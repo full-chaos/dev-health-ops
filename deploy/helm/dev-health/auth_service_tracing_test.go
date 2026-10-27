@@ -57,6 +57,9 @@ func TestAuthServiceTracingIsOffByDefault(t *testing.T) {
 func TestAuthServiceTracingOnRendersTheExportAndItsEgress(t *testing.T) {
 	for name, peer := range map[string]string{
 		"node ipBlock":       `[{"ipBlock":{"cidr":"10.0.0.151/32"}}]`,
+		"v6 host ipBlock":    `[{"ipBlock":{"cidr":"2001:db8::7/128"}}]`,
+		"v4 /8 ipBlock":      `[{"ipBlock":{"cidr":"10.0.0.0/8"}}]`,
+		"v6 /32 ipBlock":     `[{"ipBlock":{"cidr":"2001:db8::/32"}}]`,
 		"collector selector": `[{"podSelector":{"matchLabels":{"app.kubernetes.io/name":"otel-collector"}}}]`,
 		"namespace and pods": `[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"observability"}},"podSelector":{"matchLabels":{"app":"collector"}}}]`,
 	} {
@@ -109,6 +112,16 @@ func TestAuthServiceTracingRefusals(t *testing.T) {
 		"a rate not a number":      {append(append([]string{}, tracingOn...), "--set-string", "authService.tracing.sampleRate=all"), "authService.tracing.sampleRate"},
 		"a whole-internet peer":    {append(append([]string{}, tracingOn...), "--set-json", `authService.networkPolicy.egress.otlp.to=[{"ipBlock":{"cidr":"0.0.0.0/0"}}]`), "authService.networkPolicy.egress.otlp.to"},
 		"a whole-internet v6 peer": {append(append([]string{}, tracingOn...), "--set-json", `authService.networkPolicy.egress.otlp.to=[{"ipBlock":{"cidr":"::/0"}}]`), "authService.networkPolicy.egress.otlp.to"},
+	}
+	for _, cidr := range []string{
+		"0:0:0:0:0:0:0:0/0", "::0/0", " ::/0", "0.0.0.0/1", "128.0.0.0/1", "10.0.0.0/7", "::/1", "2001:db8::/31",
+		"::ffff:0:0/96", "0:0:0:0:0:ffff:0:0/96", "::FFFF:0:0/96", "0::ffff:0:0/96", "::ffff:0.0.0.0/96", "::ffff:10.0.0.151/128",
+		"10.0.0.151", "10.0.0.151/x", "10.0.0.151/32/1", "10.0.0.151/", "10.0.0.151/33", "2001:db8::7/129",
+	} {
+		cases["peer cidr "+cidr] = struct {
+			args []string
+			want string
+		}{append(append([]string{}, tracingOn...), "--set-json", `authService.networkPolicy.egress.otlp.to=[{"ipBlock":{"cidr":"`+cidr+`"}}]`), "authService.networkPolicy.egress.otlp.to"}
 	}
 	for _, name := range []string{"OTEL_ENABLED", "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_SAMPLE_RATE", "OTEL_SERVICE_NAME"} {
 		cases["extraEnv "+name] = struct {

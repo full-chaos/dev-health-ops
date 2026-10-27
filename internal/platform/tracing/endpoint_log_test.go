@@ -79,6 +79,10 @@ func TestAMalformedEndpointNeverReachesTheExporter(t *testing.T) {
 		"127.0.0.1:70000",
 		"127.0.0.1:",
 		"collector",
+		":4317",
+		"[]:4317",
+		"http://:4317",
+		"http://[]:4317/v1/traces",
 	} {
 		t.Run(endpoint, func(t *testing.T) {
 			t.Setenv("OTEL_ENABLED", "true")
@@ -105,7 +109,7 @@ func TestAMalformedEndpointNeverReachesTheExporter(t *testing.T) {
 			if initFailures.final.Load() != before+1 {
 				t.Errorf("init failures moved by %d, want 1", initFailures.final.Load()-before)
 			}
-			for _, leaked := range []string{"ops-user", "c4n4ry"} {
+			for _, leaked := range []string{"ops-user", "c4n4ry", endpoint} {
 				if strings.Contains(logs.String(), leaked) {
 					t.Errorf("the log carries %q:\n%s", leaked, logs.String())
 				}

@@ -17,7 +17,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
 // migrationLockKey is pgmigrate's advisory-lock key (lockKey): the test holds it to
@@ -31,11 +30,7 @@ const migrationLockKey int64 = 0x64686f5f7067
 // database at the baseline, the lock is released, and every run must succeed.
 func TestConcurrentUpgradesApplyEachChainRevisionOnce(t *testing.T) {
 	ctx := context.Background()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatalf("start postgres: %v", err)
-	}
-	t.Cleanup(func() { _ = instance.Close(context.Background()) })
+	instance := sharedInstance(t)
 	admin := connect(t, instance.URI)
 	uri := databaseURI(t, instance.URI, scratchDatabase(t, admin))
 	baseline, err := pgmigrate.LoadBaseline()
@@ -130,11 +125,7 @@ func TestConcurrentUpgradesApplyEachChainRevisionOnce(t *testing.T) {
 // table lock ahead of dho's statement; both are released together.
 func TestUpgradeSurvivesAnotherMigratorApplyingTheStepFirst(t *testing.T) {
 	ctx := context.Background()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatalf("start postgres: %v", err)
-	}
-	t.Cleanup(func() { _ = instance.Close(context.Background()) })
+	instance := sharedInstance(t)
 	admin := connect(t, instance.URI)
 	uri := databaseURI(t, instance.URI, scratchDatabase(t, admin))
 	baseline, err := pgmigrate.LoadBaseline()
@@ -271,11 +262,7 @@ func TestUpgradeSurvivesAnotherMigratorApplyingTheStepFirst(t *testing.T) {
 func TestUpgradeStillFailsWhenTheStepFailsForItsOwnReason(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatalf("start postgres: %v", err)
-	}
-	t.Cleanup(func() { _ = instance.Close(context.Background()) })
+	instance := sharedInstance(t)
 	admin := connect(t, instance.URI)
 	uri := databaseURI(t, instance.URI, scratchDatabase(t, admin))
 	baseline, err := pgmigrate.LoadBaseline()

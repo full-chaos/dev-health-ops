@@ -11,9 +11,10 @@ import (
 // CHAOS-10359: every `go test` of the sharded test leg and of the race-excluded census run names its -timeout, so a slow run panics
 // with the names of the tests that were running (a goroutine dump) before the 30 min job cap cancels the job with no output.
 
-var explicitTimeoutFunctions = []string{"check_test_shard", "go_test_json_run"}
+var explicitTimeoutFunctions = []string{"check_test_shard", "go_test_json_run_t"}
 
-var goTestWithoutTimeout = regexp.MustCompile(`go test (?:[^\n]*\s)?-mod=readonly`)
+// A stage of the leg is a plain go test line or a go_test_leg call (CHAOS-11684: the helper adds -json and the rest of the flags).
+var goTestWithoutTimeout = regexp.MustCompile(`go test (?:[^\n]*\s)?-mod=readonly|go_test_leg "`)
 
 // functionBody is the text of the shell function name in script, from its opening line to the first line that is a lone `}`.
 func functionBody(t *testing.T, script, name string) string {
@@ -68,14 +69,34 @@ func TestTheShardedTestLegNamesEveryGoTestTimeout(t *testing.T) {
 }
 
 func TestAGoTestLineWithoutATimeoutIsReported(t *testing.T) {
-	script := strings.Replace(readCheckGo(t), "-trimpath -timeout 10m ${rest}", "-trimpath ${rest}", 1)
+	script := strings.Replace(readCheckGo(t), "-timeout 10m ${rest}", "${rest}", 1)
 	missing, _ := callsMissingTimeout(t, script)
 	if len(missing) != 1 || !strings.Contains(missing[0], "check_test_shard") {
 		t.Fatalf("want exactly the planted check_test_shard line, got %v", missing)
 	}
-	script = strings.Replace(readCheckGo(t), "-json -count=1 -timeout 10m", "-json -count=1", 1)
+	script = strings.Replace(readCheckGo(t), "-json -count=1 -timeout \"${timeout}\"", "-json -count=1", 1)
 	missing, _ = callsMissingTimeout(t, script)
-	if len(missing) != 1 || !strings.Contains(missing[0], "go_test_json_run") {
+	if len(missing) != 1 || !strings.Contains(missing[0], "go_test_json_run_t") {
 		t.Fatalf("want exactly the planted census line, got %v", missing)
+	}
+}
+
+// CHAOS-11762 interim: the census call of a shard takes 20m only when its package list holds internal/cigates/checkgo, else 10m;
+// the timeout is an argument of the helper, never read from the environment (the behaviour is run in internal/cigates/checkgo).
+func TestTheCensusCallTimeoutIs20mOnlyForACheckgoList(t *testing.T) {
+	script := readCheckGo(t)
+	for _, want := range []string{
+		"    rows_timeout=10m\n",
+		`grep -qx -- "${CHECKGO_PACKAGE}"; then rows_timeout=20m; fi`,
+		`go_test_json_run_t "${rows_timeout}" "${json}" "${log}" ${rest_rows}`,
+		"go_test_json_run_t 10m \"${json}\" \"${log}\" \"$@\"",
+		`CHECKGO_PACKAGE="github.com/full-chaos/dev-health-ops/internal/cigates/checkgo"`,
+	} {
+		if n := strings.Count(script, want); n != 1 {
+			t.Errorf("ci/check_go.sh holds %d copies of %q, want 1", n, want)
+		}
+	}
+	if strings.Contains(script, "GO_TEST_JSON_TIMEOUT") {
+		t.Error("ci/check_go.sh reads a timeout from the environment")
 	}
 }

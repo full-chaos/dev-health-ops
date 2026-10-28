@@ -21,6 +21,9 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"net"
+	"net/netip"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -144,6 +147,13 @@ func InitWithServiceName(logger *slog.Logger, defaultName string) Component {
 		logger.Warn("OpenTelemetry initialisation failed", "error", err)
 		return Component{}
 	}
+	// The exporter's own URL parser logs the raw value it refuses, userinfo
+	// included, outside this logger: a malformed URL never reaches it.
+	if endpointHostPort(endpoint) == "invalid" {
+		initFailures.record()
+		logger.Warn("OpenTelemetry initialisation failed", "error", "OTEL_EXPORTER_OTLP_ENDPOINT is not a host:port or a URL")
+		return Component{}
+	}
 
 	provider, err := buildProvider(serviceName, environment, endpoint, sampleRate)
 	if err != nil {
@@ -155,11 +165,11 @@ func InitWithServiceName(logger *slog.Logger, defaultName string) Component {
 	otel.SetTracerProvider(provider)
 	otel.SetTextMapPropagator(propagation.TraceContext{})
 	logger.Info("OpenTelemetry tracing initialised",
-		"otlp_endpoint", endpoint,
+		"otlp_endpoint", endpointHostPort(endpoint),
 		"service_name", serviceName,
 		"sample_rate", sampleRate,
 	)
-	return Component{provider: provider, logger: logger, endpoint: endpoint}
+	return Component{provider: provider, logger: logger, endpoint: endpointHostPort(endpoint)}
 }
 
 // buildProvider is newProvider behind a func value: the one seam a test uses to make
@@ -255,6 +265,50 @@ func enabledFromEnv() bool {
 	default:
 		return true
 	}
+}
+
+// endpointHostPort is the collector address as a log line may carry it: host
+// and port only, so userinfo, a path, a query or a fragment in the configured
+// endpoint never reaches a log. Without a scheme the endpoint must be a bare
+// host:port (the exporter's own parser logs any other value raw): a non-empty
+// host, an IP literal inside brackets, a port from 1 to 65535. A URL needs a
+// host, an IP literal inside brackets, and a port from 1 to 65535 when a ":"
+// follows the host. "invalid" when none of this holds.
+func endpointHostPort(endpoint string) string {
+	if !strings.Contains(endpoint, "://") {
+		if strings.ContainsAny(endpoint, "@/?#") {
+			return "invalid"
+		}
+		host, port, err := net.SplitHostPort(endpoint)
+		if err != nil || host == "" || !validPort(port) {
+			return "invalid"
+		}
+		if strings.HasPrefix(endpoint, "[") {
+			if _, err := netip.ParseAddr(host); err != nil {
+				return "invalid"
+			}
+		}
+		return endpoint
+	}
+	parsed, err := url.Parse(endpoint)
+	if err != nil || parsed.Hostname() == "" {
+		return "invalid"
+	}
+	if strings.HasPrefix(parsed.Host, "[") {
+		if _, err := netip.ParseAddr(parsed.Hostname()); err != nil {
+			return "invalid"
+		}
+	}
+	if strings.HasSuffix(parsed.Host, ":") || (parsed.Port() != "" && !validPort(parsed.Port())) {
+		return "invalid"
+	}
+	return parsed.Host
+}
+
+// validPort reports whether port is a TCP port number from 1 to 65535.
+func validPort(port string) bool {
+	number, err := strconv.Atoi(port)
+	return err == nil && number >= 1 && number <= 65535
 }
 
 func stringEnv(name, fallback string) string {

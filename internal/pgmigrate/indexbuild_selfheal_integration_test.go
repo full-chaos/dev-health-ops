@@ -312,8 +312,18 @@ func TestBuildIndexOutlastsSnapshotHoldersOnOtherTablesAndLongStatements(t *test
 		},
 		"E2 one long read-committed statement": func(t *testing.T, uri string) uint32 {
 			conn := connect(t, uri)
-			go func() { _, _ = conn.Exec(context.Background(), "SELECT pg_sleep(10)") }()
-			return conn.PgConn().PID()
+			pid := conn.PgConn().PID()
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				_, _ = conn.Exec(ctx, "SELECT pg_sleep(10)")
+			}()
+			t.Cleanup(func() {
+				cancel()
+				<-done
+			})
+			return pid
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

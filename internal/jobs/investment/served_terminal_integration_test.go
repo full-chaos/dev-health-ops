@@ -13,6 +13,7 @@ import (
 // terminal for its (input hash, stamp). The unit is asked again only when its
 // evidence, the stamp (rubric, model) changed, or when its last request failed.
 func TestAServedLowQualityOutcomeIsTerminalUntilEvidenceStampOrModelChange(t *testing.T) {
+	t.Parallel()
 	h := newShadowHarness(t)
 	logs := &syncBuffer{}
 	failB := false

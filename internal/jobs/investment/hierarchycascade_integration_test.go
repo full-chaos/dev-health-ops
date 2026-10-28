@@ -40,6 +40,7 @@ const hierarchyCascadeTestOrg = "70d529e0-3c06-4597-8480-794fd02328b6"
 // against the written rows, so a regression that reintroduces the shadow
 // fails HERE, not only in a manual Sankey read.
 func TestRepoHierarchyCascadeEndToEnd(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	t.Cleanup(cancel)
 

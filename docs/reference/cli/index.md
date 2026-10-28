@@ -630,6 +630,8 @@ dho admin orgs delete --org-id <uuid>
 | `--dry-run` | Return the deletion plan without deleting data |
 | `--analytics-db` | ClickHouse URI (default: `CLICKHOUSE_URI`) |
 
+The deletion needs ClickHouse, also for `--dry-run`. Before anything is counted, revoked or deleted, the ClickHouse login must connect and hold `SELECT` and `ALTER DELETE` on its whole database (its own grants or its roles'), and the database must have tables with an `org_id` column. If not, the verb prints `Error: ClickHouse is not configured, not reachable or not permitted to purge; organization deletion refused. Nothing was deleted.` and exits 1. If the ClickHouse purge fails after the PostgreSQL rows are deleted, it prints `Error: Organization Postgres data was deleted, but the ClickHouse purge did not complete. Run the delete again.` and exits 1; running it again purges the organization's ClickHouse rows by id. The API route `DELETE /api/v1/admin/orgs/{org_id}` answers 503 and 500 for the same two cases. The verb logs `admin: org deletion refused` (with a `reason`), `admin: org deletion clickhouse purge incomplete` or `admin: org deletion done` on stderr. At start, go-api runs the same ClickHouse check once without failing its start and logs one line: `orgdelete_clickhouse_preflight=ok`, or `orgdelete_clickhouse_preflight=refused` with the `reason`.
+
 ### `admin licenses`
 
 Offline license key management (Ed25519-signed). `create` uses PostgreSQL.

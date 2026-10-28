@@ -13,6 +13,7 @@ deploy/helm/dev-health	auth_backfill_policy_test.go	unexpressed
 deploy/helm/dev-health	auth_flipback_runbook_test.go	unexpressed
 deploy/helm/dev-health	auth_service_test.go	unexpressed
 deploy/helm/dev-health	auth_session_secret_script_test.go	unexpressed
+deploy/helm/dev-health	auth_users_owned_barrier_script_test.go	unexpressed
 deploy/helm/dev-health	clickhouse_configd_render_test.go	unexpressed
 deploy/helm/dev-health	clickhouse_replicas_test.go	unexpressed
 deploy/helm/dev-health	clickhouse_started_test.go	unexpressed
@@ -21,6 +22,8 @@ deploy/helm/dev-health	go_api_drain_test.go	unexpressed
 deploy/helm/dev-health	go_api_fence_test.go	unexpressed
 deploy/helm/dev-health	go_api_fenced_marker_test.go	unexpressed
 deploy/helm/dev-health	go_api_internal_listener_test.go	unexpressed
+deploy/helm/dev-health	go_api_trusted_proxies_test.go	unexpressed
+deploy/helm/dev-health	go_pgbouncer_secret_keep_test.go	unexpressed
 deploy/helm/dev-health	go_pgbouncer_session_rollingupdate_test.go	unexpressed
 deploy/helm/dev-health	helm_shim_test.go	unexpressed
 deploy/helm/dev-health	hook_references_test.go	unexpressed
@@ -78,6 +81,7 @@ internal/cigates/bigboyrender	posture.go	unexpressed
 internal/cigates/chartgates	helpers_test.go	unexpressed
 internal/cigates/chartgates	overlay_test.go	unexpressed
 internal/cigates/checkgo	ci_script_helpers_test.go	unexpressed
+internal/cigates/checkgo	go_test_leg_json_test.go	unexpressed
 internal/cigates/checkgo	race_solo_test.go	unexpressed
 internal/cigates/checkgo	testcontainers_session_reap_test.go	unexpressed
 internal/cigates/chparams	chparams_test.go	unexpressed
@@ -111,6 +115,7 @@ internal/cigates/routing	chart_test.go	unexpressed
 internal/cigates/routing	cut_test.go	unexpressed
 internal/cigates/routing	deps.go	unexpressed
 internal/cigates/routing	pinned_test.go	unexpressed
+internal/cigates/scripts	auth_corpus_closure_relevance_test.go	unexpressed
 internal/cigates/scripts	auth_corpus_queue_relevance_test.go	unexpressed
 internal/cigates/scripts	auth_queue_relevance_test.go	unexpressed
 internal/cigates/scripts	ci_script_helpers_test.go	unexpressed
@@ -122,6 +127,8 @@ internal/cigates/scripts	oracle_triggers_script_test.go	unexpressed
 internal/cigates/scripts	posture_integration_test.go	unexpressed
 internal/cigates/splitshards	ci_script_helpers_test.go	unexpressed
 internal/cigates/splitshards	free_run_test.go	unexpressed
+internal/cigates/suitecatalog	suitecatalog_test.go	unexpressed
+internal/cigates/testshard	checkgofresh_test.go	unexpressed
 internal/cigates/testshard	listcall_test.go	unexpressed
 internal/cigates/testshard	providersync_test.go	unexpressed
 internal/cigates/testshard	raceshard_test.go	unexpressed
@@ -135,7 +142,9 @@ internal/cigates/workflowpaths	docs_only_go_inputs_test.go	unexpressed
 internal/cigates/workflowpaths	workflow_path_filters_test.go	unexpressed
 internal/cigates/workflows	aggregate_gate_results_test.go	unexpressed
 internal/cigates/workflows	auth_compose_proof_test.go	unexpressed
+internal/cigates/workflows	auth_corpus_closure_test.go	unexpressed
 internal/cigates/workflows	auth_corpus_external_behaviour_test.go	unexpressed
+internal/cigates/workflows	auth_corpus_external_retry_test.go	unexpressed
 internal/cigates/workflows	auth_corpus_external_test.go	unexpressed
 internal/cigates/workflows	auth_corpus_queue_test.go	cmd/auth-service
 internal/cigates/workflows	auth_corpus_queue_test.go	unexpressed

@@ -260,7 +260,7 @@ func TestVenueOracleCustomerPushWrites(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, spec)
 	// CHAOS-7204: Go records the client IP behind a trusted peer only; Python records
 	// the header's first hop. Trust this test's loopback peer so both planes agree.
-	t.Setenv("TRUSTED_PROXIES", "127.0.0.1,::1,testclient,10.0.0.1")
+	t.Setenv("TRUSTED_PROXIES", "127.0.0.1,::1,10.0.0.1")
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 	start := time.Now().UTC()

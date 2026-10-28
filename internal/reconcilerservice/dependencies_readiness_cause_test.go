@@ -1,11 +1,13 @@
 package reconcilerservice
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
+	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -21,31 +23,90 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 )
 
-// syncLogBuffer guards a bytes.Buffer with a mutex: registry.go's reportRefusals writes the
-// refusal-log record from its own background goroutine while this harness polls and reads it from
-// the test goroutine, so a bare bytes.Buffer is a real, -race-detected data race (caught by CI's
-// go-quality-leg race leg, not a review finding).
-type syncLogBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
+// refusalRecord is one "readiness check refused" line of health.Registry's refusal log.
+type refusalRecord struct {
+	Msg      string `json:"msg"`
+	Check    string `json:"check"`
+	Cause    string `json:"cause"`
+	TimedOut bool   `json:"timed_out"`
 }
 
-func (b *syncLogBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Write(p)
+// refusalSink is the log sink the harness installs on the registry. registry.go's reportRefusals
+// writes the refusal line from its own background goroutine after CheckRequired has returned, so
+// each completed Write is the event the harness waits for; it needs no timer. A Write stores the
+// decoded line and wakes every waiter.
+type refusalSink struct {
+	mu      sync.Mutex
+	records []refusalRecord
+	wake    chan struct{}
 }
 
-func (b *syncLogBuffer) Len() int {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Len()
+func (s *refusalSink) Write(p []byte) (int, error) {
+	var decoded []refusalRecord
+	for _, line := range strings.Split(string(p), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var record refusalRecord
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			record = refusalRecord{Msg: "undecodable line: " + err.Error()}
+		}
+		decoded = append(decoded, record)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.records = append(s.records, decoded...)
+	if s.wake != nil {
+		close(s.wake)
+		s.wake = nil
+	}
+	return len(p), nil
 }
 
-func (b *syncLogBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.String()
+// first returns the first refusal record of check, and the channel a later Write closes.
+func (s *refusalSink) first(check string) (refusalRecord, bool, <-chan struct{}, int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, record := range s.records {
+		if record.Msg == "readiness check refused" && record.Check == check {
+			return record, true, nil, len(s.records)
+		}
+	}
+	if s.wake == nil {
+		s.wake = make(chan struct{})
+	}
+	return refusalRecord{}, false, s.wake, len(s.records)
+}
+
+// waitForRefusalRecord returns the first refusal record of check, waiting for a Write that
+// brings it. It ends with an error only when ctx ends first; a record that arrived before the end
+// is never lost, because the lines are read again after ctx is done.
+func waitForRefusalRecord(ctx context.Context, sink *refusalSink, check string) (refusalRecord, error) {
+	for {
+		record, found, wake, seen := sink.first(check)
+		if found {
+			return record, nil
+		}
+		select {
+		case <-wake:
+		case <-ctx.Done():
+			if record, found, _, seen = sink.first(check); found {
+				return record, nil
+			}
+			return refusalRecord{}, fmt.Errorf("refusal record never arrived for %s (%d lines seen): %w", check, seen, ctx.Err())
+		}
+	}
+}
+
+// refusalExpected reports whether a refusal line will be written for check: only a check that
+// failed is logged.
+func refusalExpected(readiness health.Readiness, check string) bool {
+	for _, status := range readiness.Checks {
+		if status.Name == check {
+			return status.Failed
+		}
+	}
+	return false
 }
 
 // CHAOS-6949. health.Registry logs a bounded "readiness check refused" line (CHAOS-6883,
@@ -67,8 +128,8 @@ func reconcilerReadinessCauseHarness(t *testing.T, database *fakeReconcilerDatab
 	t.Helper()
 	t.Chdir(filepath.Join("..", ".."))
 	registry := health.NewRegistry(readinessTestCheckTimeout)
-	logs := &syncLogBuffer{}
-	registry.SetRefusalLogger(slog.New(slog.NewJSONHandler(logs, nil)))
+	sink := &refusalSink{}
+	registry.SetRefusalLogger(slog.New(slog.NewJSONHandler(sink, nil)))
 
 	sources := reconcilerSourcesForTest(t, database)
 	sources.buildRelay = func(*pgxpool.Pool, *pgxpool.Pool, *pgxpool.Pool, string, *jobruntime.Registry) (joboutbox.RelayStepper, error) {
@@ -82,36 +143,18 @@ func reconcilerReadinessCauseHarness(t *testing.T, database *fakeReconcilerDatab
 	); err != nil {
 		t.Fatalf("configureReconcilerDependenciesWithSourcesAndLogger() error = %v", err)
 	}
-	registry.CheckRequired(context.Background()) // triggers the first-refusal log line
-	// The refusal log is written by a bounded background goroutine
-	// (registry.go's reportRefusals); poll briefly for it rather than
-	// reaching for its unexported flush (health-package-only, a test tool).
-	deadline := time.Now().Add(2 * time.Second)
-	for logs.Len() == 0 && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
+	readiness := registry.CheckRequired(context.Background())
+	if !refusalExpected(readiness, checkName) {
+		t.Fatalf("%s did not refuse readiness, so no refusal line is written: %+v", checkName, readiness.Checks)
 	}
-
-	var record struct {
-		Msg      string `json:"msg"`
-		Check    string `json:"check"`
-		Cause    string `json:"cause"`
-		TimedOut bool   `json:"timed_out"`
-	}
-	found := false
-	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
-		if line == "" {
-			continue
-		}
-		if err := json.Unmarshal([]byte(line), &record); err != nil {
-			t.Fatalf("decode log line %q: %v", line, err)
-		}
-		if record.Msg == "readiness check refused" && record.Check == checkName {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatalf("no 'readiness check refused' line for %s: %s", checkName, logs.String())
+	// The refusal line is written by the registry's own goroutine (registry.go's reportRefusals)
+	// after CheckRequired returned, so wait for that write. The 60 s context only ends the wait of
+	// a line that is never written (dropped); no passing run depends on it.
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancel()
+	record, err := waitForRefusalRecord(ctx, sink, checkName)
+	if err != nil {
+		t.Fatal(err)
 	}
 	return record.Cause, record.TimedOut
 }
@@ -172,5 +215,34 @@ func TestDependencyCheckFailedIsStillTheReconcilerDependencySentinel(t *testing.
 	}
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("dependencyCheckFailed(...) = %v, want errors.Is(_, context.DeadlineExceeded)", err)
+	}
+}
+
+type ioTimeoutFake struct{}
+
+func (ioTimeoutFake) Error() string   { return "dial tcp 10.0.0.9:5432: i/o timeout secret-host" }
+func (ioTimeoutFake) Timeout() bool   { return true }
+func (ioTimeoutFake) Temporary() bool { return false }
+
+// CHAOS-11617: an OS socket deadline or net timeout reads cause=timeout, timed_out=true on every check that
+// goes through dependencyCheckFailed -- the form a context deadline has. (A raw refused dial is CHAOS-11644.)
+func TestReconcilerReadinessRefusalClassifiesIOTimeoutsAsTimeoutAcrossChecks(t *testing.T) {
+	for failureName, failure := range map[string]error{
+		"os_deadline":    os.ErrDeadlineExceeded,
+		"net_op_error":   &net.OpError{Op: "dial", Net: "tcp", Err: os.ErrDeadlineExceeded},
+		"net_error_fake": ioTimeoutFake{},
+	} {
+		for checkName, build := range map[string]func(error) *fakeReconcilerDatabase{
+			"domain_postgres": func(err error) *fakeReconcilerDatabase { return &fakeReconcilerDatabase{domainErr: err} },
+			"queue_postgres":  func(err error) *fakeReconcilerDatabase { return &fakeReconcilerDatabase{queueErr: err} },
+			"river_schema":    func(err error) *fakeReconcilerDatabase { return &fakeReconcilerDatabase{schemaErr: err} },
+		} {
+			t.Run(checkName+"/"+failureName, func(t *testing.T) {
+				cause, timedOut := reconcilerReadinessCauseHarness(t, build(failure), checkName)
+				if cause != "timeout" || !timedOut {
+					t.Fatalf("%s refused with an I/O timeout, got cause=%q timed_out=%v, want cause=timeout timed_out=true", checkName, cause, timedOut)
+				}
+			})
+		}
 	}
 }

@@ -30,21 +30,25 @@ stage-signing-key init container exists.
 {{- $tokenClass := (default dict $a.accessToken).class | default "" }}
 {{- if and $loginOn (not (trim (toString $a.sessionKeys.loginLockout.secretName))) }}{{- fail "authService.phase >= 3 (login) needs authService.sessionKeys.loginLockout.secretName: without the lockout key auth-service mounts no login route, and go-api would forward sign-in to a 404" }}{{- end }}
 {{- if and $socialOn (not (trim (toString $a.social.secretName))) }}{{- fail "authService.phase >= 3 (social sign-in) needs authService.social.secretName: the Secret with the SOCIAL_<PROVIDER>_CLIENT_ID and _CLIENT_SECRET keys go-api reads, so auth-service signs in with the same providers" }}{{- end }}
+{{- if and (eq (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true") (not (trim (toString (default dict $a.mail).secretName))) }}{{- fail "authService.phase >= 4 (users owned) needs authService.mail.secretName: the Secret holding EMAIL_PROVIDER, EMAIL_FROM_ADDRESS, EMAIL_API_KEY and APP_BASE_URL for the verify and reset mails; auth-service refuses to start without a usable mail setting" }}{{- end }}
+{{- /* When the mail Secret is the one this chart creates, its content is readable here: refuse a setting auth-service would refuse at start. */}}
+{{- if and (eq (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true") .Values.secrets.create (eq (trim (toString (default dict $a.mail).secretName)) (include "dev-health.secretName" .)) }}
+{{- $mk := default dict (default dict $a.mail).keys }}
+{{- $data := default dict .Values.secrets.data }}
+{{- $provider := lower (trim (toString (default "" (index $data (default "EMAIL_PROVIDER" $mk.provider))))) }}
+{{- if not (trim (toString (default "" (index $data (default "EMAIL_FROM_ADDRESS" $mk.fromAddress))))) }}{{- fail "authService.phase >= 4: secrets.data.EMAIL_FROM_ADDRESS is empty; auth-service refuses to start without a from-address" }}{{- end }}
+{{- if not (trim (toString (default "" (index $data (default "APP_BASE_URL" $mk.appBaseURL))))) }}{{- fail "authService.phase >= 4: secrets.data.APP_BASE_URL is empty; auth-service refuses to start without an https origin for its links" }}{{- end }}
+{{- if or (eq $provider "") (eq $provider "console") }}{{- fail "authService.phase >= 4: secrets.data.EMAIL_PROVIDER must be resend; an empty or console provider delivers no mail and auth-service refuses to start with it" }}{{- end }}
+{{- if eq $provider "smtp" }}{{- fail "authService.phase >= 4: secrets.data.EMAIL_PROVIDER=smtp is refused: the chart wires resend only (smtp needs SMTP_HOST and the rest of SMTP_*)" }}{{- end }}
+{{- if ne $provider "resend" }}{{- fail "authService.phase >= 4: secrets.data.EMAIL_PROVIDER must be resend" }}{{- end }}
+{{- if not (or (trim (toString (default "" (index $data (default "EMAIL_API_KEY" $mk.apiKey))))) (trim (toString (default "" (index $data (default "RESEND_API_KEY" $mk.resendApiKey)))))) }}{{- fail "authService.phase >= 4: EMAIL_PROVIDER=resend needs secrets.data.EMAIL_API_KEY (or RESEND_API_KEY)" }}{{- end }}
+{{- end }}
 {{- if not $a.database.secretName }}{{- fail "authService.database.secretName is required: the Secret holding the runtime login's DSN (key authService.database.secretKey)" }}{{- end }}
 {{- if and $a.sessionKeys.successor.secretName (not $a.valkey.secretName) }}{{- fail "authService.valkey.secretName is required while authService.sessionKeys.successor.secretName is set: the session routes count the compatibility refresh in the shared rate-limit store, and an in-process limiter is per replica and so no limit" }}{{- end }}
 {{- if and (eq (include "dev-health.authProxyOn" .) "true") (not $a.trustedProxies) }}{{- fail "authService.trustedProxies is required while go-api forwards auth routes to it (authService.phase >= 2): without it every proxied caller is keyed by go-api's pod address, one rate-limit bucket for all users" }}{{- end }}
 {{- if and (eq (include "dev-health.authProxyOn" .) "true") $a.networkPolicy.allowedFrom }}{{- fail "authService.networkPolicy.allowedFrom must be empty while go-api forwards auth routes to it (authService.phase >= 2): the API port admits go-api only while go-api forwards to it, because auth-service trusts the forwarded client address from that peer set" }}{{- end }}
 {{- if and (eq (include "dev-health.authProxyOn" .) "true") (not $a.networkPolicy.enabled) }}{{- fail "authService.networkPolicy.enabled must stay true while go-api forwards auth routes to it (authService.phase >= 2): trusted proxies are safe only while the auth-service NetworkPolicy admits go-api alone; turn the policy on, or go back to phase 1" }}{{- end }}
-{{- range $a.trustedProxies }}
-{{- $entry := toString . }}
-{{- if or (not (include "dev-health.trustedProxyEntry" $entry)) (regexMatch "/0$" $entry) (regexMatch "^(?i)::ffff:" $entry) }}{{- fail "authService.trustedProxies entries must each be one IP address or CIDR network, never a /0 network or an IPv4-mapped form: a trusted peer picks the client address of every request" }}{{- end }}
-{{- if contains "/" $entry }}
-{{- $bits := int (index (splitList "/" $entry) 1) }}
-{{- $v6 := contains ":" $entry }}
-{{- if or (and (not $v6) (lt $bits 24)) (and $v6 (lt $bits 64)) }}{{- fail (printf "authService.trustedProxies entry %q is wider than a /24 (IPv4) or a /64 (IPv6): the node pod range is the widest list allowed, even with authService.trustedProxiesWideAccepted" $entry) }}{{- end }}
-{{- if and (or (and (not $v6) (lt $bits 28)) (and $v6 (lt $bits 124))) (ne (toString $a.trustedProxiesWideAccepted) "true") }}{{- fail (printf "authService.trustedProxies entry %q is wider than a /28 (IPv4) or a /124 (IPv6): every address in it is believed as a proxy that names the client. It is allowed only with authService.trustedProxiesWideAccepted=true, and only while the auth-service NetworkPolicy admits go-api's pods alone on the API port; prefer the go-api pod addresses" $entry) }}{{- end }}
-{{- end }}
-{{- end }}
+{{- include "dev-health.trustedProxyList" (dict "key" "authService.trustedProxies" "entries" $a.trustedProxies "ackKey" "authService.trustedProxiesWideAccepted" "ack" (eq (toString $a.trustedProxiesWideAccepted) "true") "peer" "the API port past the go-api pod selector") }}
 {{- $ks := $a.keySet }}
 {{- $ksOn := and $ks $ks.enabled }}
 {{- $manifest := "" }}
@@ -105,6 +109,17 @@ binary): the native sleep action, a Kubernetes >= 1.30 feature. Same shape as go
 {{- if has (regexSplit "[=[:space:]]" (trimAll "-" (lower (trim (toString .)))) -1 | first) (list "signing-key-file" "signing-key-id" "signing-keyset-file" "database-max-conns" "shutdown-timeout") }}{{- fail (printf "authService.extraArgs must not set %s: the chart renders the signing key flags (authService.signingKey or authService.keySet) and the pool bound (authService.database.maxConns), and authService.shutdownTimeout owns --shutdown-timeout (the grace-period guard reads that value)" .) }}{{- end }}
 {{- end }}
 {{- if and $ksOn $a.podAnnotations (hasKey $a.podAnnotations "checksum/keyset") }}{{- fail "authService.podAnnotations must not set checksum/keyset: the chart sets it from the key-set manifest" }}{{- end }}
+{{- if $a.tracing.enabled }}
+{{- if not $a.tracing.endpoint }}{{- fail "authService.tracing.endpoint is required while authService.tracing.enabled: the service would otherwise export to localhost:4317" }}{{- end }}
+{{- if not (regexMatch "^(0(\\.[0-9]+)?|1(\\.0+)?)$" (toString $a.tracing.sampleRate)) }}{{- fail (printf "authService.tracing.sampleRate must be a number from 0 to 1, got %q" (toString $a.tracing.sampleRate)) }}{{- end }}
+{{- if and $a.networkPolicy.enabled (not $a.networkPolicy.egress.otlp.to) }}{{- fail "authService.networkPolicy.egress.otlp.to is required while authService.tracing.enabled and authService.networkPolicy.enabled: the auth pods get no other egress, so the spans would never leave the pod" }}{{- end }}
+{{- range $a.networkPolicy.egress.otlp.to }}
+{{- with (dig "ipBlock" "cidr" "" .) }}
+{{- $problem := include "dev-health.otlpPeerCidrProblem" . }}
+{{- if $problem }}{{- fail (printf "authService.networkPolicy.egress.otlp.to: ipBlock cidr %q is refused: %s. Name the collector's address (an IPv4 /8 to /32 or an IPv6 /32 to /128) or its pods" (toString .) $problem) }}{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
 {{- range $a.extraEnv }}
 {{- if eq .name "AUTH_SERVICE_TRUSTED_PROXIES" }}{{- fail "authService.extraEnv must not set AUTH_SERVICE_TRUSTED_PROXIES: use authService.trustedProxies, which the render checks" }}{{- end }}
 {{- if eq .name "AUTH_VALKEY_URI" }}{{- fail "authService.extraEnv must not set AUTH_VALKEY_URI: use authService.valkey, which reaches the container by secretKeyRef" }}{{- end }}
@@ -251,6 +266,20 @@ spec:
             - name: AUTH_USERS_OWNED
               value: "true"
           {{- end }}
+          {{- if eq (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true" }}
+          {{- $m := default dict $a.mail }}
+          {{- $mk := default dict $m.keys }}
+            - name: EMAIL_PROVIDER
+              valueFrom: {secretKeyRef: {name: {{ $m.secretName | quote }}, key: {{ $mk.provider | quote }}}}
+            - name: EMAIL_FROM_ADDRESS
+              valueFrom: {secretKeyRef: {name: {{ $m.secretName | quote }}, key: {{ $mk.fromAddress | quote }}}}
+            - name: EMAIL_API_KEY
+              valueFrom: {secretKeyRef: {name: {{ $m.secretName | quote }}, key: {{ $mk.apiKey | quote }}, optional: true}}
+            - name: RESEND_API_KEY
+              valueFrom: {secretKeyRef: {name: {{ $m.secretName | quote }}, key: {{ $mk.resendApiKey | quote }}, optional: true}}
+            - name: APP_BASE_URL
+              valueFrom: {secretKeyRef: {name: {{ $m.secretName | quote }}, key: {{ $mk.appBaseURL | quote }}}}
+          {{- end }}
           {{- if eq (include "dev-health.authOn" (dict "flag" "orgsOwned" "context" .)) "true" }}
             - name: AUTH_ORGS_OWNED
               value: "true"
@@ -262,6 +291,16 @@ spec:
           {{- if $a.trustedProxies }}
             - name: AUTH_SERVICE_TRUSTED_PROXIES
               value: {{ join "," $a.trustedProxies | quote }}
+          {{- end }}
+            - name: OTEL_ENABLED
+              value: {{ ternary "true" "false" (eq (toString $a.tracing.enabled) "true") | quote }}
+          {{- if $a.tracing.enabled }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ $a.tracing.endpoint | quote }}
+            - name: OTEL_SAMPLE_RATE
+              value: {{ toString $a.tracing.sampleRate | quote }}
+            - name: OTEL_SERVICE_NAME
+              value: "auth-service"
           {{- end }}
           {{- with $a.extraEnv }}
             {{- toYaml . | nindent 12 }}
@@ -354,6 +393,15 @@ data:
 {{- if $a.networkPolicy.enabled }}
 {{- if not $a.networkPolicy.egress.database.to }}{{- fail "authService.networkPolicy.egress.database.to is required while authService.networkPolicy.enabled (the default; set it false only when another layer enforces the boundary): the auth pods are excluded from the release-wide policy, so an empty list would cut the service off from its database" }}{{- end }}
 {{- if and $a.valkey.secretName (not $a.networkPolicy.egress.valkey.to) }}{{- fail "authService.networkPolicy.egress.valkey.to is required while authService.valkey.secretName is set and authService.networkPolicy.enabled: the auth pods get no egress but DNS and the database, so an empty list would cut the service off from its rate-limit store" }}{{- end }}
+{{- $mailOn := and (eq (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true") (trim (toString (default dict $a.mail).secretName)) }}
+{{- if and $mailOn (not $a.networkPolicy.egress.mail.to) }}{{- fail "authService.networkPolicy.egress.mail.to is required while authService.mail.secretName is set at authService.phase >= 4 and authService.networkPolicy.enabled: the auth pods get no egress but DNS, the database and the listed peers, so the mail provider would be unreachable" }}{{- end }}
+{{- range $i, $peer := $a.networkPolicy.egress.mail.to }}
+{{- $problem := include "dev-health.authMailPeerProblem" (dict "peer" $peer "ports" $a.networkPolicy.egress.mail.ports) }}
+{{- if $problem }}{{- fail (printf "authService.networkPolicy.egress.mail.to[%d] %s" $i $problem) }}{{- end }}
+{{- end }}
+{{- $wide := 0 }}
+{{- range $a.networkPolicy.egress.mail.to }}{{- if eq (include "dev-health.authMailPeerClass" .) "wide" }}{{- $wide = add1 $wide }}{{- end }}{{- end }}
+{{- if and (gt $wide 0) (ne $wide (len $a.networkPolicy.egress.mail.to)) }}{{- fail "authService.networkPolicy.egress.mail.to: a whole-internet ipBlock (0.0.0.0/0 or ::/0) must be the only kind of peer in the list: the one mail rule then carries TCP 443 alone, so a narrow peer would silently lose its own ports" }}{{- end }}
 {{- range (concat $a.networkPolicy.allowedFrom $a.networkPolicy.metricsFrom) }}
 {{- if not (or (and .matchLabels (gt (len .matchLabels) 0)) (and .matchExpressions (gt (len .matchExpressions) 0))) }}
 {{- fail "authService.networkPolicy.allowedFrom and metricsFrom entries need a non-empty matchLabels or matchExpressions: an empty podSelector admits every pod in the namespace" }}
@@ -435,6 +483,13 @@ spec:
         - protocol: TCP
           port: {{ $a.networkPolicy.egress.valkey.port }}
     {{- end }}
+    {{- if and $mailOn $a.networkPolicy.egress.mail.to }}
+    # The mail provider
+    - to:
+        {{- toYaml $a.networkPolicy.egress.mail.to | nindent 8 }}
+      ports:
+        {{- toYaml $a.networkPolicy.egress.mail.ports | nindent 8 }}
+    {{- end }}
     {{- with $a.networkPolicy.egress.keyCustody.to }}
     # Key custody service (KMS)
     - to:
@@ -442,6 +497,14 @@ spec:
       ports:
         - protocol: TCP
           port: {{ $a.networkPolicy.egress.keyCustody.port }}
+    {{- end }}
+    {{- if $a.tracing.enabled }}
+    # The OTLP/gRPC trace collector, and nothing else
+    - to:
+        {{- toYaml $a.networkPolicy.egress.otlp.to | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: {{ $a.networkPolicy.egress.otlp.port }}
     {{- end }}
 {{- end }}
 {{- end }}

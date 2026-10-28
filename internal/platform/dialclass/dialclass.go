@@ -11,6 +11,7 @@ import (
 	"os"
 	"syscall"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/timeoutclass"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -26,7 +27,7 @@ func IsTransient(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
-	if errors.Is(err, ErrUnreachable) {
+	if errors.Is(err, ErrUnreachable) || errors.Is(err, timeoutclass.ErrTimeout) {
 		return true
 	}
 	var pgErr *pgconn.PgError
@@ -53,3 +54,25 @@ func IsTransient(err error) bool {
 	var netErr net.Error
 	return errors.As(err, &netErr) && netErr.Timeout()
 }
+
+// MarkTransient returns err marked as transient when IsTransient(err) holds,
+// and err itself otherwise (nil stays nil, and an error that is already marked
+// is returned as it is). The marked error has err's text, unwraps to err and
+// answers Transient() true, so a registry that tests an error for a
+// Transient() bool method (health.IsTransient, by errors.As; this package does
+// not import health) reads it as a dial failure a later attempt can outlast.
+// A context deadline, a cancel, an authentication or permission failure and a
+// plain error come back unchanged.
+func MarkTransient(err error) error {
+	var marked transientError
+	if !IsTransient(err) || errors.As(err, &marked) {
+		return err
+	}
+	return transientError{cause: err}
+}
+
+type transientError struct{ cause error }
+
+func (e transientError) Error() string { return e.cause.Error() }
+func (e transientError) Unwrap() error { return e.cause }
+func (transientError) Transient() bool { return true }

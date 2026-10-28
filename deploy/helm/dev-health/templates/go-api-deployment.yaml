@@ -82,6 +82,13 @@ ranges (the fenced ports and the internal port), zero-padded so a string sort is
 {{- range .Values.goApi.extraEnv }}
 {{- if has .name (list "DEV_HEALTH_LEGACY_INGEST_ENABLED" "DEV_HEALTH_LEGACY_INGEST_SUNSET") }}{{- fail (printf "goApi.extraEnv must not set %s: use legacyIngest.enabled and legacyIngest.sunset" .name) }}{{- end }}
 {{- if eq .name "TRUSTED_PROXIES_NETWORK_FENCED" }}{{- fail "goApi.extraEnv must not set TRUSTED_PROXIES_NETWORK_FENCED: the chart sets it only where the request-port fence renders (goApi.networkPolicy.enabled)" }}{{- end }}
+{{- /* go-api reads TRUSTED_PROXIES with the auth-service parser and refuses to start on a list it cannot read, so a literal value
+is checked here with the authService.trustedProxies rules (one helper); a valueFrom source is the deploy chart's to check. */}}
+{{- if and (eq (toString .name) "TRUSTED_PROXIES") (hasKey . "value") (trim (toString .value)) }}
+{{- $entries := list }}
+{{- range (splitList "," (toString .value)) }}{{- $entries = append $entries (trim .) }}{{- end }}
+{{- include "dev-health.trustedProxyList" (dict "key" "goApi.extraEnv TRUSTED_PROXIES" "entries" $entries "ackKey" "" "ack" false "peer" "the go-api request ports past the ingress controller pod selector") }}
+{{- end }}
 {{- end }}
 {{- if .Values.goApi.internal.enabled }}
 {{- range .Values.goApi.extraArgs }}
@@ -266,7 +273,7 @@ spec:
               valueFrom: {secretKeyRef: {name: {{ include "dev-health.sessionIssueSecretName" . }}, key: {{ required "goApi.sessionIssue.secretKey is required" (default dict .Values.goApi.sessionIssue).secretKey }}}}
             {{- end }}
             {{- end }}
-            {{- if eq (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true" }}
+            {{- if eq (include "dev-health.authOn" (dict "flag" "goApiUsersOwned" "context" .)) "true" }}
             - name: AUTH_USERS_OWNED
               value: "true"
             {{- end }}

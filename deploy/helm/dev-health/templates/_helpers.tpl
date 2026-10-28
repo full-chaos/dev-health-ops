@@ -725,6 +725,10 @@ leaf), and renders the phase. Every ladder read goes through dev-health.authOn, 
 {{- $p := $v.authService.phase -}}
 {{- if not (and (has (kindOf $p) (list "int" "int64" "float64")) (eq (float64 $p) (floor (float64 $p))) (ge (float64 $p) 0.0) (le (float64 $p) 5.0)) }}{{- fail (printf "authService.phase must be a whole number from 0 to 5, got %s %v" (kindOf $p) $p) }}{{- end -}}
 {{- if ge (int $p) 5 }}{{- fail (printf "authService.phase %d: phase 5 (orgs owned) needs its own public-table writer leaf (D6358): auth-service does not yet write the existing public organizations and memberships tables, so phase 4 is the highest phase this chart renders" (int $p)) }}{{- end -}}
+{{- $stage := toString (default "" $v.authService.usersOwnedStage) -}}
+{{- if not (has $stage (list "" "goApi" "owned")) }}{{- fail (printf "authService.usersOwnedStage must be goApi or owned, got %q" $stage) }}{{- end -}}
+{{- if and (eq (int $p) 4) (eq $stage "") }}{{- fail "authService.phase 4 needs authService.usersOwnedStage: goApi first (go-api forwards the credential routes, auth-service does not own users yet), then owned after the barrier (docs/operate/runbooks/auth-users-owned-flip-and-rollback.md)" }}{{- end -}}
+{{- if and (ne (int $p) 4) (ne $stage "") }}{{- fail (printf "authService.usersOwnedStage is set but authService.phase is %d: the stage exists only at phase 4" (int $p)) }}{{- end -}}
 {{- int $p -}}
 {{- end -}}
 
@@ -735,7 +739,9 @@ rendered one, a Secret reference included, and put a literal in the manifest. au
 names and proves each is refused.
 */}}
 {{- define "dev-health.authServiceEnvNames" -}}
-{{- $names := list "AUTH_DATABASE_URI" "AUTH_JWT_SECRET_KEY" "AUTH_SESSION_SUCCESSOR_KEY" "AUTH_LOGIN_LOCKOUT_KEY" "AUTH_SOCIAL_LINK_ROUTES" "AUTH_ACCESS_TOKEN_CLASS" "AUTH_TOKEN_ISSUER_URL" "AUTH_JWT_AUDIENCE" "AUTH_USERS_OWNED" "AUTH_ORGS_OWNED" "AUTH_VALKEY_URI" "AUTH_SERVICE_TRUSTED_PROXIES" -}}
+{{- $names := list "AUTH_DATABASE_URI" "AUTH_JWT_SECRET_KEY" "AUTH_SESSION_SUCCESSOR_KEY" "AUTH_LOGIN_LOCKOUT_KEY" "AUTH_SOCIAL_LINK_ROUTES" "AUTH_ACCESS_TOKEN_CLASS" "AUTH_TOKEN_ISSUER_URL" "AUTH_JWT_AUDIENCE" "AUTH_USERS_OWNED" "AUTH_ORGS_OWNED" "AUTH_VALKEY_URI" "AUTH_SERVICE_TRUSTED_PROXIES" "OTEL_ENABLED" "OTEL_EXPORTER_OTLP_ENDPOINT" "OTEL_SAMPLE_RATE" "OTEL_SERVICE_NAME" "EMAIL_PROVIDER" "EMAIL_FROM_ADDRESS" "APP_BASE_URL" "AUTH_MAIL_ALLOW_CONSOLE" -}}
+{{- /* EMAIL_API_KEY is appended, not listed, so the worker allow-list keeps the only listed spelling (a chartgates planted defect edits it). */ -}}
+{{- $names = (append (append $names "EMAIL_API_KEY") "RESEND_API_KEY") -}}
 {{- range $provider := list "GITHUB" "GITLAB" "GOOGLE" }}{{- range $suffix := list "CLIENT_ID" "CLIENT_SECRET" }}{{- $names = append $names (printf "SOCIAL_%s_%s" $provider $suffix) }}{{- end }}{{- end -}}
 {{- toJson $names -}}
 {{- end -}}
@@ -783,7 +789,7 @@ and the other enable flags say. templates/auth-service.yaml includes it once, ou
 {{- define "dev-health.authValidate" -}}
 {{- $a := .Values.authService -}}
 {{- $session := default dict $a.sessionKeys -}}
-{{- $keys := list (list "authService.database.secretKey" (default dict $a.database).secretKey) (list "authService.migrate.secretKey" (default dict $a.migrate).secretKey) (list "authService.signingKey.secretKey" (default dict $a.signingKey).secretKey) (list "authService.valkey.secretKey" (default dict $a.valkey).secretKey) (list "authService.sessionKeys.successor.secretKey" (default dict $session.successor).secretKey) (list "authService.sessionKeys.loginLockout.secretKey" (default dict $session.loginLockout).secretKey) (list "goApi.sessionIssue.secretKey" (default dict .Values.goApi.sessionIssue).secretKey) -}}
+{{- $keys := list (list "authService.database.secretKey" (default dict $a.database).secretKey) (list "authService.migrate.secretKey" (default dict $a.migrate).secretKey) (list "authService.signingKey.secretKey" (default dict $a.signingKey).secretKey) (list "authService.valkey.secretKey" (default dict $a.valkey).secretKey) (list "authService.sessionKeys.successor.secretKey" (default dict $session.successor).secretKey) (list "authService.sessionKeys.loginLockout.secretKey" (default dict $session.loginLockout).secretKey) (list "authService.mail.keys.provider" (default dict (default dict $a.mail).keys).provider) (list "authService.mail.keys.fromAddress" (default dict (default dict $a.mail).keys).fromAddress) (list "authService.mail.keys.apiKey" (default dict (default dict $a.mail).keys).apiKey) (list "authService.mail.keys.resendApiKey" (default dict (default dict $a.mail).keys).resendApiKey) (list "authService.mail.keys.appBaseURL" (default dict (default dict $a.mail).keys).appBaseURL) (list "goApi.sessionIssue.secretKey" (default dict .Values.goApi.sessionIssue).secretKey) -}}
 {{- range $keys }}
 {{- if not (include "dev-health.validSecretKey" (index . 1)) }}{{- fail (printf "%s must be a Secret key: letters, digits, '-', '_' and '.', at most 253 characters, not '.', '..' or a name that starts with '..'" (index . 0)) }}{{- end }}
 {{- end }}
@@ -809,6 +815,7 @@ and the other enable flags say. templates/auth-service.yaml includes it once, ou
 {{- if eq (include "dev-health.authOn" (dict "flag" "localLogin" "context" .)) "true" }}
 {{- if not (include "dev-health.validSecretKey" .Values.authService.sessionKeys.loginLockout.secretKey) }}{{- fail "authService.phase >= 3 (login) needs authService.sessionKeys.loginLockout.secretKey to be a Secret key: letters, digits, '-', '_', '.'" }}{{- end }}
 {{- end }}
+{{- if and (ge (int (include "dev-health.authPhase" .)) 4) (not .Values.goApi.enabled) }}{{- fail (printf "authService.usersOwnedStage=%s needs go-api (goApi.enabled=true): go-api forwards the credential routes and refuses local user writes, and an owned auth-service must never run without it" .Values.authService.usersOwnedStage) }}{{- end }}
 {{- $_ := include "dev-health.authEdDSAIssuer" . }}
 {{- $_ := include "dev-health.authSSOOn" (dict "flag" "oidc" "context" .) }}
 {{- $_ := include "dev-health.authSSOOn" (dict "flag" "saml" "context" .) }}
@@ -819,13 +826,18 @@ and the other enable flags say. templates/auth-service.yaml includes it once, ou
 {{/*
 "true" when authService.phase turns the ladder flag on, else "". Call with (dict "flag" <name> "context" $).
 The ladder (each flag is on from its phase up): service 1, sessions 2, localLogin 3, social 3, credentials 4,
-usersOwned 4, orgsOwned 5. credentials moves with usersOwned: go-api refuses AUTH_USERS_OWNED unless the credential routes
+usersOwned 4, orgsOwned 5. credentials moves with go-api's users switch: go-api refuses AUTH_USERS_OWNED unless the credential routes
 go to auth-service. auth-service mounts them from phase 2 (a 503 stub until users are owned).
+Phase 4 has two stages (authService.usersOwnedStage): goApiUsersOwned (go-api's AUTH_USERS_OWNED) is on at both; usersOwned (auth-service,
+the auth Jobs, the grants) is on only at stage owned, so go-api rolls first and auth-service owns users after (CHAOS-11606).
 */}}
 {{- define "dev-health.authOn" -}}
-{{- $ladder := dict "service" 1 "sessions" 2 "localLogin" 3 "social" 3 "credentials" 4 "usersOwned" 4 "orgsOwned" 5 -}}
+{{- $ladder := dict "service" 1 "sessions" 2 "localLogin" 3 "social" 3 "credentials" 4 "goApiUsersOwned" 4 "usersOwned" 4 "orgsOwned" 5 -}}
 {{- if not (hasKey $ladder .flag) }}{{- fail (printf "dev-health.authOn: %s is not a ladder flag" .flag) }}{{- end -}}
-{{- if ge (int (include "dev-health.authPhase" .context)) (int (get $ladder .flag)) -}}true{{- end -}}
+{{- $phase := int (include "dev-health.authPhase" .context) -}}
+{{- if ge $phase (int (get $ladder .flag)) -}}
+{{- if or (ne .flag "usersOwned") (ge $phase 5) (eq (toString .context.Values.authService.usersOwnedStage) "owned") -}}true{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{/*
@@ -837,6 +849,104 @@ Call with (dict "flag" "oidc"|"saml" "context" $).
 {{- $key := printf "authService.sso.%s" .flag -}}
 {{- $sso := default dict .context.Values.authService.sso -}}
 {{- if eq (include "dev-health.authBool" (dict "value" (index $sso .flag) "key" $key)) "true" }}{{- fail (printf "%s=true is refused: the chart does not render auth-service's SSO settings (state key, base URL, encryption key) yet, so its %s routes would not mount" $key (upper .flag)) }}{{- end -}}
+{{- end -}}
+
+{{/*
+"" when a CIDR string is well formed, else the reason: exactly one "/" and a plain decimal prefix (0, or 1 to 3 digits with
+no leading zero, no sign, no space); an IPv4 address that is a strict dotted quad (four decimal fields 0 to 255, no
+leading zero, no letter); an IPv6 address that is hex, colons and expands to 8 groups (no dotted tail); a prefix of at
+most 32 (IPv4) or 128 (IPv6). One parse for every CIDR the mail egress reads. Call with the string.
+*/}}
+{{- define "dev-health.authMailCidrShape" -}}
+{{- if not (kindIs "string" .) -}}is not a string
+{{- else if not (regexMatch "^[^/]+/(0|[1-9][0-9]{0,2})$" .) -}}must be one address/prefix with a plain decimal prefix
+{{- else -}}
+{{- $parts := splitList "/" . -}}
+{{- $addr := index $parts 0 -}}
+{{- $prefix := atoi (index $parts 1) -}}
+{{- if contains ":" $addr -}}
+{{- if not (regexMatch "^[0-9a-fA-F:]+$" $addr) -}}the IPv6 address has a character that is not a hex digit or a colon
+{{- else if ne (len (include "dev-health.ipv6Groups" (lower $addr) | fromJsonArray)) 8 -}}the IPv6 address does not parse
+{{- else if gt $prefix 128 -}}the IPv6 prefix is above 128
+{{- end -}}
+{{- else if not (regexMatch "^(0|[1-9][0-9]?|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\\.(0|[1-9][0-9]?|1[0-9]{2}|2[0-4][0-9]|25[0-5])){3}$" $addr) -}}the IPv4 address is not a dotted quad of decimal fields from 0 to 255
+{{- else if gt $prefix 32 -}}the IPv4 prefix is above 32
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+The class of one authService.networkPolicy.egress.mail.to entry, the only reading of it: "wide" (exactly 0.0.0.0/0 or ::/0),
+"narrow" (selectors, or an ipBlock that dev-health.otlpPeerCidrProblem accepts), or "bad:<reason>". An entry is one peer
+kind: an ipBlock, or podSelector and/or namespaceSelector. A selector counts only when its matchLabels has a key or its
+matchExpressions has an item (the outer object having keys is not enough). Prefix 0 is wide only as 0.0.0.0 or ::.
+Call with the entry.
+*/}}
+{{- define "dev-health.authMailPeerClass" -}}
+{{- $peer := . -}}
+{{- if not (kindIs "map" $peer) -}}bad:is not an object
+{{- else if and (hasKey $peer "ipBlock") (or (hasKey $peer "podSelector") (hasKey $peer "namespaceSelector")) -}}bad:holds an ipBlock and a selector; a peer is one kind
+{{- else if hasKey $peer "ipBlock" -}}
+{{- $ib := $peer.ipBlock -}}
+{{- if not (kindIs "map" $ib) -}}bad:ipBlock is not an object
+{{- else -}}
+{{- $shape := include "dev-health.authMailCidrShape" $ib.cidr -}}
+{{- $exceptShape := "" -}}
+{{- if hasKey $ib "except" -}}
+{{- if not (kindIs "slice" $ib.except) -}}{{- $exceptShape = "ipBlock.except is not a list" -}}
+{{- else -}}{{- range $ib.except -}}{{- $es := include "dev-health.authMailCidrShape" . -}}{{- if and $es (not $exceptShape) -}}{{- $exceptShape = printf "ipBlock.except entry %s %s" (toString .) $es -}}{{- end -}}{{- end -}}{{- end -}}
+{{- end -}}
+{{- if $shape -}}bad:ipBlock.cidr {{ $shape }}
+{{- else if $exceptShape -}}bad:{{ $exceptShape }}
+{{- else if hasSuffix "/0" $ib.cidr -}}
+{{- if has $ib.cidr (list "0.0.0.0/0" "::/0") -}}wide{{- else -}}bad:ipBlock.cidr with prefix 0 must be exactly 0.0.0.0/0 or ::/0{{- end -}}
+{{- else -}}
+{{- $problem := include "dev-health.otlpPeerCidrProblem" $ib.cidr -}}
+{{- if $problem -}}bad:ipBlock.cidr {{ $problem }}{{- else -}}narrow{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- else -}}
+{{- $n := 0 -}}
+{{- $empty := "" -}}
+{{- range $k := list "podSelector" "namespaceSelector" -}}
+{{- if hasKey $peer $k -}}
+{{- $n = add1 $n -}}
+{{- $sel := index $peer $k -}}
+{{- if not (and (kindIs "map" $sel) (or (and (kindIs "map" $sel.matchLabels) (gt (len $sel.matchLabels) 0)) (and (kindIs "slice" $sel.matchExpressions) (gt (len $sel.matchExpressions) 0)))) -}}{{- $empty = $k -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if eq $n 0 -}}bad:has no ipBlock, podSelector or namespaceSelector
+{{- else if $empty -}}bad:{{ $empty }} has no matchLabels or matchExpressions item, so it selects everything
+{{- else -}}narrow
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+"" when one authService.networkPolicy.egress.mail.to entry is acceptable, else the reason. Call with
+(dict "peer" <entry> "ports" <authService.networkPolicy.egress.mail.ports>). The class is dev-health.authMailPeerClass.
+The one whole-internet exception (D6427, a provider with no fixed addresses): exactly 0.0.0.0/0 or ::/0, only with ports
+[TCP 443] alone (protocol TCP or unset, no endPort) and an except list of well formed CIDRs holding every private,
+shared, link-local and loopback network below, and for IPv6 also the mapped and NAT64 ranges that would reach internal
+IPv4 addresses.
+*/}}
+{{- define "dev-health.authMailPeerProblem" -}}
+{{- $class := include "dev-health.authMailPeerClass" .peer -}}
+{{- if hasPrefix "bad:" $class -}}{{ trimPrefix "bad:" $class }}
+{{- else if eq $class "wide" -}}
+{{- $cidr := .peer.ipBlock.cidr -}}
+{{- $required := ternary (list "fc00::/7" "fe80::/10" "::1/128" "::ffff:0:0/96" "64:ff9b::/96") (list "10.0.0.0/8" "172.16.0.0/12" "192.168.0.0/16" "100.64.0.0/10" "169.254.0.0/16" "127.0.0.0/8") (contains ":" $cidr) -}}
+{{- $except := list -}}
+{{- range (.peer.ipBlock.except | default list) }}{{- $except = append $except (lower .) }}{{- end -}}
+{{- $missing := list -}}
+{{- range $required }}{{- if not (has . $except) }}{{- $missing = append $missing . }}{{- end }}{{- end -}}
+{{- $ports := .ports | default list -}}
+{{- $port := dict -}}
+{{- if eq (len $ports) 1 }}{{- $port = index $ports 0 }}{{- end -}}
+{{- if not (and (eq (len $ports) 1) (kindIs "map" $port) (eq (toString (default "TCP" $port.protocol)) "TCP") (hasKey $port "port") (eq (int $port.port) 443) (not (hasKey $port "endPort"))) -}}an ipBlock with prefix 0 is accepted only with authService.networkPolicy.egress.mail.ports of TCP 443 alone
+{{- else if $missing -}}ipBlock.cidr {{ $cidr }} needs except entries {{ join ", " $missing }}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{/*
@@ -1079,9 +1189,74 @@ namespace, HTTPS, then networkPolicy.extraEgress. The auth pods never use these 
 {{- end }}
 
 {{/*
+The integer value of a dotted IPv4 address (validated by the caller).
+*/}}
+{{- define "dev-health.ipv4Int" -}}
+{{- $o := splitList "." (toString .) -}}
+{{- add (add (mul (int (index $o 0)) 16777216) (mul (int (index $o 1)) 65536)) (add (mul (int (index $o 2)) 256) (int (index $o 3))) -}}
+{{- end -}}
+
+{{/*
+One trusted proxy list, checked as internal/auth/clientaddr ParseTrust reads it (auth-service, and go-api through
+internal/api/clientip), so a rendered list never stops either service at start, plus the node pod range rule (CHAOS-11703):
+a wide IPv4 entry holds the node's own addresses (the network address, the bridge at the next one), from which a host
+process or a hostNetwork pod reaches the port past the pod selector, so it needs "!<network>" and "!<network+1>" beside it.
+dict: key (the values key the messages name), entries (list of strings), ackKey ("" = no ack band: a wide IPv4 entry needs
+only its node exclusions), ack (bool), peer (what the port admits, for the node message). Prints nothing; fails on a bad list.
+*/}}
+{{- define "dev-health.trustedProxyList" -}}
+{{- $p := . }}
+{{- $trusted := list }}
+{{- $excluded := list }}
+{{- range $p.entries }}
+{{- $entry := toString . }}
+{{- if hasPrefix "!" $entry }}
+{{- $addr := trimPrefix "!" $entry }}
+{{- if or (contains "/" $addr) (contains ":" $addr) (not (include "dev-health.trustedProxyEntry" $addr)) }}{{- fail (printf "%s exclusion entries must each be \"!\" and one IPv4 address, never a network, an IPv6 or an IPv4-mapped address: %q is not" $p.key $entry) }}{{- end }}
+{{- $excluded = append $excluded $addr }}
+{{- else }}
+{{- if or (not (include "dev-health.trustedProxyEntry" $entry)) (regexMatch "/0$" $entry) (regexMatch "^(?i)::ffff:" $entry) }}{{- fail (printf "%s entries must each be one IP address or CIDR network, never a /0 network or an IPv4-mapped form: a trusted peer picks the client address of every request" $p.key) }}{{- end }}
+{{- if contains "/" $entry }}
+{{- $bits := int (index (splitList "/" $entry) 1) }}
+{{- $v6 := contains ":" $entry }}
+{{- if or (and (not $v6) (lt $bits 24)) (and $v6 (lt $bits 64)) }}{{- fail (printf "%s entry %q is wider than a /24 (IPv4) or a /64 (IPv6): the node pod range is the widest list allowed%s" $p.key $entry (ternary (printf ", even with %s" $p.ackKey) "" (ne $p.ackKey ""))) }}{{- end }}
+{{- if and $v6 (lt $bits 124) }}{{- fail (printf "%s entry %q is an IPv6 network wider than a /124: the render cannot name its node exclusions, %s" $p.key $entry (ternary (printf "so %s does not allow it; list the go-api pod addresses" $p.ackKey) "so it is refused; list the proxy addresses" (ne $p.ackKey ""))) }}{{- end }}
+{{- if and $p.ackKey (lt $bits 28) (not $p.ack) }}{{- fail (printf "%s entry %q is wider than a /28 (IPv4) or a /124 (IPv6): every address in it is believed as a proxy that names the client. It is allowed only with %s=true, with its node exclusions beside it, and only while the auth-service NetworkPolicy admits go-api's pods alone on the API port; prefer the go-api pod addresses" $p.key $entry $p.ackKey) }}{{- end }}
+{{- end }}
+{{- $trusted = append $trusted $entry }}
+{{- end }}
+{{- end }}
+{{- /* An exclusion mirrors clientaddr.ParseTrust: inside a listed network, never also listed as an address. IPv4 only, so the render can check it. */}}
+{{- range $x := $excluded }}
+{{- if has $x $trusted }}{{- fail (printf "%s exclusion entries must not name an address the list also trusts: \"!%s\"" $p.key $x) }}{{- end }}
+{{- $xv := int (include "dev-health.ipv4Int" $x) }}
+{{- $inside := false }}
+{{- range $trusted }}
+{{- if and (contains "/" .) (not (contains ":" .)) }}
+{{- $parts := splitList "/" . }}
+{{- $nv := int (include "dev-health.ipv4Int" (index $parts 0)) }}
+{{- $size := 1 }}
+{{- range until (int (sub 32 (int (index $parts 1)))) }}{{- $size = mul $size 2 }}{{- end }}
+{{- if and (ge $xv $nv) (lt $xv (add $nv $size)) }}{{- $inside = true }}{{- end }}
+{{- end }}
+{{- end }}
+{{- if not $inside }}{{- fail (printf "%s exclusion entries must each lie inside a listed IPv4 network: \"!%s\" does not" $p.key $x) }}{{- end }}
+{{- end }}
+{{- range $trusted }}
+{{- if and (contains "/" .) (not (contains ":" .)) (lt (int (index (splitList "/" .) 1)) 28) }}
+{{- $net := index (splitList "/" .) 0 }}
+{{- $o := splitList "." $net }}
+{{- $bridge := printf "%s.%s.%s.%d" (index $o 0) (index $o 1) (index $o 2) (add1 (int (index $o 3))) }}
+{{- if not (and (has $net $excluded) (has $bridge $excluded)) }}{{- fail (printf "%s entry %q needs its node exclusions \"!%s\" and \"!%s\" in the same list: the range holds the node's own addresses, from which a host process or a hostNetwork pod reaches %s" $p.key . $net $bridge $p.peer) }}{{- end }}
+{{- end }}
+{{- end }}
+{{- end -}}
+
+{{/*
 One authService.trustedProxies entry is what internal/auth/clientaddr ParseTrust accepts (a bare IP address, or a strict CIDR
 network: canonical prefix digits, no host bits, no zone), so a rendered value never stops auth-service at start. Prints "true" when
-the entry is valid, nothing otherwise. The chart refuses /0 and IPv4-mapped forms on top of this.
+the entry is valid, nothing otherwise. The chart refuses /0 and IPv4-mapped forms on top of this. An exclusion entry
+("!<address>") is this check on its address, plus the IPv4-only rules in auth-service.yaml.
 */}}
 {{- define "dev-health.trustedProxyEntry" -}}
 {{- $parts := splitList "/" (toString .) -}}
@@ -1303,4 +1478,103 @@ Kubernetes default of 25 percent rounds up to one pod at one replica). Takes
 {{- $used := add $pools $direct -}}
 {{- if gt $used (int64 $v) -}}{{- fail (printf "authService.database.connectionBudget: %d connections are needed but the budget is %d: (authService.replicas %d + %d surge) x authService.database.maxConns %d = %d direct, plus %d go-pgbouncer pool connections (%s). Lower a pool or add capacity before raising the budget" $used (int64 $v) $replicas (int64 (include "dev-health.authMaxSurge" .)) (int64 (include "dev-health.authMaxConns" .)) $direct $pools $txnDetail) -}}{{- end -}}
 {{- end -}}
+{{- end -}}
+
+{{/*
+Why an OTLP egress ipBlock cidr is refused, or "" when it is acceptable. The prefix is parsed as a number: an IPv4
+prefix must be /8 to /32 and an IPv6 prefix /32 to /128, so no spelling of 0.0.0.0/0 or ::/0 passes. An IPv6 cidr
+written with an embedded dotted IPv4 part is refused; any other is expanded to its 8 groups and refused when it
+overlaps the IPv4-mapped range ::ffff:0:0/96 or the NAT64 ranges 64:ff9b::/96 and 64:ff9b:1::/48 (inside them or
+containing them), in any spelling. Call with the cidr string.
+*/}}
+{{- define "dev-health.otlpPeerCidrProblem" -}}
+{{- $parts := splitList "/" (lower (trim (toString .))) -}}
+{{- if ne (len $parts) 2 -}}
+it needs exactly one "/" and a prefix
+{{- else -}}
+{{- $addr := index $parts 0 -}}
+{{- $bits := index $parts 1 -}}
+{{- if not (regexMatch "^[0-9]{1,3}$" $bits) -}}
+the prefix is not a number
+{{- else -}}
+{{- $prefix := atoi $bits -}}
+{{- if contains ":" $addr -}}
+{{- if or (lt $prefix 32) (gt $prefix 128) -}}
+an IPv6 prefix must be from /32 to /128
+{{- else if contains "." $addr -}}
+an IPv6 address with an embedded IPv4 part (the mapped or compatible range) is not a collector address
+{{- else -}}
+{{- $groups := include "dev-health.ipv6Groups" $addr | fromJsonArray -}}
+{{- if ne (len $groups) 8 -}}
+the IPv6 address does not parse
+{{- else -}}
+{{- $reason := "" -}}
+{{- range $r := list (list (list 0 0 0 0 0 65535 0 0) 96 "the IPv4-mapped IPv6 range ::ffff:0:0/96") (list (list 100 65435 0 0 0 0 0 0) 96 "the NAT64 range 64:ff9b::/96") (list (list 100 65435 1 0 0 0 0 0) 48 "the NAT64 range 64:ff9b:1::/48") -}}
+{{- if and (not $reason) (eq (include "dev-health.ipv6Overlaps" (dict "a" $groups "p" $prefix "b" (index $r 0) "q" (index $r 1))) "true") -}}
+{{- $reason = printf "it overlaps %s, which is not a collector address" (index $r 2) -}}
+{{- end -}}
+{{- end -}}
+{{- $reason -}}
+{{- end -}}
+{{- end -}}
+{{- else -}}
+{{- if or (lt $prefix 8) (gt $prefix 32) -}}
+an IPv4 prefix must be from /8 to /32
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+The 8 groups of a lower-case IPv6 address as a JSON list of numbers, "::" expanded; [] when it does not parse.
+*/}}
+{{- define "dev-health.ipv6Groups" -}}
+{{- $hex := dict "0" 0 "1" 1 "2" 2 "3" 3 "4" 4 "5" 5 "6" 6 "7" 7 "8" 8 "9" 9 "a" 10 "b" 11 "c" 12 "d" 13 "e" 14 "f" 15 -}}
+{{- $halves := splitList "::" . -}}
+{{- $raw := list -}}
+{{- if eq (len $halves) 1 -}}
+{{- $raw = splitList ":" . -}}
+{{- else if eq (len $halves) 2 -}}
+{{- $left := list -}}
+{{- if ne (index $halves 0) "" }}{{- $left = splitList ":" (index $halves 0) }}{{- end -}}
+{{- $right := list -}}
+{{- if ne (index $halves 1) "" }}{{- $right = splitList ":" (index $halves 1) }}{{- end -}}
+{{- $fill := sub 8 (add (len $left) (len $right)) | int -}}
+{{- if gt $fill 0 -}}
+{{- $raw = $left -}}
+{{- range until $fill }}{{- $raw = append $raw "0" }}{{- end -}}
+{{- $raw = concat $raw $right -}}
+{{- end -}}
+{{- end -}}
+{{- $out := list -}}
+{{- $ok := eq (len $raw) 8 -}}
+{{- range $g := $raw -}}
+{{- if not (regexMatch "^[0-9a-f]{1,4}$" $g) -}}
+{{- $ok = false -}}
+{{- else -}}
+{{- $v := 0 -}}
+{{- range $c := splitList "" $g }}{{- $v = add (mul $v 16) (get $hex $c) }}{{- end -}}
+{{- $out = append $out $v -}}
+{{- end -}}
+{{- end -}}
+{{- if and $ok (eq (len $out) 8) -}}{{- toJson $out -}}{{- else -}}[]{{- end -}}
+{{- end -}}
+
+{{/*
+"true" when the IPv6 prefixes a/p and b/q (8 groups each) overlap: they agree on their first min(p, q) bits.
+*/}}
+{{- define "dev-health.ipv6Overlaps" -}}
+{{- $m := min (int .p) (int .q) -}}
+{{- $full := div $m 16 | int -}}
+{{- $rem := mod $m 16 | int -}}
+{{- $same := true -}}
+{{- range $i := until $full -}}
+{{- if ne (int (index $.a $i)) (int (index $.b $i)) }}{{- $same = false }}{{- end -}}
+{{- end -}}
+{{- if and $same (gt $rem 0) -}}
+{{- $shift := index (list 1 2 4 8 16 32 64 128 256 512 1024 2048 4096 8192 16384 32768 65536) (sub 16 $rem | int) -}}
+{{- if ne (div (int (index .a $full)) $shift) (div (int (index .b $full)) $shift) }}{{- $same = false }}{{- end -}}
+{{- end -}}
+{{- if $same }}true{{- end -}}
 {{- end -}}

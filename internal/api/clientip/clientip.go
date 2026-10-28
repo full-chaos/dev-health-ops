@@ -5,8 +5,13 @@
 //
 //  1. The client is the TCP peer, unless the peer is a trusted proxy. An
 //     untrusted peer's forwarding headers are ignored entirely.
-//  2. Trusted proxies come from TRUSTED_PROXIES (comma-separated IPs and/or
-//     CIDRs), read on every call. Unset or empty trusts nobody (fail closed).
+//  2. Trusted proxies come from TRUSTED_PROXIES, read on every call with the
+//     auth-service parser (clientaddr.ParseTrustFor): comma-separated IPs, strict
+//     CIDRs and "!<address>" exclusions. An excluded address is never a proxy,
+//     even inside a listed network: the node pod range holds the node's own
+//     addresses, from which a host process or a hostNetwork pod reaches go-api.
+//     Unset or empty trusts nobody. A list the parser refuses trusts nobody, and
+//     go-api refuses to start on it (Check), so no entry is ever dropped.
 //  3. For a trusted peer, X-Forwarded-For (all header lines joined) is walked
 //     from the RIGHT: each hop a trusted proxy appended is skipped, and the
 //     first untrusted hop is the client. Entries left of that hop are
@@ -42,7 +47,12 @@ import (
 	"net/netip"
 	"os"
 	"strings"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
 )
+
+// Env names the trusted-proxy list.
+const Env = "TRUSTED_PROXIES"
 
 // FromRequest returns the client address per the package rule, or "" when the
 // request carries no peer address at all.
@@ -54,8 +64,8 @@ func FromRequest(r *http.Request) string {
 		// raw text so distinct peers stay distinct.
 		return peerText
 	}
-	trusted := parseTrusted(os.Getenv("TRUSTED_PROXIES"))
-	if !trusted.contains(peer) {
+	trusted := trustedSet()
+	if !trusted.Contains(peer) {
 		return peer.String()
 	}
 	if forwarded := strings.Join(r.Header.Values("X-Forwarded-For"), ","); strings.TrimSpace(forwarded) != "" {
@@ -65,12 +75,12 @@ func FromRequest(r *http.Request) string {
 			if !ok {
 				return peer.String()
 			}
-			if !trusted.contains(hop) {
+			if !trusted.Contains(hop) {
 				return hop.String()
 			}
 		}
 	}
-	if real, ok := parseAddr(r.Header.Get("X-Real-IP")); ok && !trusted.contains(real) {
+	if real, ok := parseAddr(r.Header.Get("X-Real-IP")); ok && !trusted.Contains(real) {
 		return real.String()
 	}
 	return peer.String()
@@ -110,60 +120,28 @@ func parseAddr(text string) (netip.Addr, bool) {
 
 func canonical(addr netip.Addr) netip.Addr { return addr.Unmap().WithZone("") }
 
-type trustedSet struct {
-	prefixes []netip.Prefix
-}
-
-func parseTrusted(raw string) trustedSet {
-	var set trustedSet
-	for _, part := range strings.Split(raw, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		if strings.Contains(part, "/") {
-			if prefix, err := netip.ParsePrefix(part); err == nil {
-				set.prefixes = append(set.prefixes, netip.PrefixFrom(canonical(prefix.Addr()), unmapBits(prefix)).Masked())
-			}
-			continue
-		}
-		if addr, err := netip.ParseAddr(part); err == nil {
-			addr = canonical(addr)
-			set.prefixes = append(set.prefixes, netip.PrefixFrom(addr, addr.BitLen()))
-		}
+// trustedSet is the parsed list; a list the parser refuses trusts nobody.
+func trustedSet() clientaddr.Trust {
+	trust, err := clientaddr.ParseTrustFor(Env, os.Getenv(Env))
+	if err != nil {
+		return clientaddr.Trust{}
 	}
-	return set
+	return trust
 }
 
-// unmapBits keeps an IPv4-mapped IPv6 prefix (::ffff:a.b.c.d/96+n) meaning the
-// same IPv4 range once its address is unmapped.
-func unmapBits(prefix netip.Prefix) int {
-	if prefix.Addr().Is4In6() && prefix.Bits() >= 96 {
-		return prefix.Bits() - 96
+// Check reads TRUSTED_PROXIES as FromRequest does: the number of trusted entries
+// and of exclusions, or the parser's error, which names the entry by its index.
+func Check() (entries, exclusions int, err error) {
+	trust, err := clientaddr.ParseTrustFor(Env, os.Getenv(Env))
+	if err != nil {
+		return 0, 0, err
 	}
-	return prefix.Bits()
+	return trust.Len(), trust.Exclusions(), nil
 }
 
-func (s trustedSet) contains(addr netip.Addr) bool {
-	for _, prefix := range s.prefixes {
-		if prefix.Contains(addr) {
-			return true
-		}
-	}
-	return false
-}
-
-// WidePrefixes counts the TRUSTED_PROXIES entries wider than a /28 (IPv4) or a
+// WidePrefixes counts the TRUSTED_PROXIES networks wider than a /28 (IPv4) or a
 // /124 (IPv6): each trusts every address in it as a proxy.
-func WidePrefixes() int {
-	wide := 0
-	for _, prefix := range parseTrusted(os.Getenv("TRUSTED_PROXIES")).prefixes {
-		if prefix.Addr().BitLen()-prefix.Bits() > 4 {
-			wide++
-		}
-	}
-	return wide
-}
+func WidePrefixes() int { return trustedSet().WidePrefixes() }
 
 // NetworkFencedMarker names the variable the chart sets to "true" only where the go-api request
 // ports are fenced to the ingress controller pods by a NetworkPolicy.

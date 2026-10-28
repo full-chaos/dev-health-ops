@@ -119,3 +119,46 @@ func TestNarrowAfterFlipBackIsRefusedWithAuthMigrateOff(t *testing.T) {
 		}
 	}
 }
+
+// CHAOS-11606: the first rollback release (phase 4, stage goApi) turns users-owned off for auth-service while old owned
+// pods still serve, so it defers exactly like the phase 3 release. The defer follows ownership (authOn usersOwned), not the
+// phase number: stage owned never defers.
+func TestStageGoAPIRollbackReleaseNeverNarrows(t *testing.T) {
+	docs := renderPhase(t, 4, "--set", "authService.usersOwnedStage=goApi", "--set", "authService.migrate.acknowledgeGrantNarrowing="+ackDigest)
+	flag := "-ack-grant-narrowing=" + ackDigest
+	want := map[string][]string{
+		"a-dev-health-auth-migrate": {flag, "-defer-narrowing"},
+		"a-dev-health-auth-grants":  {"grants", flag, "-defer-narrowing"},
+	}
+	if got := ackJobs(t, docs); !reflect.DeepEqual(got, want) {
+		t.Errorf("stage goApi: Jobs with the acknowledgement = %v, want %v", got, want)
+	}
+}
+
+func TestStageOwnedDoesNotDefer(t *testing.T) {
+	docs := renderPhase(t, 4, "--set", "authService.usersOwnedStage=owned", "--set", "authService.migrate.acknowledgeGrantNarrowing="+ackDigest)
+	flag := "-ack-grant-narrowing=" + ackDigest
+	want := map[string][]string{
+		"a-dev-health-auth-migrate": {flag},
+		"a-dev-health-auth-grants":  {"grants", flag},
+	}
+	if got := ackJobs(t, docs); !reflect.DeepEqual(got, want) {
+		t.Errorf("stage owned: Jobs with the acknowledgement = %v, want %v", got, want)
+	}
+}
+
+// narrowAfterFlipBack is refused at phase 4 at every stage, by the one guard, with its one message.
+func TestNarrowAfterFlipBackIsRefusedAtPhase4AtEveryStageByOneGuard(t *testing.T) {
+	for _, stage := range []string{"goApi", "owned"} {
+		_, out, err := renderAuth(t, phaseArgs(4, "--set", "authService.usersOwnedStage="+stage,
+			"--set", "authService.migrate.acknowledgeGrantNarrowing="+ackDigest,
+			"--set", "authService.migrate.narrowAfterFlipBack=true")...)
+		const want = "authService.migrate.narrowAfterFlipBack is refused at authService.phase 4 or higher and while auth-service owns users"
+		if err == nil || !strings.Contains(out, want) {
+			t.Errorf("stage %s: want the guard refusal %q: err=%v out=%.300s", stage, want, err, out)
+		}
+		if strings.Contains(out, "not a phase 4 setting") {
+			t.Errorf("stage %s: a second refusal path answered: %.300s", stage, out)
+		}
+	}
+}

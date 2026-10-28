@@ -18,6 +18,7 @@ lifecycle: active
 - [Backup or restore failure](backup-or-restore-failure.md)
 - [Disaster recovery](disaster-recovery.md)
 - [Auth sessions flip and rollback](auth-sessions-flip-and-rollback.md)
+- [Auth users-owned flip and rollback](auth-users-owned-flip-and-rollback.md)
 - [Auth-service scrape check and alert import](auth-service-scrape-and-alerts.md)
 - [Auth users flip-back grants](auth-users-flip-back-grants.md)
 

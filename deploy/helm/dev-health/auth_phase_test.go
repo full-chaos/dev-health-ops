@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -19,10 +20,10 @@ import (
 // that go-api's and auth-service's own start-up parsers accept what the chart renders, with every route go-api
 // forwards mounted by auth-service.
 
-var phase3Secrets = []string{
+var phase3Secrets = append([]string{
 	"--set", "authService.sessionKeys.loginLockout.secretName=auth-lockout",
 	"--set", "authService.social.secretName=auth-social",
-}
+}, mailSets()...) // the mail setting renders only from phase 4 and is inert below it
 
 // phaseArgs renders go-api, query-api, the migrate Job and the River hooks beside auth-service, with every
 // precondition the phase needs.
@@ -41,6 +42,9 @@ func phaseArgs(phase int, extra ...string) []string {
 	}
 	if phase >= 3 {
 		out = append(out, phase3Secrets...)
+	}
+	if phase == 4 && !slices.ContainsFunc(extra, func(s string) bool { return strings.HasPrefix(s, "authService.usersOwnedStage=") }) {
+		out = append(out, "--set", "authService.usersOwnedStage=owned")
 	}
 	return append(out, extra...)
 }

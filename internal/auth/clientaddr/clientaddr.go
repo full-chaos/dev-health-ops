@@ -3,7 +3,10 @@
 //
 // The address is the socket peer, unless the peer is a configured trusted
 // proxy (AUTH_SERVICE_TRUSTED_PROXIES) that sent exactly one X-Forwarded-For
-// value holding exactly one address: then it is that address. The go-api
+// value holding exactly one address: then it is that address. An excluded
+// address ("!<address>" entry) is never a proxy, even inside a listed network:
+// the node pod range holds the node's own addresses, from which a host process
+// or a hostNetwork pod reaches the service. The go-api
 // proxy sends one value it resolved itself (internal/apiservice/authproxy.go),
 // so a chain, a second header or an unparsable value is not a proxy's answer
 // and falls back to the peer. X-Forwarded-Proto and the other forwarded
@@ -32,60 +35,122 @@ const Env = "AUTH_SERVICE_TRUSTED_PROXIES"
 type Trust struct {
 	addrs    map[netip.Addr]bool
 	prefixes []netip.Prefix
+	except   map[netip.Addr]bool
 }
 
-// ParseTrust reads a comma-separated list of IP addresses and networks. A
-// network must be a strict CIDR (no host bits). An empty value trusts no
-// peer. "*", a hostname, an empty entry or a non-strict CIDR is an error, so
-// a typo cannot widen the trust.
-func ParseTrust(value string) (Trust, error) {
-	t := Trust{addrs: map[netip.Addr]bool{}}
+// ParseTrust reads a comma-separated list of IP addresses, networks and
+// exclusions. A network must be a strict CIDR (no host bits), never a /0. An
+// exclusion is "!" and one IP address, never a network; it must lie inside a
+// listed network and must not also be listed as an address. No entry may be an
+// IPv4-mapped form. An empty value trusts no peer. "*", a hostname, an empty
+// entry, a non-strict CIDR or a bad exclusion is an error, so a typo cannot
+// widen the trust.
+func ParseTrust(value string) (Trust, error) { return ParseTrustFor(Env, value) }
+
+// ParseTrustFor is ParseTrust for the variable name, which its errors name.
+func ParseTrustFor(name, value string) (Trust, error) {
+	t := Trust{addrs: map[netip.Addr]bool{}, except: map[netip.Addr]bool{}}
 	if strings.TrimSpace(value) == "" {
 		return t, nil
 	}
+	type exclusion struct {
+		addr  netip.Addr
+		entry int
+	}
+	var exclusions []exclusion
 	for index, raw := range strings.Split(value, ",") {
 		entry := strings.TrimSpace(raw)
 		switch {
 		case entry == "":
-			return Trust{}, fmt.Errorf("%s entry %d is empty", Env, index+1)
+			return Trust{}, fmt.Errorf("%s entry %d is empty", name, index+1)
 		case entry == "*":
-			return Trust{}, fmt.Errorf("%s entry %d is \"*\": name each proxy address or network", Env, index+1)
+			return Trust{}, fmt.Errorf("%s entry %d is \"*\": name each proxy address or network", name, index+1)
+		case strings.HasPrefix(entry, "!"):
+			addr, err := netip.ParseAddr(entry[1:])
+			if err != nil || addr.Zone() != "" {
+				return Trust{}, fmt.Errorf("%s entry %d is not an excluded IP address (\"!\" and one address, never a network)", name, index+1)
+			}
+			if addr.Is4In6() {
+				return Trust{}, fmt.Errorf("%s entry %d is an IPv4-mapped exclusion: give it as IPv4", name, index+1)
+			}
+			exclusions = append(exclusions, exclusion{addr, index + 1})
 		case strings.Contains(entry, "/"):
 			prefix, err := netip.ParsePrefix(entry)
 			if err != nil || prefix.Addr().Zone() != "" {
-				return Trust{}, fmt.Errorf("%s entry %d is not a network", Env, index+1)
+				return Trust{}, fmt.Errorf("%s entry %d is not a network", name, index+1)
 			}
 			if prefix.Masked() != prefix {
-				return Trust{}, fmt.Errorf("%s entry %d has host bits set: give the network address", Env, index+1)
+				return Trust{}, fmt.Errorf("%s entry %d has host bits set: give the network address", name, index+1)
 			}
 			if prefix.Addr().Is4In6() {
-				return Trust{}, fmt.Errorf("%s entry %d is an IPv4-mapped network: give it as IPv4", Env, index+1)
+				return Trust{}, fmt.Errorf("%s entry %d is an IPv4-mapped network: give it as IPv4", name, index+1)
+			}
+			if prefix.Bits() == 0 {
+				return Trust{}, fmt.Errorf("%s entry %d is a /0 network: it would trust every peer", name, index+1)
 			}
 			t.prefixes = append(t.prefixes, prefix)
 		default:
 			addr, err := netip.ParseAddr(entry)
 			if err != nil || addr.Zone() != "" {
-				return Trust{}, fmt.Errorf("%s entry %d is not an IP address", Env, index+1)
+				return Trust{}, fmt.Errorf("%s entry %d is not an IP address", name, index+1)
 			}
-			t.addrs[addr.Unmap()] = true
+			if addr.Is4In6() {
+				return Trust{}, fmt.Errorf("%s entry %d is an IPv4-mapped address: give it as IPv4", name, index+1)
+			}
+			t.addrs[addr] = true
 		}
+	}
+	for _, x := range exclusions {
+		if t.addrs[x.addr] {
+			return Trust{}, fmt.Errorf("%s entry %d excludes an address the list also trusts", name, x.entry)
+		}
+		if !t.inPrefixes(x.addr) {
+			return Trust{}, fmt.Errorf("%s entry %d excludes an address outside every listed network", name, x.entry)
+		}
+		t.except[x.addr] = true
 	}
 	return t, nil
 }
 
-// Len is the number of trusted entries.
+// Len is the number of trusted entries; exclusions are not counted.
 func (t Trust) Len() int { return len(t.addrs) + len(t.prefixes) }
 
-func (t Trust) trusts(peer netip.Addr) bool {
-	if t.addrs[peer] {
-		return true
+// Exclusions is the number of excluded addresses.
+func (t Trust) Exclusions() int { return len(t.except) }
+
+// WidePrefixes is the number of trusted networks wider than a /28 (IPv4) or a
+// /124 (IPv6): each trusts every address in it as a proxy.
+func (t Trust) WidePrefixes() int {
+	wide := 0
+	for _, prefix := range t.prefixes {
+		if prefix.Addr().BitLen()-prefix.Bits() > 4 {
+			wide++
+		}
 	}
+	return wide
+}
+
+// Contains reports whether addr (zone dropped, IPv4-mapped unmapped) is a
+// trusted proxy: listed, or inside a listed network and not excluded.
+func (t Trust) Contains(addr netip.Addr) bool { return t.trusts(addr.WithZone("").Unmap()) }
+
+func (t Trust) inPrefixes(peer netip.Addr) bool {
 	for _, prefix := range t.prefixes {
 		if prefix.Contains(peer) {
 			return true
 		}
 	}
 	return false
+}
+
+func (t Trust) trusts(peer netip.Addr) bool {
+	if t.except[peer] {
+		return false
+	}
+	if t.addrs[peer] {
+		return true
+	}
+	return t.inPrefixes(peer)
 }
 
 // Resolve is the client address of r: the zero Addr when the peer address

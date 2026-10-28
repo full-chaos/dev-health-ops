@@ -13,6 +13,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/timeoutclass"
 )
 
 var checkNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,62}$`)
@@ -591,6 +593,10 @@ func (c *requiredCheck) execute(
 			return false, true, "timeout"
 		case errors.Is(err, context.Canceled):
 			return false, true, "canceled"
+		case timeoutclass.IsTimeout(err):
+			// An I/O timeout (OS socket deadline, net.Error) has the same form as a context deadline, and
+			// wins over a transient flag on the same error (CHAOS-11617).
+			return false, true, "timeout"
 		case IsTransient(err):
 			return false, false, CauseUnreachable
 		default:

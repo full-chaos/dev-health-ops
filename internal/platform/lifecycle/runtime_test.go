@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -244,86 +245,86 @@ func TestRuntimeComponentFailureLogsComponentNameAndCause(t *testing.T) {
 	}
 }
 
+// The runtime runs in a bubble on a virtual clock with channel-based components (no I/O): shutdown returns at exactly the shutdown
+// timeout while the non-cooperative components are still blocked, so a bound that is honored late fails as well as one that is
+// never honored.
 func TestShutdownBoundsNonCooperativeComponentsAndAttemptsAllInReverse(t *testing.T) {
 	t.Parallel()
 
-	var mu sync.Mutex
-	var events []string
-	record := func(event string) {
-		mu.Lock()
-		defer mu.Unlock()
-		events = append(events, event)
-	}
-	newComponent := func(name string) *nonCooperativeComponent {
-		return &nonCooperativeComponent{
-			name:    name,
-			record:  record,
-			entered: make(chan struct{}),
-			release: make(chan struct{}),
-			exited:  make(chan struct{}),
+	synctest.Test(t, func(t *testing.T) {
+		var mu sync.Mutex
+		var events []string
+		record := func(event string) {
+			mu.Lock()
+			defer mu.Unlock()
+			events = append(events, event)
 		}
-	}
-	a := newComponent("a")
-	b := newComponent("b")
-	c := newComponent("c")
-	components := []*nonCooperativeComponent{a, b, c}
-	t.Cleanup(func() {
+		newComponent := func(name string) *nonCooperativeComponent {
+			return &nonCooperativeComponent{
+				name:    name,
+				record:  record,
+				entered: make(chan struct{}),
+				release: make(chan struct{}),
+				exited:  make(chan struct{}),
+			}
+		}
+		a := newComponent("a")
+		b := newComponent("b")
+		c := newComponent("c")
+		components := []*nonCooperativeComponent{a, b, c}
+		// Every component is released on the way out, so a failing run still ends the bubble.
+		defer func() {
+			for _, component := range components {
+				select {
+				case <-component.release:
+				default:
+					close(component.release)
+				}
+				<-component.exited
+			}
+		}()
+		const shutdownTimeout = 90 * time.Millisecond
+		runtime, err := New(Options{ShutdownTimeout: shutdownTimeout})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		started := time.Now()
+		err = runtime.shutdown(context.Background(), []Component{a, b, c})
+		returnedAt := time.Now()
+		if err == nil {
+			t.Fatal("expected non-cooperative shutdowns to report deadline errors")
+		}
+		for _, name := range []string{"a", "b", "c"} {
+			if !strings.Contains(err.Error(), "shutdown component "+name+": context deadline exceeded") {
+				t.Fatalf("missing %s deadline error: %v", name, err)
+			}
+		}
 		for _, component := range components {
 			select {
-			case <-component.release:
-			default:
-				close(component.release)
-			}
-			select {
 			case <-component.exited:
-			case <-time.After(time.Second):
-				t.Errorf("component %s did not exit after release", component.name)
+				t.Fatalf("component %s had exited when shutdown returned: it was not a non-cooperative component", component.name)
+			default:
 			}
+		}
+		if !returnedAt.Equal(started.Add(shutdownTimeout)) {
+			t.Fatalf("shutdown returned at +%v of virtual time, want +%v: the hard shutdown bound", returnedAt.Sub(started), shutdownTimeout)
+		}
+		for _, component := range components {
+			select {
+			case <-component.entered:
+			default:
+				t.Fatalf("component %s was not attempted", component.name)
+			}
+		}
+
+		mu.Lock()
+		gotEvents := append([]string(nil), events...)
+		mu.Unlock()
+		if want := []string{"stop:c", "stop:b", "stop:a"}; !reflect.DeepEqual(gotEvents, want) {
+			t.Fatalf("unexpected shutdown attempt order: got %v want %v", gotEvents, want)
 		}
 	})
-	const shutdownTimeout = 90 * time.Millisecond
-	runtime, err := New(Options{ShutdownTimeout: shutdownTimeout})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	startedAt := time.Now()
-	err = runtime.shutdown(context.Background(), []Component{a, b, c})
-	elapsed := time.Since(startedAt)
-	if err == nil {
-		t.Fatal("expected non-cooperative shutdowns to report deadline errors")
-	}
-	for _, name := range []string{"a", "b", "c"} {
-		if !strings.Contains(err.Error(), "shutdown component "+name+": context deadline exceeded") {
-			t.Fatalf("missing %s deadline error: %v", name, err)
-		}
-	}
-	if elapsed > shutdownTimeout+100*time.Millisecond {
-		t.Fatalf("shutdown exceeded hard upper bound: elapsed=%s timeout=%s", elapsed, shutdownTimeout)
-	}
-	for _, component := range components {
-		select {
-		case <-component.entered:
-		default:
-			t.Fatalf("component %s was not attempted", component.name)
-		}
-	}
-
-	mu.Lock()
-	gotEvents := append([]string(nil), events...)
-	mu.Unlock()
-	if want := []string{"stop:c", "stop:b", "stop:a"}; !reflect.DeepEqual(gotEvents, want) {
-		t.Fatalf("unexpected shutdown attempt order: got %v want %v", gotEvents, want)
-	}
-
-	for _, component := range components {
-		close(component.release)
-		select {
-		case <-component.exited:
-		case <-time.After(time.Second):
-			t.Fatalf("component %s did not exit after release", component.name)
-		}
-	}
 }
 
 func TestShutdownHonorsReviewedComponentBudget(t *testing.T) {

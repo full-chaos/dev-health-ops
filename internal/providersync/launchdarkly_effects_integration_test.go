@@ -77,6 +77,7 @@ CREATE TABLE feature_flag_event (
 ORDER BY (org_id, flag_key, environment, event_ts)`); err != nil {
 		t.Fatal(err)
 	}
+	//ttlclock:allow never reaches a TTL table: the test creates its own feature_flag_event table without a TTL instead of the migrated one tables=feature_flag_event
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 	repository, err := NewPostgresRepository(pool)
 	if err != nil {

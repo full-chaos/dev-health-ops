@@ -28,6 +28,7 @@ internal/platform/logging
 internal/platform/pgident
 internal/platform/queuecontrol
 internal/platform/secrets
+internal/platform/timeoutclass
 internal/platform/version
 internal/providerfoundation
 internal/pyargparse

@@ -55,7 +55,6 @@ internal/syncdispatchruntime/dispatch_pool_contention_integration_test.go	TestDi
 internal/syncreconciler/materializer_jit_cost_integration_test.go	TestMaterializerStepCompletesUnderRealisticStageBudgetWithJITOnAtServerLevel	pending CHAOS-11684 conversion
 internal/syncreconciler/stage_failed_phase_integration_test.go	TestStageFailedNamesTheSlowStatementThatSpentTheBudget	found by the gate, not by the census: pending CHAOS-11684 re-census and conversion
 internal/testsupport/containers/shared_integration_test.go	TestSharedPostgresAtCapacityRefusesLoudly	pending CHAOS-11684 conversion
-internal/workerservice/dependencies_test.go	TestQueuedContractVersionsReadyDoesNotWaitOnTheCensusOnceProven	pending CHAOS-11684 conversion
 internal/workerservice/execution_liveness_retry_backoff_integration_test.go	TestExecutionLivenessSeesIdempotencyFailuresSpacedByRiverRetryBackoff	found by the gate, not by the census: pending CHAOS-11684 re-census and conversion
 internal/workerservice/multi_replica_outage_integration_test.go	waitForCompletedAfterOutage	found by the gate, not by the census: pending CHAOS-11684 re-census and conversion
 internal/workerservice/readiness_pool_wiring_test.go	TestDomainReadinessChecksRunOnTheReadinessPoolNotTheWorkPool	lower-bound wait proof: load only lengthens it

@@ -42,22 +42,23 @@ func (r *flowRecorder) names() []string {
 }
 
 type flowAccounts struct {
-	rec       *flowRecorder
-	byEmail   map[string]*User
-	byID      map[uuid.UUID]*User
-	taken     bool
-	provided  []ProvisionLocalRequest
-	verified  []uuid.UUID
-	peeked    [][32]byte
-	hashes    []string
-	ended     []uuid.UUID
-	created   []uuid.UUID
-	links     *flowLinks
-	afterPeek func()
-	newID     uuid.UUID
-	writeErr  error
-	locker    *flowLocker
-	outside   int
+	rec             *flowRecorder
+	byEmail         map[string]*User
+	byID            map[uuid.UUID]*User
+	taken           bool
+	provided        []ProvisionLocalRequest
+	verified        []uuid.UUID
+	peeked          [][32]byte
+	hashes          []string
+	ended           []uuid.UUID
+	created         []uuid.UUID
+	links           *flowLinks
+	afterPeek       func()
+	afterVerifyPeek func()
+	newID           uuid.UUID
+	writeErr        error
+	locker          *flowLocker
+	outside         int
 }
 
 func (a *flowAccounts) ByEmail(_ context.Context, email string) (*User, error) {
@@ -83,6 +84,9 @@ func (a *flowAccounts) PeekVerificationLink(_ context.Context, hash [32]byte) (u
 	a.rec.add("PeekVerificationLink")
 	a.peeked = append(a.peeked, hash)
 	id, ok := a.links.redeem[hash]
+	if ok && a.afterVerifyPeek != nil {
+		a.afterVerifyPeek()
+	}
 	return id, ok, nil
 }
 
@@ -340,6 +344,17 @@ func TestVerifyConsumesOnceAndMarksVerified(t *testing.T) {
 	again, err := rig.f.Verify(context.Background(), "good-secret")
 	if err != nil || again.Kind != FlowInvalidToken || len(rig.accounts.verified) != 1 {
 		t.Errorf("replay = %+v, %v, verified writes %d", again, err, len(rig.accounts.verified))
+	}
+}
+
+func TestVerifyOfALinkSpentAfterTheReadIsRefused(t *testing.T) {
+	rig := newFlowRig(t, true)
+	u := rig.user("v@example.com", false)
+	rig.grant("raced", u.ID)
+	rig.accounts.afterVerifyPeek = func() { delete(rig.links.redeem, sha256.Sum256([]byte("raced"))) }
+	out, err := rig.f.Verify(context.Background(), "raced")
+	if err != nil || out.Kind != FlowInvalidToken || len(rig.accounts.verified) != 0 {
+		t.Fatalf("Verify = %+v, %v, verified writes %d; want a refusal that writes nothing", out, err, len(rig.accounts.verified))
 	}
 }
 

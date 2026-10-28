@@ -249,10 +249,12 @@ func (h *handlers) createUser(w http.ResponseWriter, r *http.Request) {
 	var fullNamePresent, authProviderPresent, authProviderIDPresent bool
 	role, rolePresent := "member", false
 	if ok {
-		email, _ = errs.RequiredString(object, "email", 1, 0)
+		if value, present := errs.RequiredString(object, "email", 1, 0); present && !errs.RefuseTextForm(pyjson.ClassEmail, "email", value) {
+			email = value
+		}
 		password, _ = errs.OptionalString(object, "password", 8, 128)
 		username, _ = errs.OptionalString(object, "username", 0, 0)
-		fullName, fullNamePresent = errs.OptionalString(object, "full_name", 0, 0)
+		fullName, fullNamePresent = errs.OptionalDisplayText(object, "full_name")
 		// auth_provider/is_verified/is_superuser are pydantic fields with a
 		// DEFAULT, not `| None` -- DefaultedString/DefaultedBool: present is
 		// false only when the key is absent (apply the same default Python
@@ -735,16 +737,16 @@ func parseUserUpdate(errs *pybody.Errors, body pybody.Body) userUpdate {
 	object, ok := errs.Object(body)
 	patch := userUpdate{}
 	if ok {
-		if v, present := errs.OptionalString(object, "email", 0, 0); present {
+		if v, present := errs.OptionalString(object, "email", 0, 0); present && !errs.RefuseTextForm(pyjson.ClassEmail, "email", v) {
 			patch.Email = &v
 		}
 		if v, present := errs.OptionalString(object, "username", 0, 0); present {
 			patch.Username = &v
 		}
-		if v, present := errs.OptionalString(object, "full_name", 0, 0); present {
+		if v, present := errs.OptionalDisplayText(object, "full_name"); present {
 			patch.FullName = &v
 		}
-		if v, present := errs.OptionalString(object, "avatar_url", 0, 0); present {
+		if v, present := errs.OptionalURLString(object, "avatar_url"); present {
 			patch.AvatarURL = &v
 		}
 		if v, present := errs.OptionalBool(object, "is_active"); present {

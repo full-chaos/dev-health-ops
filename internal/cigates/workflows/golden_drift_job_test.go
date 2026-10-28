@@ -34,13 +34,13 @@ func TestGoldenDriftJobIsAdvisoryAndPullRequestOnly(t *testing.T) {
 		t.Fatal("job lost its selection step")
 	}
 	run := asString(sel["run"])
-	for _, want := range []string{"ci/go_relevant_diff.sh", "ci/golden_drift.sh select"} {
+	for _, want := range []string{"ci/go_relevant_diff.sh", "ci/check_golden_drift.sh select"} {
 		if !strings.Contains(run, want) {
 			t.Errorf("selection step lacks %q", want)
 		}
 	}
 	runStep, n := stepNamed(job, "Run the selected frozen-Python golden tests")
-	if n != 1 || !strings.Contains(asString(runStep["run"]), "ci/golden_drift.sh run") {
+	if n != 1 || !strings.Contains(asString(runStep["run"]), "ci/check_golden_drift.sh run") {
 		t.Fatal("job lost its run step")
 	}
 	if !strings.Contains(asString(runStep["if"]), "steps.select.outputs.rows") {

@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// The advisory PR check for frozen-Python golden drift (ci/golden_drift.sh, ci/golden_drift_registry.tsv). The five
+// The advisory PR check for frozen-Python golden drift (ci/check_golden_drift.sh, ci/golden_drift_registry.tsv). The five
 // culprit shapes are the file sets of the pull requests that failed in the merge queue; a PR file list is abbreviated
 // to the paths that decide the selection.
 
@@ -21,7 +21,7 @@ func goldenDriftSelect(t *testing.T, list string) (verdict string, pkgs []string
 	if err := os.WriteFile(f, []byte(list), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	res := cmdSpec{dir: t.TempDir(), env: []string{shimBasePath()}}.run("bash", filepath.Join(root, "ci", "golden_drift.sh"), "select", f)
+	res := cmdSpec{dir: t.TempDir(), env: []string{shimBasePath()}}.run("bash", filepath.Join(root, "ci", "check_golden_drift.sh"), "select", f)
 	for _, line := range strings.Split(strings.TrimSpace(res.stdout), "\n") {
 		switch {
 		case strings.HasPrefix(line, "VERDICT "):
@@ -56,7 +56,7 @@ func TestGoldenDriftSelect(t *testing.T) {
 		{"unrelated Go package", nulList("internal/orgactivity/orgactivity.go"), "none", nil},
 		{"lookalike dirs", nulList("internal/adminops2/x.go", "internal/api/sessions/x.go", "internal/pgmigrate/sqlx/a.sql", "internal/pgmigrate/chain_manifest.tsv.bak"), "none", nil},
 		{"down migration is a migration path", nulList("internal/pgmigrate/sql/down/0160_x.sql"), "select", allGoldenPkgs},
-		{"the check itself runs every row", nulList("ci/golden_drift.sh"), "select", allGoldenPkgs},
+		{"the check itself runs every row", nulList("ci/check_golden_drift.sh"), "select", allGoldenPkgs},
 		{"the registry runs every row", nulList("ci/golden_drift_registry.tsv"), "select", allGoldenPkgs},
 		{"bad input: empty list", "", "all", allGoldenPkgs},
 		{"bad input: nul only", "\x00", "all", allGoldenPkgs},
@@ -81,7 +81,7 @@ func TestGoldenDriftSelect(t *testing.T) {
 
 func TestGoldenDriftMissingListFailsOpen(t *testing.T) {
 	root := repoRoot(t)
-	res := cmdSpec{dir: t.TempDir(), env: []string{shimBasePath()}}.run("bash", filepath.Join(root, "ci", "golden_drift.sh"), "select", filepath.Join(t.TempDir(), "absent.txt"))
+	res := cmdSpec{dir: t.TempDir(), env: []string{shimBasePath()}}.run("bash", filepath.Join(root, "ci", "check_golden_drift.sh"), "select", filepath.Join(t.TempDir(), "absent.txt"))
 	if res.code != 0 || !strings.HasPrefix(res.stdout, "VERDICT all ") || strings.Count(res.stdout, "ROW\t") != len(allGoldenPkgs) {
 		t.Fatalf("missing list: exit %d stdout %q, want every row", res.code, res.stdout)
 	}
@@ -175,7 +175,7 @@ func runGoldenDrift(t *testing.T, rows string, mode, failPkg string) (cmdResult,
 		t.Fatal(err)
 	}
 	logf := filepath.Join(t.TempDir(), "go.log")
-	res := cmdSpec{dir: t.TempDir(), env: []string{"PATH=" + dir + ":/usr/bin:/bin", "FAKE_GO_LOG=" + logf, "FAKE_GO_MODE=" + mode, "FAKE_GO_FAIL_PKG=" + failPkg}}.run("bash", filepath.Join(repoRoot(t), "ci", "golden_drift.sh"), "run", rf)
+	res := cmdSpec{dir: t.TempDir(), env: []string{"PATH=" + dir + ":/usr/bin:/bin", "FAKE_GO_LOG=" + logf, "FAKE_GO_MODE=" + mode, "FAKE_GO_FAIL_PKG=" + failPkg}}.run("bash", filepath.Join(repoRoot(t), "ci", "check_golden_drift.sh"), "run", rf)
 	b, _ := os.ReadFile(logf)
 	return res, string(b)
 }

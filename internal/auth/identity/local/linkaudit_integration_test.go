@@ -91,8 +91,8 @@ VALUES ($1, $2, $2, '{}', 'community', 'stripe', true, now(), now()) ON CONFLICT
 	subject := user.String()
 	err = audit.Commit(ctx, e.runtime, schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
-			_, err := tx.Exec(ctx, `INSERT INTO auth.memberships (organization_id, principal_id, status, created_at, updated_at)
-VALUES ($1, $2, 'active', `+createdAt+`, `+createdAt+`)`, org, subject)
+			_, err := tx.Exec(ctx, `INSERT INTO auth.memberships (organization_id, principal_id, status, role, created_at, updated_at)
+VALUES ($1, $2, 'active', 'member', `+createdAt+`, `+createdAt+`)`, org, subject)
 			return err
 		},
 		Audit:     audit.AuditEvent{EventType: "auth.membership.added", Outcome: audit.OutcomeAllowed, SubjectPrincipalID: &subject, Attributes: map[string]any{"reason_code": "membership_added"}},

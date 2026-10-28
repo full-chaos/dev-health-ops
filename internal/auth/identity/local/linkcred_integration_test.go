@@ -312,7 +312,12 @@ func (a *liveAccounts) ProvisionLocal(context.Context, ProvisionLocalRequest) (u
 func (a *liveAccounts) PeekVerificationLink(ctx context.Context, hash [32]byte) (uuid.UUID, bool, error) {
 	return a.links.PeekVerificationLink(ctx, hash)
 }
-func (a *liveAccounts) SetEmailVerifiedConsuming(context.Context, uuid.UUID, [32]byte) error {
+func (a *liveAccounts) SetEmailVerifiedConsuming(ctx context.Context, _ uuid.UUID, link [32]byte) error {
+	if _, ok, err := a.links.Redeem(ctx, RedeemRequest{Purpose: PurposeEmailVerification, TokenHash: link}); err != nil {
+		return err
+	} else if !ok {
+		return ErrVerificationLinkUnusable
+	}
 	return nil
 }
 func (a *liveAccounts) PeekResetLink(ctx context.Context, hash [32]byte) (uuid.UUID, bool, error) {

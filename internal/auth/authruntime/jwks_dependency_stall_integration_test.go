@@ -112,9 +112,14 @@ func (p *blackholeProxy) pipe(dst, src net.Conn) {
 // TestJWKSAnswersWhileTheDatabaseIsBlackholed drives the real stack (configure
 // over live PostgreSQL and Valkey, the production middleware chain) with the
 // database behind a TCP blackhole: login requests stall to the request
-// timeout and hold in-flight slots while key-set requests run. Bounds: every
-// JWKS request is a 200 and finishes within jwksBound, far under the request
-// timeout.
+// timeout and hold in-flight slots while key-set requests run. The test asserts
+// no absolute time. Precondition: the due JWKS request's key-state read reaches
+// the blackhole (the proxy's dropped-bytes counter grows), so a run that never
+// reaches the inline wait fails on its own line. Then: every JWKS request
+// (the burst and the due request) is a 200; the burst's p50 is at most
+// max(5 x the healthy burst's p50, 1 s) and the slowest request at most
+// max(25 x the healthy burst's max, 1 s) -- a ratio against a healthy burst of
+// this same test, the 1 s being only a floor under the ratio bounds.
 func TestJWKSAnswersWhileTheDatabaseIsBlackholed(t *testing.T) {
 	const (
 		requestTimeout = 4 * time.Second

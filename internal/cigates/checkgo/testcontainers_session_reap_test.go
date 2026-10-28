@@ -304,13 +304,73 @@ case "$FAKE_MODE" in
     exit 0 ;;
   exit3)
     exit 3 ;;
-  quitdump)
-    trap 'echo GOROUTINE-DUMP-STDERR >&2; printf "{\"Action\":\"output\",\"Output\":\"GOROUTINE-DUMP-PIPED\\\\n\"}\n"; exit 2' QUIT
-    sleep 300 &
-    echo $! > "$FAKE_DIR/sleeper-pid"
-    while :; do wait; done ;;
 esac
 `
+
+// providersyncQuitFake is a Go program that stands in for a hung go test binary. The Go runtime prints every goroutine on
+// SIGQUIT and exits 2 whatever signal disposition the process inherited (an sh script cannot trap a signal that was
+// ignored on entry), as the real test binary does. It runs `sleep 300` holding the pipes, writes one line to the piped
+// stdout when the QUIT arrives, then lets the runtime dump. It records ready/quit-seen markers and its signal masks.
+const providersyncQuitFake = `package main
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"os/signal"
+	"strings"
+	"syscall"
+)
+
+func main() {
+	args := os.Args[1:]
+	if len(args) == 0 || args[0] != "test" || !strings.Contains(strings.Join(args, " "), "internal/providersync") {
+		_ = syscall.Exec(os.Getenv("FAKE_REAL_GO"), append([]string{"go"}, args...), os.Environ())
+		os.Exit(127)
+	}
+	dir := os.Getenv("FAKE_DIR")
+	if st, err := os.ReadFile("/proc/self/status"); err == nil {
+		for _, l := range strings.Split(string(st), "\n") {
+			if strings.HasPrefix(l, "SigIgn") || strings.HasPrefix(l, "SigBlk") {
+				_ = os.WriteFile(dir+"/diag-"+strings.Fields(l)[0], []byte(l+"\n"), 0o644)
+			}
+		}
+	}
+	fmt.Printf("{\"Action\":\"output\",\"Output\":\"fake-go-started\\n\"}\n")
+	sleeper := exec.Command("sleep", "300")
+	sleeper.Stdout, sleeper.Stderr = os.Stdout, os.Stderr
+	if err := sleeper.Start(); err != nil {
+		os.Exit(1)
+	}
+	_ = os.WriteFile(dir+"/sleeper-pid", []byte(fmt.Sprint(sleeper.Process.Pid)), 0o644)
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGQUIT)
+	_ = os.WriteFile(dir+"/ready", nil, 0o644)
+	<-quit
+	_ = os.WriteFile(dir+"/quit-seen", nil, 0o644)
+	fmt.Printf("{\"Action\":\"output\",\"Output\":\"GOROUTINE-DUMP-PIPED\\n\"}\n")
+	signal.Reset(syscall.SIGQUIT)
+	_ = syscall.Kill(os.Getpid(), syscall.SIGQUIT)
+	select {}
+}
+`
+
+func buildQuitFake(t *testing.T, realGo, work, bin string) {
+	t.Helper()
+	src := filepath.Join(work, "quitfake")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "main.go"), []byte(providersyncQuitFake), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(realGo, "build", "-o", filepath.Join(bin, "go"), "main.go")
+	cmd.Dir = src
+	cmd.Env = append(os.Environ(), "GOWORK=off", "GOFLAGS=")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("building the fake go: %v\n%s", err, out)
+	}
+}
 
 type providersyncStepRun struct {
 	code           int
@@ -318,6 +378,7 @@ type providersyncStepRun struct {
 	sleeperPID     int
 	sleeperAlive   bool
 	timedOut       bool
+	diag           string
 }
 
 func runProvidersyncStep(t *testing.T, mode, bound string, wrap func(script, work string) []string) providersyncStepRun {
@@ -333,7 +394,9 @@ func runProvidersyncStep(t *testing.T, mode, bound string, wrap func(script, wor
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(providersyncFakeGo), 0o755); err != nil {
+	if mode == "quitdump" {
+		buildQuitFake(t, realGo, work, bin)
+	} else if err := os.WriteFile(filepath.Join(bin, "go"), []byte(providersyncFakeGo), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	argv := []string{"bash", script, "integration-shard", "providersync", "1"}
@@ -369,12 +432,17 @@ func runProvidersyncStep(t *testing.T, mode, bound string, wrap func(script, wor
 		if ee, ok := err.(*exec.ExitError); ok {
 			res.code = ee.ExitCode()
 		}
-	case <-time.After(120 * time.Second):
+	case <-time.After(240 * time.Second):
 		res.timedOut = true
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		<-done
 	}
 	res.stdout, res.stderr = stdout.String(), stderr.String()
+	for _, n := range []string{"ready", "quit-seen", "diag-SigIgn", "diag-SigBlk"} {
+		if raw, err := os.ReadFile(filepath.Join(work, n)); err == nil {
+			res.diag += n + "=" + strings.TrimSpace(string(raw)) + "; "
+		}
+	}
 	if raw, err := os.ReadFile(filepath.Join(work, "sleeper-pid")); err == nil {
 		if pid, err := strconv.Atoi(strings.TrimSpace(string(raw))); err == nil {
 			res.sleeperPID = pid
@@ -394,7 +462,7 @@ func runProvidersyncStep(t *testing.T, mode, bound string, wrap func(script, wor
 
 func TestProvidersyncStepBoundsAStdoutHoldingChild(t *testing.T) {
 	t.Parallel()
-	r := runProvidersyncStep(t, "hold", "3", nil)
+	r := runProvidersyncStep(t, "hold", "10", nil)
 	if r.timedOut {
 		t.Fatal("the step hung: a child holding stdout open kept `tee` alive and no step bound stopped it")
 	}
@@ -404,7 +472,7 @@ func TestProvidersyncStepBoundsAStdoutHoldingChild(t *testing.T) {
 	if !strings.Contains(r.stderr, "step bound") {
 		t.Errorf("stderr does not name the step bound: %s", tail(r.stderr, 1500))
 	}
-	if r.sleeperPID == 0 || !hasField(r.stderr, strconv.Itoa(r.sleeperPID)) {
+	if r.sleeperPID == 0 || !stderrListsPID(r.stderr, r.sleeperPID) {
 		t.Errorf("the ps table does not list the leftover child pid %d: %s", r.sleeperPID, tail(r.stderr, 1500))
 	}
 	if r.sleeperAlive {
@@ -417,15 +485,15 @@ func TestProvidersyncStepBoundsAStdoutHoldingChild(t *testing.T) {
 
 func TestProvidersyncStepDumpReachesTheLogOnBound(t *testing.T) {
 	t.Parallel()
-	r := runProvidersyncStep(t, "quitdump", "3", nil)
+	r := runProvidersyncStep(t, "quitdump", "15", nil)
 	if r.timedOut {
 		t.Fatal("the step hung: no step bound stopped a go test that never exits")
 	}
-	if !strings.Contains(r.stderr, "GOROUTINE-DUMP-STDERR") {
-		t.Errorf("the QUIT dump on the test binary's stderr did not reach the step stderr: %s", tail(r.stderr, 1500))
+	if !strings.Contains(r.stderr, "SIGQUIT: quit") || !strings.Contains(r.stderr, "goroutine 1") {
+		t.Errorf("the QUIT goroutine dump on the test binary's stderr did not reach the step stderr (fake saw: %s): %s", r.diag, tail(r.stderr, 1500))
 	}
 	if !strings.Contains(r.stdout, "GOROUTINE-DUMP-PIPED") {
-		t.Errorf("tee/jq died before the dump written to the piped stdout arrived: stdout %s", tail(r.stdout, 1500))
+		t.Errorf("tee/jq died before the line written to the piped stdout arrived (fake saw: %s): stdout %s", r.diag, tail(r.stdout, 1500))
 	}
 	if r.code != 124 {
 		t.Errorf("exit code %d, want 124", r.code)
@@ -444,7 +512,7 @@ func TestProvidersyncStepReapsLeftoverChildrenAfterGoTestExits(t *testing.T) {
 	if r.sleeperAlive {
 		t.Error("a child left in go test's process group survived the step (not reaped)")
 	}
-	if r.sleeperPID == 0 || !hasField(r.stderr, strconv.Itoa(r.sleeperPID)) {
+	if r.sleeperPID == 0 || !stderrListsPID(r.stderr, r.sleeperPID) {
 		t.Errorf("the leftover ps table does not list pid %d: %s", r.sleeperPID, tail(r.stderr, 1500))
 	}
 }
@@ -490,4 +558,14 @@ func TestProvidersyncStepRunnerReturnsToItsCaller(t *testing.T) {
 	if !strings.Contains(r.stdout, "NEXT-LINE-RAN rc=3") {
 		t.Errorf("the line after the runner did not run with go test's rc 3 (the script was exec-replaced?): stdout %s stderr %s", tail(r.stdout, 800), tail(r.stderr, 800))
 	}
+}
+
+// stderrListsPID reports whether a ps row of the text starts with the pid.
+func stderrListsPID(text string, pid int) bool {
+	for _, line := range strings.Split(text, "\n") {
+		if f := strings.Fields(line); len(f) > 0 && f[0] == strconv.Itoa(pid) {
+			return true
+		}
+	}
+	return false
 }

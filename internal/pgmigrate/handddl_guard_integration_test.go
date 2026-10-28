@@ -15,7 +15,6 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
 // ledgerEnv, set to 1, rewrites testdata/hand_ddl_ledger.tsv from the tree
@@ -127,12 +126,9 @@ func TestHandWrittenTestDDLMatchesTheMigratedSchema(t *testing.T) {
 
 func loadRealColumns(ctx context.Context, t *testing.T) map[string]map[string]bool {
 	t.Helper()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatalf("start postgres: %v", err)
-	}
-	t.Cleanup(func() { _ = instance.Close(context.Background()) })
-	conn, err := pgx.Connect(ctx, instance.URI)
+	instance := sharedInstance(t)
+	admin := connect(t, instance.URI)
+	conn, err := pgx.Connect(ctx, databaseURI(t, instance.URI, scratchDatabase(t, admin)))
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

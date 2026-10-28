@@ -55,6 +55,8 @@ func runStopBoundHelper() {
 // stop ended inside that budget: exit 0 and no shutdown-error or abandoned-flush
 // line. The component bounds (tracing.shutdownFlushTimeout, metricsFlushTimeout)
 // are summed here against the one number the container smoke cares about.
+// Named limit: a flush bound raised by less than the slack left under the budget
+// passes here; tracing/flush_test.go owns the tracing bound.
 func TestTheWholeStopWithEveryTelemetryEndpointDownStaysUnderTheContainerBudget(t *testing.T) {
 	if os.Getenv("STOP_BOUND_HELPER") == "1" {
 		runStopBoundHelper()

@@ -26,7 +26,10 @@ type allowedApply struct {
 }
 
 // workerserviceApplyAllowlist: the two workerservice helpers move in PR B of CHAOS-11760.
-var workerserviceApplyAllowlist = []allowedApply{}
+var workerserviceApplyAllowlist = []allowedApply{
+	{File: "internal/workerservice/daily_no_repository_partition_integration_test.go", Reason: "PR B, CHAOS-11760"},
+	{File: "internal/workerservice/multi_replica_integration_test.go", Reason: "PR B, CHAOS-11760"},
+}
 
 // applyCallSites returns file:line (slash form, relative to root) of every pgschema.Apply / ApplyURI call in a test
 // file directly inside dir, comment lines excluded.

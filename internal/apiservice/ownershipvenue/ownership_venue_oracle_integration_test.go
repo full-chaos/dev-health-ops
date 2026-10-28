@@ -281,7 +281,7 @@ func runOwnership(t *testing.T, golden *venueoracle.Golden, cases []scenario, wi
 	// The peer is the loopback address (Go plane) or the FastAPI TestClient host
 	// (Python plane): trust it as a proxy so
 	// each scenario's X-Forwarded-For is its own rate-limit bucket.
-	t.Setenv("TRUSTED_PROXIES", "127.0.0.1,::1,testclient")
+	t.Setenv("TRUSTED_PROXIES", "127.0.0.1,::1")
 	ctx := context.Background()
 	idSeq = 0 // each oracle numbers its ids from 1, whichever tests ran before it
 	root := repoRoot(t)

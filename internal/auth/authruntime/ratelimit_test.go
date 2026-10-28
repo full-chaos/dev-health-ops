@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"net"
 	"regexp"
 	"strings"
 	"testing"
@@ -65,9 +66,27 @@ func TestSessionRoutesAloneBuildTheStoreForTheRefreshLimit(t *testing.T) {
 }
 
 func TestTheStoreDialsOnFirstUseAndAnUnreachableOneIsAnErrorNotAPass(t *testing.T) {
-	cfg := limitConfig(t, compatEnvironment(map[string]string{}))
+	// The store's address is a listener the test owns. Building the store must not dial it: after the build the test dials a probe
+	// connection, and the first connection the listener accepts must be the probe (the accept queue is in connection order).
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	accepted := make(chan net.Conn, 16)
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			accepted <- conn
+		}
+	}()
+	env := compatEnvironment(map[string]string{})
+	env[authconfig.EnvValkeyURI] = "redis://auth-ratelimit:test-only-password@" + listener.Addr().String() + "/1"
+	cfg := limitConfig(t, env)
 	registry := health.NewRegistry(time.Second)
-	started := time.Now()
 	limits, components, err := limitStore(cfg, discard(), registry)
 	if err != nil || limits == nil || len(components) != 1 {
 		t.Fatalf("limits %v, %d components, err %v", limits, len(components), err)
@@ -76,9 +95,26 @@ func TestTheStoreDialsOnFirstUseAndAnUnreachableOneIsAnErrorNotAPass(t *testing.
 	if !ok {
 		t.Fatalf("component %T, want the lazy store", components[0])
 	}
-	if time.Since(started) > time.Second {
-		t.Fatal("building the store took a dial's time")
+	probe, err := net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
 	}
+	defer probe.Close()
+	// The wait below is a guard for the failure path only; a passing run never reaches it.
+	select {
+	case first := <-accepted:
+		if first.RemoteAddr().String() != probe.LocalAddr().String() {
+			t.Fatal("building the store dialled the server: the store must dial on first use")
+		}
+		_ = first.Close()
+	case <-time.After(30 * time.Second):
+		t.Fatal("the probe connection was never accepted")
+	}
+	if store.client != nil || store.store != nil {
+		t.Fatal("building the store opened a client: the store must open on first use")
+	}
+	// From here the store's address is a closed port: unreachable.
+	_ = listener.Close()
 	if store.Backend() != "redis" {
 		t.Fatalf("backend %q", store.Backend())
 	}

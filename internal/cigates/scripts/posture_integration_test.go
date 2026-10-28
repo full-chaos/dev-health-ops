@@ -759,3 +759,61 @@ func TestPostureIntegrationHardCodesNoToolchainPath(t *testing.T) {
 		t.Fatalf("the runner-not-found refusal must come before the go toolchain resolution (runner at %d, go at %d)", runnerCheck, goResolve)
 	}
 }
+
+// CHAOS-11714: internal/pgmigrate needs about 705 s at host load 30-39, above go test's 10 m default, so the runner
+// gives that one package -timeout 20m (and a capped.sh limit above it). Every other package keeps the default.
+func TestPostureIntegrationGivesOnlyPgmigrateALongTimeout(t *testing.T) {
+	f := postureDemo(t)
+	write := func(rel, body string) {
+		p := filepath.Join(f.dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("ci/posture_integration_packages.tsv", "internal/ok\ninternal/pgmigrate\n")
+	write("internal/pgmigrate/pg_test.go", "package pgmigrate\n\nimport \"testing\"\n\nfunc TestRan(t *testing.T) {}\n")
+	f.git("add", ".")
+	f.git("commit", "-q", "-m", "pgmigrate fixture")
+	calls := filepath.Join(t.TempDir(), "calls.txt")
+	runner := filepath.Join(t.TempDir(), "runner.sh")
+	body := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + calls + "\nshift 5\nexec \"$@\"\n"
+	if err := os.WriteFile(runner, []byte(body), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	paths := filepath.Join(t.TempDir(), "changed.txt")
+	if err := os.WriteFile(paths, []byte("internal/ok/ok_test.go\x00"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := append(goListEnv(), "PATH="+filepath.Dir(goBinary(t))+string(os.PathListSeparator)+"/usr/bin:/bin")
+	res := cmdSpec{dir: f.dir, env: env}.run("bash", filepath.Join(f.dir, "ci", "posture_integration.sh"), "--run", "--paths", paths, "--test-runner", runner)
+	if res.code == 0 || postureRow(res, "SIMULATED internal/ok ") == "" || postureRow(res, "SIMULATED internal/pgmigrate ") == "" {
+		t.Fatalf("want both packages run (exit is non-zero in test-runner mode): exit %d stdout=%q stderr=%q", res.code, res.stdout, res.stderr)
+	}
+	raw, err := os.ReadFile(calls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		switch {
+		case strings.HasSuffix(line, " ./internal/pgmigrate"):
+			seen++
+			if !strings.Contains(line, " -timeout 20m ") || !strings.HasPrefix(line, "-t 1500 ") {
+				t.Fatalf("internal/pgmigrate must run with -timeout 20m under a 1500 s cap, got %q", line)
+			}
+		case strings.HasSuffix(line, " ./internal/ok"):
+			seen++
+			if strings.Contains(line, "-timeout") || !strings.HasPrefix(line, "-t 900 ") {
+				t.Fatalf("every other package keeps go test's default timeout and the 900 s cap, got %q", line)
+			}
+		default:
+			t.Fatalf("unexpected runner call %q", line)
+		}
+	}
+	if seen != 2 {
+		t.Fatalf("want one runner call per package, got %d: %q", seen, raw)
+	}
+}

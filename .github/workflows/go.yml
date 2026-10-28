@@ -228,6 +228,7 @@ on:
       # run reader and the venue workflow whose step names that reader filters on
       - 'ci/go_relevant_diff.sh'
       - 'ci/integration_pr_scope.sh'
+      - 'ci/check_golden_drift.sh'
       - 'ci/last-venue-run.sh'
       - '.github/workflows/venue-oracles.yml'
       # the workflow-shape guards (CHAOS-10177) read EVERY workflow file, the builder-image pin reader and its table,
@@ -738,6 +739,67 @@ jobs:
       - name: Log out of GitHub Container Registry
         if: always()
         run: docker logout ghcr.io
+
+  # Advisory early check for frozen-Python golden drift. The golden tests run in the merge queue; a pull request that adds a
+  # column, a table or a writer guard used to meet a red golden only there, and the entries behind it failed with it.
+  # ci/check_golden_drift.sh runs only the golden tests the change can reach (ci/golden_drift_registry.tsv: migration paths and the
+  # golden package directories). It is pull_request only, is NOT in go-queue-gate's needs, and a bad input runs every row.
+  # A label that already runs the shards (ci:integration, ci:full) makes it select nothing.
+  # Selection is by migration paths and the golden package directories only. A change to a writer outside those directories
+  # (example: internal/auth/authruntime/usersguard.go) selects no row here and is still caught by the merge queue shards.
+  # Closure based triggers are a later step; this is a bounded early signal, not full coverage.
+  go-golden-drift:
+    name: go-golden-drift
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Select the golden tests the change can reach
+        id: select
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          set -euo pipefail
+          rows="${RUNNER_TEMP}/golden_rows.tsv"
+          # A label that already runs the integration shards on this pull request makes this check redundant.
+          if jq -e 'index("ci:integration") or index("ci:full")' <<< "${PR_LABELS_JSON}" > /dev/null; then
+            echo "VERDICT none a ci:integration or ci:full label already runs the integration shards" >> "${rows}"
+          else
+            bash ci/go_relevant_diff.sh > "${RUNNER_TEMP}/changed.txt" || : > "${RUNNER_TEMP}/changed.txt"
+            bash ci/check_golden_drift.sh select "${RUNNER_TEMP}/changed.txt" >> "${rows}"
+          fi
+          cat "${rows}"
+          echo "rows=$(grep -c '^ROW' "${rows}" || true)" >> "${GITHUB_OUTPUT}"
+
+      - name: Set up Go
+        if: steps.select.outputs.rows != '0'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+
+      - name: Log in to GitHub Container Registry
+        if: steps.select.outputs.rows != '0'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pre-pull pinned test dependency images with bounded retry
+        if: steps.select.outputs.rows != '0'
+        run: bash ci/check_go.sh integration-prepull
+
+      - name: Run the selected frozen-Python golden tests
+        if: steps.select.outputs.rows != '0'
+        run: bash ci/check_golden_drift.sh run "${RUNNER_TEMP}/golden_rows.tsv"
 
   # Preserve the existing required-check contract while the implementation
   # fans out behind it. Outside the merge queue this job observes the aggregate result after every shard has reached

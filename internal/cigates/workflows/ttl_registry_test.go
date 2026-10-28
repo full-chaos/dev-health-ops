@@ -154,9 +154,14 @@ func ttlMigrationFiles(t *testing.T, dirs ...string) []string {
 				out = append(out, filepath.Join(dir, e.Name()))
 			}
 		}
-		if len(out) == before {
+		// The live chain is empty while no migration follows the head baseline (CHAOS-11751); every other
+		// directory holds migrations.
+		if len(out) == before && !strings.HasSuffix(filepath.ToSlash(dir), "internal/chmigrate/sql") {
 			t.Fatalf("no migration files under %s: a TTL scan over nothing would pass empty", dir)
 		}
+	}
+	if len(out) == 0 {
+		t.Fatal("no migration files at all: a TTL scan over nothing would pass empty")
 	}
 	sort.Slice(out, func(i, j int) bool { return filepath.Base(out[i]) < filepath.Base(out[j]) })
 	return out
@@ -267,10 +272,11 @@ func ttlVocabularyProblems(precise map[string]ttlRetention, coarse map[string]bo
 	return problems
 }
 
-// The pre-099 text is frozen in history/, the live chain is sql/; together they are every ClickHouse migration.
+// The pre-099 text is frozen in history/, 099..144 in archive/sql/ (the head baseline holds their end state,
+// CHAOS-11751), the live chain is sql/; together they are every ClickHouse migration.
 func ttlRealDirs(t *testing.T) []string {
 	root := filepath.Join(repoRoot(t), "internal", "chmigrate")
-	return []string{filepath.Join(root, "history"), filepath.Join(root, "sql")}
+	return []string{filepath.Join(root, "history"), filepath.Join(root, "archive", "sql"), filepath.Join(root, "sql")}
 }
 
 func TestTTLVocabularyMatchesTheRealMigrations(t *testing.T) {

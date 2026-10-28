@@ -149,8 +149,9 @@ func TestShutdownSlicesFitAfterTheAPIBudget(t *testing.T) {
 		if component.Name() == "auth-api-http" || component.Name() == "readiness-gate" {
 			continue
 		}
-		// A quiet stop fits the smallest slice, so the attempt context of every other component is still live when it returns. A
-		// stop that is slow because the host is loaded fails this too: the budget is the runtime's own, no constant is added here.
+		// This checks the component's real slice through its attempt context, not a theoretical share of the shutdown budget: the
+		// context of every other component is still live when its stop returns. A stop that is slow because the host is loaded fails
+		// this too: the budget is the runtime's own, no constant is added here.
 		if !insideSlice[i] {
 			t.Errorf("%s did not stop inside its attempt budget (the smallest slice is %v)", component.Name(), smallest)
 		}

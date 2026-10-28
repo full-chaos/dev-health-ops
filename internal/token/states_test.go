@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/keystore"
@@ -570,6 +571,8 @@ type hungStates struct {
 	reads int
 	rows  []KeyStateRow
 	hang  bool
+	// hungStart and hungEnd are the instants the last hung read began and ended (read from the clock of the test's bubble).
+	hungStart, hungEnd time.Time
 }
 
 func (h *hungStates) KeyStates(ctx context.Context) ([]KeyStateRow, error) {
@@ -578,7 +581,13 @@ func (h *hungStates) KeyStates(ctx context.Context) ([]KeyStateRow, error) {
 	hang, rows := h.hang, append([]KeyStateRow(nil), h.rows...)
 	h.mu.Unlock()
 	if hang {
+		h.mu.Lock()
+		h.hungStart = time.Now()
+		h.mu.Unlock()
 		<-ctx.Done()
+		h.mu.Lock()
+		h.hungEnd = time.Now()
+		h.mu.Unlock()
 		return nil, ctx.Err()
 	}
 	return rows, nil
@@ -602,68 +611,92 @@ func (s *KeyStates) idle() bool {
 	return s.flight == nil
 }
 
-// A refresh against a hung source never holds a request: every concurrent
-// caller answers from the last good snapshot within the inline wait, the
-// source is read once, and the read ends at its own timeout.
+// A refresh against a hung source never holds a request: every concurrent caller answers from the last good snapshot at the
+// configured inline wait, the source is read once, and the read ends at its own timeout. The test runs in a bubble on a virtual clock
+// with the in-memory source, so every instant is exact: the 200 callers return at the inline wait while the read is still hung, and
+// the read ends at the configured read timeout.
 func TestKeyStatesRefreshAgainstAHungSourceHoldsNoRequest(t *testing.T) {
-	source := &hungStates{rows: []KeyStateRow{{KeyID: "a", State: StateActive}}}
-	clock := &fakeClock{now: time.Unix(0, 0)}
-	states := NewKeyStates(KeyStatesConfig{Source: source, RefreshEvery: 10 * time.Second, MaxStale: JWKSCacheTTL,
-		ReadTimeout: 300 * time.Millisecond, InlineWait: 20 * time.Millisecond, Now: clock.Now})
-	if _, err := states.Rows(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	source.setHang(true)
-	clock.advance(11 * time.Second)
+	synctest.Test(t, func(t *testing.T) {
+		const inlineWait, readTimeout = 20 * time.Millisecond, 50 * time.Millisecond
+		source := &hungStates{rows: []KeyStateRow{{KeyID: "a", State: StateActive}}}
+		clock := &fakeClock{now: time.Unix(0, 0)}
+		states := NewKeyStates(KeyStatesConfig{Source: source, RefreshEvery: 10 * time.Second, MaxStale: JWKSCacheTTL,
+			ReadTimeout: readTimeout, InlineWait: inlineWait, Now: clock.Now})
+		defer states.Close()
+		if _, err := states.Rows(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		source.setHang(true)
+		clock.advance(11 * time.Second)
 
-	const callers = 200
-	took := make([]time.Duration, callers)
-	var wg sync.WaitGroup
-	for i := range callers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			start := time.Now()
-			rows, err := states.Rows(context.Background())
-			took[i] = time.Since(start)
-			if err != nil || len(rows) != 1 {
-				t.Errorf("caller %d = %v, %v; want the last good snapshot", i, rows, err)
+		const callers = 200
+		returned := make([]time.Time, callers)
+		started := time.Now()
+		var wg sync.WaitGroup
+		for i := range callers {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				rows, err := states.Rows(context.Background())
+				returned[i] = time.Now()
+				if err != nil || len(rows) != 1 {
+					t.Errorf("caller %d = %v, %v; want the last good snapshot", i, rows, err)
+				}
+			}()
+		}
+		wg.Wait()
+		// The caller that starts the refresh waits the inline wait; every other caller answers from the snapshot at once. No caller
+		// may come back later than the inline wait, and exactly one comes back at it.
+		atInlineWait := 0
+		for i, at := range returned {
+			if at.After(started.Add(inlineWait)) {
+				t.Errorf("caller %d returned at +%v of virtual time, after the configured inline wait %v: it waited on the hung read", i, at.Sub(started), inlineWait)
 			}
-		}()
-	}
-	wg.Wait()
-	for i, d := range took {
-		if d > 250*time.Millisecond {
-			t.Errorf("caller %d waited %s on a hung source, want well under the read timeout 300ms", i, d)
+			if at.Equal(started.Add(inlineWait)) {
+				atInlineWait++
+			}
 		}
-	}
-	if got := source.readCount(); got != 2 {
-		t.Errorf("the source was read %d times, want 2 (first read + one single-flight refresh)", got)
-	}
-	deadline := time.Now().Add(3 * time.Second)
-	for !states.idle() {
-		if time.Now().After(deadline) {
-			t.Fatal("the refresh goroutine did not end after its read timeout")
+		if atInlineWait != 1 {
+			t.Errorf("%d callers returned at the inline wait %v, want exactly the one that started the refresh", atInlineWait, inlineWait)
 		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		if got := source.readCount(); got != 2 {
+			t.Errorf("the source was read %d times, want 2 (first read + one single-flight refresh)", got)
+		}
+		if states.idle() {
+			t.Error("the refresh is not in flight when the callers returned: they did not answer while the read was hung")
+		}
+		// The hung read ends at its own timeout: let the virtual clock run past it.
+		time.Sleep(readTimeout)
+		source.mu.Lock()
+		defer source.mu.Unlock()
+		if !source.hungEnd.Equal(source.hungStart.Add(readTimeout)) {
+			t.Errorf("the hung read ended at +%v of its start, want +%v (the configured read timeout)", source.hungEnd.Sub(source.hungStart), readTimeout)
+		}
+	})
 }
 
 // With no snapshot at all, a caller waits for the read but never longer than
 // its own context, and is refused (fail closed), not served nothing.
 func TestKeyStatesColdStartAgainstAHungSourceFailsClosedAtTheCallersDeadline(t *testing.T) {
-	source := &hungStates{hang: true}
-	states := NewKeyStates(KeyStatesConfig{Source: source, ReadTimeout: 2 * time.Second})
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-	start := time.Now()
-	rows, err := states.Rows(ctx)
-	if !reasonIs(err, ReasonKeyStatesUnavailable) || rows != nil {
-		t.Fatalf("cold read = %v, %v; want %s", rows, err, ReasonKeyStatesUnavailable)
-	}
-	if took := time.Since(start); took > time.Second {
-		t.Fatalf("cold read took %s, want about the caller's 50ms", took)
-	}
+	// The bubble runs on a virtual clock: Rows returns at the caller's deadline or it does not, whatever the host load.
+	synctest.Test(t, func(t *testing.T) {
+		source := &hungStates{hang: true}
+		// The read timeout is an hour: only the caller's context can end this wait.
+		states := NewKeyStates(KeyStatesConfig{Source: source, ReadTimeout: time.Hour})
+		defer states.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		deadline, _ := ctx.Deadline()
+		rows, err := states.Rows(ctx)
+		returnedAt := time.Now()
+		if !reasonIs(err, ReasonKeyStatesUnavailable) || rows != nil {
+			t.Fatalf("cold read = %v, %v; want %s", rows, err, ReasonKeyStatesUnavailable)
+		}
+		// On the virtual clock the read ends exactly at the caller's deadline: not before (it waited for the caller's context) and not after.
+		if !returnedAt.Equal(deadline) {
+			t.Fatalf("the cold read returned at %v of virtual time relative to its caller's deadline: want exactly at it", returnedAt.Sub(deadline))
+		}
+	})
 }
 
 // A compromise that lands in a background refresh is applied by the very next

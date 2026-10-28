@@ -725,6 +725,10 @@ leaf), and renders the phase. Every ladder read goes through dev-health.authOn, 
 {{- $p := $v.authService.phase -}}
 {{- if not (and (has (kindOf $p) (list "int" "int64" "float64")) (eq (float64 $p) (floor (float64 $p))) (ge (float64 $p) 0.0) (le (float64 $p) 5.0)) }}{{- fail (printf "authService.phase must be a whole number from 0 to 5, got %s %v" (kindOf $p) $p) }}{{- end -}}
 {{- if ge (int $p) 5 }}{{- fail (printf "authService.phase %d: phase 5 (orgs owned) needs its own public-table writer leaf (D6358): auth-service does not yet write the existing public organizations and memberships tables, so phase 4 is the highest phase this chart renders" (int $p)) }}{{- end -}}
+{{- $stage := toString (default "" $v.authService.usersOwnedStage) -}}
+{{- if not (has $stage (list "" "goApi" "owned")) }}{{- fail (printf "authService.usersOwnedStage must be goApi or owned, got %q" $stage) }}{{- end -}}
+{{- if and (eq (int $p) 4) (eq $stage "") }}{{- fail "authService.phase 4 needs authService.usersOwnedStage: goApi first (go-api forwards the credential routes, auth-service does not own users yet), then owned after the barrier (docs/operate/runbooks/auth-users-owned-flip-and-rollback.md)" }}{{- end -}}
+{{- if and (ne (int $p) 4) (ne $stage "") }}{{- fail (printf "authService.usersOwnedStage is set but authService.phase is %d: the stage exists only at phase 4" (int $p)) }}{{- end -}}
 {{- int $p -}}
 {{- end -}}
 
@@ -811,6 +815,7 @@ and the other enable flags say. templates/auth-service.yaml includes it once, ou
 {{- if eq (include "dev-health.authOn" (dict "flag" "localLogin" "context" .)) "true" }}
 {{- if not (include "dev-health.validSecretKey" .Values.authService.sessionKeys.loginLockout.secretKey) }}{{- fail "authService.phase >= 3 (login) needs authService.sessionKeys.loginLockout.secretKey to be a Secret key: letters, digits, '-', '_', '.'" }}{{- end }}
 {{- end }}
+{{- if and (ge (int (include "dev-health.authPhase" .)) 4) (not .Values.goApi.enabled) }}{{- fail (printf "authService.usersOwnedStage=%s needs go-api (goApi.enabled=true): go-api forwards the credential routes and refuses local user writes, and an owned auth-service must never run without it" .Values.authService.usersOwnedStage) }}{{- end }}
 {{- $_ := include "dev-health.authEdDSAIssuer" . }}
 {{- $_ := include "dev-health.authSSOOn" (dict "flag" "oidc" "context" .) }}
 {{- $_ := include "dev-health.authSSOOn" (dict "flag" "saml" "context" .) }}
@@ -821,13 +826,18 @@ and the other enable flags say. templates/auth-service.yaml includes it once, ou
 {{/*
 "true" when authService.phase turns the ladder flag on, else "". Call with (dict "flag" <name> "context" $).
 The ladder (each flag is on from its phase up): service 1, sessions 2, localLogin 3, social 3, credentials 4,
-usersOwned 4, orgsOwned 5. credentials moves with usersOwned: go-api refuses AUTH_USERS_OWNED unless the credential routes
+usersOwned 4, orgsOwned 5. credentials moves with go-api's users switch: go-api refuses AUTH_USERS_OWNED unless the credential routes
 go to auth-service. auth-service mounts them from phase 2 (a 503 stub until users are owned).
+Phase 4 has two stages (authService.usersOwnedStage): goApiUsersOwned (go-api's AUTH_USERS_OWNED) is on at both; usersOwned (auth-service,
+the auth Jobs, the grants) is on only at stage owned, so go-api rolls first and auth-service owns users after (CHAOS-11606).
 */}}
 {{- define "dev-health.authOn" -}}
-{{- $ladder := dict "service" 1 "sessions" 2 "localLogin" 3 "social" 3 "credentials" 4 "usersOwned" 4 "orgsOwned" 5 -}}
+{{- $ladder := dict "service" 1 "sessions" 2 "localLogin" 3 "social" 3 "credentials" 4 "goApiUsersOwned" 4 "usersOwned" 4 "orgsOwned" 5 -}}
 {{- if not (hasKey $ladder .flag) }}{{- fail (printf "dev-health.authOn: %s is not a ladder flag" .flag) }}{{- end -}}
-{{- if ge (int (include "dev-health.authPhase" .context)) (int (get $ladder .flag)) -}}true{{- end -}}
+{{- $phase := int (include "dev-health.authPhase" .context) -}}
+{{- if ge $phase (int (get $ladder .flag)) -}}
+{{- if or (ne .flag "usersOwned") (ge $phase 5) (eq (toString .context.Values.authService.usersOwnedStage) "owned") -}}true{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{/*
@@ -1184,6 +1194,62 @@ The integer value of a dotted IPv4 address (validated by the caller).
 {{- define "dev-health.ipv4Int" -}}
 {{- $o := splitList "." (toString .) -}}
 {{- add (add (mul (int (index $o 0)) 16777216) (mul (int (index $o 1)) 65536)) (add (mul (int (index $o 2)) 256) (int (index $o 3))) -}}
+{{- end -}}
+
+{{/*
+One trusted proxy list, checked as internal/auth/clientaddr ParseTrust reads it (auth-service, and go-api through
+internal/api/clientip), so a rendered list never stops either service at start, plus the node pod range rule (CHAOS-11703):
+a wide IPv4 entry holds the node's own addresses (the network address, the bridge at the next one), from which a host
+process or a hostNetwork pod reaches the port past the pod selector, so it needs "!<network>" and "!<network+1>" beside it.
+dict: key (the values key the messages name), entries (list of strings), ackKey ("" = no ack band: a wide IPv4 entry needs
+only its node exclusions), ack (bool), peer (what the port admits, for the node message). Prints nothing; fails on a bad list.
+*/}}
+{{- define "dev-health.trustedProxyList" -}}
+{{- $p := . }}
+{{- $trusted := list }}
+{{- $excluded := list }}
+{{- range $p.entries }}
+{{- $entry := toString . }}
+{{- if hasPrefix "!" $entry }}
+{{- $addr := trimPrefix "!" $entry }}
+{{- if or (contains "/" $addr) (contains ":" $addr) (not (include "dev-health.trustedProxyEntry" $addr)) }}{{- fail (printf "%s exclusion entries must each be \"!\" and one IPv4 address, never a network, an IPv6 or an IPv4-mapped address: %q is not" $p.key $entry) }}{{- end }}
+{{- $excluded = append $excluded $addr }}
+{{- else }}
+{{- if or (not (include "dev-health.trustedProxyEntry" $entry)) (regexMatch "/0$" $entry) (regexMatch "^(?i)::ffff:" $entry) }}{{- fail (printf "%s entries must each be one IP address or CIDR network, never a /0 network or an IPv4-mapped form: a trusted peer picks the client address of every request" $p.key) }}{{- end }}
+{{- if contains "/" $entry }}
+{{- $bits := int (index (splitList "/" $entry) 1) }}
+{{- $v6 := contains ":" $entry }}
+{{- if or (and (not $v6) (lt $bits 24)) (and $v6 (lt $bits 64)) }}{{- fail (printf "%s entry %q is wider than a /24 (IPv4) or a /64 (IPv6): the node pod range is the widest list allowed%s" $p.key $entry (ternary (printf ", even with %s" $p.ackKey) "" (ne $p.ackKey ""))) }}{{- end }}
+{{- if and $v6 (lt $bits 124) }}{{- fail (printf "%s entry %q is an IPv6 network wider than a /124: the render cannot name its node exclusions, %s" $p.key $entry (ternary (printf "so %s does not allow it; list the go-api pod addresses" $p.ackKey) "so it is refused; list the proxy addresses" (ne $p.ackKey ""))) }}{{- end }}
+{{- if and $p.ackKey (lt $bits 28) (not $p.ack) }}{{- fail (printf "%s entry %q is wider than a /28 (IPv4) or a /124 (IPv6): every address in it is believed as a proxy that names the client. It is allowed only with %s=true, with its node exclusions beside it, and only while the auth-service NetworkPolicy admits go-api's pods alone on the API port; prefer the go-api pod addresses" $p.key $entry $p.ackKey) }}{{- end }}
+{{- end }}
+{{- $trusted = append $trusted $entry }}
+{{- end }}
+{{- end }}
+{{- /* An exclusion mirrors clientaddr.ParseTrust: inside a listed network, never also listed as an address. IPv4 only, so the render can check it. */}}
+{{- range $x := $excluded }}
+{{- if has $x $trusted }}{{- fail (printf "%s exclusion entries must not name an address the list also trusts: \"!%s\"" $p.key $x) }}{{- end }}
+{{- $xv := int (include "dev-health.ipv4Int" $x) }}
+{{- $inside := false }}
+{{- range $trusted }}
+{{- if and (contains "/" .) (not (contains ":" .)) }}
+{{- $parts := splitList "/" . }}
+{{- $nv := int (include "dev-health.ipv4Int" (index $parts 0)) }}
+{{- $size := 1 }}
+{{- range until (int (sub 32 (int (index $parts 1)))) }}{{- $size = mul $size 2 }}{{- end }}
+{{- if and (ge $xv $nv) (lt $xv (add $nv $size)) }}{{- $inside = true }}{{- end }}
+{{- end }}
+{{- end }}
+{{- if not $inside }}{{- fail (printf "%s exclusion entries must each lie inside a listed IPv4 network: \"!%s\" does not" $p.key $x) }}{{- end }}
+{{- end }}
+{{- range $trusted }}
+{{- if and (contains "/" .) (not (contains ":" .)) (lt (int (index (splitList "/" .) 1)) 28) }}
+{{- $net := index (splitList "/" .) 0 }}
+{{- $o := splitList "." $net }}
+{{- $bridge := printf "%s.%s.%s.%d" (index $o 0) (index $o 1) (index $o 2) (add1 (int (index $o 3))) }}
+{{- if not (and (has $net $excluded) (has $bridge $excluded)) }}{{- fail (printf "%s entry %q needs its node exclusions \"!%s\" and \"!%s\" in the same list: the range holds the node's own addresses, from which a host process or a hostNetwork pod reaches %s" $p.key . $net $bridge $p.peer) }}{{- end }}
+{{- end }}
+{{- end }}
 {{- end -}}
 
 {{/*

@@ -7,7 +7,9 @@ import (
 	"log/slog"
 	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -26,47 +28,81 @@ func closedPort(t *testing.T) string {
 	return address
 }
 
-// TestAnUnreachableCollectorCostsTheStopAtMostTheFlushBound is the executed
-// repro of the container-smoke red (exit 137): a sampled span is buffered, the
-// collector port is closed, and the component's final flush used to retry until
-// the whole shutdown budget (the caller's context, 10 s in the binaries) was
-// spent, longer than the five seconds a stopping container is given. The stop
-// must return nil inside the bound, and say loudly why spans were dropped.
-func TestAnUnreachableCollectorCostsTheStopAtMostTheFlushBound(t *testing.T) {
-	t.Setenv("OTEL_ENABLED", "true")
-	t.Setenv("OTEL_SAMPLE_RATE", "1")
-	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", closedPort(t))
-	var logs bytes.Buffer
-	component := InitWithServiceName(slog.New(slog.NewTextHandler(&logs, nil)), "flush-test")
-	t.Cleanup(func() { otel.SetTracerProvider(sdktrace.NewTracerProvider()) })
+// hungExporter is a collector that never answers: every export and its shutdown wait for their context to end, or for the test to
+// release them (the SDK abandons the export it started when the flush bound ends). It is in memory, no socket is opened.
+type hungExporter struct{ release chan struct{} }
 
-	_, span := otel.Tracer("flush-test").Start(context.Background(), "buffered")
-	span.End()
-
-	// The caller's budget is far larger than the bound: only the bound may
-	// decide how long the stop takes.
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	started := time.Now()
-	err := component.Shutdown(ctx)
-	elapsed := time.Since(started)
-
-	if err != nil {
-		t.Errorf("a down collector failed the stop: %v", err)
-	}
-	if limit := shutdownFlushTimeout + time.Second; elapsed > limit {
-		t.Errorf("the stop took %v with an unreachable collector, want <= %v (bound %v)", elapsed, limit, shutdownFlushTimeout)
-	}
-	if !strings.Contains(logs.String(), "collector") || !strings.Contains(logs.String(), "dropped") {
-		t.Errorf("no loud line saying the collector was down and spans were dropped:\n%s", logs.String())
+func (e hungExporter) ExportSpans(ctx context.Context, _ []sdktrace.ReadOnlySpan) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-e.release:
+		return nil
 	}
 }
 
-type failingExporter struct{ shutdownErr error }
+func (e hungExporter) Shutdown(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-e.release:
+		return nil
+	}
+}
+
+// TestAnUnreachableCollectorCostsTheStopAtMostTheFlushBound is the repro of the container-smoke red (exit 137): a sampled span is
+// buffered, the collector never answers, and the component's final flush used to wait until the whole shutdown budget (the caller's
+// context, 10 s in the binaries) was spent, longer than the five seconds a stopping container is given. The stop must return nil
+// inside the bound, and say loudly why spans were dropped. It runs in a bubble on a virtual clock against an in-memory exporter, so
+// the stop that outlives the bound by any amount fails.
+func TestAnUnreachableCollectorCostsTheStopAtMostTheFlushBound(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var logs bytes.Buffer
+		exporter := hungExporter{release: make(chan struct{})}
+		// The export the SDK abandoned at the bound ends here, so the bubble can end.
+		defer close(exporter.release)
+		provider := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample()), sdktrace.WithBatcher(exporter))
+		component := Component{provider: provider, logger: slog.New(slog.NewTextHandler(&logs, nil)), endpoint: "collector.test:4317"}
+
+		_, span := provider.Tracer("flush-test").Start(context.Background(), "buffered")
+		span.End()
+
+		// The caller's budget is far larger than the bound: only the bound may decide how long the stop takes.
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		started := time.Now()
+		err := component.Shutdown(ctx)
+		returnedAt := time.Now()
+
+		if err != nil {
+			t.Errorf("a down collector failed the stop: %v", err)
+		}
+		if returnedAt.After(started.Add(shutdownFlushTimeout)) {
+			t.Errorf("the stop returned at +%v of virtual time with an unreachable collector, want it back at the flush bound %v", returnedAt.Sub(started), shutdownFlushTimeout)
+		}
+		if ctx.Err() != nil {
+			t.Errorf("the stop spent the caller's whole budget with an unreachable collector, want it back at the flush bound %v", shutdownFlushTimeout)
+		}
+		if !strings.Contains(logs.String(), "collector") || !strings.Contains(logs.String(), "dropped") {
+			t.Errorf("no loud line saying the collector was down and spans were dropped:\n%s", logs.String())
+		}
+	})
+}
+
+type failingExporter struct {
+	shutdownErr error
+	// boundLive, when set, records whether the flush context was still live when the exporter returned its error.
+	boundLive *atomic.Bool
+}
 
 func (failingExporter) ExportSpans(context.Context, []sdktrace.ReadOnlySpan) error { return nil }
 
-func (e failingExporter) Shutdown(context.Context) error { return e.shutdownErr }
+func (e failingExporter) Shutdown(ctx context.Context) error {
+	if e.boundLive != nil {
+		e.boundLive.Store(ctx.Err() == nil)
+	}
+	return e.shutdownErr
+}
 
 // TestARealFlushErrorOtherThanTheDeadlineIsStillReported: only the bound being
 // hit means "collector down"; any other error from the final flush is still the
@@ -120,15 +156,15 @@ func TestACallerContextThatExpiredIsNotSwallowed(t *testing.T) {
 // the bound has not elapsed (and the caller is live) is a real flush failure.
 func TestAnExporterDeadlineErrorBeforeTheBoundIsAFailureNotACollectorOutage(t *testing.T) {
 	var logs bytes.Buffer
-	provider := sdktrace.NewTracerProvider(sdktrace.WithBatcher(failingExporter{shutdownErr: context.DeadlineExceeded}))
+	var boundLive atomic.Bool
+	provider := sdktrace.NewTracerProvider(sdktrace.WithBatcher(failingExporter{shutdownErr: context.DeadlineExceeded, boundLive: &boundLive}))
 	component := Component{provider: provider, logger: slog.New(slog.NewTextHandler(&logs, nil)), endpoint: "x"}
-	started := time.Now()
 	err := component.Shutdown(context.Background())
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("Shutdown = %v, want the exporter's own deadline error returned", err)
 	}
-	if time.Since(started) >= shutdownFlushTimeout {
-		t.Fatalf("the exporter's error took the whole bound; the test did not exercise an early deadline error")
+	if !boundLive.Load() {
+		t.Fatalf("the exporter's error came after the bound ended; the test did not exercise an early deadline error")
 	}
 	if strings.Contains(logs.String(), "collector is not reachable") {
 		t.Errorf("an exporter's own deadline error was reported as an unreachable collector:\n%s", logs.String())

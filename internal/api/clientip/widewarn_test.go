@@ -13,7 +13,9 @@ func TestWidePrefixesCountsEntriesWiderThanASlash28(t *testing.T) {
 		"2001:db8::1":                        0,
 		"2001:db8::/124":                     0,
 		"2001:db8::/64":                      1,
-		"::ffff:10.42.0.0/120":               1,
+		"::ffff:10.42.0.0/120":               0,
+		"10.42.0.0/24,!10.42.0.0,!10.42.0.1": 1,
+		"10.42.0.0/24,bogus":                 0,
 		"::ffff:10.42.0.0/124,not-a-network": 0,
 	} {
 		t.Setenv("TRUSTED_PROXIES", raw)

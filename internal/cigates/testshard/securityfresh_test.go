@@ -161,10 +161,10 @@ func freshEnv(on bool) []string {
 	return []string{"DEV_HEALTH_GO_FRESH_SECURITY="}
 }
 
-// receipt runs the leg receipt on the -json events of the summary lines of log.
+// receipt runs the leg receipt on the -json events of the summary lines of log, for a leg that ran packages.
 func receipt(t *testing.T, on bool, log string) (string, string, error) {
 	t.Helper()
-	return checkGo(t, freshEnv(on), "security-fresh-receipt", writeLog(t, summaryEvents(t, log)))
+	return checkGo(t, freshEnv(on), "security-fresh-receipt", "1", writeLog(t, summaryEvents(t, log)))
 }
 
 func TestACachedSecurityPackageFailsTheMergeGroupLeg(t *testing.T) {
@@ -259,12 +259,13 @@ func TestNoRaceSoloPackageIsASecurityPackage(t *testing.T) {
 	}
 }
 
-func TestTheFreshCallsCarryCountOneAndThePlainCallsDoNot(t *testing.T) {
+// The security calls take their -count=1 from go_test_leg on merge_group (the only event that splits them off), once.
+func TestTheSecurityAndPlainCallsTakeCountOneOnlyFromGoTestLeg(t *testing.T) {
 	t.Parallel()
 	source := readCheckGo(t)
 	for _, want := range []string{
-		`go_test_leg "${log}" "${legjson}" -count=1 -timeout 10m ${rest_sec}`,
-		`go_test_leg "${racelog}" "${legjson}" -race -count=1 -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" "${pkgs_sec[@]}"`,
+		`go_test_leg "${log}" "${legjson}" -timeout 10m ${rest_sec}`,
+		`go_test_leg "${racelog}" "${legjson}" -race -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" "${pkgs_sec[@]}"`,
 		`go_test_leg "${log}" "${legjson}" -timeout 10m ${rest}`,
 		`go_test_leg "${racelog}" "${legjson}" -race -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" "${pkgs[@]}"`,
 	} {

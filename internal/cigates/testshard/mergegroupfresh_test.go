@@ -3,6 +3,8 @@ package testshard_test
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -57,13 +59,16 @@ func outputEvent(t *testing.T, pkg, test, output string) string {
 	return string(b) + "\n"
 }
 
-func hasArg(call, arg string) bool {
+func hasArg(call, arg string) bool { return countArg(call, arg) > 0 }
+
+func countArg(call, arg string) int {
+	n := 0
 	for _, f := range strings.Fields(call) {
 		if f == arg {
-			return true
+			n++
 		}
 	}
-	return false
+	return n
 }
 
 type legCalls struct {
@@ -113,8 +118,11 @@ func TestOnMergeGroupEveryGoTestOfTheTestAndRaceLegsCarriesCountOne(t *testing.T
 			t.Errorf("ci-leg %s: the stand-in recorded no go test call", l.leg)
 		}
 		for _, c := range l.calls {
-			if !hasArg(c, "-count=1") {
-				t.Errorf("ci-leg %s on merge_group: a go test without -count=1 in its argv: %s", l.leg, c)
+			if n := countArg(c, "-count=1"); n != 1 {
+				t.Errorf("ci-leg %s on merge_group: a go test with %d -count=1 in its argv, want exactly 1: %s", l.leg, n, c)
+			}
+			if strings.Contains(c, "/internal/auth/") && !hasArg(c, "-tags=integration") {
+				seen["security packages"] = true
 			}
 			switch {
 			case hasArg(c, "-list"):
@@ -143,7 +151,7 @@ func TestOnMergeGroupEveryGoTestOfTheTestAndRaceLegsCarriesCountOne(t *testing.T
 			}
 		}
 	}
-	for _, kind := range []string{"providersync list", "providersync race slice", "multi-replica gate", "heavy package alone", "race solo", "race packages", "test packages"} {
+	for _, kind := range []string{"providersync list", "providersync race slice", "multi-replica gate", "heavy package alone", "race solo", "race packages", "test packages", "security packages"} {
 		if !seen[kind] {
 			t.Errorf("no leg ran a %s call: the check covers less than the legs run", kind)
 		}
@@ -219,7 +227,7 @@ func TestATestsOwnOutputLineIsNotReadAsACachedPackage(t *testing.T) {
 	mod, _ := goList(t)
 	events := outputEvent(t, mod+"/internal/cigates/testshard", "TestAChildGoTest", "ok  \t"+mod+"/internal/clientip\t(cached)\n") +
 		summaryEvents(t, "ok  \t"+mod+"/internal/cigates/testshard\t0.500s\n")
-	out, errs, err := checkGo(t, freshEnv(true), "security-fresh-receipt", writeLog(t, events))
+	out, errs, err := checkGo(t, freshEnv(true), "security-fresh-receipt", "1", writeLog(t, events))
 	if err != nil {
 		t.Fatalf("a test's own output line failed the merge_group receipt: %v\n%s", err, errs)
 	}
@@ -324,5 +332,86 @@ func TestEveryGoTestLineOfTheTestAndRaceLegsNamesCountOne(t *testing.T) {
 	}
 	if missing, _ := legCallsWithoutCountOne(t, planted); len(missing) != 1 {
 		t.Errorf("a go_test_leg call that lost -count=1 was not caught: %v", missing)
+	}
+}
+
+// The leg's own variables stay in the leg: a go test call (and so any check_go.sh a test starts) sees neither the leg's -json
+// directory nor the merge_group switch.
+func TestEveryGoTestCallOfALegSeesNeitherLegVariable(t *testing.T) {
+	t.Parallel()
+	for _, leg := range [][]string{{"race", "1", "4"}, {"test", "350", "350"}} {
+		leak := writeLog(t, "")
+		env := append(freshEnv(true), "GO_TEST_LEG_JSON_DIR="+t.TempDir(), "FAKE_GO_LEAK_LOG="+leak)
+		r := runCheckGo(t, env, false, append([]string{"ci-leg"}, leg...)...)
+		if r.Err != nil {
+			t.Errorf("ci-leg %v: %v\n%s", leg, r.Err, r.Stderr)
+			continue
+		}
+		b, err := os.ReadFile(leak)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(b) == 0 {
+			t.Errorf("ci-leg %v: the stand-in logged no go test call", leg)
+		}
+		for _, l := range strings.Split(strings.TrimSuffix(string(b), "\n"), "\n") {
+			if strings.TrimSpace(l) != "" {
+				t.Errorf("ci-leg %v: a go test call sees %q", leg, strings.TrimSpace(l))
+			}
+		}
+	}
+}
+
+// A test of internal/cigates/testshard starts check_go.sh ci-leg as a child. Under a hosted leg (GO_TEST_LEG_JSON_DIR set), the
+// child must not empty or rewrite the parent's leg -json file: the parent's receipt reads it.
+func TestAChildCheckGoLeavesTheParentLegJSONByteIdentical(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	parent := filepath.Join(dir, "test-350-of-350.json")
+	const marker = "PARENT-LEG-EVENTS\n"
+	if err := os.WriteFile(parent, []byte(marker), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	env := append(freshEnv(true), "GO_TEST_LEG_JSON_DIR="+dir, "FAKE_GO_CHILD_CHECK_GO="+filepath.Join(repoRoot(t), "ci", "check_go.sh"))
+	r := runCheckGo(t, env, false, "ci-leg", "race", "1", "4")
+	if r.Err != nil {
+		t.Fatalf("ci-leg race 1 4: %v\n%s", r.Err, r.Stderr)
+	}
+	b, err := os.ReadFile(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != marker {
+		t.Errorf("a child check_go.sh rewrote the leg -json file %s: %d byte(s), want the %d seeded byte(s)", parent, len(b), len(marker))
+	}
+}
+
+func TestOnMergeGroupALegThatRanPackagesWithNoPackageSummaryFails(t *testing.T) {
+	t.Parallel()
+	for name, events := range map[string]string{"empty": "", "malformed": "not a json event\n{\"Action\":\n"} {
+		f := writeLog(t, events)
+		_, errs, err := checkGo(t, freshEnv(true), "security-fresh-receipt", "3", f)
+		if err == nil || !strings.Contains(errs, "no package summary") {
+			t.Errorf("%s events, merge_group, 3 packages ran: want a failure naming no package summary, got err=%v\n%s", name, err, errs)
+		}
+		if _, errs, err := checkGo(t, freshEnv(false), "security-fresh-receipt", "3", f); err != nil {
+			t.Errorf("%s events on a pull request must only report: %v\n%s", name, err, errs)
+		}
+		if _, errs, err := checkGo(t, freshEnv(true), "security-fresh-receipt", "0", f); err != nil {
+			t.Errorf("%s events, merge_group, no package ran: %v\n%s", name, err, errs)
+		}
+	}
+}
+
+// Through the real race leg: no stage printed a package summary, so on merge_group the receipt has nothing to prove the leg ran.
+func TestARaceLegWithNoPackageSummaryFailsOnlyOnMergeGroup(t *testing.T) {
+	t.Parallel()
+	empty := writeLog(t, "")
+	mg := runCheckGo(t, append(freshEnv(true), "FAKE_GO_TEST_STDOUT="+empty), false, "ci-leg", "race", "1", "4")
+	if mg.Err == nil || !strings.Contains(mg.Stderr, "no package summary") {
+		t.Errorf("merge_group: a race leg with no package summary passed: err=%v\n%s", mg.Err, mg.Stderr)
+	}
+	if pr := runCheckGo(t, append(freshEnv(false), "FAKE_GO_TEST_STDOUT="+empty), false, "ci-leg", "race", "1", "4"); pr.Err != nil {
+		t.Errorf("pull request: %v\n%s", pr.Err, pr.Stderr)
 	}
 }

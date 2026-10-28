@@ -214,24 +214,45 @@ func (chunk PreparedProviderChunk) Validate(claim Claim, policy ChunkPolicy) err
 
 // encodedPreparedChunkPayload measures the provider sidecar without the
 // effect ledger. The ledger is stored in its own JSONB column and is measured
-// separately by the durable store. The small fixed-point loop accounts for
-// payload_bytes being part of the encoded payload itself.
+// separately by the durable store. payload_bytes is part of the encoded payload
+// itself, so the stamp is a fixed point (see stampPayloadBytes).
 func encodedPreparedChunkPayload(chunk PreparedProviderChunk) ([]byte, error) {
 	chunk.Ledger = EffectLedgerState{}
-	chunk.PayloadBytes = 0
 	var encoded []byte
-	for attempt := 0; attempt < 3; attempt++ {
-		var err error
-		encoded, err = json.Marshal(chunk)
-		if err != nil {
-			return nil, err
+	var marshalErr error
+	_, converged := stampPayloadBytes(func(payloadBytes int) int {
+		if marshalErr != nil {
+			return payloadBytes
 		}
-		if chunk.PayloadBytes == len(encoded) {
-			return encoded, nil
-		}
-		chunk.PayloadBytes = len(encoded)
+		chunk.PayloadBytes = payloadBytes
+		encoded, marshalErr = json.Marshal(chunk)
+		return len(encoded)
+	})
+	if marshalErr != nil {
+		return nil, marshalErr
+	}
+	if !converged {
+		return nil, errChunkPayloadStamp
 	}
 	return encoded, nil
+}
+
+// errChunkPayloadStamp is the refusal for a payload_bytes stamp that did not reach its fixed point. It cannot
+// happen for a sidecar within the 2 MiB cap; it is a policy refusal, never a checkpoint conflict.
+var errChunkPayloadStamp = fmt.Errorf("%w: payload_bytes stamp did not converge", ErrChunkPolicyExceeded)
+
+// stampPayloadBytes STUB (red): the legacy three passes; it reports the stamp the last measured encoding carries and
+// success whatever happened.
+func stampPayloadBytes(measure func(payloadBytes int) int) (int, bool) {
+	stamp := 0
+	for pass := 0; pass < 3; pass++ {
+		length := measure(stamp)
+		if length == stamp || pass == 2 {
+			return stamp, true
+		}
+		stamp = length
+	}
+	return stamp, true
 }
 
 // ChunkedEffectStore persists the checkpoint and prepared sidecars, and owns

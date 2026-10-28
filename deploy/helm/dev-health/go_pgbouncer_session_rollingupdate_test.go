@@ -84,6 +84,13 @@ func TestSessionRollingUpdateUnsetRendersByteEqual(t *testing.T) {
 			t.Errorf("%s render: %d OTEL_ENABLED \"false\" entries, want one per auth-service Deployment", name, n)
 		}
 		tip = strings.ReplaceAll(tip, otelOff, "")
+		// The chart-owned PgBouncer Secret gained helm.sh/resource-policy: keep after the base: that one annotation is
+		// left out of the tip, exactly once where the Secret renders.
+		keepAnn := "  annotations:\n    helm.sh/resource-policy: keep\ntype: Opaque\n"
+		if n := strings.Count(tip, keepAnn); n != strings.Count(tip, "kind: Secret\nmetadata:\n  name: a-dev-health-go-pgbouncer\n") {
+			t.Errorf("%s render: %d keep annotations on the PgBouncer Secret, want one per Secret", name, n)
+		}
+		tip = strings.ReplaceAll(tip, keepAnn, "type: Opaque\n")
 		if b, c := withoutSpecStrategy(t, baseValkey, false), withoutSpecStrategy(t, tipValkey, true); b != c {
 			t.Errorf("%s render: the Valkey Deployment differs from base %s beyond spec.strategy:\n  base: %q\n  tip:  %q", name, goldenBaseSha[:10], b, c)
 		}

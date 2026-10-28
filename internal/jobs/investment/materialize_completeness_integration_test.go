@@ -198,6 +198,7 @@ func (h *completenessHarness) run(m *Materializer, config Config) (Stats, error)
 //	        replaced the old one, the unit still looks complete and is skipped (no
 //	        spurious LLM call); after the merge the NEXT request heals it
 func TestCHAOS8788CrashedRewriteOfAnOlderUnitIsHealedByTheNextRequest(t *testing.T) {
+	t.Parallel()
 	h := newCompletenessHarness(t)
 	mock := categorize.MockProvider{}
 	at := func(hours int) time.Time { return h.within.Add(time.Duration(hours) * time.Hour) }
@@ -349,6 +350,7 @@ func (twoQuoteProvider) Model() string { return "mock" }
 // != recorded 2, and the unit is rewritten. A check that only asked "are there
 // any quotes" would call it complete.
 func TestCHAOS8788PartialQuoteLossIsHealed(t *testing.T) {
+	t.Parallel()
 	h := newCompletenessHarness(t)
 	h.setEvidence("1")
 	old := twoQuoteProvider{second: [2]int{5, 40}}   // quotes A (whole) and B (5..40)
@@ -384,6 +386,7 @@ func TestCHAOS8788PartialQuoteLossIsHealed(t *testing.T) {
 // complete and never rewritten for completeness, whatever its quotes look like;
 // so is a unit with zero quotes and a recorded count of 0.
 func TestCHAOS8788UnrecordedAndZeroQuoteUnitsAreComplete(t *testing.T) {
+	t.Parallel()
 	h := newCompletenessHarness(t)
 	h.setEvidence("1")
 	mock := categorize.MockProvider{}
@@ -434,6 +437,7 @@ func TestCHAOS8788UnrecordedAndZeroQuoteUnitsAreComplete(t *testing.T) {
 // and with physical duplicates of one quote of one run. Both filter on the row's
 // run id FIRST, then dedupe on (work_unit_id, source_id, quote), neither uses FINAL.
 func TestCHAOS8788VisibleQuoteCountEqualsTheProductReaderBeforeAndAfterAMerge(t *testing.T) {
+	t.Parallel()
 	h := newCompletenessHarness(t)
 	mock := categorize.MockProvider{}
 	h.setEvidence("1")
@@ -485,6 +489,7 @@ func TestCHAOS8788VisibleQuoteCountEqualsTheProductReaderBeforeAndAfterAMerge(t 
 // but produced no quote (here: too little evidence text, a fallback outcome)
 // records 0, never NULL.
 func TestCHAOS8788RunWithoutQuotesRecordsZeroAndWithoutSnippetsRecordsNull(t *testing.T) {
+	t.Parallel()
 	h := newCompletenessHarness(t)
 	mock := categorize.MockProvider{}
 	for _, id := range []string{"Q1", "Q2"} {
@@ -522,6 +527,7 @@ func TestCHAOS8788RunWithoutQuotesRecordsZeroAndWithoutSnippetsRecordsNull(t *te
 // not the count of an older row of the same key: a bare argMax skips NULL values
 // and would resurrect the older count (the query reads the tuple instead).
 func TestCHAOS8788LatestRowWithoutACountIsNullNotTheOlderCount(t *testing.T) {
+	t.Parallel()
 	h := newCompletenessHarness(t)
 	mock := categorize.MockProvider{}
 	h.setEvidence("1")
@@ -562,6 +568,7 @@ func (h *completenessHarness) insertQuote(unit, run, sourceType, sourceID, quote
 // (a) A unit whose visible quotes are ABOVE the recorded count is incomplete too:
 // the row's run recorded 1 and now shows 2 (a stray quote under its run id).
 func TestCHAOS8788MoreVisibleQuotesThanRecordedIsIncomplete(t *testing.T) {
+	t.Parallel()
 	h := newCompletenessHarness(t)
 	mock := categorize.MockProvider{}
 	h.setEvidence("1")
@@ -590,6 +597,7 @@ func TestCHAOS8788MoreVisibleQuotesThanRecordedIsIncomplete(t *testing.T) {
 // on the next request. A raw length (2) would never match the 1 visible quote and
 // the unit would be rewritten on every request.
 func TestCHAOS8788DuplicateQuoteFromTheModelRecordsTheDistinctCount(t *testing.T) {
+	t.Parallel()
 	h := newCompletenessHarness(t)
 	h.setEvidence("1")
 	duplicating := twoQuoteProvider{second: [2]int{0, 80}} // the second quote is the first, whole
@@ -611,6 +619,7 @@ func TestCHAOS8788DuplicateQuoteFromTheModelRecordsTheDistinctCount(t *testing.T
 // (c) FetchVisibleQuoteCounts narrows its unit x run cross product to each unit's
 // OWN run: two units that appear with each other's run id in the same chunk.
 func TestCHAOS8788VisibleQuoteCountsKeepEachUnitToItsOwnRun(t *testing.T) {
+	t.Parallel()
 	h := newCompletenessHarness(t)
 	at := h.within
 	// U1 under R1: 2 quotes, under R2: 1. U2 under R2: 1 quote, under R1: 3.
@@ -634,6 +643,7 @@ func TestCHAOS8788VisibleQuoteCountsKeepEachUnitToItsOwnRun(t *testing.T) {
 // (d) The dedupe key is (work_unit_id, source_id, quote), like the table and the
 // product reader: the same quote with another source_type is ONE visible quote.
 func TestCHAOS8788SameQuoteWithAnotherSourceTypeIsOneVisibleQuote(t *testing.T) {
+	t.Parallel()
 	h := newCompletenessHarness(t)
 	h.setEvidence("1")
 	if _, err := h.run(h.materializer(h.conn, categorize.MockProvider{}), h.cfg("run-old", h.within, false)); err != nil {

@@ -91,6 +91,8 @@ metadata:
   namespace: {{ include "dev-health.namespace" . }}
   labels:
     {{- include "dev-health.componentLabels" (dict "component" "go-pgbouncer" "context" $) | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
 type: Opaque
 stringData:
   RIVER_DOMAIN_DATABASE_PASSWORD: {{ required "goWorkers.pgbouncer.secret.data.RIVER_DOMAIN_DATABASE_PASSWORD is required when PgBouncer is enabled" .Values.goWorkers.pgbouncer.secret.data.RIVER_DOMAIN_DATABASE_PASSWORD | quote }}

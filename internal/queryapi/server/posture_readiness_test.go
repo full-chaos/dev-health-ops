@@ -212,7 +212,7 @@ func silentPostgresPool(t *testing.T) (*pgxpool.Pool, *atomic.Int32) {
 	return pool, accepted
 }
 
-// posturePassGuard is the named limit L of the readyz posture test below: readyzTimeout/2, and 10x or more of the slowest
+// posturePassGuard is the named limit L of the readyz posture test below (follow-up Low: CHAOS-11769): readyzTimeout/2, and 10x or more of the slowest
 // correct-path answer measured under -race.
 const posturePassGuard = readyzTimeout / 2
 
@@ -232,7 +232,7 @@ func TestReadyzAnswersWithinTheProbeBudgetWhileThePostureQueryIsSlow(t *testing.
 	}
 	probes := readinessProbes(fakePinger{}, fakePinger{}, fakeJWKS{}, queryAPIPostureCheck(env, pool))
 
-	// NAMED LIMIT (follow-up Low ticket, opened via pm): the silent server is a real socket, so no virtual clock
+	// NAMED LIMIT (follow-up Low ticket CHAOS-11769): the silent server is a real socket, so no virtual clock
 	// applies. A probe that waited on the live posture check would block until the probe's own context ends
 	// (readyzTimeout, 3 s). posturePassGuard is a failure-path guard only, at most half of that wait and far above
 	// the answer of a probe that does not wait (a few ms, measured under -race); it is not a performance assertion.

@@ -508,9 +508,12 @@ func (h *handlers) orgDeletionPurgePostgres(ctx context.Context, orgUUID uuid.UU
 // orgDeletionPurgeClickHouse counts and (not dry_run) deletes the org's rows
 // in every table the preflight discovered live from system.columns (the
 // accepted divergence from org_deletion.py's static regex-parse of migration
-// files -- see this file's package doc comment). A table whose count or
-// delete fails does not stop the others; the failed tables come back as an
-// *orgDeletionIncompleteError, never as a warning in a success.
+// files -- see this file's package doc comment). The count is reported only:
+// a real delete runs ALTER DELETE on every table, also one that counts 0 (a
+// row policy can hide rows from SELECT that ALTER DELETE still reaches). A
+// table whose count or delete fails does not stop the others; the failed
+// tables come back as an *orgDeletionIncompleteError, never as a warning in a
+// success.
 func (h *handlers) orgDeletionPurgeClickHouse(ctx context.Context, ch *orgDeletionClickHouse, orgIDStr string, dryRun bool, result *orgDeletionResult) error {
 	// mutations_sync=2 makes each ALTER TABLE DELETE below block until
 	// ClickHouse has actually applied it, rather than merely queuing an
@@ -527,6 +530,9 @@ func (h *handlers) orgDeletionPurgeClickHouse(ctx context.Context, ch *orgDeleti
 	var failed []string
 	var first error
 	fail := func(table string, err error) {
+		if len(failed) > 0 && failed[len(failed)-1] == table {
+			return
+		}
 		failed = append(failed, table)
 		if first == nil {
 			first = fmt.Errorf("%s: %w", table, err)
@@ -542,12 +548,12 @@ func (h *handlers) orgDeletionPurgeClickHouse(ctx context.Context, ch *orgDeleti
 		countRow := ch.conn.QueryRow(ctx, fmt.Sprintf("SELECT count() FROM `%s` WHERE %s", t.Name, condition), bind)
 		if err := countRow.Scan(&count); err != nil {
 			fail(t.Name, err)
-			continue
+		} else {
+			result.clickhouseTables = append(result.clickhouseTables, t.Name)
+			result.clickhouseCount[t.Name] = int64(count)
+			result.clickhouseTotal += int64(count)
 		}
-		result.clickhouseTables = append(result.clickhouseTables, t.Name)
-		result.clickhouseCount[t.Name] = int64(count)
-		result.clickhouseTotal += int64(count)
-		if dryRun || count == 0 {
+		if dryRun {
 			continue
 		}
 		if err := ch.conn.Exec(syncCtx, fmt.Sprintf("ALTER TABLE `%s` DELETE WHERE %s", t.Name, condition), bind); err != nil {

@@ -93,6 +93,8 @@ func TestBuildIndexHolderLongerThanTheWindowLeavesTheLeftoverAndBlocksNoWriter(t
 	release := holdWriter(t, uri)
 
 	writer := connect(t, uri)
+	writerCtx, cancelWriters := context.WithCancel(context.Background())
+	defer cancelWriters()
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -109,7 +111,7 @@ func TestBuildIndexHolderLongerThanTheWindowLeavesTheLeftoverAndBlocksNoWriter(t
 			default:
 			}
 			startedInside := building.Load()
-			_, err := writer.Exec(context.Background(), "UPDATE public.sync_run_units SET updated_at = updated_at WHERE false")
+			_, err := writer.Exec(writerCtx, "UPDATE public.sync_run_units SET updated_at = updated_at WHERE false")
 			finishedInside := building.Load()
 			mu.Lock()
 			writes++
@@ -127,21 +129,21 @@ func TestBuildIndexHolderLongerThanTheWindowLeavesTheLeftoverAndBlocksNoWriter(t
 	logs := &syncBuffer{}
 	conn := connect(t, uri)
 	// A failure-only guard (window 12 s + cleanup 3 s + 60 s): a build that does not end with its window never returns.
-	built := make(chan error, 1)
+	// On the guard the build is cancelled first, then the writers are stopped, cancelled and joined, then the test fails.
 	building.Store(true)
-	go func() {
-		_, err := pgmigrate.BuildFailureStreakIndex(context.Background(), conn, pgmigrate.IndexBuildOptions{
-			LockTimeout: 2 * time.Second, Attempts: 2, RetryDelay: 0, Deadline: 12 * time.Second, CleanupBudget: 3 * time.Second,
-			SampleEvery: 200 * time.Millisecond, HeartbeatEvery: time.Second,
-		}, slog.New(slog.NewJSONHandler(logs, nil)))
-		built <- err
-	}()
-	var err error
-	select {
-	case err = <-built:
-	case <-time.After(75 * time.Second):
-		t.Fatal("the build is still running after the 75 s guard: it did not end with its window plus the cleanup budget")
-	}
+	_, err := runBuildGuarded(t, 75*time.Second, "the build must end with its window plus the cleanup budget",
+		func() {
+			building.Store(false)
+			close(stop)
+			cancelWriters()
+			wg.Wait()
+		},
+		func(ctx context.Context) (pgmigrate.IndexBuildResult, error) {
+			return pgmigrate.BuildFailureStreakIndex(ctx, conn, pgmigrate.IndexBuildOptions{
+				LockTimeout: 2 * time.Second, Attempts: 2, RetryDelay: 0, Deadline: 12 * time.Second, CleanupBudget: 3 * time.Second,
+				SampleEvery: 200 * time.Millisecond, HeartbeatEvery: time.Second,
+			}, slog.New(slog.NewJSONHandler(logs, nil)))
+		})
 	building.Store(false)
 	close(stop)
 	wg.Wait()
@@ -248,19 +250,14 @@ func TestBuildIndexTableLockWaitStaysUnderLockTimeout(t *testing.T) {
 	logs := &syncBuffer{}
 	conn := connect(t, uri)
 	// The attempt ends with the 1 s lock_timeout; one that waited for the 5 min window never returns inside the 60 s
-	// failure-only guard.
-	built := make(chan error, 1)
-	go func() {
-		_, buildErr := pgmigrate.BuildFailureStreakIndex(context.Background(), conn, pgmigrate.IndexBuildOptions{
-			LockTimeout: time.Second, Attempts: 1, Deadline: 5 * time.Minute, SampleEvery: 100 * time.Millisecond,
-		}, slog.New(slog.NewJSONHandler(logs, nil)))
-		built <- buildErr
-	}()
-	select {
-	case err = <-built:
-	case <-time.After(60 * time.Second):
-		t.Fatal("the attempt is still running after the 60 s guard: it did not end at lock_timeout")
-	}
+	// failure-only guard. On the guard the build is cancelled first and the holder transaction is rolled back.
+	_, err = runBuildGuarded(t, 60*time.Second, "the attempt must end at lock_timeout",
+		func() { _ = tx.Rollback(context.Background()) },
+		func(ctx context.Context) (pgmigrate.IndexBuildResult, error) {
+			return pgmigrate.BuildFailureStreakIndex(ctx, conn, pgmigrate.IndexBuildOptions{
+				LockTimeout: time.Second, Attempts: 1, Deadline: 5 * time.Minute, SampleEvery: 100 * time.Millisecond,
+			}, slog.New(slog.NewJSONHandler(logs, nil)))
+		})
 	if err == nil {
 		t.Fatal("the attempt must fail at lock_timeout, not succeed")
 	}

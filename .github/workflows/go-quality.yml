@@ -188,7 +188,7 @@ jobs:
     strategy:
       # One red leg must not cancel the others: every leg reports its own signal.
       fail-fast: false
-      # CHAOS-11418: the legs live in ci/go_quality_legs.json (static, test-N-of-3, race-N-of-4; the tooling tests pin the
+      # CHAOS-11418: the legs live in ci/go_quality_legs.json (static, test-N-of-4, race-N-of-5; the tooling tests pin the
       # race and test counts there). go-quality-plan filters them with ci/go_quality_legs.sh: a pull request without the ci:full
       # label starts no race leg (a job cannot read its own matrix in an `if`, so the leg is left out, not started to report a
       # skip). The legs are not required status contexts (the ruleset requires the `go-quality` aggregate), so the count can
@@ -658,7 +658,7 @@ jobs:
           QUEUE_RUN: ${{ needs.go-quality-plan.outputs.queue_run }}
         run: |
           if [ -n "${QUEUE_RUN}" ]; then
-            summary="go-quality on this push: static ran; test-1-of-3, test-2-of-3, test-3-of-3, race-1-of-4, race-2-of-4, race-3-of-4, race-4-of-4 skipped: queue-tested sha, merge_group run ${QUEUE_RUN}"
+            summary="go-quality on this push: static ran; test-1-of-4, test-2-of-4, test-3-of-4, test-4-of-4, race-1-of-5, race-2-of-5, race-3-of-5, race-4-of-5, race-5-of-5 skipped: queue-tested sha, merge_group run ${QUEUE_RUN}"
           else
             summary="go-quality on this push: every leg ran (no queue-tested sha)"
           fi

@@ -72,7 +72,9 @@ func partitionDefects(t *testing.T, verb string, count int) []string {
 	t.Helper()
 	whole := planKeys(t, verb, 1, 1)
 	// internal/providersync is in EVERY race leg by design (one test-name slice each): it is not a partitioned row.
-	onEveryLeg := func(r string) bool { return verb == "race-shard-plan" && strings.Contains(r, "/internal/providersync\t") }
+	onEveryLeg := func(r string) bool {
+		return verb == "race-shard-plan" && strings.Contains(r, "/internal/providersync\t")
+	}
 	if len(whole) < 100 {
 		t.Fatalf("%s 1 1: only %d rows", verb, len(whole))
 	}

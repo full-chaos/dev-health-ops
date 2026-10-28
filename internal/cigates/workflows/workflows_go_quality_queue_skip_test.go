@@ -18,8 +18,8 @@ const (
 )
 
 var qualityLegNames = []string{
-	"static", "test-1-of-3", "test-2-of-3", "test-3-of-3",
-	"race-1-of-4", "race-2-of-4", "race-3-of-4", "race-4-of-4",
+	"static", "test-1-of-4", "test-2-of-4", "test-3-of-4", "test-4-of-4",
+	"race-1-of-5", "race-2-of-5", "race-3-of-5", "race-4-of-5", "race-5-of-5",
 }
 
 type qualityLeg struct{ name, job, step string }

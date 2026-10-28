@@ -943,7 +943,8 @@ IPv4 addresses.
 {{- $ports := .ports | default list -}}
 {{- $port := dict -}}
 {{- if eq (len $ports) 1 }}{{- $port = index $ports 0 }}{{- end -}}
-{{- if not (and (eq (len $ports) 1) (kindIs "map" $port) (eq (toString (default "TCP" $port.protocol)) "TCP") (hasKey $port "port") (eq (int $port.port) 443) (not (hasKey $port "endPort"))) -}}an ipBlock with prefix 0 is accepted only with authService.networkPolicy.egress.mail.ports of TCP 443 alone
+{{- if and (eq (len $ports) 1) (kindIs "map" $port) (hasKey $port "protocol") (eq (toString $port.protocol) "") -}}authService.networkPolicy.egress.mail.ports[0].protocol is empty: omit protocol or set TCP; an empty string is not accepted on an ipBlock with prefix 0
+{{- else if not (and (eq (len $ports) 1) (kindIs "map" $port) (eq (toString (default "TCP" $port.protocol)) "TCP") (hasKey $port "port") (eq (int $port.port) 443) (not (hasKey $port "endPort"))) -}}an ipBlock with prefix 0 is accepted only with authService.networkPolicy.egress.mail.ports of TCP 443 alone
 {{- else if $missing -}}ipBlock.cidr {{ $cidr }} needs except entries {{ join ", " $missing }}
 {{- end -}}
 {{- end -}}

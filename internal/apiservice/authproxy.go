@@ -270,14 +270,14 @@ func (p *authProxy) seedSeries(routes []httpapi.Route) {
 			registered[aggregate] = true
 		}
 	}
-	seedAuthProxySeries(authProxyRequests, p.cfg, registered)
+	seedAuthProxySeries(p.cfg, registered)
 }
 
 // seedAuthProxySeries records 0 for every label set the proxy can count for the registered aggregates, once, at construction: an OTel
 // counter creates a series on its first Add, so without this the first export of a low-traffic series already holds its count and a
 // rate/increase query has no earlier sample to subtract. local is always possible; forwarded and upstream_error only for an aggregate
 // whose flag is on. Only static values.
-func seedAuthProxySeries(counter metric.Int64Counter, cfg AuthProxyConfig, registered map[AuthAggregate]bool) {
+func seedAuthProxySeries(cfg AuthProxyConfig, registered map[AuthAggregate]bool) {
 	for _, aggregate := range AuthAggregates {
 		if !registered[aggregate] {
 			continue
@@ -287,7 +287,7 @@ func seedAuthProxySeries(counter metric.Int64Counter, cfg AuthProxyConfig, regis
 			outcomes = []string{outcomeForwarded, outcomeLocal, outcomeUpstreamError}
 		}
 		for _, outcome := range outcomes {
-			counter.Add(context.Background(), 0, metric.WithAttributes(
+			authProxyRequests.Add(context.Background(), 0, metric.WithAttributes(
 				attribute.String("aggregate", string(aggregate)), attribute.String("outcome", outcome)))
 		}
 	}

@@ -511,3 +511,25 @@ func TestAuthServiceMailEgressRefusesABadExceptOnANarrowPeer(t *testing.T) {
 		t.Fatalf("a well formed except on a narrow peer was refused: %v\n%.300s", err, out)
 	}
 }
+
+func TestAuthServiceMailEgressRefusesAnEmptyProtocolOnAWidePeer(t *testing.T) {
+	for label, peer := range map[string]string{"v4": mailPeer("0.0.0.0/0", mailV4Except), "v6": mailPeer("::/0", mailV6Except)} {
+		out, err := mailRender(t, []string{peer}, "--set-json", `authService.networkPolicy.egress.mail.ports=[{"protocol":"","port":443}]`)
+		if err == nil || !strings.Contains(out, "ports[0].protocol is empty") {
+			t.Fatalf("%s: protocol \"\" on a whole-internet peer was not refused with its named reason: %v\n%.300s", label, err, out)
+		}
+	}
+}
+
+func TestAuthServiceMailEgressWidePeerAcceptsExplicitTCP(t *testing.T) {
+	v4 := mailPeer("0.0.0.0/0", mailV4Except)
+	if out, err := mailRender(t, []string{v4}, "--set-json", `authService.networkPolicy.egress.mail.ports=[{"protocol":"TCP","port":443}]`); err != nil {
+		t.Fatalf("explicit TCP was refused: %v\n%.200s", err, out)
+	}
+}
+
+func TestAuthServiceMailEgressNarrowPeerKeepsAnEmptyProtocol(t *testing.T) {
+	if out, err := mailRender(t, []string{mailBlock("10.1.2.0/24")}, "--set-json", `authService.networkPolicy.egress.mail.ports=[{"protocol":"","port":587}]`); err != nil {
+		t.Fatalf("a narrow peer with protocol \"\" was refused: %v\n%.200s", err, out)
+	}
+}

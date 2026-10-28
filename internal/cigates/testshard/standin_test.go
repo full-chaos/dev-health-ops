@@ -49,6 +49,8 @@ esac
 printf '%%s\n' "$*" >> "${FAKE_GO_LOG}"
 # FAKE_GO_ENV_LOG: the GOFLAGS value of each go test call, one line per call, in the order of FAKE_GO_LOG.
 [ -z "${FAKE_GO_ENV_LOG:-}" ] || printf 'GOFLAGS=%%s\n' "${GOFLAGS:-}" >> "${FAKE_GO_ENV_LOG}"
+# FAKE_GO_FRESH_LOG: "set" or "unset" for CHECK_GO_FRESH in the environment of each go test call, one line per call.
+[ -z "${FAKE_GO_FRESH_LOG:-}" ] || printf '%%s\n' "${CHECK_GO_FRESH+set}${CHECK_GO_FRESH-unset}" >> "${FAKE_GO_FRESH_LOG}"
 # FAKE_GO_TEST_STDOUT: what a go test call prints (a canned go test log, e.g. the "ok" summary lines of the packages it ran).
 if [ -n "${FAKE_GO_TEST_STDOUT:-}" ]; then cat "${FAKE_GO_TEST_STDOUT}"
 else

@@ -84,7 +84,11 @@ func whatItSaysWhenItGivesUp(t *testing.T, run func(testing.TB)) string {
 		defer close(done)
 		run(recorder)
 	}()
-	<-done
+	select {
+	case <-done:
+	case <-time.After(60 * time.Second): // failure-only guard: a wait with no bound of its own never gives up
+		t.Fatal("the helper is still waiting after the 60 s guard: its bound did not end the wait")
+	}
 	if recorder.fatal == "" {
 		t.Fatal("the helper did not give up")
 	}
@@ -161,8 +165,9 @@ func TestWaitForRouter_IsLoudWhenTheBoundIsHit(t *testing.T) {
 	base, port := startEarlyPort(t, -1, routerWithNoPlanes)
 	started := time.Now()
 	said := whatItSaysWhenItGivesUp(t, func(tb testing.TB) { waitForRouter(tb, base, 700*time.Millisecond, diagnoseSentinel) })
-	if took := time.Since(started); took < 700*time.Millisecond || took > 20*time.Second {
-		t.Errorf("gave up after %s, want just above the bound of 700ms", took)
+	//abstime:allow lower bound: the wait gave up only after its 700ms bound; an upper limit is the 60 s guard of whatItSaysWhenItGivesUp
+	if took := time.Since(started); took < 700*time.Millisecond {
+		t.Errorf("gave up after %s, want after the bound of 700ms", took)
 	}
 	for _, want := range []string{"the router did not answer an HTTP request within 700ms", "attempts, last: ", sentinelLog} {
 		if !strings.Contains(said, want) {

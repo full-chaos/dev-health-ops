@@ -11,7 +11,6 @@ internal/cigates/emitscan/scan_test.go	TestSelfReferencingAliasChainsAreFast	own
 internal/faultproxy/proxy_test.go	TestDelayAddsLatency	lower-bound wait proof: load only lengthens it
 internal/faultproxy/proxy_test.go	TestSlowCapsRate	lower-bound wait proof: load only lengthens it
 internal/goapiproof/credentialecho_test.go	TestSentSecretsScansALargeBodyQuickly	measured hosted margin 12.5 (>= 3), CHAOS-11684 census
-internal/ingressplanes/real_nginx_wait_integration_test.go	TestWaitForRouter_IsLoudWhenTheBoundIsHit	pending CHAOS-11684 conversion
 internal/jobs/investment/nativeexecutor_test.go	TestCategorizeFanOutIsBoundedByLimit	not wall time: poll counter (internal/jobs/investment/nativeexecutor_test.go:552)
 internal/jobs/investment/shadowphase_test.go	TestAPanicOfThePhaseLoopLeavesNoGoroutineBehind	not wall time: poll counter (internal/jobs/investment/shadowphase_test.go:912)
 internal/pgmigrate/indexbuild_concurrent_integration_test.go	TestBuildIndexRefusesWhileAnotherRunHoldsTheBuildLock	pending CHAOS-11684 conversion

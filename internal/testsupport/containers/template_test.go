@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"os/exec"
 	"reflect"
 	"regexp"
 	"strings"
@@ -256,6 +258,7 @@ func TestFingerprintQueryReadsOwnersGrantsOptionsCommentsDefaultsAndContent(t *t
 	for _, want := range []string{
 		"pg_get_userbyid(", "relacl", "reloptions", "obj_description(", "col_description(",
 		"pg_default_acl", "string_agg(", "proacl", "nspacl", "'content '",
+		"pg_get_viewdef(", "pg_largeobject_metadata", "lo_get(", "'view-def '", "'large-objects '",
 	} {
 		if !strings.Contains(pgTemplateFingerprintQuery, want) {
 			t.Errorf("the fingerprint query lacks %s", want)
@@ -268,5 +271,18 @@ func TestPostgresSessionStateIsEmptyOutsideSharedMode(t *testing.T) {
 	user, searchPath, err := PostgresSessionState(context.Background())
 	if err != nil || user != "" || searchPath != "" {
 		t.Errorf("PostgresSessionState outside shared mode = (%q, %q, %v), want empty and no error", user, searchPath, err)
+	}
+}
+
+// A developer or CI runner that has exported DEV_HEALTH_TEST_PG_TEMPLATE=off must still get the
+// same unit tests: TestMain clears every environment value the package reads. The child is this
+// test binary, run with the value set, on the two tests whose reasons it would change.
+func TestAnInheritedTemplateOffDoesNotChangeThePackageTests(t *testing.T) {
+	child := exec.Command(os.Args[0], "-test.count=1",
+		"-test.run", "^(TestTemplateFallbackReason|TestTemplateFallbackLogsANamedLineAndAsksDockerOnce)$")
+	child.Env = append(os.Environ(), PostgresTemplateEnv+"=off")
+	output, err := child.CombinedOutput()
+	if err != nil {
+		t.Fatalf("the child test binary with %s=off failed: %v\n%s", PostgresTemplateEnv, err, output)
 	}
 }

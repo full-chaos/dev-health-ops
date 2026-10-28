@@ -30,6 +30,8 @@ func templateBuild(ctx context.Context, uri string) error {
 		"CREATE SEQUENCE public.tpl_seq",
 		"CREATE TABLE public.tpl_t (id int PRIMARY KEY, note text)",
 		"INSERT INTO public.tpl_t VALUES (1, 'seed')",
+		"CREATE VIEW public.tpl_v AS SELECT id, note FROM public.tpl_t",
+		"SELECT lo_from_bytea(424242, 'seed'::bytea)",
 		"SELECT nextval('public.tpl_seq')",
 	} {
 		if _, err := conn.Exec(ctx, statement); err != nil {
@@ -74,6 +76,8 @@ func requireFingerprint(t *testing.T, rows []string) {
 		"rows public.tpl_t=1",
 		"sequence public.tpl_seq last=1 called=true",
 		"extension pg_trgm ",
+		"view-def public.tpl_v ",
+		"large-objects n=1 ",
 	} {
 		found := false
 		for _, row := range rows {
@@ -364,6 +368,12 @@ func TestTemplateChangeIsAFailLine(t *testing.T) {
 		{"schema granted", func(t *testing.T, ctx context.Context, s *sharedServers) {
 			writeIntoTemplate(t, ctx, s, name, "GRANT USAGE ON SCHEMA public TO pg_monitor")
 		}, "schema public"},
+		{"view replaced, same columns", func(t *testing.T, ctx context.Context, s *sharedServers) {
+			writeIntoTemplate(t, ctx, s, name, "CREATE OR REPLACE VIEW public.tpl_v AS SELECT id, note FROM public.tpl_t WHERE id > 0")
+		}, "view-def public.tpl_v"},
+		{"large object content changed", func(t *testing.T, ctx context.Context, s *sharedServers) {
+			writeIntoTemplate(t, ctx, s, name, "SELECT lo_put(424242, 0, 'changed'::bytea)")
+		}, "large-objects "},
 		{"connections left allowed", func(t *testing.T, ctx context.Context, s *sharedServers) {
 			pgExec(t, ctx, s.pg.adminDSN, "ALTER DATABASE "+name+" ALLOW_CONNECTIONS true")
 		}, "allowconn"},

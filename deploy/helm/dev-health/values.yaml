@@ -178,10 +178,19 @@ authService:
   #      5  orgs owned: AUTH_ORGS_OWNED too. Meaning (D6358): auth-service writes
   #         the existing public organizations and memberships tables.
   #    Phase 5 is refused at render: orgs owned needs its own public-table writer
-  #    leaf. Phase 4 renders; rollback is phase minus 1 (4 -> 3) in one helm
-  #    upgrade. The chart refuses the keys this replaces (goApi.authProxy,
+  #    leaf. Phase 4 renders. Rollback from phase 4 is NOT one upgrade: stage goApi,
+  #    then deploy/scripts/auth-users-owned-barrier.sh down-auth, then phase 3 (runbook
+  #    docs/operate/runbooks/auth-users-owned-flip-and-rollback.md). The chart refuses the keys this replaces (goApi.authProxy,
   #    authService.enabled, authService.usersOwned, authService.orgsOwned).
   phase: 0
+  # -- Phase 4 only (CHAOS-11606), required there and refused elsewhere: the roll order of users owned.
+  #      goApi  go-api forwards the credential routes and carries AUTH_USERS_OWNED; auth-service, the auth
+  #             Jobs and the grants stay in their phase 3 form (credential stubs, nothing owned). Release this
+  #             first, run deploy/scripts/auth-users-owned-barrier.sh up-go-api, then the users-backfill.
+  #      owned  auth-service owns users (AUTH_USERS_OWNED, the pod label, the widened grants). Run the
+  #             barrier (up-owned) first. Rollback runs the other way: goApi, barrier down-auth, then phase 3.
+  #    Runbook: docs/operate/runbooks/auth-users-owned-flip-and-rollback.md.
+  usersOwnedStage: ""
   # -- Two replicas keep the service up through one pod loss or node drain
   #    (N+1, docs/operate/plan/auth-service-capacity.md); a PodDisruptionBudget
   #    (minAvailable 1) renders only while this is 2 or more.
@@ -447,7 +456,7 @@ authService:
   #    roll: the same roll sets it false again and reads that the Job is gone.
   backfill:
     enabled: false
-    # -- users-backfill, orgs-backfill or legacy-link-purge (the last needs users owned; run it after the phase-4 rollout is complete).
+    # -- users-backfill, users-reconcile (read-only; the post-flip detection net), orgs-backfill or legacy-link-purge (the last needs users owned; run it after the phase-4 rollout is complete).
     verb: ""
     # -- true: read and report, write nothing. A real run needs an explicit false.
     dryRun: true

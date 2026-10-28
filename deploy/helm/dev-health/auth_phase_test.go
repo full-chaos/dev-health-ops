@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -41,6 +42,9 @@ func phaseArgs(phase int, extra ...string) []string {
 	}
 	if phase >= 3 {
 		out = append(out, phase3Secrets...)
+	}
+	if phase == 4 && !slices.ContainsFunc(extra, func(s string) bool { return strings.HasPrefix(s, "authService.usersOwnedStage=") }) {
+		out = append(out, "--set", "authService.usersOwnedStage=owned")
 	}
 	return append(out, extra...)
 }

@@ -32,7 +32,7 @@ func TestGoAPIUsersOwnedCannotBeSetThroughExtraEnv(t *testing.T) {
 
 // Phase 4: go-api owns the users switch and forwards the credential routes.
 func TestGoAPIUsersOwnedAndCredentialsProxyRenderAtPhase4(t *testing.T) {
-	docs, out, err := renderAuth(t, goAPIWithAuth(append([]string{"--set", "authService.phase=4"}, phase3Secrets...)...)...)
+	docs, out, err := renderAuth(t, goAPIWithAuth(append([]string{"--set", "authService.phase=4", "--set", "authService.usersOwnedStage=owned"}, phase3Secrets...)...)...)
 	if err != nil {
 		t.Fatalf("phase 4: render: %v\n%.400s", err, out)
 	}

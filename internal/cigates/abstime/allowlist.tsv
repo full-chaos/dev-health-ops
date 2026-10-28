@@ -7,7 +7,6 @@ internal/api/syncadmin/backfill_submit_integration_test.go	TestBackfillSubmitRet
 internal/audit/outboxloop_test.go	TestLoopHandsTheStepperTheCurrentTimeNotTheTickTimestamp	not a performance budget: clock or stamp skew
 internal/auth/authruntime/jwks_dependency_stall_integration_test.go	TestJWKSAnswersWhileTheDatabaseIsBlackholed	found by the gate, not by the census: pending CHAOS-11684 re-census and conversion
 internal/backfillrun/run_integration_test.go	TestVerbReportsWhatTheSchedulerDid	lower-bound wait proof: load only lengthens it
-internal/cigates/docstools/hostsmoke_internal_test.go	TestHostSmokeRequestTimeout	pending CHAOS-11684 conversion
 internal/cigates/emitscan/scan_rows_test.go	TestConstFixpointBounded	owned by CHAOS-11674 (emitscan budgets)
 internal/cigates/emitscan/scan_rows_test.go	timed	owned by CHAOS-11674 (emitscan budgets)
 internal/cigates/emitscan/scan_test.go	TestSelfReferencingAliasChainsAreFast	owned by CHAOS-11674 (emitscan budgets)

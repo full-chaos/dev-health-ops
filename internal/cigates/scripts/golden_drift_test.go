@@ -313,3 +313,79 @@ func TestGoldenDriftRunNeverPassesWithoutRunningANamedRow(t *testing.T) {
 		}
 	})
 }
+
+// Any non-empty line of a rows file must be a VERDICT line or a well-formed ROW: anything else is a usage error that runs
+// nothing, and a "VERDICT none" never sits beside a ROW.
+func TestGoldenDriftRunRefusesAnyOtherLine(t *testing.T) {
+	good := "ROW\tinternal/adminops\t^TestA$\n"
+	for name, rows := range map[string]string{
+		"a stray word before a good row": "hello\n" + good,
+		"a stray word after a good row":  good + "hello\n",
+		"a leading space on a ROW":       " " + good,
+		"a lowercase row line":           "row\tinternal/adminops\t^TestA$\n",
+		"none verdict beside a good row": "VERDICT none x\n" + good,
+		"a verdict-like word":            "VERDICTS select\n" + good,
+	} {
+		t.Run(name, func(t *testing.T) {
+			res, log := runGoldenDrift(t, rows, "pass", "")
+			if res.code != 2 || strings.TrimSpace(log) != "" {
+				t.Fatalf("exit %d, go calls %q: want exit 2 and no go test", res.code, log)
+			}
+		})
+	}
+}
+
+// The workflow decides "rows != 0" with a ROW-prefix count (grep -c '^ROW'). That count and the number of rows `run`
+// actually runs must be one rule: for every rows file, `run` either fails without running anything or runs exactly as many
+// go tests as the workflow's prefix count.
+func TestGoldenDriftWorkflowRowCountEqualsRowsRun(t *testing.T) {
+	root := repoRoot(t)
+	raw, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "go.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := string(raw)
+	if i := strings.Index(job, "  go-golden-drift:\n"); i >= 0 {
+		job = job[i:]
+	} else {
+		t.Fatal("go.yml lost the go-golden-drift job")
+	}
+	if j := strings.Index(job, "\n  # Preserve the existing required-check contract"); j >= 0 {
+		job = job[:j]
+	}
+	m := regexp.MustCompile(`grep -c '\^(ROW[^']*)'`).FindStringSubmatch(job)
+	if m == nil || m[1] != "ROW" {
+		t.Fatalf("the select step must count rows with grep -c '^ROW' (the script's own prefix); got %v", m)
+	}
+	files := map[string]string{
+		"one row":            "VERDICT select 1 of 4\nROW\tinternal/adminops\t^TestA$\n",
+		"four rows":          "VERDICT all x\nROW\ta\t^A$\nROW\tb\t^B$\nROW\tc\t^C$\nROW\td\t^D$\n",
+		"none":               "VERDICT none x\n",
+		"bare ROW":           "VERDICT select x\nROW\n",
+		"ROW glued":          "VERDICT select x\nROWX\ta\t^A$\n",
+		"ROW one field":      "VERDICT select x\nROW\ta\n",
+		"ROW then space":     "VERDICT select x\nROW a ^A$\n",
+		"good then bare ROW": "VERDICT select x\nROW\ta\t^A$\nROW\n",
+	}
+	for name, rows := range files {
+		t.Run(name, func(t *testing.T) {
+			prefixed := 0
+			for _, l := range strings.Split(rows, "\n") {
+				if strings.HasPrefix(l, "ROW") {
+					prefixed++
+				}
+			}
+			res, log := runGoldenDrift(t, rows, "pass", "")
+			calls := 0
+			if s := strings.TrimSpace(log); s != "" {
+				calls = len(strings.Split(s, "\n"))
+			}
+			if res.code == 0 && calls != prefixed {
+				t.Fatalf("run exited 0 after %d go test(s) but the workflow counts %d ROW-prefixed line(s)", calls, prefixed)
+			}
+			if res.code != 0 && calls != 0 {
+				t.Fatalf("a refused rows file must run nothing, ran %d", calls)
+			}
+		})
+	}
+}

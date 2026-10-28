@@ -78,6 +78,8 @@ func RunWithSharedServers(run func() int) (code int) {
 }
 
 type sharedServers struct {
+	templates templateRegistry
+
 	pgOnce sync.Once
 	pg     *sharedServer
 	pgErr  error
@@ -88,19 +90,23 @@ type sharedServers struct {
 }
 
 type sharedServer struct {
-	engine    string
-	container *Instance
-	adminDSN  string
-	httpDSN   string
-	snapshot  func(ctx context.Context, adminDSN string) ([]string, error)
-	baseline  []string
+	// startedHere is true for a server this process booted itself. Only such a
+	// server may get a template database (template.go).
+	startedHere bool
+	engine      string
+	container   *Instance
+	adminDSN    string
+	httpDSN     string
+	snapshot    func(ctx context.Context, adminDSN string) ([]string, error)
+	baseline    []string
 }
 
 // sharedBootTimeout bounds a shared server's start. The server outlives the
 // test that triggered it, so the caller's context is not used.
 const sharedBootTimeout = 3 * time.Minute
 
-func (s *sharedServers) startPostgres(ctx context.Context) (*Instance, error) {
+// postgres boots the shared PostgreSQL server on first use.
+func (s *sharedServers) postgres() (*sharedServer, error) {
 	s.pgOnce.Do(func() {
 		boot, cancel := context.WithTimeout(context.Background(), sharedBootTimeout)
 		defer cancel()
@@ -109,7 +115,15 @@ func (s *sharedServers) startPostgres(ctx context.Context) (*Instance, error) {
 	if s.pgErr != nil {
 		return nil, fmt.Errorf("shared PostgreSQL server: %w", s.pgErr)
 	}
-	return startPostgresRemote(ctx, s.pg.adminDSN)
+	return s.pg, nil
+}
+
+func (s *sharedServers) startPostgres(ctx context.Context) (*Instance, error) {
+	server, err := s.postgres()
+	if err != nil {
+		return nil, err
+	}
+	return startPostgresRemote(ctx, server.adminDSN)
 }
 
 func (s *sharedServers) startClickHouse(ctx context.Context) (*Instance, error) {
@@ -136,6 +150,15 @@ func (s *sharedServers) finish(ctx context.Context) ([]string, error) {
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: read the server state after the run: %w", server.engine, err))
 		} else {
+			if server == s.pg {
+				for _, finding := range s.unregisteredTemplates(after) {
+					findings = append(findings, server.engine+" "+finding)
+				}
+				after = withoutTemplateRows(after)
+				for _, finding := range s.checkTemplates(ctx, server) {
+					findings = append(findings, server.engine+" "+finding)
+				}
+			}
 			for _, finding := range diffSnapshots(server.baseline, after) {
 				findings = append(findings, server.engine+" "+finding)
 			}
@@ -206,7 +229,7 @@ func bootSharedPostgres(ctx context.Context) (*sharedServer, error) {
 		return nil, err
 	}
 	container.engine, container.mode = "postgres", "shared-server"
-	server := &sharedServer{engine: "postgres", container: container, adminDSN: container.URI, snapshot: postgresSnapshot}
+	server := &sharedServer{startedHere: true, engine: "postgres", container: container, adminDSN: container.URI, snapshot: postgresSnapshot}
 	if err := checkPostgresCapacity(ctx, server.adminDSN, want); err != nil {
 		_ = container.Close(ctx)
 		return nil, err
@@ -251,11 +274,12 @@ func bootSharedClickHouse(ctx context.Context) (*sharedServer, error) {
 		return nil, err
 	}
 	server := &sharedServer{
-		engine:    "clickhouse",
-		container: container,
-		adminDSN:  container.URI,
-		httpDSN:   httpDSN,
-		snapshot:  clickHouseSnapshot,
+		startedHere: true,
+		engine:      "clickhouse",
+		container:   container,
+		adminDSN:    container.URI,
+		httpDSN:     httpDSN,
+		snapshot:    clickHouseSnapshot,
 	}
 	if server.baseline, err = clickHouseSnapshot(ctx, server.adminDSN); err != nil {
 		_ = container.Close(ctx)

@@ -79,6 +79,7 @@ internal/mintcli/envelope
 internal/netclass
 internal/operationalbackfill
 internal/operationalordering
+internal/orgactivity
 internal/ownershipwindow
 internal/pgmigrate
 internal/pgmigrate/schemagate

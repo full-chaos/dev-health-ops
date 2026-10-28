@@ -82,7 +82,7 @@ INTEGRATION_CONTAINER_HARNESS="${ROOT}/internal/testsupport/containers/harness.g
 # turned `check_go.sh test` -- a verb CI declares container-free -- into a full
 # integration run that starts Testcontainers. A caller's environment must not be
 # able to change which suite a verb runs.
-GO_ENV_OFF=(env -u GO_PROVIDER_ROUTES -u DEV_HEALTH_ENV -u GOFLAGS -u GOEXPERIMENT)
+GO_ENV_OFF=(env -u GO_PROVIDER_ROUTES -u DEV_HEALTH_ENV -u GOFLAGS -u GOEXPERIMENT -u CHECK_GO_FRESH)
 
 # INTEGRATION_TEST_ENV (CHAOS-6634): environment for the MULTI-PACKAGE
 # `go test -tags=integration pkgA pkgB ...` invocations below (integration and
@@ -633,14 +633,21 @@ go_test_leg() {
   return "${rc}"
 }
 
-# go_test_json_run JSON_FILE LOG_FILE PKG...: ONE fresh `go test -json` run of the packages (run it from the module directory).
-# The events are appended to JSON_FILE; jq turns them back into the plain go test log on stdout and in LOG_FILE (the ok lines
-# the wall and unweighted guards read). pipefail keeps go test's exit code.
+# go_test_json_run JSON_FILE LOG_FILE PKG...: go_test_json_run_t with the 10m go test -timeout.
 go_test_json_run() {
   local json="$1" log="$2"
   shift 2
+  go_test_json_run_t 10m "${json}" "${log}" "$@"
+}
+
+# go_test_json_run_t TIMEOUT JSON_FILE LOG_FILE PKG...: ONE fresh `go test -json` run of the packages (run it from the module directory).
+# The events are appended to JSON_FILE; jq turns them back into the plain go test log on stdout and in LOG_FILE (the ok lines
+# the wall and unweighted guards read). pipefail keeps go test's exit code. TIMEOUT is an argument, never read from the environment.
+go_test_json_run_t() {
+  local timeout="$1" json="$2" log="$3"
+  shift 3
   command -v jq >/dev/null 2>&1 || die "the race-excluded receipts need jq to read go test -json events"
-  "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -json -count=1 -timeout 10m "$@" \
+  "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -json -count=1 -timeout "${timeout}" "$@" \
     | tee -a "${json}" \
     | jq -rj 'select(.Action == "output") | .Output' \
     | tee -a "${log}"
@@ -707,6 +714,7 @@ check_race_excluded_ran() {
 # leg and ~213 s alone, with the default 600 s go test timeout as the only margin, so one slow runner timed it out
 # (run 38786639144). It now runs alone, after the rest, so its time no longer depends on what else is scheduled.
 SERIAL_HEAVY_TEST_PACKAGE="github.com/full-chaos/dev-health-ops/internal/gqlgenguard"
+CHECKGO_PACKAGE="github.com/full-chaos/dev-health-ops/internal/cigates/checkgo"
 
 # GO_QUALITY_SELECTION_FILE: the verdict of `cmd/cigate plan-verdict --go-files-full` (the go-quality-plan job). Unset,
 # empty or a FULL first line runs every package. `AFFECTED <n>` and n root-module keys run only those packages: the test and
@@ -958,7 +966,7 @@ check_security_fresh_receipt() {
 # partition `go list ./...`; internal/gqlgenguard runs alone after the rest of its shard. The packages that hold race-excluded rows run once,
 # fresh, with go test -json, and the shard reads the receipts of its rows from that run (check_race_excluded_receipts): no second execution.
 check_test_shard() {
-  local shard="${1:-}" count="${2:-}" plan log json started wall module_dir rest rest_rows rest_sec census_keys heavy_is_row listing legjson
+  local shard="${1:-}" count="${2:-}" plan log json started wall module_dir rest rest_rows rest_sec rows_timeout census_keys heavy_is_row listing legjson
   check_test_shard_args "${shard}" "${count}"
   plan="$(check_test_shard_plan "${shard}" "${count}")"
   listing="$(race_excluded_rows "${shard}" "${count}")" || exit 2
@@ -975,6 +983,9 @@ check_test_shard() {
     rest_rows="$(printf '%s\n' "${plan}" | awk -F'\t' -v m="${module_dir}" -v heavy="${SERIAL_HEAVY_TEST_PACKAGE}" -v keys="${census_keys}" '
       BEGIN { n = split(keys, k, "\n"); for (i = 1; i <= n; i++) if (k[i] != "") isrow[k[i]] = 1 }
       $1 == m && $2 != heavy && m == "." && ($3 in isrow) { print $2 }')"
+    # goes when the 11762 split lands
+    rows_timeout=10m
+    if [ "${module_dir}" = "." ] && printf '%s\n' "${rest_rows}" | grep -qx -- "${CHECKGO_PACKAGE}"; then rows_timeout=20m; fi
     rest_sec=""
     if security_fresh_active && [ "${module_dir}" = "." ]; then
       rest_sec="$(printf '%s\n' "${rest}" | security_split in)"
@@ -1001,7 +1012,7 @@ check_test_shard() {
       (
         cd "${ROOT}/${module_dir}"
         # shellcheck disable=SC2086
-        go_test_json_run "${json}" "${log}" ${rest_rows}
+        go_test_json_run_t "${rows_timeout}" "${json}" "${log}" ${rest_rows}
       ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}"; return 1; }
     fi
     if printf '%s\n' "${plan}" | awk -F'\t' -v m="${module_dir}" -v heavy="${SERIAL_HEAVY_TEST_PACKAGE}" '$1 == m && $2 == heavy { found = 1 } END { exit !found }'; then

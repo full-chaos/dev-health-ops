@@ -107,6 +107,16 @@ func runLegWithFakeGo(t *testing.T, leg string, shard int, mode string) (cmdResu
 			t.Fatal(err)
 		}
 
+		// The plain log's tee fails with rc 9 after it copied its input: the pipeline's own tee and the converter-failure fallback both end in rc 9.
+		realTee, err := exec.LookPath("tee")
+		if err != nil {
+			t.Fatal(err)
+		}
+		fakeTee := "#!/usr/bin/env bash\ncase \"$1 $2\" in \"-a \"*dev-health-test-shard.*) " + realTee + " \"$@\"; exit 9 ;; esac\nexec " + realTee + " \"$@\"\n"
+		if err := os.WriteFile(filepath.Join(bin, "tee"), []byte(fakeTee), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
 		// The leg's raw file is a symlink to /dev/full: every write fails with ENOSPC.
 		if err := os.MkdirAll(legDir, 0o755); err != nil {
 			t.Fatal(err)
@@ -182,6 +192,9 @@ func TestTheLegStageKeepsGoTestsVerdictAndEveryOutputLine(t *testing.T) {
 			}
 			if !strings.Contains(res.stdout, `"Action":"output"`) {
 				t.Errorf("the raw stream is not in the plain log after the converter failed: %s", tail(res.stdout, 600))
+			}
+			if !strings.Contains(res.stderr, "go_test_leg: plain log write failed (tee rc 9)") {
+				t.Errorf("the failure does not name the plain log write of the converter-failure fallback: %s", tail(res.stderr, 800))
 			}
 		}},
 	} {

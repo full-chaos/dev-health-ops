@@ -923,6 +923,15 @@ func TestMCPOrgCheckReadsTheOrgIDSpellingToo(t *testing.T) {
 	}
 }
 
+// assertMCPFragmentGraphRefusal proves WHICH check refused: the fragment-graph size check, which runs before the
+// validator and before any per-use walk. Every later check refuses with the same reason but another message.
+func assertMCPFragmentGraphRefusal(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	if !strings.Contains(rec.Body.String(), "the document expands to more than") {
+		t.Fatalf("the refusal did not come from the fragment-graph size check, which must run before the validator and any per-use walk: %.300s", rec.Body.String())
+	}
+}
+
 // selfDoublingFragments is a small valid document whose fragments double at
 // each level: n levels expand to 2^n aliased hotspots fields.
 func selfDoublingFragments(n int) string {
@@ -941,6 +950,7 @@ func TestMCPRefusesSelfDoublingFragmentsBeforeExpandingThem(t *testing.T) {
 	query := selfDoublingFragments(60) // 2^60 expanded fields: an expansion before the bounded count never finishes
 	rec := mcpDoBounded(t, fmt.Sprintf("a %d-byte self-doubling document", len(query)), l.mcp, validMCPHeaders(), mcpBody(t, query, mcpHotspotsVariables(mcpTestOrg)))
 	assertMCPRefused(t, rec, l.ch, http.StatusBadRequest, mcpReasonComplexity)
+	assertMCPFragmentGraphRefusal(t, rec)
 }
 
 // The bound itself, independent of the clock: 2^60 expanded fields would
@@ -1051,6 +1061,7 @@ func TestMCPRefusesSelfDoublingFragmentsBeforeTheValidatorRunsOnThem(t *testing.
 		query += fmt.Sprintf("fragment F%d on __Type { name }", n)
 		rec := mcpDoBounded(t, fmt.Sprintf("n=%d (%d bytes): the validator ran on the expanded document", n, len(query)), l.mcp, validMCPHeaders(), mcpBody(t, query, nil))
 		assertMCPRefused(t, rec, l.ch, http.StatusBadRequest, mcpReasonComplexity)
+		assertMCPFragmentGraphRefusal(t, rec)
 	}
 }
 

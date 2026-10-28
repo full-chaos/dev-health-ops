@@ -82,7 +82,9 @@ INTEGRATION_CONTAINER_HARNESS="${ROOT}/internal/testsupport/containers/harness.g
 # turned `check_go.sh test` -- a verb CI declares container-free -- into a full
 # integration run that starts Testcontainers. A caller's environment must not be
 # able to change which suite a verb runs.
-GO_ENV_OFF=(env -u GO_PROVIDER_ROUTES -u DEV_HEALTH_ENV -u GOFLAGS -u GOEXPERIMENT -u CHECK_GO_FRESH)
+# CHAOS-11745: GO_TEST_LEG_JSON_DIR and DEV_HEALTH_GO_FRESH_SECURITY belong to the leg: a test that starts check_go.sh as a child
+# must not empty the leg's -json file (its receipt reads it) or run in the leg's merge_group mode.
+GO_ENV_OFF=(env -u GO_PROVIDER_ROUTES -u DEV_HEALTH_ENV -u GOFLAGS -u GOEXPERIMENT -u CHECK_GO_FRESH -u GO_TEST_LEG_JSON_DIR -u DEV_HEALTH_GO_FRESH_SECURITY)
 
 # INTEGRATION_TEST_ENV (CHAOS-6634): environment for the MULTI-PACKAGE
 # `go test -tags=integration pkgA pkgB ...` invocations below (integration and
@@ -180,7 +182,7 @@ run_integration_go_test() {
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|ci-leg-warm test|race SHARD COUNT|test-shard-plan SHARD COUNT|race-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|race-excluded-receipts JSON...|test-shard-wall-guard SHARD COUNT WALL LOGFILE|test-shard-unweighted-guard SHARD COUNT LOGFILE|security-fresh-receipt JSON...|security-fresh-split PKG...|build|contract|ratchets|race-weights-rows|multi-replica-workers|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|ci-leg-warm test|race SHARD COUNT|test-shard-plan SHARD COUNT|race-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|race-excluded-receipts JSON...|test-shard-wall-guard SHARD COUNT WALL LOGFILE|test-shard-unweighted-guard SHARD COUNT LOGFILE|security-fresh-receipt RAN JSON...|security-fresh-split PKG...|build|contract|ratchets|race-weights-rows|multi-replica-workers|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
 
   auth   (CHAOS-4887) The Auth Control Plane gates over the auth packages ALONE: gofmt, vet, test,
          -race, the production-middleware stack test (G-69, must log its marker), one fuzz run per
@@ -273,10 +275,11 @@ usage() {
          Log the wall seconds of a test shard and fail above 85% of the 30 min
          job cap (GO_TEST_SHARD_CAP_SECONDS), naming the shard and its three
          heaviest packages (measured in LOGFILE, else by weight).
-  security-fresh-receipt JSON...
+  security-fresh-receipt RAN JSON...
          The cache receipt of a test or race leg (CHAOS-11448), read from the go test -json events of its stages: how many
          packages read "ok (cached)" (cached = NOT executed), and, with DEV_HEALTH_GO_FRESH_SECURITY=1 (merge_group), a
-         failure when any package read "(cached)" (CHAOS-11745). security-fresh-split PKG... prints sec|plain per package.
+         failure when any package read "(cached)" or when a leg that ran RAN > 0 packages left no package summary
+         (CHAOS-11745). security-fresh-split PKG... prints sec|plain per package.
   test-shard-unweighted-guard SHARD COUNT LOGFILE
          Fail when a package of the shard ran 30 s or more in LOGFILE (its go
          test log) and has no row in ci/go_test_weights.tsv; prints the row.
@@ -943,9 +946,12 @@ security_split() {
 # check_security_fresh_receipt JSON...: the cache receipt of a test or race leg, read from the go test -json events of its stages.
 # A package's own summary event (an output event with no Test) that reads "ok ... (cached)" is cached = NOT executed; a line a
 # test prints carries its Test and is never read as a summary. On merge_group any cached package fails the leg (CHAOS-11745); a
-# "[no tests to run]" package has nothing to execute and is not counted.
+# "[no tests to run]" package has nothing to execute and is not counted. RAN is the number of packages the leg ran: on merge_group
+# a leg that ran packages and left no package summary (an empty or unreadable events file) fails, it never reads as 0 cached.
 check_security_fresh_receipt() {
-  local f events bad cached set_file fresh sec_cached summary
+  local ran="${1:-}" f events bad cached summaries set_file fresh sec_cached summary
+  case "${ran}" in ""|*[!0-9]*) die "security-fresh-receipt needs RAN, the number of packages the leg ran, got '${ran}'" ;; esac
+  shift
   [ "$#" -gt 0 ] || die "security-fresh-receipt needs the -json event file(s) of the leg"
   for f in "$@"; do
     { [ -f "${f}" ] && [ -r "${f}" ]; } || die "security-fresh-receipt needs the -json events of the leg as readable files, got '${f}'"
@@ -956,11 +962,14 @@ check_security_fresh_receipt() {
     | fromjson?
     | select(type == "object" and .Action == "output" and ((.Test // "") == "") and ((.Package // "") != ""))
     | ((.Output // "") | tostring) as $o
-    | select(($o | test("^ok\\s")) and ($o | test("\\[no tests to run\\]") | not))
-    | (if ($o | test("\\(cached\\)")) then "C " else "R " end) + .Package' | LC_ALL=C sort -u)" \
+    | select($o | test("^(ok|FAIL|\\?)\\s"))
+    | ("S " + .Package),
+      (select(($o | test("^ok\\s")) and ($o | test("\\[no tests to run\\]") | not))
+       | (if ($o | test("\\(cached\\)")) then "C " else "R " end) + .Package)' | LC_ALL=C sort -u)" \
     || die "security-fresh-receipt could not read the -json events"
   bad="$(printf '%s\n' "${events}" | sed -n 's/^C //p')"
   cached="$(printf '%s\n' "${bad}" | grep -c . || true)"
+  summaries="$(printf '%s\n' "${events}" | grep -c '^S ' || true)"
   summary="$(printf 'cache-receipt: %s package(s) reported "ok (cached)": cached = NOT executed by this leg\n' "${cached}")"
   if ! security_fresh_active; then
     summary="${summary}"$'\n'"security-fresh: off (event is not merge_group)"
@@ -978,14 +987,25 @@ check_security_fresh_receipt() {
   summary="${summary}"$'\n'"$(printf 'merge-group-fresh: every go test of this leg ran with -count=1, %s package(s) cached' "${cached}")"
   printf '%s\n' "${summary}"
   [ -z "${GITHUB_STEP_SUMMARY:-}" ] || printf '%s\n' "${summary}" >> "${GITHUB_STEP_SUMMARY}"
+  [ "${ran}" -eq 0 ] || [ "${summaries}" -gt 0 ] \
+    || die "the -json events of this leg hold no package summary although it ran ${ran} package(s): the receipt cannot tell what ran"
   [ "${cached}" -eq 0 ] || die "package(s) read ok (cached) on merge_group: their tests were NOT executed: $(printf '%s\n' "${bad}" | tr '\n' ' ')"
+}
+
+# LEG_EVENTS_TMP: the -json events of a test or race leg that keeps no timings (GO_TEST_LEG_JSON_DIR unset), for its cache
+# receipt; an EXIT trap removes it on every exit path.
+LEG_EVENTS_TMP=""
+remove_leg_events_tmp() { [ -z "${LEG_EVENTS_TMP}" ] || rm -f -- "${LEG_EVENTS_TMP}"; }
+leg_events_file() {
+  LEG_EVENTS_TMP="$(mktemp "${TMPDIR:-/tmp}/dev-health-$1-shard-events.XXXXXX")" || die "no temp file for the -json events of the $1 leg"
+  trap remove_leg_events_tmp EXIT
 }
 
 # check_test_shard SHARD COUNT: the SHARD-th of COUNT slices of the unit tests (what check_test runs as one). The slices
 # partition `go list ./...`; internal/gqlgenguard runs alone after the rest of its shard. The packages that hold race-excluded rows run once,
 # fresh, with go test -json, and the shard reads the receipts of its rows from that run (check_race_excluded_receipts): no second execution.
 check_test_shard() {
-  local shard="${1:-}" count="${2:-}" plan log json started wall module_dir rest rest_rows rest_sec rows_timeout census_keys heavy_is_row listing legjson rjson=""
+  local shard="${1:-}" count="${2:-}" plan log json started wall module_dir rest rest_rows rest_sec rows_timeout census_keys heavy_is_row listing legjson
   check_test_shard_args "${shard}" "${count}"
   plan="$(check_test_shard_plan "${shard}" "${count}")"
   listing="$(race_excluded_rows "${shard}" "${count}")" || exit 2
@@ -995,8 +1015,8 @@ check_test_shard() {
   legjson="$(leg_json_file test "${shard}" "${count}")" || exit 2
   # The cache receipt reads the stages' -json events: a leg that keeps no timings keeps them in a temp file.
   if [ "${legjson}" = /dev/null ]; then
-    rjson="$(mktemp "${TMPDIR:-/tmp}/dev-health-test-shard-events.XXXXXX")"
-    legjson="${rjson}"
+    leg_events_file test
+    legjson="${LEG_EVENTS_TMP}"
   fi
   started="$(date +%s)"
   if security_fresh_active; then security_fresh_load; fi
@@ -1022,22 +1042,22 @@ check_test_shard() {
         cd "${ROOT}/${module_dir}"
         # shellcheck disable=SC2086
         go_test_leg "${log}" "${legjson}" -timeout 10m ${rest}
-      ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}" ${rjson:+"${rjson}"}; return 1; }
+      ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}"; return 1; }
     fi
     if [ -n "${rest_sec}" ]; then
       printf 'go test (shard %s/%s, security -count=1): %s: %d package(s)\n' "${shard}" "${count}" "${module_dir}" "$(printf '%s\n' "${rest_sec}" | grep -c .)"
       (
         cd "${ROOT}/${module_dir}"
         # shellcheck disable=SC2086
-        go_test_leg "${log}" "${legjson}" -count=1 -timeout 10m ${rest_sec}
-      ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}" ${rjson:+"${rjson}"}; return 1; }
+        go_test_leg "${log}" "${legjson}" -timeout 10m ${rest_sec}
+      ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}"; return 1; }
     fi
     if [ -n "${rest_rows}" ]; then
       (
         cd "${ROOT}/${module_dir}"
         # shellcheck disable=SC2086
         go_test_json_run_t "${rows_timeout}" "${json}" "${log}" ${rest_rows}
-      ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}" ${rjson:+"${rjson}"}; return 1; }
+      ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}"; return 1; }
     fi
     if printf '%s\n' "${plan}" | awk -F'\t' -v m="${module_dir}" -v heavy="${SERIAL_HEAVY_TEST_PACKAGE}" '$1 == m && $2 == heavy { found = 1 } END { exit !found }'; then
       printf 'go test%s (shard %s/%s, alone): %s\n' "${MERGE_GROUP_FRESH:+ -count=1}" "${shard}" "${count}" "${SERIAL_HEAVY_TEST_PACKAGE}"
@@ -1049,22 +1069,22 @@ check_test_shard() {
         (
           cd "${ROOT}/${module_dir}"
           go_test_json_run "${json}" "${log}" "${SERIAL_HEAVY_TEST_PACKAGE}"
-        ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}" ${rjson:+"${rjson}"}; return 1; }
+        ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}"; return 1; }
       else
         (
           cd "${ROOT}/${module_dir}"
           go_test_leg "${log}" "${legjson}" -timeout 10m "${SERIAL_HEAVY_TEST_PACKAGE}"
-        ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}" ${rjson:+"${rjson}"}; return 1; }
+        ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}"; return 1; }
       fi
     fi
   done
   if [ "${legjson}" != /dev/null ]; then cat "${json}" >>"${legjson}"; fi
-  check_race_excluded_receipts "${listing}" "${json}" || { rm -f -- "${log}" "${json}" ${rjson:+"${rjson}"}; return 1; }
-  (check_security_fresh_receipt "${legjson}" "${json}") || { rm -f -- "${log}" "${json}" ${rjson:+"${rjson}"}; return 1; }
+  check_race_excluded_receipts "${listing}" "${json}" || { rm -f -- "${log}" "${json}"; return 1; }
+  (check_security_fresh_receipt "$(printf '%s\n' "${plan}" | grep -c . || true)" "${legjson}" "${json}") || { rm -f -- "${log}" "${json}"; return 1; }
   wall=$(($(date +%s) - started))
-  (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}") || { rm -f -- "${log}" "${json}" ${rjson:+"${rjson}"}; return 1; }
-  (check_test_shard_wall_guard "${shard}" "${count}" "${wall}" "${log}") || { rm -f -- "${log}" "${json}" ${rjson:+"${rjson}"}; return 1; }
-  rm -f -- "${log}" "${json}" ${rjson:+"${rjson}"}
+  (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}") || { rm -f -- "${log}" "${json}"; return 1; }
+  (check_test_shard_wall_guard "${shard}" "${count}" "${wall}" "${log}") || { rm -f -- "${log}" "${json}"; return 1; }
+  rm -f -- "${log}" "${json}"
 }
 
 check_race() {
@@ -1219,7 +1239,7 @@ check_race_shard_plan() {
 }
 
 check_race_shard() {
-  local shard="${1:-}" count="${2:-}" module_dir modpath pkg selected=0 missing racelog legjson rjson="" ps_json=""
+  local shard="${1:-}" count="${2:-}" module_dir modpath pkg selected=0 missing racelog legjson ps_json=""
   check_race_shard_args "${shard}" "${count}"
   load_quality_selection
   local -a pkgs solo_pkgs pkgs_sec pkgs_all
@@ -1227,8 +1247,8 @@ check_race_shard() {
   legjson="$(leg_json_file race "${shard}" "${count}")" || exit 2
   # The cache receipt reads the stages' -json events: a leg that keeps no timings keeps them in a temp file.
   if [ "${legjson}" = /dev/null ]; then
-    rjson="$(mktemp "${TMPDIR:-/tmp}/dev-health-race-shard-events.XXXXXX")"
-    legjson="${rjson}"
+    leg_events_file race
+    legjson="${LEG_EVENTS_TMP}"
   fi
   if security_fresh_active; then security_fresh_load; fi
   for module_dir in "${MODULE_DIRS[@]}"; do
@@ -1273,15 +1293,15 @@ check_race_shard() {
       (
         cd "${ROOT}/${module_dir}"
         go_test_leg "${racelog}" "${legjson}" -race -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" "${pkgs[@]}"
-      ) || { rm -f -- "${racelog}" ${rjson:+"${rjson}"}; return 1; }
+      ) || { rm -f -- "${racelog}"; return 1; }
     fi
     if [ "${#pkgs_sec[@]}" -gt 0 ]; then
       selected=$((selected + ${#pkgs_sec[@]}))
       printf 'go test -race (shard %s/%s): %s: security -count=1: %d package(s)\n' "${shard}" "${count}" "${module_dir}" "${#pkgs_sec[@]}"
       (
         cd "${ROOT}/${module_dir}"
-        go_test_leg "${racelog}" "${legjson}" -race -count=1 -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" "${pkgs_sec[@]}"
-      ) || { rm -f -- "${racelog}" ${rjson:+"${rjson}"}; return 1; }
+        go_test_leg "${racelog}" "${legjson}" -race -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" "${pkgs_sec[@]}"
+      ) || { rm -f -- "${racelog}"; return 1; }
     fi
     # CHAOS-10289: the solo packages run last and alone: the shard's packages and its providersync slice have finished, so
     # nothing else of this leg runs beside them.
@@ -1291,11 +1311,11 @@ check_race_shard() {
       (
         cd "${ROOT}/${module_dir}"
         go_test_leg "${racelog}" "${legjson}" -race -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" "${solo_pkgs[@]}"
-      ) || { rm -f -- "${racelog}" ${rjson:+"${rjson}"}; return 1; }
+      ) || { rm -f -- "${racelog}"; return 1; }
     fi
   done
-  (check_security_fresh_receipt "${legjson}" ${ps_json:+"${ps_json}"}) || { rm -f -- "${racelog}" ${rjson:+"${rjson}"}; return 1; }
-  rm -f -- "${racelog}" ${rjson:+"${rjson}"}
+  (check_security_fresh_receipt "${selected}" "${legjson}" ${ps_json:+"${ps_json}"}) || { rm -f -- "${racelog}"; return 1; }
+  rm -f -- "${racelog}"
   [ "${selected}" -gt 0 ] || [ "${QUALITY_FILTER_ACTIVE}" -eq 1 ] \
     || die "race shard ${shard}/${count} selected zero packages -- the matrix is wider than the package list, so this leg would read green while running nothing"
 }
@@ -4880,7 +4900,7 @@ case "${1:-all}" in
     check_test_shard_unweighted_guard "$2" "$3" "$4"
     ;;
   security-fresh-receipt)
-    [ "$#" -ge 2 ] || die "security-fresh-receipt accepts JSON..."
+    [ "$#" -ge 3 ] || die "security-fresh-receipt accepts RAN JSON..."
     shift
     check_security_fresh_receipt "$@"
     ;;

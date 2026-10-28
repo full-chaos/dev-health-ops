@@ -4,7 +4,10 @@ package chmigrate_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -227,4 +230,32 @@ func TestADatabaseBelowTheSquashedBaselineIsRefused(t *testing.T) {
 		t.Errorf("a refused upgrade changed schema_migrations: %s", firstDifference(got, beforeVersions))
 	}
 	compareCatalogs(t, "after the refusal", catalog(t, env.ctx, conn, database), beforeCatalog)
+}
+
+// regenerateHeadEnv set to "1" makes TestRegenerateTheHeadBaseline write baseline/head.json from the archive. It is
+// the only producer of head.json; TestBaselineEqualsTheArchivedChain then holds the file to the archive.
+const regenerateHeadEnv = "CHMIGRATE_REGENERATE_HEAD"
+
+// TestRegenerateTheHeadBaseline writes baseline/head.json: the capture of a fresh database built the old way (the
+// archived 098 baseline, then every archived chain file), in the archived file's own JSON form.
+func TestRegenerateTheHeadBaseline(t *testing.T) {
+	if os.Getenv(regenerateHeadEnv) != "1" {
+		t.Skipf("set %s=1 to regenerate baseline/head.json", regenerateHeadEnv)
+	}
+	archived, err := os.ReadFile(filepath.Join(archiveDir, "baseline-098", "head.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again, err := json.MarshalIndent(loadArchivedBaseline(t), "", "  "); err != nil || string(again)+"\n" != string(archived) {
+		t.Fatalf("the archived baseline is not in json.MarshalIndent form (%v): the regenerated file would not be in the same form", err)
+	}
+	env := newSquashEnv(t)
+	database, conn, _, _ := env.build(t, loadArchivedBaseline(t), loadArchivedChain(t))
+	data, err := json.MarshalIndent(capture(t, env.ctx, conn, database, productionContract), "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join("baseline", "head.json"), append(data, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }

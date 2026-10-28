@@ -16,6 +16,7 @@ const (
 	plantArchiveSQL      = "internal/pgmigrate/archive/sql/0139_a.sql"
 	plantGolden          = "internal/pgmigrate/testdata/golden/alias.json"
 	plantSource          = "internal/pgmigrate/alias_integration_test.go"
+	plantSource2         = "internal/api/health/frozen_python_test.go"
 )
 
 func sum(body string) string {
@@ -39,12 +40,14 @@ func writeAt(t *testing.T, repo, path, body string) {
 func squashRepo(t *testing.T) (string, string, Exemption) {
 	t.Helper()
 	repo := t.TempDir()
-	baseManifest := "file\t" + plantGolden + "\t" + sum("{}") + "\npins\t" + plantSource + "\t" + strings.Repeat("a", 64) + "\topens=2,finishes=0,skips=0\n"
+	baseManifest := "file\t" + plantGolden + "\t" + sum("{}") + "\npins\t" + plantSource + "\t" + strings.Repeat("a", 64) + "\topens=2,finishes=0,skips=0\n" +
+		"pins\t" + plantSource2 + "\t" + strings.Repeat("b", 64) + "\topens=1,finishes=0,skips=0\n"
 	for path, body := range map[string]string{
 		ManifestPath:  baseManifest,
 		plantBaseline: "old head",
 		plantGolden:   "{}",
 		plantSource:   "package x\nvar _ = venueoracle.OpenGolden(t, a)\nvar _ = venueoracle.OpenGolden(t, b)\n",
+		plantSource2:  "package y\nvar _ = venueoracle.OpenGolden(t, c)\n",
 		"other.txt":   "x",
 	} {
 		writeAt(t, repo, path, body)
@@ -59,7 +62,8 @@ func squashRepo(t *testing.T) (string, string, Exemption) {
 		t.Fatal(err)
 	}
 	writeAt(t, repo, plantBaseline, "new head")
-	writeAt(t, repo, ManifestPath, "file\t"+plantGolden+"\t"+sum("{}")+"\npins\t"+plantSource+"\t"+strings.Repeat("a", 64)+"\topens=1,finishes=0,skips=0\n")
+	writeAt(t, repo, ManifestPath, "file\t"+plantGolden+"\t"+sum("{}")+"\npins\t"+plantSource+"\t"+strings.Repeat("a", 64)+"\topens=1,finishes=0,skips=0\n"+
+		"pins\t"+plantSource2+"\t"+strings.Repeat("b", 64)+"\topens=1,finishes=0,skips=0\n")
 	writeAt(t, repo, plantSource, "package x\nvar _ = venueoracle.OpenGolden(t, a)\n")
 	writeAt(t, repo, plantArchiveManifest, "0139\tabc\t0139_a.sql\n")
 	writeAt(t, repo, plantArchiveSQL, "-- Revision 0139 (down_revision 0138)\n")
@@ -203,6 +207,36 @@ func TestTheSquashExemptionDoesNotClearOtherContentUnderTheSamePaths(t *testing.
 			git(t, repo, "commit", "-q", "-am", "same paths, other content")
 			if problems := gitHalf(t, repo, base, []Exemption{exemption}); len(problems) == 0 {
 				t.Errorf("the exemption clears %s", name)
+			}
+		})
+	}
+}
+
+// The exemption waives only its own findings. Every other check of the git half still runs when it matches: a frozen
+// comparison removed beyond the squash's own (a pinned source the squash lowered, lowered again; another pinned source
+// lowered) and a guarded path the squash does not name (an added baseline file) are still refused.
+func TestTheSquashExemptionWaivesOnlyItsOwnFindings(t *testing.T) {
+	for name, edit := range map[string]func(t *testing.T, repo string){
+		"the squash's pinned source rewritten (reviewer's repro)": func(t *testing.T, repo string) {
+			writeAt(t, repo, plantSource, "package x\n")
+		},
+		"another pinned source loses its comparison": func(t *testing.T, repo string) {
+			writeAt(t, repo, plantSource2, "package y\n")
+		},
+		"an added baseline file beside the squash": func(t *testing.T, repo string) {
+			writeAt(t, repo, "internal/pgmigrate/baseline/extra.json", "{}")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			repo, base, exemption := squashRepo(t)
+			if problems := gitHalf(t, repo, base, []Exemption{exemption}); len(problems) > 0 {
+				t.Fatalf("the squash change set itself is refused: %v", problems)
+			}
+			edit(t, repo)
+			git(t, repo, "add", ".")
+			git(t, repo, "commit", "-q", "-m", "one more change beside the squash")
+			if problems := gitHalf(t, repo, base, []Exemption{exemption}); len(problems) == 0 {
+				t.Errorf("the exemption hides %s", name)
 			}
 		})
 	}

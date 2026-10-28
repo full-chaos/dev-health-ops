@@ -25,8 +25,12 @@ var batchA = []string{
 // same rule as batchA.
 var batchB = []string{
 	"internal/chmigrate",
+	"internal/jobs/metrics/daily/benchmarking",
+	"internal/jobs/metrics/daily/icfinalize",
 	"internal/jobs/report",
 	"internal/queryapi/workgraph",
+	"internal/teamattribution",
+	"internal/teamownership",
 }
 
 // repoScan walks the module's internal tree once for every test of this

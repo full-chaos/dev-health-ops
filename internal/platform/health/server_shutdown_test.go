@@ -3,7 +3,6 @@ package health
 import (
 	"bufio"
 	"context"
-	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -24,6 +23,16 @@ type gatedServer struct {
 	release chan struct{}
 	swept   chan struct{}
 	once    sync.Once
+	// served is closed when a /metrics request reaches its handler (the readiness handler answers without its
+	// checks once the stop has closed readiness, so only /metrics shows a request served after the stop).
+	served     chan struct{}
+	servedOnce sync.Once
+}
+
+func (g *gatedServer) WritePrometheus(w io.Writer) error {
+	g.servedOnce.Do(func() { close(g.served) })
+	_, err := io.WriteString(w, "edge_gate_served 1\n")
+	return err
 }
 
 // open lets the readiness check return.
@@ -31,7 +40,7 @@ func (g *gatedServer) open() { g.once.Do(func() { close(g.release) }) }
 
 func startGatedServer(t *testing.T, configure func(*Server)) *gatedServer {
 	t.Helper()
-	g := &gatedServer{entered: make(chan struct{}), release: make(chan struct{}), swept: make(chan struct{})}
+	g := &gatedServer{entered: make(chan struct{}), release: make(chan struct{}), swept: make(chan struct{}), served: make(chan struct{})}
 	var enteredOnce sync.Once
 	t.Cleanup(g.open)
 	registry := NewRegistry(time.Minute)
@@ -44,6 +53,9 @@ func startGatedServer(t *testing.T, configure func(*Server)) *gatedServer {
 			return ctx.Err()
 		}
 	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.RegisterMetrics("edge_gate", g); err != nil {
 		t.Fatal(err)
 	}
 	server, err := NewServer(ServerOptions{Address: "127.0.0.1:0", Registry: registry, Service: "test", Version: "dev"})
@@ -108,7 +120,10 @@ func readAll(conn net.Conn) <-chan string {
 	return out
 }
 
-const readyRequest = "GET /readyz HTTP/1.1\r\nHost: operator\r\nConnection: close\r\n\r\n"
+const (
+	readyRequest   = "GET /readyz HTTP/1.1\r\nHost: operator\r\nConnection: close\r\n\r\n"
+	metricsRequest = "GET /metrics HTTP/1.1\r\nHost: operator\r\nConnection: close\r\n\r\n"
+)
 
 // A request whose bytes reached the server before the stop is served whole: the stop never cuts it.
 func TestARequestReadBeforeTheStopIsServedWhole(t *testing.T) {
@@ -145,7 +160,7 @@ func TestARequestSentAfterTheStopIsRefusedWhole(t *testing.T) {
 	held := holdTrackedConn(t, g.server.Address())
 	done := shutdownAsync(g.server)
 	await(t, g.swept, "the stop's sweep")
-	_, _ = io.WriteString(held, readyRequest)
+	_, _ = io.WriteString(held, metricsRequest)
 	if response := await(t, readAll(held), "the refusal"); response != "" {
 		t.Fatalf("a request sent after the stop got %q, want no response", response)
 	}
@@ -153,51 +168,94 @@ func TestARequestSentAfterTheStopIsRefusedWhole(t *testing.T) {
 		t.Fatalf("Shutdown: %v", err)
 	}
 	select {
-	case <-g.entered:
+	case <-g.served:
 		t.Fatal("the refused request reached its handler")
 	default:
 	}
 }
 
 // Bytes the server reads while the stop claims the connection are handed on to nobody: the request is refused whole,
-// never served from a closed connection.
+// never served from a closed connection. The stop is held after its sweep until the server is done with the
+// connection, so the HTTP server's own shutdown check cannot be what refuses it.
 func TestBytesReadAsTheStopClaimsTheConnectionAreRefusedWhole(t *testing.T) {
 	reached, proceed := make(chan struct{}), make(chan struct{})
-	var once sync.Once
+	swept, allowStop := make(chan struct{}), make(chan struct{})
+	heldClosed := make(chan struct{})
+	var readOnce, closeOnce, allowOnce sync.Once
+	t.Cleanup(func() { allowOnce.Do(func() { close(allowStop) }) })
 	var heldAddress atomic.Pointer[string]
+	isHeld := func(conn net.Conn) bool {
+		held := heldAddress.Load()
+		return held != nil && conn.RemoteAddr().String() == *held
+	}
 	g := startGatedServer(t, func(s *Server) {
 		s.firstReadHook = func(conn net.Conn) {
-			if held := heldAddress.Load(); held == nil || conn.RemoteAddr().String() != *held {
-				return
+			if isHeld(conn) {
+				readOnce.Do(func() {
+					close(reached)
+					<-proceed
+				})
 			}
-			once.Do(func() {
-				close(reached)
-				<-proceed
-			})
+		}
+		s.closedHook = func(conn net.Conn) {
+			if isHeld(conn) {
+				closeOnce.Do(func() { close(heldClosed) })
+			}
+		}
+		s.sweptHook = func() {
+			close(swept)
+			<-allowStop
 		}
 	})
 	held := holdTrackedConn(t, g.server.Address())
 	address := held.LocalAddr().String()
 	heldAddress.Store(&address)
-	if _, err := io.WriteString(held, readyRequest); err != nil {
+	if _, err := io.WriteString(held, metricsRequest); err != nil {
 		t.Fatal(err)
 	}
 	await(t, reached, "the server's first read")
 	done := shutdownAsync(g.server)
-	await(t, g.swept, "the stop's sweep")
+	await(t, swept, "the stop's sweep")
 	close(proceed)
-	response := readAll(held)
+	await(t, heldClosed, "the server finishing with the claimed connection")
 	select {
-	case <-g.entered:
+	case <-g.served:
 		t.Fatal("bytes read after the stop claimed the connection reached the handler")
-	case got := <-response:
-		if got != "" {
-			t.Fatalf("the claimed connection answered %q, want no response", got)
-		}
-	case <-time.After(failAfter):
-		t.Fatal("the claimed connection neither closed nor answered")
+	default:
 	}
-	if err := await(t, done, "Shutdown returning"); err != nil && !errors.Is(err, context.Canceled) {
+	if got := await(t, readAll(held), "the claimed connection closing"); got != "" {
+		t.Fatalf("the claimed connection answered %q, want no response", got)
+	}
+	allowOnce.Do(func() { close(allowStop) })
+	if err := await(t, done, "Shutdown returning"); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+}
+
+// A connection accepted after the stop's sweep, while the listener is still open, is closed at once when it has sent
+// nothing: the sweep covers every connection, not only the ones it saw.
+func TestAConnectionAcceptedAfterTheSweepIsClosedWhenUnused(t *testing.T) {
+	swept, allowStop := make(chan struct{}), make(chan struct{})
+	var allowOnce sync.Once
+	t.Cleanup(func() { allowOnce.Do(func() { close(allowStop) }) })
+	g := startGatedServer(t, func(s *Server) {
+		s.sweptHook = func() {
+			close(swept)
+			<-allowStop
+		}
+	})
+	done := shutdownAsync(g.server)
+	await(t, swept, "the stop's sweep")
+	late, err := net.Dial("tcp", g.server.Address())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer late.Close()
+	if got := await(t, readAll(late), "the late connection closing"); got != "" {
+		t.Fatalf("the late connection answered %q, want none", got)
+	}
+	allowOnce.Do(func() { close(allowStop) })
+	if err := await(t, done, "Shutdown returning"); err != nil {
 		t.Fatalf("Shutdown: %v", err)
 	}
 }

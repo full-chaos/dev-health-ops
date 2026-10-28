@@ -37,10 +37,12 @@ type Server struct {
 	connMu   sync.Mutex
 	conns    map[*trackedConn]struct{}
 	stopping bool
-	// sweptHook and firstReadHook are nil outside tests: they pause at the stop's sweep and at a connection's first
-	// read, so a test can order a request against the stop.
+	// sweptHook, firstReadHook and closedHook are nil outside tests: they pause at the stop's sweep and at a
+	// connection's first read, and report a connection the HTTP server is done with, so a test can order a request
+	// against the stop.
 	sweptHook     func()
 	firstReadHook func(net.Conn)
+	closedHook    func(net.Conn)
 }
 
 func NewServer(options ServerOptions) (*Server, error) {
@@ -418,6 +420,9 @@ func (c *trackedConn) Close() error {
 		c.server.connMu.Lock()
 		delete(c.server.conns, c)
 		c.server.connMu.Unlock()
+		if c.server.closedHook != nil {
+			c.server.closedHook(c.Conn)
+		}
 	})
 	return err
 }

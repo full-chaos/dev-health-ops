@@ -4,22 +4,19 @@ package chmigrate_test
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
-// CHAOS-9807: migration 130 creates work_unit_issue_size and rollback/130_*.down.sql drops it. The test rehearses
-// both through the production migrator (chmigrate.Upgrade, what `dho migrate clickhouse upgrade` runs): the
-// upgrade records the version and creates the table, a second upgrade is up to date, the newest row per unit wins
-// after a merge, the operator rollback removes the table AND its version row, and the next upgrade creates the
-// table again.
-func TestWorkUnitIssueSizeMigrationUpgradesAndDowngrades(t *testing.T) {
+// CHAOS-9807: migration 130 creates work_unit_issue_size. On the head: the table exists with its version recorded,
+// a second upgrade keeps it, and the newest row per unit wins after a merge. (The rehearsal of the operator
+// rollback and the upgrade after it is archived with 130, CHAOS-11751: with the baseline at 144 a database whose
+// 130 row is removed is below the head.)
+func TestWorkUnitIssueSize(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	instance, err := containers.StartClickHouse(ctx)
@@ -75,21 +72,5 @@ VALUES ('o', 'u', 3, 1, 2, 'r1', '2026-10-01 00:00:00'), ('o', 'u', 8, 2, 2, 'r2
 	}
 	if size != 8 || rows != 1 {
 		t.Fatalf("after a merge the unit holds %d rows of size %v, want the newest row only (size 8)", rows, size)
-	}
-
-	body, err := os.ReadFile("rollback/130_work_unit_issue_size.down.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, statement := range chmigrate.SplitStatements(string(body)) {
-		exec(statement)
-	}
-	if tables() != 0 || recorded() != 0 {
-		t.Fatalf("after the rollback: table %d, version rows %d; want neither", tables(), recorded())
-	}
-
-	chschema.Apply(ctx, t, instance)
-	if tables() != 1 || recorded() == 0 {
-		t.Fatalf("the upgrade after the rollback: table %d, version rows %d; want the table back", tables(), recorded())
 	}
 }

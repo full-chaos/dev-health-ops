@@ -80,6 +80,34 @@ func TestOrgDeletionGrantProblemReadsAQuotedDatabaseName(t *testing.T) {
 	}
 }
 
+// Inside backticks a doubled backtick and the escapes \` and \\ are one literal
+// character; any other escape, or an unbalanced backtick, makes the grant not
+// count.
+func TestOrgDeletionGrantProblemUnquotesBacktickNamesExactly(t *testing.T) {
+	grant := func(target string) []string { return []string{"GRANT SELECT, ALTER DELETE ON " + target + " TO u"} }
+	for _, tc := range []struct {
+		name, database, target string
+		allowed                bool
+	}{
+		{"doubled backtick", "a`b", "`a``b`.*", true},
+		{"escaped backtick", "a`b", "`a\\`b`.*", true},
+		{"escaped backslash", `a\b`, "`a\\\\b`.*", true},
+		{"unknown escape", "worker", "`wo\\rker`.*", false},
+		{"unknown escape, raw name", `wo\rker`, "`wo\\rker`.*", false},
+		{"unbalanced backtick before the dot", "worker_test", "`worker_test.*", false},
+		{"unbalanced backtick after the name", "worker_test", "worker_test`.*", false},
+		{"unbalanced backtick in the table", "worker_test", "worker_test.`*", false},
+		{"quoted * database, unquoted * table", "worker_test", "`*`.*", false},
+		{"quoted * table", "worker_test", "worker_test.`*`", false},
+		{"quoted plain database", "worker_test", "`worker_test`.*", true},
+	} {
+		err := orgDeletionGrantProblem(tc.database, grant(tc.target))
+		if (err == nil) != tc.allowed {
+			t.Errorf("%s: %q on database %q: err = %v, want allowed=%v", tc.name, tc.target, tc.database, err, tc.allowed)
+		}
+	}
+}
+
 func TestGrantPrivilegesKeepsColumnListsWhole(t *testing.T) {
 	got := strings.Join(grantPrivileges("ALTER  DELETE, SELECT(a, b),insert"), "|")
 	if want := "ALTER DELETE|SELECT(A, B)|INSERT"; got != want {

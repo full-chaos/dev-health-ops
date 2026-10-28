@@ -70,6 +70,10 @@ and `/readyz` fails closed, naming the check. See the
 
 Durations take Go syntax (`30s`, `5m`).
 
+### Session route bearer
+
+The session, social link and change-password routes read their bearer through the route's endpoint-profile row. With `AUTH_TOKEN_ISSUER_URL` set, they accept the EdDSA user access token of audience `auth-service` (access-token.v1), checked against the keys the JWKS publishes: it needs a valid `sid`, its session must be live, and the session's `token_version` pin must equal the user's current `token_version`. The HS256 compatibility access token stays accepted on the same rows. Without `AUTH_TOKEN_ISSUER_URL` the routes verify the HS256 compatibility access token only.
+
 ### Rate limits
 
 The login, credential and social link routes count in a shared fixed-window store, so a limit holds across replicas. Every counter id starts with `auth_svc_`; go-api's counters are never read or written.

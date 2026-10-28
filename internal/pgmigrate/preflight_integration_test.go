@@ -269,18 +269,14 @@ func productionEnv(t *testing.T) {
 
 func startInstance(t *testing.T) (*containers.Instance, *pgx.Conn) {
 	t.Helper()
-	instance, err := containers.StartPostgres(context.Background())
-	if err != nil {
-		t.Fatalf("start postgres: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := instance.Close(context.Background()); err != nil {
-			t.Errorf("close postgres: %v", err)
-		}
-	})
-	if instance.Container == nil {
-		t.Fatal("the oracle dumps databases with the server's own pg_dump and needs a container instance, not a remote DSN")
-	}
+	instance := sharedInstance(t)
+	return instance, connect(t, instance.URI)
+}
+
+// startIsolatedInstance is for a test that creates a role.
+func startIsolatedInstance(t *testing.T) (*containers.Instance, *pgx.Conn) {
+	t.Helper()
+	instance := isolatedInstance(t)
 	return instance, connect(t, instance.URI)
 }
 
@@ -565,7 +561,7 @@ func (r *statementRecorder) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQ
 func TestPreflightIsReadOnly(t *testing.T) {
 	ctx := context.Background()
 	baseline, current := currentBuild(t)
-	instance, admin := startInstance(t)
+	instance, admin := startIsolatedInstance(t)
 	database := stateDatabase(t, admin, instance, upgradeTo(t, baseline, nil))
 
 	config, err := pgx.ParseConfig(databaseURI(t, instance.URI, database))

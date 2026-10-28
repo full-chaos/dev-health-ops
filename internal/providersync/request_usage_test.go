@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -1046,6 +1047,189 @@ func TestShutdownDrainRetriesUntilItsBound(t *testing.T) {
 		strings.Contains(logs.String(), "request_usage_unsent") {
 		t.Fatalf("stored=%+v writes=%d logs=%s", got, sink.writeCount(), logs.String())
 	}
+}
+
+// TestCloseLogsTheUnsentLineBeforeItReturnsWhenAWriteHangs closes a writer
+// while a write to a hung store is in flight: the drain still names the rows
+// it could not store before Close returns.
+func TestCloseLogsTheUnsentLineBeforeItReturnsWhenAWriteHangs(t *testing.T) {
+	t.Parallel()
+	hung := &hangingRequestUsageSink{release: make(chan struct{}), started: make(chan struct{})}
+	logs := &syncBuffer{}
+	writer := NewRequestUsageWriter(hung, slog.New(slog.NewTextHandler(logs, nil)))
+	writer.cadence = 5 * time.Millisecond
+	writer.writeTimeout = 10 * time.Second
+	writer.Start()
+	t.Cleanup(func() {
+		close(hung.release)
+		writer.Close(time.Second)
+	})
+	writer.Offer([]RequestUsageRow{{Transport: requestTransportREST, Requests: 1}})
+	select {
+	case <-hung.started:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the first write never started")
+	}
+	writer.Close(10 * time.Millisecond)
+	select {
+	case <-writer.done:
+	default:
+		t.Fatalf("Close returned before the drain ended: logs=%s", logs.String())
+	}
+	requests, _, found := namedByLastLine(logs.String(), "unsent")
+	if !found || requests != 1 {
+		t.Fatalf("unsent line: %s", logs.String())
+	}
+}
+
+// cancelAwareRequestUsageSink holds each write until its context ends and
+// reports how the first write's context ended.
+type cancelAwareRequestUsageSink struct {
+	once     sync.Once
+	started  chan struct{}
+	firstErr chan error
+}
+
+func (sink *cancelAwareRequestUsageSink) WriteRequestUsage(ctx context.Context, _ []RequestUsageRow) error {
+	first := false
+	sink.once.Do(func() {
+		first = true
+		close(sink.started)
+	})
+	<-ctx.Done()
+	if first {
+		sink.firstErr <- ctx.Err()
+	}
+	return ctx.Err()
+}
+
+// TestCloseCancelsTheInFlightWrite closes a writer while a write is in flight:
+// Close cancels that write's context, so a store that honours its context
+// returns and leaves no goroutine behind.
+func TestCloseCancelsTheInFlightWrite(t *testing.T) {
+	t.Parallel()
+	sink := &cancelAwareRequestUsageSink{started: make(chan struct{}), firstErr: make(chan error, 1)}
+	logs := &syncBuffer{}
+	writer := NewRequestUsageWriter(sink, slog.New(slog.NewTextHandler(logs, nil)))
+	writer.cadence = 5 * time.Millisecond
+	writer.writeTimeout = 10 * time.Second
+	writer.Start()
+	t.Cleanup(func() { writer.Close(time.Second) })
+	writer.Offer([]RequestUsageRow{{Transport: requestTransportREST, Requests: 1}})
+	select {
+	case <-sink.started:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the first write never started")
+	}
+	writer.Close(10 * time.Millisecond)
+	select {
+	case <-writer.done:
+	default:
+		t.Fatalf("Close returned before the writer stopped: logs=%s", logs.String())
+	}
+	select {
+	case err := <-sink.firstErr:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("the in-flight write ended with %v, want it cancelled by Close", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("the in-flight write still runs after the hang ceiling: its goroutine leaks")
+	}
+}
+
+// expiryRecordingRequestUsageSink fails every write and counts the writes it
+// was handed with a context that had already ended.
+type expiryRecordingRequestUsageSink struct {
+	mu      sync.Mutex
+	expired int
+}
+
+func (sink *expiryRecordingRequestUsageSink) WriteRequestUsage(ctx context.Context, _ []RequestUsageRow) error {
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if ctx.Err() != nil {
+		sink.expired++
+	}
+	return errScriptedTransport
+}
+
+func (sink *expiryRecordingRequestUsageSink) expiredWrites() int {
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	return sink.expired
+}
+
+// holdingDroppedLineHandler holds the writer goroutine on its first
+// dropped-rows line until release closes.
+type holdingDroppedLineHandler struct {
+	slog.Handler
+	held    chan struct{}
+	release chan struct{}
+	once    *sync.Once
+}
+
+func (handler holdingDroppedLineHandler) Handle(ctx context.Context, record slog.Record) error {
+	err := handler.Handler.Handle(ctx, record)
+	if record.Message == "provider_sync.request_usage_dropped" {
+		handler.once.Do(func() {
+			close(handler.held)
+			<-handler.release
+		})
+	}
+	return err
+}
+
+// TestTheDrainNeverHandsTheStoreAnEndedContext holds the drain's write in its
+// dropped-rows line until the drain deadline has passed: the write must give
+// up without calling the store, and before Close returns one unsent line, and
+// no failed-write line, names the rows.
+func TestTheDrainNeverHandsTheStoreAnEndedContext(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		sink := &expiryRecordingRequestUsageSink{}
+		logs := &syncBuffer{}
+		handler := holdingDroppedLineHandler{Handler: slog.NewTextHandler(logs, nil), held: make(chan struct{}), release: make(chan struct{}), once: &sync.Once{}}
+		writer := NewRequestUsageWriter(sink, slog.New(handler))
+		writer.cadence = time.Hour
+		writer.writeTimeout = 10 * time.Second
+		var releaseOnce sync.Once
+		release := func() { releaseOnce.Do(func() { close(handler.release) }) }
+		t.Cleanup(func() {
+			release()
+			writer.Close(time.Second)
+		})
+		writer.Start()
+		writer.Offer([]RequestUsageRow{{Transport: requestTransportREST, Requests: 1}})
+		writer.countDropped([]RequestUsageRow{{Transport: requestTransportREST, Requests: 1}})
+		closed := make(chan struct{})
+		go func() {
+			defer close(closed)
+			writer.Close(10 * time.Millisecond)
+		}()
+		select {
+		case <-handler.held:
+		case <-time.After(30 * time.Second):
+			t.Fatal("the drain never reached its dropped-rows line")
+		}
+		// The bubble's clock: this moves it past the drain deadline at once.
+		time.Sleep(time.Until(writer.drainDeadline) + time.Millisecond)
+		release()
+		select {
+		case <-closed:
+		case <-time.After(30 * time.Second):
+			t.Fatal("Close still waits after the hang ceiling")
+		}
+		atClose := logs.String()
+		if requests, _, found := namedByLastLine(atClose, "unsent"); !found || requests != 1 ||
+			strings.Count(atClose, "msg=provider_sync.request_usage_unsent") != 1 ||
+			strings.Contains(atClose, "msg=provider_sync.request_usage_flush_failed") {
+			t.Fatalf("when Close returned, want one unsent line naming the row and no failed-write line: %s", atClose)
+		}
+		synctest.Wait()
+		if got := sink.expiredWrites(); got != 0 {
+			t.Fatalf("the store was handed an ended context %d time(s): logs=%s", got, logs.String())
+		}
+	})
 }
 
 // TestRepeatingWriterNoticesAreRateLimited fails the store on every write:

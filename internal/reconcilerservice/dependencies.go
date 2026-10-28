@@ -86,7 +86,14 @@ func (failure dependencyFailure) DependencyReason() string { return failure.reas
 // documents that it never exposes catalog or driver connection material (logDependencyCheckFailure's
 // own doc comment), so wrapping it here is exactly as safe as logging it already was.
 // errors.Is(_, errReconcilerDependencyUnavailable) still holds for every existing caller.
+// A dial failure postgres.IsTransientDialError accepts (a refused or reset dial, a pooler with no
+// free slot, EOF) is marked transient, so the registry reads cause=unreachable for it, as it does
+// for the worker (CHAOS-11644); a context deadline, a cancel and an I/O timeout keep their causes
+// because the registry tests them first.
 func dependencyCheckFailed(err error) error {
+	if postgres.IsTransientDialError(err) {
+		err = transientDialError{cause: err}
+	}
 	return fmt.Errorf("%w: %w", errReconcilerDependencyUnavailable, err)
 }
 

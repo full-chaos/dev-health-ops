@@ -21,6 +21,7 @@ deploy/helm/dev-health	go_api_drain_test.go	unexpressed
 deploy/helm/dev-health	go_api_fence_test.go	unexpressed
 deploy/helm/dev-health	go_api_fenced_marker_test.go	unexpressed
 deploy/helm/dev-health	go_api_internal_listener_test.go	unexpressed
+deploy/helm/dev-health	go_pgbouncer_secret_keep_test.go	unexpressed
 deploy/helm/dev-health	go_pgbouncer_session_rollingupdate_test.go	unexpressed
 deploy/helm/dev-health	helm_shim_test.go	unexpressed
 deploy/helm/dev-health	hook_references_test.go	unexpressed
@@ -123,6 +124,7 @@ internal/cigates/scripts	oracle_triggers_script_test.go	unexpressed
 internal/cigates/scripts	posture_integration_test.go	unexpressed
 internal/cigates/splitshards	ci_script_helpers_test.go	unexpressed
 internal/cigates/splitshards	free_run_test.go	unexpressed
+internal/cigates/suitecatalog	suitecatalog_test.go	unexpressed
 internal/cigates/testshard	listcall_test.go	unexpressed
 internal/cigates/testshard	providersync_test.go	unexpressed
 internal/cigates/testshard	raceshard_test.go	unexpressed

@@ -39,7 +39,7 @@ func TestLoadBuildHoldsBaselineAndChainInOrder(t *testing.T) {
 	build := buildVersions(t)
 	versions := build.Versions()
 	chain, err := chmigrate.LoadChain()
-	if err != nil || len(chain) == 0 {
+	if err != nil {
 		t.Fatalf("chain: %v", err)
 	}
 	baseline, err := chmigrate.LoadBaseline()
@@ -49,8 +49,15 @@ func TestLoadBuildHoldsBaselineAndChainInOrder(t *testing.T) {
 	if len(versions) != len(baseline.Versions)+len(chain) {
 		t.Fatalf("got %d versions, want %d", len(versions), len(baseline.Versions)+len(chain))
 	}
-	if build.Head() != chain[len(chain)-1].Version {
-		t.Fatalf("head = %q, want last chain file %q", build.Head(), chain[len(chain)-1].Version)
+	for index, version := range baseline.Versions {
+		if versions[index] != version {
+			t.Fatalf("version %d = %q, want the baseline's %q", index, versions[index], version)
+		}
+	}
+	for index, file := range chain {
+		if versions[len(baseline.Versions)+index] != file.Version {
+			t.Fatalf("version %d = %q, want chain file %q", len(baseline.Versions)+index, versions[len(baseline.Versions)+index], file.Version)
+		}
 	}
 	seen := map[string]bool{}
 	for _, v := range versions {

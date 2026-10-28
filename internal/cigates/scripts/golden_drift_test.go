@@ -443,3 +443,70 @@ func TestGoldenDriftRunAcceptsExactlyTheSelectOutput(t *testing.T) {
 		})
 	}
 }
+
+// Hostile rows files: bytes the shell would silently drop or reinterpret must not reach go test.
+func TestGoldenDriftRunRefusesHostileRowsFiles(t *testing.T) {
+	v := "VERDICT select 1 of 4 rows for 1 changed paths\n"
+	row := "ROW\tinternal/adminops\t^TestA$\n"
+	bad := map[string]string{
+		"a NUL byte in a ROW regex":                  v + "ROW\tinternal/adminops\t^Test\x00X$\n",
+		"a NUL byte in a ROW package":                v + "ROW\tinternal/admin\x00ops\t^TestA$\n",
+		"a NUL byte in the VERDICT line":             "VERDICT select 1 of\x00 4\n" + row,
+		"a NUL byte on its own line":                 v + "\x00\n" + row,
+		"no final newline after a ROW":               v + strings.TrimSuffix(row, "\n"),
+		"no final newline after VERDICT none":        "VERDICT none x",
+		"no final newline after a VERDICT with rows": row + "VERDICT select x",
+		"a space-only reason":                        "VERDICT all  \n" + row,
+		"a tab-only reason":                          "VERDICT select \t\n" + row,
+		"a space-only none reason":                   "VERDICT none   \n",
+		"a package ..":                               v + "ROW\t..\t^TestA$\n",
+		"a package ../":                              v + "ROW\t../\t^TestA$\n",
+		"a package with an inner ..":                 v + "ROW\tinternal/../etc\t^TestA$\n",
+		"a package ending in ..":                     v + "ROW\tinternal/adminops/..\t^TestA$\n",
+		"an absolute package":                        v + "ROW\t/etc\t^TestA$\n",
+		"VERDICT nonesuch":                           "VERDICT nonesuch x\n" + row,
+		"VERDICT selected":                           "VERDICT selected x\n" + row,
+		"VERDICT allx":                               "VERDICT allx\n" + row,
+	}
+	for name, rows := range bad {
+		t.Run(name, func(t *testing.T) {
+			res, log := runGoldenDrift(t, rows, "pass", "")
+			if res.code != 2 || strings.TrimSpace(log) != "" {
+				t.Fatalf("exit %d, go calls %q: want exit 2 and no go test (stderr %q)", res.code, log, res.stderr)
+			}
+		})
+	}
+	for name, rows := range map[string]string{
+		"a tab inside the reason":         "VERDICT select a\tb\n" + row,
+		"a regex that starts with a dash": v + "ROW\tinternal/adminops\t-x\n",
+		"a dotted package name":           v + "ROW\tinternal/a..b\t^TestA$\n",
+	} {
+		t.Run("accepted: "+name, func(t *testing.T) {
+			res, log := runGoldenDrift(t, rows, "pass", "")
+			if res.code != 0 || strings.TrimSpace(log) == "" {
+				t.Fatalf("exit %d, go calls %q: want exit 0 and the row runs (stderr %q)", res.code, log, res.stderr)
+			}
+		})
+	}
+}
+
+// select must not emit a package the run side refuses: the registry applies the same package rule.
+func TestGoldenDriftRegistryRefusesAnUnsafePackage(t *testing.T) {
+	root := repoRoot(t)
+	list := filepath.Join(t.TempDir(), "changed.txt")
+	if err := os.WriteFile(list, []byte(nulList("internal/pgmigrate/sql/0160_x.sql")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, pkg := range map[string]string{"dotdot": "..", "dotdot slash": "../x", "inner dotdot": "internal/../x", "trailing dotdot": "internal/..", "absolute": "/etc"} {
+		t.Run(name, func(t *testing.T) {
+			reg := filepath.Join(t.TempDir(), "registry.tsv")
+			if err := os.WriteFile(reg, []byte(pkg+"\t^TestX$\t@MIG\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			res := cmdSpec{dir: t.TempDir(), env: []string{shimBasePath(), "GOLDEN_DRIFT_REGISTRY=" + reg}}.run("bash", filepath.Join(root, "ci", "check_golden_drift.sh"), "select", list)
+			if res.code != 2 || res.stdout != "" {
+				t.Fatalf("exit %d stdout %q, want exit 2 and no verdict", res.code, res.stdout)
+			}
+		})
+	}
+}

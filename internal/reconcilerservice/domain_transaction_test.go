@@ -272,12 +272,28 @@ func TestDomainPostgresRunsTheCachedPostureCheckWhenOffered(t *testing.T) {
 type syncBuffer struct {
 	mu     sync.Mutex
 	buffer bytes.Buffer
+	wake   chan struct{}
+	armed  chan struct{}
 }
 
 func (b *syncBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.buffer.Write(p)
+	n, err := b.buffer.Write(p)
+	if b.wake != nil {
+		close(b.wake)
+		b.wake = nil
+	}
+	return n, err
+}
+
+// waitFor is the stub of the old poll shape: it looks once and gives up.
+func (b *syncBuffer) waitFor(ctx context.Context, want string) bool {
+	found := strings.Contains(b.String(), want)
+	if b.armed != nil {
+		b.armed <- struct{}{}
+	}
+	return found
 }
 
 func (b *syncBuffer) String() string {

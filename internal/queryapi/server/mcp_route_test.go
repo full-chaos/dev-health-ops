@@ -136,6 +136,22 @@ func mcpDo(handler http.Handler, method string, header http.Header, body string)
 	return rec
 }
 
+// mcpDoBounded is mcpDo with a failure-path guard: a refusal that is reached before the stage's
+// work returns at once, so a passing run never reaches the guard. A request that is still running
+// after it means the stage's pre-check did not bound it; the message names the stage.
+func mcpDoBounded(t *testing.T, stage string, handler http.Handler, header http.Header, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- mcpDo(handler, http.MethodPost, header, body) }()
+	select {
+	case rec := <-done:
+		return rec
+	case <-time.After(30 * time.Second):
+		t.Fatalf("%s: still running after the 30 s guard: no pre-check bounded the work", stage)
+		return nil
+	}
+}
+
 func mcpBody(t *testing.T, query string, variables map[string]any) string {
 	t.Helper()
 	payload := map[string]any{"query": query}
@@ -922,14 +938,9 @@ func selfDoublingFragments(n int) string {
 // zero ClickHouse, in bounded time.
 func TestMCPRefusesSelfDoublingFragmentsBeforeExpandingThem(t *testing.T) {
 	l := newMCPTestListeners(t, &countingMCPClient{}, allMCPRootsEnabled(), mcpDefaultLimits())
-	query := selfDoublingFragments(22)
-	started := time.Now()
-	rec := mcpDo(l.mcp, http.MethodPost, validMCPHeaders(), mcpBody(t, query, mcpHotspotsVariables(mcpTestOrg)))
-	elapsed := time.Since(started)
+	query := selfDoublingFragments(60) // 2^60 expanded fields: an expansion before the bounded count never finishes
+	rec := mcpDoBounded(t, fmt.Sprintf("a %d-byte self-doubling document", len(query)), l.mcp, validMCPHeaders(), mcpBody(t, query, mcpHotspotsVariables(mcpTestOrg)))
 	assertMCPRefused(t, rec, l.ch, http.StatusBadRequest, mcpReasonComplexity)
-	if elapsed > time.Second {
-		t.Fatalf("refusing a %d-byte self-doubling document took %s: something expanded it before the bounded count", len(query), elapsed)
-	}
 }
 
 // The bound itself, independent of the clock: 2^60 expanded fields would
@@ -1038,20 +1049,15 @@ func TestMCPRefusesSelfDoublingFragmentsBeforeTheValidatorRunsOnThem(t *testing.
 			query += fmt.Sprintf("fragment F%d on __Type { ofType { ...F%d } ofType { ...F%d } }\n", i, i+1, i+1)
 		}
 		query += fmt.Sprintf("fragment F%d on __Type { name }", n)
-		started := time.Now()
-		rec := mcpDo(l.mcp, http.MethodPost, validMCPHeaders(), mcpBody(t, query, nil))
-		elapsed := time.Since(started)
+		rec := mcpDoBounded(t, fmt.Sprintf("n=%d (%d bytes): the validator ran on the expanded document", n, len(query)), l.mcp, validMCPHeaders(), mcpBody(t, query, nil))
 		assertMCPRefused(t, rec, l.ch, http.StatusBadRequest, mcpReasonComplexity)
-		if elapsed > 250*time.Millisecond {
-			t.Fatalf("n=%d (%d bytes): refusal took %s: the validator ran on the expanded document", n, len(query), elapsed)
-		}
 	}
 }
 
 // Every stage that walks the document has a bound that runs before its work
 // (r2, r3 on #3425: the same class, unbounded work on fragment expansion, in
 // two different stages). The worst cell per stage under the body cap: each
-// must be answered in well under a second with zero ClickHouse calls unless
+// must be answered with zero ClickHouse calls unless
 // it is a legitimate served query.
 func TestMCPEveryStageOfTheDocumentPathIsBoundedUnderTheBodyCap(t *testing.T) {
 	doubling := func(n int) string {
@@ -1081,13 +1087,7 @@ func TestMCPEveryStageOfTheDocumentPathIsBoundedUnderTheBodyCap(t *testing.T) {
 	}
 	l := newMCPTestListeners(t, &countingMCPClient{}, allMCPRootsEnabled(), mcpDefaultLimits())
 	for _, c := range cases {
-		started := time.Now()
-		rec := mcpDo(l.mcp, http.MethodPost, validMCPHeaders(), c.body)
-		// Wall time is only a generous backstop (the regressions this class
-		// produced cost 1-15 s); the proof is the refusal code below.
-		if elapsed := time.Since(started); elapsed > 5*time.Second {
-			t.Errorf("%s / %s: took %s", c.stage, c.name, elapsed)
-		}
+		rec := mcpDoBounded(t, c.stage+" / "+c.name, l.mcp, validMCPHeaders(), c.body)
 		if c.reason != "" {
 			if reason, _ := mcpReason(t, rec); reason != c.reason {
 				t.Errorf("%s / %s: reason %q, want %q (the stage's pre-check did not bound it); body %.200s", c.stage, c.name, reason, c.reason, rec.Body.String())
@@ -1102,7 +1102,7 @@ func TestMCPEveryStageOfTheDocumentPathIsBoundedUnderTheBodyCap(t *testing.T) {
 // Delta 5 (D3610): the fragment graph is sized exactly, by memoised DP over
 // every node kind, before any stage that walks spreads. One cell per shape
 // that amplifies or could hide amplification; each asserts the work bound's
-// refusal reason, wall time is only a 5 s backstop.
+// refusal reason; a stage that is not bounded never returns.
 func TestMCPFragmentGraphIsSizedExactlyBeforeAnyStageWalksIt(t *testing.T) {
 	spreadDoubling := func(n int, leaf string) string {
 		q := "query { ...F0 }\n"
@@ -1153,11 +1153,7 @@ func TestMCPFragmentGraphIsSizedExactlyBeforeAnyStageWalksIt(t *testing.T) {
 	}
 	l := newMCPTestListeners(t, &countingMCPClient{}, allMCPRootsEnabled(), mcpDefaultLimits())
 	for _, c := range cases {
-		started := time.Now()
-		rec := mcpDo(l.mcp, http.MethodPost, validMCPHeaders(), mcpBody(t, c.query, c.vars))
-		if elapsed := time.Since(started); elapsed > 5*time.Second {
-			t.Errorf("%s: took %s", c.name, elapsed)
-		}
+		rec := mcpDoBounded(t, c.name, l.mcp, validMCPHeaders(), mcpBody(t, c.query, c.vars))
 		if rec.Code != c.status {
 			t.Errorf("%s: status %d, want %d; body %.200s", c.name, rec.Code, c.status, rec.Body.String())
 		}

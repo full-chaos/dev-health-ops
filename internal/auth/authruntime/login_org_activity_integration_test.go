@@ -75,6 +75,19 @@ VALUES ($1, $2, 'Second Org', 'community', true, '{}', 'self', now(), now())`, [
 	if got := login(); got != second.String() {
 		t.Fatalf("known activity: login took %s, want the organization with metrics %s", got, second)
 	}
+	// Both have data: the newest metrics decide, whichever organization joined first.
+	if _, err := e.admin.Exec(ctx, `UPDATE org_activity SET has_data = true, computed_at = now() - interval '2 days' WHERE org_id = $1`, first); err != nil {
+		t.Fatal(err)
+	}
+	if got := login(); got != second.String() {
+		t.Fatalf("both have data, the second is newer: login took %s, want %s", got, second)
+	}
+	if _, err := e.admin.Exec(ctx, `UPDATE org_activity SET computed_at = now() + interval '1 day' WHERE org_id = $1`, first); err != nil {
+		t.Fatal(err)
+	}
+	if got := login(); got != first.String() {
+		t.Fatalf("both have data, the first is newer: login took %s, want %s", got, first)
+	}
 	if strings.Contains(e.logs.String(), first.String()) && strings.Contains(e.logs.String(), "org activity unknown") {
 		t.Fatalf("the unknown-activity WARN names an organization id:\n%s", e.logs.String())
 	}

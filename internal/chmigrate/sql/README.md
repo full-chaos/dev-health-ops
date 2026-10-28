@@ -22,4 +22,7 @@ and never applies it again. `TestEveryRollbackFileDeletesItsOwnVersionRowLast`
 enforces the last statement. A rollback file of a version at or below the
 baseline (124..144) removes a baseline version row, so this build then refuses
 the database as below the head: it is valid only together with an image
-rollback to a pre-squash build, which re-applies the migration.
+rollback to a pre-squash build, which re-applies the migration. The rehearsal
+of `../rollback/144_llm_attempts_endpoint.down.sql`
+(`TestRollback144UpDownUpThroughAPreSquashBuild`) stays until a later migration
+replaces it as the live rollback.

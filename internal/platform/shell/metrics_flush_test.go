@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -60,32 +61,54 @@ func (p deadlineProbe) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// flushBoundCeiling is the most the flush deadline may sit past the start of the flush: half of the stop budget, the
-// other half being the tracing flush (stop_bound_test.go).
-const flushBoundCeiling = stopBoundBudget / 2
+// flushBoundContract is the flush bound the stop budget is built on: the 2 s tracing bound and this 1 s fit the 4 s stop
+// budget (stop_bound_test.go). It is a literal on purpose: a change of metricsFlushTimeout alone turns this file red.
+const flushBoundContract = time.Second
+
+func TestFlushBoundContract(t *testing.T) {
+	if metricsFlushTimeout != flushBoundContract {
+		t.Fatalf("metricsFlushTimeout = %v, want the contract %v: change both on purpose, with the stop budget", metricsFlushTimeout, flushBoundContract)
+	}
+}
 
 // TestMetricsFlushHandsTheSourceAContextBoundedByTheFlushTimeout pins what the shell tests that stop the whole process
-// cannot see: the push stop receives the flush context (a deadline at all), and that deadline is the flush bound, not
-// the shutdown budget. No wall time is measured: the deadline the source saw is compared with the instant before the call.
+// cannot see: the push stop receives the flush context, and its deadline is exactly the flush bound after the call, not
+// the shutdown budget. It runs in a synctest bubble: the clock is fake, so nothing is measured and nothing can race.
 func TestMetricsFlushHandsTheSourceAContextBoundedByTheFlushTimeout(t *testing.T) {
-	probe := deadlineProbe{got: make(chan time.Time, 1)}
-	flush := metricsFlush{source: probe, logger: slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
-	defer cancel()
-	before := time.Now()
-	if err := flush.Shutdown(ctx); err != nil {
-		t.Fatalf("Shutdown error = %v, want nil", err)
-	}
-	var deadline time.Time
-	select {
-	case deadline = <-probe.got:
-	case <-time.After(30 * time.Second):
-		t.Fatal("the source never saw the flush")
-	}
-	if deadline.IsZero() {
-		t.Fatal("the source got a context with no deadline: the flush bound never reaches the push stop")
-	}
-	if span := deadline.Sub(before); span > flushBoundCeiling {
-		t.Errorf("the source's deadline is %v after the call, want <= %v (metricsFlushTimeout %v)", span, flushBoundCeiling, metricsFlushTimeout)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		probe := deadlineProbe{got: make(chan time.Time, 1)}
+		flush := metricsFlush{source: probe, logger: slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+		defer cancel()
+		start := time.Now()
+		if err := flush.Shutdown(ctx); err != nil {
+			t.Fatalf("Shutdown error = %v, want nil", err)
+		}
+		deadline := <-probe.got
+		if deadline.IsZero() {
+			t.Fatal("the source got a context with no deadline: the flush bound never reaches the push stop")
+		}
+		if !deadline.Equal(start.Add(flushBoundContract)) {
+			t.Errorf("the source's deadline is %v after the call, want %v", deadline.Sub(start), flushBoundContract)
+		}
+	})
+}
+
+// TestMetricsFlushTakesHalfOfWhatIsLeftWhenThatIsLessThanTheFlushBound pins the half-budget rule: the components that
+// stop after the flush still need their share.
+func TestMetricsFlushTakesHalfOfWhatIsLeftWhenThatIsLessThanTheFlushBound(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		probe := deadlineProbe{got: make(chan time.Time, 1)}
+		flush := metricsFlush{source: probe, logger: slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))}
+		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+		defer cancel()
+		start := time.Now()
+		if err := flush.Shutdown(ctx); err != nil {
+			t.Fatalf("Shutdown error = %v, want nil", err)
+		}
+		deadline := <-probe.got
+		if !deadline.Equal(start.Add(750 * time.Millisecond)) {
+			t.Errorf("the source's deadline is %v after the call, want 750ms (half of the 1.5 s left)", deadline.Sub(start))
+		}
+	})
 }

@@ -292,8 +292,13 @@ echo RESUMED > @MARKER@
 	g.expect(diedWithin(pid, 3*time.Second), "the cancelled run exited but left the worker (pid %d) running: the trap did not tear down the services", pid)
 }
 
-// boundSecs is TEARDOWN_WAIT_SECS for the disposition check: long enough that paying it is unmistakable.
-const boundSecs = 8
+// boundSecs is TEARDOWN_WAIT_SECS for the SIGTERM-ignoring service in the disposition check: long enough that paying
+// it is unmistakable. promptBoundSecs is the bound while the prompt service is stopped: it is far above any host stall
+// (a 9 s stall is 2.2x below it), so only a watchdog that was never cancelled can fire.
+const (
+	boundSecs       = 8
+	promptBoundSecs = 20
+)
 
 func teardownFastUnderCleanupDisposition(g *guard) {
 	src, ok := teardownSource(g)
@@ -302,21 +307,26 @@ func teardownFastUnderCleanupDisposition(g *guard) {
 	}
 	log := filepath.Join(g.tmp, "kill-disposition.log")
 	// Services are forked FIRST (they must not inherit the ignore), then the disposition is set as cleanup() does.
-	// kill is wrapped to log its calls: the watchdog's escalation is the only kill -KILL <service pid> the library makes.
-	body := "set -euo pipefail\nTEARDOWN_WAIT_SECS=" + strconv.Itoa(boundSecs) + "\n" + src + sub(`
-kill() { echo "KILL $*" >> @LOG@; builtin kill "$@"; }
+	// kill and sleep are wrapped to log their calls, in order: the watchdog's escalation is the only kill -KILL <service
+	// pid> the library makes, and its first sleep 1 is the moment it is armed. The wrappers are defined after the
+	// services are forked, so only the library's own calls are logged.
+	body := "set -euo pipefail\nTEARDOWN_WAIT_SECS=" + strconv.Itoa(promptBoundSecs) + "\n" + src + sub(`
 set -m
 ( trap "" TERM; while :; do sleep 1; done ) & STUBBORN=$!
 ( while :; do sleep 1; done ) & PROMPT=$!
 set +m
 sleep 0.3
+kill() { echo "KILL $*" >> @LOG@; builtin kill "$@"; }
+sleep() { echo "SLEEP $*" >> @LOG@; command sleep "$@"; }
 trap '' INT TERM
+echo "PROMPT_PID=$PROMPT"
 stop_service prompt "$PROMPT"
 echo "PROMPT_WATCHDOG_FIRED=$(grep -c "^KILL -KILL ${PROMPT}$" @LOG@ || true)"
+TEARDOWN_WAIT_SECS=@BOUND@
 start=$SECONDS
 stop_service stubborn "$STUBBORN"
 echo "STUBBORN_ELAPSED=$((SECONDS - start))"
-`, "@LOG@", log)
+`, "@LOG@", log, "@BOUND@", strconv.Itoa(boundSecs))
 	r, ok := g.bash(g.launch, body, 60*time.Second)
 	if !ok {
 		return
@@ -329,12 +339,28 @@ echo "STUBBORN_ELAPSED=$((SECONDS - start))"
 	// A service that exits promptly must cancel the watchdog before its bound ends: the watchdog never fires its own
 	// kill -KILL <pid>. A count of calls, no time is compared (D6418).
 	fired := regexp.MustCompile(`PROMPT_WATCHDOG_FIRED=(\d+)`).FindStringSubmatch(r.stdout)
-	if fired == nil {
-		g.failf("no PROMPT_WATCHDOG_FIRED in %q: the script died before reaching it", r.stdout)
+	pid := regexp.MustCompile(`PROMPT_PID=(\d+)`).FindStringSubmatch(r.stdout)
+	if fired == nil || pid == nil {
+		g.failf("no PROMPT_WATCHDOG_FIRED or PROMPT_PID in %q: the script died before reaching them", r.stdout)
 		return
 	}
 	g.expect(fired[1] == "0",
 		"the watchdog of a service that exits promptly ran to its bound and killed it %s time(s): the watchdog was not cancelled (SIGTERM ignored via the inherited disposition?)", fired[1])
+	// Event order, no time: after the prompt service is signalled the next thing the library does that sleeps is the
+	// watchdog's own sleep 1; a slow step between the signal and the watchdog would show as another sleep first.
+	logged, _ := readIfExists(log)
+	signalled, next := false, ""
+	for _, line := range strings.Split(logged, "\n") {
+		if line == "KILL -TERM "+pid[1] {
+			signalled = true
+		} else if signalled && strings.HasPrefix(line, "SLEEP ") {
+			next = line
+			break
+		}
+	}
+	g.expect(signalled, "the log has no KILL -TERM %s: stop_service never signalled the prompt service (log %q)", pid[1], logged)
+	g.expect(next == "SLEEP 1",
+		"the first sleep after the prompt service was signalled is %q, want the watchdog's SLEEP 1: something slow ran before the watchdog was armed", next)
 	//abstime:allow lower-bound wait, load only lengthens it (precedent: allowlist.tsv backfillrun and faultproxy rows)
 	g.expect(stubborn >= boundSecs,
 		"a SIGTERM-ignoring service took only %ds against a %ds bound: the bound is not being honoured", stubborn, boundSecs)
@@ -503,6 +529,12 @@ func TestTeardownPlantedDefects(t *testing.T) {
 			name: "watchdog cancelled with SIGTERM", copy: subject,
 			mutate: mut(libRel, "  kill -KILL \"${watchdog}\"", "  kill -TERM \"${watchdog}\""),
 			check:  teardownFastUnderCleanupDisposition, want: "watchdog was not cancelled",
+		},
+		planted{
+			// A slow step between signalling the service and arming the watchdog (the elapsed time the old ratio saw).
+			name: "slow step before the watchdog is armed", copy: subject,
+			mutate: mut(libRel, "  kill -TERM \"${pid}\" >/dev/null 2>&1 || true\n", "  kill -TERM \"${pid}\" >/dev/null 2>&1 || true\n  sleep 4\n"),
+			check:  teardownFastUnderCleanupDisposition, want: "before the watchdog was armed",
 		},
 		planted{
 			name: "stop_service does not wait for the service", copy: subject,

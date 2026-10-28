@@ -171,12 +171,15 @@ func runShellShutdownHelper() {
 		done <- Execute(ctx, Spec{Service: "dev-health-worker"}, nil, lookup, IO{Stdout: &stdout, Stderr: &stderr})
 	}()
 	time.Sleep(1500 * time.Millisecond)
+	_, _ = os.Stdout.WriteString("READY\n")
+	_, _ = os.Stdin.Read(make([]byte, 1))
 	cancel()
 	code := <-done
 	_, _ = os.Stderr.WriteString("SHUTDOWN_CODE=" + strconv.Itoa(code) + "\n" + stdout.String() + stderr.String())
 	os.Exit(0)
 }
 
+// Named limit: a process that stays alive less than the 25 s failure ceiling past the stop request passes (see stopDriven).
 // TestAnUnreachableCollectorCostsTheStopAtMostTheFlushBound: with the OTLP push
 // on and nothing listening on the collector port, the stop returns inside the
 // metrics flush bound plus slack, with exit code 0, not after the whole
@@ -208,20 +211,7 @@ func TestAnUnreachableCollectorCostsTheStopAtMostTheFlushBound(t *testing.T) {
 		"OTEL_EXPORTER_OTLP_ENDPOINT="+closedAddress,
 		"OTEL_METRIC_EXPORT_INTERVAL=200",
 	)
-	var output bytes.Buffer
-	command.Stdout, command.Stderr = &output, &output
-	done := make(chan error, 1)
-	if err := command.Start(); err != nil {
-		t.Fatal(err)
-	}
-	go func() { done <- command.Wait() }()
-	select {
-	case <-done:
-	case <-time.After(25 * time.Second):
-		_ = command.Process.Kill()
-		t.Fatalf("the shell did not stop within 25 s; output:\n%s", output.String())
-	}
-	text := output.String()
+	text := stopDriven(t, command, 25*time.Second)
 	index := strings.Index(text, "SHUTDOWN_CODE=")
 	if index < 0 {
 		t.Fatalf("the helper did not report its stop time:\n%s", text)

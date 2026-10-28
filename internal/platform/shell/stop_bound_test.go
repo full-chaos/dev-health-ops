@@ -1,9 +1,11 @@
 package shell
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -38,6 +40,8 @@ func runStopBoundHelper() {
 	_, span := otel.Tracer("stop-bound").Start(context.Background(), "buffered")
 	span.End()
 	time.Sleep(200 * time.Millisecond)
+	_, _ = os.Stdout.WriteString("READY\n")
+	_, _ = os.Stdin.Read(make([]byte, 1))
 	cancel()
 	code := <-done
 	_, _ = os.Stderr.WriteString("STOP_CODE=" + strconv.Itoa(code) + "\n")
@@ -55,8 +59,10 @@ func runStopBoundHelper() {
 // stop ended inside that budget: exit 0 and no shutdown-error or abandoned-flush
 // line. The component bounds (tracing.shutdownFlushTimeout, metricsFlushTimeout)
 // are summed here against the one number the container smoke cares about.
-// Named limit: a flush bound raised by less than the slack left under the budget
-// passes here; tracing/flush_test.go owns the tracing bound.
+// Named limits: a flush bound raised by less than the slack left under the budget
+// passes here (tracing/flush_test.go owns the tracing bound); and a process that
+// stays alive less than the 30 s failure ceiling past the stop request passes (a
+// tighter wall bound is about 1.27x of hosted headroom, the D6418 eject class).
 func TestTheWholeStopWithEveryTelemetryEndpointDownStaysUnderTheContainerBudget(t *testing.T) {
 	if os.Getenv("STOP_BOUND_HELPER") == "1" {
 		runStopBoundHelper()
@@ -84,20 +90,7 @@ func TestTheWholeStopWithEveryTelemetryEndpointDownStaysUnderTheContainerBudget(
 		"OTEL_EXPORTER_OTLP_ENDPOINT="+closedAddress,
 		"OTEL_METRIC_EXPORT_INTERVAL=200",
 	)
-	var output bytes.Buffer
-	command.Stdout, command.Stderr = &output, &output
-	if err := command.Start(); err != nil {
-		t.Fatal(err)
-	}
-	done := make(chan error, 1)
-	go func() { done <- command.Wait() }()
-	select {
-	case <-done:
-	case <-time.After(30 * time.Second):
-		_ = command.Process.Kill()
-		t.Fatalf("the shell did not stop within 30 s; output:\n%s", output.String())
-	}
-	text := output.String()
+	text := stopDriven(t, command, 30*time.Second)
 	index := strings.Index(text, "STOP_CODE=")
 	if index < 0 {
 		t.Fatalf("the helper did not report its stop time:\n%s", text)
@@ -120,4 +113,64 @@ func TestTheWholeStopWithEveryTelemetryEndpointDownStaysUnderTheContainerBudget(
 	if !strings.Contains(text, "final flush timed out") {
 		t.Errorf("the buffered span was not reported as dropped; the sampled span did not reach the flush:\n%s", text)
 	}
+}
+
+// stopDriven runs command, a helper that prints READY on stdout and then waits for
+// one byte on stdin before it stops, and drives the stop by events: wait for READY,
+// check the process is still alive before the stop request (it must not exit on its
+// own), send the byte, wait for the exit (Wait returned). The ceiling only guards
+// the failure path; no elapsed time is compared. It returns the stderr output.
+func stopDriven(t *testing.T, command *exec.Cmd, ceiling time.Duration) string {
+	t.Helper()
+	var output bytes.Buffer
+	command.Stderr = &output
+	stdin, err := command.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	ready, drained := make(chan struct{}), make(chan struct{})
+	go func() {
+		reader := bufio.NewReader(stdout)
+		if line, _ := reader.ReadString('\n'); strings.TrimSpace(line) == "READY" {
+			close(ready)
+		}
+		_, _ = io.Copy(io.Discard, reader)
+		close(drained)
+	}()
+	done := make(chan error, 1)
+	go func() {
+		<-drained
+		done <- command.Wait()
+	}()
+	select {
+	case <-ready:
+	case <-done:
+		t.Fatalf("the helper exited before READY; output:\n%s", output.String())
+	case <-time.After(ceiling):
+		_ = command.Process.Kill()
+		<-done
+		t.Fatalf("the helper never printed READY within the %v ceiling; output:\n%s", ceiling, output.String())
+	}
+	select {
+	case <-done:
+		t.Fatalf("the helper exited before the stop request; output:\n%s", output.String())
+	default:
+	}
+	_, _ = stdin.Write([]byte{'x'})
+	_ = stdin.Close()
+	select {
+	case <-done:
+	case <-time.After(ceiling):
+		_ = command.Process.Kill()
+		<-done
+		t.Fatalf("the process did not exit within the %v ceiling after the stop request; output:\n%s", ceiling, output.String())
+	}
+	return output.String()
 }

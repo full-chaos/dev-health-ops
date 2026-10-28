@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/keystore"
@@ -635,7 +636,15 @@ func TestKeyStatesRefreshAgainstAHungSourceHoldsNoRequest(t *testing.T) {
 			}
 		}()
 	}
-	wg.Wait()
+	// Callers that wait for the hung read never return: the wait below is a guard for the failure path only, a passing run never
+	// reaches it.
+	callersDone := make(chan struct{})
+	go func() { wg.Wait(); close(callersDone) }()
+	select {
+	case <-callersDone:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the callers are still waiting on the hung read: a refresh against a hung source holds the requests")
+	}
 	if states.idle() {
 		t.Fatal("the refresh is not in flight after the callers returned: the callers did not answer while the read was hung")
 	}
@@ -675,18 +684,23 @@ func waitIdle(t *testing.T, states *KeyStates) {
 // With no snapshot at all, a caller waits for the read but never longer than
 // its own context, and is refused (fail closed), not served nothing.
 func TestKeyStatesColdStartAgainstAHungSourceFailsClosedAtTheCallersDeadline(t *testing.T) {
-	source := &hungStates{hang: true}
-	// The read timeout is an hour: only the caller's context can end this wait.
-	states := NewKeyStates(KeyStatesConfig{Source: source, ReadTimeout: time.Hour})
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-	rows, err := states.Rows(ctx)
-	if !reasonIs(err, ReasonKeyStatesUnavailable) || rows != nil {
-		t.Fatalf("cold read = %v, %v; want %s", rows, err, ReasonKeyStatesUnavailable)
-	}
-	if ctx.Err() == nil {
-		t.Fatal("the cold read ended before its caller's context did")
-	}
+	// The bubble runs on a virtual clock: Rows returns at the caller's deadline or it does not, whatever the host load.
+	synctest.Test(t, func(t *testing.T) {
+		source := &hungStates{hang: true}
+		// The read timeout is an hour: only the caller's context can end this wait.
+		states := NewKeyStates(KeyStatesConfig{Source: source, ReadTimeout: time.Hour})
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		deadline, _ := ctx.Deadline()
+		rows, err := states.Rows(ctx)
+		returnedAt := time.Now()
+		if !reasonIs(err, ReasonKeyStatesUnavailable) || rows != nil {
+			t.Fatalf("cold read = %v, %v; want %s", rows, err, ReasonKeyStatesUnavailable)
+		}
+		if returnedAt.After(deadline) {
+			t.Fatalf("the cold read returned %v after its caller's deadline: it waited for something other than the caller's context", returnedAt.Sub(deadline))
+		}
+	})
 }
 
 // A compromise that lands in a background refresh is applied by the very next

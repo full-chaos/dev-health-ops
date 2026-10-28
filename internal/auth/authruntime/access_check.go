@@ -26,10 +26,11 @@ func withAccessCheck(cfg authconfig.Config, logger *slog.Logger, signer authapi.
 	return issuer.WithAccessCheck(check), nil
 }
 
-// credentialIssuer is the issuer of the password routes: the HS256 issuer with
-// the access check.
-func credentialIssuer(cfg authconfig.Config, logger *slog.Logger, signer authapi.AccessSigner, _ authapi.KidRecorder) (*authapi.Issuer, error) {
-	issuer, err := authapi.NewIssuer(cfg.Session.AccessSecret.Reveal(), cfg.Session.AccessIssuer, cfg.Session.AccessAudience)
+// credentialIssuer is the issuer of the password routes: the one production
+// builder of the session routes' issuer, so the access token a password change
+// returns is of the configured class and its signing kid is recorded.
+func credentialIssuer(cfg authconfig.Config, logger *slog.Logger, signer authapi.AccessSigner, recorder authapi.KidRecorder) (*authapi.Issuer, error) {
+	issuer, err := newRecordingIssuer(cfg, signer, recorder)
 	if err != nil {
 		return nil, err
 	}

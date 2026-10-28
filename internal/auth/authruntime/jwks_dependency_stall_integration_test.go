@@ -27,6 +27,7 @@ type blackholeProxy struct {
 	listener net.Listener
 	target   string
 	hole     atomic.Bool
+	dropped  atomic.Int64 // bytes read from a client while the hole was open (never forwarded)
 	mu       sync.Mutex
 	conns    []net.Conn
 }
@@ -69,8 +70,14 @@ func (p *blackholeProxy) serve() {
 
 func (p *blackholeProxy) handle(client net.Conn) {
 	if p.hole.Load() {
-		_, _ = io.Copy(io.Discard, client)
-		return
+		buffer := make([]byte, 32<<10)
+		for {
+			n, err := client.Read(buffer)
+			p.dropped.Add(int64(n))
+			if err != nil {
+				return
+			}
+		}
 	}
 	upstream, err := net.Dial("tcp", p.target)
 	if err != nil {
@@ -88,6 +95,9 @@ func (p *blackholeProxy) pipe(dst, src net.Conn) {
 	buffer := make([]byte, 32<<10)
 	for {
 		n, err := src.Read(buffer)
+		if n > 0 && p.hole.Load() {
+			p.dropped.Add(int64(n))
+		}
 		if n > 0 && !p.hole.Load() {
 			if _, werr := dst.Write(buffer[:n]); werr != nil {
 				return
@@ -196,7 +206,37 @@ func TestJWKSAnswersWhileTheDatabaseIsBlackholed(t *testing.T) {
 	}
 	baselineP50, baselineMax := baselineTook[probes/2], baselineTook[probes-1]
 
+	// The healthy burst above started the key-state refresh and made the snapshot fresh (a refresh starts at most once per
+	// KeyStateRefresh): let it become due again, so that the first JWKS request after the fault is the one that starts the
+	// read and waits for it inline (the path this test guards). Without this the faulted burst would be served from a fresh
+	// snapshot and never reach that path.
+	time.Sleep(token.KeyStateRefresh + time.Second)
+
 	proxy.hole.Store(true)
+	// The due request goes first and alone, so that the only database traffic during the fault is its key-state read; the
+	// test proves that read reached the blackhole (the inline wait is in progress) before it goes on.
+	var dueStatus int
+	var dueTook time.Duration
+	dueDone := make(chan struct{})
+	droppedBefore := proxy.dropped.Load()
+	go func() {
+		defer close(dueDone)
+		start := time.Now()
+		response, err := client.Get(e.front.URL + "/.well-known/jwks.json")
+		dueTook = time.Since(start)
+		if err == nil {
+			dueStatus = response.StatusCode
+			_, _ = io.Copy(io.Discard, response.Body)
+			_ = response.Body.Close()
+		}
+	}()
+	reachDeadline := time.Now().Add(15 * time.Second)
+	for proxy.dropped.Load() == droppedBefore {
+		if time.Now().After(reachDeadline) {
+			t.Fatal("the due JWKS request's key-state read never reached the blackhole within the 15 s guard: the faulted burst cannot reach the inline-wait path")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	var wg sync.WaitGroup
 	var held atomic.Int64
 	for i := 1; i <= stallers; i++ {
@@ -212,36 +252,39 @@ func TestJWKSAnswersWhileTheDatabaseIsBlackholed(t *testing.T) {
 	time.Sleep(requestTimeout / 4)
 
 	statuses, took := jwksBurst()
+	<-dueDone
 	wg.Wait()
+	statuses = append(statuses, dueStatus)
+	faultedMax := max(took[probes-1], dueTook)
 
 	counts := map[int]int{}
 	for _, status := range statuses {
 		counts[status]++
 	}
-	t.Logf("load: %d stalled logins, %d held >= %s; %d JWKS GETs at concurrency %d; JWKS statuses=%v p50=%s p99=%s p100=%s",
-		stallers, held.Load(), requestTimeout/2, probes, probes, counts, took[probes/2], took[probes*99/100], took[probes-1])
+	t.Logf("load: %d stalled logins, %d held >= %s; %d JWKS GETs at concurrency %d; JWKS statuses=%v p50=%s p99=%s p100=%s due request=%s",
+		stallers, held.Load(), requestTimeout/2, probes, probes, counts, took[probes/2], took[probes*99/100], took[probes-1], dueTook)
 	if held.Load() < maxInFlightRequests {
 		t.Fatalf("only %d logins were held by the blackhole, want >= %d: the fault did not stall the database routes", held.Load(), maxInFlightRequests)
 	}
-	if counts[http.StatusOK] != probes {
+	if counts[http.StatusOK] != probes+1 {
 		for _, line := range strings.Split(e.logs.String(), "\n") {
 			if strings.Contains(line, "well-known") || strings.Contains(line, "jwks") {
 				t.Log(line)
 				break
 			}
 		}
-		t.Errorf("JWKS answered %v, want %d x 200 (0 x 429)", counts, probes)
+		t.Errorf("JWKS answered %v, want %d x 200 (0 x 429)", counts, probes+1)
 	}
 	// The ratio against the healthy burst of this test (D6418: a ratio in the same process, not an absolute time): a JWKS
 	// request that waits on the blackholed database is slower by orders of magnitude (its wait is the request timeout).
 	// A check fails only when it is over BOTH its ratio bound AND 1 s (the floor keeps two tiny durations from a flaky ratio).
 	p50Limit, maxLimit := max(5*baselineP50, time.Second), max(25*baselineMax, time.Second)
 	t.Logf("JWKS ratio vs the healthy burst: p50 %s vs %s (%.1fx, bound 5x and 1s), max %s vs %s (%.1fx, bound 25x and 1s)",
-		took[probes/2], baselineP50, float64(took[probes/2])/float64(baselineP50), took[probes-1], baselineMax, float64(took[probes-1])/float64(baselineMax))
+		took[probes/2], baselineP50, float64(took[probes/2])/float64(baselineP50), faultedMax, baselineMax, float64(faultedMax)/float64(baselineMax))
 	if took[probes/2] > p50Limit {
 		t.Errorf("JWKS p50 ratio: p50 %s under the fault vs %s healthy: over 5x the baseline p50 and over 1 s: the JWKS answer waited on the dead database", took[probes/2], baselineP50)
 	}
-	if took[probes-1] > maxLimit {
-		t.Errorf("JWKS max ratio: slowest %s under the fault vs %s healthy: over 25x the baseline max and over 1 s: the JWKS answer waited on the dead database", took[probes-1], baselineMax)
+	if faultedMax > maxLimit {
+		t.Errorf("JWKS max ratio: slowest %s under the fault vs %s healthy: over 25x the baseline max and over 1 s: the JWKS answer waited on the dead database", faultedMax, baselineMax)
 	}
 }

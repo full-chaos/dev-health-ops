@@ -276,3 +276,21 @@ func TestStreamingExecutorFinishesAnEmissionWhoseSidecarLengthCrossesAPowerOfTen
 		}
 	}
 }
+
+// A stamp that does not settle surfaces as the policy refusal, through the encoder and through the store's
+// material builder; it is never the checkpoint conflict. (The pass bound is a variable only for this test.)
+func TestAStampThatDoesNotSettleIsRefusedAsPolicyNotAsConflict(t *testing.T) {
+	chunk := chunkEndingAt(t, 10002)
+	previous := maxPayloadStampPasses
+	maxPayloadStampPasses = 2
+	t.Cleanup(func() { maxPayloadStampPasses = previous })
+
+	if _, err := encodedPreparedChunkPayload(chunk); !errors.Is(err, ErrChunkPolicyExceeded) || errors.Is(err, ErrChunkCheckpointConflict) {
+		t.Fatalf("encoder: %v: want ErrChunkPolicyExceeded and not ErrChunkCheckpointConflict", err)
+	}
+	claim := nativeTestClaim("github", "cicd")
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	if _, err := buildPreparedChunkMaterial(claim, chunk, now); !errors.Is(err, ErrChunkPolicyExceeded) || errors.Is(err, ErrChunkCheckpointConflict) {
+		t.Fatalf("material: %v: want ErrChunkPolicyExceeded and not ErrChunkCheckpointConflict", err)
+	}
+}

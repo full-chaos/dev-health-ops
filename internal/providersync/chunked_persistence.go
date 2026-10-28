@@ -316,7 +316,7 @@ var errChunkPayloadStamp = fmt.Errorf("%w: payload_bytes stamp did not converge"
 // maxPayloadStampPasses bounds stampPayloadBytes. The stamp starts at 0 and each pass sets it to base+digits(stamp):
 // it never decreases and grows by less than 8 per pass, so it crosses at most one power of ten and settles in four
 // passes for any sidecar within the 2 MiB cap.
-const maxPayloadStampPasses = 8
+var maxPayloadStampPasses = 8
 
 // stampPayloadBytes finds the payload_bytes value that the encoding of the sidecar that carries it measures
 // exactly: measure(stamp) == stamp. The number is part of the bytes it counts, so a fixed number of passes is not

@@ -54,6 +54,17 @@ load_registry() {
   [ "${#rows[@]}" -gt 0 ] || die "registry holds no row"
 }
 
+# The ROW line format lives here and only here: emit_row writes it, parse_row reads it. A line that starts with ROW and
+# does not parse is a usage error, never a skipped line.
+emit_row() { printf 'ROW\t%s\t%s\n' "$1" "$2"; }
+ROW_PKG="" ROW_RE=""
+parse_row() {
+  split_tabs 3 "$1"
+  [ "${F1}" = "ROW" ] || die "malformed ROW line: $1"
+  ROW_PKG="${F2}"
+  ROW_RE="${F3}"
+}
+
 emit_all() {
   local row pkg re
   echo "VERDICT all $1"
@@ -61,7 +72,7 @@ emit_all() {
     pkg="${row%%$'\x1f'*}"
     re="${row#*$'\x1f'}"
     re="${re%%$'\x1f'*}"
-    printf 'ROW\t%s\t%s\n' "${pkg}" "${re}"
+    emit_row "${pkg}" "${re}"
   done
 }
 
@@ -121,7 +132,7 @@ select_rows() {
     pkg="${row%%$'\x1f'*}"
     re="${row#*$'\x1f'}"
     re="${re%%$'\x1f'*}"
-    printf 'ROW\t%s\t%s\n' "${pkg}" "${re}"
+    emit_row "${pkg}" "${re}"
   done
 }
 
@@ -137,31 +148,40 @@ message() {
 
 out=""
 run_rows() {
-  local file="${1:-}" pkg re line failed=0 count=0 rc
+  local file="${1:-}" line failed=0 rc i verdict=""
+  local -a pkgs=() res=()
   [ -n "${file}" ] && [ -r "${file}" ] || die "run needs a readable ROWS_FILE"
   trap 'rm -f "${out:-}"' EXIT
+  # Pass 1 reads the whole file before any test runs: any malformed ROW line, or a rows file that names no row without an
+  # explicit "VERDICT none", exits 2 and runs nothing.
   while IFS= read -r line || [ -n "${line}" ]; do
-    case "${line}" in ROW$'\t'*) ;; *) continue ;; esac
-    split_tabs 3 "${line}"
-    pkg="${F2}"
-    re="${F3}"
-    count=$((count + 1))
-    echo "== golden drift: ${pkg} -run ${re}"
+    case "${line}" in
+      ROW*) parse_row "${line}"; pkgs+=("${ROW_PKG}"); res+=("${ROW_RE}") ;;
+      "VERDICT none"*) verdict="none" ;;
+      "VERDICT select"* | "VERDICT all"*) verdict="rows" ;;
+    esac
+  done < "${file}"
+  if [ "${#pkgs[@]}" -eq 0 ]; then
+    [ "${verdict}" = "none" ] || die "rows file names no ROW and no VERDICT none: nothing would run"
+    echo "check_golden_drift.sh: VERDICT none, no ROW to run"
+    return 0
+  fi
+  for i in "${!pkgs[@]}"; do
+    echo "== golden drift: ${pkgs[i]} -run ${res[i]}"
     out="$(mktemp)"
     rc=0
-    (cd "${ROOT}" && env -u GOFLAGS -u GOEXPERIMENT GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m -v -run "${re}" "./${pkg}") >> "${out}" 2>&1 || rc=$?
+    (cd "${ROOT}" && env -u GOFLAGS -u GOEXPERIMENT GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m -v -run "${res[i]}" "./${pkgs[i]}") >> "${out}" 2>&1 || rc=$?
     cat "${out}"
     if [ "${rc}" -ne 0 ]; then
-      message "${pkg}" "${re}"
+      message "${pkgs[i]}" "${res[i]}"
       failed=1
     elif ! grep -q '^--- PASS: ' "${out}"; then
-      echo "check_golden_drift.sh: -run ${re} matched no passing test in ${pkg}; fix the registry row" >&2
-      message "${pkg}" "${re}"
+      echo "check_golden_drift.sh: -run ${res[i]} matched no passing test in ${pkgs[i]}; fix the registry row" >&2
+      message "${pkgs[i]}" "${res[i]}"
       failed=1
     fi
     rm -f "${out}"
-  done < "${file}"
-  [ "${count}" -gt 0 ] || { echo "check_golden_drift.sh: no ROW to run"; return 0; }
+  done
   return "${failed}"
 }
 

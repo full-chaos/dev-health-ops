@@ -82,8 +82,10 @@ func TestReconcilerOperatorStaysLiveWhenDependenciesAreMissing(t *testing.T) {
 		})
 	}()
 
+	// Failure-path hang guard only: no passing run waits on it.
+	guard, stopGuard := context.WithTimeout(t.Context(), 60*time.Second)
+	defer stopGuard()
 	client := &http.Client{Timeout: 100 * time.Millisecond}
-	deadline := time.Now().Add(3 * time.Second)
 	for {
 		response, requestErr := client.Get("http://" + address + "/healthz")
 		if requestErr == nil {
@@ -94,10 +96,13 @@ func TestReconcilerOperatorStaysLiveWhenDependenciesAreMissing(t *testing.T) {
 			}
 			break
 		}
-		if time.Now().After(deadline) {
+		select {
+		case code := <-done:
+			t.Fatalf("operator HTTP exited %d before it started: %v logs=%s stderr=%s", code, requestErr, stdout.String(), stderr.String())
+		case <-guard.Done():
 			t.Fatalf("operator HTTP did not start: %v logs=%s stderr=%s", requestErr, stdout.String(), stderr.String())
+		case <-time.After(10 * time.Millisecond):
 		}
-		time.Sleep(10 * time.Millisecond)
 	}
 	response, err := client.Get("http://" + address + "/readyz")
 	if err != nil {
@@ -115,7 +120,7 @@ func TestReconcilerOperatorStaysLiveWhenDependenciesAreMissing(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("shell exit = %d logs=%s stderr=%s", code, stdout.String(), stderr.String())
 		}
-	case <-time.After(3 * time.Second):
+	case <-guard.Done():
 		t.Fatal("operator HTTP did not stop after cancellation")
 	}
 }

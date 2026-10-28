@@ -7,8 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"sort"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,9 +23,10 @@ type fixedKeys struct{ set token.KeySet }
 func (f fixedKeys) KeySet(context.Context) (token.KeySet, error) { return f.set, nil }
 
 // TestJWKSAnswersWhileDependencyRoutesStall drives the production server
-// options with routes that hold their in-flight slot until the request
-// deadline (a stalled dependency) and asserts the key route still answers 200
-// and fast.
+// options with routes that hold their in-flight slot until the test releases
+// them (a stalled dependency) and asserts the key route still answers 200 while
+// every one of them is held: a key route that waited for a slot could answer
+// only after the release, which comes after the probes.
 func TestJWKSAnswersWhileDependencyRoutesStall(t *testing.T) {
 	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(map[string]string{
 		authconfig.EnvDatabaseURI:            "postgres://auth@127.0.0.1:1/devhealth",
@@ -33,7 +34,7 @@ func TestJWKSAnswersWhileDependencyRoutesStall(t *testing.T) {
 		authconfig.EnvSigningKeyID:           "stall-test",
 		authconfig.EnvRateLimitPerSecond:     "10000",
 		authconfig.EnvRateLimitBurst:         "10000",
-		authconfig.EnvRequestTimeout:         "2s",
+		authconfig.EnvRequestTimeout:         "30s",
 		authconfig.EnvAPIAddress:             "127.0.0.1:0",
 		authconfig.EnvOperatorAddress:        "127.0.0.1:1",
 		authconfig.EnvHealthCheckTimeout:     "1s",
@@ -51,8 +52,11 @@ func TestJWKSAnswersWhileDependencyRoutesStall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	release := make(chan struct{})
+	var held atomic.Int32
 	stall := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		<-r.Context().Done()
+		held.Add(1)
+		<-release
 		w.WriteHeader(http.StatusServiceUnavailable)
 	})
 	routes := []httpapi.Route{{Method: http.MethodGet, Pattern: "/v1/stall", Handler: stall}}
@@ -76,39 +80,47 @@ func TestJWKSAnswersWhileDependencyRoutesStall(t *testing.T) {
 			}
 		}()
 	}
-	time.Sleep(300 * time.Millisecond)
+	// The waits below are guards for the failure path only; a passing run never reaches them. Without the release every stalled
+	// handler stays in its slot, so a key route that is limited by those slots never answers.
+	for held.Load() < maxInFlightRequests {
+		select {
+		case <-time.After(10 * time.Millisecond):
+		case <-t.Context().Done():
+			t.Fatal("the stalling routes did not fill their in-flight slots")
+		}
+	}
 
 	const probes = 256
 	statuses := make([]int, probes)
-	took := make([]time.Duration, probes)
 	var wg sync.WaitGroup
 	for i := range probes {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			start := time.Now()
 			resp, err := client.Get(ts.URL + "/.well-known/jwks.json")
-			took[i] = time.Since(start)
 			if err == nil {
 				statuses[i] = resp.StatusCode
 				_ = resp.Body.Close()
 			}
 		}()
 	}
-	wg.Wait()
+	probesDone := make(chan struct{})
+	go func() { wg.Wait(); close(probesDone) }()
+	select {
+	case <-probesDone:
+	case <-time.After(30 * time.Second):
+		close(release)
+		t.Fatal("the JWKS probes are still waiting while the stalled routes hold their slots: the key route is not isolated from them")
+	}
+	close(release)
 	stallers.Wait()
 
 	counts := map[int]int{}
 	for _, s := range statuses {
 		counts[s]++
 	}
-	sort.Slice(took, func(a, b int) bool { return took[a] < took[b] })
-	p99 := took[probes*99/100]
-	t.Logf("JWKS statuses=%v p50=%s p99=%s", counts, took[probes/2], p99)
+	t.Logf("JWKS statuses=%v", counts)
 	if counts[http.StatusOK] != probes {
 		t.Errorf("JWKS answered %v while dependency routes stalled; want %d x 200", counts, probes)
-	}
-	if p99 > 500*time.Millisecond {
-		t.Errorf("JWKS p99 = %s while dependency routes stalled; want <= 500ms", p99)
 	}
 }

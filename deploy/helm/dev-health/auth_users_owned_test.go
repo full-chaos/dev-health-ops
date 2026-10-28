@@ -43,7 +43,7 @@ func TestUsersOwnedCannotBeSetThroughExtraEnv(t *testing.T) {
 // Phase 4 (users owned): auth-service, the auth-migrate and auth-grants hooks and the auth-backfill Job all carry
 // AUTH_USERS_OWNED=true, and none carries AUTH_ORGS_OWNED.
 func TestUsersOwnedRendersAtPhase4(t *testing.T) {
-	docs, out, err := renderAuth(t, goAPIWithAuth(append([]string{"--set", "authService.phase=4"}, phase3Secrets...)...)...)
+	docs, out, err := renderAuth(t, goAPIWithAuth(append([]string{"--set", "authService.phase=4", "--set", "authService.usersOwnedStage=owned"}, phase3Secrets...)...)...)
 	if err != nil {
 		t.Fatalf("phase 4: render: %v\n%.400s", err, out)
 	}
@@ -67,8 +67,8 @@ func TestUsersOwnedRendersAtPhase4(t *testing.T) {
 }
 
 func TestUsersOwnedRendersOnBackfillJobAtPhase4(t *testing.T) {
-	args := withSets(append(append([]string{}, backfillOn...), phase3Secrets...), "authService.backfill.verb=users-backfill", "authService.phase=4")
-	args = append(append(args, sessionReaders...), sessionSuccessor...)
+	args := withSets(append(append([]string{}, backfillOn...), phase3Secrets...), "authService.backfill.verb=users-backfill", "authService.phase=4", "authService.usersOwnedStage=owned", "goApi.enabled=true")
+	args = append(append(append(args, sessionReaders...), sessionSuccessor...), authTrusted...)
 	_, job := renderBackfill(t, args)
 	if value, set := containerEnvValue(t, job, "AUTH_USERS_OWNED"); !set || value != "true" {
 		t.Errorf("phase 4: auth-backfill Job AUTH_USERS_OWNED=%q set=%v; want true", value, set)

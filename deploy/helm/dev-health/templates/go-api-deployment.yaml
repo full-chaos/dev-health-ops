@@ -266,7 +266,7 @@ spec:
               valueFrom: {secretKeyRef: {name: {{ include "dev-health.sessionIssueSecretName" . }}, key: {{ required "goApi.sessionIssue.secretKey is required" (default dict .Values.goApi.sessionIssue).secretKey }}}}
             {{- end }}
             {{- end }}
-            {{- if eq (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true" }}
+            {{- if eq (include "dev-health.authOn" (dict "flag" "goApiUsersOwned" "context" .)) "true" }}
             - name: AUTH_USERS_OWNED
               value: "true"
             {{- end }}

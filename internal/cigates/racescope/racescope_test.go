@@ -53,10 +53,23 @@ func TestEveryRaceExcludedPackageIsProvenFreeOfConcurrency(t *testing.T) {
 	}
 }
 
+// planEnv drops the variables that narrow check_go.sh's plans: a PR leg exports them to the whole leg, and this test wants the whole plan.
+func planEnv(environ []string) []string {
+	var out []string
+	for _, kv := range environ {
+		if strings.HasPrefix(kv, "GO_QUALITY_SELECTION_FILE=") || strings.HasPrefix(kv, "GO_RACE_EXCLUDED_TESTS=") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
 func planFor(t *testing.T, root, plan string, shard, count int) map[string]bool {
 	t.Helper()
 	cmd := exec.Command("bash", "ci/check_go.sh", plan, strconv.Itoa(shard), strconv.Itoa(count))
 	cmd.Dir = root
+	cmd.Env = planEnv(os.Environ())
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("ci/check_go.sh %s %d %d: %v", plan, shard, count, err)
@@ -561,5 +574,19 @@ func TestARowWhoseClosureStartsGoroutinesIsRefusedEvenWhenItNamesACoveringPackag
 		if got := problemsOf(t, files, covered); !strings.Contains(got, "an in-module package") {
 			t.Errorf("%s: want the closure of a judged without the covered-by shortcut, got:\n%s", name, got)
 		}
+	}
+}
+
+// A PR leg exports GO_QUALITY_SELECTION_FILE (an AFFECTED verdict) to every process of the leg, including this test; the plan it asks
+// check_go.sh for must be the whole plan, so the inherited selection must not reach the script. Serial: it sets the environment.
+func TestPlanForIgnoresAnInheritedQualitySelection(t *testing.T) {
+	sel := filepath.Join(t.TempDir(), "selection.txt")
+	if err := os.WriteFile(sel, []byte("AFFECTED 1\ncmd/dho\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GO_QUALITY_SELECTION_FILE", sel)
+	plan := planFor(t, repoRoot(t), "test-shard-plan", 1, 1)
+	if len(plan) <= 100 || !plan["internal/teamid"] {
+		t.Errorf("the test plan holds %d package(s) under an inherited selection, want the whole plan incl. internal/teamid", len(plan))
 	}
 }

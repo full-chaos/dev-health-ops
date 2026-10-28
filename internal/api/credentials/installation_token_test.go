@@ -8,6 +8,7 @@ import (
 	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -27,6 +28,27 @@ func testPrivateKey(t *testing.T) string {
 // retries a timed-out attempt as a transient failure (up to three attempts).
 // The timeout and the first retry delay are shortened here; the shape is the
 // same.
+// attemptRecorder is the client transport of the retry test: for every attempt it records when the attempt was handed to it, and
+// then the deadline the attempt's context carries.
+type attemptRecorder struct {
+	mu       sync.Mutex
+	attempts []recordedAttempt
+}
+
+type recordedAttempt struct {
+	handedAt, deadline time.Time
+	hasDeadline        bool
+}
+
+func (r *attemptRecorder) RoundTrip(request *http.Request) (*http.Response, error) {
+	handedAt := time.Now()
+	deadline, ok := request.Context().Deadline()
+	r.mu.Lock()
+	r.attempts = append(r.attempts, recordedAttempt{handedAt: handedAt, deadline: deadline, hasDeadline: ok})
+	r.mu.Unlock()
+	return http.DefaultTransport.RoundTrip(request)
+}
+
 func TestInstallationTokenAttemptTimesOutAndIsRetried(t *testing.T) {
 	previousTimeout, previousDelay := installationTokenTimeout, installationTokenRetryDelay
 	installationTokenTimeout, installationTokenRetryDelay = 100*time.Millisecond, 5*time.Millisecond
@@ -48,7 +70,8 @@ func TestInstallationTokenAttemptTimesOutAndIsRetried(t *testing.T) {
 	}))
 	t.Cleanup(func() { close(release); server.Close() })
 
-	h := handlers{client: &http.Client{}} // no Timeout, as the production default
+	recorder := &attemptRecorder{}
+	h := handlers{client: &http.Client{Transport: recorder}} // no Timeout, as the production default
 	gc := &githubCredentials{appID: "1", privateKey: testPrivateKey(t), installationID: "111", app: true}
 	// A hung attempt ends only through the client's own timeout (the handler waits for release or the request context), so a token
 	// after two hung attempts shows that each of them timed out.
@@ -58,6 +81,22 @@ func TestInstallationTokenAttemptTimesOutAndIsRetried(t *testing.T) {
 	}
 	if got := requests.Load(); got != 3 {
 		t.Errorf("%d requests, want 3 (two timed-out attempts, then success)", got)
+	}
+	// Each attempt carries a deadline no later than twice the configured attempt timeout after it was handed to the transport. The
+	// check reads the deadline the attempt was given: it measures no elapsed time, so a slow host cannot fail it.
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	if len(recorder.attempts) != 3 {
+		t.Fatalf("the transport saw %d attempts, want 3", len(recorder.attempts))
+	}
+	for i, attempt := range recorder.attempts {
+		if !attempt.hasDeadline {
+			t.Errorf("attempt %d carries no deadline: a hung attempt would never time out", i+1)
+			continue
+		}
+		if attempt.deadline.After(attempt.handedAt.Add(2 * installationTokenTimeout)) {
+			t.Errorf("attempt %d deadline is later than twice the configured attempt timeout %v after it was handed over", i+1, installationTokenTimeout)
+		}
 	}
 }
 

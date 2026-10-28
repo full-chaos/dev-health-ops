@@ -197,21 +197,32 @@ var comparisons = map[token.Token]bool{token.GTR: true, token.GEQ: true, token.L
 //
 // A duration a child process measures and reports as KEY=<number> is measured too (CHAOS-11757). A key is emitted
 // when a measured value follows `"KEY="` in a + chain, fills the `KEY=%d` or `KEY=%[n]d` verb of a Printf-family
-// format, or follows a `"KEY="` argument of a Print, Println, Fprint, Fprintln, Sprint or Sprintln call, or when a script
-// literal holds KEY=$((SECONDS ...)), KEY=$SECONDS, KEY=$EPOCHREALTIME or KEY=$(date +%s). It is carried when an
-// Sscanf format reads `KEY=%d` into &v (v is measured), or when a call of a function declared in the same file with
-// the key as a string literal argument returns it (the function must scan or parse: Sscan*, strconv.Parse*/Atoi,
-// time.ParseDuration, json Unmarshal/Decode, or it calls such a function of the file: one level of call depth; a helper
-// that only logs the key reads nothing).
+// format, or follows a `"KEY="` argument of a Print, Println, Fprint, Fprintln, Sprint or Sprintln call; or when a script
+// literal holds KEY=$((SECONDS ...)), KEY=$SECONDS, KEY=$EPOCHREALTIME or KEY=$(date +%s), KEY=$var for a var assigned
+// one of those in the same literal, or a printf line whose KEY=%s verb takes one of them. It is carried when an Sscanf
+// format reads `KEY=%d` into &v (v is measured) from a source that is not a fixed literal, or when a call of a function
+// declared in the same file with the key as a string literal argument and a non-literal source argument returns it
+// (the function must scan or parse: Sscan*, strconv.Parse*/Atoi, time.ParseDuration, json Unmarshal/Decode, or it calls
+// such a function of the file: one level of call depth; a helper that only logs the key reads nothing).
 // A quotient of two measured values is a ratio and is not measured, whether compared directly or through a variable.
 // Stated limits, each pinned by a test:
-//   - A ratio of two carried values is legal, like a ratio of two time.Since values.
-//   - A key that no measured value fills (PORT=, CODE=) is not an emitter; its readers are not measured.
-//   - strings.Index/Contains/Cut on a key text carry nothing.
+//   - A ratio of two carried values is legal, like a ratio of two time.Since values
+//     (TestRatioOfTwoCarriedValuesIsNotAnAbsoluteBudget).
+//   - A key that no measured value fills (PORT=, CODE=) is not an emitter; its readers are not measured
+//     (TestAKeyThatCarriesNoMeasurementIsNotTracked).
+//   - A read of a fixed literal, or of an identifier that only holds literals, is not a child's report, so a diagnostic
+//     print of the same key elsewhere does not taint it (TestFixedLiteralInputIsNotAChildReport,
+//     TestAReassignedIdentifierIsNotALiteralSource).
+//   - strings.Index, Contains, Cut and Count on a key text carry nothing (TestStringsIndexOfAKeyIsNotACarriedValue,
+//     TestStringsContainsAndCutOfAKeyCarryNothing).
 //   - The emitter and the reader must be in the same file; a key emitted in another file is not seen, and a reader
-//     helper declared in another file is not seen.
-//   - Reader helpers are followed one call level deep; a helper that reaches a parser through two levels is not seen.
-//   - Only literal upper-case KEY= channels are seen: JSON, files, exit codes, computed keys and lower-case keys are not.
+//     helper declared in another file is not seen (TestEmitterInAnotherFileIsOutOfScope,
+//     TestAHelperDeclaredInAnotherFileIsNotAReader).
+//   - Reader helpers are followed one call level deep (TestTwoLevelsOfHelperCallsAreOutOfScope).
+//   - Script keys are read inside one literal: no flow between literals, no eval.
+//   - Only literal upper-case KEY= channels are seen: JSON, files, exit codes, computed keys and lower-case keys are not
+//     (TestDurationCarriedAsJSONIsOutOfScope, TestAFileChannelIsOutOfScope, TestAComputedKeyIsOutOfScope,
+//     TestALowercaseKeyIsOutOfScope).
 func findAssertions(fset *token.FileSet, file *ast.File, rel string) []finding {
 	var out []finding
 	c := carriedKeys(file)
@@ -220,8 +231,9 @@ func findAssertions(fset *token.FileSet, file *ast.File, rel string) []finding {
 		if fd, ok := decl.(*ast.FuncDecl); ok {
 			name = fd.Name.Name
 		}
+		cd := c.scoped(decl)
 		tracked := trackDecl(decl, c)
-		isMeasured := func(e ast.Node) bool { return measured(e, tracked, c) }
+		isMeasured := func(e ast.Node) bool { return measured(e, tracked, cd) }
 		ast.Inspect(decl, func(n ast.Node) bool {
 			be, ok := n.(*ast.BinaryExpr)
 			if !ok || !comparisons[be.Op] {
@@ -249,6 +261,7 @@ func findAssertions(fset *token.FileSet, file *ast.File, rel string) []finding {
 
 // trackDecl returns the names in decl that hold a measured duration, found by three passes over the assignments.
 func trackDecl(decl ast.Decl, c *carried) map[string]bool {
+	c = c.scoped(decl)
 	tracked := map[string]bool{}
 	isMeasured := func(e ast.Node) bool { return measured(e, tracked, c) }
 	for range 3 {
@@ -287,6 +300,100 @@ var (
 		regexp.MustCompile(`\b([A-Z][A-Z0-9_]*)=\$\(date \+%s`),
 	}
 )
+
+var (
+	shellMeasuredAssign = regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*)=(?:\$\(\([^)]*\bSECONDS\b|\$\{?(?:SECONDS|EPOCHREALTIME)\b|\$\(date \+%s)`)
+	shellMeasuredWord   = regexp.MustCompile(`\$\(\([^)]*\bSECONDS\b|\$\{?(?:SECONDS|EPOCHREALTIME)\b|\$\(date \+%s`)
+)
+
+// scriptKeys returns the KEY names a script literal reports a measured value under: KEY=$((SECONDS ...)) and the like;
+// KEY=$var, where var was assigned such a value in the same literal; and a printf line whose KEY=%s verb takes such a
+// word or variable. One literal, no eval, no flow between literals.
+func scriptKeys(text string) []string {
+	var out []string
+	for _, re := range scriptKeyRes {
+		for _, m := range re.FindAllStringSubmatch(text, -1) {
+			out = append(out, m[1])
+		}
+	}
+	vars := map[string]*regexp.Regexp{}
+	for _, m := range shellMeasuredAssign.FindAllStringSubmatch(text, -1) {
+		vars[m[1]] = regexp.MustCompile(`\$\{?` + regexp.QuoteMeta(m[1]) + `\b`)
+	}
+	for v := range vars {
+		re := regexp.MustCompile(`\b([A-Z][A-Z0-9_]*)=["']*\$\{?` + regexp.QuoteMeta(v) + `\b`)
+		for _, m := range re.FindAllStringSubmatch(text, -1) {
+			out = append(out, m[1])
+		}
+	}
+	measuredWord := func(w string) bool {
+		if shellMeasuredWord.MatchString(w) {
+			return true
+		}
+		for _, re := range vars {
+			if re.MatchString(w) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, line := range strings.Split(text, "\n") {
+		i := strings.Index(line, "printf ")
+		if i < 0 {
+			continue
+		}
+		words := shellWords(line[i+len("printf "):])
+		if len(words) == 0 {
+			continue
+		}
+		args := words[1:]
+		for _, v := range formatVerbs(strings.Trim(words[0], "'\"")) {
+			if m := keyAtEnd.FindStringSubmatch(v.prefix); m != nil && v.arg < len(args) && measuredWord(args[v.arg]) {
+				out = append(out, m[1])
+			}
+		}
+	}
+	return out
+}
+
+// shellWords splits s on blanks outside quotes and outside a $( ... ) group.
+func shellWords(s string) []string {
+	var words []string
+	var cur strings.Builder
+	var quote byte
+	depth := 0
+	flush := func() {
+		if cur.Len() > 0 {
+			words = append(words, cur.String())
+			cur.Reset()
+		}
+	}
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		switch {
+		case quote != 0:
+			cur.WriteByte(ch)
+			if ch == quote && !(quote == '"' && i > 0 && s[i-1] == '\\') {
+				quote = 0
+			}
+		case ch == '\'' || ch == '"':
+			quote = ch
+			cur.WriteByte(ch)
+		case ch == '(':
+			depth++
+			cur.WriteByte(ch)
+		case ch == ')' && depth > 0:
+			depth--
+			cur.WriteByte(ch)
+		case (ch == ' ' || ch == '\t') && depth == 0:
+			flush()
+		default:
+			cur.WriteByte(ch)
+		}
+	}
+	flush()
+	return words
+}
 
 // formatArg is the index of the format string in the Printf and Scanf families, by function name.
 var formatArg = map[string]int{"Printf": 0, "Sprintf": 0, "Errorf": 0, "Fprintf": 1, "Sscanf": 1, "Fscanf": 1}
@@ -360,7 +467,11 @@ func trackScanned(call *ast.CallExpr, c *carried, tracked map[string]bool) {
 	if c == nil || len(c.keys) == 0 {
 		return
 	}
-	if name := callName(call); name != "Sscanf" && name != "Fscanf" {
+	name := callName(call)
+	if name != "Sscanf" && name != "Fscanf" {
+		return
+	}
+	if name == "Sscanf" && len(call.Args) > 0 && c.isLiteral(call.Args[0]) {
 		return
 	}
 	format, first, ok := formatCall(call)
@@ -385,6 +496,70 @@ func trackScanned(call *ast.CallExpr, c *carried, tracked map[string]bool) {
 type carried struct {
 	keys    map[string]bool
 	readers map[string]bool
+	lits    map[string]bool // identifiers of the declaration in scope that only ever hold a literal
+}
+
+// scoped returns c with the literal-only identifiers of decl; a read of a fixed literal is not a child's report.
+func (c *carried) scoped(decl ast.Decl) *carried {
+	if c == nil {
+		return nil
+	}
+	cp := *c
+	cp.lits = literalIdents(decl)
+	return &cp
+}
+
+func (c *carried) isLiteral(e ast.Expr) bool {
+	switch x := e.(type) {
+	case *ast.BasicLit:
+		return true
+	case *ast.Ident:
+		return c != nil && c.lits[x.Name]
+	}
+	return false
+}
+
+// literalIdents returns the identifiers that every assignment in decl gives a literal.
+func literalIdents(decl ast.Decl) map[string]bool {
+	lit, other := map[string]bool{}, map[string]bool{}
+	note := func(lhs, rhs []ast.Expr) {
+		for i, l := range lhs {
+			id := baseIdent(l)
+			if id == "" {
+				continue
+			}
+			if len(rhs) == len(lhs) {
+				if _, ok := rhs[i].(*ast.BasicLit); ok {
+					lit[id] = true
+					continue
+				}
+			}
+			other[id] = true
+		}
+	}
+	ast.Inspect(decl, func(n ast.Node) bool {
+		switch s := n.(type) {
+		case *ast.AssignStmt:
+			note(s.Lhs, s.Rhs)
+		case *ast.ValueSpec:
+			lhs := make([]ast.Expr, len(s.Names))
+			for i, id := range s.Names {
+				lhs[i] = id
+			}
+			note(lhs, s.Values)
+		case *ast.RangeStmt:
+			for _, e := range []ast.Expr{s.Key, s.Value} {
+				if id := baseIdent(e); id != "" {
+					other[id] = true
+				}
+			}
+		}
+		return true
+	})
+	for id := range other {
+		delete(lit, id)
+	}
+	return lit
 }
 
 var parseCalls = map[string]bool{"Sscan": true, "Sscanf": true, "Sscanln": true, "Fscan": true, "Fscanf": true, "Fscanln": true,
@@ -447,10 +622,8 @@ func carriedKeys(file *ast.File) *carried {
 				}
 			case *ast.BasicLit:
 				if text, ok := stringLit(x); ok {
-					for _, re := range scriptKeyRes {
-						for _, m := range re.FindAllStringSubmatch(text, -1) {
-							c.keys[m[1]] = true
-						}
+					for _, k := range scriptKeys(text) {
+						c.keys[k] = true
 					}
 				}
 			}
@@ -553,10 +726,16 @@ func measured(n ast.Node, tracked map[string]bool, c *carried) bool {
 				if c == nil || !c.readers[fun.Name] {
 					break
 				}
+				keyed, source := false, false
 				for _, arg := range x.Args {
 					if text, ok := stringLit(arg); ok && c.keys[strings.TrimSuffix(text, "=")] {
-						found = true
+						keyed = true
+					} else if !c.isLiteral(arg) {
+						source = true
 					}
+				}
+				if keyed && source {
+					found = true
 				}
 			}
 		}

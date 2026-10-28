@@ -35,6 +35,78 @@ var (
 	ErrChunkContinuation       = errors.New("provider sync chunk continuation is durable and attempt-neutral")
 )
 
+// ChunkSidecarMismatchError is the bare checkpoint conflict of a stored sidecar whose payload_bytes column and the
+// payload_bytes inside its JSON disagree (CHAOS-11772). It carries the two numbers and nothing from the payload. It is
+// not a ChunkStoreError, so it stays a deterministic, permanent conflict (providerunit: checkpoint_conflict) and
+// matches ErrChunkCheckpointConflict with errors.Is.
+type ChunkSidecarMismatchError struct {
+	Field   string
+	Stored  int
+	Payload int
+}
+
+func (err *ChunkSidecarMismatchError) Error() string {
+	return fmt.Sprintf("%s: %s mismatch (column=%d payload=%d)", ErrChunkCheckpointConflict.Error(), err.Field, err.Stored, err.Payload)
+}
+
+func (err *ChunkSidecarMismatchError) Is(target error) bool {
+	return target == ErrChunkCheckpointConflict
+}
+
+// chunkConflictBecause is the bare checkpoint conflict with a fixed-vocabulary reason (never row data). It is not a
+// ChunkStoreError: providerunit still classes it deterministic-terminal.
+func chunkConflictBecause(reason string) error {
+	return fmt.Errorf("%w (%s)", ErrChunkCheckpointConflict, reason)
+}
+
+// storedChunkRow is the relational half of a prepared chunk row.
+type storedChunkRow struct {
+	schemaVersion, routeVersion string
+	ordinal, totalChunks        int
+	cursorBefore, cursorAfter   string
+	inventoryComplete           bool
+	payloadBytes                int
+	manifestDigest, status      string
+}
+
+// verifyStoredChunk checks a decoded sidecar against its row and returns the chunk with the row's canonical count.
+// PostgresRepository and the in-process store both call it, so a refusal has one reason in both.
+func verifyStoredChunk(chunk PreparedProviderChunk, row storedChunkRow) (PreparedProviderChunk, error) {
+	switch {
+	case row.status != "pending" && row.status != "writing" && row.status != "committed":
+		return PreparedProviderChunk{}, chunkConflictBecause("status")
+	case chunk.SchemaVersion != row.schemaVersion:
+		return PreparedProviderChunk{}, chunkConflictBecause("schema_version")
+	case chunk.RouteVersion != row.routeVersion:
+		return PreparedProviderChunk{}, chunkConflictBecause("route_version")
+	case chunk.Ordinal != row.ordinal:
+		return PreparedProviderChunk{}, chunkConflictBecause("ordinal")
+	case chunk.CursorBefore != row.cursorBefore:
+		return PreparedProviderChunk{}, chunkConflictBecause("cursor_before")
+	case chunk.CursorAfter != row.cursorAfter:
+		return PreparedProviderChunk{}, chunkConflictBecause("cursor_after")
+	case chunk.InventoryComplete != row.inventoryComplete:
+		return PreparedProviderChunk{}, chunkConflictBecause("inventory_complete")
+	case chunk.PayloadBytes != row.payloadBytes:
+		return PreparedProviderChunk{}, &ChunkSidecarMismatchError{Field: "payload_bytes", Stored: row.payloadBytes, Payload: chunk.PayloadBytes}
+	case chunk.ManifestDigest != row.manifestDigest:
+		return PreparedProviderChunk{}, chunkConflictBecause("manifest_digest")
+	}
+	// The sidecar payload is prepared before the final inventory count is known. The relational column is finalized
+	// transactionally and is the canonical count used by recovery; do not let the provisional JSON value overwrite it.
+	chunk.TotalChunks = row.totalChunks
+	if chunk.TotalChunks < 0 || (chunk.TotalChunks > 0 && chunk.Ordinal >= chunk.TotalChunks) {
+		return PreparedProviderChunk{}, chunkConflictBecause("total_chunks")
+	}
+	if chunk.ManifestDigest == "" {
+		return PreparedProviderChunk{}, chunkConflictBecause("manifest_digest")
+	}
+	if chunk.Ledger.validate() != nil {
+		return PreparedProviderChunk{}, chunkConflictBecause("ledger_invalid")
+	}
+	return chunk, nil
+}
+
 // ChunkStoreError is a transient error (a database error, a cancelled context,
 // a provider page that changed between attempts) flattened into the conflict
 // sentinel. It matches ErrChunkCheckpointConflict and its cause with

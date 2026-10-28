@@ -702,3 +702,18 @@ func TestAPayloadStampRefusalIsNotACheckpointConflict(t *testing.T) {
 		t.Fatalf("causeClass = %q", got)
 	}
 }
+
+// CHAOS-11772: the named payload_bytes mismatch is still the bare, deterministic conflict: checkpoint_conflict,
+// terminal on the first attempt, with the two numbers in its text.
+func TestNamedSidecarMismatchStaysACheckpointConflict(t *testing.T) {
+	named := &providersync.ChunkSidecarMismatchError{Field: "payload_bytes", Stored: 10001, Payload: 10000}
+	for _, err := range []error{named, fmt.Errorf("unit: %w", named)} {
+		category, deterministic := deterministicTerminalCategory(err)
+		if !deterministic || category != CheckpointConflictCategory {
+			t.Fatalf("%v: category %q deterministic=%v", err, category, deterministic)
+		}
+		if !strings.Contains(err.Error(), "payload_bytes mismatch (column=10001 payload=10000)") {
+			t.Fatalf("error text %q does not name the mismatch and both numbers", err)
+		}
+	}
+}

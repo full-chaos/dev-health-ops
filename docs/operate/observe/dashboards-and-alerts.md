@@ -73,3 +73,142 @@ that actually render them.
 The `valkey` group watches the in-chart Valkey through the collector's redis receiver: any key eviction in ten minutes, and used memory above 80% of the planned maxmemory 192mb for ten minutes. The import JSON and the checks are in the auth-service scrape and alert import runbook.
 
 The file is the text of record: no Prometheus loads it in production. The production rules are created in SigNoz from this text. A test pins every `dev_health_api_` metric name a rule reads against the series the service really exposes, so a rule on a name nobody emits fails the build instead of looking covered. The scrape series `up` (and `absent(up)`) are scrape metadata, not exposed by the service: the test checks their rule shape, and they depend on the collector's job name `auth-service`. The test also pins each rule's threshold shape and `for:` duration, that no rule result carries the scrape instance, and that the 5xx rule keeps its traffic floor.
+
+## Org activity rules
+
+`alerts/rules.yml` carries an `org_activity` group over the metrics worker's OTLP push. The worker's daily finalize writes `public.org_activity`, the table auth login reads to choose the active organization; a stale row makes login fall back to the earliest join. Two rules:
+
+- `OrgActivityRefreshFailed`: any increase of `daily_finalize_org_activity_refresh_failed_total` in 24 hours. The counter is created and seeded at 0 when the finalize handler gets its refresher, so the first failure of a worker's life is an increase and not a first sample. A failure inside the first export interval (60 seconds after the worker starts) is still folded into the first exported value.
+- `OrgActivityStale`: `dev_health_org_activity_refresh_age_seconds`, the age of the newest row (`now() - max(refreshed_at)`), above two days for fifteen minutes. SigNoz cannot read Postgres, so the worker exports the number: one database read per minute (two second timeout), no sample and never 0 when the read fails or the table is empty. `dev_health_org_activity_refresh_age_read_failed_total` counts the failed reads, so a gauge that stopped reporting can be told from a fresh table.
+
+PromQL rules do not evaluate on this SigNoz (D6417), so the production rules are builder threshold rules. Both route through the notification policy to the `accounts-email` channel (labels `team = platform`, `severity = warning`).
+
+```json
+{
+  "alert": "OrgActivityRefreshFailed",
+  "alertType": "METRIC_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
+  "condition": {
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "unit": "",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "stepInterval": 300,
+            "aggregations": [
+              {
+                "metricName": "daily_finalize_org_activity_refresh_failed_total",
+                "timeAggregation": "increase",
+                "spaceAggregation": "sum"
+              }
+            ],
+            "disabled": false
+          }
+        }
+      ]
+    },
+    "selectedQueryName": "A",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "warning",
+          "target": 0,
+          "op": "above",
+          "matchType": "at_least_once"
+        }
+      ]
+    }
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": {
+      "evalWindow": "24h",
+      "frequency": "5m"
+    }
+  },
+  "notificationSettings": {
+    "usePolicy": true
+  },
+  "labels": {
+    "severity": "warning",
+    "team": "platform"
+  },
+  "annotations": {
+    "summary": "org_activity refresh failed in the daily finalize",
+    "description": "The daily finalize could not refresh public.org_activity in the last day (ClickHouse read error, panic, or organizations left without a row). Login falls back to the earliest-joined organization for stale rows. Next: the worker log line 'the org activity projection was not refreshed' (run_id, organization_id)."
+  }
+}
+```
+
+```json
+{
+  "alert": "OrgActivityStale",
+  "alertType": "METRIC_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
+  "condition": {
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "unit": "s",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "stepInterval": 60,
+            "aggregations": [
+              {
+                "metricName": "dev_health_org_activity_refresh_age_seconds",
+                "timeAggregation": "latest",
+                "spaceAggregation": "max"
+              }
+            ],
+            "disabled": false
+          }
+        }
+      ]
+    },
+    "selectedQueryName": "A",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "warning",
+          "target": 172800,
+          "op": "above",
+          "matchType": "all_the_times"
+        }
+      ]
+    }
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": {
+      "evalWindow": "15m",
+      "frequency": "1m"
+    }
+  },
+  "notificationSettings": {
+    "usePolicy": true
+  },
+  "labels": {
+    "severity": "warning",
+    "team": "platform"
+  },
+  "annotations": {
+    "summary": "org_activity not refreshed for two days",
+    "description": "No organization's activity row was refreshed for two days: the daily finalize is not running or every refresh fails. Login falls back to the earliest join. Next: rule OrgActivityRefreshFailed, the worker finalize logs, and dev_health_org_activity_refresh_age_read_failed_total."
+  }
+}
+```
+
+Checks after import: query `dev_health_org_activity_refresh_age_seconds` and `daily_finalize_org_activity_refresh_failed_total` over the last hour. The age is below 172800 and the counter reads 0 on a healthy worker. "No data" for the age means the table is empty or the reads fail (see the read-failed counter); it does not mean fresh.

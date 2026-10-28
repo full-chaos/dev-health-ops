@@ -16,6 +16,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
+	"github.com/full-chaos/dev-health-ops/internal/auth/usersbackfill"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
@@ -194,6 +195,30 @@ WHERE aggregate_type = 'membership' AND aggregate_id = $1), 0)`, "mbr_"+membersh
 	return rev
 }
 
+// requireReconciled reads the users-reconcile membership counts (CHAOS-10783)
+// over the whole database: every pair the store wrote agrees in both tables.
+// membership_role_diff is not read: a test plays go-api's own role writer.
+func (e *env) requireReconciled(t *testing.T, ctx context.Context) {
+	t.Helper()
+	tx, err := usersbackfill.OpenSnapshot(ctx, e.admin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	schema, err := authschema.NewValidatedIdentifier("auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := usersbackfill.TxTarget{Tx: tx, Schema: schema}.MembershipDiffs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.PublicMissing != 0 || d.InactiveInPublic != 0 || d.AuthMissing != 0 {
+		t.Fatalf("reconcile: public_missing=%d inactive_in_public=%d auth_missing=%d, want 0 0 0",
+			d.PublicMissing, d.InactiveInPublic, d.AuthMissing)
+	}
+}
+
 // Remove marks the auth row removed and deletes go-api's row, with one audit
 // row, one outbox event and one revision, in one commit.
 func TestRemoveWritesBothTablesOneAuditOneOutbox(t *testing.T) {
@@ -220,6 +245,11 @@ func TestRemoveWritesBothTablesOneAuditOneOutbox(t *testing.T) {
 	}
 	if _, err := e.store.Remove(ctx, Change{OrgID: org, PrincipalID: user, Authorize: allowAll}); !errors.Is(err, ErrNotMember) {
 		t.Fatalf("second Remove = %v, want ErrNotMember", err)
+	}
+	e.requireReconciled(t, ctx)
+	// go-api's member routes write no public audit_logs row; the aggregate writes none either.
+	if n := e.count(t, ctx, `SELECT count(*) FROM public.audit_logs WHERE org_id = $1`, org); n != 0 {
+		t.Fatalf("public audit_logs rows = %d, want 0", n)
 	}
 }
 
@@ -248,6 +278,7 @@ func TestReAddAfterRemoveReactivatesTheSameAuthRow(t *testing.T) {
 	if err := e.admin.QueryRow(ctx, `SELECT id FROM public.memberships WHERE org_id = $1 AND user_id = $2`, org, user).Scan(&pubID); err != nil || pubID != first.ID {
 		t.Fatalf("public id = %v (%v), want %v", pubID, err, first.ID)
 	}
+	e.requireReconciled(t, ctx)
 }
 
 func TestChangeRoleSuspendReactivateProject(t *testing.T) {
@@ -274,6 +305,7 @@ func TestChangeRoleSuspendReactivateProject(t *testing.T) {
 	if got := e.rows(t, ctx, org, user); got != (rows{"admin", "active", "admin"}) {
 		t.Fatalf("after reactivate = %+v", got)
 	}
+	e.requireReconciled(t, ctx)
 }
 
 func TestTransferOwnershipMovesBothRolesInOneCommit(t *testing.T) {
@@ -294,6 +326,7 @@ func TestTransferOwnershipMovesBothRolesInOneCommit(t *testing.T) {
 	if n := e.auditRows(t, ctx, "auth.membership.ownership_transferred", org); n != 1 {
 		t.Fatalf("transfer audit rows = %d, want 1", n)
 	}
+	e.requireReconciled(t, ctx)
 }
 
 func TestRemoveOrSuspendTheOnlyOwnerIsRefused(t *testing.T) {

@@ -698,8 +698,9 @@ func TestKeyStatesColdStartAgainstAHungSourceFailsClosedAtTheCallersDeadline(t *
 		if !reasonIs(err, ReasonKeyStatesUnavailable) || rows != nil {
 			t.Fatalf("cold read = %v, %v; want %s", rows, err, ReasonKeyStatesUnavailable)
 		}
-		if returnedAt.After(deadline) {
-			t.Fatalf("the cold read returned %v after its caller's deadline: it waited for something other than the caller's context", returnedAt.Sub(deadline))
+		// On the virtual clock the read ends exactly at the caller's deadline: not before (it waited for the caller's context) and not after.
+		if !returnedAt.Equal(deadline) {
+			t.Fatalf("the cold read returned at %v of virtual time relative to its caller's deadline: want exactly at it", returnedAt.Sub(deadline))
 		}
 	})
 }

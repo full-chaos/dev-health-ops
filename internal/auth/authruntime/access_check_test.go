@@ -2,6 +2,7 @@ package authruntime
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -121,6 +122,54 @@ func TestProductionRoutesConstructTheAccessCheck(t *testing.T) {
 			if status != wantStatus || (wantReason != "" && reason != wantReason) {
 				t.Errorf("%s, %s: %d %q; want %d %q", name, route, status, reason, wantStatus, wantReason)
 			}
+		}
+	}
+}
+
+type kidLog struct{ kids []string }
+
+func (k *kidLog) RecordSigningKid(_ context.Context, _ uuid.UUID, kid string) error {
+	k.kids = append(k.kids, kid)
+	return nil
+}
+
+func tokenAlg(t *testing.T, compact string) string {
+	t.Helper()
+	raw, err := base64.RawURLEncoding.DecodeString(strings.Split(compact, ".")[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var header struct {
+		Alg string `json:"alg"`
+	}
+	if err := json.Unmarshal(raw, &header); err != nil {
+		t.Fatal(err)
+	}
+	return header.Alg
+}
+
+// The password routes mint the access token of the configured class and
+// record the signing kid of the session, like the session routes.
+func TestCredentialIssuerFollowsTheConfiguredAccessClass(t *testing.T) {
+	dir := t.TempDir()
+	writeSigningKey(t, dir, "k1.pem")
+	signer := token.NewFileSigner(token.FileConfig{KeyPath: filepath.Join(dir, "k1.pem"), KeyID: "k1"})
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	for class, want := range map[string]struct{ alg, kid string }{"hs256_compat": {"HS256", ""}, "eddsa": {"EdDSA", "k1"}} {
+		kids := &kidLog{}
+		issuer, err := credentialIssuer(classConfig(t, class), logger, signer, kids)
+		if err != nil {
+			t.Fatal(err)
+		}
+		compact, err := issuer.AccessContext(context.Background(), authapi.Grant{PrincipalID: uuid.New(), SessionID: uuid.New()})
+		if err != nil {
+			t.Fatalf("%s: %v", class, err)
+		}
+		if got := tokenAlg(t, compact); got != want.alg {
+			t.Errorf("%s: the password routes minted alg %s, want %s", class, got, want.alg)
+		}
+		if len(kids.kids) != 1 || kids.kids[0] != want.kid {
+			t.Errorf("%s: recorded kids %v, want [%q]", class, kids.kids, want.kid)
 		}
 	}
 }

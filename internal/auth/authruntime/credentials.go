@@ -154,11 +154,8 @@ func credentialRoutes(
 	if err != nil {
 		return nil, nil, err
 	}
-	issuer, err := authapi.NewIssuer(cfg.Session.AccessSecret.Reveal(), cfg.Session.AccessIssuer, cfg.Session.AccessAudience)
+	issuer, err := credentialIssuer(cfg, logger, accessSigner, sessions)
 	if err != nil {
-		return nil, nil, err
-	}
-	if issuer, err = withAccessCheck(cfg, logger, accessSigner, issuer); err != nil {
 		return nil, nil, err
 	}
 	identities, err := identity.New(identity.Config{Pool: pool, Schema: schema, Logger: logger, UsersOwnedByAuth: true})

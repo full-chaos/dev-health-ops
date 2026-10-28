@@ -264,9 +264,9 @@ func TestTheSecurityAndPlainCallsTakeCountOneOnlyFromGoTestLeg(t *testing.T) {
 	t.Parallel()
 	source := readCheckGo(t)
 	for _, want := range []string{
-		`go_test_leg "${log}" "${legjson}" -timeout 10m ${rest_sec}`,
+		`go_test_leg "${log}" "${legjson}" -timeout "$(cigates_go_test_timeout ${rest_sec})" ${rest_sec}`,
 		`go_test_leg "${racelog}" "${legjson}" -race -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" "${pkgs_sec[@]}"`,
-		`go_test_leg "${log}" "${legjson}" -timeout 10m ${rest}`,
+		`go_test_leg "${log}" "${legjson}" -timeout "$(cigates_go_test_timeout ${rest})" ${rest}`,
 		`go_test_leg "${racelog}" "${legjson}" -race -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" "${pkgs[@]}"`,
 	} {
 		if !strings.Contains(source, want) {

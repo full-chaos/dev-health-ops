@@ -29,17 +29,13 @@ import (
 func TestOwnershipCloseSkipsForAnyOtherActiveIntegrationEndToEnd(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	pg, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	pg := pgschema.Start(ctx, t)
 	defer pg.Close(context.Background())
 	pool, err := pgxpool.New(ctx, pg.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	pgschema.Apply(ctx, t, pool)
 	ch, err := containers.StartClickHouse(ctx)
 	if err != nil {
 		t.Fatal(err)

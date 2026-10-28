@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ type gatedRun struct {
 	calls   atomic.Int32
 	release chan struct{}
 	result  atomic.Pointer[error]
+	once    sync.Once
 }
 
 func newGatedRun() *gatedRun { return &gatedRun{release: make(chan struct{})} }
@@ -30,8 +32,33 @@ func (g *gatedRun) run(context.Context) error {
 }
 
 func (g *gatedRun) finishWith(err error) {
-	g.result.Store(&err)
-	close(g.release)
+	g.once.Do(func() {
+		g.result.Store(&err)
+		close(g.release)
+	})
+}
+
+// releaseAtCleanup opens the gate when the test ends, pass or fail, and waits for the check's runner goroutine to finish,
+// so that no goroutine outlives the test (a failed run would otherwise leave it blocked on the shut gate).
+func (g *gatedRun) releaseAtCleanup(t *testing.T, check *CachedPostureCheck) {
+	t.Helper()
+	t.Cleanup(func() {
+		g.finishWith(nil)
+		deadline := time.Now().Add(30 * time.Second)
+		for {
+			check.mu.Lock()
+			idle := check.flight == nil
+			check.mu.Unlock()
+			if idle {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Error("the runner goroutine did not end after its gate was released")
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	})
 }
 
 // mustNotWaitOnTheQuery runs one probe while the test holds the expensive query open: the query is released only after the probe
@@ -56,6 +83,7 @@ func TestCheckNoWaitFailsClosedUntilTheFirstRunAnswers(t *testing.T) {
 	t.Parallel()
 	gate := newGatedRun()
 	check, _ := newTestCachedPostureCheck(gate.run, PostureCheckOptions{})
+	gate.releaseAtCleanup(t, check)
 	for probe := 1; probe <= 5; probe++ {
 		err := mustNotWaitOnTheQuery(t, fmt.Sprintf("probe %d", probe), check.CheckNoWait)
 		if !errors.Is(err, ErrUnavailable) || !strings.Contains(err.Error(), "not yet proven") {
@@ -76,6 +104,7 @@ func TestWarmStartsTheFirstRunWithoutAProbe(t *testing.T) {
 	t.Parallel()
 	gate := newGatedRun()
 	check, _ := newTestCachedPostureCheck(gate.run, PostureCheckOptions{})
+	gate.releaseAtCleanup(t, check)
 	check.Warm()
 	check.Warm()
 	waitFor(t, "the warm run to start", func() bool { return gate.calls.Load() == 1 })
@@ -100,6 +129,7 @@ func TestCheckNoWaitServesAStalePassWhileTheRefreshIsSlow(t *testing.T) {
 	waitFor(t, "the first pass", func() bool { return check.CheckNoWait() == nil })
 
 	refresh := newGatedRun()
+	refresh.releaseAtCleanup(t, check)
 	gate.Store(refresh)
 	clock.Advance(defaultPostureTTL + time.Second)
 	if err := mustNotWaitOnTheQuery(t, "stale-pass probe", check.CheckNoWait); err != nil {
@@ -131,6 +161,7 @@ func TestCheckNoWaitFailsClosedPastMaxStale(t *testing.T) {
 	waitFor(t, "the first pass", func() bool { return check.CheckNoWait() == nil })
 
 	slow := newGatedRun()
+	slow.releaseAtCleanup(t, check)
 	gate.Store(slow)
 	clock.Advance(defaultPostureMaxStale + time.Minute)
 	err := mustNotWaitOnTheQuery(t, "past-MaxStale probe", check.CheckNoWait)
@@ -168,6 +199,7 @@ func TestCheckNoWaitServesARefusalAndHealsOnTheRerun(t *testing.T) {
 
 	// Past RefusalTTL: the refusal is STILL served while the re-run is held open.
 	rerun := newGatedRun()
+	rerun.releaseAtCleanup(t, check)
 	gate.Store(rerun)
 	clock.Advance(defaultPostureRefusalTTL + time.Second)
 	if err := mustNotWaitOnTheQuery(t, "post-TTL refusal probe", check.CheckNoWait); !errors.Is(err, ErrPostureRefused) {

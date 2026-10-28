@@ -498,7 +498,7 @@ func configureWithRoutes(
 			return nil, err
 		}
 	}
-	credRoutes, credComponents, err := credentialRoutes(cfg, logger, store.Pool(), schemaID, limits)
+	credRoutes, credComponents, err := credentialRoutes(cfg, logger, store.Pool(), schemaID, limits, signer)
 	if err != nil {
 		closeStore()
 		return nil, err

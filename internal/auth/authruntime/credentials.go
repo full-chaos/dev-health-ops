@@ -139,7 +139,7 @@ func checkAppBaseURL(raw string, allowHTTP bool) error {
 // link-mail sender.
 func credentialRoutes(
 	cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
-	limits *authapi.Limits,
+	limits *authapi.Limits, accessSigner authapi.AccessSigner,
 ) ([]httpapi.Route, []lifecycle.Component, error) {
 	if !cfg.Session.Enabled {
 		return nil, nil, nil

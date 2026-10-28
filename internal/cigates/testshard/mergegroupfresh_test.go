@@ -333,6 +333,33 @@ func TestEveryGoTestLineOfTheTestAndRaceLegsNamesCountOne(t *testing.T) {
 	if missing, _ := legCallsWithoutCountOne(t, planted); len(missing) != 1 {
 		t.Errorf("a go_test_leg call that lost -count=1 was not caught: %v", missing)
 	}
+	// The census run is fresh on every event: its -count=1 is literal, never the merge_group switch.
+	if !censusCallHasLiteralCountOne(t, script) {
+		t.Errorf("go_test_json_run_t: its go test line has no literal -count=1: the census run would read cached results")
+	}
+	noCensusCount := strings.Replace(script, "-trimpath -json -count=1 -timeout \"${timeout}\"", "-trimpath -json -timeout \"${timeout}\"", 1)
+	if noCensusCount == script {
+		t.Fatal("the go_test_json_run_t call to plant is not in ci/check_go.sh")
+	}
+	if censusCallHasLiteralCountOne(t, noCensusCount) {
+		t.Errorf("a go_test_json_run_t call that lost its literal -count=1 was not caught")
+	}
+}
+
+// censusCallHasLiteralCountOne reports whether every go test line of go_test_json_run_t names a literal -count=1 (at least one).
+func censusCallHasLiteralCountOne(t *testing.T, script string) bool {
+	t.Helper()
+	seen := 0
+	for _, line := range strings.Split(functionBody(t, script, "go_test_json_run_t"), "\n") {
+		if !goTestWithoutTimeout.MatchString(line) || strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		seen++
+		if !hasArg(line, "-count=1") {
+			return false
+		}
+	}
+	return seen > 0
 }
 
 // The leg's own variables stay in the leg: a go test call (and so any check_go.sh a test starts) sees neither the leg's -json

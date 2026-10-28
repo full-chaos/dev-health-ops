@@ -8,23 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
-
-// createTeamCatalogCredentialStampTables is a minimal, local Postgres
-// fixture, because resolveTeamCatalogIntegration only ever touches sync_runs and
-// integrations. Mirrors internal/syncdispatchruntime/
-// native_reference_discovery_integration_test.go's equally minimal
-// createReferenceDiscoveryTables for the same reason.
-func createTeamCatalogCredentialStampTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
-	t.Helper()
-	// The migrated schema: integrations, sync_runs and sync_configurations carry their real columns,
-	// foreign keys and constraints.
-	pgschema.Apply(ctx, t, pool)
-}
 
 // TestResolveTeamCatalogIntegrationUsesTheRunFrozenCredentialWhenStamped
 // pins the CHAOS-4431 codex review P1 fix: resolve_run_auth's exact branch
@@ -36,17 +23,13 @@ func createTeamCatalogCredentialStampTables(t *testing.T, ctx context.Context, p
 func TestResolveTeamCatalogIntegrationUsesTheRunFrozenCredentialWhenStamped(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	createTeamCatalogCredentialStampTables(t, ctx, pool)
 
 	const (
 		orgID           = "org-credential-stamp"
@@ -93,17 +76,13 @@ func TestResolveTeamCatalogIntegrationUsesTheRunFrozenCredentialWhenStamped(t *t
 func TestResolveTeamCatalogIntegrationFallsBackToLiveCredentialWhenUnstamped(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	createTeamCatalogCredentialStampTables(t, ctx, pool)
 
 	const (
 		orgID         = "org-credential-unstamped"
@@ -152,17 +131,13 @@ func TestResolveTeamCatalogIntegrationFallsBackToLiveCredentialWhenUnstamped(t *
 func TestResolveTeamCatalogIntegrationFailsClosedOnEnvironmentStampedAuth(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	createTeamCatalogCredentialStampTables(t, ctx, pool)
 
 	const (
 		orgID         = "org-credential-environment"

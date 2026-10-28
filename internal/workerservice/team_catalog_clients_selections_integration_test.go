@@ -7,22 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
-
-// createTeamCatalogSelectionsTables is a minimal, local Postgres fixture for
-// teamCatalogSelectionsResolver.ResolveSelections -- includes sync_
-// configurations (absent from createTeamCatalogCredentialStampTables, which
-// resolveTeamCatalogIntegration never touches) and integrations.config
-// (needed for the no-canonical-row owner/group_path fallback below).
-func createTeamCatalogSelectionsTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
-	t.Helper()
-	// The migrated schema: integrations, sync_runs and sync_configurations carry their real columns,
-	// foreign keys and constraints.
-	pgschema.Apply(ctx, t, pool)
-}
 
 // TestResolveSelectionsFallsBackToIntegrationConfigOwnerWithNoCanonicalRow
 // pins the fix routed from 4432's codex round (base-owner item, 2026-08-28):
@@ -39,17 +26,13 @@ func createTeamCatalogSelectionsTables(t *testing.T, ctx context.Context, pool *
 func TestResolveSelectionsFallsBackToIntegrationConfigOwnerWithNoCanonicalRow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	createTeamCatalogSelectionsTables(t, ctx, pool)
 
 	const (
 		orgID         = "org-selections-legacy-config"
@@ -86,17 +69,13 @@ func TestResolveSelectionsFallsBackToIntegrationConfigOwnerWithNoCanonicalRow(t 
 func TestResolveSelectionsNonStrictFallbackStaysAllOffDespiteConfigFallback(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	createTeamCatalogSelectionsTables(t, ctx, pool)
 
 	const (
 		orgID         = "org-selections-legacy-config-nonstrict"

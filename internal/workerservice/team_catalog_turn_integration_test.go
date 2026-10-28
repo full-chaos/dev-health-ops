@@ -73,17 +73,8 @@ func TestCatalogLeaseTurnKeepsOneOpenRowOfANewFactAcrossOverlappingRuns(t *testi
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	pg, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	pg := pgschema.Start(ctx, t)
 	t.Cleanup(func() { _ = pg.Close(context.Background()) })
-	setup, err := pgxpool.New(ctx, pg.URI)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pgschema.Apply(ctx, t, setup)
-	setup.Close()
 	// Two processes' pools, ONE connection each (the smallest valid configuration).
 	poolA, err := pgxpool.New(ctx, pg.URI+"&pool_max_conns=1")
 	if err != nil {

@@ -35,6 +35,8 @@ func TestMain(m *testing.M) {
 		ScratchPrefixEnv,
 		SharedServersEnv,
 		HarnessTimingEnv,
+		PostgresTemplateEnv,
+		ClickHouseTimezoneEnv,
 	} {
 		if err := os.Unsetenv(key); err != nil {
 			fmt.Fprintf(os.Stderr, "clear %s: %v\n", key, err)

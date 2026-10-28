@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"io"
 	"log/slog"
 	"net/http"
@@ -171,5 +172,44 @@ func TestCredentialIssuerFollowsTheConfiguredAccessClass(t *testing.T) {
 		if len(kids.kids) != 1 || kids.kids[0] != want.kid {
 			t.Errorf("%s: recorded kids %v, want [%q]", class, kids.kids, want.kid)
 		}
+	}
+}
+
+// The production builder: under the eddsa class (audience auth-service) the legacy
+// HS256 verifier checks go-api's audience; under hs256_compat it checks the
+// configured audience, as before.
+func TestTheLegacyAudienceOfTheProductionIssuerFollowsTheClass(t *testing.T) {
+	cfg := classConfig(t, "eddsa")
+	mint := func(audience string) string {
+		hs, err := authapi.NewIssuer(cfg.Session.AccessSecret.Reveal(), cfg.Session.AccessIssuer, audience)
+		if err != nil {
+			t.Fatal(err)
+		}
+		compact, err := hs.Access(authapi.Grant{PrincipalID: uuid.New(), SessionID: uuid.New()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return compact
+	}
+	signer := &stubSigner{}
+	eddsa, err := newAccessIssuer(cfg, signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := eddsa.Verify(mint(contracts.PlatformAPIAudience)); err != nil {
+		t.Errorf("eddsa class: a go-api HS256 token is refused: %v", err)
+	}
+	if _, _, err := eddsa.Verify(mint("auth-service")); err == nil {
+		t.Error("eddsa class: an HS256 token of the EdDSA audience is accepted")
+	}
+	hs, err := newAccessIssuer(classConfig(t, "hs256_compat"), signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := hs.Verify(mint("auth-service")); err != nil {
+		t.Errorf("hs256_compat: the configured audience is refused: %v", err)
+	}
+	if _, _, err := hs.Verify(mint(contracts.PlatformAPIAudience)); err == nil {
+		t.Error("hs256_compat: a token of another audience is accepted")
 	}
 }

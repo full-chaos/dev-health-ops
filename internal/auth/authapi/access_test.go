@@ -489,3 +489,24 @@ func TestChangePasswordWithAnEdDSABearerReturnsAnEdDSATokenOfTheNewSession(t *te
 		t.Fatalf("kids recorded for the new session = %v, want [k1]", got)
 	}
 }
+
+// Under the eddsa class the issuer's audience is the session route audience, and
+// go-api's HS256 token carries go-api's own audience: a live HS256 token keeps
+// working on the rows that opt in, and a token of any other audience is refused.
+func TestUnderTheEdDSAClassTheLegacyTokenKeepsGoAPIsAudience(t *testing.T) {
+	a := newAccessFixture(t)
+	for audience, want := range map[string]int{contracts.PlatformAPIAudience: http.StatusOK, "query-api": http.StatusUnauthorized, AccessTokenAudience: http.StatusUnauthorized} {
+		hs, err := NewIssuer(testSecret, testIssuer, audience)
+		if err != nil {
+			t.Fatal(err)
+		}
+		compact, err := hs.Access(a.grant())
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := a.do(http.MethodGet, "/v1/sessions/current", "", map[string]string{"Authorization": "Bearer " + compact})
+		if r.Code != want {
+			t.Errorf("HS256 token of audience %q: status %d, want %d; body %s", audience, r.Code, want, r.Body)
+		}
+	}
+}

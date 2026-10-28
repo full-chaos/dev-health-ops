@@ -3,11 +3,11 @@
 # packages, ~3,030 s package time in sum): a package with no row weighs 1. The weights only need to be roughly right: a wrong one
 # costs balance, never coverage (the shards always partition `go list ./...`). Key = import path relative to the module root.
 # Sorted (LC_ALL=C), no duplicates; internal/cigates/testshard checks each row names a real package.
-cmd/dho	25
+cmd/dho	135
 cmd/gqlgen-guard	19
-deploy/helm/dev-health	127
+deploy/helm/dev-health	457
 internal/api/credentials	32
-internal/api/syncadmin	26
+internal/api/syncadmin	113
 internal/api/teamsidentity	46
 internal/atlassianteams	11
 internal/auth/contracts	13
@@ -38,29 +38,29 @@ internal/fixturescli	6
 internal/goapicli/restprove	12
 internal/goapiproof	126
 internal/gqlgenguard	550
-internal/httpguard	197
+internal/httpguard	489
 internal/joboutbox	11
-internal/jobruntime	3
+internal/jobruntime	33
 internal/jobs	6
-internal/jobs/metrics/daily	31
+internal/jobs/metrics/daily	89
 internal/jobs/metrics/remaining	8
-internal/jobs/workgraph/units	44
+internal/jobs/workgraph/units	103
 internal/platform/logging	16
 internal/platform/otlpmetrics	31
 internal/platform/tracing	4
 internal/providerfoundation	14
-internal/providersync	260
+internal/providersync	367
 internal/pythonparity	20
 internal/pythonparity/emailvalidator	27
-internal/pythonparity/pyidna	29
+internal/pythonparity/pyidna	77
 internal/queryapi/investmentexplain	19
 internal/queryapiservice	13
 internal/storage/clickhouse	3
-internal/storedversion	29
+internal/storedversion	74
 internal/streamhandlers	32
 internal/streamrunnerservice	22
 internal/synccli	71
 internal/syncdispatchruntime	23
 internal/testsupport/goldenscan/treegate	8
-internal/testsupport/venuechanged	99
+internal/testsupport/venuechanged	232
 internal/testsupport/venueoracle/goldenhygiene	9

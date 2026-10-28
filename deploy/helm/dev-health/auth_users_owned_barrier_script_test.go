@@ -139,6 +139,7 @@ type bworld struct {
 	goRS, authRS                []any
 	goPods, authPods, otherPods []any
 	jobs, cronJobs              []any
+	statefulSets                []any
 }
 
 const (
@@ -258,6 +259,7 @@ func (w *bworld) files() map[string]string {
 		"pods.all.json":            bwList(all),
 		"jobs.all.json":            bwList(w.jobs),
 		"cronjobs.all.json":        bwList(w.cronJobs),
+		"statefulsets.all.json":    bwList(w.statefulSets),
 	}
 }
 
@@ -418,7 +420,7 @@ func TestBarrierFailsOnEachBrokenState(t *testing.T) {
 
 // A kubectl error is never a pass, whichever call it hits.
 func TestBarrierFailsClosedWhenKubectlFails(t *testing.T) {
-	for _, key := range []string{"deploy.go-api", "rs.go-api", "pods.go-api", "rs.auth-service", "pods.all", "jobs.all", "cronjobs.all"} {
+	for _, key := range []string{"deploy.go-api", "rs.go-api", "pods.go-api", "rs.auth-service", "pods.all", "jobs.all", "cronjobs.all", "statefulsets.all"} {
 		r := runBarrier(t, bwGoodBarrierWorld(), []string{"FAKE_FAIL=" + key}, "up-go-api")
 		if r.rc == 0 || strings.Contains(r.stdout, "barrier_ok") {
 			t.Errorf("kubectl %s failing passed: rc=%d", key, r.rc)
@@ -441,7 +443,7 @@ func TestBarrierCallsOnlyKubectlGetJSONPath(t *testing.T) {
 			t.Fatalf("%s: kubectl called %d times", mode, len(lines))
 		}
 		for _, line := range lines {
-			if !regexp.MustCompile(`^-n dev-health --request-timeout=30s get (deploy|rs|pods|jobs|cronjobs) (-l app\.kubernetes\.io/instance=a\S* )?-o jsonpath=`).MatchString(line) {
+			if !regexp.MustCompile(`^-n dev-health --request-timeout=30s get (deploy|rs|pods|jobs|cronjobs|statefulsets) (-l app\.kubernetes\.io/instance=a\S* )?-o jsonpath=`).MatchString(line) {
 				t.Errorf("%s: kubectl call outside the read-only shape: %s", mode, line)
 			}
 			if regexp.MustCompile(`\b(secret|secrets|exec|describe|apply|patch|replace|delete|logs|env)\b`).MatchString(strings.SplitN(line, "-o jsonpath=", 2)[0]) {
@@ -679,5 +681,124 @@ func TestBarrierAdminUsersScanAsksForEveryContainerField(t *testing.T) {
 		if !found {
 			t.Errorf("no ReplicaSet template read for %s (the exact-match set)", comp)
 		}
+	}
+}
+
+// The bundled ClickHouse StatefulSet (chart: templates/clickhouse.yaml:10-12, name <fullname>-clickhouse; its init container
+// clickhouse-usersd-links runs `sh -c`, clickhouse.yaml:53-59) is the one long-lived release workload on the script's fixed
+// list. Its pods are trusted only through kind + name + the ownerReference chain, never through a label.
+const clickHouseSTS = "a-dev-health-clickhouse"
+
+func bwClickHouseInit() map[string]any {
+	return map[string]any{"name": "clickhouse-usersd-links", "image": "clickhouse/clickhouse-server:24.3",
+		"command": bwStrs("sh", "-c", `for n in "$@"; do ln -sfn "../usersd-cm/$n" "/links/$n"; done`, "--", "users.xml")}
+}
+
+func bwClickHouseMain() map[string]any {
+	return map[string]any{"name": "clickhouse", "image": "clickhouse/clickhouse-server:24.3"}
+}
+
+func bwStatefulSet(name string) map[string]any {
+	return map[string]any{
+		"metadata": map[string]any{"name": name},
+		"spec": map[string]any{"template": map[string]any{"spec": map[string]any{
+			"initContainers": []any{bwClickHouseInit()}, "containers": []any{bwClickHouseMain()}}}},
+	}
+}
+
+func bwOwned(pod map[string]any, kind, name string) map[string]any {
+	pod["metadata"].(map[string]any)["ownerReferences"] = []any{map[string]any{"kind": kind, "name": name}}
+	return pod
+}
+
+func bwClickHousePod(name string, extra ...any) map[string]any {
+	containers := append([]any{bwClickHouseMain()}, extra...)
+	return bwOwned(bwPodAt(name, "clickhouse", "", map[string]any{"initContainers": []any{bwClickHouseInit()}, "containers": containers}), "StatefulSet", clickHouseSTS)
+}
+
+func clickHouseWorld() *bworld {
+	w := bwNewWorld()
+	w.statefulSets = []any{bwStatefulSet(clickHouseSTS)}
+	w.otherPods = append(w.otherPods, bwClickHousePod(clickHouseSTS+"-0"))
+	return w
+}
+
+// The named StatefulSet pod as rendered (sh -c in its init container) passes.
+func TestBarrierPassesTheNamedClickHouseStatefulSetPod(t *testing.T) {
+	for _, mode := range []string{"up-go-api", "up-owned", "down-auth"} {
+		if r := runBarrier(t, clickHouseWorld().files(), nil, mode); !bwPassed(r) {
+			t.Errorf("%s: the named ClickHouse pod was refused: rc=%d stderr=%q", mode, r.rc, r.stderr)
+		}
+	}
+}
+
+// Nothing else rides on the named workload: a Job, a Deployment, a StatefulSet of another name, a pod without the owner, a
+// changed template, an extra container. The release label is never a reason to trust.
+func TestBarrierStopsWhereTheNamedWorkloadIsImitated(t *testing.T) {
+	chInit := []any{bwClickHouseInit()}
+	chMain := []any{bwClickHouseMain()}
+	rows := map[string]func(w *bworld){
+		"a rogue Job with the release label and the ClickHouse command": func(w *bworld) {
+			j := bwJobItem("x1", map[string]any{"initContainers": chInit, "containers": chMain})
+			j["metadata"].(map[string]any)["labels"] = map[string]any{"app.kubernetes.io/instance": "a"}
+			w.jobs = append(w.jobs, j)
+		},
+		"a rogue CronJob with the ClickHouse command": func(w *bworld) {
+			w.cronJobs = append(w.cronJobs, bwCronJobItem("x1", map[string]any{"initContainers": chInit, "containers": chMain}))
+		},
+		"a rogue Deployment pod with the release label, a name not on the list": func(w *bworld) {
+			pod := bwOwned(bwPodAt("x1", "clickhouse", "", map[string]any{"initContainers": chInit, "containers": chMain}), "ReplicaSet", "rogue-5d9f")
+			w.otherPods = append(w.otherPods, pod)
+		},
+		"a StatefulSet pod of another name": func(w *bworld) {
+			pod := bwOwned(bwPodAt("x1", "clickhouse", "", map[string]any{"initContainers": chInit, "containers": chMain}), "StatefulSet", "rogue-clickhouse")
+			w.statefulSets = append(w.statefulSets, bwStatefulSet("rogue-clickhouse"))
+			w.otherPods = append(w.otherPods, pod)
+		},
+		"the ClickHouse tuple on a pod without an owner": func(w *bworld) {
+			w.otherPods = append(w.otherPods, bwPodAt("x1", "clickhouse", "", map[string]any{"initContainers": chInit, "containers": chMain}))
+		},
+		"the named StatefulSet pod with an extra container": func(w *bworld) {
+			w.otherPods = append(w.otherPods, bwClickHousePod("x1", map[string]any{"name": "sidecar", "image": "registry.example/tool:1", "args": bwStrs("admin", "users", "create")}))
+		},
+		"the named StatefulSet pod with an extra shell container": func(w *bworld) {
+			w.otherPods = append(w.otherPods, bwClickHousePod("x1", map[string]any{"name": "sidecar", "image": "registry.example/tool:1", "command": bwStrs("bash", "-c", "true")}))
+		},
+		"the named StatefulSet pod with a changed init command": func(w *bworld) {
+			pod := bwClickHousePod("x1")
+			pod["spec"].(map[string]any)["initContainers"] = []any{map[string]any{"name": "clickhouse-usersd-links", "image": "clickhouse/clickhouse-server:24.3",
+				"command": bwStrs("sh", "-c", `echo "$(id)"`)}}
+			w.otherPods = append(w.otherPods, pod)
+		},
+	}
+	for name, mut := range rows {
+		t.Run(name, func(t *testing.T) {
+			w := clickHouseWorld()
+			mut(w)
+			r := runBarrier(t, w.files(), nil, "up-go-api")
+			if bwPassed(r) || r.rc == 0 || !strings.Contains(r.stderr, "x1") {
+				t.Fatalf("rc=%d stdout=%q stderr=%q", r.rc, r.stdout, r.stderr)
+			}
+		})
+	}
+}
+
+// The scan asks for the owner chain and for the StatefulSets of the namespace (by kind and name, never by label).
+func TestBarrierScanAsksForOwnersAndStatefulSets(t *testing.T) {
+	r := runBarrier(t, clickHouseWorld().files(), nil, "up-go-api")
+	foundOwner, foundSTS := false, false
+	for _, line := range strings.Split(r.argv, "\n") {
+		if strings.Contains(line, "get pods -o jsonpath=") && strings.Contains(line, ".metadata.ownerReferences[*]") {
+			foundOwner = true
+		}
+		if strings.Contains(line, "get statefulsets -o jsonpath=") && strings.Contains(line, ".spec.template.spec.containers[*]") {
+			foundSTS = true
+		}
+	}
+	if !foundOwner {
+		t.Error("the pod scan does not read the ownerReferences")
+	}
+	if !foundSTS {
+		t.Error("no namespace-wide `get statefulsets -o jsonpath=` call with the template containers")
 	}
 }

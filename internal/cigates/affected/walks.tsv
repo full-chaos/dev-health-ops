@@ -143,6 +143,9 @@ internal/cigates/scripts	tmp_dirs_removed_test.go	unexpressed	-	-
 internal/cigates/sharedserver	batch_a_test.go	unexpressed	-	-
 internal/cigates/sharedserver	sharedserver_test.go	unexpressed	-	*_test.go
 internal/cigates/splitshards	support_test.go	unexpressed	-	-
+internal/cigates/suitecatalog	runblock_test.go	unexpressed	-	-
+internal/cigates/suitecatalog	suitecatalog_test.go	.github/workflows	dir	*
+internal/cigates/suitecatalog	suitecatalog_test.go	unexpressed	-	-
 internal/cigates/testshard	raceweightsdir_test.go	ci/go_race_weights.d	dir	*
 internal/cigates/testshard	trimpath_test.go	.github/workflows	dir	*
 internal/cigates/testshard	trimpath_test.go	unexpressed	-	-
@@ -255,6 +258,7 @@ internal/platform/fernet	fernet_test.go	unexpressed	-	*.go
 internal/platform/otlpmetrics	labelcensus_test.go	.	tree	*.go
 internal/platform/secrets	declared_fields_test.go	internal	tree	*.go
 internal/platform/secrets	envreads_test.go	.	tree	*.go
+internal/platform/timeoutclass	timeoutclass_test.go	internal/platform/timeoutclass	dir	*
 internal/processreadiness	readiness_timeout_test.go	internal/processreadiness	dir	*
 internal/providerfoundation	classify_call_sites_test.go	unexpressed	-	-
 internal/providerfoundation	wire_sites_census_test.go	internal/providerfoundation	dir	*

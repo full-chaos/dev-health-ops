@@ -166,6 +166,7 @@ func (h *shadowHarness) truncate(t *testing.T, tables ...string) {
 // theme map that is the roll-up of that mix, and N attempt rows with tokens,
 // cost and latency. A second run asks nobody again.
 func TestShadowPhaseWritesShadowAndAttemptRowsAfterAMaterializeRun(t *testing.T) {
+	t.Parallel()
 	h := newShadowHarness(t)
 	fake := newFakeJev(t, nil)
 	logs := &syncBuffer{}
@@ -277,6 +278,7 @@ func TestShadowPhaseWritesShadowAndAttemptRowsAfterAMaterializeRun(t *testing.T)
 // The shadow skip-existing predicate on a real engine, clause by clause: the
 // stamp is equal, the input hash is equal, and the LATEST state is terminal.
 func TestTheShadowSkipExistingPredicateClauseByClause(t *testing.T) {
+	t.Parallel()
 	h := newShadowHarness(t)
 	writer, err := chwrite.NewWriter(h.conn)
 	if err != nil {
@@ -353,6 +355,7 @@ func TestTheShadowSkipExistingPredicateClauseByClause(t *testing.T) {
 // Each variant must also prove that its phase really ran the way it claims, so
 // the comparison is never between two runs that did nothing.
 func TestNoShadowFailureChangesAServedRow(t *testing.T) {
+	t.Parallel()
 	h := newShadowHarness(t)
 	at := h.within
 

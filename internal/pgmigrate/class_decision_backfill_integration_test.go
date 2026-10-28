@@ -453,7 +453,7 @@ func TestClassDecisionUnsetDigestDoesNotInheritARoleOrDatabaseDefault(t *testing
 	ctx := context.Background()
 	for _, scope := range []string{"role", "database"} {
 		t.Run(scope, func(t *testing.T) {
-			d := newDownInstance(t)
+			d := newIsolatedDownInstance(t)
 			// seeded is a database at 0145 holding the class rows, with the stale digest as the scope's default; a
 			// connection opened after the default was set reads it (checked, so the test cannot pass unmeasured).
 			seeded := func(t *testing.T) (string, *pgx.Conn) {
@@ -540,7 +540,7 @@ func runPreflightVerb(t *testing.T, uri string, extra map[string]string) (int, p
 // needs_manual/class_decision_digest exactly when the upgrade refuses, applies_cleanly exactly when it applies.
 func TestPreflightPredictsTheClassDecisionGuard(t *testing.T) {
 	ctx := context.Background()
-	d := newDownInstance(t)
+	d := newIsolatedDownInstance(t)
 	digest := func(v string) map[string]string { return map[string]string{pgmigrate.ClassDecisionLiveDigestEnv: v} }
 	cases := []struct {
 		name       string

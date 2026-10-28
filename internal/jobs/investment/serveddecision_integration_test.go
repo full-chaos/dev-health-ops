@@ -111,6 +111,7 @@ func mapSum(values map[string]float64) float64 {
 //	C: evidence none -> the level mix, no quote, low quality
 //	D: under the gate -> the insufficient_evidence row, no request
 func TestAServedDecisionRunWritesTheContractRowsForEachState(t *testing.T) {
+	t.Parallel()
 	h := newShadowHarness(t)
 	logs := &syncBuffer{}
 	fake := newFakeJev(t, func(_ int, body []byte) jevReply {
@@ -241,6 +242,7 @@ func TestAServedDecisionRunWritesTheContractRowsForEachState(t *testing.T) {
 // answers it). The run ends the way a generative run with a failed call ends
 // today: no error, the failure in its counts.
 func TestAServedRequestFailureKeepsTheLastRowAndTheRunEndsAsItDoesToday(t *testing.T) {
+	t.Parallel()
 	h := newShadowHarness(t)
 	logs := &syncBuffer{}
 	failB := true
@@ -336,6 +338,7 @@ func TestAServedRequestFailureKeepsTheLastRowAndTheRunEndsAsItDoesToday(t *testi
 // with the deterministic class of the generative path, and writes no
 // investment row.
 func TestAServedDeterministicFailureEndsTheRunLikeTheGenerativePath(t *testing.T) {
+	t.Parallel()
 	h := newShadowHarness(t)
 	logs := &syncBuffer{}
 	fake := newFakeJev(t, func(int, []byte) jevReply { return jevReply{status: http.StatusUnauthorized, body: []byte(`{}`)} })
@@ -368,6 +371,7 @@ func TestAServedDeterministicFailureEndsTheRunLikeTheGenerativePath(t *testing.T
 // every gate-pass unit must carry the generative stamp. Skip-existing must not
 // reuse run 1's rows while run 2's rows are the latest (CHAOS-8873).
 func TestSettingTheProviderBackServesTheGenerativeRowsAgain(t *testing.T) {
+	t.Parallel()
 	h := newShadowHarness(t)
 	logs := &syncBuffer{}
 	writer, err := chwrite.NewWriter(h.conn)
@@ -503,6 +507,7 @@ func servedOutcomeSum(t *testing.T, collector *jobruntime.MetricsCollector) (sum
 // The metric is the readback of the production switch: a run with no count
 // must not read as a healthy one.
 func TestEveryUnitAskedOfTheServedBackendIsInOneOutcomeCountOnEveryExit(t *testing.T) {
+	t.Parallel()
 	h := newShadowHarness(t)
 	for _, tc := range []struct {
 		name       string
@@ -583,6 +588,7 @@ func (observer *countingServedObserver) ObserveServedRun(_ string, outcomes map[
 // asks nothing, and still reports ONE run line and ONE observation (all
 // zero). A run that reports nothing must never be the healthy case.
 func TestAServedRunWithNoUnitToAskStillReportsItsRun(t *testing.T) {
+	t.Parallel()
 	h := newShadowHarness(t)
 	logs := &syncBuffer{}
 	fake := newFakeJev(t, nil)

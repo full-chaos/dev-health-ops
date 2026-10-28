@@ -46,6 +46,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/dialclass"
+	"github.com/full-chaos/dev-health-ops/internal/platform/timeoutclass"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -132,10 +133,15 @@ func Once(ctx context.Context, opener TxOpener) (err error) {
 // must a cancellation.
 //
 // CHAOS-11608: a refused or pooler-refused dial keeps dialclass.ErrUnreachable as its cause, so
-// it classifies transient (unreachable), never as a timeout and never with the driver text.
+// it classifies transient (unreachable), never as a timeout and never with the driver text. An OS
+// socket deadline or net timeout keeps timeoutclass.ErrTimeout instead (CHAOS-11617): still transient
+// to the dial retry loops, and a timeout to health.Registry.
 func sanitizedProbeError(operation string, err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return fmt.Errorf("%s: unavailable: %w", operation, context.DeadlineExceeded)
+	}
+	if timeoutclass.IsTimeout(err) {
+		return fmt.Errorf("%s: unavailable: %w", operation, timeoutclass.ErrTimeout)
 	}
 	if dialclass.IsTransient(err) {
 		return fmt.Errorf("%s: unavailable: %w", operation, dialclass.ErrUnreachable)

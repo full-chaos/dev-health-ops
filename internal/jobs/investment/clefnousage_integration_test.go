@@ -18,6 +18,7 @@ const clefBudgetOrg = "aaaaaaaa-0000-4000-8000-0000000000c1"
 // A clef answer with no usage settles through the real Postgres store at the
 // reserved amount as a success; the next admission of the same month passes.
 func TestAClefAnswerWithNoUsageSettlesThroughPgStoreAndTheNextAdmitPasses(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	instance, err := containers.StartPostgres(ctx)
 	if err != nil {

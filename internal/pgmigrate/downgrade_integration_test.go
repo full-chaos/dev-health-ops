@@ -83,11 +83,14 @@ type downInstance struct {
 
 func newDownInstance(t *testing.T) downInstance {
 	t.Helper()
-	instance, err := containers.StartPostgres(context.Background())
-	if err != nil {
-		t.Fatalf("start postgres: %v", err)
-	}
-	t.Cleanup(func() { _ = instance.Close(context.Background()) })
+	instance := sharedInstance(t)
+	return downInstance{instance: instance, admin: connect(t, instance.URI)}
+}
+
+// newIsolatedDownInstance is for a test that changes server-wide state (a role default).
+func newIsolatedDownInstance(t *testing.T) downInstance {
+	t.Helper()
+	instance := isolatedInstance(t)
 	return downInstance{instance: instance, admin: connect(t, instance.URI)}
 }
 

@@ -241,3 +241,43 @@ func TestGoldenDriftSelectRegistryErrorExitsTwo(t *testing.T) {
 		t.Fatalf("exit %d stdout %q, want exit 2 and no verdict", res.code, res.stdout)
 	}
 }
+
+// A malformed registry row is a registry error (exit 2, no verdict). Bash `read` with a tab IFS merges adjacent tabs, so
+// an empty field must be rejected by an explicit split, never read as the next field.
+func TestGoldenDriftMalformedRegistryExitsTwo(t *testing.T) {
+	root := repoRoot(t)
+	rows := map[string]string{
+		"empty trigger then a fourth field": "internal/adminops\t^TestUsersMatchTheFrozenPythonOutput$\t\tinternal/adminops/*\n",
+		"two fields":                        "internal/adminops\t^TestX$\n",
+		"empty package":                     "\t^TestX$\t@MIG\n",
+		"empty regex":                       "internal/adminops\t\t@MIG\n",
+		"empty trigger":                     "internal/adminops\t^TestX$\t\n",
+		"trailing empty fourth field":       "internal/adminops\t^TestX$\t@MIG\t\n",
+		"four fields":                       "internal/adminops\t^TestX$\t@MIG\textra\n",
+	}
+	list := filepath.Join(t.TempDir(), "changed.txt")
+	if err := os.WriteFile(list, []byte(nulList("internal/pgmigrate/sql/0160_add_users_saml_nameid_parts.sql")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, row := range rows {
+		t.Run(name, func(t *testing.T) {
+			reg := filepath.Join(t.TempDir(), "registry.tsv")
+			if err := os.WriteFile(reg, []byte(row), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			res := cmdSpec{dir: t.TempDir(), env: []string{shimBasePath(), "GOLDEN_DRIFT_REGISTRY=" + reg}}.run("bash", filepath.Join(root, "ci", "check_golden_drift.sh"), "select", list)
+			if res.code != 2 || res.stdout != "" {
+				t.Fatalf("exit %d stdout %q, want exit 2 and no verdict", res.code, res.stdout)
+			}
+		})
+	}
+}
+
+func TestGoldenDriftRunRefusesAMalformedRowLine(t *testing.T) {
+	for _, rows := range []string{"ROW\tinternal/adminops\t\n", "ROW\t\t^TestA$\n", "ROW\tinternal/adminops\t^TestA$\textra\n"} {
+		res, _ := runGoldenDrift(t, rows, "pass", "")
+		if res.code != 2 {
+			t.Fatalf("rows %q: exit %d, want 2", rows, res.code)
+		}
+	}
+}

@@ -309,7 +309,12 @@ func (a *liveAccounts) ByID(_ context.Context, id uuid.UUID) (*User, error) {
 func (a *liveAccounts) ProvisionLocal(context.Context, ProvisionLocalRequest) (uuid.UUID, error) {
 	return uuid.Nil, identity.ErrEmailTaken
 }
-func (a *liveAccounts) SetEmailVerified(context.Context, uuid.UUID) error { return nil }
+func (a *liveAccounts) PeekVerificationLink(ctx context.Context, hash [32]byte) (uuid.UUID, bool, error) {
+	return a.links.PeekVerificationLink(ctx, hash)
+}
+func (a *liveAccounts) SetEmailVerifiedConsuming(context.Context, uuid.UUID, [32]byte) error {
+	return nil
+}
 func (a *liveAccounts) PeekResetLink(ctx context.Context, hash [32]byte) (uuid.UUID, bool, error) {
 	return a.links.PeekResetLink(ctx, hash)
 }
@@ -712,7 +717,12 @@ func (a *statefulAccounts) ByID(context.Context, uuid.UUID) (*User, error) {
 func (a *statefulAccounts) ProvisionLocal(context.Context, ProvisionLocalRequest) (uuid.UUID, error) {
 	return uuid.Nil, identity.ErrEmailTaken
 }
-func (a *statefulAccounts) SetEmailVerified(context.Context, uuid.UUID) error { return nil }
+func (a *statefulAccounts) PeekVerificationLink(context.Context, [32]byte) (uuid.UUID, bool, error) {
+	return uuid.Nil, false, nil
+}
+func (a *statefulAccounts) SetEmailVerifiedConsuming(context.Context, uuid.UUID, [32]byte) error {
+	return nil
+}
 func (a *statefulAccounts) PeekResetLink(context.Context, [32]byte) (uuid.UUID, bool, error) {
 	return uuid.Nil, false, nil
 }

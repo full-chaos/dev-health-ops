@@ -26,11 +26,12 @@ var (
 	registeredWithChanges = regexp.MustCompile(`^.*?createuseruser:([^{]*?)User registered\{"email": "[^"]*", "organization_id": "<uuid>"\}(\{.*)$`)
 	// A registration or password reset audit row with no organization: the organization column is NULL.
 	registeredNoOrg = regexp.MustCompile(`^<nil>.*createuseruser:.*User registered\{\}.*success<null>$`)
-	verifiedNoOrg   = regexp.MustCompile(`^<nil>.*email_verifieduseruser:.*Email verified\{\}.*success<null>$`)
+	verifiedAudit   = regexp.MustCompile(`^.*email_verifieduseruser:.*Email verified\{\}.*success<null>$`)
 	resetNoOrg      = regexp.MustCompile(`^<nil>.*password_resetuseruser:.*User reset password\{\}.*success<null>$`)
-	// Alice's password reset: go-api audits it in her first membership's organization, auth-service in none.
-	aliceResetOrgA = regexp.MustCompile(`^Org A(alice@example\.compassword_resetuseruser:alice@example\.comUser reset password\{\}.*success<null>)$`)
-	resetAsked     = regexp.MustCompile(`password_reset_requesteduser`)
+	// A password reset request of a user with no membership: the organization column is NULL.
+	resetAskedNoOrg = regexp.MustCompile(`^<nil>[^<].*password_reset_requesteduseruser:.*Password reset requested\{\}.*success<null>$`)
+	// A password reset request of an address no user holds: no organization, no principal, so no address either.
+	resetAskedUnknown = regexp.MustCompile(`^<nil><null>password_reset_requesteduser<nil>Password reset requested\{\}.*success<null>$`)
 )
 
 // registeredWithoutOrgOrChanges is a registration's golden audit row as auth-service records it: no organization
@@ -100,7 +101,7 @@ var Quirks = []Quirk{
 	},
 	{
 		ID: "audit-register-organization-and-changes-not-recorded", Kind: Deliberate, Table: TableAuditLogs, Needs: []Aggregate{Credentials},
-		Reason: "auth-service audits a registration as a principal event with no organization, no changes object and no description column; go-api's row names the new organization and holds the address and organization id in its changes. Max is the golden's four registrations with an organization",
+		Reason: "auth-service audits a registration with the names of the fields it set (changed_fields) and no organization: the audit row's organization column references auth.organizations, which does not hold the new organization until it is projected; go-api's row names the new organization and holds the address and organization id in its changes, and the audit attribute allowlist (G-65) has no slot for an address. Max is the golden's four registrations with an organization",
 		Max:    4, Exact: true,
 		Rewrite: registeredWithoutOrgOrChanges,
 	},
@@ -112,17 +113,9 @@ var Quirks = []Quirk{
 	},
 	{
 		ID: "audit-email-verified-recorded", Kind: Deliberate, Table: TableAuditLogs, Needs: []Aggregate{Credentials},
-		Reason: "auth-service audits a verification twice (the link redeemed, the address marked verified); go-api writes no audit row for it. The scenario verifies two links (nina, uma)",
+		Reason: "auth-service audits a verification with one row (the address marked verified, in the user's earliest membership organization, or none); go-api writes no audit row for it. The scenario verifies two links (nina, uma)",
 		Max:    verifiedAuditRows, Exact: true,
-		Extra: func(line string) bool { return verifiedNoOrg.MatchString(line) },
-	},
-	{
-		ID: "audit-password-reset-organization-not-recorded", Kind: Deliberate, Table: TableAuditLogs, Needs: []Aggregate{Credentials},
-		Reason: "alice's password reset: go-api audits it in her first membership's organization, auth-service's event holds none",
-		Max:    1, Exact: true,
-		Rewrite: func(line string) (string, bool) {
-			return replaceOnce(aliceResetOrgA, line, "<nil>${1}")
-		},
+		Extra: func(line string) bool { return verifiedAudit.MatchString(line) },
 	},
 	{
 		ID: "audit-password-reset-recorded-without-membership", Kind: Deliberate, Table: TableAuditLogs, Needs: []Aggregate{Credentials},
@@ -131,10 +124,16 @@ var Quirks = []Quirk{
 		Extra: func(line string) bool { return resetNoOrg.MatchString(line) },
 	},
 	{
-		ID: "audit-password-reset-requested-not-recorded", Kind: Deliberate, Table: TableAuditLogs, Needs: []Aggregate{Credentials},
-		Reason: "go-api audits a password reset request for a user with a membership (alice); auth-service's issue of a link credential writes no audit event",
+		ID: "audit-password-reset-requested-without-membership", Kind: Deliberate, Table: TableAuditLogs, Needs: []Aggregate{Credentials},
+		Reason: "auth-service audits every password reset request of an existing user, with a NULL organization when the user has no membership; go-api audits one only for a user with a membership (pia has none)",
 		Max:    1, Exact: true,
-		Missing: func(line string) bool { return resetAsked.MatchString(line) },
+		Extra: func(line string) bool { return resetAskedNoOrg.MatchString(line) },
+	},
+	{
+		ID: "audit-password-reset-requested-unknown-address", Kind: Deliberate, Table: TableAuditLogs, Needs: []Aggregate{Credentials},
+		Reason: "auth-service leaves a row for a reset request of an address no user holds, with no principal, no organization and no address, so a probe of addresses leaves a trail; go-api audits nothing for it. Max is the scenario's unknown-address request plus its rate-limit window",
+		Max:    5,
+		Extra:  func(line string) bool { return resetAskedUnknown.MatchString(line) },
 	},
 	{
 		ID: "link-token-format-auth-service", Kind: Deliberate, Table: TableLinkMails, Needs: []Aggregate{Credentials}, Owned: OwnedOnly,
@@ -147,5 +146,5 @@ var Quirks = []Quirk{
 }
 
 // verifiedAuditRows is the email-verified audit rows of the scenario: two verification links followed with a live
-// token (nina's, uma's; nina's second visit is refused), each audited by two events.
-const verifiedAuditRows = 2 * 2
+// token (nina's, uma's; nina's second visit is refused), each audited by one event.
+const verifiedAuditRows = 2

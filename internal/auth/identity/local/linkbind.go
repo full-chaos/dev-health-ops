@@ -36,11 +36,25 @@ func (l *PGLinks) IssueBound(ctx context.Context, req IssueRequest) error {
 	if !real {
 		principal = uuid.New()
 	}
+	if req.Purpose == PurposePasswordReset {
+		return l.issueResetRequest(ctx, req, principal, real)
+	}
 	tx, err := l.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("local: storing a link credential: %w", err)
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if err := l.writeBoundLink(ctx, tx, req, principal, real); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("local: storing a link credential: %w", err)
+	}
+	return nil
+}
+
+// writeBoundLink is IssueBound's statements: lock, delete, insert.
+func (l *PGLinks) writeBoundLink(ctx context.Context, tx execer, req IssueRequest, principal uuid.UUID, real bool) error {
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, lockKey("link:"+string(req.Purpose), principal.String())); err != nil {
 		return fmt.Errorf("local: locking the issue: %w", err)
 	}
@@ -53,9 +67,6 @@ WHERE principal_id = $1::uuid AND purpose = $2 AND consumed_at IS NULL AND $3::b
 SELECT $1::uuid, $2, $3, now() + make_interval(secs => $4::double precision), clock_timestamp(),
        (SELECT COALESCE(u.token_version, 0) FROM public.users u WHERE u.id = $1::uuid)
 WHERE $5::boolean`, principal.String(), string(req.Purpose), req.TokenHash[:], req.TTL.Seconds(), real); err != nil {
-		return fmt.Errorf("local: storing a link credential: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("local: storing a link credential: %w", err)
 	}
 	return nil

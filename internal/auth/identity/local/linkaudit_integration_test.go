@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
@@ -58,6 +59,22 @@ func tracedLinks(t *testing.T, ctx context.Context, env *pgEnv) (*PGLinks, *stat
 	return NewPGLinks(pool, schema), recorder
 }
 
+// project copies a public organization into the auth schema, as login does before it names one.
+func (e *pgEnv) project(t *testing.T, ctx context.Context, org uuid.UUID) {
+	t.Helper()
+	schema, err := authschema.NewValidatedIdentifier("auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := identity.New(identity.Config{Pool: e.runtime, Schema: schema, UsersOwnedByAuth: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ProjectOrganization(ctx, org); err != nil {
+		t.Fatalf("ProjectOrganization: %v", err)
+	}
+}
+
 func (e *pgEnv) membership(t *testing.T, ctx context.Context, user uuid.UUID, org uuid.UUID, createdAt string) {
 	t.Helper()
 	if _, err := e.admin.Exec(ctx, `INSERT INTO public.organizations (id, slug, name, settings, tier, managed_by, is_active, created_at, updated_at)
@@ -77,6 +94,8 @@ func TestResetRequestWritesTheLinkAndOneAuditRowInTheEarliestMembershipOrganizat
 	first, later := uuid.New(), uuid.New()
 	env.membership(t, ctx, p, later, "now()")
 	env.membership(t, ctx, p, first, "now() - interval '2 days'")
+	env.project(t, ctx, first)
+	env.project(t, ctx, later)
 	if err := links.IssueBound(ctx, IssueRequest{PrincipalID: p, Purpose: PurposePasswordReset, TokenHash: linkHash("rq1"), TTL: ResetTTL}); err != nil {
 		t.Fatal(err)
 	}
@@ -91,6 +110,19 @@ FROM auth.security_audit_events WHERE event_type = $1`, audit.EventPasswordReset
 	}
 	if n != 1 || org != first.String() || subject != p.String() || reason != "password_reset_requested" {
 		t.Errorf("rows %d org %s (want %s) subject %s reason %s", n, org, first, subject, reason)
+	}
+}
+
+func TestResetRequestOfAnUnprojectedMembershipOrganizationNamesNoOrganization(t *testing.T) {
+	ctx := context.Background()
+	env, links := linkEnv(t, ctx)
+	p := env.owner(t, ctx)
+	env.membership(t, ctx, p, uuid.New(), "now()")
+	if err := links.IssueBound(ctx, IssueRequest{PrincipalID: p, Purpose: PurposePasswordReset, TokenHash: linkHash("np1"), TTL: ResetTTL}); err != nil {
+		t.Fatalf("a request must not fail on an organization the auth schema lacks: %v", err)
+	}
+	if n := env.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = $1 AND organization_id IS NULL AND subject_principal_id = $2`, audit.EventPasswordResetRequested, p.String()); n != 1 {
+		t.Errorf("rows with no organization = %d, want 1", n)
 	}
 }
 
@@ -192,6 +224,7 @@ func TestVerificationWritesExactlyOneAuditRowInTheEarliestMembershipOrganization
 	p := rig.account(t, ctx, "Verify-pass-1")
 	org := uuid.New()
 	rig.env.membership(t, ctx, p, org, "now()")
+	rig.env.project(t, ctx, org)
 	if err := rig.links.IssueBound(ctx, IssueRequest{PrincipalID: p, Purpose: PurposeEmailVerification, TokenHash: linkHash("verify-secret"), TTL: VerificationTTL}); err != nil {
 		t.Fatal(err)
 	}

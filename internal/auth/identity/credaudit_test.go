@@ -22,16 +22,16 @@ func TestCredentialAuditEventsCarryTheOrganizationAndAllowlistedChanges(t *testi
 	}
 
 	t.Run("a registration that creates an organization", func(t *testing.T) {
-		e := provisionAudit(subject, actor, &org)
-		if e.OrganizationID == nil || *e.OrganizationID != org {
-			t.Errorf("organization = %v, want %s", e.OrganizationID, org)
+		e := provisionAudit(subject, actor, true)
+		if e.OrganizationID != nil {
+			t.Errorf("organization = %v, want none: auth.organizations does not hold the new organization", *e.OrganizationID)
 		}
 		if got, want := changes(e), []string{"email", "organization_id"}; !reflect.DeepEqual(got, want) {
 			t.Errorf("changed_fields = %v, want %v", got, want)
 		}
 	})
 	t.Run("a registration with no organization", func(t *testing.T) {
-		e := provisionAudit(subject, actor, nil)
+		e := provisionAudit(subject, actor, false)
 		if e.OrganizationID != nil {
 			t.Errorf("organization = %v, want none", *e.OrganizationID)
 		}
@@ -60,8 +60,8 @@ func TestCredentialAuditEventsAreValidAndHoldNoAddress(t *testing.T) {
 	org := uuid.NewString()
 	actor := SelfSignUp(nil)
 	events := map[string]audit.AuditEvent{
-		"provision":       provisionAudit(subject, actor, &org),
-		"provision, none": provisionAudit(subject, actor, nil),
+		"provision":       provisionAudit(subject, actor, true),
+		"provision, none": provisionAudit(subject, actor, false),
 		"verified":        verifiedAudit(subject, actor, &org),
 		"reset":           passwordAudit(PasswordReset, subject, actor, &org),
 		"change":          passwordAudit(PasswordChanged, subject, actor, nil),
@@ -82,7 +82,7 @@ func TestEveryCredentialAuditEventIsMappedByTheCorpus(t *testing.T) {
 	mapped := authrows.CredentialAuditEvents()
 	subject := uuid.NewString()
 	for _, e := range []audit.AuditEvent{
-		provisionAudit(subject, SelfSignUp(nil), nil),
+		provisionAudit(subject, SelfSignUp(nil), false),
 		verifiedAudit(subject, SelfSignUp(nil), nil),
 		passwordAudit(PasswordReset, subject, SelfSignUp(nil), nil),
 		passwordAudit(PasswordChanged, subject, SelfSignUp(nil), nil),

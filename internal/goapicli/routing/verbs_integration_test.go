@@ -336,6 +336,12 @@ func TestStatusReturnsWithinItsTimeoutUnderAHeldLock(t *testing.T) {
 			t.Fatalf("status must NEVER refuse, even with the database blocked: %v", result.err)
 		}
 	case <-time.After(30 * time.Second):
+		// The verb takes no context: release the lock the query is blocked on, then join it, then fail.
+		_ = holder.Rollback(ctx)
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+		}
 		t.Fatal("status is still running after the 30 s guard under a held lock -- the deadline is not bounding the blocked query")
 	}
 	if !strings.Contains(out, "local schema_digest") || !strings.Contains(out, "go plane schema_digest") || !strings.Contains(out, featureOperationLine(verbTestOperation)) {

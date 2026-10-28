@@ -316,7 +316,8 @@ func TestReconcileLinesAreStableAndListEveryGatedClass(t *testing.T) {
 		want = append(want, "diff."+class+"=0")
 	}
 	want = append(want, "info.last_login_drift=0", "info.display_name_drift=0", "info.identity_not_carried=0", "info.sso_identity_unmatched=0",
-		"info.sso_identity_relink_pending=0", "info.sso_subject_unverifiable=0")
+		"info.sso_identity_relink_pending=0", "info.sso_subject_unverifiable=0",
+		"info.membership_public_missing=0", "info.membership_auth_missing=0", "info.membership_role_diff=0")
 	if strings.Join(lines, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("lines:\n%s", strings.Join(lines, "\n"))
 	}

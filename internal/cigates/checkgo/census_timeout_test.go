@@ -7,8 +7,8 @@ import (
 	"testing"
 )
 
-// CHAOS-11762 interim: the census call of a test shard gets -timeout 20m only when its package list holds
-// internal/cigates/checkgo (485-562 s on hosted merge_group); every other go test call keeps 10m. An inherited
+// CHAOS-11762 interim, widened by CHAOS-11787: a go test call of a test shard gets -timeout 20m when its package list holds a
+// package under internal/cigates/ (checkgo ran 485-757 s on hosted merge_group); every other go test call keeps 10m. An inherited
 // GO_TEST_JSON_TIMEOUT changes nothing: the caller's environment never picks a timeout.
 
 const checkgoTimeoutPackage = "internal/cigates/checkgo"
@@ -34,9 +34,13 @@ func TestTheCensusCallOfAShardTakes20mOnlyWhenItHoldsCheckgo(t *testing.T) {
 					t.Errorf("shard %d (%q): an inherited value reached a go test call: %s", shard, ambient, l)
 				}
 				want := " -timeout 10m "
+				for _, f := range strings.Fields(l) {
+					if strings.HasPrefix(f, cigatesPrefix) {
+						want = " -timeout 20m "
+					}
+				}
 				if hasField(l, fullPkg(checkgoTimeoutPackage)) {
 					withCheckgo++
-					want = " -timeout 20m "
 				}
 				if !strings.Contains(l, want) {
 					t.Errorf("shard %d (%q): want%s in: %s", shard, ambient, want, l)

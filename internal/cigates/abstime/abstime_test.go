@@ -568,3 +568,8 @@ func TestScriptKeysAreReadInsideOneLiteral(t *testing.T) {
 	body := "const first = \"elapsed=$SECONDS\\n\"\n\nconst second = \"echo \\\"A_ELAPSED=$elapsed\\\"\\n\"\n" + shellElapsedOf
 	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil))
 }
+
+// The fixpoint does not depend on the order of the assigns in the literal.
+func TestPlantedShellAssignOrderDoesNotMatter(t *testing.T) {
+	shellRefused(t, `"elapsed=$((end - start))\nend=$(date +%s)\necho \"A_ELAPSED=$elapsed\"\n"`)
+}

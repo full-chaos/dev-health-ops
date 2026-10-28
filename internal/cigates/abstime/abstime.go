@@ -198,8 +198,9 @@ var comparisons = map[token.Token]bool{token.GTR: true, token.GEQ: true, token.L
 // A duration a child process measures and reports as KEY=<number> is measured too (CHAOS-11757). A key is emitted
 // when a measured value follows `"KEY="` in a + chain, fills the `KEY=%d` or `KEY=%[n]d` verb of a Printf-family
 // format, or follows a `"KEY="` argument of a Print, Println, Fprint, Fprintln, Sprint or Sprintln call; or when a script
-// literal holds KEY=$((SECONDS ...)), KEY=$SECONDS, KEY=$EPOCHREALTIME or KEY=$(date +%s), KEY=$var for a var assigned
-// one of those in the same literal, or a printf line whose KEY=%s verb takes one of them. It is carried when an Sscanf
+// literal assigns a value that CONTAINS $((... SECONDS ...)), $SECONDS, $EPOCHREALTIME or $(date +%s), or a variable
+// already measured (followed to a fixpoint, so two hops and date-inside-arithmetic count), to an upper-case KEY, or when
+// a printf line's KEY=%s verb takes such a value. It is carried when an Sscanf
 // format reads `KEY=%d` into &v (v is measured) from a source that is not a fixed literal, or when a call of a function
 // declared in the same file with the key as a string literal argument and a non-literal source argument returns it
 // (the function must scan or parse: Sscan*, strconv.Parse*/Atoi, time.ParseDuration, json Unmarshal/Decode, or it calls
@@ -219,7 +220,7 @@ var comparisons = map[token.Token]bool{token.GTR: true, token.GEQ: true, token.L
 //     helper declared in another file is not seen (TestEmitterInAnotherFileIsOutOfScope,
 //     TestAHelperDeclaredInAnotherFileIsNotAReader).
 //   - Reader helpers are followed one call level deep (TestTwoLevelsOfHelperCallsAreOutOfScope).
-//   - Script keys are read inside one literal: no flow between literals, no eval.
+//   - Script keys are read inside one literal: no flow between literals, no eval (TestScriptKeysAreReadInsideOneLiteral).
 //   - Only literal upper-case KEY= channels are seen: JSON, files, exit codes, computed keys and lower-case keys are not
 //     (TestDurationCarriedAsJSONIsOutOfScope, TestAFileChannelIsOutOfScope, TestAComputedKeyIsOutOfScope,
 //     TestALowercaseKeyIsOutOfScope).
@@ -302,8 +303,9 @@ var (
 )
 
 var (
-	shellMeasuredAssign = regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*)=(?:\$\(\([^)]*\bSECONDS\b|\$\{?(?:SECONDS|EPOCHREALTIME)\b|\$\(date \+%s)`)
-	shellMeasuredWord   = regexp.MustCompile(`\$\(\([^)]*\bSECONDS\b|\$\{?(?:SECONDS|EPOCHREALTIME)\b|\$\(date \+%s`)
+	shellAssign       = regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*)=([^\n;]*)`)
+	shellKeyName      = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
+	shellMeasuredWord = regexp.MustCompile(`\$\(\([^)]*\bSECONDS\b|\$\{?(?:SECONDS|EPOCHREALTIME)\b|\$\(date \+%s`)
 )
 
 // scriptKeys returns the KEY names a script literal reports a measured value under: KEY=$((SECONDS ...)) and the like;
@@ -316,27 +318,38 @@ func scriptKeys(text string) []string {
 			out = append(out, m[1])
 		}
 	}
+	// An assign is measured when its right-hand side CONTAINS a measured word or a variable already measured (bare in
+	// arithmetic, $v elsewhere); followed to a fixpoint. An upper-case name assigned such a value is a key.
+	assigns := shellAssign.FindAllStringSubmatch(text, -1)
 	vars := map[string]*regexp.Regexp{}
-	for _, m := range shellMeasuredAssign.FindAllStringSubmatch(text, -1) {
-		vars[m[1]] = regexp.MustCompile(`\$\{?` + regexp.QuoteMeta(m[1]) + `\b`)
-	}
-	for v := range vars {
-		re := regexp.MustCompile(`\b([A-Z][A-Z0-9_]*)=["']*\$\{?` + regexp.QuoteMeta(v) + `\b`)
-		for _, m := range re.FindAllStringSubmatch(text, -1) {
-			out = append(out, m[1])
-		}
-	}
-	measuredWord := func(w string) bool {
-		if shellMeasuredWord.MatchString(w) {
+	bare := map[string]*regexp.Regexp{}
+	refers := func(rhs string) bool {
+		if shellMeasuredWord.MatchString(rhs) {
 			return true
 		}
-		for _, re := range vars {
-			if re.MatchString(w) {
+		for v, re := range vars {
+			if re.MatchString(rhs) || strings.Contains(rhs, "$((") && bare[v].MatchString(rhs) {
 				return true
 			}
 		}
 		return false
 	}
+	for changed := true; changed; {
+		changed = false
+		for _, m := range assigns {
+			if _, done := vars[m[1]]; !done && refers(m[2]) {
+				vars[m[1]] = regexp.MustCompile(`\$\{?` + regexp.QuoteMeta(m[1]) + `\b`)
+				bare[m[1]] = regexp.MustCompile(`\b` + regexp.QuoteMeta(m[1]) + `\b`)
+				changed = true
+			}
+		}
+	}
+	for _, m := range assigns {
+		if shellKeyName.MatchString(m[1]) && refers(m[2]) {
+			out = append(out, m[1])
+		}
+	}
+	measuredWord := refers
 	for _, line := range strings.Split(text, "\n") {
 		i := strings.Index(line, "printf ")
 		if i < 0 {

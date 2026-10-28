@@ -321,6 +321,7 @@ sleep() { echo "SLEEP $*" >> @LOG@; command sleep "$@"; }
 trap '' INT TERM
 echo "PROMPT_PID=$PROMPT"
 stop_service prompt "$PROMPT"
+echo "STOP_DONE prompt" >> @LOG@
 echo "PROMPT_WATCHDOG_FIRED=$(grep -c "^KILL -KILL ${PROMPT}$" @LOG@ || true)"
 TEARDOWN_WAIT_SECS=@BOUND@
 start=$SECONDS
@@ -347,12 +348,15 @@ echo "STUBBORN_ELAPSED=$((SECONDS - start))"
 	g.expect(fired[1] == "0",
 		"the watchdog of a service that exits promptly ran to its bound and killed it %s time(s): the watchdog was not cancelled (SIGTERM ignored via the inherited disposition?)", fired[1])
 	// Event order, no time: after the prompt service is signalled the next thing the library does that sleeps is the
-	// watchdog's own sleep 1; a slow step between the signal and the watchdog would show as another sleep first.
+	// watchdog's own sleep 1; a slow step between the signal and the watchdog would show as another sleep first. The scan
+	// ends where the prompt's stop ends, so the stubborn service's watchdog cannot stand in for a missing one.
 	logged, _ := readIfExists(log)
 	signalled, next := false, ""
 	for _, line := range strings.Split(logged, "\n") {
 		if line == "KILL -TERM "+pid[1] {
 			signalled = true
+		} else if signalled && line == "STOP_DONE prompt" {
+			break
 		} else if signalled && strings.HasPrefix(line, "SLEEP ") {
 			next = line
 			break

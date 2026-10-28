@@ -95,7 +95,7 @@ func TestMain(m *testing.M) {
 // providersyncListUnset and providersyncListArgs are the race leg's providersync listing call: the variables it unsets (GO_ENV_OFF)
 // and its go arguments.
 var (
-	providersyncListUnset = []string{"GO_PROVIDER_ROUTES", "DEV_HEALTH_ENV", "GOFLAGS", "GOEXPERIMENT"}
+	providersyncListUnset = []string{"GO_PROVIDER_ROUTES", "DEV_HEALTH_ENV", "GOFLAGS", "GOEXPERIMENT", "CHECK_GO_FRESH"}
 	providersyncListArgs  = []string{"test", "-mod=readonly", "-trimpath", "-race", "-list", ".*", "./internal/providersync"}
 )
 

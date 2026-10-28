@@ -570,6 +570,8 @@ type hungStates struct {
 	reads int
 	rows  []KeyStateRow
 	hang  bool
+	// release ends a hung read the way its context ending does; nil never releases.
+	release chan struct{}
 }
 
 func (h *hungStates) KeyStates(ctx context.Context) ([]KeyStateRow, error) {
@@ -578,8 +580,12 @@ func (h *hungStates) KeyStates(ctx context.Context) ([]KeyStateRow, error) {
 	hang, rows := h.hang, append([]KeyStateRow(nil), h.rows...)
 	h.mu.Unlock()
 	if hang {
-		<-ctx.Done()
-		return nil, ctx.Err()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-h.release:
+			return nil, context.Canceled
+		}
 	}
 	return rows, nil
 }
@@ -603,13 +609,14 @@ func (s *KeyStates) idle() bool {
 }
 
 // A refresh against a hung source never holds a request: every concurrent
-// caller answers from the last good snapshot within the inline wait, the
+// caller answers from the last good snapshot while the read is still hung, the
 // source is read once, and the read ends at its own timeout.
 func TestKeyStatesRefreshAgainstAHungSourceHoldsNoRequest(t *testing.T) {
-	source := &hungStates{rows: []KeyStateRow{{KeyID: "a", State: StateActive}}}
+	source := &hungStates{rows: []KeyStateRow{{KeyID: "a", State: StateActive}}, release: make(chan struct{})}
 	clock := &fakeClock{now: time.Unix(0, 0)}
+	// The read timeout is an hour: only the release below ends the hung read, so a caller that returned did not wait for it.
 	states := NewKeyStates(KeyStatesConfig{Source: source, RefreshEvery: 10 * time.Second, MaxStale: JWKSCacheTTL,
-		ReadTimeout: 300 * time.Millisecond, InlineWait: 20 * time.Millisecond, Now: clock.Now})
+		ReadTimeout: time.Hour, InlineWait: 20 * time.Millisecond, Now: clock.Now})
 	if _, err := states.Rows(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -617,33 +624,49 @@ func TestKeyStatesRefreshAgainstAHungSourceHoldsNoRequest(t *testing.T) {
 	clock.advance(11 * time.Second)
 
 	const callers = 200
-	took := make([]time.Duration, callers)
 	var wg sync.WaitGroup
 	for i := range callers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			start := time.Now()
 			rows, err := states.Rows(context.Background())
-			took[i] = time.Since(start)
 			if err != nil || len(rows) != 1 {
 				t.Errorf("caller %d = %v, %v; want the last good snapshot", i, rows, err)
 			}
 		}()
 	}
 	wg.Wait()
-	for i, d := range took {
-		if d > 250*time.Millisecond {
-			t.Errorf("caller %d waited %s on a hung source, want well under the read timeout 300ms", i, d)
-		}
+	if states.idle() {
+		t.Fatal("the refresh is not in flight after the callers returned: the callers did not answer while the read was hung")
 	}
 	if got := source.readCount(); got != 2 {
 		t.Errorf("the source was read %d times, want 2 (first read + one single-flight refresh)", got)
 	}
+	close(source.release)
+	waitIdle(t, states)
+
+	// A hung read ends at its own timeout.
+	timed := &hungStates{rows: []KeyStateRow{{KeyID: "a", State: StateActive}}}
+	timedClock := &fakeClock{now: time.Unix(0, 0)}
+	timedStates := NewKeyStates(KeyStatesConfig{Source: timed, RefreshEvery: 10 * time.Second, MaxStale: JWKSCacheTTL,
+		ReadTimeout: 50 * time.Millisecond, InlineWait: 20 * time.Millisecond, Now: timedClock.Now})
+	if _, err := timedStates.Rows(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	timed.setHang(true)
+	timedClock.advance(11 * time.Second)
+	if _, err := timedStates.Rows(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	waitIdle(t, timedStates)
+}
+
+func waitIdle(t *testing.T, states *KeyStates) {
+	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for !states.idle() {
 		if time.Now().After(deadline) {
-			t.Fatal("the refresh goroutine did not end after its read timeout")
+			t.Fatal("the refresh goroutine did not end")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -653,16 +676,16 @@ func TestKeyStatesRefreshAgainstAHungSourceHoldsNoRequest(t *testing.T) {
 // its own context, and is refused (fail closed), not served nothing.
 func TestKeyStatesColdStartAgainstAHungSourceFailsClosedAtTheCallersDeadline(t *testing.T) {
 	source := &hungStates{hang: true}
-	states := NewKeyStates(KeyStatesConfig{Source: source, ReadTimeout: 2 * time.Second})
+	// The read timeout is an hour: only the caller's context can end this wait.
+	states := NewKeyStates(KeyStatesConfig{Source: source, ReadTimeout: time.Hour})
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	start := time.Now()
 	rows, err := states.Rows(ctx)
 	if !reasonIs(err, ReasonKeyStatesUnavailable) || rows != nil {
 		t.Fatalf("cold read = %v, %v; want %s", rows, err, ReasonKeyStatesUnavailable)
 	}
-	if took := time.Since(start); took > time.Second {
-		t.Fatalf("cold read took %s, want about the caller's 50ms", took)
+	if ctx.Err() == nil {
+		t.Fatal("the cold read ended before its caller's context did")
 	}
 }
 

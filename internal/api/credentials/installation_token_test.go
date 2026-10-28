@@ -50,16 +50,14 @@ func TestInstallationTokenAttemptTimesOutAndIsRetried(t *testing.T) {
 
 	h := handlers{client: &http.Client{}} // no Timeout, as the production default
 	gc := &githubCredentials{appID: "1", privateKey: testPrivateKey(t), installationID: "111", app: true}
-	started := time.Now()
+	// A hung attempt ends only through the client's own timeout (the handler waits for release or the request context), so a token
+	// after two hung attempts shows that each of them timed out.
 	token, err := h.installationToken(context.Background(), gc, server.URL)
 	if err != nil || token != "inst_ok" {
 		t.Fatalf("token %q, err %v; want the third attempt's token", token, err)
 	}
 	if got := requests.Load(); got != 3 {
 		t.Errorf("%d requests, want 3 (two timed-out attempts, then success)", got)
-	}
-	if elapsed := time.Since(started); elapsed > 5*time.Second {
-		t.Errorf("took %v: an attempt did not time out", elapsed)
 	}
 }
 

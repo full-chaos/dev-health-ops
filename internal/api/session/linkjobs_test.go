@@ -32,18 +32,14 @@ func TestQueueLinkJobReturnsBeforeTheWork(t *testing.T) {
 	h := jobHandlers(&logs)
 	release, ran := make(chan struct{}), make(chan struct{})
 	request := httptest.NewRequest(http.MethodPost, "/forgot", nil)
-	start := time.Now()
 	h.queueLinkJob(context.Background(), request, mailPasswordReset, true, func(context.Context, *http.Request) error {
 		<-release
 		close(ran)
 		return nil
 	})
-	if time.Since(start) > time.Second {
-		t.Fatal("queueLinkJob waited for the work")
-	}
 	select {
 	case <-ran:
-		t.Fatal("the job finished before it was released")
+		t.Fatal("queueLinkJob returned only after the work finished")
 	default:
 	}
 	close(release)

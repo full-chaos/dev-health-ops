@@ -36,15 +36,15 @@ func TestMetricsFlushNeverOutlivesItsBudgetEvenWhenTheSourceIgnoresTheContext(t 
 
 	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
 	defer cancel()
-	started := time.Now()
 	err := flush.Shutdown(ctx)
+	attemptOver := ctx.Err() != nil
 	if err != nil {
 		t.Fatalf("Shutdown error = %v, want nil: an unreachable collector is not a shutdown failure", err)
 	}
 	// The flush budget is half of the 400ms attempt; the return must come before the attempt's own
 	// deadline so the runtime never sees DeadlineExceeded.
-	if elapsed := time.Since(started); elapsed >= 380*time.Millisecond {
-		t.Fatalf("Shutdown took %s, want it back inside its half-budget well before the 400ms attempt deadline", elapsed)
+	if attemptOver {
+		t.Fatal("Shutdown returned only after the attempt's own deadline passed, want it back inside its half-budget")
 	}
 	if !strings.Contains(logs.String(), "final flush abandoned") {
 		t.Fatalf("the abandoned flush was not logged: %q", logs.String())

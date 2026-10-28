@@ -3,6 +3,7 @@ package pgmigrate
 import (
 	"bytes"
 	"context"
+	"os"
 	"strings"
 	"testing"
 
@@ -141,5 +142,33 @@ func TestHistoryRefusesVerboseAndPositionals(t *testing.T) {
 	code, stdout, _ := runHistoryVerb(t, history)
 	if code != cli.ExitOK || !strings.HasSuffix(stdout, "<base> -> 0001, Initial consolidated schema migration.\n") {
 		t.Errorf("history: exit %d, stdout ends %q", code, stdout[max(0, len(stdout)-80):])
+	}
+}
+
+// The squash changes no line of `history`: the archived revisions print as the chain printed them before
+// (testdata/history_before_squash.txt is the output of the build before the squash, af8d28ed).
+func TestHistoryOutputIsUnchangedByTheSquash(t *testing.T) {
+	want, err := os.ReadFile("testdata/history_before_squash.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := LoadHistory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline, err := LoadBaseline()
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain, err := LoadChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := WriteHistory(&out, WithChain(entries, baseline, chain)); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != string(want) {
+		t.Errorf("history changed:\n%s\nwant:\n%s", out.String(), want)
 	}
 }

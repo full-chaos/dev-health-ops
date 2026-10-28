@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -163,29 +164,32 @@ func TestOperatorReadyz_PinnedResponseBodies(t *testing.T) {
 // its context ends is released by ObserveProbe's own readyzTimeout (not by anything the
 // probe does), and the failure it returns is the class alone.
 func TestObserveProbe_BoundsSlowDependencyCheck(t *testing.T) {
-	blocked := make(chan struct{})
-	probe := ReadinessProbe{Name: "query_clickhouse", Check: func(ctx context.Context) error {
-		defer close(blocked)
-		<-ctx.Done()
-		return ctx.Err()
-	}}
-	start := time.Now()
-	// The parent never ends on its own within the bound: only ObserveProbe's own deadline can release the probe.
-	parent, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	err := ObserveProbe(probe)(parent)
-	elapsed := time.Since(start)
-	select {
-	case <-blocked:
-	default:
-		t.Fatal("the probe never observed ctx.Done(): ObserveProbe applied no deadline")
-	}
-	if err == nil || err.Error() != "dependency" {
-		t.Fatalf("err = %v, want the class-only fallback \"dependency\"", err)
-	}
-	if elapsed > readyzTimeout+5*time.Second {
-		t.Fatalf("a blocked probe took %s to fail, want about %s (readyzTimeout)", elapsed, readyzTimeout)
-	}
+	// The check runs in a bubble on a virtual clock: the blocked probe fails at exactly readyzTimeout, not at the parent's 60 s.
+	synctest.Test(t, func(t *testing.T) {
+		blocked := make(chan struct{})
+		probe := ReadinessProbe{Name: "query_clickhouse", Check: func(ctx context.Context) error {
+			defer close(blocked)
+			<-ctx.Done()
+			return ctx.Err()
+		}}
+		start := time.Now()
+		// The parent never ends on its own within the bound: only ObserveProbe's own deadline can release the probe.
+		parent, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		err := ObserveProbe(probe)(parent)
+		returnedAt := time.Now()
+		select {
+		case <-blocked:
+		default:
+			t.Fatal("the probe never observed ctx.Done(): ObserveProbe applied no deadline")
+		}
+		if err == nil || err.Error() != "dependency" {
+			t.Fatalf("err = %v, want the class-only fallback \"dependency\"", err)
+		}
+		if !returnedAt.Equal(start.Add(readyzTimeout)) {
+			t.Fatalf("a blocked probe failed at +%v of virtual time, want +%v (readyzTimeout)", returnedAt.Sub(start), readyzTimeout)
+		}
+	})
 }
 
 // TestExecutableSchemaBuildsAndLinks proves the gqlgen-generated schema and

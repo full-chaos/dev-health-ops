@@ -116,6 +116,7 @@ func awaitAnswered(t *testing.T, probes ...*postgres.LazyProbeCheck) {
 			continue
 		}
 		// CheckWith waits on the already-warmed cold flight, bounded by ctx (its name and run are ignored once warmed).
+		// A never-warmed probe would be built here with a nil run and panic: accepted failure mode, no prod surface on purpose.
 		_ = probe.CheckWith(guard, "", nil, postgres.PostureCheckOptions{})
 		if !probe.Answered() {
 			t.Fatal("a warmed readiness check never produced its first answer")

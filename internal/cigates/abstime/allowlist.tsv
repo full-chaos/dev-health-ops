@@ -3,8 +3,6 @@
 # internal/cigates/emitscan/scan_rows_test.go costRatio bound 1.6 is a ratio, not an absolute assertion: no row (D6418 stated deviation, parser depth cap).
 cmd/auth-migrate/wait_test.go	TestDatabaseWaitGivesUpAtTheBound	not wall time: fake clock (cmd/auth-migrate/wait_test.go:105)
 cmd/auth-migrate/wait_test.go	TestDatabaseWaitHoldsTheBound	not wall time: fake clock (cmd/auth-migrate/wait_test.go:156)
-internal/api/credentials/installation_token_test.go	TestInstallationTokenAttemptTimesOutAndIsRetried	pending CHAOS-11684 conversion
-internal/api/session/linkjobs_test.go	TestQueueLinkJobReturnsBeforeTheWork	pending CHAOS-11684 conversion
 internal/api/syncadmin/backfill_submit_integration_test.go	TestBackfillSubmitReturnsAtOnceForAWideWindowAndManyRequests	pending CHAOS-11684 conversion
 internal/audit/outboxloop_test.go	TestLoopHandsTheStepperTheCurrentTimeNotTheTickTimestamp	not a performance budget: clock or stamp skew
 internal/auth/authruntime/jwks_dependency_stall_integration_test.go	TestJWKSAnswersWhileTheDatabaseIsBlackholed	found by the gate, not by the census: pending CHAOS-11684 re-census and conversion
@@ -19,11 +17,6 @@ internal/cigates/docstools/hostsmoke_internal_test.go	TestHostSmokeRequestTimeou
 internal/cigates/emitscan/scan_rows_test.go	TestConstFixpointBounded	owned by CHAOS-11674 (emitscan budgets)
 internal/cigates/emitscan/scan_rows_test.go	timed	owned by CHAOS-11674 (emitscan budgets)
 internal/cigates/emitscan/scan_test.go	TestSelfReferencingAliasChainsAreFast	owned by CHAOS-11674 (emitscan budgets)
-internal/egressguard/egressguard_test.go	TestGuardedDialFallsBackToTheOtherFamily	pending CHAOS-11684 conversion
-internal/egressguard/egressguard_test.go	TestGuardedDialReturnsThePrimaryErrorWhenEveryFamilyFails	pending CHAOS-11684 conversion
-internal/egressguard/egressguard_test.go	TestGuardedDialSplitsTheDeadlineAcrossOneFamily	pending CHAOS-11684 conversion
-internal/egressguard/egressguard_test.go	TestGuardedDialStartsTheFallbackWhenThePrimaryFails	pending CHAOS-11684 conversion
-internal/egressguard/egressguard_test.go	TestWrapFallsBackPerFamilyThroughTheTransport	pending CHAOS-11684 conversion
 internal/faultproxy/proxy_test.go	TestDelayAddsLatency	lower-bound wait proof: load only lengthens it
 internal/faultproxy/proxy_test.go	TestSlowCapsRate	lower-bound wait proof: load only lengthens it
 internal/goapicli/prove/e2e_test.go	TestRunBoundsTheOpeningBuildinfoReadToTheConfiguredTimeout	pending CHAOS-11684 conversion
@@ -45,11 +38,6 @@ internal/pgmigrate/indexbuild_concurrent_integration_test.go	TestBuildIndexRefus
 internal/pgmigrate/indexbuild_concurrent_integration_test.go	TestBuildIndexSecondRunDuringABuildRefusesAndLeavesTheBuildAlone	pending CHAOS-11684 conversion
 internal/pgmigrate/indexbuild_selfheal_integration_test.go	TestBuildIndexHolderLongerThanTheWindowLeavesTheLeftoverAndBlocksNoWriter	pending CHAOS-11684 conversion
 internal/pgmigrate/indexbuild_selfheal_integration_test.go	TestBuildIndexTableLockWaitStaysUnderLockTimeout	pending CHAOS-11684 conversion
-internal/platform/health/health_test.go	TestReadinessTimesOutAndContainsPanics	pending CHAOS-11684 conversion
-internal/platform/lifecycle/runtime_test.go	TestShutdownBoundsNonCooperativeComponentsAndAttemptsAllInReverse	pending CHAOS-11684 conversion
-internal/platform/shell/metrics_flush_test.go	TestMetricsFlushNeverOutlivesItsBudgetEvenWhenTheSourceIgnoresTheContext	pending CHAOS-11684 conversion
-internal/platform/tracing/flush_test.go	TestAnExporterDeadlineErrorBeforeTheBoundIsAFailureNotACollectorOutage	pending CHAOS-11684 conversion
-internal/platform/tracing/flush_test.go	TestAnUnreachableCollectorCostsTheStopAtMostTheFlushBound	pending CHAOS-11684 conversion
 internal/providerfoundation/body_classification_test.go	TestDoUnauthenticatedStalledErrorBodyReturnsWithinBoundAndIsClosed	pending CHAOS-11684 conversion
 internal/providerfoundation/http_gate_wait_test.go	TestAGateWaitWithinTheBoundIsSleptOutInPlace	lower-bound wait proof: load only lengthens it
 internal/providerfoundation/http_gate_wait_test.go	TestInPlaceGateWaitsAreBoundedInTotal	lower-bound wait proof: load only lengthens it
@@ -90,8 +78,6 @@ internal/syncreconciler/materializer_jit_cost_integration_test.go	TestMaterializ
 internal/syncreconciler/stage_budget_pipeline_test.go	TestRunStageBudgetIsIndependentOfItsSiblings	pending CHAOS-11684 conversion
 internal/syncreconciler/stage_failed_phase_integration_test.go	TestStageFailedNamesTheSlowStatementThatSpentTheBudget	found by the gate, not by the census: pending CHAOS-11684 re-census and conversion
 internal/testsupport/containers/shared_integration_test.go	TestSharedPostgresAtCapacityRefusesLoudly	pending CHAOS-11684 conversion
-internal/token/states_test.go	TestKeyStatesColdStartAgainstAHungSourceFailsClosedAtTheCallersDeadline	pending CHAOS-11684 conversion
-internal/token/states_test.go	TestKeyStatesRefreshAgainstAHungSourceHoldsNoRequest	pending CHAOS-11684 conversion
 internal/workerservice/dependencies_test.go	TestQueuedContractVersionsReadyDoesNotWaitOnTheCensusOnceProven	pending CHAOS-11684 conversion
 internal/workerservice/execution_liveness_retry_backoff_integration_test.go	TestExecutionLivenessSeesIdempotencyFailuresSpacedByRiverRetryBackoff	found by the gate, not by the census: pending CHAOS-11684 re-census and conversion
 internal/workerservice/multi_replica_outage_integration_test.go	waitForCompletedAfterOutage	found by the gate, not by the census: pending CHAOS-11684 re-census and conversion

@@ -138,6 +138,9 @@ FILES=(
   # CHAOS-11649: the shared bounded retry loop the pull helper uses, and its fixture suite.
   "${ROOT}/ci/lib/retry.sh"
   "${ROOT}/ci/retry_test.sh"
+  # the bounded ghcr.io login fallback for merge_group jobs, and its fixture suite.
+  "${ROOT}/ci/lib/ghcr_login.sh"
+  "${ROOT}/ci/ghcr_login_test.sh"
   # tracked scripts CI never linted, added because they are already clean
   # under the pin -- verified, not assumed
   "${ROOT}/ci/aggregate_gate_results.sh"

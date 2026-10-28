@@ -13,6 +13,7 @@ deploy/helm/dev-health	auth_backfill_policy_test.go	unexpressed
 deploy/helm/dev-health	auth_flipback_runbook_test.go	unexpressed
 deploy/helm/dev-health	auth_service_test.go	unexpressed
 deploy/helm/dev-health	auth_session_secret_script_test.go	unexpressed
+deploy/helm/dev-health	auth_users_owned_barrier_script_test.go	unexpressed
 deploy/helm/dev-health	clickhouse_configd_render_test.go	unexpressed
 deploy/helm/dev-health	clickhouse_replicas_test.go	unexpressed
 deploy/helm/dev-health	clickhouse_started_test.go	unexpressed
@@ -21,6 +22,7 @@ deploy/helm/dev-health	go_api_drain_test.go	unexpressed
 deploy/helm/dev-health	go_api_fence_test.go	unexpressed
 deploy/helm/dev-health	go_api_fenced_marker_test.go	unexpressed
 deploy/helm/dev-health	go_api_internal_listener_test.go	unexpressed
+deploy/helm/dev-health	go_api_trusted_proxies_test.go	unexpressed
 deploy/helm/dev-health	go_pgbouncer_secret_keep_test.go	unexpressed
 deploy/helm/dev-health	go_pgbouncer_session_rollingupdate_test.go	unexpressed
 deploy/helm/dev-health	helm_shim_test.go	unexpressed

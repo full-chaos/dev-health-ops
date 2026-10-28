@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate/schemagate"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/platform/dialclass"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/platform/poolstat"
@@ -91,9 +92,7 @@ func (failure dependencyFailure) DependencyReason() string { return failure.reas
 // for the worker (CHAOS-11644); a context deadline, a cancel and an I/O timeout keep their causes
 // because the registry tests them first.
 func dependencyCheckFailed(err error) error {
-	if postgres.IsTransientDialError(err) {
-		err = transientDialError{cause: err}
-	}
+	err = dialclass.MarkTransient(err)
 	return fmt.Errorf("%w: %w", errReconcilerDependencyUnavailable, err)
 }
 

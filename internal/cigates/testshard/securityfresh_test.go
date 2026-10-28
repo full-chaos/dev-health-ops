@@ -262,10 +262,10 @@ func TestTheFreshCallsCarryCountOneAndThePlainCallsDoNot(t *testing.T) {
 	t.Parallel()
 	source := readCheckGo(t)
 	for _, want := range []string{
-		`go test -mod=readonly -trimpath -count=1 -timeout 10m ${rest_sec}`,
-		`go test -mod=readonly -trimpath -race -count=1 -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" "${pkgs_sec[@]}"`,
-		`go test -mod=readonly -trimpath -timeout 10m ${rest} 2>&1`,
-		`go test -mod=readonly -trimpath -race -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" "${pkgs[@]}"`,
+		`go_test_leg "${log}" "${legjson}" -count=1 -timeout 10m ${rest_sec}`,
+		`go_test_leg "${racelog}" "${legjson}" -race -count=1 -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" "${pkgs_sec[@]}"`,
+		`go_test_leg "${log}" "${legjson}" -timeout 10m ${rest}`,
+		`go_test_leg "${racelog}" "${legjson}" -race -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" "${pkgs[@]}"`,
 	} {
 		if !strings.Contains(source, want) {
 			t.Errorf("ci/check_go.sh lacks the call %q", want)

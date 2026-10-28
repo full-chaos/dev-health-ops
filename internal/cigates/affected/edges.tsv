@@ -79,6 +79,7 @@ internal/cigates/bigboyrender	posture.go	unexpressed
 internal/cigates/chartgates	helpers_test.go	unexpressed
 internal/cigates/chartgates	overlay_test.go	unexpressed
 internal/cigates/checkgo	ci_script_helpers_test.go	unexpressed
+internal/cigates/checkgo	go_test_leg_json_test.go	unexpressed
 internal/cigates/checkgo	race_solo_test.go	unexpressed
 internal/cigates/checkgo	testcontainers_session_reap_test.go	unexpressed
 internal/cigates/chparams	chparams_test.go	unexpressed
@@ -125,6 +126,7 @@ internal/cigates/scripts	posture_integration_test.go	unexpressed
 internal/cigates/splitshards	ci_script_helpers_test.go	unexpressed
 internal/cigates/splitshards	free_run_test.go	unexpressed
 internal/cigates/suitecatalog	suitecatalog_test.go	unexpressed
+internal/cigates/testshard	checkgofresh_test.go	unexpressed
 internal/cigates/testshard	listcall_test.go	unexpressed
 internal/cigates/testshard	providersync_test.go	unexpressed
 internal/cigates/testshard	raceshard_test.go	unexpressed

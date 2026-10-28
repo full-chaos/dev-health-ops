@@ -35,7 +35,7 @@ var classifiedOpenSites = map[string]struct {
 	"synccli/synccli.go":                          {1, "verb `dho sync teams` (Atlassian): redact() on every returned text and the process logger wrapped for the run (synccli TestSyncTeamsLogsNeitherClickHouseLoginNorPassword)"},
 	"synccli/inline.go":                           {1, "verbs `dho sync <target>`: the store open is redacted through secrets.Boundary and runTarget redacts every other error (synccli credential_redaction_test.go)"},
 	"workersctl/main.go":                          {4, "verb `dho workers ...` (providersync cleanup, run marker, compact-ownership-intervals, drain-removed-dependencies): prints a constant message or a fixed error code, never the error text"},
-	"apiservice/admin/orgdeletion.go":             {1, "API handler: a constant warning, never the error text"},
+	"apiservice/admin/orgdeletion_clickhouse.go":  {1, "org deletion preflight: the API route and the go-api start line log a fixed reason (the route also the error with the DSN and its password removed, redactClickHouse) through the service's redacting logger; verb `dho admin orgs delete` prints a constant refusal and logs the redacted error through logging.NewJSON (verbs_integration_test.go)"},
 	"apiservice/deps.go":                          {1, "daemon (api): the error is logged at startup; the open redacts its own error (storage/clickhouse factory)"},
 	"queryapi/server/investment_explain_route.go": {1, "daemon (query-api): logged at runtime; the open redacts its own error"},
 	"queryapi/server/workunit_explain_route.go":   {1, "daemon (query-api): logged at runtime; the open redacts its own error"},

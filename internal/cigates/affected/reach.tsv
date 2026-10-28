@@ -39,6 +39,7 @@ internal/api/credentials	probes.go	internal/apiservice/ssovenue
 internal/api/credentials	probes.go	internal/auth/authapi
 internal/api/credentials	probes.go	internal/auth/authruntime
 internal/api/credentials	probes.go	internal/billingcli
+internal/api/credentials	probes.go	internal/clicredentials
 internal/apiservice	githubapp_config.go	cmd/dho
 internal/apiservice	githubapp_config.go	deploy/helm/dev-health
 internal/apiservice	githubapp_config.go	internal/api/githubapp

@@ -75,6 +75,23 @@
       "type": "object",
       "properties": {
         "replicas": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "mail": {
+          "description": "The Secret and key names of the verify and reset mail setting, read by secretKeyRef from phase 4.",
+          "type": "object",
+          "properties": {
+            "secretName": { "type": "string" },
+            "keys": {
+              "type": "object",
+              "properties": {
+                "provider": { "type": "string" },
+                "fromAddress": { "type": "string" },
+                "apiKey": { "type": "string" },
+                "resendApiKey": { "type": "string" },
+                "appBaseURL": { "type": "string" }
+              }
+            }
+          }
+        },
         "drain": {
           "description": "CHAOS-11648: seconds the old auth-service pod keeps serving before SIGTERM (native preStop sleep, Kubernetes >= 1.30). 0 renders no hook.",
           "type": "object",
@@ -232,6 +249,18 @@
               "type": "object",
               "properties": {
                 "poolSize": { "type": "integer", "minimum": 1, "maximum": 1000 },
+                "exporter": {
+                  "type": "object",
+                  "description": "CHAOS-11638: pgbouncer_exporter sidecar of the transaction pooler (Unix-socket console login as `pgbouncer`, no password).",
+                  "properties": {
+                    "enabled": { "type": "boolean" },
+                    "image": { "type": "string" },
+                    "port": { "type": "integer", "minimum": 1024, "maximum": 65535 },
+                    "resources": { "type": "object" },
+                    "metricsFrom": { "type": "array", "items": { "type": "object" } }
+                  },
+                  "additionalProperties": false
+                },
                 "rollingUpdate": {
                   "type": ["object", "null"],
                   "description": "Rolling update of the transaction pooler Deployment. Whole numbers only: the connection budget counts surge pods. Empty renders no strategy key (the Kubernetes default, one surge pod at one replica, which the budget counts).",

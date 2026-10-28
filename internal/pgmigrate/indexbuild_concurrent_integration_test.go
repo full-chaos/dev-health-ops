@@ -201,9 +201,26 @@ func TestBuildIndexRefusesWhileAnotherRunHoldsTheBuildLock(t *testing.T) {
 
 	run, recorder := tracedConn(t, uri)
 	logs := &syncBuffer{}
-	result, err := pgmigrate.BuildFailureStreakIndex(context.Background(), run,
-		pgmigrate.IndexBuildOptions{LockTimeout: 2 * time.Second, Attempts: 3, RetryDelay: time.Second, Deadline: 30 * time.Second},
-		slog.New(slog.NewJSONHandler(logs, nil)))
+	// The holder keeps the build lock for the whole test: a loser that waits for it never returns. The 60 s guard is a
+	// failure-only ceiling that a passing run (an immediate refusal) never reaches.
+	type buildResult struct {
+		result pgmigrate.IndexBuildResult
+		err    error
+	}
+	finished := make(chan buildResult, 1)
+	go func() {
+		result, err := pgmigrate.BuildFailureStreakIndex(context.Background(), run,
+			pgmigrate.IndexBuildOptions{LockTimeout: 2 * time.Second, Attempts: 3, RetryDelay: time.Second, Deadline: 30 * time.Second},
+			slog.New(slog.NewJSONHandler(logs, nil)))
+		finished <- buildResult{result, err}
+	}()
+	var got buildResult
+	select {
+	case got = <-finished:
+	case <-time.After(60 * time.Second):
+		t.Fatal("the build is still waiting after the 60 s guard: the loser must refuse at once, not wait for the build lock")
+	}
+	result, err := got.result, got.err
 	if !errors.Is(err, pgmigrate.ErrBuildLockHeld) {
 		t.Fatalf("result %+v err %v, want the refusal %q", result, err, lockHeldRefusal)
 	}

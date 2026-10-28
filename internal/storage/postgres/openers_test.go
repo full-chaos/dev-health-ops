@@ -76,6 +76,7 @@ var openers = map[string]struct {
 	"internal/rivermigrate/roles.go":                    {kindDiscarded, "migrate roles' Authenticate closure: the connect error is inspected for SQLSTATE 28P01 only (a wrong password) and its text is never printed or logged; the message names a role label"},
 	"internal/testsupport/containers/remote.go":         {kindTest, "test containers"},
 	"internal/testsupport/containers/shared.go":         {kindTest, "test containers: the shared server's capacity check and leak snapshot"},
+	"internal/testsupport/containers/template.go":       {kindTest, "test containers: the shared server's template build, fingerprint and finish check"},
 	"internal/testsupport/domainroledb/domainroledb.go": {kindTest, "domain-role venue: the migrated schema and grants, a pool as the domain role"},
 	"internal/testsupport/pgschema/pgschema.go":         {kindTest, "test schema helper"},
 	"internal/testsupport/pinrig/pinrig.go":             {kindTest, "pin proof: pools as the runtime and session reader roles"},

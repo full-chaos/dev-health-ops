@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -74,7 +73,6 @@ func claimSnapshotBucket() dispatchBucket {
 // the fixture keeps its shape.
 func createClaimSnapshotTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	pgschema.Apply(ctx, t, pool)
 	pgseed.Org(ctx, t, pool, claimSnapshotOrg, "community")
 	for _, runID := range []string{claimSnapshotRun, claimSnapshotOtherRun} {
 		pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{ID: runID, OrgID: claimSnapshotOrg, IntegrationID: claimSnapshotIntegration})
@@ -85,10 +83,7 @@ func withClaimSnapshotPool(t *testing.T, fn func(ctx context.Context, pool *pgxp
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {

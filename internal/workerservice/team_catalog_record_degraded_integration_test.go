@@ -13,7 +13,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 )
@@ -23,17 +22,13 @@ import (
 func TestRecordSyncRunDegradedLegsMergesIntoTheRunResult(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer func() { _ = instance.Close(context.Background()) }()
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	pgschema.Apply(ctx, t, pool)
 	const runID, orgID = "00000000-0000-4000-8000-0000000000b1", "00000000-0000-4000-8000-0000000000b2"
 	pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{ID: runID, OrgID: orgID, Status: "success", TotalUnits: 14, CompletedUnits: 14,
 		ResultJSON: `{"completed_units":14,"failed_units":0}`})

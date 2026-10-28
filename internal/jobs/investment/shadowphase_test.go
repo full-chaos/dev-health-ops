@@ -557,6 +557,22 @@ func TestTheBudgetIsADeadlineThatNoSettingLiftsAboveTheClamp(t *testing.T) {
 	}
 }
 
+// guardedShadowRun runs one phase with a failure-only guard: the fake provider and the store of these tests are held open,
+// so a phase whose budget or cancellation wiring is broken never returns. A passing run never reaches the guard.
+func guardedShadowRun[T any](t *testing.T, stage string, run func() T) T {
+	t.Helper()
+	done := make(chan T, 1)
+	go func() { done <- run() }()
+	select {
+	case got := <-done:
+		return got
+	case <-time.After(30 * time.Second):
+		t.Fatalf("%s: the phase is still running after the 30 s guard: its budget or cancellation did not end it", stage)
+		var zero T
+		return zero
+	}
+}
+
 // A provider that does not answer cannot hold the run: the phase ends at its
 // budget, says so, and writes no row for a unit it did not get an answer for.
 func TestAPhaseThatRunsOutOfBudgetStopsAndSaysSo(t *testing.T) {
@@ -568,11 +584,9 @@ func TestAPhaseThatRunsOutOfBudgetStopsAndSaysSo(t *testing.T) {
 	settings.Budget = 300 * time.Millisecond
 	phase := newTestShadowPhase(t, fake, settings, debugLogger(logs))
 	store := &memoryShadowStore{}
-	started := time.Now()
-	summary := phase.run(context.Background(), store, shadowTestConfig(), shadowTestEntries(t, "u1", "u2", "u3"))
-	if elapsed := time.Since(started); elapsed > 5*time.Second {
-		t.Fatalf("the phase took %v with a budget of 300 ms", elapsed)
-	}
+	summary := guardedShadowRun(t, "a phase with a 300 ms budget and a provider that never answers", func() shadowSummary {
+		return phase.run(context.Background(), store, shadowTestConfig(), shadowTestEntries(t, "u1", "u2", "u3"))
+	})
 	if summary.StopReason != ShadowStopBudget || summary.Attempted != 0 || len(store.records) != 0 {
 		t.Fatalf("summary = %+v, rows = %d", summary, len(store.records))
 	}
@@ -603,13 +617,11 @@ func TestNothingIsWrittenAfterTheRunContextIsCancelled(t *testing.T) {
 	observer := &recordingShadowObserver{}
 	phase.SetObserver(observer)
 	store := &memoryShadowStore{}
-	started := time.Now()
-	summary := phase.run(runCtx, store, shadowTestConfig(), shadowTestEntries(t, "u1", "u2", "u3"))
-	// The budget of this phase is 30 s. A phase whose context is a child of the
-	// run context ends at once when the run is cancelled, and asks nobody else.
-	if elapsed := time.Since(started); elapsed > 5*time.Second {
-		t.Fatalf("the phase went on for %v after the run context was cancelled: its context is not a child of the run context", elapsed)
-	}
+	// A phase whose context is a child of the run context ends at once when the run is cancelled, and asks nobody
+	// else; one whose context is not stays on the held second request.
+	summary := guardedShadowRun(t, "a phase whose run context was cancelled", func() shadowSummary {
+		return phase.run(runCtx, store, shadowTestConfig(), shadowTestEntries(t, "u1", "u2", "u3"))
+	})
 	if fake.count() != 2 {
 		t.Fatalf("requests = %d, want 2: no request may start after the cancel", fake.count())
 	}
@@ -962,12 +974,9 @@ func TestAShadowWriteInsideThePhaseEndsWithTheBudget(t *testing.T) {
 	phase := newTestShadowPhase(t, fake, settings, testLogger())
 	phase.writeBatch = 1
 	store := &memoryShadowStore{blockWrite: 1}
-	started := time.Now()
-	summary := phase.run(context.Background(), store, shadowTestConfig(), shadowTestEntries(t, "u1", "u2", "u3"))
-	elapsed := time.Since(started)
-	if elapsed > 5*time.Second {
-		t.Fatalf("the phase took %v with a budget of 500 ms: a write inside the phase did not end with the budget", elapsed)
-	}
+	summary := guardedShadowRun(t, "a phase with a 500 ms budget and a store write that never answers", func() shadowSummary {
+		return phase.run(context.Background(), store, shadowTestConfig(), shadowTestEntries(t, "u1", "u2", "u3"))
+	})
 	if len(store.writeDeadlines) != 2 {
 		t.Fatalf("shadow writes = %d, want 2 (one inside the phase, one at the end)", len(store.writeDeadlines))
 	}

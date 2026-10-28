@@ -20,12 +20,15 @@ const (
 	plantUnpinned        = "internal/pgmigrate/runner_test.go"
 	plantListedElsewhere = "internal/api/health/testdata/fixture.json"
 	plantLegacySource    = "internal/legacy/old_test.go"
+	plantListedAbsent    = "internal/api/health/testdata/later.json"
 )
 
-// squashTipManifest is the manifest the squash fixture's change branch holds: it lists one file outside the guarded
-// dirs that the base manifest does not, so that file is a guard input through the HEAD manifest alone.
+// squashTipManifest is the manifest the squash fixture's change branch holds: it lists two files outside the guarded
+// dirs that the base manifest does not (one present, one absent at the squash), so they are guard inputs through the
+// HEAD manifest alone.
 func squashTipManifest() string {
 	return "file\t" + plantGolden + "\t" + sum("{}") + "\nfile\t" + plantListedElsewhere + "\t" + sum("[]") + "\n" +
+		"file\t" + plantListedAbsent + "\t" + sum("[]") + "\n" +
 		"pins\t" + plantSource + "\t" + strings.Repeat("a", 64) + "\topens=1,finishes=0,skips=0\n" +
 		"pins\t" + plantSource2 + "\t" + strings.Repeat("b", 64) + "\topens=1,finishes=0,skips=0\n"
 }
@@ -295,6 +298,7 @@ func TestEveryGuardInputChangeBesideTheSquashIsRefused(t *testing.T) {
 		{name: "manifest/edited (a pins row dropped)", ops: []op{{write: ManifestPath, body: strings.SplitAfter(squashTipManifest(), "\n")[0]}}},
 		{name: "manifest-listed file outside the guarded dirs/edited", ops: []op{{write: plantListedElsewhere, body: "[1]"}}},
 		{name: "manifest-listed file outside the guarded dirs/deleted", ops: []op{{remove: plantListedElsewhere}}},
+		{name: "manifest-listed file outside the guarded dirs/added (absent at the squash)", ops: []op{{write: plantListedAbsent, body: "[]"}}},
 		{name: "base-pinned source outside the pinned dirs/added back", ops: []op{{write: plantLegacySource, body: "package z\nvar _ = venueoracle.OpenGolden(t, d)\n"}}},
 		{name: "golden/edited", ops: []op{{write: plantGolden, body: "{\"x\":1}"}}},
 		{name: "golden/added", ops: []op{{write: "internal/pgmigrate/testdata/golden/new.json", body: "{}"}}},

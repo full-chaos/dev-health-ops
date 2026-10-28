@@ -1,9 +1,12 @@
 package workflows_test
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
+
+var eventNameRe = regexp.MustCompile(`github\.event_name\s*(==|!=)\s*'([^']*)'`)
 
 // The golden-drift check is ADVISORY: a pull_request-only job that go-queue-gate does not wait for, so it is never a
 // required status and never runs in the merge queue.
@@ -23,6 +26,10 @@ func TestGoldenDriftJobIsAdvisoryAndPullRequestOnly(t *testing.T) {
 	}
 	if strings.Contains(cond, "merge_group") {
 		t.Errorf("job if %q must not name merge_group", cond)
+	}
+	events := eventNameRe.FindAllStringSubmatch(cond, -1)
+	if len(events) != 1 || events[0][1] != "==" || events[0][2] != "pull_request" {
+		t.Errorf("job if %q must compare github.event_name exactly once, to 'pull_request' with ==: a push, schedule, dispatch or release clause makes the advisory check run elsewhere", cond)
 	}
 	if strings.Contains(cond, "ci:full") {
 		t.Errorf("job if %q must not name ci:full (the ci:full-gated job set is pinned); the select step reads the labels", cond)

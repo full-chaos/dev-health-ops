@@ -281,3 +281,35 @@ func TestGoldenDriftRunRefusesAMalformedRowLine(t *testing.T) {
 		}
 	}
 }
+
+// run must never turn a rows file that names rows into a green no-op: a line that starts with ROW but does not parse, or a
+// select/all verdict without a single ROW line, is a usage error (exit 2); only an explicit "VERDICT none" runs nothing.
+func TestGoldenDriftRunNeverPassesWithoutRunningANamedRow(t *testing.T) {
+	bad := map[string]string{
+		"bare ROW marker":                  "ROW\n",
+		"ROW with one field":               "ROW\tinternal/adminops\n",
+		"ROW glued to a word":              "ROWX\tinternal/adminops\t^TestA$\n",
+		"ROW then a space":                 "ROW internal/adminops ^TestA$\n",
+		"select verdict and no row":        "VERDICT select 1 of 4 rows for 2 changed paths\n",
+		"all verdict and no row":           "VERDICT all bad input\n",
+		"empty rows file":                  "",
+		"verdict none but a malformed row": "VERDICT none x\nROW\n",
+	}
+	for name, rows := range bad {
+		t.Run(name, func(t *testing.T) {
+			res, log := runGoldenDrift(t, rows, "pass", "")
+			if res.code != 2 {
+				t.Fatalf("exit %d, want 2 (stdout %q stderr %q)", res.code, res.stdout, res.stderr)
+			}
+			if strings.TrimSpace(log) != "" {
+				t.Fatalf("no go test may run for an unparseable rows file: %q", log)
+			}
+		})
+	}
+	t.Run("an explicit none verdict runs nothing and passes", func(t *testing.T) {
+		res, log := runGoldenDrift(t, "VERDICT none 1 changed paths reach no golden row\n", "pass", "")
+		if res.code != 0 || strings.TrimSpace(log) != "" {
+			t.Fatalf("exit %d log %q, want exit 0 and no go test", res.code, log)
+		}
+	})
+}

@@ -25,10 +25,10 @@ type allowedApply struct {
 	Reason string
 }
 
-// workerserviceApplyAllowlist: the two workerservice helpers move in PR B of CHAOS-11760.
+// workerserviceApplyAllowlist: the two workerservice helpers move in PR B of CHAOS-11760; PR B deletes these rows.
 var workerserviceApplyAllowlist = []allowedApply{
-	{File: "internal/workerservice/daily_no_repository_partition_integration_test.go", Reason: "PR B, CHAOS-11760"},
-	{File: "internal/workerservice/multi_replica_integration_test.go", Reason: "PR B, CHAOS-11760"},
+	{File: "internal/workerservice/daily_no_repository_partition_integration_test.go", Reason: "PR B: CHAOS-11760 PR B"},
+	{File: "internal/workerservice/multi_replica_integration_test.go", Reason: "PR B: CHAOS-11760 PR B"},
 }
 
 // applyCallSites returns file:line (slash form, relative to root) of every pgschema.Apply / ApplyURI call in a test

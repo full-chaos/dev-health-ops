@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"reflect"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -276,13 +277,27 @@ func TestPostgresSessionStateIsEmptyOutsideSharedMode(t *testing.T) {
 
 // A developer or CI runner that has exported DEV_HEALTH_TEST_PG_TEMPLATE=off must still get the
 // same unit tests: TestMain clears every environment value the package reads. The child is this
-// test binary, run with the value set, on the two tests whose reasons it would change.
+// test binary, run with the value set, on the two tests whose reasons it would change. The child
+// runs with -test.v and the parent counts the top-level "--- PASS" lines: a rename of either test
+// would make -test.run match nothing, and the child would exit 0 without running it.
 func TestAnInheritedTemplateOffDoesNotChangeThePackageTests(t *testing.T) {
-	child := exec.Command(os.Args[0], "-test.count=1",
-		"-test.run", "^(TestTemplateFallbackReason|TestTemplateFallbackLogsANamedLineAndAsksDockerOnce)$")
+	want := []string{"TestTemplateFallbackReason", "TestTemplateFallbackLogsANamedLineAndAsksDockerOnce"}
+	child := exec.Command(os.Args[0], "-test.count=1", "-test.v",
+		"-test.run", "^("+strings.Join(want, "|")+")$")
 	child.Env = append(os.Environ(), PostgresTemplateEnv+"=off")
 	output, err := child.CombinedOutput()
 	if err != nil {
 		t.Fatalf("the child test binary with %s=off failed: %v\n%s", PostgresTemplateEnv, err, output)
+	}
+	var passed []string
+	for _, line := range strings.Split(string(output), "\n") {
+		if name, ok := strings.CutPrefix(line, "--- PASS: "); ok {
+			passed = append(passed, strings.Fields(name)[0])
+		}
+	}
+	sort.Strings(passed)
+	sort.Strings(want)
+	if !reflect.DeepEqual(passed, want) {
+		t.Fatalf("the child passed %q, want exactly %q\n%s", passed, want, output)
 	}
 }

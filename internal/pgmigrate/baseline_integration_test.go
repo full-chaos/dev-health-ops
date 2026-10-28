@@ -75,15 +75,7 @@ var productionSettings = pgmigrate.Settings{Cutover: true, RiverSchema: "river"}
 func TestBaselineIsTheFrozenPythonUpgrade(t *testing.T) {
 	pgmigrate.UseFrozenChain(t) // the frozen goldens end at pgmigrate.FrozenHead
 	ctx := context.Background()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatalf("start postgres: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := instance.Close(context.Background()); err != nil {
-			t.Errorf("close postgres: %v", err)
-		}
-	})
+	instance := sharedInstance(t)
 	if instance.Container == nil {
 		t.Fatal("this test dumps databases with the server's own pg_dump and needs a container instance, not a remote DSN")
 	}

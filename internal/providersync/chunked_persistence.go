@@ -241,18 +241,26 @@ func encodedPreparedChunkPayload(chunk PreparedProviderChunk) ([]byte, error) {
 // happen for a sidecar within the 2 MiB cap; it is a policy refusal, never a checkpoint conflict.
 var errChunkPayloadStamp = fmt.Errorf("%w: payload_bytes stamp did not converge", ErrChunkPolicyExceeded)
 
-// stampPayloadBytes STUB (red): the legacy three passes; it reports the stamp the last measured encoding carries and
-// success whatever happened.
+// maxPayloadStampPasses bounds stampPayloadBytes. The stamp starts at 0 and each pass sets it to base+digits(stamp):
+// it never decreases and grows by less than 8 per pass, so it crosses at most one power of ten and settles in four
+// passes for any sidecar within the 2 MiB cap.
+const maxPayloadStampPasses = 8
+
+// stampPayloadBytes finds the payload_bytes value that the encoding of the sidecar that carries it measures
+// exactly: measure(stamp) == stamp. The number is part of the bytes it counts, so a fixed number of passes is not
+// enough: for lengths a few bytes above a power of ten (101, 1001-1002, 10001-10003, 100001-100004,
+// 1000001-1000005) the last pass changed the digit count and the loop stopped one short (CHAOS-11772). The false
+// return is a loop that did not settle; it cannot happen within the cap.
 func stampPayloadBytes(measure func(payloadBytes int) int) (int, bool) {
 	stamp := 0
-	for pass := 0; pass < 3; pass++ {
+	for pass := 0; pass < maxPayloadStampPasses; pass++ {
 		length := measure(stamp)
-		if length == stamp || pass == 2 {
+		if length == stamp {
 			return stamp, true
 		}
 		stamp = length
 	}
-	return stamp, true
+	return stamp, false
 }
 
 // ChunkedEffectStore persists the checkpoint and prepared sidecars, and owns

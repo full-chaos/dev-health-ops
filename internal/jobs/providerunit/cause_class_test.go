@@ -686,3 +686,19 @@ func TestCauseClassKeepsTheDeterministicCategoryWhenTheWorkDeadlinePassed(t *tes
 		})
 	}
 }
+
+// CHAOS-11772: a payload_bytes stamp that does not settle is a policy refusal (ErrChunkPolicyExceeded), never the
+// checkpoint conflict that terminalized a unit holding committed rows. The refusal keeps whatever class a policy
+// refusal has; it must not be classed checkpoint_conflict.
+func TestAPayloadStampRefusalIsNotACheckpointConflict(t *testing.T) {
+	refusal := fmt.Errorf("%w: payload_bytes stamp did not converge", providersync.ErrChunkPolicyExceeded)
+	if errors.Is(refusal, providersync.ErrChunkCheckpointConflict) {
+		t.Fatal("a policy refusal matches the checkpoint conflict")
+	}
+	if category, deterministic := deterministicTerminalCategory(refusal); deterministic && category == CheckpointConflictCategory {
+		t.Fatalf("the stamp refusal was classed %q", category)
+	}
+	if got := causeClass(refusal, false); got == causeClassCheckpointStoreError {
+		t.Fatalf("causeClass = %q", got)
+	}
+}

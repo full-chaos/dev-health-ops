@@ -50,15 +50,20 @@ func isGhcrLogin(step yamlMap) bool {
 func ghcrRetryOffenders(job yamlMap) []string {
 	steps := stepsOf(job)
 	var out []string
-	login := -1
+	login, logins := -1, 0
 	for i, s := range steps {
 		if isGhcrLogin(s) {
-			login = i
-			break
+			if login < 0 {
+				login = i
+			}
+			logins++
 		}
 	}
 	if login < 0 {
 		return []string{"no ghcr.io docker/login-action step"}
+	}
+	if logins > 1 {
+		out = append(out, fmt.Sprintf("%d ghcr.io login steps; a covered job must have exactly one, with the retry shape", logins))
 	}
 	ls := steps[login]
 	if !pinnedAction.MatchString(asString(ls["uses"])) {

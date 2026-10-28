@@ -16,7 +16,7 @@
         {
           "algorithm": "HS256",
           "anchor": {
-            "line": 62,
+            "line": 63,
             "note": "func (i *Issuer) Access",
             "path": "internal/auth/authapi/issuer.go"
           },
@@ -63,10 +63,15 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
+      },
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
       },
       "classification": "protected",
       "current_state_cache_behavior": "No cache: the session row and the users row are read live on every request.",
@@ -81,7 +86,7 @@
           "note": "func (h handlers) authenticate",
           "path": "internal/auth/authapi/routes.go"
         },
-        "description": "authenticate: bearer HS256 access token (edgetoken, go-api's validate_token rules) with a sid claim; the session must be live and belong to sub, the users row active, and tv equal to users.token_version. Every refusal is a 401 error.v1 with an auth-outcome reason code."
+        "description": "authenticate: bearer HS256 access token (edgetoken, go-api's validate_token rules) with a sid claim; the session must be live and belong to sub, the users row active, and tv equal to users.token_version. Every refusal is a 401 error.v1 with an auth-outcome reason code. An EdDSA user_access_token (JWT header alg EdDSA) is checked by the profile-routed validator with audience auth-service (scope auth:session): sid is required, and the session's token_version pin must equal users.token_version; the HS256 access token stays accepted (legacy_hs256 true)."
       },
       "public_rationale": null,
       "route": "/v1/sessions/current",
@@ -101,10 +106,15 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
+      },
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
       },
       "classification": "protected",
       "current_state_cache_behavior": "No cache: the session row and the users row are read live on every request.",
@@ -119,7 +129,7 @@
           "note": "func (h handlers) authenticate",
           "path": "internal/auth/authapi/routes.go"
         },
-        "description": "authenticate: bearer HS256 access token (edgetoken, go-api's validate_token rules) with a sid claim; the session must be live and belong to sub, the users row active, and tv equal to users.token_version. Every refusal is a 401 error.v1 with an auth-outcome reason code."
+        "description": "authenticate: bearer HS256 access token (edgetoken, go-api's validate_token rules) with a sid claim; the session must be live and belong to sub, the users row active, and tv equal to users.token_version. Every refusal is a 401 error.v1 with an auth-outcome reason code. An EdDSA user_access_token (JWT header alg EdDSA) is checked by the profile-routed validator with audience auth-service (scope auth:session): sid is required, and the session's token_version pin must equal users.token_version; the HS256 access token stays accepted (legacy_hs256 true)."
       },
       "public_rationale": null,
       "route": "/v1/sessions/revoke",
@@ -139,10 +149,15 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
+      },
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
       },
       "classification": "protected",
       "current_state_cache_behavior": "No cache: the session row and the users row are read live on every request.",
@@ -157,7 +172,7 @@
           "note": "func (h handlers) authenticate",
           "path": "internal/auth/authapi/routes.go"
         },
-        "description": "authenticate: bearer HS256 access token (edgetoken, go-api's validate_token rules) with a sid claim; the session must be live and belong to sub, the users row active, and tv equal to users.token_version. Every refusal is a 401 error.v1 with an auth-outcome reason code."
+        "description": "authenticate: bearer HS256 access token (edgetoken, go-api's validate_token rules) with a sid claim; the session must be live and belong to sub, the users row active, and tv equal to users.token_version. Every refusal is a 401 error.v1 with an auth-outcome reason code. An EdDSA user_access_token (JWT header alg EdDSA) is checked by the profile-routed validator with audience auth-service (scope auth:session): sid is required, and the session's token_version pin must equal users.token_version; the HS256 access token stays accepted (legacy_hs256 true)."
       },
       "public_rationale": null,
       "route": "/v1/sessions/revoke-all",
@@ -177,10 +192,15 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
+      },
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
       },
       "classification": "protected",
       "current_state_cache_behavior": "No cache: the session row and the users row are read live on every request.",
@@ -195,7 +215,7 @@
           "note": "func (h handlers) authenticate",
           "path": "internal/auth/authapi/routes.go"
         },
-        "description": "authenticate: bearer HS256 access token (edgetoken, go-api's validate_token rules) with a sid claim; the session must be live and belong to sub, the users row active, and tv equal to users.token_version. Every refusal is a 401 error.v1 with an auth-outcome reason code. The provider access token in the body is then verified with the provider (social.Service.Link) and the link is bound to the bearer's principal; a stale sign-in is refused."
+        "description": "authenticate: bearer HS256 access token (edgetoken, go-api's validate_token rules) with a sid claim; the session must be live and belong to sub, the users row active, and tv equal to users.token_version. Every refusal is a 401 error.v1 with an auth-outcome reason code. The provider access token in the body is then verified with the provider (social.Service.Link) and the link is bound to the bearer's principal; a stale sign-in is refused. An EdDSA user_access_token (JWT header alg EdDSA) is checked by the profile-routed validator with audience auth-service (scope auth:session): sid is required, and the session's token_version pin must equal users.token_version; the HS256 access token stays accepted (legacy_hs256 true)."
       },
       "public_rationale": null,
       "route": "/v1/identities/social",
@@ -215,10 +235,15 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
+      },
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
       },
       "classification": "protected",
       "current_state_cache_behavior": "No cache: the session row and the users row are read live on every request.",
@@ -233,7 +258,7 @@
           "note": "func (h handlers) authenticate",
           "path": "internal/auth/authapi/routes.go"
         },
-        "description": "authenticate: bearer HS256 access token (edgetoken, go-api's validate_token rules) with a sid claim; the session must be live and belong to sub, the users row active, and tv equal to users.token_version. Every refusal is a 401 error.v1 with an auth-outcome reason code. social.Service.Unlink then removes an identity of the bearer's own principal only, and never the last sign-in method."
+        "description": "authenticate: bearer HS256 access token (edgetoken, go-api's validate_token rules) with a sid claim; the session must be live and belong to sub, the users row active, and tv equal to users.token_version. Every refusal is a 401 error.v1 with an auth-outcome reason code. social.Service.Unlink then removes an identity of the bearer's own principal only, and never the last sign-in method. An EdDSA user_access_token (JWT header alg EdDSA) is checked by the profile-routed validator with audience auth-service (scope auth:session): sid is required, and the session's token_version pin must equal users.token_version; the HS256 access token stays accepted (legacy_hs256 true)."
       },
       "public_rationale": null,
       "route": "/v1/identities/social/{id}",
@@ -261,7 +286,7 @@
         {
           "algorithm": "HS256",
           "anchor": {
-            "line": 62,
+            "line": 63,
             "note": "func (i *Issuer) Access",
             "path": "internal/auth/authapi/issuer.go"
           },
@@ -313,7 +338,7 @@
         {
           "algorithm": "HS256",
           "anchor": {
-            "line": 62,
+            "line": 63,
             "note": "func (i *Issuer) Access",
             "path": "internal/auth/authapi/issuer.go"
           },
@@ -399,7 +424,7 @@
         {
           "algorithm": "HS256",
           "anchor": {
-            "line": 62,
+            "line": 63,
             "note": "func (i *Issuer) Access",
             "path": "internal/auth/authapi/issuer.go"
           },
@@ -457,7 +482,7 @@
         {
           "algorithm": "HS256",
           "anchor": {
-            "line": 62,
+            "line": 63,
             "note": "func (i *Issuer) Access",
             "path": "internal/auth/authapi/issuer.go"
           },
@@ -637,10 +662,15 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
+      },
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
       },
       "classification": "protected",
       "current_state_cache_behavior": "No cache: the session row and the users row are read live on every request.",
@@ -652,7 +682,7 @@
         {
           "algorithm": "HS256",
           "anchor": {
-            "line": 62,
+            "line": 63,
             "note": "func (i *Issuer) Access",
             "path": "internal/auth/authapi/issuer.go"
           },
@@ -685,7 +715,7 @@
           "note": "func (h handlers) authenticate",
           "path": "internal/auth/authapi/routes.go"
         },
-        "description": "authenticate: bearer HS256 access token with a sid claim; the session must be live and belong to sub, the users row active, and tv equal to users.token_version. The flow then requires the current password."
+        "description": "authenticate: bearer HS256 access token with a sid claim; the session must be live and belong to sub, the users row active, and tv equal to users.token_version. The flow then requires the current password. An EdDSA user_access_token (JWT header alg EdDSA) is checked by the profile-routed validator with audience auth-service (scope auth:session): sid is required, and the session's token_version pin must equal users.token_version; the HS256 access token stays accepted (legacy_hs256 true)."
       },
       "public_rationale": null,
       "route": "/api/v1/auth/change-password",
@@ -828,7 +858,7 @@
         {
           "algorithm": "HS256",
           "anchor": {
-            "line": 62,
+            "line": 63,
             "note": "func (i *Issuer) Access",
             "path": "internal/auth/authapi/issuer.go"
           },
@@ -910,7 +940,7 @@
         {
           "algorithm": "HS256",
           "anchor": {
-            "line": 62,
+            "line": 63,
             "note": "func (i *Issuer) Access",
             "path": "internal/auth/authapi/issuer.go"
           },
@@ -992,7 +1022,7 @@
         {
           "algorithm": "HS256",
           "anchor": {
-            "line": 62,
+            "line": 63,
             "note": "func (i *Issuer) Access",
             "path": "internal/auth/authapi/issuer.go"
           },

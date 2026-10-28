@@ -105,6 +105,9 @@ func sessionRoutes(
 	if err != nil {
 		return nil, err
 	}
+	if issuer, err = withAccessCheck(cfg, logger, accessSigner, issuer); err != nil {
+		return nil, err
+	}
 	routes, err := authapi.Routes(authapi.Deps{
 		Sessions: sessions, Users: authapi.PGUsers{Pool: pool}, Issuer: issuer, Logger: logger,
 	})

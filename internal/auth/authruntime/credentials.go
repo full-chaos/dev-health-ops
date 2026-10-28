@@ -158,6 +158,9 @@ func credentialRoutes(
 	if err != nil {
 		return nil, nil, err
 	}
+	if issuer, err = withAccessCheck(cfg, logger, accessSigner, issuer); err != nil {
+		return nil, nil, err
+	}
 	identities, err := identity.New(identity.Config{Pool: pool, Schema: schema, Logger: logger, UsersOwnedByAuth: true})
 	if err != nil {
 		return nil, nil, err

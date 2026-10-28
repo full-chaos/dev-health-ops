@@ -194,8 +194,8 @@ func TestEdDSARefusalsCarryTheirAuthOutcomeReason(t *testing.T) {
 
 	good := a.bearer(a.grant())["Authorization"]
 	parts := strings.Split(good, ".")
-	tampered := parts[0] + "." + parts[1] + "." + flipFirst(parts[2])
-	expectError(t, a.do(http.MethodGet, "/v1/sessions/current", "", map[string]string{"Authorization": tampered}), http.StatusUnauthorized, "bad_signature")
+	altered := parts[0] + "." + parts[1] + "." + flipFirst(parts[2])
+	expectError(t, a.do(http.MethodGet, "/v1/sessions/current", "", map[string]string{"Authorization": altered}), http.StatusUnauthorized, "bad_signature")
 
 	expectError(t, a.do(http.MethodGet, "/v1/sessions/current", "", map[string]string{"Authorization": "Bearer not.a.token"}), http.StatusUnauthorized, "malformed")
 }

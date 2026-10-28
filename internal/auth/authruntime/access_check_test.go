@@ -42,7 +42,7 @@ func accessCheckConfig(t *testing.T, issuerURL string) authconfig.Config {
 	return cfg
 }
 
-func mount(routes []httpapi.Route) http.Handler {
+func mountRoutes(routes []httpapi.Route) http.Handler {
 	mux := http.NewServeMux()
 	for _, route := range routes {
 		mux.Handle(route.Method+" "+route.Pattern, requestid.Middleware(route.Handler))
@@ -50,7 +50,7 @@ func mount(routes []httpapi.Route) http.Handler {
 	return mux
 }
 
-func answer(t *testing.T, h http.Handler, method, path, body, bearer string) (int, string) {
+func routeAnswer(t *testing.T, h http.Handler, method, path, body, bearer string) (int, string) {
 	t.Helper()
 	request := httptest.NewRequest(method, path, strings.NewReader(body))
 	request.Header.Set("Authorization", "Bearer "+bearer)
@@ -90,7 +90,10 @@ func TestProductionRoutesConstructTheAccessCheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	passwordBody := `{"current_password":"current-password-1","new_password":"Brand-new-pass-77!"}`
+	passwordBody, err := json.Marshal(map[string]string{"current_password": strings.Repeat("a", 24), "new_password": strings.Repeat("b", 24)})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	for name, issuerURL := range map[string]string{"issuer set": accessCheckIssuer, "issuer unset": ""} {
 		cfg := accessCheckConfig(t, issuerURL)
@@ -108,10 +111,10 @@ func TestProductionRoutesConstructTheAccessCheck(t *testing.T) {
 		}
 		for route, call := range map[string]func() (int, string){
 			"session current": func() (int, string) {
-				return answer(t, mount(sessionSet), http.MethodGet, authapi.PatternCurrent, "", bearer)
+				return routeAnswer(t, mountRoutes(sessionSet), http.MethodGet, authapi.PatternCurrent, "", bearer)
 			},
 			"change password": func() (int, string) {
-				return answer(t, mount(credentialSet), http.MethodPost, authapi.PatternChangePassword, passwordBody, bearer)
+				return routeAnswer(t, mountRoutes(credentialSet), http.MethodPost, authapi.PatternChangePassword, string(passwordBody), bearer)
 			},
 		} {
 			status, reason := call()

@@ -246,23 +246,16 @@ func integrationJobRunsStep(t *testing.T, raw []byte, workflow, job, needle stri
 func integrationTimeoutViolations(t *testing.T, root string) []string {
 	var out []string
 	timeoutRe := regexp.MustCompile(`-timeout[= ](\d+)m\b`)
-	must := func(b []byte, err error) []byte {
-		t.Helper()
-		if err != nil {
-			t.Fatal(err)
-		}
-		return b
-	}
 	scripts := map[string]string{
-		"check_go.sh":           string(must(os.ReadFile(filepath.Join(root, "ci", "check_go.sh")))),
-		"check_golden_drift.sh": string(must(os.ReadFile(filepath.Join(root, "ci", "check_golden_drift.sh")))),
+		"check_go.sh":           readFile(t, filepath.Join(root, "ci", "check_go.sh")),
+		"check_golden_drift.sh": readFile(t, filepath.Join(root, "ci", "check_golden_drift.sh")),
 	}
 	workflows := map[string][]byte{
-		"go.yml":                    must(os.ReadFile(filepath.Join(root, ".github", "workflows", "go.yml"))),
-		"go-quality.yml":            must(os.ReadFile(filepath.Join(root, ".github", "workflows", "go-quality.yml"))),
-		"go-auth-service.yml":       must(os.ReadFile(filepath.Join(root, ".github", "workflows", "go-auth-service.yml"))),
-		"venue-oracles.yml":         must(os.ReadFile(filepath.Join(root, ".github", "workflows", "venue-oracles.yml"))),
-		"venue-oracles-changed.yml": must(os.ReadFile(filepath.Join(root, ".github", "workflows", "venue-oracles-changed.yml"))),
+		"go.yml":                    []byte(readFile(t, filepath.Join(root, ".github", "workflows", "go.yml"))),
+		"go-quality.yml":            []byte(readFile(t, filepath.Join(root, ".github", "workflows", "go-quality.yml"))),
+		"go-auth-service.yml":       []byte(readFile(t, filepath.Join(root, ".github", "workflows", "go-auth-service.yml"))),
+		"venue-oracles.yml":         []byte(readFile(t, filepath.Join(root, ".github", "workflows", "venue-oracles.yml"))),
+		"venue-oracles-changed.yml": []byte(readFile(t, filepath.Join(root, ".github", "workflows", "venue-oracles-changed.yml"))),
 	}
 	rows := integrationTimeoutRows()
 	matched := make([]int, len(rows))

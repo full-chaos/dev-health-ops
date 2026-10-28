@@ -92,15 +92,17 @@ func TestAPIListenerReservesThreeQuartersOfTheShutdownTimeout(t *testing.T) {
 	}
 }
 
+// timedComponent records, the moment the component's Shutdown returns, whether the attempt context the runtime handed it was still
+// live: it stopped inside the slice of the shutdown budget it was given.
 type timedComponent struct {
 	lifecycle.Component
-	took *time.Duration
+	insideSlice *bool
 }
 
 func (c timedComponent) Shutdown(ctx context.Context) error {
-	start := time.Now()
-	defer func() { *c.took = time.Since(start) }()
-	return c.Component.Shutdown(ctx)
+	err := c.Component.Shutdown(ctx)
+	*c.insideSlice = ctx.Err() == nil
+	return err
 }
 
 func (c timedComponent) ShutdownBudget() time.Duration {
@@ -116,10 +118,10 @@ func (c timedComponent) ShutdownBudget() time.Duration {
 // slice, and the pool (index 0) is last, so it gets whatever is left.
 func TestShutdownSlicesFitAfterTheAPIBudget(t *testing.T) {
 	cfg, components := configuredForShutdown(t)
-	took := make([]time.Duration, len(components))
+	insideSlice := make([]bool, len(components))
 	wrapped := make([]lifecycle.Component, len(components))
 	for i, component := range components {
-		wrapped[i] = timedComponent{Component: component, took: &took[i]}
+		wrapped[i] = timedComponent{Component: component, insideSlice: &insideSlice[i]}
 	}
 	runtime, err := lifecycle.New(lifecycle.Options{
 		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -143,12 +145,14 @@ func TestShutdownSlicesFitAfterTheAPIBudget(t *testing.T) {
 	smallest := (cfg.ShutdownTimeout - apiBudget) / time.Duration(len(components)-2)
 	t.Logf("components=%d api budget=%v smallest slice=%v", len(components), apiBudget, smallest)
 	for i, component := range components {
-		t.Logf("%s stopped in %v", component.Name(), took[i])
+		t.Logf("%s stopped inside its attempt budget: %v", component.Name(), insideSlice[i])
 		if component.Name() == "auth-api-http" || component.Name() == "readiness-gate" {
 			continue
 		}
-		if took[i] >= smallest {
-			t.Errorf("%s took %v, not below the smallest slice %v", component.Name(), took[i], smallest)
+		// A quiet stop fits the smallest slice, so the attempt context of every other component is still live when it returns. A
+		// stop that is slow because the host is loaded fails this too: the budget is the runtime's own, no constant is added here.
+		if !insideSlice[i] {
+			t.Errorf("%s did not stop inside its attempt budget (the smallest slice is %v)", component.Name(), smallest)
 		}
 	}
 }

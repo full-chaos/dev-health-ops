@@ -715,7 +715,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/platform/health/server.go",
-        "line": 117
+        "line": 131
       },
       "surface_kind": "rest"
     },
@@ -731,7 +731,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/platform/health/server.go",
-        "line": 118
+        "line": 132
       },
       "surface_kind": "rest"
     },
@@ -747,7 +747,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/platform/health/server.go",
-        "line": 119
+        "line": 133
       },
       "surface_kind": "rest"
     },
@@ -763,7 +763,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/platform/health/server.go",
-        "line": 117
+        "line": 131
       },
       "surface_kind": "rest"
     },
@@ -779,7 +779,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/platform/health/server.go",
-        "line": 118
+        "line": 132
       },
       "surface_kind": "rest"
     },
@@ -795,7 +795,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/platform/health/server.go",
-        "line": 119
+        "line": 133
       },
       "surface_kind": "rest"
     },

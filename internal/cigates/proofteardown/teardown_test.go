@@ -325,8 +325,10 @@ echo "STUBBORN_ELAPSED=$((SECONDS - start))"
 	if !ok1 || !ok2 {
 		return
 	}
-	g.expect(prompt <= boundSecs*3/8,
-		"a service that exits promptly took %ds against a %ds bound: the watchdog was not cancelled (SIGTERM ignored via the inherited disposition?)", prompt, boundSecs)
+	// Both seconds come from the same script run, so they are compared with each other, never with a wall-time budget (D6418).
+	g.expect(prompt*2 < stubborn,
+		"a service that exits promptly took %ds against %ds for the SIGTERM-ignoring one: the watchdog was not cancelled (SIGTERM ignored via the inherited disposition?)", prompt, stubborn)
+	//abstime:allow lower-bound wait, load only lengthens it (precedent: allowlist.tsv backfillrun and faultproxy rows)
 	g.expect(stubborn >= boundSecs,
 		"a SIGTERM-ignoring service took only %ds against a %ds bound: the bound is not being honoured", stubborn, boundSecs)
 	g.expect(strings.Contains(r.stderr, "ignored SIGTERM"), "no escalation warning for the stubborn service: %q", r.stderr)

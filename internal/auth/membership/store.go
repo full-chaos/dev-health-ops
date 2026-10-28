@@ -1,16 +1,24 @@
 package membership
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
@@ -24,8 +32,8 @@ type Config struct {
 	Meter     metric.Meter
 }
 
-// Locked is what Authorize sees: the rows the verb locked, read in its
-// transaction.
+// Locked is what Authorize sees: the organization and the principals the verb
+// locked, in its transaction.
 type Locked struct {
 	OrgID      uuid.UUID
 	Principals []uuid.UUID
@@ -75,28 +83,498 @@ type Store struct {
 }
 
 func New(cfg Config) (*Store, error) {
-	return nil, errors.New("membership: not built")
+	if cfg.Pool == nil {
+		return nil, errors.New("membership: no connection pool")
+	}
+	if cfg.Schema.String() == "" {
+		return nil, errors.New("membership: no auth schema")
+	}
+	s := &Store{pool: cfg.Pool, q: authschema.Quote(cfg.Schema), ownsUsers: cfg.OwnsUsers, logger: cfg.Logger}
+	s.commit = func(ctx context.Context, m audit.Mutation) error { return audit.Commit(ctx, cfg.Pool, cfg.Schema, m) }
+	if s.logger == nil {
+		s.logger = slog.Default()
+	}
+	meter := cfg.Meter
+	if meter == nil {
+		meter = otel.Meter("github.com/full-chaos/dev-health-ops/internal/auth/membership")
+	}
+	var err error
+	if s.mutations, err = meter.Int64Counter("auth.membership.mutations",
+		metric.WithDescription("Membership mutations, by verb and outcome.")); err != nil {
+		return nil, fmt.Errorf("membership: registering the mutation counter: %w", err)
+	}
+	return s, nil
 }
 
-func (s *Store) Add(ctx context.Context, c Change) (*Membership, error) { return nil, ErrStore }
+func (s *Store) record(ctx context.Context, v verb, err error) {
+	s.mutations.Add(ctx, 1, metric.WithAttributes(attribute.String("verb", string(v)), attribute.String("outcome", outcomeLabel(err))))
+}
 
-func (s *Store) ChangeRole(ctx context.Context, c Change) (*Membership, error) { return nil, ErrStore }
+// refusals are the store's named outcomes: returned as they are, never
+// wrapped in ErrStore.
+var refusals = []error{ErrNotOwned, ErrRoleInvalid, ErrNotMember, ErrAlreadyMember, ErrSuspended, ErrLastOwner,
+	ErrNotOwner, ErrTargetNotMember, ErrRoleMissing, ErrRevisionConflict, ErrOrgNotFound, ErrOrgSuspended,
+	ErrPrincipalNotFound, ErrDenied, errStateMoved}
 
-func (s *Store) Suspend(ctx context.Context, c Change) (*Membership, error) { return nil, ErrStore }
+func (s *Store) run(ctx context.Context, v verb, m audit.Mutation) (err error) {
+	defer func() {
+		s.record(ctx, v, err)
+		if errors.Is(err, audit.ErrNoStateChange) {
+			err = nil
+		}
+	}()
+	err = s.commit(ctx, m)
+	if err == nil || errors.Is(err, audit.ErrNoStateChange) {
+		return err
+	}
+	for _, refusal := range refusals {
+		if errors.Is(err, refusal) {
+			return refusal
+		}
+	}
+	s.logger.ErrorContext(ctx, "membership: store failure", "verb", string(v), logging.ErrorAttr(err))
+	return fmt.Errorf("%w: %s: %w", ErrStore, v, err)
+}
 
-func (s *Store) Reactivate(ctx context.Context, c Change) (*Membership, error) { return nil, ErrStore }
+// pairRows is one locked (organization, principal) pair in both tables.
+type pairRows struct {
+	principal  uuid.UUID
+	publicID   *uuid.UUID
+	publicRole *string
+	authID     *uuid.UUID
+	authStatus *Status
+	authRole   *string
+}
 
-func (s *Store) Remove(ctx context.Context, c Change) (*Membership, error) { return nil, ErrStore }
+func (p pairRows) state() state { return effective(p.publicRole, p.authStatus, p.authRole) }
 
-func (s *Store) TransferOwnership(ctx context.Context, t Transfer) error { return ErrStore }
+// id is the membership's one id: the auth row's, else go-api's, else new.
+func (p pairRows) id() uuid.UUID {
+	switch {
+	case p.authID != nil:
+		return *p.authID
+	case p.publicID != nil:
+		return *p.publicID
+	}
+	return uuid.New()
+}
 
-// AddInTx is Add inside a caller's audit.Commit (an invite accept). It returns
-// the membership's provisioning event for the caller's mutation; the caller's
-// audit row names the change.
-func (s *Store) AddInTx(ctx context.Context, tx audit.TxOps, c Change) (*Membership, audit.OutboxEvent, error) {
-	return nil, audit.OutboxEvent{}, ErrStore
+// locked is the result of readPairs.
+type locked struct {
+	pairs        map[uuid.UUID]*pairRows
+	activeOwners int
+}
+
+type rowsIter interface {
+	Next() bool
+	Scan(dest ...any) error
+	Close()
+	Err() error
+}
+
+// querier is the read surface readPairs needs: a verb's transaction (locked)
+// or the pool (the lock-free plan read).
+type querier interface {
+	query(ctx context.Context, sql string, args ...any) (rowsIter, error)
+	queryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+type txQuerier struct{ tx audit.TxOps }
+
+func (q txQuerier) query(ctx context.Context, sql string, args ...any) (rowsIter, error) {
+	rows, err := q.tx.Query(ctx, sql, args...)
+	return rows, err
+}
+
+func (q txQuerier) queryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	return q.tx.QueryRow(ctx, sql, args...)
+}
+
+type poolQuerier struct{ pool *pgxpool.Pool }
+
+func (q poolQuerier) query(ctx context.Context, sql string, args ...any) (rowsIter, error) {
+	return q.pool.Query(ctx, sql, args...)
+}
+
+func (q poolQuerier) queryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	return q.pool.QueryRow(ctx, sql, args...)
+}
+
+// readPairs reads the pairs of one verb. With lock it takes the locks in the
+// one order every membership writer uses (the JIT join takes 1, 2, 5, 6):
+//  1. auth.principals rows FOR UPDATE, by id;
+//  2. public.users rows FOR UPDATE, by id (go-api's guard and JIT join lock);
+//  3. the auth.organizations row FOR SHARE (organization verbs take it FOR UPDATE);
+//  4. (invites: the invite aggregate locks them between 3 and 5);
+//  5. public.memberships: the organization's owner rows and the pairs, FOR UPDATE, by id;
+//  6. auth.memberships pair rows FOR UPDATE, by id;
+//  7. aggregate_revisions, inside audit.Commit.
+func (s *Store) readPairs(ctx context.Context, q querier, orgID uuid.UUID, principals []uuid.UUID, lock bool) (*locked, error) {
+	forUpdate, forShare := "", ""
+	if lock {
+		forUpdate, forShare = " FOR UPDATE", " FOR SHARE"
+	}
+	ids := sortedUnique(principals)
+	for _, sql := range []string{
+		`SELECT id FROM ` + s.q + `.principals WHERE id = ANY($1) ORDER BY id` + forUpdate,
+		`SELECT id FROM public.users WHERE id = ANY($1) ORDER BY id` + forUpdate,
+	} {
+		n, err := countRows(ctx, q, sql, ids)
+		if err != nil {
+			return nil, err
+		}
+		if n != len(ids) {
+			return nil, ErrPrincipalNotFound
+		}
+	}
+	var orgActive bool
+	err := q.queryRow(ctx, `SELECT disabled_at IS NULL FROM `+s.q+`.organizations WHERE id = $1`+forShare, orgID).Scan(&orgActive)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrOrgNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !orgActive {
+		return nil, ErrOrgSuspended
+	}
+	l := &locked{pairs: map[uuid.UUID]*pairRows{}}
+	for _, id := range ids {
+		l.pairs[id] = &pairRows{principal: id}
+	}
+	rows, err := q.query(ctx, `SELECT id, user_id, role FROM public.memberships
+WHERE org_id = $1 AND (role = 'owner' OR user_id = ANY($2)) ORDER BY id`+forUpdate, orgID, ids)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var id, user uuid.UUID
+		var role string
+		if err := rows.Scan(&id, &user, &role); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if role == "owner" {
+			l.activeOwners++
+		}
+		if p, ok := l.pairs[user]; ok {
+			p.publicID, p.publicRole = &id, &role
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows, err = q.query(ctx, `SELECT id, principal_id, status, role FROM `+s.q+`.memberships
+WHERE organization_id = $1 AND principal_id = ANY($2) ORDER BY id`+forUpdate, orgID, ids)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var id, principal uuid.UUID
+		var status Status
+		var role *string
+		if err := rows.Scan(&id, &principal, &status, &role); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		p := l.pairs[principal]
+		p.authID, p.authStatus, p.authRole = &id, &status, role
+	}
+	rows.Close()
+	return l, rows.Err()
+}
+
+func countRows(ctx context.Context, q querier, sql string, ids []uuid.UUID) (int, error) {
+	rows, err := q.query(ctx, sql, ids)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for rows.Next() {
+		n++
+	}
+	rows.Close()
+	return n, rows.Err()
+}
+
+func sortedUnique(ids []uuid.UUID) []uuid.UUID {
+	seen := map[uuid.UUID]bool{}
+	out := make([]uuid.UUID, 0, len(ids))
+	for _, id := range ids {
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return bytes.Compare(out[i][:], out[j][:]) < 0 })
+	return out
+}
+
+func authorize(ctx context.Context, tx audit.TxOps, auth Authorize, l Locked) error {
+	if auth == nil {
+		return ErrDenied
+	}
+	if err := auth(ctx, tx, l); err != nil {
+		if errors.Is(err, ErrDenied) {
+			return ErrDenied
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *Store) checkRevision(ctx context.Context, tx audit.TxOps, id uuid.UUID, expected *int64) error {
+	if expected == nil {
+		return nil
+	}
+	var rev int64
+	err := tx.QueryRow(ctx, `SELECT revision FROM `+s.q+`.aggregate_revisions WHERE aggregate_type = 'membership' AND aggregate_id = $1`,
+		provisioning.WireID("membership", id.String())).Scan(&rev)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
+	if rev != *expected {
+		return ErrRevisionConflict
+	}
+	return nil
+}
+
+// write brings both rows of one pair to next: active = go-api's row present
+// with the role; any other status = no public row (the 10783 contract).
+func (s *Store) write(ctx context.Context, tx audit.TxOps, orgID uuid.UUID, p *pairRows, id uuid.UUID, next state, invitedBy *uuid.UUID) error {
+	if next.status == StatusActive {
+		switch {
+		case p.publicID == nil:
+			if _, err := tx.Exec(ctx, `INSERT INTO public.memberships (id, user_id, org_id, role, invited_by_id, joined_at, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, clock_timestamp(), clock_timestamp(), clock_timestamp())`, id, p.principal, orgID, next.role, invitedBy); err != nil {
+				return err
+			}
+		case *p.publicRole != next.role:
+			if _, err := tx.Exec(ctx, `UPDATE public.memberships SET role = $2, updated_at = clock_timestamp() WHERE id = $1`,
+				*p.publicID, next.role); err != nil {
+				return err
+			}
+		}
+	} else if p.publicID != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM public.memberships WHERE id = $1`, *p.publicID); err != nil {
+			return err
+		}
+	}
+	var role *string
+	if next.role != "" {
+		role = &next.role
+	}
+	if p.authID == nil {
+		_, err := tx.Exec(ctx, `INSERT INTO `+s.q+`.memberships (id, organization_id, principal_id, status, role, invited_by, joined_at)
+VALUES ($1, $2, $3, $4, $5, $6, CASE WHEN $4 = 'active' THEN clock_timestamp() END)`, id, orgID, p.principal, string(next.status), role, invitedBy)
+		return err
+	}
+	_, err := tx.Exec(ctx, `UPDATE `+s.q+`.memberships SET status = $2, role = $3,
+joined_at = CASE WHEN $2 = 'active' THEN COALESCE(joined_at, clock_timestamp()) ELSE joined_at END,
+updated_at = clock_timestamp() WHERE id = $1`, *p.authID, string(next.status), role)
+	return err
+}
+
+// errStateMoved reports that the rows changed between the plan read and the
+// locks: the verb is planned again.
+var errStateMoved = errors.New("membership: the rows changed while the change was planned")
+
+// planAttempts bounds the plan-then-lock loop.
+const planAttempts = 3
+
+// pairPlan is one pair's change as planned from a lock-free read: the audit
+// row and the event are fixed before the transaction (audit.Mutation), and
+// the locked read must find the same rows, or the verb is planned again.
+type pairPlan struct {
+	rowID *uuid.UUID
+	id    uuid.UUID
+	prev  state
+	next  state
+}
+
+func planOf(p *pairRows) pairPlan {
+	pl := pairPlan{prev: p.state()}
+	switch {
+	case p.authID != nil:
+		pl.rowID = p.authID
+	case p.publicID != nil:
+		pl.rowID = p.publicID
+	}
+	if pl.rowID != nil {
+		pl.id = *pl.rowID
+	} else {
+		pl.id = uuid.New()
+	}
+	return pl
+}
+
+func (pl pairPlan) matches(p *pairRows) bool {
+	got := planOf(p)
+	if (got.rowID == nil) != (pl.rowID == nil) || (got.rowID != nil && *got.rowID != *pl.rowID) {
+		return false
+	}
+	return got.prev == pl.prev
+}
+
+// mutate runs one verb on one pair.
+func (s *Store) mutate(ctx context.Context, v verb, c Change) (*Membership, error) {
+	if !s.ownsUsers {
+		s.record(ctx, v, ErrNotOwned)
+		return nil, ErrNotOwned
+	}
+	if (v == verbAdd || v == verbChangeRole) && !isOrganizationRole(c.Role) {
+		s.record(ctx, v, ErrRoleInvalid)
+		return nil, ErrRoleInvalid
+	}
+	ids := []uuid.UUID{c.PrincipalID}
+	var err error
+	for range planAttempts {
+		var read *locked
+		read, err = s.readPairs(ctx, poolQuerier{s.pool}, c.OrgID, ids, false)
+		if err != nil {
+			// The locked read below decides the refusal after Authorize, so
+			// a refusal is not disclosed to an actor Authorize refuses.
+			read = &locked{pairs: map[uuid.UUID]*pairRows{c.PrincipalID: {principal: c.PrincipalID}}}
+		}
+		plan := planOf(read.pairs[c.PrincipalID])
+		plan.next = plan.prev
+		if d, derr := decide(v, plan.prev, c.Role, read.activeOwners); derr == nil {
+			plan.next = d.next
+		}
+		err = s.run(ctx, v, audit.Mutation{
+			Apply: func(ctx context.Context, tx audit.TxOps) error {
+				l, err := s.readPairs(ctx, txQuerier{tx}, c.OrgID, ids, true)
+				if err != nil {
+					return err
+				}
+				if err := authorize(ctx, tx, c.Authorize, Locked{OrgID: c.OrgID, Principals: ids}); err != nil {
+					return err
+				}
+				p := l.pairs[c.PrincipalID]
+				if c.ExpectedRevision != nil {
+					row := planOf(p).rowID
+					if row == nil {
+						return ErrRevisionConflict
+					}
+					if err := s.checkRevision(ctx, tx, *row, c.ExpectedRevision); err != nil {
+						return err
+					}
+				}
+				d, err := decide(v, p.state(), c.Role, l.activeOwners)
+				if err != nil {
+					return err
+				}
+				if !plan.matches(p) || d.next != plan.next {
+					return errStateMoved
+				}
+				if d.noop {
+					return nil
+				}
+				return s.write(ctx, tx, c.OrgID, p, plan.id, d.next, c.InvitedBy)
+			},
+			Audit:  auditFor(v, c.OrgID, c.PrincipalID, plan.id, c.Actor, plan.prev, plan.next),
+			Events: []audit.OutboxEvent{eventFor(v, plan.id, plan.next)},
+		})
+		if !errors.Is(err, errStateMoved) {
+			break
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	return s.Get(ctx, c.OrgID, c.PrincipalID)
+}
+
+func (s *Store) Add(ctx context.Context, c Change) (*Membership, error) {
+	return s.mutate(ctx, verbAdd, c)
+}
+
+func (s *Store) ChangeRole(ctx context.Context, c Change) (*Membership, error) {
+	return s.mutate(ctx, verbChangeRole, c)
+}
+
+func (s *Store) Suspend(ctx context.Context, c Change) (*Membership, error) {
+	return s.mutate(ctx, verbSuspend, c)
+}
+
+func (s *Store) Reactivate(ctx context.Context, c Change) (*Membership, error) {
+	return s.mutate(ctx, verbReactivate, c)
+}
+
+func (s *Store) Remove(ctx context.Context, c Change) (*Membership, error) {
+	return s.mutate(ctx, verbRemove, c)
+}
+
+// TransferOwnership moves the ownership of an organization in one commit: the
+// source owner becomes admin and the target member becomes owner (go-api
+// transferOwnership). A transfer to the source itself changes nothing.
+func (s *Store) TransferOwnership(ctx context.Context, t Transfer) error {
+	if !s.ownsUsers {
+		s.record(ctx, verbTransfer, ErrNotOwned)
+		return ErrNotOwned
+	}
+	ids := []uuid.UUID{t.From, t.To}
+	var err error
+	for range planAttempts {
+		var from, to pairPlan
+		if read, rerr := s.readPairs(ctx, poolQuerier{s.pool}, t.OrgID, ids, false); rerr == nil {
+			from, to = planOf(read.pairs[t.From]), planOf(read.pairs[t.To])
+		} else {
+			from, to = planOf(&pairRows{principal: t.From}), planOf(&pairRows{principal: t.To})
+		}
+		from.next, to.next = from.prev, to.prev
+		if f, tt, derr := decideTransfer(from.prev, to.prev); derr == nil && t.From != t.To {
+			from.next, to.next = f, tt
+		}
+		err = s.run(ctx, verbTransfer, audit.Mutation{
+			Apply: func(ctx context.Context, tx audit.TxOps) error {
+				l, err := s.readPairs(ctx, txQuerier{tx}, t.OrgID, ids, true)
+				if err != nil {
+					return err
+				}
+				if err := authorize(ctx, tx, t.Authorize, Locked{OrgID: t.OrgID, Principals: sortedUnique(ids)}); err != nil {
+					return err
+				}
+				pf, pt := l.pairs[t.From], l.pairs[t.To]
+				nextFrom, nextTo, err := decideTransfer(pf.state(), pt.state())
+				if err != nil {
+					return err
+				}
+				if t.From == t.To {
+					return nil
+				}
+				if !from.matches(pf) || !to.matches(pt) || nextFrom != from.next || nextTo != to.next {
+					return errStateMoved
+				}
+				if err := s.write(ctx, tx, t.OrgID, pf, from.id, nextFrom, nil); err != nil {
+					return err
+				}
+				return s.write(ctx, tx, t.OrgID, pt, to.id, nextTo, nil)
+			},
+			Audit:  auditFor(verbTransfer, t.OrgID, t.To, to.id, t.Actor, to.prev, to.next),
+			Events: []audit.OutboxEvent{eventFor(verbTransfer, from.id, from.next), eventFor(verbTransfer, to.id, to.next)},
+		})
+		if !errors.Is(err, errStateMoved) {
+			break
+		}
+	}
+	return err
 }
 
 func (s *Store) Get(ctx context.Context, orgID, principalID uuid.UUID) (*Membership, error) {
-	return nil, ErrStore
+	var m Membership
+	err := s.pool.QueryRow(ctx, `SELECT m.id, m.organization_id, m.principal_id, m.role, m.status, m.joined_at, COALESCE(r.revision, 0)
+FROM `+s.q+`.memberships m LEFT JOIN `+s.q+`.aggregate_revisions r
+  ON r.aggregate_type = 'membership' AND r.aggregate_id = 'mbr_' || m.id::text
+WHERE m.organization_id = $1 AND m.principal_id = $2`, orgID, principalID).
+		Scan(&m.ID, &m.OrgID, &m.PrincipalID, &m.Role, &m.Status, &m.JoinedAt, &m.Revision)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotMember
+	}
+	if err != nil {
+		s.logger.ErrorContext(ctx, "membership: read failure", logging.ErrorAttr(err))
+		return nil, fmt.Errorf("%w: read: %w", ErrStore, err)
+	}
+	return &m, nil
 }

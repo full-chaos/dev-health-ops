@@ -24,6 +24,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/finite"
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate/schemagate"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/platform/dialclass"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/platform/postureguard"
@@ -118,9 +119,7 @@ func dependencyUnavailable(reason string) error { return dependencyFailure{reaso
 // carries the real error text; this only restores that same detail to the
 // in-process return value the classifier reads.
 func dependencyCheckFailed(err error) error {
-	if isTransientDialError(err) {
-		err = transientDialError{cause: err}
-	}
+	err = dialclass.MarkTransient(err)
 	return fmt.Errorf("%w: %w", errWorkerDependencyUnavailable, err)
 }
 

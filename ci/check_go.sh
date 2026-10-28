@@ -362,6 +362,11 @@ usage() {
          stays unchanged. CI gets its real (sharded, parallel) integration
          signal from the separate go-storage-integration-plan/-shard jobs,
          not from this step.
+  CHECK_GO_FRESH=1 (environment, plain local runs only)
+         Every go call gets GOFLAGS=-count=1, so no test passes from the test
+         cache. Refused (exit 2) under CI=true or GITHUB_ACTIONS=true.
+         Hosted-like lane shard runs (CI=true) keep the go env GOCACHE and
+         run go clean -testcache right before instead.
   all    Run fmt, vet, test, race, build, contract,
          integration-vet, the FULL integration suite (every non-denylisted
          package, unsharded -- Docker required), and multi-replica-workers
@@ -375,6 +380,22 @@ die() {
   printf 'ERROR: %s\n' "$1" >&2
   exit 2
 }
+
+# CHAOS-11725: CHECK_GO_FRESH=1 is for plain local runs: GO_ENV_OFF sets GOFLAGS=-count=1 again after its scrub, so every go
+# call runs its tests and none passes from the test cache (a test that reads a file through a child process, such as helm or
+# bash, otherwise reads "ok (cached)" after an edit of only that file). Refused under CI=true or GITHUB_ACTIONS=true: hosted legs
+# keep the test cache and its receipt, and an ignored knob would be a silent false green.
+case "${CHECK_GO_FRESH:-}" in
+  ""|0) ;;
+  1)
+    if [ "${CI:-}" = "true" ] || [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+      die "CHECK_GO_FRESH=1 is for local runs only; refused because CI=true or GITHUB_ACTIONS=true (hosted legs keep the test cache and its receipt; locally keep the go env GOCACHE and run go clean -testcache right before the run)"
+    fi
+    GO_ENV_OFF+=(GOFLAGS=-count=1)
+    printf 'check_go.sh: CHECK_GO_FRESH=1: GOFLAGS=-count=1 on every go call (test cache off, local only)\n' >&2
+    ;;
+  *) die "CHECK_GO_FRESH must be 1 or unset, got '${CHECK_GO_FRESH}'" ;;
+esac
 
 cleanup_go_build_output() {
   if [ -z "${DEV_HEALTH_GO_BUILD_OUTPUT}" ]; then

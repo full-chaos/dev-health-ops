@@ -330,6 +330,23 @@ func configure(
 	return configureWith(ctx, cfg, registry, logger, nil)
 }
 
+// orgDeletionPreflightTimeout bounds the start-time ClickHouse preflight (Open
+// dials and pings; the grant read and discovery are two small queries).
+const orgDeletionPreflightTimeout = 15 * time.Second
+
+// logOrgDeletionPreflight logs, once at start and without failing it, whether
+// the org deletion could purge ClickHouse: orgdelete_clickhouse_preflight=ok, or
+// =refused with the named reason. Never the DSN, the login or an error text.
+func logOrgDeletionPreflight(ctx context.Context, logger *slog.Logger, dsn string) {
+	ctx, cancel := context.WithTimeout(ctx, orgDeletionPreflightTimeout)
+	defer cancel()
+	if reason := admin.OrgDeletionPreflight(ctx, dsn); reason != "" {
+		logger.WarnContext(ctx, "orgdelete_clickhouse_preflight", slog.String("orgdelete_clickhouse_preflight", "refused"), slog.String("reason", reason))
+		return
+	}
+	logger.InfoContext(ctx, "orgdelete_clickhouse_preflight", slog.String("orgdelete_clickhouse_preflight", "ok"))
+}
+
 // RegisterOperatorMetrics puts the api's counters on the operator
 // /metrics, the Go api's scrape surface (the Python api served its
 // prometheus_client counters on /metrics): the OTel instruments, each
@@ -458,6 +475,7 @@ func configureWith(
 	if adjust != nil {
 		adjust(&deps)
 	}
+	logOrgDeletionPreflight(ctx, logger, deps.ClickHouseDSN)
 	gate := NewIntakeGate(&deps, logger)
 	server, err := NewServerWithGate(cfg, logger, Routes(deps, logger), gate, scope...)
 	if err != nil {

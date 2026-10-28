@@ -410,6 +410,7 @@ jobs:
           bash ci/go_worker_fixture_test.sh
           bash ci/pull_base_image_test.sh
           bash ci/retry_test.sh
+          bash ci/ghcr_login_test.sh
 
       - name: Check the gqlgen output has not drifted from its hand-edits
         if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'
@@ -467,12 +468,21 @@ jobs:
           echo "DEV_HEALTH_CONTRACT_BASE=${base_dir}/contracts/jobs/v1" >> "${GITHUB_ENV}"
 
       - name: Log in to GitHub Container Registry
+        id: ghcr_login
+        continue-on-error: true
         if: steps.relevance.outputs.relevant == 'true'
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Retry the GitHub Container Registry login
+        if: steps.ghcr_login.outcome == 'failure'
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash ci/lib/ghcr_login.sh
 
       - name: Pre-pull pinned test dependency images with bounded retry
         if: steps.relevance.outputs.relevant == 'true'
@@ -625,6 +635,10 @@ jobs:
       - name: Validate River compatibility harness
         if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'
         run: bash ci/check_river_compat_static.sh
+
+      - name: Log out of GitHub Container Registry
+        if: always()
+        run: docker logout ghcr.io
 
   go-quality:
     name: go-quality

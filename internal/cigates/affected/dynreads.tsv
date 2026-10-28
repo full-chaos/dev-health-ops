@@ -269,6 +269,7 @@ internal/cigates/splitshards	ci_script_helpers_test.go
 internal/cigates/splitshards	split_package_shards_test.go
 internal/cigates/suitecatalog	runblock_test.go
 internal/cigates/suitecatalog	suitecatalog_test.go
+internal/cigates/testshard	checkgofresh_test.go
 internal/cigates/testshard	providersync_test.go
 internal/cigates/testshard	raceshard_test.go
 internal/cigates/testshard	securityfresh_test.go

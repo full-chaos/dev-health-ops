@@ -7,9 +7,13 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
-// answered is the stub of the old poll shape: it looks once and gives up.
-func answered(_ context.Context, probes ...*postgres.LazyProbeCheck) bool {
+// answered waits on each unanswered probe through CheckWith: the warmed cold flight, bounded by ctx; a never-warmed probe would panic on its nil run (accepted, no prod surface).
+func answered(ctx context.Context, probes ...*postgres.LazyProbeCheck) bool {
 	for _, probe := range probes {
+		if probe.Answered() {
+			continue
+		}
+		_ = probe.CheckWith(ctx, "", nil, postgres.PostureCheckOptions{})
 		if !probe.Answered() {
 			return false
 		}

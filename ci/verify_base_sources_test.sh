@@ -25,20 +25,20 @@ TSV
 
 # the stub answers only: docker buildx imagetools inspect --format '{{ .Manifest.Digest }}' <ref>. FAKE_DIG_GO / FAKE_DIG_DEB override
 # the served digest; FAKE_FAIL=<repo substring> makes the inspect fail. Every call is logged; any other docker command is a test bug.
-cat > "${T}/bin/docker" <<'STUB'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >> "${DOCKER_LOG}"
-if [ "$1 $2 $3" != "buildx imagetools inspect" ] || [ "$4" != "--format" ] || [ "$5" != "{{ .Manifest.Digest }}" ] || [ "$#" != 6 ]; then
-  printf 'stub docker: unexpected invocation: %s\n' "$*" >&2; exit 99
-fi
-ref="$6"
-if [ -n "${FAKE_FAIL:-}" ] && [[ "${ref}" == *"${FAKE_FAIL}"* ]]; then printf 'manifest unknown\n' >&2; exit 1; fi
-case "${ref}" in
-  *golang*) printf '%s\n' "${FAKE_DIG_GO:-${GO_D}}" ;;
-  *debian*) printf '%s\n' "${FAKE_DIG_DEB:-${DEB_D}}" ;;
-  *) printf 'stub docker: unexpected ref %s\n' "${ref}" >&2; exit 99 ;;
-esac
-STUB
+# shellcheck disable=SC2016  # the stub's text is single-quoted on purpose
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'printf '\''%s\n'\'' "$*" >> "${DOCKER_LOG}"' \
+  'if [ "$1 $2 $3" != "buildx imagetools inspect" ] || [ "$4" != "--format" ] || [ "$5" != "{{ .Manifest.Digest }}" ] || [ "$#" != 6 ]; then' \
+  '  printf '\''stub docker: unexpected invocation: %s\n'\'' "$*" >&2; exit 99' \
+  'fi' \
+  'ref="$6"' \
+  'if [ -n "${FAKE_FAIL:-}" ] && [[ "${ref}" == *"${FAKE_FAIL}"* ]]; then printf '\''manifest unknown\n'\'' >&2; exit 1; fi' \
+  'case "${ref}" in' \
+  '  *golang*) printf '\''%s\n'\'' "${FAKE_DIG_GO:-${GO_D}}" ;;' \
+  '  *debian*) printf '\''%s\n'\'' "${FAKE_DIG_DEB:-${DEB_D}}" ;;' \
+  '  *) printf '\''stub docker: unexpected ref %s\n'\'' "${ref}" >&2; exit 99 ;;' \
+  'esac' > "${T}/bin/docker"
 chmod +x "${T}/bin/docker"
 
 run() { # tsv ; env passes through; sets RC, OUT

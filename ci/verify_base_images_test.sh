@@ -24,29 +24,29 @@ TSV
 
 # the stub: FAKE_NO_TOKEN=<repo-substring> refuses a token; FAKE_CODE_<kind>=<http code>; FAKE_DIG_<kind>=<digest> where kind is
 # GOTAG, GODIG, DEBTAG, DEBDIG (tag or digest reference of golang or debian). Every call is logged.
-cat > "${T}/bin/curl" <<'STUB'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >> "${CURL_LOG}"
-url=""; for a in "$@"; do case "${a}" in https://*) url="${a}" ;; esac; done
-case "${url}" in
-  https://ghcr.io/token*)
-    if [ -n "${FAKE_NO_TOKEN:-}" ] && [[ "${url}" == *"${FAKE_NO_TOKEN}"* ]]; then exit 22; fi
-    printf '{"token":"anon-token"}'; exit 0 ;;
-  https://ghcr.io/v2/*/manifests/*)
-    ref="${url##*/manifests/}"; kind=""
-    case "${url}" in *golang*) kind=GO ;; *debian*) kind=DEB ;; esac
-    case "${ref}" in sha256:*) kind="${kind}DIG" ;; *) kind="${kind}TAG" ;; esac
-    code_var="FAKE_CODE_${kind}"; dig_var="FAKE_DIG_${kind}"
-    code="${!code_var:-200}"
-    if [ "${kind}" = GODIG ] || [ "${kind}" = DEBDIG ]; then def="${ref}"; else
-      if [ "${kind}" = GOTAG ]; then def="${GO_D}"; else def="${DEB_D}"; fi; fi
-    dig="${!dig_var:-${def}}"
-    printf 'HTTP/2 %s\r\n' "${code}"
-    [ "${code}" = 200 ] && printf 'docker-content-digest: %s\r\n' "${dig}"
-    printf '\r\n'; exit 0 ;;
-  *) printf 'stub curl: unexpected url %s\n' "${url}" >&2; exit 99 ;;
-esac
-STUB
+# shellcheck disable=SC2016  # the stub's text is single-quoted on purpose
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'printf '\''%s\n'\'' "$*" >> "${CURL_LOG}"' \
+  'url=""; for a in "$@"; do case "${a}" in https://*) url="${a}" ;; esac; done' \
+  'case "${url}" in' \
+  '  https://ghcr.io/token*)' \
+  '    if [ -n "${FAKE_NO_TOKEN:-}" ] && [[ "${url}" == *"${FAKE_NO_TOKEN}"* ]]; then exit 22; fi' \
+  '    printf '\''{"token":"anon-token"}'\''; exit 0 ;;' \
+  '  https://ghcr.io/v2/*/manifests/*)' \
+  '    ref="${url##*/manifests/}"; kind=""' \
+  '    case "${url}" in *golang*) kind=GO ;; *debian*) kind=DEB ;; esac' \
+  '    case "${ref}" in sha256:*) kind="${kind}DIG" ;; *) kind="${kind}TAG" ;; esac' \
+  '    code_var="FAKE_CODE_${kind}"; dig_var="FAKE_DIG_${kind}"' \
+  '    code="${!code_var:-200}"' \
+  '    if [ "${kind}" = GODIG ] || [ "${kind}" = DEBDIG ]; then def="${ref}"; else' \
+  '      if [ "${kind}" = GOTAG ]; then def="${GO_D}"; else def="${DEB_D}"; fi; fi' \
+  '    dig="${!dig_var:-${def}}"' \
+  '    printf '\''HTTP/2 %s\r\n'\'' "${code}"' \
+  '    [ "${code}" = 200 ] && printf '\''docker-content-digest: %s\r\n'\'' "${dig}"' \
+  '    printf '\''\r\n'\''; exit 0 ;;' \
+  '  *) printf '\''stub curl: unexpected url %s\n'\'' "${url}" >&2; exit 99 ;;' \
+  'esac' > "${T}/bin/curl"
 chmod +x "${T}/bin/curl"
 
 run() { # args: tsv path ; env passes through; sets RC, OUT

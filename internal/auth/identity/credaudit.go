@@ -16,8 +16,11 @@ type RowQuerier interface {
 }
 
 // AuditOrganization is the organization the audit row of a principal's
-// credential event names: the principal's earliest membership by (created_at,
-// id) whose organization is in the auth schema, or nil when there is none. It
+// credential event names: the one login picks without organization activity
+// (authapi chooseMembership): the earliest join, joined_at falling back to
+// created_at, ties in the order joined_at, created_at, id; nil when there is no
+// membership. A backfill keeps the source joined_at and stamps created_at with
+// the projection time, so created_at alone would choose by projection order. It
 // reads the auth schema's own tables, which the auth runtime role can select,
 // and the audit row's organization column references auth.organizations, so a
 // named organization always satisfies it. go-api names the first row of an
@@ -28,7 +31,7 @@ func AuditOrganization(ctx context.Context, q RowQuerier, schema string, princip
 	err := q.QueryRow(ctx, `SELECT o.id::text FROM `+schema+`.memberships m
 JOIN `+schema+`.organizations o ON o.id = m.organization_id
 WHERE m.principal_id = $1 AND m.status <> 'removed'
-ORDER BY m.created_at, m.id LIMIT 1`, principal).Scan(&org)
+ORDER BY COALESCE(m.joined_at, m.created_at), m.joined_at NULLS LAST, m.created_at, m.id LIMIT 1`, principal).Scan(&org)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}

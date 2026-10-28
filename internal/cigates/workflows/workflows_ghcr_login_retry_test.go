@@ -205,6 +205,10 @@ func TestGhcrRetryShapeCheckerCatchesPlantedDefects(t *testing.T) {
 		{"fallback before login", func(s []any) []any { s[1], s[2] = s[2], s[1]; return s }, "before the login"},
 		{"token in run text", func(s []any) []any { asMap(s[2])["run"] = ghcrFallbackRun + " ${{ secrets.GITHUB_TOKEN }}"; return s }, "no fallback step"},
 		{"token not from env", func(s []any) []any { delete(asMap(s[2]), "env"); return s }, "through env"},
+		{"second unshaped login", func(s []any) []any {
+			second := yamlMap{"name": "Second login", "uses": "docker/login-action@dbcb813823bdd20940b903addbd779551569679f", "with": yamlMap{"registry": "ghcr.io"}}
+			return append(s[:4:4], append([]any{second}, s[4:]...)...)
+		}, "exactly one"},
 		{"login action unpinned", func(s []any) []any { asMap(s[1])["uses"] = "docker/login-action@v4"; return s }, "not pinned"},
 	}
 	for _, c := range cases {

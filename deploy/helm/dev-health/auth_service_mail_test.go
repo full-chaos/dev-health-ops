@@ -397,3 +397,106 @@ func TestAuthServiceMailEgressRefusesAPrefixThatContainsTheMappedOrNAT64Range(t 
 		}
 	}
 }
+
+const mailNarrowPeer = `{"namespaceSelector":{"matchLabels":{"team":"mail-relay"}}}`
+
+func mailBlock(cidr string) string { return fmt.Sprintf(`{"ipBlock":{"cidr":%q}}`, cidr) }
+
+func wantMailPeerRefusal(t *testing.T, label string, peers []string, extra ...string) {
+	t.Helper()
+	out, err := mailRender(t, peers, extra...)
+	if err == nil || !strings.Contains(out, "authService.networkPolicy.egress.mail.to") {
+		t.Fatalf("%s: accepted: %v\n%.300s", label, err, out)
+	}
+}
+
+func TestAuthServiceMailEgressRefusesAnEmptySelector(t *testing.T) {
+	good := `{"matchLabels":{"app":"x"}}`
+	empties := map[string]string{
+		"empty object":             `{}`,
+		"empty matchLabels":        `{"matchLabels":{}}`,
+		"empty matchExpressions":   `{"matchExpressions":[]}`,
+		"both empty":               `{"matchLabels":{},"matchExpressions":[]}`,
+		"empty matchLabels + list": `{"matchLabels":{},"matchExpressions":[]}`,
+	}
+	for _, kind := range []string{"podSelector", "namespaceSelector"} {
+		for name, sel := range empties {
+			t.Run(kind+"/"+strings.ReplaceAll(name, " ", "_"), func(t *testing.T) {
+				wantMailPeerRefusal(t, name, []string{fmt.Sprintf(`{%q:%s}`, kind, sel)})
+			})
+		}
+	}
+	t.Run("one present selector empty", func(t *testing.T) {
+		wantMailPeerRefusal(t, "pod ok, namespace empty", []string{fmt.Sprintf(`{"podSelector":%s,"namespaceSelector":{"matchLabels":{}}}`, good)})
+	})
+	t.Run("two peer kinds in one entry", func(t *testing.T) {
+		wantMailPeerRefusal(t, "ipBlock and selector", []string{fmt.Sprintf(`{"ipBlock":{"cidr":"10.1.2.0/24"},"podSelector":%s}`, good)})
+	})
+	for name, peer := range map[string]string{
+		"pod labels":      fmt.Sprintf(`{"podSelector":%s}`, good),
+		"namespace exprs": `{"namespaceSelector":{"matchExpressions":[{"key":"team","operator":"Exists"}]}}`,
+		"both non-empty":  fmt.Sprintf(`{"podSelector":%s,"namespaceSelector":%s}`, good, good),
+	} {
+		if out, err := mailRender(t, []string{peer}); err != nil {
+			t.Fatalf("%s: a non-empty selector was refused: %v\n%.300s", name, err, out)
+		}
+	}
+}
+
+func TestAuthServiceMailEgressRefusesANonCanonicalPrefix(t *testing.T) {
+	v4, v6 := mailV4Except, mailV6Except
+	for _, cidr := range []string{"0.0.0.0/00", "0.0.0.0/000", "::/00", "::/000", "0.0.0.0/+0", "0.0.0.0/ 0", "10.0.0.0/08", "10.0.0.0/008", "2001:db8::/032", " 10.0.0.0/8", "10.0.0.0/8 ", "10.0.0.0/8\n", "\t10.0.0.0/8"} {
+		t.Run(strings.NewReplacer("/", "_", " ", "_", "\n", "n", "\t", "t").Replace(cidr), func(t *testing.T) {
+			wantMailPeerRefusal(t, cidr, []string{mailBlock(cidr)})
+			except := v4
+			if strings.Contains(cidr, ":") {
+				except = v6
+			}
+			wantMailPeerRefusal(t, cidr+" beside a narrow peer", []string{mailPeer(cidr, except), mailNarrowPeer})
+		})
+	}
+	for _, cidr := range []string{"0.0.0.0/0 ", "00.0.0.0/0", "0.0.0.00/0", "0.0.0/0", "::ffff:0.0.0.0/0", "::FFFF:0:0/0", "0:0:0:0:0:0:0:0/0", "0::0/0", "::0/0", "1.2.3.4/0", "::1/0"} {
+		except := v4
+		if strings.Contains(cidr, ":") {
+			except = v6
+		}
+		wantMailPeerRefusal(t, cidr, []string{mailPeer(cidr, except)})
+	}
+}
+
+func TestAuthServiceMailEgressRefusesAMalformedAddress(t *testing.T) {
+	for _, cidr := range []string{"10.ab.0.0/8", "10.0.0.a/32", "0a.0.0.0/8", "1e1.0.0.0/8", "256.0.0.0/8", "10.0.0/8", "10.0.0.0.0/8", "010.0.0.0/8", "10.00.0.0/16", "10..0.0/8", ".10.0.0.0/8", "::g/32", "2001:db8::1::2/32", "2001:db8:0:0:0:0:0:0:1/64"} {
+		wantMailPeerRefusal(t, cidr, []string{mailBlock(cidr)})
+	}
+	for _, cidr := range []string{"10.1.2.0/24", "203.0.113.7/32", "8.0.0.0/8", "2001:db8::/32", "2001:DB8::/32"} {
+		if out, err := mailRender(t, []string{mailBlock(cidr)}); err != nil {
+			t.Fatalf("%q was refused: %v\n%.300s", cidr, err, out)
+		}
+	}
+}
+
+func TestAuthServiceMailEgressRefusesAPrefixOutOfRange(t *testing.T) {
+	for _, cidr := range []string{"10.0.0.0/33", "10.0.0.0/999", "2001:db8::/129", "10.0.0.0/256"} {
+		wantMailPeerRefusal(t, cidr, []string{mailBlock(cidr)})
+	}
+}
+
+func TestAuthServiceMailEgressRefusesAnExceptThatIsNotACIDR(t *testing.T) {
+	for _, bad := range []string{"not-a-cidr", "10.ab.0.0/8", "10.0.0.0/08", "10.0.0.0/33"} {
+		wantMailPeerRefusal(t, bad, []string{mailPeer("0.0.0.0/0", append(append([]string{}, mailV4Except...), bad))})
+	}
+	wantMailPeerRefusal(t, "v6 bad except", []string{mailPeer("::/0", append(append([]string{}, mailV6Except...), "zz::/8"))})
+}
+
+func TestAuthServiceMailEgressNeedsTheExactTCPProtocol(t *testing.T) {
+	v4 := mailPeer("0.0.0.0/0", mailV4Except)
+	for _, proto := range []string{"tcp", "Tcp", "TCP "} {
+		out, err := mailRender(t, []string{v4}, "--set-json", fmt.Sprintf(`authService.networkPolicy.egress.mail.ports=[{"protocol":%q,"port":443}]`, proto))
+		if err == nil || !strings.Contains(out, "authService.networkPolicy.egress.mail") {
+			t.Fatalf("protocol %q accepted: %v\n%.200s", proto, err, out)
+		}
+	}
+	if out, err := mailRender(t, []string{v4}, "--set-json", `authService.networkPolicy.egress.mail.ports=[{"port":443}]`); err != nil {
+		t.Fatalf("an unset protocol (TCP) was refused: %v\n%.200s", err, out)
+	}
+}

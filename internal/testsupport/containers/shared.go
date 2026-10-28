@@ -151,6 +151,9 @@ func (s *sharedServers) finish(ctx context.Context) ([]string, error) {
 			errs = append(errs, fmt.Errorf("%s: read the server state after the run: %w", server.engine, err))
 		} else {
 			if server == s.pg {
+				for _, finding := range s.unregisteredTemplates(after) {
+					findings = append(findings, server.engine+" "+finding)
+				}
 				after = withoutTemplateRows(after)
 				for _, finding := range s.checkTemplates(ctx, server) {
 					findings = append(findings, server.engine+" "+finding)

@@ -290,18 +290,27 @@ func buildTemplate(ctx context.Context, server *sharedServer, name string, build
 }
 
 // pgTemplateFingerprintQuery returns one text row per object and per piece of
-// state a test could change in a database: relations, columns (type, null
-// flag, default), indexes, constraints, functions, triggers, sequences (last
-// value and is_called), extensions with their versions, and the exact row count
-// of every table. Definitions enter as md5 so a row stays short.
+// state a test could change in a database: relations (kind, owner, grants,
+// storage options, comment), columns (type, null flag, default, grants,
+// comment), indexes, constraints, triggers, functions (owner, grants,
+// comment), schemas (owner, grants, comment), default privileges, the
+// database's own owner, grants and comment, extensions with their versions,
+// sequences (last value and is_called), the exact row count of every table and
+// an md5 of the content of every table (its rows as text, in row-text order, a
+// total order whatever the key or the column types). Definitions enter as md5
+// so a row stays short.
 const pgTemplateFingerprintQuery = `
 WITH rel AS (
-  SELECT c.oid, c.relkind, n.nspname, c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+  SELECT c.oid, c.relkind, n.nspname, c.relname, c.relowner, c.relacl, c.reloptions
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
    WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg_toast%' AND n.nspname NOT LIKE 'pg_temp%'
 )
-SELECT 'relation ' || nspname || '.' || relname || ' kind=' || relkind::text FROM rel
+SELECT 'relation ' || nspname || '.' || relname || ' kind=' || relkind::text || ' owner=' || pg_get_userbyid(relowner) ||
+       ' acl=' || coalesce(relacl::text, '') || ' opts=' || coalesce(reloptions::text, '') ||
+       ' comment=' || coalesce(md5(obj_description(oid, 'pg_class')), '') FROM rel
 UNION ALL SELECT 'column ' || r.nspname || '.' || r.relname || '.' || a.attname || ' ' || format_type(a.atttypid, a.atttypmod) ||
-         ' notnull=' || a.attnotnull || ' default=' || coalesce(md5(pg_get_expr(d.adbin, d.adrelid)), '')
+         ' notnull=' || a.attnotnull || ' default=' || coalesce(md5(pg_get_expr(d.adbin, d.adrelid)), '') ||
+         ' acl=' || coalesce(a.attacl::text, '') || ' comment=' || coalesce(md5(col_description(a.attrelid, a.attnum::int)), '')
   FROM rel r JOIN pg_attribute a ON a.attrelid = r.oid AND a.attnum > 0 AND NOT a.attisdropped
   LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum WHERE r.relkind IN ('r', 'p', 'v', 'm', 'f')
 UNION ALL SELECT 'index ' || r.nspname || '.' || r.relname || ' ' || md5(pg_get_indexdef(r.oid)) FROM rel r WHERE r.relkind IN ('i', 'I')
@@ -309,9 +318,18 @@ UNION ALL SELECT 'constraint ' || r.nspname || '.' || r.relname || '.' || k.conn
   FROM pg_constraint k JOIN rel r ON r.oid = k.conrelid
 UNION ALL SELECT 'trigger ' || r.nspname || '.' || r.relname || '.' || t.tgname || ' ' || md5(pg_get_triggerdef(t.oid))
   FROM pg_trigger t JOIN rel r ON r.oid = t.tgrelid WHERE NOT t.tgisinternal
-UNION ALL SELECT 'function ' || n.nspname || '.' || p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ') ' || md5(coalesce(p.prosrc, ''))
+UNION ALL SELECT 'function ' || n.nspname || '.' || p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ') ' || md5(coalesce(p.prosrc, '')) ||
+         ' owner=' || pg_get_userbyid(p.proowner) || ' acl=' || coalesce(p.proacl::text, '') ||
+         ' comment=' || coalesce(md5(obj_description(p.oid, 'pg_proc')), '')
   FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
  WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg_toast%' AND p.prokind <> 'a'
+UNION ALL SELECT 'schema ' || nspname || ' owner=' || pg_get_userbyid(nspowner) || ' acl=' || coalesce(nspacl::text, '') ||
+         ' comment=' || coalesce(md5(obj_description(oid, 'pg_namespace')), '')
+  FROM pg_namespace WHERE nspname NOT IN ('pg_catalog', 'information_schema') AND nspname NOT LIKE 'pg_toast%' AND nspname NOT LIKE 'pg_temp%'
+UNION ALL SELECT 'default-acl ' || pg_get_userbyid(defaclrole) || ' ' || coalesce(defaclnamespace::regnamespace::text, '*') || ' ' ||
+         defaclobjtype::text || ' ' || defaclacl::text FROM pg_default_acl
+UNION ALL SELECT 'database-acl ' || pg_get_userbyid(datdba) || ' ' || coalesce(datacl::text, '') || ' ' ||
+         coalesce(md5(shobj_description(oid, 'pg_database')), '') FROM pg_database WHERE datname = current_database()
 UNION ALL SELECT 'extension ' || extname || ' ' || extversion FROM pg_extension
 UNION ALL SELECT 'sequence ' || schemaname || '.' || sequencename || ' last=' ||
     (xpath('/row/l/text()', query_to_xml(format('SELECT last_value AS l FROM %I.%I', schemaname, sequencename), false, true, '')))[1]::text || ' called=' ||
@@ -319,6 +337,11 @@ UNION ALL SELECT 'sequence ' || schemaname || '.' || sequencename || ' last=' ||
   FROM pg_sequences
 UNION ALL SELECT 'rows ' || nspname || '.' || relname || '=' ||
     (xpath('/row/c/text()', query_to_xml(format('SELECT count(*) AS c FROM %I.%I', nspname, relname), false, true, '')))[1]::text
+  FROM rel WHERE relkind IN ('r', 'p')
+UNION ALL SELECT 'content ' || nspname || '.' || relname || ' md5=' ||
+    (xpath('/row/h/text()', query_to_xml(
+      format('SELECT md5(coalesce(string_agg(t::text, %L ORDER BY t::text), %L)) AS h FROM %I.%I t', '', '', nspname, relname),
+      false, true, '')))[1]::text
   FROM rel WHERE relkind IN ('r', 'p')`
 
 // pgTemplateFingerprint reads the state a template must keep unchanged.
@@ -359,9 +382,9 @@ func withoutTemplateRows(rows []string) []string {
 	return out
 }
 
-// checkTemplates compares every template with the state it had when it was
-// built, and names any template database nobody registered. A template that
-// changed, is open to connections, or lost its template flag is a finding.
+// checkTemplates compares every registered template with the state it had when
+// it was built. A template that changed, is open to connections, or lost its
+// template flag is a finding.
 func (s *sharedServers) checkTemplates(ctx context.Context, server *sharedServer) []string {
 	if !s.templates.used() {
 		return nil
@@ -389,11 +412,6 @@ func (s *sharedServers) checkTemplates(ctx context.Context, server *sharedServer
 	}
 	rows.Close()
 	registered := s.templates.built()
-	for name := range present {
-		if _, ok := registered[name]; !ok {
-			findings = append(findings, "template "+name+": unregistered template database")
-		}
-	}
 	for name, entry := range registered {
 		f, ok := present[name]
 		if !ok {
@@ -424,4 +442,49 @@ func (s *sharedServers) checkTemplates(ctx context.Context, server *sharedServer
 	}
 	sort.Strings(findings)
 	return findings
+}
+
+// unregisteredTemplates names every database in a snapshot that is called like
+// a template and that no caller registered, whether or not any template was
+// registered in the run.
+func (s *sharedServers) unregisteredTemplates(rows []string) []string {
+	registered := s.templates.built()
+	var findings []string
+	for _, row := range rows {
+		name, ok := strings.CutPrefix(row, "database ")
+		if !ok || !strings.HasPrefix(name, templateNamePrefix) {
+			continue
+		}
+		name, _, _ = strings.Cut(name, " ")
+		if _, ok := registered[name]; !ok {
+			findings = append(findings, "template "+name+": unregistered template database")
+		}
+	}
+	return findings
+}
+
+// PostgresSessionState reads what a role connecting to the shared server sees
+// before any database default applies: the user and the effective search_path
+// (the role and server defaults). It is empty outside the cases a template can
+// be used in (see templateFallbackReason). The template key includes it.
+func PostgresSessionState(ctx context.Context) (user, searchPath string, err error) {
+	servers := activeSharedServers()
+	if templateFallbackReason(servers) != "" {
+		return "", "", nil
+	}
+	server, err := servers.postgres()
+	if err != nil {
+		return "", "", err
+	}
+	return postgresSessionState(ctx, server.adminDSN)
+}
+
+func postgresSessionState(ctx context.Context, dsn string) (user, searchPath string, err error) {
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		return "", "", err
+	}
+	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
+	err = conn.QueryRow(ctx, "SELECT current_user::text, current_setting('search_path')").Scan(&user, &searchPath)
+	return user, searchPath, err
 }

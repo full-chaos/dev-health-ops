@@ -70,7 +70,11 @@ func applyURI(ctx context.Context, uri string) error {
 // instance, as after StartPostgres.
 func Start(ctx context.Context, t testing.TB) *containers.Instance {
 	t.Helper()
-	key, err := Key()
+	user, searchPath, err := containers.PostgresSessionState(ctx)
+	if err != nil {
+		t.Fatalf("pgschema: read the session state of the shared server: %v", err)
+	}
+	key, err := key(SessionState{CurrentUser: user, SearchPath: searchPath})
 	if err != nil {
 		t.Fatalf("pgschema: template key: %v", err)
 	}
@@ -83,7 +87,7 @@ func Start(ctx context.Context, t testing.TB) *containers.Instance {
 
 // keyVersion changes when the way the schema is built changes in a way the
 // inputs below do not show.
-const keyVersion = "pgschema-template-1"
+const keyVersion = "pgschema-template-2"
 
 // KeyEnv lists the environment values pgmigrate.Upgrade reads; a different
 // value can build a different schema, so each is part of the key.
@@ -91,7 +95,9 @@ var KeyEnv = []string{pgmigrate.AuthSchemaEnv, pgmigrate.RiverSchemaEnv, pgmigra
 
 // Key is KeyFor over the embedded baseline and chain, the harness image and
 // the process environment, read now.
-func Key() (string, error) {
+func Key() (string, error) { return key(SessionState{}) }
+
+func key(state SessionState) (string, error) {
 	baseline, err := pgmigrate.LoadBaseline()
 	if err != nil {
 		return "", err
@@ -100,13 +106,24 @@ func Key() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return KeyFor(baseline, chain, containers.PostgresImage, os.LookupEnv), nil
+	return KeyForSession(baseline, chain, containers.PostgresImage, os.LookupEnv, state), nil
 }
 
 // KeyFor hashes everything the migrated schema is built from: the baseline,
 // every chain file (revision, name, body) in the order given, the image, and
 // each KeyEnv value (a set-but-empty value differs from an unset one).
 func KeyFor(baseline pgmigrate.Baseline, chain []pgmigrate.ChainFile, image string, lookup func(string) (string, bool)) string {
+	return KeyForSession(baseline, chain, image, lookup, SessionState{})
+}
+
+// SessionState is what the build role sees on the server before any database
+// default applies (containers.PostgresSessionState): a role default for
+// search_path or another role builds the same chain into other places or under
+// another owner.
+type SessionState struct{ CurrentUser, SearchPath string }
+
+// KeyForSession is KeyFor with the session state of the build role in the hash.
+func KeyForSession(baseline pgmigrate.Baseline, chain []pgmigrate.ChainFile, image string, lookup func(string) (string, bool), state SessionState) string {
 	hash := sha256.New()
 	field := func(parts ...string) {
 		for _, part := range parts {
@@ -116,6 +133,7 @@ func KeyFor(baseline pgmigrate.Baseline, chain []pgmigrate.ChainFile, image stri
 	}
 	field("version", keyVersion)
 	field("image", image)
+	field("session", state.CurrentUser, state.SearchPath)
 	for _, name := range KeyEnv {
 		value, set := lookup(name)
 		field("env", name, fmt.Sprint(set), value)

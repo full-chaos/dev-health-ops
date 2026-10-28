@@ -18,6 +18,7 @@ import (
 var corpusLiveRoots = []string{
 	"./internal/api/session", "./internal/api/sso", "./internal/api/policy", "./internal/apiservice", "./cmd/dho", "./cmd/auth-service",
 	"./cmd/dev-health-worker-migrate", "./cmd/auth-migrate",
+	"./internal/testsupport/providerstub/cmd/providerstub", "./internal/testsupport/smtpcapture/cmd/smtpsink",
 }
 
 // corpusLiveTestPackage is the package the corpus runs `go test -tags integration` on (ci/auth_corpus_external.sh).
@@ -508,5 +509,33 @@ func TestAuthCorpusQueueTestedPackageVariantsMapToTheirDirectory(t *testing.T) {
 	list := "FAKE_GO_TEST_LIST=P example.com/x/internal/apiservice/authflowvenue [example.com/x/internal/apiservice/authflowvenue.test]\nP example.com/x/internal/testsupport/venueoracle [example.com/x/internal/apiservice/authflowvenue.test]"
 	if got := corpusLiveRun(t, []string{list}, "internal/testsupport/venueoracle/x.go"); got != "corpus=true" {
 		t.Fatalf("a test variant row: got %q, want corpus=true", got)
+	}
+}
+
+// CHAOS-11735: an embedded file of a TEST VARIANT prints as `E PATH [PATH.test]/file` (a
+// dependency recompiled for the test): its directory is a closure directory, and only that directory.
+func TestAuthCorpusQueueTestedPackageEmbedOfATestVariantMapsToItsDirectory(t *testing.T) {
+	const tested = "example.com/x/internal/apiservice/authflowvenue"
+	list := "FAKE_GO_TEST_LIST=P " + tested + " [" + tested + ".test]\n" +
+		"E example.com/x/internal/testsupport/proofprincipals [" + tested + ".test]/fixtures/a.json\n" +
+		"P example.com/x/internal/testsupport/venueoracle [" + tested + ".test]\n" +
+		"E example.com/x/internal/testsupport/venueoracle [" + tested + ".test]/data/sub/b.json"
+	cases := []struct {
+		name  string
+		paths []string
+		want  string
+	}{
+		{"a file beside the embed of a recompiled test-support package", []string{"internal/testsupport/proofprincipals/fixtures/new.json"}, "corpus=true"},
+		{"a file beside the embed of a recompiled dependency", []string{"internal/testsupport/venueoracle/data/sub/new.json"}, "corpus=true"},
+		{"a sibling of the nested embed directory", []string{"internal/testsupport/venueoracle/data/sub2/x.json"}, "corpus=false"},
+		{"a subdirectory of the nested embed directory that is not embedded", []string{"internal/testsupport/venueoracle/data/sub/deeper/x.json"}, "corpus=false"},
+		{"the parent of the nested embed directory is not itself an embed directory", []string{"internal/testsupport/venueoracle/data/x.json"}, "corpus=false"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := corpusLiveRun(t, []string{list}, c.paths...); got != c.want {
+				t.Fatalf("change %q: got %q, want %q", c.paths, got, c.want)
+			}
+		})
 	}
 }

@@ -22,6 +22,7 @@ const corpusModule = "github.com/full-chaos/dev-health-ops"
 var corpusClosureRoots = []string{
 	"./internal/api/session", "./internal/api/sso", "./internal/api/policy", "./internal/apiservice", "./cmd/dho", "./cmd/auth-service",
 	"./cmd/dev-health-worker-migrate", "./cmd/auth-migrate",
+	"./internal/testsupport/providerstub/cmd/providerstub", "./internal/testsupport/smtpcapture/cmd/smtpsink",
 }
 
 // The package the corpus runs `go test -tags integration` on.
@@ -78,28 +79,143 @@ func TestAuthCorpusClosureRootsExistAndTheSetNamesThem(t *testing.T) {
 	}
 }
 
-// Every command the corpus images build (the go build loop of docker/go-worker.Dockerfile) is a root.
+// CHAOS-11735: every `go build` of every image the corpus compose project builds names a command that is a root.
+// The corpus images are the Dockerfiles that compose.yml and ci/auth_corpus_external.override.yml name in a build block.
+var corpusImageDockerfiles = map[string]int{
+	"docker/go-worker.Dockerfile":    4, // the for-loop: dev-health-worker-migrate auth-service auth-migrate dho
+	"docker/providerstub.Dockerfile": 1,
+	"docker/smtpsink.Dockerfile":     1,
+}
+
+// corpusComposeDockerfiles lists every build.dockerfile of the services in the given compose files.
+func corpusComposeDockerfiles(t *testing.T, root string, files ...string) []string {
+	t.Helper()
+	seen := map[string]bool{}
+	for _, f := range files {
+		doc := parseYAML(t, readFile(t, filepath.Join(root, f)), f)
+		services, ok := doc["services"].(yamlMap)
+		if !ok {
+			t.Fatalf("%s has no services map", f)
+		}
+		for name, raw := range services {
+			svc, ok := raw.(yamlMap)
+			if !ok {
+				t.Fatalf("%s: service %s is not a map", f, name)
+			}
+			build, has := svc["build"]
+			if !has {
+				continue
+			}
+			b, ok := build.(yamlMap)
+			if !ok {
+				t.Fatalf("%s: service %s has a build that is not a map; cannot tell its Dockerfile", f, name)
+			}
+			df, ok := b["dockerfile"].(string)
+			if !ok || df == "" {
+				t.Fatalf("%s: service %s has a build block without a dockerfile", f, name)
+			}
+			seen[df] = true
+		}
+	}
+	var out []string
+	for d := range seen {
+		out = append(out, d)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func TestAuthCorpusClosureRootsCoverTheImageBuildList(t *testing.T) {
 	root := authProofRoot(t)
-	text := readFile(t, filepath.Join(root, "docker", "go-worker.Dockerfile"))
-	i := strings.Index(text, "for command in")
-	j := strings.Index(text[i:], "; do")
-	if i < 0 || j < 0 {
-		t.Fatal("docker/go-worker.Dockerfile has no `for command in ... ; do` build loop")
+	got := corpusComposeDockerfiles(t, root, "compose.yml", "ci/auth_corpus_external.override.yml")
+	var want []string
+	for d := range corpusImageDockerfiles {
+		want = append(want, d)
+	}
+	sort.Strings(want)
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("the corpus compose files build %v, the test pins %v: a new corpus image must be parsed here", got, want)
 	}
 	roots := map[string]bool{}
 	for _, r := range corpusSetValue(t, root, "AUTH_CORPUS_ROOTS") {
 		roots[r] = true
 	}
-	n := 0
-	for _, f := range strings.Fields(strings.ReplaceAll(text[i+len("for command in"):i+j], "\\", " ")) {
-		n++
-		if !roots["./cmd/"+f] {
-			t.Errorf("the corpus images build cmd/%s but it is not in AUTH_CORPUS_ROOTS", f)
+	for _, df := range want {
+		builds, err := parseDockerfileBuilds(readFile(t, filepath.Join(root, df)))
+		if err != nil {
+			t.Fatalf("%s: %v", df, err)
+		}
+		if len(builds) != corpusImageDockerfiles[df] {
+			t.Fatalf("%s: parsed %d go build targets %v, want %d", df, len(builds), builds, corpusImageDockerfiles[df])
+		}
+		for _, b := range builds {
+			if !roots[b.pkg] {
+				t.Errorf("%s:%d builds %s but it is not in AUTH_CORPUS_ROOTS", df, b.line, b.pkg)
+			}
 		}
 	}
-	if n < 4 {
-		t.Errorf("the build loop lists %d commands, want at least 4", n)
+}
+
+func TestAuthCorpusDockerfileParserTable(t *testing.T) {
+	ok := []struct {
+		name string
+		text string
+		want []string
+	}{
+		{"a loop over a variable, multi-line RUN", "FROM x\nRUN --mount=type=cache,target=/a \\\n    set -eu; \\\n    for command in \\\n        a \\\n        b; do \\\n      GOOS=\"${T}\" go build -trimpath -ldflags=\"-s -w \\\n -X p.V=${V}\" -o \"/out/${command}\" \\\n        \"./cmd/${command}\"; \\\n    done; \\\n    mkdir -p /x\n", []string{"./cmd/a", "./cmd/b"}},
+		{"an && chain", "RUN go build -o /out/a ./cmd/a && go build -o /out/b ./cmd/b\n", []string{"./cmd/a", "./cmd/b"}},
+		{"a second loop later in the file is read too", "RUN for c in a; do go build ./cmd/$c; done\nRUN for c in b d; do go build -o /o/$c ./cmd/${c}; done\n", []string{"./cmd/a", "./cmd/b", "./cmd/d"}},
+		{"a literal target, no loop", "RUN go build -buildvcs=false -o /out/x ./internal/x/cmd/x\n", []string{"./internal/x/cmd/x"}},
+		{"a value flag before the target", "RUN go build -tags integration -p 4 -o /out/x ./cmd/x\n", []string{"./cmd/x"}},
+		{"comment lines and other instructions", "# go build ./cmd/no\nENV A=go\nRUN echo hi\nRUN echo go build ./cmd/no\n", nil},
+		{"no go build at all", "FROM x\nRUN echo hi\n", nil},
+		{"go mod download is not a build", "RUN go mod download\n", nil},
+	}
+	for _, c := range ok {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := parseDockerfileBuilds(c.text)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var pkgs []string
+			for _, b := range got {
+				pkgs = append(pkgs, b.pkg)
+			}
+			if strings.Join(pkgs, " ") != strings.Join(c.want, " ") {
+				t.Fatalf("got %v, want %v", pkgs, c.want)
+			}
+		})
+	}
+	bad := map[string]string{
+		"an unset variable":                "RUN go build ./cmd/${other}\n",
+		"a build-arg variable":             "ARG C=a\nRUN go build ./cmd/${C}\n",
+		"a command substitution":           "RUN go build $(echo ./cmd/a)\n",
+		"a backtick":                       "RUN go build `echo ./cmd/a`\n",
+		"a heredoc":                        "RUN <<EOF\ngo build ./cmd/a\nEOF\n",
+		"the all-packages pattern":         "RUN go build ./...\n",
+		"a target without ./":              "RUN go build cmd/a\n",
+		"a build without a target":         "RUN go build -o /out/a\n",
+		"an unterminated quote":            "RUN go build \"./cmd/a\n",
+		"a loop that never ends":           "RUN for c in a; do go build ./cmd/$c\n",
+		"a done without a loop":            "RUN go build ./cmd/a; done\n",
+		"a loop over a substitution":       "RUN for c in $(ls); do go build ./cmd/$c; done\n",
+		"an if around a build":             "RUN if true; then go build ./cmd/a; fi\n",
+		"a while around a build":           "RUN while true; do go build ./cmd/a; done\n",
+		"a shell -c wrapper":               "RUN sh -c \"go build ./cmd/a\"\n",
+		"an exec-form RUN with go":         "RUN [\"go\", \"build\", \"./cmd/a\"]\n",
+		"go run":                           "RUN go run ./cmd/a\n",
+		"a go test":                        "RUN go test ./cmd/a\n",
+		"a shell comment after the target": "RUN go build ./cmd/y # tail\n",
+		"a go build with a stray word":     "RUN go build ./cmd/a b\n",
+		"a variable inside a target":       "RUN go build ./cmd/a${V}\n",
+		"a dot-dot target":                 "RUN go build ../x\n",
+	}
+	for name, text := range bad {
+		t.Run("fails closed: "+name, func(t *testing.T) {
+			if got, err := parseDockerfileBuilds(text); err == nil {
+				t.Fatalf("want an error, got %v", got)
+			}
+		})
 	}
 }
 
@@ -224,4 +340,23 @@ func writeNUL(path string, items []string) error {
 		b.WriteByte(0)
 	}
 	return os.WriteFile(path, b.Bytes(), 0o644)
+}
+
+type dockerBuild struct {
+	line int
+	pkg  string
+}
+
+// parseDockerfileBuilds returns every go build target of a Dockerfile text, or an error for a form it cannot read.
+func parseDockerfileBuilds(text string) ([]dockerBuild, error) {
+	i := strings.Index(text, "for command in")
+	j := strings.Index(text[i:], "; do")
+	if i < 0 || j < 0 {
+		return nil, nil
+	}
+	var out []dockerBuild
+	for _, f := range strings.Fields(strings.ReplaceAll(text[i+len("for command in"):i+j], "\\", " ")) {
+		out = append(out, dockerBuild{pkg: "./cmd/" + f})
+	}
+	return out, nil
 }

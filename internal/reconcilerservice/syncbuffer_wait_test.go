@@ -53,3 +53,21 @@ func TestSyncBufferWaitForReReadsAfterTheGuardEnds(t *testing.T) {
 		t.Fatal("waitFor lost a line that was there when its guard ended")
 	}
 }
+
+// The write and the end of the guard are both ready when the waiter wakes, and select picks one of
+// them at random: a waiter that does not read the buffer again after the guard ends loses the line
+// on some rounds.
+func TestSyncBufferWaitForKeepsALineThatRacesTheGuardEnd(t *testing.T) {
+	for round := 0; round < 64; round++ {
+		buffer := syncBuffer{armed: make(chan struct{}, 1)}
+		guard, stop := context.WithCancel(t.Context())
+		result := make(chan bool, 1)
+		go func() { result <- buffer.waitFor(guard, "readiness check refused") }()
+		<-buffer.armed
+		_, _ = buffer.Write([]byte("a readiness check refused\n"))
+		stop()
+		if !<-result {
+			t.Fatalf("round %d: waitFor lost a line that raced the end of its guard", round)
+		}
+	}
+}

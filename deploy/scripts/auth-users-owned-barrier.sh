@@ -12,7 +12,19 @@
 # Exit 0 = the next step may run. Any other exit = STOP: a check failed, or kubectl failed (it fails closed).
 # On success the last line is `barrier_ok mode=<mode> time=<UTC time>`: keep the time for the report.
 #
-# Env: RELEASE (required, the Helm release name), NAMESPACE (default dev-health).
+# The admin users scan (up-go-api, up-owned and down-auth) is FAIL-CLOSED. Every container of every pod, Job and CronJob of the
+# namespace STOPs the barrier, naming kind, object and container, unless it is exactly a trusted server container; it STOPs on a
+# mention of dho, a shell with a -c flag (sh, bash, ash, dash, zsh, ksh), `$(`, a backtick, `${`, eval, or the words admin and users
+# together; a row that does not split cleanly STOPs too. A false STOP is cleared by hand by the operator.
+# Trusted, and only for a pod container whose (name, image repository, command + args) equals one of:
+#   - the containers and init containers of the go-api and auth-service ReplicaSet pod templates (the chart's servers);
+#   - the containers of the live pod template of the one long-lived release workload on the fixed list below, and only when the
+#     pod's ownerReference is exactly that kind and name: the bundled ClickHouse StatefulSet.
+# A label never trusts anything. A Job or a CronJob is never trusted. Not seen: a `kubectl exec` into a running container (it is
+# not in a pod spec), and a change to a trusted workload's own template.
+#
+# Env: RELEASE (required, the Helm release name), NAMESPACE (default dev-health), FULLNAME (the chart fullname; default by the
+# chart's rule: RELEASE when it contains dev-health, else RELEASE-dev-health).
 set -uo pipefail
 
 NAMESPACE="${NAMESPACE:-dev-health}"
@@ -29,6 +41,19 @@ if [ "${2:-}" = "--plan" ]; then
   exit 0
 fi
 [ -n "${RELEASE:-}" ] || die "RELEASE is required"
+
+# The chart fullname (templates/_helpers.tpl:11-22) and the fixed list of trusted long-lived workloads: statefulset <fullname>-clickhouse
+# (templates/clickhouse.yaml:10-12; its init container clickhouse-usersd-links runs `sh -c`, clickhouse.yaml:53-59). Checked against the
+# chart: postgresql, pgbouncer, redis, query-api, web and go-workers hold no container that the fail-closed rules stop.
+if [ -z "${FULLNAME:-}" ]; then
+  case "$RELEASE" in
+  *dev-health*) FULLNAME="$RELEASE" ;;
+  *) FULLNAME="${RELEASE}-dev-health" ;;
+  esac
+fi
+FULLNAME="${FULLNAME:0:63}"
+FULLNAME="${FULLNAME%-}"
+TRUSTED_STS="${FULLNAME}-clickhouse"
 command -v kubectl >/dev/null 2>&1 || die "kubectl is not installed"
 
 FAILS=0
@@ -81,27 +106,63 @@ go_api_forwards() {
   [ "$n" -gt 0 ] || fail "no go-api pod listed"
 }
 
-# One segment per container (`;` after each) holds that container's command and args as kubectl prints them (JSON arrays),
-# so command, args and an `sh -c` string are one text. A segment with both whole words admin and users is an admin users
-# verb: any users subcommand counts. Fields: name|component|containers|initContainers|ephemeralContainers.
-scan_admin_users() { # KIND ROWS
-  printf '%s\n' "$2" | awk -F'|' -v kind="$1" '
-    BEGIN { admin = "(^|[^A-Za-z0-9_-])admin($|[^A-Za-z0-9_-])"; users = "(^|[^A-Za-z0-9_-])users($|[^A-Za-z0-9_-])" }
-    NF && $2 != "go-api" && $2 != "auth-service" {
-      for (f = 3; f <= 5; f++) {
-        n = split($f, seg, ";")
-        for (i = 1; i <= n; i++) if (seg[i] ~ admin && seg[i] ~ users) { print kind " " $1 ": admin users verb" > "/dev/stderr"; bad = 1 }
+# Row formats (one jsonpath per kind). A container is `name@@image@@{.command}{.args}<<c>>` (kubectl prints each array as JSON).
+# pods:  name|component|owner|containers|initContainers|ephemeralContainers (6 fields); Jobs and CronJobs: name|-|-|containers|initContainers|.
+CONTAINERS='{range .spec.containers[*]}{.name}@@{.image}@@{.command}{.args}<<c>>{end}'
+INIT='{range .spec.initContainers[*]}{.name}@@{.image}@@{.command}{.args}<<c>>{end}'
+EPHEMERAL='{range .spec.ephemeralContainers[*]}{.name}@@{.image}@@{.command}{.args}<<c>>{end}'
+# the same two, read from a workload's pod template (ReplicaSet, StatefulSet)
+T_CONTAINERS='{range .spec.template.spec.containers[*]}{.name}@@{.image}@@{.command}{.args}<<c>>{end}'
+T_INIT='{range .spec.template.spec.initContainers[*]}{.name}@@{.image}@@{.command}{.args}<<c>>{end}'
+
+# scan_admin_users KIND ROWS: uses SERVER_SET (segments of the go-api and auth-service ReplicaSet templates) and STS_SET (the
+# segments of the live template of TRUSTED_STS); both come in through the environment, which awk reads unmangled.
+scan_admin_users() {
+  printf '%s\n' "$2" | KIND="$1" SERVER_SET="$SERVER_SET" STS_SET="$STS_SET" STS_OWNER="StatefulSet/${TRUSTED_STS};" awk -F'|' '
+    function repo(img) { sub(/@.*/, "", img); if (match(img, /:[^\/]*$/)) img = substr(img, 1, RSTART - 1); return img }
+    function norm(seg,   p, n) { n = split(seg, p, "@@"); if (n != 3) return "!"; return p[1] "@@" repo(p[2]) "@@" p[3] }
+    function load(str, set,   a, n, i, k) { n = split(str, a, "<<c>>"); for (i = 1; i <= n; i++) if (a[i] != "") { k = norm(a[i]); if (k != "!") set[k] = 1 } }
+    function stop(obj, cname, why) { print kind " " obj (cname != "" ? " container " cname : "") ": " why > "/dev/stderr"; bad = 1 }
+    BEGIN {
+      kind = ENVIRON["KIND"]
+      load(ENVIRON["SERVER_SET"], srv); load(ENVIRON["STS_SET"], sts)
+      admin = "(^|[^A-Za-z0-9_-])admin($|[^A-Za-z0-9_-])"; users = "(^|[^A-Za-z0-9_-])users($|[^A-Za-z0-9_-])"
+      evalw = "(^|[^A-Za-z0-9_-])eval($|[^A-Za-z0-9_-])"
+      shell = "\"([^\"]*/)?(sh|bash|ash|dash|zsh|ksh)\""; cflag = "\"-[A-Za-z]*c[A-Za-z]*\""
+    }
+    NF {
+      if (NF != 6) { stop($1, "", "malformed row (a field separator in an argument?)"); next }
+      for (f = 4; f <= 6; f++) {
+        n = split($f, seg, "<<c>>")
+        for (i = 1; i <= n; i++) {
+          if (seg[i] == "") continue
+          key = norm(seg[i])
+          if (key == "!") { stop($1, "", "malformed container segment"); continue }
+          if (kind == "pod" && (key in srv || ($3 == ENVIRON["STS_OWNER"] && key in sts))) continue
+          split(key, p, "@@"); cmd = p[3]; cname = p[1]
+          if (index(cmd, "dho")) stop($1, cname, "mentions dho")
+          if (cmd ~ shell && cmd ~ cflag) stop($1, cname, "runs a shell with -c")
+          if (index(cmd, "$(") || index(cmd, "`") || index(cmd, "${") || cmd ~ evalw) stop($1, cname, "uses a command substitution, a variable or eval")
+          if (cmd ~ admin && cmd ~ users) stop($1, cname, "holds admin and users")
+        }
       }
     }
-    END { exit bad }' || fail "a $1 outside go-api and auth-service runs an admin users verb"
+    END { exit bad }' || fail "a $1 in the namespace holds an admin users writer or a container the scan cannot clear (see above)"
 }
 
 no_other_users_writer() {
-  kget ns pods '{range .items[*]}{.metadata.name}|{.metadata.labels.app\.kubernetes\.io/component}|{range .spec.containers[*]}{.command}{.args};{end}|{range .spec.initContainers[*]}{.command}{.args};{end}|{range .spec.ephemeralContainers[*]}{.command}{.args};{end}{"\n"}{end}'
+  kget go-api rs '{range .items[*]}'"$T_CONTAINERS$T_INIT"'{end}'
+  local sg="$KOUT"
+  kget auth-service rs '{range .items[*]}'"$T_CONTAINERS$T_INIT"'{end}'
+  local sa="$KOUT"
+  SERVER_SET="$sg$sa"
+  kget ns statefulsets '{range .items[*]}{.metadata.name}|'"$T_CONTAINERS$T_INIT"'{"\n"}{end}'
+  STS_SET="$(printf '%s\n' "$KOUT" | awk -F'|' -v want="$TRUSTED_STS" '$1 == want { print $2 }')"
+  kget ns pods '{range .items[*]}{.metadata.name}|{.metadata.labels.app\.kubernetes\.io/component}|{range .metadata.ownerReferences[*]}{.kind}/{.name};{end}|'"$CONTAINERS|$INIT|$EPHEMERAL"'{"\n"}{end}'
   scan_admin_users pod "$KOUT"
-  kget ns jobs '{range .items[*]}{.metadata.name}|-|{range .spec.template.spec.containers[*]}{.command}{.args};{end}|{range .spec.template.spec.initContainers[*]}{.command}{.args};{end}|{"\n"}{end}'
+  kget ns jobs '{range .items[*]}{.metadata.name}|-|-|{range .spec.template.spec.containers[*]}{.name}@@{.image}@@{.command}{.args}<<c>>{end}|{range .spec.template.spec.initContainers[*]}{.name}@@{.image}@@{.command}{.args}<<c>>{end}|{"\n"}{end}'
   scan_admin_users job "$KOUT"
-  kget ns cronjobs '{range .items[*]}{.metadata.name}|-|{range .spec.jobTemplate.spec.template.spec.containers[*]}{.command}{.args};{end}|{range .spec.jobTemplate.spec.template.spec.initContainers[*]}{.command}{.args};{end}|{"\n"}{end}'
+  kget ns cronjobs '{range .items[*]}{.metadata.name}|-|-|{range .spec.jobTemplate.spec.template.spec.containers[*]}{.name}@@{.image}@@{.command}{.args}<<c>>{end}|{range .spec.jobTemplate.spec.template.spec.initContainers[*]}{.name}@@{.image}@@{.command}{.args}<<c>>{end}|{"\n"}{end}'
   scan_admin_users cronjob "$KOUT"
 }
 
@@ -129,6 +190,7 @@ down-auth)
   old_replicasets_empty auth-service
   auth_service_owned_pods
   [ "$OWNED_N" -eq 0 ] || fail "an auth-service pod still carries AUTH_USERS_OWNED=true"
+  no_other_users_writer
   ;;
 esac
 

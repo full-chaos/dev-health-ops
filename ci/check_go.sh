@@ -197,13 +197,7 @@ providersync_bound_watchdog() {
     kill -0 "${pid}" 2>/dev/null || return 0
   done
   echo hit >"${marker}"
-  printf 'check_go.sh: providersync step bound (%s s) hit; stopping the go test process group %s\n' "${bound}" "${pgid:-none}" >&2
-  if [ -z "${pgid}" ]; then
-    kill -QUIT "${pid}" 2>/dev/null || true
-    sleep 10
-    kill -KILL "${pid}" 2>/dev/null || true
-    return 0
-  fi
+  printf 'check_go.sh: providersync step bound (%s s) hit; stopping the go test process group %s\n' "${bound}" "${pgid}" >&2
   group_ps_table "${pgid}" >&2
   for p in $(ps -eo pid=,pgid=,comm= | awk -v g="${pgid}" '$2 == g && $3 != "tee" && $3 != "jq" && $3 != "bash" { print $1 }'); do
     kill -QUIT "${p}" 2>/dev/null || true
@@ -219,38 +213,43 @@ providersync_bound_watchdog() {
 run_providersync_bounded() {
   local test_regex="$1" json_file="$2"
   local bound="${DEV_HEALTH_GO_STEP_BOUND_SECS:-${PROVIDERSYNC_STEP_BOUND_SECS}}"
-  local pid pgid="" own_pgid i rc=0 wd marker pidfile
-  local -a private_group=()
+  local pid pgid own_pgid i rc=0 wd marker pidfile
   case "${bound}" in ''|*[!0-9]*) die "DEV_HEALTH_GO_STEP_BOUND_SECS must be a whole number of seconds" ;; esac
-  if command -v setsid >/dev/null 2>&1; then
-    private_group=(setsid)
+  if ! command -v setsid >/dev/null 2>&1; then
+    echo "check_go.sh: setsid is required for the bounded providersync step" >&2
+    return 2
   fi
   marker="$(mktemp)"
   pidfile="$(mktemp)"
   (
     cd "${ROOT}"
     # shellcheck disable=SC2016
-    exec ${private_group[@]+"${private_group[@]}"} bash -c 'echo $$ >"$3"; set -o pipefail; out=$1; filter=$2; shift 3; "$@" | tee "${out}" | jq --unbuffered -rj "${filter}"' _ \
+    exec setsid bash -c 'echo $$ >"$3"; set -o pipefail; out=$1; filter=$2; shift 3; "$@" | tee "${out}" | jq --unbuffered -rj "${filter}"' _ \
       "${json_file}" 'select(.Action == "output") | .Output' "${pidfile}" \
       "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=22m -json -run "${test_regex}" ./internal/providersync
   ) &
   pid=$!
-  if [ "${#private_group[@]}" -gt 0 ]; then
-    own_pgid="$(ps -o pgid= -p "$$" | tr -d ' ')"
-    for i in $(seq 1 50); do
-      [ -s "${pidfile}" ] && break
-      sleep 0.1
-    done
-    pgid="$(tr -d ' \n' <"${pidfile}")"
-    case "${pgid}" in ''|*[!0-9]*|"${own_pgid}") pgid="" ;; esac
-  else
-    echo "check_go.sh: no setsid; the step bound stops pid ${pid} only" >&2
-  fi
+  own_pgid="$(ps -o pgid= -p "$$" | tr -d ' ')"
+  for i in $(seq 1 600); do
+    [ -s "${pidfile}" ] && break
+    kill -0 "${pid}" 2>/dev/null || break
+    sleep 0.1
+  done
+  pgid="$(tr -d ' \n' <"${pidfile}")"
+  case "${pgid}" in
+    ''|*[!0-9]*|"${own_pgid}")
+      echo "check_go.sh: the providersync step has no process group of its own; stopping it" >&2
+      kill -KILL "${pid}" 2>/dev/null || true
+      wait "${pid}" 2>/dev/null || true
+      rm -f "${marker}" "${pidfile}"
+      return 2
+      ;;
+  esac
   providersync_bound_watchdog "${pid}" "${pgid}" "${bound}" "${marker}" &
   wd=$!
   wait "${pid}" || rc=$?
   wait "${wd}" 2>/dev/null || true
-  if [ -n "${pgid}" ] && pgrep -g "${pgid}" >/dev/null 2>&1; then
+  if pgrep -g "${pgid}" >/dev/null 2>&1; then
     echo "check_go.sh: processes left in the go test process group ${pgid}; stopping them" >&2
     group_ps_table "${pgid}" >&2
     kill -TERM -- "-${pgid}" 2>/dev/null || true

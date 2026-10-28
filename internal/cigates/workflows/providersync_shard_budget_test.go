@@ -305,6 +305,62 @@ func integrationTimeoutViolations(t *testing.T, root string) []string {
 			out = append(out, fmt.Sprintf("row %s matched %d go test lines, want exactly 1", rows[i].name, n))
 		}
 	}
+	return append(out, workflowIntegrationTimeoutViolations(t, root)...)
+}
+
+// directWorkflowIntegrationCalls registers the integration go test calls that a workflow run step makes itself, as
+// "<workflow file> <job>".
+var directWorkflowIntegrationCalls = map[string]bool{"freeze-provider-worlds.yml freeze": true}
+
+func workflowIntegrationTimeoutViolations(t *testing.T, root string) []string {
+	t.Helper()
+	var out []string
+	timeoutRe := regexp.MustCompile(`-timeout[= ](\d+)m\b`)
+	capExprRe := regexp.MustCompile(`(\d+) \|\| (\d+)\s*\}\}\s*$`)
+	found := map[string]bool{}
+	for _, name := range workflowNames(t, root) {
+		jobs := asMap(loadWf(t, root, name)["jobs"])
+		for jobName, j := range jobs {
+			job := asMap(j)
+			for _, st := range asList(job["steps"]) {
+				for _, line := range integrationGoTestLines(asString(asMap(st)["run"])) {
+					key := name + " " + jobName
+					found[key] = true
+					if !directWorkflowIntegrationCalls[key] {
+						out = append(out, fmt.Sprintf(".github/workflows/%s job %s: direct integration go test call is not in directWorkflowIntegrationCalls: %s", name, jobName, line))
+						continue
+					}
+					m := timeoutRe.FindStringSubmatch(line)
+					if m == nil {
+						out = append(out, fmt.Sprintf(".github/workflows/%s job %s: the integration go test call has no -timeout=<N>m", name, jobName))
+						continue
+					}
+					timeout, _ := strconv.Atoi(m[1])
+					capMin := 0
+					switch v := job["timeout-minutes"].(type) {
+					case int:
+						capMin = v
+					case string:
+						if e := capExprRe.FindStringSubmatch(v); e != nil {
+							a, _ := strconv.Atoi(e[1])
+							b, _ := strconv.Atoi(e[2])
+							capMin = min(a, b)
+						}
+					}
+					if capMin == 0 {
+						out = append(out, fmt.Sprintf(".github/workflows/%s job %s: no readable timeout-minutes", name, jobName))
+					} else if timeout > capMin-integrationTimeoutMarginMinutes {
+						out = append(out, fmt.Sprintf(".github/workflows/%s job %s: go test -timeout=%dm must be <= %dm (job cap %dm - %dm)", name, jobName, timeout, capMin-integrationTimeoutMarginMinutes, capMin, integrationTimeoutMarginMinutes))
+					}
+				}
+			}
+		}
+	}
+	for key := range directWorkflowIntegrationCalls {
+		if !found[key] {
+			out = append(out, fmt.Sprintf("directWorkflowIntegrationCalls row %q matches no integration go test call (stale row)", key))
+		}
+	}
 	return out
 }
 

@@ -422,6 +422,9 @@ func runProvidersyncStep(t *testing.T, mode, bound string, wrap func(script, wor
 		"GOMODCACHE=" + dirs[0], "GOPATH=" + dirs[1], "DEV_HEALTH_GO_CACHE=" + dirs[2],
 		"FAKE_MODE=" + mode, "FAKE_DIR=" + work, "GO_TEST_JSON_DIR=" + filepath.Join(work, "json"), "GITHUB_ACTIONS=true", "CI=true", "GITHUB_RUN_ID=1",
 		"RUNNER_TEMP=" + work, "DEV_HEALTH_GO_STEP_BOUND_SECS=" + bound, "SECRET_CANARY=canary-11794-do-not-print"}
+	if v, ok := os.LookupEnv("GOTMPDIR"); ok {
+		cmd.Env = append(cmd.Env, "GOTMPDIR="+v)
+	}
 	for _, o := range opts {
 		if o == "nosetsid" {
 			shim := filepath.Join(work, "nosetsid.sh")

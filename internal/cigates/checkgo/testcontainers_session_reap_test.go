@@ -284,3 +284,210 @@ func TestTcTrapResolvingAtTrapTimeNeverKillsAGroupItsPIDDoesNotLead(t *testing.T
 		t.Errorf("rc/target/peer/bystander = %q; want %q (the target's group is not led by it: stop the recorded pid only)", got, "143 dead alive alive")
 	}
 }
+
+// CHAOS-11794 step 1b: the providersync shard pipeline (`go test -json | tee | jq`) runs in its own process group under a
+// hard step bound. A child that holds stdout open must not hang the step; the group gets a QUIT dump, a ps table
+// (pid, pgid, ppid, etimes, args: never env) and a KILL; leftover group members are reaped after go test exits.
+
+const providersyncFakeGo = `#!/bin/sh
+case "$1" in test) ;; *) exec "$FAKE_REAL_GO" "$@" ;; esac
+case "$*" in *-tags=integration*-json*internal/providersync*) ;; *) exec "$FAKE_REAL_GO" "$@" ;; esac
+printf '{"Action":"output","Output":"fake-go-started\\n"}\n'
+case "$FAKE_MODE" in
+  hold)
+    sleep 300 &
+    echo $! > "$FAKE_DIR/sleeper-pid"
+    exit 0 ;;
+  leftover)
+    sleep 300 >/dev/null 2>&1 &
+    echo $! > "$FAKE_DIR/sleeper-pid"
+    exit 0 ;;
+  exit3)
+    exit 3 ;;
+  quitdump)
+    trap 'echo GOROUTINE-DUMP-STDERR >&2; printf "{\"Action\":\"output\",\"Output\":\"GOROUTINE-DUMP-PIPED\\\\n\"}\n"; exit 2' QUIT
+    sleep 300 &
+    echo $! > "$FAKE_DIR/sleeper-pid"
+    while :; do wait; done ;;
+esac
+`
+
+type providersyncStepRun struct {
+	code           int
+	stdout, stderr string
+	sleeperPID     int
+	sleeperAlive   bool
+	timedOut       bool
+}
+
+func runProvidersyncStep(t *testing.T, mode, bound string, wrap func(script, work string) []string) providersyncStepRun {
+	t.Helper()
+	script := scriptPath(t, "ci/check_go.sh")
+	repo := filepath.Dir(filepath.Dir(script))
+	work := t.TempDir()
+	bin := filepath.Join(work, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	realGo, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(providersyncFakeGo), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	argv := []string{"bash", script, "integration-shard", "providersync", "1"}
+	if wrap != nil {
+		argv = wrap(script, work)
+	}
+	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd.Dir = repo
+	goEnv, err := exec.Command(realGo, "env", "GOMODCACHE", "GOPATH", "GOCACHE").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dirs := strings.Fields(string(goEnv))
+	if len(dirs) != 3 {
+		t.Fatalf("go env GOMODCACHE GOPATH GOCACHE printed %q", goEnv)
+	}
+	cmd.Env = []string{"PATH=" + bin + ":" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "TMPDIR=" + work, "FAKE_REAL_GO=" + realGo,
+		"GOMODCACHE=" + dirs[0], "GOPATH=" + dirs[1], "DEV_HEALTH_GO_CACHE=" + dirs[2],
+		"FAKE_MODE=" + mode, "FAKE_DIR=" + work, "GO_TEST_JSON_DIR=" + filepath.Join(work, "json"), "GITHUB_ACTIONS=true", "CI=true", "GITHUB_RUN_ID=1",
+		"RUNNER_TEMP=" + work, "DEV_HEALTH_GO_STEP_BOUND_SECS=" + bound, "SECRET_CANARY=canary-11794-do-not-print"}
+	var stdout, stderr strings.Builder
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	res := providersyncStepRun{}
+	// Failure-only hang ceiling (D6418): the pass path asserts no wall time.
+	select {
+	case err := <-done:
+		if ee, ok := err.(*exec.ExitError); ok {
+			res.code = ee.ExitCode()
+		}
+	case <-time.After(120 * time.Second):
+		res.timedOut = true
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		<-done
+	}
+	res.stdout, res.stderr = stdout.String(), stderr.String()
+	if raw, err := os.ReadFile(filepath.Join(work, "sleeper-pid")); err == nil {
+		if pid, err := strconv.Atoi(strings.TrimSpace(string(raw))); err == nil {
+			res.sleeperPID = pid
+			for i := 0; i < 100; i++ {
+				if res.sleeperAlive = syscall.Kill(pid, 0) == nil; !res.sleeperAlive {
+					break
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			if res.sleeperAlive {
+				_ = syscall.Kill(pid, syscall.SIGKILL)
+			}
+		}
+	}
+	return res
+}
+
+func TestProvidersyncStepBoundsAStdoutHoldingChild(t *testing.T) {
+	t.Parallel()
+	r := runProvidersyncStep(t, "hold", "3", nil)
+	if r.timedOut {
+		t.Fatal("the step hung: a child holding stdout open kept `tee` alive and no step bound stopped it")
+	}
+	if r.code != 124 {
+		t.Errorf("exit code %d, want 124 (step bound hit); stderr: %s", r.code, tail(r.stderr, 1500))
+	}
+	if !strings.Contains(r.stderr, "step bound") {
+		t.Errorf("stderr does not name the step bound: %s", tail(r.stderr, 1500))
+	}
+	if r.sleeperPID == 0 || !hasField(r.stderr, strconv.Itoa(r.sleeperPID)) {
+		t.Errorf("the ps table does not list the leftover child pid %d: %s", r.sleeperPID, tail(r.stderr, 1500))
+	}
+	if r.sleeperAlive {
+		t.Error("the stdout-holding child survived the step")
+	}
+	if strings.Contains(r.stdout+r.stderr, "canary-11794-do-not-print") {
+		t.Error("the step printed an environment value (D6331)")
+	}
+}
+
+func TestProvidersyncStepDumpReachesTheLogOnBound(t *testing.T) {
+	t.Parallel()
+	r := runProvidersyncStep(t, "quitdump", "3", nil)
+	if r.timedOut {
+		t.Fatal("the step hung: no step bound stopped a go test that never exits")
+	}
+	if !strings.Contains(r.stderr, "GOROUTINE-DUMP-STDERR") {
+		t.Errorf("the QUIT dump on the test binary's stderr did not reach the step stderr: %s", tail(r.stderr, 1500))
+	}
+	if !strings.Contains(r.stdout, "GOROUTINE-DUMP-PIPED") {
+		t.Errorf("tee/jq died before the dump written to the piped stdout arrived: stdout %s", tail(r.stdout, 1500))
+	}
+	if r.code != 124 {
+		t.Errorf("exit code %d, want 124", r.code)
+	}
+}
+
+func TestProvidersyncStepReapsLeftoverChildrenAfterGoTestExits(t *testing.T) {
+	t.Parallel()
+	r := runProvidersyncStep(t, "leftover", "600", nil)
+	if r.timedOut {
+		t.Fatal("the step hung")
+	}
+	if r.code != 0 {
+		t.Errorf("exit code %d, want 0 (go test passed); stderr: %s", r.code, tail(r.stderr, 1500))
+	}
+	if r.sleeperAlive {
+		t.Error("a child left in go test's process group survived the step (not reaped)")
+	}
+	if r.sleeperPID == 0 || !hasField(r.stderr, strconv.Itoa(r.sleeperPID)) {
+		t.Errorf("the leftover ps table does not list pid %d: %s", r.sleeperPID, tail(r.stderr, 1500))
+	}
+}
+
+func TestProvidersyncStepKeepsGoTestExitCode(t *testing.T) {
+	t.Parallel()
+	r := runProvidersyncStep(t, "exit3", "600", nil)
+	if r.timedOut {
+		t.Fatal("the step hung")
+	}
+	if r.code != 3 {
+		t.Errorf("exit code %d, want go test's 3", r.code)
+	}
+	if strings.Contains(r.stderr, "step bound") {
+		t.Error("the step bound fired on a go test that exited by itself")
+	}
+}
+
+// check_go.sh itself must never be exec-replaced: the bounded runner returns and the next line runs.
+func TestProvidersyncStepRunnerReturnsToItsCaller(t *testing.T) {
+	t.Parallel()
+	text, err := os.ReadFile(scriptPath(t, "ci/check_go.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(text)
+	start := strings.Index(s, "PROVIDERSYNC_STEP_BOUND_SECS=")
+	fn := strings.Index(s, "run_providersync_bounded() {")
+	if start < 0 || fn < start {
+		t.Fatal("PROVIDERSYNC_STEP_BOUND_SECS / run_providersync_bounded not found in ci/check_go.sh")
+	}
+	end := fn + strings.Index(s[fn:], "\n}\n") + 3
+	snippet := s[start:end]
+	r := runProvidersyncStep(t, "exit3", "600", func(script, work string) []string {
+		harness := "set -uo pipefail\nROOT=" + filepath.Dir(filepath.Dir(script)) + "\nSCRIPT_DIR=" + work + "\nGO_ENV_OFF=(env)\n" +
+			"die() { echo \"$*\" >&2; exit 2; }\n" + snippet +
+			"\nrun_providersync_bounded '^TestX$' " + filepath.Join(work, "out.json") + "\necho \"NEXT-LINE-RAN rc=$?\"\n"
+		return []string{"bash", "-c", harness}
+	})
+	if r.timedOut {
+		t.Fatal("the runner hung")
+	}
+	if !strings.Contains(r.stdout, "NEXT-LINE-RAN rc=3") {
+		t.Errorf("the line after the runner did not run with go test's rc 3 (the script was exec-replaced?): stdout %s stderr %s", tail(r.stdout, 800), tail(r.stderr, 800))
+	}
+}

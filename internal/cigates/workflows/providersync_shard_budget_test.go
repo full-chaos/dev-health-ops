@@ -292,3 +292,18 @@ func TestIntegrationGoTestTimeoutsSitThreeMinutesUnderJobCaps(t *testing.T) {
 		}
 	}
 }
+
+func TestProvidersyncStepBoundSitsBetweenGoTestTimeoutAndJobCap(t *testing.T) {
+	script, err := os.ReadFile(filepath.Join(repoRoot(t), "ci", "check_go.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^PROVIDERSYNC_STEP_BOUND_SECS=(\d+)$`).FindStringSubmatch(string(script))
+	if m == nil {
+		t.Fatal("ci/check_go.sh has no PROVIDERSYNC_STEP_BOUND_SECS=<n> line")
+	}
+	bound, _ := strconv.Atoi(m[1])
+	if capMin := providersyncJobTimeoutMinutes(t); bound <= 22*60 || bound > (capMin-1)*60 {
+		t.Fatalf("PROVIDERSYNC_STEP_BOUND_SECS=%d must be above the 22 min go test -timeout and at most %d s (job cap %d min - 1 min)", bound, (capMin-1)*60, capMin)
+	}
+}

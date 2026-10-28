@@ -63,9 +63,8 @@ func TestConfigureLogsTheTrustedProxyCounts(t *testing.T) {
 	}
 	for _, tc := range cases {
 		got, err := configureTrusted(t, tc.list, tc.set)
-		var coded interface{ DependencyReason() string }
-		if errors.As(err, &coded) && coded.DependencyReason() == "api_trusted_proxies_invalid" {
-			t.Errorf("TRUSTED_PROXIES=%q (set %v): refused: %v", tc.list, tc.set, err)
+		if err != nil {
+			t.Errorf("TRUSTED_PROXIES=%q (set %v): configure = %v, want nil (a readable list starts go-api)", tc.list, tc.set, err)
 			continue
 		}
 		if !strings.Contains(got, "api: trusted proxies "+tc.want) {

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
 )
 
@@ -94,15 +96,56 @@ func TestGoAPITrustedProxyValuesRenderOnlyWhatGoAPIParses(t *testing.T) {
 	}
 }
 
-// A value the chart cannot read (valueFrom) is the deploy chart's "unreadable" rule, not a render refusal here.
+// A value the chart cannot read (valueFrom) is the deploy chart's "unreadable" rule, not a render refusal here: it
+// renders, and the go-api env keeps the reference whole.
 func TestGoAPITrustedProxiesFromAReferenceRender(t *testing.T) {
 	if _, err := exec.LookPath("helm"); err != nil {
 		t.Skip("helm is not installed")
 	}
 	out, err := exec.Command("helm", "template", "trusted", ".", "--namespace", releaseNamespace, "--set", "goApi.enabled=true",
 		"--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24",
-		"--set-json", `goApi.extraEnv=[{"name":"TRUSTED_PROXIES","valueFrom":{"configMapKeyRef":{"name":"x","key":"y"}}}]`).CombinedOutput()
+		"--set-json", `goApi.extraEnv=[{"name":"TRUSTED_PROXIES","valueFrom":{"secretKeyRef":{"name":"go-api-trusted","key":"TRUSTED_PROXIES_LIST"}}}]`).CombinedOutput()
 	if err != nil {
 		t.Fatalf("render: %v\n%.400s", err, out)
+	}
+	var found []map[string]any
+	for _, document := range strings.Split(string(out), "\n---") {
+		var doc struct {
+			Kind     string `yaml:"kind"`
+			Metadata struct {
+				Name string `yaml:"name"`
+			} `yaml:"metadata"`
+			Spec struct {
+				Template struct {
+					Spec struct {
+						Containers []struct {
+							Env []map[string]any `yaml:"env"`
+						} `yaml:"containers"`
+					} `yaml:"spec"`
+				} `yaml:"template"`
+			} `yaml:"spec"`
+		}
+		if err := yaml.Unmarshal([]byte(document), &doc); err != nil {
+			t.Fatalf("a document of the render does not parse: %v", err)
+		}
+		if doc.Kind != "Deployment" || !strings.HasSuffix(doc.Metadata.Name, "-go-api") || len(doc.Spec.Template.Spec.Containers) == 0 {
+			continue
+		}
+		for _, entry := range doc.Spec.Template.Spec.Containers[0].Env {
+			if entry["name"] == "TRUSTED_PROXIES" {
+				found = append(found, entry)
+			}
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("the go-api env has %d TRUSTED_PROXIES entries, want exactly the one reference: %v", len(found), found)
+	}
+	if _, hasValue := found[0]["value"]; hasValue {
+		t.Fatalf("TRUSTED_PROXIES carries a value beside the reference: %v", found[0])
+	}
+	ref, _ := found[0]["valueFrom"].(map[string]any)
+	secret, _ := ref["secretKeyRef"].(map[string]any)
+	if secret["name"] != "go-api-trusted" || secret["key"] != "TRUSTED_PROXIES_LIST" || len(ref) != 1 {
+		t.Fatalf("TRUSTED_PROXIES valueFrom = %v, want secretKeyRef name go-api-trusted, key TRUSTED_PROXIES_LIST", found[0]["valueFrom"])
 	}
 }

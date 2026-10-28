@@ -689,6 +689,7 @@ func TestKeyStatesColdStartAgainstAHungSourceFailsClosedAtTheCallersDeadline(t *
 		source := &hungStates{hang: true}
 		// The read timeout is an hour: only the caller's context can end this wait.
 		states := NewKeyStates(KeyStatesConfig{Source: source, ReadTimeout: time.Hour})
+		defer states.Close()
 		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 		defer cancel()
 		deadline, _ := ctx.Deadline()

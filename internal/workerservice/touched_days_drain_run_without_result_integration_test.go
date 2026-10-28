@@ -3,7 +3,6 @@
 package workerservice
 
 import (
-	"bytes"
 	"context"
 	"reflect"
 	"strings"
@@ -82,7 +81,7 @@ SET status = $2, finalization_status = $2, finalized_at = $3, updated_at = $3 WH
 func TestTouchedDaysDrainReturnsTheKeysOfEveryRunWithoutAResult(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	rig := &drainRig{touchedRig: newTouchedRig(t, ctx), observer: &drainObserver{}, logs: &bytes.Buffer{}}
+	rig := &drainRig{touchedRig: newTouchedRig(t, ctx), observer: &drainObserver{}, logs: newDrainLogs()}
 	day := time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC)
 	dayKey := day.Format("2006-01-02")
 	first, second := uuid.NewString(), uuid.NewString()
@@ -237,7 +236,7 @@ UPDATE public.daily_metrics_runs SET created_at = $3 WHERE org_id = $1::uuid AND
 func TestTouchedDaysDrainSplitOfADayKeepsAWorkScopeOfSeveralRepositoriesWhole(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	rig := &drainRig{touchedRig: newTouchedRig(t, ctx), observer: &drainObserver{}, logs: &bytes.Buffer{}}
+	rig := &drainRig{touchedRig: newTouchedRig(t, ctx), observer: &drainObserver{}, logs: newDrainLogs()}
 	orgID := uuid.NewString()
 	day := time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC)
 	now := time.Now().UTC()

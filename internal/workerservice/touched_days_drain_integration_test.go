@@ -3,7 +3,6 @@
 package workerservice
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -101,10 +100,13 @@ func (runs drainFaultRuns) StartTx(ctx context.Context, tx pgx.Tx, org string, d
 	return runs.touchedDrainRuns.StartTx(ctx, tx, org, day, passID, repositories)
 }
 
+// drainRigLogsAreLocked pins the field type: drainRig writes its logs through the locked writer.
+var _ = drainRig{logs: &lockedBuffer{}}
+
 type drainRig struct {
 	*touchedRig
 	observer *drainObserver
-	logs     *bytes.Buffer
+	logs     *drainLogs
 }
 
 func (rig *drainRig) productionRuns() touchedDrainRuns {
@@ -181,7 +183,7 @@ func pass(trigger string) string { return trigger + ":" + uuid.NewString() }
 func TestTouchedDaysDrain(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
 	defer cancel()
-	rig := &drainRig{touchedRig: newTouchedRig(t, ctx), observer: &drainObserver{}, logs: &bytes.Buffer{}}
+	rig := &drainRig{touchedRig: newTouchedRig(t, ctx), observer: &drainObserver{}, logs: newDrainLogs()}
 	target := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
 	newest := target.AddDate(0, 0, -20) // outside the window of a fan-out of target
 

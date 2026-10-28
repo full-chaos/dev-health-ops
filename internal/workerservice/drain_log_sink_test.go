@@ -1,7 +1,6 @@
 package workerservice
 
 import (
-	"bytes"
 	"io"
 	"log/slog"
 	"strings"
@@ -13,7 +12,7 @@ import (
 // only per handler, so two drains of one rig write the one buffer with no common lock. The sink must hold its own.
 
 // drainLogs is what drainRig.logs holds.
-type drainLogs = bytes.Buffer // STUB (red): an unguarded buffer
+type drainLogs = lockedBuffer
 
 func newDrainLogs() *drainLogs { return &drainLogs{} }
 

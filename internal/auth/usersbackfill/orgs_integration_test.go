@@ -170,6 +170,10 @@ func TestOrgsBackfillReactivationRoleChangeAndDivergence(t *testing.T) {
 	if e.count(t, ctx, `SELECT count(*) FROM auth.memberships WHERE organization_id = $1 AND principal_id = $2 AND status = 'removed'`, org, u2) != 1 {
 		t.Fatal("a removed membership was re-activated")
 	}
+	// Leave the shared database with no removed auth membership over a public member (a gated users-reconcile class).
+	if _, err := e.admin.Exec(ctx, `DELETE FROM public.memberships WHERE org_id = $1 AND user_id = $2`, org, u2); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestOrgsBackfillRefusalsAndAuthOnly(t *testing.T) {

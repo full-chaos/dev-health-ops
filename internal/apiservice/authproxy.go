@@ -12,6 +12,7 @@ import (
 	"net/textproto"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -246,7 +247,43 @@ func newAuthProxy(cfg AuthProxyConfig, logger *slog.Logger) *authProxy {
 		ExpectContinueTimeout: time.Second,
 		ForceAttemptHTTP2:     true,
 	}
+	seedAuthProxySeries(authProxyRequests, cfg)
 	return &authProxy{cfg: cfg, logger: logger, transport: transport}
+}
+
+// seedAuthProxySeries records 0 for every label set the proxy can count, once, at construction: an OTel counter creates a series on its
+// first Add, so without this the first export of a low-traffic series already holds its count and a rate/increase query has no earlier
+// sample to subtract. local is always possible; forwarded and upstream_error only for an aggregate whose flag is on. Only static values.
+func seedAuthProxySeries(counter metric.Int64Counter, cfg AuthProxyConfig) {
+	for _, aggregate := range AuthAggregates {
+		outcomes := []string{outcomeLocal}
+		if cfg.Enabled(aggregate) {
+			outcomes = []string{outcomeForwarded, outcomeLocal, outcomeUpstreamError}
+		}
+		for _, outcome := range outcomes {
+			counter.Add(context.Background(), 0, metric.WithAttributes(
+				attribute.String("aggregate", string(aggregate)), attribute.String("outcome", outcome)))
+		}
+	}
+}
+
+// authProxyRequestSeeds are the proxied routes whose per-route request series the public listener seeds at 0 (httpapi.RequestSeed): the
+// 15 forwardable auth patterns, not every route.
+func authProxyRequestSeeds() []httpapi.RequestSeed {
+	var seeds []httpapi.RequestSeed
+	for _, routes := range []map[string]AuthAggregate{sessionProxyRoutes, routeProxyRoutes} {
+		for key := range routes {
+			method, pattern, _ := strings.Cut(key, " ")
+			seeds = append(seeds, httpapi.RequestSeed{Method: method, Route: pattern})
+		}
+	}
+	sort.Slice(seeds, func(i, j int) bool {
+		if seeds[i].Route != seeds[j].Route {
+			return seeds[i].Route < seeds[j].Route
+		}
+		return seeds[i].Method < seeds[j].Method
+	})
+	return seeds
 }
 
 // proxyState is one request's body as the client sent it and the outcome

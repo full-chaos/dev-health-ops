@@ -167,7 +167,7 @@ func orgDeletionGrantProblem(database string, lines []string) error {
 			continue
 		}
 		db, table, ok := grantTarget(match[3])
-		if !ok || (db != "*" && db != database) {
+		if !ok || (!db.all && db.name != database) {
 			continue
 		}
 		privileges := grantPrivileges(match[2])
@@ -182,7 +182,7 @@ func orgDeletionGrantProblem(database string, lines []string) error {
 			}
 			continue
 		}
-		if table != "*" {
+		if !table.all {
 			continue
 		}
 		for _, privilege := range privileges {
@@ -206,13 +206,52 @@ func orgDeletionGrantProblem(database string, lines []string) error {
 	return nil
 }
 
-// grantTarget splits "db.table" (either part may be * or backtick-quoted).
-func grantTarget(target string) (database, table string, ok bool) {
-	database, table, ok = strings.Cut(target, ".")
-	if !ok {
-		return "", "", false
+// grantName is one part of a grant target: all is the unquoted wildcard *; a
+// backtick-quoted part is always a name (`*` is a table named *).
+type grantName struct {
+	name string
+	all  bool
+}
+
+// grantTarget splits "db.table" as SHOW GRANTS prints it. A target it cannot
+// read for certain (an unclosed or doubled quote, an escape, a stray dot or
+// backtick) is not ok, so its grant never counts.
+func grantTarget(target string) (database, table grantName, ok bool) {
+	database, rest, ok := readGrantName(target, true)
+	if !ok || !strings.HasPrefix(rest, ".") {
+		return grantName{}, grantName{}, false
 	}
-	return strings.Trim(database, "`"), strings.Trim(table, "`"), true
+	table, rest, ok = readGrantName(rest[1:], false)
+	if !ok || rest != "" {
+		return grantName{}, grantName{}, false
+	}
+	return database, table, true
+}
+
+// readGrantName reads one target part: a backtick-quoted name, or an unquoted
+// run up to the first dot (stopAtDot) or the end.
+func readGrantName(text string, stopAtDot bool) (grantName, string, bool) {
+	if strings.HasPrefix(text, "`") {
+		end := strings.IndexByte(text[1:], '`')
+		if end < 0 {
+			return grantName{}, "", false
+		}
+		name, rest := text[1:1+end], text[2+end:]
+		if name == "" || strings.ContainsRune(name, '\\') || strings.HasPrefix(rest, "`") {
+			return grantName{}, "", false
+		}
+		return grantName{name: name}, rest, true
+	}
+	part, rest := text, ""
+	if stopAtDot {
+		if i := strings.IndexByte(text, '.'); i >= 0 {
+			part, rest = text[:i], text[i:]
+		}
+	}
+	if part == "" || strings.ContainsAny(part, "`.\\") {
+		return grantName{}, "", false
+	}
+	return grantName{name: part, all: part == "*"}, rest, true
 }
 
 // grantPrivileges splits a privilege list at top-level commas (a column list

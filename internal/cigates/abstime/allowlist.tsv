@@ -6,7 +6,6 @@ cmd/auth-migrate/wait_test.go	TestDatabaseWaitHoldsTheBound	not wall time: fake 
 internal/api/syncadmin/backfill_submit_integration_test.go	TestBackfillSubmitReturnsAtOnceForAWideWindowAndManyRequests	pending CHAOS-11684 conversion
 internal/audit/outboxloop_test.go	TestLoopHandsTheStepperTheCurrentTimeNotTheTickTimestamp	not a performance budget: clock or stamp skew
 internal/auth/authruntime/jwks_dependency_stall_integration_test.go	TestJWKSAnswersWhileTheDatabaseIsBlackholed	found by the gate, not by the census: pending CHAOS-11684 re-census and conversion
-internal/auth/authruntime/jwks_stall_isolation_test.go	TestJWKSAnswersWhileDependencyRoutesStall	found by the gate, not by the census: pending CHAOS-11684 re-census and conversion
 internal/auth/linkmail/linkmail_test.go	TestFullPoolReturnsAtOnceAndCountsDropped	pending CHAOS-11684 conversion
 internal/auth/workloadexchange/exchange_test.go	TestASlowReviewTimesOutWith503	pending CHAOS-11684 conversion
 internal/backfillrun/run_integration_test.go	TestVerbReportsWhatTheSchedulerDid	lower-bound wait proof: load only lengthens it

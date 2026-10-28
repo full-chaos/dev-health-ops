@@ -47,6 +47,8 @@ case " $* " in *" -list "*)
   exit 0 ;;
 esac
 printf '%%s\n' "$*" >> "${FAKE_GO_LOG}"
+# FAKE_GO_ENV_LOG: the GOFLAGS value of each go test call, one line per call, in the order of FAKE_GO_LOG.
+[ -z "${FAKE_GO_ENV_LOG:-}" ] || printf 'GOFLAGS=%%s\n' "${GOFLAGS:-}" >> "${FAKE_GO_ENV_LOG}"
 # FAKE_GO_TEST_STDOUT: what a go test call prints (a canned go test log, e.g. the "ok" summary lines of the packages it ran).
 if [ -n "${FAKE_GO_TEST_STDOUT:-}" ]; then cat "${FAKE_GO_TEST_STDOUT}"
 else
@@ -75,6 +77,8 @@ var (
 func TestMain(m *testing.M) {
 	// The job's selection narrows the plan of a child check_go.sh; these tests judge the whole module, so no child inherits it.
 	os.Unsetenv("GO_QUALITY_SELECTION_FILE")
+	// A child check_go.sh gets CHECK_GO_FRESH only where a test sets it.
+	os.Unsetenv("CHECK_GO_FRESH")
 	dir, err := os.MkdirTemp("", "testshard-golist-")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

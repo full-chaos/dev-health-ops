@@ -449,31 +449,7 @@ func (h *handlers) updateUser(w http.ResponseWriter, r *http.Request) {
 
 	body := bodyFromContext(ctx)
 	var errs pybody.Errors
-	object, ok := errs.Object(body)
-	patch := userUpdate{}
-	if ok {
-		if v, present := errs.OptionalString(object, "email", 0, 0); present {
-			patch.Email = &v
-		}
-		if v, present := errs.OptionalString(object, "username", 0, 0); present {
-			patch.Username = &v
-		}
-		if v, present := errs.OptionalString(object, "full_name", 0, 0); present {
-			patch.FullName = &v
-		}
-		if v, present := errs.OptionalString(object, "avatar_url", 0, 0); present {
-			patch.AvatarURL = &v
-		}
-		if v, present := errs.OptionalBool(object, "is_active"); present {
-			patch.IsActive = &v
-		}
-		if v, present := errs.OptionalBool(object, "is_verified"); present {
-			patch.IsVerified = &v
-		}
-		if v, present := errs.OptionalBool(object, "is_superuser"); present {
-			patch.IsSuperuser = &v
-		}
-	}
+	patch := parseUserUpdate(&errs, body)
 	if len(errs) > 0 {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 		return
@@ -752,4 +728,34 @@ func (h *handlers) deleteUser(w http.ResponseWriter, r *http.Request) {
 			policy.WriteModel(w, http.StatusOK, out, nil)
 		}
 	})
+}
+
+// parseUserUpdate reads the optional fields of a user update body.
+func parseUserUpdate(errs *pybody.Errors, body pybody.Body) userUpdate {
+	object, ok := errs.Object(body)
+	patch := userUpdate{}
+	if ok {
+		if v, present := errs.OptionalString(object, "email", 0, 0); present {
+			patch.Email = &v
+		}
+		if v, present := errs.OptionalString(object, "username", 0, 0); present {
+			patch.Username = &v
+		}
+		if v, present := errs.OptionalString(object, "full_name", 0, 0); present {
+			patch.FullName = &v
+		}
+		if v, present := errs.OptionalString(object, "avatar_url", 0, 0); present {
+			patch.AvatarURL = &v
+		}
+		if v, present := errs.OptionalBool(object, "is_active"); present {
+			patch.IsActive = &v
+		}
+		if v, present := errs.OptionalBool(object, "is_verified"); present {
+			patch.IsVerified = &v
+		}
+		if v, present := errs.OptionalBool(object, "is_superuser"); present {
+			patch.IsSuperuser = &v
+		}
+	}
+	return patch
 }

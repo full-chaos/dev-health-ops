@@ -180,7 +180,7 @@ run_integration_go_test() {
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|ci-leg-warm test|race SHARD COUNT|test-shard-plan SHARD COUNT|race-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|race-excluded-receipts JSON...|test-shard-wall-guard SHARD COUNT WALL LOGFILE|test-shard-unweighted-guard SHARD COUNT LOGFILE|security-fresh-receipt LOGFILE|security-fresh-split PKG...|build|contract|ratchets|race-weights-rows|multi-replica-workers|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|ci-leg-warm test|race SHARD COUNT|test-shard-plan SHARD COUNT|race-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|race-excluded-receipts JSON...|test-shard-wall-guard SHARD COUNT WALL LOGFILE|test-shard-unweighted-guard SHARD COUNT LOGFILE|security-fresh-receipt JSON...|security-fresh-split PKG...|build|contract|ratchets|race-weights-rows|multi-replica-workers|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
 
   auth   (CHAOS-4887) The Auth Control Plane gates over the auth packages ALONE: gofmt, vet, test,
          -race, the production-middleware stack test (G-69, must log its marker), one fuzz run per
@@ -273,10 +273,10 @@ usage() {
          Log the wall seconds of a test shard and fail above 85% of the 30 min
          job cap (GO_TEST_SHARD_CAP_SECONDS), naming the shard and its three
          heaviest packages (measured in LOGFILE, else by weight).
-  security-fresh-receipt LOGFILE
-         The cache receipt of a test or race leg (CHAOS-11448): how many packages read "ok (cached)" (cached = NOT executed),
-         and, with DEV_HEALTH_GO_FRESH_SECURITY=1 (merge_group), a failure when a package of
-         ci/security_fresh_packages.txt read "(cached)". security-fresh-split PKG... prints sec|plain per package.
+  security-fresh-receipt JSON...
+         The cache receipt of a test or race leg (CHAOS-11448), read from the go test -json events of its stages: how many
+         packages read "ok (cached)" (cached = NOT executed), and, with DEV_HEALTH_GO_FRESH_SECURITY=1 (merge_group), a
+         failure when any package read "(cached)" (CHAOS-11745). security-fresh-split PKG... prints sec|plain per package.
   test-shard-unweighted-guard SHARD COUNT LOGFILE
          Fail when a package of the shard ran 30 s or more in LOGFILE (its go
          test log) and has no row in ci/go_test_weights.tsv; prints the row.
@@ -598,7 +598,7 @@ go_test_leg() {
   command -v jq >/dev/null 2>&1 || die "the test and race legs need jq to read go test -json"
   raw="$(mktemp "${TMPDIR:-/tmp}/dev-health-leg-raw.XXXXXX")" || die "go_test_leg: no temp file for the raw go test -json stream"
   set +e
-  "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -json "$@" 2>&1 \
+  "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath ${MERGE_GROUP_FRESH:+-count=1} -json "$@" 2>&1 \
     | tee "${raw}" \
     | { jq -nR --unbuffered -rj "${GO_TEST_LEG_JQ}"; jqrc=$?; [ "${jqrc}" -eq 0 ] || cat >/dev/null; exit "${jqrc}"; } \
     | tee -a "${log}"
@@ -898,12 +898,18 @@ check_test_shard_unweighted_guard() {
   fi
 }
 
-# CHAOS-11448: merge_group runs the security packages of ci/security_fresh_packages.txt with -count=1 (their tests always execute);
-# every other package may read "ok (cached)". DEV_HEALTH_GO_FRESH_SECURITY=1 turns it on (go-quality.yml sets it on merge_group only).
+# CHAOS-11448: merge_group runs the security packages of ci/security_fresh_packages.txt with -count=1 in their own call (their tests
+# always execute). DEV_HEALTH_GO_FRESH_SECURITY=1 turns it on (go-quality.yml sets it on merge_group only).
 SECURITY_FRESH_FILE="${DEV_HEALTH_GO_SECURITY_FRESH_LIST:-${ROOT}/ci/security_fresh_packages.txt}"
 SECURITY_FRESH_SET=""
 
 security_fresh_active() { [ "${DEV_HEALTH_GO_FRESH_SECURITY:-}" = "1" ]; }
+
+# CHAOS-11745: on merge_group EVERY go test of the test and race legs carries -count=1 (${MERGE_GROUP_FRESH:+-count=1}): the
+# restored build cache holds test results, and a test that reads a file through a child process (helm, bash, go, git) reads
+# "ok (cached)" after that file changed. The build cache stays; only the test results are not reused. A pull request keeps them.
+MERGE_GROUP_FRESH=""
+if security_fresh_active; then MERGE_GROUP_FRESH=1; fi
 
 # security_fresh_load: the import paths of the list (root module) in SECURITY_FRESH_SET; a path that does not exist is fatal.
 security_fresh_load() {
@@ -934,12 +940,27 @@ security_split() {
   [ "${rc}" -le 1 ] || return "${rc}"
 }
 
-# check_security_fresh_receipt LOG: the cache receipt of a test or race leg (LOG = its go test output). Cached = NOT executed.
-# On merge_group a security package that reads "(cached)" fails the leg (a "[no tests to run]" package has nothing to execute).
+# check_security_fresh_receipt JSON...: the cache receipt of a test or race leg, read from the go test -json events of its stages.
+# A package's own summary event (an output event with no Test) that reads "ok ... (cached)" is cached = NOT executed; a line a
+# test prints carries its Test and is never read as a summary. On merge_group any cached package fails the leg (CHAOS-11745); a
+# "[no tests to run]" package has nothing to execute and is not counted.
 check_security_fresh_receipt() {
-  local log="${1:-}" cached set_file result bad fresh summary
-  { [ -f "${log}" ] && [ -r "${log}" ]; } || die "security-fresh-receipt needs the leg's go test log as a readable file, got '${log}'"
-  cached="$(grep -cE '^ok[[:space:]].*\(cached\)' "${log}" || true)"
+  local f events bad cached set_file fresh sec_cached summary
+  [ "$#" -gt 0 ] || die "security-fresh-receipt needs the leg's go test -json file(s)"
+  for f in "$@"; do
+    { [ -f "${f}" ] && [ -r "${f}" ]; } || die "security-fresh-receipt needs the leg's go test -json events as readable files, got '${f}'"
+  done
+  command -v jq >/dev/null 2>&1 || die "security-fresh-receipt needs jq to read the go test -json events"
+  events="$(cat -- "$@" | jq -nR -r '
+    inputs
+    | fromjson?
+    | select(type == "object" and .Action == "output" and ((.Test // "") == "") and ((.Package // "") != ""))
+    | ((.Output // "") | tostring) as $o
+    | select(($o | test("^ok\\s")) and ($o | test("\\[no tests to run\\]") | not))
+    | (if ($o | test("\\(cached\\)")) then "C " else "R " end) + .Package' | LC_ALL=C sort -u)" \
+    || die "security-fresh-receipt could not read the go test -json events"
+  bad="$(printf '%s\n' "${events}" | sed -n 's/^C //p')"
+  cached="$(printf '%s\n' "${bad}" | grep -c . || true)"
   summary="$(printf 'cache-receipt: %s package(s) reported "ok (cached)": cached = NOT executed by this leg\n' "${cached}")"
   if ! security_fresh_active; then
     summary="${summary}"$'\n'"security-fresh: off (event is not merge_group)"
@@ -950,23 +971,21 @@ check_security_fresh_receipt() {
   security_fresh_load
   set_file="$(mktemp "${TMPDIR:-/tmp}/dev-health-security-set.XXXXXX")"
   printf '%s\n' "${SECURITY_FRESH_SET}" > "${set_file}"
-  result="$(awk -v setfile="${set_file}" 'BEGIN { while ((getline l < setfile) > 0) s[l] = 1 }
-    $1 == "ok" && ($2 in s) && $0 !~ /\[no tests to run\]/ { if ($0 ~ /\(cached\)/) print "C " $2; else n++ }
-    END { print "N " n + 0 }' "${log}")" || { rm -f -- "${set_file}"; die "security-fresh-receipt could not read ${log}"; }
+  fresh="$(printf '%s\n' "${events}" | sed -n 's/^R //p' | grep -Fxc -f "${set_file}" || true)"
+  sec_cached="$(printf '%s\n' "${bad}" | grep -Fxc -f "${set_file}" || true)"
   rm -f -- "${set_file}"
-  bad="$(printf '%s\n' "${result}" | sed -n 's/^C //p' | tr '\n' ' ')"
-  fresh="$(printf '%s\n' "${result}" | sed -n 's/^N //p')"
-  summary="${summary}"$'\n'"$(printf 'security-fresh: %s package(s) of ci/security_fresh_packages.txt executed with -count=1 on merge_group, %s cached' "${fresh}" "$(printf '%s\n' "${bad}" | wc -w | tr -d ' ')")"
+  summary="${summary}"$'\n'"$(printf 'security-fresh: %s package(s) of ci/security_fresh_packages.txt executed with -count=1 on merge_group, %s cached' "${fresh}" "${sec_cached}")"
+  summary="${summary}"$'\n'"$(printf 'merge-group-fresh: every go test of this leg ran with -count=1, %s package(s) cached' "${cached}")"
   printf '%s\n' "${summary}"
   [ -z "${GITHUB_STEP_SUMMARY:-}" ] || printf '%s\n' "${summary}" >> "${GITHUB_STEP_SUMMARY}"
-  [ -z "${bad}" ] || die "security package(s) read ok (cached) on merge_group: their tests were NOT executed: ${bad}"
+  [ "${cached}" -eq 0 ] || die "package(s) read ok (cached) on merge_group: their tests were NOT executed: $(printf '%s\n' "${bad}" | tr '\n' ' ')"
 }
 
 # check_test_shard SHARD COUNT: the SHARD-th of COUNT slices of the unit tests (what check_test runs as one). The slices
 # partition `go list ./...`; internal/gqlgenguard runs alone after the rest of its shard. The packages that hold race-excluded rows run once,
 # fresh, with go test -json, and the shard reads the receipts of its rows from that run (check_race_excluded_receipts): no second execution.
 check_test_shard() {
-  local shard="${1:-}" count="${2:-}" plan log json started wall module_dir rest rest_rows rest_sec rows_timeout census_keys heavy_is_row listing legjson
+  local shard="${1:-}" count="${2:-}" plan log json started wall module_dir rest rest_rows rest_sec rows_timeout census_keys heavy_is_row listing legjson rjson=""
   check_test_shard_args "${shard}" "${count}"
   plan="$(check_test_shard_plan "${shard}" "${count}")"
   listing="$(race_excluded_rows "${shard}" "${count}")" || exit 2
@@ -974,6 +993,11 @@ check_test_shard() {
   log="$(mktemp "${TMPDIR:-/tmp}/dev-health-test-shard.XXXXXX")"
   json="$(mktemp "${TMPDIR:-/tmp}/dev-health-test-shard-json.XXXXXX")"
   legjson="$(leg_json_file test "${shard}" "${count}")" || exit 2
+  # The cache receipt reads the stages' -json events: a leg that keeps no timings keeps them in a temp file.
+  if [ "${legjson}" = /dev/null ]; then
+    rjson="$(mktemp "${TMPDIR:-/tmp}/dev-health-test-shard-events.XXXXXX")"
+    legjson="${rjson}"
+  fi
   started="$(date +%s)"
   if security_fresh_active; then security_fresh_load; fi
   for module_dir in "${MODULE_DIRS[@]}"; do
@@ -991,14 +1015,14 @@ check_test_shard() {
       rest_sec="$(printf '%s\n' "${rest}" | security_split in)"
       rest="$(printf '%s\n' "${rest}" | security_split out)"
     fi
-    printf 'go test (shard %s/%s): %s: %d package(s), %d with race-excluded rows\n' "${shard}" "${count}" "${module_dir}" \
+    printf 'go test%s (shard %s/%s): %s: %d package(s), %d with race-excluded rows\n' "${MERGE_GROUP_FRESH:+ -count=1}" "${shard}" "${count}" "${module_dir}" \
       "$(printf '%s\n%s\n' "${rest}" "${rest_rows}" | grep -c . || true)" "$(printf '%s\n' "${rest_rows}" | grep -c . || true)"
     if [ -n "${rest}" ]; then
       (
         cd "${ROOT}/${module_dir}"
         # shellcheck disable=SC2086
         go_test_leg "${log}" "${legjson}" -timeout 10m ${rest}
-      ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}"; return 1; }
+      ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}" ${rjson:+"${rjson}"}; return 1; }
     fi
     if [ -n "${rest_sec}" ]; then
       printf 'go test (shard %s/%s, security -count=1): %s: %d package(s)\n' "${shard}" "${count}" "${module_dir}" "$(printf '%s\n' "${rest_sec}" | grep -c .)"
@@ -1006,17 +1030,17 @@ check_test_shard() {
         cd "${ROOT}/${module_dir}"
         # shellcheck disable=SC2086
         go_test_leg "${log}" "${legjson}" -count=1 -timeout 10m ${rest_sec}
-      ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}"; return 1; }
+      ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}" ${rjson:+"${rjson}"}; return 1; }
     fi
     if [ -n "${rest_rows}" ]; then
       (
         cd "${ROOT}/${module_dir}"
         # shellcheck disable=SC2086
         go_test_json_run_t "${rows_timeout}" "${json}" "${log}" ${rest_rows}
-      ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}"; return 1; }
+      ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}" ${rjson:+"${rjson}"}; return 1; }
     fi
     if printf '%s\n' "${plan}" | awk -F'\t' -v m="${module_dir}" -v heavy="${SERIAL_HEAVY_TEST_PACKAGE}" '$1 == m && $2 == heavy { found = 1 } END { exit !found }'; then
-      printf 'go test (shard %s/%s, alone): %s\n' "${shard}" "${count}" "${SERIAL_HEAVY_TEST_PACKAGE}"
+      printf 'go test%s (shard %s/%s, alone): %s\n' "${MERGE_GROUP_FRESH:+ -count=1}" "${shard}" "${count}" "${SERIAL_HEAVY_TEST_PACKAGE}"
       heavy_is_row=0
       if [ "${module_dir}" = "." ] && printf '%s\n' "${plan}" | awk -F'\t' -v heavy="${SERIAL_HEAVY_TEST_PACKAGE}" -v keys="${census_keys}" '
           BEGIN { n = split(keys, k, "\n"); for (i = 1; i <= n; i++) isrow[k[i]] = 1 }
@@ -1025,22 +1049,22 @@ check_test_shard() {
         (
           cd "${ROOT}/${module_dir}"
           go_test_json_run "${json}" "${log}" "${SERIAL_HEAVY_TEST_PACKAGE}"
-        ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}"; return 1; }
+        ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}" ${rjson:+"${rjson}"}; return 1; }
       else
         (
           cd "${ROOT}/${module_dir}"
           go_test_leg "${log}" "${legjson}" -timeout 10m "${SERIAL_HEAVY_TEST_PACKAGE}"
-        ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}"; return 1; }
+        ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}" ${rjson:+"${rjson}"}; return 1; }
       fi
     fi
   done
   if [ "${legjson}" != /dev/null ]; then cat "${json}" >>"${legjson}"; fi
-  check_race_excluded_receipts "${listing}" "${json}" || { rm -f -- "${log}" "${json}"; return 1; }
-  (check_security_fresh_receipt "${log}") || { rm -f -- "${log}" "${json}"; return 1; }
+  check_race_excluded_receipts "${listing}" "${json}" || { rm -f -- "${log}" "${json}" ${rjson:+"${rjson}"}; return 1; }
+  (check_security_fresh_receipt "${legjson}" "${json}") || { rm -f -- "${log}" "${json}" ${rjson:+"${rjson}"}; return 1; }
   wall=$(($(date +%s) - started))
-  (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}") || { rm -f -- "${log}" "${json}"; return 1; }
-  (check_test_shard_wall_guard "${shard}" "${count}" "${wall}" "${log}") || { rm -f -- "${log}" "${json}"; return 1; }
-  rm -f -- "${log}" "${json}"
+  (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}") || { rm -f -- "${log}" "${json}" ${rjson:+"${rjson}"}; return 1; }
+  (check_test_shard_wall_guard "${shard}" "${count}" "${wall}" "${log}") || { rm -f -- "${log}" "${json}" ${rjson:+"${rjson}"}; return 1; }
+  rm -f -- "${log}" "${json}" ${rjson:+"${rjson}"}
 }
 
 check_race() {
@@ -1097,7 +1121,7 @@ check_providersync_race_shard() {
   [ -f "${weights}" ] || die "providersync race shards need ${weights}"
   # CHAOS-8275: list EVERY name of the RACE test binary (so a //go:build race file is seen too), not just ^Test of the plain build. A Fuzz*,
   # Example* or Benchmark* name would be selected by no `-run ^(Test...)$` shard and run in no race leg, so it fails here instead.
-  listing="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -race -list '.*' ./internal/providersync)" \
+  listing="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -race ${MERGE_GROUP_FRESH:+-count=1} -list '.*' ./internal/providersync)" \
     || die "go test -race -list failed for internal/providersync"
   listing="$(printf '%s\n' "${listing}" | grep -Ev '^(ok|FAIL|\?|---)[[:space:]]' | grep -v '^$' || true)"
   other="$(printf '%s\n' "${listing}" | grep -v '^Test' || true)"
@@ -1119,7 +1143,7 @@ check_providersync_race_shard() {
   [ "${total}" -eq "$(printf '%s\n' "${all}" | wc -l)" ] \
     && [ "$(printf '%s' "${names}" | LC_ALL=C sort)" = "$(printf '%s\n' "${all}" | LC_ALL=C sort)" ] \
     || die "providersync race shards are not an exact partition of the ${total} listed tests"
-  printf 'go test -race providersync shard %s/%s: %s of %s tests\n' "${shard}" "${count}" "$(printf '%s\n' "${regex}" | tr -cd '|' | wc -c | awk '{print $1 + 1}')" "${total}"
+  printf 'go test -race%s providersync shard %s/%s: %s of %s tests\n' "${MERGE_GROUP_FRESH:+ -count=1}" "${shard}" "${count}" "$(printf '%s\n' "${regex}" | tr -cd '|' | wc -c | awk '{print $1 + 1}')" "${total}"
   # CHAOS-10481: -json goes to a per-leg file (the leg number is in the name); jq turns it back into the plain go test log, and
   # pipefail keeps go test's exit code. The guard runs after a failed run too, so a timeout names the test that never ended.
   command -v jq >/dev/null 2>&1 || die "providersync race shards need jq to print the go test -json log"
@@ -1129,7 +1153,7 @@ check_providersync_race_shard() {
   (
     set -o pipefail
     cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -race -json -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" -run "${regex}" ./internal/providersync \
+    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -race ${MERGE_GROUP_FRESH:+-count=1} -json -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" -run "${regex}" ./internal/providersync \
       | tee "${json}" \
       | jq -rj 'select(.Action == "output") | .Output'
   ) || run_rc=$?
@@ -1195,12 +1219,17 @@ check_race_shard_plan() {
 }
 
 check_race_shard() {
-  local shard="${1:-}" count="${2:-}" module_dir modpath pkg selected=0 missing racelog legjson
+  local shard="${1:-}" count="${2:-}" module_dir modpath pkg selected=0 missing racelog legjson rjson="" ps_json=""
   check_race_shard_args "${shard}" "${count}"
   load_quality_selection
   local -a pkgs solo_pkgs pkgs_sec pkgs_all
   racelog="$(mktemp "${TMPDIR:-/tmp}/dev-health-race-shard.XXXXXX")"
   legjson="$(leg_json_file race "${shard}" "${count}")" || exit 2
+  # The cache receipt reads the stages' -json events: a leg that keeps no timings keeps them in a temp file.
+  if [ "${legjson}" = /dev/null ]; then
+    rjson="$(mktemp "${TMPDIR:-/tmp}/dev-health-race-shard-events.XXXXXX")"
+    legjson="${rjson}"
+  fi
   if security_fresh_active; then security_fresh_load; fi
   for module_dir in "${MODULE_DIRS[@]}"; do
     modpath="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -m)"
@@ -1232,18 +1261,19 @@ check_race_shard() {
         [ -n "${pkg}" ] && pkgs+=("${pkg}")
       done < <(printf '%s\n' "${pkgs_all[@]}" | security_split out)
     fi
-    printf 'go test -race (shard %s/%s): %s: %d package(s), %d solo\n' "${shard}" "${count}" "${module_dir}" "${#pkgs[@]}" "${#solo_pkgs[@]}"
+    printf 'go test -race%s (shard %s/%s): %s: %d package(s), %d solo\n' "${MERGE_GROUP_FRESH:+ -count=1}" "${shard}" "${count}" "${module_dir}" "${#pkgs[@]}" "${#solo_pkgs[@]}"
     if [ "${module_dir}" = "." ] && quality_selected . internal/providersync; then
       # CHAOS-8166: internal/providersync runs in EVERY race leg, one test-name shard each (it is not in pkgs above).
       selected=$((selected + 1))
       check_providersync_race_shard "${shard}" "${count}"
+      ps_json="${GO_TEST_JSON_DIR:-${ROOT}/go-test-json}/providersync-race-${shard}.json"
     fi
     if [ "${#pkgs[@]}" -gt 0 ]; then
       selected=$((selected + ${#pkgs[@]}))
       (
         cd "${ROOT}/${module_dir}"
         go_test_leg "${racelog}" "${legjson}" -race -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" "${pkgs[@]}"
-      ) || { rm -f -- "${racelog}"; return 1; }
+      ) || { rm -f -- "${racelog}" ${rjson:+"${rjson}"}; return 1; }
     fi
     if [ "${#pkgs_sec[@]}" -gt 0 ]; then
       selected=$((selected + ${#pkgs_sec[@]}))
@@ -1251,21 +1281,21 @@ check_race_shard() {
       (
         cd "${ROOT}/${module_dir}"
         go_test_leg "${racelog}" "${legjson}" -race -count=1 -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" "${pkgs_sec[@]}"
-      ) || { rm -f -- "${racelog}"; return 1; }
+      ) || { rm -f -- "${racelog}" ${rjson:+"${rjson}"}; return 1; }
     fi
     # CHAOS-10289: the solo packages run last and alone: the shard's packages and its providersync slice have finished, so
     # nothing else of this leg runs beside them.
     if [ "${#solo_pkgs[@]}" -gt 0 ]; then
       selected=$((selected + ${#solo_pkgs[@]}))
-      printf 'go test -race (shard %s/%s): %s: solo, alone: %s\n' "${shard}" "${count}" "${module_dir}" "${solo_pkgs[*]}"
+      printf 'go test -race%s (shard %s/%s): %s: solo, alone: %s\n' "${MERGE_GROUP_FRESH:+ -count=1}" "${shard}" "${count}" "${module_dir}" "${solo_pkgs[*]}"
       (
         cd "${ROOT}/${module_dir}"
         go_test_leg "${racelog}" "${legjson}" -race -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" "${solo_pkgs[@]}"
-      ) || { rm -f -- "${racelog}"; return 1; }
+      ) || { rm -f -- "${racelog}" ${rjson:+"${rjson}"}; return 1; }
     fi
   done
-  (check_security_fresh_receipt "${racelog}") || { rm -f -- "${racelog}"; return 1; }
-  rm -f -- "${racelog}"
+  (check_security_fresh_receipt "${legjson}" ${ps_json:+"${ps_json}"}) || { rm -f -- "${racelog}" ${rjson:+"${rjson}"}; return 1; }
+  rm -f -- "${racelog}" ${rjson:+"${rjson}"}
   [ "${selected}" -gt 0 ] || [ "${QUALITY_FILTER_ACTIVE}" -eq 1 ] \
     || die "race shard ${shard}/${count} selected zero packages -- the matrix is wider than the package list, so this leg would read green while running nothing"
 }
@@ -4850,8 +4880,9 @@ case "${1:-all}" in
     check_test_shard_unweighted_guard "$2" "$3" "$4"
     ;;
   security-fresh-receipt)
-    [ "$#" -eq 2 ] || die "security-fresh-receipt accepts LOGFILE"
-    check_security_fresh_receipt "$2"
+    [ "$#" -ge 2 ] || die "security-fresh-receipt accepts JSON..."
+    shift
+    check_security_fresh_receipt "$@"
     ;;
   security-fresh-split)
     shift

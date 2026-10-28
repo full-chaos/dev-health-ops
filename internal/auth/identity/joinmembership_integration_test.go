@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
@@ -88,17 +89,18 @@ func TestJoinMembershipVisibleToGoAPIReaderInSameCommit(t *testing.T) {
 	}
 	var pubID, authID uuid.UUID
 	var authStatus, authRole string
-	var sameJoined, publicOneInstant, invitedNull bool
+	var sameJoined, publicOneInstant, authOneInstant, invitedNull bool
 	if err := e.admin.QueryRow(ctx, `SELECT p.id, a.id, a.status, a.role, p.joined_at = a.joined_at,
-	p.joined_at = p.created_at AND p.created_at = p.updated_at, p.invited_by_id IS NULL
+	p.joined_at = p.created_at AND p.created_at = p.updated_at,
+	a.joined_at = a.created_at AND a.created_at = a.updated_at, p.invited_by_id IS NULL
 FROM public.memberships p JOIN auth.memberships a ON a.principal_id = p.user_id AND a.organization_id = p.org_id
 WHERE p.user_id = $1 AND p.org_id = $2`, user, org).
-		Scan(&pubID, &authID, &authStatus, &authRole, &sameJoined, &publicOneInstant, &invitedNull); err != nil {
+		Scan(&pubID, &authID, &authStatus, &authRole, &sameJoined, &publicOneInstant, &authOneInstant, &invitedNull); err != nil {
 		t.Fatalf("read both rows: %v", err)
 	}
-	if pubID != m.ID || authID != m.ID || authStatus != "active" || authRole != "admin" || !sameJoined || !publicOneInstant || !invitedNull {
-		t.Fatalf("rows differ: public id %v auth id %v (want %v), auth %s/%s, same joined_at %v, public one instant %v, invited_by NULL %v",
-			pubID, authID, m.ID, authStatus, authRole, sameJoined, publicOneInstant, invitedNull)
+	if pubID != m.ID || authID != m.ID || authStatus != "active" || authRole != "admin" || !sameJoined || !publicOneInstant || !authOneInstant || !invitedNull {
+		t.Fatalf("rows differ: public id %v auth id %v (want %v), auth %s/%s, same joined_at %v, public one instant %v, auth one instant %v, invited_by NULL %v",
+			pubID, authID, m.ID, authStatus, authRole, sameJoined, publicOneInstant, authOneInstant, invitedNull)
 	}
 }
 
@@ -382,6 +384,37 @@ func TestJoinMembershipRefusedWithoutUsersOwned(t *testing.T) {
 		t.Fatalf("join before the cutover = %v, want ErrSignupNotAvailable", err)
 	}
 	e.requireNoMemberRows(t, ctx, user, org)
+}
+
+// A join in a transaction that is not READ COMMITTED is refused before any
+// lock or write: its existence check after the user lock would read a snapshot
+// older than a go-api join that committed while it waited.
+func TestJoinMembershipRefusedOutsideReadCommitted(t *testing.T) {
+	e := getEnv(t)
+	for _, level := range []string{"repeatable read", "serializable"} {
+		t.Run(level, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			cfg := e.runtime.Config().Copy()
+			cfg.MaxConns = 2
+			cfg.ConnConfig.RuntimeParams["default_transaction_isolation"] = level
+			pool, err := pgxpool.NewWithConfig(ctx, cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer pool.Close()
+			s, err := New(Config{Pool: pool, Schema: e.store.schema, UsersOwnedByAuth: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			user, org := e.joinFixture(t, ctx)
+			err = joinCommit(ctx, s, membershipJoin{ID: uuid.New(), Principal: user, OrgID: org, Role: "member"}, nil)
+			if !errors.Is(err, ErrJoinNotReadCommitted) {
+				t.Fatalf("join under %s = %v, want ErrJoinNotReadCommitted", level, err)
+			}
+			e.requireNoMemberRows(t, ctx, user, org)
+		})
+	}
 }
 
 // A role outside the organization roles writes nothing.

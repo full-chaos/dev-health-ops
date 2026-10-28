@@ -18,6 +18,10 @@ import (
 // Nothing is written.
 var ErrMembershipDiverged = errors.New("identity: the account has an auth membership in the organization and no public membership")
 
+// ErrJoinNotReadCommitted reports a join in a transaction that is not READ
+// COMMITTED. Nothing is read under the user lock and nothing is written.
+var ErrJoinNotReadCommitted = errors.New("identity: a join must run in a READ COMMITTED transaction")
+
 // errJoinAlreadyMember reports a join of an account that already is a member
 // of the organization in public.memberships. Nothing is written.
 var errJoinAlreadyMember = errors.New("identity: already a member of the organization")

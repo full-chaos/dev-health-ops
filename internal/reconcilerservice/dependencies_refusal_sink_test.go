@@ -135,3 +135,22 @@ func TestRefusalIsExpectedOnlyForAFailedCheck(t *testing.T) {
 		}
 	}
 }
+
+// A waiter parks on the channel the sink hands out while no line is stored; the next Write must
+// close it. Write returns only after it has woken the waiters, so the channel is already closed
+// when Write returns and the check needs no wait and no timer.
+func TestRefusalSinkWriteWakesAParkedWaiter(t *testing.T) {
+	sink := &refusalSink{}
+	_, found, wake, _ := sink.first("queue_postgres")
+	if found {
+		t.Fatal("an empty sink holds a record")
+	}
+
+	writeLines(t, sink, refusalLine("domain_postgres", "error", false))
+
+	select {
+	case <-wake:
+	default:
+		t.Fatal("a Write left a parked waiter asleep")
+	}
+}

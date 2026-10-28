@@ -214,7 +214,7 @@ type grantName struct {
 }
 
 // grantTarget splits "db.table" as SHOW GRANTS prints it. A target it cannot
-// read for certain (an unclosed or doubled quote, an escape, a stray dot or
+// read for certain (an unbalanced backtick, an unknown escape, a stray dot or
 // backtick) is not ok, so its grant never counts.
 func grantTarget(target string) (database, table grantName, ok bool) {
 	database, rest, ok := readGrantName(target, true)
@@ -229,18 +229,35 @@ func grantTarget(target string) (database, table grantName, ok bool) {
 }
 
 // readGrantName reads one target part: a backtick-quoted name, or an unquoted
-// run up to the first dot (stopAtDot) or the end.
+// run up to the first dot (stopAtDot) or the end. Inside backticks a doubled
+// backtick and the escapes \` and \\ are one literal character; any other
+// escape or an unbalanced backtick is not ok.
 func readGrantName(text string, stopAtDot bool) (grantName, string, bool) {
 	if strings.HasPrefix(text, "`") {
-		end := strings.IndexByte(text[1:], '`')
-		if end < 0 {
-			return grantName{}, "", false
+		var name strings.Builder
+		for i := 1; i < len(text); i++ {
+			switch c := text[i]; c {
+			case '`':
+				if i+1 < len(text) && text[i+1] == '`' {
+					name.WriteByte('`')
+					i++
+					continue
+				}
+				if name.Len() == 0 {
+					return grantName{}, "", false
+				}
+				return grantName{name: name.String()}, text[i+1:], true
+			case '\\':
+				if i+1 >= len(text) || (text[i+1] != '`' && text[i+1] != '\\') {
+					return grantName{}, "", false
+				}
+				name.WriteByte(text[i+1])
+				i++
+			default:
+				name.WriteByte(c)
+			}
 		}
-		name, rest := text[1:1+end], text[2+end:]
-		if name == "" || strings.ContainsRune(name, '\\') || strings.HasPrefix(rest, "`") {
-			return grantName{}, "", false
-		}
-		return grantName{name: name}, rest, true
+		return grantName{}, "", false
 	}
 	part, rest := text, ""
 	if stopAtDot {

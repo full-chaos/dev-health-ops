@@ -301,3 +301,18 @@ func TestAnInheritedTemplateOffDoesNotChangeThePackageTests(t *testing.T) {
 		t.Fatalf("the child passed %q, want exactly %q\n%s", passed, want, output)
 	}
 }
+
+// The statements that open and close a template are text the review checked word for word.
+func TestTemplateAlterStatementsKeepTheirText(t *testing.T) {
+	closeStatement, openStatement := templateAlterDDL("dh_tpl_abababababababababababab")
+	if want := `ALTER DATABASE "dh_tpl_abababababababababababab" WITH IS_TEMPLATE true ALLOW_CONNECTIONS false`; closeStatement != want {
+		t.Errorf("close statement = %q, want %q", closeStatement, want)
+	}
+	if want := `ALTER DATABASE "dh_tpl_abababababababababababab" WITH ALLOW_CONNECTIONS true`; openStatement != want {
+		t.Errorf("open statement = %q, want %q", openStatement, want)
+	}
+	create, drop := postgresScratchDDL("dh_tpl_abababababababababababab")
+	if create != `CREATE DATABASE "dh_tpl_abababababababababababab"` || drop != `DROP DATABASE IF EXISTS "dh_tpl_abababababababababababab" WITH (FORCE)` {
+		t.Errorf("create/drop = %q / %q", create, drop)
+	}
+}

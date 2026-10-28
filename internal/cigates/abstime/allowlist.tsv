@@ -12,7 +12,6 @@ internal/cigates/emitscan/scan_rows_test.go	timed	owned by CHAOS-11674 (emitscan
 internal/cigates/emitscan/scan_test.go	TestSelfReferencingAliasChainsAreFast	owned by CHAOS-11674 (emitscan budgets)
 internal/faultproxy/proxy_test.go	TestDelayAddsLatency	lower-bound wait proof: load only lengthens it
 internal/faultproxy/proxy_test.go	TestSlowCapsRate	lower-bound wait proof: load only lengthens it
-internal/goapicli/routing/main_test.go	TestConnectPostgresBoundsTheDialAndSaysSo	pending CHAOS-11684 conversion
 internal/goapicli/routing/verbs_integration_test.go	TestStatusReturnsWithinItsTimeoutUnderAHeldLock	pending CHAOS-11684 conversion
 internal/goapiproof/credentialecho_test.go	TestSentSecretsScansALargeBodyQuickly	measured hosted margin 12.5 (>= 3), CHAOS-11684 census
 internal/ingressplanes/real_nginx_wait_integration_test.go	TestWaitForRouter_IsLoudWhenTheBoundIsHit	pending CHAOS-11684 conversion

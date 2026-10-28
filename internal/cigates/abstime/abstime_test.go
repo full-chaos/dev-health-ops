@@ -238,3 +238,78 @@ func TestRepositoryTestsHaveNoUnlistedAbsoluteTimeAssertion(t *testing.T) {
 		t.Fatalf("%d absolute time assertion problem(s):\n%s", len(got), strings.Join(got, "\n"))
 	}
 }
+
+// A duration measured in a child process and carried to the parent as KEY=<number> is still a measurement: the parent
+// compares it with a constant the same way a same-process time.Since is compared (CHAOS-11757).
+const carriedHelper = "func helper() {\n\ts := time.Now()\n\tos.Stderr.WriteString(\"STOP_MS=\" + strconv.FormatInt(time.Since(s).Milliseconds(), 10) + \" CODE=\" + strconv.Itoa(0) + \"\\n\")\n}\n\n"
+
+func TestPlantedChildEncodedMillisecondsAgainstAConstantIsRefused(t *testing.T) {
+	body := carriedHelper + "func TestStop(t *testing.T) {\n\tvar ms int64\n\tvar code int\n\tfmt.Sscanf(text, \"STOP_MS=%d CODE=%d\", &ms, &code)\n\tif stop := time.Duration(ms) * time.Millisecond; stop >= 4*time.Second {\n\t\tt.Fatal(\"slow\")\n\t}\n}\n"
+	wantOne(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil), "p/x_test.go", "TestStop", "D6418", "child process")
+}
+
+func TestPlantedChildMillisecondsAgainstALimitVariableIsRefused(t *testing.T) {
+	body := carriedHelper + "func TestOtlp(t *testing.T) {\n\tvar millis int64\n\tvar code int\n\tfmt.Sscanf(text, \"STOP_MS=%d CODE=%d\", &millis, &code)\n\tif limit := (time.Second + 1500*time.Millisecond).Milliseconds(); millis > limit {\n\t\tt.Fatal(\"slow\")\n\t}\n}\n"
+	wantOne(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil), "TestOtlp")
+}
+
+func TestPlantedFprintfEmittedMillisecondsAreRefused(t *testing.T) {
+	helper := "func helper() {\n\ts := time.Now()\n\tfmt.Fprintf(os.Stderr, \"SHUTDOWN_MS=%d CODE=%d\\n\", time.Since(s).Milliseconds(), 0)\n}\n\n"
+	body := helper + "func TestFprintf(t *testing.T) {\n\tvar millis int64\n\tvar code int\n\tfmt.Sscanf(text, \"SHUTDOWN_MS=%d CODE=%d\", &millis, &code)\n\tif millis > 2500 {\n\t\tt.Fatal(\"slow\")\n\t}\n}\n"
+	wantOne(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil), "TestFprintf")
+}
+
+func TestPlantedShellSecondsParsedByAHelperAreRefused(t *testing.T) {
+	body := "const script = \"start=$SECONDS\\nstop_service x\\necho \\\"A_ELAPSED=$((SECONDS - start))\\\"\\n\"\n\nfunc elapsedOf(stdout, key string) (int, bool) { return 0, true }\n\nfunc TestTeardown(t *testing.T) {\n\tprompt, ok := elapsedOf(out, \"A_ELAPSED\")\n\tif !ok {\n\t\treturn\n\t}\n\tif prompt <= 3 {\n\t\tt.Fatal(\"x\")\n\t}\n}\n"
+	wantOne(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil), "TestTeardown")
+}
+
+func TestCarriedMeasurementTakesTheSameMarkerAndAllowlistRow(t *testing.T) {
+	test := "func TestStop(t *testing.T) {\n\tvar ms int64\n\tfmt.Sscanf(text, \"STOP_MS=%d\", &ms)\n\t%s\n\tif time.Duration(ms)*time.Millisecond > time.Minute {\n\t\tt.Fatal(\"x\")\n\t}\n}\n"
+	src := carriedHelper + strings.Replace(test, "%s", "//abstime:allow hang ceiling, never a budget", 1)
+	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + src}), nil))
+	src = carriedHelper + strings.Replace(test, "%s", "", 1)
+	rows := []abstime.Row{{File: "p/x_test.go", Func: "TestStop", Reason: "pending", Line: 2}}
+	wantOne(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + src}), nil), "TestStop")
+	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + src}), rows))
+	stale := writeTree(t, map[string]string{"p/x_test.go": head + carriedHelper + "func TestStop(t *testing.T) {}\n"})
+	wantOne(t, check(t, stale, rows), "stale allowlist row")
+}
+
+// Limits of the carried-measurement rule: each is stated in the findAssertions doc comment and pinned here, so a
+// change of the rule shows in a test.
+
+func TestCarriedHangCeilingAndExitCodeAreNotAssertions(t *testing.T) {
+	body := carriedHelper + "func TestStop(t *testing.T) {\n\tvar ms int64\n\tvar code int\n\tfmt.Sscanf(text, \"STOP_MS=%d CODE=%d\", &ms, &code)\n\tselect {\n\tcase <-done:\n\tcase <-time.After(30 * time.Second):\n\t\tt.Fatal(\"hang\")\n\t}\n\tif code > 1 || code < 0 {\n\t\tt.Fatal(code)\n\t}\n\tt.Log(ms)\n}\n"
+	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil))
+}
+
+func TestRatioOfTwoCarriedValuesIsNotAnAbsoluteBudget(t *testing.T) {
+	helper := "func helper() {\n\ts := time.Now()\n\tos.Stderr.WriteString(\"FAST_MS=\" + strconv.FormatInt(time.Since(s).Milliseconds(), 10) + \"\\n\")\n\tos.Stderr.WriteString(\"SLOW_MS=\" + strconv.FormatInt(time.Since(s).Milliseconds(), 10) + \"\\n\")\n}\n\n"
+	body := helper + "func TestRatio(t *testing.T) {\n\tvar fast, slow int64\n\tfmt.Sscanf(text, \"FAST_MS=%d\", &fast)\n\tfmt.Sscanf(text, \"SLOW_MS=%d\", &slow)\n\tif 2*fast >= slow {\n\t\tt.Fatal(\"x\")\n\t}\n}\n"
+	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil))
+}
+
+func TestAKeyThatCarriesNoMeasurementIsNotTracked(t *testing.T) {
+	helper := "func helper(port int) {\n\tos.Stderr.WriteString(\"PORT=\" + strconv.Itoa(port) + \"\\n\")\n}\n\n"
+	body := helper + "func TestPort(t *testing.T) {\n\tvar port int\n\tfmt.Sscanf(text, \"PORT=%d\", &port)\n\tif port > 1024 {\n\t\tt.Log(port)\n\t}\n}\n"
+	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil))
+}
+
+func TestStringsIndexOfAKeyIsNotACarriedValue(t *testing.T) {
+	body := carriedHelper + "func TestIndex(t *testing.T) {\n\tindex := strings.Index(text, \"STOP_MS=\")\n\tif index < 3 {\n\t\tt.Fatal(\"x\")\n\t}\n}\n"
+	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil))
+}
+
+func TestEmitterInAnotherFileIsOutOfScope(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"p/helper_test.go": head + carriedHelper,
+		"p/x_test.go":      head + "func TestStop(t *testing.T) {\n\tvar ms int64\n\tfmt.Sscanf(text, \"STOP_MS=%d\", &ms)\n\tif ms > 4000 {\n\t\tt.Fatal(\"x\")\n\t}\n}\n",
+	})
+	wantClean(t, check(t, root, nil))
+}
+
+func TestDurationCarriedAsJSONIsOutOfScope(t *testing.T) {
+	body := "func helper() {\n\ts := time.Now()\n\tjson.NewEncoder(os.Stderr).Encode(map[string]int64{\"ms\": time.Since(s).Milliseconds()})\n}\n\nfunc TestJSON(t *testing.T) {\n\tvar got map[string]int64\n\tjson.Unmarshal(raw, &got)\n\tif got[\"ms\"] > 4000 {\n\t\tt.Fatal(\"x\")\n\t}\n}\n"
+	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil))
+}

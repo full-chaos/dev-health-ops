@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -83,28 +84,37 @@ func TestRequiredChecksCanPassBeforePublicReadinessGateOpens(t *testing.T) {
 	}
 }
 
+// The registry runs in a bubble on a virtual clock with in-memory check functions: Readiness returns at exactly the configured
+// timeout, so a timeout that is honored late fails as well as one that is never honored.
 func TestReadinessTimesOutAndContainsPanics(t *testing.T) {
 	t.Parallel()
 
-	registry := NewRegistry(20 * time.Millisecond)
-	if err := registry.RegisterRequired("timeout", func(ctx context.Context) error {
-		<-ctx.Done()
-		return ctx.Err()
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := registry.RegisterRequired("panic", func(context.Context) error {
-		panic("private panic text")
-	}); err != nil {
-		t.Fatal(err)
-	}
-	registry.SetReady(true)
+	synctest.Test(t, func(t *testing.T) {
+		const checkTimeout = 20 * time.Millisecond
+		registry := NewRegistry(checkTimeout)
+		if err := registry.RegisterRequired("timeout", func(ctx context.Context) error {
+			<-ctx.Done()
+			return ctx.Err()
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := registry.RegisterRequired("panic", func(context.Context) error {
+			panic("private panic text")
+		}); err != nil {
+			t.Fatal(err)
+		}
+		registry.SetReady(true)
 
-	// The timeout check returns only when its context ends, so Readiness returning at all is the proof that it honored the timeout.
-	status := registry.Readiness(context.Background())
-	if status.Ready || !slices.Equal(status.Failed, []string{"panic", "timeout"}) {
-		t.Fatalf("expected timeout and panic failures, got %#v", status)
-	}
+		started := time.Now()
+		status := registry.Readiness(context.Background())
+		returnedAt := time.Now()
+		if status.Ready || !slices.Equal(status.Failed, []string{"panic", "timeout"}) {
+			t.Fatalf("expected timeout and panic failures, got %#v", status)
+		}
+		if !returnedAt.Equal(started.Add(checkTimeout)) {
+			t.Fatalf("readiness returned at +%v of virtual time, want +%v: the timeout is not honored at its configured bound", returnedAt.Sub(started), checkTimeout)
+		}
+	})
 }
 
 // CheckStatus.TimedOut lets a caller like the worker's preclaim-readiness

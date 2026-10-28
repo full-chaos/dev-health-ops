@@ -500,3 +500,14 @@ func TestAuthServiceMailEgressNeedsTheExactTCPProtocol(t *testing.T) {
 		t.Fatalf("an unset protocol (TCP) was refused: %v\n%.200s", err, out)
 	}
 }
+
+func TestAuthServiceMailEgressRefusesABadExceptOnANarrowPeer(t *testing.T) {
+	for _, bad := range []string{`"not-a-cidr"`, `"10.ab.0.0/8"`, `"10.0.0.0/08"`, `"10.0.0.0/33"`, `"zz::/8"`, `""`} {
+		peer := fmt.Sprintf(`{"ipBlock":{"cidr":"8.8.8.0/24","except":[%s]}}`, bad)
+		wantMailPeerRefusal(t, "except "+bad, []string{peer})
+	}
+	wantMailPeerRefusal(t, "except is not a list", []string{`{"ipBlock":{"cidr":"8.8.8.0/24","except":"8.8.8.8/32"}}`})
+	if out, err := mailRender(t, []string{`{"ipBlock":{"cidr":"8.8.8.0/24","except":["8.8.8.8/32"]}}`}); err != nil {
+		t.Fatalf("a well formed except on a narrow peer was refused: %v\n%.300s", err, out)
+	}
+}

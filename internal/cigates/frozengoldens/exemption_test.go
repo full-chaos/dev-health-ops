@@ -90,7 +90,7 @@ func squashRepo(t *testing.T) (string, string, Exemption) {
 	git(t, repo, "commit", "-q", "-m", "squash")
 	paths := []string{ManifestPath, plantBaseline, plantArchiveManifest, plantArchiveSQL}
 	sort.Strings(paths)
-	content := inputDigest(t, repo, baseManifest)
+	content := exemptionDigest(t, repo, base)
 	return repo, base, Exemption{
 		BaseManifestSHA256:    sum(baseManifest),
 		BaseHeadJSONSHA256:    sum("old head"),
@@ -105,7 +105,7 @@ func squashRepo(t *testing.T) (string, string, Exemption) {
 	}
 }
 
-func inputDigest(t *testing.T, repo, baseManifest string) string {
+func exemptionDigest(t *testing.T, repo, base string) string {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(repo, ManifestPath))
 	if err != nil {
@@ -115,11 +115,7 @@ func inputDigest(t *testing.T, repo, baseManifest string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base, err := Parse(strings.NewReader(baseManifest))
-	if err != nil {
-		t.Fatal(err)
-	}
-	content, err := InputDigest(repo, head, base)
+	content, err := ExemptionDigest(repo, base, head)
 	if err != nil {
 		t.Fatal(err)
 	}

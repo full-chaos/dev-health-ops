@@ -116,7 +116,7 @@ type RequestSeed struct {
 }
 
 // SeededStatusClasses are the status classes a seeded route gets a 0 series for.
-var SeededStatusClasses = []string{"2xx", "4xx", "5xx"}
+var SeededStatusClasses = []string{"2xx", "3xx", "4xx", "5xx"}
 
 // seedRequests records 0 for each seed x SeededStatusClasses, once, at construction. A cumulative counter creates a series on its first
 // Add, so without this the first export of a low-traffic route already holds its count and rate/increase has no earlier sample. Only the

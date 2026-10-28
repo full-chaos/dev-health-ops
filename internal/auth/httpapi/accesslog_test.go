@@ -495,7 +495,7 @@ func TestRequestSeedsCreateOneZeroSeriesPerStatusClass(t *testing.T) {
 			}
 		}
 	}
-	want := []string{"/a POST 2xx", "/a POST 4xx", "/a POST 5xx", "/b OTHER 2xx", "/b OTHER 4xx", "/b OTHER 5xx"}
+	want := []string{"/a POST 2xx", "/a POST 3xx", "/a POST 4xx", "/a POST 5xx", "/b OTHER 2xx", "/b OTHER 3xx", "/b OTHER 4xx", "/b OTHER 5xx"}
 	if len(got) != len(want) {
 		t.Fatalf("seeded series %v, want %v", got, want)
 	}

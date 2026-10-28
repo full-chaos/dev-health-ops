@@ -291,6 +291,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		Logger:    logger,
 		Counters:  limits,
 	})...)
+	proxy.seedSeries(routes)
 	return markResponseModels(proxy.wrap(routes))
 }
 
@@ -699,7 +700,7 @@ func NewServerWithGate(
 		Name:     "api-http",
 		Listener: "public",
 		// The proxied auth routes' request series exist at 0 before the first request.
-		SeedRequestSeries: authProxyRequestSeeds(),
+		SeedRequestSeries: authProxyRequestSeeds(routes),
 		Address:           cfg.APIAddress,
 		Logger:            logger,
 		Routes:            routes,

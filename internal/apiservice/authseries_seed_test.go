@@ -2,7 +2,6 @@ package apiservice
 
 import (
 	"context"
-	"net/http"
 	"testing"
 
 	"go.opentelemetry.io/otel"
@@ -10,7 +9,6 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
-	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 )
 
@@ -48,7 +46,8 @@ func TestTheAuthProxyCounterIsSeededAtZeroBeforeAnyRequest(t *testing.T) {
 	authProxyRequests = counter
 	t.Cleanup(func() { authProxyRequests = previous })
 
-	_ = newAuthProxy(mustProxyConfig(t, allOn("http://127.0.0.1:1")), quietLogger())
+	proxy := newAuthProxy(mustProxyConfig(t, allOn("http://127.0.0.1:1")), quietLogger())
+	proxy.seedSeries(proxiedRoutes(func(AuthAggregate) bool { return true }))
 
 	points := counterPoints(t, reader, "devhealth_api_auth_proxy_requests_total")
 	if len(points) == 0 {
@@ -72,8 +71,7 @@ func TestThePublicListenersAuthRouteRequestCounterIsSeededAtZeroBeforeAnyRequest
 	if err != nil {
 		t.Fatal(err)
 	}
-	route := httpapi.Route{Method: http.MethodPost, Pattern: "/echo", Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})}
-	if _, err := NewServer(cfg, quietLogger(), []httpapi.Route{route}); err != nil {
+	if _, err := NewServer(cfg, quietLogger(), proxiedRoutes(func(AuthAggregate) bool { return true })); err != nil {
 		t.Fatal(err)
 	}
 

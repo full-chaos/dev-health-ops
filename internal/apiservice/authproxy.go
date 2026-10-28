@@ -247,15 +247,41 @@ func newAuthProxy(cfg AuthProxyConfig, logger *slog.Logger) *authProxy {
 		ExpectContinueTimeout: time.Second,
 		ForceAttemptHTTP2:     true,
 	}
-	seedAuthProxySeries(authProxyRequests, cfg)
 	return &authProxy{cfg: cfg, logger: logger, transport: transport}
 }
 
-// seedAuthProxySeries records 0 for every label set the proxy can count, once, at construction: an OTel counter creates a series on its
-// first Add, so without this the first export of a low-traffic series already holds its count and a rate/increase query has no earlier
-// sample to subtract. local is always possible; forwarded and upstream_error only for an aggregate whose flag is on. Only static values.
-func seedAuthProxySeries(counter metric.Int64Counter, cfg AuthProxyConfig) {
+// proxiedRouteKeys maps "METHOD pattern" to the aggregate for every forwardable auth route. It is only a predicate over the route set the
+// listener is given; no series is seeded for a route that is not registered.
+var proxiedRouteKeys = func() map[string]AuthAggregate {
+	out := map[string]AuthAggregate{}
+	for _, routes := range []map[string]AuthAggregate{sessionProxyRoutes, routeProxyRoutes} {
+		for key, aggregate := range routes {
+			out[key] = aggregate
+		}
+	}
+	return out
+}()
+
+// seedSeries seeds the auth proxy counter for the aggregates that have at least one registered proxied route in routes.
+func (p *authProxy) seedSeries(routes []httpapi.Route) {
+	registered := map[AuthAggregate]bool{}
+	for _, route := range routes {
+		if aggregate, ok := proxiedRouteKeys[route.Method+" "+route.Pattern]; ok {
+			registered[aggregate] = true
+		}
+	}
+	seedAuthProxySeries(authProxyRequests, p.cfg, registered)
+}
+
+// seedAuthProxySeries records 0 for every label set the proxy can count for the registered aggregates, once, at construction: an OTel
+// counter creates a series on its first Add, so without this the first export of a low-traffic series already holds its count and a
+// rate/increase query has no earlier sample to subtract. local is always possible; forwarded and upstream_error only for an aggregate
+// whose flag is on. Only static values.
+func seedAuthProxySeries(counter metric.Int64Counter, cfg AuthProxyConfig, registered map[AuthAggregate]bool) {
 	for _, aggregate := range AuthAggregates {
+		if !registered[aggregate] {
+			continue
+		}
 		outcomes := []string{outcomeLocal}
 		if cfg.Enabled(aggregate) {
 			outcomes = []string{outcomeForwarded, outcomeLocal, outcomeUpstreamError}
@@ -267,14 +293,16 @@ func seedAuthProxySeries(counter metric.Int64Counter, cfg AuthProxyConfig) {
 	}
 }
 
-// authProxyRequestSeeds are the proxied routes whose per-route request series the public listener seeds at 0 (httpapi.RequestSeed): the
-// 15 forwardable auth patterns, not every route.
-func authProxyRequestSeeds() []httpapi.RequestSeed {
+// authProxyRequestSeeds are the registered proxied routes whose per-route request series the public listener seeds at 0
+// (httpapi.RequestSeed): routes (the set the mux is built from) filtered to the forwardable auth patterns, matched on method AND pattern.
+func authProxyRequestSeeds(routes []httpapi.Route) []httpapi.RequestSeed {
 	var seeds []httpapi.RequestSeed
-	for _, routes := range []map[string]AuthAggregate{sessionProxyRoutes, routeProxyRoutes} {
-		for key := range routes {
-			method, pattern, _ := strings.Cut(key, " ")
-			seeds = append(seeds, httpapi.RequestSeed{Method: method, Route: pattern})
+	seen := map[string]bool{}
+	for _, route := range routes {
+		key := route.Method + " " + route.Pattern
+		if _, ok := proxiedRouteKeys[key]; ok && !seen[key] {
+			seen[key] = true
+			seeds = append(seeds, httpapi.RequestSeed{Method: route.Method, Route: route.Pattern})
 		}
 	}
 	sort.Slice(seeds, func(i, j int) bool {

@@ -21,12 +21,10 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 )
 
-// archivedChMigrate is the archive the head baseline replaced (CHAOS-11751).
-var archivedChMigrate = filepath.Join("..", "..", "chmigrate", "archive")
-
 func loadArchive(t *testing.T) (chmigrate.Baseline, []chmigrate.ChainFile) {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(archivedChMigrate, "baseline-098", "head.json"))
+	// The archive the head baseline replaced (CHAOS-11751).
+	raw, err := os.ReadFile(filepath.Join("..", "..", "chmigrate", "archive", "baseline-098", "head.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +32,7 @@ func loadArchive(t *testing.T) (chmigrate.Baseline, []chmigrate.ChainFile) {
 	if err := json.Unmarshal(raw, &baseline); err != nil {
 		t.Fatal(err)
 	}
-	paths, err := filepath.Glob(filepath.Join(archivedChMigrate, "sql", "*.sql"))
+	paths, err := filepath.Glob(filepath.Join("..", "..", "chmigrate", "archive", "sql", "*.sql"))
 	if err != nil || len(paths) == 0 {
 		t.Fatalf("the archived chain holds %d files (%v)", len(paths), err)
 	}

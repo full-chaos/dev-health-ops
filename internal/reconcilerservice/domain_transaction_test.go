@@ -270,10 +270,10 @@ func TestDomainPostgresRunsTheCachedPostureCheckWhenOffered(t *testing.T) {
 }
 
 type syncBuffer struct {
-	mu     sync.Mutex
-	buffer bytes.Buffer
-	wake   chan struct{}
-	armed  chan struct{}
+	mu      sync.Mutex
+	buffer  bytes.Buffer
+	wake    chan struct{}
+	onArmed func()
 }
 
 func (b *syncBuffer) Write(p []byte) (int, error) {
@@ -301,11 +301,8 @@ func (b *syncBuffer) waitFor(ctx context.Context, want string) bool {
 		}
 		wake := b.wake
 		b.mu.Unlock()
-		if b.armed != nil {
-			select {
-			case b.armed <- struct{}{}:
-			default:
-			}
+		if b.onArmed != nil {
+			b.onArmed()
 		}
 		select {
 		case <-wake:

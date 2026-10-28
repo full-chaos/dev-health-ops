@@ -430,6 +430,12 @@ func (h *handlers) updateUser(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	var errs pybody.Errors
+	patch := parseUserUpdate(&errs, bodyFromContext(ctx))
+	if len(errs) > 0 {
+		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
+		return
+	}
 	existing, err := h.store.fullUserByID(ctx, targetID)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "admin: update user lookup failed", "error", err)
@@ -449,13 +455,6 @@ func (h *handlers) updateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body := bodyFromContext(ctx)
-	var errs pybody.Errors
-	patch := parseUserUpdate(&errs, body)
-	if len(errs) > 0 {
-		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
-		return
-	}
 	h.superuserGuardedWrite(ctx, w, user, patch.IsSuperuser, "update_user", func(g *superuserTx) func() {
 		if g.refuse(targetID) {
 			return nil

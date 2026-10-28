@@ -1,6 +1,10 @@
 package pyjson
 
-import "unicode/utf8"
+import (
+	"unicode/utf8"
+
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+)
 
 // TextClass names the kind of text a field holds; each class refuses its own set of forms.
 type TextClass int
@@ -29,6 +33,11 @@ const (
 // BadTextForm returns the first refused form in text (WTF-8, as the body decoder keeps it), or TextFormNone. It is
 // the one input rule go-api and auth-service share for email, display text and URL fields.
 func BadTextForm(class TextClass, text string) TextForm {
+	if class == ClassEmail {
+		// The address validator trims whitespace-like characters at either edge (Python str.strip), so a character
+		// trimmed there never reaches a stored address.
+		text = pythonparity.Strip(text)
+	}
 	if HasSurrogate(text) {
 		return TextFormLoneSurrogate
 	}

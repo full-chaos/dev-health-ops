@@ -401,3 +401,16 @@ func TestALowercaseKeyIsOutOfScope(t *testing.T) {
 	body := "func helper() {\n\ts := time.Now()\n\tos.Stderr.WriteString(\"stop_ms=\" + strconv.FormatInt(time.Since(s).Milliseconds(), 10))\n}\n\nfunc TestLower(t *testing.T) {\n\tvar ms int64\n\tfmt.Sscanf(text, \"stop_ms=%d\", &ms)\n\tif ms > 4000 {\n\t\tt.Fatal(\"x\")\n\t}\n}\n"
 	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil))
 }
+
+// A reader helper may wrap one parsing helper: one level of call depth is followed, two are not (stated limit).
+const nestedParser = "func parseMillis(out string) int {\n\tn, _ := strconv.Atoi(out)\n\treturn n\n}\n\n"
+
+func TestAHelperThatCallsAParsingHelperIsAReader(t *testing.T) {
+	body := carriedHelper + nestedParser + "func readKey(out, key string) int {\n\treturn parseMillis(out)\n}\n\nfunc TestNested(t *testing.T) {\n\tms := readKey(text, \"STOP_MS\")\n\tif ms > 4000 {\n\t\tt.Fatal(ms)\n\t}\n}\n"
+	wantOne(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil), "TestNested")
+}
+
+func TestTwoLevelsOfHelperCallsAreOutOfScope(t *testing.T) {
+	body := carriedHelper + nestedParser + "func readKey(out, key string) int {\n\treturn parseMillis(out)\n}\n\nfunc readKeyTwice(out, key string) int {\n\treturn readKey(out, key)\n}\n\nfunc TestDeep(t *testing.T) {\n\tms := readKeyTwice(text, \"STOP_MS\")\n\tif ms > 4000 {\n\t\tt.Fatal(ms)\n\t}\n}\n"
+	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil))
+}

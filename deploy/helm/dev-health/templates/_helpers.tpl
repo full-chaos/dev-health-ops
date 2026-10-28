@@ -881,7 +881,13 @@ Call with the entry.
 {{- if not (kindIs "map" $ib) -}}bad:ipBlock is not an object
 {{- else -}}
 {{- $shape := include "dev-health.authMailCidrShape" $ib.cidr -}}
+{{- $exceptShape := "" -}}
+{{- if hasKey $ib "except" -}}
+{{- if not (kindIs "slice" $ib.except) -}}{{- $exceptShape = "ipBlock.except is not a list" -}}
+{{- else -}}{{- range $ib.except -}}{{- $es := include "dev-health.authMailCidrShape" . -}}{{- if and $es (not $exceptShape) -}}{{- $exceptShape = printf "ipBlock.except entry %s %s" (toString .) $es -}}{{- end -}}{{- end -}}{{- end -}}
+{{- end -}}
 {{- if $shape -}}bad:ipBlock.cidr {{ $shape }}
+{{- else if $exceptShape -}}bad:{{ $exceptShape }}
 {{- else if hasSuffix "/0" $ib.cidr -}}
 {{- if has $ib.cidr (list "0.0.0.0/0" "::/0") -}}wide{{- else -}}bad:ipBlock.cidr with prefix 0 must be exactly 0.0.0.0/0 or ::/0{{- end -}}
 {{- else -}}
@@ -921,15 +927,13 @@ IPv4 addresses.
 {{- $cidr := .peer.ipBlock.cidr -}}
 {{- $required := ternary (list "fc00::/7" "fe80::/10" "::1/128" "::ffff:0:0/96" "64:ff9b::/96") (list "10.0.0.0/8" "172.16.0.0/12" "192.168.0.0/16" "100.64.0.0/10" "169.254.0.0/16" "127.0.0.0/8") (contains ":" $cidr) -}}
 {{- $except := list -}}
-{{- $badExcept := "" -}}
-{{- range (.peer.ipBlock.except | default list) }}{{- $shape := include "dev-health.authMailCidrShape" . }}{{- if $shape }}{{- $badExcept = printf "except entry %s %s" (toString .) $shape }}{{- else }}{{- $except = append $except (lower .) }}{{- end }}{{- end -}}
+{{- range (.peer.ipBlock.except | default list) }}{{- $except = append $except (lower .) }}{{- end -}}
 {{- $missing := list -}}
 {{- range $required }}{{- if not (has . $except) }}{{- $missing = append $missing . }}{{- end }}{{- end -}}
 {{- $ports := .ports | default list -}}
 {{- $port := dict -}}
 {{- if eq (len $ports) 1 }}{{- $port = index $ports 0 }}{{- end -}}
-{{- if $badExcept -}}ipBlock.{{ $badExcept }}
-{{- else if not (and (eq (len $ports) 1) (kindIs "map" $port) (eq (toString (default "TCP" $port.protocol)) "TCP") (hasKey $port "port") (eq (int $port.port) 443) (not (hasKey $port "endPort"))) -}}an ipBlock with prefix 0 is accepted only with authService.networkPolicy.egress.mail.ports of TCP 443 alone
+{{- if not (and (eq (len $ports) 1) (kindIs "map" $port) (eq (toString (default "TCP" $port.protocol)) "TCP") (hasKey $port "port") (eq (int $port.port) 443) (not (hasKey $port "endPort"))) -}}an ipBlock with prefix 0 is accepted only with authService.networkPolicy.egress.mail.ports of TCP 443 alone
 {{- else if $missing -}}ipBlock.cidr {{ $cidr }} needs except entries {{ join ", " $missing }}
 {{- end -}}
 {{- end -}}

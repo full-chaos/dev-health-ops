@@ -16,13 +16,13 @@ import (
 
 // archivedRevisions are the revisions below the squashed baseline that a live database may still record: the old
 // baseline 0138 and every archived chain revision but the last (the last is the baseline itself).
-var archivedRevisions = func() []string {
+func archivedRevisions() []string {
 	out := []string{"0138"}
 	for revision := 139; revision < 162; revision++ {
 		out = append(out, fmt.Sprintf("%04d", revision))
 	}
 	return out
-}()
+}
 
 // catalogSnapshot is what a run that executes no DDL leaves unchanged: alembic_version, and every catalog row of a
 // relation, function or type outside the system schemas with the transaction that last wrote it.
@@ -99,7 +99,7 @@ func TestADatabaseAtAnArchivedRevisionIsRefusedAsBelowTheBaseline(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, revision := range archivedRevisions {
+	for _, revision := range archivedRevisions() {
 		archivedUpgradeTo(t, ctx, conn, revision)
 		before := catalogSnapshot(t, ctx, conn)
 		_, err := pgmigrate.Upgrade(ctx, conn, baseline, chain)

@@ -35,3 +35,19 @@ func TestEdDSAClassWithTheSessionRoutesNeedsTheSessionRouteAudience(t *testing.T
 		}
 	}
 }
+
+// With no session secrets no session route is mounted, so there is nothing for
+// the audience to end.
+func TestTheAudienceRuleDoesNotApplyWithoutTheSessionRoutes(t *testing.T) {
+	env := eddsaEnv()
+	delete(env, EnvAccessTokenSecret)
+	delete(env, EnvSessionSuccessorKey)
+	env[EnvAccessTokenAudience] = "dev-health-api"
+	cfg, err := Load(Spec{LookupEnv: lookupFrom(env)})
+	if err != nil {
+		t.Fatalf("eddsa without the session routes: %v", err)
+	}
+	if cfg.Session.Enabled {
+		t.Fatal("the session routes are enabled without their secrets")
+	}
+}

@@ -98,6 +98,9 @@ func TestUsersReconcileMembershipClasses(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.seedMember(t, ctx, org, publicOnly, "viewer")
+	// A public user the auth schema does not hold is out of scope (users-reconcile counts it as missing_in_auth).
+	notInAuth := e.seed(t, ctx, uniq("mr"), true, true)
+	e.seedMember(t, ctx, org, notInAuth, "member")
 	e.removeAuthMembership(t, ctx, org, inactive)
 	rep := e.memberDiffs(t, ctx)
 	if d := countsOf(rep).minus(base); d != (memberCounts{publicMissing: 1, inactive: 1, roleDiff: 1, authMissing: 1}) {
@@ -111,8 +114,8 @@ func TestUsersReconcileMembershipClasses(t *testing.T) {
 	if _, err := e.admin.Exec(ctx, `DELETE FROM public.memberships WHERE org_id = $1 AND user_id = $2`, org, inactive); err != nil {
 		t.Fatal(err)
 	}
-	if d := countsOf(e.memberDiffs(t, ctx)).minus(base); d.inactive != 0 {
-		t.Fatalf("after the public removal: %+v, want no inactive diff", d)
+	if d := countsOf(e.memberDiffs(t, ctx)).minus(base); d != (memberCounts{publicMissing: 1, roleDiff: 1, authMissing: 1}) {
+		t.Fatalf("after the public removal: %+v, want no inactive diff and the other classes unchanged", d)
 	}
 }
 

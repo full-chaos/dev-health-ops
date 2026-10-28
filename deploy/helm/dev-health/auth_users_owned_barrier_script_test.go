@@ -840,3 +840,23 @@ func TestBarrierFullnameRuleNamesTheTrustedStatefulSet(t *testing.T) {
 		})
 	}
 }
+
+// A server container is trusted for a pod only. A Job or a CronJob that carries a go-api or auth-service server container
+// (here the auth-service init container, which runs `sh -ec`) is scanned like any other and STOPs the barrier.
+func TestBarrierNeverTrustsAJobOrCronJobWithAServerContainer(t *testing.T) {
+	spec := map[string]any{"initContainers": []any{bwAuthInit()}, "containers": []any{bwServerAuth("")}}
+	for _, kind := range []string{"job", "cronjob"} {
+		t.Run(kind, func(t *testing.T) {
+			w := bwNewWorld()
+			if kind == "job" {
+				w.jobs = append(w.jobs, bwJobItem("t1", spec))
+			} else {
+				w.cronJobs = append(w.cronJobs, bwCronJobItem("t1", spec))
+			}
+			r := runBarrier(t, w.files(), nil, "up-go-api")
+			if bwPassed(r) || r.rc == 0 || !strings.Contains(r.stderr, "t1") {
+				t.Fatalf("a %s with a server container was trusted: rc=%d stdout=%q stderr=%q", kind, r.rc, r.stdout, r.stderr)
+			}
+		})
+	}
+}

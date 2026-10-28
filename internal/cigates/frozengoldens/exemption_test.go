@@ -22,7 +22,8 @@ const (
 	plantLegacySource    = "internal/legacy/old_test.go"
 )
 
-// squashTipManifest is the manifest the squash fixture's change branch holds.
+// squashTipManifest is the manifest the squash fixture's change branch holds: it lists one file outside the guarded
+// dirs that the base manifest does not, so that file is a guard input through the HEAD manifest alone.
 func squashTipManifest() string {
 	return "file\t" + plantGolden + "\t" + sum("{}") + "\nfile\t" + plantListedElsewhere + "\t" + sum("[]") + "\n" +
 		"pins\t" + plantSource + "\t" + strings.Repeat("a", 64) + "\topens=1,finishes=0,skips=0\n" +
@@ -50,7 +51,7 @@ func writeAt(t *testing.T, repo, path, body string) {
 func squashRepo(t *testing.T) (string, string, Exemption) {
 	t.Helper()
 	repo := t.TempDir()
-	baseManifest := "file\t" + plantGolden + "\t" + sum("{}") + "\nfile\t" + plantListedElsewhere + "\t" + sum("[]") + "\n" +
+	baseManifest := "file\t" + plantGolden + "\t" + sum("{}") + "\n" +
 		"pins\t" + plantSource + "\t" + strings.Repeat("a", 64) + "\topens=2,finishes=0,skips=0\n" +
 		"pins\t" + plantSource2 + "\t" + strings.Repeat("b", 64) + "\topens=1,finishes=0,skips=0\n" +
 		"pins\t" + plantLegacySource + "\t" + strings.Repeat("d", 64) + "\topens=1,finishes=0,skips=0\n"

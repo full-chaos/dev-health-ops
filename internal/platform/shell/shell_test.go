@@ -946,6 +946,19 @@ func TestBlankFlagDoesNotShadowTheEnvironment(t *testing.T) {
 // (the api and the query-api installed a MeterProvider; the scheduler, worker,
 // reconciler and stream runner did not, so their instruments were dropped).
 func TestShellExportsOTelInstrumentsOnMetrics(t *testing.T) {
+	exportOTelProbe(t)
+}
+
+// TestShellExportsOTelInstrumentsOnMetricsTwiceInOneProcess pins that the probe
+// holds when the meter provider (installed once per process) outlives a run, as
+// it does under go test -count=N.
+func TestShellExportsOTelInstrumentsOnMetricsTwiceInOneProcess(t *testing.T) {
+	exportOTelProbe(t)
+	exportOTelProbe(t)
+}
+
+func exportOTelProbe(t *testing.T) {
+	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)

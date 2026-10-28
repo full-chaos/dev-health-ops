@@ -229,15 +229,17 @@ func MergeBase(dir string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// Exemption clears the git half for ONE exact change set, keyed to content: the base tree's manifest and head.json,
-// the archive manifest at HEAD, the exact set of guarded paths the change set touches, and the content of every one
-// of those paths at HEAD (ContentDigest). A change set that differs in any of them gets the guard's normal verdict.
+// Exemption waives the git half's findings of ONE exact change set, keyed to content: the base tree's manifest and
+// head.json, the archive manifest at HEAD, the exact set of guarded paths the change set touches, and the content of
+// every one of those paths at HEAD (ContentDigest). A matching exemption waives only the changed-path findings for its
+// Paths and the below-base findings whose exact text is in WaivedBelowBase; every other finding stands.
 type Exemption struct {
 	BaseManifestSHA256    string
 	BaseHeadJSONSHA256    string
 	ArchiveManifestSHA256 string
 	Paths                 []string
 	ContentSHA256         string
+	WaivedBelowBase       []string
 	Cites                 string
 }
 
@@ -258,7 +260,7 @@ func ContentDigest(root string, paths []string) (string, error) {
 	return hex.EncodeToString(digest.Sum(nil)), nil
 }
 
-// Exemptions are the change sets the git half clears.
+// Exemptions are the change sets whose own findings the git half waives.
 var Exemptions []Exemption
 
 // matches reports whether the change set under root against base is exactly the one e names.
@@ -304,11 +306,20 @@ func GitHalf(root, base string, m Manifest, exemptions []Exemption) ([]string, e
 	if err != nil {
 		return nil, err
 	}
+	waivedPaths, waivedBelowBase := map[string]bool{}, map[string]bool{}
 	for _, exemption := range exemptions {
-		if ok, err := exemption.matches(root, base, changed); err != nil {
+		ok, err := exemption.matches(root, base, changed)
+		if err != nil {
 			return nil, err
-		} else if ok {
-			return nil, nil
+		}
+		if !ok {
+			continue
+		}
+		for _, path := range exemption.Paths {
+			waivedPaths[path] = true
+		}
+		for _, problem := range exemption.WaivedBelowBase {
+			waivedBelowBase[problem] = true
 		}
 	}
 	var problems []string
@@ -318,11 +329,15 @@ func GitHalf(root, base string, m Manifest, exemptions []Exemption) ([]string, e
 	}
 	if ok {
 		for _, problem := range CheckNotBelowBase(root, baseManifest) {
-			problems = append(problems, "a frozen comparison was removed against the base: "+problem)
+			if !waivedBelowBase[problem] {
+				problems = append(problems, "a frozen comparison was removed against the base: "+problem)
+			}
 		}
 	}
 	for _, path := range changed {
-		problems = append(problems, "this change set edits a frozen golden, a pin source list or the manifest: "+path)
+		if !waivedPaths[path] {
+			problems = append(problems, "this change set edits a frozen golden, a pin source list or the manifest: "+path)
+		}
 	}
 	return problems, nil
 }

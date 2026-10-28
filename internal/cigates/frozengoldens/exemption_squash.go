@@ -3,14 +3,25 @@ package frozengoldens
 // The baseline squash (D6430, CHAOS-11743): the one change set that moves the PostgreSQL baseline from 0138 to 0162,
 // rewrites the manifest and archives the chain. Keyed to content (the base's manifest and baseline, and every byte of
 // the 53 paths at HEAD), it matches only on a base that still holds the pre-squash manifest and baseline, so it is
-// inert once the squash is on main.
+// inert once the squash is on main. It waives only the findings of those 53 paths and the eight exact below-base
+// lines the squash makes; any other finding of the git half stands.
 func init() {
 	Exemptions = append(Exemptions, Exemption{
 		BaseManifestSHA256:    "79ffd4e60d3831026afbde6a987d862b382832039a43aae3657a4949c8ee1ca1",
 		BaseHeadJSONSHA256:    "d2fcd166d6f4c2e81d98c55cdc31bac41a3366170d976ffaa95beeac01f18ce2",
 		ArchiveManifestSHA256: "518cf1b5fbb584bb6aeca817d0cd5fb0e32984730cf92324037cd3ea893c7ab4",
 		ContentSHA256:         "0530c660e0d757b6c26cff31de213a07d4afb046bc9840898ed260d7c0340aad",
-		Cites:                 "D6430 / CHAOS-11743",
+		WaivedBelowBase: []string{
+			"internal/pgmigrate/alias_integration_test.go: a test source the base manifest pins is missing",
+			"internal/pgmigrate/baseline_integration_test.go: golden-open calls went from 1 to 0 against the base",
+			"internal/pgmigrate/downgrade_integration_test.go: golden-open calls went from 1 to 0 against the base",
+			"internal/pgmigrate/history_integration_test.go: a test source the base manifest pins is missing",
+			"internal/pgmigrate/hook_upgrade_integration_test.go: a test source the base manifest pins is missing",
+			"internal/pgmigrate/old_script_heads_test.go: a test source the base manifest pins is missing",
+			"internal/pgmigrate/preflight_integration_test.go: golden-open calls went from 1 to 0 against the base",
+			"internal/pgmigrate/revisions_integration_test.go: a test source the base manifest pins is missing",
+		},
+		Cites: "D6430 / CHAOS-11743",
 		Paths: []string{
 			"internal/cigates/frozengoldens/frozen_goldens.tsv",
 			"internal/pgmigrate/archive/README.md",

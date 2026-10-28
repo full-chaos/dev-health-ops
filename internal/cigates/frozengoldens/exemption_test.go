@@ -81,6 +81,7 @@ func squashRepo(t *testing.T) (string, string, Exemption) {
 		ArchiveManifestSHA256: sum("0139\tabc\t0139_a.sql\n"),
 		Paths:                 paths,
 		ContentSHA256:         content,
+		WaivedBelowBase:       []string{plantSource + ": golden-open calls went from 2 to 1 against the base"},
 		Cites:                 "D6430 / CHAOS-11743",
 	}
 }

@@ -110,6 +110,13 @@ VALUES ($1, $2, 'active', 'member', `+joinedAt+`, `+createdAt+`, `+createdAt+`)`
 	}
 }
 
+func orgText(org *string) string {
+	if org == nil {
+		return "<nil>"
+	}
+	return *org
+}
+
 // AuditOrganization runs as the auth runtime role, which holds no SELECT on public.memberships.
 func TestAuditOrganizationRunsAsTheRuntimeRole(t *testing.T) {
 	ctx := context.Background()
@@ -124,7 +131,7 @@ func TestAuditOrganizationRunsAsTheRuntimeRole(t *testing.T) {
 	env.membership(t, ctx, p, first, "now() - interval '2 days'")
 	got, err := identity.AuditOrganization(ctx, env.runtime, `"auth"`, p)
 	if err != nil || got == nil || *got != first.String() {
-		t.Fatalf("AuditOrganization = %v, %v; want %s", got, err, first)
+		t.Fatalf("AuditOrganization = %s, %v; want %s", orgText(got), err, first)
 	}
 }
 
@@ -349,7 +356,7 @@ func TestAuditOrganizationFollowsTheLoginChoiceForBackfilledMemberships(t *testi
 	env.membershipJoined(t, ctx, p, noJoin, "NULL", "now() - interval '2 days'")
 	got, err := identity.AuditOrganization(ctx, env.runtime, `"auth"`, p)
 	if err != nil || got == nil || *got != joinedFirst.String() {
-		t.Fatalf("AuditOrganization = %v, %v; want %s (the earliest join, though its created_at is the latest)", got, err, joinedFirst)
+		t.Fatalf("AuditOrganization = %s, %v; want %s (the earliest join, though its created_at is the latest)", orgText(got), err, joinedFirst)
 	}
 
 	q := env.owner(t, ctx)
@@ -357,6 +364,6 @@ func TestAuditOrganizationFollowsTheLoginChoiceForBackfilledMemberships(t *testi
 	env.membershipJoined(t, ctx, q, noJoin, "NULL", "now() - interval '2 days'")
 	got, err = identity.AuditOrganization(ctx, env.runtime, `"auth"`, q)
 	if err != nil || got == nil || *got != noJoin.String() {
-		t.Fatalf("AuditOrganization = %v, %v; want %s (no joined_at: created_at is the join time)", got, err, noJoin)
+		t.Fatalf("AuditOrganization = %s, %v; want %s (no joined_at: created_at is the join time)", orgText(got), err, noJoin)
 	}
 }

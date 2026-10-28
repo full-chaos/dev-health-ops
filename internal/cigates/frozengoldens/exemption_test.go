@@ -175,3 +175,29 @@ func TestTheGitHalfSeesAFileAddedUnderTheBaselineOrTheArchive(t *testing.T) {
 		})
 	}
 }
+
+// The exemption pins the content of the change set too: the same guarded paths with other bytes (an archived down
+// file edited, or a changed baseline re-pinned in the manifest) is another change set, and the guard refuses it.
+func TestTheSquashExemptionDoesNotClearOtherContentUnderTheSamePaths(t *testing.T) {
+	for name, edit := range map[string]func(t *testing.T, repo string){
+		"an edited archived file": func(t *testing.T, repo string) {
+			writeAt(t, repo, plantArchiveSQL, "-- Revision 0139 (down_revision 0138)\nDROP TABLE users;\n")
+		},
+		"a changed baseline, re-pinned in the manifest": func(t *testing.T, repo string) {
+			writeAt(t, repo, plantBaseline, "new head with another seed row")
+			writeAt(t, repo, ManifestPath, "file\t"+plantBaseline+"\t"+sum("new head with another seed row")+"\nfile\t"+plantGolden+"\t"+sum("{}")+"\npins\t"+plantSource+"\t"+strings.Repeat("a", 64)+"\topens=1,finishes=0,skips=0\n")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			repo, base, exemption := squashRepo(t)
+			if problems := gitHalf(t, repo, base, []Exemption{exemption}); len(problems) > 0 {
+				t.Fatalf("the squash change set itself is refused: %v", problems)
+			}
+			edit(t, repo)
+			git(t, repo, "commit", "-q", "-am", "same paths, other content")
+			if problems := gitHalf(t, repo, base, []Exemption{exemption}); len(problems) == 0 {
+				t.Errorf("the exemption clears %s", name)
+			}
+		})
+	}
+}

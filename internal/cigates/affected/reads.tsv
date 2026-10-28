@@ -12,6 +12,7 @@ deploy/helm/dev-health	test	compose.yml
 deploy/helm/dev-health	test	deploy
 deploy/helm/dev-health	test	docs
 internal/api/githubapp	test	ci
+internal/api/session	test	ci
 internal/api/sso	test	ci
 internal/api/webhookintake	test	contracts
 internal/apiservice	code	contracts

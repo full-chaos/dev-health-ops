@@ -312,7 +312,7 @@ func (s loginSessions) Create(ctx context.Context, principalID uuid.UUID, _ *uui
 	if err != nil {
 		return session.Issued{}, err
 	}
-	membership := chooseMembership(memberships, attempt.requested)
+	membership := s.h.chooseLoginMembership(ctx, memberships, attempt.requested)
 	if membership == nil && len(memberships) > 0 {
 		return session.Issued{}, &notMemberError{principal: principalID}
 	}

@@ -102,10 +102,7 @@ func TestProviderUnitAllArtifactsUnreadableTerminalizesOnFirstAttempt(t *testing
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	t.Cleanup(cancel)
 
-	postgres, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	postgres := pgschema.Start(ctx, t)
 	t.Cleanup(func() {
 		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer closeCancel()
@@ -118,7 +115,6 @@ func TestProviderUnitAllArtifactsUnreadableTerminalizesOnFirstAttempt(t *testing
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	pgschema.Apply(ctx, t, pool)
 
 	clickhouse, err := containers.StartClickHouse(ctx)
 	if err != nil {

@@ -118,11 +118,13 @@ func tracedService(t *testing.T, env map[string]string, paths ...string) ([]expo
 		env = brokenEnvironment(t, ports[0], ports[1])
 	}
 	logs, stop := runService(t, env)
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := serviceClient(10 * time.Second)
 	defer client.CloseIdleConnections()
 	api := "http://" + env[authconfig.EnvAPIAddress]
 	operator := "http://" + env[authconfig.EnvOperatorAddress]
 	awaitResponse(t, client, operator+"/healthz").Body.Close()
+	// The API listener starts after the operator listener: wait for it on a probe path, which opens no span.
+	awaitResponse(t, client, api+"/health").Body.Close()
 	for _, path := range paths {
 		request, err := http.NewRequest(http.MethodGet, api+path, nil)
 		if err != nil {
@@ -244,7 +246,7 @@ func TestTracingOffExportsNothing(t *testing.T) {
 			env := brokenEnvironment(t, ports[0], ports[1])
 			env[authconfig.EnvLogLevel] = "info"
 			logs, stop := runService(t, env)
-			client := &http.Client{Timeout: 10 * time.Second}
+			client := serviceClient(10 * time.Second)
 			defer client.CloseIdleConnections()
 			awaitResponse(t, client, "http://"+ports[1]+"/healthz").Body.Close()
 			response := awaitResponse(t, client, "http://"+ports[0]+"/v1/unmatched-probe")
@@ -296,7 +298,7 @@ func TestTheStartupLineNamesTheCollectorByHostAndPortOnly(t *testing.T) {
 			env := brokenEnvironment(t, ports[0], ports[1])
 			env[authconfig.EnvLogLevel] = "info"
 			logs, stop := runService(t, env)
-			client := &http.Client{Timeout: 10 * time.Second}
+			client := serviceClient(10 * time.Second)
 			defer client.CloseIdleConnections()
 			awaitResponse(t, client, "http://"+ports[1]+"/healthz").Body.Close()
 			if code := stop(); code != 0 {
@@ -329,7 +331,7 @@ func TestWithNoOTELVariablesTheServiceStartsWithTheDefaults(t *testing.T) {
 	env := brokenEnvironment(t, ports[0], ports[1])
 	env[authconfig.EnvLogLevel] = "info"
 	logs, stop := runService(t, env)
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := serviceClient(10 * time.Second)
 	defer client.CloseIdleConnections()
 	awaitResponse(t, client, "http://"+ports[1]+"/healthz").Body.Close()
 	if code := stop(); code != 0 {
@@ -352,7 +354,7 @@ func TestAMalformedCollectorEndpointLeavesTracingOffAndUnnamed(t *testing.T) {
 	env := brokenEnvironment(t, ports[0], ports[1])
 	env[authconfig.EnvLogLevel] = "info"
 	logs, stop := runService(t, env)
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := serviceClient(10 * time.Second)
 	defer client.CloseIdleConnections()
 	awaitResponse(t, client, "http://"+ports[1]+"/healthz").Body.Close()
 	if code := stop(); code != 0 {

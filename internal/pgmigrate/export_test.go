@@ -2,8 +2,11 @@ package pgmigrate
 
 import (
 	"context"
+	"fmt"
 	"io/fs"
 	"log/slog"
+	"regexp"
+	"strconv"
 	"testing"
 	"testing/fstest"
 
@@ -19,8 +22,72 @@ func UseChainFS(t testing.TB, fsys fs.FS) {
 	t.Cleanup(func() { chainFS.Store(previous) })
 }
 
+// fixtureHead is the head the planted fixtures (testdata/postfreeze, the plants tests write) are numbered above:
+// their first revision is fixtureHead+1. PlantedChainFS moves them to sit above the live head, so a released revision
+// never collides with a plant.
+const fixtureHead = 162
+
+// LiveHead is the application head of the embedded build: the last revision of the embedded chain, or the
+// baseline's application head while the chain is empty.
+func LiveHead(t testing.TB) string {
+	t.Helper()
+	head := ""
+	entries, err := fs.ReadDir(chainFiles, "sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if match := chainName.FindStringSubmatch(entry.Name()); match != nil && !entry.IsDir() && (head == "" || revisionLess(head, match[1])) {
+			head = match[1]
+		}
+	}
+	if head == "" {
+		baseline, err := LoadBaseline()
+		if err != nil {
+			t.Fatal(err)
+		}
+		head = applicationHead(baseline)
+	}
+	return head
+}
+
+// PlantedRevision is where fixture revision n (written above fixtureHead) sits once planted: n moved by the live
+// head's distance from fixtureHead.
+func PlantedRevision(t testing.TB, n int) string {
+	t.Helper()
+	live, err := strconv.Atoi(LiveHead(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fmt.Sprintf("%04d", n-fixtureHead+live)
+}
+
+var (
+	plantedName   = regexp.MustCompile(`^(sql/(?:down/)?)([0-9]{4})(_.*)$`)
+	plantedHeader = regexp.MustCompile(`\b(Revision|down_revision) ([0-9]{4})\b`)
+)
+
+func movePlant(t testing.TB, name string, data []byte) (string, []byte) {
+	shift := func(revision string) string {
+		n, err := strconv.Atoi(revision)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return PlantedRevision(t, n)
+	}
+	if match := plantedName.FindStringSubmatch(name); match != nil {
+		name = match[1] + shift(match[2]) + match[3]
+	}
+	data = plantedHeader.ReplaceAllFunc(data, func(header []byte) []byte {
+		match := plantedHeader.FindSubmatch(header)
+		return []byte(string(match[1]) + " " + shift(string(match[2])))
+	})
+	return name, data
+}
+
 // PlantedChainFS is the embedded chain (the revisions above the baseline) plus every file of extra (the same
-// layout), which is how a test plants a revision without touching the real sql dir.
+// layout, numbered above fixtureHead), moved to sit above the live head, which is how a test plants a revision
+// without touching the real sql dir.
 func PlantedChainFS(t testing.TB, extra fs.FS) fs.FS {
 	t.Helper()
 	out := fstest.MapFS{}
@@ -50,6 +117,7 @@ func PlantedChainFS(t testing.TB, extra fs.FS) fs.FS {
 			if err != nil {
 				return err
 			}
+			name, data = movePlant(t, name, data)
 			out[name] = &fstest.MapFile{Data: data}
 			return nil
 		})

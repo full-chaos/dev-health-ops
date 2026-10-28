@@ -135,8 +135,9 @@ func schemaShape(t *testing.T, uri string) string {
 	return strings.Join(lines, "\n")
 }
 
-// plantedWalk is four revisions planted above the baseline (testdata/postfreeze/walk), each with its down file; the
-// down file of 0164 refuses while planted_walk_b holds a row.
+// plantedWalk is four revisions planted above the live head (testdata/postfreeze/walk, written as 0163..0166 and
+// moved by PlantedChainFS), each with its down file; the down file of the second refuses while planted_walk_b holds a
+// row.
 func plantedWalk(t *testing.T) {
 	t.Helper()
 	pgmigrate.UsePlantedChain(t, os.DirFS("testdata/postfreeze/walk"))
@@ -277,15 +278,16 @@ func TestDowngradeRefusalsLeaveTheDatabaseAlone(t *testing.T) {
 		t.Errorf("downgrade %s from chain position 2: exit %d stderr %s", top, code, stderr)
 	}
 	// An explicit target leaves 0066 alone on a two-head database.
-	if code, _, stderr := goDowngrade(t, head, "0164"); code != cli.ExitOK {
-		t.Fatalf("downgrade 0164: exit %d %s", code, stderr)
+	second := pgmigrate.PlantedRevision(t, 164)
+	if code, _, stderr := goDowngrade(t, head, second); code != cli.ExitOK {
+		t.Fatalf("downgrade %s: exit %d %s", second, code, stderr)
 	}
-	if got := alembicVersions(t, head); !reflect.DeepEqual(got, []string{"0066", "0164"}) {
-		t.Fatalf("downgrade 0164 left alembic_version %v, want 0066 and 0164", got)
+	if got := alembicVersions(t, head); !reflect.DeepEqual(got, []string{"0066", second}) {
+		t.Fatalf("downgrade %s left alembic_version %v, want 0066 and %s", second, got, second)
 	}
 	// the state refusals on a database that is not a chain database.
 	empty := databaseURI(t, d.instance.URI, scratchDatabase(t, d.admin))
-	if code, _, stderr := goDowngrade(t, empty, "0163"); code != cli.ExitFailure || !strings.Contains(stderr, "no_revision_recorded") {
+	if code, _, stderr := goDowngrade(t, empty, pgmigrate.PlantedRevision(t, 163)); code != cli.ExitFailure || !strings.Contains(stderr, "no_revision_recorded") {
 		t.Errorf("empty database: exit %d %s", code, stderr)
 	}
 	ahead := d.at(t, len(chain))
@@ -293,15 +295,15 @@ func TestDowngradeRefusalsLeaveTheDatabaseAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	aheadShape := schemaShape(t, ahead)
-	if code, _, stderr := goDowngrade(t, ahead, "0163"); code != cli.ExitFailure || !strings.Contains(stderr, "ahead_of_build") || schemaShape(t, ahead) != aheadShape {
+	if code, _, stderr := goDowngrade(t, ahead, pgmigrate.PlantedRevision(t, 163)); code != cli.ExitFailure || !strings.Contains(stderr, "ahead_of_build") || schemaShape(t, ahead) != aheadShape {
 		t.Errorf("ahead-of-build database: exit %d %s", code, stderr)
 	}
 }
 
 // Alembic runs the whole downgrade walk in one transaction (env.py wraps it in
 // context.begin_transaction()), so a step that fails rolls back every step before it;
-// dho does the same. A row in planted_walk_b makes 0164's down refuse after 0166 and 0165
-// were reverted: nothing may change, and the error says so.
+// dho does the same. A row in planted_walk_b makes the second planted revision's down refuse after the fourth and the
+// third were reverted: nothing may change, and the error says so.
 func TestDowngradeFailureMidWalkRollsBackTheWholeWalk(t *testing.T) {
 	plantedWalk(t)
 	d := newDownInstance(t)
@@ -312,9 +314,10 @@ func TestDowngradeFailureMidWalkRollsBackTheWholeWalk(t *testing.T) {
 	}
 	before := schemaShape(t, uri)
 	head := chain[len(chain)-1].Revision // the head of the shipped chain, never a literal: the next revision must not break this test
-	code, _, stderr := goDowngrade(t, uri, "0163")
-	if code != cli.ExitFailure || !strings.Contains(stderr, "downgrade_failed") || !strings.Contains(stderr, "down 0164") || !strings.Contains(stderr, "verified by re-read: alembic_version still holds [0066 "+head+"]") || !strings.Contains(stderr, `"observed":["0066","`+head+`"],"outcome":"rolled_back"`) {
-		t.Fatalf("exit %d stderr %s, want downgrade_failed naming 0164 and the verified unchanged state", code, stderr)
+	first, second := pgmigrate.PlantedRevision(t, 163), pgmigrate.PlantedRevision(t, 164)
+	code, _, stderr := goDowngrade(t, uri, first)
+	if code != cli.ExitFailure || !strings.Contains(stderr, "downgrade_failed") || !strings.Contains(stderr, "down "+second) || !strings.Contains(stderr, "verified by re-read: alembic_version still holds [0066 "+head+"]") || !strings.Contains(stderr, `"observed":["0066","`+head+`"],"outcome":"rolled_back"`) {
+		t.Fatalf("exit %d stderr %s, want downgrade_failed naming %s and the verified unchanged state", code, stderr, second)
 	}
 	if got := schemaShape(t, uri); got != before {
 		t.Fatalf("the failed walk changed the database:\n%s", shapeDiff(before, got))
@@ -468,7 +471,7 @@ func TestDowngradeReportsOnlyVerifiedStateAfterALostCommitAcknowledgement(t *tes
 	})
 }
 
-// The upgrade verb ends with the same final outcome line: a run that failed at 0163 is one
+// The upgrade verb ends with the same final outcome line: a run that failed at a planted revision is one
 // rolled-back transaction (CHAOS-7291), so it says "rolled_back" with the revisions it started
 // from, never "committed" and no longer "partial".
 func TestUpgradeVerbLogsTheVerifiedOutcome(t *testing.T) {

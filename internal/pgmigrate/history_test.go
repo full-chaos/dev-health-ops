@@ -145,8 +145,9 @@ func TestHistoryRefusesVerboseAndPositionals(t *testing.T) {
 	}
 }
 
-// The squash changes no line of `history`: the archived revisions print as the chain printed them before
-// (testdata/history_before_squash.txt is the output of the build before the squash, af8d28ed).
+// The squash changes no line of `history` up to the squashed head: the archived revisions print as the chain printed
+// them before (testdata/history_before_squash.txt is the output of the build before the squash, af8d28ed). Revisions
+// released above the baseline add lines above it, so the comparison is of the history without the live chain.
 func TestHistoryOutputIsUnchangedByTheSquash(t *testing.T) {
 	want, err := os.ReadFile("testdata/history_before_squash.txt")
 	if err != nil {
@@ -160,12 +161,8 @@ func TestHistoryOutputIsUnchangedByTheSquash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	chain, err := LoadChain()
-	if err != nil {
-		t.Fatal(err)
-	}
 	var out bytes.Buffer
-	if err := WriteHistory(&out, WithChain(entries, baseline, chain)); err != nil {
+	if err := WriteHistory(&out, WithChain(entries, baseline, nil)); err != nil {
 		t.Fatal(err)
 	}
 	if out.String() != string(want) {

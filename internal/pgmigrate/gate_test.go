@@ -40,7 +40,7 @@ func TestBuildHeadsLoadedFromTheEmbeddedChainAreEqualAtTheirOwnHeads(t *testing.
 	behind := []string{}
 	for _, head := range build.Heads() {
 		if head != cutoverRevision {
-			head = previousRevisionOf(head)
+			head = previousRevisionOf(t, head)
 		}
 		behind = append(behind, head)
 	}
@@ -49,11 +49,20 @@ func TestBuildHeadsLoadedFromTheEmbeddedChainAreEqualAtTheirOwnHeads(t *testing.
 	}
 }
 
-func previousRevisionOf(revision string) string {
-	for index, file := range ArchivedChain() {
+// previousRevisionOf is the revision before revision in the whole chain the build knows: the archive, then the live
+// chain above the baseline.
+func previousRevisionOf(t *testing.T, revision string) string {
+	t.Helper()
+	live, err := LoadChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain := append(ArchivedChain(), live...)
+	for index, file := range chain {
 		if file.Revision == revision && index > 0 {
-			return ArchivedChain()[index-1].Revision
+			return chain[index-1].Revision
 		}
 	}
-	return revision
+	t.Fatalf("revision %s has no predecessor in the archive or the live chain", revision)
+	return ""
 }

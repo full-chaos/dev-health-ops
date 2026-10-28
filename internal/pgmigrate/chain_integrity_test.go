@@ -32,16 +32,17 @@ func loadChainError(t *testing.T) string {
 func TestLoadChainRefusesAGap(t *testing.T) {
 	UsePlantedChain(t, os.DirFS("testdata/postfreeze/gap"))
 	got := loadChainError(t)
-	if !strings.Contains(got, "gap in the chain") || !strings.Contains(got, "0165") || !strings.Contains(got, "0164") {
-		t.Errorf("LoadChain error %q does not name the gap before 0165 (want 0164)", got)
+	gapAt, want := PlantedRevision(t, 165), PlantedRevision(t, 164)
+	if !strings.Contains(got, "gap in the chain") || !strings.Contains(got, gapAt) || !strings.Contains(got, want) {
+		t.Errorf("LoadChain error %q does not name the gap before %s (want %s)", got, gapAt, want)
 	}
 }
 
 func TestLoadChainRefusesADuplicateRevision(t *testing.T) {
 	UsePlantedChain(t, os.DirFS("testdata/postfreeze/duplicate"))
 	got := loadChainError(t)
-	if !strings.Contains(got, "more than one file") || !strings.Contains(got, "0163") {
-		t.Errorf("LoadChain error %q does not name the duplicate revision 0163", got)
+	if duplicate := PlantedRevision(t, 163); !strings.Contains(got, "more than one file") || !strings.Contains(got, duplicate) {
+		t.Errorf("LoadChain error %q does not name the duplicate revision %s", got, duplicate)
 	}
 }
 
@@ -50,8 +51,9 @@ func TestLoadChainRefusesADownRevisionThatIsNotThePredecessor(t *testing.T) {
 		"sql/0163_plant.sql": "-- Revision 0163 (down_revision 0160), planted.\nSELECT 1;\n",
 	}))
 	got := loadChainError(t)
-	if !strings.Contains(got, "down_revision") || !strings.Contains(got, "0160") || !strings.Contains(got, "0162") {
-		t.Errorf("LoadChain error %q does not name down_revision 0160 against the predecessor 0162", got)
+	wrong, predecessor := PlantedRevision(t, 160), LiveHead(t)
+	if !strings.Contains(got, "down_revision") || !strings.Contains(got, wrong) || !strings.Contains(got, predecessor) {
+		t.Errorf("LoadChain error %q does not name down_revision %s against the predecessor %s", got, wrong, predecessor)
 	}
 }
 
@@ -64,8 +66,9 @@ func TestLoadChainRefusesAMissingDownRevisionHeader(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			UsePlantedChain(t, plantedFiles(map[string]string{"sql/0163_plant.sql": first}))
-			if got := loadChainError(t); !strings.Contains(got, "0163_plant.sql") || !strings.Contains(got, "header") {
-				t.Errorf("LoadChain error %q does not refuse the header of sql/0163_plant.sql", got)
+			planted := PlantedRevision(t, 163) + "_plant.sql"
+			if got := loadChainError(t); !strings.Contains(got, planted) || !strings.Contains(got, "header") {
+				t.Errorf("LoadChain error %q does not refuse the header of sql/%s", got, planted)
 			}
 		})
 	}

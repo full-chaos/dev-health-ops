@@ -389,3 +389,57 @@ func TestGoldenDriftWorkflowRowCountEqualsRowsRun(t *testing.T) {
 		})
 	}
 }
+
+// run accepts exactly the line set `select` emits: one well-formed ROW per row and exactly one VERDICT line
+// (select|none|all, with a reason). select never emits an empty line, so an empty line is refused too. Everything else
+// exits 2 and runs no go test.
+func TestGoldenDriftRunAcceptsExactlyTheSelectOutput(t *testing.T) {
+	v := "VERDICT select 1 of 4 rows for 1 changed paths\n"
+	row := "ROW\tinternal/adminops\t^TestA$\n"
+	bad := map[string]string{
+		"leading-space ROW":                v + " " + row,
+		"lower-case row":                   v + "row\tinternal/adminops\t^TestA$\n",
+		"a garbage line":                   v + row + "garbage\n",
+		"a garbage line first":             "garbage\n" + v + row,
+		"two VERDICT lines":                v + v + row,
+		"none verdict with a ROW":          "VERDICT none x\n" + row,
+		"ROW lines and no VERDICT":         row,
+		"an empty line between":            v + "\n" + row,
+		"a trailing empty line":            v + row + "\n",
+		"VERDICT without a reason":         "VERDICT select\n" + row,
+		"unknown verdict kind":             "VERDICT maybe x\n" + row,
+		"select verdict and no ROW":        v,
+		"two none verdicts and no ROW":     "VERDICT none a\nVERDICT none b\n",
+		"a space-indented VERDICT":         " " + v + row,
+		"VERDICT glued to a longer word":   "VERDICTS select x\n" + row,
+		"a carriage return ends the ROW":   v + "ROW\tinternal/adminops\t^TestA$\r\n",
+		"a fifth ROW field":                v + row[:len(row)-1] + "\textra\n",
+		"a ROW with an empty regex":        v + "ROW\tinternal/adminops\t\n",
+		"a ROW with an empty package":      v + "ROW\t\t^TestA$\n",
+		"a comment line":                   "# note\n" + v + row,
+		"a tab-led line":                   "\t" + v + row,
+		"two ROWs glued on one line":       v + "ROW\ta\t^A$ROW\tb\t^B$\n",
+		"VERDICT after the rows (kept ok)": "",
+	}
+	delete(bad, "VERDICT after the rows (kept ok)")
+	for name, rows := range bad {
+		t.Run(name, func(t *testing.T) {
+			res, log := runGoldenDrift(t, rows, "pass", "")
+			if res.code != 2 || strings.TrimSpace(log) != "" {
+				t.Fatalf("exit %d, go calls %q: want exit 2 and no go test (stderr %q)", res.code, log, res.stderr)
+			}
+		})
+	}
+	for name, rows := range map[string]string{
+		"exactly what select emits":              v + row,
+		"all verdict, two rows":                  "VERDICT all bad input: change list missing\n" + row + "ROW\ta\t^A$\n",
+		"the verdict after the rows is still ok": row + v,
+	} {
+		t.Run("accepted: "+name, func(t *testing.T) {
+			res, log := runGoldenDrift(t, rows, "pass", "")
+			if res.code != 0 || strings.TrimSpace(log) == "" {
+				t.Fatalf("exit %d, go calls %q: want exit 0 and the rows run (stderr %q)", res.code, log, res.stderr)
+			}
+		})
+	}
+}

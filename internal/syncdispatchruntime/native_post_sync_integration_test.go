@@ -509,6 +509,40 @@ CREATE TABLE post_sync_markers (
 	}
 }
 
+// CHAOS-11760: the probe table of these tests is created on the CLONE, after pgschema.Start, never on the template
+// the clones copy. A second clone, taken after a test has created the probe table in its own database, must not have
+// it; if the table ever reached the template, every later clone would carry it.
+func TestPostSyncProbeTableIsCreatedOnTheCloneNeverTheTemplate(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	first := pgschema.Start(ctx, t)
+	defer first.Close(context.Background())
+	firstPool, err := pgxpool.New(ctx, first.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer firstPool.Close()
+	createPostSyncTables(t, ctx, firstPool)
+	var present bool
+	if err := firstPool.QueryRow(ctx, `SELECT to_regclass('public.post_sync_markers') IS NOT NULL`).Scan(&present); err != nil || !present {
+		t.Fatalf("the clone a post-sync test uses has no probe table (present=%v err=%v)", present, err)
+	}
+
+	second := pgschema.Start(ctx, t)
+	defer second.Close(context.Background())
+	secondPool, err := pgxpool.New(ctx, second.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer secondPool.Close()
+	if err := secondPool.QueryRow(ctx, `SELECT to_regclass('public.post_sync_markers') IS NOT NULL`).Scan(&present); err != nil {
+		t.Fatal(err)
+	}
+	if present {
+		t.Fatal("a clone taken after a post-sync test already has post_sync_markers: the probe DDL reached the template")
+	}
+}
+
 // postSyncRouteGeneration is the post_sync route generation these tests run under. The migrations
 // seed every route as celery at generation 2 and the table's trigger demands a generation increase
 // for any state change, so a river route starts at generation 2.

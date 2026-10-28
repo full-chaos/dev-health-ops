@@ -173,7 +173,7 @@ func TestRunRefusesACredentialBearingEndpointBeforeAnyHTTPCall(t *testing.T) {
 // happens BEFORE client.Do and is only bounded by whichever ctx
 // FetchBuildIdentity was actually given). Replacing `boundedCtx()` with
 // `context.Background()` at that call site lets a hanging minter block
-// forever instead of failing at -timeout: this test's elapsed-time bound
+// forever instead of failing at -timeout: this test's 30 s failure-only guard
 // catches exactly that.
 //
 // The fake minter never returns on its own; it is cancelled by the

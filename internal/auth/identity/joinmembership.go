@@ -44,9 +44,10 @@ var joinPublicMembershipColumns = []string{"id", "user_id", "org_id", "role", "j
 // joins of one account run one after the other. A public row in the
 // organization is errJoinAlreadyMember and an auth row without one is
 // ErrMembershipDiverged; neither writes. No public.users row, or no
-// public.organizations row, is ErrLegacyProjection. A unique violation on
-// either table (a join that raced this one) is errJoinAlreadyMember; the
-// transaction is then aborted, so the caller returns the error.
+// public.organizations row, is ErrLegacyProjection. Every go-api membership
+// insert holds the public.users row (its foreign key check) until it commits,
+// so a concurrent go-api join or add is seen by the check, not by a unique
+// violation.
 func (s *Store) insertJoinMembership(ctx context.Context, tx audit.TxOps, m membershipJoin) error {
 	if !s.ownsUsers {
 		return ErrSignupNotAvailable
@@ -81,27 +82,18 @@ func (s *Store) insertJoinMembership(ctx context.Context, tx audit.TxOps, m memb
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO public.memberships (`+strings.Join(joinPublicMembershipColumns, ", ")+`)
 VALUES ($1, $2, $3, $4, $5, $5, $5)`, m.ID, m.Principal, m.OrgID, m.Role, at); err != nil {
-		return joinWriteErr(err)
+		return publicJoinWriteErr(err)
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO `+s.q+`.memberships (id, organization_id, principal_id, status, role, joined_at)
-VALUES ($1, $2, $3, 'active', $4, $5)`, m.ID, m.OrgID, m.Principal, m.Role, at); err != nil {
-		return joinWriteErr(err)
-	}
-	return nil
+	_, err = tx.Exec(ctx, `INSERT INTO `+s.q+`.memberships (id, organization_id, principal_id, status, role, joined_at)
+VALUES ($1, $2, $3, 'active', $4, $5)`, m.ID, m.OrgID, m.Principal, m.Role, at)
+	return err
 }
 
-// joinWriteErr maps a membership insert failure: a unique violation is a
-// concurrent join; a missing public user or organization is
-// ErrLegacyProjection. Anything else stays as it is.
-func joinWriteErr(err error) error {
+// publicJoinWriteErr maps a missing public organization (foreign key) to
+// ErrLegacyProjection.
+func publicJoinWriteErr(err error) error {
 	var pgErr *pgconn.PgError
-	if !errors.As(err, &pgErr) {
-		return err
-	}
-	switch {
-	case pgErr.Code == "23505" && pgErr.TableName == "memberships":
-		return errJoinAlreadyMember
-	case pgErr.Code == "23503" && pgErr.SchemaName == "public" && pgErr.TableName == "memberships":
+	if errors.As(err, &pgErr) && pgErr.Code == "23503" {
 		return ErrLegacyProjection
 	}
 	return err

@@ -305,6 +305,52 @@ VALUES ($1, $2, $3, 'viewer', now(), now(), now())`, uuid.New(), org, user); err
 	}
 }
 
+// An open go-api admin add holds the public.users row (its foreign key check)
+// so the join waits on the user lock; once the add commits the join is a no-op.
+func TestJoinMembershipWaitsForGoAPIAdminAdd(t *testing.T) {
+	e := getEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	user, org := e.joinFixture(t, ctx)
+	adminAdd, err := e.admin.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = adminAdd.Rollback(context.Background()) }()
+	if _, err := adminAdd.Exec(ctx, `INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
+VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), org, user); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- joinCommit(ctx, e.owned, membershipJoin{ID: uuid.New(), Principal: user, OrgID: org, Role: "admin"}, nil)
+	}()
+	role := e.runtime.Config().ConnConfig.User
+	for waiting := 0; waiting == 0; {
+		select {
+		case err := <-done:
+			t.Fatalf("the join returned (%v) while the go-api add was open", err)
+		case <-ctx.Done():
+			t.Fatal("the join never waited on the public.users row lock")
+		default:
+		}
+		waiting = e.count(t, ctx, `SELECT count(*) FROM pg_stat_activity
+WHERE usename = $1 AND wait_event_type = 'Lock' AND query LIKE '%FROM public.users WHERE id = $1 FOR UPDATE%'`, role)
+		if waiting == 0 {
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	if err := adminAdd.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; !errors.Is(err, errJoinAlreadyMember) {
+		t.Fatalf("join racing a go-api add = %v, want errJoinAlreadyMember", err)
+	}
+	if p, a := e.memberRows(t, ctx, user, org); p != 1 || a != 0 {
+		t.Fatalf("rows: public=%d auth=%d, want 1 and 0", p, a)
+	}
+}
+
 // Before the users cutover the join writes nothing (the public insert grant
 // does not exist then).
 func TestJoinMembershipRefusedWithoutUsersOwned(t *testing.T) {

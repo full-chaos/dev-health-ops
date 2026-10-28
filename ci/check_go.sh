@@ -154,7 +154,7 @@ run_integration_go_test() {
   (
     cd "${ROOT}/${module_dir}"
     exec ${private_group[@]+"${private_group[@]}"} "${GO_ENV_OFF[@]}" GOWORK=off TESTCONTAINERS_SESSION_ID="${sid}" ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} \
-      go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m "$@"
+      go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=22m "$@"
   ) &
   pid=$!
   TC_TRAP_PID="${pid}"
@@ -1848,7 +1848,7 @@ check_venue_oracles() {
         GOWORK=off \
         DEV_HEALTH_VENUE_ORACLES=1 \
         DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${pkg_proof_dir}" \
-        go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=40m \
+        go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=37m \
           -run "${pattern}" -json "${rel}"
     ) >"${json_log}" 2>"${stderr_log}" || go_test_status=$?
 
@@ -3213,7 +3213,7 @@ check_daily_test_shard() {
   printf 'go test daily test shard %s: %d top-level test(s)\n' "${shard}" "${selected_count}"
   (
     cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m -run "${test_regex}" "./${DAILY_INTEGRATION_PACKAGE_KEY}"
+    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=22m -run "${test_regex}" "./${DAILY_INTEGRATION_PACKAGE_KEY}"
   )
 }
 
@@ -3416,7 +3416,7 @@ check_workerservice_test_shard() {
   printf 'go test workerservice test shard %s: %d top-level test(s)\n' "${shard}" "${selected_count}"
   (
     cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m -run "${test_regex}" "./${WORKERSERVICE_INTEGRATION_PACKAGE_KEY}"
+    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=22m -run "${test_regex}" "./${WORKERSERVICE_INTEGRATION_PACKAGE_KEY}"
   )
 }
 
@@ -3619,7 +3619,7 @@ check_queryapiserver_test_shard() {
   printf 'go test queryapiserver test shard %s: %d top-level test(s)\n' "${shard}" "${selected_count}"
   (
     cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m -run "${test_regex}" "./${QAPISERVER_INTEGRATION_PACKAGE_KEY}"
+    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=22m -run "${test_regex}" "./${QAPISERVER_INTEGRATION_PACKAGE_KEY}"
   )
 }
 
@@ -3822,7 +3822,7 @@ check_remaining_test_shard() {
   printf 'go test remaining test shard %s: %d top-level test(s)\n' "${shard}" "${selected_count}"
   (
     cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m -run "${test_regex}" "./${REMAINING_INTEGRATION_PACKAGE_KEY}"
+    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=22m -run "${test_regex}" "./${REMAINING_INTEGRATION_PACKAGE_KEY}"
   )
 }
 
@@ -4486,7 +4486,7 @@ check_auth_race_integration() {
     [ -n "${want}" ] || die "auth race-integration: no TestRace* test found in ${pkg}"
     output="$(mktemp)"
     printf 'auth go test -race -tags=integration %s\n' "${pkg}"
-    if ! auth_go test -mod=readonly -trimpath -count=1 -race -tags=integration -v -timeout=30m "${pkg}" >"${output}" 2>&1; then
+    if ! auth_go test -mod=readonly -trimpath -count=1 -race -tags=integration -v -timeout=27m "${pkg}" >"${output}" 2>&1; then
       cat "${output}" >&2
       rm -f "${output}"
       die "auth race-integration: ${pkg} failed"

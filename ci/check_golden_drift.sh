@@ -204,7 +204,7 @@ run_rows() {
     echo "== golden drift: ${pkgs[i]} -run ${res[i]}"
     out="$(mktemp)"
     rc=0
-    (cd "${ROOT}" && env -u GOFLAGS -u GOEXPERIMENT GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m -v -run "${res[i]}" "./${pkgs[i]}") >> "${out}" 2>&1 || rc=$?
+    (cd "${ROOT}" && env -u GOFLAGS -u GOEXPERIMENT GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=22m -v -run "${res[i]}" "./${pkgs[i]}") >> "${out}" 2>&1 || rc=$?
     cat "${out}"
     if [ "${rc}" -ne 0 ]; then
       message "${pkgs[i]}" "${res[i]}"

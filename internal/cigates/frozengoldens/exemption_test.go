@@ -18,7 +18,16 @@ const (
 	plantSource          = "internal/pgmigrate/alias_integration_test.go"
 	plantSource2         = "internal/api/health/frozen_python_test.go"
 	plantUnpinned        = "internal/pgmigrate/runner_test.go"
+	plantListedElsewhere = "internal/api/health/testdata/fixture.json"
+	plantLegacySource    = "internal/legacy/old_test.go"
 )
+
+// squashTipManifest is the manifest the squash fixture's change branch holds.
+func squashTipManifest() string {
+	return "file\t" + plantGolden + "\t" + sum("{}") + "\nfile\t" + plantListedElsewhere + "\t" + sum("[]") + "\n" +
+		"pins\t" + plantSource + "\t" + strings.Repeat("a", 64) + "\topens=1,finishes=0,skips=0\n" +
+		"pins\t" + plantSource2 + "\t" + strings.Repeat("b", 64) + "\topens=1,finishes=0,skips=0\n"
+}
 
 func sum(body string) string {
 	s := sha256.Sum256([]byte(body))
@@ -41,16 +50,20 @@ func writeAt(t *testing.T, repo, path, body string) {
 func squashRepo(t *testing.T) (string, string, Exemption) {
 	t.Helper()
 	repo := t.TempDir()
-	baseManifest := "file\t" + plantGolden + "\t" + sum("{}") + "\npins\t" + plantSource + "\t" + strings.Repeat("a", 64) + "\topens=2,finishes=0,skips=0\n" +
-		"pins\t" + plantSource2 + "\t" + strings.Repeat("b", 64) + "\topens=1,finishes=0,skips=0\n"
+	baseManifest := "file\t" + plantGolden + "\t" + sum("{}") + "\nfile\t" + plantListedElsewhere + "\t" + sum("[]") + "\n" +
+		"pins\t" + plantSource + "\t" + strings.Repeat("a", 64) + "\topens=2,finishes=0,skips=0\n" +
+		"pins\t" + plantSource2 + "\t" + strings.Repeat("b", 64) + "\topens=1,finishes=0,skips=0\n" +
+		"pins\t" + plantLegacySource + "\t" + strings.Repeat("d", 64) + "\topens=1,finishes=0,skips=0\n"
 	for path, body := range map[string]string{
-		ManifestPath:  baseManifest,
-		plantBaseline: "old head",
-		plantGolden:   "{}",
-		plantSource:   "package x\nvar _ = venueoracle.OpenGolden(t, a)\nvar _ = venueoracle.OpenGolden(t, b)\n",
-		plantSource2:  "package y\nvar _ = venueoracle.OpenGolden(t, c)\n",
-		plantUnpinned: "package x\n",
-		"other.txt":   "x",
+		ManifestPath:         baseManifest,
+		plantBaseline:        "old head",
+		plantGolden:          "{}",
+		plantSource:          "package x\nvar _ = venueoracle.OpenGolden(t, a)\nvar _ = venueoracle.OpenGolden(t, b)\n",
+		plantSource2:         "package y\nvar _ = venueoracle.OpenGolden(t, c)\n",
+		plantUnpinned:        "package x\n",
+		plantListedElsewhere: "[]",
+		plantLegacySource:    "package z\nvar _ = venueoracle.OpenGolden(t, d)\n",
+		"other.txt":          "x",
 	} {
 		writeAt(t, repo, path, body)
 	}
@@ -64,8 +77,8 @@ func squashRepo(t *testing.T) (string, string, Exemption) {
 		t.Fatal(err)
 	}
 	writeAt(t, repo, plantBaseline, "new head")
-	writeAt(t, repo, ManifestPath, "file\t"+plantGolden+"\t"+sum("{}")+"\npins\t"+plantSource+"\t"+strings.Repeat("a", 64)+"\topens=1,finishes=0,skips=0\n"+
-		"pins\t"+plantSource2+"\t"+strings.Repeat("b", 64)+"\topens=1,finishes=0,skips=0\n")
+	writeAt(t, repo, ManifestPath, squashTipManifest())
+	git(t, repo, "rm", "-q", plantLegacySource)
 	writeAt(t, repo, plantSource, "package x\nvar _ = venueoracle.OpenGolden(t, a)\n")
 	writeAt(t, repo, plantArchiveManifest, "0139\tabc\t0139_a.sql\n")
 	writeAt(t, repo, plantArchiveSQL, "-- Revision 0139 (down_revision 0138)\n")
@@ -73,19 +86,40 @@ func squashRepo(t *testing.T) (string, string, Exemption) {
 	git(t, repo, "commit", "-q", "-m", "squash")
 	paths := []string{ManifestPath, plantBaseline, plantArchiveManifest, plantArchiveSQL}
 	sort.Strings(paths)
-	content, err := ContentDigest(repo, paths)
-	if err != nil {
-		t.Fatal(err)
-	}
+	content := inputDigest(t, repo, baseManifest)
 	return repo, base, Exemption{
 		BaseManifestSHA256:    sum(baseManifest),
 		BaseHeadJSONSHA256:    sum("old head"),
 		ArchiveManifestSHA256: sum("0139\tabc\t0139_a.sql\n"),
 		Paths:                 paths,
 		ContentSHA256:         content,
-		WaivedBelowBase:       []string{plantSource + ": golden-open calls went from 2 to 1 against the base"},
-		Cites:                 "D6430 / CHAOS-11743",
+		WaivedBelowBase: []string{
+			plantLegacySource + ": a test source the base manifest pins is missing",
+			plantSource + ": golden-open calls went from 2 to 1 against the base",
+		},
+		Cites: "D6430 / CHAOS-11743",
 	}
+}
+
+func inputDigest(t *testing.T, repo, baseManifest string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(repo, ManifestPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, err := Parse(strings.NewReader(string(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := Parse(strings.NewReader(baseManifest))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := InputDigest(repo, head, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return content
 }
 
 func gitHalf(t *testing.T, repo, base string, exemptions []Exemption) []string {
@@ -198,7 +232,7 @@ func TestTheSquashExemptionDoesNotClearOtherContentUnderTheSamePaths(t *testing.
 		},
 		"a changed baseline, re-pinned in the manifest": func(t *testing.T, repo string) {
 			writeAt(t, repo, plantBaseline, "new head with another seed row")
-			writeAt(t, repo, ManifestPath, "file\t"+plantBaseline+"\t"+sum("new head with another seed row")+"\nfile\t"+plantGolden+"\t"+sum("{}")+"\npins\t"+plantSource+"\t"+strings.Repeat("a", 64)+"\topens=1,finishes=0,skips=0\n")
+			writeAt(t, repo, ManifestPath, "file\t"+plantBaseline+"\t"+sum("new head with another seed row")+"\n"+squashTipManifest())
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -256,8 +290,11 @@ func TestEveryGuardInputChangeBesideTheSquashIsRefused(t *testing.T) {
 		ops   []op
 		clear bool
 	}{
-		{name: "manifest/count-preserving edit (a comment line)", ops: []op{{write: ManifestPath, body: "# note\n" + "file\t" + plantGolden + "\t" + sum("{}") + "\npins\t" + plantSource + "\t" + strings.Repeat("a", 64) + "\topens=1,finishes=0,skips=0\n" + "pins\t" + plantSource2 + "\t" + strings.Repeat("b", 64) + "\topens=1,finishes=0,skips=0\n"}}},
-		{name: "manifest/edited (a pins row dropped)", ops: []op{{write: ManifestPath, body: "file\t" + plantGolden + "\t" + sum("{}") + "\npins\t" + plantSource + "\t" + strings.Repeat("a", 64) + "\topens=1,finishes=0,skips=0\n"}}},
+		{name: "manifest/count-preserving edit (a comment line)", ops: []op{{write: ManifestPath, body: "# note\n" + squashTipManifest()}}},
+		{name: "manifest/edited (a pins row dropped)", ops: []op{{write: ManifestPath, body: strings.SplitAfter(squashTipManifest(), "\n")[0]}}},
+		{name: "manifest-listed file outside the guarded dirs/edited", ops: []op{{write: plantListedElsewhere, body: "[1]"}}},
+		{name: "manifest-listed file outside the guarded dirs/deleted", ops: []op{{remove: plantListedElsewhere}}},
+		{name: "base-pinned source outside the pinned dirs/added back", ops: []op{{write: plantLegacySource, body: "package z\nvar _ = venueoracle.OpenGolden(t, d)\n"}}},
 		{name: "golden/edited", ops: []op{{write: plantGolden, body: "{\"x\":1}"}}},
 		{name: "golden/added", ops: []op{{write: "internal/pgmigrate/testdata/golden/new.json", body: "{}"}}},
 		{name: "golden/deleted", ops: []op{{remove: plantGolden}}},

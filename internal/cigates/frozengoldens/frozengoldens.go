@@ -231,7 +231,7 @@ func MergeBase(dir string) (string, error) {
 
 // Exemption waives the git half's findings of ONE exact change set, keyed to content: the base tree's manifest and
 // head.json, the archive manifest at HEAD, the exact set of guarded paths the change set touches, and the content of
-// every one of those paths at HEAD (ContentDigest). A matching exemption waives only the changed-path findings for its
+// every file the guard reads at HEAD (InputDigest). A matching exemption waives only the changed-path findings for its
 // Paths and the below-base findings whose exact text is in WaivedBelowBase; every other finding stands.
 type Exemption struct {
 	BaseManifestSHA256    string
@@ -243,19 +243,95 @@ type Exemption struct {
 	Cites                 string
 }
 
-// ContentDigest is the sha256 over "<path>\t<sha256 of the path's blob at HEAD>\n" for every path, sorted: one value
-// that changes with any byte of any of the paths.
-func ContentDigest(root string, paths []string) (string, error) {
-	sorted := append([]string(nil), paths...)
-	sort.Strings(sorted)
-	digest := sha256.New()
-	for _, path := range sorted {
-		blob, err := exec.Command("git", "-C", root, "show", "HEAD:"+path).Output()
-		if err != nil {
-			return "", fmt.Errorf("git show HEAD:%s: %w", path, err)
+// inputPaths is every path the guard reads at HEAD: the manifest, every path the HEAD or the base manifest names,
+// every file under the guarded and golden dirs and every *_test.go entry directly in the pinned dirs.
+func inputPaths(root string, head, base Manifest) ([]string, error) {
+	set := map[string]bool{ManifestPath: true}
+	for _, m := range []Manifest{head, base} {
+		for path := range m.Files {
+			set[path] = true
 		}
-		sum := sha256.Sum256(blob)
-		fmt.Fprintf(digest, "%s\t%s\n", path, hex.EncodeToString(sum[:]))
+		for path := range m.Pins {
+			set[path] = true
+		}
+		for path := range m.Shape {
+			set[path] = true
+		}
+	}
+	var pinned []string
+	for _, dir := range PinnedDirs {
+		pinned = append(pinned, dir+"/")
+	}
+	for _, listing := range []struct {
+		flags  []string
+		paths  []string
+		suffix string
+	}{
+		{[]string{"-r"}, append(append([]string(nil), GuardedDirs...), GoldenDirs...), ""},
+		{nil, pinned, "_test.go"},
+	} {
+		args := append(append([]string{"-C", root, "ls-tree", "-z", "--name-only", "--full-tree"}, listing.flags...), "HEAD", "--")
+		out, err := exec.Command("git", append(args, listing.paths...)...).Output()
+		if err != nil {
+			return nil, fmt.Errorf("git ls-tree HEAD: %w", err)
+		}
+		for _, path := range strings.Split(string(out), "\x00") {
+			if path != "" && strings.HasSuffix(path, listing.suffix) {
+				set[path] = true
+			}
+		}
+	}
+	paths := make([]string, 0, len(set))
+	for path := range set {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return paths, nil
+}
+
+// InputDigest is the sha256 over "<path>\t<object type>\t<sha256 of the object at HEAD>\n" for every path the guard
+// reads (or "<path>\tabsent\n"), sorted: one value that changes with any byte of any input, or any input added,
+// deleted or renamed.
+func InputDigest(root string, head, base Manifest) (string, error) {
+	paths, err := inputPaths(root, head, base)
+	if err != nil {
+		return "", err
+	}
+	cmd := exec.Command("git", "-C", root, "cat-file", "--batch")
+	var input strings.Builder
+	for _, path := range paths {
+		input.WriteString("HEAD:" + path + "\n")
+	}
+	cmd.Stdin = strings.NewReader(input.String())
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git cat-file --batch: %w", err)
+	}
+	reader := bufio.NewReader(strings.NewReader(string(out)))
+	digest := sha256.New()
+	for _, path := range paths {
+		header, err := reader.ReadString('\n')
+		if err != nil {
+			return "", fmt.Errorf("git cat-file --batch: %s: %w", path, err)
+		}
+		fields := strings.Fields(header)
+		if len(fields) == 2 && fields[1] == "missing" {
+			fmt.Fprintf(digest, "%s\tabsent\n", path)
+			continue
+		}
+		if len(fields) != 3 {
+			return "", fmt.Errorf("git cat-file --batch: %s: unexpected header %q", path, header)
+		}
+		size, err := strconv.Atoi(fields[2])
+		if err != nil {
+			return "", fmt.Errorf("git cat-file --batch: %s: %w", path, err)
+		}
+		body := make([]byte, size+1)
+		if _, err := io.ReadFull(reader, body); err != nil {
+			return "", fmt.Errorf("git cat-file --batch: %s: %w", path, err)
+		}
+		sum := sha256.Sum256(body[:size])
+		fmt.Fprintf(digest, "%s\t%s\t%s\n", path, fields[1], hex.EncodeToString(sum[:]))
 	}
 	return hex.EncodeToString(digest.Sum(nil)), nil
 }
@@ -264,7 +340,7 @@ func ContentDigest(root string, paths []string) (string, error) {
 var Exemptions []Exemption
 
 // matches reports whether the change set under root against base is exactly the one e names.
-func (e Exemption) matches(root, base string, changed []string) (bool, error) {
+func (e Exemption) matches(root, base string, changed []string, head, baseManifest Manifest) (bool, error) {
 	if len(changed) != len(e.Paths) {
 		return false, nil
 	}
@@ -292,7 +368,7 @@ func (e Exemption) matches(root, base string, changed []string) (bool, error) {
 	if sum := sha256.Sum256(data); hex.EncodeToString(sum[:]) != e.ArchiveManifestSHA256 {
 		return false, nil
 	}
-	content, err := ContentDigest(root, e.Paths)
+	content, err := InputDigest(root, head, baseManifest)
 	if err != nil {
 		return false, nil
 	}
@@ -306,9 +382,16 @@ func GitHalf(root, base string, m Manifest, exemptions []Exemption) ([]string, e
 	if err != nil {
 		return nil, err
 	}
+	baseManifest, hasBase, err := BaseManifest(root, base)
+	if err != nil {
+		return nil, err
+	}
 	waivedPaths, waivedBelowBase := map[string]bool{}, map[string]bool{}
 	for _, exemption := range exemptions {
-		ok, err := exemption.matches(root, base, changed)
+		if !hasBase {
+			break
+		}
+		ok, err := exemption.matches(root, base, changed, m, baseManifest)
 		if err != nil {
 			return nil, err
 		}
@@ -323,11 +406,7 @@ func GitHalf(root, base string, m Manifest, exemptions []Exemption) ([]string, e
 		}
 	}
 	var problems []string
-	baseManifest, ok, err := BaseManifest(root, base)
-	if err != nil {
-		return nil, err
-	}
-	if ok {
+	if hasBase {
 		for _, problem := range CheckNotBelowBase(root, baseManifest) {
 			if !waivedBelowBase[problem] {
 				problems = append(problems, "a frozen comparison was removed against the base: "+problem)

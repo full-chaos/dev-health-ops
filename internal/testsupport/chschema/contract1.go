@@ -28,6 +28,15 @@ type contract1Overlay struct {
 // LoadContract1Baseline returns chmigrate's head with the contract-1 overlay
 // applied: the legacy operational tables, and no record of migration 067.
 func LoadContract1Baseline() (chmigrate.Baseline, error) {
+	head, err := chmigrate.LoadBaseline()
+	if err != nil {
+		return chmigrate.Baseline{}, err
+	}
+	return overlayContract1(head)
+}
+
+// overlayContract1 applies the contract-1 overlay to a head baseline.
+func overlayContract1(head chmigrate.Baseline) (chmigrate.Baseline, error) {
 	var overlay contract1Overlay
 	if err := json.Unmarshal(contract1Head, &overlay); err != nil {
 		return chmigrate.Baseline{}, fmt.Errorf("decode the contract-1 overlay: %w", err)
@@ -35,10 +44,6 @@ func LoadContract1Baseline() (chmigrate.Baseline, error) {
 	if overlay.Contract != 1 || len(overlay.Objects) == 0 || len(overlay.OmittedVersions) == 0 {
 		return chmigrate.Baseline{}, fmt.Errorf("the contract-1 overlay is malformed (contract %d, %d objects, %d omitted versions)",
 			overlay.Contract, len(overlay.Objects), len(overlay.OmittedVersions))
-	}
-	head, err := chmigrate.LoadBaseline()
-	if err != nil {
-		return chmigrate.Baseline{}, err
 	}
 	omitted := map[string]bool{}
 	for _, version := range overlay.OmittedVersions {

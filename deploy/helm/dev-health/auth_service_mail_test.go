@@ -533,3 +533,15 @@ func TestAuthServiceMailEgressNarrowPeerKeepsAnEmptyProtocol(t *testing.T) {
 		t.Fatalf("a narrow peer with protocol \"\" was refused: %v\n%.200s", err, out)
 	}
 }
+
+func TestAuthServiceMailEgressRefusesANonStringProtocolOnAWidePeer(t *testing.T) {
+	peers := map[string]string{"v4": mailPeer("0.0.0.0/0", mailV4Except), "v6": mailPeer("::/0", mailV6Except)}
+	for label, peer := range peers {
+		for _, proto := range []string{`false`, `0`, `[]`, `null`, `" "`} {
+			out, err := mailRender(t, []string{peer}, "--set-json", fmt.Sprintf(`authService.networkPolicy.egress.mail.ports=[{"protocol":%s,"port":443}]`, proto))
+			if err == nil || !strings.Contains(out, "authService.networkPolicy.egress.mail") {
+				t.Fatalf("%s: protocol %s on a whole-internet peer was accepted: %v\n%.300s", label, proto, err, out)
+			}
+		}
+	}
+}

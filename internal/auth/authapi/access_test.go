@@ -15,6 +15,8 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
+	"github.com/full-chaos/dev-health-go/authverify"
+
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
@@ -336,3 +338,24 @@ func TestTheValidatorSeesNoRouteOutsideItsRows(t *testing.T) {
 }
 
 var _ = httptest.NewRecorder
+
+func TestUserBearerRefusesAnEmptyOrInvalidSidMalformed(t *testing.T) {
+	subject := session.WirePrincipalID(uuid.New())
+	for name, sid := range map[string]string{"empty": "", "not a session id": "ses_!!!", "a bare uuid": uuid.NewString()} {
+		bearer, reason, err := userBearer(&authverify.AccessClaims{Subject: subject, SessionID: sid})
+		if err == nil || reason != "malformed" || bearer.SessionID != uuid.Nil {
+			t.Errorf("%s: bearer %+v, reason %q, err %v; want a malformed refusal", name, bearer, reason, err)
+		}
+	}
+	if _, reason, err := userBearer(&authverify.AccessClaims{Subject: "prn_x", SessionID: session.WireSessionID(uuid.New())}); err == nil || reason != "malformed" {
+		t.Errorf("bad subject: reason %q, err %v; want a malformed refusal", reason, err)
+	}
+	if _, reason, err := userBearer(nil); err == nil || reason != "malformed" {
+		t.Errorf("no claims: reason %q, err %v; want a malformed refusal", reason, err)
+	}
+	sid := uuid.New()
+	bearer, reason, err := userBearer(&authverify.AccessClaims{Subject: subject, SessionID: session.WireSessionID(sid)})
+	if err != nil || reason != "" || bearer.SessionID != sid || !bearer.sessionPinned {
+		t.Errorf("valid claims: bearer %+v, reason %q, err %v", bearer, reason, err)
+	}
+}

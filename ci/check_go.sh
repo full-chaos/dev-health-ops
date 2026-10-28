@@ -721,6 +721,19 @@ go_test_leg() {
   return "${rc}"
 }
 
+# cigates_go_test_timeout PKG...: the go test -timeout of one call (interim, widened to every internal/cigates package by #5191). internal/cigates/affected
+# ran 600.088 s against the 10m default in a hosted test leg (run 40750061254), so a call whose package list holds it gets 20m (a hang ceiling,
+# no time assert). COST: every other package of that call gets 20m too. The timeout is an argument of the call, never read from the environment.
+cigates_go_test_timeout() {
+  local p
+  for p in "$@"; do
+    case "${p}" in
+      github.com/full-chaos/dev-health-ops/internal/cigates/affected) printf '20m\n'; return 0 ;;
+    esac
+  done
+  printf '10m\n'
+}
+
 # go_test_json_run JSON_FILE LOG_FILE PKG...: go_test_json_run_t with the 10m go test -timeout.
 go_test_json_run() {
   local json="$1" log="$2"
@@ -1085,7 +1098,7 @@ check_test_shard() {
       (
         cd "${ROOT}/${module_dir}"
         # shellcheck disable=SC2086
-        go_test_leg "${log}" "${legjson}" -timeout 10m ${rest}
+        go_test_leg "${log}" "${legjson}" -timeout "$(cigates_go_test_timeout ${rest})" ${rest}
       ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}"; return 1; }
     fi
     if [ -n "${rest_sec}" ]; then

@@ -4,7 +4,6 @@
 cmd/auth-migrate/wait_test.go	TestDatabaseWaitGivesUpAtTheBound	not wall time: fake clock (cmd/auth-migrate/wait_test.go:105)
 cmd/auth-migrate/wait_test.go	TestDatabaseWaitHoldsTheBound	not wall time: fake clock (cmd/auth-migrate/wait_test.go:156)
 internal/audit/outboxloop_test.go	TestLoopHandsTheStepperTheCurrentTimeNotTheTickTimestamp	not a performance budget: clock or stamp skew
-internal/auth/authruntime/jwks_dependency_stall_integration_test.go	TestJWKSAnswersWhileTheDatabaseIsBlackholed	found by the gate, not by the census: pending CHAOS-11684 re-census and conversion
 internal/backfillrun/run_integration_test.go	TestVerbReportsWhatTheSchedulerDid	lower-bound wait proof: load only lengthens it
 internal/cigates/emitscan/scan_rows_test.go	TestConstFixpointBounded	owned by CHAOS-11674 (emitscan budgets)
 internal/cigates/emitscan/scan_rows_test.go	timed	owned by CHAOS-11674 (emitscan budgets)

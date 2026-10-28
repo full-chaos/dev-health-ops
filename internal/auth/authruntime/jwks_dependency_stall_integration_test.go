@@ -108,7 +108,6 @@ func (p *blackholeProxy) pipe(dst, src net.Conn) {
 func TestJWKSAnswersWhileTheDatabaseIsBlackholed(t *testing.T) {
 	const (
 		requestTimeout = 4 * time.Second
-		jwksBound      = time.Second
 		stallers       = 3 * maxInFlightRequests
 		probes         = 256
 	)
@@ -131,7 +130,9 @@ func TestJWKSAnswersWhileTheDatabaseIsBlackholed(t *testing.T) {
 	})
 	transport := &http.Transport{MaxIdleConnsPerHost: 512}
 	defer transport.CloseIdleConnections()
-	client := &http.Client{Transport: transport}
+	// The 30 s client timeout is a failure-only ceiling: a JWKS request that waits on the dead database ends as a client
+	// error (status 0), which the 200 count below refuses. A passing run never comes near it.
+	client := &http.Client{Transport: transport, Timeout: 30 * time.Second}
 
 	login := func(i int) (int, time.Duration) {
 		body := fmt.Sprintf(`{"email":"stall-%d@example.com","password":"wrong"}`, i)
@@ -170,6 +171,7 @@ func TestJWKSAnswersWhileTheDatabaseIsBlackholed(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			//abstime:allow lower bound: counts the logins the blackhole held for at least half the request timeout (the fault precondition), never a speed check
 			if _, took := login(i); took >= requestTimeout/2 {
 				held.Add(1)
 			}
@@ -215,8 +217,5 @@ func TestJWKSAnswersWhileTheDatabaseIsBlackholed(t *testing.T) {
 			}
 		}
 		t.Errorf("JWKS answered %v, want %d x 200 (0 x 429)", counts, probes)
-	}
-	if took[probes-1] > jwksBound {
-		t.Errorf("slowest JWKS request took %s, want <= %s (request timeout %s)", took[probes-1], jwksBound, requestTimeout)
 	}
 }

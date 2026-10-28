@@ -16,7 +16,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/aftercommit"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5"
@@ -80,10 +79,7 @@ func (writer markerTeamRepoOwnership) PublishTx(ctx context.Context, tx pgx.Tx, 
 func TestNativePostSyncFanoutIsDuplicateStableAndRollsBackWholeGeneration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
@@ -228,10 +224,7 @@ func (observer *recordingFanoutObserver) ObservePostSyncFanout(outcome jobruntim
 func TestNativePostSyncFanoutObservesPublishedOutcomeWithDispatchID(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
@@ -275,10 +268,7 @@ func TestNativePostSyncFanoutObservesPublishedOutcomeWithDispatchID(t *testing.T
 func TestNativePostSyncFanoutObservesNoRepositoriesOutcomeWhenNotDailyRelevant(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
@@ -332,10 +322,7 @@ func TestNativePostSyncFanoutObservesNoRepositoriesOutcomeWhenNotDailyRelevant(t
 func TestNativePostSyncFanoutObservesErrorOutcomeWhenDailyStartRunTxFails(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
@@ -385,10 +372,7 @@ func TestNativePostSyncFanoutObservesErrorOutcomeWhenDailyStartRunTxFails(t *tes
 func TestNativePostSyncFanoutDoesNotReportPublishedWhenALaterStageRollsBackTheWholeTransaction(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
@@ -453,10 +437,7 @@ func TestNativePostSyncFanoutDoesNotReportPublishedWhenALaterStageRollsBackTheWh
 func TestNativePostSyncFanoutDoesNotReportPublishedWhenALaterStageWriterPanics(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
@@ -517,7 +498,6 @@ func TestNativePostSyncFanoutDoesNotReportPublishedWhenALaterStageWriterPanics(t
 
 func createPostSyncTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	pgschema.Apply(ctx, t, pool)
 	// post_sync_markers is this file's own probe table (the marker writers below stage into it);
 	// it is not a production table, so the migrated schema does not carry it.
 	if _, err := pool.Exec(ctx, `
@@ -625,10 +605,7 @@ func (unavailableTeamWriter) PublishTx(context.Context, pgx.Tx, PostSyncPlan) er
 func TestNativePostSyncFanoutTeamAutoimportFailurePolicy(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
@@ -785,10 +762,7 @@ func (unavailableTeamRepoOwnershipWriter) PublishTx(context.Context, pgx.Tx, Pos
 func TestNativePostSyncFanoutTeamRepoOwnershipDerivationFailurePolicy(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
@@ -946,10 +920,7 @@ func (observer *recordingTeamRepoOwnershipDerivationObserver) ObserveTeamRepoOwn
 func TestNativePostSyncFanoutTeamRepoOwnershipDerivationRecordsRouteMissingOnDeterministicRejection(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
@@ -1043,10 +1014,7 @@ func seedPostSyncWithSyncOptions(
 func TestNativePostSyncFanoutTeamAutoimportGateIsAnyOfThreeCategories(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
@@ -1154,10 +1122,7 @@ func (writer hookingRemaining) StartRunTx(ctx context.Context, tx pgx.Tx, family
 func TestNativePostSyncFanoutRunsAStagedSignalOnlyAfterTheCommit(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {

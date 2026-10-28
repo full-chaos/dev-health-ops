@@ -51,6 +51,8 @@ printf '%%s\n' "$*" >> "${FAKE_GO_LOG}"
 [ -z "${FAKE_GO_ENV_LOG:-}" ] || printf 'GOFLAGS=%%s\n' "${GOFLAGS:-}" >> "${FAKE_GO_ENV_LOG}"
 # FAKE_GO_FRESH_LOG: "set" or "unset" for CHECK_GO_FRESH in the environment of each go test call, one line per call.
 [ -z "${FAKE_GO_FRESH_LOG:-}" ] || printf '%%s\n' "${CHECK_GO_FRESH+set}${CHECK_GO_FRESH-unset}" >> "${FAKE_GO_FRESH_LOG}"
+# The multi-replica worker gate (test shard 1) reads the measured-job count its go test writes.
+[ -z "${DEV_HEALTH_MULTI_REPLICA_PROOF:-}" ] || printf '1\n' > "${DEV_HEALTH_MULTI_REPLICA_PROOF}"
 # FAKE_GO_TEST_STDOUT: what a go test call prints (a canned go test log, e.g. the "ok" summary lines of the packages it ran).
 if [ -n "${FAKE_GO_TEST_STDOUT:-}" ]; then cat "${FAKE_GO_TEST_STDOUT}"
 else
@@ -59,6 +61,8 @@ else
   # A -json run (the legs' stages) prints the same summary lines as output events, which the leg's converter turns back into the log.
   case " $* " in *" -race "*) ;; *" -json "*) for a in "$@"; do case "$a" in -*|test) ;; *) printf '{"Action":"output","Package":"p","Output":"ok  \\t%%s\\t0.01s\\n"}\n' "$a" ;; esac; done ;; esac
 fi
+# FAKE_GO_PROVIDERSYNC_STDOUT: what the race leg's providersync slice call prints, and only that call.
+if [ -n "${FAKE_GO_PROVIDERSYNC_STDOUT:-}" ] && [[ " $* " == *" ./internal/providersync "* ]]; then cat "${FAKE_GO_PROVIDERSYNC_STDOUT}"; fi
 case " $* " in *" -json "*) printf '{"Time":"2026-01-01T00:00:00Z","Action":"pass","Package":"p","Test":"TestFake","Elapsed":0.01}\n' ;; esac
 [ -z "${FAKE_GO_FAIL:-}" ] || exit 1
 # FAKE_GO_FAIL_ONLY fails exactly one of the two race calls of a leg: "providersync" or "packages".

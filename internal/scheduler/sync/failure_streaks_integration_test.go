@@ -181,6 +181,11 @@ func TestFailureStreakReadThatCannotFinishLeavesTheTransactionUsable(t *testing.
 			t.Fatalf("streaks = %v, want nil", got)
 		}
 	case <-time.After(30 * time.Second):
+		cancel()
+		select {
+		case <-streaks:
+		case <-time.After(10 * time.Second):
+		}
 		t.Fatal("the streak read is still running after the 30 s guard: it has no bound of its own and holds the step")
 	}
 

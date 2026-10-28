@@ -49,6 +49,7 @@ load_registry() {
   while IFS= read -r line || [ -n "${line}" ]; do
     case "${line}" in '' | '#'*) continue ;; esac
     split_tabs 3 "${line}"
+    safe_pkg "${F1}"
     rows+=("${F1}"$'\x1f'"${F2}"$'\x1f'"${F3}")
   done < "${REGISTRY}"
   [ "${#rows[@]}" -gt 0 ] || die "registry holds no row"
@@ -58,9 +59,24 @@ load_registry() {
 # does not parse is a usage error, never a skipped line.
 emit_row() { printf 'ROW\t%s\t%s\n' "$1" "$2"; }
 ROW_PKG="" ROW_RE=""
+# verdict_reason TEXT: the reason of a VERDICT line must hold a non-space character.
+verdict_reason() {
+  [[ "$1" =~ [^[:space:]] ]] || die "the VERDICT reason is blank"
+}
+# safe_pkg PKG: a package is a relative path below the repository: no absolute path, no ".." segment. The registry and
+# the ROW parser apply the same rule, so select cannot emit a package that run refuses.
+safe_pkg() {
+  case "$1" in
+    /*) die "package must be relative to the repository: $1" ;;
+  esac
+  case "/$1/" in
+    */../*) die "package must not contain a .. segment: $1" ;;
+  esac
+}
 parse_row() {
   split_tabs 3 "$1"
   [ "${F1}" = "ROW" ] || die "malformed ROW line: $1"
+  safe_pkg "${F2}"
   ROW_PKG="${F2}"
   ROW_RE="${F3}"
 }
@@ -152,6 +168,10 @@ run_rows() {
   local -a pkgs=() res=()
   [ -n "${file}" ] && [ -r "${file}" ] || die "run needs a readable ROWS_FILE"
   trap 'rm -f "${out:-}"' EXIT
+  # Bytes the shell read would drop or reinterpret are refused before it reads: a NUL byte (read drops it, so Test\0X would
+  # run as TestX) and a missing final newline (select always ends its last line with one).
+  [ "$(tr -d '\000' < "${file}" | wc -c)" -eq "$(wc -c < "${file}")" ] || die "NUL byte in the rows file"
+  [ "$(tail -c1 "${file}" | od -An -tx1 | tr -d ' \n')" = "0a" ] || die "the rows file does not end with a newline"
   # Pass 1 reads the whole file before any test runs and accepts EXACTLY what `select` emits: one well-formed
   # ROW<TAB>package<TAB>regex line per row and exactly one "VERDICT select|none|all <reason>" line. select never prints an
   # empty line, a carriage return or any other text, so each of those exits 2 and runs nothing, as does a count of parsed
@@ -166,8 +186,9 @@ run_rows() {
           ROW$'\t'*) parse_row "${line}"; pkgs+=("${ROW_PKG}"); res+=("${ROW_RE}") ;;
         esac
         ;;
-      "VERDICT none "?*) verdicts=$((verdicts + 1)); verdict="none" ;;
-      "VERDICT select "?* | "VERDICT all "?*) verdicts=$((verdicts + 1)); verdict="rows" ;;
+      "VERDICT none "?*) verdict_reason "${line#VERDICT none }"; verdicts=$((verdicts + 1)); verdict="none" ;;
+      "VERDICT select "?*) verdict_reason "${line#VERDICT select }"; verdicts=$((verdicts + 1)); verdict="rows" ;;
+      "VERDICT all "?*) verdict_reason "${line#VERDICT all }"; verdicts=$((verdicts + 1)); verdict="rows" ;;
       *) die "unexpected line in the rows file: ${line}" ;;
     esac
   done < "${file}"

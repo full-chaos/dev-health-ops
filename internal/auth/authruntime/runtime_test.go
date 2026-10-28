@@ -408,17 +408,21 @@ func TestGracefulShutdownLeavesNoGoroutineBehind(t *testing.T) {
 // observed, so the assertion above cannot be satisfied by a transient dip.
 func settledGoroutines(t *testing.T) int {
 	t.Helper()
-	deadline := time.Now().Add(15 * time.Second)
+	// The settle is counted in samples, not compared with a clock: the count must stop falling for stableSamples samples in a row (a
+	// sample is a yield and a 20 ms pause), and the wait gives up after maxSamples and returns the lowest count seen.
+	const stableSamples, maxSamples = 50, 750
 	lowest := runtime.NumGoroutine()
-	stableSince := time.Now()
-	for time.Now().Before(deadline) {
+	stable := 0
+	for range maxSamples {
 		runtime.Gosched()
 		current := runtime.NumGoroutine()
 		if current < lowest {
 			lowest = current
-			stableSince = time.Now()
+			stable = 0
+		} else {
+			stable++
 		}
-		if time.Since(stableSince) > time.Second {
+		if stable >= stableSamples {
 			return lowest
 		}
 		time.Sleep(20 * time.Millisecond)

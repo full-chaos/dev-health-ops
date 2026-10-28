@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"go.opentelemetry.io/otel/sdk/metric"
@@ -135,26 +136,31 @@ func TestSendDoesNotWaitForTheProviderForAnyAddress(t *testing.T) {
 	closeIn(t, s)
 }
 
+// The sender runs in a bubble on a virtual clock with an in-memory provider that waits on a gate: ten sends into a full pool return
+// at the instant they were made, so a send that waits for room fails as well as one that never returns.
 func TestFullPoolReturnsAtOnceAndCountsDropped(t *testing.T) {
-	p := &fakeProvider{gate: make(chan struct{})}
-	var logs bytes.Buffer
-	rd := metric.NewManualReader()
-	s := newSender(t, p, 1, 1, &logs, rd)
-	start := time.Now()
-	for i := 0; i < 10; i++ {
-		if err := s.Send(context.Background(), message(local.PurposePasswordReset, true)); err != nil {
-			t.Fatal(err)
+	synctest.Test(t, func(t *testing.T) {
+		p := &fakeProvider{gate: make(chan struct{})}
+		var logs bytes.Buffer
+		rd := metric.NewManualReader()
+		s := newSender(t, p, 1, 1, &logs, rd)
+		start := time.Now()
+		for i := 0; i < 10; i++ {
+			if err := s.Send(context.Background(), message(local.PurposePasswordReset, true)); err != nil {
+				t.Fatal(err)
+			}
 		}
-	}
-	if time.Since(start) > time.Second {
-		t.Fatal("a full pool made Send wait")
-	}
-	close(p.gate)
-	closeIn(t, s)
-	counts := outcomes(t, rd)
-	if counts[OutcomeDropped] < 7 || counts[OutcomeSent] < 1 || counts[OutcomeSent]+counts[OutcomeDropped] != 10 {
-		t.Fatalf("outcome counts %v do not add up to 10 sends with drops", counts)
-	}
+		returnedAt := time.Now()
+		if !returnedAt.Equal(start) {
+			t.Fatalf("ten sends into a full pool returned at +%v of virtual time: a full pool made Send wait", returnedAt.Sub(start))
+		}
+		close(p.gate)
+		closeIn(t, s)
+		counts := outcomes(t, rd)
+		if counts[OutcomeDropped] < 7 || counts[OutcomeSent] < 1 || counts[OutcomeSent]+counts[OutcomeDropped] != 10 {
+			t.Fatalf("outcome counts %v do not add up to 10 sends with drops", counts)
+		}
+	})
 }
 
 func TestFailureLogsNoTextAndCountsFailed(t *testing.T) {

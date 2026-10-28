@@ -23,6 +23,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/full-chaos/dev-health-go/authverify"
@@ -461,22 +462,49 @@ func assertUnavailable(t *testing.T, h *harness, rec *httptest.ResponseRecorder,
 	}
 }
 
+// hungValidator is a TokenReview that never answers: it waits for its context to end. It is in memory, no socket is opened.
+type hungValidator struct{}
+
+func (hungValidator) Validate(ctx context.Context, _ string) (authverify.SubjectIdentity, error) {
+	<-ctx.Done()
+	return authverify.SubjectIdentity{}, ctx.Err()
+}
+
+// The exchange runs in a bubble on a virtual clock with an in-memory validator that never answers, so the 503 comes back at exactly
+// ReviewCallTimeout: a bound removed fails as a deadlock and a bound honored late fails the instant check.
+// The harness's fake API server is built OUTSIDE the bubble on purpose: it listens on a real socket, and an accept waiting on that
+// socket inside the bubble would keep the virtual clock from advancing. Nothing in the bubble may touch it: its request counter must
+// stay 0, inside the bubble and again after the bubble returned.
 func TestASlowReviewTimesOutWith503(t *testing.T) {
-	h := newHarness(t)
-	release := make(chan struct{})
-	t.Cleanup(func() { close(release) })
-	h.review.set(func(w http.ResponseWriter, r *http.Request, _ reviewSpec) {
-		select {
-		case <-release:
-		case <-r.Context().Done():
-		}
-	})
-	start := time.Now()
-	rec := h.post(form(h.validSubject(), "auth-service", "").Encode())
-	if elapsed := time.Since(start); elapsed > ReviewCallTimeout+2*time.Second {
-		t.Fatalf("the review took %s, over the %s bound", elapsed, ReviewCallTimeout)
+	h := newHarness(t, func(_ *harness, d *Deps) { d.Validator = hungValidator{} })
+	subject := h.validSubject()
+	requestsSeen := func() int {
+		h.review.mu.Lock()
+		defer h.review.mu.Unlock()
+		return h.review.calls
 	}
-	assertUnavailable(t, h, rec, "tokenreview_unavailable")
+	// Failure path only: a bubble that does not end (for example the code under test reaching a real transport) never returns. This
+	// watchdog runs on the real clock outside the bubble, never fires on a passing run, and states the facts it can see: the test is
+	// still running and the number of requests the fake API server received.
+	watchdog := time.AfterFunc(30*time.Second, func() {
+		panic(fmt.Sprintf("TestASlowReviewTimesOutWith503: test still running after the 30 s guard; fake API requests=%d", requestsSeen()))
+	})
+	defer watchdog.Stop()
+	synctest.Test(t, func(t *testing.T) {
+		start := time.Now()
+		rec := h.post(form(subject, "auth-service", "").Encode())
+		returnedAt := time.Now()
+		if calls := requestsSeen(); calls != 0 {
+			t.Fatalf("the fake API server outside the bubble received %d request(s): the exchange used a real transport", calls)
+		}
+		if !returnedAt.Equal(start.Add(ReviewCallTimeout)) {
+			t.Fatalf("the exchange answered at +%v of virtual time, want +%v (the review bound)", returnedAt.Sub(start), ReviewCallTimeout)
+		}
+		assertUnavailable(t, h, rec, "tokenreview_unavailable")
+	})
+	if calls := requestsSeen(); calls != 0 {
+		t.Fatalf("the fake API server outside the bubble received %d request(s) by the time the bubble returned", calls)
+	}
 }
 
 // An API server without the TokenReview path (it answers 404) fails closed.

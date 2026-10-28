@@ -79,8 +79,20 @@ type clickHouse struct {
 
 func startClickHouse(t *testing.T) clickHouse {
 	t.Helper()
+	return startClickHouseWith(t, containers.StartClickHouse)
+}
+
+// startIsolatedClickHouse is startClickHouse on a private container, for a test that needs a server of its own
+// (a different time zone, server-wide state).
+func startIsolatedClickHouse(t *testing.T) clickHouse {
+	t.Helper()
+	return startClickHouseWith(t, containers.StartClickHouseIsolated)
+}
+
+func startClickHouseWith(t *testing.T, start func(context.Context) (*containers.Instance, error)) clickHouse {
+	t.Helper()
 	ctx := context.Background()
-	instance, err := containers.StartClickHouse(ctx)
+	instance, err := start(ctx)
 	if err != nil {
 		t.Fatalf("start clickhouse: %v", err)
 	}

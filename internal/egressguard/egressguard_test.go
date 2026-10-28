@@ -746,6 +746,10 @@ func TestGuardedDialStartsTheFallbackWhenThePrimaryFails(t *testing.T) {
 		return newTrackedConn(), nil
 	}
 	waited := dial(hung)
+	//abstime:allow lower bound: the fallback delay timer ran its course; a loaded host only makes the wait longer
+	if waited < fallbackDelay {
+		t.Fatalf("a primary that never answers got its fallback after %v, before the fallback delay %v", waited, fallbackDelay)
+	}
 	fast := dial(inner)
 	for range 4 {
 		fast = min(fast, dial(inner))

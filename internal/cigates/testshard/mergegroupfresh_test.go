@@ -296,7 +296,7 @@ func TestACachedProvidersyncRaceSliceFailsOnlyTheMergeGroupRaceLeg(t *testing.T)
 // go_test_leg runs every stage of check_test_shard and check_race_shard (checkgo's leg-site guard pins that they hold no go test
 // call of their own).
 var mergeGroupLegFunctions = []string{
-	"go_test_leg", "go_test_json_run", "check_multi_replica_workers", "check_providersync_race_shard",
+	"go_test_leg", "go_test_json_run_t", "check_multi_replica_workers", "check_providersync_race_shard",
 }
 
 // legCallsWithoutCountOne lists the go test lines of the leg functions that name no -count=1, and the number of lines seen.

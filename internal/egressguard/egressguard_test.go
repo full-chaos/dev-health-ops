@@ -19,6 +19,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
@@ -717,45 +718,57 @@ func TestGuardedDialFallsBackToTheOtherFamily(t *testing.T) {
 	}
 }
 
-// A primary that fails at once starts the fallback at once (no 300 ms wait).
-func TestGuardedDialStartsTheFallbackWhenThePrimaryFails(t *testing.T) {
-	allowOnly(t)
-	mapNames(t, map[string][]netip.Addr{"dual.example": {netip.MustParseAddr(publicV6), netip.MustParseAddr(publicV4)}})
-	inner := func(_ context.Context, _, address string) (net.Conn, error) {
-		if strings.HasPrefix(address, "[") {
-			return nil, errors.New("v6 unreachable")
-		}
-		return newTrackedConn(), nil
+// The fallback delay is the net.Dialer default (RFC 8305): a changed value is a changed behaviour.
+func TestGuardedDialFallbackDelayIsTheDialerDefault(t *testing.T) {
+	if fallbackDelay != 300*time.Millisecond {
+		t.Fatalf("fallbackDelay = %v, want the net.Dialer default of 300 ms", fallbackDelay)
 	}
-	dial := func(inner func(context.Context, string, string) (net.Conn, error)) time.Duration {
-		started := time.Now()
-		conn, err := guardedDial(inner)(context.Background(), "tcp", "dual.example:443")
-		took := time.Since(started)
-		if err != nil {
-			t.Fatal(err)
-		}
-		_ = conn.Close()
-		return took
-	}
-	// The same name with a primary that never answers waits out the fallback delay: that run is the yardstick, in this process.
-	hung := func(ctx context.Context, _, address string) (net.Conn, error) {
-		if strings.HasPrefix(address, "[") {
-			<-ctx.Done()
-			return nil, ctx.Err()
-		}
-		return newTrackedConn(), nil
-	}
-	waited := dial(hung)
-	//abstime:allow lower bound: the fallback delay timer ran its course; a loaded host only makes the wait longer
-	if waited < fallbackDelay {
-		t.Fatalf("a primary that never answers got its fallback after %v, before the fallback delay %v", waited, fallbackDelay)
-	}
-	fast := dial(inner)
-	for range 4 {
-		fast = min(fast, dial(inner))
-	}
-	if fast*2 >= waited {
-		t.Fatalf("a failed primary took %v, the fallback delay run took %v: want an immediate fallback, not a wait", fast, waited)
+}
+
+// A primary that never answers gets its fallback at the fallback delay; a primary that fails at once gets its fallback at once
+// (no wait). Each dial runs in a bubble with a virtual clock, so the time the fallback was dialled is exact whatever the host load.
+// The dialler is a fake that does no network I/O.
+func TestGuardedDialStartsTheFallbackAtTheDelayOrAtOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		primaryFails bool
+		wantAfter    time.Duration
+	}{
+		{"the primary never answers: the fallback starts at the fallback delay", false, fallbackDelay},
+		{"the primary fails at once: the fallback starts at once", true, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				allowOnly(t)
+				mapNames(t, map[string][]netip.Addr{"dual.example": {netip.MustParseAddr(publicV6), netip.MustParseAddr(publicV4)}})
+				started := time.Now()
+				var mutex sync.Mutex
+				var fallbackAt time.Time
+				inner := func(ctx context.Context, _, address string) (net.Conn, error) {
+					if strings.HasPrefix(address, "[") {
+						if tc.primaryFails {
+							return nil, errors.New("v6 unreachable")
+						}
+						<-ctx.Done()
+						return nil, ctx.Err()
+					}
+					mutex.Lock()
+					fallbackAt = time.Now()
+					mutex.Unlock()
+					return newTrackedConn(), nil
+				}
+				conn, err := guardedDial(inner)(context.Background(), "tcp", "dual.example:443")
+				if err != nil {
+					t.Fatal(err)
+				}
+				_ = conn.Close()
+				mutex.Lock()
+				defer mutex.Unlock()
+				if !fallbackAt.Equal(started.Add(tc.wantAfter)) {
+					t.Fatalf("the fallback was dialled at +%v of virtual time, want +%v", fallbackAt.Sub(started), tc.wantAfter)
+				}
+			})
+		})
 	}
 }
 
@@ -804,14 +817,38 @@ func TestGuardedDialReturnsThePrimaryErrorWhenEveryFamilyFails(t *testing.T) {
 	}
 	settledGoroutines(t, before)
 
+	handed := make(chan context.Context, 2)
 	blocked := func(ctx context.Context, _, _ string) (net.Conn, error) {
+		handed <- ctx
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	time.AfterFunc(100*time.Millisecond, cancel)
-	if _, err := guardedDial(blocked)(ctx, "tcp", "dual.example:443"); err == nil {
-		t.Fatal("a cancelled context must end the dial with an error")
+	defer cancel()
+	dialDone := make(chan error, 1)
+	go func() {
+		_, err := guardedDial(blocked)(ctx, "tcp", "dual.example:443")
+		dialDone <- err
+	}()
+	// The waits below are guards for the failure path only; a passing run never reaches them.
+	var dialCtx context.Context
+	select {
+	case dialCtx = <-handed:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the dial never reached the dialler")
+	}
+	cancel()
+	// A context derived from the caller's ends in the same call as the caller's cancel; one detached from it does not.
+	if dialCtx.Err() == nil {
+		t.Fatal("the context handed to the dialler did not end with the caller's cancel: the dial ignores a cancelled caller")
+	}
+	select {
+	case err := <-dialDone:
+		if err == nil {
+			t.Fatal("a cancelled context must end the dial with an error")
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("the dial did not end after the caller cancelled")
 	}
 	settledGoroutines(t, before)
 }

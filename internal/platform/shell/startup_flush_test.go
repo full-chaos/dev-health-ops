@@ -99,10 +99,7 @@ func TestMetricsFlushStartExportsOnceBeforeItReturns(t *testing.T) {
 func TestMetricsFlushStartIsBoundedWhenTheFlushIgnoresItsContext(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		source := &flushSource{hold: make(chan struct{})}
-		go func() {
-			time.Sleep(30 * time.Second)
-			close(source.hold)
-		}()
+		defer close(source.hold)
 		flush, logs := newFlush(source)
 		start := time.Now()
 		if err := flush.Start(context.Background()); err != nil {

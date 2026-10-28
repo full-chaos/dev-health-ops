@@ -218,6 +218,12 @@ func awaitBoundAddressOrExit(t *testing.T, logs *safeBuffer, exit <-chan int, co
 
 // awaitResponse polls url until it answers, so the test never races the
 // listener's bind.
+// serviceClient talks to the service under test with no keep-alive. Its transport keeps no idle connections, so it
+// never leaves a dialled connection unused on a listener: the service's stop would wait for such a connection.
+func serviceClient(timeout time.Duration) *http.Client {
+	return &http.Client{Timeout: timeout, Transport: &http.Transport{DisableKeepAlives: true}}
+}
+
 func awaitResponse(t *testing.T, client *http.Client, url string) *http.Response {
 	t.Helper()
 	deadline := time.Now().Add(20 * time.Second)
@@ -276,7 +282,7 @@ func TestReadinessFailsClosedOnBrokenDatabaseAndSigningKey(t *testing.T) {
 	env := brokenEnvironment(t, apiAddress, operatorAddress)
 
 	logs, stop := runService(t, env)
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := serviceClient(10 * time.Second)
 	defer client.CloseIdleConnections()
 
 	response := awaitSettledReadiness(t, client, "http://"+operatorAddress+"/readyz")
@@ -354,7 +360,7 @@ func TestReadinessFailsClosedOnBrokenDatabaseAndSigningKey(t *testing.T) {
 // transport's, the DNS resolver's) are already in the count and cannot be
 // mistaken for a leak.
 func TestGracefulShutdownLeavesNoGoroutineBehind(t *testing.T) {
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := serviceClient(10 * time.Second)
 
 	start := func() (string, func() int) {
 		ports := reservePorts(t, 2)
@@ -700,7 +706,7 @@ func TestFlagsOverrideTheEnvironment(t *testing.T) {
 	if flagOperator == operatorAddress {
 		t.Fatalf("the operator listener bound the held environment address %s: the hold is not effective", operatorAddress)
 	}
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := serviceClient(5 * time.Second)
 	defer client.CloseIdleConnections()
 	response := awaitResponse(t, client, "http://"+flagOperator+"/healthz")
 	_, _ = io.Copy(io.Discard, response.Body)
@@ -790,7 +796,7 @@ func TestTheAuthServiceScrapeCarriesItsPerRouteRequestSeries(t *testing.T) {
 	env := brokenEnvironment(t, apiAddress, operatorAddress)
 	env[authconfig.EnvLogLevel] = "info"
 	logs, stop := runService(t, env)
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := serviceClient(10 * time.Second)
 	defer client.CloseIdleConnections()
 
 	api := awaitResponse(t, client, "http://"+apiAddress+"/v1/never-registered/customer-8841")
@@ -840,7 +846,7 @@ func TestHealthcheckMirrorsReadiness(t *testing.T) {
 	}
 
 	logs, stop := runService(t, env)
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := serviceClient(10 * time.Second)
 	defer client.CloseIdleConnections()
 	// Both listeners must be bound before the shutdown below: a cancel that lands
 	// between the operator and the API bind makes Execute return the start error
@@ -865,7 +871,7 @@ func TestTheAuthServiceScrapeRegistersTheRateLimitCounters(t *testing.T) {
 	apiAddress, operatorAddress := ports[0], ports[1]
 	env := brokenEnvironment(t, apiAddress, operatorAddress)
 	_, stop := runService(t, env)
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := serviceClient(10 * time.Second)
 	defer client.CloseIdleConnections()
 
 	scrape := awaitResponse(t, client, "http://"+operatorAddress+"/metrics")
@@ -897,7 +903,7 @@ func TestOneOperatorScrapeCarriesTheRateLimitAlertSeries(t *testing.T) {
 	apiAddress, operatorAddress := ports[0], ports[1]
 	env := sessionEnvironment(brokenEnvironment(t, apiAddress, operatorAddress))
 	_, stop := runService(t, env)
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := serviceClient(10 * time.Second)
 	defer client.CloseIdleConnections()
 
 	counter := regexp.MustCompile(`(?m)^dev_health_api_rate_limit_store_errors_total\{limit="auth_svc_[a-z_]+"\} 0$`)

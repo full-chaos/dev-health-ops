@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -31,6 +32,17 @@ type Server struct {
 	errors   chan error
 	mu       sync.RWMutex
 	listener net.Listener
+
+	// conns are the accepted connections; stopping is set when Shutdown begins.
+	connMu   sync.Mutex
+	conns    map[*trackedConn]struct{}
+	stopping bool
+	// sweptHook, firstReadHook and closedHook are nil outside tests: they pause at the stop's sweep and at a
+	// connection's first read, and report a connection the HTTP server is done with, so a test can order a request
+	// against the stop.
+	sweptHook     func()
+	firstReadHook func(net.Conn)
+	closedHook    func(net.Conn)
 }
 
 func NewServer(options ServerOptions) (*Server, error) {
@@ -46,6 +58,7 @@ func NewServer(options ServerOptions) (*Server, error) {
 		service:  options.Service,
 		version:  options.Version,
 		errors:   make(chan error, 1),
+		conns:    map[*trackedConn]struct{}{},
 	}
 	server.server = &http.Server{
 		Addr:              options.Address,
@@ -73,7 +86,7 @@ func (s *Server) Start(ctx context.Context) error {
 	s.listener = listener
 	s.server.BaseContext = func(net.Listener) context.Context { return ctx }
 	go func() {
-		if serveErr := s.server.Serve(listener); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+		if serveErr := s.server.Serve(trackingListener{Listener: listener, server: s}); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			s.registry.SetLive(false)
 			select {
 			case s.errors <- fmt.Errorf("operator HTTP server: %w", serveErr):
@@ -92,6 +105,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if !started {
 		return nil
 	}
+	s.closeUnusedConns()
 	if err := s.server.Shutdown(ctx); err != nil {
 		return fmt.Errorf("shutdown operator HTTP: %w", err)
 	}
@@ -323,4 +337,100 @@ func writeJSON(response http.ResponseWriter, status int, payload map[string]any)
 	response.Header().Set("Content-Type", "application/json")
 	response.WriteHeader(status)
 	_ = json.NewEncoder(response).Encode(payload)
+}
+
+// closeUnusedConns closes every connection that has delivered no byte to the HTTP server, and makes the listener close
+// any connection it accepts from now on the same way. http.Server.Shutdown treats such a connection as busy until it
+// is 5 s old (a Go client leaves one behind when it dials for a request that an idle connection then served), which is
+// longer than this listener's share of the shutdown timeout. A connection whose first bytes reached the server is
+// left to Shutdown, which serves or drains it: a request is never cut after the server read it.
+func (s *Server) closeUnusedConns() {
+	s.connMu.Lock()
+	s.stopping = true
+	for conn := range s.conns {
+		conn.closeIfUnused()
+	}
+	s.connMu.Unlock()
+	if s.sweptHook != nil {
+		s.sweptHook()
+	}
+}
+
+// trackingListener registers each accepted connection with the server.
+type trackingListener struct {
+	net.Listener
+	server *Server
+}
+
+func (l trackingListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	tracked := &trackedConn{Conn: conn, server: l.server}
+	l.server.connMu.Lock()
+	l.server.conns[tracked] = struct{}{}
+	if l.server.stopping {
+		tracked.closeIfUnused()
+	}
+	l.server.connMu.Unlock()
+	return tracked, nil
+}
+
+const (
+	connUnused int32 = iota
+	connInUse
+	connClosedUnused
+)
+
+// trackedConn records whether any byte reached the HTTP server. Whichever comes first wins: the first read that
+// returns bytes marks it in use (the stop then leaves it to Shutdown), or the stop marks it closed unused (a read
+// that returns bytes after that hands none of them on, so the request is refused, never half served).
+type trackedConn struct {
+	net.Conn
+	server    *Server
+	state     atomic.Int32
+	closeOnce sync.Once
+}
+
+func (c *trackedConn) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	if n > 0 && c.state.Load() == connUnused {
+		if c.server.firstReadHook != nil {
+			c.server.firstReadHook(c.Conn)
+		}
+		c.state.CompareAndSwap(connUnused, connInUse)
+	}
+	if n > 0 && c.state.Load() == connClosedUnused {
+		return 0, net.ErrClosed
+	}
+	return n, err
+}
+
+// closeIfUnused closes the connection when no byte has reached the server yet.
+func (c *trackedConn) closeIfUnused() {
+	if c.state.CompareAndSwap(connUnused, connClosedUnused) {
+		_ = c.Conn.Close()
+	}
+}
+
+func (c *trackedConn) Close() error {
+	err := c.Conn.Close()
+	c.closeOnce.Do(func() {
+		c.server.connMu.Lock()
+		delete(c.server.conns, c)
+		c.server.connMu.Unlock()
+		if c.server.closedHook != nil {
+			c.server.closedHook(c.Conn)
+		}
+	})
+	return err
+}
+
+// CloseWrite keeps the half-close http.Server uses when the underlying connection has one.
+func (c *trackedConn) CloseWrite() error {
+	if closer, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return closer.CloseWrite()
+	}
+	return c.Close()
 }

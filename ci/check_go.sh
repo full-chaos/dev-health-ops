@@ -543,6 +543,75 @@ census_package_partition() {
     NF { key = ($0 == mod) ? "." : substr($0, length(mod) + 2); if ((key in isrow) == (kind == "rows")) print }'
 }
 
+# leg_json_file KIND SHARD COUNT: the file a test or race leg keeps its go test -json in, emptied first:
+# ${GO_TEST_LEG_JSON_DIR}/<KIND>-<SHARD>-of-<COUNT>.json, or /dev/null when the variable is unset (a local run, a stand-in test).
+# It is a different directory from go-test-json/ (the uploaded providersync slice): the raw events carry test output and never leave
+# the runner; the workflow reduces them to package/test/action/elapsed first.
+leg_json_file() {
+  local dir="${GO_TEST_LEG_JSON_DIR:-}"
+  if [ -z "${dir}" ]; then
+    printf '/dev/null\n'
+    return 0
+  fi
+  mkdir -p -- "${dir}" && : >"${dir}/$1-$2-of-$3.json" || return 1
+  printf '%s\n' "${dir}/$1-$2-of-$3.json"
+}
+
+# go_test_leg LOG LEGJSON ARG...: `go test -json ARG...` of one stage of a test or race leg (run it from the module directory).
+# The plain log, on stdout and in LOG, is every Output field of the event stream verbatim, in stream order (the -v form: more
+# lines than plain go test, never fewer). A line that is not a JSON event passes through raw. The raw stream is kept in a stage
+# temp file and appended to LEGJSON (/dev/null when the leg keeps no timings) when the stage ends. Every element of the pipe is
+# read right after it: go test's own status is the stage status; a failed converter, a failed copy of the raw stream, a failed
+# write of the plain log or of LEGJSON is named on stderr and makes the stage fail (rc 70) when go test passed. A failed converter
+# drains its input (go test is never killed by a broken pipe) and the raw stream is printed into the plain log, so the log is
+# never empty.
+GO_TEST_LEG_JQ='
+inputs
+| ((fromjson? | select(type == "object" and ((.Action | type) == "string"))) // {Action: "output", Output: (. + "\n")})
+| select(.Action == "output")
+| ((.Output // "") | tostring)'
+go_test_leg() {
+  local log="$1" legjson="$2" rc raw problem=0
+  local -a ps fb
+  shift 2
+  command -v jq >/dev/null 2>&1 || die "the test and race legs need jq to read go test -json"
+  raw="$(mktemp "${TMPDIR:-/tmp}/dev-health-leg-raw.XXXXXX")" || die "go_test_leg: no temp file for the raw go test -json stream"
+  set +e
+  "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -json "$@" 2>&1 \
+    | tee "${raw}" \
+    | { jq -nR --unbuffered -rj "${GO_TEST_LEG_JQ}"; jqrc=$?; [ "${jqrc}" -eq 0 ] || cat >/dev/null; exit "${jqrc}"; } \
+    | tee -a "${log}"
+  ps=("${PIPESTATUS[@]}")
+  set -e
+  rc="${ps[0]}"
+  if [ "${ps[2]}" -ne 0 ]; then
+    printf 'go_test_leg: JSON converter failed (jq rc %s): the raw go test -json stream follows in the plain log\n' "${ps[2]}" >&2
+    set +e
+    cat "${raw}" | tee -a "${log}"
+    fb=("${PIPESTATUS[@]}")
+    set -e
+    if [ "${fb[1]}" -ne 0 ]; then
+      printf 'go_test_leg: plain log write failed (tee rc %s)\n' "${fb[1]}" >&2
+    fi
+    problem=1
+  fi
+  if [ "${ps[1]}" -ne 0 ]; then
+    printf 'go_test_leg: the copy of the raw stream failed (tee rc %s)\n' "${ps[1]}" >&2
+    problem=1
+  fi
+  if [ "${ps[3]}" -ne 0 ]; then
+    printf 'go_test_leg: the plain log write failed (tee rc %s)\n' "${ps[3]}" >&2
+    problem=1
+  fi
+  if [ "${legjson}" != /dev/null ] && ! cat "${raw}" >>"${legjson}"; then
+    printf 'go_test_leg: the raw file write failed: %s\n' "${legjson}" >&2
+    problem=1
+  fi
+  rm -f -- "${raw}"
+  if [ "${problem}" -ne 0 ] && [ "${rc}" -eq 0 ]; then rc=70; fi
+  return "${rc}"
+}
+
 # go_test_json_run JSON_FILE LOG_FILE PKG...: ONE fresh `go test -json` run of the packages (run it from the module directory).
 # The events are appended to JSON_FILE; jq turns them back into the plain go test log on stdout and in LOG_FILE (the ok lines
 # the wall and unweighted guards read). pipefail keeps go test's exit code.
@@ -868,13 +937,14 @@ check_security_fresh_receipt() {
 # partition `go list ./...`; internal/gqlgenguard runs alone after the rest of its shard. The packages that hold race-excluded rows run once,
 # fresh, with go test -json, and the shard reads the receipts of its rows from that run (check_race_excluded_receipts): no second execution.
 check_test_shard() {
-  local shard="${1:-}" count="${2:-}" plan log json started wall module_dir rest rest_rows rest_sec census_keys heavy_is_row listing
+  local shard="${1:-}" count="${2:-}" plan log json started wall module_dir rest rest_rows rest_sec census_keys heavy_is_row listing legjson
   check_test_shard_args "${shard}" "${count}"
   plan="$(check_test_shard_plan "${shard}" "${count}")"
   listing="$(race_excluded_rows "${shard}" "${count}")" || exit 2
   census_keys="$(race_excluded_rows | cut -f1 | LC_ALL=C sort -u)" || exit 2
   log="$(mktemp "${TMPDIR:-/tmp}/dev-health-test-shard.XXXXXX")"
   json="$(mktemp "${TMPDIR:-/tmp}/dev-health-test-shard-json.XXXXXX")"
+  legjson="$(leg_json_file test "${shard}" "${count}")" || exit 2
   started="$(date +%s)"
   if security_fresh_active; then security_fresh_load; fi
   for module_dir in "${MODULE_DIRS[@]}"; do
@@ -895,7 +965,7 @@ check_test_shard() {
       (
         cd "${ROOT}/${module_dir}"
         # shellcheck disable=SC2086
-        "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -timeout 10m ${rest} 2>&1 | tee -a "${log}"
+        go_test_leg "${log}" "${legjson}" -timeout 10m ${rest}
       ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}"; return 1; }
     fi
     if [ -n "${rest_sec}" ]; then
@@ -903,7 +973,7 @@ check_test_shard() {
       (
         cd "${ROOT}/${module_dir}"
         # shellcheck disable=SC2086
-        "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -count=1 -timeout 10m ${rest_sec} 2>&1 | tee -a "${log}"
+        go_test_leg "${log}" "${legjson}" -count=1 -timeout 10m ${rest_sec}
       ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}"; return 1; }
     fi
     if [ -n "${rest_rows}" ]; then
@@ -927,11 +997,12 @@ check_test_shard() {
       else
         (
           cd "${ROOT}/${module_dir}"
-          "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -timeout 10m "${SERIAL_HEAVY_TEST_PACKAGE}" 2>&1 | tee -a "${log}"
+          go_test_leg "${log}" "${legjson}" -timeout 10m "${SERIAL_HEAVY_TEST_PACKAGE}"
         ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}"; return 1; }
       fi
     fi
   done
+  if [ "${legjson}" != /dev/null ]; then cat "${json}" >>"${legjson}"; fi
   check_race_excluded_receipts "${listing}" "${json}" || { rm -f -- "${log}" "${json}"; return 1; }
   (check_security_fresh_receipt "${log}") || { rm -f -- "${log}" "${json}"; return 1; }
   wall=$(($(date +%s) - started))
@@ -1092,11 +1163,12 @@ check_race_shard_plan() {
 }
 
 check_race_shard() {
-  local shard="${1:-}" count="${2:-}" module_dir modpath pkg selected=0 missing racelog
+  local shard="${1:-}" count="${2:-}" module_dir modpath pkg selected=0 missing racelog legjson
   check_race_shard_args "${shard}" "${count}"
   load_quality_selection
   local -a pkgs solo_pkgs pkgs_sec pkgs_all
   racelog="$(mktemp "${TMPDIR:-/tmp}/dev-health-race-shard.XXXXXX")"
+  legjson="$(leg_json_file race "${shard}" "${count}")" || exit 2
   if security_fresh_active; then security_fresh_load; fi
   for module_dir in "${MODULE_DIRS[@]}"; do
     modpath="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -m)"
@@ -1138,7 +1210,7 @@ check_race_shard() {
       selected=$((selected + ${#pkgs[@]}))
       (
         cd "${ROOT}/${module_dir}"
-        "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -race -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" "${pkgs[@]}" 2>&1 | tee -a "${racelog}"
+        go_test_leg "${racelog}" "${legjson}" -race -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" "${pkgs[@]}"
       ) || { rm -f -- "${racelog}"; return 1; }
     fi
     if [ "${#pkgs_sec[@]}" -gt 0 ]; then
@@ -1146,7 +1218,7 @@ check_race_shard() {
       printf 'go test -race (shard %s/%s): %s: security -count=1: %d package(s)\n' "${shard}" "${count}" "${module_dir}" "${#pkgs_sec[@]}"
       (
         cd "${ROOT}/${module_dir}"
-        "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -race -count=1 -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" "${pkgs_sec[@]}" 2>&1 | tee -a "${racelog}"
+        go_test_leg "${racelog}" "${legjson}" -race -count=1 -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" "${pkgs_sec[@]}"
       ) || { rm -f -- "${racelog}"; return 1; }
     fi
     # CHAOS-10289: the solo packages run last and alone: the shard's packages and its providersync slice have finished, so
@@ -1156,7 +1228,7 @@ check_race_shard() {
       printf 'go test -race (shard %s/%s): %s: solo, alone: %s\n' "${shard}" "${count}" "${module_dir}" "${solo_pkgs[*]}"
       (
         cd "${ROOT}/${module_dir}"
-        "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -race -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" "${solo_pkgs[@]}" 2>&1 | tee -a "${racelog}"
+        go_test_leg "${racelog}" "${legjson}" -race -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" "${solo_pkgs[@]}"
       ) || { rm -f -- "${racelog}"; return 1; }
     fi
   done

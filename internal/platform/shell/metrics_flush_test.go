@@ -49,18 +49,26 @@ func TestMetricsFlushNeverOutlivesItsBudgetEvenWhenTheSourceIgnoresTheContext(t 
 		defer cancel()
 		callerDeadline, _ := ctx.Deadline()
 		handedAt := time.Now()
-		result := make(chan error, 1)
-		go func() { result <- flush.Shutdown(ctx) }()
+		type outcome struct {
+			err error
+			at  time.Time
+		}
+		result := make(chan outcome, 1)
+		// The return instant is read in the goroutine that ran Shutdown, the moment it came back.
+		go func() {
+			err := flush.Shutdown(ctx)
+			result <- outcome{err: err, at: time.Now()}
+		}()
 		// The source returns only when released, after this test: Shutdown coming back at all means it stopped waiting for the source.
 		// The wait below is a guard for the failure path only; a passing run never reaches it.
-		var err error
+		var done outcome
 		select {
-		case err = <-result:
+		case done = <-result:
 		case <-time.After(30 * time.Second):
 			t.Fatal("Shutdown is still waiting for a source that ignores its context: the flush is not bounded")
 		}
-		if err != nil {
-			t.Fatalf("Shutdown error = %v, want nil: an unreachable collector is not a shutdown failure", err)
+		if done.err != nil {
+			t.Fatalf("Shutdown error = %v, want nil: an unreachable collector is not a shutdown failure", done.err)
 		}
 		// The flush budget is half of the attempt. Measured from the moment the source was entered, the deadline it was handed must fall
 		// in the first three quarters of what was left of the caller's budget, so the return comes before the attempt's own deadline
@@ -80,6 +88,14 @@ func TestMetricsFlushNeverOutlivesItsBudgetEvenWhenTheSourceIgnoresTheContext(t 
 		}
 		if flushDeadline.After(entry.Add(callerDeadline.Sub(entry) * 3 / 4)) {
 			t.Fatalf("the flush deadline %v is past three quarters of the caller's budget left at entry %v (caller deadline %v): the flush spends almost the whole attempt", *flushDeadline, entry, callerDeadline)
+		}
+		// Shutdown comes back when the flush budget ends: before the attempt's own deadline (the runtime never sees DeadlineExceeded) and
+		// not before the deadline the source was handed.
+		if !done.at.Before(callerDeadline) {
+			t.Fatalf("Shutdown returned at %v of virtual time, not before the caller's deadline %v: it outlived its flush budget", done.at, callerDeadline)
+		}
+		if done.at.Before(*flushDeadline) {
+			t.Fatalf("Shutdown returned at %v, before the flush deadline %v the source was handed", done.at, *flushDeadline)
 		}
 		if !strings.Contains(logs.String(), "final flush abandoned") {
 			t.Fatalf("the abandoned flush was not logged: %q", logs.String())

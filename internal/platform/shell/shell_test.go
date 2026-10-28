@@ -1146,14 +1146,30 @@ func TestShellLogsWhichRequiredCheckRefusedReadinessWithoutTheErrorText(t *testi
 
 // syncBuffer is a bytes.Buffer the shell's logger and the test can share.
 type syncBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
+	mu    sync.Mutex
+	buf   bytes.Buffer
+	wake  chan struct{}
+	armed chan struct{}
 }
 
 func (b *syncBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.buf.Write(p)
+	n, err := b.buf.Write(p)
+	if b.wake != nil {
+		close(b.wake)
+		b.wake = nil
+	}
+	return n, err
+}
+
+// waitFor is the stub of the old poll shape: it looks once and gives up.
+func (b *syncBuffer) waitFor(ctx context.Context, want string) bool {
+	found := strings.Contains(b.String(), want)
+	if b.armed != nil {
+		b.armed <- struct{}{}
+	}
+	return found
 }
 
 func (b *syncBuffer) String() string {

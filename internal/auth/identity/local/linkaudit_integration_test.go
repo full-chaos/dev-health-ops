@@ -282,3 +282,48 @@ func TestVerificationWritesExactlyOneAuditRowInTheEarliestMembershipOrganization
 		t.Errorf("rows after a replay = %d, want 1", n)
 	}
 }
+
+// afterPeekAccounts runs hook once the verification link has been read and before the write that consumes it.
+type afterPeekAccounts struct {
+	IdentityAccounts
+	hook func(ctx context.Context)
+}
+
+func (a afterPeekAccounts) PeekVerificationLink(ctx context.Context, hash [32]byte) (uuid.UUID, bool, error) {
+	id, ok, err := a.IdentityAccounts.PeekVerificationLink(ctx, hash)
+	if ok && a.hook != nil {
+		a.hook(ctx)
+	}
+	return id, ok, err
+}
+
+// A link spent between the read and the write that consumes it is refused: nothing is verified and no
+// verification row is written.
+func TestVerificationOfALinkSpentAfterTheReadIsRefusedAndWritesNothing(t *testing.T) {
+	ctx := context.Background()
+	rig := newEndRig(t, ctx)
+	p := rig.account(t, ctx, "Verify-pass-2")
+	if err := rig.links.IssueBound(ctx, IssueRequest{PrincipalID: p, Purpose: PurposeEmailVerification, TokenHash: linkHash("raced-secret"), TTL: VerificationTTL}); err != nil {
+		t.Fatal(err)
+	}
+	racing := afterPeekAccounts{IdentityAccounts: rig.accounts, hook: func(ctx context.Context) {
+		if _, ok, err := rig.links.Redeem(ctx, RedeemRequest{Purpose: PurposeEmailVerification, TokenHash: linkHash("raced-secret")}); err != nil || !ok {
+			t.Errorf("spending the link between the read and the write: ok %v, err %v", ok, err)
+		}
+	}}
+	flows, err := NewFlows(FlowsConfig{Accounts: racing, Links: rig.links, Sessions: rig.sessions, Mail: &liveMail{},
+		Locker: rig.links, UsersOwnedByAuth: true, Hash: cheapHash})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := flows.Verify(ctx, "raced-secret")
+	if err != nil || out.Kind != FlowInvalidToken {
+		t.Fatalf("Verify = %+v, %v; want FlowInvalidToken", out, err)
+	}
+	if n := rig.env.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE subject_principal_id = $1 AND event_type = 'auth.user.email_verified'`, p.String()); n != 0 {
+		t.Errorf("verification rows = %d, want 0: a refused verification writes no row", n)
+	}
+	if n := rig.env.count(t, ctx, `SELECT count(*) FROM public.users WHERE id = $1 AND is_verified`, p); n != 0 {
+		t.Errorf("the address was marked verified by a link that was already spent")
+	}
+}

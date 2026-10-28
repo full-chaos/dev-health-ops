@@ -85,9 +85,6 @@ var chainFiles embed.FS
 //go:embed archive/chain_manifest.tsv
 var archiveManifestFile []byte
 
-// archived is the chain revisions below the baseline (archive/chain_manifest.tsv), in order: name only, no SQL.
-var archived = mustParseArchive(archiveManifestFile)
-
 func mustParseArchive(data []byte) []ChainFile {
 	var out []ChainFile
 	for _, line := range strings.Split(strings.TrimSuffix(string(data), "\n"), "\n") {
@@ -100,8 +97,9 @@ func mustParseArchive(data []byte) []ChainFile {
 	return out
 }
 
-// ArchivedChain is the chain revisions the baseline replaced, in order: revision and file name, no SQL.
-func ArchivedChain() []ChainFile { return append([]ChainFile(nil), archived...) }
+// ArchivedChain is the chain revisions the baseline replaced (archive/chain_manifest.tsv), in order: revision and file
+// name, no SQL.
+func ArchivedChain() []ChainFile { return mustParseArchive(archiveManifestFile) }
 
 // FrozenHead is the last revision the Python-recorded goldens cover (CHAOS-10365 froze them; no tool can record
 // them again). The chain up to and including it equals those goldens byte for byte and is never edited. A revision

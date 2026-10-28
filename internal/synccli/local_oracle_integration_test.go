@@ -48,7 +48,13 @@ type fixture struct {
 
 func newFixture(t *testing.T, name string) *fixture {
 	t.Helper()
-	dir := filepath.Join(t.TempDir(), name)
+	return newFixtureIn(t, t.TempDir(), name)
+}
+
+// newFixtureIn is newFixture under root.
+func newFixtureIn(t *testing.T, root, name string) *fixture {
+	t.Helper()
+	dir := filepath.Join(root, name)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

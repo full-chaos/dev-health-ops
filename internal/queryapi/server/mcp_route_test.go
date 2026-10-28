@@ -158,11 +158,13 @@ func mcpDoBounded(t *testing.T, stage string, handler http.Handler, header http.
 		return rec
 	case <-time.After(30 * time.Second):
 		cancel()
+		exited := false
 		select {
 		case <-done:
+			exited = true
 		case <-time.After(10 * time.Second):
 		}
-		t.Fatalf("%s: still running after the 30 s guard: no pre-check bounded the work", stage)
+		t.Fatalf("%s: still running after the 30 s guard: no pre-check bounded the work (after the cancel and a 10 s join the request goroutine exited: %v; false means a CPU-bound walk that does not read the context is still running)", stage, exited)
 		return nil
 	}
 }

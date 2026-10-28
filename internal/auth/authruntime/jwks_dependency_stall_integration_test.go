@@ -117,9 +117,10 @@ func (p *blackholeProxy) pipe(dst, src net.Conn) {
 // the blackhole (the proxy's dropped-bytes counter grows), so a run that never
 // reaches the inline wait fails on its own line. Then: every JWKS request
 // (the burst and the due request) is a 200; the burst's p50 is at most
-// max(5 x the healthy burst's p50, 1 s) and the slowest request at most
-// max(25 x the healthy burst's max, 1 s) -- a ratio against a healthy burst of
-// this same test, the 1 s being only a floor under the ratio bounds.
+// max(5 x the healthy burst's p50, the inline wait) and the slowest request at
+// most max(25 x the healthy burst's max, 4 x the inline wait) -- a ratio against
+// a healthy burst of this same test, the floors being derived from the
+// production inline wait (token.KeyStateInlineWait), never a fixed time.
 func TestJWKSAnswersWhileTheDatabaseIsBlackholed(t *testing.T) {
 	const (
 		requestTimeout = 4 * time.Second
@@ -293,14 +294,15 @@ func TestJWKSAnswersWhileTheDatabaseIsBlackholed(t *testing.T) {
 	}
 	// The ratio against the healthy burst of this test (D6418: a ratio in the same process, not an absolute time): a JWKS
 	// request that waits on the blackholed database is slower by orders of magnitude (its wait is the request timeout).
-	// A check fails only when it is over BOTH its ratio bound AND 1 s (the floor keeps two tiny durations from a flaky ratio).
-	p50Limit, maxLimit := max(5*baselineP50, time.Second), max(25*baselineMax, time.Second)
-	t.Logf("JWKS ratio vs the healthy burst: p50 %s vs %s (%.1fx, bound 5x and 1s), max %s vs %s (%.1fx, bound 25x and 1s)",
-		took[probes/2], baselineP50, float64(took[probes/2])/float64(baselineP50), faultedMax, baselineMax, float64(faultedMax)/float64(baselineMax))
+	// The floor under each ratio bound comes from the production promise (the inline wait of a refresh), not from a wall
+	// time: see jwksRatioLimit and its unit test, which pins that a slowdown of 45x at a 20 ms baseline is over the bound.
+	p50Limit, maxLimit := jwksRatioLimit(baselineP50, 5, jwksP50Floor), jwksRatioLimit(baselineMax, 25, jwksMaxFloor)
+	t.Logf("JWKS ratio vs the healthy burst: p50 %s vs %s (%.1fx, limit %s), max %s vs %s (%.1fx, limit %s)",
+		took[probes/2], baselineP50, float64(took[probes/2])/float64(baselineP50), p50Limit, faultedMax, baselineMax, float64(faultedMax)/float64(baselineMax), maxLimit)
 	if took[probes/2] > p50Limit {
-		t.Errorf("JWKS p50 ratio: p50 %s under the fault vs %s healthy: over 5x the baseline p50 and over 1 s: the JWKS answer waited on the dead database", took[probes/2], baselineP50)
+		t.Errorf("JWKS p50 ratio: p50 %s under the fault vs %s healthy: over its limit %s (5x the baseline p50, floor %s): the JWKS answer waited on the dead database", took[probes/2], baselineP50, p50Limit, jwksP50Floor)
 	}
 	if faultedMax > maxLimit {
-		t.Errorf("JWKS max ratio: slowest %s under the fault vs %s healthy: over 25x the baseline max and over 1 s: the JWKS answer waited on the dead database", faultedMax, baselineMax)
+		t.Errorf("JWKS max ratio: slowest %s under the fault vs %s healthy: over its limit %s (25x the baseline max, floor %s): the JWKS answer waited on the dead database", faultedMax, baselineMax, maxLimit, jwksMaxFloor)
 	}
 }

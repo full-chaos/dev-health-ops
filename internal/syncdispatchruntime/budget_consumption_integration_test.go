@@ -13,32 +13,22 @@ import (
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func createBudgetConsumptionTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
-	t.Helper()
-	pgschema.Apply(ctx, t, pool)
-}
-
 func withBudgetConsumptionPool(t *testing.T, fn func(ctx context.Context, pool *pgxpool.Pool)) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	createBudgetConsumptionTables(t, ctx, pool)
 	fn(ctx, pool)
 }
 

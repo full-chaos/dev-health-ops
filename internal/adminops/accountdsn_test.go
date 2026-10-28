@@ -45,6 +45,15 @@ func TestAccountVerbsDialAPIDatabaseOverPostgresURI(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			code := verb.run(context.Background(), cli.Env{Args: verb.args, Lookup: lookup, Stdin: strings.NewReader(verb.stdin), Stdout: &stdout, Stderr: &stderr})
 			output := stdout.String() + stderr.String()
+			if verb.name == "orgs delete" {
+				// With no ClickHouse the deletion refuses before it opens any
+				// database; its DSN choice is accountOperator's, which every other
+				// verb here measures.
+				if api.Connections() != 0 || domain.Connections() != 0 || code != cli.ExitFailure || !strings.Contains(stdout.String(), "organization deletion refused") {
+					t.Fatalf("exit %d, %d API and %d POSTGRES_URI connection(s), want exit 1, none and the refusal; output %q", code, api.Connections(), domain.Connections(), output)
+				}
+				return
+			}
 			api.RequireConnected(t)
 			if domain.Connections() != 0 {
 				t.Fatalf("dialed POSTGRES_URI although API_DATABASE_URI is set; output %q", output)

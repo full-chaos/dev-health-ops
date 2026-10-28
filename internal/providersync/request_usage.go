@@ -459,7 +459,10 @@ type RequestUsageWriter struct {
 	noticeInterval time.Duration
 	now            func() time.Time
 	notices        map[string]*requestUsageNotice
-	drainTimeout   time.Duration
+	drainDeadline  time.Time
+	// stopping is cancelled by Close: it cancels a batch or tick write in flight.
+	stopping       context.Context
+	cancelStopping context.CancelFunc
 
 	droppedRows     atomic.Uint64
 	droppedRequests atomic.Uint64
@@ -476,7 +479,9 @@ type RequestUsageWriter struct {
 // NewRequestUsageWriter builds a writer over sink. logger must be a handler
 // instance of its own, not one a unit's code path also logs through.
 func NewRequestUsageWriter(sink RequestUsageSink, logger *slog.Logger) *RequestUsageWriter {
+	stopping, cancelStopping := context.WithCancel(context.Background())
 	return &RequestUsageWriter{
+		stopping: stopping, cancelStopping: cancelStopping,
 		sink: sink, logger: logger,
 		batches:      make(chan []RequestUsageRow, requestUsageQueueBatches),
 		writeTimeout: requestUsageWriteTimeout, cadence: requestUsageCadence,
@@ -514,12 +519,18 @@ func (writer *RequestUsageWriter) Start() {
 	writer.startOnce.Do(func() { go writer.run() })
 }
 
-// Close stops the writer after one last drain that retries until timeout,
-// naming any rows it could not store. It returns once the writer has stopped,
-// or after timeout plus one write deadline if the writer is stuck.
+// Close cancels a write in flight and stops the writer after one last drain
+// that retries until timeout from this call, naming any rows it could not
+// store. It returns once the writer has stopped, or after timeout plus one
+// write deadline if the writer is stuck. The unsent line can still come after
+// Close returns when:
+//   - the writer's logger blocks;
+//   - the writer goroutine gets no CPU for one write deadline past the drain's;
+//   - Close is called again: only the first call sets the drain deadline.
 func (writer *RequestUsageWriter) Close(timeout time.Duration) {
 	writer.stopOnce.Do(func() {
-		writer.drainTimeout = timeout
+		writer.drainDeadline = time.Now().Add(timeout)
+		writer.cancelStopping()
 		close(writer.stop)
 	})
 	writer.Start()
@@ -550,10 +561,10 @@ func (writer *RequestUsageWriter) step(ticks <-chan time.Time) (stopped bool) {
 	case rows := <-writer.batches:
 		writer.buffer = append(writer.buffer, rows...)
 		if len(writer.buffer) >= writer.batchRows {
-			writer.write(context.Background())
+			writer.write(writer.stopping)
 		}
 	case <-ticks:
-		writer.write(context.Background())
+		writer.write(writer.stopping)
 	case <-writer.stop:
 		writer.drain()
 		return true
@@ -562,7 +573,9 @@ func (writer *RequestUsageWriter) step(ticks <-chan time.Time) (stopped bool) {
 }
 
 func (writer *RequestUsageWriter) drain() {
-	deadline := time.Now().Add(writer.drainTimeout)
+	deadline := writer.drainDeadline
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
 	for {
 		select {
 		case rows := <-writer.batches:
@@ -573,7 +586,7 @@ func (writer *RequestUsageWriter) drain() {
 		break
 	}
 	for len(writer.buffer) > 0 && time.Now().Before(deadline) {
-		if !writer.write(context.Background()) {
+		if !writer.write(ctx) {
 			time.Sleep(min(writer.retryPause, time.Until(deadline)))
 		}
 	}
@@ -584,8 +597,11 @@ func (writer *RequestUsageWriter) drain() {
 }
 
 // write stores the buffer and reports whether it was accepted. It waits at
-// most the write deadline whatever the sink does; a write still running then
-// is abandoned and its rows stay buffered.
+// most the write deadline whatever the sink does; a write still running then,
+// or when ctx is cancelled, is cancelled and its rows stay buffered for a
+// byte-identical re-send. A cancel is not logged: the drain reports the rows.
+// A ctx that has already ended never reaches the sink and is not logged: the
+// drain's unsent line names those rows.
 func (writer *RequestUsageWriter) write(ctx context.Context) bool {
 	writer.reportDropped(false)
 	if overflow := len(writer.buffer) - writer.bufferRows; overflow > 0 {
@@ -601,6 +617,9 @@ func (writer *RequestUsageWriter) write(ctx context.Context) bool {
 	defer cancel()
 	batch := append([]RequestUsageRow(nil), writer.buffer...)
 	result := make(chan error, 1)
+	if writeContext.Err() != nil {
+		return false
+	}
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
@@ -614,6 +633,9 @@ func (writer *RequestUsageWriter) write(ctx context.Context) bool {
 	case err = <-result:
 	case <-writeContext.Done():
 		err = errRequestUsageWriteTimeout
+	}
+	if err != nil && errors.Is(ctx.Err(), context.Canceled) {
+		return false
 	}
 	if err != nil {
 		writer.notice(slog.LevelWarn, "provider_sync.request_usage_flush_failed", writer.buffer, err)

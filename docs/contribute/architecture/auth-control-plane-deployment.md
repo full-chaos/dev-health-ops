@@ -111,7 +111,7 @@ rollback is the phase minus 1.
 | 1 | auth-service dark | auth-service, its migrate and grants Jobs and policies; `AUTH_DATABASE_SCHEMA` on go-api, query-api and the River hooks. No route reaches the service. |
 | 2 | Sessions | Phase 1 plus `AUTH_PROXY_URL`, `AUTH_PROXY_SESSIONS` and `AUTH_SESSION_ISSUE_TOKEN` on go-api (from phase 2 every `AUTH_PROXY_*` flag is rendered `"true"` or `"false"`, so an env entry beats `goApi.envFrom`), `AUTH_PROXY_SESSIONS` on query-api, the migrate Job and the River hooks, the session keys on auth-service, and the auth-service API port open to go-api only. Needs the session readers, the successor key and the rate-limit store. |
 | 3 | Login and social sign-in | Phase 2 plus `AUTH_PROXY_LOCAL_LOGIN` and `AUTH_PROXY_SOCIAL` on go-api, and on auth-service `AUTH_LOGIN_LOCKOUT_KEY` (`authService.sessionKeys.loginLockout`) and the six optional `SOCIAL_<PROVIDER>_CLIENT_ID` / `_CLIENT_SECRET` keys (`authService.social.secretName`). |
-| 4 | Users owned | Phase 3 plus `AUTH_PROXY_CREDENTIALS` and `AUTH_USERS_OWNED` (go-api, auth-service, the migrate, grants and backfill Jobs). Renders (D6358); roll back with phase 3 in one `helm upgrade`. |
+| 4 | Users owned | Phase 3 plus `AUTH_PROXY_CREDENTIALS` and `AUTH_USERS_OWNED` (go-api, auth-service, the migrate, grants and backfill Jobs). Needs `authService.usersOwnedStage`: `goApi` (go-api only) first, then `owned` (everything else), with the barrier script between them ([runbook](../../operate/runbooks/auth-users-owned-flip-and-rollback.md)). Renders (D6358). |
 | 5 | Orgs owned | Phase 4 plus `AUTH_ORGS_OWNED` (auth-service and the backfill Job). **Refused at render.** |
 
 Phases 4 and 5 mean (D6358) that auth-service becomes the writer of the existing
@@ -142,19 +142,15 @@ auth-service and go-api pods run the same phase.
 
 The chart cannot read the running image, so check it before the upgrade.
 
-Rolling back phase 4 narrows the runtime role's grants (the write grant on the
-public `users` table goes), and the grants ratchet refuses a narrowing without
-an acknowledgement. The rollback is one `helm upgrade` with the phase and the
-acknowledgement together:
-`helm upgrade <release> <chart> --values <values> --set authService.phase=3 --set authService.migrate.acknowledgeGrantNarrowing=<digest>`.
-The digest is the 16 hex characters the ratchet prints when it refuses (it is
-not a secret). If you do not hold it, run the phase-only upgrade
-(`--set authService.phase=3`) first: the auth-migrate hook refuses in one
-transaction, changes nothing, and the failed hook Job is kept, so read the
-digest with `kubectl logs job/<release>-auth-migrate` (the line
-"re-run with -ack-grant-narrowing=<digest>") and upgrade again with the key set.
-The key renders as `-ack-grant-narrowing=<digest>` on the auth-migrate and
-auth-grants Jobs only while it is set; clear it in the next deploy change.
+Rolling back phase 4 is not one `helm upgrade`. The order is: stage `goApi` (D1), the barrier script
+`down-auth`, then phase 3 (D2), then a later narrowing release (D3). Follow the steps in
+[the users-owned flip and rollback runbook](../../operate/runbooks/auth-users-owned-flip-and-rollback.md#rollback-owned-to-phase-3).
+D1 and D2 defer the grant narrowing (CHAOS-11581): the auth runtime role keeps its users-owned grants until D3, after no
+owned auth-service pod is left. The grants ratchet still refuses a narrowing without an acknowledgement; the digest is
+the 16 hex characters it prints when it refuses (not a secret), and the
+[flip-back grants runbook](../../operate/runbooks/auth-users-flip-back-grants.md) says how to read it. The key renders as
+`-ack-grant-narrowing=<digest>` on the auth-migrate and auth-grants Jobs only while it is set; clear it in the next
+deploy change.
 
 The chart refuses the keys the phase replaces, whatever their value:
 `goApi.authProxy.*`, `authService.enabled`, `authService.usersOwned` and

@@ -47,11 +47,15 @@ case " $* " in *" -list "*)
   exit 0 ;;
 esac
 printf '%%s\n' "$*" >> "${FAKE_GO_LOG}"
+# FAKE_GO_ENV_LOG: the GOFLAGS value of each go test call, one line per call, in the order of FAKE_GO_LOG.
+[ -z "${FAKE_GO_ENV_LOG:-}" ] || printf 'GOFLAGS=%%s\n' "${GOFLAGS:-}" >> "${FAKE_GO_ENV_LOG}"
 # FAKE_GO_TEST_STDOUT: what a go test call prints (a canned go test log, e.g. the "ok" summary lines of the packages it ran).
 if [ -n "${FAKE_GO_TEST_STDOUT:-}" ]; then cat "${FAKE_GO_TEST_STDOUT}"
 else
   # Default: a passing plain run prints one summary line per package argument, so the leg's unweighted guard sees coverage.
   case " $* " in *" -race "*|*" -json "*) ;; *) for a in "$@"; do case "$a" in -*|test) ;; *) printf 'ok  \t%%s\t0.01s\n' "$a" ;; esac; done ;; esac
+  # A -json run (the legs' stages) prints the same summary lines as output events, which the leg's converter turns back into the log.
+  case " $* " in *" -race "*) ;; *" -json "*) for a in "$@"; do case "$a" in -*|test) ;; *) printf '{"Action":"output","Package":"p","Output":"ok  \\t%%s\\t0.01s\\n"}\n' "$a" ;; esac; done ;; esac
 fi
 case " $* " in *" -json "*) printf '{"Time":"2026-01-01T00:00:00Z","Action":"pass","Package":"p","Test":"TestFake","Elapsed":0.01}\n' ;; esac
 [ -z "${FAKE_GO_FAIL:-}" ] || exit 1
@@ -73,6 +77,8 @@ var (
 func TestMain(m *testing.M) {
 	// The job's selection narrows the plan of a child check_go.sh; these tests judge the whole module, so no child inherits it.
 	os.Unsetenv("GO_QUALITY_SELECTION_FILE")
+	// A child check_go.sh gets CHECK_GO_FRESH only where a test sets it.
+	os.Unsetenv("CHECK_GO_FRESH")
 	dir, err := os.MkdirTemp("", "testshard-golist-")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

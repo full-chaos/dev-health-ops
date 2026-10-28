@@ -10,15 +10,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
-// transientDialError marks a startup dependency failure that a later attempt
-// can outlast: the endpoint refused, reset or dropped the connection, or the
-// pooler had no free slot. It satisfies health.TransientError.
-type transientDialError struct{ cause error }
-
-func (e transientDialError) Error() string { return e.cause.Error() }
-func (e transientDialError) Unwrap() error { return e.cause }
-func (transientDialError) Transient() bool { return true }
-
 // isTransientDialError reports whether err is a dial failure a later attempt
 // can outlast; the classification lives with the pool code that logs it.
 func isTransientDialError(err error) bool { return postgres.IsTransientDialError(err) }

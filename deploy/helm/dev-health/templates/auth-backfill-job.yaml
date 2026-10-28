@@ -31,7 +31,7 @@ spec:
         - auth
         - {{ $b.verb }}
         - {{ printf "--batch=%d" (int $b.batch) | quote }}
-        {{- if $dryRun }}
+        {{- if and $dryRun (ne (toString $b.verb) "users-reconcile") }}
         - "--dry-run"
         {{- end }}
         {{- if eq (toString $b.verb) "legacy-link-purge" }}
@@ -63,7 +63,7 @@ spec:
 {{- $null := include "dev-health.authBool" (dict "value" $b.dryRun "key" "authService.backfill.dryRun") }}
 {{- if $enabled }}
 {{- if not (include "dev-health.authOn" (dict "flag" "service" "context" .)) }}{{- fail "authService.backfill.enabled needs authService.phase >= 1: the Job uses the auth-service database login" }}{{- end }}
-{{- if not (has (toString $b.verb) (list "users-backfill" "orgs-backfill" "legacy-link-purge")) }}{{- fail "authService.backfill.verb must be users-backfill, orgs-backfill or legacy-link-purge" }}{{- end }}
+{{- if not (has (toString $b.verb) (list "users-backfill" "users-reconcile" "orgs-backfill" "legacy-link-purge")) }}{{- fail "authService.backfill.verb must be users-backfill, users-reconcile, orgs-backfill or legacy-link-purge" }}{{- end }}
 {{- if eq (toString $b.verb) "legacy-link-purge" }}
 {{- if not (regexMatch "^[a-z0-9][a-z0-9._-]{0,62}$" (toString $b.runId)) }}{{- fail "authService.backfill.runId for legacy-link-purge must be a lowercase slug (letters, digits, . _ -; at most 63): it is written to the audit row" }}{{- end }}
 {{- if not (eq (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true") }}{{- fail "authService.backfill.verb legacy-link-purge needs users owned (authService.phase >= 4): go-api still serves the legacy link-token rows before it" }}{{- end }}

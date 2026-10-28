@@ -365,11 +365,20 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Log in to GitHub Container Registry
+        id: ghcr_login
+        continue-on-error: true
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Retry the GitHub Container Registry login
+        if: steps.ghcr_login.outcome == 'failure'
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash ci/lib/ghcr_login.sh
 
       - name: Build and push by digest
         id: build
@@ -413,6 +422,10 @@ jobs:
           path: /tmp/digests/*
           if-no-files-found: error
           retention-days: 1
+
+      - name: Log out of GitHub Container Registry
+        if: always()
+        run: docker logout ghcr.io
 
   # Runner contract v1.6 (signed 2026-09-03, chris via CF team-lead,
   # /Users/chris/projects/full-chaos/dev-health/.remember/lanes/
@@ -567,11 +580,20 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Log in to GitHub Container Registry
+        id: ghcr_login
+        continue-on-error: true
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Retry the GitHub Container Registry login
+        if: steps.ghcr_login.outcome == 'failure'
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash ci/lib/ghcr_login.sh
 
       - name: Build and push by digest
         id: build
@@ -613,6 +635,10 @@ jobs:
           path: /tmp/digests/*
           if-no-files-found: error
           retention-days: 1
+
+      - name: Log out of GitHub Container Registry
+        if: always()
+        run: docker logout ghcr.io
 
   go-merge:
     name: Merge Go Digests
@@ -792,11 +818,20 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Log in to GitHub Container Registry
+        id: ghcr_login
+        continue-on-error: true
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Retry the GitHub Container Registry login
+        if: steps.ghcr_login.outcome == 'failure'
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash ci/lib/ghcr_login.sh
 
       - name: Build and push by digest
         id: build
@@ -853,6 +888,10 @@ jobs:
           path: /tmp/digests/*
           if-no-files-found: error
           retention-days: 1
+
+      - name: Log out of GitHub Container Registry
+        if: always()
+        run: docker logout ghcr.io
 
   # CHAOS-5666: merges go-api-tools-build's per-platform digests into one
   # manifest list, same shape as go-merge above, scoped to the

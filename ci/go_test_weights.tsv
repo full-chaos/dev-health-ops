@@ -11,13 +11,14 @@ internal/api/syncadmin	26
 internal/api/teamsidentity	46
 internal/atlassianteams	11
 internal/auth/contracts	13
+internal/auth/identity/local	31
 internal/cigates/affected	430
 internal/cigates/affectedmatrix	44
 internal/cigates/affectedmodule	50
 internal/cigates/affectedreject	230
 internal/cigates/bigboy	35
 internal/cigates/chartgates	126
-internal/cigates/checkgo	160
+internal/cigates/checkgo	364
 internal/cigates/docstools	34
 internal/cigates/emitscan	34
 internal/cigates/integrationshards	165

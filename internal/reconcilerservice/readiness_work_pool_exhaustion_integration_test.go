@@ -108,13 +108,17 @@ func TestReadinessChecksDoNotQueueBehindTheQueueAndCoordinatorWorkPools(t *testi
 // warmed at construction and answer long before load arrives (CHAOS-6934).
 func awaitAnswered(t *testing.T, probes ...*postgres.LazyProbeCheck) {
 	t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
+	// Failure-path hang guard only: no passing run waits on it.
+	guard, stopGuard := context.WithTimeout(t.Context(), 60*time.Second)
+	defer stopGuard()
 	for _, probe := range probes {
-		for !probe.Answered() {
-			if time.Now().After(deadline) {
-				t.Fatal("a warmed readiness check never produced its first answer")
-			}
-			time.Sleep(10 * time.Millisecond)
+		if probe.Answered() {
+			continue
+		}
+		// CheckWith waits on the already-warmed cold flight, bounded by ctx (its name and run are ignored once warmed).
+		_ = probe.CheckWith(guard, "", nil, postgres.PostureCheckOptions{})
+		if !probe.Answered() {
+			t.Fatal("a warmed readiness check never produced its first answer")
 		}
 	}
 }

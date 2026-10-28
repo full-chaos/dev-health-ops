@@ -14,8 +14,11 @@ import (
 	"io"
 	"io/fs"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
+	"unicode"
 )
 
 const (
@@ -144,7 +147,7 @@ func Check(root string, rows []Row) ([]string, error) {
 				used[key] = true
 				continue
 			}
-			violations = append(violations, fmt.Sprintf("%s:%d: %s: absolute time assertion `%s`: use an operation count or a ratio against a baseline measured in the same process (D6418); a hang ceiling takes //abstime:allow <reason> on or above the line", f.file, f.line, f.fn, f.expr))
+			violations = append(violations, fmt.Sprintf("%s:%d: %s: absolute time assertion `%s`: use an operation count or a ratio against a baseline measured in the same process (D6418; a duration a child process reports as KEY=<number> is measured too); a hang ceiling takes //abstime:allow <reason> on or above the line", f.file, f.line, f.fn, f.expr))
 		}
 		return nil
 	})
@@ -191,38 +194,28 @@ var comparisons = map[token.Token]bool{token.GTR: true, token.GEQ: true, token.L
 // measured when it holds time.Since, time.Until, a Getrusage call or an Elapsed field (never a Sub call: that is mostly timestamp arithmetic on fake clocks and dates), or a variable
 // assigned from one in the same top-level declaration. A comparison of two measured durations is a ratio, not an
 // absolute budget. A comparison with the literal 0 is a sign check.
+//
+// A duration a child process measures and reports as KEY=<number> is measured too (CHAOS-11757). A key is emitted
+// when a measured value follows `"KEY="` in a + chain or fills the `KEY=%d` verb of a Printf-family format, or when
+// a script literal holds KEY=$((SECONDS ...)), KEY=$SECONDS, KEY=$EPOCHREALTIME or KEY=$(date +%s). It is carried
+// when an Sscanf format reads `KEY=%d` into &v (v is measured), or when a call of a local function (not pkg.Func)
+// has the key as a string literal argument (its results are measured).
+// Stated limits, each pinned by a test:
+//   - A ratio of two carried values is legal, like a ratio of two time.Since values.
+//   - A key that no measured value fills (PORT=, CODE=) is not an emitter; its readers are not measured.
+//   - strings.Index/Contains/Cut on a key text carry nothing.
+//   - The emitter and the reader must be in the same file; a key emitted in another file is not seen.
+//   - Only literal KEY= channels are seen: JSON, files, exit codes and computed keys are not.
 func findAssertions(fset *token.FileSet, file *ast.File, rel string) []finding {
 	var out []finding
+	keys := carriedKeys(file)
 	for _, decl := range file.Decls {
 		name := packageScope
 		if fd, ok := decl.(*ast.FuncDecl); ok {
 			name = fd.Name.Name
 		}
-		tracked := map[string]bool{}
-		isMeasured := func(e ast.Node) bool { return measured(e, tracked) }
-		for range 3 {
-			ast.Inspect(decl, func(n ast.Node) bool {
-				switch s := n.(type) {
-				case *ast.AssignStmt:
-					track(tracked, s.Lhs, s.Rhs, isMeasured)
-				case *ast.ValueSpec:
-					lhs := make([]ast.Expr, len(s.Names))
-					for i, id := range s.Names {
-						lhs[i] = id
-					}
-					track(tracked, lhs, s.Values, isMeasured)
-				case *ast.RangeStmt:
-					if isMeasured(s.X) {
-						for _, e := range []ast.Expr{s.Key, s.Value} {
-							if id := baseIdent(e); id != "" {
-								tracked[id] = true
-							}
-						}
-					}
-				}
-				return true
-			})
-		}
+		tracked := trackDecl(decl, keys)
+		isMeasured := func(e ast.Node) bool { return measured(e, tracked, keys) }
 		ast.Inspect(decl, func(n ast.Node) bool {
 			be, ok := n.(*ast.BinaryExpr)
 			if !ok || !comparisons[be.Op] {
@@ -246,6 +239,179 @@ func findAssertions(fset *token.FileSet, file *ast.File, rel string) []finding {
 		})
 	}
 	return out
+}
+
+// trackDecl returns the names in decl that hold a measured duration, found by three passes over the assignments.
+func trackDecl(decl ast.Decl, keys map[string]bool) map[string]bool {
+	tracked := map[string]bool{}
+	isMeasured := func(e ast.Node) bool { return measured(e, tracked, keys) }
+	for range 3 {
+		ast.Inspect(decl, func(n ast.Node) bool {
+			switch s := n.(type) {
+			case *ast.AssignStmt:
+				track(tracked, s.Lhs, s.Rhs, isMeasured)
+			case *ast.ValueSpec:
+				lhs := make([]ast.Expr, len(s.Names))
+				for i, id := range s.Names {
+					lhs[i] = id
+				}
+				track(tracked, lhs, s.Values, isMeasured)
+			case *ast.RangeStmt:
+				if isMeasured(s.X) {
+					for _, e := range []ast.Expr{s.Key, s.Value} {
+						if id := baseIdent(e); id != "" {
+							tracked[id] = true
+						}
+					}
+				}
+			case *ast.CallExpr:
+				trackScanned(s, keys, tracked)
+			}
+			return true
+		})
+	}
+	return tracked
+}
+
+var (
+	keyAtEnd     = regexp.MustCompile(`([A-Z][A-Z0-9_]*)=$`)
+	scriptKeyRes = []*regexp.Regexp{
+		regexp.MustCompile(`\b([A-Z][A-Z0-9_]*)=\$\(\([^)]*\bSECONDS\b`),
+		regexp.MustCompile(`\b([A-Z][A-Z0-9_]*)=\$\{?(?:SECONDS|EPOCHREALTIME)\b`),
+		regexp.MustCompile(`\b([A-Z][A-Z0-9_]*)=\$\(date \+%s`),
+	}
+)
+
+// formatArg is the index of the format string in the Printf and Scanf families, by function name.
+var formatArg = map[string]int{"Printf": 0, "Sprintf": 0, "Errorf": 0, "Fprintf": 1, "Sscanf": 1, "Fscanf": 1}
+
+func callName(c *ast.CallExpr) string {
+	switch f := c.Fun.(type) {
+	case *ast.SelectorExpr:
+		return f.Sel.Name
+	case *ast.Ident:
+		return f.Name
+	}
+	return ""
+}
+
+func stringLit(e ast.Expr) (string, bool) {
+	lit, ok := e.(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return "", false
+	}
+	v, err := strconv.Unquote(lit.Value)
+	return v, err == nil
+}
+
+// verbPrefixes returns, for each verb of format, the text before it.
+func verbPrefixes(format string) []string {
+	var out []string
+	for i := 0; i < len(format); i++ {
+		if format[i] != '%' {
+			continue
+		}
+		if i+1 < len(format) && format[i+1] == '%' {
+			i++
+			continue
+		}
+		out = append(out, format[:i])
+		j := i + 1
+		for j < len(format) && !unicode.IsLetter(rune(format[j])) {
+			j++
+		}
+		i = j
+	}
+	return out
+}
+
+// formatCall returns the format text of a Printf/Scanf-family call and the index of its first verb argument.
+func formatCall(c *ast.CallExpr) (string, int, bool) {
+	at, ok := formatArg[callName(c)]
+	if !ok || at >= len(c.Args) {
+		return "", 0, false
+	}
+	format, ok := stringLit(c.Args[at])
+	return format, at + 1, ok
+}
+
+func trackScanned(c *ast.CallExpr, keys map[string]bool, tracked map[string]bool) {
+	if len(keys) == 0 {
+		return
+	}
+	if name := callName(c); name != "Sscanf" && name != "Fscanf" {
+		return
+	}
+	format, first, ok := formatCall(c)
+	if !ok {
+		return
+	}
+	for i, prefix := range verbPrefixes(format) {
+		m := keyAtEnd.FindStringSubmatch(prefix)
+		if m == nil || !keys[m[1]] || first+i >= len(c.Args) {
+			continue
+		}
+		if u, ok := c.Args[first+i].(*ast.UnaryExpr); ok && u.Op == token.AND {
+			if id := baseIdent(u.X); id != "" {
+				tracked[id] = true
+			}
+		}
+	}
+}
+
+// carriedKeys returns the KEY names a measured value is reported under in file.
+func carriedKeys(file *ast.File) map[string]bool {
+	keys := map[string]bool{}
+	for _, decl := range file.Decls {
+		tracked := trackDecl(decl, nil)
+		isMeasured := func(e ast.Node) bool { return measured(e, tracked, nil) }
+		ast.Inspect(decl, func(n ast.Node) bool {
+			switch x := n.(type) {
+			case *ast.BinaryExpr:
+				if x.Op != token.ADD {
+					return true
+				}
+				ops := plusOperands(x)
+				for i := 0; i+1 < len(ops); i++ {
+					if text, ok := stringLit(ops[i]); ok && isMeasured(ops[i+1]) {
+						if m := keyAtEnd.FindStringSubmatch(text); m != nil {
+							keys[m[1]] = true
+						}
+					}
+				}
+			case *ast.CallExpr:
+				if callName(x) == "Sscanf" || callName(x) == "Fscanf" {
+					return true
+				}
+				format, first, ok := formatCall(x)
+				if !ok {
+					return true
+				}
+				for i, prefix := range verbPrefixes(format) {
+					if m := keyAtEnd.FindStringSubmatch(prefix); m != nil && first+i < len(x.Args) && isMeasured(x.Args[first+i]) {
+						keys[m[1]] = true
+					}
+				}
+			case *ast.BasicLit:
+				if text, ok := stringLit(x); ok {
+					for _, re := range scriptKeyRes {
+						for _, m := range re.FindAllStringSubmatch(text, -1) {
+							keys[m[1]] = true
+						}
+					}
+				}
+			}
+			return true
+		})
+	}
+	return keys
+}
+
+func plusOperands(e ast.Expr) []ast.Expr {
+	if be, ok := e.(*ast.BinaryExpr); ok && be.Op == token.ADD {
+		return append(plusOperands(be.X), plusOperands(be.Y)...)
+	}
+	return []ast.Expr{e}
 }
 
 func signCheck(e ast.Expr, measured bool) bool {
@@ -285,7 +451,7 @@ func baseIdent(e ast.Expr) string {
 	return ""
 }
 
-func measured(n ast.Node, tracked map[string]bool) bool {
+func measured(n ast.Node, tracked map[string]bool, keys map[string]bool) bool {
 	if n == nil {
 		return false
 	}
@@ -302,10 +468,17 @@ func measured(n ast.Node, tracked map[string]bool) bool {
 				found = true
 			}
 		case *ast.CallExpr:
-			if sel, ok := x.Fun.(*ast.SelectorExpr); ok {
-				switch sel.Sel.Name {
+			switch fun := x.Fun.(type) {
+			case *ast.SelectorExpr:
+				switch fun.Sel.Name {
 				case "Since", "Until", "Getrusage":
 					found = true
+				}
+			case *ast.Ident:
+				for _, arg := range x.Args {
+					if text, ok := stringLit(arg); ok && keys[strings.TrimSuffix(text, "=")] {
+						found = true
+					}
 				}
 			}
 		}

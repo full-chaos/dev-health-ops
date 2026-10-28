@@ -48,52 +48,7 @@ stage-signing-key init container exists.
 {{- if and (eq (include "dev-health.authProxyOn" .) "true") (not $a.trustedProxies) }}{{- fail "authService.trustedProxies is required while go-api forwards auth routes to it (authService.phase >= 2): without it every proxied caller is keyed by go-api's pod address, one rate-limit bucket for all users" }}{{- end }}
 {{- if and (eq (include "dev-health.authProxyOn" .) "true") $a.networkPolicy.allowedFrom }}{{- fail "authService.networkPolicy.allowedFrom must be empty while go-api forwards auth routes to it (authService.phase >= 2): the API port admits go-api only while go-api forwards to it, because auth-service trusts the forwarded client address from that peer set" }}{{- end }}
 {{- if and (eq (include "dev-health.authProxyOn" .) "true") (not $a.networkPolicy.enabled) }}{{- fail "authService.networkPolicy.enabled must stay true while go-api forwards auth routes to it (authService.phase >= 2): trusted proxies are safe only while the auth-service NetworkPolicy admits go-api alone; turn the policy on, or go back to phase 1" }}{{- end }}
-{{- $trusted := list }}
-{{- $excluded := list }}
-{{- range $a.trustedProxies }}
-{{- $entry := toString . }}
-{{- if hasPrefix "!" $entry }}
-{{- $addr := trimPrefix "!" $entry }}
-{{- if or (contains "/" $addr) (contains ":" $addr) (not (include "dev-health.trustedProxyEntry" $addr)) }}{{- fail (printf "authService.trustedProxies exclusion entries must each be \"!\" and one IPv4 address, never a network, an IPv6 or an IPv4-mapped address: %q is not" $entry) }}{{- end }}
-{{- $excluded = append $excluded $addr }}
-{{- else }}
-{{- if or (not (include "dev-health.trustedProxyEntry" $entry)) (regexMatch "/0$" $entry) (regexMatch "^(?i)::ffff:" $entry) }}{{- fail "authService.trustedProxies entries must each be one IP address or CIDR network, never a /0 network or an IPv4-mapped form: a trusted peer picks the client address of every request" }}{{- end }}
-{{- if contains "/" $entry }}
-{{- $bits := int (index (splitList "/" $entry) 1) }}
-{{- $v6 := contains ":" $entry }}
-{{- if or (and (not $v6) (lt $bits 24)) (and $v6 (lt $bits 64)) }}{{- fail (printf "authService.trustedProxies entry %q is wider than a /24 (IPv4) or a /64 (IPv6): the node pod range is the widest list allowed, even with authService.trustedProxiesWideAccepted" $entry) }}{{- end }}
-{{- if and $v6 (lt $bits 124) }}{{- fail (printf "authService.trustedProxies entry %q is an IPv6 network wider than a /124: the render cannot name its node exclusions, so authService.trustedProxiesWideAccepted does not allow it; list the go-api pod addresses" $entry) }}{{- end }}
-{{- if and (lt $bits 28) (ne (toString $a.trustedProxiesWideAccepted) "true") }}{{- fail (printf "authService.trustedProxies entry %q is wider than a /28 (IPv4) or a /124 (IPv6): every address in it is believed as a proxy that names the client. It is allowed only with authService.trustedProxiesWideAccepted=true, with its node exclusions beside it, and only while the auth-service NetworkPolicy admits go-api's pods alone on the API port; prefer the go-api pod addresses" $entry) }}{{- end }}
-{{- end }}
-{{- $trusted = append $trusted $entry }}
-{{- end }}
-{{- end }}
-{{- /* An exclusion mirrors clientaddr.ParseTrust: inside a listed network, never also listed as an address. IPv4 only, so the render can check it. */}}
-{{- range $x := $excluded }}
-{{- if has $x $trusted }}{{- fail (printf "authService.trustedProxies exclusion entries must not name an address the list also trusts: \"!%s\"" $x) }}{{- end }}
-{{- $xv := int (include "dev-health.ipv4Int" $x) }}
-{{- $inside := false }}
-{{- range $trusted }}
-{{- if and (contains "/" .) (not (contains ":" .)) }}
-{{- $parts := splitList "/" . }}
-{{- $nv := int (include "dev-health.ipv4Int" (index $parts 0)) }}
-{{- $size := 1 }}
-{{- range until (int (sub 32 (int (index $parts 1)))) }}{{- $size = mul $size 2 }}{{- end }}
-{{- if and (ge $xv $nv) (lt $xv (add $nv $size)) }}{{- $inside = true }}{{- end }}
-{{- end }}
-{{- end }}
-{{- if not $inside }}{{- fail (printf "authService.trustedProxies exclusion entries must each lie inside a listed IPv4 network: \"!%s\" does not" $x) }}{{- end }}
-{{- end }}
-{{- /* CHAOS-11703: a wide IPv4 entry is the node pod range, which holds the node's own addresses (the network address, the bridge
-at the next one). A host process or a hostNetwork pod reaches the API port from them, which the go-api pod selector does not stop. */}}
-{{- range $trusted }}
-{{- if and (contains "/" .) (not (contains ":" .)) (lt (int (index (splitList "/" .) 1)) 28) }}
-{{- $net := index (splitList "/" .) 0 }}
-{{- $o := splitList "." $net }}
-{{- $bridge := printf "%s.%s.%s.%d" (index $o 0) (index $o 1) (index $o 2) (add1 (int (index $o 3))) }}
-{{- if not (and (has $net $excluded) (has $bridge $excluded)) }}{{- fail (printf "authService.trustedProxies entry %q needs its node exclusions \"!%s\" and \"!%s\" in the same list: the range holds the node's own addresses, from which a host process or a hostNetwork pod reaches the API port past the go-api pod selector" . $net $bridge) }}{{- end }}
-{{- end }}
-{{- end }}
+{{- include "dev-health.trustedProxyList" (dict "key" "authService.trustedProxies" "entries" $a.trustedProxies "ackKey" "authService.trustedProxiesWideAccepted" "ack" (eq (toString $a.trustedProxiesWideAccepted) "true") "peer" "the API port past the go-api pod selector") }}
 {{- $ks := $a.keySet }}
 {{- $ksOn := and $ks $ks.enabled }}
 {{- $manifest := "" }}

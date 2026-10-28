@@ -114,7 +114,7 @@ jobs:
           queue_file="${RUNNER_TEMP}/queue-tested-run-id"
           rm -f "${queue_file}"
           run_id=""
-          if QUEUE_TESTED_RUN_ID_FILE="${queue_file}" bash ci/queue_tested_sha.sh "${GITHUB_REPOSITORY}" "${GITHUB_SHA}" go-quality.yml 'go-quality-leg (' 'Run Go quality leg' 8; then
+          if QUEUE_TESTED_RUN_ID_FILE="${queue_file}" bash ci/queue_tested_sha.sh "${GITHUB_REPOSITORY}" "${GITHUB_SHA}" go-quality.yml 'go-quality-leg (' 'Run Go quality leg' 10; then
             run_id="$(cat "${queue_file}" 2>/dev/null || true)"
           fi
           case "${run_id}" in

@@ -212,6 +212,10 @@ func silentPostgresPool(t *testing.T) (*pgxpool.Pool, *atomic.Int32) {
 	return pool, accepted
 }
 
+// posturePassGuard is the named limit L of the readyz posture test below: readyzTimeout/2, and 10x or more of the slowest
+// correct-path answer measured under -race.
+const posturePassGuard = readyzTimeout / 2
+
 // The readiness contract (D2549/D2588): the probe answers within its budget and
 // NEVER waits on a live expensive check. With a posture query that cannot
 // answer, /readyz must fail closed at once (the query_role_posture check), not hold the
@@ -228,10 +232,10 @@ func TestReadyzAnswersWithinTheProbeBudgetWhileThePostureQueryIsSlow(t *testing.
 	}
 	probes := readinessProbes(fakePinger{}, fakePinger{}, fakeJWKS{}, queryAPIPostureCheck(env, pool))
 
-	// NAMED LIMIT: the silent server is a real socket, so no virtual clock applies and this test states no
-	// time bound: a probe that waited on the posture query would end at the handler's own 3 s bound with the same
-	// 503 body. The 30 s guard below catches only a probe that never returns. The "answers at once" bound is
-	// covered by the CheckNoWait tests in the postgres package, which hold the query open and need no clock.
+	// NAMED LIMIT (follow-up Low ticket, opened via pm): the silent server is a real socket, so no virtual clock
+	// applies. A probe that waited on the live posture check would block until the probe's own context ends
+	// (readyzTimeout, 3 s). posturePassGuard is a failure-path guard only, at most half of that wait and far above
+	// the answer of a probe that does not wait (a few ms, measured under -race); it is not a performance assertion.
 	for probe := 1; probe <= 3; probe++ {
 		type answer struct {
 			code int
@@ -245,8 +249,8 @@ func TestReadyzAnswersWithinTheProbeBudgetWhileThePostureQueryIsSlow(t *testing.
 		var got answer
 		select {
 		case got = <-done:
-		case <-time.After(30 * time.Second):
-			t.Fatalf("probe %d: /readyz is still waiting on the posture query after the 30 s guard", probe)
+		case <-time.After(posturePassGuard):
+			t.Fatalf("probe %d: /readyz is still waiting on the posture query after the %v guard: it must not wait on the live check", probe, posturePassGuard)
 		}
 		code, body := got.code, got.body
 		if code != http.StatusServiceUnavailable || body != `{"failed_checks":["query_role_posture"],"status":"not_ready"}` {

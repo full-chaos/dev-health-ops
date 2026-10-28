@@ -53,10 +53,23 @@ func TestEveryRaceExcludedPackageIsProvenFreeOfConcurrency(t *testing.T) {
 	}
 }
 
+// planEnv drops the variables that narrow check_go.sh's plans: a PR leg exports them to the whole leg, and this test wants the whole plan.
+func planEnv(environ []string) []string {
+	var out []string
+	for _, kv := range environ {
+		if strings.HasPrefix(kv, "GO_QUALITY_SELECTION_FILE=") || strings.HasPrefix(kv, "GO_RACE_EXCLUDED_TESTS=") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
 func planFor(t *testing.T, root, plan string, shard, count int) map[string]bool {
 	t.Helper()
 	cmd := exec.Command("bash", "ci/check_go.sh", plan, strconv.Itoa(shard), strconv.Itoa(count))
 	cmd.Dir = root
+	cmd.Env = planEnv(os.Environ())
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("ci/check_go.sh %s %d %d: %v", plan, shard, count, err)

@@ -514,3 +514,57 @@ func TestAFileChannelIsOutOfScope(t *testing.T) {
 	body := "func helper() {\n\ts := time.Now()\n\tos.WriteFile(path, []byte(strconv.FormatInt(time.Since(s).Milliseconds(), 10)), 0o644)\n}\n\nfunc TestFile(t *testing.T) {\n\traw, _ := os.ReadFile(path)\n\tms, _ := strconv.Atoi(string(raw))\n\tif ms > 4000 {\n\t\tt.Fatal(ms)\n\t}\n}\n"
 	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil))
 }
+
+// Round-2 verifier probes (CHAOS-11757, ACP-RULING-delta-e-verify): an assign counts as measured when its right-hand side
+// CONTAINS a measured word or a variable already measured, followed to a fixpoint.
+
+func shellRefused(t *testing.T, script string) {
+	t.Helper()
+	body := "const script = " + script + "\n" + shellElapsedOf
+	got := check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil)
+	if len(got) != 1 || !strings.Contains(got[0], "TestShell") {
+		t.Fatalf("want one violation naming TestShell, got %q", got)
+	}
+}
+
+// Form (1): the repo's own idiom, a date inside the arithmetic (ci/check_go.sh).
+func TestPlantedShellDateInsideArithmeticAssignIsRefused(t *testing.T) {
+	shellRefused(t, `"start=$SECONDS\nelapsed=$(( $(date +%s) - start ))\necho \"A_ELAPSED=$elapsed\"\n"`)
+}
+
+// Form (2): two hops, the measured word is assigned first and used by the next assign.
+func TestPlantedShellTwoHopAssignIsRefused(t *testing.T) {
+	shellRefused(t, `"end=$(date +%s)\nelapsed=$((end - start))\necho \"A_ELAPSED=$elapsed\"\n"`)
+}
+
+// Form (3): the key itself is assigned from arithmetic that holds the measured word.
+func TestPlantedShellKeyAssignedFromArithmeticIsRefused(t *testing.T) {
+	shellRefused(t, `"A_ELAPSED=$(($(date +%s) - started))\n"`)
+}
+
+func TestPlantedShellOtherAssignSpellingsAreRefused(t *testing.T) {
+	for name, script := range map[string]string{
+		"seconds in sum":  `"d=$((SECONDS + 1))\necho \"A_ELAPSED=$d\"\n"`,
+		"three hops":      `"a=$SECONDS\nb=$((a - 1))\nc=$((b * 2))\necho \"A_ELAPSED=$c\"\n"`,
+		"printf of a hop": `"end=$(date +%s)\nelapsed=$((end - start))\nprintf 'A_ELAPSED=%s\\n' \"$elapsed\"\n"`,
+	} {
+		t.Run(name, func(t *testing.T) { shellRefused(t, script) })
+	}
+}
+
+func TestShellArithmeticWithoutAMeasuredWordIsNotAnEmitter(t *testing.T) {
+	for name, script := range map[string]string{
+		"plain arithmetic": `"a=$((b - c))\necho \"A_X=$a\"\n"`,
+		"command output":   `"name=$(basename x)\necho \"A_NAME=$name\"\n"`,
+		"bare word":        `"seconds=3\nelapsed=$((seconds * 2))\necho \"A_ELAPSED=$elapsed\"\n"`,
+	} {
+		body := "const script = " + script + "\n" + shellElapsedOf
+		wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil))
+		_ = name
+	}
+}
+
+func TestScriptKeysAreReadInsideOneLiteral(t *testing.T) {
+	body := "const first = \"elapsed=$SECONDS\\n\"\n\nconst second = \"echo \\\"A_ELAPSED=$elapsed\\\"\\n\"\n" + shellElapsedOf
+	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil))
+}

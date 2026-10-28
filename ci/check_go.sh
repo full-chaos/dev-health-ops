@@ -568,7 +568,7 @@ inputs
 | ((.Output // "") | tostring)'
 go_test_leg() {
   local log="$1" legjson="$2" rc raw problem=0
-  local -a ps
+  local -a ps fb
   shift 2
   command -v jq >/dev/null 2>&1 || die "the test and race legs need jq to read go test -json"
   raw="$(mktemp "${TMPDIR:-/tmp}/dev-health-leg-raw.XXXXXX")" || die "go_test_leg: no temp file for the raw go test -json stream"
@@ -582,7 +582,13 @@ go_test_leg() {
   rc="${ps[0]}"
   if [ "${ps[2]}" -ne 0 ]; then
     printf 'go_test_leg: JSON converter failed (jq rc %s): the raw go test -json stream follows in the plain log\n' "${ps[2]}" >&2
-    cat "${raw}" | tee -a "${log}" || true
+    set +e
+    cat "${raw}" | tee -a "${log}"
+    fb=("${PIPESTATUS[@]}")
+    set -e
+    if [ "${fb[1]}" -ne 0 ]; then
+      printf 'go_test_leg: plain log write failed (tee rc %s)\n' "${fb[1]}" >&2
+    fi
     problem=1
   fi
   if [ "${ps[1]}" -ne 0 ]; then

@@ -170,6 +170,9 @@ func TestOrgsBackfillReactivationRoleChangeAndDivergence(t *testing.T) {
 	if e.count(t, ctx, `SELECT count(*) FROM auth.memberships WHERE organization_id = $1 AND principal_id = $2 AND status = 'removed'`, org, u2) != 1 {
 		t.Fatal("a removed membership was re-activated")
 	}
+	// Leave the pair matched (active, same role in both schemas): a removed auth membership over a public member is
+	// a gated users-reconcile class, and one without a public row is an auth-only membership.
+	e.setAuthMembershipStatus(t, ctx, org, u2, "active")
 }
 
 func TestOrgsBackfillRefusalsAndAuthOnly(t *testing.T) {

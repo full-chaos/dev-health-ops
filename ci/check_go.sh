@@ -633,14 +633,15 @@ go_test_leg() {
   return "${rc}"
 }
 
-# cigates_go_test_timeout PKG...: the go test -timeout of one call (interim, widened to every internal/cigates package by #5191). internal/cigates/affected
-# ran 600.088 s against the 10m default in a hosted test leg (run 40750061254), so a call whose package list holds it gets 20m (a hang ceiling,
-# no time assert). COST: every other package of that call gets 20m too. The timeout is an argument of the call, never read from the environment.
+# cigates_go_test_timeout PKG...: the go test -timeout of one call (CHAOS-11787; interim, removed by CHAOS-11768 (widened)). The internal/cigates
+# packages run 485-757 s in a hosted test leg against the 10m default, so a call whose package list holds one gets 20m (a hang ceiling, no
+# time assert). COST: every other package of that call gets 20m too. The match is the exact import-path prefix with the slash: the bare
+# internal/cigates, internal/cigatesX and other modules give 10m. The timeout is an argument of the call, never read from the environment.
 cigates_go_test_timeout() {
   local p
   for p in "$@"; do
     case "${p}" in
-      github.com/full-chaos/dev-health-ops/internal/cigates/affected) printf '20m\n'; return 0 ;;
+      github.com/full-chaos/dev-health-ops/internal/cigates/?*) printf '20m\n'; return 0 ;;
     esac
   done
   printf '10m\n'
@@ -727,7 +728,6 @@ check_race_excluded_ran() {
 # leg and ~213 s alone, with the default 600 s go test timeout as the only margin, so one slow runner timed it out
 # (run 38786639144). It now runs alone, after the rest, so its time no longer depends on what else is scheduled.
 SERIAL_HEAVY_TEST_PACKAGE="github.com/full-chaos/dev-health-ops/internal/gqlgenguard"
-CHECKGO_PACKAGE="github.com/full-chaos/dev-health-ops/internal/cigates/checkgo"
 
 # GO_QUALITY_SELECTION_FILE: the verdict of `cmd/cigate plan-verdict --go-files-full` (the go-quality-plan job). Unset,
 # empty or a FULL first line runs every package. `AFFECTED <n>` and n root-module keys run only those packages: the test and
@@ -996,9 +996,8 @@ check_test_shard() {
     rest_rows="$(printf '%s\n' "${plan}" | awk -F'\t' -v m="${module_dir}" -v heavy="${SERIAL_HEAVY_TEST_PACKAGE}" -v keys="${census_keys}" '
       BEGIN { n = split(keys, k, "\n"); for (i = 1; i <= n; i++) if (k[i] != "") isrow[k[i]] = 1 }
       $1 == m && $2 != heavy && m == "." && ($3 in isrow) { print $2 }')"
-    # goes when the 11762 split lands
-    rows_timeout=10m
-    if [ "${module_dir}" = "." ] && printf '%s\n' "${rest_rows}" | grep -qx -- "${CHECKGO_PACKAGE}"; then rows_timeout=20m; fi
+    # shellcheck disable=SC2086
+    rows_timeout="$(cigates_go_test_timeout ${rest_rows})"
     rest_sec=""
     if security_fresh_active && [ "${module_dir}" = "." ]; then
       rest_sec="$(printf '%s\n' "${rest}" | security_split in)"
@@ -1018,7 +1017,7 @@ check_test_shard() {
       (
         cd "${ROOT}/${module_dir}"
         # shellcheck disable=SC2086
-        go_test_leg "${log}" "${legjson}" -count=1 -timeout 10m ${rest_sec}
+        go_test_leg "${log}" "${legjson}" -count=1 -timeout "$(cigates_go_test_timeout ${rest_sec})" ${rest_sec}
       ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}"; return 1; }
     fi
     if [ -n "${rest_rows}" ]; then

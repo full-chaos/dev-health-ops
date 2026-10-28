@@ -34,16 +34,20 @@ func (g *gatedRun) finishWith(err error) {
 	close(g.release)
 }
 
-const noWaitBudget = 100 * time.Millisecond
-
-func mustReturnQuickly(t *testing.T, what string, check func() error) error {
+// mustNotWaitOnTheQuery runs one probe while the test holds the expensive query open: the query is released only after the probe
+// returned, so a probe that waited on it would never return. The wait below is a guard for the failure path only; a passing run never
+// reaches it.
+func mustNotWaitOnTheQuery(t *testing.T, what string, check func() error) error {
 	t.Helper()
-	started := time.Now()
-	err := check()
-	if elapsed := time.Since(started); elapsed > noWaitBudget {
-		t.Fatalf("%s took %v (> %v): CheckNoWait waited on the query", what, elapsed, noWaitBudget)
+	done := make(chan error, 1)
+	go func() { done <- check() }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(30 * time.Second):
+		t.Fatalf("%s: CheckNoWait is still waiting on the query that the test holds open: it must answer without waiting", what)
+		return nil
 	}
-	return err
 }
 
 // Never proven: fail closed at once, one background run however many probes
@@ -53,7 +57,7 @@ func TestCheckNoWaitFailsClosedUntilTheFirstRunAnswers(t *testing.T) {
 	gate := newGatedRun()
 	check, _ := newTestCachedPostureCheck(gate.run, PostureCheckOptions{})
 	for probe := 1; probe <= 5; probe++ {
-		err := mustReturnQuickly(t, fmt.Sprintf("probe %d", probe), check.CheckNoWait)
+		err := mustNotWaitOnTheQuery(t, fmt.Sprintf("probe %d", probe), check.CheckNoWait)
 		if !errors.Is(err, ErrUnavailable) || !strings.Contains(err.Error(), "not yet proven") {
 			t.Fatalf("probe %d: %v, want ErrUnavailable naming 'not yet proven'", probe, err)
 		}
@@ -98,12 +102,12 @@ func TestCheckNoWaitServesAStalePassWhileTheRefreshIsSlow(t *testing.T) {
 	refresh := newGatedRun()
 	gate.Store(refresh)
 	clock.Advance(defaultPostureTTL + time.Second)
-	if err := mustReturnQuickly(t, "stale-pass probe", check.CheckNoWait); err != nil {
+	if err := mustNotWaitOnTheQuery(t, "stale-pass probe", check.CheckNoWait); err != nil {
 		t.Fatalf("a pass inside MaxStale must be served: %v", err)
 	}
 	waitFor(t, "the refresh to start", func() bool { return refresh.calls.Load() == 1 })
 	for i := 0; i < 3; i++ {
-		if err := mustReturnQuickly(t, "probe during refresh", check.CheckNoWait); err != nil {
+		if err := mustNotWaitOnTheQuery(t, "probe during refresh", check.CheckNoWait); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -129,7 +133,7 @@ func TestCheckNoWaitFailsClosedPastMaxStale(t *testing.T) {
 	slow := newGatedRun()
 	gate.Store(slow)
 	clock.Advance(defaultPostureMaxStale + time.Minute)
-	err := mustReturnQuickly(t, "past-MaxStale probe", check.CheckNoWait)
+	err := mustNotWaitOnTheQuery(t, "past-MaxStale probe", check.CheckNoWait)
 	if !errors.Is(err, ErrUnavailable) || !strings.Contains(err.Error(), "last proven") {
 		t.Fatalf("past MaxStale: %v, want ErrUnavailable naming the last proof's age", err)
 	}
@@ -153,7 +157,7 @@ func TestCheckNoWaitServesARefusalAndHealsOnTheRerun(t *testing.T) {
 
 	// Inside RefusalTTL: served, no new run.
 	for i := 0; i < 3; i++ {
-		err := mustReturnQuickly(t, "refusal probe", check.CheckNoWait)
+		err := mustNotWaitOnTheQuery(t, "refusal probe", check.CheckNoWait)
 		if !errors.Is(err, ErrPostureRefused) || !strings.Contains(err.Error(), "saved_reports") || !strings.Contains(err.Error(), "ago") {
 			t.Fatalf("refusal probe: %v, want the refusal naming the privilege and its age", err)
 		}
@@ -166,7 +170,7 @@ func TestCheckNoWaitServesARefusalAndHealsOnTheRerun(t *testing.T) {
 	rerun := newGatedRun()
 	gate.Store(rerun)
 	clock.Advance(defaultPostureRefusalTTL + time.Second)
-	if err := mustReturnQuickly(t, "post-TTL refusal probe", check.CheckNoWait); !errors.Is(err, ErrPostureRefused) {
+	if err := mustNotWaitOnTheQuery(t, "post-TTL refusal probe", check.CheckNoWait); !errors.Is(err, ErrPostureRefused) {
 		t.Fatalf("the refusal must be served while its re-run is in flight: %v", err)
 	}
 	waitFor(t, "the re-run to start", func() bool { return rerun.calls.Load() == 1 })

@@ -296,8 +296,9 @@ func buildTemplate(ctx context.Context, server *sharedServer, name string, build
 // comment), schemas (owner, grants, comment), default privileges, the
 // database's own owner, grants and comment, extensions with their versions,
 // sequences (last value and is_called), the exact row count of every table and
-// an md5 of the content of every table (its rows as text, in row-text order, a
-// total order whatever the key or the column types). Definitions enter as md5
+// an md5 of the content of every table (its rows as text, in row-text order with
+// the C collation, a total order whatever the key, the column types or the
+// database collation). Definitions enter as md5
 // so a row stays short.
 const pgTemplateFingerprintQuery = `
 WITH rel AS (
@@ -340,7 +341,7 @@ UNION ALL SELECT 'rows ' || nspname || '.' || relname || '=' ||
   FROM rel WHERE relkind IN ('r', 'p')
 UNION ALL SELECT 'content ' || nspname || '.' || relname || ' md5=' ||
     (xpath('/row/h/text()', query_to_xml(
-      format('SELECT md5(coalesce(string_agg(t::text, %L ORDER BY t::text), %L)) AS h FROM %I.%I t', '', '', nspname, relname),
+      format('SELECT md5(coalesce(string_agg(t::text, %L ORDER BY t::text COLLATE "C"), %L)) AS h FROM %I.%I t', '', '', nspname, relname),
       false, true, '')))[1]::text
   FROM rel WHERE relkind IN ('r', 'p')`
 

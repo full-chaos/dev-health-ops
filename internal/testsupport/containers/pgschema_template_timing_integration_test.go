@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
@@ -32,5 +34,15 @@ func TestTemplateFingerprintPrintsItsCostOnTheMigratedSchema(t *testing.T) {
 			}
 			fmt.Printf("TEMPLATE-FINGERPRINT\trun=%d\trows=%d\tseconds=%.3f\n", i, len(rows), time.Since(began).Seconds())
 		}
+		conn, err := pgx.Connect(ctx, instance.URI)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = conn.Close(context.Background()) }()
+		var largeObjects int
+		if err := conn.QueryRow(ctx, "SELECT count(*) FROM pg_largeobject_metadata").Scan(&largeObjects); err != nil {
+			t.Fatal(err)
+		}
+		fmt.Printf("TEMPLATE-LARGEOBJECTS\tn=%d\n", largeObjects)
 	})
 }

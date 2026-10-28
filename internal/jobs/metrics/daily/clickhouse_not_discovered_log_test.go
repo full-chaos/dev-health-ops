@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -168,46 +169,37 @@ func (connection *blockingConnection) Query(ctx context.Context, query string, a
 // tables. The wait is bounded: a count that takes longer than its time is
 // given up, the line says the count was not read, and the caller goes on.
 func TestTheReportOfRepositoriesNotDiscoveredIsBoundedInTime(t *testing.T) {
-	organizationID := "00000000-0000-4000-8000-000000000009"
-	connection := &blockingConnection{scriptedConnection: scriptedConnection{
-		repositoryRows: &repositoryRowsStub{}, probeRows: &probeRowsStub{},
-	}}
-	discoverer, err := NewClickHouseRepositoryDiscoverer(connection)
-	if err != nil {
-		t.Fatal(err)
-	}
-	const reportTimeout = 50 * time.Millisecond
-	discoverer.reportTimeout = reportTimeout
-	var captured bytes.Buffer
-	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&captured, &slog.HandlerOptions{Level: slog.LevelInfo})))
-	defer slog.SetDefault(previous)
+	synctest.Test(t, func(t *testing.T) {
+		organizationID := "00000000-0000-4000-8000-000000000009"
+		connection := &blockingConnection{scriptedConnection: scriptedConnection{
+			repositoryRows: &repositoryRowsStub{}, probeRows: &probeRowsStub{},
+		}}
+		discoverer, err := NewClickHouseRepositoryDiscoverer(connection)
+		if err != nil {
+			t.Fatal(err)
+		}
+		const reportTimeout = 50 * time.Millisecond
+		discoverer.reportTimeout = reportTimeout
+		var captured bytes.Buffer
+		previous := slog.Default()
+		slog.SetDefault(slog.New(slog.NewJSONHandler(&captured, &slog.HandlerOptions{Level: slog.LevelInfo})))
+		defer slog.SetDefault(previous)
 
-	done := make(chan struct{})
-	started := time.Now()
-	go func() {
+		started := time.Now()
 		discoverer.ReportRepositoriesNotDiscovered(context.Background(), organizationID)
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the report did not return: the count has no bound in time")
-	}
-	// The deadline starts inside the report, after started, so a count held for
-	// its time makes the report last at least that long on any host load; a
-	// clock started by the stub can read less under load although the bound held.
-	if elapsed := time.Since(started); elapsed < reportTimeout || elapsed >= 2*time.Second || !connection.entered {
-		t.Fatalf("the report took %s and the count was reached: %t; want the count held for its %s and then given up", elapsed, connection.entered, reportTimeout)
-	}
-	var record map[string]any
-	if err := json.Unmarshal(bytes.TrimSpace(captured.Bytes()), &record); err != nil {
-		t.Fatalf("decode %q: %v", captured.String(), err)
-	}
-	if record["msg"] != RepositoryRowsNotDiscoveredLogMessage || record["level"] != "WARN" || record["count_read"] != false {
-		t.Fatalf("the line of a count that ran out of time = %v, want WARN with count_read false", record)
-	}
-	if notDiscoveredReportTimeout <= 0 || notDiscoveredReportTimeout > time.Minute {
-		t.Fatalf("the bound of the report is %s: it must be above 0 and far below the time of a dispatch", notDiscoveredReportTimeout)
-	}
+		returnedAt := time.Now()
+		if !returnedAt.Equal(started.Add(reportTimeout)) || !connection.entered {
+			t.Fatalf("the report returned at +%v of virtual time and the count was reached: %t; want the count held for its %s and then given up", returnedAt.Sub(started), connection.entered, reportTimeout)
+		}
+		var record map[string]any
+		if err := json.Unmarshal(bytes.TrimSpace(captured.Bytes()), &record); err != nil {
+			t.Fatalf("decode %q: %v", captured.String(), err)
+		}
+		if record["msg"] != RepositoryRowsNotDiscoveredLogMessage || record["level"] != "WARN" || record["count_read"] != false {
+			t.Fatalf("the line of a count that ran out of time = %v, want WARN with count_read false", record)
+		}
+		if notDiscoveredReportTimeout <= 0 || notDiscoveredReportTimeout > time.Minute {
+			t.Fatalf("the bound of the report is %s: it must be above 0 and far below the time of a dispatch", notDiscoveredReportTimeout)
+		}
+	})
 }

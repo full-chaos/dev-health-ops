@@ -278,8 +278,9 @@ usage() {
          and, with DEV_HEALTH_GO_FRESH_SECURITY=1 (merge_group), a failure when a package of
          ci/security_fresh_packages.txt read "(cached)". security-fresh-split PKG... prints sec|plain per package.
   test-shard-unweighted-guard SHARD COUNT LOGFILE
-         Fail when a package of the shard ran 30 s or more in LOGFILE (its go
+         Fail when a package of the shard ran 45 s or more in LOGFILE (its go
          test log) and has no row in ci/go_test_weights.tsv; prints the row.
+         From 30 s up to 45 s it only warns (::warning:: and a step-summary row).
          With DEV_HEALTH_GO_UNWEIGHTED_REPORT_ONLY=1 (merge_group) it warns and exits 0; an unusable log still fails.
   build  Run go build ./... in every Go module.
   contract
@@ -846,8 +847,10 @@ check_test_shard_wall_guard() {
   die "test shard ${shard}/${count} took ${wall}s, over ${GO_TEST_SHARD_WALL_PERCENT}% (${limit}s) of the ${GO_TEST_SHARD_CAP_SECONDS}s job cap; heaviest packages by ${basis}: ${top} -- rebalance ci/go_test_weights.tsv or add a shard"
 }
 
-# check_test_shard_unweighted_guard SHARD COUNT LOGFILE [partial] (CHAOS-10498): fails when a package of the shard ran 30 s or more in
-# LOGFILE (the leg's go test log) and has no row in ci/go_test_weights.tsv, and prints the row to add. A package with no row weighs
+# check_test_shard_unweighted_guard SHARD COUNT LOGFILE [partial] (CHAOS-10498): fails when a package of the shard ran 45 s or more
+# (DEV_HEALTH_GO_TEST_UNWEIGHTED_FAIL_SECONDS) in LOGFILE (the leg's go test log) and has no row in ci/go_test_weights.tsv, and prints
+# the row to add; from 30 s (DEV_HEALTH_GO_TEST_UNWEIGHTED_SLOW_SECONDS) up to the fail threshold it only warns (::warning:: plus a
+# step-summary row, exit 0). A fail threshold below the warn threshold or not a whole number exits 2. A package with no row weighs
 # 1, so an unweighted heavy package unbalances the shards without anyone seeing it; this makes it red on the leg that ran it.
 # DEV_HEALTH_GO_UNWEIGHTED_REPORT_ONLY=1 (go-quality.yml sets it on merge_group only, CHAOS-11682) turns a named package (awk exit 1) into a
 # ::warning:: plus a step-summary line and exit 0: a package the entry did not touch must not eject it. An unusable log (awk exit 2) fails always.
@@ -857,8 +860,18 @@ check_test_shard_unweighted_guard() {
   { [ -f "${log}" ] && [ -r "${log}" ]; } || die "test-shard-unweighted-guard needs the shard's go test log as a readable file, got '${log}'"
   plan="$(check_test_shard_plan "${shard}" "${count}")"
   local out rc=0
-  out="$(awk -v weights="${GO_TEST_WEIGHTS}" -v thresh="${DEV_HEALTH_GO_TEST_UNWEIGHTED_SLOW_SECONDS:-30}" -v label="${GO_TEST_WEIGHTS#"${ROOT}/"}" -v partial="${partial:+1}" \
+  out="$(awk -v weights="${GO_TEST_WEIGHTS}" -v thresh="${DEV_HEALTH_GO_TEST_UNWEIGHTED_SLOW_SECONDS:-30}" -v failthresh="${DEV_HEALTH_GO_TEST_UNWEIGHTED_FAIL_SECONDS:-45}" -v label="${GO_TEST_WEIGHTS#"${ROOT}/"}" -v partial="${partial:+1}" \
     -f "${GO_TEST_UNWEIGHTED_SLOW_AWK:-${ROOT}/ci/go_test_unweighted_slow.awk}" <(printf '%s\n' "${plan}") "${log}" 2>&1)" || rc=$?
+  local wline
+  while IFS= read -r wline; do
+    case "${wline}" in
+      unweighted-slow-warning:*|nested-module-slow-warning:*)
+        printf '::warning::%s\n' "${wline}" >&2
+        if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+          printf 'unweighted-slow warning (add the row in a pull request): %s\n' "${wline}" >> "${GITHUB_STEP_SUMMARY}" || true
+        fi ;;
+    esac
+  done <<< "${out}"
   if [ "${rc}" -ne 1 ] || [ "${DEV_HEALTH_GO_UNWEIGHTED_REPORT_ONLY:-}" != "1" ]; then
     [ -z "${out}" ] || printf '%s\n' "${out}" >&2
     return "${rc}"

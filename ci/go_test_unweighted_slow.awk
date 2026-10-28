@@ -1,11 +1,14 @@
 # CHAOS-10498: fail a plain (non-race) test leg when one of its packages ran >= thresh seconds and has no row in the test weights.
 #
-#   awk -v weights=<tsv> -v thresh=<seconds> -v label=<name for messages> -f ci/go_test_unweighted_slow.awk <plan> <go test log>
+#   awk -v weights=<tsv> -v thresh=<seconds> [-v failthresh=<seconds>] -v label=<name for messages> -f ci/go_test_unweighted_slow.awk <plan> <go test log>
 #
 # plan: the shard's "module<TAB>package<TAB>key" lines (check_test_shard_plan); log: the leg's plain go test output, whose
 # "ok"/"FAIL" summary lines are "<status><TAB><package><TAB><seconds>s" (a cached package has no seconds and is skipped).
 # Weights rows are read as ci/go_race_shard.awk reads them: TAB-split, column 1, exact key, no comment or blank row. The failure
 # prints the row to add (the measured seconds, rounded) so it can be pasted into the weights file.
+# Headroom: from thresh up to (not including) failthresh (default 45) a package with no row only WARNS (one "unweighted-slow-warning:"
+# line carrying the suggested row, exit stays 0), so a package near the line does not flip red by runner load; failthresh and above
+# fails as before. failthresh must be a whole number >= thresh, else exit 2 (fail closed).
 # partial=1 (a leg whose go test run already failed: its log is cut short) keeps only the slow-package diagnostic and skips the
 # coverage proof. A package of a nested module cannot be given a row (the weights are keyed by root-module package and the table
 # test refuses any other key), so it is named with that reason and no row.
@@ -15,6 +18,11 @@ BEGIN {
   FS = "\t"
   if (weights == "") { print "go_test_unweighted_slow: weights file not given" > "/dev/stderr"; bad = 2; exit 2 }
   if (thresh == "") thresh = 30
+  if (failthresh == "") failthresh = 45
+  if (failthresh !~ /^[0-9]+$/ || failthresh + 0 < thresh + 0) {
+    printf "go_test_unweighted_slow: the fail threshold '%s' must be a whole number of seconds >= the warn threshold %s\n", failthresh, thresh > "/dev/stderr"
+    bad = 2; exit 2
+  }
   if (label == "") label = weights
   nrows = 0
   while ((getline line < weights) > 0) {
@@ -35,6 +43,13 @@ $1 ~ /^(ok|FAIL)[ ]*$/ && ($2 in key) && $3 ~ /^[0-9]+(\.[0-9]+)?s$/ {
   sec = substr($3, 1, length($3) - 1) + 0
   if (sec >= thresh + 0 && !(key[$2] in w) && !($2 in named)) {
     named[$2] = 1
+    if (sec < failthresh + 0) {
+      if (modof[$2] != ".")
+        printf "nested-module-slow-warning: %s took %ss (>= %s s, < %s s) in module %s and has no row in %s; no row can be added: the weights are keyed by root-module package only\n", $2, sec, thresh, failthresh, modof[$2], label > "/dev/stderr"
+      else
+        printf "unweighted-slow-warning: %s took %ss (>= %s s, < %s s) in this test leg and has no row in %s; suggested row (measured seconds): %s\t%d\n", $2, sec, thresh, failthresh, label, key[$2], int(sec + 0.5) > "/dev/stderr"
+      next
+    }
     if (modof[$2] != ".") {
       printf "nested-module-slow-package: %s took %ss (>= %s s) in module %s and has no row in %s; no row can be added: the weights are keyed by root-module package only; move the test to the root module or extend the weights table to nested modules\n", $2, sec, thresh, modof[$2], label > "/dev/stderr"
       rc = 1

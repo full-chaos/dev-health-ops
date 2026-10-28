@@ -248,10 +248,11 @@ func (e Exemption) matches(root, base string, changed []string) (bool, error) {
 	if len(changed) != len(e.Paths) {
 		return false, nil
 	}
-	sorted := append([]string(nil), changed...)
+	sorted, want := append([]string(nil), changed...), append([]string(nil), e.Paths...)
 	sort.Strings(sorted)
+	sort.Strings(want)
 	for i := range sorted {
-		if sorted[i] != e.Paths[i] {
+		if sorted[i] != want[i] {
 			return false, nil
 		}
 	}

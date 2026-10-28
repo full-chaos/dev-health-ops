@@ -130,6 +130,8 @@ FILES=(
   # neither escapes the lint the way lane-4441 found this script itself once did.
   "${ROOT}/ci/mirror_precheck_lib.sh"
   "${ROOT}/ci/mirror_precheck_lib_test.sh"
+  # CHAOS-11422: the entry point that lists and runs the dedicated shell suites.
+  "${ROOT}/ci/run_shell_tests.sh"
   # CHAOS-11096: base-image pull retry/fallback helper and its fixture suite.
   "${ROOT}/ci/lib/pull_base_image.sh"
   "${ROOT}/ci/pull_base_image_test.sh"
@@ -145,6 +147,8 @@ FILES=(
   # CHAOS-10160: the external auth corpus job and its set-env hook.
   "${ROOT}/ci/auth_corpus_external.sh"
   "${ROOT}/ci/auth_corpus_set_env.sh"
+  # CHAOS-11670: the shared set (roots, tested package) both corpus scripts source.
+  "${ROOT}/ci/auth_corpus_set.sh"
   # CHAOS-11596: the merge queue relevance of the external auth corpus.
   "${ROOT}/ci/auth_corpus_queue_relevance.sh"
   "${ROOT}/ci/run_tests.sh"

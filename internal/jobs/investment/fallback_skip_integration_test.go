@@ -14,6 +14,7 @@ import (
 // gate is not written again for the same (input hash, stamp). Both provider
 // paths. A changed hash or stamp, or a unit that gains evidence, is processed.
 func TestAnInsufficientEvidenceFallbackRowIsNotRewrittenForTheSameHashAndStamp(t *testing.T) {
+	t.Parallel()
 	const gatedRows = `SELECT count() FROM work_unit_investments WHERE org_id = ? AND categorization_status = 'insufficient_evidence'`
 	for _, path := range []string{"generative", "served"} {
 		t.Run(path, func(t *testing.T) {

@@ -49,6 +49,7 @@ func (conn *failingBatchConn) PrepareBatch(ctx context.Context, query string, op
 // WriteInvestments first again and this test goes red (the re-run skips the
 // unit, the unit has no quotes).
 func TestCrashBetweenOutputWritesIsRedoneNotSkipped(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	t.Cleanup(cancel)
 

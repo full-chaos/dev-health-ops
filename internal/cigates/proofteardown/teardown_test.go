@@ -300,12 +300,22 @@ const (
 	promptBoundSecs = 20
 )
 
-func teardownFastUnderCleanupDisposition(g *guard) {
+func teardownFastUnderCleanupDisposition(g *guard) { teardownDisposition(g, false) }
+
+// teardownFastWatchdogThatNeverLogs is the same run, but the sleep wrapper logs only from the script shell: the watchdog
+// subshell never logs, as when it is SIGKILLed before its first sleep (a loaded host). A correct library still passes.
+func teardownFastWatchdogThatNeverLogs(g *guard) { teardownDisposition(g, true) }
+
+func teardownDisposition(g *guard, quiet bool) {
 	src, ok := teardownSource(g)
 	if !ok {
 		return
 	}
 	log := filepath.Join(g.tmp, "kill-disposition.log")
+	sleepFn := `sleep() { echo "SLEEP $*" >> ` + log + `; command sleep "$@"; }`
+	if quiet {
+		sleepFn = `sleep() { [ "$BASHPID" = "$$" ] && echo "SLEEP $*" >> ` + log + `; command sleep "$@"; }`
+	}
 	// Services are forked FIRST (they must not inherit the ignore), then the disposition is set as cleanup() does.
 	// kill and sleep are wrapped to log their calls, in order: the watchdog's escalation is the only kill -KILL <service
 	// pid> the library makes, and its first sleep 1 is the moment it is armed. The wrappers are defined after the
@@ -317,7 +327,7 @@ set -m
 set +m
 sleep 0.3
 kill() { echo "KILL $*" >> @LOG@; builtin kill "$@"; }
-sleep() { echo "SLEEP $*" >> @LOG@; command sleep "$@"; }
+@SLEEPFN@
 trap '' INT TERM
 echo "PROMPT_PID=$PROMPT"
 stop_service prompt "$PROMPT"
@@ -327,7 +337,7 @@ TEARDOWN_WAIT_SECS=@BOUND@
 start=$SECONDS
 stop_service stubborn "$STUBBORN"
 echo "STUBBORN_ELAPSED=$((SECONDS - start))"
-`, "@LOG@", log, "@BOUND@", strconv.Itoa(boundSecs))
+`, "@LOG@", log, "@BOUND@", strconv.Itoa(boundSecs), "@SLEEPFN@", sleepFn)
 	r, ok := g.bash(g.launch, body, 60*time.Second)
 	if !ok {
 		return
@@ -395,6 +405,7 @@ func checks() []check {
 		{"shutdown_timeout_at_contract_minimum", shutdownTimeoutAtContractMinimum},
 		{"cancelled_run_tears_down_and_exits", cancelledRunTearsDownAndExits},
 		{"teardown_fast_under_cleanup_disposition", teardownFastUnderCleanupDisposition},
+		{"watchdog_that_never_logs_still_passes", teardownFastWatchdogThatNeverLogs},
 	}
 	for _, bad := range junk {
 		cs = append(cs, check{"wait_secs_fails_closed/" + bad, waitSecsFailsClosed(bad)})

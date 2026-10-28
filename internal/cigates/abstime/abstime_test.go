@@ -573,3 +573,43 @@ func TestScriptKeysAreReadInsideOneLiteral(t *testing.T) {
 func TestPlantedShellAssignOrderDoesNotMatter(t *testing.T) {
 	shellRefused(t, `"elapsed=$((end - start))\nend=$(date +%s)\necho \"A_ELAPSED=$elapsed\"\n"`)
 }
+
+// Round-3 verifier probes (CHAOS-11757, ACP-RULING-delta-f-verify): each NAME= is scanned on its own, so a second key on
+// the same line is not swallowed by the first assign.
+
+const shellCodeOf = `
+func codeOf(stdout, key string) (int, bool) {
+	n, err := strconv.Atoi(stdout)
+	return n, err == nil
+}
+
+func TestShellCode(t *testing.T) {
+	code, ok := codeOf(out, "CODE")
+	if ok && code <= 3 {
+		t.Fatal("x")
+	}
+}
+`
+
+func TestPlantedTwoKeysOnOneEchoLineCatchTheMeasuredOne(t *testing.T) {
+	shellRefused(t, `"elapsed=$((SECONDS - start)); echo \"CODE=$code A_ELAPSED=$elapsed\"\n"`)
+	shellRefused(t, `"elapsed=$((SECONDS - start))\necho \"CODE=$code A_ELAPSED=$elapsed\"\n"`)
+}
+
+func TestTheUnmeasuredKeyOnTheSameLineStaysClean(t *testing.T) {
+	for name, script := range map[string]string{
+		"assign then echo": `"elapsed=$((SECONDS - start)); echo \"CODE=$code A_ELAPSED=$elapsed\"\n"`,
+		"inline":           `"echo \"CODE=0 A_ELAPSED=$((SECONDS - start))\"\n"`,
+		"printf":           `"printf 'CODE=%s A_ELAPSED=%s\\n' 0 \"$((SECONDS - start))\"\n"`,
+	} {
+		body := "const script = " + script + "\n" + shellCodeOf
+		got := check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil)
+		if len(got) != 0 {
+			t.Fatalf("%s: the CODE reader must stay clean, got %q", name, got)
+		}
+	}
+}
+
+func TestTwoMeasuredKeysOnOneLineAreBothKeys(t *testing.T) {
+	shellRefused(t, `"echo \"A_ELAPSED=$((SECONDS - start)) B_ELAPSED=$((SECONDS - begin))\"\n"`)
+}

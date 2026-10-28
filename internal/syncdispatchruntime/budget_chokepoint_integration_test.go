@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -18,7 +17,6 @@ func createChokepointTables(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 	// sync_runs backs bumpSyncRunRollup's seam (CHAOS-4586): terminalizeUnit
 	// recomputes this row's completed_units/failed_units in the same
 	// transaction as every terminal write it makes.
-	pgschema.Apply(ctx, t, pool)
 	pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{ID: chokepointTestRunID, TotalUnits: 1})
 }
 
@@ -29,10 +27,7 @@ func withChokepointPool(t *testing.T, fn func(ctx context.Context, pool *pgxpool
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {

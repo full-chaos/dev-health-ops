@@ -1123,8 +1123,10 @@ func TestShellLogsWhichRequiredCheckRefusedReadinessWithoutTheErrorText(t *testi
 		}), IO{Stdout: &stdout, Stderr: &stderr})
 	}()
 
+	// Failure-path hang guard only: no passing run waits on it.
+	guard, stopGuard := context.WithTimeout(t.Context(), 60*time.Second)
+	defer stopGuard()
 	client := &http.Client{Timeout: time.Second}
-	deadline := time.Now().Add(5 * time.Second)
 	for {
 		response, requestErr := client.Get("http://" + address + "/readyz")
 		if requestErr == nil {
@@ -1134,16 +1136,16 @@ func TestShellLogsWhichRequiredCheckRefusedReadinessWithoutTheErrorText(t *testi
 				break
 			}
 		}
-		if time.Now().After(deadline) {
+		select {
+		case code := <-done:
+			t.Fatalf("the shell exited %d before it answered 503 naming the check: logs=%s", code, stdout.String())
+		case <-guard.Done():
 			t.Fatalf("the service never answered 503 naming the check: err=%v logs=%s", requestErr, stdout.String())
+		case <-time.After(10 * time.Millisecond):
 		}
-		time.Sleep(10 * time.Millisecond)
 	}
-	// The refusal line is written off the readiness path: wait for it.
-	for logDeadline := time.Now().Add(3 * time.Second); !strings.Contains(stdout.String(), `"msg":"readiness check refused"`) &&
-		time.Now().Before(logDeadline); {
-		time.Sleep(10 * time.Millisecond)
-	}
+	// The refusal line is written off the readiness path: wait for its Write.
+	stdout.waitFor(guard, `"msg":"readiness check refused"`)
 	logs := stdout.String()
 	for _, want := range []string{`"msg":"readiness check refused"`, `"check":"refusing_dependency"`, `"cause":"error"`} {
 		if !strings.Contains(logs, want) {
@@ -1158,21 +1160,53 @@ func TestShellLogsWhichRequiredCheckRefusedReadinessWithoutTheErrorText(t *testi
 	cancel()
 	select {
 	case <-done:
-	case <-time.After(3 * time.Second):
+	case <-guard.Done():
 		t.Fatal("shell did not terminate after cancellation")
 	}
 }
 
 // syncBuffer is a bytes.Buffer the shell's logger and the test can share.
 type syncBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
+	mu      sync.Mutex
+	buf     bytes.Buffer
+	wake    chan struct{}
+	onArmed func()
 }
 
 func (b *syncBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.buf.Write(p)
+	n, err := b.buf.Write(p)
+	if b.wake != nil {
+		close(b.wake)
+		b.wake = nil
+	}
+	return n, err
+}
+
+// waitFor returns true once want is in the buffer, woken by Write; ctx is only a hang guard,
+// and the buffer is read once more when it ends so a line that raced it is not lost.
+func (b *syncBuffer) waitFor(ctx context.Context, want string) bool {
+	for {
+		b.mu.Lock()
+		if strings.Contains(b.buf.String(), want) {
+			b.mu.Unlock()
+			return true
+		}
+		if b.wake == nil {
+			b.wake = make(chan struct{})
+		}
+		wake := b.wake
+		b.mu.Unlock()
+		if b.onArmed != nil {
+			b.onArmed()
+		}
+		select {
+		case <-wake:
+		case <-ctx.Done():
+			return strings.Contains(b.String(), want)
+		}
+	}
 }
 
 func (b *syncBuffer) String() string {

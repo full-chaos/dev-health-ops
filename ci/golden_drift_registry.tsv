@@ -1,0 +1,12 @@
+# Frozen-Python golden drift registry. One row per golden test set that a pull request must run early (ci/check_golden_drift.sh).
+# Columns (tab separated): package<TAB>-run regex<TAB>triggers. The build tag is always `integration`; every row starts a
+# PostgreSQL container, so the job needs docker.
+# triggers: `;` separated shell case patterns matched against each changed path (`*` also matches `/`). @MIG expands to the
+# migration paths (see ci/check_golden_drift.sh). A change that matches a trigger runs the row. Add the package directory of the
+# golden test and the paths of the writers it compares.
+# A row is added only after its test names are checked: internal/cigates/scripts/golden_drift_test.go lists the tests each
+# regex matches and fails when one matches none.
+internal/adminops	^(TestUsersMatchTheFrozenPythonOutput|TestOrgsDeleteMatchesTheFrozenPythonOutput)$	@MIG;internal/adminops/*
+internal/fixturescli	^TestFinalizeSyntheticWritesTheFrozenPythonRows$	@MIG;internal/fixturescli/*
+internal/auth/usersbackfill	^(TestOrgsBackfill.*|TestReconcileAfterBackfillIsZeroDiffAndSeesPlantedDrift)$	@MIG;internal/auth/usersbackfill/*
+internal/api/session	^TestSessionRoutesMatchGolden$	@MIG;internal/api/session/*

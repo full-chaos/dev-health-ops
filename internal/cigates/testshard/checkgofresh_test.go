@@ -220,3 +220,31 @@ func TestAFileReadByAChildProcessIsServedFromTheTestCacheUnlessCountIsOne(t *tes
 		t.Fatalf("GOFLAGS=-count=1 must run the test again and see the edit: got %v: %s", err, out)
 	}
 }
+
+func TestNoGoCallEnvHoldsTheFreshKnobItself(t *testing.T) {
+	t.Parallel()
+	freshLog := filepath.Join(t.TempDir(), "go_fresh.log")
+	if err := os.WriteFile(freshLog, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run, flags := goFlagsOfCalls(t, []string{"CI=", "GITHUB_ACTIONS=", "CHECK_GO_FRESH=1", "FAKE_GO_FRESH_LOG=" + freshLog}, "ci-leg", "test", "350", "350")
+	if run.Err != nil {
+		t.Fatalf("%v\n%s", run.Err, run.Stderr)
+	}
+	b, err := os.ReadFile(freshLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := strings.Fields(string(b))
+	if len(seen) == 0 || len(seen) != len(run.Calls) || len(flags) != len(seen) {
+		t.Fatalf("%d fresh record(s), %d GOFLAGS record(s) for %d go test call(s): the scan saw nothing", len(seen), len(flags), len(run.Calls))
+	}
+	for i, s := range seen {
+		if s != "unset" {
+			t.Errorf("go test %s ran with CHECK_GO_FRESH in its environment: a child check_go.sh would inherit the knob", run.Calls[i])
+		}
+		if flags[i] != "-count=1" {
+			t.Errorf("go test %s ran with GOFLAGS=%q, want -count=1: the knob must still work", run.Calls[i], flags[i])
+		}
+	}
+}

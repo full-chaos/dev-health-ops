@@ -467,6 +467,10 @@ func TestGoldenDriftRunRefusesHostileRowsFiles(t *testing.T) {
 		"VERDICT nonesuch":                           "VERDICT nonesuch x\n" + row,
 		"VERDICT selected":                           "VERDICT selected x\n" + row,
 		"VERDICT allx":                               "VERDICT allx\n" + row,
+		"VERDICT nonesuch alone":                     "VERDICT nonesuch x\n",
+		"VERDICT none without a reason alone":        "VERDICT none\n",
+		"VERDICT none glued to a word alone":         "VERDICT nonex y\n",
+		"VERDICT selected alone":                     "VERDICT selected x\n",
 	}
 	for name, rows := range bad {
 		t.Run(name, func(t *testing.T) {

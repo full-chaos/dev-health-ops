@@ -79,6 +79,13 @@ func (e *pgEnv) project(t *testing.T, ctx context.Context, org uuid.UUID) {
 // membership edge (a guarded table, so the insert runs under the commit guard setting).
 func (e *pgEnv) membership(t *testing.T, ctx context.Context, user uuid.UUID, org uuid.UUID, createdAt string) {
 	t.Helper()
+	e.membershipJoined(t, ctx, user, org, createdAt, createdAt)
+}
+
+// membershipJoined seeds an auth membership with a join time and a creation time (SQL expressions), as a backfill
+// writes them: joined_at is the source membership's, created_at is the projection time.
+func (e *pgEnv) membershipJoined(t *testing.T, ctx context.Context, user uuid.UUID, org uuid.UUID, joinedAt, createdAt string) {
+	t.Helper()
 	if _, err := e.admin.Exec(ctx, `INSERT INTO public.organizations (id, slug, name, settings, tier, managed_by, is_active, created_at, updated_at)
 VALUES ($1, $2, $2, '{}', 'community', 'stripe', true, now(), now()) ON CONFLICT DO NOTHING`, org, org.String()); err != nil {
 		t.Fatalf("seed organization: %v", err)
@@ -91,8 +98,8 @@ VALUES ($1, $2, $2, '{}', 'community', 'stripe', true, now(), now()) ON CONFLICT
 	subject := user.String()
 	err = audit.Commit(ctx, e.runtime, schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
-			_, err := tx.Exec(ctx, `INSERT INTO auth.memberships (organization_id, principal_id, status, role, created_at, updated_at)
-VALUES ($1, $2, 'active', 'member', `+createdAt+`, `+createdAt+`)`, org, subject)
+			_, err := tx.Exec(ctx, `INSERT INTO auth.memberships (organization_id, principal_id, status, role, joined_at, created_at, updated_at)
+VALUES ($1, $2, 'active', 'member', `+joinedAt+`, `+createdAt+`, `+createdAt+`)`, org, subject)
 			return err
 		},
 		Audit:     audit.AuditEvent{EventType: "auth.membership.added", Outcome: audit.OutcomeAllowed, SubjectPrincipalID: &subject, Attributes: map[string]any{"reason_code": "membership_added"}},
@@ -325,5 +332,31 @@ func TestVerificationOfALinkSpentAfterTheReadIsRefusedAndWritesNothing(t *testin
 	}
 	if n := rig.env.count(t, ctx, `SELECT count(*) FROM public.users WHERE id = $1 AND is_verified`, p); n != 0 {
 		t.Errorf("the address was marked verified by a link that was already spent")
+	}
+}
+
+// The audit organization is the one login picks: the earliest join, joined_at falling back to created_at
+// (authapi chooseMembership). A backfill keeps the source joined_at and stamps created_at with the projection time,
+// so the two orders differ for a user with several backfilled memberships.
+func TestAuditOrganizationFollowsTheLoginChoiceForBackfilledMemberships(t *testing.T) {
+	ctx := context.Background()
+	env, _ := linkEnv(t, ctx)
+
+	joinedFirst, joinedLater, noJoin := uuid.New(), uuid.New(), uuid.New()
+	p := env.owner(t, ctx)
+	env.membershipJoined(t, ctx, p, joinedLater, "now() - interval '1 day'", "now() - interval '10 days'")
+	env.membershipJoined(t, ctx, p, joinedFirst, "now() - interval '5 days'", "now()")
+	env.membershipJoined(t, ctx, p, noJoin, "NULL", "now() - interval '2 days'")
+	got, err := identity.AuditOrganization(ctx, env.runtime, `"auth"`, p)
+	if err != nil || got == nil || *got != joinedFirst.String() {
+		t.Fatalf("AuditOrganization = %v, %v; want %s (the earliest join, though its created_at is the latest)", got, err, joinedFirst)
+	}
+
+	q := env.owner(t, ctx)
+	env.membershipJoined(t, ctx, q, joinedLater, "now() - interval '1 day'", "now() - interval '10 days'")
+	env.membershipJoined(t, ctx, q, noJoin, "NULL", "now() - interval '2 days'")
+	got, err = identity.AuditOrganization(ctx, env.runtime, `"auth"`, q)
+	if err != nil || got == nil || *got != noJoin.String() {
+		t.Fatalf("AuditOrganization = %v, %v; want %s (no joined_at: created_at is the join time)", got, err, noJoin)
 	}
 }

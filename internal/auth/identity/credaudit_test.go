@@ -126,7 +126,7 @@ func TestAuditOrganizationReadsOnlyTheAuthSchema(t *testing.T) {
 	if strings.Contains(sql, "public.") {
 		t.Errorf("the lookup reads a public table: %s", sql)
 	}
-	for _, want := range []string{`"auth".memberships`, `"auth".organizations`, "ORDER BY m.created_at, m.id", "m.status <> 'removed'"} {
+	for _, want := range []string{`"auth".memberships`, `"auth".organizations`, "ORDER BY COALESCE(m.joined_at, m.created_at), m.joined_at NULLS LAST, m.created_at, m.id", "m.status <> 'removed'"} {
 		if !strings.Contains(sql, want) {
 			t.Errorf("the lookup lacks %q: %s", want, sql)
 		}

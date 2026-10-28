@@ -69,7 +69,7 @@ func TestTheShardedTestLegNamesEveryGoTestTimeout(t *testing.T) {
 }
 
 func TestAGoTestLineWithoutATimeoutIsReported(t *testing.T) {
-	script := strings.Replace(readCheckGo(t), "-timeout 10m ${rest}", "${rest}", 1)
+	script := strings.Replace(readCheckGo(t), "-timeout \"$(cigates_go_test_timeout ${rest})\" ${rest}", "${rest}", 1)
 	missing, _ := callsMissingTimeout(t, script)
 	if len(missing) != 1 || !strings.Contains(missing[0], "check_test_shard") {
 		t.Fatalf("want exactly the planted check_test_shard line, got %v", missing)

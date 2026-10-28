@@ -39,6 +39,20 @@ func TestGoldenDriftJobIsAdvisoryAndPullRequestOnly(t *testing.T) {
 			t.Errorf("selection step lacks %q", want)
 		}
 	}
+	if strings.Contains(run, "| tee") {
+		t.Error("the select step must not pipe the selector into tee: write the rows to a file, then cat it, so the selector's status decides the step")
+	}
+	for _, line := range strings.Split(run, "\n") {
+		if strings.Contains(line, "check_golden_drift.sh select") && strings.Contains(line, "||") {
+			t.Errorf("the select call must not swallow its status: %q", line)
+		}
+	}
+	for _, name := range []string{"Select the golden tests the change can reach", "Run the selected frozen-Python golden tests"} {
+		st, _ := stepNamed(job, name)
+		if strings.Contains(asString(st["run"]), "go test") && !strings.Contains(asString(st["run"]), "-count=1") {
+			t.Errorf("step %q runs go test without -count=1", name)
+		}
+	}
 	runStep, n := stepNamed(job, "Run the selected frozen-Python golden tests")
 	if n != 1 || !strings.Contains(asString(runStep["run"]), "ci/check_golden_drift.sh run") {
 		t.Fatal("job lost its run step")

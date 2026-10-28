@@ -754,11 +754,12 @@ jobs:
           rows="${RUNNER_TEMP}/golden_rows.tsv"
           # A label that already runs the integration shards on this pull request makes this check redundant.
           if jq -e 'index("ci:integration") or index("ci:full")' <<< "${PR_LABELS_JSON}" > /dev/null; then
-            echo "VERDICT none a ci:integration or ci:full label already runs the integration shards" | tee "${rows}"
+            echo "VERDICT none a ci:integration or ci:full label already runs the integration shards" >> "${rows}"
           else
             bash ci/go_relevant_diff.sh > "${RUNNER_TEMP}/changed.txt" || : > "${RUNNER_TEMP}/changed.txt"
-            bash ci/check_golden_drift.sh select "${RUNNER_TEMP}/changed.txt" | tee "${rows}"
+            bash ci/check_golden_drift.sh select "${RUNNER_TEMP}/changed.txt" >> "${rows}"
           fi
+          cat "${rows}"
           echo "rows=$(grep -c '^ROW' "${rows}" || true)" >> "${GITHUB_OUTPUT}"
 
       - name: Set up Go

@@ -190,7 +190,12 @@ func TestGoldenDriftRun(t *testing.T) {
 		if res.code != 0 {
 			t.Fatalf("exit %d: %s %s", res.code, res.stdout, res.stderr)
 		}
-		for _, want := range []string{"-tags=integration", "-count=1", "-run ^TestA$ ./internal/adminops", "-run ^TestB$ ./internal/api/session"} {
+		for _, line := range strings.Split(strings.TrimSpace(log), "\n") {
+			if !strings.Contains(line, " -count=1 ") {
+				t.Errorf("every go test the check runs carries an explicit -count=1 (a cached pass proves nothing): %q", line)
+			}
+		}
+		for _, want := range []string{"-tags=integration", "-run ^TestA$ ./internal/adminops", "-run ^TestB$ ./internal/api/session"} {
 			if !strings.Contains(log, want) {
 				t.Errorf("go call log lacks %q:\n%s", want, log)
 			}
@@ -222,4 +227,17 @@ func TestGoldenDriftRun(t *testing.T) {
 			t.Fatalf("exit %d, want 2", res.code)
 		}
 	})
+}
+
+// A registry error is a usage error (exit 2), never a verdict: the workflow step must stop on it.
+func TestGoldenDriftSelectRegistryErrorExitsTwo(t *testing.T) {
+	root := repoRoot(t)
+	list := filepath.Join(t.TempDir(), "changed.txt")
+	if err := os.WriteFile(list, []byte(nulList("docs/a.md")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res := cmdSpec{dir: t.TempDir(), env: []string{shimBasePath(), "GOLDEN_DRIFT_REGISTRY=" + filepath.Join(t.TempDir(), "absent.tsv")}}.run("bash", filepath.Join(root, "ci", "check_golden_drift.sh"), "select", list)
+	if res.code != 2 || res.stdout != "" {
+		t.Fatalf("exit %d stdout %q, want exit 2 and no verdict", res.code, res.stdout)
+	}
 }

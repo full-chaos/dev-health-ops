@@ -114,16 +114,19 @@ message() {
 
 out=""
 run_rows() {
-  local file="${1:-}" pkg re kind failed=0 count=0
+  local file="${1:-}" pkg re kind failed=0 count=0 rc
   [ -n "${file}" ] && [ -r "${file}" ] || die "run needs a readable ROWS_FILE"
-  out="$(mktemp)"
   trap 'rm -f "${out:-}"' EXIT
   while IFS=$'\t' read -r kind pkg re || [ -n "${kind}" ]; do
     [ "${kind}" = "ROW" ] || continue
     [ -n "${pkg}" ] && [ -n "${re}" ] || die "malformed ROW line"
     count=$((count + 1))
     echo "== golden drift: ${pkg} -run ${re}"
-    if ! (cd "${ROOT}" && env -u GOFLAGS -u GOEXPERIMENT GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m -v -run "${re}" "./${pkg}") 2>&1 | tee "${out}"; then
+    out="$(mktemp)"
+    rc=0
+    (cd "${ROOT}" && env -u GOFLAGS -u GOEXPERIMENT GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m -v -run "${re}" "./${pkg}") >> "${out}" 2>&1 || rc=$?
+    cat "${out}"
+    if [ "${rc}" -ne 0 ]; then
       message "${pkg}" "${re}"
       failed=1
     elif ! grep -q '^--- PASS: ' "${out}"; then
@@ -131,6 +134,7 @@ run_rows() {
       message "${pkg}" "${re}"
       failed=1
     fi
+    rm -f "${out}"
   done < "${file}"
   [ "${count}" -gt 0 ] || { echo "check_golden_drift.sh: no ROW to run"; return 0; }
   return "${failed}"

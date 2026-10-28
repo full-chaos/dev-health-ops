@@ -4,21 +4,19 @@ package chmigrate_test
 
 import (
 	"context"
-	"os"
-	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
-// INVARIANT (CHAOS-8790): the real chain, applied to a fresh database, leaves
+// INVARIANT (CHAOS-8790): the head, applied to a fresh database, leaves
 // work_item_interactions keyed by the provider comment id as the LAST part of
 // the sorting key, so two comments of one work item in the same millisecond are
-// two rows; the old writer's column list (no interaction_id) still inserts,
-// as a legacy row with the empty id; and migration 107 is re-runnable: a
-// second run of every statement is a no-op, as the chain's rule requires.
-func TestWorkItemInteractionsCommentIDMigration(t *testing.T) {
+// two rows; and the old writer's column list (no interaction_id) still inserts,
+// as a legacy row with the empty id. (The rerun of migration 107 is archived
+// with it, CHAOS-11751.)
+func TestWorkItemInteractionsCommentID(t *testing.T) {
 	ctx := context.Background()
 	instance, err := containers.StartClickHouse(ctx)
 	if err != nil {
@@ -68,24 +66,6 @@ func TestWorkItemInteractionsCommentIDMigration(t *testing.T) {
 	const want = "org_id, work_item_id, occurred_at, interaction_type, interaction_id"
 	if got != want {
 		t.Fatalf("sorting key = %q, want %q", got, want)
-	}
-
-	// the migration file again, statement by statement, as the runner sends it
-	file, err := os.ReadFile("sql/107_work_item_interactions_comment_id.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	statements := chmigrate.SplitStatements(string(file))
-	if len(statements) != 2 {
-		t.Fatalf("migration 107 has %d statements, want the ALTER and the view", len(statements))
-	}
-	if !strings.HasPrefix(statements[0], "ALTER TABLE work_item_interactions") {
-		t.Fatalf("the first statement is not the one ALTER: %.60s", statements[0])
-	}
-	for _, statement := range statements {
-		if err := db.Exec(ctx, statement); err != nil {
-			t.Fatalf("re-run: %v", err)
-		}
 	}
 
 	insert := func(columns, values string) {

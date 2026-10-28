@@ -178,10 +178,15 @@ func (cut goldenCutOff) wantVersionSets(py migrateFact, dhoState string) (applie
 type migrateEnv struct {
 	instance *containers.Instance
 	admin    driver.Conn
+	// baseline is the head baseline and chain the live chain after it: what dho applies.
 	baseline chmigrate.Baseline
 	chain    []chmigrate.ChainFile
-	cut      goldenCutOff
-	frozen   map[string]migrateFact
+	// pyBaseline and archived are what the Python facts were recorded over: the 098 baseline and the chain files
+	// after it, archived when the baseline moved to the chain head (CHAOS-11751).
+	pyBaseline chmigrate.Baseline
+	archived   []chmigrate.ChainFile
+	cut        goldenCutOff
+	frozen     map[string]migrateFact
 }
 
 func (e *migrateEnv) nativeURI(t *testing.T, database string) string {
@@ -359,11 +364,13 @@ func newMigrateEnv(t *testing.T) *migrateEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cut, err := splitChainAtGoldenHead(chain, migrateGoldenHead)
+	pyBaseline, archived := loadArchivedBaseline(t), loadArchivedChain(t)
+	cut, err := splitChainAtGoldenHead(append(append([]chmigrate.ChainFile(nil), archived...), chain...), migrateGoldenHead)
 	if err != nil {
 		t.Fatal(err)
 	}
-	env := &migrateEnv{instance: instance, admin: openDatabase(t, instance.URI, ""), baseline: baseline, chain: chain, cut: cut, frozen: map[string]migrateFact{}}
+	env := &migrateEnv{instance: instance, admin: openDatabase(t, instance.URI, ""), baseline: baseline, chain: chain,
+		pyBaseline: pyBaseline, archived: archived, cut: cut, frozen: map[string]migrateFact{}}
 	raw, err := os.ReadFile(migrateGolden)
 	if err != nil {
 		t.Fatal(err)
@@ -400,7 +407,7 @@ func runMigrateScenarios(t *testing.T) *migrateEnv {
 	// The versions the frozen Python facts count: the baseline and the chain
 	// up to migrateGoldenHead. dho's own count is this plus the files above
 	// the cut-off, which requireSameStatus checks by name.
-	totalVersions := len(e.baseline.Versions) + len(e.cut.frozen)
+	totalVersions := len(e.pyBaseline.Versions) + len(e.cut.frozen)
 
 	// ---- status of a database no verb has touched ----
 	emptyGo := e.newDatabase(t)
@@ -452,7 +459,7 @@ func runMigrateScenarios(t *testing.T) *migrateEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if built, err := chmigrate.Upgrade(ctx, frozenDB, e.baseline, e.cut.frozen); err != nil || built.Action != "baseline_applied" {
+	if built, err := chmigrate.Upgrade(ctx, frozenDB, e.pyBaseline, e.cut.frozen); err != nil || built.Action != "baseline_applied" {
 		t.Fatalf("dho upgrade to the golden's head: %+v, %v", built, err)
 	}
 	if got := e.schemaDigest(t, frozenHead); got != up.Schema {
@@ -464,19 +471,46 @@ func runMigrateScenarios(t *testing.T) *migrateEnv {
 			t.Errorf("upgrade fresh: dho left digest %s, python %s: the two runners built different databases", headSchema, up.Schema)
 		}
 	} else {
-		// The files above the cut-off, by Go-only rules: the verb applies
-		// exactly these files to the database Python's chain ends at, in
-		// chain order, and the result is the database a fresh upgrade of the
-		// whole chain builds. A file the verb skips, applies twice, or applies
-		// with another result on an existing database than on a fresh one
-		// fails here.
-		code, stdout, stderr := e.goVerb(t, frozenHead, "upgrade", "2")
-		var stepped chmigrate.Result
-		if err := json.Unmarshal([]byte(stdout), &stepped); code != 0 || err != nil || stepped.Action != "chain_applied" || !reflect.DeepEqual(stepped.Applied, e.cut.aboveVersions()) {
-			t.Errorf("dho upgrade from %s: exit %d, %q (%v) %s: want chain_applied naming exactly %v", migrateGoldenHead, code, stdout, err, stderr, e.cut.aboveVersions())
+		// The files above the cut-off, by Go-only rules. The archived ones are
+		// versions of the head baseline since it moved to the chain head
+		// (CHAOS-11751), so the database the old runner left at the cut-off is
+		// below this build's head: the verb refuses it, naming exactly those
+		// files, and writes nothing. Built the old way to the end (every
+		// archived file, then the live chain), it is the database a fresh
+		// upgrade builds. A file the head baseline does not record, records
+		// under another name, or builds differently fails here.
+		var archivedAbove []string
+		for _, file := range e.cut.above {
+			for _, archived := range e.archived {
+				if archived.Version == file.Version {
+					archivedAbove = append(archivedAbove, file.Version)
+				}
+			}
 		}
-		if got := e.schemaDigest(t, frozenHead); got != headSchema {
-			t.Errorf("dho upgrade from %s left digest %s, a fresh upgrade of the whole chain %s: the %d chain file(s) above the cut-off do not give one database", migrateGoldenHead, got, headSchema, len(e.cut.above))
+		before := e.schemaDigest(t, frozenHead)
+		_, refused := e.goStatus(t, frozenHead)
+		if refused.State != "below_head" || !reflect.DeepEqual(refused.Missing, archivedAbove) {
+			t.Errorf("dho status at %s: %s missing %v, want below_head missing exactly the archived files above it %v", migrateGoldenHead, refused.State, refused.Missing, archivedAbove)
+		}
+		code, stdout, stderr := e.goVerb(t, frozenHead, "upgrade", "2")
+		if code != cli.ExitFailure || stdout != "" || !strings.Contains(stderr, `"code":"below_head"`) || e.schemaDigest(t, frozenHead) != before {
+			t.Errorf("dho upgrade from %s: exit %d, stdout %q, stderr %q: want a below_head refusal that writes nothing", migrateGoldenHead, code, stdout, stderr)
+		}
+		stepped := e.newDatabase(t)
+		steppedDB, _, err := chmigrate.NewConnDB(ctx, openDatabase(t, e.instance.URI, stepped))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := chmigrate.Upgrade(ctx, steppedDB, e.pyBaseline, e.archived); err != nil {
+			t.Fatalf("the old way to the archived head: %v", err)
+		}
+		if len(e.chain) > 0 {
+			if _, err := chmigrate.Upgrade(ctx, steppedDB, e.baseline, e.chain); err != nil {
+				t.Fatalf("the live chain over the archived head: %v", err)
+			}
+		}
+		if got := e.schemaDigest(t, stepped); got != headSchema {
+			t.Errorf("the old way to the head left digest %s, a fresh upgrade %s: the %d chain file(s) above the cut-off do not give one database", got, headSchema, len(e.cut.above))
 		}
 		if headSchema == up.Schema {
 			t.Errorf("the whole chain has %d file(s) above %s and still gives python's digest %s: their version rows are not in the database", len(e.cut.above), migrateGoldenHead, up.Schema)
@@ -511,7 +545,8 @@ func runMigrateScenarios(t *testing.T) *migrateEnv {
 	}
 
 	// ---- below the head: one version unrecorded ----
-	dropped := e.baseline.Versions[len(e.baseline.Versions)/2]
+	// The version the Python fact dropped: the middle one of the baseline it ran over.
+	dropped := e.pyBaseline.Versions[len(e.pyBaseline.Versions)/2]
 	if err := openDatabase(t, e.instance.URI, goHead).Exec(ctx, "ALTER TABLE schema_migrations DELETE WHERE version = ? SETTINGS mutations_sync = 2", dropped); err != nil {
 		t.Fatal(err)
 	}
@@ -639,10 +674,11 @@ func (e *migrateEnv) schemaDigest2(t *testing.T, database string) string {
 // file above it is CHECKED -- by name, in the right set, with the right
 // count -- never skipped.
 func TestMigrateGoldenCutOffChecksTheChainFilesAboveIt(t *testing.T) {
-	chain, err := chmigrate.LoadChain()
+	live, err := chmigrate.LoadChain()
 	if err != nil {
 		t.Fatal(err)
 	}
+	chain := append(loadArchivedChain(t), live...)
 	cut, err := splitChainAtGoldenHead(chain, migrateGoldenHead)
 	if err != nil {
 		t.Fatal(err)
@@ -660,11 +696,19 @@ func TestMigrateGoldenCutOffChecksTheChainFilesAboveIt(t *testing.T) {
 			t.Fatalf("%s is at or below the cut-off and was put above it", file.Version)
 		}
 	}
-	// The golden's own count is the baseline plus the frozen files: the
+	// The golden's own count is the 098 baseline plus the frozen files: the
 	// constant and the golden agree, or one of them moved without the other.
-	baseline, err := chmigrate.LoadBaseline()
+	// dho's own list (the head baseline and the live chain) is that plus
+	// exactly the files above the cut-off.
+	baseline := loadArchivedBaseline(t)
+	headBaseline, err := chmigrate.LoadBaseline()
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(headBaseline.Versions)+len(live) != len(baseline.Versions)+len(cut.frozen)+len(cut.above) {
+		t.Fatalf("dho lists %d versions (head %d + live %d); the golden's %d + %d above the cut-off = %d",
+			len(headBaseline.Versions)+len(live), len(headBaseline.Versions), len(live), len(baseline.Versions)+len(cut.frozen), len(cut.above),
+			len(baseline.Versions)+len(cut.frozen)+len(cut.above))
 	}
 	raw, err := os.ReadFile(migrateGolden)
 	if err != nil {

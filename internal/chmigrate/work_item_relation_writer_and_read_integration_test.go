@@ -4,30 +4,22 @@ package chmigrate_test
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
-
-// The work_items columns the view of migration 103 reads, as the chain types
-// them (009 + 024).
-const workItemsBeforeRelationsRead = `CREATE TABLE work_items (
-    repo_id UUID, work_item_id String, provider String, project_id String,
-    last_synced DateTime64(3), org_id String DEFAULT 'default'
-) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (repo_id, work_item_id)`
 
 // INVARIANT (CHAOS-8578): for every work item (org, id),
 // max(relations_read_at) in work_item_relations_read is the latest
 // last_synced of its work_items rows that are NOT github Projects v2 board
 // rows (project_id 'ghprojv2:...'): the board pass reads no relations and
-// never moves it. An item stored before the migration gets the latest such
-// last_synced still stored. relation_writer exists on work_item_dependencies,
-// is NULL unless a writer sets it, and is replaced with the row.
-func TestRelationWriterAndReadMigrationKeepsTheLatestRelationRead(t *testing.T) {
+// never moves it. relation_writer exists on work_item_dependencies, is NULL
+// unless a writer sets it, and is replaced with the row. (The fill of items
+// stored before migration 103 and its rerun are archived with it, CHAOS-11751.)
+func TestRelationWriterAndReadKeepsTheLatestRelationRead(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	instance, err := containers.StartClickHouse(ctx)
@@ -39,6 +31,7 @@ func TestRelationWriterAndReadMigrationKeepsTheLatestRelationRead(t *testing.T) 
 		defer closeCancel()
 		_ = instance.Close(closeCtx)
 	})
+	chschema.Apply(ctx, t, instance) // the head, migration 103 included
 	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
 	if err != nil {
 		t.Fatal(err)
@@ -70,29 +63,14 @@ WHERE org_id = ? AND work_item_id = ?`, org, id).Scan(&out); err != nil {
 			repoID + `', '` + id + `', '` + provider + `', '` + project + `', '` + lastSynced + `', '` + org + `')`)
 	}
 
-	exec(workItemsBeforeRelationsRead)
-	exec(dependenciesBeforeRelationStart)
-	exec(`ALTER TABLE work_item_dependencies ADD COLUMN IF NOT EXISTS relation_started_at Nullable(DateTime64(3))`)
-	// Before the migration: #7 read by the text pass on the 5th, then
-	// written by the board pass on the 7th; #8 only by the board pass; a
-	// jira item; #7 of another organization.
+	// #7 read by the text pass on the 5th, then written by the board pass on
+	// the 7th; #8 only by the board pass; a jira item; #7 of another
+	// organization.
 	item("org-a", repo, "gh:acme/api#7", "github", "acme/api", "2026-08-05 10:00:00.000")
 	item("org-a", noRepo, "gh:acme/api#7", "github", "ghprojv2:acme#1", "2026-08-07 10:00:00.000")
 	item("org-a", noRepo, "gh:acme/api#8", "github", "ghprojv2:acme#1", "2026-08-07 10:00:00.000")
 	item("org-a", repo, "jira:OPS-1", "jira", "OPS", "2026-08-06 10:00:00.000")
 	item("org-b", repo, "gh:acme/api#7", "github", "acme/api", "2026-08-02 10:00:00.000")
-
-	sql, err := os.ReadFile("sql/103_work_item_relation_writer_and_read.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	statements := chmigrate.SplitStatements(string(sql))
-	if len(statements) != 4 {
-		t.Fatalf("migration 103 has %d statements, want the column, the table, the view and the fill", len(statements))
-	}
-	for _, statement := range statements {
-		exec(statement)
-	}
 
 	check := func(when string) {
 		t.Helper()
@@ -107,11 +85,11 @@ WHERE org_id = ? AND work_item_id = ?`, org, id).Scan(&out); err != nil {
 			}
 		}
 	}
-	// Items stored before the migration: the board row is not a read.
+	// The board row is not a read.
 	if got := readAt("org-a", "gh:acme/api#7"); got != "2026-08-05 10:00:00.000" {
-		t.Fatalf("org-a #7 stored before the migration: read at %q, want the text pass, not the later board pass", got)
+		t.Fatalf("org-a #7: read at %q, want the text pass, not the later board pass", got)
 	}
-	// After it: a text pass moves the read time, a board pass does not.
+	// A later text pass moves the read time, a board pass does not.
 	item("org-a", repo, "gh:acme/api#7", "github", "acme/api", "2026-08-09 10:00:00.000")
 	item("org-a", noRepo, "gh:acme/api#7", "github", "ghprojv2:acme#1", "2026-08-12 10:00:00.000")
 	item("org-a", noRepo, "gh:acme/api#8", "github", "ghprojv2:acme#1", "2026-08-12 10:00:00.000")
@@ -121,12 +99,6 @@ WHERE org_id = ? AND work_item_id = ?`, org, id).Scan(&out); err != nil {
 	exec(`OPTIMIZE TABLE work_item_relations_read FINAL`)
 	exec(`OPTIMIZE TABLE work_items FINAL`)
 	check("after merges")
-
-	// The migration is re-runnable: every statement again, same answers.
-	for _, statement := range statements {
-		exec(statement)
-	}
-	check("after the migration ran again")
 
 	// relation_writer: NULL unless a writer sets it, and replaced with the row.
 	exec(`INSERT INTO work_item_dependencies (source_work_item_id, target_work_item_id, relationship_type, relationship_type_raw, last_synced, org_id, relationship_semantics_version) VALUES ('gitlab:a/r#5', 'gitlab:a/r#7', 'blocks', 'blocks', '2026-08-09 10:00:00.000', 'org-a', 'canonical-blocks.v2')`)

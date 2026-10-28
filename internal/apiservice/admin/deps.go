@@ -146,6 +146,9 @@ type handlers struct {
 	// route's own dependencies (CHAOS-6306); every other handler in this
 	// package ignores them.
 	clickHouseDSN string
+	// readGrants replaces the org deletion's grant read in tests; nil reads
+	// SHOW GRANTS FOR CURRENT_USER FINAL.
+	readGrants func(context.Context, driver.Conn) ([]string, error)
 	// spend is the LLM spend route's ClickHouse reader; nil when the api has no
 	// ClickHouse login.
 	spend     spendReader

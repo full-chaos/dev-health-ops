@@ -735,7 +735,9 @@ rendered one, a Secret reference included, and put a literal in the manifest. au
 names and proves each is refused.
 */}}
 {{- define "dev-health.authServiceEnvNames" -}}
-{{- $names := list "AUTH_DATABASE_URI" "AUTH_JWT_SECRET_KEY" "AUTH_SESSION_SUCCESSOR_KEY" "AUTH_LOGIN_LOCKOUT_KEY" "AUTH_SOCIAL_LINK_ROUTES" "AUTH_ACCESS_TOKEN_CLASS" "AUTH_TOKEN_ISSUER_URL" "AUTH_JWT_AUDIENCE" "AUTH_USERS_OWNED" "AUTH_ORGS_OWNED" "AUTH_VALKEY_URI" "AUTH_SERVICE_TRUSTED_PROXIES" "OTEL_ENABLED" "OTEL_EXPORTER_OTLP_ENDPOINT" "OTEL_SAMPLE_RATE" "OTEL_SERVICE_NAME" -}}
+{{- $names := list "AUTH_DATABASE_URI" "AUTH_JWT_SECRET_KEY" "AUTH_SESSION_SUCCESSOR_KEY" "AUTH_LOGIN_LOCKOUT_KEY" "AUTH_SOCIAL_LINK_ROUTES" "AUTH_ACCESS_TOKEN_CLASS" "AUTH_TOKEN_ISSUER_URL" "AUTH_JWT_AUDIENCE" "AUTH_USERS_OWNED" "AUTH_ORGS_OWNED" "AUTH_VALKEY_URI" "AUTH_SERVICE_TRUSTED_PROXIES" "OTEL_ENABLED" "OTEL_EXPORTER_OTLP_ENDPOINT" "OTEL_SAMPLE_RATE" "OTEL_SERVICE_NAME" "EMAIL_PROVIDER" "EMAIL_FROM_ADDRESS" "APP_BASE_URL" "AUTH_MAIL_ALLOW_CONSOLE" -}}
+{{- /* EMAIL_API_KEY is appended, not listed, so the worker allow-list keeps the only listed spelling (a chartgates planted defect edits it). */ -}}
+{{- $names = (append (append $names "EMAIL_API_KEY") "RESEND_API_KEY") -}}
 {{- range $provider := list "GITHUB" "GITLAB" "GOOGLE" }}{{- range $suffix := list "CLIENT_ID" "CLIENT_SECRET" }}{{- $names = append $names (printf "SOCIAL_%s_%s" $provider $suffix) }}{{- end }}{{- end -}}
 {{- toJson $names -}}
 {{- end -}}
@@ -783,7 +785,7 @@ and the other enable flags say. templates/auth-service.yaml includes it once, ou
 {{- define "dev-health.authValidate" -}}
 {{- $a := .Values.authService -}}
 {{- $session := default dict $a.sessionKeys -}}
-{{- $keys := list (list "authService.database.secretKey" (default dict $a.database).secretKey) (list "authService.migrate.secretKey" (default dict $a.migrate).secretKey) (list "authService.signingKey.secretKey" (default dict $a.signingKey).secretKey) (list "authService.valkey.secretKey" (default dict $a.valkey).secretKey) (list "authService.sessionKeys.successor.secretKey" (default dict $session.successor).secretKey) (list "authService.sessionKeys.loginLockout.secretKey" (default dict $session.loginLockout).secretKey) (list "goApi.sessionIssue.secretKey" (default dict .Values.goApi.sessionIssue).secretKey) -}}
+{{- $keys := list (list "authService.database.secretKey" (default dict $a.database).secretKey) (list "authService.migrate.secretKey" (default dict $a.migrate).secretKey) (list "authService.signingKey.secretKey" (default dict $a.signingKey).secretKey) (list "authService.valkey.secretKey" (default dict $a.valkey).secretKey) (list "authService.sessionKeys.successor.secretKey" (default dict $session.successor).secretKey) (list "authService.sessionKeys.loginLockout.secretKey" (default dict $session.loginLockout).secretKey) (list "authService.mail.keys.provider" (default dict (default dict $a.mail).keys).provider) (list "authService.mail.keys.fromAddress" (default dict (default dict $a.mail).keys).fromAddress) (list "authService.mail.keys.apiKey" (default dict (default dict $a.mail).keys).apiKey) (list "authService.mail.keys.resendApiKey" (default dict (default dict $a.mail).keys).resendApiKey) (list "authService.mail.keys.appBaseURL" (default dict (default dict $a.mail).keys).appBaseURL) (list "goApi.sessionIssue.secretKey" (default dict .Values.goApi.sessionIssue).secretKey) -}}
 {{- range $keys }}
 {{- if not (include "dev-health.validSecretKey" (index . 1)) }}{{- fail (printf "%s must be a Secret key: letters, digits, '-', '_' and '.', at most 253 characters, not '.', '..' or a name that starts with '..'" (index . 0)) }}{{- end }}
 {{- end }}
@@ -837,6 +839,104 @@ Call with (dict "flag" "oidc"|"saml" "context" $).
 {{- $key := printf "authService.sso.%s" .flag -}}
 {{- $sso := default dict .context.Values.authService.sso -}}
 {{- if eq (include "dev-health.authBool" (dict "value" (index $sso .flag) "key" $key)) "true" }}{{- fail (printf "%s=true is refused: the chart does not render auth-service's SSO settings (state key, base URL, encryption key) yet, so its %s routes would not mount" $key (upper .flag)) }}{{- end -}}
+{{- end -}}
+
+{{/*
+"" when a CIDR string is well formed, else the reason: exactly one "/" and a plain decimal prefix (0, or 1 to 3 digits with
+no leading zero, no sign, no space); an IPv4 address that is a strict dotted quad (four decimal fields 0 to 255, no
+leading zero, no letter); an IPv6 address that is hex, colons and expands to 8 groups (no dotted tail); a prefix of at
+most 32 (IPv4) or 128 (IPv6). One parse for every CIDR the mail egress reads. Call with the string.
+*/}}
+{{- define "dev-health.authMailCidrShape" -}}
+{{- if not (kindIs "string" .) -}}is not a string
+{{- else if not (regexMatch "^[^/]+/(0|[1-9][0-9]{0,2})$" .) -}}must be one address/prefix with a plain decimal prefix
+{{- else -}}
+{{- $parts := splitList "/" . -}}
+{{- $addr := index $parts 0 -}}
+{{- $prefix := atoi (index $parts 1) -}}
+{{- if contains ":" $addr -}}
+{{- if not (regexMatch "^[0-9a-fA-F:]+$" $addr) -}}the IPv6 address has a character that is not a hex digit or a colon
+{{- else if ne (len (include "dev-health.ipv6Groups" (lower $addr) | fromJsonArray)) 8 -}}the IPv6 address does not parse
+{{- else if gt $prefix 128 -}}the IPv6 prefix is above 128
+{{- end -}}
+{{- else if not (regexMatch "^(0|[1-9][0-9]?|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\\.(0|[1-9][0-9]?|1[0-9]{2}|2[0-4][0-9]|25[0-5])){3}$" $addr) -}}the IPv4 address is not a dotted quad of decimal fields from 0 to 255
+{{- else if gt $prefix 32 -}}the IPv4 prefix is above 32
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+The class of one authService.networkPolicy.egress.mail.to entry, the only reading of it: "wide" (exactly 0.0.0.0/0 or ::/0),
+"narrow" (selectors, or an ipBlock that dev-health.otlpPeerCidrProblem accepts), or "bad:<reason>". An entry is one peer
+kind: an ipBlock, or podSelector and/or namespaceSelector. A selector counts only when its matchLabels has a key or its
+matchExpressions has an item (the outer object having keys is not enough). Prefix 0 is wide only as 0.0.0.0 or ::.
+Call with the entry.
+*/}}
+{{- define "dev-health.authMailPeerClass" -}}
+{{- $peer := . -}}
+{{- if not (kindIs "map" $peer) -}}bad:is not an object
+{{- else if and (hasKey $peer "ipBlock") (or (hasKey $peer "podSelector") (hasKey $peer "namespaceSelector")) -}}bad:holds an ipBlock and a selector; a peer is one kind
+{{- else if hasKey $peer "ipBlock" -}}
+{{- $ib := $peer.ipBlock -}}
+{{- if not (kindIs "map" $ib) -}}bad:ipBlock is not an object
+{{- else -}}
+{{- $shape := include "dev-health.authMailCidrShape" $ib.cidr -}}
+{{- $exceptShape := "" -}}
+{{- if hasKey $ib "except" -}}
+{{- if not (kindIs "slice" $ib.except) -}}{{- $exceptShape = "ipBlock.except is not a list" -}}
+{{- else -}}{{- range $ib.except -}}{{- $es := include "dev-health.authMailCidrShape" . -}}{{- if and $es (not $exceptShape) -}}{{- $exceptShape = printf "ipBlock.except entry %s %s" (toString .) $es -}}{{- end -}}{{- end -}}{{- end -}}
+{{- end -}}
+{{- if $shape -}}bad:ipBlock.cidr {{ $shape }}
+{{- else if $exceptShape -}}bad:{{ $exceptShape }}
+{{- else if hasSuffix "/0" $ib.cidr -}}
+{{- if has $ib.cidr (list "0.0.0.0/0" "::/0") -}}wide{{- else -}}bad:ipBlock.cidr with prefix 0 must be exactly 0.0.0.0/0 or ::/0{{- end -}}
+{{- else -}}
+{{- $problem := include "dev-health.otlpPeerCidrProblem" $ib.cidr -}}
+{{- if $problem -}}bad:ipBlock.cidr {{ $problem }}{{- else -}}narrow{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- else -}}
+{{- $n := 0 -}}
+{{- $empty := "" -}}
+{{- range $k := list "podSelector" "namespaceSelector" -}}
+{{- if hasKey $peer $k -}}
+{{- $n = add1 $n -}}
+{{- $sel := index $peer $k -}}
+{{- if not (and (kindIs "map" $sel) (or (and (kindIs "map" $sel.matchLabels) (gt (len $sel.matchLabels) 0)) (and (kindIs "slice" $sel.matchExpressions) (gt (len $sel.matchExpressions) 0)))) -}}{{- $empty = $k -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if eq $n 0 -}}bad:has no ipBlock, podSelector or namespaceSelector
+{{- else if $empty -}}bad:{{ $empty }} has no matchLabels or matchExpressions item, so it selects everything
+{{- else -}}narrow
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+"" when one authService.networkPolicy.egress.mail.to entry is acceptable, else the reason. Call with
+(dict "peer" <entry> "ports" <authService.networkPolicy.egress.mail.ports>). The class is dev-health.authMailPeerClass.
+The one whole-internet exception (D6427, a provider with no fixed addresses): exactly 0.0.0.0/0 or ::/0, only with ports
+[TCP 443] alone (protocol TCP or unset, no endPort) and an except list of well formed CIDRs holding every private,
+shared, link-local and loopback network below, and for IPv6 also the mapped and NAT64 ranges that would reach internal
+IPv4 addresses.
+*/}}
+{{- define "dev-health.authMailPeerProblem" -}}
+{{- $class := include "dev-health.authMailPeerClass" .peer -}}
+{{- if hasPrefix "bad:" $class -}}{{ trimPrefix "bad:" $class }}
+{{- else if eq $class "wide" -}}
+{{- $cidr := .peer.ipBlock.cidr -}}
+{{- $required := ternary (list "fc00::/7" "fe80::/10" "::1/128" "::ffff:0:0/96" "64:ff9b::/96") (list "10.0.0.0/8" "172.16.0.0/12" "192.168.0.0/16" "100.64.0.0/10" "169.254.0.0/16" "127.0.0.0/8") (contains ":" $cidr) -}}
+{{- $except := list -}}
+{{- range (.peer.ipBlock.except | default list) }}{{- $except = append $except (lower .) }}{{- end -}}
+{{- $missing := list -}}
+{{- range $required }}{{- if not (has . $except) }}{{- $missing = append $missing . }}{{- end }}{{- end -}}
+{{- $ports := .ports | default list -}}
+{{- $port := dict -}}
+{{- if eq (len $ports) 1 }}{{- $port = index $ports 0 }}{{- end -}}
+{{- if not (and (eq (len $ports) 1) (kindIs "map" $port) (eq (toString (default "TCP" $port.protocol)) "TCP") (hasKey $port "port") (eq (int $port.port) 443) (not (hasKey $port "endPort"))) -}}an ipBlock with prefix 0 is accepted only with authService.networkPolicy.egress.mail.ports of TCP 443 alone
+{{- else if $missing -}}ipBlock.cidr {{ $cidr }} needs except entries {{ join ", " $missing }}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{/*

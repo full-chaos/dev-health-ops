@@ -196,9 +196,9 @@ type Deps struct {
 	// only -- so it structurally cannot hold ALTER DELETE on org-deletion's
 	// live-discovered purge targets, which grow with every future
 	// org_id-bearing table and can never be a fixed enumerated grant list).
-	// "" = not configured; every ClickHouse count/delete is skipped with a
-	// warning, matching org_deletion.py's own behavior when its ClickHouse
-	// client cannot connect.
+	// "" = not configured: the org deletion refuses (503, nothing deleted),
+	// as it does for a DSN that cannot connect or a login without SELECT and
+	// ALTER DELETE on its database (admin/orgdeletion_clickhouse.go).
 	ClickHouseDSN string
 	// AuthProxy routes /api/v1/auth/* aggregates to auth-service
 	// (AUTH_PROXY_*); the zero value serves every route in go-api.

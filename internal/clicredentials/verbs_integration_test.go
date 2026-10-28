@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/adminops"
 	"github.com/full-chaos/dev-health-ops/internal/aicli"
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
@@ -25,10 +26,14 @@ type verb struct {
 	// without grants (the server hides what the login cannot see instead): it is
 	// still checked for a leak, but cannot be required to fail.
 	readOnlyNoGrants bool
-	root             cli.Command
-	path             []string
-	args             func(dsn string) []string
-	env              func(dsn string) map[string]string
+	// noGrantsSignature replaces the server's "Not enough privileges" for a verb
+	// that reads the login's own grants (allowed without any grant) and refuses
+	// on them before a refused statement: the text that proves it read them.
+	noGrantsSignature string
+	root              cli.Command
+	path              []string
+	args              func(dsn string) []string
+	env               func(dsn string) map[string]string
 }
 
 func dsnEnv(dsn string) map[string]string {
@@ -68,6 +73,16 @@ func verbs() []verb {
 			args: func(string) []string { return []string{"--org", "org-1"} }, env: dsnEnv},
 		{family: "backfill operational", root: operationalbackfill.Command(), path: []string{"operational"},
 			args: func(string) []string { return []string{"--org", "c0ffee00-dead-4bee-8bad-f00dfeedface"} }, env: dsnEnv},
+		// The org deletion's ClickHouse preflight runs before any Postgres call,
+		// so a Postgres DSN that names a closed port is never dialed.
+		{family: "admin orgs delete", noGrantsSignature: "the ClickHouse login cannot purge database",
+			root: adminops.Command(), path: []string{"orgs", "delete"},
+			args: func(string) []string { return []string{"--org-id", "c0ffee00-dead-4bee-8bad-f00dfeedface"} },
+			env: func(dsn string) map[string]string {
+				env := dsnEnv(dsn)
+				env["MIGRATION_DATABASE_URI"] = "postgres://orgdel_census:orgdel-census-pg-pw@127.0.0.1:1/devhealth?sslmode=disable"
+				return env
+			}},
 	}
 }
 
@@ -88,6 +103,9 @@ func TestNoVerbPrintsTheClickHouseLoginOrPassword(t *testing.T) {
 			"no grants":      {server.NoGrants, "Not enough privileges"},
 		} {
 			t.Run(testCase.family+"/"+scenario, func(t *testing.T) {
+				if scenario == "no grants" && testCase.noGrantsSignature != "" {
+					dsn.signature = testCase.noGrantsSignature
+				}
 				code, stdout, stderr, logs := chlogin.Run(t, testCase.root, testCase.path, testCase.args(dsn.dsn), testCase.env(dsn.dsn))
 				readOnly := scenario == "no grants" && testCase.readOnlyNoGrants
 				if code == cli.ExitOK && !readOnly {

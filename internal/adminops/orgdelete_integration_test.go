@@ -59,6 +59,22 @@ type deleteResult struct {
 	Exit   int    `json:"exit"`
 	Stdout string `json:"stdout"`
 	State  string `json:"state"`
+	// seeded is the rows before the verb ran.
+	seeded string
+}
+
+// refusedWithoutClickHouse names the scenarios with a valid organization id and
+// no ClickHouse: the Python verb skipped the ClickHouse purge with a warning and
+// deleted the Postgres rows; the Go verb refuses before it touches anything
+// (exit 1, the refusal line, every row left).
+var refusedWithoutClickHouse = map[string]bool{
+	"dry run, no ClickHouse":                true,
+	"real delete, no ClickHouse":            true,
+	"unknown organization":                  true,
+	"id in braces and capitals":             true,
+	"id without hyphens":                    true,
+	"PagerDuty grant without configuration": true,
+	"PagerDuty grant, dry run":              true,
 }
 
 var timestampLine = regexp.MustCompile(`"timestamp": "[^"]*"`)
@@ -460,7 +476,10 @@ func runDeleteScenarios(t *testing.T) []deleteResult {
 	for _, scenario := range deleteScenarios {
 		db.seedOrganizations(t, scenario.pagerduty)
 		fixture.reseed()
-		results = append(results, goDelete(t, db, fixture, scenario))
+		seeded := snapshot(t, db, fixture, scenario)
+		result := goDelete(t, db, fixture, scenario)
+		result.seeded = seeded
+		results = append(results, result)
 	}
 	return results
 }
@@ -565,7 +584,22 @@ func TestOrgsDeleteMatchesTheFrozenPythonOutput(t *testing.T) {
 		frozen[index] = withoutDroppedTables(t, frozen[index])
 	}
 	got := runDeleteScenarios(t)
-	compareDeletes(t, got, frozen, "frozen Python")
+	want := append([]deleteResult(nil), frozen...)
+	refused := 0
+	for index, s := range deleteScenarios {
+		if !refusedWithoutClickHouse[s.name] {
+			continue
+		}
+		if s.clickhouse {
+			t.Fatalf("%s points the verb at ClickHouse: it is no refusedWithoutClickHouse scenario", s.name)
+		}
+		want[index] = deleteResult{Name: s.name, Exit: cli.ExitFailure, Stdout: orgDeleteRefusedLine, State: got[index].seeded}
+		refused++
+	}
+	if refused != len(refusedWithoutClickHouse) {
+		t.Fatalf("%d of %d refusedWithoutClickHouse names are scenarios", refused, len(refusedWithoutClickHouse))
+	}
+	compareDeletes(t, got, want, "frozen Python (no-ClickHouse scenarios: the refusal)")
 	// A golden in which nothing was deleted passes for any implementation.
 	deleted := 0
 	for _, item := range frozen {
@@ -587,6 +621,15 @@ func quote(text string) string { return "'" + strings.ReplaceAll(text, "'", "''"
 // keeps its row, and a dry run removes nothing.
 func TestOrgsDeleteRemovesTheOrgActivityRowOfTheDeletedOrganization(t *testing.T) {
 	db := startDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	t.Cleanup(cancel)
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start clickhouse: %v", err)
+	}
+	t.Cleanup(func() { _ = instance.Close(context.Background()) })
+	chschema.Apply(ctx, t, instance)
+	clickhouseEnv := map[string]string{"CLICKHOUSE_URI": instance.URI}
 	db.seedOrganizations(t, false)
 	for _, org := range []string{targetOrg, controlOrg} {
 		db.insertRow(t, "org_activity", map[string]string{"org_id": quote(org) + "::uuid", "has_data": "true", "refreshed_at": "now()"})
@@ -599,13 +642,13 @@ func TestOrgsDeleteRemovesTheOrgActivityRowOfTheDeletedOrganization(t *testing.T
 		}
 		return n
 	}
-	if code, out := goVerbEnv(t, db, nil, []string{"orgs", "delete", "--org-id", targetOrg, "--dry-run"}); code != 0 {
+	if code, out := goVerbEnv(t, db, clickhouseEnv, []string{"orgs", "delete", "--org-id", targetOrg, "--dry-run"}); code != 0 {
 		t.Fatalf("dry run: exit %d: %s", code, out)
 	}
 	if count(targetOrg) != 1 || count(controlOrg) != 1 {
 		t.Fatalf("a dry run changed org_activity: target %d, control %d", count(targetOrg), count(controlOrg))
 	}
-	if code, out := goVerbEnv(t, db, nil, []string{"orgs", "delete", "--org-id", targetOrg}); code != 0 {
+	if code, out := goVerbEnv(t, db, clickhouseEnv, []string{"orgs", "delete", "--org-id", targetOrg}); code != 0 {
 		t.Fatalf("delete: exit %d: %s", code, out)
 	}
 	if count(targetOrg) != 0 || count(controlOrg) != 1 {

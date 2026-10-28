@@ -1,0 +1,874 @@
+[
+  {
+    "apiVersion": "apps/v1",
+    "kind": "Deployment",
+    "metadata": {
+      "labels": {
+        "app.kubernetes.io/component": "go-pgbouncer-transaction",
+        "app.kubernetes.io/instance": "a",
+        "app.kubernetes.io/managed-by": "Helm",
+        "app.kubernetes.io/name": "dev-health",
+        "app.kubernetes.io/part-of": "dev-health",
+        "app.kubernetes.io/version": "0.1.0",
+        "helm.sh/chart": "dev-health-0.1.0"
+      },
+      "name": "a-dev-health-go-pgbouncer-transaction",
+      "namespace": "default"
+    },
+    "spec": {
+      "replicas": 1,
+      "selector": {
+        "matchLabels": {
+          "app.kubernetes.io/component": "go-pgbouncer-transaction",
+          "app.kubernetes.io/instance": "a",
+          "app.kubernetes.io/name": "dev-health"
+        }
+      },
+      "template": {
+        "metadata": {
+          "annotations": {
+            "checksum/users-ini": "7663624f9ba59edf49bd108a83949ebbbfd4bc160b721cc69132ee83cd67b606"
+          },
+          "labels": {
+            "app.kubernetes.io/component": "go-pgbouncer-transaction",
+            "app.kubernetes.io/instance": "a",
+            "app.kubernetes.io/name": "dev-health"
+          }
+        },
+        "spec": {
+          "automountServiceAccountToken": false,
+          "containers": [
+            {
+              "args": [
+                "/usr/bin/pgbouncer",
+                "/etc/pgbouncer-users/pgbouncer.ini"
+              ],
+              "env": [
+                {
+                  "name": "DB_HOST",
+                  "value": "postgres.example.com"
+                },
+                {
+                  "name": "DB_PORT",
+                  "value": "5432"
+                },
+                {
+                  "name": "DB_NAME",
+                  "value": "devhealth"
+                },
+                {
+                  "name": "DB_USER",
+                  "value": "devhealth_domain"
+                },
+                {
+                  "name": "DB_PASSWORD",
+                  "valueFrom": {
+                    "secretKeyRef": {
+                      "key": "RIVER_DOMAIN_DATABASE_PASSWORD",
+                      "name": "a-dev-health-go-pgbouncer"
+                    }
+                  }
+                },
+                {
+                  "name": "LISTEN_PORT",
+                  "value": "6432"
+                },
+                {
+                  "name": "POOL_MODE",
+                  "value": "transaction"
+                },
+                {
+                  "name": "AUTH_TYPE",
+                  "value": "scram-sha-256"
+                },
+                {
+                  "name": "DEFAULT_POOL_SIZE",
+                  "value": "16"
+                },
+                {
+                  "name": "MAX_CLIENT_CONN",
+                  "value": "1000"
+                },
+                {
+                  "name": "LOG_CONNECTIONS",
+                  "value": "0"
+                },
+                {
+                  "name": "LOG_DISCONNECTIONS",
+                  "value": "0"
+                },
+                {
+                  "name": "LOG_POOLER_ERRORS",
+                  "value": "1"
+                },
+                {
+                  "name": "AUTH_FILE",
+                  "value": "/etc/pgbouncer-userlist/userlist.txt"
+                }
+              ],
+              "image": "edoburu/pgbouncer:1.25.2@sha256:4c1ca296ef525f108f5d3552cc337c0c09587cf8dae7f0067fd93349e47dc1cd",
+              "imagePullPolicy": "IfNotPresent",
+              "livenessProbe": {
+                "initialDelaySeconds": 10,
+                "periodSeconds": 10,
+                "tcpSocket": {
+                  "port": "pgbouncer"
+                }
+              },
+              "name": "pgbouncer",
+              "ports": [
+                {
+                  "containerPort": 6432,
+                  "name": "pgbouncer"
+                }
+              ],
+              "readinessProbe": {
+                "initialDelaySeconds": 2,
+                "periodSeconds": 5,
+                "tcpSocket": {
+                  "port": "pgbouncer"
+                }
+              },
+              "resources": {
+                "limits": {
+                  "cpu": "250m",
+                  "memory": "256Mi"
+                },
+                "requests": {
+                  "cpu": "50m",
+                  "memory": "64Mi"
+                }
+              },
+              "securityContext": {
+                "allowPrivilegeEscalation": false,
+                "capabilities": {
+                  "drop": [
+                    "ALL"
+                  ]
+                },
+                "readOnlyRootFilesystem": true
+              },
+              "volumeMounts": [
+                {
+                  "mountPath": "/etc/pgbouncer",
+                  "name": "generated-config"
+                },
+                {
+                  "mountPath": "/etc/pgbouncer-userlist",
+                  "name": "userlist",
+                  "readOnly": true
+                },
+                {
+                  "mountPath": "/etc/pgbouncer-users",
+                  "name": "users",
+                  "readOnly": true
+                }
+              ]
+            }
+          ],
+          "securityContext": {
+            "fsGroup": 70,
+            "runAsGroup": 70,
+            "runAsNonRoot": true,
+            "runAsUser": 70,
+            "seccompProfile": {
+              "type": "RuntimeDefault"
+            }
+          },
+          "volumes": [
+            {
+              "emptyDir": {},
+              "name": "generated-config"
+            },
+            {
+              "name": "userlist",
+              "secret": {
+                "defaultMode": 288,
+                "items": [
+                  {
+                    "key": "userlist.txt",
+                    "path": "userlist.txt"
+                  }
+                ],
+                "secretName": "a-dev-health-go-pgbouncer"
+              }
+            },
+            {
+              "configMap": {
+                "name": "a-dev-health-go-pgbouncer-transaction-users"
+              },
+              "name": "users"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "apiVersion": "v1",
+    "kind": "Service",
+    "metadata": {
+      "labels": {
+        "app.kubernetes.io/component": "go-pgbouncer-transaction",
+        "app.kubernetes.io/instance": "a",
+        "app.kubernetes.io/managed-by": "Helm",
+        "app.kubernetes.io/name": "dev-health",
+        "app.kubernetes.io/part-of": "dev-health",
+        "app.kubernetes.io/version": "0.1.0",
+        "helm.sh/chart": "dev-health-0.1.0"
+      },
+      "name": "a-dev-health-go-pgbouncer-transaction",
+      "namespace": "default"
+    },
+    "spec": {
+      "ports": [
+        {
+          "name": "pgbouncer",
+          "port": 6432,
+          "targetPort": "pgbouncer"
+        }
+      ],
+      "selector": {
+        "app.kubernetes.io/component": "go-pgbouncer-transaction",
+        "app.kubernetes.io/instance": "a",
+        "app.kubernetes.io/name": "dev-health"
+      },
+      "type": "ClusterIP"
+    }
+  },
+  {
+    "apiVersion": "networking.k8s.io/v1",
+    "kind": "NetworkPolicy",
+    "metadata": {
+      "labels": {
+        "app.kubernetes.io/component": "go-pgbouncer-transaction",
+        "app.kubernetes.io/instance": "a",
+        "app.kubernetes.io/managed-by": "Helm",
+        "app.kubernetes.io/name": "dev-health",
+        "app.kubernetes.io/part-of": "dev-health",
+        "app.kubernetes.io/version": "0.1.0",
+        "helm.sh/chart": "dev-health-0.1.0"
+      },
+      "name": "a-dev-health-go-pgbouncer-transaction",
+      "namespace": "default"
+    },
+    "spec": {
+      "egress": [
+        {
+          "ports": [
+            {
+              "port": 5432,
+              "protocol": "TCP"
+            }
+          ],
+          "to": [
+            {
+              "ipBlock": {
+                "cidr": "10.0.0.0/24"
+              }
+            }
+          ]
+        }
+      ],
+      "ingress": [
+        {
+          "from": [
+            {
+              "podSelector": {
+                "matchLabels": {
+                  "app.kubernetes.io/component": "go-worker",
+                  "app.kubernetes.io/instance": "a",
+                  "app.kubernetes.io/name": "dev-health"
+                }
+              }
+            }
+          ],
+          "ports": [
+            {
+              "port": 6432,
+              "protocol": "TCP"
+            }
+          ]
+        },
+        {
+          "from": [
+            {
+              "namespaceSelector": {
+                "matchLabels": {
+                  "kubernetes.io/metadata.name": "keda"
+                }
+              }
+            }
+          ],
+          "ports": [
+            {
+              "port": 6432,
+              "protocol": "TCP"
+            }
+          ]
+        }
+      ],
+      "podSelector": {
+        "matchLabels": {
+          "app.kubernetes.io/component": "go-pgbouncer-transaction",
+          "app.kubernetes.io/instance": "a",
+          "app.kubernetes.io/name": "dev-health"
+        }
+      },
+      "policyTypes": [
+        "Ingress",
+        "Egress"
+      ]
+    }
+  },
+  {
+    "apiVersion": "apps/v1",
+    "kind": "Deployment",
+    "metadata": {
+      "labels": {
+        "app.kubernetes.io/component": "go-pgbouncer-queue-session",
+        "app.kubernetes.io/instance": "a",
+        "app.kubernetes.io/managed-by": "Helm",
+        "app.kubernetes.io/name": "dev-health",
+        "app.kubernetes.io/part-of": "dev-health",
+        "app.kubernetes.io/version": "0.1.0",
+        "helm.sh/chart": "dev-health-0.1.0"
+      },
+      "name": "a-dev-health-go-pgbouncer-queue-session",
+      "namespace": "default"
+    },
+    "spec": {
+      "replicas": 1,
+      "selector": {
+        "matchLabels": {
+          "app.kubernetes.io/component": "go-pgbouncer-queue-session",
+          "app.kubernetes.io/instance": "a",
+          "app.kubernetes.io/name": "dev-health"
+        }
+      },
+      "template": {
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/component": "go-pgbouncer-queue-session",
+            "app.kubernetes.io/instance": "a",
+            "app.kubernetes.io/name": "dev-health"
+          }
+        },
+        "spec": {
+          "automountServiceAccountToken": false,
+          "containers": [
+            {
+              "env": [
+                {
+                  "name": "DB_HOST",
+                  "value": "postgres.example.com"
+                },
+                {
+                  "name": "DB_PORT",
+                  "value": "5432"
+                },
+                {
+                  "name": "DB_NAME",
+                  "value": "devhealth"
+                },
+                {
+                  "name": "DB_USER",
+                  "value": "devhealth_queue"
+                },
+                {
+                  "name": "DB_PASSWORD",
+                  "valueFrom": {
+                    "secretKeyRef": {
+                      "key": "RIVER_QUEUE_DATABASE_PASSWORD",
+                      "name": "a-dev-health-go-pgbouncer"
+                    }
+                  }
+                },
+                {
+                  "name": "LISTEN_PORT",
+                  "value": "6433"
+                },
+                {
+                  "name": "POOL_MODE",
+                  "value": "session"
+                },
+                {
+                  "name": "AUTH_TYPE",
+                  "value": "scram-sha-256"
+                },
+                {
+                  "name": "DEFAULT_POOL_SIZE",
+                  "value": "50"
+                },
+                {
+                  "name": "MAX_CLIENT_CONN",
+                  "value": "128"
+                },
+                {
+                  "name": "LOG_CONNECTIONS",
+                  "value": "0"
+                },
+                {
+                  "name": "LOG_DISCONNECTIONS",
+                  "value": "0"
+                },
+                {
+                  "name": "LOG_POOLER_ERRORS",
+                  "value": "1"
+                }
+              ],
+              "image": "edoburu/pgbouncer:1.25.2@sha256:4c1ca296ef525f108f5d3552cc337c0c09587cf8dae7f0067fd93349e47dc1cd",
+              "imagePullPolicy": "IfNotPresent",
+              "livenessProbe": {
+                "initialDelaySeconds": 10,
+                "periodSeconds": 10,
+                "tcpSocket": {
+                  "port": "pgbouncer"
+                }
+              },
+              "name": "pgbouncer",
+              "ports": [
+                {
+                  "containerPort": 6433,
+                  "name": "pgbouncer"
+                }
+              ],
+              "readinessProbe": {
+                "initialDelaySeconds": 2,
+                "periodSeconds": 5,
+                "tcpSocket": {
+                  "port": "pgbouncer"
+                }
+              },
+              "resources": {
+                "limits": {
+                  "cpu": "250m",
+                  "memory": "256Mi"
+                },
+                "requests": {
+                  "cpu": "50m",
+                  "memory": "64Mi"
+                }
+              },
+              "securityContext": {
+                "allowPrivilegeEscalation": false,
+                "capabilities": {
+                  "drop": [
+                    "ALL"
+                  ]
+                },
+                "readOnlyRootFilesystem": true
+              },
+              "volumeMounts": [
+                {
+                  "mountPath": "/etc/pgbouncer",
+                  "name": "generated-config"
+                }
+              ]
+            }
+          ],
+          "securityContext": {
+            "fsGroup": 70,
+            "runAsGroup": 70,
+            "runAsNonRoot": true,
+            "runAsUser": 70,
+            "seccompProfile": {
+              "type": "RuntimeDefault"
+            }
+          },
+          "volumes": [
+            {
+              "emptyDir": {},
+              "name": "generated-config"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "apiVersion": "v1",
+    "kind": "Service",
+    "metadata": {
+      "labels": {
+        "app.kubernetes.io/component": "go-pgbouncer-queue-session",
+        "app.kubernetes.io/instance": "a",
+        "app.kubernetes.io/managed-by": "Helm",
+        "app.kubernetes.io/name": "dev-health",
+        "app.kubernetes.io/part-of": "dev-health",
+        "app.kubernetes.io/version": "0.1.0",
+        "helm.sh/chart": "dev-health-0.1.0"
+      },
+      "name": "a-dev-health-go-pgbouncer-queue-session",
+      "namespace": "default"
+    },
+    "spec": {
+      "ports": [
+        {
+          "name": "pgbouncer",
+          "port": 6433,
+          "targetPort": "pgbouncer"
+        }
+      ],
+      "selector": {
+        "app.kubernetes.io/component": "go-pgbouncer-queue-session",
+        "app.kubernetes.io/instance": "a",
+        "app.kubernetes.io/name": "dev-health"
+      },
+      "type": "ClusterIP"
+    }
+  },
+  {
+    "apiVersion": "networking.k8s.io/v1",
+    "kind": "NetworkPolicy",
+    "metadata": {
+      "labels": {
+        "app.kubernetes.io/component": "go-pgbouncer-queue-session",
+        "app.kubernetes.io/instance": "a",
+        "app.kubernetes.io/managed-by": "Helm",
+        "app.kubernetes.io/name": "dev-health",
+        "app.kubernetes.io/part-of": "dev-health",
+        "app.kubernetes.io/version": "0.1.0",
+        "helm.sh/chart": "dev-health-0.1.0"
+      },
+      "name": "a-dev-health-go-pgbouncer-queue-session",
+      "namespace": "default"
+    },
+    "spec": {
+      "egress": [
+        {
+          "ports": [
+            {
+              "port": 5432,
+              "protocol": "TCP"
+            }
+          ],
+          "to": [
+            {
+              "ipBlock": {
+                "cidr": "10.0.0.0/24"
+              }
+            }
+          ]
+        }
+      ],
+      "ingress": [
+        {
+          "from": [
+            {
+              "podSelector": {
+                "matchLabels": {
+                  "app.kubernetes.io/component": "go-worker",
+                  "app.kubernetes.io/instance": "a",
+                  "app.kubernetes.io/name": "dev-health"
+                }
+              }
+            }
+          ],
+          "ports": [
+            {
+              "port": 6433,
+              "protocol": "TCP"
+            }
+          ]
+        }
+      ],
+      "podSelector": {
+        "matchLabels": {
+          "app.kubernetes.io/component": "go-pgbouncer-queue-session",
+          "app.kubernetes.io/instance": "a",
+          "app.kubernetes.io/name": "dev-health"
+        }
+      },
+      "policyTypes": [
+        "Ingress",
+        "Egress"
+      ]
+    }
+  },
+  {
+    "apiVersion": "apps/v1",
+    "kind": "Deployment",
+    "metadata": {
+      "labels": {
+        "app.kubernetes.io/component": "go-pgbouncer-coordinator-session",
+        "app.kubernetes.io/instance": "a",
+        "app.kubernetes.io/managed-by": "Helm",
+        "app.kubernetes.io/name": "dev-health",
+        "app.kubernetes.io/part-of": "dev-health",
+        "app.kubernetes.io/version": "0.1.0",
+        "helm.sh/chart": "dev-health-0.1.0"
+      },
+      "name": "a-dev-health-go-pgbouncer-coordinator-session",
+      "namespace": "default"
+    },
+    "spec": {
+      "replicas": 1,
+      "selector": {
+        "matchLabels": {
+          "app.kubernetes.io/component": "go-pgbouncer-coordinator-session",
+          "app.kubernetes.io/instance": "a",
+          "app.kubernetes.io/name": "dev-health"
+        }
+      },
+      "template": {
+        "metadata": {
+          "labels": {
+            "app.kubernetes.io/component": "go-pgbouncer-coordinator-session",
+            "app.kubernetes.io/instance": "a",
+            "app.kubernetes.io/name": "dev-health"
+          }
+        },
+        "spec": {
+          "automountServiceAccountToken": false,
+          "containers": [
+            {
+              "env": [
+                {
+                  "name": "DB_HOST",
+                  "value": "postgres.example.com"
+                },
+                {
+                  "name": "DB_PORT",
+                  "value": "5432"
+                },
+                {
+                  "name": "DB_NAME",
+                  "value": "devhealth"
+                },
+                {
+                  "name": "DB_USER",
+                  "value": "devhealth_coordinator"
+                },
+                {
+                  "name": "DB_PASSWORD",
+                  "valueFrom": {
+                    "secretKeyRef": {
+                      "key": "RIVER_COORDINATOR_DATABASE_PASSWORD",
+                      "name": "a-dev-health-go-pgbouncer"
+                    }
+                  }
+                },
+                {
+                  "name": "LISTEN_PORT",
+                  "value": "6434"
+                },
+                {
+                  "name": "POOL_MODE",
+                  "value": "session"
+                },
+                {
+                  "name": "AUTH_TYPE",
+                  "value": "scram-sha-256"
+                },
+                {
+                  "name": "DEFAULT_POOL_SIZE",
+                  "value": "14"
+                },
+                {
+                  "name": "MAX_CLIENT_CONN",
+                  "value": "32"
+                },
+                {
+                  "name": "LOG_CONNECTIONS",
+                  "value": "0"
+                },
+                {
+                  "name": "LOG_DISCONNECTIONS",
+                  "value": "0"
+                },
+                {
+                  "name": "LOG_POOLER_ERRORS",
+                  "value": "1"
+                }
+              ],
+              "image": "edoburu/pgbouncer:1.25.2@sha256:4c1ca296ef525f108f5d3552cc337c0c09587cf8dae7f0067fd93349e47dc1cd",
+              "imagePullPolicy": "IfNotPresent",
+              "livenessProbe": {
+                "initialDelaySeconds": 10,
+                "periodSeconds": 10,
+                "tcpSocket": {
+                  "port": "pgbouncer"
+                }
+              },
+              "name": "pgbouncer",
+              "ports": [
+                {
+                  "containerPort": 6434,
+                  "name": "pgbouncer"
+                }
+              ],
+              "readinessProbe": {
+                "initialDelaySeconds": 2,
+                "periodSeconds": 5,
+                "tcpSocket": {
+                  "port": "pgbouncer"
+                }
+              },
+              "resources": {
+                "limits": {
+                  "cpu": "250m",
+                  "memory": "256Mi"
+                },
+                "requests": {
+                  "cpu": "50m",
+                  "memory": "64Mi"
+                }
+              },
+              "securityContext": {
+                "allowPrivilegeEscalation": false,
+                "capabilities": {
+                  "drop": [
+                    "ALL"
+                  ]
+                },
+                "readOnlyRootFilesystem": true
+              },
+              "volumeMounts": [
+                {
+                  "mountPath": "/etc/pgbouncer",
+                  "name": "generated-config"
+                }
+              ]
+            }
+          ],
+          "securityContext": {
+            "fsGroup": 70,
+            "runAsGroup": 70,
+            "runAsNonRoot": true,
+            "runAsUser": 70,
+            "seccompProfile": {
+              "type": "RuntimeDefault"
+            }
+          },
+          "volumes": [
+            {
+              "emptyDir": {},
+              "name": "generated-config"
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "apiVersion": "v1",
+    "kind": "Service",
+    "metadata": {
+      "labels": {
+        "app.kubernetes.io/component": "go-pgbouncer-coordinator-session",
+        "app.kubernetes.io/instance": "a",
+        "app.kubernetes.io/managed-by": "Helm",
+        "app.kubernetes.io/name": "dev-health",
+        "app.kubernetes.io/part-of": "dev-health",
+        "app.kubernetes.io/version": "0.1.0",
+        "helm.sh/chart": "dev-health-0.1.0"
+      },
+      "name": "a-dev-health-go-pgbouncer-coordinator-session",
+      "namespace": "default"
+    },
+    "spec": {
+      "ports": [
+        {
+          "name": "pgbouncer",
+          "port": 6434,
+          "targetPort": "pgbouncer"
+        }
+      ],
+      "selector": {
+        "app.kubernetes.io/component": "go-pgbouncer-coordinator-session",
+        "app.kubernetes.io/instance": "a",
+        "app.kubernetes.io/name": "dev-health"
+      },
+      "type": "ClusterIP"
+    }
+  },
+  {
+    "apiVersion": "networking.k8s.io/v1",
+    "kind": "NetworkPolicy",
+    "metadata": {
+      "labels": {
+        "app.kubernetes.io/component": "go-pgbouncer-coordinator-session",
+        "app.kubernetes.io/instance": "a",
+        "app.kubernetes.io/managed-by": "Helm",
+        "app.kubernetes.io/name": "dev-health",
+        "app.kubernetes.io/part-of": "dev-health",
+        "app.kubernetes.io/version": "0.1.0",
+        "helm.sh/chart": "dev-health-0.1.0"
+      },
+      "name": "a-dev-health-go-pgbouncer-coordinator-session",
+      "namespace": "default"
+    },
+    "spec": {
+      "egress": [
+        {
+          "ports": [
+            {
+              "port": 5432,
+              "protocol": "TCP"
+            }
+          ],
+          "to": [
+            {
+              "ipBlock": {
+                "cidr": "10.0.0.0/24"
+              }
+            }
+          ]
+        }
+      ],
+      "ingress": [
+        {
+          "from": [
+            {
+              "podSelector": {
+                "matchLabels": {
+                  "app.kubernetes.io/component": "go-worker",
+                  "app.kubernetes.io/instance": "a",
+                  "app.kubernetes.io/name": "dev-health"
+                }
+              }
+            }
+          ],
+          "ports": [
+            {
+              "port": 6434,
+              "protocol": "TCP"
+            }
+          ]
+        }
+      ],
+      "podSelector": {
+        "matchLabels": {
+          "app.kubernetes.io/component": "go-pgbouncer-coordinator-session",
+          "app.kubernetes.io/instance": "a",
+          "app.kubernetes.io/name": "dev-health"
+        }
+      },
+      "policyTypes": [
+        "Ingress",
+        "Egress"
+      ]
+    }
+  },
+  {
+    "apiVersion": "v1",
+    "data": {
+      "pgbouncer.ini": "%include /etc/pgbouncer/pgbouncer.ini\n[users]\ndevhealth_keda_readonly = pool_size=4\n"
+    },
+    "kind": "ConfigMap",
+    "metadata": {
+      "labels": {
+        "app.kubernetes.io/component": "go-pgbouncer-transaction",
+        "app.kubernetes.io/instance": "a",
+        "app.kubernetes.io/managed-by": "Helm",
+        "app.kubernetes.io/name": "dev-health",
+        "app.kubernetes.io/part-of": "dev-health",
+        "app.kubernetes.io/version": "0.1.0",
+        "helm.sh/chart": "dev-health-0.1.0"
+      },
+      "name": "a-dev-health-go-pgbouncer-transaction-users",
+      "namespace": "default"
+    }
+  }
+]

@@ -359,3 +359,35 @@ func TestUserBearerRefusesAnEmptyOrInvalidSidMalformed(t *testing.T) {
 		t.Errorf("valid claims: bearer %+v, reason %q, err %v", bearer, reason, err)
 	}
 }
+
+// Today's state, pinned: a session-route caller holding the dev-health-api
+// EdDSA token is refused with the audience reason on a user_access_token row,
+// while the HS256 token still passes on the row's legacy opt-in. The issuer
+// must mint audience auth-service for these callers before HS256 retires.
+func TestAnApiAudienceEdDSATokenIsRefusedOnASessionRowWhileTheLegacyTokenPasses(t *testing.T) {
+	a := newAccessFixture(t)
+	rows, err := AuthServiceAccessRows()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range rows {
+		if !row.AcceptsUser || !row.LegacyHS256 {
+			t.Fatalf("row %s: accepts_user=%v legacy_hs256=%v", row.Profile, row.AcceptsUser, row.LegacyHS256)
+		}
+	}
+	api := a.claims()
+	api.Aud, api.Scope = "dev-health-api", "api:access"
+	expectError(t, a.do(http.MethodGet, "/v1/sessions/current", "", a.signClaims(api)), http.StatusUnauthorized, "audience")
+
+	hs, err := NewIssuer(testSecret, testIssuer, AccessTokenAudience)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compact, err := hs.Access(a.grant())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := a.do(http.MethodGet, "/v1/sessions/current", "", map[string]string{"Authorization": "Bearer " + compact}); r.Code != http.StatusOK {
+		t.Fatalf("the legacy HS256 token = %d %s", r.Code, r.Body)
+	}
+}

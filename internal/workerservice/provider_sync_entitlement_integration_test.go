@@ -17,7 +17,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/google/uuid"
@@ -40,10 +39,7 @@ import (
 func TestProviderUnitRefusedByEntitlementTerminalizesAsFeatureDisabled(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	t.Cleanup(cancel)
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	t.Cleanup(func() {
 		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer closeCancel()
@@ -58,7 +54,6 @@ func TestProviderUnitRefusedByEntitlementTerminalizesAsFeatureDisabled(t *testin
 	t.Cleanup(pool.Close)
 	// The migrated schema: the worker's credential resolver, the provider-sync repository and the
 	// entitlement gate all read real columns, foreign keys and constraints.
-	pgschema.Apply(ctx, t, pool)
 	featureID := uuid.NewString()
 	// The migrations pre-register canonical_incident_ingestion; the test drives it enabled by tier.
 	pgseed.SetFeatureFlag(ctx, t, pool, featureID, "canonical_incident_ingestion", "community", true)

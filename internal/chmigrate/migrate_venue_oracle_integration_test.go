@@ -174,7 +174,7 @@ func (cut goldenCutOff) wantVersionSets(py migrateFact, dhoState string) (applie
 // migrateEnv is one database on the shared server, seen by both planes.
 type migrateEnv struct {
 	mu       sync.Mutex
-	uris     map[string]string
+	scratch  map[string]scratchDB
 	baseline chmigrate.Baseline
 	chain    []chmigrate.ChainFile
 	cut      goldenCutOff
@@ -186,17 +186,25 @@ func (e *migrateEnv) nativeURI(t *testing.T, database string) string {
 	return e.uri(t, database)
 }
 
-// uri is the native DSN of a database that newDatabase returned.
-func (e *migrateEnv) uri(t *testing.T, database string) string {
+// handle names a database that newDatabase returned. It is unique per call:
+// with the shared mode off every private container has the same database
+// name, so the name cannot identify a database.
+func (e *migrateEnv) lookup(t *testing.T, handle string) scratchDB {
 	t.Helper()
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	uri, ok := e.uris[database]
+	scratch, ok := e.scratch[handle]
 	if !ok {
-		t.Fatalf("database %q was not taken from newDatabase", database)
+		t.Fatalf("database handle %q was not taken from newDatabase", handle)
 	}
-	return uri
+	return scratch
 }
+
+// uri is the native DSN of the database behind handle.
+func (e *migrateEnv) uri(t *testing.T, handle string) string { return e.lookup(t, handle).URI }
+
+// dbName is the name of the database behind handle, as the server knows it.
+func (e *migrateEnv) dbName(t *testing.T, handle string) string { return e.lookup(t, handle).Name }
 
 // goVerb runs `dho migrate clickhouse <verb>` on database.
 func (e *migrateEnv) goVerb(t *testing.T, database, verb, contract string, args ...string) (int, string, string) {
@@ -223,7 +231,7 @@ func (e *migrateEnv) goVerb(t *testing.T, database, verb, contract string, args 
 // schemaDigest is the digest of the database as an upgrade leaves it.
 func (e *migrateEnv) schemaDigest(t *testing.T, database string) string {
 	t.Helper()
-	captured := capture(t, context.Background(), openDatabase(t, e.uri(t, database), ""), database, productionContract)
+	captured := capture(t, context.Background(), openDatabase(t, e.uri(t, database), ""), e.dbName(t, database), productionContract)
 	raw, err := json.Marshal(captured)
 	if err != nil {
 		t.Fatal(err)
@@ -234,11 +242,15 @@ func (e *migrateEnv) schemaDigest(t *testing.T, database string) string {
 
 func (e *migrateEnv) newDatabase(t *testing.T) string {
 	t.Helper()
-	scratch := scratchDatabase(t)
+	return e.register(scratchDatabase(t))
+}
+
+func (e *migrateEnv) register(scratch scratchDB) string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.uris[scratch.Name] = scratch.URI
-	return scratch.Name
+	handle := fmt.Sprintf("scratch-%d", len(e.scratch))
+	e.scratch[handle] = scratch
+	return handle
 }
 
 // pythonFact is the Python plane's fact for the step, read from the frozen golden
@@ -313,13 +325,14 @@ func nameDigests(names []string) []string {
 func (e *migrateEnv) goVersionSets(t *testing.T, database string, status chmigrate.Status) (applied, pending []string) {
 	t.Helper()
 	conn := openDatabase(t, e.uri(t, database), "")
+	databaseName := e.dbName(t, database)
 	var exists uint64
-	if err := conn.QueryRow(context.Background(), "SELECT count() FROM system.tables WHERE database = ? AND name = ?", database, chmigrate.SchemaMigrationsTable).Scan(&exists); err != nil {
+	if err := conn.QueryRow(context.Background(), "SELECT count() FROM system.tables WHERE database = ? AND name = ?", databaseName, chmigrate.SchemaMigrationsTable).Scan(&exists); err != nil {
 		t.Fatal(err)
 	}
 	var recorded []string
 	if exists == 1 {
-		rows, err := conn.Query(context.Background(), "SELECT version FROM `"+database+"`.schema_migrations ORDER BY version")
+		rows, err := conn.Query(context.Background(), "SELECT version FROM `"+databaseName+"`.schema_migrations ORDER BY version")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -368,7 +381,7 @@ func newMigrateEnv(t *testing.T) *migrateEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	env := &migrateEnv{uris: map[string]string{}, baseline: baseline, chain: chain, cut: cut, frozen: map[string]migrateFact{}}
+	env := &migrateEnv{scratch: map[string]scratchDB{}, baseline: baseline, chain: chain, cut: cut, frozen: map[string]migrateFact{}}
 	raw, err := os.ReadFile(migrateGolden)
 	if err != nil {
 		t.Fatal(err)
@@ -608,7 +621,7 @@ func (e *migrateEnv) tables(t *testing.T, database string, names ...string) []st
 	var found []string
 	for _, name := range names {
 		var count uint64
-		if err := openDatabase(t, e.uri(t, database), "").QueryRow(context.Background(), "SELECT count() FROM system.tables WHERE database = ? AND name = ?", database, name).Scan(&count); err != nil {
+		if err := openDatabase(t, e.uri(t, database), "").QueryRow(context.Background(), "SELECT count() FROM system.tables WHERE database = ? AND name = ?", e.dbName(t, database), name).Scan(&count); err != nil {
 			t.Fatal(err)
 		}
 		if count == 1 {
@@ -622,7 +635,7 @@ func (e *migrateEnv) tables(t *testing.T, database string, names ...string) []st
 // (a refused upgrade leaves a database that is not a migrated one).
 func (e *migrateEnv) schemaDigest2(t *testing.T, database string) string {
 	t.Helper()
-	rows, err := openDatabase(t, e.uri(t, database), "").Query(context.Background(), "SELECT name, engine, create_table_query FROM system.tables WHERE database = ? ORDER BY name", database)
+	rows, err := openDatabase(t, e.uri(t, database), "").Query(context.Background(), "SELECT name, engine, create_table_query FROM system.tables WHERE database = ? ORDER BY name", e.dbName(t, database))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -751,3 +764,17 @@ func TestMigrateClickHouseMatchesTheFrozenPythonOutput(t *testing.T) {
 // after the Python delete (CHAOS-7308); to re-prove them while Python still
 // exists, restore TestMigrateClickHouseVenueOracleMatchesThePythonRunner and
 // TestRepairVenueOracleMatchesThePythonProducer from this commit's parent.
+
+// With the shared mode off every private container has the same database
+// name, so two databases of one test must not be told apart by name.
+func TestMigrateEnvHandlesStayDistinctWhenDatabaseNamesRepeat(t *testing.T) {
+	e := &migrateEnv{scratch: map[string]scratchDB{}}
+	first := e.register(scratchDB{URI: "clickhouse://host-a/worker_test", Name: "worker_test"})
+	second := e.register(scratchDB{URI: "clickhouse://host-b/worker_test", Name: "worker_test"})
+	if first == second {
+		t.Fatalf("two databases named worker_test share the handle %q", first)
+	}
+	if e.uri(t, first) == e.uri(t, second) || e.dbName(t, first) != "worker_test" || e.dbName(t, second) != "worker_test" {
+		t.Fatalf("handles resolve to %q and %q, want two different servers and the name worker_test", e.uri(t, first), e.uri(t, second))
+	}
+}

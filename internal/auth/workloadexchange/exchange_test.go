@@ -471,20 +471,33 @@ func (hungValidator) Validate(ctx context.Context, _ string) (authverify.Subject
 }
 
 // The exchange runs in a bubble on a virtual clock with an in-memory validator that never answers, so the 503 comes back at exactly
-// ReviewCallTimeout: a bound removed fails as a deadlock and a bound honored late fails the instant check. The harness's own fake
-// API server is built outside the bubble and is never contacted: no goroutine of the bubble does I/O.
+// ReviewCallTimeout: a bound removed fails as a deadlock and a bound honored late fails the instant check.
+// The harness's fake API server is built OUTSIDE the bubble on purpose: it listens on a real socket, and an accept waiting on that
+// socket inside the bubble would keep the virtual clock from advancing. Nothing in the bubble may touch it: its request counter must
+// stay 0, inside the bubble and again after the bubble returned.
 func TestASlowReviewTimesOutWith503(t *testing.T) {
 	h := newHarness(t, func(_ *harness, d *Deps) { d.Validator = hungValidator{} })
 	subject := h.validSubject()
+	requestsSeen := func() int {
+		h.review.mu.Lock()
+		defer h.review.mu.Unlock()
+		return h.review.calls
+	}
 	synctest.Test(t, func(t *testing.T) {
 		start := time.Now()
 		rec := h.post(form(subject, "auth-service", "").Encode())
 		returnedAt := time.Now()
+		if calls := requestsSeen(); calls != 0 {
+			t.Fatalf("the fake API server outside the bubble received %d request(s): the exchange used a real transport", calls)
+		}
 		if !returnedAt.Equal(start.Add(ReviewCallTimeout)) {
 			t.Fatalf("the exchange answered at +%v of virtual time, want +%v (the review bound)", returnedAt.Sub(start), ReviewCallTimeout)
 		}
 		assertUnavailable(t, h, rec, "tokenreview_unavailable")
 	})
+	if calls := requestsSeen(); calls != 0 {
+		t.Fatalf("the fake API server outside the bubble received %d request(s) by the time the bubble returned", calls)
+	}
 }
 
 // An API server without the TokenReview path (it answers 404) fails closed.

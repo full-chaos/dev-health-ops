@@ -11,7 +11,6 @@ import (
 
 	scheduledsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/full-chaos/dev-health-ops/internal/syncrunrollup"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5"
@@ -26,13 +25,6 @@ import (
 // termination mechanics, not on message content.
 var testFeatureDisabledMessage = canonicalIncidentFeatureDisabledMessage(scheduledsync.FeatureDecisionReasonGlobalDisabled)
 
-// createFeatureDisabledTables builds the migrated schema: the run/unit/outbox/ledger tables this
-// file drives carry their real columns, foreign keys and check constraints.
-func createFeatureDisabledTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
-	t.Helper()
-	pgschema.Apply(ctx, t, pool)
-}
-
 const (
 	featureDisabledTestOrg         = "00000000-0000-4000-8000-0000000000e1"
 	featureDisabledTestRun         = "00000000-0000-4000-8000-0000000000e2"
@@ -43,10 +35,7 @@ func startFeatureDisabledPool(t *testing.T) (context.Context, *pgxpool.Pool) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	t.Cleanup(cancel)
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	t.Cleanup(func() { instance.Close(context.Background()) })
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
@@ -93,7 +82,6 @@ func insertFeatureDisabledUnit(t *testing.T, ctx context.Context, pool *pgxpool.
 // matches NULL). An already-terminal SUCCESS unit must be left untouched.
 func TestTerminalizeFeatureDisabledRunBulkAndRaceSafeRunning(t *testing.T) {
 	ctx, pool := startFeatureDisabledPool(t)
-	createFeatureDisabledTables(t, ctx, pool)
 	seedFeatureDisabledRun(t, ctx, pool, 5)
 
 	planned := "00000000-0000-4000-8000-0000000001a1"
@@ -198,7 +186,6 @@ func TestTerminalizeFeatureDisabledRunBulkAndRaceSafeRunning(t *testing.T) {
 // count reflects it.
 func TestTerminalizeFeatureDisabledRunWaitsForAConcurrentRollupWriterThenSeesItsResult(t *testing.T) {
 	ctx, pool := startFeatureDisabledPool(t)
-	createFeatureDisabledTables(t, ctx, pool)
 	// total_units=2: one PLANNED unit that already exists (the consumer's
 	// own phase-1 bulk update fails it) and one the PRODUCER inserts,
 	// already 'success', only after confirming the consumer is blocked.
@@ -336,7 +323,6 @@ VALUES ($1, $2, $3, $4, $5, 'github', 'prs', 'standard', 'incremental', 'success
 // and that it does not wedge a run that has no actual contender.
 func TestTerminalizeFeatureDisabledRunAcquiresTheBucketAdvisoryLockBeforeAnyUnitWrite(t *testing.T) {
 	ctx, pool := startFeatureDisabledPool(t)
-	createFeatureDisabledTables(t, ctx, pool)
 	seedFeatureDisabledRun(t, ctx, pool, 1)
 	unitID := "00000000-0000-4000-8000-0000000001c3"
 	// insertFeatureDisabledUnit hardcodes provider='github'; cost_class
@@ -473,7 +459,6 @@ func waitForBlockedSyncRunsLock(t *testing.T, ctx context.Context, pool *pgxpool
 // done.
 func TestTerminalizeFeatureDisabledRunLeavesGenuinelyNonterminalStateAlone(t *testing.T) {
 	ctx, pool := startFeatureDisabledPool(t)
-	createFeatureDisabledTables(t, ctx, pool)
 	seedFeatureDisabledRun(t, ctx, pool, 1)
 	stuck := "00000000-0000-4000-8000-0000000001b1"
 	insertFeatureDisabledUnit(t, ctx, pool, stuck, "some_unmodeled_status", nil)
@@ -495,7 +480,6 @@ func TestTerminalizeFeatureDisabledRunLeavesGenuinelyNonterminalStateAlone(t *te
 // observeTerminalSyncRun's BackfillJob/JobRun side effects fire.
 func TestTerminalizeFeatureDisabledGraphTerminatesLedgerOutboxAndObservers(t *testing.T) {
 	ctx, pool := startFeatureDisabledPool(t)
-	createFeatureDisabledTables(t, ctx, pool)
 	seedFeatureDisabledRun(t, ctx, pool, 1)
 	insertFeatureDisabledUnit(t, ctx, pool, "00000000-0000-4000-8000-0000000001c1", "planned", nil)
 
@@ -589,7 +573,6 @@ VALUES ($1, $2, $3, $4, 'running', '2026-01-01', '2026-01-02')`,
 // never duplicated -- mirroring Python's find-or-create-else-update branch.
 func TestTerminalizeFeatureDisabledGraphUpsertsAnExistingFinalizeRow(t *testing.T) {
 	ctx, pool := startFeatureDisabledPool(t)
-	createFeatureDisabledTables(t, ctx, pool)
 	seedFeatureDisabledRun(t, ctx, pool, 1)
 	insertFeatureDisabledUnit(t, ctx, pool, "00000000-0000-4000-8000-0000000001d1", "planned", nil)
 	existingFinalizeID := "00000000-0000-4000-8000-0000000001d2"
@@ -628,7 +611,6 @@ func TestTerminalizeFeatureDisabledGraphUpsertsAnExistingFinalizeRow(t *testing.
 // actually creates the row.
 func TestArmFeatureDisabledFinalizeIsRaceSafeAndIdempotent(t *testing.T) {
 	ctx, pool := startFeatureDisabledPool(t)
-	createFeatureDisabledTables(t, ctx, pool)
 	seedFeatureDisabledRun(t, ctx, pool, 1)
 
 	var firstArmed, secondArmed bool
@@ -668,7 +650,6 @@ func TestArmFeatureDisabledFinalizeIsRaceSafeAndIdempotent(t *testing.T) {
 // feature regardless of the integration's own dataset configuration.
 func TestSyncRunRequiresCanonicalIncidentFeatureUnitScopeWins(t *testing.T) {
 	ctx, pool := startFeatureDisabledPool(t)
-	createFeatureDisabledTables(t, ctx, pool)
 	seedFeatureDisabledRun(t, ctx, pool, 1)
 	pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{
 		ID: "00000000-0000-4000-8000-0000000001e1", RunID: featureDisabledTestRun, OrgID: featureDisabledTestOrg,
@@ -702,7 +683,6 @@ VALUES ('00000000-0000-4000-8000-0000000001e2', $2, $1, 'users', true, '{}'::jso
 // the Python query.
 func TestSyncRunRequiresCanonicalIncidentFeatureIntegrationFallbackRespectsIsEnabled(t *testing.T) {
 	ctx, pool := startFeatureDisabledPool(t)
-	createFeatureDisabledTables(t, ctx, pool)
 	seedFeatureDisabledRun(t, ctx, pool, 0)
 	if _, err := pool.Exec(ctx, `
 INSERT INTO integration_datasets (id, org_id, integration_id, dataset_key, is_enabled, options)

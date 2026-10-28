@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -23,17 +23,13 @@ func TestNativeFinalizeSyncRunWritesNoPostSyncWhileAUnitIsNotTerminal(t *testing
 		t.Run("last unit ends "+last, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 			defer cancel()
-			instance, err := containers.StartPostgres(ctx)
-			if err != nil {
-				t.Fatal(err)
-			}
+			instance := pgschema.Start(ctx, t)
 			defer instance.Close(context.Background())
 			pool, err := pgxpool.New(ctx, instance.URI)
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer pool.Close()
-			createFinalizeTables(t, ctx, pool)
 			seedFinalizeRoute(t, ctx, pool)
 			insertFinalizeRun(t, ctx, pool, 2, "", "")
 			pgseed.EnsureSyncIntegration(ctx, t, pool, finalizeTestOrg, finalizeTestIntegration, finalizeTestSource)

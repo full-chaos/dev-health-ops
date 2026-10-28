@@ -375,6 +375,7 @@ internal/jobcontract	registry.go
 internal/jobcontract	registry_test.go
 internal/jobcontract	types_test.go
 internal/joboutbox	strand_repair_premise_test.go
+internal/joboutbox	strand_repair_test.go
 internal/jobruntime	budget_postgres_integration_test.go
 internal/jobruntime	daily_native_family_telemetry_test.go
 internal/jobs/investment	materialize_frozen_python_golden_test.go
@@ -421,6 +422,7 @@ internal/jobs/report	report_test.go
 internal/jobs/report	runtime_integration_test.go
 internal/jobs/workgraph/operationaledges	incidents_golden_integration_test.go
 internal/llmorgsettings	baseurl_reader_guard_test.go
+internal/llmorgsettings	relation_test.go
 internal/loadharness	profiles_test.go
 internal/localgit	blame.go
 internal/localgit	git.go

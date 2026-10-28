@@ -17,8 +17,24 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 )
 
-// memberDiffs reads the membership counts in one read-only snapshot.
-func (e *reconEnv) memberDiffs(t *testing.T, ctx context.Context) Reconciliation {
+// orgDiffs reads the membership counts of one organization in one read-only
+// snapshot, so rows other tests leave in the shared database do not count.
+func (e *reconEnv) orgDiffs(t *testing.T, ctx context.Context, org uuid.UUID) MembershipDiffs {
+	t.Helper()
+	tx, err := OpenSnapshot(ctx, e.runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	d, err := TxTarget{Tx: tx, Schema: e.schema}.membershipDiffsIn(ctx, &org)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+// wholeInactive is the gated membership count over the whole shared database.
+func (e *reconEnv) wholeInactive(t *testing.T, ctx context.Context) int {
 	t.Helper()
 	tx, err := OpenSnapshot(ctx, e.runtime)
 	if err != nil {
@@ -29,31 +45,31 @@ func (e *reconEnv) memberDiffs(t *testing.T, ctx context.Context) Reconciliation
 	if err := ReconcileMemberships(ctx, TxTarget{Tx: tx, Schema: e.schema}, &rep); err != nil {
 		t.Fatal(err)
 	}
-	return rep
+	return rep.Diffs[DiffMembershipInactiveInPublic]
 }
 
-type memberCounts struct{ publicMissing, inactive, roleDiff, authMissing int }
-
-func countsOf(r Reconciliation) memberCounts {
-	return memberCounts{r.MembershipPublicMissing, r.Diffs[DiffMembershipInactiveInPublic], r.MembershipRoleDiff, r.MembershipAuthMissing}
-}
-
-func (c memberCounts) minus(b memberCounts) memberCounts {
-	return memberCounts{c.publicMissing - b.publicMissing, c.inactive - b.inactive, c.roleDiff - b.roleDiff, c.authMissing - b.authMissing}
-}
-
-// removeAuthMembership sets an auth membership to removed through
-// audit.Commit, as an auth-side status writer would.
-func (e *reconEnv) removeAuthMembership(t *testing.T, ctx context.Context, org, user uuid.UUID) {
+// setAuthMembershipStatus sets an auth membership's status through
+// audit.Commit, as an auth-side status writer would. An equal status is left
+// as it is.
+func (e *reconEnv) setAuthMembershipStatus(t *testing.T, ctx context.Context, org, user uuid.UUID, status string) {
 	t.Helper()
 	var id uuid.UUID
-	if err := e.admin.QueryRow(ctx, `SELECT id FROM auth.memberships WHERE organization_id = $1 AND principal_id = $2`, org, user).Scan(&id); err != nil {
+	var current string
+	if err := e.admin.QueryRow(ctx, `SELECT id, status FROM auth.memberships WHERE organization_id = $1 AND principal_id = $2`, org, user).
+		Scan(&id, &current); err != nil {
 		t.Fatal(err)
+	}
+	if current == status {
+		return
+	}
+	event := map[string]string{"active": "membership.activated", "removed": "membership.removed"}[status]
+	if event == "" {
+		t.Fatalf("no outbox event for status %q", status)
 	}
 	orgText, subject, target := org.String(), user.String(), id.String()
 	err := audit.Commit(ctx, e.runtime, e.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
-			_, err := tx.Exec(ctx, `UPDATE auth.memberships SET status = 'removed', updated_at = clock_timestamp() WHERE id = $1`, id)
+			_, err := tx.Exec(ctx, `UPDATE auth.memberships SET status = $2, updated_at = clock_timestamp() WHERE id = $1`, id, status)
 			return err
 		},
 		Audit: audit.AuditEvent{
@@ -61,23 +77,85 @@ func (e *reconEnv) removeAuthMembership(t *testing.T, ctx context.Context, org, 
 			Attributes: map[string]any{"reason_code": "membership_status_changed", "target_kind": "membership", "target_id": target},
 		},
 		Events: []audit.OutboxEvent{{AggregateType: "membership", AggregateID: provisioning.WireID("membership", target),
-			EventType: "membership.removed", Change: map[string]any{"status": "removed"}}},
+			EventType: event, Change: map[string]any{"status": status}}},
 	})
 	if err != nil {
-		t.Fatalf("set the auth membership removed: %v", err)
+		t.Fatalf("set the auth membership %s: %v", status, err)
 	}
 }
 
-// After the organizations backfill the membership counts do not move; each
-// go-api change and each auth status change shows up in exactly its class,
-// and only an auth status that is not active over a public member is gated.
+// matchOrgOnCleanup leaves every membership pair of org matched when the test
+// ends, whatever it changed: each auth membership active with a public row of
+// its role, no public membership without an auth row, and the listed public
+// users (never copied to the auth schema) deleted. No membership row of org is
+// then auth-only, public-only, inactive over a public member or of another
+// role, so the whole-database checks of the other tests in the package do not
+// see it. The auth rows stay (the runtime role has no DELETE on them).
+func (e *reconEnv) matchOrgOnCleanup(t *testing.T, org uuid.UUID, publicOnlyUsers *[]uuid.UUID) {
+	t.Helper()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		if _, err := e.admin.Exec(ctx, `DELETE FROM public.memberships p WHERE p.org_id = $1 AND NOT EXISTS
+  (SELECT 1 FROM auth.memberships a WHERE a.organization_id = p.org_id AND a.principal_id = p.user_id)`, org); err != nil {
+			t.Errorf("cleanup public-only memberships: %v", err)
+			return
+		}
+		rows, err := e.admin.Query(ctx, `SELECT principal_id, role FROM auth.memberships WHERE organization_id = $1`, org)
+		if err != nil {
+			t.Errorf("cleanup read: %v", err)
+			return
+		}
+		type pair struct {
+			user uuid.UUID
+			role string
+		}
+		var pairs []pair
+		for rows.Next() {
+			var p pair
+			if err := rows.Scan(&p.user, &p.role); err != nil {
+				rows.Close()
+				t.Errorf("cleanup scan: %v", err)
+				return
+			}
+			pairs = append(pairs, p)
+		}
+		rows.Close()
+		for _, p := range pairs {
+			e.setAuthMembershipStatus(t, ctx, org, p.user, "active")
+			if _, err := e.admin.Exec(ctx, `INSERT INTO public.memberships (id, user_id, org_id, role, joined_at, created_at, updated_at)
+SELECT $1, $2, $3, $4, now(), now(), now()
+WHERE NOT EXISTS (SELECT 1 FROM public.memberships WHERE user_id = $2 AND org_id = $3)`, uuid.New(), p.user, org, p.role); err != nil {
+				t.Errorf("cleanup restore public row: %v", err)
+				return
+			}
+			if _, err := e.admin.Exec(ctx, `UPDATE public.memberships SET role = $3 WHERE user_id = $1 AND org_id = $2 AND role <> $3`, p.user, org, p.role); err != nil {
+				t.Errorf("cleanup restore public role: %v", err)
+				return
+			}
+		}
+		if publicOnlyUsers != nil && len(*publicOnlyUsers) > 0 {
+			if _, err := e.admin.Exec(ctx, `DELETE FROM public.users WHERE id = ANY($1)`, *publicOnlyUsers); err != nil {
+				t.Errorf("cleanup public-only users: %v", err)
+				return
+			}
+		}
+		if d := e.orgDiffs(t, ctx, org); d != (MembershipDiffs{}) {
+			t.Errorf("after cleanup the organization still has membership differences: %+v", d)
+		}
+	})
+}
+
+// After the organizations backfill an organization has no membership
+// difference; each go-api change and each auth status change shows up in
+// exactly its class, counted for this organization only.
 func TestUsersReconcileMembershipClasses(t *testing.T) {
 	e := getReconEnv(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	// Earlier tests in the package share the database: compare counts with a baseline.
-	base := countsOf(e.memberDiffs(t, ctx))
 	org, _ := e.seedOrg(t, ctx, true)
+	var publicOnlyUsers []uuid.UUID
+	e.matchOrgOnCleanup(t, org, &publicOnlyUsers)
 	removed := e.seed(t, ctx, uniq("mr"), true, true)
 	roled := e.seed(t, ctx, uniq("mr"), true, true)
 	inactive := e.seed(t, ctx, uniq("mr"), true, true)
@@ -87,8 +165,8 @@ func TestUsersReconcileMembershipClasses(t *testing.T) {
 	e.seedMember(t, ctx, org, roled, "member")
 	e.seedMember(t, ctx, org, inactive, "admin")
 	e.runOrgs(t, ctx, false)
-	if d := countsOf(e.memberDiffs(t, ctx)).minus(base); d != (memberCounts{}) {
-		t.Fatalf("after the organizations backfill: %+v, want no change", d)
+	if d := e.orgDiffs(t, ctx, org); d != (MembershipDiffs{}) {
+		t.Fatalf("after the organizations backfill: %+v, want none", d)
 	}
 
 	if _, err := e.admin.Exec(ctx, `DELETE FROM public.memberships WHERE org_id = $1 AND user_id = $2`, org, removed); err != nil {
@@ -100,25 +178,20 @@ func TestUsersReconcileMembershipClasses(t *testing.T) {
 	e.seedMember(t, ctx, org, publicOnly, "viewer")
 	// A public user the auth schema does not hold is out of scope (users-reconcile counts it as missing_in_auth).
 	notInAuth := e.seed(t, ctx, uniq("mr"), true, true)
+	publicOnlyUsers = append(publicOnlyUsers, notInAuth)
 	e.seedMember(t, ctx, org, notInAuth, "member")
-	e.removeAuthMembership(t, ctx, org, inactive)
-	rep := e.memberDiffs(t, ctx)
-	if d := countsOf(rep).minus(base); d != (memberCounts{publicMissing: 1, inactive: 1, roleDiff: 1, authMissing: 1}) {
+	e.setAuthMembershipStatus(t, ctx, org, inactive, "removed")
+	if d := e.orgDiffs(t, ctx, org); d != (MembershipDiffs{PublicMissing: 1, InactiveInPublic: 1, RoleDiff: 1, AuthMissing: 1}) {
 		t.Fatalf("after the planted changes: %+v, want one in each class", d)
 	}
-	if rep.GatedTotal() != base.inactive+1 {
-		t.Fatalf("gated = %d, want only the inactive class (%d)", rep.GatedTotal(), base.inactive+1)
-	}
 
-	// go-api removes the inactive member too: nothing is gated for it any more.
+	// go-api removes the inactive member too: nothing is inactive over a public member any more.
 	if _, err := e.admin.Exec(ctx, `DELETE FROM public.memberships WHERE org_id = $1 AND user_id = $2`, org, inactive); err != nil {
 		t.Fatal(err)
 	}
-	if d := countsOf(e.memberDiffs(t, ctx)).minus(base); d != (memberCounts{publicMissing: 1, roleDiff: 1, authMissing: 1}) {
+	if d := e.orgDiffs(t, ctx, org); d != (MembershipDiffs{PublicMissing: 1, RoleDiff: 1, AuthMissing: 1}) {
 		t.Fatalf("after the public removal: %+v, want no inactive diff and the other classes unchanged", d)
 	}
-	// Leave every public user in the auth schema for the tests that follow.
-	e.backfill(t, ctx)
 }
 
 // The users-reconcile verb fails on an inactive auth membership over a public
@@ -128,6 +201,7 @@ func TestVerbGatesMembershipInactiveInPublic(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	org, _ := e.seedOrg(t, ctx, true)
+	e.matchOrgOnCleanup(t, org, nil)
 	user := e.seed(t, ctx, uniq("mv"), true, true)
 	e.backfill(t, ctx)
 	e.seedMember(t, ctx, org, user, "member")
@@ -144,8 +218,8 @@ func TestVerbGatesMembershipInactiveInPublic(t *testing.T) {
 			}, Stdout: &stdout, Stderr: &stderr})
 		return code, stdout.String() + stderr.String()
 	}
-	before := countsOf(e.memberDiffs(t, ctx)).inactive
-	e.removeAuthMembership(t, ctx, org, user)
+	before := e.wholeInactive(t, ctx)
+	e.setAuthMembershipStatus(t, ctx, org, user, "removed")
 	code, out := run()
 	if code != cli.ExitFailure || !strings.Contains(out, "info.membership_public_missing=") ||
 		!strings.Contains(out, "diff.membership_inactive_in_public="+strconv.Itoa(before+1)) {
@@ -153,9 +227,5 @@ func TestVerbGatesMembershipInactiveInPublic(t *testing.T) {
 	}
 	if strings.Contains(out, user.String()) || strings.Contains(out, org.String()) {
 		t.Fatal("the verb printed an id")
-	}
-	// Leave the shared database with no gated membership row.
-	if _, err := e.admin.Exec(ctx, `DELETE FROM public.memberships WHERE org_id = $1 AND user_id = $2`, org, user); err != nil {
-		t.Fatal(err)
 	}
 }

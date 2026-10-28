@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 
+	"github.com/google/uuid"
+
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
@@ -51,6 +53,12 @@ func ReconcileMemberships(ctx context.Context, tgt MembershipTarget, rep *Reconc
 // (organization, user) pairs of the auth principals of kind user. Counts only:
 // no id or value leaves the query.
 func (t TxTarget) MembershipDiffs(ctx context.Context) (MembershipDiffs, error) {
+	return t.membershipDiffsIn(ctx, nil)
+}
+
+// membershipDiffsIn is MembershipDiffs over one organization's pairs, or over
+// every pair when org is nil.
+func (t TxTarget) membershipDiffsIn(ctx context.Context, org *uuid.UUID) (MembershipDiffs, error) {
 	q := authschema.Quote(t.Schema)
 	var d MembershipDiffs
 	err := t.Tx.QueryRow(ctx, `WITH pub AS (
@@ -60,12 +68,13 @@ func (t TxTarget) MembershipDiffs(ctx context.Context) (MembershipDiffs, error) 
   FROM `+q+`.memberships a
   FULL JOIN pub p ON p.org_id = a.organization_id AND p.user_id = a.principal_id
   WHERE COALESCE(a.principal_id, p.user_id) IN (SELECT id FROM `+q+`.principals WHERE kind = 'user')
+    AND ($1::uuid IS NULL OR COALESCE(a.organization_id, p.org_id) = $1::uuid)
 )
 SELECT
   count(*) FILTER (WHERE in_auth AND status = 'active' AND NOT in_public),
   count(*) FILTER (WHERE in_auth AND status <> 'active' AND in_public),
   count(*) FILTER (WHERE in_auth AND status = 'active' AND in_public AND (role IS NULL OR roles <> ARRAY[role]::text[])),
   count(*) FILTER (WHERE NOT in_auth AND in_public)
-FROM pairs`).Scan(&d.PublicMissing, &d.InactiveInPublic, &d.RoleDiff, &d.AuthMissing)
+FROM pairs`, org).Scan(&d.PublicMissing, &d.InactiveInPublic, &d.RoleDiff, &d.AuthMissing)
 	return d, err
 }

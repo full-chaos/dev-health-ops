@@ -128,6 +128,12 @@ func TestJoinMembershipPublicWriteFailureLeavesNoRows(t *testing.T) {
 	if _, err := e.admin.Exec(ctx, `DELETE FROM public.organizations WHERE id = $1`, org); err != nil {
 		t.Fatal(err)
 	}
+	// Put the public organization back, so no auth-only organization stays in the shared database.
+	t.Cleanup(func() {
+		if _, err := e.admin.Exec(context.Background(), `INSERT INTO public.organizations (id, slug, name) VALUES ($1, $2, 'identity-test')`, org, "org-"+org.String()); err != nil {
+			t.Errorf("restore the public organization: %v", err)
+		}
+	})
 	err := joinCommit(ctx, e.owned, membershipJoin{ID: uuid.New(), Principal: user, OrgID: org, Role: "member"}, nil)
 	if !errors.Is(err, ErrLegacyProjection) {
 		t.Fatalf("join with no public organization = %v, want ErrLegacyProjection", err)
@@ -140,10 +146,21 @@ func TestJoinMembershipNoPublicUserLeavesNoRows(t *testing.T) {
 	e := getEnv(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	user, org := e.joinFixture(t, ctx)
+	email := uniqueEmail("join-nouser")
+	user := e.seedUser(t, ctx, email, true, true)
+	e.project(t, ctx, user)
+	org := e.seedAuthOwnedOrg(t, ctx)
 	if _, err := e.admin.Exec(ctx, `DELETE FROM public.users WHERE id = $1`, user); err != nil {
 		t.Fatal(err)
 	}
+	// Put the public user back (as seedUser wrote it), so no auth user without a public row stays in the shared database.
+	t.Cleanup(func() {
+		if _, err := e.admin.Exec(context.Background(), `INSERT INTO public.users
+	(id, email, password_hash, auth_provider, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
+VALUES ($1, $2, '$2b$12$abcdefghijklmnopqrstuuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0', 'local', true, true, false, 0, now(), now())`, user, email); err != nil {
+			t.Errorf("restore the public user: %v", err)
+		}
+	})
 	err := joinCommit(ctx, e.owned, membershipJoin{ID: uuid.New(), Principal: user, OrgID: org, Role: "member"}, nil)
 	if !errors.Is(err, ErrLegacyProjection) {
 		t.Fatalf("join with no public user = %v, want ErrLegacyProjection", err)
@@ -218,6 +235,8 @@ func TestJoinMembershipDivergedAuthRowRefused(t *testing.T) {
 	if p, a := e.memberRows(t, ctx, user, org); p != 0 || a != 1 {
 		t.Fatalf("rows: public=%d auth=%d, want 0 and 1", p, a)
 	}
+	// Match the pair again, so no auth-only membership stays in the shared database.
+	e.seedMembership(t, ctx, user, org)
 }
 
 // Concurrent joins of one account to one organization write one row per table.

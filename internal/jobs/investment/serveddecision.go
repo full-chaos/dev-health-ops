@@ -357,15 +357,15 @@ func (served *ServedDecision) categorize(ctx context.Context, cfg Config, entry 
 	unit := shadowUnit{workUnitID: entry.result.Investment.WorkUnitID, bundle: entry.result.Bundle}
 	// The worker pool can still hand over a unit after the run stopped (its
 	// producer's select picks at random between two ready cases): that unit is
-	// never sent.
-	result := shadowResult{unit: unit, err: ctx.Err()}
-	if result.err == nil {
-		result = served.classifyOne(ctx, unit)
+	// never sent, so it is not asked and has no outcome count.
+	if err := ctx.Err(); err != nil {
+		return categorize.CategorizationOutcome{}, err
 	}
+	result := served.classifyOne(ctx, unit)
 	if result.err != nil {
 		// A cancelled or expired context (the only error Classify returns for a
-		// completer that NewCompleter built). The unit still has its one outcome
-		// count: a run with no count must not read as a healthy one.
+		// completer that NewCompleter built). The unit was asked, so it has its
+		// one outcome count.
 		served.mu.Lock()
 		served.outcomes[servedOutcomeCancelled]++
 		served.mu.Unlock()

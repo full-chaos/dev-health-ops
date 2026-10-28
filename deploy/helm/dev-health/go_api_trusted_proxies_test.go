@@ -97,19 +97,47 @@ func TestGoAPITrustedProxyValuesRenderOnlyWhatGoAPIParses(t *testing.T) {
 }
 
 // A value the chart cannot read (valueFrom) is the deploy chart's "unreadable" rule, not a render refusal here: it
-// renders, and the go-api env keeps the reference whole.
+// renders, and the go-api env keeps the reference whole (its kind, name and key), with no value beside it.
 func TestGoAPITrustedProxiesFromAReferenceRender(t *testing.T) {
 	if _, err := exec.LookPath("helm"); err != nil {
 		t.Skip("helm is not installed")
 	}
-	out, err := exec.Command("helm", "template", "trusted", ".", "--namespace", releaseNamespace, "--set", "goApi.enabled=true",
-		"--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24",
-		"--set-json", `goApi.extraEnv=[{"name":"TRUSTED_PROXIES","valueFrom":{"secretKeyRef":{"name":"go-api-trusted","key":"TRUSTED_PROXIES_LIST"}}}]`).CombinedOutput()
-	if err != nil {
-		t.Fatalf("render: %v\n%.400s", err, out)
+	for _, ref := range []struct{ kind, name, key string }{
+		{"configMapKeyRef", "x", "y"},
+		{"secretKeyRef", "s", "k"},
+	} {
+		t.Run(ref.kind, func(t *testing.T) {
+			extra, err := json.Marshal([]map[string]any{{"name": "TRUSTED_PROXIES",
+				"valueFrom": map[string]any{ref.kind: map[string]string{"name": ref.name, "key": ref.key}}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			out, err := exec.Command("helm", "template", "trusted", ".", "--namespace", releaseNamespace, "--set", "goApi.enabled=true",
+				"--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24", "--set-json", "goApi.extraEnv="+string(extra)).CombinedOutput()
+			if err != nil {
+				t.Fatalf("render: %v\n%.400s", err, out)
+			}
+			found := goAPITrustedEnv(t, string(out))
+			if len(found) != 1 {
+				t.Fatalf("the go-api env has %d TRUSTED_PROXIES entries, want exactly the one reference: %v", len(found), found)
+			}
+			if _, hasValue := found[0]["value"]; hasValue {
+				t.Fatalf("TRUSTED_PROXIES carries a value beside the reference: %v", found[0])
+			}
+			from, _ := found[0]["valueFrom"].(map[string]any)
+			got, _ := from[ref.kind].(map[string]any)
+			if len(from) != 1 || len(got) != 2 || got["name"] != ref.name || got["key"] != ref.key {
+				t.Fatalf("TRUSTED_PROXIES valueFrom = %v, want only %s {name: %s, key: %s}", found[0]["valueFrom"], ref.kind, ref.name, ref.key)
+			}
+		})
 	}
+}
+
+// goAPITrustedEnv is every TRUSTED_PROXIES entry of the go-api container env in a render.
+func goAPITrustedEnv(t *testing.T, render string) []map[string]any {
+	t.Helper()
 	var found []map[string]any
-	for _, document := range strings.Split(string(out), "\n---") {
+	for _, document := range strings.Split(render, "\n---") {
 		var doc struct {
 			Kind     string `yaml:"kind"`
 			Metadata struct {
@@ -137,15 +165,5 @@ func TestGoAPITrustedProxiesFromAReferenceRender(t *testing.T) {
 			}
 		}
 	}
-	if len(found) != 1 {
-		t.Fatalf("the go-api env has %d TRUSTED_PROXIES entries, want exactly the one reference: %v", len(found), found)
-	}
-	if _, hasValue := found[0]["value"]; hasValue {
-		t.Fatalf("TRUSTED_PROXIES carries a value beside the reference: %v", found[0])
-	}
-	ref, _ := found[0]["valueFrom"].(map[string]any)
-	secret, _ := ref["secretKeyRef"].(map[string]any)
-	if secret["name"] != "go-api-trusted" || secret["key"] != "TRUSTED_PROXIES_LIST" || len(ref) != 1 {
-		t.Fatalf("TRUSTED_PROXIES valueFrom = %v, want secretKeyRef name go-api-trusted, key TRUSTED_PROXIES_LIST", found[0]["valueFrom"])
-	}
+	return found
 }

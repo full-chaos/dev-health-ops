@@ -11,19 +11,21 @@ import (
 )
 
 // stuckSource is a push stop that ignores its context until released, as the SDK periodic reader does while it waits for its
-// export loop. It records the deadline of the context it was handed, and whether that context had already ended.
+// export loop. It records when it was entered, read from its own clock the moment it starts, and the deadline of the context it was
+// handed.
 type stuckSource struct {
 	release  chan struct{}
 	entered  chan struct{}
+	entry    atomic.Pointer[time.Time]
 	deadline atomic.Pointer[time.Time]
-	ended    atomic.Bool
 }
 
 func (s *stuckSource) Shutdown(ctx context.Context) error {
+	entry := time.Now()
+	s.entry.Store(&entry)
 	if deadline, ok := ctx.Deadline(); ok {
 		s.deadline.Store(&deadline)
 	}
-	s.ended.Store(ctx.Err() != nil)
 	close(s.entered)
 	<-s.release
 	return nil
@@ -56,9 +58,10 @@ func TestMetricsFlushNeverOutlivesItsBudgetEvenWhenTheSourceIgnoresTheContext(t 
 	if err != nil {
 		t.Fatalf("Shutdown error = %v, want nil: an unreachable collector is not a shutdown failure", err)
 	}
-	// The flush budget is half of the attempt. The deadline the source was handed must fall in the first three quarters of the
-	// caller's budget, so the return comes before the attempt's own deadline and the runtime never sees DeadlineExceeded. The check
-	// reads deadlines, not elapsed time.
+	// The flush budget is half of the attempt. Measured from the moment the source was entered, the deadline it was handed must fall in
+	// the first three quarters of what was left of the caller's budget, so the return comes before the attempt's own deadline and the
+	// runtime never sees DeadlineExceeded. The check reads deadlines and the source's own entry time, not elapsed time: a goroutine that
+	// starts late only moves the entry time.
 	select {
 	case <-source.entered:
 	case <-time.After(30 * time.Second):
@@ -68,11 +71,12 @@ func TestMetricsFlushNeverOutlivesItsBudgetEvenWhenTheSourceIgnoresTheContext(t 
 	if flushDeadline == nil {
 		t.Fatal("the source was handed a context with no deadline")
 	}
-	if source.ended.Load() {
-		t.Fatal("the source was handed a context that had already ended")
+	entry := *source.entry.Load()
+	if !flushDeadline.After(handedAt) {
+		t.Fatalf("the flush deadline %v is not after the call started (%v): the source was handed no budget", *flushDeadline, handedAt)
 	}
-	if flushDeadline.After(handedAt.Add(callerDeadline.Sub(handedAt) * 3 / 4)) {
-		t.Fatalf("the flush deadline %v is past three quarters of the caller's budget (caller deadline %v): the flush spends almost the whole attempt", *flushDeadline, callerDeadline)
+	if flushDeadline.After(entry.Add(callerDeadline.Sub(entry) * 3 / 4)) {
+		t.Fatalf("the flush deadline %v is past three quarters of the caller's budget left at entry %v (caller deadline %v): the flush spends almost the whole attempt", *flushDeadline, entry, callerDeadline)
 	}
 	if !strings.Contains(logs.String(), "final flush abandoned") {
 		t.Fatalf("the abandoned flush was not logged: %q", logs.String())

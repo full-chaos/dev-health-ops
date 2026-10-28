@@ -946,11 +946,11 @@ security_split() {
 # "[no tests to run]" package has nothing to execute and is not counted.
 check_security_fresh_receipt() {
   local f events bad cached set_file fresh sec_cached summary
-  [ "$#" -gt 0 ] || die "security-fresh-receipt needs the leg's go test -json file(s)"
+  [ "$#" -gt 0 ] || die "security-fresh-receipt needs the -json event file(s) of the leg"
   for f in "$@"; do
-    { [ -f "${f}" ] && [ -r "${f}" ]; } || die "security-fresh-receipt needs the leg's go test -json events as readable files, got '${f}'"
+    { [ -f "${f}" ] && [ -r "${f}" ]; } || die "security-fresh-receipt needs the -json events of the leg as readable files, got '${f}'"
   done
-  command -v jq >/dev/null 2>&1 || die "security-fresh-receipt needs jq to read the go test -json events"
+  command -v jq >/dev/null 2>&1 || die "security-fresh-receipt needs jq to read the -json events"
   events="$(cat -- "$@" | jq -nR -r '
     inputs
     | fromjson?
@@ -958,7 +958,7 @@ check_security_fresh_receipt() {
     | ((.Output // "") | tostring) as $o
     | select(($o | test("^ok\\s")) and ($o | test("\\[no tests to run\\]") | not))
     | (if ($o | test("\\(cached\\)")) then "C " else "R " end) + .Package' | LC_ALL=C sort -u)" \
-    || die "security-fresh-receipt could not read the go test -json events"
+    || die "security-fresh-receipt could not read the -json events"
   bad="$(printf '%s\n' "${events}" | sed -n 's/^C //p')"
   cached="$(printf '%s\n' "${bad}" | grep -c . || true)"
   summary="$(printf 'cache-receipt: %s package(s) reported "ok (cached)": cached = NOT executed by this leg\n' "${cached}")"

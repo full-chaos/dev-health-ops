@@ -22,16 +22,34 @@ SELF_PATTERNS=('ci/check_golden_drift.sh' 'ci/golden_drift_registry.tsv')
 
 die() { echo "check_golden_drift.sh: $*" >&2; exit 2; }
 
+# split_tabs SEP COUNT LINE: sets F1..FCOUNT. Splits on exact tabs and keeps empty fields (a `read` with a tab IFS merges
+# adjacent tabs, so an empty field would be read as the next one). Refuses a line without exactly COUNT non-empty fields.
+F1="" F2="" F3=""
+split_tabs() {
+  local count="$1" line="$2" tabs rest
+  tabs="${line//[!$'\t']/}"
+  [ "${#tabs}" -eq $((count - 1)) ] || die "needs exactly ${count} tab separated fields: ${line}"
+  F1="${line%%$'\t'*}"
+  rest="${line#*$'\t'}"
+  if [ "${count}" -eq 2 ]; then
+    F2="${rest}"
+  else
+    F2="${rest%%$'\t'*}"
+    F3="${rest#*$'\t'}"
+  fi
+  if [ -z "${F1}" ] || [ -z "${F2}" ] || { [ "${count}" -eq 3 ] && [ -z "${F3}" ]; }; then
+    die "needs ${count} non-empty fields: ${line}"
+  fi
+}
+
 load_registry() {
   [ -r "${REGISTRY}" ] || die "registry ${REGISTRY} is not readable"
   rows=()
-  local line pkg re trig extra
+  local line
   while IFS= read -r line || [ -n "${line}" ]; do
     case "${line}" in '' | '#'*) continue ;; esac
-    IFS=$'\t' read -r pkg re trig extra <<< "${line}"
-    [ -n "${pkg}" ] && [ -n "${re}" ] && [ -n "${trig}" ] && [ -z "${extra}" ] \
-      || die "registry row needs exactly 3 non-empty tab separated fields: ${line}"
-    rows+=("${pkg}"$'\t'"${re}"$'\t'"${trig}")
+    split_tabs 3 "${line}"
+    rows+=("${F1}"$'\x1f'"${F2}"$'\x1f'"${F3}")
   done < "${REGISTRY}"
   [ "${#rows[@]}" -gt 0 ] || die "registry holds no row"
 }
@@ -40,7 +58,9 @@ emit_all() {
   local row pkg re
   echo "VERDICT all $1"
   for row in "${rows[@]}"; do
-    IFS=$'\t' read -r pkg re _ <<< "${row}"
+    pkg="${row%%$'\x1f'*}"
+    re="${row#*$'\x1f'}"
+    re="${re%%$'\x1f'*}"
     printf 'ROW\t%s\t%s\n' "${pkg}" "${re}"
   done
 }
@@ -66,7 +86,8 @@ select_rows() {
   done < "${list}"
   local selected=()
   for row in "${rows[@]}"; do
-    IFS=$'\t' read -r pkg re trig <<< "${row}"
+    pkg="${row%%$'\x1f'*}"
+    trig="${row##*$'\x1f'}"
     hit=0
     local -a pats=()
     IFS=';' read -r -a pats <<< "${trig}"
@@ -97,7 +118,9 @@ select_rows() {
   fi
   echo "VERDICT select ${picked} of ${#rows[@]} rows for ${n} changed paths"
   for row in "${selected[@]}"; do
-    IFS=$'\t' read -r pkg re _ <<< "${row}"
+    pkg="${row%%$'\x1f'*}"
+    re="${row#*$'\x1f'}"
+    re="${re%%$'\x1f'*}"
     printf 'ROW\t%s\t%s\n' "${pkg}" "${re}"
   done
 }
@@ -114,12 +137,14 @@ message() {
 
 out=""
 run_rows() {
-  local file="${1:-}" pkg re kind failed=0 count=0 rc
+  local file="${1:-}" pkg re line failed=0 count=0 rc
   [ -n "${file}" ] && [ -r "${file}" ] || die "run needs a readable ROWS_FILE"
   trap 'rm -f "${out:-}"' EXIT
-  while IFS=$'\t' read -r kind pkg re || [ -n "${kind}" ]; do
-    [ "${kind}" = "ROW" ] || continue
-    [ -n "${pkg}" ] && [ -n "${re}" ] || die "malformed ROW line"
+  while IFS= read -r line || [ -n "${line}" ]; do
+    case "${line}" in ROW$'\t'*) ;; *) continue ;; esac
+    split_tabs 3 "${line}"
+    pkg="${F2}"
+    re="${F3}"
     count=$((count + 1))
     echo "== golden drift: ${pkg} -run ${re}"
     out="$(mktemp)"

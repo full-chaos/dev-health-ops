@@ -303,7 +303,7 @@ var (
 )
 
 var (
-	shellAssign       = regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*)=([^\n;]*)`)
+	shellAssignName   = regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*)=`)
 	shellKeyName      = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
 	shellMeasuredWord = regexp.MustCompile(`\$\(\([^)]*\bSECONDS\b|\$\{?(?:SECONDS|EPOCHREALTIME)\b|\$\(date \+%s`)
 )
@@ -320,7 +320,10 @@ func scriptKeys(text string) []string {
 	}
 	// An assign is measured when its right-hand side CONTAINS a measured word or a variable already measured (bare in
 	// arithmetic, $v elsewhere); followed to a fixpoint. An upper-case name assigned such a value is a key.
-	assigns := shellAssign.FindAllStringSubmatch(text, -1)
+	var assigns [][]string
+	for _, loc := range shellAssignName.FindAllStringSubmatchIndex(text, -1) {
+		assigns = append(assigns, []string{"", text[loc[2]:loc[3]], assignValue(text, loc[1])})
+	}
 	vars := map[string]*regexp.Regexp{}
 	bare := map[string]*regexp.Regexp{}
 	refers := func(rhs string) bool {
@@ -367,6 +370,31 @@ func scriptKeys(text string) []string {
 		}
 	}
 	return out
+}
+
+// assignValue returns the value of the assign whose right-hand side starts at i: it ends at a blank, a semicolon or a
+// quote outside parentheses (so $(( ... )) and $( ... ) groups hold their blanks); leading quotes are skipped. Each NAME=
+// is scanned on its own, so a later KEY= on the same line is not swallowed.
+func assignValue(text string, i int) string {
+	start := i
+	for i < len(text) && (text[i] == '"' || text[i] == '\'') {
+		i++
+	}
+	depth := 0
+	for ; i < len(text); i++ {
+		switch ch := text[i]; {
+		case ch == '(':
+			depth++
+		case ch == ')':
+			if depth == 0 {
+				return text[start:i]
+			}
+			depth--
+		case depth == 0 && (ch == ' ' || ch == '\t' || ch == '\n' || ch == ';' || ch == '"' || ch == '\''):
+			return text[start:i]
+		}
+	}
+	return text[start:]
 }
 
 // shellWords splits s on blanks outside quotes and outside a $( ... ) group.

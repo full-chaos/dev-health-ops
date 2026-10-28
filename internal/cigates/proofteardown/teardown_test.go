@@ -357,24 +357,30 @@ echo "STUBBORN_ELAPSED=$((SECONDS - start))"
 	}
 	g.expect(fired[1] == "0",
 		"the watchdog of a service that exits promptly ran to its bound and killed it %s time(s): the watchdog was not cancelled (SIGTERM ignored via the inherited disposition?)", fired[1])
-	// Event order, no time: after the prompt service is signalled the next thing the library does that sleeps is the
-	// watchdog's own sleep 1; a slow step between the signal and the watchdog would show as another sleep first. The scan
-	// ends where the prompt's stop ends, so the stubborn service's watchdog cannot stand in for a missing one.
+	// Event order, no time. Between signalling the prompt service and the end of its stop the script shell logs only
+	// calls the library makes itself. Armed: the parent logged "KILL -KILL <pid>" for a pid that is not the service
+	// (the cancelled watchdog); it needs no logging from the watchdog, which a loaded host may SIGKILL before its first
+	// sleep. Nothing slow: no sleep other than the watchdog's own "SLEEP 1" in that window.
 	logged, _ := readIfExists(log)
-	signalled, next := false, ""
+	signalled, armed, slow := false, false, ""
+	killOnePid := regexp.MustCompile(`^KILL -KILL [0-9]+$`)
+scan:
 	for _, line := range strings.Split(logged, "\n") {
-		if line == "KILL -TERM "+pid[1] {
+		switch {
+		case line == "KILL -TERM "+pid[1]:
 			signalled = true
-		} else if signalled && line == "STOP_DONE prompt" {
-			break
-		} else if signalled && strings.HasPrefix(line, "SLEEP ") {
-			next = line
-			break
+		case !signalled:
+		case line == "STOP_DONE prompt":
+			break scan
+		case killOnePid.MatchString(line) && line != "KILL -KILL "+pid[1]:
+			armed = true
+		case strings.HasPrefix(line, "SLEEP ") && line != "SLEEP 1" && slow == "":
+			slow = line
 		}
 	}
 	g.expect(signalled, "the log has no KILL -TERM %s: stop_service never signalled the prompt service (log %q)", pid[1], logged)
-	g.expect(next == "SLEEP 1",
-		"the first sleep after the prompt service was signalled is %q, want the watchdog's SLEEP 1: something slow ran before the watchdog was armed", next)
+	g.expect(slow == "", "%q ran after the prompt service was signalled and before its stop ended: something slow ran before the watchdog was armed", slow)
+	g.expect(armed, "the parent logged no KILL -KILL <watchdog pid> for the prompt service: the watchdog was never armed (log %q)", logged)
 	//abstime:allow lower-bound wait, load only lengthens it (precedent: allowlist.tsv backfillrun and faultproxy rows)
 	g.expect(stubborn >= boundSecs,
 		"a SIGTERM-ignoring service took only %ds against a %ds bound: the bound is not being honoured", stubborn, boundSecs)

@@ -67,11 +67,16 @@ func squashRepo(t *testing.T) (string, string, Exemption) {
 	git(t, repo, "commit", "-q", "-m", "squash")
 	paths := []string{ManifestPath, plantBaseline, plantArchiveManifest, plantArchiveSQL}
 	sort.Strings(paths)
+	content, err := ContentDigest(repo, paths)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return repo, base, Exemption{
 		BaseManifestSHA256:    sum(baseManifest),
 		BaseHeadJSONSHA256:    sum("old head"),
 		ArchiveManifestSHA256: sum("0139\tabc\t0139_a.sql\n"),
 		Paths:                 paths,
+		ContentSHA256:         content,
 		Cites:                 "D6430 / CHAOS-11743",
 	}
 }
@@ -105,6 +110,7 @@ func TestTheSquashExemptionClearsExactlyItsChangeSet(t *testing.T) {
 		"another base manifest":    func(e *Exemption) { e.BaseManifestSHA256 = sum("other manifest") },
 		"another base head.json":   func(e *Exemption) { e.BaseHeadJSONSHA256 = sum("other head") },
 		"another archive manifest": func(e *Exemption) { e.ArchiveManifestSHA256 = sum("other archive") },
+		"another content digest":   func(e *Exemption) { e.ContentSHA256 = sum("other content") },
 		"a missing path":           func(e *Exemption) { e.Paths = e.Paths[1:] },
 		"an extra path": func(e *Exemption) {
 			e.Paths = append(append([]string(nil), e.Paths...), "internal/pgmigrate/archive/sql/0140_b.sql")

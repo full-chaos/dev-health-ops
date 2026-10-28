@@ -230,14 +230,32 @@ func MergeBase(dir string) (string, error) {
 }
 
 // Exemption clears the git half for ONE exact change set, keyed to content: the base tree's manifest and head.json,
-// the archive manifest at HEAD and the exact set of guarded paths the change set touches. A change set that differs in
-// any of them gets the guard's normal verdict.
+// the archive manifest at HEAD, the exact set of guarded paths the change set touches, and the content of every one
+// of those paths at HEAD (ContentDigest). A change set that differs in any of them gets the guard's normal verdict.
 type Exemption struct {
 	BaseManifestSHA256    string
 	BaseHeadJSONSHA256    string
 	ArchiveManifestSHA256 string
 	Paths                 []string
+	ContentSHA256         string
 	Cites                 string
+}
+
+// ContentDigest is the sha256 over "<path>\t<sha256 of the path's blob at HEAD>\n" for every path, sorted: one value
+// that changes with any byte of any of the paths.
+func ContentDigest(root string, paths []string) (string, error) {
+	sorted := append([]string(nil), paths...)
+	sort.Strings(sorted)
+	digest := sha256.New()
+	for _, path := range sorted {
+		blob, err := exec.Command("git", "-C", root, "show", "HEAD:"+path).Output()
+		if err != nil {
+			return "", fmt.Errorf("git show HEAD:%s: %w", path, err)
+		}
+		sum := sha256.Sum256(blob)
+		fmt.Fprintf(digest, "%s\t%s\n", path, hex.EncodeToString(sum[:]))
+	}
+	return hex.EncodeToString(digest.Sum(nil)), nil
 }
 
 // Exemptions are the change sets the git half clears.
@@ -269,8 +287,14 @@ func (e Exemption) matches(root, base string, changed []string) (bool, error) {
 	if err != nil {
 		return false, nil
 	}
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:]) == e.ArchiveManifestSHA256, nil
+	if sum := sha256.Sum256(data); hex.EncodeToString(sum[:]) != e.ArchiveManifestSHA256 {
+		return false, nil
+	}
+	content, err := ContentDigest(root, e.Paths)
+	if err != nil {
+		return false, nil
+	}
+	return content == e.ContentSHA256, nil
 }
 
 // GitHalf is the git half's verdict on the tree under root against base: the guarded paths the change set touches and

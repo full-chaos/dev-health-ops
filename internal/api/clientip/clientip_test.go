@@ -56,7 +56,8 @@ func TestFromRequest(t *testing.T) {
 		{"ipv6 peer trusted by cidr", "fd00::/8", "[fd00::5]:4000", []string{"198.51.100.7"}, "", "198.51.100.7"},
 		{"ipv6 peer untrusted", "10.0.0.0/8", "[2001:db8::9]:4000", []string{"198.51.100.7"}, "", "2001:db8::9"},
 		{"peer without port", "10.0.0.5", "10.0.0.5", []string{"198.51.100.7"}, "", "198.51.100.7"},
-		{"trusted list tolerates junk and blanks", " junk, ,10.0.0.5/99, 10.0.0.5 ", "10.0.0.5:4000", []string{"198.51.100.7"}, "", "198.51.100.7"},
+		{"a list with junk or blanks trusts nobody", " junk, ,10.0.0.5/99, 10.0.0.5 ", "10.0.0.5:4000", []string{"198.51.100.7"}, "", "10.0.0.5"},
+		{"spaces around entries are trimmed", " 10.0.0.1 , 10.0.0.5 ", "10.0.0.5:4000", []string{"198.51.100.7"}, "", "198.51.100.7"},
 		{"cidr 10.42.0.0/16 trusts a 10.42.x ingress peer", "10.42.0.0/16", "10.42.7.9:4000", []string{"6.6.6.6, 198.51.100.7"}, "", "198.51.100.7"},
 		{"cidr 10.42.0.0/16 does not trust 10.43.x", "10.42.0.0/16", "10.43.7.9:4000", []string{"198.51.100.7"}, "", "10.43.7.9"},
 		// Trust-contract pin (see package doc): a trusted proxy that forwards the

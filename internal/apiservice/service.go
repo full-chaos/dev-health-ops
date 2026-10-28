@@ -390,6 +390,9 @@ func configureWith(
 	logger *slog.Logger,
 	adjust func(*Deps),
 ) ([]lifecycle.Component, error) {
+	if err := checkTrustedProxies(logger); err != nil {
+		return nil, dependencyFailure(ctx, logger, "api_trusted_proxies", "api_trusted_proxies_invalid", err)
+	}
 	authProxy, err := ParseAuthProxyConfig(envsecrets.ProcessLookup)
 	if err != nil {
 		return nil, dependencyFailure(ctx, logger, "api_auth_proxy", "api_auth_proxy_config_invalid", err)
@@ -436,7 +439,6 @@ func configureWith(
 			return nil, dependencyFailure(ctx, logger, "api_access_verify", "api_access_verify_config_invalid", err)
 		}
 	}
-	logWideTrust(logger)
 	if err := RegisterOperatorMetrics(registry, &deps); err != nil {
 		closeComponents(depComponents)
 		return nil, err

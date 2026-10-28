@@ -58,7 +58,12 @@ func TestArchivedRevisionsAreKnown(t *testing.T) {
 	}
 }
 
+// git keeps no empty directory: sql/down holds a placeholder so the embedded chain still has the dir LoadDownChain
+// reads, and every downgrade does not fail as down_chain_unavailable while the live chain is empty.
 func TestDownChainIsEmptyAfterTheSquash(t *testing.T) {
+	if _, err := os.Stat("sql/down/README.md"); err != nil {
+		t.Errorf("sql/down has no placeholder: %v", err)
+	}
 	down, err := LoadDownChain()
 	if err != nil {
 		t.Fatalf("LoadDownChain: %v", err)

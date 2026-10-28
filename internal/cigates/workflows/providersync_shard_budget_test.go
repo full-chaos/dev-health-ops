@@ -1,6 +1,7 @@
 package workflows_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -242,9 +243,9 @@ func integrationJobRunsStep(t *testing.T, raw []byte, workflow, job, needle stri
 	return false
 }
 
-func TestIntegrationGoTestTimeoutsSitThreeMinutesUnderJobCaps(t *testing.T) {
+func integrationTimeoutViolations(t *testing.T, root string) []string {
+	var out []string
 	timeoutRe := regexp.MustCompile(`-timeout[= ](\d+)m\b`)
-	root := repoRoot(t)
 	must := func(b []byte, err error) []byte {
 		t.Helper()
 		if err != nil {
@@ -276,34 +277,35 @@ func TestIntegrationGoTestTimeoutsSitThreeMinutesUnderJobCaps(t *testing.T) {
 				}
 			}
 			if idx < 0 {
-				t.Errorf("ci/%s: integration go test call is not in integrationTimeoutRows: %s", script, line)
+				out = append(out, fmt.Sprintf("ci/%s: integration go test call is not in integrationTimeoutRows: %s", script, line))
 				continue
 			}
 			m := timeoutRe.FindStringSubmatch(line)
 			if m == nil {
-				t.Errorf("ci/%s: %s call has no -timeout=<N>m", script, rows[idx].name)
+				out = append(out, fmt.Sprintf("ci/%s: %s call has no -timeout=<N>m", script, rows[idx].name))
 				continue
 			}
 			timeout, _ := strconv.Atoi(m[1])
 			capMin := -1
 			for _, j := range rows[idx].jobs {
 				if !integrationJobRunsStep(t, workflows[j.workflow], j.workflow, j.job, j.stepNeedle) {
-					t.Errorf("%s job %s no longer runs %q (the %s row is stale)", j.workflow, j.job, j.stepNeedle, rows[idx].name)
+					out = append(out, fmt.Sprintf("%s job %s no longer runs %q (the %s row is stale)", j.workflow, j.job, j.stepNeedle, rows[idx].name))
 				}
 				if c := integrationJobCapMinutes(t, workflows[j.workflow], j.workflow, j.job); capMin < 0 || c < capMin {
 					capMin = c
 				}
 			}
 			if timeout > capMin-integrationTimeoutMarginMinutes {
-				t.Errorf("ci/%s: %s go test -timeout=%dm must be <= %dm (smallest job cap %dm - %dm) so a hang dumps the running test names", script, rows[idx].name, timeout, capMin-integrationTimeoutMarginMinutes, capMin, integrationTimeoutMarginMinutes)
+				out = append(out, fmt.Sprintf("ci/%s: %s go test -timeout=%dm must be <= %dm (smallest job cap %dm - %dm) so a hang dumps the running test names", script, rows[idx].name, timeout, capMin-integrationTimeoutMarginMinutes, capMin, integrationTimeoutMarginMinutes))
 			}
 		}
 	}
 	for i, n := range matched {
 		if n != 1 {
-			t.Errorf("row %s matched %d go test lines, want exactly 1", rows[i].name, n)
+			out = append(out, fmt.Sprintf("row %s matched %d go test lines, want exactly 1", rows[i].name, n))
 		}
 	}
+	return out
 }
 
 func TestProvidersyncStepBoundSitsBetweenGoTestTimeoutAndJobCap(t *testing.T) {
@@ -318,5 +320,33 @@ func TestProvidersyncStepBoundSitsBetweenGoTestTimeoutAndJobCap(t *testing.T) {
 	bound, _ := strconv.Atoi(m[1])
 	if capMin := providersyncJobTimeoutMinutes(t); bound <= 22*60 || bound > (capMin-1)*60 {
 		t.Fatalf("PROVIDERSYNC_STEP_BOUND_SECS=%d must be above the 22 min go test -timeout and at most %d s (job cap %d min - 1 min)", bound, (capMin-1)*60, capMin)
+	}
+}
+
+func TestIntegrationGoTestTimeoutsSitThreeMinutesUnderJobCaps(t *testing.T) {
+	expectNoViolations(t, integrationTimeoutViolations(t, repoRoot(t)))
+}
+
+// A direct integration go test call in a workflow run step (not through ci/check_go.sh) must be under its own job's cap too.
+func TestIntegrationTimeoutGuardCoversDirectWorkflowCalls(t *testing.T) {
+	root := repoRoot(t)
+	const freeze = ".github/workflows/freeze-provider-worlds.yml"
+	files := []string{
+		"ci/check_go.sh", "ci/check_golden_drift.sh", freeze,
+		".github/workflows/go.yml", ".github/workflows/go-quality.yml", ".github/workflows/go-auth-service.yml",
+		".github/workflows/venue-oracles.yml", ".github/workflows/venue-oracles-changed.yml",
+	}
+	for _, c := range []struct {
+		name string
+		m    mutation
+		want string
+	}{
+		{"a workflow call over its job cap", mutation{freeze, "-timeout=25m", "-timeout=29m"}, "29m"},
+		{"a workflow call in a job nobody registered", mutation{freeze, "  freeze:\n", "  freeze2:\n"}, "freeze2"},
+		{"the job cap lowered below the timeout", mutation{freeze, "timeout-minutes: 30", "timeout-minutes: 27"}, "27m"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			expectViolation(t, integrationTimeoutViolations(t, plantTree(t, root, files, c.m)), c.want)
+		})
 	}
 }

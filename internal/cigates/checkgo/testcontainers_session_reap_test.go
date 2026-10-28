@@ -290,8 +290,10 @@ func TestTcTrapResolvingAtTrapTimeNeverKillsAGroupItsPIDDoesNotLead(t *testing.T
 // (pid, pgid, ppid, etimes, args: never env) and a KILL; leftover group members are reaped after go test exits.
 
 const providersyncFakeGo = `#!/bin/sh
+[ -z "${GOTMPDIR+x}" ] || echo "$GOTMPDIR" >> "$FAKE_DIR/gotmpdir"
 case "$1" in test) ;; *) exec "$FAKE_REAL_GO" "$@" ;; esac
 case "$*" in *-tags=integration*-json*internal/providersync*) ;; *) exec "$FAKE_REAL_GO" "$@" ;; esac
+: > "$FAKE_DIR/go-started"
 printf '{"Action":"output","Output":"fake-go-started\\n"}\n'
 case "$FAKE_MODE" in
   hold)
@@ -379,9 +381,12 @@ type providersyncStepRun struct {
 	sleeperAlive   bool
 	timedOut       bool
 	diag           string
+	work           string
+	goStarted      bool
 }
 
-func runProvidersyncStep(t *testing.T, mode, bound string, wrap func(script, work string) []string) providersyncStepRun {
+// runProvidersyncStep runs the shard step against a fake go. opts: "nosetsid" makes `command -v setsid` fail inside check_go.sh.
+func runProvidersyncStep(t *testing.T, mode, bound string, wrap func(script, work string) []string, opts ...string) providersyncStepRun {
 	t.Helper()
 	script := scriptPath(t, "ci/check_go.sh")
 	repo := filepath.Dir(filepath.Dir(script))
@@ -417,6 +422,16 @@ func runProvidersyncStep(t *testing.T, mode, bound string, wrap func(script, wor
 		"GOMODCACHE=" + dirs[0], "GOPATH=" + dirs[1], "DEV_HEALTH_GO_CACHE=" + dirs[2],
 		"FAKE_MODE=" + mode, "FAKE_DIR=" + work, "GO_TEST_JSON_DIR=" + filepath.Join(work, "json"), "GITHUB_ACTIONS=true", "CI=true", "GITHUB_RUN_ID=1",
 		"RUNNER_TEMP=" + work, "DEV_HEALTH_GO_STEP_BOUND_SECS=" + bound, "SECRET_CANARY=canary-11794-do-not-print"}
+	for _, o := range opts {
+		if o == "nosetsid" {
+			shim := filepath.Join(work, "nosetsid.sh")
+			body := "command() { if [ \"${1:-}\" = -v ] && [ \"${2:-}\" = setsid ]; then return 1; fi; builtin command \"$@\"; }\n"
+			if err := os.WriteFile(shim, []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			cmd.Env = append(cmd.Env, "BASH_ENV="+shim)
+		}
+	}
 	var stdout, stderr strings.Builder
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -438,6 +453,9 @@ func runProvidersyncStep(t *testing.T, mode, bound string, wrap func(script, wor
 		<-done
 	}
 	res.stdout, res.stderr = stdout.String(), stderr.String()
+	res.work = work
+	_, statErr := os.Stat(filepath.Join(work, "go-started"))
+	res.goStarted = statErr == nil
 	for _, n := range []string{"ready", "quit-seen", "diag-SigIgn", "diag-SigBlk"} {
 		if raw, err := os.ReadFile(filepath.Join(work, n)); err == nil {
 			res.diag += n + "=" + strings.TrimSpace(string(raw)) + "; "
@@ -568,4 +586,38 @@ func stderrListsPID(text string, pid int) bool {
 		}
 	}
 	return false
+}
+
+// Without setsid there is no process group to stop, so the bounded step must refuse before it starts go test.
+func TestProvidersyncStepRefusesWithoutSetsid(t *testing.T) {
+	t.Parallel()
+	r := runProvidersyncStep(t, "hold", "3", nil, "nosetsid")
+	if r.timedOut {
+		t.Fatal("the step hung")
+	}
+	if r.code != 2 {
+		t.Errorf("exit code %d, want 2 (setsid missing); stderr: %s", r.code, tail(r.stderr, 1500))
+	}
+	if !strings.Contains(r.stderr, "setsid is required for the bounded providersync step") {
+		t.Errorf("stderr does not say that setsid is required: %s", tail(r.stderr, 1500))
+	}
+	if r.goStarted {
+		t.Error("go test was started although the step cannot stop its process group")
+	}
+}
+
+// The helper's explicit environment must carry a configured GOTMPDIR to the go calls of check_go.sh.
+func TestProvidersyncStepHelperPassesGOTMPDIRThrough(t *testing.T) {
+	want := t.TempDir()
+	t.Setenv("GOTMPDIR", want)
+	r := runProvidersyncStep(t, "exit3", "600", nil)
+	raw, err := os.ReadFile(filepath.Join(r.work, "gotmpdir"))
+	if err != nil {
+		t.Fatalf("no go call saw a GOTMPDIR: the helper dropped it (%v)", err)
+	}
+	for _, line := range strings.Fields(string(raw)) {
+		if line != want {
+			t.Errorf("a go call saw GOTMPDIR=%q, want %q", line, want)
+		}
+	}
 }

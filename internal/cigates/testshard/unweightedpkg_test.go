@@ -377,3 +377,19 @@ func TestTheWarnTierKeepsTheFailClosedContracts(t *testing.T) {
 		t.Errorf("a failed go test run with a warn-tier package: err=%v\n%s", r.Err, r.Stderr)
 	}
 }
+
+// A package that appears twice in a log (a rerun, -count=2) fails when ANY of its lines reaches the fail threshold, whatever line is first.
+func TestAPackageWithAWarnLineAndALaterFailLineFails(t *testing.T) {
+	t.Parallel()
+	pkg, key := unweightedPackage(t, 1, shardCount)
+	for name, log := range map[string]string{
+		"warn then fail": coverLog(t, 1, shardCount, map[string]string{pkg: "31.000s"}) + "ok  \t" + pkg + "\t50.000s\n",
+		"fail then warn": coverLog(t, 1, shardCount, map[string]string{pkg: "50.000s"}) + "ok  \t" + pkg + "\t31.000s\n",
+	} {
+		errs, err := unweightedGuard(t, nil, 1, log)
+		var ee *exec.ExitError
+		if !errors.As(err, &ee) || ee.ExitCode() != 1 || !strings.Contains(errs, "\n"+key+"\t50\n") {
+			t.Errorf("%s: err=%v, want exit 1 with the row %q\n%s", name, err, key+"\t50", errs)
+		}
+	}
+}

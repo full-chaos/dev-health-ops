@@ -37,11 +37,9 @@ import (
 //     the database is byte-unchanged;
 //   - the preflight itself changes nothing (byte-identical dump before and after).
 //
-// TestPreflightMatchesTheHookOverTheStateGrid builds the grid with dho itself (a
-// truncated chain leaves a database at that revision; the baseline test proves dho's
-// databases equal Python's). TestPreflightMatchesTheHookOverFrozenAlembicStates builds
-// the states that need Python (below the baseline) and the ones the Python upgrade
-// leaves, with the real Alembic.
+// TestPreflightMatchesTheHookOverTheStateGrid builds the grid with dho itself: planted
+// revisions above the baseline (a truncated chain leaves a database at that revision),
+// and the archived build for a database below the baseline.
 
 // build is one build of dho: its chain and the Alembic walk it embeds. A rolled-back
 // image is a build with a shorter chain and no walk entry for what it lacks.
@@ -102,6 +100,11 @@ func stateDatabase(t *testing.T, admin *pgx.Conn, instance *containers.Instance,
 		t.Fatal(err)
 	}
 	return database
+}
+
+func scratchDatabaseName(t *testing.T) string {
+	t.Helper()
+	return "dho_pg_clone_" + randomSuffix(t)
 }
 
 func cloneDatabase(t *testing.T, admin *pgx.Conn, source string) string {
@@ -170,6 +173,7 @@ func runHook(t *testing.T, ctx context.Context, admin *pgx.Conn, instance *conta
 
 func reasonForError(err error) []string {
 	var below pgmigrate.BelowHeadError
+	var belowBaseline pgmigrate.BelowBaselineError
 	var ahead pgmigrate.AheadOfBuildError
 	var foreign pgmigrate.ForeignDatabaseError
 	var mismatch pgmigrate.SchemaMismatchError
@@ -186,6 +190,8 @@ func reasonForError(err error) []string {
 		return []string{pgmigrate.ReasonForeignDatabase}
 	case errors.As(err, &ahead):
 		return []string{pgmigrate.ReasonAheadOfBuild}
+	case errors.As(err, &belowBaseline):
+		return []string{pgmigrate.ReasonBelowBaseline}
 	case errors.As(err, &below):
 		return []string{pgmigrate.ReasonBelowBaseline, pgmigrate.ReasonCutoverMissing}
 	}
@@ -306,10 +312,17 @@ func sequence(steps ...func(*pgx.Conn)) func(*pgx.Conn) {
 	}
 }
 
+// plantedTwo is two revisions planted above the baseline (testdata/postfreeze/two): the pending chain the grid and the
+// verb tests need while the real chain above the baseline is empty.
+func plantedTwo(t *testing.T) {
+	t.Helper()
+	pgmigrate.UsePlantedChain(t, os.DirFS("testdata/postfreeze/two"))
+}
+
 // TestPreflightMatchesTheHookOverTheStateGrid is the mechanism oracle over states dho
 // builds itself.
 func TestPreflightMatchesTheHookOverTheStateGrid(t *testing.T) {
-	pgmigrate.UseFrozenChain(t) // the frozen goldens end at pgmigrate.FrozenHead
+	plantedTwo(t)
 	ctx := context.Background()
 	productionEnv(t)
 	t.Setenv(pgmigrate.AuthSchemaEnv, "auth")
@@ -335,45 +348,53 @@ func TestPreflightMatchesTheHookOverTheStateGrid(t *testing.T) {
 		build    build
 		verdict  string
 		reason   string
+		// baseline, when set, is the build's baseline instead of this build's (a build from before the squash).
+		baseline *pgmigrate.Baseline
 	}
+	oldBaseline, archived := archivedBuild(t)
+	preSquash := build{chain: archived, history: current.history}
 	states := []state{
-		{"empty database", empty, productionSettings, current, pgmigrate.VerdictAppliesCleanly, pgmigrate.ReasonEmptyDatabase},
-		{"at the baseline", atBaseline, productionSettings, current, pgmigrate.VerdictAppliesCleanly, pgmigrate.ReasonPendingRevs},
-		{"at the head", atHead, productionSettings, current, pgmigrate.VerdictAtHead, pgmigrate.ReasonUpToDate},
+		{"empty database", empty, productionSettings, current, pgmigrate.VerdictAppliesCleanly, pgmigrate.ReasonEmptyDatabase, nil},
+		{"at the baseline", atBaseline, productionSettings, current, pgmigrate.VerdictAppliesCleanly, pgmigrate.ReasonPendingRevs, nil},
+		{"at the head", atHead, productionSettings, current, pgmigrate.VerdictAtHead, pgmigrate.ReasonUpToDate, nil},
 		{"cutover row deleted", stateDatabase(t, admin, instance, sequence(upgradeTo(t, baseline, current.chain),
 			execSQL(t, "DELETE FROM alembic_version WHERE version_num = '0066'"))), productionSettings, current,
-			pgmigrate.VerdictNeedsManual, pgmigrate.ReasonCutoverMissing},
+			pgmigrate.VerdictNeedsManual, pgmigrate.ReasonCutoverMissing, nil},
 		{"below the baseline", stateDatabase(t, admin, instance, sequence(upgradeTo(t, baseline, nil),
 			execSQL(t, "UPDATE alembic_version SET version_num = '0137' WHERE version_num = '"+application+"'"))), productionSettings, current,
-			pgmigrate.VerdictNeedsManual, pgmigrate.ReasonBelowBaseline},
+			pgmigrate.VerdictNeedsManual, pgmigrate.ReasonBelowBaseline, nil},
 		{"a revision this build never heard of", stateDatabase(t, admin, instance, sequence(upgradeTo(t, baseline, nil),
 			execSQL(t, "UPDATE alembic_version SET version_num = '9999' WHERE version_num = '"+application+"'"))), productionSettings, current,
-			pgmigrate.VerdictNeedsManual, pgmigrate.ReasonAheadOfBuild},
+			pgmigrate.VerdictNeedsManual, pgmigrate.ReasonAheadOfBuild, nil},
 		// CHAOS-6878: an unknown revision ALONGSIDE the baseline heads. The hook used to apply the
 		// chain over such a database (or call it up to date); it refuses now, and the preflight says so.
 		{"an unknown extra row beside the baseline heads", stateDatabase(t, admin, instance, sequence(upgradeTo(t, baseline, nil),
 			execSQL(t, "INSERT INTO alembic_version VALUES ('9999')"))), productionSettings, current,
-			pgmigrate.VerdictNeedsManual, pgmigrate.ReasonAheadOfBuild},
+			pgmigrate.VerdictNeedsManual, pgmigrate.ReasonAheadOfBuild, nil},
 		{"an unknown extra row beside the head", stateDatabase(t, admin, instance, sequence(upgradeTo(t, baseline, current.chain),
 			execSQL(t, "INSERT INTO alembic_version VALUES ('9999')"))), productionSettings, current,
-			pgmigrate.VerdictNeedsManual, pgmigrate.ReasonAheadOfBuild},
+			pgmigrate.VerdictNeedsManual, pgmigrate.ReasonAheadOfBuild, nil},
 		{"a future revision beside the baseline heads", stateDatabase(t, admin, instance, sequence(upgradeTo(t, baseline, nil),
 			execSQL(t, "INSERT INTO alembic_version VALUES ('0999')"))), productionSettings, current,
-			pgmigrate.VerdictNeedsManual, pgmigrate.ReasonAheadOfBuild},
+			pgmigrate.VerdictNeedsManual, pgmigrate.ReasonAheadOfBuild, nil},
 		{"the image was rolled back one revision", atHead, productionSettings, olderBuild(t, current, 1),
-			pgmigrate.VerdictNeedsManual, pgmigrate.ReasonAheadOfBuild},
+			pgmigrate.VerdictNeedsManual, pgmigrate.ReasonAheadOfBuild, nil},
 		{"objects but no alembic_version", stateDatabase(t, admin, instance, execSQL(t, "CREATE TABLE public.not_ours (id int)")),
-			productionSettings, current, pgmigrate.VerdictNeedsManual, pgmigrate.ReasonForeignDatabase},
+			productionSettings, current, pgmigrate.VerdictNeedsManual, pgmigrate.ReasonForeignDatabase, nil},
 		{"the auth lineage under another schema name", stateDatabase(t, admin, instance, sequence(
 			execSQL(t, `CREATE SCHEMA other_auth`),
 			execSQL(t, `CREATE TABLE other_auth.schema_migrations (version integer PRIMARY KEY, name text NOT NULL, applied_at timestamptz NOT NULL)`),
 			execSQL(t, `CREATE TABLE other_auth.things (id integer)`))), productionSettings, current,
-			pgmigrate.VerdictNeedsManual, pgmigrate.ReasonAuthSchemaMismatch},
+			pgmigrate.VerdictNeedsManual, pgmigrate.ReasonAuthSchemaMismatch, nil},
 		{"alembic_version at the baseline, a table gone", stateDatabase(t, admin, instance, sequence(upgradeTo(t, baseline, nil),
 			execSQL(t, "DROP TABLE public."+baseline.Tables()[len(baseline.Tables())-1]+" CASCADE"))), productionSettings, current,
-			pgmigrate.VerdictNeedsManual, pgmigrate.ReasonSchemaMismatch},
+			pgmigrate.VerdictNeedsManual, pgmigrate.ReasonSchemaMismatch, nil},
 		{"the environment lacks the cutover", atHead, pgmigrate.Settings{Cutover: false, RiverSchema: "river"}, current,
-			pgmigrate.VerdictNeedsManual, pgmigrate.ReasonSettingsMismatch},
+			pgmigrate.VerdictNeedsManual, pgmigrate.ReasonSettingsMismatch, nil},
+		{"at an archived revision (0161)", stateDatabase(t, admin, instance, func(conn *pgx.Conn) { archivedUpgradeTo(t, ctx, conn, "0161") }),
+			productionSettings, current, pgmigrate.VerdictNeedsManual, pgmigrate.ReasonBelowBaseline, nil},
+		{"the image rolled back across the squash reads the baseline as its head", atBaseline, productionSettings, preSquash,
+			pgmigrate.VerdictAtHead, pgmigrate.ReasonUpToDate, &oldBaseline},
 	}
 	// Every chain prefix: the database a Python upgrade would leave after each
 	// revision, and the hook must reach the head from each.
@@ -382,12 +403,16 @@ func TestPreflightMatchesTheHookOverTheStateGrid(t *testing.T) {
 		states = append(states, state{
 			fmt.Sprintf("at chain revision %s", prefix[len(prefix)-1].Revision),
 			stateDatabase(t, admin, instance, upgradeTo(t, baseline, prefix)), productionSettings, current,
-			pgmigrate.VerdictAppliesCleanly, pgmigrate.ReasonPendingRevs,
+			pgmigrate.VerdictAppliesCleanly, pgmigrate.ReasonPendingRevs, nil,
 		})
 	}
 	for _, s := range states {
 		t.Run(s.name, func(t *testing.T) {
-			report := checkAgainstHook(t, ctx, admin, instance, s.name, s.database, s.settings, baseline, s.build, s.verdict, s.reason)
+			base := baseline
+			if s.baseline != nil {
+				base = *s.baseline
+			}
+			report := checkAgainstHook(t, ctx, admin, instance, s.name, s.database, s.settings, base, s.build, s.verdict, s.reason)
 			if s.reason == pgmigrate.ReasonCutoverMissing && !reflect.DeepEqual(report.Missing, []string{"0066"}) {
 				t.Fatalf("missing = %v, want [0066]", report.Missing)
 			}
@@ -427,6 +452,7 @@ func productionLookup(key string) (string, bool) {
 // stdout, nothing secret, and a measurement that did not happen is exit 3 and no
 // verdict.
 func TestPreflightCommand(t *testing.T) {
+	plantedTwo(t)
 	ctx := context.Background()
 	baseline, current := currentBuild(t)
 	instance, admin := startInstance(t)
@@ -559,6 +585,7 @@ func (r *statementRecorder) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQ
 // preflight uses sends no write and takes no advisory lock, and it runs inside one
 // READ ONLY transaction; a role that can only read gets the same verdict.
 func TestPreflightIsReadOnly(t *testing.T) {
+	plantedTwo(t)
 	ctx := context.Background()
 	baseline, current := currentBuild(t)
 	instance, admin := startIsolatedInstance(t)
@@ -626,57 +653,6 @@ func TestPreflightIsReadOnly(t *testing.T) {
 	if code != pgmigrate.ExitAppliesCleanly || !strings.Contains(stdout, `"verdict":"applies_cleanly"`) {
 		t.Fatalf("a read-only role got exit %d, stdout %q, stderr %q", code, stdout, stderr)
 	}
-}
-
-// preflightStatesSHA256 pins testdata/golden/preflight_states.json (the record verb rewrites it).
-const preflightStatesSHA256 = "4b768999dba8305dadb61883bc5b20315b934446e36c60b523a5bbc1af561911"
-
-// TestPreflightMatchesTheHookOverFrozenAlembicStates is the Python-built-state oracle: the states
-// are built by the REAL Python Alembic upgrade (below the baseline included), executed once and frozen
-// (frozen_states_integration_test.go), restored and asserted before use; the verdict is compared with
-// the real hook on a copy. No Python starts here (CHAOS-7797).
-func TestPreflightMatchesTheHookOverFrozenAlembicStates(t *testing.T) {
-	pgmigrate.UseFrozenChain(t) // the frozen goldens end at pgmigrate.FrozenHead
-	ctx := context.Background()
-	productionEnv(t)
-	t.Setenv("MIGRATION_DATABASE_URI", "")
-	os.Unsetenv("MIGRATION_DATABASE_URI")
-	baseline, current := currentBuild(t)
-	instance, admin := startInstance(t)
-	specs := []stateSpec{upgradeSpec("0137", "0066"), upgradeSpec("0138", "0066"), upgradeSpec("0138"), upgradeSpec("head")}
-	for index := 0; index < len(current.chain)-1; index++ {
-		specs = append(specs, upgradeSpec(current.chain[index].Revision, "0066"))
-	}
-	golden, frozen := openStatesGolden(t, "testdata/golden/preflight_states.json", preflightStatesSHA256, "TestPreflightMatchesTheHookOverFrozenAlembicStates", specs)
-
-	// pythonState is the database the real Python upgrade left at the revisions: the frozen capture restored.
-	pythonState := func(revisions ...string) string {
-		t.Helper()
-		return frozen.restoreState(t, ctx, instance, admin, strings.Join(revisions, "+")).database
-	}
-	type state struct {
-		name, database, verdict, reason string
-	}
-	states := []state{
-		{"python: below the baseline (0137)", pythonState("0137", "0066"), pgmigrate.VerdictNeedsManual, pgmigrate.ReasonBelowBaseline},
-		{"python: at the baseline (0138)", pythonState("0138", "0066"), pgmigrate.VerdictAppliesCleanly, pgmigrate.ReasonPendingRevs},
-		{"python: the baseline without the cutover", pythonState("0138"), pgmigrate.VerdictNeedsManual, pgmigrate.ReasonCutoverMissing},
-		{"python: at the head", pythonState("head"), pgmigrate.VerdictAtHead, pgmigrate.ReasonUpToDate},
-		// CHAOS-6878: real-Alembic databases that also record a revision this build does not know.
-		{"python: at the head, plus an unknown row", pythonStateWith(pythonState, admin, instance, "INSERT INTO alembic_version VALUES ('9999')", "head"), pgmigrate.VerdictNeedsManual, pgmigrate.ReasonAheadOfBuild},
-		{"python: the baseline, plus a future revision", pythonStateWith(pythonState, admin, instance, "INSERT INTO alembic_version VALUES ('0999')", "0138", "0066"), pgmigrate.VerdictNeedsManual, pgmigrate.ReasonAheadOfBuild},
-	}
-	for index := 0; index < len(current.chain)-1; index++ {
-		revision := current.chain[index].Revision
-		states = append(states, state{"python: at chain revision " + revision, pythonState(revision, "0066"), pgmigrate.VerdictAppliesCleanly, pgmigrate.ReasonPendingRevs})
-	}
-	for _, s := range states {
-		t.Run(s.name, func(t *testing.T) {
-			checkAgainstHook(t, ctx, admin, instance, s.name, s.database, productionSettings, baseline, current, s.verdict, s.reason)
-		})
-	}
-	golden.SkipDiff(t)
-	golden.Finish(t)
 }
 
 // pauseAfterVersionCheck is a query tracer that stops the connection right after the
@@ -795,29 +771,6 @@ func TestReadersSeeOneSnapshotWhileAnUpgradeCommits(t *testing.T) {
 	}
 }
 
-// pythonStateWith builds a real-Alembic state and then records one more row in alembic_version.
-func pythonStateWith(build func(...string) string, admin *pgx.Conn, instance *containers.Instance, insert string, revisions ...string) string {
-	database := build(revisions...)
-	conn, err := pgx.Connect(context.Background(), instanceDatabaseURI(instance.URI, database))
-	if err != nil {
-		panic(err)
-	}
-	defer conn.Close(context.Background())
-	if _, err := conn.Exec(context.Background(), insert); err != nil {
-		panic(err)
-	}
-	return database
-}
-
-func instanceDatabaseURI(uri, database string) string {
-	parsed, err := url.Parse(uri)
-	if err != nil {
-		panic(err)
-	}
-	parsed.Path = "/" + database
-	return parsed.String()
-}
-
 // TestUpgradeRefusesADatabaseAheadOfTheBuild is the hook's own behaviour (CHAOS-6878),
 // through the verbs the chart runs: `upgrade` refuses a database that records a
 // revision this build does not know, with a nonzero exit, an error naming the revision
@@ -871,6 +824,7 @@ func TestUpgradeRefusesADatabaseAheadOfTheBuild(t *testing.T) {
 // of a build that lacks the last chain revision, is ahead of that build and names the
 // revision it does not know; read with this build's own walk it is at its head.
 func TestAnOlderBuildReadsAForwardMigratedDatabaseAsAheadOfIt(t *testing.T) {
+	plantedTwo(t)
 	ctx := context.Background()
 	productionEnv(t)
 	baseline, current := currentBuild(t)

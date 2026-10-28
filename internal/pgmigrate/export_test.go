@@ -19,9 +19,9 @@ func UseChainFS(t testing.TB, fsys fs.FS) {
 	t.Cleanup(func() { chainFS.Store(previous) })
 }
 
-// FrozenChainFS is the embedded chain files with a revision at or below FrozenHead, plus every file of extra (the
-// same layout), which is how a test plants a Go-only revision above the cut without touching the real sql dir.
-func FrozenChainFS(t testing.TB, extra fs.FS) fs.FS {
+// PlantedChainFS is the embedded chain (the revisions above the baseline) plus every file of extra (the same
+// layout), which is how a test plants a revision without touching the real sql dir.
+func PlantedChainFS(t testing.TB, extra fs.FS) fs.FS {
 	t.Helper()
 	out := fstest.MapFS{}
 	for _, dir := range []string{"sql", "sql/down"} {
@@ -30,8 +30,7 @@ func FrozenChainFS(t testing.TB, extra fs.FS) fs.FS {
 			t.Fatal(err)
 		}
 		for _, entry := range entries {
-			match := chainName.FindStringSubmatch(entry.Name())
-			if entry.IsDir() || match == nil || revisionLess(FrozenHead, match[1]) {
+			if entry.IsDir() || chainName.FindStringSubmatch(entry.Name()) == nil {
 				continue
 			}
 			data, err := fs.ReadFile(chainFiles, dir+"/"+entry.Name())
@@ -41,6 +40,7 @@ func FrozenChainFS(t testing.TB, extra fs.FS) fs.FS {
 			out[dir+"/"+entry.Name()] = &fstest.MapFile{Data: data}
 		}
 	}
+	out["sql/down/README.md"] = &fstest.MapFile{Data: []byte("placeholder\n")}
 	if extra != nil {
 		err := fs.WalkDir(extra, ".", func(name string, entry fs.DirEntry, err error) error {
 			if err != nil || entry.IsDir() {
@@ -60,16 +60,10 @@ func FrozenChainFS(t testing.TB, extra fs.FS) fs.FS {
 	return out
 }
 
-// UseFrozenChain installs the chain through FrozenHead: what every comparison with a frozen golden runs on.
-func UseFrozenChain(t testing.TB) {
-	t.Helper()
-	UseChainFS(t, FrozenChainFS(t, nil))
-}
-
-// UsePlantedChain installs the chain through FrozenHead plus the revisions under dir (layout sql/ and sql/down/).
+// UsePlantedChain installs the embedded chain plus the revisions under extra (layout sql/ and sql/down/).
 func UsePlantedChain(t testing.TB, extra fs.FS) {
 	t.Helper()
-	UseChainFS(t, FrozenChainFS(t, extra))
+	UseChainFS(t, PlantedChainFS(t, extra))
 }
 
 // DropInvalidUnitsIndex runs the cleanup that follows a final failed build of the index the verb names.

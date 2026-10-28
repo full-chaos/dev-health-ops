@@ -69,25 +69,35 @@ WHERE c.relname = $1 AND c.relnamespace = 'public'::regnamespace`, name).Scan(&d
 	return definition, valid
 }
 
-func chainPosition(t *testing.T, revision string) (position, length int) {
+// headPosition is the chain position of the head: the baseline plus every chain revision.
+func headPosition(t *testing.T) int {
 	t.Helper()
 	chain, err := pgmigrate.LoadChain()
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i, file := range chain {
-		if file.Revision == revision {
-			return i, len(chain)
-		}
+	return len(chain)
+}
+
+// withoutIndex is a scratch database at the head with the index of revision 0159 (failure streak) or 0161 (open units)
+// dropped: the state before that revision, which the build-index verb exists for. Both revisions are in the baseline.
+func (d downInstance) withoutIndex(t *testing.T, revision string) string {
+	t.Helper()
+	index := map[string]string{"0159": pgmigrate.FailureStreakIndexName, "0161": pgmigrate.OpenUnitsIndexName}[revision]
+	if index == "" {
+		t.Fatalf("no build-index revision %s", revision)
 	}
-	t.Fatalf("the chain holds no revision %s", revision)
-	return 0, 0
+	uri := d.at(t, headPosition(t))
+	if _, err := connect(t, uri).Exec(context.Background(), "DROP INDEX public."+index); err != nil {
+		t.Fatal(err)
+	}
+	return uri
 }
 
 // The verb builds the index before revision 0159, finds it valid on a second run, repairs an INVALID leftover, and
 // revision 0159 then does nothing: the database holds the definition a plain walk to the head builds.
 func TestBuildIndexBeforeRevision0159(t *testing.T) {
-	position, length := chainPosition(t, "0159")
+	length := headPosition(t)
 	d := newDownInstance(t)
 	headConn := connect(t, d.at(t, length))
 	wantDefinition, valid := streakIndexDefinition(t, headConn)
@@ -95,7 +105,7 @@ func TestBuildIndexBeforeRevision0159(t *testing.T) {
 		t.Fatalf("the walk's index is %q valid=%v", wantDefinition, valid)
 	}
 
-	uri := d.at(t, position)
+	uri := d.withoutIndex(t, "0159")
 	conn := connect(t, uri)
 	var present bool
 	if err := conn.QueryRow(context.Background(), "SELECT to_regclass('public.ix_sync_run_units_failure_streak') IS NOT NULL").Scan(&present); err != nil || present {
@@ -136,11 +146,11 @@ func TestBuildIndexBeforeRevision0159(t *testing.T) {
 	if err != nil {
 		t.Fatalf("upgrade to the head: %v", err)
 	}
-	if len(applied.Applied) == 0 || applied.Applied[0] != "0159" {
-		t.Fatalf("applied %v, want it to start at 0159", applied.Applied)
+	if applied.Action != "up_to_date" || len(applied.Applied) != 0 {
+		t.Fatalf("upgrade after the build = %+v, want up_to_date: the index is in the baseline", applied)
 	}
 	if got, valid := streakIndexDefinition(t, conn); !valid || got != wantDefinition {
-		t.Fatalf("after revision 0159: index %q valid=%v, want %q", got, valid, wantDefinition)
+		t.Fatalf("after the upgrade: index %q valid=%v, want %q", got, valid, wantDefinition)
 	}
 }
 
@@ -209,9 +219,8 @@ func holdWriter(t *testing.T, uri string) (release func()) {
 
 // When the build fails for good and the blocker clears before the cleanup, the INVALID index the failed build left is dropped.
 func TestBuildIndexFinalFailureDropsTheInvalidIndex(t *testing.T) {
-	position, _ := chainPosition(t, "0159")
 	d := newDownInstance(t)
-	uri := d.at(t, position)
+	uri := d.withoutIndex(t, "0159")
 	release := holdWriter(t, uri)
 
 	conn := connect(t, uri)
@@ -235,9 +244,8 @@ func TestBuildIndexFinalFailureDropsTheInvalidIndex(t *testing.T) {
 // When the blocker outlives the cleanup too, the INVALID index stays, the verb exits non-zero and logs the distinct line;
 // the next run drops it and builds a valid one.
 func TestBuildIndexFinalFailureUnderHeldLockLeavesIndexForNextRun(t *testing.T) {
-	position, _ := chainPosition(t, "0159")
 	d := newDownInstance(t)
-	uri := d.at(t, position)
+	uri := d.withoutIndex(t, "0159")
 	release := holdWriter(t, uri)
 
 	conn := connect(t, uri)
@@ -263,7 +271,7 @@ func TestBuildIndexFinalFailureUnderHeldLockLeavesIndexForNextRun(t *testing.T) 
 
 // A VALID index is never dropped by the cleanup that follows a final failed build.
 func TestDropInvalidFailureStreakIndexKeepsAValidIndex(t *testing.T) {
-	_, length := chainPosition(t, "0159")
+	length := headPosition(t)
 	d := newDownInstance(t)
 	conn := connect(t, d.at(t, length))
 	if _, valid := streakIndexDefinition(t, conn); !valid {
@@ -279,9 +287,8 @@ func TestDropInvalidFailureStreakIndexKeepsAValidIndex(t *testing.T) {
 // Mirrors of the failure-streak cleanup tests for the open-units index (revision 0161), on the migrated schema.
 // When the build fails for good and the blocker clears before the cleanup, the INVALID index the failed build left is dropped.
 func TestBuildOpenUnitsIndexFinalFailureDropsTheInvalidIndex(t *testing.T) {
-	position, _ := chainPosition(t, "0161")
 	d := newDownInstance(t)
-	uri := d.at(t, position)
+	uri := d.withoutIndex(t, "0161")
 	release := holdWriter(t, uri)
 
 	conn := connect(t, uri)
@@ -305,9 +312,8 @@ func TestBuildOpenUnitsIndexFinalFailureDropsTheInvalidIndex(t *testing.T) {
 // When the blocker outlives the cleanup too, the INVALID index stays, the verb exits non-zero and logs the distinct line;
 // the next run drops it and builds a valid one.
 func TestBuildOpenUnitsIndexFinalFailureUnderHeldLockLeavesIndexForNextRun(t *testing.T) {
-	position, _ := chainPosition(t, "0161")
 	d := newDownInstance(t)
-	uri := d.at(t, position)
+	uri := d.withoutIndex(t, "0161")
 	release := holdWriter(t, uri)
 
 	conn := connect(t, uri)
@@ -333,7 +339,7 @@ func TestBuildOpenUnitsIndexFinalFailureUnderHeldLockLeavesIndexForNextRun(t *te
 
 // A VALID index is never dropped by the cleanup that follows a final failed build.
 func TestDropInvalidOpenUnitsIndexKeepsAValidIndex(t *testing.T) {
-	_, length := chainPosition(t, "0161")
+	length := headPosition(t)
 	d := newDownInstance(t)
 	conn := connect(t, d.at(t, length))
 	if _, valid := indexDefinition(t, conn, pgmigrate.OpenUnitsIndexName); !valid {
@@ -349,7 +355,7 @@ func TestDropInvalidOpenUnitsIndexKeepsAValidIndex(t *testing.T) {
 // The open-units verb builds the index before revision 0161, finds it valid on a second run, repairs an INVALID leftover,
 // and revision 0161 then does nothing for it: the database holds the definition a plain walk to the head builds.
 func TestBuildOpenUnitsIndexBeforeRevision0161(t *testing.T) {
-	position, length := chainPosition(t, "0161")
+	length := headPosition(t)
 	d := newDownInstance(t)
 	headConn := connect(t, d.at(t, length))
 	definitionOf := func(conn *pgx.Conn) (definition string, valid bool) {
@@ -366,7 +372,7 @@ WHERE c.relname = $1 AND c.relnamespace = 'public'::regnamespace`, pgmigrate.Ope
 	if !valid || !strings.Contains(wantDefinition, "(sync_run_id) WHERE") {
 		t.Fatalf("the walk's index is %q valid=%v", wantDefinition, valid)
 	}
-	uri := d.at(t, position)
+	uri := d.withoutIndex(t, "0161")
 	conn := connect(t, uri)
 	var present bool
 	if err := conn.QueryRow(context.Background(), "SELECT to_regclass('public.ix_sync_run_units_open_run') IS NOT NULL").Scan(&present); err != nil || present {
@@ -402,20 +408,19 @@ WHERE c.relname = $1 AND c.relnamespace = 'public'::regnamespace`, pgmigrate.Ope
 	if err != nil {
 		t.Fatalf("upgrade to the head: %v", err)
 	}
-	if len(applied.Applied) == 0 || applied.Applied[0] != "0161" {
-		t.Fatalf("applied %v, want it to start at 0161", applied.Applied)
+	if applied.Action != "up_to_date" || len(applied.Applied) != 0 {
+		t.Fatalf("upgrade after the build = %+v, want up_to_date: the index is in the baseline", applied)
 	}
 	if got, valid := definitionOf(conn); !valid || got != wantDefinition {
-		t.Fatalf("after revision 0161: index %q valid=%v, want %q", got, valid, wantDefinition)
+		t.Fatalf("after the upgrade: index %q valid=%v, want %q", got, valid, wantDefinition)
 	}
 }
 
 // The two indexes have their own build lock: a held streak lock does not stop an open-units build, and a held open-units lock
 // refuses an open-units run over an index that is not valid.
 func TestBuildOpenUnitsIndexHasItsOwnBuildLock(t *testing.T) {
-	position, _ := chainPosition(t, "0161")
 	d := newDownInstance(t)
-	uri := d.at(t, position)
+	uri := d.withoutIndex(t, "0161")
 	holder := connect(t, uri)
 	hold := func(key int64) {
 		t.Helper()
@@ -441,33 +446,5 @@ func TestBuildOpenUnitsIndexHasItsOwnBuildLock(t *testing.T) {
 		pgmigrate.IndexBuildOptions{LockTimeout: time.Second, Attempts: 1, Deadline: 60 * time.Second}, slog.New(slog.NewJSONHandler(io.Discard, nil)))
 	if !errors.Is(err, pgmigrate.ErrBuildLockHeld) {
 		t.Fatalf("err = %v, want ErrBuildLockHeld", err)
-	}
-}
-
-// From the database at revision 0159 the chain applies 0160 and then 0161 in order, and 0161 leaves its column and its index.
-func TestTheChainAppliesRevisions0160And0161InOrderFrom0159(t *testing.T) {
-	position, _ := chainPosition(t, "0160")
-	d := newDownInstance(t)
-	conn := connect(t, d.at(t, position))
-	baseline, err := pgmigrate.LoadBaseline()
-	if err != nil {
-		t.Fatal(err)
-	}
-	chain, err := pgmigrate.LoadChain()
-	if err != nil {
-		t.Fatal(err)
-	}
-	applied, err := pgmigrate.Upgrade(context.Background(), conn, baseline, chain)
-	if err != nil {
-		t.Fatalf("upgrade from 0159: %v", err)
-	}
-	if len(applied.Applied) < 2 || applied.Applied[0] != "0160" || applied.Applied[1] != "0161" {
-		t.Fatalf("applied %v, want it to start 0160, 0161", applied.Applied)
-	}
-	var column, index bool
-	if err := conn.QueryRow(context.Background(), `SELECT
-EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'sync_run_post_dispatches' AND column_name = 'recorded_at'),
-to_regclass('public.`+pgmigrate.OpenUnitsIndexName+`') IS NOT NULL`).Scan(&column, &index); err != nil || !column || !index {
-		t.Fatalf("after 0161: recorded_at=%v open-units index=%v err=%v", column, index, err)
 	}
 }

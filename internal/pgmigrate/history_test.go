@@ -3,7 +3,6 @@ package pgmigrate
 import (
 	"bytes"
 	"context"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -45,14 +44,23 @@ func TestHistoryHoldsTheBaselineHeads(t *testing.T) {
 	if entries[len(entries)-1].Down != "<base>" {
 		t.Errorf("the walk ends at %q, want the base", entries[len(entries)-1].Down)
 	}
+	// The walk is the frozen Alembic history: it ends at FrozenHead. The archived Go-only revisions and the chain add
+	// the rest, up to the build's heads.
+	if want := []string{cutoverRevision, FrozenHead}; strings.Join(sortedCopy(heads), ",") != strings.Join(want, ",") {
+		t.Errorf("the walk's heads are %v, want %v", heads, want)
+	}
 	chain, err := LoadChain()
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The walk is the frozen Alembic history: it ends at FrozenHead. Go-only revisions above it are the chain's own.
-	chain = ChainThrough(chain, FrozenHead)
-	if want := Heads(baseline, chain); strings.Join(sortedCopy(heads), ",") != strings.Join(want, ",") {
-		t.Errorf("the walk's heads are %v, the baseline and its chain reach %v", heads, want)
+	var withChain []string
+	for _, entry := range WithChain(entries, baseline, chain) {
+		if entry.RealHead {
+			withChain = append(withChain, entry.Revision)
+		}
+	}
+	if want := Heads(baseline, chain); strings.Join(sortedCopy(withChain), ",") != strings.Join(want, ",") {
+		t.Errorf("the walk with the archive and the chain has heads %v, the build reaches %v", withChain, want)
 	}
 }
 
@@ -81,21 +89,20 @@ func TestHistoryWithAChain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	real, err := LoadChain()
-	if err != nil {
-		t.Fatal(err)
-	}
-	real = ChainThrough(real, FrozenHead)
-	if got := WithChain(entries, baseline, real); !reflect.DeepEqual(got, entries) {
-		t.Errorf("the shipped chain (all Alembic revisions) changed the walk: %d entries, was %d", len(got), len(entries))
+	archived := ArchivedChain()
+	if got := WithChain(entries, baseline, ChainThrough(archived, FrozenHead)); len(got) != len(entries)+len(ChainAbove(archived, FrozenHead)) {
+		t.Errorf("the walk with the archive has %d entries, want %d: the Alembic revisions are added once, the Go-only ones each", len(got), len(entries)+len(ChainAbove(archived, FrozenHead)))
 	}
 	top := ""
-	for _, entry := range entries {
+	for _, entry := range WithChain(entries, baseline, nil) {
 		if entry.RealHead && entry.Revision != "0066" {
 			top = entry.Revision
 		}
 	}
-	chain := append(append([]ChainFile(nil), real...),
+	if top != applicationHead(baseline) {
+		t.Errorf("the walk with the archive ends at %s, want the baseline %s", top, applicationHead(baseline))
+	}
+	chain := append([]ChainFile(nil),
 		ChainFile{Revision: "9001", Name: "9001_add_widget_table.sql"},
 		ChainFile{Revision: "9002", Name: "9002_widget_index.sql"})
 	var out bytes.Buffer
@@ -116,7 +123,7 @@ func TestHistoryWithAChain(t *testing.T) {
 	if found[0] != "9001 -> 9002 (head), Widget index." || found[1] != top+" -> 9001, Add widget table." {
 		t.Errorf("chain lines = %q", found[:2])
 	}
-	if !strings.Contains(found[2], " -> "+top+" ") || strings.Contains(found[2], "(head)") {
+	if !strings.Contains(found[2], " -> "+top) || strings.Contains(found[2], "(head)") {
 		t.Errorf("the old application head line = %q, want no head mark", found[2])
 	}
 	if !strings.HasPrefix(lines[0], "0065 -> 0066 (river_cutover) (head), ") {

@@ -141,9 +141,8 @@ const plantValidSQL = "UPDATE pg_index SET indisvalid = true WHERE indexrelid = 
 // then commits. When the probe gets the lock the index is VALID: the run must keep that same index, not drop and rebuild it.
 // (A real REINDEX INDEX CONCURRENTLY queued ahead of the probe ended in 40P01 on PG 18, so the fake keeps the order fixed.)
 func TestBuildIndexSkipsAnIndexAnotherBuilderMadeValidWhileTheProbeWaited(t *testing.T) {
-	position, _ := chainPosition(t, "0159")
 	d := newDownInstance(t)
-	uri := d.at(t, position)
+	uri := d.withoutIndex(t, "0159")
 	plantInvalidIndex(t, uri)
 	observer := connect(t, uri)
 	before := streakIndexState(t, observer)
@@ -191,9 +190,8 @@ func TestBuildIndexSkipsAnIndexAnotherBuilderMadeValidWhileTheProbeWaited(t *tes
 // While another build-index run holds the build lock and the index is INVALID, a run refuses at once with the named
 // refusal and sends no DDL: the INVALID index stays the same relation. The verb reports it as build_index_lock_held.
 func TestBuildIndexRefusesWhileAnotherRunHoldsTheBuildLock(t *testing.T) {
-	position, _ := chainPosition(t, "0159")
 	d := newDownInstance(t)
-	uri := d.at(t, position)
+	uri := d.withoutIndex(t, "0159")
 	plantInvalidIndex(t, uri)
 	observer := connect(t, uri)
 	before := streakIndexState(t, observer)
@@ -237,7 +235,7 @@ func TestBuildIndexRefusesWhileAnotherRunHoldsTheBuildLock(t *testing.T) {
 
 // While another run holds the build lock and the index is already VALID, a run reports present with exit 0 and sends no DDL.
 func TestBuildIndexLoserReportsPresentWhenTheIndexIsValid(t *testing.T) {
-	_, length := chainPosition(t, "0159")
+	length := headPosition(t)
 	d := newDownInstance(t)
 	uri := d.at(t, length)
 	observer := connect(t, uri)
@@ -269,9 +267,8 @@ func TestBuildIndexLoserReportsPresentWhenTheIndexIsValid(t *testing.T) {
 // refuses at once with no DDL; it never probes the table or drops the first run's in-progress index, so the first run
 // ends VALID on its one attempt.
 func TestBuildIndexSecondRunDuringABuildRefusesAndLeavesTheBuildAlone(t *testing.T) {
-	position, _ := chainPosition(t, "0159")
 	d := newDownInstance(t)
-	uri := d.at(t, position)
+	uri := d.withoutIndex(t, "0159")
 	plantInvalidIndex(t, uri)
 	observer := connect(t, uri)
 	release := holdWriter(t, uri)

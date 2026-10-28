@@ -72,7 +72,7 @@ func TestPostureIntegrationListsTheFourteenPackagesOnATrigger(t *testing.T) {
 		t.Fatalf("the posture list has %d packages, want 14", len(keys))
 	}
 	triggers := []string{
-		"internal/pgmigrate/sql/0158_x.sql", "internal/pgmigrate/baseline/head.json", "internal/rivermigrate/x.go",
+		"internal/pgmigrate/sql/0158_x.sql", "internal/pgmigrate/baseline/head.json", "internal/pgmigrate/archive/sql/0139_x.sql", "internal/rivermigrate/x.go",
 		"internal/testsupport/domainroledb/domainroledb.go", "internal/storage/postgres/domain_authorization.go",
 		"internal/storage/postgres/posture_manifest.go", "internal/storage/postgres/role_posture_integration_test.go",
 		"internal/storage/postgres/authschema/x.go", "internal/storage/postgres/aclguard/x.go",

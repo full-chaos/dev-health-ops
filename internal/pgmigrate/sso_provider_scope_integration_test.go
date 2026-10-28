@@ -18,17 +18,6 @@ import (
 // backfill binds an account only when exactly one provider of its protocol belongs to an organization it is a
 // member of; every other account stays unbound.
 
-func positionOf0155(t *testing.T, chain []pgmigrate.ChainFile) int {
-	t.Helper()
-	for i, file := range chain {
-		if file.Revision == "0155" {
-			return i
-		}
-	}
-	t.Fatal("the chain holds no revision 0155")
-	return 0
-}
-
 type scopeSeed struct {
 	ctx  context.Context
 	conn *pgx.Conn
@@ -70,57 +59,6 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), org, id); err !
 
 func strptr(s string) *string { return &s }
 
-func TestRevision0155BindsAccountsToExactlyOneProvider(t *testing.T) {
-	chain, err := pgmigrate.LoadChain()
-	if err != nil {
-		t.Fatal(err)
-	}
-	idx := positionOf0155(t, chain)
-	d := newDownInstance(t)
-	uri := d.at(t, idx)
-	conn := connect(t, uri)
-	ctx := context.Background()
-	s := scopeSeed{ctx: ctx, conn: conn, t: t}
-
-	orgA, orgB, orgC, orgD, orgE, orgF := s.org(), s.org(), s.org(), s.org(), s.org(), s.org()
-	providerA := s.provider(orgA, "saml")
-	s.provider(orgB, "oidc")
-	s.provider(orgB, "oidc")
-	s.provider(orgC, "saml")
-	s.provider(orgD, "oidc")
-	s.provider(orgE, "oidc")
-	providerF := s.provider(orgF, "oidc")
-
-	bound := s.user("saml", strptr("sub-a"), orgA)
-	ambiguousInOrg := s.user("oidc", strptr("sub-b"), orgB)
-	wrongProtocol := s.user("oidc", strptr("sub-c"), orgC)
-	twoOrgs := s.user("oidc", strptr("sub-de"), orgD, orgE)
-	noOrg := s.user("oidc", strptr("sub-none"))
-	local := s.user("local", nil, orgF)
-	noSubject := s.user("oidc", nil, orgF)
-	boundToF := s.user("oidc", strptr("sub-f"), orgF)
-
-	baseline, err := pgmigrate.LoadBaseline()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pgmigrate.Upgrade(ctx, conn, baseline, chain[:idx+1]); err != nil {
-		t.Fatalf("upgrade to 0155: %v", err)
-	}
-	want := map[uuid.UUID]*uuid.UUID{
-		bound: &providerA, ambiguousInOrg: nil, wrongProtocol: nil, twoOrgs: nil, noOrg: nil, local: nil, noSubject: nil, boundToF: &providerF,
-	}
-	for id, expected := range want {
-		var got *uuid.UUID
-		if err := conn.QueryRow(ctx, `SELECT sso_provider_id FROM users WHERE id = $1`, id).Scan(&got); err != nil {
-			t.Fatal(err)
-		}
-		if (got == nil) != (expected == nil) || (got != nil && *got != *expected) {
-			t.Errorf("user %s: sso_provider_id = %v, want %v", id, got, expected)
-		}
-	}
-}
-
 func TestRevision0155KeepsAProvidersSubjectsUniqueAndUnbindsOnProviderDelete(t *testing.T) {
 	chain, err := pgmigrate.LoadChain()
 	if err != nil {
@@ -129,7 +67,6 @@ func TestRevision0155KeepsAProvidersSubjectsUniqueAndUnbindsOnProviderDelete(t *
 	d := newDownInstance(t)
 	conn := connect(t, d.at(t, len(chain)))
 	ctx := context.Background()
-	positionOf0155(t, chain)
 	s := scopeSeed{ctx: ctx, conn: conn, t: t}
 	orgA, orgB := s.org(), s.org()
 	providerA, providerB := s.provider(orgA, "oidc"), s.provider(orgB, "oidc")

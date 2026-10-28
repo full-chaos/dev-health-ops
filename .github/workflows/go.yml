@@ -65,6 +65,9 @@ on:
       # internal/pgmigrate's chain_manifest.tsv pins the sha256 of each chain file; a test reads it, so a change to it
       # is an input of the Go tests.
       - 'internal/pgmigrate/chain_manifest.tsv'
+      # internal/pgmigrate //go:embed-s archive/chain_manifest.tsv, and its tests build the old baseline and the
+      # archived chain from archive/ (the history the baseline replaced, D6430).
+      - 'internal/pgmigrate/archive/**'
       # internal/chmigrate //go:embed-s its sql/ chain directory, so a file
       # there is an input of the Go build and its tests.
       - 'internal/chmigrate/sql/**'

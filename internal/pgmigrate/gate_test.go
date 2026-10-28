@@ -37,18 +37,23 @@ func TestBuildHeadsLoadedFromTheEmbeddedChainAreEqualAtTheirOwnHeads(t *testing.
 	if got := build.CompareHeads(build.Heads()); got != HeadsEqual {
 		t.Fatalf("the build's own heads %v compare %v, want equal", build.Heads(), got)
 	}
-	chain, err := LoadChain()
-	if err != nil || len(chain) < 2 {
-		t.Fatalf("chain: %v", err)
-	}
 	behind := []string{}
 	for _, head := range build.Heads() {
-		if head == chain[len(chain)-1].Revision {
-			head = chain[len(chain)-2].Revision
+		if head != cutoverRevision {
+			head = previousRevisionOf(head)
 		}
 		behind = append(behind, head)
 	}
 	if got := build.CompareHeads(behind); got != HeadsBehind {
 		t.Fatalf("one revision behind %v compares %v, want behind", behind, got)
 	}
+}
+
+func previousRevisionOf(revision string) string {
+	for index, file := range ArchivedChain() {
+		if file.Revision == revision && index > 0 {
+			return ArchivedChain()[index-1].Revision
+		}
+	}
+	return revision
 }

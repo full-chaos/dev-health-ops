@@ -76,7 +76,11 @@ func Parse(r io.Reader) (Manifest, error) {
 // GuardedDirs are directories the git half guards whole, whatever the manifest lists: an existing file in them that
 // is modified, deleted or renamed against the base is refused, so a manifest weakened in the same change set (an entry
 // dropped, a golden deleted) does not clear itself.
-var GuardedDirs = []string{"internal/pgmigrate/testdata/golden", "internal/pgmigrate/baseline", "internal/api/health/testdata/golden"}
+var GuardedDirs = []string{"internal/pgmigrate/testdata/golden", "internal/pgmigrate/baseline", "internal/pgmigrate/archive", "internal/api/health/testdata/golden"}
+
+// AddGuardedDirs are the guarded directories where an ADDED file is a change too: a second baseline or a new archived
+// file is not history the base holds.
+var AddGuardedDirs = []string{"internal/pgmigrate/baseline", "internal/pgmigrate/archive"}
 
 // GuardedPaths is every path the git half refuses a change to: the manifest itself, its frozen files and the guarded
 // directories.
@@ -239,12 +243,48 @@ type Exemption struct {
 // Exemptions are the change sets the git half clears.
 var Exemptions []Exemption
 
+// matches reports whether the change set under root against base is exactly the one e names.
+func (e Exemption) matches(root, base string, changed []string) (bool, error) {
+	if len(changed) != len(e.Paths) {
+		return false, nil
+	}
+	sorted := append([]string(nil), changed...)
+	sort.Strings(sorted)
+	for i := range sorted {
+		if sorted[i] != e.Paths[i] {
+			return false, nil
+		}
+	}
+	for path, want := range map[string]string{ManifestPath: e.BaseManifestSHA256, "internal/pgmigrate/baseline/head.json": e.BaseHeadJSONSHA256} {
+		out, err := exec.Command("git", "-C", root, "show", base+":"+path).Output()
+		if err != nil {
+			return false, nil
+		}
+		if sum := sha256.Sum256(out); hex.EncodeToString(sum[:]) != want {
+			return false, nil
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(root, "internal", "pgmigrate", "archive", "chain_manifest.tsv"))
+	if err != nil {
+		return false, nil
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]) == e.ArchiveManifestSHA256, nil
+}
+
 // GitHalf is the git half's verdict on the tree under root against base: the guarded paths the change set touches and
 // the frozen comparisons it removes against the base manifest, one line each.
 func GitHalf(root, base string, m Manifest, exemptions []Exemption) ([]string, error) {
 	changed, err := Changed(root, base, m.GuardedPaths())
 	if err != nil {
 		return nil, err
+	}
+	for _, exemption := range exemptions {
+		if ok, err := exemption.matches(root, base, changed); err != nil {
+			return nil, err
+		} else if ok {
+			return nil, nil
+		}
 	}
 	var problems []string
 	baseManifest, ok, err := BaseManifest(root, base)
@@ -262,18 +302,27 @@ func GitHalf(root, base string, m Manifest, exemptions []Exemption) ([]string, e
 	return problems, nil
 }
 
-// Changed lists the paths among guarded that differ between base and HEAD in dir.
+// Changed lists the paths among guarded that differ between base and HEAD in dir: modified, deleted, renamed or
+// retyped anywhere guarded, and added under AddGuardedDirs.
 func Changed(dir, base string, guarded []string) ([]string, error) {
-	args := append([]string{"-C", dir, "diff", "--name-only", "--diff-filter=MDRT", base + "...HEAD", "--"}, guarded...)
-	out, err := exec.Command("git", args...).Output()
-	if err != nil {
-		return nil, fmt.Errorf("git diff %s...HEAD: %w", base, err)
-	}
+	seen := map[string]bool{}
 	var changed []string
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if line != "" {
-			changed = append(changed, line)
+	for _, query := range []struct {
+		filter string
+		paths  []string
+	}{{"MDRT", guarded}, {"A", AddGuardedDirs}} {
+		args := append([]string{"-C", dir, "diff", "--name-only", "--diff-filter=" + query.filter, base + "...HEAD", "--"}, query.paths...)
+		out, err := exec.Command("git", args...).Output()
+		if err != nil {
+			return nil, fmt.Errorf("git diff %s...HEAD: %w", base, err)
+		}
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			if line != "" && !seen[line] {
+				seen[line] = true
+				changed = append(changed, line)
+			}
 		}
 	}
+	sort.Strings(changed)
 	return changed, nil
 }

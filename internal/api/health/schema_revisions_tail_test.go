@@ -6,7 +6,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 )
 
-// missingTailRevisions are the Go-only chain revisions (above pgmigrate.FrozenHead) a database could be migrated to
+// missingTailRevisions are the Go-only chain revisions (above pgmigrate.FrozenHead, archived or live) a database could be migrated to
 // that satisfyingRevisions does not list: the api would report such a database as not at the schema it needs.
 func missingTailRevisions(chain []pgmigrate.ChainFile) []string {
 	var missing []string
@@ -23,6 +23,7 @@ func TestSchemaRevisionsCoverTheGoOnlyChainTail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	chain = append(pgmigrate.ArchivedChain(), chain...)
 	if missing := missingTailRevisions(chain); len(missing) > 0 {
 		t.Errorf("chain revisions %v are not in satisfyingRevisions (schema_revisions.go): add them by hand", missing)
 	}

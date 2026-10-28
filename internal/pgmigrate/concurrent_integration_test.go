@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -26,9 +27,10 @@ const migrationLockKey int64 = 0x64686f5f7067
 // Runs of `dho migrate postgres upgrade` that plan from the same state, one after
 // another behind the migration lock, apply each chain revision once between them: a
 // run that finds another has advanced the database does not run the SQL again (the
-// revisions are not idempotent: 0139 adds a column). Six runs wait on the lock over a
+// revisions are not idempotent: the first planted revision adds a column). Six runs wait on the lock over a
 // database at the baseline, the lock is released, and every run must succeed.
 func TestConcurrentUpgradesApplyEachChainRevisionOnce(t *testing.T) {
+	plantedRace(t)
 	ctx := context.Background()
 	instance := sharedInstance(t)
 	admin := connect(t, instance.URI)
@@ -119,11 +121,12 @@ func TestConcurrentUpgradesApplyEachChainRevisionOnce(t *testing.T) {
 
 // A migrator that takes no dho lock (the Python Alembic upgrade) may apply a chain
 // revision after dho has planned it and before dho's SQL runs. dho's SQL then fails
-// (0139 adds a column that is there), and the run must not fail the deploy: the
+// (the first planted revision adds a column that is there), and the run must not fail the deploy: the
 // database is where the run wanted it. The other migrator is stood in for by a
 // transaction that runs the revision's own SQL and moves alembic_version, queued on a
 // table lock ahead of dho's statement; both are released together.
 func TestUpgradeSurvivesAnotherMigratorApplyingTheStepFirst(t *testing.T) {
+	plantedRace(t)
 	ctx := context.Background()
 	instance := sharedInstance(t)
 	admin := connect(t, instance.URI)
@@ -260,6 +263,7 @@ func TestUpgradeSurvivesAnotherMigratorApplyingTheStepFirst(t *testing.T) {
 // A step that fails for its own reason (a column it adds is there, though nothing recorded the revision) is still the run's
 // failure: nothing recorded it, so the run does not carry on, retry or hang.
 func TestUpgradeStillFailsWhenTheStepFailsForItsOwnReason(t *testing.T) {
+	plantedRace(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	instance := sharedInstance(t)
@@ -277,7 +281,7 @@ func TestUpgradeStillFailsWhenTheStepFailsForItsOwnReason(t *testing.T) {
 	if _, err := pgmigrate.Upgrade(ctx, conn, baseline, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := conn.Exec(ctx, "ALTER TABLE refunds ADD COLUMN idempotency_key text"); err != nil {
+	if _, err := conn.Exec(ctx, "ALTER TABLE refunds ADD COLUMN planted_race text"); err != nil {
 		t.Fatal(err)
 	}
 	result, err := pgmigrate.Upgrade(ctx, conn, baseline, chain)
@@ -294,4 +298,11 @@ func TestUpgradeStillFailsWhenTheStepFailsForItsOwnReason(t *testing.T) {
 	if fmt.Sprint(recorded) != fmt.Sprint([]string{"0066", baseline.Heads[0]}) && fmt.Sprint(recorded) != fmt.Sprint([]string{"0066", baseline.Heads[1]}) {
 		t.Errorf("the failed step changed alembic_version to %v", recorded)
 	}
+}
+
+// plantedRace is two revisions planted above the baseline (testdata/postfreeze/race): the first adds a column to
+// refunds, a table the baseline holds, so a lock on refunds stops it and a second run of it fails with 42701.
+func plantedRace(t *testing.T) {
+	t.Helper()
+	pgmigrate.UsePlantedChain(t, os.DirFS("testdata/postfreeze/race"))
 }

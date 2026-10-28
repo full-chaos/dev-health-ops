@@ -64,9 +64,8 @@ func linesWith(lines []map[string]any, msg string) []map[string]any {
 // An INVALID leftover plus a writer transaction older than lock_timeout that ends inside the build window: the verb waits
 // it out and ends with a VALID index (action rebuilt). Before the change every attempt failed 55P03.
 func TestBuildIndexOutlastsALongTransactionOverAnInvalidLeftover(t *testing.T) {
-	position, _ := chainPosition(t, "0159")
 	d := newDownInstance(t)
-	uri := d.at(t, position)
+	uri := d.withoutIndex(t, "0159")
 	plantInvalidIndex(t, uri)
 	release := holdWriter(t, uri)
 	timer := time.AfterFunc(12*time.Second, release)
@@ -85,9 +84,8 @@ func TestBuildIndexOutlastsALongTransactionOverAnInvalidLeftover(t *testing.T) {
 // A holder that outlives the window: the build ends inside the window plus the cleanup budget with the leftover key and
 // the blocker row, and the writers behind the build never wait on it.
 func TestBuildIndexHolderLongerThanTheWindowLeavesTheLeftoverAndBlocksNoWriter(t *testing.T) {
-	position, _ := chainPosition(t, "0159")
 	d := newDownInstance(t)
-	uri := d.at(t, position)
+	uri := d.withoutIndex(t, "0159")
 	plantInvalidIndex(t, uri)
 	release := holdWriter(t, uri)
 
@@ -196,9 +194,8 @@ func assertBlockerLinesAreAllowlisted(t *testing.T, lines []map[string]any, raw 
 
 // While a build waits for an older transaction, the heartbeat names the blocker with the allowlisted fields only.
 func TestBuildIndexHeartbeatLogsTheBlockerWithAllowlistedFieldsOnly(t *testing.T) {
-	position, _ := chainPosition(t, "0159")
 	d := newDownInstance(t)
-	uri := d.at(t, position)
+	uri := d.withoutIndex(t, "0159")
 	release := holdWriter(t, uri)
 	timer := time.AfterFunc(6*time.Second, release)
 	defer timer.Stop()
@@ -222,9 +219,8 @@ func TestBuildIndexHeartbeatLogsTheBlockerWithAllowlistedFieldsOnly(t *testing.T
 // A holder of SHARE UPDATE EXCLUSIVE (a long VACUUM, DDL) ends the attempt at lock_timeout, not at the window: the table-lock
 // wait stays short.
 func TestBuildIndexTableLockWaitStaysUnderLockTimeout(t *testing.T) {
-	position, _ := chainPosition(t, "0159")
 	d := newDownInstance(t)
-	uri := d.at(t, position)
+	uri := d.withoutIndex(t, "0159")
 	holder := connect(t, uri)
 	tx, err := holder.Begin(context.Background())
 	if err != nil {
@@ -255,7 +251,6 @@ func TestBuildIndexTableLockWaitStaysUnderLockTimeout(t *testing.T) {
 
 // The start line and the line after each failed attempt report the index state.
 func TestBuildIndexLogsTheExistingIndexState(t *testing.T) {
-	position, _ := chainPosition(t, "0159")
 	for name, tc := range map[string]struct {
 		prepare func(t *testing.T, uri string)
 		want    string
@@ -266,7 +261,7 @@ func TestBuildIndexLogsTheExistingIndexState(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := newDownInstance(t)
-			uri := d.at(t, position)
+			uri := d.withoutIndex(t, "0159")
 			tc.prepare(t, uri)
 			logs := &syncBuffer{}
 			conn := connect(t, uri)
@@ -292,7 +287,6 @@ func TestBuildIndexLogsTheExistingIndexState(t *testing.T) {
 // With an INVALID leftover planted, the build waits for the holder, ends "rebuilt" and VALID, and the heartbeat names the
 // holder's pid.
 func TestBuildIndexOutlastsSnapshotHoldersOnOtherTablesAndLongStatements(t *testing.T) {
-	position, _ := chainPosition(t, "0159")
 	for name, start := range map[string]func(t *testing.T, uri string) (pid uint32){
 		"E3 repeatable-read snapshot on another table": func(t *testing.T, uri string) uint32 {
 			conn := connect(t, uri)
@@ -328,7 +322,7 @@ func TestBuildIndexOutlastsSnapshotHoldersOnOtherTablesAndLongStatements(t *test
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := newDownInstance(t)
-			uri := d.at(t, position)
+			uri := d.withoutIndex(t, "0159")
 			plantInvalidIndex(t, uri)
 			holderPID := start(t, uri)
 			time.Sleep(500 * time.Millisecond)

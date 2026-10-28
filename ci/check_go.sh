@@ -229,7 +229,7 @@ run_providersync_bounded() {
   pidfile="$(mktemp)"
   (
     cd "${ROOT}"
-    exec ${private_group[@]+"${private_group[@]}"} bash -c 'echo $$ >"$3"; set -o pipefail; json=$1; filter=$2; shift 3; "$@" | tee "${json}" | jq --unbuffered -rj "${filter}"' _ \
+    exec ${private_group[@]+"${private_group[@]}"} bash -c 'echo $$ >"$3"; set -o pipefail; out=$1; filter=$2; shift 3; "$@" | tee "${out}" | jq --unbuffered -rj "${filter}"' _ \
       "${json_file}" 'select(.Action == "output") | .Output' "${pidfile}" \
       "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=22m -json -run "${test_regex}" ./internal/providersync
   ) &

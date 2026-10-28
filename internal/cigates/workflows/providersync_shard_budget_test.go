@@ -170,15 +170,10 @@ func integrationTimeoutRows() []integrationTimeoutRow {
 }
 
 // integrationGoTestLines returns the integration go test calls of a script with backslash continuations joined.
-func integrationGoTestLines(t *testing.T, script string) []string {
-	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(repoRoot(t), "ci", script))
-	if err != nil {
-		t.Fatal(err)
-	}
+func integrationGoTestLines(text string) []string {
 	var out []string
 	var pending string
-	for _, line := range strings.Split(string(raw), "\n") {
+	for _, line := range strings.Split(text, "\n") {
 		joined := pending + strings.TrimSpace(line)
 		if strings.HasSuffix(joined, `\`) {
 			pending = strings.TrimSuffix(joined, `\`) + " "
@@ -197,12 +192,8 @@ func integrationGoTestLines(t *testing.T, script string) []string {
 	return out
 }
 
-func integrationJobCapMinutes(t *testing.T, workflow, job string) int {
+func integrationJobCapMinutes(t *testing.T, raw []byte, workflow, job string) int {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(repoRoot(t), ".github", "workflows", workflow))
-	if err != nil {
-		t.Fatal(err)
-	}
 	var wf struct {
 		Jobs map[string]struct {
 			TimeoutMinutes any `yaml:"timeout-minutes"`
@@ -231,12 +222,8 @@ func integrationJobCapMinutes(t *testing.T, workflow, job string) int {
 	return 0
 }
 
-func integrationJobRunsStep(t *testing.T, workflow, job, needle string) bool {
+func integrationJobRunsStep(t *testing.T, raw []byte, workflow, job, needle string) bool {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(repoRoot(t), ".github", "workflows", workflow))
-	if err != nil {
-		t.Fatal(err)
-	}
 	var wf struct {
 		Jobs map[string]struct {
 			Steps []struct {
@@ -257,10 +244,29 @@ func integrationJobRunsStep(t *testing.T, workflow, job, needle string) bool {
 
 func TestIntegrationGoTestTimeoutsSitThreeMinutesUnderJobCaps(t *testing.T) {
 	timeoutRe := regexp.MustCompile(`-timeout[= ](\d+)m\b`)
+	root := repoRoot(t)
+	must := func(b []byte, err error) []byte {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	scripts := map[string]string{
+		"check_go.sh":           string(must(os.ReadFile(filepath.Join(root, "ci", "check_go.sh")))),
+		"check_golden_drift.sh": string(must(os.ReadFile(filepath.Join(root, "ci", "check_golden_drift.sh")))),
+	}
+	workflows := map[string][]byte{
+		"go.yml":                    must(os.ReadFile(filepath.Join(root, ".github", "workflows", "go.yml"))),
+		"go-quality.yml":            must(os.ReadFile(filepath.Join(root, ".github", "workflows", "go-quality.yml"))),
+		"go-auth-service.yml":       must(os.ReadFile(filepath.Join(root, ".github", "workflows", "go-auth-service.yml"))),
+		"venue-oracles.yml":         must(os.ReadFile(filepath.Join(root, ".github", "workflows", "venue-oracles.yml"))),
+		"venue-oracles-changed.yml": must(os.ReadFile(filepath.Join(root, ".github", "workflows", "venue-oracles-changed.yml"))),
+	}
 	rows := integrationTimeoutRows()
 	matched := make([]int, len(rows))
 	for _, script := range []string{"check_go.sh", "check_golden_drift.sh"} {
-		for _, line := range integrationGoTestLines(t, script) {
+		for _, line := range integrationGoTestLines(scripts[script]) {
 			idx := -1
 			for i, r := range rows {
 				if r.script == script && r.anchor.MatchString(line) {
@@ -281,10 +287,10 @@ func TestIntegrationGoTestTimeoutsSitThreeMinutesUnderJobCaps(t *testing.T) {
 			timeout, _ := strconv.Atoi(m[1])
 			capMin := -1
 			for _, j := range rows[idx].jobs {
-				if !integrationJobRunsStep(t, j.workflow, j.job, j.stepNeedle) {
+				if !integrationJobRunsStep(t, workflows[j.workflow], j.workflow, j.job, j.stepNeedle) {
 					t.Errorf("%s job %s no longer runs %q (the %s row is stale)", j.workflow, j.job, j.stepNeedle, rows[idx].name)
 				}
-				if c := integrationJobCapMinutes(t, j.workflow, j.job); capMin < 0 || c < capMin {
+				if c := integrationJobCapMinutes(t, workflows[j.workflow], j.workflow, j.job); capMin < 0 || c < capMin {
 					capMin = c
 				}
 			}

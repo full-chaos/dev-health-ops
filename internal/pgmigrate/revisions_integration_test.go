@@ -14,7 +14,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -76,11 +75,7 @@ func removeEnv(environ []string, key string) []string {
 func revisionsDatabase(t *testing.T) (uri string, admin func(string)) {
 	t.Helper()
 	ctx := context.Background()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatalf("start postgres: %v", err)
-	}
-	t.Cleanup(func() { _ = instance.Close(context.Background()) })
+	instance := sharedInstance(t)
 	adminConn := connect(t, instance.URI)
 	database := scratchDatabase(t, adminConn)
 	uri = databaseURI(t, instance.URI, database)

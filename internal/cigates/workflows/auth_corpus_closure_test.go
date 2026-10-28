@@ -3,9 +3,11 @@ package workflows_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -22,6 +24,7 @@ const corpusModule = "github.com/full-chaos/dev-health-ops"
 var corpusClosureRoots = []string{
 	"./internal/api/session", "./internal/api/sso", "./internal/api/policy", "./internal/apiservice", "./cmd/dho", "./cmd/auth-service",
 	"./cmd/dev-health-worker-migrate", "./cmd/auth-migrate",
+	"./internal/testsupport/providerstub/cmd/providerstub", "./internal/testsupport/smtpcapture/cmd/smtpsink",
 }
 
 // The package the corpus runs `go test -tags integration` on.
@@ -78,28 +81,143 @@ func TestAuthCorpusClosureRootsExistAndTheSetNamesThem(t *testing.T) {
 	}
 }
 
-// Every command the corpus images build (the go build loop of docker/go-worker.Dockerfile) is a root.
+// CHAOS-11735: every `go build` of every image the corpus compose project builds names a command that is a root.
+// The corpus images are the Dockerfiles that compose.yml and ci/auth_corpus_external.override.yml name in a build block.
+var corpusImageDockerfiles = map[string]int{
+	"docker/go-worker.Dockerfile":    4, // the for-loop: dev-health-worker-migrate auth-service auth-migrate dho
+	"docker/providerstub.Dockerfile": 1,
+	"docker/smtpsink.Dockerfile":     1,
+}
+
+// corpusComposeDockerfiles lists every build.dockerfile of the services in the given compose files.
+func corpusComposeDockerfiles(t *testing.T, root string, files ...string) []string {
+	t.Helper()
+	seen := map[string]bool{}
+	for _, f := range files {
+		doc := parseYAML(t, readFile(t, filepath.Join(root, f)), f)
+		services, ok := doc["services"].(yamlMap)
+		if !ok {
+			t.Fatalf("%s has no services map", f)
+		}
+		for name, raw := range services {
+			svc, ok := raw.(yamlMap)
+			if !ok {
+				t.Fatalf("%s: service %s is not a map", f, name)
+			}
+			build, has := svc["build"]
+			if !has {
+				continue
+			}
+			b, ok := build.(yamlMap)
+			if !ok {
+				t.Fatalf("%s: service %s has a build that is not a map; cannot tell its Dockerfile", f, name)
+			}
+			df, ok := b["dockerfile"].(string)
+			if !ok || df == "" {
+				t.Fatalf("%s: service %s has a build block without a dockerfile", f, name)
+			}
+			seen[df] = true
+		}
+	}
+	var out []string
+	for d := range seen {
+		out = append(out, d)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func TestAuthCorpusClosureRootsCoverTheImageBuildList(t *testing.T) {
 	root := authProofRoot(t)
-	text := readFile(t, filepath.Join(root, "docker", "go-worker.Dockerfile"))
-	i := strings.Index(text, "for command in")
-	j := strings.Index(text[i:], "; do")
-	if i < 0 || j < 0 {
-		t.Fatal("docker/go-worker.Dockerfile has no `for command in ... ; do` build loop")
+	got := corpusComposeDockerfiles(t, root, "compose.yml", "ci/auth_corpus_external.override.yml")
+	var want []string
+	for d := range corpusImageDockerfiles {
+		want = append(want, d)
+	}
+	sort.Strings(want)
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("the corpus compose files build %v, the test pins %v: a new corpus image must be parsed here", got, want)
 	}
 	roots := map[string]bool{}
 	for _, r := range corpusSetValue(t, root, "AUTH_CORPUS_ROOTS") {
 		roots[r] = true
 	}
-	n := 0
-	for _, f := range strings.Fields(strings.ReplaceAll(text[i+len("for command in"):i+j], "\\", " ")) {
-		n++
-		if !roots["./cmd/"+f] {
-			t.Errorf("the corpus images build cmd/%s but it is not in AUTH_CORPUS_ROOTS", f)
+	for _, df := range want {
+		builds, err := parseDockerfileBuilds(readFile(t, filepath.Join(root, df)))
+		if err != nil {
+			t.Fatalf("%s: %v", df, err)
+		}
+		if len(builds) != corpusImageDockerfiles[df] {
+			t.Fatalf("%s: parsed %d go build targets %v, want %d", df, len(builds), builds, corpusImageDockerfiles[df])
+		}
+		for _, b := range builds {
+			if !roots[b.pkg] {
+				t.Errorf("%s:%d builds %s but it is not in AUTH_CORPUS_ROOTS", df, b.line, b.pkg)
+			}
 		}
 	}
-	if n < 4 {
-		t.Errorf("the build loop lists %d commands, want at least 4", n)
+}
+
+func TestAuthCorpusDockerfileParserTable(t *testing.T) {
+	ok := []struct {
+		name string
+		text string
+		want []string
+	}{
+		{"a loop over a variable, multi-line RUN", "FROM x\nRUN --mount=type=cache,target=/a \\\n    set -eu; \\\n    for command in \\\n        a \\\n        b; do \\\n      GOOS=\"${T}\" go build -trimpath -ldflags=\"-s -w \\\n -X p.V=${V}\" -o \"/out/${command}\" \\\n        \"./cmd/${command}\"; \\\n    done; \\\n    mkdir -p /x\n", []string{"./cmd/a", "./cmd/b"}},
+		{"an && chain", "RUN go build -o /out/a ./cmd/a && go build -o /out/b ./cmd/b\n", []string{"./cmd/a", "./cmd/b"}},
+		{"a second loop later in the file is read too", "RUN for c in a; do go build ./cmd/$c; done\nRUN for c in b d; do go build -o /o/$c ./cmd/${c}; done\n", []string{"./cmd/a", "./cmd/b", "./cmd/d"}},
+		{"a literal target, no loop", "RUN go build -buildvcs=false -o /out/x ./internal/x/cmd/x\n", []string{"./internal/x/cmd/x"}},
+		{"a value flag before the target", "RUN go build -tags integration -p 4 -o /out/x ./cmd/x\n", []string{"./cmd/x"}},
+		{"comment lines and other instructions", "# go build ./cmd/no\nENV A=go\nRUN echo hi\nRUN echo go build ./cmd/no\n", nil},
+		{"no go build at all", "FROM x\nRUN echo hi\n", nil},
+		{"go mod download is not a build", "RUN go mod download\n", nil},
+	}
+	for _, c := range ok {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := parseDockerfileBuilds(c.text)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var pkgs []string
+			for _, b := range got {
+				pkgs = append(pkgs, b.pkg)
+			}
+			if strings.Join(pkgs, " ") != strings.Join(c.want, " ") {
+				t.Fatalf("got %v, want %v", pkgs, c.want)
+			}
+		})
+	}
+	bad := map[string]string{
+		"an unset variable":                "RUN go build ./cmd/${other}\n",
+		"a build-arg variable":             "ARG C=a\nRUN go build ./cmd/${C}\n",
+		"a command substitution":           "RUN go build $(echo ./cmd/a)\n",
+		"a backtick":                       "RUN go build `echo ./cmd/a`\n",
+		"a heredoc":                        "RUN <<EOF\ngo build ./cmd/a\nEOF\n",
+		"the all-packages pattern":         "RUN go build ./...\n",
+		"a target without ./":              "RUN go build cmd/a\n",
+		"a build without a target":         "RUN go build -o /out/a\n",
+		"an unterminated quote":            "RUN go build \"./cmd/a\n",
+		"a loop that never ends":           "RUN for c in a; do go build ./cmd/$c\n",
+		"a done without a loop":            "RUN go build ./cmd/a; done\n",
+		"a loop over a substitution":       "RUN for c in $(ls); do go build ./cmd/$c; done\n",
+		"an if around a build":             "RUN if true; then go build ./cmd/a; fi\n",
+		"a while around a build":           "RUN while true; do go build ./cmd/a; done\n",
+		"a shell -c wrapper":               "RUN sh -c \"go build ./cmd/a\"\n",
+		"an exec-form RUN with go":         "RUN [\"go\", \"build\", \"./cmd/a\"]\n",
+		"go run":                           "RUN go run ./cmd/a\n",
+		"a go test":                        "RUN go test ./cmd/a\n",
+		"a shell comment after the target": "RUN go build ./cmd/y # tail\n",
+		"a go build with a stray word":     "RUN go build ./cmd/a b\n",
+		"a variable inside a target":       "RUN go build ./cmd/a${V}\n",
+		"a dot-dot target":                 "RUN go build ../x\n",
+	}
+	for name, text := range bad {
+		t.Run("fails closed: "+name, func(t *testing.T) {
+			if got, err := parseDockerfileBuilds(text); err == nil {
+				t.Fatalf("want an error, got %v", got)
+			}
+		})
 	}
 }
 
@@ -224,4 +342,269 @@ func writeNUL(path string, items []string) error {
 		b.WriteByte(0)
 	}
 	return os.WriteFile(path, b.Bytes(), 0o644)
+}
+
+type dockerBuild struct {
+	line int
+	pkg  string
+}
+
+// parseDockerfileBuilds returns every `go build`/`go install` target of every RUN of a Dockerfile text. It fails closed:
+// a RUN it cannot read to the end (a heredoc, an exec form that names go, a command substitution, a backtick, an
+// unterminated quote, a shell comment, a control form other than `for NAME in WORDS; do ... done`, a go run or go test,
+// a target that is not a plain ./path after the loop variable is expanded) is an error, never a silent skip.
+func parseDockerfileBuilds(text string) ([]dockerBuild, error) {
+	var out []dockerBuild
+	lines := strings.Split(text, "\n")
+	for i := 0; i < len(lines); i++ {
+		first := i + 1
+		trimmed := strings.TrimSpace(lines[i])
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		logical := trimmed
+		for strings.HasSuffix(logical, "\\") {
+			logical = strings.TrimSpace(strings.TrimSuffix(logical, "\\"))
+			i++
+			if i >= len(lines) {
+				break
+			}
+			next := strings.TrimSpace(lines[i])
+			if strings.HasPrefix(next, "#") {
+				next = ""
+			}
+			logical += " " + next
+			logical = strings.TrimSpace(logical)
+		}
+		word, rest, _ := strings.Cut(logical, " ")
+		if !strings.EqualFold(word, "RUN") {
+			continue
+		}
+		builds, err := parseRunBuilds(rest, first)
+		if err != nil {
+			return nil, fmt.Errorf("line %d: %w", first, err)
+		}
+		out = append(out, builds...)
+	}
+	return out, nil
+}
+
+// goCommandWord: a RUN with no go build/install/run/test/generate word has nothing to parse (a bounded retry of go mod download, mkdir).
+var goCommandWord = regexp.MustCompile(`(^|[^A-Za-z0-9_./-])go\s+(build|install|run|test|generate)(\s|$)`)
+
+type shellLoop struct {
+	name   string
+	words  []string
+	active bool
+}
+
+func parseRunBuilds(body string, line int) ([]dockerBuild, error) {
+	body = strings.TrimSpace(body)
+	for strings.HasPrefix(body, "--") {
+		_, rest, _ := strings.Cut(body, " ")
+		body = strings.TrimSpace(rest)
+	}
+	if strings.HasPrefix(body, "[") {
+		if strings.Contains(body, "go") {
+			return nil, fmt.Errorf("an exec-form RUN that names go cannot be parsed: %s", body)
+		}
+		return nil, nil
+	}
+	if strings.Contains(body, "<<") {
+		return nil, fmt.Errorf("a heredoc RUN cannot be parsed")
+	}
+	if !goCommandWord.MatchString(body) {
+		return nil, nil
+	}
+	stmts, err := shellStatements(body)
+	if err != nil {
+		return nil, err
+	}
+	var loops []shellLoop
+	var out []dockerBuild
+	for _, s := range stmts {
+		switch s[0] {
+		case "if", "then", "elif", "else", "fi", "while", "until", "case", "esac", "select", "function", "{", "}", "(", "!":
+			return nil, fmt.Errorf("the control form %q is not parsed", s[0])
+		case "for":
+			if len(s) < 4 || s[2] != "in" || strings.ContainsAny(s[1], "$=") {
+				return nil, fmt.Errorf("a for loop that is not `for NAME in WORDS`: %v", s)
+			}
+			for _, w := range s[3:] {
+				if w == "" || strings.ContainsAny(w, "$*?[{~") {
+					return nil, fmt.Errorf("a for loop over a word that is not plain: %q", w)
+				}
+			}
+			loops = append(loops, shellLoop{name: s[1], words: s[3:]})
+			continue
+		case "do":
+			if len(loops) == 0 || loops[len(loops)-1].active {
+				return nil, fmt.Errorf("a do without a for")
+			}
+			loops[len(loops)-1].active = true
+			s = s[1:]
+			if len(s) == 0 {
+				continue
+			}
+		case "done":
+			if len(loops) == 0 || !loops[len(loops)-1].active || len(s) != 1 {
+				return nil, fmt.Errorf("a done without a loop")
+			}
+			loops = loops[:len(loops)-1]
+			continue
+		}
+		for len(s) > 0 && strings.Contains(s[0], "=") && strings.Index(s[0], "=") > 0 && !strings.ContainsAny(s[0][:strings.Index(s[0], "=")], "/$-") {
+			s = s[1:]
+		}
+		if len(s) == 0 {
+			continue
+		}
+		if filepath.Base(s[0]) != "go" {
+			for _, w := range s[1:] {
+				if strings.Contains(w, "go build") || strings.Contains(w, "go install") || strings.Contains(w, "go run") {
+					return nil, fmt.Errorf("a go command inside the argument of %q cannot be parsed", s[0])
+				}
+			}
+			continue
+		}
+		if len(s) < 2 {
+			continue
+		}
+		switch s[1] {
+		case "build", "install":
+		case "run", "test", "generate":
+			return nil, fmt.Errorf("go %s in a RUN is not parsed", s[1])
+		default:
+			continue
+		}
+		var pkgs []string
+		valueFlags := map[string]bool{"-o": true, "-ldflags": true, "-tags": true, "-gcflags": true, "-asmflags": true, "-p": true, "-mod": true, "-modfile": true, "-C": true, "-toolexec": true, "-overlay": true, "-pkgdir": true, "-compiler": true, "-gccgoflags": true, "-installsuffix": true}
+		for k := 2; k < len(s); k++ {
+			a := s[k]
+			if strings.HasPrefix(a, "-") {
+				if valueFlags[a] {
+					k++
+				}
+				continue
+			}
+			pkgs = append(pkgs, a)
+		}
+		if len(pkgs) != 1 {
+			return nil, fmt.Errorf("go %s with %d package words %v, want exactly one", s[1], len(pkgs), pkgs)
+		}
+		expanded, err := expandLoopWord(pkgs[0], loops)
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range expanded {
+			if !strings.HasPrefix(p, "./") || strings.ContainsAny(p, "$*") || strings.Contains(p, "..") || strings.HasSuffix(p, "/") {
+				return nil, fmt.Errorf("go build target %q is not a plain ./path", p)
+			}
+			out = append(out, dockerBuild{line: line, pkg: p})
+		}
+	}
+	if len(loops) > 0 {
+		return nil, fmt.Errorf("a for loop without its done")
+	}
+	return out, nil
+}
+
+// expandLoopWord replaces ${NAME} / $NAME of the innermost active loop by each of its words; any other $ is an error.
+func expandLoopWord(word string, loops []shellLoop) ([]string, error) {
+	if !strings.Contains(word, "$") {
+		return []string{word}, nil
+	}
+	for k := len(loops) - 1; k >= 0; k-- {
+		l := loops[k]
+		if !l.active {
+			continue
+		}
+		var out []string
+		for _, w := range l.words {
+			r := strings.NewReplacer("${"+l.name+"}", w, "$"+l.name, w).Replace(word)
+			out = append(out, r)
+		}
+		if len(out) > 0 && !strings.Contains(out[0], "$") {
+			return out, nil
+		}
+	}
+	return nil, fmt.Errorf("go build target %q uses a variable that is not a loop variable of the enclosing for", word)
+}
+
+// shellStatements splits a RUN body into statements of words (quotes removed), on ; && || | & and newlines outside quotes.
+func shellStatements(body string) ([][]string, error) {
+	var stmts [][]string
+	var cur []string
+	var word strings.Builder
+	inWord := false
+	flushWord := func() {
+		if inWord {
+			cur = append(cur, word.String())
+			word.Reset()
+			inWord = false
+		}
+	}
+	flushStmt := func() {
+		flushWord()
+		if len(cur) > 0 {
+			stmts = append(stmts, cur)
+			cur = nil
+		}
+	}
+	rs := []rune(body)
+	for i := 0; i < len(rs); i++ {
+		c := rs[i]
+		switch {
+		case c == '`':
+			return nil, fmt.Errorf("a backtick substitution cannot be parsed")
+		case c == '$' && i+1 < len(rs) && rs[i+1] == '(':
+			return nil, fmt.Errorf("a $( substitution cannot be parsed")
+		case c == '\'':
+			j := i + 1
+			for j < len(rs) && rs[j] != '\'' {
+				j++
+			}
+			if j >= len(rs) {
+				return nil, fmt.Errorf("an unterminated single quote")
+			}
+			inWord = true
+			word.WriteString(string(rs[i+1 : j]))
+			i = j
+		case c == '"':
+			j := i + 1
+			inWord = true
+			for j < len(rs) && rs[j] != '"' {
+				switch {
+				case rs[j] == '`' || (rs[j] == '$' && j+1 < len(rs) && rs[j+1] == '('):
+					return nil, fmt.Errorf("a substitution inside double quotes cannot be parsed")
+				case rs[j] == '\\' && j+1 < len(rs):
+					j++
+				}
+				word.WriteRune(rs[j])
+				j++
+			}
+			if j >= len(rs) {
+				return nil, fmt.Errorf("an unterminated double quote")
+			}
+			i = j
+		case c == '\\':
+			if i+1 >= len(rs) {
+				return nil, fmt.Errorf("a trailing backslash")
+			}
+			i++
+			inWord = true
+			word.WriteRune(rs[i])
+		case c == '#' && !inWord:
+			return nil, fmt.Errorf("a shell comment in a RUN cannot be parsed")
+		case c == ' ' || c == '\t':
+			flushWord()
+		case c == ';' || c == '&' || c == '|' || c == '\n':
+			flushStmt()
+		default:
+			inWord = true
+			word.WriteRune(c)
+		}
+	}
+	flushStmt()
+	return stmts, nil
 }

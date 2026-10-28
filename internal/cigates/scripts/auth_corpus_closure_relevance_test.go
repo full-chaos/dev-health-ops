@@ -18,6 +18,7 @@ import (
 var corpusLiveRoots = []string{
 	"./internal/api/session", "./internal/api/sso", "./internal/api/policy", "./internal/apiservice", "./cmd/dho", "./cmd/auth-service",
 	"./cmd/dev-health-worker-migrate", "./cmd/auth-migrate",
+	"./internal/testsupport/providerstub/cmd/providerstub", "./internal/testsupport/smtpcapture/cmd/smtpsink",
 }
 
 // corpusLiveTestPackage is the package the corpus runs `go test -tags integration` on (ci/auth_corpus_external.sh).
@@ -260,16 +261,20 @@ func corpusFixtureRepo(t *testing.T) (dir string, env []string) {
 		t.Skip("no go on PATH")
 	}
 	files := map[string]string{
-		"go.mod":                                      "module example.com/fix\n\ngo 1.21\n",
-		"internal/api/session/s.go":                   "package session\n\nimport _ \"example.com/fix/internal/liba\"\n",
-		"internal/api/sso/s.go":                       "package sso\n\nimport \"embed\"\n\n//go:embed templates/*.html\nvar T embed.FS\n",
-		"internal/api/sso/templates/a.html":           "<p>a</p>\n",
-		"internal/api/policy/p.go":                    "package policy\n",
-		"internal/apiservice/a.go":                    "package apiservice\n",
-		"cmd/dho/main.go":                             "package main\n\nimport _ \"example.com/fix/internal/libb\"\n\nfunc main() {}\n",
-		"cmd/auth-service/main.go":                    "package main\n\nfunc main() {}\n",
-		"cmd/dev-health-worker-migrate/main.go":       "package main\n\nfunc main() {}\n",
-		"cmd/auth-migrate/main.go":                    "package main\n\nfunc main() {}\n",
+		"go.mod":                                "module example.com/fix\n\ngo 1.21\n",
+		"internal/api/session/s.go":             "package session\n\nimport _ \"example.com/fix/internal/liba\"\n",
+		"internal/api/sso/s.go":                 "package sso\n\nimport \"embed\"\n\n//go:embed templates/*.html\nvar T embed.FS\n",
+		"internal/api/sso/templates/a.html":     "<p>a</p>\n",
+		"internal/api/policy/p.go":              "package policy\n",
+		"internal/apiservice/a.go":              "package apiservice\n",
+		"cmd/dho/main.go":                       "package main\n\nimport _ \"example.com/fix/internal/libb\"\n\nfunc main() {}\n",
+		"cmd/auth-service/main.go":              "package main\n\nfunc main() {}\n",
+		"cmd/dev-health-worker-migrate/main.go": "package main\n\nfunc main() {}\n",
+		"cmd/auth-migrate/main.go":              "package main\n\nfunc main() {}\n",
+		"internal/testsupport/providerstub/cmd/providerstub/main.go": "package main\n\nimport _ \"example.com/fix/internal/libstub\"\n\nfunc main() {}\n",
+		"internal/testsupport/smtpcapture/cmd/smtpsink/main.go":      "package main\n\nimport _ \"example.com/fix/internal/libsink\"\n\nfunc main() {}\n",
+		"internal/libstub/s.go":                       "package libstub\n",
+		"internal/libsink/s.go":                       "package libsink\n",
 		"internal/apiservice/authflowvenue/doc.go":    "package authflowvenue\n",
 		"internal/apiservice/authflowvenue/v_test.go": "//go:build integration\n\npackage authflowvenue\n\nimport _ \"example.com/fix/internal/testsupport/venueoracle\"\n",
 		"internal/testsupport/venueoracle/v.go":       "package venueoracle\n",
@@ -302,6 +307,8 @@ func TestAuthCorpusQueueLiveClosureOnAFixtureModule(t *testing.T) {
 		{"a package a binary imports", "internal/libb/new.go", "corpus=true"},
 		{"a root itself", "internal/api/policy/new.go", "corpus=true"},
 		{"an embedded-file directory", "internal/api/sso/templates/new.html", "corpus=true"},
+		{"a package only the corpus provider stub imports", "internal/libstub/new.go", "corpus=true"},
+		{"a package only the corpus mail sink imports", "internal/libsink/new.go", "corpus=true"},
 		{"a package no root imports", "internal/unrelated/new.go", "corpus=false"},
 		{"a test-support package of the tested package (integration tag)", "internal/testsupport/venueoracle/new.go", "corpus=true"},
 		{"the other cmd built into the corpus image", "cmd/dev-health-worker-migrate/new.go", "corpus=true"},
@@ -508,5 +515,33 @@ func TestAuthCorpusQueueTestedPackageVariantsMapToTheirDirectory(t *testing.T) {
 	list := "FAKE_GO_TEST_LIST=P example.com/x/internal/apiservice/authflowvenue [example.com/x/internal/apiservice/authflowvenue.test]\nP example.com/x/internal/testsupport/venueoracle [example.com/x/internal/apiservice/authflowvenue.test]"
 	if got := corpusLiveRun(t, []string{list}, "internal/testsupport/venueoracle/x.go"); got != "corpus=true" {
 		t.Fatalf("a test variant row: got %q, want corpus=true", got)
+	}
+}
+
+// CHAOS-11735: an embedded file of a TEST VARIANT prints as `E PATH [PATH.test]/file` (a
+// dependency recompiled for the test): its directory is a closure directory, and only that directory.
+func TestAuthCorpusQueueTestedPackageEmbedOfATestVariantMapsToItsDirectory(t *testing.T) {
+	const tested = "example.com/x/internal/apiservice/authflowvenue"
+	list := "FAKE_GO_TEST_LIST=P " + tested + " [" + tested + ".test]\n" +
+		"E example.com/x/internal/testsupport/proofprincipals [" + tested + ".test]/fixtures/a.json\n" +
+		"P example.com/x/internal/testsupport/venueoracle [" + tested + ".test]\n" +
+		"E example.com/x/internal/testsupport/venueoracle [" + tested + ".test]/data/sub/b.json"
+	cases := []struct {
+		name  string
+		paths []string
+		want  string
+	}{
+		{"a file beside the embed of a recompiled test-support package", []string{"internal/testsupport/proofprincipals/fixtures/new.json"}, "corpus=true"},
+		{"a file beside the embed of a recompiled dependency", []string{"internal/testsupport/venueoracle/data/sub/new.json"}, "corpus=true"},
+		{"a sibling of the nested embed directory", []string{"internal/testsupport/venueoracle/data/sub2/x.json"}, "corpus=false"},
+		{"a subdirectory of the nested embed directory that is not embedded", []string{"internal/testsupport/venueoracle/data/sub/deeper/x.json"}, "corpus=false"},
+		{"the parent of the nested embed directory is not itself an embed directory", []string{"internal/testsupport/venueoracle/data/x.json"}, "corpus=false"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := corpusLiveRun(t, []string{list}, c.paths...); got != c.want {
+				t.Fatalf("change %q: got %q, want %q", c.paths, got, c.want)
+			}
+		})
 	}
 }

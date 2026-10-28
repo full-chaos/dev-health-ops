@@ -3,8 +3,9 @@
 # `go test -tags integration` on the tested package) and by ci/auth_corpus_queue_relevance.sh (which lists the live
 # `go list -deps` closure of the roots, and of the tested package with its tests and the integration tag).
 # AUTH_CORPUS_ROOTS: the go-api auth route packages, the apiservice top level and every command the corpus images build
-# (the go build loop of docker/go-worker.Dockerfile; internal/cigates/workflows tests that each is a root).
+# (every go build of docker/go-worker.Dockerfile, docker/providerstub.Dockerfile and docker/smtpsink.Dockerfile; internal/cigates/workflows
+# parses them and tests that each is a root).
 # shellcheck disable=SC2034
-AUTH_CORPUS_ROOTS=(./internal/api/session ./internal/api/sso ./internal/api/policy ./internal/apiservice ./cmd/dho ./cmd/auth-service ./cmd/dev-health-worker-migrate ./cmd/auth-migrate)
+AUTH_CORPUS_ROOTS=(./internal/api/session ./internal/api/sso ./internal/api/policy ./internal/apiservice ./cmd/dho ./cmd/auth-service ./cmd/dev-health-worker-migrate ./cmd/auth-migrate ./internal/testsupport/providerstub/cmd/providerstub ./internal/testsupport/smtpcapture/cmd/smtpsink)
 # shellcheck disable=SC2034
 AUTH_CORPUS_TEST_PACKAGE=./internal/apiservice/authflowvenue

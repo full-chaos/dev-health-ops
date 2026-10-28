@@ -45,6 +45,19 @@ func (f *fakeTx) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
 func (f *fakeTx) Commit(context.Context) error   { f.committed = true; return nil }
 func (f *fakeTx) Rollback(context.Context) error { f.rolledBack = true; return nil }
 
+func init() {
+	txStatusOf = func(pgx.Tx) byte { return 'T' }
+}
+
+func testSchema(t *testing.T) authschema.ValidatedIdentifier {
+	t.Helper()
+	schema, err := authschema.NewValidatedIdentifier("auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return schema
+}
+
 func resetRequested() AuditEvent {
 	return AuditEvent{EventType: EventPasswordResetRequested, Outcome: OutcomeAllowed,
 		Attributes: map[string]any{"reason_code": "password_reset_requested", "target_kind": "principal"}}
@@ -78,7 +91,7 @@ func TestAppendWithValidatesTheRowAsAppendDoes(t *testing.T) {
 
 func TestAppendWithRunsApplyThenTheAuditRowInOneTransaction(t *testing.T) {
 	tx := &fakeTx{}
-	err := appendWithTx(context.Background(), tx, authschema.ValidatedIdentifier{}, resetRequested(),
+	err := appendWithTx(context.Background(), tx, testSchema(t), resetRequested(),
 		func(ctx context.Context, ops TxOps) error {
 			_, err := ops.Exec(ctx, "SELECT 'apply'")
 			return err
@@ -109,7 +122,7 @@ func TestAppendWithRunsApplyThenTheAuditRowInOneTransaction(t *testing.T) {
 
 func TestAppendWithRefusesAGuardedWrite(t *testing.T) {
 	tx := &fakeTx{changed: 1}
-	err := appendWithTx(context.Background(), tx, authschema.ValidatedIdentifier{}, resetRequested(),
+	err := appendWithTx(context.Background(), tx, testSchema(t), resetRequested(),
 		func(context.Context, TxOps) error { return nil })
 	if !errors.Is(err, ErrGuardedWriteInAppend) {
 		t.Fatalf("err = %v, want ErrGuardedWriteInAppend", err)
@@ -126,7 +139,7 @@ func TestAppendWithRefusesAGuardedWrite(t *testing.T) {
 
 func TestAppendWithWritesNoRowWhenApplyFails(t *testing.T) {
 	tx := &fakeTx{}
-	err := appendWithTx(context.Background(), tx, authschema.ValidatedIdentifier{}, resetRequested(),
+	err := appendWithTx(context.Background(), tx, testSchema(t), resetRequested(),
 		func(context.Context, TxOps) error { return errors.New("apply failed") })
 	if !errors.Is(err, ErrMutationFailed) {
 		t.Fatalf("err = %v, want ErrMutationFailed", err)
@@ -143,7 +156,7 @@ func TestAppendWithWritesNoRowWhenApplyFails(t *testing.T) {
 
 func TestAppendWithFailsWholeWhenTheAuditInsertFails(t *testing.T) {
 	tx := &fakeTx{failOn: "security_audit_events"}
-	err := appendWithTx(context.Background(), tx, authschema.ValidatedIdentifier{}, resetRequested(),
+	err := appendWithTx(context.Background(), tx, testSchema(t), resetRequested(),
 		func(context.Context, TxOps) error { return nil })
 	if !errors.Is(err, ErrMutationFailed) {
 		t.Fatalf("err = %v, want ErrMutationFailed", err)

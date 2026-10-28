@@ -243,6 +243,7 @@ var approvedAuditReasonCodes = []string{
 	"identity_projected",
 	"identity_relinked",
 	"password_reset",
+	"password_reset_requested",
 	"policy_revision_activated",
 	"entitlement_snapshot_applied",
 	"denied_no_membership",

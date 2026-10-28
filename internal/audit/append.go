@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
@@ -75,23 +74,4 @@ func Append(ctx context.Context, pool *pgxpool.Pool, schema authschema.Validated
 		return fmt.Errorf("%w: committing", ErrMutationFailed)
 	}
 	return nil
-}
-
-// EventPasswordResetRequested is a password-reset link the service issued (or
-// refused to issue for an unknown address): the request changes no guarded
-// state.
-const EventPasswordResetRequested = "auth.password.reset_requested"
-
-// ErrGuardedWriteInAppend reports that the apply function of AppendWith wrote
-// a guarded table. Nothing is written.
-var ErrGuardedWriteInAppend = fmt.Errorf("%w: a guarded write belongs in Commit", ErrMutationFailed)
-
-// AppendWith is Append with the caller's unguarded writes in the same
-// transaction.
-func AppendWith(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier, event AuditEvent, apply func(ctx context.Context, tx TxOps) error) error {
-	return fmt.Errorf("%w: not implemented", ErrMutationFailed)
-}
-
-func appendWithTx(ctx context.Context, tx pgx.Tx, schema authschema.ValidatedIdentifier, event AuditEvent, apply func(ctx context.Context, tx TxOps) error) error {
-	return fmt.Errorf("%w: not implemented", ErrMutationFailed)
 }

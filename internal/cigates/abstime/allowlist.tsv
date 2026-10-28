@@ -13,8 +13,6 @@ internal/faultproxy/proxy_test.go	TestSlowCapsRate	lower-bound wait proof: load 
 internal/goapiproof/credentialecho_test.go	TestSentSecretsScansALargeBodyQuickly	measured hosted margin 12.5 (>= 3), CHAOS-11684 census
 internal/jobs/investment/nativeexecutor_test.go	TestCategorizeFanOutIsBoundedByLimit	not wall time: poll counter (internal/jobs/investment/nativeexecutor_test.go:552)
 internal/jobs/investment/shadowphase_test.go	TestAPanicOfThePhaseLoopLeavesNoGoroutineBehind	not wall time: poll counter (internal/jobs/investment/shadowphase_test.go:912)
-internal/pgmigrate/indexbuild_selfheal_integration_test.go	TestBuildIndexHolderLongerThanTheWindowLeavesTheLeftoverAndBlocksNoWriter	pending CHAOS-11684 conversion
-internal/pgmigrate/indexbuild_selfheal_integration_test.go	TestBuildIndexTableLockWaitStaysUnderLockTimeout	pending CHAOS-11684 conversion
 internal/providerfoundation/http_gate_wait_test.go	TestAGateWaitWithinTheBoundIsSleptOutInPlace	lower-bound wait proof: load only lengthens it
 internal/providerfoundation/http_gate_wait_test.go	TestInPlaceGateWaitsAreBoundedInTotal	lower-bound wait proof: load only lengthens it
 internal/providersync/chunked_wall_bound_test.go	TestChunkedAttemptStopsOnTheWallBoundNotTheOldEightChunks	not wall time: fake clock (internal/providersync/chunked_wall_bound_test.go:134)

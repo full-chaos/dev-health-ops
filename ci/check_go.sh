@@ -177,6 +177,93 @@ run_integration_go_test() {
   return "${rc}"
 }
 
+# CHAOS-11794: the providersync shard pipeline (`go test -json | tee | jq`) runs in its own process group (setsid, only
+# inside the backgrounded subshell: this script is never exec-replaced) under a hard step bound. A child that holds
+# stdout open would keep `tee` alive after go test is gone and stall the step until the job cap with no log. The bound
+# sits above the 22 min go test -timeout (its dump wins when it can) and below the 25 min job cap. At the bound the
+# group's processes except tee/jq/bash get SIGQUIT (Go prints every goroutine; tee and jq stay up to carry the dump),
+# then KILL after 10 s. Leftover group members are reaped after go test exits. ps prints pid, pgid, ppid, etimes and
+# args only, never env. DEV_HEALTH_GO_STEP_BOUND_SECS overrides the bound for tests.
+PROVIDERSYNC_STEP_BOUND_SECS=1380
+
+group_ps_table() {
+  ps -eo pid,pgid,ppid,etimes,args 2>/dev/null | awk -v g="$1" 'NR == 1 || $2 == g' | cut -c1-300
+}
+
+providersync_bound_watchdog() {
+  local pid="$1" pgid="$2" bound="$3" marker="$4" s p
+  for ((s = 0; s < bound; s++)); do
+    sleep 1
+    kill -0 "${pid}" 2>/dev/null || return 0
+  done
+  echo hit >"${marker}"
+  printf 'check_go.sh: providersync step bound (%s s) hit; stopping the go test process group %s\n' "${bound}" "${pgid:-none}" >&2
+  if [ -z "${pgid}" ]; then
+    kill -QUIT "${pid}" 2>/dev/null || true
+    sleep 10
+    kill -KILL "${pid}" 2>/dev/null || true
+    return 0
+  fi
+  group_ps_table "${pgid}" >&2
+  for p in $(ps -eo pid=,pgid=,comm= | awk -v g="${pgid}" '$2 == g && $3 != "tee" && $3 != "jq" && $3 != "bash" { print $1 }'); do
+    kill -QUIT "${p}" 2>/dev/null || true
+  done
+  for ((s = 0; s < 100; s++)); do
+    kill -0 "${pid}" 2>/dev/null || return 0
+    sleep 0.1
+  done
+  group_ps_table "${pgid}" >&2
+  kill -KILL -- "-${pgid}" 2>/dev/null || true
+}
+
+run_providersync_bounded() {
+  local test_regex="$1" json_file="$2"
+  local bound="${DEV_HEALTH_GO_STEP_BOUND_SECS:-${PROVIDERSYNC_STEP_BOUND_SECS}}"
+  local pid pgid="" own_pgid i rc=0 wd marker pidfile
+  local -a private_group=()
+  case "${bound}" in ''|*[!0-9]*) die "DEV_HEALTH_GO_STEP_BOUND_SECS must be a whole number of seconds" ;; esac
+  if command -v setsid >/dev/null 2>&1; then
+    private_group=(setsid)
+  fi
+  marker="$(mktemp)"
+  pidfile="$(mktemp)"
+  (
+    cd "${ROOT}"
+    exec ${private_group[@]+"${private_group[@]}"} bash -c 'echo $$ >"$3"; set -o pipefail; json=$1; filter=$2; shift 3; "$@" | tee "${json}" | jq --unbuffered -rj "${filter}"' _ \
+      "${json_file}" 'select(.Action == "output") | .Output' "${pidfile}" \
+      "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=22m -json -run "${test_regex}" ./internal/providersync
+  ) &
+  pid=$!
+  if [ "${#private_group[@]}" -gt 0 ]; then
+    own_pgid="$(ps -o pgid= -p "$$" | tr -d ' ')"
+    for i in $(seq 1 50); do
+      [ -s "${pidfile}" ] && break
+      sleep 0.1
+    done
+    pgid="$(tr -d ' \n' <"${pidfile}")"
+    case "${pgid}" in ''|*[!0-9]*|"${own_pgid}") pgid="" ;; esac
+  else
+    echo "check_go.sh: no setsid; the step bound stops pid ${pid} only" >&2
+  fi
+  providersync_bound_watchdog "${pid}" "${pgid}" "${bound}" "${marker}" &
+  wd=$!
+  wait "${pid}" || rc=$?
+  wait "${wd}" 2>/dev/null || true
+  if [ -n "${pgid}" ] && pgrep -g "${pgid}" >/dev/null 2>&1; then
+    echo "check_go.sh: processes left in the go test process group ${pgid}; stopping them" >&2
+    group_ps_table "${pgid}" >&2
+    kill -TERM -- "-${pgid}" 2>/dev/null || true
+    for i in $(seq 1 50); do
+      pgrep -g "${pgid}" >/dev/null 2>&1 || break
+      sleep 0.1
+    done
+    kill -KILL -- "-${pgid}" 2>/dev/null || true
+  fi
+  [ ! -s "${marker}" ] || rc=124
+  rm -f "${marker}" "${pidfile}"
+  return "${rc}"
+}
+
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
@@ -4247,13 +4334,7 @@ check_providersync_test_shard() {
   # and pipefail keeps go test's exit code.
   local json_dir="${GO_TEST_JSON_DIR:-${ROOT}/go-test-json}"
   mkdir -p "${json_dir}"
-  (
-    set -o pipefail
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=22m -json -run "${test_regex}" ./internal/providersync \
-      | tee "${json_dir}/providersync-shard-${shard}.json" \
-      | jq -rj 'select(.Action == "output") | .Output'
-  )
+  run_providersync_bounded "${test_regex}" "${json_dir}/providersync-shard-${shard}.json"
 }
 
 check_integration_shard() {

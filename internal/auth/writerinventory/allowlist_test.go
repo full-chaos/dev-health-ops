@@ -113,6 +113,9 @@ var Allowlist = []Entry{
 	{File: "internal/auth/identity/publicusers.go", Func: "insertPublicUser", Table: "public.users", Verb: "INSERT"},
 	{File: "internal/auth/identity/publicusers.go", Func: "updatePublicPassword", Table: "public.users", Verb: "UPDATE"},
 	{File: "internal/auth/identity/publicusers.go", Func: "updatePublicVerified", Table: "public.users", Verb: "UPDATE"},
+	// A join's membership: the public row and the auth row in one audit.Commit, only while AUTH_USERS_OWNED is on.
+	{File: "internal/auth/identity/joinmembership.go", Func: "Store.insertJoinMembership", Table: "auth.memberships", Verb: "INSERT"},
+	{File: "internal/auth/identity/joinmembership.go", Func: "Store.insertJoinMembership", Table: "public.memberships", Verb: "INSERT"},
 	{File: "internal/auth/identity/store.go", Func: "Store.applyProjectionChange", Table: "auth.principals", Verb: "UPDATE"},
 	{File: "internal/auth/identity/store.go", Func: "Store.applyProjectionChange", Table: "auth.users", Verb: "UPDATE"},
 	{File: "internal/auth/identity/store.go", Func: "Store.insertProjection", Table: "auth.principals", Verb: "INSERT"},

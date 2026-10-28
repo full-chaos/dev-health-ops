@@ -170,6 +170,7 @@ internal/cigates/chartgates	overlay_test.go
 internal/cigates/chconstructor	chconstructor_test.go
 internal/cigates/checkgo	check_go_script_test.go
 internal/cigates/checkgo	ci_script_helpers_test.go
+internal/cigates/checkgo	cigates_timeout_test.go
 internal/cigates/checkgo	discovery_tree_test.go
 internal/cigates/checkgo	go_test_leg_json_test.go
 internal/cigates/checkgo	race_solo_load_test.go

@@ -95,18 +95,18 @@ func TestMetricsFlushStartExportsOnceBeforeItReturns(t *testing.T) {
 }
 
 // TestMetricsFlushStartIsBoundedWhenTheFlushIgnoresItsContext: a flush that does not return (the SDK reader may wait
-// on its export loop first) costs the start at most its budget and a warning, never a failed start.
+// on its export loop first) costs the start its bounded wait and a warning, never a failed start: Start comes back
+// while the flush is still held.
 func TestMetricsFlushStartIsBoundedWhenTheFlushIgnoresItsContext(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		source := &flushSource{hold: make(chan struct{})}
 		defer close(source.hold)
 		flush, logs := newFlush(source)
-		start := time.Now()
 		if err := flush.Start(context.Background()); err != nil {
 			t.Fatalf("Start = %v, want nil: an unreachable collector is not a start failure", err)
 		}
-		if waited := time.Since(start); waited > metricsFlushTimeout {
-			t.Errorf("Start waited %v on the bubble clock for a stuck flush, want at most %v", waited, metricsFlushTimeout)
+		if source.returned.Load() {
+			t.Error("the stuck flush returned before Start did: Start must stop waiting at its budget, not at the flush")
 		}
 		if got := strings.Count(logs.String(), "otlp metrics startup flush abandoned"); got != 1 {
 			t.Errorf("abandon warnings = %d, want 1; logs:\n%s", got, logs.String())

@@ -335,6 +335,8 @@ func TestPlantedPrintFamilyKeyAsItsOwnArgumentIsRefused(t *testing.T) {
 		"Println":  "fmt.Println(\"DURATION_MS=\", time.Since(s).Milliseconds())",
 		"Fprint":   "fmt.Fprint(os.Stderr, \"DURATION_MS=\", time.Since(s).Milliseconds())",
 		"Sprint":   "_ = fmt.Sprint(\"DURATION_MS=\", time.Since(s).Milliseconds())",
+		"Print":    "fmt.Print(\"DURATION_MS=\", time.Since(s).Milliseconds())",
+		"Sprintln": "_ = fmt.Sprintln(\"DURATION_MS=\", time.Since(s).Milliseconds())",
 	} {
 		body := "func helper() {\n\ts := time.Now()\n\t" + emit + "\n}\n\nfunc TestPrint(t *testing.T) {\n\tvar ms int64\n\tfmt.Sscanf(text, \"DURATION_MS=%d\", &ms)\n\tif ms > 5000 {\n\t\tt.Fatal(\"slow\")\n\t}\n}\n"
 		got := check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil)
@@ -412,5 +414,103 @@ func TestAHelperThatCallsAParsingHelperIsAReader(t *testing.T) {
 
 func TestTwoLevelsOfHelperCallsAreOutOfScope(t *testing.T) {
 	body := carriedHelper + nestedParser + "func readKey(out, key string) int {\n\treturn parseMillis(out)\n}\n\nfunc readKeyTwice(out, key string) int {\n\treturn readKey(out, key)\n}\n\nfunc TestDeep(t *testing.T) {\n\tms := readKeyTwice(text, \"STOP_MS\")\n\tif ms > 4000 {\n\t\tt.Fatal(ms)\n\t}\n}\n"
+	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil))
+}
+
+// Round-2 reviewer probes (CHAOS-11757, ACP-RULING-r2-fixscope): shell reports through a variable or printf, and fixed
+// literal inputs that must not count as a child's report.
+
+const shellElapsedOf = `
+func elapsedOf(stdout, key string) (int, bool) {
+	n, err := strconv.Atoi(stdout)
+	return n, err == nil
+}
+
+func TestShell(t *testing.T) {
+	prompt, ok := elapsedOf(out, "A_ELAPSED")
+	if ok && prompt <= 3 {
+		t.Fatal("x")
+	}
+}
+`
+
+func TestPlantedShellAssignedThenEchoedKeyIsRefused(t *testing.T) {
+	for name, script := range map[string]string{
+		"dollar": `"start=$SECONDS\nelapsed=$((SECONDS - start))\necho \"A_ELAPSED=$elapsed\"\n"`,
+		"braces": `"elapsed=${SECONDS}\necho \"A_ELAPSED=${elapsed}\"\n"`,
+		"epoch":  `"t=$EPOCHREALTIME\necho A_ELAPSED=$t\n"`,
+		"upper":  `"ELAPSED=$((SECONDS - start))\necho \"A_ELAPSED=$ELAPSED\"\n"`,
+		"date":   `"d=$(date +%s)\necho \"A_ELAPSED=$d\"\n"`,
+		"quoted": `"elapsed=$((SECONDS - start))\necho 'A_ELAPSED='\"$elapsed\"\n"`,
+	} {
+		body := "const script = " + script + "\n" + shellElapsedOf
+		got := check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil)
+		if len(got) != 1 || !strings.Contains(got[0], "TestShell") {
+			t.Fatalf("%s: want one violation naming TestShell, got %q", name, got)
+		}
+	}
+}
+
+func TestPlantedShellPrintfKeyIsRefused(t *testing.T) {
+	for name, script := range map[string]string{
+		"arith":    `"printf 'A_ELAPSED=%s\\n' \"$((SECONDS - start))\"\n"`,
+		"seconds":  `"printf 'A_ELAPSED=%d\\n' $SECONDS\n"`,
+		"variable": `"elapsed=$((SECONDS - start))\nprintf 'A_ELAPSED=%s\\n' \"$elapsed\"\n"`,
+		"second":   `"printf 'CODE=%s A_ELAPSED=%s\\n' 0 \"$((SECONDS - start))\"\n"`,
+	} {
+		body := "const script = " + script + "\n" + shellElapsedOf
+		got := check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil)
+		if len(got) != 1 || !strings.Contains(got[0], "TestShell") {
+			t.Fatalf("%s: want one violation naming TestShell, got %q", name, got)
+		}
+	}
+}
+
+func TestShellEchoOfAnUnmeasuredVariableIsNotAnEmitter(t *testing.T) {
+	for name, script := range map[string]string{
+		"echo":   `"name=x\necho \"A_ELAPSED=$name\"\n"`,
+		"printf": `"printf 'A_ELAPSED=%s\\n' \"$port\"\n"`,
+		"first":  `"printf 'CODE=%s A_ELAPSED=%s\\n' \"$((SECONDS - start))\" 0\n"`,
+	} {
+		body := "const script = " + script + "\n" + shellElapsedOf
+		wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil))
+		_ = name
+	}
+}
+
+const logKeyDiagnostic = `
+func diag() {
+	s := time.Now()
+	log.Printf("STOP_MS=%d", time.Since(s).Milliseconds())
+}
+
+`
+
+func TestFixedLiteralInputIsNotAChildReport(t *testing.T) {
+	for name, test := range map[string]string{
+		"literal":    "var ms int\n\tfmt.Sscanf(\"STOP_MS=2\", \"STOP_MS=%d\", &ms)",
+		"identifier": "var ms int\n\tin := \"STOP_MS=2\"\n\tfmt.Sscanf(in, \"STOP_MS=%d\", &ms)",
+		"helper":     "ms, _ := readKey(\"STOP_MS=2\", \"STOP_MS\")",
+	} {
+		body := logKeyDiagnostic + "func readKey(out, key string) (int, bool) {\n\tn, err := strconv.Atoi(out)\n\treturn n, err == nil\n}\n\nfunc TestFixed(t *testing.T) {\n\t" + test + "\n\tif ms > 1 {\n\t\tt.Fatal(ms)\n\t}\n}\n"
+		got := check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil)
+		if len(got) != 0 {
+			t.Fatalf("%s: a fixed literal input is not a child's report, got %q", name, got)
+		}
+	}
+}
+
+func TestAReassignedIdentifierIsNotALiteralSource(t *testing.T) {
+	body := logKeyDiagnostic + "func TestReassigned(t *testing.T) {\n\tvar ms int\n\tin := \"STOP_MS=2\"\n\tin = readOutput()\n\tfmt.Sscanf(in, \"STOP_MS=%d\", &ms)\n\tif ms > 1 {\n\t\tt.Fatal(ms)\n\t}\n}\n"
+	wantOne(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil), "TestReassigned")
+}
+
+func TestStringsContainsAndCutOfAKeyCarryNothing(t *testing.T) {
+	body := carriedHelper + "func TestContains(t *testing.T) {\n\tn := strings.Count(text, \"STOP_MS=\")\n\thas := strings.Contains(text, \"STOP_MS=\")\n\tbefore, _, _ := strings.Cut(text, \"STOP_MS=\")\n\tif n > 1 || len(before) > 4 || !has {\n\t\tt.Fatal(n)\n\t}\n}\n"
+	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil))
+}
+
+func TestAFileChannelIsOutOfScope(t *testing.T) {
+	body := "func helper() {\n\ts := time.Now()\n\tos.WriteFile(path, []byte(strconv.FormatInt(time.Since(s).Milliseconds(), 10)), 0o644)\n}\n\nfunc TestFile(t *testing.T) {\n\traw, _ := os.ReadFile(path)\n\tms, _ := strconv.Atoi(string(raw))\n\tif ms > 4000 {\n\t\tt.Fatal(ms)\n\t}\n}\n"
 	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil))
 }

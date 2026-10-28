@@ -250,6 +250,29 @@ authService:
   valkey:
     secretName: ""
     secretKey: AUTH_VALKEY_URI
+  # -- The mail setting of the verify and reset mails, read by secretKeyRef from
+  #    ONE Secret the chart does not create (use the Secret go-api reads
+  #    EMAIL_PROVIDER, EMAIL_FROM_ADDRESS, EMAIL_API_KEY and APP_BASE_URL from).
+  #    From authService.phase 4 (users owned) secretName is required and the
+  #    four variables render; below phase 4 nothing renders. The service
+  #    refuses to start without a usable setting (a real provider, a
+  #    from-address, an https origin as APP_BASE_URL). A resend provider with
+  #    no key fails when a mail is sent, not at start. The console override
+  #    AUTH_MAIL_ALLOW_CONSOLE is never rendered and authService.extraEnv
+  #    refuses it. When secretName is the Secret this chart creates
+  #    (secrets.create=true), the render also reads secrets.data: it fails
+  #    without EMAIL_FROM_ADDRESS and APP_BASE_URL, with EMAIL_PROVIDER empty,
+  #    console or smtp (the chart wires resend only), or resend with neither
+  #    key. The chart cannot read a Secret it did not create.
+  mail:
+    secretName: ""
+    keys:
+      provider: EMAIL_PROVIDER
+      fromAddress: EMAIL_FROM_ADDRESS
+      apiKey: EMAIL_API_KEY
+      # -- Resend reads EMAIL_API_KEY, else RESEND_API_KEY (internal/mail/sender.go).
+      resendApiKey: RESEND_API_KEY
+      appBaseURL: APP_BASE_URL
   # -- AUTH_SERVICE_TRUSTED_PROXIES: the peers (IP addresses or strict CIDR networks) whose single X-Forwarded-For
   #    value names the client. Required from authService.phase 2 (go-api forwards auth routes), because otherwise every proxied caller
   #    shares the proxy's own address in the rate-limit keys. List the go-api pods' network only: the render refuses
@@ -475,6 +498,21 @@ authService:
       keyCustody:
         to: []
         port: 443
+      # -- Peers of the mail provider, `to` entries plus ports. REQUIRED from
+      #    phase 4 while authService.mail.secretName is set and the policy is
+      #    on (the chart cannot see which provider the Secret selects). An
+      #    ipBlock must be one CIDR, IPv4 /8 or longer, IPv6 /32 or longer; a
+      #    mapped or NAT64 form is refused, and so is a peer with no selector.
+      #    The one whole-internet form (a provider with no fixed addresses):
+      #    ipBlock 0.0.0.0/0 (and/or ::/0) with ports of TCP 443 alone and an
+      #    `except` list of at least 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16,
+      #    100.64.0.0/10, 169.254.0.0/16, 127.0.0.0/8 (IPv6: fc00::/7,
+      #    fe80::/10, ::1/128, ::ffff:0:0/96, 64:ff9b::/96).
+      mail:
+        to: []
+        ports:
+          - protocol: TCP
+            port: 443
       # -- Peers of the OTLP/gRPC trace collector, `to` entries plus port. Rendered only while
       #    authService.tracing.enabled, and then required when the policy is on. An ipBlock (the node
       #    InternalIP of a hostPort collector) and a podSelector/namespaceSelector are both accepted;

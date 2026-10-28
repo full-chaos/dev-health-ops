@@ -300,34 +300,41 @@ func teardownFastUnderCleanupDisposition(g *guard) {
 	if !ok {
 		return
 	}
+	log := filepath.Join(g.tmp, "kill-disposition.log")
 	// Services are forked FIRST (they must not inherit the ignore), then the disposition is set as cleanup() does.
-	body := "set -euo pipefail\nTEARDOWN_WAIT_SECS=" + strconv.Itoa(boundSecs) + "\n" + src + `
+	// kill is wrapped to log its calls: the watchdog's escalation is the only kill -KILL <service pid> the library makes.
+	body := "set -euo pipefail\nTEARDOWN_WAIT_SECS=" + strconv.Itoa(boundSecs) + "\n" + src + sub(`
+kill() { echo "KILL $*" >> @LOG@; builtin kill "$@"; }
 set -m
 ( trap "" TERM; while :; do sleep 1; done ) & STUBBORN=$!
 ( while :; do sleep 1; done ) & PROMPT=$!
 set +m
 sleep 0.3
 trap '' INT TERM
-start=$SECONDS
 stop_service prompt "$PROMPT"
-echo "PROMPT_ELAPSED=$((SECONDS - start))"
+echo "PROMPT_WATCHDOG_FIRED=$(grep -c "^KILL -KILL ${PROMPT}$" @LOG@ || true)"
 start=$SECONDS
 stop_service stubborn "$STUBBORN"
 echo "STUBBORN_ELAPSED=$((SECONDS - start))"
-`
+`, "@LOG@", log)
 	r, ok := g.bash(g.launch, body, 60*time.Second)
 	if !ok {
 		return
 	}
 	g.expect(r.code == 0, "the disposition run failed (exit %d): %s", r.code, r.stderr)
-	prompt, ok1 := elapsedOf(g, r.stdout, "PROMPT_ELAPSED")
-	stubborn, ok2 := elapsedOf(g, r.stdout, "STUBBORN_ELAPSED")
-	if !ok1 || !ok2 {
+	stubborn, ok := elapsedOf(g, r.stdout, "STUBBORN_ELAPSED")
+	if !ok {
 		return
 	}
-	// Both seconds come from the same script run, so they are compared with each other, never with a wall-time budget (D6418).
-	g.expect(prompt*2 < stubborn,
-		"a service that exits promptly took %ds against %ds for the SIGTERM-ignoring one: the watchdog was not cancelled (SIGTERM ignored via the inherited disposition?)", prompt, stubborn)
+	// A service that exits promptly must cancel the watchdog before its bound ends: the watchdog never fires its own
+	// kill -KILL <pid>. A count of calls, no time is compared (D6418).
+	fired := regexp.MustCompile(`PROMPT_WATCHDOG_FIRED=(\d+)`).FindStringSubmatch(r.stdout)
+	if fired == nil {
+		g.failf("no PROMPT_WATCHDOG_FIRED in %q: the script died before reaching it", r.stdout)
+		return
+	}
+	g.expect(fired[1] == "0",
+		"the watchdog of a service that exits promptly ran to its bound and killed it %s time(s): the watchdog was not cancelled (SIGTERM ignored via the inherited disposition?)", fired[1])
 	//abstime:allow lower-bound wait, load only lengthens it (precedent: allowlist.tsv backfillrun and faultproxy rows)
 	g.expect(stubborn >= boundSecs,
 		"a SIGTERM-ignoring service took only %ds against a %ds bound: the bound is not being honoured", stubborn, boundSecs)

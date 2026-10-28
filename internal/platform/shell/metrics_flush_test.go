@@ -50,3 +50,42 @@ func TestMetricsFlushNeverOutlivesItsBudgetEvenWhenTheSourceIgnoresTheContext(t 
 		t.Fatalf("the abandoned flush was not logged: %q", logs.String())
 	}
 }
+
+// deadlineProbe records whether the context its Shutdown received carries a deadline, and which.
+type deadlineProbe struct{ got chan time.Time }
+
+func (p deadlineProbe) Shutdown(ctx context.Context) error {
+	deadline, _ := ctx.Deadline()
+	p.got <- deadline
+	return nil
+}
+
+// flushBoundCeiling is the most the flush deadline may sit past the start of the flush: half of the stop budget, the
+// other half being the tracing flush (stop_bound_test.go).
+const flushBoundCeiling = stopBoundBudget / 2
+
+// TestMetricsFlushHandsTheSourceAContextBoundedByTheFlushTimeout pins what the shell tests that stop the whole process
+// cannot see: the push stop receives the flush context (a deadline at all), and that deadline is the flush bound, not
+// the shutdown budget. No wall time is measured: the deadline the source saw is compared with the instant before the call.
+func TestMetricsFlushHandsTheSourceAContextBoundedByTheFlushTimeout(t *testing.T) {
+	probe := deadlineProbe{got: make(chan time.Time, 1)}
+	flush := metricsFlush{source: probe, logger: slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+	before := time.Now()
+	if err := flush.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown error = %v, want nil", err)
+	}
+	var deadline time.Time
+	select {
+	case deadline = <-probe.got:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the source never saw the flush")
+	}
+	if deadline.IsZero() {
+		t.Fatal("the source got a context with no deadline: the flush bound never reaches the push stop")
+	}
+	if span := deadline.Sub(before); span > flushBoundCeiling {
+		t.Errorf("the source's deadline is %v after the call, want <= %v (metricsFlushTimeout %v)", span, flushBoundCeiling, metricsFlushTimeout)
+	}
+}

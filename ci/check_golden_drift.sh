@@ -148,30 +148,33 @@ message() {
 
 out=""
 run_rows() {
-  local file="${1:-}" line failed=0 rc i verdict="" prefixed=0
+  local file="${1:-}" line failed=0 rc i verdict="" verdicts=0 prefixed=0
   local -a pkgs=() res=()
   [ -n "${file}" ] && [ -r "${file}" ] || die "run needs a readable ROWS_FILE"
   trap 'rm -f "${out:-}"' EXIT
-  # Pass 1 reads the whole file before any test runs. Every non-empty line must be a VERDICT line or a well-formed ROW; a
-  # ROW-prefixed line that is not ROW<TAB>... , or a count of parsed rows that differs from the ROW-prefixed lines (the
-  # workflow counts those with grep -c '^ROW'), exits 2 and runs nothing.
+  # Pass 1 reads the whole file before any test runs and accepts EXACTLY what `select` emits: one well-formed
+  # ROW<TAB>package<TAB>regex line per row and exactly one "VERDICT select|none|all <reason>" line. select never prints an
+  # empty line, a carriage return or any other text, so each of those exits 2 and runs nothing, as does a count of parsed
+  # rows that differs from the ROW-prefixed lines (the workflow counts those with grep -c '^ROW').
   while IFS= read -r line || [ -n "${line}" ]; do
     case "${line}" in
-      "") ;;
+      *$'\r'*) die "carriage return in the rows file: ${line}" ;;
+      "") die "empty line in the rows file" ;;
       ROW*)
         prefixed=$((prefixed + 1))
         case "${line}" in
           ROW$'\t'*) parse_row "${line}"; pkgs+=("${ROW_PKG}"); res+=("${ROW_RE}") ;;
         esac
         ;;
-      "VERDICT none"*) verdict="none" ;;
-      "VERDICT select"* | "VERDICT all"*) verdict="rows" ;;
+      "VERDICT none "?*) verdicts=$((verdicts + 1)); verdict="none" ;;
+      "VERDICT select "?* | "VERDICT all "?*) verdicts=$((verdicts + 1)); verdict="rows" ;;
       *) die "unexpected line in the rows file: ${line}" ;;
     esac
   done < "${file}"
+  [ "${verdicts}" -eq 1 ] || die "the rows file needs exactly one VERDICT line with a reason, has ${verdicts}"
   [ "${prefixed}" -eq "${#pkgs[@]}" ] || die "${prefixed} ROW-prefixed line(s) but ${#pkgs[@]} well-formed row(s): nothing runs"
   if [ "${#pkgs[@]}" -eq 0 ]; then
-    [ "${verdict}" = "none" ] || die "rows file names no ROW and no VERDICT none: nothing would run"
+    [ "${verdict}" = "none" ] || die "VERDICT ${verdict} but no ROW: nothing would run"
     echo "check_golden_drift.sh: VERDICT none, no ROW to run"
     return 0
   fi

@@ -51,27 +51,15 @@ func repoScan(t *testing.T) ([]string, []finding) {
 
 func TestBatchAPackagesRunOnSharedServers(t *testing.T) {
 	optedIn, _ := repoScan(t)
-	have := map[string]bool{}
-	for _, dir := range optedIn {
-		have["internal/"+dir] = true
-	}
-	for _, pkg := range batchA {
-		if !have[pkg] {
-			t.Errorf("%s: no TestMain calls %s; wrap its run in containers.RunWithSharedServers", pkg, optInCall)
-		}
+	for _, pkg := range missingFromBatch(optedIn, batchA) {
+		t.Errorf("%s: no TestMain calls %s; wrap its run in containers.RunWithSharedServers", pkg, optInCall)
 	}
 }
 
 func TestBatchBPackagesRunOnSharedServers(t *testing.T) {
 	optedIn, _ := repoScan(t)
-	have := map[string]bool{}
-	for _, dir := range optedIn {
-		have["internal/"+dir] = true
-	}
-	for _, pkg := range batchB {
-		if !have[pkg] {
-			t.Errorf("%s: no TestMain calls %s; wrap its run in containers.RunWithSharedServers", pkg, optInCall)
-		}
+	for _, pkg := range missingFromBatch(optedIn, batchB) {
+		t.Errorf("%s: no TestMain calls %s; wrap its run in containers.RunWithSharedServers", pkg, optInCall)
 	}
 }
 

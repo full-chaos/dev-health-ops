@@ -30,7 +30,6 @@ internal/reconcilerservice/readiness_pool_wiring_test.go	TestDomainReadinessChec
 internal/scheduler/fixed/engine_test.go	TestIntervalScheduleWaitsAFullPeriodAfterItsBaseline	not wall time: schedule timestamps (internal/scheduler/fixed/engine_test.go:671)
 internal/scheduler/sync/work_item_ran_before_integration_test.go	TestLoadWorkItemLastSuccessAtLivePostgres	not a performance budget: clock or stamp skew
 internal/schedulerservice/readiness_pool_wiring_test.go	TestDomainReadinessChecksRunOnTheReadinessPoolNotTheWorkPool	lower-bound wait proof: load only lengthens it
-internal/syncreconciler/materializer_jit_cost_integration_test.go	TestMaterializerStepCompletesUnderRealisticStageBudgetWithJITOnAtServerLevel	pending CHAOS-11684 conversion
 internal/syncreconciler/stage_failed_phase_integration_test.go	TestStageFailedNamesTheSlowStatementThatSpentTheBudget	found by the gate, not by the census: pending CHAOS-11684 re-census and conversion
 internal/testsupport/containers/shared_integration_test.go	TestSharedPostgresAtCapacityRefusesLoudly	pending CHAOS-11684 conversion
 internal/workerservice/execution_liveness_retry_backoff_integration_test.go	TestExecutionLivenessSeesIdempotencyFailuresSpacedByRiverRetryBackoff	found by the gate, not by the census: pending CHAOS-11684 re-census and conversion

@@ -123,7 +123,8 @@ func TestComposeExecKillIsBoundedForAChildOutsideTheGroup(t *testing.T) {
 // kill: the planted step is in it by its command name, with its state, and no
 // argument or environment value is printed. The planted step is a copy of the
 // multi-call stand-in (multicallMain): like a multi-call coreutils it picks its
-// applet from argv[0], so the step runs as sleep only when argv[0] says so.
+// applet from argv[0], so the script runs it with `exec -a sleep`: argv[0] is
+// sleep, and the command name stays planted-step.
 func TestComposeExecKillPrintsTheProcessGroupSnapshotWithoutArguments(t *testing.T) {
 	standIn, err := os.Executable()
 	if err != nil {
@@ -132,7 +133,7 @@ func TestComposeExecKillPrintsTheProcessGroupSnapshotWithoutArguments(t *testing
 	dir, script := composeHangScript(t,
 		"cp \"$"+multicallBinEnv+"\" \"$PWD/planted-step\"\n"+
 			"echo \"STEP snapshot rc=0 00:00:00\"\n"+
-			"exec \"$PWD/planted-step\" 31337\n")
+			"exec -a sleep \"$PWD/planted-step\" 31337\n")
 	// Clean time about 1.1 s; ceiling 20 s.
 	r, err := composeExecWithin(t, 20*time.Second, dir, time.Second, script,
 		"HANG_SECRET="+composeCHSentinel, multicallEnv+"=1", multicallBinEnv+"="+standIn)

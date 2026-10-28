@@ -894,7 +894,13 @@ Call with the entry.
 {{- $exceptShape := "" -}}
 {{- if hasKey $ib "except" -}}
 {{- if not (kindIs "slice" $ib.except) -}}{{- $exceptShape = "ipBlock.except is not a list" -}}
-{{- else -}}{{- range $ib.except -}}{{- $es := include "dev-health.authMailCidrShape" . -}}{{- if and $es (not $exceptShape) -}}{{- $exceptShape = printf "ipBlock.except entry %s %s" (toString .) $es -}}{{- end -}}{{- end -}}{{- end -}}
+{{- else -}}{{- range $ib.except -}}{{- $es := include "dev-health.authMailCidrShape" . -}}
+{{- /* An IPv4-mapped address (five zero groups, then ffff) is refused by the apiserver: a connect to ::ffff:a.b.c.d leaves the pod as IPv4, so the v4 peer's except list already decides it. */ -}}
+{{- if and (not $es) (contains ":" (toString .)) -}}
+{{- $g := include "dev-health.ipv6Groups" (lower (index (splitList "/" (toString .)) 0)) | fromJsonArray -}}
+{{- if and (eq (len $g) 8) (eq (int (index $g 0)) 0) (eq (int (index $g 1)) 0) (eq (int (index $g 2)) 0) (eq (int (index $g 3)) 0) (eq (int (index $g 4)) 0) (eq (int (index $g 5)) 65535) }}{{- $es = "is an IPv4-mapped IPv6 address; the apiserver refuses it and the IPv4 except list already covers the mapped range" }}{{- end -}}
+{{- end -}}
+{{- if and $es (not $exceptShape) -}}{{- $exceptShape = printf "ipBlock.except entry %s %s" (toString .) $es -}}{{- end -}}{{- end -}}{{- end -}}
 {{- end -}}
 {{- if $shape -}}bad:ipBlock.cidr {{ $shape }}
 {{- else if $exceptShape -}}bad:{{ $exceptShape }}
@@ -927,15 +933,16 @@ Call with the entry.
 (dict "peer" <entry> "ports" <authService.networkPolicy.egress.mail.ports>). The class is dev-health.authMailPeerClass.
 The one whole-internet exception (D6427, a provider with no fixed addresses): exactly 0.0.0.0/0 or ::/0, only with ports
 [TCP 443] alone (protocol TCP or unset, no endPort) and an except list of well formed CIDRs holding every private,
-shared, link-local and loopback network below, and for IPv6 also the mapped and NAT64 ranges that would reach internal
-IPv4 addresses.
+shared, link-local and loopback network below, and for IPv6 also the NAT64 range. The IPv4-mapped range ::ffff:0:0/96 is
+not listed: an IPv4-mapped destination leaves the pod as IPv4, so the v4 peer's except list decides it, and the apiserver
+refuses a mapped ipBlock.except entry, so one is refused at render.
 */}}
 {{- define "dev-health.authMailPeerProblem" -}}
 {{- $class := include "dev-health.authMailPeerClass" .peer -}}
 {{- if hasPrefix "bad:" $class -}}{{ trimPrefix "bad:" $class }}
 {{- else if eq $class "wide" -}}
 {{- $cidr := .peer.ipBlock.cidr -}}
-{{- $required := ternary (list "fc00::/7" "fe80::/10" "::1/128" "::ffff:0:0/96" "64:ff9b::/96") (list "10.0.0.0/8" "172.16.0.0/12" "192.168.0.0/16" "100.64.0.0/10" "169.254.0.0/16" "127.0.0.0/8") (contains ":" $cidr) -}}
+{{- $required := ternary (list "fc00::/7" "fe80::/10" "::1/128" "64:ff9b::/96") (list "10.0.0.0/8" "172.16.0.0/12" "192.168.0.0/16" "100.64.0.0/10" "169.254.0.0/16" "127.0.0.0/8") (contains ":" $cidr) -}}
 {{- $except := list -}}
 {{- range (.peer.ipBlock.except | default list) }}{{- $except = append $except (lower .) }}{{- end -}}
 {{- $missing := list -}}

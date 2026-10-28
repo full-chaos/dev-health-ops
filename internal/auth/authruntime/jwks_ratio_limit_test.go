@@ -8,18 +8,30 @@ import (
 )
 
 // jwksRatioLimit is the bound of one ratio check of the JWKS stall test: factor times the baseline measured in the same
-// test, but never below a floor. The floor is derived from the production promise, not from a wall time: a JWKS request
-// that starts a key-state refresh waits at most token.KeyStateInlineWait for it, so a correct faulted request is never
-// faster than about that, whatever the baseline.
+// test, but never below a floor.
 func jwksRatioLimit(baseline time.Duration, factor int64, floor time.Duration) time.Duration {
 	return max(time.Duration(factor)*baseline, floor)
 }
 
-// jwksMaxFloor and jwksP50Floor are the floors of the two checks of the JWKS stall test: four and one times the inline wait.
+// jwksInlineWaitPinned is the promise the floors rest on: a JWKS request that starts a key-state refresh waits at most this
+// long for it (token.KeyStateInlineWait), so a correct faulted request is never faster than about that, whatever the
+// baseline. It is a constant of this test, NOT read from the production constant: a floor that follows the code under test
+// would move with a regression of that code. TestJWKSInlineWaitIsThePinnedPromise ties the two together.
+const jwksInlineWaitPinned = 100 * time.Millisecond
+
+// jwksMaxFloor and jwksP50Floor are the floors of the two checks of the JWKS stall test: four and one times the pinned wait.
 const (
-	jwksMaxFloor = 4 * token.KeyStateInlineWait
-	jwksP50Floor = token.KeyStateInlineWait
+	jwksMaxFloor = 4 * jwksInlineWaitPinned
+	jwksP50Floor = jwksInlineWaitPinned
 )
+
+// A change of the production inline wait must be a deliberate change of the pinned value and of the floors, never the
+// production constant alone (a larger wait would otherwise lift its own limit and hide itself from the ratio check).
+func TestJWKSInlineWaitIsThePinnedPromise(t *testing.T) {
+	if token.KeyStateInlineWait != jwksInlineWaitPinned {
+		t.Fatalf("token.KeyStateInlineWait = %v, but the JWKS stall test pins %v and derives its floors from that value: change the pinned value and the floors deliberately, never the production constant alone", token.KeyStateInlineWait, jwksInlineWaitPinned)
+	}
+}
 
 // The floor must not hide a slowdown that the ratio alone would catch: at a 20 ms baseline the max limit is 500 ms, so a
 // 900 ms response (45x) is over it; only responses at or under the floor can hide behind it.
@@ -48,6 +60,6 @@ func TestJWKSRatioLimitCannotHideASlowdown(t *testing.T) {
 		}
 	}
 	if jwksMaxFloor >= time.Second || jwksP50Floor >= jwksMaxFloor {
-		t.Errorf("the floors are %v and %v: derived from the inline wait (%v), far under 1 s", jwksMaxFloor, jwksP50Floor, token.KeyStateInlineWait)
+		t.Errorf("the floors are %v and %v: derived from the pinned inline wait (%v), far under 1 s", jwksMaxFloor, jwksP50Floor, jwksInlineWaitPinned)
 	}
 }

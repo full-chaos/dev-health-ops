@@ -582,10 +582,10 @@ internal/storedversion	writers_test.go
 internal/streamhandlers	external_clickhouse_test.go
 internal/streamhandlers	stored_version_invariant_test.go
 internal/streamhandlers	stored_version_reference_test.go
-internal/synccli	local_oracle_generated_integration_test.go
 internal/synccli	local_oracle_integration_test.go
 internal/synccli	print_sites_test.go
 internal/synccli	target.go
+internal/synccli	walk_order_integration_test.go
 internal/synccoverage	payload_frozen_python_oracle_test.go
 internal/syncdispatchcontract	routes.go
 internal/syncdispatchruntime	log_error_text_test.go

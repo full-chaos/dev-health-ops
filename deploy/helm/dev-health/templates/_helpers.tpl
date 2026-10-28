@@ -842,42 +842,95 @@ Call with (dict "flag" "oidc"|"saml" "context" $).
 {{- end -}}
 
 {{/*
+"" when a CIDR string is well formed, else the reason: exactly one "/" and a plain decimal prefix (0, or 1 to 3 digits with
+no leading zero, no sign, no space); an IPv4 address that is a strict dotted quad (four decimal fields 0 to 255, no
+leading zero, no letter); an IPv6 address that is hex, colons and expands to 8 groups (no dotted tail); a prefix of at
+most 32 (IPv4) or 128 (IPv6). One parse for every CIDR the mail egress reads. Call with the string.
+*/}}
+{{- define "dev-health.authMailCidrShape" -}}
+{{- if not (kindIs "string" .) -}}is not a string
+{{- else if not (regexMatch "^[^/]+/(0|[1-9][0-9]{0,2})$" .) -}}must be one address/prefix with a plain decimal prefix
+{{- else -}}
+{{- $parts := splitList "/" . -}}
+{{- $addr := index $parts 0 -}}
+{{- $prefix := atoi (index $parts 1) -}}
+{{- if contains ":" $addr -}}
+{{- if not (regexMatch "^[0-9a-fA-F:]+$" $addr) -}}the IPv6 address has a character that is not a hex digit or a colon
+{{- else if ne (len (include "dev-health.ipv6Groups" (lower $addr) | fromJsonArray)) 8 -}}the IPv6 address does not parse
+{{- else if gt $prefix 128 -}}the IPv6 prefix is above 128
+{{- end -}}
+{{- else if not (regexMatch "^(0|[1-9][0-9]?|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\\.(0|[1-9][0-9]?|1[0-9]{2}|2[0-4][0-9]|25[0-5])){3}$" $addr) -}}the IPv4 address is not a dotted quad of decimal fields from 0 to 255
+{{- else if gt $prefix 32 -}}the IPv4 prefix is above 32
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+The class of one authService.networkPolicy.egress.mail.to entry, the only reading of it: "wide" (exactly 0.0.0.0/0 or ::/0),
+"narrow" (selectors, or an ipBlock that dev-health.otlpPeerCidrProblem accepts), or "bad:<reason>". An entry is one peer
+kind: an ipBlock, or podSelector and/or namespaceSelector. A selector counts only when its matchLabels has a key or its
+matchExpressions has an item (the outer object having keys is not enough). Prefix 0 is wide only as 0.0.0.0 or ::.
+Call with the entry.
+*/}}
+{{- define "dev-health.authMailPeerClass" -}}
+{{- $peer := . -}}
+{{- if not (kindIs "map" $peer) -}}bad:is not an object
+{{- else if and (hasKey $peer "ipBlock") (or (hasKey $peer "podSelector") (hasKey $peer "namespaceSelector")) -}}bad:holds an ipBlock and a selector; a peer is one kind
+{{- else if hasKey $peer "ipBlock" -}}
+{{- $ib := $peer.ipBlock -}}
+{{- if not (kindIs "map" $ib) -}}bad:ipBlock is not an object
+{{- else -}}
+{{- $shape := include "dev-health.authMailCidrShape" $ib.cidr -}}
+{{- if $shape -}}bad:ipBlock.cidr {{ $shape }}
+{{- else if hasSuffix "/0" $ib.cidr -}}
+{{- if has $ib.cidr (list "0.0.0.0/0" "::/0") -}}wide{{- else -}}bad:ipBlock.cidr with prefix 0 must be exactly 0.0.0.0/0 or ::/0{{- end -}}
+{{- else -}}
+{{- $problem := include "dev-health.otlpPeerCidrProblem" $ib.cidr -}}
+{{- if $problem -}}bad:ipBlock.cidr {{ $problem }}{{- else -}}narrow{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- else -}}
+{{- $n := 0 -}}
+{{- $empty := "" -}}
+{{- range $k := list "podSelector" "namespaceSelector" -}}
+{{- if hasKey $peer $k -}}
+{{- $n = add1 $n -}}
+{{- $sel := index $peer $k -}}
+{{- if not (and (kindIs "map" $sel) (or (and (kindIs "map" $sel.matchLabels) (gt (len $sel.matchLabels) 0)) (and (kindIs "slice" $sel.matchExpressions) (gt (len $sel.matchExpressions) 0)))) -}}{{- $empty = $k -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if eq $n 0 -}}bad:has no ipBlock, podSelector or namespaceSelector
+{{- else if $empty -}}bad:{{ $empty }} has no matchLabels or matchExpressions item, so it selects everything
+{{- else -}}narrow
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 "" when one authService.networkPolicy.egress.mail.to entry is acceptable, else the reason. Call with
-(dict "peer" <entry> "ports" <authService.networkPolicy.egress.mail.ports>). A peer selects pods, namespaces or one
-address block; an empty selector admits everything of its kind and an empty entry admits every destination. An
-ipBlock is one CIDR checked by dev-health.otlpPeerCidrProblem (IPv4 /8 or longer, IPv6 /32 or longer, nothing that
-overlaps the IPv4-mapped or NAT64 ranges, in any spelling). The one exception (D6427, a provider with no fixed addresses): exactly 0.0.0.0/0 or ::/0,
-only with ports [TCP 443] alone and an except list holding every private, shared, link-local and loopback network
-below, and for IPv6 also the mapped and NAT64 ranges that would reach internal IPv4 addresses.
+(dict "peer" <entry> "ports" <authService.networkPolicy.egress.mail.ports>). The class is dev-health.authMailPeerClass.
+The one whole-internet exception (D6427, a provider with no fixed addresses): exactly 0.0.0.0/0 or ::/0, only with ports
+[TCP 443] alone (protocol TCP or unset, no endPort) and an except list of well formed CIDRs holding every private,
+shared, link-local and loopback network below, and for IPv6 also the mapped and NAT64 ranges that would reach internal
+IPv4 addresses.
 */}}
 {{- define "dev-health.authMailPeerProblem" -}}
-{{- $peer := .peer -}}
-{{- if not (kindIs "map" $peer) -}}is not an object
-{{- else if and (not (and (kindIs "map" $peer.podSelector) (gt (len $peer.podSelector) 0))) (not (and (kindIs "map" $peer.namespaceSelector) (gt (len $peer.namespaceSelector) 0))) (not (kindIs "map" $peer.ipBlock)) -}}has no non-empty podSelector, namespaceSelector or ipBlock
-{{- else if kindIs "map" $peer.ipBlock -}}
-{{- $cidr := toString $peer.ipBlock.cidr -}}
-{{- if not (regexMatch "^[0-9a-fA-F:.]+/[0-9]{1,3}$" $cidr) -}}ipBlock.cidr must be one address/prefix
-{{- else -}}
-{{- $parts := splitList "/" $cidr -}}
-{{- $ip := lower (index $parts 0) -}}
-{{- $prefix := int (index $parts 1) -}}
-{{- $v6 := contains ":" $ip -}}
-{{- if eq $prefix 0 -}}
-{{- $required := ternary (list "fc00::/7" "fe80::/10" "::1/128" "::ffff:0:0/96" "64:ff9b::/96") (list "10.0.0.0/8" "172.16.0.0/12" "192.168.0.0/16" "100.64.0.0/10" "169.254.0.0/16" "127.0.0.0/8") $v6 -}}
+{{- $class := include "dev-health.authMailPeerClass" .peer -}}
+{{- if hasPrefix "bad:" $class -}}{{ trimPrefix "bad:" $class }}
+{{- else if eq $class "wide" -}}
+{{- $cidr := .peer.ipBlock.cidr -}}
+{{- $required := ternary (list "fc00::/7" "fe80::/10" "::1/128" "::ffff:0:0/96" "64:ff9b::/96") (list "10.0.0.0/8" "172.16.0.0/12" "192.168.0.0/16" "100.64.0.0/10" "169.254.0.0/16" "127.0.0.0/8") (contains ":" $cidr) -}}
 {{- $except := list -}}
-{{- range ($peer.ipBlock.except | default list) }}{{- $except = append $except (lower (toString .)) }}{{- end -}}
+{{- $badExcept := "" -}}
+{{- range (.peer.ipBlock.except | default list) }}{{- $shape := include "dev-health.authMailCidrShape" . }}{{- if $shape }}{{- $badExcept = printf "except entry %s %s" (toString .) $shape }}{{- else }}{{- $except = append $except (lower .) }}{{- end }}{{- end -}}
 {{- $missing := list -}}
 {{- range $required }}{{- if not (has . $except) }}{{- $missing = append $missing . }}{{- end }}{{- end -}}
 {{- $ports := .ports | default list -}}
 {{- $port := dict -}}
 {{- if eq (len $ports) 1 }}{{- $port = index $ports 0 }}{{- end -}}
-{{- if not (or (and $v6 (eq $ip "::")) (and (not $v6) (eq $ip "0.0.0.0"))) -}}ipBlock.cidr with prefix 0 must be exactly 0.0.0.0/0 or ::/0
-{{- else if not (and (eq (len $ports) 1) (kindIs "map" $port) (eq (upper (toString (default "TCP" $port.protocol))) "TCP") (hasKey $port "port") (eq (int $port.port) 443) (not (hasKey $port "endPort"))) -}}an ipBlock with prefix 0 is accepted only with authService.networkPolicy.egress.mail.ports of TCP 443 alone
+{{- if $badExcept -}}ipBlock.{{ $badExcept }}
+{{- else if not (and (eq (len $ports) 1) (kindIs "map" $port) (eq (toString (default "TCP" $port.protocol)) "TCP") (hasKey $port "port") (eq (int $port.port) 443) (not (hasKey $port "endPort"))) -}}an ipBlock with prefix 0 is accepted only with authService.networkPolicy.egress.mail.ports of TCP 443 alone
 {{- else if $missing -}}ipBlock.cidr {{ $cidr }} needs except entries {{ join ", " $missing }}
-{{- end -}}
-{{- else -}}
-{{- include "dev-health.otlpPeerCidrProblem" $cidr -}}
-{{- end -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

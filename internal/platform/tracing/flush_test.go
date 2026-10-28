@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -27,38 +28,65 @@ func closedPort(t *testing.T) string {
 	return address
 }
 
-// TestAnUnreachableCollectorCostsTheStopAtMostTheFlushBound is the executed
-// repro of the container-smoke red (exit 137): a sampled span is buffered, the
-// collector port is closed, and the component's final flush used to retry until
-// the whole shutdown budget (the caller's context, 10 s in the binaries) was
-// spent, longer than the five seconds a stopping container is given. The stop
-// must return nil inside the bound, and say loudly why spans were dropped.
+// hungExporter is a collector that never answers: every export and its shutdown wait for their context to end, or for the test to
+// release them (the SDK abandons the export it started when the flush bound ends). It is in memory, no socket is opened.
+type hungExporter struct{ release chan struct{} }
+
+func (e hungExporter) ExportSpans(ctx context.Context, _ []sdktrace.ReadOnlySpan) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-e.release:
+		return nil
+	}
+}
+
+func (e hungExporter) Shutdown(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-e.release:
+		return nil
+	}
+}
+
+// TestAnUnreachableCollectorCostsTheStopAtMostTheFlushBound is the repro of the container-smoke red (exit 137): a sampled span is
+// buffered, the collector never answers, and the component's final flush used to wait until the whole shutdown budget (the caller's
+// context, 10 s in the binaries) was spent, longer than the five seconds a stopping container is given. The stop must return nil
+// inside the bound, and say loudly why spans were dropped. It runs in a bubble on a virtual clock against an in-memory exporter, so
+// the stop that outlives the bound by any amount fails.
 func TestAnUnreachableCollectorCostsTheStopAtMostTheFlushBound(t *testing.T) {
-	t.Setenv("OTEL_ENABLED", "true")
-	t.Setenv("OTEL_SAMPLE_RATE", "1")
-	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", closedPort(t))
-	var logs bytes.Buffer
-	component := InitWithServiceName(slog.New(slog.NewTextHandler(&logs, nil)), "flush-test")
-	t.Cleanup(func() { otel.SetTracerProvider(sdktrace.NewTracerProvider()) })
+	synctest.Test(t, func(t *testing.T) {
+		var logs bytes.Buffer
+		exporter := hungExporter{release: make(chan struct{})}
+		// The export the SDK abandoned at the bound ends here, so the bubble can end.
+		defer close(exporter.release)
+		provider := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample()), sdktrace.WithBatcher(exporter))
+		component := Component{provider: provider, logger: slog.New(slog.NewTextHandler(&logs, nil)), endpoint: "collector.test:4317"}
 
-	_, span := otel.Tracer("flush-test").Start(context.Background(), "buffered")
-	span.End()
+		_, span := provider.Tracer("flush-test").Start(context.Background(), "buffered")
+		span.End()
 
-	// The caller's budget is far larger than the bound: only the bound may
-	// decide how long the stop takes.
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	err := component.Shutdown(ctx)
+		// The caller's budget is far larger than the bound: only the bound may decide how long the stop takes.
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		started := time.Now()
+		err := component.Shutdown(ctx)
+		returnedAt := time.Now()
 
-	if err != nil {
-		t.Errorf("a down collector failed the stop: %v", err)
-	}
-	if ctx.Err() != nil {
-		t.Errorf("the stop spent the caller's whole budget with an unreachable collector, want it back at the flush bound %v", shutdownFlushTimeout)
-	}
-	if !strings.Contains(logs.String(), "collector") || !strings.Contains(logs.String(), "dropped") {
-		t.Errorf("no loud line saying the collector was down and spans were dropped:\n%s", logs.String())
-	}
+		if err != nil {
+			t.Errorf("a down collector failed the stop: %v", err)
+		}
+		if returnedAt.After(started.Add(shutdownFlushTimeout)) {
+			t.Errorf("the stop returned at +%v of virtual time with an unreachable collector, want it back at the flush bound %v", returnedAt.Sub(started), shutdownFlushTimeout)
+		}
+		if ctx.Err() != nil {
+			t.Errorf("the stop spent the caller's whole budget with an unreachable collector, want it back at the flush bound %v", shutdownFlushTimeout)
+		}
+		if !strings.Contains(logs.String(), "collector") || !strings.Contains(logs.String(), "dropped") {
+			t.Errorf("no loud line saying the collector was down and spans were dropped:\n%s", logs.String())
+		}
+	})
 }
 
 type failingExporter struct {

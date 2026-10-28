@@ -21,8 +21,8 @@ func TestGoldenDriftJobIsAdvisoryAndPullRequestOnly(t *testing.T) {
 	if strings.Contains(cond, "merge_group") {
 		t.Errorf("job if %q must not name merge_group", cond)
 	}
-	if !strings.Contains(cond, "ci:integration") || !strings.Contains(cond, "ci:full") {
-		t.Errorf("job if %q must skip when a label already runs the shards", cond)
+	if strings.Contains(cond, "ci:full") {
+		t.Errorf("job if %q must not name ci:full (the ci:full-gated job set is pinned); the select step reads the labels", cond)
 	}
 	for _, need := range pinNeeds(pinJob(doc, "go-queue-gate")) {
 		if need == "go-golden-drift" {
@@ -34,7 +34,7 @@ func TestGoldenDriftJobIsAdvisoryAndPullRequestOnly(t *testing.T) {
 		t.Fatal("job lost its selection step")
 	}
 	run := asString(sel["run"])
-	for _, want := range []string{"ci/go_relevant_diff.sh", "ci/check_golden_drift.sh select"} {
+	for _, want := range []string{"ci/go_relevant_diff.sh", "ci/check_golden_drift.sh select", "ci:integration", "ci:full"} {
 		if !strings.Contains(run, want) {
 			t.Errorf("selection step lacks %q", want)
 		}

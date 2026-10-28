@@ -118,13 +118,16 @@ func TestGoldenDriftRegistryMatchesRealTests(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: regex: %v", f[0], err)
 		}
-		files, _ := filepath.Glob(filepath.Join(root, f[0], "*_test.go"))
-		if len(files) == 0 {
-			t.Fatalf("%s: no test files", f[0])
+		entries, err := os.ReadDir(filepath.Join(root, f[0]))
+		if err != nil {
+			t.Fatal(err)
 		}
 		matched := 0
-		for _, file := range files {
-			b, err := os.ReadFile(file)
+		for _, e := range entries {
+			if !strings.HasSuffix(e.Name(), "_test.go") {
+				continue
+			}
+			b, err := os.ReadFile(filepath.Join(root, f[0], e.Name()))
 			if err != nil {
 				t.Fatal(err)
 			}

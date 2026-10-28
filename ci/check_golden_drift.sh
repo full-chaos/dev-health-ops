@@ -103,14 +103,13 @@ select_rows() {
 }
 
 message() {
-  cat >&2 <<MSG
-::error title=FROZEN PYTHON GOLDEN DRIFT::$1 $2 differs from the frozen Python output.
-The goldens are frozen and have no update command: do NOT edit a golden file.
-Add the new Go-only column or guard to the test's exclusion list (or map it in the test), with the reason.
-Example: internal/adminops/users_integration_test.go:185 strips 'saml_nameid_format' and 'saml_sp_name_qualifier' from to_jsonb(u) (new users columns).
-A new guard that changes a status or body (500 vs 400) needs the case listed in the test as Go-only, with a ruling.
-This check is advisory; the same test runs in the merge queue.
-MSG
+  printf '%s\n' \
+    "::error title=FROZEN PYTHON GOLDEN DRIFT::$1 -run $2 differs from the frozen Python output." \
+    "The goldens are frozen and have no update command: do NOT edit a golden file." \
+    "Add the new Go-only column or guard to the test's exclusion list (or map it in the test), with the reason." \
+    "Example: internal/adminops/users_integration_test.go:185 strips 'saml_nameid_format' and 'saml_sp_name_qualifier' from to_jsonb(u) (new users columns)." \
+    "A new guard that changes a status or body (500 vs 400) needs the case listed in the test as Go-only, with a ruling." \
+    "This check is advisory; the same test runs in the merge queue." >&2
 }
 
 out=""

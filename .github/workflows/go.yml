@@ -229,7 +229,6 @@ on:
       - 'ci/go_relevant_diff.sh'
       - 'ci/integration_pr_scope.sh'
       - 'ci/check_golden_drift.sh'
-      - 'ci/golden_drift_registry.tsv'
       - 'ci/last-venue-run.sh'
       - '.github/workflows/venue-oracles.yml'
       # the workflow-shape guards (CHAOS-10177) read EVERY workflow file, the builder-image pin reader and its table,
@@ -732,10 +731,10 @@ jobs:
   # column, a table or a writer guard used to meet a red golden only there, and the entries behind it failed with it.
   # ci/check_golden_drift.sh runs only the golden tests the change can reach (ci/golden_drift_registry.tsv: migration paths and the
   # golden package directories). It is pull_request only, is NOT in go-queue-gate's needs, and a bad input runs every row.
-  # A label that already runs the shards (ci:integration, ci:full) makes it redundant.
+  # A label that already runs the shards (ci:integration, ci:full) makes it select nothing.
   go-golden-drift:
     name: go-golden-drift
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && !contains(github.event.pull_request.labels.*.name, 'ci:integration') && !contains(github.event.pull_request.labels.*.name, 'ci:full')
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
@@ -749,11 +748,18 @@ jobs:
         id: select
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         run: |
           set -euo pipefail
-          bash ci/go_relevant_diff.sh > "${RUNNER_TEMP}/changed.txt" || : > "${RUNNER_TEMP}/changed.txt"
-          bash ci/check_golden_drift.sh select "${RUNNER_TEMP}/changed.txt" | tee "${RUNNER_TEMP}/golden_rows.tsv"
-          echo "rows=$(grep -c '^ROW' "${RUNNER_TEMP}/golden_rows.tsv" || true)" >> "${GITHUB_OUTPUT}"
+          rows="${RUNNER_TEMP}/golden_rows.tsv"
+          # A label that already runs the integration shards on this pull request makes this check redundant.
+          if jq -e 'index("ci:integration") or index("ci:full")' <<< "${PR_LABELS_JSON}" > /dev/null; then
+            echo "VERDICT none a ci:integration or ci:full label already runs the integration shards" | tee "${rows}"
+          else
+            bash ci/go_relevant_diff.sh > "${RUNNER_TEMP}/changed.txt" || : > "${RUNNER_TEMP}/changed.txt"
+            bash ci/check_golden_drift.sh select "${RUNNER_TEMP}/changed.txt" | tee "${rows}"
+          fi
+          echo "rows=$(grep -c '^ROW' "${rows}" || true)" >> "${GITHUB_OUTPUT}"
 
       - name: Set up Go
         if: steps.select.outputs.rows != '0'

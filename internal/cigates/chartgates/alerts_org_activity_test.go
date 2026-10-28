@@ -20,6 +20,7 @@ const (
 	orgActivityReadFailed   = "dev_health_org_activity_refresh_age_read_failed_total"
 	orgActivityStaleSeconds = "172800"
 	orgActivityDocRel       = "docs/operate/observe/dashboards-and-alerts.md"
+	orgActivityChannel      = "accounts-email"
 )
 
 var orgActivityBlock = regexp.MustCompile("(?s)```json\n(.*?)\n```")
@@ -89,7 +90,11 @@ func orgActivityBuilderMatchesTheRule(g *guard) {
 		g.expect(len(th) == 1 && str(mp(th[0])["op"]) == w.op && str(mp(th[0])["matchType"]) == w.matchType && jsonNumber(mp(th[0])["target"]) == w.target,
 			"%s threshold is %v, want %s %s %s", w.alert, th, w.op, w.target, w.matchType)
 		g.expect(str(mp(mp(root["evaluation"])["spec"])["evalWindow"]) == w.window, "%s evalWindow is %q, want %s", w.alert, str(mp(mp(root["evaluation"])["spec"])["evalWindow"]), w.window)
-		g.expect(mp(root["notificationSettings"])["usePolicy"] == true, "%s must route through the notification policy", w.alert)
+		g.expect(mp(root["notificationSettings"])["usePolicy"] == false, "%s must name its channel and not use the notification policy (as the production rule does)", w.alert)
+		if len(th) == 1 {
+			channels := list(mp(th[0])["channels"])
+			g.expect(len(channels) == 1 && str(channels[0]) == orgActivityChannel, "%s channels are %v, want [%s]", w.alert, channels, orgActivityChannel)
+		}
 		labels := mp(root["labels"])
 		g.expect(str(labels["severity"]) == "warning" && str(labels["team"]) == "platform", "%s labels are %v", w.alert, labels)
 	}

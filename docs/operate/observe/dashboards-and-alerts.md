@@ -81,7 +81,7 @@ The file is the text of record: no Prometheus loads it in production. The produc
 - `OrgActivityRefreshFailed`: any increase of `daily_finalize_org_activity_refresh_failed_total` in 24 hours. The counter is created and seeded at 0 when the finalize handler gets its refresher, so the first failure of a worker's life is an increase and not a first sample. A failure inside the first export interval (60 seconds after the worker starts) is still folded into the first exported value.
 - `OrgActivityStale`: `dev_health_org_activity_refresh_age_seconds`, the age of the newest row (`now() - max(refreshed_at)`), above two days for fifteen minutes. SigNoz cannot read Postgres, so the worker exports the number: one database read per minute (two second timeout), no sample and never 0 when the read fails or the table is empty. `dev_health_org_activity_refresh_age_read_failed_total` counts the failed reads, so a gauge that stopped reporting can be told from a fresh table.
 
-PromQL rules do not evaluate on this SigNoz (D6417), so the production rules are builder threshold rules. Both route through the notification policy to the `accounts-email` channel (labels `team = platform`, `severity = warning`).
+PromQL rules do not evaluate on this SigNoz (D6417), so the production rules are builder threshold rules. Both name the `accounts-email` channel explicitly and do not use the notification policy (`usePolicy` is false), as the production rule `OrgActivityRefreshFailed` does; the labels are `team = platform` and `severity = warning`.
 
 ```json
 {
@@ -121,7 +121,8 @@ PromQL rules do not evaluate on this SigNoz (D6417), so the production rules are
           "name": "warning",
           "target": 0,
           "op": "above",
-          "matchType": "at_least_once"
+          "matchType": "at_least_once",
+          "channels": ["accounts-email"]
         }
       ]
     }
@@ -134,7 +135,7 @@ PromQL rules do not evaluate on this SigNoz (D6417), so the production rules are
     }
   },
   "notificationSettings": {
-    "usePolicy": true
+    "usePolicy": false
   },
   "labels": {
     "severity": "warning",
@@ -185,7 +186,8 @@ PromQL rules do not evaluate on this SigNoz (D6417), so the production rules are
           "name": "warning",
           "target": 172800,
           "op": "above",
-          "matchType": "all_the_times"
+          "matchType": "all_the_times",
+          "channels": ["accounts-email"]
         }
       ]
     }
@@ -198,7 +200,7 @@ PromQL rules do not evaluate on this SigNoz (D6417), so the production rules are
     }
   },
   "notificationSettings": {
-    "usePolicy": true
+    "usePolicy": false
   },
   "labels": {
     "severity": "warning",

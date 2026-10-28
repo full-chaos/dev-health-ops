@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -957,8 +958,13 @@ func TestShellExportsOTelInstrumentsOnMetricsTwiceInOneProcess(t *testing.T) {
 	exportOTelProbe(t)
 }
 
+var otelProbeRuns atomic.Int64
+
+// Each run records on its own instrument name: the meter provider installs once
+// per process, so a shared name would keep counting across runs.
 func exportOTelProbe(t *testing.T) {
 	t.Helper()
+	name := fmt.Sprintf("shell_otel_probe_%d_total", otelProbeRuns.Add(1))
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -993,7 +999,7 @@ func exportOTelProbe(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	counter, err := otel.Meter("github.com/full-chaos/dev-health-ops/internal/platform/shell").Int64Counter("shell_otel_probe_total")
+	counter, err := otel.Meter("github.com/full-chaos/dev-health-ops/internal/platform/shell").Int64Counter(name)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1006,10 +1012,10 @@ func exportOTelProbe(t *testing.T) {
 	body, _ := io.ReadAll(response.Body)
 	_ = response.Body.Close()
 	// An instrument with no row in labels.tsv keeps its total and loses every label.
-	if !strings.Contains(string(body), "shell_otel_probe_total 3") || strings.Contains(string(body), `probe="shell"`) {
+	if !strings.Contains(string(body), name+" 3") || strings.Contains(string(body), `probe="shell"`) {
 		t.Fatalf("/metrics does not carry the recorded OTel instrument without its labels:\n%s", body)
 	}
-	if !strings.Contains(string(body), `dev_health_metric_labels_dropped_total{instrument="shell_otel_probe_total",label="*"}`) {
+	if !strings.Contains(string(body), `dev_health_metric_labels_dropped_total{instrument="`+name+`",label="*"}`) {
 		t.Fatalf("/metrics does not count the dropped labels of the unlisted instrument:\n%s", body)
 	}
 

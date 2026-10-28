@@ -60,7 +60,7 @@ func TestReadinessProvesTheKeySetThroughTheSigner(t *testing.T) {
 	env[authconfig.EnvSigningKeySetFile] = manifest
 
 	logs, stop := runService(t, env)
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := serviceClient(10 * time.Second)
 	defer client.CloseIdleConnections()
 	response := awaitSettledReadiness(t, client, "http://"+ports[1]+"/readyz")
 	raw, err := io.ReadAll(response.Body)

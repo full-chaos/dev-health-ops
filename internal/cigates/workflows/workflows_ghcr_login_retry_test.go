@@ -29,6 +29,7 @@ var ghcrNoMergeGroupRun = map[string]string{
 	"docker-images.yml/go-merge":           "job runs on non-PR, non-merge_group events only",
 	"docker-images.yml/go-api-tools-merge": "job runs on non-PR, non-merge_group events only",
 	"docker-images.yml/fan-in-latest":      "job runs on non-PR, non-merge_group events only",
+	"go.yml/go-golden-drift":               "job runs on pull_request only (advisory), never in a merge group",
 }
 
 var pinnedAction = regexp.MustCompile(`@[0-9a-f]{40}$`)

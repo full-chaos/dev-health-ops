@@ -270,14 +270,46 @@ func TestDomainPostgresRunsTheCachedPostureCheckWhenOffered(t *testing.T) {
 }
 
 type syncBuffer struct {
-	mu     sync.Mutex
-	buffer bytes.Buffer
+	mu      sync.Mutex
+	buffer  bytes.Buffer
+	wake    chan struct{}
+	onArmed func()
 }
 
 func (b *syncBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.buffer.Write(p)
+	n, err := b.buffer.Write(p)
+	if b.wake != nil {
+		close(b.wake)
+		b.wake = nil
+	}
+	return n, err
+}
+
+// waitFor returns true once want is in the buffer, woken by Write; ctx is only a hang guard,
+// and the buffer is read once more when it ends so a line that raced it is not lost.
+func (b *syncBuffer) waitFor(ctx context.Context, want string) bool {
+	for {
+		b.mu.Lock()
+		if strings.Contains(b.buffer.String(), want) {
+			b.mu.Unlock()
+			return true
+		}
+		if b.wake == nil {
+			b.wake = make(chan struct{})
+		}
+		wake := b.wake
+		b.mu.Unlock()
+		if b.onArmed != nil {
+			b.onArmed()
+		}
+		select {
+		case <-wake:
+		case <-ctx.Done():
+			return strings.Contains(b.String(), want)
+		}
+	}
 }
 
 func (b *syncBuffer) String() string {
@@ -297,11 +329,10 @@ func TestReconcilerWarnsAboutASaturatedWorkPoolWithoutAScrape(t *testing.T) {
 	holdAll(t, work, 2)
 	var logs syncBuffer
 	buildWithPoolsLogged(t, work, probe, 2*time.Second, slog.New(slog.NewTextHandler(&logs, nil)))
-	deadline := time.Now().Add(5 * time.Second)
-	for !strings.Contains(logs.String(), "readiness does not depend on it") {
-		if time.Now().After(deadline) {
-			t.Fatal("a saturated work pool produced no warning although nothing scraped the metrics")
-		}
-		time.Sleep(5 * time.Millisecond)
+	// Failure-path hang guard only: no passing run waits on it.
+	guard, stopGuard := context.WithTimeout(t.Context(), 60*time.Second)
+	defer stopGuard()
+	if !logs.waitFor(guard, "readiness does not depend on it") {
+		t.Fatal("a saturated work pool produced no warning although nothing scraped the metrics")
 	}
 }

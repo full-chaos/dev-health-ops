@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -19,7 +18,6 @@ func createBudgetCandidatesTables(t *testing.T, ctx context.Context, pool *pgxpo
 	// sync_runs backs bumpSyncRunRollup's seam (CHAOS-4586): every mechanism
 	// that terminalizes a sync_run_units row in this package recomputes this
 	// row's completed_units/failed_units in the same transaction.
-	pgschema.Apply(ctx, t, pool)
 	pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{ID: budgetCandidatesRunID, OrgID: "org-1"})
 }
 
@@ -29,10 +27,7 @@ func withBudgetCandidatesPool(t *testing.T, fn func(ctx context.Context, pool *p
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {

@@ -19,6 +19,8 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/token"
 )
@@ -389,5 +391,36 @@ func TestAnApiAudienceEdDSATokenIsRefusedOnASessionRowWhileTheLegacyTokenPasses(
 	}
 	if r := a.do(http.MethodGet, "/v1/sessions/current", "", map[string]string{"Authorization": "Bearer " + compact}); r.Code != http.StatusOK {
 		t.Fatalf("the legacy HS256 token = %d %s", r.Code, r.Body)
+	}
+}
+
+func TestSocialLinkAndUnlinkAcceptTheAuthServiceEdDSAToken(t *testing.T) {
+	a := newAccessFixture(t)
+	other := uuid.New()
+	domain := &fakeLinkDomain{proofs: map[string]uuid.UUID{}, owners: map[uuid.UUID]uuid.UUID{other: a.principal}, methods: map[uuid.UUID]int{a.principal: 2}}
+	routes, err := SocialLinkRoutes(SocialLinkDeps{Sessions: a.sessions, Users: a.users, Issuer: a.issuer, Social: domain, Limits: mustLimits(t, httpapi.NewMemoryCounters(nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	for _, route := range routes {
+		mux.Handle(route.Method+" "+route.Pattern, requestid.Middleware(route.Handler))
+	}
+	a.server = mux
+	header := a.bearer(a.grant())
+	if r := a.do(http.MethodPost, PatternSocialLink, linkBody, header); r.Code != http.StatusOK && r.Code != http.StatusCreated {
+		t.Fatalf("link = %d, body %s", r.Code, r.Body)
+	}
+	if r := a.do(http.MethodDelete, "/v1/identities/social/"+other.String(), "", header); r.Code/100 != 2 {
+		t.Fatalf("unlink = %d, body %s", r.Code, r.Body)
+	}
+	if len(domain.whos) != 2 {
+		t.Fatalf("the domain was reached %d times, want 2", len(domain.whos))
+	}
+	c := a.claims()
+	c.Aud, c.Scope = "dev-health-api", "api:access"
+	expectError(t, a.do(http.MethodPost, PatternSocialLink, linkBody, a.signClaims(c)), http.StatusUnauthorized, "audience")
+	if len(domain.whos) != 2 {
+		t.Fatal("the domain was reached with a token of another audience")
 	}
 }

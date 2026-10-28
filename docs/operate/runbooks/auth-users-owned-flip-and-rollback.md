@@ -50,6 +50,8 @@ Phase 4 moves ownership of users from go-api to auth-service. While the roll run
 6. **U3.** Set `usersOwnedStage: owned` and `authService.backfill.enabled: false`. Upgrade. The hooks widen the grants, auth-service rolls owned, and its pods carry the label `dev-health.io/auth-users-owned=true`.
 7. Detection net. Run `users-reconcile` as a Job: `authService.backfill.enabled: true`, `verb: users-reconcile`, a new `runId`. It reads `public.users` and the auth schema in one read-only snapshot and exits 1 on any gated difference (`password_hash_diff`, `missing_in_auth`, `email_diff`, `token_version_diff`, and the rest). Run it once before U1 as the baseline, once after U3, and again 15 minutes after U3. The baseline must be 0 and every later run must be 0. The stop rule is: any value other than 0 after a 0 baseline means STOP and write one report with the barrier time.
 
+   Memberships: `diff.membership_inactive_in_public` is gated (an `auth.memberships` row that is not active while `public.memberships` still holds the member). The `info.membership_*` lines are printed and never gated. After U3, go-api still removes a member with a DELETE in `public.memberships` only and changes a role in `public.memberships` only; the `auth.memberships` row stays active with the old role. So `info.membership_public_missing` grows with each go-api member removal and `info.membership_role_diff` with each go-api role change. That is expected and is not a STOP.
+
 ## Rollback: owned to phase 3
 
 Roll back in the opposite order. auth-service stops owning users first, so no owned pod writes while a local writer exists.

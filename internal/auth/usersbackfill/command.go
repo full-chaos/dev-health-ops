@@ -196,7 +196,11 @@ func runReconcile(ctx context.Context, env cli.Env) int {
 		return cli.ExitFailure
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
-	rep, err := Reconcile(ctx, TxSource{Tx: tx}, TxTarget{Tx: tx, Schema: schema}, *batch)
+	target := TxTarget{Tx: tx, Schema: schema}
+	rep, err := Reconcile(ctx, TxSource{Tx: tx}, target, *batch)
+	if err == nil {
+		err = ReconcileMemberships(ctx, target, &rep)
+	}
 	for _, line := range rep.Lines() {
 		fmt.Fprintln(env.Stdout, line)
 	}

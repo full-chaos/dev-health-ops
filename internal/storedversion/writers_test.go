@@ -100,6 +100,7 @@ var unresolvedWriters = map[string]string{
 	"internal/auth/identity/backfill.go":                     "PostgreSQL auth-schema principal and user inserts of the users backfill (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/identity/backfill_orgs.go":                "PostgreSQL auth-schema membership insert and role update of the organizations and memberships backfill (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/identity/identities.go":                   "PostgreSQL auth-schema identity inserts (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/identity/joinmembership.go":               "PostgreSQL auth-schema membership insert of a join (schema name interpolated) and its public.memberships row; no in-scope ClickHouse table",
 	"internal/auth/identity/local/attempts_pg.go":            "PostgreSQL auth-schema login_attempts insert (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/identity/local/linkcred.go":               "PostgreSQL auth-schema link_credentials insert (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/identity/local/linkbind.go":               "PostgreSQL auth-schema link_credentials insert (schema name interpolated); no in-scope ClickHouse table",

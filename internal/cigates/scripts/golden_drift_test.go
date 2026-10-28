@@ -161,7 +161,7 @@ const fakeGo = `#!/bin/bash
 echo "go $*" >> "${FAKE_GO_LOG}"
 last="${@: -1}"
 case "${FAKE_GO_MODE:-pass}:${last}" in
-  fail:*"${FAKE_GO_FAIL_PKG:-nomatch}") echo "--- FAIL: TestX (0.00s)"; exit 1 ;;
+  fail:*"${FAKE_GO_FAIL_PKG:-nomatch}") echo "--- PASS: TestSibling (0.00s)"; echo "--- FAIL: TestX (0.00s)"; exit 1 ;;
   nomatch:*) echo "testing: warning: no tests to run"; echo "ok  ${last}"; exit 0 ;;
   *) echo "--- PASS: TestX (0.00s)"; exit 0 ;;
 esac

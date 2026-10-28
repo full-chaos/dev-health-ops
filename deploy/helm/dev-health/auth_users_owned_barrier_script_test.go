@@ -802,3 +802,41 @@ func TestBarrierScanAsksForOwnersAndStatefulSets(t *testing.T) {
 		t.Error("no namespace-wide `get statefulsets -o jsonpath=` call with the template containers")
 	}
 }
+
+func bwClickHouseWorldNamed(sts string) *bworld {
+	w := bwNewWorld()
+	w.statefulSets = []any{bwStatefulSet(sts)}
+	pod := bwOwned(bwPodAt(sts+"-0", "clickhouse", "", map[string]any{"initContainers": []any{bwClickHouseInit()}, "containers": []any{bwClickHouseMain()}}), "StatefulSet", sts)
+	w.otherPods = append(w.otherPods, pod)
+	return w
+}
+
+// The StatefulSet the script trusts is named <fullname>-clickhouse with the chart's fullname rule (_helpers.tpl:11-22): the
+// FULLNAME override, else RELEASE when it contains "dev-health", else RELEASE-dev-health. A wrong derivation must not trust the
+// wrong StatefulSet (and trusting nothing shows as a STOP on the real one, tested by the pass rows).
+func TestBarrierFullnameRuleNamesTheTrustedStatefulSet(t *testing.T) {
+	cases := []struct {
+		name string
+		env  []string
+		sts  string
+		pass bool
+	}{
+		{"release without the chart name", []string{"RELEASE=a"}, "a-dev-health-clickhouse", true},
+		{"release that contains the chart name", []string{"RELEASE=prod-dev-health"}, "prod-dev-health-clickhouse", true},
+		{"the FULLNAME override", []string{"RELEASE=a", "FULLNAME=custom"}, "custom-clickhouse", true},
+		{"release without the chart name, no fullname", []string{"RELEASE=a"}, "a-clickhouse", false},
+		{"release that contains the chart name, doubled", []string{"RELEASE=prod-dev-health"}, "prod-dev-health-dev-health-clickhouse", false},
+		{"the override replaces the default", []string{"RELEASE=a", "FULLNAME=custom"}, "a-dev-health-clickhouse", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := runBarrier(t, bwClickHouseWorldNamed(c.sts).files(), c.env, "up-go-api")
+			if c.pass && !bwPassed(r) {
+				t.Fatalf("refused: rc=%d stderr=%q", r.rc, r.stderr)
+			}
+			if !c.pass && (bwPassed(r) || r.rc == 0) {
+				t.Fatalf("passed: rc=%d stdout=%q", r.rc, r.stdout)
+			}
+		})
+	}
+}

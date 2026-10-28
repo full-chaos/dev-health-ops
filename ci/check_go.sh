@@ -365,8 +365,8 @@ usage() {
   CHECK_GO_FRESH=1 (environment, plain local runs only)
          Every go call gets GOFLAGS=-count=1, so no test passes from the test
          cache. Refused (exit 2) under CI=true or GITHUB_ACTIONS=true.
-         Hosted-like lane shard runs (CI=true) keep a lane-own GOCACHE plus
-         go clean -testcache instead.
+         Hosted-like lane shard runs (CI=true) keep the go env GOCACHE and
+         run go clean -testcache right before instead.
   all    Run fmt, vet, test, race, build, contract,
          integration-vet, the FULL integration suite (every non-denylisted
          package, unsharded -- Docker required), and multi-replica-workers
@@ -389,7 +389,7 @@ case "${CHECK_GO_FRESH:-}" in
   ""|0) ;;
   1)
     if [ "${CI:-}" = "true" ] || [ "${GITHUB_ACTIONS:-}" = "true" ]; then
-      die "CHECK_GO_FRESH=1 is for local runs only; refused because CI=true or GITHUB_ACTIONS=true (hosted legs keep the test cache and its receipt; locally use a lane-own GOCACHE and go clean -testcache)"
+      die "CHECK_GO_FRESH=1 is for local runs only; refused because CI=true or GITHUB_ACTIONS=true (hosted legs keep the test cache and its receipt; locally keep the go env GOCACHE and run go clean -testcache right before the run)"
     fi
     GO_ENV_OFF+=(GOFLAGS=-count=1)
     printf 'check_go.sh: CHECK_GO_FRESH=1: GOFLAGS=-count=1 on every go call (test cache off, local only)\n' >&2

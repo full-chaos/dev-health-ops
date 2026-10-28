@@ -23,7 +23,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
-	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -90,6 +89,16 @@ func (h *handlers) deleteOrganization(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.deleteOrganizationData(ctx, orgUUID, dryRun)
 	if err != nil {
+		var refused *orgDeletionRefusedError
+		if errors.As(err, &refused) {
+			policy.WriteDetail(w, http.StatusServiceUnavailable, orgDeletionRefusedDetail, nil)
+			return
+		}
+		var incomplete *orgDeletionIncompleteError
+		if errors.As(err, &incomplete) {
+			policy.WriteDetail(w, http.StatusInternalServerError, orgDeletionIncompleteDetail, nil)
+			return
+		}
 		var step *orgDeletionStepError
 		if errors.As(err, &step) {
 			h.logger.ErrorContext(ctx, "admin: org deletion "+step.step+" failed", "error", step.err)
@@ -113,10 +122,22 @@ func (e *orgDeletionStepError) Unwrap() error { return e.err }
 
 // deleteOrganizationData is org_deletion.py's OrganizationDeletionService.delete
 // after the org id is parsed: the one sequence the route and the operator verb
-// (Operator.DeleteOrg) both run. ClickHouse trouble is a warning in the result,
-// never an error.
+// (Operator.DeleteOrg) both run. It fails closed on ClickHouse (see
+// orgdeletion_clickhouse.go): the preflight runs before every count, revoke
+// and delete; a purge failure after the Postgres commit is an
+// *orgDeletionIncompleteError.
 func (h *handlers) deleteOrganizationData(ctx context.Context, orgUUID uuid.UUID, dryRun bool) (*orgDeletionResult, error) {
 	orgIDStr := orgUUID.String()
+	ch, err := h.orgDeletionClickHousePreflight(ctx)
+	if err != nil {
+		var refused *orgDeletionRefusedError
+		if errors.As(err, &refused) {
+			h.logOrgDeletionRefused(ctx, orgIDStr, dryRun, refused)
+		}
+		return nil, err
+	}
+	defer func() { _ = ch.conn.Close() }()
+
 	result := &orgDeletionResult{
 		organizationID:     orgIDStr,
 		dryRun:             dryRun,
@@ -150,7 +171,23 @@ func (h *handlers) deleteOrganizationData(ctx context.Context, orgUUID uuid.UUID
 		}
 	}
 
-	h.orgDeletionPurgeClickHouse(ctx, orgIDStr, dryRun, result)
+	if err := h.orgDeletionPurgeClickHouse(ctx, ch, orgIDStr, dryRun, result); err != nil {
+		var incomplete *orgDeletionIncompleteError
+		if !errors.As(err, &incomplete) {
+			return nil, err
+		}
+		if dryRun {
+			refused := &orgDeletionRefusedError{reason: refusalCountFailed, err: err}
+			h.logOrgDeletionRefused(ctx, orgIDStr, dryRun, refused)
+			return nil, refused
+		}
+		h.logger.ErrorContext(ctx, "admin: org deletion clickhouse purge incomplete",
+			"org_id", orgIDStr, "tables", incomplete.tables, "postgres_committed", true, "error", h.redactClickHouse(incomplete.err))
+		return nil, err
+	}
+	h.logger.InfoContext(ctx, "admin: org deletion done",
+		"org_id", orgIDStr, "dry_run", dryRun, "postgres_total", result.postgresTotal,
+		"clickhouse_total", result.clickhouseTotal, "clickhouse_tables", len(result.clickhouseTables))
 	return result, nil
 }
 
@@ -468,32 +505,16 @@ func (h *handlers) orgDeletionPurgePostgres(ctx context.Context, orgUUID uuid.UU
 	return tx.Commit(ctx)
 }
 
-// orgDeletionPurgeClickHouse discovers every org_id-bearing ClickHouse
-// table live from system.columns (the accepted divergence from
-// org_deletion.py's static regex-parse of migration files -- see this
-// file's package doc comment), counts and (not dry_run) deletes each,
-// exactly as org_deletion.py's own per-table loop does. Every failure here
-// -- no ClickHouse configured, a table's own count/delete erroring -- is a
-// warning, never a request failure: ClickHouse is a secondary analytics
-// store and org_deletion.py treats it the same way.
-func (h *handlers) orgDeletionPurgeClickHouse(ctx context.Context, orgIDStr string, dryRun bool, result *orgDeletionResult) {
-	if h.clickHouseDSN == "" {
-		result.warnings = append(result.warnings, "ClickHouse URI not configured; analytics tables were not verified.")
-		return
-	}
-	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(h.clickHouseDSN))
-	if err != nil {
-		result.warnings = append(result.warnings, "ClickHouse URI not configured; analytics tables were not verified.")
-		return
-	}
-	defer conn.Close()
-
-	tables, err := DiscoverClickHouseOrgTables(ctx, conn)
-	if err != nil || len(tables) == 0 {
-		result.warnings = append(result.warnings, "ClickHouse migration table catalog is empty.")
-		return
-	}
-
+// orgDeletionPurgeClickHouse counts and (not dry_run) deletes the org's rows
+// in every table the preflight discovered live from system.columns (the
+// accepted divergence from org_deletion.py's static regex-parse of migration
+// files -- see this file's package doc comment). The count is reported only:
+// a real delete runs ALTER DELETE on every table, also one that counts 0 (a
+// row policy can hide rows from SELECT that ALTER DELETE still reaches). A
+// table whose count or delete fails does not stop the others; the failed
+// tables come back as an *orgDeletionIncompleteError, never as a warning in a
+// success.
+func (h *handlers) orgDeletionPurgeClickHouse(ctx context.Context, ch *orgDeletionClickHouse, orgIDStr string, dryRun bool, result *orgDeletionResult) error {
 	// mutations_sync=2 makes each ALTER TABLE DELETE below block until
 	// ClickHouse has actually applied it, rather than merely queuing an
 	// async mutation -- same synchronous-write discipline
@@ -506,28 +527,43 @@ func (h *handlers) orgDeletionPurgeClickHouse(ctx context.Context, orgIDStr stri
 	// table and observing the response return before the mutation applied.
 	syncCtx := clickhouse.Context(ctx, clickhouse.WithSettings(orgDeletionMutationSettings()))
 
-	for _, t := range tables {
+	var failed []string
+	var first error
+	fail := func(table string, err error) {
+		if len(failed) > 0 && failed[len(failed)-1] == table {
+			return
+		}
+		failed = append(failed, table)
+		if first == nil {
+			first = fmt.Errorf("%s: %w", table, err)
+		}
+	}
+	for _, t := range ch.tables {
 		condition := "org_id = ?"
 		var bind any = orgIDStr
 		if IsUUIDColumnType(t.OrgIDType) {
 			condition = "org_id = toUUID(?)"
 		}
 		var count uint64
-		countRow := conn.QueryRow(ctx, fmt.Sprintf("SELECT count() FROM `%s` WHERE %s", t.Name, condition), bind)
+		countRow := ch.conn.QueryRow(ctx, fmt.Sprintf("SELECT count() FROM `%s` WHERE %s", t.Name, condition), bind)
 		if err := countRow.Scan(&count); err != nil {
-			result.warnings = append(result.warnings, fmt.Sprintf("ClickHouse table %s missing or has no org_id column; skipped.", t.Name))
+			fail(t.Name, err)
+		} else {
+			result.clickhouseTables = append(result.clickhouseTables, t.Name)
+			result.clickhouseCount[t.Name] = int64(count)
+			result.clickhouseTotal += int64(count)
+		}
+		if dryRun {
 			continue
 		}
-		result.clickhouseTables = append(result.clickhouseTables, t.Name)
-		result.clickhouseCount[t.Name] = int64(count)
-		result.clickhouseTotal += int64(count)
-		if dryRun || count == 0 {
-			continue
-		}
-		if err := conn.Exec(syncCtx, fmt.Sprintf("ALTER TABLE `%s` DELETE WHERE %s", t.Name, condition), bind); err != nil {
-			result.warnings = append(result.warnings, fmt.Sprintf("Unable to delete ClickHouse table %s.", t.Name))
+		if err := ch.conn.Exec(syncCtx, fmt.Sprintf("ALTER TABLE `%s` DELETE WHERE %s", t.Name, condition), bind); err != nil {
+			fail(t.Name, err)
 		}
 	}
+	if len(failed) > 0 {
+		return &orgDeletionIncompleteError{tables: failed, err: first}
+	}
+	return nil
 }
 
 // orgDeletionMutationSettings: 2 waits for every replica, so a 200 means the
@@ -546,7 +582,7 @@ type ChTable struct{ Name, OrgIDType string }
 // the connected database carrying a column literally named org_id, read
 // straight from system.columns rather than duplicated as a second,
 // hand-maintained list. It is exported and is the ONE place this query is
-// written -- both orgDeletionPurgeClickHouse and the live table-set
+// written -- both the org deletion preflight and the live table-set
 // agreement oracle (orgdeletion_clickhouse_oracle_test.go, package
 // admin_test) call it, so a test asserting the two discovery mechanisms
 // agree is never quietly comparing itself.
@@ -575,11 +611,11 @@ func DiscoverClickHouseOrgTables(ctx context.Context, conn driver.Conn) ([]ChTab
 	for rows.Next() {
 		var t ChTable
 		if err := rows.Scan(&t.Name, &t.OrgIDType); err != nil {
-			continue
+			return nil, err
 		}
 		tables = append(tables, t)
 	}
-	return tables, nil
+	return tables, rows.Err()
 }
 
 // IsUUIDColumnType reports whether a ClickHouse column type string names

@@ -529,7 +529,7 @@ func shellRefused(t *testing.T, script string) {
 
 // Form (1): the repo's own idiom, a date inside the arithmetic (ci/check_go.sh).
 func TestPlantedShellDateInsideArithmeticAssignIsRefused(t *testing.T) {
-	shellRefused(t, `"start=$SECONDS\nelapsed=$(( $(date +%s) - start ))\necho \"A_ELAPSED=$elapsed\"\n"`)
+	shellRefused(t, `"start=3\nelapsed=$(( $(date +%s) - start ))\necho \"A_ELAPSED=$elapsed\"\n"`)
 }
 
 // Form (2): two hops, the measured word is assigned first and used by the next assign.

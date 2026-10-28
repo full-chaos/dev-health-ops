@@ -223,11 +223,17 @@ func TestJWKSAnswersWhileTheDatabaseIsBlackholed(t *testing.T) {
 	var dueStatus int
 	var dueTook time.Duration
 	dueDone := make(chan struct{})
+	dueCtx, cancelDue := context.WithCancel(ctx)
+	defer cancelDue()
 	droppedBefore := proxy.dropped.Load()
 	go func() {
 		defer close(dueDone)
 		start := time.Now()
-		response, err := client.Get(e.front.URL + "/.well-known/jwks.json")
+		dueRequest, requestErr := http.NewRequestWithContext(dueCtx, http.MethodGet, e.front.URL+"/.well-known/jwks.json", nil)
+		if requestErr != nil {
+			return
+		}
+		response, err := client.Do(dueRequest)
 		dueTook = time.Since(start)
 		if err == nil {
 			dueStatus = response.StatusCode
@@ -238,6 +244,11 @@ func TestJWKSAnswersWhileTheDatabaseIsBlackholed(t *testing.T) {
 	reachDeadline := time.Now().Add(15 * time.Second)
 	for proxy.dropped.Load() == droppedBefore {
 		if time.Now().After(reachDeadline) {
+			cancelDue()
+			select {
+			case <-dueDone:
+			case <-time.After(10 * time.Second):
+			}
 			t.Fatal("the due JWKS request's key-state read never reached the blackhole within the 15 s guard: the faulted burst cannot reach the inline-wait path")
 		}
 		time.Sleep(10 * time.Millisecond)

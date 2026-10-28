@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -26,31 +27,36 @@ func jobHandlers(logs *bytes.Buffer) handlers {
 	return handlers{Deps: Deps{Logger: slog.New(slog.NewTextHandler(logs, nil))}}
 }
 
+// The queue and its job run in a bubble on a virtual clock: queueLinkJob hands the work to the queue and returns at the same
+// instant, while the job is still waiting for its release.
 func TestQueueLinkJobReturnsBeforeTheWork(t *testing.T) {
-	q := withQueue(t, 4)
-	var logs bytes.Buffer
-	h := jobHandlers(&logs)
-	release, ran := make(chan struct{}), make(chan struct{})
-	request := httptest.NewRequest(http.MethodPost, "/forgot", nil)
-	start := time.Now()
-	h.queueLinkJob(context.Background(), request, mailPasswordReset, true, func(context.Context, *http.Request) error {
-		<-release
-		close(ran)
-		return nil
+	synctest.Test(t, func(t *testing.T) {
+		q := withQueue(t, 4)
+		var logs bytes.Buffer
+		h := jobHandlers(&logs)
+		release, ran := make(chan struct{}), make(chan struct{})
+		request := httptest.NewRequest(http.MethodPost, "/forgot", nil)
+		start := time.Now()
+		h.queueLinkJob(context.Background(), request, mailPasswordReset, true, func(context.Context, *http.Request) error {
+			<-release
+			close(ran)
+			return nil
+		})
+		returnedAt := time.Now()
+		if !returnedAt.Equal(start) {
+			t.Fatalf("queueLinkJob returned %v of virtual time after the start: it waited for the work", returnedAt.Sub(start))
+		}
+		select {
+		case <-ran:
+			t.Fatal("queueLinkJob returned only after the work finished")
+		default:
+		}
+		close(release)
+		q.wait()
+		if text := scrape(t, q); !strings.Contains(text, `purpose="password_reset",outcome="sent"} 1`) {
+			t.Errorf("the finished job was not counted as sent:\n%s", text)
+		}
 	})
-	if time.Since(start) > time.Second {
-		t.Fatal("queueLinkJob waited for the work")
-	}
-	select {
-	case <-ran:
-		t.Fatal("the job finished before it was released")
-	default:
-	}
-	close(release)
-	q.wait()
-	if text := scrape(t, q); !strings.Contains(text, `purpose="password_reset",outcome="sent"} 1`) {
-		t.Errorf("the finished job was not counted as sent:\n%s", text)
-	}
 }
 
 func TestQueueLinkJobSurvivesACancelledRequest(t *testing.T) {

@@ -254,7 +254,9 @@ func TestWaitForPlanes_NamesThePlaneThatDidNotAnswer(t *testing.T) {
 		late := map[string]int32{PlaneGoAPI: 0, PlaneQueryAPI: 0}
 		late[missing] = -1
 		server := httptest.NewServer(newLateRouter(late))
-		said := whatItSaysWhenItGivesUp(t, func(_ context.Context, tb testing.TB) { waitForPlanes(tb, server.URL, 700*time.Millisecond, diagnoseSentinel) })
+		said := whatItSaysWhenItGivesUp(t, func(_ context.Context, tb testing.TB) {
+			waitForPlanes(tb, server.URL, 700*time.Millisecond, diagnoseSentinel)
+		})
 		server.Close()
 		for _, want := range []string{"the " + missing + " stub plane did not answer", "within 700ms", "last: status 502", sentinelLog} {
 			if !strings.Contains(said, want) {
@@ -269,7 +271,9 @@ func TestWaitForPlanes_NamesThePlaneThatDidNotAnswer(t *testing.T) {
 func TestWaitForPlanes_AnAnswerFromTheOtherPlaneIsNotTheAnswer(t *testing.T) {
 	server := httptest.NewServer(goStub(PlaneGoAPI))
 	t.Cleanup(server.Close)
-	said := whatItSaysWhenItGivesUp(t, func(_ context.Context, tb testing.TB) { waitForPlanes(tb, server.URL, 700*time.Millisecond, diagnoseSentinel) })
+	said := whatItSaysWhenItGivesUp(t, func(_ context.Context, tb testing.TB) {
+		waitForPlanes(tb, server.URL, 700*time.Millisecond, diagnoseSentinel)
+	})
 	for _, want := range []string{"the " + PlaneQueryAPI + " stub plane did not answer", "last: status 200, " + stubPlane + ` "` + PlaneGoAPI + `"`, sentinelLog} {
 		if !strings.Contains(said, want) {
 			t.Errorf("it said %q, want %q in it", said, want)

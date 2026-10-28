@@ -2,11 +2,13 @@ package authapi
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -422,5 +424,68 @@ func TestSocialLinkAndUnlinkAcceptTheAuthServiceEdDSAToken(t *testing.T) {
 	expectError(t, a.do(http.MethodPost, PatternSocialLink, linkBody, a.signClaims(c)), http.StatusUnauthorized, "audience")
 	if len(domain.whos) != 2 {
 		t.Fatal("the domain was reached with a token of another audience")
+	}
+}
+
+type sidKids struct {
+	mu   sync.Mutex
+	kids map[uuid.UUID][]string
+}
+
+func (s *sidKids) RecordSigningKid(_ context.Context, sid uuid.UUID, kid string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.kids == nil {
+		s.kids = map[uuid.UUID][]string{}
+	}
+	s.kids[sid] = append(s.kids[sid], kid)
+	return nil
+}
+
+// The password change with an EdDSA bearer: the real route set, the real
+// EdDSA issuer and access check, the real flows over in-memory stores. The
+// returned access token is EdDSA, signed by the active kid, bound to the new
+// session, and that kid is recorded on the new session.
+func TestChangePasswordWithAnEdDSABearerReturnsAnEdDSATokenOfTheNewSession(t *testing.T) {
+	a := newAccessFixture(t)
+	kids := &sidKids{}
+	a.issuer.WithKidRecorder(kids)
+	c := newCredFixtureOn(t, httpapi.NewMemoryCounters(nil), a.fixture)
+	body := `{"current_password":"current-password-1","new_password":"Brand-new-pass-77!"}`
+	r := c.call(http.MethodPost, PatternChangePassword, body, a.bearer(a.grant()))
+	if r.Code != http.StatusOK || c.fakes.pwdSet != 1 || c.fakes.created != 1 {
+		t.Fatalf("change = %d, writes %d, sessions %d; %s", r.Code, c.fakes.pwdSet, c.fakes.created, r.Body)
+	}
+	answer := jsonBody(t, r)
+	compact, _ := answer["access_token"].(string)
+	parts := strings.Split(compact, ".")
+	if len(parts) != 3 {
+		t.Fatalf("access_token is not a compact JWS: %q", compact)
+	}
+	decode := func(part string) map[string]any {
+		raw, err := base64.RawURLEncoding.DecodeString(part)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out map[string]any
+		if err := json.Unmarshal(raw, &out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	header, claims := decode(parts[0]), decode(parts[1])
+	if header["alg"] != "EdDSA" || header["kid"] != "k1" {
+		t.Fatalf("returned token header %v, want alg EdDSA and kid k1", header)
+	}
+	sid, ok := claims["sid"].(string)
+	if !ok || sid == session.WireSessionID(a.record.ID) {
+		t.Fatalf("returned token sid %v, want the new session, not %s", claims["sid"], session.WireSessionID(a.record.ID))
+	}
+	newID, err := session.ParseWireSessionID(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := kids.kids[newID]; len(got) != 1 || got[0] != "k1" {
+		t.Fatalf("kids recorded for the new session = %v, want [k1]", got)
 	}
 }

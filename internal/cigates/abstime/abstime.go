@@ -201,7 +201,8 @@ var comparisons = map[token.Token]bool{token.GTR: true, token.GEQ: true, token.L
 // literal holds KEY=$((SECONDS ...)), KEY=$SECONDS, KEY=$EPOCHREALTIME or KEY=$(date +%s). It is carried when an
 // Sscanf format reads `KEY=%d` into &v (v is measured), or when a call of a function declared in the same file with
 // the key as a string literal argument returns it (the function must scan or parse: Sscan*, strconv.Parse*/Atoi,
-// time.ParseDuration, json Unmarshal/Decode; a helper that only logs the key reads nothing).
+// time.ParseDuration, json Unmarshal/Decode, or it calls such a function of the file: one level of call depth; a helper
+// that only logs the key reads nothing).
 // A quotient of two measured values is a ratio and is not measured, whether compared directly or through a variable.
 // Stated limits, each pinned by a test:
 //   - A ratio of two carried values is legal, like a ratio of two time.Since values.
@@ -209,6 +210,7 @@ var comparisons = map[token.Token]bool{token.GTR: true, token.GEQ: true, token.L
 //   - strings.Index/Contains/Cut on a key text carry nothing.
 //   - The emitter and the reader must be in the same file; a key emitted in another file is not seen, and a reader
 //     helper declared in another file is not seen.
+//   - Reader helpers are followed one call level deep; a helper that reaches a parser through two levels is not seen.
 //   - Only literal upper-case KEY= channels are seen: JSON, files, exit codes, computed keys and lower-case keys are not.
 func findAssertions(fset *token.FileSet, file *ast.File, rel string) []finding {
 	var out []finding
@@ -454,6 +456,23 @@ func carriedKeys(file *ast.File) *carried {
 			}
 			return true
 		})
+	}
+	// One level of call depth: a function that calls a parsing function of the file reads too.
+	direct := map[string]bool{}
+	for name := range c.readers {
+		direct[name] = true
+	}
+	for _, decl := range file.Decls {
+		if fd, ok := decl.(*ast.FuncDecl); ok && fd.Recv == nil && fd.Body != nil {
+			ast.Inspect(fd.Body, func(n ast.Node) bool {
+				if call, ok := n.(*ast.CallExpr); ok {
+					if id, ok := call.Fun.(*ast.Ident); ok && direct[id.Name] {
+						c.readers[fd.Name.Name] = true
+					}
+				}
+				return true
+			})
+		}
 	}
 	return c
 }

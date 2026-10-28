@@ -48,19 +48,12 @@ func TestNoChangeSetTouchesAFrozenGoldenOrTheManifest(t *testing.T) {
 		}
 		t.Skipf("no origin/main here: %v", err)
 	}
-	changed, err := Changed(root, base, mustLoad(t).GuardedPaths())
+	problems, err := GitHalf(root, base, mustLoad(t), Exemptions)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if baseManifest, ok, err := BaseManifest(root, base); err != nil {
-		t.Fatal(err)
-	} else if ok {
-		if problems := CheckNotBelowBase(root, baseManifest); len(problems) > 0 {
-			t.Errorf("a frozen comparison was removed against the base:\n%s", strings.Join(problems, "\n"))
-		}
-	}
-	if len(changed) > 0 {
-		t.Errorf("this change set edits a frozen golden, a pin source list or the manifest: %v\nThe frozen files are never rewritten; only a human-approved change to %s may do this", changed, ManifestPath)
+	if len(problems) > 0 {
+		t.Errorf("%s\nThe frozen files are never rewritten; only a human-approved change to %s may do this", strings.Join(problems, "\n"), ManifestPath)
 	}
 }
 

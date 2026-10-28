@@ -225,6 +225,43 @@ func MergeBase(dir string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// Exemption clears the git half for ONE exact change set, keyed to content: the base tree's manifest and head.json,
+// the archive manifest at HEAD and the exact set of guarded paths the change set touches. A change set that differs in
+// any of them gets the guard's normal verdict.
+type Exemption struct {
+	BaseManifestSHA256    string
+	BaseHeadJSONSHA256    string
+	ArchiveManifestSHA256 string
+	Paths                 []string
+	Cites                 string
+}
+
+// Exemptions are the change sets the git half clears.
+var Exemptions []Exemption
+
+// GitHalf is the git half's verdict on the tree under root against base: the guarded paths the change set touches and
+// the frozen comparisons it removes against the base manifest, one line each.
+func GitHalf(root, base string, m Manifest, exemptions []Exemption) ([]string, error) {
+	changed, err := Changed(root, base, m.GuardedPaths())
+	if err != nil {
+		return nil, err
+	}
+	var problems []string
+	baseManifest, ok, err := BaseManifest(root, base)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		for _, problem := range CheckNotBelowBase(root, baseManifest) {
+			problems = append(problems, "a frozen comparison was removed against the base: "+problem)
+		}
+	}
+	for _, path := range changed {
+		problems = append(problems, "this change set edits a frozen golden, a pin source list or the manifest: "+path)
+	}
+	return problems, nil
+}
+
 // Changed lists the paths among guarded that differ between base and HEAD in dir.
 func Changed(dir, base string, guarded []string) ([]string, error) {
 	args := append([]string{"-C", dir, "diff", "--name-only", "--diff-filter=MDRT", base + "...HEAD", "--"}, guarded...)

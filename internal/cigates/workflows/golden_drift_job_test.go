@@ -18,6 +18,9 @@ func TestGoldenDriftJobIsAdvisoryAndPullRequestOnly(t *testing.T) {
 	if !strings.Contains(cond, "github.event_name == 'pull_request'") {
 		t.Errorf("job if %q must be pull_request only", cond)
 	}
+	if !strings.Contains(cond, "github.event.pull_request.head.repo.full_name == github.repository") {
+		t.Errorf("job if %q must keep the same-repository predicate (a fork pull request has no registry login secret)", cond)
+	}
 	if strings.Contains(cond, "merge_group") {
 		t.Errorf("job if %q must not name merge_group", cond)
 	}

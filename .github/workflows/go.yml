@@ -732,6 +732,9 @@ jobs:
   # ci/check_golden_drift.sh runs only the golden tests the change can reach (ci/golden_drift_registry.tsv: migration paths and the
   # golden package directories). It is pull_request only, is NOT in go-queue-gate's needs, and a bad input runs every row.
   # A label that already runs the shards (ci:integration, ci:full) makes it select nothing.
+  # Selection is by migration paths and the golden package directories only. A change to a writer outside those directories
+  # (example: internal/auth/authruntime/usersguard.go) selects no row here and is still caught by the merge queue shards.
+  # Closure based triggers are a later step; this is a bounded early signal, not full coverage.
   go-golden-drift:
     name: go-golden-drift
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository

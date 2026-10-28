@@ -38,9 +38,10 @@ func TestRefusalSinkWaitReturnsALineWrittenBeforeTheWait(t *testing.T) {
 	}
 }
 
-// The waiter may park before the line arrives; the write must wake it. The context is cancelled
-// after the write, so a sink that never wakes a waiter ends the wait with the context error and
-// the test fails instead of hanging.
+// A line written while a waiter runs is returned to it. The waiter may or may not have parked
+// before the write; the test does not force either order. The context is cancelled after the
+// write and the wait reads the lines again when its context ends, so this test also passes for a
+// sink that never wakes a waiter; TestRefusalSinkWriteWakesAParkedWaiter is the wake-up test.
 func TestRefusalSinkWaitReturnsALineWrittenAfterTheWaitStarted(t *testing.T) {
 	sink := &refusalSink{}
 	ctx, cancel := context.WithCancel(context.Background())

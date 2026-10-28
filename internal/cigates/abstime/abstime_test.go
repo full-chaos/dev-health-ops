@@ -260,7 +260,7 @@ func TestPlantedFprintfEmittedMillisecondsAreRefused(t *testing.T) {
 }
 
 func TestPlantedShellSecondsParsedByAHelperAreRefused(t *testing.T) {
-	body := "const script = \"start=$SECONDS\\nstop_service x\\necho \\\"A_ELAPSED=$((SECONDS - start))\\\"\\n\"\n\nfunc elapsedOf(stdout, key string) (int, bool) { return 0, true }\n\nfunc TestTeardown(t *testing.T) {\n\tprompt, ok := elapsedOf(out, \"A_ELAPSED\")\n\tif !ok {\n\t\treturn\n\t}\n\tif prompt <= 3 {\n\t\tt.Fatal(\"x\")\n\t}\n}\n"
+	body := "const script = \"start=$SECONDS\\nstop_service x\\necho \\\"A_ELAPSED=$((SECONDS - start))\\\"\\n\"\n\nfunc elapsedOf(stdout, key string) (int, bool) {\n\tn, err := strconv.Atoi(stdout)\n\treturn n, err == nil\n}\n\nfunc TestTeardown(t *testing.T) {\n\tprompt, ok := elapsedOf(out, \"A_ELAPSED\")\n\tif !ok {\n\t\treturn\n\t}\n\tif prompt <= 3 {\n\t\tt.Fatal(\"x\")\n\t}\n}\n"
 	wantOne(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil), "TestTeardown")
 }
 
@@ -311,5 +311,93 @@ func TestEmitterInAnotherFileIsOutOfScope(t *testing.T) {
 
 func TestDurationCarriedAsJSONIsOutOfScope(t *testing.T) {
 	body := "func helper() {\n\ts := time.Now()\n\tjson.NewEncoder(os.Stderr).Encode(map[string]int64{\"ms\": time.Since(s).Milliseconds()})\n}\n\nfunc TestJSON(t *testing.T) {\n\tvar got map[string]int64\n\tjson.Unmarshal(raw, &got)\n\tif got[\"ms\"] > 4000 {\n\t\tt.Fatal(\"x\")\n\t}\n}\n"
+	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil))
+}
+
+// Reviewer probes of the carried-measurement rule (CHAOS-11757): each is a planted shape the rule must refuse, or a
+// legal shape it must leave alone.
+
+func TestPlantedIndexedPrintfVerbsAreFollowedToTheirArgument(t *testing.T) {
+	helper := "func helper() {\n\tstart := time.Now()\n\ts := fmt.Sprintf(\"DURATION_MS=%[2]d CODE=%[1]d\", 0, time.Since(start).Milliseconds())\n\tos.Stderr.WriteString(s)\n}\n\n"
+	body := helper + "func TestIndexed(t *testing.T) {\n\tvar ms int64\n\tvar code int\n\tfmt.Sscanf(text, \"DURATION_MS=%d CODE=%d\", &ms, &code)\n\tif ms > 5000 {\n\t\tt.Fatal(\"slow\")\n\t}\n}\n"
+	wantOne(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil), "TestIndexed")
+}
+
+func TestIndexedVerbOnTheOtherArgumentIsNotAnEmitter(t *testing.T) {
+	helper := "func helper() {\n\tstart := time.Now()\n\ts := fmt.Sprintf(\"CODE=%[1]d DURATION_MS=%[1]d\", 0, time.Since(start).Milliseconds())\n\tos.Stderr.WriteString(s)\n}\n\n"
+	body := helper + "func TestIndexed(t *testing.T) {\n\tvar ms int64\n\tfmt.Sscanf(text, \"DURATION_MS=%d\", &ms)\n\tif ms > 5000 {\n\t\tt.Fatal(\"x\")\n\t}\n}\n"
+	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil))
+}
+
+func TestPlantedPrintFamilyKeyAsItsOwnArgumentIsRefused(t *testing.T) {
+	for name, emit := range map[string]string{
+		"Fprintln": "fmt.Fprintln(os.Stderr, \"DURATION_MS=\", time.Since(s).Milliseconds())",
+		"Println":  "fmt.Println(\"DURATION_MS=\", time.Since(s).Milliseconds())",
+		"Fprint":   "fmt.Fprint(os.Stderr, \"DURATION_MS=\", time.Since(s).Milliseconds())",
+		"Sprint":   "_ = fmt.Sprint(\"DURATION_MS=\", time.Since(s).Milliseconds())",
+	} {
+		body := "func helper() {\n\ts := time.Now()\n\t" + emit + "\n}\n\nfunc TestPrint(t *testing.T) {\n\tvar ms int64\n\tfmt.Sscanf(text, \"DURATION_MS=%d\", &ms)\n\tif ms > 5000 {\n\t\tt.Fatal(\"slow\")\n\t}\n}\n"
+		got := check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil)
+		if len(got) != 1 || !strings.Contains(got[0], "TestPrint") {
+			t.Fatalf("%s: want one violation naming TestPrint, got %q", name, got)
+		}
+	}
+}
+
+func TestPrintFamilyKeyBeforeAnUnmeasuredArgumentIsNotAnEmitter(t *testing.T) {
+	body := "func helper(port int) {\n\tfmt.Fprintln(os.Stderr, \"PORT=\", port)\n}\n\nfunc TestPort(t *testing.T) {\n\tvar port int\n\tfmt.Sscanf(text, \"PORT=%d\", &port)\n\tif port > 1024 {\n\t\tt.Log(port)\n\t}\n}\n"
+	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil))
+}
+
+func TestQuotientOfTwoMeasuredValuesIsARatioEvenThroughAVariable(t *testing.T) {
+	direct := "func TestRatioVar(t *testing.T) {\n\ta := time.Now()\n\tfast := time.Since(a)\n\tb := time.Now()\n\tslow := time.Since(b)\n\tratio := float64(slow) / float64(fast)\n\tif ratio > 2 {\n\t\tt.Fatal(\"x\")\n\t}\n}\n"
+	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + direct}), nil))
+	helper := "func helper() {\n\ts := time.Now()\n\tos.Stderr.WriteString(\"A_MS=\" + strconv.FormatInt(time.Since(s).Milliseconds(), 10) + \"\\n\")\n\tos.Stderr.WriteString(\"B_MS=\" + strconv.FormatInt(time.Since(s).Milliseconds(), 10) + \"\\n\")\n}\n\n"
+	carried := helper + "func TestCarriedRatioVar(t *testing.T) {\n\tvar a, b int64\n\tfmt.Sscanf(text, \"A_MS=%d\", &a)\n\tfmt.Sscanf(text, \"B_MS=%d\", &b)\n\tratio := float64(b) / float64(a)\n\tif ratio > 2 {\n\t\tt.Fatal(\"x\")\n\t}\n}\n"
+	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + carried}), nil))
+}
+
+func TestQuotientOfAMeasuredValueByAConstantIsStillMeasured(t *testing.T) {
+	body := "func TestPerOp(t *testing.T) {\n\ta := time.Now()\n\tper := time.Since(a) / 100\n\tif per > time.Millisecond {\n\t\tt.Fatal(\"x\")\n\t}\n}\n"
+	wantOne(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil), "TestPerOp")
+}
+
+func TestALoggingHelperIsNotAReaderOfACarriedKey(t *testing.T) {
+	body := carriedHelper + "func logKey(key string) int {\n\tfmt.Println(\"key\", key)\n\treturn 2\n}\n\nfunc TestLogged(t *testing.T) {\n\tcode := logKey(\"STOP_MS\")\n\tif code > 1 {\n\t\tt.Fatal(code)\n\t}\n}\n"
+	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil))
+}
+
+func TestHelpersThatParseAreReadersWhateverTheParser(t *testing.T) {
+	for name, parse := range map[string]string{
+		"Atoi":          "n, err := strconv.Atoi(out)\n\treturn n, err == nil",
+		"ParseInt":      "n, err := strconv.ParseInt(out, 10, 64)\n\treturn int(n), err == nil",
+		"ParseFloat":    "f, err := strconv.ParseFloat(out, 64)\n\treturn int(f), err == nil",
+		"Sscanf":        "var n int\n\t_, err := fmt.Sscanf(out, \"%d\", &n)\n\treturn n, err == nil",
+		"ParseDuration": "d, err := time.ParseDuration(out)\n\treturn int(d), err == nil",
+		"Unmarshal":     "var n int\n\terr := json.Unmarshal([]byte(out), &n)\n\treturn n, err == nil",
+	} {
+		body := carriedHelper + "func readKey(out, key string) (int, bool) {\n\t" + parse + "\n}\n\nfunc TestHelper(t *testing.T) {\n\tms, ok := readKey(text, \"STOP_MS\")\n\tif ok && ms > 4000 {\n\t\tt.Fatal(ms)\n\t}\n}\n"
+		got := check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil)
+		if len(got) != 1 || !strings.Contains(got[0], "TestHelper") {
+			t.Fatalf("%s: want one violation naming TestHelper, got %q", name, got)
+		}
+	}
+}
+
+func TestAHelperDeclaredInAnotherFileIsNotAReader(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"p/helper_test.go": head + "func readKey(out, key string) (int, bool) {\n\tn, err := strconv.Atoi(out)\n\treturn n, err == nil\n}\n",
+		"p/x_test.go":      head + carriedHelper + "func TestHelper(t *testing.T) {\n\tms, _ := readKey(text, \"STOP_MS\")\n\tif ms > 4000 {\n\t\tt.Fatal(ms)\n\t}\n}\n",
+	})
+	wantClean(t, check(t, root, nil))
+}
+
+func TestAComputedKeyIsOutOfScope(t *testing.T) {
+	body := "func helper() {\n\ts := time.Now()\n\tkey := \"STOP\" + \"_MS\"\n\tos.Stderr.WriteString(key + \"=\" + strconv.FormatInt(time.Since(s).Milliseconds(), 10))\n}\n\nfunc TestComputed(t *testing.T) {\n\tvar ms int64\n\tfmt.Sscanf(text, \"STOP_MS=%d\", &ms)\n\tif ms > 4000 {\n\t\tt.Fatal(\"x\")\n\t}\n}\n"
+	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil))
+}
+
+func TestALowercaseKeyIsOutOfScope(t *testing.T) {
+	body := "func helper() {\n\ts := time.Now()\n\tos.Stderr.WriteString(\"stop_ms=\" + strconv.FormatInt(time.Since(s).Milliseconds(), 10))\n}\n\nfunc TestLower(t *testing.T) {\n\tvar ms int64\n\tfmt.Sscanf(text, \"stop_ms=%d\", &ms)\n\tif ms > 4000 {\n\t\tt.Fatal(\"x\")\n\t}\n}\n"
 	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil))
 }

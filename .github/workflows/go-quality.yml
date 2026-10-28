@@ -485,8 +485,23 @@ jobs:
           DEV_HEALTH_GO_FRESH_SECURITY: ${{ github.event_name == 'merge_group' && '1' || '' }}
           # CHAOS-11682: on merge_group the unweighted-slow guard only reports; pull_request, push, schedule and dispatch still fail.
           DEV_HEALTH_GO_UNWEIGHTED_REPORT_ONLY: ${{ github.event_name == 'merge_group' && '1' || '' }}
+          # CHAOS-11684: the test and race stages run go test -json; the raw events (they carry test output) stay in this runner
+          # directory and are reduced to package/test/action/elapsed by the step below. Never under go-test-json/ (uploaded as is).
+          GO_TEST_LEG_JSON_DIR: ${{ runner.temp }}/go-test-leg-json
         # Each stage of the leg prints UTC start/done stamps (`==> stage ...`).
         run: bash ci/check_go.sh ci-leg ${{ matrix.args }}
+
+      - name: Reduce the leg's go test -json to per-test timings
+        if: always() && steps.relevance.outputs.relevant == 'true' && github.event_name != 'pull_request' && (startsWith(matrix.name, 'test-') || startsWith(matrix.name, 'race-'))
+        continue-on-error: true
+        # CHAOS-11684: one row per finished test, package<TAB>test<TAB>action<TAB>elapsed seconds, gzipped. No test output leaves the
+        # runner. A line that is not a JSON event is skipped. The leg's pass or fail is decided by the step above, never by this one.
+        run: |
+          mkdir -p go-test-timings
+          for f in "${RUNNER_TEMP}"/go-test-leg-json/*.json; do
+            [ -f "${f}" ] || continue
+            jq -R -r 'fromjson? | select(type == "object" and ((.Test // "") != "") and (.Action == "pass" or .Action == "fail" or .Action == "skip")) | [.Package, .Test, .Action, (.Elapsed // 0)] | @tsv' "${f}"
+          done | gzip -9 > "go-test-timings/${{ matrix.name }}.tsv.gz"
 
       - name: Upload the providersync race slice's go test -json (race legs)
         continue-on-error: true
@@ -498,6 +513,17 @@ jobs:
           name: go-test-json-${{ matrix.name }}
           path: go-test-json/
           retention-days: 7
+          if-no-files-found: warn
+
+      - name: Upload the leg's per-test timings
+        if: always() && steps.relevance.outputs.relevant == 'true' && github.event_name != 'pull_request' && (startsWith(matrix.name, 'test-') || startsWith(matrix.name, 'race-'))
+        continue-on-error: true
+        # CHAOS-11684: a merge_group or main run keeps the leg's timings for 14 days, so a test's clean maximum is read from many runs.
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: go-test-timings-${{ matrix.name }}
+          path: go-test-timings/
+          retention-days: 14
           if-no-files-found: warn
 
       - name: Save the plan-reads call-graph result (main pushes, GitHub-hosted static leg)

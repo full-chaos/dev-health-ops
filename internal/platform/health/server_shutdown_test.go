@@ -239,6 +239,8 @@ func TestAConnectionAcceptedAfterTheSweepIsClosedWhenUnused(t *testing.T) {
 	var allowOnce sync.Once
 	t.Cleanup(func() { allowOnce.Do(func() { close(allowStop) }) })
 	g := startGatedServer(t, func(s *Server) {
+		// Only the stop may close the late connection here: the read timeouts would close it too, later.
+		s.server.ReadHeaderTimeout, s.server.ReadTimeout = time.Hour, time.Hour
 		s.sweptHook = func() {
 			close(swept)
 			<-allowStop

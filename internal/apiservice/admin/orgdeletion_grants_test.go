@@ -45,6 +45,14 @@ func TestOrgDeletionGrantProblem(t *testing.T) {
 			"GRANT SELECT, ALTER DELETE ON *.* TO u",
 			"REVOKE ALTER DELETE ON other.* FROM u",
 		}, ""},
+		{"quoted * is a table named *, not every table", []string{"GRANT SELECT, ALTER DELETE ON worker_test.`*` TO u"}, "no SELECT on worker_test.*"},
+		{"quoted * is a database named *, not every database", []string{"GRANT SELECT, ALTER DELETE ON `*`.* TO u"}, "no SELECT on worker_test.*"},
+		{"unclosed quote", []string{"GRANT SELECT, ALTER DELETE ON `worker_test.* TO u"}, "no SELECT on worker_test.*"},
+		{"doubled backtick inside a name", []string{"GRANT SELECT, ALTER DELETE ON `worker``_test`.* TO u"}, "no SELECT on worker_test.*"},
+		{"revoke on the table named *", []string{
+			"GRANT SELECT, ALTER DELETE ON worker_test.* TO u",
+			"REVOKE ALTER DELETE ON worker_test.`*` FROM u",
+		}, "partial revoke"},
 		{"revoke of an unrelated privilege", []string{
 			"GRANT SELECT, ALTER DELETE ON worker_test.* TO u",
 			"REVOKE INSERT ON worker_test.t1 FROM u",
@@ -59,6 +67,16 @@ func TestOrgDeletionGrantProblem(t *testing.T) {
 				t.Errorf("err = %v, want one with %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// A backtick-quoted database name is matched exactly, also with a dot in it.
+func TestOrgDeletionGrantProblemReadsAQuotedDatabaseName(t *testing.T) {
+	if err := orgDeletionGrantProblem("org.analytics", []string{"GRANT SELECT, ALTER DELETE ON `org.analytics`.* TO u"}); err != nil {
+		t.Errorf("quoted dotted database: %v, want the purge allowed", err)
+	}
+	if err := orgDeletionGrantProblem("org", []string{"GRANT SELECT, ALTER DELETE ON `org.analytics`.* TO u"}); err == nil {
+		t.Error("a grant on database org.analytics allowed a purge of database org")
 	}
 }
 

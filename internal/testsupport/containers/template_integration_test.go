@@ -5,6 +5,7 @@ package containers
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -339,6 +340,30 @@ func TestTemplateChangeIsAFailLine(t *testing.T) {
 		{"extension added", func(t *testing.T, ctx context.Context, s *sharedServers) {
 			writeIntoTemplate(t, ctx, s, name, "CREATE EXTENSION citext")
 		}, "extension citext"},
+		{"row updated, same count", func(t *testing.T, ctx context.Context, s *sharedServers) {
+			writeIntoTemplate(t, ctx, s, name, "UPDATE public.tpl_t SET note = 'changed' WHERE id = 1")
+		}, "content public.tpl_t"},
+		{"table granted to PUBLIC", func(t *testing.T, ctx context.Context, s *sharedServers) {
+			writeIntoTemplate(t, ctx, s, name, "GRANT SELECT ON public.tpl_t TO PUBLIC")
+		}, "relation public.tpl_t"},
+		{"table owner changed", func(t *testing.T, ctx context.Context, s *sharedServers) {
+			writeIntoTemplate(t, ctx, s, name, "ALTER TABLE public.tpl_t OWNER TO pg_monitor")
+		}, "relation public.tpl_t"},
+		{"table reloption set", func(t *testing.T, ctx context.Context, s *sharedServers) {
+			writeIntoTemplate(t, ctx, s, name, "ALTER TABLE public.tpl_t SET (fillfactor = 70)")
+		}, "relation public.tpl_t"},
+		{"table comment set", func(t *testing.T, ctx context.Context, s *sharedServers) {
+			writeIntoTemplate(t, ctx, s, name, "COMMENT ON TABLE public.tpl_t IS 'planted'")
+		}, "relation public.tpl_t"},
+		{"column comment set", func(t *testing.T, ctx context.Context, s *sharedServers) {
+			writeIntoTemplate(t, ctx, s, name, "COMMENT ON COLUMN public.tpl_t.note IS 'planted'")
+		}, "column public.tpl_t.note"},
+		{"default privileges changed", func(t *testing.T, ctx context.Context, s *sharedServers) {
+			writeIntoTemplate(t, ctx, s, name, "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO PUBLIC")
+		}, "default-acl"},
+		{"schema granted", func(t *testing.T, ctx context.Context, s *sharedServers) {
+			writeIntoTemplate(t, ctx, s, name, "GRANT USAGE ON SCHEMA public TO pg_monitor")
+		}, "schema public"},
 		{"connections left allowed", func(t *testing.T, ctx context.Context, s *sharedServers) {
 			pgExec(t, ctx, s.pg.adminDSN, "ALTER DATABASE "+name+" ALLOW_CONNECTIONS true")
 		}, "allowconn"},
@@ -414,4 +439,44 @@ func TestTemplateIsNotBuiltOnAServerThisBinaryDidNotStart(t *testing.T) {
 	if got := builds.Load(); got != 1 {
 		t.Errorf("builds = %d, want 1 (the chain on the clone's own database)", got)
 	}
+}
+
+// The session state the key reads is what a build role sees: a role default for
+// search_path changes it. This test has its own server, so the server-wide role
+// change stays out of a shared-server run.
+func TestSessionStateSeesARoleDefaultSearchPath(t *testing.T) {
+	ctx := sharedCtx(t)
+	server, err := StartPostgresIsolated(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mustClose(t, ctx, server)
+	pgExec(t, ctx, server.URI, "CREATE ROLE state_probe LOGIN PASSWORD 'probe'")
+	roleDSN := rewriteUser(t, server.URI, "state_probe", "probe")
+
+	user, before, err := postgresSessionState(ctx, roleDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if user != "state_probe" || before == "" {
+		t.Fatalf("session state = (%q, %q), want the role and a search_path", user, before)
+	}
+	pgExec(t, ctx, server.URI, "ALTER ROLE state_probe SET search_path = state_probe_schema")
+	_, after, err := postgresSessionState(ctx, roleDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after == before || !strings.Contains(after, "state_probe_schema") {
+		t.Errorf("search_path before %q, after the role default %q: want a change that names the new path", before, after)
+	}
+}
+
+func rewriteUser(t *testing.T, uri, user, password string) string {
+	t.Helper()
+	u, err := url.Parse(uri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.User = url.UserPassword(user, password)
+	return u.String()
 }

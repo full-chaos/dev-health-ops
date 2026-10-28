@@ -138,3 +138,27 @@ func TestKeyUsesTheHarnessImage(t *testing.T) {
 		t.Errorf("Key() = %s, want KeyFor over the embedded chain and %s", real, containers.PostgresImage)
 	}
 }
+
+// The key sees what the build role sees: a role default for search_path or another role
+// builds the same chain into other places or under another owner.
+func TestKeyChangesWithTheSessionState(t *testing.T) {
+	state := SessionState{CurrentUser: "worker_test", SearchPath: `"$user", public`}
+	base := KeyForSession(fixtureBaseline(), fixtureChain(), "img", noEnv, state)
+	if again := KeyForSession(fixtureBaseline(), fixtureChain(), "img", noEnv, state); again != base {
+		t.Errorf("the same state gave two keys: %s %s", base, again)
+	}
+	if len(base) != 64 {
+		t.Errorf("key %q is not 64 hex digits", base)
+	}
+	for name, changed := range map[string]SessionState{
+		"search_path": {CurrentUser: "worker_test", SearchPath: "other_schema"},
+		"role":        {CurrentUser: "other_role", SearchPath: `"$user", public`},
+	} {
+		if KeyForSession(fixtureBaseline(), fixtureChain(), "img", noEnv, changed) == base {
+			t.Errorf("another %s kept the key", name)
+		}
+	}
+	if KeyForSession(fixtureBaseline(), fixtureChain(), "img", noEnv, SessionState{}) == base {
+		t.Error("an empty session state and a real one gave one key")
+	}
+}

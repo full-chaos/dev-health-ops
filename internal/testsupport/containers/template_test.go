@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
@@ -216,7 +217,7 @@ func TestTemplateFingerprintDiffNamesTheChange(t *testing.T) {
 // columns relkind, contype, prokind and attalign (SQLSTATE 42725), so each
 // such column enters the fingerprint text through ::text.
 func TestFingerprintQueryCastsCatalogCharColumnsToText(t *testing.T) {
-	pattern := regexp.MustCompile(`\|\|\s*(?:\w+\.)?(relkind|contype|prokind|attalign|typtype|tgtype|polcmd)\b(::text)?`)
+	pattern := regexp.MustCompile(`\|\|\s*(?:\w+\.)?(relkind|contype|prokind|attalign|typtype|tgtype|polcmd|defaclobjtype)\b(::text)?`)
 	matches := pattern.FindAllStringSubmatch(pgTemplateFingerprintQuery, -1)
 	if len(matches) == 0 {
 		t.Fatal("the query concatenates no catalog char column; the check proves nothing, update it")
@@ -225,5 +226,47 @@ func TestFingerprintQueryCastsCatalogCharColumnsToText(t *testing.T) {
 		if match[2] != "::text" {
 			t.Errorf("%q is concatenated without ::text", strings.TrimSpace(match[0]))
 		}
+	}
+}
+
+// A database named like a template that no caller asked for is a leak even when no
+// template was built in the run: nothing registered, one finding.
+func TestFinishReportsAnUnregisteredTemplateDatabaseWhenNoTemplateWasRegistered(t *testing.T) {
+	servers := &sharedServers{
+		pg: &sharedServer{engine: "postgres", baseline: []string{"database worker_test allowconn=true"},
+			snapshot: func(context.Context, string) ([]string, error) {
+				return []string{"database worker_test allowconn=true", "database dh_tpl_0123456789abcdef01234567 allowconn=true"}, nil
+			}},
+	}
+
+	findings, err := servers.finish(context.Background())
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"postgres template dh_tpl_0123456789abcdef01234567: unregistered template database"}
+	if !reflect.DeepEqual(findings, want) {
+		t.Errorf("findings = %q, want %q", findings, want)
+	}
+}
+
+// The fingerprint reads what a test could change besides the rows' count: owners, grants,
+// storage options, comments, default privileges and the content of every table.
+func TestFingerprintQueryReadsOwnersGrantsOptionsCommentsDefaultsAndContent(t *testing.T) {
+	for _, want := range []string{
+		"pg_get_userbyid(", "relacl", "reloptions", "obj_description(", "col_description(",
+		"pg_default_acl", "string_agg(", "proacl", "nspacl", "'content '",
+	} {
+		if !strings.Contains(pgTemplateFingerprintQuery, want) {
+			t.Errorf("the fingerprint query lacks %s", want)
+		}
+	}
+}
+
+func TestPostgresSessionStateIsEmptyOutsideSharedMode(t *testing.T) {
+	recordDockerCalls(t)
+	user, searchPath, err := PostgresSessionState(context.Background())
+	if err != nil || user != "" || searchPath != "" {
+		t.Errorf("PostgresSessionState outside shared mode = (%q, %q, %v), want empty and no error", user, searchPath, err)
 	}
 }

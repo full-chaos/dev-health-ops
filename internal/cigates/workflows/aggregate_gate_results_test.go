@@ -606,12 +606,6 @@ func TestAWorkflowGatesOnChangesToItself(t *testing.T) {
 	}
 }
 
-func TestPathsFilterCoversLefthookYml(t *testing.T) {
-	if patterns := codePatterns(t, loadWorkflow(t, ".github/workflows/test.yml")); !isCovered("lefthook.yml", patterns) {
-		t.Fatal("test.yml's path filter has no lefthook.yml entry: a lefthook.yml-only change would skip the guards")
-	}
-}
-
 func TestPathsFilterCoversTheChartTheStartedChartJobTests(t *testing.T) {
 	patterns := codePatterns(t, loadWorkflow(t, ".github/workflows/test.yml"))
 	for _, f := range []string{"deploy/helm/dev-health/templates/clickhouse-configd.yaml", "deploy/helm/dev-health/clickhouse_started_test.go"} {

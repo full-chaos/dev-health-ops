@@ -15,7 +15,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/rivermigrate"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
 // oldestSupportedProdHead is the newest Alembic application revision a production database may
@@ -40,11 +39,7 @@ const hookStatesSHA256 = "c22eb8928f03fc124cf6eaa400aec43d8cf9ac79aebc59d01817e9
 func TestHookVerbUpgradesAnOldProductionDatabaseToTheAlembicHead(t *testing.T) {
 	pgmigrate.UseFrozenChain(t) // the frozen goldens end at pgmigrate.FrozenHead
 	ctx := context.Background()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatalf("start postgres: %v", err)
-	}
-	t.Cleanup(func() { _ = instance.Close(context.Background()) })
+	instance := sharedInstance(t)
 	if instance.Container == nil {
 		t.Fatal("this test dumps databases with the server's own pg_dump and needs a container instance, not a remote DSN")
 	}

@@ -117,6 +117,10 @@ fi
 TC_TRAP_PID="" TC_TRAP_SID="" TC_TRAP_PGID=""
 tc_trap() {
   local i
+  # A TERM before the setup loop recorded the group: resolve it now (the same private-group guard applies below).
+  if [ -z "${TC_TRAP_PGID}" ]; then
+    TC_TRAP_PGID="$(ps -o pgid= -p "${TC_TRAP_PID}" 2>/dev/null | tr -d ' ' || true)"
+  fi
   # Group kill only for a private group: pgid == the recorded go test pid and != this shell's own group.
   if [ -n "${TC_TRAP_PGID}" ] && [ "${TC_TRAP_PGID}" = "${TC_TRAP_PID}" ] \
     && [ "${TC_TRAP_PGID}" != "$(ps -o pgid= -p "$$" | tr -d ' ')" ]; then

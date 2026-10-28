@@ -29,6 +29,7 @@ printf '%s\n' \
   '    case "${ref}" in' \
   '      mirror.gcr.io/*) key=mirror; fails="${FAKE_FAIL_MIRROR:-0}" ;;' \
   '      docker.io/*) key=dockerio; fails="${FAKE_FAIL_DOCKERIO:-0}" ;;' \
+  '      gcr.io/*) key=gcr; fails="${FAKE_FAIL_GCR:-0}" ;;' \
   '      *) echo "stub: unknown source ${ref}" >&2; exit 99 ;;' \
   '    esac' \
   '    n="$(bump "${key}")"' \
@@ -56,18 +57,30 @@ bad() { printf 'FAIL %s\n' "$1"; fails=$((fails + 1)); }
 
 # run <name> <env assignments...> -> sets RC, OUT, and per-source counts. The helper runs under env -i with a
 # fixed PATH/HOME/TMPDIR/LC_ALL, so no hosted-runner variable (GITHUB_*, RUNNER_*, CI, PULL_*, DOCKER_*) can change a case.
+# MODE=hosted adds a hosted-like environment (GITHUB_RUN_ID, GITHUB_ACTIONS, CI, RUNNER_OS) on top. FN and TV pick the
+# helper function and the tag variable it exports (default: the Go build image).
+MODE=plain
+HOSTED_ENV=(GITHUB_RUN_ID=4242 GITHUB_ACTIONS=true CI=true RUNNER_OS=Linux)
+# norm: the parts of an output that differ per run (elapsed seconds, the process id of the tag, the temp dir).
+norm() { sed -E -e 's/elapsed=[0-9]+s/elapsed=Ns/' -e 's/(local|4242|777)-[0-9]+/\1-PID/g' -e "s#${T}#TMP#g"; }
+GOLDEN_OUT="${T}/golden.out"; : > "${GOLDEN_OUT}"
 run() {
-  FAKE_DIR="${T}/d.$1"; rm -rf "${FAKE_DIR}"; mkdir -p "${FAKE_DIR}"
+  local name="$1"
+  FAKE_DIR="${T}/d.${MODE}.$1"; rm -rf "${FAKE_DIR}"; mkdir -p "${FAKE_DIR}"
   FAKE_LOG="${FAKE_DIR}/log"; : > "${FAKE_LOG}"
   shift
+  local mode_env=()
+  [ "${MODE}" = hosted ] && mode_env=("${HOSTED_ENV[@]}")
   set +e
   # shellcheck disable=SC2016
-  OUT="$(env -i PATH="${T}/bin:/usr/bin:/bin" HOME="${T}" TMPDIR="${T}" LC_ALL=C "$@" FAKE_DIR="${FAKE_DIR}" FAKE_LOG="${FAKE_LOG}" \
-    PULL_BACKOFF_SECS="0 0" bash -c 'source "$1"; pull_pinned_base_image "$2"; r=$?; echo "TAG=${PINNED_BASE_TAG:-}"; exit "$r"' _ "${LIB}" "${DF:-${T}/Dockerfile}" 2>&1)"
+  OUT="$(env -i PATH="${T}/bin:/usr/bin:/bin" HOME="${T}" TMPDIR="${T}" LC_ALL=C "${mode_env[@]}" "$@" FAKE_DIR="${FAKE_DIR}" FAKE_LOG="${FAKE_LOG}" \
+    PULL_BACKOFF_SECS="0 0" bash -c 'source "$1"; "$3" "$2"; r=$?; tv="$4"; echo "TAG=${!tv:-}"; exit "$r"' _ "${LIB}" "${DF:-${T}/Dockerfile}" "${FN:-pull_pinned_base_image}" "${TV:-PINNED_BASE_TAG}" 2>&1)"
   RC=$?
   set -e
   PULLS_MIRROR="$(grep -c '^docker pull mirror.gcr.io/' "${FAKE_LOG}" || true)"
   PULLS_DOCKERIO="$(grep -c '^docker pull docker.io/' "${FAKE_LOG}" || true)"
+  PULLS_GCR="$(grep -c '^docker pull gcr.io/' "${FAKE_LOG}" || true)"
+  case "${name}" in t*) printf '=== %s rc=%s mirror=%s dockerio=%s\n%s\n' "${name}" "${RC}" "${PULLS_MIRROR}" "${PULLS_DOCKERIO}" "$(printf '%s\n' "${OUT}" | norm)" >> "${GOLDEN_OUT}" ;; esac
 }
 SEEN="FAKE_SEEN_DIGEST=${DIGEST}"
 
@@ -76,7 +89,7 @@ if { [ "${RC}" = 0 ] && [ "${PULLS_MIRROR}" = 3 ] && [ "${PULLS_DOCKERIO}" = 0 ]
 
 run t2 FAKE_FAIL_MIRROR=9 "${SEEN}"
 if { [ "${RC}" = 0 ] && [ "${PULLS_MIRROR}" = 3 ] && [ "${PULLS_DOCKERIO}" = 1 ]; }; then ok "t2 mirror all fail: 3 tries, then docker.io used"; else bad "t2 (rc=${RC} m=${PULLS_MIRROR} d=${PULLS_DOCKERIO})"; fi
-if grep -q "^docker pull docker.io/library/golang@${DIGEST}\$" "${T}/d.t2/log"; then ok "t2 fallback pulls the SAME digest"; else bad "t2 fallback digest"; fi
+if grep -q "^docker pull docker.io/library/golang@${DIGEST}\$" "${T}/d.plain.t2/log"; then ok "t2 fallback pulls the SAME digest"; else bad "t2 fallback digest"; fi
 
 run t3 FAKE_FAIL_MIRROR=9 FAKE_FAIL_DOCKERIO=9 "${SEEN}"
 if { [ "${RC}" != 0 ] && [ "${PULLS_MIRROR}" = 3 ] && [ "${PULLS_DOCKERIO}" = 3 ]; }; then ok "t3 both fail: 3+3 tries, non-zero"; else bad "t3 (rc=${RC} m=${PULLS_MIRROR} d=${PULLS_DOCKERIO})"; fi
@@ -141,6 +154,111 @@ for s in ci/check_auth_k8s.sh ci/check_session_cutover_rehearsal.sh; do
   if grep -qF 'GO_BUILD_IMAGE="${PINNED_BASE_TAG}"' "${ROOT}/${s}" && grep -q -- '--pull=false' "${ROOT}/${s}"; then ok "${s} builds from the local tag"; else bad "${s} build args"; fi
   if grep -E 'docker image rm' "${ROOT}/${s}" | grep -qF 'PINNED_BASE_TAG'; then ok "${s} removes PINNED_BASE_TAG in its cleanup"; else bad "${s} cleanup leaves the pulled base tag"; fi
 done
+
+
+# --- the Go build image helper keeps its behaviour: the output of every t* case is byte-equal to the golden recorded from
+# the helper before CHAOS-11649 (elapsed seconds, process ids and the temp dir normalised).
+GOLDEN="${ROOT}/ci/testdata/pull_base_image.golden"
+if [ -n "${GOLDEN_WRITE:-}" ]; then
+  mkdir -p "$(dirname "${GOLDEN}")"; cp "${GOLDEN_OUT}" "${GOLDEN}"; ok "golden written"
+elif [ -f "${GOLDEN}" ] && cmp -s "${GOLDEN_OUT}" "${GOLDEN}"; then ok "golden: every build-image case prints byte-equal output to the pre-CHAOS-11649 helper"
+else bad "golden: the build-image output differs from ci/testdata/pull_base_image.golden"; diff "${GOLDEN}" "${GOLDEN_OUT}" | head -10 || true; fi
+
+# --- CHAOS-11649: the runtime image (ARG GO_RUNTIME_IMAGE, gcr.io only) is pulled with the same rules.
+RSEEN="FAKE_SEEN_DIGEST=${OTHER}"
+runtime_cases() {
+  local m="${MODE}"
+  FN=pull_pinned_runtime_image TV=PINNED_RUNTIME_TAG
+  export FN TV
+  run r1 FAKE_FAIL_GCR=2 "${RSEEN}"
+  if { [ "${RC}" = 0 ] && [ "${PULLS_GCR}" = 3 ] && [ "${PULLS_MIRROR}" = 0 ] && [ "${PULLS_DOCKERIO}" = 0 ]; }; then ok "${m} r1 gcr fails 2x then succeeds: 3 tries, no other source"; else bad "${m} r1 (rc=${RC} g=${PULLS_GCR} m=${PULLS_MIRROR} d=${PULLS_DOCKERIO})"; fi
+  if printf '%s\n' "${OUT}" | grep -q '^TAG=dho-go-runtime-base:'; then ok "${m} r1 PINNED_RUNTIME_TAG is a dho-go-runtime-base tag"; else bad "${m} r1 tag: ${OUT}"; fi
+  if grep -q "^docker pull gcr.io/distroless/static-debian12@${OTHER}\$" "${FAKE_LOG}"; then ok "${m} r1 pulls the digest of the Dockerfile ARG"; else bad "${m} r1 pull ref"; fi
+
+  run r2 FAKE_FAIL_GCR=9 "${RSEEN}"
+  if { [ "${RC}" != 0 ] && [ "${PULLS_GCR}" = 3 ] && [ "${PULLS_MIRROR}" = 0 ] && [ "${PULLS_DOCKERIO}" = 0 ]; }; then ok "${m} r2 gcr always fails: exactly 3 pulls, no fallback, non-zero"; else bad "${m} r2 (rc=${RC} g=${PULLS_GCR})"; fi
+  if printf '%s\n' "${OUT}" | grep -q "^FAIL: base image static-debian12@${OTHER} could not be pulled from: gcr.io (3 tries)"; then ok "${m} r2 named failure line"; else bad "${m} r2 named line: ${OUT}"; fi
+  if printf '%s\n' "${OUT}" | grep -qx 'TAG='; then ok "${m} r2 no tag after a failure"; else bad "${m} r2 tag: ${OUT}"; fi
+
+  run r2b PINNED_RUNTIME_TAG=stale FAKE_FAIL_GCR=9 "${RSEEN}"
+  if printf '%s\n' "${OUT}" | grep -qx 'TAG='; then ok "${m} r2b a failure clears a stale PINNED_RUNTIME_TAG"; else bad "${m} r2b: ${OUT}"; fi
+
+  run r3 "FAKE_SEEN_DIGEST=${DIGEST}"
+  if [ "${RC}" != 0 ] && [ "${PULLS_GCR}" = 3 ] && printf '%s\n' "${OUT}" | grep -q 'digest=mismatch'; then ok "${m} r3 digest mismatch is a failed try"; else bad "${m} r3 (rc=${RC}): ${OUT}"; fi
+  run r3b FAKE_INSPECT_RC=3 "${RSEEN}"
+  if [ "${RC}" != 0 ] && [ "${PULLS_GCR}" = 3 ] && printf '%s\n' "${OUT}" | grep -q 'digest=inspect-failed'; then ok "${m} r3b inspect failure is a failed try"; else bad "${m} r3b (rc=${RC}): ${OUT}"; fi
+
+  run r4 FAKE_TAG_RC=42 "${RSEEN}"
+  if [ "${RC}" = 1 ] && printf '%s\n' "${OUT}" | grep -q "^FAIL: docker tag of gcr.io/distroless/static-debian12@${OTHER} to dho-go-runtime-base:.* failed rc=42"; then ok "${m} r4 docker tag rc 42: helper rc 1, named line"; else bad "${m} r4 (rc=${RC}): ${OUT}"; fi
+
+  run r5 "${RSEEN}"
+  if printf '%s\n' "${OUT}" | grep -Eq "^base-image pull: source=gcr.io try=1/3 rc=0 elapsed=[0-9]+s digest=${OTHER}\$"; then ok "${m} r5 per-try log line"; else bad "${m} r5 log line: ${OUT}"; fi
+  local rt1 bt
+  rt1="$(printf '%s\n' "${OUT}" | sed -n 's/^TAG=//p')"
+  FN=pull_pinned_base_image TV=PINNED_BASE_TAG run r5b "${SEEN}"
+  bt="$(printf '%s\n' "${OUT}" | sed -n 's/^TAG=//p')"
+  if [ -n "${rt1}" ] && [ -n "${bt}" ] && [ "${rt1%%:*}" != "${bt%%:*}" ]; then ok "${m} r5 runtime and build tags have different names"; else bad "${m} r5 tags ${rt1} / ${bt}"; fi
+  if [ "${m}" = hosted ]; then
+    if printf '%s\n' "${rt1}" | grep -q ':4242-'; then ok "${m} r5 tag carries GITHUB_RUN_ID"; else bad "${m} r5 run id: ${rt1}"; fi
+  fi
+  FN=pull_pinned_runtime_image TV=PINNED_RUNTIME_TAG run r5c GITHUB_RUN_ID=777 "${RSEEN}"
+  if printf '%s\n' "${OUT}" | grep -q '^TAG=dho-go-runtime-base:777-'; then ok "${m} r5 an explicit run id wins"; else bad "${m} r5 explicit run id: ${OUT}"; fi
+
+  C2="sha256:$(printf 'e%.0s' {1..64})"
+  sed "s/static-debian12:nonroot@sha256:b*/static-debian12:nonroot@${C2}/" "${T}/Dockerfile" > "${T}/Dockerfile.rt2"
+  DF="${T}/Dockerfile.rt2" run r6 "FAKE_SEEN_DIGEST=${C2}"
+  if [ "${RC}" = 0 ] && grep -q "^docker pull gcr.io/distroless/static-debian12@${C2}\$" "${FAKE_LOG}"; then ok "${m} r6 digest is read from the Dockerfile"; else bad "${m} r6 (rc=${RC}): ${OUT}"; fi
+
+  printf 'ARG GO_RUNTIME_IMAGE="mirror.gcr.io/distroless/static-debian12:nonroot@%s"\n' "${OTHER}" > "${T}/Dockerfile.rt.nogcr"
+  DF="${T}/Dockerfile.rt.nogcr" run r6b "${RSEEN}"
+  if [ "${RC}" = 1 ] && printf '%s\n' "${OUT}" | grep -q '^FAIL: GO_RUNTIME_IMAGE in .* is not a gcr.io ref' && [ "${PULLS_GCR}" = 0 ] && [ "${PULLS_MIRROR}" = 0 ]; then ok "${m} r6b non-gcr.io ref: named failure, no pull"; else bad "${m} r6b (rc=${RC}): ${OUT}"; fi
+  printf 'ARG GO_RUNTIME_IMAGE="gcr.io/distroless/static-debian12:nonroot"\n' > "${T}/Dockerfile.rt.nodigest"
+  DF="${T}/Dockerfile.rt.nodigest" run r6c "${RSEEN}"
+  if [ "${RC}" = 1 ] && printf '%s\n' "${OUT}" | grep -q '^FAIL: GO_RUNTIME_IMAGE in .* has no sha256 digest pin' && [ "${PULLS_GCR}" = 0 ]; then ok "${m} r6c no digest pin: named failure, no pull"; else bad "${m} r6c (rc=${RC}): ${OUT}"; fi
+  printf 'ARG GO_BUILD_IMAGE="mirror.gcr.io/library/golang:1@%s"\n' "${DIGEST}" > "${T}/Dockerfile.rt.noarg"
+  DF="${T}/Dockerfile.rt.noarg" run r6d "${RSEEN}"
+  if [ "${RC}" = 1 ] && printf '%s\n' "${OUT}" | grep -q '^FAIL: ARG GO_RUNTIME_IMAGE not found in ' && [ "${PULLS_GCR}" = 0 ]; then ok "${m} r6d missing ARG: named failure, no pull"; else bad "${m} r6d (rc=${RC}): ${OUT}"; fi
+  DF="${T}/missing-Dockerfile" run r6e "${RSEEN}"
+  if [ "${RC}" = 1 ] && printf '%s\n' "${OUT}" | grep -q '^FAIL: cannot read .*missing-Dockerfile' && [ "${PULLS_GCR}" = 0 ]; then ok "${m} r6e unreadable Dockerfile: named failure, no pull"; else bad "${m} r6e (rc=${RC}): ${OUT}"; fi
+
+  run r7 FAKE_FAIL_GCR=9 "${RSEEN}"
+  if grep -q '^docker login' "${FAKE_LOG}"; then bad "${m} r7 docker login called"; else ok "${m} r7 no docker login"; fi
+  unset FN TV
+}
+for MODE in plain hosted; do runtime_cases; done
+MODE=plain
+
+# the real Dockerfile carries the ARG the helper reads, pinned to gcr.io by digest
+if grep -Eq '^ARG GO_RUNTIME_IMAGE="gcr\.io/[^"]+@sha256:[0-9a-f]{64}"$' "${ROOT}/docker/go-worker.Dockerfile"; then ok "r8 docker/go-worker.Dockerfile pins GO_RUNTIME_IMAGE to gcr.io by digest"; else bad "r8 the Dockerfile pin"; fi
+
+# the worst case of the pulls stays below half of the smaller job timeout
+tries="$(sed -n 's/.*PULL_TRIES:-\([0-9]*\)}.*/\1/p' "${LIB}" | head -1)"
+tmo="$(sed -n 's/.*PULL_TIMEOUT_SECS:-\([0-9]*\)}.*/\1/p' "${LIB}" | head -1)"
+gaps="$(sed -n 's/.*PULL_BACKOFF_SECS:-\([0-9 ]*\)}.*/\1/p' "${LIB}" | head -1)"
+per_source="$(awk -v t="${tries}" -v o="${tmo}" -v g="${gaps}" 'BEGIN { n = split(g, a, " "); s = t * o; for (i = 1; i < t; i++) s += (i <= n ? a[i] : a[n]); print s }')"
+sources_total=$((2 + 1))
+worst=$((per_source * sources_total))
+min_timeout=""
+for wf in auth-k8s-proof.yml session-cutover-rehearsal.yml; do
+  # shellcheck disable=SC2013
+  for m in $(sed -n 's/^ *timeout-minutes: *\([0-9]*\).*/\1/p' "${ROOT}/.github/workflows/${wf}"); do
+    if [ -z "${min_timeout}" ] || [ "${m}" -lt "${min_timeout}" ]; then min_timeout="${m}"; fi
+  done
+done
+if [ -n "${per_source}" ] && [ -n "${min_timeout}" ] && [ "$((worst * 2))" -lt "$((min_timeout * 60))" ]; then ok "r9 worst-case pull time ${worst}s (3 sources x ${per_source}s) is below half of the smaller job timeout (${min_timeout} min)"; else bad "r9 budget: per_source=${per_source} worst=${worst} min_timeout=${min_timeout}"; fi
+
+# both scripts pre-pull the runtime image before their first build, build from the local tag and clean it up
+for s in ci/check_auth_k8s.sh ci/check_session_cutover_rehearsal.sh; do
+  p="$(grep -n 'pull_pinned_runtime_image' "${ROOT}/${s}" | head -1 | cut -d: -f1 || true)"
+  b="$(grep -n '^build ' "${ROOT}/${s}" | head -1 | cut -d: -f1 || true)"
+  if { [ -n "${p}" ] && [ -n "${b}" ] && [ "${p}" -lt "${b}" ]; }; then ok "r8 ${s} pre-pulls the runtime image before its first build"; else bad "r8 ${s} does not pre-pull the runtime image before building"; fi
+  # shellcheck disable=SC2016
+  if grep -qF 'GO_RUNTIME_IMAGE="${PINNED_RUNTIME_TAG}"' "${ROOT}/${s}" && grep -q -- '--pull=false' "${ROOT}/${s}"; then ok "r8 ${s} builds from the local runtime tag"; else bad "r8 ${s} runtime build arg"; fi
+  if grep -E 'docker image rm' "${ROOT}/${s}" | grep -qF 'PINNED_RUNTIME_TAG'; then ok "r8 ${s} removes PINNED_RUNTIME_TAG in its cleanup"; else bad "r8 ${s} cleanup leaves the pulled runtime tag"; fi
+done
+
+# the loop is shared: the pull helper uses retry_named from ci/lib/retry.sh
+if grep -q 'retry_named' "${LIB}" && grep -q 'retry.sh' "${LIB}"; then ok "r10 the pull helper uses retry_named from ci/lib/retry.sh"; else bad "r10 the pull helper does not use the shared retry"; fi
 
 [ "${fails}" = 0 ] || { printf '%s check(s) failed\n' "${fails}"; exit 1; }
 printf 'all pull_base_image checks passed\n'

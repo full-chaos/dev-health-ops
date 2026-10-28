@@ -129,6 +129,14 @@ var orgDeleteTablesAfterThePythonFreeze = map[string]string{
 	"work_unit_issue_size":              "130_work_unit_issue_size.sql",               // CHAOS-9807
 }
 
+// orgDeletePostgresTablesAfterThePythonFreeze names each PostgreSQL org-scoped table column a migration added
+// after adminPythonBuild, where the frozen row state was recorded: "table.column" -> the migration that added
+// it. The frozen state cannot hold it, so it is left out of the Go side before the comparison; the rows of
+// such a table are proven by their own test (TestOrgsDeleteRemovesTheOrgActivityRowOfTheDeletedOrganization).
+var orgDeletePostgresTablesAfterThePythonFreeze = map[string]string{
+	"org_activity.org_id": "0162_add_org_activity.sql",
+}
+
 // orgDeleteTablesDroppedAfterThePythonFreeze names each ClickHouse table a migration dropped after
 // adminPythonBuild, where the frozen Python plan was recorded: table -> the migration that dropped it.
 // The frozen plan and the frozen row state still hold them; the Go plan, which discovers tables live,
@@ -301,6 +309,7 @@ func neutral(dataType, id string) string {
 	case "text", "character varying", "character":
 		return "'x'"
 	case "timestamp with time zone", "timestamp without time zone":
+		//ttlclock:allow never reaches a TTL table: Postgres neutral() value for the date columns of the org rows; the ClickHouse reseed writes only git_blame and backfill_log, stamped with now64()/today() tables=llm_categorization_attempts,work_unit_investment_shadow
 		return "'2000-01-01 00:00:00+00'"
 	case "integer", "bigint", "smallint", "numeric", "double precision", "real":
 		return "0"
@@ -309,6 +318,7 @@ func neutral(dataType, id string) string {
 	case "json", "jsonb", "ARRAY":
 		return "'{}'"
 	case "date":
+		//ttlclock:allow never reaches a TTL table: Postgres neutral() value for the date columns of the org rows; the ClickHouse reseed writes only git_blame and backfill_log, stamped with now64()/today() tables=llm_categorization_attempts,work_unit_investment_shadow
 		return "'2000-01-01'"
 	}
 	return "NULL"
@@ -473,7 +483,14 @@ func (f *chFixture) reseed() {
 
 func snapshot(t *testing.T, db *database, fixture *chFixture, scenario deleteScenario) string {
 	t.Helper()
-	state := map[string]any{"postgres": db.orgRowState(t)}
+	postgres := db.orgRowState(t)
+	for key := range orgDeletePostgresTablesAfterThePythonFreeze {
+		if _, ok := postgres[key]; !ok {
+			t.Fatalf("the migrated schema has no %s: the orgDeletePostgresTablesAfterThePythonFreeze entry has rotted", key)
+		}
+		delete(postgres, key)
+	}
+	state := map[string]any{"postgres": postgres}
 	if scenario.clickhouse {
 		state["clickhouse"] = fixture.counts()
 	}
@@ -564,3 +581,34 @@ func TestOrgsDeleteMatchesTheFrozenPythonOutput(t *testing.T) {
 }
 
 func quote(text string) string { return "'" + strings.ReplaceAll(text, "'", "''") + "'" }
+
+// A deleted organization leaves no org_activity row: the table is not in the frozen Python plan, so the
+// deletion reaches it through the foreign key to organizations (ON DELETE CASCADE). The control organization
+// keeps its row, and a dry run removes nothing.
+func TestOrgsDeleteRemovesTheOrgActivityRowOfTheDeletedOrganization(t *testing.T) {
+	db := startDatabase(t)
+	db.seedOrganizations(t, false)
+	for _, org := range []string{targetOrg, controlOrg} {
+		db.insertRow(t, "org_activity", map[string]string{"org_id": quote(org) + "::uuid", "has_data": "true", "refreshed_at": "now()"})
+	}
+	count := func(org string) int {
+		t.Helper()
+		var n int
+		if err := db.conn.QueryRow(context.Background(), "SELECT count(*) FROM org_activity WHERE org_id = $1::uuid", org).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if code, out := goVerbEnv(t, db, nil, []string{"orgs", "delete", "--org-id", targetOrg, "--dry-run"}); code != 0 {
+		t.Fatalf("dry run: exit %d: %s", code, out)
+	}
+	if count(targetOrg) != 1 || count(controlOrg) != 1 {
+		t.Fatalf("a dry run changed org_activity: target %d, control %d", count(targetOrg), count(controlOrg))
+	}
+	if code, out := goVerbEnv(t, db, nil, []string{"orgs", "delete", "--org-id", targetOrg}); code != 0 {
+		t.Fatalf("delete: exit %d: %s", code, out)
+	}
+	if count(targetOrg) != 0 || count(controlOrg) != 1 {
+		t.Fatalf("after the delete org_activity has target %d, control %d rows, want 0 and 1", count(targetOrg), count(controlOrg))
+	}
+}

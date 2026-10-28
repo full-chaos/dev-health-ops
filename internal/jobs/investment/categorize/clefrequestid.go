@@ -11,11 +11,13 @@ import (
 	"github.com/google/uuid"
 )
 
-// Sources of a clef attempt's request id.
+// Sources of an attempt's request id. The first three are the clef target's; the jev target's id is its own response
+// header.
 const (
 	RequestIDSourceAIG    = "aig"
 	RequestIDSourceRay    = "ray"
 	RequestIDSourceClient = "client"
+	RequestIDSourceHeader = "header"
 )
 
 // clefCall is the state of one send: the attempts of one call share it.

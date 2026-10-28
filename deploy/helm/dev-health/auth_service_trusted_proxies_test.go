@@ -235,8 +235,9 @@ func TestAuthServiceProxyOffRendersWithADisabledNetworkPolicy(t *testing.T) {
 }
 
 // wideTier names the width band of one entry: "" is a narrow entry (IPv4 /28 or longer, IPv6 /124 or longer, a bare
-// address), "ack" is the band that needs authService.trustedProxiesWideAccepted (IPv4 /24../27, IPv6 /64../123), and
-// "refused" is wider than the node pod range (IPv4 /0../23, IPv6 /0../63), which no ack allows.
+// address), "ack" is the band that needs authService.trustedProxiesWideAccepted and the node exclusions (IPv4 /24../27),
+// and "refused" is every other network: wider than the node pod range (IPv4 /0../23), or an IPv6 network wider than a
+// /124, whose node exclusions the render cannot name.
 func wideTier(entry string) string {
 	prefix, err := netip.ParsePrefix(entry)
 	if err != nil {
@@ -246,22 +247,49 @@ func wideTier(entry string) string {
 	switch {
 	case v4 && bits >= 28, !v4 && bits >= 124:
 		return ""
-	case v4 && bits >= 24, !v4 && bits >= 64:
+	case v4 && bits >= 24:
 		return "ack"
 	}
 	return "refused"
 }
 
+// nodeExclusions are the "!<address>" entries a wide IPv4 entry needs beside it: its network address and the next one
+// (the node's bridge). Nil for any other entry.
+func nodeExclusions(entry string) []string {
+	prefix, err := netip.ParsePrefix(entry)
+	if err != nil || !prefix.Addr().Is4() || prefix.Masked() != prefix || prefix.Bits() < 24 || prefix.Bits() >= 28 {
+		return nil
+	}
+	return []string{"!" + prefix.Addr().String(), "!" + prefix.Addr().Next().String()}
+}
+
+func listJSON(entries []string) string {
+	quoted := make([]string, len(entries))
+	for i, entry := range entries {
+		quoted[i] = `"` + entry + `"`
+	}
+	return "[" + strings.Join(quoted, ",") + "]"
+}
+
+func renderList(t *testing.T, entries []string, extra ...string) ([]map[string]any, string, error) {
+	t.Helper()
+	args := append(goAPIWithAuth("--set", "authService.phase=2"), "--set-json", "authService.trustedProxies="+listJSON(entries))
+	return renderAuth(t, append(args, extra...)...)
+}
+
 const (
-	wideAckKey     = "authService.trustedProxiesWideAccepted"
-	wideNeedsAck   = "trustedProxiesWideAccepted"
-	wideTooWideMsg = "wider than a /24 (IPv4) or a /64 (IPv6)"
+	wideAckKey      = "authService.trustedProxiesWideAccepted"
+	wideNeedsAck    = "trustedProxiesWideAccepted"
+	wideTooWideMsg  = "wider than a /24 (IPv4) or a /64 (IPv6)"
+	wideIPv6Msg     = "IPv6 network wider than a /124"
+	nodeExclusionsM = "node exclusions"
+	exclusionKeyMsg = "exclusion entries"
 )
 
+// renderWide renders one entry with the node exclusions it needs, so a test of the width bands reads only the width rule.
 func renderWide(t *testing.T, entry string, extra ...string) ([]map[string]any, string, error) {
 	t.Helper()
-	args := append(goAPIWithAuth("--set", "authService.phase=2"), "--set-json", `authService.trustedProxies=["`+entry+`"]`)
-	return renderAuth(t, append(args, extra...)...)
+	return renderList(t, append([]string{entry}, nodeExclusions(entry)...), extra...)
 }
 
 // The pod range of the node is the widest list entry: a wide entry needs the explicit ack, a wider one is refused with it.
@@ -275,15 +303,139 @@ func TestAuthServiceWideTrustedProxiesRefusedWithoutTheAck(t *testing.T) {
 }
 
 func TestAuthServiceWideTrustedProxiesRenderWithTheAck(t *testing.T) {
-	for _, entry := range []string{"10.42.0.0/24", "10.42.0.0/27", "fd00:0:0:1::/64", "fd00::/120"} {
+	for entry, want := range map[string]string{
+		"10.42.0.0/24":   "10.42.0.0/24,!10.42.0.0,!10.42.0.1",
+		"10.42.0.0/27":   "10.42.0.0/27,!10.42.0.0,!10.42.0.1",
+		"10.42.0.96/27":  "10.42.0.96/27,!10.42.0.96,!10.42.0.97",
+		"10.42.0.128/25": "10.42.0.128/25,!10.42.0.128,!10.42.0.129",
+	} {
 		docs, out, err := renderWide(t, entry, "--set", wideAckKey+"=true")
 		if err != nil {
 			t.Errorf("wide entry %q with the ack: %v\n%.400s", entry, err, out)
 			continue
 		}
 		container := at(authDoc(docs, "Deployment", "a-dev-health-auth-service"), "spec", "template", "spec", "containers", 0)
-		if got, _ := envValue(container, trustedEnvName); got != entry {
-			t.Errorf("%s = %q, want %q", trustedEnvName, got, entry)
+		if got, _ := envValue(container, trustedEnvName); got != want {
+			t.Errorf("%s = %q, want %q", trustedEnvName, got, want)
+		}
+	}
+}
+
+// The node pod range holds the node's own addresses (network address, bridge): a host process or a hostNetwork pod
+// reaches the API port from them, which the go-api pod selector does not stop. A wide IPv4 entry renders only with both
+// excluded beside it, in any order.
+func TestAuthServiceWideTrustedProxiesNeedTheNodeExclusions(t *testing.T) {
+	ack := []string{"--set", wideAckKey + "=true"}
+	for _, list := range [][]string{
+		{"10.42.0.0/24"},
+		{"10.42.0.0/24", "!10.42.0.0"},
+		{"10.42.0.0/24", "!10.42.0.1"},
+		{"10.42.0.0/24", "!10.42.0.1", "!10.42.0.2"},
+		{"10.42.0.0/27", "!10.42.0.1"},
+		{"10.42.0.96/27", "10.42.0.0/28", "!10.42.0.0", "!10.42.0.1"},
+		{"10.42.0.0/24", "!10.42.0.0", "!10.42.0.1", "10.42.1.0/24"},
+	} {
+		if _, out, err := renderList(t, list, ack...); err == nil || !strings.Contains(out, nodeExclusionsM) {
+			t.Errorf("%v with the ack: err=%v, want the node exclusions refusal\n%.400s", list, err, out)
+		}
+	}
+	for _, list := range [][]string{
+		{"10.42.0.0/24", "!10.42.0.0", "!10.42.0.1"},
+		{"!10.42.0.1", "!10.42.0.0", "10.42.0.0/24"},
+		{"10.42.0.0/24", "!10.42.0.0", "!10.42.0.1", "10.42.1.0/24", "!10.42.1.0", "!10.42.1.1"},
+		{"10.42.0.0/25", "!10.42.0.0", "!10.42.0.1", "!10.42.0.5"},
+	} {
+		docs, out, err := renderList(t, list, ack...)
+		if err != nil {
+			t.Errorf("%v with the ack: %v\n%.400s", list, err, out)
+			continue
+		}
+		container := at(authDoc(docs, "Deployment", "a-dev-health-auth-service"), "spec", "template", "spec", "containers", 0)
+		if got, _ := envValue(container, trustedEnvName); got != strings.Join(list, ",") {
+			t.Errorf("%s = %q, want %q", trustedEnvName, got, strings.Join(list, ","))
+		}
+	}
+}
+
+// An exclusion is one IPv4 address inside a listed IPv4 network, never a network, an IPv6 or IPv4-mapped form, or an
+// address that is also listed as trusted.
+func TestAuthServiceTrustedProxyExclusionEntries(t *testing.T) {
+	for _, list := range [][]string{
+		{"10.42.0.0/28", "!"},
+		{"10.42.0.0/28", "!10.42.0.1/32"},
+		{"10.42.0.0/28", "!10.42.0.0/28"},
+		{"10.42.0.0/28", "!*"},
+		{"10.42.0.0/28", "!host.internal"},
+		{"10.42.0.0/28", "! 10.42.0.1"},
+		{"10.42.0.0/28", "!!10.42.0.1"},
+		{"10.42.0.0/28", "!10.42.0.01"},
+		{"10.42.0.0/28", "!::ffff:10.42.0.1"},
+		{"fd00::/124", "!fd00::1"},
+		{"10.42.0.0/28", "!10.42.0.16"},
+		{"10.42.0.0/28", "!10.43.0.1"},
+		{"!10.42.0.1"},
+		{"10.42.0.1", "!10.42.0.1"},
+		{"10.42.0.0/28", "10.42.0.1", "!10.42.0.1"},
+	} {
+		if _, out, err := renderList(t, list); err == nil || !strings.Contains(out, exclusionKeyMsg) {
+			t.Errorf("%v: err=%v, want the exclusion entries refusal\n%.400s", list, err, out)
+		}
+	}
+	for _, list := range [][]string{
+		{"10.42.0.0/28", "!10.42.0.1"},
+		{"10.42.0.0/28", "!10.42.0.15"},
+		{"10.42.0.0/28", "!10.42.0.0", "!10.42.0.1", "fd00::1"},
+		{"10.9.0.5", "10.42.0.0/30", "!10.42.0.3"},
+	} {
+		if _, out, err := renderList(t, list); err != nil {
+			t.Errorf("%v: %v\n%.400s", list, err, out)
+		}
+	}
+}
+
+// Parity for whole lists: a list the chart renders is a list the service parses (else auth-service stops at start).
+// The chart is stricter on purpose for an IPv6 or IPv4-mapped exclusion and for a wide entry without its exclusions.
+func TestAuthServiceTrustedProxyListsRenderOnlyWhatTheServiceParses(t *testing.T) {
+	var both, neither int
+	for _, list := range [][]string{
+		{"10.42.0.0/24", "!10.42.0.0", "!10.42.0.1"},
+		{"10.42.0.0/28", "!10.42.0.1"},
+		{"10.9.0.5", "10.42.0.0/30", "!10.42.0.3"},
+		{"10.42.0.0/24", "!10.42.0.0"},
+		{"10.42.0.0/24"},
+		{"fd00::/124", "!fd00::1"},
+		{"10.42.0.0/28", "!::ffff:10.42.0.1"},
+		{"10.42.0.0/28", "!10.43.0.1"},
+		{"10.42.0.1", "!10.42.0.1"},
+		{"10.42.0.0/28", "10.42.0.1", "!10.42.0.1"},
+		{"10.42.0.0/28", "!10.42.0.1/32"},
+		{"10.42.0.0/28", "!"},
+		{"10.42.0.0/28", "!!10.42.0.1"},
+		{"10.42.0.0/28", "! 10.42.0.1"},
+		{"!10.42.0.1"},
+	} {
+		_, parseErr := clientaddr.ParseTrust(strings.Join(list, ","))
+		_, _, renderErr := renderList(t, list, "--set", wideAckKey+"=true")
+		switch {
+		case renderErr == nil && parseErr != nil:
+			t.Errorf("%v renders but the service refuses it (%v): auth-service would not start", list, parseErr)
+		case renderErr == nil:
+			both++
+		case parseErr != nil:
+			neither++
+		}
+	}
+	if both < 3 || neither < 6 {
+		t.Fatalf("the table does not exercise both outcomes: %d accepted by both, %d refused by both", both, neither)
+	}
+}
+
+// An IPv6 network wider than a /124 is refused even with the ack: the render cannot name its node exclusions.
+func TestAuthServiceWideIPv6TrustedProxiesRefusedEvenWithTheAck(t *testing.T) {
+	for _, entry := range []string{"fd00:0:0:1::/64", "fd00::/120", "fd00::/123", "2001:db8::/96"} {
+		_, out, err := renderWide(t, entry, "--set", wideAckKey+"=true")
+		if err == nil || !strings.Contains(out, wideIPv6Msg) {
+			t.Errorf("wide IPv6 entry %q with the ack: err=%v\n%.400s", entry, err, out)
 		}
 	}
 }
@@ -461,8 +613,11 @@ func TestAuthServiceWideTrustedProxiesNeedTheAckAtEveryPhase(t *testing.T) {
 	if out, err := phase1("10.42.0.0/24"); err == nil || !strings.Contains(out, wideNeedsAck) {
 		t.Errorf("phase 1, wide entry, no ack: err=%v\n%.300s", err, out)
 	}
-	if out, err := phase1("10.42.0.0/24", "--set", wideAckKey+"=true"); err != nil {
-		t.Errorf("phase 1, wide entry, ack: %v\n%.300s", err, out)
+	if out, err := phase1("10.42.0.0/24", "--set", wideAckKey+"=true"); err == nil || !strings.Contains(out, nodeExclusionsM) {
+		t.Errorf("phase 1, wide entry, ack, no exclusions: err=%v\n%.300s", err, out)
+	}
+	if out, err := phase1(`10.42.0.0/24","!10.42.0.0","!10.42.0.1`, "--set", wideAckKey+"=true"); err != nil {
+		t.Errorf("phase 1, wide entry, ack, exclusions: %v\n%.300s", err, out)
 	}
 	if out, err := phase1("10.42.0.0/16", "--set", wideAckKey+"=true"); err == nil || !strings.Contains(out, wideTooWideMsg) {
 		t.Errorf("phase 1, too wide entry, ack: err=%v\n%.300s", err, out)

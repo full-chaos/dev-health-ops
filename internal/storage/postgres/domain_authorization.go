@@ -743,6 +743,11 @@ func domainPosture() RolePosture {
 			// through this encrypted token row and atomically rotate an expiring
 			// token. They need no INSERT or DELETE authority.
 			{"provider_oauth_credentials", false, true, false},
+			// The daily metrics finalize upserts one row per organization (the activity
+			// projection the auth plane reads for the login organization choice):
+			// INSERT ... ON CONFLICT DO UPDATE, never DELETE (the row goes with its
+			// organization by foreign key).
+			{"org_activity", true, true, false},
 			{"sync_runs", true, true, false},
 			{"sync_dispatch_transport_routes", false, false, false},
 			{"sync_run_units", true, true, false},

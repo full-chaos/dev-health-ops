@@ -555,6 +555,7 @@ func createOperatorIntegrationSchema(
 		// asserting nothing -- the exact vacuity that let CHAOS-3100 survive.
 		"CREATE TABLE public.sync_run_reference_discoveries (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.sync_run_post_dispatches (id uuid PRIMARY KEY)",
+		"CREATE TABLE public.org_activity (org_id uuid PRIMARY KEY, has_data boolean NOT NULL, computed_at timestamptz, refreshed_at timestamptz NOT NULL)",
 		"CREATE TABLE public.scheduled_sync_occurrences (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.fixed_schedule_occurrences (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.tier_limits (id bigint PRIMARY KEY)",

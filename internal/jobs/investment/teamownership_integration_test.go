@@ -132,6 +132,7 @@ func matrixRepoID(providerIndex, n int) string {
 //     cell that must stay negative -- team authorization is ownership-derived,
 //     never person -> membership -> team.
 func TestTeamOwnershipFallbackProviderEntityMatrix(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	t.Cleanup(cancel)
 	instance, err := containers.StartClickHouse(ctx)

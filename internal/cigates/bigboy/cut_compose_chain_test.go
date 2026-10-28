@@ -108,6 +108,11 @@ func cutCheckWebEnvAfterRecreate(g *guard) {
 
 const cutMarker = "plainword-marker-c"
 
+// The one password-bearing psql form in ci/bigboy: the prod branch of pg-grants-check.sh hands the pod's own
+// POSTGRES_PASSWORD to psql inside the pod shell, single-quoted on the host, because the bundled Postgres asks
+// loopback clients for a scram-sha-256 password. The host never expands, carries or prints it.
+const cutPGProdPsql = `PGPASSWORD="$POSTGRES_PASSWORD" psql -w -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -X -q -A -t`
+
 var cutClassDigest = "sha256:" + strings.Repeat("ab", 32)
 
 const cutFakeDocker = `#!/bin/bash
@@ -192,7 +197,7 @@ func cutRunClass(g *guard, script string, o cutClassOpts) cutClass {
 	cutWrite(g, filepath.Join(bin, "docker"), cutFakeDocker, 0o755)
 	cutStub(g, bin, "python3", "exit 0\n")
 	if o.kubectl {
-		cutStub(g, bin, "kubectl", `d="$FAKE_DIR"; printf '%s\0' "$@" > "$d/kubectl-argv"; cat > /dev/null; echo 'r|t|SELECT|t|t'`+"\n")
+		cutStub(g, bin, "kubectl", `d="$FAKE_DIR"; printf '%s\0' "$@" > "$d/kubectl-argv"; printf '%s' "${PGPASSWORD:-}" > "$d/kubectl-pgpassword"; cat > /dev/null; echo 'r|t|SELECT|t|t'`+"\n")
 	}
 	fake := cutMkdir(g, tmp, "fake")
 	scratch := cutMkdir(g, tmp, "scratch")
@@ -449,8 +454,13 @@ func cutCheckPGGrantsProd(g *guard) {
 	g.expect(r.code == 0 && strings.Contains(r.stdout, "PG_OK expectations=1"), "pg-grants-check prod failed rc=%d: %s %s", r.code, r.stdout, r.stderr)
 	a := cutNul(filepath.Join(r.fake, "kubectl-argv"))
 	g.expect(slices.Contains(a, "exec") && slices.Contains(a, "-i") && slices.Contains(a, "dev-health-ops-postgresql-0"), "the prod branch is not a kubectl exec -i on the postgres pod: %v", a)
-	g.expect(cutPsqlW(a), "the prod psql must run with -w and no password: %v", a)
-	g.expect(cutNoPassword(a), "a password is set or expanded on the prod psql call: %v", a)
+	n := len(a)
+	g.expect(n >= 3 && a[n-3] == "sh" && a[n-2] == "-c" && a[n-1] == cutPGProdPsql, "the prod psql is not the ruled in-pod form %q: %v", cutPGProdPsql, a)
+	g.expect(n >= 1 && cutNoPassword(a[:n-1]), "a password is on the host side of the prod kubectl call: %v", a)
+	g.expect(!slices.ContainsFunc(a, func(s string) bool { return strings.Contains(s, cutMarker) }) && !strings.Contains(r.stdout+r.stderr, cutMarker),
+		"the host expanded the password into the prod call or its output: %v", a)
+	env, err := os.ReadFile(filepath.Join(r.fake, "kubectl-pgpassword"))
+	g.expect(err == nil && len(env) == 0, "the host passed PGPASSWORD to kubectl")
 	g.expect(len(r.calls) == 0, "the prod branch must not call docker")
 }
 
@@ -512,6 +522,9 @@ func cutCheckNoBareDocker(g *guard) {
 			continue
 		}
 		code := strings.Join(cutStripComments(g.read("ci/bigboy/"+e.Name())), "\n")
+		if "ci/bigboy/"+e.Name() == cutPGGrants {
+			code = strings.Replace(code, "'"+cutPGProdPsql+"'", "''", 1)
+		}
 		if hits := cutBareDocker.FindAllString(code, -1); len(hits) > 0 {
 			g.failf("%s: bare docker exec/run/cp, printenv or PGPASSWORD: %v", e.Name(), hits)
 		}
@@ -527,7 +540,15 @@ var (
 // Every code line of the five scripts, including branches no stub run reaches: a comment-stripped scan.
 func cutCheckNoEnvFlagNoPasswordExpansion(g *guard) {
 	for _, s := range []string{cutHook, cutRiver, cutPGGrants, cutGrants, cutProve} {
+		ruled := 0
+		if s == cutPGGrants {
+			ruled = 1
+		}
 		for _, ln := range cutStripComments(g.read(s)) {
+			if ruled > 0 && strings.Contains(ln, "'"+cutPGProdPsql+"'") {
+				ln = strings.Replace(ln, "'"+cutPGProdPsql+"'", "''", 1)
+				ruled--
+			}
 			if strings.Contains(ln, "docker ") || strings.Contains(ln, "HC=(") {
 				l := strings.ReplaceAll(ln, " -e PROVE_ORG ", " ")
 				g.expect(!cutEFlag.MatchString(l), "%s: env-passing flag -e on a docker line: %s", s, ln)
@@ -624,7 +645,7 @@ func TestCutComposeChain(t *testing.T) {
 		check{"river_apply_obeys_every_class_rule", cutCheckRiverClassRules},
 		check{"river_apply_reports_a_failing_apply", cutCheckRiverFailingApply},
 		check{"pg_grants_check_bigboy_uses_compose_exec_only", cutCheckPGGrantsBigboy},
-		check{"pg_grants_check_prod_branch_runs_psql_w_without_a_password", cutCheckPGGrantsProd},
+		check{"pg_grants_check_prod_branch_sends_the_pod_password_inside_the_pod_only", cutCheckPGGrantsProd},
 		check{"grants_check_uses_compose_exec_only", cutCheckGrantsComposeExec},
 		check{"one_offs_carry_no_literal_credential_and_use_compose_substitution", cutCheckOneOffsYAML},
 		check{"no_bare_docker_exec_run_or_printenv_in_ci_bigboy_run_files", cutCheckNoBareDocker},
@@ -762,8 +783,40 @@ func TestCutComposeChainPlanted(t *testing.T) {
 		},
 		{
 			name: "prod psql without -w", copy: cp, check: cutCheckPGGrantsProd,
-			mutate: mut(cutPGGrants, `sh -c 'psql -w -U "$POSTGRES_USER"`, `sh -c 'psql -U "$POSTGRES_USER"`),
-			want:   "must run with -w",
+			mutate: mut(cutPGGrants, `psql -w -h 127.0.0.1`, `psql -h 127.0.0.1`),
+			want:   "not the ruled in-pod form",
+		},
+		{
+			name: "prod psql still on the socket with no password", copy: cp, check: cutCheckPGGrantsProd,
+			mutate: mut(cutPGGrants, `sh -c '`+cutPGProdPsql+`'`, `sh -c 'psql -w -U "$POSTGRES_USER" -d "$POSTGRES_DB" -X -q -A -t'`),
+			want:   "not the ruled in-pod form",
+		},
+		{
+			name: "prod password on the host side", copy: cp, check: cutCheckPGGrantsProd,
+			mutate: mut(cutPGGrants, `else KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl`, `else PGPASSWORD=$POSTGRES_PASSWORD KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl`),
+			want:   "host passed PGPASSWORD to kubectl",
+		},
+		{
+			name: "prod password expanded by the host shell", copy: cp, check: cutCheckPGGrantsProd,
+			mutate: mut(cutPGGrants, `sh -c '`+cutPGProdPsql+`'`, `sh -c "PGPASSWORD=$POSTGRES_PASSWORD psql -w -h 127.0.0.1 -U \$POSTGRES_USER -d \$POSTGRES_DB -X -q -A -t"`),
+			want:   "host expanded the password",
+		},
+		{
+			name: "prod host-side PGPASSWORD is a banned token", copy: cp, check: cutCheckNoBareDocker,
+			mutate: mut(cutPGGrants, `else KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl`, `else PGPASSWORD=$POSTGRES_PASSWORD KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl`),
+			want:   "pg-grants-check.sh: bare docker exec/run/cp, printenv or PGPASSWORD",
+		},
+		{
+			name: "the ruled form in another ci/bigboy file", copy: cp, check: cutCheckNoBareDocker,
+			mutate: func(t *testing.T, root string) {
+				writeFile(t, root, "ci/bigboy/planted-pw.sh", "#!/usr/bin/env bash\nkubectl exec -i p -- sh -c '"+cutPGProdPsql+"'\n")
+			},
+			want: "planted-pw.sh: bare docker exec/run/cp, printenv or PGPASSWORD",
+		},
+		{
+			name: "a second ruled psql line in pg-grants-check", copy: cp, check: cutCheckNoEnvFlagNoPasswordExpansion,
+			mutate: mut(cutPGGrants, "set -u\n", "set -u\nX=$(sh -c '"+cutPGProdPsql+"')\n"),
+			want:   "password expansion",
 		},
 		{
 			name: "grants exec without -T", copy: cp, check: cutCheckGrantsComposeExec,

@@ -266,6 +266,8 @@ internal/cigates/sharedserver	batch_a_test.go
 internal/cigates/sharedserver	sharedserver_test.go
 internal/cigates/splitshards	ci_script_helpers_test.go
 internal/cigates/splitshards	split_package_shards_test.go
+internal/cigates/suitecatalog	runblock_test.go
+internal/cigates/suitecatalog	suitecatalog_test.go
 internal/cigates/testshard	providersync_test.go
 internal/cigates/testshard	raceshard_test.go
 internal/cigates/testshard	securityfresh_test.go
@@ -279,9 +281,12 @@ internal/cigates/weightsfiles	ci_script_helpers_test.go
 internal/cigates/weightsfiles	race_weights_files_test.go
 internal/cigates/workflowpaths	workflow_path_filters_test.go
 internal/cigates/workflows	auth_compose_proof_test.go
+internal/cigates/workflows	auth_corpus_closure_test.go
 internal/cigates/workflows	auth_corpus_external_behaviour_test.go
+internal/cigates/workflows	auth_corpus_external_retry_test.go
 internal/cigates/workflows	auth_corpus_external_test.go
 internal/cigates/workflows	auth_corpus_queue_test.go
+internal/cigates/workflows	chart_started_filter_test.go
 internal/cigates/workflows	chart_started_selector_test.go
 internal/cigates/workflows	ci_script_helpers_test.go
 internal/cigates/workflows	docker_images_fanin_behaviour_test.go

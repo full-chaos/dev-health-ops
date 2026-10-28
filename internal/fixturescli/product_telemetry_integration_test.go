@@ -121,6 +121,7 @@ func TestProductTelemetryVerbSeedsThroughRealClickHouse(t *testing.T) {
 	}
 	// Row counts and event ids come from draws, never from the clock: the same spec at any end time.
 	seed := int64(3)
+	//ttlclock:allow never reaches a TTL table: generator spec evaluated in memory only (row counts and event ids do not depend on the end time); the verb under test writes with time.Now() tables=product_telemetry_events
 	want, err := fixturesgen.GenerateProductTelemetry(fixturesgen.ProductTelemetrySpec{OrgID: "org-a", Days: 2, SessionsPerDay: 4, Seed: &seed, EndTime: mustTime("2001-01-01T00:00:00Z")})
 	if err != nil {
 		t.Fatal(err)

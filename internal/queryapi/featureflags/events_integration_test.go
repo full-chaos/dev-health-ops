@@ -119,6 +119,7 @@ func TestResolveEvents_RealClickHouse_HappyPath(t *testing.T) {
 	defer func() { _ = client.Close() }()
 
 	const orgID = "chaos-5523-events-happy-path"
+	//ttlclock:allow never reaches a TTL table: the test creates its own feature_flag_event table without a TTL (featureFlagEventDDL) instead of the migrated one tables=feature_flag_event
 	t0 := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
 	rows := []eventSeedRow{
 		{eventType: "flag_toggled", flagKey: "dark-mode", environment: "staging", actorType: "user", prevState: "off", nextState: "on", eventTs: t0.Add(2 * time.Minute)},

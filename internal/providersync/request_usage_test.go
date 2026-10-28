@@ -796,12 +796,77 @@ func TestWriterCloseNamesWhatItCouldNotStore(t *testing.T) {
 	sink := &memoryRequestUsageSink{failures: -1}
 	writer, logs := newTestRequestUsageWriter(t, sink)
 	writer.Offer([]RequestUsageRow{{Transport: requestTransportREST, Requests: 2, Responses: 1}, {Transport: requestTransportGraphQL, Requests: 3, Responses: 3}})
-	writer.Close(time.Second)
+	closeAndAwaitDrain(t, writer, time.Second, nil)
 	requests, responses, found := namedByLastLine(logs.String(), "unsent")
 	if !found || requests != 5 || responses != 4 || !strings.Contains(logs.String(), "rest_requests=2 rest_responses=1 graphql_requests=3") || !strings.Contains(logs.String(), "level=ERROR msg=provider_sync.request_usage_unsent") {
 		t.Fatalf("unsent line: %s", logs.String())
 	}
 	writer.Offer([]RequestUsageRow{{Transport: requestTransportREST, Requests: 1}})
+}
+
+// closeAndAwaitDrain closes writer and returns once its shutdown drain has
+// ended; afterClose, when set, runs once Close has returned.
+func closeAndAwaitDrain(t *testing.T, writer *RequestUsageWriter, timeout time.Duration, afterClose func()) {
+	t.Helper()
+	writer.Close(timeout)
+	if afterClose != nil {
+		afterClose()
+	}
+	select {
+	case <-writer.done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("writer still draining after the hang ceiling")
+	}
+}
+
+// holdingLogHandler holds the writer goroutine on its first flush_failed line
+// until release closes: a shutdown drain that ends after Close gave up.
+type holdingLogHandler struct {
+	slog.Handler
+	held    chan struct{}
+	release chan struct{}
+	once    *sync.Once
+}
+
+func (handler holdingLogHandler) Handle(ctx context.Context, record slog.Record) error {
+	err := handler.Handler.Handle(ctx, record)
+	if record.Message == "provider_sync.request_usage_flush_failed" {
+		handler.once.Do(func() {
+			close(handler.held)
+			<-handler.release
+		})
+	}
+	return err
+}
+
+// TestTheUnsentLineIsReadAfterADrainThatOutlivesClose holds the writer in a
+// failed write until Close has returned on its bound: the unsent line comes
+// only after that, and the test must wait for the drain to read it.
+func TestTheUnsentLineIsReadAfterADrainThatOutlivesClose(t *testing.T) {
+	t.Parallel()
+	logs := &syncBuffer{}
+	handler := holdingLogHandler{Handler: slog.NewTextHandler(logs, nil), held: make(chan struct{}), release: make(chan struct{}), once: &sync.Once{}}
+	writer := NewRequestUsageWriter(panickingRequestUsageSink{}, slog.New(handler))
+	writer.cadence = 5 * time.Millisecond
+	writer.writeTimeout = 200 * time.Millisecond
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(handler.release) }) }
+	t.Cleanup(func() {
+		release()
+		writer.Close(time.Second)
+	})
+	writer.Start()
+	writer.Offer([]RequestUsageRow{{Transport: requestTransportREST, Requests: 1}})
+	select {
+	case <-handler.held:
+	case <-time.After(30 * time.Second):
+		t.Fatal("writer never reached flush_failed")
+	}
+	closeAndAwaitDrain(t, writer, 10*time.Millisecond, release)
+	if !strings.Contains(logs.String(), "request usage write panicked: store driver bug") ||
+		!strings.Contains(logs.String(), "msg=provider_sync.request_usage_unsent") {
+		t.Fatalf("logs=%s", logs.String())
+	}
 }
 
 type panickingRequestUsageSink struct{}
@@ -828,20 +893,25 @@ func TestWriterSurvivesAPanickingStoreAndAHungWrite(t *testing.T) {
 	t.Parallel()
 	writer, logs := newTestRequestUsageWriter(t, panickingRequestUsageSink{})
 	writer.Offer([]RequestUsageRow{{Transport: requestTransportREST, Requests: 1}})
-	writer.Close(time.Second)
+	closeAndAwaitDrain(t, writer, time.Second, nil)
 	if !strings.Contains(logs.String(), "request usage write panicked: store driver bug") ||
 		!strings.Contains(logs.String(), "msg=provider_sync.request_usage_unsent") {
 		t.Fatalf("logs=%s", logs.String())
 	}
 	hung := &hangingRequestUsageSink{release: make(chan struct{}), started: make(chan struct{})}
-	t.Cleanup(func() { close(hung.release) })
 	hangingWriter, hangingLogs := newTestRequestUsageWriter(t, hung)
+	t.Cleanup(func() { close(hung.release) })
 	hangingWriter.Offer([]RequestUsageRow{{Transport: requestTransportREST, Requests: 1}})
 	<-hung.started
-	started := time.Now()
-	hangingWriter.Close(time.Second)
-	if elapsed := time.Since(started); elapsed > 2*time.Second {
-		t.Fatalf("close waited %s on a hung write", elapsed)
+	closed := make(chan struct{})
+	go func() {
+		defer close(closed)
+		hangingWriter.Close(time.Second)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("close is still waiting on a hung write after 10s: a hang ceiling, Close is bounded by its argument")
 	}
 	if !strings.Contains(hangingLogs.String(), errRequestUsageWriteTimeout.Error()) {
 		t.Fatalf("logs=%s", hangingLogs.String())

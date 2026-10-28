@@ -84,6 +84,8 @@ internal/llmorgsettings
 internal/mail
 internal/netclass
 internal/operationalordering
+internal/orgactivity/chread
+internal/orgactivity/refresh
 internal/ownershipwindow
 internal/pgmigrate
 internal/pgmigrate/schemagate
@@ -107,6 +109,7 @@ internal/platform/queuecontrol
 internal/platform/secrets
 internal/platform/selfprobe
 internal/platform/shell
+internal/platform/timeoutclass
 internal/platform/tracing
 internal/platform/version
 internal/platform/workersignals

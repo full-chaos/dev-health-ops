@@ -3,9 +3,9 @@
 # fans into the required context auth-gate. One bash glob per line, matched against the repo-relative path with
 # `case`: `*` matches any characters including `/`, except in a row that starts with `=`, which matches one directory only
 # (the file's directory must equal the row's directory part). A line starting with # is a comment.
-# NOT in the set, by design: the rest of the Go packages go-api and the migrate binaries are built from (cmd, internal and
-# contracts are copied whole into the images). A row for them would run the corpus on almost every Go change; the set
-# is the auth-service route set plus the corpus's own inputs.
+# The Go packages the auth route packages and both binaries import are NOT listed here: ci/auth_corpus_queue_relevance.sh (CHAOS-11670)
+# runs go list -deps of the roots live, in the checkout, and a changed file in the directory of any repo package of that closure (or of a
+# file it embeds) is relevant too. This file is the floor: the auth-service route set plus the corpus's own inputs and the images' non-Go inputs.
 # internal/cigates/workflows (TestAuthCorpusQueuePathSetCoversEveryRouteFile, TestAuthCorpusQueuePathSetCoversEveryDirectInput) fails when a non-test Go file that declares
 # an auth-service route (httpapi.Route{ of internal/auth/httpapi) is outside this set, so a new route file cannot skip the corpus.
 #
@@ -27,6 +27,7 @@ internal/api/policy/*
 internal/apiservice/authflowvenue/*
 # the corpus: script, overrides, set-env hook, route table, stub, mail sink and stub provider
 ci/auth_corpus_external.sh
+ci/auth_corpus_set.sh
 ci/auth_corpus_external.override.yml
 ci/auth_corpus_external.acp.override.yml
 ci/auth_corpus_set_env.sh

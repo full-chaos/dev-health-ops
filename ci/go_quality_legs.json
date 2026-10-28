@@ -1,0 +1,10 @@
+[
+  {"name": "static", "args": "static"},
+  {"name": "test-1-of-3", "args": "test 1 3"},
+  {"name": "test-2-of-3", "args": "test 2 3"},
+  {"name": "test-3-of-3", "args": "test 3 3"},
+  {"name": "race-1-of-4", "args": "race 1 4", "heavy": true, "pool": true},
+  {"name": "race-2-of-4", "args": "race 2 4", "heavy": true, "pool": true},
+  {"name": "race-3-of-4", "args": "race 3 4", "heavy": true, "pool": true},
+  {"name": "race-4-of-4", "args": "race 4 4", "heavy": true, "pool": true}
+]

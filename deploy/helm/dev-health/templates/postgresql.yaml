@@ -1,4 +1,8 @@
 {{- if .Values.postgresql.enabled }}
+{{- $existing := .Values.postgresql.credentialsSecret.existingSecret }}
+{{- if and $existing.name .Values.secrets.create }}
+{{- fail "postgresql.credentialsSecret.existingSecret.name needs secrets.create=false: with the chart-owned shared Secret the URI Secrets would embed postgresql.credentials.password, which this setting stops the chart from using" }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -17,6 +21,23 @@ data:
     host    all       all   0.0.0.0/0      scram-sha-256
     host    all       all   ::/0           scram-sha-256
 ---
+{{- if not $existing.name }}
+{{- /* The same value as the POSTGRES_PASSWORD env below. It renders with the store
+       whatever postgresql.credentialsSecret.enabled says, so it exists before the
+       StatefulSet is told to read it. With existingSecret.name set the chart reads that
+       Secret instead and renders none. */}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "dev-health.fullname" . }}-postgresql-credentials
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "postgresql" "context" $) | nindent 4 }}
+type: Opaque
+stringData:
+  POSTGRES_PASSWORD: {{ .Values.postgresql.credentials.password | quote }}
+---
+{{- end }}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -59,7 +80,19 @@ spec:
             - name: POSTGRES_USER
               value: {{ .Values.postgresql.credentials.user | quote }}
             - name: POSTGRES_PASSWORD
+              {{- if $existing.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $existing.name | quote }}
+                  key: {{ $existing.key | default "POSTGRES_PASSWORD" | quote }}
+              {{- else if .Values.postgresql.credentialsSecret.enabled }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "dev-health.fullname" . }}-postgresql-credentials
+                  key: POSTGRES_PASSWORD
+              {{- else }}
               value: {{ .Values.postgresql.credentials.password | quote }}
+              {{- end }}
             - name: POSTGRES_DB
               value: {{ .Values.postgresql.credentials.database | quote }}
             # Must match the compose stack exactly: the volume is mounted at the

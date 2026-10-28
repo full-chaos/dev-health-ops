@@ -41,6 +41,7 @@ import (
 //   - a unit that ended at the run's reference time, of the second team: its
 //     repository.
 func TestTheOwnershipFallbackTakesTheRepositoriesOfTheUnitsEndTime(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	t.Cleanup(cancel)
 	instance, err := containers.StartClickHouse(ctx)

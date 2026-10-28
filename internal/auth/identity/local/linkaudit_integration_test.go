@@ -84,20 +84,22 @@ VALUES ($1, $2, $2, '{}', 'community', 'stripe', true, now(), now()) ON CONFLICT
 		t.Fatalf("seed organization: %v", err)
 	}
 	e.project(t, ctx, org)
-	tx, err := e.admin.Begin(ctx)
+	schema, err := authschema.NewValidatedIdentifier("auth")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, `SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true)`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tx.Exec(ctx, `INSERT INTO auth.memberships (organization_id, principal_id, status, created_at, updated_at)
-VALUES ($1, $2, 'active', `+createdAt+`, `+createdAt+`)`, org, user.String()); err != nil {
+	subject := user.String()
+	err = audit.Commit(ctx, e.runtime, schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			_, err := tx.Exec(ctx, `INSERT INTO auth.memberships (organization_id, principal_id, status, created_at, updated_at)
+VALUES ($1, $2, 'active', `+createdAt+`, `+createdAt+`)`, org, subject)
+			return err
+		},
+		Audit:     audit.AuditEvent{EventType: "auth.membership.added", Outcome: audit.OutcomeAllowed, SubjectPrincipalID: &subject, Attributes: map[string]any{"reason_code": "membership_added"}},
+		OffStream: audit.OffStreamLinkCredentialLifecycle,
+	})
+	if err != nil {
 		t.Fatalf("seed membership: %v", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		t.Fatal(err)
 	}
 }
 

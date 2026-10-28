@@ -17,19 +17,25 @@ type RowQuerier interface {
 
 // AuditOrganization is the organization the audit row of a principal's
 // credential event names: the principal's earliest membership by (created_at,
-// id), or nil when there is none or that organization is not in the auth schema
-// yet (the audit row's organization column references it; login projects an
-// organization before it names one). go-api names the first row of an unordered
-// LIMIT 1 read; the order here is fixed, so the same principal always gets the
-// same organization. schema is the quoted auth schema name.
+// id) whose organization is in the auth schema, or nil when there is none. It
+// reads the auth schema's own tables, which the auth runtime role can select,
+// and the audit row's organization column references auth.organizations, so a
+// named organization always satisfies it. go-api names the first row of an
+// unordered LIMIT 1 read; the order here is fixed, so the same principal always
+// gets the same organization. schema is the quoted auth schema name.
 func AuditOrganization(ctx context.Context, q RowQuerier, schema string, principal uuid.UUID) (*string, error) {
-	var org *string
-	err := q.QueryRow(ctx, `SELECT o.id::text FROM (SELECT org_id FROM public.memberships WHERE user_id = $1 ORDER BY created_at, id LIMIT 1) m
-LEFT JOIN `+schema+`.organizations o ON o.id = m.org_id`, principal).Scan(&org)
+	var org string
+	err := q.QueryRow(ctx, `SELECT o.id::text FROM `+schema+`.memberships m
+JOIN `+schema+`.organizations o ON o.id = m.organization_id
+WHERE m.principal_id = $1 AND m.status <> 'removed'
+ORDER BY m.created_at, m.id LIMIT 1`, principal).Scan(&org)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
-	return org, err
+	if err != nil {
+		return nil, err
+	}
+	return &org, nil
 }
 
 // provisionAudit is a registration's event. The new organization is named in

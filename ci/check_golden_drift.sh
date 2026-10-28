@@ -148,24 +148,34 @@ message() {
 
 out=""
 run_rows() {
-  local file="${1:-}" line failed=0 rc i verdict=""
+  local file="${1:-}" line failed=0 rc i verdict="" prefixed=0
   local -a pkgs=() res=()
   [ -n "${file}" ] && [ -r "${file}" ] || die "run needs a readable ROWS_FILE"
   trap 'rm -f "${out:-}"' EXIT
-  # Pass 1 reads the whole file before any test runs: any malformed ROW line, or a rows file that names no row without an
-  # explicit "VERDICT none", exits 2 and runs nothing.
+  # Pass 1 reads the whole file before any test runs. Every non-empty line must be a VERDICT line or a well-formed ROW; a
+  # ROW-prefixed line that is not ROW<TAB>... , or a count of parsed rows that differs from the ROW-prefixed lines (the
+  # workflow counts those with grep -c '^ROW'), exits 2 and runs nothing.
   while IFS= read -r line || [ -n "${line}" ]; do
     case "${line}" in
-      ROW*) parse_row "${line}"; pkgs+=("${ROW_PKG}"); res+=("${ROW_RE}") ;;
+      "") ;;
+      ROW*)
+        prefixed=$((prefixed + 1))
+        case "${line}" in
+          ROW$'\t'*) parse_row "${line}"; pkgs+=("${ROW_PKG}"); res+=("${ROW_RE}") ;;
+        esac
+        ;;
       "VERDICT none"*) verdict="none" ;;
       "VERDICT select"* | "VERDICT all"*) verdict="rows" ;;
+      *) die "unexpected line in the rows file: ${line}" ;;
     esac
   done < "${file}"
+  [ "${prefixed}" -eq "${#pkgs[@]}" ] || die "${prefixed} ROW-prefixed line(s) but ${#pkgs[@]} well-formed row(s): nothing runs"
   if [ "${#pkgs[@]}" -eq 0 ]; then
     [ "${verdict}" = "none" ] || die "rows file names no ROW and no VERDICT none: nothing would run"
     echo "check_golden_drift.sh: VERDICT none, no ROW to run"
     return 0
   fi
+  [ "${verdict}" != "none" ] || die "VERDICT none beside ${#pkgs[@]} ROW line(s)"
   for i in "${!pkgs[@]}"; do
     echo "== golden drift: ${pkgs[i]} -run ${res[i]}"
     out="$(mktemp)"

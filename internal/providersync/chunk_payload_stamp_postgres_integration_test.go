@@ -45,9 +45,9 @@ func TestChunkedPostgresStoresACrossingChunkWithAConsistentPayloadBytes(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
 	claim, err := repository.Claim(ctx, ClaimRequest{
-		UnitID: firstUnitID, OrgID: "org-acme", Owner: uuid.NewString(), Now: now, LeaseDuration: time.Hour, AllowExpiredRecovery: true,
+		UnitID: firstUnitID, OrgID: "org-acme", Owner: uuid.NewString(), Now: now, LeaseDuration: time.Minute, AllowExpiredRecovery: true,
 	})
 	if err != nil {
 		t.Fatal(err)

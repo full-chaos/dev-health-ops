@@ -16,6 +16,7 @@ const mirrorWf = ".github/workflows/mirror-test-images.yml"
 var mirrorSuitePaths = []string{
 	"ci/mirror_precheck_lib.sh",
 	"ci/mirror_precheck_lib_test.sh",
+	"ci/verify_base_images_test.sh",
 	"ci/run_shell_tests.sh",
 	"ci/suites.tsv",
 }
@@ -29,6 +30,8 @@ var basePushPaths = []string{
 	"tests/compatibility/river/compose.compatibility.yml",
 	"ci/builder_images.tsv",
 	"ci/builder_images.sh",
+	"ci/base_images.tsv",
+	"ci/verify_base_images.sh",
 	".github/workflows/test.yml",
 	".github/workflows/live-e2e.yml",
 	".github/workflows/mirror-test-images.yml",

@@ -64,6 +64,10 @@ on:
       # ci/builder_images.tsv must be mirrored before the workflows pull it.
       - ci/builder_images.tsv
       - ci/builder_images.sh
+      # The base images (CHAOS-10366) are an INPUT too, and so is the check that
+      # reads them back after the publish.
+      - ci/base_images.tsv
+      - ci/verify_base_images.sh
       # A service-image change must re-run the mirror, or the new ref is
       # declared before it exists and the required check fails at pull time.
       - .github/workflows/test.yml
@@ -82,6 +86,10 @@ on:
       # ci/builder_images.tsv must be mirrored before the workflows pull it.
       - ci/builder_images.tsv
       - ci/builder_images.sh
+      # The base images (CHAOS-10366) are an INPUT too, and so is the check that
+      # reads them back after the publish.
+      - ci/base_images.tsv
+      - ci/verify_base_images.sh
       # A service-image change must re-run the mirror, or the new ref is
       # declared before it exists and the required check fails at pull time.
       - .github/workflows/test.yml
@@ -90,6 +98,7 @@ on:
       # Not on push: the filter is workflow-wide, so a suite-only push to main would start the mirror publisher.
       - ci/mirror_precheck_lib.sh
       - ci/mirror_precheck_lib_test.sh
+      - ci/verify_base_images_test.sh
       - ci/run_shell_tests.sh
       - ci/suites.tsv
       - .github/workflows/mirror-test-images.yml
@@ -256,6 +265,13 @@ jobs:
           #      uses up its limit; CI now takes them from this mirror by digest.
           bash ci/builder_images.sh "${OWNER}" \
             | awk -F'\t' '$1 == "upstream" { print $3 }' >> images.raw
+          #   6. The base images of the Go image builds (CHAOS-10366): the golang
+          #      build image and the debian runtime image, read from
+          #      ci/base_images.tsv through the same reader. Docker Hub official
+          #      images that were pulled from mirror.gcr.io, which answers 429 under
+          #      load; the Dockerfiles take them from this mirror by digest.
+          bash ci/builder_images.sh "${OWNER}" ci/base_images.tsv \
+            | awk -F'\t' '$1 == "upstream" { print $3 }' >> images.raw
 
           sort -u images.raw > images.txt
           test -s images.txt || { echo "::error::no images resolved"; exit 1; }
@@ -297,6 +313,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Run the precheck library suite
         run: bash ci/run_shell_tests.sh mirror-precheck-lib
+      - name: Run the base-image verification suite
+        run: bash ci/run_shell_tests.sh base-images-verify
 
   mirror:
     needs: precheck
@@ -451,6 +469,13 @@ jobs:
           #      uses up its limit; CI now takes them from this mirror by digest.
           bash ci/builder_images.sh "${OWNER}" \
             | awk -F'\t' '$1 == "upstream" { print $3 }' >> images.raw
+          #   6. The base images of the Go image builds (CHAOS-10366): the golang
+          #      build image and the debian runtime image, read from
+          #      ci/base_images.tsv through the same reader. Docker Hub official
+          #      images that were pulled from mirror.gcr.io, which answers 429 under
+          #      load; the Dockerfiles take them from this mirror by digest.
+          bash ci/builder_images.sh "${OWNER}" ci/base_images.tsv \
+            | awk -F'\t' '$1 == "upstream" { print $3 }' >> images.raw
 
           sort -u images.raw > images.txt
           test -s images.txt || { echo "::error::no images resolved"; exit 1; }
@@ -591,6 +616,17 @@ jobs:
             fi
           done < images.txt
           exit "${failed}"
+
+      # CHAOS-10366: the check a consumer makes. A Dockerfile build pulls the base
+      # images from ghcr.io with no login, so read each one back from ghcr.io
+      # WITHOUT credentials, by tag and by digest: a package that is private (a new
+      # package is created private), missing, or holding another digest fails HERE,
+      # named, instead of as a 404 inside a Docker build. Anonymous on purpose: no
+      # secret, no token.
+      - name: Verify the base images are readable anonymously at their pin
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: bash ci/verify_base_images.sh "${OWNER}"
 
   # Reports the ANONYMOUS per-runner-IP Docker Hub allowance -- the only one this
   # workflow now depends on, since it holds no Docker Hub account.

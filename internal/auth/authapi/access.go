@@ -20,6 +20,7 @@ import (
 
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
 
@@ -28,7 +29,7 @@ const (
 	AccessService = "dev-health-auth-service"
 	// AccessTokenAudience is the audience an EdDSA access token carries to be
 	// accepted at the session routes (access-token.v1 scope auth:session).
-	AccessTokenAudience = "auth-service"
+	AccessTokenAudience = contracts.SessionRouteAudience
 
 	// keyReadBound bounds one read of the key set on the verify path.
 	keyReadBound = 2 * time.Second

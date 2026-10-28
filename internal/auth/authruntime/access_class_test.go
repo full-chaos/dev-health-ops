@@ -28,6 +28,7 @@ func classConfig(t *testing.T, class string) authconfig.Config {
 		authconfig.EnvSigningKeyFile:      "/nonexistent",
 		authconfig.EnvSigningKeyID:        "class-test",
 		authconfig.EnvAccessTokenClass:    class,
+		authconfig.EnvAccessTokenAudience: "auth-service",
 		authconfig.EnvTokenIssuerURL:      "https://auth.example.test",
 		authconfig.EnvValkeyURI:           testValkeyURI,
 		authconfig.EnvAccessTokenSecret:   "class-test-access-secret-0123456789abcdef",

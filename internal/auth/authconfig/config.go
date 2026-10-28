@@ -478,6 +478,12 @@ func Load(spec Spec) (Config, error) {
 				EnvAccessTokenClass, AccessClassEdDSA, EnvAccessTokenAudience)
 		}
 	}
+	if cfg.Session.Enabled && cfg.Session.AccessClass == AccessClassEdDSA && cfg.Session.AccessAudience != contracts.SessionRouteAudience {
+		// The session routes accept an EdDSA token of audience auth-service only: started like this every
+		// signed-in user's token would be refused at every one of them.
+		return Config{}, fmt.Errorf("%s=%s with %s=%s: the session routes accept the EdDSA access token only with audience %s; the issuer switch (CHAOS-10456) must mint that audience before this class can start",
+			EnvAccessTokenClass, AccessClassEdDSA, EnvAccessTokenAudience, cfg.Session.AccessAudience, contracts.SessionRouteAudience)
+	}
 	if cfg.TrustedProxies, err = clientaddr.ParseTrust(valueOf(lookup, EnvTrustedProxies)); err != nil {
 		return Config{}, err
 	}

@@ -11,6 +11,7 @@ import (
 func TestEdDSAClassWithTheSessionRoutesNeedsTheSessionRouteAudience(t *testing.T) {
 	for _, audience := range []string{"", "dev-health-api"} {
 		env := eddsaEnv()
+		delete(env, EnvAccessTokenAudience)
 		if audience != "" {
 			env[EnvAccessTokenAudience] = audience
 		}

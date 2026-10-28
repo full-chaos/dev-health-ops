@@ -13,6 +13,10 @@ const UserAccessTokenClass = "user_access_token"
 // It is the one place the value lives; the schema names it, the corpus pins it.
 const AccessTokenLifetimeCeiling = 60 * time.Minute
 
+// SessionRouteAudience is the audience an EdDSA user access token carries to be
+// accepted at auth-service's own session routes.
+const SessionRouteAudience = "auth-service"
+
 // accessTokenScopes binds each user-token audience to its one scope
 // (vocabulary/audiences.json, access-token.v1 schema).
 var accessTokenScopes = map[string]string{

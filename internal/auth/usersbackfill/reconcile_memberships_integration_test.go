@@ -117,6 +117,8 @@ func TestUsersReconcileMembershipClasses(t *testing.T) {
 	if d := countsOf(e.memberDiffs(t, ctx)).minus(base); d != (memberCounts{publicMissing: 1, roleDiff: 1, authMissing: 1}) {
 		t.Fatalf("after the public removal: %+v, want no inactive diff and the other classes unchanged", d)
 	}
+	// Leave every public user in the auth schema for the tests that follow.
+	e.backfill(t, ctx)
 }
 
 // The users-reconcile verb fails on an inactive auth membership over a public

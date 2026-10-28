@@ -23,7 +23,7 @@ import (
 func submitVenue(t *testing.T, sources int) (*cascadeVenue, cascadeSeeded, string) {
 	t.Helper()
 	v := startCascadeVenue(t, false)
-	t.Setenv("SYNC_MANUAL_TRIGGER_AWAIT_SECONDS", "600")
+	t.Setenv("SYNC_MANUAL_TRIGGER_AWAIT_SECONDS", "120")
 	one := v.seed("github", `["git"]`, []string{"repo-metadata", "commits"})
 	for index := 0; index < sources; index++ {
 		name := fmt.Sprintf("acme/repo-%d", index)
@@ -84,7 +84,7 @@ func accepted(t *testing.T, status int, body string) acceptedBody {
 }
 
 // submitBounded is v.call with a failure-only guard: a submit returns at once, so a run never reaches the guard; a submit
-// that waits for the plan stays on the 600 s await of submitVenue and fails here, naming the request.
+// that waits for the plan stays on the 120 s await of submitVenue and fails here, naming the request.
 func submitBounded(t *testing.T, v *cascadeVenue, what, path, body string) (int, string) {
 	t.Helper()
 	type answer struct {

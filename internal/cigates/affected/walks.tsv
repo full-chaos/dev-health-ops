@@ -346,6 +346,7 @@ internal/storedversion	writers_test.go	unexpressed	-	*.go
 internal/streamhandlers	stored_version_invariant_test.go	unexpressed	-	-
 internal/streamrunnerservice	readiness_timeout_test.go	internal/streamrunnerservice	dir	*
 internal/synccli	print_sites_test.go	internal/synccli	dir	*
+internal/synccli	walk_order_integration_test.go	unexpressed	-	-
 internal/syncdispatchruntime	claim_id_chunks_test.go	internal/syncdispatchruntime	dir	*
 internal/syncdispatchruntime	log_error_text_test.go	internal/syncdispatchruntime	dir	*
 internal/syncdispatchruntime	log_error_text_test.go	internal/syncdispatchruntime/synclog	dir	*

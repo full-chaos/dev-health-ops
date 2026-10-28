@@ -71,6 +71,8 @@ func planKeys(t *testing.T, verb string, shard, count int) []string {
 func partitionDefects(t *testing.T, verb string, count int) []string {
 	t.Helper()
 	whole := planKeys(t, verb, 1, 1)
+	// internal/providersync is in EVERY race leg by design (one test-name slice each): it is not a partitioned row.
+	onEveryLeg := func(r string) bool { return verb == "race-shard-plan" && strings.Contains(r, "/internal/providersync\t") }
 	if len(whole) < 100 {
 		t.Fatalf("%s 1 1: only %d rows", verb, len(whole))
 	}
@@ -81,11 +83,16 @@ func partitionDefects(t *testing.T, verb string, count int) []string {
 			return []string{fmt.Sprintf("%s %d %d is empty", verb, k, count)}
 		}
 		for _, r := range rows {
-			seen[r]++
+			if !onEveryLeg(r) {
+				seen[r]++
+			}
 		}
 	}
 	var bad []string
 	for _, r := range whole {
+		if onEveryLeg(r) {
+			continue
+		}
 		if seen[r] != 1 {
 			bad = append(bad, fmt.Sprintf("%s: row %q in %d of the %d shards, want 1", verb, r, seen[r], count))
 		}

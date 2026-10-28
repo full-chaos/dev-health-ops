@@ -63,11 +63,12 @@ func TestQueryOIDCAndSAMLStayRefusedByNameWithCredentials(t *testing.T) {
 
 func TestCredentialAuditEventMapping(t *testing.T) {
 	want := map[string][3]string{
-		"auth.principal.provisioned": {"create", "user", "User registered"},
-		"auth.email.verified":        {"email_verified", "user", "Email verified"},
-		"auth.user.email_verified":   {"email_verified", "user", "Email verified"},
-		"auth.password.reset":        {"password_reset", "user", "User reset password"},
-		"auth.user.password_changed": {"password_changed", "user", "User changed own password"},
+		"auth.principal.provisioned":    {"create", "user", "User registered"},
+		"auth.email.verified":           {"email_verified", "user", "Email verified"},
+		"auth.user.email_verified":      {"email_verified", "user", "Email verified"},
+		"auth.password.reset":           {"password_reset", "user", "User reset password"},
+		"auth.user.password_changed":    {"password_changed", "user", "User changed own password"},
+		"auth.password.reset_requested": {"password_reset_requested", "user", "Password reset requested"},
 	}
 	got := CredentialAuditEvents()
 	if len(got) != len(want) {
@@ -125,15 +126,24 @@ func TestCredentialQuirksAreWellFormedAndNeedCredentials(t *testing.T) {
 		ids[q.ID] = true
 	}
 	for _, id := range []string{
-		"audit-register-organization-and-changes-not-recorded",
+		"audit-register-changes-not-recorded",
 		"audit-register-without-organization-recorded",
 		"audit-email-verified-recorded",
-		"audit-password-reset-organization-not-recorded",
 		"audit-password-reset-recorded-without-membership",
-		"audit-password-reset-requested-not-recorded",
+		"audit-password-reset-requested-without-membership",
+		"audit-password-reset-requested-unknown-address",
 	} {
 		if !ids[id] {
 			t.Errorf("no quirk %s", id)
+		}
+	}
+	for _, id := range []string{
+		"audit-register-organization-and-changes-not-recorded",
+		"audit-password-reset-organization-not-recorded",
+		"audit-password-reset-requested-not-recorded",
+	} {
+		if ids[id] {
+			t.Errorf("quirk %s is closed and must be gone", id)
 		}
 	}
 	for _, q := range Quirks {
@@ -149,10 +159,15 @@ func TestCredentialQuirksAreWellFormedAndNeedCredentials(t *testing.T) {
 const (
 	nl       = `{"ip_address": "203.0.113.7", "user_agent": "venue-oracle/1"}`
 	goldenN  = `Nina's Team  Ünïnina.new@example.comcreateuseruser:nina.new@example.comUser registered{"email": "nina.new@example.com", "organization_id": "<uuid>"}` + nl + `success<null>`
-	acpN     = `<nil>nina.new@example.comcreateuseruser:nina.new@example.comUser registered{}` + nl + `success<null>`
+	acpN     = `Nina's Team  Ünïnina.new@example.comcreateuseruser:nina.new@example.comUser registered{}` + nl + `success<null>`
+	acpSolo  = `<nil>solo@example.comcreateuseruser:solo@example.comUser registered{}` + nl + `success<null>`
 	goldenR  = `Org Aalice@example.compassword_resetuseruser:alice@example.comUser reset password{}` + nl + `success<null>`
-	acpR     = `<nil>alice@example.compassword_resetuseruser:alice@example.comUser reset password{}` + nl + `success<null>`
+	acpPiaR  = `<nil>pia@example.compassword_resetuseruser:pia@example.comUser reset password{}` + nl + `success<null>`
 	goldenRQ = `Org Aalice@example.compassword_reset_requesteduseruser:alice@example.comPassword reset requested{}` + nl + `success<null>`
+	acpPiaRQ = `<nil>pia@example.compassword_reset_requesteduseruser:pia@example.comPassword reset requested{}` + nl + `success<null>`
+	acpNoRQ  = `<nil><null>password_reset_requesteduser<nil>Password reset requested{}` + nl + `success<null>`
+	acpNinaV = `Nina's Team  Ünïnina.new@example.comemail_verifieduseruser:nina.new@example.comEmail verified{}` + nl + `success<null>`
+	acpUmaV  = `<nil>uma@example.comemail_verifieduseruser:uma@example.comEmail verified{}` + nl + `success<null>`
 )
 
 func TestCredentialQuirksCoverTheScenarioRowsExactly(t *testing.T) {
@@ -160,13 +175,12 @@ func TestCredentialQuirksCoverTheScenarioRowsExactly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	solo := strings.Replace(acpN, "nina.new", "solo", 2)
-	pia := strings.Replace(acpR, "alice", "pia", 2)
-	verified := `<nil>nina.new@example.comemail_verifieduseruser:nina.new@example.comEmail verified{}` + nl + `success<null>`
-	goldenRows, acpRows := []string{goldenN, goldenR, goldenRQ}, []string{acpN, acpR, solo, pia, verified, verified, verified, verified}
+	goldenRows := []string{goldenN, goldenR, goldenRQ}
+	acpRows := []string{acpN, goldenR, goldenRQ, acpSolo, acpPiaR, acpPiaRQ, acpNoRQ, acpNinaV, acpUmaV}
 	for _, name := range []string{"emma", "ned", "maya"} {
-		goldenRows = append(goldenRows, strings.Replace(strings.Replace(goldenN, "nina.new", name, 2), "Nina's Team  Ünï", "My Organization", 1))
-		acpRows = append(acpRows, strings.Replace(acpN, "nina.new", name, 2))
+		golden := strings.Replace(strings.Replace(goldenN, "nina.new", name, 2), "Nina's Team  Ünï", "My Organization", 1)
+		goldenRows = append(goldenRows, golden)
+		acpRows = append(acpRows, strings.Replace(golden, `{"email": "`+name+`@example.com", "organization_id": "<uuid>"}`, "{}", 1))
 	}
 	golden, acp := strings.Join(goldenRows, rowSeparator), strings.Join(acpRows, rowSeparator)
 	if problems := l.Compare(TableAuditLogs, golden, acp); len(problems) != 0 {
@@ -177,14 +191,23 @@ func TestCredentialQuirksCoverTheScenarioRowsExactly(t *testing.T) {
 			t.Errorf("unexpected: %s", p)
 		}
 	}
-	if !strings.Contains(l.Covered(), "audit-email-verified-recorded=4") || !strings.Contains(l.Covered(), "audit-password-reset-requested-not-recorded=1") {
-		t.Errorf("covered: %s", l.Covered())
+	covered := l.Covered()
+	for _, want := range []string{"audit-register-changes-not-recorded=4", "audit-email-verified-recorded=2",
+		"audit-password-reset-requested-without-membership=1", "audit-password-reset-requested-unknown-address=1"} {
+		if !strings.Contains(covered, want) {
+			t.Errorf("covered lacks %s: %s", want, covered)
+		}
+	}
+	for _, closed := range []string{"audit-password-reset-requested-not-recorded", "audit-password-reset-organization-not-recorded"} {
+		if strings.Contains(covered, closed) {
+			t.Errorf("closed quirk %s still covers a row: %s", closed, covered)
+		}
 	}
 }
 
 func TestCredentialQuirkMaxIsExactBelowAndAbove(t *testing.T) {
-	verified := `<nil>nina.new@example.comemail_verifieduseruser:nina.new@example.comEmail verified{}` + nl + `success<null>`
-	for _, n := range []int{3, 5} {
+	verified := acpNinaV
+	for _, n := range []int{1, 3} {
 		l, err := NewLedger(forwarded(t, "credentials"), false)
 		if err != nil {
 			t.Fatal(err)
@@ -195,7 +218,7 @@ func TestCredentialQuirkMaxIsExactBelowAndAbove(t *testing.T) {
 		}
 		problems := strings.Join(append(l.Compare(TableAuditLogs, "x", strings.Join(rows, rowSeparator)), l.Dead()...), "\n")
 		if !strings.Contains(problems, "audit-email-verified-recorded") && !strings.Contains(problems, "target only: <nil>nina.new") {
-			t.Errorf("%d email-verified rows were accepted; the scenario holds exactly 4:\n%s", n, problems)
+			t.Errorf("%d email-verified rows were accepted; the scenario holds exactly 2:\n%s", n, problems)
 		}
 	}
 }

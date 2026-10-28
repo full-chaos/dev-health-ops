@@ -483,10 +483,11 @@ func TestASlowReviewTimesOutWith503(t *testing.T) {
 		defer h.review.mu.Unlock()
 		return h.review.calls
 	}
-	// Failure path only: a code under test that reaches a real transport inside the bubble never returns. This watchdog runs on the real
-	// clock outside the bubble, never fires on a passing run, and names the cause with the counter.
+	// Failure path only: a bubble that does not end (for example the code under test reaching a real transport) never returns. This
+	// watchdog runs on the real clock outside the bubble, never fires on a passing run, and states the facts it can see: the test is
+	// still running and the number of requests the fake API server received.
 	watchdog := time.AfterFunc(30*time.Second, func() {
-		panic(fmt.Sprintf("TestASlowReviewTimesOutWith503: the exchange did not return within 30 s of real time; the fake API server outside the bubble has received %d request(s): the code under test used a real transport", requestsSeen()))
+		panic(fmt.Sprintf("TestASlowReviewTimesOutWith503: test still running after the 30 s guard; fake API requests=%d", requestsSeen()))
 	})
 	defer watchdog.Stop()
 	synctest.Test(t, func(t *testing.T) {

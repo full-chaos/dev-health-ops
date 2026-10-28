@@ -82,7 +82,7 @@ INTEGRATION_CONTAINER_HARNESS="${ROOT}/internal/testsupport/containers/harness.g
 # turned `check_go.sh test` -- a verb CI declares container-free -- into a full
 # integration run that starts Testcontainers. A caller's environment must not be
 # able to change which suite a verb runs.
-GO_ENV_OFF=(env -u GO_PROVIDER_ROUTES -u DEV_HEALTH_ENV -u GOFLAGS -u GOEXPERIMENT)
+GO_ENV_OFF=(env -u GO_PROVIDER_ROUTES -u DEV_HEALTH_ENV -u GOFLAGS -u GOEXPERIMENT -u CHECK_GO_FRESH)
 
 # INTEGRATION_TEST_ENV (CHAOS-6634): environment for the MULTI-PACKAGE
 # `go test -tags=integration pkgA pkgB ...` invocations below (integration and

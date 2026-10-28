@@ -19,11 +19,11 @@ import (
 
 // submitVenue is a planner-managed configuration with n selected sources and NO
 // scheduler running: a submit that waited for the plan would wait out
-// SYNC_MANUAL_TRIGGER_AWAIT_SECONDS, which these tests set far above the 30 s failure guard of submitBounded.
+// SYNC_MANUAL_TRIGGER_AWAIT_SECONDS, which these tests set to twice the 30 s failure guard of submitBounded.
 func submitVenue(t *testing.T, sources int) (*cascadeVenue, cascadeSeeded, string) {
 	t.Helper()
 	v := startCascadeVenue(t, false)
-	t.Setenv("SYNC_MANUAL_TRIGGER_AWAIT_SECONDS", "120")
+	t.Setenv("SYNC_MANUAL_TRIGGER_AWAIT_SECONDS", "60")
 	one := v.seed("github", `["git"]`, []string{"repo-metadata", "commits"})
 	for index := 0; index < sources; index++ {
 		name := fmt.Sprintf("acme/repo-%d", index)
@@ -83,23 +83,35 @@ func accepted(t *testing.T, status int, body string) acceptedBody {
 	return out
 }
 
-// submitBounded is v.call with a failure-only guard: a submit returns at once, so a run never reaches the guard; a submit
-// that waits for the plan stays on the 120 s await of submitVenue and fails here, naming the request.
+// submitBounded is v.call with a failure-only guard: a submit returns at once, so a run never reaches the guard. A submit
+// that waits for the plan stays on the 60 s await of submitVenue: on the 30 s guard the request is cancelled FIRST (its
+// handler ends, so the server can close), then the call is joined for at most 10 s, then the test fails naming the request.
 func submitBounded(t *testing.T, v *cascadeVenue, what, path, body string) (int, string) {
 	t.Helper()
 	type answer struct {
 		status int
 		body   string
+		err    error
 	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	done := make(chan answer, 1)
 	go func() {
-		status, text := v.call("POST", path, body)
-		done <- answer{status, text}
+		status, text, err := v.callCtx(ctx, "POST", path, body)
+		done <- answer{status, text, err}
 	}()
 	select {
 	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("%s: %v", what, got.err)
+		}
 		return got.status, got.body
 	case <-time.After(30 * time.Second):
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+		}
 		t.Fatalf("%s: the submit is still waiting after the 30 s guard: it waited for the plan instead of returning at once", what)
 		return 0, ""
 	}

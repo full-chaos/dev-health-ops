@@ -231,7 +231,6 @@ func firstLine(s string) string {
 // needs the real generator says why it cannot run rather than failing opaquely.
 func goAvailable(t *testing.T) {
 	t.Helper()
-	trackSlowTest(t)
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Fatalf("the go command is required to run the real generator: %v", err)
 	}

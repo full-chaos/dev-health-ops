@@ -18,7 +18,6 @@ internal/goapicli/restprove/main_test.go	TestResolveBuilds_TimeoutZeroOrNegative
 internal/goapicli/routing/main_test.go	TestConnectPostgresBoundsTheDialAndSaysSo	pending CHAOS-11684 conversion
 internal/goapicli/routing/verbs_integration_test.go	TestStatusReturnsWithinItsTimeoutUnderAHeldLock	pending CHAOS-11684 conversion
 internal/goapiproof/credentialecho_test.go	TestSentSecretsScansALargeBodyQuickly	measured hosted margin 12.5 (>= 3), CHAOS-11684 census
-internal/gqlgenguard/racebudget_test.go	TestMain	pending CHAOS-11684 conversion
 internal/ingressplanes/real_nginx_wait_integration_test.go	TestWaitForRouter_IsLoudWhenTheBoundIsHit	pending CHAOS-11684 conversion
 internal/jobs/investment/nativeexecutor_test.go	TestCategorizeFanOutIsBoundedByLimit	not wall time: poll counter (internal/jobs/investment/nativeexecutor_test.go:552)
 internal/jobs/investment/shadowphase_test.go	TestAPanicOfThePhaseLoopLeavesNoGoroutineBehind	not wall time: poll counter (internal/jobs/investment/shadowphase_test.go:912)

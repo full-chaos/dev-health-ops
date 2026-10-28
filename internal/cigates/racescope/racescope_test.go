@@ -563,3 +563,17 @@ func TestARowWhoseClosureStartsGoroutinesIsRefusedEvenWhenItNamesACoveringPackag
 		}
 	}
 }
+
+// A PR leg exports GO_QUALITY_SELECTION_FILE (an AFFECTED verdict) to every process of the leg, including this test; the plan it asks
+// check_go.sh for must be the whole plan, so the inherited selection must not reach the script. Serial: it sets the environment.
+func TestPlanForIgnoresAnInheritedQualitySelection(t *testing.T) {
+	sel := filepath.Join(t.TempDir(), "selection.txt")
+	if err := os.WriteFile(sel, []byte("AFFECTED 1\ncmd/dho\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GO_QUALITY_SELECTION_FILE", sel)
+	plan := planFor(t, repoRoot(t), "test-shard-plan", 1, 1)
+	if len(plan) <= 100 || !plan["internal/teamid"] {
+		t.Errorf("the test plan holds %d package(s) under an inherited selection, want the whole plan incl. internal/teamid", len(plan))
+	}
+}

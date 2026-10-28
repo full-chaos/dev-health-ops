@@ -1375,6 +1375,9 @@ type FinalizeHandler struct {
 	orgActivity OrgActivityRefresher
 	// orgActivityTimeoutOverride replaces orgActivityRefreshTimeout in tests.
 	orgActivityTimeoutOverride time.Duration
+	// refreshFailed counts failed refreshes. It is created, and seeded at 0, when a refresher is attached, so the series
+	// exists before the first failure (a series created by its first Add loses that sample in an increase() query).
+	refreshFailed metric.Int64Counter
 }
 
 // OrgActivityRefresher upserts the row of public.org_activity for one
@@ -1393,8 +1396,18 @@ const orgActivityFillBatch = 25
 // runs after a finalize completes. A failed refresh never fails the finalize:
 // the row keeps its last value and the next finalize writes it again.
 func (handler *FinalizeHandler) SetOrgActivityRefresher(refresher OrgActivityRefresher) {
-	if handler != nil {
-		handler.orgActivity = refresher
+	if handler == nil {
+		return
+	}
+	handler.orgActivity = refresher
+	if refresher == nil {
+		return
+	}
+	meter := otel.GetMeterProvider().Meter("github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily")
+	if counter, err := meter.Int64Counter(OrgActivityRefreshFailedCounter, metric.WithUnit("{refresh}"),
+		metric.WithDescription("org activity projection refreshes that failed, timed out or were skipped after a finalize completed")); err == nil {
+		counter.Add(context.Background(), 0)
+		handler.refreshFailed = counter
 	}
 }
 
@@ -1413,11 +1426,9 @@ func (handler *FinalizeHandler) orgActivityTimeout() time.Duration {
 	return orgActivityRefreshTimeout
 }
 
-func countOrgActivityRefreshFailed(ctx context.Context) {
-	meter := otel.GetMeterProvider().Meter("github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily")
-	if counter, err := meter.Int64Counter(OrgActivityRefreshFailedCounter, metric.WithUnit("{refresh}"),
-		metric.WithDescription("org activity projection refreshes that failed, timed out or were skipped after a finalize completed")); err == nil {
-		counter.Add(context.WithoutCancel(ctx), 1)
+func (handler *FinalizeHandler) countOrgActivityRefreshFailed(ctx context.Context) {
+	if handler.refreshFailed != nil {
+		handler.refreshFailed.Add(context.WithoutCancel(ctx), 1)
 	}
 }
 
@@ -1432,20 +1443,20 @@ func (handler *FinalizeHandler) refreshOrgActivity(ctx context.Context, run Run)
 	defer cancel()
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			countOrgActivityRefreshFailed(ctx)
+			handler.countOrgActivityRefreshFailed(ctx)
 			slog.Default().ErrorContext(ctx, "daily finalize: the org activity refresh panicked",
 				"run_id", run.ID, "organization_id", run.OrganizationID)
 		}
 	}()
 	if orgID, err := uuid.Parse(run.OrganizationID); err == nil {
 		if err := handler.orgActivity.Refresh(ctx, orgID); err != nil {
-			countOrgActivityRefreshFailed(ctx)
+			handler.countOrgActivityRefreshFailed(ctx)
 			slog.Default().WarnContext(ctx, "daily finalize: the org activity projection was not refreshed",
 				"run_id", run.ID, "organization_id", run.OrganizationID, "error", err)
 		}
 	}
 	if _, skipped, err := handler.orgActivity.RefreshMissing(ctx, orgActivityFillBatch); err != nil || skipped > 0 {
-		countOrgActivityRefreshFailed(ctx)
+		handler.countOrgActivityRefreshFailed(ctx)
 		slog.Default().WarnContext(ctx, "daily finalize: organizations without an activity row were not all filled",
 			"run_id", run.ID, "skipped", skipped, "error", err)
 	}

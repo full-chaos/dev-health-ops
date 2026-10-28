@@ -127,7 +127,7 @@ func TestCommandEndToEnd(t *testing.T) {
 		setup, state, code, detail string
 	}{
 		"the heads recorded over no schema": {
-			"CREATE TABLE alembic_version (version_num varchar(32) PRIMARY KEY); INSERT INTO alembic_version VALUES ('0066'), ('0138')",
+			"CREATE TABLE alembic_version (version_num varchar(32) PRIMARY KEY); INSERT INTO alembic_version VALUES ('0066'), ('0162')",
 			"schema_mismatch", "schema_mismatch", "table(s) the head creates are absent",
 		},
 		"only a function": {

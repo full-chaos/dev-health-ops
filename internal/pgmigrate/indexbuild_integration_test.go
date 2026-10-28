@@ -79,6 +79,16 @@ func headPosition(t *testing.T) int {
 	return len(chain)
 }
 
+// archivedHead is a scratch database the archived chain built to 0162: the index definitions as production built them
+// (CREATE INDEX from the revision's text). A database the baseline built holds the same index in pg_dump's re-parsed
+// form, which reads differently and means the same.
+func (d downInstance) archivedHead(t *testing.T) string {
+	t.Helper()
+	uri := databaseURI(t, d.instance.URI, scratchDatabase(t, d.admin))
+	archivedUpgradeTo(t, context.Background(), connect(t, uri), "0162")
+	return uri
+}
+
 // withoutIndex is a scratch database at the head with the index of revision 0159 (failure streak) or 0161 (open units)
 // dropped: the state before that revision, which the build-index verb exists for. Both revisions are in the baseline.
 func (d downInstance) withoutIndex(t *testing.T, revision string) string {
@@ -97,9 +107,8 @@ func (d downInstance) withoutIndex(t *testing.T, revision string) string {
 // The verb builds the index before revision 0159, finds it valid on a second run, repairs an INVALID leftover, and
 // revision 0159 then does nothing: the database holds the definition a plain walk to the head builds.
 func TestBuildIndexBeforeRevision0159(t *testing.T) {
-	length := headPosition(t)
 	d := newDownInstance(t)
-	headConn := connect(t, d.at(t, length))
+	headConn := connect(t, d.archivedHead(t))
 	wantDefinition, valid := streakIndexDefinition(t, headConn)
 	if !valid || !strings.Contains(wantDefinition, "(org_id, integration_id, source_id, dataset_key, updated_at DESC, id DESC)") {
 		t.Fatalf("the walk's index is %q valid=%v", wantDefinition, valid)
@@ -355,9 +364,8 @@ func TestDropInvalidOpenUnitsIndexKeepsAValidIndex(t *testing.T) {
 // The open-units verb builds the index before revision 0161, finds it valid on a second run, repairs an INVALID leftover,
 // and revision 0161 then does nothing for it: the database holds the definition a plain walk to the head builds.
 func TestBuildOpenUnitsIndexBeforeRevision0161(t *testing.T) {
-	length := headPosition(t)
 	d := newDownInstance(t)
-	headConn := connect(t, d.at(t, length))
+	headConn := connect(t, d.archivedHead(t))
 	definitionOf := func(conn *pgx.Conn) (definition string, valid bool) {
 		err := conn.QueryRow(context.Background(), `
 SELECT pg_get_indexdef(i.indexrelid), i.indisvalid AND i.indisready

@@ -11,6 +11,7 @@ import (
 	"os"
 	"syscall"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/timeoutclass"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -26,7 +27,7 @@ func IsTransient(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
-	if errors.Is(err, ErrUnreachable) {
+	if errors.Is(err, ErrUnreachable) || errors.Is(err, timeoutclass.ErrTimeout) {
 		return true
 	}
 	var pgErr *pgconn.PgError

@@ -89,6 +89,7 @@ func rollbackCase(t *testing.T, merge bool) {
 }
 
 func TestRollbackOfTheServedModelRecategorisesAndServesTheRolledBackRow(t *testing.T) {
+	t.Parallel()
 	for _, merge := range []bool{false, true} {
 		name := "no merge between steps"
 		if merge {
@@ -102,6 +103,7 @@ func TestRollbackOfTheServedModelRecategorisesAndServesTheRolledBackRow(t *testi
 // latest; evidence H1 -> H2 -> H1 must ask again at the last step, as the
 // config rollback does.
 func TestAnInputRevertIsRecategorisedNotSkipped(t *testing.T) {
+	t.Parallel()
 	h := newCompletenessHarness(t)
 	calls := 0
 	provider := countingProvider{inner: &calls}
@@ -125,6 +127,7 @@ func TestAnInputRevertIsRecategorisedNotSkipped(t *testing.T) {
 // TestTheServedSkipExistingPredicateClauseByClause pins every clause of
 // FetchExistingInvestmentKeys on the row the readers serve.
 func TestTheServedSkipExistingPredicateClauseByClause(t *testing.T) {
+	t.Parallel()
 	h := newCompletenessHarness(t)
 	h.setEvidence("1")
 	calls := 0

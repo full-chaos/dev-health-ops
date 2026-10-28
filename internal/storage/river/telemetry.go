@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/dialclass"
+	"github.com/full-chaos/dev-health-ops/internal/platform/timeoutclass"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -296,6 +297,8 @@ func queueTelemetryReadFailure(err error) error {
 		return fmt.Errorf("%w: %w", ErrQueueTelemetryUnavailable, context.DeadlineExceeded)
 	case errors.Is(err, context.Canceled):
 		return fmt.Errorf("%w: %w", ErrQueueTelemetryUnavailable, context.Canceled)
+	case timeoutclass.IsTimeout(err):
+		return fmt.Errorf("%w: %w", ErrQueueTelemetryUnavailable, timeoutclass.ErrTimeout)
 	case dialclass.IsTransient(err):
 		return fmt.Errorf("%w: %w", ErrQueueTelemetryUnavailable, dialclass.ErrUnreachable)
 	default:

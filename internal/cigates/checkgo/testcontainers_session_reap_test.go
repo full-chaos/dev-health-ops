@@ -77,7 +77,7 @@ func TestReapTestcontainersSessionRemovesOnlyThatSessionByID(t *testing.T) {
 
 // helperHarness extracts tc_trap and run_integration_go_test from ci/check_go.sh and runs them against a stand-in
 // `go` that records its start and a stand-in reaper that records the session id it is given.
-func helperHarness(t *testing.T, sid string, signal, noSetsid bool) (exit int, marker, goStarted, childAlive, sentinelAlive bool, reaped string) {
+func helperHarness(t *testing.T, sid string, signal, noSetsid, slowPS bool) (exit int, marker, goStarted, childAlive, sentinelAlive bool, reaped string) {
 	t.Helper()
 	text, err := os.ReadFile(scriptPath(t, "ci/check_go.sh"))
 	if err != nil {
@@ -107,6 +107,19 @@ func helperHarness(t *testing.T, sid string, signal, noSetsid bool) (exit int, m
 	if err := os.WriteFile(filepath.Join(dir, "reap-testcontainers-session.sh"), []byte(fakeReap), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if slowPS {
+		// Forced slow setup: the first three ps calls of the helper take 2 s each, so a TERM lands before TC_TRAP_PGID is set.
+		realPS, err := exec.LookPath("ps")
+		if err != nil {
+			t.Fatal(err)
+		}
+		cnt := filepath.Join(dir, "ps-count")
+		shim := "#!/bin/sh\nn=$(cat " + cnt + " 2>/dev/null || echo 0); n=$((n+1)); echo $n > " + cnt + "\n" +
+			"if [ $n -le 3 ]; then sleep 2; fi\nexec " + realPS + " \"$@\"\n"
+		if err := os.WriteFile(filepath.Join(bin, "ps"), []byte(shim), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
 	sentinel := filepath.Join(dir, "sentinel-pid")
 	pre := "sleep 30 &\necho $! > " + sentinel + "\n"
 	if noSetsid {
@@ -116,7 +129,9 @@ func helperHarness(t *testing.T, sid string, signal, noSetsid bool) (exit int, m
 		"SCRIPT_DIR=" + dir + "\nROOT=" + dir + "\nGO_ENV_OFF=(env)\nINTEGRATION_TEST_ENV=()\n" +
 		"die() { echo \"$*\" >&2; exit 2; }\n" + s[start:end] +
 		"run_integration_go_test . ./x &\nHP=$!\n" +
-		"if [ \"" + map[bool]string{true: "1", false: "0"}[signal] + "\" = 1 ]; then sleep 1; kill -TERM $HP; fi\n" +
+		"if [ \"" + map[bool]string{true: "1", false: "0"}[signal] + "\" = 1 ]; then\n" +
+		// wait for the fake go's child (it starts after exec setsid), bounded: the 30 s ceiling only bounds a hang
+		"for i in $(seq 1 600); do [ -s " + childPID + " ] && break; kill -0 $HP 2>/dev/null || break; sleep 0.05; done\nkill -TERM $HP\nfi\n" +
 		"wait $HP\n"
 	// The helper must run in the foreground shell to own its trap: call it directly when no signal is sent.
 	if !signal {
@@ -169,7 +184,7 @@ func TestIntegrationHelperRefusesAnUnsafeSessionIDBeforeGoTestStarts(t *testing.
 		"short",
 		strings.Repeat("a", 65),
 	} {
-		exit, marker, goStarted, _, _, _ := helperHarness(t, sid, true, false)
+		exit, marker, goStarted, _, _, _ := helperHarness(t, sid, true, false, false)
 		if exit == 0 || marker || goStarted {
 			t.Errorf("sid %q: exit=%d marker=%v goStarted=%v; want a refusal before go test, no marker", sid, exit, marker, goStarted)
 		}
@@ -177,14 +192,21 @@ func TestIntegrationHelperRefusesAnUnsafeSessionIDBeforeGoTestStarts(t *testing.
 }
 
 func TestIntegrationHelperTrapReapsTheSessionOnTERM(t *testing.T) {
-	exit, marker, goStarted, childAlive, sentinelAlive, reaped := helperHarness(t, "sess-abcdef12", true, false)
+	exit, marker, goStarted, childAlive, sentinelAlive, reaped := helperHarness(t, "sess-abcdef12", true, false, false)
 	if exit != 143 || marker || !goStarted || childAlive || !sentinelAlive || reaped != "sess-abcdef12" {
 		t.Errorf("exit=%d marker=%v goStarted=%v childAlive=%v sentinelAlive=%v reaped=%q; want 143, no marker, go started, the go test's child gone, a bystander in the helper's own group alive, reaped sess-abcdef12", exit, marker, goStarted, childAlive, sentinelAlive, reaped)
 	}
 }
 
+func TestIntegrationHelperTrapReapsTheSessionWhenTERMArrivesDuringSlowGroupSetup(t *testing.T) {
+	exit, marker, goStarted, childAlive, sentinelAlive, reaped := helperHarness(t, "sess-abcdef12", true, false, true)
+	if exit != 143 || marker || !goStarted || childAlive || !sentinelAlive || reaped != "sess-abcdef12" {
+		t.Errorf("exit=%d marker=%v goStarted=%v childAlive=%v sentinelAlive=%v reaped=%q; want 143, no marker, go started, the go test's child gone (the group resolved at trap time), a bystander in the helper's own group alive, reaped sess-abcdef12", exit, marker, goStarted, childAlive, sentinelAlive, reaped)
+	}
+}
+
 func TestIntegrationHelperWithoutSetsidStopsOnlyTheRecordedPID(t *testing.T) {
-	exit, _, goStarted, _, sentinelAlive, reaped := helperHarness(t, "sess-abcdef12", true, true)
+	exit, _, goStarted, _, sentinelAlive, reaped := helperHarness(t, "sess-abcdef12", true, true, false)
 	if exit != 143 || !goStarted || !sentinelAlive || reaped != "sess-abcdef12" {
 		t.Errorf("exit=%d goStarted=%v sentinelAlive=%v reaped=%q; want 143, go started, a bystander in the helper's group alive (no group kill), reaped", exit, goStarted, sentinelAlive, reaped)
 	}
@@ -221,5 +243,44 @@ func TestTcTrapNeverKillsTheHelpersOwnProcessGroup(t *testing.T) {
 	}
 	if got := strings.TrimSpace(string(raw)); got != "143 alive dead" {
 		t.Errorf("rc/bystander/target = %q; want %q (pgid equal to the helper's own group: stop the recorded pid only)", got, "143 alive dead")
+	}
+}
+
+func TestTcTrapResolvingAtTrapTimeNeverKillsAGroupItsPIDDoesNotLead(t *testing.T) {
+	text, err := os.ReadFile(scriptPath(t, "ci/check_go.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(text)
+	start := strings.Index(s, "tc_trap() {")
+	end := start + strings.Index(s[start:], "\n}\n") + 3
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "reap-testcontainers-session.sh"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	res := filepath.Join(dir, "res")
+	tf, pf := filepath.Join(dir, "target-pid"), filepath.Join(dir, "peer-pid")
+	// A foreign group (leader L, from setsid) holds the target T and a peer P, neither of them the leader: T has not done its own setsid.
+	script := "set -uo pipefail\nSCRIPT_DIR=" + dir + "\n" + s[start:end] +
+		"sleep 30 &\nBYSTANDER=$!\n" +
+		"setsid sh -c 'sleep 30 & echo $! > " + tf + "; sleep 30 & echo $! > " + pf + "; wait' &\n" +
+		"for i in $(seq 1 200); do [ -s " + tf + " ] && [ -s " + pf + " ] && break; sleep 0.05; done\n" +
+		"TARGET=$(cat " + tf + "); PEER=$(cat " + pf + ")\n" +
+		"TC_TRAP_PID=$TARGET TC_TRAP_SID=sess-abcdef12 TC_TRAP_PGID=\n" +
+		"( tc_trap ) 2>/dev/null\nrc=$?\n" +
+		"for i in $(seq 1 200); do kill -0 $TARGET 2>/dev/null || break; sleep 0.05; done\n" +
+		"t=dead; kill -0 $TARGET 2>/dev/null && t=alive\n" +
+		"p=dead; kill -0 $PEER 2>/dev/null && p=alive\n" +
+		"b=dead; kill -0 $BYSTANDER 2>/dev/null && b=alive\n" +
+		"echo \"$rc $t $p $b\" > " + res + "\nkill -KILL $BYSTANDER $TARGET $PEER 2>/dev/null\n"
+	if err := exec.Command("setsid", "bash", "-c", script).Run(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(raw)); got != "143 dead alive alive" {
+		t.Errorf("rc/target/peer/bystander = %q; want %q (the target's group is not led by it: stop the recorded pid only)", got, "143 dead alive alive")
 	}
 }

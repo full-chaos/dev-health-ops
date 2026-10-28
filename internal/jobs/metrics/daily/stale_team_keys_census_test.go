@@ -493,6 +493,28 @@ func decidedTeamKeyTables() []string {
 	return names
 }
 
+// The census reads a column at the type the migrations leave it: migrations 124
+// and 128 turn these counters into Float64 with ALTER TABLE ... MODIFY COLUMN.
+func TestCensusReadsTheCounterTypesTheMigrationsLeave(t *testing.T) {
+	tables := loadCensusTables(t)
+	for _, want := range []struct{ table, column string }{
+		{"team_metrics_daily", "commits_count"},
+		{"team_complexity_daily", "loc_total"},
+		{"ai_impact_metrics_daily", "prs_total"},
+		{"compounding_risk_daily", "merged_prs_30d"},
+	} {
+		got := ""
+		for _, column := range tables[want.table].columns {
+			if column.name == want.column {
+				got = column.typ
+			}
+		}
+		if !strings.Contains(got, "Float64") {
+			t.Errorf("the census reads %s.%s as %q; the migrations leave it Float64", want.table, want.column, got)
+		}
+	}
+}
+
 // The declaration of each table of the shared rule against the schema: the
 // rule builds its read and its row of zeros from the declaration alone, so a
 // column that the declaration does not hold is a column the rule gets wrong.

@@ -20,8 +20,11 @@
 # introduces a service ref the mirror has NEVER published -- an existing ref is
 # already there and pulls immediately. So:
 #
-#   Introducing a NEW service image? Dispatch this workflow on the branch and
-#   let it finish BEFORE the PR's Tests run, or expect one failed pull.
+#   Introducing a NEW service image? Since CHAOS-10366 this workflow publishes
+#   ONLY from main (a push to main, the weekly schedule, or a dispatch started
+#   from main); a pull_request run and a dispatch from a branch publish nothing.
+#   Merge the change, let the push run on main publish the image, then re-run
+#   the PR's Tests: until then expect one failed pull.
 #
 # Fork PRs cannot publish at all: GITHUB_TOKEN is read-only on a fork, so the
 # mirror job is skipped. They CAN pull every image already mirrored, because
@@ -99,13 +102,16 @@ on:
       - ci/mirror_precheck_lib.sh
       - ci/mirror_precheck_lib_test.sh
       - ci/verify_base_images_test.sh
+      - ci/verify_base_sources.sh
+      - ci/verify_base_sources_test.sh
       - ci/run_shell_tests.sh
       - ci/suites.tsv
       - .github/workflows/mirror-test-images.yml
 
+# CHAOS-10366 (safety): the workflow level grants NO write. The one job that publishes (mirror) holds packages: write itself; a pull_request
+# run used to reach it with a workflow-wide write token and pushed new packages into ghcr.io/full-chaos before any review.
 permissions:
   contents: read
-  packages: write
 
 concurrency:
   # CHAOS-4928: the bare literal below used to be the WHOLE group -- every
@@ -315,6 +321,8 @@ jobs:
         run: bash ci/run_shell_tests.sh mirror-precheck-lib
       - name: Run the base-image verification suite
         run: bash ci/run_shell_tests.sh base-images-verify
+      - name: Run the base-image source check suite
+        run: bash ci/run_shell_tests.sh base-sources-verify
 
   mirror:
     needs: precheck
@@ -350,11 +358,15 @@ jobs:
     concurrency:
       group: mirror-publish
       cancel-in-progress: false
-    # Forks get neither the Docker Hub secrets nor packages:write, so the job
-    # would fail at login rather than do anything useful.
+    # CHAOS-10366: publishes ONLY from main, and never on a pull_request. A push to main, the weekly schedule (which always runs on main) or a
+    # workflow_dispatch started FROM main; a dispatch from another ref is skipped. A pull_request run takes the read-only dry-run job below.
+    # packages: write is held by this job alone.
+    permissions:
+      contents: read
+      packages: write
     if: >-
-      (github.event.pull_request.head.repo.full_name == github.repository || github.event_name != 'pull_request') &&
-      (github.event_name != 'pull_request' || needs.precheck.outputs.missing == 'true')
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -627,6 +639,23 @@ jobs:
         env:
           OWNER: ${{ github.repository_owner }}
         run: bash ci/verify_base_images.sh "${OWNER}"
+
+  # CHAOS-10366: what a pull_request run does INSTEAD of publishing. Read-only (packages: read, no login, no secret, no step that can push):
+  # each pinned base image (ci/base_images.tsv) is read AT ITS SOURCE and must serve exactly the pinned digest, so a bad pin fails the PR
+  # before anything reaches ghcr.io; the publish itself happens only after the merge, on main.
+  dry-run:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Verify each pinned base image digest at its source
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: bash ci/verify_base_sources.sh "${OWNER}"
 
   # Reports the ANONYMOUS per-runner-IP Docker Hub allowance -- the only one this
   # workflow now depends on, since it holds no Docker Hub account.

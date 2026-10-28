@@ -49,8 +49,8 @@ func corpusQueueRepo(t *testing.T, withPaths bool) string {
 		}
 	}
 	corpusQueueFakeGo(t, dir)
-	// the six roots of the live closure exist in the tree (the script refuses a missing root)
-	for _, r := range []string{"internal/api/session", "internal/api/sso", "internal/api/policy", "internal/apiservice", "cmd/dho", "cmd/auth-service", "cmd/dev-health-worker-migrate", "cmd/auth-migrate", "internal/apiservice/authflowvenue"} {
+	// the roots of the live closure exist in the tree (the script refuses a missing root)
+	for _, r := range []string{"internal/api/session", "internal/api/sso", "internal/api/policy", "internal/apiservice", "cmd/dho", "cmd/auth-service", "cmd/dev-health-worker-migrate", "cmd/auth-migrate", "internal/testsupport/providerstub/cmd/providerstub", "internal/testsupport/smtpcapture/cmd/smtpsink", "internal/apiservice/authflowvenue"} {
 		if err := os.MkdirAll(filepath.Join(dir, r), 0o755); err != nil {
 			t.Fatal(err)
 		}

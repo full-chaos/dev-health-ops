@@ -72,7 +72,14 @@ func TestProvidersyncShardKeepsReadableLogAndExitCode(t *testing.T) {
 	if start < 0 || end < start {
 		t.Fatal("check_providersync_test_shard not found in ci/check_go.sh")
 	}
-	fn := body[start:end]
+	if !strings.Contains(body[start:end], "run_providersync_bounded ") {
+		t.Fatal("check_providersync_test_shard must run its go test through run_providersync_bounded")
+	}
+	rs := strings.Index(body, "run_providersync_bounded() {")
+	if rs < 0 {
+		t.Fatal("run_providersync_bounded not found in ci/check_go.sh")
+	}
+	fn := body[rs : rs+strings.Index(body[rs:], "\n}\n")]
 	for _, want := range []string{"-json", "tee ", "jq ", "pipefail"} {
 		if !strings.Contains(fn, want) {
 			t.Errorf("providersync shard function lacks %q: it must write the json file, stream a readable log and keep go test's exit code", want)

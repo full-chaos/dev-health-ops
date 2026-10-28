@@ -221,6 +221,7 @@ internal/cigates/docstools	validate_inventory_review.go
 internal/cigates/docstools	validate_inventory_review_cases_test.go
 internal/cigates/docstools	validatedsite.go
 internal/cigates/emitscan	scan.go
+internal/cigates/frozengoldens	exemption_test.go
 internal/cigates/frozengoldens	frozengoldens.go
 internal/cigates/frozengoldens	frozengoldens_test.go
 internal/cigates/integrationshards	ci_script_helpers_test.go
@@ -434,6 +435,10 @@ internal/mintcli/envelopekeys	main_test.go
 internal/mintcli/envelopekeys	verify_roundtrip_test.go
 internal/operationalordering	finalreads_test.go
 internal/ownershipwindow	ownershipwindow_test.go
+internal/pgmigrate	archive_fixture_integration_test.go
+internal/pgmigrate	archive_test.go
+internal/pgmigrate	indexbuild_test.go
+internal/pgmigrate	squash_test.go
 internal/platform/config	route_switch_absence_test.go
 internal/platform/credshape	census_test.go
 internal/platform/credshape	credshape_test.go

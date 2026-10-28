@@ -349,7 +349,6 @@ internal/jobcontract	registry.go	internal/jobs/metrics/daily
 internal/jobcontract	registry.go	internal/jobs/metrics/remaining
 internal/jobcontract	registry.go	internal/jobs/report
 internal/jobcontract	registry.go	internal/jobs/workgraph
-internal/jobcontract	registry.go	internal/pgmigrate
 internal/jobcontract	registry.go	internal/queryapi/server
 internal/jobcontract	registry.go	internal/queryapiservice
 internal/jobcontract	registry.go	internal/reconcilerservice
@@ -665,7 +664,6 @@ internal/testsupport/venueoracle	golden.go	internal/mail
 internal/testsupport/venueoracle	golden.go	internal/maintenancecli
 internal/testsupport/venueoracle	golden.go	internal/metricscli
 internal/testsupport/venueoracle	golden.go	internal/operationalbackfill
-internal/testsupport/venueoracle	golden.go	internal/pgmigrate
 internal/testsupport/venueoracle	golden.go	internal/platform/config
 internal/testsupport/venueoracle	golden.go	internal/providerfoundation
 internal/testsupport/venueoracle	golden.go	internal/providersync

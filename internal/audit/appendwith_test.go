@@ -188,3 +188,22 @@ func TestResetRequestedAttributesAreAllowlisted(t *testing.T) {
 		}
 	}
 }
+
+func TestAppendWithRefusesATransactionTheApplyEnded(t *testing.T) {
+	saved := txStatusOf
+	txStatusOf = func(pgx.Tx) byte { return 'I' }
+	t.Cleanup(func() { txStatusOf = saved })
+	tx := &fakeTx{}
+	err := appendWithTx(context.Background(), tx, testSchema(t), resetRequested(), func(context.Context, TxOps) error { return nil })
+	if !errors.Is(err, ErrMutationFailed) {
+		t.Fatalf("err = %v, want ErrMutationFailed", err)
+	}
+	if tx.committed {
+		t.Error("committed a transaction the apply ended")
+	}
+	for _, s := range tx.statements {
+		if strings.Contains(s, "INSERT INTO") {
+			t.Errorf("audit row written outside the transaction: %s", s)
+		}
+	}
+}

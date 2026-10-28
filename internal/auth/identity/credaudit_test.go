@@ -1,12 +1,14 @@
 package identity
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/authrows"
@@ -96,5 +98,37 @@ func TestEveryCredentialAuditEventIsMappedByTheCorpus(t *testing.T) {
 	}
 	if got := mapped[audit.EventPasswordResetRequested]; got != (authrows.AuditMapping{Action: "password_reset_requested", ResourceType: "user", Description: "Password reset requested"}) {
 		t.Errorf("reset-requested mapping = %+v", got)
+	}
+}
+
+type sqlRecorder struct{ sqls []string }
+
+type noRow struct{}
+
+func (noRow) Scan(...any) error { return pgx.ErrNoRows }
+
+func (r *sqlRecorder) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
+	r.sqls = append(r.sqls, sql)
+	return noRow{}
+}
+
+// The auth runtime role reads only the auth schema's tables: it holds no SELECT on public.memberships.
+func TestAuditOrganizationReadsOnlyTheAuthSchema(t *testing.T) {
+	rec := &sqlRecorder{}
+	org, err := AuditOrganization(context.Background(), rec, `"auth"`, uuid.New())
+	if err != nil || org != nil {
+		t.Fatalf("AuditOrganization = %v, %v; want nil, nil for a principal with no membership", org, err)
+	}
+	if len(rec.sqls) != 1 {
+		t.Fatalf("statements = %d, want 1", len(rec.sqls))
+	}
+	sql := rec.sqls[0]
+	if strings.Contains(sql, "public.") {
+		t.Errorf("the lookup reads a public table: %s", sql)
+	}
+	for _, want := range []string{`"auth".memberships`, `"auth".organizations`, "ORDER BY m.created_at, m.id", "m.status <> 'removed'"} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("the lookup lacks %q: %s", want, sql)
+		}
 	}
 }

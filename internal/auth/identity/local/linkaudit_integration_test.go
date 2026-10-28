@@ -75,15 +75,47 @@ func (e *pgEnv) project(t *testing.T, ctx context.Context, org uuid.UUID) {
 	}
 }
 
+// membership seeds a public organization, projects it into the auth schema as login does, and writes the auth
+// membership edge (a guarded table, so the insert runs under the commit guard setting).
 func (e *pgEnv) membership(t *testing.T, ctx context.Context, user uuid.UUID, org uuid.UUID, createdAt string) {
 	t.Helper()
 	if _, err := e.admin.Exec(ctx, `INSERT INTO public.organizations (id, slug, name, settings, tier, managed_by, is_active, created_at, updated_at)
 VALUES ($1, $2, $2, '{}', 'community', 'stripe', true, now(), now()) ON CONFLICT DO NOTHING`, org, org.String()); err != nil {
 		t.Fatalf("seed organization: %v", err)
 	}
-	if _, err := e.admin.Exec(ctx, `INSERT INTO public.memberships (id, user_id, org_id, role, joined_at, created_at, updated_at)
-VALUES (gen_random_uuid(), $1, $2, 'member', `+createdAt+`, `+createdAt+`, `+createdAt+`)`, user, org); err != nil {
+	e.project(t, ctx, org)
+	tx, err := e.admin.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO auth.memberships (organization_id, principal_id, status, created_at, updated_at)
+VALUES ($1, $2, 'active', `+createdAt+`, `+createdAt+`)`, org, user.String()); err != nil {
 		t.Fatalf("seed membership: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// AuditOrganization runs as the auth runtime role, which holds no SELECT on public.memberships.
+func TestAuditOrganizationRunsAsTheRuntimeRole(t *testing.T) {
+	ctx := context.Background()
+	env, _ := linkEnv(t, ctx)
+	p := env.owner(t, ctx)
+	none, err := identity.AuditOrganization(ctx, env.runtime, `"auth"`, p)
+	if err != nil || none != nil {
+		t.Fatalf("no membership: %v, %v; want nil, nil", none, err)
+	}
+	first, later := uuid.New(), uuid.New()
+	env.membership(t, ctx, p, later, "now()")
+	env.membership(t, ctx, p, first, "now() - interval '2 days'")
+	got, err := identity.AuditOrganization(ctx, env.runtime, `"auth"`, p)
+	if err != nil || got == nil || *got != first.String() {
+		t.Fatalf("AuditOrganization = %v, %v; want %s", got, err, first)
 	}
 }
 
@@ -94,8 +126,6 @@ func TestResetRequestWritesTheLinkAndOneAuditRowInTheEarliestMembershipOrganizat
 	first, later := uuid.New(), uuid.New()
 	env.membership(t, ctx, p, later, "now()")
 	env.membership(t, ctx, p, first, "now() - interval '2 days'")
-	env.project(t, ctx, first)
-	env.project(t, ctx, later)
 	if err := links.IssueBound(ctx, IssueRequest{PrincipalID: p, Purpose: PurposePasswordReset, TokenHash: linkHash("rq1"), TTL: ResetTTL}); err != nil {
 		t.Fatal(err)
 	}
@@ -113,13 +143,12 @@ FROM auth.security_audit_events WHERE event_type = $1`, audit.EventPasswordReset
 	}
 }
 
-func TestResetRequestOfAnUnprojectedMembershipOrganizationNamesNoOrganization(t *testing.T) {
+func TestResetRequestOfAPrincipalWithNoMembershipNamesNoOrganization(t *testing.T) {
 	ctx := context.Background()
 	env, links := linkEnv(t, ctx)
 	p := env.owner(t, ctx)
-	env.membership(t, ctx, p, uuid.New(), "now()")
 	if err := links.IssueBound(ctx, IssueRequest{PrincipalID: p, Purpose: PurposePasswordReset, TokenHash: linkHash("np1"), TTL: ResetTTL}); err != nil {
-		t.Fatalf("a request must not fail on an organization the auth schema lacks: %v", err)
+		t.Fatalf("a request must not fail for a principal with no membership: %v", err)
 	}
 	if n := env.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = $1 AND organization_id IS NULL AND subject_principal_id = $2`, audit.EventPasswordResetRequested, p.String()); n != 1 {
 		t.Errorf("rows with no organization = %d, want 1", n)
@@ -224,7 +253,6 @@ func TestVerificationWritesExactlyOneAuditRowInTheEarliestMembershipOrganization
 	p := rig.account(t, ctx, "Verify-pass-1")
 	org := uuid.New()
 	rig.env.membership(t, ctx, p, org, "now()")
-	rig.env.project(t, ctx, org)
 	if err := rig.links.IssueBound(ctx, IssueRequest{PrincipalID: p, Purpose: PurposeEmailVerification, TokenHash: linkHash("verify-secret"), TTL: VerificationTTL}); err != nil {
 		t.Fatal(err)
 	}

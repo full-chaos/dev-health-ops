@@ -127,7 +127,12 @@ func mcpHeaders(org, role, superuser, impersonation string) http.Header {
 func validMCPHeaders() http.Header { return mcpHeaders(mcpTestOrg, "member", "false", "false") }
 
 func mcpDo(handler http.Handler, method string, header http.Header, body string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(method, "/query", strings.NewReader(body))
+	return mcpDoCtx(context.Background(), handler, method, header, body)
+}
+
+// mcpDoCtx is mcpDo with a request context that the caller can cancel.
+func mcpDoCtx(ctx context.Context, handler http.Handler, method string, header http.Header, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, "/query", strings.NewReader(body)).WithContext(ctx)
 	for key, values := range header {
 		req.Header[key] = values
 	}
@@ -138,15 +143,25 @@ func mcpDo(handler http.Handler, method string, header http.Header, body string)
 
 // mcpDoBounded is mcpDo with a failure-path guard: a refusal that is reached before the stage's
 // work returns at once, so a passing run never reaches the guard. A request that is still running
-// after it means the stage's pre-check did not bound it; the message names the stage.
+// after it means the stage's pre-check did not bound it: the request context is cancelled FIRST
+// (every stage that reads it ends), the call is joined for at most 10 s, then the test fails and
+// names the stage. A pure in-memory walk does not read the context, so the join can time out and that
+// goroutine then runs until the test binary ends; the guard is on the failure path only.
 func mcpDoBounded(t *testing.T, stage string, handler http.Handler, header http.Header, body string) *httptest.ResponseRecorder {
 	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	done := make(chan *httptest.ResponseRecorder, 1)
-	go func() { done <- mcpDo(handler, http.MethodPost, header, body) }()
+	go func() { done <- mcpDoCtx(ctx, handler, http.MethodPost, header, body) }()
 	select {
 	case rec := <-done:
 		return rec
 	case <-time.After(30 * time.Second):
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+		}
 		t.Fatalf("%s: still running after the 30 s guard: no pre-check bounded the work", stage)
 		return nil
 	}

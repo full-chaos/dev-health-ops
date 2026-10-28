@@ -167,14 +167,21 @@ var planeProbes = []routingRow{
 // for each plane, not for the first one: a router that has found go-api can
 // still give 502 for query-api (CHAOS-8542). Bounded; when the bound wins it
 // names the plane that did not answer and prints the router log.
-func waitForPlanes(t testing.TB, base string, limit time.Duration, diagnose func() string) {
+func waitForPlanes(ctx context.Context, t testing.TB, base string, limit time.Duration, diagnose func() string) {
 	t.Helper()
 	client := &http.Client{Timeout: 10 * time.Second}
 	deadline := time.Now().Add(limit)
 	for _, probe := range planeProbes {
 		last := "no answer yet"
 		for {
-			response, err := client.Get(base + probe.path)
+			request, requestErr := http.NewRequestWithContext(ctx, http.MethodGet, base+probe.path, nil)
+			if requestErr != nil {
+				t.Fatalf("build the plane request: %v", requestErr)
+			}
+			response, err := client.Do(request)
+			if ctx.Err() != nil {
+				return // the caller cancelled the wait (its failure guard); nothing more to say here
+			}
 			if err != nil {
 				last = err.Error()
 			} else {
@@ -237,8 +244,15 @@ func answersWithoutPlanes(ctx context.Context, t testing.TB, base string, limit 
 	t.Helper()
 	waitForRouter(ctx, t, base, limit, diagnose)
 	client := &http.Client{Timeout: 90 * time.Second}
-	response, err := client.Get(base + "/")
+	request, requestErr := http.NewRequestWithContext(ctx, http.MethodGet, base+"/", nil)
+	if requestErr != nil {
+		t.Fatalf("build the router request: %v", requestErr)
+	}
+	response, err := client.Do(request)
 	if err != nil {
+		if ctx.Err() != nil {
+			return // the caller cancelled the wait (its failure guard)
+		}
 		t.Fatalf("the router with no plane behind it did not answer: %v\n%s", err, diagnose())
 	}
 	defer func() { _ = response.Body.Close() }()
@@ -341,7 +355,7 @@ func startRouterInContainers(t *testing.T) router {
 	if err != nil {
 		t.Fatalf("start the stub planes (%s): %v", RouterImage, err)
 	}
-	waitForPlanes(t, base, 90*time.Second, diagnose)
+	waitForPlanes(context.Background(), t, base, 90*time.Second, diagnose)
 	return router{base: base, port: RouterPort}
 }
 
@@ -423,7 +437,7 @@ func startRouterAsProcess(t *testing.T, binary string, contract Contract) router
 	answersWithoutPlanes(context.Background(), t, base, 15*time.Second, diagnose)
 	startStubAt(t, goAPI, PlaneGoAPI)
 	startStubAt(t, queryAPI, PlaneQueryAPI)
-	waitForPlanes(t, base, 15*time.Second, diagnose)
+	waitForPlanes(context.Background(), t, base, 15*time.Second, diagnose)
 	_, port, err := net.SplitHostPort(address)
 	if err != nil {
 		t.Fatal(err)

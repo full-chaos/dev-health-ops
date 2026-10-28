@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
 func TestQueryAPIPostureCheckIsOptIn(t *testing.T) {
@@ -212,10 +214,6 @@ func silentPostgresPool(t *testing.T) (*pgxpool.Pool, *atomic.Int32) {
 	return pool, accepted
 }
 
-// posturePassGuard is the named limit L of the readyz posture test below (follow-up Low: CHAOS-11769): readyzTimeout/2, and 10x or more of the slowest
-// correct-path answer measured under -race.
-const posturePassGuard = readyzTimeout / 2
-
 // The readiness contract (D2549/D2588): the probe answers within its budget and
 // NEVER waits on a live expensive check. With a posture query that cannot
 // answer, /readyz must fail closed at once (the query_role_posture check), not hold the
@@ -232,10 +230,31 @@ func TestReadyzAnswersWithinTheProbeBudgetWhileThePostureQueryIsSlow(t *testing.
 	}
 	probes := readinessProbes(fakePinger{}, fakePinger{}, fakeJWKS{}, queryAPIPostureCheck(env, pool))
 
-	// NAMED LIMIT (follow-up Low ticket CHAOS-11769): the silent server is a real socket, so no virtual clock
-	// applies. A probe that waited on the live posture check would block until the probe's own context ends
-	// (readyzTimeout, 3 s). posturePassGuard is a failure-path guard only, at most half of that wait and far above
-	// the answer of a probe that does not wait (a few ms, measured under -race); it is not a performance assertion.
+	// A probe that does not wait on the live posture check answers at once from the background run's state ("not yet
+	// proven"). One that waits stays on the context handed to it: the check is called directly with a 30 s context, far
+	// above the 10 s failure-only guard, so a wait is seen as "still running after the guard" (the readyz handler's own 3 s
+	// bound would end it with the same 503 body, which is why the check is called here and not only through /readyz).
+	// No time bound sits on the passing path. On the guard the call is cancelled FIRST, then joined for at most 10 s.
+	check := queryAPIPostureCheck(env, pool)
+	checkCtx, cancelCheck := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancelCheck()
+	for probe := 1; probe <= 3; probe++ {
+		checked := make(chan error, 1)
+		go func() { checked <- check(checkCtx) }()
+		select {
+		case err := <-checked:
+			if !errors.Is(err, postgresstore.ErrUnavailable) || !strings.Contains(err.Error(), "role posture not yet proven") {
+				t.Fatalf("probe %d: posture check = %v, want ErrUnavailable naming 'role posture not yet proven' (an unproven role is not ready)", probe, err)
+			}
+		case <-time.After(10 * time.Second):
+			cancelCheck()
+			select {
+			case <-checked:
+			case <-time.After(10 * time.Second):
+			}
+			t.Fatalf("probe %d: the posture check is still waiting after the 10 s guard: it must not wait on the live check", probe)
+		}
+	}
 	for probe := 1; probe <= 3; probe++ {
 		type answer struct {
 			code int
@@ -249,8 +268,13 @@ func TestReadyzAnswersWithinTheProbeBudgetWhileThePostureQueryIsSlow(t *testing.
 		var got answer
 		select {
 		case got = <-done:
-		case <-time.After(posturePassGuard):
-			t.Fatalf("probe %d: /readyz is still waiting on the posture query after the %v guard: it must not wait on the live check", probe, posturePassGuard)
+		case <-time.After(10 * time.Second):
+			// operatorReadyz takes no context; its registry ends the check at its own bound, so the join below is short.
+			select {
+			case <-done:
+			case <-time.After(10 * time.Second):
+			}
+			t.Fatalf("probe %d: /readyz is still running after the 10 s guard", probe)
 		}
 		code, body := got.code, got.body
 		if code != http.StatusServiceUnavailable || body != `{"failed_checks":["query_role_posture"],"status":"not_ready"}` {

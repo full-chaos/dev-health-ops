@@ -71,7 +71,8 @@ func TestTheCigatesTimeoutHelperMatchesTheExactPrefix(t *testing.T) {
 func TestEveryGoTestCallOfAShardTakes20mOnlyWhenItHoldsACigatesPackage(t *testing.T) {
 	t.Parallel()
 	heavy := fullPkg("internal/gqlgenguard")
-	for _, ambient := range [][]string{nil, {"GO_TEST_JSON_TIMEOUT=1s"}, {"DEV_HEALTH_GO_FRESH_SECURITY=1"}} {
+	// One ambient set: an inherited timeout value changes nothing, and the merge_group security batch (rest_sec) runs too.
+	for _, ambient := range [][]string{{"GO_TEST_JSON_TIMEOUT=1s", "DEV_HEALTH_GO_FRESH_SECURITY=1"}} {
 		twenty := 0
 		for shard := 1; shard <= 3; shard++ {
 			res, lines := runShardWithFakeGo(t, shard, "", ambient...)

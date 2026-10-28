@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
+	"github.com/full-chaos/dev-health-ops/internal/orgactivity"
 )
 
 // UserState is the live public.users state an access token is minted from.
@@ -161,4 +162,79 @@ func chooseMembership(memberships []Membership, requested *uuid.UUID) *Membershi
 		}
 	}
 	return best
+}
+
+// OrgActivityReader is the optional part of Users that reads the activity
+// projection (public.org_activity) the login organization choice ranks by.
+type OrgActivityReader interface {
+	// OrgActivity returns the activity of each of orgIDs. An organization with no row is Unknown.
+	OrgActivity(ctx context.Context, orgIDs []uuid.UUID) (map[uuid.UUID]orgactivity.Activity, error)
+}
+
+// OrgActivity reads public.org_activity for orgIDs (one query). A missing row is
+// Unknown: the projection is written when an organization's metrics finalize, and
+// an organization without one has not been established.
+func (p PGUsers) OrgActivity(ctx context.Context, orgIDs []uuid.UUID) (map[uuid.UUID]orgactivity.Activity, error) {
+	out := make(map[uuid.UUID]orgactivity.Activity, len(orgIDs))
+	for _, id := range orgIDs {
+		out[id] = orgactivity.Activity{Unknown: true}
+	}
+	if len(orgIDs) == 0 {
+		return out, nil
+	}
+	rows, err := p.Pool.Query(ctx, `SELECT org_id, has_data, computed_at FROM public.org_activity WHERE org_id = ANY($1)`, orgIDs)
+	if err != nil {
+		return nil, fmt.Errorf("%w: reading public.org_activity: %w", errUsersStore, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var hasData bool
+		var computedAt *time.Time
+		if err := rows.Scan(&id, &hasData, &computedAt); err != nil {
+			return nil, fmt.Errorf("%w: reading public.org_activity: %w", errUsersStore, err)
+		}
+		if computedAt != nil {
+			value := computedAt.UTC()
+			computedAt = &value
+		}
+		out[id] = orgactivity.Activity{HasData: hasData, Last: computedAt}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("%w: reading public.org_activity: %w", errUsersStore, err)
+	}
+	return out, nil
+}
+
+// chooseLoginMembership is go-api's login choice (selectActiveMembership with
+// organization activity) for the session a password login starts: the requested
+// organization's membership, else the one with metrics data, then the newest
+// metrics, then the earliest join. The activity comes from the projection; a
+// missing row, or a failed read of it, makes the activity unknown, which ranks
+// nobody, so the earliest join decides, with a WARN (go-api's fallback).
+func (h compatHandlers) chooseLoginMembership(ctx context.Context, memberships []Membership, requested *uuid.UUID) *Membership {
+	reader, ok := h.Users.(OrgActivityReader)
+	if requested != nil || len(memberships) < 2 || !ok {
+		return chooseMembership(memberships, requested)
+	}
+	ids := make([]uuid.UUID, len(memberships))
+	candidates := make([]orgactivity.Membership, len(memberships))
+	for index, m := range memberships {
+		ids[index] = m.OrgID
+		candidates[index] = orgactivity.Membership{OrgID: m.OrgID, JoinedAt: m.JoinedAt, CreatedAt: m.CreatedAt}
+	}
+	activities, err := reader.OrgActivity(ctx, ids)
+	if err != nil {
+		h.rec.logger.WarnContext(ctx, "org activity unreadable, active organization chosen by earliest join",
+			"memberships", len(memberships))
+		return chooseMembership(memberships, nil)
+	}
+	if orgactivity.AnyUnknown(candidates, activities) {
+		h.rec.logger.WarnContext(ctx, "org activity unknown, active organization chosen by earliest join",
+			"memberships", len(memberships))
+	}
+	if index := orgactivity.Select(candidates, nil, activities); index >= 0 {
+		return &memberships[index]
+	}
+	return nil
 }

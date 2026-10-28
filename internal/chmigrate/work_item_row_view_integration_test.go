@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
 // INVARIANT (CHAOS-8863): the real chain, applied to a fresh database, leaves the three aggregate work-item daily
@@ -17,18 +16,8 @@ import (
 // and migration 141 is re-runnable: a second run of every statement is a no-op.
 func TestWorkItemRowViewMigration(t *testing.T) {
 	ctx := context.Background()
-	instance, err := containers.StartClickHouse(ctx)
-	if err != nil {
-		t.Fatalf("start clickhouse: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := instance.Close(context.Background()); err != nil {
-			t.Errorf("close clickhouse: %v", err)
-		}
-	})
-	admin := openDatabase(t, instance.URI, "")
-	name := scratchDatabase(t, admin)
-	conn := openDatabase(t, instance.URI, name)
+	scratch := scratchDatabase(t)
+	conn := openDatabase(t, scratch.URI, "")
 	db, _, err := chmigrate.NewConnDB(ctx, conn)
 	if err != nil {
 		t.Fatal(err)

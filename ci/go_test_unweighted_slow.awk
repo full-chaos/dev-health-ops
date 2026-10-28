@@ -42,14 +42,16 @@ $1 ~ /^(ok|FAIL|\?)[ ]*$/ && NF >= 3 { nsummary++; seen[$2] = 1 }
 $1 ~ /^(ok|FAIL)[ ]*$/ && ($2 in key) && $3 ~ /^[0-9]+(\.[0-9]+)?s$/ {
   sec = substr($3, 1, length($3) - 1) + 0
   if (sec >= thresh + 0 && !(key[$2] in w) && !($2 in named)) {
-    named[$2] = 1
     if (sec < failthresh + 0) {
+      if ($2 in warned) next
+      warned[$2] = 1
       if (modof[$2] != ".")
         printf "nested-module-slow-warning: %s took %ss (>= %s s, < %s s) in module %s and has no row in %s; no row can be added: the weights are keyed by root-module package only\n", $2, sec, thresh, failthresh, modof[$2], label > "/dev/stderr"
       else
         printf "unweighted-slow-warning: %s took %ss (>= %s s, < %s s) in this test leg and has no row in %s; suggested row (measured seconds): %s\t%d\n", $2, sec, thresh, failthresh, label, key[$2], int(sec + 0.5) > "/dev/stderr"
       next
     }
+    named[$2] = 1
     if (modof[$2] != ".") {
       printf "nested-module-slow-package: %s took %ss (>= %s s) in module %s and has no row in %s; no row can be added: the weights are keyed by root-module package only; move the test to the root module or extend the weights table to nested modules\n", $2, sec, thresh, modof[$2], label > "/dev/stderr"
       rc = 1

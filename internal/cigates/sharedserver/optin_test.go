@@ -1,10 +1,17 @@
 package sharedserver_test
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
 const (
@@ -16,9 +23,105 @@ const (
 )
 
 // optsIn reports whether a test file holds a TestMain that runs the package
-// on shared servers.
+// on shared servers: the body of func TestMain(m *testing.M) passes the
+// result of the harness's RunWithSharedServers (through the file's real
+// import of it) to os.Exit, and every use of m lies inside the argument of
+// that call, where at least one use runs the tests (m.Run, or m handed to a
+// runner). Comments and string literals are not code and never count.
 func optsIn(src string) (bool, error) {
-	return strings.Contains(src, optInCall), nil
+	file, err := parser.ParseFile(token.NewFileSet(), "main_test.go", src, 0)
+	if err != nil {
+		return false, err
+	}
+	imports := map[string]string{}
+	for _, spec := range file.Imports {
+		path, err := strconv.Unquote(spec.Path.Value)
+		if err != nil {
+			return false, err
+		}
+		name := path[strings.LastIndex(path, "/")+1:]
+		if spec.Name != nil {
+			name = spec.Name.Name
+		}
+		imports[name] = path
+	}
+	isCall := func(call *ast.CallExpr, path, function string) bool {
+		selector, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || selector.Sel.Name != function {
+			return false
+		}
+		pkg, ok := selector.X.(*ast.Ident)
+		return ok && pkg.Obj == nil && imports[pkg.Name] == path
+	}
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Recv != nil || fn.Name.Name != "TestMain" || fn.Body == nil || fn.Type.Params.NumFields() != 1 {
+			continue
+		}
+		param := fn.Type.Params.List[0]
+		star, ok := param.Type.(*ast.StarExpr)
+		if !ok || len(param.Names) != 1 || param.Names[0].Name == "_" {
+			continue
+		}
+		if sel, ok := star.X.(*ast.SelectorExpr); !ok || sel.Sel.Name != "M" {
+			continue
+		}
+		m := param.Names[0].Obj
+		var shared []*ast.CallExpr
+		ast.Inspect(fn.Body, func(node ast.Node) bool {
+			exit, ok := node.(*ast.CallExpr)
+			if !ok || !isCall(exit, "os", "Exit") || len(exit.Args) != 1 {
+				return true
+			}
+			if call, ok := exit.Args[0].(*ast.CallExpr); ok && isCall(call, containersImportPath, "RunWithSharedServers") && len(call.Args) == 1 {
+				shared = append(shared, call)
+			}
+			return true
+		})
+		inside := func(pos token.Pos) bool {
+			for _, call := range shared {
+				if call.Args[0].Pos() <= pos && pos < call.Args[0].End() {
+					return true
+				}
+			}
+			return false
+		}
+		runs, outside := false, false
+		ast.Inspect(fn.Body, func(node ast.Node) bool {
+			switch node := node.(type) {
+			case *ast.Ident:
+				if node.Obj == m && !inside(node.Pos()) {
+					outside = true
+				}
+			case *ast.CallExpr:
+				if !inside(node.Pos()) {
+					return true
+				}
+				if selector, ok := node.Fun.(*ast.SelectorExpr); ok {
+					if id, ok := selector.X.(*ast.Ident); ok && id.Obj == m && selector.Sel.Name == "Run" {
+						runs = true
+					}
+				}
+				for _, arg := range node.Args {
+					if id, ok := arg.(*ast.Ident); ok && id.Obj == m {
+						runs = true
+					}
+				}
+			}
+			return true
+		})
+		for _, call := range shared {
+			if selector, ok := call.Args[0].(*ast.SelectorExpr); ok {
+				if id, ok := selector.X.(*ast.Ident); ok && id.Obj == m && selector.Sel.Name == "Run" {
+					runs = true
+				}
+			}
+		}
+		if len(shared) > 0 && runs && !outside {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // missingFromBatch returns the packages of a batch (internal/<dir>) that are
@@ -115,5 +218,49 @@ func writeFixture(t *testing.T, path, body string) {
 	}
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A test file that names the opt-in call while its package does not opt in
+// is a TestMain that does not run on shared servers however it reads.
+func TestNoPackageNamesTheOptInCallWithoutOptingIn(t *testing.T) {
+	root, err := moduleroot.Root()
+	if err != nil {
+		t.Fatal(err)
+	}
+	optedIn, _ := repoScan(t)
+	opted := map[string]bool{}
+	for _, dir := range optedIn {
+		opted[dir] = true
+	}
+	const self = "cigates/sharedserver"
+	walkErr := filepath.WalkDir(filepath.Join(root, "internal"), func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			switch entry.Name() {
+			case ".git", "node_modules", "testdata", "vendor":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		dir, _ := filepath.Rel(filepath.Join(root, "internal"), filepath.Dir(path))
+		dir = filepath.ToSlash(dir)
+		if strings.Contains(string(data), optInCall) && !opted[dir] && dir != self {
+			t.Errorf("internal/%s: %s names %s but no TestMain of the package runs its tests inside it",
+				dir, entry.Name(), optInCall)
+		}
+		return nil
+	})
+	if walkErr != nil {
+		t.Fatal(walkErr)
 	}
 }

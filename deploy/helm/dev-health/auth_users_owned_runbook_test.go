@@ -176,7 +176,13 @@ func TestOverlapWindowsAreNamed(t *testing.T) {
 	text := string(raw)
 	for _, want := range []string{
 		"The U1 overlap",
+		"The U3 overlap",
 		"The D1 overlap",
+		"internal/auth/authruntime/credentials.go:147",
+		"fails closed",
+		"mentions dho",
+		"shell with -c",
+		"server container",
 		"internal/apiservice/authproxy.go:264-267",
 		"not in a pod spec",
 		"cannot see",
@@ -191,6 +197,8 @@ func TestOverlapWindowsAreNamed(t *testing.T) {
 	for _, bad := range []string{
 		"For the whole goApi stage, from the start of U1 to the end of U3, six credential routes are stubbed",
 		"auth-service returns to the phase 3 form and go-api still forwards, so the credential routes answer `503` until the stubs are up",
+		"all six routes remain stubbed through the end of U3",
+		"until the end of U3, six credential routes are stubbed",
 	} {
 		if strings.Contains(text, bad) {
 			t.Errorf("the runbook still makes an unqualified claim: %q", bad)

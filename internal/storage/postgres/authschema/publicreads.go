@@ -109,7 +109,9 @@ type InsertGrant struct {
 
 // RegisterOrganizationGrants is the switch-gated INSERT access the auth
 // runtime role needs so a sign-up writes go-api's organization and owner
-// membership in the transaction of the user it creates (AUTH_USERS_OWNED).
+// membership in the transaction of the user it creates, and a join writes
+// go-api's membership row in the transaction of its auth membership
+// (AUTH_USERS_OWNED).
 // INSERT on exactly these columns of these two tables: no UPDATE, no DELETE,
 // no TRUNCATE, and no SELECT beyond PublicReadColumns. go-api keeps every
 // update of an organization or a membership.

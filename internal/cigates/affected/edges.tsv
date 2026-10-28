@@ -81,6 +81,7 @@ internal/cigates/bigboyrender	posture.go	unexpressed
 internal/cigates/chartgates	helpers_test.go	unexpressed
 internal/cigates/chartgates	overlay_test.go	unexpressed
 internal/cigates/checkgo	ci_script_helpers_test.go	unexpressed
+internal/cigates/checkgo	cigates_timeout_test.go	unexpressed
 internal/cigates/checkgo	go_test_leg_json_test.go	unexpressed
 internal/cigates/checkgo	race_solo_test.go	unexpressed
 internal/cigates/checkgo	testcontainers_session_reap_test.go	unexpressed

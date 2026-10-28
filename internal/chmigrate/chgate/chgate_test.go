@@ -158,3 +158,19 @@ func TestReadClass(t *testing.T) {
 		}
 	}
 }
+
+// The build's head is the migrator's head (chmigrate.HeadVersion): the last migration, never the "__init__.py" row
+// the Python runner recorded, also when the chain after the baseline is empty.
+func TestBuildHeadIsTheMigratorsHead(t *testing.T) {
+	baseline, err := chmigrate.LoadBaseline()
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain, err := chmigrate.LoadChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := buildVersions(t).Head(), chmigrate.HeadVersion(baseline, chain); got != want {
+		t.Fatalf("build head %q, the migrator's head %q", got, want)
+	}
+}

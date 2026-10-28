@@ -221,7 +221,7 @@ func TestGoQualityQueueLookupIsPushOnlyReadOnlyAndFailsOpen(t *testing.T) {
 		t.Error("the queue lookup step must be continue-on-error: a lookup failure must run every leg, never fail the plan job")
 	}
 	run := asString(step["run"])
-	if !strings.Contains(run, `bash ci/queue_tested_sha.sh "${GITHUB_REPOSITORY}" "${GITHUB_SHA}" go-quality.yml 'go-quality-leg (' 'Run Go quality leg' 8`) {
+	if !strings.Contains(run, `bash ci/queue_tested_sha.sh "${GITHUB_REPOSITORY}" "${GITHUB_SHA}" go-quality.yml 'go-quality-leg (' 'Run Go quality leg' 10`) {
 		t.Error("the lookup must call the helper for the pushed sha with the go-quality leg arguments")
 	}
 	if !strings.Contains(run, "QUEUE_TESTED_RUN_ID_FILE=") || !strings.Contains(run, `*[!0-9]*) run_id="" ;;`) {

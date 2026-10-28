@@ -17,6 +17,7 @@ const (
 	plantGolden          = "internal/pgmigrate/testdata/golden/alias.json"
 	plantSource          = "internal/pgmigrate/alias_integration_test.go"
 	plantSource2         = "internal/api/health/frozen_python_test.go"
+	plantUnpinned        = "internal/pgmigrate/runner_test.go"
 )
 
 func sum(body string) string {
@@ -48,6 +49,7 @@ func squashRepo(t *testing.T) (string, string, Exemption) {
 		plantGolden:   "{}",
 		plantSource:   "package x\nvar _ = venueoracle.OpenGolden(t, a)\nvar _ = venueoracle.OpenGolden(t, b)\n",
 		plantSource2:  "package y\nvar _ = venueoracle.OpenGolden(t, c)\n",
+		plantUnpinned: "package x\n",
 		"other.txt":   "x",
 	} {
 		writeAt(t, repo, path, body)
@@ -238,6 +240,92 @@ func TestTheSquashExemptionWaivesOnlyItsOwnFindings(t *testing.T) {
 			git(t, repo, "commit", "-q", "-m", "one more change beside the squash")
 			if problems := gitHalf(t, repo, base, []Exemption{exemption}); len(problems) == 0 {
 				t.Errorf("the exemption hides %s", name)
+			}
+		})
+	}
+}
+
+// Every file the guard reads is an input of the exemption: a byte change, an added, deleted or renamed file in any
+// input class beside the squash is another change set, and the guard refuses it. Only a file the guard never reads
+// (other.txt) leaves the exemption matching.
+func TestEveryGuardInputChangeBesideTheSquashIsRefused(t *testing.T) {
+	type op struct{ write, body, remove, from, to string }
+	skip := "package x\nvar _ = venueoracle.OpenGolden(t, a)\nfunc f() { t.Skip() }\n"
+	for _, cell := range []struct {
+		name  string
+		ops   []op
+		clear bool
+	}{
+		{name: "manifest/count-preserving edit (a comment line)", ops: []op{{write: ManifestPath, body: "# note\n" + "file\t" + plantGolden + "\t" + sum("{}") + "\npins\t" + plantSource + "\t" + strings.Repeat("a", 64) + "\topens=1,finishes=0,skips=0\n" + "pins\t" + plantSource2 + "\t" + strings.Repeat("b", 64) + "\topens=1,finishes=0,skips=0\n"}}},
+		{name: "manifest/edited (a pins row dropped)", ops: []op{{write: ManifestPath, body: "file\t" + plantGolden + "\t" + sum("{}") + "\npins\t" + plantSource + "\t" + strings.Repeat("a", 64) + "\topens=1,finishes=0,skips=0\n"}}},
+		{name: "golden/edited", ops: []op{{write: plantGolden, body: "{\"x\":1}"}}},
+		{name: "golden/added", ops: []op{{write: "internal/pgmigrate/testdata/golden/new.json", body: "{}"}}},
+		{name: "golden/deleted", ops: []op{{remove: plantGolden}}},
+		{name: "golden/renamed", ops: []op{{from: plantGolden, to: "internal/pgmigrate/testdata/golden/alias2.json"}}},
+		{name: "waived source/edited (an extra t.Skip, opens unchanged)", ops: []op{{write: plantSource, body: skip}}},
+		{name: "waived source/count-preserving edit (a comment)", ops: []op{{write: plantSource, body: "package x\n// note\nvar _ = venueoracle.OpenGolden(t, a)\n"}}},
+		{name: "waived source/deleted", ops: []op{{remove: plantSource}}},
+		{name: "waived source/renamed", ops: []op{{from: plantSource, to: "internal/pgmigrate/alias2_integration_test.go"}}},
+		{name: "pinned source/edited (an extra t.Skip, opens unchanged)", ops: []op{{write: plantSource2, body: "package y\nvar _ = venueoracle.OpenGolden(t, c)\nfunc f() { t.Skip() }\n"}}},
+		{name: "pinned source/count-preserving edit (a comment)", ops: []op{{write: plantSource2, body: "package y\n// note\nvar _ = venueoracle.OpenGolden(t, c)\n"}}},
+		{name: "pinned source/deleted", ops: []op{{remove: plantSource2}}},
+		{name: "pinned source/renamed", ops: []op{{from: plantSource2, to: "internal/api/health/frozen_python2_test.go"}}},
+		{name: "unpinned source in a pinned dir/edited", ops: []op{{write: plantUnpinned, body: "package x\nconst pin = \"" + strings.Repeat("c", 64) + "\"\n"}}},
+		{name: "unpinned source in a pinned dir/count-preserving edit (a comment)", ops: []op{{write: plantUnpinned, body: "package x\n// note\n"}}},
+		{name: "unpinned source in a pinned dir/added", ops: []op{{write: "internal/pgmigrate/new_test.go", body: "package x\n"}}},
+		{name: "unpinned source in a pinned dir/deleted", ops: []op{{remove: plantUnpinned}}},
+		{name: "unpinned source in a pinned dir/renamed", ops: []op{{from: plantUnpinned, to: "internal/pgmigrate/runner2_test.go"}}},
+		{name: "baseline/edited", ops: []op{{write: plantBaseline, body: "new head, edited"}}},
+		{name: "baseline/added", ops: []op{{write: "internal/pgmigrate/baseline/extra.json", body: "{}"}}},
+		{name: "baseline/deleted", ops: []op{{remove: plantBaseline}}},
+		{name: "baseline/renamed", ops: []op{{from: plantBaseline, to: "internal/pgmigrate/baseline/head2.json"}}},
+		{name: "archive/edited", ops: []op{{write: plantArchiveSQL, body: "-- Revision 0139 (down_revision 0138)\n-- note\n"}}},
+		{name: "archive/added", ops: []op{{write: "internal/pgmigrate/archive/sql/0140_b.sql", body: "x"}}},
+		{name: "archive/deleted", ops: []op{{remove: plantArchiveSQL}}},
+		{name: "archive/renamed", ops: []op{{from: plantArchiveSQL, to: "internal/pgmigrate/archive/sql/0139_b.sql"}}},
+		{name: "archive manifest/count-preserving edit", ops: []op{{write: plantArchiveManifest, body: "0139\tabc\t0139_a.sql\n\n"}}},
+		{name: "control: a file the guard never reads", ops: []op{{write: "other.txt", body: "y"}}, clear: true},
+	} {
+		t.Run(cell.name, func(t *testing.T) {
+			repo, base, exemption := squashRepo(t)
+			before := gitHalf(t, repo, base, []Exemption{exemption})
+			if len(before) > 0 {
+				t.Fatalf("the squash change set itself is refused: %v", before)
+			}
+			data, err := os.ReadFile(filepath.Join(repo, ManifestPath))
+			if err != nil {
+				t.Fatal(err)
+			}
+			m, err := Parse(strings.NewReader(string(data)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, o := range cell.ops {
+				switch {
+				case o.write != "":
+					writeAt(t, repo, o.write, o.body)
+				case o.remove != "":
+					git(t, repo, "rm", "-q", o.remove)
+				default:
+					git(t, repo, "mv", o.from, o.to)
+				}
+			}
+			git(t, repo, "add", "-A")
+			git(t, repo, "commit", "-q", "-m", cell.name)
+			if data, err := os.ReadFile(filepath.Join(repo, ManifestPath)); err == nil {
+				if m, err = Parse(strings.NewReader(string(data))); err != nil {
+					t.Fatal(err)
+				}
+			}
+			problems, err := GitHalf(repo, base, m, []Exemption{exemption})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cell.clear && len(problems) > 0 {
+				t.Errorf("%s breaks the exemption: %v", cell.name, problems)
+			}
+			if !cell.clear && len(problems) == 0 {
+				t.Errorf("the exemption clears %s", cell.name)
 			}
 		})
 	}

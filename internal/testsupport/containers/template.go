@@ -295,11 +295,11 @@ func buildTemplate(ctx context.Context, server *sharedServer, name string, build
 // comment), indexes, constraints, triggers, functions (owner, grants,
 // comment), schemas (owner, grants, comment), default privileges, the
 // database's own owner, grants and comment, extensions with their versions,
-// sequences (last value and is_called), the exact row count of every table and
-// an md5 of the content of every table (its rows as text, in row-text order with
-// the C collation, a total order whatever the key, the column types or the
-// database collation). Definitions enter as md5
-// so a row stays short.
+// views and materialized views (md5 of pg_get_viewdef), large objects (their count and an md5 over
+// each one's owner, grants and content), sequences (last value and is_called), the exact row count
+// of every table and an md5 of the content of every table (its rows as text, in
+// row-text order with the C collation, a total order whatever the key, the column
+// types or the database collation). Definitions enter as md5 so a row stays short.
 const pgTemplateFingerprintQuery = `
 WITH rel AS (
   SELECT c.oid, c.relkind, n.nspname, c.relname, c.relowner, c.relacl, c.reloptions
@@ -331,6 +331,11 @@ UNION ALL SELECT 'default-acl ' || pg_get_userbyid(defaclrole) || ' ' || coalesc
          defaclobjtype::text || ' ' || defaclacl::text FROM pg_default_acl
 UNION ALL SELECT 'database-acl ' || pg_get_userbyid(datdba) || ' ' || coalesce(datacl::text, '') || ' ' ||
          coalesce(md5(shobj_description(oid, 'pg_database')), '') FROM pg_database WHERE datname = current_database()
+UNION ALL SELECT 'view-def ' || r.nspname || '.' || r.relname || ' ' || md5(pg_get_viewdef(r.oid)) FROM rel r WHERE r.relkind IN ('v', 'm')
+UNION ALL SELECT 'large-objects ' || 'n=' || count(*) || ' ' ||
+         coalesce(md5(string_agg(m.oid::text || ':' || pg_get_userbyid(m.lomowner) || ':' || coalesce(m.lomacl::text, '') || ':' || md5(lo_get(m.oid)),
+                                 ',' ORDER BY m.oid)), '')
+  FROM pg_largeobject_metadata m
 UNION ALL SELECT 'extension ' || extname || ' ' || extversion FROM pg_extension
 UNION ALL SELECT 'sequence ' || schemaname || '.' || sequencename || ' last=' ||
     (xpath('/row/l/text()', query_to_xml(format('SELECT last_value AS l FROM %I.%I', schemaname, sequencename), false, true, '')))[1]::text || ' called=' ||

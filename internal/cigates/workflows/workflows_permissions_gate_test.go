@@ -228,6 +228,7 @@ func TestWorkflowPermissionsGateRefusesEachDefectClass(t *testing.T) {
 		{"null at workflow level", mutation{testWf, topRead, "permissions:\n"}, "test.yml: workflow-level permissions is <nil>, not a mapping"},
 		{"deleted workflow-level block", mutation{testWf, topRead, ""}, "test.yml: no workflow-level permissions block"},
 		{"workflow block widened", mutation{testWf, topRead, "permissions:\n  contents: write\n"}, "test.yml: workflow-level permissions map[contents:write], want exactly contents: read"},
+		{"workflow block gains a scope", mutation{testWf, topRead, "permissions:\n  contents: read\n  packages: write\n"}, "test.yml: workflow-level permissions map[contents:read packages:write], want exactly contents: read"},
 		{"job block widened to write", mutation{testWf, jobRead, "    permissions:\n      contents: write\n    outputs:\n"}, "test.yml job changes: job-level permissions map[contents:write] grant a write scope that is not allowlisted"},
 		{"registry login in a read-only job", mutation{mirror, suiteRun, "      - name: Login\n        run: docker login ghcr.io\n" + suiteRun}, "mirror-test-images.yml job precheck-lib-test: a registry login in a job with no packages scope"},
 		{"login action in a read-only job", mutation{mirror, suiteRun, "      - uses: docker/login-action@v4\n" + suiteRun}, "mirror-test-images.yml job precheck-lib-test: a registry login in a job with no packages scope"},

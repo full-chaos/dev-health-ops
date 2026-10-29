@@ -224,6 +224,9 @@ func TestRunBlockLockPlants(t *testing.T) {
 		wantViolation(t, root, `catalog suite "river-frozen-evidence" is named by no lock row`)
 	})
 	t.Run("a workflow-level permissions change is a sha256 mismatch on the top row", func(t *testing.T) {
+		if v := strings.Join(violations(t, plantTree(t)), "\n"); strings.Contains(v, "sha256 mismatch") {
+			t.Fatalf("the unplanted tree must lock clean before the permissions plants mean anything:\n%s", v)
+		}
 		for name, to := range map[string]string{"scalar": "permissions: write-all\n", "widened": "permissions:\n  contents: write\n", "deleted": ""} {
 			root := plantTree(t)
 			edit(t, filepath.Join(root, ".github/workflows/test.yml"), func(s string) string {

@@ -697,7 +697,7 @@ func TestRefusedPlansAnswerTheirRefusal(t *testing.T) {
 	// writes is everything a refused change could write for org: both
 	// membership tables (every column that changes on a write), the audit rows
 	// and the outbox events naming the organization.
-	writes := func(org uuid.UUID) string {
+	writes := func(t *testing.T, org uuid.UUID) string {
 		t.Helper()
 		var out string
 		if err := e.admin.QueryRow(ctx, `SELECT concat_ws('|',
@@ -732,13 +732,16 @@ func TestRefusedPlansAnswerTheirRefusal(t *testing.T) {
 			return err
 		}, ErrDenied},
 	} {
-		before := writes(c.org)
-		if err := c.run(); !errors.Is(err, c.want) || errors.Is(err, ErrStore) {
-			t.Fatalf("%s = %v, want %v", c.name, err, c.want)
-		}
-		if after := writes(c.org); after != before {
-			t.Fatalf("%s wrote: before %q after %q", c.name, before, after)
-		}
+		t.Run(c.name, func(t *testing.T) {
+			before := writes(t, c.org)
+			// Both checks report on their own: the answer, then what was written.
+			if err := c.run(); !errors.Is(err, c.want) || errors.Is(err, ErrStore) {
+				t.Errorf("answer = %v, want %v", err, c.want)
+			}
+			if after := writes(t, c.org); after != before {
+				t.Errorf("wrote: before %q after %q", before, after)
+			}
+		})
 	}
 }
 

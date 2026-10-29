@@ -548,7 +548,8 @@ func (d *fenceDB) familiesT(t *testing.T, ctx context.Context) {
 	d.must(t, ctx, `INSERT INTO auth.principals (id, kind, display_name) VALUES ($1, 'service_account', 'fence sa'), ($2, 'workload', 'fence wl')`, saPrincipal, wlPrincipal)
 	org := fenceOrgID(0)
 	d.commit(t, ctx, "membership.created", 0, func(ctx context.Context, tx audit.TxOps) error {
-		_, err := tx.Exec(ctx, `INSERT INTO auth.memberships (organization_id, principal_id, role, status) VALUES ($1, $2, 'member', 'active')`, org, member)
+		_, err := tx.Exec(ctx, `INSERT INTO auth.memberships (id, organization_id, principal_id, role, status) VALUES ($1, $2, $3, 'member', 'active')`,
+			uuid.NewSHA1(uuid.NameSpaceURL, []byte("fence-membership")), org, member)
 		return err
 	})
 	d.commit(t, ctx, "service_account.created", 0, func(ctx context.Context, tx audit.TxOps) error {
@@ -559,7 +560,8 @@ func (d *fenceDB) familiesT(t *testing.T, ctx context.Context) {
 		_, err := tx.Exec(ctx, `INSERT INTO auth.workloads (principal_id, organization_id, name) VALUES ($1, $2, 'fence-wl')`, wlPrincipal, org)
 		return err
 	})
-	d.must(t, ctx, `INSERT INTO auth.link_credentials (principal_id, purpose, token_hash, expires_at) VALUES ($1, 'password_reset', decode(md5('fence-a') || md5('fence-b'), 'hex'), now() + interval '1 day')`, member)
+	d.must(t, ctx, `INSERT INTO auth.link_credentials (id, principal_id, purpose, token_hash, expires_at) VALUES ($1, $2, 'password_reset', decode(md5('fence-a') || md5('fence-b'), 'hex'), now() + interval '1 day')`,
+		uuid.NewSHA1(uuid.NameSpaceURL, []byte("fence-link-credential")), member)
 	d.commit(t, ctx, "user.created", 0, func(ctx context.Context, tx audit.TxOps) error {
 		_, err := tx.Exec(ctx, `INSERT INTO auth.users (principal_id, email, email_lower, password_hash, password_algorithm, password_updated_at)
 VALUES ($1, 'fence@example.invalid', 'fence@example.invalid', 'h1', 'argon2id', '2026-10-01T00:00:00Z')`, member)

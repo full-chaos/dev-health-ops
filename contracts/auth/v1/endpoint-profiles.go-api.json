@@ -6589,10 +6589,17 @@
       "accepted_credential_classes": [
         "external_push_ingest_token"
       ],
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/externalingest/auth.go:153): the push token row is read on every request, no cache; the feature decisions are read in the handler on every request (internal/api/externalingest/handlers.go:81)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the push token's organization; a missing, unknown, expired or revoked token answers 401 (internal/api/externalingest/auth.go:103; internal/api/externalingest/auth.go:124), a token without the route's scope answers 403 (internal/api/externalingest/auth.go:191)",
+      "gaps": [
+        "action: no catalog action is proven to equal the push token scope check (schema:read) (this leaf does not extend the vocabulary)",
+        "impersonation_policy: the organization comes from the push token row, not from the session; the Principal step leaves the caller anonymous on this row (internal/api/policy/principalonce.go:135; internal/api/policy/principalonce.go:139), so the organization-scope and impersonation middlewares set no organization and the handler reads none; exempt_no_org_context records that"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/external-ingest/availability [dev-health-ops-api @api]",
+      "impersonation_policy": "exempt_no_org_context",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -6625,6 +6632,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_credential: the push token's external_ingest_tokens row names the organization (internal/api/externalingest/auth.go:153)",
       "route": "/api/v1/external-ingest/availability",
       "service": "dev-health-ops-api",
       "source": {
@@ -6638,10 +6646,17 @@
       "accepted_credential_classes": [
         "external_push_ingest_token"
       ],
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/externalingest/auth.go:153): the push token row is read on every request, no cache; the customer push feature decision is read on every request (internal/api/externalingest/auth.go:195)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the push token's organization; a missing, unknown, expired or revoked token answers 401 (internal/api/externalingest/auth.go:103; internal/api/externalingest/auth.go:124), a token without the route's scope answers 403 (internal/api/externalingest/auth.go:191), and an organization without the customer push feature answers 403 (internal/api/externalingest/auth.go:203)",
+      "gaps": [
+        "action: no catalog action is proven to equal the push token scope check (ingest:status) (this leaf does not extend the vocabulary)",
+        "impersonation_policy: the organization comes from the push token row, not from the session; the Principal step leaves the caller anonymous on this row (internal/api/policy/principalonce.go:135; internal/api/policy/principalonce.go:139), so the organization-scope and impersonation middlewares set no organization and the handler reads none; exempt_no_org_context records that"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/external-ingest/batches [dev-health-ops-api @api]",
+      "impersonation_policy": "exempt_no_org_context",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -6674,6 +6689,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_credential: the push token's external_ingest_tokens row names the organization (internal/api/externalingest/auth.go:153)",
       "route": "/api/v1/external-ingest/batches",
       "service": "dev-health-ops-api",
       "source": {
@@ -6687,10 +6703,17 @@
       "accepted_credential_classes": [
         "external_push_ingest_token"
       ],
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/externalingest/auth.go:153): the push token row is read on every request, no cache; the customer push feature decision is read on every request (internal/api/externalingest/auth.go:195)",
+      "disclosure_behavior": "by-id route, behaviour today: a batch id that is unknown or belongs to another organization answers 404 (internal/api/externalingest/handlers.go:564), because the batch lookup is scoped to the push token's organization (internal/api/externalingest/status.go:183); a token without the ingest:status scope answers 403 (internal/api/externalingest/auth.go:191)",
+      "gaps": [
+        "action: no catalog action is proven to equal the push token scope check (ingest:status) (this leaf does not extend the vocabulary)",
+        "impersonation_policy: the organization comes from the push token row, not from the session; the Principal step leaves the caller anonymous on this row (internal/api/policy/principalonce.go:135; internal/api/policy/principalonce.go:139), so the organization-scope and impersonation middlewares set no organization and the handler reads none; exempt_no_org_context records that"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/external-ingest/batches/{ingestion_id} [dev-health-ops-api @api]",
+      "impersonation_policy": "exempt_no_org_context",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -6723,6 +6746,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_credential: the push token's external_ingest_tokens row names the organization (internal/api/externalingest/auth.go:153)",
       "route": "/api/v1/external-ingest/batches/{ingestion_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -7102,14 +7126,20 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
       },
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26), and an X-Org-Id organization the caller may not use answers 403 (internal/api/telemetry/telemetry.go:120)",
+      "gaps": [
+        "action: no catalog action is proven to equal the telemetry settings check; settings.read is the candidate (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "GET /api/v1/telemetry/status [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -7142,6 +7172,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization, an X-Org-Id organization the caller may use, or the impersonation target while a session is active (internal/api/telemetry/telemetry.go:85)",
       "route": "/api/v1/telemetry/status",
       "service": "dev-health-ops-api",
       "source": {
@@ -7204,14 +7235,20 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
       },
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
+      "gaps": [
+        "action: no catalog action covers the build identity read (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "GET /buildinfo [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "GET",
       "primary_validator": {
         "anchor": {
@@ -7244,6 +7281,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the guard requires an organization context (internal/api/policy/guard.go:115); the handler reads none (internal/api/buildinfo/buildinfo.go:33)",
       "route": "/buildinfo",
       "service": "dev-health-ops-api",
       "source": {
@@ -14526,10 +14564,17 @@
       "accepted_credential_classes": [
         "external_push_ingest_token"
       ],
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/externalingest/auth.go:153): the push token row is read on every request, no cache; the customer push feature decision is read on every request (internal/api/externalingest/auth.go:195)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the push token's organization; a missing, unknown, expired or revoked token answers 401 (internal/api/externalingest/auth.go:103; internal/api/externalingest/auth.go:124), a token without the route's scope answers 403 (internal/api/externalingest/auth.go:191), and an organization without the customer push feature answers 403 (internal/api/externalingest/auth.go:203)",
+      "gaps": [
+        "action: no catalog action is proven to equal the push token scope check (ingest:write) (this leaf does not extend the vocabulary)",
+        "impersonation_policy: the organization comes from the push token row, not from the session; the Principal step leaves the caller anonymous on this row (internal/api/policy/principalonce.go:135; internal/api/policy/principalonce.go:139), so the organization-scope and impersonation middlewares set no organization and the handler reads none; exempt_no_org_context records that"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/external-ingest/batches [dev-health-ops-api @api]",
+      "impersonation_policy": "exempt_no_org_context",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -14562,6 +14607,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_credential: the push token's external_ingest_tokens row names the organization (internal/api/externalingest/auth.go:153)",
       "route": "/api/v1/external-ingest/batches",
       "service": "dev-health-ops-api",
       "source": {
@@ -14575,10 +14621,17 @@
       "accepted_credential_classes": [
         "external_push_ingest_token"
       ],
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/externalingest/auth.go:153): the push token row is read on every request, no cache; the customer push feature decision is read on every request (internal/api/externalingest/auth.go:195)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the push token's organization; a missing, unknown, expired or revoked token answers 401 (internal/api/externalingest/auth.go:103; internal/api/externalingest/auth.go:124), a token without the route's scope answers 403 (internal/api/externalingest/auth.go:191), and an organization without the customer push feature answers 403 (internal/api/externalingest/auth.go:203)",
+      "gaps": [
+        "action: no catalog action is proven to equal the push token scope check (schema:read) (this leaf does not extend the vocabulary)",
+        "impersonation_policy: the organization comes from the push token row, not from the session; the Principal step leaves the caller anonymous on this row (internal/api/policy/principalonce.go:135; internal/api/policy/principalonce.go:139), so the organization-scope and impersonation middlewares set no organization and the handler reads none; exempt_no_org_context records that"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/external-ingest/validate [dev-health-ops-api @api]",
+      "impersonation_policy": "exempt_no_org_context",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -14611,6 +14664,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_credential: the push token's external_ingest_tokens row names the organization (internal/api/externalingest/auth.go:153)",
       "route": "/api/v1/external-ingest/validate",
       "service": "dev-health-ops-api",
       "source": {
@@ -14625,14 +14679,22 @@
         "legacy_ingest_api_key",
         "legacy_ingest_hmac_signature"
       ],
+      "action": null,
       "class_disambiguator": {
         "kind": "dedicated_header",
         "name": "X-API-Key"
       },
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: no authorization read (internal/api/legacyingest/auth.go:211): the configured API keys and signing secret are read from the environment on each request; no store read",
+      "disclosure_behavior": "no path resource id, behaviour today: a body that is not valid JSON answers 422, and one that is not UTF-8 answers 400, before the credential check (internal/api/legacyingest/legacyingest.go:161; internal/api/legacyingest/legacyingest.go:165), to any caller; a missing or wrong key or signature answers 401 (internal/api/legacyingest/auth.go:228); a JSON body that fails the route field validation answers 422 only after the credential check (internal/api/legacyingest/legacyingest.go:177)",
+      "gaps": [
+        "action: no catalog action is proven to equal the deployment-wide ingest key check (this leaf does not extend the vocabulary)",
+        "impersonation_policy: the organization comes from the body org_id, not from the session, and the handler reads no context organization; exempt_no_org_context records that",
+        "credential_binding: the deployment-wide ingest key and signing secret are not bound to an organization (internal/api/legacyingest/auth.go:211); the body org_id is used as given, so any holder of the key may write to any organization; it closes with a separate change that binds or retires the key, not in this leaf"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/ingest/commits [dev-health-ops-api @api]",
+      "impersonation_policy": "exempt_no_org_context",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -14665,6 +14727,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_body: the body org_id names the organization (internal/api/legacyingest/models.go:53) and keys the stream the batch is written to (internal/api/legacyingest/legacyingest.go:195); the configured key and signing secret carry no organization (internal/api/legacyingest/auth.go:211)",
       "route": "/api/v1/ingest/commits",
       "service": "dev-health-ops-api",
       "source": {
@@ -14679,14 +14742,22 @@
         "legacy_ingest_api_key",
         "legacy_ingest_hmac_signature"
       ],
+      "action": null,
       "class_disambiguator": {
         "kind": "dedicated_header",
         "name": "X-API-Key"
       },
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: no authorization read (internal/api/legacyingest/auth.go:211): the configured API keys and signing secret are read from the environment on each request; no store read",
+      "disclosure_behavior": "no path resource id, behaviour today: a body that is not valid JSON answers 422, and one that is not UTF-8 answers 400, before the credential check (internal/api/legacyingest/legacyingest.go:161; internal/api/legacyingest/legacyingest.go:165), to any caller; a missing or wrong key or signature answers 401 (internal/api/legacyingest/auth.go:228); a JSON body that fails the route field validation answers 422 only after the credential check (internal/api/legacyingest/legacyingest.go:177)",
+      "gaps": [
+        "action: no catalog action is proven to equal the deployment-wide ingest key check (this leaf does not extend the vocabulary)",
+        "impersonation_policy: the organization comes from the body org_id, not from the session, and the handler reads no context organization; exempt_no_org_context records that",
+        "credential_binding: the deployment-wide ingest key and signing secret are not bound to an organization (internal/api/legacyingest/auth.go:211); the body org_id is used as given, so any holder of the key may write to any organization; it closes with a separate change that binds or retires the key, not in this leaf"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/ingest/deployments [dev-health-ops-api @api]",
+      "impersonation_policy": "exempt_no_org_context",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -14719,6 +14790,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_body: the body org_id names the organization (internal/api/legacyingest/models.go:53) and keys the stream the batch is written to (internal/api/legacyingest/legacyingest.go:195); the configured key and signing secret carry no organization (internal/api/legacyingest/auth.go:211)",
       "route": "/api/v1/ingest/deployments",
       "service": "dev-health-ops-api",
       "source": {
@@ -14733,14 +14805,22 @@
         "legacy_ingest_api_key",
         "legacy_ingest_hmac_signature"
       ],
+      "action": null,
       "class_disambiguator": {
         "kind": "dedicated_header",
         "name": "X-API-Key"
       },
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: no authorization read (internal/api/legacyingest/auth.go:211): the configured API keys and signing secret are read from the environment on each request; no store read",
+      "disclosure_behavior": "no path resource id, behaviour today: a body that is not valid JSON answers 422, and one that is not UTF-8 answers 400, before the credential check (internal/api/legacyingest/legacyingest.go:161; internal/api/legacyingest/legacyingest.go:165), to any caller; a missing or wrong key or signature answers 401 (internal/api/legacyingest/auth.go:228); a JSON body that fails the route field validation answers 422 only after the credential check (internal/api/legacyingest/legacyingest.go:177)",
+      "gaps": [
+        "action: no catalog action is proven to equal the deployment-wide ingest key check (this leaf does not extend the vocabulary)",
+        "impersonation_policy: the organization comes from the body org_id, not from the session, and the handler reads no context organization; exempt_no_org_context records that",
+        "credential_binding: the deployment-wide ingest key and signing secret are not bound to an organization (internal/api/legacyingest/auth.go:211); the body org_id is used as given, so any holder of the key may write to any organization; it closes with a separate change that binds or retires the key, not in this leaf"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/ingest/incidents [dev-health-ops-api @api]",
+      "impersonation_policy": "exempt_no_org_context",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -14773,6 +14853,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_body: the body org_id names the organization (internal/api/legacyingest/models.go:53) and keys the stream the batch is written to (internal/api/legacyingest/legacyingest.go:195); the configured key and signing secret carry no organization (internal/api/legacyingest/auth.go:211)",
       "route": "/api/v1/ingest/incidents",
       "service": "dev-health-ops-api",
       "source": {
@@ -14787,14 +14868,22 @@
         "legacy_ingest_api_key",
         "legacy_ingest_hmac_signature"
       ],
+      "action": null,
       "class_disambiguator": {
         "kind": "dedicated_header",
         "name": "X-API-Key"
       },
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: no authorization read (internal/api/legacyingest/auth.go:211): the configured API keys and signing secret are read from the environment on each request; no store read",
+      "disclosure_behavior": "no path resource id, behaviour today: a body that is not valid JSON answers 422, and one that is not UTF-8 answers 400, before the credential check (internal/api/legacyingest/legacyingest.go:161; internal/api/legacyingest/legacyingest.go:165), to any caller; a missing or wrong key or signature answers 401 (internal/api/legacyingest/auth.go:228); a JSON body that fails the route field validation answers 422 only after the credential check (internal/api/legacyingest/legacyingest.go:177)",
+      "gaps": [
+        "action: no catalog action is proven to equal the deployment-wide ingest key check (this leaf does not extend the vocabulary)",
+        "impersonation_policy: the organization comes from the body org_id, not from the session, and the handler reads no context organization; exempt_no_org_context records that",
+        "credential_binding: the deployment-wide ingest key and signing secret are not bound to an organization (internal/api/legacyingest/auth.go:211); the body org_id is used as given, so any holder of the key may write to any organization; it closes with a separate change that binds or retires the key, not in this leaf"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/ingest/pull-requests [dev-health-ops-api @api]",
+      "impersonation_policy": "exempt_no_org_context",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -14827,6 +14916,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_body: the body org_id names the organization (internal/api/legacyingest/models.go:53) and keys the stream the batch is written to (internal/api/legacyingest/legacyingest.go:195); the configured key and signing secret carry no organization (internal/api/legacyingest/auth.go:211)",
       "route": "/api/v1/ingest/pull-requests",
       "service": "dev-health-ops-api",
       "source": {
@@ -14841,14 +14931,22 @@
         "legacy_ingest_api_key",
         "legacy_ingest_hmac_signature"
       ],
+      "action": null,
       "class_disambiguator": {
         "kind": "dedicated_header",
         "name": "X-API-Key"
       },
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: no authorization read (internal/api/legacyingest/auth.go:211): the configured API keys and signing secret are read from the environment on each request; no store read",
+      "disclosure_behavior": "no path resource id, behaviour today: a body that is not valid JSON answers 422, and one that is not UTF-8 answers 400, before the credential check (internal/api/legacyingest/legacyingest.go:161; internal/api/legacyingest/legacyingest.go:165), to any caller; a missing or wrong key or signature answers 401 (internal/api/legacyingest/auth.go:228); a JSON body that fails the route field validation answers 422 only after the credential check (internal/api/legacyingest/legacyingest.go:177)",
+      "gaps": [
+        "action: no catalog action is proven to equal the deployment-wide ingest key check (this leaf does not extend the vocabulary)",
+        "impersonation_policy: the organization comes from the body org_id, not from the session, and the handler reads no context organization; exempt_no_org_context records that",
+        "credential_binding: the deployment-wide ingest key and signing secret are not bound to an organization (internal/api/legacyingest/auth.go:211); the body org_id is used as given, so any holder of the key may write to any organization; it closes with a separate change that binds or retires the key, not in this leaf"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/ingest/telemetry [dev-health-ops-api @api]",
+      "impersonation_policy": "exempt_no_org_context",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -14881,6 +14979,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_body: the body org_id names the organization of the stored signal rows (internal/api/legacyingest/telemetry.go:101); the configured key and signing secret carry no organization (internal/api/legacyingest/auth.go:211)",
       "route": "/api/v1/ingest/telemetry",
       "service": "dev-health-ops-api",
       "source": {
@@ -14895,14 +14994,22 @@
         "legacy_ingest_api_key",
         "legacy_ingest_hmac_signature"
       ],
+      "action": null,
       "class_disambiguator": {
         "kind": "dedicated_header",
         "name": "X-API-Key"
       },
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: no authorization read (internal/api/legacyingest/auth.go:211): the configured API keys and signing secret are read from the environment on each request; no store read",
+      "disclosure_behavior": "no path resource id, behaviour today: a body that is not valid JSON answers 422, and one that is not UTF-8 answers 400, before the credential check (internal/api/legacyingest/legacyingest.go:161; internal/api/legacyingest/legacyingest.go:165), to any caller; a missing or wrong key or signature answers 401 (internal/api/legacyingest/auth.go:228); a JSON body that fails the route field validation answers 422 only after the credential check (internal/api/legacyingest/legacyingest.go:177)",
+      "gaps": [
+        "action: no catalog action is proven to equal the deployment-wide ingest key check (this leaf does not extend the vocabulary)",
+        "impersonation_policy: the organization comes from the body org_id, not from the session, and the handler reads no context organization; exempt_no_org_context records that",
+        "credential_binding: the deployment-wide ingest key and signing secret are not bound to an organization (internal/api/legacyingest/auth.go:211); the body org_id is used as given, so any holder of the key may write to any organization; it closes with a separate change that binds or retires the key, not in this leaf"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/ingest/work-items [dev-health-ops-api @api]",
+      "impersonation_policy": "exempt_no_org_context",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -14935,6 +15042,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_body: the body org_id names the organization (internal/api/legacyingest/models.go:53) and keys the stream the batch is written to (internal/api/legacyingest/legacyingest.go:195); the configured key and signing secret carry no organization (internal/api/legacyingest/auth.go:211)",
       "route": "/api/v1/ingest/work-items",
       "service": "dev-health-ops-api",
       "source": {
@@ -14992,14 +15100,20 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
       },
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26), and an X-Org-Id organization the caller may not use answers 403 (internal/api/telemetry/telemetry.go:120)",
+      "gaps": [
+        "action: no catalog action is proven to equal the telemetry settings check; settings.write is the candidate (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/telemetry/opt-in [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -15032,6 +15146,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization, an X-Org-Id organization the caller may use, or the impersonation target while a session is active (internal/api/telemetry/telemetry.go:85)",
       "route": "/api/v1/telemetry/opt-in",
       "service": "dev-health-ops-api",
       "source": {
@@ -15056,14 +15171,20 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
       },
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26), and an X-Org-Id organization the caller may not use answers 403 (internal/api/telemetry/telemetry.go:120)",
+      "gaps": [
+        "action: no catalog action is proven to equal the telemetry settings check; settings.write is the candidate (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/telemetry/opt-out [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -15096,6 +15217,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization, an X-Org-Id organization the caller may use, or the impersonation target while a session is active (internal/api/telemetry/telemetry.go:85)",
       "route": "/api/v1/telemetry/opt-out",
       "service": "dev-health-ops-api",
       "source": {
@@ -15120,14 +15242,20 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
+      "action": null,
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
       },
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26), and an X-Org-Id organization the caller may not use answers 403 (internal/api/telemetry/telemetry.go:120); a caller that is not a superuser, or a request in an active impersonation session, answers 403 (internal/api/telemetry/report.go:38)",
+      "gaps": [
+        "action: the route checks a platform role itself (internal/api/telemetry/report.go:35) and acts in one organization; no catalog action is proven to equal that check (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/telemetry/report [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -15160,6 +15288,7 @@
           "reachable_but_not_owner": true
         }
       ],
+      "resource_resolver": "organization_from_session: the caller's organization, an X-Org-Id organization the caller may use, or the impersonation target while a session is active (internal/api/telemetry/telemetry.go:85)",
       "route": "/api/v1/telemetry/report",
       "service": "dev-health-ops-api",
       "source": {
@@ -15179,10 +15308,16 @@
       "accepted_credential_classes": [
         "github_webhook_signature"
       ],
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: no authorization read (internal/api/webhookintake/github.go:35): the shared secret is read once when the handler is built",
+      "disclosure_behavior": "no path resource id, behaviour today: a missing X-GitHub-Event or X-GitHub-Delivery header answers 422 before the signature check (internal/api/webhookintake/github.go:46), and a missing or wrong signature answers 401 (internal/api/webhookintake/github.go:56)",
+      "gaps": [
+        "action: no catalog action covers the source provider webhook; the signature is its only credential (this leaf does not extend the vocabulary)"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/webhooks/github [dev-health-ops-api @api]",
+      "impersonation_policy": "exempt_no_org_context",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -15193,6 +15328,7 @@
         "description": "The webhook handler verifies the provider signature over the raw body before it enqueues."
       },
       "public_rationale": null,
+      "resource_resolver": "none: the provider signature is the only credential and the route resolves no organization; the payload's provider organization login is stored as given (internal/api/webhookintake/github.go:79)",
       "route": "/api/v1/webhooks/github",
       "service": "dev-health-ops-api",
       "source": {
@@ -15200,16 +15336,24 @@
         "line": 99
       },
       "surface_kind": "rest",
-      "tenant_requirement": "org_scoped"
+      "tenant_requirement": "none"
     },
     {
       "accepted_credential_classes": [
         "pagerduty_webhook_signature"
       ],
+      "action": null,
       "classification": "protected",
-      "gaps": [],
+      "current_state_cache_behavior": "none: per-request read (internal/api/webhookintake/pagerduty.go:60): the binding row and its encrypted signing secret are read on every delivery, no cache",
+      "disclosure_behavior": null,
+      "gaps": [
+        "action: no catalog action covers the incident provider webhook; the binding signature is its only credential (this leaf does not extend the vocabulary)",
+        "impersonation_policy: the organization comes from the binding row, not from the session; the Principal step leaves the caller anonymous on a webhook row (internal/api/policy/principalonce.go:127), so the organization-scope and impersonation middlewares set no organization and the handler reads none; exempt_no_org_context records that",
+        "disclosure_behavior: a by-id route, but an unknown, unreceivable or mismatched binding id answers the same 401 as a wrong signature (internal/api/webhookintake/pagerduty.go:625) after the same signature work (internal/api/webhookintake/pagerduty.go:617), not the 404 the by-id rule names; only a verified delivery to a binding in no handled status answers 404 (internal/api/webhookintake/pagerduty.go:558); recorded as found, no route changed"
+      ],
       "graphql_field_name": null,
       "id": "POST /api/v1/webhooks/pagerduty/{binding_id} [dev-health-ops-api @api]",
+      "impersonation_policy": "exempt_no_org_context",
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -15220,6 +15364,7 @@
         "description": "The PagerDuty webhook handler resolves the binding and verifies its stored signing secret over the raw body."
       },
       "public_rationale": null,
+      "resource_resolver": "organization_from_credential: the {binding_id} path segment names the pagerduty_webhook_bindings row whose stored signing secret is the credential and whose org_id is the organization (internal/api/webhookintake/pagerduty.go:60)",
       "route": "/api/v1/webhooks/pagerduty/{binding_id}",
       "service": "dev-health-ops-api",
       "source": {

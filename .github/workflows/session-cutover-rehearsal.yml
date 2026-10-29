@@ -27,6 +27,7 @@ on:
       - 'internal/auth/restorefence/**'
       - 'cmd/auth-migrate/restorefence*.go'
       - 'internal/auth/authruntime/runtime.go'
+      - 'internal/storage/postgres/authschema/migrations/0035_restore_fence.sql'
   workflow_dispatch:
     inputs:
       strict:

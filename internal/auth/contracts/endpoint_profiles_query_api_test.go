@@ -240,7 +240,7 @@ func TestSchemaStatesAbsentVersusNullOnEveryAdvisoryField(t *testing.T) {
 	}
 }
 
-const multiClassQueryAPIRows = 33
+const multiClassQueryAPIRows = 35
 
 func TestEveryMultiClassQueryAPIRowNamesASelectorTheRegistryHonours(t *testing.T) {
 	registry := realRegistry(t)

@@ -349,3 +349,41 @@ func TestEveryMintedValuePassesTheDevHealthGoClient(t *testing.T) {
 		t.Fatalf("the client sent a non-canonical value (%q, %v)", sent, err)
 	}
 }
+
+// TestBootstrapDirSyncFailureRegistersNothingAndLeavesNoFile: a value is
+// registered only once its out-file and the directory entry are durable; an
+// injected directory fsync failure refuses the verb before the store and
+// removes the file.
+func TestBootstrapDirSyncFailureRegistersNothingAndLeavesNoFile(t *testing.T) {
+	prev := syncDir
+	syncDir = func(string) error { return errors.New("injected directory fsync failure") }
+	defer func() { syncDir = prev }()
+	direct := filepath.Join(t.TempDir(), "direct")
+	if err := writeSecretFile(direct, "fcwlb_value"); err == nil {
+		t.Fatal("writeSecretFile ignored a directory fsync failure")
+	}
+	if _, err := os.Lstat(direct); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("the file of a failed directory fsync was kept")
+	}
+	for _, verb := range []string{"bootstrap-create", "bootstrap-rotate"} {
+		store := &fakeBootstrap{}
+		out := filepath.Join(t.TempDir(), "value")
+		args := []string{verb, "-workload", "api", "-out", out, "-apply"}
+		if verb == "bootstrap-rotate" {
+			args = append(args, "-overlap", "5m")
+		}
+		var stderr bytes.Buffer
+		if code := runBootstrap(t.Context(), store, mustParse(t, args...), io.Discard, &stderr); code != 1 {
+			t.Fatalf("%s exit = %d, want 1", verb, code)
+		}
+		if store.writes != 0 {
+			t.Fatalf("%s registered a value whose directory entry is not durable", verb)
+		}
+		if _, err := os.Lstat(out); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s kept the out-file", verb)
+		}
+		if !strings.Contains(stderr.String(), "nothing was registered") {
+			t.Fatalf("%s stderr = %q", verb, stderr.String())
+		}
+	}
+}

@@ -26,6 +26,20 @@ type bootstrapStore interface {
 
 var errOutExists = errors.New("the -out path exists")
 
+// syncDir makes a new entry in dir durable: open, fsync and close, each error
+// returned.
+var syncDir = func(dir string) error {
+	d, err := os.Open(dir) // #nosec G304 -- the operator-chosen output path's directory
+	if err != nil {
+		return err
+	}
+	serr := d.Sync()
+	if cerr := d.Close(); serr == nil {
+		serr = cerr
+	}
+	return serr
+}
+
 // writeSecretFile creates path (it must not exist; a symlink there is not
 // followed) with mode 0600 whatever the umask, writes value with no newline
 // and syncs the file and its directory.
@@ -54,10 +68,7 @@ func writeSecretFile(path, value string) (err error) {
 	if err := f.Sync(); err != nil {
 		return errors.New("the -out file could not be synced")
 	}
-	if d, err := os.Open(filepath.Dir(path)); err == nil {
-		_ = d.Sync()
-		_ = d.Close()
-	}
+	_ = syncDir(filepath.Dir(path))
 	return nil
 }
 

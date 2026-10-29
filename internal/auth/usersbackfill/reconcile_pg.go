@@ -51,8 +51,7 @@ func (t TxTarget) Page(ctx context.Context, after *uuid.UUID, limit int) ([]Auth
 	rows, err := t.Tx.Query(ctx, `SELECT p.id, p.kind, u.principal_id IS NOT NULL,
        COALESCE(u.email, ''), COALESCE(u.email_lower, ''), p.disabled_at IS NULL, u.email_verified_at IS NOT NULL,
        u.password_hash, COALESCE(u.legacy_token_version, 0), u.last_login_at, p.display_name,
-       EXISTS (SELECT 1 FROM `+q+`.platform_role_assignments r WHERE r.principal_id = p.id AND r.role_key = $3
-               AND (r.expires_at IS NULL OR r.expires_at > statement_timestamp())),
+       `+identity.PlatformRoleHeldSQL(q, "p.id", "$3")+`,
        EXISTS (SELECT 1 FROM `+q+`.platform_role_assignments r WHERE r.principal_id = p.id AND r.role_key = $3 AND r.granted_by IS NULL),
        (SELECT COALESCE(jsonb_agg(jsonb_build_array(e.issuer, e.provider, e.subject) ORDER BY e.issuer, e.provider, e.subject), '[]'::jsonb)
           FROM `+q+`.external_identities e WHERE e.principal_id = p.id)

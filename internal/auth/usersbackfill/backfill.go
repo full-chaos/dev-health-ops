@@ -121,8 +121,17 @@ func (r Report) Lines() []string {
 		fmt.Sprintf("platform_role_granted=%d", r.RoleGranted),
 		fmt.Sprintf("platform_role_revoked=%d", r.RoleRevoked),
 		fmt.Sprintf("platform_role_skipped_owned=%d", r.RoleSkippedOwned),
-		fmt.Sprintf("skipped=%d", r.SkippedTotal()),
+		fmt.Sprintf("platform_role_expired_granted=%d", len(r.ExpiredGranted)),
 	}
+	expired := make([]string, 0, len(r.ExpiredGranted))
+	for _, id := range r.ExpiredGranted {
+		expired = append(expired, id.String())
+	}
+	sort.Strings(expired)
+	for _, id := range expired {
+		lines = append(lines, "platform_role_expired_granted.assignment="+id)
+	}
+	lines = append(lines, fmt.Sprintf("skipped=%d", r.SkippedTotal()))
 	classes := make([]string, 0, len(r.Skipped))
 	for c := range r.Skipped {
 		classes = append(classes, c)
@@ -210,6 +219,9 @@ func Run(ctx context.Context, src Source, sink Sink, opts Options) (Report, erro
 			}
 			if res.RoleSkipped {
 				rep.RoleSkippedOwned++
+			}
+			if res.RoleExpiredGranted != nil {
+				rep.ExpiredGranted = append(rep.ExpiredGranted, *res.RoleExpiredGranted)
 			}
 		}
 		last := rows[len(rows)-1].ID

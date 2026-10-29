@@ -1001,3 +1001,30 @@ func TestPostureIntegrationStubRunTriesEveryDirWhenRemovalFails(t *testing.T) {
 		t.Fatalf("%d removal failures reported, want 4 (the worktree dir and the three made dirs): stderr=%q", n, res.stderr)
 	}
 }
+
+// A relative TMPDIR that starts with "-" must not turn the script's own paths into options: the dirs are made, used and
+// removed, on a pass and on a failing exit.
+func TestPostureIntegrationStubRunHandlesADashRelativeTmpdir(t *testing.T) {
+	f := postureDemo(t)
+	scratch := filepath.Join(f.dir, "-scratch")
+	if err := os.Mkdir(scratch, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	makeWritable(t, scratch)
+	if err := os.WriteFile(filepath.Join(f.dir, ".git", "info", "exclude"), []byte("/-scratch\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, env := postureTmpEnv(t)
+	env = append(withoutEnv(env, "TMPDIR"), "TMPDIR=-scratch")
+	pass := append(append([]string{}, env...), "PATH="+filepath.Dir(goBinary(t))+string(os.PathListSeparator)+"/usr/bin:/bin")
+	res := postureStubRun(t, f, "#!/bin/sh\nshift 5\nexec \"$@\"\n", pass)
+	if res.code != 5 {
+		t.Fatalf("stub run: exit %d stdout=%q stderr=%q, want exit 5", res.code, res.stdout, res.stderr)
+	}
+	requireEmptyDir(t, scratch, "a dash-relative TMPDIR after a pass")
+	res = postureStubRun(t, f, "#!/bin/sh\nexit 0\n", append(append([]string{}, env...), "PATH=/usr/bin:/bin"))
+	if res.code != 3 || !strings.Contains(res.stderr, "go not found") {
+		t.Fatalf("no go on PATH: exit %d stderr=%q, want exit 3 and go not found", res.code, res.stderr)
+	}
+	requireEmptyDir(t, scratch, "a dash-relative TMPDIR after a failing exit")
+}

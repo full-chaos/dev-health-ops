@@ -205,6 +205,9 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedI
 			}
 			report.FloorsRaised = tag.RowsAffected()
 			for _, s := range sections {
+				if m == nil && s.manifestOnly {
+					continue
+				}
 				rows := []Row{}
 				if m != nil {
 					for _, ms := range m.Sections {

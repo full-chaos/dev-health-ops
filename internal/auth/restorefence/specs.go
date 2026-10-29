@@ -50,10 +50,15 @@ type section struct {
 	active  string
 	// touch sets updated_at on a changed row.
 	touch bool
+	// manifestOnly marks a section that runs only with a manifest: with no manifest (the blind margin) nothing is
+	// known about which rows the source kept, and a presence section would remove every row.
+	manifestOnly bool
 	// action is the operator action a report section (and the counter section)
 	// raises for the ids it names.
 	action ActionKind
 }
+
+func (s section) runsWithoutManifest() bool { return !s.manifestOnly }
 
 func (s section) qualified(schema authschema.ValidatedIdentifier) string {
 	if s.legacy {
@@ -128,6 +133,9 @@ var sections = []section{
 		cols: []column{colTS("revoked_at"), colText("status")}, revoked: "s.revoked_at IS NOT NULL", active: "t.revoked_at IS NULL", touch: true},
 	{name: "public.org_invites", legacy: true, table: "org_invites", kind: kindRevoke, key: colUUID("id"),
 		cols: []column{colText("status"), colTS("accepted_at")}, revoked: "s.status <> 'pending'", active: "t.status = 'pending'", touch: true},
+	// The legacy membership mirror (D6358: a public row means an active member): a mirror row deleted after the
+	// target is deleted again; a row the source still holds is left alone.
+	{name: "public.memberships", legacy: true, table: "memberships", kind: kindPresence, key: colUUID("id"), manifestOnly: true},
 	{name: "public.users", legacy: true, table: "users", kind: kindCounter, key: colUUID("id"),
 		cols: []column{{name: "is_active", pgType: "boolean"}, {name: "token_version", pgType: "integer"}}, revoked: "s.token_version > 0 OR NOT s.is_active", touch: true,
 		action: ActionForcePasswordReset},

@@ -95,6 +95,9 @@ func execute(
 	if len(args) > 0 && args[0] == "workloads" {
 		return executeWorkloads(parent, args[1:], lookup, stdout, stderr)
 	}
+	if len(args) > 0 && args[0] == "platform-role-bootstrap" {
+		return executePlatformRoleBootstrap(parent, args[1:], lookup, stdout, stderr)
+	}
 	grantsOnly := len(args) > 0 && args[0] == "grants"
 	if grantsOnly {
 		args = args[1:]

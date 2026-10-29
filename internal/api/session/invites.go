@@ -81,6 +81,23 @@ func inviteEmailRefusal(invite *pendingInvite, user *userRow) string {
 // new membership, or errInviteRefused when the user already belongs to
 // the organization.
 func (h handlers) acceptInvite(ctx context.Context, tx pgx.Tx, invite *pendingInvite, userID uuid.UUID, now time.Time) (uuid.UUID, error) {
+	// The auth lock order (internal/auth/membership readPairs): the users rows
+	// the INSERT's foreign keys check (the account, the inviter) FOR KEY SHARE,
+	// one row per statement in id order (the text order of the lowercase uuid
+	// is Postgres's uuid order), before the INSERT checks them in its own
+	// trigger order.
+	referenced := []uuid.UUID{userID}
+	if invite.InvitedByID != nil && *invite.InvitedByID != userID {
+		referenced = append(referenced, *invite.InvitedByID)
+		if referenced[1].String() < referenced[0].String() {
+			referenced[0], referenced[1] = referenced[1], referenced[0]
+		}
+	}
+	for _, id := range referenced {
+		if _, err := tx.Exec(ctx, `SELECT 1 FROM users WHERE id = $1::uuid FOR KEY SHARE`, id); err != nil {
+			return uuid.UUID{}, err
+		}
+	}
 	var member bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM memberships WHERE org_id = $1::uuid AND user_id = $2::uuid)`,
 		invite.OrgID, userID).Scan(&member); err != nil {

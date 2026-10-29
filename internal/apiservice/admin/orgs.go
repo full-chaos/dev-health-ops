@@ -464,7 +464,19 @@ func (h *handlers) addMember(w http.ResponseWriter, r *http.Request) {
 		invitedByID = &id
 	}
 	h.superuserGuardedWrite(ctx, w, user, nil, "add_member", func(g *superuserTx) func() {
+		// The auth lock order (internal/auth/membership readPairs): the
+		// inviter's users row FOR KEY SHARE (the INSERT's foreign key check)
+		// and the target's FOR UPDATE, one row per statement in id order
+		// (the text order of the lowercase uuid is Postgres's uuid order),
+		// before any other lock.
+		inviterFirst := invitedByID != nil && invitedByID.String() < targetUserID.String()
+		if inviterFirst && !g.keyShare(*invitedByID) {
+			return nil
+		}
 		if g.refuse(targetUserID) {
+			return nil
+		}
+		if invitedByID != nil && invitedByID.String() > targetUserID.String() && !g.keyShare(*invitedByID) {
 			return nil
 		}
 		created, err := g.store.insertMembership(ctx, orgID, targetUserID, role, invitedByID)

@@ -48,7 +48,7 @@ func (r *OrgRemoval) Referenced() []uuid.UUID {
 }
 
 // LockPrincipals takes the auth.principals rows of ids FOR KEY SHARE, in id
-// order: step 1 of the one lock order, for a caller that inserts rows naming
+// order: step 1 of the auth lock order (readPairs), for a caller that inserts rows naming
 // them after it locks the organization. A membership verb holding one FOR
 // UPDATE is waited for here, never after the organization row.
 func (s *Store) LockPrincipals(ctx context.Context, tx audit.TxOps, ids []uuid.UUID) error {

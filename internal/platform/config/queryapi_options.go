@@ -92,6 +92,11 @@ var queryAPIOptions = func() []Option {
 			Usage: "audience of the edge JWT the proof route verifies",
 		},
 		{
+			Flag: "access-token-issuer", Env: "AUTH_ACCESS_TOKEN_ISSUER", Kind: KindString,
+			Services: q, Group: GroupRoutes,
+			Usage: "https issuer of EdDSA user access tokens (go-api's value): set, the REST, /query and /graphql routes validate the edge and user access tokens by their endpoint-profile row against its JWKS; unset, they do not",
+		},
+		{
 			Flag: "drilldown-issues-enabled", Env: "GO_API_DRILLDOWN_ISSUES_ENABLED", Kind: KindBool,
 			Default: "false", Services: q, Group: GroupRoutes,
 			Usage: "enable the drilldown issues route (default off; it also needs its dependencies configured, or it stays unmounted)",

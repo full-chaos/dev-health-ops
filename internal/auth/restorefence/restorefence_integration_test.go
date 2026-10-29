@@ -524,31 +524,27 @@ func TestTheTimelineProbePostureAndValue(t *testing.T) {
 	}
 }
 
-// The probe reads the WAL position; a definer that is not a superuser must be
-// able to. If this fails the migration role needs a grant the deployment does
-// not give.
-func TestTheWalFunctionsAreCallableByAnOrdinaryRole(t *testing.T) {
+// The probe runs with its owner's rights. In a deployment the owner is the
+// migration role, which need not be a superuser: with an ordinary role as the
+// owner the runtime role must still read the timeline through the function. If
+// this fails, the migration role needs a grant the deployment does not give.
+func TestTheProbeWorksWhenAnOrdinaryRoleOwnsIt(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	db := newFenceDB(t, ctx)
-	role := db.runtimeRole + "_plain"
-	if _, err := db.admin.Exec(ctx, fmt.Sprintf(`CREATE ROLE %q NOSUPERUSER`, role)); err != nil {
+	owner := db.runtimeRole + "_owner"
+	if _, err := db.admin.Exec(ctx, fmt.Sprintf(`CREATE ROLE %q NOSUPERUSER`, owner)); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { containers.DropRole(db.admin, role, t.Logf) })
-	conn, err := db.admin.Acquire(ctx)
-	if err != nil {
+	t.Cleanup(func() { containers.DropRole(db.admin, owner, t.Logf) })
+	if _, err := db.admin.Exec(ctx, fmt.Sprintf(`ALTER FUNCTION auth.restore_fence_timeline() OWNER TO %q`, owner)); err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Release()
-	if _, err := conn.Exec(ctx, fmt.Sprintf(`SET ROLE %q`, role)); err != nil {
-		t.Fatal(err)
+	var timeline *int64
+	if err := db.runtime.QueryRow(ctx, `SELECT auth.restore_fence_timeline()`).Scan(&timeline); err != nil {
+		t.Fatalf("the runtime role cannot call the probe owned by an ordinary role: %v", err)
 	}
-	var name string
-	if err := conn.QueryRow(ctx, `SELECT pg_walfile_name(pg_current_wal_insert_lsn())`).Scan(&name); err != nil {
-		t.Fatalf("an ordinary role cannot read the WAL position: %v", err)
-	}
-	if len(name) != 24 {
-		t.Fatalf("WAL file name %q", name)
+	if timeline == nil || *timeline < 1 {
+		t.Fatalf("timeline = %v", timeline)
 	}
 }

@@ -59,6 +59,13 @@ func TestTheTimelineProbeIsTheOnlyDefinerFunctionAndNarrow(t *testing.T) {
 			t.Errorf("the definer body holds %q: it may only compute the timeline id", forbidden)
 		}
 	}
+	// pg_walfile_name raises on a standby: the probe answers NULL there, before
+	// it reads the WAL, and a NULL timeline is never "fenced".
+	recovery := strings.Index(body, "PG_IS_IN_RECOVERY()")
+	wal := strings.Index(body, "PG_WALFILE_NAME")
+	if recovery < 0 || wal < 0 || recovery > wal || !strings.Contains(body, "RETURN NULL") {
+		t.Error("the probe must return NULL while the server is in recovery, before it reads the WAL position")
+	}
 	if strings.Count(strings.ToUpper(sql), "CREATE FUNCTION") != 1 {
 		t.Error("migration 0032 creates another function")
 	}

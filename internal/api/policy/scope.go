@@ -212,12 +212,12 @@ func (a *Authenticator) Membership(ctx context.Context, userID, orgID string) (s
 	return role, member, err
 }
 
-// Impersonation is ImpersonationMiddleware. For a caller whose token claims
-// superuser and whose users row confirms it, an active session makes the
-// target's org the request's org, sets the impersonation context, and
-// stamps X-Impersonating / X-Impersonated-User-Id on the response. A
-// session lookup failure refuses the request with the generic 500, like the
-// other authorization lookups (fail closed, logged).
+// Impersonation is ImpersonationMiddleware. For a caller mayImpersonate lets
+// in whose users row says superuser, an active session makes the target's
+// org the request's org, sets the impersonation context, and stamps
+// X-Impersonating / X-Impersonated-User-Id on the response. A session
+// lookup failure refuses the request with the generic 500, like the other
+// authorization lookups (fail closed, logged).
 func (s *Scope) Impersonation(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Every path below that calls next has decided; the refusals return

@@ -4,9 +4,14 @@ package policy
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
@@ -78,6 +83,41 @@ func TestUserStateAuthReadErrorIsStoreUnavailableWhileOwned(t *testing.T) {
 		got, ok, err := read(on, ctx, id)
 		if err == nil || MissingGrant(err) == "" || ok || got {
 			t.Errorf("%s: superuser %v ok %v err %v, want the grant error", name, got, ok, err)
+		}
+	}
+}
+
+// While owned, a newly assigned admin whose legacy token still carries
+// is_superuser false enters the impersonation check (the live assignment
+// decides) and is served the active session; off, the claim alone decides.
+func TestImpersonationGateReadsTheAssignmentWhileOwned(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	env := platformroleseam.Start(ctx, t, true)
+	if _, err := env.Admin.Exec(ctx, fmt.Sprintf(`GRANT SELECT ON public.impersonation_sessions TO %q`, env.ReaderRole)); err != nil {
+		t.Fatal(err)
+	}
+	admin := env.User(ctx, t, false, true)
+	target := env.User(ctx, t, false, false)
+	org := env.Member(ctx, t, target, "member")
+	pgseed.ImpersonationSession(ctx, t, env.Admin, uuid.NewString(), admin.String(), target.String(), org.String(), "member", time.Now().Add(time.Hour), nil)
+	token := sign(t, claims(func(c jwt.MapClaims) { c["sub"] = admin.String() }))
+	for owned, impersonated := range map[bool]string{true: target.String(), false: ""} {
+		auth := authenticator(t, PGStore{Pool: env.Reader, AuthSchema: "auth", PlatformRolesOwned: owned})
+		scope := NewScope(auth, quiet())
+		server := httptest.NewServer(scope.Principal(scope.OrgScope(scope.Impersonation(echo))))
+		request, _ := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/x", nil)
+		request.Header.Set("Authorization", "Bearer "+token)
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			server.Close()
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		server.Close()
+		if response.StatusCode != http.StatusOK || response.Header.Get("X-Impersonated-User-Id") != impersonated {
+			t.Errorf("owned %v: %d %s impersonated %q, want %q", owned, response.StatusCode, body, response.Header.Get("X-Impersonated-User-Id"), impersonated)
 		}
 	}
 }

@@ -10,7 +10,7 @@ func init() {
 		BaseManifestSHA256:    "79ffd4e60d3831026afbde6a987d862b382832039a43aae3657a4949c8ee1ca1",
 		BaseHeadJSONSHA256:    "d2fcd166d6f4c2e81d98c55cdc31bac41a3366170d976ffaa95beeac01f18ce2",
 		ArchiveManifestSHA256: "518cf1b5fbb584bb6aeca817d0cd5fb0e32984730cf92324037cd3ea893c7ab4",
-		ContentSHA256:         "a05beb4eca5936df3b9148a3c6296a468450f3c8d3d5f2948088e7671a50b499",
+		ContentSHA256:         "c9865d973c3eaa9b1884017d07f2e59a6487a6e57f1ca7d718159906ab5d8e76",
 		WaivedBelowBase: []string{
 			"internal/pgmigrate/alias_integration_test.go: a test source the base manifest pins is missing",
 			"internal/pgmigrate/baseline_integration_test.go: golden-open calls went from 1 to 0 against the base",

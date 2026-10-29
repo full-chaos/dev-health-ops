@@ -1,0 +1,21 @@
+{
+  "accepted_credential_classes": [
+    "kubernetes_sa_token_exchange",
+    "workload_bootstrap_credential"
+  ],
+  "action": "acr.context.read",
+  "cache_class": "decision_bound",
+  "class_disambiguator": {
+    "kind": "subject_token_type",
+    "name": "urn:dev-health:params:oauth:token-type:workload-bootstrap"
+  },
+  "classification": "protected",
+  "current_state_required": false,
+  "denial_disclosure": "forbidden",
+  "impersonation": "denied",
+  "method": "POST",
+  "resource_resolver": "credential_claim",
+  "route": "/internal/v1/token/exchange",
+  "schema_version": "endpoint-auth-profile.v1",
+  "tenant_requirement": "active_membership"
+}

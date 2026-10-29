@@ -28,7 +28,7 @@ type AuthRow struct {
 	TokenVersion int64
 	LastLoginAt  *time.Time
 	DisplayName  string
-	// RoleHeld is any platform_admin assignment; RoleBackfilled one with no granter.
+	// RoleHeld is a platform_admin assignment that has not expired; RoleBackfilled one with no granter, expired or not.
 	RoleHeld       bool
 	RoleBackfilled bool
 	// Identities are every auth.external_identities row of the principal.

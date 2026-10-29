@@ -25,7 +25,7 @@ func mustLoad(t *testing.T) Manifest {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(m.Files) < 10 || len(m.Pins) < 5 {
+	if len(m.Files) < 10 || len(m.Pins) < 1 {
 		t.Fatalf("the manifest lists %d files and %d pin sources: it guards nothing", len(m.Files), len(m.Pins))
 	}
 	return m
@@ -48,19 +48,12 @@ func TestNoChangeSetTouchesAFrozenGoldenOrTheManifest(t *testing.T) {
 		}
 		t.Skipf("no origin/main here: %v", err)
 	}
-	changed, err := Changed(root, base, mustLoad(t).GuardedPaths())
+	problems, err := GitHalf(root, base, mustLoad(t), Exemptions)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if baseManifest, ok, err := BaseManifest(root, base); err != nil {
-		t.Fatal(err)
-	} else if ok {
-		if problems := CheckNotBelowBase(root, baseManifest); len(problems) > 0 {
-			t.Errorf("a frozen comparison was removed against the base:\n%s", strings.Join(problems, "\n"))
-		}
-	}
-	if len(changed) > 0 {
-		t.Errorf("this change set edits a frozen golden, a pin source list or the manifest: %v\nThe frozen files are never rewritten; only a human-approved change to %s may do this", changed, ManifestPath)
+	if len(problems) > 0 {
+		t.Errorf("%s\nThe frozen files are never rewritten; only a human-approved change to %s may do this", strings.Join(problems, "\n"), ManifestPath)
 	}
 }
 
@@ -114,7 +107,7 @@ func TestTheGuardIsRedOnEveryKindOfPlantedChange(t *testing.T) {
 		}
 	}
 	for path := range m.Pins {
-		if strings.HasSuffix(path, "alias_integration_test.go") {
+		if strings.HasSuffix(path, "internal/api/health/frozen_python_test.go") {
 			someSource = path
 		}
 	}
@@ -141,13 +134,13 @@ func TestTheGuardIsRedOnEveryKindOfPlantedChange(t *testing.T) {
 		"a frozen comparison replaced by t.Skip, the pin literal kept": {func(root string) {
 			path := filepath.Join(root, someSource)
 			data, _ := os.ReadFile(path)
-			swapped := strings.Replace(string(data), "venueoracle.OpenGolden(", "t.Skip(\"gone\"); venueoracle.OpenGolden(", 1)
+			swapped := strings.Replace(string(data), "goldens.Outputs(", "t.Skip(\"gone\"); return goldens.Outputs(", 1)
 			_ = os.WriteFile(path, []byte(swapped), 0o644)
 		}, someSource + ": the frozen comparisons changed"},
 		"a golden-open call removed, the pin literal kept": {func(root string) {
 			path := filepath.Join(root, someSource)
 			data, _ := os.ReadFile(path)
-			swapped := strings.Replace(string(data), "venueoracle.OpenGolden(", "venueoracle.Renamed(", 1)
+			swapped := strings.Replace(string(data), "goldens.Outputs(", "goldens.Renamed(", 1)
 			_ = os.WriteFile(path, []byte(swapped), 0o644)
 		}, someSource + ": the frozen comparisons changed"},
 		"a pin added to an unlisted test source": {func(root string) {

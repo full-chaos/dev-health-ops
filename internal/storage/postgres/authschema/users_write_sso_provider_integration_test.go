@@ -71,31 +71,31 @@ func TestUsersOwnedApplyGrantsTheSSOProviderInsert(t *testing.T) {
 	}
 }
 
-// TestUsersOwnedApplyDefersTheSSOProviderInsertBefore0155: on an ops schema at revision 0154 (no
-// users.sso_provider_id), Apply with users-owned passes and reports the write grant of the column DEFERRED; the
+// TestUsersOwnedApplyDefersTheSSOProviderInsertBefore0155: on an ops schema without users.sso_provider_id (the state
+// before revision 0155, built as the head with the column dropped), Apply with users-owned passes and reports the write grant of the column DEFERRED; the
 // posture check holds it PENDING (no error, no violation); the grants pass refuses and names the column.
 func TestUsersOwnedApplyDefersTheSSOProviderInsertBefore0155(t *testing.T) {
 	f := newOrderFixture(t)
-	f.dhoMigrateThrough(t, "0154")
+	f.dhoMigrateWithoutSSOProviderColumn(t)
 	logs, err := f.applyUsersOwned(t, true, "")
 	if err != nil {
-		t.Fatalf("Apply users-owned at ops revision 0154: %v", err)
+		t.Fatalf("Apply users-owned without users.sso_provider_id: %v", err)
 	}
 	if !strings.Contains(logs, "users-owned write grant DEFERRED") || !strings.Contains(logs, "column=sso_provider_id") {
-		t.Fatalf("Apply at 0154 did not report the sso_provider_id write grant as DEFERRED:\n%s", logs)
+		t.Fatalf("Apply without the column did not report the sso_provider_id write grant as DEFERRED:\n%s", logs)
 	}
 	var postureLogs bytes.Buffer
 	violations, err := VerifyRuntimePosture(f.ctx, orderConnect(t, f.ctx, f.uri), Options{Schema: "auth", RuntimeRole: f.role, UsersOwned: true,
 		Logger: slog.New(slog.NewTextHandler(&postureLogs, nil))})
 	if err != nil {
-		t.Fatalf("posture check at 0154: %v", err)
+		t.Fatalf("posture check without the column: %v", err)
 	}
 	if !strings.Contains(postureLogs.String(), "users-owned write grant PENDING") || !strings.Contains(postureLogs.String(), "column=sso_provider_id") {
-		t.Fatalf("posture check at 0154 did not log the sso_provider_id write grant as PENDING:\n%s", postureLogs.String())
+		t.Fatalf("posture check without the column did not log the sso_provider_id write grant as PENDING:\n%s", postureLogs.String())
 	}
 	for _, v := range violations {
 		if strings.Contains(v.Object, "sso_provider_id") {
-			t.Fatalf("posture check at 0154 named %+v; want the column PENDING", v)
+			t.Fatalf("posture check without the column named %+v; want the column PENDING", v)
 		}
 	}
 	pool, err := pgxpool.New(f.ctx, f.uri)
@@ -105,7 +105,7 @@ func TestUsersOwnedApplyDefersTheSSOProviderInsertBefore0155(t *testing.T) {
 	defer pool.Close()
 	_, err = Grants(f.ctx, pool, Options{Schema: "auth", RuntimeRole: f.role, UsersOwned: true})
 	if !errors.Is(err, ErrPublicColumnMissing) || !strings.Contains(err.Error(), "public.users.sso_provider_id") {
-		t.Fatalf("grants pass at ops revision 0154 = %v, want ErrPublicColumnMissing naming public.users.sso_provider_id", err)
+		t.Fatalf("grants pass without users.sso_provider_id = %v, want ErrPublicColumnMissing naming public.users.sso_provider_id", err)
 	}
 }
 

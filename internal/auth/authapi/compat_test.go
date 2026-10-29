@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
@@ -247,6 +248,11 @@ type compatFixture struct {
 	orgB         uuid.UUID
 	orgD         uuid.UUID
 	counters     httpapi.CounterStore
+	// workload, usersWrap and meter, when set, feed the issue route's workload
+	// path, a counting Users and a readable meter.
+	workload  *SessionIssueWorkload
+	usersWrap Users
+	meter     metric.Meter
 }
 
 const (
@@ -283,8 +289,12 @@ func (f *compatFixture) buildCompat() {
 	if f.serviceCreds != nil {
 		creds = f.serviceCreds
 	}
+	var users Users = f.users
+	if f.usersWrap != nil {
+		users = f.usersWrap
+	}
 	routes, err := CompatRoutes(CompatDeps{
-		Sessions: f.sessions, Users: f.users, Issuer: f.issuer,
+		Sessions: f.sessions, Users: users, Issuer: f.issuer, IssueWorkload: f.workload, Meter: f.meter,
 		Logger:    slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		Projector: f.projector,
 		// The real writer (audit.Append) refuses an attribute outside the

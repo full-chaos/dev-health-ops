@@ -86,6 +86,8 @@ type errorDocument struct {
 type recorder struct {
 	logger   *slog.Logger
 	outcomes metric.Int64Counter
+	// compatUses counts accepted svc_authsess_ uses of the session issue route.
+	compatUses metric.Int64Counter
 }
 
 func newRecorder(logger *slog.Logger, meter metric.Meter) (recorder, error) {
@@ -94,7 +96,13 @@ func newRecorder(logger *slog.Logger, meter metric.Meter) (recorder, error) {
 	if err != nil {
 		return recorder{}, err
 	}
-	return recorder{logger: logger, outcomes: outcomes}, nil
+	compatUses, err := meter.Int64Counter(compatUsesMetric,
+		metric.WithDescription("Accepted svc_authsess_ uses of the session issue route, by credential class."))
+	if err != nil {
+		return recorder{}, err
+	}
+	compatUses.Add(context.Background(), 0, metric.WithAttributes(attribute.String("class", compatClass)))
+	return recorder{logger: logger, outcomes: outcomes, compatUses: compatUses}, nil
 }
 
 func (rec recorder) record(ctx context.Context, operation, result, reason string, err error) {

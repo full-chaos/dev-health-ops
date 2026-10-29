@@ -318,7 +318,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/compat.go",
-        "line": 139
+        "line": 142
       },
       "surface_kind": "rest"
     },
@@ -377,7 +377,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/compat.go",
-        "line": 126
+        "line": 129
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -405,7 +405,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/compat.go",
-        "line": 127
+        "line": 130
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -463,18 +463,23 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/compat.go",
-        "line": 146
+        "line": 149
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
     },
     {
       "accepted_credential_classes": [
-        "internal_svc_authsess_token"
+        "internal_svc_authsess_token",
+        "workload_token"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "workload+jwt"
+      },
       "classification": "protected",
-      "current_state_cache_behavior": "No cache: the credential row is read live by token hash on every call.",
-      "disclosure_behavior": "Every refusal is an error.v1 envelope (schema_version, status, reason_code) with no credential and no detail text; a store or key failure is an error.v1 5xx.",
+      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set, and no table.",
+      "disclosure_behavior": "Every refusal, for every credential class and reason, is the same 401 error.v1 envelope (schema_version, status, reason_code invalid_credentials) with no credential, claim or reason text; the reason is only in the log line. A store or key-set failure is an error.v1 503.",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /internal/v1/sessions [dev-health-auth-service @api]",
@@ -515,24 +520,29 @@
           "note": "func (p PG) Check",
           "path": "internal/auth/servicecred/servicecred.go"
         },
-        "description": "servicecred.PG.Check: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding sessions:issue."
+        "description": "servicecred.PG.Check: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding sessions:issue. A workload token (JOSE typ workload+jwt, chosen before any validator runs) is decided without a table read by internal/auth/authapi/issue_workload.go SessionIssueWorkload.authorize: audience auth-service and the configured go-api workload principal as sub (the token has no action claim, so the subject is the sessions.issue binding), then authverify.WorkloadVerifier. Any other credential class is refused before any decode or read."
       },
       "route": "/internal/v1/sessions",
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/compat.go",
-        "line": 143
+        "line": 146
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
     },
     {
       "accepted_credential_classes": [
-        "kubernetes_sa_token_exchange"
+        "kubernetes_sa_token_exchange",
+        "workload_bootstrap_credential"
       ],
+      "class_disambiguator": {
+        "kind": "subject_token_type",
+        "name": "urn:dev-health:params:oauth:token-type:workload-bootstrap"
+      },
       "classification": "protected",
-      "current_state_cache_behavior": "No cache: the Kubernetes TokenReview API and the workload registry rows are read on every exchange.",
-      "disclosure_behavior": "Every refusal after a valid request shape is the same 400 {\"error\":\"invalid_grant\"}; a malformed request is 400 {\"error\":\"invalid_request\"}; a TokenReview, signer or audit failure is 503 {\"error\":\"temporarily_unavailable\"}. No credential, claim or reason text is in any answer; the reason is only in the log line and the auth.workload.exchanges counter.",
+      "current_state_cache_behavior": "No cache: on every exchange the Kubernetes subject is read from the Kubernetes TokenReview API and the workload registry rows, and the bootstrap subject from its credential_registry row with its workload and principal rows.",
+      "disclosure_behavior": "Every refusal after a valid request shape is the same 400 {\"error\":\"invalid_grant\"}; a malformed request is 400 {\"error\":\"invalid_request\"}; a TokenReview, signer or audit failure is 503 {\"error\":\"temporarily_unavailable\"} (a bootstrap registry read failure is the same 400 invalid_grant). No credential, claim or reason text is in any answer; the reason is only in the log line and the auth.workload.exchanges counter.",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /internal/v1/token/exchange [dev-health-auth-service @api]",
@@ -549,7 +559,7 @@
           "direction": "returned_to_caller",
           "issuer": "AUTH_TOKEN_ISSUER_URL",
           "lifetime_seconds": 300,
-          "note": "workload-token.v1 for the resolved workload principal; the lifetime is at most 300 s and never past the subject token's expiry; the jti is bound to the binding and registry revision by the auth.workload.token_issued audit row."
+          "note": "workload-token.v1 for the resolved workload principal; the lifetime is at most 300 s and never past the subject token's or the bootstrap credential's expiry; the jti is bound to the binding (Kubernetes) or the credential row (bootstrap) and the registry revision by the auth.workload.token_issued audit row."
         }
       ],
       "method": "POST",
@@ -559,7 +569,7 @@
           "note": "subject, err := h.Validator.Validate(reviewCtx, subjectToken)",
           "path": "internal/auth/workloadexchange/exchange.go"
         },
-        "description": "handler.review: the Kubernetes TokenReview API authenticates the subject_token for the audience dev-health-workload-exchange; it is authenticated only by TokenReview: after a successful review its exp claim is read unverified, only to cap the issued token's lifetime, and it is never stored; the workload registry then resolves the reviewed ServiceAccount and narrows the audience and actions."
+        "description": "handler.review: the Kubernetes TokenReview API authenticates the subject_token for the audience dev-health-workload-exchange; it is authenticated only by TokenReview: after a successful review its exp claim is read unverified, only to cap the issued token's lifetime, and it is never stored; the workload registry then resolves the reviewed ServiceAccount and narrows the audience and actions. With subject_token_type urn:dev-health:params:oauth:token-type:workload-bootstrap the request is the Compose bootstrap subject instead and never reaches TokenReview: handler.serveBootstrap (exchange_bootstrap.go:88) refuses a value outside the fcwlb_ shape before any store read, and workload.Store.ResolveBootstrap resolves the SHA-256 digest of the value (class, platform owner, workload kind, revocation, expiry, workload and principal state, and an audience both the workload and the credential hold)."
       },
       "route": "/internal/v1/token/exchange",
       "service": "dev-health-auth-service",
@@ -1138,5 +1148,5 @@
     }
   ],
   "schema_version": "endpoint-profile.v1",
-  "source_commit": "58a2c7d5a5336c502a16dbb366f9ec5bc56c325f"
+  "source_commit": "46f0604ca577e507c13cdfedfb65e2a805ef2a09"
 }

@@ -212,13 +212,16 @@ internal/cigates/docstools	validate_inventory_review.go
 internal/cigates/docstools	validate_inventory_review_cases_test.go
 internal/cigates/docstools	validatedsite.go
 internal/cigates/emitscan	scan.go
-internal/cigates/frozengoldens	frozengoldens.go
+internal/cigates/frozengoldens	exemption_test.go
 internal/cigates/frozengoldens	frozengoldens_test.go
+internal/cigates/frozengoldens	reads.go
+internal/cigates/frozengoldens	reads_guard_test.go
 internal/cigates/integrationshards	ci_script_helpers_test.go
 internal/cigates/integrationshards	integration_sharding_test.go
 internal/cigates/integrationshards	shard_start_order_test.go
 internal/cigates/integrationshards	side_effect_hooks_test.go
 internal/cigates/livee2e	cli.go
+internal/cigates/membershipreads	membershipreads.go
 internal/cigates/nopython	nopython_test.go
 internal/cigates/nopython	tests_python_test.go
 internal/cigates/nopython	trackedfiles_test.go
@@ -262,6 +265,7 @@ internal/cigates/splitshards	split_package_shards_test.go
 internal/cigates/suitecatalog	runblock_test.go
 internal/cigates/suitecatalog	suitecatalog_test.go
 internal/cigates/testshard	checkgofresh_test.go
+internal/cigates/testshard	mergegroupfresh_test.go
 internal/cigates/testshard	providersync_test.go
 internal/cigates/testshard	raceshard_test.go
 internal/cigates/testshard	securityfresh_test.go
@@ -368,6 +372,7 @@ internal/jobcontract	registry.go
 internal/jobcontract	registry_test.go
 internal/jobcontract	types_test.go
 internal/joboutbox	strand_repair_premise_test.go
+internal/joboutbox	strand_repair_test.go
 internal/jobruntime	budget_postgres_integration_test.go
 internal/jobruntime	daily_native_family_telemetry_test.go
 internal/jobs/investment	materialize_frozen_python_golden_test.go
@@ -414,6 +419,7 @@ internal/jobs/report	report_test.go
 internal/jobs/report	runtime_integration_test.go
 internal/jobs/workgraph/operationaledges	incidents_golden_integration_test.go
 internal/llmorgsettings	baseurl_reader_guard_test.go
+internal/llmorgsettings	relation_test.go
 internal/loadharness	profiles_test.go
 internal/localgit	blame.go
 internal/localgit	git.go
@@ -428,6 +434,10 @@ internal/mintcli/envelopekeys	main_test.go
 internal/mintcli/envelopekeys	verify_roundtrip_test.go
 internal/operationalordering	finalreads_test.go
 internal/ownershipwindow	ownershipwindow_test.go
+internal/pgmigrate	archive_fixture_integration_test.go
+internal/pgmigrate	archive_test.go
+internal/pgmigrate	indexbuild_test.go
+internal/pgmigrate	squash_test.go
 internal/platform/config	route_switch_absence_test.go
 internal/platform/credshape	census_test.go
 internal/platform/credshape	credshape_test.go

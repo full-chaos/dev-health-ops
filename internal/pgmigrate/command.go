@@ -86,7 +86,7 @@ func Command(resolve ResolveDSN) cli.Command {
 			},
 			{
 				Name:    "downgrade",
-				Summary: "revert the PostgreSQL revisions above a target (revision id 0138-0145, or -N), as `alembic downgrade` does; refuses, before it connects, a target whose steps are not ported",
+				Summary: "revert the PostgreSQL revisions above a target (revision id " + DownRangeText() + ", or -N), as `alembic downgrade` does; refuses, before it connects, a target whose steps are not ported",
 				Kind:    cli.Verb,
 				Run: func(ctx context.Context, env cli.Env) int {
 					return downgrade(ctx, resolve, env)
@@ -150,7 +150,7 @@ func run(ctx context.Context, verb string, resolve ResolveDSN, env cli.Env) int 
 	}
 	logger := logging.NewJSON(env.Stderr, slog.LevelInfo)
 	before, _ := Recorded(ctx, conn)
-	result, err := UpgradeLoggedWithSettings(ctx, conn, baseline, chain, logger, ClassDecisionWalkSettings(env.Lookup))
+	result, err := UpgradeLogged(ctx, conn, baseline, chain, logger)
 	// One final line per run, from state read back afterwards: the step logs fire
 	// before their SQL. A failed upgrade's outcome is what alembic_version holds now.
 	observed, readErr := Recorded(ctx, conn)
@@ -158,6 +158,7 @@ func run(ctx context.Context, verb string, resolve ResolveDSN, env cli.Env) int 
 		Refused: isRefusal(err), Err: err, ReadFailed: readErr != nil, Changed: !sameSet(observed, before)}))
 	if err != nil {
 		var below BelowHeadError
+		var belowBaseline BelowBaselineError
 		var ahead AheadOfBuildError
 		var foreign ForeignDatabaseError
 		var mismatch SchemaMismatchError
@@ -169,6 +170,8 @@ func run(ctx context.Context, verb string, resolve ResolveDSN, env cli.Env) int 
 			return writeError(env.Stderr, "schema_mismatch", err.Error())
 		case errors.As(err, &ahead):
 			return writeError(env.Stderr, "ahead_of_build", err.Error())
+		case errors.As(err, &belowBaseline):
+			return writeError(env.Stderr, ReasonBelowBaseline, err.Error())
 		case errors.As(err, &below):
 			return writeError(env.Stderr, "below_head", err.Error())
 		case errors.As(err, &foreign):
@@ -177,29 +180,6 @@ func run(ctx context.Context, verb string, resolve ResolveDSN, env cli.Env) int 
 		return writeError(env.Stderr, "migration_failed", boundary.Redact(err).Error())
 	}
 	return writeResult(env.Stdout, env.Stderr, result)
-}
-
-// ClassDecisionLiveDigestEnv carries the schema digest of the RUNNING (old) query-api into the walk: revision 0146
-// backfills go_api_class_decision from the go_api_routing_state rows at exactly that digest, the rows the old image
-// serves (CHAOS-8735, D4819). The roll reads it from the old image's GET /registry before the upgrade.
-const ClassDecisionLiveDigestEnv = "DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST"
-
-// ClassDecisionLiveDigestSetting is the session setting revision 0146 reads; the Alembic mirror sets the same one.
-const ClassDecisionLiveDigestSetting = "dho.class_decision_live_schema_digest"
-
-// ClassDecisionWalkSettings is the walk setting ClassDecisionLiveDigestSetting from ClassDecisionLiveDigestEnv, set
-// for the walk's own transaction (the transaction that runs revision 0146). Unset names nothing, and the walk then sets
-// the setting empty (walkDefaults), never leaving a role or database default in view; empty is what revision 0146
-// refuses with MCP class rows present and needs nothing without them.
-func ClassDecisionWalkSettings(lookup func(string) (string, bool)) WalkSettings {
-	if lookup == nil {
-		return nil
-	}
-	value, ok := lookup(ClassDecisionLiveDigestEnv)
-	if !ok {
-		return nil
-	}
-	return WalkSettings{ClassDecisionLiveDigestSetting: value}
 }
 
 func writeResult(stdout, stderr io.Writer, value any) int {

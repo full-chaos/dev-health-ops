@@ -27,24 +27,43 @@ func AtHead(t testing.TB) Database {
 	return Database{Revisions: heads(t)}
 }
 
-// OneBehind is a database one migration behind this build.
+// OneBehind is a database one migration behind this build: its application head is the revision before the build's
+// (from the live chain, or from the archive the baseline was squashed from).
 func OneBehind(t testing.TB) Database {
 	t.Helper()
 	chain, err := pgmigrate.LoadChain()
-	if err != nil || len(chain) < 2 {
-		t.Fatalf("the chain must hold two revisions: %v", err)
+	if err != nil {
+		t.Fatal(err)
 	}
-	build := heads(t)
-	top := chain[len(chain)-1].Revision
+	all := append(pgmigrate.ArchivedChain(), chain...)
+	previous := map[string]string{}
+	for i := 1; i < len(all); i++ {
+		previous[all[i].Revision] = all[i-1].Revision
+	}
 	revisions := []string{}
-	for _, revision := range build {
-		if revision == top {
-			revision = chain[len(chain)-2].Revision
+	for _, revision := range heads(t) {
+		if before, ok := previous[revision]; ok {
+			revision = before
 		}
 		revisions = append(revisions, revision)
 	}
 	sort.Strings(revisions)
+	if equal(revisions, heads(t)) {
+		t.Fatalf("no revision before the build heads %v", heads(t))
+	}
 	return Database{Revisions: revisions}
+}
+
+func equal(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // Ahead is a database that records a revision this build does not know.

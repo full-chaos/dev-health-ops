@@ -17,6 +17,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -182,6 +184,136 @@ func TestReconcileAfterBackfillIsZeroDiffAndSeesPlantedDrift(t *testing.T) {
 	e.seedID(t, ctx, id, addr, false, true)
 	if rep := e.reconcile(t, ctx); rep.GatedTotal() != 0 {
 		t.Fatalf("after restoring the public row: %+v", rep.Diffs)
+	}
+}
+
+// An expired assignment is not held: a public superuser whose only assignment
+// expired is a platform role difference, and the next backfill clears it.
+func TestReconcileCountsAnExpiredAssignmentAsNotHeld(t *testing.T) {
+	e := getReconEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	id := e.seed(t, ctx, uniq("expired"), true, true)
+	if _, err := e.admin.Exec(ctx, `UPDATE public.users SET is_superuser = true WHERE id = $1`, id); err != nil {
+		t.Fatal(err)
+	}
+	e.backfill(t, ctx)
+	if rep := e.reconcile(t, ctx); rep.GatedTotal() != 0 {
+		t.Fatalf("after backfill: %+v", rep.Diffs)
+	}
+	var assignment uuid.UUID
+	if err := e.admin.QueryRow(ctx, `SELECT id FROM auth.platform_role_assignments WHERE principal_id = $1`, id).Scan(&assignment); err != nil {
+		t.Fatal(err)
+	}
+	expired := uuid.New()
+	subject := id.String()
+	err := audit.Commit(ctx, e.runtime, e.schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			if _, err := tx.Exec(ctx, `DELETE FROM auth.platform_role_assignments WHERE id = $1`, assignment); err != nil {
+				return err
+			}
+			_, err := tx.Exec(ctx, `INSERT INTO auth.platform_role_assignments (id, principal_id, role_key, expires_at)
+VALUES ($1, $2, 'platform_admin', statement_timestamp() - interval '1 minute')`, expired, id)
+			return err
+		},
+		Audit: audit.AuditEvent{EventType: "auth.platform_role.granted", Outcome: audit.OutcomeAllowed, SubjectPrincipalID: &subject,
+			Attributes: map[string]any{"reason_code": "role_granted", "target_kind": "principal", "target_id": subject}},
+		Events: []audit.OutboxEvent{
+			{AggregateType: "platform_role_assignment", AggregateID: provisioning.WireID("platform_role_assignment", assignment.String()),
+				EventType: "platform_role_assignment.revoked", Change: map[string]any{"status": "revoked"}},
+			{AggregateType: "platform_role_assignment", AggregateID: provisioning.WireID("platform_role_assignment", expired.String()),
+				EventType: "platform_role_assignment.granted", Change: map[string]any{"status": "active"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("plant an expired assignment: %v", err)
+	}
+	if rep := e.reconcile(t, ctx); rep.Diffs[DiffPlatformRole] != 1 || rep.GatedTotal() != 1 {
+		t.Fatalf("a superuser whose assignment expired: %+v", rep.Diffs)
+	}
+	e.backfill(t, ctx)
+	if rep := e.reconcile(t, ctx); rep.GatedTotal() != 0 {
+		t.Fatalf("after the backfill replaced the expired assignment: %+v", rep.Diffs)
+	}
+}
+
+// An expired assignment a person granted is not held either: a public
+// superuser with only such an assignment is a platform role difference, the
+// backfill writes nothing for it and reports it, and the difference stays until
+// a person decides (here: public is_superuser cleared).
+func TestReconcileCountsAnExpiredGrantedAssignmentAndTheBackfillLeavesIt(t *testing.T) {
+	e := getReconEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	granter := e.seed(t, ctx, uniq("granter"), true, true)
+	id := e.seed(t, ctx, uniq("expgrant"), true, true)
+	if _, err := e.admin.Exec(ctx, `UPDATE public.users SET is_superuser = true WHERE id = ANY($1)`, []uuid.UUID{granter, id}); err != nil {
+		t.Fatal(err)
+	}
+	e.backfill(t, ctx)
+	if rep := e.reconcile(t, ctx); rep.GatedTotal() != 0 {
+		t.Fatalf("after backfill: %+v", rep.Diffs)
+	}
+	var assignment uuid.UUID
+	if err := e.admin.QueryRow(ctx, `SELECT id FROM auth.platform_role_assignments WHERE principal_id = $1`, id).Scan(&assignment); err != nil {
+		t.Fatal(err)
+	}
+	expired := uuid.New()
+	subject := id.String()
+	err := audit.Commit(ctx, e.runtime, e.schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			if _, err := tx.Exec(ctx, `DELETE FROM auth.platform_role_assignments WHERE id = $1`, assignment); err != nil {
+				return err
+			}
+			_, err := tx.Exec(ctx, `INSERT INTO auth.platform_role_assignments (id, principal_id, role_key, granted_by, expires_at)
+VALUES ($1, $2, 'platform_admin', $3, statement_timestamp() - interval '1 minute')`, expired, id, granter)
+			return err
+		},
+		Audit: audit.AuditEvent{EventType: "auth.platform_role.granted", Outcome: audit.OutcomeAllowed, SubjectPrincipalID: &subject,
+			Attributes: map[string]any{"reason_code": "role_granted", "target_kind": "principal", "target_id": subject}},
+		Events: []audit.OutboxEvent{
+			{AggregateType: "platform_role_assignment", AggregateID: provisioning.WireID("platform_role_assignment", assignment.String()),
+				EventType: "platform_role_assignment.revoked", Change: map[string]any{"status": "revoked"}},
+			{AggregateType: "platform_role_assignment", AggregateID: provisioning.WireID("platform_role_assignment", expired.String()),
+				EventType: "platform_role_assignment.granted", Change: map[string]any{"status": "active"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("plant an expired granted assignment: %v", err)
+	}
+	if rep := e.reconcile(t, ctx); rep.Diffs[DiffPlatformRole] != 1 || rep.GatedTotal() != 1 {
+		t.Fatalf("a superuser whose granted assignment expired: %+v", rep.Diffs)
+	}
+	rows := func() int {
+		var n int
+		if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.platform_role_assignments WHERE principal_id = $1`, id).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	rep, err := Run(ctx, PGSource{Pool: e.runtime}, e.store, Options{BatchSize: 500})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.ExpiredGranted) == 0 || !strings.Contains(strings.Join(rep.Lines(), "\n"), "platform_role_expired_granted.assignment="+expired.String()) {
+		t.Fatalf("the backfill does not report the expired granted assignment:\n%s", strings.Join(rep.Lines(), "\n"))
+	}
+	if n := rows(); n != 1 {
+		t.Fatalf("assignments after the backfill = %d, want the one expired granted row", n)
+	}
+	var still int
+	if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.platform_role_assignments WHERE id = $1`, expired).Scan(&still); err != nil || still != 1 {
+		t.Fatalf("the backfill removed the expired granted assignment (%d, %v)", still, err)
+	}
+	if rep := e.reconcile(t, ctx); rep.Diffs[DiffPlatformRole] != 1 {
+		t.Fatalf("the difference must stay until a person decides: %+v", rep.Diffs)
+	}
+	// A person decides: is_superuser is cleared; the shared database is zero-diff again.
+	if _, err := e.admin.Exec(ctx, `UPDATE public.users SET is_superuser = false WHERE id = $1`, id); err != nil {
+		t.Fatal(err)
+	}
+	if rep := e.reconcile(t, ctx); rep.GatedTotal() != 0 {
+		t.Fatalf("after clearing is_superuser: %+v", rep.Diffs)
 	}
 }
 

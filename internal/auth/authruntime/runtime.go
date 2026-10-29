@@ -119,7 +119,7 @@ func sessionRoutes(
 	if err != nil {
 		return nil, err
 	}
-	compat, err := compatRoutes(cfg, logger, pool, schema, sessions, issuer, limits)
+	compat, err := compatRoutes(cfg, logger, pool, schema, sessions, issuer, limits, accessSigner)
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +156,7 @@ func newAccessIssuer(cfg authconfig.Config, signer authapi.AccessSigner) (*autha
 // the social provider client and the append-only audit writer.
 func compatRoutes(
 	cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
-	sessions *session.Store, issuer *authapi.Issuer, limits *authapi.Limits,
+	sessions *session.Store, issuer *authapi.Issuer, limits *authapi.Limits, signer authapi.AccessSigner,
 ) ([]httpapi.Route, error) {
 	identities, err := identity.New(identityConfig(cfg, logger, pool, schema))
 	if err != nil {
@@ -179,8 +179,12 @@ func compatRoutes(
 	if err != nil {
 		return nil, err
 	}
+	issueWorkload, err := sessionIssueWorkload(cfg, signer)
+	if err != nil {
+		return nil, err
+	}
 	deps := authapi.CompatDeps{
-		Sessions: sessions, Users: authapi.PGUsers{Pool: pool}, Issuer: issuer, Logger: logger,
+		Sessions: sessions, Users: authapi.PGUsers{Pool: pool}, Issuer: issuer, Logger: logger, IssueWorkload: issueWorkload,
 		Projector: identities, Social: socialService, ServiceCredentials: servicecred.PG{Pool: pool},
 		AppendAudit: func(ctx context.Context, event audit.AuditEvent) error {
 			return audit.Append(ctx, pool, schema, event)

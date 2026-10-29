@@ -9,24 +9,15 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 )
 
-// Revision 0162 adds public.org_activity, the projection of the metrics activity of an organization that the auth
+// The head (revision 0162, now the baseline) holds public.org_activity, the projection of the metrics activity of an organization that the auth
 // plane reads: one row per organization, deleted with it, holding the two facts of the login org choice.
 func TestRevision0162AddsTheOrgActivityProjection(t *testing.T) {
 	chain, err := pgmigrate.LoadChain()
 	if err != nil {
 		t.Fatal(err)
 	}
-	idx := -1
-	for i, file := range chain {
-		if file.Revision == "0162" {
-			idx = i
-		}
-	}
-	if idx < 1 {
-		t.Fatal("the chain holds no revision 0162")
-	}
 	d := newDownInstance(t)
-	conn := connect(t, d.at(t, idx+1))
+	conn := connect(t, d.at(t, len(chain)))
 	ctx := context.Background()
 
 	var columns string

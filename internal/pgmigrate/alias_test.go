@@ -28,6 +28,7 @@ func applicationRevisions(t *testing.T) (head, below string, entries []HistoryEn
 	if err != nil {
 		t.Fatal(err)
 	}
+	entries = WithChain(entries, baseline, nil)
 	head = applicationHead(baseline)
 	for _, entry := range entries {
 		if entry.Revision == head {

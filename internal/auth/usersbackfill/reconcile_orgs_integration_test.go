@@ -13,7 +13,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
+	"github.com/full-chaos/dev-health-ops/internal/auth/org"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 )
 
@@ -291,5 +293,52 @@ func (e *reconEnv) writerNotBlocked(t *testing.T, name string, write func(ctx co
 		case <-time.After(10 * time.Second):
 		}
 		t.Fatalf("a writer on %s was blocked by the open snapshot (no commit within 5 s)", name)
+	}
+}
+
+// The reactivation window, end to end: a suspension that reached the auth
+// schema stays after go-api's row turns active again (org_active_diff, which
+// fails the default gate), and the auth-owned reactivate (the verb behind
+// POST /internal/v1/organizations/reactivate) clears it: the organization is
+// then listed with no class.
+func TestOrgsReconcileIsZeroAfterTheAuthReactivate(t *testing.T) {
+	e := getReconEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	id, _ := e.seedOrg(t, ctx, true)
+	e.runOrgs(t, ctx, false)
+	if _, ok := classesOf(e.orgsSnapshot(t, ctx), id); ok {
+		t.Fatal("a freshly copied organization is a mismatch")
+	}
+	setActive := func(active bool) {
+		t.Helper()
+		if _, err := e.admin.Exec(ctx, `UPDATE public.organizations SET is_active = $2 WHERE id = $1`, id, active); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setActive(false)
+	if err := e.store.ProjectOrganization(ctx, id); err != nil {
+		t.Fatalf("refresh after a go-api suspend: %v", err)
+	}
+	if classes, ok := classesOf(e.orgsSnapshot(t, ctx), id); ok {
+		t.Fatalf("after the refresh of a go-api suspend: classes %v, want none", classes)
+	}
+	setActive(true)
+	if err := e.store.ProjectOrganization(ctx, id); err != nil {
+		t.Fatalf("refresh after a go-api reactivate: %v", err)
+	}
+	if classes, ok := classesOf(e.orgsSnapshot(t, ctx), id); !ok || strings.Join(classes, ",") != ClassOrgActive {
+		t.Fatalf("a go-api reactivate alone: classes %v (listed %v), want %s", classes, ok, ClassOrgActive)
+	}
+	orgs, err := org.New(org.Config{Pool: e.runtime, Schema: e.schema})
+	if err != nil {
+		t.Fatal(err)
+	}
+	allow := func(context.Context, audit.TxOps, uuid.UUID) error { return nil }
+	if changed, err := orgs.ReactivateAuthorized(ctx, id, nil, org.Actor{}, allow); err != nil || !changed {
+		t.Fatalf("auth reactivate: changed=%v err=%v", changed, err)
+	}
+	if classes, ok := classesOf(e.orgsSnapshot(t, ctx), id); ok {
+		t.Fatalf("after the auth reactivate: classes %v, want none (a zero diff)", classes)
 	}
 }

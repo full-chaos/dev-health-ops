@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -49,10 +50,10 @@ type composeOut struct {
 }
 
 // composeBugsinkEnv is the three bugsink variables the deploy copy of the file requires (`:?`). It supplies
-// them only for a tree chosen by BIGBOY_DIR: the in-repo ci/bigboy keeps its defaults, and a render or
+// them only for a tree outside the repo (BIGBOY_DIR): the in-repo ci/bigboy keeps its defaults, and a render or
 // required-set check of it must fail if those become required. Test-only values.
 func composeBugsinkEnv() map[string]string {
-	if os.Getenv(bigboydir.Env) == "" {
+	if bigboydir.InRepo(moduleRootNoT()) {
 		return map[string]string{} // non-nil: a fresh-root render reads it as "no process env at all"
 	}
 	return map[string]string{
@@ -502,4 +503,22 @@ func composeSchemaError(content string, env map[string]string) string {
 		return err.Error()
 	}
 	return ""
+}
+
+// moduleRootNoT is the module root for helpers that have no *testing.T.
+func moduleRootNoT() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		panic(err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			panic("go.mod not found above the test directory")
+		}
+		dir = parent
+	}
 }

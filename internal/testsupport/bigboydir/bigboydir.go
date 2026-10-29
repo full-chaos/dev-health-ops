@@ -4,6 +4,8 @@
 package bigboydir
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -17,7 +19,7 @@ const (
 	skipMsg = "bigboy tree absent: set " + Env + " to the deploy repo's docker/bigboy (looked in %s)"
 )
 
-// Lookup returns the bigboy tree and whether it holds compose.bigboy.yml. It never skips, for a gate that
+// Lookup returns the bigboy tree and whether it holds compose.bigboy.yml (a marker that cannot be read counts as held). It never skips, for a gate that
 // has other inputs to check when the tree is absent.
 func Lookup(repoRoot string) (string, bool) {
 	dir := os.Getenv(Env)
@@ -29,7 +31,16 @@ func Lookup(repoRoot string) (string, bool) {
 		dir = filepath.Join(repoRoot, dir)
 	}
 	_, err := os.Stat(filepath.Join(dir, marker))
-	return dir, err == nil
+	// only a missing marker means "absent": an unreadable tree reports present, so the guards read it and fail
+	return dir, err == nil || !errors.Is(err, fs.ErrNotExist)
+}
+
+// InRepo reports whether the selected tree is the in-repo ci/bigboy (BIGBOY_DIR unset, or naming it).
+func InRepo(repoRoot string) bool {
+	dir, _ := Lookup(repoRoot)
+	a, errA := filepath.EvalSymlinks(dir)
+	b, errB := filepath.EvalSymlinks(filepath.Join(repoRoot, filepath.FromSlash(inRepo)))
+	return errA == nil && errB == nil && a == b
 }
 
 // Dir returns the bigboy tree: $BIGBOY_DIR when set, else <repoRoot>/ci/bigboy. It skips the test when the

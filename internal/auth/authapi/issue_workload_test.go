@@ -598,6 +598,9 @@ func TestTheUnverifiedPeekIsStrictJSON(t *testing.T) {
 		if w.keys.reads != 0 {
 			t.Fatalf("%s: the peek let the token reach the key set (%d reads)", name, w.keys.reads)
 		}
+		if !strings.Contains(w.logs.String(), `"refusal":"payload_not_strict"`) {
+			t.Fatalf("%s: the peek did not refuse it as payload_not_strict: %s", name, w.logs.String())
+		}
 	}
 }
 

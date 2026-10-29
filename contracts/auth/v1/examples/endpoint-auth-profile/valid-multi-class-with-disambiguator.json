@@ -1,13 +1,13 @@
 {
   "accepted_credential_classes": [
     "acr_client_credential",
-    "legacy_ingest_api_key"
+    "org_context_header"
   ],
   "action": "acr.context.read",
   "cache_class": "decision_bound",
   "class_disambiguator": {
     "kind": "dedicated_header",
-    "name": "X-API-Key"
+    "name": "X-Org-Id"
   },
   "classification": "protected",
   "current_state_required": false,

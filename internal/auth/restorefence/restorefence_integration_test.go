@@ -548,7 +548,7 @@ func (d *fenceDB) familiesT(t *testing.T, ctx context.Context) {
 	d.must(t, ctx, `INSERT INTO auth.principals (id, kind, display_name) VALUES ($1, 'service_account', 'fence sa'), ($2, 'workload', 'fence wl')`, saPrincipal, wlPrincipal)
 	org := fenceOrgID(0)
 	d.commit(t, ctx, "membership.created", 0, func(ctx context.Context, tx audit.TxOps) error {
-		_, err := tx.Exec(ctx, `INSERT INTO auth.memberships (organization_id, principal_id, status) VALUES ($1, $2, 'active')`, org, member)
+		_, err := tx.Exec(ctx, `INSERT INTO auth.memberships (organization_id, principal_id, role, status) VALUES ($1, $2, 'member', 'active')`, org, member)
 		return err
 	})
 	d.commit(t, ctx, "service_account.created", 0, func(ctx context.Context, tx audit.TxOps) error {
@@ -556,7 +556,7 @@ func (d *fenceDB) familiesT(t *testing.T, ctx context.Context) {
 		return err
 	})
 	d.commit(t, ctx, "workload.created", 0, func(ctx context.Context, tx audit.TxOps) error {
-		_, err := tx.Exec(ctx, `INSERT INTO auth.workloads (principal_id, name) VALUES ($1, 'fence-wl')`, wlPrincipal)
+		_, err := tx.Exec(ctx, `INSERT INTO auth.workloads (principal_id, organization_id, name) VALUES ($1, $2, 'fence-wl')`, wlPrincipal, org)
 		return err
 	})
 	d.must(t, ctx, `INSERT INTO auth.link_credentials (principal_id, purpose, token_hash, expires_at) VALUES ($1, 'password_reset', decode(md5('fence-a') || md5('fence-b'), 'hex'), now() + interval '1 day')`, member)
@@ -582,7 +582,10 @@ func (d *fenceDB) familiesAfterT(t *testing.T, ctx context.Context) {
 		_, err := tx.Exec(ctx, `UPDATE auth.workloads SET disabled_at = now() WHERE name = 'fence-wl'`)
 		return err
 	})
-	d.must(t, ctx, `UPDATE auth.link_credentials SET consumed_at = now()`)
+	d.commit(t, ctx, "link_credential.consumed", 0, func(ctx context.Context, tx audit.TxOps) error {
+		_, err := tx.Exec(ctx, `UPDATE auth.link_credentials SET consumed_at = now()`)
+		return err
+	})
 	d.must(t, ctx, `INSERT INTO auth.saml_assertion_uses (issuer, assertion_id_hash, expires_at) VALUES ('https://idp.example.invalid', decode(md5('x') || md5('y'), 'hex'), now() + interval '1 day')`)
 	d.commit(t, ctx, "user.password_changed", 0, func(ctx context.Context, tx audit.TxOps) error {
 		_, err := tx.Exec(ctx, `UPDATE auth.users SET password_hash = 'h2', password_algorithm = 'argon2id', password_updated_at = '2026-10-15T00:00:00Z' WHERE principal_id = $1`, member)

@@ -252,20 +252,21 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			Now: deps.Now,
 		})...)
 		routes = append(routes, admin.Routes(admin.Deps{
-			Pool:          deps.Pool,
-			Valkey:        deps.Valkey,
-			Guard:         deps.Guard,
-			Logger:        logger,
-			ClickHouseDSN: deps.ClickHouseDSN,
-			ClickHouse:    deps.ClickHouse,
-			Decryptor:     deps.Decryptor,
-			PagerDuty:     deps.PagerDuty,
-			HTTPDoer:      deps.HTTPDoer,
-			Now:           deps.Now,
-			Write:         WriteError,
-			Limits:        limits,
-			Invites:       deps.Invites,
-			UsersOwned:    deps.UsersOwned,
+			Pool:           deps.Pool,
+			Valkey:         deps.Valkey,
+			Guard:          deps.Guard,
+			Logger:         logger,
+			ClickHouseDSN:  deps.ClickHouseDSN,
+			ClickHouse:     deps.ClickHouse,
+			Decryptor:      deps.Decryptor,
+			PagerDuty:      deps.PagerDuty,
+			HTTPDoer:       deps.HTTPDoer,
+			Now:            deps.Now,
+			Write:          WriteError,
+			Limits:         limits,
+			Invites:        deps.Invites,
+			UsersOwned:     deps.UsersOwned,
+			OrgReactivator: deps.OrgReactivator,
 		})...)
 	}
 	webhookintake.LogUnconfiguredSecrets(logger)
@@ -392,6 +393,11 @@ func configureWith(
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_session_issue", "api_session_issue_config_invalid", err)
+	}
+	deps.OrgReactivator, err = orgReactivator(authProxy, envsecrets.ProcessLookup)
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_org_provisioning", "api_org_provisioning_config_invalid", err)
 	}
 	var scope []func(http.Handler) http.Handler
 	if deps.Pool != nil {

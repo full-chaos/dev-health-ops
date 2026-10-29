@@ -1,6 +1,6 @@
 {
   "credential_class_source": "contracts/auth/v1/credential-classes.json",
-  "generated_at": "2026-10-20T00:00:00Z",
+  "generated_at": "2026-10-29T00:00:00Z",
   "rows": [
     {
       "accepted_credential_classes": [
@@ -530,6 +530,224 @@
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
+    },
+    {
+      "accepted_credential_classes": [
+        "internal_svc_authsess_token"
+      ],
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: the credential row is read live by token hash on every call; the actor's public.users and public.memberships rows are read live before the write and again under the write's locks.",
+      "disclosure_behavior": "Every bearer refusal is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed with no read; a refused actor gets 403 (principal_deactivated, admin_required or superuser_required) before any row of the request is read, so a missing organization, principal or inviter is named only to an actor the rule allows; a store failure is 503.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/memberships/add [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 26,
+          "note": "func (p PG) CheckScope",
+          "path": "internal/auth/servicecred/scope.go"
+        },
+        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). Any other bearer is refused before the body is read; then the actor rule (go-api's ensureOrgAdminAccess and refuseSuperuserWrite): the actor is an active superuser, or an active owner or admin member of the organization, and a non-superuser actor may not change a superuser member. It runs on the live users and membership rows before anything is read for the request, and again inside the write's transaction after its locks."
+      },
+      "route": "/internal/v1/memberships/add",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/provisioning.go",
+        "line": 182
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped"
+    },
+    {
+      "accepted_credential_classes": [
+        "internal_svc_authsess_token"
+      ],
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: the credential row is read live by token hash on every call; the actor's public.users and public.memberships rows are read live before the write and again under the write's locks.",
+      "disclosure_behavior": "Every bearer refusal is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed with no read; a refused actor gets 403 (principal_deactivated, admin_required or superuser_required) before any row of the request is read, so a missing organization, principal or inviter is named only to an actor the rule allows; a store failure is 503.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/memberships/role [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 26,
+          "note": "func (p PG) CheckScope",
+          "path": "internal/auth/servicecred/scope.go"
+        },
+        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). Any other bearer is refused before the body is read; then the actor rule (go-api's ensureOrgAdminAccess and refuseSuperuserWrite): the actor is an active superuser, or an active owner or admin member of the organization, and a non-superuser actor may not change a superuser member. It runs on the live users and membership rows before anything is read for the request, and again inside the write's transaction after its locks."
+      },
+      "route": "/internal/v1/memberships/role",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/provisioning.go",
+        "line": 183
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped"
+    },
+    {
+      "accepted_credential_classes": [
+        "internal_svc_authsess_token"
+      ],
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: the credential row is read live by token hash on every call; the actor's public.users and public.memberships rows are read live before the write and again under the write's locks.",
+      "disclosure_behavior": "Every bearer refusal is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed with no read; a refused actor gets 403 (principal_deactivated, admin_required or superuser_required) before any row of the request is read, so a missing organization, principal or inviter is named only to an actor the rule allows; a store failure is 503.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/memberships/remove [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 26,
+          "note": "func (p PG) CheckScope",
+          "path": "internal/auth/servicecred/scope.go"
+        },
+        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). Any other bearer is refused before the body is read; then the actor rule (go-api's ensureOrgAdminAccess and refuseSuperuserWrite): the actor is an active superuser, or an active owner or admin member of the organization, and a non-superuser actor may not change a superuser member. It runs on the live users and membership rows before anything is read for the request, and again inside the write's transaction after its locks."
+      },
+      "route": "/internal/v1/memberships/remove",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/provisioning.go",
+        "line": 184
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped"
+    },
+    {
+      "accepted_credential_classes": [
+        "internal_svc_authsess_token"
+      ],
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: the credential row is read live by token hash on every call; the actor's public.users and public.memberships rows are read live before the write and again under the write's locks.",
+      "disclosure_behavior": "Every bearer refusal is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed with no read; a refused actor gets 403 (principal_deactivated, admin_required or superuser_required) before any row of the request is read, so a missing organization, principal or inviter is named only to an actor the rule allows; a store failure is 503.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/memberships/transfer [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 26,
+          "note": "func (p PG) CheckScope",
+          "path": "internal/auth/servicecred/scope.go"
+        },
+        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). Any other bearer is refused before the body is read; then the actor rule (go-api's ensureOrgAdminAccess and refuseSuperuserWrite): the actor is an active superuser, or an active owner or admin member of the organization, and a non-superuser actor may not change a superuser member. It runs on the live users and membership rows before anything is read for the request, and again inside the write's transaction after its locks."
+      },
+      "route": "/internal/v1/memberships/transfer",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/provisioning.go",
+        "line": 185
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped"
+    },
+    {
+      "accepted_credential_classes": [
+        "internal_svc_authsess_token"
+      ],
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: the credential row is read live by token hash on every call; the actor's public.users and public.memberships rows are read live before the write and again under the write's locks.",
+      "disclosure_behavior": "Every bearer refusal is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed with no read; a refused actor gets 403 (principal_deactivated, admin_required or superuser_required) before any row of the request is read, so a missing organization, principal or inviter is named only to an actor the rule allows; a store failure is 503.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/invites/create [dev-health-auth-service @api]",
+      "issued_credential": [
+        {
+          "algorithm": null,
+          "anchor": {
+            "line": 247,
+            "note": "signedtoken.Build(id, s.secret)",
+            "path": "internal/auth/invite/store.go"
+          },
+          "audience": null,
+          "class_id": "org_invite_token",
+          "direction": "returned_to_caller",
+          "issuer": null,
+          "lifetime_seconds": 259200,
+          "note": "The invite token (go-api's signed form over the invite id), answered once; stored only as its SHA-256 digest in auth.invites and public.org_invites. Lifetime 1 hour to 30 days, default 72 hours."
+        }
+      ],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 26,
+          "note": "func (p PG) CheckScope",
+          "path": "internal/auth/servicecred/scope.go"
+        },
+        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). Any other bearer is refused before the body is read; then the actor rule (go-api's ensureOrgAdminAccess): the actor is an active superuser, or an active owner or admin member of the organization (an invite names an address, so there is no target rule). It runs on the live users and membership rows before anything is read for the request, and again inside the write's transaction after the organization row lock."
+      },
+      "route": "/internal/v1/invites/create",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/provisioning.go",
+        "line": 186
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped"
+    },
+    {
+      "accepted_credential_classes": [
+        "internal_svc_authsess_token"
+      ],
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: the credential row is read live by token hash on every call; the account's public.users row is read live before the write and again under the write's locks.",
+      "disclosure_behavior": "Every bearer refusal is the same 401 error.v1 invalid_credentials; an inactive account is 403 principal_deactivated before the invite store is called and again under the account's users-row lock; an unknown, badly signed, expired, used or revoked invite token is the same 400 invite_invalid; a store failure is 503.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/invites/accept [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 26,
+          "note": "func (p PG) CheckScope",
+          "path": "internal/auth/servicecred/scope.go"
+        },
+        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). Any other bearer is refused before the body is read; then the account named in the body must be active, checked before the invite store is called and again under the account's users-row lock; there is no actor rule: the invite token and the account's verified address, equal to the invite's, authorize the join (internal/auth/invite)."
+      },
+      "route": "/internal/v1/invites/accept",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/provisioning.go",
+        "line": 187
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "none"
+    },
+    {
+      "accepted_credential_classes": [
+        "internal_svc_authsess_token"
+      ],
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: the credential row is read live by token hash on every call; the actor's public.users and public.memberships rows are read live before the write and again under the write's locks.",
+      "disclosure_behavior": "Every bearer refusal is the same 401 error.v1 invalid_credentials; an actor that is not an active superuser gets 403 (principal_deactivated or superuser_required) before any row of the request is read, and the same rule runs again after the organization row lock, so a missing organization is named only to a superuser; a store failure is 503.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/organizations/deprovision [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 26,
+          "note": "func (p PG) CheckScope",
+          "path": "internal/auth/servicecred/scope.go"
+        },
+        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). Any other bearer is refused before the body is read; then the actor must be an active superuser (go-api's DELETE /api/v1/admin/orgs/{org_id} is superuser only), checked on the live users row before anything is read for the request, and again inside the commit after the organization row lock."
+      },
+      "route": "/internal/v1/organizations/deprovision",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/provisioning.go",
+        "line": 188
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "cross_org_superuser_only"
     },
     {
       "accepted_credential_classes": [
@@ -1148,5 +1366,5 @@
     }
   ],
   "schema_version": "endpoint-profile.v1",
-  "source_commit": "46f0604ca577e507c13cdfedfb65e2a805ef2a09"
+  "source_commit": "7a6b2358132d28d0d4ec892aa9a0c3aa611cb5df"
 }

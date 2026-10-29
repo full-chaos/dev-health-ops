@@ -586,7 +586,7 @@ func TestProvidersyncStepRunnerReturnsToItsCaller(t *testing.T) {
 	snippet := s[start:end]
 	r := runProvidersyncStep(t, "exit3", "600", func(script, work string) []string {
 		harness := "set -uo pipefail\nROOT=" + filepath.Dir(filepath.Dir(script)) + "\nSCRIPT_DIR=" + work + "\nGO_ENV_OFF=(env)\n" +
-			"die() { echo \"$*\" >&2; exit 2; }\n" + snippet +
+			"die() { echo \"$*\" >&2; exit 2; }\n" + jobBudgetSnippet(t) + "\n" + snippet +
 			"\nrun_providersync_bounded '^TestX$' " + filepath.Join(work, "out.json") + "\necho \"NEXT-LINE-RAN rc=$?\"\n"
 		return []string{"bash", "-c", harness}
 	})

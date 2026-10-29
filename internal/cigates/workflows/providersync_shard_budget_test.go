@@ -43,22 +43,19 @@ func TestProvidersyncShardGoTestTimeoutIsUnderTheJobCap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var found []string
-	for _, line := range strings.Split(string(script), "\n") {
-		if strings.Contains(line, "go test") && strings.Contains(line, "-run \"${test_regex}\"") && strings.Contains(line, "./internal/providersync") {
-			found = append(found, line)
-		}
+	body := string(script)
+	start := strings.Index(body, "run_providersync_bounded() {")
+	if start < 0 {
+		t.Fatal("run_providersync_bounded not found in ci/check_go.sh")
 	}
-	if len(found) != 1 {
-		t.Fatalf("want exactly one providersync shard go test line in ci/check_go.sh, found %d", len(found))
-	}
-	m := regexp.MustCompile(`-timeout=(\d+)m\b`).FindStringSubmatch(found[0])
-	if m == nil {
-		t.Fatalf("providersync shard go test has no -timeout=<N>m: %s", found[0])
+	fn := body[start : start+strings.Index(body[start:], "\n}\n")]
+	m := regexp.MustCompile(`job_go_test_timeout (\d+)`).FindStringSubmatch(fn)
+	if m == nil || !strings.Contains(fn, `-timeout="${tmo}"`) {
+		t.Fatal("the providersync shard go test must take its -timeout from job_go_test_timeout N")
 	}
 	timeout, _ := strconv.Atoi(m[1])
 	if cap := providersyncJobTimeoutMinutes(t); timeout >= cap {
-		t.Fatalf("go test -timeout=%dm must sit under the %d min job cap so a slow shard panics with the running test names instead of a silent cancel", timeout, cap)
+		t.Fatalf("the go test limit %dm must sit under the %d min job cap so a slow shard panics with the running test names instead of a silent cancel", timeout, cap)
 	}
 }
 

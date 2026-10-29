@@ -164,7 +164,7 @@ message() {
 
 out=""
 run_rows() {
-  local file="${1:-}" line failed=0 rc i verdict="" verdicts=0 prefixed=0
+  local file="${1:-}" line failed=0 rc i verdict="" verdicts=0 prefixed=0 tmo
   local -a pkgs=() res=()
   [ -n "${file}" ] && [ -r "${file}" ] || die "run needs a readable ROWS_FILE"
   trap 'rm -f "${out:-}"' EXIT
@@ -204,7 +204,8 @@ run_rows() {
     echo "== golden drift: ${pkgs[i]} -run ${res[i]}"
     out="$(mktemp)"
     rc=0
-    (cd "${ROOT}" && env -u GOFLAGS -u GOEXPERIMENT GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=22m -v -run "${res[i]}" "./${pkgs[i]}") >> "${out}" 2>&1 || rc=$?
+    tmo="$(bash "${ROOT}/ci/check_go.sh" job-timeout 22)" || exit 2
+    (cd "${ROOT}" && env -u GOFLAGS -u GOEXPERIMENT GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout="${tmo}" -v -run "${res[i]}" "./${pkgs[i]}") >> "${out}" 2>&1 || rc=$?
     cat "${out}"
     if [ "${rc}" -ne 0 ]; then
       message "${pkgs[i]}" "${res[i]}"

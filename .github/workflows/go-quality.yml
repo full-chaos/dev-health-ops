@@ -218,6 +218,7 @@ jobs:
     # real completion times on ARC are known.
     timeout-minutes: ${{ (matrix.pool && vars.CI_RACE_RUNNER != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops') && 45 || 30 }}
     env:
+      CHECK_GO_JOB_CAP_MIN: ${{ (matrix.pool && vars.CI_RACE_RUNNER != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops') && 45 || 30 }}
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
       TESTCONTAINERS_RYUK_DISABLED: ${{ (matrix.pool && vars.CI_RACE_RUNNER != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops') && 'true' || 'false' }}
       # The default 600 s per-package go test timeout is too small for the pool.

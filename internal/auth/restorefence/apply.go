@@ -68,8 +68,6 @@ type Report struct {
 	Actions []OperatorAction `json:"actions"`
 }
 
-const blindDigest = "blind_margin"
-
 // Preflight lists the tables the migration role cannot write, by name only.
 func Preflight(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier) ([]string, error) {
 	var missing []string
@@ -205,8 +203,19 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedI
 			}
 			report.FloorsRaised = tag.RowsAffected()
 			for _, s := range sections {
-				if m == nil && s.manifestOnly {
-					continue
+				if m == nil {
+					if q := blindReviewSQL(s); q != "" {
+						ids, err := collectIDs(ctx, tx, q)
+						if err != nil {
+							return fmt.Errorf("naming the rows to review of section %s (sqlstate %s)", s.name, sqlState(err))
+						}
+						if len(ids) > 0 {
+							report.Actions = append(report.Actions, OperatorAction{Kind: ActionReviewAfterBlindMargin, Source: s.name, IDs: ids})
+						}
+					}
+					if s.manifestOnly {
+						continue
+					}
 				}
 				rows := []Row{}
 				if m != nil {
@@ -292,9 +301,9 @@ func sqlState(err error) string {
 	return "none"
 }
 
-// collectIDs runs an id-listing statement (rows as $1) and returns the ids.
-func collectIDs(ctx context.Context, tx audit.TxOps, sql, rows string) ([]string, error) {
-	r, err := tx.Query(ctx, sql, rows)
+// collectIDs runs an id-listing statement and returns the ids.
+func collectIDs(ctx context.Context, tx audit.TxOps, sql string, args ...any) ([]string, error) {
+	r, err := tx.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, err
 	}

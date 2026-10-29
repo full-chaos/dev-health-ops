@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 )
@@ -53,7 +54,6 @@ type Manifest struct {
 // digest, members in a fixed order, rows sorted by key, numbers as written.
 func (m Manifest) Canonical() ([]byte, error) {
 	body := m
-	body.SHA256 = ""
 	floors := append([]Floor(nil), body.Floors...)
 	sort.Slice(floors, func(i, j int) bool {
 		if floors[i].AggregateType != floors[j].AggregateType {
@@ -74,7 +74,7 @@ func (m Manifest) Canonical() ([]byte, error) {
 	}
 	sort.Slice(secs, func(i, j int) bool { return secs[i].Name < secs[j].Name })
 	body.Sections = secs
-	// SHA256 is empty in the digest input; drop the member.
+	// The digest input leaves out the sha256 member.
 	raw, err := json.Marshal(struct {
 		Version        int       `json:"version"`
 		SourceTimeline int64     `json:"source_timeline"`
@@ -134,7 +134,7 @@ func ParseManifest(raw []byte) (Manifest, error) {
 	if err := dec.Decode(&m); err != nil {
 		return Manifest{}, fmt.Errorf("%w: %v", ErrManifest, err)
 	}
-	if _, err := dec.Token(); err == nil {
+	if _, err := dec.Token(); err != io.EOF {
 		return Manifest{}, fmt.Errorf("%w: trailing content", ErrManifest)
 	}
 	out := Manifest{Version: m.Version, SourceTimeline: m.SourceTimeline, Floors: m.Floors, SHA256: m.SHA256}

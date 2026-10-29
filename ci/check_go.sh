@@ -216,7 +216,7 @@ run_providersync_bounded() {
   local pid pgid own_pgid i rc=0 wd marker pidfile
   case "${bound}" in ''|*[!0-9]*) die "DEV_HEALTH_GO_STEP_BOUND_SECS must be a whole number of seconds" ;; esac
   if ! command -v setsid >/dev/null 2>&1; then
-    echo "check_go.sh: setsid is required for the bounded providersync step" >&2
+    echo "check_go.sh: the bounded providersync step needs setsid (util-linux) on PATH; it is missing, so the step does not start. Install a setsid on PATH (Linux: util-linux) or run this shard on Linux." >&2
     return 2
   fi
   marker="$(mktemp)"

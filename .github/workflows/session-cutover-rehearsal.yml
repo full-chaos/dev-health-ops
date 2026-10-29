@@ -26,6 +26,7 @@ on:
       - 'internal/rivermigrate/rivermigrate.go'
       - 'internal/auth/restorefence/**'
       - 'cmd/auth-migrate/restorefence*.go'
+      - 'internal/auth/authruntime/runtime.go'
   workflow_dispatch:
     inputs:
       strict:

@@ -63,6 +63,9 @@ type BackfillResult struct {
 	// RoleSkipped is set when the platform role differs from Superuser but
 	// PlatformRolesOwned kept the backfill from changing it.
 	RoleSkipped bool
+	// RoleExpiredGranted is the id of an expired assignment a person granted
+	// to a superuser: the backfill leaves it and reports it.
+	RoleExpiredGranted *uuid.UUID
 }
 
 type backfillState struct {

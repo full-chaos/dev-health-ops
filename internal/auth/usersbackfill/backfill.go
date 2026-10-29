@@ -77,7 +77,10 @@ type Report struct {
 	// RoleSkippedOwned counts users whose platform role differs from
 	// is_superuser and was left alone because platform roles are owned.
 	RoleSkippedOwned int
-	Skipped          map[string]int
+	// ExpiredGranted are the ids of expired assignments a person granted to a
+	// superuser; the backfill leaves them and reports them.
+	ExpiredGranted []uuid.UUID
+	Skipped        map[string]int
 
 	// IdentityRelinkPending counts the not-carried SSO accounts the owned store re-links at their first sign-in
 	// (identity.IsSSORelinkable).

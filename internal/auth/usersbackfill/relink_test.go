@@ -105,7 +105,7 @@ func TestReportLinesKeepEveryOldLineByteEqual(t *testing.T) {
 		"skipped.email_collision=2", "skipped.invalid_identity=1"}
 	var kept []string
 	for _, line := range rep.Lines() {
-		if line != "identity_relink_pending=3" && line != "sso_subject_unverifiable=4" && !strings.HasPrefix(line, "platform_role_skipped_owned=") {
+		if line != "identity_relink_pending=3" && line != "sso_subject_unverifiable=4" && !strings.HasPrefix(line, "platform_role_skipped_owned=") && !strings.HasPrefix(line, "platform_role_expired_granted") {
 			kept = append(kept, line)
 		}
 	}

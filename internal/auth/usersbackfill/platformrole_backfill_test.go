@@ -94,3 +94,33 @@ func TestUsersBackfillRefusesAMalformedPlatformRolesSwitchBeforeConnect(t *testi
 		t.Fatalf("exit %d, stderr %q", code, stderr.String())
 	}
 }
+
+// expiredSink reports an expired granted assignment for some users.
+type expiredSink struct{ expired map[uuid.UUID]uuid.UUID }
+
+func (x expiredSink) BackfillUser(_ context.Context, t identity.BackfillTarget, _ bool) (identity.BackfillResult, error) {
+	var res identity.BackfillResult
+	if id, ok := x.expired[t.ID]; ok {
+		res.RoleExpiredGranted = &id
+	}
+	return res, nil
+}
+
+// Each expired granted assignment is reported by its id, in id order, after
+// a count line.
+func TestRunReportsExpiredGrantedAssignmentsByID(t *testing.T) {
+	rows := rowsFor(3)
+	a, b := uuid.MustParse("00000000-0000-4000-8000-0000000000b2"), uuid.MustParse("00000000-0000-4000-8000-0000000000a1")
+	rep, err := Run(context.Background(), pagedSource{rows: rows}, expiredSink{expired: map[uuid.UUID]uuid.UUID{rows[0].ID: a, rows[2].ID: b}}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Join(rep.Lines(), "\n")
+	want := "platform_role_expired_granted=2\nplatform_role_expired_granted.assignment=" + b.String() + "\nplatform_role_expired_granted.assignment=" + a.String()
+	if !strings.Contains(lines, want) {
+		t.Fatalf("report lacks\n%s\nin\n%s", want, lines)
+	}
+	if rep.Unchanged != 3 {
+		t.Fatalf("an expired granted assignment is not a write: unchanged %d, want 3", rep.Unchanged)
+	}
+}

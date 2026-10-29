@@ -5,22 +5,21 @@ package chmigrate_test
 import (
 	"context"
 	"fmt"
-	"os"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 
-	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
 // Invariant the consumer of last_synced relies on: a reader that keeps a cursor and reads
 // "last_synced > cursor" never permanently misses a row. These cells execute the ways a server stamp
-// and the moment a row becomes visible to a reader can come apart, against a real ClickHouse with the
-// migration applied. The contract they establish (and what they do NOT establish) is in the PR body.
+// and the moment a row becomes visible to a reader can come apart, against a real ClickHouse at the
+// head (migration 099 in the baseline; the legacy-row cell is archived with 099, CHAOS-11751). The contract they establish (and what they do NOT establish) is in the PR body.
 func TestLastSyncedCursorContractAgainstRealClickHouse(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
@@ -33,6 +32,7 @@ func TestLastSyncedCursorContractAgainstRealClickHouse(t *testing.T) {
 		defer closeCancel()
 		_ = instance.Close(closeCtx)
 	})
+	chschema.Apply(ctx, t, instance) // the head: team_project_ownership with its last_synced DEFAULT (migration 099)
 	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
 	if err != nil {
 		t.Fatal(err)
@@ -64,24 +64,6 @@ func TestLastSyncedCursorContractAgainstRealClickHouse(t *testing.T) {
 	const cols = `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) `
 	const stampOf = `SELECT toUnixTimestamp64Milli(last_synced) FROM team_project_ownership WHERE project_id = '%s'`
 	stamp := func(project string) int64 { return millis(fmt.Sprintf(stampOf, project)) }
-
-	// Legacy rows, then the real migration file.
-	exec(ownershipBeforeLastSynced)
-	exec(cols + `VALUES ('o', 'jira', 'T', 'LEGACY', 'LEGACY', 'native', '2020-01-01 00:00:00', NULL, '2020-01-01 00:00:00')`)
-	cursorBeforeMigration := time.Now().UTC().UnixMilli()
-	time.Sleep(20 * time.Millisecond)
-	sql, err := os.ReadFile("sql/099_team_project_ownership_last_synced.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, statement := range chmigrate.SplitStatements(string(sql)) {
-		exec(statement)
-	}
-
-	// Cell 1, MATERIALIZE: a cursor taken before the migration sees every legacy row afterwards.
-	if got := stamp("LEGACY"); got <= cursorBeforeMigration {
-		t.Fatalf("legacy last_synced %d is not after a cursor taken before the migration (%d): the row would be invisible to it", got, cursorBeforeMigration)
-	}
 
 	// Cell 2, part commit: a slow insert (2 s inside its SELECT) and a fast insert that commits while it
 	// runs. The fast row becomes visible first; the question is where the slow row's stamp lands.

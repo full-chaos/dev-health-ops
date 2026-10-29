@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	valkeystore "github.com/full-chaos/dev-health-ops/internal/storage/valkey"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
 	valkeygo "github.com/valkey-io/valkey-go"
@@ -50,17 +51,13 @@ func seedSuccessfulUnitRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool
 
 func startFinalizePostgres(t *testing.T, ctx context.Context) *pgxpool.Pool {
 	t.Helper()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	t.Cleanup(func() { _ = instance.Close(context.Background()) })
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	createFinalizeTables(t, ctx, pool)
 	seedFinalizeRoute(t, ctx, pool)
 	seedSuccessfulUnitRun(t, ctx, pool)
 	return pool

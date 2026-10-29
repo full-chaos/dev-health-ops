@@ -165,7 +165,7 @@ func (s *SessionIssueWorkload) authorize(bearer string) (issueCaller, string, er
 	}
 	aud, sub, ok := peekAudienceAndSubject(payload)
 	if !ok {
-		return issueCaller{}, "contract", nil
+		return issueCaller{}, "payload_not_strict", nil
 	}
 	if aud != issueWorkloadAudience {
 		return issueCaller{}, "audience", nil

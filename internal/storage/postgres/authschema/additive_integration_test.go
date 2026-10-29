@@ -403,6 +403,11 @@ var additiveExemptions = []additiveExemption{
 	},
 	{
 		version:    33,
+		regression: `constraint aggregate_revisions.aggregate_revisions_aggregate_type_check redefined "CHECK ((aggregate_type = ANY (ARRAY['principal'::text, 'user'::text, 'external_identity'::text, 'organization'::text, 'membership'::text, 'platform_role_assignment'::text, 'service_account'::text, 'workload'::text, 'resource_grant'::text])))" -> "CHECK ((aggregate_type = ANY (ARRAY['principal'::text, 'user'::text, 'external_identity'::text, 'organization'::text, 'membership'::text, 'platform_role_assignment'::text, 'service_account'::text, 'workload'::text, 'resource_grant'::text, 'invite'::text])))"`,
+		reason:     "aggregate_revisions admits the invite aggregate; the redefined list is the 0013 list plus that one value, so it only widens (CHAOS-10981)",
+	},
+	{
+		version:    33,
 		regression: `constraint platform_role_assignments.platform_role_assignments_principal_id_fkey redefined "FOREIGN KEY (principal_id) REFERENCES auth.principals(id) ON DELETE CASCADE" -> "FOREIGN KEY (principal_id) REFERENCES auth.principals(id) ON DELETE RESTRICT"`,
 		reason:     "deleting a principal that holds a platform role is refused instead of deleting the role",
 	},

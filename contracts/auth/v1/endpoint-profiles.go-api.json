@@ -894,7 +894,7 @@
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
       "gaps": [
-        "action: no catalog action covers billing management; the action it needs is billing.manage (this leaf does not extend the vocabulary)",
+        "action: the handler admits only a superuser (internal/api/billing/plans.go:428); no organization role holds it, and the catalog has no platform billing action",
         "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
       ],
       "graphql_field_name": null,
@@ -5756,7 +5756,7 @@
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
       "gaps": [
-        "action: no catalog action covers billing read; the action it needs is billing.read (this leaf does not extend the vocabulary)"
+        "action: the handler admits only a superuser (internal/api/billing/audit.go:139); no organization role holds it, and the catalog has no platform billing action"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/billing/audit [dev-health-ops-api @api]",
@@ -5826,7 +5826,7 @@
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
       "gaps": [
-        "action: no catalog action covers billing read; the action it needs is billing.read (this leaf does not extend the vocabulary)",
+        "action: the handler admits only a superuser (internal/api/billing/audit.go:214); no organization role holds it, and the catalog has no platform billing action",
         "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
       ],
       "graphql_field_name": null,
@@ -5888,7 +5888,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "license.read",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -5897,7 +5897,6 @@
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
       "gaps": [
-        "action: no catalog action covers entitlement read; the action it needs is license.read (this leaf does not extend the vocabulary)",
         "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
       ],
       "graphql_field_name": null,
@@ -5959,7 +5958,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "billing.read",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -5967,9 +5966,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
-      "gaps": [
-        "action: no catalog action covers billing read; the action it needs is billing.read (this leaf does not extend the vocabulary)"
-      ],
+      "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/billing/invoices [dev-health-ops-api @api]",
       "impersonation_policy": "subject_to_impersonation_override",
@@ -6029,7 +6026,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "billing.read",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -6038,7 +6035,6 @@
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
       "gaps": [
-        "action: no catalog action covers billing read; the action it needs is billing.read (this leaf does not extend the vocabulary)",
         "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
       ],
       "graphql_field_name": null,
@@ -6109,7 +6105,7 @@
       "current_state_cache_behavior": "none: no authorization read (internal/api/billing/routes.go:87)",
       "disclosure_behavior": null,
       "gaps": [
-        "action: no catalog action covers the plan catalog read; the action it needs is billing.read (this leaf does not extend the vocabulary)",
+        "action: the plan catalog read is open to anonymous callers (policy.Optional, internal/api/billing/routes.go:87); no role-held catalog action fits a read that needs no role",
         "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
       ],
       "graphql_field_name": null,
@@ -6180,7 +6176,7 @@
       "current_state_cache_behavior": "none: no authorization read (internal/api/billing/routes.go:96)",
       "disclosure_behavior": null,
       "gaps": [
-        "action: no catalog action covers the plan catalog read; the action it needs is billing.read (this leaf does not extend the vocabulary)",
+        "action: the plan catalog read is open to anonymous callers (policy.Optional, internal/api/billing/routes.go:96); no role-held catalog action fits a read that needs no role",
         "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
       ],
       "graphql_field_name": null,
@@ -6251,7 +6247,7 @@
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
       "gaps": [
-        "action: no catalog action covers billing read; the action it needs is billing.read (this leaf does not extend the vocabulary)"
+        "action: the handler admits only a superuser (internal/api/billing/refunds.go:570); no organization role holds it, and the catalog has no platform billing action"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/billing/refunds [dev-health-ops-api @api]",
@@ -6321,7 +6317,7 @@
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
       "gaps": [
-        "action: no catalog action covers billing read; the action it needs is billing.read (this leaf does not extend the vocabulary)",
+        "action: the handler admits only a superuser (internal/api/billing/refunds.go:632); no organization role holds it, and the catalog has no platform billing action",
         "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
       ],
       "graphql_field_name": null,
@@ -6383,7 +6379,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "billing.read",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -6391,9 +6387,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
-      "gaps": [
-        "action: no catalog action covers billing read; the action it needs is billing.read (this leaf does not extend the vocabulary)"
-      ],
+      "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/billing/subscriptions [dev-health-ops-api @api]",
       "impersonation_policy": "subject_to_impersonation_override",
@@ -6453,7 +6447,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "billing.read",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -6461,9 +6455,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
-      "gaps": [
-        "action: no catalog action covers billing read; the action it needs is billing.read (this leaf does not extend the vocabulary)"
-      ],
+      "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/billing/subscriptions/history [dev-health-ops-api @api]",
       "impersonation_policy": "subject_to_impersonation_override",
@@ -6523,7 +6515,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "billing.read",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -6531,9 +6523,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
-      "gaps": [
-        "action: no catalog action covers billing read; the action it needs is billing.read (this leaf does not extend the vocabulary)"
-      ],
+      "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/billing/subscriptions/list [dev-health-ops-api @api]",
       "impersonation_policy": "subject_to_impersonation_override",
@@ -6984,7 +6974,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "license.read",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -6993,7 +6983,6 @@
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
       "gaps": [
-        "action: no catalog action covers entitlement read; the action it needs is license.read (this leaf does not extend the vocabulary)",
         "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
       ],
       "graphql_field_name": null,
@@ -13625,7 +13614,7 @@
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
       "gaps": [
-        "action: no catalog action covers billing management; the action it needs is billing.manage (this leaf does not extend the vocabulary)",
+        "action: the handler admits only a superuser (internal/api/billing/audit.go:306); no organization role holds it, and the catalog has no platform billing action",
         "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
       ],
       "graphql_field_name": null,
@@ -13696,7 +13685,7 @@
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
       "gaps": [
-        "action: no catalog action covers billing management; the action it needs is billing.manage (this leaf does not extend the vocabulary)"
+        "action: every organization role may call the route today (policy.Authenticated, internal/api/billing/routes.go:109, no role check in the handler); billing.manage is held by admin and owner only, so it does not record this route's access"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/billing/checkout [dev-health-ops-api @api]",
@@ -13757,7 +13746,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "billing.manage",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -13766,7 +13755,6 @@
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
       "gaps": [
-        "action: no catalog action covers billing management; the action it needs is billing.manage (this leaf does not extend the vocabulary)",
         "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
       ],
       "graphql_field_name": null,
@@ -13837,7 +13825,7 @@
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
       "gaps": [
-        "action: no catalog action covers billing management; the action it needs is billing.manage (this leaf does not extend the vocabulary)"
+        "action: the handler admits only a superuser (internal/api/billing/plans.go:137); no organization role holds it, and the catalog has no platform billing action"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/billing/plans [dev-health-ops-api @api]",
@@ -13907,7 +13895,7 @@
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "platform route, behaviour today: only a superuser passes, any other caller answers 403 (internal/api/policy/guard.go:137); the caller's own organization is not read",
       "gaps": [
-        "action: no catalog action covers billing management; the action it needs is billing.manage (this leaf does not extend the vocabulary)"
+        "action: the route is superuser-only (policy.Superuser, internal/api/billing/routes.go:92) with tenancy cross_org_superuser_only; the billing actions are organization actions, and the catalog has no platform billing action"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/billing/plans/pull-stripe [dev-health-ops-api @api]",
@@ -14016,7 +14004,7 @@
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
       "gaps": [
-        "action: no catalog action covers billing management; the action it needs is billing.manage (this leaf does not extend the vocabulary)",
+        "action: the handler admits only a superuser (internal/api/billing/plansync.go:25); no organization role holds it, and the catalog has no platform billing action",
         "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
       ],
       "graphql_field_name": null,
@@ -14087,7 +14075,7 @@
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
       "gaps": [
-        "action: no catalog action covers billing management; the action it needs is billing.manage (this leaf does not extend the vocabulary)"
+        "action: every organization role may call the route today (policy.Authenticated, internal/api/billing/routes.go:110, no role check in the handler); billing.manage is held by admin and owner only, so it does not record this route's access"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/billing/portal [dev-health-ops-api @api]",
@@ -14157,7 +14145,7 @@
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
       "gaps": [
-        "action: no catalog action covers billing management; the action it needs is billing.manage (this leaf does not extend the vocabulary)"
+        "action: the handler admits only a superuser (internal/api/billing/reconcile.go:413); no organization role holds it, and the catalog has no platform billing action"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/billing/reconcile [dev-health-ops-api @api]",
@@ -14227,7 +14215,7 @@
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
       "gaps": [
-        "action: no catalog action covers billing management; the action it needs is billing.manage (this leaf does not extend the vocabulary)"
+        "action: the handler admits only a superuser (internal/api/billing/refunds.go:71); no organization role holds it, and the catalog has no platform billing action"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/billing/refunds [dev-health-ops-api @api]",
@@ -14288,7 +14276,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "billing.manage",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -14296,9 +14284,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
-      "gaps": [
-        "action: no catalog action covers billing management; the action it needs is billing.manage (this leaf does not extend the vocabulary)"
-      ],
+      "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/billing/subscriptions/cancel [dev-health-ops-api @api]",
       "impersonation_policy": "subject_to_impersonation_override",
@@ -14358,7 +14344,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "billing.manage",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -14366,9 +14352,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
-      "gaps": [
-        "action: no catalog action covers billing management; the action it needs is billing.manage (this leaf does not extend the vocabulary)"
-      ],
+      "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/billing/subscriptions/change-plan [dev-health-ops-api @api]",
       "impersonation_policy": "subject_to_impersonation_override",
@@ -14428,7 +14412,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "billing.manage",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -14436,9 +14420,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
-      "gaps": [
-        "action: no catalog action covers billing management; the action it needs is billing.manage (this leaf does not extend the vocabulary)"
-      ],
+      "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/billing/subscriptions/reactivate [dev-health-ops-api @api]",
       "impersonation_policy": "subject_to_impersonation_override",
@@ -15848,7 +15830,7 @@
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
       "gaps": [
-        "action: no catalog action covers billing management; the action it needs is billing.manage (this leaf does not extend the vocabulary)",
+        "action: the handler admits only a superuser (internal/api/billing/plans.go:340); no organization role holds it, and the catalog has no platform billing action",
         "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
       ],
       "graphql_field_name": null,

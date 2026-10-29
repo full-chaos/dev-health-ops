@@ -1,6 +1,6 @@
 {
   "schema_version": "roles.v1",
-  "catalog_version": 2,
+  "catalog_version": 3,
   "description": "The closed role catalog. Each role lists its actions explicitly; there is no inheritance, wildcard or all-actions role. A platform role holds only platform actions; an organization role holds only organization actions.",
   "roles": [
     {
@@ -8,7 +8,9 @@
       "scope": "organization",
       "actions": [
         "analytics.read",
+        "billing.read",
         "git.read",
+        "license.read",
         "members.read",
         "metrics.read",
         "org.read",
@@ -23,7 +25,9 @@
       "actions": [
         "analytics.export",
         "analytics.read",
+        "billing.read",
         "git.read",
+        "license.read",
         "members.read",
         "metrics.read",
         "org.read",
@@ -38,10 +42,13 @@
       "actions": [
         "analytics.export",
         "analytics.read",
+        "billing.manage",
+        "billing.read",
         "git.read",
         "git.sync",
         "integrations.read",
         "integrations.write",
+        "license.read",
         "members.invite",
         "members.manage",
         "members.read",
@@ -63,10 +70,13 @@
       "actions": [
         "analytics.export",
         "analytics.read",
+        "billing.manage",
+        "billing.read",
         "git.read",
         "git.sync",
         "integrations.read",
         "integrations.write",
+        "license.read",
         "members.invite",
         "members.manage",
         "members.read",

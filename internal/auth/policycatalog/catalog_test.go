@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	actionsSHA = "4337f3509db0ba9bfdbb80f35c30ca450dfe169abb5a1bf18598dc2b92719ccf"
-	rolesSHA   = "867899e8151541437162b6fed8eae0f00fb5c6117367b9e657193d7729418446"
+	actionsSHA = "65ef0a1f6573e3d3b8d08b2ca6024fcf1b3db87214b787e6c8f2b95386789f33"
+	rolesSHA   = "024192e8eb32a5b07b0e7ce8e41acc72ce1c26db6000dbdbb66524a3e86b8132"
 )
 
 func repoRoot(t *testing.T) string {
@@ -193,20 +193,27 @@ func TestEmbeddedFilesValidateAgainstTheirSchemas(t *testing.T) {
 	}
 }
 
-// Parity: the role -> action sets equal the hierarchy in
-// internal/api/session/permissions.go (roleHierarchy; each role holds its own
-// entries and every lower role's), with ':' spelled '.'.
-func TestRolesMatchTheSessionHierarchy(t *testing.T) {
+// catalogOnly is the closed set of catalog actions that have no permission in
+// internal/api/session/permissions.go. Catalog-only = not served in /auth/me
+// until a web-reviewed change adds it there; every other catalog action must
+// still equal a session permission.
+var catalogOnly = map[string]bool{"billing.read": true, "billing.manage": true, "license.read": true}
+
+type sessionEntry struct {
+	role string
+	perm []string
+}
+
+// sessionPermissions parses roleHierarchy and standardPermissions from
+// internal/api/session/permissions.go.
+func sessionPermissions(t *testing.T) ([]sessionEntry, []string) {
+	t.Helper()
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, filepath.Join(repoRoot(t), "internal/api/session/permissions.go"), nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	type entry struct {
-		role string
-		perm []string
-	}
-	var hier []entry
+	var hier []sessionEntry
 	var std []string
 	ast.Inspect(f, func(n ast.Node) bool {
 		vs, ok := n.(*ast.ValueSpec)
@@ -225,7 +232,7 @@ func TestRolesMatchTheSessionHierarchy(t *testing.T) {
 		case "roleHierarchy":
 			for _, e := range lit.Elts {
 				el := e.(*ast.CompositeLit)
-				en := entry{role: unq(t, el.Elts[0])}
+				en := sessionEntry{role: unq(t, el.Elts[0])}
 				for _, p := range el.Elts[1].(*ast.CompositeLit).Elts {
 					en.perm = append(en.perm, unq(t, p))
 				}
@@ -237,6 +244,15 @@ func TestRolesMatchTheSessionHierarchy(t *testing.T) {
 	if len(hier) != 4 || len(std) != 22 {
 		t.Fatalf("parsed %d roles and %d permissions from permissions.go", len(hier), len(std))
 	}
+	return hier, std
+}
+
+// Parity: the role -> action sets equal the hierarchy in
+// internal/api/session/permissions.go (roleHierarchy; each role holds its own
+// entries and every lower role's), with ':' spelled '.'; catalogOnly actions
+// are left out of the comparison.
+func TestRolesMatchTheSessionHierarchy(t *testing.T) {
+	hier, std := sessionPermissions(t)
 	c := Default()
 	held := map[string]bool{}
 	for _, e := range hier {
@@ -248,7 +264,12 @@ func TestRolesMatchTheSessionHierarchy(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got := append([]string(nil), r.Actions...)
+		var got []string
+		for _, a := range r.Actions {
+			if !catalogOnly[a] {
+				got = append(got, a)
+			}
+		}
 		sort.Strings(got)
 		if strings.Join(got, ",") != strings.Join(want, ",") {
 			t.Errorf("role %s = %v, want %v", e.role, got, want)
@@ -265,8 +286,8 @@ func TestRolesMatchTheSessionHierarchy(t *testing.T) {
 			t.Errorf("action %s has scope %s", a.ID, a.Scope)
 		}
 	}
-	if len(c.Actions()) != len(std) {
-		t.Errorf("catalog has %d actions, permissions.go %d", len(c.Actions()), len(std))
+	if len(c.Actions()) != len(std)+len(catalogOnly) {
+		t.Errorf("catalog has %d actions, permissions.go %d plus %d catalog-only", len(c.Actions()), len(std), len(catalogOnly))
 	}
 	if _, err := os.Stat(filepath.Join(repoRoot(t), "internal/api/session/permissions.go")); err != nil {
 		t.Fatal(err)
@@ -289,4 +310,58 @@ func keys(m map[string]bool) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// The catalog actions with no session permission are exactly catalogOnly. Load
+// already refuses a role that lists an action of the other scope.
+func TestCatalogOnlyActionsAreExactlyTheClosedSet(t *testing.T) {
+	_, std := sessionPermissions(t)
+	session := map[string]bool{}
+	for _, p := range std {
+		session[strings.Replace(p, ":", ".", 1)] = true
+	}
+	extra := map[string]bool{}
+	for _, a := range Default().Actions() {
+		if !session[a.ID] {
+			extra[a.ID] = true
+		}
+	}
+	if strings.Join(keys(extra), ",") != strings.Join(keys(catalogOnly), ",") {
+		t.Errorf("catalog actions with no session permission = %v, want exactly %v", keys(extra), keys(catalogOnly))
+	}
+}
+
+// The billing and license actions carry these classes and are held by exactly these roles.
+func TestCatalogHoldsTheBillingAndLicenseActions(t *testing.T) {
+	classes := map[string][2]string{
+		"billing.read":   {RiskLow, CacheDecisionBound},
+		"billing.manage": {RiskHigh, CacheNone},
+		"license.read":   {RiskLow, CacheDecisionBound},
+	}
+	holders := map[string][]string{
+		"billing.read":   {"admin", "member", "owner", "viewer"},
+		"billing.manage": {"admin", "owner"},
+		"license.read":   {"admin", "member", "owner", "viewer"},
+	}
+	c := Default()
+	for id, want := range classes {
+		a, err := c.Action(id)
+		if err != nil {
+			t.Errorf("action %s: %v", id, err)
+			continue
+		}
+		if a.RiskClass != want[0] || a.CacheClass != want[1] {
+			t.Errorf("action %s = %s/%s, want %s/%s", id, a.RiskClass, a.CacheClass, want[0], want[1])
+		}
+		var got []string
+		for _, r := range c.Roles() {
+			if c.Allows(r.ID, id) {
+				got = append(got, r.ID)
+			}
+		}
+		sort.Strings(got)
+		if strings.Join(got, ",") != strings.Join(holders[id], ",") {
+			t.Errorf("action %s is held by %v, want %v", id, got, holders[id])
+		}
+	}
 }

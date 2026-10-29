@@ -758,3 +758,118 @@ func TestBodyOrganizationRowsNameTheirCredentialBinding(t *testing.T) {
 		})
 	}
 }
+
+// The billing and licensing rows that today's code lets a catalog role set perform carry that action.
+var billingActionRows = map[string]string{
+	"GET /api/v1/billing/invoices [dev-health-ops-api @api]":                    "billing.read",
+	"GET /api/v1/billing/invoices/{invoice_id} [dev-health-ops-api @api]":       "billing.read",
+	"GET /api/v1/billing/subscriptions [dev-health-ops-api @api]":               "billing.read",
+	"GET /api/v1/billing/subscriptions/list [dev-health-ops-api @api]":          "billing.read",
+	"GET /api/v1/billing/subscriptions/history [dev-health-ops-api @api]":       "billing.read",
+	"GET /api/v1/billing/entitlements/{org_id} [dev-health-ops-api @api]":       "license.read",
+	"GET /api/v1/licensing/entitlements/{org_id} [dev-health-ops-api @api]":     "license.read",
+	"POST /api/v1/billing/invoices/{invoice_id}/void [dev-health-ops-api @api]": "billing.manage",
+	"POST /api/v1/billing/subscriptions/change-plan [dev-health-ops-api @api]":  "billing.manage",
+	"POST /api/v1/billing/subscriptions/cancel [dev-health-ops-api @api]":       "billing.manage",
+	"POST /api/v1/billing/subscriptions/reactivate [dev-health-ops-api @api]":   "billing.manage",
+}
+
+// The billing rows no catalog role set fits: superuser-only handlers, the anonymous plan reads, the platform
+// pull and the routes every organization role may call. They keep action null with a gap that says why.
+var billingNullRows = []string{
+	"GET /api/v1/billing/plans [dev-health-ops-api @api]",
+	"GET /api/v1/billing/plans/{plan_id} [dev-health-ops-api @api]",
+	"POST /api/v1/billing/plans [dev-health-ops-api @api]",
+	"PUT /api/v1/billing/plans/{plan_id} [dev-health-ops-api @api]",
+	"DELETE /api/v1/billing/plans/{plan_id} [dev-health-ops-api @api]",
+	"POST /api/v1/billing/plans/{plan_id}/sync-stripe [dev-health-ops-api @api]",
+	"POST /api/v1/billing/plans/pull-stripe [dev-health-ops-api @api]",
+	"GET /api/v1/billing/audit [dev-health-ops-api @api]",
+	"GET /api/v1/billing/audit/{audit_id} [dev-health-ops-api @api]",
+	"POST /api/v1/billing/audit/{audit_id}/resolve [dev-health-ops-api @api]",
+	"GET /api/v1/billing/refunds [dev-health-ops-api @api]",
+	"GET /api/v1/billing/refunds/{refund_id} [dev-health-ops-api @api]",
+	"POST /api/v1/billing/refunds [dev-health-ops-api @api]",
+	"POST /api/v1/billing/reconcile [dev-health-ops-api @api]",
+	"POST /api/v1/billing/checkout [dev-health-ops-api @api]",
+	"POST /api/v1/billing/portal [dev-health-ops-api @api]",
+}
+
+func TestBillingAndLicenseRowsRecordTheirAction(t *testing.T) {
+	ids := append([]string(nil), billingNullRows...)
+	for id := range billingActionRows {
+		ids = append(ids, id)
+	}
+	for id, row := range rowsByID(t, ids) {
+		want, set := billingActionRows[id]
+		got, isString := row["action"].(string)
+		switch {
+		case set && (!isString || got != want):
+			t.Errorf("%s: action %v, want %q", id, row["action"], want)
+		case set && gapNames(row, "action"):
+			t.Errorf("%s: carries action %q and still an action gap", id, got)
+		case !set && row["action"] != nil:
+			t.Errorf("%s: action %v, want null", id, row["action"])
+		case !set:
+			gaps, _ := row["gaps"].([]any)
+			for _, gap := range gaps {
+				if text, _ := gap.(string); strings.HasPrefix(text, "action:") && strings.Contains(text, "the action it needs is") {
+					t.Errorf("%s: the action gap still names a needed action the catalog now holds: %q", id, text)
+				}
+			}
+		}
+	}
+}
+
+// adminRoutePattern matches a billing route registration whose guard level is exactly policy.Admin.
+var adminRoutePattern = regexp.MustCompile(`Method: http\.Method([A-Za-z]+), Pattern: prefix \+ "([^"]+)".*policy\.Admin,`)
+
+func adminRoutes(source string) map[string]bool {
+	out := map[string]bool{}
+	for _, match := range adminRoutePattern.FindAllStringSubmatch(source, -1) {
+		out[strings.ToUpper(match[1])+" /api/v1/billing"+match[2]+" [dev-health-ops-api @api]"] = true
+	}
+	return out
+}
+
+// billing.manage is recorded on exactly the billing routes that the policy.Admin guard (an organization admin or
+// owner) wraps; a route added to or taken from that guard, or a row given the action without it, fails here.
+func TestBillingManageRowsAreExactlyThePolicyAdminRoutes(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(testRoot(t), "internal/api/billing/routes.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin := adminRoutes(string(raw))
+	if len(admin) < 4 {
+		t.Fatalf("found %d policy.Admin billing routes; the route parse measured nothing", len(admin))
+	}
+	recorded := map[string]bool{}
+	for _, item := range loadGoAPIDocument(t)["rows"].([]any) {
+		row := item.(map[string]any)
+		if row["action"] == "billing.manage" {
+			recorded[row["id"].(string)] = true
+		}
+	}
+	for id := range admin {
+		if !recorded[id] {
+			t.Errorf("%s is wrapped in policy.Admin but its row does not record billing.manage", id)
+		}
+	}
+	for id := range recorded {
+		if !admin[id] {
+			t.Errorf("%s records billing.manage but is not wrapped in policy.Admin", id)
+		}
+	}
+}
+
+func TestAdminRouteParseSeesOnlyTheAdminGuard(t *testing.T) {
+	source := `		{Method: http.MethodPost, Pattern: prefix + "/a", Allow: http.MethodPost, Handler: wrap(policy.Admin, h.a)},
+		{Method: http.MethodGet, Pattern: prefix + "/b", Handler: wrap(policy.AdminOrg, h.b)},
+		{Method: http.MethodPost, Pattern: prefix + "/c", Handler: body(policy.Authenticated, h.c)},
+		{Method: http.MethodPut, Pattern: prefix + "/d/{id}", Handler: body(policy.Admin, h.d)},`
+	got := adminRoutes(source)
+	want := []string{"POST /api/v1/billing/a [dev-health-ops-api @api]", "PUT /api/v1/billing/d/{id} [dev-health-ops-api @api]"}
+	if len(got) != len(want) || !got[want[0]] || !got[want[1]] {
+		t.Fatalf("adminRoutes = %v, want exactly %v", got, want)
+	}
+}

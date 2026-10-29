@@ -28,6 +28,7 @@ func TestRestoreFenceArgsRefuseWhatTheVerbsDoNotTake(t *testing.T) {
 		"export without a file":    {"export"},
 		"apply without an input":   {"apply"},
 		"apply with a zero margin": {"apply", "-blind-margin", "0"},
+		"manifest with a margin":   {"apply", "-manifest", "m.json", "-blind-margin", "5"},
 		"a positional argument":    {"status", "extra"},
 		"status with -apply":       {"status", "-apply"},
 		"export with a manifest":   {"export", "-out", "m.json", "-manifest", "x"},

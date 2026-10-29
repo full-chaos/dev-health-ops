@@ -221,10 +221,10 @@ func TestAnAllowlistEntryWithAnEditedRangeIsNotHeldAndItsExpiryOnlyShortens(t *t
 // (written by an earlier binary, without the newer sections) is refused with a clear message at ParseManifest and at
 // Apply, before any database work.
 func TestAVersionOneManifestIsRefusedWithAClearMessage(t *testing.T) {
-	if ManifestVersion != 3 {
-		t.Fatalf("ManifestVersion = %d, want 3", ManifestVersion)
+	if ManifestVersion != 4 {
+		t.Fatalf("ManifestVersion = %d, want 4", ManifestVersion)
 	}
-	for _, v := range []int{1, 2} {
+	for _, v := range []int{1, 2, 3} {
 		m := sampleManifest(t)
 		m.Version = v
 		if err := m.Seal(); err != nil {
@@ -248,6 +248,7 @@ func TestAVersionOneManifestIsRefusedWithAClearMessage(t *testing.T) {
 var pinnedSectionSet = map[int]string{
 	2: "1ce899a3a8cfc45c8579eb54ee13d46bc5421c765c9f46d33f5809b0c4344b9d",
 	3: "de43468c86eb3895268e1e9bfe141595e3863c044af353f09e41aa5ced16bb43",
+	4: "PIN",
 }
 
 func sectionSetDigest(t *testing.T, skip ...string) string {

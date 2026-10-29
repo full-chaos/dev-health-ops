@@ -26,7 +26,7 @@ var columns = []string{"suite", "owner", "risk", "command", "inputs", "trigger",
 var (
 	commandStart = regexp.MustCompile(`(?:^|[\s(!;&|])(?:bash\s+|\./)?((?:ci/(?:check|run)_[A-Za-z0-9_]+\.sh|scripts/[A-Za-z0-9_.-]+_test\.sh|ci/[A-Za-z0-9_.-]+_test\.sh|ci/auth_corpus_external\.sh)\b.*|go test\b.*|node --test\b.*|node run\.mjs\b.*|pnpm graphql:wire-parity:check\b.*|docker info\b.*|docker build -t dind-smoke-test:local\b.*)$`)
 	commandCut   = regexp.MustCompile(`\s+(?:\|\||\||&&|;|\d?>|<|\))|;\s.*$|\s\\$`)
-	goTestFlags  = regexp.MustCompile(`\s-(?:mod=\S+|trimpath|count=\S+|timeout[= ]\S+|v|json|race)\b`)
+	goTestFlags  = regexp.MustCompile(`\s-(?:mod=\S+|count=\S+|timeout[= ]\S+|(?:trimpath|v|json|race)\b)`)
 	segmentSplit = regexp.MustCompile(`\s+(?:&&|\|\||\|)\s+|;\s+|;$`)
 	yamlToken    = regexp.MustCompile(`[A-Za-z0-9*_./-]+\.ya?ml`)
 	shellSuite   = regexp.MustCompile(`(?:_test|^test-[A-Za-z0-9_-]+)\.sh$`)
@@ -54,7 +54,7 @@ func repoRoot(t *testing.T) string {
 
 func normalize(line string) string {
 	line = strings.TrimSpace(line)
-	for _, skip := range []string{"#", "echo ", "printf ", "chmod ", "source "} {
+	for _, skip := range []string{"#", "echo ", "printf ", "chmod ", "source ", "tmo="} {
 		if strings.HasPrefix(line, skip) {
 			return ""
 		}
@@ -290,6 +290,8 @@ func TestNormalize(t *testing.T) {
 		`elif bash ci/check_go.sh auth relevant "${mb}" "${HEAD_SHA}" | tee r.txt | grep -q`:  `ci/check_go.sh auth relevant "${mb}" "${HEAD_SHA}"`,
 		`./ci/run_tests.sh live-e2e`:                                                          `ci/run_tests.sh live-e2e`,
 		`go test -mod=readonly -trimpath -count=1 -v -run '^TestX$' ./deploy/helm/dev-health`: `go test -run '^TestX$' ./deploy/helm/dev-health`,
+		`go test -mod=readonly -count=1 -timeout="${tmo}" -v -run '^TestX$' ./x`:              `go test -run '^TestX$' ./x`,
+		`tmo="$(bash ci/check_go.sh job-timeout 25)"`:                                         ``,
 		`chmod +x ci/run_tests.sh ci/run_live_backend_e2e.sh`:                                 ``,
 		`source ci/mirror_precheck_lib.sh`:                                                    ``,
 		`bash ci/check_migration_matrix_test.sh`:                                              `ci/check_migration_matrix_test.sh`,

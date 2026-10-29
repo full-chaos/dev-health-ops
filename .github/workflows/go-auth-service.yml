@@ -236,6 +236,8 @@ jobs:
     if: github.event_name == 'merge_group' && needs.auth-changes.outputs.corpus == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      CHECK_GO_JOB_CAP_MIN: 30
     strategy:
       fail-fast: false
       matrix:

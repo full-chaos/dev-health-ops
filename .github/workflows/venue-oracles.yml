@@ -231,6 +231,8 @@ jobs:
     name: auth-corpus-external (${{ matrix.leg }})
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      CHECK_GO_JOB_CAP_MIN: 45
     strategy:
       fail-fast: false
       matrix:

@@ -542,6 +542,9 @@ func authCorpusViolations(t *testing.T, root string) []string {
 	if found != 1 {
 		out = append(out, fmt.Sprintf("ci/auth_corpus_external.sh: found %d corpus go test calls, want 1", found))
 	}
+	if !strings.Contains(script, `check_go.sh" job-start`) {
+		out = append(out, "ci/auth_corpus_external.sh: the script does not take the job start of the corpus deadline")
+	}
 	if !strings.Contains(script, `-test.timeout="${tmo}"`) {
 		out = append(out, "ci/auth_corpus_external.sh: the compiled corpus test binary does not get -test.timeout from job-timeout")
 	}
@@ -678,6 +681,7 @@ func TestAuthCorpusAndGitlabGuardsCatchPlantedDefects(t *testing.T) {
 	}{
 		{"the corpus go test loses its timeout", mutation{corpus, `-count=1 -timeout="${tmo}" -v`, "-count=1 -v"}, "does not take its -timeout"},
 		{"the corpus test binary loses -test.timeout", mutation{corpus, ` -test.timeout="${tmo}"`, ""}, "-test.timeout"},
+		{"the corpus script loses the job start", mutation{corpus, `check_go.sh" job-start`, `check_go.sh" job-timeout 1`}, "job start"},
 		{"the corpus limit is over the cap", mutation{corpus, "job-timeout 27", "job-timeout 29"}, "29m"},
 		{"a GitLab job cap that differs from its timeout", mutation{gl, `CHECK_GO_JOB_CAP_MIN: "60"`, `CHECK_GO_JOB_CAP_MIN: "50"`}, "must equal its timeout"},
 		{"a GitLab job without the job start", mutation{gl, `export CHECK_GO_JOB_START="$(date +%s)"`, "true"}, "must export CHECK_GO_JOB_START"},

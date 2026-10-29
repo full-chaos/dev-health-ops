@@ -382,3 +382,79 @@ func TestBootstrapStoreErrorsCarryNoValueOrDigest(t *testing.T) {
 	}
 	noSecretIn(t, e, principal, v)
 }
+
+// bootstrapWrites counts the rows the bootstrap verbs write for a workload:
+// registry rows, their audit rows and their events, plus the sum of expiries.
+func bootstrapWrites(t *testing.T, e *env, principal uuid.UUID) string {
+	t.Helper()
+	var state string
+	if err := e.admin.QueryRow(ctxT(t), `SELECT (SELECT count(*) FROM auth.credential_registry WHERE principal_id = $1)::text || '/' ||
+(SELECT coalesce(string_agg(expires_at::text || coalesce(revoked_at::text, '-'), ',' ORDER BY id), '') FROM auth.credential_registry WHERE principal_id = $1) || '/' ||
+(SELECT count(*) FROM auth.security_audit_events WHERE subject_principal_id = $1 AND event_type LIKE 'auth.workload.bootstrap_%')::text || '/' ||
+(SELECT count(*) FROM auth.auth_outbox_events WHERE aggregate_id = $2 AND event_type = 'workload.bootstrap_changed')::text`,
+		principal, wire(principal)).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
+// refusesDisabled: with a live value present, create and rotate are refused
+// as disabled and write nothing; revoke and disable still work.
+func refusesDisabled(t *testing.T, e *env, n string, principal, live uuid.UUID) {
+	t.Helper()
+	ctx := ctxT(t)
+	before := bootstrapWrites(t, e, principal)
+	if _, err := e.writer.CreateBootstrap(ctx, n, mint(t), nil, time.Hour, Actor{}); !errors.Is(err, ErrBootstrapWorkloadDisabled) {
+		t.Fatalf("create on a disabled workload = %v, want ErrBootstrapWorkloadDisabled", err)
+	}
+	if _, err := e.writer.RotateBootstrap(ctx, n, mint(t), 0, time.Hour, Actor{}); !errors.Is(err, ErrBootstrapWorkloadDisabled) {
+		t.Fatalf("rotate on a disabled workload = %v, want ErrBootstrapWorkloadDisabled", err)
+	}
+	if after := bootstrapWrites(t, e, principal); after != before {
+		t.Fatalf("a refused create or rotate wrote: %s -> %s", before, after)
+	}
+	if err := e.writer.RevokeBootstrap(ctx, live, BootstrapReasonOwnerRequest, Actor{}); err != nil {
+		t.Fatalf("revoke on a disabled workload: %v", err)
+	}
+	if _, err := e.writer.DisableBootstrap(ctx, n, Actor{}); err != nil {
+		t.Fatalf("disable on a disabled workload: %v", err)
+	}
+}
+
+func TestBootstrapCreateAndRotateRefuseADisabledWorkload(t *testing.T) {
+	e := getEnv(t)
+	ctx := ctxT(t)
+	n, principal := registerWorkload(t, e, []string{"auth-service"})
+	first, err := e.writer.CreateBootstrap(ctx, n, mint(t), nil, time.Hour, Actor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.writer.Disable(ctx, n, Actor{}); err != nil {
+		t.Fatal(err)
+	}
+	refusesDisabled(t, e, n, principal, first.CredentialID)
+	if err := e.writer.Enable(ctx, n, Actor{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.writer.CreateBootstrap(ctx, n, mint(t), nil, time.Hour, Actor{}); err != nil {
+		t.Fatalf("create after Enable: %v", err)
+	}
+}
+
+// TestBootstrapCreateAndRotateRefuseADisabledPrincipal: the principal row
+// alone is disabled (a deprovision or a restore fence sets it); the workload
+// row is not.
+func TestBootstrapCreateAndRotateRefuseADisabledPrincipal(t *testing.T) {
+	e := getEnv(t)
+	ctx := ctxT(t)
+	n, principal := registerWorkload(t, e, []string{"auth-service"})
+	first, err := e.writer.CreateBootstrap(ctx, n, mint(t), nil, time.Hour, Actor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitSeed(t, e, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1 RETURNING id`, principal)
+	if info, err := e.writer.Lookup(ctx, n); err != nil || info.Disabled {
+		t.Fatalf("the workload row is disabled too (%v); the cell needs the principal alone", err)
+	}
+	refusesDisabled(t, e, n, principal, first.CredentialID)
+}

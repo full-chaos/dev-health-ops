@@ -22,11 +22,13 @@ import (
 )
 
 // fakeBootstrap records what the verbs hand the store; err fails every write.
-// The failure text quotes the value, as a careless store error could.
+// The failure text quotes the value, as a careless store error could. refusal,
+// when set, is what create and rotate return instead.
 type fakeBootstrap struct {
-	values []string
-	writes int
-	err    bool
+	values  []string
+	writes  int
+	err     bool
+	refusal error
 }
 
 func (f *fakeBootstrap) fail(value string) error {
@@ -36,6 +38,9 @@ func (f *fakeBootstrap) fail(value string) error {
 func (f *fakeBootstrap) CreateBootstrap(_ context.Context, _, value string, _ []string, _ time.Duration, _ workload.Actor) (workload.BootstrapResult, error) {
 	f.writes++
 	f.values = append(f.values, value)
+	if f.refusal != nil {
+		return workload.BootstrapResult{}, f.refusal
+	}
 	if f.err {
 		return workload.BootstrapResult{}, f.fail(value)
 	}
@@ -45,6 +50,9 @@ func (f *fakeBootstrap) CreateBootstrap(_ context.Context, _, value string, _ []
 func (f *fakeBootstrap) RotateBootstrap(_ context.Context, _, value string, _, _ time.Duration, _ workload.Actor) (workload.BootstrapResult, error) {
 	f.writes++
 	f.values = append(f.values, value)
+	if f.refusal != nil {
+		return workload.BootstrapResult{}, f.refusal
+	}
 	if f.err {
 		return workload.BootstrapResult{}, f.fail(value)
 	}
@@ -384,6 +392,40 @@ func TestBootstrapDirSyncFailureRegistersNothingAndLeavesNoFile(t *testing.T) {
 		}
 		if !strings.Contains(stderr.String(), "nothing was registered") {
 			t.Fatalf("%s stderr = %q", verb, stderr.String())
+		}
+	}
+}
+
+// TestBootstrapADisabledWorkloadIsNamedAndLeavesNoFile: create and rotate of a
+// disabled workload fail with that class, and the out-file is removed.
+func TestBootstrapADisabledWorkloadIsNamedAndLeavesNoFile(t *testing.T) {
+	for _, verb := range []string{"bootstrap-create", "bootstrap-rotate"} {
+		store := &fakeBootstrap{refusal: workload.ErrBootstrapWorkloadDisabled}
+		out := filepath.Join(t.TempDir(), "value")
+		args := []string{verb, "-workload", "api", "-out", out, "-apply"}
+		if verb == "bootstrap-rotate" {
+			args = append(args, "-overlap", "5m")
+		}
+		var stdout, stderr bytes.Buffer
+		if code := runBootstrap(t.Context(), store, mustParse(t, args...), &stdout, &stderr); code != 1 {
+			t.Fatalf("%s exit = %d, want 1", verb, code)
+		}
+		if !strings.Contains(stderr.String(), "(the workload is disabled; enable it first)") {
+			t.Fatalf("%s stderr = %q", verb, stderr.String())
+		}
+		if _, err := os.Lstat(out); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s kept the out-file of a refused verb", verb)
+		}
+		noLeak(t, store.values[0], stdout.String(), stderr.String())
+	}
+}
+
+// TestTheUsageStatesTheOutDirectoryRule: cleanup removes the out-file by
+// path, so the directory must be writable only by the operator.
+func TestTheUsageStatesTheOutDirectoryRule(t *testing.T) {
+	for _, want := range []string{"directory writable only by the operator", "removed by path"} {
+		if !strings.Contains(workloadsUsage, want) {
+			t.Errorf("the usage text lacks %q", want)
 		}
 	}
 }

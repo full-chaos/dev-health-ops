@@ -279,19 +279,34 @@ func lockWrites(ctx context.Context, tx audit.TxOps) error {
 // (it blocks the new row, and with no active administrator no one could revoke
 // it). The caller is the migration role.
 func (s *Store) Bootstrap(ctx context.Context, principal uuid.UUID) (uuid.UUID, error) {
+	expired, err := s.bootstrapTarget(ctx, principal)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return s.bootstrapApply(ctx, principal, expired)
+}
+
+// bootstrapTarget reads the id of the principal's platform_admin row, if any.
+func (s *Store) bootstrapTarget(ctx context.Context, principal uuid.UUID) (*uuid.UUID, error) {
 	var expired *uuid.UUID
 	err := s.pool.QueryRow(ctx, `SELECT id FROM `+s.q+`.platform_role_assignments WHERE principal_id = $1 AND role_key = $2`,
 		principal, PlatformAdmin).Scan(&expired)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return uuid.Nil, s.storeErr(ctx, "read bootstrap target", err)
+		return nil, s.storeErr(ctx, "read bootstrap target", err)
 	}
+	return expired, nil
+}
+
+// bootstrapApply is the one audit.Commit of Bootstrap; expired is the row
+// bootstrapTarget read.
+func (s *Store) bootstrapApply(ctx context.Context, principal uuid.UUID, expired *uuid.UUID) (uuid.UUID, error) {
 	id := uuid.New()
 	events := []audit.OutboxEvent{roleEvent(id, "platform_role_assignment.granted", "active")}
 	if expired != nil {
 		events = append(events, roleEvent(*expired, "platform_role_assignment.revoked", "revoked"))
 	}
 	subject := principal.String()
-	err = audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
+	err := audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			if err := lockWrites(ctx, tx); err != nil {
 				return err

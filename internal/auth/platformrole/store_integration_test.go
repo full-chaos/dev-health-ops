@@ -702,3 +702,107 @@ VALUES ($1, $2, 'platform_admin', $2, statement_timestamp() - interval '1 minute
 		t.Fatalf("revoked events for the expired assignment = %d, want 1", n)
 	}
 }
+
+// plantAssignment writes one platform_admin row of principal through
+// audit.Commit (grantedBy nil = no granter; expired = a minute in the past).
+func (e *env) plantAssignment(t *testing.T, ctx context.Context, principal uuid.UUID, grantedBy *uuid.UUID, expired bool) uuid.UUID {
+	t.Helper()
+	id := uuid.New()
+	expiry := "NULL"
+	if expired {
+		expiry = "statement_timestamp() - interval '1 minute'"
+	}
+	subject := principal.String()
+	if err := audit.Commit(ctx, e.admin, e.schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			_, err := tx.Exec(ctx, `INSERT INTO auth.platform_role_assignments (id, principal_id, role_key, granted_by, expires_at)
+VALUES ($1, $2, 'platform_admin', $3, `+expiry+`)`, id, principal, grantedBy)
+			return err
+		},
+		Audit: audit.AuditEvent{EventType: "auth.platform_role.granted", Outcome: audit.OutcomeAllowed, SubjectPrincipalID: &subject,
+			Attributes: map[string]any{"reason_code": "role_granted", "target_kind": "principal", "target_id": subject}},
+		Events: []audit.OutboxEvent{{AggregateType: "platform_role_assignment",
+			AggregateID: provisioning.WireID("platform_role_assignment", id.String()), EventType: "platform_role_assignment.granted",
+			Change: map[string]any{"status": "active"}}},
+	}); err != nil {
+		t.Fatalf("plant an assignment: %v", err)
+	}
+	return id
+}
+
+// unplantAssignment deletes one assignment through audit.Commit.
+func (e *env) unplantAssignment(t *testing.T, ctx context.Context, id, principal uuid.UUID) {
+	t.Helper()
+	subject := principal.String()
+	if err := audit.Commit(ctx, e.admin, e.schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			_, err := tx.Exec(ctx, `DELETE FROM auth.platform_role_assignments WHERE id = $1`, id)
+			return err
+		},
+		Audit: audit.AuditEvent{EventType: "auth.platform_role.revoked", Outcome: audit.OutcomeAllowed, SubjectPrincipalID: &subject,
+			Attributes: map[string]any{"reason_code": "role_revoked", "target_kind": "principal", "target_id": subject}},
+		Events: []audit.OutboxEvent{{AggregateType: "platform_role_assignment",
+			AggregateID: provisioning.WireID("platform_role_assignment", id.String()), EventType: "platform_role_assignment.revoked",
+			Change: map[string]any{"status": "revoked"}}},
+	}); err != nil {
+		t.Fatalf("remove an assignment: %v", err)
+	}
+}
+
+// The target's own assignment that has NOT expired is an active admin: the
+// bootstrap refuses and deletes nothing.
+func TestBootstrapDeletesNoUnexpiredAssignment(t *testing.T) {
+	e := isolatedEnv(t)
+	ctx := ctxT(t)
+	target := e.user(t, ctx, true, false)
+	held := e.plantAssignment(t, ctx, target, nil, false)
+	if _, err := e.bootstrapStore(t).Bootstrap(ctx, target); !errors.Is(err, ErrBootstrapAdminActive) {
+		t.Fatalf("bootstrap over the target's unexpired assignment: %v, want ErrBootstrapAdminActive", err)
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.platform_role_assignments WHERE id = $1`, held); n != 1 {
+		t.Fatal("the refused bootstrap deleted the unexpired assignment")
+	}
+	if n := e.bootstrapAudits(t, ctx, target); n != 0 {
+		t.Fatalf("the refused bootstrap wrote %d audit rows", n)
+	}
+}
+
+// The replace deletes only the row the bootstrap read: when that row changed
+// after the read (gone, or replaced by another expired row), the bootstrap is
+// refused and writes nothing.
+func TestBootstrapReplaceRefusesWhenTheRowChangedAfterTheRead(t *testing.T) {
+	for name, replace := range map[string]bool{"removed": false, "replaced": true} {
+		t.Run(name, func(t *testing.T) {
+			e := isolatedEnv(t)
+			ctx := ctxT(t)
+			target := e.user(t, ctx, true, false)
+			e.plantAssignment(t, ctx, target, &target, true)
+			s := e.bootstrapStore(t)
+			read, err := s.bootstrapTarget(ctx, target)
+			if err != nil || read == nil {
+				t.Fatalf("read: %v %v, want the expired row", read, err)
+			}
+			e.unplantAssignment(t, ctx, *read, target)
+			var other uuid.UUID
+			if replace {
+				other = e.plantAssignment(t, ctx, target, &target, true)
+			}
+			if _, err := s.bootstrapApply(ctx, target, read); !errors.Is(err, ErrBootstrapRowChanged) {
+				t.Fatalf("bootstrap after the row changed: %v, want ErrBootstrapRowChanged", err)
+			}
+			want := 0
+			if replace {
+				want = 1
+				if n := e.count(t, ctx, `SELECT count(*) FROM auth.platform_role_assignments WHERE id = $1`, other); n != 1 {
+					t.Fatal("the refused bootstrap deleted the row it did not read")
+				}
+			}
+			if n := e.count(t, ctx, `SELECT count(*) FROM auth.platform_role_assignments WHERE principal_id = $1`, target); n != want {
+				t.Fatalf("rows of the target after the refusal = %d, want %d", n, want)
+			}
+			if n := e.bootstrapAudits(t, ctx, target); n != 0 {
+				t.Fatalf("the refused bootstrap wrote %d audit rows", n)
+			}
+		})
+	}
+}

@@ -1,9 +1,6 @@
 package contracts
 
 import (
-	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -36,20 +33,7 @@ func TestTheChangePasswordRowIssuesBothAccessTokenClasses(t *testing.T) {
 }
 
 func TestTheUserAccessTokenClassNoLongerClaimsNoValidator(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join(ContractsDir(testRoot(t)), "credential-classes.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var document struct {
-		Classes []struct {
-			ClassID string   `json:"class_id"`
-			Gaps    []string `json:"gaps"`
-		} `json:"classes"`
-	}
-	if err := json.Unmarshal(raw, &document); err != nil {
-		t.Fatal(err)
-	}
-	for _, class := range document.Classes {
+	for _, class := range loadClassRegistryDocument(t).Classes {
 		if class.ClassID != "user_access_token" {
 			continue
 		}

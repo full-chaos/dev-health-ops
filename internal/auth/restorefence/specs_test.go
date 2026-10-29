@@ -39,7 +39,8 @@ func TestEverySectionNamesItsTableAndKeepsAuthAndLegacySeparate(t *testing.T) {
 			t.Errorf("section %s qualifies as %s", s.name, got)
 		}
 	}
-	for _, want := range []string{"public.refresh_tokens", "public.internal_service_credentials", "public.external_ingest_tokens", "public.pagerduty_webhook_bindings", "auth.sessions", "auth.refresh_credentials", "auth.credential_registry", "auth.signing_keys"} {
+	for _, want := range []string{"public.refresh_tokens", "public.internal_service_credentials", "public.external_ingest_tokens", "public.pagerduty_webhook_bindings", "auth.sessions", "auth.refresh_credentials", "auth.credential_registry", "auth.signing_keys",
+		"auth.memberships", "auth.service_accounts", "auth.workloads", "auth.link_credentials", "auth.saml_assertion_uses", "auth.users", "public.provider_oauth_revocations"} {
 		if !seen[want] {
 			t.Errorf("section %s is missing", want)
 		}
@@ -122,6 +123,64 @@ func TestEveryCarriedTableAndColumnExistsInTheSchemaItIsReadFrom(t *testing.T) {
 			inCreate := regexp.MustCompile(`(?m)^\s+"?updated_at"?\s`).MatchString(m[1])
 			if !inCreate {
 				t.Errorf("%s: touch is set but the table has no updated_at", s.name)
+			}
+		}
+	}
+}
+
+func TestAMembershipThatWasSuspendedCanBeRemovedAndNothingIsEverReactivated(t *testing.T) {
+	def, ok := sectionByName("auth.memberships")
+	if !ok {
+		t.Fatal("auth.memberships is not a section")
+	}
+	sql := def.applySQL(testSchema(t))
+	for _, want := range []string{"'suspended'", "'removed'", "'invited'", "'active'"} {
+		if !strings.Contains(def.active+def.revoked, want) {
+			t.Errorf("the membership rule does not name %s", want)
+		}
+	}
+	if strings.Contains(def.revoked, "'active'") {
+		t.Error("an active membership is not a revoked state")
+	}
+	if !strings.Contains(sql, "status = x.status") {
+		t.Error("the membership status is not copied from the source row")
+	}
+}
+
+func TestInsertAndReportSectionsHaveTheirOwnShape(t *testing.T) {
+	for _, s := range sections {
+		sql := strings.ToUpper(s.applySQL(testSchema(t)))
+		switch s.kind {
+		case kindInsert:
+			if !strings.Contains(sql, "ON CONFLICT DO NOTHING") || strings.Contains(sql, "DELETE") || strings.Contains(sql, "UPDATE ") {
+				t.Errorf("%s: replay evidence is only ever inserted, and an existing row is left alone", s.name)
+			}
+		case kindReport:
+			for _, verb := range []string{"INSERT", "UPDATE ", "DELETE"} {
+				if strings.Contains(sql, verb) {
+					t.Errorf("%s: a report section writes nothing (found %s)", s.name, verb)
+				}
+			}
+		}
+	}
+	for _, name := range []string{"auth.saml_assertion_uses"} {
+		if def, _ := sectionByName(name); def.kind != kindInsert {
+			t.Errorf("%s must be an insert section", name)
+		}
+	}
+	for _, name := range []string{"auth.users", "public.provider_oauth_revocations"} {
+		if def, _ := sectionByName(name); def.kind != kindReport {
+			t.Errorf("%s must be a report section", name)
+		}
+	}
+}
+
+// The ids of what needs an operator action never carry hash or token bytes.
+func TestOnlyTheReplayEvidenceColumnMayNameAHash(t *testing.T) {
+	for _, s := range sections {
+		for _, c := range s.columnNames() {
+			if strings.Contains(c, "hash") && !(s.name == "auth.saml_assertion_uses" && c == "assertion_id_hash") {
+				t.Errorf("section %s carries %s", s.name, c)
 			}
 		}
 	}

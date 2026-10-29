@@ -731,6 +731,12 @@ func publicReadViolations(ctx context.Context, conn *pgx.Conn, options Options) 
 				continue
 			}
 		}
+		if options.UsersOwned && schema == publicSchema && (kind == "r" || kind == "p") && isMembershipWriteColumn(table, privilege, column) {
+			continue
+		}
+		if options.UsersOwned && schema == publicSchema && (kind == "r" || kind == "p") && isInviteWriteColumn(table, privilege, column) {
+			continue
+		}
 		violations = append(violations, Violation{
 			Kind: "column", Schema: schema, Object: table + "." + column, Privilege: privilege,
 			Detail: "not declared in PublicReadColumns",
@@ -739,5 +745,13 @@ func publicReadViolations(ctx context.Context, conn *pgx.Conn, options Options) 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("%w: reading effective column privileges", ErrMigrationFailed)
 	}
-	return violations, nil
+	missing, err := membershipWriteMissing(ctx, conn, options)
+	if err != nil {
+		return nil, err
+	}
+	inviteMissing, err := inviteWriteMissing(ctx, conn, options)
+	if err != nil {
+		return nil, err
+	}
+	return append(append(violations, missing...), inviteMissing...), nil
 }

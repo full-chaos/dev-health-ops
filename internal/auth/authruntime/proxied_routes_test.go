@@ -212,7 +212,7 @@ func mountedAuthRoutes(t *testing.T, env map[string]string) map[string]bool {
 	if err != nil {
 		t.Fatal(err)
 	}
-	credentials, components, err := credentialRoutes(cfg, logger, pool, schema, mustLimits(t))
+	credentials, components, err := credentialRoutes(cfg, logger, pool, schema, mustLimits(t), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +283,7 @@ func TestNotMountedStubsAnswer503WithRetryAfterInEveryPhase(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		credentials, _, err := credentialRoutes(cfg, logger, pool, schema, mustLimits(t))
+		credentials, _, err := credentialRoutes(cfg, logger, pool, schema, mustLimits(t), nil)
 		if err != nil {
 			t.Fatal(err)
 		}

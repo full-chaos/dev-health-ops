@@ -3,36 +3,16 @@
 # internal/cigates/emitscan/scan_rows_test.go costRatio bound 1.6 is a ratio, not an absolute assertion: no row (D6418 stated deviation, parser depth cap).
 cmd/auth-migrate/wait_test.go	TestDatabaseWaitGivesUpAtTheBound	not wall time: fake clock (cmd/auth-migrate/wait_test.go:105)
 cmd/auth-migrate/wait_test.go	TestDatabaseWaitHoldsTheBound	not wall time: fake clock (cmd/auth-migrate/wait_test.go:156)
-internal/api/syncadmin/backfill_submit_integration_test.go	TestBackfillSubmitReturnsAtOnceForAWideWindowAndManyRequests	pending CHAOS-11684 conversion
 internal/audit/outboxloop_test.go	TestLoopHandsTheStepperTheCurrentTimeNotTheTickTimestamp	not a performance budget: clock or stamp skew
-internal/auth/authruntime/jwks_dependency_stall_integration_test.go	TestJWKSAnswersWhileTheDatabaseIsBlackholed	found by the gate, not by the census: pending CHAOS-11684 re-census and conversion
 internal/backfillrun/run_integration_test.go	TestVerbReportsWhatTheSchedulerDid	lower-bound wait proof: load only lengthens it
-internal/cigates/docstools/hostsmoke_internal_test.go	TestHostSmokeRequestTimeout	pending CHAOS-11684 conversion
 internal/cigates/emitscan/scan_rows_test.go	TestConstFixpointBounded	owned by CHAOS-11674 (emitscan budgets)
 internal/cigates/emitscan/scan_rows_test.go	timed	owned by CHAOS-11674 (emitscan budgets)
 internal/cigates/emitscan/scan_test.go	TestSelfReferencingAliasChainsAreFast	owned by CHAOS-11674 (emitscan budgets)
 internal/faultproxy/proxy_test.go	TestDelayAddsLatency	lower-bound wait proof: load only lengthens it
 internal/faultproxy/proxy_test.go	TestSlowCapsRate	lower-bound wait proof: load only lengthens it
-internal/goapicli/prove/e2e_test.go	TestRunBoundsTheOpeningBuildinfoReadToTheConfiguredTimeout	pending CHAOS-11684 conversion
-internal/goapicli/restprove/main_test.go	TestResolveBuilds_TimeoutZeroOrNegativeMeansNoDeadline	pending CHAOS-11684 conversion
-internal/goapicli/routing/main_test.go	TestConnectPostgresBoundsTheDialAndSaysSo	pending CHAOS-11684 conversion
-internal/goapicli/routing/verbs_integration_test.go	TestStatusReturnsWithinItsTimeoutUnderAHeldLock	pending CHAOS-11684 conversion
 internal/goapiproof/credentialecho_test.go	TestSentSecretsScansALargeBodyQuickly	measured hosted margin 12.5 (>= 3), CHAOS-11684 census
-internal/gqlgenguard/racebudget_test.go	TestMain	pending CHAOS-11684 conversion
-internal/ingressplanes/real_nginx_wait_integration_test.go	TestWaitForRouter_IsLoudWhenTheBoundIsHit	pending CHAOS-11684 conversion
-internal/jobs/dimensionfold/fold_test.go	TestFoldTableTimeoutReleasesTheRun	pending CHAOS-11684 conversion
 internal/jobs/investment/nativeexecutor_test.go	TestCategorizeFanOutIsBoundedByLimit	not wall time: poll counter (internal/jobs/investment/nativeexecutor_test.go:552)
 internal/jobs/investment/shadowphase_test.go	TestAPanicOfThePhaseLoopLeavesNoGoroutineBehind	not wall time: poll counter (internal/jobs/investment/shadowphase_test.go:912)
-internal/jobs/investment/shadowphase_test.go	TestAPhaseThatRunsOutOfBudgetStopsAndSaysSo	pending CHAOS-11684 conversion
-internal/jobs/investment/shadowphase_test.go	TestAShadowWriteInsideThePhaseEndsWithTheBudget	pending CHAOS-11684 conversion
-internal/jobs/investment/shadowphase_test.go	TestNothingIsWrittenAfterTheRunContextIsCancelled	pending CHAOS-11684 conversion
-internal/jobs/metrics/daily/clickhouse_not_discovered_log_test.go	TestTheReportOfRepositoriesNotDiscoveredIsBoundedInTime	pending CHAOS-11684 conversion
-internal/jobs/metrics/daily/lease_renewal_bound_test.go	TestLeaseRenewalIsBoundedByTheLease	found by the gate, not by the census: pending CHAOS-11684 re-census and conversion
-internal/pgmigrate/indexbuild_concurrent_integration_test.go	TestBuildIndexRefusesWhileAnotherRunHoldsTheBuildLock	pending CHAOS-11684 conversion
-internal/pgmigrate/indexbuild_concurrent_integration_test.go	TestBuildIndexSecondRunDuringABuildRefusesAndLeavesTheBuildAlone	pending CHAOS-11684 conversion
-internal/pgmigrate/indexbuild_selfheal_integration_test.go	TestBuildIndexHolderLongerThanTheWindowLeavesTheLeftoverAndBlocksNoWriter	pending CHAOS-11684 conversion
-internal/pgmigrate/indexbuild_selfheal_integration_test.go	TestBuildIndexTableLockWaitStaysUnderLockTimeout	pending CHAOS-11684 conversion
-internal/providerfoundation/body_classification_test.go	TestDoUnauthenticatedStalledErrorBodyReturnsWithinBoundAndIsClosed	pending CHAOS-11684 conversion
 internal/providerfoundation/http_gate_wait_test.go	TestAGateWaitWithinTheBoundIsSleptOutInPlace	lower-bound wait proof: load only lengthens it
 internal/providerfoundation/http_gate_wait_test.go	TestInPlaceGateWaitsAreBoundedInTotal	lower-bound wait proof: load only lengthens it
 internal/providersync/chunked_wall_bound_test.go	TestChunkedAttemptStopsOnTheWallBoundNotTheOldEightChunks	not wall time: fake clock (internal/providersync/chunked_wall_bound_test.go:134)
@@ -46,34 +26,9 @@ internal/providersync/request_usage_test.go	TestOfferDropsAndCountsWhenTheQueueI
 internal/providersync/request_usage_test.go	TestWriterCloseIsBoundedWhenItsLoggerIsStuck	measured hosted margin 16.7 (>= 3), CHAOS-11684 census
 internal/providersync/syncunit_budget_exhaustion_oracle_test.go	budgetDeferralExhausted	not wall time: pure fn of now (internal/providersync/syncunit_budget_exhaustion_oracle_test.go:96)
 internal/queryapi/analytics/investmentownershipteam_rule_test.go	TestOwnershipTeamSourceRendersTheOneOwnershipRule	not a performance budget: clock or stamp skew
-internal/queryapi/server/mcp_route_test.go	TestMCPEveryStageOfTheDocumentPathIsBoundedUnderTheBodyCap	pending CHAOS-11684 conversion
-internal/queryapi/server/mcp_route_test.go	TestMCPFragmentGraphIsSizedExactlyBeforeAnyStageWalksIt	pending CHAOS-11684 conversion
-internal/queryapi/server/mcp_route_test.go	TestMCPRefusesSelfDoublingFragmentsBeforeExpandingThem	pending CHAOS-11684 conversion
-internal/queryapi/server/mcp_route_test.go	TestMCPRefusesSelfDoublingFragmentsBeforeTheValidatorRunsOnThem	pending CHAOS-11684 conversion
-internal/queryapi/server/posture_readiness_test.go	TestReadyzAnswersWithinTheProbeBudgetWhileThePostureQueryIsSlow	pending CHAOS-11684 conversion
-internal/queryapi/server/server_test.go	TestObserveProbe_BoundsSlowDependencyCheck	pending CHAOS-11684 conversion
 internal/reconcilerservice/readiness_pool_wiring_test.go	TestDomainReadinessChecksRunOnTheReadinessPoolNotTheWorkPool	lower-bound wait proof: load only lengthens it
 internal/scheduler/fixed/engine_test.go	TestIntervalScheduleWaitsAFullPeriodAfterItsBaseline	not wall time: schedule timestamps (internal/scheduler/fixed/engine_test.go:671)
-internal/scheduler/sync/failure_streaks_integration_test.go	TestFailureStreakReadThatCannotFinishLeavesTheTransactionUsable	pending CHAOS-11684 conversion
 internal/scheduler/sync/work_item_ran_before_integration_test.go	TestLoadWorkItemLastSuccessAtLivePostgres	not a performance budget: clock or stamp skew
 internal/schedulerservice/readiness_pool_wiring_test.go	TestDomainReadinessChecksRunOnTheReadinessPoolNotTheWorkPool	lower-bound wait proof: load only lengthens it
-internal/storage/clickhouse/pool_test.go	TestWarmPoolIsBounded	pending CHAOS-11684 conversion
-internal/storage/postgres/posture_cache_nowait_test.go	mustReturnQuickly	pending CHAOS-11684 conversion
-internal/storage/postgres/posture_statement_timeout_integration_test.go	TestPostureStatementRunsUnderItsOwnServerSideTimeoutThatDoesNotLeak	pending CHAOS-11684 conversion
-internal/storage/postgres/probe_check_test.go	TestLazyProbeCheckNeverMakesAProbeWaitOnceItHasAnAnswer	pending CHAOS-11684 conversion
-internal/storage/postgres/probe_check_test.go	TestLazyProbeCheckServesAPassWhileAnUnansweredRefreshRunsAndBoundsIt	pending CHAOS-11684 conversion
-internal/storage/postgres/probe_check_test.go	TestLazyProbeCheckTheColdProbeIsBoundedByItsOwnContext	pending CHAOS-11684 conversion
-internal/storage/river/telemetry_test.go	TestQueueTelemetrySamplerHonorsQueryTimeout	pending CHAOS-11684 conversion
-internal/streamrunnerservice/bootstrap_retry_test.go	TestStreamRunnerShutdownDuringAStartupOutageIsClean	pending CHAOS-11684 conversion
-internal/synccli/batch_loop_gate_test.go	TestLoopHoldDoesNotWaitOnceThePeakIsReached	pending CHAOS-11684 conversion
-internal/syncdispatchruntime/dispatch_pool_contention_integration_test.go	TestConcurrentDispatchOnOneBucketDoesNotStarveASmallPool	pending CHAOS-11684 conversion
-internal/syncdispatchruntime/dispatch_pool_contention_integration_test.go	TestDispatchGivesItsConnectionBackWhenAnotherPassHoldsTheBucketLock	pending CHAOS-11684 conversion
-internal/syncreconciler/materializer_jit_cost_integration_test.go	TestMaterializerStepCompletesUnderRealisticStageBudgetWithJITOnAtServerLevel	pending CHAOS-11684 conversion
-internal/syncreconciler/stage_budget_pipeline_test.go	TestRunStageBudgetIsIndependentOfItsSiblings	pending CHAOS-11684 conversion
-internal/syncreconciler/stage_failed_phase_integration_test.go	TestStageFailedNamesTheSlowStatementThatSpentTheBudget	found by the gate, not by the census: pending CHAOS-11684 re-census and conversion
-internal/testsupport/containers/shared_integration_test.go	TestSharedPostgresAtCapacityRefusesLoudly	pending CHAOS-11684 conversion
-internal/workerservice/dependencies_test.go	TestQueuedContractVersionsReadyDoesNotWaitOnTheCensusOnceProven	pending CHAOS-11684 conversion
-internal/workerservice/execution_liveness_retry_backoff_integration_test.go	TestExecutionLivenessSeesIdempotencyFailuresSpacedByRiverRetryBackoff	found by the gate, not by the census: pending CHAOS-11684 re-census and conversion
-internal/workerservice/multi_replica_outage_integration_test.go	waitForCompletedAfterOutage	found by the gate, not by the census: pending CHAOS-11684 re-census and conversion
 internal/workerservice/readiness_pool_wiring_test.go	TestDomainReadinessChecksRunOnTheReadinessPoolNotTheWorkPool	lower-bound wait proof: load only lengthens it
 internal/workerservice/river_soft_stop_integration_test.go	TestUnsetShutdownTimeoutRuntimeOutlivesTheDefaultAndReleases	lower-bound wait proof: load only lengthens it

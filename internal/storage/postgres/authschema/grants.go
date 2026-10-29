@@ -84,6 +84,8 @@ func RuntimePosture() []TablePrivilege {
 		// Tenancy and non-human principals.
 		{Table: "organizations", Select: true, Insert: true, Update: true},
 		{Table: "memberships", Select: true, Insert: true, Update: true},
+		// Invites (0033): a revoked or accepted invite keeps its row, so no DELETE.
+		{Table: "invites", Select: true, Insert: true, Update: true},
 		{Table: "platform_role_assignments", Select: true, Insert: true, Delete: true},
 		{Table: "service_accounts", Select: true, Insert: true, Update: true},
 		{Table: "workloads", Select: true, Insert: true, Update: true},
@@ -257,6 +259,16 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 		return err
 	}
 	publicStatements = append(publicStatements, linkPurge...)
+	membershipWrite, err := membershipWriteStatements(ctx, conn, options, logger)
+	if err != nil {
+		return err
+	}
+	publicStatements = append(publicStatements, membershipWrite...)
+	inviteWrite, err := inviteWriteStatements(ctx, conn, options, logger)
+	if err != nil {
+		return err
+	}
+	publicStatements = append(publicStatements, inviteWrite...)
 
 	tx, err := conn.Begin(ctx)
 	if err != nil {

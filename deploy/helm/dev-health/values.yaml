@@ -202,8 +202,9 @@ authService:
     class: ""
     # -- The https issuer of eddsa access tokens: auth-service signs it
     #    (AUTH_TOKEN_ISSUER_URL, with AUTH_JWT_AUDIENCE=dev-health-api) and go-api
-    #    verifies it (AUTH_ACCESS_TOKEN_ISSUER) against its JWKS. Rendered only
-    #    with class eddsa; go-api must reach the issuer's JWKS document.
+    #    and query-api verify it (AUTH_ACCESS_TOKEN_ISSUER) against its JWKS.
+    #    Rendered only with class eddsa; go-api and query-api must reach the
+    #    issuer's JWKS document.
     issuerURL: ""
   # -- AUTH_SOCIAL_LINK_ROUTES: mounts the bearer-only social link and unlink
   #    routes. Needs phase >= 2 (the session secrets).
@@ -516,7 +517,9 @@ authService:
       #    ipBlock 0.0.0.0/0 (and/or ::/0) with ports of TCP 443 alone and an
       #    `except` list of at least 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16,
       #    100.64.0.0/10, 169.254.0.0/16, 127.0.0.0/8 (IPv6: fc00::/7,
-      #    fe80::/10, ::1/128, ::ffff:0:0/96, 64:ff9b::/96).
+      #    fe80::/10, ::1/128, 64:ff9b::/96). The IPv4-mapped range is not listed
+      #    (an IPv4-mapped destination leaves the pod as IPv4 and meets the v4
+      #    list); a mapped `except` entry is refused, as the apiserver refuses it.
       mail:
         to: []
         ports:

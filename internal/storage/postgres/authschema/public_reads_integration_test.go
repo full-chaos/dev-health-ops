@@ -73,6 +73,9 @@ func newPublicReadsFixture(t *testing.T, ctx context.Context, hide ...string) *p
 		for table := range publicReadOracle {
 			owned = append(owned, table)
 		}
+		for _, grant := range InviteWriteGrants() {
+			owned = append(owned, grant.Table)
+		}
 		for _, table := range owned {
 			if _, err := conn.Exec(ctx, fmt.Sprintf(`ALTER TABLE public.%s OWNER TO %s`,
 				Quote(mustValidatedIdentifier(table)), Quote(mustValidatedIdentifier(migrationRole)))); err != nil {

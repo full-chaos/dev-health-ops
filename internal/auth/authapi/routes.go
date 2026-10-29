@@ -99,9 +99,10 @@ func (h handlers) authenticate(w http.ResponseWriter, r *http.Request, operation
 		h.rec.refuse(w, r, operation, unauthorized(reasonMalformed), nil)
 		return Bearer{}, session.Record{}, false
 	}
-	bearer, reason, err := h.Issuer.Verify(token)
+	bearer, reason, err := h.Issuer.bearer(r.Context(), r.Pattern, token)
 	if err != nil {
-		h.rec.refuse(w, r, operation, unauthorized(reason), nil)
+		refused, logged := bearerRefusal(reason, err)
+		h.rec.refuse(w, r, operation, refused, logged)
 		return Bearer{}, session.Record{}, false
 	}
 	record, err := h.Sessions.Current(r.Context(), bearer.SessionID)
@@ -133,7 +134,7 @@ func (h handlers) authenticate(w http.ResponseWriter, r *http.Request, operation
 	case !user.IsActive:
 		h.rec.refuse(w, r, operation, unauthorized(reasonDeactivated), nil)
 		return Bearer{}, session.Record{}, false
-	case user.TokenVersion != bearer.TokenVersion:
+	case bearer.revisionStale(record, user):
 		h.rec.refuse(w, r, operation, unauthorized(reasonRevisionStale), nil)
 		return Bearer{}, session.Record{}, false
 	}

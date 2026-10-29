@@ -499,6 +499,7 @@ func waitForCompletedAfterOutage(
 		}
 		quietFor := time.Since(quiet)
 		switch {
+		//abstime:allow hang ceiling: fails only a run that never converged within the recovery budget
 		case elapsed >= outageRecoveryBudget:
 			if changed.Equal(released) {
 				t.Fatalf(
@@ -517,6 +518,7 @@ func waitForCompletedAfterOutage(
 				completerProgress.quietFor().Round(time.Second),
 				observation.completed, len(jobIDs), observation.snapshots,
 			)
+		//abstime:allow hang watchdog: fails only a run whose jobs and completer showed no activity for the progress grace
 		case quietFor >= completerProgressGrace:
 			t.Fatalf(
 				"outage recovery stalled: neither river_job nor the BatchCompleter's own "+

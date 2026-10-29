@@ -3,7 +3,6 @@
 package workerservice
 
 import (
-	"bytes"
 	"context"
 	"reflect"
 	"strings"
@@ -27,7 +26,7 @@ const (
 
 func newDrainRig(t *testing.T, ctx context.Context) *drainRig {
 	t.Helper()
-	return &drainRig{touchedRig: newTouchedRig(t, ctx), observer: &drainObserver{}, logs: &bytes.Buffer{}}
+	return &drainRig{touchedRig: newTouchedRig(t, ctx), observer: &drainObserver{}, logs: newDrainLogs()}
 }
 
 // drainRunsOf counts the drain runs of the organization, by day.

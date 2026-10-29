@@ -232,8 +232,8 @@ func TestRaceLegsTurnSetupGoCacheOffOnThePool(t *testing.T) {
 	t.Fatal("no setup-go step in go-quality-leg")
 }
 
-// Only the four race legs are budgeted for the pool (queue measured 7-10 min hosted vs under 1 min pool): static and test stay hosted.
-func TestOnlyTheFourRaceLegsCarryThePoolFlag(t *testing.T) {
+// Only the five race legs are budgeted for the pool (queue measured 7-10 min hosted vs under 1 min pool): static and test stay hosted.
+func TestOnlyTheFiveRaceLegsCarryThePoolFlag(t *testing.T) {
 	got := map[string]bool{}
 	for _, entry := range goQualityLegList(t, authProofRoot(t)) {
 		name, _ := entry["name"].(string)
@@ -241,7 +241,7 @@ func TestOnlyTheFourRaceLegsCarryThePoolFlag(t *testing.T) {
 			got[name] = true
 		}
 	}
-	want := map[string]bool{"race-1-of-4": true, "race-2-of-4": true, "race-3-of-4": true, "race-4-of-4": true}
+	want := map[string]bool{"race-1-of-5": true, "race-2-of-5": true, "race-3-of-5": true, "race-4-of-5": true, "race-5-of-5": true}
 	if len(got) != len(want) {
 		t.Fatalf("pool-flagged legs = %v, want exactly %v", got, want)
 	}

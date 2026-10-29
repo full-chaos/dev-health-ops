@@ -426,6 +426,7 @@ func TestNativeFinalizeSyncRunExecutesEntirelyAsTheDomainRole(t *testing.T) {
 		  VALUES ($1,$2,$3,'dispatching',1,0,0)`, []any{finalizeTestRun, finalizeTestOrg, finalizeTestIntegration}},
 		{`INSERT INTO integration_credentials (id,org_id) VALUES ('00000000-0000-4000-8000-0000000000c1',$1)`, []any{finalizeTestOrg}},
 		{`UPDATE integrations SET credential_id='00000000-0000-4000-8000-0000000000c1' WHERE id=$1`, []any{finalizeTestIntegration}},
+		{`UPDATE sync_runs SET auth_source='integration_credential' WHERE id=$1`, []any{finalizeTestRun}},
 		{`INSERT INTO integration_sources (id) VALUES ($1)`, []any{finalizeTestSource}},
 		{`INSERT INTO sync_run_units
 		    (id,org_id,sync_run_id,provider,dataset_key,source_id,status,since_at,before_at,cost_class,mode)

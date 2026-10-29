@@ -55,6 +55,7 @@ func TestFinalizeStampsCredentialConnected(t *testing.T) {
 		runCred    bool // run carries its own credential_id (otherwise the integration's is used)
 		noCred     bool // neither run nor integration names a credential
 		envRun     bool // the run authenticated from the environment, whatever the integration points at now
+		legacyNull bool // an unstamped legacy run: no credential_id and no auth_source
 		wantStamp  bool
 		wantSucces *bool // expected state of the stamped credential when unchanged
 	}{
@@ -70,6 +71,7 @@ func TestFinalizeStampsCredentialConnected(t *testing.T) {
 		{name: "late run does not overwrite a newer connected test", pre: pre{success: boolp(true), ago: -time.Hour}, units: []string{"success"}},
 		{name: "run credential wins over integration credential", units: []string{"success"}, runCred: true, wantStamp: true},
 		{name: "environment run does not stamp a credential attached later", units: []string{"success"}, envRun: true},
+		{name: "legacy unstamped run stamps nothing", units: []string{"success"}, legacyNull: true},
 		{name: "run with no credential is a no-op", units: []string{"success"}, noCred: true},
 		{name: "inactive credential is not touched", pre: pre{inactive: true}, units: []string{"success"}},
 	}
@@ -102,8 +104,12 @@ func TestFinalizeStampsCredentialConnected(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			authSource := "integration_credential"
 			if tc.envRun {
-				if _, err := pool.Exec(ctx, `UPDATE sync_runs SET auth_source = 'environment' WHERE id = $1::uuid`, finalizeTestRun); err != nil {
+				authSource = "environment"
+			}
+			if !tc.legacyNull {
+				if _, err := pool.Exec(ctx, `UPDATE sync_runs SET auth_source = $2 WHERE id = $1::uuid`, finalizeTestRun, authSource); err != nil {
 					t.Fatal(err)
 				}
 			}

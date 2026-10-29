@@ -21,7 +21,8 @@ const (
 )
 
 // outboxConsumerDirs returns the package directories (relative to root) of
-// non-test Go files that start an outbox publisher (audit.NewPublisher), and
+// non-test Go files that start an outbox publisher (audit.NewPublisher) or
+// implement audit.Sink (a Deliver method taking audit.Event), and
 // the directories that register a fence floor input
 // (restorefence.RegisterFloorInput). Package audit itself is skipped.
 func outboxConsumerDirs(t *testing.T, root string) (publishers, registrars []string) {
@@ -45,7 +46,7 @@ func outboxConsumerDirs(t *testing.T, root string) (publishers, registrars []str
 		if err != nil {
 			return err
 		}
-		if !strings.Contains(string(data), "NewPublisher") && !strings.Contains(string(data), "RegisterFloorInput") {
+		if !strings.Contains(string(data), "NewPublisher") && !strings.Contains(string(data), "RegisterFloorInput") && !strings.Contains(string(data), "Deliver(") {
 			return nil
 		}
 		file, err := parser.ParseFile(token.NewFileSet(), path, data, 0)
@@ -64,6 +65,15 @@ func outboxConsumerDirs(t *testing.T, root string) (publishers, registrars []str
 		dir, _ := filepath.Rel(root, filepath.Dir(path))
 		dir = filepath.ToSlash(dir)
 		ast.Inspect(file, func(n ast.Node) bool {
+			if fn, ok := n.(*ast.FuncDecl); ok && fn.Name.Name == "Deliver" && fn.Recv != nil && fn.Type.Params != nil {
+				for _, field := range fn.Type.Params.List {
+					if sel, ok := field.Type.(*ast.SelectorExpr); ok && sel.Sel.Name == "Event" {
+						if id, ok := sel.X.(*ast.Ident); ok && names[id.Name] == auditImportPath {
+							pub[dir] = true
+						}
+					}
+				}
+			}
 			call, ok := n.(*ast.CallExpr)
 			if !ok {
 				return true
@@ -145,9 +155,10 @@ func TestTheConsumerCensusSeesAPublisherWithoutAnInput(t *testing.T) {
 	}
 	write("lone/lone.go", "package lone\n\nimport \"github.com/full-chaos/dev-health-ops/internal/audit\"\n\nfunc start() { _, _ = audit.NewPublisher(nil, nil, audit.PublisherConfig{}) }\n")
 	write("paired/paired.go", "package paired\n\nimport (\n\t\"github.com/full-chaos/dev-health-ops/internal/audit\"\n\t\"github.com/full-chaos/dev-health-ops/internal/auth/restorefence\"\n)\n\nfunc start() {\n\t_, _ = audit.NewPublisher(nil, nil, audit.PublisherConfig{})\n\trestorefence.RegisterFloorInput(nil)\n}\n")
+	write("sink/sink.go", "package sink\n\nimport (\n\t\"context\"\n\n\t\"github.com/full-chaos/dev-health-ops/internal/audit\"\n)\n\ntype feed struct{}\n\nfunc (feed) Deliver(ctx context.Context, e audit.Event) error { return nil }\n")
 	write("mention/mention.go", "package mention\n\n// audit.NewPublisher is only named in this comment.\nvar _ = \"NewPublisher\"\n")
 	publishers, registrars := outboxConsumerDirs(t, root)
-	if got := strings.Join(unregisteredConsumers(publishers, registrars), ","); got != "lone" {
-		t.Fatalf("unregistered consumers = %q, want lone", got)
+	if got := strings.Join(unregisteredConsumers(publishers, registrars), ","); got != "lone,sink" {
+		t.Fatalf("unregistered consumers = %q, want lone,sink", got)
 	}
 }

@@ -7,6 +7,8 @@ package platformrole
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -39,8 +41,14 @@ var (
 // any other value is an error. Case and surrounding space are ignored, as for
 // AUTH_USERS_OWNED.
 func OwnedFromLookup(lookup secrets.LookupEnv) (bool, error) {
-	_, _ = lookup(OwnedEnv)
-	return false, nil
+	raw, _ := lookup(OwnedEnv)
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "false":
+		return false, nil
+	case "true":
+		return true, nil
+	}
+	return false, fmt.Errorf("%s must be true or false", OwnedEnv)
 }
 
 // Authority is the platform authority a principal holds now. The zero value
@@ -58,16 +66,36 @@ func (a Authority) Any() bool { return len(a.roles) > 0 }
 // Allows reports whether a held role allows action and action is a platform
 // action of the catalog. An organization action is never allowed.
 func (a Authority) Allows(action string) bool {
-	return len(a.roles) > 0 && action != ""
+	catalog := policycatalog.Default()
+	act, err := catalog.Action(action)
+	if err != nil || act.Scope != policycatalog.ScopePlatform {
+		return false
+	}
+	for _, role := range a.roles {
+		if catalog.Allows(role, action) {
+			return true
+		}
+	}
+	return false
 }
 
 // IsPlatformRole reports whether role is a platform role of the catalog.
 func IsPlatformRole(role string) bool {
-	return role != "" && policycatalog.Default() != nil
+	r, err := policycatalog.Default().Role(role)
+	return err == nil && r.Scope == policycatalog.ScopePlatform
 }
 
 // authorityOf keeps the platform roles of the catalog among the stored
 // role keys and reports how many it ignored.
 func authorityOf(stored []string) (Authority, int) {
-	return Authority{roles: stored}, 0
+	var a Authority
+	ignored := 0
+	for _, role := range stored {
+		if IsPlatformRole(role) {
+			a.roles = append(a.roles, role)
+		} else {
+			ignored++
+		}
+	}
+	return a, ignored
 }

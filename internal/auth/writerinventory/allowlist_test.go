@@ -123,6 +123,8 @@ var Allowlist = []Entry{
 	{File: "internal/auth/membership/store.go", Func: "Store.write", Table: "public.memberships", Verb: "DELETE"},
 	{File: "internal/auth/membership/store.go", Func: "Store.write", Table: "public.memberships", Verb: "INSERT"},
 	{File: "internal/auth/membership/store.go", Func: "Store.write", Table: "public.memberships", Verb: "UPDATE"},
+	{File: "internal/auth/platformrole/store.go", Func: "Store.Grant", Table: "auth.platform_role_assignments", Verb: "INSERT"},
+	{File: "internal/auth/platformrole/store.go", Func: "Store.Revoke", Table: "auth.platform_role_assignments", Verb: "DELETE"},
 	{File: "internal/auth/identity/store.go", Func: "Store.applyProjectionChange", Table: "auth.principals", Verb: "UPDATE"},
 	{File: "internal/auth/identity/store.go", Func: "Store.applyProjectionChange", Table: "auth.users", Verb: "UPDATE"},
 	{File: "internal/auth/identity/store.go", Func: "Store.insertProjection", Table: "auth.principals", Verb: "INSERT"},

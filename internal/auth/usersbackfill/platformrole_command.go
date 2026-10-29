@@ -37,7 +37,15 @@ func platformRoleVerbs() []cli.Command {
 // platformRoleOwnedGate refuses a write before any database access while
 // public users.is_superuser is still the authority.
 func platformRoleOwnedGate(env cli.Env, verb string) int {
-	_, _ = env, verb
+	owned, err := platformrole.OwnedFromLookup(env.Lookup)
+	if err != nil {
+		fmt.Fprintf(env.Stderr, "%s: %s must be true or false\n", verb, platformrole.OwnedEnv)
+		return cli.ExitFailure
+	}
+	if !owned {
+		fmt.Fprintf(env.Stderr, "%s: refused: %s is not true, public users.is_superuser is still the platform authority\n", verb, platformrole.OwnedEnv)
+		return cli.ExitRefused
+	}
 	return cli.ExitOK
 }
 

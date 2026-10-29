@@ -65,6 +65,9 @@ func (h handlers) provisionOrGetUser(ctx context.Context, row *providerRow, emai
 		isSuperuser                bool
 		tokenVersion               int64
 	)
+	if err := refuseUnusableSubject(authProviderValue, externalID); err != nil {
+		return nil, nil, err
+	}
 	userID, found, err := h.resolveProviderIdentity(ctx, authProviderValue, providerID, externalID, email)
 	if err != nil {
 		return nil, nil, err
@@ -123,6 +126,13 @@ WHERE id = $1::uuid`,
 
 	return &provisionedUser{id: id, email: existingEmail, username: username, fullName: newFullName,
 		isSuperuser: isSuperuser, tokenVersion: tokenVersion}, membership, nil
+}
+
+// refuseUnusableSubject is the one subject rule of the sign-in callbacks (OIDC, SAML, OAuth): an empty subject, or one
+// that identity.ValidSubject refuses (NUL and other control characters, invalid UTF-8, edge white space, too long), is
+// refused before any database statement, so the answer never depends on which accounts exist. The error names no value.
+func refuseUnusableSubject(authProvider, externalID string) error {
+	return identity.RefuseInvalidProviderID(authProvider, &externalID)
 }
 
 // errIdentityConflict: the email belongs to an account with another or no SSO

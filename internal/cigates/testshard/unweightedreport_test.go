@@ -22,12 +22,12 @@ func TestMergeGroupReportsAnUnweightedSlowPackageAndKeepsTheLegGreen(t *testing.
 	t.Parallel()
 	pkg, key := unweightedPackage(t, 1, shardCount)
 	summary := filepath.Join(t.TempDir(), "summary.md")
-	log := coverLog(t, 1, shardCount, map[string]string{pkg: "31.600s"})
+	log := coverLog(t, 1, shardCount, map[string]string{pkg: "47.600s"})
 	errs, err := unweightedGuard(t, reportEnv(summary), 1, log)
 	if err != nil {
-		t.Fatalf("report mode failed on an unweighted package at 31.6 s: %v\n%s", err, errs)
+		t.Fatalf("report mode failed on an unweighted package at 47.6 s: %v\n%s", err, errs)
 	}
-	for _, want := range []string{"::warning::", "unweighted-slow-package: " + pkg + " took 31.6s", "\n" + key + "\t32\n"} {
+	for _, want := range []string{"::warning::", "unweighted-slow-package: " + pkg + " took 47.6s", "\n" + key + "\t48\n"} {
 		if !strings.Contains(errs, want) {
 			t.Errorf("the report lacks %q: %s", want, errs)
 		}
@@ -36,7 +36,7 @@ func TestMergeGroupReportsAnUnweightedSlowPackageAndKeepsTheLegGreen(t *testing.
 	if rerr != nil || !strings.Contains(string(b), key) {
 		t.Errorf("the step summary does not name %q: err=%v %q", key, rerr, b)
 	}
-	if errs, err := unweightedGuard(t, []string{reportOnlyEnv + "="}, 1, log); err == nil || !strings.Contains(errs, "\n"+key+"\t32\n") {
+	if errs, err := unweightedGuard(t, []string{reportOnlyEnv + "="}, 1, log); err == nil || !strings.Contains(errs, "\n"+key+"\t48\n") {
 		t.Errorf("with the variable empty (pull_request, push, local) the guard must still fail with the row: err=%v\n%s", err, errs)
 	}
 }
@@ -80,7 +80,7 @@ func TestReportModeNamesANestedModulePackageWithoutFailing(t *testing.T) {
 	if nested == "" {
 		t.Skip("shard 1 holds no nested-module package")
 	}
-	errs, err = unweightedGuard(t, reportEnv(filepath.Join(t.TempDir(), "s.md")), 1, coverLog(t, 1, shardCount, map[string]string{nested: "30.000s"}))
+	errs, err = unweightedGuard(t, reportEnv(filepath.Join(t.TempDir(), "s.md")), 1, coverLog(t, 1, shardCount, map[string]string{nested: "45.000s"}))
 	if err != nil {
 		t.Fatalf("report mode failed on a nested-module package: %v\n%s", err, errs)
 	}

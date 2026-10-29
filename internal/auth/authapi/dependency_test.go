@@ -66,6 +66,8 @@ func TestNamesDependencyIgnoresGeneratedFieldsAndCatchesThePort(t *testing.T) {
 	}{
 		{"error.v1 body whose occurred_at microseconds hold the port digits",
 			`{"schema_version":"error.v1","status":503,"reason_code":"dependency_unavailable","request_id":"req_HGHRVOLSZVFFDFMOT2566AO6SU","occurred_at":"2026-10-29T03:04:57.315432Z","retry_after_seconds":1}`, false},
+		{"error.v1 body whose occurred_at fraction is trimmed to the port digits (RFC 3339 drops trailing zeros)",
+			`{"schema_version":"error.v1","status":503,"reason_code":"dependency_unavailable","request_id":"req_HGHRVOLSZVFFDFMOT2566AO6SU","occurred_at":"2026-10-29T03:04:57.5432Z","retry_after_seconds":1}`, false},
 		{"error.v1 body whose request_id holds the port digits",
 			`{"schema_version":"error.v1","status":503,"reason_code":"dependency_unavailable","request_id":"req_AB5432CD","occurred_at":"2026-10-29T03:04:57.100000Z","retry_after_seconds":1}`, false},
 		{"plain text whose timestamp holds the port digits", `retry later (at 03:04:57.315432Z)`, false},

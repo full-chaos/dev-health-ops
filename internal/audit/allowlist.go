@@ -211,9 +211,10 @@ var attributeIDRules = map[string]*regexp.Regexp{
 	"action_key":     regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*){1,3}$`),
 	"display_prefix": regexp.MustCompile(`^(fcacr|fcpush|svc|rt)_[A-Za-z0-9]{2,8}$`),
 	// A signing key's kid: public, the JWS header value (keystore.KeyIDPattern).
-	"key_id":         regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`),
-	"jti":            uuidPattern,
-	"workload_jti":   uuidPattern,
+	"key_id": regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`),
+	"jti":    uuidPattern,
+	// The workload-token schema's jti pattern, so every jti the verifier accepts is valid here.
+	"workload_jti":   regexp.MustCompile(`^[A-Za-z0-9_-]{22,64}$`),
 	"principal_id":   uuidPattern,
 	"binding_id":     uuidPattern,
 	"related_key_id": regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`),

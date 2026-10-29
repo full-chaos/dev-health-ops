@@ -47,17 +47,20 @@ func TestRestoreFenceIsADryRunUnlessApplyIsGiven(t *testing.T) {
 }
 
 func TestRestoreFenceInitIsAVerbWithOneOptionalFlag(t *testing.T) {
-	for name, args := range map[string][]string{"init": {"init"}, "init if absent": {"init", "-if-absent"}} {
+	for name, args := range map[string][]string{"init": {"init"}, "init if absent": {"init", "-if-absent"}, "init naming the timeline": {"init", "-timeline", "2"}} {
 		if _, err := parseRestoreFenceArgs(args, io.Discard); err != nil {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
 	for name, args := range map[string][]string{
-		"init with a manifest": {"init", "-manifest", "m.json"},
-		"init with -apply":     {"init", "-apply"},
-		"init with a margin":   {"init", "-blind-margin", "5"},
-		"init positional":      {"init", "extra"},
-		"-if-absent on apply":  {"apply", "-manifest", "m.json", "-if-absent"},
+		"init with a manifest":      {"init", "-manifest", "m.json"},
+		"init with -apply":          {"init", "-apply"},
+		"init with a margin":        {"init", "-blind-margin", "5"},
+		"init positional":           {"init", "extra"},
+		"-if-absent on apply":       {"apply", "-manifest", "m.json", "-if-absent"},
+		"-if-absent with -timeline": {"init", "-if-absent", "-timeline", "2"},
+		"-timeline on apply":        {"apply", "-manifest", "m.json", "-timeline", "2"},
+		"a zero timeline":           {"init", "-timeline", "0"},
 	} {
 		if _, err := parseRestoreFenceArgs(args, io.Discard); err == nil {
 			t.Errorf("%s: accepted", name)

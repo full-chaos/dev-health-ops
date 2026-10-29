@@ -17,7 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
-const restoreFenceUsage = "usage: auth-migrate restore-fence export -out FILE | apply [-manifest FILE] [-blind-margin N] [-apply] | init [-if-absent] | status\n  init " + restorefence.InitHelp
+const restoreFenceUsage = "usage: auth-migrate restore-fence export -out FILE | apply [-manifest FILE] [-blind-margin N] [-apply] | init [-timeline N | -if-absent] | status\n  init " + restorefence.InitHelp
 
 type restoreFenceArgs struct {
 	verb        string
@@ -26,6 +26,7 @@ type restoreFenceArgs struct {
 	blindMargin int64
 	apply       bool
 	ifAbsent    bool
+	timeline    int64
 }
 
 func parseRestoreFenceArgs(args []string, stderr io.Writer) (restoreFenceArgs, error) {
@@ -43,6 +44,7 @@ func parseRestoreFenceArgs(args []string, stderr io.Writer) (restoreFenceArgs, e
 		flags.Int64Var(&parsed.blindMargin, "blind-margin", 0, "raise every revision by this much (the fallback when the WAL after the target is gone)")
 		flags.BoolVar(&parsed.apply, "apply", false, "write the change (without it the run is a dry run that rolls back)")
 	case "init":
+		flags.Int64Var(&parsed.timeline, "timeline", 0, "confirm the live timeline: required when it is above 1 (a promoted database may be a restore)")
 		flags.BoolVar(&parsed.ifAbsent, "if-absent", false, "compose/dev only; never on a restore: exit 0 without writing when the timeline already has a fence row (still refuses in recovery)")
 	case "status":
 	default:
@@ -53,6 +55,16 @@ func parseRestoreFenceArgs(args []string, stderr io.Writer) (restoreFenceArgs, e
 	}
 	if flags.NArg() != 0 {
 		return restoreFenceArgs{}, errors.New("positional arguments are not accepted")
+	}
+	if parsed.verb == "init" {
+		set := false
+		flags.Visit(func(f *flag.Flag) { set = set || f.Name == "timeline" })
+		if set && parsed.timeline < 1 {
+			return restoreFenceArgs{}, errors.New("-timeline must be the live timeline, 1 or more")
+		}
+		if parsed.ifAbsent && set {
+			return restoreFenceArgs{}, errors.New("-if-absent never names a timeline")
+		}
 	}
 	if parsed.verb == "export" && parsed.out == "" {
 		return restoreFenceArgs{}, errors.New("export needs -out")
@@ -116,7 +128,7 @@ func executeRestoreFence(parent context.Context, args []string, lookup secrets.L
 
 	switch parsed.verb {
 	case "init":
-		report, err := restorefence.Init(ctx, pool, schema, parsed.ifAbsent)
+		report, err := restorefence.Init(ctx, pool, schema, restorefence.InitOptions{IfAbsent: parsed.ifAbsent, Timeline: parsed.timeline})
 		if err != nil {
 			fmt.Fprintf(stderr, "restore-fence error: %v\n", err)
 			return 1

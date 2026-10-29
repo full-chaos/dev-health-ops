@@ -384,7 +384,7 @@ func TestApplyOnANoLossTimelineChangesNothingAndClearsReadiness(t *testing.T) {
 	if err := Check(ctx, db.runtime, db.schema); !errors.Is(err, ErrNotFenced) {
 		t.Fatalf("a migrated database with no init = %v, want ErrNotFenced (0034 writes no row)", err)
 	}
-	if _, err := Init(ctx, db.admin, db.schema, false); err != nil {
+	if _, err := Init(ctx, db.admin, db.schema, InitOptions{}); err != nil {
 		t.Fatalf("init: %v", err)
 	}
 	if err := Check(ctx, db.runtime, db.schema); err != nil {
@@ -524,7 +524,7 @@ func TestTheRuntimeRoleReadsTheTimelineItself(t *testing.T) {
 	if viaRuntime < 1 || viaRuntime != viaControl {
 		t.Fatalf("the runtime role reads timeline %d, pg_control says %d", viaRuntime, viaControl)
 	}
-	if _, err := Init(ctx, db.admin, db.schema, false); err != nil {
+	if _, err := Init(ctx, db.admin, db.schema, InitOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := Check(ctx, db.runtime, db.schema); err != nil {
@@ -676,13 +676,13 @@ func TestInitWritesOneAuditedRowAndRefusesAnExistingOneAndTheRuntimeRole(t *test
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	db := newFenceDB(t, ctx)
-	if _, err := Init(ctx, db.runtime, db.schema, false); err == nil {
+	if _, err := Init(ctx, db.runtime, db.schema, InitOptions{}); err == nil {
 		t.Fatal("the runtime role ran init")
 	}
 	if n := db.count(t, ctx, `SELECT count(*) FROM auth.restore_fence_state`); n != 0 {
 		t.Fatalf("a refused init wrote %d rows", n)
 	}
-	report, err := Init(ctx, db.admin, db.schema, false)
+	report, err := Init(ctx, db.admin, db.schema, InitOptions{})
 	if err != nil {
 		t.Fatalf("init: %v", err)
 	}
@@ -695,10 +695,10 @@ func TestInitWritesOneAuditedRowAndRefusesAnExistingOneAndTheRuntimeRole(t *test
 	if n := db.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.restore_fence.initialized'`); n != 1 {
 		t.Fatalf("init wrote %d audit rows, want 1", n)
 	}
-	if _, err := Init(ctx, db.admin, db.schema, false); !errors.Is(err, ErrInitRefused) {
+	if _, err := Init(ctx, db.admin, db.schema, InitOptions{}); !errors.Is(err, ErrInitRefused) {
 		t.Fatalf("a second init = %v, want ErrInitRefused", err)
 	}
-	again, err := Init(ctx, db.admin, db.schema, true)
+	again, err := Init(ctx, db.admin, db.schema, InitOptions{IfAbsent: true})
 	if err != nil || !again.AlreadyFenced {
 		t.Fatalf("init -if-absent on a fenced timeline = %+v, %v", again, err)
 	}

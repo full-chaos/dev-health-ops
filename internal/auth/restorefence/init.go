@@ -18,7 +18,7 @@ import (
 var ErrInitRefused = errors.New("restorefence: init refused")
 
 // InitHelp is the help text of the init verb.
-const InitHelp = "writes the 'initial' fence row of the live timeline: only on a database that is NOT a restore (a restored database is fenced with apply, never init). -if-absent: compose/dev only; never on a restore"
+const InitHelp = "writes the 'initial' fence row of the live timeline: only on a database that is NOT a restore (a restored database is fenced with apply, never init). On a timeline above 1 it refuses unless -timeline N names the live timeline. -if-absent: compose/dev only; never on a restore; never with -timeline"
 
 // InitReport is what init wrote: the timeline only.
 type InitReport struct {
@@ -43,8 +43,29 @@ type initDB interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
-// initInTx refuses in recovery first, whatever else is true, then refuses an existing row, then writes.
-func initInTx(ctx context.Context, db initDB, schema authschema.ValidatedIdentifier) (int64, error) {
+// InitOptions set one init.
+type InitOptions struct {
+	// IfAbsent is the dev and compose path: an existing row is not an error.
+	IfAbsent bool
+	// Timeline is the operator's confirmation of the live timeline (0 = none named). A database on a timeline
+	// above 1 has been promoted at least once, which is what a restore looks like: init writes there only when the
+	// operator names that exact timeline. IfAbsent never names one.
+	Timeline int64
+}
+
+func (o InitOptions) validate() error {
+	if o.Timeline < 0 {
+		return fmt.Errorf("%w: the timeline must be positive", ErrInitRefused)
+	}
+	if o.IfAbsent && o.Timeline != 0 {
+		return fmt.Errorf("%w: -if-absent never names a timeline", ErrInitRefused)
+	}
+	return nil
+}
+
+// initInTx refuses in recovery first, whatever else is true, then a timeline above 1 that the operator did not name,
+// then an existing row, then writes.
+func initInTx(ctx context.Context, db initDB, schema authschema.ValidatedIdentifier, named int64) (int64, error) {
 	var recovery bool
 	if err := db.QueryRow(ctx, `SELECT pg_is_in_recovery()`).Scan(&recovery); err != nil {
 		return 0, fmt.Errorf("reading the recovery state")
@@ -55,6 +76,12 @@ func initInTx(ctx context.Context, db initDB, schema authschema.ValidatedIdentif
 	timeline, err := Timeline(ctx, db)
 	if err != nil {
 		return 0, fmt.Errorf("reading the timeline")
+	}
+	if named != 0 && named != timeline {
+		return timeline, fmt.Errorf("%w: the named timeline is not the live one", ErrInitRefused)
+	}
+	if timeline > 1 && named != timeline {
+		return timeline, fmt.Errorf("%w: the live timeline is %d: a database that was promoted may be a restore; fence it with apply, or name the timeline with -timeline %d only if it is not a restore", ErrInitRefused, timeline, timeline)
 	}
 	var exists bool
 	if err := db.QueryRow(ctx, initExistsSQL(schema), timeline).Scan(&exists); err != nil {
@@ -73,11 +100,15 @@ func initInTx(ctx context.Context, db initDB, schema authschema.ValidatedIdentif
 // migration role, in one audit.Commit. It refuses on a server in recovery and when the
 // timeline already has a row of any kind. With ifAbsent an existing row is not an error
 // (a dev or compose bring-up repeats it); a server in recovery still is.
-func Init(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier, ifAbsent bool) (InitReport, error) {
+func Init(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier, opts InitOptions) (InitReport, error) {
+	if err := opts.validate(); err != nil {
+		return InitReport{}, err
+	}
+	ifAbsent := opts.IfAbsent
 	var report InitReport
 	err := audit.Commit(ctx, pool, schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
-			timeline, err := initInTx(ctx, tx, schema)
+			timeline, err := initInTx(ctx, tx, schema, opts.Timeline)
 			report.Timeline = timeline
 			return err
 		},

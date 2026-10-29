@@ -592,7 +592,9 @@ func TestTheUnverifiedPeekIsStrictJSON(t *testing.T) {
 		"aud not a string":                `{"aud":["auth-service"],"sub":"` + w.subject + `",` + rest + `}`,
 		"not an object":                   `["auth-service"]`,
 		"trailing document":               `{"aud":"auth-service","sub":"` + w.subject + `",` + rest + `}{}`,
+		"exact and upper case aud":        `{"aud":"auth-service","AUD":"dev-health-api","sub":"` + w.subject + `",` + rest + `}`,
 	} {
+		w.logs.Reset()
 		expectError(t, w.issue(bearerOf(craftedToken(payload))), http.StatusUnauthorized, "invalid_credentials")
 		w.nothingRead(name)
 		if w.keys.reads != 0 {

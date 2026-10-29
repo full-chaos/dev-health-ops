@@ -40,6 +40,7 @@ func TestEverySectionNamesItsTableAndKeepsAuthAndLegacySeparate(t *testing.T) {
 		}
 	}
 	for _, want := range []string{"public.refresh_tokens", "public.internal_service_credentials", "public.external_ingest_tokens", "public.pagerduty_webhook_bindings", "auth.sessions", "auth.refresh_credentials", "auth.credential_registry", "auth.signing_keys",
+		"auth.principals", "auth.workload_bindings", "auth.organizations", "public.saml_assertion_replays",
 		"auth.memberships", "auth.service_accounts", "auth.workloads", "auth.link_credentials", "auth.saml_assertion_uses", "auth.users", "public.provider_oauth_revocations"} {
 		if !seen[want] {
 			t.Errorf("section %s is missing", want)
@@ -104,7 +105,7 @@ func TestEveryCarriedTableAndColumnExistsInTheSchemaItIsReadFrom(t *testing.T) {
 	for _, s := range sections {
 		source, create := authSQL.String(), regexp.MustCompile(`(?s)CREATE TABLE `+s.table+`\s*\((.*?)\n\);`)
 		if s.legacy {
-			source = head.Schema
+			source = head.Schema + "\n" + legacyMigrationSQL(t, root)
 			create = regexp.MustCompile(`(?s)CREATE TABLE (?:IF NOT EXISTS )?(?:public\.)?"?` + s.table + `"?\s*\((.*?)\n\)\s*;`)
 		}
 		m := create.FindStringSubmatch(source)
@@ -184,4 +185,24 @@ func TestOnlyTheReplayEvidenceColumnMayNameAHash(t *testing.T) {
 			}
 		}
 	}
+}
+
+// legacyMigrationSQL is the rendered SQL of the legacy migrations after the baseline: a table such as
+// saml_assertion_replays is created there, not in the baseline schema.
+func legacyMigrationSQL(t *testing.T, root string) string {
+	t.Helper()
+	files, err := filepath.Glob(filepath.Join(root, "internal", "pgmigrate", "sql", "*.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	for _, f := range files {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b.Write(raw)
+		b.WriteString("\n")
+	}
+	return b.String()
 }

@@ -97,6 +97,9 @@ func Preflight(ctx context.Context, pool *pgxpool.Pool, schema authschema.Valida
 	if err := check("auth.restore_fence_state", q+".restore_fence_state", "INSERT"); err != nil {
 		return nil, err
 	}
+	if err := check("auth.sso_flow_states", q+".sso_flow_states", "UPDATE"); err != nil {
+		return nil, err
+	}
 	for _, s := range sections {
 		privilege := "UPDATE"
 		switch s.kind {
@@ -236,6 +239,12 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedI
 					report.Revocations += changed
 				}
 			}
+			flows, err := tx.Exec(ctx, flowStatesSQL(schema))
+			if err != nil {
+				return fmt.Errorf("invalidating the SSO flow states (sqlstate %s)", sqlState(err))
+			}
+			report.Sections = append(report.Sections, SectionReport{Name: "auth.sso_flow_states", Changed: flows.RowsAffected()})
+			report.Revocations += flows.RowsAffected()
 			if !opts.Apply {
 				return errDryRun
 			}

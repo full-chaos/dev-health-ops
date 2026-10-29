@@ -57,7 +57,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
-	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
+	"github.com/full-chaos/dev-health-ops/internal/platform/pgident"
 )
 
 const (
@@ -317,11 +317,10 @@ func lookupSQLFor(opts Options) (string, error) {
 	if schema == "" {
 		schema = "auth"
 	}
-	id, err := authschema.NewValidatedIdentifier(schema)
-	if err != nil {
-		return "", fmt.Errorf("edgetokenmint: auth schema: %w", err)
+	if pgident.Check(schema) != pgident.OK {
+		return "", fmt.Errorf("edgetokenmint: auth schema %q is not a usable schema name", schema)
 	}
-	holds := rule.HoldsSQL(authschema.Quote(id), "u.id", "'"+rule.PlatformAdmin+"'")
+	holds := rule.HoldsSQL(pgx.Identifier{schema}.Sanitize(), "u.id", "'"+rule.PlatformAdmin+"'")
 	return strings.Replace(lookupSQL, "u.is_superuser,", "(u.is_superuser OR "+holds+"),", 1), nil
 }
 

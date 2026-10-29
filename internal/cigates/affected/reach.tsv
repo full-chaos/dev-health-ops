@@ -96,7 +96,6 @@ internal/auth/contracts	contracts.go	internal/auth/keyrotation
 internal/auth/contracts	contracts.go	internal/auth/linkmail
 internal/auth/contracts	contracts.go	internal/auth/membership
 internal/auth/contracts	contracts.go	internal/auth/passwordpolicy
-internal/auth/contracts	contracts.go	internal/auth/platformrole
 internal/auth/contracts	contracts.go	internal/auth/policycatalog
 internal/auth/contracts	contracts.go	internal/auth/session
 internal/auth/contracts	contracts.go	internal/auth/usersbackfill

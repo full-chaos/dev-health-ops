@@ -205,7 +205,7 @@ func scanSteps(t *testing.T, root string) ([]runStep, []string) {
 		if mapGet(top, "jobs") != nil {
 			var sub yaml.Node
 			sub.Kind = yaml.MappingNode
-			for _, k := range []string{"on", "env", "defaults"} {
+			for _, k := range []string{"on", "permissions", "env", "defaults"} {
 				if v := mapGet(top, k); v != nil {
 					sub.Content = append(sub.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: k}, v)
 				}
@@ -384,7 +384,7 @@ func renderLock(steps []runStep, old []lockRow) string {
 	}
 	var b strings.Builder
 	b.WriteString("# CHAOS-11422: the whole-step lock. Every step of every workflow and action file (run or uses), every job and every workflow has one reviewed row.\n")
-	b.WriteString("# sha256 = of the canonical step (or job, or workflow on, env and defaults; an action inputs and runs without steps) with anchors resolved, keys sorted, run text trailing-white-space stripped plus one final newline. suites = catalog suite ids or none.\n# NAMED LIMIT: the scripts a step calls are NOT covered. The lock covers workflow and action YAML only.\n")
+	b.WriteString("# sha256 = of the canonical step (or job, or workflow on, permissions, env and defaults; an action inputs and runs without steps) with anchors resolved, keys sorted, run text trailing-white-space stripped plus one final newline. suites = catalog suite ids or none.\n# NAMED LIMIT: the scripts a step calls are NOT covered. The lock covers workflow and action YAML only.\n")
 	b.WriteString("# Regenerate the shas with: go test ./internal/cigates/suitecatalog -run TestRunBlockLockUpdate -update. A new or changed row has empty suites and reason a reviewer must fill.\n")
 	b.WriteString(strings.Join(lockColumns, "\t") + "\n")
 	for _, s := range steps {

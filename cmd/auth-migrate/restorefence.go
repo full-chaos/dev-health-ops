@@ -117,8 +117,11 @@ func (s pgRestoreFenceStore) PendingActions(ctx context.Context, schema authsche
 }
 func (s pgRestoreFenceStore) Close() { s.pool.Close() }
 
-// openRestoreFenceStore connects as the migration role; tests replace it.
-var openRestoreFenceStore = func(ctx context.Context, uri string, stderr io.Writer) (restoreFenceStore, error) {
+// openRestoreFenceStore is replaced only by tests (TestTheDefaultStoreOpenerIsTheRealOne pins the default).
+var openRestoreFenceStore = openPGRestoreFenceStore
+
+// openPGRestoreFenceStore connects as the migration role.
+func openPGRestoreFenceStore(ctx context.Context, uri string, stderr io.Writer) (restoreFenceStore, error) {
 	poolConfig := postgresstore.DefaultConfig(uri)
 	poolConfig.MaxConns = 2
 	pool, err := newDatabaseWait(poolConfig, stderr).run(ctx)

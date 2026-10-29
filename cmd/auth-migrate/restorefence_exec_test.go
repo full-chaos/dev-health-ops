@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -212,5 +213,12 @@ func TestExecRefusesBadArgumentsBeforeConnecting(t *testing.T) {
 	rc, _, errOut := runExec(t, store, nil, "init", "-if-absent", "-timeline", "2")
 	if rc != 2 || !strings.Contains(errOut, "never names a timeline") || len(store.calls) != 0 {
 		t.Fatalf("rc %d, stderr %q, calls %v", rc, errOut, store.calls)
+	}
+}
+
+// The seam is for tests only: the shipped default must be the real, database-backed opener.
+func TestTheDefaultStoreOpenerIsTheRealOne(t *testing.T) {
+	if reflect.ValueOf(openRestoreFenceStore).Pointer() != reflect.ValueOf(openPGRestoreFenceStore).Pointer() {
+		t.Fatal("openRestoreFenceStore is not the real PostgreSQL opener: a test seam was left swapped")
 	}
 }

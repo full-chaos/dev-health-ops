@@ -24,7 +24,15 @@ type shellCollector struct {
 	mu    sync.Mutex
 	seen  map[string]string // metric name -> service.name of the resource
 	count int
+	// hold, when set, keeps the answer to the first export until it is closed
+	// (or holdLimit passes): the shell's startup flush runs before the operator
+	// HTTP listener starts, so while it is held the pull endpoint cannot answer.
+	hold chan struct{}
 }
+
+// holdLimit bounds a held export; the shell abandons its startup flush after
+// metricsFlushTimeout anyway.
+const holdLimit = 5 * time.Second
 
 func (c *shellCollector) Export(_ context.Context, req *colmetricpb.ExportMetricsServiceRequest) (*colmetricpb.ExportMetricsServiceResponse, error) {
 	c.mu.Lock()
@@ -43,6 +51,14 @@ func (c *shellCollector) Export(_ context.Context, req *colmetricpb.ExportMetric
 			}
 		}
 	}
+	if c.count == 1 && c.hold != nil {
+		c.mu.Unlock()
+		select {
+		case <-c.hold:
+		case <-time.After(holdLimit):
+		}
+		c.mu.Lock()
+	}
 	return &colmetricpb.ExportMetricsServiceResponse{}, nil
 }
 
@@ -54,13 +70,18 @@ var _ = metricpb.Metric{}
 // the OTLP env of the deployed pod, against a real collector. The runtime
 // gauges the operator server writes as a hand-written fragment must arrive
 // under the service name the env gives, and the pull endpoint must still serve
-// them.
+// them. The collector holds its answer to the first export (the startup flush,
+// which runs before the operator listener starts), so the fragment arrives
+// while the pull endpoint is not up yet: the order every run must survive.
 func TestShellPushesItsRegisteredFragmentsOverOTLP(t *testing.T) {
 	if os.Getenv("SHELL_OTLP_HELPER") == "1" {
 		runShellHelper()
 		return
 	}
-	collector := &shellCollector{seen: map[string]string{}}
+	hold := make(chan struct{})
+	release := sync.OnceFunc(func() { close(hold) })
+	defer release()
+	collector := &shellCollector{seen: map[string]string{}, hold: hold}
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)

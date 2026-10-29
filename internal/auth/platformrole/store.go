@@ -98,12 +98,12 @@ func (s *Store) Resolve(ctx context.Context, principal uuid.UUID) (Authority, er
 }
 
 // resolveOn reads the active role keys of principal through q. With lock set
-// the assignment and principal rows are held FOR SHARE until the transaction
-// ends, so a revoke or a disable of them waits for it.
+// the principal row is share-locked until the transaction ends, so a disable
+// of it waits; the assignment rows are covered by the write lock.
 func (s *Store) resolveOn(ctx context.Context, q rowQuerier, principal uuid.UUID, lock bool) (Authority, error) {
 	locking := ""
 	if lock {
-		locking = " FOR SHARE OF r, p"
+		locking = " FOR SHARE OF p"
 	}
 	var stored []string
 	err := q.QueryRow(ctx, `SELECT coalesce(array_agg(role_key ORDER BY role_key), '{}') FROM (
@@ -119,9 +119,10 @@ func (s *Store) resolveOn(ctx context.Context, q rowQuerier, principal uuid.UUID
 	return a, nil
 }
 
-// Grant gives in.Principal the platform role in.Role in one audit.Commit. The
-// actor's authority, the target principal and the expiry are checked in the
-// same transaction as the insert, on the database clock.
+// Grant gives in.Principal the platform role in.Role in one audit.Commit. It
+// takes the write lock first; the actor's authority, the target principal and
+// the expiry are checked in the same transaction as the insert, on the
+// database clock.
 func (s *Store) Grant(ctx context.Context, in GrantInput) (uuid.UUID, error) {
 	if !IsPlatformRole(in.Role) {
 		return uuid.Nil, ErrNotPlatformRole
@@ -130,6 +131,9 @@ func (s *Store) Grant(ctx context.Context, in GrantInput) (uuid.UUID, error) {
 	actor, subject := in.Actor.String(), in.Principal.String()
 	err := audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			if err := lockWrites(ctx, tx); err != nil {
+				return err
+			}
 			held, err := s.resolveOn(ctx, tx, in.Actor, true)
 			if err != nil {
 				return err
@@ -139,7 +143,7 @@ func (s *Store) Grant(ctx context.Context, in GrantInput) (uuid.UUID, error) {
 			}
 			var kind string
 			var enabled bool
-			err = tx.QueryRow(ctx, `SELECT kind, disabled_at IS NULL FROM `+s.q+`.principals WHERE id = $1 FOR SHARE`, in.Principal).Scan(&kind, &enabled)
+			err = tx.QueryRow(ctx, `SELECT kind, disabled_at IS NULL FROM `+s.q+`.principals WHERE id = $1 FOR SHARE OF principals`, in.Principal).Scan(&kind, &enabled)
 			switch {
 			case errors.Is(err, pgx.ErrNoRows):
 				return ErrPrincipalMissing
@@ -177,10 +181,9 @@ VALUES ($1, $2, $3, $4, $5) ON CONFLICT (principal_id, role_key) DO NOTHING RETU
 	return id, nil
 }
 
-// Revoke removes in.Role from in.Principal in one audit.Commit. Every
-// assignment row is locked first, in id order, so concurrent revokes
-// serialize; a revoke that would leave no active platform administrator is
-// refused.
+// Revoke removes in.Role from in.Principal in one audit.Commit. The write
+// lock is taken first, so concurrent grants and revokes serialize; a revoke
+// that would leave no active platform administrator is refused.
 func (s *Store) Revoke(ctx context.Context, in RevokeInput) error {
 	if !IsPlatformRole(in.Role) {
 		return ErrNotPlatformRole
@@ -197,9 +200,12 @@ func (s *Store) Revoke(ctx context.Context, in RevokeInput) error {
 	actor, subject := in.Actor.String(), in.Principal.String()
 	err = audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			if err := lockWrites(ctx, tx); err != nil {
+				return err
+			}
 			rows, err := tx.Query(ctx, `SELECT r.id, r.principal_id, r.role_key, `+activeSQL+`
 FROM `+s.q+`.platform_role_assignments r JOIN `+s.q+`.principals p ON p.id = r.principal_id
-ORDER BY r.id FOR UPDATE OF r FOR SHARE OF p`)
+ORDER BY r.id FOR SHARE OF p`)
 			if err != nil {
 				return err
 			}
@@ -249,6 +255,14 @@ ORDER BY r.id FOR UPDATE OF r FOR SHARE OF p`)
 		return s.writeErr(ctx, "revoke", err)
 	}
 	return nil
+}
+
+// lockWrites takes the store's advisory write lock for the rest of the
+// transaction. The runtime role holds no UPDATE on the assignments, so it
+// cannot row-lock them; this lock serializes the store's writers instead.
+func lockWrites(ctx context.Context, tx audit.TxOps) error {
+	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, writeLock)
+	return err
 }
 
 // List is every stored assignment, with Active on the database clock.

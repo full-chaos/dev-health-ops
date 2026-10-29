@@ -101,6 +101,7 @@ const APPROVED_AUDIT = [
   "identity_projected",
   "identity_relinked",
   "password_reset",
+  "password_reset_requested",
   "policy_revision_activated",
   "entitlement_snapshot_applied",
   "denied_no_membership",
@@ -118,6 +119,9 @@ const APPROVED_AUDIT = [
   "expired",
   "principal_not_found",
   "malformed",
+  "invite_created",
+  "invite_accepted",
+  "invite_revoked",
 ];
 const APPROVED_DECISION = [
   "allowed_by_repository_grant",

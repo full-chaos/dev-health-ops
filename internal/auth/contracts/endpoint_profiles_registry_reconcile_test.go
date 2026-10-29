@@ -25,7 +25,8 @@ type classRegistryAnchor struct {
 
 type classRegistryDocument struct {
 	Classes []struct {
-		ClassID string `json:"class_id"`
+		ClassID string   `json:"class_id"`
+		Gaps    []string `json:"gaps"`
 		Issuer  struct {
 			Anchors []*classRegistryAnchor `json:"anchors"`
 		} `json:"issuer"`
@@ -56,18 +57,41 @@ func indexRegistry(document classRegistryDocument) registryAnchors {
 	return out
 }
 
-// authHTTPLayer is the package whose issuer anchors and route registrations
-// are auth-service's served surface: an issuer or consumer anchor there must
-// be a profile's issued credential or accepted class.
+// authHTTPLayer is one auth-service route package (the session and
+// credential routes); the planted cases below anchor there.
 const authHTTPLayer = "internal/auth/authapi/"
+
+// routePackages is auth-service's served surface: the package directory of
+// every row's source file (each route is registered there). An issuer or
+// consumer anchor in one of those packages must be a profile's issued
+// credential or accepted class. Derived from the rows, so a package that
+// starts registering a route is covered by its own row.
+func routePackages(rows []map[string]any) map[string]bool {
+	packages := map[string]bool{}
+	for _, row := range rows {
+		source, _ := row["source"].(map[string]any)
+		if file, _ := source["file"].(string); file != "" {
+			packages[filepath.ToSlash(filepath.Dir(file))+"/"] = true
+		}
+	}
+	return packages
+}
+
+// inRoutePackage reports whether the "path:line" key is in one of packages
+// (its own directory, not a subdirectory).
+func inRoutePackage(key string, packages map[string]bool) bool {
+	path, _, _ := strings.Cut(key, ":")
+	return packages[filepath.ToSlash(filepath.Dir(path))+"/"]
+}
 
 // reconcileProfilesWithRegistry checks both directions: every class a row
 // accepts has a registry consumer anchored at the row's source line, and every
 // class a row issues has a registry issuer anchored at the issued credential's
-// line; and every registry consumer or issuer anchored in the auth-service
-// HTTP layer is a row's accepted or issued class at that line.
+// line; and every registry consumer or issuer anchored in an auth-service
+// route package is a row's accepted or issued class at that line.
 func reconcileProfilesWithRegistry(rows []map[string]any, registry registryAnchors) []string {
 	var problems []string
+	packages := routePackages(rows)
 	accepted := map[string]bool{}
 	issued := map[string]bool{}
 	for _, row := range rows {
@@ -100,14 +124,14 @@ func reconcileProfilesWithRegistry(rows []map[string]any, registry registryAncho
 	}
 	for class, anchors := range registry.consumers {
 		for key := range anchors {
-			if strings.HasPrefix(key, authHTTPLayer) && !accepted[class+"@"+key] {
+			if inRoutePackage(key, packages) && !accepted[class+"@"+key] {
 				problems = append(problems, fmt.Sprintf("credential-classes.json has a %s consumer anchored at %s, which no auth-service profile row accepts there", class, key))
 			}
 		}
 	}
 	for class, anchors := range registry.issuers {
 		for key := range anchors {
-			if strings.HasPrefix(key, authHTTPLayer) && !issued[class+"@"+key] {
+			if inRoutePackage(key, packages) && !issued[class+"@"+key] {
 				problems = append(problems, fmt.Sprintf("credential-classes.json has a %s issuer anchored at %s, which no auth-service profile row issues there", class, key))
 			}
 		}
@@ -140,8 +164,8 @@ func authServiceRows(t *testing.T) []map[string]any {
 
 // TestAuthServiceProfilesReconcileWithTheCredentialRegistry: what each
 // auth-service row accepts and issues is listed in credential-classes.json at
-// the same file:line, and the registry lists no auth-service HTTP-layer
-// producer or consumer that no row profiles.
+// the same file:line, and the registry lists no producer or consumer in an
+// auth-service route package that no row profiles.
 func TestAuthServiceProfilesReconcileWithTheCredentialRegistry(t *testing.T) {
 	problems := reconcileProfilesWithRegistry(authServiceRows(t), indexRegistry(loadClassRegistryDocument(t)))
 	for _, problem := range problems {
@@ -208,6 +232,12 @@ func TestTheReconcileGateRefusesPlantedMismatches(t *testing.T) {
 		"the registry loses the issue route's service credential consumer": func(_ []map[string]any, registry registryAnchors) {
 			delete(registry.consumers["internal_svc_authsess_token"], anchorKey(authHTTPLayer+"compat.go", 143))
 		},
+		"the registry names a workload exchange consumer no row accepts": func(_ []map[string]any, registry registryAnchors) {
+			registry.consumers["workload_token"][anchorKey("internal/auth/workloadexchange/exchange.go", 143)] = true
+		},
+		"the registry names an authruntime issuer no row issues": func(_ []map[string]any, registry registryAnchors) {
+			registry.issuers["refresh_credential"][anchorKey("internal/auth/authruntime/sso.go", 104)] = true
+		},
 	}
 	for name, plant := range cases {
 		rows, registry := fresh()
@@ -215,5 +245,20 @@ func TestTheReconcileGateRefusesPlantedMismatches(t *testing.T) {
 		if len(reconcileProfilesWithRegistry(rows, registry)) == 0 {
 			t.Errorf("%s: the gate reported nothing", name)
 		}
+	}
+}
+
+// TestTheRoutePackagesAreEveryAuthServiceRouteSource: the derived set holds
+// the session routes' package and the workload exchange's, and nothing that
+// is not a row's source directory.
+func TestTheRoutePackagesAreEveryAuthServiceRouteSource(t *testing.T) {
+	packages := routePackages(authServiceRows(t))
+	for _, want := range []string{authHTTPLayer, "internal/auth/workloadexchange/", "internal/auth/authruntime/"} {
+		if !packages[want] {
+			t.Errorf("route packages %v lack %s", packages, want)
+		}
+	}
+	if inRoutePackage("internal/auth/workloadexchange/sub/x.go:1", packages) || inRoutePackage("internal/auth/workload/store.go:1", packages) {
+		t.Error("a subdirectory or a non-route package counts as a route package")
 	}
 }

@@ -100,6 +100,7 @@
             "identity_projected",
             "identity_relinked",
             "password_reset",
+            "password_reset_requested",
             "policy_revision_activated",
             "entitlement_snapshot_applied",
             "denied_no_membership",
@@ -116,7 +117,10 @@
             "provider_already_linked",
             "expired",
             "principal_not_found",
-            "malformed"
+            "malformed",
+            "invite_created",
+            "invite_accepted",
+            "invite_revoked"
           ],
           "description": "A reason code from a CLOSED vocabulary (contracts/auth/v1/vocabulary/reason-codes.json): the codes used by authorization decisions and error.v1 in this corpus, the revoked_reason values, and the reason codes the merged audit producer accepts. A pattern would admit a secret-shaped lowercase value, so the set is an enum. A new value arrives with the producer that emits it."
         },

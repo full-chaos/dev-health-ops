@@ -137,9 +137,9 @@ func TestNewEdgeUserStoreReusesTheGivenPool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newEdgeUserStore: %v", err)
 	}
-	pg, ok := store.(policy.PGStore)
+	pg, ok := pgStoreOf(store)
 	if !ok || pg.Pool != pool {
-		t.Fatalf("store = %#v, want policy.PGStore over the given pool", store)
+		t.Fatalf("store = %#v, want query-api's users store over policy.PGStore over the given pool", store)
 	}
 }
 

@@ -32,7 +32,7 @@ func Command() cli.Command {
 	return cli.Command{
 		Name:    "auth",
 		Kind:    cli.Group,
-		Summary: "auth control plane operator verbs: users-backfill, users-reconcile, oauth-sso-count, orgs-backfill, legacy-link-purge",
+		Summary: "auth control plane operator verbs: users-backfill, users-reconcile, oauth-sso-count, orgs-backfill, orgs-reconcile, legacy-link-purge",
 		Children: []cli.Command{{
 			Name:    "users-backfill",
 			Kind:    cli.Verb,
@@ -53,6 +53,11 @@ func Command() cli.Command {
 			Kind:    cli.Verb,
 			Summary: "copy public.organizations and public.memberships into the auth schema (idempotent; counts only; run users-backfill first)",
 			Run:     runOrgs,
+		}, {
+			Name:    "orgs-reconcile",
+			Kind:    cli.Verb,
+			Summary: "compare public.organizations and public.memberships with the auth schema in one read-only snapshot (counts and org ids only; exit 1 on a gated diff; -exact gates every class)",
+			Run:     runOrgsReconcile,
 		}, {
 			Name:    "legacy-link-purge",
 			Kind:    cli.Verb,
@@ -338,6 +343,45 @@ func runLegacyLinkPurge(ctx context.Context, env cli.Env) int {
 	}
 	for _, line := range rep.Lines() {
 		fmt.Fprintln(env.Stdout, line)
+	}
+	return cli.ExitOK
+}
+
+func runOrgsReconcile(ctx context.Context, env cli.Env) int {
+	flags := flag.NewFlagSet("dho auth orgs-reconcile", flag.ContinueOnError)
+	flags.SetOutput(env.Stderr)
+	flags.Usage = func() {
+		fmt.Fprintln(env.Stderr, "usage: dho auth orgs-reconcile [-exact]")
+		fmt.Fprintln(env.Stderr, "  default mode: exit 1 on an organization diff (missing, extra, slug, name, active), an auth membership public does not have, or a membership auth holds inactive while public has the member.")
+		fmt.Fprintln(env.Stderr, "                Role changes and removals go-api made in public are printed, not gated (go-api writes public until the flip).")
+		fmt.Fprintln(env.Stderr, "  -exact:       the cutover gate: exit 1 on EVERY class, role differences, public-only memberships and duplicate sources included.")
+	}
+	exact := flags.Bool("exact", false, "gate every diff class (the cutover gate); the default gates organization diffs, auth-only memberships and inactive-in-public")
+	if err := flags.Parse(env.Args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return cli.ExitOK
+		}
+		return cli.ExitUsage
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted")
+		return cli.ExitUsage
+	}
+	target, closeFn, code := orgsReconcileTargetFn(ctx, env, "orgs-reconcile")
+	if code != cli.ExitOK {
+		return code
+	}
+	defer closeFn()
+	rep, err := ReconcileOrgs(ctx, target, *exact)
+	if err != nil {
+		fmt.Fprintln(env.Stderr, "orgs-reconcile: stopped: reading the organization aggregates failed")
+		return cli.ExitFailure
+	}
+	for _, line := range rep.Lines() {
+		fmt.Fprintln(env.Stdout, line)
+	}
+	if rep.GatedTotal() > 0 {
+		return cli.ExitFailure
 	}
 	return cli.ExitOK
 }

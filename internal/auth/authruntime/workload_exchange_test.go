@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -128,5 +129,31 @@ func TestTheWorkloadExchangeRefusesToStartWithoutItsCA(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "absent-ca.crt") {
 		t.Fatalf("the refusal carries the path: %v", err)
+	}
+}
+
+// AUTH_WORKLOAD_BOOTSTRAP alone mounts the route with no Kubernetes setting:
+// the bootstrap subject is served and the JWT subject is a shape fault.
+func TestTheWorkloadExchangeIsMountedForTheBootstrapSubjectAlone(t *testing.T) {
+	env := exchangeEnv(t, false)
+	env[authconfig.EnvWorkloadBootstrap] = "true"
+	api, err := configuredAPI(t, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	post := func(subjectType string) *httptest.ResponseRecorder {
+		body := "grant_type=" + url.QueryEscape(workloadexchange.GrantTypeTokenExchange) +
+			"&subject_token_type=" + url.QueryEscape(subjectType) + "&subject_token=not-a-bootstrap-value&audience=auth-service"
+		req := httptest.NewRequest(http.MethodPost, workloadexchange.Pattern, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rec := httptest.NewRecorder()
+		api.ServeHTTP(rec, req)
+		return rec
+	}
+	if rec := post(workloadexchange.TokenTypeWorkloadBootstrap); rec.Code != http.StatusBadRequest || rec.Body.String() != "{\"error\":\"invalid_grant\"}\n" {
+		t.Fatalf("a malformed bootstrap value: %d %q, want the uniform 400 invalid_grant", rec.Code, rec.Body.String())
+	}
+	if rec := post(workloadexchange.TokenTypeJWT); rec.Code != http.StatusBadRequest || rec.Body.String() != "{\"error\":\"invalid_request\"}\n" {
+		t.Fatalf("a JWT subject with the Kubernetes subject off: %d %q, want 400 invalid_request", rec.Code, rec.Body.String())
 	}
 }

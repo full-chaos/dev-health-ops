@@ -11,6 +11,7 @@ internal/api/pyjson
 internal/api/pytime
 internal/api/registerorg
 internal/audit
+internal/auth/accessverify
 internal/auth/authapi
 internal/auth/clientaddr
 internal/auth/contracts
@@ -219,6 +220,7 @@ internal/workitemcontract
 ~internal/chmigrate/sql
 ~internal/fixturescli/testdata/generate
 ~internal/fixturescli/testdata/synthetic
+~internal/pgmigrate/archive
 ~internal/pgmigrate/baseline
 ~internal/pgmigrate/sql
 ~internal/pgmigrate/sql/down

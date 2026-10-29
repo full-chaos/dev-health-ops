@@ -346,7 +346,7 @@ func TestEveryLegStageGoesThroughTheJSONHelperAndKeepsGoTestsRC(t *testing.T) {
 	}
 	text := string(script)
 	for name, mut := range map[string][2]string{
-		"a race site back to the plain pipe": {`go_test_leg "${racelog}" "${legjson}" -race -count=1 `, `"${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -race -count=1 `},
+		"a race site back to the plain pipe": {`go_test_leg "${racelog}" "${legjson}" -race -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" "${pkgs_sec[@]}"`, `"${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -race -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" "${pkgs_sec[@]}"`},
 		"no explicit status copy":            {`ps=("${PIPESTATUS[@]}")`, `ps=($?)`},
 		"a converter failure is not named":   {"go_test_leg: JSON converter failed", "go_test_leg: converter note"},
 		"a raw file failure is not named":    {"go_test_leg: the raw file write failed", "go_test_leg: raw file note"},

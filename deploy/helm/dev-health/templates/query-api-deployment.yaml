@@ -57,6 +57,9 @@ the release-wide policy admits every pod in the namespace).
 {{- if eq .name "QUERY_API_MCP_BOUNDARY" }}
 {{- fail "queryApi.extraEnv must not set QUERY_API_MCP_BOUNDARY: the chart sets the MCP boundary marker only beside the MCP NetworkPolicy (queryApi.mcp.enabled); a marker from extraEnv would defeat the process's refusal to start an MCP address that arrived without the boundary" }}
 {{- end }}
+{{- if eq (upper (trim (toString .name))) "AUTH_ACCESS_TOKEN_ISSUER" }}
+{{- fail "queryApi.extraEnv must not set AUTH_ACCESS_TOKEN_ISSUER: authService.accessToken.issuerURL renders it, for auth-service and go-api too" }}
+{{- end }}
 {{- end }}
 {{- if .Values.queryApi.internal.enabled }}
 {{- range .Values.queryApi.internal.allowedFrom }}
@@ -230,6 +233,11 @@ spec:
             */}}
             {{- with .Values.queryApi.corsAllowedOrigins }}
             - name: CORS_ALLOWED_ORIGINS
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with include "dev-health.authEdDSAIssuer" . }}
+            {{- /* The eddsa access-token issuer query-api verifies against its JWKS: the same value auth-service signs and go-api verifies. */}}
+            - name: AUTH_ACCESS_TOKEN_ISSUER
               value: {{ . | quote }}
             {{- end }}
             {{- /*

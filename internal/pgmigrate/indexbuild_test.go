@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -23,26 +24,40 @@ func squash(sql string) string {
 	return strings.TrimSpace(sqlSpaces.ReplaceAllString(sqlLineComments.ReplaceAllString(sql, ""), " "))
 }
 
-func chainFile(t *testing.T, revision string) pgmigrate.ChainFile {
+// archivedFile is an archived chain revision's SQL (dir archive/sql/ or archive/sql/down/), as released.
+func archivedFile(t *testing.T, dir, revision string) string {
 	t.Helper()
-	chain, err := pgmigrate.LoadChain()
+	for _, file := range pgmigrate.ArchivedChain() {
+		if file.Revision == revision {
+			data, err := os.ReadFile(dir + file.Name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return string(data)
+		}
+	}
+	t.Fatalf("the archive holds no revision %s", revision)
+	return ""
+}
+
+// The baseline holds the index the verb builds, under the verb's name.
+func baselineHoldsIndex(t *testing.T, name string) {
+	t.Helper()
+	baseline, err := pgmigrate.LoadBaseline()
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, file := range chain {
-		if file.Revision == revision {
-			return file
-		}
+	if !strings.Contains(baseline.Schema, "CREATE INDEX "+name+" ON public.sync_run_units ") {
+		t.Fatalf("the baseline schema holds no index %s on sync_run_units", name)
 	}
-	t.Fatalf("the chain holds no revision %s", revision)
-	return pgmigrate.ChainFile{}
 }
 
 // The Job's definition and revision 0159's statement are one: the same name, table, columns, order and predicate, so a
 // database the Job built and a database revision 0159 built hold the same index.
 func TestFailureStreakIndexDefinitionMatchesRevision0159(t *testing.T) {
 	want := squash("CREATE INDEX IF NOT EXISTS " + pgmigrate.FailureStreakIndexBody + ";")
-	if got := squash(chainFile(t, "0159").SQL); got != want {
+	baselineHoldsIndex(t, pgmigrate.FailureStreakIndexName)
+	if got := squash(archivedFile(t, "archive/sql/", "0159")); got != want {
 		t.Fatalf("revision 0159 =\n%s\nwant\n%s", got, want)
 	}
 }
@@ -50,7 +65,8 @@ func TestFailureStreakIndexDefinitionMatchesRevision0159(t *testing.T) {
 // The Job's open-units definition is contained in revision 0161's statements.
 func TestOpenUnitsIndexDefinitionMatchesRevision0161(t *testing.T) {
 	want := squash("CREATE INDEX IF NOT EXISTS " + pgmigrate.OpenUnitsIndexBody + ";")
-	if got := squash(chainFile(t, "0161").SQL); !strings.Contains(got, want) {
+	baselineHoldsIndex(t, pgmigrate.OpenUnitsIndexName)
+	if got := squash(archivedFile(t, "archive/sql/", "0161")); !strings.Contains(got, want) {
 		t.Fatalf("revision 0161 =\n%s\nwant it to contain\n%s", got, want)
 	}
 }
@@ -82,16 +98,7 @@ func TestFailureStreakIndexServesTheStreakQuery(t *testing.T) {
 }
 
 func TestRevision0159DownDropsTheIndexOnly(t *testing.T) {
-	var down string
-	files, err := pgmigrate.LoadDownChain()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, file := range files {
-		if file.Revision == "0159" {
-			down = squash(file.SQL)
-		}
-	}
+	down := squash(archivedFile(t, "archive/sql/down/", "0159"))
 	if down != "DROP INDEX IF EXISTS public.ix_sync_run_units_failure_streak;" {
 		t.Fatalf("down 0159 = %q", down)
 	}

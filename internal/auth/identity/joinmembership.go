@@ -44,8 +44,9 @@ var joinPublicMembershipColumns = []string{"id", "user_id", "org_id", "role", "j
 // together or neither does. It is the only writer of a new auth membership
 // apart from the organizations backfill, which copies public rows.
 //
-// It locks the public.users row as go-api's own JIT join does, so the two
-// joins of one account run one after the other. A public row in the
+// It locks the auth principal row and then the public.users row (the lock
+// go-api's own JIT join takes), the order every membership writer uses, so
+// the joins and membership changes of one account run one after the other. A public row in the
 // organization is errJoinAlreadyMember and an auth row without one is
 // ErrMembershipDiverged; neither writes. No public.users row, or no
 // public.organizations row, is ErrLegacyProjection. Every go-api membership
@@ -69,7 +70,17 @@ func (s *Store) insertJoinMembership(ctx context.Context, tx audit.TxOps, m memb
 		return ErrBackfillRole
 	}
 	var locked uuid.UUID
-	err := tx.QueryRow(ctx, `SELECT id FROM public.users WHERE id = $1 FOR UPDATE`, m.Principal).Scan(&locked)
+	// The principal row first, then the public.users row: the one lock order
+	// of every membership writer (internal/auth/membership), whatever the
+	// caller already holds.
+	err := tx.QueryRow(ctx, `SELECT id FROM `+s.q+`.principals WHERE id = $1 FOR UPDATE`, m.Principal).Scan(&locked)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrUserNotFound
+	}
+	if err != nil {
+		return err
+	}
+	err = tx.QueryRow(ctx, `SELECT id FROM public.users WHERE id = $1 FOR UPDATE`, m.Principal).Scan(&locked)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrLegacyProjection
 	}

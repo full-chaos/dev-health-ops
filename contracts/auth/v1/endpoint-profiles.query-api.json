@@ -21,24 +21,26 @@
     {
       "accepted_credential_classes": [
         "effective_principal_envelope",
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "unknown",
       "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "HS256"
+        "kind": "jwt_header_typ",
+        "name": "at+jwt"
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "class_disambiguator: jwt_header_typ at+jwt picks user_access_token; effective_principal_envelope and ops_access_token_hs256 are then told apart by jwt_header_alg (EdDSA, HS256), which one selector cannot declare (principal.AccessClassOf, internal/queryapi/principal/edge_access.go)"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/drilldown/issues [dev-health-query-api @query,internal]",
@@ -50,7 +52,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -66,30 +68,32 @@
         "algorithm": "EdDSA",
         "audience": "query-api",
         "issuer": "dev-health-ops-edge",
-        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+        "token_type": "EdDSA JWT (envelope), HS256 JWT (edge access token) or EdDSA at+jwt JWT (user access token)"
       }
     },
     {
       "accepted_credential_classes": [
         "effective_principal_envelope",
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "unknown",
       "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "HS256"
+        "kind": "jwt_header_typ",
+        "name": "at+jwt"
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "class_disambiguator: jwt_header_typ at+jwt picks user_access_token; effective_principal_envelope and ops_access_token_hs256 are then told apart by jwt_header_alg (EdDSA, HS256), which one selector cannot declare (principal.AccessClassOf, internal/queryapi/principal/edge_access.go)"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/drilldown/issues [dev-health-query-api @query,internal]",
@@ -101,7 +105,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -117,30 +121,32 @@
         "algorithm": "EdDSA",
         "audience": "query-api",
         "issuer": "dev-health-ops-edge",
-        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+        "token_type": "EdDSA JWT (envelope), HS256 JWT (edge access token) or EdDSA at+jwt JWT (user access token)"
       }
     },
     {
       "accepted_credential_classes": [
         "effective_principal_envelope",
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "unknown",
       "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "HS256"
+        "kind": "jwt_header_typ",
+        "name": "at+jwt"
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "class_disambiguator: jwt_header_typ at+jwt picks user_access_token; effective_principal_envelope and ops_access_token_hs256 are then told apart by jwt_header_alg (EdDSA, HS256), which one selector cannot declare (principal.AccessClassOf, internal/queryapi/principal/edge_access.go)"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/drilldown/prs [dev-health-query-api @query,internal]",
@@ -152,7 +158,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -168,30 +174,32 @@
         "algorithm": "EdDSA",
         "audience": "query-api",
         "issuer": "dev-health-ops-edge",
-        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+        "token_type": "EdDSA JWT (envelope), HS256 JWT (edge access token) or EdDSA at+jwt JWT (user access token)"
       }
     },
     {
       "accepted_credential_classes": [
         "effective_principal_envelope",
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "unknown",
       "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "HS256"
+        "kind": "jwt_header_typ",
+        "name": "at+jwt"
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "class_disambiguator: jwt_header_typ at+jwt picks user_access_token; effective_principal_envelope and ops_access_token_hs256 are then told apart by jwt_header_alg (EdDSA, HS256), which one selector cannot declare (principal.AccessClassOf, internal/queryapi/principal/edge_access.go)"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/drilldown/prs [dev-health-query-api @query,internal]",
@@ -203,7 +211,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -219,30 +227,32 @@
         "algorithm": "EdDSA",
         "audience": "query-api",
         "issuer": "dev-health-ops-edge",
-        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+        "token_type": "EdDSA JWT (envelope), HS256 JWT (edge access token) or EdDSA at+jwt JWT (user access token)"
       }
     },
     {
       "accepted_credential_classes": [
         "effective_principal_envelope",
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "unknown",
       "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "HS256"
+        "kind": "jwt_header_typ",
+        "name": "at+jwt"
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "class_disambiguator: jwt_header_typ at+jwt picks user_access_token; effective_principal_envelope and ops_access_token_hs256 are then told apart by jwt_header_alg (EdDSA, HS256), which one selector cannot declare (principal.AccessClassOf, internal/queryapi/principal/edge_access.go)"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/explain [dev-health-query-api @query,internal]",
@@ -254,7 +264,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -270,30 +280,32 @@
         "algorithm": "EdDSA",
         "audience": "query-api",
         "issuer": "dev-health-ops-edge",
-        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+        "token_type": "EdDSA JWT (envelope), HS256 JWT (edge access token) or EdDSA at+jwt JWT (user access token)"
       }
     },
     {
       "accepted_credential_classes": [
         "effective_principal_envelope",
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "unknown",
       "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "HS256"
+        "kind": "jwt_header_typ",
+        "name": "at+jwt"
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "class_disambiguator: jwt_header_typ at+jwt picks user_access_token; effective_principal_envelope and ops_access_token_hs256 are then told apart by jwt_header_alg (EdDSA, HS256), which one selector cannot declare (principal.AccessClassOf, internal/queryapi/principal/edge_access.go)"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/explain [dev-health-query-api @query,internal]",
@@ -305,7 +317,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -321,30 +333,32 @@
         "algorithm": "EdDSA",
         "audience": "query-api",
         "issuer": "dev-health-ops-edge",
-        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+        "token_type": "EdDSA JWT (envelope), HS256 JWT (edge access token) or EdDSA at+jwt JWT (user access token)"
       }
     },
     {
       "accepted_credential_classes": [
         "effective_principal_envelope",
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "unknown",
       "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "HS256"
+        "kind": "jwt_header_typ",
+        "name": "at+jwt"
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "class_disambiguator: jwt_header_typ at+jwt picks user_access_token; effective_principal_envelope and ops_access_token_hs256 are then told apart by jwt_header_alg (EdDSA, HS256), which one selector cannot declare (principal.AccessClassOf, internal/queryapi/principal/edge_access.go)"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/filters/options [dev-health-query-api @query,internal]",
@@ -356,7 +370,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -372,30 +386,32 @@
         "algorithm": "EdDSA",
         "audience": "query-api",
         "issuer": "dev-health-ops-edge",
-        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+        "token_type": "EdDSA JWT (envelope), HS256 JWT (edge access token) or EdDSA at+jwt JWT (user access token)"
       }
     },
     {
       "accepted_credential_classes": [
         "effective_principal_envelope",
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "unknown",
       "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "HS256"
+        "kind": "jwt_header_typ",
+        "name": "at+jwt"
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "class_disambiguator: jwt_header_typ at+jwt picks user_access_token; effective_principal_envelope and ops_access_token_hs256 are then told apart by jwt_header_alg (EdDSA, HS256), which one selector cannot declare (principal.AccessClassOf, internal/queryapi/principal/edge_access.go)"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/flame [dev-health-query-api @query,internal]",
@@ -407,7 +423,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -423,30 +439,32 @@
         "algorithm": "EdDSA",
         "audience": "query-api",
         "issuer": "dev-health-ops-edge",
-        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+        "token_type": "EdDSA JWT (envelope), HS256 JWT (edge access token) or EdDSA at+jwt JWT (user access token)"
       }
     },
     {
       "accepted_credential_classes": [
         "effective_principal_envelope",
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "unknown",
       "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "HS256"
+        "kind": "jwt_header_typ",
+        "name": "at+jwt"
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "class_disambiguator: jwt_header_typ at+jwt picks user_access_token; effective_principal_envelope and ops_access_token_hs256 are then told apart by jwt_header_alg (EdDSA, HS256), which one selector cannot declare (principal.AccessClassOf, internal/queryapi/principal/edge_access.go)"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/flame/aggregated [dev-health-query-api @query,internal]",
@@ -458,7 +476,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -474,30 +492,32 @@
         "algorithm": "EdDSA",
         "audience": "query-api",
         "issuer": "dev-health-ops-edge",
-        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+        "token_type": "EdDSA JWT (envelope), HS256 JWT (edge access token) or EdDSA at+jwt JWT (user access token)"
       }
     },
     {
       "accepted_credential_classes": [
         "effective_principal_envelope",
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "unknown",
       "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "HS256"
+        "kind": "jwt_header_typ",
+        "name": "at+jwt"
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "class_disambiguator: jwt_header_typ at+jwt picks user_access_token; effective_principal_envelope and ops_access_token_hs256 are then told apart by jwt_header_alg (EdDSA, HS256), which one selector cannot declare (principal.AccessClassOf, internal/queryapi/principal/edge_access.go)"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/heatmap [dev-health-query-api @query,internal]",
@@ -509,7 +529,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -525,30 +545,32 @@
         "algorithm": "EdDSA",
         "audience": "query-api",
         "issuer": "dev-health-ops-edge",
-        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+        "token_type": "EdDSA JWT (envelope), HS256 JWT (edge access token) or EdDSA at+jwt JWT (user access token)"
       }
     },
     {
       "accepted_credential_classes": [
         "effective_principal_envelope",
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "unknown",
       "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "HS256"
+        "kind": "jwt_header_typ",
+        "name": "at+jwt"
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "class_disambiguator: jwt_header_typ at+jwt picks user_access_token; effective_principal_envelope and ops_access_token_hs256 are then told apart by jwt_header_alg (EdDSA, HS256), which one selector cannot declare (principal.AccessClassOf, internal/queryapi/principal/edge_access.go)"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/home [dev-health-query-api @query,internal]",
@@ -560,7 +582,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -576,30 +598,32 @@
         "algorithm": "EdDSA",
         "audience": "query-api",
         "issuer": "dev-health-ops-edge",
-        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+        "token_type": "EdDSA JWT (envelope), HS256 JWT (edge access token) or EdDSA at+jwt JWT (user access token)"
       }
     },
     {
       "accepted_credential_classes": [
         "effective_principal_envelope",
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "unknown",
       "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "HS256"
+        "kind": "jwt_header_typ",
+        "name": "at+jwt"
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "class_disambiguator: jwt_header_typ at+jwt picks user_access_token; effective_principal_envelope and ops_access_token_hs256 are then told apart by jwt_header_alg (EdDSA, HS256), which one selector cannot declare (principal.AccessClassOf, internal/queryapi/principal/edge_access.go)"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/home [dev-health-query-api @query,internal]",
@@ -611,7 +635,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -627,30 +651,32 @@
         "algorithm": "EdDSA",
         "audience": "query-api",
         "issuer": "dev-health-ops-edge",
-        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+        "token_type": "EdDSA JWT (envelope), HS256 JWT (edge access token) or EdDSA at+jwt JWT (user access token)"
       }
     },
     {
       "accepted_credential_classes": [
         "effective_principal_envelope",
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "unknown",
       "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "HS256"
+        "kind": "jwt_header_typ",
+        "name": "at+jwt"
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "class_disambiguator: jwt_header_typ at+jwt picks user_access_token; effective_principal_envelope and ops_access_token_hs256 are then told apart by jwt_header_alg (EdDSA, HS256), which one selector cannot declare (principal.AccessClassOf, internal/queryapi/principal/edge_access.go)"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/investment [dev-health-query-api @query,internal]",
@@ -662,7 +688,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -678,30 +704,32 @@
         "algorithm": "EdDSA",
         "audience": "query-api",
         "issuer": "dev-health-ops-edge",
-        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+        "token_type": "EdDSA JWT (envelope), HS256 JWT (edge access token) or EdDSA at+jwt JWT (user access token)"
       }
     },
     {
       "accepted_credential_classes": [
         "effective_principal_envelope",
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "unknown",
       "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "HS256"
+        "kind": "jwt_header_typ",
+        "name": "at+jwt"
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "class_disambiguator: jwt_header_typ at+jwt picks user_access_token; effective_principal_envelope and ops_access_token_hs256 are then told apart by jwt_header_alg (EdDSA, HS256), which one selector cannot declare (principal.AccessClassOf, internal/queryapi/principal/edge_access.go)"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/investment [dev-health-query-api @query,internal]",
@@ -713,7 +741,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -729,30 +757,32 @@
         "algorithm": "EdDSA",
         "audience": "query-api",
         "issuer": "dev-health-ops-edge",
-        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+        "token_type": "EdDSA JWT (envelope), HS256 JWT (edge access token) or EdDSA at+jwt JWT (user access token)"
       }
     },
     {
       "accepted_credential_classes": [
         "effective_principal_envelope",
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "unknown",
       "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "HS256"
+        "kind": "jwt_header_typ",
+        "name": "at+jwt"
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "class_disambiguator: jwt_header_typ at+jwt picks user_access_token; effective_principal_envelope and ops_access_token_hs256 are then told apart by jwt_header_alg (EdDSA, HS256), which one selector cannot declare (principal.AccessClassOf, internal/queryapi/principal/edge_access.go)"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/investment/explain [dev-health-query-api @query,internal]",
@@ -764,7 +794,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -780,30 +810,32 @@
         "algorithm": "EdDSA",
         "audience": "query-api",
         "issuer": "dev-health-ops-edge",
-        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+        "token_type": "EdDSA JWT (envelope), HS256 JWT (edge access token) or EdDSA at+jwt JWT (user access token)"
       }
     },
     {
       "accepted_credential_classes": [
         "effective_principal_envelope",
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "unknown",
       "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "HS256"
+        "kind": "jwt_header_typ",
+        "name": "at+jwt"
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "class_disambiguator: jwt_header_typ at+jwt picks user_access_token; effective_principal_envelope and ops_access_token_hs256 are then told apart by jwt_header_alg (EdDSA, HS256), which one selector cannot declare (principal.AccessClassOf, internal/queryapi/principal/edge_access.go)"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/investment/sunburst [dev-health-query-api @query,internal]",
@@ -815,7 +847,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -831,7 +863,7 @@
         "algorithm": "EdDSA",
         "audience": "query-api",
         "issuer": "dev-health-ops-edge",
-        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+        "token_type": "EdDSA JWT (envelope), HS256 JWT (edge access token) or EdDSA at+jwt JWT (user access token)"
       }
     },
     {
@@ -853,24 +885,26 @@
     {
       "accepted_credential_classes": [
         "effective_principal_envelope",
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "unknown",
       "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "HS256"
+        "kind": "jwt_header_typ",
+        "name": "at+jwt"
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "class_disambiguator: jwt_header_typ at+jwt picks user_access_token; effective_principal_envelope and ops_access_token_hs256 are then told apart by jwt_header_alg (EdDSA, HS256), which one selector cannot declare (principal.AccessClassOf, internal/queryapi/principal/edge_access.go)"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/opportunities [dev-health-query-api @query,internal]",
@@ -882,7 +916,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -898,30 +932,32 @@
         "algorithm": "EdDSA",
         "audience": "query-api",
         "issuer": "dev-health-ops-edge",
-        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+        "token_type": "EdDSA JWT (envelope), HS256 JWT (edge access token) or EdDSA at+jwt JWT (user access token)"
       }
     },
     {
       "accepted_credential_classes": [
         "effective_principal_envelope",
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "unknown",
       "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "HS256"
+        "kind": "jwt_header_typ",
+        "name": "at+jwt"
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "class_disambiguator: jwt_header_typ at+jwt picks user_access_token; effective_principal_envelope and ops_access_token_hs256 are then told apart by jwt_header_alg (EdDSA, HS256), which one selector cannot declare (principal.AccessClassOf, internal/queryapi/principal/edge_access.go)"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/opportunities [dev-health-query-api @query,internal]",
@@ -933,7 +969,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -949,30 +985,32 @@
         "algorithm": "EdDSA",
         "audience": "query-api",
         "issuer": "dev-health-ops-edge",
-        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+        "token_type": "EdDSA JWT (envelope), HS256 JWT (edge access token) or EdDSA at+jwt JWT (user access token)"
       }
     },
     {
       "accepted_credential_classes": [
         "effective_principal_envelope",
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "unknown",
       "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "HS256"
+        "kind": "jwt_header_typ",
+        "name": "at+jwt"
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "class_disambiguator: jwt_header_typ at+jwt picks user_access_token; effective_principal_envelope and ops_access_token_hs256 are then told apart by jwt_header_alg (EdDSA, HS256), which one selector cannot declare (principal.AccessClassOf, internal/queryapi/principal/edge_access.go)"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/people [dev-health-query-api @query,internal]",
@@ -984,7 +1022,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -1000,21 +1038,22 @@
         "algorithm": "EdDSA",
         "audience": "query-api",
         "issuer": "dev-health-ops-edge",
-        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+        "token_type": "EdDSA JWT (envelope), HS256 JWT (edge access token) or EdDSA at+jwt JWT (user access token)"
       }
     },
     {
       "accepted_credential_classes": [
         "effective_principal_envelope",
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "unknown",
       "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "HS256"
+        "kind": "jwt_header_typ",
+        "name": "at+jwt"
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
@@ -1024,7 +1063,8 @@
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "disclosure_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "disclosure_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "class_disambiguator: jwt_header_typ at+jwt picks user_access_token; effective_principal_envelope and ops_access_token_hs256 are then told apart by jwt_header_alg (EdDSA, HS256), which one selector cannot declare (principal.AccessClassOf, internal/queryapi/principal/edge_access.go)"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/people/{person_id}/drilldown/issues [dev-health-query-api @query,internal]",
@@ -1036,7 +1076,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -1052,21 +1092,22 @@
         "algorithm": "EdDSA",
         "audience": "query-api",
         "issuer": "dev-health-ops-edge",
-        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+        "token_type": "EdDSA JWT (envelope), HS256 JWT (edge access token) or EdDSA at+jwt JWT (user access token)"
       }
     },
     {
       "accepted_credential_classes": [
         "effective_principal_envelope",
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "unknown",
       "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "HS256"
+        "kind": "jwt_header_typ",
+        "name": "at+jwt"
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
@@ -1076,7 +1117,8 @@
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "disclosure_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "disclosure_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "class_disambiguator: jwt_header_typ at+jwt picks user_access_token; effective_principal_envelope and ops_access_token_hs256 are then told apart by jwt_header_alg (EdDSA, HS256), which one selector cannot declare (principal.AccessClassOf, internal/queryapi/principal/edge_access.go)"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/people/{person_id}/drilldown/prs [dev-health-query-api @query,internal]",
@@ -1088,7 +1130,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -1104,21 +1146,22 @@
         "algorithm": "EdDSA",
         "audience": "query-api",
         "issuer": "dev-health-ops-edge",
-        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+        "token_type": "EdDSA JWT (envelope), HS256 JWT (edge access token) or EdDSA at+jwt JWT (user access token)"
       }
     },
     {
       "accepted_credential_classes": [
         "effective_principal_envelope",
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "unknown",
       "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "HS256"
+        "kind": "jwt_header_typ",
+        "name": "at+jwt"
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
@@ -1128,7 +1171,8 @@
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "disclosure_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "disclosure_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "class_disambiguator: jwt_header_typ at+jwt picks user_access_token; effective_principal_envelope and ops_access_token_hs256 are then told apart by jwt_header_alg (EdDSA, HS256), which one selector cannot declare (principal.AccessClassOf, internal/queryapi/principal/edge_access.go)"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/people/{person_id}/metric [dev-health-query-api @query,internal]",
@@ -1140,7 +1184,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -1156,21 +1200,22 @@
         "algorithm": "EdDSA",
         "audience": "query-api",
         "issuer": "dev-health-ops-edge",
-        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+        "token_type": "EdDSA JWT (envelope), HS256 JWT (edge access token) or EdDSA at+jwt JWT (user access token)"
       }
     },
     {
       "accepted_credential_classes": [
         "effective_principal_envelope",
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "unknown",
       "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "HS256"
+        "kind": "jwt_header_typ",
+        "name": "at+jwt"
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
@@ -1180,7 +1225,8 @@
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "disclosure_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "disclosure_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "class_disambiguator: jwt_header_typ at+jwt picks user_access_token; effective_principal_envelope and ops_access_token_hs256 are then told apart by jwt_header_alg (EdDSA, HS256), which one selector cannot declare (principal.AccessClassOf, internal/queryapi/principal/edge_access.go)"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/people/{person_id}/summary [dev-health-query-api @query,internal]",
@@ -1192,7 +1238,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -1208,30 +1254,32 @@
         "algorithm": "EdDSA",
         "audience": "query-api",
         "issuer": "dev-health-ops-edge",
-        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+        "token_type": "EdDSA JWT (envelope), HS256 JWT (edge access token) or EdDSA at+jwt JWT (user access token)"
       }
     },
     {
       "accepted_credential_classes": [
         "effective_principal_envelope",
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "unknown",
       "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "HS256"
+        "kind": "jwt_header_typ",
+        "name": "at+jwt"
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "class_disambiguator: jwt_header_typ at+jwt picks user_access_token; effective_principal_envelope and ops_access_token_hs256 are then told apart by jwt_header_alg (EdDSA, HS256), which one selector cannot declare (principal.AccessClassOf, internal/queryapi/principal/edge_access.go)"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/quadrant [dev-health-query-api @query,internal]",
@@ -1243,7 +1291,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -1259,30 +1307,32 @@
         "algorithm": "EdDSA",
         "audience": "query-api",
         "issuer": "dev-health-ops-edge",
-        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+        "token_type": "EdDSA JWT (envelope), HS256 JWT (edge access token) or EdDSA at+jwt JWT (user access token)"
       }
     },
     {
       "accepted_credential_classes": [
         "effective_principal_envelope",
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "unknown",
       "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "HS256"
+        "kind": "jwt_header_typ",
+        "name": "at+jwt"
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "class_disambiguator: jwt_header_typ at+jwt picks user_access_token; effective_principal_envelope and ops_access_token_hs256 are then told apart by jwt_header_alg (EdDSA, HS256), which one selector cannot declare (principal.AccessClassOf, internal/queryapi/principal/edge_access.go)"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/sankey [dev-health-query-api @query,internal]",
@@ -1294,7 +1344,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -1310,30 +1360,32 @@
         "algorithm": "EdDSA",
         "audience": "query-api",
         "issuer": "dev-health-ops-edge",
-        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+        "token_type": "EdDSA JWT (envelope), HS256 JWT (edge access token) or EdDSA at+jwt JWT (user access token)"
       }
     },
     {
       "accepted_credential_classes": [
         "effective_principal_envelope",
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "unknown",
       "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "HS256"
+        "kind": "jwt_header_typ",
+        "name": "at+jwt"
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "class_disambiguator: jwt_header_typ at+jwt picks user_access_token; effective_principal_envelope and ops_access_token_hs256 are then told apart by jwt_header_alg (EdDSA, HS256), which one selector cannot declare (principal.AccessClassOf, internal/queryapi/principal/edge_access.go)"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/sankey [dev-health-query-api @query,internal]",
@@ -1345,7 +1397,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -1361,30 +1413,32 @@
         "algorithm": "EdDSA",
         "audience": "query-api",
         "issuer": "dev-health-ops-edge",
-        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+        "token_type": "EdDSA JWT (envelope), HS256 JWT (edge access token) or EdDSA at+jwt JWT (user access token)"
       }
     },
     {
       "accepted_credential_classes": [
         "effective_principal_envelope",
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "unknown",
       "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "HS256"
+        "kind": "jwt_header_typ",
+        "name": "at+jwt"
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "class_disambiguator: jwt_header_typ at+jwt picks user_access_token; effective_principal_envelope and ops_access_token_hs256 are then told apart by jwt_header_alg (EdDSA, HS256), which one selector cannot declare (principal.AccessClassOf, internal/queryapi/principal/edge_access.go)"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/work-units [dev-health-query-api @query,internal]",
@@ -1396,7 +1450,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -1412,30 +1466,32 @@
         "algorithm": "EdDSA",
         "audience": "query-api",
         "issuer": "dev-health-ops-edge",
-        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+        "token_type": "EdDSA JWT (envelope), HS256 JWT (edge access token) or EdDSA at+jwt JWT (user access token)"
       }
     },
     {
       "accepted_credential_classes": [
         "effective_principal_envelope",
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "unknown",
       "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "HS256"
+        "kind": "jwt_header_typ",
+        "name": "at+jwt"
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "class_disambiguator: jwt_header_typ at+jwt picks user_access_token; effective_principal_envelope and ops_access_token_hs256 are then told apart by jwt_header_alg (EdDSA, HS256), which one selector cannot declare (principal.AccessClassOf, internal/queryapi/principal/edge_access.go)"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/work-units [dev-health-query-api @query,internal]",
@@ -1447,7 +1503,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -1463,21 +1519,22 @@
         "algorithm": "EdDSA",
         "audience": "query-api",
         "issuer": "dev-health-ops-edge",
-        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+        "token_type": "EdDSA JWT (envelope), HS256 JWT (edge access token) or EdDSA at+jwt JWT (user access token)"
       }
     },
     {
       "accepted_credential_classes": [
         "effective_principal_envelope",
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "unknown",
       "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "HS256"
+        "kind": "jwt_header_typ",
+        "name": "at+jwt"
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
@@ -1487,7 +1544,8 @@
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
         "impersonation_policy: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "disclosure_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "disclosure_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "class_disambiguator: jwt_header_typ at+jwt picks user_access_token; effective_principal_envelope and ops_access_token_hs256 are then told apart by jwt_header_alg (EdDSA, HS256), which one selector cannot declare (principal.AccessClassOf, internal/queryapi/principal/edge_access.go)"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/work-units/{work_unit_id}/explain [dev-health-query-api @query,internal]",
@@ -1499,7 +1557,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -1515,7 +1573,7 @@
         "algorithm": "EdDSA",
         "audience": "query-api",
         "issuer": "dev-health-ops-edge",
-        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+        "token_type": "EdDSA JWT (envelope), HS256 JWT (edge access token) or EdDSA at+jwt JWT (user access token)"
       }
     },
     {
@@ -1562,12 +1620,17 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "unknown",
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "at+jwt"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
       "disclosure_behavior": "401 Authentication required (authenticateGraphQLEdge); 403 for an X-Org-Id the caller may not use (scope.OrgScope); 404 for a browser GET; 404 UNREGISTERED_DOCUMENT for an authenticated unregistered document",
@@ -1586,7 +1649,7 @@
           "note": "func authenticateGraphQLEdge",
           "path": "internal/queryapi/server/graphql_edge_route.go"
         },
-        "description": "authenticateGraphQLEdge: edge access token only (authenticateEdgeTokenOnly, live users row)."
+        "description": "authenticateGraphQLEdge: edge access token or, with AUTH_ACCESS_TOKEN_ISSUER set, user access token (EdDSA, typ at+jwt, audience dev-health-api) only (authenticateEdgeTokenOnly, live users row)."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_header_or_credential: the X-Org-Id header when the caller may use it (a superuser, the caller's own organization, or a member of that organization), else the credential's organization (scope.OrgScope)",
@@ -1602,17 +1665,22 @@
         "algorithm": "HS256",
         "audience": null,
         "issuer": null,
-        "token_type": "HS256 JWT (edge access token)"
+        "token_type": "HS256 JWT (edge access token) or EdDSA at+jwt JWT (user access token)"
       }
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "unknown",
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "at+jwt"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
       "disclosure_behavior": "401 Authentication required (authenticateGraphQLEdge); 403 for an X-Org-Id the caller may not use (scope.OrgScope); 404 for a browser GET; 404 UNREGISTERED_DOCUMENT for an authenticated unregistered document",
@@ -1631,7 +1699,7 @@
           "note": "func authenticateGraphQLEdge",
           "path": "internal/queryapi/server/graphql_edge_route.go"
         },
-        "description": "authenticateGraphQLEdge: edge access token only (authenticateEdgeTokenOnly, live users row)."
+        "description": "authenticateGraphQLEdge: edge access token or, with AUTH_ACCESS_TOKEN_ISSUER set, user access token (EdDSA, typ at+jwt, audience dev-health-api) only (authenticateEdgeTokenOnly, live users row)."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_header_or_credential: the X-Org-Id header when the caller may use it (a superuser, the caller's own organization, or a member of that organization), else the credential's organization (scope.OrgScope)",
@@ -1647,7 +1715,7 @@
         "algorithm": "HS256",
         "audience": null,
         "issuer": null,
-        "token_type": "HS256 JWT (edge access token)"
+        "token_type": "HS256 JWT (edge access token) or EdDSA at+jwt JWT (user access token)"
       }
     },
     {
@@ -1701,15 +1769,16 @@
     {
       "accepted_credential_classes": [
         "effective_principal_envelope",
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "unknown",
       "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "HS256"
+        "kind": "jwt_header_typ",
+        "name": "at+jwt"
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
@@ -1718,7 +1787,8 @@
         "The in-cluster internal identity headers are a third carrier accepted only on the internal listener (internal/queryapi/internalidentity, authenticateInternalRequest in internal/queryapi/server/internal_auth.go); the closed credential vocabulary has no class for them, so they are named here, not classified.",
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "class_disambiguator: jwt_header_typ at+jwt picks user_access_token; effective_principal_envelope and ops_access_token_hs256 are then told apart by jwt_header_alg (EdDSA, HS256), which one selector cannot declare (principal.AccessClassOf, internal/queryapi/principal/edge_access.go)"
       ],
       "graphql_field_name": null,
       "id": "POST /query [dev-health-query-api @query,internal]",
@@ -1730,7 +1800,7 @@
           "note": "func authenticateInternalRequest",
           "path": "internal/queryapi/server/internal_auth.go"
         },
-        "description": "authenticateInternalRequest picks the carrier and refuses ambiguity; the envelope is verified by principal.Verifier.Verify, the edge access token by the live users-row check."
+        "description": "authenticateInternalRequest picks the carrier and refuses ambiguity; the envelope is verified by principal.Verifier.Verify, the edge access token and, with AUTH_ACCESS_TOKEN_ISSUER set, the user access token (EdDSA, typ at+jwt, audience dev-health-api) by the profile-routed validator and the live users-row check."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: claims.OrgID returned by authenticateInternalRequest",
@@ -1746,7 +1816,7 @@
         "algorithm": "EdDSA",
         "audience": "query-api",
         "issuer": "dev-health-ops-edge",
-        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+        "token_type": "EdDSA JWT (envelope), HS256 JWT (edge access token) or EdDSA at+jwt JWT (user access token)"
       }
     },
     {
@@ -1788,15 +1858,16 @@
     {
       "accepted_credential_classes": [
         "effective_principal_envelope",
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "unknown",
       "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "HS256"
+        "kind": "jwt_header_typ",
+        "name": "at+jwt"
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
@@ -1805,7 +1876,8 @@
         "Same serving pipeline and carrier check as POST /query (query_route.go authenticateInternalRequest call). Mounted only when the deployment posture permits (mountProofRoute).",
         "The in-cluster internal identity headers are a third carrier accepted only on the internal listener (internal/queryapi/internalidentity, authenticateInternalRequest in internal/queryapi/server/internal_auth.go); the closed credential vocabulary has no class for them, so they are named here, not classified.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "class_disambiguator: jwt_header_typ at+jwt picks user_access_token; effective_principal_envelope and ops_access_token_hs256 are then told apart by jwt_header_alg (EdDSA, HS256), which one selector cannot declare (principal.AccessClassOf, internal/queryapi/principal/edge_access.go)"
       ],
       "graphql_field_name": null,
       "id": "POST /query/proof [dev-health-query-api @query,internal]",
@@ -1817,7 +1889,7 @@
           "note": "func authenticateInternalRequest",
           "path": "internal/queryapi/server/internal_auth.go"
         },
-        "description": "authenticateInternalRequest picks the carrier and refuses ambiguity; the envelope is verified by principal.Verifier.Verify, the edge access token by the live users-row check."
+        "description": "authenticateInternalRequest picks the carrier and refuses ambiguity; the envelope is verified by principal.Verifier.Verify, the edge access token and, with AUTH_ACCESS_TOKEN_ISSUER set, the user access token (EdDSA, typ at+jwt, audience dev-health-api) by the profile-routed validator and the live users-row check."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: claims.OrgID returned by authenticateInternalRequest",
@@ -1833,21 +1905,22 @@
         "algorithm": "EdDSA",
         "audience": "query-api",
         "issuer": "dev-health-ops-edge",
-        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+        "token_type": "EdDSA JWT (envelope), HS256 JWT (edge access token) or EdDSA at+jwt JWT (user access token)"
       }
     },
     {
       "accepted_credential_classes": [
         "effective_principal_envelope",
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "unknown",
       "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "HS256"
+        "kind": "jwt_header_typ",
+        "name": "at+jwt"
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
@@ -1856,7 +1929,8 @@
         "Same serving pipeline and carrier check as POST /query (query_route.go authenticateInternalRequest call). Mounted on the internal listener only.",
         "The in-cluster internal identity headers are a third carrier accepted only on the internal listener (internal/queryapi/internalidentity, authenticateInternalRequest in internal/queryapi/server/internal_auth.go); the closed credential vocabulary has no class for them, so they are named here, not classified.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "class_disambiguator: jwt_header_typ at+jwt picks user_access_token; effective_principal_envelope and ops_access_token_hs256 are then told apart by jwt_header_alg (EdDSA, HS256), which one selector cannot declare (principal.AccessClassOf, internal/queryapi/principal/edge_access.go)"
       ],
       "graphql_field_name": null,
       "id": "POST /query/proof-write [dev-health-query-api @internal]",
@@ -1868,7 +1942,7 @@
           "note": "func authenticateInternalRequest",
           "path": "internal/queryapi/server/internal_auth.go"
         },
-        "description": "authenticateInternalRequest picks the carrier and refuses ambiguity; the envelope is verified by principal.Verifier.Verify, the edge access token by the live users-row check."
+        "description": "authenticateInternalRequest picks the carrier and refuses ambiguity; the envelope is verified by principal.Verifier.Verify, the edge access token and, with AUTH_ACCESS_TOKEN_ISSUER set, the user access token (EdDSA, typ at+jwt, audience dev-health-api) by the profile-routed validator and the live users-row check."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: claims.OrgID returned by authenticateInternalRequest; the organization must be on the go_api_proof_orgs allowlist",
@@ -1884,21 +1958,22 @@
         "algorithm": "EdDSA",
         "audience": "query-api",
         "issuer": "dev-health-ops-edge",
-        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+        "token_type": "EdDSA JWT (envelope), HS256 JWT (edge access token) or EdDSA at+jwt JWT (user access token)"
       }
     },
     {
       "accepted_credential_classes": [
         "effective_principal_envelope",
-        "ops_access_token_hs256"
+        "ops_access_token_hs256",
+        "user_access_token"
       ],
       "access_token_validation": {
         "legacy_hs256": true
       },
       "action": "unknown",
       "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "HS256"
+        "kind": "jwt_header_typ",
+        "name": "at+jwt"
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
@@ -1907,7 +1982,8 @@
         "Same serving pipeline and carrier check as POST /query (query_route.go authenticateInternalRequest call). Mounted on the internal listener only.",
         "The in-cluster internal identity headers are a third carrier accepted only on the internal listener (internal/queryapi/internalidentity, authenticateInternalRequest in internal/queryapi/server/internal_auth.go); the closed credential vocabulary has no class for them, so they are named here, not classified.",
         "action: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
-        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
+        "class_disambiguator: jwt_header_typ at+jwt picks user_access_token; effective_principal_envelope and ops_access_token_hs256 are then told apart by jwt_header_alg (EdDSA, HS256), which one selector cannot declare (principal.AccessClassOf, internal/queryapi/principal/edge_access.go)"
       ],
       "graphql_field_name": null,
       "id": "POST /query/run-operation [dev-health-query-api @internal]",
@@ -1919,7 +1995,7 @@
           "note": "func authenticateInternalRequest",
           "path": "internal/queryapi/server/internal_auth.go"
         },
-        "description": "authenticateInternalRequest picks the carrier and refuses ambiguity; the envelope is verified by principal.Verifier.Verify, the edge access token by the live users-row check."
+        "description": "authenticateInternalRequest picks the carrier and refuses ambiguity; the envelope is verified by principal.Verifier.Verify, the edge access token and, with AUTH_ACCESS_TOKEN_ISSUER set, the user access token (EdDSA, typ at+jwt, audience dev-health-api) by the profile-routed validator and the live users-row check."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: claims.OrgID returned by authenticateInternalRequest",
@@ -1935,7 +2011,7 @@
         "algorithm": "EdDSA",
         "audience": "query-api",
         "issuer": "dev-health-ops-edge",
-        "token_type": "EdDSA JWT (envelope) or HS256 JWT (edge access token)"
+        "token_type": "EdDSA JWT (envelope), HS256 JWT (edge access token) or EdDSA at+jwt JWT (user access token)"
       }
     },
     {

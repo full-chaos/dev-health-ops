@@ -24,7 +24,8 @@ import (
 // production refusal, and dho adds none). The Go migrator carries down SQL only for
 // the chain revisions after the baseline (sql/down/<revision>_<slug>.sql, one per
 // sql/ file, TestDownChainCoversEveryChainRevision): the ported range is the chain
-// revisions 0139 and later, reverted down to the baseline application head (0138).
+// revisions above the baseline, reverted down to the baseline application head (0162
+// since the squash; the archived down SQL of 0139..0162 is history and never runs).
 // A step outside it (the River cutover 0066, anything at or below the baseline) has
 // no down SQL, so dho refuses BEFORE it resolves a DSN or touches a database when the
 // target itself is outside the range, and refuses before the first step when the
@@ -126,7 +127,29 @@ func ParseDowngradeTarget(arg string, graph map[string]bool) (DowngradeTarget, *
 			Detail: fmt.Sprintf("%q is not a revision of this release", arg)}
 	}
 	return DowngradeTarget{}, &DowngradeRefusal{Code: "unsupported_target", PreDatabase: true,
-		Detail: fmt.Sprintf("target %q is not supported: dho reverts to a revision id (%s) or -N; base, head, heads, +N, rev@-N, branch@base and partial ids are not ported (use `dev-hops migrate postgres downgrade` from the Python image)", arg, "0138-0145")}
+		Detail: fmt.Sprintf("target %q is not supported: dho reverts to a revision id (%s) or -N; base, head, heads, +N, rev@-N, branch@base and partial ids are not ported", arg, DownRangeText())}
+}
+
+// DownRangeText is this build's range of downgrade targets: the baseline application head, up to the last chain
+// revision with down SQL.
+func DownRangeText() string {
+	baseline, err := LoadBaseline()
+	if err != nil {
+		return "at or above the baseline"
+	}
+	chain, err := LoadChain()
+	if err != nil {
+		return "at or above the baseline"
+	}
+	down, err := LoadDownChain()
+	if err != nil {
+		return "at or above the baseline"
+	}
+	r := NewDownRange(baseline, chain, down)
+	if len(r.Covered) == 0 {
+		return r.Floor
+	}
+	return r.Floor + "-" + r.Covered[len(r.Covered)-1]
 }
 
 // DownRange is the ported range: the floor is the baseline application head (the
@@ -177,7 +200,7 @@ func (r DownRange) CheckTarget(target DowngradeTarget) *DowngradeRefusal {
 		first, last = r.Covered[0], r.Covered[len(r.Covered)-1]
 	}
 	return &DowngradeRefusal{Code: "below_baseline_floor", PreDatabase: true,
-		Detail: fmt.Sprintf("target %s is outside the ported downgrade range %s-%s (revert to %s at the lowest): its steps have no down SQL in dho; nothing was read or changed. Run `dev-hops migrate postgres downgrade` from the Python image",
+		Detail: fmt.Sprintf("target %s is outside the ported downgrade range %s-%s (revert to %s at the lowest): its steps have no down SQL in dho; nothing was read or changed",
 			target.Revision, first, last, r.Floor)}
 }
 
@@ -374,7 +397,7 @@ func downgrade(ctx context.Context, resolve ResolveDSN, env cli.Env) int {
 	for _, arg := range env.Args {
 		switch {
 		case arg == "-h" || arg == "--help":
-			fmt.Fprintln(env.Stderr, "Usage of dho migrate postgres downgrade TARGET: TARGET is a revision id 0138-0145 (revert everything above it) or -N (revert N steps); environment as `migrate postgres current`")
+			fmt.Fprintln(env.Stderr, "Usage of dho migrate postgres downgrade TARGET: TARGET is a revision id "+DownRangeText()+" (revert everything above it) or -N (revert N steps); environment as `migrate postgres current`")
 			return cli.ExitOK
 		case strings.HasPrefix(arg, "-") && arg != "-" && !negativeNumber.MatchString(arg):
 			fmt.Fprintf(env.Stderr, "argument error: unknown flag %s\n", arg)

@@ -37,18 +37,32 @@ func TestBuildHeadsLoadedFromTheEmbeddedChainAreEqualAtTheirOwnHeads(t *testing.
 	if got := build.CompareHeads(build.Heads()); got != HeadsEqual {
 		t.Fatalf("the build's own heads %v compare %v, want equal", build.Heads(), got)
 	}
-	chain, err := LoadChain()
-	if err != nil || len(chain) < 2 {
-		t.Fatalf("chain: %v", err)
-	}
 	behind := []string{}
 	for _, head := range build.Heads() {
-		if head == chain[len(chain)-1].Revision {
-			head = chain[len(chain)-2].Revision
+		if head != cutoverRevision {
+			head = previousRevisionOf(t, head)
 		}
 		behind = append(behind, head)
 	}
 	if got := build.CompareHeads(behind); got != HeadsBehind {
 		t.Fatalf("one revision behind %v compares %v, want behind", behind, got)
 	}
+}
+
+// previousRevisionOf is the revision before revision in the whole chain the build knows: the archive, then the live
+// chain above the baseline.
+func previousRevisionOf(t *testing.T, revision string) string {
+	t.Helper()
+	live, err := LoadChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain := append(ArchivedChain(), live...)
+	for index, file := range chain {
+		if file.Revision == revision && index > 0 {
+			return chain[index-1].Revision
+		}
+	}
+	t.Fatalf("revision %s has no predecessor in the archive or the live chain", revision)
+	return ""
 }

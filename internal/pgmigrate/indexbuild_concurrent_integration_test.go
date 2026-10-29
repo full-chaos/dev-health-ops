@@ -134,6 +134,35 @@ type buildOutcome struct {
 	err    error
 }
 
+// runBuildGuarded runs one build on a goroutine under a failure-only ceiling. On the ceiling the build's context is
+// cancelled FIRST, onGuard (a release of whatever the build waits on; may be nil) runs, the goroutine is joined for at most
+// 10 s, and only then the test fails with what. A passing run never reaches the ceiling.
+func runBuildGuarded(t *testing.T, ceiling time.Duration, what string, onGuard func(), run func(ctx context.Context) (pgmigrate.IndexBuildResult, error)) (pgmigrate.IndexBuildResult, error) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan buildOutcome, 1)
+	go func() {
+		result, err := run(ctx)
+		done <- buildOutcome{result, err}
+	}()
+	select {
+	case got := <-done:
+		return got.result, got.err
+	case <-time.After(ceiling):
+		cancel()
+		if onGuard != nil {
+			onGuard()
+		}
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+		}
+		t.Fatalf("%s: still running after the %s guard", what, ceiling)
+		return pgmigrate.IndexBuildResult{}, nil
+	}
+}
+
 const plantValidSQL = "UPDATE pg_index SET indisvalid = true WHERE indexrelid = 'public.ix_sync_run_units_failure_streak'::regclass"
 
 // A fake second builder finishes the build while this run's table-lock probe waits: it holds SHARE UPDATE EXCLUSIVE (the
@@ -141,9 +170,8 @@ const plantValidSQL = "UPDATE pg_index SET indisvalid = true WHERE indexrelid = 
 // then commits. When the probe gets the lock the index is VALID: the run must keep that same index, not drop and rebuild it.
 // (A real REINDEX INDEX CONCURRENTLY queued ahead of the probe ended in 40P01 on PG 18, so the fake keeps the order fixed.)
 func TestBuildIndexSkipsAnIndexAnotherBuilderMadeValidWhileTheProbeWaited(t *testing.T) {
-	position, _ := chainPosition(t, "0159")
 	d := newDownInstance(t)
-	uri := d.at(t, position)
+	uri := d.withoutIndex(t, "0159")
 	plantInvalidIndex(t, uri)
 	observer := connect(t, uri)
 	before := streakIndexState(t, observer)
@@ -191,9 +219,8 @@ func TestBuildIndexSkipsAnIndexAnotherBuilderMadeValidWhileTheProbeWaited(t *tes
 // While another build-index run holds the build lock and the index is INVALID, a run refuses at once with the named
 // refusal and sends no DDL: the INVALID index stays the same relation. The verb reports it as build_index_lock_held.
 func TestBuildIndexRefusesWhileAnotherRunHoldsTheBuildLock(t *testing.T) {
-	position, _ := chainPosition(t, "0159")
 	d := newDownInstance(t)
-	uri := d.at(t, position)
+	uri := d.withoutIndex(t, "0159")
 	plantInvalidIndex(t, uri)
 	observer := connect(t, uri)
 	before := streakIndexState(t, observer)
@@ -201,15 +228,16 @@ func TestBuildIndexRefusesWhileAnotherRunHoldsTheBuildLock(t *testing.T) {
 
 	run, recorder := tracedConn(t, uri)
 	logs := &syncBuffer{}
-	started := time.Now()
-	result, err := pgmigrate.BuildFailureStreakIndex(context.Background(), run,
-		pgmigrate.IndexBuildOptions{LockTimeout: 2 * time.Second, Attempts: 3, RetryDelay: time.Second, Deadline: 30 * time.Second},
-		slog.New(slog.NewJSONHandler(logs, nil)))
+	// The holder keeps the build lock for the whole test: a loser that waits for it never returns. The 60 s guard is a
+	// failure-only ceiling that a passing run (an immediate refusal) never reaches.
+	result, err := runBuildGuarded(t, 60*time.Second, "the loser must refuse at once, not wait for the build lock", nil,
+		func(ctx context.Context) (pgmigrate.IndexBuildResult, error) {
+			return pgmigrate.BuildFailureStreakIndex(ctx, run,
+				pgmigrate.IndexBuildOptions{LockTimeout: 2 * time.Second, Attempts: 3, RetryDelay: time.Second, Deadline: 30 * time.Second},
+				slog.New(slog.NewJSONHandler(logs, nil)))
+		})
 	if !errors.Is(err, pgmigrate.ErrBuildLockHeld) {
 		t.Fatalf("result %+v err %v, want the refusal %q", result, err, lockHeldRefusal)
-	}
-	if elapsed := time.Since(started); elapsed > 10*time.Second {
-		t.Fatalf("the refusal took %s; the loser must not wait", elapsed)
 	}
 	if result.Attempts != 0 || result.Valid {
 		t.Fatalf("result %+v, want no attempt", result)
@@ -237,7 +265,7 @@ func TestBuildIndexRefusesWhileAnotherRunHoldsTheBuildLock(t *testing.T) {
 
 // While another run holds the build lock and the index is already VALID, a run reports present with exit 0 and sends no DDL.
 func TestBuildIndexLoserReportsPresentWhenTheIndexIsValid(t *testing.T) {
-	_, length := chainPosition(t, "0159")
+	length := headPosition(t)
 	d := newDownInstance(t)
 	uri := d.at(t, length)
 	observer := connect(t, uri)
@@ -269,9 +297,8 @@ func TestBuildIndexLoserReportsPresentWhenTheIndexIsValid(t *testing.T) {
 // refuses at once with no DDL; it never probes the table or drops the first run's in-progress index, so the first run
 // ends VALID on its one attempt.
 func TestBuildIndexSecondRunDuringABuildRefusesAndLeavesTheBuildAlone(t *testing.T) {
-	position, _ := chainPosition(t, "0159")
 	d := newDownInstance(t)
-	uri := d.at(t, position)
+	uri := d.withoutIndex(t, "0159")
 	plantInvalidIndex(t, uri)
 	observer := connect(t, uri)
 	release := holdWriter(t, uri)
@@ -295,19 +322,27 @@ AND (query LIKE 'DROP INDEX CONCURRENTLY%' OR query LIKE 'CREATE INDEX CONCURREN
 	})
 
 	second, recorder := tracedConn(t, uri)
-	started := time.Now()
-	result, err := pgmigrate.BuildFailureStreakIndex(ctx, second,
-		pgmigrate.IndexBuildOptions{LockTimeout: 2 * time.Second, Attempts: 2, RetryDelay: time.Second, Deadline: 20 * time.Second, CleanupBudget: 10 * time.Second},
-		discardLogger())
-	elapsed := time.Since(started)
+	// The second run refuses at once; one that waits for the first run's build lock stays on it. The 60 s guard is a
+	// failure-only ceiling: on it the second build is cancelled, the first run's writer holder is released and the first run
+	// is joined, so nothing outlives the test.
+	result, err := runBuildGuarded(t, 60*time.Second, "the second run must refuse at once, not wait for the build lock",
+		func() {
+			release()
+			select {
+			case <-firstDone:
+			case <-time.After(20 * time.Second):
+			}
+		},
+		func(runCtx context.Context) (pgmigrate.IndexBuildResult, error) {
+			return pgmigrate.BuildFailureStreakIndex(runCtx, second,
+				pgmigrate.IndexBuildOptions{LockTimeout: 2 * time.Second, Attempts: 2, RetryDelay: time.Second, Deadline: 20 * time.Second, CleanupBudget: 10 * time.Second},
+				discardLogger())
+		})
 	release()
 	firstOutcome := <-firstDone
 
 	if !errors.Is(err, pgmigrate.ErrBuildLockHeld) {
 		t.Fatalf("second run: result %+v err %v, want the refusal %q", result, err, lockHeldRefusal)
-	}
-	if elapsed > 10*time.Second {
-		t.Fatalf("the second run took %s; it must not wait", elapsed)
 	}
 	if ddl := recorder.ddl(); len(ddl) != 0 {
 		t.Fatalf("the second run sent DDL: %q", ddl)

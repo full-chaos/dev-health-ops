@@ -15,36 +15,24 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
-// squashEnv is one ClickHouse server for the squash proofs: each database is a fresh scratch database on it.
+// squashEnv runs the squash proofs: each database is a fresh scratch database (on the shared server when shared mode is on).
 type squashEnv struct {
-	ctx      context.Context
-	instance *containers.Instance
-	admin    driver.Conn
+	ctx context.Context
 }
 
 func newSquashEnv(t *testing.T) *squashEnv {
 	t.Helper()
-	ctx := context.Background()
-	instance, err := containers.StartClickHouse(ctx)
-	if err != nil {
-		t.Fatalf("start clickhouse: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := instance.Close(context.Background()); err != nil {
-			t.Errorf("close clickhouse: %v", err)
-		}
-	})
-	return &squashEnv{ctx: ctx, instance: instance, admin: openDatabase(t, instance.URI, "")}
+	return &squashEnv{ctx: context.Background()}
 }
 
 // build makes a fresh database and runs Upgrade over it with baseline and chain.
 func (e *squashEnv) build(t *testing.T, baseline chmigrate.Baseline, chain []chmigrate.ChainFile) (string, driver.Conn, chmigrate.DB, chmigrate.Result) {
 	t.Helper()
-	database := scratchDatabase(t, e.admin)
-	conn := openDatabase(t, e.instance.URI, database)
+	scratch := scratchDatabase(t)
+	database := scratch.Name
+	conn := openDatabase(t, scratch.URI, "")
 	db, _, err := chmigrate.NewConnDB(e.ctx, conn)
 	if err != nil {
 		t.Fatal(err)

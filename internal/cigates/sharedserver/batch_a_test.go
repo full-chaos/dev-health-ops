@@ -22,6 +22,14 @@ var batchA = []string{
 	"internal/workerservice",
 }
 
+// batchB lists the packages of the second batch of the adoption, under the
+// same rule as batchA.
+var batchB = []string{
+	"internal/chmigrate",
+	"internal/jobs/report",
+	"internal/queryapi/workgraph",
+}
+
 // repoScan walks the module's internal tree once for every test of this
 // package that needs the real tree; the walk is most of the package's run time.
 var (
@@ -44,14 +52,15 @@ func repoScan(t *testing.T) ([]string, []finding) {
 
 func TestBatchAPackagesRunOnSharedServers(t *testing.T) {
 	optedIn, _ := repoScan(t)
-	have := map[string]bool{}
-	for _, dir := range optedIn {
-		have["internal/"+dir] = true
+	for _, pkg := range missingFromBatch(optedIn, batchA) {
+		t.Errorf("%s: no TestMain calls %s; wrap its run in containers.RunWithSharedServers", pkg, optInCall)
 	}
-	for _, pkg := range batchA {
-		if !have[pkg] {
-			t.Errorf("%s: no TestMain calls %s; wrap its run in containers.RunWithSharedServers", pkg, optInCall)
-		}
+}
+
+func TestBatchBPackagesRunOnSharedServers(t *testing.T) {
+	optedIn, _ := repoScan(t)
+	for _, pkg := range missingFromBatch(optedIn, batchB) {
+		t.Errorf("%s: no TestMain calls %s; wrap its run in containers.RunWithSharedServers", pkg, optInCall)
 	}
 }
 

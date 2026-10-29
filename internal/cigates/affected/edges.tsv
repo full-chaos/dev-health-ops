@@ -98,8 +98,8 @@ internal/cigates/docstools	refusals_pub_test.go	unexpressed
 internal/cigates/docstools	refusals_test.go	**/cmd/cigate
 internal/cigates/docstools	refusals_test.go	unexpressed
 internal/cigates/docstools	validate_inventory_review_refusals_test.go	unexpressed
-internal/cigates/frozengoldens	frozengoldens.go	unexpressed
 internal/cigates/frozengoldens	frozengoldens_test.go	unexpressed
+internal/cigates/frozengoldens	reads.go	unexpressed
 internal/cigates/integrationshards	ci_script_helpers_test.go	unexpressed
 internal/cigates/integrationshards	free_run_test.go	unexpressed
 internal/cigates/nopython	trackedfiles_test.go	unexpressed
@@ -155,6 +155,7 @@ internal/cigates/workflows	ci_script_helpers_test.go	unexpressed
 internal/cigates/workflows	docs_only_step_test.go	unexpressed
 internal/cigates/workflows	go_api_tools_build_inputs_test.go	unexpressed
 internal/cigates/workflows	go_quality_leg_selection_test.go	unexpressed
+internal/cigates/workflows	go_quality_legs_shape_test.go	unexpressed
 internal/cigates/workflows	go_workers_compose_proof_test.go	unexpressed
 internal/cigates/workflows	governance_context_test.go	unexpressed
 internal/cigates/workflows	image_reuse_exec_norace_test.go	unexpressed
@@ -199,6 +200,7 @@ internal/platform/logging	provider_origin_sources_test.go	unexpressed
 internal/platform/logging	value_redaction_test.go	unexpressed
 internal/platform/otlpmetrics	environment_proxy_test.go	unexpressed
 internal/platform/shell	otlp_push_test.go	unexpressed
+internal/platform/shell	startup_flush_test.go	unexpressed
 internal/platform/shell	stop_bound_test.go	unexpressed
 internal/platform/tracing	environment_proxy_test.go	unexpressed
 internal/providerfoundation	environment_proxy_test.go	unexpressed

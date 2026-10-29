@@ -161,9 +161,10 @@ func freshEnv(on bool) []string {
 	return []string{"DEV_HEALTH_GO_FRESH_SECURITY="}
 }
 
+// receipt runs the leg receipt on the -json events of the summary lines of log, for a leg that ran packages.
 func receipt(t *testing.T, on bool, log string) (string, string, error) {
 	t.Helper()
-	return checkGo(t, freshEnv(on), "security-fresh-receipt", writeLog(t, log))
+	return checkGo(t, freshEnv(on), "security-fresh-receipt", "1", writeLog(t, summaryEvents(t, log)))
 }
 
 func TestACachedSecurityPackageFailsTheMergeGroupLeg(t *testing.T) {
@@ -184,17 +185,17 @@ func TestACachedSecurityPackageFailsTheMergeGroupLeg(t *testing.T) {
 	}
 }
 
-func TestACachedOtherPackageIsAllowedAndTheReceiptSaysItWasNotExecuted(t *testing.T) {
+func TestACachedPackageWithNoTestsToRunIsAllowedAndIsNotCounted(t *testing.T) {
 	t.Parallel()
 	mod, _ := goList(t)
-	log := "ok  \t" + mod + "/internal/queryapi/home\t(cached)\nok  \t" + mod + "/internal/auth/org\t0.020s\n" +
+	log := "ok  \t" + mod + "/internal/queryapi/home\t0.031s\nok  \t" + mod + "/internal/auth/org\t0.020s\n" +
 		"ok  \t" + mod + "/internal/apiservice/ssovenue\t(cached) [no tests to run]\n"
 	out, errs, err := receipt(t, true, log)
 	if err != nil {
-		t.Fatalf("a cached non-security package failed the guard: %v\n%s", err, errs)
+		t.Fatalf("a cached package with no tests to run failed the guard: %v\n%s", err, errs)
 	}
 	for _, want := range []string{
-		"cache-receipt: 2 package(s) reported \"ok (cached)\": cached = NOT executed by this leg\n",
+		"cache-receipt: 0 package(s) reported \"ok (cached)\": cached = NOT executed by this leg\n",
 		"security-fresh: 1 package(s) of ci/security_fresh_packages.txt executed with -count=1 on merge_group, 0 cached\n",
 	} {
 		if !strings.Contains(out, want) {
@@ -258,12 +259,13 @@ func TestNoRaceSoloPackageIsASecurityPackage(t *testing.T) {
 	}
 }
 
-func TestTheFreshCallsCarryCountOneAndThePlainCallsDoNot(t *testing.T) {
+// The security calls take their -count=1 from go_test_leg on merge_group (the only event that splits them off), once.
+func TestTheSecurityAndPlainCallsTakeCountOneOnlyFromGoTestLeg(t *testing.T) {
 	t.Parallel()
 	source := readCheckGo(t)
 	for _, want := range []string{
-		`go_test_leg "${log}" "${legjson}" -count=1 -timeout "$(cigates_go_test_timeout ${rest_sec})" ${rest_sec}`,
-		`go_test_leg "${racelog}" "${legjson}" -race -count=1 -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" "${pkgs_sec[@]}"`,
+		`go_test_leg "${log}" "${legjson}" -timeout "$(cigates_go_test_timeout ${rest_sec})" ${rest_sec}`,
+		`go_test_leg "${racelog}" "${legjson}" -race -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" "${pkgs_sec[@]}"`,
 		`go_test_leg "${log}" "${legjson}" -timeout "$(cigates_go_test_timeout ${rest})" ${rest}`,
 		`go_test_leg "${racelog}" "${legjson}" -race -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" "${pkgs[@]}"`,
 	} {

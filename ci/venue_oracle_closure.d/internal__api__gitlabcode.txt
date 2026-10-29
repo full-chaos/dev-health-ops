@@ -50,6 +50,7 @@ internal/testsupport/redirectprobe
 internal/testsupport/venueoracle
 ~internal/chmigrate/baseline
 ~internal/chmigrate/sql
+~internal/pgmigrate/archive
 ~internal/pgmigrate/baseline
 ~internal/pgmigrate/sql
 ~internal/pgmigrate/sql/down

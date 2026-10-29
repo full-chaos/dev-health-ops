@@ -7,22 +7,23 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// TestQueryEdgeAuthenticatorStaysUnroutedWithTheIssuerSet: go-api's
-// profile-routed access-token validation never reaches query-api's /query
-// authenticator, even with go-api's issuer variable set in the environment.
-func TestQueryEdgeAuthenticatorStaysUnroutedWithTheIssuerSet(t *testing.T) {
+// TestQueryEdgeAuthenticatorRoutesByRowOnlyWithTheIssuerSet: query-api's
+// /query and /graphql authenticator is profile-routed exactly when
+// AUTH_ACCESS_TOKEN_ISSUER is set, read through the lookup Build is given,
+// never from the process environment.
+func TestQueryEdgeAuthenticatorRoutesByRowOnlyWithTheIssuerSet(t *testing.T) {
 	t.Setenv("AUTH_ACCESS_TOKEN_ISSUER", "https://auth.example.test")
 	pool, err := pgxpool.New(context.Background(), "postgres://nobody:none@127.0.0.1:1/none?connect_timeout=1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	settings := edgeSettings(map[string]string{edgeJWTSecretEnvVar: edgeTestSecret, "AUTH_ACCESS_TOKEN_ISSUER": "https://auth.example.test"})
-	auth, _, err := buildQueryEdgeAuthenticatorFromEnv(settings, pool)
-	if err != nil || auth == nil {
-		t.Fatalf("auth %v err %v", auth, err)
+	unset, _, err := buildQueryEdgeAuthenticatorFromEnv(edgeSettings(map[string]string{edgeJWTSecretEnvVar: edgeTestSecret}), pool)
+	if err != nil || unset == nil || unset.Routed() {
+		t.Fatalf("issuer unset in the lookup: auth %v err %v; want an unrouted authenticator", unset, err)
 	}
-	if auth.Routed() {
-		t.Fatal("query-api's /query authenticator is profile-routed")
+	set, _, err := buildQueryEdgeAuthenticatorFromEnv(edgeSettings(map[string]string{edgeJWTSecretEnvVar: edgeTestSecret, accessTokenIssuerEnvVar: "https://auth.example.test"}), pool)
+	if err != nil || set == nil || !set.Routed() {
+		t.Fatalf("issuer set in the lookup: auth %v err %v; want a routed authenticator", set, err)
 	}
 }

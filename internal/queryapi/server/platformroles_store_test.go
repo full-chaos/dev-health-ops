@@ -27,13 +27,19 @@ func TestQueryAPIUserStoresCarryThePlatformRolesSwitch(t *testing.T) {
 		if !ok {
 			t.Fatalf("store base is %T, want policy.PGStore", users.queryAPIStoreBase)
 		}
+		if users.ReadsPlatformRoles() != base.PlatformRolesOwned {
+			t.Fatalf("the wrapped store reads the switch as %v, its base as %v", users.ReadsPlatformRoles(), base.PlatformRolesOwned)
+		}
 		return base.PlatformRolesOwned
 	}
 	for value, want := range map[string]bool{"": false, "false": false, "true": true, " TRUE ": true} {
 		settings := edgeSettings(map[string]string{edgeJWTSecretEnvVar: edgeTestSecret, "AUTH_PLATFORM_ROLES_OWNED": value})
-		_, store, err := buildQueryEdgeAuthenticatorFromEnv(settings, pool)
+		auth, store, err := buildQueryEdgeAuthenticatorFromEnv(settings, pool)
 		if err != nil || owned(store) != want {
 			t.Errorf("%q: /query store owned %v err %v, want %v", value, store, err, want)
+		}
+		if got := policy.NewScope(auth, nil).ReadsPlatformRoles(); got != want {
+			t.Errorf("%q: the /graphql scope reads the switch as %v, want %v", value, got, want)
 		}
 		users, err := newEdgeUserStore(settings, pool)
 		if err != nil || owned(users) != want {

@@ -76,6 +76,9 @@ func (s PGStore) superuserColumn() (string, error) {
 	return PlatformRoleRead{Owned: s.PlatformRolesOwned, AuthSchema: s.AuthSchema}.Superuser("is_superuser", "users.id")
 }
 
+// ReadsPlatformRoles implements Store.
+func (s PGStore) ReadsPlatformRoles() bool { return s.PlatformRolesOwned }
+
 // superuserGrant names, in a grant error, what the superuser read needs.
 func (s PGStore) superuserGrant() string {
 	if s.PlatformRolesOwned {

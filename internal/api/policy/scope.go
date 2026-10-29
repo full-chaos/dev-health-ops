@@ -295,3 +295,7 @@ func writeOrgDenied(w http.ResponseWriter) {
 	w.WriteHeader(http.StatusForbidden)
 	_, _ = io.Copy(w, bytes.NewReader(orgDeniedBody))
 }
+
+// ReadsPlatformRoles is the platform roles switch the impersonation gate
+// reads: the one its users store reads is_superuser under.
+func (s *Scope) ReadsPlatformRoles() bool { return s.auth != nil && s.auth.store.ReadsPlatformRoles() }

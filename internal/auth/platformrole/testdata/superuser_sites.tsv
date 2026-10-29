@@ -16,6 +16,7 @@ internal/api/billing/refunds.go	handlers.listRefunds	1	-
 internal/api/billing/routes.go	Routes	1	-
 internal/api/billing/subscriptions.go	handlers.resolveOrg	2	-
 internal/api/orgs/orgs.go	handlers.entitlements	1	7
+internal/api/policy/accessroute.go	Scope.mayImpersonate	1	-
 internal/api/policy/accessroute_user.go	Authenticator.accessTokenUser	1	-
 internal/api/policy/guard.go	Guard.Wrap	2	-
 internal/api/policy/principal.go	Authenticator.CheckClaims	1	-

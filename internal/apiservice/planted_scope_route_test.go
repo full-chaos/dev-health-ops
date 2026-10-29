@@ -162,3 +162,5 @@ func TestGoAPIScopeDeclaresTheEndpointProfileRows(t *testing.T) {
 		t.Fatal("the api listener's scope has no endpoint-profile rows")
 	}
 }
+
+func (*plantedStore) ReadsPlatformRoles() bool { return false }

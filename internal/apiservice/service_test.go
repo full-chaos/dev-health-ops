@@ -512,3 +512,5 @@ func TestUnhandledErrorsCarryOnlyContentHeaders(t *testing.T) {
 		}
 	}
 }
+
+func (scopeStore) ReadsPlatformRoles() bool { return false }

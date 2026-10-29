@@ -7,6 +7,19 @@ import (
 	"testing"
 )
 
+// The request scope's impersonation gate reads the switch startup parsed.
+func TestTheRequestScopeGetsThePlatformRolesSwitch(t *testing.T) {
+	for _, owned := range []bool{false, true} {
+		protected, err := newProtection(apiTestConfig(), nil, owned, quietLogger())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := protected.scope.ReadsPlatformRoles(); got != owned {
+			t.Errorf("startup switch %v reached the scope as %v", owned, got)
+		}
+	}
+}
+
 // Every go-api route set that reads public.users gets the platform roles
 // switch from startup: session, sso and billing take PlatformRoles, admin
 // takes PlatformRolesOwned and AuthSchema. A Deps literal without them would

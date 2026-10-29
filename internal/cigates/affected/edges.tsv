@@ -199,6 +199,7 @@ internal/platform/logging	provider_origin_sources_test.go	unexpressed
 internal/platform/logging	value_redaction_test.go	unexpressed
 internal/platform/otlpmetrics	environment_proxy_test.go	unexpressed
 internal/platform/shell	otlp_push_test.go	unexpressed
+internal/platform/shell	startup_flush_test.go	unexpressed
 internal/platform/shell	stop_bound_test.go	unexpressed
 internal/platform/tracing	environment_proxy_test.go	unexpressed
 internal/providerfoundation	environment_proxy_test.go	unexpressed

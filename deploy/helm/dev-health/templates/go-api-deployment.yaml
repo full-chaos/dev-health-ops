@@ -17,6 +17,18 @@ one. The platform ConfigMap in particular is NOT inherited by default: it pins
 OTEL_SERVICE_NAME=dev-health-ops, and this service names itself
 dev-health-api.
 */ -}}
+{{- /* CHAOS-11813: the legacy /api/v1/ingest/* routes of go-api are retired and go-api reads no legacy ingest setting.
+A value that asks for the routes fails the render whether go-api renders or not; the pin that keeps them off
+(legacyIngest.enabled: false, no sunset, as dev-health-deploy's prod values carry it) still renders. */}}
+{{- if hasKey .Values "legacyIngest" }}
+{{- $legacyIngest := .Values.legacyIngest }}
+{{- if not (kindIs "map" $legacyIngest) }}{{- fail "legacyIngest is retired: the legacy /api/v1/ingest/* routes of go-api are gone (CHAOS-11813); only legacyIngest.enabled: false may remain" }}{{- end }}
+{{- if and (hasKey $legacyIngest "enabled") (ne (toString $legacyIngest.enabled) "false") }}{{- fail "legacyIngest.enabled is retired: the legacy /api/v1/ingest/* routes of go-api are gone (CHAOS-11813); set it false or remove it" }}{{- end }}
+{{- if and (hasKey $legacyIngest "sunset") (ne (trim (toString $legacyIngest.sunset)) "") }}{{- fail "legacyIngest.sunset is retired: the legacy /api/v1/ingest/* routes of go-api are gone (CHAOS-11813); remove it" }}{{- end }}
+{{- end }}
+{{- range .Values.goApi.extraEnv }}
+{{- if has (upper (trim (toString .name))) (list "DEV_HEALTH_LEGACY_INGEST_ENABLED" "DEV_HEALTH_LEGACY_INGEST_SUNSET") }}{{- fail (printf "goApi.extraEnv must not set %s: the legacy ingest routes are retired (CHAOS-11813) and go-api reads no such setting" .name) }}{{- end }}
+{{- end }}
 {{- if .Values.goApi.enabled }}
 {{- if and .Values.goApi.internal.enabled (or (eq (int .Values.goApi.internal.port) (int .Values.goApi.port)) (eq (int .Values.goApi.internal.port) (int .Values.goApi.operatorPort))) }}
 {{- fail "goApi.internal.port must differ from goApi.port and goApi.operatorPort: each listener has its own port" }}
@@ -79,9 +91,7 @@ ranges (the fenced ports and the internal port), zero-padded so a string sort is
 {{- end }}
 {{- end }}
 {{- $closed := append $fenced (printf "%05d" (int .Values.goApi.internal.port)) }}
-{{- if hasKey .Values "legacyIngest" }}{{- fail "legacyIngest is retired: the legacy /api/v1/ingest/* routes of go-api are gone (CHAOS-11813); remove legacyIngest from the values" }}{{- end }}
 {{- range .Values.goApi.extraEnv }}
-{{- if has (upper (trim (toString .name))) (list "DEV_HEALTH_LEGACY_INGEST_ENABLED" "DEV_HEALTH_LEGACY_INGEST_SUNSET") }}{{- fail (printf "goApi.extraEnv must not set %s: the legacy ingest routes are retired (CHAOS-11813) and go-api reads no such setting" .name) }}{{- end }}
 {{- if eq .name "TRUSTED_PROXIES_NETWORK_FENCED" }}{{- fail "goApi.extraEnv must not set TRUSTED_PROXIES_NETWORK_FENCED: the chart sets it only where the request-port fence renders (goApi.networkPolicy.enabled)" }}{{- end }}
 {{- /* go-api reads TRUSTED_PROXIES with the auth-service parser and refuses to start on a list it cannot read, so a literal value
 is checked here with the authService.trustedProxies rules (one helper); a valueFrom source is the deploy chart's to check. */}}

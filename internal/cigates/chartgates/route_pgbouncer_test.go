@@ -750,7 +750,10 @@ func TestRoutePgbouncerGuardsPlantedDefects(t *testing.T) {
 			mut(route, `{{- $operatorPullPolicy := .Values.migrations.hook.routeActivate.pullPolicy | default "IfNotPresent" }}`, `{{- $operatorPullPolicy := "IfNotPresent" }}`),
 			routePullPolicyOverrideWins, "did not win"},
 		{"route-accepts-an-empty-bundled-database", chartOnly,
-			mut(chartRel+"/"+helpersTpl, `{{- required "postgresql.credentials.database must not be empty when postgresql.enabled=true" .Values.postgresql.credentials.database }}`, `{{- .Values.postgresql.credentials.database }}`),
+			all(
+				mut(chartRel+"/"+helpersTpl, `{{- required "postgresql.credentials.database must not be empty when postgresql.enabled=true" .Values.postgresql.credentials.database }}`, `{{- .Values.postgresql.credentials.database }}`),
+				mut(chartRel+"/"+helpersTpl, `{{- if not (regexMatch "^[A-Za-z0-9_]+$" $db) -}}`, `{{- if false -}}`),
+			),
 			routeRefusesEmptyBundledDatabase, "rendered"},
 		{"pgbouncer-topology-not-required", chartAndManifest,
 			mut(chartFile("values.schema.json"), `"pgbouncer": {

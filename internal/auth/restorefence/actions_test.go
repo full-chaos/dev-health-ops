@@ -18,6 +18,9 @@ func TestActionLinesCarryOnlyKindSourceCountAndIDs(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("lines = %v, want one per action that has ids", lines)
 	}
+	if !strings.HasSuffix(lines[0], " follow-up=CHAOS-11834") || !strings.HasSuffix(lines[1], " follow-up=CHAOS-11835") {
+		t.Errorf("each action names its follow-up leaf: %v", lines)
+	}
 	if !strings.HasPrefix(lines[0], "operator-action force_password_reset source=public.users count=2 ids=00000000-0000-4000-8000-000000000001,00000000-0000-4000-8000-000000000002") {
 		t.Errorf("ids are not listed in order: %s", lines[0])
 	}

@@ -428,7 +428,7 @@ func (e *env) holdWriteLock(t *testing.T, ctx context.Context) func() {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, writeLock); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "auth.platform_role_assignments:write"); err != nil {
 		_ = tx.Rollback(ctx)
 		t.Fatal(err)
 	}

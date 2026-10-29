@@ -200,4 +200,7 @@ func TestStoreLocksNoAssignmentRow(t *testing.T) {
 	if !strings.Contains(string(src), "pg_advisory_xact_lock(hashtextextended($1, 0))") {
 		t.Error("the store takes no advisory write lock")
 	}
+	if writeLock != "auth.platform_role_assignments:write" {
+		t.Errorf("write lock name = %q: every writer of the table must take the same lock", writeLock)
+	}
 }

@@ -252,7 +252,7 @@ type provFixture struct {
 
 func newProvFixture(t *testing.T) *provFixture {
 	t.Helper()
-	return newProvFixtureWith(t, docWithReactivateRow(t))
+	return newProvFixtureWith(t, nil)
 }
 
 // docWithReactivateRow is the embedded endpoint-profile document plus the row

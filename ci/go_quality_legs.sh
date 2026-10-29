@@ -21,4 +21,10 @@ if ! jq -e 'type == "array" and length > 0 and any(.[]; .name == "static")' <<<"
   echo "go_quality_legs.sh: the leg list is empty or has no static leg" >&2
   exit 3
 fi
+# A repeated leg name pads the matrix: the queue-tested check counts distinct leg names, and a duplicate hides a missing leg.
+dups="$(jq -r '[.[] | .name] | group_by(.) | map(select(length > 1) | .[0]) | join(", ")' "${legs}")"
+if [ -n "${dups}" ]; then
+  echo "go_quality_legs.sh: duplicate leg name(s) in the leg list: ${dups}" >&2
+  exit 3
+fi
 printf '%s\n%s\n' "${matrix}" "${policy}"

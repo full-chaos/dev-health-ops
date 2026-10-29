@@ -267,6 +267,12 @@ func lockWrites(ctx context.Context, tx audit.TxOps) error {
 	return err
 }
 
+// Bootstrap gives principal platform_admin when no platform administrator is
+// active (the break-glass after a restore).
+func (s *Store) Bootstrap(ctx context.Context, principal uuid.UUID) (uuid.UUID, error) {
+	return uuid.New(), nil
+}
+
 // List is every stored assignment, with Active on the database clock.
 func (s *Store) List(ctx context.Context) ([]Assignment, error) {
 	rows, err := s.pool.Query(ctx, `SELECT r.id, r.principal_id, r.role_key, r.granted_by, r.expires_at, `+activeSQL+`

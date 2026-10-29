@@ -926,7 +926,7 @@ Call with the entry.
 "" when one authService.networkPolicy.egress.mail.to entry is acceptable, else the reason. Call with
 (dict "peer" <entry> "ports" <authService.networkPolicy.egress.mail.ports>). The class is dev-health.authMailPeerClass.
 The one whole-internet exception (D6427, a provider with no fixed addresses): exactly 0.0.0.0/0 or ::/0, only with ports
-[TCP 443] alone (protocol TCP or unset, no endPort) and an except list of well formed CIDRs holding every private,
+[TCP 443] alone (protocol the string TCP or the key absent; "", null and any other value are refused; no endPort) and an except list of well formed CIDRs holding every private,
 shared, link-local and loopback network below, and for IPv6 also the mapped and NAT64 ranges that would reach internal
 IPv4 addresses.
 */}}
@@ -943,7 +943,8 @@ IPv4 addresses.
 {{- $ports := .ports | default list -}}
 {{- $port := dict -}}
 {{- if eq (len $ports) 1 }}{{- $port = index $ports 0 }}{{- end -}}
-{{- if not (and (eq (len $ports) 1) (kindIs "map" $port) (eq (toString (default "TCP" $port.protocol)) "TCP") (hasKey $port "port") (eq (int $port.port) 443) (not (hasKey $port "endPort"))) -}}an ipBlock with prefix 0 is accepted only with authService.networkPolicy.egress.mail.ports of TCP 443 alone
+{{- if and (eq (len $ports) 1) (kindIs "map" $port) (hasKey $port "protocol") (eq (toString $port.protocol) "") -}}authService.networkPolicy.egress.mail.ports[0].protocol is empty: omit protocol or set TCP; an empty string is not accepted on an ipBlock with prefix 0
+{{- else if not (and (eq (len $ports) 1) (kindIs "map" $port) (or (not (hasKey $port "protocol")) (and (kindIs "string" $port.protocol) (eq $port.protocol "TCP"))) (hasKey $port "port") (eq (int $port.port) 443) (not (hasKey $port "endPort"))) -}}an ipBlock with prefix 0 is accepted only with authService.networkPolicy.egress.mail.ports of TCP 443 alone
 {{- else if $missing -}}ipBlock.cidr {{ $cidr }} needs except entries {{ join ", " $missing }}
 {{- end -}}
 {{- end -}}

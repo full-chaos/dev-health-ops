@@ -249,10 +249,12 @@ func (h *handlers) createUser(w http.ResponseWriter, r *http.Request) {
 	var fullNamePresent, authProviderPresent, authProviderIDPresent bool
 	role, rolePresent := "member", false
 	if ok {
-		email, _ = errs.RequiredString(object, "email", 1, 0)
+		if value, present := errs.RequiredString(object, "email", 1, 0); present && !errs.RefuseTextForm(pyjson.ClassEmail, "email", value) {
+			email = value
+		}
 		password, _ = errs.OptionalString(object, "password", 8, 128)
 		username, _ = errs.OptionalString(object, "username", 0, 0)
-		fullName, fullNamePresent = errs.OptionalString(object, "full_name", 0, 0)
+		fullName, fullNamePresent = errs.OptionalDisplayText(object, "full_name")
 		// auth_provider/is_verified/is_superuser are pydantic fields with a
 		// DEFAULT, not `| None` -- DefaultedString/DefaultedBool: present is
 		// false only when the key is absent (apply the same default Python
@@ -428,6 +430,12 @@ func (h *handlers) updateUser(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	var errs pybody.Errors
+	patch := parseUserUpdate(&errs, bodyFromContext(ctx))
+	if len(errs) > 0 {
+		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
+		return
+	}
 	existing, err := h.store.fullUserByID(ctx, targetID)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "admin: update user lookup failed", "error", err)
@@ -447,37 +455,6 @@ func (h *handlers) updateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body := bodyFromContext(ctx)
-	var errs pybody.Errors
-	object, ok := errs.Object(body)
-	patch := userUpdate{}
-	if ok {
-		if v, present := errs.OptionalString(object, "email", 0, 0); present {
-			patch.Email = &v
-		}
-		if v, present := errs.OptionalString(object, "username", 0, 0); present {
-			patch.Username = &v
-		}
-		if v, present := errs.OptionalString(object, "full_name", 0, 0); present {
-			patch.FullName = &v
-		}
-		if v, present := errs.OptionalString(object, "avatar_url", 0, 0); present {
-			patch.AvatarURL = &v
-		}
-		if v, present := errs.OptionalBool(object, "is_active"); present {
-			patch.IsActive = &v
-		}
-		if v, present := errs.OptionalBool(object, "is_verified"); present {
-			patch.IsVerified = &v
-		}
-		if v, present := errs.OptionalBool(object, "is_superuser"); present {
-			patch.IsSuperuser = &v
-		}
-	}
-	if len(errs) > 0 {
-		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
-		return
-	}
 	h.superuserGuardedWrite(ctx, w, user, patch.IsSuperuser, "update_user", func(g *superuserTx) func() {
 		if g.refuse(targetID) {
 			return nil
@@ -752,4 +729,34 @@ func (h *handlers) deleteUser(w http.ResponseWriter, r *http.Request) {
 			policy.WriteModel(w, http.StatusOK, out, nil)
 		}
 	})
+}
+
+// parseUserUpdate reads the optional fields of a user update body.
+func parseUserUpdate(errs *pybody.Errors, body pybody.Body) userUpdate {
+	object, ok := errs.Object(body)
+	patch := userUpdate{}
+	if ok {
+		if v, present := errs.OptionalString(object, "email", 0, 0); present && !errs.RefuseTextForm(pyjson.ClassEmail, "email", v) {
+			patch.Email = &v
+		}
+		if v, present := errs.OptionalString(object, "username", 0, 0); present {
+			patch.Username = &v
+		}
+		if v, present := errs.OptionalDisplayText(object, "full_name"); present {
+			patch.FullName = &v
+		}
+		if v, present := errs.OptionalURLString(object, "avatar_url"); present {
+			patch.AvatarURL = &v
+		}
+		if v, present := errs.OptionalBool(object, "is_active"); present {
+			patch.IsActive = &v
+		}
+		if v, present := errs.OptionalBool(object, "is_verified"); present {
+			patch.IsVerified = &v
+		}
+		if v, present := errs.OptionalBool(object, "is_superuser"); present {
+			patch.IsSuperuser = &v
+		}
+	}
+	return patch
 }

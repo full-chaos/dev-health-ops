@@ -303,6 +303,18 @@ func TestRegisterRefusals(t *testing.T) {
 			t.Errorf("want one notice and no credential: %+v", rig.mail.sent)
 		}
 	})
+	t.Run("an address with a refused form writes nothing and mails nothing", func(t *testing.T) {
+		for _, email := range []string{"a\ufffdb@example.com", "a\x00b@example.com", "a\tb@example.com"} {
+			rig := newFlowRig(t, true)
+			_, err := rig.f.Register(context.Background(), RegisterRequest{Email: email, Password: flowPassword})
+			if !errors.Is(err, identity.ErrInvalidEmail) {
+				t.Fatalf("Register(%q) err = %v, want ErrInvalidEmail", email, err)
+			}
+			if got := rig.rec.names(); len(got) != 0 || len(rig.mail.sent) != 0 {
+				t.Errorf("Register(%q): calls = %v, mails %d, want none", email, got, len(rig.mail.sent))
+			}
+		}
+	})
 	t.Run("password policy comes first and writes nothing", func(t *testing.T) {
 		rig := newFlowRig(t, true)
 		out, err := rig.f.Register(context.Background(), RegisterRequest{Email: "x@example.com", Password: "short"})

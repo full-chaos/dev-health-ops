@@ -190,9 +190,11 @@ func buildPreparedChunkMaterial(
 	if len(ledgerRaw) == 0 {
 		return preparedChunkMaterial{}, ErrEffectRecoveryUnsafe
 	}
-	if chunk.Validate(claim, DefaultChunkPolicy()) != nil ||
-		len(payloadRaw)+len(ledgerRaw) > maxChunkPayloadBytes {
-		return preparedChunkMaterial{}, ErrChunkCheckpointConflict
+	if chunk.Validate(claim, DefaultChunkPolicy()) != nil {
+		return preparedChunkMaterial{}, chunkConflictBecause("chunk_invalid")
+	}
+	if len(payloadRaw)+len(ledgerRaw) > maxChunkPayloadBytes {
+		return preparedChunkMaterial{}, chunkConflictBecause("payload_and_ledger_size")
 	}
 	// A chunk with no aggregate must store SQL NULL, not the JSONB scalar
 	// `null`. Only the final chunk of a route carries a Result, so marshalling
@@ -331,28 +333,17 @@ func loadPreparedChunkRow(
 	if err != nil {
 		return PreparedProviderChunk{}, NewChunkStoreError(err)
 	}
-	if json.Unmarshal(payloadRaw, &chunk) != nil || json.Unmarshal(ledgerRaw, &chunk.Ledger) != nil ||
-		(status != "pending" && status != "writing" && status != "committed") ||
-		chunk.SchemaVersion != storedSchemaVersion || chunk.RouteVersion != storedRouteVersion ||
-		chunk.Ordinal != storedOrdinal || chunk.CursorBefore != storedCursorBefore ||
-		chunk.CursorAfter != storedCursorAfter || chunk.InventoryComplete != storedInventoryComplete ||
-		chunk.PayloadBytes != storedPayloadBytes || chunk.ManifestDigest != storedManifestDigest {
-		return PreparedProviderChunk{}, ErrChunkCheckpointConflict
+	if json.Unmarshal(payloadRaw, &chunk) != nil {
+		return PreparedProviderChunk{}, chunkConflictBecause("payload_decode")
 	}
-	// The sidecar payload is prepared before the final inventory count is
-	// known. The relational column is finalized transactionally and is the
-	// canonical count used by recovery; do not let the provisional JSON value
-	// overwrite it during decode.
-	chunk.TotalChunks = storedTotal
-	if chunk.TotalChunks < 0 || (chunk.TotalChunks > 0 && chunk.Ordinal >= chunk.TotalChunks) {
-		return PreparedProviderChunk{}, ErrChunkCheckpointConflict
+	if json.Unmarshal(ledgerRaw, &chunk.Ledger) != nil {
+		return PreparedProviderChunk{}, chunkConflictBecause("ledger_decode")
 	}
-	if chunk.ManifestDigest == "" || chunk.TotalChunks < 0 ||
-		(chunk.TotalChunks > 0 && chunk.Ordinal >= chunk.TotalChunks) ||
-		chunk.Ledger.validate() != nil {
-		return PreparedProviderChunk{}, ErrChunkCheckpointConflict
-	}
-	return chunk, nil
+	return verifyStoredChunk(chunk, storedChunkRow{
+		schemaVersion: storedSchemaVersion, routeVersion: storedRouteVersion, ordinal: storedOrdinal, totalChunks: storedTotal,
+		cursorBefore: storedCursorBefore, cursorAfter: storedCursorAfter, inventoryComplete: storedInventoryComplete,
+		payloadBytes: storedPayloadBytes, manifestDigest: storedManifestDigest, status: status,
+	})
 }
 
 func (repository *PostgresRepository) BeginChunkEffect(

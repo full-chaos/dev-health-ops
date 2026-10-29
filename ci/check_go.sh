@@ -278,8 +278,9 @@ usage() {
          and, with DEV_HEALTH_GO_FRESH_SECURITY=1 (merge_group), a failure when a package of
          ci/security_fresh_packages.txt read "(cached)". security-fresh-split PKG... prints sec|plain per package.
   test-shard-unweighted-guard SHARD COUNT LOGFILE
-         Fail when a package of the shard ran 30 s or more in LOGFILE (its go
+         Fail when a package of the shard ran 45 s or more in LOGFILE (its go
          test log) and has no row in ci/go_test_weights.tsv; prints the row.
+         From 30 s up to 45 s it only warns (::warning:: and a step-summary row).
          With DEV_HEALTH_GO_UNWEIGHTED_REPORT_ONLY=1 (merge_group) it warns and exits 0; an unusable log still fails.
   build  Run go build ./... in every Go module.
   contract
@@ -633,14 +634,15 @@ go_test_leg() {
   return "${rc}"
 }
 
-# cigates_go_test_timeout PKG...: the go test -timeout of one call (interim, widened to every internal/cigates package by #5191). internal/cigates/affected
-# ran 600.088 s against the 10m default in a hosted test leg (run 40750061254), so a call whose package list holds it gets 20m (a hang ceiling,
-# no time assert). COST: every other package of that call gets 20m too. The timeout is an argument of the call, never read from the environment.
+# cigates_go_test_timeout PKG...: the go test -timeout of one call (CHAOS-11787; interim, removed by CHAOS-11768 (widened)). The internal/cigates
+# packages run 485-757 s in a hosted test leg against the 10m default, so a call whose package list holds one gets 20m (a hang ceiling, no
+# time assert). COST: every other package of that call gets 20m too. The match is the exact import-path prefix with the slash: the bare
+# internal/cigates, internal/cigatesX and other modules give 10m. The timeout is an argument of the call, never read from the environment.
 cigates_go_test_timeout() {
   local p
   for p in "$@"; do
     case "${p}" in
-      github.com/full-chaos/dev-health-ops/internal/cigates/affected) printf '20m\n'; return 0 ;;
+      github.com/full-chaos/dev-health-ops/internal/cigates/?*) printf '20m\n'; return 0 ;;
     esac
   done
   printf '10m\n'
@@ -727,7 +729,6 @@ check_race_excluded_ran() {
 # leg and ~213 s alone, with the default 600 s go test timeout as the only margin, so one slow runner timed it out
 # (run 38786639144). It now runs alone, after the rest, so its time no longer depends on what else is scheduled.
 SERIAL_HEAVY_TEST_PACKAGE="github.com/full-chaos/dev-health-ops/internal/gqlgenguard"
-CHECKGO_PACKAGE="github.com/full-chaos/dev-health-ops/internal/cigates/checkgo"
 
 # GO_QUALITY_SELECTION_FILE: the verdict of `cmd/cigate plan-verdict --go-files-full` (the go-quality-plan job). Unset,
 # empty or a FULL first line runs every package. `AFFECTED <n>` and n root-module keys run only those packages: the test and
@@ -888,8 +889,10 @@ check_test_shard_wall_guard() {
   die "test shard ${shard}/${count} took ${wall}s, over ${GO_TEST_SHARD_WALL_PERCENT}% (${limit}s) of the ${GO_TEST_SHARD_CAP_SECONDS}s job cap; heaviest packages by ${basis}: ${top} -- rebalance ci/go_test_weights.tsv or add a shard"
 }
 
-# check_test_shard_unweighted_guard SHARD COUNT LOGFILE [partial] (CHAOS-10498): fails when a package of the shard ran 30 s or more in
-# LOGFILE (the leg's go test log) and has no row in ci/go_test_weights.tsv, and prints the row to add. A package with no row weighs
+# check_test_shard_unweighted_guard SHARD COUNT LOGFILE [partial] (CHAOS-10498): fails when a package of the shard ran 45 s or more
+# (DEV_HEALTH_GO_TEST_UNWEIGHTED_FAIL_SECONDS) in LOGFILE (the leg's go test log) and has no row in ci/go_test_weights.tsv, and prints
+# the row to add; from 30 s (DEV_HEALTH_GO_TEST_UNWEIGHTED_SLOW_SECONDS) up to the fail threshold it only warns (::warning:: plus a
+# step-summary row, exit 0). A fail threshold below the warn threshold or not a whole number exits 2. A package with no row weighs
 # 1, so an unweighted heavy package unbalances the shards without anyone seeing it; this makes it red on the leg that ran it.
 # DEV_HEALTH_GO_UNWEIGHTED_REPORT_ONLY=1 (go-quality.yml sets it on merge_group only, CHAOS-11682) turns a named package (awk exit 1) into a
 # ::warning:: plus a step-summary line and exit 0: a package the entry did not touch must not eject it. An unusable log (awk exit 2) fails always.
@@ -899,8 +902,18 @@ check_test_shard_unweighted_guard() {
   { [ -f "${log}" ] && [ -r "${log}" ]; } || die "test-shard-unweighted-guard needs the shard's go test log as a readable file, got '${log}'"
   plan="$(check_test_shard_plan "${shard}" "${count}")"
   local out rc=0
-  out="$(awk -v weights="${GO_TEST_WEIGHTS}" -v thresh="${DEV_HEALTH_GO_TEST_UNWEIGHTED_SLOW_SECONDS:-30}" -v label="${GO_TEST_WEIGHTS#"${ROOT}/"}" -v partial="${partial:+1}" \
+  out="$(awk -v weights="${GO_TEST_WEIGHTS}" -v thresh="${DEV_HEALTH_GO_TEST_UNWEIGHTED_SLOW_SECONDS:-30}" -v failthresh="${DEV_HEALTH_GO_TEST_UNWEIGHTED_FAIL_SECONDS:-45}" -v label="${GO_TEST_WEIGHTS#"${ROOT}/"}" -v partial="${partial:+1}" \
     -f "${GO_TEST_UNWEIGHTED_SLOW_AWK:-${ROOT}/ci/go_test_unweighted_slow.awk}" <(printf '%s\n' "${plan}") "${log}" 2>&1)" || rc=$?
+  local wline
+  while IFS= read -r wline; do
+    case "${wline}" in
+      unweighted-slow-warning:*|nested-module-slow-warning:*)
+        printf '::warning::%s\n' "${wline}" >&2
+        if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+          printf 'unweighted-slow warning (add the row in a pull request): %s\n' "${wline}" >> "${GITHUB_STEP_SUMMARY}" || true
+        fi ;;
+    esac
+  done <<< "${out}"
   if [ "${rc}" -ne 1 ] || [ "${DEV_HEALTH_GO_UNWEIGHTED_REPORT_ONLY:-}" != "1" ]; then
     [ -z "${out}" ] || printf '%s\n' "${out}" >&2
     return "${rc}"
@@ -996,9 +1009,8 @@ check_test_shard() {
     rest_rows="$(printf '%s\n' "${plan}" | awk -F'\t' -v m="${module_dir}" -v heavy="${SERIAL_HEAVY_TEST_PACKAGE}" -v keys="${census_keys}" '
       BEGIN { n = split(keys, k, "\n"); for (i = 1; i <= n; i++) if (k[i] != "") isrow[k[i]] = 1 }
       $1 == m && $2 != heavy && m == "." && ($3 in isrow) { print $2 }')"
-    # goes when the 11762 split lands
-    rows_timeout=10m
-    if [ "${module_dir}" = "." ] && printf '%s\n' "${rest_rows}" | grep -qx -- "${CHECKGO_PACKAGE}"; then rows_timeout=20m; fi
+    # shellcheck disable=SC2086
+    rows_timeout="$(cigates_go_test_timeout ${rest_rows})"
     rest_sec=""
     if security_fresh_active && [ "${module_dir}" = "." ]; then
       rest_sec="$(printf '%s\n' "${rest}" | security_split in)"
@@ -1018,7 +1030,7 @@ check_test_shard() {
       (
         cd "${ROOT}/${module_dir}"
         # shellcheck disable=SC2086
-        go_test_leg "${log}" "${legjson}" -count=1 -timeout 10m ${rest_sec}
+        go_test_leg "${log}" "${legjson}" -count=1 -timeout "$(cigates_go_test_timeout ${rest_sec})" ${rest_sec}
       ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}"; return 1; }
     fi
     if [ -n "${rest_rows}" ]; then

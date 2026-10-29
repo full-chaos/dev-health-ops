@@ -139,7 +139,7 @@ func helperHarness(t *testing.T, sid string, signal, noSetsid, slowPS bool) (exi
 			"die() { echo \"$*\" >&2; exit 2; }\n" + jobBudgetSnippet(t) + "\n" + s[start:end] + "run_integration_go_test . ./x\n"
 	}
 	cmd := exec.Command("bash", "-c", script)
-	cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"),
+	cmd.Env = inheritedEnv(deadlineEnvNames, "PATH="+bin+":"+os.Getenv("PATH"),
 		"TESTCONTAINERS_SESSION_ID="+sid, "PROOF_MARKER="+markerPath)
 	err = cmd.Run()
 	exit = 0

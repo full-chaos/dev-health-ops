@@ -24,11 +24,15 @@ type shellCollector struct {
 	mu    sync.Mutex
 	seen  map[string]string // metric name -> service.name of the resource
 	count int
-	// hold, when set, keeps the answer to the first export until it is closed
-	// (or holdLimit passes): the shell's startup flush runs before the operator
-	// HTTP listener starts, so while it is held the pull endpoint cannot answer.
-	hold chan struct{}
-	held bool
+	// hold, when set, keeps the answer to the first export that carries the
+	// metric target until it is closed (or holdLimit passes): the shell's
+	// startup flush runs before the operator HTTP listener starts, so while it
+	// is held the pull endpoint cannot answer. heldExport is the number of the
+	// held export (0: none) and heldHadTarget whether it carried target.
+	hold          chan struct{}
+	target        string
+	heldExport    int
+	heldHadTarget bool
 }
 
 // holdLimit bounds a held export; the shell abandons its startup flush after
@@ -39,6 +43,7 @@ func (c *shellCollector) Export(_ context.Context, req *colmetricpb.ExportMetric
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.count++
+	carries := false
 	for _, resource := range req.GetResourceMetrics() {
 		service := ""
 		for _, kv := range resource.GetResource().GetAttributes() {
@@ -49,11 +54,12 @@ func (c *shellCollector) Export(_ context.Context, req *colmetricpb.ExportMetric
 		for _, scope := range resource.GetScopeMetrics() {
 			for _, metric := range scope.GetMetrics() {
 				c.seen[metric.GetName()] = service
+				carries = carries || metric.GetName() == c.target
 			}
 		}
 	}
 	if c.count == 1 && c.hold != nil {
-		c.held = true
+		c.heldExport, c.heldHadTarget = c.count, carries
 		c.mu.Unlock()
 		select {
 		case <-c.hold:
@@ -66,15 +72,75 @@ func (c *shellCollector) Export(_ context.Context, req *colmetricpb.ExportMetric
 
 var _ = metricpb.Metric{}
 
+func exportOf(names ...string) *colmetricpb.ExportMetricsServiceRequest {
+	var metrics []*metricpb.Metric
+	for _, name := range names {
+		metrics = append(metrics, &metricpb.Metric{Name: name})
+	}
+	return &colmetricpb.ExportMetricsServiceRequest{ResourceMetrics: []*metricpb.ResourceMetrics{{
+		ScopeMetrics: []*metricpb.ScopeMetrics{{Metrics: metrics}},
+	}}}
+}
+
+// TestTheCollectorHoldsOnlyTheExportCarryingTheTarget: an export without the
+// target is answered at once; the first export with it is the one held, and
+// the collector records that export's number.
+func TestTheCollectorHoldsOnlyTheExportCarryingTheTarget(t *testing.T) {
+	hold := make(chan struct{})
+	release := sync.OnceFunc(func() { close(hold) })
+	defer release()
+	c := &shellCollector{seen: map[string]string{}, hold: hold, target: "dev_health_runtime_live"}
+	first := make(chan struct{})
+	go func() { _, _ = c.Export(context.Background(), exportOf("go_goroutines")); close(first) }()
+	select {
+	case <-first:
+	case <-time.After(holdLimit / 2):
+		t.Fatal("an export without the target was held")
+	}
+	second := make(chan struct{})
+	go func() {
+		_, _ = c.Export(context.Background(), exportOf("go_goroutines", "dev_health_runtime_live"))
+		close(second)
+	}()
+	for {
+		c.mu.Lock()
+		heldExport, heldHadTarget := c.heldExport, c.heldHadTarget
+		c.mu.Unlock()
+		if heldExport != 0 {
+			if heldExport != 2 || !heldHadTarget {
+				t.Fatalf("held export %d (carried the target: %t), want export 2, carrying it", heldExport, heldHadTarget)
+			}
+			break
+		}
+		select {
+		case <-second:
+			t.Fatal("the export carrying the target was not held")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	select {
+	case <-second:
+		t.Fatal("the held export was answered before the release")
+	default:
+	}
+	release()
+	<-second
+	if _, err := c.Export(context.Background(), exportOf("dev_health_runtime_live")); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestShellPushesItsRegisteredFragmentsOverOTLP runs a real shell process (a
 // re-execution of this test binary: the MeterProvider is installed once per
 // process, so the push cannot be proven in-process after other tests ran) with
 // the OTLP env of the deployed pod, against a real collector. The runtime
 // gauges the operator server writes as a hand-written fragment must arrive
 // under the service name the env gives, and the pull endpoint must still serve
-// them. The collector holds its answer to the first export (the startup flush,
-// which runs before the operator listener starts), so the fragment arrives
-// while the pull endpoint is not up yet: the order every run must survive.
+// them. The periodic export interval is far beyond the run, so the first export
+// is the startup flush, which runs before the operator listener starts; the
+// collector holds its answer to the export that carries the fragment, so the
+// fragment arrives while the pull endpoint is not up yet: the order every run
+// must survive.
 func TestShellPushesItsRegisteredFragmentsOverOTLP(t *testing.T) {
 	if os.Getenv("SHELL_OTLP_HELPER") == "1" {
 		runShellHelper()
@@ -83,7 +149,7 @@ func TestShellPushesItsRegisteredFragmentsOverOTLP(t *testing.T) {
 	hold := make(chan struct{})
 	release := sync.OnceFunc(func() { close(hold) })
 	defer release()
-	collector := &shellCollector{seen: map[string]string{}, hold: hold}
+	collector := &shellCollector{seen: map[string]string{}, hold: hold, target: "dev_health_runtime_live"}
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -105,7 +171,7 @@ func TestShellPushesItsRegisteredFragmentsOverOTLP(t *testing.T) {
 		"SHELL_OTLP_HTTP_ADDR="+httpAddress,
 		"OTEL_ENABLED=true",
 		"OTEL_EXPORTER_OTLP_ENDPOINT="+lis.Addr().String(),
-		"OTEL_METRIC_EXPORT_INTERVAL=200",
+		"OTEL_METRIC_EXPORT_INTERVAL=600000",
 		"OTEL_SERVICE_NAME=dev-health-go-shelltest",
 	)
 	var output bytes.Buffer
@@ -150,10 +216,10 @@ func TestShellPushesItsRegisteredFragmentsOverOTLP(t *testing.T) {
 	// starts; release the flush and wait for the pull endpoint, under the same
 	// deadline.
 	collector.mu.Lock()
-	held := collector.held
+	heldExport, heldHadTarget := collector.heldExport, collector.heldHadTarget
 	collector.mu.Unlock()
-	if !held {
-		t.Fatal("the first export was not held: the run no longer covers a push that arrives before the pull listener")
+	if heldExport != 1 || !heldHadTarget {
+		t.Fatalf("held export %d (carried the fragment: %t), want the first export, carrying it: the run no longer covers a push that arrives before the pull listener", heldExport, heldHadTarget)
 	}
 	release()
 	var response *http.Response

@@ -110,7 +110,7 @@ func (h handlers) socialLogin(w http.ResponseWriter, r *http.Request) {
 		refuse(w, http.StatusBadRequest, providerUserIDInvalid)
 		return
 	}
-	if email, isText := info.Email.(string); isText && pyjson.BadTextForm(pyjson.ClassEmail, email) != pyjson.TextFormNone {
+	if email, isText := info.Email.(string); isText && info.EmailVerified && pyjson.BadTextForm(pyjson.ClassEmail, email) != pyjson.TextFormNone {
 		h.Logger.WarnContext(ctx, "social login refused: the provider returned an unusable email address", "provider", provider)
 		refuse(w, http.StatusBadRequest, providerEmailUnusable)
 		return

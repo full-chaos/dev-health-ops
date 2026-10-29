@@ -59,7 +59,6 @@ func TestSocialLoginRefusesAnUnusableProviderEmailBeforeTheDatabase(t *testing.T
 		"control":          `"MARKER77\u0001@example.test"`,
 		"del":              `"MARKER77\u007f@example.test"`,
 		"c1":               `"MARKER77\u0085x@example.test"`,
-		"lone surrogate":   `"MARKER77\ud800@example.test"`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			code, body, logs, pastGuard := socialLoginWithEmail(t, emailJSON)
@@ -85,5 +84,14 @@ func TestSocialLoginGoesOnWithAUsableProviderEmail(t *testing.T) {
 		if _, body, _, pastGuard := socialLoginWithEmail(t, emailJSON); !pastGuard {
 			t.Fatalf("email %s: the handler answered before the database: %q", emailJSON, body)
 		}
+	}
+}
+
+// A lone surrogate in the profile email makes the profile unverified (oauthprovider.cleanProfileText), so the sign-in
+// keeps the unverified-email answer, which is read after the user lookup: the guard does not answer it.
+func TestSocialLoginKeepsTheUnverifiedAnswerForALoneSurrogateEmail(t *testing.T) {
+	code, body, _, pastGuard := socialLoginWithEmail(t, `"MARKER77\ud800@example.test"`)
+	if !pastGuard {
+		t.Fatalf("the email guard answered an unverified profile first: %d %q", code, body)
 	}
 }

@@ -135,6 +135,29 @@ func refuseUnusableSubject(authProvider, externalID string) error {
 	return identity.RefuseInvalidProviderID(authProvider, &externalID)
 }
 
+// errInvalidProviderEmail: the identity provider returned an address the shared email text rule refuses. The text names
+// no value.
+var errInvalidProviderEmail = errors.New("sso: the identity provider returned an unusable email address")
+
+// refuseUnusableEmail is the one email text rule of the sign-in callbacks (OIDC, SAML, OAuth): the shared pyjson rule
+// for an address (lone surrogate, invalid UTF-8, NUL, control characters, U+FFFD after the edge trim), applied before
+// any database statement, so the answer never depends on which accounts exist.
+func refuseUnusableEmail(email string) error {
+	if pyjson.BadTextForm(pyjson.ClassEmail, email) != pyjson.TextFormNone {
+		return errInvalidProviderEmail
+	}
+	return nil
+}
+
+// invalidProviderEmailDetail is the 400 body of a sign-in whose identity provider returned an unusable email
+// address; it names no value.
+func invalidProviderEmailDetail() *pyjson.Object {
+	detail := pyjson.NewObject()
+	detail.Set("message", "The identity provider returned an unusable email address")
+	detail.Set("reason", "invalid_provider_email")
+	return detail
+}
+
 // errIdentityConflict: the email belongs to an account with another or no SSO
 // identity, or the identity key matches more than one account.
 var errIdentityConflict = errors.New("identity conflict")

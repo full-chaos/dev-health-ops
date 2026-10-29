@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-// A blind margin has no source state, so the flag sections change nothing; the apply names every row that is active now
-// (ids only) so the operator can review it.
+// A blind margin has no source state, so the flag, scope, role and superuser sections change nothing; the apply names
+// every row that holds one now (ids only) so the operator can review it.
 func TestABlindMarginNamesTheActiveLegacyRowsForReview(t *testing.T) {
 	want := map[string]string{
 		"public.organizations":            "t.is_active",
@@ -14,16 +14,21 @@ func TestABlindMarginNamesTheActiveLegacyRowsForReview(t *testing.T) {
 		"public.integrations":             "t.is_active",
 		"public.integration_credentials":  "t.is_active",
 		"public.github_app_installations": "t.suspended_at IS NULL",
+		"auth.workloads.scope":            "(cardinality(t.audiences) > 0 OR cardinality(t.allowed_actions) > 0)",
+		"auth.credential_registry.scope":  "t.revoked_at IS NULL AND (cardinality(t.scopes) > 0 OR cardinality(t.audiences) > 0)",
+		"auth.memberships.role":           "t.role IN ('admin', 'owner')",
+		"public.memberships.role":         "t.role IN ('admin', 'owner')",
+		"public.users.superuser":          "t.is_superuser",
 	}
 	for name, pred := range want {
 		def := mustSection(t, name)
-		sql := blindReviewSQL(def)
-		if sql == "" || !strings.Contains(sql, "SELECT t.id::text FROM "+def.qualified(testSchema(t))+" t WHERE "+pred) {
+		sql := blindReviewSQL(def, testSchema(t))
+		if sql == "" || !strings.Contains(sql, "SELECT t."+def.key.name+"::text FROM "+def.qualified(testSchema(t))+" t WHERE "+pred) {
 			t.Errorf("%s: blind-margin review SQL = %q, want the ids where %s", name, sql, pred)
 		}
 	}
 	for _, s := range sections {
-		if _, ok := want[s.name]; !ok && blindReviewSQL(s) != "" {
+		if _, ok := want[s.name]; !ok && blindReviewSQL(s, testSchema(t)) != "" {
 			t.Errorf("%s has a blind-margin review list it was not ruled to have", s.name)
 		}
 	}

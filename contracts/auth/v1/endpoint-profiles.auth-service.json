@@ -661,7 +661,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 247,
+            "line": 280,
             "note": "signedtoken.Build(id, s.secret)",
             "path": "internal/auth/invite/store.go"
           },

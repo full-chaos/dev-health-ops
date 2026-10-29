@@ -25,6 +25,7 @@ const workloadsUsage = "usage: auth-migrate workloads seed [-apply] | bind -work
 	" | bootstrap-revoke -credential ID -reason compromised|owner_request [-apply]" +
 	" | bootstrap-disable -workload N [-apply]" +
 	"\nA bootstrap value is written once, to a new 0600 -out file, and never to argv, stdout or a log." +
+	"\nPut -out in a directory writable only by the operator: a failed verb's file is removed by path." +
 	"\nbootstrap-disable revokes every live bootstrap value of N at once; workload tokens issued before it live at most 300 s."
 
 type workloadsArgs struct {
@@ -68,7 +69,7 @@ func parseWorkloadsArgs(args []string, stderr io.Writer) (workloadsArgs, error) 
 	flags.StringVar(&parsed.binding.Namespace, "namespace", "", "bind: the Kubernetes namespace")
 	flags.StringVar(&parsed.binding.ServiceAccountName, "service-account", "", "bind: the Kubernetes service account name")
 	flags.StringVar(&parsed.binding.ServiceAccountUID, "uid", "", "bind: the service account uid, when it is to be pinned")
-	flags.StringVar(&parsed.out, "out", "", "bootstrap-create, bootstrap-rotate: the NEW file (mode 0600) the value is written to once")
+	flags.StringVar(&parsed.out, "out", "", "bootstrap-create, bootstrap-rotate: the NEW file (mode 0600) the value is written to once, in a directory writable only by the operator")
 	flags.Var(&parsed.audiences, "audience", "bootstrap-create: an audience of the value (repeatable; default: the workload's audiences)")
 	flags.DurationVar(&parsed.expiresIn, "expires-in", workload.BootstrapExpiryDefault, "bootstrap-create, bootstrap-rotate: the value's lifetime (at most 2160h)")
 	flags.DurationVar(&parsed.overlap, "overlap", 0, "bootstrap-rotate: how long the old value stays live (0 to 1h)")
@@ -271,6 +272,8 @@ func failureClass(err error) string {
 		return "the workload has no live bootstrap value"
 	case errors.Is(err, workload.ErrBootstrapNotFound):
 		return "bootstrap credential not found"
+	case errors.Is(err, workload.ErrBootstrapWorkloadDisabled):
+		return "the workload is disabled; enable it first"
 	case errors.Is(err, workload.ErrAudienceInvalid):
 		return "audience refused"
 	case errors.Is(err, workload.ErrStore):

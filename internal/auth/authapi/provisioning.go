@@ -571,7 +571,9 @@ type acceptAnswer struct {
 
 // inviteAccept takes no actor rule: the token and the account's verified
 // address authorize the join (the invite aggregate checks both under its
-// locks). The account must be active.
+// locks). The account must be active. The invite aggregate projects the
+// invite's organization when the auth schema has none yet, once the token
+// names a pending, unexpired invite.
 func (h provisioningHandlers) inviteAccept(w http.ResponseWriter, r *http.Request) {
 	body, ok := h.admit(w, r, opInviteAccept, "token", "principal_id", "description", "request_metadata")
 	if !ok {
@@ -596,8 +598,9 @@ func (h provisioningHandlers) inviteAccept(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	accepted, err := h.Invites.Accept(ctx, invite.AcceptInput{Token: token, PrincipalID: principal,
-		Actor:       invite.Actor{PrincipalID: &principal, RequestID: requestid.Audit(ctx)},
-		PublicAudit: &invite.PublicAudit{Description: description, RequestMetadata: metadata}})
+		Actor:              invite.Actor{PrincipalID: &principal, RequestID: requestid.Audit(ctx)},
+		PublicAudit:        &invite.PublicAudit{Description: description, RequestMetadata: metadata},
+		EnsureOrganization: h.Organizations.EnsureOrganization})
 	if err != nil {
 		answer := inviteRefusal(err)
 		h.rec.refuse(w, r, opInviteAccept, answer, failure(answer, err))
@@ -628,6 +631,7 @@ func inviteRefusal(err error) refusal {
 		{invite.ErrAlreadyMember, refusal{http.StatusConflict, reasonAlreadyMember}},
 		{invite.ErrOrgNotFound, refusal{http.StatusNotFound, reasonOrganizationNotFound}},
 		{invite.ErrOrgSuspended, refusal{http.StatusConflict, reasonOrganizationInactive}},
+		{invite.ErrOrgConflict, refusal{http.StatusConflict, reasonOrganizationConflict}},
 		{invite.ErrInviterNotFound, refusal{http.StatusNotFound, reasonInviterNotFound}},
 		{membership.ErrStateMoved, refusal{http.StatusConflict, reasonStateChanged}},
 	} {

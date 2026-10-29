@@ -3,6 +3,7 @@ package restorefence
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -84,7 +85,7 @@ func TestParseManifestRefusesWhatTheFenceDidNotWrite(t *testing.T) {
 		"an extra column":           func(m *Manifest) { m.Sections[0].Rows = []Row{{"id": "x", "token_hash": "abc"}} },
 		"a missing column":          func(m *Manifest) { m.Sections[0].Rows = []Row{{"id": "x"}} },
 		"a value of another shape":  func(m *Manifest) { m.Sections[0].Rows = rowWithValue(m.Sections[0].Name, []any{"x"}) },
-		"a version other than one":  func(m *Manifest) { m.Version = 2 },
+		"another version":           func(m *Manifest) { m.Version = ManifestVersion + 1 },
 		"a source timeline below 1": func(m *Manifest) { m.SourceTimeline = 0 },
 	}
 	for name, mutate := range cases {
@@ -120,7 +121,11 @@ func TestParseManifestRefusesTrailingContentAndUnknownMembers(t *testing.T) {
 	if _, err := ParseManifest(append(append([]byte(nil), raw...), []byte(`{}`)...)); err == nil {
 		t.Error("trailing content accepted")
 	}
-	extra := strings.Replace(string(raw), `"version": 1,`, `"version": 1, "note": "x",`, 1)
+	version := fmt.Sprintf(`"version": %d,`, ManifestVersion)
+	extra := strings.Replace(string(raw), version, version+` "note": "x",`, 1)
+	if extra == string(raw) {
+		t.Fatal("the version member was not found")
+	}
 	if _, err := ParseManifest([]byte(extra)); err == nil {
 		t.Error("an unknown member was accepted")
 	}

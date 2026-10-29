@@ -105,10 +105,12 @@ func (noRows) QueryRow(context.Context, string, ...any) pgx.Row { return nil }
 type fakeEnsurer struct {
 	err   error
 	calls int
+	last  uuid.UUID
 }
 
-func (f *fakeEnsurer) EnsureOrganization(context.Context, uuid.UUID) error {
+func (f *fakeEnsurer) EnsureOrganization(_ context.Context, orgID uuid.UUID) error {
 	f.calls++
+	f.last = orgID
 	return f.err
 }
 
@@ -678,6 +680,31 @@ func TestInviteAcceptNeedsAnActiveAccount(t *testing.T) {
 	}
 }
 
+// An accept hands the invite aggregate the organization projection, which it
+// runs once it knows the invite's organization: the route's own ensurer, called
+// with that organization. The route itself projects nothing before the token is
+// read.
+func TestInviteAcceptHandsTheOrganizationProjectionToTheStore(t *testing.T) {
+	f := newProvFixture(t)
+	accept := routeCases()[5]
+	if response := f.post(accept.path, encode(accept.body(f, f.target)), nil); response.Code != http.StatusOK {
+		t.Fatalf("accept: %d %s", response.Code, response.Body)
+	}
+	if f.orgs.calls != 0 {
+		t.Fatal("the route projected an organization before the store read the token")
+	}
+	ensure := f.invites.accept.EnsureOrganization
+	if ensure == nil {
+		t.Fatal("the accept has no organization projection")
+	}
+	org := uuid.New()
+	if err := ensure(context.Background(), org); err != nil || f.orgs.calls != 1 || f.orgs.last != org {
+		t.Fatalf("the projection did not reach the route's ensurer with the invite's organization (calls %d, err %v)", f.orgs.calls, err)
+	}
+	f.invites.err = invite.ErrOrgConflict
+	expectRefusal(t, f.post(accept.path, encode(accept.body(f, f.target)), nil), http.StatusConflict, reasonOrganizationConflict)
+}
+
 // What each verb is given: the body's values, the actor and the request id,
 // and the request part of go-api's audit_logs row.
 func TestProvisioningPassesTheRequestToTheStores(t *testing.T) {
@@ -743,6 +770,7 @@ func TestProvisioningRefusalAnswers(t *testing.T) {
 		invite.ErrRoleInvalid: {400, reasonRoleInvalid}, invite.ErrTTLInvalid: {400, reasonTTLInvalid},
 		invite.ErrPendingExists: {409, reasonInvitePending}, invite.ErrAlreadyMember: {409, reasonAlreadyMember},
 		invite.ErrOrgNotFound: {404, reasonOrganizationNotFound}, invite.ErrOrgSuspended: {409, reasonOrganizationInactive},
+		invite.ErrOrgConflict:     {409, reasonOrganizationConflict},
 		invite.ErrInviterNotFound: {404, reasonInviterNotFound}, membership.ErrStateMoved: {409, reasonStateChanged},
 		fmt.Errorf("%w: boom", invite.ErrStore): {503, reasonStoreUnavailable},
 	} {

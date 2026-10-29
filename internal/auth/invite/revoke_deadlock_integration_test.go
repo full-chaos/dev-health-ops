@@ -50,12 +50,14 @@ VALUES ($1, $2, $3, 'member', $4, $5, 'pending', $6, now(), now())`, id, org, ad
 	free := func() { once.Do(func() { close(release) }) }
 	defer free()
 	revoked := make(chan error, 1)
+	var revokePID int32
 	go func() {
 		revoked <- e.store.Revoke(ctx, RevokeInput{OrgID: org, InviteID: id, Actor: Actor{PrincipalID: &a},
-			Authorize: func(context.Context, audit.TxOps, uuid.UUID) error {
+			Authorize: func(ctx context.Context, tx audit.TxOps, _ uuid.UUID) error {
+				err := tx.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&revokePID)
 				close(inAuthorize)
 				<-release
-				return nil
+				return err
 			}})
 	}()
 	select {
@@ -70,8 +72,10 @@ VALUES ($1, $2, $3, 'member', $4, $5, 'pending', $6, now(), now())`, id, org, ad
 		demoted <- err
 	}()
 	bound := time.After(10 * time.Second)
+	// Only a backend that the revoke blocks counts: the demotion.
 	for waiting := 0; waiting == 0; {
-		if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM pg_locks WHERE NOT granted`).Scan(&waiting); err != nil {
+		if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE $1::int = ANY(pg_blocking_pids(pid))`, revokePID).
+			Scan(&waiting); err != nil {
 			t.Fatal(err)
 		}
 		if waiting > 0 {

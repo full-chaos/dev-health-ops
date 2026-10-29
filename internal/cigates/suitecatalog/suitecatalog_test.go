@@ -268,6 +268,7 @@ func violations(t *testing.T, root string) []string {
 		}
 	}
 	bad = append(bad, lockViolations(t, root, rows)...)
+	bad = append(bad, topRowReasonViolations(t, root)...)
 	for _, f := range shellSuiteFiles(root) {
 		if !files[f] {
 			bad = append(bad, fmt.Sprintf("shell suite %s is named by no catalog row inputs", f))

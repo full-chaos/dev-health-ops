@@ -61,6 +61,7 @@ SHA=/usr/bin/sha256sum
 MKTEMP=/usr/bin/mktemp
 CMP=/usr/bin/cmp
 RM=/bin/rm
+CHMOD=/bin/chmod
 self="${BASH_SOURCE[0]}"
 here="${self%/*}"
 list_file="${here}/posture_integration_packages.tsv"
@@ -86,6 +87,7 @@ pfx=""
 changed_tmp=""
 json_tmp=""
 wt_root=""
+made_dirs=()
 cleanup() {
   if [ -n "${wt_root}" ]; then
     "${GIT}" worktree remove --force "${wt_root}/tree" > /dev/null 2>&1 || true
@@ -93,6 +95,11 @@ cleanup() {
     "${GIT}" worktree prune > /dev/null 2>&1 || true
   fi
   "${RM}" -f "${changed_tmp}" "${json_tmp}"
+  # A Go module cache is read-only: make it writable before removal. Only dirs this script created are listed.
+  for d in ${made_dirs[@]+"${made_dirs[@]}"}; do
+    "${CHMOD}" -R u+w "${d}" > /dev/null 2>&1 || true
+    "${RM}" -rf "${d}"
+  done
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
@@ -189,7 +196,10 @@ if [ -z "${stub}" ]; then
   [ -f "${capped}" ] && [ -x "${capped}" ] || { echo "runner not found: ${capped}" >&2; exit 3; }
 fi
 if [ -n "${stub}" ]; then
-  gomod="${GOMODCACHE:-$("${MKTEMP}" -d)}"; gocache="${GOCACHE:-$("${MKTEMP}" -d)}"; gotmp="${GOTMPDIR:-$("${MKTEMP}" -d)}"
+  gomod="${GOMODCACHE:-}"; gocache="${GOCACHE:-}"; gotmp="${GOTMPDIR:-}"
+  if [ -z "${gomod}" ]; then gomod="$("${MKTEMP}" -d)"; made_dirs+=("${gomod}"); fi
+  if [ -z "${gocache}" ]; then gocache="$("${MKTEMP}" -d)"; made_dirs+=("${gocache}"); fi
+  if [ -z "${gotmp}" ]; then gotmp="$("${MKTEMP}" -d)"; made_dirs+=("${gotmp}"); fi
 else
   gomod="/var/lib/oci-cache/go-mod"; gocache="/var/lib/oci-cache/go-build"; gotmp="/var/lib/oci-cache/go-tmp"
 fi

@@ -23,16 +23,26 @@ func (s *stubSigner) Check(context.Context) error { return errors.New("stub") }
 
 func classConfig(t *testing.T, class string) authconfig.Config {
 	t.Helper()
-	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(map[string]string{
+	return classConfigWith(t, class, nil)
+}
+
+func classConfigWith(t *testing.T, class string, extra map[string]string) authconfig.Config {
+	t.Helper()
+	env := map[string]string{
 		authconfig.EnvDatabaseURI:         "postgres://auth@127.0.0.1:1/devhealth",
 		authconfig.EnvSigningKeyFile:      "/nonexistent",
 		authconfig.EnvSigningKeyID:        "class-test",
 		authconfig.EnvAccessTokenClass:    class,
+		authconfig.EnvAccessTokenAudience: "auth-service",
 		authconfig.EnvTokenIssuerURL:      "https://auth.example.test",
 		authconfig.EnvValkeyURI:           testValkeyURI,
 		authconfig.EnvAccessTokenSecret:   "class-test-access-secret-0123456789abcdef",
 		authconfig.EnvSessionSuccessorKey: base64.RawURLEncoding.EncodeToString([]byte("class-test-successor-key-0032-ab")),
-	})})
+	}
+	for name, value := range extra {
+		env[name] = value
+	}
+	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(env)})
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}

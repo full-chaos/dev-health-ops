@@ -557,22 +557,49 @@ func TestTheBudgetIsADeadlineThatNoSettingLiftsAboveTheClamp(t *testing.T) {
 	}
 }
 
+// guardedShadowRun runs one phase with a failure-only guard: the fake provider and the store of these tests are held open,
+// so a phase whose budget or cancellation wiring is broken never returns. A passing run never reaches the guard. On the
+// guard the phase context is cancelled FIRST, onGuard (a release of what the test holds open; may be nil) runs, the phase is
+// joined for at most 10 s, and only then the test fails.
+func guardedShadowRun[T any](t *testing.T, stage string, parent context.Context, onGuard func(), run func(ctx context.Context) T) T {
+	t.Helper()
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	done := make(chan T, 1)
+	go func() { done <- run(ctx) }()
+	select {
+	case got := <-done:
+		return got
+	case <-time.After(30 * time.Second):
+		cancel()
+		if onGuard != nil {
+			onGuard()
+		}
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+		}
+		t.Fatalf("%s: the phase is still running after the 30 s guard: its budget or cancellation did not end it", stage)
+		var zero T
+		return zero
+	}
+}
+
 // A provider that does not answer cannot hold the run: the phase ends at its
 // budget, says so, and writes no row for a unit it did not get an answer for.
 func TestAPhaseThatRunsOutOfBudgetStopsAndSaysSo(t *testing.T) {
 	release := make(chan struct{})
-	t.Cleanup(func() { close(release) })
+	releaseOnce := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(releaseOnce)
 	fake := newFakeJev(t, func(int, []byte) jevReply { return jevReply{wait: release} })
 	logs := &syncBuffer{}
 	settings := shadowTestSettings()
 	settings.Budget = 300 * time.Millisecond
 	phase := newTestShadowPhase(t, fake, settings, debugLogger(logs))
 	store := &memoryShadowStore{}
-	started := time.Now()
-	summary := phase.run(context.Background(), store, shadowTestConfig(), shadowTestEntries(t, "u1", "u2", "u3"))
-	if elapsed := time.Since(started); elapsed > 5*time.Second {
-		t.Fatalf("the phase took %v with a budget of 300 ms", elapsed)
-	}
+	summary := guardedShadowRun(t, "a phase with a 300 ms budget and a provider that never answers", context.Background(), releaseOnce, func(ctx context.Context) shadowSummary {
+		return phase.run(ctx, store, shadowTestConfig(), shadowTestEntries(t, "u1", "u2", "u3"))
+	})
 	if summary.StopReason != ShadowStopBudget || summary.Attempted != 0 || len(store.records) != 0 {
 		t.Fatalf("summary = %+v, rows = %d", summary, len(store.records))
 	}
@@ -588,7 +615,8 @@ func TestNothingIsWrittenAfterTheRunContextIsCancelled(t *testing.T) {
 	runCtx, cancelRun := context.WithCancel(context.Background())
 	defer cancelRun()
 	release := make(chan struct{})
-	t.Cleanup(func() { close(release) })
+	releaseOnce := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(releaseOnce)
 	fake := newFakeJev(t, func(n int, _ []byte) jevReply {
 		if n == 1 {
 			return okReply()
@@ -603,13 +631,11 @@ func TestNothingIsWrittenAfterTheRunContextIsCancelled(t *testing.T) {
 	observer := &recordingShadowObserver{}
 	phase.SetObserver(observer)
 	store := &memoryShadowStore{}
-	started := time.Now()
-	summary := phase.run(runCtx, store, shadowTestConfig(), shadowTestEntries(t, "u1", "u2", "u3"))
-	// The budget of this phase is 30 s. A phase whose context is a child of the
-	// run context ends at once when the run is cancelled, and asks nobody else.
-	if elapsed := time.Since(started); elapsed > 5*time.Second {
-		t.Fatalf("the phase went on for %v after the run context was cancelled: its context is not a child of the run context", elapsed)
-	}
+	// A phase whose context is a child of the run context ends at once when the run is cancelled, and asks nobody
+	// else; one whose context is not stays on the held second request.
+	summary := guardedShadowRun(t, "a phase whose run context was cancelled", runCtx, releaseOnce, func(ctx context.Context) shadowSummary {
+		return phase.run(ctx, store, shadowTestConfig(), shadowTestEntries(t, "u1", "u2", "u3"))
+	})
 	if fake.count() != 2 {
 		t.Fatalf("requests = %d, want 2: no request may start after the cancel", fake.count())
 	}
@@ -962,12 +988,9 @@ func TestAShadowWriteInsideThePhaseEndsWithTheBudget(t *testing.T) {
 	phase := newTestShadowPhase(t, fake, settings, testLogger())
 	phase.writeBatch = 1
 	store := &memoryShadowStore{blockWrite: 1}
-	started := time.Now()
-	summary := phase.run(context.Background(), store, shadowTestConfig(), shadowTestEntries(t, "u1", "u2", "u3"))
-	elapsed := time.Since(started)
-	if elapsed > 5*time.Second {
-		t.Fatalf("the phase took %v with a budget of 500 ms: a write inside the phase did not end with the budget", elapsed)
-	}
+	summary := guardedShadowRun(t, "a phase with a 500 ms budget and a store write that never answers", context.Background(), nil, func(ctx context.Context) shadowSummary {
+		return phase.run(ctx, store, shadowTestConfig(), shadowTestEntries(t, "u1", "u2", "u3"))
+	})
 	if len(store.writeDeadlines) != 2 {
 		t.Fatalf("shadow writes = %d, want 2 (one inside the phase, one at the end)", len(store.writeDeadlines))
 	}

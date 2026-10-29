@@ -48,7 +48,14 @@ type Accounts interface {
 	ByID(ctx context.Context, id uuid.UUID) (*User, error)
 	// ProvisionLocal returns identity.ErrEmailTaken for a taken email.
 	ProvisionLocal(ctx context.Context, req ProvisionLocalRequest) (uuid.UUID, error)
-	SetEmailVerified(ctx context.Context, id uuid.UUID) error
+	// PeekVerificationLink reads the principal of a live verification link
+	// and consumes nothing.
+	PeekVerificationLink(ctx context.Context, tokenHash [32]byte) (principalID uuid.UUID, ok bool, err error)
+	// SetEmailVerifiedConsuming marks the address verified and consumes the
+	// verification link in one transaction, with one audit row.
+	// ErrVerificationLinkUnusable means the link was no longer usable at that
+	// moment and nothing changed.
+	SetEmailVerifiedConsuming(ctx context.Context, id uuid.UUID, link [32]byte) error
 	// PeekResetLink reads the principal of a live reset link and consumes
 	// nothing. ok is false, in the same one read, for a link of an account
 	// that is gone or of the service provider.
@@ -90,7 +97,6 @@ type RedeemRequest struct {
 // same refusal; the database clock decides expiry.
 type Links interface {
 	IssueBound(ctx context.Context, req IssueRequest) error
-	Redeem(ctx context.Context, req RedeemRequest) (principalID uuid.UUID, ok bool, err error)
 }
 
 // Message is one link e-mail. Deliver false is a decoy: the sender does the
@@ -118,6 +124,9 @@ type Locker interface {
 // ErrResetLinkUnusable is SetPasswordEndingSessions' refusal of a reset link
 // that was replayed, expired or replaced before the write: nothing changed.
 var ErrResetLinkUnusable = errors.New("local: the reset link is no longer usable")
+
+// ErrVerificationLinkUnusable is ErrResetLinkUnusable for a verification link.
+var ErrVerificationLinkUnusable = errors.New("local: the verification link is no longer usable")
 
 // PasswordEnd is one password write and what ends with it.
 type PasswordEnd struct {

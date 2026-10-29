@@ -256,12 +256,12 @@ var optionRegistry = []Option{
 	},
 	{
 		Env: EnvInviteTokenSecret, Kind: KindString, Secret: true, Group: GroupSession,
-		Usage: "signing key of new invite tokens (go-api's LINK_TOKEN_SECRET, else its JWT_SECRET_KEY chain); " +
+		Usage: "signing key of new invite tokens (go-api's LINK_TOKEN_SECRET; never AUTH_JWT_SECRET_KEY); " +
 			EnvInviteTokenSecret + "_FILE reads it from a mounted file instead. Required while " + EnvMembershipRoutes + " is true",
 	},
 	{
 		Env: EnvInviteTokenSecretPrevious, Kind: KindString, Secret: true, Group: GroupSession,
-		Usage: "retired invite token key, accepted and never used to sign (go-api's LINK_TOKEN_SECRET_PREVIOUS); " +
+		Usage: "retired invite token key, accepted and never used to sign (go-api's LINK_TOKEN_SECRET_PREVIOUS; never AUTH_JWT_SECRET_KEY); " +
 			EnvInviteTokenSecretPrevious + "_FILE reads it from a mounted file instead. Required while " + EnvMembershipRoutes + " is true",
 	},
 	{

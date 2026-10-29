@@ -12,6 +12,11 @@ import (
 // carries the closed Status.Reason and nothing else.
 var ErrNotUsableAsFloorSource = errors.New("revisionfeed: not usable as a floor source")
 
+// ErrNoFloors: the hash holds no floor. The fence counts a consumer input that reads fine as a usable source, which stops
+// the blind margin from applying; an empty hash (a fresh, flushed or lost Valkey) is no evidence of "no revision above 0", so
+// the input reports it as an error and the fence skips it ("read_failed"). Never an empty map, never a zero floor.
+var ErrNoFloors = errors.New("revisionfeed: no published floors")
+
 type floorInput struct{ client Client }
 
 // NewFloorInput is the revision feed as a restore-fence floor input: an ADVISORY lower bound (the fence takes the maximum

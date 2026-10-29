@@ -25,12 +25,20 @@ import (
 func revisionFeed(
 	cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
 ) (*audit.Publisher, []lifecycle.Component, error) {
+	return revisionFeedWith(cfg, logger, pool, schema, valkey.Open)
+}
+
+// revisionFeedWith is revisionFeed with the Valkey dialer given (tests count dials).
+func revisionFeedWith(
+	cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
+	dial func(context.Context, valkey.Config) (valkeygo.Client, error),
+) (*audit.Publisher, []lifecycle.Component, error) {
 	if !cfg.RevisionFeed {
 		return nil, nil, nil
 	}
 	config := valkey.DefaultConfig(cfg.ValkeyURI.Reveal())
 	config.ClientName = valkeyClientName
-	client := revisionfeed.NewLazyClient(func(ctx context.Context) (valkeygo.Client, error) { return valkey.Open(ctx, config) })
+	client := revisionfeed.NewLazyClient(func(ctx context.Context) (valkeygo.Client, error) { return dial(ctx, config) })
 	// The fence's census requires every outbox consumer to be a floor input. The registry is per process: this one is
 	// declared here, and the restore-fence CLI registers its own with its own login (a later leaf).
 	restorefence.RegisterFloorInput(revisionfeed.NewFloorInput(client))

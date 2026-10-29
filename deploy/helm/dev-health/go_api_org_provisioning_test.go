@@ -13,6 +13,10 @@ import (
 
 const orgProvisioningEnv = "AUTH_PROXY_ORG_PROVISIONING"
 
+// membershipRoutesOn sets AUTH_MEMBERSHIP_ROUTES=true on auth-service, the only way the chart mounts the provisioning
+// routes (it has no value of its own).
+var membershipRoutesOn = []string{"--set", "authService.extraEnv[0].name=AUTH_MEMBERSHIP_ROUTES", "--set-string", "authService.extraEnv[0].value=true"}
+
 func orgProvisioningArgs(phase string, sets ...string) []string {
 	return goAPIWithAuth(append(append([]string{"--set", "authService.phase=" + phase}, phase3Secrets...), sets...)...)
 }
@@ -41,11 +45,11 @@ func TestOrgProvisioningOffRendersByteEqualToNoValueAtAllPhases(t *testing.T) {
 
 func TestOrgProvisioningOnRendersTheSwitchTrueAndNothingElse(t *testing.T) {
 	for _, phase := range []string{"2", "3"} {
-		_, offOut, err := renderAuth(t, orgProvisioningArgs(phase)...)
+		_, offOut, err := renderAuth(t, orgProvisioningArgs(phase, membershipRoutesOn...)...)
 		if err != nil {
 			t.Fatalf("phase %s: render failed: %v\n%.400s", phase, err, offOut)
 		}
-		docs, onOut, err := renderAuth(t, orgProvisioningArgs(phase, "--set", "goApi.authProxy.orgProvisioning=true")...)
+		docs, onOut, err := renderAuth(t, orgProvisioningArgs(phase, append([]string{"--set", "goApi.authProxy.orgProvisioning=true"}, membershipRoutesOn...)...)...)
 		if err != nil {
 			t.Fatalf("phase %s, on: render failed: %v\n%.400s", phase, err, onOut)
 		}
@@ -107,5 +111,39 @@ func TestOrgProvisioningRefusals(t *testing.T) {
 				t.Fatalf("the refusal does not say %q: %.400s", tc.want, out)
 			}
 		})
+	}
+}
+
+// The switch makes go-api call auth-service's reactivate route, which exists only while AUTH_MEMBERSHIP_ROUTES is
+// true on auth-service. The chart refuses the switch on without that setting (authService.extraEnv is the only way
+// to set it), and renders it with it.
+func TestOrgProvisioningNeedsTheAuthMembershipRoutes(t *testing.T) {
+	const want = "goApi.authProxy.orgProvisioning needs authService.extraEnv AUTH_MEMBERSHIP_ROUTES=true"
+	on := []string{"--set", "goApi.authProxy.orgProvisioning=true"}
+	for name, sets := range map[string][]string{
+		"no setting":      on,
+		"set false":       append(append([]string{}, on...), "--set", "authService.extraEnv[0].name=AUTH_MEMBERSHIP_ROUTES", "--set-string", "authService.extraEnv[0].value=false"),
+		"set empty":       append(append([]string{}, on...), "--set", "authService.extraEnv[0].name=AUTH_MEMBERSHIP_ROUTES", "--set-string", "authService.extraEnv[0].value="),
+		"another setting": append(append([]string{}, on...), "--set", "authService.extraEnv[0].name=AUTH_OTHER", "--set-string", "authService.extraEnv[0].value=true"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, out, err := renderAuth(t, orgProvisioningArgs("2", sets...)...)
+			if err == nil {
+				t.Fatal("rendered; the switch on without the provisioning routes must be refused")
+			}
+			if !strings.Contains(out, want) {
+				t.Fatalf("the refusal does not say %q: %.400s", want, out)
+			}
+		})
+	}
+	docs, out, err := renderAuth(t, orgProvisioningArgs("2", append(append([]string{}, on...), membershipRoutesOn...)...)...)
+	if err != nil {
+		t.Fatalf("the switch on with the routes on: render failed: %v\n%.400s", err, out)
+	}
+	if got := proxyEnv(t, docs)[orgProvisioningEnv]; got != "true" {
+		t.Fatalf("%s = %q, want \"true\"", orgProvisioningEnv, got)
+	}
+	if _, out, err := renderAuth(t, orgProvisioningArgs("2", membershipRoutesOn...)...); err != nil || strings.Contains(out, orgProvisioningEnv) {
+		t.Fatalf("the routes on with the switch off: err=%v, mentions the switch=%v; want a render without it", err, strings.Contains(out, orgProvisioningEnv))
 	}
 }

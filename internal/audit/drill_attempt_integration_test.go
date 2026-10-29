@@ -196,8 +196,9 @@ func drillAttemptTry(t *testing.T, ctx context.Context, store *workload.Store, d
 	if err := os.WriteFile(filepath.Join(dir, "attempt-"+expect+"-"+os.Getenv("DRILL_LABEL")+".json"), encoded, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// The end-of-WAL copy (expect F) and a fenced PITR copy must refuse both; the unfenced PITR copy is the measured gap.
-	if (expect == "F" || fenced) && res.AcceptedAfterT != 0 {
-		t.Fatalf("revoked access is still usable: %d of 2 attempts accepted (expect=%s fenced=%v)", res.AcceptedAfterT, expect, fenced)
+	// The end-of-WAL copy (expect F) and a fenced PITR copy must refuse both, each for its own reason; the unfenced PITR
+	// copy is the measured gap and must accept both (the script turns a failure here into FAIL, not GAP).
+	if err := checkAttempts(expect, fenced, res.Tries); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -102,6 +102,11 @@ psql_in() { # service, sql
   dc exec -T "$1" psql -U postgres -At -c "$2"
 }
 
+# psql_rw runs a statement with the read-only default overridden for that session only (the PITR copy starts read-only).
+psql_rw() { # service, sql
+  dc exec -T -e PGOPTIONS='-c default_transaction_read_only=off' "$1" psql -U postgres -At -c "$2"
+}
+
 wait_promoted() { # service
   for _ in $(seq 1 90); do
     if [[ "$(psql_in "$1" 'select pg_is_in_recovery()' 2>/dev/null || true)" == "f" ]]; then return 0; fi
@@ -156,7 +161,11 @@ fi
 log "S1 start source (WAL archive on)"
 load_gate
 dc --profile src up -d --wait src
-drill "$port_src" migrate
+if [[ "$fence_mode" -eq 1 ]]; then
+  drill "$port_src" migrate DRILL_FENCE=1 # the full migrated schema: the fence carries the legacy public tables too
+else
+  drill "$port_src" migrate
+fi
 if [[ "$fence_mode" -eq 1 ]]; then
   # a database that is not a restore: the explicit init, once, on timeline 1 (the first-roll step)
   fence "$port_src" init >"$evidence/fence-init-src.txt"
@@ -225,8 +234,12 @@ if [[ "$fence_mode" -eq 1 ]]; then
   fence "$port_pitr" status >"$evidence/fence-status-after.txt" || result=1
   grep -q 'fenced=true' "$evidence/fence-status-after.txt" || { echo "drill-auth-pitr.sh: status after apply is not 'fenced=true'" >&2; result=1; }
   # reset the read-only default, as the runbook does before auth-service starts
-  psql_in pitr 'ALTER SYSTEM RESET default_transaction_read_only' >/dev/null
-  psql_in pitr 'SELECT pg_reload_conf()' >/dev/null
+  psql_rw pitr 'ALTER SYSTEM RESET default_transaction_read_only' >/dev/null
+  psql_rw pitr 'SELECT pg_reload_conf()' >/dev/null
+  for _ in $(seq 1 10); do # the reload is asynchronous
+    [[ "$(psql_in pitr 'show default_transaction_read_only')" == "off" ]] && break
+    sleep 1
+  done
   [[ "$(psql_in pitr 'show default_transaction_read_only')" == "off" ]] || { echo "drill-auth-pitr.sh: the read-only default was not reset" >&2; result=1; }
   drill "$port_pitr" post DRILL_EXPECT=T DRILL_FINAL=F DRILL_FENCE=1 || result=1
   dc --profile pitr stop pitr

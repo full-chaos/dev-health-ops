@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
 
 // TestDrillAuthPITR is the driver of scripts/drill-auth-pitr.sh (backup,
@@ -95,6 +96,11 @@ func drillMigrate(t *testing.T, ctx context.Context, admin *pgxpool.Pool, role s
 	}
 	if !regexp.MustCompile(`^[a-z_][a-z0-9_]{0,30}$`).MatchString(role) {
 		t.Fatalf("bad runtime role name %q", role)
+	}
+	if os.Getenv("DRILL_FENCE") == "1" {
+		// The restore fence carries the legacy public tables as well (refresh tokens, invites, reset tokens, ...): the
+		// fenced drill runs on the full migrated schema, as production does, or apply refuses on the missing tables.
+		pgschema.ApplyURI(ctx, t, admin.Config().ConnString())
 	}
 	if _, err := admin.Exec(ctx, fmt.Sprintf(`CREATE ROLE %q LOGIN PASSWORD '%s'`, role, password)); err != nil {
 		t.Fatalf("create runtime role: %v", err)

@@ -26,7 +26,14 @@ var droppedColumn = regexp.MustCompile("(?is)\\balter\\s+table\\s+`?([a-z0-9_]+)
 
 func droppedColumnsOfTheMigrations(t *testing.T) map[string]map[string]bool {
 	t.Helper()
-	files, err := filepath.Glob(filepath.Join("..", "chmigrate", "sql", "*.sql"))
+	// Every ClickHouse migration after the 098 baseline: the archived chain files 099..144 (the head baseline holds
+	// their end state, CHAOS-11751) and the live chain after them. A column or table any of them dropped is gone.
+	files, err := filepath.Glob(filepath.Join("..", "chmigrate", "archive", "sql", "*.sql"))
+	if err == nil {
+		var live []string
+		live, err = filepath.Glob(filepath.Join("..", "chmigrate", "sql", "*.sql"))
+		files = append(files, live...)
+	}
 	if err != nil || len(files) < 10 {
 		t.Fatalf("the census read %d migration files (%v): it did not measure the tree", len(files), err)
 	}
@@ -178,7 +185,14 @@ func TestRetiredColumnsAreOnlyTheNamedOnes(t *testing.T) {
 var droppedTable = regexp.MustCompile("(?is)\\bdrop\\s+table\\s+(?:if\\s+exists\\s+)?`?([a-z0-9_]+)`?\\s*;")
 
 func TestEveryDroppedTableOfAFrozenWorldIsRetiredByName(t *testing.T) {
-	files, err := filepath.Glob(filepath.Join("..", "chmigrate", "sql", "*.sql"))
+	// Every ClickHouse migration after the 098 baseline: the archived chain files 099..144 (the head baseline holds
+	// their end state, CHAOS-11751) and the live chain after them. A column or table any of them dropped is gone.
+	files, err := filepath.Glob(filepath.Join("..", "chmigrate", "archive", "sql", "*.sql"))
+	if err == nil {
+		var live []string
+		live, err = filepath.Glob(filepath.Join("..", "chmigrate", "sql", "*.sql"))
+		files = append(files, live...)
+	}
 	if err != nil || len(files) < 10 {
 		t.Fatalf("the census read %d migration files (%v): it did not measure the tree", len(files), err)
 	}

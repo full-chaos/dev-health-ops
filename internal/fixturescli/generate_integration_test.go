@@ -264,9 +264,15 @@ func derivedTables(t *testing.T, dsn string) map[string]bool {
 // ReplacingMergeTree tables with several versions of a row, and how many of them a raw SELECT sees
 // depends on which merges have run. With merges stopped, a database holds exactly the rows inserted
 // into it, in the capture and after a load alike.
+// stopMerges stops the merges of the tables of the DSN's database only: the package runs on a shared
+// ClickHouse server, where a server-wide SYSTEM STOP MERGES would outlive the test and stop every later one.
 func stopMerges(t *testing.T, dsn string) {
 	t.Helper()
-	clickHouseHTTP(t, dsn, "SYSTEM STOP MERGES")
+	database := strings.TrimSpace(clickHouseHTTP(t, dsn, "SELECT currentDatabase() FORMAT TSV"))
+	tables := clickHouseHTTP(t, dsn, "SELECT name FROM system.tables WHERE database = currentDatabase() AND engine LIKE '%MergeTree%' FORMAT TSV")
+	for _, name := range strings.Fields(tables) {
+		clickHouseHTTP(t, dsn, "SYSTEM STOP MERGES `"+database+"`.`"+name+"`")
+	}
 }
 
 func requireUTCServer(t *testing.T, dsn string) {
@@ -583,7 +589,7 @@ func TestGenerateVerbOnAPartiallyMigratedClickHouseWritesNothing(t *testing.T) {
 // must refuse before writing anything, not reinterpret every shifted value at the server's offset.
 func TestGenerateVerbRefusesANonUTCServer(t *testing.T) {
 	t.Setenv(containers.ClickHouseTimezoneEnv, "America/Los_Angeles")
-	ch := startClickHouse(t)
+	ch := startIsolatedClickHouse(t) // the zone is a property of the server: a shared one runs in UTC
 	before := rowCounts(t, ch.httpDSN)
 	code, stdout, stderr := runGenerateVerb(t, nil, acrArgs(ch.instance.URI)...)
 	if code != cli.ExitRefused || stdout != "" || !strings.Contains(stderr, "non_utc_server") || !strings.Contains(stderr, "America/Los_Angeles") {

@@ -87,11 +87,17 @@ func TestSocialLoginGoesOnWithAUsableProviderEmail(t *testing.T) {
 	}
 }
 
-// A lone surrogate in the profile email makes the profile unverified (oauthprovider.cleanProfileText), so the sign-in
-// keeps the unverified-email answer, which is read after the user lookup: the guard does not answer it.
-func TestSocialLoginKeepsTheUnverifiedAnswerForALoneSurrogateEmail(t *testing.T) {
-	code, body, _, pastGuard := socialLoginWithEmail(t, `"MARKER77\ud800@example.test"`)
-	if !pastGuard {
-		t.Fatalf("the email guard answered an unverified profile first: %d %q", code, body)
+// A lone surrogate in the profile email makes the profile unverified (oauthprovider.cleanProfileText): the sign-in is
+// answered with the unverified-email 403 before any database work, whether or not an account exists.
+func TestSocialLoginAnswersAnUnverifiedBadFormEmailBeforeTheDatabase(t *testing.T) {
+	code, body, logs, pastGuard := socialLoginWithEmail(t, `"MARKER77\ud800@example.test"`)
+	if pastGuard {
+		t.Fatal("the handler went on to the database with an unusable provider email")
+	}
+	if code != http.StatusForbidden || !strings.Contains(body, providerEmailUnverified) {
+		t.Fatalf("status %d body %q, want the 403 unverified-email answer", code, body)
+	}
+	if strings.Contains(body, "MARKER77") || strings.Contains(logs, "MARKER77") {
+		t.Fatalf("the provider email reached the response or the log: %q %q", body, logs)
 	}
 }

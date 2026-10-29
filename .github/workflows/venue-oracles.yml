@@ -90,6 +90,7 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8]
     env:
+      CHECK_GO_JOB_CAP_MIN: 40
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
       # Test seconds one leg may plan and run: the 2400 s job cap minus ~200 s of
       # setup minus drift. The verb warns over it; the shard test fails a plan over it.
@@ -230,6 +231,8 @@ jobs:
     name: auth-corpus-external (${{ matrix.leg }})
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      CHECK_GO_JOB_CAP_MIN: 45
     strategy:
       fail-fast: false
       matrix:

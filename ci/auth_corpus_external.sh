@@ -40,6 +40,11 @@ fi
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
 ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
+# The job start of the deadline, taken once here: the job runs this script in up to three steps, and a later step reads it from GITHUB_ENV.
+if [ -n "${CHECK_GO_JOB_CAP_MIN:-}" ] && [ -z "${CHECK_GO_JOB_START:-}" ]; then
+  CHECK_GO_JOB_START="$(bash "${ROOT}/ci/check_go.sh" job-start)" || die "no job start for the corpus deadline"
+  export CHECK_GO_JOB_START
+fi
 # CHAOS-11670: the tested package comes from the set the relevance script lists the closure of (ci/auth_corpus_set.sh).
 # shellcheck source=ci/auth_corpus_set.sh
 source "${SCRIPT_DIR}/auth_corpus_set.sh"
@@ -426,14 +431,17 @@ if [ "${LEG}" = "acp" ] && [ -z "${AUTH_CORPUS_USERS_UNOWNED:-}" ]; then
 else
   export DEVHEALTH_AUTH_ORACLE_USERS_OWNED=false
 fi
-TEST_CMD=(go test -trimpath -tags integration -count=1 -v -run '^TestAuthFlowVenueOracle$' "${AUTH_CORPUS_TEST_PACKAGE}")
+# The test limit comes from the job budget (the queue job has 30 min, the external workflow 45): 27 min at most, less when the
+# compose bring-up used part of the job.
+tmo="$(bash "${ROOT}/ci/check_go.sh" job-timeout 27)" || die "no job time budget left for the corpus test"
+TEST_CMD=(go test -trimpath -tags integration -count=1 -timeout="${tmo}" -v -run '^TestAuthFlowVenueOracle$' "${AUTH_CORPUS_TEST_PACKAGE}")
 if [ "${LEG}" = "acp" ] && [ -z "${AUTH_CORPUS_USERS_UNOWNED:-}" ]; then
   # The owned leg: the test seeds, signals, and waits; the flip (step 1e and 1f) runs once the users exist.
   export DEVHEALTH_AUTH_ORACLE_SEEDED_FILE="${SEEDED_FILE}" DEVHEALTH_AUTH_ORACLE_FLIPPED_FILE="${FLIPPED_FILE}"
   # The test runs as its own compiled binary, so the pid kept here is the test itself and cleanup kills that pid and nothing else.
   TEST_BIN="${WORK}/authflowvenue.test"
   (cd "${ROOT}" && go test -c -trimpath -tags integration -o "${TEST_BIN}" "${AUTH_CORPUS_TEST_PACKAGE}")
-  (cd "${ROOT}/${AUTH_CORPUS_TEST_PACKAGE#./}" && exec "${TEST_BIN}" -test.v -test.count=1 -test.run '^TestAuthFlowVenueOracle$') &
+  (cd "${ROOT}/${AUTH_CORPUS_TEST_PACKAGE#./}" && exec "${TEST_BIN}" -test.v -test.count=1 -test.timeout="${tmo}" -test.run '^TestAuthFlowVenueOracle$') &
   TEST_PID=$!
   while [ ! -e "${SEEDED_FILE}" ] && kill -0 "${TEST_PID}" 2>/dev/null; do sleep 1; done
   if [ ! -e "${SEEDED_FILE}" ]; then

@@ -472,7 +472,7 @@ func TestAuthCorpusAcpLegKeysStayOutOfArgumentsAndOutput(t *testing.T) {
 
 func TestAuthCorpusAcpLegMasksTheKeysBeforeAnythingElse(t *testing.T) {
 	metrics := metric("sessions") + "\n" + metric("local_login")
-	fake, out, err := runAcpLeg(t, "GITHUB_ACTIONS=true", "FAKE_SERVED="+requiredServed, "FAKE_METRICS="+metrics)
+	fake, out, err := runAcpLeg(t, "GITHUB_ACTIONS=true", "CHECK_GO_JOB_CAP_MIN=30", "FAKE_SERVED="+requiredServed, "FAKE_METRICS="+metrics)
 	if err != nil {
 		t.Fatalf("leg acp failed: %v\n%s", err, out)
 	}

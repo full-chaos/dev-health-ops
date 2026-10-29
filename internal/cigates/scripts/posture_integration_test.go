@@ -902,8 +902,9 @@ func TestPostureIntegrationStubRunLeavesNoTempDirsBehind(t *testing.T) {
 
 func TestPostureIntegrationStubRunLeavesNoTempDirsBehindOnAFailingExit(t *testing.T) {
 	f := postureDemo(t)
+	// An empty PATH dir: a hosted runner has go in /usr/bin, so the dirs /usr/bin:/bin cannot stand for "no go".
 	tmp, env := postureTmpEnv(t)
-	env = append(env, "PATH=/usr/bin:/bin")
+	env = append(env, "PATH="+t.TempDir())
 	res := postureStubRun(t, f, "#!/bin/sh\nexit 0\n", env)
 	if res.code != 3 || !strings.Contains(res.stderr, "go not found") {
 		t.Fatalf("no go on PATH: exit %d stderr=%q, want exit 3 and go not found", res.code, res.stderr)
@@ -1022,7 +1023,7 @@ func TestPostureIntegrationStubRunHandlesADashRelativeTmpdir(t *testing.T) {
 		t.Fatalf("stub run: exit %d stdout=%q stderr=%q, want exit 5", res.code, res.stdout, res.stderr)
 	}
 	requireEmptyDir(t, scratch, "a dash-relative TMPDIR after a pass")
-	res = postureStubRun(t, f, "#!/bin/sh\nexit 0\n", append(append([]string{}, env...), "PATH=/usr/bin:/bin"))
+	res = postureStubRun(t, f, "#!/bin/sh\nexit 0\n", append(append([]string{}, env...), "PATH="+t.TempDir()))
 	if res.code != 3 || !strings.Contains(res.stderr, "go not found") {
 		t.Fatalf("no go on PATH: exit %d stderr=%q, want exit 3 and go not found", res.code, res.stderr)
 	}

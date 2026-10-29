@@ -40,6 +40,15 @@ func (f floorInput) Status(ctx context.Context) error {
 	return nil
 }
 
+// Floors fails closed: an unreachable store is an error with no map, and an empty hash is ErrNoFloors with no map. The
+// fence skips an input whose read fails, so neither can pass as a usable source or as a zero floor.
 func (f floorInput) Floors(ctx context.Context) (map[string]int64, error) {
-	return PublishedFloors(ctx, f.client)
+	floors, err := PublishedFloors(ctx, f.client)
+	if err != nil {
+		return nil, err
+	}
+	if len(floors) == 0 {
+		return nil, ErrNoFloors
+	}
+	return floors, nil
 }

@@ -150,9 +150,13 @@ channel.
 - **A restore-fence floor input.** The restore fence's census requires every outbox
   consumer to hand its high-water marks to the fence, so the feed is one
   (`revisionfeed.NewFloorInput`): an advisory lower bound that the fence uses only
-  while `ReadStatus` says usable. The registry is per process; the auth-service
-  registers its input when the feed is on, and the restore-fence CLI will register
-  its own with its own Valkey login (a later leaf).
+  while `ReadStatus` says usable. It fails closed: a store that is not usable
+  (including the chart default `allkeys-lru`) or unreachable is reported as such,
+  and an empty hash is `ErrNoFloors`, never an empty map or a zero floor (the fence
+  would count an empty input as a usable source and refuse the blind margin). The
+  registry is per process; the auth-service registers its input only when the feed
+  is on, and the restore-fence CLI will register its own with its own Valkey login
+  (CHAOS-11978, which blocks the production flag flip).
 - **Restore.** Until the restore-fence leaf that reads these floors ships, a
   restore does not use the Valkey hash, and **the flag must stay off in
   production**.

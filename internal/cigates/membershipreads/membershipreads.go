@@ -6,16 +6,19 @@
 // copies would make them a second read authority and would need an auth-schema GRANT that nobody holds. The query-api
 // login holds no privilege on those two auth tables; this gate is the code side of the same rule.
 //
-// A SITE is a string literal (a raw string, an interpreted string, or a concatenation of literals folded into one) of
-// production code under one of Scopes that names `<qualifier>.memberships` or `<qualifier>.organizations` where the
-// qualifier is anything but `public`: auth, a quoted "auth", a Sprintf verb (%s), or no visible qualifier at all (a
-// literal that starts with ".memberships" because the schema is concatenated in front). Case and spaces around the dot do
-// not matter. There is no allow list: a read of those tables has no legitimate place in these packages.
+// A SITE is a string literal, or a `+` chain folded into one string, of production code under one of Scopes that names
+// `<qualifier>.memberships` or `<qualifier>.organizations` where the qualifier is anything but `public`: auth, a quoted
+// "auth", a Sprintf verb (%s), or no visible qualifier at all (a literal that starts with ".memberships" because the schema is
+// concatenated in front). Case and spaces around the dot do not matter. A chain is folded when every operand is a literal, a
+// string conversion, or a constant of the same package (declared in any file of the directory, in a grouped block, typed or
+// untyped, built from other constants) or of the enclosing function; a constant of ANOTHER package is not loaded, and a table
+// name right behind one is refused by name as unresolved. There is no allow list: a read of those tables has no legitimate
+// place in these packages.
 //
 // NOT covered, stated: code outside Scopes (the shared storage packages, internal/auth/**, which is auth-service and holds
 // the writes), an unqualified `memberships` that a search_path resolves to the auth schema (the query-api and go-api
-// logins pin their search_path and the posture test pins their grants), SQL assembled from pieces no literal fold
-// reaches (a name built by a function call or a variable), and _test.go files.
+// logins pin their search_path and the posture test pins their grants), SQL assembled from a variable or a call between
+// the fragments (those operands are not folded; the fragments are scanned one by one), and _test.go files.
 package membershipreads
 
 import (
@@ -53,26 +56,56 @@ var (
 	qualifierEnd = regexp.MustCompile(`("[^"]*"|[A-Za-z0-9_%$]+)\s*$`)
 )
 
-// Check scans the non-test .go files below each scope root of root and returns one named finding per site, sorted. A file
-// that does not parse is an error: a gate that skipped it would scan nothing.
+// unresolved stands in the folded text for a constant the gate cannot resolve (a constant of another package, or a name
+// declared more than once in a scope): a table name right behind it is refused by name.
+const unresolved = "\x00"
+
+type parsedFile struct {
+	rel  string
+	dir  string
+	fset *token.FileSet
+	file *ast.File
+}
+
+// Check scans the non-test .go files below each scope root of root and returns one named finding per site, sorted. A
+// file that does not parse is an error: a gate that skipped it would scan nothing. A string expression is folded when
+// every operand is a literal, a string conversion, or a constant of the same package (any file of the directory; typed or
+// untyped; in a grouped block; built from other constants) or of the enclosing function.
 func Check(root string, scopes []Scope) ([]string, error) {
 	var findings []string
 	for _, scope := range scopes {
-		err := walk(root, scope, func(rel string, fset *token.FileSet, file *ast.File) {
-			ast.Inspect(file, func(n ast.Node) bool {
-				text, ok := foldString(n)
-				if !ok {
-					return true
-				}
-				for _, ref := range refs(text) {
-					findings = append(findings, fmt.Sprintf("%s:%d: membership-read: %s code names %s: go-api and query-api read public.memberships and public.organizations only; auth-service writes both copies in one transaction (D6358, CHAOS-10985)",
-						rel, fset.Position(n.Pos()).Line, scope.Service, ref))
-				}
-				return false
-			})
-		})
+		files, err := collect(root, scope)
 		if err != nil {
 			return nil, err
+		}
+		tables := packageConsts(files)
+		for _, pf := range files {
+			imports := importNames(pf.file)
+			for _, decl := range pf.file.Decls {
+				fl := &folder{pkg: tables[pf.dir], imports: imports}
+				if fd, ok := decl.(*ast.FuncDecl); ok && fd.Body != nil {
+					fl.local = declaredConsts(fd.Body)
+				}
+				ast.Inspect(decl, func(n ast.Node) bool {
+					text, ok := "", false
+					switch e := n.(type) {
+					case *ast.BasicLit:
+						text, ok = fl.fold(e)
+					case *ast.BinaryExpr:
+						text, ok = fl.fold(e)
+					default:
+						return true
+					}
+					if !ok {
+						return true
+					}
+					for _, ref := range refs(text) {
+						findings = append(findings, fmt.Sprintf("%s:%d: membership-read: %s code names %s: go-api and query-api read public.memberships and public.organizations only; auth-service writes both copies in one transaction (D6358, CHAOS-10985)",
+							pf.rel, pf.fset.Position(n.Pos()).Line, scope.Service, ref))
+					}
+					return false
+				})
+			}
 		}
 	}
 	sort.Strings(findings)
@@ -84,9 +117,12 @@ func Check(root string, scopes []Scope) ([]string, error) {
 func Packages(root string, scopes []Scope) ([]string, error) {
 	seen := map[string]bool{}
 	for _, scope := range scopes {
-		err := walk(root, scope, func(rel string, _ *token.FileSet, _ *ast.File) { seen[path.Dir(rel)] = true })
+		files, err := collect(root, scope)
 		if err != nil {
 			return nil, err
+		}
+		for _, pf := range files {
+			seen[pf.dir] = true
 		}
 	}
 	out := make([]string, 0, len(seen))
@@ -97,9 +133,10 @@ func Packages(root string, scopes []Scope) ([]string, error) {
 	return out, nil
 }
 
-func walk(root string, scope Scope, visit func(rel string, fset *token.FileSet, file *ast.File)) error {
+func collect(root string, scope Scope) ([]parsedFile, error) {
 	base := filepath.Join(root, filepath.FromSlash(scope.Root))
-	return filepath.WalkDir(base, func(p string, d fs.DirEntry, err error) error {
+	var files []parsedFile
+	err := filepath.WalkDir(base, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if p == base {
 				return nil // a scope root that does not exist scans nothing; the real-tree test requires every root to hold code
@@ -126,43 +163,153 @@ func walk(root string, scope Scope, visit func(rel string, fset *token.FileSet, 
 		if err != nil {
 			return fmt.Errorf("membershipreads: cannot parse %s: %w", rel, err)
 		}
-		visit(rel, fset, file)
+		files = append(files, parsedFile{rel: rel, dir: path.Dir(rel), fset: fset, file: file})
 		return nil
 	})
+	return files, err
 }
 
-// foldString is the text of a string literal, or of a `+` chain of literals, which is folded into one string. A chain
-// with any non-literal operand is not folded as a whole: its literal operands are visited one by one.
-func foldString(n ast.Node) (string, bool) {
-	switch e := n.(type) {
+// constTable maps a constant name to the expressions that declare it; more than one means the name is ambiguous.
+type constTable map[string][]ast.Expr
+
+func (t constTable) add(spec *ast.ValueSpec, values []ast.Expr) {
+	for i, name := range spec.Names {
+		if name.Name == "_" || i >= len(values) {
+			continue
+		}
+		t[name.Name] = append(t[name.Name], values[i])
+	}
+}
+
+// declaredConsts are the constants of a function body (every const declaration inside it).
+func declaredConsts(body ast.Node) constTable {
+	table := constTable{}
+	ast.Inspect(body, func(n ast.Node) bool {
+		if gd, ok := n.(*ast.GenDecl); ok && gd.Tok == token.CONST {
+			addConstSpecs(table, gd)
+		}
+		return true
+	})
+	return table
+}
+
+// addConstSpecs adds a const block: a spec with no values repeats the values of the one before it, as Go does.
+func addConstSpecs(table constTable, gd *ast.GenDecl) {
+	var values []ast.Expr
+	for _, sp := range gd.Specs {
+		vs := sp.(*ast.ValueSpec)
+		if len(vs.Values) > 0 {
+			values = vs.Values
+		}
+		table.add(vs, values)
+	}
+}
+
+// packageConsts is the constant table of each directory: the top-level const blocks of every non-test file in it.
+func packageConsts(files []parsedFile) map[string]constTable {
+	tables := map[string]constTable{}
+	for _, pf := range files {
+		table := tables[pf.dir]
+		if table == nil {
+			table = constTable{}
+			tables[pf.dir] = table
+		}
+		for _, decl := range pf.file.Decls {
+			if gd, ok := decl.(*ast.GenDecl); ok && gd.Tok == token.CONST {
+				addConstSpecs(table, gd)
+			}
+		}
+	}
+	return tables
+}
+
+// importNames are the names the file's imports bind (an alias, or the last element of the path).
+func importNames(file *ast.File) map[string]bool {
+	names := map[string]bool{}
+	for _, imp := range file.Imports {
+		if imp.Name != nil {
+			if imp.Name.Name != "_" && imp.Name.Name != "." {
+				names[imp.Name.Name] = true
+			}
+			continue
+		}
+		if p, err := strconv.Unquote(imp.Path.Value); err == nil {
+			names[path.Base(p)] = true
+		}
+	}
+	return names
+}
+
+// folder folds a string expression to its text. Not folded (ok false): a variable, a call, a field, or anything that is
+// not a constant string. A constant the gate cannot resolve folds to the unresolved marker.
+type folder struct {
+	pkg     constTable
+	local   constTable
+	imports map[string]bool
+	depth   int
+}
+
+func (f *folder) fold(e ast.Expr) (string, bool) {
+	if f.depth > 32 {
+		return unresolved, true
+	}
+	switch x := e.(type) {
 	case *ast.BasicLit:
-		if e.Kind != token.STRING {
+		if x.Kind != token.STRING {
 			return "", false
 		}
-		s, err := strconv.Unquote(e.Value)
+		s, err := strconv.Unquote(x.Value)
 		return s, err == nil
+	case *ast.ParenExpr:
+		return f.fold(x.X)
 	case *ast.BinaryExpr:
-		if e.Op != token.ADD {
+		if x.Op != token.ADD {
 			return "", false
 		}
-		left, ok := foldOperand(e.X)
+		left, ok := f.fold(x.X)
 		if !ok {
 			return "", false
 		}
-		right, ok := foldOperand(e.Y)
+		right, ok := f.fold(x.Y)
 		if !ok {
 			return "", false
 		}
 		return left + right, true
+	case *ast.CallExpr:
+		if id, ok := x.Fun.(*ast.Ident); ok && id.Name == "string" && len(x.Args) == 1 && f.table(id.Name) == nil {
+			return f.fold(x.Args[0])
+		}
+	case *ast.Ident:
+		table := f.table(x.Name)
+		if table == nil {
+			return "", false
+		}
+		exprs := table[x.Name]
+		if len(exprs) != 1 {
+			return unresolved, true
+		}
+		child := &folder{pkg: f.pkg, imports: f.imports, depth: f.depth + 1}
+		if _, isLocal := f.local[x.Name]; isLocal {
+			child.local = f.local
+		}
+		return child.fold(exprs[0])
+	case *ast.SelectorExpr:
+		if id, ok := x.X.(*ast.Ident); ok && f.imports[id.Name] && f.table(id.Name) == nil {
+			return unresolved, true
+		}
 	}
 	return "", false
 }
 
-func foldOperand(e ast.Expr) (string, bool) {
-	if p, ok := e.(*ast.ParenExpr); ok {
-		return foldOperand(p.X)
+// table is the scope that declares name: the function's constants first, then the package's; nil when neither does.
+func (f *folder) table(name string) constTable {
+	if _, ok := f.local[name]; ok {
+		return f.local
 	}
-	return foldString(e)
+	if _, ok := f.pkg[name]; ok {
+		return f.pkg
+	}
+	return nil
 }
 
 // refs lists the references in text to a table that is not in the public schema, as they are written.
@@ -171,6 +318,10 @@ func refs(text string) []string {
 	for _, m := range tableDot.FindAllStringSubmatchIndex(text, -1) {
 		table := strings.ToLower(text[m[2]:m[3]])
 		qualifier := ""
+		if strings.HasSuffix(text[:m[0]], unresolved) {
+			out = append(out, fmt.Sprintf("%s after a constant of another package the gate does not load (refused as unresolved)", strings.ToLower(text[m[2]:m[3]])))
+			continue
+		}
 		if q := qualifierEnd.FindString(text[:m[0]]); q != "" {
 			qualifier = strings.TrimSpace(q)
 		}

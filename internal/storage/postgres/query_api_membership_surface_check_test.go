@@ -6,6 +6,8 @@ import (
 	"strings"
 )
 
+const queryAPIAuthSchema = "auth"
+
 var (
 	queryAPIMembershipColumns = []string{"org_id", "role", "user_id"}
 	queryAPISessionColumns    = []string{"id", "legacy_token_version", "principal_id", "revoked_at"}
@@ -43,6 +45,9 @@ func queryAPIAuthSurfaceDefects(p RolePosture, session QueryAPISessionRead) []st
 	sort.Strings(got)
 	if strings.Join(got, ",") != strings.Join(queryAPIMembershipColumns, ",") {
 		out = append(out, fmt.Sprintf("memberships columns = %v, want exactly %v", got, queryAPIMembershipColumns))
+	}
+	if session.Schema != queryAPIAuthSchema {
+		out = append(out, fmt.Sprintf("the session read is in schema %q, want the auth schema %q", session.Schema, queryAPIAuthSchema))
 	}
 	columns := append([]string{}, session.Columns...)
 	sort.Strings(columns)

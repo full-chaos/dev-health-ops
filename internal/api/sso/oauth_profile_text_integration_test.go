@@ -110,16 +110,19 @@ func TestOAuthCallbackNewUserWithASurrogateInTheProfileText(t *testing.T) {
 	}
 }
 
-// A lone surrogate in the email is refused with the unverified-email answer and writes nothing, new user or not.
+// A lone surrogate in the email is refused by the provider email rule before the verified-email check: 400
+// invalid_provider_email, one "provisioning" denial row, nothing else written.
 func TestOAuthCallbackRefusesASurrogateInTheEmail(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
-	st, _, providerID, _ := oauthStack(t, ctx, oauthProfileWith("44", `e\ud800@example.test`, "Cy", ""))
+	st, orgID, providerID, _ := oauthStack(t, ctx, oauthProfileWith("44", `e\ud800@example.test`, "Cy", ""))
 	before := snapshotRows(t, ctx, st)
 	status, body := oauthCallbackOnce(t, st, providerID)
-	if status != http.StatusForbidden || body["detail"] != "No verified email address is available from this OAuth provider" {
-		t.Fatalf("status=%d body=%v, want 403 No verified email address is available from this OAuth provider", status, body)
+	detail, _ := body["detail"].(map[string]any)
+	if status != http.StatusBadRequest || detail["reason"] != "invalid_provider_email" {
+		t.Fatalf("status=%d body=%v, want 400 invalid_provider_email", status, body)
 	}
+	assertSSOAuditStage(t, ctx, st.pool, orgID, "provisioning")
 	assertNoRowsWritten(t, ctx, st, before)
 }
 

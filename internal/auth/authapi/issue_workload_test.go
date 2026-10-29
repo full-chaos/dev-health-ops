@@ -264,6 +264,10 @@ func TestIssueSessionRefusesWrongCredentialsBeforeAnyRead(t *testing.T) {
 		"oversized jws": func(*workloadIssueFixture) map[string]string {
 			return bearerOf(strings.Repeat("a", 3000) + "." + strings.Repeat("b", 3000) + ".c")
 		},
+		"oversized workload token": func(w *workloadIssueFixture) map[string]string {
+			h, _ := w.mint("workload+jwt", nil)
+			return bearerOf(strings.TrimPrefix(h["Authorization"], "Bearer ") + strings.Repeat("A", 3000))
+		},
 		"empty bearer": func(*workloadIssueFixture) map[string]string { return map[string]string{"Authorization": "Bearer "} },
 		"basic scheme": func(*workloadIssueFixture) map[string]string {
 			return map[string]string{"Authorization": "Basic Z29vZA=="}

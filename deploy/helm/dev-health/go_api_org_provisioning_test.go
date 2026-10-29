@@ -125,6 +125,11 @@ func TestOrgProvisioningNeedsTheAuthMembershipRoutes(t *testing.T) {
 		"set false":       append(append([]string{}, on...), "--set", "authService.extraEnv[0].name=AUTH_MEMBERSHIP_ROUTES", "--set-string", "authService.extraEnv[0].value=false"),
 		"set empty":       append(append([]string{}, on...), "--set", "authService.extraEnv[0].name=AUTH_MEMBERSHIP_ROUTES", "--set-string", "authService.extraEnv[0].value="),
 		"another setting": append(append([]string{}, on...), "--set", "authService.extraEnv[0].name=AUTH_OTHER", "--set-string", "authService.extraEnv[0].value=true"),
+		// auth-service reads the exact name, and the last entry with that name wins in the rendered env.
+		"lower-case name": append(append([]string{}, on...), "--set", "authService.extraEnv[0].name=auth_membership_routes", "--set-string", "authService.extraEnv[0].value=true"),
+		"true then false": append(append([]string{}, on...), "--set", "authService.extraEnv[0].name=AUTH_MEMBERSHIP_ROUTES", "--set-string", "authService.extraEnv[0].value=true",
+			"--set", "authService.extraEnv[1].name=AUTH_MEMBERSHIP_ROUTES", "--set-string", "authService.extraEnv[1].value=false"),
+		"upper-case value": append(append([]string{}, on...), "--set", "authService.extraEnv[0].name=AUTH_MEMBERSHIP_ROUTES", "--set-string", "authService.extraEnv[0].value=TRUE"),
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, out, err := renderAuth(t, orgProvisioningArgs("2", sets...)...)
@@ -142,6 +147,12 @@ func TestOrgProvisioningNeedsTheAuthMembershipRoutes(t *testing.T) {
 	}
 	if got := proxyEnv(t, docs)[orgProvisioningEnv]; got != "true" {
 		t.Fatalf("%s = %q, want \"true\"", orgProvisioningEnv, got)
+	}
+	// false then true: the last entry wins, and it is true.
+	lastTrue := append(append([]string{}, on...), "--set", "authService.extraEnv[0].name=AUTH_MEMBERSHIP_ROUTES", "--set-string", "authService.extraEnv[0].value=false",
+		"--set", "authService.extraEnv[1].name=AUTH_MEMBERSHIP_ROUTES", "--set-string", "authService.extraEnv[1].value=true")
+	if _, out, err := renderAuth(t, orgProvisioningArgs("2", lastTrue...)...); err != nil {
+		t.Fatalf("false then true: render failed: %v\n%.400s", err, out)
 	}
 	if _, out, err := renderAuth(t, orgProvisioningArgs("2", membershipRoutesOn...)...); err != nil || strings.Contains(out, orgProvisioningEnv) {
 		t.Fatalf("the routes on with the switch off: err=%v, mentions the switch=%v; want a render without it", err, strings.Contains(out, orgProvisioningEnv))

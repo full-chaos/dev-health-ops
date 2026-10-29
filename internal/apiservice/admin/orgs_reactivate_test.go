@@ -51,7 +51,9 @@ type reactivationDB struct {
 	log    *orderLog
 	found  bool
 	active bool
-	sqls   []string
+	// seq, when set, is the is_active each successive read of the row sees (a suspend that lands between reads).
+	seq  []bool
+	sqls []string
 }
 
 var errNoWrite = errors.New("reactivationDB: no write in this test")
@@ -75,6 +77,9 @@ func (d *reactivationDB) Query(_ context.Context, sql string, _ ...any) (pgx.Row
 func (d *reactivationDB) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
 	d.log.add("db:select")
 	d.sqls = append(d.sqls, strings.Join(strings.Fields(sql), " "))
+	if len(d.seq) > 0 {
+		d.active, d.seq = d.seq[0], d.seq[1:]
+	}
 	return orgRow{d}
 }
 
@@ -189,15 +194,16 @@ func TestPatchIsActiveTrueFailsClosedWhenAuthRefusesOrIsDown(t *testing.T) {
 	}
 }
 
-// Only a request that turns an inactive organization active reaches auth.
-func TestPatchWithTheSwitchOnCallsAuthOnlyForAReactivation(t *testing.T) {
+// Every is_active=true request of a found organization reaches auth, whatever the first read saw: a suspend that lands
+// between that read and the write would otherwise let go-api write is_active=true with no auth call.
+func TestPatchWithTheSwitchOnCallsAuthForEveryIsActiveTrueOfAFoundOrg(t *testing.T) {
 	for name, tc := range map[string]struct {
 		body   string
 		found  bool
 		active bool
 		auth   int
 	}{
-		"true on an active org":   {`{"is_active": true}`, true, true, 0},
+		"true on an active org":   {`{"is_active": true}`, true, true, 1},
 		"false on an active org":  {`{"is_active": false}`, true, true, 0},
 		"false on a suspended":    {`{"is_active": false}`, true, false, 0},
 		"no is_active":            {`{"name": "N"}`, true, false, 0},
@@ -217,5 +223,46 @@ func TestPatchWithTheSwitchOnCallsAuthOnlyForAReactivation(t *testing.T) {
 	h := newReactivationHandlers(&reactivationDB{log: log}, &fakeAuthReactivator{log: log})
 	if code, body := patchOrg(h, `{"is_active": true}`); code != http.StatusNotFound || !strings.Contains(body, "Organization not found") {
 		t.Fatalf("a missing org: %d %s, want the 404 of today", code, body)
+	}
+}
+
+// The race: the gate's read sees an active organization, a suspend lands, and the write would turn it active
+// again. Auth is called exactly once, before any write, whatever the first read saw.
+func TestPatchIsActiveTrueCallsAuthEvenWhenTheFirstReadSawActive(t *testing.T) {
+	log := &orderLog{}
+	db := &reactivationDB{log: log, found: true, seq: []bool{true, false, false}}
+	auth := &fakeAuthReactivator{log: log}
+	patchOrg(newReactivationHandlers(db, auth), `{"is_active": true}`)
+	if auth.calls != 1 {
+		t.Fatalf("%d auth calls, want exactly 1 although the first read saw an active organization", auth.calls)
+	}
+	if a, w := log.index("auth"), log.index("db:begin"); a < 0 || w < 0 || a > w {
+		t.Fatalf("order %v, want the auth call before the write transaction", log.steps)
+	}
+}
+
+// An already-active organization with the switch on: auth is called, and the update runs after it.
+func TestPatchIsActiveTrueOnAnActiveOrgCallsAuthThenWrites(t *testing.T) {
+	log := &orderLog{}
+	db := &reactivationDB{log: log, found: true, active: true}
+	auth := &fakeAuthReactivator{log: log}
+	patchOrg(newReactivationHandlers(db, auth), `{"is_active": true}`)
+	if auth.calls != 1 || log.index("db:begin") < 0 || log.index("auth") > log.index("db:begin") {
+		t.Fatalf("auth calls=%d order %v, want the auth call and then the write transaction", auth.calls, log.steps)
+	}
+}
+
+// With the first read active, an auth refusal or outage is a 503 and no write.
+func TestPatchIsActiveTrueOnAnActiveOrgFailsClosedWhenAuthFails(t *testing.T) {
+	for name, err := range map[string]error{"down": orgreactivate.ErrUnavailable, "refused": orgreactivate.ErrRefused} {
+		log := &orderLog{}
+		db := &reactivationDB{log: log, found: true, active: true}
+		code, body := patchOrg(newReactivationHandlers(db, &fakeAuthReactivator{log: log, err: err}), `{"is_active": true}`)
+		if code != http.StatusServiceUnavailable || strings.TrimSpace(body) != authUnavailableBody {
+			t.Fatalf("%s: %d %s, want 503 %s", name, code, body, authUnavailableBody)
+		}
+		if log.index("db:begin") != -1 {
+			t.Fatalf("%s: the write ran after auth failed: %v", name, log.steps)
+		}
 	}
 }

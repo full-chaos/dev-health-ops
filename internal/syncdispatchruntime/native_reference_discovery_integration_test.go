@@ -10,16 +10,10 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
-
-func createReferenceDiscoveryTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
-	t.Helper()
-	pgschema.Apply(ctx, t, pool)
-}
 
 const (
 	discoveryTestOrg         = "00000000-0000-4000-8000-0000000000d1"
@@ -80,17 +74,13 @@ func (e retryableDiscoveryError) Retryable() bool { return true }
 func TestNativeReferenceDiscoverySucceedsAndArmsDispatch(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	createReferenceDiscoveryTables(t, ctx, pool)
 	seedDiscoveryRoute(t, ctx, pool)
 
 	executor := &fakeDiscoveryExecutor{summary: map[string]any{"reference_team_keys": []string{"ENG"}}}
@@ -133,17 +123,13 @@ func TestNativeReferenceDiscoverySucceedsAndArmsDispatch(t *testing.T) {
 func TestNativeReferenceDiscoverySkipsAnAlreadyClaimedRun(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	createReferenceDiscoveryTables(t, ctx, pool)
 	seedDiscoveryRoute(t, ctx, pool)
 
 	ledgerID := "00000000-0000-4000-8000-0000000000d5"
@@ -175,17 +161,13 @@ VALUES ($1,$2,$3,'running',1,now(),'someone-else',now() + interval '1 hour',now(
 func TestNativeReferenceDiscoveryRetriesARetryableFailure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	createReferenceDiscoveryTables(t, ctx, pool)
 	seedDiscoveryRoute(t, ctx, pool)
 
 	executor := &fakeDiscoveryExecutor{err: retryableDiscoveryError{message: "rate limited, please retry"}}
@@ -259,17 +241,13 @@ func TestNativeReferenceDiscoveryTerminatesAfterExhaustingRetries(t *testing.T) 
 	t.Setenv("SYNC_REFERENCE_DISCOVERY_MAX_ATTEMPTS", "1")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	createReferenceDiscoveryTables(t, ctx, pool)
 	seedDiscoveryRoute(t, ctx, pool)
 	unitID := "00000000-0000-4000-8000-0000000000d6"
 	sourceID := "00000000-0000-4000-8000-0000000000d7"
@@ -351,17 +329,13 @@ func TestNativeReferenceDiscoveryTerminatesAfterExhaustingRetries(t *testing.T) 
 func TestFailNonterminalUnitsAcquiresTheBucketAdvisoryLockBeforeAnyUnitWrite(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	createReferenceDiscoveryTables(t, ctx, pool)
 	seedDiscoveryRoute(t, ctx, pool)
 	unitID := "00000000-0000-4000-8000-0000000000e7"
 	sourceID := "00000000-0000-4000-8000-0000000000e8"
@@ -447,17 +421,13 @@ func TestNativeReferenceDiscoveryTerminatesAfterExhaustingRetriesRecordsTheRollu
 	t.Setenv("SYNC_REFERENCE_DISCOVERY_MAX_ATTEMPTS", "1")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	createReferenceDiscoveryTables(t, ctx, pool)
 	seedDiscoveryRoute(t, ctx, pool)
 	unitID := "00000000-0000-4000-8000-0000000000fa"
 	sourceID := "00000000-0000-4000-8000-0000000000fb"
@@ -494,17 +464,13 @@ func TestNativeReferenceDiscoveryTerminatesAfterExhaustingRetriesRecordsTheRollu
 func TestNativeReferenceDiscoveryLostLeaseDoesNotOverwriteAWinner(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	createReferenceDiscoveryTables(t, ctx, pool)
 	seedDiscoveryRoute(t, ctx, pool)
 
 	service, err := NewNativeReferenceDiscoveryService(pool, nil, &fakeDiscoveryExecutor{})
@@ -547,17 +513,13 @@ VALUES ($1,$2,$3,'success',1,now(),now(),'{}'::json,now(),now())`,
 func TestNativeReferenceDiscoveryTerminalizesRunWhenFeatureDisabled(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	createReferenceDiscoveryTables(t, ctx, pool)
 	seedDiscoveryRoute(t, ctx, pool)
 	unitID := "00000000-0000-4000-8000-0000000000d9"
 	sourceID := "00000000-0000-4000-8000-0000000000da"
@@ -639,17 +601,13 @@ func TestNativeReferenceDiscoveryTerminalizesRunWhenFeatureDisabled(t *testing.T
 func TestNativeReferenceDiscoveryTerminalizesRunWhenFeatureDisabledRecordsTheRollupBumpMetric(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	createReferenceDiscoveryTables(t, ctx, pool)
 	seedDiscoveryRoute(t, ctx, pool)
 	unitID := "00000000-0000-4000-8000-0000000000e5"
 	sourceID := "00000000-0000-4000-8000-0000000000e6"
@@ -695,17 +653,13 @@ func TestNativeReferenceDiscoveryTerminalizesRunWhenFeatureDisabledRecordsTheRol
 func TestNativeReferenceDiscoveryProceedsWhenFeatureNotRequired(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	createReferenceDiscoveryTables(t, ctx, pool)
 	seedDiscoveryRoute(t, ctx, pool)
 	unitID := "00000000-0000-4000-8000-0000000000db"
 	sourceID := "00000000-0000-4000-8000-0000000000dc"
@@ -744,17 +698,13 @@ func TestNativeReferenceDiscoveryProceedsWhenFeatureNotRequired(t *testing.T) {
 func TestResolveAuthoritativeProviderTreatsAQueryFailureAsRetryable(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	createReferenceDiscoveryTables(t, ctx, pool)
 	seedDiscoveryRoute(t, ctx, pool)
 
 	service, err := NewNativeReferenceDiscoveryService(pool, nil, &fakeDiscoveryExecutor{})
@@ -790,17 +740,13 @@ func TestResolveAuthoritativeProviderTreatsAQueryFailureAsRetryable(t *testing.T
 func TestNativeReferenceDiscoveryRoutesAStampSuccessFailureThroughHandleFailure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	createReferenceDiscoveryTables(t, ctx, pool)
 	seedDiscoveryRoute(t, ctx, pool)
 
 	// Break stampSuccess's UPDATE at the database level -- not a Go-level

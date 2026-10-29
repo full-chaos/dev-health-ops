@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -51,10 +52,7 @@ func withRouteHoldFixture(t *testing.T, fn func(ctx context.Context, fixture rou
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
@@ -66,7 +64,6 @@ func withRouteHoldFixture(t *testing.T, fn func(ctx context.Context, fixture rou
 	// Repository/Relay claim-and-deliver path drives it), worker_job_routes (seeded on river for
 	// sync.provider_unit) and worker_job_runs (Rollback's live-claims check reads it). A River schema
 	// is added below, after Apply (which wants an empty database).
-	createReferenceDiscoveryTables(t, ctx, pool)
 	pgseed.Org(ctx, t, pool, discoveryTestOrg, "community")
 
 	// A real River schema this Postgres instance owns -- DomainRole/

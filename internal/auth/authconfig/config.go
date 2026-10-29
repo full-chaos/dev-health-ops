@@ -87,6 +87,8 @@ const (
 	EnvAccessTokenSecret   = "AUTH_JWT_SECRET_KEY"
 	EnvAccessTokenIssuer   = "AUTH_JWT_ISSUER"
 	EnvAccessTokenAudience = "AUTH_JWT_AUDIENCE"
+	// EnvLegacyJWTAudience is the audience of go-api's HS256 compatibility access token under the eddsa class.
+	EnvLegacyJWTAudience = "AUTH_LEGACY_JWT_AUDIENCE"
 	// EnvAccessTokenClass picks the one class of access token this service
 	// mints: hs256_compat (the default) or eddsa. Exact match, no fallback.
 	EnvAccessTokenClass = "AUTH_ACCESS_TOKEN_CLASS"
@@ -260,6 +262,8 @@ type SessionTokens struct {
 	AccessSecret   secrets.Value
 	AccessIssuer   string
 	AccessAudience string
+	// LegacyAudience is the audience of go-api's HS256 token under the eddsa class.
+	LegacyAudience string
 	SuccessorKey   secrets.Value
 	// LoginEnabled is set with LockoutKey: the login route is mounted.
 	LoginEnabled bool
@@ -323,6 +327,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.String("jwt_audience", c.Session.AccessAudience),
 		slog.String("access_class", c.Session.AccessClass),
 		slog.Bool("workload_exchange_enabled", c.WorkloadExchange.Enabled),
+		slog.Bool("workload_bootstrap_enabled", c.WorkloadExchange.Bootstrap),
 	}
 }
 
@@ -478,6 +483,12 @@ func Load(spec Spec) (Config, error) {
 				EnvAccessTokenClass, AccessClassEdDSA, EnvAccessTokenAudience)
 		}
 	}
+	if cfg.Session.Enabled && cfg.Session.AccessClass == AccessClassEdDSA && cfg.Session.AccessAudience != contracts.SessionRouteAudience {
+		// The session routes accept an EdDSA token of audience auth-service only: started like this every
+		// signed-in user's token would be refused at every one of them.
+		return Config{}, fmt.Errorf("%s=%s with %s=%s: the session routes accept the EdDSA access token only with audience %s; the issuer switch (CHAOS-10456) must mint that audience before this class can start",
+			EnvAccessTokenClass, AccessClassEdDSA, EnvAccessTokenAudience, cfg.Session.AccessAudience, contracts.SessionRouteAudience)
+	}
 	if cfg.TrustedProxies, err = clientaddr.ParseTrust(valueOf(lookup, EnvTrustedProxies)); err != nil {
 		return Config{}, err
 	}
@@ -572,6 +583,13 @@ func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 		AccessClass:    class,
 		AccessIssuer:   stringOr(lookup, EnvAccessTokenIssuer, defaultAccessTokenIssuer),
 		AccessAudience: stringOr(lookup, EnvAccessTokenAudience, defaultAccessTokenAudience),
+	}
+	out.LegacyAudience = contracts.PlatformAPIAudience
+	if raw, set := lookup(EnvLegacyJWTAudience); set {
+		if raw == "" || raw != strings.TrimSpace(raw) {
+			return SessionTokens{}, fmt.Errorf("%s is set but empty or has surrounding whitespace: unset it for go-api's default audience", EnvLegacyJWTAudience)
+		}
+		out.LegacyAudience = raw
 	}
 	access, hasAccess, err := secrets.ResolveSecret(EnvAccessTokenSecret, lookup)
 	if err != nil {

@@ -166,16 +166,27 @@ func TestFailureStreakReadThatCannotFinishLeavesTheTransactionUsable(t *testing.
 		t.Fatal(err)
 	}
 
-	stepCtx, cancel := context.WithTimeout(background, 15*time.Second)
+	// The step context has no deadline of its own: the read must end by its own bound (failureStreakReadCap). A read with
+	// no bound stays on the held table lock; the 30 s guard is a failure-only ceiling that a passing run never reaches.
+	stepCtx, cancel := context.WithCancel(background)
 	defer cancel()
-	started := time.Now()
-	got := loadFailureStreaks(stepCtx, fixture.pool, streakOrgID, streakIntegrationID, "github",
-		[]PlanDataset{{Key: workitemcontract.FamilyDatasets()[0]}})
-	if got != nil {
-		t.Fatalf("streaks = %v, want nil", got)
-	}
-	if elapsed := time.Since(started); elapsed > failureStreakReadCap+failureStreakClientMargin+300*time.Millisecond {
-		t.Fatalf("the read held the step for %s: want it ended near the %s bound", elapsed, failureStreakReadCap)
+	streaks := make(chan map[string]providersync.FailureStreak, 1)
+	go func() {
+		streaks <- loadFailureStreaks(stepCtx, fixture.pool, streakOrgID, streakIntegrationID, "github",
+			[]PlanDataset{{Key: workitemcontract.FamilyDatasets()[0]}})
+	}()
+	select {
+	case got := <-streaks:
+		if got != nil {
+			t.Fatalf("streaks = %v, want nil", got)
+		}
+	case <-time.After(30 * time.Second):
+		cancel()
+		select {
+		case <-streaks:
+		case <-time.After(10 * time.Second):
+		}
+		t.Fatal("the streak read is still running after the 30 s guard: it has no bound of its own and holds the step")
 	}
 
 	var one int

@@ -5,10 +5,11 @@ auth.identity.projections	kind,outcome	code: internal/auth/identity/store.go
 auth.identity.wire_slug_omitted		code: internal/auth/identity/store.go
 auth.oidc.outcomes	outcome,reason,route	code: internal/auth/identity/oidc/service.go
 auth.org.mutations	outcome,verb	code: internal/auth/org/store.go
+auth.membership.mutations	outcome,verb	code: internal/auth/membership/store.go
 auth.session.refresh_exchanges	reason_code	code: internal/auth/session/store.go
 auth.session.revocations	reason	code: internal/auth/session/store.go
 auth.social.outcomes	operation,provider,reason_code	code: internal/auth/identity/social/service.go
-auth.workload.exchanges	audience,outcome,reason	code: internal/auth/workloadexchange/reasons.go
+auth.workload.exchanges	audience,outcome,reason,subject	code: internal/auth/workloadexchange/reasons.go
 auth.workload.mutations	outcome,verb	code: internal/auth/workload/store.go
 auth.workload.resolves	outcome	code: internal/auth/workload/store.go
 credential_mapping_rejected_total	missing_field,provider	code: internal/providerfoundation/credential_mapping_metrics.go
@@ -184,6 +185,8 @@ dev_health_jira_dev_status_total	outcome	code: internal/providerfoundation/budge
 dev_health_jira_search_pages_total	outcome	code: internal/providerfoundation/budget.go
 dev_health_metric_compat_retry_total	decision,worker_kind	code: internal/jobruntime/telemetry.go
 dev_health_metrics_finite_boundary_nonfinite_total	family,field,reason	code: internal/jobs/metrics/finite/finite.go
+dev_health_org_activity_refresh_age_read_failed_total		code: internal/orgactivity/refresh/age.go
+dev_health_org_activity_refresh_age_seconds		code: internal/orgactivity/refresh/age.go
 dev_health_otel_init_failures_total	attempt	code: internal/platform/tracing/initfailures.go
 dev_health_otel_spans_total	outcome	code: internal/platform/tracing/spancounters.go
 dev_health_otel_spans_unaccounted		code: internal/platform/tracing/spancounters.go

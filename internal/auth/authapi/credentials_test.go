@@ -69,9 +69,20 @@ func (c *credFakes) ProvisionLocal(_ context.Context, req local.ProvisionLocalRe
 	c.provisioned = append(c.provisioned, req)
 	return uuid.New(), nil
 }
-func (c *credFakes) SetEmailVerified(_ context.Context, id uuid.UUID) error {
+func (c *credFakes) PeekVerificationLink(_ context.Context, hash [32]byte) (uuid.UUID, bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	id, ok := c.links[credLinkKey{local.PurposeEmailVerification, hash}]
+	return id, ok, nil
+}
+func (c *credFakes) SetEmailVerifiedConsuming(_ context.Context, _ uuid.UUID, link [32]byte) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	key := credLinkKey{local.PurposeEmailVerification, link}
+	if _, ok := c.links[key]; !ok {
+		return local.ErrVerificationLinkUnusable
+	}
+	delete(c.links, key)
 	c.user.IsVerified = true
 	return nil
 }

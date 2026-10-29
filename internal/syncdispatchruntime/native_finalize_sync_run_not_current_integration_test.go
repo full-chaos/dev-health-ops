@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/otel"
@@ -26,17 +26,13 @@ import (
 func TestNativeFinalizeSyncRunLogsAndCountsADeliveryThatIsNotCurrent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	createFinalizeTables(t, ctx, pool)
 	seedFinalizeRouteRow(t, ctx, pool)
 	pgseed.EnsureSyncIntegration(ctx, t, pool, finalizeTestOrg, finalizeTestIntegration, finalizeTestSource)
 	pgseed.SyncConfiguration(ctx, t, pool, finalizeTestSyncConfig, finalizeTestOrg, finalizeTestIntegration, `{}`, time.Now())
@@ -106,17 +102,13 @@ func TestNativeFinalizeSyncRunLogsAndCountsADeliveryThatIsNotCurrent(t *testing.
 func TestNativeFinalizeSyncRunReportsTheRouteGenerationWhenTheOutboxRowIsMissing(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	createFinalizeTables(t, ctx, pool)
 	seedFinalizeRoute(t, ctx, pool)
 	insertFinalizeRun(t, ctx, pool, 1, "", "")
 	if _, err := pool.Exec(ctx, `DELETE FROM sync_dispatch_outbox WHERE id = $1`, finalizeTestOutbox); err != nil {

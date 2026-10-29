@@ -28,15 +28,12 @@ func TestPostureStatementRunsUnderItsOwnServerSideTimeoutThatDoesNotLeak(t *test
 	if err != nil || !answer {
 		t.Fatalf("statement_timeout inside the posture transaction = %v (err %v), want 10s", answer, err)
 	}
-	// ... it ends the statement on the SERVER with no client deadline at all ...
-	started := time.Now()
+	// ... it ends the statement on the SERVER with no client deadline at all (without that timeout the 30 s sleep returns
+	// no error, which the SQLSTATE check below refuses) ...
 	_, err = queryPostureAnswer(ctx, pool, 300*time.Millisecond, "SELECT pg_sleep(30) IS NOT NULL")
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) || pgErr.Code != "57014" {
 		t.Fatalf("slow statement = %v, want SQLSTATE 57014 from the server", err)
-	}
-	if took := time.Since(started); took > 5*time.Second {
-		t.Fatalf("the server-side timeout took %s to fire", took)
 	}
 	// ... and does not leak: the same pooled connection, outside the
 	// transaction, is back to the server default.

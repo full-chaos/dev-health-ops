@@ -114,14 +114,14 @@ func servedAuthRoutesWithIssuer(t *testing.T, issuer string) map[string]bool {
 	if err != nil {
 		t.Fatalf("sessionRoutes: %v", err)
 	}
-	credentials, _, err := credentialRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, mustLimits(t))
+	credentials, _, err := credentialRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, mustLimits(t), nil)
 	if err != nil {
 		t.Fatalf("credentialRoutes: %v", err)
 	}
 	for _, route := range append(routes, credentials...) {
 		registered["api"] = append(registered["api"], route.Pattern)
 	}
-	if cfg.WorkloadExchange.Enabled {
+	if cfg.WorkloadExchange.Mounted() {
 		registered["api"] = append(registered["api"], workloadexchange.Pattern)
 	}
 	seenWellKnown := map[string]bool{}
@@ -509,9 +509,10 @@ func TestAWellKnownRowWithNoRouteIsStale(t *testing.T) {
 	}
 }
 
-// exchangeEnvironment turns the workload-token exchange on for the probe: a
-// throwaway CA bundle and reviewer token file, so configure builds the route.
-// The probe sends no valid request, so nothing reaches TokenReview.
+// exchangeEnvironment turns the workload-token exchange on for the probe, with
+// both subjects: a throwaway CA bundle and reviewer token file, so configure
+// builds the route. The probe sends no valid request, so nothing reaches
+// TokenReview or the bootstrap registry.
 func exchangeEnvironment(t *testing.T, env map[string]string) {
 	t.Helper()
 	tls := httptest.NewTLSServer(http.NotFoundHandler())
@@ -527,6 +528,7 @@ func exchangeEnvironment(t *testing.T, env map[string]string) {
 		t.Fatal(err)
 	}
 	env[authconfig.EnvWorkloadExchange] = "true"
+	env[authconfig.EnvWorkloadBootstrap] = "true"
 	env[authconfig.EnvWorkloadTrustDomain] = "cluster.example.test"
 	env[authconfig.EnvWorkloadClusterIssuer] = "https://kubernetes.default.svc.cluster.local"
 	env[authconfig.EnvWorkloadKubeAPIURL] = "https://kubernetes.default.svc"

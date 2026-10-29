@@ -9,18 +9,15 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"net/url"
 	"os"
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
-
-	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
 // The executed proof of `dho migrate clickhouse upgrade|status` (CHAOS-6899):
@@ -176,23 +173,43 @@ func (cut goldenCutOff) wantVersionSets(py migrateFact, dhoState string) (applie
 
 // migrateEnv is one database on the shared server, seen by both planes.
 type migrateEnv struct {
-	instance *containers.Instance
-	admin    driver.Conn
+	mu      sync.Mutex
+	scratch map[string]scratchDB
+	// baseline is the head baseline and chain the live chain after it: what dho applies.
 	baseline chmigrate.Baseline
 	chain    []chmigrate.ChainFile
-	cut      goldenCutOff
-	frozen   map[string]migrateFact
+	// pyBaseline and archived are what the Python facts were recorded over: the 098 baseline and the chain files
+	// after it, archived when the baseline moved to the chain head (CHAOS-11751).
+	pyBaseline chmigrate.Baseline
+	archived   []chmigrate.ChainFile
+	cut        goldenCutOff
+	frozen     map[string]migrateFact
 }
 
 func (e *migrateEnv) nativeURI(t *testing.T, database string) string {
 	t.Helper()
-	parsed, err := url.Parse(e.instance.URI)
-	if err != nil {
-		t.Fatal(err)
-	}
-	parsed.Path = "/" + database
-	return parsed.String()
+	return e.uri(t, database)
 }
+
+// handle names a database that newDatabase returned. It is unique per call:
+// with the shared mode off every private container has the same database
+// name, so the name cannot identify a database.
+func (e *migrateEnv) lookup(t *testing.T, handle string) scratchDB {
+	t.Helper()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	scratch, ok := e.scratch[handle]
+	if !ok {
+		t.Fatalf("database handle %q was not taken from newDatabase", handle)
+	}
+	return scratch
+}
+
+// uri is the native DSN of the database behind handle.
+func (e *migrateEnv) uri(t *testing.T, handle string) string { return e.lookup(t, handle).URI }
+
+// dbName is the name of the database behind handle, as the server knows it.
+func (e *migrateEnv) dbName(t *testing.T, handle string) string { return e.lookup(t, handle).Name }
 
 // goVerb runs `dho migrate clickhouse <verb>` on database.
 func (e *migrateEnv) goVerb(t *testing.T, database, verb, contract string, args ...string) (int, string, string) {
@@ -219,7 +236,7 @@ func (e *migrateEnv) goVerb(t *testing.T, database, verb, contract string, args 
 // schemaDigest is the digest of the database as an upgrade leaves it.
 func (e *migrateEnv) schemaDigest(t *testing.T, database string) string {
 	t.Helper()
-	captured := capture(t, context.Background(), openDatabase(t, e.instance.URI, database), database, productionContract)
+	captured := capture(t, context.Background(), openDatabase(t, e.uri(t, database), ""), e.dbName(t, database), productionContract)
 	raw, err := json.Marshal(captured)
 	if err != nil {
 		t.Fatal(err)
@@ -228,7 +245,18 @@ func (e *migrateEnv) schemaDigest(t *testing.T, database string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (e *migrateEnv) newDatabase(t *testing.T) string { return scratchDatabase(t, e.admin) }
+func (e *migrateEnv) newDatabase(t *testing.T) string {
+	t.Helper()
+	return e.register(scratchDatabase(t))
+}
+
+func (e *migrateEnv) register(scratch scratchDB) string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	handle := fmt.Sprintf("scratch-%d", len(e.scratch))
+	e.scratch[handle] = scratch
+	return handle
+}
 
 // pythonFact is the Python plane's fact for the step, read from the frozen golden
 // (the Python producer cannot run any more: CHAOS-7793).
@@ -301,14 +329,15 @@ func nameDigests(names []string) []string {
 // head).
 func (e *migrateEnv) goVersionSets(t *testing.T, database string, status chmigrate.Status) (applied, pending []string) {
 	t.Helper()
-	conn := openDatabase(t, e.instance.URI, database)
+	conn := openDatabase(t, e.uri(t, database), "")
+	databaseName := e.dbName(t, database)
 	var exists uint64
-	if err := conn.QueryRow(context.Background(), "SELECT count() FROM system.tables WHERE database = ? AND name = ?", database, chmigrate.SchemaMigrationsTable).Scan(&exists); err != nil {
+	if err := conn.QueryRow(context.Background(), "SELECT count() FROM system.tables WHERE database = ? AND name = ?", databaseName, chmigrate.SchemaMigrationsTable).Scan(&exists); err != nil {
 		t.Fatal(err)
 	}
 	var recorded []string
 	if exists == 1 {
-		rows, err := conn.Query(context.Background(), "SELECT version FROM `"+database+"`.schema_migrations ORDER BY version")
+		rows, err := conn.Query(context.Background(), "SELECT version FROM `"+databaseName+"`.schema_migrations ORDER BY version")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -345,12 +374,6 @@ func sortedCopy(in []string) []string {
 
 func newMigrateEnv(t *testing.T) *migrateEnv {
 	t.Helper()
-	ctx := context.Background()
-	instance, err := containers.StartClickHouse(ctx)
-	if err != nil {
-		t.Fatalf("start clickhouse: %v", err)
-	}
-	t.Cleanup(func() { _ = instance.Close(context.Background()) })
 	baseline, err := chmigrate.LoadBaseline()
 	if err != nil {
 		t.Fatal(err)
@@ -359,11 +382,13 @@ func newMigrateEnv(t *testing.T) *migrateEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cut, err := splitChainAtGoldenHead(chain, migrateGoldenHead)
+	pyBaseline, archived := loadArchivedBaseline(t), loadArchivedChain(t)
+	cut, err := splitChainAtGoldenHead(append(append([]chmigrate.ChainFile(nil), archived...), chain...), migrateGoldenHead)
 	if err != nil {
 		t.Fatal(err)
 	}
-	env := &migrateEnv{instance: instance, admin: openDatabase(t, instance.URI, ""), baseline: baseline, chain: chain, cut: cut, frozen: map[string]migrateFact{}}
+	env := &migrateEnv{scratch: map[string]scratchDB{}, baseline: baseline, chain: chain,
+		pyBaseline: pyBaseline, archived: archived, cut: cut, frozen: map[string]migrateFact{}}
 	raw, err := os.ReadFile(migrateGolden)
 	if err != nil {
 		t.Fatal(err)
@@ -400,7 +425,7 @@ func runMigrateScenarios(t *testing.T) *migrateEnv {
 	// The versions the frozen Python facts count: the baseline and the chain
 	// up to migrateGoldenHead. dho's own count is this plus the files above
 	// the cut-off, which requireSameStatus checks by name.
-	totalVersions := len(e.baseline.Versions) + len(e.cut.frozen)
+	totalVersions := len(e.pyBaseline.Versions) + len(e.cut.frozen)
 
 	// ---- status of a database no verb has touched ----
 	emptyGo := e.newDatabase(t)
@@ -417,7 +442,7 @@ func runMigrateScenarios(t *testing.T) *migrateEnv {
 
 	// ---- status of a foreign database (an unrelated table, no versions) ----
 	foreignGo := e.newDatabase(t)
-	if err := openDatabase(t, e.instance.URI, foreignGo).Exec(ctx, "CREATE TABLE unrelated_sentinel (x Int8) ENGINE = Memory"); err != nil {
+	if err := openDatabase(t, e.uri(t, foreignGo), "").Exec(ctx, "CREATE TABLE unrelated_sentinel (x Int8) ENGINE = Memory"); err != nil {
 		t.Fatal(err)
 	}
 	name := "status foreign --check"
@@ -448,11 +473,11 @@ func runMigrateScenarios(t *testing.T) *migrateEnv {
 	// migrateGoldenHead, so it is compared with what dho builds from the SAME
 	// files: the baseline and the chain up to the cut-off.
 	frozenHead := e.newDatabase(t)
-	frozenDB, _, err := chmigrate.NewConnDB(ctx, openDatabase(t, e.instance.URI, frozenHead))
+	frozenDB, _, err := chmigrate.NewConnDB(ctx, openDatabase(t, e.uri(t, frozenHead), ""))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if built, err := chmigrate.Upgrade(ctx, frozenDB, e.baseline, e.cut.frozen); err != nil || built.Action != "baseline_applied" {
+	if built, err := chmigrate.Upgrade(ctx, frozenDB, e.pyBaseline, e.cut.frozen); err != nil || built.Action != "baseline_applied" {
 		t.Fatalf("dho upgrade to the golden's head: %+v, %v", built, err)
 	}
 	if got := e.schemaDigest(t, frozenHead); got != up.Schema {
@@ -464,19 +489,46 @@ func runMigrateScenarios(t *testing.T) *migrateEnv {
 			t.Errorf("upgrade fresh: dho left digest %s, python %s: the two runners built different databases", headSchema, up.Schema)
 		}
 	} else {
-		// The files above the cut-off, by Go-only rules: the verb applies
-		// exactly these files to the database Python's chain ends at, in
-		// chain order, and the result is the database a fresh upgrade of the
-		// whole chain builds. A file the verb skips, applies twice, or applies
-		// with another result on an existing database than on a fresh one
-		// fails here.
-		code, stdout, stderr := e.goVerb(t, frozenHead, "upgrade", "2")
-		var stepped chmigrate.Result
-		if err := json.Unmarshal([]byte(stdout), &stepped); code != 0 || err != nil || stepped.Action != "chain_applied" || !reflect.DeepEqual(stepped.Applied, e.cut.aboveVersions()) {
-			t.Errorf("dho upgrade from %s: exit %d, %q (%v) %s: want chain_applied naming exactly %v", migrateGoldenHead, code, stdout, err, stderr, e.cut.aboveVersions())
+		// The files above the cut-off, by Go-only rules. The archived ones are
+		// versions of the head baseline since it moved to the chain head
+		// (CHAOS-11751), so the database the old runner left at the cut-off is
+		// below this build's head: the verb refuses it, naming exactly those
+		// files, and writes nothing. Built the old way to the end (every
+		// archived file, then the live chain), it is the database a fresh
+		// upgrade builds. A file the head baseline does not record, records
+		// under another name, or builds differently fails here.
+		var archivedAbove []string
+		for _, file := range e.cut.above {
+			for _, archived := range e.archived {
+				if archived.Version == file.Version {
+					archivedAbove = append(archivedAbove, file.Version)
+				}
+			}
 		}
-		if got := e.schemaDigest(t, frozenHead); got != headSchema {
-			t.Errorf("dho upgrade from %s left digest %s, a fresh upgrade of the whole chain %s: the %d chain file(s) above the cut-off do not give one database", migrateGoldenHead, got, headSchema, len(e.cut.above))
+		before := e.schemaDigest(t, frozenHead)
+		_, refused := e.goStatus(t, frozenHead)
+		if refused.State != "below_head" || !reflect.DeepEqual(refused.Missing, archivedAbove) {
+			t.Errorf("dho status at %s: %s missing %v, want below_head missing exactly the archived files above it %v", migrateGoldenHead, refused.State, refused.Missing, archivedAbove)
+		}
+		code, stdout, stderr := e.goVerb(t, frozenHead, "upgrade", "2")
+		if code != cli.ExitFailure || stdout != "" || !strings.Contains(stderr, `"code":"below_head"`) || e.schemaDigest(t, frozenHead) != before {
+			t.Errorf("dho upgrade from %s: exit %d, stdout %q, stderr %q: want a below_head refusal that writes nothing", migrateGoldenHead, code, stdout, stderr)
+		}
+		stepped := e.newDatabase(t)
+		steppedDB, _, err := chmigrate.NewConnDB(ctx, openDatabase(t, e.uri(t, stepped), ""))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := chmigrate.Upgrade(ctx, steppedDB, e.pyBaseline, e.archived); err != nil {
+			t.Fatalf("the old way to the archived head: %v", err)
+		}
+		if len(e.chain) > 0 {
+			if _, err := chmigrate.Upgrade(ctx, steppedDB, e.baseline, e.chain); err != nil {
+				t.Fatalf("the live chain over the archived head: %v", err)
+			}
+		}
+		if got := e.schemaDigest(t, stepped); got != headSchema {
+			t.Errorf("the old way to the head left digest %s, a fresh upgrade %s: the %d chain file(s) above the cut-off do not give one database", got, headSchema, len(e.cut.above))
 		}
 		if headSchema == up.Schema {
 			t.Errorf("the whole chain has %d file(s) above %s and still gives python's digest %s: their version rows are not in the database", len(e.cut.above), migrateGoldenHead, up.Schema)
@@ -511,8 +563,9 @@ func runMigrateScenarios(t *testing.T) *migrateEnv {
 	}
 
 	// ---- below the head: one version unrecorded ----
-	dropped := e.baseline.Versions[len(e.baseline.Versions)/2]
-	if err := openDatabase(t, e.instance.URI, goHead).Exec(ctx, "ALTER TABLE schema_migrations DELETE WHERE version = ? SETTINGS mutations_sync = 2", dropped); err != nil {
+	// The version the Python fact dropped: the middle one of the baseline it ran over.
+	dropped := e.pyBaseline.Versions[len(e.pyBaseline.Versions)/2]
+	if err := openDatabase(t, e.uri(t, goHead), "").Exec(ctx, "ALTER TABLE schema_migrations DELETE WHERE version = ? SETTINGS mutations_sync = 2", dropped); err != nil {
 		t.Fatal(err)
 	}
 	for _, args := range [][]string{{"--check"}, nil} {
@@ -535,7 +588,7 @@ func runMigrateScenarios(t *testing.T) *migrateEnv {
 	if pyBelow.Exit != 0 || pyBelow.Schema != up.Schema {
 		t.Errorf("python re-applied the missing migration and left %+v, want exit 0 and the head database %s", pyBelow, up.Schema)
 	}
-	if err := openDatabase(t, e.instance.URI, goHead).Exec(ctx, "INSERT INTO schema_migrations (version, applied_at) VALUES (?, now64(3))", dropped); err != nil {
+	if err := openDatabase(t, e.uri(t, goHead), "").Exec(ctx, "INSERT INTO schema_migrations (version, applied_at) VALUES (?, now64(3))", dropped); err != nil {
 		t.Fatal(err)
 	}
 
@@ -547,7 +600,7 @@ func runMigrateScenarios(t *testing.T) *migrateEnv {
 			break
 		}
 	}
-	if err := openDatabase(t, e.instance.URI, goHead).Exec(ctx, "DROP VIEW "+view.Name); err != nil {
+	if err := openDatabase(t, e.uri(t, goHead), "").Exec(ctx, "DROP VIEW "+view.Name); err != nil {
 		t.Fatal(err)
 	}
 	name = "status schema mismatch --check"
@@ -603,7 +656,7 @@ func (e *migrateEnv) tables(t *testing.T, database string, names ...string) []st
 	var found []string
 	for _, name := range names {
 		var count uint64
-		if err := openDatabase(t, e.instance.URI, database).QueryRow(context.Background(), "SELECT count() FROM system.tables WHERE database = ? AND name = ?", database, name).Scan(&count); err != nil {
+		if err := openDatabase(t, e.uri(t, database), "").QueryRow(context.Background(), "SELECT count() FROM system.tables WHERE database = ? AND name = ?", e.dbName(t, database), name).Scan(&count); err != nil {
 			t.Fatal(err)
 		}
 		if count == 1 {
@@ -617,7 +670,7 @@ func (e *migrateEnv) tables(t *testing.T, database string, names ...string) []st
 // (a refused upgrade leaves a database that is not a migrated one).
 func (e *migrateEnv) schemaDigest2(t *testing.T, database string) string {
 	t.Helper()
-	rows, err := openDatabase(t, e.instance.URI, database).Query(context.Background(), "SELECT name, engine, create_table_query FROM system.tables WHERE database = ? ORDER BY name", database)
+	rows, err := openDatabase(t, e.uri(t, database), "").Query(context.Background(), "SELECT name, engine, create_table_query FROM system.tables WHERE database = ? ORDER BY name", e.dbName(t, database))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -639,10 +692,11 @@ func (e *migrateEnv) schemaDigest2(t *testing.T, database string) string {
 // file above it is CHECKED -- by name, in the right set, with the right
 // count -- never skipped.
 func TestMigrateGoldenCutOffChecksTheChainFilesAboveIt(t *testing.T) {
-	chain, err := chmigrate.LoadChain()
+	live, err := chmigrate.LoadChain()
 	if err != nil {
 		t.Fatal(err)
 	}
+	chain := append(loadArchivedChain(t), live...)
 	cut, err := splitChainAtGoldenHead(chain, migrateGoldenHead)
 	if err != nil {
 		t.Fatal(err)
@@ -660,11 +714,19 @@ func TestMigrateGoldenCutOffChecksTheChainFilesAboveIt(t *testing.T) {
 			t.Fatalf("%s is at or below the cut-off and was put above it", file.Version)
 		}
 	}
-	// The golden's own count is the baseline plus the frozen files: the
+	// The golden's own count is the 098 baseline plus the frozen files: the
 	// constant and the golden agree, or one of them moved without the other.
-	baseline, err := chmigrate.LoadBaseline()
+	// dho's own list (the head baseline and the live chain) is that plus
+	// exactly the files above the cut-off.
+	baseline := loadArchivedBaseline(t)
+	headBaseline, err := chmigrate.LoadBaseline()
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(headBaseline.Versions)+len(live) != len(baseline.Versions)+len(cut.frozen)+len(cut.above) {
+		t.Fatalf("dho lists %d versions (head %d + live %d); the golden's %d + %d above the cut-off = %d",
+			len(headBaseline.Versions)+len(live), len(headBaseline.Versions), len(live), len(baseline.Versions)+len(cut.frozen), len(cut.above),
+			len(baseline.Versions)+len(cut.frozen)+len(cut.above))
 	}
 	raw, err := os.ReadFile(migrateGolden)
 	if err != nil {
@@ -746,3 +808,17 @@ func TestMigrateClickHouseMatchesTheFrozenPythonOutput(t *testing.T) {
 // after the Python delete (CHAOS-7308); to re-prove them while Python still
 // exists, restore TestMigrateClickHouseVenueOracleMatchesThePythonRunner and
 // TestRepairVenueOracleMatchesThePythonProducer from this commit's parent.
+
+// With the shared mode off every private container has the same database
+// name, so two databases of one test must not be told apart by name.
+func TestMigrateEnvHandlesStayDistinctWhenDatabaseNamesRepeat(t *testing.T) {
+	e := &migrateEnv{scratch: map[string]scratchDB{}}
+	first := e.register(scratchDB{URI: "clickhouse://host-a/worker_test", Name: "worker_test"})
+	second := e.register(scratchDB{URI: "clickhouse://host-b/worker_test", Name: "worker_test"})
+	if first == second {
+		t.Fatalf("two databases named worker_test share the handle %q", first)
+	}
+	if e.uri(t, first) == e.uri(t, second) || e.dbName(t, first) != "worker_test" || e.dbName(t, second) != "worker_test" {
+		t.Fatalf("handles resolve to %q and %q, want two different servers and the name worker_test", e.uri(t, first), e.uri(t, second))
+	}
+}

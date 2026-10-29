@@ -18,6 +18,10 @@ import (
 // Nothing is written.
 var ErrMembershipDiverged = errors.New("identity: the account has an auth membership in the organization and no public membership")
 
+// ErrJoinNotReadCommitted reports a join in a transaction that is not READ
+// COMMITTED. Nothing is read under the user lock and nothing is written.
+var ErrJoinNotReadCommitted = errors.New("identity: a join must run in a READ COMMITTED transaction")
+
 // errJoinAlreadyMember reports a join of an account that already is a member
 // of the organization in public.memberships. Nothing is written.
 var errJoinAlreadyMember = errors.New("identity: already a member of the organization")
@@ -40,23 +44,43 @@ var joinPublicMembershipColumns = []string{"id", "user_id", "org_id", "role", "j
 // together or neither does. It is the only writer of a new auth membership
 // apart from the organizations backfill, which copies public rows.
 //
-// It locks the public.users row as go-api's own JIT join does, so the two
-// joins of one account run one after the other. A public row in the
+// It locks the auth principal row and then the public.users row (the lock
+// go-api's own JIT join takes), the order every membership writer uses, so
+// the joins and membership changes of one account run one after the other. A public row in the
 // organization is errJoinAlreadyMember and an auth row without one is
 // ErrMembershipDiverged; neither writes. No public.users row, or no
 // public.organizations row, is ErrLegacyProjection. Every go-api membership
 // insert holds the public.users row (its foreign key check) until it commits,
 // so a concurrent go-api join or add is seen by the check, not by a unique
-// violation.
+// violation. That check needs READ COMMITTED (each statement reads the latest
+// commits); any other isolation is ErrJoinNotReadCommitted before the lock.
+// Every timestamp of both rows is the one instant.
 func (s *Store) insertJoinMembership(ctx context.Context, tx audit.TxOps, m membershipJoin) error {
 	if !s.ownsUsers {
 		return ErrSignupNotAvailable
+	}
+	var isolation string
+	if err := tx.QueryRow(ctx, `SELECT current_setting('transaction_isolation')`).Scan(&isolation); err != nil {
+		return err
+	}
+	if isolation != "read committed" {
+		return ErrJoinNotReadCommitted
 	}
 	if !IsOrganizationRole(m.Role) {
 		return ErrBackfillRole
 	}
 	var locked uuid.UUID
-	err := tx.QueryRow(ctx, `SELECT id FROM public.users WHERE id = $1 FOR UPDATE`, m.Principal).Scan(&locked)
+	// The principal row first, then the public.users row: the one lock order
+	// of every membership writer (internal/auth/membership), whatever the
+	// caller already holds.
+	err := tx.QueryRow(ctx, `SELECT id FROM `+s.q+`.principals WHERE id = $1 FOR UPDATE`, m.Principal).Scan(&locked)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrUserNotFound
+	}
+	if err != nil {
+		return err
+	}
+	err = tx.QueryRow(ctx, `SELECT id FROM public.users WHERE id = $1 FOR UPDATE`, m.Principal).Scan(&locked)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrLegacyProjection
 	}
@@ -84,8 +108,8 @@ func (s *Store) insertJoinMembership(ctx context.Context, tx audit.TxOps, m memb
 VALUES ($1, $2, $3, $4, $5, $5, $5)`, m.ID, m.Principal, m.OrgID, m.Role, at); err != nil {
 		return publicJoinWriteErr(err)
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO `+s.q+`.memberships (id, organization_id, principal_id, status, role, joined_at)
-VALUES ($1, $2, $3, 'active', $4, $5)`, m.ID, m.OrgID, m.Principal, m.Role, at)
+	_, err = tx.Exec(ctx, `INSERT INTO `+s.q+`.memberships (id, organization_id, principal_id, status, role, joined_at, created_at, updated_at)
+VALUES ($1, $2, $3, 'active', $4, $5, $5, $5)`, m.ID, m.OrgID, m.Principal, m.Role, at)
 	return err
 }
 

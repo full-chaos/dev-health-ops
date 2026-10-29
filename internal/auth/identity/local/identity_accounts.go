@@ -19,7 +19,7 @@ type IdentityStore interface {
 	ByEmail(ctx context.Context, normalizedEmail string) (*identity.Principal, error)
 	ByID(ctx context.Context, id uuid.UUID) (*identity.Principal, error)
 	ProvisionLocal(ctx context.Context, req identity.LocalProvisionRequest) (uuid.UUID, error)
-	SetEmailVerified(ctx context.Context, principal uuid.UUID, at time.Time, actor identity.Actor) error
+	SetEmailVerifiedWith(ctx context.Context, principal uuid.UUID, at time.Time, actor identity.Actor, end func(context.Context, audit.TxOps) error) error
 	SetPasswordHashFor(ctx context.Context, principal uuid.UUID, hash string, actor identity.Actor, cause identity.PasswordCause, end func(context.Context, audit.TxOps) error) (int64, error)
 }
 
@@ -35,6 +35,8 @@ type SessionEnder interface {
 // (*PGLinks).
 type ResetLinks interface {
 	PeekResetLink(ctx context.Context, tokenHash [32]byte) (uuid.UUID, bool, error)
+	PeekVerificationLink(ctx context.Context, tokenHash [32]byte) (uuid.UUID, bool, error)
+	ConsumeVerificationLinkInTx(ctx context.Context, tx audit.TxOps, principalID uuid.UUID, tokenHash [32]byte) error
 	ConsumeBoundResetLinkInTx(ctx context.Context, tx audit.TxOps, principalID uuid.UUID, tokenHash [32]byte) error
 	EndResetLinksInTx(ctx context.Context, tx audit.TxOps, principalID uuid.UUID) (int64, error)
 }
@@ -90,12 +92,22 @@ func (a IdentityAccounts) ProvisionLocal(ctx context.Context, req ProvisionLocal
 	return a.Store.ProvisionLocal(ctx, identity.LocalProvisionRequest{Email: req.Email, FullName: req.FullName, PasswordHash: &hash, Actor: a.actor(ctx), Organization: org})
 }
 
-func (a IdentityAccounts) SetEmailVerified(ctx context.Context, id uuid.UUID) error {
+func (a IdentityAccounts) PeekVerificationLink(ctx context.Context, tokenHash [32]byte) (uuid.UUID, bool, error) {
+	return a.Links.PeekVerificationLink(ctx, tokenHash)
+}
+
+func (a IdentityAccounts) SetEmailVerifiedConsuming(ctx context.Context, id uuid.UUID, link [32]byte) error {
 	now := time.Now
 	if a.Now != nil {
 		now = a.Now
 	}
-	return a.Store.SetEmailVerified(ctx, id, now(), a.actor(ctx))
+	err := a.Store.SetEmailVerifiedWith(ctx, id, now(), a.actor(ctx), func(ctx context.Context, tx audit.TxOps) error {
+		return a.Links.ConsumeVerificationLinkInTx(ctx, tx, id, link)
+	})
+	if errors.Is(err, identity.ErrLinkUnusable) {
+		return ErrVerificationLinkUnusable
+	}
+	return err
 }
 
 func (a IdentityAccounts) PeekResetLink(ctx context.Context, tokenHash [32]byte) (uuid.UUID, bool, error) {

@@ -151,7 +151,7 @@ var attributeVocabulary = map[string][]string{
 		"role_granted", "role_revoked", "membership_added", "membership_removed", "membership_status_changed",
 		"grant_created", "grant_revoked", "credential_issued", "credential_rotated", "credential_revoked",
 		"session_revoked", "organization_created", "organization_updated", "principal_disabled",
-		"principal_enabled", "principal_projected", "principal_provisioned", "email_verified", "password_changed", "password_reset",
+		"principal_enabled", "principal_projected", "principal_provisioned", "email_verified", "password_changed", "password_reset", "password_reset_requested",
 		"identity_linked", "identity_unlinked", "identity_projected", "identity_relinked", "policy_revision_activated",
 		"entitlement_snapshot_applied", "denied_no_membership", "denied_no_grant", "denied_policy",
 		"accepted", "invalid_credentials", "account_locked", "principal_deactivated", "email_unverified",
@@ -164,8 +164,8 @@ var attributeVocabulary = map[string][]string{
 		"signing_key",
 	},
 	"resource_kind":   {"organization", "repository", "project", "team"},
-	"previous_status": {"active", "disabled", "revoked", "pending", "expired", "suspended", "retiring", "retired", "compromised"},
-	"new_status":      {"active", "disabled", "revoked", "pending", "expired", "suspended", "retiring", "retired", "compromised"},
+	"previous_status": {"active", "disabled", "revoked", "pending", "expired", "suspended", "retiring", "retired", "compromised", "removed"},
+	"new_status":      {"active", "disabled", "revoked", "pending", "expired", "suspended", "retiring", "retired", "compromised", "removed"},
 	// rotation_verb and rotation_refusal are the signing-key state machine's
 	// verbs and refusal reasons (internal/auth/keyrotation).
 	"rotation_verb": {"adopt", "register", "activate", "retire", "rollback", "compromise"},

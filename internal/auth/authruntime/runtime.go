@@ -110,6 +110,9 @@ func sessionRoutes(
 	if err != nil {
 		return nil, err
 	}
+	if issuer, err = withAccessCheck(cfg, logger, accessSigner, issuer); err != nil {
+		return nil, err
+	}
 	routes, err := authapi.Routes(authapi.Deps{
 		Sessions: sessions, Users: authapi.PGUsers{Pool: pool}, Issuer: issuer, Logger: logger,
 	})
@@ -143,7 +146,7 @@ func newAccessIssuer(cfg authconfig.Config, signer authapi.AccessSigner) (*autha
 	case authconfig.AccessClassEdDSA:
 		return authapi.NewEdDSAIssuer(
 			cfg.Session.AccessSecret.Reveal(), cfg.Session.AccessIssuer, cfg.Session.AccessAudience,
-			signer, cfg.TokenIssuerURL,
+			signer, cfg.TokenIssuerURL, authapi.WithLegacyAudience(cfg.Session.LegacyAudience),
 		)
 	}
 	return nil, fmt.Errorf("authruntime: unknown access token class %q", cfg.Session.AccessClass)
@@ -517,7 +520,7 @@ func configureWithRoutes(
 			return nil, err
 		}
 	}
-	credRoutes, credComponents, err := credentialRoutes(cfg, logger, store.Pool(), schemaID, limits)
+	credRoutes, credComponents, err := credentialRoutes(cfg, logger, store.Pool(), schemaID, limits, signer)
 	if err != nil {
 		closeStore()
 		return nil, err

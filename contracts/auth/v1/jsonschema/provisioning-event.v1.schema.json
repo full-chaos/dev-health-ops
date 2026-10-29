@@ -357,6 +357,7 @@
               "membership.invited",
               "membership.activated",
               "membership.role_changed",
+              "membership.suspended",
               "membership.removed"
             ]
           },

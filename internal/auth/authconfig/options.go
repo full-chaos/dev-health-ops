@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 )
 
 // Kind is the parse type of an option value. It tells the flag layer which
@@ -214,6 +216,11 @@ var optionRegistry = []Option{
 		Flag: "jwt-audience", Env: EnvAccessTokenAudience, Kind: KindString,
 		Default: defaultAccessTokenAudience, Group: GroupSession,
 		Usage: "aud of the compatibility access token (go-api's JWT_AUDIENCE)",
+	},
+	{
+		Env: EnvLegacyJWTAudience, Kind: KindString, Default: contracts.PlatformAPIAudience, Group: GroupSession,
+		Usage: "aud that the eddsa access token class checks go-api's HS256 compatibility token with (go-api's JWT_AUDIENCE); hs256_compat uses " +
+			EnvAccessTokenAudience + ". Set but empty is refused at start",
 	},
 	{
 		Env: EnvValkeyURI, Kind: KindString, Secret: true, Group: GroupSession,

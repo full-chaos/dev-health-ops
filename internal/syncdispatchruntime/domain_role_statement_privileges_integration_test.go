@@ -424,6 +424,8 @@ func TestNativeFinalizeSyncRunExecutesEntirelyAsTheDomainRole(t *testing.T) {
 	}{
 		{`INSERT INTO sync_runs (id,org_id,integration_id,status,total_units,completed_units,failed_units)
 		  VALUES ($1,$2,$3,'dispatching',1,0,0)`, []any{finalizeTestRun, finalizeTestOrg, finalizeTestIntegration}},
+		{`INSERT INTO integration_credentials (id,org_id) VALUES ('00000000-0000-4000-8000-0000000000c1',$1)`, []any{finalizeTestOrg}},
+		{`UPDATE integrations SET credential_id='00000000-0000-4000-8000-0000000000c1' WHERE id=$1`, []any{finalizeTestIntegration}},
 		{`INSERT INTO integration_sources (id) VALUES ($1)`, []any{finalizeTestSource}},
 		{`INSERT INTO sync_run_units
 		    (id,org_id,sync_run_id,provider,dataset_key,source_id,status,since_at,before_at,cost_class,mode)
@@ -492,6 +494,9 @@ func TestNativeFinalizeSyncRunExecutesEntirelyAsTheDomainRole(t *testing.T) {
 		"sync_configurations canonical stamp",
 		`SELECT count(*) FROM sync_configurations WHERE id=$1 AND last_sync_success`,
 		finalizeTestSyncConfig)
+	assertSingleRow(t, ctx, admin,
+		"integration_credentials connected stamp (CHAOS-11881)",
+		`SELECT count(*) FROM integration_credentials WHERE id='00000000-0000-4000-8000-0000000000c1' AND last_test_success AND last_test_at IS NOT NULL`)
 	assertSingleRow(t, ctx, admin,
 		"sync_coverage_projections invalidation",
 		// updated_at moves with invalidated_at: the Python statement is an
@@ -1075,7 +1080,8 @@ CREATE TABLE sync_dispatch_outbox (
 CREATE TABLE sync_runs (
  id uuid PRIMARY KEY, org_id text NOT NULL, integration_id uuid NOT NULL,
  status text NOT NULL, total_units int NOT NULL DEFAULT 0, completed_units int NOT NULL DEFAULT 0,
- failed_units int NOT NULL DEFAULT 0, started_at timestamptz NULL, completed_at timestamptz NULL, result json NULL, error text NULL
+ failed_units int NOT NULL DEFAULT 0, started_at timestamptz NULL, completed_at timestamptz NULL, result json NULL, error text NULL,
+ credential_id uuid NULL
 );
 CREATE TABLE sync_run_units (
  id uuid PRIMARY KEY, org_id text NOT NULL, sync_run_id uuid NOT NULL, provider text NOT NULL,
@@ -1085,7 +1091,12 @@ CREATE TABLE sync_run_units (
  error text NULL, result json NULL, processor_flags json NULL
 );
 CREATE TABLE integrations (
- id uuid PRIMARY KEY, provider text NOT NULL
+ id uuid PRIMARY KEY, provider text NOT NULL, credential_id uuid NULL
+);
+CREATE TABLE integration_credentials (
+ id uuid PRIMARY KEY, org_id text NOT NULL, is_active boolean NOT NULL DEFAULT true,
+ last_test_at timestamptz NULL, last_test_success boolean NULL, last_test_error text NULL,
+ updated_at timestamptz NULL
 );
 CREATE TABLE sync_configurations (
  id uuid PRIMARY KEY, org_id text NOT NULL, integration_id uuid NOT NULL, parent_id uuid NULL,

@@ -10,10 +10,10 @@ import (
 )
 
 const (
-	platformRoleMigration = 33
-	m33Holder             = "00000000-0000-4000-8000-000000109791"
-	m33Granter            = "00000000-0000-4000-8000-000000109792"
-	m33Refused            = "00000000-0000-4000-8000-0000001097a1"
+	platformRoleMigration = 34
+	m34Holder             = "00000000-0000-4000-8000-000000109791"
+	m34Granter            = "00000000-0000-4000-8000-000000109792"
+	m34Refused            = "00000000-0000-4000-8000-0000001097a1"
 )
 
 func applyThroughPlatformRoles(t *testing.T, ctx context.Context, seed func(*migrationOnlyFixture)) (*migrationOnlyFixture, error) {
@@ -38,28 +38,28 @@ func applyThroughPlatformRoles(t *testing.T, ctx context.Context, seed func(*mig
 	return nil, nil
 }
 
-func m33Principals(t *testing.T, ctx context.Context, env *migrationOnlyFixture) {
+func m34Principals(t *testing.T, ctx context.Context, env *migrationOnlyFixture) {
 	t.Helper()
 	if err := domainOwnedExec(t, ctx, env,
-		`INSERT INTO auth.principals (id, kind, display_name) VALUES ('`+m33Holder+`', 'user', 'holder')`,
-		`INSERT INTO auth.principals (id, kind, display_name) VALUES ('`+m33Granter+`', 'user', 'granter')`); err != nil {
+		`INSERT INTO auth.principals (id, kind, display_name) VALUES ('`+m34Holder+`', 'user', 'holder')`,
+		`INSERT INTO auth.principals (id, kind, display_name) VALUES ('`+m34Granter+`', 'user', 'granter')`); err != nil {
 		t.Fatalf("seed principals: %v", err)
 	}
 }
 
 // The pre-flight names, by id only, an assignment whose role is not a platform
 // role, and nothing is applied or recorded.
-func TestMigration0033RefusesANonPlatformRoleRowByID(t *testing.T) {
+func TestMigration0034RefusesANonPlatformRoleRowByID(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	env, err := applyThroughPlatformRoles(t, ctx, func(env *migrationOnlyFixture) {
-		m33Principals(t, ctx, env)
+		m34Principals(t, ctx, env)
 		if err := domainOwnedExec(t, ctx, env,
-			`INSERT INTO auth.platform_role_assignments (id, principal_id, role_key) VALUES ('`+m33Refused+`', '`+m33Holder+`', 'owner')`); err != nil {
+			`INSERT INTO auth.platform_role_assignments (id, principal_id, role_key) VALUES ('`+m34Refused+`', '`+m34Holder+`', 'owner')`); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
 	})
-	if err == nil || !strings.Contains(err.Error(), m33Refused) || strings.Contains(err.Error(), "'owner'") {
+	if err == nil || !strings.Contains(err.Error(), m34Refused) || strings.Contains(err.Error(), "'owner'") {
 		t.Fatalf("migration over an organization role row = %v, want the row id named and no role value", err)
 	}
 	var recorded bool
@@ -71,13 +71,13 @@ func TestMigration0033RefusesANonPlatformRoleRowByID(t *testing.T) {
 // After the migration: only catalog platform roles are values, the CHECK is
 // validated, and neither the holder nor the granter of an assignment can be
 // deleted.
-func TestMigration0033ClosesTheRoleAndRestrictsDeletes(t *testing.T) {
+func TestMigration0034ClosesTheRoleAndRestrictsDeletes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	env, err := applyThroughPlatformRoles(t, ctx, func(env *migrationOnlyFixture) {
-		m33Principals(t, ctx, env)
+		m34Principals(t, ctx, env)
 		if err := domainOwnedExec(t, ctx, env,
-			`INSERT INTO auth.platform_role_assignments (principal_id, role_key, granted_by) VALUES ('`+m33Holder+`', 'platform_admin', '`+m33Granter+`')`); err != nil {
+			`INSERT INTO auth.platform_role_assignments (principal_id, role_key, granted_by) VALUES ('`+m34Holder+`', 'platform_admin', '`+m34Granter+`')`); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
 	})
@@ -98,10 +98,10 @@ func TestMigration0033ClosesTheRoleAndRestrictsDeletes(t *testing.T) {
 	}
 	for _, role := range []string{"owner", "admin", "member", "viewer", "superuser", "Platform_Admin"} {
 		m10Fail(t, domainOwnedExec(t, ctx, env,
-			`INSERT INTO auth.platform_role_assignments (principal_id, role_key) VALUES ('`+m33Granter+`', '`+role+`')`),
+			`INSERT INTO auth.platform_role_assignments (principal_id, role_key) VALUES ('`+m34Granter+`', '`+role+`')`),
 			"a platform role assignment with role "+role)
 	}
-	for _, who := range []string{m33Holder, m33Granter} {
+	for _, who := range []string{m34Holder, m34Granter} {
 		err := domainOwnedExec(t, ctx, env, `DELETE FROM auth.principals WHERE id = '`+who+`'`)
 		if err == nil || !strings.Contains(err.Error(), "foreign key") {
 			t.Errorf("deleting principal %s of an assignment: %v, want a foreign key refusal", who, err)

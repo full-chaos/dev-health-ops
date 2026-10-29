@@ -1,4 +1,4 @@
--- 0033 platform_role_assignments: closed role, no cascade.
+-- 0034 platform_role_assignments: closed role, no cascade.
 -- NOT ADDITIVE in two places, on purpose (additiveExemptions): the foreign keys
 -- platform_role_assignments_principal_id_fkey (ON DELETE CASCADE) and
 -- platform_role_assignments_granted_by_fkey (ON DELETE SET NULL) become
@@ -28,7 +28,7 @@ BEGIN
       FROM platform_role_assignments
      WHERE role_key NOT IN ('platform_admin');
     IF refused IS NOT NULL THEN
-        RAISE EXCEPTION 'migration 0033: platform role assignments with a role outside the platform roles: %', refused
+        RAISE EXCEPTION 'migration 0034: platform role assignments with a role outside the platform roles: %', refused
             USING ERRCODE = '23514';
     END IF;
 END

@@ -219,6 +219,7 @@ internal/cigates/integrationshards	integration_sharding_test.go
 internal/cigates/integrationshards	shard_start_order_test.go
 internal/cigates/integrationshards	side_effect_hooks_test.go
 internal/cigates/livee2e	cli.go
+internal/cigates/membershipreads	membershipreads.go
 internal/cigates/nopython	nopython_test.go
 internal/cigates/nopython	tests_python_test.go
 internal/cigates/nopython	trackedfiles_test.go

@@ -32,9 +32,9 @@ type Options struct {
 	// Apply writes the change. Without it the run reads the counts inside a
 	// transaction that rolls back.
 	Apply bool
-	// BlindMargin raises every restored revision by this much before the
-	// manifest floors apply (floor = max(restored + margin, manifest)). It is the
-	// fallback when the WAL after T is gone: consumers read the jump as a gap.
+	// BlindMargin raises every restored revision by this much. It is the
+	// fallback of last resort, used only when no manifest and no usable consumer
+	// input exists (the WAL after T is gone): consumers read the jump as a gap.
 	BlindMargin int64
 	// Inputs are consumer high-water inputs besides the registered ones.
 	Inputs []FloorInput
@@ -62,6 +62,8 @@ type Report struct {
 	Revocations    int64           `json:"revocations_reapplied"`
 	RowsRemoved    int64           `json:"rows_removed"`
 	Sections       []SectionReport `json:"sections"`
+	// Inputs is one line per floor input: used or skipped, and why.
+	Inputs []InputReport `json:"inputs"`
 }
 
 const blindDigest = "blind_margin"
@@ -124,14 +126,9 @@ func complete(m Manifest) error {
 // timeline. m may be nil only with a blind margin. Any error rolls everything
 // back. A second run for the same timeline and manifest changes nothing.
 func Apply(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier, m *Manifest, opts Options) (Report, error) {
-	if m == nil && opts.BlindMargin <= 0 {
-		return Report{}, fmt.Errorf("%w: a manifest or a blind margin is required", ErrApply)
-	}
 	if opts.BlindMargin < 0 || opts.BlindMargin >= maxRevision {
 		return Report{}, fmt.Errorf("%w: the blind margin is outside 0..2^53-2", ErrApply)
 	}
-	digest, source := blindDigest, "blind_margin"
-	var floors []Floor
 	if m != nil {
 		if err := complete(*m); err != nil {
 			return Report{}, err
@@ -140,7 +137,10 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedI
 		if err != nil || d != m.SHA256 {
 			return Report{}, fmt.Errorf("%w: digest does not match the content", ErrManifest)
 		}
-		digest, source, floors = m.SHA256, "manifest", m.Floors
+	}
+	plan, err := resolveInputs(ctx, m, opts, append(RegisteredFloorInputs(), opts.Inputs...))
+	if err != nil {
+		return Report{}, err
 	}
 	missing, err := Preflight(ctx, pool, schema)
 	if err != nil {
@@ -149,22 +149,14 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedI
 	if len(missing) > 0 {
 		return Report{}, fmt.Errorf("%w: %s", ErrPrivileges, strings.Join(missing, "; "))
 	}
-	var extra []map[string]int64
-	for _, in := range append(RegisteredFloorInputs(), opts.Inputs...) {
-		got, err := in.Floors(ctx)
-		if err != nil {
-			return Report{}, fmt.Errorf("%w: floor input %s failed", ErrApply, in.Name())
-		}
-		extra = append(extra, got)
-	}
-	merged := mergeFloors(floors, extra)
-	floorsJSON, err := json.Marshal(merged)
+	digest, source := plan.digest, plan.source
+	floorsJSON, err := json.Marshal(plan.floors)
 	if err != nil {
 		return Report{}, fmt.Errorf("%w: encoding the floors", ErrApply)
 	}
 
 	q := authschema.Quote(schema)
-	report := Report{Source: source, Digest: digest, DryRun: !opts.Apply}
+	report := Report{Source: source, Digest: digest, DryRun: !opts.Apply, Inputs: plan.reports}
 	commitErr := audit.Commit(ctx, pool, schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			var timeline *int64
@@ -183,8 +175,8 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedI
 			if exists {
 				return errAlready
 			}
-			if opts.BlindMargin > 0 {
-				tag, err := tx.Exec(ctx, `UPDATE `+q+`.aggregate_revisions SET revision = LEAST(revision + $1, `+fmt.Sprint(maxRevision)+`), updated_at = clock_timestamp()`, opts.BlindMargin)
+			if plan.margin > 0 {
+				tag, err := tx.Exec(ctx, `UPDATE `+q+`.aggregate_revisions SET revision = LEAST(revision + $1, `+fmt.Sprint(maxRevision)+`), updated_at = clock_timestamp()`, plan.margin)
 				if err != nil {
 					return fmt.Errorf("raising the revisions by the margin (sqlstate %s)", sqlState(err))
 				}

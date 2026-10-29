@@ -2,6 +2,7 @@ package restorefence
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 )
@@ -11,8 +12,14 @@ import (
 // applies the MAXIMUM of every input and the restored value. A consumer of the
 // auth outbox (an audit.Sink wired through audit.NewPublisher) must register
 // one; TestEveryOutboxConsumerHasAFenceFloorInput fails when it does not.
+//
+// A registered input is ADVISORY: it is used only while Status returns nil (the
+// consumer's store is durable enough to trust as a lower bound); an input whose
+// status fails is reported and skipped.
 type FloorInput interface {
 	Name() string
+	// Status returns nil when the input may be used.
+	Status(ctx context.Context) error
 	// Floors returns the highest revision the consumer holds, keyed
 	// "aggregate_type:aggregate_id".
 	Floors(ctx context.Context) (map[string]int64, error)
@@ -81,4 +88,70 @@ func splitFloorKey(k string) (typ, id string, ok bool) {
 		}
 	}
 	return "", "", false
+}
+
+// InputReport is one input's line in the apply report and the status output.
+type InputReport struct {
+	Name string `json:"name"`
+	// Kind is "wal_manifest", "blind_margin" or "consumer".
+	Kind   string `json:"kind"`
+	Used   bool   `json:"used"`
+	Floors int    `json:"floors"`
+	// Reason is a closed token for an input that was not used.
+	Reason string `json:"reason,omitempty"`
+}
+
+type resolved struct {
+	floors  []Floor
+	reports []InputReport
+	source  string // the state row's source: manifest, blind_margin or inputs
+	digest  string // the state row's manifest_sha256
+	margin  int64
+}
+
+// resolveInputs names every input of one apply and takes the floor as the
+// maximum over them: the WAL manifest, then each registered consumer input
+// whose status passes. The blind margin is the fallback of last resort: it is
+// refused while a manifest or a usable consumer input exists.
+func resolveInputs(ctx context.Context, m *Manifest, opts Options, registered []FloorInput) (resolved, error) {
+	var out resolved
+	var manifestFloors []Floor
+	if m != nil {
+		manifestFloors = m.Floors
+		out.reports = append(out.reports, InputReport{Name: "wal_manifest", Kind: "wal_manifest", Used: true, Floors: len(m.Floors)})
+		out.source, out.digest = "manifest", m.SHA256
+	}
+	var extra []map[string]int64
+	usable := 0
+	for _, in := range registered {
+		rep := InputReport{Name: in.Name(), Kind: "consumer"}
+		if err := in.Status(ctx); err != nil {
+			rep.Reason = "status_failed"
+			out.reports = append(out.reports, rep)
+			continue
+		}
+		got, err := in.Floors(ctx)
+		if err != nil {
+			rep.Reason = "read_failed"
+			out.reports = append(out.reports, rep)
+			continue
+		}
+		rep.Used, rep.Floors = true, len(got)
+		extra = append(extra, got)
+		usable++
+		out.reports = append(out.reports, rep)
+	}
+	switch {
+	case opts.BlindMargin > 0 && (m != nil || usable > 0):
+		return resolved{}, fmt.Errorf("%w: the blind margin applies only when no manifest and no usable consumer input exists", ErrApply)
+	case opts.BlindMargin > 0:
+		out.margin, out.source, out.digest = opts.BlindMargin, "blind_margin", blindDigest
+		out.reports = append(out.reports, InputReport{Name: "blind_margin", Kind: "blind_margin", Used: true})
+	case m == nil && usable > 0:
+		out.source, out.digest = "inputs", "inputs"
+	case m == nil:
+		return resolved{}, fmt.Errorf("%w: a manifest, a usable consumer input or a blind margin is required", ErrApply)
+	}
+	out.floors = mergeFloors(manifestFloors, extra)
+	return out, nil
 }

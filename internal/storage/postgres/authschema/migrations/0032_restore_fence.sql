@@ -33,9 +33,9 @@ REVOKE ALL ON FUNCTION restore_fence_timeline() FROM PUBLIC;
 
 CREATE TABLE restore_fence_state (
     timeline_id           bigint      NOT NULL CHECK (timeline_id >= 1),
-    manifest_sha256       text        NOT NULL CHECK (manifest_sha256 ~ '^([0-9a-f]{64}|initial|blind_margin)$'),
+    manifest_sha256       text        NOT NULL CHECK (manifest_sha256 ~ '^([0-9a-f]{64}|initial|blind_margin|inputs)$'),
     -- source says what the fence was applied from.
-    source                text        NOT NULL CHECK (source IN ('migration', 'manifest', 'blind_margin')),
+    source                text        NOT NULL CHECK (source IN ('migration', 'manifest', 'blind_margin', 'inputs')),
     applied_at            timestamptz NOT NULL DEFAULT now(),
     floors_raised         bigint      NOT NULL DEFAULT 0 CHECK (floors_raised >= 0),
     revocations_reapplied bigint      NOT NULL DEFAULT 0 CHECK (revocations_reapplied >= 0),

@@ -57,6 +57,9 @@ func parseRestoreFenceArgs(args []string, stderr io.Writer) (restoreFenceArgs, e
 	if parsed.verb == "apply" && parsed.manifest == "" && parsed.blindMargin <= 0 {
 		return restoreFenceArgs{}, errors.New("apply needs -manifest or -blind-margin")
 	}
+	if parsed.verb == "apply" && parsed.manifest != "" && parsed.blindMargin != 0 {
+		return restoreFenceArgs{}, errors.New("-blind-margin applies only without -manifest")
+	}
 	return parsed, nil
 }
 
@@ -117,9 +120,11 @@ func executeRestoreFence(parent context.Context, args []string, lookup secrets.L
 		}
 		if err := restorefence.Check(ctx, pool, schema); err != nil {
 			fmt.Fprintf(stdout, "restore-fence status timeline=%d fenced=false\n", *timeline)
+			printInputStatus(ctx, stdout)
 			return 1
 		}
 		fmt.Fprintf(stdout, "restore-fence status timeline=%d fenced=true\n", *timeline)
+		printInputStatus(ctx, stdout)
 		return 0
 	case "export":
 		manifest, err := restorefence.ExportManifest(ctx, pool, schema)
@@ -177,4 +182,15 @@ func executeRestoreFence(parent context.Context, args []string, lookup secrets.L
 	}
 	fmt.Fprintf(stdout, "restore-fence apply %s\n", encoded)
 	return 0
+}
+
+// printInputStatus prints one line per floor input: the two the operator
+// supplies to apply, and every registered consumer input with its status.
+func printInputStatus(ctx context.Context, stdout io.Writer) {
+	fmt.Fprintln(stdout, "input wal_manifest kind=wal_manifest supplied=apply -manifest")
+	fmt.Fprintln(stdout, "input blind_margin kind=blind_margin supplied=apply -blind-margin (only when no other input exists)")
+	for _, in := range restorefence.RegisteredFloorInputs() {
+		usable := in.Status(ctx) == nil
+		fmt.Fprintf(stdout, "input %s kind=consumer usable=%t\n", in.Name(), usable)
+	}
 }

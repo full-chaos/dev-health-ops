@@ -11,7 +11,6 @@ func TestRestoreFenceArgsAcceptTheDocumentedVerbs(t *testing.T) {
 		"apply with a manifest": {"apply", "-manifest", "m.json"},
 		"apply with a margin":   {"apply", "-blind-margin", "1000000"},
 		"apply for real":        {"apply", "-manifest", "m.json", "-apply"},
-		"apply with both":       {"apply", "-manifest", "m.json", "-blind-margin", "5", "-apply"},
 		"status":                {"status"},
 	}
 	for name, args := range cases {

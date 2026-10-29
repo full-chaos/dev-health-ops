@@ -176,7 +176,7 @@ func dhoAPIServes(t *testing.T) func(string) bool {
 		t.Fatal(err)
 	}
 	deps := apiservice.Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, logger), Verifier: verifier,
-		ClickHouse: stubClickHouse{}, Valkey: stubValkey{}, LegacyIngestEnabled: true}
+		ClickHouse: stubClickHouse{}, Valkey: stubValkey{}}
 	mux := http.NewServeMux()
 	routes := apiservice.Routes(deps, logger)
 	for _, route := range routes {

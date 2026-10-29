@@ -49,7 +49,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/githubapp"
 	healthroutes "github.com/full-chaos/dev-health-ops/internal/api/health"
 	"github.com/full-chaos/dev-health-ops/internal/api/integrationsadmin"
-	"github.com/full-chaos/dev-health-ops/internal/api/legacyingest"
 	"github.com/full-chaos/dev-health-ops/internal/api/orgs"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/producttelemetry"
@@ -183,19 +182,6 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		Logger:   logger,
 		Counters: limits,
 	})...)
-	var legacyStore legacyingest.Store
-	if deps.Valkey != nil {
-		legacyStore = legacyingest.ValkeyStore{Client: deps.Valkey}
-	}
-	// The telemetry route writes ClickHouse with the api's own login; with
-	// none configured it accepts and skips, as the Python route does.
-	var legacyClickHouse legacyingest.ClickHouse
-	if deps.ClickHouse != nil {
-		legacyClickHouse = deps.ClickHouse
-	}
-	if deps.LegacyIngestEnabled {
-		routes = append(routes, legacyingest.Harden(legacyingest.Routes(legacyingest.Deps{Store: legacyStore, Metrics: deps.LegacyIngestMetrics, ClickHouse: legacyClickHouse, Logger: logger}), deps.LegacyIngestOptions)...)
-	}
 	routes = append(routes, healthroutes.Routes(healthroutes.Deps{
 		// deps.ClickHouse is the api's own dedicated ClickHouse login
 		// (CHAOS-6310), the SAME connection internal/api/teamsidentity's
@@ -351,14 +337,9 @@ func logOrgDeletionPreflight(ctx context.Context, logger *slog.Logger, dsn strin
 // RegisterOperatorMetrics puts the api's counters on the operator
 // /metrics, the Go api's scrape surface (the Python api served its
 // prometheus_client counters on /metrics): the OTel instruments, each
-// declared under the Python counter name, as one fragment, and the
-// legacy-ingest refusal counter, which it sets on deps, as another.
+// declared under the Python counter name, as one fragment.
 func RegisterOperatorMetrics(registry *health.Registry, deps *Deps) error {
 	if err := apimetrics.Register(registry); err != nil {
-		return err
-	}
-	deps.LegacyIngestMetrics = legacyingest.NewMetrics()
-	if err := registry.RegisterMetrics("legacy_ingest", deps.LegacyIngestMetrics); err != nil {
 		return err
 	}
 	// CHAOS-8816: what PATCH /sync-configs/{id} does to dataset rows (rows
@@ -681,7 +662,6 @@ func NewServerWithGate(
 ) (*httpapi.Server, error) {
 	noStore := httpapi.NewNoStoreRoutes(httpapi.AdminRoutes)
 	middleware := []func(http.Handler) http.Handler{buildinfo.Stamp(version.Current("api")), pyheaders.UnhandledErrorShape, CloseHTTP10, MarkSignatureOnly, DecodedPathRouting, noStore.Middleware}
-	middleware = append(middleware, legacyingest.HeaderLayers(routes)...)
 	if gate != nil {
 		middleware = append(middleware, intakeGate(gate, cfg.CORSAllowedOrigins))
 	}

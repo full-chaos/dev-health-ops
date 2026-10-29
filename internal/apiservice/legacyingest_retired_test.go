@@ -2,6 +2,7 @@ package apiservice
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -77,9 +78,13 @@ func TestRetiredLegacyIngestRoutesAnswer404(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				body, err := io.ReadAll(response.Body)
 				_ = response.Body.Close()
-				if response.StatusCode != http.StatusNotFound {
-					t.Errorf("POST %s = %d, want 404 (retired)", path, response.StatusCode)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if response.StatusCode != http.StatusNotFound || string(body) != `{"detail":"Not Found"}` {
+					t.Errorf("POST %s = %d %s, want 404 {\"detail\":\"Not Found\"} (retired)", path, response.StatusCode, body)
 				}
 				for _, header := range []string{"Deprecation", "Sunset"} {
 					if value := response.Header.Get(header); value != "" {

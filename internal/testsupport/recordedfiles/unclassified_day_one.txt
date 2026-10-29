@@ -47,7 +47,6 @@ internal/apiservice/billingvenue/testdata/stripe_webhook/invoice.paid.json
 internal/apiservice/billingvenue/testdata/stripe_webhook/refund.created.json
 internal/apiservice/billingvenue/testdata/stripe_webhook/refund.updated.json
 internal/apiservice/customerpush/testdata/admin_schema.v1.json
-internal/apiservice/metricsvenue/testdata/python_metrics.tsv
 internal/apiservice/testdata/python_raw_http_golden.json.gz
 internal/fixturescli/testdata/generate/github_acme__live-e2e_r1_14d_c6_p24_t10_s20260219_raw.json.gz
 internal/fixturescli/testdata/generate/synthetic_acme__live-e2e_r1_14d_c6_p24_t10_s20260219_mg.json.gz

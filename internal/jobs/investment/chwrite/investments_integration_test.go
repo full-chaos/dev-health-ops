@@ -236,11 +236,11 @@ func TestWriteRepoEffortAndQuotesRoundTrip(t *testing.T) {
 	}
 }
 
-// TestWriteRefusesEmptyOrganizationID pins the CHAOS-4341 org-scoping
+// TestInvestmentWritesRefuseEmptyOrganizationID pins the CHAOS-4341 org-scoping
 // discipline (internal/jobs/metrics/daily/cicd.Writer.WriteResult): a write
 // with no org id fails closed instead of writing an org_id="" row invisible
 // to every org-scoped reader.
-func TestWriteRefusesEmptyOrganizationID(t *testing.T) {
+func TestInvestmentWritesRefuseEmptyOrganizationID(t *testing.T) {
 	writer, _, ctx := newTestWriter(t)
 
 	if _, err := writer.WriteInvestments(ctx, "", []InvestmentRecord{{WorkUnitID: "x"}}); err == nil {

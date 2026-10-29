@@ -42,6 +42,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/social"
 	"github.com/full-chaos/dev-health-ops/internal/auth/keyrotation"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
+	"github.com/full-chaos/dev-health-ops/internal/auth/restorefence"
 	"github.com/full-chaos/dev-health-ops/internal/auth/servicecred"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
@@ -67,6 +68,10 @@ var keyStateSource = func(pool *pgxpool.Pool, schema authschema.ValidatedIdentif
 const (
 	CheckPostgres   = "postgres"
 	CheckSigningKey = "signing_key"
+	// CheckRestoreFence holds auth-service not ready while the database is on a
+	// timeline that has no restore-fence record (a restore or promote that
+	// auth-migrate restore-fence apply has not covered).
+	CheckRestoreFence = "restore_fence"
 )
 
 // IO is the process's stream set, injectable for tests.
@@ -440,6 +445,20 @@ func configureWithRoutes(
 		return nil, err
 	}
 
+	if err := registry.RegisterRequired(CheckRestoreFence, func(ctx context.Context) error {
+		if fenceErr := restorefence.Check(ctx, store.Pool(), schemaID); fenceErr != nil {
+			logger.ErrorContext(
+				ctx, "readiness check failed",
+				"check", CheckRestoreFence, "reason", fenceReason(fenceErr),
+			)
+			return fenceErr
+		}
+		return nil
+	}); err != nil {
+		closeStore()
+		return nil, err
+	}
+
 	// The shared httpapi server records its request counter and duration
 	// histogram through OTel; without this source they never reach /metrics.
 	// Fails soft: a broken exporter leaves them unexported, never stops boot.
@@ -788,3 +807,11 @@ func runHealthcheck(parent context.Context, cfg authconfig.Config, streams IO) i
 // healthcheckSlack is added to the per-check readiness deadline so the probe
 // outlasts a readiness evaluation that runs to its own bound.
 const healthcheckSlack = time.Second
+
+// fenceReason is the closed token the restore-fence check logs: never the error text.
+func fenceReason(err error) string {
+	if errors.Is(err, restorefence.ErrNotFenced) {
+		return "timeline_not_fenced"
+	}
+	return "fence_state_unreadable"
+}

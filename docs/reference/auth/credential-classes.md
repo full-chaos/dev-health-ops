@@ -129,9 +129,19 @@ rotate and revoke it. A second scope, `memberships:write`, which no other
 service may hold, lets go-api call the internal provisioning routes
 (`/internal/v1/memberships/*`, `/internal/v1/invites/*`,
 `/internal/v1/organizations/deprovision`, mounted by `AUTH_MEMBERSHIP_ROUTES`;
-`servicecred.PG.CheckScope`). The route and go-api's four compatibility routes
-(`/api/v1/auth/{login,refresh,logout,social-login}`) have rows in
-`contracts/auth/v1/endpoint-profiles.auth-service.json`.
+`servicecred.PG.CheckScope`). The route, the seven provisioning routes and
+go-api's four compatibility routes (`/api/v1/auth/{login,refresh,logout,social-login}`)
+have rows in `contracts/auth/v1/endpoint-profiles.auth-service.json`. The
+provisioning audit rows name the actor and the request id, not the credential
+row (a gap of the class; 11853 closes it).
+
+**`org_invite_token` (CHAOS-11798).** The invite link token: `signedtoken.Build`
+over the invite id (32 lowercase hex characters, a dot, 64 lowercase hex
+characters), stored only as its SHA-256 digest. go-api mints it
+(`internal/apiservice/admin/invites.go`) and so does auth-service's invite
+aggregate behind `POST /internal/v1/invites/create`, which answers it once; go-api
+(`internal/api/session/invites.go`) and the auth-service invite aggregate validate
+it. Its earlier registry anchors named Python files that no longer exist.
 
 **`link_credential` (CHAOS-10688).** The one-time e-mail link token of the
 auth-service local flows (e-mail verification, password reset): 32 random bytes,

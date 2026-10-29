@@ -144,7 +144,7 @@ func (v *vtree) run(script string, env []string, verb ...string) cmdResult {
 	if err := os.MkdirAll(tmp, 0o755); err != nil {
 		v.t.Fatal(err)
 	}
-	e := inheritedEnv(nil, append([]string{"TMPDIR=" + tmp, "DEV_HEALTH_GO_CACHE=" + filepath.Join(tmp, "gocache")}, env...)...)
+	e := inheritedEnv(deadlineEnvNames, append([]string{"TMPDIR=" + tmp, "DEV_HEALTH_GO_CACHE=" + filepath.Join(tmp, "gocache")}, env...)...)
 	return freeSpec{dir: v.dir, env: e}.run("bash", append([]string{filepath.Join(v.dir, script)}, verb...)...)
 }
 

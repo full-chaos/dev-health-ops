@@ -159,7 +159,7 @@ var attributeVocabulary = map[string][]string{
 		"accepted", "invalid_credentials", "account_locked", "principal_deactivated", "email_unverified",
 		"email_collision", "signup_unavailable", "identity_conflict",
 		"provider_already_linked", "expired", "principal_not_found", "malformed", "compromised",
-		"invite_created", "invite_accepted", "invite_revoked",
+		"invite_created", "invite_accepted", "invite_revoked", "restore_fence_bootstrap",
 	},
 	"target_kind": {
 		"principal", "organization", "membership", "role_assignment", "resource_grant", "credential",
@@ -181,7 +181,7 @@ var attributeVocabulary = map[string][]string{
 	"client_service": {"auth-service", "api", "web", "billing-edge", "worker", "acr-api", "acr-mcp"},
 	// audience is a workload token's aud: a workload audience only.
 	"audience":         {"auth-service", "dev-health-api"},
-	"credential_class": {"user_access_token", "refresh_credential", "workload_token", "acr_client", "external_push", "service_account_key"},
+	"credential_class": {"user_access_token", "refresh_credential", "workload_token", "acr_client", "external_push", "service_account_key", "workload_bootstrap_credential"},
 	// source names who started an auth-service record: go-api-delegated is a
 	// session go-api signed the user in for and asked auth-service to issue.
 	"source": {"go-api-delegated"},

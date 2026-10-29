@@ -401,7 +401,12 @@ type drillPostResult struct {
 	LostRevisions         int64    `json:"revisions_lost_by_pitr_total"`
 	RevokesAfterTComeBack int      `json:"revokes_after_target_that_came_back"`
 	ReissuedDifferent     int      `json:"keys_reissued_with_different_content"`
-	Verdict               string   `json:"verdict"`
+	// Fenced is set by DRILL_FENCE=1: the restore fence (auth-migrate restore-fence export and apply) ran before
+	// these writes. FenceRowsForLiveTimeline is the number of restore_fence_state rows the runtime role reads for the
+	// timeline the server is on now: exactly one (the apply row) on a fenced restore.
+	Fenced                   bool   `json:"fenced"`
+	FenceRowsForLiveTimeline *int64 `json:"fence_rows_for_live_timeline,omitempty"`
+	Verdict                  string `json:"verdict"`
 }
 
 // drillPost runs new writes after a restore: every aggregate must continue at
@@ -409,11 +414,17 @@ type drillPostResult struct {
 // timeline). The keys the restored timeline re-issues, that the pre-restore
 // timeline (DRILL_FINAL) had already published, are reported, not failed: that
 // is the PITR caveat the drill measures.
+//
+// With DRILL_FENCE=1 the restore fence ran first (CHAOS-11271): the next write of every aggregate is
+// max(restored revision, floor) + 1, where the floor is the end-of-WAL revision (DRILL_FINAL), no key is re-issued
+// with different content, no revocation made after T is live, and the runtime role reads exactly one
+// restore_fence_state row for the live timeline.
 func drillPost(t *testing.T, ctx context.Context, rt *pgxpool.Pool, schema authschema.ValidatedIdentifier, admin *pgxpool.Pool, dir, expect, final string) {
 	t.Helper()
 	want := drillLoad(t, dir, expect)
 	fin := drillLoad(t, dir, final)
-	res := drillPostResult{Expect: expect, Final: final, ContinuityOK: true}
+	fenced := os.Getenv("DRILL_FENCE") == "1"
+	res := drillPostResult{Expect: expect, Final: final, ContinuityOK: true, Fenced: fenced}
 	for i := 0; i < drillOrgs; i++ {
 		if err := drillOrgUpdate(ctx, rt, schema, i, fmt.Sprintf("drill-post-%d", i)); err != nil {
 			t.Fatalf("post write org %d: %v", i, err)
@@ -430,9 +441,13 @@ func drillPost(t *testing.T, ctx context.Context, rt *pgxpool.Pool, schema auths
 	}
 	for i := 0; i < drillOrgs; i++ {
 		k := "organization:org_" + drillOrgID(i).String()
-		if got.Revisions[k] != want.Revisions[k]+1 {
+		next := want.Revisions[k] + 1
+		if fenced {
+			next = max(want.Revisions[k], fin.Revisions[k]) + 1
+		}
+		if got.Revisions[k] != next {
 			res.ContinuityOK = false
-			t.Errorf("%s: revision %d after one post-restore write, want %d", k, got.Revisions[k], want.Revisions[k]+1)
+			t.Errorf("%s: revision %d after one post-restore write, want %d", k, got.Revisions[k], next)
 		}
 		res.LostRevisions += fin.Revisions[k] - want.Revisions[k]
 	}
@@ -480,7 +495,24 @@ func drillPost(t *testing.T, ctx context.Context, rt *pgxpool.Pool, schema auths
 	if res.RevokesAfterTComeBack != 0 || res.ReissuedDifferent != 0 {
 		res.Verdict = "GAP"
 	}
+	if fenced {
+		var rows int64
+		if err := rt.QueryRow(ctx, `SELECT count(*) FROM `+authschema.Quote(schema)+`.restore_fence_state
+WHERE timeline_id = ('x' || substr(pg_walfile_name(pg_current_wal_insert_lsn()), 1, 8))::bit(32)::bigint`).Scan(&rows); err != nil {
+			t.Fatalf("read the fence rows of the live timeline as the runtime role: %v", err)
+		}
+		res.FenceRowsForLiveTimeline = &rows
+	}
 	drillWriteJSON(t, filepath.Join(dir, "post-"+expect+".json"), res)
+	if fenced {
+		if res.RevokesAfterTComeBack != 0 || res.ReissuedDifferent != 0 || len(res.ReusedKeys) != 0 {
+			t.Fatalf("fenced restore: %d revocation(s) after T came back, %d key(s) re-issued with different content, %d re-issued key(s)",
+				res.RevokesAfterTComeBack, res.ReissuedDifferent, len(res.ReusedKeys))
+		}
+		if res.FenceRowsForLiveTimeline == nil || *res.FenceRowsForLiveTimeline != 1 {
+			t.Fatalf("fenced restore: restore_fence_state has %v row(s) for the live timeline, want exactly 1", res.FenceRowsForLiveTimeline)
+		}
+	}
 	if !res.ContinuityOK || !res.NoDuplicateKeys {
 		t.Fatalf("post-restore writes: continuity=%v noDuplicateKeys=%v", res.ContinuityOK, res.NoDuplicateKeys)
 	}

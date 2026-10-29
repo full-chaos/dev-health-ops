@@ -680,18 +680,32 @@
       "id": "POST /api/v1/auth/change-password [dev-health-auth-service @api]",
       "issued_credential": [
         {
-          "algorithm": "HS256 (hs256_compat); EdDSA (eddsa)",
+          "algorithm": "HS256",
           "anchor": {
             "line": 63,
             "note": "func (i *Issuer) Access",
             "path": "internal/auth/authapi/issuer.go"
           },
-          "audience": "AUTH_JWT_AUDIENCE (default dev-health-api); under the eddsa class dev-health-api or auth-service",
+          "audience": "AUTH_JWT_AUDIENCE (default dev-health-api)",
           "class_id": "ops_access_token_hs256",
           "direction": "returned_to_caller",
-          "issuer": "AUTH_JWT_ISSUER (default dev-health-ops); under the eddsa class AUTH_TOKEN_ISSUER_URL",
+          "issuer": "AUTH_JWT_ISSUER (default dev-health-ops)",
           "lifetime_seconds": 3600,
-          "note": "go-api's access claims for the caller's new session, plus sid. Under the eddsa access token class (AUTH_ACCESS_TOKEN_CLASS) the returned access token is instead the EdDSA user access token (access-token.v1) of the configured audience, signed by the active key of the key set, and its signing kid is recorded on the new session."
+          "note": "go-api's access claims for the caller's new session, plus sid (hs256_compat class)."
+        },
+        {
+          "algorithm": "EdDSA",
+          "anchor": {
+            "line": 63,
+            "note": "func (i *Issuer) Access",
+            "path": "internal/auth/authapi/issuer.go"
+          },
+          "audience": "AUTH_JWT_AUDIENCE (dev-health-api or auth-service, eddsa class)",
+          "class_id": "user_access_token",
+          "direction": "returned_to_caller",
+          "issuer": "AUTH_TOKEN_ISSUER_URL",
+          "lifetime_seconds": 3600,
+          "note": "Under the eddsa access token class the access token of the caller's new session is the access-token.v1 JWS, signed by the active key of the key set; its signing kid is recorded on the new session."
         },
         {
           "algorithm": null,

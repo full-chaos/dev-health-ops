@@ -583,6 +583,13 @@ func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 		AccessIssuer:   stringOr(lookup, EnvAccessTokenIssuer, defaultAccessTokenIssuer),
 		AccessAudience: stringOr(lookup, EnvAccessTokenAudience, defaultAccessTokenAudience),
 	}
+	out.LegacyAudience = contracts.PlatformAPIAudience
+	if raw, set := lookup(EnvLegacyJWTAudience); set {
+		if raw == "" || raw != strings.TrimSpace(raw) {
+			return SessionTokens{}, fmt.Errorf("%s is set but empty or has surrounding whitespace: unset it for go-api's default audience", EnvLegacyJWTAudience)
+		}
+		out.LegacyAudience = raw
+	}
 	access, hasAccess, err := secrets.ResolveSecret(EnvAccessTokenSecret, lookup)
 	if err != nil {
 		return SessionTokens{}, err

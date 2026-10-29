@@ -40,11 +40,30 @@ type eddsaMinter struct {
 	check    signerCheck
 }
 
+// EdDSAOption adjusts NewEdDSAIssuer.
+type EdDSAOption func(*eddsaSettings)
+
+type eddsaSettings struct{ legacyAudience string }
+
+// WithLegacyAudience sets the audience the HS256 compatibility token is verified
+// with (go-api's JWT_AUDIENCE). An empty value keeps go-api's default audience.
+func WithLegacyAudience(audience string) EdDSAOption {
+	return func(s *eddsaSettings) {
+		if audience != "" {
+			s.legacyAudience = audience
+		}
+	}
+}
+
 // NewEdDSAIssuer builds an Issuer whose access tokens are access-token.v1
 // EdDSA tokens. secret and legacyIssuer only verify HS256 compatibility
 // tokens (the session routes, legacy refresh); this Issuer never signs with
 // them. issuerURL is the iss claim, byte for byte.
-func NewEdDSAIssuer(secret, legacyIssuer, audience string, signer AccessSigner, issuerURL string) (*Issuer, error) {
+func NewEdDSAIssuer(secret, legacyIssuer, audience string, signer AccessSigner, issuerURL string, options ...EdDSAOption) (*Issuer, error) {
+	settings := eddsaSettings{legacyAudience: contracts.PlatformAPIAudience}
+	for _, option := range options {
+		option(&settings)
+	}
 	scope, ok := contracts.AccessTokenScope(audience)
 	if !ok {
 		return nil, errors.New("authapi: the EdDSA access token audience is not a user access token audience")
@@ -56,7 +75,7 @@ func NewEdDSAIssuer(secret, legacyIssuer, audience string, signer AccessSigner, 
 		return nil, errors.New("authapi: the EdDSA access token needs an issuer URL")
 	}
 	// The HS256 compatibility token is go-api's: it carries go-api's audience, whatever audience this issuer mints.
-	verifier, err := edgetoken.New(secret, legacyIssuer, contracts.PlatformAPIAudience)
+	verifier, err := edgetoken.New(secret, legacyIssuer, settings.legacyAudience)
 	if err != nil {
 		return nil, err
 	}

@@ -55,6 +55,8 @@ type section struct {
 	active  string
 	// touch sets updated_at on a changed row.
 	touch bool
+	// deleteGuard narrows what a presence section deletes: an extra predicate on the restored row (alias t).
+	deleteGuard string
 	// manifestOnly marks a section that runs only with a manifest: with no manifest (the blind margin) nothing is
 	// known about which rows the source kept, and a presence section would remove every row.
 	manifestOnly bool
@@ -117,6 +119,13 @@ var sections = []section{
 		cols: []column{colTS("disabled_at")}, revoked: "s.disabled_at IS NOT NULL", active: "t.disabled_at IS NULL", touch: true},
 	{name: "auth.link_credentials", table: "link_credentials", kind: kindRevoke, key: colUUID("id"),
 		cols: []column{colTS("consumed_at")}, revoked: "s.consumed_at IS NOT NULL", active: "t.consumed_at IS NULL"},
+	// Link credentials the source replaced or removed: Issue deletes the old unconsumed row, so its restored copy
+	// would stay usable. The ids of the source's unconsumed rows are carried and a restored unconsumed row absent
+	// from them is deleted. The consumed section above runs first, so a link consumed after T stays as a consumed
+	// row. A link issued after T is absent from the restored database (expected). With no manifest (blind margin)
+	// every unconsumed link credential is removed: fail closed, users ask for a new link (D6459).
+	{name: "auth.link_credentials.ids", suffix: ".ids", table: "link_credentials", kind: kindPresence, key: colUUID("id"),
+		revoked: "s.consumed_at IS NULL", deleteGuard: "t.consumed_at IS NULL"},
 	// Replay evidence: the identifier hash of a used SAML assertion is a hash of a
 	// public assertion id, not a credential; it travels as hex.
 	{name: "auth.saml_assertion_uses", table: "saml_assertion_uses", kind: kindInsert, key: colText("issuer"),
@@ -243,10 +252,14 @@ SELECT (SELECT count(*) FROM u), 0::bigint`, s.recordset(), tbl, s.key.name, s.k
 		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s)
 SELECT 0::bigint, (SELECT count(*) FROM m x WHERE NOT EXISTS (SELECT 1 FROM %s t WHERE t.%s = x.%s))`, s.recordset(), tbl, s.key.name, s.key.name)
 	default: // kindPresence
+		guard := ""
+		if s.deleteGuard != "" {
+			guard = " AND " + s.deleteGuard
+		}
 		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s),
-d AS (DELETE FROM %s t WHERE NOT EXISTS (SELECT 1 FROM m x WHERE x.%s = t.%s) RETURNING 1)
+d AS (DELETE FROM %s t WHERE NOT EXISTS (SELECT 1 FROM m x WHERE x.%s = t.%s)%s RETURNING 1)
 SELECT (SELECT count(*) FROM d), 0::bigint`,
-			s.recordset(), tbl, s.key.name, s.key.name)
+			s.recordset(), tbl, s.key.name, s.key.name, guard)
 	}
 }
 

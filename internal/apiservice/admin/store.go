@@ -28,6 +28,9 @@ type pgStore struct {
 	// UsersOwned is AUTH_USERS_OWNED: auth-service owns users, so every
 	// public.users writer of the store refuses before it writes.
 	UsersOwned bool
+	// PlatformRolesOwned is AUTH_PLATFORM_ROLES_OWNED: auth-service owns the
+	// platform roles, so a write of public users.is_superuser refuses.
+	PlatformRolesOwned bool
 	// Now is injectable for tests; nil means time.Now.
 	Now func() time.Time
 }
@@ -201,5 +204,9 @@ func parseUUID(value string) (uuid.UUID, error) {
 // ErrUsersOwned is the refusal of a public.users write while auth-service owns
 // users; the routes answer the moved operation and the operator verbs exit refused.
 var ErrUsersOwned = usersowned.ErrRefused
+
+// ErrPlatformRolesOwned is the refusal of an is_superuser write while
+// auth-service owns the platform roles.
+var ErrPlatformRolesOwned = usersowned.ErrPlatformRolesRefused
 
 func (s pgStore) refuseWhileUsersOwned() error { return usersowned.RefuseWhileUsersOwned(s.UsersOwned) }

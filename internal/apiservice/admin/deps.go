@@ -78,6 +78,9 @@ type Deps struct {
 	// UsersOwned is AUTH_USERS_OWNED: auth-service owns users, so the routes
 	// that write public.users answer the moved operation.
 	UsersOwned bool
+	// PlatformRolesOwned is AUTH_PLATFORM_ROLES_OWNED: a write of
+	// is_superuser answers the moved operation.
+	PlatformRolesOwned bool
 }
 
 // Routes is the admin area's route set.

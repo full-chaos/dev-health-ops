@@ -81,12 +81,25 @@ type ColumnGrant struct {
 	Privilege  string
 }
 
-// SessionReadGrant names the auth session columns query-api may read: USAGE on
-// Schema and column SELECT on Schema.Table(Columns).
+// SessionReadGrant names the auth columns query-api may read: USAGE on Schema
+// and column SELECT on each of Tables: the sessions table (Table, Columns),
+// then Also (the platform role read while auth-service owns the platform roles).
 type SessionReadGrant struct {
 	Schema  string
 	Table   string
 	Columns []string
+	Also    []SessionReadTable
+}
+
+// SessionReadTable is one auth table of a SessionReadGrant.
+type SessionReadTable struct {
+	Table   string
+	Columns []string
+}
+
+// Tables is the whole read: the sessions table, then Also.
+func (g SessionReadGrant) Tables() []SessionReadTable {
+	return append([]SessionReadTable{{Table: g.Table, Columns: g.Columns}}, g.Also...)
 }
 
 type MigrationOptions struct {

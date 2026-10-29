@@ -6170,7 +6170,7 @@ func queryAPISessionRead(getenv getenvFunc) (*postgresstore.QueryAPISessionRead,
 	if err != nil {
 		return nil, err
 	}
-	read := postgresstore.QueryAPISessionReadFor(schema)
+	read := postgresstore.QueryAPISessionReadFor(schema, false)
 	return &read, nil
 }
 

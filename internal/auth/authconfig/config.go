@@ -233,6 +233,11 @@ type Config struct {
 	// auth.organizations; the legacy login projection writes nothing.
 	OrgsOwned bool
 
+	// PlatformRolesOwned is AUTH_PLATFORM_ROLES_OWNED, parsed by
+	// platformrole.OwnedFromLookup: the sign-in state reads is_superuser from
+	// the auth platform role assignments.
+	PlatformRolesOwned bool
+
 	// SSO holds the federated sign-in settings; a protocol without all of its
 	// values mounts no route.
 	SSO SSO

@@ -530,7 +530,7 @@ func queryAPISessionReadFor(lookup func(string) (string, bool), sessionsOwnedByA
 	if !riverstore.ValidIdentifier(schema) {
 		return nil, fmt.Errorf("AUTH_DATABASE_SCHEMA holds an unusable schema name")
 	}
-	read := postgresstore.QueryAPISessionReadFor(schema)
+	read := postgresstore.QueryAPISessionReadFor(schema, false)
 	return &riverstore.SessionReadGrant{Schema: read.Schema, Table: read.Table, Columns: read.Columns}, nil
 }
 

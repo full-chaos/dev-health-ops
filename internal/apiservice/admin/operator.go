@@ -42,6 +42,9 @@ type Operator struct {
 	// UsersOwned is AUTH_USERS_OWNED: auth-service owns users, so the verbs
 	// that write public.users refuse with ErrUsersOwned.
 	UsersOwned bool
+	// PlatformRolesOwned is AUTH_PLATFORM_ROLES_OWNED: a verb that writes
+	// is_superuser refuses with ErrPlatformRolesOwned.
+	PlatformRolesOwned bool
 	// readGrants replaces the org deletion's ClickHouse grant read in a test.
 	readGrants func(context.Context, driver.Conn) ([]string, error)
 }

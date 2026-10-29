@@ -60,6 +60,10 @@ const (
 	// active while public.memberships holds the member: go-api would still
 	// grant the membership.
 	DiffMembershipInactiveInPublic = "membership_inactive_in_public"
+	// DiffPlatformRoleDisabled counts public superusers whose auth principal
+	// is disabled: the backfill's assignment of such a principal gives no
+	// platform authority, so the platform roles switch would take it away.
+	DiffPlatformRoleDisabled = "platform_role_disabled_superuser"
 )
 
 // GatedClasses lists every class the gate counts, in report order: the diff

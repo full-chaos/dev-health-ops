@@ -201,6 +201,10 @@ type Options struct {
 	Audience string
 	TTL      time.Duration
 	Now      func() time.Time
+	// PlatformRolesOwned is AUTH_PLATFORM_ROLES_OWNED: the lookup also refuses
+	// a principal that holds a platform role in AuthSchema (empty: "auth").
+	PlatformRolesOwned bool
+	AuthSchema         string
 }
 
 func (o Options) withDefaults() Options {
@@ -287,18 +291,23 @@ const lookupSQL = `SELECT u.id::text, u.email, u.is_active, u.is_superuser, u.to
 
 // LookupPrincipal reads the proof service principal for orgID and refuses
 // any row the edge must not accept for go-api-prove.
-func LookupPrincipal(ctx context.Context, db RowQuerier, orgID string) (Principal, error) {
-	return lookupPrincipal(ctx, db, ProvePrincipalID, orgID)
+func LookupPrincipal(ctx context.Context, db RowQuerier, orgID string, opts Options) (Principal, error) {
+	return lookupPrincipal(ctx, db, ProvePrincipalID, orgID, opts)
 }
 
 // LookupAdminPrincipal reads the org-admin proof service principal for orgID
 // and refuses any row that is not a service identity holding exactly the
 // admin role in that org.
-func LookupAdminPrincipal(ctx context.Context, db RowQuerier, orgID string) (Principal, error) {
-	return lookupPrincipal(ctx, db, AdminProofPrincipalID, orgID)
+func LookupAdminPrincipal(ctx context.Context, db RowQuerier, orgID string, opts Options) (Principal, error) {
+	return lookupPrincipal(ctx, db, AdminProofPrincipalID, orgID, opts)
 }
 
-func lookupPrincipal(ctx context.Context, db RowQuerier, principalID, orgID string) (Principal, error) {
+// lookupSQLFor is the lookup statement. RED STUB: public is_superuser only.
+func lookupSQLFor(opts Options) (string, error) {
+	return lookupSQL, nil
+}
+
+func lookupPrincipal(ctx context.Context, db RowQuerier, principalID, orgID string, opts Options) (Principal, error) {
 	if _, err := uuid.Parse(orgID); err != nil {
 		return Principal{}, errors.New("edgetokenmint: org id is not a UUID")
 	}
@@ -309,7 +318,11 @@ func lookupPrincipal(ctx context.Context, db RowQuerier, principalID, orgID stri
 		hasPassword             bool
 		role                    *string
 	)
-	err := db.QueryRow(ctx, lookupSQL, principalID, orgID).Scan(
+	query, err := lookupSQLFor(opts)
+	if err != nil {
+		return Principal{}, err
+	}
+	err = db.QueryRow(ctx, query, principalID, orgID).Scan(
 		&id, &email, &active, &superuser, &tokenVersion, &authProvider, &hasPassword, &role,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -336,7 +349,7 @@ func lookupPrincipal(ctx context.Context, db RowQuerier, principalID, orgID stri
 // MintForAdminProve looks up the org-admin proof service principal for orgID
 // and mints its token (role admin).
 func MintForAdminProve(ctx context.Context, db RowQuerier, signingKey []byte, orgID string, opts Options) (string, error) {
-	principal, err := LookupAdminPrincipal(ctx, db, orgID)
+	principal, err := LookupAdminPrincipal(ctx, db, orgID, opts)
 	if err != nil {
 		return "", err
 	}
@@ -346,7 +359,7 @@ func MintForAdminProve(ctx context.Context, db RowQuerier, signingKey []byte, or
 // MintForProve looks up the proof service principal for orgID and mints
 // its token. This is the entry point cmd/mint-edge-token uses.
 func MintForProve(ctx context.Context, db RowQuerier, signingKey []byte, orgID string, opts Options) (string, error) {
-	principal, err := LookupPrincipal(ctx, db, orgID)
+	principal, err := LookupPrincipal(ctx, db, orgID, opts)
 	if err != nil {
 		return "", err
 	}

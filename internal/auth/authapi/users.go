@@ -12,6 +12,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/orgactivity"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
 // UserState is the live public.users state an access token is minted from.
@@ -51,7 +52,22 @@ type Membership struct {
 // is_superuser, token_version, auth_provider) and memberships (user_id, org_id, role,
 // joined_at, created_at), and nothing else (authschema.PublicReadColumns). The schema is named, so the role's search_path
 // does not decide which table is read.
-type PGUsers struct{ Pool *pgxpool.Pool }
+type PGUsers struct {
+	Pool *pgxpool.Pool
+	// AuthSchema is the validated auth schema, read while PlatformRolesOwned.
+	AuthSchema authschema.ValidatedIdentifier
+	// PlatformRolesOwned is AUTH_PLATFORM_ROLES_OWNED: is_superuser is read
+	// from the auth platform role assignments (platformrole.HoldsSQL).
+	PlatformRolesOwned bool
+}
+
+// stateSQL is StateOn's statement. RED STUB: the public column always.
+func (p PGUsers) stateSQL() string {
+	return `
+		SELECT email, username, full_name, COALESCE(is_active, false), COALESCE(is_superuser, false),
+		       COALESCE(token_version, 0), auth_provider
+		FROM public.users WHERE id = $1`
+}
 
 // errMultipleRows is a lookup that must match at most one row matching more.
 var errMultipleRows = errors.New("authapi: more than one row where one or none was expected")
@@ -69,10 +85,7 @@ func (p PGUsers) State(ctx context.Context, userID uuid.UUID) (UserState, bool, 
 // StateOn is State on q: the caller's connection or transaction.
 func (p PGUsers) StateOn(ctx context.Context, q session.Queryer, userID uuid.UUID) (UserState, bool, error) {
 	var s UserState
-	err := q.QueryRow(ctx, `
-		SELECT email, username, full_name, COALESCE(is_active, false), COALESCE(is_superuser, false),
-		       COALESCE(token_version, 0), auth_provider
-		FROM public.users WHERE id = $1`, userID).
+	err := q.QueryRow(ctx, p.stateSQL(), userID).
 		Scan(&s.Email, &s.Username, &s.FullName, &s.IsActive, &s.IsSuperuser, &s.TokenVersion, &s.AuthProvider)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return UserState{}, false, nil

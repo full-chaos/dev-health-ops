@@ -33,6 +33,20 @@ type PGStore struct {
 	// AuthSchema is the auth-service schema the sessions live in
 	// (AUTH_DATABASE_SCHEMA); empty means "auth".
 	AuthSchema string
+	// PlatformRolesOwned is AUTH_PLATFORM_ROLES_OWNED: is_superuser is read
+	// from the auth platform role assignments (platformrole.HoldsSQL), not from
+	// public users.is_superuser.
+	PlatformRolesOwned bool
+}
+
+// userStateSQL is UserState's statement. RED STUB: the public column always.
+func (s PGStore) userStateSQL() (string, error) {
+	return `SELECT is_active, is_superuser, token_version FROM users WHERE id = $1`, nil
+}
+
+// accessUserSQL is AccessUser's statement. RED STUB: the public column always.
+func (s PGStore) accessUserSQL() (string, error) {
+	return `SELECT is_active, is_superuser, token_version, email, username, full_name FROM users WHERE id = $1`, nil
 }
 
 func (s PGStore) now() time.Time {
@@ -48,9 +62,11 @@ func (s PGStore) now() time.Time {
 func (s PGStore) UserState(ctx context.Context, id uuid.UUID) (UserState, bool, error) {
 	var active, superuser *bool
 	var version *int64
-	err := s.Pool.QueryRow(ctx,
-		`SELECT is_active, is_superuser, token_version FROM users WHERE id = $1`, id,
-	).Scan(&active, &superuser, &version)
+	query, err := s.userStateSQL()
+	if err != nil {
+		return UserState{}, false, err
+	}
+	err = s.Pool.QueryRow(ctx, query, id).Scan(&active, &superuser, &version)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return UserState{}, false, nil
 	}

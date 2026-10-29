@@ -32,8 +32,8 @@ func TestEverySectionNamesItsTableAndKeepsAuthAndLegacySeparate(t *testing.T) {
 		if s.legacy {
 			prefix = "public."
 		}
-		if s.name != prefix+s.table {
-			t.Errorf("section %q: want the name %q", s.name, prefix+s.table)
+		if s.name != prefix+s.table+s.suffix {
+			t.Errorf("section %q: want the name %q", s.name, prefix+s.table+s.suffix)
 		}
 		if got := s.qualified(testSchema(t)); s.legacy && !strings.HasPrefix(got, "public.") || !s.legacy && !strings.HasPrefix(got, `"auth".`) {
 			t.Errorf("section %s qualifies as %s", s.name, got)

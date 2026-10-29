@@ -17,6 +17,10 @@ const (
 	// ActionRequeueProviderRevocation: a provider token revocation queued after
 	// the target is gone; the operator re-disconnects or revokes at the provider.
 	ActionRequeueProviderRevocation ActionKind = "requeue_provider_revocation"
+	// ActionUserTombstoned: the source deleted these legacy users after the target. The restored rows are
+	// disabled and their token_version is bumped, not deleted. Nothing is required of the operator; the ids are
+	// named so the deletion is visible.
+	ActionUserTombstoned ActionKind = "user_tombstoned"
 )
 
 // followUp names the follow-up leaf that automates each action; the operator
@@ -24,6 +28,7 @@ const (
 var followUp = map[ActionKind]string{
 	ActionForcePasswordReset:        "CHAOS-11834",
 	ActionRequeueProviderRevocation: "CHAOS-11835",
+	ActionUserTombstoned:            "none",
 }
 
 // OperatorAction is the ids a section names for one action. Ids only: never a

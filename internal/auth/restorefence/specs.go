@@ -30,6 +30,9 @@ const (
 	// kindInsert puts back replay evidence the restore lost: a row of the
 	// source that the restored table lacks is inserted; an existing row is left.
 	kindInsert
+	// kindTombstone disables (is_active false) and bumps token_version of the restored rows whose id is not in
+	// the manifest: a row the source deleted. It never deletes: foreign keys fan out from users.
+	kindTombstone
 	// kindReport writes nothing: it names the source rows the restored table
 	// lacks, as an operator action.
 	kindReport
@@ -37,8 +40,10 @@ const (
 
 // section is one table the fence carries.
 type section struct {
-	// name is the manifest section name: "auth.<table>" or "public.<table>".
+	// name is the manifest section name: "auth.<table>" or "public.<table>", plus suffix when a table has two
+	// sections.
 	name   string
+	suffix string
 	legacy bool // a table of the legacy public schema
 	table  string
 	kind   kind
@@ -139,6 +144,10 @@ var sections = []section{
 	{name: "public.users", legacy: true, table: "users", kind: kindCounter, key: colUUID("id"),
 		cols: []column{{name: "is_active", pgType: "boolean"}, {name: "token_version", pgType: "integer"}}, revoked: "s.token_version > 0 OR NOT s.is_active", touch: true,
 		action: ActionForcePasswordReset},
+	// A legacy user the source force-deleted after the target: tombstoned, never deleted (restrict and no-action
+	// foreign keys, cascades into sessions and tokens). Runs after the counter section above.
+	{name: "public.users.present", suffix: ".present", legacy: true, table: "users", kind: kindTombstone, key: colUUID("id"), manifestOnly: true,
+		action: ActionUserTombstoned},
 	{name: "public.provider_oauth_revocations", legacy: true, table: "provider_oauth_revocations", kind: kindReport, key: colUUID("id"),
 		cols: []column{colText("org_id"), colText("provider"), colText("purpose")}, action: ActionRequeueProviderRevocation},
 	// The legacy SAML replay table: an assertion id used after the target must stay used.
@@ -225,6 +234,11 @@ SELECT (SELECT count(*) FROM u), (SELECT count(*) FROM m x WHERE NOT EXISTS (SEL
 		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s),
 i AS (INSERT INTO %s (%s) SELECT %s FROM m ON CONFLICT DO NOTHING RETURNING 1)
 SELECT (SELECT count(*) FROM i), 0::bigint`, s.recordset(), tbl, strings.Join(names, ", "), strings.Join(exprs, ", "))
+	case kindTombstone:
+		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s),
+u AS (UPDATE %s t SET is_active = false, token_version = t.token_version + 1, updated_at = clock_timestamp()
+      WHERE NOT EXISTS (SELECT 1 FROM m x WHERE x.%s = t.%s) RETURNING 1)
+SELECT (SELECT count(*) FROM u), 0::bigint`, s.recordset(), tbl, s.key.name, s.key.name)
 	case kindReport:
 		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s)
 SELECT 0::bigint, (SELECT count(*) FROM m x WHERE NOT EXISTS (SELECT 1 FROM %s t WHERE t.%s = x.%s))`, s.recordset(), tbl, s.key.name, s.key.name)
@@ -245,6 +259,9 @@ func (s section) idsSQL(schema authschema.ValidatedIdentifier) string {
 		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s)
 SELECT t.%s::text FROM %s t JOIN m x ON x.%s = t.%s
 WHERE t.password_updated_at IS NULL OR t.password_updated_at < x.password_updated_at ORDER BY 1`, s.recordset(), s.key.name, tbl, s.key.name, s.key.name)
+	case s.kind == kindTombstone:
+		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s)
+SELECT t.%s::text FROM %s t WHERE NOT EXISTS (SELECT 1 FROM m x WHERE x.%s = t.%s) ORDER BY 1`, s.recordset(), s.key.name, tbl, s.key.name, s.key.name)
 	case s.kind == kindReport:
 		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s)
 SELECT x.%s::text FROM m x WHERE NOT EXISTS (SELECT 1 FROM %s t WHERE t.%s = x.%s) ORDER BY 1`, s.recordset(), s.key.name, tbl, s.key.name, s.key.name)

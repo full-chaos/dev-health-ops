@@ -79,7 +79,7 @@ func TestInviteRevokeIsNotMountedYet(t *testing.T) {
 		t.Fatalf("POST %s through the provisioning routes = %d, want 404", PatternInviteRevoke, response.Code)
 	}
 	routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
-		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision})
+		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate})
 	if err != nil {
 		t.Fatal(err)
 	}

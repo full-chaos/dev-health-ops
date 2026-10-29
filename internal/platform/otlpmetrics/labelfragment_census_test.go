@@ -552,8 +552,9 @@ func TestFragmentLabelsTableEqualsTheCensus(t *testing.T) {
 			t.Errorf("fragment family %s: labels.tsv has %v, the code emits %v (%s)", name, row.Keys, keys, c.sites[name].file)
 		}
 	}
-	if c.typeFiles < 39 || c.typeLines < 122 || len(want) < 280 {
-		t.Errorf("the census read %d files, %d TYPE lines, %d families: fewer than the 39 files and 122 lines of the base", c.typeFiles, c.typeLines, len(want))
+	// CHAOS-11813 retired the legacy ingest fragment (its TYPE line; 122 before).
+	if c.typeFiles < 39 || c.typeLines < 121 || len(want) < 280 {
+		t.Errorf("the census read %d files, %d TYPE lines, %d families: fewer than the 39 files and 121 lines of the base", c.typeFiles, c.typeLines, len(want))
 	}
 	t.Logf("%d files with # TYPE, %d TYPE lines, %d families", c.typeFiles, c.typeLines, len(want))
 }

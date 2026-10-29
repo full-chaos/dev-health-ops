@@ -14,7 +14,6 @@ internal/api/githubcode
 internal/api/gitlabcode
 internal/api/health
 internal/api/integrationsadmin
-internal/api/legacyingest
 internal/api/licensing
 internal/api/licensing/processlicense
 internal/api/oauthprovider

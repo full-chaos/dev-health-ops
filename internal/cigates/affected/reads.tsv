@@ -26,6 +26,7 @@ internal/auth/authconfig	test	contracts
 internal/auth/authruntime	test	contracts
 internal/auth/authruntime	test	deploy
 internal/auth/contracts	code	contracts
+internal/auth/contracts	test	ci
 internal/auth/contracts	test	docs
 internal/auth/contracts/tokencorpus	code	contracts
 internal/auth/identity/oidc	test	ci
@@ -129,6 +130,7 @@ internal/cigates/workflowpaths	test	deploy
 internal/cigates/workflowpaths	test	docs
 internal/cigates/workflowpaths	test	docs-data
 internal/cigates/workflows	test	.github
+internal/cigates/workflows	test	.gitlab-ci.yml
 internal/cigates/workflows	test	ci
 internal/cigates/workflows	test	compose.yml
 internal/cigates/workflows	test	contracts

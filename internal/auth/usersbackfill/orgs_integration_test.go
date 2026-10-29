@@ -119,7 +119,7 @@ func TestOrgsBackfillInsertsThenRerunChangesNothing(t *testing.T) {
 	}
 }
 
-func TestOrgsBackfillReactivationRoleChangeAndDivergence(t *testing.T) {
+func TestOrgsBackfillKeepsSuspensionRoleChangeAndDivergence(t *testing.T) {
 	e := getReconEnv(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -137,15 +137,17 @@ func TestOrgsBackfillReactivationRoleChangeAndDivergence(t *testing.T) {
 	if _, err := e.admin.Exec(ctx, `UPDATE public.memberships SET role = 'owner' WHERE org_id = $1 AND user_id = $2`, org, u1); err != nil {
 		t.Fatal(err)
 	}
+	// go-api's reactivation does not reactivate the auth organization: a
+	// suspension in the auth schema ends only by an auth-service verb.
 	rep := e.runOrgs(t, ctx, false)
-	if rep.OrgsReactivated != 1 || rep.MembershipsRoleSet != 1 || rep.SkippedTotal() != 0 {
+	if rep.OrgsReactivated != 0 || rep.MembershipsRoleSet != 1 || rep.SkippedTotal() != 0 {
 		t.Fatalf("second run: %+v", rep)
 	}
-	if e.count(t, ctx, `SELECT count(*) FROM auth.organizations WHERE id = $1 AND disabled_at IS NULL`, org) != 1 {
-		t.Fatal("reactivation did not clear disabled_at")
+	if e.count(t, ctx, `SELECT count(*) FROM auth.organizations WHERE id = $1 AND disabled_at IS NOT NULL`, org) != 1 {
+		t.Fatal("the backfill cleared disabled_at of a suspended organization")
 	}
-	if e.count(t, ctx, `SELECT count(*) FROM auth.auth_outbox_events WHERE event_type = 'organization.reactivated' AND aggregate_id = 'org_'||$1::text`, org) != 1 {
-		t.Fatal("no organization.reactivated event")
+	if e.count(t, ctx, `SELECT count(*) FROM auth.auth_outbox_events WHERE event_type = 'organization.reactivated' AND aggregate_id = 'org_'||$1::text`, org) != 0 {
+		t.Fatal("an organization.reactivated event")
 	}
 	if e.count(t, ctx, `SELECT count(*) FROM auth.memberships WHERE organization_id = $1 AND principal_id = $2 AND role = 'owner'`, org, u1) != 1 ||
 		e.count(t, ctx, `SELECT count(*) FROM auth.auth_outbox_events WHERE event_type = 'membership.role_changed'`) < 1 {

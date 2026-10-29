@@ -14,6 +14,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -403,26 +405,35 @@ func (e *env) holdWriteLock(t *testing.T, ctx context.Context) func() {
 // the wait is seen and before the release.
 func (e *env) waitsForTheWriteLock(t *testing.T, ctx context.Context, write func() error, whileBlocked func()) error {
 	t.Helper()
+	return e.waitsBehind(t, ctx, func() func() { return e.holdWriteLock(t, ctx) },
+		`wait_event_type = 'Lock' AND wait_event = 'advisory'`, "the write lock", write, whileBlocked)
+}
+
+// waitsBehind runs write while hold's transaction holds a lock: write must be
+// seen waiting (waitCondition on pg_stat_activity, for the runtime role)
+// before it returns, and must finish once the lock is released. whileBlocked,
+// when set, runs after the wait is seen and before the release.
+func (e *env) waitsBehind(t *testing.T, ctx context.Context, hold func() func(), waitCondition, what string, write func() error, whileBlocked func()) error {
+	t.Helper()
 	var role string
 	if err := e.runtime.QueryRow(ctx, `SELECT current_user`).Scan(&role); err != nil {
 		t.Fatal(err)
 	}
-	release := e.holdWriteLock(t, ctx)
+	release := hold()
 	done := make(chan error, 1)
 	go func() { done <- write() }()
 	for {
 		select {
 		case err := <-done:
 			release()
-			t.Fatalf("the write returned (%v) while another transaction held the write lock", err)
+			t.Fatalf("the write returned (%v) while another transaction held %s", err, what)
 		case <-ctx.Done():
 			release()
-			t.Fatal("no waiter on the write lock was seen")
+			t.Fatalf("no waiter on %s was seen", what)
 		default:
 		}
 		var waiting int
-		if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
-			WHERE usename = $1 AND wait_event_type = 'Lock' AND wait_event = 'advisory'`, role).Scan(&waiting); err != nil {
+		if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE usename = $1 AND `+waitCondition, role).Scan(&waiting); err != nil {
 			release()
 			t.Fatal(err)
 		}
@@ -437,6 +448,25 @@ func (e *env) waitsForTheWriteLock(t *testing.T, ctx context.Context, write func
 	release()
 	return <-done
 }
+
+// holdPrincipalRow locks one principal row FOR UPDATE in an open admin
+// transaction, as a concurrent disable would, and returns its release.
+func (e *env) holdPrincipalRow(t *testing.T, ctx context.Context, principal uuid.UUID) func() {
+	t.Helper()
+	tx, err := e.admin.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var id uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT id FROM auth.principals WHERE id = $1 FOR UPDATE`, principal).Scan(&id); err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatal(err)
+	}
+	return func() { _ = tx.Rollback(ctx) }
+}
+
+// rowLockWait is a wait on a row lock, not on the advisory write lock.
+const rowLockWait = `wait_event_type = 'Lock' AND wait_event <> 'advisory'`
 
 func TestGrantWaitsForTheWriteLock(t *testing.T) {
 	e := getEnv(t)
@@ -515,5 +545,271 @@ func TestGrantChecksTheExpiryAfterTheWriteLock(t *testing.T) {
 	}, func() { e.sleepPast(t, ctx, until) })
 	if !errors.Is(err, ErrExpiryNotFuture) {
 		t.Fatalf("an expiry that passed while the grant waited: %v, want ErrExpiryNotFuture", err)
+	}
+}
+
+// A granter whose role expires while the grant waits on a principal row lock
+// is refused: the guard reads after every lock wait.
+func TestGrantChecksTheGranterAfterAPrincipalRowWait(t *testing.T) {
+	e := getEnv(t)
+	ctx := ctxT(t)
+	admin := e.user(t, ctx, true, true)
+	granter := e.user(t, ctx, true, false)
+	target := e.user(t, ctx, true, false)
+	until := time.Now().Add(3 * time.Second)
+	if _, err := e.store.Grant(ctx, GrantInput{Actor: admin, Principal: granter, Role: PlatformAdmin, ExpiresAt: &until}); err != nil {
+		t.Fatal(err)
+	}
+	err := e.waitsBehind(t, ctx, func() func() { return e.holdPrincipalRow(t, ctx, target) }, rowLockWait, "the target's principal row",
+		func() error {
+			_, err := e.store.Grant(ctx, GrantInput{Actor: granter, Principal: target, Role: PlatformAdmin})
+			return err
+		}, func() { e.sleepPast(t, ctx, until) })
+	if !errors.Is(err, ErrGranterNotHeld) {
+		t.Fatalf("a granter that expired while the grant waited on a principal row: %v, want ErrGranterNotHeld", err)
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.platform_role_assignments WHERE principal_id = $1`, target); n != 0 {
+		t.Fatalf("the refused grant wrote %d rows", n)
+	}
+}
+
+// A revoker whose role expires while the revoke waits on a principal row lock
+// is refused, and the target keeps its role.
+func TestRevokeChecksTheRevokerAfterAPrincipalRowWait(t *testing.T) {
+	e := getEnv(t)
+	ctx := ctxT(t)
+	admin := e.user(t, ctx, true, true)
+	revoker := e.user(t, ctx, true, false)
+	target := e.user(t, ctx, true, true)
+	until := time.Now().Add(3 * time.Second)
+	if _, err := e.store.Grant(ctx, GrantInput{Actor: admin, Principal: revoker, Role: PlatformAdmin, ExpiresAt: &until}); err != nil {
+		t.Fatal(err)
+	}
+	err := e.waitsBehind(t, ctx, func() func() { return e.holdPrincipalRow(t, ctx, target) }, rowLockWait, "the target's principal row",
+		func() error {
+			return e.store.Revoke(ctx, RevokeInput{Actor: revoker, Principal: target, Role: PlatformAdmin})
+		}, func() { e.sleepPast(t, ctx, until) })
+	if !errors.Is(err, ErrGranterNotHeld) {
+		t.Fatalf("a revoker that expired while the revoke waited on a principal row: %v, want ErrGranterNotHeld", err)
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.platform_role_assignments WHERE principal_id = $1`, target); n != 1 {
+		t.Fatalf("the refused revoke left %d rows of the target, want 1", n)
+	}
+}
+
+// bootstrapStore is the store as the migration role uses it (the admin pool).
+func (e *env) bootstrapStore(t *testing.T) *Store {
+	t.Helper()
+	s, err := New(Config{Pool: e.admin, Schema: e.schema})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func (e *env) bootstrapAudits(t *testing.T, ctx context.Context, principal uuid.UUID) int {
+	t.Helper()
+	return e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.platform_role.granted'
+		AND subject_principal_id = $1 AND attributes->>'reason_code' = 'restore_fence_bootstrap'`, principal)
+}
+
+func TestBootstrapRefusesWhileAnAdminIsActive(t *testing.T) {
+	e := isolatedEnv(t)
+	ctx := ctxT(t)
+	e.user(t, ctx, true, true)
+	target := e.user(t, ctx, true, false)
+	if _, err := e.bootstrapStore(t).Bootstrap(ctx, target); !errors.Is(err, ErrBootstrapAdminActive) {
+		t.Fatalf("bootstrap with an active admin: %v, want ErrBootstrapAdminActive", err)
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.platform_role_assignments WHERE principal_id = $1`, target); n != 0 {
+		t.Fatalf("the refused bootstrap wrote %d rows", n)
+	}
+}
+
+func TestBootstrapGrantsWhenNoAdminIsActive(t *testing.T) {
+	e := isolatedEnv(t)
+	ctx := ctxT(t)
+	target := e.user(t, ctx, true, false)
+	id, err := e.bootstrapStore(t).Bootstrap(ctx, target)
+	if err != nil {
+		t.Fatalf("bootstrap with no active admin: %v", err)
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.platform_role_assignments WHERE id = $1 AND principal_id = $2
+		AND role_key = 'platform_admin' AND granted_by = $2 AND expires_at IS NULL`, id, target); n != 1 {
+		t.Fatal("the bootstrap row is not a permanent self-granted platform_admin")
+	}
+	if n := e.bootstrapAudits(t, ctx, target); n != 1 {
+		t.Fatalf("bootstrap audit rows = %d, want 1", n)
+	}
+	if held, err := e.store.Resolve(ctx, target); err != nil || !held.Allows(GrantAction) {
+		t.Fatalf("Resolve after the bootstrap: %v %v", held.Roles(), err)
+	}
+	other := e.user(t, ctx, true, false)
+	if _, err := e.bootstrapStore(t).Bootstrap(ctx, other); !errors.Is(err, ErrBootstrapAdminActive) {
+		t.Fatalf("a second bootstrap: %v, want ErrBootstrapAdminActive", err)
+	}
+}
+
+func TestBootstrapRefusesADisabledOrMissingPrincipal(t *testing.T) {
+	e := isolatedEnv(t)
+	ctx := ctxT(t)
+	disabled := e.user(t, ctx, false, false)
+	if _, err := e.bootstrapStore(t).Bootstrap(ctx, disabled); !errors.Is(err, ErrPrincipalOff) {
+		t.Fatalf("bootstrap of a disabled principal: %v, want ErrPrincipalOff", err)
+	}
+	if _, err := e.bootstrapStore(t).Bootstrap(ctx, uuid.New()); !errors.Is(err, ErrPrincipalMissing) {
+		t.Fatalf("bootstrap of a missing principal: %v, want ErrPrincipalMissing", err)
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.platform_role_assignments`); n != 0 {
+		t.Fatalf("refused bootstraps wrote %d rows", n)
+	}
+}
+
+// The principal's own expired assignment blocks a new row: the bootstrap
+// replaces it in the same commit, with the revoked event of the old id.
+func TestBootstrapReplacesThePrincipalsExpiredAssignment(t *testing.T) {
+	e := isolatedEnv(t)
+	ctx := ctxT(t)
+	target := e.user(t, ctx, true, false)
+	expired := uuid.New()
+	subject := target.String()
+	if err := audit.Commit(ctx, e.admin, e.schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			_, err := tx.Exec(ctx, `INSERT INTO auth.platform_role_assignments (id, principal_id, role_key, granted_by, expires_at)
+VALUES ($1, $2, 'platform_admin', $2, statement_timestamp() - interval '1 minute')`, expired, target)
+			return err
+		},
+		Audit: audit.AuditEvent{EventType: "auth.platform_role.granted", Outcome: audit.OutcomeAllowed, SubjectPrincipalID: &subject,
+			Attributes: map[string]any{"reason_code": "role_granted", "target_kind": "principal", "target_id": subject}},
+		Events: []audit.OutboxEvent{{AggregateType: "platform_role_assignment",
+			AggregateID: provisioning.WireID("platform_role_assignment", expired.String()), EventType: "platform_role_assignment.granted",
+			Change: map[string]any{"status": "active"}}},
+	}); err != nil {
+		t.Fatalf("plant an expired assignment: %v", err)
+	}
+	id, err := e.bootstrapStore(t).Bootstrap(ctx, target)
+	if err != nil {
+		t.Fatalf("bootstrap over the principal's expired assignment: %v", err)
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.platform_role_assignments WHERE id = $1`, expired); n != 0 {
+		t.Fatal("the expired assignment is still there")
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.platform_role_assignments WHERE id = $1 AND expires_at IS NULL AND granted_by = $2`, id, target); n != 1 {
+		t.Fatal("the bootstrap row is missing")
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.auth_outbox_events WHERE event_type = 'platform_role_assignment.revoked' AND aggregate_id = $1`,
+		"pra_"+expired.String()); n != 1 {
+		t.Fatalf("revoked events for the expired assignment = %d, want 1", n)
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.auth_outbox_events WHERE event_type = 'platform_role_assignment.granted' AND aggregate_id = $1`,
+		"pra_"+id.String()); n != 1 {
+		t.Fatalf("granted events for the bootstrap row = %d, want 1", n)
+	}
+	if n := e.bootstrapAudits(t, ctx, target); n != 1 {
+		t.Fatalf("bootstrap audit rows (reason restore_fence_bootstrap) = %d, want 1", n)
+	}
+}
+
+// plantAssignment writes one platform_admin row of principal through
+// audit.Commit (grantedBy nil = no granter; expired = a minute in the past).
+func (e *env) plantAssignment(t *testing.T, ctx context.Context, principal uuid.UUID, grantedBy *uuid.UUID, expired bool) uuid.UUID {
+	t.Helper()
+	id := uuid.New()
+	expiry := "NULL"
+	if expired {
+		expiry = "statement_timestamp() - interval '1 minute'"
+	}
+	subject := principal.String()
+	if err := audit.Commit(ctx, e.admin, e.schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			_, err := tx.Exec(ctx, `INSERT INTO auth.platform_role_assignments (id, principal_id, role_key, granted_by, expires_at)
+VALUES ($1, $2, 'platform_admin', $3, `+expiry+`)`, id, principal, grantedBy)
+			return err
+		},
+		Audit: audit.AuditEvent{EventType: "auth.platform_role.granted", Outcome: audit.OutcomeAllowed, SubjectPrincipalID: &subject,
+			Attributes: map[string]any{"reason_code": "role_granted", "target_kind": "principal", "target_id": subject}},
+		Events: []audit.OutboxEvent{{AggregateType: "platform_role_assignment",
+			AggregateID: provisioning.WireID("platform_role_assignment", id.String()), EventType: "platform_role_assignment.granted",
+			Change: map[string]any{"status": "active"}}},
+	}); err != nil {
+		t.Fatalf("plant an assignment: %v", err)
+	}
+	return id
+}
+
+// unplantAssignment deletes one assignment through audit.Commit.
+func (e *env) unplantAssignment(t *testing.T, ctx context.Context, id, principal uuid.UUID) {
+	t.Helper()
+	subject := principal.String()
+	if err := audit.Commit(ctx, e.admin, e.schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			_, err := tx.Exec(ctx, `DELETE FROM auth.platform_role_assignments WHERE id = $1`, id)
+			return err
+		},
+		Audit: audit.AuditEvent{EventType: "auth.platform_role.revoked", Outcome: audit.OutcomeAllowed, SubjectPrincipalID: &subject,
+			Attributes: map[string]any{"reason_code": "role_revoked", "target_kind": "principal", "target_id": subject}},
+		Events: []audit.OutboxEvent{{AggregateType: "platform_role_assignment",
+			AggregateID: provisioning.WireID("platform_role_assignment", id.String()), EventType: "platform_role_assignment.revoked",
+			Change: map[string]any{"status": "revoked"}}},
+	}); err != nil {
+		t.Fatalf("remove an assignment: %v", err)
+	}
+}
+
+// The target's own assignment that has NOT expired is an active admin: the
+// bootstrap refuses and deletes nothing.
+func TestBootstrapDeletesNoUnexpiredAssignment(t *testing.T) {
+	e := isolatedEnv(t)
+	ctx := ctxT(t)
+	target := e.user(t, ctx, true, false)
+	held := e.plantAssignment(t, ctx, target, nil, false)
+	if _, err := e.bootstrapStore(t).Bootstrap(ctx, target); !errors.Is(err, ErrBootstrapAdminActive) {
+		t.Fatalf("bootstrap over the target's unexpired assignment: %v, want ErrBootstrapAdminActive", err)
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.platform_role_assignments WHERE id = $1`, held); n != 1 {
+		t.Fatal("the refused bootstrap deleted the unexpired assignment")
+	}
+	if n := e.bootstrapAudits(t, ctx, target); n != 0 {
+		t.Fatalf("the refused bootstrap wrote %d audit rows", n)
+	}
+}
+
+// The replace deletes only the row the bootstrap read: when that row changed
+// after the read (gone, or replaced by another expired row), the bootstrap is
+// refused and writes nothing.
+func TestBootstrapReplaceRefusesWhenTheRowChangedAfterTheRead(t *testing.T) {
+	for name, replace := range map[string]bool{"removed": false, "replaced": true} {
+		t.Run(name, func(t *testing.T) {
+			e := isolatedEnv(t)
+			ctx := ctxT(t)
+			target := e.user(t, ctx, true, false)
+			e.plantAssignment(t, ctx, target, &target, true)
+			s := e.bootstrapStore(t)
+			read, err := s.bootstrapTarget(ctx, target)
+			if err != nil || read == nil {
+				t.Fatalf("read: %v %v, want the expired row", read, err)
+			}
+			e.unplantAssignment(t, ctx, *read, target)
+			var other uuid.UUID
+			if replace {
+				other = e.plantAssignment(t, ctx, target, &target, true)
+			}
+			if _, err := s.bootstrapApply(ctx, target, read); !errors.Is(err, ErrBootstrapRowChanged) {
+				t.Fatalf("bootstrap after the row changed: %v, want ErrBootstrapRowChanged", err)
+			}
+			want := 0
+			if replace {
+				want = 1
+				if n := e.count(t, ctx, `SELECT count(*) FROM auth.platform_role_assignments WHERE id = $1`, other); n != 1 {
+					t.Fatal("the refused bootstrap deleted the row it did not read")
+				}
+			}
+			if n := e.count(t, ctx, `SELECT count(*) FROM auth.platform_role_assignments WHERE principal_id = $1`, target); n != want {
+				t.Fatalf("rows of the target after the refusal = %d, want %d", n, want)
+			}
+			if n := e.bootstrapAudits(t, ctx, target); n != 0 {
+				t.Fatalf("the refused bootstrap wrote %d audit rows", n)
+			}
+		})
 	}
 }

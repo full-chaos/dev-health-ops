@@ -42,6 +42,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/social"
 	"github.com/full-chaos/dev-health-ops/internal/auth/keyrotation"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
+	"github.com/full-chaos/dev-health-ops/internal/auth/restorefence"
 	"github.com/full-chaos/dev-health-ops/internal/auth/servicecred"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
@@ -67,6 +68,10 @@ var keyStateSource = func(pool *pgxpool.Pool, schema authschema.ValidatedIdentif
 const (
 	CheckPostgres   = "postgres"
 	CheckSigningKey = "signing_key"
+	// CheckRestoreFence holds auth-service not ready while the database is on a
+	// timeline that has no restore-fence record (a restore or promote that
+	// auth-migrate restore-fence apply has not covered).
+	CheckRestoreFence = "restore_fence"
 )
 
 // IO is the process's stream set, injectable for tests.
@@ -214,7 +219,11 @@ func compatRoutes(
 	if err != nil {
 		return nil, err
 	}
-	return append(append(routes, links...), sso...), nil
+	provisioning, err := provisioningRoutes(cfg, logger, pool, schema, identities)
+	if err != nil {
+		return nil, err
+	}
+	return append(append(append(routes, links...), sso...), provisioning...), nil
 }
 
 // Main runs the command and exits with its status.
@@ -429,6 +438,20 @@ func configureWithRoutes(
 				"check", CheckSigningKey, "reason", token.ReasonOf(checkErr),
 			)
 			return checkErr
+		}
+		return nil
+	}); err != nil {
+		closeStore()
+		return nil, err
+	}
+
+	if err := registry.RegisterRequired(CheckRestoreFence, func(ctx context.Context) error {
+		if fenceErr := restorefence.Check(ctx, store.Pool(), schemaID); fenceErr != nil {
+			logger.ErrorContext(
+				ctx, "readiness check failed",
+				"check", CheckRestoreFence, "reason", fenceReason(fenceErr),
+			)
+			return fenceErr
 		}
 		return nil
 	}); err != nil {
@@ -788,4 +811,12 @@ const healthcheckSlack = time.Second
 // pgUsers is the routes' read of the go-api users, with the platform roles switch.
 func pgUsers(cfg authconfig.Config, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier) authapi.PGUsers {
 	return authapi.PGUsers{Pool: pool, AuthSchema: schema, PlatformRolesOwned: cfg.PlatformRolesOwned}
+}
+
+// fenceReason is the closed token the restore-fence check logs: never the error text.
+func fenceReason(err error) string {
+	if errors.Is(err, restorefence.ErrNotFenced) {
+		return "timeline_not_fenced"
+	}
+	return "fence_state_unreadable"
 }

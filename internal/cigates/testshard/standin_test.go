@@ -227,7 +227,7 @@ func runCheckGoIn(t *testing.T, root string, extraEnv []string, fail bool, args 
 	if err := os.WriteFile(replay, providersyncRaceListing(t), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	env := append(os.Environ(),
+	env := append(pinnedDeadlineEnv(),
 		reportOnlyEnv+"=",
 		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"FAKE_GO_LOG="+log, "FAKE_GO_LIST_LOG="+listLog, "TMPDIR="+filepath.Join(dir, "tmp"),
@@ -259,4 +259,17 @@ func runCheckGoIn(t *testing.T, root string, extraEnv []string, fail bool, args 
 func runCheckGo(t *testing.T, extraEnv []string, fail bool, args ...string) legRun {
 	t.Helper()
 	return runCheckGoIn(t, repoRoot(t), extraEnv, fail, args...)
+}
+
+// pinnedDeadlineEnv is the test environment without GITHUB_ACTIONS and the job-deadline variables: a hosted run inherits
+// GITHUB_ACTIONS=true, and the deadline refuses a guarded call without CHECK_GO_JOB_CAP_MIN. A test that wants either sets it in extraEnv.
+func pinnedDeadlineEnv() []string {
+	skip := map[string]bool{"GITHUB_ACTIONS": true, "CHECK_GO_JOB_CAP_MIN": true, "CHECK_GO_JOB_START": true, "CHECK_GO_NOW_EPOCH": true, "CHECK_GO_NOW_EPOCH_FILE": true}
+	var env []string
+	for _, kv := range os.Environ() {
+		if !skip[strings.SplitN(kv, "=", 2)[0]] {
+			env = append(env, kv)
+		}
+	}
+	return env
 }

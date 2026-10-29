@@ -122,6 +122,7 @@ const APPROVED_AUDIT = [
   "invite_created",
   "invite_accepted",
   "invite_revoked",
+  "restore_fence_bootstrap",
 ];
 const APPROVED_DECISION = [
   "allowed_by_repository_grant",

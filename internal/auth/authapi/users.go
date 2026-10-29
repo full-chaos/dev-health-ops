@@ -131,6 +131,22 @@ func (p PGUsers) Role(ctx context.Context, userID, orgID uuid.UUID) (*string, bo
 	return role, found, nil
 }
 
+// RoleOn is go-api's membershipRole (internal/apiservice/admin/guards.go,
+// ensureOrgAdminAccess) on q, the caller's connection or transaction: the
+// first matching row's role; found is false without one. A NULL role is
+// found with a nil role.
+func (p PGUsers) RoleOn(ctx context.Context, q session.Queryer, userID, orgID uuid.UUID) (*string, bool, error) {
+	var role *string
+	err := q.QueryRow(ctx, `SELECT role FROM public.memberships WHERE user_id = $1 AND org_id = $2 LIMIT 1`, userID, orgID).Scan(&role)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("%w: reading public.memberships: %w", errUsersStore, err)
+	}
+	return role, true, nil
+}
+
 // Memberships is go-api's orderedMemberships (internal/api/session/store.go).
 func (p PGUsers) Memberships(ctx context.Context, userID uuid.UUID) ([]Membership, error) {
 	rows, err := p.Pool.Query(ctx, `

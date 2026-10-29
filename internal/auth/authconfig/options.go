@@ -255,6 +255,21 @@ var optionRegistry = []Option{
 		Usage: "\"true\" mounts the bearer-only social link and unlink routes (POST /v1/identities/social, DELETE /v1/identities/social/{id}); needs the session secrets",
 	},
 	{
+		Flag: "membership-routes", Env: EnvMembershipRoutes, Kind: KindString, Group: GroupSession, Default: "false",
+		Usage: "\"true\" mounts the internal membership, invite and organization deprovision routes go-api calls with its service credential; needs " +
+			EnvInviteTokenSecret + " and " + EnvInviteTokenSecretPrevious,
+	},
+	{
+		Env: EnvInviteTokenSecret, Kind: KindString, Secret: true, Group: GroupSession,
+		Usage: "signing key of new invite tokens (go-api's LINK_TOKEN_SECRET, else its JWT_SECRET_KEY chain); " +
+			EnvInviteTokenSecret + "_FILE reads it from a mounted file instead. Required while " + EnvMembershipRoutes + " is true",
+	},
+	{
+		Env: EnvInviteTokenSecretPrevious, Kind: KindString, Secret: true, Group: GroupSession,
+		Usage: "retired invite token key, accepted and never used to sign (go-api's LINK_TOKEN_SECRET_PREVIOUS); " +
+			EnvInviteTokenSecretPrevious + "_FILE reads it from a mounted file instead. Required while " + EnvMembershipRoutes + " is true",
+	},
+	{
 		Flag: "social-github-client-id", Env: "SOCIAL_GITHUB_CLIENT_ID", Kind: KindString, Group: GroupSession,
 		Usage: "GitHub OAuth client id for POST /api/v1/auth/social-login (go-api's setting)",
 	},

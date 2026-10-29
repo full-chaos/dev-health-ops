@@ -81,8 +81,9 @@ func TestEveryHS256RowAlsoAcceptsTheUserAccessToken(t *testing.T) {
 			t.Errorf("%s: class_disambiguator %v, want %v", row["id"], row["class_disambiguator"], wantSelector)
 		}
 	}
-	if hs != 196 || plain != 48 {
-		t.Errorf("rows with the HS256 opt-in %d, without %d; want 196 and 48", hs, plain)
+	// CHAOS-11813 retired the 6 legacy ingest rows, which had no HS256 opt-in (48 before).
+	if hs != 196 || plain != 42 {
+		t.Errorf("rows with the HS256 opt-in %d, without %d; want 196 and 42", hs, plain)
 	}
 }
 
@@ -189,8 +190,8 @@ func TestRowsWithoutTheAccessTokenOptInStillRefuseAUserAccessToken(t *testing.T)
 		}
 		unchanged++
 	}
-	if unchanged != 51 {
-		t.Errorf("checked %d rows, want 51 (48 api + 3 billing-edge)", unchanged)
+	if unchanged != 45 {
+		t.Errorf("checked %d rows, want 45 (42 api + 3 billing-edge; CHAOS-11813 retired 6 legacy ingest rows)", unchanged)
 	}
 }
 

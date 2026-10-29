@@ -395,6 +395,37 @@ VALUES ($1, $2, $3, $4)`, regrant, target.ID, PlatformAdminRole, granter.ID)
 	}
 }
 
+// A bootstrap assignment (granted_by = the principal itself) is not the
+// backfill's: a user whose public is_superuser is false keeps it.
+func TestBackfillRevokeLeavesASelfGrantedBootstrapAssignment(t *testing.T) {
+	e := getEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	target := BackfillTarget{ID: uuid.New(), Email: uniqueEmail("bfb"), Active: true}
+	if _, err := e.store.BackfillUser(ctx, target, false); err != nil {
+		t.Fatal(err)
+	}
+	assignment := uuid.New()
+	err := audit.Commit(ctx, e.store.pool, e.store.schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			_, err := tx.Exec(ctx, `INSERT INTO `+e.store.q+`.platform_role_assignments (id, principal_id, role_key, granted_by)
+VALUES ($1, $2, $3, $2)`, assignment, target.ID, PlatformAdminRole)
+			return err
+		},
+		Audit:  roleAudit("auth.platform_role.granted", "role_granted", target.ID.String()),
+		Events: []audit.OutboxEvent{roleEvent(assignment, "platform_role_assignment.granted", "active")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res, err := e.store.BackfillUser(ctx, target, false); err != nil || res.RoleRevoked || res != (BackfillResult{}) {
+		t.Fatalf("a non-superuser with a bootstrap assignment: %+v %v", res, err)
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.platform_role_assignments WHERE id = $1`, assignment); n != 1 {
+		t.Fatal("the backfill revoked a self-granted bootstrap assignment")
+	}
+}
+
 func TestBackfillNeverRevokesAnAssignmentWithAGranter(t *testing.T) {
 	e := getEnv(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)

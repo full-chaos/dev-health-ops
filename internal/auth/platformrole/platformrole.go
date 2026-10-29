@@ -34,7 +34,13 @@ var (
 	ErrNotHeld           = errors.New("platformrole: the principal does not hold the role")
 	ErrLastPlatformAdmin = errors.New("platformrole: the revoke would leave no active platform administrator")
 	ErrStore             = errors.New("platformrole: store failure")
+
+	ErrBootstrapAdminActive = errors.New("platformrole: an active platform administrator exists; the bootstrap is refused")
+	ErrBootstrapRowChanged  = errors.New("platformrole: the principal's assignment changed during the bootstrap; nothing was written")
 )
+
+// BootstrapReason is the audit reason code of a break-glass bootstrap grant.
+const BootstrapReason = "restore_fence_bootstrap"
 
 // OwnedFromLookup reads OwnedEnv: unset, empty or false is off, true is on,
 // any other value is an error. Case and surrounding space are ignored, as for

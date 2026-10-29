@@ -217,7 +217,7 @@ func TestConfigureRegistersTheDatabaseCheckOnlyWhenConfigured(t *testing.T) {
 // and webhookintake's routes both register unconditionally too (a handler
 // that needs a live dependency answers an error at request time instead).
 func TestRoutesMountsEveryArea(t *testing.T) {
-	routes := Routes(Deps{LegacyIngestEnabled: true}, nil)
+	routes := Routes(Deps{}, nil)
 	want := map[string]bool{
 		"GET /api/v1/external-ingest/schemas":                  false,
 		"GET /api/v1/external-ingest/schemas/{schema_version}": false,
@@ -226,22 +226,16 @@ func TestRoutesMountsEveryArea(t *testing.T) {
 		"POST /api/v1/external-ingest/batches":                 false,
 		"GET /api/v1/external-ingest/batches":                  false,
 		"GET /api/v1/external-ingest/batches/{ingestion_id}":   false,
-		"POST /api/v1/ingest/commits":                          false,
-		"POST /api/v1/ingest/deployments":                      false,
-		"POST /api/v1/ingest/incidents":                        false,
-		"POST /api/v1/ingest/pull-requests":                    false,
-		"POST /api/v1/ingest/work-items":                       false,
-		"POST /api/v1/ingest/telemetry":                        false,
-		"GET /health":                                          false,
-		"HEAD /health":                                         false,
-		"GET /ready":                                           false,
-		"HEAD /ready":                                          false,
-		"GET /health/workers":                                  false,
-		"HEAD /health/workers":                                 false,
-		"POST /api/v1/product-telemetry/events":                false,
-		"POST /api/v1/webhooks/github":                         false,
-		"POST /api/v1/webhooks/pagerduty/{binding_id}":         false,
-		"GET /api/v1/webhooks/health":                          false,
+		"GET /health":                                  false,
+		"HEAD /health":                                 false,
+		"GET /ready":                                   false,
+		"HEAD /ready":                                  false,
+		"GET /health/workers":                          false,
+		"HEAD /health/workers":                         false,
+		"POST /api/v1/product-telemetry/events":        false,
+		"POST /api/v1/webhooks/github":                 false,
+		"POST /api/v1/webhooks/pagerduty/{binding_id}": false,
+		"GET /api/v1/webhooks/health":                  false,
 	}
 	if len(routes) != len(want) {
 		t.Fatalf("route count = %d, want %d: %+v", len(routes), len(want), routes)

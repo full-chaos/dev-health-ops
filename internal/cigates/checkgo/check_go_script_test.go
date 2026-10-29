@@ -21,7 +21,7 @@ import (
 //   test_check_go_integration_coverage.py (3092 .. 6926)         -> TestCheckGoIntegrationCoverage
 
 var publicVerbs = []string{
-	"fmt", "vet", "test", "race", "build", "contract", "multi-replica-workers", "integration-vet", "integration-coverage",
+	"fmt", "vet", "test", "race", "build", "contract", "multi-replica-workers", "job-timeout", "job-start", "integration-vet", "integration-coverage",
 	"integration-shard-plan", "integration-images", "integration-prepull", "integration-shard", "integration", "fast", "ci", "all",
 }
 
@@ -177,7 +177,7 @@ func TestCheckGoStaticContract(t *testing.T) {
 	})
 	plants := []struct{ name, old, repl, want string }{
 		{"ci drops the race detector", "    check_test\n    check_race\n    check_build\n", "    check_test\n    check_build\n", "`ci` case block runs"},
-		{"multi-replica gate loses the cold flag", "-tags=integration -count=1 -timeout=5m", "-tags=integration -timeout=5m", "check_multi_replica_workers lacks"},
+		{"multi-replica gate loses the cold flag", "-count=1 -timeout=\"${tmo}\" \\\n        -run '^TestExplicitQueueMultiReplica", "-timeout=\"${tmo}\" \\\n        -run '^TestExplicitQueueMultiReplica", "check_multi_replica_workers lacks"},
 		{"multi-replica proof not required", "measured zero jobs", "measured nothing", "check_multi_replica_workers lacks"},
 		{"a multi-package call site outside the reap helper", `run_integration_go_test "${module_dir}" "${run_pkgs[@]}"`, `go test -tags=integration "${run_pkgs[@]}"`, "outside run_integration_go_test"},
 	}
@@ -508,7 +508,8 @@ func recordedGoTestRaw(work, script string, env []string, verb ...string) ([]str
 	if err := os.WriteFile(logPath, nil, 0o644); err != nil {
 		return nil, cmdResult{}, err
 	}
-	full := inheritedEnv([]string{"CI", "TESTCONTAINERS_RYUK_DISABLED", "PATH", "FAKE_GO_LOG", "FAKE_PROOF", "TMPDIR"},
+	// GITHUB_ACTIONS and the job-deadline variables are pinned to "unset" (the local mode) so a hosted run of this test behaves as a local one.
+	full := inheritedEnv([]string{"CI", "GITHUB_ACTIONS", "CHECK_GO_JOB_CAP_MIN", "CHECK_GO_JOB_START", "CHECK_GO_NOW_EPOCH", "CHECK_GO_NOW_EPOCH_FILE", "TESTCONTAINERS_RYUK_DISABLED", "PATH", "FAKE_GO_LOG", "FAKE_PROOF", "TMPDIR"},
 		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "FAKE_GO_LOG="+logPath, "TMPDIR="+work)
 	full = append(full, env...)
 	res := cmdSpec{dir: filepath.Dir(filepath.Dir(script)), env: full}.run("bash", append([]string{script}, verb...)...)

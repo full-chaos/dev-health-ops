@@ -183,9 +183,15 @@ const OffStreamSigningKeyLifecycle = "signing_key_lifecycle"
 // provisioning event yet: allowed actions and deployment bindings.
 const OffStreamWorkloadRegistry = "workload_registry"
 
+// OffStreamRestoreFence marks the restore fence's apply (auth-migrate
+// restore-fence apply): it raises revision counters and re-applies revocations
+// after a point-in-time restore. Its writes republish nothing; the counters it
+// raises exist so the next real event is a revision no consumer has seen.
+const OffStreamRestoreFence = "restore_fence"
+
 var offStreamReasons = map[string]bool{
 	OffStreamSessionLifecycle: true, OffStreamLinkCredentialLifecycle: true, OffStreamSigningKeyLifecycle: true,
-	OffStreamWorkloadRegistry: true,
+	OffStreamWorkloadRegistry: true, OffStreamRestoreFence: true,
 }
 
 // TxOps is what a mutation may do inside the transaction.

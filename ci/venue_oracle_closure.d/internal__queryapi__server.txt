@@ -25,7 +25,11 @@ internal/auth/identity/local
 internal/auth/identity/oidc
 internal/auth/identity/saml
 internal/auth/identity/social
+internal/auth/invite
 internal/auth/keystore
+internal/auth/membership
+internal/auth/org
+internal/auth/orgdeprovision
 internal/auth/passwordhash
 internal/auth/passwordpolicy
 internal/auth/platformrole/rule
@@ -34,6 +38,7 @@ internal/auth/requestid
 internal/auth/servicecred
 internal/auth/session
 internal/auth/sessionid
+internal/auth/signedtoken
 internal/backfillrun
 internal/cacheinvalidation
 internal/chmigrate

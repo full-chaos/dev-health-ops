@@ -115,10 +115,38 @@ func TestTheTestShardsAtTheLegCountHoldEveryRowOnce(t *testing.T) {
 	}
 }
 
-func TestTheRaceLegsAtTheLegCountHoldEveryRowOnce(t *testing.T) {
+// Every race package is in exactly one race leg, except internal/providersync, whose tests are split by name so that each providersync
+// test runs in exactly one leg.
+func TestTheRaceLegsAtTheLegCountHoldEveryPackageOnceExceptProvidersync(t *testing.T) {
 	t.Parallel()
 	_, races, _ := legCounts(t)
 	for _, d := range partitionDefects(t, "race-shard-plan", races) {
 		t.Error(d)
+	}
+}
+
+// Each providersync race test name is in exactly one of the race legs, and no leg's slice is empty, at the shipped leg count.
+func TestEveryProvidersyncRaceTestIsInExactlyOneRaceLegAtTheLegCount(t *testing.T) {
+	t.Parallel()
+	_, races, _ := legCounts(t)
+	weights, awk := providersyncPaths(t)
+	names := providersyncNames(t)
+	seen := map[string]int{}
+	for k := 1; k <= races; k++ {
+		part, err := providersyncShard(t, awk, weights, names, k, races)
+		if err != nil {
+			t.Fatalf("providersync slice %d/%d: %v", k, races, err)
+		}
+		if len(part) == 0 {
+			t.Errorf("providersync race slice %d/%d is empty", k, races)
+		}
+		for _, n := range part {
+			seen[n]++
+		}
+	}
+	for _, n := range names {
+		if seen[n] != 1 {
+			t.Errorf("providersync test %s is in %d of the %d race legs, want 1", n, seen[n], races)
+		}
 	}
 }

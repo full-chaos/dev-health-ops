@@ -80,7 +80,7 @@ func TestProvisioningRoutesNeedTheirProfileRows(t *testing.T) {
 	f := newProvFixture(t)
 	routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
 		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate,
-		profileRows: plant(func(row map[string]any) (map[string]any, bool) { return row, row["route"] != PatternInviteAccept })})
+		ProfileRows: plant(func(row map[string]any) (map[string]any, bool) { return row, row["route"] != PatternInviteAccept })})
 	if !errors.Is(err, errProvisioningRows) || routes != nil {
 		t.Fatalf("ProvisioningRoutes over a document without a row: %d routes, %v; want none and a refusal", len(routes), err)
 	}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
@@ -89,6 +90,11 @@ func run(ctx context.Context, env cli.Env) int {
 		fmt.Fprintln(env.Stderr, "users-backfill: refused: AUTH_USERS_OWNED is true, auth.users is the authority and this command copies from public.users")
 		return cli.ExitRefused
 	}
+	opts, err := usersBackfillOptions(env.Lookup, *dryRun, *batch)
+	if err != nil {
+		fmt.Fprintf(env.Stderr, "users-backfill: %s must be true or false\n", platformrole.OwnedEnv)
+		return cli.ExitFailure
+	}
 	pool, schema, code := connectFn(ctx, env, "users-backfill")
 	if code != cli.ExitOK {
 		return code
@@ -99,7 +105,6 @@ func run(ctx context.Context, env cli.Env) int {
 		fmt.Fprintln(env.Stderr, "users-backfill: could not build the identity store")
 		return cli.ExitFailure
 	}
-	opts := Options{DryRun: *dryRun, BatchSize: *batch}
 	rep, err := Run(ctx, PGSource{Pool: pool}, store, opts)
 	for _, line := range rep.Lines() {
 		fmt.Fprintln(env.Stdout, line)
@@ -153,8 +158,11 @@ func runOAuthSSOCount(ctx context.Context, env cli.Env) int {
 // usersBackfillOptions builds the users-backfill options from its flags and
 // the environment.
 func usersBackfillOptions(lookup secrets.LookupEnv, dryRun bool, batch int) (Options, error) {
-	_, _ = lookup("")
-	return Options{DryRun: dryRun, BatchSize: batch}, nil
+	owned, err := platformrole.OwnedFromLookup(lookup)
+	if err != nil {
+		return Options{}, err
+	}
+	return Options{DryRun: dryRun, BatchSize: batch, PlatformRolesOwned: owned}, nil
 }
 
 // connect resolves the schema and opens the auth runtime pool. A non-zero

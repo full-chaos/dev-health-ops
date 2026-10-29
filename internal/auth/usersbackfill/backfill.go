@@ -117,6 +117,7 @@ func (r Report) Lines() []string {
 		fmt.Sprintf("last_login_drift=%d", r.LastLoginDrift),
 		fmt.Sprintf("platform_role_granted=%d", r.RoleGranted),
 		fmt.Sprintf("platform_role_revoked=%d", r.RoleRevoked),
+		fmt.Sprintf("platform_role_skipped_owned=%d", r.RoleSkippedOwned),
 		fmt.Sprintf("skipped=%d", r.SkippedTotal()),
 	}
 	classes := make([]string, 0, len(r.Skipped))
@@ -175,6 +176,7 @@ func Run(ctx context.Context, src Source, sink Sink, opts Options) (Report, erro
 					rep.SSOSubjectUnverifiable++
 				}
 			}
+			target.PlatformRolesOwned = opts.PlatformRolesOwned
 			res, err := sink.BackfillUser(ctx, target, opts.DryRun)
 			if err != nil {
 				rep.Skipped[classify(err)]++
@@ -202,6 +204,9 @@ func Run(ctx context.Context, src Source, sink Sink, opts Options) (Report, erro
 			}
 			if res.RoleRevoked {
 				rep.RoleRevoked++
+			}
+			if res.RoleSkipped {
+				rep.RoleSkippedOwned++
 			}
 		}
 		last := rows[len(rows)-1].ID

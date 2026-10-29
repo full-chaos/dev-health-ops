@@ -17,10 +17,12 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
-// activeSQL is the current-state rule of an assignment, on the database clock:
-// a user principal that is not disabled, and an assignment that has not
-// expired. r is the assignment row, p its principal.
-const activeSQL = `(p.kind = 'user' AND p.disabled_at IS NULL AND (r.expires_at IS NULL OR r.expires_at > now()))`
+// activeSQL is the current-state rule of an assignment, on the database clock
+// of the statement that reads it (a guard statement runs after the write
+// lock, so the wait for the lock is not counted as earlier time): a user
+// principal that is not disabled, and an assignment that has not expired. r is
+// the assignment row, p its principal.
+const activeSQL = `(p.kind = 'user' AND p.disabled_at IS NULL AND (r.expires_at IS NULL OR r.expires_at > statement_timestamp()))`
 
 // writeLock is the advisory transaction lock every grant and revoke takes
 // first, so the store's writes run one at a time.
@@ -156,7 +158,7 @@ func (s *Store) Grant(ctx context.Context, in GrantInput) (uuid.UUID, error) {
 			}
 			if in.ExpiresAt != nil {
 				var future bool
-				if err := tx.QueryRow(ctx, `SELECT $1::timestamptz > now()`, *in.ExpiresAt).Scan(&future); err != nil {
+				if err := tx.QueryRow(ctx, `SELECT $1::timestamptz > statement_timestamp()`, *in.ExpiresAt).Scan(&future); err != nil {
 					return err
 				}
 				if !future {

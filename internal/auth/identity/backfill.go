@@ -92,6 +92,7 @@ func (s *Store) BackfillUser(ctx context.Context, t BackfillTarget, dryRun bool)
 	src := source{email: t.Email, emailLower: storedLoginKey(t.Email), active: t.Active, verified: t.Verified}
 	if !found {
 		res.Inserted = true
+		res.RoleSkipped = t.Superuser && t.PlatformRolesOwned
 		if !dryRun {
 			if err := s.insertBackfill(ctx, t, src); err != nil {
 				if !errors.Is(err, errPrincipalExists) {
@@ -151,6 +152,8 @@ func sameTime(a, b *time.Time) bool {
 // existing user agree with t, each change its own audit.Commit.
 func (s *Store) backfillExtras(ctx context.Context, t BackfillTarget, st backfillState, dryRun bool, res *BackfillResult) error {
 	switch {
+	case t.PlatformRolesOwned:
+		res.RoleSkipped = t.Superuser && !st.roleHeld || !t.Superuser && st.roleBackfilled
 	case t.Superuser && !st.roleHeld:
 		res.Updated, res.RoleGranted = true, true
 		if !dryRun {
@@ -221,7 +224,8 @@ func (s *Store) insertBackfill(ctx context.Context, t BackfillTarget, src source
 		algorithm = &a
 	}
 	assignment := uuid.New()
-	if t.Superuser {
+	grant := t.Superuser && !t.PlatformRolesOwned
+	if grant {
 		events = append(events, roleEvent(assignment, "platform_role_assignment.granted", "active"))
 	}
 	err := audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
@@ -241,7 +245,7 @@ RETURNING id`, t.ID, t.DisplayName, t.Active).Scan(&inserted)
 	(principal_id, email, email_lower, email_verified_at, password_hash, password_algorithm, legacy_token_version, last_login_at)
 VALUES ($1, $2, $3, CASE WHEN $4::boolean THEN clock_timestamp() ELSE NULL END, $5, $6, $7, $8)`,
 				t.ID, src.email, src.emailLower, t.Verified, t.PasswordHash, algorithm, t.TokenVersion, t.LastLoginAt)
-			if err != nil || !t.Superuser {
+			if err != nil || !grant {
 				return err
 			}
 			_, err = tx.Exec(ctx, `INSERT INTO `+s.q+`.platform_role_assignments (id, principal_id, role_key)

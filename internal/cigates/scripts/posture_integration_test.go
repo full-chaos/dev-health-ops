@@ -991,7 +991,13 @@ func TestPostureIntegrationStubRunTriesEveryDirWhenRemovalFails(t *testing.T) {
 	if res.code != 5 {
 		t.Fatalf("stub run: exit %d stdout=%q stderr=%q, want exit 5 although removal fails", res.code, res.stdout, res.stderr)
 	}
-	if n := strings.Count(res.stderr, "cannot remove"); n != 4 {
+	n := 0
+	for _, l := range strings.Split(res.stderr, "\n") {
+		if strings.HasPrefix(l, "cannot remove ") {
+			n++
+		}
+	}
+	if n != 4 {
 		t.Fatalf("%d removal failures reported, want 4 (the worktree dir and the three made dirs): stderr=%q", n, res.stderr)
 	}
 }

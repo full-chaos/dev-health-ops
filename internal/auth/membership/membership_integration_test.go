@@ -684,25 +684,61 @@ func TestAuthorizeSuperuserRefusalIsNamed(t *testing.T) {
 }
 
 // A change the lock-free read refuses answers its own refusal, never a store
-// failure: a role change of a non-member, a transfer to a non-member, and a
-// role change in a missing organization for a refused actor.
+// failure, and writes nothing: no state row, no audit row, no event (its
+// planned audit row and event are placeholders that must never commit). A
+// role change of a non-member, a transfer to a non-member, a removal of the
+// last owner, and a role change in a missing organization for a refused actor.
 func TestRefusedPlansAnswerTheirRefusal(t *testing.T) {
 	e := getEnv(t)
 	ctx := context.Background()
 	org, owner, stranger := e.seedOrg(t, ctx), e.seedUser(t, ctx), e.seedUser(t, ctx)
 	e.add(t, ctx, org, owner, "owner")
-	if _, err := e.store.ChangeRole(ctx, Change{OrgID: org, PrincipalID: stranger, Role: "admin", Authorize: allowAll}); !errors.Is(err, ErrNotMember) {
-		t.Fatalf("ChangeRole of a non-member = %v, want ErrNotMember", err)
-	}
-	if err := e.store.TransferOwnership(ctx, Transfer{OrgID: org, From: owner, To: stranger, Authorize: allowAll}); !errors.Is(err, ErrTargetNotMember) {
-		t.Fatalf("TransferOwnership to a non-member = %v, want ErrTargetNotMember", err)
+	missing := uuid.New()
+	// writes is everything a refused change could write for org: both
+	// membership tables (every column that changes on a write), the audit rows
+	// and the outbox events naming the organization.
+	writes := func(org uuid.UUID) string {
+		t.Helper()
+		var out string
+		if err := e.admin.QueryRow(ctx, `SELECT concat_ws('|',
+  (SELECT string_agg(concat_ws(',', id, user_id, role, updated_at), ';' ORDER BY id) FROM public.memberships WHERE org_id = $1),
+  (SELECT string_agg(concat_ws(',', id, principal_id, status, role, joined_at, updated_at), ';' ORDER BY id) FROM auth.memberships WHERE organization_id = $1),
+  (SELECT count(*) FROM auth.security_audit_events WHERE organization_id = $1),
+  (SELECT count(*) FROM auth.auth_outbox_events WHERE payload->>'organization_id' = 'org_' || $1::text))`, org).Scan(&out); err != nil {
+			t.Fatal(err)
+		}
+		return out
 	}
 	deny := func(context.Context, audit.TxOps, Locked) error { return ErrDenied }
-	if _, err := e.store.ChangeRole(ctx, Change{OrgID: uuid.New(), PrincipalID: stranger, Role: "admin", Authorize: deny}); !errors.Is(err, ErrDenied) {
-		t.Fatalf("ChangeRole in a missing organization by a refused actor = %v, want ErrDenied", err)
-	}
-	if got := e.rows(t, ctx, org, stranger); got != (rows{}) {
-		t.Fatalf("refused changes wrote %+v", got)
+	for _, c := range []struct {
+		name string
+		org  uuid.UUID
+		run  func() error
+		want error
+	}{
+		{"role change of a non-member", org, func() error {
+			_, err := e.store.ChangeRole(ctx, Change{OrgID: org, PrincipalID: stranger, Role: "admin", Actor: Actor{PrincipalID: &owner}, Authorize: allowAll})
+			return err
+		}, ErrNotMember},
+		{"transfer to a non-member", org, func() error {
+			return e.store.TransferOwnership(ctx, Transfer{OrgID: org, From: owner, To: stranger, Actor: Actor{PrincipalID: &owner}, Authorize: allowAll})
+		}, ErrTargetNotMember},
+		{"removal of the last owner", org, func() error {
+			_, err := e.store.Remove(ctx, Change{OrgID: org, PrincipalID: owner, Actor: Actor{PrincipalID: &owner}, Authorize: allowAll})
+			return err
+		}, ErrLastOwner},
+		{"a refused actor in a missing organization", missing, func() error {
+			_, err := e.store.ChangeRole(ctx, Change{OrgID: missing, PrincipalID: stranger, Role: "admin", Authorize: deny})
+			return err
+		}, ErrDenied},
+	} {
+		before := writes(c.org)
+		if err := c.run(); !errors.Is(err, c.want) || errors.Is(err, ErrStore) {
+			t.Fatalf("%s = %v, want %v", c.name, err, c.want)
+		}
+		if after := writes(c.org); after != before {
+			t.Fatalf("%s wrote: before %q after %q", c.name, before, after)
+		}
 	}
 }
 

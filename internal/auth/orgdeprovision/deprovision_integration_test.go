@@ -217,8 +217,14 @@ func (e *env) live(t *testing.T, ctx context.Context, orgID uuid.UUID) live {
 	return l
 }
 
-func (e *env) requireReconciled(t *testing.T, ctx context.Context) {
+// requireReconciled reads the users-reconcile membership counts (CHAOS-10783)
+// over the pairs of orgs only, so rows other tests leave cannot make it pass or
+// fail: every pair these organizations hold agrees in both tables.
+func (e *env) requireReconciled(t *testing.T, ctx context.Context, orgs ...uuid.UUID) {
 	t.Helper()
+	if len(orgs) == 0 {
+		t.Fatal("requireReconciled needs the organizations to read")
+	}
 	tx, err := usersbackfill.OpenSnapshot(ctx, e.admin)
 	if err != nil {
 		t.Fatal(err)
@@ -228,13 +234,14 @@ func (e *env) requireReconciled(t *testing.T, ctx context.Context) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d, err := usersbackfill.TxTarget{Tx: tx, Schema: schema}.MembershipDiffs(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if d.PublicMissing != 0 || d.InactiveInPublic != 0 || d.AuthMissing != 0 {
-		t.Fatalf("reconcile: public_missing=%d inactive_in_public=%d auth_missing=%d, want 0 0 0",
-			d.PublicMissing, d.InactiveInPublic, d.AuthMissing)
+	for _, org := range orgs {
+		d, err := usersbackfill.TxTarget{Tx: tx, Schema: schema}.MembershipDiffsOf(ctx, org)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d != (usersbackfill.MembershipDiffs{}) {
+			t.Fatalf("reconcile of %v: %+v, want all 0", org, d)
+		}
 	}
 }
 
@@ -338,7 +345,7 @@ AND payload->>'organization_id' = $2`, event, "org_"+p.org.String()); n != want 
 			t.Fatalf("%s events = %d, want %d", event, n, want)
 		}
 	}
-	e.requireReconciled(t, ctx)
+	e.requireReconciled(t, ctx, p.org)
 
 	// A repeat is a no-op: nothing written.
 	again, err := e.service.Deprovision(ctx, Input{OrgID: p.org, Actor: Actor{PrincipalID: &actor}, Authorize: allowOrg})
@@ -463,8 +470,10 @@ func TestDeprovisionAgainstAConcurrentAccept(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	wins := map[string]int{}
+	var orgs []uuid.UUID
 	for round := range 20 {
 		orgID := e.seedOrg(t, ctx)
+		orgs = append(orgs, orgID)
 		owner, _ := e.seedUser(t, ctx)
 		e.add(t, ctx, orgID, owner, "owner")
 		joiner, email := e.seedUser(t, ctx)
@@ -511,7 +520,7 @@ WHERE a.id = $1 AND a.status = p.status`, minted.ID).Scan(&status); err != nil {
 		}
 	}
 	t.Logf("first: %v", wins)
-	e.requireReconciled(t, ctx)
+	e.requireReconciled(t, ctx, orgs...)
 }
 
 // deprovisionRetried is a deprovision that is run again after ErrStateMoved,
@@ -533,8 +542,10 @@ func TestDeprovisionAgainstConcurrentMembershipVerbs(t *testing.T) {
 	e := getEnv(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
+	var orgs []uuid.UUID
 	for round := range 10 {
 		orgID := e.seedOrg(t, ctx)
+		orgs = append(orgs, orgID)
 		owner, _ := e.seedUser(t, ctx)
 		e.add(t, ctx, orgID, owner, "owner")
 		member, _ := e.seedUser(t, ctx)
@@ -583,7 +594,7 @@ VALUES (gen_random_uuid(), $1, $2, 'member', now(), now(), now())`, goAPI, orgID
 			t.Fatalf("round %d: after all = %+v, want nothing live", round, got)
 		}
 	}
-	e.requireReconciled(t, ctx)
+	e.requireReconciled(t, ctx, orgs...)
 }
 
 // The deprovision takes no public.users row: it completes while go-api holds

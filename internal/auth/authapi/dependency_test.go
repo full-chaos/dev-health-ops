@@ -29,8 +29,38 @@ func expectDown(t *testing.T, name string, response *httptest.ResponseRecorder, 
 	if got := response.Code; got != http.StatusServiceUnavailable {
 		t.Errorf("%s = %d, want 503: %s", name, got, body)
 	}
-	if strings.Contains(body, "sentinel") || strings.Contains(body, "5432") {
+	if namesDependency(body) {
 		t.Errorf("%s 503 names the dependency: %s", name, body)
+	}
+}
+
+// namesDependency reports whether a 503 body names the store behind it: a
+// sentinel value from the fixture, or the PostgreSQL port.
+func namesDependency(body string) bool {
+	return strings.Contains(body, "sentinel") || strings.Contains(body, "5432")
+}
+
+func TestNamesDependencyIgnoresGeneratedFieldsAndCatchesThePort(t *testing.T) {
+	for _, c := range []struct {
+		name, body string
+		want       bool
+	}{
+		{"error.v1 body whose occurred_at microseconds hold the port digits",
+			`{"schema_version":"error.v1","status":503,"reason_code":"dependency_unavailable","request_id":"req_HGHRVOLSZVFFDFMOT2566AO6SU","occurred_at":"2026-10-29T03:04:57.315432Z","retry_after_seconds":1}`, false},
+		{"error.v1 body whose request_id holds the port digits",
+			`{"schema_version":"error.v1","status":503,"reason_code":"dependency_unavailable","request_id":"req_AB5432CD","occurred_at":"2026-10-29T03:04:57.100000Z","retry_after_seconds":1}`, false},
+		{"plain text whose timestamp holds the port digits", `retry later (at 03:04:57.315432Z)`, false},
+		{"detail naming host and port", `{"detail":"dial tcp db.internal:5432: connect: connection refused"}`, true},
+		{"detail naming only the port", `{"detail":"postgres port 5432 refused"}`, true},
+		{"error.v1 body with the port in a field the server fills from the error", `{"schema_version":"error.v1","status":503,"reason_code":"db:5432","request_id":"req_X","occurred_at":"2026-10-29T03:04:57.100000Z"}`, true},
+		{"plain text naming host and port", `dial tcp 10.0.0.5:5432: connect: connection refused`, true},
+		{"sentinel value", `{"detail":"sentinel-person@example.com"}`, true},
+		{"sentinel inside occurred_at", `{"occurred_at":"sentinel"}`, true},
+		{"service unavailable without names", `{"detail":"Authentication service temporarily unavailable"}`, false},
+	} {
+		if got := namesDependency(c.body); got != c.want {
+			t.Errorf("%s: namesDependency = %v, want %v: %s", c.name, got, c.want, c.body)
+		}
 	}
 }
 

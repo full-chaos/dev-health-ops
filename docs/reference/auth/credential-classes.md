@@ -93,6 +93,7 @@ Design docs (read the guardrails at minimum):
 | `link_credential` | active | human | |
 | `pagerduty_webhook_signature` | active | external_source | |
 | `workload_token` | **unconsumed** | workload | |
+| `workload_bootstrap_credential` | optional_feature | workload | |
 
 **30 classes at the Wave 0 freeze** (31 with `effective_principal_envelope`, added by CHAOS-4737 below). 5 were not in CHAOS-3273's minimum list and were discovered
 during this inventory (`new_vs_ticket: true` in the JSON):
@@ -177,6 +178,24 @@ Kubernetes TokenReview API is its only authenticator, for the fixed audience
 read unverified, only to cap the issued token's lifetime, and it is never
 stored. The exchange answers a `workload_token`. The route is mounted only with
 `AUTH_WORKLOAD_EXCHANGE=true`, so the class is `optional_feature`.
+
+**`workload_bootstrap_credential`.** The Compose and self-hosted bootstrap
+credential of one workload (ACP-ADR-06 decision 2): `fcwlb_` and 32 random
+bytes as unpadded base64url, read by the workload from a restricted secret file
+and presented to auth-service's workload-token exchange as the RFC 8693
+`subject_token` with `subject_token_type`
+`urn:dev-health:params:oauth:token-type:workload-bootstrap`. It is accepted
+there and nowhere else: as an `Authorization` bearer it opens no auth-service
+route, and go-api refuses its prefix before any validator. The registry
+(`auth.credential_registry`) keeps the SHA-256 digest of the whole value, never
+the value. A value of another shape is refused before any store read; a
+revoked or expired credential, a disabled workload, or an audience outside
+both the workload's and the credential's audiences gets the exchange's one
+refusal. An issued `workload_token` never outlives the credential's expiry, and
+its `auth.workload.token_issued` audit row names the credential row id. The
+route serves this subject only with `AUTH_WORKLOAD_BOOTSTRAP=true`, so the
+class is `optional_feature`. Creating, rotating, revoking and disabling a
+credential is a separate leaf.
 
 ## The CHAOS-3271 class: credentials that reach a validator that is not their own
 

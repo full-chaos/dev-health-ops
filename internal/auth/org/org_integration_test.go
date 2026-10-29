@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
@@ -236,5 +237,54 @@ func TestSuspendedOrgIsVisibleAsDeniedToCurrentStateRead(t *testing.T) {
 	o, err := e.store.BySlug(ctx, slug)
 	if err != nil || o.Status != StatusSuspended || o.SuspendedAt == nil {
 		t.Fatalf("BySlug = %+v, %v", o, err)
+	}
+}
+
+// Authorize runs under the row lock and before any write: a denial writes no
+// row, no audit row, no event and no revision; an allowed call writes all four
+// once; a repeat is a no-op with no second audit row.
+func TestReactivateAuthorizedDeniedWritesNothingAllowedWritesAllOnce(t *testing.T) {
+	e := getEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	id, err := e.store.Create(ctx, CreateInput{Name: "Org", Slug: slugFor()}, Actor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.store.Suspend(ctx, id, nil, Actor{}); err != nil {
+		t.Fatal(err)
+	}
+	actor := uuid.New()
+	auditSQL := `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.organization.reactivated' AND organization_id = $1`
+	outboxSQL := `SELECT count(*) FROM auth.auth_outbox_events WHERE aggregate_type = 'organization' AND aggregate_id = $1 AND event_type = 'organization.reactivated'`
+	deny := func(context.Context, audit.TxOps, uuid.UUID) error { return ErrDenied }
+	if changed, err := e.store.ReactivateAuthorized(ctx, id, nil, Actor{PrincipalID: &actor}, deny); !errors.Is(err, ErrDenied) || changed {
+		t.Fatalf("denied call: changed=%v err=%v", changed, err)
+	}
+	if o, err := e.store.Get(ctx, id); err != nil || o.Status != StatusSuspended || o.Revision != 2 {
+		t.Fatalf("after the denial: %+v, %v", o, err)
+	}
+	if e.count(t, ctx, auditSQL, id) != 0 || e.count(t, ctx, outboxSQL, "org_"+id.String()) != 0 {
+		t.Fatal("a denied reactivate left an audit row or an event")
+	}
+	saw := false
+	allow := func(_ context.Context, _ audit.TxOps, got uuid.UUID) error { saw = got == id; return nil }
+	if changed, err := e.store.ReactivateAuthorized(ctx, id, nil, Actor{PrincipalID: &actor}, allow); err != nil || !changed || !saw {
+		t.Fatalf("allowed call: changed=%v err=%v authorize saw org=%v", changed, err, saw)
+	}
+	if o, err := e.store.Get(ctx, id); err != nil || o.Status != StatusActive || o.SuspendedAt != nil || o.Revision != 3 {
+		t.Fatalf("after the reactivate: %+v, %v", o, err)
+	}
+	if e.count(t, ctx, auditSQL, id) != 1 || e.count(t, ctx, outboxSQL, "org_"+id.String()) != 1 {
+		t.Fatal("an allowed reactivate must leave one audit row and one event")
+	}
+	if changed, err := e.store.ReactivateAuthorized(ctx, id, nil, Actor{PrincipalID: &actor}, allow); err != nil || changed {
+		t.Fatalf("repeat: changed=%v err=%v, want a no-op", changed, err)
+	}
+	if o, _ := e.store.Get(ctx, id); o.Revision != 3 || e.count(t, ctx, auditSQL, id) != 1 {
+		t.Fatalf("a repeat bumped the revision or wrote a second audit row: %+v", o)
+	}
+	if _, err := e.store.ReactivateAuthorized(ctx, uuid.New(), nil, Actor{}, allow); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown org = %v", err)
 	}
 }

@@ -150,7 +150,7 @@ func (o *otree) verb(verb string, env []string, args ...string) oracleRun {
 	log := filepath.Join(o.dir, "fake_go.log")
 	o.write("fake_go.log", "")
 	o.mkdir("tmp")
-	e := inheritedEnv(nil, append([]string{
+	e := inheritedEnv(deadlineEnvNames, append([]string{
 		"PATH=" + filepath.Join(o.dir, "bin") + string(os.PathListSeparator) + os.Getenv("PATH"), "FAKE_GO_LOG=" + log,
 		"TMPDIR=" + filepath.Join(o.dir, "tmp"), "DEV_HEALTH_GO_CACHE=" + filepath.Join(o.dir, "tmp", "gocache"),
 	}, env...)...)
@@ -241,3 +241,7 @@ func nested(m yamlAny, keys ...string) any {
 	}
 	return cur
 }
+
+// deadlineEnvNames are pinned to "unset" by the helpers that run ci/check_go.sh with a stand-in go: a hosted run inherits
+// GITHUB_ACTIONS=true, and the job deadline refuses a guarded call without CHECK_GO_JOB_CAP_MIN.
+var deadlineEnvNames = []string{"GITHUB_ACTIONS", "CHECK_GO_JOB_CAP_MIN", "CHECK_GO_JOB_START", "CHECK_GO_NOW_EPOCH", "CHECK_GO_NOW_EPOCH_FILE"}

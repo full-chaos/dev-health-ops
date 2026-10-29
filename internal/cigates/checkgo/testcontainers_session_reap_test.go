@@ -127,7 +127,7 @@ func helperHarness(t *testing.T, sid string, signal, noSetsid, slowPS bool) (exi
 	}
 	script := "set -uo pipefail\n" + pre +
 		"SCRIPT_DIR=" + dir + "\nROOT=" + dir + "\nGO_ENV_OFF=(env)\nINTEGRATION_TEST_ENV=()\n" +
-		"die() { echo \"$*\" >&2; exit 2; }\n" + s[start:end] +
+		"die() { echo \"$*\" >&2; exit 2; }\n" + jobBudgetSnippet(t) + "\n" + s[start:end] +
 		"run_integration_go_test . ./x &\nHP=$!\n" +
 		"if [ \"" + map[bool]string{true: "1", false: "0"}[signal] + "\" = 1 ]; then\n" +
 		// wait for the fake go's child (it starts after exec setsid), bounded: the 30 s ceiling only bounds a hang
@@ -136,7 +136,7 @@ func helperHarness(t *testing.T, sid string, signal, noSetsid, slowPS bool) (exi
 	// The helper must run in the foreground shell to own its trap: call it directly when no signal is sent.
 	if !signal {
 		script = "set -uo pipefail\n" + pre + "SCRIPT_DIR=" + dir + "\nROOT=" + dir + "\nGO_ENV_OFF=(env)\nINTEGRATION_TEST_ENV=()\n" +
-			"die() { echo \"$*\" >&2; exit 2; }\n" + s[start:end] + "run_integration_go_test . ./x\n"
+			"die() { echo \"$*\" >&2; exit 2; }\n" + jobBudgetSnippet(t) + "\n" + s[start:end] + "run_integration_go_test . ./x\n"
 	}
 	cmd := exec.Command("bash", "-c", script)
 	cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"),
@@ -896,3 +896,7 @@ func TestIntegrationPackagesLoopShrinksTheNextTimeout(t *testing.T) {
 		t.Errorf("the third call must return 2 with the exhausted line; output:\n%s", out)
 	}
 }
+
+// deadlineEnvNames are pinned to "unset" by the helpers that run ci/check_go.sh with a stand-in go: a hosted run inherits
+// GITHUB_ACTIONS=true, and the job deadline refuses a guarded call without CHECK_GO_JOB_CAP_MIN.
+var deadlineEnvNames = []string{"GITHUB_ACTIONS", "CHECK_GO_JOB_CAP_MIN", "CHECK_GO_JOB_START", "CHECK_GO_NOW_EPOCH", "CHECK_GO_NOW_EPOCH_FILE"}

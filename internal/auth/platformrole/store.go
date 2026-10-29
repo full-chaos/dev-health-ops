@@ -22,6 +22,10 @@ import (
 // expired. r is the assignment row, p its principal.
 const activeSQL = `(p.kind = 'user' AND p.disabled_at IS NULL AND (r.expires_at IS NULL OR r.expires_at > now()))`
 
+// writeLock is the advisory transaction lock every grant and revoke takes
+// first, so the store's writes run one at a time.
+const writeLock = "auth.platform_role_assignments:write"
+
 // Config builds a Store.
 type Config struct {
 	Pool   *pgxpool.Pool

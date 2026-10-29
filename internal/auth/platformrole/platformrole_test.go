@@ -5,6 +5,9 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"os"
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -169,3 +172,32 @@ func TestWriteErrKeepsEachRefusalAndHidesStoreFailures(t *testing.T) {
 }
 
 func discardLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+
+// The runtime role holds no UPDATE on platform_role_assignments (a change is a
+// revoke then a grant), and PostgreSQL requires UPDATE for any row-locking
+// clause. So every locking clause of the store names only principal rows; the
+// store serializes its writes with its advisory write lock instead.
+func TestStoreLocksNoAssignmentRow(t *testing.T) {
+	src, err := os.ReadFile("store.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	clauses := regexp.MustCompile(`FOR\s+(?:NO\s+KEY\s+UPDATE|KEY\s+SHARE|UPDATE|SHARE)\b(\s+OF\s+[a-z_]+(?:\s*,\s*[a-z_]+)*)?`).FindAllStringSubmatch(string(src), -1)
+	if len(clauses) == 0 {
+		t.Fatal("no locking clause found; the principal rows of a grant and a revoke must be locked")
+	}
+	for _, c := range clauses {
+		if c[1] == "" {
+			t.Errorf("%q names no table: say which rows it locks", c[0])
+			continue
+		}
+		for _, name := range strings.Split(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(c[1]), "OF")), ",") {
+			if name = strings.TrimSpace(name); name != "p" && name != "principals" {
+				t.Errorf("%q locks %s; only principal rows may be locked", c[0], name)
+			}
+		}
+	}
+	if !strings.Contains(string(src), "pg_advisory_xact_lock(hashtextextended($1, 0))") {
+		t.Error("the store takes no advisory write lock")
+	}
+}

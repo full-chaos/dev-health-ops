@@ -118,42 +118,42 @@ func newEnv(t *testing.T) (*env, error) {
 func (e *env) clear(t *testing.T) {
 	t.Helper()
 	ctx := context.Background()
-	rows, err := e.admin.Query(ctx, `SELECT id FROM auth.platform_role_assignments`)
+	rows, err := e.admin.Query(ctx, `SELECT id, principal_id FROM auth.platform_role_assignments`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var ids []uuid.UUID
+	var ids, principals []uuid.UUID
 	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
+		var id, principal uuid.UUID
+		if err := rows.Scan(&id, &principal); err != nil {
 			t.Fatal(err)
 		}
-		ids = append(ids, id)
+		ids, principals = append(ids, id), append(principals, principal)
 	}
 	rows.Close()
-	for _, id := range ids {
-		e.commitAssignment(t, ctx, `DELETE FROM auth.platform_role_assignments WHERE id = $1`, id, "platform_role_assignment.revoked", id)
+	for i, id := range ids {
+		e.commitRevoke(t, ctx, id, principals[i])
 	}
 }
 
-// commitAssignment runs one statement on the assignments through audit.Commit
-// with its outbox event, as the store does.
-func (e *env) commitAssignment(t *testing.T, ctx context.Context, sql string, assignment uuid.UUID, verb string, args ...any) {
+// commitRevoke deletes one assignment through audit.Commit with its audit row
+// (subject = the holder) and outbox event, as the store does.
+func (e *env) commitRevoke(t *testing.T, ctx context.Context, assignment, principal uuid.UUID) {
 	t.Helper()
-	subject := assignment.String()
+	subject := principal.String()
 	err := audit.Commit(ctx, e.runtime, e.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
-			_, err := tx.Exec(ctx, sql, args...)
+			_, err := tx.Exec(ctx, `DELETE FROM auth.platform_role_assignments WHERE id = $1`, assignment)
 			return err
 		},
 		Audit: audit.AuditEvent{EventType: "auth.platform_role.revoked", Outcome: audit.OutcomeAllowed, SubjectPrincipalID: &subject,
 			Attributes: map[string]any{"reason_code": "role_revoked", "target_kind": "principal", "target_id": subject}},
 		Events: []audit.OutboxEvent{{AggregateType: "platform_role_assignment",
-			AggregateID: provisioning.WireID("platform_role_assignment", assignment.String()), EventType: verb,
+			AggregateID: provisioning.WireID("platform_role_assignment", assignment.String()), EventType: "platform_role_assignment.revoked",
 			Change: map[string]any{"status": "revoked"}}},
 	})
 	if err != nil {
-		t.Fatalf("commit %q: %v", sql, err)
+		t.Fatalf("cleanup revoke %s: %v", assignment, err)
 	}
 }
 
@@ -417,5 +417,84 @@ func TestRevokeOfARoleNotHeldIsRefused(t *testing.T) {
 	plain := e.user(t, ctx, true, false)
 	if err := e.store.Revoke(ctx, RevokeInput{Actor: admin, Principal: plain, Role: PlatformAdmin}); !errors.Is(err, ErrNotHeld) {
 		t.Fatalf("revoking a role not held: %v, want ErrNotHeld", err)
+	}
+}
+
+// holdWriteLock takes the store's write lock in an open admin transaction and
+// returns its release.
+func (e *env) holdWriteLock(t *testing.T, ctx context.Context) func() {
+	t.Helper()
+	tx, err := e.admin.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, writeLock); err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatal(err)
+	}
+	return func() { _ = tx.Rollback(ctx) }
+}
+
+// waitsForTheWriteLock runs write while another transaction holds the write
+// lock: write must be seen waiting on the advisory lock before it returns, and
+// must finish once the lock is released.
+func (e *env) waitsForTheWriteLock(t *testing.T, ctx context.Context, write func() error) error {
+	t.Helper()
+	var role string
+	if err := e.runtime.QueryRow(ctx, `SELECT current_user`).Scan(&role); err != nil {
+		t.Fatal(err)
+	}
+	release := e.holdWriteLock(t, ctx)
+	done := make(chan error, 1)
+	go func() { done <- write() }()
+	for {
+		select {
+		case err := <-done:
+			release()
+			t.Fatalf("the write returned (%v) while another transaction held the write lock", err)
+		case <-ctx.Done():
+			release()
+			t.Fatal("no waiter on the write lock was seen")
+		default:
+		}
+		var waiting int
+		if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
+			WHERE usename = $1 AND wait_event_type = 'Lock' AND wait_event = 'advisory'`, role).Scan(&waiting); err != nil {
+			release()
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	release()
+	return <-done
+}
+
+func TestGrantWaitsForTheWriteLock(t *testing.T) {
+	e := getEnv(t)
+	ctx := ctxT(t)
+	admin := e.user(t, ctx, true, true)
+	target := e.user(t, ctx, true, false)
+	err := e.waitsForTheWriteLock(t, ctx, func() error {
+		_, err := e.store.Grant(ctx, GrantInput{Actor: admin, Principal: target, Role: PlatformAdmin})
+		return err
+	})
+	if err != nil {
+		t.Fatalf("Grant after the lock was released: %v", err)
+	}
+}
+
+func TestRevokeWaitsForTheWriteLock(t *testing.T) {
+	e := getEnv(t)
+	ctx := ctxT(t)
+	a := e.user(t, ctx, true, true)
+	b := e.user(t, ctx, true, true)
+	err := e.waitsForTheWriteLock(t, ctx, func() error {
+		return e.store.Revoke(ctx, RevokeInput{Actor: a, Principal: b, Role: PlatformAdmin})
+	})
+	if err != nil {
+		t.Fatalf("Revoke after the lock was released: %v", err)
 	}
 }

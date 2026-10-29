@@ -533,3 +533,37 @@ func TestNewSessionIssueWorkloadRefusesBadConfigurationNamingNoValue(t *testing.
 		t.Fatal(err)
 	}
 }
+
+// The log line names why a bearer was refused, so an operator can tell a
+// class refusal from a verifier refusal. The answer never does.
+func TestIssueSessionLogsWhyABearerWasRefused(t *testing.T) {
+	forty3 := strings.Repeat("A", 43)
+	for name, tc := range map[string]struct {
+		build func(*workloadIssueFixture) map[string]string
+		want  string
+	}{
+		"user access token typ": {func(w *workloadIssueFixture) map[string]string { h, _ := w.mint("at+jwt", nil); return h }, "not_a_workload_token"},
+		"hs256 edge token":      {func(w *workloadIssueFixture) map[string]string { return w.bearer(w.grant()) }, "not_a_workload_token"},
+		"fcacr_":                {func(*workloadIssueFixture) map[string]string { return bearerOf("fcacr_" + forty3) }, "other_credential_class"},
+		"opaque value":          {func(*workloadIssueFixture) map[string]string { return bearerOf("good") }, "not_a_jws"},
+		"oversized":             {func(*workloadIssueFixture) map[string]string { return bearerOf(strings.Repeat("a", 6000)) }, "oversized"},
+		"wrong audience": {func(w *workloadIssueFixture) map[string]string {
+			h, _ := w.mint("workload+jwt", func(c *contracts.WorkloadTokenClaims) { c.Aud = "dev-health-api" })
+			return h
+		}, "audience"},
+		"wrong subject": {func(w *workloadIssueFixture) map[string]string {
+			h, _ := w.mint("workload+jwt", func(c *contracts.WorkloadTokenClaims) { c.Sub = session.WirePrincipalID(uuid.New()) })
+			return h
+		}, "subject"},
+		"expired": {func(w *workloadIssueFixture) map[string]string {
+			h, _ := w.mint("workload+jwt", func(c *contracts.WorkloadTokenClaims) { c.Iat, c.Nbf, c.Exp = c.Iat-400, c.Nbf-400, c.Exp-400 })
+			return h
+		}, "expired"},
+	} {
+		w := newWorkloadIssueFixture(t)
+		expectError(t, w.issue(tc.build(w)), http.StatusUnauthorized, "invalid_credentials")
+		if !strings.Contains(w.logs.String(), `"refusal":"`+tc.want+`"`) {
+			t.Errorf("%s: the log line does not carry refusal %q: %s", name, tc.want, w.logs.String())
+		}
+	}
+}

@@ -19,7 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
-const restoreFenceUsage = "usage: auth-migrate restore-fence export -out FILE | apply [-manifest FILE] [-blind-margin N] [-apply] | init [-timeline N | -if-absent] | status\n  init " + restorefence.InitHelp + "\n  apply -blind-margin (no manifest) also removes every legacy reset and verification token, every unconsumed link credential and every pending invite (fail closed: users ask for a new link, admins re-invite); the apply output prints the counts. A blind margin leaves the legacy access flags (organizations, IP allowlist entries, integrations, integration credentials, GitHub App installations) as restored: it has no source state, and switching them off is an outage; the apply lists every active row by id (operator-action review_after_blind_margin) for the operator to review"
+const restoreFenceUsage = "usage: auth-migrate restore-fence export -out FILE | apply [-manifest FILE] [-blind-margin N] [-apply] | init [-timeline N | -if-absent] | status\n  init " + restorefence.InitHelp + "\n  apply -blind-margin (no manifest) also removes every legacy reset and verification token, every unconsumed link credential and every pending invite (fail closed: users ask for a new link, admins re-invite); the apply output prints the counts. A blind margin leaves the legacy access flags (organizations, IP allowlist entries, integrations, integration credentials, GitHub App installations) as restored: it has no source state, and switching them off is an outage; the apply lists every active row by id (operator-action review_after_blind_margin) for the operator to review. It also leaves workload and credential scopes, membership roles, legacy superuser flags and provider credentials as restored; every row that holds one is listed by id for review"
 
 type restoreFenceArgs struct {
 	verb        string
@@ -43,7 +43,7 @@ func parseRestoreFenceArgs(args []string, stderr io.Writer) (restoreFenceArgs, e
 		flags.StringVar(&parsed.out, "out", "", "the manifest file to create (it must not exist)")
 	case "apply":
 		flags.StringVar(&parsed.manifest, "manifest", "", "the manifest exported from the shadow restore")
-		flags.Int64Var(&parsed.blindMargin, "blind-margin", 0, "raise every revision by this much (the fallback when the WAL after the target is gone); also removes every legacy reset and verification token, every unconsumed link credential and every pending invite (fail closed); the legacy access flags stay as restored and every active row is listed by id for review")
+		flags.Int64Var(&parsed.blindMargin, "blind-margin", 0, "raise every revision by this much (the fallback when the WAL after the target is gone); also removes every legacy reset and verification token, every unconsumed link credential and every pending invite (fail closed); the legacy access flags, workload and credential scopes, membership roles, superuser flags and provider credentials stay as restored, and the rows that hold one are listed by id for review")
 		flags.BoolVar(&parsed.apply, "apply", false, "write the change (without it the run is a dry run that rolls back)")
 	case "init":
 		flags.Int64Var(&parsed.timeline, "timeline", 0, "confirm the live timeline: required when it is above 1 (a promoted database may be a restore)")

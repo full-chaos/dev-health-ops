@@ -36,6 +36,10 @@ const Path = "/internal/v1/sessions"
 // service: its prefix and 32 random bytes as unpadded base64url.
 var tokenPattern = regexp.MustCompile(`^svc_authsess_[A-Za-z0-9_-]{43}$`)
 
+// ValidToken reports whether token has the auth-session-issuer credential
+// shape, for the other go-api clients of auth-service that present it.
+func ValidToken(token string) bool { return tokenPattern.MatchString(token) }
+
 // maxAnswerBytes bounds the issue route's answer.
 const maxAnswerBytes = 64 << 10
 

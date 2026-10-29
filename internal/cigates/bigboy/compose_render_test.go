@@ -45,10 +45,23 @@ type composeOut struct {
 	err      string
 }
 
+// composeBugsinkEnv is the three bugsink variables the deploy copy of the file requires (`:?`); the ops copy
+// has defaults, so supplying them is harmless there. Test-only values.
+func composeBugsinkEnv() map[string]string {
+	return map[string]string{
+		"BUGSINK_DB_PASSWORD":      "test-only-bugsink-db",
+		"BUGSINK_SECRET_KEY":       "test-only-bugsink-key",
+		"BUGSINK_CREATE_SUPERUSER": "test@example.invalid:test-only",
+	}
+}
+
 func composeEnv(extra map[string]string) map[string]string {
 	env := map[string]string{
 		"BIGBOY_OPERATOR_IMAGE": composeOperatorImage,
 		"DHO_API_CH_USERS_XML":  composeProject + "/.go-api-dev/dho_api_ch.xml",
+	}
+	for k, v := range composeBugsinkEnv() {
+		env[k] = v
 	}
 	for k, v := range extra {
 		env[k] = v

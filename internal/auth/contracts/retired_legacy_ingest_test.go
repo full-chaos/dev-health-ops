@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/bigboydir"
 )
 
 // The legacy POST /api/v1/ingest/* routes are retired (CHAOS-11813). No route
@@ -19,7 +21,7 @@ func TestNoContractNamesARetiredLegacyIngestPath(t *testing.T) {
 		"endpoint profiles":     filepath.Join(root, "contracts", "auth", "v1", "endpoint-profiles.go-api.json"),
 		"ingress planes":        filepath.Join(root, "contracts", "ingress", "v1", "planes.json"),
 		"compose router":        filepath.Join(root, "contracts", "ingress", "v1", "compose-router.nginx.conf"),
-		"bigboy traefik planes": filepath.Join(root, "ci", "bigboy", "traefik-dynamic-planes.yml.example"),
+		"bigboy traefik planes": bigboydir.Path(t, root, "traefik-dynamic-planes.yml.example"),
 	}
 	for name, path := range files {
 		raw, err := os.ReadFile(path)

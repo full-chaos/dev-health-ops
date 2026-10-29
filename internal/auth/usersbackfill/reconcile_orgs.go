@@ -20,7 +20,7 @@ const (
 	ClassOrgName                  = "org_name_diff"
 	ClassOrgActive                = "org_active_diff"
 	ClassMemberPublicMissing      = "membership_public_missing"
-	ClassMemberInactiveInPublic   = "membership_inactive_in_public"
+	ClassMemberInactiveInPublic   = DiffMembershipInactiveInPublic
 	ClassMemberAuthMissing        = "membership_auth_missing"
 	ClassMemberRole               = "membership_role_diff"
 	ClassMemberDuplicatePublicSrc = "membership_duplicate_public_source"
@@ -128,29 +128,44 @@ func (r OrgsReconciliation) GatedTotal() int {
 	return n
 }
 
-// Lines renders the report as stable key=value lines: class names, counts and organization ids only, never a
-// slug, name, email or any other value.
+// Lines renders the report in the shape of users-reconcile: mode, seen, matched, gated_diffs, then one diff.<class>
+// line per gated class and one info.<class> line per ungated class (the gate decides which), then the info counts. Class
+// names, counts and organization ids only, never a slug, name, email or any other value. Seen is the number of
+// public.organizations rows; matched the organizations equal on slug, name and active state.
 func (r OrgsReconciliation) Lines() []string {
 	gate := "default"
+	gated := OrgClasses[:defaultGatedClassCount]
 	if r.Exact {
 		gate = "exact"
+		gated = OrgClasses
+	}
+	isGated := map[string]bool{}
+	for _, c := range gated {
+		isGated[c] = true
 	}
 	d := r.Diffs
 	lines := []string{
 		"mode=read-only",
 		"gate=" + gate,
-		fmt.Sprintf("orgs_public=%d", d.PublicOrgs),
-		fmt.Sprintf("orgs_auth=%d", d.AuthOrgs),
-		fmt.Sprintf("orgs_matched=%d", d.Matched),
-		fmt.Sprintf("memberships_public=%d", d.PublicMemberships),
-		fmt.Sprintf("memberships_auth=%d", d.AuthMemberships),
+		fmt.Sprintf("seen=%d", d.PublicOrgs),
+		fmt.Sprintf("matched=%d", d.Matched),
+		fmt.Sprintf("gated_diffs=%d", r.GatedTotal()),
 	}
 	for _, c := range OrgClasses {
-		lines = append(lines, fmt.Sprintf("diff.%s=%d", c, d.count(c)))
+		if isGated[c] {
+			lines = append(lines, fmt.Sprintf("diff.%s=%d", c, d.count(c)))
+		}
+	}
+	for _, c := range OrgClasses {
+		if !isGated[c] {
+			lines = append(lines, fmt.Sprintf("info.%s=%d", c, d.count(c)))
+		}
 	}
 	lines = append(lines,
+		fmt.Sprintf("info.orgs_auth=%d", d.AuthOrgs),
+		fmt.Sprintf("info.memberships_public=%d", d.PublicMemberships),
+		fmt.Sprintf("info.memberships_auth=%d", d.AuthMemberships),
 		fmt.Sprintf("info.membership_non_user_principals=%d", d.NonUserPrincipalMemberships),
-		fmt.Sprintf("gated_diffs=%d", r.GatedTotal()),
 		fmt.Sprintf("mismatch_orgs_total=%d", r.MismatchOrgsTotal),
 		fmt.Sprintf("mismatch_listed=%d", len(r.Listed)),
 	)

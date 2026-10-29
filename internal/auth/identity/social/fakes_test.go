@@ -38,6 +38,20 @@ type account struct {
 	// profileOf serves this other token's profile from the user endpoint
 	// while the token check reports this account.
 	profileOf string
+	// rawID, when set, is the raw JSON text of the id member the user endpoint serves; "-" omits the member.
+	rawID string
+}
+
+// withRawID puts a.rawID into body["id"], or removes the member for "-".
+func (a account) withRawID(body map[string]any) map[string]any {
+	switch a.rawID {
+	case "":
+	case "-":
+		delete(body, "id")
+	default:
+		body["id"] = json.RawMessage(a.rawID)
+	}
+	return body
 }
 
 // fakeProviders serves GitHub, GitLab and Google from one httptest server.
@@ -142,7 +156,7 @@ func (f *fakeProviders) githubUser(w http.ResponseWriter, r *http.Request) {
 	if a.public {
 		body["email"] = a.email
 	}
-	reply(w, body)
+	reply(w, a.withRawID(body))
 }
 
 func (f *fakeProviders) githubEmails(w http.ResponseWriter, r *http.Request) {
@@ -173,7 +187,7 @@ func (f *fakeProviders) gitlabUser(w http.ResponseWriter, r *http.Request) {
 	if a.verified {
 		confirmed = "2026-01-01T00:00:00Z"
 	}
-	reply(w, map[string]any{"id": a.id, "username": "u", "name": "Test User", "email": a.email, "confirmed_at": confirmed})
+	reply(w, a.withRawID(map[string]any{"id": a.id, "username": "u", "name": "Test User", "email": a.email, "confirmed_at": confirmed}))
 }
 
 func (f *fakeProviders) googleInfo(w http.ResponseWriter, r *http.Request) {
@@ -200,5 +214,5 @@ func (f *fakeProviders) googleUser(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"id":"` + a.googleID + `","email":"` + a.rawEmail + `","verified_email":true,"name":"Test User"}`))
 		return
 	}
-	reply(w, map[string]any{"id": a.googleID, "email": a.email, "verified_email": a.verified, "name": "Test User"})
+	reply(w, a.withRawID(map[string]any{"id": a.googleID, "email": a.email, "verified_email": a.verified, "name": "Test User"}))
 }

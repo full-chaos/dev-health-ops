@@ -616,6 +616,12 @@ func TestTheFenceCoversTheAuthorizationAndReplayFamiliesAndNamesTheOperatorActio
 		byName[s.Name] = s
 	}
 	for _, name := range []string{"auth.memberships", "auth.service_accounts", "auth.workloads", "auth.link_credentials", "auth.saml_assertion_uses"} {
+		// A manifest row with no restored row is reported as absent: in this
+		// fixture both databases hold the same rows, so none may be absent, and an
+		// id that differs between them can never read as "changed 0" again.
+		if byName[name].Absent != 0 {
+			t.Errorf("%s: %d manifest row(s) have no restored row; the two databases must hold the same ids", name, byName[name].Absent)
+		}
 		if byName[name].Changed != 1 {
 			t.Errorf("%s changed %d, want 1", name, byName[name].Changed)
 		}

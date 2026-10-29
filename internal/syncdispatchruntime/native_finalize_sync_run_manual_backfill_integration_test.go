@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	schedulersync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -45,18 +46,29 @@ func finalizeManualBackfill(t *testing.T, taskID, plannerResult string, successU
 	}
 	defer pool.Close()
 	seedFinalizeRoute(t, ctx, pool)
-	insertFinalizeRun(t, ctx, pool, successUnits, plannerResult, "")
+	// The run of an occurrence has the materializer's deterministic id, the only link the finalizer can read.
+	runID, err := schedulersync.DeterministicSyncRunID(manualBackfillOccurrence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pgseed.EnsureSyncRun(ctx, t, pool, pgseed.SyncRun{
+		ID: runID, OrgID: finalizeTestOrg, IntegrationID: finalizeTestIntegration,
+		Status: "dispatching", TotalUnits: successUnits, ResultJSON: plannerResult,
+	})
+	pgseed.SyncDispatchOutbox(ctx, t, pool, finalizeTestOutbox, runID, finalizeTestOrg, "finalize_sync_run", "dispatched", "river", finalizeRouteGeneration)
+	args := newFinalizeArgs()
+	args.RunID = runID
 	pgseed.EnsureSyncIntegration(ctx, t, pool, finalizeTestOrg, finalizeTestIntegration, finalizeTestSource)
 	if successUnits > 0 {
 		since := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 		before := time.Date(2026, 7, 2, 0, 0, 0, 0, time.UTC)
 		pgseed.InsertSyncRunUnit(ctx, t, pool, pgseed.SyncRunUnit{
-			ID: finalizeTestUnit, RunID: finalizeTestRun, OrgID: finalizeTestOrg, IntegrationID: finalizeTestIntegration,
+			ID: finalizeTestUnit, RunID: runID, OrgID: finalizeTestOrg, IntegrationID: finalizeTestIntegration,
 			SourceID: finalizeTestSource, Status: "success", SinceAt: &since, BeforeAt: &before, CostClass: "heavy",
 		})
 	}
 	pgseed.ScheduledJob(ctx, t, pool, manualBackfillScheduled, finalizeTestOrg)
-	pgseed.JobRun(ctx, t, pool, manualBackfillJobRun, manualBackfillScheduled, jobRunStatusRunning, `{"sync_run_id":"`+finalizeTestRun+`"}`)
+	pgseed.JobRun(ctx, t, pool, manualBackfillJobRun, manualBackfillScheduled, jobRunStatusRunning, `{"sync_run_id":"`+runID+`"}`)
 	for _, occurrence := range []struct {
 		id     string
 		linked bool
@@ -67,7 +79,7 @@ INSERT INTO public.scheduled_sync_occurrences
      reconcile_status, sync_run_id, job_run_id)
 VALUES ($1, 1, $2, $3::uuid, $4::uuid, now(), now(), $5::text, CASE WHEN $6::boolean THEN $7::uuid END, CASE WHEN $6::boolean THEN $8::uuid END)`,
 			occurrence.id, finalizeTestOrg, finalizeTestSyncConfig, manualBackfillScheduled,
-			map[bool]string{true: "completed", false: "pending"}[occurrence.linked], occurrence.linked, finalizeTestRun, manualBackfillJobRun); err != nil {
+			map[bool]string{true: "completed", false: "pending"}[occurrence.linked], occurrence.linked, runID, manualBackfillJobRun); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -84,7 +96,7 @@ VALUES ($1, $2, $3, $4, 'pending', '2026-01-01', '2026-01-02', 0, 0, 0)`,
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := service.Finalize(ctx, newFinalizeArgs()); err != nil {
+	if err := service.Finalize(ctx, args); err != nil {
 		t.Fatalf("Finalize: %v", err)
 	}
 
@@ -96,7 +108,7 @@ VALUES ($1, $2, $3, $4, 'pending', '2026-01-01', '2026-01-02', 0, 0, 0)`,
 	if err := pool.QueryRow(ctx, `SELECT status FROM backfill_jobs WHERE id=$1`, manualBackfillOtherJob).Scan(&out.bystanderStatus); err != nil {
 		t.Fatal(err)
 	}
-	if err := pool.QueryRow(ctx, `SELECT status FROM sync_runs WHERE id=$1`, finalizeTestRun).Scan(&out.runStatus); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT status FROM sync_runs WHERE id=$1`, runID).Scan(&out.runStatus); err != nil {
 		t.Fatal(err)
 	}
 	return out
@@ -159,7 +171,11 @@ func TestFinalizeFailsTheManualBackfillJobOfAFailedRun(t *testing.T) {
 
 // TestFinalizeStillResolvesTheScheduledBackfillJob: the existing sync_run:<id> key keeps working.
 func TestFinalizeStillResolvesTheScheduledBackfillJob(t *testing.T) {
-	out := finalizeManualBackfill(t, "sync_run:"+finalizeTestRun, "", 1)
+	runID, err := schedulersync.DeterministicSyncRunID(manualBackfillOccurrence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := finalizeManualBackfill(t, "sync_run:"+runID, "", 1)
 	if out.status != "completed" {
 		t.Fatalf("scheduled backfill job status=%q want completed", out.status)
 	}

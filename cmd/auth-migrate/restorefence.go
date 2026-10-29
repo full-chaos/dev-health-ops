@@ -19,7 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
-const restoreFenceUsage = "usage: auth-migrate restore-fence export -out FILE | apply [-manifest FILE] [-blind-margin N] [-apply] | init [-timeline N | -if-absent] | status\n  init " + restorefence.InitHelp + "\n  apply -blind-margin (no manifest) also removes every legacy reset and verification token, every unconsumed link credential and every pending invite (fail closed: users ask for a new link, admins re-invite); the apply output prints the counts"
+const restoreFenceUsage = "usage: auth-migrate restore-fence export -out FILE | apply [-manifest FILE] [-blind-margin N] [-apply] | init [-timeline N | -if-absent] | status\n  init " + restorefence.InitHelp + "\n  apply -blind-margin (no manifest) also removes every legacy reset and verification token, every unconsumed link credential and every pending invite (fail closed: users ask for a new link, admins re-invite); the apply output prints the counts. A blind margin leaves the legacy access flags (organizations, IP allowlist entries, integrations, integration credentials, GitHub App installations) as restored: it has no source state, and switching them off is an outage; the apply lists every active row by id (operator-action review_after_blind_margin) for the operator to review"
 
 type restoreFenceArgs struct {
 	verb        string
@@ -43,7 +43,7 @@ func parseRestoreFenceArgs(args []string, stderr io.Writer) (restoreFenceArgs, e
 		flags.StringVar(&parsed.out, "out", "", "the manifest file to create (it must not exist)")
 	case "apply":
 		flags.StringVar(&parsed.manifest, "manifest", "", "the manifest exported from the shadow restore")
-		flags.Int64Var(&parsed.blindMargin, "blind-margin", 0, "raise every revision by this much (the fallback when the WAL after the target is gone); also removes every legacy reset and verification token, every unconsumed link credential and every pending invite (fail closed)")
+		flags.Int64Var(&parsed.blindMargin, "blind-margin", 0, "raise every revision by this much (the fallback when the WAL after the target is gone); also removes every legacy reset and verification token, every unconsumed link credential and every pending invite (fail closed); the legacy access flags stay as restored and every active row is listed by id for review")
 		flags.BoolVar(&parsed.apply, "apply", false, "write the change (without it the run is a dry run that rolls back)")
 	case "init":
 		flags.Int64Var(&parsed.timeline, "timeline", 0, "confirm the live timeline: required when it is above 1 (a promoted database may be a restore)")
@@ -261,7 +261,7 @@ func executeRestoreFence(parent context.Context, args []string, lookup secrets.L
 	}
 	fmt.Fprintf(stdout, "restore-fence apply %s\n", encoded)
 	if report.Source == "blind_margin" {
-		var legacyTokens, links, invites int64
+		var legacyTokens, links, invites, legacyInvites int64
 		for _, s := range report.Sections {
 			switch s.Name {
 			case "public.email_verification_tokens", "public.password_reset_tokens":
@@ -270,9 +270,11 @@ func executeRestoreFence(parent context.Context, args []string, lookup secrets.L
 				links += s.Changed
 			case "auth.invites.ids":
 				invites += s.Changed
+			case "public.org_invites.ids":
+				legacyInvites += s.Changed
 			}
 		}
-		fmt.Fprintf(stdout, "restore-fence blind-margin removed legacy_tokens=%d link_credentials=%d invites=%d\n", legacyTokens, links, invites)
+		fmt.Fprintf(stdout, "restore-fence blind-margin removed legacy_tokens=%d link_credentials=%d invites=%d legacy_invites=%d\n", legacyTokens, links, invites, legacyInvites)
 	}
 	for _, line := range restorefence.ActionLines(report.Actions) {
 		fmt.Fprintln(stdout, line)

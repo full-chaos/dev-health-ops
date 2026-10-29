@@ -63,6 +63,11 @@ type section struct {
 	deleteGuard string
 	// retireSet is the SET clause of a retire section.
 	retireSet string
+	// revokeSet replaces the SET clause a revoke section builds from cols: a section that carries ids only.
+	revokeSet string
+	// blindReview is the predicate (alias t) on the restored rows a blind margin leaves as they are but names for the
+	// operator to review (ids only). Legacy sections only.
+	blindReview string
 	// manifestOnly marks a section that runs only with a manifest: with no manifest (the blind margin) nothing is
 	// known about which rows the source kept, and a presence section would remove every row.
 	manifestOnly bool
@@ -84,6 +89,7 @@ var (
 	colUUID   = func(n string) column { return column{name: n, pgType: "uuid"} }
 	colTS     = func(n string) column { return column{name: n, pgType: "timestamptz"} }
 	colText   = func(n string) column { return column{name: n, pgType: "text"} }
+	colBool   = func(n string) column { return column{name: n, pgType: "boolean"} }
 	colTSKeep = func(n string) column { return column{name: n, pgType: "timestamptz", keep: true} }
 	colTxKeep = func(n string) column { return column{name: n, pgType: "text", keep: true} }
 )
@@ -102,6 +108,10 @@ var sections = []section{
 		active:  "(t.revoked_at IS NULL AND x.revoked_at IS NOT NULL) OR (t.consumed_at IS NULL AND x.consumed_at IS NOT NULL)", touch: true},
 	{name: "auth.credential_registry", table: "credential_registry", kind: kindRevoke, key: colUUID("id"),
 		cols: []column{colTS("revoked_at"), colText("revoked_reason")}, revoked: "s.revoked_at IS NOT NULL", active: "t.revoked_at IS NULL", touch: true},
+	// An expiry the source shortened after T (RotateBootstrap shortens the parent's) is shortened again: the guard keeps
+	// LEAST(restored, source), so a restore never extends an expiry. With no manifest it changes nothing.
+	{name: "auth.credential_registry.expiry", suffix: ".expiry", table: "credential_registry", kind: kindRevoke, key: colUUID("id"),
+		cols: []column{colTS("expires_at")}, revoked: "s.expires_at IS NOT NULL", active: "(t.expires_at IS NULL OR t.expires_at > x.expires_at)", touch: true},
 	{name: "auth.signing_keys", table: "signing_keys", kind: kindRevoke, key: colText("kid"),
 		cols: []column{colText("status"), colTS("revoked_at")}, revoked: "s.status = 'compromised'", active: "t.status <> 'compromised'", touch: true},
 	{name: "auth.resource_grants", table: "resource_grants", kind: kindRevoke, key: colUUID("id"),
@@ -159,6 +169,11 @@ var sections = []section{
 		cols: []column{colTS("revoked_at"), colText("status")}, revoked: "s.revoked_at IS NOT NULL", active: "t.revoked_at IS NULL", touch: true},
 	{name: "public.org_invites", legacy: true, table: "org_invites", kind: kindRevoke, key: colUUID("id"),
 		cols: []column{colText("status"), colTS("accepted_at")}, revoked: "s.status <> 'pending'", active: "t.status = 'pending'", touch: true},
+	// A legacy invite still pending after the section above that the source no longer holds pending (deleted) ends
+	// revoked; the legacy accept path reads this table. With no manifest every pending legacy invite is revoked (fail
+	// closed, as auth.invites.ids).
+	{name: "public.org_invites.ids", suffix: ".ids", legacy: true, table: "org_invites", kind: kindRetire, key: colUUID("id"),
+		revoked: "s.status = 'pending'", deleteGuard: "t.status = 'pending'", retireSet: "status = 'revoked', updated_at = clock_timestamp()"},
 	// The legacy membership mirror (D6358: a public row means an active member): a mirror row deleted after the
 	// target is deleted again; a row the source still holds is left alone.
 	{name: "public.memberships", legacy: true, table: "memberships", kind: kindPresence, key: colUUID("id"), manifestOnly: true},
@@ -176,7 +191,40 @@ var sections = []section{
 		cols: []column{colText("assertion_id"), colTS("expires_at")}},
 	{name: "public.email_verification_tokens", legacy: true, table: "email_verification_tokens", kind: kindPresence, key: colUUID("id")},
 	{name: "public.password_reset_tokens", legacy: true, table: "password_reset_tokens", kind: kindPresence, key: colUUID("id")},
+
+	// Legacy access flags: a flag the source switched off after T is switched off again; nothing is switched on. A row
+	// the source deleted is switched off (never deleted), only with a manifest. With no manifest (blind margin) nothing
+	// is known: switching every row off is an outage (and opens every IP allowlist), so the flags stay as restored and
+	// the active rows are named for review.
+	{name: "public.organizations", legacy: true, table: "organizations", kind: kindRevoke, key: colUUID("id"),
+		cols: []column{colBool("is_active")}, revoked: "NOT s.is_active", active: "t.is_active", touch: true, blindReview: "t.is_active"},
+	{name: "public.organizations.ids", suffix: ".ids", legacy: true, table: "organizations", kind: kindRetire, key: colUUID("id"), manifestOnly: true,
+		deleteGuard: "t.is_active", retireSet: "is_active = false, updated_at = clock_timestamp()"},
+	// 0 active allowlist entries means the org accepts every address, so an entry is switched off only while its org
+	// keeps an active entry the source also holds active; otherwise it stays and the org is named for review.
+	{name: "public.org_ip_allowlist.ids", suffix: ".ids", legacy: true, table: "org_ip_allowlist", kind: kindRetire, key: colUUID("id"), manifestOnly: true,
+		revoked: "s.is_active", deleteGuard: "t.is_active AND " + allowlistKeepsASharedEntry, retireSet: "is_active = false, updated_at = clock_timestamp()",
+		action: ActionReviewIPAllowlist, blindReview: "t.is_active"},
+	{name: "public.integrations", legacy: true, table: "integrations", kind: kindRevoke, key: colUUID("id"),
+		cols: []column{colBool("is_active")}, revoked: "NOT s.is_active", active: "t.is_active", touch: true, blindReview: "t.is_active"},
+	{name: "public.integrations.ids", suffix: ".ids", legacy: true, table: "integrations", kind: kindRetire, key: colUUID("id"), manifestOnly: true,
+		deleteGuard: "t.is_active", retireSet: "is_active = false, updated_at = clock_timestamp()"},
+	{name: "public.integration_credentials", legacy: true, table: "integration_credentials", kind: kindRevoke, key: colUUID("id"),
+		cols: []column{colBool("is_active")}, revoked: "NOT s.is_active", active: "t.is_active", touch: true, blindReview: "t.is_active"},
+	// The stored provider secret the source cleared (a disconnect) is cleared again. Only ids travel, never the secret.
+	{name: "public.integration_credentials.secret", suffix: ".secret", legacy: true, table: "integration_credentials", kind: kindRevoke, key: colUUID("id"),
+		revoked: "s.credentials_encrypted IS NULL", active: "t.credentials_encrypted IS NOT NULL", revokeSet: "credentials_encrypted = NULL", touch: true},
+	{name: "public.integration_credentials.ids", suffix: ".ids", legacy: true, table: "integration_credentials", kind: kindRetire, key: colUUID("id"), manifestOnly: true,
+		deleteGuard: "(t.is_active OR t.credentials_encrypted IS NOT NULL)", retireSet: "is_active = false, credentials_encrypted = NULL, updated_at = clock_timestamp()"},
+	// The webhook sets suspended_at on suspend and on uninstall; the row is never deleted. An earlier suspension stays.
+	{name: "public.github_app_installations", legacy: true, table: "github_app_installations", kind: kindRevoke, key: colUUID("id"),
+		cols: []column{colTSKeep("suspended_at")}, revoked: "s.suspended_at IS NOT NULL", active: "t.suspended_at IS NULL", touch: true,
+		blindReview: "t.suspended_at IS NULL"},
 }
+
+// allowlistKeepsASharedEntry holds (alias t, manifest m) while the org of t keeps an active entry the source also
+// holds active.
+const allowlistKeepsASharedEntry = "EXISTS (SELECT 1 FROM public.org_ip_allowlist k JOIN m y ON y.id = k.id WHERE k.org_id = t.org_id AND k.is_active)"
 
 // floorsSection is the manifest name of the revision floors.
 const floorsSection = "auth.aggregate_revisions"
@@ -223,6 +271,9 @@ func (s section) applySQL(schema authschema.ValidatedIdentifier) string {
 	switch s.kind {
 	case kindRevoke:
 		var sets []string
+		if s.revokeSet != "" {
+			sets = append(sets, s.revokeSet)
+		}
 		for _, c := range s.cols {
 			if c.keep {
 				sets = append(sets, fmt.Sprintf("%s = COALESCE(t.%s, x.%s)", c.name, c.name, c.name))
@@ -294,11 +345,24 @@ SELECT t.%s::text FROM %s t WHERE NOT EXISTS (SELECT 1 FROM m x WHERE x.%s = t.%
 	case s.kind == kindReport:
 		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s)
 SELECT x.%s::text FROM m x WHERE NOT EXISTS (SELECT 1 FROM %s t WHERE t.%s = x.%s) ORDER BY 1`, s.recordset(), s.key.name, tbl, s.key.name, s.key.name)
+	case s.action == ActionReviewIPAllowlist:
+		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s)
+SELECT DISTINCT t.org_id::text FROM %s t WHERE t.is_active AND NOT EXISTS (SELECT 1 FROM m x WHERE x.%s = t.%s) AND NOT %s ORDER BY 1`,
+			s.recordset(), tbl, s.key.name, s.key.name, allowlistKeepsASharedEntry)
 	case s.kind == kindCounter && s.action != "":
 		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s)
 SELECT t.%s::text FROM %s t JOIN m x ON x.%s = t.%s WHERE t.token_version < x.token_version ORDER BY 1`, s.recordset(), s.key.name, tbl, s.key.name, s.key.name)
 	}
 	return ""
+}
+
+// blindReviewSQL returns the statement that names the restored rows a blind margin leaves as they are, for the operator
+// to review (ids only), or "" when the section has none.
+func blindReviewSQL(s section) string {
+	if s.blindReview == "" || !s.legacy {
+		return ""
+	}
+	return `SELECT t.` + s.key.name + `::text FROM public.` + s.table + ` t WHERE ` + s.blindReview + ` ORDER BY 1`
 }
 
 // flowStatesSQL invalidates every SSO flow state the restored database holds: no per-row export

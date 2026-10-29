@@ -105,6 +105,8 @@ const (
 	EnvUsersOwned = "AUTH_USERS_OWNED"
 	// EnvOrgsOwned is the organizations-owned switch (true or false, default false).
 	EnvOrgsOwned = "AUTH_ORGS_OWNED"
+	// EnvRevisionFeed is the revision feed switch (on or off, default off).
+	EnvRevisionFeed = "AUTH_REVISION_FEED"
 	// EnvSocialLinkRoutes ("true" or "false", default false) mounts the
 	// bearer-only social link and unlink routes; it needs the session secrets.
 	EnvSocialLinkRoutes = "AUTH_SOCIAL_LINK_ROUTES"
@@ -232,6 +234,8 @@ type Config struct {
 	// OrgsOwned is AUTH_ORGS_OWNED: auth-service is the only writer of
 	// auth.organizations; the legacy login projection writes nothing.
 	OrgsOwned bool
+	// RevisionFeed is AUTH_REVISION_FEED=on: the outbox publisher has a Valkey sink and this replica subscribes.
+	RevisionFeed bool
 
 	// Provisioning mounts the internal membership and invite routes.
 	Provisioning Provisioning

@@ -550,7 +550,18 @@ var (
 
 // LooksSecret reports whether an environment variable's name says it holds a
 // secret (a token, password, key) rather than a plain setting.
-func LooksSecret(name string) bool { return secretNamePattern.MatchString(name) }
+func LooksSecret(name string) bool {
+	return !nonSecretFlagNames[name] && secretNamePattern.MatchString(name)
+}
+
+// nonSecretFlagNames are the boolean routing flags go-api reads (true or false). Their
+// names match secretNamePattern, but a value of "true" is not a secret and is below
+// MinRegisteredLength. The match is on the exact name, so a neighbour such as
+// AUTH_PROXY_CREDENTIALS_X is still a secret.
+var nonSecretFlagNames = map[string]bool{
+	"AUTH_PROXY_SESSIONS": true, "AUTH_PROXY_LOCAL_LOGIN": true, "AUTH_PROXY_CREDENTIALS": true,
+	"AUTH_PROXY_SOCIAL": true, "AUTH_PROXY_OIDC": true, "AUTH_PROXY_SAML": true,
+}
 
 // GetenvNamed is os.Getenv for a helper that reads a variable chosen by name: the
 // value is registered when the name says it is a secret (by value) or a DSN

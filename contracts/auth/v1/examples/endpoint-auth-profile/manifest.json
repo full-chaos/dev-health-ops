@@ -44,6 +44,10 @@
     {
       "file": "valid-multi-class-content-type-selector.json",
       "why": "Two classes accepted and the credential of one is in the body: the device_code grant (application/json) against a bearer ACR client credential. Only the device-code class declares a content_type marker, so the selector content_type/application/json picks exactly one. (The wire profile cannot list acr_workload_identity_exchange; the gate unit tests cover the device-code against token-exchange pair on the real registry.)"
+    },
+    {
+      "file": "valid-multi-class-subject-token-type-selector.json",
+      "why": "The workload-token exchange accepts two classes in the same form field: the Kubernetes ServiceAccount token and the Compose bootstrap credential. The RFC 8693 subject_token_type picks the class; only the bootstrap class declares the selector's token-type URI, so subject_token_type picks exactly one."
     }
   ],
   "reject": [
@@ -364,6 +368,18 @@
       "expect_instance_location": "/class_disambiguator/name",
       "expect_keyword": "not",
       "why": "`/` is allowed only in a content_type name; a header, scheme, prefix or JWT field name never carries one."
+    },
+    {
+      "file": "invalid-subject-token-type-name-not-a-urn.json",
+      "expect_instance_location": "/class_disambiguator/name",
+      "expect_keyword": "pattern",
+      "why": "A subject_token_type selector names a full token-type URI (urn:...); a bare word is not one."
+    },
+    {
+      "file": "invalid-urn-name-on-a-header-selector.json",
+      "expect_instance_location": "/class_disambiguator/name",
+      "expect_keyword": "not",
+      "why": "`:` is allowed only in a subject_token_type name; a header, scheme, prefix or JWT field name never carries one."
     }
   ],
   "reject_by_client": [
@@ -390,6 +406,10 @@
     {
       "file": "invalid-high-risk-action-cacheable.json",
       "why": "Schema-valid, refused by the profile gate: members.invite is a high-risk catalog action, so its profile cache_class must be none."
+    },
+    {
+      "file": "invalid-subject-token-type-selector-no-accepted-class-owns-it.json",
+      "why": "Schema-valid, refused by the profile gate: the route accepts the two exchange classes and selects by a token-type URI neither declares (compared exactly, so a longer URI is not a match)."
     }
   ]
 }

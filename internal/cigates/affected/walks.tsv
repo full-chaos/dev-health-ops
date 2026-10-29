@@ -140,6 +140,7 @@ internal/cigates/scripts	oracle_selection_helpers_test.go	unexpressed	-	-
 internal/cigates/scripts	oracle_shards_script_test.go	unexpressed	-	-
 internal/cigates/scripts	oracle_triggers_script_test.go	unexpressed	-	-
 internal/cigates/scripts	ported_contract_guards_test.go	unexpressed	-	*.go
+internal/cigates/scripts	posture_integration_test.go	unexpressed	-	-
 internal/cigates/scripts	registry_guard_script_test.go	unexpressed	-	-
 internal/cigates/scripts	relevance_step_script_test.go	unexpressed	-	-
 internal/cigates/scripts	shard_row_files_merge_test.go	unexpressed	-	-

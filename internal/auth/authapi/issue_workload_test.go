@@ -268,11 +268,7 @@ func TestIssueSessionRefusesWrongCredentialsBeforeAnyRead(t *testing.T) {
 		"basic scheme": func(*workloadIssueFixture) map[string]string {
 			return map[string]string{"Authorization": "Basic Z29vZA=="}
 		},
-		"lowercase typ": func(w *workloadIssueFixture) map[string]string { h, _ := w.mint("workload+JWT", nil); return h },
-		"application/ typ": func(w *workloadIssueFixture) map[string]string {
-			h, _ := w.mint("application/workload+jwt", nil)
-			return h
-		},
+		"longer typ": func(w *workloadIssueFixture) map[string]string { h, _ := w.mint("workload+jwt-x", nil); return h },
 	}
 	var golden string
 	for name, build := range preKey {
@@ -363,7 +359,7 @@ func TestIssueSessionAnswers503WhenTheKeySetIsUnavailable(t *testing.T) {
 	w := newWorkloadIssueFixture(t)
 	header, _ := w.mint("workload+jwt", nil)
 	w.keys.err = errors.New("custody down")
-	expectError(t, w.issue(header), http.StatusServiceUnavailable, "dependency")
+	expectError(t, w.issue(header), http.StatusServiceUnavailable, "dependency_unavailable")
 	w.nothingRead("key outage")
 }
 

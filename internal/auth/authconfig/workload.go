@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -136,3 +137,28 @@ var errNotHTTPSOrigin = errors.New("not an https origin")
 
 // Mounted reports whether the exchange route is mounted: either subject is on.
 func (w WorkloadExchange) Mounted() bool { return w.Enabled || w.Bootstrap }
+
+// EnvSessionIssueWorkloadSubject is the go-api workload principal (prn_) whose
+// workload token the session issue route accepts. Unset, the route accepts no
+// workload token. Set, it needs EnvTokenIssuerURL.
+const EnvSessionIssueWorkloadSubject = "AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT"
+
+// sessionIssueWorkloadSubjectPattern is the session.v1 principal id: prn_ and
+// 16 bytes as unpadded base64url.
+var sessionIssueWorkloadSubjectPattern = regexp.MustCompile(`^prn_[A-Za-z0-9_-]{22}$`)
+
+// sessionIssueWorkloadSubject reads the session issue route's workload
+// subject. Errors name the variable, never its value.
+func sessionIssueWorkloadSubject(lookup secrets.LookupEnv, tokenIssuerURL string) (string, error) {
+	value, ok := lookup(EnvSessionIssueWorkloadSubject)
+	if !ok || value == "" {
+		return "", nil
+	}
+	if !sessionIssueWorkloadSubjectPattern.MatchString(value) {
+		return "", fmt.Errorf("%s must be a workload principal id (prn_ and 22 base64url characters)", EnvSessionIssueWorkloadSubject)
+	}
+	if tokenIssuerURL == "" {
+		return "", fmt.Errorf("%s needs %s", EnvSessionIssueWorkloadSubject, EnvTokenIssuerURL)
+	}
+	return value, nil
+}

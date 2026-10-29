@@ -43,6 +43,8 @@ var allowedAttributeKeys = map[string]struct{}{
 	"revision":     {},
 	"audience":     {},
 	"actions":      {},
+	// The auth.session.issued row of a workload call: the verified token's jti.
+	"workload_jti": {},
 
 	"purged_email_verification_tokens": {},
 	"purged_password_reset_tokens":     {},
@@ -210,6 +212,7 @@ var attributeIDRules = map[string]*regexp.Regexp{
 	// A signing key's kid: public, the JWS header value (keystore.KeyIDPattern).
 	"key_id":         regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`),
 	"jti":            uuidPattern,
+	"workload_jti":   uuidPattern,
 	"principal_id":   uuidPattern,
 	"binding_id":     uuidPattern,
 	"related_key_id": regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`),

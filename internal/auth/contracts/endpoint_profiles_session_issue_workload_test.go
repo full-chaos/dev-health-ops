@@ -1,11 +1,7 @@
 package contracts
 
 import (
-	"encoding/json"
-	"os"
-	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 )
 
@@ -64,34 +60,15 @@ func TestTheSelectorGateAcceptsTheSessionIssueRow(t *testing.T) {
 	}
 }
 
-// credential-classes.json names the route as a workload_token consumer, and
-// the svc_authsess_ class keeps its own.
-func TestTheRegistryNamesTheSessionIssueRouteAsAWorkloadTokenConsumer(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join(ContractsDir(testRoot(t)), "credential-classes.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var document struct {
-		Classes []struct {
-			ClassID   string `json:"class_id"`
-			Consumers []struct {
-				Anchor      struct{ Path string } `json:"anchor"`
-				Description string                `json:"description"`
-			} `json:"consumers"`
-		} `json:"classes"`
-	}
-	if err := json.Unmarshal(raw, &document); err != nil {
-		t.Fatal(err)
-	}
-	named := map[string]bool{}
-	for _, class := range document.Classes {
-		for _, consumer := range class.Consumers {
-			if consumer.Anchor.Path == "internal/auth/authapi/compat.go" && strings.Contains(consumer.Description, "/internal/v1/sessions") {
-				named[class.ClassID] = true
-			}
+// credential-classes.json names the route as a consumer of both classes at the
+// row's source line.
+func TestTheRegistryNamesTheSessionIssueRouteAsAConsumerOfBothClasses(t *testing.T) {
+	registry := indexRegistry(loadClassRegistryDocument(t))
+	line := int(sessionIssueRow(t)["source"].(map[string]any)["line"].(float64))
+	key := anchorKey(authHTTPLayer+"compat.go", line)
+	for _, class := range []string{"workload_token", "internal_svc_authsess_token"} {
+		if !registry.consumers[class][key] {
+			t.Errorf("%s has no consumer anchored at %s", class, key)
 		}
-	}
-	if !named["workload_token"] || !named["internal_svc_authsess_token"] {
-		t.Fatalf("consumers of /internal/v1/sessions: %v, want workload_token and internal_svc_authsess_token", named)
 	}
 }

@@ -202,6 +202,97 @@ func TestBackfillLeavesPlatformRolesAloneWhileOwned(t *testing.T) {
 	}
 }
 
+// plantExpiredRole replaces the platform_admin assignments of principal with
+// one that expired a minute ago, granted by grantedBy (nil = the backfill), in
+// one audit.Commit.
+func plantExpiredRole(t *testing.T, ctx context.Context, e *env, principal uuid.UUID, grantedBy *uuid.UUID) uuid.UUID {
+	t.Helper()
+	var old []uuid.UUID
+	rows, err := e.admin.Query(ctx, `SELECT id FROM auth.platform_role_assignments WHERE principal_id = $1 AND role_key = $2`, principal, PlatformAdminRole)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		old = append(old, id)
+	}
+	rows.Close()
+	planted := uuid.New()
+	events := []audit.OutboxEvent{roleEvent(planted, "platform_role_assignment.granted", "active")}
+	for _, id := range old {
+		events = append(events, roleEvent(id, "platform_role_assignment.revoked", "revoked"))
+	}
+	err = audit.Commit(ctx, e.store.pool, e.store.schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			if _, err := tx.Exec(ctx, `DELETE FROM `+e.store.q+`.platform_role_assignments WHERE principal_id = $1 AND role_key = $2`, principal, PlatformAdminRole); err != nil {
+				return err
+			}
+			_, err := tx.Exec(ctx, `INSERT INTO `+e.store.q+`.platform_role_assignments (id, principal_id, role_key, granted_by, expires_at)
+VALUES ($1, $2, $3, $4, statement_timestamp() - interval '1 minute')`, planted, principal, PlatformAdminRole, grantedBy)
+			return err
+		},
+		Audit:  roleAudit("auth.platform_role.granted", "role_granted", principal.String()),
+		Events: events,
+	})
+	if err != nil {
+		t.Fatalf("plant an expired assignment: %v", err)
+	}
+	return planted
+}
+
+// An expired assignment is not held: a public superuser whose only assignment
+// expired gets a fresh one, which replaces the expired row in one commit,
+// whoever granted it.
+func TestBackfillReplacesAnExpiredAssignmentOfASuperuser(t *testing.T) {
+	e := getEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	granter := BackfillTarget{ID: uuid.New(), Email: uniqueEmail("bfg2"), Active: true, Superuser: true}
+	if _, err := e.store.BackfillUser(ctx, granter, false); err != nil {
+		t.Fatal(err)
+	}
+	for name, by := range map[string]*uuid.UUID{"backfilled": nil, "granted": &granter.ID} {
+		target := BackfillTarget{ID: uuid.New(), Email: uniqueEmail("bfe"), Active: true, Superuser: true}
+		if _, err := e.store.BackfillUser(ctx, target, false); err != nil {
+			t.Fatal(err)
+		}
+		expired := plantExpiredRole(t, ctx, e, target.ID, by)
+		res, err := e.store.BackfillUser(ctx, target, false)
+		if err != nil || !res.RoleGranted || !res.Updated {
+			t.Fatalf("%s: a superuser with only an expired assignment: %+v %v", name, res, err)
+		}
+		if n := e.count(t, ctx, `SELECT count(*) FROM auth.platform_role_assignments WHERE principal_id = $1 AND granted_by IS NULL
+			AND expires_at IS NULL`, target.ID); n != 1 {
+			t.Fatalf("%s: active backfilled assignments = %d, want 1", name, n)
+		}
+		if n := e.count(t, ctx, `SELECT count(*) FROM auth.platform_role_assignments WHERE id = $1`, expired); n != 0 {
+			t.Fatalf("%s: the expired row is still there", name)
+		}
+		if n := e.count(t, ctx, `SELECT count(*) FROM auth.auth_outbox_events WHERE event_type = 'platform_role_assignment.revoked' AND aggregate_id = $1`,
+			"pra_"+expired.String()); n != 1 {
+			t.Fatalf("%s: revoked events for the expired row = %d, want 1", name, n)
+		}
+		if res, err := e.store.BackfillUser(ctx, target, false); err != nil || res != (BackfillResult{}) {
+			t.Fatalf("%s: rerun wrote something: %+v %v", name, res, err)
+		}
+	}
+	// Not a superuser: an expired granted row is not the backfill's and stays.
+	plain := BackfillTarget{ID: uuid.New(), Email: uniqueEmail("bfn"), Active: true}
+	if _, err := e.store.BackfillUser(ctx, plain, false); err != nil {
+		t.Fatal(err)
+	}
+	expired := plantExpiredRole(t, ctx, e, plain.ID, &granter.ID)
+	if res, err := e.store.BackfillUser(ctx, plain, false); err != nil || res != (BackfillResult{}) {
+		t.Fatalf("not a superuser, expired granted row: %+v %v", res, err)
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.platform_role_assignments WHERE id = $1`, expired); n != 1 {
+		t.Fatal("the backfill removed an expired assignment it did not grant")
+	}
+}
+
 func TestBackfillNeverRevokesAnAssignmentWithAGranter(t *testing.T) {
 	e := getEnv(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)

@@ -58,7 +58,7 @@ func (c *shellCollector) Export(_ context.Context, req *colmetricpb.ExportMetric
 			}
 		}
 	}
-	if c.count == 1 && c.hold != nil {
+	if c.hold != nil && c.heldExport == 0 && carries {
 		c.heldExport, c.heldHadTarget = c.count, carries
 		c.mu.Unlock()
 		select {

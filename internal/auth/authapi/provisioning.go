@@ -140,9 +140,9 @@ type ProvisioningDeps struct {
 	Orgs          OrganizationReactivator
 	Logger        *slog.Logger
 	Meter         metric.Meter
-	// profileRows is the endpoint-profile document the routes are checked
+	// ProfileRows is the endpoint-profile document the routes are checked
 	// against; nil is the one the binary embeds. Tests plant others.
-	profileRows []byte
+	ProfileRows []byte
 }
 
 type provisioningHandlers struct {
@@ -161,7 +161,7 @@ func ProvisioningRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 		deps.Memberships == nil || deps.Invites == nil || deps.Deprovision == nil || deps.Orgs == nil {
 		return nil, errors.New("authapi: provisioning routes need credentials, users, a reader, organizations, memberships, invites, a deprovisioner and the organization reactivate verb")
 	}
-	rows := deps.profileRows
+	rows := deps.ProfileRows
 	if rows == nil {
 		rows = authv1.AuthServiceEndpointProfiles
 	}
@@ -188,7 +188,7 @@ func ProvisioningRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 		uses.Add(context.Background(), 0, metric.WithAttributes(attribute.String("operation", op)))
 	}
 	h := provisioningHandlers{ProvisioningDeps: deps, rec: rec, provisioningUses: uses}
-	return []httpapi.Route{
+	routes := []httpapi.Route{
 		{Method: http.MethodPost, Pattern: PatternMembershipAdd, Handler: http.HandlerFunc(h.membershipAdd)},
 		{Method: http.MethodPost, Pattern: PatternMembershipRole, Handler: http.HandlerFunc(h.membershipRole)},
 		{Method: http.MethodPost, Pattern: PatternMembershipRemove, Handler: http.HandlerFunc(h.membershipRemove)},
@@ -196,8 +196,15 @@ func ProvisioningRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 		{Method: http.MethodPost, Pattern: PatternInviteCreate, Handler: http.HandlerFunc(h.inviteCreate)},
 		{Method: http.MethodPost, Pattern: PatternInviteAccept, Handler: http.HandlerFunc(h.inviteAccept)},
 		{Method: http.MethodPost, Pattern: PatternOrgDeprovision, Handler: http.HandlerFunc(h.orgDeprovision)},
-		{Method: http.MethodPost, Pattern: PatternOrgReactivate, Handler: http.HandlerFunc(h.orgReactivate)},
-	}, nil
+	}
+	// Mounted only when the profile document holds its row: without it the route answers 404, the routes above are
+	// unaffected and the service starts. One line names the route and nothing else.
+	if rowsPresentFor(rows, darkPatterns) == nil {
+		routes = append(routes, httpapi.Route{Method: http.MethodPost, Pattern: PatternOrgReactivate, Handler: http.HandlerFunc(h.orgReactivate)})
+	} else {
+		deps.Logger.Info("auth provisioning route not mounted: no endpoint-profile row", "route", PatternOrgReactivate)
+	}
+	return routes, nil
 }
 
 // admit checks the bearer (the session issuer credential holding

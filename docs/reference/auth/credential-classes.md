@@ -128,8 +128,8 @@ carry other prefixes, services and scopes. auth-service is its only validator
 rotate and revoke it. A second scope, `memberships:write`, which no other
 service may hold, lets go-api call the internal provisioning routes
 (`/internal/v1/memberships/*`, `/internal/v1/invites/*`,
-`/internal/v1/organizations/{deprovision,reactivate}`, mounted by `AUTH_MEMBERSHIP_ROUTES`;
-`servicecred.PG.CheckScope`). The route, the eight provisioning routes and
+`/internal/v1/organizations/deprovision`, mounted by `AUTH_MEMBERSHIP_ROUTES`;
+`servicecred.PG.CheckScope`). The route, the seven provisioning routes and
 go-api's four compatibility routes (`/api/v1/auth/{login,refresh,logout,social-login}`)
 have rows in `contracts/auth/v1/endpoint-profiles.auth-service.json`. The
 provisioning audit rows name the actor and the request id, not the credential

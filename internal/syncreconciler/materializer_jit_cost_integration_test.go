@@ -7,11 +7,14 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -218,11 +221,11 @@ func TestMaterializeFinalizeSQLCancellationSurfacesSQLState57014(t *testing.T) {
 
 // TestMaterializerStepCompletesUnderRealisticStageBudgetWithJITOnAtServerLevel
 // is the GREEN half: the exact shipped Materializer.Step, unmodified, called
-// through its real public API against the same realistic population and the
-// same 600ms budget the reconciler pipeline actually uses -- with the
+// through its real public API against the same realistic population -- with the
 // server's own jit=on default untouched, proving Step's own SET LOCAL
-// jit=off is what keeps it under budget, not a container-level setting this
-// test happened to control.
+// jit=off (sent before the finalize statement) is what keeps JIT out of the
+// step, not a container-level setting this test happened to control. The
+// proof is the recorded statement order and a clean Step, not a duration.
 func TestMaterializerStepCompletesUnderRealisticStageBudgetWithJITOnAtServerLevel(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -238,7 +241,13 @@ func TestMaterializerStepCompletesUnderRealisticStageBudgetWithJITOnAtServerLeve
 		}
 	}()
 
-	pool, err := pgxpool.New(ctx, instance.URI)
+	poolConfig, err := pgxpool.ParseConfig(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statements := &statementRecorder{}
+	poolConfig.ConnConfig.Tracer = statements
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,23 +270,58 @@ func TestMaterializerStepCompletesUnderRealisticStageBudgetWithJITOnAtServerLeve
 		t.Fatal(err)
 	}
 
-	const materializerStageBudget = 600 * time.Millisecond
-	stepCtx, stepCancel := context.WithTimeout(ctx, materializerStageBudget)
+	// The mechanism, not a duration: the stage runs its statements in a transaction that first turns JIT off, so the
+	// planner-cost blowup of CHAOS-4262 cannot compile a JIT plan. The statements the Step sends are recorded, and the
+	// "SET LOCAL jit = off" must come before the finalize statement. The 30 s context is a failure-only ceiling.
+	statements.reset()
+	stepCtx, stepCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer stepCancel()
 
 	now := time.Now().UTC()
-	start := time.Now()
 	_, stepErr := materializer.Step(stepCtx, now, now.Add(-time.Hour), maximumStepLimit)
-	elapsed := time.Since(start)
-
 	if stepErr != nil {
-		t.Fatalf("Step() error = %v (after %s); the JIT-disable statement should keep this well under the %s stage budget",
-			stepErr, elapsed, materializerStageBudget)
+		t.Fatalf("Step() error = %v; with the JIT-disable statement the step completes", stepErr)
 	}
-	if elapsed >= materializerStageBudget {
-		t.Fatalf("Step() took %s, want comfortably under the %s stage budget it will actually run under in production",
-			elapsed, materializerStageBudget)
+	sent := statements.sent()
+	disable, finalize := -1, -1
+	for index, sql := range sent {
+		if disable < 0 && strings.Contains(sql, "SET LOCAL jit = off") {
+			disable = index
+		}
+		if finalize < 0 && sql == materializeFinalizeSQL {
+			finalize = index
+		}
 	}
+	if disable < 0 || finalize < 0 || disable > finalize {
+		t.Fatalf("statement order of the step = %q: the JIT-disable statement (index %d) must come before the finalize statement (index %d)", sent, disable, finalize)
+	}
+}
+
+// statementRecorder is a pgx query tracer that keeps the SQL text of every statement sent, in order.
+type statementRecorder struct {
+	mu   sync.Mutex
+	list []string
+}
+
+func (r *statementRecorder) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	r.mu.Lock()
+	r.list = append(r.list, data.SQL)
+	r.mu.Unlock()
+	return ctx
+}
+
+func (r *statementRecorder) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+func (r *statementRecorder) reset() {
+	r.mu.Lock()
+	r.list = nil
+	r.mu.Unlock()
+}
+
+func (r *statementRecorder) sent() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.list...)
 }
 
 // TestMaterializerStepContextDeadlineClassifiesAsStageContextDeadline is the

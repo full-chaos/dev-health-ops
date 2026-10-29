@@ -981,3 +981,18 @@ func TestPostureIntegrationStubRunRemovesAllDirsPastAnUnreadableSubdir(t *testin
 	}
 	requireEmptyDir(t, tmp, "an unreadable subdir")
 }
+
+// A removal that fails (the parent dir is read-only) is reported for every dir the script made, not only the first.
+func TestPostureIntegrationStubRunTriesEveryDirWhenRemovalFails(t *testing.T) {
+	f := postureDemo(t)
+	tmp, env := postureTmpEnv(t)
+	env = append(env, "PATH="+filepath.Dir(goBinary(t))+string(os.PathListSeparator)+"/usr/bin:/bin")
+	res := postureStubRun(t, f, "#!/bin/sh\nchmod 0555 \"${GOMODCACHE%/*}\"\nexit 0\n", env)
+	if res.code != 5 {
+		t.Fatalf("stub run: exit %d stdout=%q stderr=%q, want exit 5 although removal fails", res.code, res.stdout, res.stderr)
+	}
+	if n := strings.Count(res.stderr, "cannot remove"); n != 4 {
+		t.Fatalf("%d removal failures reported, want 4 (the worktree dir and the three made dirs): stderr=%q", n, res.stderr)
+	}
+	_ = tmp
+}

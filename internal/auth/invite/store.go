@@ -476,10 +476,12 @@ func (s *Store) acceptOnce(ctx context.Context, in AcceptInput, digest string) (
 					return nil
 				}
 				// An invite go-api made before: take it over into auth.invites.
+				// invited_by is the inviter the plan locked at step 1, or NULL when
+				// the plan had none: never an id that no step-1 lock holds.
 				_, err = tx.Exec(ctx, `INSERT INTO `+s.q+`.invites
 	(id, organization_id, email_normalized, role, token_hash, invited_by, status, expires_at, created_at, updated_at)
 VALUES ($1, $2, $3, $4, $5, (SELECT p.id FROM `+s.q+`.principals p WHERE p.id = $6), 'pending', $7, $8, $9)`,
-					locked.id, locked.orgID, locked.email, locked.role, digest, locked.inviter, locked.expiresAt, locked.createdAt, now)
+					locked.id, locked.orgID, locked.email, locked.role, digest, change.InvitedBy, locked.expiresAt, locked.createdAt, now)
 				return err
 			}
 			if err := s.members.ApplyAdd(ctx, tx, plan, step4); err != nil {
@@ -553,7 +555,14 @@ func (s *Store) Revoke(ctx context.Context, in RevokeInput) error {
 	}
 	return s.run(ctx, verbRevoke, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
-			if err := s.lockActor(ctx, tx, in.Actor.PrincipalID); err != nil {
+			// The inviter, read before any lock (every invite has its public row),
+			// is locked with the actor: a take-over below names it in auth.invites.
+			var inviter *uuid.UUID
+			if err := tx.QueryRow(ctx, `SELECT invited_by_id FROM public.org_invites WHERE id = $1 AND org_id = $2`, in.InviteID, in.OrgID).
+				Scan(&inviter); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				return err
+			}
+			if err := s.lockActor(ctx, tx, in.Actor.PrincipalID, inviter); err != nil {
 				return err
 			}
 			if err := s.lockOrg(ctx, tx, in.OrgID, in.Authorize); err != nil {
@@ -577,15 +586,17 @@ func (s *Store) Revoke(ctx context.Context, in RevokeInput) error {
 			if err != nil || noop {
 				return err
 			}
+			// A take-over writes as invited_by the inviter locked above, or NULL:
+			// never an id read after the locks, so no lock is taken after step 3.
 			if inAuth {
 				if _, err := tx.Exec(ctx, `UPDATE `+s.q+`.invites SET status = 'revoked', updated_at = $2 WHERE id = $1`, in.InviteID, now); err != nil {
 					return err
 				}
 			} else if _, err := tx.Exec(ctx, `INSERT INTO `+s.q+`.invites
 	(id, organization_id, email_normalized, role, token_hash, invited_by, status, expires_at, created_at, updated_at)
-SELECT p.id, p.org_id, p.email, p.role, p.token_hash, (SELECT a.id FROM `+s.q+`.principals a WHERE a.id = p.invited_by_id),
+SELECT p.id, p.org_id, p.email, p.role, p.token_hash, (SELECT a.id FROM `+s.q+`.principals a WHERE a.id = $3::uuid AND a.id = p.invited_by_id),
        'revoked', p.expires_at, p.created_at, $2
-FROM public.org_invites p WHERE p.id = $1`, in.InviteID, now); err != nil {
+FROM public.org_invites p WHERE p.id = $1`, in.InviteID, now, inviter); err != nil {
 				return err
 			}
 			_, err = tx.Exec(ctx, `UPDATE public.org_invites SET status = 'revoked', updated_at = $2 WHERE id = $1`, in.InviteID, now)

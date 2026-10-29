@@ -43,8 +43,8 @@ if [ -z "${POSTURE_CLEAN_ENV:-}" ]; then
   first="$(command -v go)" || first=""
   allow+=("POSTURE_GO_FIRST=${first}")
   if [ "${stub_mode}" -eq 1 ]; then
-    # A simulated run is never a receipt: it may use the caller's cache dirs (hosted CI has no fixed paths).
-    for name in GOMODCACHE GOCACHE GOTMPDIR; do
+    # A simulated run is never a receipt: it may use the caller's cache dirs (hosted CI has no fixed paths) and its TMPDIR.
+    for name in GOMODCACHE GOCACHE GOTMPDIR TMPDIR; do
       if [ -n "${!name+x}" ]; then allow+=("${name}=${!name}"); fi
     done
   fi

@@ -80,12 +80,12 @@ func TestTheSessionIssueWorkloadSwitchIsLoggedAsABoolNeverTheSubject(t *testing.
 		if strings.Contains(attr.Value.String(), issueWorkloadSubject) {
 			t.Fatalf("log attribute %s carries the subject", attr.Key)
 		}
-		if attr.Key == "session_issue_workload_enabled" {
+		if attr.Key == "issue_route_workload_enabled" {
 			seen = attr.Value.Kind() == slog.KindBool && attr.Value.Bool()
 		}
 	}
 	if !seen {
-		t.Fatal("session_issue_workload_enabled is not logged as true")
+		t.Fatal("issue_route_workload_enabled is not logged as true")
 	}
 }
 

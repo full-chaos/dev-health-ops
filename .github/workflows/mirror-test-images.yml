@@ -20,27 +20,28 @@
 # introduces a service ref the mirror has NEVER published -- an existing ref is
 # already there and pulls immediately. So:
 #
-#   Introducing a NEW service image? Dispatch this workflow on the branch and
-#   let it finish BEFORE the PR's Tests run, or expect one failed pull.
+#   Introducing a NEW service image? Since CHAOS-10366 this workflow publishes
+#   ONLY from main (a push to main, the weekly schedule, or a dispatch started
+#   from main); a pull_request run and a dispatch from a branch publish nothing.
+#   Merge the change, let the push run on main publish the image, then re-run
+#   the PR's Tests: until then expect one failed pull.
 #
-# Fork PRs cannot publish at all: GITHUB_TOKEN is read-only on a fork, so the
-# mirror job is skipped. They CAN pull every image already mirrored, because
+# No pull_request run publishes (CHAOS-10366: the mirror job runs only from main; a PR runs the
+# read-only dry-run job), a fork PR included (its GITHUB_TOKEN is read-only anyway). A PR CAN pull every image already mirrored, because
 # these packages are public -- verified: an anonymous ghcr token returns 200 for
-# `full-chaos/valkey/valkey:8-alpine`. A fork PR that introduces a brand-new
-# service image therefore needs a maintainer to mirror it first, which is the
-# correct outcome rather than a gap: a fork must not be able to publish into
+# `full-chaos/valkey/valkey:8-alpine`. A PR (fork or not) that introduces a brand-new
+# service image therefore needs the mirror to publish it from main first, which is the
+# correct outcome rather than a gap: a PR must not be able to publish into
 # this registry.
 #
-# RISK-NOTE (2026-09-04, precheck-gated `mirror` job): on `pull_request`, the
-# `mirror` job now only runs when `precheck` finds a resolved image missing
-# from the mirror entirely -- it does NOT detect a MOVED upstream tag (the
-# two non-digest-pinned images, clickhouse/clickhouse-server:26.7 and
-# valkey/valkey:8-alpine, per the job-level `concurrency` comment below).
-# `imagetools inspect --raw` only asks "does this destination tag exist",
-# never "does it still match upstream". So on a PR, a moved tag is not
-# refreshed until the next `push`-to-main run (unconditional, always
-# mirrors). This is a narrower version of the SAME acceptance already made
-# for those two images at the digest level -- see `precheck`'s own job
+# RISK-NOTE (2026-09-04, revised for CHAOS-10366): the `mirror` job NEVER runs on `pull_request`. A PR runs the
+# read-only `dry-run` job instead (the pinned base-image digests are checked at their source) and the `precheck` job
+# (a read-only look at ghcr.io), neither of which publishes. The publish happens only from main: a `push` to main, the
+# weekly `schedule`, or a `workflow_dispatch` started from main. So a MOVED upstream tag (the two non-digest-pinned
+# images, clickhouse/clickhouse-server:26.7 and valkey/valkey:8-alpine, see the job-level `concurrency` comment
+# below) is refreshed by the next push-to-main or scheduled run (both unconditional, always mirror); `precheck`'s
+# `imagetools inspect --raw` only asks "does this destination tag exist", never "does it still match upstream".
+# This is the SAME acceptance already made for those two images at the digest level -- see `precheck`'s own job
 # comment for the incident this responds to.
 name: Mirror test images
 
@@ -64,6 +65,10 @@ on:
       # ci/builder_images.tsv must be mirrored before the workflows pull it.
       - ci/builder_images.tsv
       - ci/builder_images.sh
+      # The base images (CHAOS-10366) are an INPUT too, and so is the check that
+      # reads them back after the publish.
+      - ci/base_images.tsv
+      - ci/verify_base_images.sh
       # A service-image change must re-run the mirror, or the new ref is
       # declared before it exists and the required check fails at pull time.
       - .github/workflows/test.yml
@@ -82,6 +87,10 @@ on:
       # ci/builder_images.tsv must be mirrored before the workflows pull it.
       - ci/builder_images.tsv
       - ci/builder_images.sh
+      # The base images (CHAOS-10366) are an INPUT too, and so is the check that
+      # reads them back after the publish.
+      - ci/base_images.tsv
+      - ci/verify_base_images.sh
       # A service-image change must re-run the mirror, or the new ref is
       # declared before it exists and the required check fails at pull time.
       - .github/workflows/test.yml
@@ -90,13 +99,17 @@ on:
       # Not on push: the filter is workflow-wide, so a suite-only push to main would start the mirror publisher.
       - ci/mirror_precheck_lib.sh
       - ci/mirror_precheck_lib_test.sh
+      - ci/verify_base_images_test.sh
+      - ci/verify_base_sources.sh
+      - ci/verify_base_sources_test.sh
       - ci/run_shell_tests.sh
       - ci/suites.tsv
       - .github/workflows/mirror-test-images.yml
 
+# CHAOS-10366 (safety): the workflow level grants NO write. The one job that publishes (mirror) holds packages: write itself; a pull_request
+# run used to reach it with a workflow-wide write token and pushed new packages into ghcr.io/full-chaos before any review.
 permissions:
   contents: read
-  packages: write
 
 concurrency:
   # CHAOS-4928: the bare literal below used to be the WHOLE group -- every
@@ -117,6 +130,8 @@ concurrency:
   # and workflow_dispatch are the opposite: each carries branch-specific
   # intent that a later, unrelated event must not evict, so each gets its
   # own group, isolated from the shared slot and from every other PR/dispatch.
+  # (CHAOS-10366: the pull_request group now carries only the read-only jobs;
+  # the publish job runs only from main, see its `if:` below.)
   #
   # Two different refs CAN now enter this job at the same time -- fixed
   # below by a SEPARATE, job-level concurrency group (CHAOS-4928 codex round
@@ -135,6 +150,9 @@ concurrency:
   #     would be a real, silent inconsistency for exactly these two images.
   # The job-level lock below closes that gap structurally instead of
   # depending on every image happening to be digest-pinned.
+  # (CHAOS-10366: every run that can reach the publish now runs from
+  # refs/heads/main, so "two different refs" can no longer occur; the lock
+  # still serialises concurrent push, schedule and dispatch runs on main.)
   group: mirror-test-images-${{ github.event.pull_request.number || (github.event_name == 'workflow_dispatch' && github.sha) || 'main' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
@@ -161,11 +179,12 @@ jobs:
   # documented job and the volume tonight was still genuine, correctly
   # scoped, contention.
   #
-  # This job answers the question the mirror job's `if:` actually needs on
-  # a PR: does the image set THIS PR needs already exist in the mirror?
-  # This mirror is idempotent and cumulative (CHAOS-4778's header), so a PR
-  # that changes none of the resolved images has nothing to gain from
-  # entering `mirror-publish` at all. `precheck` runs OUTSIDE that lock --
+  # This job answers, on a PR, a read-only question: does the image set THIS
+  # PR needs already exist in the mirror? (Since CHAOS-10366 its answer no
+  # longer gates a publish: the mirror job runs only from main.) This mirror
+  # is idempotent and cumulative (CHAOS-4778's header), so a PR that changes
+  # none of the resolved images has nothing to gain from it either.
+  # `precheck` runs OUTSIDE the `mirror-publish` lock --
   # a pure, unauthenticated read against ghcr.io (these packages are public,
   # see the header comment above), safe to run concurrently with itself
   # across every PR at once, with nothing to serialise.
@@ -256,6 +275,13 @@ jobs:
           #      uses up its limit; CI now takes them from this mirror by digest.
           bash ci/builder_images.sh "${OWNER}" \
             | awk -F'\t' '$1 == "upstream" { print $3 }' >> images.raw
+          #   6. The base images of the Go image builds (CHAOS-10366): the golang
+          #      build image and the debian runtime image, read from
+          #      ci/base_images.tsv through the same reader. Docker Hub official
+          #      images that were pulled from mirror.gcr.io, which answers 429 under
+          #      load; the Dockerfiles take them from this mirror by digest.
+          bash ci/builder_images.sh "${OWNER}" ci/base_images.tsv \
+            | awk -F'\t' '$1 == "upstream" { print $3 }' >> images.raw
 
           sort -u images.raw > images.txt
           test -s images.txt || { echo "::error::no images resolved"; exit 1; }
@@ -297,6 +323,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Run the precheck library suite
         run: bash ci/run_shell_tests.sh mirror-precheck-lib
+      - name: Run the base-image verification suite
+        run: bash ci/run_shell_tests.sh base-images-verify
+      - name: Run the base-image source check suite
+        run: bash ci/run_shell_tests.sh base-sources-verify
 
   mirror:
     needs: precheck
@@ -316,27 +346,24 @@ jobs:
     # mode). A contended mirror job failing loud here is an acceptable,
     # narrower residual, not the bug this ticket exists to fix.
     #
-    # `precheck` above is what actually keeps this lock uncontended on a
-    # busy night now: on `pull_request`, this job only enters the group at
-    # all when `precheck` found something genuinely missing. A PR that
-    # touches a filtered path but resolves to the SAME image set as what's
-    # already mirrored (the common case -- see this job's own trigger
-    # `paths:` discussion) never queues here, so it can never evict or be
-    # evicted by another PR's mirror. `push`/`schedule`/`workflow_dispatch`
-    # are unaffected: `github.event_name != 'pull_request'` short-circuits
-    # both this and the fork-PR clause below to `true`, so main keeps doing
-    # the full idempotent refresh regardless of `precheck`'s answer --
-    # moving-tag drift (clickhouse/valkey, not digest-pinned) still
-    # self-heals there, just not on every PR that happens to touch a
-    # filtered path.
+    # Since CHAOS-10366 this job never runs on a `pull_request` (see its `if:`
+    # below), so no PR can enter this group, evict or be evicted by another
+    # PR's mirror: only a push to main, the weekly schedule and a dispatch
+    # from main queue here. They do the full idempotent refresh regardless of
+    # `precheck`'s answer -- moving-tag drift (clickhouse/valkey, not
+    # digest-pinned) self-heals on the next such run.
     concurrency:
       group: mirror-publish
       cancel-in-progress: false
-    # Forks get neither the Docker Hub secrets nor packages:write, so the job
-    # would fail at login rather than do anything useful.
+    # CHAOS-10366: publishes ONLY from main, and never on a pull_request. A push to main, the weekly schedule (which always runs on main) or a
+    # workflow_dispatch started FROM main; a dispatch from another ref is skipped. A pull_request run takes the read-only dry-run job below.
+    # packages: write is held by this job alone.
+    permissions:
+      contents: read
+      packages: write
     if: >-
-      (github.event.pull_request.head.repo.full_name == github.repository || github.event_name != 'pull_request') &&
-      (github.event_name != 'pull_request' || needs.precheck.outputs.missing == 'true')
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -450,6 +477,13 @@ jobs:
           #      anonymous Docker Hub pull that fails once a shared runner IP
           #      uses up its limit; CI now takes them from this mirror by digest.
           bash ci/builder_images.sh "${OWNER}" \
+            | awk -F'\t' '$1 == "upstream" { print $3 }' >> images.raw
+          #   6. The base images of the Go image builds (CHAOS-10366): the golang
+          #      build image and the debian runtime image, read from
+          #      ci/base_images.tsv through the same reader. Docker Hub official
+          #      images that were pulled from mirror.gcr.io, which answers 429 under
+          #      load; the Dockerfiles take them from this mirror by digest.
+          bash ci/builder_images.sh "${OWNER}" ci/base_images.tsv \
             | awk -F'\t' '$1 == "upstream" { print $3 }' >> images.raw
 
           sort -u images.raw > images.txt
@@ -591,6 +625,34 @@ jobs:
             fi
           done < images.txt
           exit "${failed}"
+
+      # CHAOS-10366: the check a consumer makes. A Dockerfile build pulls the base
+      # images from ghcr.io with no login, so read each one back from ghcr.io
+      # WITHOUT credentials, by tag and by digest: a package that is private (a new
+      # package is created private), missing, or holding another digest fails HERE,
+      # named, instead of as a 404 inside a Docker build. Anonymous on purpose: no
+      # secret, no token.
+      - name: Verify the base images are readable anonymously at their pin
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: bash ci/verify_base_images.sh "${OWNER}"
+
+  # CHAOS-10366: what a pull_request run does INSTEAD of publishing. Read-only (packages: read, no login, no secret, no step that can push):
+  # each pinned base image (ci/base_images.tsv) is read AT ITS SOURCE and must serve exactly the pinned digest, so a bad pin fails the PR
+  # before anything reaches ghcr.io; the publish itself happens only after the merge, on main.
+  dry-run:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Verify each pinned base image digest at its source
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: bash ci/verify_base_sources.sh "${OWNER}"
 
   # Reports the ANONYMOUS per-runner-IP Docker Hub allowance -- the only one this
   # workflow now depends on, since it holds no Docker Hub account.

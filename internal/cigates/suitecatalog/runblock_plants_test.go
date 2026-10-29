@@ -223,6 +223,37 @@ func TestRunBlockLockPlants(t *testing.T) {
 		})
 		wantViolation(t, root, `catalog suite "river-frozen-evidence" is named by no lock row`)
 	})
+	t.Run("a workflow-level permissions change is a sha256 mismatch on the top row", func(t *testing.T) {
+		for name, to := range map[string]string{"scalar": "permissions: write-all\n", "widened": "permissions:\n  contents: write\n", "deleted": ""} {
+			root := plantTree(t)
+			edit(t, filepath.Join(root, ".github/workflows/test.yml"), func(s string) string {
+				if !strings.Contains(s, "\npermissions:\n  contents: read\n") {
+					t.Fatal("planted defect did not land: test.yml has no workflow-level permissions block")
+				}
+				return strings.Replace(s, "\npermissions:\n  contents: read\n", "\n"+to, 1)
+			})
+			v := strings.Join(violations(t, root), "\n")
+			if !strings.Contains(v, `sha256 mismatch: .github/workflows/test.yml job (workflow) step "(top)"`) {
+				t.Errorf("%s: the top row did not notice the permissions change:\n%s", name, v)
+			}
+		}
+	})
+	t.Run("a top row whose reason does not say permissions is refused", func(t *testing.T) {
+		root := plantTree(t)
+		edit(t, filepath.Join(root, lockPath), func(s string) string {
+			lines := strings.Split(s, "\n")
+			for i, l := range lines {
+				cells := strings.Split(l, "\t")
+				if len(cells) == 7 && cells[1] == "(workflow)" && cells[2] == "(top)" {
+					cells[6] = "pins on, env and defaults"
+					lines[i] = strings.Join(cells, "\t")
+					break
+				}
+			}
+			return strings.Join(lines, "\n")
+		})
+		wantViolation(t, root, "does not say that the row pins the workflow permissions")
+	})
 	t.Run("a trailing whitespace change keeps the lock green", func(t *testing.T) {
 		root := plantTree(t)
 		edit(t, filepath.Join(root, ".github/workflows/go-quality.yml"), func(s string) string {

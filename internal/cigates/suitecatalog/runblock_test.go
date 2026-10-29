@@ -320,6 +320,9 @@ func lockViolations(t *testing.T, root string, catalog []row) []string {
 		if r.suites == "" {
 			bad = append(bad, fmt.Sprintf("%s job %s step %q: empty suites (use none)", r.file, r.job, r.step))
 		}
+		if r.job == "(workflow)" && r.step == "(top)" && !strings.Contains(r.reason, "permissions") {
+			bad = append(bad, fmt.Sprintf("%s job %s step %q: the reason does not say that the row pins the workflow permissions", r.file, r.job, r.step))
+		}
 		if r.suites != "none" {
 			for _, id := range strings.Split(r.suites, ",") {
 				if !known[id] {

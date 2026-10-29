@@ -570,11 +570,14 @@ func (s *Store) Revoke(ctx context.Context, in RevokeInput) error {
 			}
 			now := s.now().UTC()
 			var status string
+			var expiresAt time.Time
 			inAuth := true
-			err := tx.QueryRow(ctx, `SELECT status FROM `+s.q+`.invites WHERE id = $1 AND organization_id = $2 FOR UPDATE`, in.InviteID, in.OrgID).Scan(&status)
+			err := tx.QueryRow(ctx, `SELECT status, expires_at FROM `+s.q+`.invites WHERE id = $1 AND organization_id = $2 FOR UPDATE`, in.InviteID, in.OrgID).
+				Scan(&status, &expiresAt)
 			if errors.Is(err, pgx.ErrNoRows) {
 				inAuth = false
-				err = tx.QueryRow(ctx, `SELECT status FROM public.org_invites WHERE id = $1 AND org_id = $2 FOR UPDATE`, in.InviteID, in.OrgID).Scan(&status)
+				err = tx.QueryRow(ctx, `SELECT status, expires_at FROM public.org_invites WHERE id = $1 AND org_id = $2 FOR UPDATE`, in.InviteID, in.OrgID).
+					Scan(&status, &expiresAt)
 			}
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrNotFound
@@ -582,7 +585,7 @@ func (s *Store) Revoke(ctx context.Context, in RevokeInput) error {
 			if err != nil {
 				return err
 			}
-			noop, err := decideRevoke(Status(status))
+			noop, err := decideRevoke(Status(status), expiresAt, now)
 			if err != nil || noop {
 				return err
 			}

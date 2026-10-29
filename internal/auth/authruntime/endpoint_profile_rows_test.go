@@ -70,7 +70,7 @@ func servedAuthRoutesWithIssuer(t *testing.T, issuer string) map[string]bool {
 		// on whenever an issuer is set.
 		exchangeEnvironment(t, env)
 	}
-	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(ssoEnvironment(compatEnvironment(env)))})
+	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(provisioningEnvironment(ssoEnvironment(compatEnvironment(env))))})
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
@@ -236,9 +236,10 @@ func plantedMissingRow(t *testing.T, served map[string]bool, other string) {
 }
 
 // servedAuthRouteCount is every route the probe serves: four session routes, two social link routes,
-// four compatibility routes, the session issue route, the eight federated sign-in routes, the six credentials routes and the three operator
-// paths on GET and HEAD, and GET and HEAD of the JWKS and the discovery document.
-const servedAuthRouteCount = 36
+// four compatibility routes, the session issue route, the eight federated sign-in routes, the six credentials routes,
+// the eight provisioning routes and the three operator paths on GET and HEAD, and GET and HEAD of the JWKS and the
+// discovery document.
+const servedAuthRouteCount = 44
 
 // compareServedToRows returns the served routes with no row and the rows for
 // routes nothing serves, per method and listener.
@@ -303,6 +304,19 @@ func TestTheRowGateRefusesAPlantedMissingRowForEachCompatibilityRoute(t *testing
 	}
 }
 
+// TestTheRowGateRefusesAPlantedMissingRowForEachProvisioningRoute: each
+// provisioning route is served by the probe, and its row removed in memory is
+// named alone.
+func TestTheRowGateRefusesAPlantedMissingRowForEachProvisioningRoute(t *testing.T) {
+	served := servedAuthRoutes(t)
+	for _, key := range provisioningServedRoutes {
+		if !served[key] {
+			t.Fatalf("probe does not serve %s: the provisioning mounts are missing from the probe", key)
+		}
+		plantedMissingRow(t, served, key)
+	}
+}
+
 // TestTheRowGateRefusesARowForARouteNothingServes is the stale-row control: a
 // row for an unmounted route is reported.
 func TestTheRowGateRefusesARowForARouteNothingServes(t *testing.T) {
@@ -342,6 +356,11 @@ func TestAuthEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
 		"/api/v1/auth/verify": "PatternVerifyEmail", "/api/v1/auth/resend-verification": "PatternResendVerification",
 		"/api/v1/auth/forgot-password": "PatternForgotPassword", "/api/v1/auth/reset-password": "PatternResetPassword",
 		"/api/v1/auth/change-password": "PatternChangePassword", "/api/v1/auth/register": "PatternRegister",
+		"/internal/v1/memberships/add": "PatternMembershipAdd", "/internal/v1/memberships/role": "PatternMembershipRole",
+		"/internal/v1/memberships/remove": "PatternMembershipRemove", "/internal/v1/memberships/transfer": "PatternMembershipTransfer",
+		"/internal/v1/invites/create": "PatternInviteCreate", "/internal/v1/invites/accept": "PatternInviteAccept",
+		"/internal/v1/organizations/deprovision": "PatternOrgDeprovision",
+		"/internal/v1/organizations/reactivate":  "PatternOrgReactivate",
 	}
 	checked := 0
 	var walk func(node any, where string)

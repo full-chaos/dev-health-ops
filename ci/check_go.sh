@@ -7,6 +7,78 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -
 ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
 GO_TOOLCHAIN="go1.27.3"
 export GOTOOLCHAIN="${GO_TOOLCHAIN}"
+
+# CHAOS-11794: the job deadline. A go test -timeout that is only a constant can sit past the end of the job: a call that starts
+# late in a 25 min job with a 22 min -timeout is cancelled by the job cap before its own timeout prints the goroutines. Every
+# integration go test call takes `job_go_test_timeout N` instead: min(N min, CHECK_GO_JOB_CAP_MIN - elapsed - 3 min) in seconds.
+# CHECK_GO_JOB_CAP_MIN is the job's own timeout-minutes (a job-level env in the workflow; a test pins the two equal). The job
+# start is taken at the first check_go.sh call of the job (CHECK_GO_JOB_START, appended to GITHUB_ENV for the later steps); it
+# misses the checkout and setup steps, which the 3 min margin absorbs. No budget left: a named line and rc 2, never an unbounded
+# call. A hosted run without the cap refuses too; outside CI without the cap the constants apply. CHECK_GO_NOW_EPOCH(_FILE) is a
+# test clock, honoured only when GITHUB_ACTIONS is not true.
+job_budget_init() {
+  [ -n "${CHECK_GO_JOB_CAP_MIN:-}" ] || return 0
+  if [ -z "${CHECK_GO_JOB_START:-}" ]; then
+    CHECK_GO_JOB_START="$(job_budget_now)"
+    export CHECK_GO_JOB_START
+    [ -z "${GITHUB_ENV:-}" ] || printf 'CHECK_GO_JOB_START=%s\n' "${CHECK_GO_JOB_START}" >>"${GITHUB_ENV}"
+  fi
+}
+
+job_budget_now() {
+  if [ "${GITHUB_ACTIONS:-}" != true ]; then
+    if [ -n "${CHECK_GO_NOW_EPOCH_FILE:-}" ]; then cat "${CHECK_GO_NOW_EPOCH_FILE}"; return 0; fi
+    if [ -n "${CHECK_GO_NOW_EPOCH:-}" ]; then printf '%s\n' "${CHECK_GO_NOW_EPOCH}"; return 0; fi
+  fi
+  date +%s
+}
+
+# job_budget_remaining: the seconds of the job budget left after the 3 min margin, or "none" when no cap is set (outside CI).
+job_budget_remaining() {
+  local cap="${CHECK_GO_JOB_CAP_MIN:-}" now start
+  if [ -z "${cap}" ]; then
+    printf 'none\n'
+    return 0
+  fi
+  case "${cap}" in *[!0-9]*) echo "check_go.sh: CHECK_GO_JOB_CAP_MIN must be a whole number of minutes, got '${cap}'" >&2; return 2 ;; esac
+  job_budget_init
+  start="${CHECK_GO_JOB_START:-}"
+  case "${start}" in ''|*[!0-9]*) echo "check_go.sh: CHECK_GO_JOB_START is not a whole number of seconds ('${start}'); the go test is not started" >&2; return 2 ;; esac
+  now="$(job_budget_now)"
+  printf '%s\n' "$((cap * 60 - (now - start) - 180))"
+}
+
+job_go_test_timeout() {
+  local const_min="${1:-}" cap="${CHECK_GO_JOB_CAP_MIN:-}" remaining secs
+  case "${const_min}" in ''|*[!0-9]*) echo "check_go.sh: job_go_test_timeout needs a whole number of minutes" >&2; return 2 ;; esac
+  if [ -z "${cap}" ]; then
+    if [ "${GITHUB_ACTIONS:-}" = true ]; then
+      echo "check_go.sh: CHECK_GO_JOB_CAP_MIN is not set for a guarded step; the job must carry its own timeout-minutes as that env value, so the go test is not started" >&2
+      return 2
+    fi
+    printf '%ss\n' "$((const_min * 60))"
+    return 0
+  fi
+  remaining="$(job_budget_remaining)" || return 2
+  if [ "${remaining}" -le 0 ]; then
+    echo "check_go.sh: job time budget exhausted before this go test call (its limit is ${const_min}m): cap ${cap}m, elapsed $((cap * 60 - 180 - remaining))s, 3 min kept back; the call is not started" >&2
+    return 2
+  fi
+  secs=$((const_min * 60))
+  [ "${remaining}" -ge "${secs}" ] || secs="${remaining}"
+  printf '%ss\n' "${secs}"
+}
+
+job_budget_init
+if [ "${1:-}" = "job-start" ]; then
+  printf '%s\n' "${CHECK_GO_JOB_START:-}"
+  exit 0
+fi
+if [ "${1:-}" = "job-timeout" ]; then
+  [ "$#" -eq 2 ] || { echo "usage: check_go.sh job-timeout MINUTES" >&2; exit 2; }
+  if job_go_test_timeout "$2"; then exit 0; fi
+  exit 2
+fi
 # CHAOS-5224 / CHAOS-5268: precedence is an explicit DEV_HEALTH_GO_CACHE first,
 # then an already-inherited GOCACHE, then a GOCACHE CONFIGURED on the machine
 # (`go env -changed GOCACHE`: the Go env file written by `go env -w`, which is
@@ -144,9 +216,10 @@ tc_trap() {
 }
 
 run_integration_go_test() {
-  local module_dir="$1" sid pid rc=0 i own_pgid
+  local module_dir="$1" sid pid rc=0 i own_pgid tmo
   local -a private_group=()
   shift
+  tmo="$(job_go_test_timeout 22)" || return 2
   sid="${TESTCONTAINERS_SESSION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
   [[ "${sid}" =~ ^[A-Za-z0-9._-]{8,64}$ ]] \
     || die "TESTCONTAINERS_SESSION_ID must match ^[A-Za-z0-9._-]{8,64}\$"
@@ -156,7 +229,7 @@ run_integration_go_test() {
   (
     cd "${ROOT}/${module_dir}"
     exec ${private_group[@]+"${private_group[@]}"} "${GO_ENV_OFF[@]}" GOWORK=off TESTCONTAINERS_SESSION_ID="${sid}" ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} \
-      go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m "$@"
+      go test -mod=readonly -trimpath -tags=integration -count=1 -timeout="${tmo}" "$@"
   ) &
   pid=$!
   TC_TRAP_PID="${pid}"
@@ -179,10 +252,100 @@ run_integration_go_test() {
   return "${rc}"
 }
 
+# CHAOS-11794: the providersync shard pipeline (`go test -json | tee | jq`) runs in its own process group (setsid, only
+# inside the backgrounded subshell: this script is never exec-replaced) under a hard step bound. A child that holds
+# stdout open would keep `tee` alive after go test is gone and stall the step until the job cap with no log. The bound
+# sits above the 22 min go test -timeout (its dump wins when it can) and below the 25 min job cap. At the bound the
+# group's processes except tee/jq/bash get SIGQUIT (Go prints every goroutine; tee and jq stay up to carry the dump),
+# then KILL after 10 s. Leftover group members are reaped after go test exits. ps prints pid, pgid, ppid, etimes and
+# args only, never env. DEV_HEALTH_GO_STEP_BOUND_SECS overrides the bound for tests.
+PROVIDERSYNC_STEP_BOUND_SECS=1380
+
+group_ps_table() {
+  ps -eo pid,pgid,ppid,etimes,args 2>/dev/null | awk -v g="$1" 'NR == 1 || $2 == g' | cut -c1-300
+}
+
+providersync_bound_watchdog() {
+  local pid="$1" pgid="$2" bound="$3" marker="$4" s p
+  for ((s = 0; s < bound; s++)); do
+    sleep 1
+    kill -0 "${pid}" 2>/dev/null || return 0
+  done
+  echo hit >"${marker}"
+  printf 'check_go.sh: providersync step bound (%s s) hit; stopping the go test process group %s\n' "${bound}" "${pgid}" >&2
+  group_ps_table "${pgid}" >&2
+  for p in $(ps -eo pid=,pgid=,comm= | awk -v g="${pgid}" '$2 == g && $3 != "tee" && $3 != "jq" && $3 != "bash" { print $1 }'); do
+    kill -QUIT "${p}" 2>/dev/null || true
+  done
+  for ((s = 0; s < 100; s++)); do
+    kill -0 "${pid}" 2>/dev/null || return 0
+    sleep 0.1
+  done
+  group_ps_table "${pgid}" >&2
+  kill -KILL -- "-${pgid}" 2>/dev/null || true
+}
+
+run_providersync_bounded() {
+  local test_regex="$1" json_file="$2"
+  local bound="${DEV_HEALTH_GO_STEP_BOUND_SECS:-${PROVIDERSYNC_STEP_BOUND_SECS}}"
+  local pid pgid own_pgid i rc=0 wd marker pidfile tmo remaining
+  case "${bound}" in ''|*[!0-9]*) die "DEV_HEALTH_GO_STEP_BOUND_SECS must be a whole number of seconds" ;; esac
+  if ! command -v setsid >/dev/null 2>&1; then
+    echo "check_go.sh: the bounded providersync step needs setsid (util-linux) on PATH; it is missing, so the step does not start. Install a setsid on PATH (Linux: util-linux) or run this shard on Linux." >&2
+    return 2
+  fi
+  tmo="$(job_go_test_timeout 22)" || return 2
+  remaining="$(job_budget_remaining)" || return 2
+  if [ "${remaining}" != none ] && [ "${remaining}" -lt "${bound}" ]; then bound="${remaining}"; fi
+  marker="$(mktemp)"
+  pidfile="$(mktemp)"
+  (
+    cd "${ROOT}"
+    # shellcheck disable=SC2016
+    exec setsid bash -c 'echo $$ >"$3"; set -o pipefail; out=$1; filter=$2; shift 3; "$@" | tee "${out}" | jq --unbuffered -rj "${filter}"' _ \
+      "${json_file}" 'select(.Action == "output") | .Output' "${pidfile}" \
+      "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout="${tmo}" -json -run "${test_regex}" ./internal/providersync
+  ) &
+  pid=$!
+  own_pgid="$(ps -o pgid= -p "$$" | tr -d ' ')"
+  for i in $(seq 1 600); do
+    [ -s "${pidfile}" ] && break
+    kill -0 "${pid}" 2>/dev/null || break
+    sleep 0.1
+  done
+  pgid="$(tr -d ' \n' <"${pidfile}")"
+  case "${pgid}" in
+    ''|*[!0-9]*|"${own_pgid}")
+      echo "check_go.sh: the providersync step has no process group of its own; stopping it" >&2
+      kill -KILL "${pid}" 2>/dev/null || true
+      wait "${pid}" 2>/dev/null || true
+      rm -f "${marker}" "${pidfile}"
+      return 2
+      ;;
+  esac
+  providersync_bound_watchdog "${pid}" "${pgid}" "${bound}" "${marker}" &
+  wd=$!
+  wait "${pid}" || rc=$?
+  wait "${wd}" 2>/dev/null || true
+  if pgrep -g "${pgid}" >/dev/null 2>&1; then
+    echo "check_go.sh: processes left in the go test process group ${pgid}; stopping them" >&2
+    group_ps_table "${pgid}" >&2
+    kill -TERM -- "-${pgid}" 2>/dev/null || true
+    for i in $(seq 1 50); do
+      pgrep -g "${pgid}" >/dev/null 2>&1 || break
+      sleep 0.1
+    done
+    kill -KILL -- "-${pgid}" 2>/dev/null || true
+  fi
+  [ ! -s "${marker}" ] || rc=124
+  rm -f "${marker}" "${pidfile}"
+  return "${rc}"
+}
+
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|ci-leg-warm test|race SHARD COUNT|test-shard-plan SHARD COUNT|race-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|race-excluded-receipts JSON...|test-shard-wall-guard SHARD COUNT WALL LOGFILE|test-shard-unweighted-guard SHARD COUNT LOGFILE|security-fresh-receipt RAN JSON...|security-fresh-split PKG...|build|contract|ratchets|race-weights-rows|multi-replica-workers|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|ci-leg-warm test|race SHARD COUNT|test-shard-plan SHARD COUNT|race-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|race-excluded-receipts JSON...|test-shard-wall-guard SHARD COUNT WALL LOGFILE|test-shard-unweighted-guard SHARD COUNT LOGFILE|security-fresh-receipt RAN JSON...|security-fresh-split PKG...|build|contract|ratchets|race-weights-rows|multi-replica-workers|job-timeout MINUTES|job-start|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
 
   auth   (CHAOS-4887) The Auth Control Plane gates over the auth packages ALONE: gofmt, vet, test,
          -race, the production-middleware stack test (G-69, must log its marker), one fuzz run per
@@ -289,6 +452,15 @@ usage() {
   contract
          Validate the job contract tree and, when DEV_HEALTH_CONTRACT_BASE is
          set, reject breaking in-place changes against that directory.
+  job-start
+         Print CHECK_GO_JOB_START, the job start of the deadline (taken here when
+         CHECK_GO_JOB_CAP_MIN is set and no earlier call took it), or an empty
+         line without a cap. ci/check_golden_drift.sh takes it once for its rows.
+  job-timeout MINUTES
+         Print the go test -timeout, in seconds, of one integration call whose
+         own limit is MINUTES: min(MINUTES, CHECK_GO_JOB_CAP_MIN - elapsed - 3 min).
+         Rc 2 and a named line when no budget is left, or when CI has no cap.
+         Does not need Go. ci/check_golden_drift.sh calls it for each row.
   multi-replica-workers
          Run the production ops-profile multi-replica claim, drain, and restart
          gate against real PostgreSQL with `-count=1`. Requires a non-zero
@@ -1904,11 +2076,12 @@ check_venue_oracles() {
     printf 'venue-oracles: %d registered test(s) across %d package(s)\n' "${total}" "${#vo_dirs[@]}"
   fi
 
-  local rel pattern pkg_proof_dir json_log stderr_log go_test_status proof failed=0
+  local rel pattern pkg_proof_dir json_log stderr_log go_test_status proof failed=0 tmo
   local -a compared=() go_only=()
   for index in "${!vo_dirs[@]}"; do
     rel="./${vo_dirs[${index}]#"${ROOT}"/}"
     pattern="^(${vo_names[${index}]})\$"
+    tmo="$(job_go_test_timeout 37)" || return 2
     printf '  RUN  %s: %s\n' "${rel}" "${vo_names[${index}]//|/ }"
 
     pkg_proof_dir="${proof_dir}/${index}"
@@ -1923,7 +2096,7 @@ check_venue_oracles() {
         GOWORK=off \
         DEV_HEALTH_VENUE_ORACLES=1 \
         DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${pkg_proof_dir}" \
-        go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=40m \
+        go test -mod=readonly -trimpath -tags=integration -count=1 -timeout="${tmo}" \
           -run "${pattern}" -json "${rel}"
     ) >"${json_log}" 2>"${stderr_log}" || go_test_status=$?
 
@@ -3286,9 +3459,11 @@ check_daily_test_shard() {
   fi
 
   printf 'go test daily test shard %s: %d top-level test(s)\n' "${shard}" "${selected_count}"
+  local tmo
+  tmo="$(job_go_test_timeout 22)" || return 2
   (
     cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m -run "${test_regex}" "./${DAILY_INTEGRATION_PACKAGE_KEY}"
+    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout="${tmo}" -run "${test_regex}" "./${DAILY_INTEGRATION_PACKAGE_KEY}"
   )
 }
 
@@ -3489,9 +3664,11 @@ check_workerservice_test_shard() {
   fi
 
   printf 'go test workerservice test shard %s: %d top-level test(s)\n' "${shard}" "${selected_count}"
+  local tmo
+  tmo="$(job_go_test_timeout 22)" || return 2
   (
     cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m -run "${test_regex}" "./${WORKERSERVICE_INTEGRATION_PACKAGE_KEY}"
+    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout="${tmo}" -run "${test_regex}" "./${WORKERSERVICE_INTEGRATION_PACKAGE_KEY}"
   )
 }
 
@@ -3692,9 +3869,11 @@ check_queryapiserver_test_shard() {
   fi
 
   printf 'go test queryapiserver test shard %s: %d top-level test(s)\n' "${shard}" "${selected_count}"
+  local tmo
+  tmo="$(job_go_test_timeout 22)" || return 2
   (
     cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m -run "${test_regex}" "./${QAPISERVER_INTEGRATION_PACKAGE_KEY}"
+    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout="${tmo}" -run "${test_regex}" "./${QAPISERVER_INTEGRATION_PACKAGE_KEY}"
   )
 }
 
@@ -3895,9 +4074,11 @@ check_remaining_test_shard() {
   fi
 
   printf 'go test remaining test shard %s: %d top-level test(s)\n' "${shard}" "${selected_count}"
+  local tmo
+  tmo="$(job_go_test_timeout 22)" || return 2
   (
     cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m -run "${test_regex}" "./${REMAINING_INTEGRATION_PACKAGE_KEY}"
+    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout="${tmo}" -run "${test_regex}" "./${REMAINING_INTEGRATION_PACKAGE_KEY}"
   )
 }
 
@@ -4322,13 +4503,7 @@ check_providersync_test_shard() {
   # and pipefail keeps go test's exit code.
   local json_dir="${GO_TEST_JSON_DIR:-${ROOT}/go-test-json}"
   mkdir -p "${json_dir}"
-  (
-    set -o pipefail
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=22m -json -run "${test_regex}" ./internal/providersync \
-      | tee "${json_dir}/providersync-shard-${shard}.json" \
-      | jq -rj 'select(.Action == "output") | .Output'
-  )
+  run_providersync_bounded "${test_regex}" "${json_dir}/providersync-shard-${shard}.json"
 }
 
 check_integration_shard() {
@@ -4388,7 +4563,8 @@ check_integration() {
 }
 
 check_multi_replica_workers() {
-  local proof_dir proof_file measured result
+  local proof_dir proof_file measured result tmo
+  tmo="$(job_go_test_timeout 5)" || return 2
   proof_dir="$(mktemp -d "${TMPDIR:-/tmp}/dev-health-multi-replica.XXXXXX")"
   proof_file="${proof_dir}/measured-jobs"
   result=0
@@ -4397,7 +4573,7 @@ check_multi_replica_workers() {
     "${GO_ENV_OFF[@]}" \
       GOWORK=off \
       DEV_HEALTH_MULTI_REPLICA_PROOF="${proof_file}" \
-      go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=5m \
+      go test -mod=readonly -trimpath -tags=integration -count=1 -timeout="${tmo}" \
         -run '^TestExplicitQueueMultiReplicaClaimDrainRestart$' \
         ./internal/workerservice
   ) || result=$?
@@ -4555,13 +4731,14 @@ AUTH_RACE_PACKAGES=(
   ./internal/auth/keyrotation
 )
 check_auth_race_integration() {
-  local pkg output want got total=0
+  local pkg output want got total=0 tmo
   for pkg in "${AUTH_RACE_PACKAGES[@]}"; do
+    tmo="$(job_go_test_timeout 27)" || return 2
     want="$(cd "${ROOT}" && grep -hoE '^func TestRace[A-Za-z0-9_]+' "${pkg#./}"/*_test.go | sed 's/^func //' | LC_ALL=C sort -u || true)"
     [ -n "${want}" ] || die "auth race-integration: no TestRace* test found in ${pkg}"
     output="$(mktemp)"
     printf 'auth go test -race -tags=integration %s\n' "${pkg}"
-    if ! auth_go test -mod=readonly -trimpath -count=1 -race -tags=integration -v -timeout=30m "${pkg}" >"${output}" 2>&1; then
+    if ! auth_go test -mod=readonly -trimpath -count=1 -race -tags=integration -v -timeout="${tmo}" "${pkg}" >"${output}" 2>&1; then
       cat "${output}" >&2
       rm -f "${output}"
       die "auth race-integration: ${pkg} failed"

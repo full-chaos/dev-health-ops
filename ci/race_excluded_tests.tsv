@@ -47,6 +47,7 @@ internal/cigates/scripts	TestOracleChangedJobSelectStep
 internal/cigates/scripts	TestOracleChangedLegs
 internal/cigates/scripts	TestOracleClosureFiles
 internal/cigates/scripts	TestOracleLegPlan
+internal/cigates/scripts	TestOracleLoopShrinksTheNextTimeout
 internal/cigates/scripts	TestOracleShardSlices
 internal/cigates/scripts	TestOracleShardsRealRegistry
 internal/cigates/scripts	TestOracleTriggerSelectionRule

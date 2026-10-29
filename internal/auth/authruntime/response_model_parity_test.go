@@ -32,19 +32,27 @@ var goOnlyRoutes = map[string]struct {
 	model  bool
 	reason string
 }{
-	"DELETE /v1/identities/social/{id}":      {false, "auth-service native route; no go-api twin; writes no policy body"},
-	"GET /v1/sessions/current":               {false, "auth-service native route; no go-api twin; writes no policy body"},
-	"POST /internal/v1/sessions":             {false, "internal session issue route; no go-api twin; writes no policy body"},
-	"POST /internal/v1/token/exchange":       {false, "internal workload-token exchange; no go-api twin; writes no policy body"},
-	"POST /v1/identities/social":             {false, "auth-service native route; no go-api twin; writes no policy body"},
-	"POST /v1/sessions/revoke-all":           {false, "auth-service native route; no go-api twin; writes no policy body"},
-	"POST /v1/sessions/revoke":               {false, "auth-service native route; no go-api twin; writes no policy body"},
-	"POST /v1/token/refresh":                 {false, "auth-service native route; no go-api twin; writes no policy body"},
-	"GET /.well-known/jwks.json":             {false, "well-known document; no go-api twin; written without a policy body"},
-	"HEAD /.well-known/jwks.json":            {false, "well-known document; no go-api twin; written without a policy body"},
-	"GET /.well-known/openid-configuration":  {false, "well-known document; no go-api twin; written without a policy body"},
-	"HEAD /.well-known/openid-configuration": {false, "well-known document; no go-api twin; written without a policy body"},
-	"POST /api/v1/auth/change-password":      {true, "Go-only self-service route; answers through writeCompatModel (policy.WriteModel)"},
+	"DELETE /v1/identities/social/{id}":           {false, "auth-service native route; no go-api twin; writes no policy body"},
+	"GET /v1/sessions/current":                    {false, "auth-service native route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/sessions":                  {false, "internal session issue route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/token/exchange":            {false, "internal workload-token exchange; no go-api twin; writes no policy body"},
+	"POST /internal/v1/memberships/add":           {false, "internal provisioning route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/memberships/role":          {false, "internal provisioning route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/memberships/remove":        {false, "internal provisioning route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/memberships/transfer":      {false, "internal provisioning route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/invites/create":            {false, "internal provisioning route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/invites/accept":            {false, "internal provisioning route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/organizations/deprovision": {false, "internal provisioning route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/organizations/reactivate":  {false, "internal provisioning route; no go-api twin; writes no policy body"},
+	"POST /v1/identities/social":                  {false, "auth-service native route; no go-api twin; writes no policy body"},
+	"POST /v1/sessions/revoke-all":                {false, "auth-service native route; no go-api twin; writes no policy body"},
+	"POST /v1/sessions/revoke":                    {false, "auth-service native route; no go-api twin; writes no policy body"},
+	"POST /v1/token/refresh":                      {false, "auth-service native route; no go-api twin; writes no policy body"},
+	"GET /.well-known/jwks.json":                  {false, "well-known document; no go-api twin; written without a policy body"},
+	"HEAD /.well-known/jwks.json":                 {false, "well-known document; no go-api twin; written without a policy body"},
+	"GET /.well-known/openid-configuration":       {false, "well-known document; no go-api twin; written without a policy body"},
+	"HEAD /.well-known/openid-configuration":      {false, "well-known document; no go-api twin; written without a policy body"},
+	"POST /api/v1/auth/change-password":           {true, "Go-only self-service route; answers through writeCompatModel (policy.WriteModel)"},
 }
 
 func parityRoutes(t *testing.T) []httpapi.Route {
@@ -58,7 +66,7 @@ func parityRoutes(t *testing.T) []httpapi.Route {
 		authconfig.EnvTokenIssuerURL:   "https://issuer.example.test",
 	}
 	exchangeEnvironment(t, env)
-	env = ssoEnvironment(compatEnvironment(env))
+	env = provisioningEnvironment(ssoEnvironment(compatEnvironment(env)))
 	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(env)})
 	if err != nil {
 		t.Fatal(err)

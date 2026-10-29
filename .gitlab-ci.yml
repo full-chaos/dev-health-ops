@@ -465,6 +465,8 @@ go:quality:
   extends: .go_job
   stage: go
   timeout: 45m
+  variables:
+    CHECK_GO_JOB_CAP_MIN: "45"
   parallel:
     matrix:
       - LEG: ["static", "test", "race 1 4", "race 2 4", "race 3 4", "race 4 4"]
@@ -488,6 +490,7 @@ go:quality:
   script:
     - |
       set -euo pipefail
+      export CHECK_GO_JOB_START="$(date +%s)"
       if [ "${LEG}" = "static" ]; then
         bash ci/check_migration_matrix.sh stamp
         bash ci/check_migration_matrix.sh contract
@@ -519,8 +522,11 @@ go:storage-integration:
   extends: .go_job
   stage: go
   timeout: 2h
+  variables:
+    CHECK_GO_JOB_CAP_MIN: "120"
   rules: *code_rules
   script:
+    - export CHECK_GO_JOB_START="$(date +%s)"
     - bash ci/check_go.sh integration-shard-plan
     - bash ci/check_go.sh integration-prepull
     - bash ci/check_go.sh integration
@@ -633,11 +639,14 @@ go:venue-oracles:
   extends: .go_job
   stage: go
   timeout: 1h
+  variables:
+    CHECK_GO_JOB_CAP_MIN: "60"
   rules: *main_rules
   parallel:
     matrix:
       - SHARD: ["1", "2", "3", "4", "5", "6", "7", "8"]
   script:
+    - export CHECK_GO_JOB_START="$(date +%s)"
     - bash ci/check_go.sh integration-prepull
     - bash ci/check_go.sh venue-oracles "${SHARD}" 8
 
@@ -646,10 +655,13 @@ go:venue-oracles-changed:
   extends: .go_job
   stage: go
   timeout: 1h
+  variables:
+    CHECK_GO_JOB_CAP_MIN: "60"
   rules: *mr_rules
   script:
     - |
       set -euo pipefail
+      export CHECK_GO_JOB_START="$(date +%s)"
       git diff --name-only -z "${CI_MERGE_REQUEST_DIFF_BASE_SHA}...${CI_COMMIT_SHA}" > changed.txt
       bash ci/check_go.sh venue-oracles --changed changed.txt --list | grep '^SELECT' > selected.txt || true
       count="$(wc -l < selected.txt | tr -d ' ')"

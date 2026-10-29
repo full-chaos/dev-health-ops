@@ -682,6 +682,7 @@ jobs:
       fail-fast: ${{ github.event_name == 'merge_group' }}
       matrix: ${{ fromJSON(needs.go-storage-integration-plan.outputs.matrix) }}
     env:
+      CHECK_GO_JOB_CAP_MIN: 25
       # Redirect every registry-less Docker Hub pull -- the harness images AND
       # testcontainers-go's own hardcoded reaper -- at the ghcr mirror. Job-level
       # on purpose: the pre-pull warms the ref, and testcontainers resolves it
@@ -759,6 +760,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
+      CHECK_GO_JOB_CAP_MIN: 25
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

@@ -14,13 +14,13 @@ func TestCheckGoMultiReplicaGateExecutes(t *testing.T) {
 	scenarios := multiReplicaScenarios()
 	assertAllPass(t, script, scenarios)
 	assertPlantsCaught(t, script, scenarios, []plant{
-		pc("the gate returns before running anything", "check_multi_replica_workers() {\n  local proof_dir proof_file measured result\n", "check_multi_replica_workers() {\n  return 0\n  local proof_dir proof_file measured result\n",
+		pc("the gate returns before running anything", "check_multi_replica_workers() {\n  local proof_dir proof_file measured result tmo\n", "check_multi_replica_workers() {\n  return 0\n  local proof_dir proof_file measured result tmo\n",
 			"multi_replica_gate_runs_the_required_test", "want exit 0"),
 		pc("zero measured jobs accepted", `if [ "${measured}" -le 0 ]; then`, `if false; then`,
 			"multi_replica_gate_fails_on_zero_measured_jobs", "measured zero jobs"),
 		pc("a missing proof accepted", `if [ ! -f "${proof_file}" ]; then`, `if false; then`,
 			"multi_replica_gate_fails_without_a_proof_file", "no measured-job proof"),
-		pc("the test run is warm", "-tags=integration -count=1 -timeout=5m", "-tags=integration -timeout=5m",
+		pc("the test run is warm", "-count=1 -timeout=\"${tmo}\" \\\n        -run '^TestExplicitQueueMultiReplica", "-timeout=\"${tmo}\" \\\n        -run '^TestExplicitQueueMultiReplica",
 			"multi_replica_gate_runs_the_required_test", "-count=1"),
 	})
 }

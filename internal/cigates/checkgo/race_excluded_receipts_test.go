@@ -229,7 +229,7 @@ func runShardWithFakeGo(t *testing.T, shard int, slowPackage string, extraEnv ..
 	if err := os.WriteFile(logPath, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	env := inheritedEnv([]string{"PATH", "TMPDIR", "GO_RACE_EXCLUDED_TESTS", "GO_QUALITY_SELECTION_FILE", "FAKE_SLOW_PACKAGE", "DEV_HEALTH_GO_UNWEIGHTED_REPORT_ONLY"},
+	env := inheritedEnv(append([]string{"PATH", "TMPDIR", "GO_RACE_EXCLUDED_TESTS", "GO_QUALITY_SELECTION_FILE", "FAKE_SLOW_PACKAGE", "DEV_HEALTH_GO_UNWEIGHTED_REPORT_ONLY"}, deadlineEnvNames...),
 		"DEV_HEALTH_GO_UNWEIGHTED_REPORT_ONLY=",
 		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "TMPDIR="+work, "FAKE_REAL_GO="+realGo, "FAKE_GO_LOG="+logPath,
 		"FAKE_CENSUS="+filepath.Join(repo, "ci", "race_excluded_tests.tsv"), "FAKE_SLOW_PACKAGE="+slowPackage)

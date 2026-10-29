@@ -458,3 +458,37 @@ func TestBootstrapCreateAndRotateRefuseADisabledPrincipal(t *testing.T) {
 	}
 	refusesDisabled(t, e, n, principal, first.CredentialID)
 }
+
+// TestBootstrapCreateRefusesADisabledWorkloadWithNoLiveValue: with no
+// bootstrap credential at all (so the live-value rule cannot fire), create is
+// refused by the disabled check alone, for a disabled workload and for a
+// principal-only disable, and writes nothing.
+func TestBootstrapCreateRefusesADisabledWorkloadWithNoLiveValue(t *testing.T) {
+	e := getEnv(t)
+	ctx := ctxT(t)
+	disable := map[string]func(n string, principal uuid.UUID){
+		"workload disabled": func(n string, _ uuid.UUID) {
+			if err := e.writer.Disable(ctx, n, Actor{}); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"principal only": func(_ string, principal uuid.UUID) {
+			commitSeed(t, e, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1 RETURNING id`, principal)
+		},
+	}
+	for name, off := range disable {
+		t.Run(name, func(t *testing.T) {
+			n, principal := registerWorkload(t, e, []string{"auth-service"})
+			off(n, principal)
+			if got := bootstrapWrites(t, e, principal); got != "0//0/0" {
+				t.Fatalf("the workload starts with bootstrap writes: %s", got)
+			}
+			if _, err := e.writer.CreateBootstrap(ctx, n, mint(t), nil, time.Hour, Actor{}); !errors.Is(err, ErrBootstrapWorkloadDisabled) {
+				t.Fatalf("create = %v, want ErrBootstrapWorkloadDisabled", err)
+			}
+			if got := bootstrapWrites(t, e, principal); got != "0//0/0" {
+				t.Fatalf("a refused create wrote: %s", got)
+			}
+		})
+	}
+}

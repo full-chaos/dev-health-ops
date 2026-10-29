@@ -93,14 +93,27 @@ func (s *Store) ProjectOrganization(ctx context.Context, orgID uuid.UUID) (err e
 		return nil
 	case err != nil:
 		return s.storeErr(ctx, "read auth.organizations", err)
-	case cur == src:
+	case cur == keepSuspended(cur, src):
 		return nil
 	}
-	if err := s.updateOrganization(ctx, orgID, src, cur); err != nil {
+	if err := s.updateOrganization(ctx, orgID, keepSuspended(cur, src), cur); err != nil {
 		return err
 	}
 	outcome = "updated"
 	return nil
+}
+
+// keepSuspended is the one reactivation rule of every refresh from go-api's
+// row (the sign-in projection and the organizations backfill): an
+// organization suspended in the auth schema stays suspended. go-api's name and
+// slug still flow, and its is_active can suspend, never reactivate: a
+// suspension, an organization deprovision's included, ends only by an
+// auth-service verb (D6456, deny first).
+func keepSuspended(cur, src orgState) orgState {
+	if !cur.active {
+		src.active = false
+	}
+	return src
 }
 
 func (s *Store) insertOrganization(ctx context.Context, orgID uuid.UUID, src orgState) error {

@@ -66,9 +66,11 @@ type section struct {
 	deleteGuard string
 	// retireSet is the SET clause of a retire section.
 	retireSet string
-	// match is the predicate (aliases x, t) a retire section uses to find the source row of a restored row; empty means
-	// the keys are equal.
+	// match is the predicate (aliases x, t) a retire or presence section uses to find the source row of a restored row;
+	// empty means the keys are equal.
 	match string
+	// idExpr is the operator id of a restored row (alias t) when the key alone does not name it; empty means t.<key>::text.
+	idExpr string
 	// revokeSet replaces the SET clause a revoke section builds from cols: a section that carries ids only.
 	revokeSet string
 	// blindReview is the predicate (alias t) on the restored rows a blind margin leaves as they are but names for the
@@ -243,6 +245,13 @@ var sections = []section{
 		blindReview: "t.is_superuser"},
 	{name: "public.provider_oauth_revocations", legacy: true, table: "provider_oauth_revocations", kind: kindReport, key: colUUID("id"),
 		cols: []column{colText("org_id"), colText("provider"), colText("purpose")}, action: ActionRequeueProviderRevocation},
+	// A provider credential rotated (refresh, reconnect) or removed (disconnect) after T comes back with its OLD token,
+	// which may still be live at the provider. The restored row is deleted unless the source holds the same key with the
+	// same version and binding (every token or scope change bumps version), and named for the operator: revoke the old
+	// token at the provider, reconnect. Only ids, the version and the binding id travel; never the token or the scopes.
+	{name: "public.provider_oauth_credentials", legacy: true, table: "provider_oauth_credentials", kind: kindPresence, key: colText("org_id"),
+		cols:         []column{colText("provider"), colText("credential_name"), {name: "version", pgType: "integer"}, colText("binding_id")},
+		manifestOnly: true, match: oauthHeld, idExpr: oauthIDExpr, action: ActionRequeueProviderRevocation, blindReview: "true"},
 	// The legacy SAML replay table: an assertion id used after the target must stay used.
 	{name: "public.saml_assertion_replays", legacy: true, table: "saml_assertion_replays", kind: kindInsert, key: colUUID("provider_id"),
 		cols: []column{colText("assertion_id"), colTS("expires_at")}},
@@ -288,6 +297,17 @@ var sections = []section{
 // allowlistKeepsASharedEntry holds (alias t, manifest m) while the org of t keeps an active entry the source also
 // holds active.
 const allowlistKeepsASharedEntry = "EXISTS (SELECT 1 FROM public.org_ip_allowlist k JOIN m y ON y.id = k.id AND y.ip_range = k.ip_range WHERE k.org_id = t.org_id AND k.is_active)"
+
+// oauthHeld matches a restored provider credential (t) to the source's (x): the same key, version and binding.
+const oauthHeld = "x.org_id = t.org_id AND x.provider = t.provider AND x.credential_name = t.credential_name AND x.version = t.version AND x.binding_id IS NOT DISTINCT FROM t.binding_id"
+
+// oauthIDExpr names a provider credential as org/provider/name, each part percent-encoded (%, /, comma, LF, CR): the three
+// text columns have no CHECK, and the operator action line joins ids with commas.
+var oauthIDExpr = strings.Join([]string{pctEncode("t.org_id"), pctEncode("t.provider"), pctEncode("t.credential_name")}, " || '/' || ")
+
+func pctEncode(e string) string {
+	return "replace(replace(replace(replace(replace(" + e + ", '%', '%25'), '/', '%2F'), ',', '%2C'), chr(10), '%0A'), chr(13), '%0D')"
+}
 
 // allowlistHeld matches a restored entry (t) to the source's active entry (x): the same id and the same range.
 const allowlistHeld = "x.id = t.id AND x.ip_range = t.ip_range"
@@ -403,9 +423,9 @@ SELECT 0::bigint, (SELECT count(*) FROM m x WHERE NOT EXISTS (SELECT 1 FROM %s t
 			guard = " AND " + s.deleteGuard
 		}
 		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s),
-d AS (DELETE FROM %s t WHERE NOT EXISTS (SELECT 1 FROM m x WHERE x.%s = t.%s)%s RETURNING 1)
+d AS (DELETE FROM %s t WHERE NOT EXISTS (SELECT 1 FROM m x WHERE %s)%s RETURNING 1)
 SELECT (SELECT count(*) FROM d), 0::bigint`,
-			s.recordset(), tbl, s.key.name, s.key.name, guard)
+			s.recordset(), tbl, s.matchSQL(), guard)
 	}
 }
 
@@ -422,6 +442,9 @@ func (s section) matchSQL() string {
 func (s section) idsSQL(schema authschema.ValidatedIdentifier) string {
 	tbl := s.qualified(schema)
 	switch {
+	case s.kind == kindPresence && s.action == ActionRequeueProviderRevocation:
+		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s)
+SELECT %s FROM %s t WHERE NOT EXISTS (SELECT 1 FROM m x WHERE %s) ORDER BY 1`, s.recordset(), s.idSQL(), tbl, s.matchSQL())
 	case s.action == ActionReviewScopeEmptied:
 		var emptied []string
 		for _, c := range s.cols {
@@ -475,7 +498,15 @@ func blindReviewSQL(s section, schema authschema.ValidatedIdentifier) string {
 	if s.blindReview == "" {
 		return ""
 	}
-	return `SELECT t.` + s.key.name + `::text FROM ` + s.qualified(schema) + ` t WHERE ` + s.blindReview + ` ORDER BY 1`
+	return `SELECT ` + s.idSQL() + ` FROM ` + s.qualified(schema) + ` t WHERE ` + s.blindReview + ` ORDER BY 1`
+}
+
+// idSQL is the operator id of a restored row (alias t).
+func (s section) idSQL() string {
+	if s.idExpr != "" {
+		return s.idExpr
+	}
+	return "t." + s.key.name + "::text"
 }
 
 // flowStatesSQL invalidates every SSO flow state the restored database holds: no per-row export

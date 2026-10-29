@@ -246,6 +246,11 @@ var optionRegistry = []Option{
 		Usage: "true when auth-service is the only writer of organizations; the sign-in organization projection then reads no public table and writes nothing. Mounts no route",
 	},
 	{
+		Flag: "revision-feed", Env: EnvRevisionFeed, Kind: KindString, Default: "off", Group: GroupSession,
+		Usage: "on gives the auth outbox publisher a Valkey sink and subscribes this replica to the revision feed channel; off (default) keeps publishing disabled. Needs " +
+			EnvValkeyURI + ". Mounts no route",
+	},
+	{
 		Flag: "social-link-routes", Env: EnvSocialLinkRoutes, Kind: KindString, Group: GroupSession, Default: "false",
 		Usage: "\"true\" mounts the bearer-only social link and unlink routes (POST /v1/identities/social, DELETE /v1/identities/social/{id}); needs the session secrets",
 	},

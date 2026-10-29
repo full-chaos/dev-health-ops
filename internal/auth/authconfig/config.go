@@ -526,10 +526,28 @@ func Load(spec Spec) (Config, error) {
 	if cfg.SessionIssueWorkloadSubject, err = sessionIssueWorkloadSubject(lookup, cfg.TokenIssuerURL); err != nil {
 		return Config{}, err
 	}
+	if cfg.RevisionFeed, err = revisionFeed(lookup); err != nil {
+		return Config{}, err
+	}
 	if cfg.ValkeyURI, err = valkeySetting(lookup, cfg.LimitedRoutesMounted()); err != nil {
 		return Config{}, err
 	}
+	if cfg.RevisionFeed && !cfg.ValkeyURI.Configured() {
+		return Config{}, fmt.Errorf("%s=on needs %s or %s_FILE: the revision feed has no store without it", EnvRevisionFeed, EnvValkeyURI, EnvValkeyURI)
+	}
 	return cfg, nil
+}
+
+// revisionFeed reads AUTH_REVISION_FEED: unset or empty is off; only on and off (any case) are values. The refusal does
+// not quote the value.
+func revisionFeed(lookup secrets.LookupEnv) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(valueOf(lookup, EnvRevisionFeed))) {
+	case "", "off":
+		return false, nil
+	case "on":
+		return true, nil
+	}
+	return false, fmt.Errorf("%s must be on or off", EnvRevisionFeed)
 }
 
 // LimitedRoutesMounted reports whether a route that counts in the shared

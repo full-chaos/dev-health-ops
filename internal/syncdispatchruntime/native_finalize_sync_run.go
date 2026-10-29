@@ -975,13 +975,17 @@ func observeTerminalSyncRun(
 		backfillStatus = "failed"
 	}
 	marker := "sync_run:" + run.id
+	manualJobs, err := manualBackfillJobIDs(ctx, tx, run)
+	if err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `
 UPDATE public.backfill_jobs
 SET status = $1, total_chunks = $2, completed_chunks = $3, failed_chunks = $4,
     completed_at = $5, error_message = $6
-WHERE org_id = $7 AND celery_task_id LIKE '%' || $8 || '%'`,
+WHERE org_id = $7 AND (celery_task_id LIKE '%' || $8 || '%' OR id = ANY($9::uuid[]))`,
 		backfillStatus, run.totalUnits, completedUnits, failedUnits, completedAt, errorText,
-		run.orgID, marker); err != nil {
+		run.orgID, marker, manualJobs); err != nil {
 		return ErrFinalizeSyncRunUnavailable
 	}
 
@@ -1016,6 +1020,59 @@ WHERE status IN ($5, $6) AND result->>'sync_run_id' = $7`,
 		return ErrFinalizeSyncRunUnavailable
 	}
 	return nil
+}
+
+const backfillOccurrenceMarker = "occurrence:"
+
+// occurrenceOfBackfillTask is the occurrence id in a manual trigger's celery_task_id: "occurrence:<id>", or
+// "idem:<hash>;occurrence:<id>" for a keyed submit. "" when the task id names none.
+func occurrenceOfBackfillTask(task string) string {
+	index := strings.LastIndex(task, backfillOccurrenceMarker)
+	if index < 0 {
+		return ""
+	}
+	rest := task[index+len(backfillOccurrenceMarker):]
+	if end := strings.IndexByte(rest, ';'); end >= 0 {
+		rest = rest[:end]
+	}
+	return rest
+}
+
+// manualBackfillJobIDs returns the ids of the org's open backfill_jobs rows that an admin backfill (a manual trigger)
+// keyed by occurrence and that belong to this run. The row never carries "sync_run:<id>", and the domain role cannot read
+// scheduled_sync_occurrences, so the run is matched by deriving the materializer's deterministic run id from each open
+// row's occurrence id. One read; the rows are the org's pending or running manual jobs.
+func manualBackfillJobIDs(ctx context.Context, tx pgx.Tx, run *finalizeSyncRun) ([]string, error) {
+	rows, err := tx.Query(ctx, `
+SELECT id::text, celery_task_id FROM public.backfill_jobs
+WHERE org_id = $1 AND status IN ('pending', 'running') AND celery_task_id LIKE '%' || $2 || '%'`,
+		run.orgID, backfillOccurrenceMarker)
+	if err != nil {
+		return nil, ErrFinalizeSyncRunUnavailable
+	}
+	defer rows.Close()
+	ids := []string{}
+	for rows.Next() {
+		var id, task string
+		if err := rows.Scan(&id, &task); err != nil {
+			return nil, ErrFinalizeSyncRunUnavailable
+		}
+		occurrence := occurrenceOfBackfillTask(task)
+		if occurrence == "" {
+			continue
+		}
+		derived, err := schedulersync.DeterministicSyncRunID(occurrence)
+		if err != nil {
+			continue
+		}
+		if strings.EqualFold(derived, run.id) {
+			ids = append(ids, id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, ErrFinalizeSyncRunUnavailable
+	}
+	return ids, nil
 }
 
 // checkpointSuccessfulComputeInputs ports

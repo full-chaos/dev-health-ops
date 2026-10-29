@@ -13,6 +13,8 @@ import (
 
 	"github.com/google/uuid"
 
+	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
+	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 )
 
@@ -354,7 +356,8 @@ func TestProvisioningRoutesOffByDefault(t *testing.T) {
 	e := newRoutesEnvWith(t, ctx, map[string]string{authconfig.EnvUsersOwned: "true"})
 	token, _ := e.issuerCredential(t, ctx, "auth-session-issuer", `["memberships:write", "sessions:issue"]`, false, false)
 	for _, path := range []string{"/internal/v1/memberships/add", "/internal/v1/memberships/role", "/internal/v1/memberships/remove",
-		"/internal/v1/memberships/transfer", "/internal/v1/invites/create", "/internal/v1/invites/accept", "/internal/v1/organizations/deprovision"} {
+		"/internal/v1/memberships/transfer", "/internal/v1/invites/create", "/internal/v1/invites/accept", "/internal/v1/organizations/deprovision",
+		"/internal/v1/organizations/reactivate"} {
 		if got := e.doWith(t, path, `{}`, map[string]string{"Authorization": "Bearer " + token}); got.status != http.StatusNotFound {
 			t.Fatalf("%s with the switch off: %d, want 404", path, got.status)
 		}
@@ -407,4 +410,97 @@ func TestDeprovisionedOrganizationStaysSuspendedOnSignIn(t *testing.T) {
 		t.Fatalf("session issue for a former member: %d %s, want 403", got.status, got.body)
 	}
 	suspended("a session issue")
+}
+
+// A reactivate ends a suspension, by a superuser only: the organization row is
+// active again (go-api's row stays as it was), one audit row names the actor,
+// a membership write is accepted again, and a repeat is a no-op with no second
+// audit row. A deprovision's removed memberships do not come back.
+func TestProvisioningReactivateThroughConfigure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	withReactivateProfileRow(t)
+	e, header := newProvisioningEnv(t, ctx)
+	owner, org := e.seed(t, ctx)
+	super := e.account(t, ctx, acctMail(), true, true)
+	member := e.account(t, ctx, acctMail(), false, true)
+	e.addVia(t, header, org, member, owner, "member")
+	dep := e.doWith(t, "/internal/v1/organizations/deprovision", jsonBody(t, map[string]any{"organization_id": org.String(),
+		"actor_principal_id": super.String()}), header)
+	if dep.status != http.StatusOK {
+		t.Fatalf("deprovision: %d %s", dep.status, dep.body)
+	}
+	reactivate := func(actor, target uuid.UUID) answer {
+		return e.doWith(t, "/internal/v1/organizations/reactivate", jsonBody(t, map[string]any{"organization_id": target.String(),
+			"actor_principal_id": actor.String()}), header)
+	}
+	if got := reactivate(owner, org); got.status != http.StatusForbidden || object(t, got)["reason_code"] != "superuser_required" {
+		t.Fatalf("reactivate by the owner: %d %s", got.status, got.body)
+	}
+	if got := reactivate(super, uuid.New()); got.status != http.StatusNotFound || object(t, got)["reason_code"] != "organization_not_found" {
+		t.Fatalf("reactivate of an unknown organization: %d %s", got.status, got.body)
+	}
+	var active int
+	if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.organizations WHERE id = $1 AND disabled_at IS NULL`, org).Scan(&active); err != nil || active != 0 {
+		t.Fatalf("a refused reactivate cleared the suspension (%d, %v)", active, err)
+	}
+	got := reactivate(super, org)
+	if got.status != http.StatusOK {
+		t.Fatalf("reactivate: %d %s", got.status, got.body)
+	}
+	if out := object(t, got); out["organization_id"] != org.String() || out["status"] != "active" || out["reactivated"] != true {
+		t.Fatalf("reactivate answer = %v", out)
+	}
+	auditSQL := `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.organization.reactivated' AND organization_id = $1 AND actor_principal_id = $2`
+	if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.organizations WHERE id = $1 AND disabled_at IS NULL`, org).Scan(&active); err != nil || active != 1 {
+		t.Fatalf("after the reactivate: %d active auth organizations (%v), want 1", active, err)
+	}
+	var rows int
+	if err := e.admin.QueryRow(ctx, auditSQL, org, super).Scan(&rows); err != nil || rows != 1 {
+		t.Fatalf("%d reactivated audit rows naming the actor (%v), want 1", rows, err)
+	}
+	late := e.account(t, ctx, acctMail(), false, true)
+	add := e.doWith(t, "/internal/v1/memberships/add", jsonBody(t, map[string]any{"organization_id": org.String(), "principal_id": late.String(),
+		"actor_principal_id": super.String(), "role": "member"}), header)
+	if add.status != http.StatusOK {
+		t.Fatalf("add after the reactivate: %d %s", add.status, add.body)
+	}
+	if again := reactivate(super, org); again.status != http.StatusOK || object(t, again)["reactivated"] != false {
+		t.Fatalf("repeat reactivate: %d %s", again.status, again.body)
+	}
+	if err := e.admin.QueryRow(ctx, auditSQL, org, super).Scan(&rows); err != nil || rows != 1 {
+		t.Fatalf("a repeat wrote a second audit row (%d, %v)", rows, err)
+	}
+}
+
+// withReactivateProfileRow makes the stack mount the reactivate route: the
+// route is mounted only when the endpoint-profile document holds its row, and
+// the embedded document does not yet (the follow-up adds it). The plant is
+// the embedded document plus a copy of the deprovision row for the route.
+func withReactivateProfileRow(t *testing.T) {
+	t.Helper()
+	var document map[string]any
+	if err := json.Unmarshal(authv1.AuthServiceEndpointProfiles, &document); err != nil {
+		t.Fatal(err)
+	}
+	rows := document["rows"].([]any)
+	for _, item := range rows {
+		row := item.(map[string]any)
+		if row["route"] == "/internal/v1/organizations/deprovision" && row["service"] == authapi.AccessService {
+			clone := map[string]any{}
+			for k, v := range row {
+				clone[k] = v
+			}
+			clone["route"] = authapi.PatternOrgReactivate
+			document["rows"] = append(rows, clone)
+			raw, err := json.Marshal(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			provisioningProfileRows = raw
+			t.Cleanup(func() { provisioningProfileRows = nil })
+			return
+		}
+	}
+	t.Fatal("no deprovision row in the embedded document")
 }

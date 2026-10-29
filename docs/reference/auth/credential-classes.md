@@ -71,8 +71,6 @@ Design docs (read the guardrails at minimum):
 | `acr_web_assertion` | active | workload | |
 | `acr_workload_identity_exchange` | active | workload | |
 | `external_push_ingest_token` | active | external_source | |
-| `legacy_ingest_api_key` | **legacy_permissive** | external_source | **YES** |
-| `legacy_ingest_hmac_signature` | **legacy_permissive** | external_source | **YES** |
 | `stripe_webhook_signature` | active | external_source | |
 | `github_webhook_signature` | active | external_source | |
 | `gitlab_webhook_signature` | active | external_source | |
@@ -212,8 +210,10 @@ both the workload's and the credential's audiences gets the exchange's one
 refusal. An issued `workload_token` never outlives the credential's expiry, and
 its `auth.workload.token_issued` audit row names the credential row id. The
 route serves this subject only with `AUTH_WORKLOAD_BOOTSTRAP=true`, so the
-class is `optional_feature`. Creating, rotating, revoking and disabling a
-credential is a separate leaf.
+class is `optional_feature`. The operator creates, rotates, revokes and
+disables a credential with `auth-migrate workloads bootstrap-create`,
+`bootstrap-rotate`, `bootstrap-revoke` and `bootstrap-disable` (migration role;
+see the [bootstrap credential runbook](../../operate/runbooks/auth-workload-bootstrap-credential.md)).
 
 ## The CHAOS-3271 class: credentials that reach a validator that is not their own
 
@@ -270,9 +270,9 @@ mounts none of them and reads none of their settings
 `DEV_HEALTH_LEGACY_INGEST_ENABLED`, `DEV_HEALTH_LEGACY_INGEST_SUNSET`), so each
 path answers 404. Their deployment-wide key carried no organization and the
 handler wrote the body's `org_id` as given: retiring the routes removed that
-cross-tenant write path. The classes `legacy_ingest_api_key` and
-`legacy_ingest_hmac_signature` stay registered with no consumer; a follow-up
-leaf deletes them.
+cross-tenant write path. Its two credential classes (the deployment-wide API
+key and the HMAC body signature) are deleted from the registry, the wire
+schemas and the stored-class CHECK (auth migration 0036, CHAOS-11820).
 
 The engineering guardrails say: "missing config must never mean auth
 disabled in production." The webhook validators in
@@ -323,9 +323,6 @@ Flagged rather than guessed.
 - **`pagerduty_oauth_credential`** — the Python-side
   `oauth.py`/`oauth_lifecycle.py`/`oauth_storage.py`/`oauth_authorization_store.py`
   were only grepped for filenames, not read line by line.
-- **`legacy_ingest_api_key`/`legacy_ingest_hmac_signature`** — the current
-  route table mounted behind `validate_ingest_auth` was not enumerated, so
-  whether this permissive path is reachable in production is unconfirmed.
 
 Every gap above is also recorded per-class in the `gaps` array of
 [`credential-classes.json`](https://github.com/full-chaos/dev-health-ops/blob/main/contracts/auth/v1/credential-classes.json).

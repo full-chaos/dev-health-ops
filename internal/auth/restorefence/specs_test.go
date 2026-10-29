@@ -33,7 +33,7 @@ func TestEverySectionNamesItsTableAndKeepsAuthAndLegacySeparate(t *testing.T) {
 			prefix = "public."
 		}
 		idsSuffix := s.suffix == ".ids" && (s.kind == kindTombstone || s.kind == kindPresence || s.kind == kindRetire)
-		revokeSuffix := (s.suffix == ".expiry" || s.suffix == ".secret") && s.kind == kindRevoke
+		revokeSuffix := (s.suffix == ".expiry" || s.suffix == ".secret" || s.suffix == ".scope" || s.suffix == ".role" || s.suffix == ".superuser") && s.kind == kindRevoke
 		if s.suffix != "" && !idsSuffix && !revokeSuffix {
 			t.Errorf("section %q: a name suffix is the .ids suffix of a tombstone, presence or retire section, or the .expiry/.secret suffix of a second revoke section", s.name)
 		}
@@ -61,7 +61,7 @@ func TestEveryApplyStatementIsGuardedAndSingle(t *testing.T) {
 		}
 		switch s.kind {
 		case kindRevoke:
-			if !strings.Contains(sql, "AND ("+s.active+")") {
+			if !strings.Contains(sql, "AND ("+strings.ReplaceAll(s.active, "{tbl}", s.qualified(testSchema(t)))+")") {
 				t.Errorf("%s: a revoke statement without its active guard would rewrite an already revoked row", s.name)
 			}
 			if strings.Contains(strings.ToUpper(sql), "INSERT") {

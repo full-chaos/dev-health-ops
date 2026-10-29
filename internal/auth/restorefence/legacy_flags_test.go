@@ -93,8 +93,8 @@ func TestAnIPAllowlistEntryIsSwitchedOffOnlyWhileItsOrgKeepsASharedActiveEntry(t
 	sql := def.applySQL(testSchema(t))
 	for _, want := range []string{
 		"UPDATE public.org_ip_allowlist t SET is_active = false, updated_at = clock_timestamp()",
-		"EXISTS (SELECT 1 FROM public.org_ip_allowlist k JOIN m y ON y.id = k.id WHERE k.org_id = t.org_id AND k.is_active)",
-		"NOT EXISTS (SELECT 1 FROM m x WHERE x.id = t.id)",
+		"EXISTS (SELECT 1 FROM public.org_ip_allowlist k JOIN m y ON y.id = k.id AND y.ip_range = k.ip_range WHERE k.org_id = t.org_id AND k.is_active)",
+		"NOT EXISTS (SELECT 1 FROM m x WHERE x.id = t.id AND x.ip_range = t.ip_range)",
 	} {
 		if !strings.Contains(sql, want) {
 			t.Errorf("allowlist retire SQL lacks %q: %s", want, sql)
@@ -104,7 +104,7 @@ func TestAnIPAllowlistEntryIsSwitchedOffOnlyWhileItsOrgKeepsASharedActiveEntry(t
 		t.Errorf("the allowlist section names the orgs it leaves in action %q, want review_ip_allowlist", def.action)
 	}
 	ids := def.idsSQL(testSchema(t))
-	if !strings.Contains(ids, "t.org_id::text") || !strings.Contains(ids, "NOT EXISTS (SELECT 1 FROM public.org_ip_allowlist k JOIN m y ON y.id = k.id WHERE k.org_id = t.org_id AND k.is_active)") {
+	if !strings.Contains(ids, "t.org_id::text") || !strings.Contains(ids, "NOT EXISTS (SELECT 1 FROM public.org_ip_allowlist k JOIN m y ON y.id = k.id AND y.ip_range = k.ip_range WHERE k.org_id = t.org_id AND k.is_active)") {
 		t.Errorf("the review list must name the orgs whose entries the guard keeps: %s", ids)
 	}
 	if _, excl := excluded["public.org_ip_allowlist"]; excl {

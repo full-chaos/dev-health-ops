@@ -3,6 +3,7 @@ package apiservice
 import (
 	"github.com/full-chaos/dev-health-ops/internal/api/githubapp"
 	"github.com/full-chaos/dev-health-ops/internal/api/oauthprovider"
+	"github.com/full-chaos/dev-health-ops/internal/api/orgreactivate"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/acr"
@@ -199,6 +200,10 @@ type Deps struct {
 	// auth-service when it owns sessions (AUTH_PROXY_SESSIONS); nil mints
 	// them in go-api.
 	SessionIssuer sessionissue.Issuer
+	// OrgReactivator reactivates an organization in auth-service before the
+	// admin PATCH writes is_active=true; nil (AUTH_PROXY_ORG_PROVISIONING off)
+	// leaves the PATCH as it was.
+	OrgReactivator orgreactivate.Reactivator
 	// UsersOwned is AUTH_USERS_OWNED: auth-service owns users, so the go-api
 	// routes and verbs that write public.users refuse.
 	UsersOwned bool

@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
 
 // TestDrillAuthPITR is the driver of scripts/drill-auth-pitr.sh (backup,
@@ -37,6 +38,7 @@ type drillSnapshot struct {
 	Label     string            `json:"label"`
 	Revisions map[string]int64  `json:"revisions"`
 	Revoked   []string          `json:"revoked_credentials"`
+	Disabled  []string          `json:"disabled_principals"`
 	Keys      []string          `json:"outbox_idempotency_keys"`
 	KeyDigest map[string]string `json:"outbox_key_content_digest"`
 	Counts    map[string]int64  `json:"row_counts"`
@@ -95,6 +97,11 @@ func drillMigrate(t *testing.T, ctx context.Context, admin *pgxpool.Pool, role s
 	}
 	if !regexp.MustCompile(`^[a-z_][a-z0-9_]{0,30}$`).MatchString(role) {
 		t.Fatalf("bad runtime role name %q", role)
+	}
+	if os.Getenv("DRILL_FENCE") == "1" {
+		// The restore fence carries the legacy public tables as well (refresh tokens, invites, reset tokens, ...): the
+		// fenced drill runs on the full migrated schema, as production does, or apply refuses on the missing tables.
+		pgschema.ApplyURI(ctx, t, admin.Config().ConnString())
 	}
 	if _, err := admin.Exec(ctx, fmt.Sprintf(`CREATE ROLE %q LOGIN PASSWORD '%s'`, role, password)); err != nil {
 		t.Fatalf("create runtime role: %v", err)
@@ -165,6 +172,43 @@ func drillWrite(t *testing.T, ctx context.Context, rt *pgxpool.Pool, schema auth
 			}
 		}
 	}
+	// A principal created BEFORE T (label B) and disabled AFTER T (label C), and a credential created before T
+	// (label B, k=1, not revoked at T) and revoked after T: the fence must put both removals back on a PITR copy
+	// that holds them as active (the re-apply path, as opposed to rows created after T, which the copy lacks).
+	spare := uuid.NewSHA1(uuid.NameSpaceURL, []byte("drill-11232-principal-spare"))
+	if label == "B" {
+		if _, err := admin.Exec(ctx,
+			`INSERT INTO auth.principals (id, kind, display_name) VALUES ($1, 'user', 'drill spare') ON CONFLICT (id) DO NOTHING`, spare); err != nil {
+			t.Fatalf("seed the spare principal: %v", err)
+		}
+	}
+	if label == "C" {
+		err := Commit(ctx, rt, schema, Mutation{
+			Apply: func(ctx context.Context, tx TxOps) error {
+				_, err := tx.Exec(ctx, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1`, spare)
+				return err
+			},
+			Audit: AuditEvent{EventType: "principal.disabled", Outcome: OutcomeAllowed},
+			Events: []OutboxEvent{{AggregateType: "organization", AggregateID: "org_" + drillOrgID(2).String(),
+				EventType: "organization.updated"}},
+		})
+		if err != nil {
+			t.Fatalf("disable the spare principal: %v", err)
+		}
+		beforeT := uuid.NewSHA1(uuid.NameSpaceURL, []byte("drill-11232-cred-B-1"))
+		err = Commit(ctx, rt, schema, Mutation{
+			Apply: func(ctx context.Context, tx TxOps) error {
+				_, err := tx.Exec(ctx, `UPDATE auth.credential_registry SET revoked_at = now(), revoked_reason = 'compromised' WHERE id = $1`, beforeT)
+				return err
+			},
+			Audit: AuditEvent{EventType: "credential.revoked", Outcome: OutcomeAllowed},
+			Events: []OutboxEvent{{AggregateType: "organization", AggregateID: "org_" + drillOrgID(1).String(),
+				EventType: "organization.updated"}},
+		})
+		if err != nil {
+			t.Fatalf("revoke the credential created before T: %v", err)
+		}
+	}
 	for k := 0; k < drillCreds; k++ {
 		cred := uuid.NewSHA1(uuid.NameSpaceURL, []byte(fmt.Sprintf("drill-11232-cred-%s-%d", label, k)))
 		err := Commit(ctx, rt, schema, Mutation{
@@ -228,6 +272,7 @@ func drillRead(ctx context.Context, admin *pgxpool.Pool, label string) (drillSna
 		sql string
 	}{
 		{&s.Revoked, `SELECT id::text FROM auth.credential_registry WHERE revoked_at IS NOT NULL ORDER BY id`},
+		{&s.Disabled, `SELECT id::text FROM auth.principals WHERE disabled_at IS NOT NULL ORDER BY id`},
 		{&s.Keys, `SELECT idempotency_key FROM auth.auth_outbox_events ORDER BY idempotency_key`},
 	} {
 		rs, err := tx.Query(ctx, q.sql)
@@ -401,7 +446,17 @@ type drillPostResult struct {
 	LostRevisions         int64    `json:"revisions_lost_by_pitr_total"`
 	RevokesAfterTComeBack int      `json:"revokes_after_target_that_came_back"`
 	ReissuedDifferent     int      `json:"keys_reissued_with_different_content"`
-	Verdict               string   `json:"verdict"`
+	// Fenced is set by DRILL_FENCE=1: the restore fence (auth-migrate restore-fence export and apply) ran before
+	// these writes. FenceRowsForLiveTimeline is the number of restore_fence_state rows the runtime role reads for the
+	// timeline the server is on now: exactly one (the apply row) on a fenced restore.
+	// AbsentAfterRestore counts credentials and principals revoked or disabled on the end-of-WAL copy after T that the
+	// restored copy does not hold at all (created after T): they cannot authenticate, so a fenced restore does not
+	// count them as "came back" (the fence reports them as absent). The unfenced metric counts them in
+	// RevokesAfterTComeBack, as it always did.
+	AbsentAfterRestore       int    `json:"absent_after_restore"`
+	Fenced                   bool   `json:"fenced"`
+	FenceRowsForLiveTimeline *int64 `json:"fence_rows_for_live_timeline,omitempty"`
+	Verdict                  string `json:"verdict"`
 }
 
 // drillPost runs new writes after a restore: every aggregate must continue at
@@ -409,11 +464,17 @@ type drillPostResult struct {
 // timeline). The keys the restored timeline re-issues, that the pre-restore
 // timeline (DRILL_FINAL) had already published, are reported, not failed: that
 // is the PITR caveat the drill measures.
+//
+// With DRILL_FENCE=1 the restore fence ran first (CHAOS-11271): the next write of every aggregate is
+// max(restored revision, floor) + 1, where the floor is the end-of-WAL revision (DRILL_FINAL), no key is re-issued
+// with different content, no revocation made after T is live, and the runtime role reads exactly one
+// restore_fence_state row for the live timeline.
 func drillPost(t *testing.T, ctx context.Context, rt *pgxpool.Pool, schema authschema.ValidatedIdentifier, admin *pgxpool.Pool, dir, expect, final string) {
 	t.Helper()
 	want := drillLoad(t, dir, expect)
 	fin := drillLoad(t, dir, final)
-	res := drillPostResult{Expect: expect, Final: final, ContinuityOK: true}
+	fenced := os.Getenv("DRILL_FENCE") == "1"
+	res := drillPostResult{Expect: expect, Final: final, ContinuityOK: true, Fenced: fenced}
 	for i := 0; i < drillOrgs; i++ {
 		if err := drillOrgUpdate(ctx, rt, schema, i, fmt.Sprintf("drill-post-%d", i)); err != nil {
 			t.Fatalf("post write org %d: %v", i, err)
@@ -430,9 +491,13 @@ func drillPost(t *testing.T, ctx context.Context, rt *pgxpool.Pool, schema auths
 	}
 	for i := 0; i < drillOrgs; i++ {
 		k := "organization:org_" + drillOrgID(i).String()
-		if got.Revisions[k] != want.Revisions[k]+1 {
+		next := want.Revisions[k] + 1
+		if fenced {
+			next = max(want.Revisions[k], fin.Revisions[k]) + 1
+		}
+		if got.Revisions[k] != next {
 			res.ContinuityOK = false
-			t.Errorf("%s: revision %d after one post-restore write, want %d", k, got.Revisions[k], want.Revisions[k]+1)
+			t.Errorf("%s: revision %d after one post-restore write, want %d", k, got.Revisions[k], next)
 		}
 		res.LostRevisions += fin.Revisions[k] - want.Revisions[k]
 	}
@@ -471,16 +536,69 @@ func drillPost(t *testing.T, ctx context.Context, rt *pgxpool.Pool, schema auths
 	for _, id := range got.Revoked {
 		nowRevoked[id] = true
 	}
-	for _, id := range fin.Revoked {
-		if !wasRevoked[id] && !nowRevoked[id] {
-			res.RevokesAfterTComeBack++
+	present := map[string]bool{}
+	if fenced {
+		for _, q := range []string{`SELECT id::text FROM auth.credential_registry`, `SELECT id::text FROM auth.principals`} {
+			rs, err := admin.Query(ctx, q)
+			if err != nil {
+				t.Fatalf("read the ids present in the restored database: %v", err)
+			}
+			for rs.Next() {
+				var id string
+				if err := rs.Scan(&id); err != nil {
+					t.Fatal(err)
+				}
+				present[id] = true
+			}
+			rs.Close()
 		}
+	}
+	wasDisabled := map[string]bool{}
+	for _, id := range want.Disabled {
+		wasDisabled[id] = true
+	}
+	nowDisabled := map[string]bool{}
+	for _, id := range got.Disabled {
+		nowDisabled[id] = true
+	}
+	cameBack := func(removedAfterT, stillRemoved bool, id string) {
+		if !removedAfterT || stillRemoved {
+			return
+		}
+		if fenced && !present[id] {
+			res.AbsentAfterRestore++ // absent: it cannot authenticate; the fence reports it as absent
+			return
+		}
+		res.RevokesAfterTComeBack++
+	}
+	for _, id := range fin.Revoked {
+		cameBack(!wasRevoked[id], nowRevoked[id], id)
+	}
+	for _, id := range fin.Disabled {
+		cameBack(!wasDisabled[id], nowDisabled[id], id)
 	}
 	res.Verdict = "PASS"
 	if res.RevokesAfterTComeBack != 0 || res.ReissuedDifferent != 0 {
 		res.Verdict = "GAP"
 	}
+	if fenced {
+		var rows int64
+		if err := rt.QueryRow(ctx, `SELECT count(*) FROM `+authschema.Quote(schema)+`.restore_fence_state
+WHERE timeline_id = ('x' || substr(pg_walfile_name(pg_current_wal_insert_lsn()), 1, 8))::bit(32)::bigint`).Scan(&rows); err != nil {
+			t.Fatalf("read the fence rows of the live timeline as the runtime role: %v", err)
+		}
+		res.FenceRowsForLiveTimeline = &rows
+	}
 	drillWriteJSON(t, filepath.Join(dir, "post-"+expect+".json"), res)
+	if fenced {
+		if res.RevokesAfterTComeBack != 0 || res.ReissuedDifferent != 0 || len(res.ReusedKeys) != 0 {
+			t.Fatalf("fenced restore: %d revocation(s) after T came back, %d key(s) re-issued with different content, %d re-issued key(s)",
+				res.RevokesAfterTComeBack, res.ReissuedDifferent, len(res.ReusedKeys))
+		}
+		if res.FenceRowsForLiveTimeline == nil || *res.FenceRowsForLiveTimeline != 1 {
+			t.Fatalf("fenced restore: restore_fence_state has %v row(s) for the live timeline, want exactly 1", res.FenceRowsForLiveTimeline)
+		}
+	}
 	if !res.ContinuityOK || !res.NoDuplicateKeys {
 		t.Fatalf("post-restore writes: continuity=%v noDuplicateKeys=%v", res.ContinuityOK, res.NoDuplicateKeys)
 	}

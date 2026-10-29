@@ -640,6 +640,10 @@ jobs:
         if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'
         run: bash ci/check_river_compat_static.sh
 
+      - name: Test the auth PITR drill phase helper
+        if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'
+        run: bash scripts/drill-auth-pitr_test.sh
+
       - name: Log out of GitHub Container Registry
         if: always()
         run: docker logout ghcr.io

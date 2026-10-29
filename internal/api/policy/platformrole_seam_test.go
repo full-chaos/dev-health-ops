@@ -46,3 +46,22 @@ func TestAccessUserSQLIsByteEqualWhileNotOwned(t *testing.T) {
 		t.Error("an unusable auth schema must be refused while on")
 	}
 }
+
+// PlatformRoleRead: off is the caller's own column expression, byte for byte;
+// on is the platform role rule over the auth schema for the row's id.
+func TestPlatformRoleReadSuperuserFollowsTheSwitch(t *testing.T) {
+	for _, off := range []PlatformRoleRead{{}, {AuthSchema: "acp"}} {
+		if got, err := off.Superuser("u.is_superuser", "u.id"); got != "u.is_superuser" || err != nil {
+			t.Errorf("off (%q): %q %v", off.AuthSchema, got, err)
+		}
+	}
+	for schema, quoted := range map[string]string{"": `"auth"`, "acp": `"acp"`} {
+		got, err := PlatformRoleRead{Owned: true, AuthSchema: schema}.Superuser("u.is_superuser", "u.id")
+		if want := rule.HoldsSQL(quoted, "u.id", "'platform_admin'"); got != want || err != nil {
+			t.Errorf("on (%q): %q %v, want %q", schema, got, err, want)
+		}
+	}
+	if _, err := (PlatformRoleRead{Owned: true, AuthSchema: "a;b"}).Superuser("is_superuser", "users.id"); err == nil {
+		t.Error("an unusable auth schema must be refused while on")
+	}
+}

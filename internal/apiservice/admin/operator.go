@@ -43,8 +43,11 @@ type Operator struct {
 	// that write public.users refuse with ErrUsersOwned.
 	UsersOwned bool
 	// PlatformRolesOwned is AUTH_PLATFORM_ROLES_OWNED: a verb that writes
-	// is_superuser refuses with ErrPlatformRolesOwned.
+	// is_superuser refuses with ErrPlatformRolesOwned, and the users reads
+	// take is_superuser from the auth platform roles in AuthSchema.
 	PlatformRolesOwned bool
+	// AuthSchema is AUTH_DATABASE_SCHEMA (empty: "auth").
+	AuthSchema string
 	// readGrants replaces the org deletion's ClickHouse grant read in a test.
 	readGrants func(context.Context, driver.Conn) ([]string, error)
 }
@@ -113,7 +116,7 @@ func (o Operator) refuseWhileUsersOwned(writes bool) error {
 }
 
 func (o Operator) store(db pgDB) pgStore {
-	return pgStore{Pool: db, Now: o.Now, UsersOwned: o.UsersOwned, PlatformRolesOwned: o.PlatformRolesOwned}
+	return pgStore{Pool: db, Now: o.Now, UsersOwned: o.UsersOwned, PlatformRolesOwned: o.PlatformRolesOwned, AuthSchema: o.AuthSchema}
 }
 
 // inTransaction runs fn over one transaction: committed when it returns nil,

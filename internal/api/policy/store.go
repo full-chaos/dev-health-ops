@@ -42,6 +42,23 @@ type PGStore struct {
 	PlatformRolesOwned bool
 }
 
+// PlatformRoleRead is how a go-api read of public.users decides is_superuser:
+// the public column while not Owned (AUTH_PLATFORM_ROLES_OWNED off), else the
+// auth platform role rule (rule.HoldsSQL) over AuthSchema (empty: "auth") in
+// the same statement, so a failed auth read fails the read.
+type PlatformRoleRead struct {
+	Owned      bool
+	AuthSchema string
+}
+
+// Superuser is the is_superuser expression of a users read: offExpr (the
+// caller's own public column expression, byte-equal to the read before the
+// switch) while not Owned, else whether the users row idExpr holds
+// platform_admin now. RED STUB: offExpr always.
+func (p PlatformRoleRead) Superuser(offExpr, idExpr string) (string, error) {
+	return offExpr, nil
+}
+
 // superuserColumn is the is_superuser column of the users reads: public
 // users.is_superuser, or while PlatformRolesOwned the platform role rule over
 // the auth schema in the same statement (a failure of it fails the read).

@@ -1,0 +1,53 @@
+# Every non-test string literal that names is_superuser, by file and function, with its count and kind.
+# A read that decides platform power goes through policy.PlatformRoleRead (or the switched statements of
+# authapi, policy and the minter). TestEveryPublicSuperuserLiteralIsListed holds this list.
+# file	function	count	kind
+internal/adminops/users.go	runUsersDelete	1	log key
+internal/api/billing/entitlements.go	handlers.entitlementAccessSQL	1	read: the off column of PlatformRoleRead
+internal/api/policy/accessroute_user.go	PGStore.AccessUser	1	grant-error text
+internal/api/policy/principal.go	userFromClaims	1	claim key (a hint; the decision is the live read)
+internal/api/policy/store.go	PGStore.UserState	1	grant-error text
+internal/api/policy/store.go	PGStore.superuserColumn	1	read: the off column of PlatformRoleRead
+internal/api/session/refresh.go	refreshUserInfo	1	response key
+internal/api/session/register.go	handlers.register	1	write (INSERT false)
+internal/api/session/routes.go	handlers.me	1	response key
+internal/api/session/social.go	handlers.createSocialUser	1	write (INSERT false)
+internal/api/session/store.go	-	1	read: userColumns, used only through userColumnsFor
+internal/api/session/store.go	handlers.userColumnsFor	2	read: the off column of PlatformRoleRead
+internal/api/session/tokens.go	userInfo	1	response key
+internal/api/sso/provision.go	handlers.createAccountAndMembership	1	write (INSERT false)
+internal/api/sso/sso.go	handlers.userReadSQL	1	read: the off column of PlatformRoleRead
+internal/apiservice/admin/guards.go	handlers.refuseSuperuserWrite	1	log key
+internal/apiservice/admin/guards.go	pgStore.targetsSuperuserSQL	1	read: the off column of PlatformRoleRead
+internal/apiservice/admin/platformstats.go	pgStore.superuserCountSQL	1	read: the off column of PlatformRoleRead
+internal/apiservice/admin/store.go	pgStore.targetUserSQL	1	read: the off column of PlatformRoleRead
+internal/apiservice/admin/users.go	handlers.createUser	1	request key (refused while owned)
+internal/apiservice/admin/users.go	parseUserUpdate	1	request key (refused while owned)
+internal/apiservice/admin/users.go	userResponseObject	1	response key
+internal/apiservice/admin/userstore.go	-	1	read: fullUserColumns, used only through userColumns
+internal/apiservice/admin/userstore.go	pgStore.insertUser	1	write (refused while owned)
+internal/apiservice/admin/userstore.go	pgStore.updateUser	1	write (refused while owned)
+internal/apiservice/admin/userstore.go	pgStore.userColumns	2	read: the off column of PlatformRoleRead
+internal/auth/authapi/compat.go	refreshUserInfo	1	response key
+internal/auth/authapi/login.go	userInfo	1	response key
+internal/auth/authapi/users.go	PGUsers.stateSQL	1	read: the off column of the switched statement
+internal/auth/authconfig/options.go	-	1	help text
+internal/auth/edgetoken/signer.go	Signer.Access	1	claim key
+internal/auth/identity/publicusers.go	insertPublicUser	1	write (INSERT false)
+internal/auth/usersbackfill/platformrole_command.go	platformRoleOwnedGate	1	message text
+internal/auth/usersbackfill/source.go	pageUsers	1	read: the users backfill source (public is the source by design)
+internal/cigates/livee2e/livee2e.go	MintToken	1	test-tool claim key
+internal/edgetokenmint/edgetokenmint.go	-	1	read: lookupSQL, used only through lookupSQLFor
+internal/edgetokenmint/edgetokenmint.go	lookupSQLFor	2	read: the switched minter statement (public OR the rule)
+internal/platform/config/queryapi_options.go	-	1	help text
+internal/queryapi/graph/generated.go	-	1	schema description text
+internal/queryapi/server/graphql_edge_route.go	authenticateGraphQLEdge	1	log key
+internal/storage/postgres/authschema/publicreads.go	PublicReadColumns	1	grant (auth runtime role reads public users)
+internal/storage/postgres/authschema/publicreads.go	UsersWriteGrant	1	grant (users-owned write)
+internal/storage/postgres/query_api_authorization.go	queryAPIPosture	1	grant (query-api role reads public users)
+internal/testsupport/pgseed/pgseed.go	SetUserState	1	test support write
+internal/testsupport/sessionscenario/sessionscenario.go	Run	1	test support read
+internal/testsupport/sessionscenario/sessionscenario.go	Seed	2	test support write and claim
+internal/testsupport/sessionscenario/target.go	MintTokens	1	test support claim key
+internal/testsupport/venueoracle/gosubstrate.go	-	1	test support claim key
+internal/testsupport/venueoracle/gosubstrate.go	accessClaims	2	test support claim key

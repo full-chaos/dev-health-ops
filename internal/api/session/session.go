@@ -37,14 +37,12 @@ type Deps struct {
 	Auth     *policy.Authenticator
 	Verifier *edgetoken.Verifier
 	Signer   *edgetoken.Signer
-	// ClickHouse is the api's own ClickHouse login, used for organization
-	// activity; nil means no activity (Python: no CLICKHOUSE_URI).
+	// ClickHouse is the api's own ClickHouse login (organization activity); nil means none (no CLICKHOUSE_URI).
 	ClickHouse driver.Conn
 	// Limits is where the rate limits count: the api's shared counter
 	// store (Valkey when configured); nil means an in-process one on Now.
 	Limits httpapi.CounterStore
-	// Write renders the limits' refusal (httpapi.CodeRateLimited); nil
-	// means httpapi.WriteError.
+	// Write renders the limits' refusal (httpapi.CodeRateLimited); nil means httpapi.WriteError.
 	Write httpapi.ErrorWriter
 	OAuth *oauthprovider.Client
 	// Getenv reads the social-login client settings and
@@ -69,6 +67,8 @@ type Deps struct {
 	// issues every token pair these routes hand out; go-api then mints none
 	// and writes no refresh_tokens row. nil mints in go-api.
 	Issuer sessionissue.Issuer
+	// PlatformRoles is how the users reads take is_superuser (AUTH_PLATFORM_ROLES_OWNED).
+	PlatformRoles policy.PlatformRoleRead
 }
 
 type handlers struct {

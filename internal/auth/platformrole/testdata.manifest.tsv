@@ -1,4 +1,5 @@
 # Every file under internal/auth/platformrole/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 # header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+60cd16f7b2539dfddeb4fd3ca280f66c528d038a4d711ab9cf64b2a1b7fd1050	hand-written	superuser_literals.tsv
 6ba1833c2b72566ace405100b28c0c8459184b241c2d457255bf98e9ae86b308	hand-written	superuser_sites.tsv

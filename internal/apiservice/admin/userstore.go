@@ -32,6 +32,20 @@ type fullUser struct {
 
 const fullUserColumns = `id, email, username, password_hash, full_name, avatar_url, auth_provider, auth_provider_id, is_active, is_verified, is_superuser, token_version, last_login_at, created_at, updated_at`
 
+// userColumns is fullUserColumns (prefixed with alias when it is set), with
+// is_superuser read by the platform roles switch (policy.PlatformRoleRead).
+func (s pgStore) userColumns(alias string) (string, error) {
+	columns, superuser, id := fullUserColumns, "is_superuser", "users.id"
+	if alias != "" {
+		columns, superuser, id = prefixColumns(alias, fullUserColumns), alias+".is_superuser", alias+".id"
+	}
+	expr, err := s.platformRoles().Superuser(superuser, id)
+	if err != nil {
+		return "", err
+	}
+	return strings.Replace(columns, superuser+", ", expr+", ", 1), nil
+}
+
 func scanFullUser(row pgx.Row) (*fullUser, error) {
 	var u fullUser
 	err := row.Scan(&u.ID, &u.Email, &u.Username, &u.PasswordHash, &u.FullName, &u.AvatarURL,
@@ -48,17 +62,29 @@ func scanFullUser(row pgx.Row) (*fullUser, error) {
 
 // fullUserByID is UserService.get_by_id.
 func (s pgStore) fullUserByID(ctx context.Context, id uuid.UUID) (*fullUser, error) {
-	return scanFullUser(s.Pool.QueryRow(ctx, `SELECT `+fullUserColumns+` FROM users WHERE id = $1`, id))
+	columns, err := s.userColumns("")
+	if err != nil {
+		return nil, err
+	}
+	return scanFullUser(s.Pool.QueryRow(ctx, `SELECT `+columns+` FROM users WHERE id = $1`, id))
 }
 
 // userByEmail is UserService.get_by_email (case-insensitive).
 func (s pgStore) userByEmail(ctx context.Context, email string) (*fullUser, error) {
-	return scanFullUser(s.Pool.QueryRow(ctx, `SELECT `+fullUserColumns+` FROM users WHERE lower(email) = $1`, pythonparity.Lower(email)))
+	columns, err := s.userColumns("")
+	if err != nil {
+		return nil, err
+	}
+	return scanFullUser(s.Pool.QueryRow(ctx, `SELECT `+columns+` FROM users WHERE lower(email) = $1`, pythonparity.Lower(email)))
 }
 
 // userByUsername is UserService.get_by_username (case-insensitive).
 func (s pgStore) userByUsername(ctx context.Context, username string) (*fullUser, error) {
-	return scanFullUser(s.Pool.QueryRow(ctx, `SELECT `+fullUserColumns+` FROM users WHERE lower(username) = $1`, pythonparity.Lower(username)))
+	columns, err := s.userColumns("")
+	if err != nil {
+		return nil, err
+	}
+	return scanFullUser(s.Pool.QueryRow(ctx, `SELECT `+columns+` FROM users WHERE lower(username) = $1`, pythonparity.Lower(username)))
 }
 
 // listUsersFilter is list_users' shared WHERE clause (active_only + search
@@ -101,7 +127,11 @@ func itoa(n int) string {
 // listAllUsers is UserService.list_all.
 func (s pgStore) listAllUsers(ctx context.Context, f listUsersFilter) ([]*fullUser, error) {
 	where, args := f.whereActiveAndSearch(3)
-	query := `SELECT ` + prefixColumns("u", fullUserColumns) + ` FROM users u WHERE true` + where +
+	columns, err := s.userColumns("u")
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT ` + columns + ` FROM users u WHERE true` + where +
 		` ORDER BY u.created_at DESC LIMIT $1 OFFSET $2`
 	args = append([]any{f.Limit, f.Offset}, args...)
 	return s.queryUsers(ctx, query, args...)
@@ -110,7 +140,11 @@ func (s pgStore) listAllUsers(ctx context.Context, f listUsersFilter) ([]*fullUs
 // listUsersByOrg is UserService.list_by_org.
 func (s pgStore) listUsersByOrg(ctx context.Context, orgID uuid.UUID, f listUsersFilter) ([]*fullUser, error) {
 	where, args := f.whereActiveAndSearch(4)
-	query := `SELECT ` + prefixColumns("u", fullUserColumns) + ` FROM users u
+	columns, err := s.userColumns("u")
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT ` + columns + ` FROM users u
 JOIN memberships m ON m.user_id = u.id
 WHERE m.org_id = $3` + where + ` ORDER BY u.created_at DESC LIMIT $1 OFFSET $2`
 	args = append([]any{f.Limit, f.Offset, orgID}, args...)

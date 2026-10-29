@@ -79,8 +79,11 @@ type Deps struct {
 	// that write public.users answer the moved operation.
 	UsersOwned bool
 	// PlatformRolesOwned is AUTH_PLATFORM_ROLES_OWNED: a write of
-	// is_superuser answers the moved operation.
+	// is_superuser answers the moved operation, and the users reads take
+	// is_superuser from the auth platform roles in AuthSchema.
 	PlatformRolesOwned bool
+	// AuthSchema is AUTH_DATABASE_SCHEMA (empty: "auth").
+	AuthSchema string
 }
 
 // Routes is the admin area's route set.
@@ -89,7 +92,7 @@ func Routes(deps Deps) []httpapi.Route {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	store := pgStore{Pool: deps.Pool, Now: deps.Now, UsersOwned: deps.UsersOwned, PlatformRolesOwned: deps.PlatformRolesOwned}
+	store := pgStore{Pool: deps.Pool, Now: deps.Now, UsersOwned: deps.UsersOwned, PlatformRolesOwned: deps.PlatformRolesOwned, AuthSchema: deps.AuthSchema}
 	auditWriter := audit.PGWriter{Now: deps.Now}
 	cache := newImpersonationCache(deps.Valkey, store, logger)
 	if deps.Now != nil {

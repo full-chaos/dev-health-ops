@@ -2,8 +2,12 @@ package restorefence
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"sync"
 )
 
@@ -145,13 +149,28 @@ func resolveInputs(ctx context.Context, m *Manifest, opts Options, registered []
 	case opts.BlindMargin > 0 && (m != nil || usable > 0):
 		return resolved{}, fmt.Errorf("%w: the blind margin applies only when no manifest and no usable consumer input exists", ErrApply)
 	case opts.BlindMargin > 0:
-		out.margin, out.source, out.digest = opts.BlindMargin, "blind_margin", blindDigest
+		out.margin, out.source, out.digest = opts.BlindMargin, "blind_margin", stateDigest("blind_margin", []byte(strconv.FormatInt(opts.BlindMargin, 10)))
 		out.reports = append(out.reports, InputReport{Name: "blind_margin", Kind: "blind_margin", Used: true})
 	case m == nil && usable > 0:
-		out.source, out.digest = "inputs", "inputs"
+		out.source = "inputs"
 	case m == nil:
 		return resolved{}, fmt.Errorf("%w: a manifest, a usable consumer input or a blind margin is required", ErrApply)
 	}
 	out.floors = mergeFloors(manifestFloors, extra)
+	if out.source == "inputs" {
+		raw, err := json.Marshal(out.floors)
+		if err != nil {
+			return resolved{}, fmt.Errorf("%w: encoding the input floors", ErrApply)
+		}
+		out.digest = stateDigest("inputs", raw)
+	}
 	return out, nil
+}
+
+// stateDigest is the state row's manifest_sha256 of an apply without a manifest: it names what was applied (the margin,
+// or the merged input floors), so a retry with other values is new work and the same values are a no-op. The kind
+// prefix keeps the two apart from each other and from a manifest digest.
+func stateDigest(kind string, content []byte) string {
+	sum := sha256.Sum256(append([]byte("restorefence/"+kind+"/v1\n"), content...))
+	return hex.EncodeToString(sum[:])
 }

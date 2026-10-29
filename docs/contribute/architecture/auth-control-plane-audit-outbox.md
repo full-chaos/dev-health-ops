@@ -15,6 +15,7 @@ source_of_truth:
   - internal/auth/authruntime/feed.go
   - internal/auth/revisionfeed/sink.go
   - internal/auth/revisionfeed/floors.go
+  - internal/auth/revisionfeed/floorinput.go
 applicability: current
 lifecycle: active
 ---
@@ -146,6 +147,12 @@ channel.
   was evicted or lost gives a lower floor, the unsafe direction, so it is an
   advisory second input, never the only source. `ReadStatus` needs `CONFIG GET`,
   which the auth-service login does not have: the reader uses its own login.
+- **A restore-fence floor input.** The restore fence's census requires every outbox
+  consumer to hand its high-water marks to the fence, so the feed is one
+  (`revisionfeed.NewFloorInput`): an advisory lower bound that the fence uses only
+  while `ReadStatus` says usable. The registry is per process; the auth-service
+  registers its input when the feed is on, and the restore-fence CLI will register
+  its own with its own Valkey login (a later leaf).
 - **Restore.** Until the restore-fence leaf that reads these floors ships, a
   restore does not use the Valkey hash, and **the flag must stay off in
   production**.

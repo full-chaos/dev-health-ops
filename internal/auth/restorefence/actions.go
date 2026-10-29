@@ -19,6 +19,13 @@ const (
 	ActionRequeueProviderRevocation ActionKind = "requeue_provider_revocation"
 )
 
+// followUp names the follow-up leaf that automates each action; the operator
+// action line prints it.
+var followUp = map[ActionKind]string{
+	ActionForcePasswordReset:        "CHAOS-11834",
+	ActionRequeueProviderRevocation: "CHAOS-11835",
+}
+
 // OperatorAction is the ids a section names for one action. Ids only: never a
 // hash, a token or a secret.
 type OperatorAction struct {
@@ -68,7 +75,7 @@ func ActionLines(actions []OperatorAction) []string {
 		if len(a.IDs) == 0 {
 			continue
 		}
-		lines = append(lines, fmt.Sprintf("operator-action %s source=%s count=%d ids=%s", a.Kind, a.Source, len(a.IDs), strings.Join(a.IDs, ",")))
+		lines = append(lines, fmt.Sprintf("operator-action %s source=%s count=%d ids=%s follow-up=%s", a.Kind, a.Source, len(a.IDs), strings.Join(a.IDs, ","), followUp[a.Kind]))
 	}
 	return lines
 }

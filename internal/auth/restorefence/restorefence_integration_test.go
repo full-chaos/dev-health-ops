@@ -145,6 +145,8 @@ VALUES ($1, $2, 'workload_token', decode(md5($1::text), 'hex'), 'sha256', '01234
 		uuid.NewSHA1(uuid.NameSpaceURL, []byte("fence-rt")), user, uuid.NewSHA1(uuid.NameSpaceURL, []byte("fence-family")))
 	d.must(t, ctx, `INSERT INTO public.password_reset_tokens (id, user_id, token_hash, expires_at) VALUES ($1, $2, 'p1', now() + interval '1 day')`,
 		uuid.NewSHA1(uuid.NameSpaceURL, []byte("fence-prt")), user)
+	d.must(t, ctx, `INSERT INTO public.password_reset_tokens (id, user_id, token_hash, expires_at) VALUES ($1, $2, 'p2', now() + interval '1 day')`,
+		uuid.NewSHA1(uuid.NameSpaceURL, []byte("fence-prt-kept")), user)
 	d.must(t, ctx, `INSERT INTO public.internal_service_credentials (id, service_name, token_hash, token_prefix, scopes, created_at) VALUES ($1, 'svc', 's1', 'svc_x', '[]', now())`,
 		uuid.NewSHA1(uuid.NameSpaceURL, []byte("fence-isc")))
 	d.must(t, ctx, `INSERT INTO public.org_invites (id, org_id, email, token_hash, expires_at) VALUES ($1, $2, 'inv@example.invalid', 'i1', now() + interval '1 day')`,
@@ -179,7 +181,7 @@ VALUES ($1, $2, 'workload_token', decode(md5($1::text), 'hex'), 'sha256', '01234
 	user := uuid.NewSHA1(uuid.NameSpaceURL, []byte("fence-user"))
 	d.must(t, ctx, `UPDATE public.users SET is_active = false, token_version = 3 WHERE id = $1`, user)
 	d.must(t, ctx, `UPDATE public.refresh_tokens SET revoked_at = now()`)
-	d.must(t, ctx, `DELETE FROM public.password_reset_tokens`)
+	d.must(t, ctx, `DELETE FROM public.password_reset_tokens WHERE token_hash = 'p1'`)
 	d.must(t, ctx, `UPDATE public.internal_service_credentials SET revoked_at = now()`)
 	d.must(t, ctx, `UPDATE public.org_invites SET status = 'accepted', accepted_at = now()`)
 }
@@ -294,6 +296,9 @@ func TestTheFenceRaisesTheFloorsAndRevokesAgain(t *testing.T) {
 		if got := restored.revisions(t, ctx)[k]; got < want {
 			t.Errorf("%s = %d after the fence, want at least %d", k, got, want)
 		}
+	}
+	if n := restored.count(t, ctx, `SELECT count(*) FROM public.password_reset_tokens`); n != 1 {
+		t.Errorf("password_reset_tokens after the fence = %d, want only the one still live at the end of the WAL", n)
 	}
 	if n := restored.count(t, ctx, `SELECT count(*) FROM auth.credential_registry WHERE revoked_at IS NOT NULL`); n != 2 {
 		t.Errorf("revoked credentials after the fence = %d, want 2", n)

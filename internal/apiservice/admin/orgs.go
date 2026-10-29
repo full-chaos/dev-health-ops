@@ -466,6 +466,10 @@ func (h *handlers) addMember(w http.ResponseWriter, r *http.Request) {
 		}
 		invitedByID = &id
 	}
+	if h.orgProvision != nil {
+		h.addMemberInAuth(ctx, w, user, orgID, targetUserID, role, invitedByID)
+		return
+	}
 	h.superuserGuardedWrite(ctx, w, user, nil, "add_member", func(g *superuserTx) func() {
 		if g.refuse(targetUserID) {
 			return nil
@@ -510,6 +514,10 @@ func (h *handlers) updateMemberRole(w http.ResponseWriter, r *http.Request) {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 		return
 	}
+	if h.orgProvision != nil {
+		h.updateMemberRoleInAuth(ctx, w, user, orgID, targetUserID, role)
+		return
+	}
 	h.superuserGuardedWrite(ctx, w, user, nil, "update_member_role", func(g *superuserTx) func() {
 		if g.refuse(targetUserID) {
 			return nil
@@ -545,6 +553,10 @@ func (h *handlers) removeMember(w http.ResponseWriter, r *http.Request) {
 	}
 	targetUserID, ok := pathUserID(w, r)
 	if !ok {
+		return
+	}
+	if h.orgProvision != nil {
+		h.removeMemberInAuth(ctx, w, user, orgID, targetUserID)
 		return
 	}
 	h.superuserGuardedWrite(ctx, w, user, nil, "remove_member", func(g *superuserTx) func() {
@@ -609,6 +621,10 @@ func (h *handlers) transferOwnership(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.orgProvision != nil {
+		h.transferOwnershipInAuth(ctx, w, user, orgID, toUserID)
+		return
+	}
 	h.superuserGuardedWrite(ctx, w, user, nil, "transfer_ownership", func(g *superuserTx) func() {
 		fromUserID, err := h.store.currentOwner(ctx, g.tx, orgID)
 		if err != nil {

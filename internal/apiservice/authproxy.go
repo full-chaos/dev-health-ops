@@ -21,6 +21,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
 	"github.com/full-chaos/dev-health-ops/internal/api/clientip"
 	"github.com/full-chaos/dev-health-ops/internal/api/orgreactivate"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
@@ -612,4 +613,20 @@ func dropHop(header http.Header) {
 	for _, name := range hopHeaders {
 		header.Del(name)
 	}
+}
+
+// orgProvisioner is the client of auth-service's provisioning routes when
+// AUTH_PROXY_ORG_PROVISIONING is on, built from AUTH_SESSION_ISSUE_TOKEN; nil
+// when off, so the member, invite and delete routes never call auth-service.
+// On without a usable token is a start-up error, as for orgReactivator.
+func orgProvisioner(cfg AuthProxyConfig, lookup func(string) (string, bool)) (authprovision.Provisioner, error) {
+	if !cfg.OrgProvisioningOn() {
+		return nil, nil
+	}
+	token, _ := lookup(sessionissue.EnvToken)
+	client, err := authprovision.New(cfg.Upstream, strings.TrimSpace(token), cfg.Timeout)
+	if err != nil {
+		return nil, fmt.Errorf("%s is on: %w", EnvAuthProxyOrgProvisioning, err)
+	}
+	return client, nil
 }

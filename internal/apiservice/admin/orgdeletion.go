@@ -99,6 +99,11 @@ func (h *handlers) deleteOrganization(w http.ResponseWriter, r *http.Request) {
 			policy.WriteDetail(w, http.StatusInternalServerError, orgDeletionIncompleteDetail, nil)
 			return
 		}
+		var denied *orgDeletionAuthError
+		if errors.As(err, &denied) {
+			writeOrgDeletionAuthError(w)
+			return
+		}
 		var step *orgDeletionStepError
 		if errors.As(err, &step) {
 			h.logger.ErrorContext(ctx, "admin: org deletion "+step.step+" failed", "error", step.err)
@@ -137,6 +142,11 @@ func (h *handlers) deleteOrganizationData(ctx context.Context, orgUUID uuid.UUID
 		return nil, err
 	}
 	defer func() { _ = ch.conn.Close() }()
+	if !dryRun && h.orgProvision != nil {
+		if err := h.deprovisionInAuth(ctx, orgUUID); err != nil {
+			return nil, err
+		}
+	}
 
 	result := &orgDeletionResult{
 		organizationID:     orgIDStr,

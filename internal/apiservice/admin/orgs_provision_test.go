@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/audit"
 	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 )
@@ -215,7 +216,7 @@ func provisionRowsFor() map[string][]any {
 		"SELECT id, org_id, user_id, role, invited_by_id, joined_at, created_at, updated_at FROM memberships WHERE org_id = $1 AND user_id = $2": {
 			provMember, provOrg, provTarget, "admin", (*uuid.UUID)(nil), &joined, provStamp, provStamp},
 		// orgByID.
-		"FROM organizations WHERE id = $1": {provOrg, "acme", "Acme", (*string)(nil), []byte("{}"), "community", (*string)(nil), true, provStamp, provStamp},
+		"FROM organizations WHERE id = $1": {provOrg, "acme", "Acme", (*string)(nil), []byte("{}"), "community", "self", true, provStamp, provStamp},
 		// inviterIdentity.
 		"SELECT full_name, email FROM users WHERE id = $1": {(*string)(nil), (*string)(nil)},
 		// the re-read of a proxied invite.
@@ -227,6 +228,12 @@ func provisionRowsFor() map[string][]any {
 		"SELECT is_superuser FROM users WHERE id = ANY($1) ORDER BY id FOR UPDATE": {false},
 		// the superuser read of a transfer target with no single owner.
 		"SELECT is_superuser FROM users WHERE id = $1": {false},
+		// transferOwnership's target role read (switch off).
+		"SELECT role FROM memberships WHERE org_id = $1 AND user_id = $2": {"owner"},
+		// transferOwnership's target membership check (switch off).
+		"SELECT EXISTS(SELECT 1 FROM memberships WHERE org_id = $1 AND user_id = $2)": {true},
+		// createInvite's pending-duplicate check (switch off).
+		"FROM org_invites WHERE org_id = $1 AND lower(email) = $2": {false},
 	}
 }
 
@@ -253,7 +260,8 @@ var provisionRoutes = []provisionRoute{
 }
 
 func newProvisionHandlers(db *provisionDB, auth authprovision.Provisioner) *handlers {
-	h := &handlers{store: pgStore{Pool: db, Now: func() time.Time { return provStamp }}, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	h := &handlers{store: pgStore{Pool: db, Now: func() time.Time { return provStamp }}, logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		audit: audit.PGWriter{Now: func() time.Time { return provStamp }}}
 	if auth != nil {
 		h.orgProvision = auth
 	}
@@ -280,26 +288,34 @@ func callRoute(h *handlers, route provisionRoute) (int, string) {
 // transaction with its statements in order. Pinned so the switch-off path
 // stays byte-equal (X2).
 var switchOffSQL = map[string][]string{
-	"add": {"BEGIN",
-		"tx:SELECT is_superuser FROM users WHERE id = ANY($1) ORDER BY id FOR UPDATE",
-		"tx:SELECT id, org_id, user_id, role, invited_by_id, joined_at, created_at, updated_at FROM memberships WHERE org_id = $1 AND user_id = $2",
-	},
-	"role": {"BEGIN",
-		"tx:SELECT is_superuser FROM users WHERE id = ANY($1) ORDER BY id FOR UPDATE",
-		"tx:SELECT id, org_id, user_id, role, invited_by_id, joined_at, created_at, updated_at FROM memberships WHERE org_id = $1 AND user_id = $2",
-		"tx:UPDATE memberships SET role = $3, updated_at = $4 WHERE org_id = $1 AND user_id = $2",
-		"tx:SELECT id, org_id, user_id, role, invited_by_id, joined_at, created_at, updated_at FROM memberships WHERE org_id = $1 AND user_id = $2",
-		"COMMIT", "ROLLBACK",
-	},
-	"remove":   nil,
-	"transfer": nil,
-	"invite":   nil,
+	"add": {"BEGIN", "tx:SELECT is_superuser FROM users WHERE id = ANY($1) ORDER BY id FOR UPDATE", "tx:SELECT id, org_id, user_id, role, invited_by_id, joined_at, created_at, updated_at FROM memberships WHERE org_id = $1 AND user_id = $2",
+		"tx:INSERT INTO memberships (id, org_id, user_id, role, invited_by_id, joined_at, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+		"COMMIT", "ROLLBACK"},
+	"role": {"BEGIN", "tx:SELECT is_superuser FROM users WHERE id = ANY($1) ORDER BY id FOR UPDATE", "tx:SELECT id, org_id, user_id, role, invited_by_id, joined_at, created_at, updated_at FROM memberships WHERE org_id = $1 AND user_id = $2",
+		"tx:UPDATE memberships SET role = $3, updated_at = $4 WHERE org_id = $1 AND user_id = $2", "COMMIT", "ROLLBACK"},
+	"remove": {"BEGIN", "tx:SELECT is_superuser FROM users WHERE id = ANY($1) ORDER BY id FOR UPDATE", "tx:SELECT id, org_id, user_id, role, invited_by_id, joined_at, created_at, updated_at FROM memberships WHERE org_id = $1 AND user_id = $2",
+		"tx:DELETE FROM memberships WHERE org_id = $1 AND user_id = $2", "COMMIT", "ROLLBACK"},
+	"transfer": {"BEGIN", "tx:SELECT user_id FROM memberships WHERE org_id = $1 AND role = 'owner'", "tx:SELECT is_superuser FROM users WHERE id = ANY($1) ORDER BY id FOR UPDATE",
+		"tx:SELECT role FROM memberships WHERE org_id = $1 AND user_id = $2",
+		"tx:SELECT EXISTS(SELECT 1 FROM memberships WHERE org_id = $1 AND user_id = $2)",
+		"tx:UPDATE memberships SET role = 'admin', updated_at = $3 WHERE org_id = $1 AND user_id = $2",
+		"tx:UPDATE memberships SET role = 'owner', updated_at = $3 WHERE org_id = $1 AND user_id = $2", "COMMIT", "ROLLBACK"},
+	"invite": {"SELECT id, slug, name, description, settings, tier, managed_by, is_active, created_at, updated_at FROM organizations WHERE id = $1",
+		"SELECT full_name, email FROM users WHERE id = $1", "BEGIN",
+		"tx:SELECT EXISTS ( SELECT 1 FROM org_invites WHERE org_id = $1 AND lower(email) = $2 AND status = 'pending' AND expires_at >= $3 )",
+		"tx:INSERT INTO org_invites (id, org_id, email, role, token_hash, invited_by_id, status, expires_at, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+		"tx:INSERT INTO audit_logs (id, org_id, user_id, action, resource_type, resource_id, description, changes, request_metadata, status, error_message, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+		"COMMIT", "ROLLBACK"},
 }
 
 func TestProvisionSwitchOffMakesNoAuthCallAndTheSameSQL(t *testing.T) {
 	for _, route := range provisionRoutes {
 		t.Run(route.name, func(t *testing.T) {
 			db := &provisionDB{rows: provisionRowsFor()}
+			if route.name == "add" {
+				// a new member, so the add runs to its insert
+				delete(db.rows, "SELECT id, org_id, user_id, role, invited_by_id, joined_at, created_at, updated_at FROM memberships WHERE org_id = $1 AND user_id = $2")
+			}
 			h := newProvisionHandlers(db, nil)
 			callRoute(h, route)
 			for _, step := range db.log {
@@ -371,9 +387,9 @@ func TestProvisionSuccessBodiesAreTodays(t *testing.T) {
 		body string
 	}{
 		"add": {http.StatusCreated, `{"id":"` + provMember.String() + `","org_id":"` + provOrg.String() + `","user_id":"` + provTarget.String() +
-			`","role":"admin","invited_by_id":null,"joined_at":"2026-10-29T09:00:00","created_at":"2026-10-29T09:00:00","updated_at":"2026-10-29T09:00:00"}`},
+			`","role":"admin","invited_by_id":null,"joined_at":"2026-10-29T09:00:00Z","created_at":"2026-10-29T09:00:00Z","updated_at":"2026-10-29T09:00:00Z"}`},
 		"role": {http.StatusOK, `{"id":"` + provMember.String() + `","org_id":"` + provOrg.String() + `","user_id":"` + provTarget.String() +
-			`","role":"admin","invited_by_id":null,"joined_at":"2026-10-29T09:00:00","created_at":"2026-10-29T09:00:00","updated_at":"2026-10-29T09:00:00"}`},
+			`","role":"admin","invited_by_id":null,"joined_at":"2026-10-29T09:00:00Z","created_at":"2026-10-29T09:00:00Z","updated_at":"2026-10-29T09:00:00Z"}`},
 		"remove":   {http.StatusOK, `{"deleted":true}`},
 		"transfer": {http.StatusOK, `{"success":true}`},
 	}

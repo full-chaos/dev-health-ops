@@ -1,6 +1,7 @@
 package apiservice
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
 	"github.com/full-chaos/dev-health-ops/internal/api/githubapp"
 	"github.com/full-chaos/dev-health-ops/internal/api/oauthprovider"
 	"github.com/full-chaos/dev-health-ops/internal/api/orgreactivate"
@@ -204,6 +205,10 @@ type Deps struct {
 	// admin PATCH writes is_active=true; nil (AUTH_PROXY_ORG_PROVISIONING off)
 	// leaves the PATCH as it was.
 	OrgReactivator orgreactivate.Reactivator
+	// OrgProvisioner sends member, invite and organization delete changes to
+	// auth-service; nil (AUTH_PROXY_ORG_PROVISIONING off) leaves go-api the
+	// writer.
+	OrgProvisioner authprovision.Provisioner
 	// UsersOwned is AUTH_USERS_OWNED: auth-service owns users, so the go-api
 	// routes and verbs that write public.users refuse.
 	UsersOwned bool

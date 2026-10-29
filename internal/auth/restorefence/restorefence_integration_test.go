@@ -132,7 +132,7 @@ func (d *fenceDB) stateT(t *testing.T, ctx context.Context) {
 		cred := fenceCredID(c)
 		d.commit(t, ctx, "credential.created", 0, func(ctx context.Context, tx audit.TxOps) error {
 			_, err := tx.Exec(ctx, `INSERT INTO auth.credential_registry (id, principal_id, credential_class, secret_hash, hash_algorithm, fingerprint)
-VALUES ($1, $2, 'workload_token', decode(md5($1::text), 'hex'), 'sha256', '0123456789abcdef')`, cred, principal)
+VALUES ($1, $2, 'workload_token', decode(md5($1::uuid::text), 'hex'), 'sha256', '0123456789abcdef')`, cred, principal)
 			return err
 		})
 	}
@@ -174,7 +174,7 @@ func (d *fenceDB) afterT(t *testing.T, ctx context.Context) {
 	ghost := fenceCredID(99)
 	d.commit(t, ctx, "credential.created", 0, func(ctx context.Context, tx audit.TxOps) error {
 		_, err := tx.Exec(ctx, `INSERT INTO auth.credential_registry (id, principal_id, credential_class, secret_hash, hash_algorithm, fingerprint)
-VALUES ($1, $2, 'workload_token', decode(md5($1::text), 'hex'), 'sha256', '0123456789abcdef')`, ghost, principal)
+VALUES ($1, $2, 'workload_token', decode(md5($1::uuid::text), 'hex'), 'sha256', '0123456789abcdef')`, ghost, principal)
 		return err
 	})
 	revoke(ghost, "compromised")

@@ -28,6 +28,7 @@ type shellCollector struct {
 	// (or holdLimit passes): the shell's startup flush runs before the operator
 	// HTTP listener starts, so while it is held the pull endpoint cannot answer.
 	hold chan struct{}
+	held bool
 }
 
 // holdLimit bounds a held export; the shell abandons its startup flush after
@@ -52,6 +53,7 @@ func (c *shellCollector) Export(_ context.Context, req *colmetricpb.ExportMetric
 		}
 	}
 	if c.count == 1 && c.hold != nil {
+		c.held = true
 		c.mu.Unlock()
 		select {
 		case <-c.hold:
@@ -147,6 +149,12 @@ func TestShellPushesItsRegisteredFragmentsOverOTLP(t *testing.T) {
 	// The push arrives from the startup flush, before the operator listener
 	// starts; release the flush and wait for the pull endpoint, under the same
 	// deadline.
+	collector.mu.Lock()
+	held := collector.held
+	collector.mu.Unlock()
+	if !held {
+		t.Fatal("the first export was not held: the run no longer covers a push that arrives before the pull listener")
+	}
 	release()
 	var response *http.Response
 	for {

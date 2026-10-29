@@ -216,7 +216,7 @@ func TestUnthrottledSetOfTheFullRouteSetIsExactlyTheStubs(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			credentials, _, err := credentialRoutes(cfg, logger, pool, schema, mustLimits(t))
+			credentials, _, err := credentialRoutes(cfg, logger, pool, schema, mustLimits(t), nil)
 			if err != nil {
 				t.Fatal(err)
 			}

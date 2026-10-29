@@ -177,7 +177,7 @@ func TestRefusalTableHasOneRowPerPrefix(t *testing.T) {
 	for _, refusal := range earlyRefusals {
 		prefixes = append(prefixes, refusal.Prefix)
 	}
-	if want := []string{"svc_", "fcpush_", "fcacr_", "whsec_"}; !slices.Equal(prefixes, want) {
+	if want := []string{"svc_", "fcpush_", "fcacr_", "whsec_", "fcwlb_"}; !slices.Equal(prefixes, want) {
 		t.Fatalf("refusal prefixes %v, want exactly %v", prefixes, want)
 	}
 	var document struct {

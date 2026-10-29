@@ -11,6 +11,7 @@ internal/api/pyjson
 internal/api/pytime
 internal/api/registerorg
 internal/audit
+internal/auth/accessverify
 internal/auth/authapi
 internal/auth/clientaddr
 internal/auth/contracts

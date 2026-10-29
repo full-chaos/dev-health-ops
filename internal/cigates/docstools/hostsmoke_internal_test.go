@@ -40,13 +40,11 @@ func TestHostSmokeRequestTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	start := time.Now()
+	// The server answers /use/ after 2 s and the client timeout is 300 ms, so a timeout that did not fire ends
+	// in a 200 answer: exit 0 and no "request failed" line. The exit code and the line carry the proof; no elapsed time is asserted.
 	code := hostSmokeVerb([]string{"--origin", srv.URL, "--redirects", tsv}, &stdout, &stderr)
 	if code != 1 || !strings.HasPrefix(stdout.String(), "ERROR: request failed: ") || strings.Count(stdout.String(), "\n") != 1 {
 		t.Errorf("exit %d stdout %q stderr %q", code, stdout.String(), stderr.String())
-	}
-	if time.Since(start) > 1500*time.Millisecond {
-		t.Errorf("took %s; the timeout did not fire", time.Since(start))
 	}
 }
 

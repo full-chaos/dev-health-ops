@@ -255,6 +255,9 @@ func TestReactivateAuthorizedDeniedWritesNothingAllowedWritesAllOnce(t *testing.
 		t.Fatal(err)
 	}
 	actor := uuid.New()
+	if _, err := e.runtime.Exec(ctx, `INSERT INTO auth.principals (id, kind, display_name) VALUES ($1, 'user', '')`, actor); err != nil {
+		t.Fatalf("seed the acting principal: %v", err)
+	}
 	auditSQL := `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.organization.reactivated' AND organization_id = $1`
 	outboxSQL := `SELECT count(*) FROM auth.auth_outbox_events WHERE aggregate_type = 'organization' AND aggregate_id = $1 AND event_type = 'organization.reactivated'`
 	deny := func(context.Context, audit.TxOps, uuid.UUID) error { return ErrDenied }

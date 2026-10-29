@@ -61,6 +61,7 @@ and `/readyz` fails closed, naming the check. See the
 | (none, secret) | `AUTH_SESSION_SUCCESSOR_KEY` or `AUTH_SESSION_SUCCESSOR_KEY_FILE` | unset | 32 bytes, base64url without padding. Derives the rotated refresh credential that a 30 s grace replay returns again. |
 | `--jwt-issuer` | `AUTH_JWT_ISSUER` | `dev-health-ops` | `iss` of the access token; must equal go-api's `JWT_ISSUER`. |
 | `--jwt-audience` | `AUTH_JWT_AUDIENCE` | `dev-health-api` | `aud` of the access token; must equal go-api's `JWT_AUDIENCE`. |
+| (none) | `AUTH_LEGACY_JWT_AUDIENCE` | `dev-health-api` | `aud` that the `eddsa` class checks go-api's HS256 compatibility access token with; must equal go-api's `JWT_AUDIENCE` before the eddsa flip. Set but empty is refused at start. The `hs256_compat` class ignores it and uses `AUTH_JWT_AUDIENCE`. |
 | (none, secret) | `AUTH_VALKEY_URI` or `AUTH_VALKEY_URI_FILE` | unset | `redis://` or `rediss://` URI on database 1 (path `/1`) of the shared rate-limit store. Required, and refused at startup when absent, while the session routes are mounted (they carry the compatibility refresh limit, and the login, credential and social link limits); with the session routes off it is checked for shape only and never dialled. Nothing dials at startup: an unreachable store fails the `valkey` readiness check and answers the limited routes with a 500. |
 | `--orgs-owned` | `AUTH_ORGS_OWNED` | `false` | `true` makes auth-service the only writer of organizations: the sign-in organization projection then reads no public table and writes nothing, and an organization missing from `auth.organizations` answers not found. Mounts no route. Turn it on only after the organization backfill is complete; once it is `true`, `dho auth orgs-backfill` refuses (exit 3, dry run included) before it connects to any database. Any other value than `true` or `false` fails startup. |
 | `--social-link-routes` | `AUTH_SOCIAL_LINK_ROUTES` | `false` | `true` mounts the bearer-only social link and unlink routes (`POST /v1/identities/social`, `DELETE /v1/identities/social/{id}`; see [identity linking](identity-linking.md)); any other value than `true` or `false` fails startup, and `true` needs the session secrets. |
@@ -69,6 +70,12 @@ and `/readyz` fails closed, naming the check. See the
 | `--healthcheck` | | | Probes this deployment's own operator `/readyz` over loopback; exit 0 only on HTTP 200. For container healthchecks. |
 
 Durations take Go syntax (`30s`, `5m`).
+
+### Session route bearer
+
+The session, social link and change-password routes read their bearer through the route's endpoint-profile row. With `AUTH_TOKEN_ISSUER_URL` set, they accept the EdDSA user access token of audience `auth-service` (access-token.v1), checked against the keys the JWKS publishes: it needs a valid `sid`, its session must be live, and the session's `token_version` pin must equal the user's current `token_version`. The HS256 compatibility access token stays accepted on the same rows. Without `AUTH_TOKEN_ISSUER_URL` the routes verify the HS256 compatibility access token only.
+
+The session routes accept the EdDSA token with audience `auth-service` only. While the session routes are mounted, the service therefore refuses to start with the eddsa access token class unless `AUTH_JWT_AUDIENCE` is `auth-service`; the chart renders `dev-health-api` for that class, so the class stays off until the issuer switch mints the session route audience. Under that class the HS256 compatibility access token is checked with `AUTH_LEGACY_JWT_AUDIENCE` (go-api's `JWT_AUDIENCE`, `dev-health-api` when unset), not with `AUTH_JWT_AUDIENCE`.
 
 ### Rate limits
 

@@ -47,7 +47,7 @@ func TestSessionRoutesWithoutKeysAreExactlyTheRefreshLogoutStubs(t *testing.T) {
 	if want := "POST " + refreshPattern + ",POST " + logoutPattern; strings.Join(got, ",") != want {
 		t.Fatalf("mounted %v; want exactly %s", got, want)
 	}
-	if credentials, _, err := credentialRoutes(authconfig.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, authschema.ValidatedIdentifier{}, nil); err != nil || len(credentials) != 0 {
+	if credentials, _, err := credentialRoutes(authconfig.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, authschema.ValidatedIdentifier{}, nil, nil); err != nil || len(credentials) != 0 {
 		t.Fatalf("keyless credential routes %d err %v; want none, so the unthrottled set is exactly the 2 stubs", len(credentials), err)
 	}
 	if len(routesNamed(routes, issuePattern)) != 0 {

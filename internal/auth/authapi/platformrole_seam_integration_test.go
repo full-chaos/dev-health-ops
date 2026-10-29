@@ -22,8 +22,7 @@ func TestAuthServiceStateOnSameRules(t *testing.T) {
 	env := platformroleseam.Start(ctx, t, true)
 	assigned := env.User(ctx, t, false, true)
 	publicOnly := env.User(ctx, t, true, false)
-	expired := env.User(ctx, t, true, true)
-	env.Expire(ctx, t, expired)
+	expired := env.ExpiredUser(ctx, t, true)
 	disabled := env.User(ctx, t, true, true)
 	env.Disable(ctx, t, disabled)
 	on := PGUsers{Pool: env.Admin, AuthSchema: env.Schema, PlatformRolesOwned: true}

@@ -7,12 +7,14 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
@@ -190,13 +192,19 @@ func TestStoreLocksNoAssignmentRow(t *testing.T) {
 	// The guard statements run after the lock is taken, so they read the clock
 	// of their own statement: now() is the transaction start, before the wait,
 	// and clock_timestamp() can change inside one statement.
-	for _, clock := range []string{"now()", "clock_timestamp()", "current_timestamp", "transaction_timestamp()"} {
-		if strings.Contains(strings.ToLower(string(src)), clock) {
-			t.Errorf("store.go reads %s; the guards read statement_timestamp()", clock)
-		}
+	ruleSrc, err := os.ReadFile(filepath.Join("rule", "rule.go"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if strings.Count(string(src), "statement_timestamp()") < 2 {
-		t.Error("the active rule and the expiry check do not both read statement_timestamp()")
+	for name, text := range map[string]string{"store.go": string(src), "rule/rule.go": string(ruleSrc)} {
+		for _, clock := range []string{"now()", "clock_timestamp()", "current_timestamp", "transaction_timestamp()"} {
+			if strings.Contains(strings.ToLower(text), clock) {
+				t.Errorf("%s reads %s; the guards read statement_timestamp()", name, clock)
+			}
+		}
+		if !strings.Contains(text, "statement_timestamp()") {
+			t.Errorf("%s does not read statement_timestamp(): the active rule (rule.go) and the expiry check (store.go) both read it", name)
+		}
 	}
 	if writeLock != "auth.platform_role_assignments:write" {
 		t.Errorf("write lock name = %q: every writer of the table must take the same lock", writeLock)
@@ -206,8 +214,8 @@ func TestStoreLocksNoAssignmentRow(t *testing.T) {
 // HoldsSQL and the store's guards are one rule: the same condition text over
 // their own aliases, and the subquery's aliases never shadow a caller's.
 func TestHoldsSQLIsTheStoreRule(t *testing.T) {
-	if activeSQL != activeRule("r", "p") {
-		t.Fatalf("activeSQL = %q, want activeRule(r, p)", activeSQL)
+	if activeSQL != rule.ActiveRule("r", "p") {
+		t.Fatalf("activeSQL = %q, want rule.ActiveRule(r, p)", activeSQL)
 	}
 	for _, rule := range []string{"kind = 'user'", "disabled_at IS NULL", "expires_at > statement_timestamp()"} {
 		if !strings.Contains(activeSQL, rule) {
@@ -215,7 +223,7 @@ func TestHoldsSQLIsTheStoreRule(t *testing.T) {
 		}
 	}
 	got := HoldsSQL(`"auth"`, "p.id", "$2")
-	if !strings.Contains(got, activeRule("pra_held", "pra_holder")) {
+	if !strings.Contains(got, rule.ActiveRule("pra_held", "pra_holder")) || got != rule.HoldsSQL(`"auth"`, "p.id", "$2") {
 		t.Errorf("HoldsSQL = %q, want the store rule over its own aliases", got)
 	}
 	for _, want := range []string{`FROM "auth".platform_role_assignments pra_held JOIN "auth".principals pra_holder ON pra_holder.id = pra_held.principal_id`,

@@ -113,7 +113,7 @@ func (o Operator) refuseWhileUsersOwned(writes bool) error {
 }
 
 func (o Operator) store(db pgDB) pgStore {
-	return pgStore{Pool: db, Now: o.Now, UsersOwned: o.UsersOwned}
+	return pgStore{Pool: db, Now: o.Now, UsersOwned: o.UsersOwned, PlatformRolesOwned: o.PlatformRolesOwned}
 }
 
 // inTransaction runs fn over one transaction: committed when it returns nil,
@@ -157,6 +157,9 @@ type CreateUserInput struct {
 // username must be free, then the password passes the shared policy.
 func (o Operator) CreateUser(ctx context.Context, in CreateUserInput) (*User, error) {
 	if err := o.refuseWhileUsersOwned(true); err != nil {
+		return nil, err
+	}
+	if err := refuseSuperuserWhileOwned(o.PlatformRolesOwned, in.Superuser); err != nil {
 		return nil, err
 	}
 	var created *fullUser
@@ -406,6 +409,9 @@ func (o Operator) DeleteUser(ctx context.Context, in DeleteUserInput) (*DeleteUs
 // refusal rolls the whole update back.
 func (o Operator) UpdateUser(ctx context.Context, in UpdateUserInput) (*UpdateUserResult, error) {
 	if err := o.refuseWhileUsersOwned(in.WritesUsers()); err != nil {
+		return nil, err
+	}
+	if err := refuseSuperuserWhileOwned(o.PlatformRolesOwned, in.Superuser != nil); err != nil {
 		return nil, err
 	}
 	hasProfileChange := in.hasProfileChange()

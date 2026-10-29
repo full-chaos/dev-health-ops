@@ -287,6 +287,12 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 	if err != nil {
 		return err
 	}
+	beforeReaders := make(map[string][]GrantRecord, len(options.SessionReaderRoles))
+	for _, reader := range options.SessionReaderRoles {
+		if beforeReaders[reader], err = snapshotDirectGrants(ctx, tx, options.Schema, reader); err != nil {
+			return err
+		}
+	}
 	statements = append(statements, publicStatements...)
 
 	for _, statement := range statements {
@@ -316,6 +322,18 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 		g.Object = publicSchema + "." + g.Object
 		lost = append(lost, g)
 	}
+	// A session reader's losses count too (the platform roles switch turned
+	// off takes its platform role read), named by the reader.
+	for _, reader := range options.SessionReaderRoles {
+		afterReader, err := snapshotDirectGrants(ctx, tx, options.Schema, reader)
+		if err != nil {
+			return err
+		}
+		for _, g := range narrowedGrants(beforeReaders[reader], afterReader) {
+			g.Role = reader
+			lost = append(lost, g)
+		}
+	}
 	sort.Slice(lost, func(i, j int) bool { return lost[i].less(lost[j]) })
 	if len(lost) > 0 {
 		digest := narrowingDigest(lost)
@@ -333,6 +351,11 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 			if err != nil {
 				return err
 			}
+			readers, err := retainReaderPlatformGrants(ctx, tx, lost, schemaID)
+			if err != nil {
+				return err
+			}
+			kept = append(kept, readers...)
 			logger.WarnContext(
 				ctx, "runtime grants narrowing deferred with operator acknowledgement",
 				"schema", options.Schema, "runtime_role", options.RuntimeRole,

@@ -7,22 +7,21 @@ package platformrole
 
 import (
 	"errors"
-	"fmt"
-	"strings"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 // PlatformAdmin is the catalog's platform administrator role.
-const PlatformAdmin = "platform_admin"
+const PlatformAdmin = rule.PlatformAdmin
 
 // GrantAction is the platform action a granter or revoker must hold now.
 const GrantAction = "admin.users"
 
 // OwnedEnv is the platform-roles-owned switch: while it is not true, public
 // users.is_superuser is still the authority and these writes are refused.
-const OwnedEnv = "AUTH_PLATFORM_ROLES_OWNED"
+const OwnedEnv = rule.OwnedEnv
 
 var (
 	ErrNotPlatformRole   = errors.New("platformrole: the role is not a platform role of the catalog")
@@ -39,16 +38,9 @@ var (
 
 // OwnedFromLookup reads OwnedEnv: unset, empty or false is off, true is on,
 // any other value is an error. Case and surrounding space are ignored, as for
-// AUTH_USERS_OWNED.
+// AUTH_USERS_OWNED. It is rule.OwnedFromLookup, the one parse.
 func OwnedFromLookup(lookup secrets.LookupEnv) (bool, error) {
-	raw, _ := lookup(OwnedEnv)
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "", "false":
-		return false, nil
-	case "true":
-		return true, nil
-	}
-	return false, fmt.Errorf("%s must be true or false", OwnedEnv)
+	return rule.OwnedFromLookup(lookup)
 }
 
 // Authority is the platform authority a principal holds now. The zero value

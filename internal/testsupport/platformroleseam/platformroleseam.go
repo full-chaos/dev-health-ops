@@ -14,12 +14,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/full-chaos/dev-health-ops/internal/audit"
-	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 )
 
 const password = "platformroleseam-test-only-not-a-credential"
@@ -122,72 +122,75 @@ func (e *Env) ConnectAs(ctx context.Context, t testing.TB, role string) *pgxpool
 // assignment, whatever public says.
 func (e *Env) User(ctx context.Context, t testing.TB, publicSuperuser, assigned bool) uuid.UUID {
 	t.Helper()
-	return e.UserWithID(ctx, t, uuid.New(), "local", publicSuperuser, assigned)
+	id := uuid.New()
+	pgseed.User(ctx, t, e.Admin, id.String())
+	return e.Project(ctx, t, id, publicSuperuser, assigned)
 }
 
-// UserWithID is User with the id and the public auth_provider given. A public
-// row the migrated schema already seeds (the proof principals) keeps its
-// email and gets is_superuser and auth_provider.
-func (e *Env) UserWithID(ctx context.Context, t testing.TB, id uuid.UUID, provider string, publicSuperuser, assigned bool) uuid.UUID {
+// Project sets an existing public user's is_superuser (the proof principals
+// are seeded by the migrated schema) and projects its auth principal, with the
+// no-granter platform_admin assignment when assigned.
+func (e *Env) Project(ctx context.Context, t testing.TB, id uuid.UUID, publicSuperuser, assigned bool) uuid.UUID {
 	t.Helper()
-	email := fmt.Sprintf("seam-%s@example.test", id.String()[:8])
-	if _, err := e.Admin.Exec(ctx, `INSERT INTO public.users
-	(id, email, password_hash, auth_provider, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
-VALUES ($1, $2, NULL, $4, true, true, $3, 0, now(), now())
-ON CONFLICT (id) DO UPDATE SET is_superuser = EXCLUDED.is_superuser, auth_provider = EXCLUDED.auth_provider`, id, email, publicSuperuser, provider); err != nil {
-		t.Fatalf("seed public.users: %v", err)
-	}
-	if _, err := e.store.BackfillUser(ctx, identity.BackfillTarget{ID: id, Email: email, Active: true, Verified: true, Superuser: assigned}, false); err != nil {
+	pgseed.SetUserState(ctx, t, e.Admin, id.String(), true, publicSuperuser, 0)
+	if _, err := e.store.BackfillUser(ctx, identity.BackfillTarget{ID: id, Email: e.email(ctx, t, id), Active: true, Verified: true, Superuser: assigned}, false); err != nil {
 		t.Fatalf("project the auth principal: %v", err)
 	}
 	return id
 }
 
-// Disable disables the user's auth principal (public is left as it is).
-func (e *Env) Disable(ctx context.Context, t testing.TB, id uuid.UUID) {
+func (e *Env) email(ctx context.Context, t testing.TB, id uuid.UUID) string {
 	t.Helper()
 	var email string
 	if err := e.Admin.QueryRow(ctx, `SELECT email FROM public.users WHERE id = $1`, id).Scan(&email); err != nil {
 		t.Fatal(err)
 	}
+	return email
+}
+
+// Disable disables the user's auth principal (public is left as it is).
+func (e *Env) Disable(ctx context.Context, t testing.TB, id uuid.UUID) {
+	t.Helper()
 	var assigned bool
 	if err := e.Admin.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM auth.platform_role_assignments WHERE principal_id = $1)`, id).Scan(&assigned); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.store.BackfillUser(ctx, identity.BackfillTarget{ID: id, Email: email, Active: false, Verified: true, Superuser: assigned}, false); err != nil {
+	if _, err := e.store.BackfillUser(ctx, identity.BackfillTarget{ID: id, Email: e.email(ctx, t, id), Active: false, Verified: true, Superuser: assigned}, false); err != nil {
 		t.Fatalf("disable the auth principal: %v", err)
 	}
 }
 
-// Expire replaces the user's assignment by one that expired a minute ago.
-func (e *Env) Expire(ctx context.Context, t testing.TB, id uuid.UUID) {
+// ExpiredUser is User whose only assignment was granted (through the platform
+// role store, by an administrator of its own) with an expiry that has passed
+// on the database clock.
+func (e *Env) ExpiredUser(ctx context.Context, t testing.TB, publicSuperuser bool) uuid.UUID {
 	t.Helper()
-	var old uuid.UUID
-	if err := e.Admin.QueryRow(ctx, `SELECT id FROM auth.platform_role_assignments WHERE principal_id = $1`, id).Scan(&old); err != nil {
+	id := e.User(ctx, t, publicSuperuser, false)
+	granter := e.User(ctx, t, false, true)
+	roles, err := platformrole.New(platformrole.Config{Pool: e.Admin, Schema: e.Schema})
+	if err != nil {
 		t.Fatal(err)
 	}
-	expired := uuid.New()
-	subject := id.String()
-	err := audit.Commit(ctx, e.Admin, e.Schema, audit.Mutation{
-		Apply: func(ctx context.Context, tx audit.TxOps) error {
-			if _, err := tx.Exec(ctx, `DELETE FROM auth.platform_role_assignments WHERE id = $1`, old); err != nil {
-				return err
-			}
-			_, err := tx.Exec(ctx, `INSERT INTO auth.platform_role_assignments (id, principal_id, role_key, expires_at)
-VALUES ($1, $2, 'platform_admin', statement_timestamp() - interval '1 minute')`, expired, id)
-			return err
-		},
-		Audit: audit.AuditEvent{EventType: "auth.platform_role.granted", Outcome: audit.OutcomeAllowed, SubjectPrincipalID: &subject,
-			Attributes: map[string]any{"reason_code": "role_granted", "target_kind": "principal", "target_id": subject}},
-		Events: []audit.OutboxEvent{
-			{AggregateType: "platform_role_assignment", AggregateID: provisioning.WireID("platform_role_assignment", old.String()),
-				EventType: "platform_role_assignment.revoked", Change: map[string]any{"status": "revoked"}},
-			{AggregateType: "platform_role_assignment", AggregateID: provisioning.WireID("platform_role_assignment", expired.String()),
-				EventType: "platform_role_assignment.granted", Change: map[string]any{"status": "active"}},
-		},
-	})
-	if err != nil {
-		t.Fatalf("expire the assignment: %v", err)
+	var expires time.Time
+	if err := e.Admin.QueryRow(ctx, `SELECT statement_timestamp() + interval '2 seconds'`).Scan(&expires); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := roles.Grant(ctx, platformrole.GrantInput{Actor: granter, Principal: id, Role: platformrole.PlatformAdmin, ExpiresAt: &expires}); err != nil {
+		t.Fatalf("grant an expiring assignment: %v", err)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		var passed bool
+		if err := e.Admin.QueryRow(ctx, `SELECT statement_timestamp() > $1`, expires).Scan(&passed); err != nil {
+			t.Fatal(err)
+		}
+		if passed {
+			return id
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the assignment did not expire on the database clock")
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
 }
 
@@ -196,13 +199,7 @@ VALUES ($1, $2, 'platform_admin', statement_timestamp() - interval '1 minute')`,
 func (e *Env) Member(ctx context.Context, t testing.TB, user uuid.UUID, role string) uuid.UUID {
 	t.Helper()
 	org := uuid.New()
-	if _, err := e.Admin.Exec(ctx, `INSERT INTO public.organizations (id, slug, name, tier, is_active, created_at, updated_at)
-VALUES ($1, $2, 'seam', 'free', true, now(), now())`, org, "seam-"+org.String()[:8]); err != nil {
-		t.Fatalf("seed public.organizations: %v", err)
-	}
-	if _, err := e.Admin.Exec(ctx, `INSERT INTO public.memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
-VALUES ($1, $2, $3, $4, now(), now(), now())`, uuid.New(), org, user, role); err != nil {
-		t.Fatalf("seed public.memberships: %v", err)
-	}
+	pgseed.Org(ctx, t, e.Admin, org.String(), "free")
+	pgseed.Membership(ctx, t, e.Admin, uuid.NewString(), user.String(), org.String(), role)
 	return org
 }

@@ -8,6 +8,7 @@ internal/api/pytime
 internal/auth/edgetoken
 internal/auth/httpapi
 internal/auth/passwordhash
+internal/auth/platformrole/rule
 internal/auth/sessionid
 internal/chmigrate
 internal/cli

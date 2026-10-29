@@ -210,3 +210,12 @@ var ErrUsersOwned = usersowned.ErrRefused
 var ErrPlatformRolesOwned = usersowned.ErrPlatformRolesRefused
 
 func (s pgStore) refuseWhileUsersOwned() error { return usersowned.RefuseWhileUsersOwned(s.UsersOwned) }
+
+// refuseSuperuserWhileOwned is the guard of a write that sets is_superuser:
+// while auth-service owns the platform roles, it refuses before it writes.
+func refuseSuperuserWhileOwned(owned, writesSuperuser bool) error {
+	if owned && writesSuperuser {
+		return ErrPlatformRolesOwned
+	}
+	return nil
+}

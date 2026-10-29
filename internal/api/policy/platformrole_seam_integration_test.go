@@ -9,6 +9,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/platformroleseam"
 )
 
@@ -34,10 +37,10 @@ func TestUserStateReadsTheAssignmentWhileOwned(t *testing.T) {
 	env := platformroleseam.Start(ctx, t, true)
 	assigned := env.User(ctx, t, false, true)
 	publicOnly := env.User(ctx, t, true, false)
-	expired := env.User(ctx, t, true, true)
-	env.Expire(ctx, t, expired)
+	expired := env.ExpiredUser(ctx, t, true)
 	disabled := env.User(ctx, t, true, true)
 	env.Disable(ctx, t, disabled)
+	service := serviceAccountWithAssignment(t, ctx, env)
 	on := PGStore{Pool: env.Reader, AuthSchema: "auth", PlatformRolesOwned: true}
 	off := PGStore{Pool: env.Reader, AuthSchema: "auth"}
 	for name, read := range seamReads {
@@ -50,6 +53,7 @@ func TestUserStateReadsTheAssignmentWhileOwned(t *testing.T) {
 			{"public superuser, no assignment", publicOnly, false, true},
 			{"an expired assignment", expired, false, true},
 			{"a disabled principal", disabled, false, true},
+			{"a service account principal", service, false, false},
 		} {
 			for store, want := range map[*PGStore]bool{&on: c.on, &off: c.off} {
 				got, ok, err := read(*store, ctx, c.id)
@@ -76,4 +80,34 @@ func TestUserStateAuthReadErrorIsStoreUnavailableWhileOwned(t *testing.T) {
 			t.Errorf("%s: superuser %v ok %v err %v, want the grant error", name, got, ok, err)
 		}
 	}
+}
+
+// serviceAccountWithAssignment is a public user whose auth principal is a
+// service account holding platform_admin: the platform role rule holds only
+// for a user principal.
+func serviceAccountWithAssignment(t *testing.T, ctx context.Context, env *platformroleseam.Env) uuid.UUID {
+	t.Helper()
+	id := uuid.New()
+	pgseed.User(ctx, t, env.Admin, id.String())
+	principal, assignment := id.String(), uuid.New()
+	err := audit.Commit(ctx, env.Admin, env.Schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			if _, err := tx.Exec(ctx, `INSERT INTO auth.principals (id, kind, display_name) VALUES ($1, 'service_account', 'svc')`, id); err != nil {
+				return err
+			}
+			_, err := tx.Exec(ctx, `INSERT INTO auth.platform_role_assignments (id, principal_id, role_key) VALUES ($1, $2, 'platform_admin')`, assignment, id)
+			return err
+		},
+		Audit: audit.AuditEvent{EventType: "auth.principal.projected", Outcome: audit.OutcomeAllowed, SubjectPrincipalID: &principal,
+			Attributes: map[string]any{"reason_code": "principal_projected", "target_kind": "principal", "target_id": principal}},
+		Events: []audit.OutboxEvent{
+			{AggregateType: "principal", AggregateID: provisioning.WireID("principal", principal), EventType: "principal.created", Change: map[string]any{"status": "active"}},
+			{AggregateType: "platform_role_assignment", AggregateID: provisioning.WireID("platform_role_assignment", assignment.String()),
+				EventType: "platform_role_assignment.granted", Change: map[string]any{"status": "active"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("plant a service account with an assignment: %v", err)
+	}
+	return id
 }

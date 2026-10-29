@@ -41,6 +41,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
@@ -234,7 +235,7 @@ type Config struct {
 	OrgsOwned bool
 
 	// PlatformRolesOwned is AUTH_PLATFORM_ROLES_OWNED, parsed by
-	// platformrole.OwnedFromLookup: the sign-in state reads is_superuser from
+	// rule.OwnedFromLookup: the sign-in state reads is_superuser from
 	// the auth platform role assignments.
 	PlatformRolesOwned bool
 
@@ -509,6 +510,9 @@ func Load(spec Spec) (Config, error) {
 		return Config{}, err
 	}
 	if cfg.OrgsOwned, err = orgsOwned(lookup); err != nil {
+		return Config{}, err
+	}
+	if cfg.PlatformRolesOwned, err = rule.OwnedFromLookup(lookup); err != nil {
 		return Config{}, err
 	}
 	if cfg.SSO, err = ssoSettings(lookup); err != nil {

@@ -65,6 +65,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/customerpush"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
@@ -266,20 +267,21 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			Now: deps.Now,
 		})...)
 		routes = append(routes, admin.Routes(admin.Deps{
-			Pool:          deps.Pool,
-			Valkey:        deps.Valkey,
-			Guard:         deps.Guard,
-			Logger:        logger,
-			ClickHouseDSN: deps.ClickHouseDSN,
-			ClickHouse:    deps.ClickHouse,
-			Decryptor:     deps.Decryptor,
-			PagerDuty:     deps.PagerDuty,
-			HTTPDoer:      deps.HTTPDoer,
-			Now:           deps.Now,
-			Write:         WriteError,
-			Limits:        limits,
-			Invites:       deps.Invites,
-			UsersOwned:    deps.UsersOwned,
+			Pool:               deps.Pool,
+			Valkey:             deps.Valkey,
+			Guard:              deps.Guard,
+			Logger:             logger,
+			ClickHouseDSN:      deps.ClickHouseDSN,
+			ClickHouse:         deps.ClickHouse,
+			Decryptor:          deps.Decryptor,
+			PagerDuty:          deps.PagerDuty,
+			HTTPDoer:           deps.HTTPDoer,
+			Now:                deps.Now,
+			Write:              WriteError,
+			Limits:             limits,
+			Invites:            deps.Invites,
+			UsersOwned:         deps.UsersOwned,
+			PlatformRolesOwned: deps.PlatformRolesOwned,
 		})...)
 	}
 	webhookintake.LogUnconfiguredSecrets(logger)
@@ -407,6 +409,11 @@ func configureWith(
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_users_owned", "api_users_owned_config_invalid", err)
 	}
+	deps.PlatformRolesOwned, err = rule.OwnedFromLookup(envsecrets.ProcessLookup)
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_platform_roles_owned", "api_platform_roles_owned_config_invalid", err)
+	}
 	deps.SessionIssuer, err = sessionIssuer(authProxy, envsecrets.ProcessLookup)
 	if err != nil {
 		closeComponents(depComponents)
@@ -414,7 +421,7 @@ func configureWith(
 	}
 	var scope []func(http.Handler) http.Handler
 	if deps.Pool != nil {
-		protected, err := newProtection(cfg, deps.Pool, logger)
+		protected, err := newProtection(cfg, deps.Pool, deps.PlatformRolesOwned, logger)
 		if err != nil {
 			closeComponents(depComponents)
 			return nil, dependencyFailure(ctx, logger, "api_access_token_verifier", "api_protection_config_failed", err)
@@ -613,7 +620,7 @@ type protection struct {
 // newProtection builds the principal service. The api verifies the access
 // token the Python api mints, so with a database it needs the same key:
 // JWT_SECRET_KEY is required, and a missing or short key stops startup.
-func newProtection(cfg config.Config, pool *pgxpool.Pool, logger *slog.Logger) (protection, error) {
+func newProtection(cfg config.Config, pool *pgxpool.Pool, platformRolesOwned bool, logger *slog.Logger) (protection, error) {
 	if !cfg.APIJWTSecret.Configured() {
 		return protection{}, errors.New("JWT_SECRET_KEY is required by dho api when API_DATABASE_URI is set")
 	}
@@ -629,7 +636,7 @@ func newProtection(cfg config.Config, pool *pgxpool.Pool, logger *slog.Logger) (
 	if err != nil {
 		return protection{}, err
 	}
-	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool, AuthSchema: authSchema}, logger)
+	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool, AuthSchema: authSchema, PlatformRolesOwned: platformRolesOwned}, logger)
 	if err != nil {
 		return protection{}, err
 	}

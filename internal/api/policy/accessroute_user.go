@@ -108,7 +108,7 @@ func (s PGStore) AccessUser(ctx context.Context, id uuid.UUID) (AccessUserRow, b
 		return AccessUserRow{}, false, nil
 	}
 	if err != nil {
-		return AccessUserRow{}, false, storeError(err, "SELECT on users (id, is_active, is_superuser, token_version, email, username, full_name)")
+		return AccessUserRow{}, false, storeError(err, "SELECT on users (id, is_active, is_superuser, token_version, email, username, full_name)"+s.superuserGrant())
 	}
 	row.State = UserState{IsActive: active != nil && *active, IsSuperuser: superuser != nil && *superuser}
 	if version != nil {

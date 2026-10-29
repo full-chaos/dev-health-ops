@@ -158,6 +158,9 @@ func (s pgStore) insertUser(ctx context.Context, in userCreateInput) (*fullUser,
 	if err := s.refuseWhileUsersOwned(); err != nil {
 		return nil, err
 	}
+	if err := refuseSuperuserWhileOwned(s.PlatformRolesOwned, in.IsSuperuser); err != nil {
+		return nil, err
+	}
 	if in.Email != nil {
 		// Look up the value the INSERT stores (lowered and stripped): a raw
 		// lookup misses " Dup@x " and the unique index then answers with a 500.
@@ -236,6 +239,9 @@ type userUpdate struct {
 // updateUser is UserService.update.
 func (s pgStore) updateUser(ctx context.Context, id uuid.UUID, patch userUpdate) (*fullUser, error) {
 	if err := s.refuseWhileUsersOwned(); err != nil {
+		return nil, err
+	}
+	if err := refuseSuperuserWhileOwned(s.PlatformRolesOwned, patch.IsSuperuser != nil); err != nil {
 		return nil, err
 	}
 	existing, err := s.fullUserByID(ctx, id)

@@ -172,10 +172,18 @@ func (r QueryAPISessionRead) Tables() []QueryAPIAuthTable {
 	return append([]QueryAPIAuthTable{{Table: r.Table, Columns: r.Columns}}, r.Also...)
 }
 
-// QueryAPISessionReadFor is the read in the named auth schema. RED STUB: the
-// sessions table alone.
+// QueryAPISessionReadFor is the read in the named auth schema: the sessions
+// table, and the platform role read while platformRolesOwned (the columns of
+// platformrole.HoldsSQL).
 func QueryAPISessionReadFor(schema string, platformRolesOwned bool) QueryAPISessionRead {
-	return QueryAPISessionRead{Schema: schema, Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at", "legacy_token_version"}}
+	read := QueryAPISessionRead{Schema: schema, Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at", "legacy_token_version"}}
+	if platformRolesOwned {
+		read.Also = []QueryAPIAuthTable{
+			{Table: "platform_role_assignments", Columns: []string{"principal_id", "role_key", "expires_at"}},
+			{Table: "principals", Columns: []string{"id", "kind", "disabled_at"}},
+		}
+	}
+	return read
 }
 
 // CheckQueryAPIAuthorization is query-api's readiness check when the deployment
@@ -323,10 +331,12 @@ func diffQueryAPIGrantsWithSessions(database string, posture RolePosture, sessio
 	if sessions != nil {
 		allowed[key("schema", sessions.Schema, "USAGE")] = struct{}{}
 		required[key("schema", sessions.Schema, "USAGE")] = "USAGE on schema " + sessions.Schema
-		for _, column := range sessions.Columns {
-			object := sessions.Schema + "." + sessions.Table + "." + column
-			allowed[key("column", object, "SELECT")] = struct{}{}
-			required[key("column", object, "SELECT")] = "SELECT on column " + object
+		for _, table := range sessions.Tables() {
+			for _, column := range table.Columns {
+				object := sessions.Schema + "." + table.Table + "." + column
+				allowed[key("column", object, "SELECT")] = struct{}{}
+				required[key("column", object, "SELECT")] = "SELECT on column " + object
+			}
 		}
 	}
 	held := map[string]struct{}{}

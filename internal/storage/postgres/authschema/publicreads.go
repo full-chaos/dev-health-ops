@@ -71,9 +71,13 @@ func PlatformRoleReaderColumns() []ColumnGrant {
 
 // SessionReaderReads is everything a session reader role reads in the auth
 // schema: SessionReaderColumns, then PlatformRoleReaderColumns while
-// platformRolesOwned. RED STUB: the session read alone.
+// platformRolesOwned.
 func SessionReaderReads(platformRolesOwned bool) []ColumnGrant {
-	return []ColumnGrant{SessionReaderColumns()}
+	reads := []ColumnGrant{SessionReaderColumns()}
+	if platformRolesOwned {
+		reads = append(reads, PlatformRoleReaderColumns()...)
+	}
+	return reads
 }
 
 // TableWriteGrant is a column-level SELECT and UPDATE grant on one ops-schema

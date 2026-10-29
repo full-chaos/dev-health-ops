@@ -28,7 +28,9 @@ type AuthRow struct {
 	TokenVersion int64
 	LastLoginAt  *time.Time
 	DisplayName  string
-	// RoleHeld is a platform_admin assignment that has not expired; RoleBackfilled one with no granter, expired or not.
+	// RoleHeld is the platform role store's rule (platformrole.HoldsSQL): an
+	// assignment that has not expired, of a principal that is not disabled;
+	// RoleBackfilled is one with no granter, expired or not.
 	RoleHeld       bool
 	RoleBackfilled bool
 	// Identities are every auth.external_identities row of the principal.
@@ -71,7 +73,7 @@ const (
 var GatedClasses = []string{
 	DiffMissingInAuth, DiffExtraInAuth, DiffPrincipalKind, DiffEmail, DiffActive, DiffVerified,
 	DiffPasswordHash, DiffPlatformRole, DiffTokenVersion, DiffIdentityMissing, DiffIdentityConflict, DiffExtraIdentity,
-	SkipUnknownHashFormat, SkipInvalidIdentity, DiffMembershipInactiveInPublic,
+	SkipUnknownHashFormat, SkipInvalidIdentity, DiffMembershipInactiveInPublic, DiffPlatformRoleDisabled,
 }
 
 // Reconciliation is the outcome of a read-only comparison of public.users with
@@ -256,7 +258,10 @@ func compareOne(ctx context.Context, tgt Target, row Row, a AuthRow, rep *Reconc
 		if !contains(skips, SkipUnknownHashFormat) && differsString(a.PasswordHash, target.PasswordHash) {
 			classes = append(classes, DiffPasswordHash)
 		}
-		if (row.Superuser && !a.RoleHeld) || (!row.Superuser && a.RoleBackfilled) {
+		switch {
+		case row.Superuser && !a.RoleHeld && !a.Active:
+			classes = append(classes, DiffPlatformRoleDisabled)
+		case (row.Superuser && !a.RoleHeld) || (!row.Superuser && a.RoleBackfilled):
 			classes = append(classes, DiffPlatformRole)
 		}
 		if a.TokenVersion != row.TokenVersion {

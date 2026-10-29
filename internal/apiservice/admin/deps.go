@@ -89,7 +89,7 @@ func Routes(deps Deps) []httpapi.Route {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	store := pgStore{Pool: deps.Pool, Now: deps.Now, UsersOwned: deps.UsersOwned}
+	store := pgStore{Pool: deps.Pool, Now: deps.Now, UsersOwned: deps.UsersOwned, PlatformRolesOwned: deps.PlatformRolesOwned}
 	auditWriter := audit.PGWriter{Now: deps.Now}
 	cache := newImpersonationCache(deps.Valkey, store, logger)
 	if deps.Now != nil {

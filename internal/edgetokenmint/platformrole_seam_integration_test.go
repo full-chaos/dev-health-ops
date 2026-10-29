@@ -29,7 +29,7 @@ func TestEdgeMintChecksBothStoresOnlyWhileOwned(t *testing.T) {
 		{"public superuser only", true, false, edgetokenmint.ErrPrincipalSuperuser, edgetokenmint.ErrPrincipalSuperuser},
 	} {
 		env := platformroleseam.Start(ctx, t, true)
-		env.UserWithID(ctx, t, uuid.MustParse(edgetokenmint.ProvePrincipalID), edgetokenmint.ServiceAuthProvider, c.publicSuperuser, c.assigned)
+		env.Project(ctx, t, uuid.MustParse(edgetokenmint.ProvePrincipalID), c.publicSuperuser, c.assigned)
 		org := env.Member(ctx, t, uuid.MustParse(edgetokenmint.ProvePrincipalID), "viewer").String()
 		for owned, want := range map[bool]error{true: c.on, false: c.off} {
 			_, err := edgetokenmint.LookupPrincipal(ctx, env.Reader, org, edgetokenmint.Options{PlatformRolesOwned: owned, AuthSchema: "auth"})
@@ -45,7 +45,7 @@ func TestEdgeMintRefusesOnAuthReadErrorWhileOwned(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	env := platformroleseam.Start(ctx, t, false)
-	env.UserWithID(ctx, t, uuid.MustParse(edgetokenmint.ProvePrincipalID), edgetokenmint.ServiceAuthProvider, false, false)
+	env.Project(ctx, t, uuid.MustParse(edgetokenmint.ProvePrincipalID), false, false)
 	org := env.Member(ctx, t, uuid.MustParse(edgetokenmint.ProvePrincipalID), "viewer").String()
 	if _, err := edgetokenmint.LookupPrincipal(ctx, env.Reader, org, edgetokenmint.Options{}); err != nil {
 		t.Fatalf("off: %v", err)

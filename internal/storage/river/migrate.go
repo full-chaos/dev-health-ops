@@ -703,12 +703,17 @@ func validateQueryAPIOptions(options MigrationOptions) error {
 		return ErrMigrationConfiguration
 	}
 	if read := options.QueryAPISessionRead; read != nil {
-		if !validIdentifier(read.Schema) || !validIdentifier(read.Table) || len(read.Columns) == 0 {
+		if !validIdentifier(read.Schema) {
 			return ErrMigrationConfiguration
 		}
-		for _, column := range read.Columns {
-			if !validIdentifier(column) {
+		for _, table := range read.Tables() {
+			if !validIdentifier(table.Table) || len(table.Columns) == 0 {
 				return ErrMigrationConfiguration
+			}
+			for _, column := range table.Columns {
+				if !validIdentifier(column) {
+					return ErrMigrationConfiguration
+				}
 			}
 		}
 	}
@@ -926,9 +931,13 @@ func applyRuntimeGrants(ctx context.Context, tx pgx.Tx, options MigrationOptions
 		return fmt.Errorf("take the privilege writer lock")
 	}
 	if read := options.QueryAPISessionRead; read != nil && options.QueryAPIRole != "" {
-		var present bool
-		if err := tx.QueryRow(ctx, "SELECT to_regclass(format('%I.%I', $1::text, $2::text)) IS NOT NULL", read.Schema, read.Table).Scan(&present); err != nil {
-			return fmt.Errorf("read whether the auth sessions table exists")
+		present := true
+		for _, table := range read.Tables() {
+			var exists bool
+			if err := tx.QueryRow(ctx, "SELECT to_regclass(format('%I.%I', $1::text, $2::text)) IS NOT NULL", read.Schema, table.Table).Scan(&exists); err != nil {
+				return fmt.Errorf("read whether the auth sessions table exists")
+			}
+			present = present && exists
 		}
 		var skipped bool
 		if options, skipped = resolveQueryAPISessionRead(options, present); skipped && options.Logger != nil {
@@ -1211,14 +1220,15 @@ func queryAPIGrantStatements(options MigrationOptions) []string {
 		)
 	}
 	if read := options.QueryAPISessionRead; read != nil {
-		columns := make([]string, len(read.Columns))
-		for i, column := range read.Columns {
-			columns[i] = pgx.Identifier{column}.Sanitize()
+		statements = append(statements, "GRANT USAGE ON SCHEMA "+pgx.Identifier{read.Schema}.Sanitize()+" TO "+role)
+		for _, table := range read.Tables() {
+			columns := make([]string, len(table.Columns))
+			for i, column := range table.Columns {
+				columns[i] = pgx.Identifier{column}.Sanitize()
+			}
+			statements = append(statements,
+				"GRANT SELECT ("+strings.Join(columns, ", ")+") ON TABLE "+pgx.Identifier{read.Schema, table.Table}.Sanitize()+" TO "+role)
 		}
-		statements = append(statements,
-			"GRANT USAGE ON SCHEMA "+pgx.Identifier{read.Schema}.Sanitize()+" TO "+role,
-			"GRANT SELECT ("+strings.Join(columns, ", ")+") ON TABLE "+pgx.Identifier{read.Schema, read.Table}.Sanitize()+" TO "+role,
-		)
 	}
 	return statements
 }

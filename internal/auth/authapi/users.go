@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/orgactivity"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -57,14 +58,20 @@ type PGUsers struct {
 	// AuthSchema is the validated auth schema, read while PlatformRolesOwned.
 	AuthSchema authschema.ValidatedIdentifier
 	// PlatformRolesOwned is AUTH_PLATFORM_ROLES_OWNED: is_superuser is read
-	// from the auth platform role assignments (platformrole.HoldsSQL).
+	// from the auth platform role assignments (rule.HoldsSQL).
 	PlatformRolesOwned bool
 }
 
-// stateSQL is StateOn's statement. RED STUB: the public column always.
+// stateSQL is StateOn's statement: is_superuser is public users.is_superuser,
+// or while PlatformRolesOwned the platform role rule over the auth schema in
+// the same statement (a failure of it fails the read).
 func (p PGUsers) stateSQL() string {
+	superuser := `COALESCE(is_superuser, false)`
+	if p.PlatformRolesOwned {
+		superuser = rule.HoldsSQL(authschema.Quote(p.AuthSchema), "public.users.id", "'"+rule.PlatformAdmin+"'")
+	}
 	return `
-		SELECT email, username, full_name, COALESCE(is_active, false), COALESCE(is_superuser, false),
+		SELECT email, username, full_name, COALESCE(is_active, false), ` + superuser + `,
 		       COALESCE(token_version, 0), auth_provider
 		FROM public.users WHERE id = $1`
 }

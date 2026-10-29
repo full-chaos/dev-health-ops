@@ -54,6 +54,7 @@ internal/auth/httpapi
 internal/auth/identity
 internal/auth/passwordhash
 internal/auth/passwordpolicy
+internal/auth/platformrole/rule
 internal/auth/ratelimitvalkey
 internal/auth/requestid
 internal/auth/session

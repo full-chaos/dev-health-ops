@@ -9,26 +9,22 @@ import (
 )
 
 // sessionReaderStatements makes each session reader role hold exactly
-// SessionReaderColumns in the auth schema: every privilege it holds there is
+// SessionReaderReads in the auth schema: every privilege it holds there is
 // revoked first (table-level revokes take the column privileges with them),
-// then USAGE on the schema and the column SELECT are granted. A reader role
+// then USAGE on the schema and the column SELECTs are granted. A reader role
 // that does not exist is refused by name.
 func sessionReaderStatements(ctx context.Context, conn querier, options Options, schemaID ValidatedIdentifier) ([]string, error) {
 	if len(options.SessionReaderRoles) == 0 {
 		return nil, nil
 	}
-	read := SessionReaderColumns()
-	tableID, err := NewValidatedIdentifier(read.Table)
-	if err != nil {
-		return nil, err
-	}
-	columns := make([]string, 0, len(read.Columns))
-	for _, name := range read.Columns {
-		columnID, err := NewValidatedIdentifier(name)
+	reads := SessionReaderReads(options.PlatformRolesOwned)
+	tableIDs := make([]ValidatedIdentifier, len(reads))
+	for i, read := range reads {
+		tableID, err := NewValidatedIdentifier(read.Table)
 		if err != nil {
 			return nil, err
 		}
-		columns = append(columns, quoteIdentifier(columnID))
+		tableIDs[i] = tableID
 	}
 	schema := quoteIdentifier(schemaID)
 	var statements []string
@@ -50,21 +46,34 @@ func sessionReaderStatements(ctx context.Context, conn querier, options Options,
 			fmt.Sprintf(`REVOKE ALL ON ALL SEQUENCES IN SCHEMA %s FROM %s`, schema, role),
 			fmt.Sprintf(`REVOKE ALL ON SCHEMA %s FROM %s`, schema, role),
 			fmt.Sprintf(`GRANT USAGE ON SCHEMA %s TO %s`, schema, role),
-			fmt.Sprintf(`GRANT SELECT (%s) ON %s.%s TO %s`, strings.Join(columns, ", "), schema, quoteIdentifier(tableID), role),
 		)
+		for i, read := range reads {
+			columns := make([]string, 0, len(read.Columns))
+			for _, name := range read.Columns {
+				columnID, err := NewValidatedIdentifier(name)
+				if err != nil {
+					return nil, err
+				}
+				columns = append(columns, quoteIdentifier(columnID))
+			}
+			statements = append(statements,
+				fmt.Sprintf(`GRANT SELECT (%s) ON %s.%s TO %s`, strings.Join(columns, ", "), schema, quoteIdentifier(tableIDs[i]), role))
+		}
 	}
 	return statements, nil
 }
 
 // sessionReaderViolations compares what each session reader role can do in
-// the auth schema with SessionReaderColumns, in both directions: a declared
+// the auth schema with SessionReaderReads, in both directions: a declared
 // column it cannot read, any other column or table privilege, any sequence
 // privilege, CREATE on the schema, or no USAGE.
 func sessionReaderViolations(ctx context.Context, conn *pgx.Conn, options Options) ([]Violation, error) {
-	read := SessionReaderColumns()
-	declared := map[string]bool{}
-	for _, column := range read.Columns {
-		declared[column] = true
+	declared := map[string]map[string]bool{}
+	for _, read := range SessionReaderReads(options.PlatformRolesOwned) {
+		declared[read.Table] = map[string]bool{}
+		for _, column := range read.Columns {
+			declared[read.Table][column] = true
+		}
 	}
 	var violations []Violation
 	for _, reader := range options.SessionReaderRoles {
@@ -128,7 +137,7 @@ func sessionReaderViolations(ctx context.Context, conn *pgx.Conn, options Option
 				rows.Close()
 				return nil, fmt.Errorf("%w: scanning column privileges: %v", ErrMigrationFailed, redactPGError(err))
 			}
-			want := table == read.Table && declared[column] && privilege == "SELECT"
+			want := declared[table][column] && privilege == "SELECT"
 			switch {
 			case held && !want:
 				violations = append(violations, Violation{Kind: "session_reader", Schema: options.Schema, Object: table + "." + column,

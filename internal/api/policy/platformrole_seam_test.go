@@ -3,7 +3,7 @@ package policy
 import (
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 )
 
 // Off, the statements are byte-equal to the reads before the switch existed;
@@ -18,7 +18,7 @@ func TestUserStateSQLIsByteEqualWhileNotOwned(t *testing.T) {
 	}
 	for schema, quoted := range map[string]string{"": `"auth"`, "acp": `"acp"`} {
 		got, err := PGStore{AuthSchema: schema, PlatformRolesOwned: true}.userStateSQL()
-		want := `SELECT is_active, ` + platformrole.HoldsSQL(quoted, "users.id", "'platform_admin'") + `, token_version FROM users WHERE id = $1`
+		want := `SELECT is_active, ` + rule.HoldsSQL(quoted, "users.id", "'platform_admin'") + `, token_version FROM users WHERE id = $1`
 		if got != want || err != nil {
 			t.Errorf("on (%q): %q %v, want %q", schema, got, err, want)
 		}
@@ -37,7 +37,7 @@ func TestAccessUserSQLIsByteEqualWhileNotOwned(t *testing.T) {
 	}
 	for schema, quoted := range map[string]string{"": `"auth"`, "acp": `"acp"`} {
 		got, err := PGStore{AuthSchema: schema, PlatformRolesOwned: true}.accessUserSQL()
-		want := `SELECT is_active, ` + platformrole.HoldsSQL(quoted, "users.id", "'platform_admin'") + `, token_version, email, username, full_name FROM users WHERE id = $1`
+		want := `SELECT is_active, ` + rule.HoldsSQL(quoted, "users.id", "'platform_admin'") + `, token_version, email, username, full_name FROM users WHERE id = $1`
 		if got != want || err != nil {
 			t.Errorf("on (%q): %q %v, want %q", schema, got, err, want)
 		}

@@ -3,7 +3,7 @@ package edgetokenmint
 import (
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 )
 
 // AMENDMENT 1: off, the statement is byte-equal to the public-only lookup; on,
@@ -17,7 +17,7 @@ func TestLookupSQLIsByteEqualWhileNotOwned(t *testing.T) {
 	}
 	for schema, quoted := range map[string]string{"": `"auth"`, "acp": `"acp"`} {
 		got, err := lookupSQLFor(Options{PlatformRolesOwned: true, AuthSchema: schema})
-		want := `SELECT u.id::text, u.email, u.is_active, (u.is_superuser OR ` + platformrole.HoldsSQL(quoted, "u.id", "'platform_admin'") + `), u.token_version,
+		want := `SELECT u.id::text, u.email, u.is_active, (u.is_superuser OR ` + rule.HoldsSQL(quoted, "u.id", "'platform_admin'") + `), u.token_version,
        COALESCE(u.auth_provider, ''), u.password_hash IS NOT NULL, m.role
   FROM users u
   LEFT JOIN memberships m ON m.user_id = u.id AND m.org_id = $2::uuid

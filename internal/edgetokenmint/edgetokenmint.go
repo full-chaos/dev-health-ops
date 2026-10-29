@@ -55,6 +55,9 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
 const (
@@ -302,9 +305,24 @@ func LookupAdminPrincipal(ctx context.Context, db RowQuerier, orgID string, opts
 	return lookupPrincipal(ctx, db, AdminProofPrincipalID, orgID, opts)
 }
 
-// lookupSQLFor is the lookup statement. RED STUB: public is_superuser only.
+// lookupSQLFor is the lookup statement: lookupSQL while the platform roles
+// switch is off; while on, the superuser column is public is_superuser OR the
+// platform role rule over the auth schema, in the same statement, so a failed
+// auth read fails the lookup.
 func lookupSQLFor(opts Options) (string, error) {
-	return lookupSQL, nil
+	if !opts.PlatformRolesOwned {
+		return lookupSQL, nil
+	}
+	schema := opts.AuthSchema
+	if schema == "" {
+		schema = "auth"
+	}
+	id, err := authschema.NewValidatedIdentifier(schema)
+	if err != nil {
+		return "", fmt.Errorf("edgetokenmint: auth schema: %w", err)
+	}
+	holds := rule.HoldsSQL(authschema.Quote(id), "u.id", "'"+rule.PlatformAdmin+"'")
+	return strings.Replace(lookupSQL, "u.is_superuser,", "(u.is_superuser OR "+holds+"),", 1), nil
 }
 
 func lookupPrincipal(ctx context.Context, db RowQuerier, principalID, orgID string, opts Options) (Principal, error) {

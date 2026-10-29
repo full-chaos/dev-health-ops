@@ -13,12 +13,13 @@ import (
 )
 
 // ownedParseCallers are the files that read AUTH_PLATFORM_ROLES_OWNED; each
-// reads it through OwnedFromLookup.
+// reads it through OwnedFromLookup or the leaf parse it is (rule.OwnedFromLookup).
 var ownedParseCallers = []string{
 	"cmd/auth-migrate/main.go",
 	"internal/adminops/users.go",
 	"internal/apiservice/service.go",
 	"internal/auth/authconfig/config.go",
+	"internal/auth/platformrole/platformrole.go",
 	"internal/auth/usersbackfill/command.go",
 	"internal/auth/usersbackfill/platformrole_command.go",
 	"internal/mintcli/edgetoken/main.go",
@@ -29,19 +30,20 @@ var ownedParseCallers = []string{
 // ownedNameDeclarations name the switch without reading it: the constant and
 // the option registries that list it for --help.
 var ownedNameDeclarations = []string{
-	"internal/auth/platformrole/platformrole.go",
+	"internal/auth/platformrole/rule/rule.go",
 	"internal/platform/config/queryapi_options.go",
 }
 
-// The switch has one parse: every process that reads it calls
-// OwnedFromLookup, and no other file spells its name.
+// The switch has one parse (rule.OwnedFromLookup, which OwnedFromLookup is):
+// every process that reads it calls one of the two, and no other file spells
+// its name.
 func TestPlatformRolesOwnedIsParsedByOneFunction(t *testing.T) {
 	root, err := moduleroot.Root()
 	if err != nil {
 		t.Fatal(err)
 	}
 	callers, named := map[string]bool{}, map[string]bool{}
-	call := regexp.MustCompile(`\bplatformrole\.OwnedFromLookup\(`)
+	call := regexp.MustCompile(`\b(platformrole|rule)\.OwnedFromLookup\(`)
 	for _, dir := range []string{"cmd", "internal"} {
 		err := filepath.WalkDir(filepath.Join(root, dir), func(path string, d fs.DirEntry, err error) error {
 			if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {

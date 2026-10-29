@@ -614,6 +614,8 @@ func inviteRefusal(err error) refusal {
 		{invite.ErrOrgNotFound, refusal{http.StatusNotFound, reasonOrganizationNotFound}},
 		{invite.ErrOrgSuspended, refusal{http.StatusConflict, reasonOrganizationInactive}},
 		{invite.ErrOrgConflict, refusal{http.StatusConflict, reasonOrganizationConflict}},
+		{invite.ErrNotFound, refusal{http.StatusNotFound, reasonInviteNotFound}},
+		{invite.ErrNotPending, refusal{http.StatusConflict, reasonInviteNotPending}},
 		{invite.ErrInviterNotFound, refusal{http.StatusNotFound, reasonInviterNotFound}},
 		{membership.ErrStateMoved, refusal{http.StatusConflict, reasonStateChanged}},
 	} {

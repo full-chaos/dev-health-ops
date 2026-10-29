@@ -71,3 +71,16 @@ func TestTheRuntimeRoleMayReadTheStateTableOnly(t *testing.T) {
 		t.Fatalf("restore_fence_state posture = %+v, want SELECT only", entry)
 	}
 }
+
+// The migration writes no fence row: a database is ready only after an operator
+// ran `auth-migrate restore-fence init` on it, so a restored database never
+// inherits a row from a migration that ran before the backup was taken.
+func TestTheRestoreFenceMigrationWritesNoRow(t *testing.T) {
+	sql := restoreFenceMigration(t)
+	if regexp.MustCompile(`(?i)INSERT\s+INTO\s+restore_fence_state`).MatchString(sql) {
+		t.Error("the migration inserts a restore_fence_state row; the operator's init verb writes it")
+	}
+	if !strings.Contains(sql, "'init'") {
+		t.Error("source does not allow the init verb's value")
+	}
+}

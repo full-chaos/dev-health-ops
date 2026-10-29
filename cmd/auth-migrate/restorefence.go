@@ -17,7 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
-const restoreFenceUsage = "usage: auth-migrate restore-fence export -out FILE | apply [-manifest FILE] [-blind-margin N] [-apply] | status"
+const restoreFenceUsage = "usage: auth-migrate restore-fence export -out FILE | apply [-manifest FILE] [-blind-margin N] [-apply] | init [-if-absent] | status\n  init " + restorefence.InitHelp
 
 type restoreFenceArgs struct {
 	verb        string
@@ -25,6 +25,7 @@ type restoreFenceArgs struct {
 	manifest    string
 	blindMargin int64
 	apply       bool
+	ifAbsent    bool
 }
 
 func parseRestoreFenceArgs(args []string, stderr io.Writer) (restoreFenceArgs, error) {
@@ -41,6 +42,8 @@ func parseRestoreFenceArgs(args []string, stderr io.Writer) (restoreFenceArgs, e
 		flags.StringVar(&parsed.manifest, "manifest", "", "the manifest exported from the shadow restore")
 		flags.Int64Var(&parsed.blindMargin, "blind-margin", 0, "raise every revision by this much (the fallback when the WAL after the target is gone)")
 		flags.BoolVar(&parsed.apply, "apply", false, "write the change (without it the run is a dry run that rolls back)")
+	case "init":
+		flags.BoolVar(&parsed.ifAbsent, "if-absent", false, "dev and compose bring-up only: exit 0 without writing when the timeline already has a fence row")
 	case "status":
 	default:
 		return restoreFenceArgs{}, errors.New("unknown verb")
@@ -112,6 +115,18 @@ func executeRestoreFence(parent context.Context, args []string, lookup secrets.L
 	}
 
 	switch parsed.verb {
+	case "init":
+		report, err := restorefence.Init(ctx, pool, schema, parsed.ifAbsent)
+		if err != nil {
+			fmt.Fprintf(stderr, "restore-fence error: %v\n", err)
+			return 1
+		}
+		if report.AlreadyFenced {
+			fmt.Fprintf(stdout, "restore-fence init timeline=%d already_fenced=true written=false\n", report.Timeline)
+			return 0
+		}
+		fmt.Fprintf(stdout, "restore-fence init timeline=%d written=true\n", report.Timeline)
+		return 0
 	case "status":
 		timeline, err := restorefence.Timeline(ctx, pool)
 		if err != nil {

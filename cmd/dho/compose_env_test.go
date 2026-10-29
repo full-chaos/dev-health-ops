@@ -56,6 +56,7 @@ var verbServices = map[string]string{
 	"auth-keys-init":                   "`dho mint envelope-keys`: writes the auth signing key files; only the DSN groups are checked",
 	"auth-migrate":                     "`auth-migrate`: a standalone one-shot binary that opens the database at once; its own DSN and role settings are not measured here",
 	"auth-grants":                      "`auth-migrate grants`: the same standalone binary with the grants verb; opens the database at once; its own DSN and role settings are not measured here",
+	"auth-fence-init":                  "`auth-migrate restore-fence init -if-absent`: the same standalone binary; opens the database at once; its own DSN and role settings are not measured here",
 	"go-sync-dispatch-route-activate":  "`dho workers routes apply`: opens the database at once; only the DSN groups are checked",
 	"go-sync-finalize-route-activate":  "`dho workers routes apply`: opens the database at once; only the DSN groups are checked",
 	"go-sync-post-route-activate":      "`dho workers routes apply`: opens the database at once; only the DSN groups are checked",

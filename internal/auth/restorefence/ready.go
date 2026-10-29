@@ -15,7 +15,7 @@ import (
 
 // ErrNotFenced reports that the current timeline has no fence record: the
 // database was restored or promoted and `auth-migrate restore-fence apply` has
-// not run for it.
+// not run for it, or it was never initialised with `restore-fence init`.
 var ErrNotFenced = errors.New("restorefence: the current timeline has no fence record")
 
 // ErrCheckFailed reports that the fence state could not be read. The check

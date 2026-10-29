@@ -381,8 +381,14 @@ func TestApplyOnANoLossTimelineChangesNothingAndClearsReadiness(t *testing.T) {
 	defer cancel()
 	db := newFenceDB(t, ctx)
 	db.stateT(t, ctx)
+	if err := Check(ctx, db.runtime, db.schema); !errors.Is(err, ErrNotFenced) {
+		t.Fatalf("a migrated database with no init = %v, want ErrNotFenced (0033 writes no row)", err)
+	}
+	if _, err := Init(ctx, db.admin, db.schema, false); err != nil {
+		t.Fatalf("init: %v", err)
+	}
 	if err := Check(ctx, db.runtime, db.schema); err != nil {
-		t.Fatalf("a migrated database is not ready: %v", err)
+		t.Fatalf("an initialised database is not ready: %v", err)
 	}
 	// Simulate the new timeline: the stamp of the old one is what a restored
 	// database carries; remove the row for the live timeline.
@@ -450,7 +456,7 @@ func TestApplyIsAllOrNothing(t *testing.T) {
 			t.Errorf("%s changed although the apply failed", k)
 		}
 	}
-	if n := restored.count(t, ctx, `SELECT count(*) FROM auth.restore_fence_state WHERE source <> 'migration'`); n != 0 {
+	if n := restored.count(t, ctx, `SELECT count(*) FROM auth.restore_fence_state `); n != 0 {
 		t.Errorf("a failed apply recorded %d fence rows", n)
 	}
 }
@@ -492,7 +498,7 @@ func TestTheRuntimeRoleCannotApplyOrWriteTheState(t *testing.T) {
 	if _, err := Apply(ctx, db.runtime, db.schema, manifest, Options{Apply: true}); !errors.Is(err, ErrPrivileges) {
 		t.Fatalf("apply as the runtime role = %v, want ErrPrivileges", err)
 	}
-	if _, err := db.runtime.Exec(ctx, `INSERT INTO auth.restore_fence_state (timeline_id, manifest_sha256, source) VALUES (999, 'initial', 'migration')`); err == nil {
+	if _, err := db.runtime.Exec(ctx, `INSERT INTO auth.restore_fence_state (timeline_id, manifest_sha256, source) VALUES (999, 'initial', 'init')`); err == nil {
 		t.Fatal("the runtime role wrote restore_fence_state")
 	}
 }
@@ -518,8 +524,11 @@ func TestTheRuntimeRoleReadsTheTimelineItself(t *testing.T) {
 	if viaRuntime < 1 || viaRuntime != viaControl {
 		t.Fatalf("the runtime role reads timeline %d, pg_control says %d", viaRuntime, viaControl)
 	}
+	if _, err := Init(ctx, db.admin, db.schema, false); err != nil {
+		t.Fatal(err)
+	}
 	if err := Check(ctx, db.runtime, db.schema); err != nil {
-		t.Fatalf("readiness of a migrated database as the runtime role: %v", err)
+		t.Fatalf("readiness of an initialised database as the runtime role: %v", err)
 	}
 }
 
@@ -660,5 +669,148 @@ func TestTheFenceCoversTheAuthorizationAndReplayFamiliesAndNamesTheOperatorActio
 	}
 	if n := restored.count(t, ctx, `SELECT count(*) FROM auth.users WHERE password_hash = 'h1'`); n != 1 {
 		t.Errorf("the fence must not touch a password hash (found %d with the older one)", n)
+	}
+}
+
+func TestInitWritesOneAuditedRowAndRefusesAnExistingOneAndTheRuntimeRole(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	db := newFenceDB(t, ctx)
+	if _, err := Init(ctx, db.runtime, db.schema, false); err == nil {
+		t.Fatal("the runtime role ran init")
+	}
+	if n := db.count(t, ctx, `SELECT count(*) FROM auth.restore_fence_state`); n != 0 {
+		t.Fatalf("a refused init wrote %d rows", n)
+	}
+	report, err := Init(ctx, db.admin, db.schema, false)
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if report.Timeline < 1 || report.AlreadyFenced {
+		t.Fatalf("report = %+v", report)
+	}
+	if n := db.count(t, ctx, `SELECT count(*) FROM auth.restore_fence_state WHERE manifest_sha256 = 'initial' AND source = 'init'`); n != 1 {
+		t.Fatalf("init wrote %d initial rows, want 1", n)
+	}
+	if n := db.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.restore_fence.initialized'`); n != 1 {
+		t.Fatalf("init wrote %d audit rows, want 1", n)
+	}
+	if _, err := Init(ctx, db.admin, db.schema, false); !errors.Is(err, ErrInitRefused) {
+		t.Fatalf("a second init = %v, want ErrInitRefused", err)
+	}
+	again, err := Init(ctx, db.admin, db.schema, true)
+	if err != nil || !again.AlreadyFenced {
+		t.Fatalf("init -if-absent on a fenced timeline = %+v, %v", again, err)
+	}
+	if n := db.count(t, ctx, `SELECT count(*) FROM auth.restore_fence_state`); n != 1 {
+		t.Fatalf("%d fence rows after the repeats, want 1", n)
+	}
+}
+
+// A restored database does not become ready by itself: the backup carries the rows of its own
+// timeline, and the live timeline of the restore has none until apply runs.
+func TestARowOfAnOlderTimelineDoesNotOpenReadiness(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	db := newFenceDB(t, ctx)
+	live, err := Timeline(ctx, db.admin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.commit(t, ctx, "organization.updated", 0, func(ctx context.Context, tx audit.TxOps) error {
+		_, err := tx.Exec(ctx, `INSERT INTO auth.restore_fence_state (timeline_id, manifest_sha256, source) VALUES ($1, 'initial', 'init')`, live+1)
+		return err
+	})
+	if err := Check(ctx, db.runtime, db.schema); !errors.Is(err, ErrNotFenced) {
+		t.Fatalf("a row of another timeline = %v, want ErrNotFenced", err)
+	}
+}
+
+// P2-1..P2-3 of round1096: a change after the target that removes access survives the restore.
+func (d *fenceDB) removalsT(t *testing.T, ctx context.Context) {
+	t.Helper()
+	principal := uuid.NewSHA1(uuid.NameSpaceURL, []byte("fence-principal"))
+	d.commit(t, ctx, "session.created", 0, func(ctx context.Context, tx audit.TxOps) error {
+		_, err := tx.Exec(ctx, `INSERT INTO auth.sessions (id, principal_id, token_hash, expires_at) VALUES ($1, $2, decode(md5('rs-session') || md5('rs-session-b'), 'hex'), now() + interval '1 day')`,
+			fenceCredID(70), principal)
+		return err
+	})
+	for i, id := range []uuid.UUID{fenceCredID(71), fenceCredID(72)} {
+		d.commit(t, ctx, "session.created", 0, func(ctx context.Context, tx audit.TxOps) error {
+			_, err := tx.Exec(ctx, `INSERT INTO auth.refresh_credentials (id, session_id, principal_id, token_hash, expires_at) VALUES ($1, $2, $3, decode(md5($4::text) || md5($4::text || 'b'), 'hex'), now() + interval '1 day')`,
+				id, fenceCredID(70), principal, fmt.Sprintf("rs-refresh-%d", i))
+			return err
+		})
+	}
+	wl := uuid.NewSHA1(uuid.NameSpaceURL, []byte("fence-wl"))
+	d.commit(t, ctx, "workload.created", 0, func(ctx context.Context, tx audit.TxOps) error {
+		_, err := tx.Exec(ctx, `INSERT INTO auth.workload_bindings (id, workload_principal_id, environment, trust_domain, issuer, namespace, service_account_name)
+VALUES ($1, $2, 'prod', 'example.invalid', 'https://issuer.example.invalid', 'ns', 'sa')`, fenceCredID(73), wl)
+		return err
+	})
+	d.must(t, ctx, `INSERT INTO auth.sso_flow_states (id, protocol, provider_id, flow_hash, expires_at) VALUES ($1, 'oidc', $2, decode(md5('rs-flow') || md5('rs-flow-b'), 'hex'), now() + interval '1 hour')`,
+		fenceCredID(74), fenceCredID(75))
+}
+
+func (d *fenceDB) removalsAfterT(t *testing.T, ctx context.Context) {
+	t.Helper()
+	d.commit(t, ctx, "session.rotated", 0, func(ctx context.Context, tx audit.TxOps) error {
+		_, err := tx.Exec(ctx, `UPDATE auth.refresh_credentials SET consumed_at = now() WHERE id = $1`, fenceCredID(71))
+		return err
+	})
+	d.commit(t, ctx, "service_account.disabled", 0, func(ctx context.Context, tx audit.TxOps) error {
+		_, err := tx.Exec(ctx, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1`, uuid.NewSHA1(uuid.NameSpaceURL, []byte("fence-sa")))
+		return err
+	})
+	d.commit(t, ctx, "workload.disabled", 0, func(ctx context.Context, tx audit.TxOps) error {
+		_, err := tx.Exec(ctx, `UPDATE auth.workload_bindings SET disabled_at = now() WHERE id = $1`, fenceCredID(73))
+		return err
+	})
+	d.commit(t, ctx, "organization.updated", 2, func(ctx context.Context, tx audit.TxOps) error {
+		_, err := tx.Exec(ctx, `UPDATE auth.organizations SET disabled_at = now() WHERE id = $1`, fenceOrgID(2))
+		return err
+	})
+	d.must(t, ctx, `INSERT INTO public.saml_assertion_replays (provider_id, assertion_id, expires_at) VALUES ($1, 'rs-assertion', now() + interval '1 day')`, fenceCredID(75))
+}
+
+func TestTheFenceCarriesEveryRemovalOfAccessAfterTheTarget(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	restored, end := newFenceDB(t, ctx), newFenceDB(t, ctx)
+	for _, d := range []*fenceDB{restored, end} {
+		d.stateT(t, ctx)
+		d.familiesT(t, ctx)
+		d.removalsT(t, ctx)
+	}
+	end.removalsAfterT(t, ctx)
+	manifest := exportEnd(t, ctx, end)
+	report, err := Apply(ctx, restored.admin, restored.schema, manifest, Options{Apply: true})
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	byName := map[string]SectionReport{}
+	for _, s := range report.Sections {
+		byName[s.Name] = s
+	}
+	for _, name := range []string{"auth.refresh_credentials", "auth.principals", "auth.workload_bindings", "auth.organizations", "public.saml_assertion_replays", "auth.sso_flow_states"} {
+		if byName[name].Changed != 1 || byName[name].Absent != 0 {
+			t.Errorf("%s changed %d absent %d, want 1 and 0", name, byName[name].Changed, byName[name].Absent)
+		}
+	}
+	for name, sql := range map[string]string{
+		"a refresh credential consumed after T is consumed again": `SELECT count(*) FROM auth.refresh_credentials WHERE id = '` + fenceCredID(71).String() + `' AND consumed_at IS NOT NULL`,
+		"the other refresh credential stays live":                 `SELECT count(*) FROM auth.refresh_credentials WHERE id = '` + fenceCredID(72).String() + `' AND consumed_at IS NULL AND revoked_at IS NULL`,
+		"a principal disabled after T is disabled again":          `SELECT count(*) FROM auth.principals WHERE id = '` + uuid.NewSHA1(uuid.NameSpaceURL, []byte("fence-sa")).String() + `' AND disabled_at IS NOT NULL`,
+		"a workload binding disabled after T is disabled again":   `SELECT count(*) FROM auth.workload_bindings WHERE disabled_at IS NOT NULL`,
+		"an organization disabled after T is disabled again":      `SELECT count(*) FROM auth.organizations WHERE id = '` + fenceOrgID(2).String() + `' AND disabled_at IS NOT NULL`,
+		"a SAML replay row of the legacy table is put back":       `SELECT count(*) FROM public.saml_assertion_replays WHERE assertion_id = 'rs-assertion'`,
+		"every SSO flow state of the restore is consumed":         `SELECT count(*) FROM auth.sso_flow_states WHERE consumed_at IS NOT NULL`,
+	} {
+		if n := restored.count(t, ctx, sql); n != 1 {
+			t.Errorf("%s: %d rows, want 1", name, n)
+		}
+	}
+	if n := restored.count(t, ctx, `SELECT count(*) FROM auth.organizations WHERE disabled_at IS NOT NULL`); n != 1 {
+		t.Errorf("%d organizations disabled, want exactly 1", n)
 	}
 }

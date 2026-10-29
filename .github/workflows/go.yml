@@ -54,6 +54,8 @@ on:
       - 'scripts/**'
       - 'src/dev_health_ops/config/**'
       - 'internal/chmigrate/history/**'
+      # The archived ClickHouse chain (CHAOS-11751): tests execute it against the head baseline.
+      - 'internal/chmigrate/archive/**'
       # The auth lineage's SQL is //go:embed-ed into
       # internal/storage/postgres/authschema, so a change to it changes the
       # compiled binary and is covered by that package's tests -- but it is

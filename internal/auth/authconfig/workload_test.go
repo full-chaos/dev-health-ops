@@ -141,3 +141,49 @@ func TestHTTPSOriginAcceptsOnlyAnExactHTTPSOriginWithAValidPort(t *testing.T) {
 		}
 	}
 }
+
+// AUTH_WORKLOAD_BOOTSTRAP turns the Compose bootstrap subject on, alone or
+// with the Kubernetes subject. Alone it needs no Kubernetes setting; it needs
+// the token issuer. A value other than true or false refuses startup.
+func TestTheWorkloadBootstrapSubjectLoadsAloneOrWithKubernetes(t *testing.T) {
+	alone := baseEnv()
+	alone[EnvTokenIssuerURL] = "https://auth.example.com"
+	alone[EnvWorkloadBootstrap] = "true"
+	cfg, err := Load(Spec{LookupEnv: lookupFrom(alone)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.WorkloadExchange != (WorkloadExchange{Bootstrap: true}) || !cfg.WorkloadExchange.Mounted() {
+		t.Fatalf("bootstrap alone: %+v", cfg.WorkloadExchange)
+	}
+	rendered := fmt.Sprint(slog.GroupValue(cfg.SafeAttrs()...))
+	if !strings.Contains(rendered, "workload_bootstrap_enabled=true") || !strings.Contains(rendered, "workload_exchange_enabled=false") {
+		t.Fatalf("the startup line does not say which subject is on: %s", rendered)
+	}
+
+	both := workloadEnv()
+	both[EnvWorkloadBootstrap] = "true"
+	if cfg, err = Load(Spec{LookupEnv: lookupFrom(both)}); err != nil || !cfg.WorkloadExchange.Enabled || !cfg.WorkloadExchange.Bootstrap {
+		t.Fatalf("both subjects: %+v %v", cfg.WorkloadExchange, err)
+	}
+
+	off := baseEnv()
+	off[EnvWorkloadBootstrap] = "false"
+	if cfg, err = Load(Spec{LookupEnv: lookupFrom(off)}); err != nil || cfg.WorkloadExchange.Mounted() {
+		t.Fatalf("false: %+v %v", cfg.WorkloadExchange, err)
+	}
+
+	noIssuer := baseEnv()
+	noIssuer[EnvWorkloadBootstrap] = "true"
+	if _, err = Load(Spec{LookupEnv: lookupFrom(noIssuer)}); err == nil ||
+		!strings.Contains(err.Error(), EnvWorkloadBootstrap) || !strings.Contains(err.Error(), EnvTokenIssuerURL) {
+		t.Fatalf("bootstrap without the token issuer: %v", err)
+	}
+
+	typo := baseEnv()
+	typo[EnvTokenIssuerURL] = "https://auth.example.com"
+	typo[EnvWorkloadBootstrap] = "yes"
+	if _, err = Load(Spec{LookupEnv: lookupFrom(typo)}); err == nil || !strings.Contains(err.Error(), EnvWorkloadBootstrap) || strings.Contains(err.Error(), "yes") {
+		t.Fatalf("a typo was not refused by name only: %v", err)
+	}
+}

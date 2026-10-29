@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -18,10 +17,7 @@ import (
 func TestPostgresRunStorePreservesArtifactCancellationAndNotificationSemantics(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer func() {
 		if err := instance.Close(context.Background()); err != nil {
 			t.Errorf("close PostgreSQL: %v", err)
@@ -32,7 +28,6 @@ func TestPostgresRunStorePreservesArtifactCancellationAndNotificationSemantics(t
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	createReportTables(t, ctx, pool)
 
 	const (
 		reportID     = "00000000-0000-4000-8000-000000000002"
@@ -211,10 +206,7 @@ INSERT INTO report_runs (
 func TestPostgresRunStoreReclaimsAnExpiredRunningRun(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer func() {
 		if err := instance.Close(context.Background()); err != nil {
 			t.Errorf("close PostgreSQL: %v", err)
@@ -225,7 +217,6 @@ func TestPostgresRunStoreReclaimsAnExpiredRunningRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	createReportTables(t, ctx, pool)
 
 	const (
 		reportID = "00000000-0000-4000-8000-000000000012"
@@ -394,12 +385,6 @@ WHERE run.id = $1::uuid`, exhaustedRunID).Scan(
 			t.Fatalf("missing reclaim metric %q:\n%s", sample, metrics)
 		}
 	}
-}
-
-func createReportTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
-	t.Helper()
-	// The migrated schema: the report graph carries its real columns, foreign keys and constraints.
-	pgschema.Apply(ctx, t, pool)
 }
 
 func readReportNextRunAt(

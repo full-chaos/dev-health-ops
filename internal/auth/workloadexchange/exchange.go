@@ -1,9 +1,9 @@
 // Package workloadexchange is auth-service's workload-token exchange: a
-// workload presents its Kubernetes projected ServiceAccount token, the
-// Kubernetes TokenReview API authenticates it, the workload registry maps the
-// reviewed identity to a registered workload, and the route answers a
-// workload-token.v1 token for one audience. The route is internal-only and is
-// mounted only when AUTH_WORKLOAD_EXCHANGE is on.
+// workload presents a Kubernetes projected ServiceAccount token (TokenReview
+// authenticates it, the registry maps it to its binding) or a Compose
+// bootstrap credential (the registry resolves its digest), and the route
+// answers a workload-token.v1 token for one audience. Internal-only; mounted
+// when AUTH_WORKLOAD_EXCHANGE or AUTH_WORKLOAD_BOOTSTRAP is on.
 package workloadexchange
 
 import (
@@ -99,9 +99,12 @@ type Signer interface {
 // Deps are the route's collaborators.
 type Deps struct {
 	// Validator authenticates the subject token through TokenReview
-	// (NewReviewValidator).
+	// (NewReviewValidator); nil turns the Kubernetes subject off.
 	Validator authverify.SubjectTokenValidator
 	Registry  Registry
+	// Bootstrap resolves a Compose bootstrap credential by its digest; nil
+	// turns the bootstrap subject off.
+	Bootstrap BootstrapRegistry
 	// RefusalReason names why Registry.Resolve refused, for the log line and
 	// the counter only.
 	RefusalReason func(error) string
@@ -122,14 +125,11 @@ type Deps struct {
 // Routes returns the exchange route. Its registration is on a line of its
 // own: the endpoint-profile row anchors to it.
 func Routes(deps Deps) ([]httpapi.Route, error) {
-	if deps.Validator == nil || deps.Registry == nil || deps.RefusalReason == nil || deps.Signer == nil || deps.Audit == nil {
-		return nil, errors.New("workloadexchange: validator, registry, refusal reason, signer and audit are required")
+	if err := deps.check(); err != nil {
+		return nil, err
 	}
 	if !issuerURLPattern.MatchString(deps.IssuerURL) {
 		return nil, errors.New("workloadexchange: the token issuer must be an https URL")
-	}
-	if strings.TrimSpace(deps.ClusterIssuer) == "" {
-		return nil, errors.New("workloadexchange: the cluster issuer is required")
 	}
 	if deps.Now == nil {
 		deps.Now = time.Now
@@ -153,11 +153,6 @@ var (
 	unavailableBody    = oauthError{Error: "temporarily_unavailable"}
 )
 
-// oauthError is the RFC 6749 error answer; the value is one fixed code.
-type oauthError struct {
-	Error string `json:"error"`
-}
-
 type handler struct {
 	Deps
 	rec     recorder
@@ -165,6 +160,7 @@ type handler struct {
 }
 
 type exchangeRequest struct {
+	subjectType  string
 	subjectToken string
 	audience     string
 	scope        []string
@@ -178,14 +174,18 @@ type issuedAnswer struct {
 }
 
 // ServeHTTP is POST /internal/v1/token/exchange. After the request shape is
-// valid, every refusal answers the same 400 invalid_grant and every
-// dependency failure the same 503; only the log line and the counter name the
-// reason. The store is read only after TokenReview authenticated the caller.
+// valid, every refusal answers 400 invalid_grant and every dependency failure
+// 503; only the log line and the counter name the reason. A bootstrap subject
+// goes to serveBootstrap; a JWT subject reads the store only after TokenReview.
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	req, ok := parseRequest(r)
+	req, ok := h.parseRequest(r)
 	if !ok {
 		h.answer(w, r, outcomeInvalid, reasonInvalidRequest, audienceNone)
+		return
+	}
+	if req.subjectType == TokenTypeWorkloadBootstrap {
+		h.serveBootstrap(w, r, req)
 		return
 	}
 	audience := audienceLabel(req.audience)
@@ -252,7 +252,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.answer(w, r, outcomeUnavailable, reasonAuditUnavailable, audience)
 		return
 	}
-	h.rec.record(ctx, outcomeIssued, reasonIssued, audience)
+	h.rec.record(ctx, subjectKubernetes, outcomeIssued, reasonIssued, audience)
 	writeJSON(w, http.StatusOK, issuedAnswer{
 		AccessToken: issued, IssuedTokenType: TokenTypeJWT, TokenType: "Bearer", ExpiresIn: lifetime,
 	})
@@ -281,8 +281,18 @@ func (h *handler) review(ctx context.Context, subjectToken string) (authverify.S
 	return subject, ""
 }
 
+// answer writes the Kubernetes path's answers; a request shape fault is
+// counted under subject none.
 func (h *handler) answer(w http.ResponseWriter, r *http.Request, outcome, reason, audience string) {
-	h.rec.record(r.Context(), outcome, reason, audience)
+	subject := subjectKubernetes
+	if outcome == outcomeInvalid {
+		subject = subjectNone
+	}
+	h.answerAs(w, r, subject, outcome, reason, audience)
+}
+
+func (h *handler) answerAs(w http.ResponseWriter, r *http.Request, subject, outcome, reason, audience string) {
+	h.rec.record(r.Context(), subject, outcome, reason, audience)
 	switch outcome {
 	case outcomeInvalid:
 		writeJSON(w, http.StatusBadRequest, invalidRequestBody)
@@ -320,8 +330,9 @@ var requestFields = map[string]bool{
 }
 
 // parseRequest reads the RFC 8693 form: a closed field set, each field once,
-// no query string (a bare "?" included), at most MaxBodyBytes.
-func parseRequest(r *http.Request) (exchangeRequest, bool) {
+// no query string (a bare "?" included), at most MaxBodyBytes, and a
+// subject_token_type whose subject is on.
+func (h *handler) parseRequest(r *http.Request) (exchangeRequest, bool) {
 	if r.URL.RawQuery != "" || r.URL.ForceQuery || r.Body == nil {
 		return exchangeRequest{}, false
 	}
@@ -347,10 +358,12 @@ func parseRequest(r *http.Request) (exchangeRequest, bool) {
 			return exchangeRequest{}, false
 		}
 	}
-	if values.Get("grant_type") != GrantTypeTokenExchange || values.Get("subject_token_type") != TokenTypeJWT {
+	if values.Get("grant_type") != GrantTypeTokenExchange || !h.subjectOn(values.Get("subject_token_type")) {
 		return exchangeRequest{}, false
 	}
-	req := exchangeRequest{subjectToken: values.Get("subject_token"), audience: values.Get("audience")}
+	req := exchangeRequest{
+		subjectType: values.Get("subject_token_type"), subjectToken: values.Get("subject_token"), audience: values.Get("audience"),
+	}
 	if req.subjectToken == "" || len(req.subjectToken) > maxSubjectTokenSize ||
 		req.audience == "" || len(req.audience) > maxAudienceSize {
 		return exchangeRequest{}, false

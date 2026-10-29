@@ -29,6 +29,10 @@ const (
 	ReasonUIDMismatch Reason = "uid_mismatch"
 	ReasonNoAudience  Reason = "no_audience"
 	ReasonStoreError  Reason = "store_error"
+	// ReasonRevoked and ReasonExpired are ResolveBootstrap's: the bootstrap
+	// credential is revoked, or now is at or past its expiry.
+	ReasonRevoked Reason = "revoked"
+	ReasonExpired Reason = "expired"
 )
 
 // RefusalError is what Resolve returns. errors.Is(err, ErrRefused) is always
@@ -38,8 +42,9 @@ type RefusalError struct{ Reason Reason }
 func (e *RefusalError) Error() string        { return "workload: refused: " + string(e.Reason) }
 func (e *RefusalError) Is(target error) bool { return target == ErrRefused }
 
-// RefusalReason returns the reason word of a Resolve refusal (unknown,
-// disabled, uid_mismatch, no_audience, store_error), or "" for a nil or
+// RefusalReason returns the reason word of a Resolve or ResolveBootstrap
+// refusal (unknown, disabled, uid_mismatch, no_audience, revoked, expired,
+// store_error), or "" for a nil or
 // non-refusal error. It is for logs and counters only.
 func RefusalReason(err error) string {
 	var r *RefusalError
@@ -57,6 +62,10 @@ func publicReason(r reason) Reason {
 		return ReasonUIDMismatch
 	case reasonNoAudience:
 		return ReasonNoAudience
+	case reasonRevoked:
+		return ReasonRevoked
+	case reasonExpired:
+		return ReasonExpired
 	}
 	return ReasonUnknown
 }

@@ -63,8 +63,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # migration policy `dho migrate river` embeds) and contracts/sync-dispatch/v1
 # (the sync-dispatch route policy the same verb embeds), contracts/auth/v1/vocabulary
 # (the action catalog internal/auth/contracts embeds) and the auth credential-classes
-# contract the job envelope check embeds, and the go-api endpoint-profile inventory the
-# api access-token validator embeds. cmd/registrydump is needed
+# contract the job envelope check embeds, and the go-api, query-api and auth-service
+# endpoint-profile inventories their access-token validators embed. cmd/registrydump is needed
 # too, with the query_route.go it reads (below, inside internal/). The
 # whole internal/ tree is copied, not an enumerated subpackage list: an
 # enumerated list is how the next import added to any of these goes
@@ -72,7 +72,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # clear diff.
 COPY cmd/dho ./cmd/dho
 COPY cmd/registrydump ./cmd/registrydump
-COPY contracts/auth/v1/embed.go contracts/auth/v1/credential-classes.json contracts/auth/v1/endpoint_profiles_go_api.go contracts/auth/v1/endpoint-profiles.go-api.json ./contracts/auth/v1/
+COPY contracts/auth/v1/embed.go contracts/auth/v1/credential-classes.json contracts/auth/v1/endpoint_profiles_go_api.go contracts/auth/v1/endpoint-profiles.go-api.json contracts/auth/v1/endpoint_profiles_query_api.go contracts/auth/v1/endpoint-profiles.query-api.json contracts/auth/v1/endpoint_profiles_auth_service.go contracts/auth/v1/endpoint-profiles.auth-service.json ./contracts/auth/v1/
 COPY contracts/graphql/v1 ./contracts/graphql/v1
 COPY contracts/jobs/v1 ./contracts/jobs/v1
 COPY contracts/sync-dispatch/v1 ./contracts/sync-dispatch/v1

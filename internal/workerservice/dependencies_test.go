@@ -16,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
@@ -3656,41 +3657,43 @@ func TestDORARefusalRemedyNamesTheMigrateVerb(t *testing.T) {
 // blocked (the queue-control work pool held by other work) queuedContractVersionsReady still answers at
 // once from the cached pass, and refuses once that pass is older than the bound.
 func TestQueuedContractVersionsReadyDoesNotWaitOnTheCensusOnceProven(t *testing.T) {
-	telemetry := &fakeQueueTelemetry{}
-	dependencies := &workerDependencies{
-		queueTelemetry:          telemetry,
-		queueTelemetryRequired:  true,
-		logger:                  slog.New(slog.NewTextHandler(io.Discard, nil)),
-		contractVersionsOptions: postgres.PostureCheckOptions{TTL: 10 * time.Millisecond, MaxStale: 400 * time.Millisecond, RunTimeout: time.Minute},
-	}
-	dependencies.contractVersionsProbe.Warm("queued_contract_versions", dependencies.contractVersionsRun, dependencies.contractVersionsOptions)
-	deadline := time.Now().Add(5 * time.Second)
-	for dependencies.queuedContractVersionsReady(context.Background()) != nil {
-		if time.Now().After(deadline) {
-			t.Fatal("the warmed census never proved the queue")
+	synctest.Test(t, func(t *testing.T) {
+		telemetry := &fakeQueueTelemetry{}
+		dependencies := &workerDependencies{
+			queueTelemetry:          telemetry,
+			queueTelemetryRequired:  true,
+			logger:                  slog.New(slog.NewTextHandler(io.Discard, nil)),
+			contractVersionsOptions: postgres.PostureCheckOptions{TTL: 10 * time.Millisecond, MaxStale: 400 * time.Millisecond, RunTimeout: time.Minute},
 		}
-		time.Sleep(5 * time.Millisecond)
-	}
+		dependencies.contractVersionsProbe.Warm("queued_contract_versions", dependencies.contractVersionsRun, dependencies.contractVersionsOptions)
+		deadline := time.Now().Add(5 * time.Second)
+		for dependencies.queuedContractVersionsReady(context.Background()) != nil {
+			if time.Now().After(deadline) {
+				t.Fatal("the warmed census never proved the queue")
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
 
-	gate := make(chan struct{})
-	telemetry.setCheckGate(gate) // every later census run is now stuck
-	t.Cleanup(func() { close(gate) })
-	time.Sleep(40 * time.Millisecond) // older than TTL: a blocked refresh starts
-	begun := time.Now()
-	if err := dependencies.queuedContractVersionsReady(context.Background()); err != nil {
-		t.Fatalf("a pass inside the bound with a blocked census = %v, want a pass", err)
-	}
-	if time.Since(begun) > 200*time.Millisecond {
-		t.Fatalf("the probe waited %s on a blocked census", time.Since(begun))
-	}
-	time.Sleep(450 * time.Millisecond) // past the bound with no new answer: readiness refuses
-	begun = time.Now()
-	if err := dependencies.queuedContractVersionsReady(context.Background()); err == nil {
-		t.Fatal("a pass older than the bound with no answer was accepted: a dead queue database must turn readiness red")
-	}
-	if time.Since(begun) > 200*time.Millisecond {
-		t.Fatalf("the refusal waited %s", time.Since(begun))
-	}
+		gate := make(chan struct{})
+		telemetry.setCheckGate(gate) // every later census run is now stuck
+		defer close(gate)
+		time.Sleep(40 * time.Millisecond) // older than TTL: a blocked refresh starts
+		begun := time.Now()
+		if err := dependencies.queuedContractVersionsReady(context.Background()); err != nil {
+			t.Fatalf("a pass inside the bound with a blocked census = %v, want a pass", err)
+		}
+		if returnedAt := time.Now(); !returnedAt.Equal(begun) {
+			t.Fatalf("the probe waited +%v of virtual time on a blocked census", returnedAt.Sub(begun))
+		}
+		time.Sleep(450 * time.Millisecond) // past the bound with no new answer: readiness refuses
+		begun = time.Now()
+		if err := dependencies.queuedContractVersionsReady(context.Background()); err == nil {
+			t.Fatal("a pass older than the bound with no answer was accepted: a dead queue database must turn readiness red")
+		}
+		if returnedAt := time.Now(); !returnedAt.Equal(begun) {
+			t.Fatalf("the refusal waited +%v of virtual time", returnedAt.Sub(begun))
+		}
+	})
 }
 
 // selfprobeBeginFn adapts a function to selfprobe.TxOpener.

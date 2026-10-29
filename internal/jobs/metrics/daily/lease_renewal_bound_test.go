@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -24,71 +25,57 @@ import (
 // work is cancelled WELL BEFORE the parent deadline -- if the bound is absent,
 // nothing cancels it until the parent expires.
 func TestLeaseRenewalIsBoundedByTheLease(t *testing.T) {
-	// The two durations are deliberately an ORDER OF MAGNITUDE apart. The
-	// discriminator is "cancelled promptly" versus "cancelled only when the
-	// parent expires" -- not a precise latency -- so the threshold must have
-	// enough headroom to survive a loaded scheduler.
-	//
-	// The first version of this test asserted elapsed <= lease (150ms) against
-	// an expected ~100ms, which left 50ms of margin and FLAKED on bigboy at
-	// load1 62: it passed at 0.10s and failed at 0.17s on the same code. A
-	// timing assertion tight enough to measure scheduler noise measures the
-	// scheduler, not the defect -- and an intermittently red test is worse than
-	// no test, because it trains people to re-run.
-	const (
-		lease         = 150 * time.Millisecond
-		parentTimeout = 5 * time.Second
-	)
-	parent, cancelParent := context.WithTimeout(context.Background(), parentTimeout)
-	defer cancelParent()
+	// The test runs on a virtual clock (testing/synctest), so the bound is exact and no host load can move it:
+	// the work is cancelled by the lease bound at or before start+lease, and a work cancelled only by the
+	// parent deadline would end at start+parentTimeout.
+	synctest.Test(t, func(t *testing.T) {
+		const (
+			lease         = 150 * time.Millisecond
+			parentTimeout = 5 * time.Second
+		)
+		parent, cancelParent := context.WithTimeout(context.Background(), parentTimeout)
+		defer cancelParent()
 
-	var renewCalls atomic.Int64
-	// A renewal that never returns on its own. Without a per-call deadline it
-	// blocks until the PARENT is done, which is the defect.
-	renew := func(ctx context.Context) error {
-		renewCalls.Add(1)
-		<-ctx.Done()
-		return ctx.Err()
-	}
-
-	workCancelled := make(chan time.Duration, 1)
-	started := time.Now()
-	work := func(ctx context.Context) error {
-		<-ctx.Done()
-		workCancelled <- time.Since(started)
-		return ctx.Err()
-	}
-
-	err := runWithLeaseRenewal(parent, lease, renew, work)
-	if err == nil {
-		t.Fatal("runWithLeaseRenewal returned nil after a renewal that never succeeded")
-	}
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("err = %v, want it to wrap context.DeadlineExceeded -- a renewal that "+
-			"timed out is a LEASE LOSS, and the caller must be able to tell that from "+
-			"an ordinary failure", err)
-	}
-
-	select {
-	case elapsed := <-workCancelled:
-		// Bounded: one tick (lease/3) to fire plus one renewal timeout (lease/3),
-		// so ~100ms. Unbounded: the full parentTimeout, 5s. Half the parent
-		// separates those two by a factor of 25 in each direction and cannot be
-		// crossed by scheduling jitter.
-		if elapsed > parentTimeout/2 {
-			t.Fatalf("work ran %v against a %v lease and a %v parent -- it was cancelled "+
-				"by the PARENT deadline, not by the lease bound, so the executor kept "+
-				"writing past a lease another worker can reclaim",
-				elapsed, lease, parentTimeout)
+		var renewCalls atomic.Int64
+		// A renewal that never returns on its own. Without a per-call deadline it
+		// blocks until the PARENT is done, which is the defect.
+		renew := func(ctx context.Context) error {
+			renewCalls.Add(1)
+			<-ctx.Done()
+			return ctx.Err()
 		}
-	case <-time.After(parentTimeout + time.Second):
-		t.Fatal("work was never cancelled -- an unbounded renewal holds the job open " +
-			"while its lease expires, which is the two-writer hazard via timing")
-	}
 
-	if renewCalls.Load() == 0 {
-		t.Fatal("renew was never called, so this test proved nothing about renewal bounds")
-	}
+		started := time.Now()
+		var cancelledAt time.Time
+		work := func(ctx context.Context) error {
+			<-ctx.Done()
+			cancelledAt = time.Now()
+			return ctx.Err()
+		}
+
+		err := runWithLeaseRenewal(parent, lease, renew, work)
+		if err == nil {
+			t.Fatal("runWithLeaseRenewal returned nil after a renewal that never succeeded")
+		}
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("err = %v, want it to wrap context.DeadlineExceeded -- a renewal that "+
+				"timed out is a LEASE LOSS, and the caller must be able to tell that from "+
+				"an ordinary failure", err)
+		}
+		if cancelledAt.IsZero() {
+			t.Fatal("work was never cancelled -- an unbounded renewal holds the job open " +
+				"while its lease expires, which is the two-writer hazard via timing")
+		}
+		if cancelledAt.After(started.Add(lease)) {
+			t.Fatalf("work was cancelled at +%v of virtual time against a %v lease and a %v parent -- "+
+				"it was cancelled by the PARENT deadline, not by the lease bound, so the executor kept "+
+				"writing past a lease another worker can reclaim",
+				cancelledAt.Sub(started), lease, parentTimeout)
+		}
+		if renewCalls.Load() == 0 {
+			t.Fatal("renew was never called, so this test proved nothing about renewal bounds")
+		}
+	})
 }
 
 // The control: a renewal that SUCCEEDS promptly must not be cancelled by the new

@@ -138,7 +138,11 @@ func scan(t *testing.T, root string) ([]string, []finding) {
 				t.Fatal(err)
 			}
 			sources[file] = string(data)
-			opted = opted || strings.Contains(sources[file], optInCall)
+			fileOpts, err := optsIn(sources[file])
+			if err != nil {
+				t.Fatalf("%s: %v", file, err)
+			}
+			opted = opted || fileOpts
 		}
 		if !opted {
 			continue
@@ -300,7 +304,7 @@ func TestGuardFlagsPlantedServerWideStatements(t *testing.T) {
 	inFunc := func(name string, lines []string) string {
 		return "func " + name + "(t *testing.T) {\n" + strings.Join(lines, "\n") + "\n}\n"
 	}
-	write("internal/opted/main_test.go", "package opted\nfunc TestMain(m *testing.M) { os.Exit(containers.RunWithSharedServers(m.Run)) }\n")
+	write("internal/opted/main_test.go", sharedTestMain)
 	write("internal/opted/planted_test.go", "package opted\n"+inFunc("TestPlanted", planted))
 	write("internal/opted/allowed_test.go", "package opted\n"+inFunc("TestAllowed", allowed))
 	// One file, three funcs: the Isolated call covers its own func only, so the
@@ -361,7 +365,7 @@ func scanFixture(t *testing.T, lines []string) map[int]bool {
 			t.Fatal(err)
 		}
 	}
-	write("internal/opted/main_test.go", "package opted\nfunc TestMain(m *testing.M) { os.Exit(containers.RunWithSharedServers(m.Run)) }\n")
+	write("internal/opted/main_test.go", sharedTestMain)
 	write("internal/opted/fixture_test.go", "package opted\nfunc TestFixture(t *testing.T) {\n"+strings.Join(lines, "\n")+"\n}\n")
 	_, findings := scan(t, filepath.Join(root, "internal"))
 	flagged := map[int]bool{}

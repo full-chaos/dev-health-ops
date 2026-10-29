@@ -320,9 +320,6 @@ func lockViolations(t *testing.T, root string, catalog []row) []string {
 		if r.suites == "" {
 			bad = append(bad, fmt.Sprintf("%s job %s step %q: empty suites (use none)", r.file, r.job, r.step))
 		}
-		if r.job == "(workflow)" && r.step == "(top)" && !strings.Contains(r.reason, "permissions") {
-			bad = append(bad, fmt.Sprintf("%s job %s step %q: the reason does not say that the row pins the workflow permissions", r.file, r.job, r.step))
-		}
 		if r.suites != "none" {
 			for _, id := range strings.Split(r.suites, ",") {
 				if !known[id] {
@@ -422,4 +419,16 @@ func TestRenderLockLeavesANewStepEmpty(t *testing.T) {
 	if !strings.Contains(got, "a.yml\tj\t#2 new\tdefault\ts2\t\t\n") {
 		t.Fatalf("a new step must get empty suites and reason:\n%s", got)
 	}
+}
+
+// topRowReasonViolations: the (workflow)/(top) row hashes on, env, defaults and permissions, and its reviewed reason says so.
+func topRowReasonViolations(t *testing.T, root string) []string {
+	t.Helper()
+	rows, bad := readLock(root)
+	for _, r := range rows {
+		if r.job == "(workflow)" && r.step == "(top)" && !strings.Contains(r.reason, "permissions") {
+			bad = append(bad, fmt.Sprintf("%s job %s step %q: the reason does not say that the row pins the workflow permissions", r.file, r.job, r.step))
+		}
+	}
+	return bad
 }

@@ -188,16 +188,88 @@ func TestAConstantThatNamesAPublicTableOrADifferentTableIsNotAFinding(t *testing
 }
 
 // A constant from another package is not loaded (stated limit): a concatenation that puts one in front of a table name is
-// refused by name, never passed silently. A variable or a call between the fragments is not folded (stated limit).
+// refused by name, never passed silently.
 func TestAQualifiedConstantInFrontOfATableNameIsRefusedAsUnresolved(t *testing.T) {
 	src := "package p\n\nimport \"example.test/cfg\"\n\nfunc q() string {\n\treturn \"SELECT 1 FROM \" + cfg.Schema + \".\" + \"memberships\"\n}\n"
 	got := check(t, writeTree(t, map[string]string{"internal/queryapi/server/q.go": src}))
 	wantOne(t, got, "internal/queryapi/server/q.go:6", "query-api", "another package", "memberships")
 }
 
-func TestAVariableBetweenTheFragmentsIsNotFolded(t *testing.T) {
-	src := "package p\n\nvar schema = \"auth\"\n\nfunc q() string {\n\treturn \"SELECT 1 FROM \" + schema + \".\" + \"memberships\"\n}\n"
-	if got := check(t, writeTree(t, map[string]string{"internal/api/q.go": src})); len(got) != 0 {
-		t.Fatalf("a variable is a stated limit of the gate, want no finding, got %q", got)
+// A variable is not folded, so a table name right behind a non-constant operand is refused structurally: whatever the variable
+// holds, the schema in front of the table is not a constant "public".
+func TestATableNameBehindANonConstantQualifierIsARefusal(t *testing.T) {
+	for name, body := range map[string]string{
+		"variable, dot and table as separate literals": "\"SELECT 1 FROM \" + schema + \".\" + \"memberships\"",
+		"variable then a dotted literal":               "\"SELECT 1 FROM \" + schema + \".memberships\"",
+		"variable then organizations":                  "\"SELECT 1 FROM \" + schema + \".organizations\"",
+		"call result":                                  "\"SELECT 1 FROM \" + pick() + \".memberships\"",
+		"field":                                        "\"SELECT 1 FROM \" + cfg.Schema + \".memberships\"",
+		"quoted table":                                 "\"SELECT 1 FROM \" + schema + \".\\\"memberships\\\"\"",
+		"space and comment before the dot":             "\"SELECT 1 FROM \" + schema + \" /* c */ . memberships\"",
+		"format verb":                                  "fmt.Sprintf(\"SELECT 1 FROM %s.memberships\", schema)",
+		"format verb with an index":                    "fmt.Sprintf(\"SELECT 1 FROM %[1]s.organizations\", schema)",
+	} {
+		src := "package p\n\nimport \"fmt\"\n\nvar schema = \"auth\"\nvar cfg struct{ Schema string }\n\nfunc pick() string { return schema }\n\nvar _ = fmt.Sprintf\n\nvar q = " + body + "\n"
+		got := check(t, writeTree(t, map[string]string{"internal/api/q.go": src}))
+		if len(got) == 0 || !strings.Contains(strings.Join(got, "\n"), "membership-read") {
+			t.Errorf("%s: want a finding, got %q", name, got)
+		}
+	}
+}
+
+func TestANonConstantQualifierBehindAnotherTableOrAConstantPublicIsClean(t *testing.T) {
+	for name, body := range map[string]string{
+		"another table":       "\"SELECT 1 FROM \" + schema + \".sessions\"",
+		"constant public":     "\"SELECT 1 FROM \" + pub + \".\" + \"memberships\"",
+		"public literal":      "\"SELECT 1 FROM public.\" + \"memberships\"",
+		"table without a dot": "\"SELECT 1 FROM \" + schema + \" memberships\"",
+	} {
+		src := "package p\n\nconst pub = \"public\"\n\nvar schema = \"auth\"\n\nvar q = " + body + "\n"
+		if got := check(t, writeTree(t, map[string]string{"internal/api/q.go": src})); len(got) != 0 {
+			t.Errorf("%s: want no finding, got %q", name, got)
+		}
+	}
+}
+
+// Every constant expression the compiler evaluates has the same value in the gate: integer and rune conversions, arithmetic,
+// shifts, typed constants and len of a constant string.
+func TestAConstantEvaluatedLikeTheCompilerIsStillARead(t *testing.T) {
+	for name, decl := range map[string]string{
+		"string of an integer":     "const schema = string(97) + \"uth\"",
+		"string of a rune":         "const schema = string('a') + \"uth\"",
+		"string of arithmetic":     "const schema = string(96+1) + \"uth\"",
+		"string of a shift":        "const schema = string(1<<6+33) + \"uth\"",
+		"string of a typed rune":   "const r rune = 97\nconst schema = string(r) + \"uth\"",
+		"string of a byte":         "const b byte = 97\nconst schema = string(rune(b)) + \"uth\"",
+		"string of a constant sum": "const (\n\ta = 90\n\tb = 7\n\tschema = string(a+b) + \"uth\"\n)",
+		"string of a hex literal":  "const schema = string(0x61) + \"uth\"",
+	} {
+		src := "package p\n\n" + decl + "\n\nvar q = \"SELECT 1 FROM \" + schema + \".memberships\"\n"
+		got := check(t, writeTree(t, map[string]string{"internal/queryapi/q.go": src}))
+		if !strings.Contains(strings.Join(got, "\n"), "auth.memberships") {
+			t.Errorf("%s: want a finding naming auth.memberships, got %q", name, got)
+		}
+	}
+}
+
+// A SQL comment between the schema, the dot and the table does not hide the read: both comment kinds, nested block comments,
+// and a quoted string that looks like the start of a line comment.
+func TestASQLCommentInsideTheNameDoesNotHideTheRead(t *testing.T) {
+	for name, literal := range map[string]string{
+		"block comment after the dot":        "\"SELECT 1 FROM auth./* x */memberships\"",
+		"block comment around the dot":       "\"SELECT 1 FROM auth /*x*/ . memberships\"",
+		"block comment before the dot":       "\"SELECT 1 FROM auth/*x*/.memberships\"",
+		"block comment around the schema":    "\"SELECT 1 FROM /*x*/auth/*y*/./*z*/organizations\"",
+		"line comment between the parts":     "\"SELECT 1 FROM auth.-- x\\nmemberships\"",
+		"line comment before the dot":        "\"SELECT 1 FROM auth -- x\\n.memberships\"",
+		"nested block comment":               "\"SELECT 1 FROM auth./* a /* b */ c */memberships\"",
+		"quoted schema with a comment":       "\"SELECT 1 FROM \\\"auth\\\"/*x*/.\\\"memberships\\\"\"",
+		"a quoted dash pair before the read": "\"SELECT '--' FROM auth.memberships\"",
+	} {
+		src := "package p\n\nvar q = " + literal + "\n"
+		got := check(t, writeTree(t, map[string]string{"internal/apiservice/q.go": src}))
+		if len(got) == 0 || !strings.Contains(strings.Join(got, "\n"), "membership-read") {
+			t.Errorf("%s: want a finding, got %q", name, got)
+		}
 	}
 }

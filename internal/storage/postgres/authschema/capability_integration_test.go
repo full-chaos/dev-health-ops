@@ -38,7 +38,7 @@ func insertFixtures(ids map[string]string) []struct {
 		{"external_identities", `INSERT INTO auth.external_identities (principal_id, provider, subject) VALUES ($1, 'cap-idp', 'cap-subject')`, []any{ids["principal"]}},
 		{"memberships", `INSERT INTO auth.memberships (organization_id, principal_id, role) VALUES ($1, $2, 'member')`, []any{ids["org"], ids["principal"]}},
 		{"invites", `INSERT INTO auth.invites (id, organization_id, email_normalized, role, token_hash, expires_at) VALUES (gen_random_uuid(), $1, 'cap@example.com', 'member', repeat('a', 64), now() + interval '1 hour')`, []any{ids["org"]}},
-		{"platform_role_assignments", `INSERT INTO auth.platform_role_assignments (principal_id, role_key) VALUES ($1, 'cap.platform')`, []any{ids["principal"]}},
+		{"platform_role_assignments", `INSERT INTO auth.platform_role_assignments (principal_id, role_key) VALUES ($1, 'platform_admin')`, []any{ids["principal"]}},
 		{"service_accounts", `INSERT INTO auth.service_accounts (principal_id, organization_id, name, owner_principal_id) VALUES ($1, $2, 'cap-svc', $3)`, []any{ids["svcPrincipal"], ids["org"], ids["principal"]}},
 		{"workloads", `INSERT INTO auth.workloads (principal_id, organization_id, name) VALUES ($1, $2, 'cap-wl')`, []any{ids["wlPrincipal"], ids["org"]}},
 		{"sessions", `INSERT INTO auth.sessions (id, principal_id, token_hash, expires_at, legacy_token_version) VALUES ($1, $2, '\xdeadbeef'::bytea, now() + interval '1 hour', 0)`, []any{ids["session"], ids["principal"]}},

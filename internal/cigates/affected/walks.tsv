@@ -116,6 +116,7 @@ internal/cigates/frozengoldens	frozengoldens.go	unexpressed	-	-
 internal/cigates/frozengoldens	frozengoldens_test.go	unexpressed	-	-
 internal/cigates/integrationshards	integration_sharding_test.go	unexpressed	-	-
 internal/cigates/integrationshards	support_test.go	unexpressed	-	-
+internal/cigates/membershipreads	membershipreads.go	unexpressed	-	*.go
 internal/cigates/nopython	tests_python_test.go	unexpressed	-	-
 internal/cigates/outboundtransport	outboundtransport_test.go	.	tree	*
 internal/cigates/queuecreds	queuerows_test.go	unexpressed	-	*.go

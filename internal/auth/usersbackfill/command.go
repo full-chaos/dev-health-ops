@@ -32,8 +32,8 @@ func Command() cli.Command {
 	return cli.Command{
 		Name:    "auth",
 		Kind:    cli.Group,
-		Summary: "auth control plane operator verbs: users-backfill, users-reconcile, oauth-sso-count, orgs-backfill, orgs-reconcile, legacy-link-purge",
-		Children: []cli.Command{{
+		Summary: "auth control plane operator verbs: users-backfill, users-reconcile, oauth-sso-count, orgs-backfill, orgs-reconcile, legacy-link-purge, platform-role-grant, platform-role-revoke, platform-role-list",
+		Children: append([]cli.Command{{
 			Name:    "users-backfill",
 			Kind:    cli.Verb,
 			Summary: "copy public.users into the auth schema (idempotent; counts only)",
@@ -63,7 +63,7 @@ func Command() cli.Command {
 			Kind:    cli.Verb,
 			Summary: "delete go-api's legacy public link-token rows once users are owned (idempotent; counts only; refused unless AUTH_USERS_OWNED is true)",
 			Run:     runLegacyLinkPurge,
-		}},
+		}}, platformRoleVerbs()...),
 	}
 }
 

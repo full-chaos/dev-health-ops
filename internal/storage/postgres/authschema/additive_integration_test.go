@@ -401,6 +401,16 @@ var additiveExemptions = []additiveExemption{
 		reason: "credential_class admits workload_bootstrap_credential; the redefined list is the old list plus " +
 			"that one value, so it only widens",
 	},
+	{
+		version:    33,
+		regression: `constraint platform_role_assignments.platform_role_assignments_principal_id_fkey redefined "FOREIGN KEY (principal_id) REFERENCES auth.principals(id) ON DELETE CASCADE" -> "FOREIGN KEY (principal_id) REFERENCES auth.principals(id) ON DELETE RESTRICT"`,
+		reason:     "deleting a principal that holds a platform role is refused instead of deleting the role",
+	},
+	{
+		version:    33,
+		regression: `constraint platform_role_assignments.platform_role_assignments_granted_by_fkey redefined "FOREIGN KEY (granted_by) REFERENCES auth.principals(id) ON DELETE SET NULL" -> "FOREIGN KEY (granted_by) REFERENCES auth.principals(id) ON DELETE RESTRICT"`,
+		reason:     "deleting the granter of a platform role is refused, so a granted row never loses its granter",
+	},
 }
 
 // TestEveryMigrationStepIsAdditive applies the lineage ONE MIGRATION AT A TIME

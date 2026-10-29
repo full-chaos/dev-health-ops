@@ -1,64 +1,53 @@
 <clickhouse>
-  <!-- Retention of ClickHouse's own system log tables on the self-hosted compose stack.
-       text_log and trace_log grow fastest: 3 days. query_log stays 14 days: diagnosis reads
-       system.query_log. The rest: 7 days. text_log logs warning and above only.
-       ttl_only_drop_parts drops whole expired parts instead of rewriting them.
-       A change takes effect when the clickhouse container is recreated. -->
-  <text_log>
+  <!-- ClickHouse's own system log tables on the self-hosted compose stack (bigboy).
+       They filled 82 GB of a 96 GB volume (processors_profile_log 36G, text_log 32G, query_log 6.6G, trace_log 5.2G), so every
+       optional log is OFF: remove="1" is the config-merge attribute that deletes the element from the merged config, and the
+       server then neither creates nor fills that table. query_log and error_log stay, for one day: diagnosis and
+       `dho audit perf` read system.query_log. crash_log is tiny and keeps its week. ttl_only_drop_parts drops whole expired
+       parts instead of rewriting them; the server default partitions these logs by month, so query_log and error_log are
+       partitioned by day and a one-day TTL can really drop parts. The server logs at warning.
+       A change takes effect when the clickhouse container is recreated. An existing table whose TTL changes is renamed to
+       <name>_0 and recreated, and the renamed copy is read-only and keeps its data: drop query_log and error_log before the
+       first restart with this file, then drop any *_N table that appears. Tables of the logs that are now off are not removed
+       by the server: the operator drops them. -->
+  <logger>
     <level>warning</level>
-    <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
-    <settings>ttl_only_drop_parts=1</settings>
-  </text_log>
-  <trace_log>
-    <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
-    <settings>ttl_only_drop_parts=1</settings>
-  </trace_log>
+  </logger>
+  <processors_profile_log remove="1"/>
+  <text_log remove="1"/>
+  <trace_log remove="1"/>
+  <asynchronous_metric_log remove="1"/>
+  <metric_log remove="1"/>
+  <query_metric_log remove="1"/>
+  <query_thread_log remove="1"/>
+  <query_views_log remove="1"/>
+  <part_log remove="1"/>
+  <session_log remove="1"/>
+  <asynchronous_insert_log remove="1"/>
+  <background_schedule_pool_log remove="1"/>
+  <opentelemetry_span_log remove="1"/>
+  <zookeeper_log remove="1"/>
+  <aggregated_zookeeper_log remove="1"/>
+  <backup_log remove="1"/>
+  <s3queue_log remove="1"/>
+  <blob_storage_log remove="1"/>
+  <transactions_info_log remove="1"/>
+  <instrumentation_trace_log remove="1"/>
+  <iceberg_metadata_log remove="1"/>
+  <delta_lake_metadata_log remove="1"/>
+  <zookeeper_connection_log remove="1"/>
   <query_log>
-    <ttl>event_date + INTERVAL 14 DAY DELETE</ttl>
+    <partition_by>toYYYYMMDD(event_date)</partition_by>
+    <ttl>event_date + INTERVAL 1 DAY DELETE</ttl>
     <settings>ttl_only_drop_parts=1</settings>
   </query_log>
-  <query_thread_log>
-    <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+  <error_log>
+    <partition_by>toYYYYMMDD(event_date)</partition_by>
+    <ttl>event_date + INTERVAL 1 DAY DELETE</ttl>
     <settings>ttl_only_drop_parts=1</settings>
-  </query_thread_log>
-  <query_views_log>
-    <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
-    <settings>ttl_only_drop_parts=1</settings>
-  </query_views_log>
-  <metric_log>
-    <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
-    <settings>ttl_only_drop_parts=1</settings>
-  </metric_log>
-  <asynchronous_metric_log>
-    <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
-    <settings>ttl_only_drop_parts=1</settings>
-  </asynchronous_metric_log>
-  <part_log>
-    <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
-    <settings>ttl_only_drop_parts=1</settings>
-  </part_log>
-  <processors_profile_log>
-    <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
-    <settings>ttl_only_drop_parts=1</settings>
-  </processors_profile_log>
-  <session_log>
-    <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
-    <settings>ttl_only_drop_parts=1</settings>
-  </session_log>
+  </error_log>
   <crash_log>
     <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
     <settings>ttl_only_drop_parts=1</settings>
   </crash_log>
-  <error_log>
-    <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
-    <settings>ttl_only_drop_parts=1</settings>
-  </error_log>
-  <asynchronous_insert_log>
-    <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
-    <settings>ttl_only_drop_parts=1</settings>
-  </asynchronous_insert_log>
-  <background_schedule_pool_log>
-    <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
-    <settings>ttl_only_drop_parts=1</settings>
-  </background_schedule_pool_log>
 </clickhouse>

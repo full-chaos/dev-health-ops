@@ -29,6 +29,7 @@ type Issuer struct {
 	eddsa    *eddsaMinter
 	verifier *edgetoken.Verifier
 	kids     KidRecorder
+	access   *AccessCheck
 	now      func() time.Time
 }
 
@@ -122,6 +123,9 @@ type Bearer struct {
 	TokenVersion int64
 	// Impersonated is set when the token carries impersonating_user_id.
 	Impersonated bool
+	// sessionPinned is set for an EdDSA token, which has no tv: the session's
+	// legacy_token_version pin takes its place.
+	sessionPinned bool
 }
 
 // errBearerShape is a verified token whose sub, sid or tv this service cannot

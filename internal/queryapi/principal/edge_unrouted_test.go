@@ -2,8 +2,9 @@ package principal
 
 import "testing"
 
-// TestEdgeVerifierAuthenticatorStaysUnrouted: the REST edge verifier's
-// Authenticator is never profile-routed (go-api only).
+// TestEdgeVerifierAuthenticatorStaysUnrouted: NewEdgeVerifier alone builds an
+// unrouted verifier, whatever the environment holds; only RouteAccess routes
+// it (the server does, with AUTH_ACCESS_TOKEN_ISSUER in its lookup).
 func TestEdgeVerifierAuthenticatorStaysUnrouted(t *testing.T) {
 	t.Setenv("AUTH_ACCESS_TOKEN_ISSUER", "https://auth.example.test")
 	v := mustEdgeVerifier(t, edgeTestSecret, edgeTestIssuer, edgeTestAudience)

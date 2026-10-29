@@ -72,7 +72,7 @@ VALUES (gen_random_uuid(), 'projection-` + env.runtimeRole + `@example.test', NU
 		"delete":            `DELETE FROM public.users WHERE id = gen_random_uuid()`,
 		"truncate":          `TRUNCATE public.users`,
 		"insert avatar_url": `INSERT INTO public.users (id, email, avatar_url) VALUES (gen_random_uuid(), 'a@example.test', 'x')`,
-		"write memberships": `UPDATE public.memberships SET role = role`,
+		"write memberships": `UPDATE public.memberships SET user_id = user_id`,
 	} {
 		if err := env.runtimeStatement(ctx, statement); err == nil || !strings.Contains(err.Error(), "permission denied") {
 			t.Errorf("%s: err = %v, want permission denied", name, err)

@@ -2,12 +2,14 @@ package authapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"syscall"
 	"testing"
@@ -29,8 +31,58 @@ func expectDown(t *testing.T, name string, response *httptest.ResponseRecorder, 
 	if got := response.Code; got != http.StatusServiceUnavailable {
 		t.Errorf("%s = %d, want 503: %s", name, got, body)
 	}
-	if strings.Contains(body, "sentinel") || strings.Contains(body, "5432") {
+	if namesDependency(body) {
 		t.Errorf("%s 503 names the dependency: %s", name, body)
+	}
+}
+
+// postgresPort is the port as a whole number, not a digit run inside a longer
+// one (a timestamp's microseconds can hold 5432).
+var postgresPort = regexp.MustCompile(`(^|[^0-9])5432([^0-9]|$)`)
+
+// namesDependency reports whether a 503 body names the store behind it: a
+// sentinel value from the fixture, or the PostgreSQL port. The server fills
+// occurred_at and request_id itself, so they are left out of the port check.
+func namesDependency(body string) bool {
+	if strings.Contains(body, "sentinel") {
+		return true
+	}
+	text := body
+	var document map[string]any
+	if json.Unmarshal([]byte(body), &document) == nil {
+		delete(document, "occurred_at")
+		delete(document, "request_id")
+		if raw, err := json.Marshal(document); err == nil {
+			text = string(raw)
+		}
+	}
+	return postgresPort.MatchString(text)
+}
+
+func TestNamesDependencyIgnoresGeneratedFieldsAndCatchesThePort(t *testing.T) {
+	for _, c := range []struct {
+		name, body string
+		want       bool
+	}{
+		{"error.v1 body whose occurred_at microseconds hold the port digits",
+			`{"schema_version":"error.v1","status":503,"reason_code":"dependency_unavailable","request_id":"req_HGHRVOLSZVFFDFMOT2566AO6SU","occurred_at":"2026-10-29T03:04:57.315432Z","retry_after_seconds":1}`, false},
+		{"error.v1 body whose occurred_at fraction is trimmed to the port digits (RFC 3339 drops trailing zeros)",
+			`{"schema_version":"error.v1","status":503,"reason_code":"dependency_unavailable","request_id":"req_HGHRVOLSZVFFDFMOT2566AO6SU","occurred_at":"2026-10-29T03:04:57.5432Z","retry_after_seconds":1}`, false},
+		{"error.v1 body whose request_id holds the port digits",
+			`{"schema_version":"error.v1","status":503,"reason_code":"dependency_unavailable","request_id":"req_AB5432CD","occurred_at":"2026-10-29T03:04:57.100000Z","retry_after_seconds":1}`, false},
+		{"plain text whose timestamp holds the port digits", `retry later (at 03:04:57.315432Z)`, false},
+		{"detail naming host and port", `{"detail":"dial tcp db.internal:5432: connect: connection refused"}`, true},
+		{"detail naming only the port", `{"detail":"postgres port 5432 refused"}`, true},
+		{"error.v1 body with the port in a field the server fills from the error", `{"schema_version":"error.v1","status":503,"reason_code":"db:5432","request_id":"req_X","occurred_at":"2026-10-29T03:04:57.100000Z"}`, true},
+		{"plain text naming host and port", `dial tcp 10.0.0.5:5432: connect: connection refused`, true},
+		{"sentinel value", `{"detail":"sentinel-person@example.com"}`, true},
+		{"sentinel inside occurred_at", `{"occurred_at":"sentinel"}`, true},
+		{"service unavailable without names", `{"detail":"Authentication service temporarily unavailable"}`, false},
+		{"a longer number that starts with the port digits", `{"retry_after_seconds":54321}`, false},
+	} {
+		if got := namesDependency(c.body); got != c.want {
+			t.Errorf("%s: namesDependency = %v, want %v: %s", c.name, got, c.want, c.body)
+		}
 	}
 }
 

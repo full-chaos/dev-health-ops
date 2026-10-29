@@ -193,8 +193,9 @@ authService:
     class: ""
     # -- The https issuer of eddsa access tokens: auth-service signs it
     #    (AUTH_TOKEN_ISSUER_URL, with AUTH_JWT_AUDIENCE=dev-health-api) and go-api
-    #    verifies it (AUTH_ACCESS_TOKEN_ISSUER) against its JWKS. Rendered only
-    #    with class eddsa; go-api must reach the issuer's JWKS document.
+    #    and query-api verify it (AUTH_ACCESS_TOKEN_ISSUER) against its JWKS.
+    #    Rendered only with class eddsa; go-api and query-api must reach the
+    #    issuer's JWKS document.
     issuerURL: ""
   # -- AUTH_SOCIAL_LINK_ROUTES: mounts the bearer-only social link and unlink
   #    routes. Needs phase >= 2 (the session secrets).

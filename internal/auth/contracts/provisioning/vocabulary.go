@@ -44,7 +44,7 @@ var provisioningAggregates = map[string]Aggregate{
 		Events: []string{"organization.created", "organization.updated", "organization.suspended", "organization.reactivated"},
 		Change: []string{"status", "slug"}},
 	"membership": {IDPrefix: "mbr_",
-		Events: []string{"membership.invited", "membership.activated", "membership.role_changed", "membership.removed"},
+		Events: []string{"membership.invited", "membership.activated", "membership.role_changed", "membership.suspended", "membership.removed"},
 		Change: []string{"status", "role_id"}},
 	"platform_role_assignment": {IDPrefix: "pra_",
 		Events: []string{"platform_role_assignment.granted", "platform_role_assignment.revoked"},
@@ -55,6 +55,9 @@ var provisioningAggregates = map[string]Aggregate{
 	"workload": {IDPrefix: "prn_",
 		Events: []string{"workload.created", "workload.disabled", "workload.enabled", "workload.audiences_changed"},
 		Change: []string{"status", "audiences"}},
+	"invite": {IDPrefix: "inv_",
+		Events: []string{"invite.created", "invite.accepted", "invite.revoked"},
+		Change: []string{"status"}},
 	"resource_grant": {IDPrefix: "grt_",
 		Events: []string{"resource_grant.created", "resource_grant.updated", "resource_grant.revoked", "resource_grant.expired"},
 		Change: []string{"status", "resource_type", "resource_key", "action_set", "effect", "expires_at"}},
@@ -72,7 +75,7 @@ type changeMember struct {
 var wireTimestampPattern = `^([0-9]{3}[1-9]|[0-9]{2}[1-9][0-9]|[0-9][1-9][0-9]{2}|[1-9][0-9]{3})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\.[0-9]{1,6})?(Z|[+-](0[0-9]|1[0-9]|2[0-3]):[0-5][0-9])$`
 
 var provisioningChangeMembers = map[string]changeMember{
-	"status":             {enum: []string{"active", "disabled", "suspended", "pending", "removed", "revoked", "expired"}},
+	"status":             {enum: []string{"active", "disabled", "suspended", "pending", "removed", "revoked", "expired", "accepted"}},
 	"slug":               {pattern: `^[a-z0-9][a-z0-9-]{1,62}$`},
 	"role_id":            {pattern: `^rol_[A-Za-z0-9_-]{1,64}$`},
 	"owner_principal_id": {pattern: `^prn_[A-Za-z0-9_-]{1,64}$`},

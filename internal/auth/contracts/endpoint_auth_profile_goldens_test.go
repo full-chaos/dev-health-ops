@@ -183,12 +183,13 @@ func TestRejectedEndpointAuthProfileFixturesAreRejectedByTheDeclaredRule(t *test
 // endpointAuthProfileGateRefusals is the refusal each reject_by_client fixture
 // must draw from the profile gate. The schema accepts every one of them.
 var endpointAuthProfileGateRefusals = map[string]string{
-	"invalid-user-access-token-pins-the-envelope-typ.json":         `class "user_access_token" pins token_type "jwt"; its jwt_header_typ marker is "at+jwt"`,
-	"invalid-envelope-pins-the-access-token-typ.json":              `class "effective_principal_envelope" pins token_type "at+jwt"; its jwt_header_typ marker is "jwt"`,
-	"invalid-tokens-envelope-and-user-token-typs-swapped.json":     `class "effective_principal_envelope" pins token_type "at+jwt"; its jwt_header_typ marker is "jwt"`,
-	"invalid-user-access-token-pins-hs256.json":                    `class "user_access_token" pins algorithm "HS256"; its jwt_header_alg marker is "EdDSA"`,
-	"invalid-high-risk-action-cacheable.json":                      `action cache policy: action "members.invite" is high risk and its profile cache_class must be none`,
-	"invalid-content-type-selector-no-accepted-class-owns-it.json": `selector content_type/application/x-www-form-urlencoded is declared by none of the accepted classes`,
+	"invalid-user-access-token-pins-the-envelope-typ.json":               `class "user_access_token" pins token_type "jwt"; its jwt_header_typ marker is "at+jwt"`,
+	"invalid-envelope-pins-the-access-token-typ.json":                    `class "effective_principal_envelope" pins token_type "at+jwt"; its jwt_header_typ marker is "jwt"`,
+	"invalid-tokens-envelope-and-user-token-typs-swapped.json":           `class "effective_principal_envelope" pins token_type "at+jwt"; its jwt_header_typ marker is "jwt"`,
+	"invalid-user-access-token-pins-hs256.json":                          `class "user_access_token" pins algorithm "HS256"; its jwt_header_alg marker is "EdDSA"`,
+	"invalid-high-risk-action-cacheable.json":                            `action cache policy: action "members.invite" is high risk and its profile cache_class must be none`,
+	"invalid-content-type-selector-no-accepted-class-owns-it.json":       `selector content_type/application/x-www-form-urlencoded is declared by none of the accepted classes`,
+	"invalid-subject-token-type-selector-no-accepted-class-owns-it.json": `selector subject_token_type/urn:dev-health:params:oauth:token-type:workload-bootstrap-v2 is declared by none of the accepted classes`,
 }
 
 func TestEndpointAuthProfileGateRefusalTableEqualsTheManifest(t *testing.T) {

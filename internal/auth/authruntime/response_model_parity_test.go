@@ -77,7 +77,7 @@ func parityRoutes(t *testing.T) []httpapi.Route {
 	if err != nil {
 		t.Fatalf("sessionRoutes: %v", err)
 	}
-	credentials, components, err := credentialRoutes(cfg, logger, pool, schema, mustLimits(t))
+	credentials, components, err := credentialRoutes(cfg, logger, pool, schema, mustLimits(t), nil)
 	if err != nil {
 		t.Fatalf("credentialRoutes: %v", err)
 	}

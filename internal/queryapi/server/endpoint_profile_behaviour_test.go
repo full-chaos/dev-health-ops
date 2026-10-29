@@ -9,9 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
-
-	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/internalidentity"
@@ -29,6 +26,7 @@ import (
 const (
 	classEnvelope  = "effective_principal_envelope"
 	classEdgeToken = "ops_access_token_hs256"
+	classUserToken = "user_access_token"
 )
 
 var probeMethods = []string{
@@ -40,9 +38,23 @@ type behaviourStack struct {
 	handlers map[string]http.Handler
 	envelope string
 	edge     string
+	user     string
+	reader   *accessReader
 }
 
+// newBehaviourStack is the stack with the access-token issuer set: the edge
+// token, the envelope and the user access token are each a carrier.
 func newBehaviourStack(t *testing.T) *behaviourStack {
+	t.Helper()
+	minter := newAccessMinter(t)
+	stack := newAccessStack(t, newAccessStore(), testAccess(minter.keys, nil, accessTestNow), true)
+	stack.user = minter.mint(ecUser, nil, nil)
+	return stack
+}
+
+// newAccessStack is the real listener handlers over a fake store, with the
+// /query and /graphql authenticator routed by row when keys is set.
+func newAccessStack(t *testing.T, base *accessStore, setup *accessSetup, legacyOn bool) *behaviourStack {
 	t.Helper()
 	getenv := getenvFunc(func(name string) string {
 		switch name {
@@ -54,12 +66,15 @@ func newBehaviourStack(t *testing.T) *behaviourStack {
 		return ""
 	})
 	verifier, priv := iaVerifier(t)
-	store := &fakeEdgeStore{
-		states:  map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, TokenVersion: 5}},
-		found:   map[uuid.UUID]bool{ecUser: true},
-		members: map[[2]uuid.UUID]bool{{ecUser, ecOrg}: true},
-	}
+	store := newQueryAPIUserStoreFrom(base)
 	auth := ecEdgeAuth(t, store)
+	var reader *accessReader
+	if setup != nil {
+		reader = setup.reader
+		if err := routeAuthenticator(auth, setup.opts, legacyOn); err != nil {
+			t.Fatal(err)
+		}
+	}
 	mux := routeswitch.NewMux(routeswitch.StaticSwitch{"probe": true})
 	mux.Register("probe", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = authctx.FromContext(r.Context())
@@ -99,12 +114,19 @@ func newBehaviourStack(t *testing.T) *behaviourStack {
 		},
 		envelope: iaEnvelope(t, priv, principal.Claims{OrgID: ecOrg.String(), Role: "admin"}),
 		edge:     ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", tokenVersion: 5}),
+		reader:   reader,
 	}
 }
 
-// do sends one request to a listener. carrier is "", "envelope", "edge" or
-// "headers" (the internal identity headers).
+// do sends one request to a listener. carrier is "", "envelope", "edge",
+// "user" or "headers" (the internal identity headers).
 func (s *behaviourStack) do(listener, method, path, carrier string) int {
+	return s.send(listener, method, path, carrier, "").Status
+}
+
+// send is do with the answer's body; bearer, when set, is the Authorization
+// bearer instead of the carrier's.
+func (s *behaviourStack) send(listener, method, path, carrier, bearer string) answer {
 	var request *http.Request
 	switch {
 	case path == "/graphql" && (method == http.MethodGet || method == http.MethodHead):
@@ -120,15 +142,20 @@ func (s *behaviourStack) do(listener, method, path, carrier string) int {
 		request.Header.Set("Authorization", "Bearer "+s.envelope)
 	case "edge":
 		request.Header.Set("Authorization", "Bearer "+s.edge)
+	case "user":
+		request.Header.Set("Authorization", "Bearer "+s.user)
 	case "headers":
 		request.Header.Set(internalidentity.HeaderOrgID, ecOrg.String())
 		request.Header.Set(internalidentity.HeaderRole, "admin")
 		request.Header.Set(internalidentity.HeaderSuperuser, "false")
 		request.Header.Set(internalidentity.HeaderImpersonationActive, "false")
 	}
+	if bearer != "" {
+		request.Header.Set("Authorization", "Bearer "+bearer)
+	}
 	recorder := httptest.NewRecorder()
 	s.handlers[listener].ServeHTTP(recorder, request)
-	return recorder.Code
+	return answer{recorder.Code, recorder.Body.String()}
 }
 
 func jsonQuoteString(text string) string {
@@ -258,7 +285,7 @@ func TestEndpointProfileRowsMatchServedBehaviour(t *testing.T) {
 					continue
 				}
 				var accepted []string
-				for carrier, class := range map[string]string{"envelope": classEnvelope, "edge": classEdgeToken} {
+				for carrier, class := range map[string]string{"envelope": classEnvelope, "edge": classEdgeToken, "user": classUserToken} {
 					if code := stack.do(listener, method, path, carrier); code != http.StatusUnauthorized && served(code) {
 						accepted = append(accepted, class)
 					}

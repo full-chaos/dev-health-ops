@@ -37,6 +37,9 @@ var earlyRefusals = []EarlyRefusal{
 	{Prefix: "fcpush_", Classes: []string{"external_push_ingest_token"}},
 	{Prefix: "fcacr_", Classes: []string{"acr_client_credential"}},
 	{Prefix: "whsec_", Classes: nil},
+	// The Compose bootstrap credential is accepted only at auth-service's
+	// workload-token exchange, never as a Bearer.
+	{Prefix: "fcwlb_", Classes: nil},
 }
 
 const (

@@ -21,8 +21,12 @@ func TestUsersOwnedPublicGrantIsExactlyWhatTheSwitchGives(t *testing.T) {
 		{GrantRecord{Kind: "column", Object: "users", Column: "last_login_at", Privilege: "INSERT"}, false},
 		{GrantRecord{Kind: "column", Object: "users", Column: "password_hash", Privilege: "UPDATE", Grantable: true}, false},
 		{GrantRecord{Kind: "relation", Object: "users", Privilege: "UPDATE"}, false},
-		{GrantRecord{Kind: "relation", Object: "memberships", Privilege: "DELETE"}, false},
-		{GrantRecord{Kind: "column", Object: "memberships", Column: "role", Privilege: "UPDATE"}, false},
+		{GrantRecord{Kind: "relation", Object: "memberships", Privilege: "DELETE"}, true},
+		{GrantRecord{Kind: "column", Object: "memberships", Column: "role", Privilege: "UPDATE"}, true},
+		{GrantRecord{Kind: "column", Object: "memberships", Column: "invited_by_id", Privilege: "INSERT"}, true},
+		{GrantRecord{Kind: "relation", Object: "memberships", Privilege: "TRUNCATE"}, false},
+		{GrantRecord{Kind: "column", Object: "memberships", Column: "user_id", Privilege: "UPDATE"}, false},
+		{GrantRecord{Kind: "relation", Object: "organizations", Privilege: "DELETE"}, false},
 		{GrantRecord{Kind: "column", Object: "password_reset_tokens", Column: "token_hash", Privilege: "SELECT"}, false},
 	} {
 		if got := usersOwnedPublicGrant(tc.g); got != tc.want {

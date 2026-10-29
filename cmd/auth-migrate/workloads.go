@@ -6,7 +6,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/keyrotation"
 	"github.com/full-chaos/dev-health-ops/internal/auth/workload"
@@ -15,13 +19,36 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
-const workloadsUsage = "usage: auth-migrate workloads seed [-apply] | bind -workload N -environment E -trust-domain T -issuer I -namespace NS -service-account SA [-uid U] [-apply]"
+const workloadsUsage = "usage: auth-migrate workloads seed [-apply] | bind -workload N -environment E -trust-domain T -issuer I -namespace NS -service-account SA [-uid U] [-apply]" +
+	" | bootstrap-create -workload N -out PATH [-audience A]... [-expires-in DUR] [-apply]" +
+	" | bootstrap-rotate -workload N -out PATH -overlap DUR [-expires-in DUR] [-apply]" +
+	" | bootstrap-revoke -credential ID -reason compromised|owner_request [-apply]" +
+	" | bootstrap-disable -workload N [-apply]" +
+	"\nA bootstrap value is written once, to a new 0600 -out file, and never to argv, stdout or a log." +
+	"\nbootstrap-disable revokes every live bootstrap value of N at once; workload tokens issued before it live at most 300 s."
 
 type workloadsArgs struct {
 	verb    string
 	apply   bool
 	name    string
 	binding workload.BindingSpec
+
+	out          string
+	audiences    audienceList
+	expiresIn    time.Duration
+	overlap      time.Duration
+	credentialID uuid.UUID
+	reason       string
+}
+
+// audienceList is a repeatable -audience flag.
+type audienceList []string
+
+func (l *audienceList) String() string { return strings.Join(*l, ",") }
+
+func (l *audienceList) Set(v string) error {
+	*l = append(*l, v)
+	return nil
 }
 
 // parseWorkloadsArgs refuses a bad command line before any environment or
@@ -41,16 +68,35 @@ func parseWorkloadsArgs(args []string, stderr io.Writer) (workloadsArgs, error) 
 	flags.StringVar(&parsed.binding.Namespace, "namespace", "", "bind: the Kubernetes namespace")
 	flags.StringVar(&parsed.binding.ServiceAccountName, "service-account", "", "bind: the Kubernetes service account name")
 	flags.StringVar(&parsed.binding.ServiceAccountUID, "uid", "", "bind: the service account uid, when it is to be pinned")
+	flags.StringVar(&parsed.out, "out", "", "bootstrap-create, bootstrap-rotate: the NEW file (mode 0600) the value is written to once")
+	flags.Var(&parsed.audiences, "audience", "bootstrap-create: an audience of the value (repeatable; default: the workload's audiences)")
+	flags.DurationVar(&parsed.expiresIn, "expires-in", workload.BootstrapExpiryDefault, "bootstrap-create, bootstrap-rotate: the value's lifetime (at most 2160h)")
+	flags.DurationVar(&parsed.overlap, "overlap", 0, "bootstrap-rotate: how long the old value stays live (0 to 1h)")
+	credential := flags.String("credential", "", "bootstrap-revoke: the credential id")
+	flags.StringVar(&parsed.reason, "reason", "", "bootstrap-revoke: compromised or owner_request")
 	if err := flags.Parse(args[1:]); err != nil {
 		return workloadsArgs{}, err
 	}
 	if flags.NArg() != 0 {
 		return workloadsArgs{}, errors.New("positional arguments are not accepted")
 	}
+	set := map[string]bool{}
+	flags.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	only := func(verb string, allowed ...string) error {
+		for name := range set {
+			if name != "apply" && !slices.Contains(allowed, name) {
+				return fmt.Errorf("%s does not take -%s", verb, name)
+			}
+		}
+		return nil
+	}
 	switch parsed.verb {
 	case "seed":
 		if parsed.name != "" || parsed.binding != (workload.BindingSpec{}) {
 			return workloadsArgs{}, errors.New("seed takes no binding flags")
+		}
+		if err := only("seed"); err != nil {
+			return workloadsArgs{}, err
 		}
 	case "bind":
 		if workload.ValidateName(parsed.name) != nil {
@@ -58,6 +104,56 @@ func parseWorkloadsArgs(args []string, stderr io.Writer) (workloadsArgs, error) 
 		}
 		if workload.ValidateBinding(parsed.binding) != nil {
 			return workloadsArgs{}, errors.New("bind needs a valid -environment, -trust-domain, -issuer, -namespace and -service-account (and -uid, if given)")
+		}
+		if err := only("bind", "workload", "environment", "trust-domain", "issuer", "namespace", "service-account", "uid"); err != nil {
+			return workloadsArgs{}, err
+		}
+	case "bootstrap-create", "bootstrap-rotate":
+		allowed := []string{"workload", "out", "expires-in", "audience"}
+		if parsed.verb == "bootstrap-rotate" {
+			allowed = []string{"workload", "out", "expires-in", "overlap"}
+		}
+		if err := only(parsed.verb, allowed...); err != nil {
+			return workloadsArgs{}, err
+		}
+		if workload.ValidateName(parsed.name) != nil {
+			return workloadsArgs{}, fmt.Errorf("%s needs a valid -workload", parsed.verb)
+		}
+		if parsed.out == "" || parsed.out == "-" {
+			return workloadsArgs{}, fmt.Errorf("%s needs -out, a file path (never stdout)", parsed.verb)
+		}
+		if parsed.expiresIn <= 0 || parsed.expiresIn > workload.BootstrapExpiryCeiling {
+			return workloadsArgs{}, errors.New("-expires-in must be above 0 and at most 2160h (90 d)")
+		}
+		if workload.ValidateAudiences(parsed.audiences) != nil {
+			return workloadsArgs{}, errors.New("an -audience is malformed or repeated")
+		}
+		if parsed.verb == "bootstrap-rotate" {
+			if !set["overlap"] {
+				return workloadsArgs{}, errors.New("bootstrap-rotate needs -overlap (0 cuts over at once)")
+			}
+			if parsed.overlap < 0 || parsed.overlap > workload.BootstrapOverlapCeiling {
+				return workloadsArgs{}, errors.New("-overlap must be from 0 to 1h")
+			}
+		}
+	case "bootstrap-revoke":
+		if err := only(parsed.verb, "credential", "reason"); err != nil {
+			return workloadsArgs{}, err
+		}
+		id, err := uuid.Parse(*credential)
+		if err != nil || id == uuid.Nil || id.String() != *credential {
+			return workloadsArgs{}, errors.New("bootstrap-revoke needs -credential, a credential id")
+		}
+		parsed.credentialID = id
+		if parsed.reason != workload.BootstrapReasonCompromised && parsed.reason != workload.BootstrapReasonOwnerRequest {
+			return workloadsArgs{}, errors.New("bootstrap-revoke needs -reason compromised or owner_request")
+		}
+	case "bootstrap-disable":
+		if err := only(parsed.verb, "workload"); err != nil {
+			return workloadsArgs{}, err
+		}
+		if workload.ValidateName(parsed.name) != nil {
+			return workloadsArgs{}, errors.New("bootstrap-disable needs a valid -workload")
 		}
 	default:
 		return workloadsArgs{}, errors.New("unknown verb")
@@ -153,6 +249,8 @@ func executeWorkloads(parent context.Context, args []string, lookup secrets.Look
 			return 1
 		}
 		fmt.Fprintf(stdout, "workloads bind applied: workload=%s environment=%s binding=%s\n", parsed.name, parsed.binding.Environment, id)
+	default:
+		return runBootstrap(ctx, store, parsed, stdout, stderr)
 	}
 	return 0
 }
@@ -165,6 +263,16 @@ func failureClass(err error) string {
 		return "federation tuple already bound"
 	case errors.Is(err, workload.ErrBindingInvalid):
 		return "binding field refused"
+	case errors.Is(err, workload.ErrBootstrapLive):
+		return "the workload has a live bootstrap value; rotate it"
+	case errors.Is(err, workload.ErrBootstrapRotating):
+		return "a rotation is still in its overlap"
+	case errors.Is(err, workload.ErrBootstrapNone):
+		return "the workload has no live bootstrap value"
+	case errors.Is(err, workload.ErrBootstrapNotFound):
+		return "bootstrap credential not found"
+	case errors.Is(err, workload.ErrAudienceInvalid):
+		return "audience refused"
 	case errors.Is(err, workload.ErrStore):
 		return "store unavailable"
 	}

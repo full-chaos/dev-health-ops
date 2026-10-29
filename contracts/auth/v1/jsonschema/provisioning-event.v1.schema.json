@@ -115,6 +115,11 @@
               "pattern": "^prn_[A-Za-z0-9_-]{1,64}$",
               "description": "The principal an external identity belongs to: the event's subject, never its actor."
             },
+            "credential_id": {
+              "type": "string",
+              "pattern": "^crd_[A-Za-z0-9_-]{1,64}$",
+              "description": "A workload bootstrap credential's server-minted id. The value and its digest are never carried."
+            },
             "provider": {
               "type": "string",
               "pattern": "^[a-z][a-z0-9_-]{1,31}$",
@@ -484,7 +489,8 @@
               "workload.created",
               "workload.disabled",
               "workload.enabled",
-              "workload.audiences_changed"
+              "workload.audiences_changed",
+              "workload.bootstrap_changed"
             ]
           },
           "payload": {
@@ -495,7 +501,8 @@
                 "propertyNames": {
                   "enum": [
                     "status",
-                    "audiences"
+                    "audiences",
+                    "credential_id"
                   ]
                 }
               }

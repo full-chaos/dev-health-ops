@@ -170,3 +170,30 @@ func TestAnAnswerOverTheBoundIsUnavailable(t *testing.T) {
 		t.Fatalf("an oversized answer = %v, want ErrUnavailable", err)
 	}
 }
+
+func TestReactivateNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
+	reached := make(chan struct{}, 4)
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reached <- struct{}{}
+		_, _ = w.Write([]byte(`{"status":"active"}`))
+	}))
+	defer other.Close()
+	redirecting := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+Path, http.StatusTemporaryRedirect)
+	}))
+	defer redirecting.Close()
+	base, _ := url.Parse(redirecting.URL)
+	client, err := New(base, testToken, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.http.CheckRedirect == nil || client.http.CheckRedirect(nil, nil) != http.ErrUseLastResponse {
+		t.Fatal("the client's own CheckRedirect does not answer http.ErrUseLastResponse")
+	}
+	if err := client.Reactivate(context.Background(), uuid.New(), uuid.New()); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("redirect = %v, want ErrUnavailable", err)
+	}
+	if len(reached) != 0 {
+		t.Fatalf("the redirect target saw %d request(s)", len(reached))
+	}
+}

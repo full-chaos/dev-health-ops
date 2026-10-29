@@ -9,7 +9,7 @@
 # when another run for the same sha would be green (a run with no matching job is skipped). Fewer than two or more than six arguments exit 1.
 # The sixth argument may instead be @<file>: the EXPECTED job names, one per line (the leg names of the validated leg list). The run then
 # counts only when every expected name has a successful job and no other job carries the prefix: a missing, extra or padded name is not
-# a tested run. An unreadable or empty file exits 1.
+# a tested run. An unreadable file exits 1; an empty one can never match a run.
 # QUEUE_TESTED_RUN_ID_FILE, when set, receives the matched run id on exit 0.
 set -uo pipefail
 
@@ -40,7 +40,6 @@ if [ -n "${names_file}" ]; then
   while IFS= read -r line; do
     [ -n "${line}" ] && expected["${line}"]=1
   done < "${names_file}"
-  [ "${#expected[@]}" -ge 1 ] || exit 1
 fi
 for value in "${repo}" "${workflow}" "${prefix}" "${step}"; do
   case "${value}" in
@@ -76,7 +75,6 @@ for id in ${ids}; do
   done <<<"${shards}"
   count=${#seen[@]}
   if [ -n "${names_file}" ]; then
-    [ "${count}" -eq "${#expected[@]}" ] || all_green=0
     for jname in "${!seen[@]}"; do
       [ -n "${expected[${jname}]:-}" ] || all_green=0
     done

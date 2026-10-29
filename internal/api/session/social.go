@@ -45,6 +45,9 @@ func providerText(value pyjson.Value) (*string, error) {
 // providerUserIDInvalid is the one answer to a profile whose user id is empty or unusable as an identity key.
 const providerUserIDInvalid = "The provider returned an invalid user id"
 
+// providerEmailUnusable is the one answer to a profile whose email the shared email text rule refuses; it names no value.
+const providerEmailUnusable = "The provider returned an unusable email address"
+
 // socialAccountExists is the 409 for an e-mail another account holds; it names
 // no sign-in method.
 const socialAccountExists = "An account with this email already exists. Please sign in with your existing sign-in method."
@@ -105,6 +108,11 @@ func (h handlers) socialLogin(w http.ResponseWriter, r *http.Request) {
 	if err := identity.RefuseInvalidProviderID(provider, &providerUserID); err != nil {
 		h.Logger.WarnContext(ctx, "social login refused: the provider returned an invalid user id", "provider", provider)
 		refuse(w, http.StatusBadRequest, providerUserIDInvalid)
+		return
+	}
+	if email, isText := info.Email.(string); isText && pyjson.BadTextForm(pyjson.ClassEmail, email) != pyjson.TextFormNone {
+		h.Logger.WarnContext(ctx, "social login refused: the provider returned an unusable email address", "provider", provider)
+		refuse(w, http.StatusBadRequest, providerEmailUnusable)
 		return
 	}
 	tx, err := h.Pool.Begin(ctx)

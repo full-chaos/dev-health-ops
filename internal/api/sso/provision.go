@@ -68,6 +68,9 @@ func (h handlers) provisionOrGetUser(ctx context.Context, row *providerRow, emai
 	if err := refuseUnusableSubject(authProviderValue, externalID); err != nil {
 		return nil, nil, err
 	}
+	if err := refuseUnusableEmail(email); err != nil {
+		return nil, nil, err
+	}
 	userID, found, err := h.resolveProviderIdentity(ctx, authProviderValue, providerID, externalID, email)
 	if err != nil {
 		return nil, nil, err

@@ -34,8 +34,6 @@ const (
 	// maxIssueBearerBytes bounds the bearer before any header is decoded. A
 	// workload token is under 600 bytes.
 	maxIssueBearerBytes = 2048
-
-	reasonAcceptedWorkload = "accepted_workload"
 )
 
 // issueRefusedPrefixes are the credential classes the issue route never takes:

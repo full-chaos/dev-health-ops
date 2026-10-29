@@ -215,11 +215,7 @@ func (h compatHandlers) issueSession(w http.ResponseWriter, r *http.Request) {
 		h.rec.refuse(w, r, opSessionIssue, unavailable(reasonDependency), err)
 		return
 	}
-	accepted := reasonAccepted
-	if caller.workload != nil {
-		accepted = reasonAcceptedWorkload
-	}
-	h.rec.record(ctx, opSessionIssue, "success", accepted, nil)
+	h.rec.record(ctx, opSessionIssue, "success", reasonAccepted, nil)
 	writeJSON(w, http.StatusOK, issueAnswer{
 		AccessToken: access, RefreshToken: issued.Credential.Reveal(), TokenType: "bearer", ExpiresIn: AccessExpiresIn,
 	})

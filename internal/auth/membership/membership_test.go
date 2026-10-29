@@ -221,7 +221,7 @@ func TestOutcomeLabelsAreClosed(t *testing.T) {
 		nil: "ok", audit.ErrNoStateChange: "noop", ErrNotMember: "not_member", ErrAlreadyMember: "already_member",
 		ErrSuspended: "suspended", ErrLastOwner: "last_owner", ErrNotOwner: "not_owner", ErrTargetNotMember: "not_member",
 		ErrRoleInvalid: "invalid", ErrRoleMissing: "invalid", ErrRevisionConflict: "conflict", ErrOrgNotFound: "not_found",
-		ErrOrgSuspended: "suspended", ErrPrincipalNotFound: "not_found", ErrDenied: "denied", ErrNotOwned: "not_owned",
+		ErrOrgSuspended: "suspended", ErrPrincipalNotFound: "not_found", ErrInviterNotFound: "not_found", ErrDenied: "denied", ErrNotOwned: "not_owned",
 		errors.New("anything else"): "error",
 	}
 	for err, want := range cases {

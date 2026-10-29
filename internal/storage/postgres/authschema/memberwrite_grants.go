@@ -14,14 +14,17 @@ import (
 // RegisterOrganizationGrants that the auth runtime role needs to keep go-api's
 // public.memberships equal to auth.memberships while it owns users
 // (AUTH_USERS_OWNED; internal/auth/membership): DELETE a row whose membership
-// left active, UPDATE its role, and SELECT its id (the verbs read and lock the
-// row they change). No TRUNCATE, no other column and no other table. Off, the REVOKE ALL that
+// left active, UPDATE its role, SELECT its id (the verbs read and lock the row
+// they change), and INSERT invited_by_id (go-api's admin member list returns
+// the inviter; readers stay public-only, D6358; acp ruling 10-29 01:2xZ). No
+// TRUNCATE, no other column and no other table. Off, the REVOKE ALL that
 // publicReadStatements issues on the table removes it.
 type MembershipWriteGrant struct {
 	Table  string
 	Delete bool
 	Select []string
 	Update []string
+	Insert []string
 }
 
 func MembershipWriteGrants() MembershipWriteGrant {
@@ -30,6 +33,7 @@ func MembershipWriteGrants() MembershipWriteGrant {
 		Delete: true,
 		Select: []string{"id"},
 		Update: []string{"role", "updated_at"},
+		Insert: []string{"invited_by_id"},
 	}
 }
 
@@ -67,10 +71,15 @@ func membershipWriteStatements(ctx context.Context, conn querier, options Option
 	if err != nil {
 		return nil, err
 	}
+	insertColumns, err := quotedColumns(g.Insert)
+	if err != nil {
+		return nil, err
+	}
 	statements := []string{
 		fmt.Sprintf(`GRANT DELETE ON TABLE %s TO %s`, table, role),
 		fmt.Sprintf(`GRANT SELECT (%s) ON TABLE %s TO %s`, strings.Join(selectColumns, ", "), table, role),
 		fmt.Sprintf(`GRANT UPDATE (%s) ON TABLE %s TO %s`, strings.Join(updateColumns, ", "), table, role),
+		fmt.Sprintf(`GRANT INSERT (%s) ON TABLE %s TO %s`, strings.Join(insertColumns, ", "), table, role),
 	}
 	logger.InfoContext(ctx, "applying the membership write grant", "schema", publicSchema, "table", g.Table)
 	return statements, nil
@@ -95,6 +104,8 @@ func isMembershipWriteColumn(table, privilege, column string) bool {
 		return slices.Contains(g.Select, column)
 	case "UPDATE":
 		return slices.Contains(g.Update, column)
+	case "INSERT":
+		return slices.Contains(g.Insert, column)
 	}
 	return false
 }
@@ -123,7 +134,7 @@ func membershipWriteMissing(ctx context.Context, conn *pgx.Conn, options Options
 	for _, columnGrant := range []struct {
 		privilege string
 		columns   []string
-	}{{"SELECT", g.Select}, {"UPDATE", g.Update}} {
+	}{{"SELECT", g.Select}, {"UPDATE", g.Update}, {"INSERT", g.Insert}} {
 		for _, column := range columnGrant.columns {
 			var held bool
 			if err := conn.QueryRow(ctx, `SELECT has_column_privilege($1, format('%I.%I', $2::text, $3::text), $4, $5)`,

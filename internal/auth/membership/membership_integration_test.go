@@ -515,3 +515,52 @@ func TestForcedFailureAtEitherWriteLeavesEverythingUnchanged(t *testing.T) {
 		})
 	}
 }
+
+// An add with an inviter writes the inviter to go-api's row and the auth row
+// (go-api's admin member list returns invited_by_id; acp ruling 10-29 01:2xZ).
+func TestAddWithInviterWritesItToBothRows(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	org, user, inviter := e.seedOrg(t, ctx), e.seedUser(t, ctx), e.seedUser(t, ctx)
+	if _, err := e.store.Add(ctx, Change{OrgID: org, PrincipalID: user, Role: "member", InvitedBy: &inviter, Authorize: allowAll}); err != nil {
+		t.Fatalf("Add with an inviter: %v", err)
+	}
+	var public, auth uuid.UUID
+	if err := e.admin.QueryRow(ctx, `SELECT p.invited_by_id, a.invited_by FROM public.memberships p
+JOIN auth.memberships a ON a.organization_id = p.org_id AND a.principal_id = p.user_id
+WHERE p.org_id = $1 AND p.user_id = $2`, org, user).Scan(&public, &auth); err != nil {
+		t.Fatal(err)
+	}
+	if public != inviter || auth != inviter {
+		t.Fatalf("inviter public=%v auth=%v, want %v in both", public, auth, inviter)
+	}
+}
+
+// An inviter that is not in public.users, or not in the auth schema, is
+// refused before any write: no row, no audit row, no foreign-key error.
+func TestAddWithUnknownInviterIsRefusedBeforeAnyWrite(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	org := e.seedOrg(t, ctx)
+	publicOnly := uuid.New()
+	if _, err := e.admin.Exec(ctx, `INSERT INTO public.users
+	(id, email, password_hash, auth_provider, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
+VALUES ($1, $2, NULL, 'local', true, true, false, 0, now(), now())`, publicOnly, "inviter-"+publicOnly.String()[:8]+"@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	for name, inviter := range map[string]uuid.UUID{"nowhere": uuid.New(), "public.users only": publicOnly} {
+		t.Run(name, func(t *testing.T) {
+			user := e.seedUser(t, ctx)
+			_, err := e.store.Add(ctx, Change{OrgID: org, PrincipalID: user, Role: "member", InvitedBy: &inviter, Authorize: allowAll})
+			if !errors.Is(err, ErrInviterNotFound) {
+				t.Fatalf("Add with an unknown inviter = %v, want ErrInviterNotFound", err)
+			}
+			if got := e.rows(t, ctx, org, user); got != (rows{}) {
+				t.Fatalf("rows = %+v, want none", got)
+			}
+			if n := e.auditRows(t, ctx, "auth.membership.added", org); n != 0 {
+				t.Fatalf("audit rows = %d, want 0", n)
+			}
+		})
+	}
+}

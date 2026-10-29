@@ -115,7 +115,7 @@ func (s *Store) record(ctx context.Context, v verb, err error) {
 // wrapped in ErrStore.
 var refusals = []error{ErrNotOwned, ErrRoleInvalid, ErrNotMember, ErrAlreadyMember, ErrSuspended, ErrLastOwner,
 	ErrNotOwner, ErrTargetNotMember, ErrRoleMissing, ErrRevisionConflict, ErrOrgNotFound, ErrOrgSuspended,
-	ErrPrincipalNotFound, ErrDenied, errStateMoved}
+	ErrPrincipalNotFound, ErrInviterNotFound, ErrDenied, errStateMoved}
 
 func (s *Store) run(ctx context.Context, v verb, m audit.Mutation) (err error) {
 	defer func() {
@@ -210,30 +210,39 @@ func (q poolQuerier) queryRow(ctx context.Context, sql string, args ...any) pgx.
 //  5. public.memberships: the organization's owner rows and the pairs, FOR UPDATE, by id;
 //  6. auth.memberships pair rows FOR UPDATE, by id;
 //  7. aggregate_revisions, inside audit.Commit.
-func (s *Store) readPairs(ctx context.Context, q querier, orgID uuid.UUID, principals []uuid.UUID, lock bool) (*locked, error) {
+//
+// An inviter is locked with the principals, in the same id order, so a
+// membership insert never takes a later lock on a principal or users row; a
+// missing inviter is ErrInviterNotFound before anything is written.
+func (s *Store) readPairs(ctx context.Context, q querier, orgID uuid.UUID, principals []uuid.UUID, inviter *uuid.UUID, lock bool) (*locked, error) {
 	forUpdate, forShare := "", ""
 	if lock {
 		forUpdate, forShare = " FOR UPDATE", " FOR SHARE"
 	}
 	ids := sortedUnique(principals)
+	lockIDs := ids
+	if inviter != nil {
+		lockIDs = sortedUnique(append(append([]uuid.UUID(nil), ids...), *inviter))
+	}
 	// The id array goes as one array literal with an explicit ::uuid[] cast: a
 	// statement inside audit.Commit has no parameter types to encode a
 	// []uuid.UUID with.
-	parts := make([]string, len(ids))
-	for i, id := range ids {
-		parts[i] = id.String()
-	}
-	idText := "{" + strings.Join(parts, ",") + "}"
+	idText, lockText := uuidArray(ids), uuidArray(lockIDs)
 	for _, sql := range []string{
 		`SELECT id FROM ` + s.q + `.principals WHERE id = ANY($1::uuid[]) ORDER BY id` + forUpdate,
 		`SELECT id FROM public.users WHERE id = ANY($1::uuid[]) ORDER BY id` + forUpdate,
 	} {
-		n, err := countRows(ctx, q, sql, idText)
+		found, err := foundIDs(ctx, q, sql, lockText)
 		if err != nil {
 			return nil, err
 		}
-		if n != len(ids) {
-			return nil, ErrPrincipalNotFound
+		for _, id := range ids {
+			if !found[id] {
+				return nil, ErrPrincipalNotFound
+			}
+		}
+		if inviter != nil && !found[*inviter] {
+			return nil, ErrInviterNotFound
 		}
 	}
 	var orgActive bool
@@ -294,17 +303,30 @@ WHERE organization_id = $1 AND principal_id = ANY($2::uuid[]) ORDER BY id`+forUp
 	return l, rows.Err()
 }
 
-func countRows(ctx context.Context, q querier, sql string, ids string) (int, error) {
+func uuidArray(ids []uuid.UUID) string {
+	parts := make([]string, len(ids))
+	for i, id := range ids {
+		parts[i] = id.String()
+	}
+	return "{" + strings.Join(parts, ",") + "}"
+}
+
+func foundIDs(ctx context.Context, q querier, sql string, ids string) (map[uuid.UUID]bool, error) {
 	rows, err := q.query(ctx, sql, ids)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	n := 0
+	found := map[uuid.UUID]bool{}
 	for rows.Next() {
-		n++
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		found[id] = true
 	}
 	rows.Close()
-	return n, rows.Err()
+	return found, rows.Err()
 }
 
 func sortedUnique(ids []uuid.UUID) []uuid.UUID {
@@ -355,10 +377,8 @@ func (s *Store) write(ctx context.Context, tx audit.TxOps, orgID uuid.UUID, p *p
 	if next.status == StatusActive {
 		switch {
 		case p.publicID == nil:
-			// The users-owned INSERT grant (authschema.RegisterOrganizationGrants) has
-			// no invited_by_id: the inviter is kept on the auth row only.
-			if _, err := tx.Exec(ctx, `INSERT INTO public.memberships (id, user_id, org_id, role, joined_at, created_at, updated_at)
-VALUES ($1, $2, $3, $4, clock_timestamp(), clock_timestamp(), clock_timestamp())`, id, p.principal, orgID, next.role); err != nil {
+			if _, err := tx.Exec(ctx, `INSERT INTO public.memberships (id, user_id, org_id, role, invited_by_id, joined_at, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, clock_timestamp(), clock_timestamp(), clock_timestamp())`, id, p.principal, orgID, next.role, invitedBy); err != nil {
 				return err
 			}
 		case *p.publicRole != next.role:
@@ -442,7 +462,7 @@ func (s *Store) mutate(ctx context.Context, v verb, c Change) (*Membership, erro
 	var err error
 	for range planAttempts {
 		var read *locked
-		read, err = s.readPairs(ctx, poolQuerier{s.pool}, c.OrgID, ids, false)
+		read, err = s.readPairs(ctx, poolQuerier{s.pool}, c.OrgID, ids, c.InvitedBy, false)
 		if err != nil {
 			// The locked read below decides the refusal after Authorize, so
 			// a refusal is not disclosed to an actor Authorize refuses.
@@ -455,7 +475,7 @@ func (s *Store) mutate(ctx context.Context, v verb, c Change) (*Membership, erro
 		}
 		err = s.run(ctx, v, audit.Mutation{
 			Apply: func(ctx context.Context, tx audit.TxOps) error {
-				l, err := s.readPairs(ctx, txQuerier{tx}, c.OrgID, ids, true)
+				l, err := s.readPairs(ctx, txQuerier{tx}, c.OrgID, ids, c.InvitedBy, true)
 				if err != nil {
 					return err
 				}
@@ -529,7 +549,7 @@ func (s *Store) TransferOwnership(ctx context.Context, t Transfer) error {
 	var err error
 	for range planAttempts {
 		var from, to pairPlan
-		if read, rerr := s.readPairs(ctx, poolQuerier{s.pool}, t.OrgID, ids, false); rerr == nil {
+		if read, rerr := s.readPairs(ctx, poolQuerier{s.pool}, t.OrgID, ids, nil, false); rerr == nil {
 			from, to = planOf(read.pairs[t.From]), planOf(read.pairs[t.To])
 		} else {
 			from, to = planOf(&pairRows{principal: t.From}), planOf(&pairRows{principal: t.To})
@@ -540,7 +560,7 @@ func (s *Store) TransferOwnership(ctx context.Context, t Transfer) error {
 		}
 		err = s.run(ctx, verbTransfer, audit.Mutation{
 			Apply: func(ctx context.Context, tx audit.TxOps) error {
-				l, err := s.readPairs(ctx, txQuerier{tx}, t.OrgID, ids, true)
+				l, err := s.readPairs(ctx, txQuerier{tx}, t.OrgID, ids, nil, true)
 				if err != nil {
 					return err
 				}

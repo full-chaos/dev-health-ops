@@ -260,7 +260,7 @@ func outcomeLabel(err error) string {
 		return "invalid"
 	case errors.Is(err, ErrRevisionConflict):
 		return "conflict"
-	case errors.Is(err, ErrOrgNotFound), errors.Is(err, ErrPrincipalNotFound):
+	case errors.Is(err, ErrOrgNotFound), errors.Is(err, ErrPrincipalNotFound), errors.Is(err, ErrInviterNotFound):
 		return "not_found"
 	case errors.Is(err, ErrDenied):
 		return "denied"

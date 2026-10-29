@@ -16,6 +16,7 @@ var (
 	ErrOrgNotFound       = errors.New("membership: the organization is not in the auth schema")
 	ErrOrgSuspended      = errors.New("membership: the organization is suspended")
 	ErrPrincipalNotFound = errors.New("membership: the principal is not in the auth schema or in public.users")
+	ErrInviterNotFound   = errors.New("membership: the inviter is not in the auth schema or in public.users")
 	ErrDenied            = errors.New("membership: the actor may not change this membership")
 	ErrStore             = errors.New("membership: store unavailable")
 )

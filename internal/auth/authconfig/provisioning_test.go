@@ -103,7 +103,7 @@ func TestInviteAcceptSecretsOrder(t *testing.T) {
 				t.Fatalf("Load: %v", err)
 			}
 			if got := cfg.InviteAcceptSecrets(); !slices.Equal(got, c.want) {
-				t.Fatalf("accept keys differ from go-api's order (%d keys, want %d)", len(got), len(c.want))
+				t.Fatalf("accept keys differ from the invite keys in order (%d keys, want %d)", len(got), len(c.want))
 			}
 			if cfg.Provisioning.InviteSecret.Reveal() != testInviteSecret {
 				t.Fatal("the signing key is not AUTH_INVITE_TOKEN_SECRET")

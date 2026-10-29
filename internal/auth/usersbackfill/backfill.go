@@ -74,6 +74,9 @@ type Report struct {
 	LastLoginDrift   int
 	RoleGranted      int
 	RoleRevoked      int
+	// RoleSkippedOwned counts users whose platform role differs from
+	// is_superuser and was left alone because platform roles are owned.
+	RoleSkippedOwned int
 	Skipped          map[string]int
 
 	// IdentityRelinkPending counts the not-carried SSO accounts the owned store re-links at their first sign-in
@@ -131,6 +134,9 @@ func (r Report) Lines() []string {
 type Options struct {
 	DryRun    bool
 	BatchSize int
+	// PlatformRolesOwned is AUTH_PLATFORM_ROLES_OWNED: the platform role leg
+	// writes nothing and counts each difference.
+	PlatformRolesOwned bool
 }
 
 // Run copies every user. Per-user failures are counted by class and the run

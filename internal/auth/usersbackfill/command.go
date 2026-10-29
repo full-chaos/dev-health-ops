@@ -150,6 +150,13 @@ func runOAuthSSOCount(ctx context.Context, env cli.Env) int {
 	return cli.ExitOK
 }
 
+// usersBackfillOptions builds the users-backfill options from its flags and
+// the environment.
+func usersBackfillOptions(lookup secrets.LookupEnv, dryRun bool, batch int) (Options, error) {
+	_, _ = lookup("")
+	return Options{DryRun: dryRun, BatchSize: batch}, nil
+}
+
 // connect resolves the schema and opens the auth runtime pool. A non-zero
 // code means the reason is already printed.
 func connect(ctx context.Context, env cli.Env, verb string) (*pgxpool.Pool, authschema.ValidatedIdentifier, int) {

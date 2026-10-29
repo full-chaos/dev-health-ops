@@ -399,8 +399,9 @@ func (e *env) holdWriteLock(t *testing.T, ctx context.Context) func() {
 
 // waitsForTheWriteLock runs write while another transaction holds the write
 // lock: write must be seen waiting on the advisory lock before it returns, and
-// must finish once the lock is released.
-func (e *env) waitsForTheWriteLock(t *testing.T, ctx context.Context, write func() error) error {
+// must finish once the lock is released. whileBlocked, when set, runs after
+// the wait is seen and before the release.
+func (e *env) waitsForTheWriteLock(t *testing.T, ctx context.Context, write func() error, whileBlocked func()) error {
 	t.Helper()
 	var role string
 	if err := e.runtime.QueryRow(ctx, `SELECT current_user`).Scan(&role); err != nil {
@@ -430,6 +431,9 @@ func (e *env) waitsForTheWriteLock(t *testing.T, ctx context.Context, write func
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+	if whileBlocked != nil {
+		whileBlocked()
+	}
 	release()
 	return <-done
 }
@@ -442,7 +446,7 @@ func TestGrantWaitsForTheWriteLock(t *testing.T) {
 	err := e.waitsForTheWriteLock(t, ctx, func() error {
 		_, err := e.store.Grant(ctx, GrantInput{Actor: admin, Principal: target, Role: PlatformAdmin})
 		return err
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("Grant after the lock was released: %v", err)
 	}
@@ -455,8 +459,61 @@ func TestRevokeWaitsForTheWriteLock(t *testing.T) {
 	b := e.user(t, ctx, true, true)
 	err := e.waitsForTheWriteLock(t, ctx, func() error {
 		return e.store.Revoke(ctx, RevokeInput{Actor: a, Principal: b, Role: PlatformAdmin})
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("Revoke after the lock was released: %v", err)
+	}
+}
+
+// sleepPast waits until the database clock is past at.
+func (e *env) sleepPast(t *testing.T, ctx context.Context, at time.Time) {
+	t.Helper()
+	for {
+		var past bool
+		if err := e.admin.QueryRow(ctx, `SELECT statement_timestamp() > $1::timestamptz`, at).Scan(&past); err != nil {
+			t.Fatal(err)
+		}
+		if past {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// The granter is checked after the write lock is taken: a granter whose role
+// expires while the grant waits for the lock is refused.
+func TestGrantChecksTheGranterAfterTheWriteLock(t *testing.T) {
+	e := getEnv(t)
+	ctx := ctxT(t)
+	admin := e.user(t, ctx, true, true)
+	granter := e.user(t, ctx, true, false)
+	target := e.user(t, ctx, true, false)
+	until := time.Now().Add(3 * time.Second)
+	if _, err := e.store.Grant(ctx, GrantInput{Actor: admin, Principal: granter, Role: PlatformAdmin, ExpiresAt: &until}); err != nil {
+		t.Fatal(err)
+	}
+	err := e.waitsForTheWriteLock(t, ctx, func() error {
+		_, err := e.store.Grant(ctx, GrantInput{Actor: granter, Principal: target, Role: PlatformAdmin})
+		return err
+	}, func() { e.sleepPast(t, ctx, until) })
+	if !errors.Is(err, ErrGranterNotHeld) {
+		t.Fatalf("a granter that expired while the grant waited: %v, want ErrGranterNotHeld", err)
+	}
+}
+
+// The requested expiry is checked after the write lock is taken: an expiry
+// that passes while the grant waits for the lock is refused.
+func TestGrantChecksTheExpiryAfterTheWriteLock(t *testing.T) {
+	e := getEnv(t)
+	ctx := ctxT(t)
+	admin := e.user(t, ctx, true, true)
+	target := e.user(t, ctx, true, false)
+	until := time.Now().Add(3 * time.Second)
+	err := e.waitsForTheWriteLock(t, ctx, func() error {
+		_, err := e.store.Grant(ctx, GrantInput{Actor: admin, Principal: target, Role: PlatformAdmin, ExpiresAt: &until})
+		return err
+	}, func() { e.sleepPast(t, ctx, until) })
+	if !errors.Is(err, ErrExpiryNotFuture) {
+		t.Fatalf("an expiry that passed while the grant waited: %v, want ErrExpiryNotFuture", err)
 	}
 }

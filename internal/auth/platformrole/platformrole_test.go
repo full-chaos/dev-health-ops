@@ -200,6 +200,17 @@ func TestStoreLocksNoAssignmentRow(t *testing.T) {
 	if !strings.Contains(string(src), "pg_advisory_xact_lock(hashtextextended($1, 0))") {
 		t.Error("the store takes no advisory write lock")
 	}
+	// The guard statements run after the lock is taken, so they read the clock
+	// of their own statement: now() is the transaction start, before the wait,
+	// and clock_timestamp() can change inside one statement.
+	for _, clock := range []string{"now()", "clock_timestamp()", "current_timestamp", "transaction_timestamp()"} {
+		if strings.Contains(strings.ToLower(string(src)), clock) {
+			t.Errorf("store.go reads %s; the guards read statement_timestamp()", clock)
+		}
+	}
+	if strings.Count(string(src), "statement_timestamp()") < 2 {
+		t.Error("the active rule and the expiry check do not both read statement_timestamp()")
+	}
 	if writeLock != "auth.platform_role_assignments:write" {
 		t.Errorf("write lock name = %q: every writer of the table must take the same lock", writeLock)
 	}

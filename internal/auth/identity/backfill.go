@@ -32,6 +32,10 @@ type BackfillTarget struct {
 	TokenVersion int64
 	// LastLoginAt is public.users.last_login_at, or nil.
 	LastLoginAt *time.Time
+	// PlatformRolesOwned is AUTH_PLATFORM_ROLES_OWNED: auth-service owns the
+	// platform roles, so the backfill neither grants nor revokes one; a
+	// difference is reported as RoleSkipped.
+	PlatformRolesOwned bool
 }
 
 // PlatformAdminRole is the role_key a superuser holds. It is the role name of
@@ -52,6 +56,9 @@ type BackfillResult struct {
 	LastLoginDrift bool
 	RoleGranted    bool
 	RoleRevoked    bool
+	// RoleSkipped is set when the platform role differs from Superuser but
+	// PlatformRolesOwned kept the backfill from changing it.
+	RoleSkipped bool
 }
 
 type backfillState struct {

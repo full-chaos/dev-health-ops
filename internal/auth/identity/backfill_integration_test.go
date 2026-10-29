@@ -143,6 +143,65 @@ WHERE u.principal_id = $1 AND u.legacy_token_version = 3 AND u.last_login_at = $
 	}
 }
 
+// While auth-service owns platform roles the backfill neither grants nor
+// revokes one: it reports each difference as RoleSkipped and still carries the
+// other fields.
+func TestBackfillLeavesPlatformRolesAloneWhileOwned(t *testing.T) {
+	e := getEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	roles := func(id uuid.UUID) int {
+		return e.count(t, ctx, `SELECT count(*) FROM auth.platform_role_assignments WHERE principal_id = $1`, id)
+	}
+
+	fresh := BackfillTarget{ID: uuid.New(), Email: uniqueEmail("bfo"), Active: true, Superuser: true, PlatformRolesOwned: true}
+	res, err := e.store.BackfillUser(ctx, fresh, false)
+	if err != nil || !res.Inserted || !res.RoleSkipped || res.RoleGranted {
+		t.Fatalf("insert of a superuser while owned: %+v %v", res, err)
+	}
+	if n := roles(fresh.ID); n != 0 {
+		t.Fatalf("insert while owned wrote %d assignments", n)
+	}
+
+	held := BackfillTarget{ID: uuid.New(), Email: uniqueEmail("bfp"), Active: true, Superuser: true}
+	if _, err := e.store.BackfillUser(ctx, held, false); err != nil || roles(held.ID) != 1 {
+		t.Fatalf("seed a backfilled admin: %v (rows %d)", err, roles(held.ID))
+	}
+	held.Superuser, held.PlatformRolesOwned, held.TokenVersion = false, true, 4
+	res, err = e.store.BackfillUser(ctx, held, false)
+	if err != nil || !res.RoleSkipped || res.RoleRevoked || !res.Updated {
+		t.Fatalf("revoke case while owned: %+v %v", res, err)
+	}
+	if n := roles(held.ID); n != 1 {
+		t.Fatalf("revoke case while owned left %d assignments, want 1", n)
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.users WHERE principal_id = $1 AND legacy_token_version = 4`, held.ID); n != 1 {
+		t.Fatal("the token version was not carried while owned")
+	}
+
+	plain := BackfillTarget{ID: uuid.New(), Email: uniqueEmail("bfq"), Active: true}
+	if _, err := e.store.BackfillUser(ctx, plain, false); err != nil {
+		t.Fatal(err)
+	}
+	plain.Superuser, plain.PlatformRolesOwned = true, true
+	res, err = e.store.BackfillUser(ctx, plain, false)
+	if err != nil || !res.RoleSkipped || res.RoleGranted || res.Updated {
+		t.Fatalf("grant case while owned: %+v %v", res, err)
+	}
+	if n := roles(plain.ID); n != 0 {
+		t.Fatalf("grant case while owned wrote %d assignments", n)
+	}
+
+	same := BackfillTarget{ID: uuid.New(), Email: uniqueEmail("bfr"), Active: true, Superuser: true}
+	if _, err := e.store.BackfillUser(ctx, same, false); err != nil {
+		t.Fatal(err)
+	}
+	same.PlatformRolesOwned = true
+	if res, err := e.store.BackfillUser(ctx, same, false); err != nil || res != (BackfillResult{}) {
+		t.Fatalf("no difference while owned: %+v %v", res, err)
+	}
+}
+
 func TestBackfillNeverRevokesAnAssignmentWithAGranter(t *testing.T) {
 	e := getEnv(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)

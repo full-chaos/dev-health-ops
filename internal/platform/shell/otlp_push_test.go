@@ -152,27 +152,34 @@ func runShellHelper() {
 	os.Exit(0)
 }
 
+// shutdownSlack is what the stop may take beyond the metrics flush bound.
+const shutdownSlack = 1500 * time.Millisecond
+
 // runShellShutdownHelper starts the shell against a collector port that nothing
-// listens on, stops it after a second, and prints how long the stop took.
+// listens on, stops it after a second under a shutdown budget of the flush bound
+// plus shutdownSlack, and prints the exit code. The runtime enforces the budget,
+// so a stop that needs more ends in a shutdown error (D6418: no wall-time assert).
 func runShellShutdownHelper() {
 	ctx, cancel := context.WithCancel(context.Background())
 	var stdout, stderr bytes.Buffer
 	lookup := testLookup(map[string]string{
 		"DEV_HEALTH_HTTP_ADDR":        os.Getenv("SHELL_OTLP_HTTP_ADDR"),
-		"DEV_HEALTH_SHUTDOWN_TIMEOUT": "10s",
+		"DEV_HEALTH_SHUTDOWN_TIMEOUT": (metricsFlushTimeout + shutdownSlack).String(),
 	})
 	done := make(chan int, 1)
 	go func() {
 		done <- Execute(ctx, Spec{Service: "dev-health-worker"}, nil, lookup, IO{Stdout: &stdout, Stderr: &stderr})
 	}()
 	time.Sleep(1500 * time.Millisecond)
-	stopped := time.Now()
+	_, _ = os.Stdout.WriteString("READY\n")
+	_, _ = os.Stdin.Read(make([]byte, 1))
 	cancel()
 	code := <-done
-	_, _ = os.Stderr.WriteString("SHUTDOWN_MS=" + strconv.FormatInt(time.Since(stopped).Milliseconds(), 10) + " CODE=" + strconv.Itoa(code) + "\n")
+	_, _ = os.Stderr.WriteString("SHUTDOWN_CODE=" + strconv.Itoa(code) + "\n" + stdout.String() + stderr.String())
 	os.Exit(0)
 }
 
+// Named limit: a process that stays alive less than the 25 s failure ceiling past the stop request passes (see stopDriven).
 // TestAnUnreachableCollectorCostsTheStopAtMostTheFlushBound: with the OTLP push
 // on and nothing listening on the collector port, the stop returns inside the
 // metrics flush bound plus slack, with exit code 0, not after the whole
@@ -204,33 +211,24 @@ func TestAnUnreachableCollectorCostsTheStopAtMostTheFlushBound(t *testing.T) {
 		"OTEL_EXPORTER_OTLP_ENDPOINT="+closedAddress,
 		"OTEL_METRIC_EXPORT_INTERVAL=200",
 	)
-	var output bytes.Buffer
-	command.Stdout, command.Stderr = &output, &output
-	done := make(chan error, 1)
-	if err := command.Start(); err != nil {
-		t.Fatal(err)
-	}
-	go func() { done <- command.Wait() }()
-	select {
-	case <-done:
-	case <-time.After(25 * time.Second):
-		_ = command.Process.Kill()
-		t.Fatalf("the shell did not stop within 25 s; output:\n%s", output.String())
-	}
-	text := output.String()
-	index := strings.Index(text, "SHUTDOWN_MS=")
+	text := stopDriven(t, command, 25*time.Second)
+	index := strings.Index(text, "SHUTDOWN_CODE=")
 	if index < 0 {
 		t.Fatalf("the helper did not report its stop time:\n%s", text)
 	}
-	var millis int64
 	var code int
-	if _, err := fmt.Sscanf(text[index:], "SHUTDOWN_MS=%d CODE=%d", &millis, &code); err != nil {
+	if _, err := fmt.Sscanf(text[index:], "SHUTDOWN_CODE=%d", &code); err != nil {
 		t.Fatalf("unreadable helper report %q: %v", text[index:], err)
 	}
 	if code != 0 {
 		t.Errorf("the stop exited %d with an unreachable collector, want 0", code)
 	}
-	if limit := (metricsFlushTimeout + 1500*time.Millisecond).Milliseconds(); millis > limit {
-		t.Errorf("the stop took %d ms with an unreachable collector, want <= %d ms (flush bound %v)", millis, limit, metricsFlushTimeout)
+	for _, forbidden := range []string{"service stopped with error", "shutdown component"} {
+		if strings.Contains(text, forbidden) {
+			t.Errorf("the stop needed more than the flush bound %v plus %v with an unreachable collector; output has %q:\n%s", metricsFlushTimeout, shutdownSlack, forbidden, text)
+		}
+	}
+	if !strings.Contains(text, `"msg":"service stopped"`) {
+		t.Errorf("the stop did not end with the service stopped line:\n%s", text)
 	}
 }

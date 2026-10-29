@@ -2,12 +2,14 @@ package authapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"syscall"
 	"testing"
@@ -34,10 +36,27 @@ func expectDown(t *testing.T, name string, response *httptest.ResponseRecorder, 
 	}
 }
 
+// postgresPort is the port as a whole number, not a digit run inside a longer
+// one (a timestamp's microseconds can hold 5432).
+var postgresPort = regexp.MustCompile(`(^|[^0-9])5432([^0-9]|$)`)
+
 // namesDependency reports whether a 503 body names the store behind it: a
-// sentinel value from the fixture, or the PostgreSQL port.
+// sentinel value from the fixture, or the PostgreSQL port. The server fills
+// occurred_at and request_id itself, so they are left out of the port check.
 func namesDependency(body string) bool {
-	return strings.Contains(body, "sentinel") || strings.Contains(body, "5432")
+	if strings.Contains(body, "sentinel") {
+		return true
+	}
+	text := body
+	var document map[string]any
+	if json.Unmarshal([]byte(body), &document) == nil {
+		delete(document, "occurred_at")
+		delete(document, "request_id")
+		if raw, err := json.Marshal(document); err == nil {
+			text = string(raw)
+		}
+	}
+	return postgresPort.MatchString(text)
 }
 
 func TestNamesDependencyIgnoresGeneratedFieldsAndCatchesThePort(t *testing.T) {

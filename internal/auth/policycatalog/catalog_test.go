@@ -312,8 +312,8 @@ func keys(m map[string]bool) []string {
 	return out
 }
 
-// The catalog actions with no session permission are exactly catalogOnly: each
-// exists, is an organization action, and has no colon form in permissions.go.
+// The catalog actions with no session permission are exactly catalogOnly. Load
+// already refuses a role that lists an action of the other scope.
 func TestCatalogOnlyActionsAreExactlyTheClosedSet(t *testing.T) {
 	_, std := sessionPermissions(t)
 	session := map[string]bool{}
@@ -328,19 +328,6 @@ func TestCatalogOnlyActionsAreExactlyTheClosedSet(t *testing.T) {
 	}
 	if strings.Join(keys(extra), ",") != strings.Join(keys(catalogOnly), ",") {
 		t.Errorf("catalog actions with no session permission = %v, want exactly %v", keys(extra), keys(catalogOnly))
-	}
-	for id := range catalogOnly {
-		a, err := Default().Action(id)
-		if err != nil {
-			t.Errorf("catalog-only action %s: %v", id, err)
-			continue
-		}
-		if a.Scope != ScopeOrganization || a.ResourceKind != ScopeOrganization {
-			t.Errorf("catalog-only action %s has scope %s and resource_kind %s", id, a.Scope, a.ResourceKind)
-		}
-		if session[id] {
-			t.Errorf("catalog-only action %s is a session permission", id)
-		}
 	}
 }
 

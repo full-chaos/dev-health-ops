@@ -307,7 +307,7 @@ func TestIssueSessionRefusesWrongCredentialsBeforeAnyRead(t *testing.T) {
 			t.Fatalf("%s: refusal body %s differs from %s", name, got, golden)
 		}
 	}
-	// The same bytes as today's refusal of a revoked svc_authsess_ credential.
+	// The same body, but for the per-request fields, as today's refusal of a revoked svc_authsess_ credential.
 	w := newWorkloadIssueFixture(t)
 	w.creds.refusal = servicecred.RefusedRevoked
 	if got := refusalWithoutPerRequestFields(t, w.issue(issuerBearer).Body.Bytes()); got != golden {

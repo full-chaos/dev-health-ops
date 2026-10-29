@@ -85,7 +85,7 @@ VALUES ($1, $2, $2, $3, $4, CASE WHEN $3::text IS NULL THEN NULL ELSE clock_time
 			}
 			return insertPublicOwnedOrganization(ctx, tx, principal, req.Organization.Name)
 		},
-		Audit:  localAudit("auth.principal.provisioned", "principal_provisioned", subject, req.Actor),
+		Audit:  provisionAudit(subject, req.Actor, req.Organization != nil),
 		Events: []audit.OutboxEvent{principalEvent(subject, "principal.created", true), userEvent(subject, "user.created")},
 	})
 	switch {
@@ -102,10 +102,22 @@ VALUES ($1, $2, $2, $3, $4, CASE WHEN $3::text IS NULL THEN NULL ELSE clock_time
 // SetEmailVerified sets auth.users.email_verified_at (a guarded column) in one
 // audit.Commit (reason email_verified). Setting the value it already holds
 // writes nothing. Available only after the users cutover.
-func (s *Store) SetEmailVerified(ctx context.Context, principal uuid.UUID, at time.Time, actor Actor) (err error) {
+func (s *Store) SetEmailVerified(ctx context.Context, principal uuid.UUID, at time.Time, actor Actor) error {
+	return s.SetEmailVerifiedWith(ctx, principal, at, actor, nil)
+}
+
+// SetEmailVerifiedWith is SetEmailVerified with end, when not nil, run in the
+// same transaction after the address is marked verified: an error from end
+// rolls the verification back with everything else, and the transaction always
+// holds a guarded write, so its one audit row is written.
+func (s *Store) SetEmailVerifiedWith(ctx context.Context, principal uuid.UUID, at time.Time, actor Actor, end func(context.Context, audit.TxOps) error) (err error) {
 	defer func() { s.countLink(ctx, "verify_email", err) }()
 	if !s.ownsUsers {
 		return ErrSignupNotAvailable
+	}
+	org, err := AuditOrganization(ctx, s.pool, s.q, principal)
+	if err != nil {
+		return s.storeErr(ctx, "read the membership of a verified user", err)
 	}
 	subject := principal.String()
 	err = audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
@@ -118,9 +130,15 @@ WHERE principal_id = $1 AND email_verified_at IS DISTINCT FROM $2`, principal, a
 			if err != nil {
 				return err
 			}
-			return updatePublicVerified(ctx, tx, principal)
+			if err := updatePublicVerified(ctx, tx, principal); err != nil {
+				return err
+			}
+			if end != nil {
+				return end(ctx, tx)
+			}
+			return nil
 		},
-		Audit:  withChangedFields(localAudit("auth.user.email_verified", "email_verified", subject, actor), "email_verified_at"),
+		Audit:  verifiedAudit(subject, actor, org),
 		Events: []audit.OutboxEvent{userEvent(subject, "user.email_verified")},
 	})
 	return s.localErr(ctx, "set email verified", err)
@@ -169,6 +187,10 @@ func (s *Store) SetPasswordHashFor(ctx context.Context, principal uuid.UUID, has
 	if !validBcrypt(hash) {
 		return 0, ErrInvalidPasswordHash
 	}
+	org, err := AuditOrganization(ctx, s.pool, s.q, principal)
+	if err != nil {
+		return 0, s.storeErr(ctx, "read the membership of a password writer", err)
+	}
 	subject := principal.String()
 	err = audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
@@ -190,7 +212,7 @@ WHERE principal_id = $1`, principal, hash, passwordAlgorithm); err != nil {
 			}
 			return nil
 		},
-		Audit:  localAudit(cause.eventType, cause.reason, subject, actor),
+		Audit:  passwordAudit(cause, subject, actor, org),
 		Events: []audit.OutboxEvent{userEvent(subject, "user.credentials_changed")},
 	})
 	return version, s.localErr(ctx, "set password hash", err)

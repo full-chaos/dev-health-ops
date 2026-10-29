@@ -42,21 +42,23 @@ func (r *flowRecorder) names() []string {
 }
 
 type flowAccounts struct {
-	rec       *flowRecorder
-	byEmail   map[string]*User
-	byID      map[uuid.UUID]*User
-	taken     bool
-	provided  []ProvisionLocalRequest
-	verified  []uuid.UUID
-	hashes    []string
-	ended     []uuid.UUID
-	created   []uuid.UUID
-	links     *flowLinks
-	afterPeek func()
-	newID     uuid.UUID
-	writeErr  error
-	locker    *flowLocker
-	outside   int
+	rec             *flowRecorder
+	byEmail         map[string]*User
+	byID            map[uuid.UUID]*User
+	taken           bool
+	provided        []ProvisionLocalRequest
+	verified        []uuid.UUID
+	peeked          [][32]byte
+	hashes          []string
+	ended           []uuid.UUID
+	created         []uuid.UUID
+	links           *flowLinks
+	afterPeek       func()
+	afterVerifyPeek func()
+	newID           uuid.UUID
+	writeErr        error
+	locker          *flowLocker
+	outside         int
 }
 
 func (a *flowAccounts) ByEmail(_ context.Context, email string) (*User, error) {
@@ -78,11 +80,25 @@ func (a *flowAccounts) ProvisionLocal(_ context.Context, req ProvisionLocalReque
 	return a.newID, nil
 }
 
-func (a *flowAccounts) SetEmailVerified(_ context.Context, id uuid.UUID) error {
-	a.rec.add("SetEmailVerified")
+func (a *flowAccounts) PeekVerificationLink(_ context.Context, hash [32]byte) (uuid.UUID, bool, error) {
+	a.rec.add("PeekVerificationLink")
+	a.peeked = append(a.peeked, hash)
+	id, ok := a.links.redeem[hash]
+	if ok && a.afterVerifyPeek != nil {
+		a.afterVerifyPeek()
+	}
+	return id, ok, nil
+}
+
+func (a *flowAccounts) SetEmailVerifiedConsuming(_ context.Context, id uuid.UUID, link [32]byte) error {
+	a.rec.add("SetEmailVerifiedConsuming")
 	if a.writeErr != nil {
 		return a.writeErr
 	}
+	if _, ok := a.links.redeem[link]; !ok {
+		return ErrVerificationLinkUnusable
+	}
+	delete(a.links.redeem, link)
 	a.verified = append(a.verified, id)
 	return nil
 }
@@ -125,26 +141,15 @@ func (a *flowAccounts) SetPasswordEndingSessions(_ context.Context, req Password
 }
 
 type flowLinks struct {
-	rec      *flowRecorder
-	issued   []IssueRequest
-	redeemed []RedeemRequest
-	redeem   map[[32]byte]uuid.UUID
+	rec    *flowRecorder
+	issued []IssueRequest
+	redeem map[[32]byte]uuid.UUID
 }
 
 func (l *flowLinks) IssueBound(_ context.Context, req IssueRequest) error {
 	l.rec.add("Issue")
 	l.issued = append(l.issued, req)
 	return nil
-}
-
-func (l *flowLinks) Redeem(_ context.Context, req RedeemRequest) (uuid.UUID, bool, error) {
-	l.rec.add("Redeem")
-	l.redeemed = append(l.redeemed, req)
-	id, ok := l.redeem[req.TokenHash]
-	if ok {
-		delete(l.redeem, req.TokenHash)
-	}
-	return id, ok, nil
 }
 
 type flowSessions struct {
@@ -342,15 +347,26 @@ func TestVerifyConsumesOnceAndMarksVerified(t *testing.T) {
 	if err != nil || out.Kind != FlowOK || out.PrincipalID != u.ID {
 		t.Fatalf("Verify = %+v, %v", out, err)
 	}
-	if want := []string{"Redeem", "SetEmailVerified"}; !reflect.DeepEqual(rig.rec.names(), want) {
+	if want := []string{"PeekVerificationLink", "SetEmailVerifiedConsuming"}; !reflect.DeepEqual(rig.rec.names(), want) {
 		t.Fatalf("calls = %v, want %v", rig.rec.names(), want)
 	}
-	if r := rig.links.redeemed[0]; r.Purpose != PurposeEmailVerification || r.TokenHash != sha256.Sum256([]byte("good-secret")) {
-		t.Errorf("redeemed %+v", r)
+	if h := rig.accounts.peeked[0]; h != sha256.Sum256([]byte("good-secret")) {
+		t.Errorf("peeked %x", h)
 	}
 	again, err := rig.f.Verify(context.Background(), "good-secret")
 	if err != nil || again.Kind != FlowInvalidToken || len(rig.accounts.verified) != 1 {
 		t.Errorf("replay = %+v, %v, verified writes %d", again, err, len(rig.accounts.verified))
+	}
+}
+
+func TestVerifyOfALinkSpentAfterTheReadIsRefused(t *testing.T) {
+	rig := newFlowRig(t, true)
+	u := rig.user("v@example.com", false)
+	rig.grant("raced", u.ID)
+	rig.accounts.afterVerifyPeek = func() { delete(rig.links.redeem, sha256.Sum256([]byte("raced"))) }
+	out, err := rig.f.Verify(context.Background(), "raced")
+	if err != nil || out.Kind != FlowInvalidToken || len(rig.accounts.verified) != 0 {
+		t.Fatalf("Verify = %+v, %v, verified writes %d; want a refusal that writes nothing", out, err, len(rig.accounts.verified))
 	}
 }
 
@@ -521,10 +537,9 @@ func TestChangePassword(t *testing.T) {
 
 var _ = contracts.NewSecretString
 
-// A verification write that fails after the consume leaves the link spent: the
-// error surfaces, nothing is retried, and a replay is refused. A reset's link
-// is consumed in the password write, so its failed write leaves it usable.
-func TestFailedWriteAfterTheConsumeLeavesTheLinkSpent(t *testing.T) {
+// A verification or reset link is consumed in the transaction of the write it
+// authorizes, so a failed write leaves the link usable and the error surfaces.
+func TestFailedWriteLeavesTheLinkUsable(t *testing.T) {
 	boom := errors.New("store down")
 	t.Run("reset", func(t *testing.T) {
 		rig := newFlowRig(t, true)
@@ -551,8 +566,8 @@ func TestFailedWriteAfterTheConsumeLeavesTheLinkSpent(t *testing.T) {
 			t.Fatalf("Verify error = %v, want the store error", err)
 		}
 		rig.accounts.writeErr = nil
-		if out, err := rig.f.Verify(context.Background(), "s"); err != nil || out.Kind != FlowInvalidToken {
-			t.Errorf("replay = %+v, %v; want the spent link refused", out, err)
+		if out, err := rig.f.Verify(context.Background(), "s"); err != nil || out.Kind != FlowOK {
+			t.Errorf("retry = %+v, %v; want the link usable after the failed write", out, err)
 		}
 	})
 }
@@ -719,12 +734,11 @@ func TestVerifyAndResetRedeemOnlyTheirOwnPurpose(t *testing.T) {
 	if _, err := rig.f.Reset(context.Background(), "reset-secret", "A-new-pass-77"); err != nil {
 		t.Fatal(err)
 	}
-	got := []Purpose{}
-	for _, r := range rig.links.redeemed {
-		got = append(got, r.Purpose)
+	if _, ok := rig.links.redeem[sha256.Sum256([]byte("verify-secret"))]; ok {
+		t.Error("the verification link was not consumed by the verification write")
 	}
-	if want := []Purpose{PurposeEmailVerification}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("redeemed purposes = %v, want %v", got, want)
+	if want := [][32]byte{sha256.Sum256([]byte("verify-secret"))}; !reflect.DeepEqual(rig.accounts.peeked, want) {
+		t.Fatalf("verification links read = %x, want only the verification secret", rig.accounts.peeked)
 	}
 	if _, ok := rig.links.redeem[sha256.Sum256([]byte("reset-secret"))]; ok {
 		t.Error("the reset link was not consumed by the password write")

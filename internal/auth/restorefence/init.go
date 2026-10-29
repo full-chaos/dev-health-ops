@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
@@ -16,7 +18,7 @@ import (
 var ErrInitRefused = errors.New("restorefence: init refused")
 
 // InitHelp is the help text of the init verb.
-const InitHelp = "writes the 'initial' fence row of the live timeline: only on a database that is NOT a restore (a restored database is fenced with apply, never init)"
+const InitHelp = "writes the 'initial' fence row of the live timeline: only on a database that is NOT a restore (a restored database is fenced with apply, never init). -if-absent: compose/dev only; never on a restore"
 
 // InitReport is what init wrote: the timeline only.
 type InitReport struct {
@@ -35,6 +37,38 @@ func initInsertSQL(schema authschema.ValidatedIdentifier) string {
 	return `INSERT INTO ` + authschema.Quote(schema) + `.restore_fence_state (timeline_id, manifest_sha256, source) VALUES ($1, 'initial', 'init')`
 }
 
+// initDB is what the init transaction needs; an audit.TxOps satisfies it.
+type initDB interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+// initInTx refuses in recovery first, whatever else is true, then refuses an existing row, then writes.
+func initInTx(ctx context.Context, db initDB, schema authschema.ValidatedIdentifier) (int64, error) {
+	var recovery bool
+	if err := db.QueryRow(ctx, `SELECT pg_is_in_recovery()`).Scan(&recovery); err != nil {
+		return 0, fmt.Errorf("reading the recovery state")
+	}
+	if recovery {
+		return 0, fmt.Errorf("%w: the server is in recovery", ErrInitRefused)
+	}
+	timeline, err := Timeline(ctx, db)
+	if err != nil {
+		return 0, fmt.Errorf("reading the timeline")
+	}
+	var exists bool
+	if err := db.QueryRow(ctx, initExistsSQL(schema), timeline).Scan(&exists); err != nil {
+		return timeline, fmt.Errorf("reading the fence state")
+	}
+	if exists {
+		return timeline, errInitExists
+	}
+	if _, err := db.Exec(ctx, initInsertSQL(schema), timeline); err != nil {
+		return timeline, fmt.Errorf("recording the initial row (sqlstate %s)", sqlState(err))
+	}
+	return timeline, nil
+}
+
 // Init writes the 'initial' fence row for the timeline the server is on, as the
 // migration role, in one audit.Commit. It refuses on a server in recovery and when the
 // timeline already has a row of any kind. With ifAbsent an existing row is not an error
@@ -43,29 +77,9 @@ func Init(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedId
 	var report InitReport
 	err := audit.Commit(ctx, pool, schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
-			var recovery bool
-			if err := tx.QueryRow(ctx, `SELECT pg_is_in_recovery()`).Scan(&recovery); err != nil {
-				return fmt.Errorf("reading the recovery state")
-			}
-			if recovery {
-				return fmt.Errorf("%w: the server is in recovery", ErrInitRefused)
-			}
-			timeline, err := Timeline(ctx, tx)
-			if err != nil {
-				return fmt.Errorf("reading the timeline")
-			}
+			timeline, err := initInTx(ctx, tx, schema)
 			report.Timeline = timeline
-			var exists bool
-			if err := tx.QueryRow(ctx, initExistsSQL(schema), timeline).Scan(&exists); err != nil {
-				return fmt.Errorf("reading the fence state")
-			}
-			if exists {
-				return errInitExists
-			}
-			if _, err := tx.Exec(ctx, initInsertSQL(schema), timeline); err != nil {
-				return fmt.Errorf("recording the initial row (sqlstate %s)", sqlState(err))
-			}
-			return nil
+			return err
 		},
 		Audit:     audit.AuditEvent{EventType: "auth.restore_fence.initialized", Outcome: audit.OutcomeAllowed},
 		OffStream: audit.OffStreamRestoreFence,

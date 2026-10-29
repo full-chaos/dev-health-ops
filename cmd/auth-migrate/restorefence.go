@@ -43,7 +43,7 @@ func parseRestoreFenceArgs(args []string, stderr io.Writer) (restoreFenceArgs, e
 		flags.Int64Var(&parsed.blindMargin, "blind-margin", 0, "raise every revision by this much (the fallback when the WAL after the target is gone)")
 		flags.BoolVar(&parsed.apply, "apply", false, "write the change (without it the run is a dry run that rolls back)")
 	case "init":
-		flags.BoolVar(&parsed.ifAbsent, "if-absent", false, "dev and compose bring-up only: exit 0 without writing when the timeline already has a fence row")
+		flags.BoolVar(&parsed.ifAbsent, "if-absent", false, "compose/dev only; never on a restore: exit 0 without writing when the timeline already has a fence row (still refuses in recovery)")
 	case "status":
 	default:
 		return restoreFenceArgs{}, errors.New("unknown verb")

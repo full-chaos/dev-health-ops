@@ -107,7 +107,7 @@ var Allowlist = []Entry{
 	{File: "internal/auth/restorefence/apply.go", Func: "Apply", Table: "auth.aggregate_revisions", Verb: "UPSERT"},
 	{File: "internal/auth/restorefence/apply.go", Func: "Apply", Table: "auth.restore_fence_state", Verb: "INSERT"},
 	{File: "internal/auth/restorefence/apply.go", Func: "Apply", Table: "auth.sso_flow_states", Verb: "UPDATE"},
-	{File: "internal/auth/restorefence/init.go", Func: "Init", Table: "auth.restore_fence_state", Verb: "INSERT"},
+	{File: "internal/auth/restorefence/init.go", Func: "initInTx", Table: "auth.restore_fence_state", Verb: "INSERT"},
 	{File: "internal/auth/restorefence/init.go", Func: "initInsertSQL", Table: "auth.restore_fence_state", Verb: "INSERT"},
 	{File: "internal/auth/restorefence/specs.go", Func: "flowStatesSQL", Table: "auth.sso_flow_states", Verb: "UPDATE"},
 	{File: "internal/auth/session/end_all.go", Func: "Store.EndAllInTx", Table: "public.refresh_tokens", Verb: "UPDATE"},

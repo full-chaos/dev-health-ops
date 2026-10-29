@@ -12,14 +12,14 @@ import (
 
 // Every file:line anchor in credential-classes.json that cites this repository
 // is pinned to the text of the line it names in
-// testdata/credential-anchor-lines.json. A line that moves fails here, naming
+// credentialanchors/credential-anchor-lines.json. A line that moves fails here, naming
 // the class, the anchor kind, the file:line and the expected text, instead of
 // leaving a stale citation. An anchor with no pin, a pin no anchor uses, an
 // unknown repo and a path that leaves the checkout (lexically or through a
 // symlink) all fail; none is skipped.
 //
 // An anchor whose file is absent fails unless its path is listed in
-// testdata/credential-anchor-retired-paths.txt (one path per line). The list
+// credentialanchors/credential-anchor-retired-paths.txt (one path per line). The list
 // may hold only absent paths that some anchor still cites: a listed file that
 // exists, or a listed path no anchor cites, fails. Purging those anchors from
 // the registry is a separate change.
@@ -31,7 +31,7 @@ import (
 //
 //	CREDENTIAL_ANCHOR_UPDATE=1 go test ./internal/auth/contracts/ -run TestCredentialClassAnchorsPointAtTheirPinnedLineText
 //
-// That rewrites both testdata files from the registry and the current source,
+// That rewrites both credentialanchors files from the registry and the current source,
 // then runs the check against them. Read the diff of the two files before
 // committing: a pin that changed is a line that moved.
 
@@ -179,7 +179,7 @@ func checkOneAnchor(report *anchorReport, root string, ref credentialAnchorRef, 
 				report.retiredByKind[ref.kind()]++
 				return
 			}
-			report.failures = append(report.failures, fmt.Sprintf("%s: file is absent and its path is not in testdata/credential-anchor-retired-paths.txt", label))
+			report.failures = append(report.failures, fmt.Sprintf("%s: file is absent and its path is not in credentialanchors/credential-anchor-retired-paths.txt", label))
 			return
 		}
 		report.failures = append(report.failures, fmt.Sprintf("%s: file does not resolve: %v", label, err))
@@ -198,7 +198,7 @@ func checkOneAnchor(report *anchorReport, root string, ref credentialAnchorRef, 
 			}
 		}
 		sort.Strings(others)
-		report.failures = append(report.failures, fmt.Sprintf("%s: no pin at this line in testdata/credential-anchor-lines.json; pinned lines of this file: %s", label, strings.Join(others, ", ")))
+		report.failures = append(report.failures, fmt.Sprintf("%s: no pin at this line in credentialanchors/credential-anchor-lines.json; pinned lines of this file: %s", label, strings.Join(others, ", ")))
 		return
 	}
 	used[key] = true
@@ -258,7 +258,7 @@ func readAnchorFile(root, path string, cache map[string][]string) ([]string, err
 
 func loadRetiredPaths(t *testing.T) []string {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("testdata", "credential-anchor-retired-paths.txt"))
+	raw, err := os.ReadFile(filepath.Join("credentialanchors", "credential-anchor-retired-paths.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +318,7 @@ func regenerateAnchorFiles(t *testing.T, root string, document []byte) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join("testdata", "credential-anchor-lines.json"), append(encoded, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join("credentialanchors", "credential-anchor-lines.json"), append(encoded, '\n'), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	paths := make([]string, 0, len(retired))
@@ -326,14 +326,14 @@ func regenerateAnchorFiles(t *testing.T, root string, document []byte) {
 		paths = append(paths, path)
 	}
 	sort.Strings(paths)
-	if err := os.WriteFile(filepath.Join("testdata", "credential-anchor-retired-paths.txt"), []byte(strings.Join(paths, "\n")+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join("credentialanchors", "credential-anchor-retired-paths.txt"), []byte(strings.Join(paths, "\n")+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func loadAnchorPins(t *testing.T) []anchorPin {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("testdata", "credential-anchor-lines.json"))
+	raw, err := os.ReadFile(filepath.Join("credentialanchors", "credential-anchor-lines.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

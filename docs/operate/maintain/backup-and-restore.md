@@ -175,12 +175,75 @@ stayed revoked, but PITR dropped 30 revisions published after T, 2
 revocations made after T came back (credentials usable again), and 6
 (type, id, revision) keys were re-issued with different content.
 
-What this means for an operator: a PITR to an earlier time is a rollback of
-the auth plane. Treat every credential revoked after the target time as
-live again and revoke it again, and tell downstream consumers that
-revisions above the restored value will be re-issued. The fix that makes
-this safe (a restore fence that moves revision counters forward and keeps
-revocations) is tracked in CHAOS-11271; until it lands, prefer restore to
-the end of the WAL, and never PITR past a revocation you cannot redo.
+The same drill with `DRILL_FENCE=1` rehearses the restore fence (below): the source is initialised once
+(`restore-fence init`), the end-of-WAL copy is restored first and `restore-fence export` runs against it, the PITR
+copy starts read-only, `restore-fence status` says not fenced, `apply` runs as a dry run and then with `-apply`, the
+read-only default is reset, and the post phase must show no revocation after T alive, no key re-issued with different
+content, every aggregate continuing at `max(restored revision, floor) + 1` and exactly one `restore_fence_state` row
+for the live timeline. Run it with `DRILL_FENCE=1 DRILL_DIR=<new dir> scripts/drill-auth-pitr.sh`; the result line
+is `DRILL RESULT: PASS (b revokes-after-T-back=0, c reissued-different=0)`.
+
+Result of the fenced drill (CHAOS-11271): TO BE FILLED after the drill run on merged main (the date, the DRILL_DIR
+evidence path, the post-T.json counts keys_reissued_with_different_content and revokes_after_target_that_came_back,
+and fence_rows_for_live_timeline).
+
+Without the fence a PITR to an earlier time is a rollback of the auth plane: every credential revoked after the target
+time is live again and revisions above the restored value are re-issued with other content. The fence below removes
+both; follow it for every restore, promote or failover of the auth database.
+
+### Restoring the auth schema to a point in time (the restore fence)
+
+Order (nothing serves traffic until the last step):
+
+1. Stop auth-service (scale it to zero). Nothing may write to the auth database while it is restored.
+2. Restore the database to the target time (`recovery_target_time`) with `default_transaction_read_only = 'on'` in
+   `postgresql.auto.conf` before it is promoted, so no client or job can write before the fence runs.
+3. Restore a second, shadow copy of the same base backup to the END of the WAL archive (no recovery target) and keep it
+   away from clients. It is the source of everything the target time dropped.
+4. Export the manifest from the shadow copy with the migration role (the command refuses the runtime role):
+   `auth-migrate restore-fence export -out manifest.json` (`AUTH_MIGRATION_DATABASE_URI`, `AUTH_RUNTIME_DATABASE_ROLE`
+   and `AUTH_DATABASE_SCHEMA` in the environment; no secret on a command line). The manifest holds ids, states and
+   revision floors, never a credential, a hash or a token.
+5. Apply it to the restored copy: first the dry run, `auth-migrate restore-fence apply -manifest manifest.json` (it writes
+   nothing and prints the counts per table), then `... apply -manifest manifest.json -apply`. The migration DSN of the
+   apply carries `options='-c default_transaction_read_only=off'` so the apply can write although the copy is read-only.
+   One transaction does everything: the revision floors, every revocation made after the target time, and the fence row
+   for the new timeline. It is idempotent: a second run for the same timeline and manifest changes nothing.
+6. Act on the `operator-action` lines the apply prints (ids only): users whose password may have changed after the
+   target (their older password is live again: force a reset, ticket 11834) and provider token revocations queued after
+   the target (re-queue them, ticket 11835).
+7. Reset the read-only default: `ALTER SYSTEM RESET default_transaction_read_only;` then `SELECT pg_reload_conf();`.
+8. Start auth-service. Its readiness check `restore_fence` must be true (`/readyz`).
+9. `auth-migrate restore-fence status` prints `fenced=true` and the timeline (and the stored operator actions).
+
+What the apply puts back, so that nothing removed after the target time stays alive: sessions, refresh credentials,
+credential registry, signing keys, resource grants, memberships, service accounts, workloads, workload bindings,
+principals and organizations disabled, consumed link credentials and consumed refresh credentials, replaced link
+credentials, a pending invite the source no longer holds pending (it ends revoked, never accepted), SAML replay evidence, every SSO flow state (users start the flow again),
+and the legacy public tables: refresh tokens, service and ingest credentials, webhook bindings, invites, users (disabled,
+token version, and a user the source deleted is disabled, never deleted), membership mirror rows, single-use reset and
+verification tokens, and SAML replays. Revision floors are raised past everything the source reached, so no
+`(aggregate, id, revision)` key is issued twice with different content.
+
+Which command, when:
+
+| Situation | Command |
+|---|---|
+| A new database that is not a restore (first roll of the fence, a new environment, a fresh dev stack) | `restore-fence init`, once per database timeline. Dev compose runs `init -if-absent` as the `auth-fence-init` one-shot; `-if-absent` is for compose and dev only, never on a restore and never in production automation. On a timeline above 1 it refuses unless `-timeline N` names the live timeline. |
+| PITR, promote, failover, a restore from a base backup | `export` from the shadow end-of-WAL copy, then `apply` (dry run first). A planned promote that lost nothing makes `apply` a no-op that opens readiness. |
+| A logical restore (pg_dump and pg_restore into a new cluster) | The probe cannot see it (a new cluster starts at timeline 1). Run the fence by hand before traffic: `export` against the source (or its shadow restore), then `apply` and `apply -apply` on the new cluster. Never `init`. |
+| A restore of a backup taken before the fence migration existed | `apply`, never `init`. |
+| A restored volume that is on timeline 1 (a file copy of an old volume) | `apply`, never `init`: init cannot detect it. |
+| The WAL after the target time is gone (no shadow copy possible) | `apply -blind-margin N` (instead of `-manifest`). It raises every revision by N, which consumers read as a gap, and it is fail closed: it removes EVERY legacy reset and verification token, EVERY unconsumed link credential and EVERY pending invite (users ask for a new link, admins re-invite) because there is no proof of what was consumed after the target. The apply prints the counts. It cannot redo revocations: redo them by hand. |
+
+Known gaps (follow-up 11878 and the tickets it names): an unlink of an external identity, login lockout counters
+(11848), a revoked platform role assignment (11846) and the legacy organization, IP allowlist and integration flags
+(11872) are not carried; and the legacy invite table, the margin-specific blind-margin idempotency and a strict
+manifest parse are open (11878). Until those ship, redo such changes by hand after a restore and check them.
+
+First roll of the fence (D6466), in this order: (1) the auth-migrate Job (migration 0035), (2) a one-off
+`restore-fence init` Job against the live database (it writes the first fence row for the live timeline; run it once
+and read `status`), (3) the auth-service image. If the image lands before the init, the new pods stay not ready and
+the old pods keep serving; that is fail closed.
 
 Interim rule (D6323, CHAOS-11271), verbatim: "until 11271 rolls, no PITR of the auth/identity DB to any point before end of WAL without acp attest + chris's word; end-of-WAL restore is safe."

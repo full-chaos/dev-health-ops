@@ -107,7 +107,7 @@ func NewConsumerCursor() *ConsumerCursor { return &ConsumerCursor{last: map[stri
 
 // Observe classifies e and advances the cursor only on Apply.
 func (c *ConsumerCursor) Observe(e ProvisioningEvent) Disposition {
-	key := e.AggregateType + ":" + e.AggregateID
+	key := AggregateKey(e.AggregateType, e.AggregateID)
 	last := c.last[key] // 0 for an aggregate never seen
 	rev := int64(e.Payload.Revision)
 	switch {
@@ -124,8 +124,14 @@ func (c *ConsumerCursor) Observe(e ProvisioningEvent) Disposition {
 // AggregateKey is the key a ConsumerCursor keeps an aggregate's mark under.
 func AggregateKey(aggregateType, aggregateID string) string { return aggregateType + ":" + aggregateID }
 
-// ResyncTo is not implemented yet.
-func (c *ConsumerCursor) ResyncTo(key string, revision int64) {}
+// ResyncTo moves the mark of key to revision, the revision of a Gap the consumer has resynchronised on. Without it a
+// gap repeats for every later revision (a delivered outbox row is never delivered again). It never lowers a mark: a
+// stale resync is a no-op.
+func (c *ConsumerCursor) ResyncTo(key string, revision int64) {
+	if revision > c.last[key] {
+		c.last[key] = revision
+	}
+}
 
 // AuditAttributes are the allowlisted audit attributes; every schema member is
 // carried, so a parser never silently drops data the schema admits.

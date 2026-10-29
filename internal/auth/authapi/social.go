@@ -107,7 +107,7 @@ func (h compatHandlers) socialSignedIn(w http.ResponseWriter, r *http.Request, r
 		h.fail(w, r, opSocialLogin, errors.New("authapi: a social sign-in's user is not in public.users"))
 		return
 	}
-	issued, err := h.startSession(ctx, principalID, membership, nil, []string{"fed"}, string(provider))
+	issued, err := h.startSession(ctx, principalID, membership, []string{"fed"}, string(provider))
 	if err != nil {
 		h.fail(w, r, opSocialLogin, err)
 		return

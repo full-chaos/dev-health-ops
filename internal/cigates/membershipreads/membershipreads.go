@@ -16,7 +16,11 @@
 // Constants are evaluated the way the compiler evaluates them (go/constant over the AST): literals, integer and rune
 // conversions, string(...), arithmetic, shifts, len of a constant string, constants of the same package (any file of the
 // directory, grouped blocks, typed or untyped, built from other constants) or of the enclosing function. A constant of
-// ANOTHER package is not loaded: a table name right behind one is refused by name as unresolved.
+// ANOTHER package is not loaded: a table name right behind one is refused by name as unresolved, with a dot of its own or
+// without (the constant may hold the schema and the dot).
+//
+// A PostgreSQL quoted identifier with Unicode escapes, U&"...", is refused wherever it appears: its name is not the text and
+// the gate does not decode it.
 //
 // A variable, a call or a field is not folded. In a `+` chain the constant operands around it fold into runs, and a run that
 // begins with ".memberships" or ".organizations" (the table behind a non-constant qualifier) is a finding; so is a verb
@@ -64,6 +68,12 @@ var (
 	tableDot = regexp.MustCompile(`(?i)\.\s*"?(memberships|organizations)\b`)
 	// qualifierEnd is the token that ends a string: a quoted identifier or a bare word (letters, digits, underscore, a % verb).
 	qualifierEnd = regexp.MustCompile(`("[^"]*"|[A-Za-z0-9_%$]+)\s*$`)
+	// unicodeIdent finds PostgreSQL's quoted identifier with Unicode escapes, U&"...": the name it holds is not the text, and the
+	// gate does not decode it, so the token is refused wherever it appears.
+	unicodeIdent = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9_$])U\s*&\s*"`)
+	// afterUnresolved finds a table name right behind the unresolved marker (a constant the gate cannot load, which may hold the
+	// schema and the dot), with no dot of its own: whitespace and a quote may sit between.
+	afterUnresolved = regexp.MustCompile(`(?i)\x00[\s"]*(memberships|organizations)\b`)
 )
 
 // unresolved stands in the folded text for a constant the gate cannot resolve (a constant of another package, or a name
@@ -512,6 +522,12 @@ func stripSQLComments(s string) string {
 // refs lists the references in text to a table that is not in the public schema, as they are written.
 func refs(text string) []string {
 	var out []string
+	if unicodeIdent.MatchString(text) {
+		out = append(out, `a Unicode-escaped quoted identifier U&"..." (its name is not decoded, so it is refused)`)
+	}
+	for _, m := range afterUnresolved.FindAllStringSubmatch(text, -1) {
+		out = append(out, fmt.Sprintf("%s right after a constant of another package the gate does not load (unresolved: it may hold the schema and the dot)", strings.ToLower(m[1])))
+	}
 	for _, m := range tableDot.FindAllStringSubmatchIndex(text, -1) {
 		table := strings.ToLower(text[m[2]:m[3]])
 		qualifier := ""

@@ -248,7 +248,7 @@ func TestAVersionOneManifestIsRefusedWithAClearMessage(t *testing.T) {
 var pinnedSectionSet = map[int]string{
 	2: "1ce899a3a8cfc45c8579eb54ee13d46bc5421c765c9f46d33f5809b0c4344b9d",
 	3: "de43468c86eb3895268e1e9bfe141595e3863c044af353f09e41aa5ced16bb43",
-	4: "PIN",
+	4: "16d5494b3fef7ff7ca46007e9cf10b3375d14f1f9b9cf3eac9b21cdd776dd324",
 }
 
 func sectionSetDigest(t *testing.T, skip ...string) string {

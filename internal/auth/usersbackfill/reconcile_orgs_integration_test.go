@@ -189,3 +189,89 @@ func TestOrgsReconcileSnapshotIsReadOnlyAndWritesNothing(t *testing.T) {
 		t.Fatalf("the report changed auth.organizations: %d -> %d", orgsBefore, got)
 	}
 }
+
+// The snapshot holds nothing a writer can wait on and sees one consistent state: the backend of the open snapshot holds
+// only AccessShare relation locks (no row lock, no transaction id), a writer on the very rows the report read is not
+// blocked (lock_timeout 2s), and the snapshot keeps its view while a fresh snapshot sees the write.
+func TestOrgsReconcileSnapshotBlocksNoWriterAndKeepsItsView(t *testing.T) {
+	e := getReconEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	u := e.seed(t, ctx, uniq("orw"), true, true)
+	org, _ := e.seedOrg(t, ctx, true)
+	e.seedMember(t, ctx, org, u, "member")
+	e.backfill(t, ctx)
+	if rep := e.runOrgs(t, ctx, false); rep.SkippedTotal() != 0 {
+		t.Fatalf("the organization backfill skipped rows: %+v", rep)
+	}
+	t.Cleanup(func() {
+		_, _ = e.admin.Exec(context.Background(), `UPDATE public.organizations SET slug = replace(slug, '-w', '') WHERE id = $1`, org)
+	})
+
+	tx, err := OpenSnapshot(ctx, e.runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	target := TxTarget{Tx: tx, Schema: e.schema}
+	first, err := target.OrgDiffs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := classesOf(first, org); ok {
+		t.Fatalf("the planted organization is a mismatch before any write: %v", first.Mismatches)
+	}
+
+	rows, err := tx.Query(ctx, `SELECT locktype, mode, granted FROM pg_locks WHERE pid = pg_backend_pid()`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var locktype, mode string
+		var granted bool
+		if err := rows.Scan(&locktype, &mode, &granted); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		okLock := (locktype == "relation" && mode == "AccessShareLock") || (locktype == "virtualxid" && mode == "ExclusiveLock")
+		if !okLock || !granted {
+			t.Errorf("the snapshot holds a lock beyond a read: locktype %s mode %s granted %v", locktype, mode, granted)
+		}
+	}
+	rows.Close()
+
+	// Writers on the rows the report read, from other connections, while the snapshot is open.
+	for _, w := range []struct{ name, sql string }{
+		{"public.organizations", `UPDATE public.organizations SET slug = slug || '-w' WHERE id = $1`},
+		{"auth.organizations", `UPDATE auth.organizations SET updated_at = clock_timestamp() WHERE id = $1`},
+		{"public.memberships", `UPDATE public.memberships SET updated_at = now() WHERE org_id = $1`},
+	} {
+		wtx, err := e.admin.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := wtx.Exec(ctx, `SET LOCAL lock_timeout = '2s'`); err != nil {
+			_ = wtx.Rollback(ctx)
+			t.Fatal(err)
+		}
+		if _, err := wtx.Exec(ctx, w.sql, org); err != nil {
+			_ = wtx.Rollback(ctx)
+			t.Fatalf("a writer on %s was blocked or failed while the snapshot was open: %v", w.name, err)
+		}
+		if err := wtx.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	again, err := target.OrgDiffs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := classesOf(again, org); ok {
+		t.Errorf("the snapshot did not keep its view: the committed write shows inside it")
+	}
+	fresh := e.orgsSnapshot(t, ctx)
+	if got, ok := classesOf(fresh, org); !ok || strings.Join(got, ",") != ClassOrgSlug {
+		t.Errorf("a fresh snapshot does not see the write: classes %v (listed %v)", got, ok)
+	}
+}

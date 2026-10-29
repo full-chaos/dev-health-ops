@@ -233,6 +233,11 @@ func TestStoreLocksNoAssignmentRow(t *testing.T) {
 		if lw < 0 || lp < 0 || g < 0 || !(lw < lp && lp < g) {
 			t.Errorf("%s: lockWrites at %d, lockPrincipals at %d, first guard read at %d; want them present and in that order", fn, lw, lp, g)
 		}
+		if fn == "func (s *Store) Bootstrap(" {
+			if target := strings.Index(body, "lockPrincipals(ctx, tx, s.q, principal)"); target < 0 || target > g {
+				t.Errorf("Bootstrap: the target principal's row lock is at %d, the first guard read at %d; want the lock first", target, g)
+			}
+		}
 	}
 	if writeLock != "auth.platform_role_assignments:write" {
 		t.Errorf("write lock name = %q: every writer of the table must take the same lock", writeLock)

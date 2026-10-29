@@ -132,3 +132,31 @@ func firstLine(s string) string {
 	}
 	return s
 }
+
+// The census probes see the shapes they name, and only those.
+func TestTheSuperuserCensusProbesSeeTheirShapes(t *testing.T) {
+	for _, wide := range []string{"SELECT * FROM users WHERE id = $1", "select u.* from users u", "SELECT users.* FROM users",
+		"INSERT INTO users (id) VALUES ($1) RETURNING *", "UPDATE users SET x = 1 RETURNING id, is_superuser"} {
+		if !wideUsersRead.MatchString(wide) {
+			t.Errorf("a wide read is not seen: %q", wide)
+		}
+	}
+	for _, narrow := range []string{"SELECT id, email FROM users WHERE id = $1", "SELECT * FROM organizations", "RETURNING id"} {
+		if wideUsersRead.MatchString(narrow) {
+			t.Errorf("a narrow read is taken for wide: %q", narrow)
+		}
+	}
+	src := `package p
+func f(row Row, u *User) {
+	var isSuperuser, active bool
+	row.Scan(&active, &isSuperuser)
+	row.Scan(&u.IsSuperuser, &u.Superuser, &u.Email)
+}`
+	file, err := parser.ParseFile(token.NewFileSet(), "p.go", src, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := superuserFills(file); got["f"] != 3 || len(got) != 1 {
+		t.Errorf("superuserFills = %v, want f: 3", got)
+	}
+}

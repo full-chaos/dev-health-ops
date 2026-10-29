@@ -33,8 +33,28 @@ func (r storeBootstrap) ResolveBootstrap(ctx context.Context, digest [sha256.Siz
 	}, nil
 }
 
+// commitSeed runs one credential_registry write through audit.Commit on the
+// operator pool, the only path the commit guard admits (the lifecycle verbs
+// of a later change are the real writer). It returns the row id.
+func commitSeed(t *testing.T, e *storeEnv, sql string, args ...any) uuid.UUID {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	var id uuid.UUID
+	if err := audit.Commit(ctx, e.admin, e.schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			return tx.QueryRow(ctx, sql, args...).Scan(&id)
+		},
+		Audit:     audit.AuditEvent{EventType: "credential.test", Outcome: audit.OutcomeAllowed},
+		OffStream: audit.OffStreamWorkloadRegistry,
+	}); err != nil {
+		t.Fatalf("credential_registry write through audit.Commit: %v", err)
+	}
+	return id
+}
+
 // bootstrapExchange registers a workload, stores one bootstrap credential for
-// it (its digest only, through the operator pool) and returns a
+// it (its digest only, through audit.Commit) and returns a
 // bootstrap-only harness reading the real store and appending the real audit
 // row through the runtime role.
 func bootstrapExchange(t *testing.T, e *storeEnv) (*harness, string, uuid.UUID, uuid.UUID) {
@@ -52,13 +72,10 @@ func bootstrapExchange(t *testing.T, e *storeEnv) (*harness, string, uuid.UUID, 
 	}
 	value := workload.BootstrapPrefix + base64.RawURLEncoding.EncodeToString(raw)
 	digest := workload.BootstrapDigest(value)
-	var credential uuid.UUID
-	if err := e.admin.QueryRow(ctx, `INSERT INTO auth.credential_registry
+	credential := commitSeed(t, e, `INSERT INTO auth.credential_registry
 (principal_id, credential_class, display_prefix, secret_hash, hash_algorithm, audiences, fingerprint, created_at, updated_at)
 VALUES ($1, $2, 'fcwlb_', $3, $4, ARRAY['auth-service']::text[], $5, now() - interval '1 hour', now() - interval '1 hour')
-RETURNING id`, principal, workload.BootstrapClass, digest[:], workload.BootstrapHashAlgorithm, "00000000"+uuid.NewString()[:8]).Scan(&credential); err != nil {
-		t.Fatalf("store the credential: %v", err)
-	}
+RETURNING id`, principal, workload.BootstrapClass, digest[:], workload.BootstrapHashAlgorithm, "00000000"+uuid.NewString()[:8])
 	h := newHarness(t, withoutKubernetes(), func(h *harness, d *Deps) {
 		d.Bootstrap = storeBootstrap{store: e.reader}
 		d.Audit = func(ctx context.Context, event audit.AuditEvent) error {
@@ -119,9 +136,7 @@ func TestARevokedBootstrapCredentialIsRefusedAtOnce(t *testing.T) {
 	e := getStore(t)
 	h, value, _, credential := bootstrapExchange(t, e)
 	decodeAnswer(t, h.post(bootstrapForm(value, "auth-service", "").Encode()))
-	if _, err := e.admin.Exec(context.Background(), `UPDATE auth.credential_registry SET revoked_at = now(), revoked_reason = 'owner_request' WHERE id = $1`, credential); err != nil {
-		t.Fatal(err)
-	}
+	commitSeed(t, e, `UPDATE auth.credential_registry SET revoked_at = now(), revoked_reason = 'owner_request' WHERE id = $1 RETURNING id`, credential)
 	rec := h.post(bootstrapForm(value, "auth-service", "").Encode())
 	if rec.Code != http.StatusBadRequest || rec.Body.String() != "{\"error\":\"invalid_grant\"}\n" {
 		t.Fatalf("after revoke: %d %q, want the uniform 400", rec.Code, rec.Body.String())

@@ -3,6 +3,7 @@
 package workload
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
@@ -33,12 +35,33 @@ type credentialRow struct {
 	revoked   bool
 }
 
+// commitSeed runs one credential_registry write through audit.Commit on the
+// operator pool, the only path the commit guard admits (the lifecycle verbs
+// of a later change are the real writer). It returns the row id.
+func commitSeed(t *testing.T, e *env, sql string, args ...any) uuid.UUID {
+	t.Helper()
+	schema, err := authschema.NewValidatedIdentifier("auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var id uuid.UUID
+	err = audit.Commit(ctxT(t), e.admin, schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			return tx.QueryRow(ctx, sql, args...).Scan(&id)
+		},
+		Audit:     audit.AuditEvent{EventType: "credential.test", Outcome: audit.OutcomeAllowed},
+		OffStream: audit.OffStreamWorkloadRegistry,
+	})
+	if err != nil {
+		t.Fatalf("credential_registry write through audit.Commit: %v", err)
+	}
+	return id
+}
+
 // insertCredential writes one credential_registry row for principal through
-// the operator pool (W8-8's verbs are the real writer) and returns its id. The
-// row stores the value's digest only.
+// audit.Commit and returns its id. The row stores the value's digest only.
 func insertCredential(t *testing.T, e *env, principal uuid.UUID, value string, row credentialRow) uuid.UUID {
 	t.Helper()
-	ctx := ctxT(t)
 	if row.class == "" {
 		row.class = BootstrapClass
 	}
@@ -52,17 +75,12 @@ func insertCredential(t *testing.T, e *env, principal uuid.UUID, value string, r
 		at, why := time.Now().Add(-time.Hour), "owner_request"
 		revokedAt, revokedReason = &at, &why
 	}
-	var id uuid.UUID
-	err := e.admin.QueryRow(ctx, `INSERT INTO auth.credential_registry
+	return commitSeed(t, e, `INSERT INTO auth.credential_registry
 (principal_id, credential_class, display_prefix, secret_hash, hash_algorithm, expires_at, revoked_at, revoked_reason,
  audiences, fingerprint, created_at, updated_at)
 VALUES ($1, $2, 'fcwlb_', $3, $4, $5, $6, $7, $8::text[], $9, now() - interval '2 hours', now() - interval '2 hours')
 RETURNING id`, principal, row.class, digest[:], BootstrapHashAlgorithm, row.expiresAt, revokedAt, revokedReason,
-		row.audiences, strings.Repeat("0", 8)+uuid.NewString()[:8]).Scan(&id)
-	if err != nil {
-		t.Fatalf("insert the credential row: %v", err)
-	}
-	return id
+		row.audiences, strings.Repeat("0", 8)+uuid.NewString()[:8])
 }
 
 func registerWorkload(t *testing.T, e *env, audiences []string) (string, uuid.UUID) {
@@ -184,9 +202,7 @@ func TestResolveBootstrapReadsTheCurrentRowOnEveryCall(t *testing.T) {
 	if _, err := e.reader.ResolveBootstrap(ctx, BootstrapDigest(value), time.Now()); err != nil {
 		t.Fatalf("live credential: %v", err)
 	}
-	if _, err := e.admin.Exec(ctx, `UPDATE auth.credential_registry SET revoked_at = now(), revoked_reason = 'compromised' WHERE id = $1`, credential); err != nil {
-		t.Fatal(err)
-	}
+	commitSeed(t, e, `UPDATE auth.credential_registry SET revoked_at = now(), revoked_reason = 'compromised' WHERE id = $1 RETURNING id`, credential)
 	if _, err := e.reader.ResolveBootstrap(ctx, BootstrapDigest(value), time.Now()); RefusalReason(err) != string(ReasonRevoked) {
 		t.Fatalf("after revoke: %v, want revoked", err)
 	}

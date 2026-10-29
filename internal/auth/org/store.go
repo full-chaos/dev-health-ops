@@ -69,21 +69,27 @@ func (s *Store) record(ctx context.Context, v verb, err error) {
 	s.mutations.Add(ctx, 1, metric.WithAttributes(attribute.String("verb", string(v)), attribute.String("outcome", outcomeLabel(err))))
 }
 
-func (s *Store) run(ctx context.Context, v verb, m audit.Mutation) (err error) {
-	defer func() {
-		s.record(ctx, v, err)
-		if errors.Is(err, audit.ErrNoStateChange) {
-			err = nil
-		}
-	}()
-	err = s.commit(ctx, m)
+func (s *Store) run(ctx context.Context, v verb, m audit.Mutation) error {
+	_, err := s.runChanged(ctx, v, m)
+	return err
+}
+
+// runChanged is run that also says whether the commit changed state: a no-op
+// (audit.ErrNoStateChange) is success with changed false.
+func (s *Store) runChanged(ctx context.Context, v verb, m audit.Mutation) (bool, error) {
+	err := s.commit(ctx, m)
+	s.record(ctx, v, err)
 	switch {
-	case err == nil, errors.Is(err, audit.ErrNoStateChange), errors.Is(err, ErrNotFound), errors.Is(err, ErrSlugTaken),
-		errors.Is(err, ErrRevisionConflict), errors.Is(err, ErrSuspended):
-		return err
+	case err == nil:
+		return true, nil
+	case errors.Is(err, audit.ErrNoStateChange):
+		return false, nil
+	case errors.Is(err, ErrNotFound), errors.Is(err, ErrSlugTaken), errors.Is(err, ErrRevisionConflict), errors.Is(err, ErrSuspended),
+		errors.Is(err, ErrDenied):
+		return false, err
 	}
 	s.logger.ErrorContext(ctx, "org: store failure", "verb", string(v), logging.ErrorAttr(err))
-	return fmt.Errorf("%w: %s: %w", ErrStore, v, err)
+	return false, fmt.Errorf("%w: %s: %w", ErrStore, v, err)
 }
 
 // Create inserts an active organization with a server-minted id. The slug is
@@ -124,20 +130,40 @@ func (s *Store) Rename(ctx context.Context, id uuid.UUID, name string, ifRevisio
 		s.record(ctx, verbRename, err)
 		return err
 	}
-	return s.mutate(ctx, verbRename, id, n, ifRevision, a)
+	_, err = s.mutate(ctx, verbRename, id, n, ifRevision, a, nil)
+	return err
 }
 
 // Suspend sets disabled_at. A repeat is a no-op.
 func (s *Store) Suspend(ctx context.Context, id uuid.UUID, ifRevision *int64, a Actor) error {
-	return s.mutate(ctx, verbSuspend, id, "", ifRevision, a)
+	_, err := s.mutate(ctx, verbSuspend, id, "", ifRevision, a, nil)
+	return err
 }
 
 // Reactivate clears disabled_at. A repeat is a no-op.
 func (s *Store) Reactivate(ctx context.Context, id uuid.UUID, ifRevision *int64, a Actor) error {
-	return s.mutate(ctx, verbReactivate, id, "", ifRevision, a)
+	_, err := s.mutate(ctx, verbReactivate, id, "", ifRevision, a, nil)
+	return err
 }
 
-func (s *Store) mutate(ctx context.Context, v verb, id uuid.UUID, newName string, ifRevision *int64, a Actor) error {
+// Authorize decides, inside the commit and after the organization row lock,
+// whether the actor may make the change. ErrDenied refuses it; any other error
+// is a store failure.
+type Authorize func(ctx context.Context, tx audit.TxOps, id uuid.UUID) error
+
+// ReactivateAuthorized is Reactivate for a caller that must authorize the
+// actor under the row lock (D6456, deny first): authz runs after the lock and
+// before any write, and a nil authz is ErrDenied before anything is planned.
+// changed is false for an organization that was not suspended.
+func (s *Store) ReactivateAuthorized(ctx context.Context, id uuid.UUID, ifRevision *int64, a Actor, authz Authorize) (changed bool, err error) {
+	if authz == nil {
+		s.record(ctx, verbReactivate, ErrDenied)
+		return false, ErrDenied
+	}
+	return s.mutate(ctx, verbReactivate, id, "", ifRevision, a, authz)
+}
+
+func (s *Store) mutate(ctx context.Context, v verb, id uuid.UUID, newName string, ifRevision *int64, a Actor, authz Authorize) (bool, error) {
 	prev, next := StatusActive, StatusActive
 	switch v {
 	case verbSuspend:
@@ -145,7 +171,7 @@ func (s *Store) mutate(ctx context.Context, v verb, id uuid.UUID, newName string
 	case verbReactivate:
 		prev = StatusSuspended
 	}
-	return s.run(ctx, v, audit.Mutation{
+	return s.runChanged(ctx, v, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			var cur state
 			// The row lock serialises verbs on one organization, so the
@@ -157,6 +183,11 @@ func (s *Store) mutate(ctx context.Context, v verb, id uuid.UUID, newName string
 			}
 			if err != nil {
 				return err
+			}
+			if authz != nil {
+				if err := authz(ctx, tx, id); err != nil {
+					return err
+				}
 			}
 			if ifRevision != nil {
 				var rev int64

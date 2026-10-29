@@ -18,6 +18,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/invite"
 	"github.com/full-chaos/dev-health-ops/internal/auth/membership"
+	"github.com/full-chaos/dev-health-ops/internal/auth/org"
 	"github.com/full-chaos/dev-health-ops/internal/auth/orgdeprovision"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/servicecred"
@@ -37,6 +38,7 @@ const (
 	PatternInviteCreate       = "/internal/v1/invites/create"
 	PatternInviteAccept       = "/internal/v1/invites/accept"
 	PatternOrgDeprovision     = "/internal/v1/organizations/deprovision"
+	PatternOrgReactivate      = "/internal/v1/organizations/reactivate"
 )
 
 // Outcome-metric operations of the provisioning routes.
@@ -48,10 +50,11 @@ const (
 	opInviteCreate       = "invite_create"
 	opInviteAccept       = "invite_accept"
 	opOrgDeprovision     = "organization_deprovision"
+	opOrgReactivate      = "organization_reactivate"
 )
 
 var provisioningOperations = []string{opMembershipAdd, opMembershipRole, opMembershipRemove, opMembershipTransfer,
-	opInviteCreate, opInviteAccept, opOrgDeprovision}
+	opInviteCreate, opInviteAccept, opOrgDeprovision, opOrgReactivate}
 
 // Provisioning refusal codes beyond the shared ones.
 const (
@@ -112,6 +115,12 @@ type Deprovisioner interface {
 	Deprovision(ctx context.Context, in orgdeprovision.Input) (*orgdeprovision.Result, error)
 }
 
+// OrganizationReactivator ends an organization's suspension, authorizing the
+// actor under the row lock (*org.Store).
+type OrganizationReactivator interface {
+	ReactivateAuthorized(ctx context.Context, id uuid.UUID, ifRevision *int64, a org.Actor, authz org.Authorize) (changed bool, err error)
+}
+
 // OrganizationEnsurer projects go-api's organization when the auth schema
 // has none yet, never changing an existing row (*identity.Store).
 type OrganizationEnsurer interface {
@@ -127,6 +136,7 @@ type ProvisioningDeps struct {
 	Memberships   Memberships
 	Invites       Invites
 	Deprovision   Deprovisioner
+	Orgs          OrganizationReactivator
 	Logger        *slog.Logger
 	Meter         metric.Meter
 }
@@ -144,8 +154,8 @@ type provisioningHandlers struct {
 // deprovision routes. Each registration is on a line of its own.
 func ProvisioningRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 	if deps.Credentials == nil || deps.Users == nil || deps.Reader == nil || deps.Organizations == nil ||
-		deps.Memberships == nil || deps.Invites == nil || deps.Deprovision == nil {
-		return nil, errors.New("authapi: provisioning routes need credentials, users, a reader, organizations, memberships, invites and a deprovisioner")
+		deps.Memberships == nil || deps.Invites == nil || deps.Deprovision == nil || deps.Orgs == nil {
+		return nil, errors.New("authapi: provisioning routes need credentials, users, a reader, organizations, memberships, invites, a deprovisioner and the organization reactivate verb")
 	}
 	if deps.Logger == nil {
 		deps.Logger = slog.Default()
@@ -175,6 +185,7 @@ func ProvisioningRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 		{Method: http.MethodPost, Pattern: PatternInviteCreate, Handler: http.HandlerFunc(h.inviteCreate)},
 		{Method: http.MethodPost, Pattern: PatternInviteAccept, Handler: http.HandlerFunc(h.inviteAccept)},
 		{Method: http.MethodPost, Pattern: PatternOrgDeprovision, Handler: http.HandlerFunc(h.orgDeprovision)},
+		{Method: http.MethodPost, Pattern: PatternOrgReactivate, Handler: http.HandlerFunc(h.orgReactivate)},
 	}, nil
 }
 
@@ -661,4 +672,54 @@ func (h provisioningHandlers) orgDeprovision(w http.ResponseWriter, r *http.Requ
 	h.rec.record(ctx, opOrgDeprovision, "success", reasonAccepted, nil)
 	writeJSON(w, http.StatusOK, deprovisionAnswer{OrganizationID: orgID.String(), RemovedMemberships: res.RemovedMemberships,
 		RevokedInvites: res.RevokedInvites, Suspended: res.Suspended})
+}
+
+type reactivateAnswer struct {
+	OrganizationID string `json:"organization_id"`
+	Status         string `json:"status"`
+	Reactivated    bool   `json:"reactivated"`
+}
+
+// orgReactivate ends an organization's suspension: a superuser actor only
+// (go-api's PATCH /admin/orgs/{org_id} is policy.Superuser), read through the
+// users seam before anything is read for the request and again inside the
+// verb's transaction after the row lock. An organization that is not
+// suspended answers 200 with reactivated false and writes nothing.
+func (h provisioningHandlers) orgReactivate(w http.ResponseWriter, r *http.Request) {
+	body, ok := h.admit(w, r, opOrgReactivate, "organization_id", "actor_principal_id")
+	if !ok {
+		return
+	}
+	orgID, err1 := body.uuid("organization_id")
+	actor, err2 := body.uuid("actor_principal_id")
+	if errors.Join(err1, err2) != nil {
+		h.rec.refuse(w, r, opOrgReactivate, refusal{http.StatusBadRequest, reasonMalformed}, nil)
+		return
+	}
+	if !h.precheck(w, r, opOrgReactivate, actor, orgID, true) {
+		return
+	}
+	ctx := r.Context()
+	changed, err := h.Orgs.ReactivateAuthorized(ctx, orgID, nil, org.Actor{PrincipalID: &actor, RequestID: requestid.Audit(ctx)},
+		func(ctx context.Context, tx audit.TxOps, orgID uuid.UUID) error {
+			_, err := h.actorRule(ctx, tx, actor, orgID, true)
+			var refused errActorRefused
+			if errors.As(err, &refused) {
+				return org.ErrDenied
+			}
+			return err
+		})
+	if err != nil {
+		answer := unavailable(reasonStoreUnavailable)
+		switch {
+		case errors.Is(err, org.ErrDenied):
+			answer = refusal{http.StatusForbidden, reasonSuperuserRequired}
+		case errors.Is(err, org.ErrNotFound):
+			answer = refusal{http.StatusNotFound, reasonOrganizationNotFound}
+		}
+		h.rec.refuse(w, r, opOrgReactivate, answer, failure(answer, err))
+		return
+	}
+	h.rec.record(ctx, opOrgReactivate, "success", reasonAccepted, nil)
+	writeJSON(w, http.StatusOK, reactivateAnswer{OrganizationID: orgID.String(), Status: "active", Reactivated: changed})
 }

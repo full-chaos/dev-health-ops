@@ -42,13 +42,14 @@ plain `docker compose up` starts none of them.
 docker compose --profile auth up --build --wait auth-service
 ```
 
-That runs four services in order:
+That runs five services in order:
 
 | Service | Job |
 | --- | --- |
 | `auth-keys-init` | One-shot. Writes the platform signing key (Ed25519, mode 0400, uid 65532) and its JWKS into its **own** `auth_signing_keys` volume with `dho mint envelope-keys --skip-existing`, with its own key id (`AUTH_SIGNING_KEY_ID`, default `auth-signing-local`). |
 | `auth-provision` | One-shot. Creates the unprivileged runtime login (default `devhealth_auth`) and, on **every run**, resets it to `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`, so an elevated login cannot survive a re-provision. |
 | `auth-migrate` | One-shot. Applies the auth schema as the database owner and grants the runtime login its table privileges. Run it again after an upgrade. `auth-migrate grants` is the grant-only pass: the Helm chart runs it after the ops migrate Job and it fails when a listed public table is missing. |
+| `auth-fence-init` | One-shot, dev compose only. `auth-migrate restore-fence init -if-absent` writes the first restore-fence row of the fresh database (timeline 1) so that auth-service is ready; a repeat bring-up exits 0 without writing. Never run it on a restored volume (use `restore-fence apply`), and the Helm chart has no such Job: a production database is initialised once by hand (see the first roll below). |
 | `auth-service` | The service, started last as the unprivileged login. The signing key is mounted read-only from the `private/` subpath of the volume. |
 
 Things that are easy to get wrong:
@@ -91,7 +92,18 @@ docker volume rm dev-health-ops_auth_signing_keys    # drops the key too
 `go-auth-compose-proof`): it asserts the container is healthy, `/readyz` is 200,
 `/metrics` reports ready, the schema is current, the runtime login has no
 elevated attribute and owns nothing, a deliberately elevated login is
-de-escalated by re-provisioning, the key is `400 65532`, the all four auth services are on `auth_plane` only (or `network_mode: none`), and the rollback leaves postgres healthy.
+de-escalated by re-provisioning, the key is `400 65532`, all five auth services are on `auth_plane` only (or `network_mode: none`), and the rollback leaves postgres healthy.
+
+### First roll of the restore fence (D6466)
+
+auth-service is not ready on a database that has no restore-fence row for its timeline (readiness check `restore_fence`).
+The first roll onto a build that carries the fence therefore runs in this order: (1) the `auth-migrate` Job (migration
+0035, which creates `auth.restore_fence_state` and writes no row); (2) a one-off Job that runs
+`auth-migrate restore-fence init` against the live database, once, and `auth-migrate restore-fence status` must then
+print `fenced=true`; (3) the auth-service image. If the image lands before the init, the new pods stay not ready and the
+old pods keep serving (fail closed). The Helm chart deliberately has no hook that runs `init`: a hook on a restored
+database would mark it fenced without applying any revocation. A restored database is fenced with
+`restore-fence apply`, never with `init` ([procedure](../../operate/maintain/backup-and-restore.md#restoring-the-auth-schema-to-a-point-in-time-the-restore-fence)).
 
 ## Kubernetes (Helm)
 

@@ -30,6 +30,7 @@ const (
 	proofIssue     = "internal/auth/authapi/issue_user_tokens_test.go"
 	proofRefresh   = "internal/auth/authapi/refresh_user_tokens_test.go"
 	proofExchange  = "internal/auth/workloadexchange/user_tokens_refused_test.go"
+	proofProvision = "internal/auth/authapi/provisioning_rows_test.go"
 	pushRoutes     = "TestExternalPushAuthenticatedRoutesRefuseUserTokens"
 	acrTest        = "TestInternalACRRoutesRefuseUserTokens"
 	stripeTest     = "TestStripeWebhookRefusesUserTokens"
@@ -39,6 +40,7 @@ const (
 	issueTest      = "TestIssueSessionRefusesUserTokens"
 	refreshTest    = "TestRefreshRowsRefuseUserTokens"
 	exchangeTest   = "TestTheExchangeRefusesUserTokens"
+	provisionTest  = "TestProvisioningRoutesRefuseUserTokens"
 	exemptExchange = "the credential is the social provider's own token in the request body, sent to the provider; no bearer of ours is read; a user flow, outside this leaf"
 )
 
@@ -64,6 +66,13 @@ var negativeProofs = map[string]negativeProof{
 	"query-api|POST /query [dev-health-query-api @mcp]":                                       {file: proofMCP, test: mcpTest},
 	"auth-service|POST /internal/v1/sessions [dev-health-auth-service @api]":                  {file: proofIssue, test: issueTest},
 	"auth-service|POST /internal/v1/token/exchange [dev-health-auth-service @api]":            {file: proofExchange, test: exchangeTest},
+	"auth-service|POST /internal/v1/memberships/add [dev-health-auth-service @api]":           {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/memberships/role [dev-health-auth-service @api]":          {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/memberships/remove [dev-health-auth-service @api]":        {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/memberships/transfer [dev-health-auth-service @api]":      {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/invites/create [dev-health-auth-service @api]":            {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/invites/accept [dev-health-auth-service @api]":            {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/organizations/deprovision [dev-health-auth-service @api]": {file: proofProvision, test: provisionTest},
 	"auth-service|POST /v1/token/refresh [dev-health-auth-service @api]":                      {file: proofRefresh, test: refreshTest},
 	"auth-service|POST /api/v1/auth/refresh [dev-health-auth-service @api]":                   {file: proofRefresh, test: refreshTest},
 	"auth-service|POST /api/v1/auth/logout [dev-health-auth-service @api]":                    {file: proofRefresh, test: refreshTest},
@@ -169,7 +178,7 @@ func TestEveryNegativeProofNamesARealTestThatSendsUserTokens(t *testing.T) {
 	}
 }
 
-// The census: 26 derived rows = 25 proven + 1 exempt. A change to either count is a decision, made here.
+// The census: 27 derived rows = 26 proven + 1 exempt. A change to either count is a decision, made here.
 func TestNegativeProofCensus(t *testing.T) {
 	proven, exempt := 0, 0
 	for _, proof := range negativeProofs {
@@ -179,8 +188,8 @@ func TestNegativeProofCensus(t *testing.T) {
 			proven++
 		}
 	}
-	// CHAOS-11813 retired the 6 legacy ingest rows (26, 25, 1 before).
-	if len(derivedRows(t)) != 20 || proven != 19 || exempt != 1 {
-		t.Fatalf("derived %d rows, %d proven, %d exempt; want 20, 19, 1", len(derivedRows(t)), proven, exempt)
+	// CHAOS-11813 retired the 6 legacy ingest rows (26, 25, 1 before); CHAOS-11798 added the 7 provisioning rows (20, 19, 1 before).
+	if len(derivedRows(t)) != 27 || proven != 26 || exempt != 1 {
+		t.Fatalf("derived %d rows, %d proven, %d exempt; want 27, 26, 1", len(derivedRows(t)), proven, exempt)
 	}
 }

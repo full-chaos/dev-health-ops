@@ -225,6 +225,7 @@ func legSelectionViolations(t *testing.T, root string) []string {
 		`matrix="$(jq -ce '.' "${legs}")"`,
 		`if ! jq -e 'type == "array" and length > 0 and any(.[]; .name == "static")' <<<"${matrix}" >/dev/null; then`,
 		`dups="$(jq -r '[.[] | .name] | group_by(.) | map(select(length > 1) | .[0]) | join(", ")' "${legs}")"`,
+		`shape="$(jq -r '`,
 	}
 	if !reflect.DeepEqual(jqLines, wantJQ) {
 		add("%s runs jq as %q, want exactly %q: the matrix is the filtered leg file and nothing else", legsScript, jqLines, wantJQ)

@@ -221,8 +221,14 @@ func TestGoQualityQueueLookupIsPushOnlyReadOnlyAndFailsOpen(t *testing.T) {
 		t.Error("the queue lookup step must be continue-on-error: a lookup failure must run every leg, never fail the plan job")
 	}
 	run := asString(step["run"])
-	if !strings.Contains(run, `bash ci/queue_tested_sha.sh "${GITHUB_REPOSITORY}" "${GITHUB_SHA}" go-quality.yml 'go-quality-leg (' 'Run Go quality leg' 10`) {
+	if !strings.Contains(run, `bash ci/queue_tested_sha.sh "${GITHUB_REPOSITORY}" "${GITHUB_SHA}" go-quality.yml 'go-quality-leg (' 'Run Go quality leg' "@${expected_file}"`) {
 		t.Error("the lookup must call the helper for the pushed sha with the go-quality leg arguments")
+	}
+	if !strings.Contains(run, `printf '%s' "${LEGS}" | jq -r '.[] | "go-quality-leg (" + .name + ")"' > "${expected_file}"`) || strings.Contains(run, "Run Go quality leg' 10") {
+		t.Error("the lookup must take the expected job names from the validated leg list (LEGS), not a count")
+	}
+	if env, _ := step["env"].(map[string]any); asString(env["LEGS"]) != "${{ steps.legs.outputs.legs }}" {
+		t.Errorf("the lookup step LEGS = %q, want the output of the legs step", asString(env["LEGS"]))
 	}
 	if !strings.Contains(run, "QUEUE_TESTED_RUN_ID_FILE=") || !strings.Contains(run, `*[!0-9]*) run_id="" ;;`) {
 		t.Error("the run id must come from the helper file and be digits only, else empty")
@@ -340,7 +346,7 @@ func TestGoQualityLegSkipIsPushOnlyNeverStaticAndKeepsReceipts(t *testing.T) {
 		t.Errorf("matrix legs %v differ from the pinned list %v", names, qualityLegNames)
 	}
 	if len(names) != 10 {
-		t.Errorf("the helper is called with min-jobs 10, the matrix has %d legs", len(names))
+		t.Errorf("the matrix has %d legs, want 10 (static + 4 test + 5 race)", len(names))
 	}
 }
 

@@ -949,3 +949,22 @@ func TestPostureIntegrationStubRunKeepsTheDirsTheCallerSupplied(t *testing.T) {
 	}
 	requireEmptyDir(t, tmp, "a run with caller dirs")
 }
+
+// A stub run keeps the caller's TMPDIR: the worktree it makes (the runner's cwd) lies under it.
+func TestPostureIntegrationStubRunForwardsTheCallersTmpdir(t *testing.T) {
+	f := postureDemo(t)
+	tmp, env := postureTmpEnv(t)
+	env = append(env, "PATH="+filepath.Dir(goBinary(t))+string(os.PathListSeparator)+"/usr/bin:/bin")
+	cwdFile := filepath.Join(t.TempDir(), "cwd")
+	res := postureStubRun(t, f, "#!/bin/sh\npwd > "+cwdFile+"\nexit 0\n", env)
+	if res.code != 5 {
+		t.Fatalf("stub run: exit %d stdout=%q stderr=%q, want exit 5", res.code, res.stdout, res.stderr)
+	}
+	raw, err := os.ReadFile(cwdFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(raw)); !strings.HasPrefix(got, tmp+string(os.PathSeparator)) {
+		t.Fatalf("the runner ran in %q, want a dir under the caller's TMPDIR %q", got, tmp)
+	}
+}

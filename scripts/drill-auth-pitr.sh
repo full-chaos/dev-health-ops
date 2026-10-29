@@ -77,13 +77,32 @@ drill() {
   # exported in a subshell, never passed through `env`: the DSN holds a password
   # and an argv is readable by every user of the host.
   (
+    # shellcheck disable=SC2030 # each subshell sets its own copy on purpose
     export DRILL_PHASE="$phase" DRILL_EVIDENCE_DIR="$evidence"
+    # shellcheck disable=SC2030
     export DRILL_DSN="postgres://postgres:${POSTGRES_PASSWORD}@127.0.0.1:${port}/postgres?sslmode=disable"
     # shellcheck disable=SC2163 # each argument is a NAME=value assignment
     # a bare `export` (no arguments) would print every exported variable of the invoking shell into the drill log
     if (($#)); then export "$@"; fi
     "$capped" -t 600 -- "$DRILL_DIR/drill.test" -test.run '^TestDrillAuthPITR$' -test.count=1 -test.v \
       >>"$evidence/driver-$phase.log" 2>&1
+  )
+}
+
+# drill_attempt runs the authentication-attempt driver (TestDrillAuthAttempt): revoked access must be refused by the
+# verifier the auth service uses, not only marked revoked in the tables. Same environment rules as drill().
+drill_attempt() { # port, phase, optional NAME=value...
+  local port="$1" phase="$2"
+  shift 2
+  (
+    # shellcheck disable=SC2031 # each subshell sets its own copy on purpose
+    export DRILL_ATTEMPT_PHASE="$phase" DRILL_EVIDENCE_DIR="$evidence"
+    # shellcheck disable=SC2031
+    export DRILL_DSN="postgres://postgres:${POSTGRES_PASSWORD}@127.0.0.1:${port}/postgres?sslmode=disable"
+    # shellcheck disable=SC2163 # each argument is a NAME=value assignment; a bare export would print the environment
+    if (($#)); then export "$@"; fi
+    "$capped" -t 600 -- "$DRILL_DIR/drill.test" -test.run '^TestDrillAuthAttempt$' -test.count=1 -test.v \
+      >>"$evidence/driver-attempt-$phase.log" 2>&1
   )
 }
 
@@ -180,9 +199,11 @@ dc exec -T src pg_basebackup -U postgres -D /backup/base -Fp -X stream -c fast
 
 log "S3 writes B, snapshot T, writes C after T, snapshot F"
 drill "$port_src" write DRILL_LABEL=B
+drill_attempt "$port_src" seed # a workload with a live bootstrap credential per case, before T
 drill "$port_src" snapshot DRILL_LABEL=T
 sleep 3
 drill "$port_src" write DRILL_LABEL=C
+drill_attempt "$port_src" revoke # after T: revoke one credential, disable one principal
 drill "$port_src" snapshot DRILL_LABEL=F
 last_lsn="$(psql_in src 'select pg_current_wal_lsn()')"
 psql_in src 'select pg_switch_wal()' >/dev/null
@@ -213,6 +234,7 @@ if [[ "$fence_mode" -eq 1 ]]; then
   drill "$port_latest" verify DRILL_EXPECT=F DRILL_MODE=exact || result=1
   # the manifest is exported BEFORE any new write on the shadow copy
   fence "$port_latest" export -out "$evidence/fence-manifest.json" >"$evidence/fence-export.txt" || result=1
+  drill_attempt "$port_latest" attempt DRILL_EXPECT=F DRILL_LABEL=shadow || result=1
   drill "$port_latest" post DRILL_EXPECT=F DRILL_FINAL=F || result=1
   dc --profile latest stop latest
 
@@ -242,6 +264,8 @@ if [[ "$fence_mode" -eq 1 ]]; then
     sleep 1
   done
   [[ "$(psql_in pitr 'show default_transaction_read_only')" == "off" ]] || { echo "drill-auth-pitr.sh: the read-only default was not reset" >&2; result=1; }
+  # the revoked credential and the disabled principal must be refused by the real verifier on the fenced copy
+  drill_attempt "$port_pitr" attempt DRILL_EXPECT=T DRILL_LABEL=pitr DRILL_FENCE=1 || result=1
   drill "$port_pitr" post DRILL_EXPECT=T DRILL_FINAL=F DRILL_FENCE=1 || result=1
   # the apply must have re-applied at least one revocation (a credential and a principal created before T and removed
   # after it), and the rows the PITR copy lacks must be exactly the ones apply reported as absent (it cannot
@@ -261,6 +285,7 @@ dc --profile pitr up -d --wait pitr
 wait_promoted pitr
 drill "$port_pitr" verify DRILL_EXPECT=T DRILL_MODE=exact || result=1
 drill "$port_pitr" verify DRILL_EXPECT=A DRILL_MODE=atleast || result=1
+drill_attempt "$port_pitr" attempt DRILL_EXPECT=T DRILL_LABEL=pitr || result=1 # measured, not failed: the gap
 drill "$port_pitr" post DRILL_EXPECT=T DRILL_FINAL=F || result=1
 dc --profile pitr stop pitr
 
@@ -270,13 +295,14 @@ load_gate
 dc --profile latest up -d --wait latest
 wait_promoted latest
 drill "$port_latest" verify DRILL_EXPECT=F DRILL_MODE=exact || result=1
+drill_attempt "$port_latest" attempt DRILL_EXPECT=F DRILL_LABEL=shadow || result=1
 drill "$port_latest" post DRILL_EXPECT=F DRILL_FINAL=F || result=1
 dc --profile latest stop latest
 
 fi
 
 log "evidence in $evidence"
-jq -c . "$evidence"/verify-*.json "$evidence"/post-*.json | tee "$evidence/summary.txt"
+jq -c . "$evidence"/verify-*.json "$evidence"/post-*.json "$evidence"/attempt-*.json | tee "$evidence/summary.txt"
 # (a) revoked before T stays revoked, (d) no revision below T, (e) no duplicate: any failure above = FAIL.
 # (b) revokes after T that came back and (c) keys re-issued with different content = GAP.
 pitr_b="$(jq -r '.revokes_after_target_that_came_back' "$evidence/post-T.json" 2>/dev/null || echo n/a)"
@@ -287,5 +313,7 @@ if [[ "$result" -ne 0 ]]; then
 elif [[ "$pitr_b" -ne 0 || "$pitr_c" -ne 0 ]]; then
   verdict=GAP
 fi
+attempt_pitr="$(jq -r '.revoked_access_accepted' "$evidence/attempt-T-pitr.json" 2>/dev/null || echo n/a)"
+printf 'AUTH ATTEMPT on the restored copy: revoked or disabled secrets accepted=%s of 2 (fenced must be 0; the unfenced baseline shows the gap)\n' "$attempt_pitr" | tee -a "$evidence/summary.txt"
 printf 'DRILL RESULT: %s (b revokes-after-T-back=%s, c reissued-different=%s)\n' "$verdict" "$pitr_b" "$pitr_c" | tee -a "$evidence/summary.txt"
 [[ "$verdict" != FAIL ]]

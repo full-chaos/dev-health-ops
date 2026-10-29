@@ -1,10 +1,12 @@
 package authapi
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -91,13 +93,18 @@ func compactSegments(bearer string) (header, payload []byte, ok bool) {
 	return header, payload, err1 == nil && err2 == nil
 }
 
+// workloadVerifier is satisfied by *authverify.WorkloadVerifier.
+type workloadVerifier interface {
+	Verify(token string, now time.Time) (*authverify.WorkloadClaims, error)
+}
+
 // SessionIssueWorkload lets the session issue route accept the go-api workload
 // token: audience auth-service, and the one configured workload principal.
 // The token carries no action claim, so the subject equality is the
 // sessions.issue binding. A nil SessionIssueWorkload refuses every workload
 // token.
 type SessionIssueWorkload struct {
-	verifier *authverify.WorkloadVerifier
+	verifier workloadVerifier
 	subject  string
 	now      func() time.Time
 }
@@ -156,17 +163,14 @@ func (s *SessionIssueWorkload) authorize(bearer string) (issueCaller, string, er
 	if !ok {
 		return issueCaller{}, "contract", nil
 	}
-	var peek struct {
-		Aud string `json:"aud"`
-		Sub string `json:"sub"`
-	}
-	if err := json.Unmarshal(payload, &peek); err != nil {
+	aud, sub, ok := peekAudienceAndSubject(payload)
+	if !ok {
 		return issueCaller{}, "contract", nil
 	}
-	if peek.Aud != issueWorkloadAudience {
+	if aud != issueWorkloadAudience {
 		return issueCaller{}, "audience", nil
 	}
-	if peek.Sub != s.subject {
+	if sub != s.subject {
 		return issueCaller{}, "subject", nil
 	}
 	claims, err := s.verifier.Verify(bearer, s.now())
@@ -221,4 +225,47 @@ func (h compatHandlers) issueCaller(w http.ResponseWriter, r *http.Request, bear
 	}
 	h.rec.refuse(w, r, opSessionIssue, unauthorized(reasonInvalidCredentials), nil)
 	return issueCaller{}, false
+}
+
+// peekAudienceAndSubject reads aud and sub from an unverified payload, as
+// strict JSON: one object, no duplicate member, aud and sub present as strings,
+// and no member that is aud or sub in another case (encoding/json would match
+// it). The payload is already inside the bearer's length bound. The result only
+// refuses: the verifier and the checks on its claims decide.
+func peekAudienceAndSubject(payload []byte) (aud, sub string, ok bool) {
+	dec := json.NewDecoder(bytes.NewReader(payload))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return "", "", false
+	}
+	seen := map[string]bool{}
+	for dec.More() {
+		keyTok, err := dec.Token()
+		key, isString := keyTok.(string)
+		if err != nil || !isString || seen[key] {
+			return "", "", false
+		}
+		seen[key] = true
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err != nil {
+			return "", "", false
+		}
+		for _, member := range []struct {
+			name string
+			into *string
+		}{{"aud", &aud}, {"sub", &sub}} {
+			if !strings.EqualFold(key, member.name) {
+				continue
+			}
+			if key != member.name || json.Unmarshal(raw, member.into) != nil {
+				return "", "", false
+			}
+		}
+	}
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('}') {
+		return "", "", false
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return "", "", false
+	}
+	return aud, sub, seen["aud"] && seen["sub"]
 }

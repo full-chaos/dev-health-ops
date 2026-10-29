@@ -10,7 +10,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
 
@@ -23,17 +22,13 @@ func TestGenerateVerbStartsTheRecommendationsBackstop(t *testing.T) {
 	jobsContractRoot = "../../contracts/jobs/v1"
 	t.Cleanup(func() { jobsContractRoot = prior })
 
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	t.Cleanup(func() { _ = instance.Close(context.Background()) })
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	pgschema.Apply(ctx, t, pool)
 
 	ch := startClickHouse(t)
 	stopMerges(t, ch.httpDSN)

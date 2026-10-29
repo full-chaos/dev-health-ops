@@ -38,8 +38,9 @@ goApi:
   #    auth-service first and writes its own row only on success (503 and no write when auth-service
   #    refuses or is down). Needs authService.phase 2 or higher, auth-service's AUTH_MEMBERSHIP_ROUTES on,
   #    and a go-api credential (goApi.sessionIssue) minted with the memberships:write scope. Off renders nothing.
-  authProxy:
-    orgProvisioning: false
+  #    The key is absent by default (an empty goApi.authProxy map is refused like any other hand-set flag map):
+  #    authProxy:
+  #      orgProvisioning: true
   # -- The api listener (requests). The Service targets this port.
   port: 8000
   # -- The operator listener: /healthz, /readyz and /metrics. Probes use it.

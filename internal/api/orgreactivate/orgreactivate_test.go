@@ -127,7 +127,12 @@ func TestEveryFailureIsAnErrorAndNamesItsClass(t *testing.T) {
 }
 
 func TestATimeoutAndAnUnreachableServerAreUnavailable(t *testing.T) {
-	slow := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
+	slow := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(2 * time.Second):
+		}
+	}))
 	t.Cleanup(slow.Close)
 	base, _ := url.Parse(slow.URL)
 	client, err := New(base, testToken, 50*time.Millisecond)

@@ -26,6 +26,13 @@ type Invalidator interface {
 	InvalidateAll(ctx context.Context)
 }
 
+// NopInvalidator is the Invalidator while no cache exists (the decision cache of 5.8 is not built yet): the consumer then
+// only keeps its marks and metrics.
+type NopInvalidator struct{}
+
+func (NopInvalidator) Invalidate(context.Context, string, string, int64) {}
+func (NopInvalidator) InvalidateAll(context.Context)                     {}
+
 // Config is the consumer's inputs. Logger and Meter default to a discarding logger and the global meter.
 type Config struct {
 	Invalidator Invalidator

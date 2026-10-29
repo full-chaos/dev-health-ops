@@ -75,6 +75,7 @@ type BootstrapCredential struct {
 // failure becomes a storeFault.
 var bootstrapRefusals = []error{
 	ErrNotFound, ErrAudienceInvalid, ErrBootstrapLive, ErrBootstrapRotating, ErrBootstrapNone, ErrBootstrapNotFound,
+	ErrBootstrapWorkloadDisabled,
 }
 
 // storeFault is a store failure reduced to its SQLSTATE: a pgx error's
@@ -109,6 +110,32 @@ func fault(err error) error {
 
 const liveBootstrap = `credential_class = '` + BootstrapClass + `' AND revoked_at IS NULL
 AND (expires_at IS NULL OR expires_at > clock_timestamp())`
+
+// lockIssuingWorkload locks the workload row, then its principal row (the
+// order setEnabled writes them), and refuses a workload whose row or principal
+// row is disabled: no new value is issued to it. It returns the workload's
+// audiences.
+func (s *Store) lockIssuingWorkload(ctx context.Context, tx audit.TxOps, id uuid.UUID) ([]string, error) {
+	audiences, _, disabled, err := s.lockWorkload(ctx, tx, id)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, err
+		}
+		return nil, fault(err)
+	}
+	var principalDisabled bool
+	if err := tx.QueryRow(ctx, `SELECT disabled_at IS NOT NULL FROM `+s.q+`.principals WHERE id = $1 FOR UPDATE`, id).
+		Scan(&principalDisabled); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fault(err)
+	}
+	if disabled || principalDisabled {
+		return nil, ErrBootstrapWorkloadDisabled
+	}
+	return audiences, nil
+}
 
 func credentialWire(id uuid.UUID) string { return "crd_" + id.String() }
 
@@ -186,7 +213,8 @@ func validExpiry(d time.Duration) bool { return d > 0 && d <= BootstrapExpiryCei
 // expiring after expiresIn (at most 90 d), for audiences (the workload's
 // audiences when empty; else a subset of them). value must be canonical
 // (MintBootstrap's); only its digest is stored. A workload with a live
-// bootstrap credential is refused: rotate it instead.
+// bootstrap credential is refused (rotate it instead), and so is a disabled
+// workload or principal.
 func (s *Store) CreateBootstrap(ctx context.Context, name, value string, audiences []string, expiresIn time.Duration, a Actor) (BootstrapResult, error) {
 	switch {
 	case !CanonicalBootstrap(value):
@@ -204,12 +232,9 @@ func (s *Store) CreateBootstrap(ctx context.Context, name, value string, audienc
 	res := BootstrapResult{CredentialID: uuid.New()}
 	err = s.runBootstrap(ctx, verbBootstrapCreate, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
-			own, _, _, err := s.lockWorkload(ctx, tx, info.PrincipalID)
+			own, err := s.lockIssuingWorkload(ctx, tx, info.PrincipalID)
 			if err != nil {
-				if errors.Is(err, ErrNotFound) {
-					return err
-				}
-				return fault(err)
+				return err
 			}
 			grant := audiences
 			if len(grant) == 0 {
@@ -250,7 +275,7 @@ VALUES ($1, $2, $3, $4, $5, $6, clock_timestamp() + make_interval(secs => $7), $
 // bootstrap credential. The successor keeps the parent's audiences and expires
 // after expiresIn; the parent's expiry only ever moves down, to at most
 // overlap (0..1 h) from now. A workload whose rotation is still in its overlap
-// (two live values) is refused.
+// (two live values) is refused, and so is a disabled workload or principal.
 func (s *Store) RotateBootstrap(ctx context.Context, name, value string, overlap, expiresIn time.Duration, a Actor) (BootstrapResult, error) {
 	switch {
 	case !CanonicalBootstrap(value):
@@ -268,11 +293,8 @@ func (s *Store) RotateBootstrap(ctx context.Context, name, value string, overlap
 	res := BootstrapResult{CredentialID: uuid.New()}
 	err = s.runBootstrap(ctx, verbBootstrapRotate, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
-			if _, _, _, err := s.lockWorkload(ctx, tx, info.PrincipalID); err != nil {
-				if errors.Is(err, ErrNotFound) {
-					return err
-				}
-				return fault(err)
+			if _, err := s.lockIssuingWorkload(ctx, tx, info.PrincipalID); err != nil {
+				return err
 			}
 			rows, err := tx.Query(ctx, `SELECT id FROM `+s.q+`.credential_registry WHERE principal_id = $1 AND `+liveBootstrap+`
 FOR UPDATE`, info.PrincipalID)

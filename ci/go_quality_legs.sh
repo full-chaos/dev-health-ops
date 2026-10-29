@@ -28,7 +28,7 @@ if [ -n "${dups}" ]; then
   exit 3
 fi
 # The whole leg file must have the shape the workflow, the shard plans and the queue-tested check rely on, whatever the event: one static
-# leg with args "static", test-K-of-N with args "test K N" for K = 1..N, race-K-of-M (heavy) with args "race K M" for K = 1..M, no other name.
+# leg with args "static" (a missing static leg is refused above, a repeated name by the duplicate check), test-K-of-N with args "test K N" for K = 1..N, race-K-of-M (heavy) with args "race K M" for K = 1..M, no other name.
 # Every line of the program below but the last is one check, so a dropped check is a dropped line.
 shape="$(jq -r '
   [.[] | select((.name | type) == "string")] as $l
@@ -39,7 +39,6 @@ shape="$(jq -r '
   | [$r[] | .name | capture("^race-(?<k>[0-9]+)-of-(?<n>[0-9]+)$") | {k: (.k | tonumber), n: (.n | tonumber)}] as $rk
   | [
     (if ($l | length) != length then "a leg has no string name" else empty end),
-    (if ($st | length) != 1 then "exactly one leg named static is required, found \($st | length)" else empty end),
     ($st[] | select(.args != "static") | "the static leg must have args \"static\", has \(.args | tojson)"),
     ($l[] | select(.name | test("^(static|test-[0-9]+-of-[0-9]+|race-[0-9]+-of-[0-9]+)$") | not) | "unknown leg name \(.name)"),
     ($t[] | . as $e | ($e.name | capture("^test-(?<k>[0-9]+)-of-(?<n>[0-9]+)$")) as $c | select($e.args != "test \($c.k) \($c.n)") | "leg \($e.name) has args \($e.args | tojson), want \"test \($c.k) \($c.n)\""),

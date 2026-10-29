@@ -76,6 +76,7 @@ func shapeCells(t *testing.T) []struct {
 		{"no test legs", mut(func(l []legEntry) []legEntry { return append(l[:1], l[5:]...) }), "no test leg"},
 		{"no race legs", mut(func(l []legEntry) []legEntry { return l[:5] }), "no race leg"},
 		{"no static leg", mut(func(l []legEntry) []legEntry { return l[1:] }), "no static leg"},
+		{"static twice", mut(func(l []legEntry) []legEntry { return append(l, legEntry{Name: "static", Args: "static"}) }), "duplicate"},
 	}
 }
 
@@ -184,5 +185,20 @@ func TestTheQueueHelperTakesTheExpectedLegNamesNotACount(t *testing.T) {
 	}
 	if runQualityHelperNames(t, ok(qualityLegNames), "\n\n") {
 		t.Error("an empty expected-names file must be refused")
+	}
+}
+
+func TestTheLegSelectorRefusesALegWithoutAStringName(t *testing.T) {
+	root := repoRoot(t)
+	base := strings.TrimSuffix(legsJSON(t, goodLegs()), "]")
+	for _, extra := range []string{`{"args":"static"}`, `{"name":7,"args":"static"}`, `{"name":null,"args":"static"}`} {
+		f := filepath.Join(t.TempDir(), "legs.json")
+		if err := os.WriteFile(f, []byte(base+","+extra+"]"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		out, errs, code := runLegsScript(t, root, "merge_group", "false", f)
+		if code != 3 || strings.Contains(out, "static") || !strings.Contains(errs, "has no string name") {
+			t.Errorf("%s: exit %d, stdout %q, stderr %q: a leg without a string name must fail with exit 3", extra, code, out, errs)
+		}
 	}
 }

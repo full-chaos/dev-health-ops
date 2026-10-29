@@ -47,6 +47,10 @@ if [ -z "${POSTURE_CLEAN_ENV:-}" ]; then
     for name in GOMODCACHE GOCACHE GOTMPDIR TMPDIR; do
       if [ -n "${!name+x}" ]; then allow+=("${name}=${!name}"); fi
     done
+    # A relative TMPDIR is made absolute here, once, so no path the script builds from it can start with "-".
+    if [ -n "${TMPDIR+x}" ] && [ -n "${TMPDIR}" ]; then
+      case "${TMPDIR}" in /*) ;; *) allow+=("TMPDIR=${PWD}/${TMPDIR}") ;; esac
+    fi
   fi
   for name in DOCKER_HOST TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX TESTCONTAINERS_RYUK_DISABLED TESTCONTAINERS_HOST_OVERRIDE \
     TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE TESTCONTAINERS_RYUK_CONTAINER_PRIVILEGED; do
@@ -91,16 +95,16 @@ made_dirs=()
 cleanup() {
   local rc=$?
   if [ -n "${wt_root}" ]; then
-    "${GIT}" worktree remove --force "${wt_root}/tree" > /dev/null 2>&1 || true
-    "${RM}" -rf "${wt_root}" || echo "cannot remove ${wt_root}" >&2
+    "${GIT}" worktree remove --force -- "${wt_root}/tree" > /dev/null 2>&1 || true
+    "${RM}" -rf -- "${wt_root}" || echo "cannot remove ${wt_root}" >&2
     "${GIT}" worktree prune > /dev/null 2>&1 || true
   fi
-  "${RM}" -f "${changed_tmp}" "${json_tmp}" || true
+  "${RM}" -f -- "${changed_tmp}" "${json_tmp}" || true
   # A Go module cache is read-only: make it traversable and writable before removal. Only dirs this script created are
   # listed. One path that cannot be removed must not stop the rest, nor change the exit code.
   for d in ${made_dirs[@]+"${made_dirs[@]}"}; do
-    "${CHMOD}" -R u+rwx "${d}" > /dev/null 2>&1 || true
-    "${RM}" -rf "${d}" || echo "cannot remove ${d}" >&2
+    "${CHMOD}" -R u+rwx -- "${d}" > /dev/null 2>&1 || true
+    "${RM}" -rf -- "${d}" || echo "cannot remove ${d}" >&2
   done
   return "${rc}"
 }
@@ -110,7 +114,7 @@ trap 'exit 130' INT TERM HUP
 packages=()
 # The list is read strictly: it must end with a newline, and no line may hold a carriage return, a space or a tab.
 [ -f "${list_file}" ] || { echo "cannot read ${list_file}" >&2; exit 3; }
-if [ -s "${list_file}" ] && [ "$(tail -c1 "${list_file}" | od -An -tx1 | tr -d ' \n')" != "0a" ]; then
+if [ -s "${list_file}" ] && [ "$(tail -c1 -- "${list_file}" | od -An -tx1 | tr -d ' \n')" != "0a" ]; then
   echo "${list_file} does not end with a newline" >&2
   exit 3
 fi
@@ -133,7 +137,7 @@ else
 fi
 
 # A non-empty list must end in NUL, like ci/integration_pr_scope.sh; an empty diff is a valid empty change.
-if [ -s "${changed_src}" ] && [ "$(tail -c1 "${changed_src}" | od -An -tx1 | tr -d ' \n')" != "00" ]; then
+if [ -s "${changed_src}" ] && [ "$(tail -c1 -- "${changed_src}" | od -An -tx1 | tr -d ' \n')" != "00" ]; then
   echo "change list is not NUL-terminated" >&2
   exit 3
 fi
@@ -181,7 +185,7 @@ fi
 # The tests run in a fresh worktree of HEAD, so uncommitted or index-hidden edits, a parent go.work, or a fake module in
 # the cwd never feed go test. The script and the list that run must be the ones committed at HEAD.
 wt_root="$("${MKTEMP}" -d)"
-"${GIT}" -c core.sparseCheckout=false worktree add --detach "${wt_root}/tree" "${sha}" > /dev/null 2>&1 || { echo "git worktree add failed" >&2; exit 3; }
+"${GIT}" -c core.sparseCheckout=false worktree add --detach -- "${wt_root}/tree" "${sha}" > /dev/null 2>&1 || { echo "git worktree add failed" >&2; exit 3; }
 wt="${wt_root}/tree"
 # core.sparseCheckout=false on the add keeps the caller's sparse patterns out of the new worktree without writing to the
 # caller's shared .git/config. Then refuse any file the index marks other than a plain cached one (sparse, skip-worktree,
@@ -192,8 +196,8 @@ while IFS= read -r entry; do
 done <<< "${lsv}"
 wt_sha="$("${GIT}" -C "${wt}" rev-parse HEAD)" || { echo "cannot read the worktree sha" >&2; exit 3; }
 [ "${wt_sha}" = "${sha}" ] || { echo "worktree sha ${wt_sha} is not HEAD ${sha}" >&2; exit 3; }
-"${CMP}" -s "${self}" "${wt}/ci/posture_integration.sh" || { echo "this script is not the one committed at HEAD" >&2; exit 3; }
-"${CMP}" -s "${list_file}" "${wt}/ci/posture_integration_packages.tsv" || { echo "the package list is not the one committed at HEAD" >&2; exit 3; }
+"${CMP}" -s -- "${self}" "${wt}/ci/posture_integration.sh" || { echo "this script is not the one committed at HEAD" >&2; exit 3; }
+"${CMP}" -s -- "${list_file}" "${wt}/ci/posture_integration_packages.tsv" || { echo "the package list is not the one committed at HEAD" >&2; exit 3; }
 
 if [ -z "${stub}" ]; then
   [ -f "${capped}" ] && [ -x "${capped}" ] || { echo "runner not found: ${capped}" >&2; exit 3; }
@@ -225,9 +229,9 @@ if [ -n "${stub}" ]; then
   printf 'SIMULATED-HEAD %s clean=yes runner=test-runner\n' "${sha}"
   rec="SIMULATED"; sum="SIMULATED-SUMMARY"
 else
-  runner_sha="$("${SHA}" "${capped}")" || { echo "cannot hash the runner ${capped}" >&2; exit 3; }
-  go_sha="$("${SHA}" "${go_path}")" || { echo "cannot hash ${go_path}" >&2; exit 3; }
-  script_sha="$("${SHA}" "${self}")" || { echo "cannot hash the script" >&2; exit 3; }
+  runner_sha="$("${SHA}" -- "${capped}")" || { echo "cannot hash the runner ${capped}" >&2; exit 3; }
+  go_sha="$("${SHA}" -- "${go_path}")" || { echo "cannot hash ${go_path}" >&2; exit 3; }
+  script_sha="$("${SHA}" -- "${self}")" || { echo "cannot hash the script" >&2; exit 3; }
   pkgs_sha="$(printf '%s\n' "${packages[@]}" | "${SHA}")" || { echo "cannot hash the package list" >&2; exit 3; }
   go_version="$(cd "${wt}" && "${goenv[@]}" "${go_path}" version)" || { echo "go version failed" >&2; exit 3; }
   mapfile -t gv < <(cd "${wt}" && "${goenv[@]}" "${go_path}" env GOOS GOARCH GOROOT GOTOOLDIR) || { echo "go env failed" >&2; exit 3; }

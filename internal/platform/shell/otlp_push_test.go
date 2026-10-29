@@ -144,9 +144,20 @@ func TestShellPushesItsRegisteredFragmentsOverOTLP(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	response, err := client.Get("http://" + httpAddress + "/metrics")
-	if err != nil {
-		t.Fatalf("the pull endpoint is gone: %v", err)
+	// The push arrives from the startup flush, before the operator listener
+	// starts; release the flush and wait for the pull endpoint, under the same
+	// deadline.
+	release()
+	var response *http.Response
+	for {
+		var err error
+		if response, err = client.Get("http://" + httpAddress + "/metrics"); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the pull endpoint never answered: %v\nprocess output:\n%s", err, output.String())
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 	defer response.Body.Close()
 	var body bytes.Buffer

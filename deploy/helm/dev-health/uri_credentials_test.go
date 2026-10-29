@@ -260,3 +260,40 @@ func TestURIsEncodeAReservedDatabaseName(t *testing.T) {
 		}
 	}
 }
+
+func TestPgbouncerURIsEncodeReservedRoleNames(t *testing.T) {
+	args := uriCatArgs(
+		keepDummyPasswords2(),
+		jsonSet("config.RIVER_DOMAIN_DATABASE_ROLE", "dev@dom ain"),
+		jsonSet("config.RIVER_QUEUE_DATABASE_ROLE", "q:role/x"),
+		jsonSet("config.RIVER_COORDINATOR_DATABASE_ROLE", "c#role?"),
+	)
+	r := keepMustRender(t, "reserved role names", args...)
+	sd := uriStringData(t, r, uriPgbouncerSecret)
+	cases := []struct{ key, want, role, password string }{
+		{"POSTGRES_URI", "postgresql://dev%40dom%20ain:dummy-domain-0001@a-dev-health-go-pgbouncer-transaction:6432/devhealth", "dev@dom ain", "dummy-domain-0001"},
+		{"WORKER_DATABASE_URI", "postgresql://q%3Arole%2Fx:dummy-queue-0002@a-dev-health-go-pgbouncer-queue-session:6433/devhealth", "q:role/x", "dummy-queue-0002"},
+		{"COORDINATOR_DATABASE_URI", "postgresql://c%23role%3F:dummy-coord-0003@a-dev-health-go-pgbouncer-coordinator-session:6434/devhealth", "c#role?", "dummy-coord-0003"},
+	}
+	for _, c := range cases {
+		got := uriKey(t, sd, uriPgbouncerSecret, c.key)
+		if got != c.want {
+			t.Errorf("%s: the role is not the percent-encoded literal", c.key)
+		}
+		u, err := url.Parse(got)
+		if err != nil {
+			t.Errorf("%s does not parse with net/url", c.key)
+			continue
+		}
+		if pw, _ := u.User.Password(); u.User.Username() != c.role || pw != c.password {
+			t.Errorf("%s: net/url does not read back the role and the password", c.key)
+		}
+		cfg, err := pgx.ParseConfig(got)
+		if err != nil || cfg.User != c.role || cfg.Password != c.password {
+			t.Errorf("%s: pgx does not read back the role and the password", c.key)
+		}
+	}
+	if got := uriKey(t, sd, uriPgbouncerSecret, "userlist.txt"); !strings.HasPrefix(got, "\"dev@dom ain\" \"dummy-domain-0001\"\n") {
+		t.Errorf("userlist.txt does not carry the domain role verbatim")
+	}
+}

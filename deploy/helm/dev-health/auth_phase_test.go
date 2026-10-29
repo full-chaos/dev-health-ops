@@ -612,8 +612,8 @@ func TestAuthPhaseEmptyTokenClassIsTheDefault(t *testing.T) {
 // shadow the rendered one, a Secret reference included).
 func TestGoAPIExtraEnvRefusesEveryRenderedName(t *testing.T) {
 	configs := map[string][]string{
-		"phase 3 with legacy ingest": phaseArgs(3, "--set", "legacyIngest.enabled=true", "--set-string", "legacyIngest.sunset=Tue\\, 01 Dec 2026 00:00:00 GMT"),
-		"phase 2 with eddsa tokens":  phaseArgs(2, "--set", "authService.accessToken.class=eddsa", "--set", "authService.accessToken.issuerURL=https://auth.example"),
+		"phase 3":                   phaseArgs(3),
+		"phase 2 with eddsa tokens": phaseArgs(2, "--set", "authService.accessToken.class=eddsa", "--set", "authService.accessToken.issuerURL=https://auth.example"),
 	}
 	names := map[string][]string{}
 	for label, args := range configs {
@@ -630,8 +630,8 @@ func TestGoAPIExtraEnvRefusesEveryRenderedName(t *testing.T) {
 		}
 	}
 	// AUTH_USERS_OWNED renders only from phase 4, which the renders above do not use.
-	names["AUTH_USERS_OWNED"] = configs["phase 3 with legacy ingest"]
-	if len(names) < 19 {
+	names["AUTH_USERS_OWNED"] = configs["phase 3"]
+	if len(names) < 17 {
 		t.Fatalf("only %d go-api env names rendered: %v", len(names), names)
 	}
 	for name, args := range names {

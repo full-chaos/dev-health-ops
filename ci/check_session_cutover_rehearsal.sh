@@ -319,7 +319,26 @@ assert_state() { # <name> <flag:true|unset> <insert> <update>
 
 # --- baseline ------------------------------------------------------------------------------------
 printf 'step 3: baseline upgrade with the hooks: phase 1 (sessions off), readers set (prod today plus the deploy prep leaf)\n'
-helm upgrade "${HELM_BASE[@]}" --history-max 0 --wait --timeout 12m
+# No --wait here: auth-service stays not ready on a timeline with no restore-fence row, and a fresh database gets
+# that row only from the explicit init below (the first-roll order: migrate, a one-off init, then auth-service).
+helm upgrade "${HELM_BASE[@]}" --history-max 0 --timeout 12m
+printf 'step 3 fence: auth-service is not ready before restore-fence init (timeline_not_fenced)\n'
+fence_reason=""
+for _ in $(seq 1 60); do
+  fence_reason="$(K logs -l app.kubernetes.io/component=auth-service --tail=-1 2>/dev/null | grep -o -m1 'timeline_not_fenced' || true)"
+  [ -n "${fence_reason}" ] && break
+  sleep 3
+done
+[ "${fence_reason}" = timeline_not_fenced ] || die "auth-service never reported timeline_not_fenced before restore-fence init"
+[ -z "$(K get deploy/"${FULL}-auth-service" -o jsonpath='{.status.readyReplicas}')" ] || die "auth-service is Ready before restore-fence init"
+printf 'step 3 fence: restore-fence init, the auth-migrate image the migrate hook ran (once, a database that is not a restore)\n'
+K run auth-fence-init --restart=Never --image=rehearsal/auth-migrate:local --image-pull-policy=Never --override-type=strategic --overrides='{"spec":{"containers":[{"name":"auth-fence-init","image":"rehearsal/auth-migrate:local","args":["restore-fence","init"],"env":[{"name":"AUTH_MIGRATION_DATABASE_URI","valueFrom":{"secretKeyRef":{"name":"auth-migrate-db","key":"AUTH_MIGRATION_DATABASE_URI"}}},{"name":"AUTH_RUNTIME_DATABASE_ROLE","value":"devhealth_auth"}]}]}}' >/dev/null
+K wait --for=jsonpath='{.status.phase}'=Succeeded pod/auth-fence-init --timeout=120s || { K logs auth-fence-init >&2 || true; die "restore-fence init did not succeed"; }
+K logs auth-fence-init | grep -q 'restore-fence init timeline=[0-9]* written=true' || die "restore-fence init did not write the row"
+K delete pod auth-fence-init --wait=true >/dev/null
+K rollout status deploy/"${FULL}-auth-service" --timeout=480s
+K wait --for=condition=Available deploy --all --timeout=12m >/dev/null
+printf 'step 3 fence: auth-service Ready after init\n'
 BASE_REV="$(rev)"
 printf 'baseline revision %s\n' "${BASE_REV}"
 K rollout status deploy/"${FULL}-go-api" --timeout=240s

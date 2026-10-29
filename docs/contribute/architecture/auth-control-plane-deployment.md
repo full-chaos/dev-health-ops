@@ -42,19 +42,20 @@ plain `docker compose up` starts none of them.
 docker compose --profile auth up --build --wait auth-service
 ```
 
-That runs five services in order:
+That runs six services in order:
 
 | Service | Job |
 | --- | --- |
 | `auth-keys-init` | One-shot. Writes the platform signing key (Ed25519, mode 0400, uid 65532) and its JWKS into its **own** `auth_signing_keys` volume with `dho mint envelope-keys --skip-existing`, with its own key id (`AUTH_SIGNING_KEY_ID`, default `auth-signing-local`). |
 | `auth-provision` | One-shot. Creates the unprivileged runtime login (default `devhealth_auth`) and, on **every run**, resets it to `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`, so an elevated login cannot survive a re-provision. |
 | `auth-migrate` | One-shot. Applies the auth schema as the database owner and grants the runtime login its table privileges. Run it again after an upgrade. `auth-migrate grants` is the grant-only pass: the Helm chart runs it after the ops migrate Job and it fails when a listed public table is missing. |
+| `auth-grants` | One-shot. Runs `auth-migrate grants` (the grant-only pass) after `auth-migrate`, as the same elevated login, so the runtime login's table privileges, including those on the public tables, are current before auth-service starts. |
 | `auth-fence-init` | One-shot, dev compose only. `auth-migrate restore-fence init -if-absent` writes the first restore-fence row of the fresh database (timeline 1) so that auth-service is ready; a repeat bring-up exits 0 without writing. Never run it on a restored volume (use `restore-fence apply`), and the Helm chart has no such Job: a production database is initialised once by hand (see the first roll below). |
 | `auth-service` | The service, started last as the unprivileged login. The signing key is mounted read-only from the `private/` subpath of the volume. |
 
 Things that are easy to get wrong:
 
-- **Network.** `auth-provision`, `auth-migrate` and `auth-service` join only
+- **Network.** `auth-provision`, `auth-migrate`, `auth-grants`, `auth-fence-init` and `auth-service` join only
   the `auth_plane` network, which `postgres` also joins; `auth-keys-init` needs
   no network at all (`network_mode: none`, it only writes a file into its
   volume). None of them can reach any other stack service. The only effect on the
@@ -92,7 +93,7 @@ docker volume rm dev-health-ops_auth_signing_keys    # drops the key too
 `go-auth-compose-proof`): it asserts the container is healthy, `/readyz` is 200,
 `/metrics` reports ready, the schema is current, the runtime login has no
 elevated attribute and owns nothing, a deliberately elevated login is
-de-escalated by re-provisioning, the key is `400 65532`, all five auth services are on `auth_plane` only (or `network_mode: none`), and the rollback leaves postgres healthy.
+de-escalated by re-provisioning, the key is `400 65532`, all six auth services are on `auth_plane` only (or `network_mode: none`), and the rollback leaves postgres healthy.
 
 ### First roll of the restore fence (D6466)
 

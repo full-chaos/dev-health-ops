@@ -8170,7 +8170,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a superuser passes, any other caller answers 403 (internal/api/policy/guard.go:137); the handler does not scope by the caller's organization; a missing target answers 404 (internal/apiservice/admin/orgs.go:367)",
+      "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a superuser passes, any other caller answers 403 (internal/api/policy/guard.go:137); the handler does not scope by the caller's organization; a missing target answers 404 (internal/apiservice/admin/orgs.go:370)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "PATCH /api/v1/admin/orgs/{org_id} [dev-health-ops-api @api]",

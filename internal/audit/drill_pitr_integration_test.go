@@ -35,14 +35,16 @@ const (
 )
 
 type drillSnapshot struct {
-	Label     string            `json:"label"`
-	Revisions map[string]int64  `json:"revisions"`
-	Revoked   []string          `json:"revoked_credentials"`
-	Disabled  []string          `json:"disabled_principals"`
-	Keys      []string          `json:"outbox_idempotency_keys"`
-	KeyDigest map[string]string `json:"outbox_key_content_digest"`
-	Counts    map[string]int64  `json:"row_counts"`
-	Digest    map[string]string `json:"digest"`
+	Label     string           `json:"label"`
+	Revisions map[string]int64 `json:"revisions"`
+	Revoked   []string         `json:"revoked_credentials"`
+	Disabled  []string         `json:"disabled_principals"`
+	// LegacyRevoked is "table/id" of every revoked row of the legacy public credential tables the fence carries.
+	LegacyRevoked []string          `json:"legacy_revoked_credentials"`
+	Keys          []string          `json:"outbox_idempotency_keys"`
+	KeyDigest     map[string]string `json:"outbox_key_content_digest"`
+	Counts        map[string]int64  `json:"row_counts"`
+	Digest        map[string]string `json:"digest"`
 }
 
 func TestDrillAuthPITR(t *testing.T) {
@@ -98,11 +100,10 @@ func drillMigrate(t *testing.T, ctx context.Context, admin *pgxpool.Pool, role s
 	if !regexp.MustCompile(`^[a-z_][a-z0-9_]{0,30}$`).MatchString(role) {
 		t.Fatalf("bad runtime role name %q", role)
 	}
-	if os.Getenv("DRILL_FENCE") == "1" {
-		// The restore fence carries the legacy public tables as well (refresh tokens, invites, reset tokens, ...): the
-		// fenced drill runs on the full migrated schema, as production does, or apply refuses on the missing tables.
-		pgschema.ApplyURI(ctx, t, admin.Config().ConnString())
-	}
+	// The restore fence carries the legacy public tables as well (refresh tokens, service credentials, ingest tokens,
+	// ...), and the drill revokes one row of each after T: both modes run on the full migrated schema, as production
+	// does, or apply refuses on the missing tables.
+	pgschema.ApplyURI(ctx, t, admin.Config().ConnString())
 	if _, err := admin.Exec(ctx, fmt.Sprintf(`CREATE ROLE %q LOGIN PASSWORD '%s'`, role, password)); err != nil {
 		t.Fatalf("create runtime role: %v", err)
 	}
@@ -182,7 +183,11 @@ func drillWrite(t *testing.T, ctx context.Context, rt *pgxpool.Pool, schema auth
 			t.Fatalf("seed the spare principal: %v", err)
 		}
 	}
+	if label == "B" {
+		drillSeedLegacy(t, ctx, admin)
+	}
 	if label == "C" {
+		drillRevokeLegacy(t, ctx, admin)
 		err := Commit(ctx, rt, schema, Mutation{
 			Apply: func(ctx context.Context, tx TxOps) error {
 				_, err := tx.Exec(ctx, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1`, spare)
@@ -247,6 +252,49 @@ VALUES ($1, $2, 'workload_token', decode(md5(random()::text || clock_timestamp()
 	}
 }
 
+func drillLegacyID(name string) uuid.UUID {
+	return uuid.NewSHA1(uuid.NameSpaceURL, []byte("drill-11232-legacy-"+name))
+}
+
+var drillLegacyTables = []string{"refresh_tokens", "internal_service_credentials", "external_ingest_tokens"}
+
+// drillSeedLegacy creates (before T, label B) one live row in each legacy public credential table the fence carries.
+func drillSeedLegacy(t *testing.T, ctx context.Context, admin *pgxpool.Pool) {
+	t.Helper()
+	user := drillLegacyID("user")
+	statements := []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO public.users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
+VALUES ($1, 'drill-11232-legacy@example.com', true, false, false, 0, now(), now()) ON CONFLICT (id) DO NOTHING`, []any{user}},
+		{`INSERT INTO public.refresh_tokens (id, user_id, family_id, token_hash, expires_at, created_at)
+VALUES ($1, $2, $3, 'drill-11232-legacy-refresh', now() + interval '30 days', now()) ON CONFLICT (id) DO NOTHING`,
+			[]any{drillLegacyID("refresh_tokens"), user, drillLegacyID("family")}},
+		{`INSERT INTO public.internal_service_credentials (id, service_name, token_hash, token_prefix, scopes, created_at)
+VALUES ($1, 'drill-11232', 'drill-11232-legacy-service', 'svc_drill', '["entitlements:read"]', now()) ON CONFLICT (id) DO NOTHING`,
+			[]any{drillLegacyID("internal_service_credentials")}},
+		{`INSERT INTO public.external_ingest_tokens (id, org_id, source_id, name, token_hash, token_prefix, scopes, created_at)
+VALUES ($1, 'drill-11232-org', NULL, 'drill 11232', 'drill-11232-legacy-ingest', 'fcpush_drill', '["ingest:status"]'::jsonb, now()) ON CONFLICT (id) DO NOTHING`,
+			[]any{drillLegacyID("external_ingest_tokens")}},
+	}
+	for _, st := range statements {
+		if _, err := admin.Exec(ctx, st.sql, st.args...); err != nil {
+			t.Fatalf("seed the legacy credential rows: %v", err)
+		}
+	}
+}
+
+// drillRevokeLegacy revokes (after T, label C) the three rows drillSeedLegacy created.
+func drillRevokeLegacy(t *testing.T, ctx context.Context, admin *pgxpool.Pool) {
+	t.Helper()
+	for _, table := range drillLegacyTables {
+		if _, err := admin.Exec(ctx, `UPDATE public.`+table+` SET revoked_at = now() WHERE id = $1`, drillLegacyID(table)); err != nil {
+			t.Fatalf("revoke the legacy %s row: %v", table, err)
+		}
+	}
+}
+
 func drillRead(ctx context.Context, admin *pgxpool.Pool, label string) (drillSnapshot, error) {
 	tx, err := admin.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
@@ -274,6 +322,9 @@ func drillRead(ctx context.Context, admin *pgxpool.Pool, label string) (drillSna
 		{&s.Revoked, `SELECT id::text FROM auth.credential_registry WHERE revoked_at IS NOT NULL ORDER BY id`},
 		{&s.Disabled, `SELECT id::text FROM auth.principals WHERE disabled_at IS NOT NULL ORDER BY id`},
 		{&s.Keys, `SELECT idempotency_key FROM auth.auth_outbox_events ORDER BY idempotency_key`},
+		{&s.LegacyRevoked, `SELECT 'refresh_tokens/' || id::text FROM public.refresh_tokens WHERE revoked_at IS NOT NULL ORDER BY 1`},
+		{&s.LegacyRevoked, `SELECT 'internal_service_credentials/' || id::text FROM public.internal_service_credentials WHERE revoked_at IS NOT NULL ORDER BY 1`},
+		{&s.LegacyRevoked, `SELECT 'external_ingest_tokens/' || id::text FROM public.external_ingest_tokens WHERE revoked_at IS NOT NULL ORDER BY 1`},
 	} {
 		rs, err := tx.Query(ctx, q.sql)
 		if err != nil {
@@ -453,7 +504,10 @@ type drillPostResult struct {
 	// restored copy does not hold at all (created after T): they cannot authenticate, so a fenced restore does not
 	// count them as "came back" (the fence reports them as absent). The unfenced metric counts them in
 	// RevokesAfterTComeBack, as it always did.
-	AbsentAfterRestore       int    `json:"absent_after_restore"`
+	AbsentAfterRestore int `json:"absent_after_restore"`
+	// LegacyRevokesBack is the part of RevokesAfterTComeBack that is a legacy public table row (refresh token,
+	// internal service credential, external ingest token); it must be 3 unfenced and 0 fenced.
+	LegacyRevokesBack        int    `json:"legacy_revokes_after_target_that_came_back"`
 	Fenced                   bool   `json:"fenced"`
 	FenceRowsForLiveTimeline *int64 `json:"fence_rows_for_live_timeline,omitempty"`
 	Verdict                  string `json:"verdict"`
@@ -576,6 +630,22 @@ func drillPost(t *testing.T, ctx context.Context, rt *pgxpool.Pool, schema auths
 	}
 	for _, id := range fin.Disabled {
 		cameBack(!wasDisabled[id], nowDisabled[id], id)
+	}
+	// The legacy public credential rows were all created before T, so they are present on the copy: one that was live
+	// at T, is revoked on the end-of-WAL copy and is live again counts as "came back".
+	wasLegacyRevoked := map[string]bool{}
+	for _, id := range want.LegacyRevoked {
+		wasLegacyRevoked[id] = true
+	}
+	nowLegacyRevoked := map[string]bool{}
+	for _, id := range got.LegacyRevoked {
+		nowLegacyRevoked[id] = true
+	}
+	for _, id := range fin.LegacyRevoked {
+		if !wasLegacyRevoked[id] && !nowLegacyRevoked[id] {
+			res.RevokesAfterTComeBack++
+			res.LegacyRevokesBack++
+		}
 	}
 	res.Verdict = "PASS"
 	if res.RevokesAfterTComeBack != 0 || res.ReissuedDifferent != 0 {

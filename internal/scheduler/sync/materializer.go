@@ -2519,6 +2519,17 @@ func deterministicMaterializationIDs(occurrenceID string) (materializationIDs, e
 	}, nil
 }
 
+// DeterministicSyncRunID is the id of the sync run the materializer makes for an occurrence. A manual or backfill
+// trigger's backfill_jobs row names only its occurrence, so a reader that cannot read the occurrence table (the domain
+// role) finds the run's job by deriving this id from each candidate's occurrence.
+func DeterministicSyncRunID(occurrenceID string) (string, error) {
+	ids, err := deterministicMaterializationIDs(occurrenceID)
+	if err != nil {
+		return "", err
+	}
+	return ids.SyncRunID, nil
+}
+
 func deterministicUnitID(syncRunID string, ordinal int) (string, error) {
 	runID, err := uuid.Parse(syncRunID)
 	if err != nil || ordinal < 0 {

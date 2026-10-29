@@ -18,10 +18,14 @@ import (
 func TestNoContractNamesARetiredLegacyIngestPath(t *testing.T) {
 	root := testRoot(t)
 	files := map[string]string{
-		"endpoint profiles":     filepath.Join(root, "contracts", "auth", "v1", "endpoint-profiles.go-api.json"),
-		"ingress planes":        filepath.Join(root, "contracts", "ingress", "v1", "planes.json"),
-		"compose router":        filepath.Join(root, "contracts", "ingress", "v1", "compose-router.nginx.conf"),
-		"bigboy traefik planes": bigboydir.Path(t, root, "traefik-dynamic-planes.yml.example"),
+		"endpoint profiles": filepath.Join(root, "contracts", "auth", "v1", "endpoint-profiles.go-api.json"),
+		"ingress planes":    filepath.Join(root, "contracts", "ingress", "v1", "planes.json"),
+		"compose router":    filepath.Join(root, "contracts", "ingress", "v1", "compose-router.nginx.conf"),
+	}
+	if dir, ok := bigboydir.Lookup(root); ok { // the private tree is checked where it is present (deploy CI sets BIGBOY_DIR)
+		files["bigboy traefik planes"] = filepath.Join(dir, "traefik-dynamic-planes.yml.example")
+	} else {
+		t.Log("bigboy tree absent: the bigboy traefik planes example is not checked here")
 	}
 	for name, path := range files {
 		raw, err := os.ReadFile(path)

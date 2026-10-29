@@ -14,15 +14,19 @@ const (
 	Env     = "BIGBOY_DIR"
 	marker  = "compose.bigboy.yml"
 	inRepo  = "ci/bigboy"
-	skipMsg = "bigboy tree absent: set " + Env + " to the deploy repo's docker/bigboy"
+	skipMsg = "bigboy tree absent: set " + Env + " to the deploy repo's docker/bigboy (looked in %s)"
 )
 
 // Lookup returns the bigboy tree and whether it holds compose.bigboy.yml. It never skips, for a gate that
 // has other inputs to check when the tree is absent.
 func Lookup(repoRoot string) (string, bool) {
 	dir := os.Getenv(Env)
-	if dir == "" {
+	switch {
+	case dir == "":
 		dir = filepath.Join(repoRoot, filepath.FromSlash(inRepo))
+	case !filepath.IsAbs(dir):
+		// go test runs in the package directory; a relative value is read from the repository root
+		dir = filepath.Join(repoRoot, dir)
 	}
 	_, err := os.Stat(filepath.Join(dir, marker))
 	return dir, err == nil
@@ -34,7 +38,7 @@ func Dir(t testing.TB, repoRoot string) string {
 	t.Helper()
 	dir, ok := Lookup(repoRoot)
 	if !ok {
-		t.Skip(skipMsg)
+		t.Skipf(skipMsg, dir)
 	}
 	return dir
 }

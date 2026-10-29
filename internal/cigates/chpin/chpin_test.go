@@ -199,6 +199,8 @@ func repoVenues(t *testing.T, root string) []venue {
 			t.Fatal(err)
 		}
 		one("bigboy", rel, imageLine, true)
+	} else {
+		t.Log("bigboy tree absent: the bigboy ClickHouse venue is not checked here; the deploy job sets " + bigboydir.Env)
 	}
 	one("testimage", "internal/testsupport/containers/harness.go", harnessLine, false)
 	one("live-e2e", ".github/workflows/live-e2e.yml", imageLine, false)

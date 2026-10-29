@@ -5,6 +5,7 @@ auth.identity.projections	kind,outcome	code: internal/auth/identity/store.go
 auth.identity.wire_slug_omitted		code: internal/auth/identity/store.go
 auth.oidc.outcomes	outcome,reason,route	code: internal/auth/identity/oidc/service.go
 auth.org.mutations	outcome,verb	code: internal/auth/org/store.go
+auth.invite.mutations	outcome,verb	code: internal/auth/invite/store.go
 auth.membership.mutations	outcome,verb	code: internal/auth/membership/store.go
 auth.session.issue_compat_uses	class	code: internal/auth/authapi/wire.go
 auth.session.refresh_exchanges	reason_code	code: internal/auth/session/store.go

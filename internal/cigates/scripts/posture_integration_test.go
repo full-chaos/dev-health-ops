@@ -968,3 +968,16 @@ func TestPostureIntegrationStubRunForwardsTheCallersTmpdir(t *testing.T) {
 		t.Fatalf("the runner ran in %q, want a dir under the caller's TMPDIR %q", got, tmp)
 	}
 }
+
+// One path that cannot be removed must not stop the removal of the others, and must not change the exit code.
+func TestPostureIntegrationStubRunRemovesAllDirsPastAnUnreadableSubdir(t *testing.T) {
+	f := postureDemo(t)
+	tmp, env := postureTmpEnv(t)
+	env = append(env, "PATH="+filepath.Dir(goBinary(t))+string(os.PathListSeparator)+"/usr/bin:/bin")
+	body := "#!/bin/sh\nmkdir -p \"$GOMODCACHE/m/x\" && echo a > \"$GOMODCACHE/m/x/f\" && chmod 0000 \"$GOMODCACHE/m/x\"\nmkdir -p \"$GOCACHE/c\" \"$GOTMPDIR/t\"\nexit 7\n"
+	res := postureStubRun(t, f, body, env)
+	if res.code != 5 {
+		t.Fatalf("stub run: exit %d stdout=%q stderr=%q, want exit 5 as without the unreadable subdir", res.code, res.stdout, res.stderr)
+	}
+	requireEmptyDir(t, tmp, "an unreadable subdir")
+}

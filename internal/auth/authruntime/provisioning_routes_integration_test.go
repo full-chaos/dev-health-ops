@@ -276,7 +276,7 @@ func TestProvisioningInviteRoutesThroughConfigure(t *testing.T) {
 		t.Fatalf("after accept: public %q auth %q", pub, auth)
 	}
 	replay := e.doWith(t, "/internal/v1/invites/accept", accept, header)
-	unknown := e.doWith(t, "/internal/v1/invites/accept", jsonBody(t, map[string]any{"token": "0123456789abcdef0123456789abcdef." + strings.Repeat("0", 64),
+	unknown := e.doWith(t, "/internal/v1/invites/accept", jsonBody(t, map[string]any{"token": strings.Repeat("0", 32) + "." + strings.Repeat("0", 64),
 		"principal_id": invitee.String()}), header)
 	for name, refused := range map[string]answer{"replay": replay, "unknown": unknown} {
 		if refused.status != http.StatusBadRequest || object(t, refused)["reason_code"] != "invite_invalid" {

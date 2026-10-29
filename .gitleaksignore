@@ -24,3 +24,8 @@ deploy/helm/dev-health/auth_phase_test.go:generic-api-key:281
 deploy/helm/dev-health/auth_phase_test.go:generic-api-key:288
 # The same enum value "hs256_compat" of accessToken.class in the query-api issuer chart test; a class name, not a credential. Commit-less file:rule:line form.
 deploy/helm/dev-health/query_api_access_issuer_test.go:generic-api-key:14
+# CHAOS-10986: test fixtures (a token-shaped invite id of fixed hex digits and repeated characters, which signs nothing) in the
+# branch commit 9258ef6d, whose patch the pull_request range scan still reads; both tests now build the value at runtime.
+# Not a credential. Commit-less file:rule:line form; generic-api-key is suppressed on these two lines only.
+internal/auth/authapi/provisioning_test.go:generic-api-key:342
+internal/auth/authruntime/provisioning_routes_integration_test.go:generic-api-key:266

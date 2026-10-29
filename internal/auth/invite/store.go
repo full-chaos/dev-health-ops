@@ -142,7 +142,7 @@ func (s *Store) record(ctx context.Context, v verb, err error) {
 }
 
 // refusals are the store's named outcomes: returned as they are, never wrapped.
-var refusals = []error{ErrNotOwned, ErrInviteInvalid, ErrEmailUnverified, ErrEmailMismatch, ErrEmailInvalid, ErrRoleInvalid,
+var refusals = []error{ErrNotOwned, ErrInviteInvalid, ErrAccountInactive, ErrEmailUnverified, ErrEmailMismatch, ErrEmailInvalid, ErrRoleInvalid,
 	ErrTTLInvalid, ErrPendingExists, ErrNotFound, ErrNotPending, ErrAlreadyMember, ErrOrgNotFound, ErrOrgSuspended,
 	ErrInviterNotFound, ErrDenied, membership.ErrStateMoved}
 
@@ -417,10 +417,16 @@ func (s *Store) acceptOnce(ctx context.Context, in AcceptInput, digest string) (
 				if locked.id != planned.id || locked.orgID != planned.orgID || locked.role != planned.role {
 					return membership.ErrStateMoved
 				}
+				// The account's users row is held FOR UPDATE since step 2, so a
+				// deactivation either committed before this read or waits for the accept.
 				var email string
-				var verified bool
-				if err := tx.QueryRow(ctx, `SELECT email, is_verified FROM public.users WHERE id = $1`, in.PrincipalID).Scan(&email, &verified); err != nil {
+				var verified, active bool
+				if err := tx.QueryRow(ctx, `SELECT email, is_verified, COALESCE(is_active, false) FROM public.users WHERE id = $1`, in.PrincipalID).
+					Scan(&email, &verified, &active); err != nil {
 					return err
+				}
+				if !active {
+					return ErrAccountInactive
 				}
 				if err := emailRefusal(locked.email, email, verified); err != nil {
 					return err

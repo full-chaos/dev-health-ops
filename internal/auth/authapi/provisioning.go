@@ -587,6 +587,7 @@ func inviteRefusal(err error) refusal {
 		answer refusal
 	}{
 		{invite.ErrInviteInvalid, refusal{http.StatusBadRequest, reasonInviteInvalid}},
+		{invite.ErrAccountInactive, refusal{http.StatusForbidden, reasonDeactivated}},
 		{invite.ErrDenied, refusal{http.StatusForbidden, reasonAdminRequired}},
 		{invite.ErrNotOwned, refusal{http.StatusConflict, reasonUsersNotOwned}},
 		{invite.ErrEmailUnverified, refusal{http.StatusForbidden, reasonEmailUnverified}},

@@ -165,6 +165,8 @@ func outcomeLabel(err error) string {
 		return "noop"
 	case errors.Is(err, ErrInviteInvalid):
 		return "invalid_invite"
+	case errors.Is(err, ErrAccountInactive):
+		return "inactive"
 	case errors.Is(err, ErrEmailUnverified):
 		return "email_unverified"
 	case errors.Is(err, ErrEmailMismatch):

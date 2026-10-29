@@ -151,7 +151,10 @@ func (f *fakeMembers) TransferOwnership(_ context.Context, t membership.Transfer
 	return f.err
 }
 
-const createdToken = "0123456789abcdef0123456789abcdef.SENTINEL-INVITE-TOKEN"
+// fakeTokenID is a token-shaped id built at run time: a test fixture, never a credential.
+var fakeTokenID = strings.Repeat("0", 32)
+
+var createdToken = fakeTokenID + ".SENTINEL-INVITE-TOKEN"
 
 type fakeInvites struct {
 	err    error
@@ -339,7 +342,7 @@ func routeCases() []routeCase {
 				"actor_principal_id": a.String(), "description": "Organization invite created", "request_metadata": map[string]any{"ip": "198.51.100.1"}}
 		}, []string{"organization_id", "email", "role", "actor_principal_id"}},
 		{opInviteAccept, PatternInviteAccept, func(f *provFixture, a uuid.UUID) map[string]any {
-			return map[string]any{"token": "0123456789abcdef0123456789abcdef." + strings.Repeat("a", 64), "principal_id": a.String()}
+			return map[string]any{"token": fakeTokenID + "." + strings.Repeat("a", 64), "principal_id": a.String()}
 		}, []string{"token", "principal_id"}},
 		{opOrgDeprovision, PatternOrgDeprovision, func(f *provFixture, a uuid.UUID) map[string]any {
 			return map[string]any{"organization_id": f.org.String(), "actor_principal_id": a.String()}
@@ -662,7 +665,8 @@ func TestProvisioningRefusalAnswers(t *testing.T) {
 	}
 	for err, want := range map[error]refusal{
 		invite.ErrInviteInvalid: {400, reasonInviteInvalid}, invite.ErrDenied: {403, reasonAdminRequired},
-		invite.ErrNotOwned: {409, reasonUsersNotOwned}, invite.ErrEmailUnverified: {403, reasonEmailUnverified},
+		invite.ErrAccountInactive: {403, reasonDeactivated},
+		invite.ErrNotOwned:        {409, reasonUsersNotOwned}, invite.ErrEmailUnverified: {403, reasonEmailUnverified},
 		invite.ErrEmailMismatch: {403, reasonEmailMismatch}, invite.ErrEmailInvalid: {400, reasonEmailInvalid},
 		invite.ErrRoleInvalid: {400, reasonRoleInvalid}, invite.ErrTTLInvalid: {400, reasonTTLInvalid},
 		invite.ErrPendingExists: {409, reasonInvitePending}, invite.ErrAlreadyMember: {409, reasonAlreadyMember},
@@ -728,8 +732,8 @@ func TestProvisioningSuccessAnswers(t *testing.T) {
 // request metadata, on success or refusal.
 func TestProvisioningLogsCarryNoTokenOrAuditText(t *testing.T) {
 	f := newProvFixture(t)
+	acceptToken := fakeTokenID + ".SENTINEL-ACCEPT-TOKEN"
 	const (
-		acceptToken = "0123456789abcdef0123456789abcdef.SENTINEL-ACCEPT-TOKEN"
 		description = "SENTINEL-DESCRIPTION"
 		metadata    = "SENTINEL-METADATA"
 		email       = "sentinel-address@example.test"

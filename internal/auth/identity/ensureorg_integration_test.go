@@ -87,3 +87,48 @@ func TestProjectionAndBackfillKeepASuspendedOrganizationSuspended(t *testing.T) 
 		t.Fatalf("%d organization.reactivated events, want 0", n)
 	}
 }
+
+// A projection planned before a suspension commits never clears it: the UPDATE
+// itself leaves disabled_at in place when go-api's row is active (the read the
+// projection made is stale by then), and still takes go-api's name.
+func TestUpdateOrganizationNeverClearsASuspensionReadStale(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	id := e.seedOrg(t, ctx)
+	if err := e.store.ProjectOrganization(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	var stale orgState
+	if err := e.admin.QueryRow(ctx, `SELECT slug, name, disabled_at IS NULL FROM auth.organizations WHERE id = $1`, id).
+		Scan(&stale.slug, &stale.name, &stale.active); err != nil || !stale.active {
+		t.Fatalf("projected row: %+v %v", stale, err)
+	}
+	// The deprovision (here the organization verb) commits after the projection read.
+	if err := e.orgStore(t).Suspend(ctx, id, nil, org.Actor{}); err != nil {
+		t.Fatal(err)
+	}
+	src := orgState{slug: stale.slug, name: "renamed-after-a-stale-read", active: true}
+	if err := e.store.updateOrganization(ctx, id, src, stale); err != nil {
+		t.Fatalf("updateOrganization: %v", err)
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.organizations WHERE id = $1 AND disabled_at IS NOT NULL AND name = 'renamed-after-a-stale-read'`, id); n != 1 {
+		t.Fatal("the stale projection cleared the suspension or dropped go-api's name")
+	}
+	if n := e.outboxRows(t, ctx, "organization.reactivated", id.String()); n != 0 {
+		t.Fatalf("%d organization.reactivated events, want 0", n)
+	}
+	// A suspension still flows: go-api's is_active false suspends an active organization.
+	other := e.seedOrg(t, ctx)
+	if err := e.store.ProjectOrganization(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.admin.Exec(ctx, `UPDATE public.organizations SET is_active = false WHERE id = $1`, other); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.store.ProjectOrganization(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.organizations WHERE id = $1 AND disabled_at IS NOT NULL`, other); n != 1 {
+		t.Fatal("go-api's suspension did not reach the auth organization")
+	}
+}

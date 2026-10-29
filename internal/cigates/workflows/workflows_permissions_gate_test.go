@@ -86,7 +86,7 @@ var wildcardJobs = map[string][]string{
 }
 
 var persistAllowlist = map[jobKey]string{
-	{"auto-release.yml", "tag-and-release"}: "git push origin $TAG at auto-release.yml:61 pushes the release tag with the persisted checkout token",
+	{"auto-release.yml", "tag-and-release"}: "git push origin $TAG at auto-release.yml:59 pushes the release tag with the persisted checkout token",
 }
 
 // permsOf reports the mapping of a permissions value, whether the key is present and whether it is a mapping.

@@ -134,10 +134,10 @@ type ProvisioningDeps struct {
 type provisioningHandlers struct {
 	ProvisioningDeps
 	rec recorder
-	// compatUses counts every request a session issuer credential with
+	// provisioningUses counts every request a session issuer credential with
 	// memberships:write was accepted on, by operation: the compatibility
 	// credential these routes take until go-api presents its workload token.
-	compatUses metric.Int64Counter
+	provisioningUses metric.Int64Counter
 }
 
 // ProvisioningRoutes returns the internal membership, invite and organization
@@ -166,7 +166,7 @@ func ProvisioningRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 	for _, op := range provisioningOperations {
 		uses.Add(context.Background(), 0, metric.WithAttributes(attribute.String("operation", op)))
 	}
-	h := provisioningHandlers{ProvisioningDeps: deps, rec: rec, compatUses: uses}
+	h := provisioningHandlers{ProvisioningDeps: deps, rec: rec, provisioningUses: uses}
 	return []httpapi.Route{
 		{Method: http.MethodPost, Pattern: PatternMembershipAdd, Handler: http.HandlerFunc(h.membershipAdd)},
 		{Method: http.MethodPost, Pattern: PatternMembershipRole, Handler: http.HandlerFunc(h.membershipRole)},
@@ -198,7 +198,7 @@ func (h provisioningHandlers) admit(w http.ResponseWriter, r *http.Request, op s
 		h.rec.refuse(w, r, op, unauthorized(reasonInvalidCredentials), nil)
 		return nil, false
 	}
-	h.compatUses.Add(ctx, 1, metric.WithAttributes(attribute.String("operation", op)))
+	h.provisioningUses.Add(ctx, 1, metric.WithAttributes(attribute.String("operation", op)))
 	body, err := readStrictObject(http.MaxBytesReader(w, r.Body, maxProvisioningBody), allowed...)
 	if err != nil {
 		h.rec.refuse(w, r, op, refusal{http.StatusBadRequest, reasonMalformed}, nil)

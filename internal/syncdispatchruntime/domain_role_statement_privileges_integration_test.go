@@ -1081,7 +1081,7 @@ CREATE TABLE sync_runs (
  id uuid PRIMARY KEY, org_id text NOT NULL, integration_id uuid NOT NULL,
  status text NOT NULL, total_units int NOT NULL DEFAULT 0, completed_units int NOT NULL DEFAULT 0,
  failed_units int NOT NULL DEFAULT 0, started_at timestamptz NULL, completed_at timestamptz NULL, result json NULL, error text NULL,
- credential_id uuid NULL
+ credential_id uuid NULL, auth_source text NULL
 );
 CREATE TABLE sync_run_units (
  id uuid PRIMARY KEY, org_id text NOT NULL, sync_run_id uuid NOT NULL, provider text NOT NULL,

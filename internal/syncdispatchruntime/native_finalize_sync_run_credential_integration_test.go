@@ -54,6 +54,7 @@ func TestFinalizeStampsCredentialConnected(t *testing.T) {
 		units      []string
 		runCred    bool // run carries its own credential_id (otherwise the integration's is used)
 		noCred     bool // neither run nor integration names a credential
+		envRun     bool // the run authenticated from the environment, whatever the integration points at now
 		wantStamp  bool
 		wantSucces *bool // expected state of the stamped credential when unchanged
 	}{
@@ -68,6 +69,7 @@ func TestFinalizeStampsCredentialConnected(t *testing.T) {
 		{name: "late run does not overwrite a newer failed test", pre: pre{success: boolp(false), ago: -time.Hour, errText: "bad token"}, units: []string{"success"}},
 		{name: "late run does not overwrite a newer connected test", pre: pre{success: boolp(true), ago: -time.Hour}, units: []string{"success"}},
 		{name: "run credential wins over integration credential", units: []string{"success"}, runCred: true, wantStamp: true},
+		{name: "environment run does not stamp a credential attached later", units: []string{"success"}, envRun: true},
 		{name: "run with no credential is a no-op", units: []string{"success"}, noCred: true},
 		{name: "inactive credential is not touched", pre: pre{inactive: true}, units: []string{"success"}},
 	}
@@ -97,6 +99,11 @@ func TestFinalizeStampsCredentialConnected(t *testing.T) {
 			insertFinalizeRun(t, ctx, pool, len(tc.units), "", "")
 			if tc.runCred {
 				if _, err := pool.Exec(ctx, `UPDATE sync_runs SET credential_id = $1::uuid WHERE id = $2::uuid`, credTestRunCred, finalizeTestRun); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.envRun {
+				if _, err := pool.Exec(ctx, `UPDATE sync_runs SET auth_source = 'environment' WHERE id = $1::uuid`, finalizeTestRun); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -167,10 +174,17 @@ func TestFinalizeStampsCredentialConnected(t *testing.T) {
 				}
 			}
 			otherAfter := readCred(t, ctx, pool, other)
-			if (otherAfter.success == nil) != (otherBefore.success == nil) || otherAfter.at != nil && otherBefore.at != nil && !otherAfter.at.Equal(*otherBefore.at) {
-				t.Fatalf("the other credential was touched: %v -> %v", otherBefore, otherAfter)
+			if !credEqual(otherBefore, otherAfter) {
+				t.Fatalf("the other credential was touched: %+v -> %+v", otherBefore, otherAfter)
 			}
 			_ = preAt
 		})
 	}
+}
+
+func credEqual(a, b credState) bool {
+	eqBool := func(x, y *bool) bool { return (x == nil) == (y == nil) && (x == nil || *x == *y) }
+	eqStr := func(x, y *string) bool { return (x == nil) == (y == nil) && (x == nil || *x == *y) }
+	eqTime := func(x, y *time.Time) bool { return (x == nil) == (y == nil) && (x == nil || x.Equal(*y)) }
+	return eqBool(a.success, b.success) && eqStr(a.errText, b.errText) && eqTime(a.at, b.at)
 }

@@ -921,7 +921,9 @@ const credentialStampRefresh = "15 minutes"
 // connected credential back into "needs verification". A run that finished
 // before the credential's latest result (a late or repeated finalize) never
 // overwrites it. The run's own
-// credential wins over the integration's; no credential is a no-op.
+// credential wins over the integration's; no credential is a no-op, and a run
+// that authenticated from the environment stamps nothing, because the
+// integration may have gained a stored credential after the run started.
 func stampCredentialConnected(ctx context.Context, tx pgx.Tx, run *finalizeSyncRun, completedAt time.Time, successCount int) error {
 	if successCount <= 0 {
 		return nil
@@ -935,6 +937,7 @@ FROM (
   JOIN public.integrations AS integration
     ON integration.id = run.integration_id
   WHERE run.id = $1::uuid AND run.org_id = $2
+    AND COALESCE(run.auth_source, 'integration_credential') <> 'environment'
 ) AS target
 WHERE credential.id = target.credential_id
   AND credential.org_id = $2

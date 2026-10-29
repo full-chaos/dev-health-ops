@@ -51,6 +51,7 @@ internal/auth/contracts	provisioning_event_goldens_test.go	unexpressed	-	-
 internal/auth/contracts	provisioning_resources_test.go	unexpressed	-	-
 internal/auth/contracts	reason_code_vocabulary_test.go	unexpressed	-	-
 internal/auth/contracts	reject_location_test.go	unexpressed	-	-
+internal/auth/contracts	retired_credential_class_test.go	unexpressed	-	-
 internal/auth/contracts	schema_dialect_test.go	unexpressed	-	-
 internal/auth/contracts	session_goldens_test.go	unexpressed	-	-
 internal/auth/contracts	transport_error_goldens_test.go	unexpressed	-	-

@@ -71,7 +71,6 @@ internal/auth/contracts	contracts.go	cmd/loadtest
 internal/auth/contracts	contracts.go	deploy/helm/dev-health
 internal/auth/contracts	contracts.go	internal/api/billing
 internal/auth/contracts	contracts.go	internal/api/externalingest
-internal/auth/contracts	contracts.go	internal/api/legacyingest
 internal/auth/contracts	contracts.go	internal/api/session
 internal/auth/contracts	contracts.go	internal/api/usersowned
 internal/auth/contracts	contracts.go	internal/api/webhookintake
@@ -109,7 +108,6 @@ internal/auth/contracts	endpoint_auth_profile_selector_gate.go	internal/apiservi
 internal/auth/contracts	endpoint_auth_profile_selector_gate.go	internal/auth/contracts
 internal/auth/contracts/tokencorpus	corpus.go	internal/api/billing
 internal/auth/contracts/tokencorpus	corpus.go	internal/api/externalingest
-internal/auth/contracts/tokencorpus	corpus.go	internal/api/legacyingest
 internal/auth/contracts/tokencorpus	corpus.go	internal/api/webhookintake
 internal/auth/contracts/tokencorpus	corpus.go	internal/apiservice
 internal/auth/contracts/tokencorpus	corpus.go	internal/apiservice/acr
@@ -125,7 +123,6 @@ internal/auth/keystore	open_unix.go	cmd/dho
 internal/auth/keystore	open_unix.go	deploy/helm/dev-health
 internal/auth/keystore	open_unix.go	internal/api/billing
 internal/auth/keystore	open_unix.go	internal/api/externalingest
-internal/auth/keystore	open_unix.go	internal/api/legacyingest
 internal/auth/keystore	open_unix.go	internal/api/webhookintake
 internal/auth/keystore	open_unix.go	internal/apiservice
 internal/auth/keystore	open_unix.go	internal/apiservice/acr
@@ -619,7 +616,6 @@ internal/testsupport/venueoracle	golden.go	internal/api/integrationsadmin/backfi
 internal/testsupport/venueoracle	golden.go	internal/api/integrationsadmin/discoveryvenue
 internal/testsupport/venueoracle	golden.go	internal/api/integrationsadmin/integrationsvenue
 internal/testsupport/venueoracle	golden.go	internal/api/integrationsadmin/syncvenue
-internal/testsupport/venueoracle	golden.go	internal/api/legacyingest
 internal/testsupport/venueoracle	golden.go	internal/api/licensing
 internal/testsupport/venueoracle	golden.go	internal/api/licensing/processlicense
 internal/testsupport/venueoracle	golden.go	internal/api/orgs
@@ -707,7 +703,6 @@ internal/testsupport/venueoracle	golden_walk.go	internal/api/integrationsadmin/b
 internal/testsupport/venueoracle	golden_walk.go	internal/api/integrationsadmin/discoveryvenue
 internal/testsupport/venueoracle	golden_walk.go	internal/api/integrationsadmin/integrationsvenue
 internal/testsupport/venueoracle	golden_walk.go	internal/api/integrationsadmin/syncvenue
-internal/testsupport/venueoracle	golden_walk.go	internal/api/legacyingest
 internal/testsupport/venueoracle	golden_walk.go	internal/api/licensing
 internal/testsupport/venueoracle	golden_walk.go	internal/api/licensing/processlicense
 internal/testsupport/venueoracle	golden_walk.go	internal/api/orgs
@@ -785,6 +780,7 @@ internal/testsupport/venueoracle	gopin.go	internal/api/teamsidentity/adminstampv
 internal/testsupport/venueoracle	gopin.go	internal/apiservice
 internal/testsupport/venueoracle	gopin.go	internal/apiservice/admin
 internal/testsupport/venueoracle	gopin.go	internal/apiservice/billingvenue
+internal/testsupport/venueoracle	gopin.go	internal/apiservice/metricsvenue
 internal/testsupport/venueoracle	gopin.go	internal/testsupport/venueoracle
 internal/testsupport/venueoracle	opened.go	internal/admincli
 internal/testsupport/venueoracle	opened.go	internal/adminops
@@ -801,7 +797,6 @@ internal/testsupport/venueoracle	opened.go	internal/api/integrationsadmin/backfi
 internal/testsupport/venueoracle	opened.go	internal/api/integrationsadmin/discoveryvenue
 internal/testsupport/venueoracle	opened.go	internal/api/integrationsadmin/integrationsvenue
 internal/testsupport/venueoracle	opened.go	internal/api/integrationsadmin/syncvenue
-internal/testsupport/venueoracle	opened.go	internal/api/legacyingest
 internal/testsupport/venueoracle	opened.go	internal/api/licensing
 internal/testsupport/venueoracle	opened.go	internal/api/licensing/processlicense
 internal/testsupport/venueoracle	opened.go	internal/api/orgs

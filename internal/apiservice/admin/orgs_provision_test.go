@@ -331,6 +331,19 @@ func TestProvisionSwitchOffMakesNoAuthCallAndTheSameSQL(t *testing.T) {
 	}
 }
 
+// The steps of each route with the switch on: the reads go-api made before
+// the write today, the one auth call, then only the read-back of the row auth
+// wrote. Nothing else, so no second write can hide in a read that finds a row.
+var switchOnSteps = map[string][]string{
+	"add":      {"auth:add", "SELECT id, org_id, user_id, role, invited_by_id, joined_at, created_at, updated_at FROM memberships WHERE org_id = $1 AND user_id = $2"},
+	"role":     {"auth:role", "SELECT id, org_id, user_id, role, invited_by_id, joined_at, created_at, updated_at FROM memberships WHERE org_id = $1 AND user_id = $2"},
+	"remove":   {"auth:remove"},
+	"transfer": {"SELECT user_id FROM memberships WHERE org_id = $1 AND role = 'owner'", "auth:transfer"},
+	"invite": {"SELECT id, slug, name, description, settings, tier, managed_by, is_active, created_at, updated_at FROM organizations WHERE id = $1",
+		"SELECT full_name, email FROM users WHERE id = $1", "auth:invite",
+		"SELECT id, org_id, email, role, invited_by_id, status, expires_at, accepted_at, created_at, updated_at FROM org_invites WHERE id = $1"},
+}
+
 // With the switch on every route calls auth once, as the caller, before any
 // read of its answer, and go-api opens no transaction and writes nothing.
 func TestProvisionSwitchOnCallsAuthOnceAndWritesNothing(t *testing.T) {
@@ -353,6 +366,9 @@ func TestProvisionSwitchOnCallsAuthOnceAndWritesNothing(t *testing.T) {
 			}
 			if want, ok := wantArgs[route.name]; ok && !reflect.DeepEqual(auth.args[0], want) {
 				t.Fatalf("auth args %v, want %v", auth.args[0], want)
+			}
+			if want := switchOnSteps[route.name]; !reflect.DeepEqual(db.log, want) {
+				t.Fatalf("switch-on steps:\n got %q\nwant %q", db.log, want)
 			}
 			for _, step := range db.log {
 				if step == "BEGIN" || strings.HasPrefix(step, "tx:") || strings.Contains(step, "INSERT") || strings.Contains(step, "UPDATE") ||

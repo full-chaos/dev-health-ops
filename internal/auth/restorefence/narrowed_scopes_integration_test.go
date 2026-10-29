@@ -272,11 +272,15 @@ func TestMembershipRolesGoDownInBothTablesAndNeverDisagree(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	restored, end := newFenceDB(t, ctx), newFenceDB(t, ctx)
-	orgA, orgB, orgC := fenceOrgID(1), fenceOrgID(2), fenceOrgID(0)
-	users := []string{"o1", "n1", "p", "q", "v", "b1", "b2", "u"}
+	orgA, orgB, orgC, orgD := fenceOrgID(1), fenceOrgID(2), fenceOrgID(0), scopeID("org-d")
+	users := []string{"o1", "n1", "p", "q", "v", "b1", "b2", "u", "d1", "d2"}
 	for _, d := range []*fenceDB{restored, end} {
 		d.stateT(t, ctx)
-		for i, org := range []uuid.UUID{orgA, orgB, orgC} {
+		d.commit(t, ctx, "organization.created", 0, func(ctx context.Context, tx audit.TxOps) error {
+			_, err := tx.Exec(ctx, `INSERT INTO auth.organizations (id, name, slug) VALUES ($1, 'fence-scope-org-d', 'fence-scope-org-d')`, orgD)
+			return err
+		})
+		for i, org := range []uuid.UUID{orgA, orgB, orgC, orgD} {
 			d.must(t, ctx, `INSERT INTO public.organizations (id, slug, name) VALUES ($1, $2, $2)`, org, "fence-scope-org-"+string(rune('a'+i)))
 		}
 		d.scopeUsers(t, ctx, users...)
@@ -288,6 +292,14 @@ func TestMembershipRolesGoDownInBothTablesAndNeverDisagree(t *testing.T) {
 		d.memberPair(t, ctx, orgB, "b1", "owner")
 		d.memberPair(t, ctx, orgB, "b2", "owner")
 		d.must(t, ctx, `INSERT INTO public.memberships (id, user_id, org_id, role) VALUES ($1, $2, $3, 'member')`, scopeID("pub-unknown"), scopeID("user-u"), orgC)
+		// Org D: one active owner and one SUSPENDED owner (auth only: a legacy row means an active member). A suspended
+		// owner does not keep the org owned, so the active owner is the last one.
+		d.memberPair(t, ctx, orgD, "d1", "owner")
+		d.commit(t, ctx, "membership.created", 0, func(ctx context.Context, tx audit.TxOps) error {
+			_, err := tx.Exec(ctx, `INSERT INTO auth.memberships (id, organization_id, principal_id, role, status) VALUES ($1, $2, $3, 'owner', 'suspended')`,
+				scopeID("auth-m-"+orgD.String()+"-d2"), orgD, scopeID("user-d2"))
+			return err
+		})
 	}
 	restored.must(t, ctx, `UPDATE public.memberships SET role = 'superadmin' WHERE id = $1`, scopeID("pub-unknown"))
 	end.setRole(t, ctx, orgA, "o1", "admin")
@@ -295,6 +307,7 @@ func TestMembershipRolesGoDownInBothTablesAndNeverDisagree(t *testing.T) {
 	end.setRole(t, ctx, orgA, "p", "member")
 	end.setRole(t, ctx, orgA, "q", "admin")
 	end.setRole(t, ctx, orgB, "b1", "member")
+	end.setRole(t, ctx, orgD, "d1", "admin")
 	manifest := exportEnd(t, ctx, end)
 	report, err := Apply(ctx, restored.admin, restored.schema, manifest, Options{Apply: true})
 	if err != nil {
@@ -305,7 +318,7 @@ func TestMembershipRolesGoDownInBothTablesAndNeverDisagree(t *testing.T) {
 		user, want string
 	}{
 		{orgA, "o1", "owner"}, {orgA, "n1", "member"}, {orgA, "p", "member"}, {orgA, "q", "member"}, {orgA, "v", "viewer"},
-		{orgB, "b1", "member"}, {orgB, "b2", "owner"},
+		{orgB, "b1", "member"}, {orgB, "b2", "owner"}, {orgD, "d1", "owner"},
 	} {
 		a, p := restored.roles(t, ctx, c.org, c.user)
 		if a != c.want || p != c.want {
@@ -324,7 +337,7 @@ WHERE a.role IS DISTINCT FROM p.role`).Scan(&disagree); err != nil {
 	if err := restored.admin.QueryRow(ctx, `SELECT role FROM public.memberships WHERE id = $1`, scopeID("pub-unknown")).Scan(&unknown); err != nil || unknown != "superadmin" {
 		t.Errorf("an unknown legacy role is left as restored, got %q (%v)", unknown, err)
 	}
-	sameSet(t, "review_membership_owner", reviewIDs(report, "review_membership_owner", ""), sortedIDs(orgA))
+	sameSet(t, "review_membership_owner", reviewIDs(report, "review_membership_owner", ""), sortedIDs(orgA, orgD))
 	sameSet(t, "review_membership_role", reviewIDs(report, "review_membership_role", ""), sortedIDs(scopeID("pub-unknown")))
 }
 

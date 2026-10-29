@@ -18,6 +18,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/servicecred"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
@@ -676,5 +677,27 @@ func TestTheRouteRechecksTheVerifiedClaimsAfterVerify(t *testing.T) {
 		if len(w.creds.seen) != 0 || w.users.calls != usersBefore {
 			t.Fatalf("%s: a refusal read stores", name)
 		}
+	}
+}
+
+// A jti the workload-token schema allows (22 to 64 base64url characters), not
+// a uuid, is valid in the audit row the session is issued with.
+func TestReviewValidWorkloadJTIThroughProductionSessionAuditValidation(t *testing.T) {
+	w := newWorkloadIssueFixture(t)
+	const jti = "AAAAAAAAAAAAAAAAAAAAAA"
+	header, _ := w.mint("workload+jwt", func(c *contracts.WorkloadTokenClaims) { c.Jti = jti })
+	response := w.issue(header)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", response.Code, response.Body)
+	}
+	if len(w.sessions.created) != 1 {
+		t.Fatalf("%d sessions created", len(w.sessions.created))
+	}
+	attributes := w.sessions.created[0].event.Attributes
+	if attributes["workload_jti"] != jti {
+		t.Fatalf("workload_jti %v, want %s", attributes["workload_jti"], jti)
+	}
+	if err := audit.ValidateAttributes(attributes); err != nil {
+		t.Fatalf("the audit validation refuses the event the route builds: %v", err)
 	}
 }

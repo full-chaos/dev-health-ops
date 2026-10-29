@@ -88,3 +88,37 @@ func TestTheSessionIssueWorkloadSwitchIsLoggedAsABoolNeverTheSubject(t *testing.
 		t.Fatal("session_issue_workload_enabled is not logged as true")
 	}
 }
+
+// The variable is a declared option: --help names it, and it is reported as an
+// environment-only setting when set.
+func TestTheSessionIssueWorkloadSubjectIsADeclaredEnvOnlyOption(t *testing.T) {
+	var declared bool
+	for _, option := range Options() {
+		if option.Env == EnvSessionIssueWorkloadSubject {
+			declared = true
+			if option.Secret || option.Flag != "" {
+				t.Errorf("option %+v: want a plain env-only setting", option)
+			}
+		}
+	}
+	if !declared {
+		t.Fatalf("%s is not in the option registry", EnvSessionIssueWorkloadSubject)
+	}
+	if !strings.Contains(HelpText(), EnvSessionIssueWorkloadSubject) {
+		t.Fatalf("--help does not name %s", EnvSessionIssueWorkloadSubject)
+	}
+	env := baseEnv()
+	env[EnvTokenIssuerURL] = "https://auth.example.com"
+	env[EnvSessionIssueWorkloadSubject] = issueWorkloadSubject
+	cfg, err := Load(Spec{LookupEnv: lookupFrom(env)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var listed bool
+	for _, name := range cfg.EnvOnlySettings {
+		listed = listed || name == EnvSessionIssueWorkloadSubject
+	}
+	if !listed {
+		t.Fatalf("EnvOnlySettings %v does not list %s", cfg.EnvOnlySettings, EnvSessionIssueWorkloadSubject)
+	}
+}

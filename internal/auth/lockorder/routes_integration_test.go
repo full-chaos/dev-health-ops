@@ -58,8 +58,10 @@ WHERE org_id = $1 AND user_id = $2`, org, acceptor); got != "member:"+inviter.St
 		if got := e.scalar(t, ctx, `SELECT status FROM public.org_invites WHERE id = $1`, inviteID); got != "accepted" {
 			t.Fatalf("invite status = %q, want accepted", got)
 		}
+		// go-api answers a used token with the session routes' detail object.
 		again := e.acceptInvite(ctx, acceptor, token)
-		if again.status != http.StatusBadRequest || again.body["detail"] != "Invalid or expired invite" {
+		detail, _ := again.body["detail"].(map[string]any)
+		if again.status != http.StatusBadRequest || len(detail) != 1 || detail["message"] != "Invalid or expired invite" {
 			t.Fatalf("accept again: %d %s", again.status, again.raw)
 		}
 	})
@@ -69,7 +71,7 @@ WHERE org_id = $1 AND user_id = $2`, org, acceptor); got != "member:"+inviter.St
 		owner, member := e.seedPair(t, ctx)
 		e.add(t, ctx, org, owner, "owner", nil)
 		e.add(t, ctx, org, member, "member", nil)
-		e.goInvite(t, ctx, org, owner, "pending-"+uuid.NewString()[:8]+"@example.test")
+		e.goInvite(t, ctx, org, owner, "pending-"+uuid.NewString()[:8]+"@example.com")
 		deleted := e.deleteOrg(ctx, org)
 		if deleted.status != http.StatusOK || deleted.body["organization_id"] != org.String() || deleted.body["dry_run"] != false {
 			t.Fatalf("delete: %d %s", deleted.status, deleted.raw)

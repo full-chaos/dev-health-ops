@@ -200,7 +200,7 @@ func newEnv(t *testing.T) (*env, error) {
 
 	rootID := uuid.New()
 	if _, err := admin0.Exec(ctx, `INSERT INTO public.users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
-VALUES ($1, $2, true, true, true, 0, now(), now())`, rootID, "root-"+rootID.String()[:8]+"@example.test"); err != nil {
+VALUES ($1, $2, true, true, true, 0, now(), now())`, rootID, "root-"+rootID.String()[:8]+"@example.com"); err != nil {
 		return nil, fmt.Errorf("seed root: %w", err)
 	}
 	if e.root, err = e.token(rootID, true); err != nil {
@@ -210,7 +210,7 @@ VALUES ($1, $2, true, true, true, 0, now(), now())`, rootID, "root-"+rootID.Stri
 }
 
 func (e *env) token(id uuid.UUID, superuser bool) (string, error) {
-	return e.signer.Access(edgetoken.AccessClaims{UserID: id.String(), Email: id.String() + "@example.test", IsSuperuser: superuser},
+	return e.signer.Access(edgetoken.AccessClaims{UserID: id.String(), Email: id.String() + "@example.com", IsSuperuser: superuser},
 		time.Now(), uuid.NewString())
 }
 
@@ -304,7 +304,7 @@ VALUES ($1, $2, NULL, 'local', true, true, false, 0, now(), now())`, id, email(i
 	return id
 }
 
-func email(id uuid.UUID) string { return "member-" + id.String()[:8] + "@example.test" }
+func email(id uuid.UUID) string { return "member-" + id.String()[:8] + "@example.com" }
 
 // seedPair seeds two users and returns them in id order (the order Postgres
 // sorts uuid values in).

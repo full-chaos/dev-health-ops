@@ -83,7 +83,7 @@ func TestRacesOfEveryPairEndWithoutADeadlock(t *testing.T) {
 			created, err := e.invites.Create(ctx, invite.CreateInput{OrgID: org, Email: email(acceptor), Role: "member", InvitedBy: owner,
 				Actor: invite.Actor{PrincipalID: &owner}, Authorize: allowInvite})
 			if err != nil {
-				t.Fatalf("invite Create: %v", err)
+				t.Fatalf("race/P4: fixture: invite Create: %v", err)
 			}
 			g := goAPI("go-api delete organization", func() response { return e.deleteOrg(ctx, org) })
 			s := goAuth("invite Accept", func() error {

@@ -120,7 +120,7 @@ func TestP1AddMemberAndInviteRevokeByItsInviter(t *testing.T) {
 	e.cleanup(t)
 	y, x := e.seedPair(t, ctx)
 	org, org2 := e.seedOrg(t, ctx), e.seedOrg(t, ctx)
-	inviteID, _ := e.goInvite(t, ctx, org, x, "invitee-"+uuid.NewString()[:8]+"@example.test")
+	inviteID, _ := e.goInvite(t, ctx, org, x, "invitee-"+uuid.NewString()[:8]+"@example.com")
 
 	reached := e.goBarrier.Arm("INSERT INTO memberships")
 	g := goAPI("go-api add_member", func() response { return e.addMember(ctx, org2, x, &y) })
@@ -276,7 +276,7 @@ func TestP4InviteAcceptAndOrganizationDelete(t *testing.T) {
 	created, err := e.invites.Create(ctx, invite.CreateInput{OrgID: org, Email: email(acceptor), Role: "member", InvitedBy: owner,
 		Actor: invite.Actor{PrincipalID: &owner}, Authorize: allowInvite})
 	if err != nil {
-		t.Fatalf("invite Create: %v", err)
+		t.Fatalf("%s: fixture: invite Create: %v", cell, err)
 	}
 
 	reached := e.authBarrier.Arm("UPDATE public.org_invites SET status = 'accepted'")

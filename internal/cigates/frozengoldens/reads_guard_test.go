@@ -6,7 +6,9 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -42,10 +44,16 @@ func TestEveryGuardReadGoesThroughTheRecorder(t *testing.T) {
 	}
 }
 
-// unrecordedReads lists the reads in one package source that bypass the recorder.
+// readPaths are the import paths whose every use is a read; walkPaths name the functions of an import path that are.
+var (
+	readPaths = map[string]bool{"os": true, "os/exec": true, "io/fs": true, "io/ioutil": true}
+	walkPaths = map[string]map[string]bool{"path/filepath": {"Glob": true, "Walk": true, "WalkDir": true}}
+)
+
+// unrecordedReads lists the reads in one package source that bypass the recorder. A package is known by its import
+// path, whatever name the source gives it (an alias or a dot import), and a local identifier that shadows a package
+// name is not that package.
 func unrecordedReads(source string, data []byte) ([]string, error) {
-	banned := map[string]bool{"os": true, "exec": true, "fs": true, "ioutil": true}
-	bannedFilepath := map[string]bool{"Glob": true, "Walk": true, "WalkDir": true}
 	var problems []string
 	if strings.Contains(string(data), "go:embed") {
 		problems = append(problems, source+" embeds a file outside the recorder")
@@ -54,11 +62,33 @@ func unrecordedReads(source string, data []byte) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	imported := map[string]string{}
+	for _, spec := range file.Imports {
+		importPath, err := strconv.Unquote(spec.Path.Value)
+		if err != nil {
+			return nil, err
+		}
+		name := path.Base(importPath)
+		if spec.Name != nil {
+			name = spec.Name.Name
+		}
+		switch {
+		case name == "_":
+		case name == "." && (readPaths[importPath] || walkPaths[importPath] != nil):
+			problems = append(problems, fmt.Sprintf("%s dot-imports %s: every guard read goes through the recorder in reads.go", source, importPath))
+		default:
+			imported[name] = importPath
+		}
+	}
 	ast.Inspect(file, func(node ast.Node) bool {
 		switch n := node.(type) {
 		case *ast.SelectorExpr:
-			if pkg, ok := n.X.(*ast.Ident); ok && (banned[pkg.Name] || pkg.Name == "filepath" && bannedFilepath[n.Sel.Name]) {
-				problems = append(problems, fmt.Sprintf("%s uses %s.%s: every guard read goes through the recorder in reads.go", source, pkg.Name, n.Sel.Name))
+			pkg, ok := n.X.(*ast.Ident)
+			if !ok || pkg.Obj != nil {
+				return true
+			}
+			if importPath, ok := imported[pkg.Name]; ok && (readPaths[importPath] || walkPaths[importPath][n.Sel.Name]) {
+				problems = append(problems, fmt.Sprintf("%s uses %s.%s (%s): every guard read goes through the recorder in reads.go", source, pkg.Name, n.Sel.Name, importPath))
 			}
 		case *ast.Ident:
 			if n.Name == "manifestFile" {

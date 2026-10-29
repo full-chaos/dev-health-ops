@@ -277,7 +277,9 @@ func lockWrites(ctx context.Context, tx audit.TxOps) error {
 // active, in one audit.Commit with the audit reason BootstrapReason. The
 // principal's own expired assignment, if any, is replaced in the same commit
 // (it blocks the new row, and with no active administrator no one could revoke
-// it). The caller is the migration role.
+// it): the delete matches exactly that row (id, principal, role, expired on
+// the statement clock), after the write lock and the zero-active-admin check,
+// and any other count refuses the commit. The caller is the migration role.
 func (s *Store) Bootstrap(ctx context.Context, principal uuid.UUID) (uuid.UUID, error) {
 	expired, err := s.bootstrapTarget(ctx, principal)
 	if err != nil {
@@ -338,8 +340,8 @@ func (s *Store) bootstrapApply(ctx context.Context, principal uuid.UUID, expired
 				return ErrPrincipalOff
 			}
 			if expired != nil {
-				tag, err := tx.Exec(ctx, `DELETE FROM `+s.q+`.platform_role_assignments r USING `+s.q+`.principals p
-WHERE r.id = $1 AND r.principal_id = $2 AND p.id = r.principal_id AND NOT `+activeSQL, *expired, principal)
+				tag, err := tx.Exec(ctx, `DELETE FROM `+s.q+`.platform_role_assignments
+WHERE id = $1 AND principal_id = $2 AND role_key = $3 AND expires_at <= statement_timestamp()`, *expired, principal, PlatformAdmin)
 				if err != nil {
 					return err
 				}

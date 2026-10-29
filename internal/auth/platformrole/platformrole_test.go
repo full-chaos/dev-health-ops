@@ -216,9 +216,9 @@ func TestStoreLocksNoAssignmentRow(t *testing.T) {
 	// principal rows (a separate statement), then the guard reads. A guard
 	// that read before a lock wait would decide on a clock older than the wait.
 	for fn, guard := range map[string]string{
-		"func (s *Store) Grant(":     "s.resolveOn(ctx, tx",
-		"func (s *Store) Revoke(":    "rows, err := tx.Query(ctx,",
-		"func (s *Store) Bootstrap(": "activeAdmins(ctx, tx",
+		"func (s *Store) Grant(":          "s.resolveOn(ctx, tx",
+		"func (s *Store) Revoke(":         "rows, err := tx.Query(ctx,",
+		"func (s *Store) bootstrapApply(": "activeAdmins(ctx, tx",
 	} {
 		start := strings.Index(string(src), fn)
 		if start < 0 {
@@ -233,7 +233,7 @@ func TestStoreLocksNoAssignmentRow(t *testing.T) {
 		if lw < 0 || lp < 0 || g < 0 || !(lw < lp && lp < g) {
 			t.Errorf("%s: lockWrites at %d, lockPrincipals at %d, first guard read at %d; want them present and in that order", fn, lw, lp, g)
 		}
-		if fn == "func (s *Store) Bootstrap(" {
+		if fn == "func (s *Store) bootstrapApply(" {
 			if target := strings.Index(body, "lockPrincipals(ctx, tx, s.q, principal)"); target < 0 || target > g {
 				t.Errorf("Bootstrap: the target principal's row lock is at %d, the first guard read at %d; want the lock first", target, g)
 			}

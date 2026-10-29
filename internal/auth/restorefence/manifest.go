@@ -13,7 +13,7 @@ import (
 )
 
 // ManifestVersion is the manifest's format version.
-const ManifestVersion = 2
+const ManifestVersion = 3
 
 // maxRevision is the largest revision the wire allows (2^53-1, migration 0013).
 const maxRevision int64 = 9007199254740991
@@ -68,7 +68,17 @@ func (m Manifest) Canonical() ([]byte, error) {
 		def, ok := sectionByName(s.Name)
 		if ok {
 			key := def.key.name
-			sort.SliceStable(rows, func(i, j int) bool { return fmt.Sprint(rows[i][key]) < fmt.Sprint(rows[j][key]) })
+			// Rows that share a key (provider credentials of one org) are ordered by the whole row, so the digest does not
+			// depend on the export order; rows with unique keys are ordered as before.
+			sort.SliceStable(rows, func(i, j int) bool {
+				ki, kj := fmt.Sprint(rows[i][key]), fmt.Sprint(rows[j][key])
+				if ki != kj {
+					return ki < kj
+				}
+				ri, _ := json.Marshal(rows[i])
+				rj, _ := json.Marshal(rows[j])
+				return string(ri) < string(rj)
+			})
 		}
 		secs = append(secs, Section{Name: s.Name, Rows: rows})
 	}

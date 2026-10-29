@@ -2,6 +2,7 @@ package authapi
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-go/authverify"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -564,6 +566,110 @@ func TestIssueSessionLogsWhyABearerWasRefused(t *testing.T) {
 		expectError(t, w.issue(tc.build(w)), http.StatusUnauthorized, "invalid_credentials")
 		if !strings.Contains(w.logs.String(), `"refusal":"`+tc.want+`"`) {
 			t.Errorf("%s: the log line does not carry refusal %q: %s", name, tc.want, w.logs.String())
+		}
+	}
+}
+
+// craftedToken is a compact token with a workload header and the given payload
+// text and a placeholder signature: it is only ever read by the peek.
+func craftedToken(payload string) string {
+	enc := base64.RawURLEncoding
+	header := enc.EncodeToString([]byte(`{"alg":"EdDSA","typ":"workload+jwt","kid":"k1"}`))
+	return header + "." + enc.EncodeToString([]byte(payload)) + "." + enc.EncodeToString(make([]byte, 64))
+}
+
+// The peek reads strict JSON: a duplicate aud or sub, or a member spelled in
+// another case, is refused before the key set is read.
+func TestTheUnverifiedPeekIsStrictJSON(t *testing.T) {
+	w := newWorkloadIssueFixture(t)
+	rest := `"iss":"` + goldenIssuer + `","principal_type":"workload","jti":"` + uuid.NewString() + `","iat":1,"nbf":1,"exp":2`
+	for name, payload := range map[string]string{
+		"duplicate aud, wrong then right": `{"aud":"dev-health-api","aud":"auth-service","sub":"` + w.subject + `",` + rest + `}`,
+		"duplicate aud, right then wrong": `{"aud":"auth-service","aud":"dev-health-api","sub":"` + w.subject + `",` + rest + `}`,
+		"duplicate sub":                   `{"aud":"auth-service","sub":"prn_AAAAAAAAAAAAAAAAAAAAAA","sub":"` + w.subject + `",` + rest + `}`,
+		"upper case members":              `{"AUD":"auth-service","SUB":"` + w.subject + `",` + rest + `}`,
+		"mixed case aud":                  `{"Aud":"auth-service","sub":"` + w.subject + `",` + rest + `}`,
+		"aud not a string":                `{"aud":["auth-service"],"sub":"` + w.subject + `",` + rest + `}`,
+		"not an object":                   `["auth-service"]`,
+		"trailing document":               `{"aud":"auth-service","sub":"` + w.subject + `",` + rest + `}{}`,
+	} {
+		expectError(t, w.issue(bearerOf(craftedToken(payload))), http.StatusUnauthorized, "invalid_credentials")
+		w.nothingRead(name)
+		if w.keys.reads != 0 {
+			t.Fatalf("%s: the peek let the token reach the key set (%d reads)", name, w.keys.reads)
+		}
+	}
+}
+
+// (c) A forged token with the right aud and sub passes the peek and reaches the
+// verifier, which refuses it: the same 401 bytes, and no credential check, users
+// read, projection or session.
+func TestAForgedTokenWithTheRightAudienceAndSubjectReachesTheVerifierAndIsRefused(t *testing.T) {
+	w := newWorkloadIssueFixture(t)
+	other, _, _ := fileSigner(t)
+	forger := &workloadIssueFixture{compatFixture: w.compatFixture, signer: other, subject: w.subject}
+	forged, _ := forger.mint("workload+jwt", nil)
+	response := w.issue(forged)
+	expectError(t, response, http.StatusUnauthorized, "invalid_credentials")
+	w.nothingRead("forged token")
+	if w.keys.reads != 1 {
+		t.Fatalf("key set reads = %d, want 1: the forged token must reach the verifier", w.keys.reads)
+	}
+	if !strings.Contains(w.logs.String(), `"refusal":"signature"`) {
+		t.Fatalf("the verifier did not refuse on the signature: %s", w.logs.String())
+	}
+	w.creds.refusal = servicecred.RefusedRevoked
+	if got, want := normalized(t, response.Body.Bytes()), normalized(t, w.issue(issuerBearer).Body.Bytes()); got != want {
+		t.Fatalf("forged-token body %s differs from %s", got, want)
+	}
+}
+
+// stubVerifier accepts every token and answers fixed claims.
+type stubVerifier struct{ claims authverify.WorkloadClaims }
+
+func (s stubVerifier) Verify(string, time.Time) (*authverify.WorkloadClaims, error) {
+	claims := s.claims
+	return &claims, nil
+}
+
+// (a) The peek only refuses. The route decides on the verified claims: a
+// verifier that answers another subject or audience than the peek saw is a
+// refusal, and the same claims that match the configuration issue a session.
+func TestTheRouteRechecksTheVerifiedClaimsAfterVerify(t *testing.T) {
+	w := newWorkloadIssueFixture(t)
+	payload := `{"aud":"auth-service","sub":"` + w.subject + `"}`
+	verified := func(aud, sub string) *SessionIssueWorkload {
+		return &SessionIssueWorkload{
+			verifier: stubVerifier{authverify.WorkloadClaims{Audience: aud, Subject: sub, TokenID: uuid.NewString()}},
+			subject:  w.subject, now: time.Now,
+		}
+	}
+	for name, tc := range map[string]struct {
+		aud, sub string
+		ok       bool
+	}{
+		"matching claims":             {"auth-service", w.subject, true},
+		"verified subject differs":    {"auth-service", session.WirePrincipalID(uuid.New()), false},
+		"verified audience differs":   {"dev-health-api", w.subject, false},
+		"verified subject not a prn_": {"auth-service", "prn_x", false},
+		"verified subject empty":      {"auth-service", "", false},
+	} {
+		w.workload = verified(tc.aud, tc.sub)
+		w.buildCompat()
+		before, usersBefore := len(w.sessions.created), w.users.calls
+		response := w.issue(bearerOf(craftedToken(payload)))
+		if tc.ok {
+			if response.Code != http.StatusOK {
+				t.Fatalf("%s: status %d: %s", name, response.Code, response.Body)
+			}
+			continue
+		}
+		expectError(t, response, http.StatusUnauthorized, "invalid_credentials")
+		if len(w.sessions.created) != before {
+			t.Fatalf("%s: a session was created on claims the route must refuse", name)
+		}
+		if len(w.creds.seen) != 0 || w.users.calls != usersBefore {
+			t.Fatalf("%s: a refusal read stores", name)
 		}
 	}
 }

@@ -2,6 +2,7 @@ package contracts
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -71,4 +72,33 @@ func TestTheRegistryNamesTheSessionIssueRouteAsAConsumerOfBothClasses(t *testing
 			t.Errorf("%s has no consumer anchored at %s", class, key)
 		}
 	}
+}
+
+// The workload token is consumed only behind an opt-in (the precedent of
+// kubernetes_sa_token_exchange and workload_bootstrap_credential): its status is
+// optional_feature, the consumer names the variable, and no gap says it has no
+// consumer.
+func TestTheWorkloadTokenClassIsAnOptionalFeatureConsumedBehindTheSubjectVariable(t *testing.T) {
+	for _, class := range loadClassRegistryDocument(t).Classes {
+		if class.ClassID != "workload_token" {
+			continue
+		}
+		if class.Status != "optional_feature" {
+			t.Errorf("status %q, want optional_feature", class.Status)
+		}
+		var named bool
+		for _, consumer := range class.Consumers {
+			named = named || strings.Contains(consumer.Description, "AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT")
+		}
+		if !named {
+			t.Error("no consumer description names AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT")
+		}
+		for _, gap := range class.Gaps {
+			if strings.HasPrefix(gap, "consumers: none yet") {
+				t.Errorf("the gap %q is still listed", gap)
+			}
+		}
+		return
+	}
+	t.Fatal("no workload_token class")
 }

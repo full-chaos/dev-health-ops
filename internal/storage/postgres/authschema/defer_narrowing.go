@@ -29,8 +29,11 @@ func usersOwnedPublicGrant(g GrantRecord) bool {
 	}
 	switch g.Kind {
 	case "relation":
-		return g.Privilege == "DELETE" && isLegacyLinkPurgeTable(g.Object)
+		return g.Privilege == "DELETE" && (isLegacyLinkPurgeTable(g.Object) || isMembershipWriteDelete(g.Object))
 	case "column":
+		if isMembershipWriteColumn(g.Object, g.Privilege, g.Column) {
+			return true
+		}
 		if g.Object == "users" {
 			insert, update := UsersWriteGrant()
 			switch g.Privilege {

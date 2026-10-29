@@ -883,6 +883,12 @@ func (h handlers) samlACSCallback(w http.ResponseWriter, r *http.Request) {
 				invalidProviderIDDetail(), "saml", "provisioning")
 			return
 		}
+		if errors.Is(err, errInvalidProviderEmail) {
+			h.Logger.WarnContext(ctx, "sso sign-in refused: the identity provider returned an unusable email address", "protocol", "saml")
+			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusBadRequest,
+				invalidProviderEmailDetail(), "saml", "provisioning")
+			return
+		}
 		var processing ssoProcessing
 		if !asSSOProcessing(err, &processing) {
 			h.fail(w, r, "saml provisioning", err)

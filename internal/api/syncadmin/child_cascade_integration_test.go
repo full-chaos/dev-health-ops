@@ -96,13 +96,23 @@ func startCascadeVenue(t *testing.T, incidentFeature bool) *cascadeVenue {
 
 func (v *cascadeVenue) call(method, path, body string) (int, string) {
 	v.t.Helper()
+	status, text, err := v.callCtx(context.Background(), method, path, body)
+	if err != nil {
+		v.t.Fatal(err)
+	}
+	return status, text
+}
+
+// callCtx is call with a context that ends the request, and an error instead of a t.Fatal, so that it can run on a
+// goroutine that the test cancels and joins.
+func (v *cascadeVenue) callCtx(ctx context.Context, method, path, body string) (int, string, error) {
 	var reader io.Reader
 	if body != "" {
 		reader = bytes.NewReader([]byte(body))
 	}
-	request, err := http.NewRequest(method, v.server.URL+path, reader)
+	request, err := http.NewRequestWithContext(ctx, method, v.server.URL+path, reader)
 	if err != nil {
-		v.t.Fatal(err)
+		return 0, "", err
 	}
 	request.Header.Set("Authorization", "Bearer "+sign(v.t, "admin", v.org))
 	if body != "" {
@@ -110,11 +120,11 @@ func (v *cascadeVenue) call(method, path, body string) (int, string) {
 	}
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
-		v.t.Fatal(err)
+		return 0, "", err
 	}
 	defer response.Body.Close()
 	text, _ := io.ReadAll(response.Body)
-	return response.StatusCode, string(text)
+	return response.StatusCode, string(text), nil
 }
 
 func (v *cascadeVenue) exec(sql string, args ...any) {

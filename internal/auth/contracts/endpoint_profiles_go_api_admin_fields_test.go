@@ -42,12 +42,28 @@ var impersonationRoutes = map[string]string{
 // coveredFamilies are the route prefixes whose protected rows carry the fields.
 var coveredFamilies = []string{
 	"/api/v1/admin", "/api/v1/auth", "/api/v1/billing", "/api/v1/licensing", "/api/v1/orgs", "/api/v1/internal",
+	"/api/v1/ingest", "/api/v1/external-ingest", "/api/v1/telemetry", "/api/v1/webhooks", "/buildinfo",
 }
 
 // uncoveredFamilies are protected route prefixes that do not carry the fields yet; a protected row in no listed
 // family fails, so a new family cannot arrive without a decision.
-var uncoveredFamilies = []string{
-	"/api/v1/ingest", "/api/v1/external-ingest", "/api/v1/telemetry", "/api/v1/webhooks", "/buildinfo",
+var uncoveredFamilies = []string{}
+
+// Resolver kinds for a route whose organization does not come from the session: the credential's own row (a push
+// token, a webhook binding) or a body field. Such a route is not subject to the impersonation override.
+const (
+	credentialResolver = "organization_from_credential:"
+	bodyResolver       = "organization_from_body:"
+)
+
+const (
+	nonSessionGapMessage    = "is exempt_no_org_context without a gaps entry naming impersonation_policy"
+	nonSessionPolicyMessage = "whose organization does not come from the session has impersonation_policy"
+	bodyBindingMessage      = "takes its organization from the body without a credential_binding gap"
+)
+
+func nonSessionResolver(resolver string) bool {
+	return strings.HasPrefix(resolver, credentialResolver) || strings.HasPrefix(resolver, bodyResolver)
 }
 
 func hasFamilyPrefix(route string, families []string) bool {
@@ -124,7 +140,7 @@ func adminFieldViolations(row map[string]any, scopes map[string]string, root str
 
 	// resource resolver, cache text and impersonation enum are always recorded.
 	resolver, _ := row["resource_resolver"].(string)
-	if !strings.HasPrefix(resolver, "organization_from_session:") && !strings.HasPrefix(resolver, "organization_from_path:") && !strings.HasPrefix(resolver, "none:") {
+	if !strings.HasPrefix(resolver, "organization_from_session:") && !strings.HasPrefix(resolver, "organization_from_path:") && !strings.HasPrefix(resolver, "none:") && !nonSessionResolver(resolver) {
 		bad("resource_resolver does not start with a resolver kind: %q", resolver)
 	}
 	cache, _ := row["current_state_cache_behavior"].(string)
@@ -151,10 +167,19 @@ func adminFieldViolations(row map[string]any, scopes map[string]string, root str
 		if !gapNames(row, "credential_binding") {
 			bad("an internal-listener org-scoped route has no credential_binding gap")
 		}
+	case tenancy == "org_scoped" && nonSessionResolver(resolver) && policy != "exempt_no_org_context":
+		bad("an org-scoped route %s %q, want exempt_no_org_context", nonSessionPolicyMessage, policy)
+	case tenancy == "org_scoped" && nonSessionResolver(resolver):
+		if !gapNames(row, "impersonation_policy") {
+			bad("an org-scoped route whose organization comes from the credential or the body %s", nonSessionGapMessage)
+		}
 	case tenancy == "org_scoped" && policy != "subject_to_impersonation_override":
 		bad("an org-scoped route has impersonation_policy %q", policy)
 	case tenancy == "cross_org_superuser_only" && policy == "subject_to_impersonation_override":
 		bad("a cross-org superuser route has impersonation_policy %q", policy)
+	}
+	if strings.HasPrefix(resolver, bodyResolver) && !gapNames(row, "credential_binding") {
+		bad("a route %s", bodyBindingMessage)
 	}
 
 	// disclosure: the rule class is named; a by-id route never claims the no-id rule; unproven = null + gap.
@@ -286,7 +311,7 @@ func coveredRows(t *testing.T) []map[string]any {
 
 func TestEveryCoveredAdminRowCarriesTheFields(t *testing.T) {
 	rows := coveredRows(t)
-	if len(rows) < 190 {
+	if len(rows) < 214 {
 		t.Fatalf("only %d covered rows: a covered family lost its rows", len(rows))
 	}
 	nonAdmin := 0
@@ -295,7 +320,7 @@ func TestEveryCoveredAdminRowCarriesTheFields(t *testing.T) {
 			nonAdmin++
 		}
 	}
-	if nonAdmin < 53 {
+	if nonAdmin < 71 {
 		t.Fatalf("only %d covered rows outside the admin family", nonAdmin)
 	}
 	scopes := catalogScopes(t)
@@ -407,8 +432,15 @@ func TestCoveredFamilyPredicateSelectsByPrefixAndClass(t *testing.T) {
 		{"/api/v1/billing/plans", "public", false},
 		{"/api/v1/billingx/plans", "protected", false},
 		{"/api/v1/internal/acr/health", "protected", true},
-		{"/api/v1/ingest/commits", "protected", false},
+		{"/api/v1/ingest/commits", "protected", true},
 		{"/api/v1/auth/me", "protected", true},
+		{"/api/v1/external-ingest/batches", "protected", true},
+		{"/api/v1/external-ingest/schemas", "public", false},
+		{"/api/v1/telemetry/status", "protected", true},
+		{"/api/v1/webhooks/github", "protected", true},
+		{"/api/v1/webhooks/health", "public", false},
+		{"/buildinfo", "protected", true},
+		{"/buildinfox", "protected", false},
 	}
 	for _, c := range cases {
 		if got := isCoveredRow(map[string]any{"route": c.route, "classification": c.class}); got != c.want {
@@ -429,6 +461,13 @@ func TestFieldChecksCatchPlantedDefectsOnEveryNewFamily(t *testing.T) {
 		"GET /api/v1/orgs/me [dev-health-ops-api @api]",
 		"GET /api/v1/licensing/entitlements/{org_id} [dev-health-ops-api @api]",
 		"GET /api/v1/internal/acr/entitlements/{org_id} [dev-health-ops-api @internal]",
+		"GET /api/v1/external-ingest/batches/{ingestion_id} [dev-health-ops-api @api]",
+		"POST /api/v1/ingest/commits [dev-health-ops-api @api]",
+		"GET /api/v1/telemetry/status [dev-health-ops-api @api]",
+		"POST /api/v1/telemetry/report [dev-health-ops-api @api]",
+		"POST /api/v1/webhooks/github [dev-health-ops-api @api]",
+		"POST /api/v1/webhooks/pagerduty/{binding_id} [dev-health-ops-api @api]",
+		"GET /buildinfo [dev-health-ops-api @api]",
 	}
 	mutations := map[string]func(map[string]any){
 		"unknown action":            func(r map[string]any) { r["action"] = "billing.nope" },
@@ -618,5 +657,104 @@ func TestInternalACRRowsNameBothCredentialPaths(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Errorf("the llm-config validator text lacks %q: %q", want, text)
 		}
+	}
+}
+
+var legacyIngestIDs = []string{
+	"POST /api/v1/ingest/commits [dev-health-ops-api @api]",
+	"POST /api/v1/ingest/deployments [dev-health-ops-api @api]",
+	"POST /api/v1/ingest/incidents [dev-health-ops-api @api]",
+	"POST /api/v1/ingest/pull-requests [dev-health-ops-api @api]",
+	"POST /api/v1/ingest/telemetry [dev-health-ops-api @api]",
+	"POST /api/v1/ingest/work-items [dev-health-ops-api @api]",
+}
+
+type organizationSource struct{ resolver, policy, tenancy string }
+
+// Where each intake, telemetry and build row takes its organization from, and what that means for impersonation.
+var intakeOrganizationSources = map[string]organizationSource{
+	"GET /api/v1/external-ingest/availability [dev-health-ops-api @api]":           {credentialResolver, "exempt_no_org_context", "org_scoped"},
+	"POST /api/v1/external-ingest/validate [dev-health-ops-api @api]":              {credentialResolver, "exempt_no_org_context", "org_scoped"},
+	"POST /api/v1/external-ingest/batches [dev-health-ops-api @api]":               {credentialResolver, "exempt_no_org_context", "org_scoped"},
+	"GET /api/v1/external-ingest/batches [dev-health-ops-api @api]":                {credentialResolver, "exempt_no_org_context", "org_scoped"},
+	"GET /api/v1/external-ingest/batches/{ingestion_id} [dev-health-ops-api @api]": {credentialResolver, "exempt_no_org_context", "org_scoped"},
+	"POST /api/v1/ingest/commits [dev-health-ops-api @api]":                        {bodyResolver, "exempt_no_org_context", "org_scoped"},
+	"POST /api/v1/ingest/deployments [dev-health-ops-api @api]":                    {bodyResolver, "exempt_no_org_context", "org_scoped"},
+	"POST /api/v1/ingest/incidents [dev-health-ops-api @api]":                      {bodyResolver, "exempt_no_org_context", "org_scoped"},
+	"POST /api/v1/ingest/pull-requests [dev-health-ops-api @api]":                  {bodyResolver, "exempt_no_org_context", "org_scoped"},
+	"POST /api/v1/ingest/telemetry [dev-health-ops-api @api]":                      {bodyResolver, "exempt_no_org_context", "org_scoped"},
+	"POST /api/v1/ingest/work-items [dev-health-ops-api @api]":                     {bodyResolver, "exempt_no_org_context", "org_scoped"},
+	"GET /api/v1/telemetry/status [dev-health-ops-api @api]":                       {"organization_from_session:", "subject_to_impersonation_override", "org_scoped"},
+	"POST /api/v1/telemetry/opt-in [dev-health-ops-api @api]":                      {"organization_from_session:", "subject_to_impersonation_override", "org_scoped"},
+	"POST /api/v1/telemetry/opt-out [dev-health-ops-api @api]":                     {"organization_from_session:", "subject_to_impersonation_override", "org_scoped"},
+	"POST /api/v1/telemetry/report [dev-health-ops-api @api]":                      {"organization_from_session:", "subject_to_impersonation_override", "org_scoped"},
+	"POST /api/v1/webhooks/github [dev-health-ops-api @api]":                       {"none:", "exempt_no_org_context", "none"},
+	"POST /api/v1/webhooks/pagerduty/{binding_id} [dev-health-ops-api @api]":       {credentialResolver, "exempt_no_org_context", "org_scoped"},
+	"GET /buildinfo [dev-health-ops-api @api]":                                     {"organization_from_session:", "subject_to_impersonation_override", "org_scoped"},
+}
+
+func TestIntakeRowsRecordTheirOrganizationSource(t *testing.T) {
+	ids := make([]string, 0, len(intakeOrganizationSources))
+	for id := range intakeOrganizationSources {
+		ids = append(ids, id)
+	}
+	for id, row := range rowsByID(t, ids) {
+		want := intakeOrganizationSources[id]
+		resolver, _ := row["resource_resolver"].(string)
+		policy, _ := row["impersonation_policy"].(string)
+		tenancy, _ := row["tenant_requirement"].(string)
+		if !strings.HasPrefix(resolver, want.resolver) || policy != want.policy || tenancy != want.tenancy {
+			t.Errorf("%s: resolver %q, impersonation_policy %q, tenant_requirement %q; want resolver kind %q, %q, %q",
+				id, resolver, policy, tenancy, want.resolver, want.policy, want.tenancy)
+		}
+	}
+}
+
+func TestNonSessionOrganizationRowsRecordTheirImpersonationGap(t *testing.T) {
+	root := testRoot(t)
+	scopes := catalogScopes(t)
+	ids := []string{
+		"POST /api/v1/external-ingest/batches [dev-health-ops-api @api]",
+		"POST /api/v1/ingest/commits [dev-health-ops-api @api]",
+		"POST /api/v1/webhooks/pagerduty/{binding_id} [dev-health-ops-api @api]",
+	}
+	for id, row := range rowsByID(t, ids) {
+		t.Run(id, func(t *testing.T) {
+			if got := adminFieldViolations(cloneRow(t, row), scopes, root); len(got) != 0 {
+				t.Fatalf("the unmodified row has violations: %v", got)
+			}
+			ungapped := cloneRow(t, row)
+			dropGap(ungapped, "impersonation_policy")
+			if got := adminFieldViolations(ungapped, scopes, root); !violationsContain(got, nonSessionGapMessage) {
+				t.Errorf("a dropped impersonation_policy gap was not rejected for that reason: %v", got)
+			}
+			flipped := cloneRow(t, row)
+			flipped["impersonation_policy"] = "subject_to_impersonation_override"
+			if got := adminFieldViolations(flipped, scopes, root); !violationsContain(got, nonSessionPolicyMessage) {
+				t.Errorf("a flip to subject_to_impersonation_override was not rejected for that reason: %v", got)
+			}
+			session := cloneRow(t, row)
+			session["resource_resolver"] = "organization_from_session: the caller's organization (internal/api/policy/guard.go:115)"
+			if got := adminFieldViolations(session, scopes, root); !violationsContain(got, `an org-scoped route has impersonation_policy "exempt_no_org_context"`) {
+				t.Errorf("a session resolver with exempt_no_org_context was not rejected for that reason: %v", got)
+			}
+		})
+	}
+}
+
+func TestBodyOrganizationRowsNameTheirCredentialBinding(t *testing.T) {
+	root := testRoot(t)
+	scopes := catalogScopes(t)
+	for id, row := range rowsByID(t, legacyIngestIDs) {
+		t.Run(id, func(t *testing.T) {
+			if got := adminFieldViolations(cloneRow(t, row), scopes, root); len(got) != 0 {
+				t.Fatalf("the unmodified row has violations: %v", got)
+			}
+			ungapped := cloneRow(t, row)
+			dropGap(ungapped, "credential_binding")
+			if got := adminFieldViolations(ungapped, scopes, root); !violationsContain(got, bodyBindingMessage) {
+				t.Errorf("a dropped credential_binding gap was not rejected for that reason: %v", got)
+			}
+		})
 	}
 }

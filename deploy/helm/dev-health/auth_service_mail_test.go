@@ -2,6 +2,7 @@ package devhealth_test
 
 import (
 	"fmt"
+	"net/netip"
 	"strings"
 	"testing"
 )
@@ -192,7 +193,7 @@ func TestAuthServiceMailEgressRefusesAnEmptyPeer(t *testing.T) {
 
 var (
 	mailV4Except = []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16", "127.0.0.0/8"}
-	mailV6Except = []string{"fc00::/7", "fe80::/10", "::1/128", "::ffff:0:0/96", "64:ff9b::/96"}
+	mailV6Except = []string{"fc00::/7", "fe80::/10", "::1/128", "64:ff9b::/96"}
 )
 
 func mailPeer(cidr string, except []string) string {
@@ -509,6 +510,68 @@ func TestAuthServiceMailEgressRefusesABadExceptOnANarrowPeer(t *testing.T) {
 	wantMailPeerRefusal(t, "except is not a list", []string{`{"ipBlock":{"cidr":"8.8.8.0/24","except":"8.8.8.8/32"}}`})
 	if out, err := mailRender(t, []string{`{"ipBlock":{"cidr":"8.8.8.0/24","except":["8.8.8.8/32"]}}`}); err != nil {
 		t.Fatalf("a well formed except on a narrow peer was refused: %v\n%.300s", err, out)
+	}
+}
+
+// The apiserver (k3s v1.36.4, the prod minor) refuses an IPv4-mapped ipBlock.except ("must not have an IPv4-mapped IPv6 address"). A
+// connect to ::ffff:a.b.c.d leaves the pod as an IPv4 packet, so the v4 peer's except list already decides; the v6 list names none.
+func TestAuthServiceMailEgressRenderedExceptHasNoIPv4MappedForm(t *testing.T) {
+	out, err := mailRender(t, []string{mailPeer("0.0.0.0/0", mailV4Except), mailPeer("::/0", mailV6Except)})
+	if err != nil {
+		t.Fatalf("the exact shape was refused: %v\n%.300s", err, out)
+	}
+	docs, _, err := renderAuth(t, phaseArgs(4, "--set", "authService.mail.secretName=a-mail", "--set-json", "authService.networkPolicy.egress.mail.to=["+mailPeer("0.0.0.0/0", mailV4Except)+","+mailPeer("::/0", mailV6Except)+"]")...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := authDoc(docs, "NetworkPolicy", "a-dev-health-auth-service")
+	if policy == nil {
+		t.Fatal("no auth-service NetworkPolicy")
+	}
+	got := map[string][]string{}
+	for _, rule := range aList(at(policy, "spec", "egress")) {
+		for _, peer := range aList(at(rule, "to")) {
+			cidr := aStr(at(peer, "ipBlock", "cidr"))
+			if !strings.HasSuffix(cidr, "/0") {
+				continue
+			}
+			for _, e := range aList(at(peer, "ipBlock", "except")) {
+				entry := aStr(e)
+				prefix, perr := netip.ParsePrefix(entry)
+				if perr != nil {
+					t.Fatalf("except %q does not parse: %v", entry, perr)
+				}
+				if prefix.Addr().Is4In6() {
+					t.Errorf("rendered except %q is an IPv4-mapped form (the apiserver refuses it)", entry)
+				}
+				got[cidr] = append(got[cidr], entry)
+			}
+		}
+	}
+	if strings.Join(got["0.0.0.0/0"], ",") != strings.Join(mailV4Except, ",") || strings.Join(got["::/0"], ",") != strings.Join(mailV6Except, ",") {
+		t.Errorf("rendered except lists = %v; want v4 %v and v6 %v", got, mailV4Except, mailV6Except)
+	}
+}
+
+func TestAuthServiceMailEgressRefusesAMappedExceptEntry(t *testing.T) {
+	for _, mapped := range []string{"::ffff:0:0/96", "::FFFF:0:0/96", "0:0:0:0:0:ffff:0:0/96", "0000:0:0::ffff:0:0/96", "::ffff:a00:0/104", "::ffff:0:0/80", "::ffff:808:808/128"} {
+		for _, wide := range []struct {
+			cidr   string
+			except []string
+		}{{"::/0", mailV6Except}, {"0.0.0.0/0", mailV4Except}} {
+			out, err := mailRender(t, []string{mailPeer(wide.cidr, append(append([]string{}, wide.except...), mapped))})
+			if err == nil || !strings.Contains(out, "authService.networkPolicy.egress.mail.to") || !strings.Contains(out, "IPv4-mapped") {
+				t.Fatalf("%s except %q accepted or refused for another reason: %v\n%.300s", wide.cidr, mapped, err, out)
+			}
+		}
+		peer := fmt.Sprintf(`{"ipBlock":{"cidr":"2001:db8::/32","except":[%q]}}`, mapped)
+		out, err := mailRender(t, []string{peer})
+		if err == nil || !strings.Contains(out, "IPv4-mapped") {
+			t.Fatalf("narrow peer except %q accepted or refused for another reason: %v\n%.300s", mapped, err, out)
+		}
+	}
+	if out, err := mailRender(t, []string{mailPeer("::/0", append(append([]string{}, mailV6Except...), "2001:db8::/32"))}); err != nil {
+		t.Fatalf("a non-mapped extra v6 except was refused: %v\n%.300s", err, out)
 	}
 }
 

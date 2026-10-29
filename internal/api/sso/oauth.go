@@ -611,6 +611,12 @@ func (h handlers) oauthCallback(w http.ResponseWriter, r *http.Request) {
 				invalidProviderIDDetail(), "oauth", "provisioning")
 			return
 		}
+		if errors.Is(err, errInvalidProviderEmail) {
+			h.Logger.WarnContext(ctx, "sso sign-in refused: the identity provider returned an unusable email address", "protocol", "oauth")
+			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusBadRequest,
+				invalidProviderEmailDetail(), "oauth", "provisioning")
+			return
+		}
 		h.fail(w, r, "oauth provisioning", err)
 		return
 	}
@@ -736,13 +742,14 @@ func (h handlers) oauthProvisionUser(ctx context.Context, row *providerRow, prov
 		isSuperuser                                   bool
 		tokenVersion                                  int64
 	)
-	// A non-empty subject that is not a valid identity key (a lone surrogate, edge white space, ...) is refused before
-	// any lookup, as social login does (session/social.go), so PostgreSQL never sees its bytes in the identity query.
-	// An empty subject keeps its answer: the lookup is skipped for it and the creation check refuses it.
-	if claims.externalID != "" {
-		if err := identity.RefuseInvalidProviderID(authProviderValue, &claims.externalID); err != nil {
-			return nil, nil, err
-		}
+	// A subject that is not a valid identity key (empty, a lone surrogate, control characters, edge white space, ...)
+	// is refused before any lookup, as social login does (session/social.go), so PostgreSQL never sees its bytes in the
+	// identity query and the answer does not depend on which accounts exist.
+	if err := refuseUnusableSubject(authProviderValue, claims.externalID); err != nil {
+		return nil, nil, err
+	}
+	if err := refuseUnusableEmail(claims.email); err != nil {
+		return nil, nil, err
 	}
 	userID, found, err := h.resolveSSOIdentity(ctx, authProviderValue, claims.externalID, claims.email)
 	if err != nil {

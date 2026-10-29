@@ -18,8 +18,8 @@ const (
 )
 
 var qualityLegNames = []string{
-	"static", "test-1-of-3", "test-2-of-3", "test-3-of-3",
-	"race-1-of-4", "race-2-of-4", "race-3-of-4", "race-4-of-4",
+	"static", "test-1-of-4", "test-2-of-4", "test-3-of-4", "test-4-of-4",
+	"race-1-of-5", "race-2-of-5", "race-3-of-5", "race-4-of-5", "race-5-of-5",
 }
 
 type qualityLeg struct{ name, job, step string }
@@ -74,7 +74,7 @@ func runQualityHelper(t *testing.T, sha string, runs string, jobs string, failRu
 	if failRuns {
 		write("fail-runs", "")
 	}
-	command := exec.Command("bash", script, qualityRepo, sha, "go-quality.yml", qualityLegPrefix, qualityLegStep, "8")
+	command := exec.Command("bash", script, qualityRepo, sha, "go-quality.yml", qualityLegPrefix, qualityLegStep, "10")
 	command.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "STUB_DIR="+dir)
 	if idFile != "" {
 		command.Env = append(command.Env, "QUEUE_TESTED_RUN_ID_FILE="+idFile)
@@ -85,7 +85,7 @@ func runQualityHelper(t *testing.T, sha string, runs string, jobs string, failRu
 }
 
 // The go-quality form of ci/queue_tested_sha.sh answers only for a green merge_group run of this repository, for exactly
-// this sha, in which all eight legs ran their gate in the latest attempt. Every other answer keeps the legs running.
+// this sha, in which all ten legs ran their gate in the latest attempt. Every other answer keeps the legs running.
 func TestQueueTestedShaForGoQualityAnswersOnlyForAFullyRanQueueRun(t *testing.T) {
 	good := qualityRunsJSON(qualitySha, "merge_group", qualityRepo, "success")
 	allRan := qualityJobsJSON(qualityLegs(nil))
@@ -97,7 +97,7 @@ func TestQueueTestedShaForGoQualityAnswersOnlyForAFullyRanQueueRun(t *testing.T)
 		failRuns bool
 		want     bool
 	}{
-		{"all eight legs ran green", qualitySha, good, allRan, false, true},
+		{"all ten legs ran green", qualitySha, good, allRan, false, true},
 		{"a test leg was skipped by its plan", qualitySha, good,
 			qualityJobsJSON(qualityLegs(func(i int, l *qualityLeg) {
 				if i == 2 {
@@ -134,7 +134,7 @@ func TestQueueTestedShaForGoQualityAnswersOnlyForAFullyRanQueueRun(t *testing.T)
 					l.job = "cancelled"
 				}
 			})), false, false},
-		{"only seven legs", qualitySha, good, qualityJobsJSON(qualityLegs(nil)[1:]), false, false},
+		{"only nine legs", qualitySha, good, qualityJobsJSON(qualityLegs(nil)[1:]), false, false},
 		{"no leg job at all", qualitySha, good, qualityJobsJSON(nil), false, false},
 		{"the run is from a fork repository", qualitySha, qualityRunsJSON(qualitySha, "merge_group", "someone/dev-health-ops", "success"), allRan, false, false},
 		{"the run is not a merge_group run", qualitySha, qualityRunsJSON(qualitySha, "push", qualityRepo, "success"), allRan, false, false},
@@ -221,8 +221,14 @@ func TestGoQualityQueueLookupIsPushOnlyReadOnlyAndFailsOpen(t *testing.T) {
 		t.Error("the queue lookup step must be continue-on-error: a lookup failure must run every leg, never fail the plan job")
 	}
 	run := asString(step["run"])
-	if !strings.Contains(run, `bash ci/queue_tested_sha.sh "${GITHUB_REPOSITORY}" "${GITHUB_SHA}" go-quality.yml 'go-quality-leg (' 'Run Go quality leg' 8`) {
+	if !strings.Contains(run, `bash ci/queue_tested_sha.sh "${GITHUB_REPOSITORY}" "${GITHUB_SHA}" go-quality.yml 'go-quality-leg (' 'Run Go quality leg' "@${expected_file}"`) {
 		t.Error("the lookup must call the helper for the pushed sha with the go-quality leg arguments")
+	}
+	if !strings.Contains(run, `printf '%s' "${LEGS}" | jq -r '.[] | "go-quality-leg (" + .name + ")"' > "${expected_file}"`) || strings.Contains(run, "Run Go quality leg' 10") {
+		t.Error("the lookup must take the expected job names from the validated leg list (LEGS), not a count")
+	}
+	if env, _ := step["env"].(map[string]any); asString(env["LEGS"]) != "${{ steps.legs.outputs.legs }}" {
+		t.Errorf("the lookup step LEGS = %q, want the output of the legs step", asString(env["LEGS"]))
 	}
 	if !strings.Contains(run, "QUEUE_TESTED_RUN_ID_FILE=") || !strings.Contains(run, `*[!0-9]*) run_id="" ;;`) {
 		t.Error("the run id must come from the helper file and be digits only, else empty")
@@ -339,8 +345,8 @@ func TestGoQualityLegSkipIsPushOnlyNeverStaticAndKeepsReceipts(t *testing.T) {
 	if strings.Join(names, ",") != strings.Join(qualityLegNames, ",") {
 		t.Errorf("matrix legs %v differ from the pinned list %v", names, qualityLegNames)
 	}
-	if len(names) != 8 {
-		t.Errorf("the helper is called with min-jobs 8, the matrix has %d legs", len(names))
+	if len(names) != 10 {
+		t.Errorf("the matrix has %d legs, want 10 (static + 4 test + 5 race)", len(names))
 	}
 }
 
@@ -427,7 +433,7 @@ func runQualityHelperMulti(t *testing.T, runs string, jobsByID map[string]string
 		write("jobs-"+id+".json", jobs)
 	}
 	idFile := filepath.Join(dir, "run-id")
-	args := append([]string{filepath.Join(rootOf(t), "ci", "queue_tested_sha.sh"), qualityRepo, qualitySha, "go-quality.yml", qualityLegPrefix, qualityLegStep, "8"}, extra...)
+	args := append([]string{filepath.Join(rootOf(t), "ci", "queue_tested_sha.sh"), qualityRepo, qualitySha, "go-quality.yml", qualityLegPrefix, qualityLegStep, "10"}, extra...)
 	command := exec.Command("bash", args...)
 	command.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "STUB_DIR="+dir, "QUEUE_TESTED_RUN_ID_FILE="+idFile)
 	err := command.Run()

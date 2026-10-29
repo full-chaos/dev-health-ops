@@ -4,8 +4,6 @@ package chmigrate_test
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -45,16 +43,6 @@ const productionContract = 2
 //     foreign; status reads every one of these states without writing.
 func TestBaselineMatchesTheFrozenPythonChain(t *testing.T) {
 	ctx := context.Background()
-	instance, err := containers.StartClickHouse(ctx)
-	if err != nil {
-		t.Fatalf("start clickhouse: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := instance.Close(context.Background()); err != nil {
-			t.Errorf("close clickhouse: %v", err)
-		}
-	})
-	admin := openDatabase(t, instance.URI, "")
 	chain, err := chmigrate.LoadChain()
 	if err != nil {
 		t.Fatal(err)
@@ -67,39 +55,48 @@ func TestBaselineMatchesTheFrozenPythonChain(t *testing.T) {
 	}
 
 	// The golden is the Python chain's end state at the last migration it was
-	// recorded on. A chain file added after that has no Python build to record
-	// it, so the oracle covers exactly the files the golden recorded; the
-	// rest of this test runs the whole chain.
+	// recorded on (099). The 098 baseline it proves is archived with the chain
+	// files after it (CHAOS-11751), and TestBaselineEqualsTheArchivedChain
+	// holds the head baseline to that archive: Python -> archive -> head is one
+	// chain of executed proofs. A chain file after 099 has no Python build to
+	// record it, so the oracle covers exactly the files the golden recorded;
+	// the rest of this test runs the head baseline and the live chain.
+	archivedBaseline := loadArchivedBaseline(t)
 	recorded := map[string]bool{}
 	for _, version := range captured.Versions {
 		recorded[version] = true
 	}
-	for _, version := range checkedIn.Versions {
+	for _, version := range archivedBaseline.Versions {
 		if !recorded[version] {
-			t.Fatalf("the golden does not record head version %s", version)
+			t.Fatalf("the golden does not record archived baseline version %s", version)
 		}
 	}
 	var recordedChain []chmigrate.ChainFile
-	for _, file := range chain {
+	for _, file := range loadArchivedChain(t) {
 		if recorded[file.Version] {
 			recordedChain = append(recordedChain, file)
 		}
 	}
-	oracleDB := scratchDatabase(t, admin)
-	oracleConn := openDatabase(t, instance.URI, oracleDB)
+	if len(recordedChain) == 0 {
+		t.Fatal("the golden records no archived chain file: the oracle would compare the baseline alone")
+	}
+	oracleScratch := scratchDatabase(t)
+	oracleDB := oracleScratch.Name
+	oracleConn := openDatabase(t, oracleScratch.URI, "")
 	oracleStore, _, err := chmigrate.NewConnDB(ctx, oracleConn)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := chmigrate.Upgrade(ctx, oracleStore, checkedIn, recordedChain); err != nil {
+	if _, err := chmigrate.Upgrade(ctx, oracleStore, archivedBaseline, recordedChain); err != nil {
 		t.Fatalf("upgrade a fresh database to the recorded head: %v", err)
 	}
 	if diff := compare(capture(t, ctx, oracleConn, oracleDB, productionContract), captured); diff != "" {
 		t.Fatalf("dho migrate clickhouse built a different database than the Python chain: %s", diff)
 	}
 
-	goDB := scratchDatabase(t, admin)
-	goConn := openDatabase(t, instance.URI, goDB)
+	goScratch := scratchDatabase(t)
+	goDB := goScratch.Name
+	goConn := openDatabase(t, goScratch.URI, "")
 	db, database, err := chmigrate.NewConnDB(ctx, goConn)
 	if err != nil {
 		t.Fatal(err)
@@ -141,8 +138,9 @@ func TestBaselineMatchesTheFrozenPythonChain(t *testing.T) {
 	// objects exist yet). The resume must read each object back from the real
 	// server, find it identical to the baseline, create nothing and record
 	// the versions.
-	resumeDB := scratchDatabase(t, admin)
-	resumeConn := openDatabase(t, instance.URI, resumeDB)
+	resumeScratch := scratchDatabase(t)
+	resumeDB := resumeScratch.Name
+	resumeConn := openDatabase(t, resumeScratch.URI, "")
 	resumeStore, _, err := chmigrate.NewConnDB(ctx, resumeConn)
 	if err != nil {
 		t.Fatal(err)
@@ -201,8 +199,9 @@ func TestBaselineMatchesTheFrozenPythonChain(t *testing.T) {
 
 	// An unversioned database holding a table the baseline does not create
 	// is not dho's to migrate.
-	foreignDB := scratchDatabase(t, admin)
-	foreignConn := openDatabase(t, instance.URI, foreignDB)
+	foreignScratch := scratchDatabase(t)
+	foreignDB := foreignScratch.Name
+	foreignConn := openDatabase(t, foreignScratch.URI, "")
 	if err := foreignConn.Exec(ctx, "CREATE TABLE unrelated_sentinel (x Int8) ENGINE = Memory"); err != nil {
 		t.Fatal(err)
 	}
@@ -229,16 +228,17 @@ func TestBaselineMatchesTheFrozenPythonChain(t *testing.T) {
 	// `status --check`, the wait-for-migrations probe, through the command:
 	// exit 0 only at the head, 1 for anything else, the JSON printed either
 	// way, and nothing written.
-	emptyDB := scratchDatabase(t, admin)
+	emptyScratch := scratchDatabase(t)
+	emptyDB := emptyScratch.Name
 	for _, testCase := range []struct {
-		database, state string
-		code            int
+		database, uri, state string
+		code                 int
 	}{
-		{resumeDB, "at_head", cli.ExitOK},
-		{foreignDB, "foreign", cli.ExitFailure},
-		{emptyDB, "empty", cli.ExitFailure},
+		{resumeDB, resumeScratch.URI, "at_head", cli.ExitOK},
+		{foreignDB, foreignScratch.URI, "foreign", cli.ExitFailure},
+		{emptyDB, emptyScratch.URI, "empty", cli.ExitFailure},
 	} {
-		dsn, err := url.Parse(instance.URI)
+		dsn, err := url.Parse(testCase.uri)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -254,7 +254,7 @@ func TestBaselineMatchesTheFrozenPythonChain(t *testing.T) {
 			value, ok := map[string]string{chmigrate.ClickHouseURIKey: dsn.String(), chmigrate.OrderingContractEnv: "2"}[key]
 			return value, ok
 		}
-		conn := openDatabase(t, instance.URI, testCase.database)
+		conn := openDatabase(t, testCase.uri, "")
 		objectsBefore := objectCount(t, ctx, conn, testCase.database)
 		code := run(ctx, cli.Env{Args: []string{"--check"}, Lookup: lookup, Stdout: &stdout, Stderr: &stderr})
 		var status chmigrate.Status
@@ -310,23 +310,29 @@ func versionCount(t *testing.T, ctx context.Context, conn driver.Conn, database 
 	return count
 }
 
-func scratchDatabase(t *testing.T, admin driver.Conn) string {
+// scratchDB is one empty ClickHouse database and the DSN that addresses it.
+type scratchDB struct{ URI, Name string }
+
+// scratchDatabase takes an empty database from the harness: its own scratch
+// database on the shared server, or its own container when shared mode is
+// off. Every connection to it is built from URI, so both modes work.
+func scratchDatabase(t *testing.T) scratchDB {
 	t.Helper()
-	suffix := make([]byte, 6)
-	if _, err := rand.Read(suffix); err != nil {
-		t.Fatal(err)
-	}
-	name := "dho_ch_baseline_" + hex.EncodeToString(suffix)
 	ctx := context.Background()
-	if err := admin.Exec(ctx, "CREATE DATABASE "+name); err != nil {
-		t.Fatalf("create %s: %v", name, err)
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start clickhouse: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := admin.Exec(context.Background(), "DROP DATABASE IF EXISTS "+name+" SYNC"); err != nil {
-			t.Errorf("drop %s: %v", name, err)
+		if err := instance.Close(context.Background()); err != nil {
+			t.Errorf("close clickhouse: %v", err)
 		}
 	})
-	return name
+	parsed, err := url.Parse(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return scratchDB{URI: instance.URI, Name: strings.TrimPrefix(parsed.Path, "/")}
 }
 
 // openDatabase opens a native connection to database on the server behind uri
@@ -539,17 +545,17 @@ func TestSplitterMatchesFrozenPythonSplit(t *testing.T) {
 	if err := json.Unmarshal(readPythonGolden(t, "python_split.json"), &want); err != nil {
 		t.Fatalf("decode the Python split: %v", err)
 	}
-	head, err := chmigrate.LoadBaseline()
+	// The Python split covers the 098 baseline's .sql versions and the chain
+	// files up to the freeze point, now in the archive (CHAOS-11751); every
+	// file after it, archived or live, is held to the Go-only invariants.
+	live, err := chmigrate.LoadChain()
 	if err != nil {
 		t.Fatal(err)
 	}
-	chain, err := chmigrate.LoadChain()
-	if err != nil {
-		t.Fatal(err)
-	}
+	chain := append(loadArchivedChain(t), live...)
 	chainText := map[string]string{}
 	required := map[string]bool{}
-	for _, version := range head.Versions {
+	for _, version := range loadArchivedBaseline(t).Versions {
 		if strings.HasSuffix(version, ".sql") {
 			required[version] = true
 		}

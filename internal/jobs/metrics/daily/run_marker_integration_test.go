@@ -91,7 +91,7 @@ func newMarkerStack(t *testing.T) *markerStack {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	ddl, err := os.ReadFile("../../../chmigrate/sql/105_daily_metrics_run_marker.sql")
+	ddl, err := os.ReadFile("../../../chmigrate/archive/sql/105_daily_metrics_run_marker.sql")
 	if err != nil {
 		t.Fatal(err)
 	}

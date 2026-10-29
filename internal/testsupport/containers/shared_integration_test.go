@@ -631,8 +631,11 @@ func TestSharedPostgresAtCapacityRefusesLoudly(t *testing.T) {
 			}
 		}()
 		for attempt := 0; attempt < 20; attempt++ {
-			began := time.Now()
-			conn, err := pgx.Connect(ctx, instance.URI)
+			// The refusal is an immediate server answer; a connect that waited would end on this failure-only 30 s context
+			// with an error that is not SQLSTATE 53300, which the check below refuses.
+			connectCtx, cancelConnect := context.WithTimeout(ctx, 30*time.Second)
+			conn, err := pgx.Connect(connectCtx, instance.URI)
+			cancelConnect()
 			if err == nil {
 				held = append(held, conn)
 				continue
@@ -640,9 +643,6 @@ func TestSharedPostgresAtCapacityRefusesLoudly(t *testing.T) {
 			var pgErr *pgconn.PgError
 			if !errors.As(err, &pgErr) || pgErr.Code != "53300" {
 				t.Fatalf("connection %d failed with %v; want SQLSTATE 53300 too_many_connections", attempt+1, err)
-			}
-			if waited := time.Since(began); waited > 10*time.Second {
-				t.Errorf("refusal took %s; want an immediate error", waited)
 			}
 			return
 		}

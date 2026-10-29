@@ -65,6 +65,12 @@ func (h handlers) provisionOrGetUser(ctx context.Context, row *providerRow, emai
 		isSuperuser                bool
 		tokenVersion               int64
 	)
+	if err := refuseUnusableSubject(authProviderValue, externalID); err != nil {
+		return nil, nil, err
+	}
+	if err := refuseUnusableEmail(email); err != nil {
+		return nil, nil, err
+	}
 	userID, found, err := h.resolveProviderIdentity(ctx, authProviderValue, providerID, externalID, email)
 	if err != nil {
 		return nil, nil, err
@@ -123,6 +129,36 @@ WHERE id = $1::uuid`,
 
 	return &provisionedUser{id: id, email: existingEmail, username: username, fullName: newFullName,
 		isSuperuser: isSuperuser, tokenVersion: tokenVersion}, membership, nil
+}
+
+// refuseUnusableSubject is the one subject rule of the sign-in callbacks (OIDC, SAML, OAuth): an empty subject, or one
+// that identity.ValidSubject refuses (NUL and other control characters, invalid UTF-8, edge white space, too long), is
+// refused before any database statement, so the answer never depends on which accounts exist. The error names no value.
+func refuseUnusableSubject(authProvider, externalID string) error {
+	return identity.RefuseInvalidProviderID(authProvider, &externalID)
+}
+
+// errInvalidProviderEmail: the identity provider returned an address the shared email text rule refuses. The text names
+// no value.
+var errInvalidProviderEmail = errors.New("sso: the identity provider returned an unusable email address")
+
+// refuseUnusableEmail is the one email text rule of the sign-in callbacks (OIDC, SAML, OAuth): the shared pyjson rule
+// for an address (lone surrogate, invalid UTF-8, NUL, control characters, U+FFFD after the edge trim), applied before
+// any database statement, so the answer never depends on which accounts exist.
+func refuseUnusableEmail(email string) error {
+	if pyjson.BadTextForm(pyjson.ClassEmail, email) != pyjson.TextFormNone {
+		return errInvalidProviderEmail
+	}
+	return nil
+}
+
+// invalidProviderEmailDetail is the 400 body of a sign-in whose identity provider returned an unusable email
+// address; it names no value.
+func invalidProviderEmailDetail() *pyjson.Object {
+	detail := pyjson.NewObject()
+	detail.Set("message", "The identity provider returned an unusable email address")
+	detail.Set("reason", "invalid_provider_email")
+	return detail
 }
 
 // errIdentityConflict: the email belongs to an account with another or no SSO

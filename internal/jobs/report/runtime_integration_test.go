@@ -15,6 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -70,7 +71,6 @@ func TestReportRuntimeExecutesBothKindsAgainstRealStores(t *testing.T) {
 
 	pool := startReportPostgres(t, ctx)
 	conn := startReportClickHouse(t, ctx)
-	createReportTables(t, ctx, pool)
 	seedGoldenReport(t, ctx, pool)
 	seedGoldenMetrics(t, ctx, conn)
 
@@ -122,10 +122,7 @@ func TestReportRuntimeExecutesBothKindsAgainstRealStores(t *testing.T) {
 
 func startReportPostgres(t *testing.T, ctx context.Context) *pgxpool.Pool {
 	t.Helper()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	t.Cleanup(func() {
 		if err := instance.Close(context.Background()); err != nil {
 			t.Errorf("close PostgreSQL: %v", err)

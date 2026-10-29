@@ -11,18 +11,18 @@ var sqlLineComment = regexp.MustCompile(`--[^\n]*`)
 
 func code(sql string) string { return sqlLineComment.ReplaceAllString(sql, "") }
 
-func migration0032(t *testing.T) string {
+func migration0033(t *testing.T) string {
 	t.Helper()
 	migrations, err := Migrations()
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, m := range migrations {
-		if m.Version == 32 {
+		if m.Version == 33 {
 			return code(m.SQL)
 		}
 	}
-	t.Fatal("migration 0032 is missing")
+	t.Fatal("migration 0033 is missing")
 	return ""
 }
 
@@ -42,7 +42,7 @@ func TestTheTimelineProbeIsTheOnlyDefinerFunctionAndNarrow(t *testing.T) {
 	if definers != 1 {
 		t.Fatalf("the lineage holds %d SECURITY DEFINER clauses, want exactly the one of restore_fence_timeline", definers)
 	}
-	sql := migration0032(t)
+	sql := migration0033(t)
 	create := regexp.MustCompile(`(?is)CREATE FUNCTION restore_fence_timeline\(\)\s+RETURNS bigint\b(.*?)AS \$\$(.*?)\$\$;`).FindStringSubmatch(sql)
 	if create == nil {
 		t.Fatal("restore_fence_timeline() with no arguments returning bigint is not created")
@@ -67,7 +67,7 @@ func TestTheTimelineProbeIsTheOnlyDefinerFunctionAndNarrow(t *testing.T) {
 		t.Error("the probe must return NULL while the server is in recovery, before it reads the WAL position")
 	}
 	if strings.Count(strings.ToUpper(sql), "CREATE FUNCTION") != 1 {
-		t.Error("migration 0032 creates another function")
+		t.Error("migration 0033 creates another function")
 	}
 	if !regexp.MustCompile(`(?i)REVOKE ALL ON FUNCTION restore_fence_timeline\(\) FROM PUBLIC;`).MatchString(sql) {
 		t.Error("EXECUTE is not revoked from PUBLIC")

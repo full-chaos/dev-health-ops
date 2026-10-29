@@ -115,7 +115,7 @@ func RuntimePosture() []TablePrivilege {
 		// Per-aggregate revision counter (0013): bumped, never deleted.
 		{Table: "aggregate_revisions", Select: true, Insert: true, Update: true},
 
-		// Restore fence (0032): the runtime only reads which timelines are fenced.
+		// Restore fence (0033): the runtime only reads which timelines are fenced.
 		{Table: "restore_fence_state", Select: true},
 	}
 }
@@ -200,7 +200,7 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 		// and therefore cannot own, any object here -- which is what
 		// "the runtime role owns no DDL" means in practice.
 		fmt.Sprintf(`GRANT USAGE ON SCHEMA %s TO %s`, schema, role),
-		// The timeline probe (0032) is the one function the runtime may call:
+		// The timeline probe (0033) is the one function the runtime may call:
 		// revoked from PUBLIC by the migration, granted to this role only.
 		fmt.Sprintf(`REVOKE ALL ON FUNCTION %s.restore_fence_timeline() FROM %s`, schema, role),
 		fmt.Sprintf(`GRANT EXECUTE ON FUNCTION %s.restore_fence_timeline() TO %s`, schema, role),

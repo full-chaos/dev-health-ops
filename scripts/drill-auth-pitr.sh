@@ -243,6 +243,15 @@ if [[ "$fence_mode" -eq 1 ]]; then
   done
   [[ "$(psql_in pitr 'show default_transaction_read_only')" == "off" ]] || { echo "drill-auth-pitr.sh: the read-only default was not reset" >&2; result=1; }
   drill "$port_pitr" post DRILL_EXPECT=T DRILL_FINAL=F DRILL_FENCE=1 || result=1
+  # the apply must have re-applied at least one revocation (a credential and a principal created before T and removed
+  # after it), and the rows the PITR copy lacks must be exactly the ones apply reported as absent (it cannot
+  # authenticate: absence is correct, ACP-PLAN-GO-11271 item 6)
+  apply_json="$(sed -n 's/^restore-fence apply //p' "$evidence/fence-apply.txt")"
+  reapplied="$(jq -r '.revocations_reapplied' <<<"$apply_json" 2>/dev/null || echo n/a)"
+  apply_absent="$(jq -r '[.sections[] | select(.name == "auth.credential_registry" or .name == "auth.principals") | .absent] | add // 0' <<<"$apply_json" 2>/dev/null || echo n/a)"
+  post_absent="$(jq -r '.absent_after_restore' "$evidence/post-T.json" 2>/dev/null || echo n/a)"
+  { [[ "$reapplied" =~ ^[0-9]+$ ]] && [[ "$reapplied" -ge 1 ]]; } || { echo "drill-auth-pitr.sh: apply re-applied $reapplied revocation(s), want at least 1" >&2; result=1; }
+  [[ "$apply_absent" == "$post_absent" ]] || { echo "drill-auth-pitr.sh: absent rows: apply reported $apply_absent, the driver counted $post_absent" >&2; result=1; }
   dc --profile pitr stop pitr
 else
 log "S4 PITR to $t_target"

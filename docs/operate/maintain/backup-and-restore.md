@@ -183,6 +183,13 @@ content, every aggregate continuing at `max(restored revision, floor) + 1` and e
 for the live timeline. Run it with `DRILL_FENCE=1 DRILL_DIR=<new dir> scripts/drill-auth-pitr.sh`; the result line
 is `DRILL RESULT: PASS (b revokes-after-T-back=0, c reissued-different=0)`.
 
+How `b` is counted: in the unfenced drill it is every credential revoked (or principal disabled) after T that is not revoked on
+the PITR copy, absent rows included (a credential created and revoked after T does not exist on the copy). In the fenced drill
+only rows that are present on the copy and still active count; the absent ones are reported separately
+(`absent_after_restore` in `post-T.json`) and must equal what `apply` reports as absent: an absent row cannot authenticate.
+The drill also revokes a credential and disables a principal that were created before T, so the `apply` must re-apply at
+least one revocation (`revocations_reapplied`), which proves the re-apply path and not only the rows the copy lacks.
+
 Result of the fenced drill (CHAOS-11271): TO BE FILLED after the drill run on merged main (the date, the DRILL_DIR
 evidence path, the post-T.json counts keys_reissued_with_different_content and revokes_after_target_that_came_back,
 and fence_rows_for_live_timeline).

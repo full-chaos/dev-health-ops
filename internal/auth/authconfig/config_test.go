@@ -340,6 +340,7 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvAccessTokenAudience:    "other-audience",
 		EnvLegacyJWTAudience:      "other-legacy-audience",
 		EnvSocialLinkRoutes:       "true",
+		EnvMembershipRoutes:       "true",
 		EnvTrustedProxies:         "10.0.0.5,192.168.0.0/16",
 		"SOCIAL_GITHUB_CLIENT_ID": "gh-client",
 		"SOCIAL_GITLAB_CLIENT_ID": "gl-client",
@@ -371,6 +372,7 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvAccessTokenAudience:    func(c Config) string { return c.Session.AccessAudience },
 		EnvLegacyJWTAudience:      func(c Config) string { return c.Session.LegacyAudience },
 		EnvSocialLinkRoutes:       func(c Config) string { return strconv.FormatBool(c.Session.SocialLinkRoutes) },
+		EnvMembershipRoutes:       func(c Config) string { return strconv.FormatBool(c.Provisioning.Routes) },
 		EnvTrustedProxies:         func(c Config) string { return itoa(int64(c.TrustedProxies.Len())) },
 		"SOCIAL_GITHUB_CLIENT_ID": func(c Config) string { return c.Social["github"].ID },
 		"SOCIAL_GITLAB_CLIENT_ID": func(c Config) string { return c.Social["gitlab"].ID },
@@ -401,6 +403,11 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 			if option.Env == EnvSigningKeySetFile {
 				delete(env, EnvSigningKeyFile)
 				delete(env, EnvSigningKeyID)
+			}
+			if option.Env == EnvMembershipRoutes {
+				env[EnvAccessTokenSecret], env[EnvSessionSuccessorKey] = testAccessSecret, testSuccessorKey
+				env[EnvValkeyURI] = testValkeyURI
+				env[EnvInviteTokenSecret], env[EnvInviteTokenSecretPrevious] = "invite-signing-key", "invite-previous-key"
 			}
 			if option.Env == EnvSocialLinkRoutes {
 				env[EnvAccessTokenSecret], env[EnvSessionSuccessorKey] = testAccessSecret, testSuccessorKey

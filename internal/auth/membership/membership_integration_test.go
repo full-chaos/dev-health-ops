@@ -661,3 +661,24 @@ func TestLookupRefusalsAreDeniedToARefusedActor(t *testing.T) {
 		t.Fatalf("rows = %+v, want none", got)
 	}
 }
+
+// Authorize's superuser refusal is returned as it is, never as a store
+// failure, and nothing is written.
+func TestAuthorizeSuperuserRefusalIsNamed(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	org, owner, user := e.seedOrg(t, ctx), e.seedUser(t, ctx), e.seedUser(t, ctx)
+	e.add(t, ctx, org, owner, "owner")
+	superuserOnly := func(context.Context, audit.TxOps, Locked) error { return ErrSuperuserRequired }
+	_, err := e.store.Add(ctx, Change{OrgID: org, PrincipalID: user, Role: "member", Authorize: superuserOnly})
+	if !errors.Is(err, ErrSuperuserRequired) || errors.Is(err, ErrStore) {
+		t.Fatalf("Add = %v, want ErrSuperuserRequired and no store failure", err)
+	}
+	err = e.store.TransferOwnership(ctx, Transfer{OrgID: org, From: owner, To: user, Authorize: superuserOnly})
+	if !errors.Is(err, ErrSuperuserRequired) || errors.Is(err, ErrStore) {
+		t.Fatalf("TransferOwnership = %v, want ErrSuperuserRequired", err)
+	}
+	if got := e.rows(t, ctx, org, user); got != (rows{}) {
+		t.Fatalf("a refused add wrote %+v", got)
+	}
+}

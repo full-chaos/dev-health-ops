@@ -95,8 +95,10 @@ internal/auth/contracts	contracts.go	internal/auth/identity/social
 internal/auth/contracts	contracts.go	internal/auth/keyrotation
 internal/auth/contracts	contracts.go	internal/auth/linkmail
 internal/auth/contracts	contracts.go	internal/auth/membership
+internal/auth/contracts	contracts.go	internal/auth/orgdeprovision
 internal/auth/contracts	contracts.go	internal/auth/passwordpolicy
 internal/auth/contracts	contracts.go	internal/auth/policycatalog
+internal/auth/contracts	contracts.go	internal/auth/servicecred
 internal/auth/contracts	contracts.go	internal/auth/session
 internal/auth/contracts	contracts.go	internal/auth/usersbackfill
 internal/auth/contracts	contracts.go	internal/auth/workloadexchange
@@ -452,6 +454,7 @@ internal/platform/secrets	source.go	internal/auth/authapi
 internal/platform/secrets	source.go	internal/auth/authconfig
 internal/platform/secrets	source.go	internal/auth/authruntime
 internal/platform/secrets	source.go	internal/auth/membership
+internal/platform/secrets	source.go	internal/auth/orgdeprovision
 internal/platform/secrets	source.go	internal/auth/usersbackfill
 internal/platform/secrets	source.go	internal/backfillrun
 internal/platform/secrets	source.go	internal/billingcli

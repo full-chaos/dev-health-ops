@@ -233,6 +233,9 @@ type Config struct {
 	// auth.organizations; the legacy login projection writes nothing.
 	OrgsOwned bool
 
+	// Provisioning mounts the internal membership and invite routes.
+	Provisioning Provisioning
+
 	// SSO holds the federated sign-in settings; a protocol without all of its
 	// values mounts no route.
 	SSO SSO
@@ -322,6 +325,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Bool("api_routes_enabled", c.Session.Enabled),
 		slog.Bool("login_route_enabled", c.Session.LoginEnabled),
 		slog.Bool("social_link_routes_enabled", c.Session.SocialLinkRoutes),
+		slog.Bool("membership_routes_enabled", c.Provisioning.Routes),
 		slog.Int("trusted_proxy_count", c.TrustedProxies.Len()),
 		slog.String("jwt_issuer", c.Session.AccessIssuer),
 		slog.String("jwt_audience", c.Session.AccessAudience),
@@ -499,6 +503,9 @@ func Load(spec Spec) (Config, error) {
 		return Config{}, err
 	}
 	if cfg.OrgsOwned, err = orgsOwned(lookup); err != nil {
+		return Config{}, err
+	}
+	if cfg.Provisioning, err = provisioning(lookup, cfg.Session.Enabled); err != nil {
 		return Config{}, err
 	}
 	if cfg.SSO, err = ssoSettings(lookup); err != nil {

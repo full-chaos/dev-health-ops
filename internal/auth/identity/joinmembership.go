@@ -22,6 +22,10 @@ var ErrMembershipDiverged = errors.New("identity: the account has an auth member
 // COMMITTED. Nothing is read under the user lock and nothing is written.
 var ErrJoinNotReadCommitted = errors.New("identity: a join must run in a READ COMMITTED transaction")
 
+// ErrOrganizationSuspended reports a join into a suspended (or deprovisioned)
+// organization. Nothing is written.
+var ErrOrganizationSuspended = errors.New("identity: the organization is suspended")
+
 // errJoinAlreadyMember reports a join of an account that already is a member
 // of the organization in public.memberships. Nothing is written.
 var errJoinAlreadyMember = errors.New("identity: already a member of the organization")
@@ -44,9 +48,12 @@ var joinPublicMembershipColumns = []string{"id", "user_id", "org_id", "role", "j
 // together or neither does. It is the only writer of a new auth membership
 // apart from the organizations backfill, which copies public rows.
 //
-// It locks the auth principal row and then the public.users row (the lock
-// go-api's own JIT join takes), the order every membership writer uses, so
-// the joins and membership changes of one account run one after the other. A public row in the
+// It locks the auth principal row, then the public.users row (the lock
+// go-api's own JIT join takes), then the auth organization row FOR SHARE: the
+// order every membership writer uses, so the joins and membership changes of
+// one account run one after the other. A missing auth organization is
+// ErrOrganizationNotFound and a suspended one ErrOrganizationSuspended; neither
+// writes. A public row in the
 // organization is errJoinAlreadyMember and an auth row without one is
 // ErrMembershipDiverged; neither writes. No public.users row, or no
 // public.organizations row, is ErrLegacyProjection. Every go-api membership
@@ -86,6 +93,21 @@ func (s *Store) insertJoinMembership(ctx context.Context, tx audit.TxOps, m memb
 	}
 	if err != nil {
 		return err
+	}
+	// Then the organization row FOR SHARE (step 3): every membership and invite
+	// writer reaches it before any membership row, so an organization
+	// deprovision (FOR UPDATE) and a join run one after the other, and a join
+	// never lands in a suspended organization.
+	var orgActive bool
+	err = tx.QueryRow(ctx, `SELECT disabled_at IS NULL FROM `+s.q+`.organizations WHERE id = $1 FOR SHARE`, m.OrgID).Scan(&orgActive)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrOrganizationNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if !orgActive {
+		return ErrOrganizationSuspended
 	}
 	var public, auth bool
 	if err := tx.QueryRow(ctx, `SELECT

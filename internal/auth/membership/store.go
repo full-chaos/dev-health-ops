@@ -115,7 +115,7 @@ func (s *Store) record(ctx context.Context, v verb, err error) {
 // wrapped in ErrStore.
 var refusals = []error{ErrNotOwned, ErrRoleInvalid, ErrNotMember, ErrAlreadyMember, ErrSuspended, ErrLastOwner,
 	ErrNotOwner, ErrTargetNotMember, ErrRoleMissing, ErrRevisionConflict, ErrOrgNotFound, ErrOrgSuspended,
-	ErrPrincipalNotFound, ErrInviterNotFound, ErrDenied, errStateMoved}
+	ErrPrincipalNotFound, ErrInviterNotFound, ErrDenied, ErrSuperuserRequired, errStateMoved}
 
 func (s *Store) run(ctx context.Context, v verb, m audit.Mutation) (err error) {
 	defer func() {
@@ -356,8 +356,11 @@ func authorize(ctx context.Context, tx audit.TxOps, auth Authorize, l Locked) er
 		return ErrDenied
 	}
 	if err := auth(ctx, tx, l); err != nil {
-		if errors.Is(err, ErrDenied) {
+		switch {
+		case errors.Is(err, ErrDenied):
 			return ErrDenied
+		case errors.Is(err, ErrSuperuserRequired):
+			return ErrSuperuserRequired
 		}
 		return err
 	}

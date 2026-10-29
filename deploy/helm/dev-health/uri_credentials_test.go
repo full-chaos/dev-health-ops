@@ -3,6 +3,7 @@ package devhealth_test
 import (
 	"encoding/json"
 	"net/url"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -223,40 +224,79 @@ func TestChartCredentialURIsAreByteIdenticalForUnreservedCredentials(t *testing.
 
 func keepDummyPasswords2() []string { return keepDummyPasswords }
 
-func TestURIsEncodeAReservedDatabaseName(t *testing.T) {
+// A database name is NEVER encoded in a URI: the Python readers (SQLAlchemy with asyncpg, urllib) do not decode the URI path. Instead the
+// chart refuses to render a database name that is not identifier-safe ([A-Za-z0-9_]+), by name, so no reader sees an encoded path and no
+// URI carries a raw reserved character.
+func uriRefusedRender(t *testing.T, label string, args ...string) (int, string) {
+	t.Helper()
+	if _, err := exec.LookPath("helm"); err != nil {
+		t.Skip("helm is not installed")
+	}
+	out, err := exec.Command("helm", append([]string{"template", "a", "."}, args...)...).CombinedOutput()
+	rc := 0
+	if err != nil {
+		ee, ok := err.(*exec.ExitError)
+		if !ok {
+			t.Fatalf("%s: helm did not run: %v", label, err)
+		}
+		rc = ee.ExitCode()
+	}
+	return rc, string(out)
+}
+
+func TestAReservedDatabaseNameFailsTheRender(t *testing.T) {
+	for _, db := range []string{"my db", "my#db", "my%db", "my/db", "my?db", "my@db", "my:db", "db-name", "db.name"} {
+		cases := []struct {
+			label, key string
+			args       []string
+		}{
+			{"external pgbouncer database", "goWorkers.pgbouncer.postgres.database", uriCatArgs(keepDummyPasswords2(),
+				[]string{"--set", "postgresql.enabled=false", "--set", "goWorkers.pgbouncer.postgres.host=pg.example.test"},
+				jsonSet("goWorkers.pgbouncer.postgres.database", db))},
+			{"DATABASE_URI database", "postgresql.credentials.database", uriCatArgs(keepDummyPasswords2(), keepExternalSameName,
+				[]string{"--set", "postgresql.enabled=true"}, jsonSet("postgresql.credentials.database", db))},
+			{"ClickHouse database", "clickhouse.credentials.database", uriCatArgs(keepDummyPasswords2(), jsonSet("clickhouse.credentials.database", db))},
+		}
+		for _, c := range cases {
+			rc, out := uriRefusedRender(t, c.label, c.args...)
+			if rc == 0 {
+				t.Errorf("%s %q: the render succeeded; a database name that is not identifier-safe must fail it", c.label, db)
+				continue
+			}
+			if !strings.Contains(out, "identifier-safe") || !strings.Contains(out, c.key) {
+				t.Errorf("%s %q: the refusal does not name %s and the identifier-safe rule", c.label, db, c.key)
+			}
+		}
+	}
+}
+
+func TestAnIdentifierSafeDatabaseNameRendersRawInEveryURI(t *testing.T) {
 	args := uriCatArgs(
 		keepDummyPasswords2(),
 		[]string{"--set", "postgresql.enabled=true"},
-		jsonSet("postgresql.credentials.database", "my db#1"),
-		jsonSet("clickhouse.credentials.database", "ch db#1"),
+		jsonSet("postgresql.credentials.database", "my_db_1"),
+		jsonSet("clickhouse.credentials.database", "Ch_DB_2"),
 	)
-	r := keepMustRender(t, "reserved database names", args...)
+	r := keepMustRender(t, "identifier-safe database names", args...)
 	pgb := uriStringData(t, r, uriPgbouncerSecret)
 	shared := uriStringData(t, r, uriSharedSecret)
 	migrate := uriStringData(t, r, uriMigrateSecret)
 	want := []struct {
-		sd           map[string]any
-		secret, key  string
-		path         string
-		wantDatabase string
+		sd          map[string]any
+		secret, key string
+		suffix      string
 	}{
-		{pgb, uriPgbouncerSecret, "POSTGRES_URI", "/my%20db%231", "my db#1"},
-		{pgb, uriPgbouncerSecret, "WORKER_DATABASE_URI", "/my%20db%231", "my db#1"},
-		{pgb, uriPgbouncerSecret, "COORDINATOR_DATABASE_URI", "/my%20db%231", "my db#1"},
-		{shared, uriSharedSecret, "DATABASE_URI", "/my%20db%231", "my db#1"},
-		{shared, uriSharedSecret, "CLICKHOUSE_URI", "/ch%20db%231", "ch db#1"},
-		{shared, uriSharedSecret, "CLICKHOUSE_NATIVE_URI", "/ch%20db%231", "ch db#1"},
-		{migrate, uriMigrateSecret, "CLICKHOUSE_URI", "/ch%20db%231", "ch db#1"},
+		{pgb, uriPgbouncerSecret, "POSTGRES_URI", "/my_db_1"},
+		{pgb, uriPgbouncerSecret, "WORKER_DATABASE_URI", "/my_db_1"},
+		{pgb, uriPgbouncerSecret, "COORDINATOR_DATABASE_URI", "/my_db_1"},
+		{shared, uriSharedSecret, "DATABASE_URI", "/my_db_1"},
+		{shared, uriSharedSecret, "CLICKHOUSE_URI", "/Ch_DB_2"},
+		{shared, uriSharedSecret, "CLICKHOUSE_NATIVE_URI", "/Ch_DB_2"},
+		{migrate, uriMigrateSecret, "CLICKHOUSE_URI", "/Ch_DB_2"},
 	}
 	for _, c := range want {
-		got := uriKey(t, c.sd, c.secret, c.key)
-		u, err := url.Parse(strings.Replace(got, "postgresql+asyncpg", "postgresql", 1))
-		if err != nil {
-			t.Errorf("%s/%s does not parse with net/url", c.secret, c.key)
-			continue
-		}
-		if u.EscapedPath() != c.path || strings.TrimPrefix(u.Path, "/") != c.wantDatabase || u.Fragment != "" {
-			t.Errorf("%s/%s: the database name is not percent-encoded in the path", c.secret, c.key)
+		if got := uriKey(t, c.sd, c.secret, c.key); !strings.HasSuffix(got, c.suffix) {
+			t.Errorf("%s/%s: the database name is not written raw at the end of the URI", c.secret, c.key)
 		}
 	}
 }

@@ -40,6 +40,13 @@ func orgsHas(rep OrgsReconciliation, line string) bool {
 
 func orgID(n int) uuid.UUID { return uuid.MustParse(fmt.Sprintf("00000000-0000-0000-0000-%012d", n)) }
 
+// The inactive-in-public class is the one users-reconcile already gates: one name, one constant.
+func TestOrgsReconcileSharesTheUsersReconcileClassName(t *testing.T) {
+	if ClassMemberInactiveInPublic != DiffMembershipInactiveInPublic {
+		t.Fatalf("orgs-reconcile names the class %q, users-reconcile %q", ClassMemberInactiveInPublic, DiffMembershipInactiveInPublic)
+	}
+}
+
 // withClass returns diffs with one class set to n.
 func withClass(class string, n int) OrgDiffs {
 	var d OrgDiffs
@@ -96,8 +103,15 @@ func TestReconcileOrgsGatesTheRightClassesInEachMode(t *testing.T) {
 		if got := exact.GatedTotal(); (got == 3) != c.inExact || (got != 0 && got != 3) {
 			t.Errorf("exact mode, class %s: gated %d, want gated=%v", c.class, got, c.inExact)
 		}
-		if !orgsHas(def, "diff."+c.class+"=3") || !orgsHas(exact, "diff."+c.class+"=3") {
-			t.Errorf("class %s: the count line is missing:\n%s", c.class, strings.Join(def.Lines(), "\n"))
+		// The users-reconcile shape: a gated class is a diff.<class> line, an ungated one an info.<class> line.
+		key := func(gated bool) string {
+			if gated {
+				return "diff."
+			}
+			return "info."
+		}
+		if !orgsHas(def, key(c.inGate)+c.class+"=3") || !orgsHas(exact, key(c.inExact)+c.class+"=3") {
+			t.Errorf("class %s: the count line is missing or has the wrong prefix:\n%s\n--\n%s", c.class, strings.Join(def.Lines(), "\n"), strings.Join(exact.Lines(), "\n"))
 		}
 	}
 }
@@ -112,8 +126,8 @@ func TestReconcileOrgsCleanSnapshotPassesBothModes(t *testing.T) {
 		if exact {
 			mode = "exact"
 		}
-		for _, want := range []string{"mode=read-only", "gate=" + mode, "orgs_public=4", "orgs_auth=4", "orgs_matched=4",
-			"memberships_public=9", "memberships_auth=9", "gated_diffs=0", "mismatch_orgs_total=0", "mismatch_listed=0"} {
+		for _, want := range []string{"mode=read-only", "gate=" + mode, "seen=4", "matched=4", "info.orgs_auth=4",
+			"info.memberships_public=9", "info.memberships_auth=9", "gated_diffs=0", "mismatch_orgs_total=0", "mismatch_listed=0"} {
 			if !orgsHas(rep, want) {
 				t.Errorf("exact=%v: line %q missing:\n%s", exact, want, strings.Join(rep.Lines(), "\n"))
 			}
@@ -133,11 +147,9 @@ func TestReconcileOrgsLinesGolden(t *testing.T) {
 	want := strings.Join([]string{
 		"mode=read-only",
 		"gate=default",
-		"orgs_public=5",
-		"orgs_auth=6",
-		"orgs_matched=3",
-		"memberships_public=20",
-		"memberships_auth=19",
+		"seen=5",
+		"matched=3",
+		"gated_diffs=8",
 		"diff.org_missing_in_auth=1",
 		"diff.org_extra_in_auth=2",
 		"diff.org_slug_diff=1",
@@ -145,11 +157,13 @@ func TestReconcileOrgsLinesGolden(t *testing.T) {
 		"diff.org_active_diff=1",
 		"diff.membership_public_missing=2",
 		"diff.membership_inactive_in_public=1",
-		"diff.membership_auth_missing=3",
-		"diff.membership_role_diff=4",
-		"diff.membership_duplicate_public_source=1",
+		"info.membership_auth_missing=3",
+		"info.membership_role_diff=4",
+		"info.membership_duplicate_public_source=1",
+		"info.orgs_auth=6",
+		"info.memberships_public=20",
+		"info.memberships_auth=19",
 		"info.membership_non_user_principals=2",
-		"gated_diffs=8",
 		"mismatch_orgs_total=2",
 		"mismatch_listed=2",
 		"mismatch.org=00000000-0000-0000-0000-000000000001 classes=org_slug_diff,membership_role_diff",

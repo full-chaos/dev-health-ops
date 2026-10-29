@@ -147,3 +147,57 @@ func repoRoot(t *testing.T) string {
 		dir = parent
 	}
 }
+
+// A constant that holds part of the table name is folded like a literal: the schema, the dot and the table may each be a
+// constant, declared in this file or another file of the same package, grouped or alone, typed or not, built from other
+// constants, parenthesised or nested.
+
+func TestAConstantSchemaSplitAcrossAConcatenationIsStillARead(t *testing.T) {
+	for name, files := range map[string]map[string]string{
+		"same file":             {"internal/queryapi/server/q.go": "package p\n\nconst schema = \"auth\"\n\nfunc q() string {\n\treturn \"SELECT role FROM \" + schema + \".\" + \"memberships\"\n}\n"},
+		"another file":          {"internal/queryapi/server/a.go": "package p\n\nconst schema = \"auth\"\n", "internal/queryapi/server/b.go": "package p\n\nfunc q() string {\n\treturn \"SELECT role FROM \" + schema + \".memberships\"\n}\n"},
+		"grouped block":         {"internal/apiservice/q.go": "package p\n\nconst (\n\tother = \"x\"\n\tschema = \"auth\"\n\ttable = \"organizations\"\n)\n\nfunc q() string {\n\treturn \"SELECT 1 FROM \" + schema + \".\" + table\n}\n"},
+		"typed constant":        {"internal/apiservice/q.go": "package p\n\nconst schema string = \"auth\"\n\nfunc q() string {\n\treturn \"SELECT 1 FROM \" + schema + \".memberships\"\n}\n"},
+		"constant of constants": {"internal/queryapi/q.go": "package p\n\nconst (\n\ts = \"au\"\n\tschema = s + \"th\"\n\tqualified = schema + \".\" + \"memberships\"\n)\n\nfunc q() string {\n\treturn \"SELECT 1 FROM \" + qualified\n}\n"},
+		"parenthesised":         {"internal/api/q.go": "package p\n\nconst schema = \"auth\"\n\nfunc q() string {\n\treturn \"SELECT 1 FROM \" + (schema + (\".\" + \"memberships\"))\n}\n"},
+		"string conversion":     {"internal/api/q.go": "package p\n\nconst schema = string(\"auth\")\n\nfunc q() string {\n\treturn \"SELECT 1 FROM \" + schema + \".memberships\"\n}\n"},
+		"constant in a func":    {"internal/api/q.go": "package p\n\nfunc q() string {\n\tconst schema = \"auth\"\n\treturn \"SELECT 1 FROM \" + schema + \".\" + \"memberships\"\n}\n"},
+	} {
+		got := check(t, writeTree(t, files))
+		if len(got) == 0 {
+			t.Errorf("%s: want a finding naming auth.memberships or auth.organizations, got none", name)
+			continue
+		}
+		joined := strings.Join(got, "\n")
+		if !strings.Contains(joined, "auth.memberships") && !strings.Contains(joined, "auth.organizations") {
+			t.Errorf("%s: the findings do not name the auth table: %q", name, got)
+		}
+	}
+}
+
+func TestAConstantThatNamesAPublicTableOrADifferentTableIsNotAFinding(t *testing.T) {
+	for name, src := range map[string]string{
+		"public schema":        "package p\n\nconst schema = \"public\"\n\nfunc q() string {\n\treturn \"SELECT 1 FROM \" + schema + \".\" + \"memberships\"\n}\n",
+		"auth, another table":  "package p\n\nconst schema = \"auth\"\n\nfunc q() string {\n\treturn \"SELECT 1 FROM \" + schema + \".sessions\"\n}\n",
+		"local shadows global": "package p\n\nconst schema = \"auth\"\n\nfunc q() string {\n\tconst schema = \"public\"\n\treturn \"SELECT 1 FROM \" + schema + \".memberships\"\n}\n",
+	} {
+		if got := check(t, writeTree(t, map[string]string{"internal/apiservice/q.go": src})); len(got) != 0 {
+			t.Errorf("%s: want no finding, got %q", name, got)
+		}
+	}
+}
+
+// A constant from another package is not loaded (stated limit): a concatenation that puts one in front of a table name is
+// refused by name, never passed silently. A variable or a call between the fragments is not folded (stated limit).
+func TestAQualifiedConstantInFrontOfATableNameIsRefusedAsUnresolved(t *testing.T) {
+	src := "package p\n\nimport \"example.test/cfg\"\n\nfunc q() string {\n\treturn \"SELECT 1 FROM \" + cfg.Schema + \".\" + \"memberships\"\n}\n"
+	got := check(t, writeTree(t, map[string]string{"internal/queryapi/server/q.go": src}))
+	wantOne(t, got, "internal/queryapi/server/q.go:6", "query-api", "another package", "memberships")
+}
+
+func TestAVariableBetweenTheFragmentsIsNotFolded(t *testing.T) {
+	src := "package p\n\nvar schema = \"auth\"\n\nfunc q() string {\n\treturn \"SELECT 1 FROM \" + schema + \".\" + \"memberships\"\n}\n"
+	if got := check(t, writeTree(t, map[string]string{"internal/api/q.go": src})); len(got) != 0 {
+		t.Fatalf("a variable is a stated limit of the gate, want no finding, got %q", got)
+	}
+}

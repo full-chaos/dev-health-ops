@@ -41,6 +41,12 @@ func TestTheMembershipSurfaceCheckRefusesEachPlantedWidening(t *testing.T) {
 		{"the auth session read moved to memberships", func(_ *RolePosture, s *QueryAPISessionRead) {
 			s.Table = "memberships"
 		}, []string{"sessions", "memberships"}},
+		{"the session read in the public schema", func(_ *RolePosture, s *QueryAPISessionRead) {
+			s.Schema = "public"
+		}, []string{"schema", "public"}},
+		{"the session read with no schema", func(_ *RolePosture, s *QueryAPISessionRead) {
+			s.Schema = ""
+		}, []string{"schema"}},
 		{"an extra auth session column", func(_ *RolePosture, s *QueryAPISessionRead) {
 			s.Columns = append(append([]string{}, s.Columns...), "status")
 		}, []string{"session", "status"}},

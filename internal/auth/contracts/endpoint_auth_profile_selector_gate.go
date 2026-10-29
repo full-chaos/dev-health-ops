@@ -19,6 +19,13 @@ type ClassMarker struct {
 	Name string `json:"name"`
 }
 
+// selectorKinds is the closed class_disambiguator kind vocabulary of
+// endpoint-profile.schema.json (a test holds the two equal).
+var selectorKinds = []string{
+	"authorization_scheme", "credential_prefix", "dedicated_header", "jwt_header_alg", "jwt_header_typ",
+	"signature_header", "content_type",
+}
+
 // RegistryClass is the part of a credential-classes.json entry the profile
 // selector gate reads.
 type RegistryClass struct {

@@ -12,13 +12,12 @@ const (
 	// calls with its service credential.
 	EnvMembershipRoutes = "AUTH_MEMBERSHIP_ROUTES"
 	// EnvInviteTokenSecret signs new invite tokens: go-api's link signing key
-	// (LINK_TOKEN_SECRET). Never the session JWT key (AUTH_JWT_SECRET_KEY).
-	// Secret: environment or _FILE only. Required while the membership routes
-	// mount.
+	// (LINK_TOKEN_SECRET, else its JWT_SECRET_KEY chain). Secret: environment
+	// or _FILE only. Required while the membership routes mount.
 	EnvInviteTokenSecret = "AUTH_INVITE_TOKEN_SECRET"
 	// EnvInviteTokenSecretPrevious verifies invite tokens only, never signs:
-	// go-api's LINK_TOKEN_SECRET_PREVIOUS. Never the session JWT key. Secret.
-	// Required while the membership routes mount.
+	// go-api's LINK_TOKEN_SECRET_PREVIOUS. Secret. Required while the
+	// membership routes mount.
 	EnvInviteTokenSecretPrevious = "AUTH_INVITE_TOKEN_SECRET_PREVIOUS"
 )
 
@@ -33,25 +32,31 @@ type Provisioning struct {
 }
 
 // InviteAcceptSecrets are the keys a presented invite token is checked
-// against: the signing key, then the previous key (a repeat left out). The
-// session JWT key is not one: a token go-api signed with its JWT_SECRET_KEY
-// chain is no invite token here. Nil when the routes are off.
+// against, signing key first, as go-api's authmail.Config.AcceptSecrets: the
+// signing key, the previous key, then the JWT key (go-api's TokenSecret
+// chain, which signed links before a link key was set). Blanks and repeats are
+// left out. Nil when the routes are off.
 func (c Config) InviteAcceptSecrets() []string {
 	if !c.Provisioning.Routes {
 		return nil
 	}
 	out := []string{c.Provisioning.InviteSecret.Reveal()}
-	if previous := c.Provisioning.InviteSecretPrevious.Reveal(); previous != "" && previous != out[0] {
-		out = append(out, previous)
+	for _, secret := range []string{c.Provisioning.InviteSecretPrevious.Reveal(), c.Session.AccessSecret.Reveal()} {
+		seen := false
+		for _, have := range out {
+			seen = seen || have == secret
+		}
+		if secret != "" && !seen {
+			out = append(out, secret)
+		}
 	}
 	return out
 }
 
 // provisioning reads the routes switch and, when it is on, both invite keys.
-// A missing key, or a key equal to the session JWT key, is named by its
-// variable only, never by a value. The routes mount with the session routes,
-// so they need the session secrets.
-func provisioning(lookup secrets.LookupEnv, session SessionTokens) (Provisioning, error) {
+// A missing key is named by its variable only, never by a value. The routes
+// mount with the session routes, so they need the session secrets.
+func provisioning(lookup secrets.LookupEnv, sessionEnabled bool) (Provisioning, error) {
 	routes, err := strictBool(lookup, EnvMembershipRoutes)
 	if err != nil {
 		return Provisioning{}, err
@@ -67,7 +72,7 @@ func provisioning(lookup secrets.LookupEnv, session SessionTokens) (Provisioning
 	if !routes {
 		return Provisioning{}, nil
 	}
-	if !session.Enabled {
+	if !sessionEnabled {
 		return Provisioning{}, fmt.Errorf("%s needs the session secrets (%s and %s)",
 			EnvMembershipRoutes, EnvAccessTokenSecret, EnvSessionSuccessorKey)
 	}
@@ -77,15 +82,6 @@ func provisioning(lookup secrets.LookupEnv, session SessionTokens) (Provisioning
 	}{{EnvInviteTokenSecret, hasSecret && secret.Reveal() != ""}, {EnvInviteTokenSecretPrevious, hasPrevious && previous.Reveal() != ""}} {
 		if !need.set {
 			return Provisioning{}, fmt.Errorf("%s=true needs %s", EnvMembershipRoutes, need.name)
-		}
-	}
-	for _, key := range []struct {
-		name  string
-		value secrets.Value
-	}{{EnvInviteTokenSecret, secret}, {EnvInviteTokenSecretPrevious, previous}} {
-		if key.value.Reveal() == session.AccessSecret.Reveal() {
-			return Provisioning{}, fmt.Errorf("%s must not equal %s: an invite key is go-api's LINK_TOKEN_SECRET, never the session JWT key",
-				key.name, EnvAccessTokenSecret)
 		}
 	}
 	return Provisioning{Routes: true, InviteSecret: secret, InviteSecretPrevious: previous}, nil

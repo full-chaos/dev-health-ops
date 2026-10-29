@@ -1,8 +1,6 @@
 package authconfig
 
 import (
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -84,17 +82,18 @@ func merge(a, b map[string]string) map[string]string {
 	return out
 }
 
-// The accept keys are the signing key, then the previous key; repeats once.
-// The session JWT key is never one: an invite token signed with it is refused.
-// The signing key is the only one that signs.
+// The accept keys are go-api's AcceptSecrets order: the signing key, the
+// previous key, the JWT key; repeats once. The signing key is the only one
+// that signs.
 func TestInviteAcceptSecretsOrder(t *testing.T) {
 	for _, c := range []struct {
 		name     string
 		previous string
 		want     []string
 	}{
-		{"two distinct keys", testInvitePrevious, []string{testInviteSecret, testInvitePrevious}},
-		{"previous equal to the signing key", testInviteSecret, []string{testInviteSecret}},
+		{"three distinct keys", testInvitePrevious, []string{testInviteSecret, testInvitePrevious, testAccessSecret}},
+		{"previous equal to the signing key", testInviteSecret, []string{testInviteSecret, testAccessSecret}},
+		{"previous equal to the JWT key", testAccessSecret, []string{testInviteSecret, testAccessSecret}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			cfg, err := Load(Spec{LookupEnv: lookupFrom(provisioningEnv(map[string]string{EnvMembershipRoutes: "true",
@@ -103,7 +102,7 @@ func TestInviteAcceptSecretsOrder(t *testing.T) {
 				t.Fatalf("Load: %v", err)
 			}
 			if got := cfg.InviteAcceptSecrets(); !slices.Equal(got, c.want) {
-				t.Fatalf("accept keys differ from the invite keys in order (%d keys, want %d)", len(got), len(c.want))
+				t.Fatalf("accept keys differ from go-api's order (%d keys, want %d)", len(got), len(c.want))
 			}
 			if cfg.Provisioning.InviteSecret.Reveal() != testInviteSecret {
 				t.Fatal("the signing key is not AUTH_INVITE_TOKEN_SECRET")
@@ -116,50 +115,6 @@ func TestInviteAcceptSecretsOrder(t *testing.T) {
 	}
 	if got := off.InviteAcceptSecrets(); got != nil {
 		t.Fatalf("routes off: %d accept keys, want none", len(got))
-	}
-}
-
-// With the routes on, neither invite key may be the session JWT key
-// (AUTH_JWT_SECRET_KEY), compared as the loaders read them (a _FILE value
-// loses its final newline). The refusal names the variables, never a value.
-// With the routes off, the keys are not read for this rule.
-func TestInviteKeysMayNotBeTheJWTKey(t *testing.T) {
-	file := filepath.Join(t.TempDir(), "invite-key")
-	if err := os.WriteFile(file, []byte(testAccessSecret+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	on := map[string]string{EnvMembershipRoutes: "true"}
-	for _, c := range []struct {
-		name    string
-		env     map[string]string
-		wantErr string
-	}{
-		{"the signing key is the JWT key", merge(on, map[string]string{EnvInviteTokenSecret: testAccessSecret,
-			EnvInviteTokenSecretPrevious: testInvitePrevious}), EnvInviteTokenSecret + " must not equal " + EnvAccessTokenSecret},
-		{"the previous key is the JWT key", merge(on, map[string]string{EnvInviteTokenSecret: testInviteSecret,
-			EnvInviteTokenSecretPrevious: testAccessSecret}), EnvInviteTokenSecretPrevious + " must not equal " + EnvAccessTokenSecret},
-		{"the signing key file holds the JWT key", merge(on, map[string]string{EnvInviteTokenSecret + "_FILE": file,
-			EnvInviteTokenSecretPrevious: testInvitePrevious}), EnvInviteTokenSecret + " must not equal " + EnvAccessTokenSecret},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			_, err := Load(Spec{LookupEnv: lookupFrom(provisioningEnv(c.env))})
-			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
-				t.Fatalf("Load = %v, want an error containing %q", err, c.wantErr)
-			}
-			for _, secret := range []string{testInviteSecret, testInvitePrevious, testAccessSecret} {
-				if strings.Contains(err.Error(), secret) {
-					t.Fatal("the error names a key value")
-				}
-			}
-		})
-	}
-	off, err := Load(Spec{LookupEnv: lookupFrom(provisioningEnv(map[string]string{EnvInviteTokenSecret: testAccessSecret,
-		EnvInviteTokenSecretPrevious: testAccessSecret}))})
-	if err != nil {
-		t.Fatalf("routes off: Load = %v, want no refusal", err)
-	}
-	if off.Provisioning.Routes {
-		t.Fatal("routes off: the routes are on")
 	}
 }
 

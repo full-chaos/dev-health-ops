@@ -510,7 +510,7 @@ func Load(spec Spec) (Config, error) {
 	if cfg.OrgsOwned, err = orgsOwned(lookup); err != nil {
 		return Config{}, err
 	}
-	if cfg.Provisioning, err = provisioning(lookup, cfg.Session); err != nil {
+	if cfg.Provisioning, err = provisioning(lookup, cfg.Session.Enabled); err != nil {
 		return Config{}, err
 	}
 	if cfg.SSO, err = ssoSettings(lookup); err != nil {

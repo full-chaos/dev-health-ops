@@ -145,25 +145,6 @@ func TestInviteAcceptOfAnUnusableTokenProjectsNothing(t *testing.T) {
 	}
 }
 
-// An invite token signed with the session JWT key (AUTH_JWT_SECRET_KEY) is
-// not an invite token: refused, and nothing is written.
-func TestInviteAcceptRefusesATokenSignedWithTheSessionKey(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-	e, header := newProvisioningEnv(t, ctx)
-	owner, org := e.seed(t, ctx)
-	address := acctMail()
-	token := e.goAPIInvite(t, ctx, org, owner, address, testAccessSecret, "pending", time.Now().Add(24*time.Hour))
-	invitee := e.account(t, ctx, address, false, true)
-	got := e.doWith(t, "/internal/v1/invites/accept", jsonBody(t, map[string]any{"token": token, "principal_id": invitee.String()}), header)
-	if got.status != http.StatusBadRequest || object(t, got)["reason_code"] != "invite_invalid" {
-		t.Fatalf("accept: %d %s, want 400 invite_invalid", got.status, got.body)
-	}
-	if pub, auth := e.memberRows(t, ctx, org, invitee); pub != "" || auth != "" {
-		t.Fatalf("a refused accept wrote rows: public %q auth %q", pub, auth)
-	}
-}
-
 // The admin's demotion holds the admin's rows (the membership verb's locks)
 // while an invite create by that admin starts: the create waits for it, then
 // is refused as admin_required and writes no invite.

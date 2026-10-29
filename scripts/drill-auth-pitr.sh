@@ -80,7 +80,8 @@ drill() {
     export DRILL_PHASE="$phase" DRILL_EVIDENCE_DIR="$evidence"
     export DRILL_DSN="postgres://postgres:${POSTGRES_PASSWORD}@127.0.0.1:${port}/postgres?sslmode=disable"
     # shellcheck disable=SC2163 # each argument is a NAME=value assignment
-    export "$@"
+    # a bare `export` (no arguments) would print every exported variable of the invoking shell into the drill log
+    if (($#)); then export "$@"; fi
     "$capped" -t 600 -- "$DRILL_DIR/drill.test" -test.run '^TestDrillAuthPITR$' -test.count=1 -test.v \
       >>"$evidence/driver-$phase.log" 2>&1
   )

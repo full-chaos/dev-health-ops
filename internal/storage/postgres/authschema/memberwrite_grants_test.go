@@ -11,7 +11,6 @@ func TestMembershipWriteGrantsAreTheReviewedColumns(t *testing.T) {
 		Delete: true,
 		Select: []string{"id"},
 		Update: []string{"role", "updated_at"},
-		Insert: []string{"invited_by_id"},
 	}
 	if got := MembershipWriteGrants(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("MembershipWriteGrants = %+v, want %+v", got, want)

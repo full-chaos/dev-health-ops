@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -215,11 +216,19 @@ func (s *Store) readPairs(ctx context.Context, q querier, orgID uuid.UUID, princ
 		forUpdate, forShare = " FOR UPDATE", " FOR SHARE"
 	}
 	ids := sortedUnique(principals)
+	// The id array goes as one array literal with an explicit ::uuid[] cast: a
+	// statement inside audit.Commit has no parameter types to encode a
+	// []uuid.UUID with.
+	parts := make([]string, len(ids))
+	for i, id := range ids {
+		parts[i] = id.String()
+	}
+	idText := "{" + strings.Join(parts, ",") + "}"
 	for _, sql := range []string{
-		`SELECT id FROM ` + s.q + `.principals WHERE id = ANY($1) ORDER BY id` + forUpdate,
-		`SELECT id FROM public.users WHERE id = ANY($1) ORDER BY id` + forUpdate,
+		`SELECT id FROM ` + s.q + `.principals WHERE id = ANY($1::uuid[]) ORDER BY id` + forUpdate,
+		`SELECT id FROM public.users WHERE id = ANY($1::uuid[]) ORDER BY id` + forUpdate,
 	} {
-		n, err := countRows(ctx, q, sql, ids)
+		n, err := countRows(ctx, q, sql, idText)
 		if err != nil {
 			return nil, err
 		}
@@ -243,7 +252,7 @@ func (s *Store) readPairs(ctx context.Context, q querier, orgID uuid.UUID, princ
 		l.pairs[id] = &pairRows{principal: id}
 	}
 	rows, err := q.query(ctx, `SELECT id, user_id, role FROM public.memberships
-WHERE org_id = $1 AND (role = 'owner' OR user_id = ANY($2)) ORDER BY id`+forUpdate, orgID, ids)
+WHERE org_id = $1 AND (role = 'owner' OR user_id = ANY($2::uuid[])) ORDER BY id`+forUpdate, orgID, idText)
 	if err != nil {
 		return nil, err
 	}
@@ -266,7 +275,7 @@ WHERE org_id = $1 AND (role = 'owner' OR user_id = ANY($2)) ORDER BY id`+forUpda
 		return nil, err
 	}
 	rows, err = q.query(ctx, `SELECT id, principal_id, status, role FROM `+s.q+`.memberships
-WHERE organization_id = $1 AND principal_id = ANY($2) ORDER BY id`+forUpdate, orgID, ids)
+WHERE organization_id = $1 AND principal_id = ANY($2::uuid[]) ORDER BY id`+forUpdate, orgID, idText)
 	if err != nil {
 		return nil, err
 	}
@@ -285,7 +294,7 @@ WHERE organization_id = $1 AND principal_id = ANY($2) ORDER BY id`+forUpdate, or
 	return l, rows.Err()
 }
 
-func countRows(ctx context.Context, q querier, sql string, ids []uuid.UUID) (int, error) {
+func countRows(ctx context.Context, q querier, sql string, ids string) (int, error) {
 	rows, err := q.query(ctx, sql, ids)
 	if err != nil {
 		return 0, err
@@ -346,8 +355,10 @@ func (s *Store) write(ctx context.Context, tx audit.TxOps, orgID uuid.UUID, p *p
 	if next.status == StatusActive {
 		switch {
 		case p.publicID == nil:
-			if _, err := tx.Exec(ctx, `INSERT INTO public.memberships (id, user_id, org_id, role, invited_by_id, joined_at, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, clock_timestamp(), clock_timestamp(), clock_timestamp())`, id, p.principal, orgID, next.role, invitedBy); err != nil {
+			// The users-owned INSERT grant (authschema.RegisterOrganizationGrants) has
+			// no invited_by_id: the inviter is kept on the auth row only.
+			if _, err := tx.Exec(ctx, `INSERT INTO public.memberships (id, user_id, org_id, role, joined_at, created_at, updated_at)
+VALUES ($1, $2, $3, $4, clock_timestamp(), clock_timestamp(), clock_timestamp())`, id, p.principal, orgID, next.role); err != nil {
 				return err
 			}
 		case *p.publicRole != next.role:

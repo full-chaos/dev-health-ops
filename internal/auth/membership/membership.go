@@ -88,8 +88,8 @@ type decision struct {
 }
 
 // decide is the transition table of one pair. activeOwners counts the active
-// owners of the organization, the pair included. A role change keeps
-// go-api's rule (orgstore.go updateMembershipRole): no last-owner check.
+// owners of the organization, the pair included. No verb leaves an
+// organization without an active owner.
 func decide(v verb, cur state, role string, activeOwners int) (decision, error) {
 	lastOwner := cur.status == StatusActive && cur.role == "owner" && activeOwners <= 1
 	switch v {
@@ -117,6 +117,9 @@ func decide(v verb, cur state, role string, activeOwners int) (decision, error) 
 		}
 		if cur.role == role {
 			return decision{noop: true, next: cur}, nil
+		}
+		if lastOwner {
+			return decision{}, ErrLastOwner
 		}
 		return decision{next: state{status: StatusActive, role: role}}, nil
 	case verbSuspend:

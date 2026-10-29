@@ -329,13 +329,13 @@ func TestTransferOwnershipMovesBothRolesInOneCommit(t *testing.T) {
 	e.requireReconciled(t, ctx)
 }
 
-func TestRemoveOrSuspendTheOnlyOwnerIsRefused(t *testing.T) {
+func TestRemoveSuspendOrDemoteTheOnlyOwnerIsRefused(t *testing.T) {
 	e := getEnv(t)
 	ctx := context.Background()
 	org, owner := e.seedOrg(t, ctx), e.seedUser(t, ctx)
 	e.add(t, ctx, org, owner, "owner")
-	for name, verb := range map[string]func(context.Context, Change) (*Membership, error){"remove": e.store.Remove, "suspend": e.store.Suspend} {
-		if _, err := verb(ctx, Change{OrgID: org, PrincipalID: owner, Authorize: allowAll}); !errors.Is(err, ErrLastOwner) {
+	for name, verb := range map[string]func(context.Context, Change) (*Membership, error){"remove": e.store.Remove, "suspend": e.store.Suspend, "role change": e.store.ChangeRole} {
+		if _, err := verb(ctx, Change{OrgID: org, PrincipalID: owner, Role: "admin", Authorize: allowAll}); !errors.Is(err, ErrLastOwner) {
 			t.Fatalf("%s of the only owner = %v, want ErrLastOwner", name, err)
 		}
 	}

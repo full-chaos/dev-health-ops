@@ -63,14 +63,23 @@ func TestRegisterOrganizationGrantIsExactlyTheDeclaredInsertColumnsWhenOwnedAndN
 		if got := env.heldColumns(t, ctx, grant.Table, "INSERT"); !reflect.DeepEqual(got, want) {
 			t.Fatalf("%s: INSERT columns = %v, want %v", grant.Table, got, want)
 		}
+		// memberships also carries MembershipWriteGrants (PLAN-v4 section 2, CHAOS-10982):
+		// UPDATE (role, updated_at) and table DELETE, with the switch on only.
+		member := grant.Table == MembershipWriteGrants().Table
 		for _, privilege := range []string{"UPDATE", "REFERENCES"} {
-			if got := env.heldColumns(t, ctx, grant.Table, privilege); len(got) != 0 {
-				t.Fatalf("%s: %s held on %v", grant.Table, privilege, got)
+			var want []string
+			if member && privilege == "UPDATE" {
+				want = append(want, MembershipWriteGrants().Update...)
+				sort.Strings(want)
+			}
+			if got := env.heldColumns(t, ctx, grant.Table, privilege); len(got) != len(want) || (len(want) > 0 && !reflect.DeepEqual(got, want)) {
+				t.Fatalf("%s: %s held on %v, want %v", grant.Table, privilege, got, want)
 			}
 		}
 		for _, privilege := range []string{"DELETE", "TRUNCATE", "INSERT", "UPDATE"} {
-			if env.tablePrivilege(t, ctx, grant.Table, privilege) {
-				t.Fatalf("%s: table-level %s held", grant.Table, privilege)
+			want := member && privilege == "DELETE"
+			if got := env.tablePrivilege(t, ctx, grant.Table, privilege); got != want {
+				t.Fatalf("%s: table-level %s held = %v, want %v", grant.Table, privilege, got, want)
 			}
 		}
 	}
@@ -95,8 +104,13 @@ func TestRegisterOrganizationGrantIsExactlyTheDeclaredInsertColumnsWhenOwnedAndN
 		t.Fatalf("turning the switch off with the acknowledgement: %v", err)
 	}
 	for _, grant := range RegisterOrganizationGrants() {
-		if got := env.heldColumns(t, ctx, grant.Table, "INSERT"); len(got) != 0 {
-			t.Fatalf("%s: INSERT held after the switch went off: %v", grant.Table, got)
+		for _, privilege := range []string{"INSERT", "UPDATE"} {
+			if got := env.heldColumns(t, ctx, grant.Table, privilege); len(got) != 0 {
+				t.Fatalf("%s: %s held after the switch went off: %v", grant.Table, privilege, got)
+			}
+		}
+		if env.tablePrivilege(t, ctx, grant.Table, "DELETE") {
+			t.Fatalf("%s: table-level DELETE held after the switch went off", grant.Table)
 		}
 	}
 }
@@ -115,12 +129,22 @@ func TestRegisterOrganizationGrantRefusesAnUndeclaredColumnAndAnyUpdate(t *testi
 		"organizations.stripe_customer_id": `INSERT INTO public.organizations (id, slug, name, stripe_customer_id) VALUES (gen_random_uuid(), 's-2', 'n', 'x')`,
 		"memberships.invited_by_id":        `INSERT INTO public.memberships (id, user_id, org_id, role, invited_by_id) VALUES (gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), 'owner', gen_random_uuid())`,
 		"update an organization":           `UPDATE public.organizations SET name = 'z' WHERE id = gen_random_uuid()`,
-		"update a membership":              `UPDATE public.memberships SET role = 'owner' WHERE id = gen_random_uuid()`,
+		"update a membership's user":       `UPDATE public.memberships SET user_id = gen_random_uuid() WHERE id = gen_random_uuid()`,
+		"update a membership's org":        `UPDATE public.memberships SET org_id = gen_random_uuid() WHERE id = gen_random_uuid()`,
 		"delete an organization":           `DELETE FROM public.organizations WHERE id = gen_random_uuid()`,
-		"delete a membership":              `DELETE FROM public.memberships WHERE id = gen_random_uuid()`,
+		"truncate the memberships":         `TRUNCATE public.memberships`,
 	} {
 		if err := env.runtimeStatement(ctx, statement); err == nil || !strings.Contains(err.Error(), "permission denied") {
 			t.Errorf("%s: err = %v, want permission denied", name, err)
+		}
+	}
+	// A membership's role change and removal are MembershipWriteGrants (PLAN-v4 section 2, CHAOS-10982).
+	for name, statement := range map[string]string{
+		"update a membership's role": `UPDATE public.memberships SET role = 'owner', updated_at = now() WHERE id = gen_random_uuid()`,
+		"delete a membership":        `DELETE FROM public.memberships WHERE id = gen_random_uuid()`,
+	} {
+		if err := env.runtimeStatement(ctx, statement); err != nil {
+			t.Errorf("%s with the switch on: %v", name, err)
 		}
 	}
 	if err := env.runtimeStatement(ctx, `INSERT INTO public.organizations (id, slug, name, settings, tier, managed_by, is_active, created_at, updated_at)

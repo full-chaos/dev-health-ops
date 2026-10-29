@@ -59,7 +59,9 @@ func TestDecideTable(t *testing.T) {
 
 		{"role change", verbChangeRole, active("member"), "admin", 1, decision{next: active("admin")}, nil},
 		{"role change to the same role is a no-op", verbChangeRole, active("admin"), "admin", 1, decision{noop: true, next: active("admin")}, nil},
-		{"role change of the only owner keeps go-api parity", verbChangeRole, active("owner"), "admin", 1, decision{next: active("admin")}, nil},
+		{"role change of the only owner", verbChangeRole, active("owner"), "admin", 1, decision{}, ErrLastOwner},
+		{"role change of one of two owners", verbChangeRole, active("owner"), "member", 2, decision{next: active("member")}, nil},
+		{"role change of the only owner to owner is a no-op", verbChangeRole, active("owner"), "owner", 1, decision{noop: true, next: active("owner")}, nil},
 		{"role change of a non-member", verbChangeRole, state{}, "admin", 1, decision{}, ErrNotMember},
 		{"role change of a removed member", verbChangeRole, state{status: StatusRemoved, role: "member"}, "admin", 1, decision{}, ErrNotMember},
 		{"role change of a suspended member", verbChangeRole, state{status: StatusSuspended, role: "member"}, "admin", 1, decision{}, ErrSuspended},

@@ -23,7 +23,7 @@ func TestUsersOwnedPublicGrantIsExactlyWhatTheSwitchGives(t *testing.T) {
 		{GrantRecord{Kind: "relation", Object: "users", Privilege: "UPDATE"}, false},
 		{GrantRecord{Kind: "relation", Object: "memberships", Privilege: "DELETE"}, true},
 		{GrantRecord{Kind: "column", Object: "memberships", Column: "role", Privilege: "UPDATE"}, true},
-		{GrantRecord{Kind: "column", Object: "memberships", Column: "invited_by_id", Privilege: "INSERT"}, true},
+		{GrantRecord{Kind: "column", Object: "memberships", Column: "invited_by_id", Privilege: "INSERT"}, false},
 		{GrantRecord{Kind: "relation", Object: "memberships", Privilege: "TRUNCATE"}, false},
 		{GrantRecord{Kind: "column", Object: "memberships", Column: "user_id", Privilege: "UPDATE"}, false},
 		{GrantRecord{Kind: "relation", Object: "organizations", Privilege: "DELETE"}, false},

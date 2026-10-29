@@ -35,9 +35,10 @@ type credentialRow struct {
 	revoked   bool
 }
 
-// commitSeed runs one credential_registry write through audit.Commit on the
-// operator pool, the only path the commit guard admits (the lifecycle verbs
-// of a later change are the real writer). It returns the row id.
+// commitSeed runs one write to a guarded auth table (credential_registry, or
+// principals.disabled_at) through audit.Commit on the operator pool, the only
+// path the guards admit (the lifecycle verbs of a later change are the real
+// writer). It returns the row id.
 func commitSeed(t *testing.T, e *env, sql string, args ...any) uuid.UUID {
 	t.Helper()
 	schema, err := authschema.NewValidatedIdentifier("auth")
@@ -53,7 +54,7 @@ func commitSeed(t *testing.T, e *env, sql string, args ...any) uuid.UUID {
 		OffStream: audit.OffStreamWorkloadRegistry,
 	})
 	if err != nil {
-		t.Fatalf("credential_registry write through audit.Commit: %v", err)
+		t.Fatalf("guarded write through audit.Commit: %v", err)
 	}
 	return id
 }
@@ -158,9 +159,7 @@ func TestResolveBootstrapRefusals(t *testing.T) {
 			}, want: ReasonDisabled},
 		{name: "principal disabled", row: credentialRow{audiences: []string{"auth-service"}},
 			after: func(t *testing.T, _ string, p uuid.UUID) {
-				if _, err := e.admin.Exec(ctxT(t), `UPDATE auth.principals SET disabled_at = now() - interval '1 minute' WHERE id = $1`, p); err != nil {
-					t.Fatal(err)
-				}
+				commitSeed(t, e, `UPDATE auth.principals SET disabled_at = now() - interval '1 minute' WHERE id = $1 RETURNING id`, p)
 			}, want: ReasonDisabled},
 		{name: "credential with no audience", row: credentialRow{audiences: []string{}}, want: ReasonNoAudience},
 		{name: "workload with no audience", audiences: []string{}, row: credentialRow{audiences: []string{"auth-service"}}, want: ReasonNoAudience},

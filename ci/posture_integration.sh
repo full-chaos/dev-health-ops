@@ -89,17 +89,20 @@ json_tmp=""
 wt_root=""
 made_dirs=()
 cleanup() {
+  local rc=$?
   if [ -n "${wt_root}" ]; then
     "${GIT}" worktree remove --force "${wt_root}/tree" > /dev/null 2>&1 || true
-    "${RM}" -rf "${wt_root}"
+    "${RM}" -rf "${wt_root}" || echo "cannot remove ${wt_root}" >&2
     "${GIT}" worktree prune > /dev/null 2>&1 || true
   fi
-  "${RM}" -f "${changed_tmp}" "${json_tmp}"
-  # A Go module cache is read-only: make it writable before removal. Only dirs this script created are listed.
+  "${RM}" -f "${changed_tmp}" "${json_tmp}" || true
+  # A Go module cache is read-only: make it traversable and writable before removal. Only dirs this script created are
+  # listed. One path that cannot be removed must not stop the rest, nor change the exit code.
   for d in ${made_dirs[@]+"${made_dirs[@]}"}; do
-    "${CHMOD}" -R u+w "${d}" > /dev/null 2>&1 || true
-    "${RM}" -rf "${d}"
+    "${CHMOD}" -R u+rwx "${d}" > /dev/null 2>&1 || true
+    "${RM}" -rf "${d}" || echo "cannot remove ${d}" >&2
   done
+  return "${rc}"
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM HUP

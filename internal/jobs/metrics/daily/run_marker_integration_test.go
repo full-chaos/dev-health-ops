@@ -1111,7 +1111,7 @@ func TestRunMarkerMigration0148DoesNotClassAnOldPostSyncRunAsFullOrg(t *testing.
 			}
 		}
 	}
-	exec(read("../../../pgmigrate/sql/down/0148_add_daily_metrics_run_full_org.sql"))
+	exec(read("../../../pgmigrate/archive/sql/down/0148_add_daily_metrics_run_full_org.sql"))
 	const runID = "00000000-0000-4000-8000-0000000c7241"
 	if _, err := stack.pool.Exec(ctx, `
 INSERT INTO daily_metrics_runs (id,org_id,target_day,generation,status,finalization_status,created_at,updated_at)
@@ -1123,7 +1123,7 @@ VALUES ($1,$2,$3,'post-sync:00000000-0000-4000-8000-0000000c7243','running','pen
 	if _, err := stack.pool.Exec(ctx, `UPDATE daily_metrics_partitions SET repo_ids = '["00000000-0000-4000-8000-0000000c7249"]'::jsonb WHERE run_id = $1::uuid`, runID); err != nil {
 		t.Fatal(err)
 	}
-	exec(read("../../../pgmigrate/sql/0148_add_daily_metrics_run_full_org.sql"))
+	exec(read("../../../pgmigrate/archive/sql/0148_add_daily_metrics_run_full_org.sql"))
 	var fullOrg bool
 	var parts int
 	var scope string

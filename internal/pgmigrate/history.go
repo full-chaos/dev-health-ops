@@ -95,14 +95,15 @@ func chainDoc(file ChainFile) string {
 	return strings.ToUpper(words[:1]) + words[1:] + "."
 }
 
-// WithChain is the walk when the chain after the baseline holds a revision the
-// embedded walk does not have. A chain revision that is an Alembic revision (it is in
+// WithChain is the walk when the archived chain or the chain after the baseline holds a
+// revision the embedded walk does not have. A chain revision that is an Alembic revision (it is in
 // the walk: every revision of the Python scripts is) is already there, with its own
 // branch label and marks; only a chain revision of a release with no Alembic script
 // is added: it prints newest first ahead of the application branch, the branch's top
 // stops being a head, and the first added revision descends from it. An added
 // revision has no branch label or marks (it is not an Alembic script).
 func WithChain(entries []HistoryEntry, baseline Baseline, chain []ChainFile) []HistoryEntry {
+	chain = append(ArchivedChain(), chain...)
 	known := map[string]bool{}
 	for _, entry := range entries {
 		known[entry.Revision] = true

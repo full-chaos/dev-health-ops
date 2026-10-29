@@ -11,9 +11,10 @@ import (
 	"testing"
 )
 
-// The chain through FrozenHead is frozen with the Python goldens. A revision above it is Go-only and is judged here,
-// by checks Go owns (CHAOS-10751). tailProblems is the pure judgement; the tests run it on the real chain (an empty
-// tail today) and on planted fixtures under testdata/postfreeze, which are never part of the real sql dir.
+// The chain through FrozenHead was frozen with the Python goldens. A revision above it is Go-only and is judged here,
+// by checks Go owns (CHAOS-10751); since the baseline moved to 0162 (D6430) the live tail starts above the baseline.
+// tailProblems is the pure judgement; the tests run it on the live chain, on the archived 0153..0162 and on planted
+// fixtures under testdata/postfreeze, which are never part of the real sql dir.
 
 var downStatement = regexp.MustCompile(`(?im)^\s*(CREATE|DROP|ALTER|UPDATE|DELETE)\b`)
 
@@ -25,10 +26,19 @@ func nextRevision(revision string) string {
 	return fmt.Sprintf("%0*d", len(revision), n+1)
 }
 
+// tailCut is the revision the Go-only tail continues: FrozenHead, or the baseline's application head once the baseline
+// is above it.
+func tailCut(baseline Baseline) string {
+	if revisionLess(FrozenHead, applicationHead(baseline)) {
+		return applicationHead(baseline)
+	}
+	return FrozenHead
+}
+
 func tailProblems(baseline Baseline, chain []ChainFile, down []DownFile) []string {
 	var problems []string
-	tail := ChainAbove(chain, FrozenHead)
-	want := nextRevision(FrozenHead)
+	tail := ChainAbove(chain, tailCut(baseline))
+	want := nextRevision(tailCut(baseline))
 	seen := map[string]bool{}
 	for _, file := range tail {
 		switch {
@@ -45,7 +55,7 @@ func tailProblems(baseline Baseline, chain []ChainFile, down []DownFile) []strin
 		}
 	}
 	downByName := map[string]DownFile{}
-	for _, file := range ChainAbove(downAsChain(down), FrozenHead) {
+	for _, file := range ChainAbove(downAsChain(down), tailCut(baseline)) {
 		downByName[file.Name] = DownFile{Revision: file.Revision, Name: file.Name, SQL: file.SQL}
 	}
 	for _, file := range tail {
@@ -110,10 +120,15 @@ func loadTail(t *testing.T) (Baseline, []ChainFile, []DownFile) {
 func TestTheRealChainTailPassesTheGoOwnedChecks(t *testing.T) {
 	baseline, chain, down := loadTail(t)
 	if problems := tailProblems(baseline, chain, down); len(problems) > 0 {
-		t.Errorf("the Go-only revisions above %s break the rules:\n%s", FrozenHead, strings.Join(problems, "\n"))
+		t.Errorf("the Go-only revisions above %s break the rules:\n%s", tailCut(baseline), strings.Join(problems, "\n"))
 	}
-	if frozen := ChainThrough(chain, FrozenHead); len(frozen) == 0 || frozen[len(frozen)-1].Revision != FrozenHead {
-		t.Errorf("the chain does not reach FrozenHead %s", FrozenHead)
+	archived := archivedChainFiles(t)
+	old := Baseline{Cutover: true, Heads: []string{cutoverRevision, "0138"}}
+	if problems := tailProblems(old, archived, archivedDownFiles(t)); len(problems) > 0 {
+		t.Errorf("the archived Go-only revisions above %s break the rules:\n%s", FrozenHead, strings.Join(problems, "\n"))
+	}
+	if frozen := ChainThrough(archived, FrozenHead); len(frozen) == 0 || frozen[len(frozen)-1].Revision != FrozenHead {
+		t.Errorf("the archived chain does not reach FrozenHead %s", FrozenHead)
 	}
 }
 
@@ -164,7 +179,7 @@ func TestAPlantedGoOnlyTailIsAcceptedEverywhere(t *testing.T) {
 			if problems := tailProblems(baseline, chain, down); len(problems) > 0 {
 				t.Fatalf("the planted tail is refused: %v", problems)
 			}
-			tail := ChainAbove(chain, FrozenHead)
+			tail := ChainAbove(chain, tailCut(baseline))
 			if len(tail) == 0 {
 				t.Fatal("the fixture planted no revision")
 			}
@@ -172,8 +187,8 @@ func TestAPlantedGoOnlyTailIsAcceptedEverywhere(t *testing.T) {
 			if !reflect.DeepEqual(Heads(baseline, chain), []string{cutoverRevision, last}) {
 				t.Errorf("heads %v, want [%s %s]", Heads(baseline, chain), cutoverRevision, last)
 			}
-			if !reflect.DeepEqual(ChainThrough(chain, FrozenHead), ChainThrough(embeddedChain(t), FrozenHead)) {
-				t.Error("planting a tail changed the frozen prefix")
+			if !reflect.DeepEqual(ChainThrough(chain, tailCut(baseline)), ChainThrough(embeddedChain(t), tailCut(baseline))) {
+				t.Error("planting a tail changed the chain below it")
 			}
 			r := NewDownRange(baseline, chain, down)
 			if r.Covered[len(r.Covered)-1] != last {
@@ -189,7 +204,7 @@ func TestAPlantedGoOnlyTailIsAcceptedEverywhere(t *testing.T) {
 				t.Fatal(err)
 			}
 			text := out.String()
-			previous := FrozenHead
+			previous := tailCut(baseline)
 			for _, file := range tail {
 				line := fmt.Sprintf("%s -> %s", previous, file.Revision)
 				if file.Revision == last {
@@ -249,7 +264,7 @@ func assertTailDowngradeCells(t *testing.T, baseline Baseline, chain []ChainFile
 		}
 		return out
 	}
-	tail := ChainAbove(chain, FrozenHead)
+	tail := ChainAbove(chain, tailCut(baseline))
 	top := tail[len(tail)-1].Revision
 	check := func(name string, recorded []string, arg string, want []DownStep) {
 		target, refusal := ParseDowngradeTarget(arg, known)
@@ -270,7 +285,7 @@ func assertTailDowngradeCells(t *testing.T, baseline Baseline, chain []ChainFile
 		check("explicit "+file.Revision+" to its predecessor", []string{file.Revision}, previous, steps(file.Revision, previous))
 	}
 	check("-1 from the head", []string{top}, "-1", steps(top, order[index[top]-1]))
-	check("the head to FrozenHead", []string{cutoverRevision, top}, FrozenHead, steps(top, FrozenHead))
+	check("the head to the baseline floor", []string{cutoverRevision, top}, r.Floor, steps(top, r.Floor))
 	check("-N from the head to the floor", []string{top}, "-"+strconv.Itoa(index[top]), steps(top, r.Floor))
 	target, _ := ParseDowngradeTarget("-"+strconv.Itoa(index[top]+1), known)
 	if _, refusal := PlanDowngrade([]string{top}, target, r, known); refusal == nil || refusal.Code != "below_baseline_floor" {
@@ -281,7 +296,7 @@ func assertTailDowngradeCells(t *testing.T, baseline Baseline, chain []ChainFile
 // With an empty tail the generated cells have nothing to check; the planted tests above run them on a real tail.
 func TestTheRealChainTailDowngradeCells(t *testing.T) {
 	baseline, chain, down := loadTail(t)
-	if len(ChainAbove(chain, FrozenHead)) == 0 {
+	if len(ChainAbove(chain, tailCut(baseline))) == 0 {
 		t.Skip("the Go-only tail is empty")
 	}
 	assertTailDowngradeCells(t, baseline, chain, down)

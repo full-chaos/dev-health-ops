@@ -533,38 +533,34 @@ func TestGrantsPassMakesTheSSOProviderBindingReadable(t *testing.T) {
 	}
 }
 
-// TestGrantsModeFailsClosedAndApplyDefersAnAbsentManifestColumn: on an ops schema at revision 0154 (no
-// users.sso_provider_id) the grants pass, which runs only after ops migrate, refuses and names the column; Apply,
+// TestGrantsModeFailsClosedAndApplyDefersAnAbsentManifestColumn: on an ops schema without users.sso_provider_id (the
+// state of a database before revision 0155, built as the head with the column dropped) the grants pass, which runs only after ops migrate, refuses and names the column; Apply,
 // which runs before ops migrate on a roll, passes and reports the column grant DEFERRED.
 func TestGrantsModeFailsClosedAndApplyDefersAnAbsentManifestColumn(t *testing.T) {
 	f := newOrderFixture(t)
-	f.dhoMigrateThrough(t, "0154")
+	f.dhoMigrateWithoutSSOProviderColumn(t)
 	logs, err := f.applyLogged(t)
 	if err != nil {
-		t.Fatalf("Apply at ops revision 0154: %v", err)
+		t.Fatalf("Apply without users.sso_provider_id: %v", err)
 	}
 	if !strings.Contains(logs, "DEFERRED") || !strings.Contains(logs, "sso_provider_id") {
-		t.Fatalf("Apply at 0154 did not report the sso_provider_id grant as DEFERRED:\n%s", logs)
+		t.Fatalf("Apply without the column did not report the sso_provider_id grant as DEFERRED:\n%s", logs)
 	}
 	err = f.grantsPass(t, "auth")
 	if !errors.Is(err, ErrPublicColumnMissing) || !strings.Contains(err.Error(), "public.users.sso_provider_id") {
-		t.Fatalf("grants pass at ops revision 0154 = %v, want ErrPublicColumnMissing naming public.users.sso_provider_id", err)
+		t.Fatalf("grants pass without users.sso_provider_id = %v, want ErrPublicColumnMissing naming public.users.sso_provider_id", err)
 	}
 }
 
-// dhoMigrateThrough is dho migrate up to and including revision (0154: public.users has no sso_provider_id yet).
-func (f *orderFixture) dhoMigrateThrough(t *testing.T, revision string) {
+// dhoMigrateWithoutSSOProviderColumn is dho migrate to the head, then public.users without sso_provider_id: the manifest
+// column absent, as on a database before revision 0155.
+func (f *orderFixture) dhoMigrateWithoutSSOProviderColumn(t *testing.T) {
 	t.Helper()
-	baseline, err := pgmigrate.LoadBaseline()
-	if err != nil {
-		t.Fatal(err)
+	if _, err := f.dhoMigrate(t); err != nil {
+		t.Fatalf("dho migrate: %v", err)
 	}
-	chain, err := pgmigrate.LoadChain()
-	if err != nil {
+	if _, err := orderConnect(t, f.ctx, f.uri).Exec(f.ctx, `ALTER TABLE public.users DROP COLUMN sso_provider_id`); err != nil {
 		t.Fatal(err)
-	}
-	if _, err := pgmigrate.Upgrade(f.ctx, orderConnect(t, f.ctx, f.uri), baseline, pgmigrate.ChainThrough(chain, revision)); err != nil {
-		t.Fatalf("dho migrate through %s: %v", revision, err)
 	}
 }
 
@@ -589,35 +585,36 @@ func (f *orderFixture) ssoBindingReadable(t *testing.T) bool {
 	return readable
 }
 
-// TestUpgradeFrom0154DefersTheSSOBindingGrantUntil0155 is the roll from an ops schema before revision 0155: auth-migrate
-// runs first, while public.users has no sso_provider_id. Apply passes and reports the column grant DEFERRED (the
-// grants pass, run only after ops migrate, refuses); the posture check holds it PENDING. After ops migrate adds the
-// column, Apply grants it; with the grant revoked the posture check FAILS naming the column.
-func TestUpgradeFrom0154DefersTheSSOBindingGrantUntil0155(t *testing.T) {
+// TestApplyDefersTheSSOBindingGrantUntilTheColumnExists is the roll onto an ops schema that adds a manifest column
+// later: auth-migrate runs first, while public.users has no sso_provider_id. Apply passes and reports the column grant
+// DEFERRED (the grants pass, run only after ops migrate, refuses); the posture check holds it PENDING. After the ops
+// schema adds the column (as revision 0155 did), Apply grants it; with the grant revoked the posture check FAILS naming
+// the column.
+func TestApplyDefersTheSSOBindingGrantUntilTheColumnExists(t *testing.T) {
 	f := newOrderFixture(t)
-	f.dhoMigrateThrough(t, "0154")
+	f.dhoMigrateWithoutSSOProviderColumn(t)
 	if n := f.count(t, `SELECT count(*) FROM pg_attribute WHERE attrelid = 'public.users'::regclass AND attname = 'sso_provider_id' AND NOT attisdropped`); n != 0 {
-		t.Fatal("public.users already has sso_provider_id at revision 0154")
+		t.Fatal("public.users still has sso_provider_id")
 	}
 	logs, err := f.applyLogged(t)
 	if err != nil {
-		t.Fatalf("Apply at ops revision 0154: %v", err)
+		t.Fatalf("Apply without users.sso_provider_id: %v", err)
 	}
 	if !strings.Contains(logs, "DEFERRED") || !strings.Contains(logs, "sso_provider_id") {
-		t.Fatalf("Apply at 0154 did not report the sso_provider_id grant as DEFERRED:\n%s", logs)
+		t.Fatalf("Apply without the column did not report the sso_provider_id grant as DEFERRED:\n%s", logs)
 	}
 	if err := f.grantsPass(t, "auth"); err == nil || !strings.Contains(err.Error(), "public.users.sso_provider_id") {
-		t.Fatalf("grants pass at ops revision 0154 = %v, want a failure naming public.users.sso_provider_id", err)
+		t.Fatalf("grants pass without users.sso_provider_id = %v, want a failure naming public.users.sso_provider_id", err)
 	}
 
-	if _, err := f.dhoMigrate(t); err != nil {
-		t.Fatalf("dho migrate to head: %v", err)
+	if _, err := orderConnect(t, f.ctx, f.uri).Exec(f.ctx, `ALTER TABLE public.users ADD COLUMN sso_provider_id uuid REFERENCES public.sso_providers (id) ON DELETE SET NULL`); err != nil {
+		t.Fatalf("add the column back: %v", err)
 	}
 	if _, err := f.applyLogged(t); err != nil {
-		t.Fatalf("Apply after 0155: %v", err)
+		t.Fatalf("Apply after the column exists: %v", err)
 	}
 	if !f.ssoBindingReadable(t) {
-		t.Fatal("public.users.sso_provider_id is not readable after 0155 and Apply")
+		t.Fatal("public.users.sso_provider_id is not readable after the column exists and Apply")
 	}
 
 	conn := orderConnect(t, f.ctx, f.uri)
@@ -626,7 +623,7 @@ func TestUpgradeFrom0154DefersTheSSOBindingGrantUntil0155(t *testing.T) {
 	}
 	violations, err := VerifyRuntimePosture(f.ctx, conn, Options{Schema: "auth", RuntimeRole: f.role})
 	if err != nil {
-		t.Fatalf("posture check after 0155 with the grant revoked: %v", err)
+		t.Fatalf("posture check with the grant revoked: %v", err)
 	}
 	var named bool
 	for _, v := range violations {
@@ -635,6 +632,6 @@ func TestUpgradeFrom0154DefersTheSSOBindingGrantUntil0155(t *testing.T) {
 		}
 	}
 	if !named {
-		t.Fatalf("posture check after 0155 with the grant revoked = %v; want a FAIL naming users.sso_provider_id", violations)
+		t.Fatalf("posture check with the grant revoked = %v; want a FAIL naming users.sso_provider_id", violations)
 	}
 }

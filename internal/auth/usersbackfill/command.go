@@ -12,6 +12,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
@@ -32,8 +33,8 @@ func Command() cli.Command {
 	return cli.Command{
 		Name:    "auth",
 		Kind:    cli.Group,
-		Summary: "auth control plane operator verbs: users-backfill, users-reconcile, oauth-sso-count, orgs-backfill, orgs-reconcile, legacy-link-purge",
-		Children: []cli.Command{{
+		Summary: "auth control plane operator verbs: users-backfill, users-reconcile, oauth-sso-count, orgs-backfill, orgs-reconcile, legacy-link-purge, platform-role-grant, platform-role-revoke, platform-role-list",
+		Children: append([]cli.Command{{
 			Name:    "users-backfill",
 			Kind:    cli.Verb,
 			Summary: "copy public.users into the auth schema (idempotent; counts only)",
@@ -63,7 +64,7 @@ func Command() cli.Command {
 			Kind:    cli.Verb,
 			Summary: "delete go-api's legacy public link-token rows once users are owned (idempotent; counts only; refused unless AUTH_USERS_OWNED is true)",
 			Run:     runLegacyLinkPurge,
-		}},
+		}}, platformRoleVerbs()...),
 	}
 }
 
@@ -89,6 +90,11 @@ func run(ctx context.Context, env cli.Env) int {
 		fmt.Fprintln(env.Stderr, "users-backfill: refused: AUTH_USERS_OWNED is true, auth.users is the authority and this command copies from public.users")
 		return cli.ExitRefused
 	}
+	opts, err := usersBackfillOptions(env.Lookup, *dryRun, *batch)
+	if err != nil {
+		fmt.Fprintf(env.Stderr, "users-backfill: %s must be true or false\n", platformrole.OwnedEnv)
+		return cli.ExitFailure
+	}
 	pool, schema, code := connectFn(ctx, env, "users-backfill")
 	if code != cli.ExitOK {
 		return code
@@ -99,7 +105,6 @@ func run(ctx context.Context, env cli.Env) int {
 		fmt.Fprintln(env.Stderr, "users-backfill: could not build the identity store")
 		return cli.ExitFailure
 	}
-	opts := Options{DryRun: *dryRun, BatchSize: *batch}
 	rep, err := Run(ctx, PGSource{Pool: pool}, store, opts)
 	for _, line := range rep.Lines() {
 		fmt.Fprintln(env.Stdout, line)
@@ -148,6 +153,16 @@ func runOAuthSSOCount(ctx context.Context, env cli.Env) int {
 	}
 	fmt.Fprintln(env.Stdout, count.Line())
 	return cli.ExitOK
+}
+
+// usersBackfillOptions builds the users-backfill options from its flags and
+// the environment.
+func usersBackfillOptions(lookup secrets.LookupEnv, dryRun bool, batch int) (Options, error) {
+	owned, err := platformrole.OwnedFromLookup(lookup)
+	if err != nil {
+		return Options{}, err
+	}
+	return Options{DryRun: dryRun, BatchSize: batch, PlatformRolesOwned: owned}, nil
 }
 
 // connect resolves the schema and opens the auth runtime pool. A non-zero

@@ -7,6 +7,7 @@ auth.oidc.outcomes	outcome,reason,route	code: internal/auth/identity/oidc/servic
 auth.org.mutations	outcome,verb	code: internal/auth/org/store.go
 auth.invite.mutations	outcome,verb	code: internal/auth/invite/store.go
 auth.membership.mutations	outcome,verb	code: internal/auth/membership/store.go
+auth.session.issue_compat_uses	class	code: internal/auth/authapi/wire.go
 auth.session.refresh_exchanges	reason_code	code: internal/auth/session/store.go
 auth.session.revocations	reason	code: internal/auth/session/store.go
 auth.social.outcomes	operation,provider,reason_code	code: internal/auth/identity/social/service.go
@@ -260,9 +261,6 @@ dev_health_work_item_prepared_retired_effects_skipped_total	provider	code: inter
 dev_health_work_item_team_attributions_written_total	provider,source	code: internal/providerfoundation/budget.go
 dev_health_work_items_outside_window_dropped_total	provider	code: internal/providerfoundation/budget.go
 dev_health_worker_posture_manifest_mismatch	service	code: internal/platform/postureguard/postureguard.go
-devhealth_ingest_legacy_accepted_total	mechanism	code: internal/api/legacyingest/auth.go
-devhealth_ingest_legacy_auth_rejected_total	reason	code: internal/api/legacyingest/auth.go
-devhealth_ingest_legacy_requests_total	key_class,outcome,route	code: internal/api/legacyingest/auth.go
 devhealth_scheduler_executed_proof_evidence_state		code: internal/scheduler/sync/materializer.go
 devhealth_scheduler_executed_proof_gate_degraded		code: internal/scheduler/sync/materializer.go
 devhealth_scheduler_executed_proof_refresh_failures_total		code: internal/scheduler/sync/materializer.go

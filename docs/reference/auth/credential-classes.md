@@ -92,7 +92,7 @@ Design docs (read the guardrails at minimum):
 | `internal_svc_authsess_token` | active | service_account | |
 | `link_credential` | active | human | |
 | `pagerduty_webhook_signature` | active | external_source | |
-| `workload_token` | **unconsumed** | workload | |
+| `workload_token` | optional_feature | workload | |
 | `workload_bootstrap_credential` | optional_feature | workload | |
 
 **30 classes at the Wave 0 freeze** (31 with `effective_principal_envelope`, added by CHAOS-4737 below). 5 were not in CHAOS-3273's minimum list and were discovered
@@ -168,7 +168,11 @@ service), sub, principal_type `workload`, jti, iat, nbf, exp; no `org_id`, no
 `sid`, no `scope`; lifetime at most 300 seconds. Its typ separates it from the
 user access token (`at+jwt`). The auth-service workload-token exchange mints it
 (`POST /internal/v1/token/exchange`, mounted only with `AUTH_WORKLOAD_EXCHANGE=true`). The document parser `ParseWorkloadToken` is under
-`FuzzParseWorkloadToken`.
+`FuzzParseWorkloadToken`. auth-service's session issue route
+(`POST /internal/v1/sessions`) also accepts it, for audience `auth-service` and
+the one workload principal in `AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT` (the token
+has no action claim, so that subject is the `sessions.issue` binding); with the
+variable unset the route refuses it.
 
 **`kubernetes_sa_token_exchange`.** The Kubernetes projected ServiceAccount
 token a workload presents to auth-service's workload-token exchange
@@ -244,26 +248,25 @@ carries both `X-ACR-Web-Assertion` and `Authorization`
 (in the acr repo) rather than silently
 preferring one. This is the shape a class-aware gate should generalize.
 
-## Permissive-when-unconfigured: the legacy ingest path
+## Retired: the legacy ingest path
 
-The legacy ingest handler (`internal/api/legacyingest/auth.go`) is permissive
-only in a development environment. Its checks work like this:
-
-- If `INGEST_API_KEYS` and `INGEST_SIGNING_SECRET` are both unset outside a
-  development environment, the request gets a 401 (fail closed;
-  `internal/api/legacyingest/auth.go:155-159`).
-- If only one of them is set, only that check runs: an unset key list skips
-  the API-key check, and an unset signing secret skips the HMAC signature
-  check (`internal/api/legacyingest/auth.go:160-195`).
+The legacy `POST /api/v1/ingest/*` routes are retired (CHAOS-11813). go-api
+mounts none of them and reads none of their settings
+(`INGEST_API_KEYS`, `INGEST_SIGNING_SECRET`,
+`DEV_HEALTH_LEGACY_INGEST_ENABLED`, `DEV_HEALTH_LEGACY_INGEST_SUNSET`), so each
+path answers 404. Their deployment-wide key carried no organization and the
+handler wrote the body's `org_id` as given: retiring the routes removed that
+cross-tenant write path. The classes `legacy_ingest_api_key` and
+`legacy_ingest_hmac_signature` stay registered with no consumer; a follow-up
+leaf deletes them.
 
 The engineering guardrails say: "missing config must never mean auth
 disabled in production." The webhook validators in
 `internal/api/webhookintake/` (`github.go` HMAC, `gitlab.go` token compare,
 `jira.go` HMAC) and the Stripe webhook
 (`internal/api/billing/webhook.go:60-84`, signature check in
-`internal/api/billing/webhooksig.go`) also fail closed: each answers 500
-when its secret is unset. The legacy ingest path is the one place where an
-unset single credential skips its own check, so it stays a gap to review.
+`internal/api/billing/webhooksig.go`) fail closed: each answers 500
+when its secret is unset.
 
 ## Unconsumed credential: `svc_worker_*`
 

@@ -220,6 +220,7 @@ internal/workitemcontract
 ~internal/chmigrate/sql
 ~internal/fixturescli/testdata/generate
 ~internal/fixturescli/testdata/synthetic
+~internal/pgmigrate/archive
 ~internal/pgmigrate/baseline
 ~internal/pgmigrate/sql
 ~internal/pgmigrate/sql/down

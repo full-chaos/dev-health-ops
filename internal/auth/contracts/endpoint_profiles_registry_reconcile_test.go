@@ -26,12 +26,14 @@ type classRegistryAnchor struct {
 type classRegistryDocument struct {
 	Classes []struct {
 		ClassID string   `json:"class_id"`
+		Status  string   `json:"status"`
 		Gaps    []string `json:"gaps"`
 		Issuer  struct {
 			Anchors []*classRegistryAnchor `json:"anchors"`
 		} `json:"issuer"`
 		Consumers []struct {
-			Anchor *classRegistryAnchor `json:"anchor"`
+			Anchor      *classRegistryAnchor `json:"anchor"`
+			Description string               `json:"description"`
 		} `json:"consumers"`
 	} `json:"classes"`
 }
@@ -230,7 +232,7 @@ func TestTheReconcileGateRefusesPlantedMismatches(t *testing.T) {
 			}
 		},
 		"the registry loses the issue route's service credential consumer": func(_ []map[string]any, registry registryAnchors) {
-			delete(registry.consumers["internal_svc_authsess_token"], anchorKey(authHTTPLayer+"compat.go", 143))
+			delete(registry.consumers["internal_svc_authsess_token"], anchorKey(authHTTPLayer+"compat.go", 146))
 		},
 		"the registry names a workload exchange consumer no row accepts": func(_ []map[string]any, registry registryAnchors) {
 			registry.consumers["workload_token"][anchorKey("internal/auth/workloadexchange/exchange.go", 143)] = true

@@ -24,7 +24,8 @@ var (
 // migrationKeyArrays is the three key arrays of the chain file that creates
 // public.categorize_byo_settings (found by its content, not its number), in
 // body order: the pinned llm keys, the base_url-check keys, and the served
-// base_url keys their EXISTS tests.
+// base_url keys their EXISTS tests. The file is in the live chain, or in the
+// archive the squashed baseline was built from.
 func migrationKeyArrays(t *testing.T) [][]string {
 	t.Helper()
 	chain, err := pgmigrate.LoadChain()
@@ -32,7 +33,7 @@ func migrationKeyArrays(t *testing.T) [][]string {
 		t.Fatal(err)
 	}
 	var bodies []string
-	for _, file := range chain {
+	for _, file := range append(archivedChain(t), chain...) {
 		for _, match := range categorizeSettingsFunction.FindAllStringSubmatch(file.SQL, -1) {
 			bodies = append(bodies, match[1])
 		}
@@ -204,4 +205,19 @@ func TestTheBuildPathReaderFilesNameNoSettingsTableLiteral(t *testing.T) {
 			t.Errorf("%s names the settings table in a FROM; build it from the SettingsRelation", file)
 		}
 	}
+}
+
+// archivedChain is the chain files the PostgreSQL baseline was squashed from, as released.
+func archivedChain(t *testing.T) []pgmigrate.ChainFile {
+	t.Helper()
+	var out []pgmigrate.ChainFile
+	for _, file := range pgmigrate.ArchivedChain() {
+		data, err := os.ReadFile("../pgmigrate/archive/sql/" + file.Name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		file.SQL = string(data)
+		out = append(out, file)
+	}
+	return out
 }

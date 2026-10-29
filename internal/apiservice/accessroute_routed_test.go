@@ -527,7 +527,8 @@ func TestGoAPIAccessRowsAreTheFullInventory(t *testing.T) {
 			ids[row["method"].(string)+" "+row["route"].(string)] = true
 		}
 	}
-	if len(rows) != len(ids) || len(rows) < 240 {
+	// CHAOS-11813 retired the 6 legacy ingest rows (the floor was 240).
+	if len(rows) != len(ids) || len(rows) < 234 {
 		t.Fatalf("%d rows, the inventory has %d for %s", len(rows), len(ids), goAPIAccessService)
 	}
 	legacy, user := 0, 0

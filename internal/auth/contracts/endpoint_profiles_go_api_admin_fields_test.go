@@ -42,7 +42,7 @@ var impersonationRoutes = map[string]string{
 // coveredFamilies are the route prefixes whose protected rows carry the fields.
 var coveredFamilies = []string{
 	"/api/v1/admin", "/api/v1/auth", "/api/v1/billing", "/api/v1/licensing", "/api/v1/orgs", "/api/v1/internal",
-	"/api/v1/ingest", "/api/v1/external-ingest", "/api/v1/telemetry", "/api/v1/webhooks", "/buildinfo",
+	"/api/v1/external-ingest", "/api/v1/telemetry", "/api/v1/webhooks", "/buildinfo",
 }
 
 // uncoveredFamilies are protected route prefixes that do not carry the fields yet; a protected row in no listed
@@ -311,7 +311,8 @@ func coveredRows(t *testing.T) []map[string]any {
 
 func TestEveryCoveredAdminRowCarriesTheFields(t *testing.T) {
 	rows := coveredRows(t)
-	if len(rows) < 214 {
+	// CHAOS-11813 retired the 6 legacy ingest rows (214 and 71 before).
+	if len(rows) < 208 {
 		t.Fatalf("only %d covered rows: a covered family lost its rows", len(rows))
 	}
 	nonAdmin := 0
@@ -320,7 +321,7 @@ func TestEveryCoveredAdminRowCarriesTheFields(t *testing.T) {
 			nonAdmin++
 		}
 	}
-	if nonAdmin < 71 {
+	if nonAdmin < 65 {
 		t.Fatalf("only %d covered rows outside the admin family", nonAdmin)
 	}
 	scopes := catalogScopes(t)
@@ -432,7 +433,7 @@ func TestCoveredFamilyPredicateSelectsByPrefixAndClass(t *testing.T) {
 		{"/api/v1/billing/plans", "public", false},
 		{"/api/v1/billingx/plans", "protected", false},
 		{"/api/v1/internal/acr/health", "protected", true},
-		{"/api/v1/ingest/commits", "protected", true},
+		{"/api/v1/ingest/commits", "protected", false}, // the legacy ingest family is retired (CHAOS-11813)
 		{"/api/v1/auth/me", "protected", true},
 		{"/api/v1/external-ingest/batches", "protected", true},
 		{"/api/v1/external-ingest/schemas", "public", false},
@@ -462,7 +463,6 @@ func TestFieldChecksCatchPlantedDefectsOnEveryNewFamily(t *testing.T) {
 		"GET /api/v1/licensing/entitlements/{org_id} [dev-health-ops-api @api]",
 		"GET /api/v1/internal/acr/entitlements/{org_id} [dev-health-ops-api @internal]",
 		"GET /api/v1/external-ingest/batches/{ingestion_id} [dev-health-ops-api @api]",
-		"POST /api/v1/ingest/commits [dev-health-ops-api @api]",
 		"GET /api/v1/telemetry/status [dev-health-ops-api @api]",
 		"POST /api/v1/telemetry/report [dev-health-ops-api @api]",
 		"POST /api/v1/webhooks/github [dev-health-ops-api @api]",
@@ -660,15 +660,6 @@ func TestInternalACRRowsNameBothCredentialPaths(t *testing.T) {
 	}
 }
 
-var legacyIngestIDs = []string{
-	"POST /api/v1/ingest/commits [dev-health-ops-api @api]",
-	"POST /api/v1/ingest/deployments [dev-health-ops-api @api]",
-	"POST /api/v1/ingest/incidents [dev-health-ops-api @api]",
-	"POST /api/v1/ingest/pull-requests [dev-health-ops-api @api]",
-	"POST /api/v1/ingest/telemetry [dev-health-ops-api @api]",
-	"POST /api/v1/ingest/work-items [dev-health-ops-api @api]",
-}
-
 type organizationSource struct{ resolver, policy, tenancy string }
 
 // Where each intake, telemetry and build row takes its organization from, and what that means for impersonation.
@@ -678,12 +669,6 @@ var intakeOrganizationSources = map[string]organizationSource{
 	"POST /api/v1/external-ingest/batches [dev-health-ops-api @api]":               {credentialResolver, "exempt_no_org_context", "org_scoped"},
 	"GET /api/v1/external-ingest/batches [dev-health-ops-api @api]":                {credentialResolver, "exempt_no_org_context", "org_scoped"},
 	"GET /api/v1/external-ingest/batches/{ingestion_id} [dev-health-ops-api @api]": {credentialResolver, "exempt_no_org_context", "org_scoped"},
-	"POST /api/v1/ingest/commits [dev-health-ops-api @api]":                        {bodyResolver, "exempt_no_org_context", "org_scoped"},
-	"POST /api/v1/ingest/deployments [dev-health-ops-api @api]":                    {bodyResolver, "exempt_no_org_context", "org_scoped"},
-	"POST /api/v1/ingest/incidents [dev-health-ops-api @api]":                      {bodyResolver, "exempt_no_org_context", "org_scoped"},
-	"POST /api/v1/ingest/pull-requests [dev-health-ops-api @api]":                  {bodyResolver, "exempt_no_org_context", "org_scoped"},
-	"POST /api/v1/ingest/telemetry [dev-health-ops-api @api]":                      {bodyResolver, "exempt_no_org_context", "org_scoped"},
-	"POST /api/v1/ingest/work-items [dev-health-ops-api @api]":                     {bodyResolver, "exempt_no_org_context", "org_scoped"},
 	"GET /api/v1/telemetry/status [dev-health-ops-api @api]":                       {"organization_from_session:", "subject_to_impersonation_override", "org_scoped"},
 	"POST /api/v1/telemetry/opt-in [dev-health-ops-api @api]":                      {"organization_from_session:", "subject_to_impersonation_override", "org_scoped"},
 	"POST /api/v1/telemetry/opt-out [dev-health-ops-api @api]":                     {"organization_from_session:", "subject_to_impersonation_override", "org_scoped"},
@@ -715,7 +700,6 @@ func TestNonSessionOrganizationRowsRecordTheirImpersonationGap(t *testing.T) {
 	scopes := catalogScopes(t)
 	ids := []string{
 		"POST /api/v1/external-ingest/batches [dev-health-ops-api @api]",
-		"POST /api/v1/ingest/commits [dev-health-ops-api @api]",
 		"POST /api/v1/webhooks/pagerduty/{binding_id} [dev-health-ops-api @api]",
 	}
 	for id, row := range rowsByID(t, ids) {
@@ -742,20 +726,39 @@ func TestNonSessionOrganizationRowsRecordTheirImpersonationGap(t *testing.T) {
 	}
 }
 
+// No current row takes its organization from the request body: the legacy ingest rows, the only ones that did,
+// are retired with their routes (CHAOS-11813). The check below still runs over every covered row, so a body-kind
+// row added later must name its credential_binding gap; a body-kind row that appears here must be classified.
+func TestNoRowTakesItsOrganizationFromTheBody(t *testing.T) {
+	for _, row := range coveredRows(t) {
+		if resolver, _ := row["resource_resolver"].(string); strings.HasPrefix(resolver, bodyResolver) {
+			t.Errorf("%v takes its organization from the body: name its credential binding and classify it here", row["id"])
+		}
+	}
+}
+
+// The body-kind binding rule still bites with no body-kind row left: a credential-kind row re-planted as a
+// body-kind row is rejected without a credential_binding gap and accepted with one.
 func TestBodyOrganizationRowsNameTheirCredentialBinding(t *testing.T) {
 	root := testRoot(t)
 	scopes := catalogScopes(t)
-	for id, row := range rowsByID(t, legacyIngestIDs) {
-		t.Run(id, func(t *testing.T) {
-			if got := adminFieldViolations(cloneRow(t, row), scopes, root); len(got) != 0 {
-				t.Fatalf("the unmodified row has violations: %v", got)
-			}
-			ungapped := cloneRow(t, row)
-			dropGap(ungapped, "credential_binding")
-			if got := adminFieldViolations(ungapped, scopes, root); !violationsContain(got, bodyBindingMessage) {
-				t.Errorf("a dropped credential_binding gap was not rejected for that reason: %v", got)
-			}
-		})
+	const id = "POST /api/v1/external-ingest/batches [dev-health-ops-api @api]"
+	base := rowsByID(t, []string{id})[id]
+	resolver, _ := base["resource_resolver"].(string)
+	if !strings.HasPrefix(resolver, credentialResolver) {
+		t.Fatalf("%s: resolver %q is not a credential kind; the planted body row needs one", id, resolver)
+	}
+	planted := cloneRow(t, base)
+	planted["resource_resolver"] = bodyResolver + strings.TrimPrefix(resolver, credentialResolver)
+	dropGap(planted, "credential_binding")
+	if got := adminFieldViolations(planted, scopes, root); !violationsContain(got, bodyBindingMessage) {
+		t.Errorf("a body-kind row without a credential_binding gap was not rejected for that reason: %v", got)
+	}
+	bound := cloneRow(t, planted)
+	gaps, _ := bound["gaps"].([]any)
+	bound["gaps"] = append(gaps, "credential_binding: planted: the body organization is not bound to the credential")
+	if got := adminFieldViolations(bound, scopes, root); violationsContain(got, bodyBindingMessage) {
+		t.Errorf("a body-kind row with a credential_binding gap was still rejected for it: %v", got)
 	}
 }
 

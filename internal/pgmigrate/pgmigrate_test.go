@@ -79,7 +79,16 @@ func TestBaselineTables(t *testing.T) {
 
 func TestBelowHeadErrorNamesTheWayOut(t *testing.T) {
 	text := BelowHeadError{Recorded: []string{"0138"}, Missing: []string{"0066"}}.Error()
-	for _, want := range []string{"below the head", "[0138]", "[0066]", "River cutover (revision 0066) is expected", "dev-hops migrate postgres"} {
+	for _, want := range []string{"below the head", "[0138]", "[0066]", "River cutover (revision 0066) is expected", "bring the database to the baseline"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("%q does not name %q", text, want)
+		}
+	}
+}
+
+func TestBelowBaselineErrorNamesTheWayOut(t *testing.T) {
+	text := BelowBaselineError{Recorded: []string{"0066", "0161"}, Baseline: "0162"}.Error()
+	for _, want := range []string{"below the squashed baseline 0162", "[0066 0161]", "from a build before the squash", "re-create the database", "Nothing was changed"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("%q does not name %q", text, want)
 		}
@@ -139,8 +148,8 @@ func TestBaselineLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !baseline.Cutover || baseline.RiverSchema != "river" || !reflect.DeepEqual(baseline.Heads, []string{"0066", "0138"}) {
-		t.Fatalf("baseline settings cutover=%v schema=%q heads %v; want production's (true, river, [0066 0138]): the baseline is frozen at 0138",
+	if !baseline.Cutover || baseline.RiverSchema != "river" || !reflect.DeepEqual(baseline.Heads, []string{"0066", "0162"}) {
+		t.Fatalf("baseline settings cutover=%v schema=%q heads %v; want production's (true, river, [0066 0162]): the baseline moved once, to 0162",
 			baseline.Cutover, baseline.RiverSchema, baseline.Heads)
 	}
 	if strings.Contains(baseline.Schema, `\restrict`) || strings.Contains(baseline.Data, `\restrict`) {

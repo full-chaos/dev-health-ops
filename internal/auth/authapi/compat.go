@@ -87,6 +87,9 @@ type CompatDeps struct {
 	// ServiceCredentials mounts POST /internal/v1/sessions, the session issue
 	// route go-api calls; nil leaves it unmounted.
 	ServiceCredentials ServiceCredentials
+	// IssueWorkload lets that route accept the go-api workload token, and
+	// mounts it alone when ServiceCredentials is nil; nil refuses the token.
+	IssueWorkload *SessionIssueWorkload
 	// Limits holds the login limits' windows and the digest key. Required
 	// while Login is set.
 	Limits *Limits
@@ -139,7 +142,7 @@ func CompatRoutes(deps CompatDeps) ([]httpapi.Route, error) {
 		routes = append(routes, httpapi.Route{Method: http.MethodPost, Pattern: PatternCompatLogin, Handler: http.HandlerFunc(h.compatLogin),
 			ErrorWriter: h.signInTransportRefusal(providerLocal)})
 	}
-	if deps.ServiceCredentials != nil {
+	if deps.ServiceCredentials != nil || deps.IssueWorkload != nil {
 		routes = append(routes, httpapi.Route{Method: http.MethodPost, Pattern: PatternIssueSession, Handler: http.HandlerFunc(h.issueSession)})
 	}
 	if deps.Social != nil {

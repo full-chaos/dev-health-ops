@@ -137,14 +137,8 @@ func (h compatHandlers) issueSession(w http.ResponseWriter, r *http.Request) {
 		h.rec.refuse(w, r, opSessionIssue, unauthorized(reasonInvalidCredentials), nil)
 		return
 	}
-	credential, refused, err := h.ServiceCredentials.Check(ctx, contracts.NewSecretString(token))
-	if err != nil {
-		h.rec.refuse(w, r, opSessionIssue, unavailable(reasonStoreUnavailable), err)
-		return
-	}
-	if refused != "" {
-		h.rec.logger.WarnContext(ctx, "session issue refused: service credential", "refusal", string(refused))
-		h.rec.refuse(w, r, opSessionIssue, unauthorized(reasonInvalidCredentials), nil)
+	caller, ok := h.issueCaller(w, r, token)
+	if !ok {
 		return
 	}
 	req, err := parseIssueRequest(http.MaxBytesReader(w, r.Body, maxIssueBody))
@@ -202,7 +196,7 @@ func (h compatHandlers) issueSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	issued, err := h.Sessions.CreateAudited(ctx, req.principal, req.organization, req.amr,
-		issuedEvent(ctx, req, credential))
+		issuedEvent(ctx, req, caller))
 	switch {
 	case errors.Is(err, session.ErrInvalidAMR):
 		h.rec.refuse(w, r, opSessionIssue, unauthorized(reasonMalformed), nil)
@@ -228,16 +222,24 @@ func (h compatHandlers) issueSession(w http.ResponseWriter, r *http.Request) {
 }
 
 // issuedEvent is the auth.session.issued audit row: the user as subject, the
-// organization, the amr, the service credential that asked, and its source.
-func issuedEvent(ctx context.Context, req issueRequest, credential servicecred.Credential) audit.AuditEvent {
+// organization, the amr and the source, with the caller: a service credential
+// row id, or the workload principal as actor and the token's jti.
+func issuedEvent(ctx context.Context, req issueRequest, caller issueCaller) audit.AuditEvent {
 	principal := req.principal.String()
 	event := audit.AuditEvent{
 		EventType: EventSessionIssued, Outcome: audit.OutcomeAllowed,
 		SubjectPrincipalID: &principal, RequestID: requestid.Audit(ctx),
 		Attributes: map[string]any{
 			"reason_code": reasonAccepted, "target_kind": "session", "source": sourceGoAPIDelegated,
-			"amr": append([]string(nil), req.amr...), "credential_id": credential.ID,
+			"amr": append([]string(nil), req.amr...),
 		},
+	}
+	if caller.workload != nil {
+		actor := caller.workload.String()
+		event.ActorPrincipalID = &actor
+		event.Attributes["workload_jti"] = caller.jti
+	} else {
+		event.Attributes["credential_id"] = caller.credentialID
 	}
 	if req.organization != nil {
 		org := req.organization.String()

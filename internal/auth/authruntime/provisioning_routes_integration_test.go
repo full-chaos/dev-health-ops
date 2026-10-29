@@ -347,3 +347,51 @@ func TestProvisioningRoutesOffByDefault(t *testing.T) {
 		}
 	}
 }
+
+// After a deprovision, a sign-in that names the organization (a former
+// member's login with a wrong password, an unknown address, a session issue)
+// is refused and leaves the organization suspended, with no membership row.
+// Each sign-in path refreshes the organization from go-api's row, which stays
+// active until go-api's purge.
+func TestDeprovisionedOrganizationStaysSuspendedOnSignIn(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	e, header := newProvisioningEnv(t, ctx)
+	owner, org := e.seed(t, ctx)
+	super := e.account(t, ctx, acctMail(), true, true)
+	address := acctMail()
+	member := e.account(t, ctx, address, false, true)
+	e.addVia(t, header, org, member, owner, "member")
+	got := e.doWith(t, "/internal/v1/organizations/deprovision", jsonBody(t, map[string]any{"organization_id": org.String(),
+		"actor_principal_id": super.String()}), header)
+	if got.status != http.StatusOK {
+		t.Fatalf("deprovision: %d %s", got.status, got.body)
+	}
+	suspended := func(step string) {
+		t.Helper()
+		var n int
+		if err := e.admin.QueryRow(ctx, `SELECT
+  (SELECT count(*) FROM auth.organizations WHERE id = $1 AND disabled_at IS NULL) +
+  (SELECT count(*) FROM public.memberships WHERE org_id = $1) +
+  (SELECT count(*) FROM auth.memberships WHERE organization_id = $1 AND status <> 'removed')`, org).Scan(&n); err != nil || n != 0 {
+			t.Fatalf("after %s: %d live organization or membership rows (%v), want 0", step, n, err)
+		}
+	}
+	suspended("the deprovision")
+	client := map[string]string{"Content-Type": "application/json"}
+	for name, body := range map[string]string{
+		"former member, wrong password": `{"email":"` + address + `","password":"not-the-password","org_id":"` + org.String() + `"}`,
+		"unknown address":               `{"email":"` + acctMail() + `","password":"not-the-password","org_id":"` + org.String() + `"}`,
+	} {
+		if got := e.doWith(t, "/api/v1/auth/login", body, client); got.status < 400 {
+			t.Fatalf("login, %s: %d %s, want a refusal", name, got.status, got.body)
+		}
+		suspended("a login, " + name)
+	}
+	issuer, _ := e.issuerCredential(t, ctx, "auth-session-issuer", `["sessions:issue"]`, false, false)
+	issue := `{"principal_id":"` + member.String() + `","organization_id":"` + org.String() + `","amr":["pwd"]}`
+	if got := e.doWith(t, "/internal/v1/sessions", issue, map[string]string{"Authorization": "Bearer " + issuer}); got.status != http.StatusForbidden {
+		t.Fatalf("session issue for a former member: %d %s, want 403", got.status, got.body)
+	}
+	suspended("a session issue")
+}

@@ -125,7 +125,11 @@ the session cutover.
 `internal_service_credentials` table with `svc_acr_` and `svc_worker_`, which
 carry other prefixes, services and scopes. auth-service is its only validator
 (`servicecred.PG.Check`); the verbs of `dev-hops service-credentials` mint,
-rotate and revoke it. The route and go-api's four compatibility routes
+rotate and revoke it. A second scope, `memberships:write`, which no other
+service may hold, lets go-api call the internal provisioning routes
+(`/internal/v1/memberships/*`, `/internal/v1/invites/*`,
+`/internal/v1/organizations/deprovision`, mounted by `AUTH_MEMBERSHIP_ROUTES`;
+`servicecred.PG.CheckScope`). The route and go-api's four compatibility routes
 (`/api/v1/auth/{login,refresh,logout,social-login}`) have rows in
 `contracts/auth/v1/endpoint-profiles.auth-service.json`.
 
@@ -248,26 +252,25 @@ carries both `X-ACR-Web-Assertion` and `Authorization`
 (in the acr repo) rather than silently
 preferring one. This is the shape a class-aware gate should generalize.
 
-## Permissive-when-unconfigured: the legacy ingest path
+## Retired: the legacy ingest path
 
-The legacy ingest handler (`internal/api/legacyingest/auth.go`) is permissive
-only in a development environment. Its checks work like this:
-
-- If `INGEST_API_KEYS` and `INGEST_SIGNING_SECRET` are both unset outside a
-  development environment, the request gets a 401 (fail closed;
-  `internal/api/legacyingest/auth.go:155-159`).
-- If only one of them is set, only that check runs: an unset key list skips
-  the API-key check, and an unset signing secret skips the HMAC signature
-  check (`internal/api/legacyingest/auth.go:160-195`).
+The legacy `POST /api/v1/ingest/*` routes are retired (CHAOS-11813). go-api
+mounts none of them and reads none of their settings
+(`INGEST_API_KEYS`, `INGEST_SIGNING_SECRET`,
+`DEV_HEALTH_LEGACY_INGEST_ENABLED`, `DEV_HEALTH_LEGACY_INGEST_SUNSET`), so each
+path answers 404. Their deployment-wide key carried no organization and the
+handler wrote the body's `org_id` as given: retiring the routes removed that
+cross-tenant write path. The classes `legacy_ingest_api_key` and
+`legacy_ingest_hmac_signature` stay registered with no consumer; a follow-up
+leaf deletes them.
 
 The engineering guardrails say: "missing config must never mean auth
 disabled in production." The webhook validators in
 `internal/api/webhookintake/` (`github.go` HMAC, `gitlab.go` token compare,
 `jira.go` HMAC) and the Stripe webhook
 (`internal/api/billing/webhook.go:60-84`, signature check in
-`internal/api/billing/webhooksig.go`) also fail closed: each answers 500
-when its secret is unset. The legacy ingest path is the one place where an
-unset single credential skips its own check, so it stays a gap to review.
+`internal/api/billing/webhooksig.go`) fail closed: each answers 500
+when its secret is unset.
 
 ## Unconsumed credential: `svc_worker_*`
 

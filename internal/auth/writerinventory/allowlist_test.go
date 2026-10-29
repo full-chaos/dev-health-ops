@@ -140,6 +140,11 @@ var Allowlist = []Entry{
 	{File: "internal/auth/invite/store.go", Func: "Store.acceptOnce", Table: "auth.invites", Verb: "INSERT"},
 	{File: "internal/auth/invite/store.go", Func: "Store.acceptOnce", Table: "auth.invites", Verb: "UPDATE"},
 	{File: "internal/auth/invite/store.go", Func: "Store.acceptOnce", Table: "public.org_invites", Verb: "UPDATE"},
+	// The organization deprovision (one audit.Commit): pending invites revoked (go-api-only ones taken over) and the organization suspended.
+	{File: "internal/auth/invite/orgrevocation.go", Func: "Store.ApplyRevokeAll", Table: "auth.invites", Verb: "INSERT"},
+	{File: "internal/auth/invite/orgrevocation.go", Func: "Store.ApplyRevokeAll", Table: "auth.invites", Verb: "UPDATE"},
+	{File: "internal/auth/invite/orgrevocation.go", Func: "Store.ApplyRevokeAll", Table: "public.org_invites", Verb: "UPDATE"},
+	{File: "internal/auth/org/deprovision.go", Func: "Store.ApplySuspend", Table: "auth.organizations", Verb: "UPDATE"},
 	{File: "internal/auth/platformrole/store.go", Func: "Store.Grant", Table: "auth.platform_role_assignments", Verb: "INSERT"},
 	{File: "internal/auth/platformrole/store.go", Func: "Store.Revoke", Table: "auth.platform_role_assignments", Verb: "DELETE"},
 	{File: "internal/auth/identity/store.go", Func: "Store.applyProjectionChange", Table: "auth.principals", Verb: "UPDATE"},
@@ -163,6 +168,12 @@ var Allowlist = []Entry{
 	{File: "internal/auth/workload/store.go", Func: "Store.setBindingEnabled", Table: "auth.workload_bindings", Verb: "UPDATE"},
 	{File: "internal/auth/workload/store.go", Func: "Store.setEnabled", Table: "auth.principals", Verb: "UPDATE"},
 	{File: "internal/auth/workload/store.go", Func: "Store.setEnabled", Table: "auth.workloads", Verb: "UPDATE"},
+	// The workload bootstrap lifecycle verbs (CHAOS-11183, acp GO 10-29): auth-migrate operator role, inside audit.Commit.
+	{File: "internal/auth/workload/bootstrap_lifecycle.go", Func: "Store.CreateBootstrap", Table: "auth.credential_registry", Verb: "INSERT"},
+	{File: "internal/auth/workload/bootstrap_lifecycle.go", Func: "Store.DisableBootstrap", Table: "auth.credential_registry", Verb: "UPDATE"},
+	{File: "internal/auth/workload/bootstrap_lifecycle.go", Func: "Store.RevokeBootstrap", Table: "auth.credential_registry", Verb: "UPDATE"},
+	{File: "internal/auth/workload/bootstrap_lifecycle.go", Func: "Store.RotateBootstrap", Table: "auth.credential_registry", Verb: "INSERT"},
+	{File: "internal/auth/workload/bootstrap_lifecycle.go", Func: "Store.RotateBootstrap", Table: "auth.credential_registry", Verb: "UPDATE"},
 	{File: "internal/auth/org/store.go", Func: "Store.Create", Table: "auth.organizations", Verb: "INSERT"},
 	{File: "internal/auth/org/store.go", Func: "Store.mutate", Table: "auth.organizations", Verb: "UPDATE"},
 	// TEMPORARY: the one-time legacy refresh exchange revokes go-api's refresh tokens (authschema.LegacyRefreshTokenGrant). CHAOS-10408 removes both rows with the grant.

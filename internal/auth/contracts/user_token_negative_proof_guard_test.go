@@ -23,7 +23,6 @@ var userAccessClasses = map[string]bool{
 
 const (
 	proofPush      = "internal/api/externalingest/user_tokens_refused_test.go"
-	proofLegacy    = "internal/api/legacyingest/user_tokens_refused_test.go"
 	proofACR       = "internal/apiservice/acr/user_tokens_refused_test.go"
 	proofStripe    = "internal/api/billing/user_tokens_refused_test.go"
 	proofWebhooks  = "internal/api/webhookintake/user_tokens_refused_test.go"
@@ -32,7 +31,6 @@ const (
 	proofRefresh   = "internal/auth/authapi/refresh_user_tokens_test.go"
 	proofExchange  = "internal/auth/workloadexchange/user_tokens_refused_test.go"
 	pushRoutes     = "TestExternalPushAuthenticatedRoutesRefuseUserTokens"
-	legacyTest     = "TestLegacyIngestRefusesUserTokens"
 	acrTest        = "TestInternalACRRoutesRefuseUserTokens"
 	stripeTest     = "TestStripeWebhookRefusesUserTokens"
 	webhookTest    = "TestWebhookRoutesRefuseUserTokens"
@@ -60,12 +58,6 @@ var negativeProofs = map[string]negativeProof{
 	"go-api|GET /api/v1/internal/acr/orgs/{org_id}/llm-config [dev-health-ops-api @internal]": {file: proofACR, test: acrTest},
 	"go-api|POST /api/v1/billing/webhooks/stripe [dev-health-ops-api @api]":                   {file: proofStripe, test: stripeTest},
 	"go-api|POST /api/v1/billing/webhooks/stripe [dev-health-ops-billing-edge @billing-edge]": {file: proofStripe, test: stripeTest},
-	"go-api|POST /api/v1/ingest/commits [dev-health-ops-api @api]":                            {file: proofLegacy, test: legacyTest},
-	"go-api|POST /api/v1/ingest/deployments [dev-health-ops-api @api]":                        {file: proofLegacy, test: legacyTest},
-	"go-api|POST /api/v1/ingest/incidents [dev-health-ops-api @api]":                          {file: proofLegacy, test: legacyTest},
-	"go-api|POST /api/v1/ingest/pull-requests [dev-health-ops-api @api]":                      {file: proofLegacy, test: legacyTest},
-	"go-api|POST /api/v1/ingest/telemetry [dev-health-ops-api @api]":                          {file: proofLegacy, test: legacyTest},
-	"go-api|POST /api/v1/ingest/work-items [dev-health-ops-api @api]":                         {file: proofLegacy, test: legacyTest},
 	"go-api|POST /api/v1/webhooks/github [dev-health-ops-api @api]":                           {file: proofWebhooks, test: webhookTest},
 	"go-api|POST /api/v1/webhooks/pagerduty/{binding_id} [dev-health-ops-api @api]":           {file: proofWebhooks, test: webhookTest},
 	"query-api|GET /buildinfo [dev-health-query-api @query,internal]":                         {file: proofMCP, test: buildInfoTest},
@@ -187,7 +179,8 @@ func TestNegativeProofCensus(t *testing.T) {
 			proven++
 		}
 	}
-	if len(derivedRows(t)) != 26 || proven != 25 || exempt != 1 {
-		t.Fatalf("derived %d rows, %d proven, %d exempt; want 26, 25, 1", len(derivedRows(t)), proven, exempt)
+	// CHAOS-11813 retired the 6 legacy ingest rows (26, 25, 1 before).
+	if len(derivedRows(t)) != 20 || proven != 19 || exempt != 1 {
+		t.Fatalf("derived %d rows, %d proven, %d exempt; want 20, 19, 1", len(derivedRows(t)), proven, exempt)
 	}
 }

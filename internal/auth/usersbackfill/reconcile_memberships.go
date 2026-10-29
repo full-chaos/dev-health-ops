@@ -58,6 +58,11 @@ func (t TxTarget) MembershipDiffs(ctx context.Context) (MembershipDiffs, error) 
 
 // membershipDiffsIn is MembershipDiffs over one organization's pairs, or over
 // every pair when org is nil.
+// MembershipDiffsOf is MembershipDiffs over the pairs of one organization.
+func (t TxTarget) MembershipDiffsOf(ctx context.Context, org uuid.UUID) (MembershipDiffs, error) {
+	return t.membershipDiffsIn(ctx, &org)
+}
+
 func (t TxTarget) membershipDiffsIn(ctx context.Context, org *uuid.UUID) (MembershipDiffs, error) {
 	q := authschema.Quote(t.Schema)
 	var d MembershipDiffs

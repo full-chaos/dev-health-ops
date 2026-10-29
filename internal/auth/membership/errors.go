@@ -18,5 +18,8 @@ var (
 	ErrPrincipalNotFound = errors.New("membership: the principal is not in the auth schema or in public.users")
 	ErrInviterNotFound   = errors.New("membership: the inviter is not in the auth schema or in public.users")
 	ErrDenied            = errors.New("membership: the actor may not change this membership")
+	// ErrSuperuserRequired is an Authorize refusal: a superuser member is
+	// changed only by a superuser actor (go-api refuseSuperuserWrite).
+	ErrSuperuserRequired = errors.New("membership: a superuser member needs a superuser actor")
 	ErrStore             = errors.New("membership: store unavailable")
 )

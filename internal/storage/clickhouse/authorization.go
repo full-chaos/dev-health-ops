@@ -82,9 +82,11 @@ func APIPosture(database string) Posture {
 		// complexity and compounding-risk rows. Read-only.
 		{Database: database, Table: "repo_complexity_daily", AllowSelect: true},
 		{Database: database, Table: "compounding_risk_daily", AllowSelect: true},
-		// POST /api/v1/ingest/telemetry (CHAOS-6501) inserts its signal buckets
-		// with this login, as the Python route does with its own. Insert
-		// only: the route never reads, updates or deletes them.
+		// POST /api/v1/ingest/telemetry (CHAOS-6501) inserted its signal buckets
+		// with this login. The route is retired (CHAOS-11813), but the grant
+		// stays in the manifest: CheckPosture refuses a login whose grants
+		// differ from it either way, and prod's users.d still grants it. The
+		// manifest row and the users.d grant go together in one ordered step.
 		{Database: database, Table: "telemetry_signal_bucket", AllowInsert: true},
 		// GET /llm-settings/spend (CHAOS-6667) reads an org's LLM token usage
 		// and its categorization outcomes per run. Read-only.

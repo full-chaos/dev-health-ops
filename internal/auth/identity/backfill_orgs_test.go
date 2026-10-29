@@ -36,6 +36,29 @@ func TestDecideOrg(t *testing.T) {
 	}
 }
 
+// A refresh from go-api's row never reactivates: a suspended organization
+// keeps its suspension and takes go-api's name and slug.
+func TestKeepSuspended(t *testing.T) {
+	active := orgState{slug: "acme", name: "Acme", active: true}
+	suspended := orgState{slug: "acme", name: "Acme"}
+	for _, c := range []struct {
+		name          string
+		cur, src, out orgState
+	}{
+		{"suspended stays suspended against an active go-api row", suspended, orgState{slug: "acme2", name: "New", active: true}, orgState{slug: "acme2", name: "New"}},
+		{"suspended against a suspended go-api row", suspended, suspended, suspended},
+		{"active follows a suspension", active, suspended, suspended},
+		{"active stays active", active, active, active},
+	} {
+		if got := keepSuspended(c.cur, c.src); got != c.out {
+			t.Fatalf("%s: keepSuspended = %+v, want %+v", c.name, got, c.out)
+		}
+	}
+	if d := decideOrg(true, suspended, keepSuspended(suspended, active)); d != (orgDecision{}) {
+		t.Fatalf("a suspended organization against an active go-api row decides %+v, want nothing", d)
+	}
+}
+
 func TestDecideMembership(t *testing.T) {
 	s := func(v string) *string { return &v }
 	cases := []struct {

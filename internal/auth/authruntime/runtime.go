@@ -219,7 +219,11 @@ func compatRoutes(
 	if err != nil {
 		return nil, err
 	}
-	return append(append(routes, links...), sso...), nil
+	provisioning, err := provisioningRoutes(cfg, logger, pool, schema, identities)
+	if err != nil {
+		return nil, err
+	}
+	return append(append(append(routes, links...), sso...), provisioning...), nil
 }
 
 // Main runs the command and exits with its status.

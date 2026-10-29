@@ -19,15 +19,6 @@ webImage:
 # It mounts no business route yet and nothing routes to it: the ingress path
 # table that sends a ported path here is a deploy-repo change made per ported
 # area. Off by default.
-# -- The legacy /api/v1/ingest/* routes of go-api. Off by default; on, go-api
-#    refuses to start outside development unless INGEST_API_KEYS or
-#    INGEST_SIGNING_SECRET is set. Every response carries a Deprecation header.
-legacyIngest:
-  enabled: false
-  # -- RFC 8594 HTTP-date for the Sunset header, for example
-  #    "Tue, 01 Dec 2026 00:00:00 GMT". Empty sends no Sunset header; a value
-  #    that is not an HTTP-date stops go-api at start.
-  sunset: ""
 goApi:
   enabled: false
   # -- This workload's own ServiceAccount (<fullname>-go-api). automountToken stays

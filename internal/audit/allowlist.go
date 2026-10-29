@@ -181,7 +181,7 @@ var attributeVocabulary = map[string][]string{
 	"client_service": {"auth-service", "api", "web", "billing-edge", "worker", "acr-api", "acr-mcp"},
 	// audience is a workload token's aud: a workload audience only.
 	"audience":         {"auth-service", "dev-health-api"},
-	"credential_class": {"user_access_token", "refresh_credential", "workload_token", "acr_client", "external_push", "service_account_key"},
+	"credential_class": {"user_access_token", "refresh_credential", "workload_token", "acr_client", "external_push", "service_account_key", "workload_bootstrap_credential"},
 	// source names who started an auth-service record: go-api-delegated is a
 	// session go-api signed the user in for and asked auth-service to issue.
 	"source": {"go-api-delegated"},

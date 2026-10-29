@@ -471,3 +471,29 @@ func TestCreateRefusalsAreDeniedToARefusedActor(t *testing.T) {
 		t.Fatalf("accepted actor, missing organization: Create = %v, want ErrOrgNotFound", err)
 	}
 }
+
+// An account that is not active when the accept holds its users row (locked
+// from step 2) is refused, with nothing written: no membership, the invite
+// still pending in both tables, no audit row, no go-api member_joined row.
+func TestAcceptRefusesAnInactiveAccountUnderItsLock(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	f := e.invite(t, ctx, "member")
+	user := e.seedUser(t, ctx, f.email, true)
+	if _, err := e.admin.Exec(ctx, `UPDATE public.users SET is_active = false WHERE id = $1`, user); err != nil {
+		t.Fatal(err)
+	}
+	_, err := e.store.Accept(ctx, AcceptInput{Token: f.created.Token, PrincipalID: user, PublicAudit: &PublicAudit{}})
+	if !errors.Is(err, ErrAccountInactive) {
+		t.Fatalf("Accept by an inactive account = %v, want ErrAccountInactive", err)
+	}
+	if got := e.inviteRows(t, ctx, f.created.ID); got.publicStatus != "pending" || got.authStatus != "pending" {
+		t.Fatalf("invite rows after a refused accept = %+v, want pending in both", got)
+	}
+	if n := e.count(t, ctx, `SELECT (SELECT count(*) FROM public.memberships WHERE org_id = $1 AND user_id = $2)
+  + (SELECT count(*) FROM auth.memberships WHERE organization_id = $1 AND principal_id = $2)
+  + (SELECT count(*) FROM public.audit_logs WHERE org_id = $1 AND action = 'member_joined')
+  + (SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.invite.accepted' AND organization_id = $1)`, f.org, user); n != 0 {
+		t.Fatalf("a refused accept wrote %d rows", n)
+	}
+}

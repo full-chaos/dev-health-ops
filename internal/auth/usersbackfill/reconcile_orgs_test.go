@@ -223,8 +223,13 @@ func TestOrgsReconcileVerbIsRegisteredAndDocumentsBothModes(t *testing.T) {
 	}
 	var stderr bytes.Buffer
 	code := v.Run(context.Background(), cli.Env{Args: []string{"-h"}, Lookup: func(string) (string, bool) { return "", false }, Stdout: &bytes.Buffer{}, Stderr: &stderr})
-	if code != cli.ExitOK || !strings.Contains(stderr.String(), "-exact") || !strings.Contains(stderr.String(), "default") {
-		t.Fatalf("help: exit %d, text %q (it must name -exact and the default mode)", code, stderr.String())
+	if code != cli.ExitOK {
+		t.Fatalf("help: exit %d", code)
+	}
+	for _, want := range []string{"default mode:", "-exact:", "cutover gate", "go-api"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("help lacks %q (it must describe the default mode and -exact):\n%s", want, stderr.String())
+		}
 	}
 }
 

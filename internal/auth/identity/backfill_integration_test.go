@@ -317,6 +317,59 @@ func TestBackfillReplacesAnExpiredAssignmentOfASuperuser(t *testing.T) {
 	}
 }
 
+// The replace of an expired backfilled assignment deletes only the row it
+// read: when an operator re-grants the role between the backfill's read and its
+// delete (the expired row revoked, a new granted row in its place), the replace
+// is refused and writes nothing.
+func TestBackfillReplaceRefusesWhenTheRowChangedAfterTheRead(t *testing.T) {
+	e := getEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	granter := BackfillTarget{ID: uuid.New(), Email: uniqueEmail("bfrg"), Active: true, Superuser: true}
+	target := BackfillTarget{ID: uuid.New(), Email: uniqueEmail("bfrt"), Active: true, Superuser: true}
+	for _, u := range []BackfillTarget{granter, target} {
+		if _, err := e.store.BackfillUser(ctx, u, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plantExpiredRole(t, ctx, e, target.ID, nil)
+	st, found, err := e.store.readBackfillState(ctx, target.ID)
+	if err != nil || !found || st.roleHeld || st.roleExpired == nil {
+		t.Fatalf("read: %+v found=%v err=%v, want an expired backfilled row", st, found, err)
+	}
+	// The operator re-grants between the read and the delete.
+	regrant := uuid.New()
+	err = audit.Commit(ctx, e.store.pool, e.store.schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			if _, err := tx.Exec(ctx, `DELETE FROM `+e.store.q+`.platform_role_assignments WHERE id = $1`, *st.roleExpired); err != nil {
+				return err
+			}
+			_, err := tx.Exec(ctx, `INSERT INTO `+e.store.q+`.platform_role_assignments (id, principal_id, role_key, granted_by)
+VALUES ($1, $2, $3, $4)`, regrant, target.ID, PlatformAdminRole, granter.ID)
+			return err
+		},
+		Audit: roleAudit("auth.platform_role.granted", "role_granted", target.ID.String()),
+		Events: []audit.OutboxEvent{roleEvent(*st.roleExpired, "platform_role_assignment.revoked", "revoked"),
+			roleEvent(regrant, "platform_role_assignment.granted", "active")},
+	})
+	if err != nil {
+		t.Fatalf("operator re-grant: %v", err)
+	}
+	audits := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE subject_principal_id = $1`, target.ID)
+	if err := e.store.grantBackfillRole(ctx, target.ID, st.roleExpired); err == nil {
+		t.Fatal("the replace succeeded after the row changed; want a refusal")
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.platform_role_assignments WHERE principal_id = $1`, target.ID); n != 1 {
+		t.Fatalf("assignments after the refused replace = %d, want only the operator's", n)
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.platform_role_assignments WHERE id = $1 AND granted_by = $2`, regrant, granter.ID); n != 1 {
+		t.Fatal("the refused replace removed the operator's assignment")
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE subject_principal_id = $1`, target.ID); n != audits {
+		t.Fatalf("the refused replace wrote %d audit rows", n-audits)
+	}
+}
+
 func TestBackfillNeverRevokesAnAssignmentWithAGranter(t *testing.T) {
 	e := getEnv(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)

@@ -213,7 +213,7 @@ func operatorFor(ctx context.Context, env cli.Env, resolve dsnResolver) (admin.O
 	}
 	authSchema, err := policy.AuthSchemaFromEnv(func(name string) string { value, _ := env.Lookup(name); return value })
 	if err != nil {
-		return admin.Operator{}, func() {}, writeError(env.Stderr, "platform_roles_owned_invalid", err.Error())
+		return admin.Operator{}, func() {}, writeError(env.Stderr, "auth_schema_invalid", err.Error())
 	}
 	dsn, ok := resolve(env.Lookup, env.Stderr)
 	if !ok {

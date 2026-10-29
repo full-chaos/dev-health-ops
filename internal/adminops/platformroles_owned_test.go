@@ -3,10 +3,12 @@ package adminops
 import (
 	"bytes"
 	"context"
+	"io"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 func platformRolesLookup(owned string) func(string) (string, bool) {
@@ -41,5 +43,38 @@ func TestDhoUsersSuperuserRefusesWhileOwned(t *testing.T) {
 				t.Fatalf("malformed switch: exit %d stderr %q, want a configuration error naming the switch", code, stderr.String())
 			}
 		})
+	}
+}
+
+// The dho admin Operator carries the switch and AUTH_DATABASE_SCHEMA into its
+// store, so its users reads take is_superuser from the platform role rule in
+// that schema while owned. The pool is built without connecting.
+func TestOperatorCarriesThePlatformRoleRead(t *testing.T) {
+	dsn := func(secrets.LookupEnv, io.Writer) (secrets.Value, bool) {
+		return secrets.NewValue("postgres://nobody:none@127.0.0.1:1/none?connect_timeout=1"), true
+	}
+	for _, c := range []struct {
+		owned, schema string
+		wantOwned     bool
+		wantSchema    string
+	}{
+		{"true", "acp", true, "acp"},
+		{"", "", false, "auth"},
+	} {
+		values := map[string]string{"AUTH_PLATFORM_ROLES_OWNED": c.owned, "AUTH_DATABASE_SCHEMA": c.schema}
+		env := cli.Env{Lookup: func(key string) (string, bool) { value, ok := values[key]; return value, ok && value != "" },
+			Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}
+		op, closePool, code := operatorFor(context.Background(), env, dsn)
+		closePool()
+		if code != 0 || op.PlatformRolesOwned != c.wantOwned || op.AuthSchema != c.wantSchema {
+			t.Errorf("%+v: owned %v schema %q code %d, want %v %q", c, op.PlatformRolesOwned, op.AuthSchema, code, c.wantOwned, c.wantSchema)
+		}
+	}
+	values := map[string]string{"AUTH_DATABASE_SCHEMA": "a;b"}
+	env := cli.Env{Lookup: func(key string) (string, bool) { value, ok := values[key]; return value, ok },
+		Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}
+	if _, closePool, code := operatorFor(context.Background(), env, dsn); code == 0 {
+		closePool()
+		t.Error("an unusable auth schema was accepted")
 	}
 }

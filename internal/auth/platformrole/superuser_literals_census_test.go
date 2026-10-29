@@ -107,7 +107,12 @@ type literalRow struct {
 
 func readLiteralRows(t *testing.T) map[string]literalRow {
 	t.Helper()
-	f, err := os.Open(filepath.Join("testdata", "superuser_literals.tsv"))
+	return readLiteralRowsFrom(t, "superuser_literals.tsv")
+}
+
+func readLiteralRowsFrom(t *testing.T, name string) map[string]literalRow {
+	t.Helper()
+	f, err := os.Open(filepath.Join("testdata", name))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,15 +126,15 @@ func readLiteralRows(t *testing.T) map[string]literalRow {
 		}
 		fields := strings.Split(line, "\t")
 		if len(fields) != 4 || fields[3] == "" {
-			t.Fatalf("superuser_literals.tsv: %q is not file, function, count, kind", line)
+			t.Fatalf("%s: %q is not file, function, count, kind", name, line)
 		}
 		n, err := strconv.Atoi(fields[2])
 		if err != nil || n < 1 {
-			t.Fatalf("superuser_literals.tsv: %q: count must be a positive number", line)
+			t.Fatalf("%s: %q: count must be a positive number", name, line)
 		}
 		key := fields[0] + "\t" + fields[1]
 		if _, dup := rows[key]; dup {
-			t.Fatalf("superuser_literals.tsv: %s listed twice", key)
+			t.Fatalf("%s: %s listed twice", name, key)
 		}
 		rows[key] = literalRow{count: n, kind: fields[3]}
 	}

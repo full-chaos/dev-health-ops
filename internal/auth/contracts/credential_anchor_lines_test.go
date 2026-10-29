@@ -16,9 +16,10 @@ import (
 // a pin no anchor uses, and an unknown repo all fail; none is skipped.
 
 type anchorPin struct {
-	Path string `json:"path"`
-	Line int    `json:"line"`
-	Text string `json:"text"`
+	Path   string `json:"path"`
+	Line   int    `json:"line"`
+	Offset int    `json:"offset,omitempty"`
+	Text   string `json:"text"`
 }
 
 type anchorReport struct {
@@ -41,14 +42,14 @@ func checkCredentialAnchorLines(document []byte, pins []anchorPin, root string) 
 		report.failures = append(report.failures, fmt.Sprintf("credential-classes.json does not parse: %v", err))
 		return report
 	}
-	pinned := map[string]string{}
+	pinned := map[string]anchorPin{}
 	used := map[string]bool{}
 	for _, pin := range pins {
 		key := fmt.Sprintf("%s:%d", pin.Path, pin.Line)
 		if _, dup := pinned[key]; dup {
 			report.failures = append(report.failures, fmt.Sprintf("duplicate pin for %s", key))
 		}
-		pinned[key] = pin.Text
+		pinned[key] = pin
 	}
 	lineCache := map[string][]string{}
 	var walk func(classID, where string, node any)
@@ -95,7 +96,7 @@ func checkCredentialAnchorLines(document []byte, pins []anchorPin, root string) 
 	return report
 }
 
-func checkOneAnchor(report *anchorReport, root, classID, where string, repo any, path string, line int, pinned map[string]string, used map[string]bool, lineCache map[string][]string) {
+func checkOneAnchor(report *anchorReport, root, classID, where string, repo any, path string, line int, pinned map[string]anchorPin, used map[string]bool, lineCache map[string][]string) {
 	label := fmt.Sprintf("class %s anchor %s %s:%d", classID, strings.TrimPrefix(where, "/"), path, line)
 	repoName, _ := repo.(string)
 	if foreignAnchorRepos[repoName] {
@@ -104,6 +105,10 @@ func checkOneAnchor(report *anchorReport, root, classID, where string, repo any,
 	}
 	if repoName != "ops" {
 		report.failures = append(report.failures, fmt.Sprintf("%s: repo %q is not ops, web or acr", label, repoName))
+		return
+	}
+	if !filepath.IsLocal(path) {
+		report.failures = append(report.failures, fmt.Sprintf("%s: path is not a clean relative path inside the checkout", label))
 		return
 	}
 	lines, err := readAnchorFile(root, path, lineCache)
@@ -119,12 +124,12 @@ func checkOneAnchor(report *anchorReport, root, classID, where string, repo any,
 		report.failures = append(report.failures, fmt.Sprintf("%s: retired python path exists again; pin it", label))
 	}
 	key := fmt.Sprintf("%s:%d", path, line)
-	expected, ok := pinned[key]
+	pin, ok := pinned[key]
 	if !ok {
 		var others []string
-		for pinKey, text := range pinned {
+		for pinKey, other := range pinned {
 			if strings.HasPrefix(pinKey, path+":") {
-				others = append(others, fmt.Sprintf("%s=%q", pinKey, text))
+				others = append(others, fmt.Sprintf("%s=%q", pinKey, other.Text))
 			}
 		}
 		sort.Strings(others)
@@ -133,13 +138,33 @@ func checkOneAnchor(report *anchorReport, root, classID, where string, repo any,
 	}
 	used[key] = true
 	report.checked++
+	if trivialAnchorText(pin.Text) {
+		report.failures = append(report.failures, fmt.Sprintf("%s: pinned text %q is blank or brace-only and cannot detect a change; pin the first real line with an offset", label, pin.Text))
+		return
+	}
+	if pin.Offset < 0 {
+		report.failures = append(report.failures, fmt.Sprintf("%s: pin offset %d is negative", label, pin.Offset))
+		return
+	}
+	for step := 0; step < pin.Offset; step++ {
+		at := line + step
+		if at < 1 || at > len(lines) || !trivialAnchorText(strings.TrimSpace(lines[at-1])) {
+			report.failures = append(report.failures, fmt.Sprintf("%s: pin offset %d crosses line %d, which is not blank or brace-only", label, pin.Offset, at))
+			return
+		}
+	}
+	at := line + pin.Offset
 	found := "<past end of file>"
-	if line >= 1 && line <= len(lines) {
-		found = strings.TrimSpace(lines[line-1])
+	if at >= 1 && at <= len(lines) {
+		found = strings.TrimSpace(lines[at-1])
 	}
-	if found != expected {
-		report.failures = append(report.failures, fmt.Sprintf("%s: expected line text %q, found %q", label, expected, found))
+	if found != pin.Text {
+		report.failures = append(report.failures, fmt.Sprintf("%s: expected line text %q at %s:%d, found %q", label, pin.Text, path, at, found))
 	}
+}
+
+func trivialAnchorText(text string) bool {
+	return strings.Trim(text, "{}()[], \t") == ""
 }
 
 func readAnchorFile(root, path string, cache map[string][]string) ([]string, error) {
@@ -226,5 +251,56 @@ func TestCredentialAnchorLineCheckFailsOnAMovedLine(t *testing.T) {
 	foreignRepo := []byte(`{"classes":[{"class_id":"demo_class","issuer":{"anchors":[{"repo":"nowhere","path":"a","line":1}]}}]}`)
 	if report := checkCredentialAnchorLines(foreignRepo, nil, root); len(report.failures) == 0 {
 		t.Error("an unknown repo must fail")
+	}
+}
+
+func TestCredentialAnchorLineCheckRefusesAPathOutsideTheCheckout(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "checkout")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(parent, "outside.txt"), []byte("SECRET-OUTSIDE\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"../outside.txt", "/etc/hostname", "a/../../outside.txt"} {
+		document := []byte(fmt.Sprintf(`{"classes":[{"class_id":"demo_class","issuer":{"anchors":[{"repo":"ops","path":%q,"line":1}]}}]}`, path))
+		pins := []anchorPin{{Path: path, Line: 1, Text: "other"}}
+		report := checkCredentialAnchorLines(document, pins, root)
+		if len(report.failures) == 0 {
+			t.Errorf("path %q must fail", path)
+		}
+		if strings.Contains(strings.Join(report.failures, "\n"), "SECRET-OUTSIDE") {
+			t.Errorf("path %q leaked the outside file: %v", path, report.failures)
+		}
+	}
+}
+
+func TestCredentialAnchorLineCheckPinsTheFirstRealLineWhenTheAnchorLineIsBlank(t *testing.T) {
+	root := t.TempDir()
+	source := "package x\n\nfunc Verify() bool { return false }\n"
+	if err := os.WriteFile(filepath.Join(root, "a.go"), []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	document := []byte(`{"classes":[{"class_id":"demo_class","issuer":{"anchors":[{"repo":"ops","path":"a.go","line":2}]}}]}`)
+	pins := []anchorPin{{Path: "a.go", Line: 2, Offset: 1, Text: "func Verify() bool { return false }"}}
+	if report := checkCredentialAnchorLines(document, pins, root); len(report.failures) != 0 {
+		t.Fatalf("a blank anchor line pinned at its first real line must pass: %v", report.failures)
+	}
+	changed := "package x\n\nfunc Verify() bool { return true }\n"
+	if err := os.WriteFile(filepath.Join(root, "a.go"), []byte(changed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if report := checkCredentialAnchorLines(document, pins, root); len(report.failures) == 0 {
+		t.Fatal("a changed first real line must fail even though the anchor line is still blank")
+	}
+	blankPin := []anchorPin{{Path: "a.go", Line: 2, Text: ""}}
+	if report := checkCredentialAnchorLines(document, blankPin, root); len(report.failures) == 0 {
+		t.Fatal("a blank or brace-only pin must fail: it cannot detect any change")
+	}
+	farOffset := []anchorPin{{Path: "a.go", Line: 1, Offset: 2, Text: "func Verify() bool { return true }"}}
+	farDoc := []byte(`{"classes":[{"class_id":"demo_class","issuer":{"anchors":[{"repo":"ops","path":"a.go","line":1}]}}]}`)
+	if report := checkCredentialAnchorLines(farDoc, farOffset, root); len(report.failures) == 0 {
+		t.Fatal("an offset is allowed only across blank or brace-only lines; line 1 is real")
 	}
 }

@@ -3,6 +3,7 @@ package bigboy_test
 import (
 	"context"
 	"fmt"
+	"os"
 	"path"
 	"regexp"
 	"sort"
@@ -12,6 +13,8 @@ import (
 	"github.com/compose-spec/compose-go/v2/loader"
 	"github.com/compose-spec/compose-go/v2/types"
 	"gopkg.in/yaml.v3"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/bigboydir"
 )
 
 // No docker on the runners: composeRender does what `docker compose config` does, on the parsed file.
@@ -45,9 +48,13 @@ type composeOut struct {
 	err      string
 }
 
-// composeBugsinkEnv is the three bugsink variables the deploy copy of the file requires (`:?`); the ops copy
-// has defaults, so supplying them is harmless there. Test-only values.
+// composeBugsinkEnv is the three bugsink variables the deploy copy of the file requires (`:?`). It supplies
+// them only for a tree chosen by BIGBOY_DIR: the in-repo ci/bigboy keeps its defaults, and a render or
+// required-set check of it must fail if those become required. Test-only values.
 func composeBugsinkEnv() map[string]string {
+	if os.Getenv(bigboydir.Env) == "" {
+		return map[string]string{} // non-nil: a fresh-root render reads it as "no process env at all"
+	}
 	return map[string]string{
 		"BUGSINK_DB_PASSWORD":      "test-only-bugsink-db",
 		"BUGSINK_SECRET_KEY":       "test-only-bugsink-key",

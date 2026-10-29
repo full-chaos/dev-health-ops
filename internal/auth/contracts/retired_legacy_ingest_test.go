@@ -25,7 +25,7 @@ func TestNoContractNamesARetiredLegacyIngestPath(t *testing.T) {
 	if dir, ok := bigboydir.Lookup(root); ok { // the private tree is checked where it is present (deploy CI sets BIGBOY_DIR)
 		files["bigboy traefik planes"] = filepath.Join(dir, "traefik-dynamic-planes.yml.example")
 	} else {
-		t.Log("bigboy tree absent: the bigboy traefik planes example is not checked here")
+		t.Run("bigboy_traefik_planes", func(t *testing.T) { bigboydir.Dir(t, root) }) // reports the skip the deploy job fails on
 	}
 	for name, path := range files {
 		raw, err := os.ReadFile(path)

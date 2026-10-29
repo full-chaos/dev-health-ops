@@ -519,11 +519,31 @@ func TestCompatLoginAuditsAKnownUsersFailureAtTheirFirstMembership(t *testing.T)
 	}
 }
 
-func TestCompatLoginAuditsTheRequestedOrganizationWhenItExists(t *testing.T) {
+// projected reports whether the fixture projected organization id.
+func (f *compatFixture) projected(id uuid.UUID) bool {
+	f.projector.mu.Lock()
+	defer f.projector.mu.Unlock()
+	for _, call := range f.projector.orgCalls {
+		if call == id {
+			return true
+		}
+	}
+	return false
+}
+
+// A refused sign-in names the requested organization only when the user is a
+// member of it; otherwise the row is under the user's first membership and
+// the requested organization is never projected.
+func TestCompatLoginAuditsTheRequestedOrganizationOnlyForAMember(t *testing.T) {
 	f := newCompatFixture(t)
+	f.do(http.MethodPost, PatternCompatLogin, loginBody(compatEmail, "wrong", f.org.String()), nil)
+	if org := f.appended[0].OrganizationID; org == nil || *org != f.org.String() || !f.projected(f.org) {
+		t.Fatalf("member: organization %v (projected %v), want the requested %s", org, f.projected(f.org), f.org)
+	}
+	f = newCompatFixture(t)
 	f.do(http.MethodPost, PatternCompatLogin, loginBody(compatEmail, "wrong", f.orgD.String()), nil)
-	if org := f.appended[0].OrganizationID; org == nil || *org != f.orgD.String() {
-		t.Fatalf("organization %v, want the requested %s", org, f.orgD)
+	if org := f.appended[0].OrganizationID; org == nil || *org != f.orgB.String() || f.projected(f.orgD) {
+		t.Fatalf("non-member: organization %v (requested projected %v), want the first membership %s", org, f.projected(f.orgD), f.orgB)
 	}
 	missing := uuid.New()
 	f = newCompatFixture(t)
@@ -589,8 +609,11 @@ func TestCompatLoginToAnOrganizationTheUserIsNotIn(t *testing.T) {
 		t.Fatal("a session was created for an organization the user is not in")
 	}
 	event := f.appended[0]
-	if event.Attributes["reason_code"] != reasonNotMember || event.OrganizationID == nil || *event.OrganizationID != f.orgD.String() {
-		t.Fatalf("audit %+v", event)
+	if event.Attributes["reason_code"] != reasonNotMember || event.OrganizationID == nil || *event.OrganizationID != f.orgB.String() {
+		t.Fatalf("audit %+v, want the first membership %s", event, f.orgB)
+	}
+	if f.projected(f.orgD) {
+		t.Fatal("the organization the user is not in was projected")
 	}
 }
 
@@ -1112,8 +1135,64 @@ func TestAnUnverifiedSignInIsAuditedUnderTheUsersOwnMembership(t *testing.T) {
 	user.IsVerified, user.AuthProvider = false, &provider
 	delete(f.users.memberships, f.principal)
 	f.do(http.MethodPost, PatternCompatLogin, loginBody(compatEmail, compatPassword, f.orgD.String()), nil)
-	if org := f.appended[0].OrganizationID; org == nil || *org != f.orgD.String() {
-		t.Fatalf("without a membership the audit organization is %v, want the requested %s", org, f.orgD)
+	if org := f.appended[0].OrganizationID; org != nil || f.projected(f.orgD) {
+		t.Fatalf("without a membership the audit organization is %v (projected %v), want none", org, f.projected(f.orgD))
+	}
+}
+
+// Every refusal of a sign-in that names an organization the user is not a
+// member of leaves that organization unprojected and off the audit row: an
+// unknown address names no organization at all, a known one its first
+// membership.
+func TestARefusedSignInNeverProjectsARequestedOrganizationOfANonMember(t *testing.T) {
+	cases := map[string]struct {
+		email, password string
+		locked          bool
+		known           bool
+	}{
+		"unknown address": {"nobody@example.com", "x", false, false},
+		"wrong password":  {compatEmail, "wrong", false, true},
+		"locked":          {compatEmail, compatPassword, true, true},
+		"not a member":    {compatEmail, compatPassword, false, true},
+	}
+	for name, c := range cases {
+		f := newCompatFixture(t)
+		f.attempts.locked, f.attempts.remaining = c.locked, time.Minute
+		response := f.do(http.MethodPost, PatternCompatLogin, loginBody(c.email, c.password, f.orgD.String()), nil)
+		if response.Code < 400 || len(f.appended) != 1 {
+			t.Fatalf("%s: status %d with %d audit rows", name, response.Code, len(f.appended))
+		}
+		if f.projected(f.orgD) {
+			t.Errorf("%s: the requested organization of a non-member was projected", name)
+		}
+		org := f.appended[0].OrganizationID
+		switch {
+		case !c.known && org != nil:
+			t.Errorf("%s: the row names organization %s, want none", name, *org)
+		case c.known && (org == nil || *org != f.orgB.String()):
+			t.Errorf("%s: the row names organization %v, want the first membership %s", name, org, f.orgB)
+		}
+	}
+}
+
+// A successful sign-in of a user with no membership that names an
+// organization neither projects it nor puts it on the session or its row; a
+// member's sign-in to a requested organization is unchanged.
+func TestASuccessfulSignInWithoutAMembershipNamesNoRequestedOrganization(t *testing.T) {
+	f := newCompatFixture(t)
+	delete(f.users.memberships, f.principal)
+	response := f.do(http.MethodPost, PatternCompatLogin, loginBody(compatEmail, compatPassword, f.orgD.String()), nil)
+	if response.Code != http.StatusOK || len(f.sessions.created) != 1 {
+		t.Fatalf("status %d, %d sessions: %s", response.Code, len(f.sessions.created), response.Body)
+	}
+	created := f.sessions.created[0]
+	if created.org != nil || created.event.OrganizationID != nil || f.projected(f.orgD) {
+		t.Fatalf("session org %v, row org %v, projected %v: want none of them", created.org, created.event.OrganizationID, f.projected(f.orgD))
+	}
+	f = newCompatFixture(t)
+	f.do(http.MethodPost, PatternCompatLogin, loginBody(compatEmail, compatPassword, f.org.String()), nil)
+	if created := f.sessions.created[0]; created.org == nil || *created.org != f.org || *created.event.OrganizationID != f.org.String() || !f.projected(f.org) {
+		t.Fatalf("member: session org %v, want the requested %s projected", created.org, f.org)
 	}
 }
 

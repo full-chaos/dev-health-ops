@@ -564,3 +564,100 @@ VALUES ($1, $2, NULL, 'local', true, true, false, 0, now(), now())`, publicOnly,
 		})
 	}
 }
+
+// both is the inviter and join time of a pair in each table.
+type both struct {
+	publicInviter, authInviter *uuid.UUID
+	publicJoined, authJoined   time.Time
+}
+
+func (e *env) joins(t *testing.T, ctx context.Context, org, user uuid.UUID) both {
+	t.Helper()
+	var b both
+	if err := e.admin.QueryRow(ctx, `SELECT p.invited_by_id, a.invited_by, p.joined_at, a.joined_at FROM public.memberships p
+JOIN auth.memberships a ON a.organization_id = p.org_id AND a.principal_id = p.user_id
+WHERE p.org_id = $1 AND p.user_id = $2`, org, user).Scan(&b.publicInviter, &b.authInviter, &b.publicJoined, &b.authJoined); err != nil {
+		t.Fatalf("read both rows: %v", err)
+	}
+	return b
+}
+
+func sameInviter(a, b *uuid.UUID) bool {
+	return (a == nil && b == nil) || (a != nil && b != nil && *a == *b)
+}
+
+// A re-add is a new join: both rows get the new inviter and one new joined_at.
+// A reactivate is the same membership: both rows keep its inviter and joined_at.
+func TestReAddAndReactivateKeepTheInviterAndJoinEqualInBothRows(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	org, user, owner, first, second := e.seedOrg(t, ctx), e.seedUser(t, ctx), e.seedUser(t, ctx), e.seedUser(t, ctx), e.seedUser(t, ctx)
+	e.add(t, ctx, org, owner, "owner")
+	if _, err := e.store.Add(ctx, Change{OrgID: org, PrincipalID: user, Role: "member", InvitedBy: &first, Authorize: allowAll}); err != nil {
+		t.Fatal(err)
+	}
+	before := e.joins(t, ctx, org, user)
+	if _, err := e.store.Remove(ctx, Change{OrgID: org, PrincipalID: user, Authorize: allowAll}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.store.Add(ctx, Change{OrgID: org, PrincipalID: user, Role: "viewer", InvitedBy: &second, Authorize: allowAll}); err != nil {
+		t.Fatal(err)
+	}
+	readded := e.joins(t, ctx, org, user)
+	if !sameInviter(readded.publicInviter, &second) || !sameInviter(readded.authInviter, &second) {
+		t.Fatalf("re-add inviter public=%v auth=%v, want %v in both", readded.publicInviter, readded.authInviter, second)
+	}
+	if !readded.publicJoined.Equal(readded.authJoined) || !readded.authJoined.After(before.authJoined) {
+		t.Fatalf("re-add joined_at public=%v auth=%v (first join %v), want one new instant in both", readded.publicJoined, readded.authJoined, before.authJoined)
+	}
+	if _, err := e.store.Suspend(ctx, Change{OrgID: org, PrincipalID: user, Authorize: allowAll}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.store.Reactivate(ctx, Change{OrgID: org, PrincipalID: user, Authorize: allowAll}); err != nil {
+		t.Fatal(err)
+	}
+	back := e.joins(t, ctx, org, user)
+	if !sameInviter(back.publicInviter, &second) || !sameInviter(back.authInviter, &second) {
+		t.Fatalf("reactivate inviter public=%v auth=%v, want %v in both", back.publicInviter, back.authInviter, second)
+	}
+	if !back.publicJoined.Equal(readded.authJoined) || !back.authJoined.Equal(readded.authJoined) {
+		t.Fatalf("reactivate joined_at public=%v auth=%v, want the membership's %v in both", back.publicJoined, back.authJoined, readded.authJoined)
+	}
+}
+
+// A missing principal, inviter or organization is named only to an actor
+// Authorize accepts; a refused actor gets ErrDenied for each, and nothing is
+// written.
+func TestLookupRefusalsAreDeniedToARefusedActor(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	org, user := e.seedOrg(t, ctx), e.seedUser(t, ctx)
+	refuse := func(context.Context, audit.TxOps, Locked) error { return ErrDenied }
+	missing, missingOrg := uuid.New(), uuid.New()
+	cases := []struct {
+		name string
+		c    Change
+		want error
+	}{
+		{"missing principal", Change{OrgID: org, PrincipalID: missing, Role: "member"}, ErrPrincipalNotFound},
+		{"missing inviter", Change{OrgID: org, PrincipalID: user, Role: "member", InvitedBy: &missing}, ErrInviterNotFound},
+		{"missing organization", Change{OrgID: missingOrg, PrincipalID: user, Role: "member"}, ErrOrgNotFound},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			denied := tc.c
+			denied.Authorize = refuse
+			if _, err := e.store.Add(ctx, denied); !errors.Is(err, ErrDenied) || errors.Is(err, tc.want) {
+				t.Fatalf("refused actor: err = %v, want ErrDenied and not %v", err, tc.want)
+			}
+			allowed := tc.c
+			allowed.Authorize = allowAll
+			if _, err := e.store.Add(ctx, allowed); !errors.Is(err, tc.want) {
+				t.Fatalf("accepted actor: err = %v, want %v", err, tc.want)
+			}
+		})
+	}
+	if got := e.rows(t, ctx, org, user); got != (rows{}) {
+		t.Fatalf("rows = %+v, want none", got)
+	}
+}

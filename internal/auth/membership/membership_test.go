@@ -230,3 +230,16 @@ func TestOutcomeLabelsAreClosed(t *testing.T) {
 		}
 	}
 }
+
+// A caller that changes the returned role list changes nothing the store checks.
+func TestOrganizationRolesIsACopy(t *testing.T) {
+	roles := OrganizationRoles()
+	roles[0] = "superuser"
+	_ = append(OrganizationRoles(), "superuser")
+	if _, err := decide(verbAdd, state{}, "superuser", 1); !errors.Is(err, ErrRoleInvalid) {
+		t.Fatalf("decide after a caller changed the role list = %v, want ErrRoleInvalid", err)
+	}
+	if got := OrganizationRoles(); len(got) != 4 || got[0] != "viewer" {
+		t.Fatalf("OrganizationRoles = %v, want the four catalog roles", got)
+	}
+}

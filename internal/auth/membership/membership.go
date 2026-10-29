@@ -37,11 +37,14 @@ const (
 	verbTransfer   verb = "transfer"
 )
 
-// OrganizationRoles are the organization roles of contracts/auth/v1/vocabulary/roles.v1.json.
-var OrganizationRoles = []string{"viewer", "member", "admin", "owner"}
+// organizationRoles are the organization roles of contracts/auth/v1/vocabulary/roles.v1.json.
+var organizationRoles = [...]string{"viewer", "member", "admin", "owner"}
+
+// OrganizationRoles returns a copy of the organization roles.
+func OrganizationRoles() []string { return append([]string(nil), organizationRoles[:]...) }
 
 func isOrganizationRole(role string) bool {
-	for _, r := range OrganizationRoles {
+	for _, r := range organizationRoles {
 		if r == role {
 			return true
 		}

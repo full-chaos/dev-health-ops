@@ -139,12 +139,14 @@ func (s *Store) run(ctx context.Context, v verb, m audit.Mutation) (err error) {
 
 // pairRows is one locked (organization, principal) pair in both tables.
 type pairRows struct {
-	principal  uuid.UUID
-	publicID   *uuid.UUID
-	publicRole *string
-	authID     *uuid.UUID
-	authStatus *Status
-	authRole   *string
+	principal     uuid.UUID
+	publicID      *uuid.UUID
+	publicRole    *string
+	authID        *uuid.UUID
+	authStatus    *Status
+	authRole      *string
+	authJoinedAt  *time.Time
+	authInvitedBy *uuid.UUID
 }
 
 func (p pairRows) state() state { return effective(p.publicRole, p.authStatus, p.authRole) }
@@ -283,7 +285,7 @@ WHERE org_id = $1 AND (role = 'owner' OR user_id = ANY($2::uuid[])) ORDER BY id`
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	rows, err = q.query(ctx, `SELECT id, principal_id, status, role FROM `+s.q+`.memberships
+	rows, err = q.query(ctx, `SELECT id, principal_id, status, role, joined_at, invited_by FROM `+s.q+`.memberships
 WHERE organization_id = $1 AND principal_id = ANY($2::uuid[]) ORDER BY id`+forUpdate, orgID, idText)
 	if err != nil {
 		return nil, err
@@ -292,12 +294,14 @@ WHERE organization_id = $1 AND principal_id = ANY($2::uuid[]) ORDER BY id`+forUp
 		var id, principal uuid.UUID
 		var status Status
 		var role *string
-		if err := rows.Scan(&id, &principal, &status, &role); err != nil {
+		var joined *time.Time
+		var inviter *uuid.UUID
+		if err := rows.Scan(&id, &principal, &status, &role, &joined, &inviter); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		p := l.pairs[principal]
-		p.authID, p.authStatus, p.authRole = &id, &status, role
+		p.authID, p.authStatus, p.authRole, p.authJoinedAt, p.authInvitedBy = &id, &status, role, joined, inviter
 	}
 	rows.Close()
 	return l, rows.Err()
@@ -355,6 +359,23 @@ func authorize(ctx context.Context, tx audit.TxOps, auth Authorize, l Locked) er
 	return nil
 }
 
+// lookupRefusals name a missing or suspended row. They are only returned to an
+// actor Authorize accepts; any other actor gets ErrDenied, with no other
+// detail, so a refused caller learns nothing about which rows exist.
+var lookupRefusals = []error{ErrPrincipalNotFound, ErrInviterNotFound, ErrOrgNotFound, ErrOrgSuspended}
+
+func authorizeLookup(ctx context.Context, tx audit.TxOps, auth Authorize, l Locked, lookupErr error) error {
+	for _, refusal := range lookupRefusals {
+		if errors.Is(lookupErr, refusal) {
+			if err := authorize(ctx, tx, auth, l); err != nil {
+				return err
+			}
+			return lookupErr
+		}
+	}
+	return lookupErr
+}
+
 func (s *Store) checkRevision(ctx context.Context, tx audit.TxOps, id uuid.UUID, expected *int64) error {
 	if expected == nil {
 		return nil
@@ -372,18 +393,33 @@ func (s *Store) checkRevision(ctx context.Context, tx audit.TxOps, id uuid.UUID,
 }
 
 // write brings both rows of one pair to next: active = go-api's row present
-// with the role; any other status = no public row (the 10783 contract).
-func (s *Store) write(ctx context.Context, tx audit.TxOps, orgID uuid.UUID, p *pairRows, id uuid.UUID, next state, invitedBy *uuid.UUID) error {
+// with the role; any other status = no public row (the 10783 contract). A fresh
+// join (Add) gives both rows one new joined_at and the given inviter; any other
+// activation keeps the membership's own joined_at and inviter from its auth
+// row, so both rows always carry the same join.
+func (s *Store) write(ctx context.Context, tx audit.TxOps, orgID uuid.UUID, p *pairRows, id uuid.UUID, next state, fresh bool, invitedBy *uuid.UUID) error {
+	var at time.Time
+	if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&at); err != nil {
+		return err
+	}
+	joined, inviter := p.authJoinedAt, p.authInvitedBy
+	if fresh || joined == nil {
+		joined = &at
+	}
+	if fresh {
+		inviter = invitedBy
+	}
 	if next.status == StatusActive {
 		switch {
 		case p.publicID == nil:
+			// An inviter go-api no longer has (public.users ON DELETE SET NULL) is written as NULL.
 			if _, err := tx.Exec(ctx, `INSERT INTO public.memberships (id, user_id, org_id, role, invited_by_id, joined_at, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, clock_timestamp(), clock_timestamp(), clock_timestamp())`, id, p.principal, orgID, next.role, invitedBy); err != nil {
+VALUES ($1, $2, $3, $4, (SELECT u.id FROM public.users u WHERE u.id = $5), $6, $7, $7)`, id, p.principal, orgID, next.role, inviter, *joined, at); err != nil {
 				return err
 			}
 		case *p.publicRole != next.role:
-			if _, err := tx.Exec(ctx, `UPDATE public.memberships SET role = $2, updated_at = clock_timestamp() WHERE id = $1`,
-				*p.publicID, next.role); err != nil {
+			if _, err := tx.Exec(ctx, `UPDATE public.memberships SET role = $2, updated_at = $3 WHERE id = $1`,
+				*p.publicID, next.role, at); err != nil {
 				return err
 			}
 		}
@@ -397,13 +433,21 @@ VALUES ($1, $2, $3, $4, $5, clock_timestamp(), clock_timestamp(), clock_timestam
 		role = &next.role
 	}
 	if p.authID == nil {
+		var authJoined *time.Time
+		if next.status == StatusActive {
+			authJoined = joined
+		}
 		_, err := tx.Exec(ctx, `INSERT INTO `+s.q+`.memberships (id, organization_id, principal_id, status, role, invited_by, joined_at)
-VALUES ($1, $2, $3, $4, $5, $6, CASE WHEN $4 = 'active' THEN clock_timestamp() END)`, id, orgID, p.principal, string(next.status), role, invitedBy)
+VALUES ($1, $2, $3, $4, $5, $6, $7)`, id, orgID, p.principal, string(next.status), role, inviter, authJoined)
 		return err
 	}
-	_, err := tx.Exec(ctx, `UPDATE `+s.q+`.memberships SET status = $2, role = $3,
-joined_at = CASE WHEN $2 = 'active' THEN COALESCE(joined_at, clock_timestamp()) ELSE joined_at END,
-updated_at = clock_timestamp() WHERE id = $1`, *p.authID, string(next.status), role)
+	if next.status == StatusActive {
+		_, err := tx.Exec(ctx, `UPDATE `+s.q+`.memberships SET status = $2, role = $3, joined_at = $4, invited_by = $5,
+updated_at = $6 WHERE id = $1`, *p.authID, string(next.status), role, *joined, inviter, at)
+		return err
+	}
+	_, err := tx.Exec(ctx, `UPDATE `+s.q+`.memberships SET status = $2, role = $3, updated_at = $4 WHERE id = $1`,
+		*p.authID, string(next.status), role, at)
 	return err
 }
 
@@ -477,7 +521,7 @@ func (s *Store) mutate(ctx context.Context, v verb, c Change) (*Membership, erro
 			Apply: func(ctx context.Context, tx audit.TxOps) error {
 				l, err := s.readPairs(ctx, txQuerier{tx}, c.OrgID, ids, c.InvitedBy, true)
 				if err != nil {
-					return err
+					return authorizeLookup(ctx, tx, c.Authorize, Locked{OrgID: c.OrgID, Principals: ids}, err)
 				}
 				if err := authorize(ctx, tx, c.Authorize, Locked{OrgID: c.OrgID, Principals: ids}); err != nil {
 					return err
@@ -502,7 +546,7 @@ func (s *Store) mutate(ctx context.Context, v verb, c Change) (*Membership, erro
 				if d.noop {
 					return nil
 				}
-				return s.write(ctx, tx, c.OrgID, p, plan.id, d.next, c.InvitedBy)
+				return s.write(ctx, tx, c.OrgID, p, plan.id, d.next, v == verbAdd, c.InvitedBy)
 			},
 			Audit:  auditFor(v, c.OrgID, c.PrincipalID, plan.id, c.Actor, plan.prev, plan.next),
 			Events: []audit.OutboxEvent{eventFor(v, plan.id, plan.next)},
@@ -562,7 +606,7 @@ func (s *Store) TransferOwnership(ctx context.Context, t Transfer) error {
 			Apply: func(ctx context.Context, tx audit.TxOps) error {
 				l, err := s.readPairs(ctx, txQuerier{tx}, t.OrgID, ids, nil, true)
 				if err != nil {
-					return err
+					return authorizeLookup(ctx, tx, t.Authorize, Locked{OrgID: t.OrgID, Principals: sortedUnique(ids)}, err)
 				}
 				if err := authorize(ctx, tx, t.Authorize, Locked{OrgID: t.OrgID, Principals: sortedUnique(ids)}); err != nil {
 					return err
@@ -578,10 +622,10 @@ func (s *Store) TransferOwnership(ctx context.Context, t Transfer) error {
 				if !from.matches(pf) || !to.matches(pt) || nextFrom != from.next || nextTo != to.next {
 					return errStateMoved
 				}
-				if err := s.write(ctx, tx, t.OrgID, pf, from.id, nextFrom, nil); err != nil {
+				if err := s.write(ctx, tx, t.OrgID, pf, from.id, nextFrom, false, nil); err != nil {
 					return err
 				}
-				return s.write(ctx, tx, t.OrgID, pt, to.id, nextTo, nil)
+				return s.write(ctx, tx, t.OrgID, pt, to.id, nextTo, false, nil)
 			},
 			Audit:  auditFor(verbTransfer, t.OrgID, t.To, to.id, t.Actor, to.prev, to.next),
 			Events: []audit.OutboxEvent{eventFor(verbTransfer, from.id, from.next), eventFor(verbTransfer, to.id, to.next)},

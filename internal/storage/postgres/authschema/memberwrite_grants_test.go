@@ -23,17 +23,25 @@ func TestMembershipWriteGrantsAreTheReviewedColumns(t *testing.T) {
 	}
 }
 
-// The INSERT the projection needs is RegisterOrganizationGrants' and nothing
-// here repeats it: one grant set per privilege.
+// No column is both in RegisterOrganizationGrants' memberships INSERT and in
+// MembershipWriteGrants' INSERT (one grant set per privilege and column), and
+// no key column is updatable.
 func TestMembershipWriteGrantsDoNotRepeatTheInsertGrant(t *testing.T) {
 	g := MembershipWriteGrants()
+	for _, column := range g.Update {
+		if column == "id" || column == "user_id" || column == "org_id" {
+			t.Errorf("UPDATE of key column %q", column)
+		}
+	}
 	for _, insert := range RegisterOrganizationGrants() {
 		if insert.Table != g.Table {
 			continue
 		}
-		for _, column := range g.Update {
-			if column == "id" || column == "user_id" || column == "org_id" {
-				t.Errorf("UPDATE of key column %q", column)
+		for _, column := range g.Insert {
+			for _, registered := range insert.Columns {
+				if column == registered {
+					t.Errorf("INSERT column %q is in both RegisterOrganizationGrants and MembershipWriteGrants", column)
+				}
 			}
 		}
 		return

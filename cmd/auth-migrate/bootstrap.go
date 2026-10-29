@@ -41,8 +41,10 @@ var syncDir = func(dir string) error {
 }
 
 // writeSecretFile creates path (it must not exist; a symlink there is not
-// followed) with mode 0600 whatever the umask, writes value with no newline
-// and syncs the file and its directory.
+// followed) with mode 0600 whatever the umask, writes value with no newline,
+// syncs and closes the file, then syncs its directory. Any failure removes
+// path and is returned, so the caller registers nothing: a value is
+// registered only once it and its directory entry are on disk.
 func writeSecretFile(path, value string) (err error) {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) // #nosec G304 -- operator-chosen output path, created exclusively
 	if err != nil {
@@ -52,13 +54,24 @@ func writeSecretFile(path, value string) (err error) {
 		return errors.New("the -out file could not be created")
 	}
 	defer func() {
-		if cerr := f.Close(); err == nil && cerr != nil {
-			err = errors.New("the -out file could not be closed")
-		}
 		if err != nil {
 			_ = os.Remove(path)
 		}
 	}()
+	if err := fillSecretFile(f, value); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return errors.New("the -out file could not be closed")
+	}
+	if err := syncDir(filepath.Dir(path)); err != nil {
+		return errors.New("the -out directory could not be synced")
+	}
+	return nil
+}
+
+func fillSecretFile(f *os.File, value string) error {
 	if err := f.Chmod(0o600); err != nil {
 		return errors.New("the -out file mode could not be set")
 	}
@@ -68,7 +81,6 @@ func writeSecretFile(path, value string) (err error) {
 	if err := f.Sync(); err != nil {
 		return errors.New("the -out file could not be synced")
 	}
-	_ = syncDir(filepath.Dir(path))
 	return nil
 }
 

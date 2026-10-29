@@ -71,10 +71,14 @@ const blindDigest = "blind_margin"
 // Preflight lists the tables the migration role cannot write, by name only.
 func Preflight(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier) ([]string, error) {
 	var missing []string
+	var user string
+	if err := pool.QueryRow(ctx, `SELECT current_user`).Scan(&user); err != nil {
+		return nil, fmt.Errorf("%w: reading the connected role", ErrApply)
+	}
 	check := func(name, qualified, privilege string) error {
 		var ok *bool
-		if err := pool.QueryRow(ctx, `SELECT CASE WHEN to_regclass($1) IS NULL THEN NULL ELSE has_table_privilege(current_user, $1, $2) END`,
-			qualified, privilege).Scan(&ok); err != nil {
+		if err := pool.QueryRow(ctx, `SELECT CASE WHEN to_regclass($1) IS NULL THEN NULL ELSE has_table_privilege($3::text, $1, $2) END`,
+			qualified, privilege, user).Scan(&ok); err != nil {
 			return fmt.Errorf("%w: reading privileges", ErrApply)
 		}
 		if ok == nil || !*ok {

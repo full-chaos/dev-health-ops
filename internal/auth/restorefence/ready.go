@@ -59,16 +59,17 @@ func Timeline(ctx context.Context, q Querier) (int64, error) {
 }
 
 // Check is the runtime's readiness probe. It returns nil only when
-// restore_fence_state holds a row for the timeline the server is on now. A
-// server still in recovery, a malformed WAL file name and a failed read are all
-// "not ready"; the driver error text never reaches the caller.
+// restore_fence_state holds a row for the timeline the server is on now. The
+// timeline and the row are read in ONE statement (one connection, one
+// snapshot): two statements could read the timeline of the old primary and then
+// a fence row of that old timeline after a promotion, and answer ready on a
+// promoted, unfenced database. A server still in recovery (the WAL insert
+// position raises there) and every other failure are "not ready"; the driver
+// error text never reaches the caller.
 func Check(ctx context.Context, q Querier, schema authschema.ValidatedIdentifier) error {
-	timeline, err := Timeline(ctx, q)
-	if err != nil {
-		return err
-	}
 	var fenced bool
-	err = q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM `+authschema.Quote(schema)+`.restore_fence_state WHERE timeline_id = $1)`, timeline).Scan(&fenced)
+	err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM `+authschema.Quote(schema)+`.restore_fence_state
+		WHERE timeline_id = ('x' || substr(pg_walfile_name(pg_current_wal_insert_lsn()), 1, 8))::bit(32)::bigint)`).Scan(&fenced)
 	if err != nil {
 		return fmt.Errorf("%w", ErrCheckFailed)
 	}

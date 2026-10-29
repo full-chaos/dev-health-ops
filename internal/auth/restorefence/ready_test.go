@@ -48,55 +48,82 @@ func (f *fakeQuerier) QueryRow(_ context.Context, sql string, args ...any) pgx.R
 
 const walFileOnTimeline2 = "000000020000000000000007"
 
+// promotingDB models a database that is promoted (the live timeline moves from 1 to 2, and only timeline 1 has a fence
+// row) right after its first statement returns: the reviewer's interleaving. A statement that names both the timeline
+// and the fence table is evaluated at one instant; two separate statements can mix two timelines.
+type promotingDB struct {
+	live    int64
+	rows    map[int64]bool
+	promote bool
+	calls   []string
+	mixed   bool
+	err     error
+}
+
+func (d *promotingDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
+	d.calls = append(d.calls, sql)
+	n := len(d.calls)
+	defer func() {
+		if n == 1 && d.promote {
+			d.live = 2
+		}
+	}()
+	if d.err != nil {
+		return fakeRow{err: d.err}
+	}
+	hasTimeline, hasState := strings.Contains(sql, "pg_walfile_name"), strings.Contains(sql, "restore_fence_state")
+	switch {
+	case hasTimeline && hasState:
+		return fakeRow{fenced: d.rows[d.live]}
+	case hasTimeline:
+		return fakeRow{walFile: map[int64]string{1: "000000010000000000000007", 2: walFileOnTimeline2}[d.live]}
+	default:
+		tl, _ := args[0].(int64)
+		if tl != d.live {
+			d.mixed = true
+		}
+		return fakeRow{fenced: d.rows[tl]}
+	}
+}
+
+// Round1122 P1: the timeline and the fence row are read in ONE statement. A promotion between two statements made
+// the old code answer ready for the unfenced timeline 2 from the fence row of the old timeline 1.
+func TestCheckNeverMixesTwoTimelinesAcrossAPromotion(t *testing.T) {
+	db := &promotingDB{live: 1, rows: map[int64]bool{1: true}, promote: true}
+	_ = Check(context.Background(), db, testSchema(t))
+	if db.mixed {
+		t.Fatal("the fence row was read for a timeline that was no longer the live one (ready from the old primary's row)")
+	}
+	if len(db.calls) != 1 {
+		t.Fatalf("Check ran %d statements; the timeline and the row must be read together (want 1)", len(db.calls))
+	}
+	for _, want := range []string{"pg_walfile_name(pg_current_wal_insert_lsn())", `"auth".restore_fence_state`} {
+		if !strings.Contains(db.calls[0], want) {
+			t.Errorf("the one statement does not contain %s: %s", want, db.calls[0])
+		}
+	}
+}
+
 func TestCheckIsReadyOnlyWhenTheCurrentTimelineHasAFenceRecord(t *testing.T) {
-	q := &fakeQuerier{timeline: fakeRow{walFile: walFileOnTimeline2}, state: fakeRow{fenced: true}}
-	if err := Check(context.Background(), q, testSchema(t)); err != nil {
+	if err := Check(context.Background(), &promotingDB{live: 2, rows: map[int64]bool{2: true}}, testSchema(t)); err != nil {
 		t.Fatalf("a fenced timeline is not ready: %v", err)
 	}
-	if len(q.sql) != 2 || !strings.Contains(q.sql[0], "pg_walfile_name(pg_current_wal_insert_lsn())") || !strings.Contains(q.sql[1], `"auth".restore_fence_state`) {
-		t.Fatalf("the check does not compare the state with the live timeline: %v", q.sql)
-	}
-	if len(q.args[1]) != 1 || q.args[1][0] != int64(2) {
-		t.Fatalf("the state lookup is not keyed by the parsed timeline 2: %v", q.args[1])
-	}
-	q.state = fakeRow{fenced: false}
-	if err := Check(context.Background(), q, testSchema(t)); !errors.Is(err, ErrNotFenced) {
-		t.Fatalf("an unfenced timeline = %v, want ErrNotFenced", err)
+	if err := Check(context.Background(), &promotingDB{live: 2, rows: map[int64]bool{1: true}}, testSchema(t)); !errors.Is(err, ErrNotFenced) {
+		t.Fatalf("an unfenced timeline (a row exists only for timeline 1) = %v, want ErrNotFenced", err)
 	}
 }
 
-// pg_walfile_name raises on a standby ("recovery is in progress"): that, and
-// every other failure to read the timeline or the state, is NOT ready.
-func TestCheckIsNotReadyWhenTheTimelineCannotBeRead(t *testing.T) {
-	q := &fakeQuerier{timeline: fakeRow{err: errors.New("recovery is in progress")}, state: fakeRow{fenced: true}}
-	err := Check(context.Background(), q, testSchema(t))
-	if !errors.Is(err, ErrCheckFailed) {
-		t.Fatalf("a timeline read that fails (in recovery) = %v, want ErrCheckFailed", err)
-	}
-	if strings.Contains(err.Error(), "recovery is in progress") {
-		t.Fatal("the driver error text reached the check error")
-	}
-	if len(q.sql) != 1 {
-		t.Fatalf("the state was read although the timeline was not: %v", q.sql)
-	}
-}
-
-func TestCheckFailsClosedWhenTheStateCannotBeRead(t *testing.T) {
-	q := &fakeQuerier{timeline: fakeRow{walFile: walFileOnTimeline2}, state: fakeRow{err: errors.New("relation does not exist")}}
-	err := Check(context.Background(), q, testSchema(t))
-	if !errors.Is(err, ErrCheckFailed) {
-		t.Fatalf("an unreadable state = %v, want ErrCheckFailed", err)
-	}
-	if strings.Contains(err.Error(), "does not exist") {
-		t.Fatal("the driver error text reached the check error")
-	}
-}
-
-func TestCheckRefusesAWalFileNameItCannotReadATimelineFrom(t *testing.T) {
-	for _, name := range []string{"", "0000000", "ZZZZZZZZ0000000000000007", "000000000000000000000007", "00000002"} {
-		q := &fakeQuerier{timeline: fakeRow{walFile: name}, state: fakeRow{fenced: true}}
-		if err := Check(context.Background(), q, testSchema(t)); !errors.Is(err, ErrCheckFailed) {
-			t.Errorf("WAL file name %q = %v, want ErrCheckFailed", name, err)
+// pg_current_wal_insert_lsn raises on a standby ("recovery is in progress"): that, and every other failure of the
+// statement, is NOT ready, and the driver error text never reaches the caller.
+func TestCheckIsNotReadyWhenTheStatementFails(t *testing.T) {
+	for _, msg := range []string{"recovery is in progress", "relation does not exist"} {
+		db := &promotingDB{live: 1, rows: map[int64]bool{1: true}, err: errors.New(msg)}
+		err := Check(context.Background(), db, testSchema(t))
+		if !errors.Is(err, ErrCheckFailed) {
+			t.Fatalf("%q = %v, want ErrCheckFailed", msg, err)
+		}
+		if strings.Contains(err.Error(), msg) {
+			t.Fatalf("the driver error text %q reached the check error", msg)
 		}
 	}
 }

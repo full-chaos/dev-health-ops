@@ -382,7 +382,7 @@ func TestApplyOnANoLossTimelineChangesNothingAndClearsReadiness(t *testing.T) {
 	db := newFenceDB(t, ctx)
 	db.stateT(t, ctx)
 	if err := Check(ctx, db.runtime, db.schema); !errors.Is(err, ErrNotFenced) {
-		t.Fatalf("a migrated database with no init = %v, want ErrNotFenced (0034 writes no row)", err)
+		t.Fatalf("a migrated database with no init = %v, want ErrNotFenced (0035 writes no row)", err)
 	}
 	if _, err := Init(ctx, db.admin, db.schema, InitOptions{}); err != nil {
 		t.Fatalf("init: %v", err)

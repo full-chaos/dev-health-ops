@@ -229,7 +229,7 @@ func (failingKeys) KeySet(context.Context) (token.KeySet, error) {
 }
 
 func TestTheLegacyHS256TokenIsAcceptedOnlyOnARowThatOptsIn(t *testing.T) {
-	hs, err := NewIssuer(testSecret, testIssuer, AccessTokenAudience)
+	hs, err := NewIssuer(testSecret, testIssuer, contracts.PlatformAPIAudience)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +255,7 @@ func TestTheLegacyHS256TokenIsAcceptedOnlyOnARowThatOptsIn(t *testing.T) {
 
 func TestALegacyTokenKeepsItsOwnRefusalReason(t *testing.T) {
 	a := newAccessFixture(t)
-	hs, err := NewIssuer(strings.Repeat("z", 40), testIssuer, AccessTokenAudience)
+	hs, err := NewIssuer(strings.Repeat("z", 40), testIssuer, contracts.PlatformAPIAudience)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,7 +383,7 @@ func TestAnApiAudienceEdDSATokenIsRefusedOnASessionRowWhileTheLegacyTokenPasses(
 	api.Aud, api.Scope = "dev-health-api", "api:access"
 	expectError(t, a.do(http.MethodGet, "/v1/sessions/current", "", a.signClaims(api)), http.StatusUnauthorized, "audience")
 
-	hs, err := NewIssuer(testSecret, testIssuer, AccessTokenAudience)
+	hs, err := NewIssuer(testSecret, testIssuer, contracts.PlatformAPIAudience)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -55,7 +55,8 @@ func NewEdDSAIssuer(secret, legacyIssuer, audience string, signer AccessSigner, 
 	if issuerURL == "" {
 		return nil, errors.New("authapi: the EdDSA access token needs an issuer URL")
 	}
-	verifier, err := edgetoken.New(secret, legacyIssuer, audience)
+	// The HS256 compatibility token is go-api's: it carries go-api's audience, whatever audience this issuer mints.
+	verifier, err := edgetoken.New(secret, legacyIssuer, contracts.PlatformAPIAudience)
 	if err != nil {
 		return nil, err
 	}

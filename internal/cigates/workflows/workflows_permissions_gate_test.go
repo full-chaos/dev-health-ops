@@ -35,18 +35,43 @@ var workflowPermAllowlist = []permRow{
 
 type jobKey struct{ file, job string }
 
-var jobWriteAllowlist = map[jobKey]map[string]string{
-	{"auto-release.yml", "tag-and-release"}:      {"contents": "write"},
-	{"codeql-analysis.yml", "analyze-docs-only"}: {"actions": "read", "contents": "read", "security-events": "write"},
-	{"codeql-analysis.yml", "analyze"}:           {"actions": "read", "contents": "read", "security-events": "write"},
-	{"docker-images.yml", "resolve"}:             {"contents": "read", "packages": "write", "pull-requests": "read", "attestations": "read"},
-	{"docker-images.yml", "go-merge"}:            {"contents": "read", "packages": "write", "id-token": "write", "attestations": "write"},
-	{"docker-images.yml", "go-api-tools-merge"}:  {"contents": "read", "packages": "write", "id-token": "write", "attestations": "write"},
-	{"go.yml", "cancel-stacked-queue-children"}:  {"actions": "write", "contents": "read"},
-	{"mirror-test-images.yml", "mirror"}:         {"contents": "read", "packages": "write"},
-	{"security-scan.yml", "semgrep"}:             {"contents": "read", "security-events": "write"},
-	{"security-scan.yml", "gitleaks"}:            {"contents": "read", "security-events": "write"},
-	{"venue-oracles-main-alert.yml", "alert"}:    {"contents": "read", "actions": "read", "issues": "write"},
+// jobPermRow: the exact effective permissions of a job that are not exactly contents: read, and why. The job name "*" is
+// the row of every job of the workflow that has no permissions block of its own: it is valid only while at least one such
+// job exists and every one of them inherits exactly this map.
+type jobPermRow struct {
+	want   map[string]string
+	reason string
+}
+
+var jobPermAllowlist = map[jobKey]jobPermRow{
+	{"auto-release.yml", "tag-and-release"}:        {map[string]string{"contents": "write"}, "creates the release tag and the release"},
+	{"codeql-analysis.yml", "analyze-docs-only"}:   {map[string]string{"actions": "read", "contents": "read", "security-events": "write"}, "uploads the code scanning result of the docs-only twin"},
+	{"codeql-analysis.yml", "analyze"}:             {map[string]string{"actions": "read", "contents": "read", "security-events": "write"}, "uploads the code scanning result"},
+	{"docker-images.yml", "resolve"}:               {map[string]string{"contents": "read", "packages": "write", "pull-requests": "read", "attestations": "read"}, "reads the promotion state (pull requests, attestations) and writes the lookup package"},
+	{"docker-images.yml", "go-merge"}:              {map[string]string{"contents": "read", "packages": "write", "id-token": "write", "attestations": "write"}, "merges the multi-arch image, signs and attests it"},
+	{"docker-images.yml", "go-api-tools-merge"}:    {map[string]string{"contents": "read", "packages": "write", "id-token": "write", "attestations": "write"}, "merges the multi-arch image, signs and attests it"},
+	{"go-quality.yml", "go-quality-plan"}:          {map[string]string{"contents": "read", "packages": "read", "actions": "read"}, "lists runs and pulls images to plan the legs"},
+	{"go.yml", "go-storage-integration-plan"}:      {map[string]string{"contents": "read", "actions": "read"}, "lists runs for the integration shard plan"},
+	{"go.yml", "go-storage-integration"}:           {map[string]string{"actions": "read"}, "reads run state and nothing else"},
+	{"go.yml", "cancel-stacked-queue-children"}:    {map[string]string{"actions": "write", "contents": "read"}, "cancels the runs stacked on a red queue entry"},
+	{"governance.yml", "governance"}:               {map[string]string{"contents": "read", "pull-requests": "read"}, "reads pull requests for the governance gate"},
+	{"live-e2e.yml", "live-e2e-run"}:               {map[string]string{"contents": "read", "packages": "read"}, "pulls images from ghcr"},
+	{"live-e2e.yml", "metrics-executed-proof-run"}: {map[string]string{"contents": "read", "packages": "read"}, "pulls images from ghcr"},
+	{"mirror-test-images.yml", "precheck"}:         {map[string]string{"contents": "read", "packages": "read"}, "reads the mirror packages, writes nothing"},
+	{"mirror-test-images.yml", "mirror"}:           {map[string]string{"contents": "read", "packages": "write"}, "publishes the mirrored images to ghcr"},
+	{"mirror-test-images.yml", "dry-run"}:          {map[string]string{"contents": "read", "packages": "read"}, "the read-only dry run of the mirror"},
+	{"security-scan.yml", "changes"}:               {map[string]string{"contents": "read", "pull-requests": "read"}, "reads pull requests for the change filter"},
+	{"security-scan.yml", "semgrep"}:               {map[string]string{"contents": "read", "security-events": "write"}, "uploads the code scanning result"},
+	{"security-scan.yml", "gitleaks"}:              {map[string]string{"contents": "read", "security-events": "write"}, "uploads the code scanning result"},
+	{"venue-oracles-main-alert.yml", "alert"}:      {map[string]string{"contents": "read", "actions": "read", "issues": "write"}, "opens the issue for a red main run"},
+	{"arc-runner-image.yml", "*"}:                  {map[string]string{"contents": "read", "packages": "write"}, "the jobs without a block inherit the workflow-level grant (see its workflow row); each must keep inheriting exactly this map"},
+	{"docker-images.yml", "*"}:                     {map[string]string{"contents": "read", "packages": "write", "id-token": "write"}, "the jobs without a block inherit the workflow-level grant (see its workflow row); each must keep inheriting exactly this map"},
+	{"freeze-provider-worlds.yml", "*"}:            {map[string]string{"contents": "read", "packages": "read"}, "the jobs without a block inherit the workflow-level grant (see its workflow row); each must keep inheriting exactly this map"},
+	{"go-quality.yml", "*"}:                        {map[string]string{"contents": "read", "packages": "read"}, "the jobs without a block inherit the workflow-level grant (see its workflow row); each must keep inheriting exactly this map"},
+	{"go-workers-compose-proof.yml", "*"}:          {map[string]string{"contents": "read", "packages": "read"}, "the jobs without a block inherit the workflow-level grant (see its workflow row); each must keep inheriting exactly this map"},
+	{"go.yml", "*"}:                                {map[string]string{"contents": "read", "packages": "read"}, "the jobs without a block inherit the workflow-level grant (see its workflow row); each must keep inheriting exactly this map"},
+	{"venue-oracles-changed.yml", "*"}:             {map[string]string{"contents": "read", "packages": "read"}, "the jobs without a block inherit the workflow-level grant (see its workflow row); each must keep inheriting exactly this map"},
+	{"venue-oracles.yml", "*"}:                     {map[string]string{"contents": "read", "actions": "read", "packages": "read"}, "the jobs without a block inherit the workflow-level grant (see its workflow row); each must keep inheriting exactly this map"},
 }
 
 var persistAllowlist = map[jobKey]string{
@@ -91,7 +116,7 @@ func hasWrite(m map[string]string) bool {
 	return false
 }
 
-func permissionsDefects(t *testing.T, root string, wfAllow []permRow, jobAllow map[jobKey]map[string]string, persistAllow map[jobKey]string) []string {
+func permissionsDefects(t *testing.T, root string, wfAllow []permRow, jobAllow map[jobKey]jobPermRow, persistAllow map[jobKey]string) []string {
 	t.Helper()
 	var out []string
 	allowed := map[string]permRow{}
@@ -99,7 +124,7 @@ func permissionsDefects(t *testing.T, root string, wfAllow []permRow, jobAllow m
 		allowed[r.file] = r
 	}
 	seenWf := map[string]bool{}
-	seenJobWrite := map[jobKey]bool{}
+	seenJob := map[jobKey]bool{}
 	seenPersist := map[jobKey]bool{}
 	for _, name := range workflowNames(t, root) {
 		seenWf[name] = true
@@ -132,17 +157,26 @@ func permissionsDefects(t *testing.T, root string, wfAllow []permRow, jobAllow m
 			if jPresent && !jIsMap {
 				out = append(out, fmt.Sprintf("%s job %s: permissions is %v, not a mapping", name, j, job["permissions"]))
 			}
-			if jPresent && jIsMap && hasWrite(jp) {
-				seenJobWrite[key] = true
-				if want, ok := jobAllow[key]; !ok {
-					out = append(out, fmt.Sprintf("%s job %s: job-level permissions %v grant a write scope that is not allowlisted", name, j, jp))
-				} else if !reflect.DeepEqual(jp, want) {
-					out = append(out, fmt.Sprintf("%s job %s: job-level permissions %v differ from the allowlisted %v", name, j, jp, want))
-				}
-			}
 			eff, effOK := top, isMap
 			if jPresent {
 				eff, effOK = jp, jIsMap
+			}
+			if effOK && !reflect.DeepEqual(eff, map[string]string{"contents": "read"}) {
+				row, ok := jobAllow[key]
+				switch {
+				case ok:
+					seenJob[key] = true
+				case !jPresent:
+					if row, ok = jobAllow[jobKey{name, "*"}]; ok {
+						seenJob[jobKey{name, "*"}] = true
+					}
+				}
+				switch {
+				case !ok:
+					out = append(out, fmt.Sprintf("%s job %s: effective permissions %v are not exactly contents: read and have no allowlist row", name, j, eff))
+				case !reflect.DeepEqual(eff, row.want):
+					out = append(out, fmt.Sprintf("%s job %s: effective permissions %v differ from the allowlisted %v", name, j, eff, row.want))
+				}
 			}
 			canWrite := effOK && hasWrite(eff)
 			for _, s := range stepsOf(job) {
@@ -176,9 +210,12 @@ func permissionsDefects(t *testing.T, root string, wfAllow []permRow, jobAllow m
 			out = append(out, r.file+": allowlist row without a reason")
 		}
 	}
-	for k := range jobAllow {
-		if !seenJobWrite[k] {
-			out = append(out, fmt.Sprintf("%s job %s: stale job write allowlist row, the job has no write block", k.file, k.job))
+	for k, row := range jobAllow {
+		if !seenJob[k] {
+			out = append(out, fmt.Sprintf("%s job %s: stale job allowlist row, no job has these effective permissions under this key", k.file, k.job))
+		}
+		if strings.TrimSpace(row.reason) == "" {
+			out = append(out, fmt.Sprintf("%s job %s: job allowlist row without a reason", k.file, k.job))
 		}
 	}
 	for k, reason := range persistAllow {
@@ -202,7 +239,7 @@ func allWorkflowFiles(t *testing.T, root string) []string {
 }
 
 func TestWorkflowPermissionsGateHoldsOnTheRealTree(t *testing.T) {
-	d := permissionsDefects(t, rootOf(t), workflowPermAllowlist, jobWriteAllowlist, persistAllowlist)
+	d := permissionsDefects(t, rootOf(t), workflowPermAllowlist, jobPermAllowlist, persistAllowlist)
 	if len(d) > 0 {
 		t.Fatalf("%s", strings.Join(d, "\n"))
 	}
@@ -230,14 +267,14 @@ func TestWorkflowPermissionsGateRefusesEachDefectClass(t *testing.T) {
 		{"workflow block widened", mutation{testWf, topRead, "permissions:\n  contents: write\n"}, "test.yml: workflow-level permissions map[contents:write], want exactly contents: read"},
 		{"workflow block gains a scope", mutation{testWf, topRead, "permissions:\n  contents: read\n  packages: write\n"}, "test.yml: workflow-level permissions map[contents:read packages:write], want exactly contents: read"},
 		{"a job adds a read scope", mutation{testWf, jobRead, "    permissions:\n      contents: read\n      packages: read\n    outputs:\n"}, "test.yml job changes: effective permissions map[contents:read packages:read] are not exactly contents: read and have no allowlist row"},
-		{"a job without a block inherits a non-read workflow map", mutation{testWf, topRead, "permissions:\n  contents: read\n  packages: read\n"}, "have no allowlist row"},
-		{"job block widened to write", mutation{testWf, jobRead, "    permissions:\n      contents: write\n    outputs:\n"}, "test.yml job changes: job-level permissions map[contents:write] grant a write scope that is not allowlisted"},
+		{"a job without a block inherits a non-read workflow map", mutation{testWf, topRead, "permissions:\n  contents: read\n  packages: read\n"}, "test.yml job test: effective permissions map[contents:read packages:read] are not exactly contents: read and have no allowlist row"},
+		{"job block widened to write", mutation{testWf, jobRead, "    permissions:\n      contents: write\n    outputs:\n"}, "test.yml job changes: effective permissions map[contents:write] are not exactly contents: read and have no allowlist row"},
 		{"registry login in a read-only job", mutation{mirror, suiteRun, "      - name: Login\n        run: docker login ghcr.io\n" + suiteRun}, "mirror-test-images.yml job precheck-lib-test: a registry login in a job with no packages scope"},
 		{"login action in a read-only job", mutation{mirror, suiteRun, "      - uses: docker/login-action@v4\n" + suiteRun}, "mirror-test-images.yml job precheck-lib-test: a registry login in a job with no packages scope"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			tmp := plantTree(t, root, files, c.m)
-			d := strings.Join(permissionsDefects(t, tmp, workflowPermAllowlist, jobWriteAllowlist, persistAllowlist), "\n")
+			d := strings.Join(permissionsDefects(t, tmp, workflowPermAllowlist, jobPermAllowlist, persistAllowlist), "\n")
 			if !strings.Contains(d, c.want) {
 				t.Errorf("want %q in:\n%s", c.want, d)
 			}
@@ -245,42 +282,59 @@ func TestWorkflowPermissionsGateRefusesEachDefectClass(t *testing.T) {
 	}
 	t.Run("the mirror checkout persists credentials", func(t *testing.T) {
 		tmp := plantTree(t, root, files, mutation{mirror, "          persist-credentials: false\n", allMarker})
-		d := strings.Join(permissionsDefects(t, tmp, workflowPermAllowlist, jobWriteAllowlist, persistAllowlist), "\n")
+		d := strings.Join(permissionsDefects(t, tmp, workflowPermAllowlist, jobPermAllowlist, persistAllowlist), "\n")
 		if !strings.Contains(d, "mirror-test-images.yml job mirror: checkout in a job that can write must set persist-credentials: false") {
 			t.Errorf("not caught:\n%s", d)
 		}
 	})
 	t.Run("a stale or wrong allowlist row", func(t *testing.T) {
 		stale := append([]permRow{{"test.yml", map[string]string{"contents": "write"}, "x"}}, workflowPermAllowlist...)
-		if d := strings.Join(permissionsDefects(t, root, stale, jobWriteAllowlist, persistAllowlist), "\n"); !strings.Contains(d, "test.yml: stale allowlist row") {
+		if d := strings.Join(permissionsDefects(t, root, stale, jobPermAllowlist, persistAllowlist), "\n"); !strings.Contains(d, "test.yml: stale allowlist row") {
 			t.Errorf("stale row not caught:\n%s", d)
 		}
 		gone := append([]permRow{{"no-such.yml", map[string]string{}, "x"}}, workflowPermAllowlist...)
-		if d := strings.Join(permissionsDefects(t, root, gone, jobWriteAllowlist, persistAllowlist), "\n"); !strings.Contains(d, "no-such.yml: allowlisted workflow does not exist") {
+		if d := strings.Join(permissionsDefects(t, root, gone, jobPermAllowlist, persistAllowlist), "\n"); !strings.Contains(d, "no-such.yml: allowlisted workflow does not exist") {
 			t.Errorf("missing workflow not caught:\n%s", d)
 		}
 		wrong := append([]permRow(nil), workflowPermAllowlist...)
 		wrong[0] = permRow{wrong[0].file, map[string]string{"contents": "read"}, wrong[0].reason}
-		if d := strings.Join(permissionsDefects(t, root, wrong, jobWriteAllowlist, persistAllowlist), "\n"); !strings.Contains(d, "differ from the allowlisted") {
+		if d := strings.Join(permissionsDefects(t, root, wrong, jobPermAllowlist, persistAllowlist), "\n"); !strings.Contains(d, "differ from the allowlisted") {
 			t.Errorf("a map that differs from its row not caught:\n%s", d)
 		}
 		noReason := append([]permRow(nil), workflowPermAllowlist...)
 		noReason[0] = permRow{noReason[0].file, noReason[0].want, " "}
-		if d := strings.Join(permissionsDefects(t, root, noReason, jobWriteAllowlist, persistAllowlist), "\n"); !strings.Contains(d, "without a reason") {
+		if d := strings.Join(permissionsDefects(t, root, noReason, jobPermAllowlist, persistAllowlist), "\n"); !strings.Contains(d, "without a reason") {
 			t.Errorf("a row without a reason not caught:\n%s", d)
 		}
-		jobs := map[jobKey]map[string]string{{"test.yml", "changes"}: {"contents": "write"}}
-		for k, v := range jobWriteAllowlist {
-			jobs[k] = v
+		withJob := func(k jobKey, row jobPermRow) map[jobKey]jobPermRow {
+			m := map[jobKey]jobPermRow{}
+			for kk, v := range jobPermAllowlist {
+				m[kk] = v
+			}
+			m[k] = row
+			return m
 		}
-		if d := strings.Join(permissionsDefects(t, root, workflowPermAllowlist, jobs, persistAllowlist), "\n"); !strings.Contains(d, "stale job write allowlist row") {
-			t.Errorf("stale job row not caught:\n%s", d)
+		for name, c := range map[string]struct {
+			rows map[jobKey]jobPermRow
+			want string
+		}{
+			"a job row for a job whose effective map is contents: read": {withJob(jobKey{"test.yml", "changes"}, jobPermRow{map[string]string{"contents": "write"}, "x"}), "stale job allowlist row"},
+			"a job row for a job that is gone":                          {withJob(jobKey{"test.yml", "no-such-job"}, jobPermRow{map[string]string{"contents": "write"}, "x"}), "stale job allowlist row"},
+			"a wildcard row for a workflow that has no inheriting job":  {withJob(jobKey{"test.yml", "*"}, jobPermRow{map[string]string{"contents": "write"}, "x"}), "stale job allowlist row"},
+			"a job row without a reason":                                {withJob(jobKey{"mirror-test-images.yml", "mirror"}, jobPermRow{map[string]string{"contents": "read", "packages": "write"}, " "}), "job allowlist row without a reason"},
+			"a wildcard row without a reason":                           {withJob(jobKey{"go.yml", "*"}, jobPermRow{map[string]string{"contents": "read", "packages": "read"}, ""}), "job allowlist row without a reason"},
+			"a job row whose map differs from the effective map":        {withJob(jobKey{"mirror-test-images.yml", "mirror"}, jobPermRow{map[string]string{"contents": "read", "packages": "read"}, "x"}), "differ from the allowlisted"},
+			"a wildcard row whose map differs from the inherited map":   {withJob(jobKey{"go.yml", "*"}, jobPermRow{map[string]string{"contents": "read"}, "x"}), "differ from the allowlisted"},
+		} {
+			if d := strings.Join(permissionsDefects(t, root, workflowPermAllowlist, c.rows, persistAllowlist), "\n"); !strings.Contains(d, c.want) {
+				t.Errorf("%s not caught (want %q):\n%s", name, c.want, d)
+			}
 		}
 		pers := map[jobKey]string{{"test.yml", "changes"}: "x"}
 		for k, v := range persistAllowlist {
 			pers[k] = v
 		}
-		if d := strings.Join(permissionsDefects(t, root, workflowPermAllowlist, jobWriteAllowlist, pers), "\n"); !strings.Contains(d, "stale persist-credentials allowlist row") {
+		if d := strings.Join(permissionsDefects(t, root, workflowPermAllowlist, jobPermAllowlist, pers), "\n"); !strings.Contains(d, "stale persist-credentials allowlist row") {
 			t.Errorf("stale persist row not caught:\n%s", d)
 		}
 	})

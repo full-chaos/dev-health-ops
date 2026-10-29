@@ -26,14 +26,15 @@ type canonicalConfigStamp struct {
 }
 
 type zeroUnitOutcome struct {
-	status         string
-	errorText      *string
-	startedAt      *time.Time
-	completedAt    *time.Time
-	resultReason   *string
-	backfillStatus string
-	jobRunStatus   int
-	before, after  canonicalConfigStamp
+	status                                  string
+	totalUnits, completedUnits, failedUnits int
+	errorText                               *string
+	startedAt                               *time.Time
+	completedAt                             *time.Time
+	resultReason                            *string
+	backfillStatus                          string
+	jobRunStatus                            int
+	before, after                           canonicalConfigStamp
 }
 
 func readCanonicalConfigStamp(t *testing.T, ctx context.Context, pool *pgxpool.Pool) canonicalConfigStamp {
@@ -88,8 +89,8 @@ SET last_sync_at=$2, last_sync_success=TRUE, last_sync_error=NULL, last_sync_sta
 	if err := service.Finalize(ctx, newFinalizeArgs()); err != nil {
 		t.Fatalf("Finalize: %v", err)
 	}
-	if err := pool.QueryRow(ctx, `SELECT status, error, started_at, completed_at, result->>'reason' FROM sync_runs WHERE id=$1`, finalizeTestRun).
-		Scan(&out.status, &out.errorText, &out.startedAt, &out.completedAt, &out.resultReason); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT status, total_units, completed_units, failed_units, error, started_at, completed_at, result->>'reason' FROM sync_runs WHERE id=$1`, finalizeTestRun).
+		Scan(&out.status, &out.totalUnits, &out.completedUnits, &out.failedUnits, &out.errorText, &out.startedAt, &out.completedAt, &out.resultReason); err != nil {
 		t.Fatal(err)
 	}
 	if err := pool.QueryRow(ctx, `SELECT status FROM backfill_jobs WHERE id=$1`, noDatasetBackfill).Scan(&out.backfillStatus); err != nil {
@@ -118,6 +119,9 @@ func TestNativeFinalizeSyncRunNoDatasetForProviderIsANoOpSuccess(t *testing.T) {
 	out := finalizeZeroUnitRun(t, `{"reason":"no_dataset_for_provider"}`)
 	if out.status != syncRunStatusSuccess {
 		t.Fatalf("status=%q want=%q", out.status, syncRunStatusSuccess)
+	}
+	if out.totalUnits != 0 || out.completedUnits != 0 || out.failedUnits != 0 {
+		t.Fatalf("units total/completed/failed = %d/%d/%d want 0/0/0", out.totalUnits, out.completedUnits, out.failedUnits)
 	}
 	if out.errorText != nil {
 		t.Fatalf("error=%q want NULL", *out.errorText)

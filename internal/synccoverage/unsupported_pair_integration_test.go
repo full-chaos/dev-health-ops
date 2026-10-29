@@ -37,6 +37,9 @@ func seedFailedWindowFixture(t *testing.T, ctx context.Context, pool *pgxpool.Po
 		{`INSERT INTO sync_runs (id,org_id,integration_id,triggered_by,mode,status,total_units,completed_units,failed_units,started_at,completed_at,created_at) VALUES ($1,$2,$3,'test','incremental','success',0,0,0,$4,$5,$4)`, []any{fixture.RunID, orgID, fixture.IntegrationID, now.Add(-2 * time.Hour), now.Add(-time.Hour)}},
 		{`INSERT INTO scheduled_jobs (id,org_id,name,job_type,provider,schedule_cron,status,sync_config_id,next_run_at,created_at,updated_at) VALUES ($1,$2,'sync','sync',$3,'0 * * * *',0,$4,$5,$6,$6)`, []any{uuid.New(), orgID, provider, fixture.ConfigID, now.Add(time.Hour), now.Add(-24 * time.Hour)}},
 	}
+	// A backfill linked to the run whose units include the incidents window: the second path that can advertise a window.
+	statements = append(statements, statement{`INSERT INTO backfill_jobs (id,org_id,sync_config_id,celery_task_id,status,since_date,before_date) VALUES ($1,$2,$3,$4,'running',$5::date,$6::date)`,
+		[]any{uuid.New(), orgID, fixture.ConfigID, "sync_run:" + fixture.RunID.String(), now.Add(-240 * time.Hour), now.Add(-120 * time.Hour)}})
 	for _, dataset := range []struct {
 		key, status   string
 		since, before time.Duration

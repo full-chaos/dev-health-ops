@@ -124,3 +124,38 @@ func TestSelectorKindsEqualTheSchemaEnum(t *testing.T) {
 		t.Fatal("subject_token_type is not a selector kind")
 	}
 }
+
+// The selector name rules (content_type and subject_token_type if/then) are
+// written out three times: the inventory row schema, the wire profile schema
+// and the registry marker schema. They must be the same rules, so a rule
+// loosened in one copy fails here.
+func TestTheSelectorNameRulesAreTheSameInEverySchema(t *testing.T) {
+	inventory := readJSONFile(t, "contracts/auth/v1/endpoint-profile.schema.json")
+	wire := readJSONFile(t, "contracts/auth/v1/jsonschema/endpoint-auth-profile.v1.schema.json")
+	registry := readJSONFile(t, "contracts/auth/v1/credential-classes.schema.json")
+	dig := func(node any, path ...string) any {
+		for _, key := range path {
+			object, ok := node.(map[string]any)
+			if !ok {
+				t.Fatalf("path %v: %T is not an object", path, node)
+			}
+			node = object[key]
+		}
+		return node
+	}
+	rules := map[string]any{
+		"inventory": dig(inventory, "$defs", "endpointProfile", "properties", "class_disambiguator", "allOf"),
+		"wire":      dig(wire, "properties", "class_disambiguator", "allOf"),
+		"registry":  dig(registry, "$defs", "credentialClass", "properties", "markers", "items", "allOf"),
+	}
+	want, _ := json.Marshal(rules["inventory"])
+	if list, _ := rules["inventory"].([]any); len(list) != 2 {
+		t.Fatalf("inventory selector rules %s, want the content_type and subject_token_type rules", want)
+	}
+	for name, rule := range rules {
+		got, _ := json.Marshal(rule)
+		if string(got) != string(want) {
+			t.Errorf("%s selector rules differ from the inventory's:\n%s\n%s", name, got, want)
+		}
+	}
+}

@@ -291,6 +291,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		Logger:    logger,
 		Counters:  limits,
 	})...)
+	proxy.seedSeries(routes)
 	return markResponseModels(proxy.wrap(routes))
 }
 
@@ -696,15 +697,17 @@ func NewServerWithGate(
 	}
 	middleware = append(middleware, NewOriginValidation(cfg.CORSAllowedOrigins).Wrap, pyheaders.SecurityHeaders, pyheaders.NewCORS(cfg.CORSAllowedOrigins).Wrap)
 	return httpapi.NewServer(httpapi.ServerOptions{
-		Name:           "api-http",
-		Listener:       "public",
-		Address:        cfg.APIAddress,
-		Logger:         logger,
-		Routes:         routes,
-		RequestTimeout: requestTimeout,
-		MaxBodyBytes:   maxBodyBytes,
-		ErrorWriter:    WriteError,
-		NoStore:        noStore,
+		Name:     "api-http",
+		Listener: "public",
+		// The proxied auth routes' request series exist at 0 before the first request.
+		SeedRequestSeries: authProxyRequestSeeds(routes),
+		Address:           cfg.APIAddress,
+		Logger:            logger,
+		Routes:            routes,
+		RequestTimeout:    requestTimeout,
+		MaxBodyBytes:      maxBodyBytes,
+		ErrorWriter:       WriteError,
+		NoStore:           noStore,
 		// The Python api echoes any non-empty X-Request-ID
 		// (api/middleware/correlation_id.py) and routes the raw path, never
 		// redirecting one.

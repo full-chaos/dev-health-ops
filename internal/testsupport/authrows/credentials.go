@@ -20,6 +20,7 @@ var credentialAuditEvents = []credentialAuditEvent{
 	{"auth.user.email_verified", AuditMapping{"email_verified", "user", "Email verified"}},
 	{"auth.password.reset", AuditMapping{"password_reset", "user", "User reset password"}},
 	{"auth.user.password_changed", AuditMapping{"password_changed", "user", "User changed own password"}},
+	{"auth.password.reset_requested", AuditMapping{"password_reset_requested", "user", "Password reset requested"}},
 }
 
 // CredentialAuditEvents is the event type -> golden audit columns mapping of the credentials audit arm.

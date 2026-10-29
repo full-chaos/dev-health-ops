@@ -517,7 +517,9 @@ authService:
       #    ipBlock 0.0.0.0/0 (and/or ::/0) with ports of TCP 443 alone and an
       #    `except` list of at least 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16,
       #    100.64.0.0/10, 169.254.0.0/16, 127.0.0.0/8 (IPv6: fc00::/7,
-      #    fe80::/10, ::1/128, ::ffff:0:0/96, 64:ff9b::/96).
+      #    fe80::/10, ::1/128, 64:ff9b::/96). The IPv4-mapped range is not listed
+      #    (an IPv4-mapped destination leaves the pod as IPv4 and meets the v4
+      #    list); a mapped `except` entry is refused, as the apiserver refuses it.
       mail:
         to: []
         ports:

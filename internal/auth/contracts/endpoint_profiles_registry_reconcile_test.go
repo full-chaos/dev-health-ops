@@ -25,7 +25,8 @@ type classRegistryAnchor struct {
 
 type classRegistryDocument struct {
 	Classes []struct {
-		ClassID string `json:"class_id"`
+		ClassID string   `json:"class_id"`
+		Gaps    []string `json:"gaps"`
 		Issuer  struct {
 			Anchors []*classRegistryAnchor `json:"anchors"`
 		} `json:"issuer"`

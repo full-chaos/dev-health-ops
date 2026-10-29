@@ -5,6 +5,7 @@ package local
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -41,7 +42,7 @@ func TestAServiceProviderAccountGetsNoResetLinkPasswordOrLocalLoginUnderUsersOwn
 
 	// Control: a local account resets and signs in.
 	local := rig.account(t, ctx, "Old-pass-12345")
-	if err := rig.accounts.SetEmailVerified(ctx, local); err != nil {
+	if err := rig.accounts.Store.SetEmailVerifiedWith(ctx, local, time.Now(), identity.SelfSignUp(nil), nil); err != nil {
 		t.Fatal(err)
 	}
 	var localEmail string

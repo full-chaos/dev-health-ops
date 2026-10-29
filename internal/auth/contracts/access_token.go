@@ -13,6 +13,14 @@ const UserAccessTokenClass = "user_access_token"
 // It is the one place the value lives; the schema names it, the corpus pins it.
 const AccessTokenLifetimeCeiling = 60 * time.Minute
 
+// PlatformAPIAudience is the audience of go-api's HS256 access token and of the
+// EdDSA user access token that go-api and query-api accept.
+const PlatformAPIAudience = "dev-health-api"
+
+// SessionRouteAudience is the audience an EdDSA user access token carries to be
+// accepted at auth-service's own session routes.
+const SessionRouteAudience = "auth-service"
+
 // accessTokenScopes binds each user-token audience to its one scope
 // (vocabulary/audiences.json, access-token.v1 schema).
 var accessTokenScopes = map[string]string{

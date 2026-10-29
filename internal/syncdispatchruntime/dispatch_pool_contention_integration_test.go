@@ -20,7 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/syncbudget"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 )
 
@@ -38,10 +38,7 @@ func withSmallDispatchPool(t *testing.T, maxConns int32, fn func(ctx context.Con
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	config, err := pgxpool.ParseConfig(instance.URI)
 	if err != nil {
@@ -53,7 +50,6 @@ func withSmallDispatchPool(t *testing.T, maxConns int32, fn func(ctx context.Con
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	createReferenceDiscoveryTables(t, ctx, pool)
 	pgseed.Org(ctx, t, pool, discoveryTestOrg, "community")
 	fn(ctx, pool)
 }

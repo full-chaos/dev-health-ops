@@ -429,6 +429,14 @@ func TestAuthPhaseStartupAgrees(t *testing.T) {
 			}
 			serviceLookup := containerLookup(t, service, "auth-service")
 			cfg, err := authconfig.Load(authconfig.Spec{Overrides: authServiceOverrides(t, service), LookupEnv: serviceLookup})
+			if name == "phase 2 eddsa" {
+				// The eddsa class renders the audience dev-health-api, which the session routes refuse: the
+				// service refuses to start until the issuer switch mints their audience.
+				if err == nil || !strings.Contains(err.Error(), "CHAOS-10456") {
+					t.Fatalf("auth-service starts on the rendered eddsa settings: %v", err)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("auth-service refuses the rendered settings: %v", err)
 			}

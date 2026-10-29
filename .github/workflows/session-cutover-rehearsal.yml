@@ -24,6 +24,8 @@ on:
       - 'deploy/helm/dev-health/templates/river-hooks.yaml'
       - 'internal/storage/postgres/api_authorization*.go'
       - 'internal/rivermigrate/rivermigrate.go'
+      - 'internal/auth/restorefence/**'
+      - 'cmd/auth-migrate/restorefence*.go'
   workflow_dispatch:
     inputs:
       strict:

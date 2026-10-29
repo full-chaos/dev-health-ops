@@ -75,14 +75,25 @@ func (s *Store) ResolveBootstrap(ctx context.Context, digest [sha256.Size]byte, 
 	return reg, nil
 }
 
+// bootstrapRow is the one row ResolveBootstrap reads: the credential, its
+// workload and its principal.
+type bootstrapRow struct {
+	credentialID        uuid.UUID
+	class, owner        string
+	revoked             bool
+	expiresAt           *time.Time
+	credentialAudiences []string
+	principalID         uuid.UUID
+	name                string
+	audiences, actions  []string
+	kind                string
+	workloadDisabled    bool
+	principalDisabled   bool
+	revision            int64
+}
+
 func (s *Store) resolveBootstrap(ctx context.Context, digest [sha256.Size]byte, now time.Time) (BootstrapRegistration, reason, error) {
-	var (
-		reg                            BootstrapRegistration
-		class, owner, kind             string
-		revoked, wDisabled, pDisabled  bool
-		expiresAt                      *time.Time
-		credentialAudiences, audiences []string
-	)
+	var row bootstrapRow
 	err := s.pool.QueryRow(ctx, `SELECT c.id, c.credential_class, c.domain_owner, c.revoked_at IS NOT NULL, c.expires_at,
 c.audiences::text[], w.principal_id, w.name, w.audiences, w.allowed_actions, p.kind,
 w.disabled_at IS NOT NULL, p.disabled_at IS NOT NULL, COALESCE(r.revision, 0)
@@ -91,38 +102,51 @@ JOIN `+s.q+`.workloads w ON w.principal_id = c.principal_id
 JOIN `+s.q+`.principals p ON p.id = c.principal_id
 LEFT JOIN `+s.q+`.aggregate_revisions r ON r.aggregate_type = 'workload' AND r.aggregate_id = 'prn_' || w.principal_id::text
 WHERE c.secret_hash = $1`, digest[:]).
-		Scan(&reg.CredentialID, &class, &owner, &revoked, &expiresAt, &credentialAudiences,
-			&reg.PrincipalID, &reg.Name, &audiences, &reg.AllowedActions, &kind, &wDisabled, &pDisabled, &reg.Revision)
+		Scan(&row.credentialID, &row.class, &row.owner, &row.revoked, &row.expiresAt, &row.credentialAudiences,
+			&row.principalID, &row.name, &row.audiences, &row.actions, &row.kind, &row.workloadDisabled, &row.principalDisabled, &row.revision)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return BootstrapRegistration{}, reasonUnknown, nil
 	}
 	if err != nil {
 		return BootstrapRegistration{}, "", fmt.Errorf("bootstrap resolve: %w", err)
 	}
+	reg, why := row.decide(now)
+	return reg, why, nil
+}
+
+// decide is the whole rule for a read row: the class, platform ownership,
+// workload kind, revocation, expiry (live while now is before it), the
+// workload and principal state, and at least one audience both the workload
+// and the credential hold.
+func (row bootstrapRow) decide(now time.Time) (BootstrapRegistration, reason) {
 	switch {
-	case class != BootstrapClass:
-		return BootstrapRegistration{}, reasonWrongClass, nil
-	case owner != "platform":
-		return BootstrapRegistration{}, reasonNotPlatform, nil
-	case kind != "workload":
-		return BootstrapRegistration{}, reasonWrongKind, nil
-	case revoked:
-		return BootstrapRegistration{}, reasonRevoked, nil
-	case expiresAt != nil && !now.Before(*expiresAt):
-		return BootstrapRegistration{}, reasonExpired, nil
-	case wDisabled:
-		return BootstrapRegistration{}, reasonWorkloadDisabled, nil
-	case pDisabled:
-		return BootstrapRegistration{}, reasonPrincipalOff, nil
+	case row.class != BootstrapClass:
+		return BootstrapRegistration{}, reasonWrongClass
+	case row.owner != "platform":
+		return BootstrapRegistration{}, reasonNotPlatform
+	case row.kind != "workload":
+		return BootstrapRegistration{}, reasonWrongKind
+	case row.revoked:
+		return BootstrapRegistration{}, reasonRevoked
+	case row.expiresAt != nil && !now.Before(*row.expiresAt):
+		return BootstrapRegistration{}, reasonExpired
+	case row.workloadDisabled:
+		return BootstrapRegistration{}, reasonWorkloadDisabled
+	case row.principalDisabled:
+		return BootstrapRegistration{}, reasonPrincipalOff
 	}
-	reg.Audiences = intersect(audiences, credentialAudiences)
+	reg := BootstrapRegistration{
+		Registration: Registration{PrincipalID: row.principalID, Name: row.name, Audiences: intersect(row.audiences, row.credentialAudiences),
+			AllowedActions: row.actions, Revision: row.revision},
+		CredentialID: row.credentialID,
+	}
 	if len(reg.Audiences) == 0 {
-		return BootstrapRegistration{}, reasonNoAudience, nil
+		return BootstrapRegistration{}, reasonNoAudience
 	}
-	if expiresAt != nil {
-		reg.ExpiresAt = *expiresAt
+	if row.expiresAt != nil {
+		reg.ExpiresAt = *row.expiresAt
 	}
-	return reg, "", nil
+	return reg, ""
 }
 
 // intersect keeps the members of a that b also holds, in a's order.

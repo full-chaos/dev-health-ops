@@ -263,6 +263,27 @@ func TestQueryAPIAccessRowsAreTheQueryAndInternalListenerInventory(t *testing.T)
 	}
 }
 
+// The listener filter keeps a row of either bearer listener alone, and drops
+// rows of the MCP or the operator listener alone, whatever today's table holds.
+func TestQueryAPIAccessRowsKeepEachBearerListenersRows(t *testing.T) {
+	var rows []map[string]any
+	for _, id := range []string{"GET /a [s @query]", "GET /b [s @internal]", "GET /c [s @mcp]", "GET /d [s @operator]", "GET /e [s @internal,operator]"} {
+		rows = append(rows, map[string]any{"id": id, "service": queryAPIAccessService, "method": "GET", "route": strings.Fields(id)[1]})
+	}
+	raw, _ := json.Marshal(map[string]any{"rows": rows})
+	parsed, err := parseQueryAPIAccessRows(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, row := range parsed {
+		got = append(got, row.Profile)
+	}
+	if strings.Join(got, ",") != "GET /a,GET /b,GET /e" {
+		t.Fatalf("kept %v, want the query, internal and internal,operator rows", got)
+	}
+}
+
 func TestQueryAPIAccessRowsRefuseABadTable(t *testing.T) {
 	row := func(id, method, route string) map[string]any {
 		return map[string]any{"id": id, "service": queryAPIAccessService, "method": method, "route": route}

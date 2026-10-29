@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -971,6 +972,14 @@ func TestTheRetiredKindIndexPredicateNamesTheRetiredKinds(t *testing.T) {
 	chain, err := pgmigrate.LoadChain()
 	if err != nil {
 		t.Fatal(err)
+	}
+	for _, file := range pgmigrate.ArchivedChain() {
+		data, err := os.ReadFile("../pgmigrate/archive/sql/" + file.Name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		file.SQL = string(data)
+		chain = append([]pgmigrate.ChainFile{file}, chain...)
 	}
 	var body []byte
 	matches := 0

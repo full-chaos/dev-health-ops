@@ -171,6 +171,7 @@ internal/workitemcontract
 ~internal/chmigrate/baseline
 ~internal/chmigrate/sql
 ~internal/mail/templates
+~internal/pgmigrate/archive
 ~internal/pgmigrate/baseline
 ~internal/pgmigrate/sql
 ~internal/pgmigrate/sql/down

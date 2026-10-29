@@ -64,6 +64,7 @@ func TestEveryDefinerFunctionInTheChainQualifiesEveryName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	chain = append(archivedChainFiles(t), chain...)
 	found := 0
 	for _, file := range chain {
 		for _, match := range definerFunction.FindAllStringSubmatch(file.SQL, -1) {

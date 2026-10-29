@@ -147,7 +147,7 @@ while IFS= read -r -d '' path; do
   [ -n "${path}" ] || { echo "empty record in change list" >&2; exit 3; }
   [ -n "${hit}" ] && continue
   case "${path}" in
-    internal/pgmigrate/sql/* | internal/pgmigrate/baseline/* | internal/rivermigrate/* | internal/testsupport/domainroledb/*) hit="${path}" ;;
+    internal/pgmigrate/sql/* | internal/pgmigrate/baseline/* | internal/pgmigrate/archive/* | internal/rivermigrate/* | internal/testsupport/domainroledb/*) hit="${path}" ;;
     internal/storage/postgres/domain_authorization* | internal/storage/postgres/posture_* | internal/storage/postgres/role*) hit="${path}" ;;
     internal/storage/postgres/authschema/* | internal/storage/postgres/aclguard/* | internal/storage/roleprovision/*) hit="${path}" ;;
     ci/bigboy/pg-grants-check.sh | ci/posture_integration_packages.tsv | ci/posture_integration.sh) hit="${path}" ;;

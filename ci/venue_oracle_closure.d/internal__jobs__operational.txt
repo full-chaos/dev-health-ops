@@ -83,6 +83,7 @@ internal/workitemcontract
 ~internal/chmigrate/sql
 ~internal/jobs/operational/templates
 ~internal/mail/templates
+~internal/pgmigrate/archive
 ~internal/pgmigrate/baseline
 ~internal/pgmigrate/sql
 ~internal/pgmigrate/sql/down

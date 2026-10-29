@@ -13,6 +13,9 @@ type column struct {
 	name, pgType string
 	// keep copies the source value only into a NULL: a value already on the restored row stays (a write-once column).
 	keep bool
+	// narrow marks an array column: it travels as the PostgreSQL array literal text and the restored set is cut to its
+	// intersection with the source (a NULL source is the empty set). Nothing is ever added.
+	narrow bool
 }
 
 type kind int
@@ -63,10 +66,13 @@ type section struct {
 	deleteGuard string
 	// retireSet is the SET clause of a retire section.
 	retireSet string
+	// match is the predicate (aliases x, t) a retire section uses to find the source row of a restored row; empty means
+	// the keys are equal.
+	match string
 	// revokeSet replaces the SET clause a revoke section builds from cols: a section that carries ids only.
 	revokeSet string
 	// blindReview is the predicate (alias t) on the restored rows a blind margin leaves as they are but names for the
-	// operator to review (ids only). Legacy sections only.
+	// operator to review (ids only).
 	blindReview string
 	// manifestOnly marks a section that runs only with a manifest: with no manifest (the blind margin) nothing is
 	// known about which rows the source kept, and a presence section would remove every row.
@@ -92,7 +98,34 @@ var (
 	colBool   = func(n string) column { return column{name: n, pgType: "boolean"} }
 	colTSKeep = func(n string) column { return column{name: n, pgType: "timestamptz", keep: true} }
 	colTxKeep = func(n string) column { return column{name: n, pgType: "text", keep: true} }
+	colSet    = func(n string) column { return column{name: n, pgType: "text", narrow: true} }
 )
+
+// roleRank is the rank of a membership role (viewer < member < admin < owner); an unknown or NULL role has none.
+func roleRank(e string) string {
+	return "array_position(ARRAY['viewer', 'member', 'admin', 'owner']::text[], " + e + ")"
+}
+
+// ownerKept holds (aliases t, m) while the org of t keeps another owner that the source also holds as owner: demoting
+// t then leaves the org an owner. {tbl} is the membership table.
+func ownerKept(orgCol, extra string) string {
+	return "EXISTS (SELECT 1 FROM {tbl} k JOIN m y ON y.id = k.id WHERE k." + orgCol + " = t." + orgCol + " AND k.id <> t.id" + extra +
+		" AND k.role = 'owner' AND y.role = 'owner')"
+}
+
+func roleLowered(orgCol, extra string) string {
+	return roleRank("x.role") + " < " + roleRank("t.role") + " AND (t.role <> 'owner' OR " + ownerKept(orgCol, extra) + ")"
+}
+
+// scopesHeld holds (aliases t, x) while every carried array of t is a subset of the source's (an unchanged row is
+// not written).
+func scopesHeld(cols ...string) string {
+	var held []string
+	for _, c := range cols {
+		held = append(held, "t."+c+"::text[] <@ COALESCE(x."+c+"::text[], '{}'::text[])")
+	}
+	return "NOT (" + strings.Join(held, " AND ") + ")"
+}
 
 // sections lists, in apply order, every table the fence carries. The auth
 // sections come first, then the named legacy section (the same transaction).
@@ -112,6 +145,11 @@ var sections = []section{
 	// LEAST(restored, source), so a restore never extends an expiry. With no manifest it changes nothing.
 	{name: "auth.credential_registry.expiry", suffix: ".expiry", table: "credential_registry", kind: kindRevoke, key: colUUID("id"),
 		cols: []column{colTS("expires_at")}, revoked: "s.expires_at IS NOT NULL", active: "(t.expires_at IS NULL OR t.expires_at > x.expires_at)", touch: true},
+	// Scopes and audiences narrowed in place after T (the 0007 trigger allows narrowing only) are cut to the source's,
+	// on the credentials the source holds live. A credential cut to an empty set is named for review.
+	{name: "auth.credential_registry.scope", suffix: ".scope", table: "credential_registry", kind: kindRevoke, key: colUUID("id"),
+		cols: []column{colSet("scopes"), colSet("audiences")}, revoked: "s.revoked_at IS NULL", active: scopesHeld("scopes", "audiences"), touch: true,
+		action: ActionReviewScopeEmptied, blindReview: "t.revoked_at IS NULL AND (cardinality(t.scopes) > 0 OR cardinality(t.audiences) > 0)"},
 	{name: "auth.signing_keys", table: "signing_keys", kind: kindRevoke, key: colText("kid"),
 		cols: []column{colText("status"), colTS("revoked_at")}, revoked: "s.status = 'compromised'", active: "t.status <> 'compromised'", touch: true},
 	{name: "auth.resource_grants", table: "resource_grants", kind: kindRevoke, key: colUUID("id"),
@@ -135,10 +173,21 @@ var sections = []section{
 	{name: "auth.memberships", table: "memberships", kind: kindRevoke, key: colUUID("id"),
 		cols: []column{colText("status")}, revoked: "s.status IN ('suspended', 'removed')",
 		active: "(t.status IN ('invited', 'active') OR (t.status = 'suspended' AND x.status = 'removed'))", touch: true},
+	// A role lowered after T (ChangeRole) is lowered again; a role raised after T is not carried. The last owner of an
+	// org is never demoted (an org with no owner is locked out): it stays and the org is named for review. An unknown
+	// or NULL role on either side is left and named.
+	{name: "auth.memberships.role", suffix: ".role", table: "memberships", kind: kindRevoke, key: colUUID("id"),
+		cols: []column{colText("role")}, active: roleLowered("organization_id", " AND k.status = 'active'"), touch: true,
+		action: ActionReviewMembershipOwner, blindReview: "t.role IN ('admin', 'owner')"},
 	{name: "auth.service_accounts", table: "service_accounts", kind: kindRevoke, key: colUUID("principal_id"),
 		cols: []column{colText("status"), colTS("disabled_at")}, revoked: "s.status = 'disabled'", active: "t.status = 'active'", touch: true},
 	{name: "auth.workloads", table: "workloads", kind: kindRevoke, key: colUUID("principal_id"),
 		cols: []column{colTS("disabled_at")}, revoked: "s.disabled_at IS NOT NULL", active: "t.disabled_at IS NULL", touch: true},
+	// Audiences and allowed actions (SetAudiences, SetAllowedActions replace them) are cut to the source's: a value
+	// removed after T stays removed, one added after T is not granted, a swap leaves the empty set (named for review).
+	{name: "auth.workloads.scope", suffix: ".scope", table: "workloads", kind: kindRevoke, key: colUUID("principal_id"),
+		cols: []column{colSet("audiences"), colSet("allowed_actions")}, active: scopesHeld("audiences", "allowed_actions"), touch: true,
+		action: ActionReviewScopeEmptied, blindReview: "(cardinality(t.audiences) > 0 OR cardinality(t.allowed_actions) > 0)"},
 	{name: "auth.link_credentials", table: "link_credentials", kind: kindRevoke, key: colUUID("id"),
 		cols: []column{colTS("consumed_at")}, revoked: "s.consumed_at IS NOT NULL", active: "t.consumed_at IS NULL"},
 	// Link credentials the source replaced or removed: Issue deletes the old unconsumed row, so its restored copy
@@ -177,6 +226,10 @@ var sections = []section{
 	// The legacy membership mirror (D6358: a public row means an active member): a mirror row deleted after the
 	// target is deleted again; a row the source still holds is left alone.
 	{name: "public.memberships", legacy: true, table: "memberships", kind: kindPresence, key: colUUID("id"), manifestOnly: true},
+	// The legacy mirror's role (go-api reads it): the same rank rule as auth.memberships.role, in the same transaction.
+	{name: "public.memberships.role", suffix: ".role", legacy: true, table: "memberships", kind: kindRevoke, key: colUUID("id"),
+		cols: []column{colText("role")}, active: roleLowered("org_id", ""), touch: true,
+		action: ActionReviewMembershipOwner, blindReview: "t.role IN ('admin', 'owner')"},
 	{name: "public.users", legacy: true, table: "users", kind: kindCounter, key: colUUID("id"),
 		cols: []column{{name: "is_active", pgType: "boolean"}, {name: "token_version", pgType: "integer"}}, revoked: "s.token_version > 0 OR NOT s.is_active", touch: true,
 		action: ActionForcePasswordReset},
@@ -184,6 +237,10 @@ var sections = []section{
 	// foreign keys, cascades into sessions and tokens). Runs after the counter section above.
 	{name: "public.users.ids", suffix: ".ids", legacy: true, table: "users", kind: kindTombstone, key: colUUID("id"), manifestOnly: true,
 		action: ActionUserTombstoned},
+	// A superuser flag the source removed after T stays removed; one granted after T is not carried.
+	{name: "public.users.superuser", suffix: ".superuser", legacy: true, table: "users", kind: kindRevoke, key: colUUID("id"),
+		cols: []column{colBool("is_superuser")}, revoked: "NOT s.is_superuser", active: "t.is_superuser", touch: true,
+		blindReview: "t.is_superuser"},
 	{name: "public.provider_oauth_revocations", legacy: true, table: "provider_oauth_revocations", kind: kindReport, key: colUUID("id"),
 		cols: []column{colText("org_id"), colText("provider"), colText("purpose")}, action: ActionRequeueProviderRevocation},
 	// The legacy SAML replay table: an assertion id used after the target must stay used.
@@ -201,10 +258,16 @@ var sections = []section{
 	{name: "public.organizations.ids", suffix: ".ids", legacy: true, table: "organizations", kind: kindRetire, key: colUUID("id"), manifestOnly: true,
 		deleteGuard: "t.is_active", retireSet: "is_active = false, updated_at = clock_timestamp()"},
 	// 0 active allowlist entries means the org accepts every address, so an entry is switched off only while its org
-	// keeps an active entry the source also holds active; otherwise it stays and the org is named for review.
+	// keeps an active entry the source also holds active; otherwise it stays and the org is named for review. An entry
+	// is held only with the SAME ip_range (the column is text in the DDL): a range edited after T is not held.
 	{name: "public.org_ip_allowlist.ids", suffix: ".ids", legacy: true, table: "org_ip_allowlist", kind: kindRetire, key: colUUID("id"), manifestOnly: true,
+		cols: []column{colText("ip_range")}, match: allowlistHeld,
 		revoked: "s.is_active", deleteGuard: "t.is_active AND " + allowlistKeepsASharedEntry, retireSet: "is_active = false, updated_at = clock_timestamp()",
 		action: ActionReviewIPAllowlist, blindReview: "t.is_active"},
+	// An expiry the source shortened after T is shortened again (LEAST); an expired entry still counts as an entry,
+	// so this never opens an org.
+	{name: "public.org_ip_allowlist.expiry", suffix: ".expiry", legacy: true, table: "org_ip_allowlist", kind: kindRevoke, key: colUUID("id"),
+		cols: []column{colTS("expires_at")}, revoked: "s.is_active AND s.expires_at IS NOT NULL", active: "(t.expires_at IS NULL OR t.expires_at > x.expires_at)", touch: true},
 	{name: "public.integrations", legacy: true, table: "integrations", kind: kindRevoke, key: colUUID("id"),
 		cols: []column{colBool("is_active")}, revoked: "NOT s.is_active", active: "t.is_active", touch: true, blindReview: "t.is_active"},
 	{name: "public.integrations.ids", suffix: ".ids", legacy: true, table: "integrations", kind: kindRetire, key: colUUID("id"), manifestOnly: true,
@@ -224,7 +287,10 @@ var sections = []section{
 
 // allowlistKeepsASharedEntry holds (alias t, manifest m) while the org of t keeps an active entry the source also
 // holds active.
-const allowlistKeepsASharedEntry = "EXISTS (SELECT 1 FROM public.org_ip_allowlist k JOIN m y ON y.id = k.id WHERE k.org_id = t.org_id AND k.is_active)"
+const allowlistKeepsASharedEntry = "EXISTS (SELECT 1 FROM public.org_ip_allowlist k JOIN m y ON y.id = k.id AND y.ip_range = k.ip_range WHERE k.org_id = t.org_id AND k.is_active)"
+
+// allowlistHeld matches a restored entry (t) to the source's active entry (x): the same id and the same range.
+const allowlistHeld = "x.id = t.id AND x.ip_range = t.ip_range"
 
 // floorsSection is the manifest name of the revision floors.
 const floorsSection = "auth.aggregate_revisions"
@@ -245,15 +311,24 @@ func (s section) recordset() string {
 	return "jsonb_to_recordset($1::jsonb) AS x(" + strings.Join(defs, ", ") + ")"
 }
 
+// sub puts the section's qualified table into a predicate that names it as {tbl}.
+func (s section) sub(pred string, schema authschema.ValidatedIdentifier) string {
+	return strings.ReplaceAll(pred, "{tbl}", s.qualified(schema))
+}
+
 // exportSQL returns one jsonb array of the source rows in the state to carry.
 func (s section) exportSQL(schema authschema.ValidatedIdentifier) string {
 	var pairs []string
-	for _, n := range s.columnNames() {
-		if s.kind == kindInsert && n == "assertion_id_hash" {
+	for _, c := range append([]column{s.key}, s.cols...) {
+		n := c.name
+		switch {
+		case s.kind == kindInsert && n == "assertion_id_hash":
 			pairs = append(pairs, "'assertion_id_hash', encode(s.assertion_id_hash, 'hex')")
-			continue
+		case c.narrow:
+			pairs = append(pairs, fmt.Sprintf("'%s', s.%s::text", n, n))
+		default:
+			pairs = append(pairs, fmt.Sprintf("'%s', s.%s", n, n))
 		}
-		pairs = append(pairs, fmt.Sprintf("'%s', s.%s", n, n))
 	}
 	where := ""
 	if s.revoked != "" {
@@ -275,11 +350,15 @@ func (s section) applySQL(schema authschema.ValidatedIdentifier) string {
 			sets = append(sets, s.revokeSet)
 		}
 		for _, c := range s.cols {
-			if c.keep {
+			switch {
+			case c.narrow:
+				sets = append(sets, fmt.Sprintf("%s = ARRAY(SELECT a FROM unnest(t.%s) WITH ORDINALITY e(a, o) WHERE a::text = ANY(COALESCE(x.%s::text[], '{}'::text[])) ORDER BY o)",
+					c.name, c.name, c.name))
+			case c.keep:
 				sets = append(sets, fmt.Sprintf("%s = COALESCE(t.%s, x.%s)", c.name, c.name, c.name))
-				continue
+			default:
+				sets = append(sets, fmt.Sprintf("%s = x.%s", c.name, c.name))
 			}
-			sets = append(sets, fmt.Sprintf("%s = x.%s", c.name, c.name))
 		}
 		if s.touch {
 			sets = append(sets, "updated_at = clock_timestamp()")
@@ -287,7 +366,7 @@ func (s section) applySQL(schema authschema.ValidatedIdentifier) string {
 		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s),
 u AS (UPDATE %s t SET %s FROM m x WHERE t.%s = x.%s AND (%s) RETURNING 1)
 SELECT (SELECT count(*) FROM u), (SELECT count(*) FROM m x WHERE NOT EXISTS (SELECT 1 FROM %s t WHERE t.%s = x.%s))`,
-			s.recordset(), tbl, strings.Join(sets, ", "), s.key.name, s.key.name, s.active, tbl, s.key.name, s.key.name)
+			s.recordset(), tbl, strings.Join(sets, ", "), s.key.name, s.key.name, s.sub(s.active, schema), tbl, s.key.name, s.key.name)
 	case kindCounter:
 		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s),
 u AS (UPDATE %s t SET token_version = GREATEST(t.token_version, x.token_version), is_active = t.is_active AND x.is_active, updated_at = clock_timestamp()
@@ -308,8 +387,8 @@ i AS (INSERT INTO %s (%s) SELECT %s FROM m ON CONFLICT DO NOTHING RETURNING 1)
 SELECT (SELECT count(*) FROM i), 0::bigint`, s.recordset(), tbl, strings.Join(names, ", "), strings.Join(exprs, ", "))
 	case kindRetire:
 		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s),
-u AS (UPDATE %s t SET %s WHERE %s AND NOT EXISTS (SELECT 1 FROM m x WHERE x.%s = t.%s) RETURNING 1)
-SELECT (SELECT count(*) FROM u), 0::bigint`, s.recordset(), tbl, s.retireSet, s.deleteGuard, s.key.name, s.key.name)
+u AS (UPDATE %s t SET %s WHERE %s AND NOT EXISTS (SELECT 1 FROM m x WHERE %s) RETURNING 1)
+SELECT (SELECT count(*) FROM u), 0::bigint`, s.recordset(), tbl, s.retireSet, s.deleteGuard, s.matchSQL())
 	case kindTombstone:
 		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s),
 u AS (UPDATE %s t SET is_active = false, token_version = t.token_version + 1, updated_at = clock_timestamp()
@@ -330,11 +409,34 @@ SELECT (SELECT count(*) FROM d), 0::bigint`,
 	}
 }
 
+// matchSQL is the predicate (aliases x, t) that pairs a restored row with its manifest row.
+func (s section) matchSQL() string {
+	if s.match != "" {
+		return s.match
+	}
+	return "x." + s.key.name + " = t." + s.key.name
+}
+
 // idsSQL returns the statement that names the ids of the operator action of
 // this section (rows as $1), or "" when it has none.
 func (s section) idsSQL(schema authschema.ValidatedIdentifier) string {
 	tbl := s.qualified(schema)
 	switch {
+	case s.action == ActionReviewScopeEmptied:
+		var emptied []string
+		for _, c := range s.cols {
+			emptied = append(emptied, fmt.Sprintf("(cardinality(t.%s) > 0 AND NOT (t.%s::text[] && COALESCE(x.%s::text[], '{}'::text[])))", c.name, c.name, c.name))
+		}
+		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s)
+SELECT t.%s::text FROM %s t JOIN m x ON x.%s = t.%s WHERE %s ORDER BY 1`, s.recordset(), s.key.name, tbl, s.key.name, s.key.name, strings.Join(emptied, " OR "))
+	case s.action == ActionReviewMembershipOwner:
+		orgCol, extra := "org_id", ""
+		if !s.legacy {
+			orgCol, extra = "organization_id", " AND k.status = 'active'"
+		}
+		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s)
+SELECT DISTINCT t.%s::text FROM %s t JOIN m x ON x.id = t.id WHERE t.role = 'owner' AND %s < %s AND NOT %s ORDER BY 1`,
+			s.recordset(), orgCol, tbl, roleRank("x.role"), roleRank("t.role"), s.sub(ownerKept(orgCol, extra), schema))
 	case s.kind == kindReport && s.name == "auth.users":
 		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s)
 SELECT t.%s::text FROM %s t JOIN m x ON x.%s = t.%s
@@ -347,8 +449,8 @@ SELECT t.%s::text FROM %s t WHERE NOT EXISTS (SELECT 1 FROM m x WHERE x.%s = t.%
 SELECT x.%s::text FROM m x WHERE NOT EXISTS (SELECT 1 FROM %s t WHERE t.%s = x.%s) ORDER BY 1`, s.recordset(), s.key.name, tbl, s.key.name, s.key.name)
 	case s.action == ActionReviewIPAllowlist:
 		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s)
-SELECT DISTINCT t.org_id::text FROM %s t WHERE t.is_active AND NOT EXISTS (SELECT 1 FROM m x WHERE x.%s = t.%s) AND NOT %s ORDER BY 1`,
-			s.recordset(), tbl, s.key.name, s.key.name, allowlistKeepsASharedEntry)
+SELECT DISTINCT t.org_id::text FROM %s t WHERE t.is_active AND NOT EXISTS (SELECT 1 FROM m x WHERE %s) AND NOT %s ORDER BY 1`,
+			s.recordset(), tbl, s.matchSQL(), allowlistKeepsASharedEntry)
 	case s.kind == kindCounter && s.action != "":
 		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s)
 SELECT t.%s::text FROM %s t JOIN m x ON x.%s = t.%s WHERE t.token_version < x.token_version ORDER BY 1`, s.recordset(), s.key.name, tbl, s.key.name, s.key.name)
@@ -356,13 +458,24 @@ SELECT t.%s::text FROM %s t JOIN m x ON x.%s = t.%s WHERE t.token_version < x.to
 	return ""
 }
 
-// blindReviewSQL returns the statement that names the restored rows a blind margin leaves as they are, for the operator
-// to review (ids only), or "" when the section has none.
-func blindReviewSQL(s section) string {
-	if s.blindReview == "" || !s.legacy {
+// unknownRoleSQL names the memberships (rows as $1) whose role a role section leaves because the restored or the source
+// value has no rank, or "" for any other section.
+func (s section) unknownRoleSQL(schema authschema.ValidatedIdentifier) string {
+	if s.suffix != ".role" {
 		return ""
 	}
-	return `SELECT t.` + s.key.name + `::text FROM public.` + s.table + ` t WHERE ` + s.blindReview + ` ORDER BY 1`
+	return fmt.Sprintf(`WITH m AS (SELECT * FROM %s)
+SELECT t.id::text FROM %s t JOIN m x ON x.id = t.id WHERE t.role IS DISTINCT FROM x.role AND (%s IS NULL OR %s IS NULL) ORDER BY 1`,
+		s.recordset(), s.qualified(schema), roleRank("t.role"), roleRank("x.role"))
+}
+
+// blindReviewSQL returns the statement that names the restored rows a blind margin leaves as they are, for the operator
+// to review (ids only), or "" when the section has none.
+func blindReviewSQL(s section, schema authschema.ValidatedIdentifier) string {
+	if s.blindReview == "" {
+		return ""
+	}
+	return `SELECT t.` + s.key.name + `::text FROM ` + s.qualified(schema) + ` t WHERE ` + s.blindReview + ` ORDER BY 1`
 }
 
 // flowStatesSQL invalidates every SSO flow state the restored database holds: no per-row export

@@ -212,8 +212,10 @@ both the workload's and the credential's audiences gets the exchange's one
 refusal. An issued `workload_token` never outlives the credential's expiry, and
 its `auth.workload.token_issued` audit row names the credential row id. The
 route serves this subject only with `AUTH_WORKLOAD_BOOTSTRAP=true`, so the
-class is `optional_feature`. Creating, rotating, revoking and disabling a
-credential is a separate leaf.
+class is `optional_feature`. The operator creates, rotates, revokes and
+disables a credential with `auth-migrate workloads bootstrap-create`,
+`bootstrap-rotate`, `bootstrap-revoke` and `bootstrap-disable` (migration role;
+see the [bootstrap credential runbook](../../operate/runbooks/auth-workload-bootstrap-credential.md)).
 
 ## The CHAOS-3271 class: credentials that reach a validator that is not their own
 

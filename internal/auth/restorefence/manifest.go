@@ -13,7 +13,7 @@ import (
 )
 
 // ManifestVersion is the manifest's format version.
-const ManifestVersion = 1
+const ManifestVersion = 2
 
 // maxRevision is the largest revision the wire allows (2^53-1, migration 0013).
 const maxRevision int64 = 9007199254740991
@@ -139,7 +139,7 @@ func ParseManifest(raw []byte) (Manifest, error) {
 	}
 	out := Manifest{Version: m.Version, SourceTimeline: m.SourceTimeline, Floors: m.Floors, SHA256: m.SHA256}
 	if out.Version != ManifestVersion {
-		return Manifest{}, fmt.Errorf("%w: version %d, want %d", ErrManifest, out.Version, ManifestVersion)
+		return Manifest{}, fmt.Errorf("%w: manifest version %d, want %d: export it again with this auth-migrate binary", ErrManifest, out.Version, ManifestVersion)
 	}
 	if out.SourceTimeline < 1 {
 		return Manifest{}, fmt.Errorf("%w: source_timeline %d", ErrManifest, out.SourceTimeline)

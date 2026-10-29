@@ -464,3 +464,44 @@ func TestAnUnmatchedPathWithRedirectSlashesStaysUnmatched(t *testing.T) {
 		t.Errorf("requests = %v, want %v", got, want)
 	}
 }
+
+// RequestSeed: each seed gets one 0 series per seeded status class, a method outside the known set is bucketed as OTHER, and nothing but
+// the static list is used.
+func TestRequestSeedsCreateOneZeroSeriesPerStatusClass(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	previous := otel.GetMeterProvider()
+	otel.SetMeterProvider(provider)
+	t.Cleanup(func() { otel.SetMeterProvider(previous); _ = provider.Shutdown(context.Background()) })
+
+	newAccessObserver(slog.New(slog.NewJSONHandler(&bytes.Buffer{}, nil)), "public", false,
+		[]RequestSeed{{Method: "POST", Route: "/a"}, {Method: "BREW", Route: "/b"}})
+
+	var collected metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &collected); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int64{}
+	for _, scope := range collected.ScopeMetrics {
+		for _, m := range scope.Metrics {
+			if m.Name != requestsMetricName {
+				continue
+			}
+			for _, point := range m.Data.(metricdata.Sum[int64]).DataPoints {
+				route, _ := point.Attributes.Value("route")
+				method, _ := point.Attributes.Value("method")
+				class, _ := point.Attributes.Value("status_class")
+				got[route.AsString()+" "+method.AsString()+" "+class.AsString()] = point.Value
+			}
+		}
+	}
+	want := []string{"/a POST 2xx", "/a POST 3xx", "/a POST 4xx", "/a POST 5xx", "/b OTHER 2xx", "/b OTHER 3xx", "/b OTHER 4xx", "/b OTHER 5xx"}
+	if len(got) != len(want) {
+		t.Fatalf("seeded series %v, want %v", got, want)
+	}
+	for _, key := range want {
+		if value, ok := got[key]; !ok || value != 0 {
+			t.Errorf("series %q = %d (present %v), want 0", key, value, ok)
+		}
+	}
+}

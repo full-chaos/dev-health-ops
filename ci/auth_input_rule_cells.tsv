@@ -1,0 +1,37 @@
+# Shared answer table for the register input rule: go-api (internal/api/session) and auth-service (internal/auth/authapi) replay EVERY row and must give the stated answer.
+# id<TAB>field<TAB>form<TAB>json_value<TAB>want   (json_value = the JSON string literal sent in <field>; hex:<bytes> = the whole raw body; want = ok | <status> | <status> <error type> <loc>)
+email_replacement_char	email	replacement_char	"a�b@example.com"	422 value_error body.email
+email_lone_high	email	lone_high	"a\ud800b@example.com"	422 value_error body.email
+email_lone_low	email	lone_low	"a\udc00b@example.com"	422 value_error body.email
+email_nul	email	nul	"a\u0000b@example.com"	422 value_error body.email
+email_control_c0	email	control_c0	"a\u0001b@example.com"	422 value_error body.email
+email_tab	email	tab	"a\tb@example.com"	422 value_error body.email
+email_lf	email	lf	"a\nb@example.com"	422 value_error body.email
+email_cr	email	cr	"a\rb@example.com"	422 value_error body.email
+email_del	email	del	"a\u007fb@example.com"	422 value_error body.email
+email_c1	email	c1	"a\u0085b@example.com"	422 value_error body.email
+full_name_replacement_char	full_name	replacement_char	"A�B"	ok
+full_name_lone_high	full_name	lone_high	"A\ud800B"	422 string_unicode body.full_name
+full_name_lone_low	full_name	lone_low	"A\udc00B"	422 string_unicode body.full_name
+full_name_nul	full_name	nul	"A\u0000B"	422 string_unicode body.full_name
+full_name_control_c0	full_name	control_c0	"A\u0001B"	422 string_unicode body.full_name
+full_name_tab	full_name	tab	"A\tB"	422 string_unicode body.full_name
+full_name_lf	full_name	lf	"A\nB"	422 string_unicode body.full_name
+full_name_cr	full_name	cr	"A\rB"	422 string_unicode body.full_name
+full_name_del	full_name	del	"A\u007fB"	422 string_unicode body.full_name
+full_name_c1	full_name	c1	"A\u0085B"	422 string_unicode body.full_name
+org_name_replacement_char	org_name	replacement_char	"A�B"	ok
+org_name_lone_high	org_name	lone_high	"A\ud800B"	422 string_unicode body.org_name
+org_name_lone_low	org_name	lone_low	"A\udc00B"	422 string_unicode body.org_name
+org_name_nul	org_name	nul	"A\u0000B"	422 string_unicode body.org_name
+org_name_control_c0	org_name	control_c0	"A\u0001B"	422 string_unicode body.org_name
+org_name_tab	org_name	tab	"A\tB"	422 string_unicode body.org_name
+org_name_lf	org_name	lf	"A\nB"	422 string_unicode body.org_name
+org_name_cr	org_name	cr	"A\rB"	422 string_unicode body.org_name
+org_name_del	org_name	del	"A\u007fB"	422 string_unicode body.org_name
+org_name_c1	org_name	c1	"A\u0085B"	422 string_unicode body.org_name
+email_invalid_utf8	email	invalid_utf8	hex:7b22656d61696c223a2261ff62406578616d706c652e636f6d222c2270617373776f7264223a22436f72726563742d686f7273652d626174746572792d39227d	400
+valid_email_33	email	valid	"a@example.com"	ok
+valid_full_name_34	full_name	valid	"Ann \ud83d\ude00"	ok
+valid_full_name_35	full_name	valid	""	ok
+valid_org_name_36	org_name	valid	"Team \ud83c\uddf3\ud83c\uddf1"	ok

@@ -196,6 +196,8 @@ type ServerOptions struct {
 	// metrics carry for this server ("public", "internal", ...). Empty means
 	// Name.
 	Listener string
+	// SeedRequestSeries are the routes whose per-route request series exist at 0 from the moment the server is built (RequestSeed).
+	SeedRequestSeries []RequestSeed
 	// ErrorWriter renders every error this server emits. Nil means WriteError
 	// (the ACP envelope).
 	ErrorWriter ErrorWriter
@@ -521,7 +523,7 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 	if listener == "" {
 		listener = "auth-api-http"
 	}
-	observer := newAccessObserver(logger, listener, options.TrustRemoteSampling)
+	observer := newAccessObserver(logger, listener, options.TrustRemoteSampling, options.SeedRequestSeries)
 	observer.attrs = options.AccessAttrs
 	return RequestIDWith(accept)(observer.wrap(RecoverWith(logger, "<unrouted>", write)(handler))), nil
 }

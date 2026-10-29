@@ -1041,6 +1041,52 @@ groups:
             docs/reference/auth/readiness-and-slo.md.
 
   # ---------------------------------------------------------------------------
+  # Org activity projection (public.org_activity, the table auth login reads to
+  # choose the active organization). The metrics worker's daily finalize writes
+  # it; stale rows make login fall back to the earliest join. Series come from
+  # the worker's OTLP push: the refresh-failed counter is seeded at 0 when the
+  # finalize handler gets its refresher, and the age gauge is read from Postgres
+  # at most once a minute (no sample, never 0, when the read fails or the table
+  # is empty; dev_health_org_activity_refresh_age_read_failed_total counts the
+  # failures). Created in SigNoz by hand as builder threshold rules (PromQL does
+  # not evaluate there): docs/operate/observe/dashboards-and-alerts.md.
+  # ---------------------------------------------------------------------------
+  - name: org_activity
+    interval: 1m
+    rules:
+      - alert: OrgActivityRefreshFailed
+        expr: |
+          sum(increase(daily_finalize_org_activity_refresh_failed_total[24h])) > 0
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "org_activity refresh failed in the daily finalize"
+          description: |
+            The daily finalize could not refresh public.org_activity in the last
+            day: a ClickHouse read error, a panic, or organizations left
+            without a row. Auth login falls back to the earliest-joined
+            organization for stale rows. Next: the worker log line "the org
+            activity projection was not refreshed" (run_id, organization_id).
+
+      - alert: OrgActivityStale
+        expr: |
+          max(dev_health_org_activity_refresh_age_seconds) > 172800
+        for: 15m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "org_activity not refreshed for two days"
+          description: |
+            No organization's activity row was refreshed for two days
+            ({{ $value | humanizeDuration }}): the daily finalize is not running
+            or every refresh fails. Login falls back to the earliest join.
+            Next: rule OrgActivityRefreshFailed, the worker finalize logs, and
+            dev_health_org_activity_refresh_age_read_failed_total (a gauge that
+            stopped reporting is not the same as a fresh table).
+
+  # ---------------------------------------------------------------------------
   # In-chart Valkey (rate-limit counters, ingest streams). The series come from
   # the collector's redis receiver, which writes dotted names only
   # (redis.keys.evicted, redis.memory.used), so the rules select them by

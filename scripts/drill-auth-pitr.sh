@@ -10,6 +10,14 @@
 # Passwords are generated at run time and live only in this shell's environment.
 #
 # Usage: DRILL_DIR=<new empty dir> scripts/drill-auth-pitr.sh
+#
+# DRILL_FENCE=1 runs the FENCED drill (CHAOS-11271): the source is initialised with `auth-migrate restore-fence init`
+# (a fresh database on timeline 1, as the first roll does), the end-of-WAL copy is restored FIRST and `restore-fence
+# export` runs against it, the PITR copy then starts read-only (default_transaction_read_only=on in its
+# postgresql.auto.conf), `restore-fence status` must say not fenced, `apply` runs as a dry run and then with -apply
+# (a per-connection override of the read-only default), the read-only default is reset, and the verify and post
+# phases must show no revocation after T alive and no key re-issued with different content. The default (unfenced)
+# drill is unchanged and still reports the GAP.
 set -euo pipefail
 umask 077
 
@@ -38,6 +46,11 @@ export DRILL_PORT_SRC="$port_src" DRILL_PORT_PITR="$port_pitr" DRILL_PORT_LATEST
 POSTGRES_PASSWORD="$(openssl rand -hex 16)"
 DRILL_RUNTIME_PASSWORD="$(openssl rand -hex 16)"
 export POSTGRES_PASSWORD DRILL_RUNTIME_PASSWORD
+
+fence_mode=0
+[[ "${DRILL_FENCE:-}" == "1" ]] && fence_mode=1
+unset DRILL_FENCE # forwarded to the driver only for the fenced post phase, by drill() arguments
+runtime_role="${DRILL_RUNTIME_ROLE:-drill_runtime}"
 
 export GOMODCACHE=/var/lib/oci-cache/go-mod GOCACHE=/var/lib/oci-cache/go-build GOTMPDIR=/var/lib/oci-cache/go-tmp GOMAXPROCS=8
 
@@ -98,9 +111,22 @@ wait_promoted() { # service
   return 1
 }
 
-prepare_restore() { # service, target-time-or-empty
+# fence runs auth-migrate restore-fence <args> against a copy as the migration role. The DSN holds the password, so it is
+# exported inside a subshell (never argv). The per-connection options override lets apply write although the copy was
+# started read-only; export and status only read.
+fence() { # port, args...
+  local port="$1"
+  shift
+  (
+    export AUTH_MIGRATION_DATABASE_URI="host=127.0.0.1 port=${port} user=postgres password='${POSTGRES_PASSWORD}' dbname=postgres sslmode=disable options='-c default_transaction_read_only=off'"
+    export AUTH_RUNTIME_DATABASE_ROLE="$runtime_role" AUTH_DATABASE_SCHEMA=auth
+    "$capped" -t 300 -- "$DRILL_DIR/auth-migrate" restore-fence "$@"
+  )
+}
+
+prepare_restore() { # service, target-time-or-empty, optional "readonly"
   # shellcheck disable=SC2016 # the script body is expanded by the container's sh
-  dc run --rm --no-deps -T --user root --entrypoint sh -e DRILL_T="$2" "$1" -c '
+  dc run --rm --no-deps -T --user root --entrypoint sh -e DRILL_T="$2" -e DRILL_RO="${3:-}" "$1" -c '
     set -eu
     d=/var/lib/postgresql/pgdata
     mkdir -p "$d"
@@ -111,6 +137,9 @@ prepare_restore() { # service, target-time-or-empty
     if [ -n "$DRILL_T" ]; then
       printf "recovery_target_time = \047%s\047\n" "$DRILL_T" >>"$d/postgresql.auto.conf"
     fi
+    if [ "$DRILL_RO" = readonly ]; then
+      printf "default_transaction_read_only = \047on\047\n" >>"$d/postgresql.auto.conf"
+    fi
     chown -R postgres:postgres /var/lib/postgresql
     chmod 0700 "$d"
   '
@@ -119,10 +148,20 @@ prepare_restore() { # service, target-time-or-empty
 log "compile driver"
 (cd "$repo_root" && "$capped" -t 900 -- go test -p 4 -c -trimpath -tags=integration -o "$DRILL_DIR/drill.test" ./internal/audit/)
 
+if [[ "$fence_mode" -eq 1 ]]; then
+  log "compile auth-migrate (fenced drill)"
+  (cd "$repo_root" && "$capped" -t 900 -- go build -trimpath -o "$DRILL_DIR/auth-migrate" ./cmd/auth-migrate)
+fi
+
 log "S1 start source (WAL archive on)"
 load_gate
 dc --profile src up -d --wait src
 drill "$port_src" migrate
+if [[ "$fence_mode" -eq 1 ]]; then
+  # a database that is not a restore: the explicit init, once, on timeline 1 (the first-roll step)
+  fence "$port_src" init >"$evidence/fence-init-src.txt"
+  grep -q 'written=true' "$evidence/fence-init-src.txt"
+fi
 drill "$port_src" write DRILL_LABEL=A
 drill "$port_src" snapshot DRILL_LABEL=A
 
@@ -152,13 +191,51 @@ t_target="$(cat "$evidence/time-T.txt")"
   echo "drill-auth-pitr.sh: unexpected target time shape" >&2
   exit 1
 }
+# a failing check must not stop the run before the other copy is checked
+result=0
+
+if [[ "$fence_mode" -eq 1 ]]; then
+  log "S5 restore to end of WAL (shadow copy, first)"
+  prepare_restore latest ""
+  load_gate
+  dc --profile latest up -d --wait latest
+  wait_promoted latest
+  drill "$port_latest" verify DRILL_EXPECT=F DRILL_MODE=exact || result=1
+  # the manifest is exported BEFORE any new write on the shadow copy
+  fence "$port_latest" export -out "$evidence/fence-manifest.json" >"$evidence/fence-export.txt" || result=1
+  drill "$port_latest" post DRILL_EXPECT=F DRILL_FINAL=F || result=1
+  dc --profile latest stop latest
+
+  log "S4 PITR to $t_target (started read-only)"
+  prepare_restore pitr "$t_target" readonly
+  load_gate
+  dc --profile pitr up -d --wait pitr
+  wait_promoted pitr
+  [[ "$(psql_in pitr 'show default_transaction_read_only')" == "on" ]] || { echo "drill-auth-pitr.sh: the PITR copy is not read-only" >&2; result=1; }
+  drill "$port_pitr" verify DRILL_EXPECT=T DRILL_MODE=exact || result=1
+  drill "$port_pitr" verify DRILL_EXPECT=A DRILL_MODE=atleast || result=1
+  # readiness before the fence: a restored timeline has no fence row, status must say so (exit 1)
+  status_rc=0
+  fence "$port_pitr" status >"$evidence/fence-status-before.txt" || status_rc=$?
+  { [[ "$status_rc" -eq 1 ]] && grep -q 'fenced=false' "$evidence/fence-status-before.txt"; } || { echo "drill-auth-pitr.sh: status before apply is not 'fenced=false' (exit $status_rc)" >&2; result=1; }
+  fence "$port_pitr" apply -manifest "$evidence/fence-manifest.json" >"$evidence/fence-apply-dry-run.txt" || result=1
+  grep -q '"dry_run":true' "$evidence/fence-apply-dry-run.txt" || { echo "drill-auth-pitr.sh: the dry run did not report dry_run" >&2; result=1; }
+  fence "$port_pitr" apply -manifest "$evidence/fence-manifest.json" -apply >"$evidence/fence-apply.txt" || result=1
+  grep -q '"dry_run":false' "$evidence/fence-apply.txt" || { echo "drill-auth-pitr.sh: apply did not report dry_run false" >&2; result=1; }
+  fence "$port_pitr" status >"$evidence/fence-status-after.txt" || result=1
+  grep -q 'fenced=true' "$evidence/fence-status-after.txt" || { echo "drill-auth-pitr.sh: status after apply is not 'fenced=true'" >&2; result=1; }
+  # reset the read-only default, as the runbook does before auth-service starts
+  psql_in pitr 'ALTER SYSTEM RESET default_transaction_read_only' >/dev/null
+  psql_in pitr 'SELECT pg_reload_conf()' >/dev/null
+  [[ "$(psql_in pitr 'show default_transaction_read_only')" == "off" ]] || { echo "drill-auth-pitr.sh: the read-only default was not reset" >&2; result=1; }
+  drill "$port_pitr" post DRILL_EXPECT=T DRILL_FINAL=F DRILL_FENCE=1 || result=1
+  dc --profile pitr stop pitr
+else
 log "S4 PITR to $t_target"
 prepare_restore pitr "$t_target"
 load_gate
 dc --profile pitr up -d --wait pitr
 wait_promoted pitr
-# a failing check must not stop the run before the other copy is checked
-result=0
 drill "$port_pitr" verify DRILL_EXPECT=T DRILL_MODE=exact || result=1
 drill "$port_pitr" verify DRILL_EXPECT=A DRILL_MODE=atleast || result=1
 drill "$port_pitr" post DRILL_EXPECT=T DRILL_FINAL=F || result=1
@@ -172,6 +249,8 @@ wait_promoted latest
 drill "$port_latest" verify DRILL_EXPECT=F DRILL_MODE=exact || result=1
 drill "$port_latest" post DRILL_EXPECT=F DRILL_FINAL=F || result=1
 dc --profile latest stop latest
+
+fi
 
 log "evidence in $evidence"
 jq -c . "$evidence"/verify-*.json "$evidence"/post-*.json | tee "$evidence/summary.txt"

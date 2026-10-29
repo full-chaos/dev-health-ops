@@ -113,17 +113,17 @@ func executeRestoreFence(parent context.Context, args []string, lookup secrets.L
 
 	switch parsed.verb {
 	case "status":
-		timeline, err := restorefence.Timeline(ctx, pool, schema)
-		if err != nil || timeline == nil {
+		timeline, err := restorefence.Timeline(ctx, pool)
+		if err != nil {
 			fmt.Fprintln(stdout, "restore-fence status timeline=none fenced=false")
 			return 1
 		}
 		if err := restorefence.Check(ctx, pool, schema); err != nil {
-			fmt.Fprintf(stdout, "restore-fence status timeline=%d fenced=false\n", *timeline)
+			fmt.Fprintf(stdout, "restore-fence status timeline=%d fenced=false\n", timeline)
 			printInputStatus(ctx, stdout)
 			return 1
 		}
-		fmt.Fprintf(stdout, "restore-fence status timeline=%d fenced=true\n", *timeline)
+		fmt.Fprintf(stdout, "restore-fence status timeline=%d fenced=true\n", timeline)
 		printInputStatus(ctx, stdout)
 		printActions(ctx, pool, schema, stdout)
 		return 0

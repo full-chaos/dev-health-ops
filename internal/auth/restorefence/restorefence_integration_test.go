@@ -497,55 +497,42 @@ func TestTheRuntimeRoleCannotApplyOrWriteTheState(t *testing.T) {
 	}
 }
 
-func TestTheTimelineProbePostureAndValue(t *testing.T) {
+// The runtime role reads the timeline itself: the WAL built-ins are executable
+// by PUBLIC, and no function lends the owner's authority (there is no SECURITY
+// DEFINER function in the auth schema).
+func TestTheRuntimeRoleReadsTheTimelineItself(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	db := newFenceDB(t, ctx)
-	var runtimeMay, publicMay bool
-	if err := db.admin.QueryRow(ctx, `SELECT has_function_privilege($1, 'auth.restore_fence_timeline()', 'EXECUTE'), has_function_privilege('public', 'auth.restore_fence_timeline()', 'EXECUTE')`,
-		db.runtimeRole).Scan(&runtimeMay, &publicMay); err != nil {
-		t.Fatal(err)
-	}
-	if !runtimeMay || publicMay {
-		t.Fatalf("EXECUTE: runtime=%v public=%v, want true and false", runtimeMay, publicMay)
-	}
-	var viaRuntime, viaControl int64
-	if err := db.runtime.QueryRow(ctx, `SELECT auth.restore_fence_timeline()`).Scan(&viaRuntime); err != nil {
+	viaRuntime, err := Timeline(ctx, db.runtime)
+	if err != nil {
 		t.Fatalf("the runtime role cannot read the timeline: %v", err)
 	}
 	if _, err := db.admin.Exec(ctx, `CHECKPOINT`); err != nil {
 		t.Fatal(err)
 	}
+	var viaControl int64
 	if err := db.admin.QueryRow(ctx, `SELECT timeline_id FROM pg_control_checkpoint()`).Scan(&viaControl); err != nil {
 		t.Fatal(err)
 	}
 	if viaRuntime < 1 || viaRuntime != viaControl {
-		t.Fatalf("the probe says timeline %d, pg_control says %d", viaRuntime, viaControl)
+		t.Fatalf("the runtime role reads timeline %d, pg_control says %d", viaRuntime, viaControl)
+	}
+	if err := Check(ctx, db.runtime, db.schema); err != nil {
+		t.Fatalf("readiness of a migrated database as the runtime role: %v", err)
 	}
 }
 
-// The probe runs with its owner's rights. In a deployment the owner is the
-// migration role, which need not be a superuser: with an ordinary role as the
-// owner the runtime role must still read the timeline through the function. If
-// this fails, the migration role needs a grant the deployment does not give.
-func TestTheProbeWorksWhenAnOrdinaryRoleOwnsIt(t *testing.T) {
+func TestTheAuthSchemaHasNoSecurityDefinerFunction(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	db := newFenceDB(t, ctx)
-	owner := db.runtimeRole + "_owner"
-	if _, err := db.admin.Exec(ctx, fmt.Sprintf(`CREATE ROLE %q NOSUPERUSER`, owner)); err != nil {
+	var n int64
+	if err := db.admin.QueryRow(ctx, `SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'auth' AND p.prosecdef`).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { containers.DropRole(db.admin, owner, t.Logf) })
-	if _, err := db.admin.Exec(ctx, fmt.Sprintf(`ALTER FUNCTION auth.restore_fence_timeline() OWNER TO %q`, owner)); err != nil {
-		t.Fatal(err)
-	}
-	var timeline *int64
-	if err := db.runtime.QueryRow(ctx, `SELECT auth.restore_fence_timeline()`).Scan(&timeline); err != nil {
-		t.Fatalf("the runtime role cannot call the probe owned by an ordinary role: %v", err)
-	}
-	if timeline == nil || *timeline < 1 {
-		t.Fatalf("timeline = %v", timeline)
+	if n != 0 {
+		t.Fatalf("the auth schema holds %d SECURITY DEFINER function(s)", n)
 	}
 }
 

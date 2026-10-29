@@ -10,27 +10,11 @@
 -- until the fence has run. This migration stamps the timeline it runs on, so a
 -- database that was never restored is ready.
 --
--- restore_fence_timeline() is the one way the runtime learns the timeline:
--- SECURITY DEFINER, owned by the migration role, no arguments, returns the
--- timeline id and nothing else (NULL while the server is in recovery, which
--- reads as "not fenced"). search_path is pinned to pg_catalog so the definer's
--- rights cannot be redirected by a caller's search_path. EXECUTE is revoked from
--- PUBLIC here; the runtime role gets it from the grant manifest (grants.go).
-CREATE FUNCTION restore_fence_timeline() RETURNS bigint
-LANGUAGE plpgsql
-STABLE
-SECURITY DEFINER
-SET search_path = pg_catalog
-AS $$
-BEGIN
-    IF pg_is_in_recovery() THEN
-        RETURN NULL;
-    END IF;
-    RETURN ('x' || substr(pg_walfile_name(pg_current_wal_insert_lsn()), 1, 8))::bit(32)::bigint;
-END;
-$$;
-REVOKE ALL ON FUNCTION restore_fence_timeline() FROM PUBLIC;
-
+-- The timeline is read, not stored by a function: the runtime role calls the WAL
+-- built-ins itself (pg_walfile_name(pg_current_wal_insert_lsn()), EXECUTE for
+-- PUBLIC) and parses the first eight hex characters. There is no SECURITY
+-- DEFINER function in the auth schema, and a server in recovery raises an error
+-- that reads as "not fenced".
 CREATE TABLE restore_fence_state (
     timeline_id           bigint      NOT NULL CHECK (timeline_id >= 1),
     manifest_sha256       text        NOT NULL CHECK (manifest_sha256 ~ '^([0-9a-f]{64}|initial|blind_margin|inputs)$'),
@@ -45,10 +29,13 @@ CREATE TABLE restore_fence_state (
     PRIMARY KEY (timeline_id, manifest_sha256)
 );
 
--- The timeline this migration runs on is fenced by definition.
+-- The timeline this migration runs on is fenced by definition. A server in
+-- recovery cannot be migrated, so no row is stamped there.
 INSERT INTO restore_fence_state (timeline_id, manifest_sha256, source)
-SELECT restore_fence_timeline(), 'initial', 'migration'
-WHERE restore_fence_timeline() IS NOT NULL;
+SELECT timeline, 'initial', 'migration'
+FROM (SELECT CASE WHEN pg_is_in_recovery() THEN NULL
+                  ELSE ('x' || substr(pg_walfile_name(pg_current_wal_insert_lsn()), 1, 8))::bit(32)::bigint END AS timeline) AS live
+WHERE timeline IS NOT NULL;
 
 -- Only the fence's audit.Commit writes the state table (0006's guard), after
 -- the stamp above so the stamp itself is not refused.

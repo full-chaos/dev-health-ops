@@ -50,7 +50,12 @@ func (r bytesRow) Scan(dest ...any) error {
 	if r.err != nil {
 		return r.err
 	}
-	*(dest[0].(*[]byte)) = r.raw
+	switch d := dest[0].(type) {
+	case *string:
+		*d = walFileOnTimeline2
+	case *[]byte:
+		*d = r.raw
+	}
 	return nil
 }
 

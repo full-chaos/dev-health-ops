@@ -29,14 +29,11 @@ func ExportManifest(ctx context.Context, pool *pgxpool.Pool, schema authschema.V
 		return Manifest{}, fmt.Errorf("%w: time zone", ErrExport)
 	}
 	q := authschema.Quote(schema)
-	var timeline *int64
-	if err := tx.QueryRow(ctx, `SELECT `+q+`.restore_fence_timeline()`).Scan(&timeline); err != nil {
-		return Manifest{}, fmt.Errorf("%w: reading the timeline", ErrExport)
+	timeline, err := Timeline(ctx, tx)
+	if err != nil {
+		return Manifest{}, fmt.Errorf("%w: reading the timeline (export after the source is promoted)", ErrExport)
 	}
-	if timeline == nil {
-		return Manifest{}, fmt.Errorf("%w: the source is still in recovery; export after it is promoted", ErrExport)
-	}
-	m := Manifest{Version: ManifestVersion, SourceTimeline: *timeline}
+	m := Manifest{Version: ManifestVersion, SourceTimeline: timeline}
 
 	rows, err := tx.Query(ctx, `SELECT aggregate_type, aggregate_id, revision FROM `+q+`.aggregate_revisions ORDER BY aggregate_type, aggregate_id`)
 	if err != nil {

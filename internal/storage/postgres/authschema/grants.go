@@ -200,10 +200,6 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 		// and therefore cannot own, any object here -- which is what
 		// "the runtime role owns no DDL" means in practice.
 		fmt.Sprintf(`GRANT USAGE ON SCHEMA %s TO %s`, schema, role),
-		// The timeline probe (0033) is the one function the runtime may call:
-		// revoked from PUBLIC by the migration, granted to this role only.
-		fmt.Sprintf(`REVOKE ALL ON FUNCTION %s.restore_fence_timeline() FROM %s`, schema, role),
-		fmt.Sprintf(`GRANT EXECUTE ON FUNCTION %s.restore_fence_timeline() TO %s`, schema, role),
 	}
 
 	posture := append([]TablePrivilege(nil), manifest...)

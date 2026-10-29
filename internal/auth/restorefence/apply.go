@@ -170,17 +170,14 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedI
 	report := Report{Source: source, Digest: digest, DryRun: !opts.Apply, Inputs: plan.reports}
 	commitErr := audit.Commit(ctx, pool, schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
-			var timeline *int64
-			if err := tx.QueryRow(ctx, `SELECT `+q+`.restore_fence_timeline()`).Scan(&timeline); err != nil {
-				return fmt.Errorf("reading the timeline")
+			timeline, err := Timeline(ctx, tx)
+			if err != nil {
+				return fmt.Errorf("reading the timeline (a server in recovery cannot be fenced)")
 			}
-			if timeline == nil {
-				return fmt.Errorf("the server is still in recovery")
-			}
-			report.Timeline = *timeline
+			report.Timeline = timeline
 			var exists bool
 			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM `+q+`.restore_fence_state WHERE timeline_id = $1 AND manifest_sha256 = $2)`,
-				*timeline, digest).Scan(&exists); err != nil {
+				timeline, digest).Scan(&exists); err != nil {
 				return fmt.Errorf("reading the fence state")
 			}
 			if exists {
@@ -249,7 +246,7 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedI
 			}
 			if _, err := tx.Exec(ctx, `INSERT INTO `+q+`.restore_fence_state (timeline_id, manifest_sha256, source, floors_raised, revocations_reapplied, operator_actions)
 				VALUES ($1, $2, $3, $4, $5, $6::jsonb) ON CONFLICT DO NOTHING`,
-				*timeline, digest, source, report.FloorsRaised+report.MarginRows, report.Revocations+report.RowsRemoved, string(actionsJSON)); err != nil {
+				timeline, digest, source, report.FloorsRaised+report.MarginRows, report.Revocations+report.RowsRemoved, string(actionsJSON)); err != nil {
 				return fmt.Errorf("recording the fence (sqlstate %s)", sqlState(err))
 			}
 			return nil

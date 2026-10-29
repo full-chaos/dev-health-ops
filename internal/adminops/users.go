@@ -14,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/usersowned"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
@@ -210,6 +211,10 @@ func operatorFor(ctx context.Context, env cli.Env, resolve dsnResolver) (admin.O
 	if err != nil {
 		return admin.Operator{}, func() {}, writeError(env.Stderr, "platform_roles_owned_invalid", err.Error())
 	}
+	authSchema, err := policy.AuthSchemaFromEnv(func(name string) string { value, _ := env.Lookup(name); return value })
+	if err != nil {
+		return admin.Operator{}, func() {}, writeError(env.Stderr, "platform_roles_owned_invalid", err.Error())
+	}
 	dsn, ok := resolve(env.Lookup, env.Stderr)
 	if !ok {
 		return admin.Operator{}, func() {}, cli.ExitFailure
@@ -219,7 +224,7 @@ func operatorFor(ctx context.Context, env cli.Env, resolve dsnResolver) (admin.O
 	if err != nil {
 		return admin.Operator{}, func() {}, writeError(env.Stderr, "postgres_unavailable", boundary.Redact(err).Error())
 	}
-	return admin.Operator{Pool: pool, Now: time.Now, UsersOwned: owned, PlatformRolesOwned: platformRolesOwned}, pool.Close, 0
+	return admin.Operator{Pool: pool, Now: time.Now, UsersOwned: owned, PlatformRolesOwned: platformRolesOwned, AuthSchema: authSchema}, pool.Close, 0
 }
 
 // report prints an operator-facing refusal the way the Python verbs did

@@ -54,26 +54,26 @@ type PlatformRoleRead struct {
 // Superuser is the is_superuser expression of a users read: offExpr (the
 // caller's own public column expression, byte-equal to the read before the
 // switch) while not Owned, else whether the users row idExpr holds
-// platform_admin now. RED STUB: offExpr always.
+// platform_admin now.
 func (p PlatformRoleRead) Superuser(offExpr, idExpr string) (string, error) {
-	return offExpr, nil
-}
-
-// superuserColumn is the is_superuser column of the users reads: public
-// users.is_superuser, or while PlatformRolesOwned the platform role rule over
-// the auth schema in the same statement (a failure of it fails the read).
-func (s PGStore) superuserColumn() (string, error) {
-	if !s.PlatformRolesOwned {
-		return "is_superuser", nil
+	if !p.Owned {
+		return offExpr, nil
 	}
-	name := s.AuthSchema
+	name := p.AuthSchema
 	if name == "" {
 		name = defaultAuthSchema
 	}
 	if err := checkSchemaName(name); err != nil {
 		return "", fmt.Errorf("policy: auth schema: %w", err)
 	}
-	return rule.HoldsSQL(pgx.Identifier{name}.Sanitize(), "users.id", "'"+rule.PlatformAdmin+"'"), nil
+	return rule.HoldsSQL(pgx.Identifier{name}.Sanitize(), idExpr, "'"+rule.PlatformAdmin+"'"), nil
+}
+
+// superuserColumn is the is_superuser column of the users reads: public
+// users.is_superuser, or while PlatformRolesOwned the platform role rule over
+// the auth schema in the same statement (a failure of it fails the read).
+func (s PGStore) superuserColumn() (string, error) {
+	return PlatformRoleRead{Owned: s.PlatformRolesOwned, AuthSchema: s.AuthSchema}.Superuser("is_superuser", "users.id")
 }
 
 // superuserGrant names, in a grant error, what the superuser read needs.

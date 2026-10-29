@@ -206,6 +206,9 @@ type Deps struct {
 	// from the auth platform role assignments and a public is_superuser write
 	// refuses.
 	PlatformRolesOwned bool
+	// AuthSchema is AUTH_DATABASE_SCHEMA, where the platform role rule reads
+	// while PlatformRolesOwned (empty: "auth").
+	AuthSchema string
 	// Limits is the rate-limit store every limited route counts through
 	// (see limitStore); nil means the Valkey-backed store when Valkey is
 	// configured, else an in-process one.
@@ -421,4 +424,9 @@ func buildDeps(
 		slog.Bool("webhook_secret_decryptor_configured", deps.Pool != nil && cfg.SettingsEncryptionKey.Configured()),
 	)
 	return deps, components, nil
+}
+
+// platformRoles is how the go-api users reads take is_superuser.
+func (d Deps) platformRoles() policy.PlatformRoleRead {
+	return policy.PlatformRoleRead{Owned: d.PlatformRolesOwned, AuthSchema: d.AuthSchema}
 }

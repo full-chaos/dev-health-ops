@@ -204,6 +204,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		// The api's own ClickHouse login: organization activity.
 		ClickHouse: deps.ClickHouse, Limits: limits, Write: WriteError, OAuth: deps.SessionOAuth, Logger: logger,
 		Mail: deps.Invites, RegisterLimit: deps.RegisterLimit, Inner: proxy.inner, Issuer: deps.SessionIssuer,
+		PlatformRoles: deps.platformRoles(),
 	})...)
 	if deps.Guard != nil {
 		routes = append(routes, orgs.Routes(deps.Pool, deps.Guard, logger)...)
@@ -238,7 +239,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			// a distinct key from it, state.go) -- no new secret material
 			// either way.
 			Cipher: deps.Decryptor, StateSecret: deps.GitHubStateSigner.Secret, Signer: deps.Signer, Inner: proxy.inner,
-			Issuer: deps.SessionIssuer,
+			Issuer: deps.SessionIssuer, PlatformRoles: deps.platformRoles(),
 		})...)
 		billing.LogUnconfigured(logger, deps.StripeWebhookSecret, deps.StripeSecretKey)
 		routes = append(routes, billing.Routes(billing.Deps{
@@ -250,7 +251,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			// first caller that actually injects a fixed clock, so the Stripe
 			// signature timestamp check judges a replay at the instant it was
 			// recorded for, not the instant it happens to replay at.
-			Now: deps.Now,
+			Now: deps.Now, PlatformRoles: deps.platformRoles(),
 		})...)
 		routes = append(routes, admin.Routes(admin.Deps{
 			Pool:               deps.Pool,
@@ -268,6 +269,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			Invites:            deps.Invites,
 			UsersOwned:         deps.UsersOwned,
 			PlatformRolesOwned: deps.PlatformRolesOwned,
+			AuthSchema:         deps.AuthSchema,
 		})...)
 	}
 	webhookintake.LogUnconfiguredSecrets(logger)
@@ -407,7 +409,7 @@ func configureWith(
 			closeComponents(depComponents)
 			return nil, dependencyFailure(ctx, logger, "api_access_token_verifier", "api_protection_config_failed", err)
 		}
-		deps.Auth, deps.Guard = protected.auth, protected.guard
+		deps.Auth, deps.Guard, deps.AuthSchema = protected.auth, protected.guard, protected.authSchema
 		deps.Verifier, deps.Signer = protected.verifier, protected.signer
 		scope = []func(http.Handler) http.Handler{protected.scope.Principal, protected.scope.OrgScope, protected.scope.Impersonation}
 	}
@@ -478,6 +480,7 @@ func configureWith(
 		edge, err := NewEdgeServer(cfg, logger, billing.EdgeRoutes(billing.Deps{
 			Pool: deps.Pool, Stripe: deps.Stripe, Config: deps.BillingConfig, Logger: logger.With(slog.String("listener", "billing-edge")),
 			WebhookSecret: deps.StripeWebhookSecret, LicensePrivateKey: deps.LicensePrivateKey, StripeKey: deps.StripeSecretKey, Producer: deps.Producer,
+			PlatformRoles: deps.platformRoles(),
 		}))
 		if err != nil {
 			return nil, dependencyFailure(ctx, logger, "api_server", "api_billing_edge_server_config_failed", err)
@@ -596,6 +599,8 @@ type protection struct {
 	guard    *policy.Guard
 	verifier *edgetoken.Verifier
 	signer   *edgetoken.Signer
+	// authSchema is AUTH_DATABASE_SCHEMA, as the users store reads it.
+	authSchema string
 }
 
 // newProtection builds the principal service. The api verifies the access
@@ -627,7 +632,7 @@ func newProtection(cfg config.Config, pool *pgxpool.Pool, platformRolesOwned boo
 	}
 	scope := policy.NewScope(auth, logger)
 	scope.DeclaredRows(rows)
-	return protection{auth: auth, scope: scope, guard: policy.NewGuard(auth, logger),
+	return protection{auth: auth, scope: scope, guard: policy.NewGuard(auth, logger), authSchema: authSchema,
 		verifier: verifier, signer: signer}, nil
 }
 

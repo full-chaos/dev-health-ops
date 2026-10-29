@@ -3,11 +3,13 @@
 package sso_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,11 +18,33 @@ import (
 
 const domainDeniedText = "Email domain is not allowed for this provider"
 
+// domainDeniedLog is the server log line of a refused domain.
+const domainDeniedLog = "sso sign-in refused: email domain is not allowed for this provider"
+
+// syncBuffer is a log sink the stack's handlers write to while a test reads it.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 // ssoAnswer is one callback answer plus the sso_login audit rows its provider holds after it.
 type ssoAnswer struct {
 	status int
 	body   map[string]any
 	audits []string // "<error_message>|<request_metadata>" of each failure row
+	logs   string
 }
 
 func providerAudits(t *testing.T, ctx context.Context, st stack, providerID uuid.UUID) []string {
@@ -67,13 +91,25 @@ func wantInvalidProviderEmail(t *testing.T, a ssoAnswer, stage string) {
 	}
 }
 
-func wantDomainDenied(t *testing.T, a ssoAnswer) {
+func wantDomainDenied(t *testing.T, a ssoAnswer, protocol string) {
 	t.Helper()
 	if a.status != http.StatusForbidden || !reflect.DeepEqual(a.body, map[string]any{"detail": domainDeniedText}) {
 		t.Fatalf("status=%d body=%v, want 403 {detail: %q}", a.status, a.body, domainDeniedText)
 	}
 	if len(a.audits) != 0 {
 		t.Fatalf("audit rows %q, want none (the domain refusal writes no audit row)", a.audits)
+	}
+	var lines []string
+	for _, line := range strings.Split(a.logs, "\n") {
+		if strings.Contains(line, domainDeniedLog) {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) != 1 || !strings.Contains(lines[0], "protocol="+protocol) || !strings.Contains(lines[0], "domain=other.example") {
+		t.Fatalf("domain refusal log lines %q, want one naming protocol=%s and domain=other.example", lines, protocol)
+	}
+	if strings.Contains(a.logs, "person@") {
+		t.Fatal("the address is in the log")
 	}
 }
 
@@ -94,7 +130,7 @@ func oidcDomainRun(t *testing.T, email string, linked bool) ssoAnswer {
 		seedBound(t, ctx, st.pool, providerID, "oidc", "linked.person@allowed.example", "subject-1")
 	}
 	status, body := oidcSubjectCallback(t, st, idp, providerID, email, "subject-1")
-	return ssoAnswer{status: status, body: body, audits: providerAudits(t, ctx, st, providerID)}
+	return ssoAnswer{status: status, body: body, audits: providerAudits(t, ctx, st, providerID), logs: st.logs.String()}
 }
 
 func samlDomainRun(t *testing.T, email string, linked bool) ssoAnswer {
@@ -114,7 +150,7 @@ func samlDomainRun(t *testing.T, email string, linked bool) ssoAnswer {
 		seedBound(t, ctx, st.pool, providerID, "saml", "linked.person@allowed.example", "name-1")
 	}
 	status, body := samlSignIn(t, st, idp, providerID, nameIDSP, email, "name-1")
-	return ssoAnswer{status: status, body: body, audits: providerAudits(t, ctx, st, providerID)}
+	return ssoAnswer{status: status, body: body, audits: providerAudits(t, ctx, st, providerID), logs: st.logs.String()}
 }
 
 // An unusable provider address whose domain is not on the allowlist is refused by the email rule (400
@@ -142,8 +178,8 @@ func TestProviderEmailOrderDomainRefusalNamesNoDomain(t *testing.T) {
 		t.Run(protocol, func(t *testing.T) {
 			linked, unknown := run(t, "person@other.example", true), run(t, "person@other.example", false)
 			sameAnswer(t, linked, unknown)
-			wantDomainDenied(t, linked)
-			wantDomainDenied(t, unknown)
+			wantDomainDenied(t, linked, protocol)
+			wantDomainDenied(t, unknown, protocol)
 		})
 	}
 }
@@ -159,7 +195,7 @@ func TestProviderEmailOrderOAuthSurrogateIsTheEmailRule(t *testing.T) {
 			seedBound(t, ctx, st.pool, providerID, "gitlab", "linked.fay@example.test", "7")
 		}
 		status, body := oauthCallbackOnce(t, st, providerID)
-		return ssoAnswer{status: status, body: body, audits: providerAudits(t, ctx, st, providerID)}
+		return ssoAnswer{status: status, body: body, audits: providerAudits(t, ctx, st, providerID), logs: st.logs.String()}
 	}
 	linked, unknown := run(true), run(false)
 	sameAnswer(t, linked, unknown)

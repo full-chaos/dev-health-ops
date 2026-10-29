@@ -213,3 +213,44 @@ func TestTheLegacyAudienceOfTheProductionIssuerFollowsTheClass(t *testing.T) {
 		t.Error("hs256_compat: a token of another audience is accepted")
 	}
 }
+
+// AUTH_LEGACY_JWT_AUDIENCE is the audience the eddsa-class legacy verifier checks;
+// without it, go-api's default. hs256_compat keeps AUTH_JWT_AUDIENCE.
+func TestTheLegacyAudienceKeyReachesTheEdDSAClassVerifier(t *testing.T) {
+	const custom = "go-api-custom"
+	cfg := classConfigWith(t, "eddsa", map[string]string{authconfig.EnvLegacyJWTAudience: custom})
+	mint := func(audience string) string {
+		hs, err := authapi.NewIssuer(cfg.Session.AccessSecret.Reveal(), cfg.Session.AccessIssuer, audience)
+		if err != nil {
+			t.Fatal(err)
+		}
+		compact, err := hs.Access(authapi.Grant{PrincipalID: uuid.New(), SessionID: uuid.New()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return compact
+	}
+	issuer, err := newAccessIssuer(cfg, &stubSigner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := issuer.Verify(mint(custom)); err != nil {
+		t.Errorf("a token of the legacy audience %q is refused: %v", custom, err)
+	}
+	for _, audience := range []string{contracts.PlatformAPIAudience, "auth-service"} {
+		if _, _, err := issuer.Verify(mint(audience)); err == nil {
+			t.Errorf("a token of audience %q is accepted while the legacy audience is %q", audience, custom)
+		}
+	}
+	hsCfg := classConfigWith(t, "hs256_compat", map[string]string{authconfig.EnvLegacyJWTAudience: custom})
+	hsIssuer, err := newAccessIssuer(hsCfg, &stubSigner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := hsIssuer.Verify(mint("auth-service")); err != nil {
+		t.Errorf("hs256_compat ignores AUTH_JWT_AUDIENCE: %v", err)
+	}
+	if _, _, err := hsIssuer.Verify(mint(custom)); err == nil {
+		t.Error("hs256_compat reads the legacy key")
+	}
+}

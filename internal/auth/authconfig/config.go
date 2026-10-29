@@ -87,6 +87,8 @@ const (
 	EnvAccessTokenSecret   = "AUTH_JWT_SECRET_KEY"
 	EnvAccessTokenIssuer   = "AUTH_JWT_ISSUER"
 	EnvAccessTokenAudience = "AUTH_JWT_AUDIENCE"
+	// EnvLegacyJWTAudience is the audience of go-api's HS256 compatibility access token under the eddsa class.
+	EnvLegacyJWTAudience = "AUTH_LEGACY_JWT_AUDIENCE"
 	// EnvAccessTokenClass picks the one class of access token this service
 	// mints: hs256_compat (the default) or eddsa. Exact match, no fallback.
 	EnvAccessTokenClass = "AUTH_ACCESS_TOKEN_CLASS"
@@ -260,6 +262,8 @@ type SessionTokens struct {
 	AccessSecret   secrets.Value
 	AccessIssuer   string
 	AccessAudience string
+	// LegacyAudience is the audience of go-api's HS256 token under the eddsa class.
+	LegacyAudience string
 	SuccessorKey   secrets.Value
 	// LoginEnabled is set with LockoutKey: the login route is mounted.
 	LoginEnabled bool

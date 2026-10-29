@@ -15,7 +15,7 @@ func TestAForceDeletedLegacyUserIsTombstonedNotDeleted(t *testing.T) {
 			continue
 		}
 		found = true
-		if s.name != "public.users.present" || !s.manifestOnly || s.key.name != "id" {
+		if s.name != "public.users.ids" || !s.manifestOnly || s.key.name != "id" {
 			t.Errorf("tombstone section: name %q manifestOnly %v key %s", s.name, s.manifestOnly, s.key.name)
 		}
 		sql := s.applySQL(testSchema(t))
@@ -37,8 +37,8 @@ func TestAForceDeletedLegacyUserIsTombstonedNotDeleted(t *testing.T) {
 }
 
 func TestTheTombstoneActionLineCarriesIdsOnly(t *testing.T) {
-	lines := ActionLines([]OperatorAction{{Kind: ActionUserTombstoned, Source: "public.users.present", IDs: []string{"b", "a"}}})
-	if len(lines) != 1 || !strings.Contains(lines[0], "operator-action user_tombstoned source=public.users.present count=2 ids=a,b") {
+	lines := ActionLines([]OperatorAction{{Kind: ActionUserTombstoned, Source: "public.users.ids", IDs: []string{"b", "a"}}})
+	if len(lines) != 1 || !strings.Contains(lines[0], "operator-action user_tombstoned source=public.users.ids count=2 ids=a,b") {
 		t.Fatalf("lines = %v", lines)
 	}
 }
@@ -49,7 +49,7 @@ func TestTheUsersTombstoneDoesNotReplaceTheCounterSection(t *testing.T) {
 	if !ok || counter.kind != kindCounter {
 		t.Fatal("public.users must stay the counter section")
 	}
-	if tomb, ok := sectionByName("public.users.present"); !ok || tomb.kind != kindTombstone {
-		t.Fatal("public.users.present must be the tombstone section")
+	if tomb, ok := sectionByName("public.users.ids"); !ok || tomb.kind != kindTombstone {
+		t.Fatal("public.users.ids must be the tombstone section")
 	}
 }

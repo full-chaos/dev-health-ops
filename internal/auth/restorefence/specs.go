@@ -146,7 +146,7 @@ var sections = []section{
 		action: ActionForcePasswordReset},
 	// A legacy user the source force-deleted after the target: tombstoned, never deleted (restrict and no-action
 	// foreign keys, cascades into sessions and tokens). Runs after the counter section above.
-	{name: "public.users.present", suffix: ".present", legacy: true, table: "users", kind: kindTombstone, key: colUUID("id"), manifestOnly: true,
+	{name: "public.users.ids", suffix: ".ids", legacy: true, table: "users", kind: kindTombstone, key: colUUID("id"), manifestOnly: true,
 		action: ActionUserTombstoned},
 	{name: "public.provider_oauth_revocations", legacy: true, table: "provider_oauth_revocations", kind: kindReport, key: colUUID("id"),
 		cols: []column{colText("org_id"), colText("provider"), colText("purpose")}, action: ActionRequeueProviderRevocation},

@@ -169,12 +169,12 @@ func TestExecApplyIsADryRunUnlessApplyAndPassesTheManifest(t *testing.T) {
 	if err := os.WriteFile(path, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	store := &stubStore{timeline: 2, actions: []restorefence.OperatorAction{{Kind: restorefence.ActionUserTombstoned, Source: "public.users.present", IDs: []string{"u9"}}}}
+	store := &stubStore{timeline: 2, actions: []restorefence.OperatorAction{{Kind: restorefence.ActionUserTombstoned, Source: "public.users.ids", IDs: []string{"u9"}}}}
 	rc, out, _ := runExec(t, store, nil, "apply", "-manifest", path)
 	if rc != 0 || store.applyOpts.Apply || store.applied == nil || store.applied.SHA256 != m.SHA256 || !strings.Contains(out, `"dry_run":true`) {
 		t.Fatalf("dry run: rc %d, opts %+v, stdout %q", rc, store.applyOpts, out)
 	}
-	if !strings.Contains(out, "operator-action user_tombstoned source=public.users.present count=1 ids=u9") {
+	if !strings.Contains(out, "operator-action user_tombstoned source=public.users.ids count=1 ids=u9") {
 		t.Errorf("the action line is missing: %q", out)
 	}
 	store = &stubStore{timeline: 2}

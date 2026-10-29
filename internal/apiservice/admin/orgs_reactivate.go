@@ -16,8 +16,10 @@ import (
 // by auth-service's reactivate route, so it runs before go-api writes its own
 // row. It answers and returns false when the PATCH must not go on: the
 // organization is missing (404, as today), the read failed (500), or auth-service
-// refused or is down (503, nothing written: fail closed). An organization that is
-// already active needs no call.
+// refused or is down (503, nothing written: fail closed). The call is made whatever
+// the read saw: a suspend that lands between the read and the write must not let
+// the write turn the organization active with no auth call, and for an
+// organization that is not suspended auth answers a no-op and writes nothing.
 func (h *handlers) reactivateInAuth(w http.ResponseWriter, r *http.Request, orgID uuid.UUID) bool {
 	ctx := r.Context()
 	existing, err := h.store.orgByID(ctx, orgID)
@@ -29,9 +31,6 @@ func (h *handlers) reactivateInAuth(w http.ResponseWriter, r *http.Request, orgI
 	if existing == nil {
 		policy.WriteDetail(w, http.StatusNotFound, "Organization not found", nil)
 		return false
-	}
-	if existing.IsActive {
-		return true
 	}
 	user := policy.UserFrom(ctx)
 	if user == nil {

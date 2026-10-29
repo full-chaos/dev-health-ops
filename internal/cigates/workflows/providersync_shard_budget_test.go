@@ -3,6 +3,7 @@ package workflows_test
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -173,6 +174,8 @@ type integrationCall struct {
 	constMin int
 }
 
+var integrationTagRe = regexp.MustCompile(`tags[= ]"?integration`)
+
 var jobTimeoutConstRe = regexp.MustCompile(`(?:job_go_test_timeout|job-timeout) (\d+)`)
 
 // integrationCalls returns the integration go test calls of a script, each with the constant named by the nearest
@@ -198,7 +201,7 @@ func integrationCalls(text string) []integrationCall {
 		if strings.HasPrefix(joined, "#") || strings.HasPrefix(joined, "printf ") {
 			continue
 		}
-		if (strings.Contains(joined, "go test") || strings.Contains(joined, "auth_go test")) && strings.Contains(joined, "tags=integration") {
+		if (strings.Contains(joined, "go test") || strings.Contains(joined, "auth_go test")) && integrationTagRe.MatchString(joined) && !strings.Contains(joined, "go test -c ") {
 			c := 0
 			if n-lastLine <= 40 {
 				c = lastConst
@@ -337,6 +340,8 @@ func integrationTimeoutViolations(t *testing.T, root string) []string {
 		}
 	}
 	out = append(out, workflowIntegrationTimeoutViolations(t, root)...)
+	out = append(out, authCorpusViolations(t, root)...)
+	out = append(out, gitlabCapViolations(t, root)...)
 	return append(out, jobCapEnvViolations(t, root)...)
 }
 
@@ -347,7 +352,6 @@ var directWorkflowIntegrationCalls = map[string]bool{"freeze-provider-worlds.yml
 func workflowIntegrationTimeoutViolations(t *testing.T, root string) []string {
 	t.Helper()
 	var out []string
-	timeoutRe := regexp.MustCompile(`-timeout[= ](\d+)m\b`)
 	capExprRe := regexp.MustCompile(`(\d+) \|\| (\d+)\s*\}\}\s*$`)
 	found := map[string]bool{}
 	for _, name := range workflowNames(t, root) {
@@ -355,19 +359,19 @@ func workflowIntegrationTimeoutViolations(t *testing.T, root string) []string {
 		for jobName, j := range jobs {
 			job := asMap(j)
 			for _, st := range asList(job["steps"]) {
-				for _, line := range integrationGoTestLines(asString(asMap(st)["run"])) {
+				for _, call := range integrationCalls(asString(asMap(st)["run"])) {
+					line := call.line
 					key := name + " " + jobName
 					found[key] = true
 					if !directWorkflowIntegrationCalls[key] {
 						out = append(out, fmt.Sprintf(".github/workflows/%s job %s: direct integration go test call is not in directWorkflowIntegrationCalls: %s", name, jobName, line))
 						continue
 					}
-					m := timeoutRe.FindStringSubmatch(line)
-					if m == nil {
-						out = append(out, fmt.Sprintf(".github/workflows/%s job %s: the integration go test call has no -timeout=<N>m", name, jobName))
+					if call.constMin == 0 || !strings.Contains(line, `-timeout="${tmo}"`) {
+						out = append(out, fmt.Sprintf(".github/workflows/%s job %s: the integration go test call does not take its -timeout from `check_go.sh job-timeout N` (a literal -timeout or no helper call above it bypasses the job deadline)", name, jobName))
 						continue
 					}
-					timeout, _ := strconv.Atoi(m[1])
+					timeout := call.constMin
 					capMin := 0
 					switch v := job["timeout-minutes"].(type) {
 					case int:
@@ -382,7 +386,7 @@ func workflowIntegrationTimeoutViolations(t *testing.T, root string) []string {
 					if capMin == 0 {
 						out = append(out, fmt.Sprintf(".github/workflows/%s job %s: no readable timeout-minutes", name, jobName))
 					} else if timeout > capMin-integrationTimeoutMarginMinutes {
-						out = append(out, fmt.Sprintf(".github/workflows/%s job %s: go test -timeout=%dm must be <= %dm (job cap %dm - %dm)", name, jobName, timeout, capMin-integrationTimeoutMarginMinutes, capMin, integrationTimeoutMarginMinutes))
+						out = append(out, fmt.Sprintf(".github/workflows/%s job %s: go test limit %dm must be <= %dm (job cap %dm - %dm)", name, jobName, timeout, capMin-integrationTimeoutMarginMinutes, capMin, integrationTimeoutMarginMinutes))
 					}
 				}
 			}
@@ -423,13 +427,15 @@ func TestIntegrationTimeoutGuardCoversDirectWorkflowCalls(t *testing.T) {
 		"ci/check_go.sh", "ci/check_golden_drift.sh", freeze,
 		".github/workflows/go.yml", ".github/workflows/go-quality.yml", ".github/workflows/go-auth-service.yml",
 		".github/workflows/venue-oracles.yml", ".github/workflows/venue-oracles-changed.yml",
+		"ci/auth_corpus_external.sh", ".gitlab-ci.yml",
 	}
 	for _, c := range []struct {
 		name string
 		m    mutation
 		want string
 	}{
-		{"a workflow call over its job cap", mutation{freeze, "-timeout=25m", "-timeout=29m"}, "29m"},
+		{"a workflow call over its job cap", mutation{freeze, "job-timeout 25", "job-timeout 29"}, "29m"},
+		{"a literal -timeout back in the workflow call", mutation{freeze, `-timeout="${tmo}"`, "-timeout=25m"}, "bypasses the job deadline"},
 		{"a workflow call in a job nobody registered", mutation{freeze, "  freeze:\n", "  freeze2:\n"}, "freeze2"},
 		{"the job cap lowered below the timeout", mutation{freeze, "timeout-minutes: 30", "timeout-minutes: 27"}, "27m"},
 	} {
@@ -440,7 +446,7 @@ func TestIntegrationTimeoutGuardCoversDirectWorkflowCalls(t *testing.T) {
 }
 
 // guardedCheckGoRe matches the runs of a workflow step that reach an integration go test site of check_go.sh or check_golden_drift.sh.
-var guardedCheckGoRe = regexp.MustCompile(`check_go\.sh (?:integration-shard\b(?:\s|"|$)|integration(?:\s|$)|venue-oracles\b|multi-replica-workers\b|ci-leg(?:\s|$)|ci(?:\s|$)|fast(?:\s|$)|all(?:\s|$)|auth(?:\s+race-integration\b|\s*$))|check_golden_drift\.sh run\b`)
+var guardedCheckGoRe = regexp.MustCompile(`check_go\.sh (?:integration-shard\b(?:\s|"|$)|integration(?:\s|$)|venue-oracles\b|multi-replica-workers\b|ci-leg(?:\s|$)|ci(?:\s|$)|fast(?:\s|$)|all(?:\s|$)|auth(?:\s+race-integration\b|\s*$))|check_golden_drift\.sh run\b|check_go\.sh job-timeout\b|auth_corpus_external\.sh`)
 
 const jobCapEnv = "CHECK_GO_JOB_CAP_MIN"
 
@@ -485,6 +491,199 @@ func TestJobCapEnvGuardCatchesPlantedDefects(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			expectViolation(t, jobCapEnvViolations(t, plantTree(t, root, []string{goYML}, c.m)), c.want)
+		})
+	}
+}
+
+// jobCapMinutes reads the timeout-minutes of a workflow job (int, or the smaller number of a `... && N || M` expression).
+func jobCapMinutes(job yamlMap) int {
+	switch v := job["timeout-minutes"].(type) {
+	case int:
+		return v
+	case string:
+		if e := regexp.MustCompile(`(\d+) \|\| (\d+)\s*\}\}\s*$`).FindStringSubmatch(v); e != nil {
+			a, _ := strconv.Atoi(e[1])
+			b, _ := strconv.Atoi(e[2])
+			return min(a, b)
+		}
+	}
+	return 0
+}
+
+// authCorpusViolations: the external auth corpus test (ci/auth_corpus_external.sh) takes its timeout from `check_go.sh job-timeout N`,
+// N at most the smallest cap of the jobs that run it minus 3 min; the compiled test binary of the acp leg gets -test.timeout the same way.
+func authCorpusViolations(t *testing.T, root string) []string {
+	t.Helper()
+	var out []string
+	script := readFile(t, filepath.Join(root, "ci", "auth_corpus_external.sh"))
+	capMin := -1
+	for _, j := range []struct{ workflow, job string }{{"go-auth-service.yml", "auth-corpus-queue"}, {"venue-oracles.yml", "auth-corpus-external"}} {
+		c := jobCapMinutes(asMap(asMap(loadWf(t, root, j.workflow)["jobs"])[j.job]))
+		if c == 0 {
+			out = append(out, fmt.Sprintf("%s job %s has no readable timeout-minutes", j.workflow, j.job))
+			continue
+		}
+		if capMin < 0 || c < capMin {
+			capMin = c
+		}
+	}
+	found := 0
+	for _, call := range integrationCalls(script) {
+		if !strings.Contains(call.line, "TestAuthFlowVenueOracle") {
+			continue
+		}
+		found++
+		if call.constMin == 0 || !strings.Contains(call.line, `-timeout="${tmo}"`) {
+			out = append(out, "ci/auth_corpus_external.sh: the corpus go test call does not take its -timeout from `check_go.sh job-timeout N`")
+		} else if capMin > 0 && call.constMin > capMin-integrationTimeoutMarginMinutes {
+			out = append(out, fmt.Sprintf("ci/auth_corpus_external.sh: the corpus limit %dm must be <= %dm (smallest job cap %dm - %dm)", call.constMin, capMin-integrationTimeoutMarginMinutes, capMin, integrationTimeoutMarginMinutes))
+		}
+	}
+	if found != 1 {
+		out = append(out, fmt.Sprintf("ci/auth_corpus_external.sh: found %d corpus go test calls, want 1", found))
+	}
+	if !strings.Contains(script, `-test.timeout="${tmo}"`) {
+		out = append(out, "ci/auth_corpus_external.sh: the compiled corpus test binary does not get -test.timeout from job-timeout")
+	}
+	return out
+}
+
+// gitlabTimeoutMinutes reads a GitLab job timeout such as "45m", "1h" or "2h".
+func gitlabTimeoutMinutes(v any) int {
+	m := regexp.MustCompile(`^(\d+)\s*(m|h)$`).FindStringSubmatch(strings.TrimSpace(fmt.Sprint(v)))
+	if m == nil {
+		return 0
+	}
+	n, _ := strconv.Atoi(m[1])
+	if m[2] == "h" {
+		return n * 60
+	}
+	return n
+}
+
+func gitlabScriptText(v any) string {
+	switch x := v.(type) {
+	case string:
+		return x + "\n"
+	case []any:
+		var b strings.Builder
+		for _, e := range x {
+			b.WriteString(gitlabScriptText(e))
+		}
+		return b.String()
+	}
+	return ""
+}
+
+// gitlabCapViolations: every GitLab job that reaches a guarded check_go.sh call carries CHECK_GO_JOB_CAP_MIN equal to its own
+// timeout in minutes and takes the job start (an exported CHECK_GO_JOB_START) before its first call: GitLab has no GITHUB_ENV, so
+// two calls of one job would each take their own start.
+func gitlabCapViolations(t *testing.T, root string) []string {
+	t.Helper()
+	var out []string
+	doc := parseYAML(t, readFile(t, filepath.Join(root, ".gitlab-ci.yml")), ".gitlab-ci.yml")
+	for name, v := range doc {
+		job := asMap(v)
+		if job == nil || job["script"] == nil {
+			continue
+		}
+		text := gitlabScriptText(job["before_script"]) + gitlabScriptText(job["script"])
+		loc := guardedCheckGoRe.FindStringIndex(text)
+		if loc == nil {
+			continue
+		}
+		capVal, _ := asMap(job["variables"])[jobCapEnv]
+		want := gitlabTimeoutMinutes(job["timeout"])
+		switch {
+		case want == 0:
+			out = append(out, fmt.Sprintf(".gitlab-ci.yml job %s reaches a guarded check_go.sh call but has no readable timeout", name))
+		case fmt.Sprint(capVal) != fmt.Sprint(want):
+			out = append(out, fmt.Sprintf(".gitlab-ci.yml job %s: %s=%v must equal its timeout, %d minutes", name, jobCapEnv, capVal, want))
+		}
+		if i := strings.Index(text, "CHECK_GO_JOB_START="); i < 0 || i > loc[0] {
+			out = append(out, fmt.Sprintf(".gitlab-ci.yml job %s must export CHECK_GO_JOB_START before its first guarded check_go.sh call", name))
+		}
+	}
+	return out
+}
+
+// The freeze workflow's own go test call takes its -timeout from the job budget: six minutes into its 30 min job it gets 1260 s, not 25 min.
+func TestFreezeProviderWorldsCallFollowsTheJobBudget(t *testing.T) {
+	root := repoRoot(t)
+	const t0 = 1700000000
+	var run string
+	for _, st := range asList(asMap(asMap(loadWf(t, root, "freeze-provider-worlds.yml")["jobs"])["freeze"])["steps"]) {
+		if r := asString(asMap(st)["run"]); strings.Contains(r, "go test") {
+			run = r
+		}
+	}
+	if run == "" {
+		t.Fatal("no run step with go test in the freeze job")
+	}
+	runFreeze := func(now int) (int, string, string) {
+		dir := t.TempDir()
+		bin := filepath.Join(dir, "bin")
+		if err := os.MkdirAll(bin, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		log := filepath.Join(dir, "go.log")
+		fake := "#!/bin/sh\necho \"$*\" >> " + log + "\nexit 0\n"
+		if err := os.WriteFile(filepath.Join(bin, "go"), []byte(fake), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Join(root, "ci"), filepath.Join(dir, "ci")); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("bash", "-c", run)
+		cmd.Dir = dir
+		cmd.Env = []string{"PATH=" + bin + ":" + os.Getenv("PATH"), "HOME=" + dir, "TMPDIR=" + dir,
+			"CHECK_GO_JOB_CAP_MIN=30", fmt.Sprintf("CHECK_GO_JOB_START=%d", t0), fmt.Sprintf("CHECK_GO_NOW_EPOCH=%d", now)}
+		var se strings.Builder
+		cmd.Stderr = &se
+		code := 0
+		if err := cmd.Run(); err != nil {
+			ee, ok := err.(*exec.ExitError)
+			if !ok {
+				t.Fatal(err)
+			}
+			code = ee.ExitCode()
+		}
+		raw, _ := os.ReadFile(log)
+		return code, string(raw), se.String()
+	}
+	code, log, errText := runFreeze(t0 + 360)
+	if code != 0 || !strings.Contains(log, "-timeout=1260s") {
+		t.Errorf("rc %d; the go call must carry -timeout=1260s (30 min cap - 360 s - 3 min); log %q stderr %s", code, log, errText)
+	}
+	code, log, errText = runFreeze(t0 + 1700)
+	if code == 0 || log != "" || !strings.Contains(errText, "job time budget exhausted before") {
+		t.Errorf("no budget left: rc %d (want non-zero), go log %q, stderr %s", code, log, errText)
+	}
+}
+
+// Planted defects of the external-corpus and GitLab guards (a mutation that does not land fails the test).
+func TestAuthCorpusAndGitlabGuardsCatchPlantedDefects(t *testing.T) {
+	root := repoRoot(t)
+	const corpus = "ci/auth_corpus_external.sh"
+	const gl = ".gitlab-ci.yml"
+	files := []string{
+		corpus, gl, ".github/workflows/go-auth-service.yml", ".github/workflows/venue-oracles.yml",
+		".github/workflows/go.yml", ".github/workflows/go-quality.yml", ".github/workflows/venue-oracles-changed.yml",
+		".github/workflows/freeze-provider-worlds.yml", "ci/check_go.sh", "ci/check_golden_drift.sh",
+	}
+	for _, c := range []struct {
+		name string
+		m    mutation
+		want string
+	}{
+		{"the corpus go test loses its timeout", mutation{corpus, `-count=1 -timeout="${tmo}" -v`, "-count=1 -v"}, "does not take its -timeout"},
+		{"the corpus test binary loses -test.timeout", mutation{corpus, ` -test.timeout="${tmo}"`, ""}, "-test.timeout"},
+		{"the corpus limit is over the cap", mutation{corpus, "job-timeout 27", "job-timeout 29"}, "29m"},
+		{"a GitLab job cap that differs from its timeout", mutation{gl, `CHECK_GO_JOB_CAP_MIN: "60"`, `CHECK_GO_JOB_CAP_MIN: "50"`}, "must equal its timeout"},
+		{"a GitLab job without the job start", mutation{gl, `export CHECK_GO_JOB_START="$(date +%s)"`, "true"}, "must export CHECK_GO_JOB_START"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			expectViolation(t, integrationTimeoutViolations(t, plantTree(t, root, files, c.m)), c.want)
 		})
 	}
 }

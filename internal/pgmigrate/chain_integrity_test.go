@@ -32,40 +32,43 @@ func loadChainError(t *testing.T) string {
 func TestLoadChainRefusesAGap(t *testing.T) {
 	UsePlantedChain(t, os.DirFS("testdata/postfreeze/gap"))
 	got := loadChainError(t)
-	if !strings.Contains(got, "gap in the chain") || !strings.Contains(got, "0155") || !strings.Contains(got, "0154") {
-		t.Errorf("LoadChain error %q does not name the gap before 0155 (want 0154)", got)
+	gapAt, want := PlantedRevision(t, 165), PlantedRevision(t, 164)
+	if !strings.Contains(got, "gap in the chain") || !strings.Contains(got, gapAt) || !strings.Contains(got, want) {
+		t.Errorf("LoadChain error %q does not name the gap before %s (want %s)", got, gapAt, want)
 	}
 }
 
 func TestLoadChainRefusesADuplicateRevision(t *testing.T) {
 	UsePlantedChain(t, os.DirFS("testdata/postfreeze/duplicate"))
 	got := loadChainError(t)
-	if !strings.Contains(got, "more than one file") || !strings.Contains(got, "0153") {
-		t.Errorf("LoadChain error %q does not name the duplicate revision 0153", got)
+	if duplicate := PlantedRevision(t, 163); !strings.Contains(got, "more than one file") || !strings.Contains(got, duplicate) {
+		t.Errorf("LoadChain error %q does not name the duplicate revision %s", got, duplicate)
 	}
 }
 
 func TestLoadChainRefusesADownRevisionThatIsNotThePredecessor(t *testing.T) {
 	UsePlantedChain(t, plantedFiles(map[string]string{
-		"sql/0153_plant.sql": "-- Revision 0153 (down_revision 0150), planted.\nSELECT 1;\n",
+		"sql/0163_plant.sql": "-- Revision 0163 (down_revision 0160), planted.\nSELECT 1;\n",
 	}))
 	got := loadChainError(t)
-	if !strings.Contains(got, "down_revision") || !strings.Contains(got, "0150") || !strings.Contains(got, "0152") {
-		t.Errorf("LoadChain error %q does not name down_revision 0150 against the predecessor 0152", got)
+	wrong, predecessor := PlantedRevision(t, 160), LiveHead(t)
+	if !strings.Contains(got, "down_revision") || !strings.Contains(got, wrong) || !strings.Contains(got, predecessor) {
+		t.Errorf("LoadChain error %q does not name down_revision %s against the predecessor %s", got, wrong, predecessor)
 	}
 }
 
 func TestLoadChainRefusesAMissingDownRevisionHeader(t *testing.T) {
 	for name, first := range map[string]string{
 		"no comment":           "SELECT 1;\n",
-		"no down_revision":     "-- Revision 0153, planted.\nSELECT 1;\n",
-		"another revision":     "-- Revision 0154 (down_revision 0152), planted.\nSELECT 1;\n",
-		"header not on line 1": "\n-- Revision 0153 (down_revision 0152), planted.\nSELECT 1;\n",
+		"no down_revision":     "-- Revision 0163, planted.\nSELECT 1;\n",
+		"another revision":     "-- Revision 0164 (down_revision 0162), planted.\nSELECT 1;\n",
+		"header not on line 1": "\n-- Revision 0163 (down_revision 0162), planted.\nSELECT 1;\n",
 	} {
 		t.Run(name, func(t *testing.T) {
-			UsePlantedChain(t, plantedFiles(map[string]string{"sql/0153_plant.sql": first}))
-			if got := loadChainError(t); !strings.Contains(got, "0153_plant.sql") || !strings.Contains(got, "header") {
-				t.Errorf("LoadChain error %q does not refuse the header of sql/0153_plant.sql", got)
+			UsePlantedChain(t, plantedFiles(map[string]string{"sql/0163_plant.sql": first}))
+			planted := PlantedRevision(t, 163) + "_plant.sql"
+			if got := loadChainError(t); !strings.Contains(got, planted) || !strings.Contains(got, "header") {
+				t.Errorf("LoadChain error %q does not refuse the header of sql/%s", got, planted)
 			}
 		})
 	}
@@ -73,26 +76,26 @@ func TestLoadChainRefusesAMissingDownRevisionHeader(t *testing.T) {
 
 func TestLoadChainRefusesAFirstRevisionThatDoesNotContinueTheBaseline(t *testing.T) {
 	UseChainFS(t, plantedFiles(map[string]string{
-		"sql/0139_first.sql": "-- Revision 0139 (down_revision 0137), planted.\nSELECT 1;\n",
+		"sql/0163_first.sql": "-- Revision 0163 (down_revision 0161), planted.\nSELECT 1;\n",
 	}))
 	got := loadChainError(t)
-	if !strings.Contains(got, "down_revision") || !strings.Contains(got, "0137") || !strings.Contains(got, "0138") {
-		t.Errorf("LoadChain error %q does not name down_revision 0137 against the baseline head 0138", got)
+	if !strings.Contains(got, "down_revision") || !strings.Contains(got, "0161") || !strings.Contains(got, "0162") {
+		t.Errorf("LoadChain error %q does not name down_revision 0161 against the baseline head 0162", got)
 	}
 }
 
 func TestLoadChainRefusesAChainThatDoesNotStartAfterTheBaseline(t *testing.T) {
 	UseChainFS(t, plantedFiles(map[string]string{
-		"sql/0140_first.sql": "-- Revision 0140 (down_revision 0139), planted.\nSELECT 1;\n",
+		"sql/0164_first.sql": "-- Revision 0164 (down_revision 0163), planted.\nSELECT 1;\n",
 	}))
-	if got := loadChainError(t); !strings.Contains(got, "gap in the chain") || !strings.Contains(got, "0139") {
-		t.Errorf("LoadChain error %q does not name the missing 0139 after the baseline 0138", got)
+	if got := loadChainError(t); !strings.Contains(got, "gap in the chain") || !strings.Contains(got, "0163") {
+		t.Errorf("LoadChain error %q does not name the missing 0163 after the baseline 0162", got)
 	}
 }
 
 func TestLoadChainSortsRevisionsAsIntegers(t *testing.T) {
 	files := map[string]string{}
-	for n := 139; n <= 10001; n++ {
+	for n := 163; n <= 10001; n++ {
 		files[fmt.Sprintf("sql/%04d_step.sql", n)] = fmt.Sprintf("-- Revision %04d (down_revision %04d), planted.\nSELECT 1;\n", n, n-1)
 	}
 	UseChainFS(t, plantedFiles(files))
@@ -113,12 +116,15 @@ func TestLoadChainSortsRevisionsAsIntegers(t *testing.T) {
 }
 
 func TestRealChainPassesTheIntegrityRules(t *testing.T) {
-	chain, err := LoadChain()
-	if err != nil {
+	if _, err := LoadChain(); err != nil {
 		t.Fatalf("the real chain breaks the integrity rules: %v", err)
 	}
-	if len(chain) == 0 || chain[0].Revision != "0139" {
-		t.Fatalf("the real chain does not start at 0139")
+	archived := archivedChainFiles(t)
+	if err := checkChainAfter(archived, "0138"); err != nil {
+		t.Fatalf("the archived chain breaks the integrity rules: %v", err)
+	}
+	if len(archived) == 0 || archived[0].Revision != "0139" || archived[len(archived)-1].Revision != squashHead {
+		t.Fatalf("the archived chain does not run 0139..%s", squashHead)
 	}
 }
 
@@ -129,6 +135,9 @@ func manifestProblems(chain []ChainFile, manifest string) []string {
 	listed := map[string]string{}
 	last := -1
 	for _, line := range strings.Split(strings.TrimSuffix(manifest, "\n"), "\n") {
+		if line == "" && manifest == "" {
+			continue
+		}
 		fields := strings.Split(line, "\t")
 		n, err := strconv.Atoi(fields[0])
 		if len(fields) != 2 || err != nil {
@@ -172,6 +181,22 @@ func TestTheChainMatchesTheReleasedManifest(t *testing.T) {
 	}
 	if problems := manifestProblems(chain, string(data)); len(problems) > 0 {
 		t.Errorf("the chain and chain_manifest.tsv disagree:\n%s", strings.Join(problems, "\n"))
+	}
+	archive, err := os.ReadFile("archive/chain_manifest.tsv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var twoColumns strings.Builder
+	archived := archivedChainFiles(t)
+	for index, line := range strings.Split(strings.TrimSuffix(string(archive), "\n"), "\n") {
+		fields := strings.Split(line, "\t")
+		if len(fields) != 3 || index >= len(archived) || fields[2] != archived[index].Name {
+			t.Fatalf("archive manifest line %q does not name archive/sql/%s", line, archived[min(index, len(archived)-1)].Name)
+		}
+		twoColumns.WriteString(fields[0] + "\t" + fields[1] + "\n")
+	}
+	if problems := manifestProblems(archived, twoColumns.String()); len(problems) > 0 {
+		t.Errorf("archive/sql and archive/chain_manifest.tsv disagree:\n%s", strings.Join(problems, "\n"))
 	}
 }
 

@@ -223,6 +223,11 @@ var optionRegistry = []Option{
 			EnvAccessTokenAudience + ". Set but empty is refused at start",
 	},
 	{
+		Env: EnvSessionIssueWorkloadSubject, Kind: KindString, Group: GroupSession,
+		Usage: "workload principal id (prn_ and 22 base64url characters) of go-api whose workload token POST /internal/v1/sessions accepts; unset refuses every workload token. Needs " +
+			EnvTokenIssuerURL,
+	},
+	{
 		Env: EnvValkeyURI, Kind: KindString, Secret: true, Group: GroupSession,
 		Usage: "Valkey URI (redis:// or rediss://, database 1) of the shared rate-limit store; " + EnvValkeyURI +
 			"_FILE reads it from a mounted file instead. Required while the login, credential or social link routes mount",

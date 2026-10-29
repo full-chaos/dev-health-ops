@@ -13,7 +13,8 @@ func TestTheTestLegTimeoutsComeFromTheCigatesHelper(t *testing.T) {
 	for _, want := range []string{
 		`rows_timeout="$(cigates_go_test_timeout ${rest_rows})"`,
 		`go_test_leg "${log}" "${legjson}" -timeout "$(cigates_go_test_timeout ${rest})" ${rest}`,
-		`go_test_leg "${log}" "${legjson}" -count=1 -timeout "$(cigates_go_test_timeout ${rest_sec})" ${rest_sec}`,
+		// The security call has no -count=1 of its own: go_test_leg adds it, once, under MERGE_GROUP_FRESH (rest_sec exists only then).
+		`go_test_leg "${log}" "${legjson}" -timeout "$(cigates_go_test_timeout ${rest_sec})" ${rest_sec}`,
 		`go_test_leg "${log}" "${legjson}" -timeout 10m "${SERIAL_HEAVY_TEST_PACKAGE}"`,
 	} {
 		if strings.Count(body, want) != 1 {

@@ -92,7 +92,7 @@ Design docs (read the guardrails at minimum):
 | `internal_svc_authsess_token` | active | service_account | |
 | `link_credential` | active | human | |
 | `pagerduty_webhook_signature` | active | external_source | |
-| `workload_token` | **unconsumed** | workload | |
+| `workload_token` | optional_feature | workload | |
 | `workload_bootstrap_credential` | optional_feature | workload | |
 
 **30 classes at the Wave 0 freeze** (31 with `effective_principal_envelope`, added by CHAOS-4737 below). 5 were not in CHAOS-3273's minimum list and were discovered
@@ -172,7 +172,11 @@ service), sub, principal_type `workload`, jti, iat, nbf, exp; no `org_id`, no
 `sid`, no `scope`; lifetime at most 300 seconds. Its typ separates it from the
 user access token (`at+jwt`). The auth-service workload-token exchange mints it
 (`POST /internal/v1/token/exchange`, mounted only with `AUTH_WORKLOAD_EXCHANGE=true`). The document parser `ParseWorkloadToken` is under
-`FuzzParseWorkloadToken`.
+`FuzzParseWorkloadToken`. auth-service's session issue route
+(`POST /internal/v1/sessions`) also accepts it, for audience `auth-service` and
+the one workload principal in `AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT` (the token
+has no action claim, so that subject is the `sessions.issue` binding); with the
+variable unset the route refuses it.
 
 **`kubernetes_sa_token_exchange`.** The Kubernetes projected ServiceAccount
 token a workload presents to auth-service's workload-token exchange

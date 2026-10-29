@@ -45,12 +45,13 @@ func outcomeOf(f runFacts) string {
 // isRefusal reports whether err is a refusal decided before any write.
 func isRefusal(err error) bool {
 	var below BelowHeadError
+	var belowBaseline BelowBaselineError
 	var ahead AheadOfBuildError
 	var foreign ForeignDatabaseError
 	var mismatch SchemaMismatchError
 	var down DowngradeRefusal
 	var authMismatch AuthSchemaMismatchError
-	return errors.As(err, &below) || errors.As(err, &ahead) || errors.As(err, &foreign) ||
+	return errors.As(err, &below) || errors.As(err, &belowBaseline) || errors.As(err, &ahead) || errors.As(err, &foreign) ||
 		errors.As(err, &mismatch) || errors.As(err, &down) || errors.As(err, &authMismatch)
 }
 

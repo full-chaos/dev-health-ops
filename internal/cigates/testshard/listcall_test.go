@@ -32,7 +32,8 @@ func legListCall(t *testing.T, source string) ([]string, []string) {
 	if call == nil {
 		t.Fatal("ci/check_go.sh: check_providersync_race_shard holds no \"${GO_ENV_OFF[@]}\" GOWORK=off go test ... -list call")
 	}
-	return unset, strings.Fields(strings.ReplaceAll(call[1], "'", ""))
+	// The merge_group -count=1 expands to nothing on a pull request, the event the oracle's listing copies.
+	return unset, strings.Fields(strings.ReplaceAll(strings.ReplaceAll(call[1], "'", ""), "${MERGE_GROUP_FRESH:+-count=1} ", ""))
 }
 
 func TestTheHarnessListsProvidersyncWithTheLegsOwnCall(t *testing.T) {
@@ -56,7 +57,7 @@ func TestTheHarnessListCallGuardPlantedDefectsAreCaught(t *testing.T) {
 	}
 	source := string(b)
 	for _, c := range []struct{ name, from, to string }{
-		{"the leg drops -trimpath", "go test -mod=readonly -trimpath -race -list '.*' ./internal/providersync", "go test -mod=readonly -race -list '.*' ./internal/providersync"},
+		{"the leg drops -trimpath", "go test -mod=readonly -trimpath -race ${MERGE_GROUP_FRESH:+-count=1} -list '.*' ./internal/providersync", "go test -mod=readonly -race ${MERGE_GROUP_FRESH:+-count=1} -list '.*' ./internal/providersync"},
 		{"the leg unsets one more variable", "GO_ENV_OFF=(env -u GO_PROVIDER_ROUTES", "GO_ENV_OFF=(env -u GOTOOLCHAIN -u GO_PROVIDER_ROUTES"},
 	} {
 		planted := strings.Replace(source, c.from, c.to, 1)

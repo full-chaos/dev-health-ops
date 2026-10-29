@@ -72,7 +72,7 @@ func TestPostureIntegrationListsTheFourteenPackagesOnATrigger(t *testing.T) {
 		t.Fatalf("the posture list has %d packages, want 14", len(keys))
 	}
 	triggers := []string{
-		"internal/pgmigrate/sql/0158_x.sql", "internal/pgmigrate/baseline/head.json", "internal/rivermigrate/x.go",
+		"internal/pgmigrate/sql/0158_x.sql", "internal/pgmigrate/baseline/head.json", "internal/pgmigrate/archive/sql/0139_x.sql", "internal/rivermigrate/x.go",
 		"internal/testsupport/domainroledb/domainroledb.go", "internal/storage/postgres/domain_authorization.go",
 		"internal/storage/postgres/posture_manifest.go", "internal/storage/postgres/role_posture_integration_test.go",
 		"internal/storage/postgres/authschema/x.go", "internal/storage/postgres/aclguard/x.go",
@@ -446,7 +446,7 @@ func postureDemoRunArgs(t *testing.T, f postureFixture, cwd string, args []strin
 	if err := os.WriteFile(paths, []byte("internal/ok/ok_test.go\x00"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	env := append(goListEnv(), extraEnv...)
+	env := append(isolatedGoEnv(t), extraEnv...)
 	hasPath := false
 	for _, e := range extraEnv {
 		hasPath = hasPath || strings.HasPrefix(e, "PATH=")
@@ -455,6 +455,39 @@ func postureDemoRunArgs(t *testing.T, f postureFixture, cwd string, args []strin
 		env = append(env, "PATH="+filepath.Dir(goBinary(t))+string(os.PathListSeparator)+"/usr/bin:/bin")
 	}
 	return cmdSpec{dir: cwd, env: env}.run("bash", append([]string{filepath.Join(f.dir, "ci", "posture_integration.sh"), "--run", "--paths", paths, "--test-runner", pass}, args...)...)
+}
+
+// makeWritable lets t.TempDir remove a read-only Go module cache: the cleanup runs before the TempDir removal.
+func makeWritable(t *testing.T, dir string) {
+	t.Helper()
+	t.Cleanup(func() { _ = exec.Command("chmod", "-R", "u+w", dir).Run() })
+}
+
+func withoutEnv(env []string, names ...string) []string {
+	var out []string
+	for _, e := range env {
+		drop := false
+		for _, n := range names {
+			drop = drop || strings.HasPrefix(e, n+"=")
+		}
+		if !drop {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// isolatedGoEnv gives a test-runner run its own module cache, build cache and tmp dir, so a run never reads or fills the
+// host caches and never leaves a dir of its own behind.
+func isolatedGoEnv(t *testing.T) []string {
+	t.Helper()
+	env := withoutEnv(goListEnv(), "GOMODCACHE", "GOCACHE", "GOTMPDIR")
+	for _, name := range []string{"GOMODCACHE", "GOCACHE", "GOTMPDIR"} {
+		d := t.TempDir()
+		makeWritable(t, d)
+		env = append(env, name+"="+d)
+	}
+	return env
 }
 
 func postureRow(res cmdResult, prefix string) string {
@@ -541,7 +574,7 @@ func TestPostureIntegrationRealRunHeadNamesTheToolchain(t *testing.T) {
 	if err := os.WriteFile(paths, []byte("internal/ok/ok_test.go\x00"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	env := append(goListEnv(), "PATH="+filepath.Dir(goBinary(t))+string(os.PathListSeparator)+"/usr/bin:/bin")
+	env := append(isolatedGoEnv(t), "PATH="+filepath.Dir(goBinary(t))+string(os.PathListSeparator)+"/usr/bin:/bin")
 	res := cmdSpec{dir: f.dir, env: env}.run("bash", filepath.Join(f.dir, "ci", "posture_integration.sh"), "--run", "--paths", paths)
 	if res.code == 3 && strings.Contains(res.stderr, "runner not found") {
 		return
@@ -787,7 +820,7 @@ func TestPostureIntegrationGivesOnlyPgmigrateALongTimeout(t *testing.T) {
 	if err := os.WriteFile(paths, []byte("internal/ok/ok_test.go\x00"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	env := append(goListEnv(), "PATH="+filepath.Dir(goBinary(t))+string(os.PathListSeparator)+"/usr/bin:/bin")
+	env := append(isolatedGoEnv(t), "PATH="+filepath.Dir(goBinary(t))+string(os.PathListSeparator)+"/usr/bin:/bin")
 	res := cmdSpec{dir: f.dir, env: env}.run("bash", filepath.Join(f.dir, "ci", "posture_integration.sh"), "--run", "--paths", paths, "--test-runner", runner)
 	if res.code == 0 || postureRow(res, "SIMULATED internal/ok ") == "" || postureRow(res, "SIMULATED internal/pgmigrate ") == "" {
 		t.Fatalf("want both packages run (exit is non-zero in test-runner mode): exit %d stdout=%q stderr=%q", res.code, res.stdout, res.stderr)
@@ -816,4 +849,183 @@ func TestPostureIntegrationGivesOnlyPgmigrateALongTimeout(t *testing.T) {
 	if seen != 2 {
 		t.Fatalf("want one runner call per package, got %d: %q", seen, raw)
 	}
+}
+
+// CHAOS-11829: a --test-runner run makes a GOMODCACHE, a GOCACHE and a GOTMPDIR with mktemp -d when the caller sets none.
+// They must be gone when the script exits, on a pass, on a failing exit and when the module cache is read-only.
+func postureStubRun(t *testing.T, f postureFixture, runnerBody string, env []string) cmdResult {
+	t.Helper()
+	runner := filepath.Join(t.TempDir(), "runner.sh")
+	if err := os.WriteFile(runner, []byte(runnerBody), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	paths := filepath.Join(t.TempDir(), "changed.txt")
+	if err := os.WriteFile(paths, []byte("internal/ok/ok_test.go\x00"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return cmdSpec{dir: f.dir, env: env}.run("bash", filepath.Join(f.dir, "ci", "posture_integration.sh"), "--run", "--paths", paths, "--test-runner", runner)
+}
+
+func postureTmpEnv(t *testing.T) (tmp string, env []string) {
+	t.Helper()
+	tmp = t.TempDir()
+	makeWritable(t, tmp)
+	env = append(withoutEnv(goListEnv(), "GOMODCACHE", "GOCACHE", "GOTMPDIR", "TMPDIR"), "TMPDIR="+tmp)
+	return tmp, env
+}
+
+func requireEmptyDir(t *testing.T, dir, what string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Fatalf("%s: TMPDIR holds %v after the script exited, want it empty", what, names)
+	}
+}
+
+func TestPostureIntegrationStubRunLeavesNoTempDirsBehind(t *testing.T) {
+	f := postureDemo(t)
+	tmp, env := postureTmpEnv(t)
+	env = append(env, "PATH="+filepath.Dir(goBinary(t))+string(os.PathListSeparator)+"/usr/bin:/bin")
+	res := postureStubRun(t, f, "#!/bin/sh\nshift 5\nexec \"$@\"\n", env)
+	if res.code != 5 || postureRow(res, "SIMULATED internal/ok ") == "" {
+		t.Fatalf("stub run: exit %d stdout=%q stderr=%q, want exit 5 and the internal/ok row", res.code, res.stdout, res.stderr)
+	}
+	requireEmptyDir(t, tmp, "a stub run")
+}
+
+func TestPostureIntegrationStubRunLeavesNoTempDirsBehindOnAFailingExit(t *testing.T) {
+	f := postureDemo(t)
+	// An empty PATH dir: a hosted runner has go in /usr/bin, so the dirs /usr/bin:/bin cannot stand for "no go".
+	tmp, env := postureTmpEnv(t)
+	env = append(env, "PATH="+t.TempDir())
+	res := postureStubRun(t, f, "#!/bin/sh\nexit 0\n", env)
+	if res.code != 3 || !strings.Contains(res.stderr, "go not found") {
+		t.Fatalf("no go on PATH: exit %d stderr=%q, want exit 3 and go not found", res.code, res.stderr)
+	}
+	requireEmptyDir(t, tmp, "a failing exit")
+}
+
+func TestPostureIntegrationStubRunRemovesAReadOnlyModuleCache(t *testing.T) {
+	f := postureDemo(t)
+	tmp, env := postureTmpEnv(t)
+	env = append(env, "PATH="+filepath.Dir(goBinary(t))+string(os.PathListSeparator)+"/usr/bin:/bin")
+	body := "#!/bin/sh\nmkdir -p \"$GOMODCACHE/m/x\" && echo a > \"$GOMODCACHE/m/x/f\" && chmod 0444 \"$GOMODCACHE/m/x/f\" && chmod 0555 \"$GOMODCACHE/m/x\" \"$GOMODCACHE/m\"\nexit 0\n"
+	res := postureStubRun(t, f, body, env)
+	if res.code != 5 {
+		t.Fatalf("stub run: exit %d stdout=%q stderr=%q, want exit 5", res.code, res.stdout, res.stderr)
+	}
+	requireEmptyDir(t, tmp, "a read-only module cache")
+}
+
+func TestPostureIntegrationStubRunKeepsTheDirsTheCallerSupplied(t *testing.T) {
+	f := postureDemo(t)
+	tmp, env := postureTmpEnv(t)
+	env = append(env, "PATH="+filepath.Dir(goBinary(t))+string(os.PathListSeparator)+"/usr/bin:/bin")
+	var sentinels []string
+	for _, name := range []string{"GOMODCACHE", "GOCACHE", "GOTMPDIR"} {
+		d := t.TempDir()
+		makeWritable(t, d)
+		s := filepath.Join(d, "keep-"+name)
+		if err := os.WriteFile(s, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		sentinels = append(sentinels, s)
+		env = append(env, name+"="+d)
+	}
+	res := postureStubRun(t, f, "#!/bin/sh\nshift 5\nexec \"$@\"\n", env)
+	if res.code != 5 {
+		t.Fatalf("stub run: exit %d stdout=%q stderr=%q, want exit 5", res.code, res.stdout, res.stderr)
+	}
+	for _, s := range sentinels {
+		if _, err := os.Stat(s); err != nil {
+			t.Fatalf("a dir the caller supplied was removed: %v", err)
+		}
+	}
+	requireEmptyDir(t, tmp, "a run with caller dirs")
+}
+
+// A stub run keeps the caller's TMPDIR: the worktree it makes (the runner's cwd) lies under it.
+func TestPostureIntegrationStubRunForwardsTheCallersTmpdir(t *testing.T) {
+	f := postureDemo(t)
+	tmp, env := postureTmpEnv(t)
+	env = append(env, "PATH="+filepath.Dir(goBinary(t))+string(os.PathListSeparator)+"/usr/bin:/bin")
+	cwdFile := filepath.Join(t.TempDir(), "cwd")
+	res := postureStubRun(t, f, "#!/bin/sh\npwd > "+cwdFile+"\nexit 0\n", env)
+	if res.code != 5 {
+		t.Fatalf("stub run: exit %d stdout=%q stderr=%q, want exit 5", res.code, res.stdout, res.stderr)
+	}
+	raw, err := os.ReadFile(cwdFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(raw)); !strings.HasPrefix(got, tmp+string(os.PathSeparator)) {
+		t.Fatalf("the runner ran in %q, want a dir under the caller's TMPDIR %q", got, tmp)
+	}
+}
+
+// One path that cannot be removed must not stop the removal of the others, and must not change the exit code.
+func TestPostureIntegrationStubRunRemovesAllDirsPastAnUnreadableSubdir(t *testing.T) {
+	f := postureDemo(t)
+	tmp, env := postureTmpEnv(t)
+	env = append(env, "PATH="+filepath.Dir(goBinary(t))+string(os.PathListSeparator)+"/usr/bin:/bin")
+	body := "#!/bin/sh\nmkdir -p \"$GOMODCACHE/m/x\" && echo a > \"$GOMODCACHE/m/x/f\" && chmod 0000 \"$GOMODCACHE/m/x\"\nmkdir -p \"$GOCACHE/c\" \"$GOTMPDIR/t\"\nexit 7\n"
+	res := postureStubRun(t, f, body, env)
+	if res.code != 5 {
+		t.Fatalf("stub run: exit %d stdout=%q stderr=%q, want exit 5 as without the unreadable subdir", res.code, res.stdout, res.stderr)
+	}
+	requireEmptyDir(t, tmp, "an unreadable subdir")
+}
+
+// A removal that fails (the parent dir is read-only) is reported for every dir the script made, not only the first.
+func TestPostureIntegrationStubRunTriesEveryDirWhenRemovalFails(t *testing.T) {
+	f := postureDemo(t)
+	_, env := postureTmpEnv(t)
+	env = append(env, "PATH="+filepath.Dir(goBinary(t))+string(os.PathListSeparator)+"/usr/bin:/bin")
+	res := postureStubRun(t, f, "#!/bin/sh\nchmod 0555 \"${GOMODCACHE%/*}\"\nexit 0\n", env)
+	if res.code != 5 {
+		t.Fatalf("stub run: exit %d stdout=%q stderr=%q, want exit 5 although removal fails", res.code, res.stdout, res.stderr)
+	}
+	n := 0
+	for _, l := range strings.Split(res.stderr, "\n") {
+		if strings.HasPrefix(l, "cannot remove ") {
+			n++
+		}
+	}
+	if n != 4 {
+		t.Fatalf("%d removal failures reported, want 4 (the worktree dir and the three made dirs): stderr=%q", n, res.stderr)
+	}
+}
+
+// A relative TMPDIR that starts with "-" must not turn the script's own paths into options: the dirs are made, used and
+// removed, on a pass and on a failing exit.
+func TestPostureIntegrationStubRunHandlesADashRelativeTmpdir(t *testing.T) {
+	f := postureDemo(t)
+	scratch := filepath.Join(f.dir, "-scratch")
+	if err := os.Mkdir(scratch, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	makeWritable(t, scratch)
+	if err := os.WriteFile(filepath.Join(f.dir, ".git", "info", "exclude"), []byte("/-scratch\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, env := postureTmpEnv(t)
+	env = append(withoutEnv(env, "TMPDIR"), "TMPDIR=-scratch")
+	pass := append(append([]string{}, env...), "PATH="+filepath.Dir(goBinary(t))+string(os.PathListSeparator)+"/usr/bin:/bin")
+	res := postureStubRun(t, f, "#!/bin/sh\nshift 5\nexec \"$@\"\n", pass)
+	if res.code != 5 {
+		t.Fatalf("stub run: exit %d stdout=%q stderr=%q, want exit 5", res.code, res.stdout, res.stderr)
+	}
+	requireEmptyDir(t, scratch, "a dash-relative TMPDIR after a pass")
+	res = postureStubRun(t, f, "#!/bin/sh\nexit 0\n", append(append([]string{}, env...), "PATH="+t.TempDir()))
+	if res.code != 3 || !strings.Contains(res.stderr, "go not found") {
+		t.Fatalf("no go on PATH: exit %d stderr=%q, want exit 3 and go not found", res.code, res.stderr)
+	}
+	requireEmptyDir(t, scratch, "a dash-relative TMPDIR after a failing exit")
 }

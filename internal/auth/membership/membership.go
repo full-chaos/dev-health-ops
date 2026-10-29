@@ -91,8 +91,10 @@ type decision struct {
 }
 
 // decide is the transition table of one pair. activeOwners counts the active
-// owners of the organization, the pair included. No verb leaves an
-// organization without an active owner.
+// owners of the organization, the pair included. No verb removes an
+// organization's last active owner (owners never go from >=1 to 0); an
+// organization that already has none stays operable, and a change to owner is
+// its way out.
 func decide(v verb, cur state, role string, activeOwners int) (decision, error) {
 	lastOwner := cur.status == StatusActive && cur.role == "owner" && activeOwners <= 1
 	switch v {

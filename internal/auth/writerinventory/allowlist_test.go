@@ -117,6 +117,12 @@ var Allowlist = []Entry{
 	// A join's membership: the public row and the auth row in one audit.Commit, only while AUTH_USERS_OWNED is on.
 	{File: "internal/auth/identity/joinmembership.go", Func: "Store.insertJoinMembership", Table: "auth.memberships", Verb: "INSERT"},
 	{File: "internal/auth/identity/joinmembership.go", Func: "Store.insertJoinMembership", Table: "public.memberships", Verb: "INSERT"},
+	// The membership aggregate: both rows of a pair in one audit.Commit, only while AUTH_USERS_OWNED is on.
+	{File: "internal/auth/membership/store.go", Func: "Store.write", Table: "auth.memberships", Verb: "INSERT"},
+	{File: "internal/auth/membership/store.go", Func: "Store.write", Table: "auth.memberships", Verb: "UPDATE"},
+	{File: "internal/auth/membership/store.go", Func: "Store.write", Table: "public.memberships", Verb: "DELETE"},
+	{File: "internal/auth/membership/store.go", Func: "Store.write", Table: "public.memberships", Verb: "INSERT"},
+	{File: "internal/auth/membership/store.go", Func: "Store.write", Table: "public.memberships", Verb: "UPDATE"},
 	{File: "internal/auth/identity/store.go", Func: "Store.applyProjectionChange", Table: "auth.principals", Verb: "UPDATE"},
 	{File: "internal/auth/identity/store.go", Func: "Store.applyProjectionChange", Table: "auth.users", Verb: "UPDATE"},
 	{File: "internal/auth/identity/store.go", Func: "Store.insertProjection", Table: "auth.principals", Verb: "INSERT"},

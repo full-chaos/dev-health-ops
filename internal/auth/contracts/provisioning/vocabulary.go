@@ -44,7 +44,7 @@ var provisioningAggregates = map[string]Aggregate{
 		Events: []string{"organization.created", "organization.updated", "organization.suspended", "organization.reactivated"},
 		Change: []string{"status", "slug"}},
 	"membership": {IDPrefix: "mbr_",
-		Events: []string{"membership.invited", "membership.activated", "membership.role_changed", "membership.removed"},
+		Events: []string{"membership.invited", "membership.activated", "membership.role_changed", "membership.suspended", "membership.removed"},
 		Change: []string{"status", "role_id"}},
 	"platform_role_assignment": {IDPrefix: "pra_",
 		Events: []string{"platform_role_assignment.granted", "platform_role_assignment.revoked"},

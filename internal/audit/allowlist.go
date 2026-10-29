@@ -164,8 +164,8 @@ var attributeVocabulary = map[string][]string{
 		"signing_key",
 	},
 	"resource_kind":   {"organization", "repository", "project", "team"},
-	"previous_status": {"active", "disabled", "revoked", "pending", "expired", "suspended", "retiring", "retired", "compromised"},
-	"new_status":      {"active", "disabled", "revoked", "pending", "expired", "suspended", "retiring", "retired", "compromised"},
+	"previous_status": {"active", "disabled", "revoked", "pending", "expired", "suspended", "retiring", "retired", "compromised", "removed"},
+	"new_status":      {"active", "disabled", "revoked", "pending", "expired", "suspended", "retiring", "retired", "compromised", "removed"},
 	// rotation_verb and rotation_refusal are the signing-key state machine's
 	// verbs and refusal reasons (internal/auth/keyrotation).
 	"rotation_verb": {"adopt", "register", "activate", "retire", "rollback", "compromise"},

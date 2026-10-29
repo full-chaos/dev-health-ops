@@ -1143,3 +1143,17 @@ func halveWindowAfterFailures(start *time.Time, end time.Time, streak providersy
 	}
 	return start.Add(halved), true
 }
+
+// validateUnitWindows refuses a plan that holds a unit with an empty or inverted window (since >= before). The planners
+// never build one (CHAOS-11033 and normalizeStampingWindow); this is the check at the plan's output, before any row is
+// written, so a regression in a planner stops the occurrence loudly instead of persisting a zero-width unit that
+// fetches nothing and renders as a failed range.
+func validateUnitWindows(units []PlannedUnit) error {
+	for index, unit := range units {
+		if unit.WindowStart != nil && unit.WindowEnd != nil && !unit.WindowStart.Before(*unit.WindowEnd) {
+			return fmt.Errorf("%w: unit %d (%s %s) has an empty window [%s, %s)", ErrInvalidPlan, index, unit.Provider, unit.Dataset,
+				unit.WindowStart.UTC().Format(time.RFC3339Nano), unit.WindowEnd.UTC().Format(time.RFC3339Nano))
+		}
+	}
+	return nil
+}

@@ -27,9 +27,13 @@ var (
 	// A registration or password reset audit row with no organization: the organization column is NULL.
 	registeredNoOrg = regexp.MustCompile(`^<nil>.*createuseruser:.*User registered\{\}.*success<null>$`)
 	verifiedAudit   = regexp.MustCompile(`^.*email_verifieduseruser:.*Email verified\{\}.*success<null>$`)
-	resetNoOrg      = regexp.MustCompile(`^<nil>.*password_resetuseruser:.*User reset password\{\}.*success<null>$`)
+	resetNoOrg      = regexp.MustCompile(`^<nil>pia@example\.compassword_resetuseruser:pia@example\.comUser reset password\{\}.*success<null>$`)
 	// A password reset request of a user with no membership: the organization column is NULL.
-	resetAskedNoOrg = regexp.MustCompile(`^<nil>[^<].*password_reset_requesteduseruser:.*Password reset requested\{\}.*success<null>$`)
+	resetAskedNoOrg = regexp.MustCompile(`^<nil>pia@example\.compassword_reset_requesteduseruser:pia@example\.comPassword reset requested\{\}.*success<null>$`)
+	// Alice's reset request and password reset: go-api audits them in her first membership's organization (Org A);
+	// the corpus leg runs no membership backfill, so auth-service holds no membership of hers and the column is NULL.
+	aliceResetOrgA   = regexp.MustCompile(`^Org A(alice@example\.compassword_resetuseruser:alice@example\.comUser reset password\{\}.*success<null>)$`)
+	aliceRequestOrgA = regexp.MustCompile(`^Org A(alice@example\.compassword_reset_requesteduseruser:alice@example\.comPassword reset requested\{\}.*success<null>)$`)
 	// A password reset request of an address no user holds: no organization, no principal, so no address either.
 	resetAskedUnknown = regexp.MustCompile(`^<nil><null>password_reset_requesteduser<nil>Password reset requested\{\}.*success<null>$`)
 )
@@ -128,6 +132,22 @@ var Quirks = []Quirk{
 		Reason: "auth-service audits every password reset request of an existing user, with a NULL organization when the user has no membership; go-api audits one only for a user with a membership (pia has none)",
 		Max:    1, Exact: true,
 		Extra: func(line string) bool { return resetAskedNoOrg.MatchString(line) },
+	},
+	{
+		ID: "audit-password-reset-organization-not-projected", Kind: Deliberate, Table: TableAuditLogs, Needs: []Aggregate{Credentials},
+		Reason: "alice's password reset: go-api audits it in her first membership's organization; auth-service names the organization of the membership it holds in the auth schema (the one login picks), and this leg runs no membership backfill, so it holds none and the column is NULL",
+		Max:    1, Exact: true,
+		Rewrite: func(line string) (string, bool) {
+			return replaceOnce(aliceResetOrgA, line, "<nil>${1}")
+		},
+	},
+	{
+		ID: "audit-password-reset-requested-organization-not-projected", Kind: Deliberate, Table: TableAuditLogs, Needs: []Aggregate{Credentials},
+		Reason: "alice's password reset request: the same organization difference as audit-password-reset-organization-not-projected",
+		Max:    1, Exact: true,
+		Rewrite: func(line string) (string, bool) {
+			return replaceOnce(aliceRequestOrgA, line, "<nil>${1}")
+		},
 	},
 	{
 		ID: "audit-password-reset-requested-unknown-address", Kind: Deliberate, Table: TableAuditLogs, Needs: []Aggregate{Credentials},

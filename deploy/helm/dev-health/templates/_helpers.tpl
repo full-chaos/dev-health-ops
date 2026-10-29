@@ -730,6 +730,10 @@ leaf), and renders the phase. Every ladder read goes through dev-health.authOn, 
 {{- $p := $v.authService.phase -}}
 {{- if not (and (has (kindOf $p) (list "int" "int64" "float64")) (eq (float64 $p) (floor (float64 $p))) (ge (float64 $p) 0.0) (le (float64 $p) 5.0)) }}{{- fail (printf "authService.phase must be a whole number from 0 to 5, got %s %v" (kindOf $p) $p) }}{{- end -}}
 {{- if and (eq (default false (default dict $v.goApi.authProxy).orgProvisioning) true) (lt (int $p) 2) }}{{- fail "goApi.authProxy.orgProvisioning needs authService.phase 2 or higher: go-api calls auth-service through AUTH_PROXY_URL, which renders from phase 2" }}{{- end -}}
+{{- if eq (default false (default dict $v.goApi.authProxy).orgProvisioning) true }}
+{{- $routes := false }}{{- range ($v.authService.extraEnv | default list) }}{{- if and (eq (upper (trim (toString .name))) "AUTH_MEMBERSHIP_ROUTES") (eq (lower (trim (toString .value))) "true") }}{{- $routes = true }}{{- end }}{{- end }}
+{{- if not $routes }}{{- fail "goApi.authProxy.orgProvisioning needs authService.extraEnv AUTH_MEMBERSHIP_ROUTES=true: go-api calls auth-service's organization reactivate route, which auth-service mounts only with that setting" }}{{- end }}
+{{- end -}}
 {{- if ge (int $p) 5 }}{{- fail (printf "authService.phase %d: phase 5 (orgs owned) needs its own public-table writer leaf (D6358): auth-service does not yet write the existing public organizations and memberships tables, so phase 4 is the highest phase this chart renders" (int $p)) }}{{- end -}}
 {{- $stage := toString (default "" $v.authService.usersOwnedStage) -}}
 {{- if not (has $stage (list "" "goApi" "owned")) }}{{- fail (printf "authService.usersOwnedStage must be goApi or owned, got %q" $stage) }}{{- end -}}

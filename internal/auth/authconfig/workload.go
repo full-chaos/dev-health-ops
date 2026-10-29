@@ -54,7 +54,13 @@ type WorkloadExchange struct {
 // workloadExchange reads the exchange settings. Errors name the variable,
 // never its value.
 func workloadExchange(lookup secrets.LookupEnv, tokenIssuerURL string) (WorkloadExchange, error) {
-	bootstrap := false
+	bootstrap, err := strictBool(lookup, EnvWorkloadBootstrap)
+	if err != nil {
+		return WorkloadExchange{}, err
+	}
+	if bootstrap && tokenIssuerURL == "" {
+		return WorkloadExchange{}, fmt.Errorf("%s=true needs %s", EnvWorkloadBootstrap, EnvTokenIssuerURL)
+	}
 	enabled, err := strictBool(lookup, EnvWorkloadExchange)
 	if err != nil || !enabled {
 		return WorkloadExchange{Bootstrap: bootstrap}, err

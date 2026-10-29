@@ -62,6 +62,10 @@ func publicReason(r reason) Reason {
 		return ReasonUIDMismatch
 	case reasonNoAudience:
 		return ReasonNoAudience
+	case reasonRevoked:
+		return ReasonRevoked
+	case reasonExpired:
+		return ReasonExpired
 	}
 	return ReasonUnknown
 }

@@ -52,7 +52,9 @@ func exchangeRoutes(
 		}
 		deps.Validator, deps.Registry, deps.ClusterIssuer = validator, workloadRegistry{store: store}, cfg.WorkloadExchange.ClusterIssuer
 	}
-	_ = bootstrapRegistry{store: store}
+	if cfg.WorkloadExchange.Bootstrap {
+		deps.Bootstrap = bootstrapRegistry{store: store}
+	}
 	return workloadexchange.Routes(deps)
 }
 

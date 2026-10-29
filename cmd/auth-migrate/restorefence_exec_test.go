@@ -234,13 +234,13 @@ func TestExecBlindMarginApplyPrintsWhatItRemoved(t *testing.T) {
 	store := &stubStore{timeline: 2}
 	store.reportSections = []restorefence.SectionReport{
 		{Name: "public.password_reset_tokens", Changed: 3}, {Name: "public.email_verification_tokens", Changed: 2},
-		{Name: "auth.link_credentials.ids", Changed: 4}, {Name: "public.memberships", Changed: 9},
+		{Name: "auth.link_credentials.ids", Changed: 4}, {Name: "auth.invites.ids", Changed: 6}, {Name: "public.memberships", Changed: 9},
 	}
 	rc, out, _ := runExec(t, store, nil, "apply", "-blind-margin", "1000")
-	if rc != 0 || !strings.Contains(out, "restore-fence blind-margin removed legacy_tokens=5 link_credentials=4") {
+	if rc != 0 || !strings.Contains(out, "restore-fence blind-margin removed legacy_tokens=5 link_credentials=4 invites=6") {
 		t.Fatalf("rc %d, stdout %q", rc, out)
 	}
-	if !strings.Contains(restoreFenceUsage, "every legacy reset and verification token") || !strings.Contains(restoreFenceUsage, "unconsumed link credential") {
+	if !strings.Contains(restoreFenceUsage, "every legacy reset and verification token") || !strings.Contains(restoreFenceUsage, "unconsumed link credential") || !strings.Contains(restoreFenceUsage, "every pending invite") {
 		t.Errorf("the usage does not say what a blind margin removes: %s", restoreFenceUsage)
 	}
 }

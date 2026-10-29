@@ -12,7 +12,7 @@ import (
 // CHAOS-11795: the token a workflow gets. Every workflow carries a workflow-level permissions mapping that is exactly
 // contents: read, or an allowlisted exact map with a reason; a permissions value that is not a mapping (write-all,
 // read-all, a list, null) is refused at both levels; a job-level block that grants a write scope is allowlisted by its
-// exact map; a registry login needs packages: write; a checkout in a job that can write persists no credentials.
+// exact map; a registry login needs a packages scope (a dry-run job has none); a checkout in a job that can write persists no credentials.
 
 type permRow struct {
 	file   string
@@ -28,7 +28,6 @@ var workflowPermAllowlist = []permRow{
 	{"go-quality.yml", map[string]string{"contents": "read", "packages": "read"}, "the legs pull images from ghcr; the plan job adds actions: read at job level"},
 	{"go-workers-compose-proof.yml", map[string]string{"contents": "read", "packages": "read"}, "the proof pulls images from ghcr"},
 	{"go.yml", map[string]string{"contents": "read", "packages": "read"}, "the jobs pull images from ghcr; two jobs carry their own blocks"},
-	{"mirror-test-images.yml", map[string]string{"contents": "read", "packages": "write"}, "the mirror job pushes to ghcr; the write scope should move to that job"},
 	{"venue-oracles-changed.yml", map[string]string{"contents": "read", "packages": "read"}, "the job pulls images from ghcr"},
 	{"venue-oracles-main-alert.yml", map[string]string{}, "narrower than the default: the token is granted at job level only"},
 	{"venue-oracles.yml", map[string]string{"contents": "read", "actions": "read", "packages": "read"}, "the legs read run state and pull images from ghcr"},
@@ -44,6 +43,7 @@ var jobWriteAllowlist = map[jobKey]map[string]string{
 	{"docker-images.yml", "go-merge"}:            {"contents": "read", "packages": "write", "id-token": "write", "attestations": "write"},
 	{"docker-images.yml", "go-api-tools-merge"}:  {"contents": "read", "packages": "write", "id-token": "write", "attestations": "write"},
 	{"go.yml", "cancel-stacked-queue-children"}:  {"actions": "write", "contents": "read"},
+	{"mirror-test-images.yml", "mirror"}:         {"contents": "read", "packages": "write"},
 	{"security-scan.yml", "semgrep"}:             {"contents": "read", "security-events": "write"},
 	{"security-scan.yml", "gitleaks"}:            {"contents": "read", "security-events": "write"},
 	{"venue-oracles-main-alert.yml", "alert"}:    {"contents": "read", "actions": "read", "issues": "write"},
@@ -148,8 +148,8 @@ func permissionsDefects(t *testing.T, root string, wfAllow []permRow, jobAllow m
 			for _, s := range stepsOf(job) {
 				text := shellCommands(asString(s["run"]))
 				uses := strings.ToLower(asString(s["uses"]))
-				if (registryLogin.MatchString(text) || strings.HasPrefix(uses, "docker/login-action@")) && !(effOK && eff["packages"] == "write") {
-					out = append(out, fmt.Sprintf("%s job %s: a registry login in a job without packages: write", name, j))
+				if (registryLogin.MatchString(text) || strings.HasPrefix(uses, "docker/login-action@")) && !(effOK && (eff["packages"] == "read" || eff["packages"] == "write")) {
+					out = append(out, fmt.Sprintf("%s job %s: a registry login in a job with no packages scope", name, j))
 				}
 				if !strings.HasPrefix(uses, "actions/checkout@") || !canWrite {
 					continue
@@ -229,8 +229,8 @@ func TestWorkflowPermissionsGateRefusesEachDefectClass(t *testing.T) {
 		{"deleted workflow-level block", mutation{testWf, topRead, ""}, "test.yml: no workflow-level permissions block"},
 		{"workflow block widened", mutation{testWf, topRead, "permissions:\n  contents: write\n"}, "test.yml: workflow-level permissions map[contents:write], want exactly contents: read"},
 		{"job block widened to write", mutation{testWf, jobRead, "    permissions:\n      contents: write\n    outputs:\n"}, "test.yml job changes: job-level permissions map[contents:write] grant a write scope that is not allowlisted"},
-		{"registry login in a read-only job", mutation{mirror, suiteRun, "      - name: Login\n        run: docker login ghcr.io\n" + suiteRun}, "mirror-test-images.yml job precheck-lib-test: a registry login in a job without packages: write"},
-		{"login action in a read-only job", mutation{mirror, suiteRun, "      - uses: docker/login-action@v4\n" + suiteRun}, "mirror-test-images.yml job precheck-lib-test: a registry login in a job without packages: write"},
+		{"registry login in a read-only job", mutation{mirror, suiteRun, "      - name: Login\n        run: docker login ghcr.io\n" + suiteRun}, "mirror-test-images.yml job precheck-lib-test: a registry login in a job with no packages scope"},
+		{"login action in a read-only job", mutation{mirror, suiteRun, "      - uses: docker/login-action@v4\n" + suiteRun}, "mirror-test-images.yml job precheck-lib-test: a registry login in a job with no packages scope"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			tmp := plantTree(t, root, files, c.m)

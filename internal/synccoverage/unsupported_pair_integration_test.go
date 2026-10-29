@@ -5,6 +5,7 @@ package synccoverage
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 
@@ -162,6 +163,22 @@ func TestProjectorDropsProviderDatasetPairsTheProviderDoesNotSupport(t *testing.
 				t.Fatal(err)
 			}
 			assertProjection(t, raw, now, tc.wantIncidents)
+			// The admin API serves the stored row, so the persisted projection must carry the same payload.
+			var stored json.RawMessage
+			if err := pool.QueryRow(ctx, `SELECT payload FROM sync_coverage_projections WHERE org_id=$1 AND sync_config_id=$2`, fixture.OrgID, fixture.ConfigID).Scan(&stored); err != nil {
+				t.Fatal(err)
+			}
+			assertProjection(t, stored, now, tc.wantIncidents)
+			var returned, persisted any
+			if err := json.Unmarshal(raw, &returned); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(stored, &persisted); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(returned, persisted) {
+				t.Errorf("stored projection differs from the rebuilt payload\n stored: %s\nrebuilt: %s", stored, raw)
+			}
 		})
 	}
 }

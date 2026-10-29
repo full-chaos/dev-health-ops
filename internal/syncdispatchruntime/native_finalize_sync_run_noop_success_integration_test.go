@@ -4,6 +4,7 @@ package syncdispatchruntime
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -159,5 +160,14 @@ func TestNativeFinalizeSyncRunGenericZeroUnitStaysFailedAndStamps(t *testing.T) 
 	}
 	if out.after.lastSyncSuccess == nil || *out.after.lastSyncSuccess {
 		t.Fatalf("last_sync_success=%v want false", out.after.lastSyncSuccess)
+	}
+	if out.after.lastSyncAt == nil || out.before.lastSyncAt == nil || !out.after.lastSyncAt.After(*out.before.lastSyncAt) {
+		t.Fatalf("last_sync_at before=%v after=%v, want it advanced by the failed run", out.before.lastSyncAt, out.after.lastSyncAt)
+	}
+	if out.after.lastSyncError == nil || *out.after.lastSyncError == "" {
+		t.Fatalf("last_sync_error=%v want the run's error stamped", out.after.lastSyncError)
+	}
+	if out.after.lastSyncStats == nil || !strings.Contains(*out.after.lastSyncStats, "some_other_reason") {
+		t.Fatalf("last_sync_stats=%v want the run's result (reason some_other_reason) stamped", out.after.lastSyncStats)
 	}
 }

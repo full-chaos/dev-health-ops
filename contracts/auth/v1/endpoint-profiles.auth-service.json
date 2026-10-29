@@ -528,11 +528,16 @@
     },
     {
       "accepted_credential_classes": [
-        "kubernetes_sa_token_exchange"
+        "kubernetes_sa_token_exchange",
+        "workload_bootstrap_credential"
       ],
+      "class_disambiguator": {
+        "kind": "subject_token_type",
+        "name": "urn:dev-health:params:oauth:token-type:workload-bootstrap"
+      },
       "classification": "protected",
-      "current_state_cache_behavior": "No cache: the Kubernetes TokenReview API and the workload registry rows are read on every exchange.",
-      "disclosure_behavior": "Every refusal after a valid request shape is the same 400 {\"error\":\"invalid_grant\"}; a malformed request is 400 {\"error\":\"invalid_request\"}; a TokenReview, signer or audit failure is 503 {\"error\":\"temporarily_unavailable\"}. No credential, claim or reason text is in any answer; the reason is only in the log line and the auth.workload.exchanges counter.",
+      "current_state_cache_behavior": "No cache: on every exchange the Kubernetes subject is read from the Kubernetes TokenReview API and the workload registry rows, and the bootstrap subject from its credential_registry row with its workload and principal rows.",
+      "disclosure_behavior": "Every refusal after a valid request shape is the same 400 {\"error\":\"invalid_grant\"}; a malformed request is 400 {\"error\":\"invalid_request\"}; a TokenReview, signer or audit failure is 503 {\"error\":\"temporarily_unavailable\"} (a bootstrap registry read failure is the same 400 invalid_grant). No credential, claim or reason text is in any answer; the reason is only in the log line and the auth.workload.exchanges counter.",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /internal/v1/token/exchange [dev-health-auth-service @api]",
@@ -549,7 +554,7 @@
           "direction": "returned_to_caller",
           "issuer": "AUTH_TOKEN_ISSUER_URL",
           "lifetime_seconds": 300,
-          "note": "workload-token.v1 for the resolved workload principal; the lifetime is at most 300 s and never past the subject token's expiry; the jti is bound to the binding and registry revision by the auth.workload.token_issued audit row."
+          "note": "workload-token.v1 for the resolved workload principal; the lifetime is at most 300 s and never past the subject token's or the bootstrap credential's expiry; the jti is bound to the binding (Kubernetes) or the credential row (bootstrap) and the registry revision by the auth.workload.token_issued audit row."
         }
       ],
       "method": "POST",
@@ -559,7 +564,7 @@
           "note": "subject, err := h.Validator.Validate(reviewCtx, subjectToken)",
           "path": "internal/auth/workloadexchange/exchange.go"
         },
-        "description": "handler.review: the Kubernetes TokenReview API authenticates the subject_token for the audience dev-health-workload-exchange; it is authenticated only by TokenReview: after a successful review its exp claim is read unverified, only to cap the issued token's lifetime, and it is never stored; the workload registry then resolves the reviewed ServiceAccount and narrows the audience and actions."
+        "description": "handler.review: the Kubernetes TokenReview API authenticates the subject_token for the audience dev-health-workload-exchange; it is authenticated only by TokenReview: after a successful review its exp claim is read unverified, only to cap the issued token's lifetime, and it is never stored; the workload registry then resolves the reviewed ServiceAccount and narrows the audience and actions. With subject_token_type urn:dev-health:params:oauth:token-type:workload-bootstrap the request is the Compose bootstrap subject instead and never reaches TokenReview: handler.serveBootstrap (exchange_bootstrap.go:88) refuses a value outside the fcwlb_ shape before any store read, and workload.Store.ResolveBootstrap resolves the SHA-256 digest of the value (class, platform owner, workload kind, revocation, expiry, workload and principal state, and an audience both the workload and the credential hold)."
       },
       "route": "/internal/v1/token/exchange",
       "service": "dev-health-auth-service",
@@ -1138,5 +1143,5 @@
     }
   ],
   "schema_version": "endpoint-profile.v1",
-  "source_commit": "58a2c7d5a5336c502a16dbb366f9ec5bc56c325f"
+  "source_commit": "46f0604ca577e507c13cdfedfb65e2a805ef2a09"
 }

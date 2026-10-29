@@ -1,9 +1,9 @@
 // Package workloadexchange is auth-service's workload-token exchange: a
-// workload presents its Kubernetes projected ServiceAccount token, the
-// Kubernetes TokenReview API authenticates it, the workload registry maps the
-// reviewed identity to a registered workload, and the route answers a
-// workload-token.v1 token for one audience. The route is internal-only and is
-// mounted only when AUTH_WORKLOAD_EXCHANGE is on.
+// workload presents a Kubernetes projected ServiceAccount token (TokenReview
+// authenticates it, the registry maps it to its binding) or a Compose
+// bootstrap credential (the registry resolves its digest), and the route
+// answers a workload-token.v1 token for one audience. Internal-only; mounted
+// when AUTH_WORKLOAD_EXCHANGE or AUTH_WORKLOAD_BOOTSTRAP is on.
 package workloadexchange
 
 import (
@@ -174,9 +174,9 @@ type issuedAnswer struct {
 }
 
 // ServeHTTP is POST /internal/v1/token/exchange. After the request shape is
-// valid, every refusal answers the same 400 invalid_grant and every
-// dependency failure the same 503; only the log line and the counter name the
-// reason. The store is read only after TokenReview authenticated the caller.
+// valid, every refusal answers 400 invalid_grant and every dependency failure
+// 503; only the log line and the counter name the reason. A bootstrap subject
+// goes to serveBootstrap; a JWT subject reads the store only after TokenReview.
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	req, ok := h.parseRequest(r)

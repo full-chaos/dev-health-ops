@@ -383,7 +383,7 @@ func (s *Store) grantBackfillRole(ctx context.Context, id uuid.UUID, expired *uu
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			if expired != nil {
 				tag, err := tx.Exec(ctx, `DELETE FROM `+s.q+`.platform_role_assignments
-WHERE id = $1 AND principal_id = $2 AND granted_by IS NULL AND expires_at <= statement_timestamp()`, *expired, id)
+WHERE id = $1 AND principal_id = $2 AND granted_by IS NULL AND NOT `+PlatformRoleHeldSQL(s.q, "$2", "$3"), *expired, id, PlatformAdminRole)
 				if err != nil {
 					return err
 				}

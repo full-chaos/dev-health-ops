@@ -291,3 +291,71 @@ func TestReactivateAuthorizedDeniedWritesNothingAllowedWritesAllOnce(t *testing.
 		t.Fatalf("unknown org = %v", err)
 	}
 }
+
+// Reactivate is last-writer and superuser only (the route passes no revision), but it is a real revision-bumping
+// write: it moves the aggregate past the revision a suspend left, so a suspend that still carries that older
+// revision is refused as a conflict and changes nothing; and a reactivate of an organization that is not
+// suspended writes no row, no audit row, no event and no revision. Store level: the route has no revision input,
+// so a suspend with one can only be made on the store.
+func TestReactivateMovesTheRevisionPastASuspendAndAStaleSuspendIsRefused(t *testing.T) {
+	e := getEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	id, err := e.store.Create(ctx, CreateInput{Name: "Org", Slug: slugFor()}, Actor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	actor := uuid.New()
+	if _, err := e.runtime.Exec(ctx, `INSERT INTO auth.principals (id, kind, display_name) VALUES ($1, 'user', '')`, actor); err != nil {
+		t.Fatalf("seed the acting principal: %v", err)
+	}
+	allow := func(context.Context, audit.TxOps, uuid.UUID) error { return nil }
+	wire := "org_" + id.String()
+	audits := func(eventType string) int {
+		return e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = $1 AND organization_id = $2`, eventType, id)
+	}
+	events := func(eventType string) int {
+		return e.count(t, ctx, `SELECT count(*) FROM auth.auth_outbox_events WHERE aggregate_type = 'organization' AND aggregate_id = $1 AND event_type = $2`, wire, eventType)
+	}
+	if err := e.store.Suspend(ctx, id, nil, Actor{}); err != nil {
+		t.Fatal(err)
+	}
+	suspended, err := e.store.Get(ctx, id)
+	if err != nil || suspended.Status != StatusSuspended {
+		t.Fatalf("after the suspend: %+v, %v", suspended, err)
+	}
+	n := suspended.Revision
+
+	// (1) the reactivate moves the revision past the suspend's.
+	if changed, err := e.store.ReactivateAuthorized(ctx, id, nil, Actor{PrincipalID: &actor}, allow); err != nil || !changed {
+		t.Fatalf("reactivate: changed=%v err=%v", changed, err)
+	}
+	reactivated, err := e.store.Get(ctx, id)
+	if err != nil || reactivated.Status != StatusActive || reactivated.Revision <= n {
+		t.Fatalf("after the reactivate: %+v (revision must be past %d), %v", reactivated, n, err)
+	}
+
+	// (2) a suspend that carries the revision it read before the reactivate is refused and changes nothing.
+	suspendAudits, suspendEvents := audits("auth.organization.suspended"), events("organization.suspended")
+	if err := e.store.Suspend(ctx, id, &n, Actor{}); !errors.Is(err, ErrRevisionConflict) {
+		t.Fatalf("a suspend with the old revision %d = %v, want ErrRevisionConflict", n, err)
+	}
+	if after, err := e.store.Get(ctx, id); err != nil || after.Status != StatusActive || after.Revision != reactivated.Revision {
+		t.Fatalf("after the refused suspend: %+v, %v; want the reactivated state unchanged", after, err)
+	}
+	if audits("auth.organization.suspended") != suspendAudits || events("organization.suspended") != suspendEvents {
+		t.Fatal("a refused stale suspend wrote an audit row or an event")
+	}
+
+	// (3) a reactivate of an organization that is not suspended writes nothing.
+	reAudits, reEvents := audits("auth.organization.reactivated"), events("organization.reactivated")
+	if changed, err := e.store.ReactivateAuthorized(ctx, id, nil, Actor{PrincipalID: &actor}, allow); err != nil || changed {
+		t.Fatalf("reactivate of an active organization: changed=%v err=%v, want a no-op", changed, err)
+	}
+	if again, err := e.store.Get(ctx, id); err != nil || again.Revision != reactivated.Revision {
+		t.Fatalf("a no-op reactivate moved the revision: %+v, %v", again, err)
+	}
+	if audits("auth.organization.reactivated") != reAudits || events("organization.reactivated") != reEvents {
+		t.Fatal("a no-op reactivate wrote an audit row or an event")
+	}
+}

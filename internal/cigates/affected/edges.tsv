@@ -161,6 +161,7 @@ internal/cigates/workflows	image_reuse_exec_norace_test.go	unexpressed
 internal/cigates/workflows	race_pool_routing_test.go	unexpressed
 internal/cigates/workflows	strip_hook_test.go	unexpressed
 internal/cigates/workflows	workflows_auth_service_test.go	unexpressed
+internal/cigates/workflows	workflows_base_images_test.go	unexpressed
 internal/cigates/workflows	workflows_builder_images_test.go	unexpressed
 internal/cigates/workflows	workflows_go_integration_pr_scope_test.go	unexpressed
 internal/cigates/workflows	workflows_go_quality_queue_skip_test.go	unexpressed

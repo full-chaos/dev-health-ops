@@ -233,7 +233,6 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedI
 		},
 		Audit: audit.AuditEvent{
 			EventType: "auth.restore_fence.applied", Outcome: audit.OutcomeAllowed,
-			Attributes: map[string]any{"reason_code": "restore_fence_applied"},
 		},
 		OffStream: audit.OffStreamRestoreFence,
 	})

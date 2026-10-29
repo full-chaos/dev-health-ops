@@ -2,8 +2,6 @@ package contracts
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -91,7 +89,7 @@ func TestSelectorGateRefusesAnUnknownSelectorKind(t *testing.T) {
 
 // The gate's kind list is the schema's enum, both ways.
 func TestSelectorKindsEqualTheSchemaEnum(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join(ContractsDir(testRoot(t)), "endpoint-profile.schema.json"))
+	raw, err := json.Marshal(readJSONFile(t, "contracts/auth/v1/endpoint-profile.schema.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

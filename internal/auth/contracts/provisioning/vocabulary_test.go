@@ -189,3 +189,32 @@ func TestCheckEventRefusesWhatTheSchemaRefuses(t *testing.T) {
 		t.Error("WireID renders a wrong id")
 	}
 }
+
+func TestTheWorkloadBootstrapEventCarriesAStatusAndACredentialIDOnly(t *testing.T) {
+	const prn = "prn_00000000-0000-4000-8000-000000000001"
+	const crd = "crd_00000000-0000-4000-8000-000000000002"
+	for _, status := range []string{"active", "revoked", "expired"} {
+		if err := CheckEvent("workload", prn, "workload.bootstrap_changed", map[string]any{"status": status, "credential_id": crd}); err != nil {
+			t.Errorf("status %s refused: %v", status, err)
+		}
+	}
+	if err := CheckEvent("workload", prn, "workload.bootstrap_changed", map[string]any{"status": "revoked"}); err != nil {
+		t.Errorf("a disable event without a credential id refused: %v", err)
+	}
+	refused := map[string]struct {
+		aggregate, id, event string
+		change               map[string]any
+	}{
+		"an overlap status":                  {"workload", prn, "workload.bootstrap_changed", map[string]any{"status": "overlap"}},
+		"a principal id as the credential":   {"workload", prn, "workload.bootstrap_changed", map[string]any{"credential_id": prn}},
+		"a bootstrap value as the id":        {"workload", prn, "workload.bootstrap_changed", map[string]any{"credential_id": "fcwlb_" + strings.Repeat("A", 43)}},
+		"a digest member":                    {"workload", prn, "workload.bootstrap_changed", map[string]any{"secret_hash": "00"}},
+		"the event on another aggregate":     {"service_account", prn, "workload.bootstrap_changed", map[string]any{"status": "active"}},
+		"credential_id on another aggregate": {"service_account", prn, "service_account.created", map[string]any{"credential_id": crd}},
+	}
+	for name, c := range refused {
+		if err := CheckEvent(c.aggregate, c.id, c.event, c.change); err == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+}

@@ -78,6 +78,11 @@ type AcceptInput struct {
 	PrincipalID uuid.UUID
 	Actor       Actor
 	PublicAudit *PublicAudit
+	// EnsureOrganization projects the invite's organization into the auth
+	// schema when it is missing there (identity.Store.EnsureOrganization). It
+	// runs only for a token that names a pending, unexpired invite, before the
+	// membership is planned. Nil projects nothing.
+	EnsureOrganization func(ctx context.Context, orgID uuid.UUID) error
 }
 
 type Accepted struct {
@@ -145,7 +150,7 @@ func (s *Store) record(ctx context.Context, v verb, err error) {
 
 // refusals are the store's named outcomes: returned as they are, never wrapped.
 var refusals = []error{ErrNotOwned, ErrInviteInvalid, ErrAccountInactive, ErrEmailUnverified, ErrEmailMismatch, ErrEmailInvalid, ErrRoleInvalid,
-	ErrTTLInvalid, ErrPendingExists, ErrNotFound, ErrNotPending, ErrAlreadyMember, ErrOrgNotFound, ErrOrgSuspended,
+	ErrTTLInvalid, ErrPendingExists, ErrNotFound, ErrNotPending, ErrAlreadyMember, ErrOrgNotFound, ErrOrgSuspended, ErrOrgConflict,
 	ErrInviterNotFound, ErrDenied, membership.ErrStateMoved}
 
 func (s *Store) run(ctx context.Context, v verb, m audit.Mutation) (err error) {
@@ -413,6 +418,11 @@ func (s *Store) acceptOnce(ctx context.Context, in AcceptInput, digest string) (
 		s.record(ctx, verbAccept, err)
 		return nil, err
 	}
+	if in.EnsureOrganization != nil {
+		if err := s.ensureOrganization(ctx, in.EnsureOrganization, planned.orgID); err != nil {
+			return nil, err
+		}
+	}
 	change := membership.Change{OrgID: planned.orgID, PrincipalID: in.PrincipalID, Role: planned.role, InvitedBy: planned.inviter,
 		Actor: membership.Actor{PrincipalID: in.Actor.PrincipalID, RequestID: in.Actor.RequestID}}
 	plan, err := s.members.PlanAdd(ctx, change)
@@ -497,6 +507,27 @@ WHERE id = $1`, planned.id, now, in.PrincipalID); err != nil {
 		return nil, err
 	}
 	return &Accepted{InviteID: planned.id, OrgID: planned.orgID, MembershipID: plan.MembershipID(), Role: planned.role}, nil
+}
+
+// ensureOrganization runs the accept's projection of the invite's
+// organization. An organization go-api does not have either makes the invite
+// unusable (ErrInviteInvalid, the one refusal); a slug collision is
+// ErrOrgConflict; any other failure is ErrStore.
+func (s *Store) ensureOrganization(ctx context.Context, ensure func(context.Context, uuid.UUID) error, orgID uuid.UUID) error {
+	err := ensure(ctx, orgID)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, identity.ErrOrganizationNotFound):
+		err = ErrInviteInvalid
+	case errors.Is(err, identity.ErrOrganizationSlugCollision):
+		err = ErrOrgConflict
+	default:
+		s.logger.ErrorContext(ctx, "invite: organization projection failure", logging.ErrorAttr(err))
+		err = fmt.Errorf("%w: ensure organization: %w", ErrStore, err)
+	}
+	s.record(ctx, verbAccept, err)
+	return err
 }
 
 // acceptRefusal maps a membership refusal to the invite's: an organization

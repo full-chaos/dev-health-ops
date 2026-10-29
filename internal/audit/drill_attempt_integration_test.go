@@ -79,11 +79,6 @@ func TestDrillAuthAttempt(t *testing.T) {
 	}
 }
 
-const (
-	drillAttemptRevokedName  = "drill-11232-wl-revoked"
-	drillAttemptDisabledName = "drill-11232-wl-disabled"
-)
-
 type drillAttemptSecret struct {
 	Name         string `json:"name"`
 	Value        string `json:"value"`
@@ -165,12 +160,6 @@ func drillAttemptRevoke(t *testing.T, ctx context.Context, store *workload.Store
 // drillAttemptOrg is organization 2 of the main driver (the aggregate the revocation events name).
 func drillAttemptOrg() uuid.UUID {
 	return uuid.NewSHA1(uuid.NameSpaceURL, []byte("drill-11232-org-2"))
-}
-
-type drillAttemptOutcome struct {
-	Name     string `json:"name"`
-	Accepted bool   `json:"accepted"`
-	Reason   string `json:"refusal_reason,omitempty"`
 }
 
 type drillAttemptResult struct {

@@ -143,7 +143,7 @@ func TestReadersOfTheCommitBeforeTheMigrationReadTheSameValuesOnTheMigratedSchem
 	}
 	migrate := func() {
 		t.Helper()
-		sql, err := os.ReadFile("../../chmigrate/sql/112_change_failure_rate_incident_basis.sql")
+		sql, err := os.ReadFile("../../chmigrate/archive/sql/112_change_failure_rate_incident_basis.sql")
 		if err != nil {
 			t.Fatal(err)
 		}

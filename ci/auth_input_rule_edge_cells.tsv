@@ -1,0 +1,14 @@
+# Edge forms of the register email: the address validator trims these characters at either edge (Python str.strip), so both services accept the address and store it trimmed.
+# id<TAB>pad (JSON escape, sent leading, trailing and on both edges of a@example.com)<TAB>stored email
+edge_tab	\t	a@example.com
+edge_lf	\n	a@example.com
+edge_cr	\r	a@example.com
+edge_vt	\u000b	a@example.com
+edge_ff	\u000c	a@example.com
+edge_space	 	a@example.com
+edge_fs	\u001c	a@example.com
+edge_gs	\u001d	a@example.com
+edge_rs	\u001e	a@example.com
+edge_us	\u001f	a@example.com
+edge_nel	\u0085	a@example.com
+edge_nbsp	 	a@example.com

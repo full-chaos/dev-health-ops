@@ -1,4 +1,4 @@
--- 0033 restore fence state and the timeline probe. ADDITIVE ONLY. See 0001's header.
+-- 0034 restore fence state and the timeline probe. ADDITIVE ONLY. See 0001's header.
 --
 -- A point-in-time restore (or any promote) starts a new PostgreSQL timeline. The
 -- restored database knows nothing of the writes after the restore target: its

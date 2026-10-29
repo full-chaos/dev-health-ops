@@ -117,7 +117,7 @@ func RuntimePosture() []TablePrivilege {
 		// Per-aggregate revision counter (0013): bumped, never deleted.
 		{Table: "aggregate_revisions", Select: true, Insert: true, Update: true},
 
-		// Restore fence (0033): the runtime only reads which timelines are fenced.
+		// Restore fence (0034): the runtime only reads which timelines are fenced.
 		{Table: "restore_fence_state", Select: true},
 	}
 }

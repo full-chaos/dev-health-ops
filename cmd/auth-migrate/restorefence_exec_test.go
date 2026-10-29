@@ -20,20 +20,21 @@ import (
 const execTestPassword = "s3cr3t-pw-do-not-print"
 
 type stubStore struct {
-	calls       []string
-	roleErr     error
-	timeline    int64
-	timelineErr error
-	checkErr    error
-	manifest    restorefence.Manifest
-	applied     *restorefence.Manifest
-	applyOpts   restorefence.Options
-	applyErr    error
-	initOpts    restorefence.InitOptions
-	initReport  restorefence.InitReport
-	initErr     error
-	actions     []restorefence.OperatorAction
-	closed      bool
+	calls          []string
+	roleErr        error
+	timeline       int64
+	timelineErr    error
+	checkErr       error
+	manifest       restorefence.Manifest
+	applied        *restorefence.Manifest
+	applyOpts      restorefence.Options
+	applyErr       error
+	initOpts       restorefence.InitOptions
+	initReport     restorefence.InitReport
+	initErr        error
+	actions        []restorefence.OperatorAction
+	reportSections []restorefence.SectionReport
+	closed         bool
 }
 
 func (s *stubStore) CheckNotRuntimeRole(context.Context, string) error {
@@ -55,7 +56,11 @@ func (s *stubStore) Export(context.Context, authschema.ValidatedIdentifier) (res
 func (s *stubStore) Apply(_ context.Context, _ authschema.ValidatedIdentifier, m *restorefence.Manifest, o restorefence.Options) (restorefence.Report, error) {
 	s.calls = append(s.calls, "apply")
 	s.applied, s.applyOpts = m, o
-	return restorefence.Report{Timeline: s.timeline, Source: "manifest", DryRun: !o.Apply, Actions: s.actions}, s.applyErr
+	src := "manifest"
+	if m == nil {
+		src = "blind_margin"
+	}
+	return restorefence.Report{Timeline: s.timeline, Source: src, DryRun: !o.Apply, Actions: s.actions, Sections: s.reportSections}, s.applyErr
 }
 func (s *stubStore) Init(_ context.Context, _ authschema.ValidatedIdentifier, o restorefence.InitOptions) (restorefence.InitReport, error) {
 	s.calls = append(s.calls, "init")
@@ -220,5 +225,22 @@ func TestExecRefusesBadArgumentsBeforeConnecting(t *testing.T) {
 func TestTheDefaultStoreOpenerIsTheRealOne(t *testing.T) {
 	if reflect.ValueOf(openRestoreFenceStore).Pointer() != reflect.ValueOf(openPGRestoreFenceStore).Pointer() {
 		t.Fatal("openRestoreFenceStore is not the real PostgreSQL opener: a test seam was left swapped")
+	}
+}
+
+// D6459 P2-a: a blind margin (no manifest) removes every legacy reset and verification token and every unconsumed
+// link credential, fail closed; the apply output prints those counts, and the help says so.
+func TestExecBlindMarginApplyPrintsWhatItRemoved(t *testing.T) {
+	store := &stubStore{timeline: 2}
+	store.reportSections = []restorefence.SectionReport{
+		{Name: "public.password_reset_tokens", Changed: 3}, {Name: "public.email_verification_tokens", Changed: 2},
+		{Name: "auth.link_credentials.ids", Changed: 4}, {Name: "public.memberships", Changed: 9},
+	}
+	rc, out, _ := runExec(t, store, nil, "apply", "-blind-margin", "1000")
+	if rc != 0 || !strings.Contains(out, "restore-fence blind-margin removed legacy_tokens=5 link_credentials=4") {
+		t.Fatalf("rc %d, stdout %q", rc, out)
+	}
+	if !strings.Contains(restoreFenceUsage, "every legacy reset and verification token") || !strings.Contains(restoreFenceUsage, "unconsumed link credential") {
+		t.Errorf("the usage does not say what a blind margin removes: %s", restoreFenceUsage)
 	}
 }

@@ -138,6 +138,9 @@ type MembershipBackfillTarget struct {
 	UserID   uuid.UUID
 	Role     string
 	JoinedAt *time.Time
+	// InvitedBy is public.memberships.invited_by_id. It is the same id space as UserID: an auth user
+	// principal has the id of its public.users row (BackfillMembership checks UserID the same way).
+	InvitedBy *uuid.UUID
 }
 
 // MembershipBackfillResult says what BackfillMembership wrote (or would write).
@@ -147,6 +150,12 @@ type MembershipBackfillResult struct {
 	// Diverged is set when the auth membership exists and is not active. It is
 	// reported and never written: a status in the auth schema is auth's own.
 	Diverged bool
+	// InviterSet and JoinedSet say a missing invited_by / joined_at was (or would be) filled from the
+	// public row. InviterUnresolved says the public inviter has no auth user principal, so invited_by
+	// stays NULL; it is a count, never a failure.
+	InviterSet        bool
+	JoinedSet         bool
+	InviterUnresolved bool
 }
 
 // BackfillMembership makes the auth membership of (OrgID, UserID) agree with
@@ -159,14 +168,17 @@ func (s *Store) BackfillMembership(ctx context.Context, t MembershipBackfillTarg
 	if !IsOrganizationRole(t.Role) {
 		return res, ErrBackfillRole
 	}
-	var orgExists, principalExists bool
+	var orgExists, principalExists, inviterResolved bool
 	var id *uuid.UUID
 	var status, role *string
+	var curInviter *uuid.UUID
+	var curJoined *time.Time
 	err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM `+s.q+`.organizations WHERE id = $1),
        EXISTS (SELECT 1 FROM `+s.q+`.principals WHERE id = $2 AND kind = 'user'),
-       m.id, m.status, m.role
+       EXISTS (SELECT 1 FROM `+s.q+`.principals WHERE id = $3::uuid AND kind = 'user'),
+       m.id, m.status, m.role, m.invited_by, m.joined_at
 FROM (SELECT 1) x LEFT JOIN `+s.q+`.memberships m ON m.organization_id = $1 AND m.principal_id = $2`,
-		t.OrgID, t.UserID).Scan(&orgExists, &principalExists, &id, &status, &role)
+		t.OrgID, t.UserID, t.InvitedBy).Scan(&orgExists, &principalExists, &inviterResolved, &id, &status, &role, &curInviter, &curJoined)
 	if err != nil {
 		return res, s.storeErr(ctx, "read auth.memberships", err)
 	}
@@ -175,19 +187,54 @@ FROM (SELECT 1) x LEFT JOIN `+s.q+`.memberships m ON m.organization_id = $1 AND 
 		return res, err
 	}
 	res = MembershipBackfillResult{Inserted: action == memberInsert, RoleUpdated: action == memberSetRole, Diverged: action == memberDiverged}
+	var fill fillDecision
+	switch action {
+	case memberInsert:
+		fill = decideFill(true, nil, nil, t.InvitedBy, inviterResolved, t.JoinedAt)
+		fill.Joined = false
+	case memberSetRole, memberNone:
+		fill = decideFill(true, curInviter, curJoined, t.InvitedBy, inviterResolved, t.JoinedAt)
+	}
+	res.InviterSet, res.JoinedSet, res.InviterUnresolved = fill.Inviter, fill.Joined, fill.Unresolved
 	if dryRun {
 		return res, nil
 	}
 	switch action {
 	case memberInsert:
-		err = s.insertMembership(ctx, t)
+		var inviter *uuid.UUID
+		if fill.Inviter {
+			inviter = t.InvitedBy
+		}
+		err = s.insertMembership(ctx, t, inviter)
 	case memberSetRole:
 		err = s.updateMembershipRole(ctx, *id, t)
+	}
+	if err == nil && action != memberInsert && (fill.Inviter || fill.Joined) {
+		err = s.fillMembership(ctx, *id, t, fill)
 	}
 	if err != nil {
 		return MembershipBackfillResult{}, err
 	}
 	return res, nil
+}
+
+// fillDecision is what BackfillMembership fills on an existing membership. Unresolved counts a public
+// inviter with no auth user principal; nothing is written for it.
+type fillDecision struct{ Inviter, Joined, Unresolved bool }
+
+// decideFill is the whole fill rule: fill missing values only, and only on an active membership. A value
+// the auth row holds is never overwritten, whichever one is older. An inviter is written only when it is
+// an auth user principal.
+func decideFill(active bool, curInviter *uuid.UUID, curJoined *time.Time, want *uuid.UUID, resolved bool, wantJoined *time.Time) fillDecision {
+	if !active {
+		return fillDecision{}
+	}
+	var d fillDecision
+	if curInviter == nil && want != nil {
+		d.Inviter, d.Unresolved = resolved, !resolved
+	}
+	d.Joined = curJoined == nil && wantJoined != nil
+	return d
 }
 
 type memberAction int
@@ -232,15 +279,15 @@ func membershipAudit(eventType, reason string, t MembershipBackfillTarget, id uu
 	}
 }
 
-func (s *Store) insertMembership(ctx context.Context, t MembershipBackfillTarget) error {
+func (s *Store) insertMembership(ctx context.Context, t MembershipBackfillTarget, inviter *uuid.UUID) error {
 	id := uuid.New()
 	err := audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			var inserted uuid.UUID
-			err := tx.QueryRow(ctx, `INSERT INTO `+s.q+`.memberships (id, organization_id, principal_id, status, role, joined_at)
-VALUES ($1, $2, $3, 'active', $4, $5)
+			err := tx.QueryRow(ctx, `INSERT INTO `+s.q+`.memberships (id, organization_id, principal_id, status, role, joined_at, invited_by)
+VALUES ($1, $2, $3, 'active', $4, $5, $6)
 ON CONFLICT (organization_id, principal_id) DO NOTHING
-RETURNING id`, id, t.OrgID, t.UserID, t.Role, t.JoinedAt).Scan(&inserted)
+RETURNING id`, id, t.OrgID, t.UserID, t.Role, t.JoinedAt, inviter).Scan(&inserted)
 			if errors.Is(err, pgx.ErrNoRows) {
 				return errMembershipExists
 			}
@@ -278,4 +325,47 @@ WHERE id = $1 AND status = 'active' AND role IS DISTINCT FROM $2`, id, t.Role)
 		return nil
 	}
 	return s.storeErr(ctx, "update membership role", err)
+}
+
+// fillAudit reuses the projected-membership event the INSERT emits and names the field it filled; the
+// audit vocabulary has no slot for the value.
+func fillAudit(t MembershipBackfillTarget, id uuid.UUID, d fillDecision) audit.AuditEvent {
+	ev := membershipAudit("auth.membership.projected", "membership_added", t, id)
+	var fields []string
+	if d.Inviter {
+		fields = append(fields, "invited_by")
+	}
+	if d.Joined {
+		fields = append(fields, "joined_at")
+	}
+	ev.Attributes["changed_fields"] = fields
+	return ev
+}
+
+func (s *Store) fillMembership(ctx context.Context, id uuid.UUID, t MembershipBackfillTarget, d fillDecision) error {
+	var inviter *uuid.UUID
+	if d.Inviter {
+		inviter = t.InvitedBy
+	}
+	var joined *time.Time
+	if d.Joined {
+		joined = t.JoinedAt
+	}
+	err := audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			_, err := tx.Exec(ctx, `UPDATE `+s.q+`.memberships
+SET invited_by = COALESCE(invited_by, $2::uuid), joined_at = COALESCE(joined_at, $3::timestamptz), updated_at = clock_timestamp()
+WHERE id = $1 AND status = 'active'
+  AND ((invited_by IS NULL AND $2::uuid IS NOT NULL AND EXISTS (SELECT 1 FROM `+s.q+`.principals WHERE id = $2::uuid AND kind = 'user'))
+    OR (joined_at IS NULL AND $3::timestamptz IS NOT NULL))`, id, inviter, joined)
+			return err
+		},
+		Audit: fillAudit(t, id, d),
+		Events: []audit.OutboxEvent{membershipEvent(id, "membership.activated",
+			map[string]any{"status": "active", "role_id": "rol_" + t.Role})},
+	})
+	if err == nil || errors.Is(err, audit.ErrNoStateChange) {
+		return nil
+	}
+	return s.storeErr(ctx, "fill membership", err)
 }

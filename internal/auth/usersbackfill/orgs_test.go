@@ -552,7 +552,7 @@ func TestRunOrgsCountsInviterAndJoinFills(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep.InvitersSet != 2 || rep.JoinedSet != 1 || rep.InviterUnresolved != 1 || rep.MembershipsInserted != 1 || rep.MembershipsUnchanged != 1 || rep.SkippedTotal() != 0 {
+	if rep.InvitersSet != 2 || rep.JoinedSet != 1 || rep.InviterUnresolved != 1 || rep.MembershipsInserted != 1 || rep.MembershipsUnchanged != 2 || rep.SkippedTotal() != 0 {
 		t.Fatalf("report = %+v", rep)
 	}
 	lines := strings.Join(rep.Lines(), "\n")

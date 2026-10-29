@@ -183,6 +183,8 @@ func outcomeLabel(err error) string {
 		return "already_member"
 	case errors.Is(err, ErrOrgSuspended):
 		return "suspended"
+	case errors.Is(err, ErrOrgConflict):
+		return "org_conflict"
 	case errors.Is(err, ErrDenied):
 		return "denied"
 	case errors.Is(err, ErrNotOwned):

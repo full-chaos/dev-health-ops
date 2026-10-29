@@ -270,6 +270,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			UsersOwned:         deps.UsersOwned,
 			PlatformRolesOwned: deps.PlatformRolesOwned,
 			AuthSchema:         deps.AuthSchema,
+			OrgReactivator:     deps.OrgReactivator,
 		})...)
 	}
 	webhookintake.LogUnconfiguredSecrets(logger)
@@ -401,6 +402,11 @@ func configureWith(
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_session_issue", "api_session_issue_config_invalid", err)
+	}
+	deps.OrgReactivator, err = orgReactivator(authProxy, envsecrets.ProcessLookup)
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_org_provisioning", "api_org_provisioning_config_invalid", err)
 	}
 	var scope []func(http.Handler) http.Handler
 	if deps.Pool != nil {

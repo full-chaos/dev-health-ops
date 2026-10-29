@@ -509,6 +509,9 @@ func (materializer *NativeMaterializer) Materialize(
 			return PlanResult{}, err
 		}
 	}
+	if len(units) == 0 && loaded.terminalReason == "" {
+		loaded.zeroUnitReason = zeroUnitCapabilityReason(loaded.provider, loaded.input.Datasets)
+	}
 	if err := errIfOnlySkippedDatasetsHadWork(len(loaded.featureOffSkippedDatasetKeys), len(units)); err != nil {
 		return PlanResult{}, err
 	}
@@ -600,6 +603,9 @@ type loadedMaterializationPlan struct {
 	// featureOffSkippedDatasetKeys are the enabled datasets the plan left out
 	// because the canonical-incident feature is off.
 	featureOffSkippedDatasetKeys []string
+	// zeroUnitReason is the planner's reason for a plan with no unit that is a no-op rather than a failure
+	// (NoDatasetForProviderReason); it is written into sync_runs.result for the finalizer.
+	zeroUnitReason string
 	// triggeredBy is CHAOS-4602's sync_runs.triggered_by stamp: "schedule"
 	// for an ordinary cron-minted occurrence (every pre-CHAOS-4602 caller
 	// keeps this value, unconditionally), or the sync_manual_triggers row's
@@ -2184,12 +2190,21 @@ func persistDomainGraph(ctx context.Context, tx pgx.Tx, ids materializationIDs, 
 		completedAt = pointerTime(createdAt)
 		runError = &loaded.terminalReason
 		resultJSON = []byte(`{"error_category":"pagerduty_sync_disabled"}`)
-	} else if skipped := SkippedDatasetsResult(loaded.featureOffSkippedDatasetKeys); skipped != nil {
-		encoded, err := json.Marshal(map[string]any{"skipped_datasets": skipped})
-		if err != nil {
-			return fmt.Errorf("encode skipped datasets: %w", err)
+	} else {
+		result := map[string]any{}
+		if skipped := SkippedDatasetsResult(loaded.featureOffSkippedDatasetKeys); skipped != nil {
+			result["skipped_datasets"] = skipped
 		}
-		resultJSON = encoded
+		if loaded.zeroUnitReason != "" {
+			result["reason"] = loaded.zeroUnitReason
+		}
+		if len(result) > 0 {
+			encoded, err := json.Marshal(result)
+			if err != nil {
+				return fmt.Errorf("encode the plan result: %w", err)
+			}
+			resultJSON = encoded
+		}
 	}
 	triggeredByStamp := loaded.triggeredBy
 	if triggeredByStamp == "" {
@@ -2502,6 +2517,17 @@ func deterministicMaterializationIDs(occurrenceID string) (materializationIDs, e
 		ReferenceDiscoveryID: derive("reference-discovery"),
 		DispatchOutboxID:     derive("dispatch-outbox"),
 	}, nil
+}
+
+// DeterministicSyncRunID is the id of the sync run the materializer makes for an occurrence. A manual or backfill
+// trigger's backfill_jobs row names only its occurrence, so a reader that cannot read the occurrence table (the domain
+// role) finds the run's job by deriving this id from each candidate's occurrence.
+func DeterministicSyncRunID(occurrenceID string) (string, error) {
+	ids, err := deterministicMaterializationIDs(occurrenceID)
+	if err != nil {
+		return "", err
+	}
+	return ids.SyncRunID, nil
 }
 
 func deterministicUnitID(syncRunID string, ordinal int) (string, error) {

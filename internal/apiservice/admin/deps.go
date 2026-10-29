@@ -21,6 +21,7 @@ import (
 	valkeygo "github.com/valkey-io/valkey-go"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/audit"
+	"github.com/full-chaos/dev-health-ops/internal/api/orgreactivate"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
@@ -84,6 +85,10 @@ type Deps struct {
 	PlatformRolesOwned bool
 	// AuthSchema is AUTH_DATABASE_SCHEMA (empty: "auth").
 	AuthSchema string
+	// OrgReactivator is the client of auth-service's organization reactivate
+	// route (AUTH_PROXY_ORG_PROVISIONING). Nil leaves PATCH is_active as it
+	// was: public.organizations only, no auth call.
+	OrgReactivator orgreactivate.Reactivator
 }
 
 // Routes is the admin area's route set.
@@ -123,6 +128,7 @@ func Routes(deps Deps) []httpapi.Route {
 		passwordLimiter: httpapi.NewKeyedLimiter(limits, passwordLimit),
 		inviteLimiter:   httpapi.NewKeyedLimiter(limits, inviteLimit),
 		invites:         deps.Invites,
+		orgReactivator:  deps.OrgReactivator,
 	}
 	if deps.ClickHouse != nil {
 		area.spend = clickhouseSpend{conn: deps.ClickHouse}
@@ -180,6 +186,9 @@ type handlers struct {
 	passwordLimiter *httpapi.KeyedLimiter
 	inviteLimiter   *httpapi.KeyedLimiter
 	invites         InviteConfig
+	// orgReactivator is Deps.OrgReactivator: when set, a PATCH that turns an
+	// inactive organization active reaches auth-service before any write.
+	orgReactivator orgreactivate.Reactivator
 }
 
 // passwordLimit is users.py's `@limiter.limit(ADMIN_PASSWORD_LIMIT =

@@ -10,6 +10,7 @@ internal/api/externalurl
 internal/api/githubcode
 internal/api/gitlabcode
 internal/api/licensing
+internal/api/orgreactivate
 internal/api/orgs
 internal/api/policy
 internal/api/pybody
@@ -17,6 +18,7 @@ internal/api/pyjson
 internal/api/pytime
 internal/api/registerorg
 internal/api/restcore
+internal/api/sessionissue
 internal/api/standinkey
 internal/api/usersowned
 internal/apiservice/admin

@@ -276,6 +276,11 @@ spec:
             - name: {{ index . 0 }}
               value: {{ ternary "true" "false" (index . 1) | quote }}
             {{- end }}
+            {{- /* CHAOS-11858: rendered only when on, so the default manifest carries no trace of it. */}}
+            {{- if eq (default false (default dict .Values.goApi.authProxy).orgProvisioning) true }}
+            - name: AUTH_PROXY_ORG_PROVISIONING
+              value: "true"
+            {{- end }}
             {{- if $sessionsOn }}
             {{- /* The auth-session-issuer svc_ credential go-api presents to
             auth-service's session issue route. Not optional: sessions on

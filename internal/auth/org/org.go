@@ -187,6 +187,8 @@ func outcomeLabel(err error) string {
 		return "invalid"
 	case errors.Is(err, ErrSuspended):
 		return "suspended"
+	case errors.Is(err, ErrDenied):
+		return "denied"
 	}
 	return "error"
 }

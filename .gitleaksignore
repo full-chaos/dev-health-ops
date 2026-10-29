@@ -29,3 +29,5 @@ deploy/helm/dev-health/query_api_access_issuer_test.go:generic-api-key:14
 # Not a credential. Commit-less file:rule:line form; generic-api-key is suppressed on these two lines only.
 internal/auth/authapi/provisioning_test.go:generic-api-key:342
 internal/auth/authruntime/provisioning_routes_integration_test.go:generic-api-key:266
+# restore-fence legacy-flags test sentinel (no-secret-leak cells grep for it); not a credential. Commit-less form so the row matches after a squash.
+internal/auth/restorefence/legacy_flags_integration_test.go:generic-api-key:20

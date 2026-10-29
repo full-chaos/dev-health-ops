@@ -21,6 +21,21 @@ const (
 	// disabled and their token_version is bumped, not deleted. Nothing is required of the operator; the ids are
 	// named so the deletion is visible.
 	ActionUserTombstoned ActionKind = "user_tombstoned"
+	// ActionReviewIPAllowlist: the source switched off or deleted every restored active allowlist entry of these orgs.
+	// The fence leaves them active (0 active entries would accept every address); the operator reviews each org's list.
+	ActionReviewIPAllowlist ActionKind = "review_ip_allowlist"
+	// ActionReviewAfterBlindMargin: a blind margin has no source state, so the legacy access flags stay as restored.
+	// These rows are active now; the operator reviews each one.
+	ActionReviewAfterBlindMargin ActionKind = "review_after_blind_margin"
+	// ActionReviewScopeEmptied: the source holds none of these workloads' or credentials' restored audiences, actions or
+	// scopes (swapped after the target); the fence cut them to the empty set. The operator sets them again.
+	ActionReviewScopeEmptied ActionKind = "review_scope_emptied"
+	// ActionReviewMembershipOwner: the source demoted the last restored owner of these orgs; the fence kept the owner
+	// (an org with no owner is locked out). The operator reviews each org's owners.
+	ActionReviewMembershipOwner ActionKind = "review_membership_owner"
+	// ActionReviewMembershipRole: a restored or source role of these memberships is outside the known ranks; the fence
+	// left the row as restored.
+	ActionReviewMembershipRole ActionKind = "review_membership_role"
 )
 
 // followUp names the follow-up leaf that automates each action; the operator
@@ -29,6 +44,11 @@ var followUp = map[ActionKind]string{
 	ActionForcePasswordReset:        "CHAOS-11834",
 	ActionRequeueProviderRevocation: "CHAOS-11835",
 	ActionUserTombstoned:            "none",
+	ActionReviewIPAllowlist:         "none",
+	ActionReviewAfterBlindMargin:    "none",
+	ActionReviewScopeEmptied:        "none",
+	ActionReviewMembershipOwner:     "none",
+	ActionReviewMembershipRole:      "none",
 }
 
 // OperatorAction is the ids a section names for one action. Ids only: never a

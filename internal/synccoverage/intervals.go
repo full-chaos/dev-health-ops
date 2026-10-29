@@ -81,6 +81,9 @@ func mergeIntervalsBySourceScope(input []coverageInterval) []coverageInterval {
 	return result
 }
 
+// subtractIntervals returns the parts of requested that covered does not cover. A remainder no wider than
+// intervalAdjacencyTolerance is dropped: it is the seam where one day-bounded window ends at 23:59:59.999999 and the
+// next starts at 00:00:00 (mergeIntervals already treats those as adjacent), not a gap or a failed range.
 func subtractIntervals(requested, covered []coverageInterval) []coverageInterval {
 	covered = mergeIntervals(covered)
 	gaps := make([]coverageInterval, 0)
@@ -95,6 +98,14 @@ func subtractIntervals(requested, covered []coverageInterval) []coverageInterval
 			}
 			if coveredInterval.Since.After(cursor) {
 				end := minTime(coveredInterval.Since, requestedInterval.Before)
+				if end.Sub(cursor) <= intervalAdjacencyTolerance {
+					// The seam between two day-bounded windows (23:59:59.999999 -> 00:00:00), not a remainder.
+					cursor = coveredInterval.Before
+					if !cursor.Before(requestedInterval.Before) {
+						break
+					}
+					continue
+				}
 				gaps = append(gaps, coverageInterval{
 					Since: cursor, Before: end,
 					SourceIDs: append([]string(nil), requestedInterval.SourceIDs...),
@@ -108,7 +119,7 @@ func subtractIntervals(requested, covered []coverageInterval) []coverageInterval
 				break
 			}
 		}
-		if cursor.Before(requestedInterval.Before) {
+		if requestedInterval.Before.Sub(cursor) > intervalAdjacencyTolerance {
 			gaps = append(gaps, coverageInterval{
 				Since: cursor, Before: requestedInterval.Before,
 				SourceIDs: append([]string(nil), requestedInterval.SourceIDs...),

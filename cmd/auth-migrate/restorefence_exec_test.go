@@ -244,3 +244,48 @@ func TestExecBlindMarginApplyPrintsWhatItRemoved(t *testing.T) {
 		t.Errorf("the usage does not say what a blind margin removes: %s", restoreFenceUsage)
 	}
 }
+
+// 11878 (1) and the Q1 ruling: the blind-margin line counts the legacy invites it revoked, and the help says that a
+// blind margin leaves the legacy access flags as restored and lists every active row (ids only) for review.
+func TestExecBlindMarginApplyCountsLegacyInvitesAndListsTheFlagsForReview(t *testing.T) {
+	store := &stubStore{timeline: 2}
+	store.reportSections = []restorefence.SectionReport{{Name: "auth.invites.ids", Changed: 6}, {Name: "public.org_invites.ids", Changed: 2}}
+	store.actions = []restorefence.OperatorAction{{Kind: "review_after_blind_margin", Source: "public.organizations", IDs: []string{"11111111-1111-1111-1111-111111111111"}}}
+	rc, out, _ := runExec(t, store, nil, "apply", "-blind-margin", "1000")
+	if rc != 0 || !strings.Contains(out, "invites=6 legacy_invites=2") {
+		t.Fatalf("rc %d, stdout %q", rc, out)
+	}
+	if !strings.Contains(out, "operator-action review_after_blind_margin source=public.organizations count=1 ids=11111111-1111-1111-1111-111111111111") {
+		t.Errorf("the review list is not printed: %q", out)
+	}
+	for _, want := range []string{"leaves the legacy access flags", "review_after_blind_margin"} {
+		if !strings.Contains(restoreFenceUsage, want) {
+			t.Errorf("the usage lacks %q: %s", want, restoreFenceUsage)
+		}
+	}
+}
+
+// The -blind-margin flag help and the usage both say what a blind margin leaves as restored (and lists for review).
+func TestTheBlindMarginFlagHelpNamesWhatItLeavesAsRestored(t *testing.T) {
+	var errb bytes.Buffer
+	if _, err := parseRestoreFenceArgs([]string{"apply", "-h"}, &errb); err == nil {
+		t.Fatal("apply -h must stop the parse")
+	}
+	help := errb.String()
+	i := strings.Index(help, "-blind-margin")
+	if i < 0 {
+		t.Fatalf("no -blind-margin flag in the help: %q", help)
+	}
+	flagHelp := help[i:]
+	if j := strings.Index(flagHelp[1:], "\n  -"); j >= 0 {
+		flagHelp = flagHelp[:j+1]
+	}
+	for _, want := range []string{"legacy access flags", "workload and credential scopes", "membership roles", "superuser flags", "provider credentials", "listed by id for review"} {
+		if !strings.Contains(flagHelp, want) {
+			t.Errorf("the -blind-margin flag help lacks %q: %q", want, flagHelp)
+		}
+		if !strings.Contains(restoreFenceUsage, want) {
+			t.Errorf("the usage lacks %q: %s", want, restoreFenceUsage)
+		}
+	}
+}

@@ -555,7 +555,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/provisioning.go",
-        "line": 182
+        "line": 192
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped"
@@ -584,7 +584,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/provisioning.go",
-        "line": 183
+        "line": 193
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped"
@@ -613,7 +613,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/provisioning.go",
-        "line": 184
+        "line": 194
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped"
@@ -642,7 +642,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/provisioning.go",
-        "line": 185
+        "line": 195
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped"
@@ -661,7 +661,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 247,
+            "line": 280,
             "note": "signedtoken.Build(id, s.secret)",
             "path": "internal/auth/invite/store.go"
           },
@@ -686,7 +686,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/provisioning.go",
-        "line": 186
+        "line": 196
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped"
@@ -715,7 +715,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/provisioning.go",
-        "line": 187
+        "line": 197
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -744,7 +744,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/provisioning.go",
-        "line": 188
+        "line": 198
       },
       "surface_kind": "rest",
       "tenant_requirement": "cross_org_superuser_only"

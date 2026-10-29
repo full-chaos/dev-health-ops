@@ -18,6 +18,7 @@ internal/api/integrationsadmin
 internal/api/licensing
 internal/api/licensing/processlicense
 internal/api/oauthprovider
+internal/api/orgreactivate
 internal/api/orgs
 internal/api/policy
 internal/api/producttelemetry

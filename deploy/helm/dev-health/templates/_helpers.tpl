@@ -210,11 +210,33 @@ epoch the Go finalize bumps must land in the keyspace the API's cache reads.
 {{- end }}
 
 {{/*
+CHAOS-11852: a user or password written into a connection URI is percent-encoded (RFC 3986 userinfo / path
+segment): urlquery, then "+" -> "%20" (QueryEscape writes a space as "+" and a literal "+" as %2B, so the replace is exact). A value of
+unreserved characters (A-Za-z0-9 - _ . ~) renders unchanged; every Go reader of these URIs decodes the userinfo.
+*/}}
+{{- define "dev-health.uriPart" -}}
+{{- . | toString | urlquery | replace "+" "%20" -}}
+{{- end -}}
+
+{{/*
+CHAOS-11852: a database name is written RAW into a connection URI path: the Python readers (SQLAlchemy with asyncpg, urllib) do not decode the
+path, so an encoded name would be read wrongly. Instead the render FAILS, by key name, when the name is not identifier-safe ([A-Za-z0-9_]+).
+Call with (dict "key" "<values key>" "value" <name>).
+*/}}
+{{- define "dev-health.uriDatabase" -}}
+{{- $db := .value | toString -}}
+{{- if not (regexMatch "^[A-Za-z0-9_]+$" $db) -}}
+{{- fail (printf "%s must be identifier-safe ([A-Za-z0-9_]+): it is written into a connection URI path that the Python readers (SQLAlchemy/asyncpg, urllib) do not decode" .key) -}}
+{{- end -}}
+{{- $db -}}
+{{- end -}}
+
+{{/*
 ClickHouse URI — auto-computed when clickhouse.enabled
 */}}
 {{- define "dev-health.clickhouseURI" -}}
 {{- if .Values.clickhouse.enabled }}
-{{- printf "clickhouse://%s:%s@%s-clickhouse:8123/%s" .Values.clickhouse.credentials.user .Values.clickhouse.credentials.password (include "dev-health.fullname" .) .Values.clickhouse.credentials.database }}
+{{- printf "clickhouse://%s:%s@%s-clickhouse:8123/%s" (include "dev-health.uriPart" .Values.clickhouse.credentials.user) (include "dev-health.uriPart" .Values.clickhouse.credentials.password) (include "dev-health.fullname" .) (include "dev-health.uriDatabase" (dict "key" "clickhouse.credentials.database" "value" .Values.clickhouse.credentials.database)) }}
 {{- end }}
 {{- end }}
 
@@ -258,7 +280,7 @@ workload.
 */}}
 {{- define "dev-health.clickhouseNativeURI" -}}
 {{- if .Values.clickhouse.enabled }}
-{{- printf "clickhouse://%s:%s@%s-clickhouse:9000/%s" .Values.clickhouse.credentials.user .Values.clickhouse.credentials.password (include "dev-health.fullname" .) .Values.clickhouse.credentials.database }}
+{{- printf "clickhouse://%s:%s@%s-clickhouse:9000/%s" (include "dev-health.uriPart" .Values.clickhouse.credentials.user) (include "dev-health.uriPart" .Values.clickhouse.credentials.password) (include "dev-health.fullname" .) (include "dev-health.uriDatabase" (dict "key" "clickhouse.credentials.database" "value" .Values.clickhouse.credentials.database)) }}
 {{- end }}
 {{- end }}
 
@@ -267,7 +289,7 @@ PostgreSQL URI — auto-computed when postgresql.enabled
 */}}
 {{- define "dev-health.postgresURI" -}}
 {{- if .Values.postgresql.enabled }}
-{{- printf "postgresql+asyncpg://%s:%s@%s-postgresql:5432/%s" .Values.postgresql.credentials.user .Values.postgresql.credentials.password (include "dev-health.fullname" .) .Values.postgresql.credentials.database }}
+{{- printf "postgresql+asyncpg://%s:%s@%s-postgresql:5432/%s" (include "dev-health.uriPart" .Values.postgresql.credentials.user) (include "dev-health.uriPart" .Values.postgresql.credentials.password) (include "dev-health.fullname" .) (include "dev-health.uriDatabase" (dict "key" "postgresql.credentials.database" "value" .Values.postgresql.credentials.database)) }}
 {{- end }}
 {{- end }}
 
@@ -718,12 +740,22 @@ leaf), and renders the phase. Every ladder read goes through dev-health.authOn, 
 */}}
 {{- define "dev-health.authPhase" -}}
 {{- $v := .Values -}}
-{{- if hasKey $v.goApi "authProxy" }}{{- fail "goApi.authProxy is replaced by authService.phase (0 go-api only, 1 auth-service dark, 2 sessions, 3 login and social sign-in, 4 users owned, 5 orgs owned): remove goApi.authProxy and set authService.phase" }}{{- end -}}
+{{- /* goApi.authProxy keeps one key, orgProvisioning (CHAOS-11858): the go-api switch AUTH_PROXY_ORG_PROVISIONING. Every other key is a routing flag authService.phase owns. */ -}}
+{{- if hasKey $v.goApi "authProxy" }}
+{{- if or (not (kindIs "map" $v.goApi.authProxy)) (eq (len $v.goApi.authProxy) 0) }}{{- fail "goApi.authProxy is replaced by authService.phase (0 go-api only, 1 auth-service dark, 2 sessions, 3 login and social sign-in, 4 users owned, 5 orgs owned): remove goApi.authProxy and set authService.phase" }}{{- end }}
+{{- range $key, $_ := $v.goApi.authProxy }}{{- if ne $key "orgProvisioning" }}{{- fail "goApi.authProxy is replaced by authService.phase (0 go-api only, 1 auth-service dark, 2 sessions, 3 login and social sign-in, 4 users owned, 5 orgs owned): remove goApi.authProxy and set authService.phase" }}{{- end }}{{- end }}
+{{- if and (hasKey $v.goApi.authProxy "orgProvisioning") (not (kindIs "bool" $v.goApi.authProxy.orgProvisioning)) }}{{- fail "goApi.authProxy.orgProvisioning must be true or false" }}{{- end }}
+{{- end -}}
 {{- if hasKey $v.authService "enabled" }}{{- fail "authService.enabled is replaced by authService.phase: enabled=true is phase 1 and enabled=false is phase 0; remove authService.enabled and set authService.phase" }}{{- end -}}
 {{- if hasKey $v.authService "usersOwned" }}{{- fail "authService.usersOwned is replaced by authService.phase: users owned is phase 4; remove authService.usersOwned" }}{{- end -}}
 {{- if hasKey $v.authService "orgsOwned" }}{{- fail "authService.orgsOwned is replaced by authService.phase: orgs owned is phase 5; remove authService.orgsOwned" }}{{- end -}}
 {{- $p := $v.authService.phase -}}
 {{- if not (and (has (kindOf $p) (list "int" "int64" "float64")) (eq (float64 $p) (floor (float64 $p))) (ge (float64 $p) 0.0) (le (float64 $p) 5.0)) }}{{- fail (printf "authService.phase must be a whole number from 0 to 5, got %s %v" (kindOf $p) $p) }}{{- end -}}
+{{- if and (eq (default false (default dict $v.goApi.authProxy).orgProvisioning) true) (lt (int $p) 2) }}{{- fail "goApi.authProxy.orgProvisioning needs authService.phase 2 or higher: go-api calls auth-service through AUTH_PROXY_URL, which renders from phase 2" }}{{- end -}}
+{{- if eq (default false (default dict $v.goApi.authProxy).orgProvisioning) true }}
+{{- $routes := false }}{{- range ($v.authService.extraEnv | default list) }}{{- if eq (toString .name) "AUTH_MEMBERSHIP_ROUTES" }}{{- $routes = eq (toString .value) "true" }}{{- end }}{{- end }}
+{{- if not $routes }}{{- fail "goApi.authProxy.orgProvisioning needs authService.extraEnv AUTH_MEMBERSHIP_ROUTES=true (the exact name; the last entry with that name must be \"true\"): go-api calls auth-service's organization reactivate route, which auth-service mounts only with that setting" }}{{- end }}
+{{- end -}}
 {{- if ge (int $p) 5 }}{{- fail (printf "authService.phase %d: phase 5 (orgs owned) needs its own public-table writer leaf (D6358): auth-service does not yet write the existing public organizations and memberships tables, so phase 4 is the highest phase this chart renders" (int $p)) }}{{- end -}}
 {{- $stage := toString (default "" $v.authService.usersOwnedStage) -}}
 {{- if not (has $stage (list "" "goApi" "owned")) }}{{- fail (printf "authService.usersOwnedStage must be goApi or owned, got %q" $stage) }}{{- end -}}
@@ -751,7 +783,7 @@ Every env name the chart renders for the go-api container, as a JSON list. goApi
 any case, for the same reason as dev-health.authServiceEnvNames. auth_phase_test.go walks the rendered names. The DSN name is appended, not listed, so the worker DSN list keeps the only listed spelling (a chartgates planted defect edits it).
 */}}
 {{- define "dev-health.goApiEnvNames" -}}
-{{- $names := list "JWT_SECRET_KEY" "AUTH_DATABASE_SCHEMA" "HIDE_MIGRATED_CHILD_CONFIGS" "SYNC_WATERMARK_OVERLAP" "SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS" "AUTH_PROXY_URL" "AUTH_PROXY_SESSIONS" "AUTH_PROXY_LOCAL_LOGIN" "AUTH_PROXY_CREDENTIALS" "AUTH_PROXY_SOCIAL" "AUTH_PROXY_OIDC" "AUTH_PROXY_SAML" "AUTH_SESSION_ISSUE_TOKEN" "AUTH_USERS_OWNED" "AUTH_ACCESS_TOKEN_ISSUER" "TRUSTED_PROXIES_NETWORK_FENCED" -}}
+{{- $names := list "JWT_SECRET_KEY" "AUTH_DATABASE_SCHEMA" "HIDE_MIGRATED_CHILD_CONFIGS" "SYNC_WATERMARK_OVERLAP" "SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS" "AUTH_PROXY_URL" "AUTH_PROXY_SESSIONS" "AUTH_PROXY_LOCAL_LOGIN" "AUTH_PROXY_CREDENTIALS" "AUTH_PROXY_SOCIAL" "AUTH_PROXY_OIDC" "AUTH_PROXY_SAML" "AUTH_PROXY_ORG_PROVISIONING" "AUTH_SESSION_ISSUE_TOKEN" "AUTH_USERS_OWNED" "AUTH_ACCESS_TOKEN_ISSUER" "TRUSTED_PROXIES_NETWORK_FENCED" -}}
 {{- $names = (append $names "API_DATABASE_URI") }}{{- toJson $names -}}
 {{- end -}}
 

@@ -159,7 +159,7 @@ var attributeVocabulary = map[string][]string{
 		"accepted", "invalid_credentials", "account_locked", "principal_deactivated", "email_unverified",
 		"email_collision", "signup_unavailable", "identity_conflict",
 		"provider_already_linked", "expired", "principal_not_found", "malformed", "compromised",
-		"invite_created", "invite_accepted", "invite_revoked",
+		"invite_created", "invite_accepted", "invite_revoked", "restore_fence_bootstrap",
 	},
 	"target_kind": {
 		"principal", "organization", "membership", "role_assignment", "resource_grant", "credential",

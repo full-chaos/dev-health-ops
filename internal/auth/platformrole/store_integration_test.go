@@ -14,8 +14,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/full-chaos/dev-health-ops/internal/audit"
-	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -35,9 +33,6 @@ var (
 	sharedErr  error
 	sharedOnce sync.Once
 	closers    []func()
-	// seedLock serializes the tests: each one starts from a table that holds
-	// no assignment, because the last-admin rule counts every row.
-	seedLock sync.Mutex
 )
 
 func TestMain(m *testing.M) {
@@ -48,16 +43,27 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
+// getEnv is the database the tests share. They seed fresh principals and
+// delete nothing; a test that counts every platform administrator uses
+// isolatedEnv.
 func getEnv(t *testing.T) *env {
 	t.Helper()
 	sharedOnce.Do(func() { shared, sharedErr = newEnv(t) })
 	if sharedErr != nil {
 		t.Fatal(sharedErr)
 	}
-	seedLock.Lock()
-	t.Cleanup(seedLock.Unlock)
-	shared.clear(t)
 	return shared
+}
+
+// isolatedEnv is a database of its own, for a test whose rule counts every
+// active platform administrator.
+func isolatedEnv(t *testing.T) *env {
+	t.Helper()
+	e, err := newEnv(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e
 }
 
 func newEnv(t *testing.T) (*env, error) {
@@ -111,50 +117,6 @@ func newEnv(t *testing.T) (*env, error) {
 		return nil, err
 	}
 	return &env{admin: admin, runtime: runtime, schema: schema, store: store, identity: id}, nil
-}
-
-// clear revokes every assignment through audit.Commit, so each test starts
-// from an empty table.
-func (e *env) clear(t *testing.T) {
-	t.Helper()
-	ctx := context.Background()
-	rows, err := e.admin.Query(ctx, `SELECT id, principal_id FROM auth.platform_role_assignments`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var ids, principals []uuid.UUID
-	for rows.Next() {
-		var id, principal uuid.UUID
-		if err := rows.Scan(&id, &principal); err != nil {
-			t.Fatal(err)
-		}
-		ids, principals = append(ids, id), append(principals, principal)
-	}
-	rows.Close()
-	for i, id := range ids {
-		e.commitRevoke(t, ctx, id, principals[i])
-	}
-}
-
-// commitRevoke deletes one assignment through audit.Commit with its audit row
-// (subject = the holder) and outbox event, as the store does.
-func (e *env) commitRevoke(t *testing.T, ctx context.Context, assignment, principal uuid.UUID) {
-	t.Helper()
-	subject := principal.String()
-	err := audit.Commit(ctx, e.runtime, e.schema, audit.Mutation{
-		Apply: func(ctx context.Context, tx audit.TxOps) error {
-			_, err := tx.Exec(ctx, `DELETE FROM auth.platform_role_assignments WHERE id = $1`, assignment)
-			return err
-		},
-		Audit: audit.AuditEvent{EventType: "auth.platform_role.revoked", Outcome: audit.OutcomeAllowed, SubjectPrincipalID: &subject,
-			Attributes: map[string]any{"reason_code": "role_revoked", "target_kind": "principal", "target_id": subject}},
-		Events: []audit.OutboxEvent{{AggregateType: "platform_role_assignment",
-			AggregateID: provisioning.WireID("platform_role_assignment", assignment.String()), EventType: "platform_role_assignment.revoked",
-			Change: map[string]any{"status": "revoked"}}},
-	})
-	if err != nil {
-		t.Fatalf("cleanup revoke %s: %v", assignment, err)
-	}
 }
 
 // user projects one user principal; superuser gives it a backfilled
@@ -348,7 +310,7 @@ func TestGrantRefusesAMissingOrDisabledTarget(t *testing.T) {
 }
 
 func TestRevokeNeverLeavesNoActivePlatformAdmin(t *testing.T) {
-	e := getEnv(t)
+	e := isolatedEnv(t)
 	ctx := ctxT(t)
 	only := e.user(t, ctx, true, true)
 	if err := e.store.Revoke(ctx, RevokeInput{Actor: only, Principal: only, Role: PlatformAdmin}); !errors.Is(err, ErrLastPlatformAdmin) {
@@ -377,7 +339,7 @@ func TestRevokeNeverLeavesNoActivePlatformAdmin(t *testing.T) {
 
 // Two admins revoking each other at once: exactly one revoke commits.
 func TestConcurrentRevokesKeepOneActivePlatformAdmin(t *testing.T) {
-	e := getEnv(t)
+	e := isolatedEnv(t)
 	ctx := ctxT(t)
 	a := e.user(t, ctx, true, true)
 	b := e.user(t, ctx, true, true)

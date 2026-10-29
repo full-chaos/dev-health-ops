@@ -30,6 +30,9 @@ const (
 	// kindInsert puts back replay evidence the restore lost: a row of the
 	// source that the restored table lacks is inserted; an existing row is left.
 	kindInsert
+	// kindRetire moves the restored rows that pass a guard (alias t) and whose id is not in the manifest to a
+	// closed state (retireSet). It never reopens a row and never deletes one.
+	kindRetire
 	// kindTombstone disables (is_active false) and bumps token_version of the restored rows whose id is not in
 	// the manifest: a row the source deleted. It never deletes: foreign keys fan out from users.
 	kindTombstone
@@ -55,8 +58,11 @@ type section struct {
 	active  string
 	// touch sets updated_at on a changed row.
 	touch bool
-	// deleteGuard narrows what a presence section deletes: an extra predicate on the restored row (alias t).
+	// deleteGuard narrows what a presence section deletes, and selects what a retire section moves: an extra
+	// predicate on the restored row (alias t).
 	deleteGuard string
+	// retireSet is the SET clause of a retire section.
+	retireSet string
 	// manifestOnly marks a section that runs only with a manifest: with no manifest (the blind margin) nothing is
 	// known about which rows the source kept, and a presence section would remove every row.
 	manifestOnly bool
@@ -110,6 +116,12 @@ var sections = []section{
 	{name: "auth.organizations", table: "organizations", kind: kindRevoke, key: colUUID("id"),
 		cols: []column{colTS("disabled_at")}, revoked: "s.disabled_at IS NOT NULL", active: "t.disabled_at IS NULL", touch: true},
 
+	// Invites (D6459 am.1): a restored PENDING invite that the source holds as accepted or revoked, or no longer
+	// holds, ends revoked: never accepted (the membership made after T is not restored) and never pending. The
+	// export carries the source's pending ids. With no manifest (blind margin) every pending invite is revoked:
+	// fail closed, admins re-invite. An invite created after T is absent after the restore (expected).
+	{name: "auth.invites.ids", suffix: ".ids", table: "invites", kind: kindRetire, key: colUUID("id"),
+		revoked: "s.status = 'pending'", deleteGuard: "t.status = 'pending'", retireSet: "status = 'revoked', updated_at = clock_timestamp()"},
 	{name: "auth.memberships", table: "memberships", kind: kindRevoke, key: colUUID("id"),
 		cols: []column{colText("status")}, revoked: "s.status IN ('suspended', 'removed')",
 		active: "(t.status IN ('invited', 'active') OR (t.status = 'suspended' AND x.status = 'removed'))", touch: true},
@@ -243,6 +255,10 @@ SELECT (SELECT count(*) FROM u), (SELECT count(*) FROM m x WHERE NOT EXISTS (SEL
 		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s),
 i AS (INSERT INTO %s (%s) SELECT %s FROM m ON CONFLICT DO NOTHING RETURNING 1)
 SELECT (SELECT count(*) FROM i), 0::bigint`, s.recordset(), tbl, strings.Join(names, ", "), strings.Join(exprs, ", "))
+	case kindRetire:
+		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s),
+u AS (UPDATE %s t SET %s WHERE %s AND NOT EXISTS (SELECT 1 FROM m x WHERE x.%s = t.%s) RETURNING 1)
+SELECT (SELECT count(*) FROM u), 0::bigint`, s.recordset(), tbl, s.retireSet, s.deleteGuard, s.key.name, s.key.name)
 	case kindTombstone:
 		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s),
 u AS (UPDATE %s t SET is_active = false, token_version = t.token_version + 1, updated_at = clock_timestamp()

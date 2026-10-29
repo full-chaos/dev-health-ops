@@ -32,8 +32,8 @@ func TestEverySectionNamesItsTableAndKeepsAuthAndLegacySeparate(t *testing.T) {
 		if s.legacy {
 			prefix = "public."
 		}
-		if s.suffix != "" && ((s.kind != kindTombstone && s.kind != kindPresence) || s.suffix != ".ids") {
-			t.Errorf("section %q: a name suffix is allowed only as the .ids suffix of a tombstone or presence section", s.name)
+		if s.suffix != "" && ((s.kind != kindTombstone && s.kind != kindPresence && s.kind != kindRetire) || s.suffix != ".ids") {
+			t.Errorf("section %q: a name suffix is allowed only as the .ids suffix of a tombstone, presence or retire section", s.name)
 		}
 		if s.name != prefix+s.table+s.suffix {
 			t.Errorf("section %q: want the name %q", s.name, prefix+s.table+s.suffix)

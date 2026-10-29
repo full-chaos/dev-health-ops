@@ -37,7 +37,6 @@ var excluded = map[string]string{
 	// Not yet ruled: an access-removing change after the target may come back. Raised to acp with the r3 findings.
 	"auth.policy_revisions":           "NEEDS-RULING: an older active policy after a restore (the revision floor stops re-issue of a revision number only)",
 	"auth.entitlement_snapshots":      "NEEDS-RULING: an older entitlement snapshot after a restore",
-	"auth.invites":                    "NEEDS-RULING: an invite revoked or accepted after T returns pending (status, accepted_at)",
 	"public.organizations":            "NEEDS-RULING: a legacy organization deactivated after T (is_active) returns active",
 	"public.org_ip_allowlist":         "NEEDS-RULING: an allowlist entry deactivated after T (is_active) returns active",
 	"public.integrations":             "NEEDS-RULING: provider integration flags (is_active); already named not carried in RISK-NOTES",
@@ -52,6 +51,11 @@ func sectionNames() map[string]bool {
 	m := map[string]bool{floorsSection: true}
 	for _, s := range sections {
 		m[s.name] = true
+		if s.legacy {
+			m["public."+s.table] = true
+		} else {
+			m["auth."+s.table] = true
+		}
 	}
 	return m
 }

@@ -94,8 +94,12 @@ FROM auth.credential_registry WHERE id = $1 AND principal_id = $2 AND revoked_at
 		!slices.Equal(audiences, []string{"dev-health-api"}) || fingerprint != hex.EncodeToString(d[:8]) || !expires.Equal(res.ExpiresAt) {
 		t.Fatalf("row %s %s %s %v %s %s", algorithm, prefix, class, audiences, fingerprint, expires)
 	}
-	if d := time.Until(expires); d <= 50*time.Minute || d > time.Hour {
-		t.Fatalf("expires in %s, want about 1 h", d)
+	// The expiry is the insert's own clock plus the asked lifetime: between
+	// created_at + 1 h and the database's now + 1 h.
+	var lifetimeOK bool
+	if err := e.admin.QueryRow(ctx, `SELECT expires_at >= created_at + interval '1 hour' AND expires_at <= clock_timestamp() + interval '1 hour'
+FROM auth.credential_registry WHERE id = $1`, res.CredentialID).Scan(&lifetimeOK); err != nil || !lifetimeOK {
+		t.Fatalf("expires_at %s is not the insert time plus 1 h (%v)", expires, err)
 	}
 	if _, err := e.reader.ResolveBootstrap(ctx, BootstrapDigest(v), time.Now()); err != nil {
 		t.Fatalf("the created value does not resolve: %v", err)

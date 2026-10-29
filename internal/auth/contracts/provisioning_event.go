@@ -121,6 +121,12 @@ func (c *ConsumerCursor) Observe(e ProvisioningEvent) Disposition {
 	}
 }
 
+// AggregateKey is the key a ConsumerCursor keeps an aggregate's mark under.
+func AggregateKey(aggregateType, aggregateID string) string { return aggregateType + ":" + aggregateID }
+
+// ResyncTo is not implemented yet.
+func (c *ConsumerCursor) ResyncTo(key string, revision int64) {}
+
 // AuditAttributes are the allowlisted audit attributes; every schema member is
 // carried, so a parser never silently drops data the schema admits.
 type AuditAttributes struct {

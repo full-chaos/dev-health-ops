@@ -818,7 +818,7 @@ func timeoutArgs(testArgs string) []string {
 
 func TestAuthRaceIntegrationLoopShrinksTheNextTimeout(t *testing.T) {
 	t.Parallel()
-	code, errText, testArgs := runCheckGoWithFakeGo(t, []string{"auth", "race-integration"}, []string{"CHECK_GO_JOB_CAP_MIN=30", "CHECK_GO_JOB_START=" + strconv.Itoa(jobDeadlineT0), "FAKE_ADVANCE=1200"}, jobDeadlineFakeGo)
+	code, errText, testArgs := runCheckGoWithFakeGo(t, []string{"auth", "race-integration"}, []string{"CHECK_GO_JOB_CAP_MIN=30", "FAKE_ADVANCE=1200"}, jobDeadlineFakeGo)
 	got := timeoutArgs(testArgs)
 	if len(got) != 2 || got[0] != "1620s" || got[1] != "420s" {
 		t.Errorf("-timeout of the calls = %v, want [1620s 420s] (the third package has no budget left and is not started); stderr: %s", got, tail(errText, 800))
@@ -878,12 +878,12 @@ func TestIntegrationPackagesLoopShrinksTheNextTimeout(t *testing.T) {
 	at := func(sec int) string { return strconv.Itoa(jobDeadlineT0 + sec) }
 	script := "set -uo pipefail\nSCRIPT_DIR=" + dir + "\nROOT=" + dir + "\nGO_ENV_OFF=(env)\nINTEGRATION_TEST_ENV=()\n" +
 		"die() { printf 'ERROR: %s\\n' \"$1\" >&2; exit 2; }\n" + jobBudgetSnippet(t) + "\n" + s[start:end] + "\n" +
-		"CHECK_GO_NOW_EPOCH=" + at(0) + " run_integration_go_test . ./a; echo \"rc1=$?\"\n" +
+		"CHECK_GO_NOW_EPOCH=" + at(0) + " job_budget_init; CHECK_GO_NOW_EPOCH=" + at(0) + " run_integration_go_test . ./a; echo \"rc1=$?\"\n" +
 		"CHECK_GO_NOW_EPOCH=" + at(1200) + " run_integration_go_test . ./b; echo \"rc2=$?\"\n" +
 		"CHECK_GO_NOW_EPOCH=" + at(1400) + " run_integration_go_test . ./c; echo \"rc3=$?\"\n"
 	cmd := exec.Command("bash", "-c", script)
 	cmd.Env = []string{"PATH=" + bin + ":" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "TESTCONTAINERS_SESSION_ID=sessionid11794",
-		"CHECK_GO_JOB_CAP_MIN=25", "CHECK_GO_JOB_START=" + strconv.Itoa(jobDeadlineT0)}
+		"CHECK_GO_JOB_CAP_MIN=25"}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("harness: %v\n%s", err, out)
@@ -900,3 +900,16 @@ func TestIntegrationPackagesLoopShrinksTheNextTimeout(t *testing.T) {
 // deadlineEnvNames are pinned to "unset" by the helpers that run ci/check_go.sh with a stand-in go: a hosted run inherits
 // GITHUB_ACTIONS=true, and the job deadline refuses a guarded call without CHECK_GO_JOB_CAP_MIN.
 var deadlineEnvNames = []string{"GITHUB_ACTIONS", "CHECK_GO_JOB_CAP_MIN", "CHECK_GO_JOB_START", "CHECK_GO_NOW_EPOCH", "CHECK_GO_NOW_EPOCH_FILE"}
+
+// The process-group bound is min(its constant, the job budget left): with 10 s left it must not wait 1380 s (or the test override).
+func TestProvidersyncBoundShrinksWithTheJobBudget(t *testing.T) {
+	t.Parallel()
+	local := []string{"local", "env:CHECK_GO_JOB_START=" + strconv.Itoa(jobDeadlineT0), "env:CHECK_GO_NOW_EPOCH=" + strconv.Itoa(jobDeadlineT0+1310)}
+	r := runProvidersyncStep(t, "hold", "600", nil, local...)
+	if r.timedOut {
+		t.Fatal("the step hung")
+	}
+	if r.code != 124 || !strings.Contains(r.stderr, "step bound (10 s) hit") {
+		t.Errorf("rc %d (want 124); stderr must name a 10 s bound (cap 25 min - 1310 s - 3 min = 10 s): %s", r.code, tail(r.stderr, 1000))
+	}
+}

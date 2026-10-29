@@ -26,12 +26,15 @@ var oracleCIFiles = []string{
 
 const oracleStandInGo = `#!/usr/bin/env bash
 if [ "$1" != "test" ]; then exec "%s" "$@"; fi
+allargs="$*"
 pattern=""; pkg=""
 while [ "$#" -gt 0 ]; do
   case "$1" in -run) pattern="$2"; shift ;; ./*) pkg="$1" ;; esac
   shift
 done
 printf '%%s %%s\n' "${pkg}" "${pattern}" >> "${FAKE_GO_LOG}"
+if [ -n "${FAKE_GO_ARGS_LOG:-}" ]; then printf '%%s\n' "${allargs}" >> "${FAKE_GO_ARGS_LOG}"; fi
+if [ -n "${FAKE_ADVANCE:-}" ] && [ -n "${CHECK_GO_NOW_EPOCH_FILE:-}" ]; then n=$(cat "${CHECK_GO_NOW_EPOCH_FILE}"); echo $((n + FAKE_ADVANCE)) > "${CHECK_GO_NOW_EPOCH_FILE}"; fi
 if [ -n "${FAKE_GO_SLEEP:-}" ]; then sleep "${FAKE_GO_SLEEP}"; fi
 names="${pattern#^(}"; names="${names%%)\$}"
 IFS='|' read -ra list <<< "${names}"

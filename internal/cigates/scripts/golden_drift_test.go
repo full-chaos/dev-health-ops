@@ -545,3 +545,62 @@ func TestGoldenDriftRunFollowsTheJobBudget(t *testing.T) {
 		t.Errorf("no budget left: exit %d (want 2), go log %q, stderr %s", res.code, log, res.stderr)
 	}
 }
+
+// A fake go that logs its call and moves the test clock by FAKE_ADVANCE seconds, as a slow row does.
+const clockFakeGo = `#!/bin/bash
+echo "go $*" >> "${FAKE_GO_LOG}"
+n=$(cat "${CHECK_GO_NOW_EPOCH_FILE}"); echo $((n + ${FAKE_ADVANCE:-0})) > "${CHECK_GO_NOW_EPOCH_FILE}"
+echo "--- PASS: TestX (0.00s)"
+exit 0
+`
+
+// The rows of one run share ONE job start, taken in the parent shell: a child `job-timeout` call that took its own start would
+// give every row the full budget again.
+func TestGoldenDriftRowsShareOneJobStart(t *testing.T) {
+	const t0 = 1700000000
+	run := func(rows string) (cmdResult, []string, string) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "go"), []byte(clockFakeGo), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		work := t.TempDir()
+		rf := filepath.Join(work, "rows.tsv")
+		if err := os.WriteFile(rf, []byte(rows), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		clock := filepath.Join(work, "clock")
+		ghEnv := filepath.Join(work, "github_env")
+		for p, c := range map[string]string{clock: fmt.Sprint(t0), ghEnv: ""} {
+			if err := os.WriteFile(p, []byte(c), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		logf := filepath.Join(work, "go.log")
+		env := []string{"PATH=" + dir + ":/usr/bin:/bin", "FAKE_GO_LOG=" + logf, "CHECK_GO_JOB_CAP_MIN=25", "CHECK_GO_NOW_EPOCH_FILE=" + clock,
+			"FAKE_ADVANCE=1200", "GITHUB_ENV=" + ghEnv}
+		res := cmdSpec{dir: t.TempDir(), env: env}.run("bash", filepath.Join(repoRoot(t), "ci", "check_golden_drift.sh"), "run", rf)
+		raw, _ := os.ReadFile(logf)
+		var timeouts []string
+		for _, line := range strings.Split(string(raw), "\n") {
+			for _, f := range strings.Fields(line) {
+				if v, ok := strings.CutPrefix(f, "-timeout="); ok {
+					timeouts = append(timeouts, v)
+				}
+			}
+		}
+		gh, _ := os.ReadFile(ghEnv)
+		return res, timeouts, string(gh)
+	}
+	row := func(n int) string { return fmt.Sprintf("ROW\tinternal/pkg%d\t^TestA$\n", n) }
+	res, got, gh := run("VERDICT select 2 of 2\n" + row(1) + row(2))
+	if res.code != 0 || len(got) != 2 || got[0] != "1320s" || got[1] != "120s" {
+		t.Errorf("two rows: rc %d timeouts %v, want [1320s 120s]; stderr %s", res.code, got, res.stderr)
+	}
+	if strings.Count(gh, "CHECK_GO_JOB_START=") != 1 {
+		t.Errorf("GITHUB_ENV must carry the job start once, has %q", gh)
+	}
+	res, got, _ = run("VERDICT select 3 of 3\n" + row(1) + row(2) + row(3))
+	if res.code != 2 || len(got) != 2 || !strings.Contains(res.stderr, "job time budget exhausted before") {
+		t.Errorf("three rows: rc %d (want 2) timeouts %v (want the first two rows only); stderr %s", res.code, got, res.stderr)
+	}
+}

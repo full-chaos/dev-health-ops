@@ -64,10 +64,23 @@ const (
 // hard error: unlike "not configured at all", that is an operator typo
 // this binary can catch at start, the same fail-fast NewVerifier already
 // applies to the envelope's own issuer/audience.
+//
+// With AUTH_ACCESS_TOKEN_ISSUER set, the verifier also routes every edge or
+// user access token by the request's endpoint-profile row (routeEdgeVerifier),
+// and the issuer alone, with no edge secret, builds it: its validator then has
+// no HS256 verifier.
 func buildEdgeVerifierFromEnv(getenv getenvFunc, users edgeUserStore) (*principal.EdgeVerifier, error) {
 	secret, issuer, audience := edgeJWTConfigFromEnv(getenv)
-	if secret == "" {
+	access, routed, err := accessFromEnv(getenv)
+	if err != nil {
+		return nil, fmt.Errorf("build edge access-token verifier: %w", err)
+	}
+	legacyOn := secret != ""
+	if !legacyOn && !routed {
 		return nil, nil
+	}
+	if !legacyOn {
+		secret, issuer, audience = unusedEdgeSecret(), defaultEdgeJWTIssuer, defaultEdgeJWTAudience
 	}
 	// CHAOS-6290: an edge verifier that cannot read the live users row would
 	// accept the token of a deactivated user, so the secret without a store is
@@ -75,6 +88,11 @@ func buildEdgeVerifierFromEnv(getenv getenvFunc, users edgeUserStore) (*principa
 	edgeVerifier, err := principal.NewEdgeVerifier(secret, issuer, audience, users)
 	if err != nil {
 		return nil, fmt.Errorf("build edge access-token verifier: %w", err)
+	}
+	if routed {
+		if err := routeEdgeVerifier(edgeVerifier, access, legacyOn); err != nil {
+			return nil, fmt.Errorf("build edge access-token verifier: %w", err)
+		}
 	}
 	return edgeVerifier, nil
 }
@@ -95,17 +113,18 @@ type edgeUserStore = policy.Store
 // PGStore.UserState selects is_active, is_superuser and token_version only,
 // never a credential column.
 func newEdgeUserStore(getenv getenvFunc, registryPool *pgxpool.Pool) (edgeUserStore, error) {
-	if secret, _, _ := edgeJWTConfigFromEnv(getenv); secret == "" {
+	secret, _, _ := edgeJWTConfigFromEnv(getenv)
+	if secret == "" && accessTokenIssuer(getenv) == "" {
 		return nil, nil
 	}
 	if registryPool == nil {
-		return nil, fmt.Errorf("build edge users store: %s is set but the /query route (which owns the registry Postgres pool, GO_API_REGISTRY_POSTGRES_URI) is not configured; the edge token cannot be accepted without a live users check", edgeJWTSecretEnvVar)
+		return nil, fmt.Errorf("build edge users store: %s or %s is set but the /query route (which owns the registry Postgres pool, GO_API_REGISTRY_POSTGRES_URI) is not configured; an access token cannot be accepted without a live users check", edgeJWTSecretEnvVar, accessTokenIssuerEnvVar)
 	}
 	authSchema, err := policy.AuthSchemaFromEnv(getenv)
 	if err != nil {
 		return nil, fmt.Errorf("build edge users store: %w", err)
 	}
-	return policy.PGStore{Pool: registryPool, AuthSchema: authSchema}, nil
+	return newQueryAPIUserStore(policy.PGStore{Pool: registryPool, AuthSchema: authSchema}), nil
 }
 
 // edgeJWTConfigFromEnv resolves the shared GO_API_EDGE_JWT_* trio, applying
@@ -151,10 +170,23 @@ func edgeJWTConfigFromEnv(getenv getenvFunc) (secret, issuer, audience string) {
 // caller needs the same store value to do the same two checks after
 // Authenticate succeeds, without a second Postgres pool or a new exported
 // accessor on Authenticator.
+//
+// With AUTH_ACCESS_TOKEN_ISSUER set, the Authenticator routes every token by
+// the request's endpoint-profile row (routeAuthenticator), and the issuer
+// alone, with no edge secret, builds it: its validator then has no HS256
+// verifier.
 func buildQueryEdgeAuthenticatorFromEnv(getenv getenvFunc, pool *pgxpool.Pool) (*policy.Authenticator, policy.Store, error) {
 	secret, issuer, audience := edgeJWTConfigFromEnv(getenv)
-	if secret == "" {
+	access, routed, err := accessFromEnv(getenv)
+	if err != nil {
+		return nil, nil, fmt.Errorf("build query edge authenticator: %w", err)
+	}
+	legacyOn := secret != ""
+	if !legacyOn && !routed {
 		return nil, nil, nil
+	}
+	if !legacyOn {
+		secret, issuer, audience = unusedEdgeSecret(), defaultEdgeJWTIssuer, defaultEdgeJWTAudience
 	}
 	verifier, err := edgetoken.New(secret, issuer, audience)
 	if err != nil {
@@ -164,10 +196,15 @@ func buildQueryEdgeAuthenticatorFromEnv(getenv getenvFunc, pool *pgxpool.Pool) (
 	if err != nil {
 		return nil, nil, fmt.Errorf("build query edge authenticator: %w", err)
 	}
-	store := policy.PGStore{Pool: pool, AuthSchema: authSchema}
+	store := newQueryAPIUserStore(policy.PGStore{Pool: pool, AuthSchema: authSchema})
 	auth, err := policy.NewAuthenticator(verifier, store, nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("build query edge authenticator: %w", err)
+	}
+	if routed {
+		if err := routeAuthenticator(auth, access, legacyOn); err != nil {
+			return nil, nil, fmt.Errorf("build query edge authenticator: %w", err)
+		}
 	}
 	return auth, store, nil
 }

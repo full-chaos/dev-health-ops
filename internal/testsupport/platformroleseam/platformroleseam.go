@@ -125,13 +125,16 @@ func (e *Env) User(ctx context.Context, t testing.TB, publicSuperuser, assigned 
 	return e.UserWithID(ctx, t, uuid.New(), "local", publicSuperuser, assigned)
 }
 
-// UserWithID is User with the id and the public auth_provider given.
+// UserWithID is User with the id and the public auth_provider given. A public
+// row the migrated schema already seeds (the proof principals) keeps its
+// email and gets is_superuser and auth_provider.
 func (e *Env) UserWithID(ctx context.Context, t testing.TB, id uuid.UUID, provider string, publicSuperuser, assigned bool) uuid.UUID {
 	t.Helper()
 	email := fmt.Sprintf("seam-%s@example.test", id.String()[:8])
 	if _, err := e.Admin.Exec(ctx, `INSERT INTO public.users
 	(id, email, password_hash, auth_provider, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
-VALUES ($1, $2, NULL, $4, true, true, $3, 0, now(), now())`, id, email, publicSuperuser, provider); err != nil {
+VALUES ($1, $2, NULL, $4, true, true, $3, 0, now(), now())
+ON CONFLICT (id) DO UPDATE SET is_superuser = EXCLUDED.is_superuser, auth_provider = EXCLUDED.auth_provider`, id, email, publicSuperuser, provider); err != nil {
 		t.Fatalf("seed public.users: %v", err)
 	}
 	if _, err := e.store.BackfillUser(ctx, identity.BackfillTarget{ID: id, Email: email, Active: true, Verified: true, Superuser: assigned}, false); err != nil {

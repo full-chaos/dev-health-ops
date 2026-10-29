@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 )
@@ -26,5 +27,22 @@ func TestOutboxOrderSortsAcrossAggregatesAndKeepsOrderWithinOne(t *testing.T) {
 	reversed := []OutboxEvent{grantedNew, revokedOld}
 	if got := outboxOrder([]OutboxEvent{revokedOld, grantedNew}); !reflect.DeepEqual(got, reversed) {
 		t.Errorf("revoked-first caller order = %v, want the aggregate id order %v", got, reversed)
+	}
+}
+
+// Within one aggregate the caller's order holds for any number of events
+// (the sort is stable, not only for the short inputs an insertion sort takes).
+func TestOutboxOrderKeepsTheCallersOrderWithinAnAggregateAtSize(t *testing.T) {
+	var in []OutboxEvent
+	for i := 0; i < 64; i++ {
+		aggregate := []string{"usr_c", "usr_a", "usr_b"}[i%3]
+		in = append(in, OutboxEvent{AggregateType: "user", AggregateID: aggregate, EventType: fmt.Sprintf("e%02d", i)})
+	}
+	last := map[string]string{}
+	for _, e := range outboxOrder(in) {
+		if prev, ok := last[e.AggregateID]; ok && e.EventType < prev {
+			t.Fatalf("%s: %s after %s, want the caller's order", e.AggregateID, e.EventType, prev)
+		}
+		last[e.AggregateID] = e.EventType
 	}
 }

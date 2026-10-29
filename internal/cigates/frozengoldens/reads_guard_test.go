@@ -107,15 +107,16 @@ func TestTheRecorderGuardKnowsAReadByItsImportPath(t *testing.T) {
 		source string
 		read   bool
 	}{
-		"os aliased":              {"package x\nimport disk \"os\"\nfunc f(p string) ([]byte, error) { return disk.ReadFile(p) }\n", true},
-		"os/exec aliased":         {"package x\nimport run \"os/exec\"\nfunc f() error { return run.Command(\"git\").Run() }\n", true},
-		"io/fs aliased":           {"package x\nimport iofs \"io/fs\"\nfunc f(d iofs.FS) ([]byte, error) { return iofs.ReadFile(d, \"x\") }\n", true},
-		"io/ioutil aliased":       {"package x\nimport old \"io/ioutil\"\nfunc f(p string) ([]byte, error) { return old.ReadFile(p) }\n", true},
-		"path/filepath aliased":   {"package x\nimport fp \"path/filepath\"\nfunc f() ([]string, error) { return fp.Glob(\"*\") }\n", true},
-		"os dot-imported":         {"package x\nimport . \"os\"\nfunc f(p string) ([]byte, error) { return ReadFile(p) }\n", true},
-		"os by its own name":      {"package x\nimport \"os\"\nfunc f(p string) ([]byte, error) { return os.ReadFile(p) }\n", true},
-		"path/filepath join only": {"package x\nimport fp \"path/filepath\"\nfunc f() string { return fp.Join(\"a\", \"b\") }\n", false},
-		"a local named os":        {"package x\ntype t struct{ ReadFile int }\nfunc f() int { os := t{}; return os.ReadFile }\n", false},
+		"os aliased":                  {"package x\nimport disk \"os\"\nfunc f(p string) ([]byte, error) { return disk.ReadFile(p) }\n", true},
+		"os/exec aliased":             {"package x\nimport run \"os/exec\"\nfunc f() error { return run.Command(\"git\").Run() }\n", true},
+		"io/fs aliased":               {"package x\nimport iofs \"io/fs\"\nfunc f(d iofs.FS) ([]byte, error) { return iofs.ReadFile(d, \"x\") }\n", true},
+		"io/ioutil aliased":           {"package x\nimport old \"io/ioutil\"\nfunc f(p string) ([]byte, error) { return old.ReadFile(p) }\n", true},
+		"path/filepath aliased":       {"package x\nimport fp \"path/filepath\"\nfunc f() ([]string, error) { return fp.Glob(\"*\") }\n", true},
+		"os dot-imported":             {"package x\nimport . \"os\"\nfunc f(p string) ([]byte, error) { return ReadFile(p) }\n", true},
+		"os by its own name":          {"package x\nimport \"os\"\nfunc f(p string) ([]byte, error) { return os.ReadFile(p) }\n", true},
+		"path/filepath join only":     {"package x\nimport fp \"path/filepath\"\nfunc f() string { return fp.Join(\"a\", \"b\") }\n", false},
+		"a local named os":            {"package x\ntype t struct{ ReadFile int }\nfunc f() int { os := t{}; return os.ReadFile }\n", false},
+		"a local shadowing an import": {"package x\nimport \"path/filepath\"\ntype t struct{ Glob int }\nfunc f() int { _ = filepath.Join(\"a\"); filepath := t{}; return filepath.Glob }\n", false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			problems, err := unrecordedReads("planted.go", []byte(cell.source))

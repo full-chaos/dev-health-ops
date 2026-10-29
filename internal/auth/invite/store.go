@@ -1,10 +1,12 @@
 package invite
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -181,6 +183,32 @@ func authorize(ctx context.Context, tx audit.TxOps, auth Authorize, orgID uuid.U
 	return nil
 }
 
+// lockActor takes the actor's rows FOR UPDATE in steps 1 and 2 of the
+// membership lock order, before the organization row: every auth.principals
+// row, then every public.users row, each in id order. Authorize then reads the
+// actor's account and role as they stay until the commit: a demotion, a
+// disable or a superuser change of the actor commits before it or waits for
+// the verb. A missing row is no refusal here (Authorize decides on the actor).
+func (s *Store) lockActor(ctx context.Context, tx audit.TxOps, ids ...*uuid.UUID) error {
+	seen := map[uuid.UUID]bool{}
+	var order []uuid.UUID
+	for _, id := range ids {
+		if id != nil && !seen[*id] {
+			seen[*id] = true
+			order = append(order, *id)
+		}
+	}
+	sort.Slice(order, func(i, j int) bool { return bytes.Compare(order[i][:], order[j][:]) < 0 })
+	for _, table := range []string{s.q + ".principals", "public.users"} {
+		for _, id := range order {
+			if _, err := tx.Exec(ctx, `SELECT 1 FROM `+table+` WHERE id = $1 FOR UPDATE`, id); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // lockOrg takes the organization row FOR SHARE (step 3 of the membership lock
 // order). A missing or suspended organization is named only to an actor
 // Authorize accepts; any other actor gets ErrDenied.
@@ -249,6 +277,9 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (*Created, error) {
 	expires := now.Add(ttl)
 	err = s.run(ctx, verbCreate, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			if err := s.lockActor(ctx, tx, in.Actor.PrincipalID, &in.InvitedBy); err != nil {
+				return err
+			}
 			if err := s.lockOrg(ctx, tx, in.OrgID, in.Authorize); err != nil {
 				return err
 			}
@@ -491,6 +522,9 @@ func (s *Store) Revoke(ctx context.Context, in RevokeInput) error {
 	}
 	return s.run(ctx, verbRevoke, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			if err := s.lockActor(ctx, tx, in.Actor.PrincipalID); err != nil {
+				return err
+			}
 			if err := s.lockOrg(ctx, tx, in.OrgID, in.Authorize); err != nil {
 				return err
 			}

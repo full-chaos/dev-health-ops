@@ -20,14 +20,17 @@ const (
 type systemLogSpec struct {
 	off  bool
 	days int
+	// partition is the partition_by a kept table must carry: with the server default (monthly) a one-day TTL with
+	// ttl_only_drop_parts=1 could only drop a part once the whole month part had expired. Empty means none (the default).
+	partition string
 }
 
 // systemLogSpecs: the bigboy compose ClickHouse filled 82 GB in system log tables (processors_profile_log, text_log,
 // query_log, trace_log). Every log table the image can create is listed. query_log and error_log stay, for one day: diagnosis
 // and `dho audit perf` read system.query_log. crash_log is tiny and keeps its week.
 var systemLogSpecs = map[string]systemLogSpec{
-	"query_log":                    {days: 1},
-	"error_log":                    {days: 1},
+	"query_log":                    {days: 1, partition: dayPartition},
+	"error_log":                    {days: 1, partition: dayPartition},
 	"crash_log":                    {days: 7},
 	"processors_profile_log":       {off: true},
 	"text_log":                     {off: true},
@@ -48,7 +51,13 @@ var systemLogSpecs = map[string]systemLogSpec{
 	"s3queue_log":                  {off: true},
 	"blob_storage_log":             {off: true},
 	"transactions_info_log":        {off: true},
+	"instrumentation_trace_log":    {off: true},
+	"iceberg_metadata_log":         {off: true},
+	"delta_lake_metadata_log":      {off: true},
+	"zookeeper_connection_log":     {off: true},
 }
+
+const dayPartition = "toYYYYMMDD(event_date)"
 
 type systemLogConfig struct {
 	Tables []struct {
@@ -56,6 +65,7 @@ type systemLogConfig struct {
 		Attrs    []xml.Attr `xml:",any,attr"`
 		TTL      string     `xml:"ttl"`
 		Level    string     `xml:"level"`
+		Part     string     `xml:"partition_by"`
 		Settings struct {
 			Inner string `xml:",innerxml"`
 		} `xml:"settings"`
@@ -64,13 +74,14 @@ type systemLogConfig struct {
 
 var systemLogTTL = regexp.MustCompile(`^event_date \+ INTERVAL (\d+) DAY DELETE$`)
 
-func hasRemoveAttr(attrs []xml.Attr) bool {
+// removeAttr returns the value of the remove attribute and whether it is present.
+func removeAttr(attrs []xml.Attr) (string, bool) {
 	for _, a := range attrs {
 		if a.Name.Local == "remove" {
-			return true
+			return a.Value, true
 		}
 	}
-	return false
+	return "", false
 }
 
 func systemLogsFindings(text []byte) ([]string, error) {
@@ -98,16 +109,21 @@ func systemLogsFindings(text []byte) ([]string, error) {
 			continue
 		}
 		if want.off {
-			if !hasRemoveAttr(table.Attrs) {
+			if value, present := removeAttr(table.Attrs); !present {
 				findings = append(findings, fmt.Sprintf("%s: no remove attribute, the table must stay off", name))
+			} else if value != "1" {
+				findings = append(findings, fmt.Sprintf("%s: remove=%q, want remove=\"1\"", name, value))
 			}
 			if strings.TrimSpace(table.TTL) != "" || strings.TrimSpace(table.Settings.Inner) != "" {
 				findings = append(findings, fmt.Sprintf("%s: off but carries a ttl or settings", name))
 			}
 			continue
 		}
-		if hasRemoveAttr(table.Attrs) {
+		if _, present := removeAttr(table.Attrs); present {
 			findings = append(findings, fmt.Sprintf("%s: must stay on (diagnosis reads it), it carries a remove attribute", name))
+		}
+		if strings.TrimSpace(table.Part) != want.partition {
+			findings = append(findings, fmt.Sprintf("%s: partition_by %q, want %q", name, table.Part, want.partition))
 		}
 		match := systemLogTTL.FindStringSubmatch(strings.TrimSpace(table.TTL))
 		if match == nil || match[1] != fmt.Sprint(want.days) {
@@ -157,7 +173,11 @@ func goodSystemLogs() string {
 			fmt.Fprintf(&b, `<%s remove="1"/>`, name)
 			continue
 		}
-		fmt.Fprintf(&b, `<%s><ttl>event_date + INTERVAL %d DAY DELETE</ttl><settings>ttl_only_drop_parts=1</settings></%s>`, name, spec.days, name)
+		part := ""
+		if spec.partition != "" {
+			part = "<partition_by>" + spec.partition + "</partition_by>"
+		}
+		fmt.Fprintf(&b, `<%s>%s<ttl>event_date + INTERVAL %d DAY DELETE</ttl><settings>ttl_only_drop_parts=1</settings></%s>`, name, part, spec.days, name)
 	}
 	b.WriteString("</clickhouse>")
 	return b.String()
@@ -179,7 +199,7 @@ func TestSystemLogsCheckSeesEachDefect(t *testing.T) {
 	if !strings.Contains(strings.Join(empty, "\n"), "query_log: no entry") || !strings.Contains(strings.Join(empty, "\n"), "logger: no entry") {
 		t.Fatalf("an empty file passed: %v", empty)
 	}
-	query := `<query_log><ttl>event_date + INTERVAL 1 DAY DELETE</ttl><settings>ttl_only_drop_parts=1</settings></query_log>`
+	query := `<query_log><partition_by>toYYYYMMDD(event_date)</partition_by><ttl>event_date + INTERVAL 1 DAY DELETE</ttl><settings>ttl_only_drop_parts=1</settings></query_log>`
 	for name, plant := range map[string]struct{ old, new, want string }{
 		"an off table written on": {`<text_log remove="1"/>`, `<text_log><ttl>event_date + INTERVAL 3 DAY DELETE</ttl><settings>ttl_only_drop_parts=1</settings></text_log>`, "text_log: no remove attribute"},
 		"remove missing":          {`<trace_log remove="1"/>`, `<trace_log/>`, "trace_log: no remove attribute"},
@@ -188,6 +208,11 @@ func TestSystemLogsCheckSeesEachDefect(t *testing.T) {
 		"query_log turned off":    {query, `<query_log remove="1"/>`, "query_log: must stay on"},
 		"query_log no drop parts": {query, strings.Replace(query, "<settings>ttl_only_drop_parts=1</settings>", "", 1), "query_log: no ttl_only_drop_parts"},
 		"error_log missing":       {strings.ReplaceAll(query, "query_log", "error_log"), "", "error_log: no entry"},
+		"monthly partition":       {"<partition_by>toYYYYMMDD(event_date)</partition_by><ttl>event_date + INTERVAL 1 DAY DELETE</ttl><settings>ttl_only_drop_parts=1</settings></query_log>", "<ttl>event_date + INTERVAL 1 DAY DELETE</ttl><settings>ttl_only_drop_parts=1</settings></query_log>", "query_log: partition_by"},
+		"wrong partition":         {"<partition_by>toYYYYMMDD(event_date)</partition_by><ttl>event_date + INTERVAL 1 DAY DELETE</ttl><settings>ttl_only_drop_parts=1</settings></error_log>", "<partition_by>toYYYYMM(event_date)</partition_by><ttl>event_date + INTERVAL 1 DAY DELETE</ttl><settings>ttl_only_drop_parts=1</settings></error_log>", "error_log: partition_by"},
+		"crash_log partitioned":   {"<crash_log><ttl>", "<crash_log><partition_by>toYYYYMMDD(event_date)</partition_by><ttl>", "crash_log: partition_by"},
+		"remove zero":             {`<iceberg_metadata_log remove="1"/>`, `<iceberg_metadata_log remove="0"/>`, `iceberg_metadata_log: remove="0"`},
+		"remove other word":       {`<zookeeper_connection_log remove="1"/>`, `<zookeeper_connection_log remove="remove"/>`, `zookeeper_connection_log: remove="remove"`},
 		"trace level":             {"<level>warning</level>", "<level>trace</level>", `logger: level "trace"`},
 		"no logger":               {"<logger><level>warning</level></logger>", "", "logger: no entry"},
 		"listed twice":            {"</clickhouse>", `<metric_log remove="1"/></clickhouse>`, "metric_log: listed twice"},

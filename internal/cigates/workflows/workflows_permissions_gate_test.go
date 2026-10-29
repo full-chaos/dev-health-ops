@@ -73,6 +73,20 @@ var jobPermAllowlist = map[jobKey]jobPermRow{
 	{"venue-oracles.yml", "*"}:                     {map[string]string{"contents": "read", "actions": "read", "packages": "read"}, "the jobs without a block inherit the workflow-level grant (see its workflow row); each must keep inheriting exactly this map"},
 }
 
+// wildcardJobs: for each wildcard row, the exact set of jobs without a block of their own that inherit the workflow map. A new
+// inheriting job is not approved by the row; it needs an entry here (or a block and a row of its own), and an entry whose job is
+// gone, has its own block or no longer inherits is refused.
+var wildcardJobs = map[string][]string{
+	"arc-runner-image.yml":         {"build"},
+	"docker-images.yml":            {"changes", "go-build", "dind-smoke-test", "go-build-dho-arm64", "go-api-tools-build", "fan-in-latest"},
+	"freeze-provider-worlds.yml":   {"freeze"},
+	"go-quality.yml":               {"go-quality-leg", "go-quality"},
+	"go-workers-compose-proof.yml": {"go-workers-compose-proof"},
+	"go.yml":                       {"go-arm64-numeric-parity", "dind-smoke-test", "go-storage-integration-shard", "go-golden-drift", "go-container-build", "go-container-smoke", "go-container-security", "go-container-reproducibility", "go-container-reproducibility-self-hosted", "go-auth-compose-proof", "go-auth-web-proxy-proof", "graphql-wire-parity", "go-queue-gate"},
+	"venue-oracles-changed.yml":    {"venue-oracles-changed"},
+	"venue-oracles.yml":            {"venue-oracles", "auth-corpus-external"},
+}
+
 var persistAllowlist = map[jobKey]string{
 	{"arc-runner-image.yml", "build"}:           "publishing job; follow-up: persist-credentials: false",
 	{"auto-release.yml", "tag-and-release"}:     "pushes the release tag with the persisted token; check before changing",
@@ -113,7 +127,7 @@ func hasWrite(m map[string]string) bool {
 	return false
 }
 
-func permissionsDefects(t *testing.T, root string, wfAllow []permRow, jobAllow map[jobKey]jobPermRow, persistAllow map[jobKey]string) []string {
+func permissionsDefects(t *testing.T, root string, wfAllow []permRow, jobAllow map[jobKey]jobPermRow, inherit map[string][]string, persistAllow map[jobKey]string) []string {
 	t.Helper()
 	var out []string
 	allowed := map[string]permRow{}
@@ -122,6 +136,7 @@ func permissionsDefects(t *testing.T, root string, wfAllow []permRow, jobAllow m
 	}
 	seenWf := map[string]bool{}
 	seenJob := map[jobKey]bool{}
+	inheriting := map[string]map[string]bool{}
 	seenPersist := map[jobKey]bool{}
 	for _, name := range workflowNames(t, root) {
 		seenWf[name] = true
@@ -166,6 +181,17 @@ func permissionsDefects(t *testing.T, root string, wfAllow []permRow, jobAllow m
 				case !jPresent:
 					if row, ok = jobAllow[jobKey{name, "*"}]; ok {
 						seenJob[jobKey{name, "*"}] = true
+						if inheriting[name] == nil {
+							inheriting[name] = map[string]bool{}
+						}
+						inheriting[name][j] = true
+						listed := false
+						for _, l := range inherit[name] {
+							listed = listed || l == j
+						}
+						if !listed {
+							out = append(out, fmt.Sprintf("%s job %s: inherits effective permissions %v but is not in the job list of its wildcard row", name, j, eff))
+						}
 					}
 				}
 				switch {
@@ -203,6 +229,26 @@ func permissionsDefects(t *testing.T, root string, wfAllow []permRow, jobAllow m
 			out = append(out, r.file+": allowlist row without a reason")
 		}
 	}
+	files := make([]string, 0, len(inherit))
+	for f := range inherit {
+		files = append(files, f)
+	}
+	sort.Strings(files)
+	for _, f := range files {
+		if _, ok := jobAllow[jobKey{f, "*"}]; !ok {
+			out = append(out, f+": a job list without a wildcard row")
+		}
+		for _, j := range inherit[f] {
+			if !inheriting[f][j] {
+				out = append(out, fmt.Sprintf("%s: the wildcard row lists job %s, which has no inheriting job of that name", f, j))
+			}
+		}
+	}
+	for k := range jobAllow {
+		if k.job == "*" && len(inherit[k.file]) == 0 {
+			out = append(out, k.file+": a wildcard row without a job list")
+		}
+	}
 	for k, row := range jobAllow {
 		if !seenJob[k] {
 			out = append(out, fmt.Sprintf("%s job %s: stale job allowlist row, no job has these effective permissions under this key", k.file, k.job))
@@ -232,7 +278,7 @@ func allWorkflowFiles(t *testing.T, root string) []string {
 }
 
 func TestWorkflowPermissionsGateHoldsOnTheRealTree(t *testing.T) {
-	d := permissionsDefects(t, rootOf(t), workflowPermAllowlist, jobPermAllowlist, persistAllowlist)
+	d := permissionsDefects(t, rootOf(t), workflowPermAllowlist, jobPermAllowlist, wildcardJobs, persistAllowlist)
 	if len(d) > 0 {
 		t.Fatalf("%s", strings.Join(d, "\n"))
 	}
@@ -267,7 +313,7 @@ func TestWorkflowPermissionsGateRefusesEachDefectClass(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			tmp := plantTree(t, root, files, c.m)
-			d := strings.Join(permissionsDefects(t, tmp, workflowPermAllowlist, jobPermAllowlist, persistAllowlist), "\n")
+			d := strings.Join(permissionsDefects(t, tmp, workflowPermAllowlist, jobPermAllowlist, wildcardJobs, persistAllowlist), "\n")
 			if !strings.Contains(d, c.want) {
 				t.Errorf("want %q in:\n%s", c.want, d)
 			}
@@ -275,28 +321,28 @@ func TestWorkflowPermissionsGateRefusesEachDefectClass(t *testing.T) {
 	}
 	t.Run("the mirror checkout persists credentials", func(t *testing.T) {
 		tmp := plantTree(t, root, files, mutation{mirror, "          persist-credentials: false\n", allMarker})
-		d := strings.Join(permissionsDefects(t, tmp, workflowPermAllowlist, jobPermAllowlist, persistAllowlist), "\n")
+		d := strings.Join(permissionsDefects(t, tmp, workflowPermAllowlist, jobPermAllowlist, wildcardJobs, persistAllowlist), "\n")
 		if !strings.Contains(d, "mirror-test-images.yml job mirror: checkout in a job that can write must set persist-credentials: false") {
 			t.Errorf("not caught:\n%s", d)
 		}
 	})
 	t.Run("a stale or wrong allowlist row", func(t *testing.T) {
 		stale := append([]permRow{{"test.yml", map[string]string{"contents": "write"}, "x"}}, workflowPermAllowlist...)
-		if d := strings.Join(permissionsDefects(t, root, stale, jobPermAllowlist, persistAllowlist), "\n"); !strings.Contains(d, "test.yml: stale allowlist row") {
+		if d := strings.Join(permissionsDefects(t, root, stale, jobPermAllowlist, wildcardJobs, persistAllowlist), "\n"); !strings.Contains(d, "test.yml: stale allowlist row") {
 			t.Errorf("stale row not caught:\n%s", d)
 		}
 		gone := append([]permRow{{"no-such.yml", map[string]string{}, "x"}}, workflowPermAllowlist...)
-		if d := strings.Join(permissionsDefects(t, root, gone, jobPermAllowlist, persistAllowlist), "\n"); !strings.Contains(d, "no-such.yml: allowlisted workflow does not exist") {
+		if d := strings.Join(permissionsDefects(t, root, gone, jobPermAllowlist, wildcardJobs, persistAllowlist), "\n"); !strings.Contains(d, "no-such.yml: allowlisted workflow does not exist") {
 			t.Errorf("missing workflow not caught:\n%s", d)
 		}
 		wrong := append([]permRow(nil), workflowPermAllowlist...)
 		wrong[0] = permRow{wrong[0].file, map[string]string{"contents": "read"}, wrong[0].reason}
-		if d := strings.Join(permissionsDefects(t, root, wrong, jobPermAllowlist, persistAllowlist), "\n"); !strings.Contains(d, "differ from the allowlisted") {
+		if d := strings.Join(permissionsDefects(t, root, wrong, jobPermAllowlist, wildcardJobs, persistAllowlist), "\n"); !strings.Contains(d, "differ from the allowlisted") {
 			t.Errorf("a map that differs from its row not caught:\n%s", d)
 		}
 		noReason := append([]permRow(nil), workflowPermAllowlist...)
 		noReason[0] = permRow{noReason[0].file, noReason[0].want, " "}
-		if d := strings.Join(permissionsDefects(t, root, noReason, jobPermAllowlist, persistAllowlist), "\n"); !strings.Contains(d, "without a reason") {
+		if d := strings.Join(permissionsDefects(t, root, noReason, jobPermAllowlist, wildcardJobs, persistAllowlist), "\n"); !strings.Contains(d, "without a reason") {
 			t.Errorf("a row without a reason not caught:\n%s", d)
 		}
 		withJob := func(k jobKey, row jobPermRow) map[jobKey]jobPermRow {
@@ -319,7 +365,32 @@ func TestWorkflowPermissionsGateRefusesEachDefectClass(t *testing.T) {
 			"a job row whose map differs from the effective map":        {withJob(jobKey{"mirror-test-images.yml", "mirror"}, jobPermRow{map[string]string{"contents": "read", "packages": "read"}, "x"}), "differ from the allowlisted"},
 			"a wildcard row whose map differs from the inherited map":   {withJob(jobKey{"go.yml", "*"}, jobPermRow{map[string]string{"contents": "read"}, "x"}), "differ from the allowlisted"},
 		} {
-			if d := strings.Join(permissionsDefects(t, root, workflowPermAllowlist, c.rows, persistAllowlist), "\n"); !strings.Contains(d, c.want) {
+			if d := strings.Join(permissionsDefects(t, root, workflowPermAllowlist, c.rows, wildcardJobs, persistAllowlist), "\n"); !strings.Contains(d, c.want) {
+				t.Errorf("%s not caught (want %q):\n%s", name, c.want, d)
+			}
+		}
+		withList := func(f string, jobs []string) map[string][]string {
+			m := map[string][]string{}
+			for k, v := range wildcardJobs {
+				m[k] = v
+			}
+			if jobs == nil {
+				delete(m, f)
+			} else {
+				m[f] = jobs
+			}
+			return m
+		}
+		for name, c := range map[string]struct {
+			inherit map[string][]string
+			want    string
+		}{
+			"a listed job that does not exist":            {withList("go.yml", append(append([]string(nil), wildcardJobs["go.yml"]...), "no-such-job")), "go.yml: the wildcard row lists job no-such-job, which has no inheriting job of that name"},
+			"a job list for a workflow without a row":     {withList("test.yml", []string{"changes"}), "test.yml: a job list without a wildcard row"},
+			"a wildcard row without a job list":           {withList("go.yml", nil), "go.yml: a wildcard row without a job list"},
+			"an inheriting job missing from the job list": {withList("go.yml", wildcardJobs["go.yml"][1:]), "is not in the job list of its wildcard row"},
+		} {
+			if d := strings.Join(permissionsDefects(t, root, workflowPermAllowlist, jobPermAllowlist, c.inherit, persistAllowlist), "\n"); !strings.Contains(d, c.want) {
 				t.Errorf("%s not caught (want %q):\n%s", name, c.want, d)
 			}
 		}
@@ -327,7 +398,7 @@ func TestWorkflowPermissionsGateRefusesEachDefectClass(t *testing.T) {
 		for k, v := range persistAllowlist {
 			pers[k] = v
 		}
-		if d := strings.Join(permissionsDefects(t, root, workflowPermAllowlist, jobPermAllowlist, pers), "\n"); !strings.Contains(d, "stale persist-credentials allowlist row") {
+		if d := strings.Join(permissionsDefects(t, root, workflowPermAllowlist, jobPermAllowlist, wildcardJobs, pers), "\n"); !strings.Contains(d, "stale persist-credentials allowlist row") {
 			t.Errorf("stale persist row not caught:\n%s", d)
 		}
 	})

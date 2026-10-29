@@ -36,13 +36,8 @@ var excluded = map[string]string{
 	"public.billing_plans":          "not access-bearing: billing catalogue",
 	"public.billing_prices":         "not access-bearing: billing catalogue",
 	// Follow-up 11872 (D6459 am.1).
-	"auth.policy_revisions":           "not access-bearing today: dormant, insert-only, no code reads or writes it (ADR-05/07); a reader needs a fence section (the tripwire test enforces it)",
-	"auth.entitlement_snapshots":      "not access-bearing today: dormant, insert-only, no code reads or writes it (ADR-05/07); a reader needs a fence section (the tripwire test enforces it)",
-	"public.organizations":            "ticket 11872 (High; blocks the first prod fence apply): a legacy organization deactivated after T (is_active) returns active; prod is phase 2, so this is the org state go-api reads today",
-	"public.org_ip_allowlist":         "ticket 11872 (High; blocks the first prod fence apply): an allowlist entry deactivated after T (is_active) returns active",
-	"public.integrations":             "ticket 11872 (High): provider integration flags (is_active)",
-	"public.integration_credentials":  "ticket 11872 (High): provider credential flags (is_active)",
-	"public.github_app_installations": "ticket 11872 (High): provider installation flag (suspended_at), the same class as integrations",
+	"auth.policy_revisions":      "not access-bearing today: dormant, insert-only, no code reads or writes it (ADR-05/07); a reader needs a fence section (the tripwire test enforces it)",
+	"auth.entitlement_snapshots": "not access-bearing today: dormant, insert-only, no code reads or writes it (ADR-05/07); a reader needs a fence section (the tripwire test enforces it)",
 }
 
 // accessStateColumns are the columns that carry an access-removing state in the legacy public schema.

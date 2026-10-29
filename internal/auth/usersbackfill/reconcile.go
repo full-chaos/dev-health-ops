@@ -56,6 +56,10 @@ const (
 	DiffIdentityMissing  = "identity_missing"
 	DiffIdentityConflict = "identity_conflict"
 	DiffExtraIdentity    = "extra_identity_in_auth"
+	// DiffMembershipInactiveInPublic counts auth memberships that are not
+	// active while public.memberships holds the member: go-api would still
+	// grant the membership.
+	DiffMembershipInactiveInPublic = "membership_inactive_in_public"
 )
 
 // GatedClasses lists every class the gate counts, in report order: the diff
@@ -63,7 +67,7 @@ const (
 var GatedClasses = []string{
 	DiffMissingInAuth, DiffExtraInAuth, DiffPrincipalKind, DiffEmail, DiffActive, DiffVerified,
 	DiffPasswordHash, DiffPlatformRole, DiffTokenVersion, DiffIdentityMissing, DiffIdentityConflict, DiffExtraIdentity,
-	SkipUnknownHashFormat, SkipInvalidIdentity,
+	SkipUnknownHashFormat, SkipInvalidIdentity, DiffMembershipInactiveInPublic,
 }
 
 // Reconciliation is the outcome of a read-only comparison of public.users with
@@ -91,6 +95,15 @@ type Reconciliation struct {
 	// SSOSubjectUnverifiable counts the not-carried accounts of the sso_subject_unverifiable bucket
 	// (SubjectUnverifiable). Printed, never gated.
 	SSOSubjectUnverifiable int
+
+	// Membership counts of the auth principals of kind user, printed and never
+	// gated: an active auth membership with no public row (go-api removes a
+	// member in public.memberships only), a public membership with no auth row,
+	// and an active pair whose roles differ (go-api changes a role in public
+	// only).
+	MembershipPublicMissing int
+	MembershipAuthMissing   int
+	MembershipRoleDiff      int
 }
 
 // GatedTotal is the number of gated diffs: zero is the gate.
@@ -121,6 +134,9 @@ func (r Reconciliation) Lines() []string {
 		fmt.Sprintf("info.sso_identity_unmatched=%d", r.SSOIdentityUnmatched),
 		fmt.Sprintf("info.sso_identity_relink_pending=%d", r.SSORelinkPending),
 		fmt.Sprintf("info.sso_subject_unverifiable=%d", r.SSOSubjectUnverifiable),
+		fmt.Sprintf("info.membership_public_missing=%d", r.MembershipPublicMissing),
+		fmt.Sprintf("info.membership_auth_missing=%d", r.MembershipAuthMissing),
+		fmt.Sprintf("info.membership_role_diff=%d", r.MembershipRoleDiff),
 	)
 	return lines
 }

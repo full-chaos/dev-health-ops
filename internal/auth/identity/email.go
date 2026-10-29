@@ -5,6 +5,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity/emailvalidator"
 )
@@ -34,6 +35,16 @@ func NormalizeEmail(raw string) (string, error) {
 // real one is no mailbox of ours. Local sign-in keeps NormalizeEmail.
 func NormalizeFederatedEmail(raw string) (string, error) {
 	if strings.ContainsRune(raw, utf8.RuneError) {
+		return "", ErrInvalidEmail
+	}
+	return NormalizeEmail(raw)
+}
+
+// NormalizeLocalRegisterEmail is NormalizeEmail for an address a new local account is created with: it also refuses
+// the forms the register routes refuse (pyjson.ClassEmail: U+FFFD, control characters, a lone surrogate), so a caller
+// that skips the route validator cannot store them. Sign-in keeps NormalizeEmail: a stored address must still log in.
+func NormalizeLocalRegisterEmail(raw string) (string, error) {
+	if pyjson.BadTextForm(pyjson.ClassEmail, raw) != pyjson.TextFormNone {
 		return "", ErrInvalidEmail
 	}
 	return NormalizeEmail(raw)

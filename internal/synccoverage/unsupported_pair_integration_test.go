@@ -62,7 +62,7 @@ func seedFailedWindowFixture(t *testing.T, ctx context.Context, pool *pgxpool.Po
 
 // assertProjection checks the rebuilt payload: whether incidents is advertised as a dataset carrying a gap or failed
 // range and as a backfill window, and that commits (supported, successfully synced) is healthy and unchanged.
-func assertProjection(t *testing.T, raw json.RawMessage, now time.Time, wantIncidents bool) {
+func assertProjection(t *testing.T, raw json.RawMessage, now time.Time, sourceID uuid.UUID, wantIncidents bool) {
 	t.Helper()
 	var payload struct {
 		Overall struct {
@@ -74,20 +74,32 @@ func assertProjection(t *testing.T, raw json.RawMessage, now time.Time, wantInci
 			Status         string `json:"status"`
 			CoveredThrough string `json:"covered_through"`
 			Gaps           []any  `json:"gaps"`
-			FailedRanges   []any  `json:"failed_ranges"`
+			FailedRanges   []struct {
+				Since  string `json:"since"`
+				Before string `json:"before"`
+			} `json:"failed_ranges"`
 		} `json:"datasets"`
 		BackfillWindows []struct {
+			Since       string   `json:"since"`
+			Before      string   `json:"before"`
+			SourceIDs   []string `json:"source_ids"`
 			DatasetKeys []string `json:"dataset_keys"`
 		} `json:"backfill_windows"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		t.Fatal(err)
 	}
+	wantSince, wantBefore := isoTime(now.Add(-240*time.Hour)), isoTime(now.Add(-120*time.Hour))
 	incidentsRanges, commitsFound := false, false
 	for _, dataset := range payload.Datasets {
 		switch dataset.DatasetKey {
 		case "incidents":
-			incidentsRanges = len(dataset.Gaps)+len(dataset.FailedRanges) > 0
+			for _, failed := range dataset.FailedRanges {
+				incidentsRanges = incidentsRanges || (failed.Since == wantSince && failed.Before == wantBefore)
+			}
+			if wantIncidents && dataset.Status != "failed" {
+				t.Errorf("incidents status = %q, want failed", dataset.Status)
+			}
 			if !wantIncidents {
 				t.Errorf("projection carries an incidents dataset: %+v", dataset)
 			}
@@ -104,11 +116,17 @@ func assertProjection(t *testing.T, raw json.RawMessage, now time.Time, wantInci
 	incidentsWindow := false
 	for _, window := range payload.BackfillWindows {
 		for _, key := range window.DatasetKeys {
-			incidentsWindow = incidentsWindow || key == "incidents"
+			if key != "incidents" {
+				continue
+			}
+			if len(window.SourceIDs) != 1 || window.SourceIDs[0] != sourceID.String() {
+				t.Errorf("incidents backfill window source_ids = %v, want [%s]", window.SourceIDs, sourceID)
+			}
+			incidentsWindow = incidentsWindow || (window.Since == wantSince && window.Before == wantBefore)
 		}
 	}
 	if wantIncidents && (!incidentsRanges || !incidentsWindow) {
-		t.Errorf("incidents gap/failed range=%t backfill window=%t, want both\npayload: %s", incidentsRanges, incidentsWindow, raw)
+		t.Errorf("incidents failed range=%t exact backfill window=%t over %s..%s, want both\npayload: %s", incidentsRanges, incidentsWindow, wantSince, wantBefore, raw)
 	}
 	if !wantIncidents {
 		if incidentsWindow {
@@ -165,14 +183,14 @@ func TestProjectorDropsProviderDatasetPairsTheProviderDoesNotSupport(t *testing.
 			if err != nil {
 				t.Fatal(err)
 			}
-			assertProjection(t, raw, now, tc.wantIncidents)
+			assertProjection(t, raw, now, fixture.SourceID, tc.wantIncidents)
 			// The admin API serves the stored row at the current lookback and version, so that row must carry the same payload.
 			var stored json.RawMessage
 			if err := pool.QueryRow(ctx, `SELECT payload FROM sync_coverage_projections WHERE org_id=$1 AND sync_config_id=$2 AND history_lookback_days=$3 AND projection_version=$4`,
 				fixture.OrgID, fixture.ConfigID, HistoryLookbackDays, projectionVersion).Scan(&stored); err != nil {
 				t.Fatal(err)
 			}
-			assertProjection(t, stored, now, tc.wantIncidents)
+			assertProjection(t, stored, now, fixture.SourceID, tc.wantIncidents)
 			var returned, persisted any
 			if err := json.Unmarshal(raw, &returned); err != nil {
 				t.Fatal(err)

@@ -76,7 +76,7 @@ VALUES ($1, $2, $3, $4, 'running', '2026-01-01', '2026-01-02')`,
 	// A real earlier sync stamped the configuration: a no-op run must leave it, not merely leave a NULL as NULL.
 	if _, err := pool.Exec(ctx, `UPDATE sync_configurations
 SET last_sync_at=$2, last_sync_success=TRUE, last_sync_error=NULL, last_sync_stats='{"units":7}'::json WHERE id=$1`,
-		finalizeTestSyncConfig, time.Date(2026, time.October, 1, 6, 0, 0, 0, time.UTC)); err != nil {
+		finalizeTestSyncConfig, time.Now().UTC().Add(-48*time.Hour).Truncate(time.Second)); err != nil {
 		t.Fatal(err)
 	}
 

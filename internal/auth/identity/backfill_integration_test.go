@@ -276,6 +276,31 @@ func TestBackfillReplacesAnExpiredAssignmentOfASuperuser(t *testing.T) {
 			"pra_"+expired.String()); n != 1 {
 			t.Fatalf("%s: revoked events for the expired row = %d, want 1", name, n)
 		}
+		// The replace's two events are on two aggregates: each one's revision
+		// is contiguous on its own aggregate (the consumer contract). Their
+		// order across the two aggregates is the aggregate id order, not
+		// asserted here.
+		var replacement uuid.UUID
+		if err := e.admin.QueryRow(ctx, `SELECT id FROM auth.platform_role_assignments WHERE principal_id = $1 AND granted_by IS NULL
+			AND expires_at IS NULL`, target.ID).Scan(&replacement); err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range []struct {
+			aggregate, event string
+			revision         int
+		}{
+			{"pra_" + expired.String(), "platform_role_assignment.revoked", 2},
+			{"pra_" + replacement.String(), "platform_role_assignment.granted", 1},
+		} {
+			if got := e.count(t, ctx, `SELECT (payload->>'revision')::int FROM auth.auth_outbox_events WHERE aggregate_id = $1 AND event_type = $2`,
+				c.aggregate, c.event); got != c.revision {
+				t.Errorf("%s: %s %s at revision %d, want %d", name, c.aggregate, c.event, got, c.revision)
+			}
+			if got := e.count(t, ctx, `SELECT revision FROM auth.aggregate_revisions WHERE aggregate_type = 'platform_role_assignment' AND aggregate_id = $1`,
+				c.aggregate); got != c.revision {
+				t.Errorf("%s: %s revision row = %d, want %d", name, c.aggregate, got, c.revision)
+			}
+		}
 		if res, err := e.store.BackfillUser(ctx, target, false); err != nil || res != (BackfillResult{}) {
 			t.Fatalf("%s: rerun wrote something: %+v %v", name, res, err)
 		}

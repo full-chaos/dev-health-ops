@@ -385,8 +385,8 @@ func TestOrgsBackfillFillsInviterAndJoinAndKeepsWhatAuthHolds(t *testing.T) {
 	if got := e.writes(t, ctx); got != before {
 		t.Fatalf("dry run wrote: got audit/outbox/revision %v, want %v", got, before)
 	}
-	if got := e.authInviter(t, ctx, org, m1); got != nil {
-		t.Fatalf("dry run wrote an inviter: got %v, want nil", got)
+	if got := e.count(t, ctx, `SELECT count(*) FROM auth.memberships WHERE organization_id = $1 AND principal_id = $2`, org, m1); got != 0 {
+		t.Fatalf("auth membership rows of m1 after a dry run: got %d, want 0", got)
 	}
 
 	rep := e.runOrgs(t, ctx, false)

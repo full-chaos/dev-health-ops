@@ -511,6 +511,12 @@ func (h handlers) oidcCallback(w http.ResponseWriter, r *http.Request) {
 				invalidProviderIDDetail(), "oidc", "provisioning")
 			return
 		}
+		if errors.Is(err, errInvalidProviderEmail) {
+			h.Logger.WarnContext(ctx, "sso sign-in refused: the identity provider returned an unusable email address", "protocol", "oidc")
+			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusBadRequest,
+				invalidProviderEmailDetail(), "oidc", "provisioning")
+			return
+		}
 		var processing ssoProcessing
 		if !asSSOProcessing(err, &processing) {
 			h.fail(w, r, "oidc provisioning", err)

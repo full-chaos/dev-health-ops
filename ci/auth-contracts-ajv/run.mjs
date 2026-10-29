@@ -119,6 +119,9 @@ const APPROVED_AUDIT = [
   "expired",
   "principal_not_found",
   "malformed",
+  "invite_created",
+  "invite_accepted",
+  "invite_revoked",
 ];
 const APPROVED_DECISION = [
   "allowed_by_repository_grant",

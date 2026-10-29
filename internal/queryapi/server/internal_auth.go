@@ -70,7 +70,7 @@ func authenticateInternalRequest(w http.ResponseWriter, r *http.Request, verifie
 	}
 
 	if edgeAuth != nil {
-		if alg, ok := jwtHeaderAlg(token); ok && alg == principal.EdgeAlgorithm {
+		if edgeCarrierToken(edgeAuth, token) {
 			return authenticateEdgeCarrier(w, r, edgeAuth, edgeStore, token)
 		}
 	}
@@ -103,6 +103,7 @@ func authenticateInternalRequest(w http.ResponseWriter, r *http.Request, verifie
 // get_authenticated_user does the same (services/auth.py:350), never
 // re-verified against a live row on either plane today.
 func authenticateEdgeCarrier(w http.ResponseWriter, r *http.Request, edgeAuth *policy.Authenticator, edgeStore policy.Store, token string) (authctx.Claims, bool) {
+	r = r.WithContext(policy.WithRouteProfile(r.Context(), routeProfile(r)))
 	claims, outcome := checkEdgeCarrier(r, edgeAuth, token, liveScope(edgeStore))
 	if outcome != edgeAccepted {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -329,7 +330,7 @@ func authenticateEdgeTokenOnly(r *http.Request, edgeAuth *policy.Authenticator) 
 			r.URL.Path, envelopeRequestID(r))
 		return authctx.Claims{}, edgeUnavailable
 	}
-	if alg, ok := jwtHeaderAlg(token); !ok || alg != principal.EdgeAlgorithm {
+	if !edgeCarrierToken(edgeAuth, token) {
 		noteRefusal(r, "not_an_edge_token", "edge")
 		return authctx.Claims{}, edgeRefused
 	}

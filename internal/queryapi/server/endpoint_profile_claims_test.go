@@ -17,17 +17,23 @@ var rowClaims = map[string]map[string]rowClaim{
 		"resource_resolver": {value: "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization", proofs: []claimProof{
 			{file: "rest_error_response.go", decl: "authenticateRESTRequest", needles: []string{"return authctx.Claims{OrgID: claims.OrgID}, true"}, anyOf: []string{}},
 		}},
-		"disclosure_behavior": {value: "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)", proofs: []claimProof{
-			{file: "rest_error_response.go", decl: "authenticateRESTRequest", needles: []string{"writeRESTUnauthorized(", "policy.WriteDetail(w, http.StatusForbidden, \"Organization context required\", nil)", "policy.WriteAuthFailure("}, anyOf: []string{}},
+		"disclosure_behavior": {value: "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)", proofs: []claimProof{
+			{file: "rest_error_response.go", decl: "authenticateRESTRequest", needles: []string{"writeRESTUnauthorized(", "policy.WriteDetail(w, http.StatusForbidden, \"Organization context required\", nil)", "policy.WriteAuthFailure(", "authenticateRESTRouted("}, anyOf: []string{}},
+			{file: "rest_access.go", decl: "authenticateRESTRouted", needles: []string{"writeRESTUnauthorized(", "policy.WriteDetail(w, http.StatusForbidden, \"Organization context required\", nil)", "policy.WriteAuthFailure("}, anyOf: []string{}},
 			{file: "rest_error_response.go", decl: "writeRESTUnauthorized", needles: []string{"http.StatusUnauthorized"}, anyOf: []string{}},
 			{file: "../../api/policy/principal.go", decl: "WriteAuthFailure", needles: []string{"http.StatusServiceUnavailable", "WriteInternal(w)"}, anyOf: []string{}},
 			{file: "edge_users_test.go", decl: "TestOrglessEdgeTokenNeverReachesAPlantedRoute", needles: []string{"\"orgless superuser\""}, anyOf: []string{}},
+			{file: "rest_access_test.go", decl: "TestQueryAPIRESTOrgMissingIs403ForNonSuperuser", needles: []string{"\"user token\"", "http.StatusForbidden"}, anyOf: []string{}},
 		}},
-		"primary_validator": {value: "authenticateRESTRequest: bearer edge access token (HS256, live users row) or EdDSA envelope; a missing or failing credential answers 401; a valid edge token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure.", proofs: []claimProof{
-			{file: "rest_error_response.go", decl: "authenticateRESTRequest", needles: []string{"writeRESTUnauthorized(", "policy.WriteDetail(w, http.StatusForbidden, \"Organization context required\", nil)", "policy.WriteAuthFailure("}, anyOf: []string{}},
+		"primary_validator": {value: "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure.", proofs: []claimProof{
+			{file: "rest_error_response.go", decl: "authenticateRESTRequest", needles: []string{"writeRESTUnauthorized(", "policy.WriteDetail(w, http.StatusForbidden, \"Organization context required\", nil)", "policy.WriteAuthFailure(", "authenticateRESTRouted("}, anyOf: []string{}},
+			{file: "rest_access.go", decl: "authenticateRESTRouted", needles: []string{"edgeVerifier.VerifyRouted(ctx, routeProfile(r), token)", "policy.WriteDetail(w, http.StatusForbidden, \"Organization context required\", nil)", "policy.WriteAuthFailure("}, anyOf: []string{}},
+			{file: "../principal/edge_access.go", decl: "AccessClassOf", needles: []string{"header.Typ == UserAccessTokenTyp"}, anyOf: []string{}},
+			{file: "access_verify.go", decl: "accessFromEnv", needles: []string{"accessTokenIssuer(getenv)"}, anyOf: []string{}},
 			{file: "rest_error_response.go", decl: "writeRESTUnauthorized", needles: []string{"http.StatusUnauthorized"}, anyOf: []string{}},
 			{file: "../../api/policy/principal.go", decl: "WriteAuthFailure", needles: []string{"http.StatusServiceUnavailable", "WriteInternal(w)"}, anyOf: []string{}},
 			{file: "edge_users_test.go", decl: "TestOrglessEdgeTokenNeverReachesAPlantedRoute", needles: []string{"\"orgless superuser\""}, anyOf: []string{}},
+			{file: "rest_access_test.go", decl: "TestQueryAPIRESTUserTokenPath", needles: []string{"\"revoked session\"", "\"not a member of the org\""}, anyOf: []string{}},
 		}},
 	},
 	"gql": {

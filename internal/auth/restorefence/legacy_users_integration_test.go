@@ -51,10 +51,18 @@ func TestABlindMarginTombstonesNoLegacyUser(t *testing.T) {
 	defer cancel()
 	db := newFenceDB(t, ctx)
 	db.stateT(t, ctx)
+	activeBefore := db.count(t, ctx, `SELECT count(*) FROM public.users WHERE is_active`)
+	versionsBefore := db.count(t, ctx, `SELECT coalesce(sum(token_version), 0) FROM public.users`)
+	if activeBefore == 0 {
+		t.Fatal("the fixture holds no active legacy user: the test would measure nothing")
+	}
 	if _, err := Apply(ctx, db.admin, db.schema, nil, Options{Apply: true, BlindMargin: 1000}); err != nil {
 		t.Fatal(err)
 	}
-	if n := db.count(t, ctx, `SELECT count(*) FROM public.users WHERE is_active`); n != 1 {
-		t.Errorf("a blind margin disabled users (%d active, want 1)", n)
+	if n := db.count(t, ctx, `SELECT count(*) FROM public.users WHERE is_active`); n != activeBefore {
+		t.Errorf("a blind margin changed the active users: %d before, %d after", activeBefore, n)
+	}
+	if n := db.count(t, ctx, `SELECT coalesce(sum(token_version), 0) FROM public.users`); n != versionsBefore {
+		t.Errorf("a blind margin moved token versions: %d before, %d after", versionsBefore, n)
 	}
 }

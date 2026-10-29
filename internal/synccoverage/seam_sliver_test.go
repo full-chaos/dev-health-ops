@@ -43,3 +43,36 @@ func TestAZeroWidthFailedIntervalIsNeverARange(t *testing.T) {
 		t.Fatalf("a zero-width interval survived subtractIntervals: %+v", got)
 	}
 }
+
+// The prod shape (CHAOS-11774): a wide failed unit whose first week was never covered, followed by weekly success
+// windows that end at 23:59:59.999999 and restart at 00:00:00. The real failed week stays; no seam sliver remains.
+func TestAWideFailedUnitKeepsItsRealFailedRangeAndLosesTheWeeklySeams(t *testing.T) {
+	at := func(m time.Month, d, h, min, s, us int) time.Time {
+		return time.Date(2026, m, d, h, min, s, us*1000, time.UTC)
+	}
+	failed := []coverageInterval{{Since: at(8, 19, 13, 1, 58, 246840), Before: at(9, 16, 0, 0, 0, 0)}}
+	for _, success := range []coverageInterval{
+		{Since: at(8, 26, 0, 0, 0, 0), Before: at(9, 1, 23, 59, 59, 999999)},
+		{Since: at(9, 2, 0, 0, 0, 0), Before: at(9, 8, 23, 59, 59, 999999)},
+		{Since: at(9, 9, 0, 0, 0, 0), Before: at(9, 16, 0, 0, 0, 0)},
+	} {
+		failed = subtractIntervals(failed, []coverageInterval{success})
+	}
+	if len(failed) != 1 || !failed[0].Since.Equal(at(8, 19, 13, 1, 58, 246840)) || !failed[0].Before.Equal(at(8, 26, 0, 0, 0, 0)) {
+		t.Fatalf("want exactly the real failed range 08-19 13:01:58.24684 .. 08-26, got %+v", failed)
+	}
+}
+
+// The cicd shape: one failed week whose success covers it up to 23:59:59.999999 leaves only the seam, which is not a range.
+func TestACicdFailedWeekCoveredUpToTheSeamLeavesNoRange(t *testing.T) {
+	since := time.Date(2026, 8, 19, 13, 1, 58, 246840000, time.UTC)
+	end := time.Date(2026, 8, 26, 0, 0, 0, 0, time.UTC)
+	failed := subtractIntervals([]coverageInterval{{Since: since, Before: end}}, []coverageInterval{{Since: since, Before: end.Add(-time.Microsecond)}})
+	if len(failed) != 0 {
+		t.Fatalf("a 1-microsecond seam is a failed range: %+v", failed)
+	}
+	whole := subtractIntervals([]coverageInterval{{Since: since, Before: end}}, nil)
+	if len(whole) != 1 {
+		t.Fatalf("an uncovered failed week is still one failed range: %+v", whole)
+	}
+}

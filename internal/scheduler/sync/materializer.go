@@ -512,9 +512,6 @@ func (materializer *NativeMaterializer) Materialize(
 	if err := errIfOnlySkippedDatasetsHadWork(len(loaded.featureOffSkippedDatasetKeys), len(units)); err != nil {
 		return PlanResult{}, err
 	}
-	if err := validateUnitWindows(units); err != nil {
-		return PlanResult{}, err
-	}
 	if loaded.totalUnitCap > 0 && len(units) > loaded.totalUnitCap {
 		return PlanResult{}, fmt.Errorf("%w: plan has %d units over cap %d", ErrInvalidPlan, len(units), loaded.totalUnitCap)
 	}

@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 )
 
@@ -55,6 +56,7 @@ func TestOrgsReconcileClassifiesEachOrganization(t *testing.T) {
 	orgName, _ := e.seedOrg(t, ctx, true)
 	orgActive, _ := e.seedOrg(t, ctx, true)
 	orgMem, _ := e.seedOrg(t, ctx, true)
+	authOnly, _ := e.seedOrg(t, ctx, true) // copied below, then its public row is deleted: an auth-only organization
 	e.seedMember(t, ctx, orgOK, u1, "owner")
 	e.seedMember(t, ctx, orgOK, u2, "member")
 	e.seedMember(t, ctx, orgSlug, u1, "member") // u1 is in several organizations
@@ -71,16 +73,14 @@ func TestOrgsReconcileClassifiesEachOrganization(t *testing.T) {
 	e.matchOrgOnCleanup(t, orgMem, &publicOnly)
 	orgPub, _ := e.seedOrg(t, ctx, true) // public only: never copied
 	e.seedMember(t, ctx, orgPub, u1, "member")
-	authOnly := uuid.New()
-	if _, err := e.admin.Exec(ctx, `INSERT INTO auth.organizations (id, slug, name) VALUES ($1, $2, 'Auth only')`, authOnly, "auth-only-"+authOnly.String()[:8]); err != nil {
-		t.Fatalf("seed an auth-only organization: %v", err)
+	// The auth schema is written only through audit.Commit: the auth-only organization is the copy of a public one whose
+	// public row goes away (the way the orgs-backfill tests make one); no raw write to an auth table here.
+	if _, err := e.admin.Exec(ctx, `DELETE FROM public.organizations WHERE id = $1`, authOnly); err != nil {
+		t.Fatalf("delete the public row of the auth-only organization: %v", err)
 	}
 	t.Cleanup(func() {
 		c, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
-		if _, err := e.admin.Exec(c, `DELETE FROM auth.organizations WHERE id = $1`, authOnly); err != nil {
-			t.Logf("could not delete the auth-only organization (the runtime role has no DELETE; the admin should): %v", err)
-		}
 		_, _ = e.admin.Exec(c, `DELETE FROM public.memberships WHERE org_id = $1`, orgPub)
 		_, _ = e.admin.Exec(c, `DELETE FROM public.organizations WHERE id = $1`, orgPub)
 	})
@@ -198,14 +198,17 @@ func TestOrgsReconcileSnapshotBlocksNoWriterAndKeepsItsView(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	u := e.seed(t, ctx, uniq("orw"), true, true)
-	org, _ := e.seedOrg(t, ctx, true)
+	org, slug := e.seedOrg(t, ctx, true)
+	name := "Name " + slug
 	e.seedMember(t, ctx, org, u, "member")
 	e.backfill(t, ctx)
 	if rep := e.runOrgs(t, ctx, false); rep.SkippedTotal() != 0 {
 		t.Fatalf("the organization backfill skipped rows: %+v", rep)
 	}
 	t.Cleanup(func() {
-		_, _ = e.admin.Exec(context.Background(), `UPDATE public.organizations SET slug = replace(slug, '-w', '') WHERE id = $1`, org)
+		c := context.Background()
+		_, _ = e.admin.Exec(c, `UPDATE public.organizations SET slug = $2 WHERE id = $1`, org, slug)
+		_, _ = e.store.BackfillOrganization(c, identity.OrgBackfillTarget{ID: org, Slug: slug, Name: name, Active: true}, false)
 	})
 
 	tx, err := OpenSnapshot(ctx, e.runtime)
@@ -240,28 +243,20 @@ func TestOrgsReconcileSnapshotBlocksNoWriterAndKeepsItsView(t *testing.T) {
 	}
 	rows.Close()
 
-	// Writers on the rows the report read, from other connections, while the snapshot is open.
-	for _, w := range []struct{ name, sql string }{
-		{"public.organizations", `UPDATE public.organizations SET slug = slug || '-w' WHERE id = $1`},
-		{"auth.organizations", `UPDATE auth.organizations SET updated_at = clock_timestamp() WHERE id = $1`},
-		{"public.memberships", `UPDATE public.memberships SET updated_at = now() WHERE org_id = $1`},
-	} {
-		wtx, err := e.admin.Begin(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := wtx.Exec(ctx, `SET LOCAL lock_timeout = '2s'`); err != nil {
-			_ = wtx.Rollback(ctx)
-			t.Fatal(err)
-		}
-		if _, err := wtx.Exec(ctx, w.sql, org); err != nil {
-			_ = wtx.Rollback(ctx)
-			t.Fatalf("a writer on %s was blocked or failed while the snapshot was open: %v", w.name, err)
-		}
-		if err := wtx.Commit(ctx); err != nil {
-			t.Fatal(err)
-		}
-	}
+	// Writers on the rows the report read, from other connections, while the snapshot is open. The auth write goes
+	// through the store (audit.Commit): a raw write is refused by the guard before any lock and would prove nothing.
+	e.writerNotBlocked(t, "public.organizations", func(c context.Context) error {
+		_, err := e.admin.Exec(c, `UPDATE public.organizations SET slug = slug || '-w' WHERE id = $1`, org)
+		return err
+	})
+	e.writerNotBlocked(t, "auth.organizations (through audit.Commit)", func(c context.Context) error {
+		_, err := e.store.BackfillOrganization(c, identity.OrgBackfillTarget{ID: org, Slug: slug, Name: name + " w", Active: true}, false)
+		return err
+	})
+	e.writerNotBlocked(t, "public.memberships", func(c context.Context) error {
+		_, err := e.admin.Exec(c, `UPDATE public.memberships SET updated_at = now() WHERE org_id = $1`, org)
+		return err
+	})
 
 	again, err := target.OrgDiffs(ctx)
 	if err != nil {
@@ -271,7 +266,30 @@ func TestOrgsReconcileSnapshotBlocksNoWriterAndKeepsItsView(t *testing.T) {
 		t.Errorf("the snapshot did not keep its view: the committed write shows inside it")
 	}
 	fresh := e.orgsSnapshot(t, ctx)
-	if got, ok := classesOf(fresh, org); !ok || strings.Join(got, ",") != ClassOrgSlug {
+	if got, ok := classesOf(fresh, org); !ok || strings.Join(got, ",") != ClassOrgSlug+","+ClassOrgName {
 		t.Errorf("a fresh snapshot does not see the write: classes %v (listed %v)", got, ok)
+	}
+}
+
+// writerNotBlocked runs one writer and fails if it does not finish within 5 s: it then cancels the writer's context,
+// joins it for at most 10 s and only then reports. The guard costs nothing when the writer is not blocked.
+func (e *reconEnv) writerNotBlocked(t *testing.T, name string, write func(ctx context.Context) error) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- write(ctx) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("a writer on %s failed while the snapshot was open: %v", name, err)
+		}
+	case <-time.After(5 * time.Second):
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+		}
+		t.Fatalf("a writer on %s was blocked by the open snapshot (no commit within 5 s)", name)
 	}
 }

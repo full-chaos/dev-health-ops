@@ -26,6 +26,7 @@ internal/auth/authconfig	test	contracts
 internal/auth/authruntime	test	contracts
 internal/auth/authruntime	test	deploy
 internal/auth/contracts	code	contracts
+internal/auth/contracts	test	ci
 internal/auth/contracts	test	docs
 internal/auth/contracts/tokencorpus	code	contracts
 internal/auth/identity/oidc	test	ci

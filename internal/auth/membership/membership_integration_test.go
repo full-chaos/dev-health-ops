@@ -661,3 +661,115 @@ func TestLookupRefusalsAreDeniedToARefusedActor(t *testing.T) {
 		t.Fatalf("rows = %+v, want none", got)
 	}
 }
+
+// Authorize's superuser refusal is returned as it is, never as a store
+// failure, and nothing is written.
+func TestAuthorizeSuperuserRefusalIsNamed(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	org, owner, user := e.seedOrg(t, ctx), e.seedUser(t, ctx), e.seedUser(t, ctx)
+	e.add(t, ctx, org, owner, "owner")
+	superuserOnly := func(context.Context, audit.TxOps, Locked) error { return ErrSuperuserRequired }
+	_, err := e.store.Add(ctx, Change{OrgID: org, PrincipalID: user, Role: "member", Authorize: superuserOnly})
+	if !errors.Is(err, ErrSuperuserRequired) || errors.Is(err, ErrStore) {
+		t.Fatalf("Add = %v, want ErrSuperuserRequired and no store failure", err)
+	}
+	err = e.store.TransferOwnership(ctx, Transfer{OrgID: org, From: owner, To: user, Authorize: superuserOnly})
+	if !errors.Is(err, ErrSuperuserRequired) || errors.Is(err, ErrStore) {
+		t.Fatalf("TransferOwnership = %v, want ErrSuperuserRequired", err)
+	}
+	if got := e.rows(t, ctx, org, user); got != (rows{}) {
+		t.Fatalf("a refused add wrote %+v", got)
+	}
+}
+
+// A change the lock-free read refuses answers its own refusal, never a store
+// failure, and writes nothing: no state row, no audit row, no event (its
+// planned audit row and event are placeholders that must never commit). A
+// role change of a non-member, a transfer to a non-member, a removal of the
+// last owner, and a role change in a missing organization for a refused actor.
+func TestRefusedPlansAnswerTheirRefusal(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	org, owner, stranger := e.seedOrg(t, ctx), e.seedUser(t, ctx), e.seedUser(t, ctx)
+	e.add(t, ctx, org, owner, "owner")
+	missing := uuid.New()
+	// writes is everything a refused change could write for org: both
+	// membership tables (every column that changes on a write), the audit rows
+	// and the outbox events naming the organization.
+	writes := func(t *testing.T, org uuid.UUID) string {
+		t.Helper()
+		var out string
+		if err := e.admin.QueryRow(ctx, `SELECT concat_ws('|',
+  (SELECT string_agg(concat_ws(',', id, user_id, role, updated_at), ';' ORDER BY id) FROM public.memberships WHERE org_id = $1),
+  (SELECT string_agg(concat_ws(',', id, principal_id, status, role, joined_at, updated_at), ';' ORDER BY id) FROM auth.memberships WHERE organization_id = $1),
+  (SELECT count(*) FROM auth.security_audit_events WHERE organization_id = $1),
+  (SELECT count(*) FROM auth.auth_outbox_events WHERE payload->>'organization_id' = 'org_' || $1::text))`, org).Scan(&out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	deny := func(context.Context, audit.TxOps, Locked) error { return ErrDenied }
+	for _, c := range []struct {
+		name string
+		org  uuid.UUID
+		run  func() error
+		want error
+	}{
+		{"role change of a non-member", org, func() error {
+			_, err := e.store.ChangeRole(ctx, Change{OrgID: org, PrincipalID: stranger, Role: "admin", Actor: Actor{PrincipalID: &owner}, Authorize: allowAll})
+			return err
+		}, ErrNotMember},
+		{"transfer to a non-member", org, func() error {
+			return e.store.TransferOwnership(ctx, Transfer{OrgID: org, From: owner, To: stranger, Actor: Actor{PrincipalID: &owner}, Authorize: allowAll})
+		}, ErrTargetNotMember},
+		{"removal of the last owner", org, func() error {
+			_, err := e.store.Remove(ctx, Change{OrgID: org, PrincipalID: owner, Actor: Actor{PrincipalID: &owner}, Authorize: allowAll})
+			return err
+		}, ErrLastOwner},
+		{"a refused actor in a missing organization", missing, func() error {
+			_, err := e.store.ChangeRole(ctx, Change{OrgID: missing, PrincipalID: stranger, Role: "admin", Authorize: deny})
+			return err
+		}, ErrDenied},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			before := writes(t, c.org)
+			// Both checks report on their own: the answer, then what was written.
+			if err := c.run(); !errors.Is(err, c.want) || errors.Is(err, ErrStore) {
+				t.Errorf("answer = %v, want %v", err, c.want)
+			}
+			if after := writes(t, c.org); after != before {
+				t.Errorf("wrote: before %q after %q", before, after)
+			}
+		})
+	}
+}
+
+// A verb an actor makes and a verb on the actor, started together, take one
+// lock order (the actor's principal is locked at step 1 with the targets): no
+// deadlock, 20 rounds.
+func TestActorAndTargetVerbsShareOneLockOrder(t *testing.T) {
+	e := getEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	org, owner := e.seedOrg(t, ctx), e.seedUser(t, ctx)
+	e.add(t, ctx, org, owner, "owner")
+	for round := range 20 {
+		admin, target := e.seedUser(t, ctx), e.seedUser(t, ctx)
+		e.add(t, ctx, org, admin, "admin")
+		errs := make(chan error, 2)
+		go func() {
+			_, err := e.store.Add(ctx, Change{OrgID: org, PrincipalID: target, Role: "member", Actor: Actor{PrincipalID: &admin}, Authorize: allowAll})
+			errs <- err
+		}()
+		go func() {
+			_, err := e.store.ChangeRole(ctx, Change{OrgID: org, PrincipalID: admin, Role: "viewer", Actor: Actor{PrincipalID: &owner}, Authorize: allowAll})
+			errs <- err
+		}()
+		for range 2 {
+			if err := <-errs; err != nil {
+				t.Fatalf("round %d: %v", round, err)
+			}
+		}
+	}
+}

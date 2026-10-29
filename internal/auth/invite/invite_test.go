@@ -142,7 +142,7 @@ func TestOutcomeLabelsAreClosed(t *testing.T) {
 		ErrEmailMismatch: "email_mismatch", ErrEmailInvalid: "invalid", ErrRoleInvalid: "invalid", ErrTTLInvalid: "invalid",
 		ErrPendingExists: "pending_exists", ErrNotFound: "not_found", ErrNotPending: "not_pending", ErrAlreadyMember: "already_member",
 		ErrOrgNotFound: "not_found", ErrOrgSuspended: "suspended", ErrInviterNotFound: "not_found", ErrDenied: "denied",
-		ErrNotOwned: "not_owned", errors.New("other"): "error",
+		ErrNotOwned: "not_owned", ErrAccountInactive: "inactive", errors.New("other"): "error",
 	}
 	for err, want := range cases {
 		if got := outcomeLabel(err); got != want {

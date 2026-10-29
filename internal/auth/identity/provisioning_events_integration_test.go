@@ -144,7 +144,9 @@ func TestEachProducerWritesItsMappedEvent(t *testing.T) {
 	e.wantEvents(t, ctx, "external_identity", "idn_"+identities[0].ID.String(),
 		wireEvent{Verb: "external_identity.linked", Change: map[string]any{"provider": "google", "principal_id": "prn_" + fed.String()}})
 
-	// Organizations: created, renamed, suspended, reactivated.
+	// Organizations: created, renamed, suspended; go-api's reactivation does
+	// not reactivate the auth organization (a suspension ends only by an
+	// auth-service verb).
 	org := e.seedOrg(t, ctx)
 	if err := e.store.ProjectOrganization(ctx, org); err != nil {
 		t.Fatal(err)
@@ -170,8 +172,7 @@ func TestEachProducerWritesItsMappedEvent(t *testing.T) {
 	e.wantEvents(t, ctx, "organization", "org_"+org.String(),
 		wireEvent{Verb: "organization.created", Change: map[string]any{"status": "active", "slug": "org-" + org.String()}},
 		wireEvent{Verb: "organization.updated"},
-		wireEvent{Verb: "organization.suspended", Change: status("suspended")},
-		wireEvent{Verb: "organization.reactivated", Change: status("active")})
+		wireEvent{Verb: "organization.suspended", Change: status("suspended")})
 
 	// A go-api slug the wire cannot carry is left out, never rewritten.
 	unicodeOrg := uuid.New()

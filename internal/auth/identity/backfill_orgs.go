@@ -54,8 +54,9 @@ type OrgBackfillResult struct {
 
 // BackfillOrganization makes auth.organizations agree with t. A missing
 // organization is inserted; a differing one is updated (disabled_at is set
-// only when the organization turns inactive and cleared when it turns active,
-// so an equal organization keeps its timestamp); an equal one writes nothing.
+// only when the organization turns inactive, so an equal organization keeps
+// its timestamp; a suspended one stays suspended, keepSuspended); an equal one
+// writes nothing.
 func (s *Store) BackfillOrganization(ctx context.Context, t OrgBackfillTarget, dryRun bool) (OrgBackfillResult, error) {
 	var res OrgBackfillResult
 	src := orgState{slug: t.Slug, name: t.Name, active: t.Active}
@@ -68,6 +69,9 @@ func (s *Store) BackfillOrganization(ctx context.Context, t OrgBackfillTarget, d
 		found = false
 	case err != nil:
 		return res, s.storeErr(ctx, "read auth.organizations", err)
+	}
+	if found {
+		src = keepSuspended(cur, src)
 	}
 	d := decideOrg(found, cur, src)
 	if d.action == orgNone {

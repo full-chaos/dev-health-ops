@@ -133,6 +133,11 @@ var Allowlist = []Entry{
 	{File: "internal/auth/invite/store.go", Func: "Store.acceptOnce", Table: "auth.invites", Verb: "INSERT"},
 	{File: "internal/auth/invite/store.go", Func: "Store.acceptOnce", Table: "auth.invites", Verb: "UPDATE"},
 	{File: "internal/auth/invite/store.go", Func: "Store.acceptOnce", Table: "public.org_invites", Verb: "UPDATE"},
+	// The organization deprovision (one audit.Commit): pending invites revoked (go-api-only ones taken over) and the organization suspended.
+	{File: "internal/auth/invite/orgrevocation.go", Func: "Store.ApplyRevokeAll", Table: "auth.invites", Verb: "INSERT"},
+	{File: "internal/auth/invite/orgrevocation.go", Func: "Store.ApplyRevokeAll", Table: "auth.invites", Verb: "UPDATE"},
+	{File: "internal/auth/invite/orgrevocation.go", Func: "Store.ApplyRevokeAll", Table: "public.org_invites", Verb: "UPDATE"},
+	{File: "internal/auth/org/deprovision.go", Func: "Store.ApplySuspend", Table: "auth.organizations", Verb: "UPDATE"},
 	{File: "internal/auth/platformrole/store.go", Func: "Store.Grant", Table: "auth.platform_role_assignments", Verb: "INSERT"},
 	{File: "internal/auth/platformrole/store.go", Func: "Store.Revoke", Table: "auth.platform_role_assignments", Verb: "DELETE"},
 	{File: "internal/auth/identity/store.go", Func: "Store.applyProjectionChange", Table: "auth.principals", Verb: "UPDATE"},

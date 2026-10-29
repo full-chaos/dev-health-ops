@@ -8,6 +8,7 @@ var (
 	// signed, expired, accepted or revoked: a caller learns nothing else.
 	ErrInviteInvalid   = errors.New("invite: the invite is invalid or expired")
 	ErrEmailUnverified = errors.New("invite: the account's email address is not verified")
+	ErrAccountInactive = errors.New("invite: the account is not active")
 	ErrEmailMismatch   = errors.New("invite: the invite is for another email address")
 	ErrEmailInvalid    = errors.New("invite: the email address is not a normalized address")
 	ErrRoleInvalid     = errors.New("invite: the role is not an organization role")

@@ -267,7 +267,7 @@ func outcomeLabel(err error) string {
 		return "conflict"
 	case errors.Is(err, ErrOrgNotFound), errors.Is(err, ErrPrincipalNotFound), errors.Is(err, ErrInviterNotFound):
 		return "not_found"
-	case errors.Is(err, ErrDenied):
+	case errors.Is(err, ErrDenied), errors.Is(err, ErrSuperuserRequired):
 		return "denied"
 	case errors.Is(err, ErrNotOwned):
 		return "not_owned"

@@ -223,7 +223,7 @@ func TestOutcomeLabelsAreClosed(t *testing.T) {
 		nil: "ok", audit.ErrNoStateChange: "noop", ErrNotMember: "not_member", ErrAlreadyMember: "already_member",
 		ErrSuspended: "suspended", ErrLastOwner: "last_owner", ErrNotOwner: "not_owner", ErrTargetNotMember: "not_member",
 		ErrRoleInvalid: "invalid", ErrRoleMissing: "invalid", ErrRevisionConflict: "conflict", ErrOrgNotFound: "not_found",
-		ErrOrgSuspended: "suspended", ErrPrincipalNotFound: "not_found", ErrInviterNotFound: "not_found", ErrDenied: "denied", ErrNotOwned: "not_owned",
+		ErrOrgSuspended: "suspended", ErrPrincipalNotFound: "not_found", ErrInviterNotFound: "not_found", ErrDenied: "denied", ErrSuperuserRequired: "denied", ErrNotOwned: "not_owned",
 		errors.New("anything else"): "error",
 	}
 	for err, want := range cases {
@@ -243,5 +243,26 @@ func TestOrganizationRolesIsACopy(t *testing.T) {
 	}
 	if got := OrganizationRoles(); len(got) != 4 || got[0] != "viewer" {
 		t.Fatalf("OrganizationRoles = %v, want the four catalog roles", got)
+	}
+}
+
+// A change the lock-free read refuses still plans a well-formed audit row and
+// event (audit.Commit checks them before Authorize runs), whatever the pair.
+func TestRefusedPlansAreWellFormed(t *testing.T) {
+	id, org, principal := uuid.New(), uuid.New(), uuid.New()
+	for _, prev := range []state{{status: statusAbsent}, {status: StatusRemoved}, {status: StatusSuspended}, {status: StatusActive, role: "owner"}} {
+		next := refusedNext(prev)
+		if next.status != prev.status || next.role == "" {
+			t.Fatalf("refusedNext(%+v) = %+v", prev, next)
+		}
+		for _, v := range []verb{verbAdd, verbChangeRole, verbSuspend, verbReactivate, verbRemove, verbTransfer} {
+			e := eventFor(v, id, next)
+			if err := provisioning.CheckEvent(e.AggregateType, e.AggregateID, e.EventType, e.Change); err != nil {
+				t.Fatalf("%s from %+v: CheckEvent: %v", v, prev, err)
+			}
+			if err := audit.ValidateAttributes(auditFor(v, org, principal, id, Actor{}, prev, next).Attributes); err != nil {
+				t.Fatalf("%s from %+v: ValidateAttributes: %v", v, prev, err)
+			}
+		}
 	}
 }

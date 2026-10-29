@@ -61,7 +61,7 @@ type shardEnv struct {
 func runCheckGoSharding(t *testing.T, e shardEnv, args ...string) cmdResult {
 	t.Helper()
 	root := rootOf(t)
-	env := inheritedEnv(nil, e.extra...)
+	env := inheritedEnv(deadlineEnvNames, e.extra...)
 	if e.manifest != "" {
 		env = append(env, "DEV_HEALTH_GO_INTEGRATION_SHARD_MANIFEST="+e.manifest)
 	} else {
@@ -2523,3 +2523,7 @@ func TestEachPackagesShardPlansOneGoTestGroup(t *testing.T) {
 		}
 	}
 }
+
+// deadlineEnvNames are pinned to "unset" by the helpers that run ci/check_go.sh with a stand-in go: a hosted run inherits
+// GITHUB_ACTIONS=true, and the job deadline refuses a guarded call without CHECK_GO_JOB_CAP_MIN.
+var deadlineEnvNames = []string{"GITHUB_ACTIONS", "CHECK_GO_JOB_CAP_MIN", "CHECK_GO_JOB_START", "CHECK_GO_NOW_EPOCH", "CHECK_GO_NOW_EPOCH_FILE"}

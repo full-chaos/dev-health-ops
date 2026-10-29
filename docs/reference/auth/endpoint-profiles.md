@@ -181,6 +181,8 @@ cases it describes are closed.
    reachable-but-not-owner finding above — no path exemption, unverified JWT
    peek on every request.
 3. **`validate_ingest_auth` reachability: LIVE in production routing.**
+   (Historical: the Go port of these routes is retired, CHAOS-11813; each
+   path now answers 404 and no endpoint-profile row names it.)
    Reachable via exactly 6 REST routes in `api/ingest/router.py`
    (`POST /api/v1/ingest/{commits,pull-requests,work-items,deployments,incidents,telemetry}`,
    lines 26/53/80/107/134/161) — a distinct, unrelated `IngestAuthContext`

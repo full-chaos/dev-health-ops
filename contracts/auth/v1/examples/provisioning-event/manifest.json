@@ -42,6 +42,10 @@
       "why": "Workload audiences are exact strings, bounded in count."
     },
     {
+      "file": "valid-workload-bootstrap-changed.json",
+      "why": "A workload bootstrap credential change carries its status and the credential's id only, never the value or its digest."
+    },
+    {
       "file": "valid-resource-grant-with-expiry.json",
       "why": "A grant carries its expiry (TRD section 9; Q2 default keep)."
     },
@@ -206,6 +210,18 @@
       "expect_instance_location": "/payload/change/resource_key",
       "expect_keyword": "pattern",
       "why": "Repository keys are canonical lowercase owner/repo (TRD section 9)."
+    },
+    {
+      "file": "invalid-change-credential-id-not-a-credential.json",
+      "expect_instance_location": "/payload/change/credential_id",
+      "expect_keyword": "pattern",
+      "why": "A workload bootstrap event names its credential by the server-minted crd_ id; a value-shaped string has no slot."
+    },
+    {
+      "file": "invalid-change-credential-id-on-service-account.json",
+      "expect_instance_location": "/payload/change",
+      "expect_keyword": "enum",
+      "why": "credential_id is a workload member only."
     },
     {
       "file": "invalid-change-action-set-empty.json",

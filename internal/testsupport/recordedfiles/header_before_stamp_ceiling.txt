@@ -15,7 +15,6 @@ internal/api/billing/testdata/golden/billing-bodies.golden.json
 internal/api/billing/testdata/golden/billing-helpers.golden.json
 internal/api/billing/testdata/golden/stripe-signature.golden.json
 internal/api/externalingest/testdata/golden/schema-bundle.json
-internal/api/legacyingest/testdata/golden/legacy-ingest.json
 internal/api/syncadmin/testdata/golden/TestSyncAdminReadsVenueOracle.json
 internal/api/syncadmin/testdata/golden/TestSyncConfigBatchCreateVenueOracle.json
 internal/api/syncadmin/testdata/golden/TestSyncConfigCreateVenueOracle.json
@@ -62,8 +61,6 @@ internal/apiservice/testdata/program/cors-starlette.json
 internal/apiservice/testdata/program/route-response-models.json
 internal/apiservice/testdata/venue/external-ingest-payload-hash.json
 internal/apiservice/testdata/venue/external-ingest-venue-oracle.json
-internal/apiservice/testdata/venue/legacy-ingest-telemetry-venue-oracle.json
-internal/apiservice/testdata/venue/legacy-ingest-venue-oracle.json
 internal/apiservice/testdata/venue/protected-routes.json
 internal/apiservice/testdata/venue/venue-oracle-credential-git-hub-repos.json
 internal/apiservice/testdata/venue/venue-oracle-credential-repos.json

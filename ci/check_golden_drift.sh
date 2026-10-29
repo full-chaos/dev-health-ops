@@ -164,10 +164,16 @@ message() {
 
 out=""
 run_rows() {
-  local file="${1:-}" line failed=0 rc i verdict="" verdicts=0 prefixed=0
+  local file="${1:-}" line failed=0 rc i verdict="" verdicts=0 prefixed=0 tmo
   local -a pkgs=() res=()
   [ -n "${file}" ] && [ -r "${file}" ] || die "run needs a readable ROWS_FILE"
   trap 'rm -f "${out:-}"' EXIT
+  # One job start for every row, taken here in the parent shell: a child `job-timeout` call would take its own start and give
+  # each row the whole budget again.
+  if [ -n "${CHECK_GO_JOB_CAP_MIN:-}" ] && [ -z "${CHECK_GO_JOB_START:-}" ]; then
+    CHECK_GO_JOB_START="$(bash "${ROOT}/ci/check_go.sh" job-start)" || exit 2
+    export CHECK_GO_JOB_START
+  fi
   # Bytes the shell read would drop or reinterpret are refused before it reads: a NUL byte (read drops it, so Test\0X would
   # run as TestX) and a missing final newline (select always ends its last line with one).
   [ "$(tr -d '\000' < "${file}" | wc -c)" -eq "$(wc -c < "${file}")" ] || die "NUL byte in the rows file"
@@ -204,7 +210,8 @@ run_rows() {
     echo "== golden drift: ${pkgs[i]} -run ${res[i]}"
     out="$(mktemp)"
     rc=0
-    (cd "${ROOT}" && env -u GOFLAGS -u GOEXPERIMENT GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m -v -run "${res[i]}" "./${pkgs[i]}") >> "${out}" 2>&1 || rc=$?
+    tmo="$(bash "${ROOT}/ci/check_go.sh" job-timeout 22)" || exit 2
+    (cd "${ROOT}" && env -u GOFLAGS -u GOEXPERIMENT GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout="${tmo}" -v -run "${res[i]}" "./${pkgs[i]}") >> "${out}" 2>&1 || rc=$?
     cat "${out}"
     if [ "${rc}" -ne 0 ]; then
       message "${pkgs[i]}" "${res[i]}"

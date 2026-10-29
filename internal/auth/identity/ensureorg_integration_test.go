@@ -34,6 +34,17 @@ func TestEnsureOrganizationProjectsOnlyAMissingRow(t *testing.T) {
 	if n := e.count(t, ctx, `SELECT count(*) FROM auth.organizations WHERE id = $1 AND disabled_at IS NOT NULL`, id); n != 1 {
 		t.Fatal("EnsureOrganization reactivated a suspended organization")
 	}
+	// An existing row is never changed: go-api's rename does not reach it
+	// through EnsureOrganization (ProjectOrganization would take it).
+	if _, err := e.admin.Exec(ctx, `UPDATE public.organizations SET name = 'renamed-after-ensure' WHERE id = $1`, id); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.store.EnsureOrganization(ctx, id); err != nil {
+		t.Fatalf("EnsureOrganization of an existing row: %v", err)
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.organizations WHERE id = $1 AND name = 'renamed-after-ensure'`, id); n != 0 {
+		t.Fatal("EnsureOrganization changed an existing row")
+	}
 	if err := e.store.EnsureOrganization(ctx, uuid.New()); !errors.Is(err, ErrOrganizationNotFound) {
 		t.Fatalf("EnsureOrganization of an unknown organization = %v, want ErrOrganizationNotFound", err)
 	}
@@ -72,7 +83,7 @@ func TestProjectionAndBackfillKeepASuspendedOrganizationSuspended(t *testing.T) 
 	if n := e.count(t, ctx, `SELECT count(*) FROM auth.organizations WHERE id = $1 AND disabled_at IS NOT NULL AND name = 'renamed-again'`, id); n != 1 {
 		t.Fatal("the backfill reactivated a suspended organization or dropped go-api's name")
 	}
-	if n := e.outboxRows(t, ctx, "organization.reactivated", "org_"+id.String()); n != 0 {
+	if n := e.outboxRows(t, ctx, "organization.reactivated", id.String()); n != 0 {
 		t.Fatalf("%d organization.reactivated events, want 0", n)
 	}
 }

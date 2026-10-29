@@ -152,7 +152,7 @@ func (e *env) seedOrg(t *testing.T, ctx context.Context) uuid.UUID {
 	return id
 }
 
-func address() string { return "invitee-" + uuid.NewString()[:8] + "@example.test" }
+func address() string { return "invitee-" + uuid.NewString()[:8] + "@example.com" }
 
 func (e *env) count(t *testing.T, ctx context.Context, sql string, args ...any) int {
 	t.Helper()

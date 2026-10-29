@@ -28,7 +28,8 @@
         "platform_role_assignment",
         "service_account",
         "workload",
-        "resource_grant"
+        "resource_grant",
+        "invite"
       ]
     },
     "aggregate_id": {
@@ -90,7 +91,8 @@
                 "pending",
                 "removed",
                 "revoked",
-                "expired"
+                "expired",
+                "accepted"
               ],
               "description": "The aggregate's status after the change, from a closed vocabulary."
             },
@@ -540,6 +542,46 @@
                     "action_set",
                     "effect",
                     "expires_at"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "aggregate_type": {
+            "const": "invite"
+          }
+        },
+        "required": [
+          "aggregate_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "aggregate_id": {
+            "type": "string",
+            "pattern": "^inv_[A-Za-z0-9_-]{1,64}$"
+          },
+          "event_type": {
+            "enum": [
+              "invite.created",
+              "invite.accepted",
+              "invite.revoked"
+            ]
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "change": {
+                "type": "object",
+                "propertyNames": {
+                  "enum": [
+                    "status"
                   ]
                 }
               }

@@ -395,6 +395,11 @@ var additiveExemptions = []additiveExemption{
 		reason: "credential_class admits kubernetes_sa_token_exchange; the redefined list is the old list plus " +
 			"that one value, so it only widens",
 	},
+	{
+		version:    33,
+		regression: `constraint aggregate_revisions.aggregate_revisions_aggregate_type_check redefined "CHECK ((aggregate_type = ANY (ARRAY['principal'::text, 'user'::text, 'external_identity'::text, 'organization'::text, 'membership'::text, 'platform_role_assignment'::text, 'service_account'::text, 'workload'::text, 'resource_grant'::text])))" -> "CHECK ((aggregate_type = ANY (ARRAY['principal'::text, 'user'::text, 'external_identity'::text, 'organization'::text, 'membership'::text, 'platform_role_assignment'::text, 'service_account'::text, 'workload'::text, 'resource_grant'::text, 'invite'::text])))"`,
+		reason:     "aggregate_revisions admits the invite aggregate; the redefined list is the 0013 list plus that one value, so it only widens (CHAOS-10981)",
+	},
 }
 
 // TestEveryMigrationStepIsAdditive applies the lineage ONE MIGRATION AT A TIME

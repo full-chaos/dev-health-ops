@@ -12,7 +12,7 @@ func TestInviteWriteGrantsAreTheReviewedColumns(t *testing.T) {
 	want := []InviteWriteGrant{
 		{
 			Table:  "org_invites",
-			Select: []string{"id", "org_id", "email", "role", "token_hash", "invited_by_id", "status", "expires_at"},
+			Select: []string{"id", "org_id", "email", "role", "token_hash", "invited_by_id", "status", "expires_at", "created_at"},
 			Insert: []string{"id", "org_id", "email", "role", "token_hash", "invited_by_id", "status", "expires_at", "created_at", "updated_at"},
 			Update: []string{"status", "accepted_at", "updated_at"},
 		},

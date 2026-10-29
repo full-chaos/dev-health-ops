@@ -62,10 +62,10 @@ func TestEmailRefusalIsGoAPIParity(t *testing.T) {
 }
 
 func TestNormalizeEmailAcceptsOnlyAFixedPoint(t *testing.T) {
-	if got, err := normalizeEmail("member@example.test"); err != nil || got != "member@example.test" {
-		t.Fatalf("normalizeEmail(member@example.test) = %q, %v", got, err)
+	if got, err := normalizeEmail("member@example.com"); err != nil || got != "member@example.com" {
+		t.Fatalf("normalizeEmail(member@example.com) = %q, %v", got, err)
 	}
-	for _, raw := range []string{"Member@example.test", " member@example.test", "member@example", "not an address", "", "a..b@example.test"} {
+	for _, raw := range []string{"Member@example.com", " member@example.com", "member@example", "not an address", "", "a..b@example.com", "member@example.test"} {
 		if _, err := normalizeEmail(raw); !errors.Is(err, ErrEmailInvalid) {
 			t.Errorf("normalizeEmail(%q) = %v, want ErrEmailInvalid", raw, err)
 		}

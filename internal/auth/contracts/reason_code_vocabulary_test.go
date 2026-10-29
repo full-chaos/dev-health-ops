@@ -261,6 +261,9 @@ var approvedAuditReasonCodes = []string{
 	"expired",
 	"principal_not_found",
 	"malformed",
+	"invite_created",
+	"invite_accepted",
+	"invite_revoked",
 }
 
 func TestTheVocabularyFileIsExactlyTheApprovedLists(t *testing.T) {

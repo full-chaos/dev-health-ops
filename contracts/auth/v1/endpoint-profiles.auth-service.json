@@ -754,7 +754,7 @@
         "internal_svc_authsess_token"
       ],
       "classification": "protected",
-      "current_state_cache_behavior": "No cache: the credential row is read live by token hash on every call; the actor's public.users and public.memberships rows are read live before the write and again under the write's locks.",
+      "current_state_cache_behavior": "No cache: the credential row is read live by token hash on every call; the actor's public.users row is read live before the write and again under the write's locks.",
       "disclosure_behavior": "Every bearer refusal is the same 401 error.v1 invalid_credentials; an actor that is not an active superuser gets 403 (principal_deactivated or superuser_required) before any row of the request is read, and the same rule runs again after the organization row lock, so a missing organization is named only to a superuser; an organization that is not suspended answers 200 with reactivated false and writes nothing; a store failure is 503.",
       "gaps": [],
       "graphql_field_name": null,

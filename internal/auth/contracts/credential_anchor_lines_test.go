@@ -19,7 +19,7 @@ import (
 // symlink) all fail; none is skipped.
 //
 // An anchor whose file is absent fails unless its path is listed in
-// credentialanchors/credential-anchor-retired-paths.txt (one path per line). The list
+// credentialanchors/credential-anchor-retired-paths.json (a JSON array of paths). The list
 // may hold only src/dev_health_ops/*.py paths (the deleted Python tree), absent
 // ones that some anchor still cites: a listed file that
 // exists, or a listed path no anchor cites, fails. Purging those anchors from
@@ -184,7 +184,7 @@ func checkOneAnchor(report *anchorReport, root string, ref credentialAnchorRef, 
 				report.retiredByKind[ref.kind()]++
 				return
 			}
-			report.failures = append(report.failures, fmt.Sprintf("%s: file is absent and its path is not in credentialanchors/credential-anchor-retired-paths.txt", label))
+			report.failures = append(report.failures, fmt.Sprintf("%s: file is absent and its path is not in credentialanchors/credential-anchor-retired-paths.json", label))
 			return
 		}
 		report.failures = append(report.failures, fmt.Sprintf("%s: file does not resolve: %v", label, err))
@@ -263,15 +263,13 @@ func readAnchorFile(root, path string, cache map[string][]string) ([]string, err
 
 func loadRetiredPaths(t *testing.T) []string {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("credentialanchors", "credential-anchor-retired-paths.txt"))
+	raw, err := os.ReadFile(filepath.Join("credentialanchors", "credential-anchor-retired-paths.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var paths []string
-	for _, line := range strings.Split(string(raw), "\n") {
-		if line = strings.TrimSpace(line); line != "" {
-			paths = append(paths, line)
-		}
+	if err := json.Unmarshal(raw, &paths); err != nil {
+		t.Fatal(err)
 	}
 	return paths
 }
@@ -334,7 +332,11 @@ func regenerateAnchorFiles(t *testing.T, root string, document []byte) {
 		paths = append(paths, path)
 	}
 	sort.Strings(paths)
-	if err := os.WriteFile(filepath.Join("credentialanchors", "credential-anchor-retired-paths.txt"), []byte(strings.Join(paths, "\n")+"\n"), 0o644); err != nil {
+	encodedPaths, err := json.MarshalIndent(paths, "", " ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join("credentialanchors", "credential-anchor-retired-paths.json"), append(encodedPaths, '\n'), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -146,6 +147,38 @@ func (w *workloadIssueFixture) counter(name string, want map[string]string) (tot
 	return total, series
 }
 
+// requireSuccessReasonsAreClosed asserts that every success the route recorded
+// carries a reason of the closed auth-outcome vocabulary.
+func (w *workloadIssueFixture) requireSuccessReasonsAreClosed() {
+	w.t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := w.reader.Collect(context.Background(), &rm); err != nil {
+		w.t.Fatal(err)
+	}
+	var seen int
+	for _, scope := range rm.ScopeMetrics {
+		for _, m := range scope.Metrics {
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			if m.Name != outcomeCounter || !ok {
+				continue
+			}
+			for _, point := range sum.DataPoints {
+				if result, _ := point.Attributes.Value("result"); result.AsString() != "success" || point.Value == 0 {
+					continue
+				}
+				seen++
+				reason, _ := point.Attributes.Value("reason_code")
+				if !slices.Contains(contracts.AuthOutcomeSuccessReasons, reason.AsString()) {
+					w.t.Fatalf("a success was recorded with reason_code %q, outside the closed vocabulary %v", reason.AsString(), contracts.AuthOutcomeSuccessReasons)
+				}
+			}
+		}
+	}
+	if seen == 0 {
+		w.t.Fatal("no success outcome was recorded")
+	}
+}
+
 // nothingRead asserts a refusal touched no store: no credential check, no
 // users read, no projection, no session.
 func (w *workloadIssueFixture) nothingRead(name string) {
@@ -223,9 +256,10 @@ func TestIssueSessionAcceptsTheGoAPIWorkloadToken(t *testing.T) {
 	if body["refresh_token"] == "" || body["token_type"] != "bearer" {
 		t.Fatalf("body %s", response.Body)
 	}
-	if got, _ := w.counter(outcomeCounter, map[string]string{"operation": "session_issue", "reason_code": "accepted_workload"}); got != 1 {
-		t.Fatalf("accepted_workload outcomes = %d, want 1", got)
+	if got, _ := w.counter(outcomeCounter, map[string]string{"operation": "session_issue", "result": "success", "reason_code": "accepted"}); got != 1 {
+		t.Fatalf("session_issue success outcomes with reason accepted = %d, want 1", got)
 	}
+	w.requireSuccessReasonsAreClosed()
 	if got, _ := w.counter(compatCounterName, nil); got != 0 {
 		t.Fatalf("a workload issue counted %d compat uses", got)
 	}
@@ -397,6 +431,7 @@ func TestIssueSessionCountsAcceptedServiceCredentialUse(t *testing.T) {
 	if got, _ := w.counter(compatCounterName, map[string]string{"class": authsessClass}); got != 2 {
 		t.Fatalf("compat uses = %d, want 2", got)
 	}
+	w.requireSuccessReasonsAreClosed()
 }
 
 // T13: only an accepted svc_authsess_ use counts: not a refusal, not a

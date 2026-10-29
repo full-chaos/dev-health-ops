@@ -9,7 +9,7 @@ auth.membership.mutations	outcome,verb	code: internal/auth/membership/store.go
 auth.session.refresh_exchanges	reason_code	code: internal/auth/session/store.go
 auth.session.revocations	reason	code: internal/auth/session/store.go
 auth.social.outcomes	operation,provider,reason_code	code: internal/auth/identity/social/service.go
-auth.workload.exchanges	audience,outcome,reason	code: internal/auth/workloadexchange/reasons.go
+auth.workload.exchanges	audience,outcome,reason,subject	code: internal/auth/workloadexchange/reasons.go
 auth.workload.mutations	outcome,verb	code: internal/auth/workload/store.go
 auth.workload.resolves	outcome	code: internal/auth/workload/store.go
 credential_mapping_rejected_total	missing_field,provider	code: internal/providerfoundation/credential_mapping_metrics.go

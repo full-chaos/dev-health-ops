@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 
@@ -247,10 +249,11 @@ func TestImpersonationRunsForAUserToken(t *testing.T) {
 	}
 }
 
-// TestOnlyGoAPIRoutesAnAuthenticator is acp C1: the policy package is shared
-// with query-api; the one non-test RouteAccess call in the module is go-api's
-// construction (internal/apiservice), so query-api stays unrouted.
-func TestOnlyGoAPIRoutesAnAuthenticator(t *testing.T) {
+// TestOnlyGoAPIAndQueryAPIRouteAnAuthenticator: the non-test RouteAccess calls
+// in the module are go-api's construction (internal/apiservice) and query-api's
+// (its REST edge verifier and its /query and /graphql authenticator, built
+// only with AUTH_ACCESS_TOKEN_ISSUER set); no other binary routes one.
+func TestOnlyGoAPIAndQueryAPIRouteAnAuthenticator(t *testing.T) {
 	root, err := moduleroot.Root()
 	if err != nil {
 		t.Fatal(err)
@@ -290,8 +293,15 @@ func TestOnlyGoAPIRoutesAnAuthenticator(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sites) != 1 || sites[0] != "internal/apiservice/service.go" {
-		t.Fatalf("RouteAccess is called from %v; only internal/apiservice/service.go may route an Authenticator", sites)
+	sort.Strings(sites)
+	want := []string{
+		"internal/apiservice/service.go",
+		"internal/queryapi/principal/edge_access.go",
+		"internal/queryapi/server/access_verify.go",
+		"internal/queryapi/server/access_verify.go",
+	}
+	if !slices.Equal(sites, want) {
+		t.Fatalf("RouteAccess is called from %v; want exactly %v", sites, want)
 	}
 }
 

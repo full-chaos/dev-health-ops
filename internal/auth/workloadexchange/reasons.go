@@ -21,6 +21,13 @@ const (
 	outcomeInvalid     = "invalid"
 )
 
+// Subjects: which path served the exchange (none for a request shape fault).
+const (
+	subjectKubernetes = "kubernetes"
+	subjectBootstrap  = "bootstrap"
+	subjectNone       = "none"
+)
+
 // The closed reason set. Only the log line and the counter carry a reason;
 // the caller sees one answer per outcome.
 const (
@@ -32,6 +39,7 @@ const (
 	reasonAudienceRefused     = "audience_refused"
 	reasonScopeRefused        = "scope_refused"
 	reasonLifetimeTooShort    = "lifetime_too_short"
+	reasonMalformed           = "malformed"
 
 	reasonTokenReviewUnavailable = "tokenreview_unavailable"
 	reasonSaturated              = "saturated"
@@ -47,6 +55,14 @@ var resolveReasons = []string{"unknown", "disabled", "uid_mismatch", "no_audienc
 var refusedReasons = append(append([]string{reasonSubjectTokenInvalid}, resolveReasons...),
 	reasonResolveRefused, reasonAudienceRefused, reasonScopeRefused, reasonLifetimeTooShort)
 
+// bootstrapResolveReasons are the reasons the workload store names for a
+// refused ResolveBootstrap. A reason outside the set counts as
+// resolve_refused.
+var bootstrapResolveReasons = []string{"unknown", "revoked", "expired", "disabled", "no_audience", "store_error"}
+
+var bootstrapRefusedReasons = append(append([]string{reasonMalformed}, bootstrapResolveReasons...),
+	reasonResolveRefused, reasonAudienceRefused, reasonScopeRefused, reasonLifetimeTooShort)
+
 // selfCheckReasons are authverify's workload refusal reasons.
 var selfCheckReasons = []authverify.Reason{
 	authverify.ReasonContract, authverify.ReasonUnknownKid, authverify.ReasonSignature, authverify.ReasonIssuer,
@@ -54,7 +70,13 @@ var selfCheckReasons = []authverify.Reason{
 }
 
 func unavailableReasons() []string {
-	out := []string{reasonTokenReviewUnavailable, reasonSaturated, reasonSignerUnavailable, reasonAuditUnavailable}
+	return append([]string{reasonTokenReviewUnavailable, reasonSaturated}, mintUnavailableReasons()...)
+}
+
+// mintUnavailableReasons are the unavailable reasons after the subject is
+// resolved: the signer, the self-check and the audit row.
+func mintUnavailableReasons() []string {
+	out := []string{reasonSignerUnavailable, reasonAuditUnavailable}
 	for _, r := range selfCheckReasons {
 		out = append(out, selfCheckPrefix+string(r))
 	}
@@ -97,6 +119,15 @@ func resolveReason(named string) string {
 	return reasonResolveRefused
 }
 
+func bootstrapResolveReason(named string) string {
+	for _, r := range bootstrapResolveReasons {
+		if r == named {
+			return r
+		}
+	}
+	return reasonResolveRefused
+}
+
 func selfCheckReason(err error) string {
 	reason := authverify.ReasonOf(err)
 	for _, r := range selfCheckReasons {
@@ -121,7 +152,7 @@ func newRecorder(logger *slog.Logger, meter metric.Meter) (recorder, error) {
 		meter = otel.Meter("github.com/full-chaos/dev-health-ops/internal/auth/workloadexchange")
 	}
 	exchanges, err := meter.Int64Counter("auth.workload.exchanges",
-		metric.WithDescription("Workload-token exchanges, by outcome, reason and audience."))
+		metric.WithDescription("Workload-token exchanges, by subject, outcome, reason and audience."))
 	if err != nil {
 		return recorder{}, fmt.Errorf("workloadexchange: registering the exchange counter: %w", err)
 	}
@@ -136,29 +167,36 @@ func (r recorder) declare() {
 	labels := append(append([]string(nil), workloadAudiences...), audienceNone)
 	for _, audience := range labels {
 		for _, reason := range refusedReasons {
-			r.add(ctx, 0, outcomeRefused, reason, audience)
+			r.add(ctx, 0, subjectKubernetes, outcomeRefused, reason, audience)
 		}
 		for _, reason := range unavailableReasons() {
-			r.add(ctx, 0, outcomeUnavailable, reason, audience)
+			r.add(ctx, 0, subjectKubernetes, outcomeUnavailable, reason, audience)
+		}
+		for _, reason := range bootstrapRefusedReasons {
+			r.add(ctx, 0, subjectBootstrap, outcomeRefused, reason, audience)
+		}
+		for _, reason := range mintUnavailableReasons() {
+			r.add(ctx, 0, subjectBootstrap, outcomeUnavailable, reason, audience)
 		}
 	}
 	for _, audience := range workloadAudiences {
-		r.add(ctx, 0, outcomeIssued, reasonIssued, audience)
+		r.add(ctx, 0, subjectKubernetes, outcomeIssued, reasonIssued, audience)
+		r.add(ctx, 0, subjectBootstrap, outcomeIssued, reasonIssued, audience)
 	}
-	r.add(ctx, 0, outcomeInvalid, reasonInvalidRequest, audienceNone)
+	r.add(ctx, 0, subjectNone, outcomeInvalid, reasonInvalidRequest, audienceNone)
 }
 
-func (r recorder) add(ctx context.Context, n int64, outcome, reason, audience string) {
-	r.exchanges.Add(ctx, n, metric.WithAttributes(
+func (r recorder) add(ctx context.Context, n int64, subject, outcome, reason, audience string) {
+	r.exchanges.Add(ctx, n, metric.WithAttributes(attribute.String("subject", subject),
 		attribute.String("outcome", outcome), attribute.String("reason", reason), attribute.String("audience", audience)))
 }
 
 // record logs one outcome by reason and counts it. No token, claim, key,
 // ServiceAccount or upstream error text is ever logged.
-func (r recorder) record(ctx context.Context, outcome, reason, audience string) {
-	r.add(ctx, 1, outcome, reason, audience)
+func (r recorder) record(ctx context.Context, subject, outcome, reason, audience string) {
+	r.add(ctx, 1, subject, outcome, reason, audience)
 	attrs := []any{
-		slog.String("route", Pattern), slog.String("outcome", outcome), slog.String("reason", reason),
+		slog.String("route", Pattern), slog.String("subject", subject), slog.String("outcome", outcome), slog.String("reason", reason),
 		slog.String("audience", audience), slog.String("request_id", httpapi.LoggableRequestID(ctx)),
 	}
 	switch outcome {

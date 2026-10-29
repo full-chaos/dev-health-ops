@@ -140,8 +140,8 @@ func graphQLEdgeChain(query http.HandlerFunc, deps graphQLEdgeDeps) http.Handler
 	handler = scope.Principal(scope.OrgScope(handler))
 	// Outside every consumer of the caller's identity, so the org scope, the
 	// impersonation middleware and the pipeline read each fact of it once and
-	// see one answer.
-	handler = deps.auth.ReadOnce(handler)
+	// see one answer, and authenticate against the request's row (its profile).
+	handler = withRouteProfile(deps.auth.ReadOnce(handler))
 	handler = correlationID(handler)
 	// Every /graphql line names its document; a refusal before the document is
 	// resolved says so, rather than carrying nothing.
@@ -158,12 +158,12 @@ func markGraphQLDocumentNotResolved(next http.Handler) http.Handler {
 }
 
 // mountGraphQLRoute registers /graphql. It stays unmounted -- a 404, and a
-// log line saying why -- when the pod has no edge secret: the user's edge
-// access token is the path's only credential, so without it the path could
-// only ever refuse.
+// log line saying why -- when the pod has neither the edge secret nor the
+// access-token issuer: a user's access token is the path's only credential,
+// so without either the path could only ever refuse.
 func mountGraphQLRoute(mux *http.ServeMux, query http.HandlerFunc, deps graphQLEdgeDeps) {
 	if deps.auth == nil {
-		log.Printf("query-api: %s NOT mounted: %s is unset, so the product path would have no credential to accept", graphQLEdgePath, edgeJWTSecretEnvVar)
+		log.Printf("query-api: %s NOT mounted: %s and %s are unset, so the product path would have no credential to accept", graphQLEdgePath, edgeJWTSecretEnvVar, accessTokenIssuerEnvVar)
 		return
 	}
 	mux.Handle(graphQLEdgePath, graphQLEdgeChain(query, deps))

@@ -327,6 +327,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.String("jwt_audience", c.Session.AccessAudience),
 		slog.String("access_class", c.Session.AccessClass),
 		slog.Bool("workload_exchange_enabled", c.WorkloadExchange.Enabled),
+		slog.Bool("workload_bootstrap_enabled", c.WorkloadExchange.Bootstrap),
 	}
 }
 

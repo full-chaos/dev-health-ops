@@ -526,6 +526,7 @@ internal/queryapi/server	people_drilldown_issues_route_test.go
 internal/queryapi/server	people_drilldown_prs_route_test.go
 internal/queryapi/server	people_route_test.go
 internal/queryapi/server	posture_readiness_test.go
+internal/queryapi/server	query_access_test.go
 internal/queryapi/server	query_route_ai_attributed_prs_names_test.go
 internal/queryapi/server	query_route_ai_impact_summary_day_test.go
 internal/queryapi/server	query_route_ai_opportunities_names_test.go

@@ -751,6 +751,35 @@
     },
     {
       "accepted_credential_classes": [
+        "internal_svc_authsess_token"
+      ],
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: the credential row is read live by token hash on every call; the actor's public.users and public.memberships rows are read live before the write and again under the write's locks.",
+      "disclosure_behavior": "Every bearer refusal is the same 401 error.v1 invalid_credentials; an actor that is not an active superuser gets 403 (principal_deactivated or superuser_required) before any row of the request is read, and the same rule runs again after the organization row lock, so a missing organization is named only to a superuser; an organization that is not suspended answers 200 with reactivated false and writes nothing; a store failure is 503.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/organizations/reactivate [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 26,
+          "note": "func (p PG) CheckScope",
+          "path": "internal/auth/servicecred/scope.go"
+        },
+        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). Any other bearer is refused before the body is read; then the actor must be an active superuser (go-api's PATCH /api/v1/admin/orgs/{org_id} is superuser only), checked on the live users row before anything is read for the request, and again inside the commit after the organization row lock."
+      },
+      "route": "/internal/v1/organizations/reactivate",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/provisioning.go",
+        "line": 42
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "cross_org_superuser_only"
+    },
+    {
+      "accepted_credential_classes": [
         "kubernetes_sa_token_exchange",
         "workload_bootstrap_credential"
       ],
@@ -1366,5 +1395,5 @@
     }
   ],
   "schema_version": "endpoint-profile.v1",
-  "source_commit": "7a6b2358132d28d0d4ec892aa9a0c3aa611cb5df"
+  "source_commit": "e919782813f108674392a12f2a4377ad645f8dab"
 }

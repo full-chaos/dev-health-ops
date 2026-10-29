@@ -216,7 +216,7 @@ func (q poolQuerier) queryRow(ctx context.Context, sql string, args ...any) pgx.
 // An inviter is locked with the principals, in the same id order, so a
 // membership insert never takes a later lock on a principal or users row; a
 // missing inviter is ErrInviterNotFound before anything is written.
-func (s *Store) readPairs(ctx context.Context, q querier, orgID uuid.UUID, principals []uuid.UUID, inviter *uuid.UUID, lock bool) (*locked, error) {
+func (s *Store) readPairs(ctx context.Context, q querier, orgID uuid.UUID, principals []uuid.UUID, inviter *uuid.UUID, lock bool, step4 func() error) (*locked, error) {
 	forUpdate, forShare := "", ""
 	if lock {
 		forUpdate, forShare = " FOR UPDATE", " FOR SHARE"
@@ -257,6 +257,11 @@ func (s *Store) readPairs(ctx context.Context, q querier, orgID uuid.UUID, princ
 	}
 	if !orgActive {
 		return nil, ErrOrgSuspended
+	}
+	if step4 != nil {
+		if err := step4(); err != nil {
+			return nil, err
+		}
 	}
 	l := &locked{pairs: map[uuid.UUID]*pairRows{}}
 	for _, id := range ids {
@@ -506,7 +511,7 @@ func (s *Store) mutate(ctx context.Context, v verb, c Change) (*Membership, erro
 	var err error
 	for range planAttempts {
 		var read *locked
-		read, err = s.readPairs(ctx, poolQuerier{s.pool}, c.OrgID, ids, c.InvitedBy, false)
+		read, err = s.readPairs(ctx, poolQuerier{s.pool}, c.OrgID, ids, c.InvitedBy, false, nil)
 		if err != nil {
 			// The locked read below decides the refusal after Authorize, so
 			// a refusal is not disclosed to an actor Authorize refuses.
@@ -519,7 +524,7 @@ func (s *Store) mutate(ctx context.Context, v verb, c Change) (*Membership, erro
 		}
 		err = s.run(ctx, v, audit.Mutation{
 			Apply: func(ctx context.Context, tx audit.TxOps) error {
-				l, err := s.readPairs(ctx, txQuerier{tx}, c.OrgID, ids, c.InvitedBy, true)
+				l, err := s.readPairs(ctx, txQuerier{tx}, c.OrgID, ids, c.InvitedBy, true, nil)
 				if err != nil {
 					return authorizeLookup(ctx, tx, c.Authorize, Locked{OrgID: c.OrgID, Principals: ids}, err)
 				}
@@ -593,7 +598,7 @@ func (s *Store) TransferOwnership(ctx context.Context, t Transfer) error {
 	var err error
 	for range planAttempts {
 		var from, to pairPlan
-		if read, rerr := s.readPairs(ctx, poolQuerier{s.pool}, t.OrgID, ids, nil, false); rerr == nil {
+		if read, rerr := s.readPairs(ctx, poolQuerier{s.pool}, t.OrgID, ids, nil, false, nil); rerr == nil {
 			from, to = planOf(read.pairs[t.From]), planOf(read.pairs[t.To])
 		} else {
 			from, to = planOf(&pairRows{principal: t.From}), planOf(&pairRows{principal: t.To})
@@ -604,7 +609,7 @@ func (s *Store) TransferOwnership(ctx context.Context, t Transfer) error {
 		}
 		err = s.run(ctx, verbTransfer, audit.Mutation{
 			Apply: func(ctx context.Context, tx audit.TxOps) error {
-				l, err := s.readPairs(ctx, txQuerier{tx}, t.OrgID, ids, nil, true)
+				l, err := s.readPairs(ctx, txQuerier{tx}, t.OrgID, ids, nil, true, nil)
 				if err != nil {
 					return authorizeLookup(ctx, tx, t.Authorize, Locked{OrgID: t.OrgID, Principals: sortedUnique(ids)}, err)
 				}
@@ -635,6 +640,70 @@ func (s *Store) TransferOwnership(ctx context.Context, t Transfer) error {
 		}
 	}
 	return err
+}
+
+// ErrStateMoved reports that the rows of a planned add changed before its
+// locks: the caller plans the add again (AddPlan).
+var ErrStateMoved = errStateMoved
+
+// AddPlan is an Add planned for a caller's own audit.Commit, for a verb whose
+// own row decides the add (an invite accept). Its membership id and event are
+// fixed before the transaction, as audit.Mutation needs.
+type AddPlan struct {
+	change Change
+	plan   pairPlan
+}
+
+// MembershipID is the id the planned membership has in both tables.
+func (p *AddPlan) MembershipID() uuid.UUID { return p.plan.id }
+
+// Event is the planned membership's provisioning event.
+func (p *AddPlan) Event() audit.OutboxEvent { return eventFor(verbAdd, p.plan.id, p.plan.next) }
+
+// PlanAdd plans an add of c from a lock-free read. A refusal the read already
+// shows (already a member, a suspended membership) is returned at once.
+func (s *Store) PlanAdd(ctx context.Context, c Change) (*AddPlan, error) {
+	if !s.ownsUsers {
+		return nil, ErrNotOwned
+	}
+	if !isOrganizationRole(c.Role) {
+		return nil, ErrRoleInvalid
+	}
+	read, err := s.readPairs(ctx, poolQuerier{s.pool}, c.OrgID, []uuid.UUID{c.PrincipalID}, c.InvitedBy, false, nil)
+	if err != nil {
+		return nil, err
+	}
+	plan := planOf(read.pairs[c.PrincipalID])
+	d, err := decide(verbAdd, plan.prev, c.Role, read.activeOwners)
+	if err != nil {
+		return nil, err
+	}
+	plan.next = d.next
+	return &AddPlan{change: c, plan: plan}, nil
+}
+
+// ApplyAdd writes a planned add inside the caller's audit.Commit, in the one
+// lock order: principals, public.users and the organization, then step4 (the
+// caller's own row, e.g. the invite, and its checks: they authorize the add),
+// then the membership rows. A nil step4 refuses. ErrStateMoved: plan again.
+func (s *Store) ApplyAdd(ctx context.Context, tx audit.TxOps, p *AddPlan, step4 func() error) error {
+	if step4 == nil {
+		return ErrDenied
+	}
+	c := p.change
+	l, err := s.readPairs(ctx, txQuerier{tx}, c.OrgID, []uuid.UUID{c.PrincipalID}, c.InvitedBy, true, step4)
+	if err != nil {
+		return err
+	}
+	pr := l.pairs[c.PrincipalID]
+	d, err := decide(verbAdd, pr.state(), c.Role, l.activeOwners)
+	if err != nil {
+		return err
+	}
+	if !p.plan.matches(pr) || d.next != p.plan.next {
+		return errStateMoved
+	}
+	return s.write(ctx, tx, c.OrgID, pr, p.plan.id, d.next, true, c.InvitedBy)
 }
 
 func (s *Store) Get(ctx context.Context, orgID, principalID uuid.UUID) (*Membership, error) {

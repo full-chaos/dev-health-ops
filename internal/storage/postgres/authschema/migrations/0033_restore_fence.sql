@@ -39,6 +39,9 @@ CREATE TABLE restore_fence_state (
     applied_at            timestamptz NOT NULL DEFAULT now(),
     floors_raised         bigint      NOT NULL DEFAULT 0 CHECK (floors_raised >= 0),
     revocations_reapplied bigint      NOT NULL DEFAULT 0 CHECK (revocations_reapplied >= 0),
+    -- operator_actions lists what an operator must still do (ids only): force
+    -- a password reset, re-queue a provider revocation.
+    operator_actions      jsonb       NOT NULL DEFAULT '[]'::jsonb,
     PRIMARY KEY (timeline_id, manifest_sha256)
 );
 

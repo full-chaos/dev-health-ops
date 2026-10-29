@@ -23,6 +23,12 @@ const (
 	// kindPresence deletes the restored rows whose id is not in the manifest: a
 	// single-use token that was consumed after T is not usable again.
 	kindPresence
+	// kindInsert puts back replay evidence the restore lost: a row of the
+	// source that the restored table lacks is inserted; an existing row is left.
+	kindInsert
+	// kindReport writes nothing: it names the source rows the restored table
+	// lacks, as an operator action.
+	kindReport
 )
 
 // section is one table the fence carries.
@@ -40,6 +46,9 @@ type section struct {
 	active  string
 	// touch sets updated_at on a changed row.
 	touch bool
+	// action is the operator action a report section (and the counter section)
+	// raises for the ids it names.
+	action ActionKind
 }
 
 func (s section) qualified(schema authschema.ValidatedIdentifier) string {
@@ -70,6 +79,24 @@ var sections = []section{
 	{name: "auth.resource_grants", table: "resource_grants", kind: kindRevoke, key: colUUID("id"),
 		cols: []column{colTS("revoked_at")}, revoked: "s.revoked_at IS NOT NULL", active: "t.revoked_at IS NULL"},
 
+	{name: "auth.memberships", table: "memberships", kind: kindRevoke, key: colUUID("id"),
+		cols: []column{colText("status")}, revoked: "s.status IN ('suspended', 'removed')",
+		active: "(t.status IN ('invited', 'active') OR (t.status = 'suspended' AND x.status = 'removed'))", touch: true},
+	{name: "auth.service_accounts", table: "service_accounts", kind: kindRevoke, key: colUUID("principal_id"),
+		cols: []column{colText("status"), colTS("disabled_at")}, revoked: "s.status = 'disabled'", active: "t.status = 'active'", touch: true},
+	{name: "auth.workloads", table: "workloads", kind: kindRevoke, key: colUUID("principal_id"),
+		cols: []column{colTS("disabled_at")}, revoked: "s.disabled_at IS NOT NULL", active: "t.disabled_at IS NULL", touch: true},
+	{name: "auth.link_credentials", table: "link_credentials", kind: kindRevoke, key: colUUID("id"),
+		cols: []column{colTS("consumed_at")}, revoked: "s.consumed_at IS NOT NULL", active: "t.consumed_at IS NULL"},
+	// Replay evidence: the identifier hash of a used SAML assertion is a hash of a
+	// public assertion id, not a credential; it travels as hex.
+	{name: "auth.saml_assertion_uses", table: "saml_assertion_uses", kind: kindInsert, key: colText("issuer"),
+		cols: []column{colText("assertion_id_hash"), colTS("expires_at")}},
+	// Report only: users whose password changed after the target (their
+	// password_updated_at is newer in the source).
+	{name: "auth.users", table: "users", kind: kindReport, key: colUUID("principal_id"),
+		cols: []column{colTS("password_updated_at")}, revoked: "s.password_updated_at IS NOT NULL", action: ActionForcePasswordReset},
+
 	// The legacy public schema: credential and revocation state the same
 	// restore rolls back while legacy auth stays on.
 	{name: "public.refresh_tokens", legacy: true, table: "refresh_tokens", kind: kindRevoke, key: colUUID("id"),
@@ -83,7 +110,10 @@ var sections = []section{
 	{name: "public.org_invites", legacy: true, table: "org_invites", kind: kindRevoke, key: colUUID("id"),
 		cols: []column{colText("status"), colTS("accepted_at")}, revoked: "s.status <> 'pending'", active: "t.status = 'pending'", touch: true},
 	{name: "public.users", legacy: true, table: "users", kind: kindCounter, key: colUUID("id"),
-		cols: []column{{"is_active", "boolean"}, {"token_version", "integer"}}, revoked: "s.token_version > 0 OR NOT s.is_active", touch: true},
+		cols: []column{{"is_active", "boolean"}, {"token_version", "integer"}}, revoked: "s.token_version > 0 OR NOT s.is_active", touch: true,
+		action: ActionForcePasswordReset},
+	{name: "public.provider_oauth_revocations", legacy: true, table: "provider_oauth_revocations", kind: kindReport, key: colUUID("id"),
+		cols: []column{colText("org_id"), colText("provider"), colText("purpose")}, action: ActionRequeueProviderRevocation},
 	{name: "public.email_verification_tokens", legacy: true, table: "email_verification_tokens", kind: kindPresence, key: colUUID("id")},
 	{name: "public.password_reset_tokens", legacy: true, table: "password_reset_tokens", kind: kindPresence, key: colUUID("id")},
 }
@@ -111,6 +141,10 @@ func (s section) recordset() string {
 func (s section) exportSQL(schema authschema.ValidatedIdentifier) string {
 	var pairs []string
 	for _, n := range s.columnNames() {
+		if s.kind == kindInsert && n == "assertion_id_hash" {
+			pairs = append(pairs, "'assertion_id_hash', encode(s.assertion_id_hash, 'hex')")
+			continue
+		}
 		pairs = append(pairs, fmt.Sprintf("'%s', s.%s", n, n))
 	}
 	where := ""
@@ -145,10 +179,36 @@ u AS (UPDATE %s t SET token_version = GREATEST(t.token_version, x.token_version)
       FROM m x WHERE t.%s = x.%s AND (t.token_version < x.token_version OR (t.is_active AND NOT x.is_active)) RETURNING 1)
 SELECT (SELECT count(*) FROM u), (SELECT count(*) FROM m x WHERE NOT EXISTS (SELECT 1 FROM %s t WHERE t.%s = x.%s))`,
 			s.recordset(), tbl, s.key.name, s.key.name, tbl, s.key.name, s.key.name)
+	case kindInsert:
+		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s),
+i AS (INSERT INTO %s (issuer, assertion_id_hash, expires_at) SELECT issuer, decode(assertion_id_hash, 'hex'), expires_at FROM m ON CONFLICT DO NOTHING RETURNING 1)
+SELECT (SELECT count(*) FROM i), 0::bigint`, s.recordset(), tbl)
+	case kindReport:
+		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s)
+SELECT 0::bigint, (SELECT count(*) FROM m x WHERE NOT EXISTS (SELECT 1 FROM %s t WHERE t.%s = x.%s))`, s.recordset(), tbl, s.key.name, s.key.name)
 	default: // kindPresence
 		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s),
 d AS (DELETE FROM %s t WHERE NOT EXISTS (SELECT 1 FROM m x WHERE x.%s = t.%s) RETURNING 1)
 SELECT (SELECT count(*) FROM d), 0::bigint`,
 			s.recordset(), tbl, s.key.name, s.key.name)
 	}
+}
+
+// idsSQL returns the statement that names the ids of the operator action of
+// this section (rows as $1), or "" when it has none.
+func (s section) idsSQL(schema authschema.ValidatedIdentifier) string {
+	tbl := s.qualified(schema)
+	switch {
+	case s.kind == kindReport && s.name == "auth.users":
+		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s)
+SELECT t.%s::text FROM %s t JOIN m x ON x.%s = t.%s
+WHERE t.password_updated_at IS NULL OR t.password_updated_at < x.password_updated_at ORDER BY 1`, s.recordset(), s.key.name, tbl, s.key.name, s.key.name)
+	case s.kind == kindReport:
+		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s)
+SELECT x.%s::text FROM m x WHERE NOT EXISTS (SELECT 1 FROM %s t WHERE t.%s = x.%s) ORDER BY 1`, s.recordset(), s.key.name, tbl, s.key.name, s.key.name)
+	case s.kind == kindCounter && s.action != "":
+		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s)
+SELECT t.%s::text FROM %s t JOIN m x ON x.%s = t.%s WHERE t.token_version < x.token_version ORDER BY 1`, s.recordset(), s.key.name, tbl, s.key.name, s.key.name)
+	}
+	return ""
 }

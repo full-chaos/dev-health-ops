@@ -125,6 +125,7 @@ func executeRestoreFence(parent context.Context, args []string, lookup secrets.L
 		}
 		fmt.Fprintf(stdout, "restore-fence status timeline=%d fenced=true\n", *timeline)
 		printInputStatus(ctx, stdout)
+		printActions(ctx, pool, schema, stdout)
 		return 0
 	case "export":
 		manifest, err := restorefence.ExportManifest(ctx, pool, schema)
@@ -181,6 +182,9 @@ func executeRestoreFence(parent context.Context, args []string, lookup secrets.L
 		return 1
 	}
 	fmt.Fprintf(stdout, "restore-fence apply %s\n", encoded)
+	for _, line := range restorefence.ActionLines(report.Actions) {
+		fmt.Fprintln(stdout, line)
+	}
 	return 0
 }
 
@@ -192,5 +196,17 @@ func printInputStatus(ctx context.Context, stdout io.Writer) {
 	for _, in := range restorefence.RegisteredFloorInputs() {
 		usable := in.Status(ctx) == nil
 		fmt.Fprintf(stdout, "input %s kind=consumer usable=%t\n", in.Name(), usable)
+	}
+}
+
+// printActions prints the operator actions of the live timeline's fence.
+func printActions(ctx context.Context, pool restorefence.Querier, schema authschema.ValidatedIdentifier, stdout io.Writer) {
+	actions, err := restorefence.PendingActions(ctx, pool, schema)
+	if err != nil {
+		fmt.Fprintln(stdout, "operator-actions unreadable")
+		return
+	}
+	for _, line := range restorefence.ActionLines(actions) {
+		fmt.Fprintln(stdout, line)
 	}
 }

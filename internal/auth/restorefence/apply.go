@@ -64,6 +64,8 @@ type Report struct {
 	Sections       []SectionReport `json:"sections"`
 	// Inputs is one line per floor input: used or skipped, and why.
 	Inputs []InputReport `json:"inputs"`
+	// Actions are the operator actions the apply names (ids only).
+	Actions []OperatorAction `json:"actions"`
 }
 
 const blindDigest = "blind_margin"
@@ -97,8 +99,13 @@ func Preflight(ctx context.Context, pool *pgxpool.Pool, schema authschema.Valida
 	}
 	for _, s := range sections {
 		privilege := "UPDATE"
-		if s.kind == kindPresence {
+		switch s.kind {
+		case kindPresence:
 			privilege = "DELETE"
+		case kindInsert:
+			privilege = "INSERT"
+		case kindReport:
+			privilege = "SELECT"
 		}
 		if err := check(s.name, s.qualified(schema), privilege); err != nil {
 			return nil, err
@@ -210,23 +217,39 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedI
 				if err != nil {
 					return fmt.Errorf("encoding section %s", s.name)
 				}
+				if q := s.idsSQL(schema); q != "" {
+					ids, err := collectIDs(ctx, tx, q, string(raw))
+					if err != nil {
+						return fmt.Errorf("naming the operator action of section %s (sqlstate %s)", s.name, sqlState(err))
+					}
+					if len(ids) > 0 {
+						report.Actions = append(report.Actions, OperatorAction{Kind: s.action, Source: s.name, IDs: ids})
+					}
+				}
 				var changed, absent int64
 				if err := tx.QueryRow(ctx, s.applySQL(schema), string(raw)).Scan(&changed, &absent); err != nil {
 					return fmt.Errorf("applying section %s (sqlstate %s)", s.name, sqlState(err))
 				}
 				report.Sections = append(report.Sections, SectionReport{Name: s.name, Changed: changed, Absent: absent})
-				if s.kind == kindPresence {
+				switch s.kind {
+				case kindPresence:
 					report.RowsRemoved += changed
-				} else {
+				case kindReport:
+				default:
 					report.Revocations += changed
 				}
 			}
 			if !opts.Apply {
 				return errDryRun
 			}
-			if _, err := tx.Exec(ctx, `INSERT INTO `+q+`.restore_fence_state (timeline_id, manifest_sha256, source, floors_raised, revocations_reapplied)
-				VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING`,
-				*timeline, digest, source, report.FloorsRaised+report.MarginRows, report.Revocations+report.RowsRemoved); err != nil {
+			report.Actions = mergeActions(report.Actions)
+			actionsJSON, err := json.Marshal(report.Actions)
+			if err != nil {
+				return fmt.Errorf("encoding the operator actions")
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO `+q+`.restore_fence_state (timeline_id, manifest_sha256, source, floors_raised, revocations_reapplied, operator_actions)
+				VALUES ($1, $2, $3, $4, $5, $6::jsonb) ON CONFLICT DO NOTHING`,
+				*timeline, digest, source, report.FloorsRaised+report.MarginRows, report.Revocations+report.RowsRemoved, string(actionsJSON)); err != nil {
 				return fmt.Errorf("recording the fence (sqlstate %s)", sqlState(err))
 			}
 			return nil
@@ -258,4 +281,22 @@ func sqlState(err error) string {
 		return pgErr.Code
 	}
 	return "none"
+}
+
+// collectIDs runs an id-listing statement (rows as $1) and returns the ids.
+func collectIDs(ctx context.Context, tx audit.TxOps, sql, rows string) ([]string, error) {
+	r, err := tx.Query(ctx, sql, rows)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+	var ids []string
+	for r.Next() {
+		var id string
+		if err := r.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, r.Err()
 }

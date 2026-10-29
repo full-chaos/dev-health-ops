@@ -2,6 +2,7 @@ package restorefence
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -49,4 +50,21 @@ func Timeline(ctx context.Context, q Querier, schema authschema.ValidatedIdentif
 		return nil, fmt.Errorf("%w", ErrCheckFailed)
 	}
 	return id, nil
+}
+
+// PendingActions returns the operator actions recorded for the live timeline
+// (the newest fence row that names any), for `restore-fence status`.
+func PendingActions(ctx context.Context, q Querier, schema authschema.ValidatedIdentifier) ([]OperatorAction, error) {
+	s := authschema.Quote(schema)
+	var raw []byte
+	err := q.QueryRow(ctx, `SELECT coalesce((SELECT operator_actions FROM `+s+`.restore_fence_state
+		WHERE timeline_id = `+s+`.restore_fence_timeline() AND operator_actions <> '[]'::jsonb ORDER BY applied_at DESC LIMIT 1), '[]'::jsonb)`).Scan(&raw)
+	if err != nil {
+		return nil, fmt.Errorf("%w", ErrCheckFailed)
+	}
+	var out []OperatorAction
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("%w", ErrCheckFailed)
+	}
+	return out, nil
 }

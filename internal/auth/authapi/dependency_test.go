@@ -76,6 +76,7 @@ func TestNamesDependencyIgnoresGeneratedFieldsAndCatchesThePort(t *testing.T) {
 		{"sentinel value", `{"detail":"sentinel-person@example.com"}`, true},
 		{"sentinel inside occurred_at", `{"occurred_at":"sentinel"}`, true},
 		{"service unavailable without names", `{"detail":"Authentication service temporarily unavailable"}`, false},
+		{"a longer number that starts with the port digits", `{"retry_after_seconds":54321}`, false},
 	} {
 		if got := namesDependency(c.body); got != c.want {
 			t.Errorf("%s: namesDependency = %v, want %v: %s", c.name, got, c.want, c.body)

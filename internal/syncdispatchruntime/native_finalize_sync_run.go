@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/cacheinvalidation"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
+	schedulersync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/full-chaos/dev-health-ops/internal/synccoverage"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -340,13 +341,21 @@ func (service *NativeFinalizeSyncRunService) finalize(
 	}
 
 	newStatus := aggregateRunStatus(summary.total, aggregate.successCount, aggregate.failedCount)
+	terminal := zeroUnitTerminal{status: newStatus, stampConfig: true}
+	if isZeroUnit {
+		terminal = zeroUnitTerminalFor(zeroUnitReason)
+		newStatus = terminal.status
+		if terminal.clearError {
+			newError = nil
+		}
+	}
 	completedAt := run.completedAt
 	if completedAt == nil {
 		now := service.nowUTC()
 		completedAt = &now
 	}
 
-	if err := writeFinalizeRun(ctx, tx, run.id, aggregate.successCount, aggregate.failedCount, *completedAt, newStatus, resultPayload, newError); err != nil {
+	if err := writeFinalizeRun(ctx, tx, run.id, aggregate.successCount, aggregate.failedCount, *completedAt, newStatus, resultPayload, newError, terminal.startNow); err != nil {
 		return err
 	}
 
@@ -366,8 +375,10 @@ func (service *NativeFinalizeSyncRunService) finalize(
 		stampError = &sanitized
 	}
 
-	if err := stampCanonicalSyncConfig(ctx, tx, run.orgID, run.integrationID, *completedAt, runSuccess, stampError, resultPayload); err != nil {
-		return err
+	if terminal.stampConfig {
+		if err := stampCanonicalSyncConfig(ctx, tx, run.orgID, run.integrationID, *completedAt, runSuccess, stampError, resultPayload); err != nil {
+			return err
+		}
 	}
 	if err := observeTerminalSyncRun(ctx, tx, run, *completedAt, newStatus, aggregate.successCount, aggregate.failedCount, resultPayload, stampError); err != nil {
 		return err
@@ -778,6 +789,28 @@ func aggregateRunStatus(totalCount, successCount, failedCount int) string {
 	return syncRunStatusPartialFailed
 }
 
+// zeroUnitTerminal is how a run that planned zero units terminates.
+type zeroUnitTerminal struct {
+	status string
+	// clearError drops the run's error text (a no-op success has none).
+	clearError bool
+	// stampConfig stamps the canonical sync configuration's last-sync fields. A no-op success does not: the last
+	// sync of a configuration must keep describing a real sync.
+	stampConfig bool
+	// startNow sets started_at (to the completion time) when it is still NULL: a no-op run never started a unit.
+	startNow bool
+}
+
+// zeroUnitTerminalFor decides the terminal state from the planner's reason (D6467). Only the planner's capability
+// reason (the provider has no such dataset) is a success; every other reason, a planner error category included,
+// keeps the loud failure (CHAOS-4159).
+func zeroUnitTerminalFor(reason string) zeroUnitTerminal {
+	if reason == schedulersync.NoDatasetForProviderReason {
+		return zeroUnitTerminal{status: syncRunStatusSuccess, clearError: true, stampConfig: false, startNow: true}
+	}
+	return zeroUnitTerminal{status: syncRunStatusFailed, stampConfig: true}
+}
+
 // zeroUnitReasonFrom ports sync_units.py:_zero_unit_reason verbatim: prefers
 // an explicit "reason", falls back to "error_category", else the generic
 // residual. Python's predicate is `isinstance(value, str) and value.strip()`
@@ -815,6 +848,7 @@ func writeFinalizeRun(
 	status string,
 	result map[string]any,
 	errorText *string,
+	startNow bool,
 ) error {
 	encoded, err := json.Marshal(result)
 	if err != nil {
@@ -823,9 +857,10 @@ func writeFinalizeRun(
 	_, err = tx.Exec(ctx, `
 UPDATE public.sync_runs
 SET completed_units = $2, failed_units = $3, completed_at = $4, status = $5,
-    result = `+resultKeepingSkippedDatasets("$6")+`, error = $7
+    result = `+resultKeepingSkippedDatasets("$6")+`, error = $7,
+    started_at = CASE WHEN $8::boolean THEN COALESCE(started_at, $4) ELSE started_at END
 WHERE id = $1::uuid`,
-		runID, completedUnits, failedUnits, completedAt, status, encoded, errorText)
+		runID, completedUnits, failedUnits, completedAt, status, encoded, errorText, startNow)
 	if err != nil {
 		return ErrFinalizeSyncRunUnavailable
 	}

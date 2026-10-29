@@ -44,7 +44,7 @@ func TestFinalizeKeepsTheSkippedDatasetsTheRunWasPlannedWith(t *testing.T) {
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
 		if err := writeFinalizeRun(ctx, tx, keepSkippedRunID, 2, 0, time.Now(), "success",
-			map[string]any{"completed_units": 2, "failed_units": 0}, nil); err != nil {
+			map[string]any{"completed_units": 2, "failed_units": 0}, nil, false); err != nil {
 			t.Fatal(err)
 		}
 		if err := tx.Commit(ctx); err != nil {
@@ -74,7 +74,7 @@ func TestFinalizeWithoutSkippedDatasetsWritesOnlyThePayload(t *testing.T) {
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
 		if err := writeFinalizeRun(ctx, tx, keepSkippedRunID, 1, 0, time.Now(), "success",
-			map[string]any{"completed_units": 1, "failed_units": 0}, nil); err != nil {
+			map[string]any{"completed_units": 1, "failed_units": 0}, nil, false); err != nil {
 			t.Fatal(err)
 		}
 		if err := tx.Commit(ctx); err != nil {

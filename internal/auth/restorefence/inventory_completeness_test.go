@@ -2,6 +2,7 @@ package restorefence
 
 import (
 	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -34,9 +35,9 @@ var excluded = map[string]string{
 	"public.sync_configurations":    "not access-bearing: sync configuration",
 	"public.billing_plans":          "not access-bearing: billing catalogue",
 	"public.billing_prices":         "not access-bearing: billing catalogue",
-	// Follow-up 11872 (D6459 am.1), and two tables not yet classified (policy_revisions, entitlement_snapshots).
-	"auth.policy_revisions":           "NEEDS-RULING: an older active policy after a restore (the revision floor stops re-issue of a revision number only)",
-	"auth.entitlement_snapshots":      "NEEDS-RULING: an older entitlement snapshot after a restore",
+	// Follow-up 11872 (D6459 am.1).
+	"auth.policy_revisions":           "not access-bearing today: dormant, insert-only, no code reads or writes it (ADR-05/07); a reader needs a fence section (the tripwire test enforces it)",
+	"auth.entitlement_snapshots":      "not access-bearing today: dormant, insert-only, no code reads or writes it (ADR-05/07); a reader needs a fence section (the tripwire test enforces it)",
 	"public.organizations":            "ticket 11872 (High; blocks the first prod fence apply): a legacy organization deactivated after T (is_active) returns active; prod is phase 2, so this is the org state go-api reads today",
 	"public.org_ip_allowlist":         "ticket 11872 (High; blocks the first prod fence apply): an allowlist entry deactivated after T (is_active) returns active",
 	"public.integrations":             "ticket 11872 (High): provider integration flags (is_active)",
@@ -120,5 +121,54 @@ func TestEveryAuthTableAndEveryLegacyAccessTableIsASectionOrExcluded(t *testing.
 		}
 	}
 	sort.Strings(needs)
-	t.Logf("tables excluded pending an acp ruling: %s", strings.Join(needs, ", "))
+	if len(needs) > 0 {
+		t.Errorf("tables excluded pending a ruling (a ticket or a reason is required): %s", strings.Join(needs, ", "))
+	}
+}
+
+// Tripwire for the two dormant tables above: they are excluded from the fence only because no code reads or writes them.
+// A non-test, non-migration Go file that names either table (outside the grants list) fails this test, so the change
+// that adds a reader must give the table a fence section or a new, reasoned exclusion.
+func TestNoProductionCodeReadsOrWritesTheDormantPolicyAndEntitlementTables(t *testing.T) {
+	root, err := moduleroot.Root()
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed := map[string]bool{"internal/storage/postgres/authschema/grants.go": true}
+	var hits []string
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			n := d.Name()
+			if n == ".git" || n == "node_modules" || n == "testdata" || n == "migrations" || n == ".venv" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		rel, _ := filepath.Rel(root, path)
+		rel = filepath.ToSlash(rel)
+		if allowed[rel] {
+			return nil
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		text := string(raw)
+		if strings.Contains(text, "policy_revisions") || strings.Contains(text, "entitlement_snapshots") {
+			hits = append(hits, rel)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) > 0 {
+		t.Errorf("production code now names auth.policy_revisions or auth.entitlement_snapshots, so they are no longer dormant: classify them for the fence (a section or a reasoned exclusion) before this passes: %v", hits)
+	}
 }

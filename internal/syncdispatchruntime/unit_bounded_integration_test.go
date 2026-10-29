@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -21,17 +21,13 @@ import (
 func TestFinalizeOverMoreThanOnePageOfUnitsWritesEveryCheckpointAndReadsBoundedPages(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	createFinalizeTables(t, ctx, pool)
 	seedFinalizeRoute(t, ctx, pool)
 
 	const total = 2*unitPageSize + 7
@@ -120,10 +116,7 @@ WHERE sync_run_id=$1 AND compute_type='work_graph'`, finalizeTestRun).Scan(&chec
 func TestPostSyncPlanOverManyWorkItemUnitsPlansTheUnionOfTheirWindowDays(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {

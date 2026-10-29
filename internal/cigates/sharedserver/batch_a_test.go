@@ -15,6 +15,7 @@ import (
 // together (batch A of the adoption). A package that drops out of this list
 // has to say why, so a TestMain edit cannot quietly turn the mode off.
 var batchA = []string{
+	"internal/fixturescli",
 	"internal/jobs/metrics/remaining",
 	"internal/queryapi/analytics",
 	"internal/syncdispatchruntime",

@@ -56,9 +56,14 @@ func TestEveryRollbackFileDeletesItsOwnVersionRowLast(t *testing.T) {
 	}
 	for _, file := range files {
 		name := filepath.Base(file)
+		// The migration a rollback file undoes is a live chain file, or an archived one (099..144, held by the head
+		// baseline since CHAOS-11751; its rollback is valid only with an image rollback to a pre-squash build).
 		chainFile := filepath.Join("sql", strings.TrimSuffix(name, ".down.sql")+".sql")
-		if _, err := os.Stat(chainFile); err != nil {
-			t.Errorf("%s names no chain file (%s): %v", name, chainFile, err)
+		archivedFile := filepath.Join("archive", "sql", strings.TrimSuffix(name, ".down.sql")+".sql")
+		_, liveErr := os.Stat(chainFile)
+		_, archivedErr := os.Stat(archivedFile)
+		if liveErr != nil && archivedErr != nil {
+			t.Errorf("%s names no chain file (%s: %v; %s: %v)", name, chainFile, liveErr, archivedFile, archivedErr)
 		}
 		body, err := os.ReadFile(file)
 		if err != nil {

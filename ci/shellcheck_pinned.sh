@@ -130,6 +130,10 @@ FILES=(
   # neither escapes the lint the way lane-4441 found this script itself once did.
   "${ROOT}/ci/mirror_precheck_lib.sh"
   "${ROOT}/ci/mirror_precheck_lib_test.sh"
+  "${ROOT}/ci/verify_base_images.sh"
+  "${ROOT}/ci/verify_base_images_test.sh"
+  "${ROOT}/ci/verify_base_sources.sh"
+  "${ROOT}/ci/verify_base_sources_test.sh"
   # CHAOS-11422: the entry point that lists and runs the dedicated shell suites.
   "${ROOT}/ci/run_shell_tests.sh"
   # CHAOS-11096: base-image pull retry/fallback helper and its fixture suite.

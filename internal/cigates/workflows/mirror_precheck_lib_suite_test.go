@@ -16,12 +16,15 @@ const mirrorWf = ".github/workflows/mirror-test-images.yml"
 var mirrorSuitePaths = []string{
 	"ci/mirror_precheck_lib.sh",
 	"ci/mirror_precheck_lib_test.sh",
+	"ci/verify_base_images_test.sh",
+	"ci/verify_base_sources.sh",
+	"ci/verify_base_sources_test.sh",
 	"ci/run_shell_tests.sh",
 	"ci/suites.tsv",
 }
 
-// The publisher job and the push filter at the base commit 977adb6f95: the suite wiring must not change either.
-const baseMirrorIf = "(github.event.pull_request.head.repo.full_name == github.repository || github.event_name != 'pull_request') && (github.event_name != 'pull_request' || needs.precheck.outputs.missing == 'true')"
+// The publisher job's if (CHAOS-10366: main only, never a pull_request) and the push filter at the base commit 977adb6f95: the suite wiring must not change either.
+const baseMirrorIf = "github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')"
 
 var basePushPaths = []string{
 	"internal/testsupport/containers/harness.go",
@@ -29,6 +32,8 @@ var basePushPaths = []string{
 	"tests/compatibility/river/compose.compatibility.yml",
 	"ci/builder_images.tsv",
 	"ci/builder_images.sh",
+	"ci/base_images.tsv",
+	"ci/verify_base_images.sh",
 	".github/workflows/test.yml",
 	".github/workflows/live-e2e.yml",
 	".github/workflows/mirror-test-images.yml",
@@ -134,7 +139,7 @@ func TestMirrorPrecheckLibSuiteRunsOnItsTrigger(t *testing.T) {
 		{mutation{mirrorWf, "      - ci/mirror_precheck_lib_test.sh\n", allMarker}, "pull_request paths lack ci/mirror_precheck_lib_test.sh"},
 		{mutation{mirrorWf, "bash ci/run_shell_tests.sh mirror-precheck-lib", "true"}, "does not run"},
 		{mutation{mirrorWf, "  precheck-lib-test:\n", "  precheck-lib-test:\n    needs: precheck\n"}, "must not wait on another job"},
-		{mutation{mirrorWf, "(github.event_name != 'pull_request' || needs.precheck.outputs.missing == 'true')", "(github.event_name != 'pull_request' || needs.precheck.outputs.missing != 'true')"}, "publisher if differs from the base"},
+		{mutation{mirrorWf, "github.ref == 'refs/heads/main' &&", ""}, "publisher if differs from the base"},
 		{mutation{mirrorWf, pushLine, pushLine + "      - ci/suites.tsv\n"}, "push paths must not list ci/suites.tsv"},
 		{mutation{mirrorWf, perms, strings.Replace(perms, "contents: read\n", "contents: read\n      packages: write\n", 1)}, "permissions must be exactly contents: read"},
 		{mutation{mirrorWf, perms, strings.Replace(perms, "timeout-minutes: 5", "timeout-minutes: 6", 1)}, "timeout-minutes of exactly 5"},

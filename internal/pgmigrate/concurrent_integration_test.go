@@ -18,6 +18,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/jackc/pgx/v5"
 )
 
 // migrationLockKey is pgmigrate's advisory-lock key (lockKey): the test holds it to
@@ -139,19 +140,12 @@ func TestUpgradeSurvivesAnotherMigratorApplyingTheStepFirst(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(chain) < 2 {
-		t.Fatalf("the chain has %d revisions: the test needs a step for the other migrator and one after it", len(chain))
+	first := firstPlant(t, chain)
+	if len(chain)-first < 2 {
+		t.Fatalf("the chain has %d planted revisions: the test needs a step for the other migrator and one after it", len(chain)-first)
 	}
 	setup := connect(t, uri)
-	if result, err := pgmigrate.Upgrade(ctx, setup, baseline, nil); err != nil || result.Action != "baseline_applied" {
-		t.Fatalf("baseline upgrade = %+v, %v", result, err)
-	}
-	var applicationHead string
-	for _, head := range baseline.Heads {
-		if head != "0066" {
-			applicationHead = head
-		}
-	}
+	applicationHead := upgradeToLiveHead(t, ctx, setup, baseline, chain[:first])
 
 	// A third session holds the table the first step alters.
 	blocker := connect(t, uri)
@@ -188,11 +182,11 @@ func TestUpgradeSurvivesAnotherMigratorApplyingTheStepFirst(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			if _, err := tx.Exec(ctx, chain[0].SQL); err != nil {
+			if _, err := tx.Exec(ctx, chain[first].SQL); err != nil {
 				_ = tx.Rollback(ctx)
 				return err
 			}
-			if _, err := tx.Exec(ctx, "UPDATE alembic_version SET version_num = $1 WHERE version_num = $2", chain[0].Revision, applicationHead); err != nil {
+			if _, err := tx.Exec(ctx, "UPDATE alembic_version SET version_num = $1 WHERE version_num = $2", chain[first].Revision, applicationHead); err != nil {
 				_ = tx.Rollback(ctx)
 				return err
 			}
@@ -239,7 +233,7 @@ func TestUpgradeSurvivesAnotherMigratorApplyingTheStepFirst(t *testing.T) {
 		t.Fatalf("dho's result %q is not JSON: %v", stdout.String(), err)
 	}
 	var want []string
-	for _, file := range chain[1:] {
+	for _, file := range chain[first+1:] {
 		want = append(want, file.Revision)
 	}
 	if fmt.Sprint(result.Applied) != fmt.Sprint(want) {
@@ -253,7 +247,7 @@ func TestUpgradeSurvivesAnotherMigratorApplyingTheStepFirst(t *testing.T) {
 		t.Errorf("alembic_version holds %v, want the heads %v", recorded, heads)
 	}
 	// The recovery leaves a trace on stderr: the run reported success.
-	for _, want := range []string{`"revision":"` + chain[0].Revision + `"`, `"sqlstate":"42701"`} {
+	for _, want := range []string{`"revision":"` + chain[first].Revision + `"`, `"sqlstate":"42701"`} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Errorf("the recovery log %q lacks %s", stderr.String(), want)
 		}
@@ -278,15 +272,14 @@ func TestUpgradeStillFailsWhenTheStepFailsForItsOwnReason(t *testing.T) {
 		t.Fatal(err)
 	}
 	conn := connect(t, uri)
-	if _, err := pgmigrate.Upgrade(ctx, conn, baseline, nil); err != nil {
-		t.Fatal(err)
-	}
+	first := firstPlant(t, chain)
+	liveHead := upgradeToLiveHead(t, ctx, conn, baseline, chain[:first])
 	if _, err := conn.Exec(ctx, "ALTER TABLE refunds ADD COLUMN planted_race text"); err != nil {
 		t.Fatal(err)
 	}
 	result, err := pgmigrate.Upgrade(ctx, conn, baseline, chain)
-	if err == nil || !strings.Contains(err.Error(), chain[0].Name) {
-		t.Fatalf("Upgrade = %+v, %v; want the failure of %s", result, err, chain[0].Name)
+	if err == nil || !strings.Contains(err.Error(), chain[first].Name) {
+		t.Fatalf("Upgrade = %+v, %v; want the failure of %s", result, err, chain[first].Name)
 	}
 	if len(result.Applied) != 0 {
 		t.Errorf("Upgrade reports %v applied after a failing first step", result.Applied)
@@ -295,7 +288,7 @@ func TestUpgradeStillFailsWhenTheStepFailsForItsOwnReason(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fmt.Sprint(recorded) != fmt.Sprint([]string{"0066", baseline.Heads[0]}) && fmt.Sprint(recorded) != fmt.Sprint([]string{"0066", baseline.Heads[1]}) {
+	if fmt.Sprint(recorded) != fmt.Sprint([]string{"0066", liveHead}) {
 		t.Errorf("the failed step changed alembic_version to %v", recorded)
 	}
 }
@@ -305,4 +298,35 @@ func TestUpgradeStillFailsWhenTheStepFailsForItsOwnReason(t *testing.T) {
 func plantedRace(t *testing.T) {
 	t.Helper()
 	pgmigrate.UsePlantedChain(t, os.DirFS("testdata/postfreeze/race"))
+}
+
+// firstPlant is the index in chain of the first planted revision: the revisions before it are the live chain.
+func firstPlant(t *testing.T, chain []pgmigrate.ChainFile) int {
+	t.Helper()
+	planted := pgmigrate.PlantedRevision(t, 163)
+	for index, file := range chain {
+		if file.Revision == planted {
+			return index
+		}
+	}
+	t.Fatalf("the chain has no planted revision %s", planted)
+	return 0
+}
+
+// upgradeToLiveHead brings the database at conn to the live head (the baseline plus the live chain, below the plants)
+// and returns that application head.
+func upgradeToLiveHead(t *testing.T, ctx context.Context, conn *pgx.Conn, baseline pgmigrate.Baseline, live []pgmigrate.ChainFile) string {
+	t.Helper()
+	if _, err := pgmigrate.Upgrade(ctx, conn, baseline, live); err != nil {
+		t.Fatalf("upgrade to the live head: %v", err)
+	}
+	head := pgmigrate.LiveHead(t)
+	recorded, err := pgmigrate.Recorded(ctx, conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(recorded) != fmt.Sprint([]string{"0066", head}) {
+		t.Fatalf("after the upgrade to the live head alembic_version holds %v, want [0066 %s]", recorded, head)
+	}
+	return head
 }

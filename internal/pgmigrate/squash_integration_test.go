@@ -79,8 +79,8 @@ func TestAtHeadDatabaseRunsNoDDL(t *testing.T) {
 			heads = append(heads, strings.TrimPrefix(line, "alembic_version "))
 		}
 	}
-	if !reflect.DeepEqual(heads, baseline.Heads) {
-		t.Fatalf("alembic_version holds %v, want the baseline heads %v", heads, baseline.Heads)
+	if want := pgmigrate.Heads(baseline, chain); !reflect.DeepEqual(heads, want) {
+		t.Fatalf("alembic_version holds %v, want the build heads %v", heads, want)
 	}
 }
 

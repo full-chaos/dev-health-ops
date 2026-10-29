@@ -19,6 +19,9 @@ var (
 	ErrAlreadyMember   = errors.New("invite: the account already is a member of the organization")
 	ErrOrgNotFound     = errors.New("invite: the organization is not in the auth schema")
 	ErrOrgSuspended    = errors.New("invite: the organization is suspended")
+	// ErrOrgConflict: the invite's organization could not be projected into
+	// the auth schema, because its slug is another organization's there.
+	ErrOrgConflict     = errors.New("invite: the organization's slug collides in the auth schema")
 	ErrInviterNotFound = errors.New("invite: the inviter is not in the auth schema or in public.users")
 	ErrDenied          = errors.New("invite: the actor may not change this invite")
 	ErrStore           = errors.New("invite: store unavailable")

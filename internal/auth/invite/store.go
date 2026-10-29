@@ -1,10 +1,12 @@
 package invite
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -76,6 +78,11 @@ type AcceptInput struct {
 	PrincipalID uuid.UUID
 	Actor       Actor
 	PublicAudit *PublicAudit
+	// EnsureOrganization projects the invite's organization into the auth
+	// schema when it is missing there (identity.Store.EnsureOrganization). It
+	// runs only for a token that names a pending, unexpired invite, before the
+	// membership is planned. Nil projects nothing.
+	EnsureOrganization func(ctx context.Context, orgID uuid.UUID) error
 }
 
 type Accepted struct {
@@ -143,7 +150,7 @@ func (s *Store) record(ctx context.Context, v verb, err error) {
 
 // refusals are the store's named outcomes: returned as they are, never wrapped.
 var refusals = []error{ErrNotOwned, ErrInviteInvalid, ErrAccountInactive, ErrEmailUnverified, ErrEmailMismatch, ErrEmailInvalid, ErrRoleInvalid,
-	ErrTTLInvalid, ErrPendingExists, ErrNotFound, ErrNotPending, ErrAlreadyMember, ErrOrgNotFound, ErrOrgSuspended,
+	ErrTTLInvalid, ErrPendingExists, ErrNotFound, ErrNotPending, ErrAlreadyMember, ErrOrgNotFound, ErrOrgSuspended, ErrOrgConflict,
 	ErrInviterNotFound, ErrDenied, membership.ErrStateMoved}
 
 func (s *Store) run(ctx context.Context, v verb, m audit.Mutation) (err error) {
@@ -177,6 +184,32 @@ func authorize(ctx context.Context, tx audit.TxOps, auth Authorize, orgID uuid.U
 			return ErrDenied
 		}
 		return err
+	}
+	return nil
+}
+
+// lockActor takes the actor's rows FOR UPDATE in steps 1 and 2 of the
+// membership lock order, before the organization row: every auth.principals
+// row, then every public.users row, each in id order. Authorize then reads the
+// actor's account and role as they stay until the commit: a demotion, a
+// disable or a superuser change of the actor commits before it or waits for
+// the verb. A missing row is no refusal here (Authorize decides on the actor).
+func (s *Store) lockActor(ctx context.Context, tx audit.TxOps, ids ...*uuid.UUID) error {
+	seen := map[uuid.UUID]bool{}
+	var order []uuid.UUID
+	for _, id := range ids {
+		if id != nil && !seen[*id] {
+			seen[*id] = true
+			order = append(order, *id)
+		}
+	}
+	sort.Slice(order, func(i, j int) bool { return bytes.Compare(order[i][:], order[j][:]) < 0 })
+	for _, table := range []string{s.q + ".principals", "public.users"} {
+		for _, id := range order {
+			if _, err := tx.Exec(ctx, `SELECT 1 FROM `+table+` WHERE id = $1 FOR UPDATE`, id); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -249,6 +282,9 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (*Created, error) {
 	expires := now.Add(ttl)
 	err = s.run(ctx, verbCreate, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			if err := s.lockActor(ctx, tx, in.Actor.PrincipalID, &in.InvitedBy); err != nil {
+				return err
+			}
 			if err := s.lockOrg(ctx, tx, in.OrgID, in.Authorize); err != nil {
 				return err
 			}
@@ -382,6 +418,11 @@ func (s *Store) acceptOnce(ctx context.Context, in AcceptInput, digest string) (
 		s.record(ctx, verbAccept, err)
 		return nil, err
 	}
+	if in.EnsureOrganization != nil {
+		if err := s.ensureOrganization(ctx, in.EnsureOrganization, planned.orgID); err != nil {
+			return nil, err
+		}
+	}
 	change := membership.Change{OrgID: planned.orgID, PrincipalID: in.PrincipalID, Role: planned.role, InvitedBy: planned.inviter,
 		Actor: membership.Actor{PrincipalID: in.Actor.PrincipalID, RequestID: in.Actor.RequestID}}
 	plan, err := s.members.PlanAdd(ctx, change)
@@ -435,10 +476,12 @@ func (s *Store) acceptOnce(ctx context.Context, in AcceptInput, digest string) (
 					return nil
 				}
 				// An invite go-api made before: take it over into auth.invites.
+				// invited_by is the inviter the plan locked at step 1, or NULL when
+				// the plan had none: never an id that no step-1 lock holds.
 				_, err = tx.Exec(ctx, `INSERT INTO `+s.q+`.invites
 	(id, organization_id, email_normalized, role, token_hash, invited_by, status, expires_at, created_at, updated_at)
 VALUES ($1, $2, $3, $4, $5, (SELECT p.id FROM `+s.q+`.principals p WHERE p.id = $6), 'pending', $7, $8, $9)`,
-					locked.id, locked.orgID, locked.email, locked.role, digest, locked.inviter, locked.expiresAt, locked.createdAt, now)
+					locked.id, locked.orgID, locked.email, locked.role, digest, change.InvitedBy, locked.expiresAt, locked.createdAt, now)
 				return err
 			}
 			if err := s.members.ApplyAdd(ctx, tx, plan, step4); err != nil {
@@ -468,6 +511,27 @@ WHERE id = $1`, planned.id, now, in.PrincipalID); err != nil {
 	return &Accepted{InviteID: planned.id, OrgID: planned.orgID, MembershipID: plan.MembershipID(), Role: planned.role}, nil
 }
 
+// ensureOrganization runs the accept's projection of the invite's
+// organization. An organization go-api does not have either makes the invite
+// unusable (ErrInviteInvalid, the one refusal); a slug collision is
+// ErrOrgConflict; any other failure is ErrStore.
+func (s *Store) ensureOrganization(ctx context.Context, ensure func(context.Context, uuid.UUID) error, orgID uuid.UUID) error {
+	err := ensure(ctx, orgID)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, identity.ErrOrganizationNotFound):
+		err = ErrInviteInvalid
+	case errors.Is(err, identity.ErrOrganizationSlugCollision):
+		err = ErrOrgConflict
+	default:
+		s.logger.ErrorContext(ctx, "invite: organization projection failure", logging.ErrorAttr(err))
+		err = fmt.Errorf("%w: ensure organization: %w", ErrStore, err)
+	}
+	s.record(ctx, verbAccept, err)
+	return err
+}
+
 // acceptRefusal maps a membership refusal to the invite's: an organization
 // gone or suspended makes the invite unusable, with the one refusal.
 func acceptRefusal(err error) error {
@@ -491,6 +555,16 @@ func (s *Store) Revoke(ctx context.Context, in RevokeInput) error {
 	}
 	return s.run(ctx, verbRevoke, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			// The inviter, read before any lock (every invite has its public row),
+			// is locked with the actor: a take-over below names it in auth.invites.
+			var inviter *uuid.UUID
+			if err := tx.QueryRow(ctx, `SELECT invited_by_id FROM public.org_invites WHERE id = $1 AND org_id = $2`, in.InviteID, in.OrgID).
+				Scan(&inviter); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				return err
+			}
+			if err := s.lockActor(ctx, tx, in.Actor.PrincipalID, inviter); err != nil {
+				return err
+			}
 			if err := s.lockOrg(ctx, tx, in.OrgID, in.Authorize); err != nil {
 				return err
 			}
@@ -512,15 +586,17 @@ func (s *Store) Revoke(ctx context.Context, in RevokeInput) error {
 			if err != nil || noop {
 				return err
 			}
+			// A take-over writes as invited_by the inviter locked above, or NULL:
+			// never an id read after the locks, so no lock is taken after step 3.
 			if inAuth {
 				if _, err := tx.Exec(ctx, `UPDATE `+s.q+`.invites SET status = 'revoked', updated_at = $2 WHERE id = $1`, in.InviteID, now); err != nil {
 					return err
 				}
 			} else if _, err := tx.Exec(ctx, `INSERT INTO `+s.q+`.invites
 	(id, organization_id, email_normalized, role, token_hash, invited_by, status, expires_at, created_at, updated_at)
-SELECT p.id, p.org_id, p.email, p.role, p.token_hash, (SELECT a.id FROM `+s.q+`.principals a WHERE a.id = p.invited_by_id),
+SELECT p.id, p.org_id, p.email, p.role, p.token_hash, (SELECT a.id FROM `+s.q+`.principals a WHERE a.id = $3::uuid AND a.id = p.invited_by_id),
        'revoked', p.expires_at, p.created_at, $2
-FROM public.org_invites p WHERE p.id = $1`, in.InviteID, now); err != nil {
+FROM public.org_invites p WHERE p.id = $1`, in.InviteID, now, inviter); err != nil {
 				return err
 			}
 			_, err = tx.Exec(ctx, `UPDATE public.org_invites SET status = 'revoked', updated_at = $2 WHERE id = $1`, in.InviteID, now)

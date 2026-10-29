@@ -294,6 +294,7 @@ const providersyncFakeGo = `#!/bin/sh
 case "$1" in test) ;; *) exec "$FAKE_REAL_GO" "$@" ;; esac
 case "$*" in *-tags=integration*-json*internal/providersync*) ;; *) exec "$FAKE_REAL_GO" "$@" ;; esac
 : > "$FAKE_DIR/go-started"
+echo "$*" >> "$FAKE_DIR/test-args"
 printf '{"Action":"output","Output":"fake-go-started\\n"}\n'
 case "$FAKE_MODE" in
   hold)
@@ -383,6 +384,7 @@ type providersyncStepRun struct {
 	diag           string
 	work           string
 	goStarted      bool
+	testArgs       string
 }
 
 // runProvidersyncStep runs the shard step against a fake go. opts: "nosetsid" makes `command -v setsid` fail inside check_go.sh.
@@ -421,11 +423,23 @@ func runProvidersyncStep(t *testing.T, mode, bound string, wrap func(script, wor
 	cmd.Env = []string{"PATH=" + bin + ":" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "TMPDIR=" + work, "FAKE_REAL_GO=" + realGo,
 		"GOMODCACHE=" + dirs[0], "GOPATH=" + dirs[1], "DEV_HEALTH_GO_CACHE=" + dirs[2],
 		"FAKE_MODE=" + mode, "FAKE_DIR=" + work, "GO_TEST_JSON_DIR=" + filepath.Join(work, "json"), "GITHUB_ACTIONS=true", "CI=true", "GITHUB_RUN_ID=1",
-		"RUNNER_TEMP=" + work, "DEV_HEALTH_GO_STEP_BOUND_SECS=" + bound, "SECRET_CANARY=canary-11794-do-not-print"}
+		"RUNNER_TEMP=" + work, "CHECK_GO_JOB_CAP_MIN=25", "DEV_HEALTH_GO_STEP_BOUND_SECS=" + bound, "SECRET_CANARY=canary-11794-do-not-print"}
 	if v, ok := os.LookupEnv("GOTMPDIR"); ok {
 		cmd.Env = append(cmd.Env, "GOTMPDIR="+v)
 	}
 	for _, o := range opts {
+		if o == "local" {
+			var kept []string
+			for _, e := range cmd.Env {
+				if !strings.HasPrefix(e, "GITHUB_ACTIONS=") && !strings.HasPrefix(e, "CI=") && !strings.HasPrefix(e, "GITHUB_RUN_ID=") {
+					kept = append(kept, e)
+				}
+			}
+			cmd.Env = kept
+		}
+		if v, ok := strings.CutPrefix(o, "env:"); ok {
+			cmd.Env = append(cmd.Env, v)
+		}
 		if o == "nosetsid" {
 			shim := filepath.Join(work, "nosetsid.sh")
 			body := "command() { if [ \"${1:-}\" = -v ] && [ \"${2:-}\" = setsid ]; then return 1; fi; builtin command \"$@\"; }\n"
@@ -457,6 +471,9 @@ func runProvidersyncStep(t *testing.T, mode, bound string, wrap func(script, wor
 	}
 	res.stdout, res.stderr = stdout.String(), stderr.String()
 	res.work = work
+	if raw, err := os.ReadFile(filepath.Join(work, "test-args")); err == nil {
+		res.testArgs = string(raw)
+	}
 	_, statErr := os.Stat(filepath.Join(work, "go-started"))
 	res.goStarted = statErr == nil
 	for _, n := range []string{"ready", "quit-seen", "diag-SigIgn", "diag-SigBlk"} {
@@ -640,5 +657,242 @@ func TestOtherShardsStillRunWithoutSetsid(t *testing.T) {
 	}
 	if strings.Contains(r.stderr, "needs setsid") {
 		t.Errorf("a non-providersync shard printed the setsid refusal: %s", tail(r.stderr, 600))
+	}
+}
+
+// ---- the job deadline: every integration go test call gets min(its constant, job cap - elapsed - 3 min) ----
+
+const jobDeadlineT0 = 1700000000
+
+// jobBudgetSnippet returns job_budget_init and job_go_test_timeout from ci/check_go.sh.
+func jobBudgetSnippet(t *testing.T) string {
+	t.Helper()
+	raw, err := os.ReadFile(scriptPath(t, "ci/check_go.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(raw)
+	start := strings.Index(s, "job_budget_init() {")
+	fn := strings.Index(s, "job_go_test_timeout() {")
+	if start < 0 || fn < start {
+		t.Fatal("job_budget_init / job_go_test_timeout not found in ci/check_go.sh")
+	}
+	return s[start : fn+strings.Index(s[fn:], "\n}\n")+3]
+}
+
+func runJobFn(t *testing.T, env []string, body string) (code int, stdout, stderr string) {
+	t.Helper()
+	script := "set -uo pipefail\ndie() { printf 'ERROR: %s\\n' \"$1\" >&2; exit 2; }\n" + jobBudgetSnippet(t) + "\n" + body + "\n"
+	cmd := exec.Command("bash", "-c", script)
+	cmd.Env = append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME")}, env...)
+	var so, se strings.Builder
+	cmd.Stdout, cmd.Stderr = &so, &se
+	if err := cmd.Run(); err != nil {
+		ee, ok := err.(*exec.ExitError)
+		if !ok {
+			t.Fatal(err)
+		}
+		code = ee.ExitCode()
+	}
+	return code, strings.TrimSpace(so.String()), se.String()
+}
+
+func TestJobGoTestTimeoutCells(t *testing.T) {
+	t.Parallel()
+	t0 := strconv.Itoa(jobDeadlineT0)
+	at := func(sec int) string { return "CHECK_GO_NOW_EPOCH=" + strconv.Itoa(jobDeadlineT0+sec) }
+	for _, c := range []struct {
+		name     string
+		env      []string
+		arg      string
+		wantCode int
+		wantOut  string
+		wantErr  string
+	}{
+		{"remaining above the constant keeps the constant", []string{"CHECK_GO_JOB_CAP_MIN=60", "CHECK_GO_JOB_START=" + t0, at(60)}, "22", 0, "1320s", ""},
+		{"remaining below the constant wins", []string{"CHECK_GO_JOB_CAP_MIN=25", "CHECK_GO_JOB_START=" + t0, at(600)}, "22", 0, "720s", ""},
+		{"no budget left refuses", []string{"CHECK_GO_JOB_CAP_MIN=25", "CHECK_GO_JOB_START=" + t0, at(1320)}, "22", 2, "", "job time budget exhausted before"},
+		{"a cap missing in CI refuses", []string{"GITHUB_ACTIONS=true"}, "22", 2, "", "CHECK_GO_JOB_CAP_MIN is not set for a guarded step"},
+		{"a cap missing outside CI keeps the constant", nil, "22", 0, "1320s", ""},
+		{"the fake clock is ignored in CI", []string{"GITHUB_ACTIONS=true", "CHECK_GO_JOB_CAP_MIN=25", "CHECK_GO_JOB_START=" + strconv.FormatInt(time.Now().Unix(), 10), "CHECK_GO_NOW_EPOCH=" + strconv.FormatInt(time.Now().Unix()+9999, 10)}, "1", 0, "60s", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			code, out, errText := runJobFn(t, c.env, "job_go_test_timeout "+c.arg)
+			if code != c.wantCode || out != c.wantOut || !strings.Contains(errText, c.wantErr) {
+				t.Fatalf("rc %d (want %d) stdout %q (want %q) stderr %q (want it to contain %q)", code, c.wantCode, out, c.wantOut, errText, c.wantErr)
+			}
+		})
+	}
+}
+
+func TestJobStartIsTakenOnceAndExportedToLaterSteps(t *testing.T) {
+	t.Parallel()
+	ghEnv := filepath.Join(t.TempDir(), "github_env")
+	if err := os.WriteFile(ghEnv, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	env := []string{"CHECK_GO_JOB_CAP_MIN=25", "CHECK_GO_NOW_EPOCH=" + strconv.Itoa(jobDeadlineT0), "GITHUB_ENV=" + ghEnv}
+	code, out, errText := runJobFn(t, env, "job_budget_init; echo \"${CHECK_GO_JOB_START:-unset}\"")
+	if code != 0 || out != strconv.Itoa(jobDeadlineT0) {
+		t.Fatalf("first call: rc %d stdout %q stderr %q", code, out, errText)
+	}
+	raw, _ := os.ReadFile(ghEnv)
+	if strings.TrimSpace(string(raw)) != "CHECK_GO_JOB_START="+strconv.Itoa(jobDeadlineT0) {
+		t.Fatalf("GITHUB_ENV holds %q", raw)
+	}
+	env2 := append(env, "CHECK_GO_JOB_START="+strconv.Itoa(jobDeadlineT0-500), "CHECK_GO_NOW_EPOCH="+strconv.Itoa(jobDeadlineT0+100))
+	code, out, _ = runJobFn(t, env2, "job_budget_init; echo \"${CHECK_GO_JOB_START}\"")
+	if code != 0 || out != strconv.Itoa(jobDeadlineT0-500) {
+		t.Fatalf("a later call re-took the start: rc %d stdout %q", code, out)
+	}
+	raw, _ = os.ReadFile(ghEnv)
+	if strings.Count(string(raw), "CHECK_GO_JOB_START=") != 1 {
+		t.Fatalf("the later call appended to GITHUB_ENV again: %q", raw)
+	}
+}
+
+// runCheckGoWithFakeGo runs ci/check_go.sh with a fake go whose test calls are logged to $FAKE_DIR/test-args.
+func runCheckGoWithFakeGo(t *testing.T, args []string, env []string, fake string) (code int, stderr, testArgs string) {
+	t.Helper()
+	script := scriptPath(t, "ci/check_go.sh")
+	repo := filepath.Dir(filepath.Dir(script))
+	work := t.TempDir()
+	bin := filepath.Join(work, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	realGo, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(work, "clock"), []byte(strconv.Itoa(jobDeadlineT0)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	goEnv, err := exec.Command(realGo, "env", "GOMODCACHE", "GOPATH", "GOCACHE").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dirs := strings.Fields(string(goEnv))
+	cmd := exec.Command("bash", append([]string{script}, args...)...)
+	cmd.Dir = repo
+	cmd.Env = append([]string{"PATH=" + bin + ":" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "TMPDIR=" + work, "FAKE_REAL_GO=" + realGo,
+		"GOMODCACHE=" + dirs[0], "GOPATH=" + dirs[1], "DEV_HEALTH_GO_CACHE=" + dirs[2], "FAKE_DIR=" + work,
+		"CHECK_GO_NOW_EPOCH_FILE=" + filepath.Join(work, "clock")}, env...)
+	var se strings.Builder
+	cmd.Stderr = &se
+	if err := cmd.Run(); err != nil {
+		ee, ok := err.(*exec.ExitError)
+		if !ok {
+			t.Fatal(err)
+		}
+		code = ee.ExitCode()
+	}
+	raw, _ := os.ReadFile(filepath.Join(work, "test-args"))
+	return code, se.String(), string(raw)
+}
+
+// The fake go of the loop cells: it logs a test call, moves the fake clock by FAKE_ADVANCE seconds and prints the race marker of every TestRace of the package.
+const jobDeadlineFakeGo = `#!/bin/sh
+case "$1" in test) ;; *) exec "$FAKE_REAL_GO" "$@" ;; esac
+echo "$*" >> "$FAKE_DIR/test-args"
+n=$(cat "$CHECK_GO_NOW_EPOCH_FILE"); echo $((n + ${FAKE_ADVANCE:-0})) > "$CHECK_GO_NOW_EPOCH_FILE"
+for last; do :; done
+grep -hoE '^func TestRace[A-Za-z0-9_]+' "${last#./}"/*_test.go 2>/dev/null | sed 's/^func //' | while read -r name; do echo "AUTH_RACE_EXECUTED $name"; done
+exit 0
+`
+
+func timeoutArgs(testArgs string) []string {
+	var out []string
+	for _, line := range strings.Split(strings.TrimSpace(testArgs), "\n") {
+		for _, f := range strings.Fields(line) {
+			if v, ok := strings.CutPrefix(f, "-timeout="); ok {
+				out = append(out, v)
+			}
+		}
+	}
+	return out
+}
+
+func TestAuthRaceIntegrationLoopShrinksTheNextTimeout(t *testing.T) {
+	t.Parallel()
+	code, errText, testArgs := runCheckGoWithFakeGo(t, []string{"auth", "race-integration"}, []string{"CHECK_GO_JOB_CAP_MIN=30", "CHECK_GO_JOB_START=" + strconv.Itoa(jobDeadlineT0), "FAKE_ADVANCE=1200"}, jobDeadlineFakeGo)
+	got := timeoutArgs(testArgs)
+	if len(got) != 2 || got[0] != "1620s" || got[1] != "420s" {
+		t.Errorf("-timeout of the calls = %v, want [1620s 420s] (the third package has no budget left and is not started); stderr: %s", got, tail(errText, 800))
+	}
+	if code != 2 || !strings.Contains(errText, "job time budget exhausted before") {
+		t.Errorf("rc %d, want 2 with the exhausted line; stderr: %s", code, tail(errText, 800))
+	}
+}
+
+func TestMultiReplicaCallFollowsTheJobBudget(t *testing.T) {
+	t.Parallel()
+	_, errText, testArgs := runCheckGoWithFakeGo(t, []string{"multi-replica-workers"}, []string{"CHECK_GO_JOB_CAP_MIN=30", "CHECK_GO_JOB_START=" + strconv.Itoa(jobDeadlineT0-1500)}, jobDeadlineFakeGo)
+	if got := timeoutArgs(testArgs); len(got) != 1 || got[0] != "120s" {
+		t.Errorf("-timeout of the call = %v, want [120s]; stderr: %s", got, tail(errText, 800))
+	}
+}
+
+func TestProvidersyncTimeoutFollowsTheJobBudget(t *testing.T) {
+	t.Parallel()
+	local := []string{"local", "env:CHECK_GO_JOB_START=" + strconv.Itoa(jobDeadlineT0)}
+	r := runProvidersyncStep(t, "exit3", "600", nil, append(local, "env:CHECK_GO_NOW_EPOCH="+strconv.Itoa(jobDeadlineT0+1000))...)
+	if r.code != 3 || !strings.Contains(r.testArgs, "-timeout=320s") {
+		t.Errorf("rc %d (want 3); the go test call was %q, want -timeout=320s (cap 25 min - 1000 s - 3 min)", r.code, r.testArgs)
+	}
+	r = runProvidersyncStep(t, "exit3", "600", nil, append(local, "env:CHECK_GO_NOW_EPOCH="+strconv.Itoa(jobDeadlineT0+1400))...)
+	if r.code != 2 || r.goStarted || !strings.Contains(r.stderr, "job time budget exhausted before") {
+		t.Errorf("exhausted budget: rc %d (want 2), go started %v, stderr %s", r.code, r.goStarted, tail(r.stderr, 800))
+	}
+}
+
+// The packages loop (run_integration_go_test, one call per package group): a call that starts late gets a smaller -timeout and a call with no budget left is not started.
+func TestIntegrationPackagesLoopShrinksTheNextTimeout(t *testing.T) {
+	t.Parallel()
+	text, err := os.ReadFile(scriptPath(t, "ci/check_go.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(text)
+	start := strings.Index(s, `TC_TRAP_PID="" TC_TRAP_SID="" TC_TRAP_PGID=""`)
+	fn := strings.Index(s, "run_integration_go_test() {")
+	if start < 0 || fn < start {
+		t.Fatal("run_integration_go_test not found in ci/check_go.sh")
+	}
+	end := fn + strings.Index(s[fn:], "\n}\n") + 3
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(dir, "test-args")
+	if err := os.WriteFile(filepath.Join(bin, "go"), []byte("#!/bin/sh\necho \"$*\" >> \""+logPath+"\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "reap-testcontainers-session.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	at := func(sec int) string { return strconv.Itoa(jobDeadlineT0 + sec) }
+	script := "set -uo pipefail\nSCRIPT_DIR=" + dir + "\nROOT=" + dir + "\nGO_ENV_OFF=(env)\nINTEGRATION_TEST_ENV=()\n" +
+		"die() { printf 'ERROR: %s\\n' \"$1\" >&2; exit 2; }\n" + jobBudgetSnippet(t) + "\n" + s[start:end] + "\n" +
+		"CHECK_GO_NOW_EPOCH=" + at(0) + " run_integration_go_test . ./a; echo \"rc1=$?\"\n" +
+		"CHECK_GO_NOW_EPOCH=" + at(1200) + " run_integration_go_test . ./b; echo \"rc2=$?\"\n" +
+		"CHECK_GO_NOW_EPOCH=" + at(1400) + " run_integration_go_test . ./c; echo \"rc3=$?\"\n"
+	cmd := exec.Command("bash", "-c", script)
+	cmd.Env = []string{"PATH=" + bin + ":" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "TESTCONTAINERS_SESSION_ID=sessionid11794",
+		"CHECK_GO_JOB_CAP_MIN=25", "CHECK_GO_JOB_START=" + strconv.Itoa(jobDeadlineT0)}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("harness: %v\n%s", err, out)
+	}
+	raw, _ := os.ReadFile(logPath)
+	if got := timeoutArgs(string(raw)); len(got) != 2 || got[0] != "1320s" || got[1] != "120s" {
+		t.Errorf("-timeout of the calls = %v, want [1320s 120s] (the third call has no budget left); output:\n%s", got, out)
+	}
+	if !strings.Contains(string(out), "rc3=2") || !strings.Contains(string(out), "job time budget exhausted before") {
+		t.Errorf("the third call must return 2 with the exhausted line; output:\n%s", out)
 	}
 }

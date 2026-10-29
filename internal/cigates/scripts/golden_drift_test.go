@@ -1,6 +1,7 @@
 package scripts_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -512,5 +513,35 @@ func TestGoldenDriftRegistryRefusesAnUnsafePackage(t *testing.T) {
 				t.Fatalf("exit %d stdout %q, want exit 2 and no verdict", res.code, res.stdout)
 			}
 		})
+	}
+}
+
+// The golden rows run under the job deadline: -timeout = min(22 min, job cap - elapsed - 3 min), and no budget left runs nothing.
+func TestGoldenDriftRunFollowsTheJobBudget(t *testing.T) {
+	const t0 = 1700000000
+	rows := "VERDICT select 1 of 1\nROW\tinternal/adminops\t^TestA$\n"
+	run := func(nowOffset int) (cmdResult, string) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "go"), []byte(fakeGo), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		rf := filepath.Join(t.TempDir(), "rows.tsv")
+		if err := os.WriteFile(rf, []byte(rows), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		logf := filepath.Join(t.TempDir(), "go.log")
+		env := []string{"PATH=" + dir + ":/usr/bin:/bin", "FAKE_GO_LOG=" + logf, "FAKE_GO_MODE=pass",
+			"CHECK_GO_JOB_CAP_MIN=25", fmt.Sprintf("CHECK_GO_JOB_START=%d", t0), fmt.Sprintf("CHECK_GO_NOW_EPOCH=%d", t0+nowOffset)}
+		res := cmdSpec{dir: t.TempDir(), env: env}.run("bash", filepath.Join(repoRoot(t), "ci", "check_golden_drift.sh"), "run", rf)
+		b, _ := os.ReadFile(logf)
+		return res, string(b)
+	}
+	res, log := run(600)
+	if res.code != 0 || !strings.Contains(log, " -timeout=720s ") {
+		t.Errorf("exit %d; the go call must carry -timeout=720s (cap 25 min - 600 s - 3 min):\n%s\n%s", res.code, log, res.stderr)
+	}
+	res, log = run(1400)
+	if res.code != 2 || strings.Contains(log, "go test") || !strings.Contains(res.stderr, "job time budget exhausted before") {
+		t.Errorf("no budget left: exit %d (want 2), go log %q, stderr %s", res.code, log, res.stderr)
 	}
 }

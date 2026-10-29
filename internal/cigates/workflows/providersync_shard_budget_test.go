@@ -152,7 +152,7 @@ type integrationTimeoutRow struct {
 func integrationTimeoutRows() []integrationTimeoutRow {
 	shard := []integrationTimeoutJob{{"go.yml", "go-storage-integration-shard", "check_go.sh integration-shard"}}
 	return []integrationTimeoutRow{
-		{"packages", "check_go.sh", regexp.MustCompile(`-timeout=\d+m "\$@"`), shard},
+		{"packages", "check_go.sh", regexp.MustCompile(`-timeout="\$\{tmo\}" "\$@"`), shard},
 		{"daily", "check_go.sh", regexp.MustCompile(`DAILY_INTEGRATION_PACKAGE_KEY`), shard},
 		{"workerservice", "check_go.sh", regexp.MustCompile(`WORKERSERVICE_INTEGRATION_PACKAGE_KEY`), shard},
 		{"queryapiserver", "check_go.sh", regexp.MustCompile(`QAPISERVER_INTEGRATION_PACKAGE_KEY`), shard},
@@ -168,6 +168,48 @@ func integrationTimeoutRows() []integrationTimeoutRow {
 		{"auth-race-integration", "check_go.sh", regexp.MustCompile(`-race -tags=integration -v`), []integrationTimeoutJob{
 			{"go-auth-service.yml", "auth-test", "check_go.sh auth race-integration"}}},
 	}
+}
+
+// integrationCall is one integration go test call of a script and the constant of the job_go_test_timeout / job-timeout call before it.
+type integrationCall struct {
+	line     string
+	constMin int
+}
+
+var jobTimeoutConstRe = regexp.MustCompile(`(?:job_go_test_timeout|job-timeout) (\d+)`)
+
+// integrationCalls returns the integration go test calls of a script, each with the constant named by the nearest
+// job_go_test_timeout N / job-timeout N call above it (within 40 lines; 0 when there is none).
+func integrationCalls(text string) []integrationCall {
+	var out []integrationCall
+	lastConst, lastLine := 0, -1000
+	var pending string
+	for n, raw := range strings.Split(text, "\n") {
+		trimmed := strings.TrimSpace(raw)
+		if !strings.HasPrefix(trimmed, "#") {
+			if m := jobTimeoutConstRe.FindStringSubmatch(raw); m != nil {
+				lastConst, _ = strconv.Atoi(m[1])
+				lastLine = n
+			}
+		}
+		joined := pending + trimmed
+		if strings.HasSuffix(joined, `\`) {
+			pending = strings.TrimSuffix(joined, `\`) + " "
+			continue
+		}
+		pending = ""
+		if strings.HasPrefix(joined, "#") || strings.HasPrefix(joined, "printf ") {
+			continue
+		}
+		if (strings.Contains(joined, "go test") || strings.Contains(joined, "auth_go test")) && strings.Contains(joined, "tags=integration") {
+			c := 0
+			if n-lastLine <= 40 {
+				c = lastConst
+			}
+			out = append(out, integrationCall{joined, c})
+		}
+	}
+	return out
 }
 
 // integrationGoTestLines returns the integration go test calls of a script with backslash continuations joined.
@@ -245,7 +287,6 @@ func integrationJobRunsStep(t *testing.T, raw []byte, workflow, job, needle stri
 
 func integrationTimeoutViolations(t *testing.T, root string) []string {
 	var out []string
-	timeoutRe := regexp.MustCompile(`-timeout[= ](\d+)m\b`)
 	scripts := map[string]string{
 		"check_go.sh":           readFile(t, filepath.Join(root, "ci", "check_go.sh")),
 		"check_golden_drift.sh": readFile(t, filepath.Join(root, "ci", "check_golden_drift.sh")),
@@ -260,7 +301,8 @@ func integrationTimeoutViolations(t *testing.T, root string) []string {
 	rows := integrationTimeoutRows()
 	matched := make([]int, len(rows))
 	for _, script := range []string{"check_go.sh", "check_golden_drift.sh"} {
-		for _, line := range integrationGoTestLines(scripts[script]) {
+		for _, call := range integrationCalls(scripts[script]) {
+			line := call.line
 			idx := -1
 			for i, r := range rows {
 				if r.script == script && r.anchor.MatchString(line) {
@@ -273,12 +315,11 @@ func integrationTimeoutViolations(t *testing.T, root string) []string {
 				out = append(out, fmt.Sprintf("ci/%s: integration go test call is not in integrationTimeoutRows: %s", script, line))
 				continue
 			}
-			m := timeoutRe.FindStringSubmatch(line)
-			if m == nil {
-				out = append(out, fmt.Sprintf("ci/%s: %s call has no -timeout=<N>m", script, rows[idx].name))
+			if call.constMin == 0 || !strings.Contains(line, `-timeout="${tmo}"`) {
+				out = append(out, fmt.Sprintf("ci/%s: %s go test call does not take its -timeout from job_go_test_timeout N (a literal -timeout or no call above it bypasses the job deadline)", script, rows[idx].name))
 				continue
 			}
-			timeout, _ := strconv.Atoi(m[1])
+			timeout := call.constMin
 			capMin := -1
 			for _, j := range rows[idx].jobs {
 				if !integrationJobRunsStep(t, workflows[j.workflow], j.workflow, j.job, j.stepNeedle) {
@@ -298,7 +339,8 @@ func integrationTimeoutViolations(t *testing.T, root string) []string {
 			out = append(out, fmt.Sprintf("row %s matched %d go test lines, want exactly 1", rows[i].name, n))
 		}
 	}
-	return append(out, workflowIntegrationTimeoutViolations(t, root)...)
+	out = append(out, workflowIntegrationTimeoutViolations(t, root)...)
+	return append(out, jobCapEnvViolations(t, root)...)
 }
 
 // directWorkflowIntegrationCalls registers the integration go test calls that a workflow run step makes itself, as
@@ -396,6 +438,56 @@ func TestIntegrationTimeoutGuardCoversDirectWorkflowCalls(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			expectViolation(t, integrationTimeoutViolations(t, plantTree(t, root, files, c.m)), c.want)
+		})
+	}
+}
+
+// guardedCheckGoRe matches the runs of a workflow step that reach an integration go test site of check_go.sh or check_golden_drift.sh.
+var guardedCheckGoRe = regexp.MustCompile(`check_go\.sh (?:integration-shard\b(?:\s|"|$)|integration(?:\s|$)|venue-oracles\b|multi-replica-workers\b|ci-leg(?:\s|$)|ci(?:\s|$)|fast(?:\s|$)|all(?:\s|$)|auth(?:\s+race-integration\b|\s*$))|check_golden_drift\.sh run\b`)
+
+const jobCapEnv = "CHECK_GO_JOB_CAP_MIN"
+
+// jobCapEnvViolations: every job that reaches a guarded go test site carries CHECK_GO_JOB_CAP_MIN equal to its own
+// timeout-minutes (int, or the same expression text), and no other job carries it.
+func jobCapEnvViolations(t *testing.T, root string) []string {
+	t.Helper()
+	var out []string
+	for _, name := range workflowNames(t, root) {
+		for jobName, j := range asMap(loadWf(t, root, name)["jobs"]) {
+			job := asMap(j)
+			guarded := false
+			for _, st := range asList(job["steps"]) {
+				if guardedCheckGoRe.MatchString(asString(asMap(st)["run"])) {
+					guarded = true
+				}
+			}
+			envVal, hasEnv := asMap(job["env"])[jobCapEnv]
+			switch {
+			case guarded && !hasEnv:
+				out = append(out, fmt.Sprintf(".github/workflows/%s job %s runs a guarded check_go.sh step but has no %s", name, jobName, jobCapEnv))
+			case !guarded && hasEnv:
+				out = append(out, fmt.Sprintf(".github/workflows/%s job %s carries %s but runs no guarded check_go.sh step", name, jobName, jobCapEnv))
+			case guarded && fmt.Sprint(envVal) != fmt.Sprint(job["timeout-minutes"]):
+				out = append(out, fmt.Sprintf(".github/workflows/%s job %s: %s=%v differs from its timeout-minutes %v", name, jobName, jobCapEnv, envVal, job["timeout-minutes"]))
+			}
+		}
+	}
+	return out
+}
+
+func TestJobCapEnvGuardCatchesPlantedDefects(t *testing.T) {
+	root := repoRoot(t)
+	const goYML = ".github/workflows/go.yml"
+	for _, c := range []struct {
+		name string
+		m    mutation
+		want string
+	}{
+		{"a cap env that differs from timeout-minutes", mutation{goYML, "      CHECK_GO_JOB_CAP_MIN: 25\n", "      CHECK_GO_JOB_CAP_MIN: 24\n"}, "differs from its timeout-minutes"},
+		{"a guarded job without the cap env", mutation{goYML, "      CHECK_GO_JOB_CAP_MIN: 25\n", ""}, "has no CHECK_GO_JOB_CAP_MIN"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			expectViolation(t, jobCapEnvViolations(t, plantTree(t, root, []string{goYML}, c.m)), c.want)
 		})
 	}
 }

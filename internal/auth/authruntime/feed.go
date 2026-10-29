@@ -9,6 +9,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
+	"github.com/full-chaos/dev-health-ops/internal/auth/restorefence"
 	"github.com/full-chaos/dev-health-ops/internal/auth/revisionfeed"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -30,6 +31,9 @@ func revisionFeed(
 	config := valkey.DefaultConfig(cfg.ValkeyURI.Reveal())
 	config.ClientName = valkeyClientName
 	client := revisionfeed.NewLazyClient(func(ctx context.Context) (valkeygo.Client, error) { return valkey.Open(ctx, config) })
+	// The fence's census requires every outbox consumer to be a floor input. The registry is per process: this one is
+	// declared here, and the restore-fence CLI registers its own with its own login (a later leaf).
+	restorefence.RegisterFloorInput(revisionfeed.NewFloorInput(client))
 	sink, err := revisionfeed.NewSink(client)
 	if err != nil {
 		return nil, nil, err

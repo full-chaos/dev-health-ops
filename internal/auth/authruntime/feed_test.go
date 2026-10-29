@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
+	"github.com/full-chaos/dev-health-ops/internal/auth/restorefence"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
@@ -60,6 +61,13 @@ func TestTheRevisionFeedOnBuildsAPublisherAndASubscriberWithoutDialling(t *testi
 	}
 	if len(components) != 1 || components[0].Name() != "auth-revision-feed" {
 		t.Fatalf("components %v, want the auth-revision-feed subscriber", components)
+	}
+	registered := false
+	for _, in := range restorefence.RegisteredFloorInputs() {
+		registered = registered || in.Name() == "valkey-revision-feed"
+	}
+	if !registered {
+		t.Fatal("the feed is an outbox consumer and did not register its restore-fence floor input")
 	}
 	if err := components[0].Shutdown(context.Background()); err != nil {
 		t.Fatalf("shutdown before start: %v", err)

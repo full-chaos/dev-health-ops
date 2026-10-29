@@ -167,7 +167,8 @@ func TestTheFenceClearsAPasswordChangedAfterTAndNamesTheUser(t *testing.T) {
 	assertNoPasswordHash(t, ctx, restored, manifest, report)
 }
 
-// A user whose password the source holds unchanged is not written.
+// A user whose password the source holds unchanged is not written, also when its token versions are above 0 on both
+// sides (equal versions travel in the manifest; only a HIGHER source version means a password write after T).
 func TestAnUnchangedPasswordIsKeptWithNoWrite(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
@@ -175,6 +176,11 @@ func TestAnUnchangedPasswordIsKeptWithNoWrite(t *testing.T) {
 	for _, d := range []*fenceDB{restored, end} {
 		d.stateT(t, ctx)
 		d.pwSeed(t, ctx, "steady", true)
+		d.must(t, ctx, `UPDATE public.users SET token_version = 2 WHERE id = $1`, pwUser("steady"))
+		d.commit(t, ctx, "user.legacy_token_version", 0, func(ctx context.Context, tx audit.TxOps) error {
+			_, err := tx.Exec(ctx, `UPDATE auth.users SET legacy_token_version = 2 WHERE principal_id = $1`, pwUser("steady"))
+			return err
+		})
 	}
 	report, err := Apply(ctx, restored.admin, restored.schema, exportEnd(t, ctx, end), Options{Apply: true})
 	if err != nil {

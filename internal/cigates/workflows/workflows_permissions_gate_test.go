@@ -88,7 +88,18 @@ var persistAllowlist = map[jobKey]string{
 	{"security-scan.yml", "gitleaks"}:           "follow-up: persist-credentials: false",
 }
 
-var registryLogin = regexp.MustCompile(`(^|[\s;&|(])(docker|podman|buildah)\s+login(\s|$)`)
+var (
+	shellContinuation = regexp.MustCompile(`\\\r?\n`)
+	registryLogin     = regexp.MustCompile(`(^|[\s;&|(){}'"` + "`" + `])(docker|podman|buildah|skopeo|oras)['"]?(\s+-{1,2}[\w-]+(=\S*)?(\s+[^\s-]\S*)?)*\s+login(\s|$|['"])|(^|[\s;&|(){}'"` + "`" + `])helm\s+registry\s+login(\s|$|['"])`)
+)
+
+// registryLoginIn: the run text with its backslash-newline continuations joined and its comments dropped (shellCode), then
+// matched for a registry login as a command word anywhere in the text (\s+ between the words covers runs and tabs), so a prefix (sudo, command, VAR=x) or a global flag between the tool and login does not hide it. A login named in an
+// echo or in a quoted string is a false positive, kept on purpose: a line that starts with echo can still run one after a ;.
+func registryLoginIn(run string) bool {
+	joined := shellContinuation.ReplaceAllString(run, " ")
+	return registryLogin.MatchString(shellCode(joined))
+}
 
 // permsOf reports the mapping of a permissions value, whether the key is present and whether it is a mapping.
 func permsOf(holder yamlMap) (m map[string]string, present, isMap bool) {
@@ -180,9 +191,8 @@ func permissionsDefects(t *testing.T, root string, wfAllow []permRow, jobAllow m
 			}
 			canWrite := effOK && hasWrite(eff)
 			for _, s := range stepsOf(job) {
-				text := shellCommands(asString(s["run"]))
 				uses := strings.ToLower(asString(s["uses"]))
-				if (registryLogin.MatchString(text) || strings.HasPrefix(uses, "docker/login-action@")) && !(effOK && (eff["packages"] == "read" || eff["packages"] == "write")) {
+				if (registryLoginIn(asString(s["run"])) || strings.HasPrefix(uses, "docker/login-action@")) && !(effOK && (eff["packages"] == "read" || eff["packages"] == "write")) {
 					out = append(out, fmt.Sprintf("%s job %s: a registry login in a job with no packages scope", name, j))
 				}
 				if !strings.HasPrefix(uses, "actions/checkout@") || !canWrite {
@@ -279,7 +289,7 @@ func TestWorkflowPermissionsGateRefusesEachDefectClass(t *testing.T) {
 		{"helm registry login in a read-only job", mutation{mirror, suiteRun, "      - name: Login\n        run: |\n          helm registry login ghcr.io\n" + suiteRun}, "mirror-test-images.yml job precheck-lib-test: a registry login in a job with no packages scope"},
 		{"login after a global flag in a read-only job", mutation{mirror, suiteRun, "      - name: Login\n        run: |\n          docker --config /tmp/x login ghcr.io\n" + suiteRun}, "mirror-test-images.yml job precheck-lib-test: a registry login in a job with no packages scope"},
 		{"login split by a tab in a read-only job", mutation{mirror, suiteRun, "      - name: Login\n        run: |\n          docker\tlogin ghcr.io\n" + suiteRun}, "mirror-test-images.yml job precheck-lib-test: a registry login in a job with no packages scope"},
-		{"login after command and a continuation in a read-only job", mutation{mirror, suiteRun, "      - name: Login\n        run: |\n          command docker \\\n  login ghcr.io\n" + suiteRun}, "mirror-test-images.yml job precheck-lib-test: a registry login in a job with no packages scope"},
+		{"login after command and a continuation in a read-only job", mutation{mirror, suiteRun, "      - name: Login\n        run: |\n          command docker \\\n            login ghcr.io\n" + suiteRun}, "mirror-test-images.yml job precheck-lib-test: a registry login in a job with no packages scope"},
 		{"login action in a read-only job", mutation{mirror, suiteRun, "      - uses: docker/login-action@v4\n" + suiteRun}, "mirror-test-images.yml job precheck-lib-test: a registry login in a job with no packages scope"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -348,4 +358,55 @@ func TestWorkflowPermissionsGateRefusesEachDefectClass(t *testing.T) {
 			t.Errorf("stale persist row not caught:\n%s", d)
 		}
 	})
+}
+
+func TestRegistryLoginMatcher(t *testing.T) {
+	for _, run := range []string{
+		"docker login ghcr.io",
+		"docker \\\n  login ghcr.io",
+		"docker \\\r\n  login ghcr.io",
+		"sudo docker login ghcr.io",
+		"command docker login ghcr.io",
+		"DOCKER_CONFIG=/tmp/x docker login ghcr.io",
+		"env A=b docker login ghcr.io",
+		"docker --config /tmp/x login ghcr.io",
+		"docker --config=/tmp/x login ghcr.io",
+		"docker\tlogin ghcr.io",
+		"docker    login ghcr.io",
+		"podman login ghcr.io",
+		"buildah login ghcr.io",
+		"skopeo login ghcr.io",
+		"oras login ghcr.io",
+		"helm registry login ghcr.io",
+		"helm   registry \\\n login ghcr.io",
+		"a && docker login ghcr.io",
+		"a; docker login ghcr.io",
+		"(docker login ghcr.io)",
+		"echo hi\ndocker login ghcr.io",
+		"x | docker login --password-stdin ghcr.io",
+		"'docker' login ghcr.io",
+		"if true; then docker login ghcr.io; fi",
+		"echo \"x\"; docker login ghcr.io",
+		"echo docker login ghcr.io",
+	} {
+		if !registryLoginIn(run) {
+			t.Errorf("a registry login was not recognised in %q", run)
+		}
+	}
+	for _, run := range []string{
+		"docker pull alpine",
+		"docker logout ghcr.io",
+		"mydocker login x",
+		"dockerlogin x",
+		"docker-login-helper run",
+		"# docker login ghcr.io",
+		"helm registry list",
+		"helm login x",
+		"skopeo copy a b",
+		"echo login docker",
+	} {
+		if registryLoginIn(run) {
+			t.Errorf("a registry login was recognised in %q", run)
+		}
+	}
 }

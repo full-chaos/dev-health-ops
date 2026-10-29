@@ -38,6 +38,10 @@ type BackfillTarget struct {
 	PlatformRolesOwned bool
 }
 
+// errExpiredRoleChanged is a grant that found the expired assignment it was to
+// replace already changed; nothing is written and the next run reads again.
+var errExpiredRoleChanged = errors.New("identity: the expired platform role assignment changed")
+
 // PlatformAdminRole is the role_key a superuser holds. It is the role name of
 // contracts/auth/v1/vocabulary/roles.v1.json (scope platform), byte for byte.
 const PlatformAdminRole = "platform_admin"
@@ -73,10 +77,13 @@ type backfillState struct {
 	algorithm   *string
 	tokenVer    int64
 	lastLogin   *time.Time
-	// roleHeld is any platform_admin assignment; roleBackfilled is one with
-	// no granter (the only kind the backfill revokes).
+	// roleHeld is a platform_admin assignment that has not expired;
+	// roleBackfilled is one with no granter, expired or not (the only kind the
+	// backfill revokes); roleExpired is the id of an expired one, which a grant
+	// replaces.
 	roleHeld       bool
 	roleBackfilled bool
+	roleExpired    *uuid.UUID
 }
 
 // BackfillUser makes the auth rows of one user agree with t. A missing user is
@@ -157,7 +164,7 @@ func (s *Store) backfillExtras(ctx context.Context, t BackfillTarget, st backfil
 	case t.Superuser && !st.roleHeld:
 		res.Updated, res.RoleGranted = true, true
 		if !dryRun {
-			if err := s.grantBackfillRole(ctx, t.ID); err != nil {
+			if err := s.grantBackfillRole(ctx, t.ID, st.roleExpired); err != nil {
 				return err
 			}
 		}
@@ -195,11 +202,14 @@ func (s *Store) readBackfillState(ctx context.Context, id uuid.UUID) (backfillSt
 	err := s.pool.QueryRow(ctx, `SELECT p.kind, p.disabled_at IS NOT NULL, p.display_name,
        u.email, u.email_lower, u.email_verified_at IS NOT NULL, u.password_hash, u.password_algorithm,
        COALESCE(u.legacy_token_version, 0), u.last_login_at,
-       EXISTS (SELECT 1 FROM `+s.q+`.platform_role_assignments r WHERE r.principal_id = p.id AND r.role_key = $2),
-       EXISTS (SELECT 1 FROM `+s.q+`.platform_role_assignments r WHERE r.principal_id = p.id AND r.role_key = $2 AND r.granted_by IS NULL)
+       EXISTS (SELECT 1 FROM `+s.q+`.platform_role_assignments r WHERE r.principal_id = p.id AND r.role_key = $2
+               AND (r.expires_at IS NULL OR r.expires_at > statement_timestamp())),
+       EXISTS (SELECT 1 FROM `+s.q+`.platform_role_assignments r WHERE r.principal_id = p.id AND r.role_key = $2 AND r.granted_by IS NULL),
+       (SELECT r.id FROM `+s.q+`.platform_role_assignments r WHERE r.principal_id = p.id AND r.role_key = $2
+               AND r.expires_at <= statement_timestamp())
 FROM `+s.q+`.principals p LEFT JOIN `+s.q+`.users u ON u.principal_id = p.id
 WHERE p.id = $1`, id, PlatformAdminRole).Scan(&st.kind, &st.disabled, &st.displayName, &email, &emailLower, &verified, &st.hash, &st.algorithm,
-		&st.tokenVer, &st.lastLogin, &st.roleHeld, &st.roleBackfilled)
+		&st.tokenVer, &st.lastLogin, &st.roleHeld, &st.roleBackfilled, &st.roleExpired)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return st, false, nil
 	}
@@ -341,17 +351,33 @@ func roleAudit(eventType, reason, subject string) audit.AuditEvent {
 }
 
 // grantBackfillRole gives the user the platform_admin assignment (no granter)
-// in one audit.Commit.
-func (s *Store) grantBackfillRole(ctx context.Context, id uuid.UUID) error {
+// in one audit.Commit. expired, when set, is the user's expired assignment: it
+// is removed in the same commit (with its revoked event), because an expired
+// assignment holds no authority and blocks a new one.
+func (s *Store) grantBackfillRole(ctx context.Context, id uuid.UUID, expired *uuid.UUID) error {
 	assignment := uuid.New()
+	events := []audit.OutboxEvent{roleEvent(assignment, "platform_role_assignment.granted", "active")}
+	if expired != nil {
+		events = append(events, roleEvent(*expired, "platform_role_assignment.revoked", "revoked"))
+	}
 	err := audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			if expired != nil {
+				tag, err := tx.Exec(ctx, `DELETE FROM `+s.q+`.platform_role_assignments
+WHERE id = $1 AND principal_id = $2 AND expires_at <= statement_timestamp()`, *expired, id)
+				if err != nil {
+					return err
+				}
+				if tag.RowsAffected() != 1 {
+					return errExpiredRoleChanged
+				}
+			}
 			_, err := tx.Exec(ctx, `INSERT INTO `+s.q+`.platform_role_assignments (id, principal_id, role_key)
 VALUES ($1, $2, $3) ON CONFLICT (principal_id, role_key) DO NOTHING`, assignment, id, PlatformAdminRole)
 			return err
 		},
 		Audit:  roleAudit("auth.platform_role.granted", "role_granted", id.String()),
-		Events: []audit.OutboxEvent{roleEvent(assignment, "platform_role_assignment.granted", "active")},
+		Events: events,
 	})
 	if err == nil || errors.Is(err, audit.ErrNoStateChange) {
 		return nil

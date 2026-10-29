@@ -75,6 +75,7 @@ var Allowlist = []Entry{
 	{File: "internal/auth/identity/backfill.go", Func: "Store.applyBackfillCredentials", Table: "auth.principals", Verb: "UPDATE"},
 	{File: "internal/auth/identity/backfill.go", Func: "Store.applyBackfillCredentials", Table: "auth.users", Verb: "UPDATE"},
 	{File: "internal/auth/identity/backfill.go", Func: "Store.applyBackfillTokenVersion", Table: "auth.users", Verb: "UPDATE"},
+	{File: "internal/auth/identity/backfill.go", Func: "Store.grantBackfillRole", Table: "auth.platform_role_assignments", Verb: "DELETE"},
 	{File: "internal/auth/identity/backfill.go", Func: "Store.grantBackfillRole", Table: "auth.platform_role_assignments", Verb: "INSERT"},
 	{File: "internal/auth/identity/backfill.go", Func: "Store.insertBackfill", Table: "auth.platform_role_assignments", Verb: "INSERT"},
 	{File: "internal/auth/identity/backfill.go", Func: "Store.insertBackfill", Table: "auth.principals", Verb: "INSERT"},

@@ -19,11 +19,13 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
+	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/invite"
 	"github.com/full-chaos/dev-health-ops/internal/auth/membership"
+	"github.com/full-chaos/dev-health-ops/internal/auth/org"
 	"github.com/full-chaos/dev-health-ops/internal/auth/orgdeprovision"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/servicecred"
@@ -61,6 +63,8 @@ type fakeProvUsers struct {
 	inTx   *fakeProvUsers
 	err    error
 	reads  int
+	// roleReads counts RoleOn alone: a superuser-only route never reads a role.
+	roleReads int
 }
 
 func (f *fakeProvUsers) pick(q session.Queryer) *fakeProvUsers {
@@ -83,6 +87,7 @@ func (f *fakeProvUsers) StateOn(_ context.Context, q session.Queryer, id uuid.UU
 func (f *fakeProvUsers) RoleOn(_ context.Context, q session.Queryer, user, org uuid.UUID) (*string, bool, error) {
 	u := f.pick(q)
 	f.reads++
+	f.roleReads++
 	if u.err != nil {
 		return nil, false, u.err
 	}
@@ -204,6 +209,32 @@ func (f *fakeDeprovision) Deprovision(_ context.Context, in orgdeprovision.Input
 	return &orgdeprovision.Result{RemovedMemberships: 2, RevokedInvites: 1, Suspended: true}, nil
 }
 
+// fakeReactivate runs the verb's Authorize on an empty transaction, as the
+// store does after its row lock, then answers changed (a no-op when noop).
+type fakeReactivate struct {
+	err        error
+	noop       bool
+	calls      int
+	id         uuid.UUID
+	ifRevision *int64
+	actor      org.Actor
+}
+
+func (f *fakeReactivate) ReactivateAuthorized(ctx context.Context, id uuid.UUID, ifRevision *int64, a org.Actor, authz org.Authorize) (bool, error) {
+	f.calls++
+	f.id, f.ifRevision, f.actor = id, ifRevision, a
+	if authz == nil {
+		return false, org.ErrDenied
+	}
+	if err := authz(ctx, audit.TxOps{}, id); err != nil {
+		return false, err
+	}
+	if f.err != nil {
+		return false, f.err
+	}
+	return !f.noop, nil
+}
+
 type provFixture struct {
 	t                                           *testing.T
 	creds                                       *fakeScopeCredentials
@@ -212,6 +243,7 @@ type provFixture struct {
 	members                                     *fakeMembers
 	invites                                     *fakeInvites
 	deprovision                                 *fakeDeprovision
+	reactivate                                  *fakeReactivate
 	reader                                      *sdkmetric.ManualReader
 	logs                                        *bytes.Buffer
 	mux                                         *http.ServeMux
@@ -220,8 +252,45 @@ type provFixture struct {
 
 func newProvFixture(t *testing.T) *provFixture {
 	t.Helper()
+	return newProvFixtureWith(t, docWithReactivateRow(t))
+}
+
+// docWithReactivateRow is the embedded endpoint-profile document plus the row
+// the follow-up adds for the reactivate route (a copy of the deprovision row).
+func docWithReactivateRow(t testing.TB) []byte {
+	t.Helper()
+	var document map[string]any
+	if err := json.Unmarshal(authv1.AuthServiceEndpointProfiles, &document); err != nil {
+		t.Fatal(err)
+	}
+	rows := document["rows"].([]any)
+	for _, item := range rows {
+		row := item.(map[string]any)
+		if row["route"] == PatternOrgDeprovision && row["service"] == AccessService {
+			clone := map[string]any{}
+			for k, v := range row {
+				clone[k] = v
+			}
+			clone["route"] = PatternOrgReactivate
+			clone["id"] = "POST " + PatternOrgReactivate + " [dev-health-auth-service @api]"
+			document["rows"] = append(rows, clone)
+			raw, err := json.Marshal(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return raw
+		}
+	}
+	t.Fatal("no deprovision row in the embedded document")
+	return nil
+}
+
+// newProvFixtureWith builds the routes over the given endpoint-profile
+// document (nil is the one the binary embeds).
+func newProvFixtureWith(t *testing.T, profileRows []byte) *provFixture {
+	t.Helper()
 	f := &provFixture{t: t, creds: &fakeScopeCredentials{}, orgs: &fakeEnsurer{}, members: &fakeMembers{}, invites: &fakeInvites{},
-		deprovision: &fakeDeprovision{}, reader: sdkmetric.NewManualReader(), logs: &bytes.Buffer{},
+		deprovision: &fakeDeprovision{}, reactivate: &fakeReactivate{}, reader: sdkmetric.NewManualReader(), logs: &bytes.Buffer{},
 		org: uuid.New(), admin: uuid.New(), owner: uuid.New(), viewer: uuid.New(), super: uuid.New(), target: uuid.New(), x: uuid.New()}
 	f.users = &fakeProvUsers{
 		states: map[uuid.UUID]UserState{
@@ -231,7 +300,7 @@ func newProvFixture(t *testing.T) *provFixture {
 		roles: map[[2]uuid.UUID]string{{f.admin, f.org}: "admin", {f.owner, f.org}: "owner", {f.viewer, f.org}: "viewer"},
 	}
 	routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
-		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision,
+		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ProfileRows: profileRows,
 		Logger: slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		Meter:  sdkmetric.NewMeterProvider(sdkmetric.WithReader(f.reader)).Meter("test")})
 	if err != nil {
@@ -258,7 +327,7 @@ func (f *provFixture) post(path, body string, header map[string]string) *httptes
 }
 
 func (f *provFixture) storeCalls() int {
-	return f.orgs.calls + f.members.calls + f.invites.calls + f.deprovision.calls
+	return f.orgs.calls + f.members.calls + f.invites.calls + f.deprovision.calls + f.reactivate.calls
 }
 
 func (f *provFixture) uses(op string) (int64, bool) {
@@ -347,6 +416,9 @@ func routeCases() []routeCase {
 			return map[string]any{"token": fakeTokenID + "." + strings.Repeat("a", 64), "principal_id": a.String()}
 		}, []string{"token", "principal_id"}},
 		{opOrgDeprovision, PatternOrgDeprovision, func(f *provFixture, a uuid.UUID) map[string]any {
+			return map[string]any{"organization_id": f.org.String(), "actor_principal_id": a.String()}
+		}, []string{"organization_id", "actor_principal_id"}},
+		{opOrgReactivate, PatternOrgReactivate, func(f *provFixture, a uuid.UUID) map[string]any {
 			return map[string]any{"organization_id": f.org.String(), "actor_principal_id": a.String()}
 		}, []string{"organization_id", "actor_principal_id"}},
 	}
@@ -578,10 +650,10 @@ func TestProvisioningEnsuresTheOrganization(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := newProvFixture(t)
 			f.orgs.err = tc.err
-			for _, c := range append(routeCases()[:5], routeCases()[6]) {
+			for _, c := range append(routeCases()[:5], routeCases()[6], routeCases()[7]) {
 				expectRefusal(t, f.post(c.path, encode(c.body(f, f.super)), nil), tc.status, tc.reason)
 			}
-			if f.members.calls+f.invites.calls+f.deprovision.calls != 0 {
+			if f.members.calls+f.invites.calls+f.deprovision.calls+f.reactivate.calls != 0 {
 				t.Fatal("a verb ran without its organization")
 			}
 		})
@@ -785,6 +857,170 @@ func TestProvisioningLogsCarryNoTokenOrAuditText(t *testing.T) {
 	for _, secret := range []string{createdToken, acceptToken, "SENTINEL-INVITE-TOKEN", "SENTINEL-ACCEPT-TOKEN", description, metadata, email} {
 		if strings.Contains(logs, secret) {
 			t.Fatalf("a log line carries %q", secret)
+		}
+	}
+}
+
+// The reactivate route is superuser only (go-api's PATCH is policy.Superuser),
+// reads the account through the users seam alone (StateOn, never a role), and
+// refuses before the verb is reached.
+func TestOrgReactivateIsSuperuserOnlyThroughTheUsersSeam(t *testing.T) {
+	f := newProvFixture(t)
+	f.users.states[f.x] = UserState{IsActive: false, IsSuperuser: true}
+	c := routeCases()[7]
+	for name, tc := range map[string]struct {
+		actor  uuid.UUID
+		reason string
+	}{
+		"admin of the org":   {f.admin, reasonSuperuserRequired},
+		"owner of the org":   {f.owner, reasonSuperuserRequired},
+		"member of no org":   {f.target, reasonSuperuserRequired},
+		"inactive superuser": {f.x, reasonDeactivated},
+		"unknown actor":      {uuid.New(), reasonDeactivated},
+	} {
+		expectRefusal(t, f.post(c.path, encode(c.body(f, tc.actor)), nil), http.StatusForbidden, tc.reason)
+		if f.reactivate.calls != 0 {
+			t.Fatalf("%s: a refused actor reached the verb", name)
+		}
+	}
+	if response := f.post(c.path, encode(c.body(f, f.super)), nil); response.Code != http.StatusOK {
+		t.Fatalf("reactivate by a superuser: %d %s", response.Code, response.Body)
+	}
+	if f.users.roleReads != 0 {
+		t.Fatalf("the route read %d roles; the actor rule of a superuser-only route reads none", f.users.roleReads)
+	}
+	if f.reactivate.id != f.org || f.reactivate.actor.PrincipalID == nil || *f.reactivate.actor.PrincipalID != f.super ||
+		f.reactivate.actor.RequestID == nil || f.reactivate.ifRevision != nil {
+		t.Fatalf("the verb was given %+v for org %s, want the org, the actor, a request id and no revision", f.reactivate, f.reactivate.id)
+	}
+}
+
+// The rule runs again inside the verb's transaction, after the row lock: a
+// superuser demoted since the first read is refused by the verb.
+func TestOrgReactivateRunsTheActorRuleAgainUnderTheLock(t *testing.T) {
+	f := newProvFixture(t)
+	c := routeCases()[7]
+	f.users.inTx = &fakeProvUsers{states: map[uuid.UUID]UserState{f.super: {IsActive: true}}}
+	expectRefusal(t, f.post(c.path, encode(c.body(f, f.super)), nil), http.StatusForbidden, reasonSuperuserRequired)
+	f.users.inTx = &fakeProvUsers{err: errors.New("read failed")}
+	expectRefusal(t, f.post(c.path, encode(c.body(f, f.super)), nil), http.StatusServiceUnavailable, reasonStoreUnavailable)
+}
+
+func TestOrgReactivateAnswers(t *testing.T) {
+	f := newProvFixture(t)
+	c := routeCases()[7]
+	decode := func() map[string]any {
+		t.Helper()
+		response := f.post(c.path, encode(c.body(f, f.super)), nil)
+		if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" {
+			t.Fatalf("answer %d (Cache-Control %q): %s", response.Code, response.Header().Get("Cache-Control"), response.Body)
+		}
+		var doc map[string]any
+		if err := json.Unmarshal(response.Body.Bytes(), &doc); err != nil {
+			t.Fatal(err)
+		}
+		return doc
+	}
+	got := decode()
+	if len(got) != 3 || got["organization_id"] != f.org.String() || got["status"] != "active" || got["reactivated"] != true {
+		t.Fatalf("reactivate answer = %v", got)
+	}
+	f.reactivate.noop = true
+	got = decode()
+	if len(got) != 3 || got["status"] != "active" || got["reactivated"] != false {
+		t.Fatalf("answer for an org that is not suspended = %v, want 200 with reactivated false", got)
+	}
+}
+
+func TestOrgReactivateRefusalsAreNamedReasonCodes(t *testing.T) {
+	f := newProvFixture(t)
+	c := routeCases()[7]
+	for _, tc := range []struct {
+		err    error
+		status int
+		reason string
+	}{
+		{org.ErrNotFound, http.StatusNotFound, reasonOrganizationNotFound},
+		{org.ErrDenied, http.StatusForbidden, reasonSuperuserRequired},
+		{fmt.Errorf("%w: reactivate: down", org.ErrStore), http.StatusServiceUnavailable, reasonStoreUnavailable},
+		{errors.New("unclassified"), http.StatusServiceUnavailable, reasonStoreUnavailable},
+	} {
+		f.reactivate.err = tc.err
+		expectRefusal(t, f.post(c.path, encode(c.body(f, f.super)), nil), tc.status, tc.reason)
+	}
+}
+
+func TestProvisioningRoutesNeedTheOrganizationVerb(t *testing.T) {
+	f := newProvFixture(t)
+	_, err := ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
+		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision})
+	if err == nil {
+		t.Fatal("ProvisioningRoutes accepted deps with no organization verb")
+	}
+}
+
+// The reactivate route is mounted only when the embedded endpoint-profile
+// document holds its row (auth-service, POST, accepting the session issuer
+// credential). Without it the route is not mounted (404), the other seven
+// routes are served, the service starts, and one startup line names the route.
+func TestOrgReactivateIsDarkWithoutItsProfileRow(t *testing.T) {
+	f := newProvFixtureWith(t, nil)
+	if got := f.post(PatternOrgReactivate, encode(routeCases()[7].body(f, f.super)), nil); got.Code != http.StatusNotFound {
+		t.Fatalf("reactivate without its row: %d %s, want 404", got.Code, got.Body)
+	}
+	if f.reactivate.calls != 0 {
+		t.Fatal("the verb ran for a route that is not mounted")
+	}
+	for _, c := range routeCases()[:7] {
+		if got := f.post(c.path, encode(c.body(f, f.super)), nil); got.Code != http.StatusOK {
+			t.Fatalf("%s with the reactivate row absent: %d %s, want 200", c.op, got.Code, got.Body)
+		}
+	}
+	lines := 0
+	for _, line := range strings.Split(strings.TrimSpace(f.logs.String()), "\n") {
+		if strings.Contains(line, PatternOrgReactivate) {
+			lines++
+			if !strings.Contains(line, "not mounted") {
+				t.Fatalf("the startup line does not say the route is not mounted: %s", line)
+			}
+		}
+	}
+	if lines != 1 {
+		t.Fatalf("%d startup lines name the reactivate route, want 1: %s", lines, f.logs.String())
+	}
+}
+
+func TestOrgReactivateIsServedWithItsProfileRow(t *testing.T) {
+	f := newProvFixtureWith(t, docWithReactivateRow(t))
+	if got := f.post(PatternOrgReactivate, encode(routeCases()[7].body(f, f.super)), nil); got.Code != http.StatusOK {
+		t.Fatalf("reactivate with its row: %d %s, want 200", got.Code, got.Body)
+	}
+	if strings.Contains(f.logs.String(), "not mounted") {
+		t.Fatalf("a not-mounted line was logged with the row present: %s", f.logs.String())
+	}
+}
+
+// A row for another service, another method or a class other than the session
+// issuer credential does not mount the route.
+func TestOrgReactivateNeedsAnAuthServicePostRowAcceptingTheIssuerCredential(t *testing.T) {
+	for name, edit := range map[string]func(row map[string]any){
+		"another service": func(row map[string]any) { row["service"] = "dev-health-ops-api" },
+		"another method":  func(row map[string]any) { row["method"] = "GET" },
+		"another class":   func(row map[string]any) { row["accepted_credential_classes"] = []any{"workload_token"} },
+	} {
+		var document map[string]any
+		if err := json.Unmarshal(docWithReactivateRow(t), &document); err != nil {
+			t.Fatal(err)
+		}
+		rows := document["rows"].([]any)
+		edit(rows[len(rows)-1].(map[string]any))
+		raw, err := json.Marshal(document)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f := newProvFixtureWith(t, raw)
+		if got := f.post(PatternOrgReactivate, encode(routeCases()[7].body(f, f.super)), nil); got.Code != http.StatusNotFound {
+			t.Fatalf("%s: reactivate %d, want 404", name, got.Code)
 		}
 	}
 }

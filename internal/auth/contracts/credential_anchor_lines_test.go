@@ -20,7 +20,8 @@ import (
 //
 // An anchor whose file is absent fails unless its path is listed in
 // credentialanchors/credential-anchor-retired-paths.txt (one path per line). The list
-// may hold only absent paths that some anchor still cites: a listed file that
+// may hold only src/dev_health_ops/*.py paths (the deleted Python tree), absent
+// ones that some anchor still cites: a listed file that
 // exists, or a listed path no anchor cites, fails. Purging those anchors from
 // the registry is a separate change.
 //
@@ -134,6 +135,10 @@ func checkCredentialAnchorLines(document []byte, pins []anchorPin, retiredPaths 
 	}
 	retiredSet := map[string]bool{}
 	for _, path := range retiredPaths {
+		if !isRetiredPythonPath(path) {
+			report.failures = append(report.failures, fmt.Sprintf("retired list entry %q is not a src/dev_health_ops/*.py path", path))
+			continue
+		}
 		retiredSet[path] = true
 	}
 	retiredUsed := map[string]bool{}
@@ -288,6 +293,9 @@ func regenerateAnchorFiles(t *testing.T, root string, document []byte) {
 		}
 		lines, err := readAnchorFile(root, ref.path, lineCache)
 		if os.IsNotExist(err) {
+			if !isRetiredPythonPath(ref.path) {
+				t.Fatalf("%s:%d: the file is absent and is not a retired python path: fix the anchor in the registry", ref.path, ref.line)
+			}
 			retired[ref.path] = true
 			continue
 		}
@@ -475,10 +483,10 @@ func TestCredentialAnchorRetiredListIsAnExplicitAllowlistOfAbsentPaths(t *testin
 	doc := func(path string) []byte {
 		return []byte(fmt.Sprintf(`{"classes":[{"class_id":"demo_class","issuer":{"anchors":[{"repo":"ops","path":%q,"line":1}]}}]}`, path))
 	}
-	if report := checkCredentialAnchorLines(doc("gone.py"), nil, nil, root); len(report.failures) == 0 {
+	if report := checkCredentialAnchorLines(doc("src/dev_health_ops/gone.py"), nil, nil, root); len(report.failures) == 0 {
 		t.Error("an absent file not in the retired list must fail")
 	}
-	report := checkCredentialAnchorLines(doc("gone.py"), nil, []string{"gone.py"}, root)
+	report := checkCredentialAnchorLines(doc("src/dev_health_ops/gone.py"), nil, []string{"src/dev_health_ops/gone.py"}, root)
 	if len(report.failures) != 0 || report.retired != 1 || report.retiredByKind["issuer"] != 1 {
 		t.Errorf("an absent listed file must pass and be counted by kind: %+v", report)
 	}
@@ -486,7 +494,7 @@ func TestCredentialAnchorRetiredListIsAnExplicitAllowlistOfAbsentPaths(t *testin
 	if report := checkCredentialAnchorLines(doc("present.go"), pins, []string{"present.go"}, root); len(report.failures) == 0 {
 		t.Error("a listed path whose file exists must fail")
 	}
-	if report := checkCredentialAnchorLines(doc("present.go"), pins, []string{"never-cited.py"}, root); len(report.failures) == 0 {
+	if report := checkCredentialAnchorLines(doc("present.go"), pins, []string{"src/dev_health_ops/never-cited.py"}, root); len(report.failures) == 0 {
 		t.Error("a listed path no anchor cites must fail")
 	}
 }
@@ -511,4 +519,30 @@ func TestCredentialAnchorLineCheckRefusesASymlinkOutOfTheCheckout(t *testing.T) 
 	if strings.Contains(strings.Join(report.failures, "\n"), "SECRET-OUTSIDE") {
 		t.Errorf("the outside file leaked: %v", report.failures)
 	}
+}
+
+func TestCredentialAnchorRetiredListRefusesAnythingButRetiredPython(t *testing.T) {
+	root := t.TempDir()
+	document := []byte(`{"classes":[{"class_id":"demo_class","issuer":{"anchors":[{"repo":"ops","path":"internal/auth/deleted.go","line":1}]}}]}`)
+	if report := checkCredentialAnchorLines(document, nil, nil, root); len(report.failures) == 0 {
+		t.Error("a deleted Go auth file with no list entry must fail")
+	}
+	report := checkCredentialAnchorLines(document, nil, []string{"internal/auth/deleted.go"}, root)
+	if len(report.failures) == 0 || report.retired != 0 {
+		t.Errorf("a deleted Go auth file must fail even when listed, never count as retired: %+v", report)
+	}
+	for _, path := range []string{"src/dev_health_ops/x.go", "other/x.py", "src/dev_health_ops/../../internal/x.py"} {
+		if isRetiredPythonPath(path) {
+			t.Errorf("%q is not a retired python path", path)
+		}
+	}
+	if !isRetiredPythonPath("src/dev_health_ops/api/auth.py") {
+		t.Error("a python path under src/dev_health_ops must be accepted")
+	}
+}
+
+// isRetiredPythonPath is the only shape a retired path may have: the deleted
+// Python tree. A deleted Go file is a stale anchor to fix, never to allowlist.
+func isRetiredPythonPath(path string) bool {
+	return filepath.IsLocal(path) && filepath.Clean(path) == path && strings.HasPrefix(path, "src/dev_health_ops/") && strings.HasSuffix(path, ".py")
 }

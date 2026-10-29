@@ -161,10 +161,22 @@ func (w *workloadIssueFixture) issue(header map[string]string) *httptest.Respons
 	return w.do(http.MethodPost, PatternIssueSession, issueBody(w.principal, w.org.String(), "pwd"), header)
 }
 
-// normalized is a refusal body without its per-request fields.
-func normalized(t *testing.T, body []byte) string {
+// refusalWithoutPerRequestFields checks that a refusal body carries the two
+// per-request fields in their normal shape (a req_ request id and an RFC 3339
+// time) and returns the rest of the body: every other field and the key set.
+// Two refusals with the same return value have the same schema_version, status,
+// reason_code and members; only request_id and occurred_at may differ.
+func refusalWithoutPerRequestFields(t *testing.T, body []byte) string {
 	t.Helper()
 	doc := decodeObject(t, body)
+	if id, _ := doc["request_id"].(string); !strings.HasPrefix(id, "req_") || len(id) <= len("req_") {
+		t.Fatalf("request_id %v is not a req_ id: %s", doc["request_id"], body)
+	}
+	if at, _ := doc["occurred_at"].(string); at == "" {
+		t.Fatalf("occurred_at missing: %s", body)
+	} else if _, err := time.Parse(time.RFC3339Nano, at); err != nil {
+		t.Fatalf("occurred_at %q is not RFC 3339: %v", at, err)
+	}
 	delete(doc, "request_id")
 	delete(doc, "occurred_at")
 	out, err := json.Marshal(doc)
@@ -228,7 +240,8 @@ func uuidOfWire(t *testing.T, subject string) uuid.UUID {
 	return id
 }
 
-// T2-T10: every wrong credential is a byte-equal 401, and no store is read.
+// T2-T10: every wrong credential gets the same 401 error.v1 body (only the per-request
+// request_id and occurred_at differ), and no store is read.
 // The prefix, shape, typ, audience and subject refusals also read no key set.
 func TestIssueSessionRefusesWrongCredentialsBeforeAnyRead(t *testing.T) {
 	forty3 := strings.Repeat("A", 43)
@@ -286,7 +299,7 @@ func TestIssueSessionRefusesWrongCredentialsBeforeAnyRead(t *testing.T) {
 		if w.keys.reads != 0 {
 			t.Fatalf("%s: a refusal read the key set %d times before the verdict", name, w.keys.reads)
 		}
-		got := normalized(t, response.Body.Bytes())
+		got := refusalWithoutPerRequestFields(t, response.Body.Bytes())
 		if golden == "" {
 			golden = got
 		}
@@ -297,7 +310,7 @@ func TestIssueSessionRefusesWrongCredentialsBeforeAnyRead(t *testing.T) {
 	// The same bytes as today's refusal of a revoked svc_authsess_ credential.
 	w := newWorkloadIssueFixture(t)
 	w.creds.refusal = servicecred.RefusedRevoked
-	if got := normalized(t, w.issue(issuerBearer).Body.Bytes()); got != golden {
+	if got := refusalWithoutPerRequestFields(t, w.issue(issuerBearer).Body.Bytes()); got != golden {
 		t.Fatalf("a revoked service credential answers %s, want the workload refusal %s", got, golden)
 	}
 }
@@ -351,7 +364,7 @@ func TestIssueSessionRefusesATokenTheVerifierRefuses(t *testing.T) {
 		response := w.issue(build(w))
 		expectError(t, response, http.StatusUnauthorized, "invalid_credentials")
 		w.nothingRead(name)
-		got := normalized(t, response.Body.Bytes())
+		got := refusalWithoutPerRequestFields(t, response.Body.Bytes())
 		if golden == "" {
 			golden = got
 		}
@@ -608,7 +621,7 @@ func TestTheUnverifiedPeekIsStrictJSON(t *testing.T) {
 }
 
 // (c) A forged token with the right aud and sub passes the peek and reaches the
-// verifier, which refuses it: the same 401 bytes, and no credential check, users
+// verifier, which refuses it: the same 401 body, and no credential check, users
 // read, projection or session.
 func TestAForgedTokenWithTheRightAudienceAndSubjectReachesTheVerifierAndIsRefused(t *testing.T) {
 	w := newWorkloadIssueFixture(t)
@@ -625,7 +638,7 @@ func TestAForgedTokenWithTheRightAudienceAndSubjectReachesTheVerifierAndIsRefuse
 		t.Fatalf("the verifier did not refuse on the signature: %s", w.logs.String())
 	}
 	w.creds.refusal = servicecred.RefusedRevoked
-	if got, want := normalized(t, response.Body.Bytes()), normalized(t, w.issue(issuerBearer).Body.Bytes()); got != want {
+	if got, want := refusalWithoutPerRequestFields(t, response.Body.Bytes()), refusalWithoutPerRequestFields(t, w.issue(issuerBearer).Body.Bytes()); got != want {
 		t.Fatalf("forged-token body %s differs from %s", got, want)
 	}
 }

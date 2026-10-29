@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -211,7 +212,56 @@ func TestStoreLocksNoAssignmentRow(t *testing.T) {
 	if strings.Count(string(src), "statement_timestamp()") < 2 {
 		t.Error("the active rule and the expiry check do not both read statement_timestamp()")
 	}
+	// Every write locks in one order: the advisory write lock, then the
+	// principal rows (a separate statement), then the guard reads. A guard
+	// that read before a lock wait would decide on a clock older than the wait.
+	for fn, guard := range map[string]string{
+		"func (s *Store) Grant(":          "s.resolveOn(ctx, tx",
+		"func (s *Store) Revoke(":         "rows, err := tx.Query(ctx,",
+		"func (s *Store) bootstrapApply(": "activeAdmins(ctx, tx",
+	} {
+		start := strings.Index(string(src), fn)
+		if start < 0 {
+			t.Errorf("store.go has no %s", fn)
+			continue
+		}
+		body := string(src)[start:]
+		if end := strings.Index(body[1:], "\nfunc "); end > 0 {
+			body = body[:end+1]
+		}
+		lw, lp, g := strings.Index(body, "lockWrites(ctx, tx)"), strings.Index(body, "lockPrincipals(ctx, tx"), strings.Index(body, guard)
+		if lw < 0 || lp < 0 || g < 0 || !(lw < lp && lp < g) {
+			t.Errorf("%s: lockWrites at %d, lockPrincipals at %d, first guard read at %d; want them present and in that order", fn, lw, lp, g)
+		}
+		if fn == "func (s *Store) bootstrapApply(" {
+			if target := strings.Index(body, "lockPrincipals(ctx, tx, s.q, principal)"); target < 0 || target > g {
+				t.Errorf("Bootstrap: the target principal's row lock is at %d, the first guard read at %d; want the lock first", target, g)
+			}
+		}
+	}
 	if writeLock != "auth.platform_role_assignments:write" {
 		t.Errorf("write lock name = %q: every writer of the table must take the same lock", writeLock)
+	}
+}
+
+func TestBootstrapAuditReasonIsInTheVocabulary(t *testing.T) {
+	attrs := map[string]any{"reason_code": BootstrapReason, "target_kind": "principal", "target_id": uuid.New().String()}
+	if err := audit.ValidateAttributes(attrs); err != nil {
+		t.Fatalf("the bootstrap audit attributes are refused: %v", err)
+	}
+	if BootstrapReason != "restore_fence_bootstrap" {
+		t.Fatalf("BootstrapReason = %q", BootstrapReason)
+	}
+}
+
+func TestBootstrapRefusalsAreKept(t *testing.T) {
+	for _, refusal := range []error{ErrBootstrapAdminActive, ErrBootstrapRowChanged} {
+		found := false
+		for _, r := range refusals {
+			found = found || r == refusal
+		}
+		if !found {
+			t.Errorf("%v is not in the refusals writeErr keeps", refusal)
+		}
 	}
 }

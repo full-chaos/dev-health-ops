@@ -92,25 +92,21 @@ type rowQuerier interface {
 // Resolve is the platform authority principal holds now. Any read failure is
 // the zero Authority and an error: no authority is ever assumed.
 func (s *Store) Resolve(ctx context.Context, principal uuid.UUID) (Authority, error) {
-	a, err := s.resolveOn(ctx, s.pool, principal, false)
+	a, err := s.resolveOn(ctx, s.pool, principal)
 	if err != nil {
 		return Authority{}, s.storeErr(ctx, "resolve", err)
 	}
 	return a, nil
 }
 
-// resolveOn reads the active role keys of principal through q. With lock set
-// the principal row is share-locked until the transaction ends, so a disable
-// of it waits; the assignment rows are covered by the write lock.
-func (s *Store) resolveOn(ctx context.Context, q rowQuerier, principal uuid.UUID, lock bool) (Authority, error) {
-	locking := ""
-	if lock {
-		locking = " FOR SHARE OF p"
-	}
+// resolveOn reads the active role keys of principal through q. A write calls
+// it after lockWrites and lockPrincipals, so it decides on the clock of a
+// statement that runs after every lock wait.
+func (s *Store) resolveOn(ctx context.Context, q rowQuerier, principal uuid.UUID) (Authority, error) {
 	var stored []string
 	err := q.QueryRow(ctx, `SELECT coalesce(array_agg(role_key ORDER BY role_key), '{}') FROM (
 	SELECT r.role_key FROM `+s.q+`.platform_role_assignments r JOIN `+s.q+`.principals p ON p.id = r.principal_id
-	WHERE r.principal_id = $1 AND `+activeSQL+locking+`) AS held`, principal).Scan(&stored)
+	WHERE r.principal_id = $1 AND `+activeSQL+`) AS held`, principal).Scan(&stored)
 	if err != nil {
 		return Authority{}, err
 	}
@@ -122,9 +118,10 @@ func (s *Store) resolveOn(ctx context.Context, q rowQuerier, principal uuid.UUID
 }
 
 // Grant gives in.Principal the platform role in.Role in one audit.Commit. It
-// takes the write lock first; the actor's authority, the target principal and
-// the expiry are checked in the same transaction as the insert, on the
-// database clock.
+// takes the write lock, then the actor's and the target's principal rows;
+// only then are the actor's authority, the target principal and the expiry
+// checked, in the same transaction as the insert, on the clock of statements
+// that follow every lock wait.
 func (s *Store) Grant(ctx context.Context, in GrantInput) (uuid.UUID, error) {
 	if !IsPlatformRole(in.Role) {
 		return uuid.Nil, ErrNotPlatformRole
@@ -136,7 +133,10 @@ func (s *Store) Grant(ctx context.Context, in GrantInput) (uuid.UUID, error) {
 			if err := lockWrites(ctx, tx); err != nil {
 				return err
 			}
-			held, err := s.resolveOn(ctx, tx, in.Actor, true)
+			if err := lockPrincipals(ctx, tx, s.q, in.Actor, in.Principal); err != nil {
+				return err
+			}
+			held, err := s.resolveOn(ctx, tx, in.Actor)
 			if err != nil {
 				return err
 			}
@@ -145,7 +145,7 @@ func (s *Store) Grant(ctx context.Context, in GrantInput) (uuid.UUID, error) {
 			}
 			var kind string
 			var enabled bool
-			err = tx.QueryRow(ctx, `SELECT kind, disabled_at IS NULL FROM `+s.q+`.principals WHERE id = $1 FOR SHARE OF principals`, in.Principal).Scan(&kind, &enabled)
+			err = tx.QueryRow(ctx, `SELECT kind, disabled_at IS NULL FROM `+s.q+`.principals WHERE id = $1`, in.Principal).Scan(&kind, &enabled)
 			switch {
 			case errors.Is(err, pgx.ErrNoRows):
 				return ErrPrincipalMissing
@@ -184,8 +184,9 @@ VALUES ($1, $2, $3, $4, $5) ON CONFLICT (principal_id, role_key) DO NOTHING RETU
 }
 
 // Revoke removes in.Role from in.Principal in one audit.Commit. The write
-// lock is taken first, so concurrent grants and revokes serialize; a revoke
-// that would leave no active platform administrator is refused.
+// lock is taken first, so concurrent grants and revokes serialize, then the
+// principal rows of every holder; a revoke that would leave no active
+// platform administrator is refused.
 func (s *Store) Revoke(ctx context.Context, in RevokeInput) error {
 	if !IsPlatformRole(in.Role) {
 		return ErrNotPlatformRole
@@ -205,9 +206,12 @@ func (s *Store) Revoke(ctx context.Context, in RevokeInput) error {
 			if err := lockWrites(ctx, tx); err != nil {
 				return err
 			}
+			if err := lockPrincipals(ctx, tx, s.q); err != nil {
+				return err
+			}
 			rows, err := tx.Query(ctx, `SELECT r.id, r.principal_id, r.role_key, `+activeSQL+`
 FROM `+s.q+`.platform_role_assignments r JOIN `+s.q+`.principals p ON p.id = r.principal_id
-ORDER BY r.id FOR SHARE OF p`)
+ORDER BY r.id`)
 			if err != nil {
 				return err
 			}
@@ -267,6 +271,130 @@ func lockWrites(ctx context.Context, tx audit.TxOps) error {
 	return err
 }
 
+// Bootstrap is the break-glass grant after a restore: it gives principal
+// platform_admin, granted by the principal itself (never a NULL granter, which
+// would read as a backfilled row), only while no platform administrator is
+// active, in one audit.Commit with the audit reason BootstrapReason. The
+// principal's own expired assignment, if any, is replaced in the same commit
+// (it blocks the new row, and with no active administrator no one could revoke
+// it): the delete matches exactly that row (id, principal, role, expired on
+// the statement clock), after the write lock and the zero-active-admin check,
+// and any other count refuses the commit. The caller is the migration role.
+func (s *Store) Bootstrap(ctx context.Context, principal uuid.UUID) (uuid.UUID, error) {
+	expired, err := s.bootstrapTarget(ctx, principal)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return s.bootstrapApply(ctx, principal, expired)
+}
+
+// bootstrapTarget reads the id of the principal's platform_admin row, if any.
+func (s *Store) bootstrapTarget(ctx context.Context, principal uuid.UUID) (*uuid.UUID, error) {
+	var expired *uuid.UUID
+	err := s.pool.QueryRow(ctx, `SELECT id FROM `+s.q+`.platform_role_assignments WHERE principal_id = $1 AND role_key = $2`,
+		principal, PlatformAdmin).Scan(&expired)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return nil, s.storeErr(ctx, "read bootstrap target", err)
+	}
+	return expired, nil
+}
+
+// bootstrapApply is the one audit.Commit of Bootstrap; expired is the row
+// bootstrapTarget read.
+func (s *Store) bootstrapApply(ctx context.Context, principal uuid.UUID, expired *uuid.UUID) (uuid.UUID, error) {
+	id := uuid.New()
+	events := []audit.OutboxEvent{roleEvent(id, "platform_role_assignment.granted", "active")}
+	if expired != nil {
+		events = append(events, roleEvent(*expired, "platform_role_assignment.revoked", "revoked"))
+	}
+	subject := principal.String()
+	err := audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			if err := lockWrites(ctx, tx); err != nil {
+				return err
+			}
+			if err := lockPrincipals(ctx, tx, s.q); err != nil {
+				return err
+			}
+			if err := lockPrincipals(ctx, tx, s.q, principal); err != nil {
+				return err
+			}
+			admins, err := s.activeAdmins(ctx, tx)
+			if err != nil {
+				return err
+			}
+			if admins > 0 {
+				return ErrBootstrapAdminActive
+			}
+			var kind string
+			var enabled bool
+			err = tx.QueryRow(ctx, `SELECT kind, disabled_at IS NULL FROM `+s.q+`.principals WHERE id = $1`, principal).Scan(&kind, &enabled)
+			switch {
+			case errors.Is(err, pgx.ErrNoRows):
+				return ErrPrincipalMissing
+			case err != nil:
+				return err
+			case kind != "user":
+				return ErrNotHumanUser
+			case !enabled:
+				return ErrPrincipalOff
+			}
+			if expired != nil {
+				tag, err := tx.Exec(ctx, `DELETE FROM `+s.q+`.platform_role_assignments
+WHERE id = $1 AND principal_id = $2 AND role_key = $3 AND expires_at <= statement_timestamp()`, *expired, principal, PlatformAdmin)
+				if err != nil {
+					return err
+				}
+				if tag.RowsAffected() != 1 {
+					return ErrBootstrapRowChanged
+				}
+			}
+			var inserted uuid.UUID
+			err = tx.QueryRow(ctx, `INSERT INTO `+s.q+`.platform_role_assignments (id, principal_id, role_key, granted_by)
+VALUES ($1, $2, $3, $2) ON CONFLICT (principal_id, role_key) DO NOTHING RETURNING id`, id, principal, PlatformAdmin).Scan(&inserted)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrBootstrapRowChanged
+			}
+			return err
+		},
+		Audit: audit.AuditEvent{EventType: "auth.platform_role.granted", Outcome: audit.OutcomeAllowed, SubjectPrincipalID: &subject,
+			Attributes: map[string]any{"reason_code": BootstrapReason, "target_kind": "principal", "target_id": subject}},
+		Events: events,
+	})
+	if err != nil {
+		return uuid.Nil, s.writeErr(ctx, "bootstrap", err)
+	}
+	return id, nil
+}
+
+// activeAdmins counts the active platform_admin assignments, on the clock of
+// this statement.
+func (s *Store) activeAdmins(ctx context.Context, q rowQuerier) (int, error) {
+	var n int
+	err := q.QueryRow(ctx, `SELECT count(*) FROM `+s.q+`.platform_role_assignments r JOIN `+s.q+`.principals p ON p.id = r.principal_id
+WHERE r.role_key = $1 AND `+activeSQL, PlatformAdmin).Scan(&n)
+	return n, err
+}
+
+// lockPrincipals share-locks principal rows, in id order, in a statement of
+// its own: the named ids, or with none named every principal that holds an
+// assignment. A guard statement after it reads a clock that follows the wait.
+func lockPrincipals(ctx context.Context, tx audit.TxOps, schema string, ids ...uuid.UUID) error {
+	if len(ids) == 0 {
+		_, err := tx.Exec(ctx, `SELECT 1 FROM (SELECT p.id FROM `+schema+`.principals p
+WHERE p.id IN (SELECT principal_id FROM `+schema+`.platform_role_assignments) ORDER BY p.id FOR SHARE OF p) AS locked`)
+		return err
+	}
+	// The auth pool registers no uuid array codec: the ids travel as text and
+	// are cast to uuid[] in the statement.
+	text := make([]string, len(ids))
+	for i, id := range ids {
+		text[i] = id.String()
+	}
+	_, err := tx.Exec(ctx, `SELECT 1 FROM (SELECT id FROM `+schema+`.principals WHERE id = ANY($1::uuid[]) ORDER BY id FOR SHARE OF principals) AS locked`, text)
+	return err
+}
+
 // List is every stored assignment, with Active on the database clock.
 func (s *Store) List(ctx context.Context) ([]Assignment, error) {
 	rows, err := s.pool.Query(ctx, `SELECT r.id, r.principal_id, r.role_key, r.granted_by, r.expires_at, `+activeSQL+`
@@ -291,7 +419,7 @@ ORDER BY r.principal_id, r.role_key`)
 }
 
 var refusals = []error{ErrGranterNotHeld, ErrPrincipalMissing, ErrNotHumanUser, ErrPrincipalOff,
-	ErrExpiryNotFuture, ErrAlreadyHeld, ErrNotHeld, ErrLastPlatformAdmin}
+	ErrExpiryNotFuture, ErrAlreadyHeld, ErrNotHeld, ErrLastPlatformAdmin, ErrBootstrapAdminActive, ErrBootstrapRowChanged}
 
 // writeErr returns a refusal as itself and any other failure as ErrStore.
 func (s *Store) writeErr(ctx context.Context, op string, err error) error {

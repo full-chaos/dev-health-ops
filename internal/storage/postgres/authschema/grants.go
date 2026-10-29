@@ -116,6 +116,9 @@ func RuntimePosture() []TablePrivilege {
 		{Table: "auth_outbox_events", Select: true, Insert: true, Update: true, Delete: true},
 		// Per-aggregate revision counter (0013): bumped, never deleted.
 		{Table: "aggregate_revisions", Select: true, Insert: true, Update: true},
+
+		// Restore fence (0035): the runtime only reads which timelines are fenced.
+		{Table: "restore_fence_state", Select: true},
 	}
 }
 

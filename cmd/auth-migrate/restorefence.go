@@ -10,6 +10,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/full-chaos/dev-health-ops/internal/auth/keyrotation"
 	"github.com/full-chaos/dev-health-ops/internal/auth/restorefence"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -78,6 +80,54 @@ func parseRestoreFenceArgs(args []string, stderr io.Writer) (restoreFenceArgs, e
 	return parsed, nil
 }
 
+// restoreFenceStore is the database side of the verbs, so a test can stand in for it.
+type restoreFenceStore interface {
+	CheckNotRuntimeRole(ctx context.Context, runtimeRole string) error
+	Timeline(ctx context.Context) (int64, error)
+	Check(ctx context.Context, schema authschema.ValidatedIdentifier) error
+	Export(ctx context.Context, schema authschema.ValidatedIdentifier) (restorefence.Manifest, error)
+	Apply(ctx context.Context, schema authschema.ValidatedIdentifier, m *restorefence.Manifest, opts restorefence.Options) (restorefence.Report, error)
+	Init(ctx context.Context, schema authschema.ValidatedIdentifier, opts restorefence.InitOptions) (restorefence.InitReport, error)
+	PendingActions(ctx context.Context, schema authschema.ValidatedIdentifier) ([]restorefence.OperatorAction, error)
+	Close()
+}
+
+type pgRestoreFenceStore struct{ pool *pgxpool.Pool }
+
+func (s pgRestoreFenceStore) CheckNotRuntimeRole(ctx context.Context, role string) error {
+	return keyrotation.CheckNotRuntimeRole(ctx, s.pool, role)
+}
+func (s pgRestoreFenceStore) Timeline(ctx context.Context) (int64, error) {
+	return restorefence.Timeline(ctx, s.pool)
+}
+func (s pgRestoreFenceStore) Check(ctx context.Context, schema authschema.ValidatedIdentifier) error {
+	return restorefence.Check(ctx, s.pool, schema)
+}
+func (s pgRestoreFenceStore) Export(ctx context.Context, schema authschema.ValidatedIdentifier) (restorefence.Manifest, error) {
+	return restorefence.ExportManifest(ctx, s.pool, schema)
+}
+func (s pgRestoreFenceStore) Apply(ctx context.Context, schema authschema.ValidatedIdentifier, m *restorefence.Manifest, opts restorefence.Options) (restorefence.Report, error) {
+	return restorefence.Apply(ctx, s.pool, schema, m, opts)
+}
+func (s pgRestoreFenceStore) Init(ctx context.Context, schema authschema.ValidatedIdentifier, opts restorefence.InitOptions) (restorefence.InitReport, error) {
+	return restorefence.Init(ctx, s.pool, schema, opts)
+}
+func (s pgRestoreFenceStore) PendingActions(ctx context.Context, schema authschema.ValidatedIdentifier) ([]restorefence.OperatorAction, error) {
+	return restorefence.PendingActions(ctx, s.pool, schema)
+}
+func (s pgRestoreFenceStore) Close() { s.pool.Close() }
+
+// openRestoreFenceStore connects as the migration role; tests replace it.
+var openRestoreFenceStore = func(ctx context.Context, uri string, stderr io.Writer) (restoreFenceStore, error) {
+	poolConfig := postgresstore.DefaultConfig(uri)
+	poolConfig.MaxConns = 2
+	pool, err := newDatabaseWait(poolConfig, stderr).run(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return pgRestoreFenceStore{pool: pool}, nil
+}
+
 // executeRestoreFence runs `auth-migrate restore-fence`. It connects as the
 // migration role and refuses to run as the runtime role. It prints counts and
 // table names only: never an id, a hash or a DSN.
@@ -109,15 +159,13 @@ func executeRestoreFence(parent context.Context, args []string, lookup secrets.L
 
 	ctx, cancel := context.WithTimeout(parent, runBudget)
 	defer cancel()
-	poolConfig := postgresstore.DefaultConfig(migrationURI.Reveal())
-	poolConfig.MaxConns = 2
-	pool, err := newDatabaseWait(poolConfig, stderr).run(ctx)
+	store, err := openRestoreFenceStore(ctx, migrationURI.Reveal(), stderr)
 	if err != nil {
 		fmt.Fprintln(stderr, "restore-fence error: PostgreSQL migration endpoint unavailable")
 		return 1
 	}
-	defer pool.Close()
-	if err := keyrotation.CheckNotRuntimeRole(ctx, pool, runtimeRole); err != nil {
+	defer store.Close()
+	if err := store.CheckNotRuntimeRole(ctx, runtimeRole); err != nil {
 		if errors.Is(err, keyrotation.ErrRuntimeRole) {
 			fmt.Fprintf(stderr, "configuration error: %s connects as the runtime role %q; the fence runs as the migration role only\n", envMigrationURI, runtimeRole)
 		} else {
@@ -128,7 +176,7 @@ func executeRestoreFence(parent context.Context, args []string, lookup secrets.L
 
 	switch parsed.verb {
 	case "init":
-		report, err := restorefence.Init(ctx, pool, schema, restorefence.InitOptions{IfAbsent: parsed.ifAbsent, Timeline: parsed.timeline})
+		report, err := store.Init(ctx, schema, restorefence.InitOptions{IfAbsent: parsed.ifAbsent, Timeline: parsed.timeline})
 		if err != nil {
 			fmt.Fprintf(stderr, "restore-fence error: %v\n", err)
 			return 1
@@ -140,22 +188,22 @@ func executeRestoreFence(parent context.Context, args []string, lookup secrets.L
 		fmt.Fprintf(stdout, "restore-fence init timeline=%d written=true\n", report.Timeline)
 		return 0
 	case "status":
-		timeline, err := restorefence.Timeline(ctx, pool)
+		timeline, err := store.Timeline(ctx)
 		if err != nil {
 			fmt.Fprintln(stdout, "restore-fence status timeline=none fenced=false")
 			return 1
 		}
-		if err := restorefence.Check(ctx, pool, schema); err != nil {
+		if err := store.Check(ctx, schema); err != nil {
 			fmt.Fprintf(stdout, "restore-fence status timeline=%d fenced=false\n", timeline)
 			printInputStatus(ctx, stdout)
 			return 1
 		}
 		fmt.Fprintf(stdout, "restore-fence status timeline=%d fenced=true\n", timeline)
 		printInputStatus(ctx, stdout)
-		printActions(ctx, pool, schema, stdout)
+		printActions(ctx, store, schema, stdout)
 		return 0
 	case "export":
-		manifest, err := restorefence.ExportManifest(ctx, pool, schema)
+		manifest, err := store.Export(ctx, schema)
 		if err != nil {
 			fmt.Fprintf(stderr, "restore-fence error: %v\n", err)
 			return 1
@@ -198,7 +246,7 @@ func executeRestoreFence(parent context.Context, args []string, lookup secrets.L
 		}
 		manifest = &parsedManifest
 	}
-	report, err := restorefence.Apply(ctx, pool, schema, manifest, restorefence.Options{Apply: parsed.apply, BlindMargin: parsed.blindMargin})
+	report, err := store.Apply(ctx, schema, manifest, restorefence.Options{Apply: parsed.apply, BlindMargin: parsed.blindMargin})
 	if err != nil {
 		fmt.Fprintf(stderr, "restore-fence error: %v\n", err)
 		return 1
@@ -227,8 +275,8 @@ func printInputStatus(ctx context.Context, stdout io.Writer) {
 }
 
 // printActions prints the operator actions of the live timeline's fence.
-func printActions(ctx context.Context, pool restorefence.Querier, schema authschema.ValidatedIdentifier, stdout io.Writer) {
-	actions, err := restorefence.PendingActions(ctx, pool, schema)
+func printActions(ctx context.Context, store restoreFenceStore, schema authschema.ValidatedIdentifier, stdout io.Writer) {
+	actions, err := store.PendingActions(ctx, schema)
 	if err != nil {
 		fmt.Fprintln(stdout, "operator-actions unreadable")
 		return

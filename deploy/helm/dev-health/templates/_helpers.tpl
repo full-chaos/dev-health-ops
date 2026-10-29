@@ -210,11 +210,20 @@ epoch the Go finalize bumps must land in the keyspace the API's cache reads.
 {{- end }}
 
 {{/*
+CHAOS-11852: a user, password or database name written into a connection URI is percent-encoded (RFC 3986 userinfo / path
+segment): urlquery, then "+" -> "%20" (QueryEscape writes a space as "+" and a literal "+" as %2B, so the replace is exact). A value of
+unreserved characters (A-Za-z0-9 - _ . ~) renders unchanged; every Go reader of these URIs decodes the userinfo.
+*/}}
+{{- define "dev-health.uriPart" -}}
+{{- . | toString | urlquery | replace "+" "%20" -}}
+{{- end -}}
+
+{{/*
 ClickHouse URI — auto-computed when clickhouse.enabled
 */}}
 {{- define "dev-health.clickhouseURI" -}}
 {{- if .Values.clickhouse.enabled }}
-{{- printf "clickhouse://%s:%s@%s-clickhouse:8123/%s" .Values.clickhouse.credentials.user .Values.clickhouse.credentials.password (include "dev-health.fullname" .) .Values.clickhouse.credentials.database }}
+{{- printf "clickhouse://%s:%s@%s-clickhouse:8123/%s" (include "dev-health.uriPart" .Values.clickhouse.credentials.user) (include "dev-health.uriPart" .Values.clickhouse.credentials.password) (include "dev-health.fullname" .) (include "dev-health.uriPart" .Values.clickhouse.credentials.database) }}
 {{- end }}
 {{- end }}
 
@@ -258,7 +267,7 @@ workload.
 */}}
 {{- define "dev-health.clickhouseNativeURI" -}}
 {{- if .Values.clickhouse.enabled }}
-{{- printf "clickhouse://%s:%s@%s-clickhouse:9000/%s" .Values.clickhouse.credentials.user .Values.clickhouse.credentials.password (include "dev-health.fullname" .) .Values.clickhouse.credentials.database }}
+{{- printf "clickhouse://%s:%s@%s-clickhouse:9000/%s" (include "dev-health.uriPart" .Values.clickhouse.credentials.user) (include "dev-health.uriPart" .Values.clickhouse.credentials.password) (include "dev-health.fullname" .) (include "dev-health.uriPart" .Values.clickhouse.credentials.database) }}
 {{- end }}
 {{- end }}
 
@@ -267,7 +276,7 @@ PostgreSQL URI — auto-computed when postgresql.enabled
 */}}
 {{- define "dev-health.postgresURI" -}}
 {{- if .Values.postgresql.enabled }}
-{{- printf "postgresql+asyncpg://%s:%s@%s-postgresql:5432/%s" .Values.postgresql.credentials.user .Values.postgresql.credentials.password (include "dev-health.fullname" .) .Values.postgresql.credentials.database }}
+{{- printf "postgresql+asyncpg://%s:%s@%s-postgresql:5432/%s" (include "dev-health.uriPart" .Values.postgresql.credentials.user) (include "dev-health.uriPart" .Values.postgresql.credentials.password) (include "dev-health.fullname" .) (include "dev-health.uriPart" .Values.postgresql.credentials.database) }}
 {{- end }}
 {{- end }}
 

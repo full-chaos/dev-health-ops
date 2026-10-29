@@ -120,9 +120,9 @@ stringData:
   RIVER_DOMAIN_DATABASE_PASSWORD: {{ required "goWorkers.pgbouncer.secret.data.RIVER_DOMAIN_DATABASE_PASSWORD is required when PgBouncer is enabled" .Values.goWorkers.pgbouncer.secret.data.RIVER_DOMAIN_DATABASE_PASSWORD | quote }}
   RIVER_QUEUE_DATABASE_PASSWORD: {{ required "goWorkers.pgbouncer.secret.data.RIVER_QUEUE_DATABASE_PASSWORD is required when PgBouncer is enabled" .Values.goWorkers.pgbouncer.secret.data.RIVER_QUEUE_DATABASE_PASSWORD | quote }}
   RIVER_COORDINATOR_DATABASE_PASSWORD: {{ required "goWorkers.pgbouncer.secret.data.RIVER_COORDINATOR_DATABASE_PASSWORD is required when PgBouncer is enabled" .Values.goWorkers.pgbouncer.secret.data.RIVER_COORDINATOR_DATABASE_PASSWORD | quote }}
-  POSTGRES_URI: {{ printf "postgresql://%s:%s@%s:%v/%s" .Values.config.RIVER_DOMAIN_DATABASE_ROLE .Values.goWorkers.pgbouncer.secret.data.RIVER_DOMAIN_DATABASE_PASSWORD (include "dev-health.fullname" . | printf "%s-go-pgbouncer-transaction") .Values.goWorkers.pgbouncer.transaction.port $postgresDatabase | quote }}
-  WORKER_DATABASE_URI: {{ printf "postgresql://%s:%s@%s:%v/%s" .Values.config.RIVER_QUEUE_DATABASE_ROLE .Values.goWorkers.pgbouncer.secret.data.RIVER_QUEUE_DATABASE_PASSWORD (include "dev-health.fullname" . | printf "%s-go-pgbouncer-queue-session") .Values.goWorkers.pgbouncer.queueSession.port $postgresDatabase | quote }}
-  COORDINATOR_DATABASE_URI: {{ printf "postgresql://%s:%s@%s:%v/%s" .Values.config.RIVER_COORDINATOR_DATABASE_ROLE .Values.goWorkers.pgbouncer.secret.data.RIVER_COORDINATOR_DATABASE_PASSWORD (include "dev-health.fullname" . | printf "%s-go-pgbouncer-coordinator-session") .Values.goWorkers.pgbouncer.coordinatorSession.port $postgresDatabase | quote }}
+  POSTGRES_URI: {{ printf "postgresql://%s:%s@%s:%v/%s" (include "dev-health.uriPart" .Values.config.RIVER_DOMAIN_DATABASE_ROLE) (include "dev-health.uriPart" .Values.goWorkers.pgbouncer.secret.data.RIVER_DOMAIN_DATABASE_PASSWORD) (include "dev-health.fullname" . | printf "%s-go-pgbouncer-transaction") .Values.goWorkers.pgbouncer.transaction.port (include "dev-health.uriPart" $postgresDatabase) | quote }}
+  WORKER_DATABASE_URI: {{ printf "postgresql://%s:%s@%s:%v/%s" (include "dev-health.uriPart" .Values.config.RIVER_QUEUE_DATABASE_ROLE) (include "dev-health.uriPart" .Values.goWorkers.pgbouncer.secret.data.RIVER_QUEUE_DATABASE_PASSWORD) (include "dev-health.fullname" . | printf "%s-go-pgbouncer-queue-session") .Values.goWorkers.pgbouncer.queueSession.port (include "dev-health.uriPart" $postgresDatabase) | quote }}
+  COORDINATOR_DATABASE_URI: {{ printf "postgresql://%s:%s@%s:%v/%s" (include "dev-health.uriPart" .Values.config.RIVER_COORDINATOR_DATABASE_ROLE) (include "dev-health.uriPart" .Values.goWorkers.pgbouncer.secret.data.RIVER_COORDINATOR_DATABASE_PASSWORD) (include "dev-health.fullname" . | printf "%s-go-pgbouncer-coordinator-session") .Values.goWorkers.pgbouncer.coordinatorSession.port (include "dev-health.uriPart" $postgresDatabase) | quote }}
 {{- range $user := $extraUsers }}
   {{ $user.passwordKey }}: {{ required (printf "goWorkers.pgbouncer.secret.data.%s is required by goWorkers.pgbouncer.transaction.extraUsers role %s" $user.passwordKey $user.role) (index $secretData $user.passwordKey) | quote }}
 {{- end }}
@@ -132,9 +132,9 @@ stringData:
   # when `grep -q '^"$DB_USER"'` misses, so with that line present it writes
   # nothing and this read-only projection is safe.
   userlist.txt: |
-    "{{ .Values.config.RIVER_DOMAIN_DATABASE_ROLE }}" "{{ .Values.goWorkers.pgbouncer.secret.data.RIVER_DOMAIN_DATABASE_PASSWORD }}"
+    "{{ .Values.config.RIVER_DOMAIN_DATABASE_ROLE | replace "\"" "\"\"" }}" "{{ .Values.goWorkers.pgbouncer.secret.data.RIVER_DOMAIN_DATABASE_PASSWORD | replace "\"" "\"\"" }}"
     {{- range $user := $extraUsers }}
-    "{{ $user.role }}" "{{ index $secretData $user.passwordKey }}"
+    "{{ $user.role | replace "\"" "\"\"" }}" "{{ index $secretData $user.passwordKey | replace "\"" "\"\"" }}"
     {{- end }}
 {{- end }}
 ---

@@ -204,7 +204,7 @@ func tagOnlyTestFiles(t *testing.T) []string {
 // and that must be a decision.
 var unfilteredTestPackages = []string{
 	"internal/auth/identity", "internal/auth/identity/oidc", "internal/auth/identity/saml", "internal/auth/invite", "internal/auth/membership", "internal/auth/org",
-	"internal/auth/orgdeprovision", "internal/auth/usersbackfill", "internal/auth/workload", "internal/auth/workloadexchange", "internal/fixturescli", "internal/jobs/metrics/changefailure", "internal/jobs/metrics/remaining", "internal/queryapi/scancensus", "internal/storage/clickhouse/liverow", "internal/storage/postgres",
+	"internal/auth/orgdeprovision", "internal/auth/platformrole", "internal/auth/usersbackfill", "internal/auth/workload", "internal/auth/workloadexchange", "internal/fixturescli", "internal/jobs/metrics/changefailure", "internal/jobs/metrics/remaining", "internal/queryapi/scancensus", "internal/storage/clickhouse/liverow", "internal/storage/postgres",
 }
 
 func TestRealTreeKeepsExactlyTheHookPackagesUnfilteredAndNoReviewedRowIsStale(t *testing.T) {

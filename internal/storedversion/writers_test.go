@@ -104,6 +104,7 @@ var unresolvedWriters = map[string]string{
 	"internal/auth/membership/store.go":                      "PostgreSQL auth-schema memberships writes of the membership aggregate (schema name interpolated) and their public.memberships rows; no in-scope ClickHouse table",
 	"internal/auth/invite/store.go":                          "PostgreSQL auth-schema invites writes of the invite aggregate (schema name interpolated), their public.org_invites rows and go-api audit_logs rows; no in-scope ClickHouse table",
 	"internal/auth/invite/orgrevocation.go":                  "PostgreSQL auth-schema invites revocations of an organization deprovision (schema name interpolated) and their public.org_invites rows; no in-scope ClickHouse table",
+	"internal/auth/platformrole/store.go":                    "PostgreSQL auth-schema platform role assignment grants of the platform role aggregate (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/identity/local/attempts_pg.go":            "PostgreSQL auth-schema login_attempts insert (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/identity/local/linkcred.go":               "PostgreSQL auth-schema link_credentials insert (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/identity/local/linkbind.go":               "PostgreSQL auth-schema link_credentials insert (schema name interpolated); no in-scope ClickHouse table",

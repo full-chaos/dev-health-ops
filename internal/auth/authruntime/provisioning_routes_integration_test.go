@@ -141,7 +141,6 @@ WHERE event_type = 'auth.membership.added' AND organization_id = $1 AND subject_
 	}{
 		"viewer actor":            {viewer, third, "admin_required"},
 		"inactive actor":          {inactive, third, "principal_deactivated"},
-		"admin on a superuser":    {member, super, "superuser_required"},
 		"a stranger to the org":   {third, viewer, "admin_required"},
 		"unknown actor principal": {uuid.New(), third, "principal_deactivated"},
 	} {
@@ -153,6 +152,20 @@ WHERE event_type = 'auth.membership.added' AND organization_id = $1 AND subject_
 	}
 	if pub, auth := e.memberRows(t, ctx, org, third); pub != "" || auth != "" {
 		t.Fatalf("refused actors wrote rows: %q %q", pub, auth)
+	}
+	// An admin may not change a superuser member; a superuser may.
+	superRole := func(actor uuid.UUID) answer {
+		return e.doWith(t, "/internal/v1/memberships/role", jsonBody(t, map[string]any{"organization_id": org.String(),
+			"principal_id": super.String(), "actor_principal_id": actor.String(), "role": "admin"}), header)
+	}
+	if got := superRole(member); got.status != http.StatusForbidden || object(t, got)["reason_code"] != "superuser_required" {
+		t.Fatalf("admin changes a superuser member: %d %s, want 403 superuser_required", got.status, got.body)
+	}
+	if pub, _ := e.memberRows(t, ctx, org, super); pub != "member" {
+		t.Fatalf("a refused change moved the superuser member to %q", pub)
+	}
+	if got := superRole(super); got.status != http.StatusOK {
+		t.Fatalf("superuser changes a superuser member: %d %s", got.status, got.body)
 	}
 
 	remove := jsonBody(t, map[string]any{"organization_id": org.String(), "principal_id": member.String(), "actor_principal_id": owner.String()})

@@ -120,8 +120,8 @@ type plan struct {
 }
 
 // Deprovision runs the one commit, in the one lock order: the principal rows
-// its inserts name FOR KEY SHARE (step 1: members go-api wrote with no auth
-// row, inviters of go-api-only invites), the organization row FOR UPDATE
+// its rows name FOR KEY SHARE (step 1: members go-api wrote with no auth row,
+// inviters of go-api-only invites, the actor of its audit row), the organization row FOR UPDATE
 // (step 3, exclusive), Authorize, the pending invites (step 4), every
 // membership row (steps 5 and 6), the suspension, then the revisions inside
 // audit.Commit. It takes no public.users row. Every membership and invite
@@ -169,7 +169,12 @@ func (s *Service) once(ctx context.Context, in Input, p plan) (*Result, error) {
 	}
 	err := s.commit(ctx, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
-			if err := s.members.LockPrincipals(ctx, tx, append(p.members.Referenced(), p.invites.Referenced()...)); err != nil {
+			named := append(p.members.Referenced(), p.invites.Referenced()...)
+			if in.Actor.PrincipalID != nil {
+				// The audit row names the actor (a foreign key, KEY SHARE at commit).
+				named = append(named, *in.Actor.PrincipalID)
+			}
+			if err := s.members.LockPrincipals(ctx, tx, named); err != nil {
 				return err
 			}
 			active, err := s.orgs.LockForUpdate(ctx, tx, in.OrgID)

@@ -288,6 +288,14 @@ VALUES ($1, $2, $3, 'viewer', $4, $5, 'pending', now() + interval '1 day', now()
 	if got := e.live(t, ctx, p.org); got != (live{publicMembers: 5, authMembers: 5, authPending: 1, publicPending: 2, active: true}) {
 		t.Fatalf("populated organization = %+v", got)
 	}
+	// The go-api-only rows are a reconcile class: a test that leaves the
+	// organization live ends it, so the whole-database reconcile of another
+	// test reads only its own rows.
+	t.Cleanup(func() {
+		if _, err := e.service.Deprovision(context.Background(), Input{OrgID: p.org, Authorize: allowOrg}); err != nil {
+			t.Errorf("cleanup deprovision: %v", err)
+		}
+	})
 	return p
 }
 
@@ -299,7 +307,7 @@ func TestDeprovisionEndsEverythingInOneCommit(t *testing.T) {
 	e := getEnv(t)
 	ctx := context.Background()
 	p := e.populate(t, ctx)
-	actor := uuid.New()
+	actor, _ := e.seedUser(t, ctx)
 	res, err := e.service.Deprovision(ctx, Input{OrgID: p.org, Actor: Actor{PrincipalID: &actor}, Authorize: allowOrg})
 	if err != nil {
 		t.Fatalf("Deprovision: %v", err)

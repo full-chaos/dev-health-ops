@@ -215,17 +215,24 @@ func (q poolQuerier) queryRow(ctx context.Context, sql string, args ...any) pgx.
 //
 // An inviter is locked with the principals, in the same id order, so a
 // membership insert never takes a later lock on a principal or users row; a
-// missing inviter is ErrInviterNotFound before anything is written.
-func (s *Store) readPairs(ctx context.Context, q querier, orgID uuid.UUID, principals []uuid.UUID, inviter *uuid.UUID, lock bool, step4 func() error) (*locked, error) {
+// missing inviter is ErrInviterNotFound before anything is written. The actor
+// is locked with them too: the audit row names it (a foreign key, so a KEY
+// SHARE lock at commit), and a verb that targets the actor holds its principal
+// FOR UPDATE from step 1, so taking it any later could wait in a cycle. A
+// missing actor is no refusal here (Authorize decides on the actor).
+func (s *Store) readPairs(ctx context.Context, q querier, orgID uuid.UUID, principals []uuid.UUID, inviter, actor *uuid.UUID, lock bool, step4 func() error) (*locked, error) {
 	forUpdate, forShare := "", ""
 	if lock {
 		forUpdate, forShare = " FOR UPDATE", " FOR SHARE"
 	}
 	ids := sortedUnique(principals)
-	lockIDs := ids
-	if inviter != nil {
-		lockIDs = sortedUnique(append(append([]uuid.UUID(nil), ids...), *inviter))
+	lockIDs := append([]uuid.UUID(nil), ids...)
+	for _, extra := range []*uuid.UUID{inviter, actor} {
+		if extra != nil {
+			lockIDs = append(lockIDs, *extra)
+		}
 	}
+	lockIDs = sortedUnique(lockIDs)
 	// The id array goes as one array literal with an explicit ::uuid[] cast: a
 	// statement inside audit.Commit has no parameter types to encode a
 	// []uuid.UUID with.
@@ -459,6 +466,19 @@ updated_at = $6 WHERE id = $1`, *p.authID, string(next.status), role, *joined, i
 	return err
 }
 
+// refusedNext is the planned next state of a change the lock-free read
+// refuses: the commit still runs, so Authorize decides before any refusal is
+// named. Its audit row and event are never written (the locked read refuses
+// again, or finds another next state and plans again), but audit.Commit checks
+// them before the transaction, so they must be well formed: a state with no
+// role gets a placeholder role.
+func refusedNext(prev state) state {
+	if prev.role == "" {
+		prev.role = organizationRoles[0]
+	}
+	return prev
+}
+
 // errStateMoved reports that the rows changed between the plan read and the
 // locks: the verb is planned again.
 var errStateMoved = errors.New("membership: the rows changed while the change was planned")
@@ -514,20 +534,20 @@ func (s *Store) mutate(ctx context.Context, v verb, c Change) (*Membership, erro
 	var err error
 	for range planAttempts {
 		var read *locked
-		read, err = s.readPairs(ctx, poolQuerier{s.pool}, c.OrgID, ids, c.InvitedBy, false, nil)
+		read, err = s.readPairs(ctx, poolQuerier{s.pool}, c.OrgID, ids, c.InvitedBy, c.Actor.PrincipalID, false, nil)
 		if err != nil {
 			// The locked read below decides the refusal after Authorize, so
 			// a refusal is not disclosed to an actor Authorize refuses.
 			read = &locked{pairs: map[uuid.UUID]*pairRows{c.PrincipalID: {principal: c.PrincipalID}}}
 		}
 		plan := planOf(read.pairs[c.PrincipalID])
-		plan.next = plan.prev
+		plan.next = refusedNext(plan.prev)
 		if d, derr := decide(v, plan.prev, c.Role, read.activeOwners); derr == nil {
 			plan.next = d.next
 		}
 		err = s.run(ctx, v, audit.Mutation{
 			Apply: func(ctx context.Context, tx audit.TxOps) error {
-				l, err := s.readPairs(ctx, txQuerier{tx}, c.OrgID, ids, c.InvitedBy, true, nil)
+				l, err := s.readPairs(ctx, txQuerier{tx}, c.OrgID, ids, c.InvitedBy, c.Actor.PrincipalID, true, nil)
 				if err != nil {
 					return authorizeLookup(ctx, tx, c.Authorize, Locked{OrgID: c.OrgID, Principals: ids}, err)
 				}
@@ -601,18 +621,18 @@ func (s *Store) TransferOwnership(ctx context.Context, t Transfer) error {
 	var err error
 	for range planAttempts {
 		var from, to pairPlan
-		if read, rerr := s.readPairs(ctx, poolQuerier{s.pool}, t.OrgID, ids, nil, false, nil); rerr == nil {
+		if read, rerr := s.readPairs(ctx, poolQuerier{s.pool}, t.OrgID, ids, nil, t.Actor.PrincipalID, false, nil); rerr == nil {
 			from, to = planOf(read.pairs[t.From]), planOf(read.pairs[t.To])
 		} else {
 			from, to = planOf(&pairRows{principal: t.From}), planOf(&pairRows{principal: t.To})
 		}
-		from.next, to.next = from.prev, to.prev
+		from.next, to.next = refusedNext(from.prev), refusedNext(to.prev)
 		if f, tt, derr := decideTransfer(from.prev, to.prev); derr == nil && t.From != t.To {
 			from.next, to.next = f, tt
 		}
 		err = s.run(ctx, verbTransfer, audit.Mutation{
 			Apply: func(ctx context.Context, tx audit.TxOps) error {
-				l, err := s.readPairs(ctx, txQuerier{tx}, t.OrgID, ids, nil, true, nil)
+				l, err := s.readPairs(ctx, txQuerier{tx}, t.OrgID, ids, nil, t.Actor.PrincipalID, true, nil)
 				if err != nil {
 					return authorizeLookup(ctx, tx, t.Authorize, Locked{OrgID: t.OrgID, Principals: sortedUnique(ids)}, err)
 				}
@@ -672,7 +692,7 @@ func (s *Store) PlanAdd(ctx context.Context, c Change) (*AddPlan, error) {
 	if !isOrganizationRole(c.Role) {
 		return nil, ErrRoleInvalid
 	}
-	read, err := s.readPairs(ctx, poolQuerier{s.pool}, c.OrgID, []uuid.UUID{c.PrincipalID}, c.InvitedBy, false, nil)
+	read, err := s.readPairs(ctx, poolQuerier{s.pool}, c.OrgID, []uuid.UUID{c.PrincipalID}, c.InvitedBy, c.Actor.PrincipalID, false, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -694,7 +714,7 @@ func (s *Store) ApplyAdd(ctx context.Context, tx audit.TxOps, p *AddPlan, step4 
 		return ErrDenied
 	}
 	c := p.change
-	l, err := s.readPairs(ctx, txQuerier{tx}, c.OrgID, []uuid.UUID{c.PrincipalID}, c.InvitedBy, true, step4)
+	l, err := s.readPairs(ctx, txQuerier{tx}, c.OrgID, []uuid.UUID{c.PrincipalID}, c.InvitedBy, c.Actor.PrincipalID, true, step4)
 	if err != nil {
 		return err
 	}

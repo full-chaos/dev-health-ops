@@ -682,3 +682,55 @@ func TestAuthorizeSuperuserRefusalIsNamed(t *testing.T) {
 		t.Fatalf("a refused add wrote %+v", got)
 	}
 }
+
+// A change the lock-free read refuses answers its own refusal, never a store
+// failure: a role change of a non-member, a transfer to a non-member, and a
+// role change in a missing organization for a refused actor.
+func TestRefusedPlansAnswerTheirRefusal(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	org, owner, stranger := e.seedOrg(t, ctx), e.seedUser(t, ctx), e.seedUser(t, ctx)
+	e.add(t, ctx, org, owner, "owner")
+	if _, err := e.store.ChangeRole(ctx, Change{OrgID: org, PrincipalID: stranger, Role: "admin", Authorize: allowAll}); !errors.Is(err, ErrNotMember) {
+		t.Fatalf("ChangeRole of a non-member = %v, want ErrNotMember", err)
+	}
+	if err := e.store.TransferOwnership(ctx, Transfer{OrgID: org, From: owner, To: stranger, Authorize: allowAll}); !errors.Is(err, ErrTargetNotMember) {
+		t.Fatalf("TransferOwnership to a non-member = %v, want ErrTargetNotMember", err)
+	}
+	deny := func(context.Context, audit.TxOps, Locked) error { return ErrDenied }
+	if _, err := e.store.ChangeRole(ctx, Change{OrgID: uuid.New(), PrincipalID: stranger, Role: "admin", Authorize: deny}); !errors.Is(err, ErrDenied) {
+		t.Fatalf("ChangeRole in a missing organization by a refused actor = %v, want ErrDenied", err)
+	}
+	if got := e.rows(t, ctx, org, stranger); got != (rows{}) {
+		t.Fatalf("refused changes wrote %+v", got)
+	}
+}
+
+// A verb an actor makes and a verb on the actor, started together, take one
+// lock order (the actor's principal is locked at step 1 with the targets): no
+// deadlock, 20 rounds.
+func TestActorAndTargetVerbsShareOneLockOrder(t *testing.T) {
+	e := getEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	org, owner := e.seedOrg(t, ctx), e.seedUser(t, ctx)
+	e.add(t, ctx, org, owner, "owner")
+	for round := range 20 {
+		admin, target := e.seedUser(t, ctx), e.seedUser(t, ctx)
+		e.add(t, ctx, org, admin, "admin")
+		errs := make(chan error, 2)
+		go func() {
+			_, err := e.store.Add(ctx, Change{OrgID: org, PrincipalID: target, Role: "member", Actor: Actor{PrincipalID: &admin}, Authorize: allowAll})
+			errs <- err
+		}()
+		go func() {
+			_, err := e.store.ChangeRole(ctx, Change{OrgID: org, PrincipalID: admin, Role: "viewer", Actor: Actor{PrincipalID: &owner}, Authorize: allowAll})
+			errs <- err
+		}()
+		for range 2 {
+			if err := <-errs; err != nil {
+				t.Fatalf("round %d: %v", round, err)
+			}
+		}
+	}
+}

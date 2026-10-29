@@ -14686,7 +14686,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization read (internal/api/legacyingest/auth.go:211): the configured API keys and signing secret are read from the environment on each request; no store read",
-      "disclosure_behavior": "no path resource id, behaviour today: the body is decoded and parsed before the credential check, so a malformed body answers 422 or 400 (internal/api/legacyingest/legacyingest.go:161; internal/api/legacyingest/legacyingest.go:165) to any caller; then a missing or wrong key or signature answers 401 (internal/api/legacyingest/auth.go:228)",
+      "disclosure_behavior": "no path resource id, behaviour today: a body that is not valid JSON answers 422, and one that is not UTF-8 answers 400, before the credential check (internal/api/legacyingest/legacyingest.go:161; internal/api/legacyingest/legacyingest.go:165), to any caller; a missing or wrong key or signature answers 401 (internal/api/legacyingest/auth.go:228); a JSON body that fails the route field validation answers 422 only after the credential check (internal/api/legacyingest/legacyingest.go:177)",
       "gaps": [
         "action: no catalog action is proven to equal the deployment-wide ingest key check (this leaf does not extend the vocabulary)",
         "impersonation_policy: the organization comes from the body org_id, not from the session, and the handler reads no context organization; exempt_no_org_context records that",
@@ -14749,7 +14749,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization read (internal/api/legacyingest/auth.go:211): the configured API keys and signing secret are read from the environment on each request; no store read",
-      "disclosure_behavior": "no path resource id, behaviour today: the body is decoded and parsed before the credential check, so a malformed body answers 422 or 400 (internal/api/legacyingest/legacyingest.go:161; internal/api/legacyingest/legacyingest.go:165) to any caller; then a missing or wrong key or signature answers 401 (internal/api/legacyingest/auth.go:228)",
+      "disclosure_behavior": "no path resource id, behaviour today: a body that is not valid JSON answers 422, and one that is not UTF-8 answers 400, before the credential check (internal/api/legacyingest/legacyingest.go:161; internal/api/legacyingest/legacyingest.go:165), to any caller; a missing or wrong key or signature answers 401 (internal/api/legacyingest/auth.go:228); a JSON body that fails the route field validation answers 422 only after the credential check (internal/api/legacyingest/legacyingest.go:177)",
       "gaps": [
         "action: no catalog action is proven to equal the deployment-wide ingest key check (this leaf does not extend the vocabulary)",
         "impersonation_policy: the organization comes from the body org_id, not from the session, and the handler reads no context organization; exempt_no_org_context records that",
@@ -14812,7 +14812,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization read (internal/api/legacyingest/auth.go:211): the configured API keys and signing secret are read from the environment on each request; no store read",
-      "disclosure_behavior": "no path resource id, behaviour today: the body is decoded and parsed before the credential check, so a malformed body answers 422 or 400 (internal/api/legacyingest/legacyingest.go:161; internal/api/legacyingest/legacyingest.go:165) to any caller; then a missing or wrong key or signature answers 401 (internal/api/legacyingest/auth.go:228)",
+      "disclosure_behavior": "no path resource id, behaviour today: a body that is not valid JSON answers 422, and one that is not UTF-8 answers 400, before the credential check (internal/api/legacyingest/legacyingest.go:161; internal/api/legacyingest/legacyingest.go:165), to any caller; a missing or wrong key or signature answers 401 (internal/api/legacyingest/auth.go:228); a JSON body that fails the route field validation answers 422 only after the credential check (internal/api/legacyingest/legacyingest.go:177)",
       "gaps": [
         "action: no catalog action is proven to equal the deployment-wide ingest key check (this leaf does not extend the vocabulary)",
         "impersonation_policy: the organization comes from the body org_id, not from the session, and the handler reads no context organization; exempt_no_org_context records that",
@@ -14875,7 +14875,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization read (internal/api/legacyingest/auth.go:211): the configured API keys and signing secret are read from the environment on each request; no store read",
-      "disclosure_behavior": "no path resource id, behaviour today: the body is decoded and parsed before the credential check, so a malformed body answers 422 or 400 (internal/api/legacyingest/legacyingest.go:161; internal/api/legacyingest/legacyingest.go:165) to any caller; then a missing or wrong key or signature answers 401 (internal/api/legacyingest/auth.go:228)",
+      "disclosure_behavior": "no path resource id, behaviour today: a body that is not valid JSON answers 422, and one that is not UTF-8 answers 400, before the credential check (internal/api/legacyingest/legacyingest.go:161; internal/api/legacyingest/legacyingest.go:165), to any caller; a missing or wrong key or signature answers 401 (internal/api/legacyingest/auth.go:228); a JSON body that fails the route field validation answers 422 only after the credential check (internal/api/legacyingest/legacyingest.go:177)",
       "gaps": [
         "action: no catalog action is proven to equal the deployment-wide ingest key check (this leaf does not extend the vocabulary)",
         "impersonation_policy: the organization comes from the body org_id, not from the session, and the handler reads no context organization; exempt_no_org_context records that",
@@ -14938,7 +14938,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization read (internal/api/legacyingest/auth.go:211): the configured API keys and signing secret are read from the environment on each request; no store read",
-      "disclosure_behavior": "no path resource id, behaviour today: the body is decoded and parsed before the credential check, so a malformed body answers 422 or 400 (internal/api/legacyingest/legacyingest.go:161; internal/api/legacyingest/legacyingest.go:165) to any caller; then a missing or wrong key or signature answers 401 (internal/api/legacyingest/auth.go:228)",
+      "disclosure_behavior": "no path resource id, behaviour today: a body that is not valid JSON answers 422, and one that is not UTF-8 answers 400, before the credential check (internal/api/legacyingest/legacyingest.go:161; internal/api/legacyingest/legacyingest.go:165), to any caller; a missing or wrong key or signature answers 401 (internal/api/legacyingest/auth.go:228); a JSON body that fails the route field validation answers 422 only after the credential check (internal/api/legacyingest/legacyingest.go:177)",
       "gaps": [
         "action: no catalog action is proven to equal the deployment-wide ingest key check (this leaf does not extend the vocabulary)",
         "impersonation_policy: the organization comes from the body org_id, not from the session, and the handler reads no context organization; exempt_no_org_context records that",
@@ -15001,7 +15001,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization read (internal/api/legacyingest/auth.go:211): the configured API keys and signing secret are read from the environment on each request; no store read",
-      "disclosure_behavior": "no path resource id, behaviour today: the body is decoded and parsed before the credential check, so a malformed body answers 422 or 400 (internal/api/legacyingest/legacyingest.go:161; internal/api/legacyingest/legacyingest.go:165) to any caller; then a missing or wrong key or signature answers 401 (internal/api/legacyingest/auth.go:228)",
+      "disclosure_behavior": "no path resource id, behaviour today: a body that is not valid JSON answers 422, and one that is not UTF-8 answers 400, before the credential check (internal/api/legacyingest/legacyingest.go:161; internal/api/legacyingest/legacyingest.go:165), to any caller; a missing or wrong key or signature answers 401 (internal/api/legacyingest/auth.go:228); a JSON body that fails the route field validation answers 422 only after the credential check (internal/api/legacyingest/legacyingest.go:177)",
       "gaps": [
         "action: no catalog action is proven to equal the deployment-wide ingest key check (this leaf does not extend the vocabulary)",
         "impersonation_policy: the organization comes from the body org_id, not from the session, and the handler reads no context organization; exempt_no_org_context records that",

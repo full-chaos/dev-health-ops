@@ -117,12 +117,11 @@ func composeOneOffNeedsNoOwnVariables(g *guard) {
 	}
 	want := []string{"BIGBOY_ACR_API_IMAGE", "BIGBOY_ACR_FALKORDB_IMAGE", "BIGBOY_ACR_MCP_IMAGE", "BIGBOY_ACR_NGINX_IMAGE", "BIGBOY_ACR_POSTGRES_IMAGE",
 		"BIGBOY_API_TOOLS_IMAGE", "BIGBOY_DHO_IMAGE", "BIGBOY_WEB_IMAGE", "DHO_API_CH_USERS_XML"}
-	var got []string
-	for _, name := range composeRequired(g) { // the deploy copy also requires the bugsink secrets; the ops copy defaults them
-		if _, bugsink := composeBugsinkEnv()[name]; !bugsink {
-			got = append(got, name)
-		}
+	for name := range composeBugsinkEnv() { // a BIGBOY_DIR tree must require exactly these three too; the in-repo tree none of them
+		want = append(want, name)
 	}
+	sort.Strings(want)
+	got := composeRequired(g)
 	g.expect(equal(got, want), "compose.bigboy.yml requires %v, want only the pins and DHO_API_CH_USERS_XML %v", got, want)
 }
 

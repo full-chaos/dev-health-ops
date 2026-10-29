@@ -190,9 +190,12 @@ only rows that are present on the copy and still active count; the absent ones a
 The drill also revokes a credential and disables a principal that were created before T, so the `apply` must re-apply at
 least one revocation (`revocations_reapplied`), which proves the re-apply path and not only the rows the copy lacks.
 
-Result of the fenced drill (CHAOS-11271): TO BE FILLED after the drill run on merged main (the date, the DRILL_DIR
-evidence path, the post-T.json counts keys_reissued_with_different_content and revokes_after_target_that_came_back,
-and fence_rows_for_live_timeline).
+Result of the fenced drill (CHAOS-11271), 2026-10-29 on bigboy at e86f591c: `DRILL RESULT: PASS (b revokes-after-T-back=0,
+c reissued-different=0)`; post-T.json keys_reissued_with_different_content=0, revokes_after_target_that_came_back=0,
+absent_after_restore=2 (equal to the apply's absent count), fence_rows_for_live_timeline=1; the apply raised 6 floors and
+re-applied 2 revocations. The unfenced baseline of the same tip: `DRILL RESULT: GAP (b revokes-after-T-back=4,
+c reissued-different=6)`. Evidence: /var/lib/oci-cache/lane-scratch/fcdev/drill-11271b-d/evidence (fenced) and
+drill-11271b-c/evidence (baseline).
 
 Without the fence a PITR to an earlier time is a rollback of the auth plane: every credential revoked after the target
 time is live again and revisions above the restored value are re-issued with other content. The fence below removes

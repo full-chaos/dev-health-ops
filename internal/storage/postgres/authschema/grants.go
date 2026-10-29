@@ -322,17 +322,14 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 		g.Object = publicSchema + "." + g.Object
 		lost = append(lost, g)
 	}
-	// A session reader's losses count too (the platform roles switch turned
-	// off takes its platform role read), named by the reader.
+	// A session reader's lost platform role read counts too (the platform
+	// roles switch turned off), named by the reader.
 	for _, reader := range options.SessionReaderRoles {
 		afterReader, err := snapshotDirectGrants(ctx, tx, options.Schema, reader)
 		if err != nil {
 			return err
 		}
-		for _, g := range narrowedGrants(beforeReaders[reader], afterReader) {
-			g.Role = reader
-			lost = append(lost, g)
-		}
+		lost = append(lost, readerNarrowing(reader, beforeReaders[reader], afterReader)...)
 	}
 	sort.Slice(lost, func(i, j int) bool { return lost[i].less(lost[j]) })
 	if len(lost) > 0 {

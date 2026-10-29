@@ -102,3 +102,27 @@ func TestReaderPlatformReadNarrowingIsTheReaders(t *testing.T) {
 		t.Errorf("excuseRetained = %v, want %v", got, kept)
 	}
 }
+
+// A reader's loss counts only for the platform role read: a re-apply that
+// drops a grant the reader grant never declared is not a narrowing.
+func TestReaderNarrowingIsOnlyThePlatformRoleRead(t *testing.T) {
+	before := []GrantRecord{
+		{Kind: "column", Object: "sessions", Column: "id", Privilege: "SELECT"},
+		{Kind: "column", Object: "principals", Column: "kind", Privilege: "SELECT"},
+		{Kind: "column", Object: "platform_role_assignments", Column: "expires_at", Privilege: "SELECT"},
+		{Kind: "column", Object: "platform_role_assignments", Column: "granted_by", Privilege: "SELECT"},
+		{Kind: "column", Object: "principals", Column: "kind", Privilege: "UPDATE"},
+		{Kind: "relation", Object: "principals", Privilege: "SELECT"},
+	}
+	after := before[:1]
+	want := []GrantRecord{
+		{Kind: "column", Object: "platform_role_assignments", Column: "expires_at", Privilege: "SELECT", Role: "devhealth_api"},
+		{Kind: "column", Object: "principals", Column: "kind", Privilege: "SELECT", Role: "devhealth_api"},
+	}
+	if got := readerNarrowing("devhealth_api", before, after); !reflect.DeepEqual(got, want) {
+		t.Errorf("readerNarrowing = %v, want %v", got, want)
+	}
+	if got := readerNarrowing("devhealth_api", before, before); len(got) != 0 {
+		t.Errorf("no loss: %v", got)
+	}
+}

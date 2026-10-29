@@ -131,6 +131,22 @@ func isPlatformReaderColumn(table, column string) bool {
 	return false
 }
 
+// readerNarrowing is what a session reader lost of the platform role read
+// (column SELECTs of PlatformRoleReaderColumns) between before and after,
+// named by the reader. Any other grant a reader loses is one the reader grant
+// never declared (a re-apply removes it without an acknowledgement).
+func readerNarrowing(reader string, before, after []GrantRecord) []GrantRecord {
+	var lost []GrantRecord
+	for _, g := range narrowedGrants(before, after) {
+		if g.Kind != "column" || g.Privilege != "SELECT" || !isPlatformReaderColumn(g.Object, g.Column) {
+			continue
+		}
+		g.Role = reader
+		lost = append(lost, g)
+	}
+	return lost
+}
+
 // retainReaderPlatformGrants re-grants, in tx, every lost session reader
 // record that is a column SELECT of PlatformRoleReaderColumns (the platform
 // roles switch turned off while old owned pods still read), and returns them.

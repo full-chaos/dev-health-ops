@@ -730,17 +730,14 @@ func TestARowOfAnOlderTimelineDoesNotOpenReadiness(t *testing.T) {
 func (d *fenceDB) removalsT(t *testing.T, ctx context.Context) {
 	t.Helper()
 	principal := uuid.NewSHA1(uuid.NameSpaceURL, []byte("fence-principal"))
-	d.commit(t, ctx, "session.created", 0, func(ctx context.Context, tx audit.TxOps) error {
-		_, err := tx.Exec(ctx, `INSERT INTO auth.sessions (id, principal_id, token_hash, expires_at) VALUES ($1, $2, decode(md5('rs-session') || md5('rs-session-b'), 'hex'), now() + interval '1 day')`,
-			fenceCredID(70), principal)
-		return err
-	})
+	// sessions and refresh_credentials inserts are not guarded and a refresh insert is not counted by
+	// audit.Commit, so a Commit around them would read as a no-op: they are written directly. The pin
+	// check (sessions_pin_present) needs legacy_token_version on an unrevoked session.
+	d.must(t, ctx, `INSERT INTO auth.sessions (id, principal_id, token_hash, expires_at, legacy_token_version) VALUES ($1, $2, decode(md5('rs-session') || md5('rs-session-b'), 'hex'), now() + interval '1 day', 0)`,
+		fenceCredID(70), principal)
 	for i, id := range []uuid.UUID{fenceCredID(71), fenceCredID(72)} {
-		d.commit(t, ctx, "session.created", 0, func(ctx context.Context, tx audit.TxOps) error {
-			_, err := tx.Exec(ctx, `INSERT INTO auth.refresh_credentials (id, session_id, principal_id, token_hash, expires_at) VALUES ($1, $2, $3, decode(md5($4::text) || md5($4::text || 'b'), 'hex'), now() + interval '1 day')`,
-				id, fenceCredID(70), principal, fmt.Sprintf("rs-refresh-%d", i))
-			return err
-		})
+		d.must(t, ctx, `INSERT INTO auth.refresh_credentials (id, session_id, principal_id, token_hash, expires_at) VALUES ($1, $2, $3, decode(md5($4::text) || md5($4::text || 'b'), 'hex'), now() + interval '1 day')`,
+			id, fenceCredID(70), principal, fmt.Sprintf("rs-refresh-%d", i))
 	}
 	wl := uuid.NewSHA1(uuid.NameSpaceURL, []byte("fence-wl"))
 	d.commit(t, ctx, "workload.created", 0, func(ctx context.Context, tx audit.TxOps) error {
@@ -754,14 +751,8 @@ VALUES ($1, $2, 'prod', 'example.invalid', 'https://issuer.example.invalid', 'ns
 
 func (d *fenceDB) removalsAfterT(t *testing.T, ctx context.Context) {
 	t.Helper()
-	d.commit(t, ctx, "session.rotated", 0, func(ctx context.Context, tx audit.TxOps) error {
-		_, err := tx.Exec(ctx, `UPDATE auth.refresh_credentials SET consumed_at = now() WHERE id = $1`, fenceCredID(71))
-		return err
-	})
-	d.commit(t, ctx, "service_account.disabled", 0, func(ctx context.Context, tx audit.TxOps) error {
-		_, err := tx.Exec(ctx, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1`, uuid.NewSHA1(uuid.NameSpaceURL, []byte("fence-sa")))
-		return err
-	})
+	d.must(t, ctx, `UPDATE auth.refresh_credentials SET consumed_at = now() WHERE id = $1`, fenceCredID(71))
+	d.must(t, ctx, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1`, uuid.NewSHA1(uuid.NameSpaceURL, []byte("fence-sa")))
 	d.commit(t, ctx, "workload.disabled", 0, func(ctx context.Context, tx audit.TxOps) error {
 		_, err := tx.Exec(ctx, `UPDATE auth.workload_bindings SET disabled_at = now() WHERE id = $1`, fenceCredID(73))
 		return err

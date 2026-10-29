@@ -736,13 +736,11 @@ func (h handlers) oauthProvisionUser(ctx context.Context, row *providerRow, prov
 		isSuperuser                                   bool
 		tokenVersion                                  int64
 	)
-	// A non-empty subject that is not a valid identity key (a lone surrogate, edge white space, ...) is refused before
-	// any lookup, as social login does (session/social.go), so PostgreSQL never sees its bytes in the identity query.
-	// An empty subject keeps its answer: the lookup is skipped for it and the creation check refuses it.
-	if claims.externalID != "" {
-		if err := identity.RefuseInvalidProviderID(authProviderValue, &claims.externalID); err != nil {
-			return nil, nil, err
-		}
+	// A subject that is not a valid identity key (empty, a lone surrogate, control characters, edge white space, ...)
+	// is refused before any lookup, as social login does (session/social.go), so PostgreSQL never sees its bytes in the
+	// identity query and the answer does not depend on which accounts exist.
+	if err := refuseUnusableSubject(authProviderValue, claims.externalID); err != nil {
+		return nil, nil, err
 	}
 	userID, found, err := h.resolveSSOIdentity(ctx, authProviderValue, claims.externalID, claims.email)
 	if err != nil {

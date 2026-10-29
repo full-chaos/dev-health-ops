@@ -4,11 +4,9 @@ package chmigrate_test
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -18,8 +16,8 @@ import (
 // evidence_quote_count. A row written without it (every row written before the
 // migration, and a run that did not persist snippets) reads back NULL, which the
 // materializer treats as "complete"; a row written with a count reads it back.
-// The migration is re-runnable.
-func TestWorkUnitInvestmentQuoteCountIsNullableAndRerunnable(t *testing.T) {
+// (The rerun of migration 106 is archived with it, CHAOS-11751.)
+func TestWorkUnitInvestmentQuoteCountIsNullable(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	instance, err := containers.StartClickHouse(ctx)
@@ -31,7 +29,7 @@ func TestWorkUnitInvestmentQuoteCountIsNullableAndRerunnable(t *testing.T) {
 		defer closeCancel()
 		_ = instance.Close(closeCtx)
 	})
-	chschema.Apply(ctx, t, instance) // the whole chain, 106 included
+	chschema.Apply(ctx, t, instance) // the head, 106 included
 	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
 	if err != nil {
 		t.Fatal(err)
@@ -77,18 +75,5 @@ func TestWorkUnitInvestmentQuoteCountIsNullableAndRerunnable(t *testing.T) {
 	}
 	if got := read("new-row"); got == nil || *got != 2 {
 		t.Fatalf("a row written with a count reads %v, want 2", got)
-	}
-
-	sql, err := os.ReadFile("sql/106_work_unit_investment_quote_count.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, statement := range chmigrate.SplitStatements(string(sql)) {
-		if err := conn.Exec(ctx, statement); err != nil {
-			t.Fatalf("rerun of migration 106: %v", err)
-		}
-	}
-	if got := read("new-row"); got == nil || *got != 2 {
-		t.Fatalf("after the rerun the count reads %v, want 2", got)
 	}
 }

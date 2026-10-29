@@ -14,7 +14,6 @@ import (
 // invalid byte and a credential, and reads the stored text back. RED if the byte reaches the column again (the write fails) or the credential is stored.
 func TestAnInvalidByteInTheSyncErrorTextIsStoredAsAReplacementRuneAndTheWriteSucceeds(t *testing.T) {
 	ctx, pool := startFeatureDisabledPool(t)
-	createFeatureDisabledTables(t, ctx, pool)
 	seedFeatureDisabledRun(t, ctx, pool, 1)
 	if _, err := pool.Exec(ctx, `
 INSERT INTO sync_run_reference_discoveries (id,sync_run_id,org_id,status,attempts,available_at,created_at,updated_at)

@@ -55,23 +55,30 @@ func TestBaselineMatchesTheFrozenPythonChain(t *testing.T) {
 	}
 
 	// The golden is the Python chain's end state at the last migration it was
-	// recorded on. A chain file added after that has no Python build to record
-	// it, so the oracle covers exactly the files the golden recorded; the
-	// rest of this test runs the whole chain.
+	// recorded on (099). The 098 baseline it proves is archived with the chain
+	// files after it (CHAOS-11751), and TestBaselineEqualsTheArchivedChain
+	// holds the head baseline to that archive: Python -> archive -> head is one
+	// chain of executed proofs. A chain file after 099 has no Python build to
+	// record it, so the oracle covers exactly the files the golden recorded;
+	// the rest of this test runs the head baseline and the live chain.
+	archivedBaseline := loadArchivedBaseline(t)
 	recorded := map[string]bool{}
 	for _, version := range captured.Versions {
 		recorded[version] = true
 	}
-	for _, version := range checkedIn.Versions {
+	for _, version := range archivedBaseline.Versions {
 		if !recorded[version] {
-			t.Fatalf("the golden does not record head version %s", version)
+			t.Fatalf("the golden does not record archived baseline version %s", version)
 		}
 	}
 	var recordedChain []chmigrate.ChainFile
-	for _, file := range chain {
+	for _, file := range loadArchivedChain(t) {
 		if recorded[file.Version] {
 			recordedChain = append(recordedChain, file)
 		}
+	}
+	if len(recordedChain) == 0 {
+		t.Fatal("the golden records no archived chain file: the oracle would compare the baseline alone")
 	}
 	oracleScratch := scratchDatabase(t)
 	oracleDB := oracleScratch.Name
@@ -80,7 +87,7 @@ func TestBaselineMatchesTheFrozenPythonChain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := chmigrate.Upgrade(ctx, oracleStore, checkedIn, recordedChain); err != nil {
+	if _, err := chmigrate.Upgrade(ctx, oracleStore, archivedBaseline, recordedChain); err != nil {
 		t.Fatalf("upgrade a fresh database to the recorded head: %v", err)
 	}
 	if diff := compare(capture(t, ctx, oracleConn, oracleDB, productionContract), captured); diff != "" {
@@ -538,17 +545,17 @@ func TestSplitterMatchesFrozenPythonSplit(t *testing.T) {
 	if err := json.Unmarshal(readPythonGolden(t, "python_split.json"), &want); err != nil {
 		t.Fatalf("decode the Python split: %v", err)
 	}
-	head, err := chmigrate.LoadBaseline()
+	// The Python split covers the 098 baseline's .sql versions and the chain
+	// files up to the freeze point, now in the archive (CHAOS-11751); every
+	// file after it, archived or live, is held to the Go-only invariants.
+	live, err := chmigrate.LoadChain()
 	if err != nil {
 		t.Fatal(err)
 	}
-	chain, err := chmigrate.LoadChain()
-	if err != nil {
-		t.Fatal(err)
-	}
+	chain := append(loadArchivedChain(t), live...)
 	chainText := map[string]string{}
 	required := map[string]bool{}
-	for _, version := range head.Versions {
+	for _, version := range loadArchivedBaseline(t).Versions {
 		if strings.HasSuffix(version, ".sql") {
 			required[version] = true
 		}

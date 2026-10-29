@@ -185,7 +185,7 @@ func (f *Flows) Register(ctx context.Context, req RegisterRequest) (FlowOutcome,
 	if err := f.gate(); err != nil {
 		return FlowOutcome{}, err
 	}
-	email, err := identity.NormalizeEmail(req.Email)
+	email, err := identity.NormalizeLocalRegisterEmail(req.Email)
 	if err != nil {
 		return FlowOutcome{}, fmt.Errorf("local: %w", err)
 	}

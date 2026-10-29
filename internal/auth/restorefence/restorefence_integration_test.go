@@ -548,3 +548,119 @@ func TestTheProbeWorksWhenAnOrdinaryRoleOwnsIt(t *testing.T) {
 		t.Fatalf("timeline = %v", timeline)
 	}
 }
+
+// The families of the second scope ruling: authorization state (membership,
+// service account, workload), single-use link credentials, SAML replay rows,
+// and the two operator-action lists (password resets, queued provider
+// revocations). Built on their own pair so the other cells keep their fixture.
+func (d *fenceDB) familiesT(t *testing.T, ctx context.Context) {
+	t.Helper()
+	member := uuid.NewSHA1(uuid.NameSpaceURL, []byte("fence-principal"))
+	saPrincipal := uuid.NewSHA1(uuid.NameSpaceURL, []byte("fence-sa"))
+	wlPrincipal := uuid.NewSHA1(uuid.NameSpaceURL, []byte("fence-wl"))
+	d.must(t, ctx, `INSERT INTO auth.principals (id, kind, display_name) VALUES ($1, 'service_account', 'fence sa'), ($2, 'workload', 'fence wl')`, saPrincipal, wlPrincipal)
+	org := fenceOrgID(0)
+	d.commit(t, ctx, "membership.created", 0, func(ctx context.Context, tx audit.TxOps) error {
+		_, err := tx.Exec(ctx, `INSERT INTO auth.memberships (organization_id, principal_id, status) VALUES ($1, $2, 'active')`, org, member)
+		return err
+	})
+	d.commit(t, ctx, "service_account.created", 0, func(ctx context.Context, tx audit.TxOps) error {
+		_, err := tx.Exec(ctx, `INSERT INTO auth.service_accounts (principal_id, organization_id, name, owner_principal_id) VALUES ($1, $2, 'fence-sa', $3)`, saPrincipal, org, member)
+		return err
+	})
+	d.commit(t, ctx, "workload.created", 0, func(ctx context.Context, tx audit.TxOps) error {
+		_, err := tx.Exec(ctx, `INSERT INTO auth.workloads (principal_id, name) VALUES ($1, 'fence-wl')`, wlPrincipal)
+		return err
+	})
+	d.must(t, ctx, `INSERT INTO auth.link_credentials (principal_id, purpose, token_hash, expires_at) VALUES ($1, 'password_reset', decode(md5('fence-a') || md5('fence-b'), 'hex'), now() + interval '1 day')`, member)
+	d.commit(t, ctx, "user.created", 0, func(ctx context.Context, tx audit.TxOps) error {
+		_, err := tx.Exec(ctx, `INSERT INTO auth.users (principal_id, email, email_lower, password_hash, password_algorithm, password_updated_at)
+VALUES ($1, 'fence@example.invalid', 'fence@example.invalid', 'h1', 'argon2id', '2026-10-01T00:00:00Z')`, member)
+		return err
+	})
+}
+
+func (d *fenceDB) familiesAfterT(t *testing.T, ctx context.Context) {
+	t.Helper()
+	member := uuid.NewSHA1(uuid.NameSpaceURL, []byte("fence-principal"))
+	d.commit(t, ctx, "membership.removed", 0, func(ctx context.Context, tx audit.TxOps) error {
+		_, err := tx.Exec(ctx, `UPDATE auth.memberships SET status = 'removed' WHERE principal_id = $1`, member)
+		return err
+	})
+	d.commit(t, ctx, "service_account.disabled", 0, func(ctx context.Context, tx audit.TxOps) error {
+		_, err := tx.Exec(ctx, `UPDATE auth.service_accounts SET status = 'disabled', disabled_at = now() WHERE name = 'fence-sa'`)
+		return err
+	})
+	d.commit(t, ctx, "workload.disabled", 0, func(ctx context.Context, tx audit.TxOps) error {
+		_, err := tx.Exec(ctx, `UPDATE auth.workloads SET disabled_at = now() WHERE name = 'fence-wl'`)
+		return err
+	})
+	d.must(t, ctx, `UPDATE auth.link_credentials SET consumed_at = now()`)
+	d.must(t, ctx, `INSERT INTO auth.saml_assertion_uses (issuer, assertion_id_hash, expires_at) VALUES ('https://idp.example.invalid', decode(md5('x') || md5('y'), 'hex'), now() + interval '1 day')`)
+	d.commit(t, ctx, "user.password_changed", 0, func(ctx context.Context, tx audit.TxOps) error {
+		_, err := tx.Exec(ctx, `UPDATE auth.users SET password_hash = 'h2', password_algorithm = 'argon2id', password_updated_at = '2026-10-15T00:00:00Z' WHERE principal_id = $1`, member)
+		return err
+	})
+	d.must(t, ctx, `INSERT INTO public.provider_oauth_revocations (id, org_id, provider, credential_name, purpose, token_encrypted, token_key_version, created_at, updated_at)
+VALUES ($1, 'org-x', 'pagerduty', 'cred', 'disconnect', 'enc', 'v1', now(), now())`, uuid.NewSHA1(uuid.NameSpaceURL, []byte("fence-revocation")))
+}
+
+func TestTheFenceCoversTheAuthorizationAndReplayFamiliesAndNamesTheOperatorActions(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	restored, end := newFenceDB(t, ctx), newFenceDB(t, ctx)
+	for _, d := range []*fenceDB{restored, end} {
+		d.stateT(t, ctx)
+		d.familiesT(t, ctx)
+	}
+	end.afterT(t, ctx)
+	end.familiesAfterT(t, ctx)
+	manifest := exportEnd(t, ctx, end)
+
+	report, err := Apply(ctx, restored.admin, restored.schema, manifest, Options{Apply: true})
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	byName := map[string]SectionReport{}
+	for _, s := range report.Sections {
+		byName[s.Name] = s
+	}
+	for _, name := range []string{"auth.memberships", "auth.service_accounts", "auth.workloads", "auth.link_credentials", "auth.saml_assertion_uses"} {
+		if byName[name].Changed != 1 {
+			t.Errorf("%s changed %d, want 1", name, byName[name].Changed)
+		}
+	}
+	checks := map[string]string{
+		"membership removed again":       `SELECT count(*) FROM auth.memberships WHERE status = 'removed'`,
+		"service account disabled again": `SELECT count(*) FROM auth.service_accounts WHERE status = 'disabled' AND disabled_at IS NOT NULL`,
+		"workload disabled again":        `SELECT count(*) FROM auth.workloads WHERE disabled_at IS NOT NULL`,
+		"link credential consumed again": `SELECT count(*) FROM auth.link_credentials WHERE consumed_at IS NOT NULL`,
+		"SAML replay row put back":       `SELECT count(*) FROM auth.saml_assertion_uses`,
+	}
+	for name, sql := range checks {
+		if n := restored.count(t, ctx, sql); n != 1 {
+			t.Errorf("%s: %d rows, want 1", name, n)
+		}
+	}
+	kinds := map[string]int{}
+	for _, a := range report.Actions {
+		kinds[string(a.Kind)+" "+a.Source] = len(a.IDs)
+	}
+	for _, want := range []string{"force_password_reset public.users", "force_password_reset auth.users", "requeue_provider_revocation public.provider_oauth_revocations"} {
+		if kinds[want] != 1 {
+			t.Errorf("operator action %q names %d ids, want 1 (actions: %+v)", want, kinds[want], report.Actions)
+		}
+	}
+	// The stored actions are what `restore-fence status` prints, and the
+	// readiness check does not depend on them.
+	stored, err := PendingActions(ctx, restored.admin, restored.schema)
+	if err != nil || len(stored) != len(report.Actions) {
+		t.Fatalf("stored actions = %+v, %v; want %d", stored, err, len(report.Actions))
+	}
+	if err := Check(ctx, restored.runtime, restored.schema); err != nil {
+		t.Errorf("readiness after the fence: %v", err)
+	}
+	if n := restored.count(t, ctx, `SELECT count(*) FROM auth.users WHERE password_hash = 'h1'`); n != 1 {
+		t.Errorf("the fence must not touch a password hash (found %d with the older one)", n)
+	}
+}

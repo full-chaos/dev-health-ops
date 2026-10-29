@@ -1,8 +1,12 @@
 package restorefence
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5"
 )
 
 func TestActionLinesCarryOnlyKindSourceCountAndIDs(t *testing.T) {
@@ -31,5 +35,35 @@ func TestActionsOfEverySourceAreMergedByKindAndSource(t *testing.T) {
 	})
 	if len(got) != 1 || strings.Join(got[0].IDs, ",") != "a,b" {
 		t.Fatalf("merged = %+v", got)
+	}
+}
+
+type bytesRow struct {
+	raw []byte
+	err error
+}
+
+func (r bytesRow) Scan(dest ...any) error {
+	if r.err != nil {
+		return r.err
+	}
+	*(dest[0].(*[]byte)) = r.raw
+	return nil
+}
+
+type bytesQuerier struct{ row bytesRow }
+
+func (q bytesQuerier) QueryRow(_ context.Context, _ string, _ ...any) pgx.Row { return q.row }
+
+func TestPendingActionsReadTheStoredListAndFailClosedOnABadRead(t *testing.T) {
+	got, err := PendingActions(context.Background(), bytesQuerier{bytesRow{raw: []byte(`[{"kind":"force_password_reset","source":"public.users","ids":["a"]}]`)}}, testSchema(t))
+	if err != nil || len(got) != 1 || got[0].Kind != ActionForcePasswordReset || got[0].IDs[0] != "a" {
+		t.Fatalf("PendingActions = %+v, %v", got, err)
+	}
+	if _, err := PendingActions(context.Background(), bytesQuerier{bytesRow{raw: []byte(`not json`)}}, testSchema(t)); !errors.Is(err, ErrCheckFailed) {
+		t.Fatalf("a bad stored list = %v, want ErrCheckFailed", err)
+	}
+	if _, err := PendingActions(context.Background(), bytesQuerier{bytesRow{err: errors.New("down")}}, testSchema(t)); !errors.Is(err, ErrCheckFailed) {
+		t.Fatalf("an unreadable state = %v, want ErrCheckFailed", err)
 	}
 }

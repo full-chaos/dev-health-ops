@@ -190,6 +190,17 @@ only rows that are present on the copy and still active count; the absent ones a
 The drill also revokes a credential and disables a principal that were created before T, so the `apply` must re-apply at
 least one revocation (`revocations_reapplied`), which proves the re-apply path and not only the rows the copy lacks.
 
+From CHAOS-11889 the drill also proves the effect, not only the markers. Before T it creates two workloads, each with a live
+bootstrap credential; after T it revokes the credential of one and disables the principal of the other. On each restored copy
+it then presents both secrets to `workload.Store.ResolveBootstrap`, the verifier the auth service uses at the workload-token
+exchange, as the unprivileged runtime role: the end-of-WAL copy and the fenced PITR copy must refuse both (`revoked`,
+`disabled`); on the unfenced PITR copy the drill records how many are still accepted, which is the gap itself
+(`attempt-T-pitr.json`, `revoked_access_accepted`). The drill also creates one row in each of `public.refresh_tokens`,
+`public.internal_service_credentials` and `public.external_ingest_tokens` before T and revokes it after T: those come back
+unfenced (`legacy_revokes_after_target_that_came_back` is 3, and they count in `b`) and stay revoked after the fenced apply.
+So the unfenced baseline `b` is larger than in the 2026-10-29 run below. The attempt secrets live in
+`attempt-secrets.json` of the evidence directory (mode 0600, values made for the drill; nothing prints or passes them as an argument).
+
 Result of the fenced drill (CHAOS-11271), 2026-10-29 on bigboy at e86f591c: `DRILL RESULT: PASS (b revokes-after-T-back=0,
 c reissued-different=0)`; post-T.json keys_reissued_with_different_content=0, revokes_after_target_that_came_back=0,
 absent_after_restore=2 (equal to the apply's absent count), fence_rows_for_live_timeline=1; the apply raised 6 floors and

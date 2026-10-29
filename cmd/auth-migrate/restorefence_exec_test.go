@@ -264,3 +264,28 @@ func TestExecBlindMarginApplyCountsLegacyInvitesAndListsTheFlagsForReview(t *tes
 		}
 	}
 }
+
+// The -blind-margin flag help and the usage both say what a blind margin leaves as restored (and lists for review).
+func TestTheBlindMarginFlagHelpNamesWhatItLeavesAsRestored(t *testing.T) {
+	var errb bytes.Buffer
+	if _, err := parseRestoreFenceArgs([]string{"apply", "-h"}, &errb); err == nil {
+		t.Fatal("apply -h must stop the parse")
+	}
+	help := errb.String()
+	i := strings.Index(help, "-blind-margin")
+	if i < 0 {
+		t.Fatalf("no -blind-margin flag in the help: %q", help)
+	}
+	flagHelp := help[i:]
+	if j := strings.Index(flagHelp[1:], "\n  -"); j >= 0 {
+		flagHelp = flagHelp[:j+1]
+	}
+	for _, want := range []string{"legacy access flags", "workload and credential scopes", "membership roles", "superuser flags", "provider credentials", "listed by id for review"} {
+		if !strings.Contains(flagHelp, want) {
+			t.Errorf("the -blind-margin flag help lacks %q: %q", want, flagHelp)
+		}
+		if !strings.Contains(restoreFenceUsage, want) {
+			t.Errorf("the usage lacks %q: %s", want, restoreFenceUsage)
+		}
+	}
+}

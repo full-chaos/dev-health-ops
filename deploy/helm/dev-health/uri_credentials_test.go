@@ -3,7 +3,6 @@ package devhealth_test
 import (
 	"encoding/json"
 	"net/url"
-	"os/exec"
 	"strings"
 	"testing"
 
@@ -227,23 +226,6 @@ func keepDummyPasswords2() []string { return keepDummyPasswords }
 // A database name is NEVER encoded in a URI: the Python readers (SQLAlchemy with asyncpg, urllib) do not decode the URI path. Instead the
 // chart refuses to render a database name that is not identifier-safe ([A-Za-z0-9_]+), by name, so no reader sees an encoded path and no
 // URI carries a raw reserved character.
-func uriRefusedRender(t *testing.T, label string, args ...string) (int, string) {
-	t.Helper()
-	if _, err := exec.LookPath("helm"); err != nil {
-		t.Skip("helm is not installed")
-	}
-	out, err := exec.Command("helm", append([]string{"template", "a", "."}, args...)...).CombinedOutput()
-	rc := 0
-	if err != nil {
-		ee, ok := err.(*exec.ExitError)
-		if !ok {
-			t.Fatalf("%s: helm did not run: %v", label, err)
-		}
-		rc = ee.ExitCode()
-	}
-	return rc, string(out)
-}
-
 func TestAReservedDatabaseNameFailsTheRender(t *testing.T) {
 	for _, db := range []string{"my db", "my#db", "my%db", "my/db", "my?db", "my@db", "my:db", "db-name", "db.name"} {
 		cases := []struct {
@@ -258,7 +240,8 @@ func TestAReservedDatabaseNameFailsTheRender(t *testing.T) {
 			{"ClickHouse database", "clickhouse.credentials.database", uriCatArgs(keepDummyPasswords2(), jsonSet("clickhouse.credentials.database", db))},
 		}
 		for _, c := range cases {
-			rc, out := uriRefusedRender(t, c.label, c.args...)
+			r := keepHelm(t, c.label, c.args...)
+			rc, out := r.rc, r.stderr
 			if rc == 0 {
 				t.Errorf("%s %q: the render succeeded; a database name that is not identifier-safe must fail it", c.label, db)
 				continue

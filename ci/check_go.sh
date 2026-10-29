@@ -33,8 +33,23 @@ job_budget_now() {
   date +%s
 }
 
+# job_budget_remaining: the seconds of the job budget left after the 3 min margin, or "none" when no cap is set (outside CI).
+job_budget_remaining() {
+  local cap="${CHECK_GO_JOB_CAP_MIN:-}" now start
+  if [ -z "${cap}" ]; then
+    printf 'none\n'
+    return 0
+  fi
+  case "${cap}" in *[!0-9]*) echo "check_go.sh: CHECK_GO_JOB_CAP_MIN must be a whole number of minutes, got '${cap}'" >&2; return 2 ;; esac
+  job_budget_init
+  start="${CHECK_GO_JOB_START:-}"
+  case "${start}" in ''|*[!0-9]*) echo "check_go.sh: CHECK_GO_JOB_START is not a whole number of seconds ('${start}'); the go test is not started" >&2; return 2 ;; esac
+  now="$(job_budget_now)"
+  printf '%s\n' "$((cap * 60 - (now - start) - 180))"
+}
+
 job_go_test_timeout() {
-  local const_min="${1:-}" cap="${CHECK_GO_JOB_CAP_MIN:-}" now start remaining secs
+  local const_min="${1:-}" cap="${CHECK_GO_JOB_CAP_MIN:-}" remaining secs
   case "${const_min}" in ''|*[!0-9]*) echo "check_go.sh: job_go_test_timeout needs a whole number of minutes" >&2; return 2 ;; esac
   if [ -z "${cap}" ]; then
     if [ "${GITHUB_ACTIONS:-}" = true ]; then
@@ -44,14 +59,9 @@ job_go_test_timeout() {
     printf '%ss\n' "$((const_min * 60))"
     return 0
   fi
-  case "${cap}" in *[!0-9]*) echo "check_go.sh: CHECK_GO_JOB_CAP_MIN must be a whole number of minutes, got '${cap}'" >&2; return 2 ;; esac
-  job_budget_init
-  start="${CHECK_GO_JOB_START:-}"
-  case "${start}" in ''|*[!0-9]*) echo "check_go.sh: CHECK_GO_JOB_START is not a whole number of seconds ('${start}'); the go test is not started" >&2; return 2 ;; esac
-  now="$(job_budget_now)"
-  remaining=$((cap * 60 - (now - start) - 180))
+  remaining="$(job_budget_remaining)" || return 2
   if [ "${remaining}" -le 0 ]; then
-    echo "check_go.sh: job time budget exhausted before this go test call (its limit is ${const_min}m): cap ${cap}m, elapsed $((now - start))s, 3 min kept back; the call is not started" >&2
+    echo "check_go.sh: job time budget exhausted before this go test call (its limit is ${const_min}m): cap ${cap}m, elapsed $((cap * 60 - 180 - remaining))s, 3 min kept back; the call is not started" >&2
     return 2
   fi
   secs=$((const_min * 60))
@@ -60,6 +70,10 @@ job_go_test_timeout() {
 }
 
 job_budget_init
+if [ "${1:-}" = "job-start" ]; then
+  printf '%s\n' "${CHECK_GO_JOB_START:-}"
+  exit 0
+fi
 if [ "${1:-}" = "job-timeout" ]; then
   [ "$#" -eq 2 ] || { echo "usage: check_go.sh job-timeout MINUTES" >&2; exit 2; }
   if job_go_test_timeout "$2"; then exit 0; fi
@@ -272,13 +286,15 @@ providersync_bound_watchdog() {
 run_providersync_bounded() {
   local test_regex="$1" json_file="$2"
   local bound="${DEV_HEALTH_GO_STEP_BOUND_SECS:-${PROVIDERSYNC_STEP_BOUND_SECS}}"
-  local pid pgid own_pgid i rc=0 wd marker pidfile tmo
+  local pid pgid own_pgid i rc=0 wd marker pidfile tmo remaining
   case "${bound}" in ''|*[!0-9]*) die "DEV_HEALTH_GO_STEP_BOUND_SECS must be a whole number of seconds" ;; esac
   if ! command -v setsid >/dev/null 2>&1; then
     echo "check_go.sh: the bounded providersync step needs setsid (util-linux) on PATH; it is missing, so the step does not start. Install a setsid on PATH (Linux: util-linux) or run this shard on Linux." >&2
     return 2
   fi
   tmo="$(job_go_test_timeout 22)" || return 2
+  remaining="$(job_budget_remaining)" || return 2
+  if [ "${remaining}" != none ] && [ "${remaining}" -lt "${bound}" ]; then bound="${remaining}"; fi
   marker="$(mktemp)"
   pidfile="$(mktemp)"
   (
@@ -327,7 +343,7 @@ run_providersync_bounded() {
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|ci-leg-warm test|race SHARD COUNT|test-shard-plan SHARD COUNT|race-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|race-excluded-receipts JSON...|test-shard-wall-guard SHARD COUNT WALL LOGFILE|test-shard-unweighted-guard SHARD COUNT LOGFILE|security-fresh-receipt LOGFILE|security-fresh-split PKG...|build|contract|ratchets|race-weights-rows|multi-replica-workers|job-timeout MINUTES|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|ci-leg-warm test|race SHARD COUNT|test-shard-plan SHARD COUNT|race-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|race-excluded-receipts JSON...|test-shard-wall-guard SHARD COUNT WALL LOGFILE|test-shard-unweighted-guard SHARD COUNT LOGFILE|security-fresh-receipt LOGFILE|security-fresh-split PKG...|build|contract|ratchets|race-weights-rows|multi-replica-workers|job-timeout MINUTES|job-start|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
 
   auth   (CHAOS-4887) The Auth Control Plane gates over the auth packages ALONE: gofmt, vet, test,
          -race, the production-middleware stack test (G-69, must log its marker), one fuzz run per
@@ -433,6 +449,10 @@ usage() {
   contract
          Validate the job contract tree and, when DEV_HEALTH_CONTRACT_BASE is
          set, reject breaking in-place changes against that directory.
+  job-start
+         Print CHECK_GO_JOB_START, the job start of the deadline (taken here when
+         CHECK_GO_JOB_CAP_MIN is set and no earlier call took it), or an empty
+         line without a cap. ci/check_golden_drift.sh takes it once for its rows.
   job-timeout MINUTES
          Print the go test -timeout, in seconds, of one integration call whose
          own limit is MINUTES: min(MINUTES, CHECK_GO_JOB_CAP_MIN - elapsed - 3 min).

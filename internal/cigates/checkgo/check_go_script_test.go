@@ -21,7 +21,7 @@ import (
 //   test_check_go_integration_coverage.py (3092 .. 6926)         -> TestCheckGoIntegrationCoverage
 
 var publicVerbs = []string{
-	"fmt", "vet", "test", "race", "build", "contract", "multi-replica-workers", "job-timeout", "integration-vet", "integration-coverage",
+	"fmt", "vet", "test", "race", "build", "contract", "multi-replica-workers", "job-timeout", "job-start", "integration-vet", "integration-coverage",
 	"integration-shard-plan", "integration-images", "integration-prepull", "integration-shard", "integration", "fast", "ci", "all",
 }
 

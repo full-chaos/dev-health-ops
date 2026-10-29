@@ -918,7 +918,9 @@ const credentialStampRefresh = "15 minutes"
 // stampCredentialConnected marks the run's credential connected (CHAOS-11881):
 // a run with at least one successful unit proves the credential authenticates.
 // A run with no successful unit never writes, so a failed run cannot turn a
-// connected credential back into "needs verification". The run's own
+// connected credential back into "needs verification". A run that finished
+// before the credential's latest result (a late or repeated finalize) never
+// overwrites it. The run's own
 // credential wins over the integration's; no credential is a no-op.
 func stampCredentialConnected(ctx context.Context, tx pgx.Tx, run *finalizeSyncRun, completedAt time.Time, successCount int) error {
 	if successCount <= 0 {
@@ -937,6 +939,7 @@ FROM (
 WHERE credential.id = target.credential_id
   AND credential.org_id = $2
   AND credential.is_active
+  AND (credential.last_test_at IS NULL OR credential.last_test_at < $3)
   AND (credential.last_test_success IS DISTINCT FROM true
        OR credential.last_test_at IS NULL
        OR credential.last_test_at < $3::timestamptz - interval '`+credentialStampRefresh+`')`,

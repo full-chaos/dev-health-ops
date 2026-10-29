@@ -64,6 +64,9 @@ func TestFinalizeStampsCredentialConnected(t *testing.T) {
 		{name: "fresh connected credential is not rewritten", pre: pre{success: boolp(true), ago: 5 * time.Minute}, units: []string{"success"}},
 		{name: "stale connected credential is refreshed", pre: pre{success: boolp(true), ago: 20 * time.Minute}, units: []string{"success"}, wantStamp: true},
 		{name: "success heals an earlier failed test", pre: pre{success: boolp(false), ago: 2 * time.Hour, errText: "boom"}, units: []string{"success"}, wantStamp: true},
+		{name: "failed run keeps a failed test and its error", pre: pre{success: boolp(false), ago: time.Hour, errText: "bad token"}, units: []string{"failed"}},
+		{name: "late run does not overwrite a newer failed test", pre: pre{success: boolp(false), ago: -time.Hour, errText: "bad token"}, units: []string{"success"}},
+		{name: "late run does not overwrite a newer connected test", pre: pre{success: boolp(true), ago: -time.Hour}, units: []string{"success"}},
 		{name: "run credential wins over integration credential", units: []string{"success"}, runCred: true, wantStamp: true},
 		{name: "run with no credential is a no-op", units: []string{"success"}, noCred: true},
 		{name: "inactive credential is not touched", pre: pre{inactive: true}, units: []string{"success"}},
@@ -158,6 +161,9 @@ func TestFinalizeStampsCredentialConnected(t *testing.T) {
 				}
 				if (got.at == nil) != (before.at == nil) || (got.at != nil && !got.at.Equal(*before.at)) {
 					t.Fatalf("last_test_at changed: %v -> %v", before.at, got.at)
+				}
+				if (got.errText == nil) != (before.errText == nil) || (got.errText != nil && *got.errText != *before.errText) {
+					t.Fatalf("last_test_error changed: %v -> %v", before.errText, got.errText)
 				}
 			}
 			otherAfter := readCred(t, ctx, pool, other)

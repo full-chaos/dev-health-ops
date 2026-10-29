@@ -392,6 +392,14 @@ func (s *Store) acceptOnce(ctx context.Context, in AcceptInput, digest string) (
 	}
 	if err != nil {
 		err = acceptRefusal(err)
+		if errors.Is(err, ErrAlreadyMember) {
+			// A membership commits with its invite's accept, so a member who
+			// holds a used token sees the used token, not the membership.
+			again, rerr := s.readInvite(ctx, func(sql string, args ...any) pgx.Row { return s.pool.QueryRow(ctx, sql, args...) }, digest, false)
+			if rerr == nil && checkConsumable(again.row, now) != nil {
+				err = ErrInviteInvalid
+			}
+		}
 		s.record(ctx, verbAccept, err)
 		return nil, err
 	}

@@ -85,10 +85,23 @@ func inviteWriteStatements(ctx context.Context, conn querier, options Options, l
 			return nil, err
 		}
 		table := quoteIdentifier(mustValidatedIdentifier(publicSchema)) + "." + quoteIdentifier(tableID)
-		statements = append(statements, fmt.Sprintf(`REVOKE ALL ON TABLE %s FROM %s`, table, role))
 		if !options.UsersOwned {
+			// Off: revoke only what the role holds (the legacyLinkPurgeStatements shape), so a
+			// migrator without grant rights on a table the role holds nothing on issues nothing.
+			var held bool
+			if err := conn.QueryRow(ctx,
+				`SELECT has_table_privilege($1, format('%I.%I', $2::text, $3::text), 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+				     OR has_any_column_privilege($1, format('%I.%I', $2::text, $3::text), 'SELECT,INSERT,UPDATE,REFERENCES')`,
+				options.RuntimeRole, publicSchema, g.Table,
+			).Scan(&held); err != nil {
+				return nil, fmt.Errorf("%w: reading the invite write grant of %s.%s", ErrMigrationFailed, publicSchema, g.Table)
+			}
+			if held {
+				statements = append(statements, fmt.Sprintf(`REVOKE ALL ON TABLE %s FROM %s`, table, role))
+			}
 			continue
 		}
+		statements = append(statements, fmt.Sprintf(`REVOKE ALL ON TABLE %s FROM %s`, table, role))
 		selectColumns, err := quotedColumns(g.Select)
 		if err != nil {
 			return nil, err

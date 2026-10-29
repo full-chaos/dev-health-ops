@@ -66,6 +66,9 @@ internal/auth/identity	placeholder_copies_test.go	internal/auth/usersbackfill	di
 internal/auth/identity	service_provider_callers_test.go	internal/auth	tree	*
 internal/auth/identity/local	linkbind_census_test.go	.	tree	*
 internal/auth/keystore	custody_test.go	internal/auth/keystore	dir	*
+internal/auth/restorefence	consumers_test.go	unexpressed	-	*.go
+internal/auth/restorefence	inventory_completeness_test.go	.	tree	*.go
+internal/auth/restorefence	specs_test.go	internal/pgmigrate/sql	dir	*
 internal/auth/writerinventory	scan_test.go	unexpressed	-	-
 internal/bigboycompose	billing_edge_override_test.go	unexpressed	-	-
 internal/chmigrate	archive_test.go	internal/chmigrate	dir	*

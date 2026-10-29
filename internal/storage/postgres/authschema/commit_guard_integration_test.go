@@ -10,31 +10,6 @@ import (
 	"time"
 )
 
-// guardedTables carry the audit_commit_guard trigger (migration 0006): a write
-// is refused unless it runs inside an internal/audit.Commit transaction.
-var guardedTables = []string{
-	"auth_outbox_events", "security_audit_events", "resource_grants", "memberships",
-	"platform_role_assignments", "policy_revisions", "entitlement_snapshots",
-	"credential_registry", "service_accounts", "workloads", "workload_bindings", "external_identities",
-	"organizations", "aggregate_revisions", "signing_keys", "invites",
-}
-
-// unguardedTables are deliberately outside the guard, each with its reason.
-var unguardedTables = map[string]string{
-	"sessions":            "high-rate session lifecycle rows; a per-write outbox event and audit row would be noise; a new row inside audit.Commit is counted by the 0014 create guard",
-	"refresh_credentials": "high-rate rotation lifecycle rows, same reason as sessions",
-	"users":               "profile and lifecycle columns written at high rate; identity linking is guarded on external_identities; a new row inside audit.Commit is counted by the 0013 create guard",
-	"principals":          "identity root row, created with its user or service account; carries no grant; a new row inside audit.Commit is counted by the 0013 create guard",
-	"actions":             "closed vocabulary; the runtime role has no write privilege, so only the migration role writes it",
-	"roles":               "closed vocabulary; the runtime role has no write privilege",
-	"role_actions":        "closed vocabulary; the runtime role has no write privilege",
-	"link_credentials":    "single-use link tokens swept on expiry and removed with their principal; consuming or retargeting one is guarded by column (security columns below)",
-	"login_attempts":      "high-rate lockout counters keyed by an identifier hash; rate limiting, not authority",
-	"sso_flow_states":     "short-lived SSO flow state, consumed once even when the callback is rejected, so its consume cannot require an audit transaction; consumed_at is write-once and every other column is immutable by trigger",
-	"saml_assertion_uses": "insert-only replay ledger swept after expiry; a row exists to be refused a second time",
-	versionTable:          "auth-migrate bookkeeping, unreachable by the runtime role",
-}
-
 // TestEveryAuthTableIsClassified makes a new table fail CI until someone says
 // whether security writes to it must go through audit.Commit.
 func TestEveryAuthTableIsClassified(t *testing.T) {

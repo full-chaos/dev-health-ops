@@ -106,6 +106,8 @@ namespace too, not just go-worker pods. */ -}}
 {{- end }}
 {{- end }}
 {{- if .Values.goWorkers.pgbouncer.secret.create }}
+{{- /* CHAOS-11852: the database name is written raw into the URI paths below; it must be identifier-safe or the render fails. */}}
+{{- $uriDatabase := include "dev-health.uriDatabase" (dict "key" (ternary "postgresql.credentials.database" "goWorkers.pgbouncer.postgres.database" (.Values.postgresql.enabled | default false)) "value" $postgresDatabase) }}
 apiVersion: v1
 kind: Secret
 metadata:
@@ -120,9 +122,9 @@ stringData:
   RIVER_DOMAIN_DATABASE_PASSWORD: {{ required "goWorkers.pgbouncer.secret.data.RIVER_DOMAIN_DATABASE_PASSWORD is required when PgBouncer is enabled" .Values.goWorkers.pgbouncer.secret.data.RIVER_DOMAIN_DATABASE_PASSWORD | quote }}
   RIVER_QUEUE_DATABASE_PASSWORD: {{ required "goWorkers.pgbouncer.secret.data.RIVER_QUEUE_DATABASE_PASSWORD is required when PgBouncer is enabled" .Values.goWorkers.pgbouncer.secret.data.RIVER_QUEUE_DATABASE_PASSWORD | quote }}
   RIVER_COORDINATOR_DATABASE_PASSWORD: {{ required "goWorkers.pgbouncer.secret.data.RIVER_COORDINATOR_DATABASE_PASSWORD is required when PgBouncer is enabled" .Values.goWorkers.pgbouncer.secret.data.RIVER_COORDINATOR_DATABASE_PASSWORD | quote }}
-  POSTGRES_URI: {{ printf "postgresql://%s:%s@%s:%v/%s" (include "dev-health.uriPart" .Values.config.RIVER_DOMAIN_DATABASE_ROLE) (include "dev-health.uriPart" .Values.goWorkers.pgbouncer.secret.data.RIVER_DOMAIN_DATABASE_PASSWORD) (include "dev-health.fullname" . | printf "%s-go-pgbouncer-transaction") .Values.goWorkers.pgbouncer.transaction.port (include "dev-health.uriPart" $postgresDatabase) | quote }}
-  WORKER_DATABASE_URI: {{ printf "postgresql://%s:%s@%s:%v/%s" (include "dev-health.uriPart" .Values.config.RIVER_QUEUE_DATABASE_ROLE) (include "dev-health.uriPart" .Values.goWorkers.pgbouncer.secret.data.RIVER_QUEUE_DATABASE_PASSWORD) (include "dev-health.fullname" . | printf "%s-go-pgbouncer-queue-session") .Values.goWorkers.pgbouncer.queueSession.port (include "dev-health.uriPart" $postgresDatabase) | quote }}
-  COORDINATOR_DATABASE_URI: {{ printf "postgresql://%s:%s@%s:%v/%s" (include "dev-health.uriPart" .Values.config.RIVER_COORDINATOR_DATABASE_ROLE) (include "dev-health.uriPart" .Values.goWorkers.pgbouncer.secret.data.RIVER_COORDINATOR_DATABASE_PASSWORD) (include "dev-health.fullname" . | printf "%s-go-pgbouncer-coordinator-session") .Values.goWorkers.pgbouncer.coordinatorSession.port (include "dev-health.uriPart" $postgresDatabase) | quote }}
+  POSTGRES_URI: {{ printf "postgresql://%s:%s@%s:%v/%s" (include "dev-health.uriPart" .Values.config.RIVER_DOMAIN_DATABASE_ROLE) (include "dev-health.uriPart" .Values.goWorkers.pgbouncer.secret.data.RIVER_DOMAIN_DATABASE_PASSWORD) (include "dev-health.fullname" . | printf "%s-go-pgbouncer-transaction") .Values.goWorkers.pgbouncer.transaction.port $uriDatabase | quote }}
+  WORKER_DATABASE_URI: {{ printf "postgresql://%s:%s@%s:%v/%s" (include "dev-health.uriPart" .Values.config.RIVER_QUEUE_DATABASE_ROLE) (include "dev-health.uriPart" .Values.goWorkers.pgbouncer.secret.data.RIVER_QUEUE_DATABASE_PASSWORD) (include "dev-health.fullname" . | printf "%s-go-pgbouncer-queue-session") .Values.goWorkers.pgbouncer.queueSession.port $uriDatabase | quote }}
+  COORDINATOR_DATABASE_URI: {{ printf "postgresql://%s:%s@%s:%v/%s" (include "dev-health.uriPart" .Values.config.RIVER_COORDINATOR_DATABASE_ROLE) (include "dev-health.uriPart" .Values.goWorkers.pgbouncer.secret.data.RIVER_COORDINATOR_DATABASE_PASSWORD) (include "dev-health.fullname" . | printf "%s-go-pgbouncer-coordinator-session") .Values.goWorkers.pgbouncer.coordinatorSession.port $uriDatabase | quote }}
 {{- range $user := $extraUsers }}
   {{ $user.passwordKey }}: {{ required (printf "goWorkers.pgbouncer.secret.data.%s is required by goWorkers.pgbouncer.transaction.extraUsers role %s" $user.passwordKey $user.role) (index $secretData $user.passwordKey) | quote }}
 {{- end }}

@@ -75,6 +75,15 @@ func TestProvisioningRoutesNeedTheirProfileRows(t *testing.T) {
 	if err := provisioningRowsPresent([]byte("{")); !errors.Is(err, errProvisioningRows) {
 		t.Fatalf("an unreadable document: %v, want a refusal", err)
 	}
+	// ProvisioningRoutes runs the check: a planted document without one route's
+	// row builds no route at all.
+	f := newProvFixture(t)
+	routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
+		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision,
+		profileRows: plant(func(row map[string]any) (map[string]any, bool) { return row, row["route"] != PatternInviteAccept })})
+	if !errors.Is(err, errProvisioningRows) || routes != nil {
+		t.Fatalf("ProvisioningRoutes over a document without a row: %d routes, %v; want none and a refusal", len(routes), err)
+	}
 }
 
 // The provisioning routes accept only the session issuer credential holding

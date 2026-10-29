@@ -130,6 +130,9 @@ type ProvisioningDeps struct {
 	Deprovision   Deprovisioner
 	Logger        *slog.Logger
 	Meter         metric.Meter
+	// profileRows is the endpoint-profile document the routes are checked
+	// against; nil is the one the binary embeds. Tests plant others.
+	profileRows []byte
 }
 
 type provisioningHandlers struct {
@@ -148,7 +151,11 @@ func ProvisioningRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 		deps.Memberships == nil || deps.Invites == nil || deps.Deprovision == nil {
 		return nil, errors.New("authapi: provisioning routes need credentials, users, a reader, organizations, memberships, invites and a deprovisioner")
 	}
-	if err := provisioningRowsPresent(authv1.AuthServiceEndpointProfiles); err != nil {
+	rows := deps.profileRows
+	if rows == nil {
+		rows = authv1.AuthServiceEndpointProfiles
+	}
+	if err := provisioningRowsPresent(rows); err != nil {
 		return nil, err
 	}
 	if deps.Logger == nil {

@@ -34,14 +34,14 @@ var excluded = map[string]string{
 	"public.sync_configurations":    "not access-bearing: sync configuration",
 	"public.billing_plans":          "not access-bearing: billing catalogue",
 	"public.billing_prices":         "not access-bearing: billing catalogue",
-	// Not yet ruled: an access-removing change after the target may come back. Raised to acp with the r3 findings.
+	// Follow-up 11872 (D6459 am.1), and two tables not yet classified (policy_revisions, entitlement_snapshots).
 	"auth.policy_revisions":           "NEEDS-RULING: an older active policy after a restore (the revision floor stops re-issue of a revision number only)",
 	"auth.entitlement_snapshots":      "NEEDS-RULING: an older entitlement snapshot after a restore",
-	"public.organizations":            "NEEDS-RULING: a legacy organization deactivated after T (is_active) returns active",
-	"public.org_ip_allowlist":         "NEEDS-RULING: an allowlist entry deactivated after T (is_active) returns active",
-	"public.integrations":             "NEEDS-RULING: provider integration flags (is_active); already named not carried in RISK-NOTES",
-	"public.integration_credentials":  "NEEDS-RULING: provider credential flags (is_active); already named not carried in RISK-NOTES",
-	"public.github_app_installations": "NEEDS-RULING: an installation suspended after T (suspended_at) returns unsuspended",
+	"public.organizations":            "ticket 11872 (High; blocks the first prod fence apply): a legacy organization deactivated after T (is_active) returns active; prod is phase 2, so this is the org state go-api reads today",
+	"public.org_ip_allowlist":         "ticket 11872 (High; blocks the first prod fence apply): an allowlist entry deactivated after T (is_active) returns active",
+	"public.integrations":             "ticket 11872 (High): provider integration flags (is_active)",
+	"public.integration_credentials":  "ticket 11872 (High): provider credential flags (is_active)",
+	"public.github_app_installations": "ticket 11872 (High): provider installation flag (suspended_at), the same class as integrations",
 }
 
 // accessStateColumns are the columns that carry an access-removing state in the legacy public schema.

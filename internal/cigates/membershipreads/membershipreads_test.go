@@ -273,3 +273,80 @@ func TestASQLCommentInsideTheNameDoesNotHideTheRead(t *testing.T) {
 		}
 	}
 }
+
+// PostgreSQL reads U&"..." as a quoted identifier with Unicode escapes, so the name it holds is not the text. The gate does
+// not decode it: any such identifier in these packages is refused.
+func TestReviewUnicodeEscapedAuthTableMustBeRefused(t *testing.T) {
+	src := "package p\n\nconst q = `SELECT role FROM U&\"\\0061uth\".U&\"memberships\"`\n"
+	got := check(t, writeTree(t, map[string]string{"internal/queryapi/server/q.go": src}))
+	wantOne(t, got, "internal/queryapi/server/q.go:3", "membership-read", "query-api", "U&")
+}
+
+func TestAUnicodeEscapedIdentifierIsRefusedInEverySpelling(t *testing.T) {
+	for name, literal := range map[string]string{
+		"lower case":              "`SELECT 1 FROM u&\"\\0061uth\".memberships`",
+		"spaces before the quote": "`SELECT 1 FROM U& \"x\".organizations`",
+		"only the table escaped":  "`SELECT 1 FROM auth.U&\"memberships\"`",
+		"in a concatenation":      "\"SELECT 1 FROM \" + `U&\"a\"`",
+		"with a comment":          "`SELECT 1 FROM U/* c */&\"a\"`",
+		"in a format string":      "fmt.Sprintf(`SELECT 1 FROM U&\"%s\"`, name)",
+	} {
+		src := "package p\n\nimport \"fmt\"\n\nvar name = \"x\"\n\nvar _ = fmt.Sprintf\n\nvar q = " + literal + "\n"
+		got := check(t, writeTree(t, map[string]string{"internal/api/q.go": src}))
+		if len(got) == 0 || !strings.Contains(strings.Join(got, "\n"), "U&") {
+			t.Errorf("%s: want a finding naming the Unicode-escaped identifier, got %q", name, got)
+		}
+	}
+}
+
+func TestAnAmpersandThatIsNotAUnicodeEscapedIdentifierIsClean(t *testing.T) {
+	for name, literal := range map[string]string{
+		"logical and":       "`SELECT a && b FROM public.memberships`",
+		"a U& string":       "`SELECT U&'d!0061t' UESCAPE '!' FROM public.memberships`",
+		"a plain ampersand": "\"a & b\"",
+		"U ends a word":     "`SELECT SUM(x)&1 FROM public.memberships`",
+	} {
+		src := "package p\n\nvar q = " + literal + "\n"
+		if got := check(t, writeTree(t, map[string]string{"internal/api/q.go": src})); len(got) != 0 {
+			t.Errorf("%s: want no finding, got %q", name, got)
+		}
+	}
+}
+
+// A constant of another package may hold the schema and the dot ("auth."): a table name right behind it is refused.
+func TestReviewImportedSchemaDotMustRefuseFollowingTableName(t *testing.T) {
+	src := "package p\n\nimport \"example.test/cfg\"\n\nfunc q() string {\n\treturn \"SELECT role FROM \" + cfg.AuthSchemaDot + \"memberships\"\n}\n"
+	got := check(t, writeTree(t, map[string]string{"internal/queryapi/server/q.go": src}))
+	wantOne(t, got, "internal/queryapi/server/q.go:6", "membership-read", "query-api", "memberships", "unresolved")
+}
+
+func TestATableNameRightBehindAnUnresolvedConstantIsRefusedInEverySpelling(t *testing.T) {
+	for name, body := range map[string]string{
+		"organizations":          "\"SELECT 1 FROM \" + cfg.AuthSchemaDot + \"organizations\"",
+		"upper case":             "\"SELECT 1 FROM \" + cfg.AuthSchemaDot + \"MEMBERSHIPS\"",
+		"quoted table":           "\"SELECT 1 FROM \" + cfg.AuthSchemaDot + \"\\\"memberships\\\"\"",
+		"space before the table": "\"SELECT 1 FROM \" + cfg.AuthSchemaDot + \" memberships\"",
+		"comment before":         "\"SELECT 1 FROM \" + cfg.AuthSchemaDot + \"/* c */memberships\"",
+		"followed by more":       "\"SELECT 1 FROM \" + cfg.AuthSchemaDot + \"memberships WHERE x = 1\"",
+		"parenthesised":          "\"SELECT 1 FROM \" + (cfg.AuthSchemaDot + \"memberships\")",
+	} {
+		src := "package p\n\nimport \"example.test/cfg\"\n\nvar q = " + body + "\n"
+		got := check(t, writeTree(t, map[string]string{"internal/api/q.go": src}))
+		if len(got) == 0 || !strings.Contains(strings.Join(got, "\n"), "unresolved") {
+			t.Errorf("%s: want a finding naming the unresolved constant, got %q", name, got)
+		}
+	}
+}
+
+func TestAnUnresolvedConstantBehindAnotherNameOrAWordPrefixIsClean(t *testing.T) {
+	for name, body := range map[string]string{
+		"another table":          "\"SELECT 1 FROM \" + cfg.AuthSchemaDot + \"sessions\"",
+		"a longer word":          "\"SELECT 1 FROM \" + cfg.Prefix + \"memberships_total\"",
+		"table before the const": "\"SELECT 1 FROM public.memberships WHERE x = \" + cfg.Value",
+	} {
+		src := "package p\n\nimport \"example.test/cfg\"\n\nvar q = " + body + "\n"
+		if got := check(t, writeTree(t, map[string]string{"internal/api/q.go": src})); len(got) != 0 {
+			t.Errorf("%s: want no finding, got %q", name, got)
+		}
+	}
+}

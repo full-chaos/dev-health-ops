@@ -385,7 +385,13 @@ func lockPrincipals(ctx context.Context, tx audit.TxOps, schema string, ids ...u
 WHERE p.id IN (SELECT principal_id FROM `+schema+`.platform_role_assignments) ORDER BY p.id FOR SHARE OF p) AS locked`)
 		return err
 	}
-	_, err := tx.Exec(ctx, `SELECT 1 FROM (SELECT id FROM `+schema+`.principals WHERE id = ANY($1) ORDER BY id FOR SHARE OF principals) AS locked`, ids)
+	// The auth pool registers no uuid array codec: the ids travel as text and
+	// are cast to uuid[] in the statement.
+	text := make([]string, len(ids))
+	for i, id := range ids {
+		text[i] = id.String()
+	}
+	_, err := tx.Exec(ctx, `SELECT 1 FROM (SELECT id FROM `+schema+`.principals WHERE id = ANY($1::uuid[]) ORDER BY id FOR SHARE OF principals) AS locked`, text)
 	return err
 }
 

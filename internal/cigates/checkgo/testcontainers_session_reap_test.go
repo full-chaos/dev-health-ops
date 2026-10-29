@@ -601,8 +601,9 @@ func TestProvidersyncStepRefusesWithoutSetsid(t *testing.T) {
 	if r.code != 2 {
 		t.Errorf("exit code %d, want 2 (setsid missing); stderr: %s", r.code, tail(r.stderr, 1500))
 	}
-	if !strings.Contains(r.stderr, "setsid is required for the bounded providersync step") {
-		t.Errorf("stderr does not say that setsid is required: %s", tail(r.stderr, 1500))
+	const want = "check_go.sh: the bounded providersync step needs setsid (util-linux) on PATH; it is missing, so the step does not start. Install a setsid on PATH (Linux: util-linux) or run this shard on Linux."
+	if !strings.Contains(r.stderr, want) {
+		t.Errorf("stderr does not carry the refusal line %q: %s", want, tail(r.stderr, 1500))
 	}
 	if r.goStarted {
 		t.Error("go test was started although the step cannot stop its process group")
@@ -622,5 +623,22 @@ func TestProvidersyncStepHelperPassesGOTMPDIRThrough(t *testing.T) {
 		if line != want {
 			t.Errorf("a go call saw GOTMPDIR=%q, want %q", line, want)
 		}
+	}
+}
+
+// Only the providersync shard step needs setsid: another shard still runs when `command -v setsid` fails.
+func TestOtherShardsStillRunWithoutSetsid(t *testing.T) {
+	t.Parallel()
+	r := runProvidersyncStep(t, "exit3", "600", func(script, work string) []string {
+		return []string{"bash", script, "integration-shard", "daily", "1", "--dry-run"}
+	}, "nosetsid")
+	if r.timedOut {
+		t.Fatal("the dry run hung")
+	}
+	if r.code != 0 || !strings.Contains(r.stdout, "DRY RUN") {
+		t.Errorf("a non-providersync shard did not run without setsid: rc %d stdout %s stderr %s", r.code, tail(r.stdout, 600), tail(r.stderr, 600))
+	}
+	if strings.Contains(r.stderr, "needs setsid") {
+		t.Errorf("a non-providersync shard printed the setsid refusal: %s", tail(r.stderr, 600))
 	}
 }

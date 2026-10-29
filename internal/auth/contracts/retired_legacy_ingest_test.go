@@ -10,7 +10,9 @@ import (
 // The legacy POST /api/v1/ingest/* routes are retired (CHAOS-11813). No route
 // table, edge map or endpoint profile may name one: an edge path or a profile
 // row for a route nothing mounts is a contract that describes a surface that
-// is not there. (external-ingest, /api/v1/external-ingest/*, is another family.)
+// is not there. (external-ingest, /api/v1/external-ingest/*, is another family.
+// testdata/program/route-response-models.json is the frozen FastAPI route table:
+// it records the Python app, which had these routes, and is not a contract.)
 func TestNoContractNamesARetiredLegacyIngestPath(t *testing.T) {
 	root := testRoot(t)
 	files := map[string]string{
@@ -18,7 +20,6 @@ func TestNoContractNamesARetiredLegacyIngestPath(t *testing.T) {
 		"ingress planes":        filepath.Join(root, "contracts", "ingress", "v1", "planes.json"),
 		"compose router":        filepath.Join(root, "contracts", "ingress", "v1", "compose-router.nginx.conf"),
 		"bigboy traefik planes": filepath.Join(root, "ci", "bigboy", "traefik-dynamic-planes.yml.example"),
-		"route response models": filepath.Join(root, "internal", "apiservice", "testdata", "program", "route-response-models.json"),
 	}
 	for name, path := range files {
 		raw, err := os.ReadFile(path)

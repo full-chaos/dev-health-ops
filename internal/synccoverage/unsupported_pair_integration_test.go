@@ -163,9 +163,10 @@ func TestProjectorDropsProviderDatasetPairsTheProviderDoesNotSupport(t *testing.
 				t.Fatal(err)
 			}
 			assertProjection(t, raw, now, tc.wantIncidents)
-			// The admin API serves the stored row, so the persisted projection must carry the same payload.
+			// The admin API serves the stored row at the current lookback and version, so that row must carry the same payload.
 			var stored json.RawMessage
-			if err := pool.QueryRow(ctx, `SELECT payload FROM sync_coverage_projections WHERE org_id=$1 AND sync_config_id=$2`, fixture.OrgID, fixture.ConfigID).Scan(&stored); err != nil {
+			if err := pool.QueryRow(ctx, `SELECT payload FROM sync_coverage_projections WHERE org_id=$1 AND sync_config_id=$2 AND history_lookback_days=$3 AND projection_version=$4`,
+				fixture.OrgID, fixture.ConfigID, HistoryLookbackDays, projectionVersion).Scan(&stored); err != nil {
 				t.Fatal(err)
 			}
 			assertProjection(t, stored, now, tc.wantIncidents)

@@ -114,6 +114,10 @@ var Allowlist = []Entry{
 	{File: "internal/auth/restorefence/init.go", Func: "initInsertSQL", Table: "auth.restore_fence_state", Verb: "INSERT"},
 	{File: "internal/auth/restorefence/specs.go", Func: "flowStatesSQL", Table: "auth.sso_flow_states", Verb: "UPDATE"},
 	{File: "internal/auth/session/end_all.go", Func: "Store.EndAllInTx", Table: "public.refresh_tokens", Verb: "UPDATE"},
+	// acp ruling D6512 (CHAOS-12045): a membership removal revokes the member's go-api refresh tokens of that organization
+	// (revoked_at only, rows locked NOWAIT) inside the removal's audit.Commit; its auth sessions and credentials end
+	// through Store.revokeSessions (the rows below).
+	{File: "internal/auth/session/end_org.go", Func: "Store.EndOrgInTx", Table: "public.refresh_tokens", Verb: "UPDATE"},
 	{File: "internal/auth/identity/oidc/flowstore.go", Func: "PGFlowStore.Begin", Table: "auth.sso_flow_states", Verb: "INSERT"},
 	{File: "internal/auth/identity/oidc/flowstore.go", Func: "PGFlowStore.Consume", Table: "auth.sso_flow_states", Verb: "UPDATE"},
 	{File: "internal/auth/identity/organization.go", Func: "Store.insertOrganization", Table: "auth.organizations", Verb: "INSERT"},

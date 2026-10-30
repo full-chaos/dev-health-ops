@@ -238,3 +238,42 @@ func TestProvisioningWorkloadTokenReactivate(t *testing.T) {
 	}
 	w.wantWorkloadCaller(t, ctx, "auth.organization.reactivated", org, nil, jti)
 }
+
+// I7: the invite revoke and organization suspend routes take no workload
+// token: a valid one is a 401 that writes nothing (the invite stays pending,
+// no revoke or suspend audit row), and the session issuer credential still
+// works on both.
+func TestProvisioningWorkloadTokenIsRefusedOnRevokeAndSuspend(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	w := newWorkloadProvisioningEnv(t, ctx)
+	owner, org := w.seed(t, ctx)
+	super := w.account(t, ctx, acctMail(), true, true)
+	id := w.createInvite(t, w.svc, org, owner)
+	header, _ := w.mint(t, ctx, nil)
+	if got := w.revokeVia(t, header, org, owner, id); got.status != http.StatusUnauthorized {
+		t.Fatalf("revoke on the workload token: %d %s, want 401", got.status, got.body)
+	}
+	if pub, auth := w.inviteStatuses(t, ctx, id); pub != "pending" || auth != "pending" {
+		t.Fatalf("after the refused revoke: public %q auth %q", pub, auth)
+	}
+	if n := w.revokeAudits(t, ctx, org); n != 0 {
+		t.Fatalf("revoke audit rows after the refused revoke = %d, want 0", n)
+	}
+	suspend := jsonBody(t, map[string]any{"organization_id": org.String(), "actor_principal_id": super.String()})
+	header, _ = w.mint(t, ctx, nil)
+	if got := w.doWith(t, "/internal/v1/organizations/suspend", suspend, header); got.status != http.StatusUnauthorized {
+		t.Fatalf("suspend on the workload token: %d %s, want 401", got.status, got.body)
+	}
+	var suspends int
+	if err := w.admin.QueryRow(ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.organization.suspended'
+AND organization_id = $1`, org).Scan(&suspends); err != nil || suspends != 0 {
+		t.Fatalf("suspend audit rows after the refused suspend = %d (%v), want 0", suspends, err)
+	}
+	if got := w.revokeVia(t, w.svc, org, owner, id); got.status != http.StatusOK || object(t, got)["status"] != "revoked" {
+		t.Fatalf("revoke on the service credential: %d %s", got.status, got.body)
+	}
+	if got := w.doWith(t, "/internal/v1/organizations/suspend", suspend, w.svc); got.status != http.StatusOK || object(t, got)["suspended"] != true {
+		t.Fatalf("suspend on the service credential: %d %s", got.status, got.body)
+	}
+}

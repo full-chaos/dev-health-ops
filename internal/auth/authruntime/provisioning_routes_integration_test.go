@@ -475,7 +475,7 @@ func TestProvisioningReactivateThroughConfigure(t *testing.T) {
 // withProfileRow makes the stack mount a dark provisioning route: the route is mounted only when the endpoint-profile
 // document holds its row, and the embedded document does not yet. The plant is the embedded document plus a copy of
 // the deprovision row for the route.
-func withProfileRow(t *testing.T, route string) {
+func withProfileRow(t *testing.T, routes ...string) {
 	t.Helper()
 	var document map[string]any
 	if err := json.Unmarshal(authv1.AuthServiceEndpointProfiles, &document); err != nil {
@@ -489,8 +489,15 @@ func withProfileRow(t *testing.T, route string) {
 			for k, v := range row {
 				clone[k] = v
 			}
-			clone["route"] = route
-			document["rows"] = append(rows, clone)
+			for _, route := range routes {
+				extra := map[string]any{}
+				for k, v := range clone {
+					extra[k] = v
+				}
+				extra["route"] = route
+				rows = append(rows, extra)
+			}
+			document["rows"] = rows
 			raw, err := json.Marshal(document)
 			if err != nil {
 				t.Fatal(err)

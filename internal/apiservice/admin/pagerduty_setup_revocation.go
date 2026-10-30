@@ -40,6 +40,11 @@ const (
 	_                         = uint(setupRevocationStaleAfter - 2*setupCallbackDeadline)
 )
 
+// pagerDutyRevocationMaxAttempts is the revocation worker's attempt limit
+// (providerrevocation.MaxAttempts): past it the worker no longer claims a row,
+// so a route sender that pushes a row to it names the row.
+const pagerDutyRevocationMaxAttempts = 10
+
 // setupCallbackTimeout is the deadline a callback runs under after its setup
 // row is written; a var only so a test can shorten it.
 var setupCallbackTimeout = setupCallbackDeadline

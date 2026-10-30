@@ -30,3 +30,10 @@ func TestRouteSendersClaimWithSkipLocked(t *testing.T) {
 		}
 	}
 }
+
+// The route senders name a row at the worker's attempt limit; the two limits are one number.
+func TestRouteAttemptLimitMatchesTheWorker(t *testing.T) {
+	if pagerDutyRevocationMaxAttempts != providerrevocation.MaxAttempts {
+		t.Fatalf("route attempt limit %d, worker %d", pagerDutyRevocationMaxAttempts, providerrevocation.MaxAttempts)
+	}
+}

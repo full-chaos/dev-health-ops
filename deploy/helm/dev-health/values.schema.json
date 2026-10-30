@@ -51,6 +51,7 @@
   "properties": {
     "goApi": {
       "type": "object",
+      "required": ["extraVolumes", "extraVolumeMounts"],
       "properties": {
         "drain": {
           "description": "CHAOS-10718: seconds the old go-api pod keeps serving before SIGTERM (native preStop sleep, Kubernetes >= 1.30). 0 renders no hook.",

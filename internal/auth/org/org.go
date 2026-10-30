@@ -47,6 +47,8 @@ type Organization struct {
 type Actor struct {
 	PrincipalID *uuid.UUID
 	RequestID   *string
+	// Caller is the credential the request came with; the audit row names it.
+	Caller audit.Caller
 }
 
 type state struct {
@@ -144,6 +146,7 @@ func auditFor(v verb, orgID uuid.UUID, a Actor, prev, next Status) audit.AuditEv
 		actor := a.PrincipalID.String()
 		ev.ActorPrincipalID = &actor
 	}
+	a.Caller.Annotate(ev.Attributes)
 	switch v {
 	case verbCreate:
 		ev.EventType = "auth.organization.created"

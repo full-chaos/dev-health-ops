@@ -24,17 +24,14 @@ const (
 )
 
 // newProvisioningEnv is the real stack with users owned and the provisioning
-// routes on, and a go-api credential holding both of its scopes.
+// routes on, and go-api's workload token (the only bearer the routes take).
+// The token lives 300 s, so a test uses it right after the environment is up.
 func newProvisioningEnv(t *testing.T, ctx context.Context) (*routesEnv, map[string]string) {
 	t.Helper()
-	e := newRoutesEnvWith(t, ctx, map[string]string{
-		authconfig.EnvUsersOwned:                "true",
-		authconfig.EnvMembershipRoutes:          "true",
-		authconfig.EnvInviteTokenSecret:         provisioningInviteSecret,
-		authconfig.EnvInviteTokenSecretPrevious: provisioningInvitePrevious,
-	})
-	token, _ := e.issuerCredential(t, ctx, "auth-session-issuer", `["memberships:write", "sessions:issue"]`, false, false)
-	return e, map[string]string{"Authorization": "Bearer " + token, "Content-Type": "application/json"}
+	w := newWorkloadProvisioningEnv(t, ctx)
+	header, _ := w.mint(t, ctx, nil)
+	header["Content-Type"] = "application/json"
+	return w.routesEnv, header
 }
 
 // account inserts a go-api user and projects its principal.
@@ -85,16 +82,19 @@ func TestProvisioningMembershipRoutesThroughConfigure(t *testing.T) {
 	member := e.account(t, ctx, acctMail(), false, true)
 	add := jsonBody(t, map[string]any{"organization_id": org.String(), "principal_id": member.String(), "actor_principal_id": owner.String(), "role": "member"})
 
-	for name, scopes := range map[string]string{"sessions:issue only": `["sessions:issue"]`, "no scope": `[]`} {
-		token, _ := e.issuerCredential(t, ctx, "auth-session-issuer", scopes, false, false)
+	// The session issuer credential is refused on the provisioning routes whatever its row holds:
+	// the memberships:write scope is retired.
+	for name, cred := range map[string]struct {
+		scopes           string
+		revoked, expired bool
+	}{
+		"memberships:write": {`["memberships:write"]`, false, false}, "both scopes": {`["memberships:write", "sessions:issue"]`, false, false},
+		"sessions:issue only": {`["sessions:issue"]`, false, false}, "no scope": {`[]`, false, false},
+		"revoked": {`["memberships:write"]`, true, false}, "expired": {`["memberships:write"]`, false, true},
+	} {
+		token, _ := e.issuerCredential(t, ctx, "auth-session-issuer", cred.scopes, cred.revoked, cred.expired)
 		if got := e.doWith(t, "/internal/v1/memberships/add", add, map[string]string{"Authorization": "Bearer " + token}); got.status != http.StatusUnauthorized {
 			t.Fatalf("%s: %d %s, want 401", name, got.status, got.body)
-		}
-	}
-	for name, cred := range map[string][2]any{"revoked": {true, false}, "expired": {false, true}} {
-		token, _ := e.issuerCredential(t, ctx, "auth-session-issuer", `["memberships:write"]`, cred[0].(bool), cred[1].(bool))
-		if got := e.doWith(t, "/internal/v1/memberships/add", add, map[string]string{"Authorization": "Bearer " + token}); got.status != http.StatusUnauthorized {
-			t.Fatalf("%s: %d, want 401", name, got.status)
 		}
 	}
 	// memberships:write alone does not issue sessions.
@@ -118,9 +118,10 @@ func TestProvisioningMembershipRoutesThroughConfigure(t *testing.T) {
 		t.Fatalf("after add: public %q auth %q", pub, auth)
 	}
 	var actor string
-	if err := e.admin.QueryRow(ctx, `SELECT actor_principal_id::text FROM auth.security_audit_events
-WHERE event_type = 'auth.membership.added' AND organization_id = $1 AND subject_principal_id = $2`, org, member).Scan(&actor); err != nil || actor != owner.String() {
-		t.Fatalf("added audit actor = %q (%v), want the owner", actor, err)
+	var rows int
+	if err := e.admin.QueryRow(ctx, `SELECT count(*), min(actor_principal_id::text) FROM auth.security_audit_events
+WHERE event_type = 'auth.membership.added' AND organization_id = $1 AND subject_principal_id = $2`, org, member).Scan(&rows, &actor); err != nil || rows != 1 || actor != owner.String() {
+		t.Fatalf("added audit rows = %d, actor %q (%v), want one row naming the owner", rows, actor, err)
 	}
 	role := jsonBody(t, map[string]any{"organization_id": org.String(), "principal_id": member.String(), "actor_principal_id": owner.String(), "role": "admin"})
 	if got := e.doWith(t, "/internal/v1/memberships/role", role, header); got.status != http.StatusOK {

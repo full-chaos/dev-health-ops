@@ -6,26 +6,26 @@ import (
 	"testing"
 )
 
-// memberships:write lets its holder write memberships, invites and an
-// organization deprovision through auth-service. Only the session issuer
-// credential (go-api's own) may hold it.
-func TestOnlyTheSessionIssuerMayHoldMembershipsWrite(t *testing.T) {
-	var holders []string
+// memberships:write is retired: the auth-service provisioning routes take the
+// go-api workload token only. No service may hold it and no mint may ask for
+// it; the session issuer keeps sessions:issue.
+func TestNoServiceMayHoldTheRetiredMembershipsWriteScope(t *testing.T) {
 	for service, scopes := range serviceScopes {
 		if slices.Contains(scopes, "memberships:write") {
-			holders = append(holders, service)
+			t.Errorf("%s may still hold memberships:write", service)
 		}
 	}
-	if len(holders) != 1 || holders[0] != ServiceAuthSessionIssuer {
-		t.Fatalf("memberships:write holders = %v, want only %s", holders, ServiceAuthSessionIssuer)
-	}
-	got, err := ServiceCredentialScopes(ServiceAuthSessionIssuer, []string{"memberships:write", "sessions:issue"})
-	if err != nil || strings.Join(got, ",") != "memberships:write,sessions:issue" {
-		t.Fatalf("issuer scopes %v err %v", got, err)
-	}
-	for _, service := range []string{ServiceACR, ServiceWorkerOperator} {
-		if _, err := ServiceCredentialScopes(service, []string{"memberships:write"}); err == nil {
-			t.Errorf("%s may mint memberships:write", service)
+	for _, service := range []string{ServiceAuthSessionIssuer, ServiceACR, ServiceWorkerOperator} {
+		_, err := ServiceCredentialScopes(service, []string{"memberships:write"})
+		if err == nil || !strings.Contains(err.Error(), "unsupported internal service credential scope") {
+			t.Errorf("%s mint with memberships:write: %v, want the unsupported-scope refusal", service, err)
 		}
+	}
+	if _, err := ServiceCredentialScopes(ServiceAuthSessionIssuer, []string{"memberships:write", "sessions:issue"}); err == nil {
+		t.Error("the session issuer may mint memberships:write beside sessions:issue")
+	}
+	got, err := ServiceCredentialScopes(ServiceAuthSessionIssuer, []string{"sessions:issue"})
+	if err != nil || strings.Join(got, ",") != "sessions:issue" {
+		t.Fatalf("issuer scopes %v err %v, want sessions:issue", got, err)
 	}
 }

@@ -12,13 +12,13 @@ import (
 
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
-	"github.com/full-chaos/dev-health-ops/internal/auth/servicecred"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/usertokens"
 )
 
 // The routes are built only from a binary whose embedded endpoint-profile
-// document has a row, accepting the session issuer credential, for each of
-// them.
+// document has a row, accepting the go-api workload token, for each of them.
+// A row that still lists the retired session issuer credential beside it is
+// not a refusal; a row without workload_token is.
 func TestProvisioningRoutesNeedTheirProfileRows(t *testing.T) {
 	if err := provisioningRowsPresent(authv1.AuthServiceEndpointProfiles); err != nil {
 		t.Fatalf("the embedded document: %v", err)
@@ -54,9 +54,9 @@ func TestProvisioningRoutesNeedTheirProfileRows(t *testing.T) {
 	for _, pattern := range provisioningPatterns {
 		for name, edit := range map[string]func(map[string]any) (map[string]any, bool){
 			"row removed": func(row map[string]any) (map[string]any, bool) { return row, row["route"] != pattern },
-			"class removed": func(row map[string]any) (map[string]any, bool) {
+			"workload class removed": func(row map[string]any) (map[string]any, bool) {
 				if row["route"] == pattern {
-					row["accepted_credential_classes"] = []any{"workload_token"}
+					row["accepted_credential_classes"] = []any{"internal_svc_authsess_token"}
 				}
 				return row, true
 			},
@@ -73,31 +73,37 @@ func TestProvisioningRoutesNeedTheirProfileRows(t *testing.T) {
 			}
 		}
 	}
+	if err := provisioningRowsPresent(plant(func(row map[string]any) (map[string]any, bool) {
+		if slices.Contains(provisioningPatterns, row["route"].(string)) {
+			row["accepted_credential_classes"] = []any{"internal_svc_authsess_token", "workload_token"}
+		}
+		return row, true
+	})); err != nil {
+		t.Fatalf("rows that also list the retired class: %v, want no refusal", err)
+	}
 	if err := provisioningRowsPresent([]byte("{")); !errors.Is(err, errProvisioningRows) {
 		t.Fatalf("an unreadable document: %v, want a refusal", err)
 	}
 	// ProvisioningRoutes runs the check: a planted document without one route's
 	// row builds no route at all.
 	f := newProvFixture(t)
-	routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
-		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate,
+	routes, err := ProvisioningRoutes(ProvisioningDeps{Users: f.users, Reader: noRows{}, Organizations: f.orgs,
+		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, Workload: f.w.workload,
 		ProfileRows: plant(func(row map[string]any) (map[string]any, bool) { return row, row["route"] != PatternInviteAccept })})
 	if !errors.Is(err, errProvisioningRows) || routes != nil {
 		t.Fatalf("ProvisioningRoutes over a document without a row: %d routes, %v; want none and a refusal", len(routes), err)
 	}
 }
 
-// The provisioning routes accept only the session issuer credential holding
-// memberships:write. Every kind of user token, as the Authorization bearer, is
-// refused 401 invalid_credentials at the credential gate on every route: no
-// credential-row lookup (counted on the real servicecred checker's pool), no
-// actor or store read, no organization projection, no echo of the token in the
-// body or the logs.
+// The provisioning routes accept only the go-api workload token. Every kind of
+// user token, as the Authorization bearer, is refused 401 invalid_credentials
+// at the credential gate on every route: no key-set read, no actor or store
+// read, no organization projection, no echo of the token in the body or the
+// logs.
 func TestProvisioningRoutesRefuseUserTokens(t *testing.T) {
 	tokens := userTokensWithIssuer(t)
-	pool, connects := usertokens.CountingPool(t)
 	f := newProvFixture(t)
-	routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: servicecred.PG{Pool: pool}, Users: f.users, Reader: noRows{},
+	routes, err := ProvisioningRoutes(ProvisioningDeps{Workload: f.w.workload, Users: f.users, Reader: noRows{},
 		Organizations: f.orgs, Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ProfileRows: docWithRow(t, PatternOrgSuspend),
 		Logger: slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))})
 	if err != nil {
@@ -120,8 +126,8 @@ func TestProvisioningRoutesRefuseUserTokens(t *testing.T) {
 			usertokens.NoLeak(t, c.op+" "+tok.Kind+" body", response.Body.String(), tokens)
 		}
 	}
-	if got := connects.Count(); got != 0 {
-		t.Errorf("a user token reached the credential table: %d connection attempt(s), want 0", got)
+	if f.w.keys.reads != 0 {
+		t.Errorf("a user token read the key set %d times, want 0", f.w.keys.reads)
 	}
 	if f.storeCalls() != 0 || f.users.reads != 0 {
 		t.Errorf("a user token reached the stores: %d calls, %d reads", f.storeCalls(), f.users.reads)

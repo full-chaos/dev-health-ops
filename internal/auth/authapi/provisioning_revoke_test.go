@@ -45,19 +45,19 @@ func (f *provFixture) revoke(revoker InviteRevoker, body map[string]any, header 
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	uses, err := meter.Int64Counter("auth.provisioning.compat_credential_uses")
+	retired, err := meter.Int64Counter("auth.provisioning.retired_credential_refusals")
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	h := provisioningHandlers{ProvisioningDeps: ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
-		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Logger: logger}, rec: rec, provisioningUses: uses}
+	h := provisioningHandlers{ProvisioningDeps: ProvisioningDeps{Users: f.users, Reader: noRows{}, Organizations: f.orgs,
+		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Workload: f.w.workload, Logger: logger}, rec: rec, retiredRefusals: retired}
 	route := h.revokeRoute(revoker)
 	if route.Method != http.MethodPost || route.Pattern != PatternInviteRevoke {
 		f.t.Fatalf("revoke route = %s %s", route.Method, route.Pattern)
 	}
 	request := httptest.NewRequest(http.MethodPost, PatternInviteRevoke, strings.NewReader(encode(body)))
 	if header == nil {
-		header = map[string]string{"Authorization": "Bearer " + provisioningToken}
+		header, _ = f.w.mint("workload+jwt", nil)
 	}
 	for k, v := range header {
 		request.Header.Set(k, v)
@@ -78,7 +78,7 @@ func TestInviteRevokeIsNotMountedYet(t *testing.T) {
 	if response := f.post(PatternInviteRevoke, encode(f.revokeBody(f.owner, uuid.New())), nil); response.Code != http.StatusNotFound {
 		t.Fatalf("POST %s through the provisioning routes = %d, want 404", PatternInviteRevoke, response.Code)
 	}
-	routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
+	routes, err := ProvisioningRoutes(ProvisioningDeps{Users: f.users, Reader: noRows{}, Organizations: f.orgs,
 		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate})
 	if err != nil {
 		t.Fatal(err)
@@ -151,7 +151,7 @@ func TestInviteRevokePassesTheRequestAndTheLockedActorRule(t *testing.T) {
 	}
 	in := revoker.in
 	if in.OrgID != f.org || in.InviteID != id || in.Actor.PrincipalID == nil || *in.Actor.PrincipalID != f.admin || in.Actor.RequestID == nil ||
-		in.Actor.Caller.CredentialID != "cred-1" || in.Actor.Caller.Workload != nil {
+		in.Actor.Caller.CredentialID != "" || in.Actor.Caller.Workload == nil || *in.Actor.Caller.Workload != uuidOfWire(t, f.w.subject) || in.Actor.Caller.JTI == "" {
 		t.Fatalf("the store got %+v", in)
 	}
 	f.users.roles[[2]uuid.UUID{f.admin, f.org}] = "viewer"
@@ -168,6 +168,8 @@ func TestInviteRevokeRefusesABadBearerOrBody(t *testing.T) {
 	f := newProvFixture(t)
 	revoker := &fakeRevoker{}
 	expectRefusal(t, f.revoke(revoker, f.revokeBody(f.owner, uuid.New()), map[string]string{"Authorization": "Bearer nope"}),
+		http.StatusUnauthorized, reasonInvalidCredentials)
+	expectRefusal(t, f.revoke(revoker, f.revokeBody(f.owner, uuid.New()), bearerOf(provisioningToken)),
 		http.StatusUnauthorized, reasonInvalidCredentials)
 	body := f.revokeBody(f.owner, uuid.New())
 	body["reason"] = "x"

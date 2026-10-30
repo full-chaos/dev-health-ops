@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
-	"github.com/full-chaos/dev-health-ops/internal/auth/servicecred"
 )
 
 // provWorkloadFixture is the provisioning routes with the go-api workload path
@@ -16,13 +15,11 @@ import (
 // key-set reads.
 type provWorkloadFixture struct {
 	*provFixture
-	w *workloadIssueFixture
 }
 
 func newProvWorkloadFixture(t *testing.T) *provWorkloadFixture {
 	t.Helper()
-	w := newWorkloadIssueFixture(t)
-	return &provWorkloadFixture{provFixture: newProvFixtureFor(t, docWithRow(t, PatternOrgSuspend), w.workload), w: w}
+	return &provWorkloadFixture{provFixture: newProvFixtureFor(t, docWithRow(t, PatternOrgSuspend), true)}
 }
 
 // callerOf is the caller the route handed to its verb.
@@ -60,37 +57,13 @@ func TestProvisioningRoutesAcceptTheGoAPIWorkloadToken(t *testing.T) {
 		if response.Code != http.StatusOK {
 			t.Fatalf("%s with the workload token: %d %s", c.op, response.Code, response.Body)
 		}
-		if got, _ := f.uses(c.op); got != 0 {
-			t.Fatalf("%s: compat uses = %d after a workload call, want 0", c.op, got)
+		if got, _ := f.retired(c.op); got != 0 {
+			t.Fatalf("%s: retired refusals = %d after a workload call, want 0", c.op, got)
 		}
 		caller := callerOf(f.provFixture, c.op)
 		if caller.Workload == nil || *caller.Workload != want || caller.JTI != jti || caller.CredentialID != "" {
 			t.Fatalf("%s: caller = %+v, want workload %s and jti %s", c.op, caller, want, jti)
 		}
-	}
-	if len(f.creds.scopes) != 0 {
-		t.Fatalf("a workload call reached the service credential check %d times", len(f.creds.scopes))
-	}
-}
-
-// The session issuer credential keeps working beside it: the verb gets the
-// credential row id as the caller and the compat counter counts the use.
-func TestProvisioningServiceCredentialCallerIsTheCredentialRow(t *testing.T) {
-	f := newProvWorkloadFixture(t)
-	for _, c := range routeCases() {
-		if response := f.post(c.path, encode(c.body(f.provFixture, f.super)), nil); response.Code != http.StatusOK {
-			t.Fatalf("%s with the service credential: %d %s", c.op, response.Code, response.Body)
-		}
-		caller := callerOf(f.provFixture, c.op)
-		if caller.CredentialID != "cred-1" || caller.Workload != nil || caller.JTI != "" {
-			t.Fatalf("%s: caller = %+v, want the credential row", c.op, caller)
-		}
-		if got, _ := f.uses(c.op); got != 1 {
-			t.Fatalf("%s: compat uses = %d, want 1", c.op, got)
-		}
-	}
-	if f.w.keys.reads != 0 {
-		t.Fatalf("a service credential call read the key set %d times", f.w.keys.reads)
 	}
 }
 
@@ -100,18 +73,17 @@ func TestProvisioningServiceCredentialCallerIsTheCredentialRow(t *testing.T) {
 func TestProvisioningRoutesRefuseWrongCredentialsBeforeAnyRead(t *testing.T) {
 	golden := func() string {
 		f := newProvWorkloadFixture(t)
-		f.creds.refusal = servicecred.RefusedRevoked
 		c := routeCases()[0]
-		return refusalWithoutPerRequestFields(t, f.post(c.path, encode(c.body(f.provFixture, f.super)), nil).Body.Bytes())
+		return refusalWithoutPerRequestFields(t, f.post(c.path, encode(c.body(f.provFixture, f.super)), bearerOf(provisioningToken)).Body.Bytes())
 	}()
 	for name, build := range issuePreKeyRefusals() {
 		for _, c := range routeCases() {
 			f := newProvWorkloadFixture(t)
 			response := f.post(c.path, encode(c.body(f.provFixture, f.super)), build(f.w))
 			expectRefusal(t, response, http.StatusUnauthorized, reasonInvalidCredentials)
-			if len(f.creds.scopes) != 0 || f.storeCalls() != 0 || f.users.reads != 0 || f.w.keys.reads != 0 {
-				t.Fatalf("%s %s: read before the verdict (checks %d, verbs %d, users %d, key set %d)", name, c.op,
-					len(f.creds.scopes), f.storeCalls(), f.users.reads, f.w.keys.reads)
+			if f.storeCalls() != 0 || f.users.reads != 0 || f.w.keys.reads != 0 {
+				t.Fatalf("%s %s: read before the verdict (verbs %d, users %d, key set %d)", name, c.op,
+					f.storeCalls(), f.users.reads, f.w.keys.reads)
 			}
 			if got := refusalWithoutPerRequestFields(t, response.Body.Bytes()); got != golden {
 				t.Fatalf("%s %s: refusal body %s differs from %s", name, c.op, got, golden)
@@ -128,28 +100,25 @@ func TestProvisioningRoutesRefuseATokenTheVerifierRefuses(t *testing.T) {
 		for _, c := range routeCases() {
 			f := newProvWorkloadFixture(t)
 			expectRefusal(t, f.post(c.path, encode(c.body(f.provFixture, f.super)), build(f.w)), http.StatusUnauthorized, reasonInvalidCredentials)
-			if len(f.creds.scopes) != 0 || f.storeCalls() != 0 || f.users.reads != 0 {
+			if f.storeCalls() != 0 || f.users.reads != 0 {
 				t.Fatalf("%s %s: a refused token reached a store", name, c.op)
 			}
 		}
 	}
 }
 
-// With no workload path (the subject variable unset), a workload token is
-// refused with no read and the session issuer credential is unchanged.
-func TestProvisioningRefusesTheWorkloadTokenWhenThePathIsOff(t *testing.T) {
-	w := newWorkloadIssueFixture(t)
-	f := newProvFixture(t)
+// With no workload path (the subject variable unset), the routes serve no
+// bearer at all: a workload token and the retired service credential are both
+// refused with no read.
+func TestProvisioningRefusesEveryBearerWhenTheWorkloadPathIsOff(t *testing.T) {
+	f := newProvFixtureFor(t, docWithRow(t, PatternOrgSuspend), false)
 	for _, c := range routeCases() {
-		header, _ := w.mint("workload+jwt", nil)
-		expectRefusal(t, f.post(c.path, encode(c.body(f, f.super)), header), http.StatusUnauthorized, reasonInvalidCredentials)
-		if len(f.creds.scopes) != 0 || f.storeCalls() != 0 || f.users.reads != 0 || w.keys.reads != 0 {
-			t.Fatalf("%s: a workload token with the path off reached a store", c.op)
-		}
-	}
-	for _, c := range routeCases() {
-		if response := f.post(c.path, encode(c.body(f, f.super)), nil); response.Code != http.StatusOK {
-			t.Fatalf("%s with the service credential: %d", c.op, response.Code)
+		header, _ := f.w.mint("workload+jwt", nil)
+		for name, h := range map[string]map[string]string{"workload token": header, "service credential": bearerOf(provisioningToken)} {
+			expectRefusal(t, f.post(c.path, encode(c.body(f, f.super)), h), http.StatusUnauthorized, reasonInvalidCredentials)
+			if f.storeCalls() != 0 || f.users.reads != 0 || f.w.keys.reads != 0 {
+				t.Fatalf("%s %s: a refused bearer with the path off reached a store", c.op, name)
+			}
 		}
 	}
 }
@@ -162,7 +131,7 @@ func TestProvisioningWorkloadKeySetOutageIs503(t *testing.T) {
 		header, _ := f.w.mint("workload+jwt", nil)
 		expectRefusal(t, f.post(c.path, encode(c.body(f.provFixture, f.super)), header), http.StatusServiceUnavailable, reasonDependency)
 	}
-	if f.storeCalls() != 0 || f.users.reads != 0 || len(f.creds.scopes) != 0 {
+	if f.storeCalls() != 0 || f.users.reads != 0 {
 		t.Fatal("a key-set outage reached a store")
 	}
 }

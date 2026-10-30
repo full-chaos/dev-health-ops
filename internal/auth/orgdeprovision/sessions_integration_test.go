@@ -321,7 +321,8 @@ func TestAVerbHoldingTheOrganizationRowNeverWaitsOnALegacyExchange(t *testing.T)
 			}
 			exchanged := make(chan answer, 1)
 			var once sync.Once
-			authorize := func(ctx context.Context, _ audit.TxOps, _ uuid.UUID) error {
+			// The exchange runs on the test's context: the verb's own ends with its commit.
+			authorize := func(context.Context, audit.TxOps, uuid.UUID) error {
 				once.Do(func() {
 					go func() {
 						result, err := e.sessions.ExchangeLegacy(ctx, session.LegacyRefresh{PrincipalID: user, OrganizationID: &orgID, JTI: contracts.NewSecretString(jti)})

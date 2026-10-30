@@ -85,6 +85,14 @@ func (d *provisionDB) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row 
 type provisionTx struct {
 	pgx.Tx
 	db *provisionDB
+	// savepoint marks pgx's nested transaction; closed is set once it was
+	// released or rolled back, after which pgx sends nothing more.
+	savepoint, closed bool
+}
+
+func (t *provisionTx) Begin(context.Context) (pgx.Tx, error) {
+	t.db.add("tx:SAVEPOINT")
+	return &provisionTx{db: t.db, savepoint: true}, nil
 }
 
 func (t *provisionTx) Exec(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
@@ -104,8 +112,25 @@ func (t *provisionTx) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row 
 	return provisionRow{values: values, ok: ok}
 }
 
-func (t *provisionTx) Commit(context.Context) error   { t.db.add("COMMIT"); return nil }
-func (t *provisionTx) Rollback(context.Context) error { t.db.add("ROLLBACK"); return nil }
+func (t *provisionTx) Commit(context.Context) error {
+	return t.end("COMMIT", "tx:RELEASE SAVEPOINT")
+}
+
+func (t *provisionTx) Rollback(context.Context) error {
+	return t.end("ROLLBACK", "tx:ROLLBACK TO SAVEPOINT")
+}
+
+func (t *provisionTx) end(top, nested string) error {
+	if !t.savepoint {
+		t.db.add(top)
+		return nil
+	}
+	if !t.closed {
+		t.closed = true
+		t.db.add(nested)
+	}
+	return nil
+}
 
 type provisionRow struct {
 	values []any
@@ -318,8 +343,8 @@ var switchOffSQL = map[string][]string{
 	"role": {"BEGIN", "tx:SELECT is_superuser FROM users WHERE id = ANY($1) ORDER BY id FOR UPDATE", "tx:SELECT id, org_id, user_id, role, invited_by_id, joined_at, created_at, updated_at FROM memberships WHERE org_id = $1 AND user_id = $2",
 		"tx:UPDATE memberships SET role = $3, updated_at = $4 WHERE org_id = $1 AND user_id = $2", "COMMIT", "ROLLBACK"},
 	"remove": {"BEGIN", "tx:SELECT is_superuser FROM users WHERE id = ANY($1) ORDER BY id FOR UPDATE", "tx:SELECT id, org_id, user_id, role, invited_by_id, joined_at, created_at, updated_at FROM memberships WHERE org_id = $1 AND user_id = $2",
-		"tx:DELETE FROM memberships WHERE org_id = $1 AND user_id = $2",
-		"tx:UPDATE refresh_tokens SET revoked_at = $3 WHERE user_id = $1 AND org_id = $2 AND revoked_at IS NULL", "COMMIT", "ROLLBACK"},
+		"tx:SAVEPOINT", "tx:DELETE FROM memberships WHERE org_id = $1 AND user_id = $2",
+		"tx:UPDATE refresh_tokens SET revoked_at = $3 WHERE user_id = $1 AND org_id = $2 AND revoked_at IS NULL", "tx:RELEASE SAVEPOINT", "COMMIT", "ROLLBACK"},
 	"transfer": {"BEGIN", "tx:SELECT user_id FROM memberships WHERE org_id = $1 AND role = 'owner'", "tx:SELECT is_superuser FROM users WHERE id = ANY($1) ORDER BY id FOR UPDATE",
 		"tx:SELECT role FROM memberships WHERE org_id = $1 AND user_id = $2",
 		"tx:SELECT EXISTS(SELECT 1 FROM memberships WHERE org_id = $1 AND user_id = $2)",

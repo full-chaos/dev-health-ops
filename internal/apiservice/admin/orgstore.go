@@ -398,15 +398,21 @@ func (s pgStore) removeMembership(ctx context.Context, orgID, userID uuid.UUID) 
 			return false, errLastOwner
 		}
 	}
-	_, err = s.Pool.Exec(ctx, `DELETE FROM memberships WHERE org_id = $1 AND user_id = $2`, orgID, userID)
+	// The removed member's refresh tokens for this org end with the
+	// membership, in one transaction (D6507); their tokens for other orgs stay.
+	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return false, err
 	}
-	// The removed member's refresh tokens for this org end with the
-	// membership (D6507); their tokens for other orgs stay.
-	_, err = s.Pool.Exec(ctx, `UPDATE refresh_tokens SET revoked_at = $3 WHERE user_id = $1 AND org_id = $2 AND revoked_at IS NULL`,
-		userID, orgID, s.now().UTC())
-	if err != nil {
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `DELETE FROM memberships WHERE org_id = $1 AND user_id = $2`, orgID, userID); err != nil {
+		return false, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE refresh_tokens SET revoked_at = $3 WHERE user_id = $1 AND org_id = $2 AND revoked_at IS NULL`,
+		userID, orgID, s.now().UTC()); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return false, err
 	}
 	return true, nil

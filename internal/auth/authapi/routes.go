@@ -34,7 +34,7 @@ type Sessions interface {
 
 // Deps are the routes' collaborators.
 type Deps struct {
-	Sessions Sessions
+	Sessions GuardedSessions
 	Users    Users
 	Issuer   *Issuer
 	Logger   *slog.Logger

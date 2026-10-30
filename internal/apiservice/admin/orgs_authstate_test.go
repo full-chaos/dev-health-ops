@@ -151,8 +151,8 @@ func TestPatchWithTheSwitchOnStoresTheAuthStateReadUnderTheLock(t *testing.T) {
 	if lock < 0 || reread < lock || write < reread {
 		t.Fatalf("order %v, want the row lock, then the auth re-read, then the write", log.steps)
 	}
-	if !strings.Contains(strings.Join(db.sqls, "\n"), "FOR UPDATE") {
-		t.Fatalf("sql %q, want a SELECT ... FOR UPDATE", db.sqls)
+	if !strings.Contains(strings.Join(db.sqls, "\n"), "FOR NO KEY UPDATE") {
+		t.Fatalf("sql %q, want a SELECT ... FOR NO KEY UPDATE", db.sqls)
 	}
 	if !strings.Contains(logs.String(), "auth state moved after the call") {
 		t.Fatalf("log %q, want the info line for a moved state", logs.String())
@@ -248,7 +248,7 @@ func TestPatchWithTheSwitchOffReadsNoAuthStateAndStoresThePatchValue(t *testing.
 		if state.calls != 0 || len(db.writes) != 1 || db.writes[0] != active {
 			t.Fatalf("auth state reads %d, writes %v, want none and the PATCH value %v", state.calls, db.writes, active)
 		}
-		if strings.Contains(strings.Join(db.sqls, "\n"), "FOR UPDATE") {
+		if strings.Contains(strings.Join(db.sqls, "\n"), "KEY UPDATE") {
 			t.Fatalf("sql %q: the switch-off path takes a row lock", db.sqls)
 		}
 	}
@@ -268,7 +268,7 @@ func TestPatchWithoutIsActiveReadsNoAuthState(t *testing.T) {
 		if state.calls != 0 || len(log.steps) == 0 || log.index("auth") != -1 || log.index("auth-suspend") != -1 {
 			t.Fatalf("%s: auth state reads %d, steps %v, want no auth traffic", body, state.calls, log.steps)
 		}
-		if strings.Contains(strings.Join(db.sqls, "\n"), "FOR UPDATE") {
+		if strings.Contains(strings.Join(db.sqls, "\n"), "KEY UPDATE") {
 			t.Fatalf("%s: sql %q: a PATCH without is_active takes a row lock", body, db.sqls)
 		}
 	}

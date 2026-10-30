@@ -37,6 +37,8 @@ func (p *hookProvisioner) Deprovision(ctx context.Context, org, actor uuid.UUID)
 	return p.orgCreateProvisioner.Deprovision(ctx, org, actor)
 }
 
+const internalServerError = `{"detail":"Internal Server Error"}`
+
 // The runbook's read-only query for organizations without their owner.
 const ownerlessOrgsQuery = `SELECT o.id, o.created_at FROM public.organizations o WHERE NOT EXISTS (SELECT 1 FROM public.memberships m WHERE m.org_id = o.id AND m.role = 'owner') ORDER BY o.created_at`
 
@@ -109,7 +111,7 @@ func TestOrgCreateWithOwnerOnARealDatabase(t *testing.T) {
 	t.Run("I4b switch off and on, an owner go-api does not hold: today's 500, nothing written", func(t *testing.T) {
 		for _, auth := range []authprovision.Provisioner{nil, fake(nil, nil)} {
 			code, body, _, org := create(t, auth, uuid.New())
-			if code != http.StatusInternalServerError || body != `{"detail":"Internal Server Error"}` || org != uuid.Nil {
+			if code != http.StatusInternalServerError || body != internalServerError || org != uuid.Nil {
 				t.Fatalf("switch on %v: %d %s, org %s", auth != nil, code, body, org)
 			}
 		}
@@ -139,9 +141,9 @@ func TestOrgCreateWithOwnerOnARealDatabase(t *testing.T) {
 			t.Fatalf("%d %s: org %s", code, body, org)
 		}
 	})
-	t.Run("I3b auth down for both: 503, the ERROR, the runbook query lists the org", func(t *testing.T) {
+	t.Run("I3b auth down for both: 500, the ERROR, the runbook query lists the org", func(t *testing.T) {
 		code, body, logs, org := create(t, down, newOwner())
-		if code != http.StatusServiceUnavailable || body != provUnavailable || org == uuid.Nil {
+		if code != http.StatusInternalServerError || body != internalServerError || org == uuid.Nil {
 			t.Fatalf("%d %s: org %s", code, body, org)
 		}
 		if !strings.Contains(logs, "level=ERROR") || !strings.Contains(logs, "org_id="+org.String()) || strings.Contains(logs, "@") {
@@ -165,13 +167,13 @@ func TestOrgCreateWithOwnerOnARealDatabase(t *testing.T) {
 			t.Fatalf("the runbook query does not list %s", org)
 		}
 	})
-	t.Run("G1 a member lands before the DELETE: org kept, 503, the ERROR", func(t *testing.T) {
+	t.Run("G1 a member lands before the DELETE: org kept, 500, the ERROR", func(t *testing.T) {
 		auth := fake(authprovision.ErrUnavailable, nil)
 		auth.onDeprovision = func(org uuid.UUID) {
 			pgseed.Membership(ctx, t, pool, uuid.NewString(), super.String(), org.String(), "member")
 		}
 		code, body, logs, org := create(t, auth, newOwner())
-		if code != http.StatusServiceUnavailable || body != provUnavailable || org == uuid.Nil || !strings.Contains(logs, "org_id="+org.String()) {
+		if code != http.StatusInternalServerError || body != internalServerError || org == uuid.Nil || !strings.Contains(logs, "org_id="+org.String()) {
 			t.Fatalf("%d %s: org %s, log:\n%s", code, body, org, logs)
 		}
 	})

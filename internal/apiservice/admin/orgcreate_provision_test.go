@@ -332,15 +332,16 @@ func TestOrgCreateLostAnswerWithOwnerIs201(t *testing.T) {
 	}
 }
 
-// A failed read-back leaves the owner state unknown: 503 and an ERROR naming
-// the org; no deprovision and no DELETE.
-func TestOrgCreateReadBackFailsIs503WithoutCleanup(t *testing.T) {
+// A failed read-back leaves the owner state unknown: 500 (a half-written state
+// a retry must not meet) and an ERROR naming the org; no deprovision and no
+// DELETE.
+func TestOrgCreateReadBackFailsIs500WithoutCleanup(t *testing.T) {
 	db := newOrgCreateDB()
 	db.ownerReadFails = true
 	auth := &orgCreateProvisioner{fakeProvisioner: fakeProvisioner{db: db.provisionDB}, addErr: authprovision.ErrUnavailable}
 	code, body, logs := callCreateOrg(db, auth, orgCreateWithOwner)
-	if code != http.StatusServiceUnavailable || body != unavailableBody() {
-		t.Fatalf("answer %d %s, want the 503", code, body)
+	if code != http.StatusInternalServerError || body != internalBody() {
+		t.Fatalf("answer %d %s, want the 500 of a failed cleanup", code, body)
 	}
 	if len(auth.calls) != 1 || db.deleted() {
 		t.Fatalf("auth calls %v, deleted %v: an unknown owner state must not deny or delete", auth.calls, db.deleted())
@@ -348,15 +349,15 @@ func TestOrgCreateReadBackFailsIs503WithoutCleanup(t *testing.T) {
 	assertOwnerlessError(t, logs, addedOrg(t, auth))
 }
 
-// U5: the cleanup's deprovision fails: 503, an ERROR naming the org and no
+// U5: the cleanup's deprovision fails: 500, an ERROR naming the org and no
 // address, no DELETE.
-func TestOrgCreateCleanupDeprovisionFailsIs503(t *testing.T) {
+func TestOrgCreateCleanupDeprovisionFailsIs500(t *testing.T) {
 	db := newOrgCreateDB()
 	auth := &orgCreateProvisioner{fakeProvisioner: fakeProvisioner{db: db.provisionDB}, addErr: refusedWith(http.StatusConflict, "principal_deactivated"),
 		deprovisionErr: authprovision.ErrUnavailable}
 	code, body, logs := callCreateOrg(db, auth, orgCreateWithOwner)
-	if code != http.StatusServiceUnavailable || body != unavailableBody() {
-		t.Fatalf("answer %d %s, want the 503", code, body)
+	if code != http.StatusInternalServerError || body != internalBody() {
+		t.Fatalf("answer %d %s, want the 500 of a failed cleanup", code, body)
 	}
 	if db.deleted() {
 		t.Fatalf("the org was deleted after a failed deprovision: %v", db.log)
@@ -378,14 +379,14 @@ func TestOrgCreateCleanupOrgNotInAuthStillDeletes(t *testing.T) {
 }
 
 // U8: the guarded DELETE takes no row and no owner row is there (a member
-// was added meanwhile): 503 and an ERROR naming the org, no address.
-func TestOrgCreateGuardKeepsOrgWithoutOwnerIs503(t *testing.T) {
+// was added meanwhile): 500 and an ERROR naming the org, no address.
+func TestOrgCreateGuardKeepsOrgWithoutOwnerIs500(t *testing.T) {
 	db := newOrgCreateDB()
 	db.deleteTag = "DELETE 0"
 	auth := &orgCreateProvisioner{fakeProvisioner: fakeProvisioner{db: db.provisionDB}, addErr: authprovision.ErrUnavailable}
 	code, body, logs := callCreateOrg(db, auth, orgCreateWithOwner)
-	if code != http.StatusServiceUnavailable || body != unavailableBody() {
-		t.Fatalf("answer %d %s, want the 503", code, body)
+	if code != http.StatusInternalServerError || body != internalBody() {
+		t.Fatalf("answer %d %s, want the 500 of a failed cleanup", code, body)
 	}
 	want := []string{orgCreateSlugRead, orgCreateOwnerRead, orgCreateOrgInsert, "auth:add", orgCreateMemberRead, "auth:deprovision", orgCreateGuardedDelete, orgCreateMemberRead}
 	if !reflect.DeepEqual(db.log, want) {

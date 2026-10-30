@@ -1,18 +1,30 @@
 package devhealth_test
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
 
+// pgbouncerRecord is one pgbouncer log record, e.g. "2026-10-30 15:09:33.995 UTC [1] LOG kernel file descriptor limit".
+var pgbouncerRecord = regexp.MustCompile(`^\s*\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d+)? \S+ \[\d+\] [A-Z]+ `)
+
 // generatedPgbouncerIni returns the config block the pgbouncer image prints at start, cut from the container's
-// combined log text.
+// combined log text (stdout and stderr in one stream). pgbouncer's own log records that land inside the block are
+// dropped and runs of blank lines are collapsed, so two captures compare equal whatever each stream interleaved.
 func generatedPgbouncerIni(logs string) (string, bool) {
 	i, j := strings.Index(logs, "################## Auto generated"), strings.Index(logs, "################## end file")
 	if i < 0 || j <= i {
 		return "", false
 	}
-	return logs[i:j], true
+	var kept []string
+	for _, line := range strings.Split(logs[i:j], "\n") {
+		if pgbouncerRecord.MatchString(line) || (strings.TrimSpace(line) == "" && len(kept) > 0 && strings.TrimSpace(kept[len(kept)-1]) == "") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n"), true
 }
 
 const cleanIni = "################## Auto generated ##################\n[databases]\ndevhealth = host=pg port=5432\n[pgbouncer]\nlisten_port = 6432\nadmin_users = devhealth_domain\n\n# Connection sanity checks, timeouts\n\n# TLS settings\n\n"

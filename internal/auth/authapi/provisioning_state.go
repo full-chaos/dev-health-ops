@@ -9,7 +9,7 @@ import (
 )
 
 // PatternOrgState is the organization state read route, mounted only when the embedded endpoint-profile document holds
-// its row (like PatternOrgSuspend): without the row it answers 404 and the service starts.
+// its row: without the row it answers 404 and the service starts.
 const PatternOrgState = "/internal/v1/organizations/state"
 
 const opOrgState = "organization_state"

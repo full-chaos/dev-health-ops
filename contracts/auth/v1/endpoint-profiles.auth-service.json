@@ -872,8 +872,8 @@
       "route": "/internal/v1/organizations/suspend",
       "service": "dev-health-auth-service",
       "source": {
-        "file": "internal/auth/authapi/provisioning.go",
-        "line": 209
+        "file": "internal/auth/authapi/provisioning_suspend.go",
+        "line": 19
       },
       "surface_kind": "rest",
       "tenant_requirement": "cross_org_superuser_only"

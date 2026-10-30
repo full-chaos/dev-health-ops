@@ -138,6 +138,11 @@ func (s samlSessions) IssueFederatedSession(w http.ResponseWriter, r *http.Reque
 		s.h.fail(w, r, opSSOSession, err)
 		return
 	}
+	// Before the body: a record that cannot be written withholds the tokens.
+	if err := s.recordSignIn(ctx, signIn); err != nil {
+		s.h.fail(w, r, opSSOSession, err)
+		return
+	}
 	body := pyjson.NewObject()
 	body.Set("access_token", out.access)
 	body.Set("refresh_token", out.refresh)
@@ -155,7 +160,6 @@ func (s samlSessions) IssueFederatedSession(w http.ResponseWriter, r *http.Reque
 	writeCompatModel(w, body)
 }
 
-//nolint:unused // red commit: the call comes with the fix
 func (s samlSessions) recordSignIn(ctx context.Context, signIn saml.SignIn) error {
 	if signIn.OrganizationID == nil {
 		return errors.New("authapi: a SAML sign-in has no provider organization to record")

@@ -410,6 +410,9 @@ func (s *Service) callbackOAuth(ctx context.Context, admitted StoredProvider, in
 		}
 		return Login{}, clear, failure
 	}
+	if failure := s.recordSignIn(ctx, row, login); failure != nil {
+		return Login{}, clear, failure
+	}
 	return login, clear, nil
 }
 

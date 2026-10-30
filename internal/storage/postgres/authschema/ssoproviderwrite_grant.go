@@ -19,7 +19,7 @@ const ssoProvidersTable = "sso_providers"
 // UPDATE only, whatever the users-owned switch says, since the sign-in routes are served without it; the row is found
 // by id, which the public read pass grants.
 func SSOProviderWriteColumns() []string {
-	return []string{"last_error", "last_error_at", "updated_at"}
+	return []string{"last_error", "last_error_at", "last_login_at", "updated_at"}
 }
 
 // isSSOProviderWriteColumn reports whether a public column privilege is one SSOProviderWriteColumns declares.

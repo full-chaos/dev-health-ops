@@ -138,8 +138,12 @@ func (p PGSignIn) Succeeded(ctx context.Context, success Success) error {
 		now = p.Now
 	}
 	at := now().UTC()
-	_, _ = at, signInSQL
-	_ = insertSuccess
+	if _, err := tx.Exec(ctx, signInSQL, success.ProviderID, at); err != nil {
+		return err
+	}
+	if err := insertSuccess(ctx, tx, success, at); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
 }
 

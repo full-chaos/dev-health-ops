@@ -494,12 +494,14 @@ func (s *Service) callback(ctx context.Context, admitted StoredProvider, in Call
 	if failure != nil {
 		return Login{}, clear, failure
 	}
+	if failure := s.recordSignIn(ctx, row, login); failure != nil {
+		return Login{}, clear, failure
+	}
 	return login, clear, nil
 }
 
 // recordSignIn writes the success record of a sign-in whose session exists. A write error is the 500: the tokens are
 // withheld and the session stays undelivered, as on go-api's path.
-//nolint:unused // red commit: the call comes with the fix
 func (s *Service) recordSignIn(ctx context.Context, row Provider, login Login) *Error {
 	if err := s.cfg.SignInRecord.Succeeded(ctx, ssoaudit.Success{OrgID: row.OrgID, ProviderID: row.ID,
 		PrincipalID: login.PrincipalID, Protocol: row.Protocol}); err != nil {

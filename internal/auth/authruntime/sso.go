@@ -92,8 +92,8 @@ func oidcService(
 		Sessions:     sessions.OIDC(),
 		Secrets:      providerSecrets{cipher},
 		StateSecret:  contracts.NewSecretString(cfg.SSO.StateKey.Reveal()),
-		AppBaseURL:   cfg.SSO.AppBaseURL,
-		Logger:       logger,
+		AppBaseURL:   cfg.SSO.AppBaseURL, DenialAudit: oidc.PGDenialAudit{Exec: pool},
+		Logger: logger,
 	})
 }
 

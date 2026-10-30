@@ -3,6 +3,7 @@ package oidc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/auth/emaildomain"
 	"log/slog"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 // ProviderKind is the go-api users.auth_provider value of an OIDC account.
@@ -154,9 +156,12 @@ type Config struct {
 	// DefaultOAuthEndpoints. A self-hosted GitLab row's base_url overrides
 	// the GitLab base.
 	OAuthEndpoints *OAuthEndpoints
-	Now            func() time.Time
-	Logger         *slog.Logger
-	Meter          metric.Meter
+	// DenialAudit writes go-api's audit_logs row of an OAuth domain refusal
+	// (stage domain_check) before the refusal answers; nil writes none.
+	DenialAudit DenialAudit
+	Now         func() time.Time
+	Logger      *slog.Logger
+	Meter       metric.Meter
 }
 
 // Service runs the OIDC flow.
@@ -547,6 +552,12 @@ func (s *Service) resolve(ctx context.Context, row Provider, v validated, reques
 		return Login{}, failure
 	}
 	if failure := checkProviderEmail(row, v.profile.Email); failure != nil {
+		if failure.Reason == ReasonDomainNotAllowed && strings.HasPrefix(row.Protocol, "oauth_") {
+			if f := s.auditDenial(ctx, row, "domain_check",
+				fmt.Sprintf("Email domain '%s' is not allowed for this provider", emailDomain(v.profile.Email))); f != nil {
+				return Login{}, f
+			}
+		}
 		return Login{}, failure
 	}
 	principal, err := s.cfg.Identities.IdentityBySubject(ctx, v.key, LegacyMatch{AuthProvider: v.legacyAuthProvider, MembershipOrg: row.OrgID})
@@ -687,6 +698,19 @@ func checkProviderEmail(row Provider, email string) *Error {
 			map[string]string{"message": "Email domain is not allowed for this provider", "reason": "oauth_domain_not_allowed"})
 	}
 	return deny(http.StatusForbidden, ReasonDomainNotAllowed, "Email domain is not allowed for this provider")
+}
+
+// auditDenial writes go-api's OAuth denial row (recordSSOAuthenticatedDenial: protocol oauth, the stage, the
+// sanitized message) before the refusal answers; a write error is the 500 go-api answers.
+func (s *Service) auditDenial(ctx context.Context, row Provider, stage, message string) *Error {
+	if s.cfg.DenialAudit == nil {
+		return nil
+	}
+	if err := s.cfg.DenialAudit.Denied(ctx, DenialRow{OrgID: row.OrgID, ProviderID: row.ID, Protocol: "oauth", Stage: stage,
+		ErrorMessage: pythonparity.SanitizeErrorTextHardened(message, 4000)}); err != nil {
+		return internal(ReasonStoreUnavailable, err)
+	}
+	return nil
 }
 
 func conflict() *Error {

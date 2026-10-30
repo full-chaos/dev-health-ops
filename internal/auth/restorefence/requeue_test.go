@@ -158,8 +158,16 @@ func TestTheRequeueActionsNameTheirFollowUps(t *testing.T) {
 	if !strings.Contains(requeueRunbookStep, "backup-and-restore.md") || !strings.Contains(requeueRunbookStep, "RESTORE_FENCE_SOURCE_URI") {
 		t.Errorf("the runbook follow-up does not name the runbook and the variable: %q", requeueRunbookStep)
 	}
-	if f := followUpOf(OperatorAction{Kind: ActionRequeueProviderRevocation, Source: "public.provider_oauth_credentials"}); f != "CHAOS-12010" {
-		t.Errorf("requeue_provider_revocation of the deleted credentials follow-up = %q, want the revocation worker ticket", f)
+	if f := followUpOf(OperatorAction{Kind: ActionRequeueProviderRevocation, Source: "public.provider_oauth_credentials"}); f != credentialRevokeStep {
+		t.Errorf("requeue_provider_revocation of the deleted credentials follow-up = %q, want the manual revoke step %q (the fence delete writes no revocation row)", f, credentialRevokeStep)
+	}
+	for _, want := range []string{"backup-and-restore.md", "revoke-the-old-token-at-the-provider-by-hand", "then-reconnect-the-credential"} {
+		if !strings.Contains(credentialRevokeStep, want) {
+			t.Errorf("the deleted-credential follow-up %q does not say %q", credentialRevokeStep, want)
+		}
+	}
+	if strings.Contains(credentialRevokeStep, "CHAOS-") || strings.Contains(credentialRevokeStep, " ") {
+		t.Errorf("the deleted-credential follow-up must name no worker ticket and be one token: %q", credentialRevokeStep)
 	}
 	for _, k := range []ActionKind{ActionForcePasswordReset, ActionUserTombstoned, ActionProviderRevocationRequeuedBlocked} {
 		if followUpOf(OperatorAction{Kind: k, Source: "x"}) != followUp[k] {

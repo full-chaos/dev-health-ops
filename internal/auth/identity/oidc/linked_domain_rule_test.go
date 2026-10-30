@@ -3,12 +3,16 @@ package oidc
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/google/uuid"
 )
 
 const domainDeniedDetail = `{"detail":"Email domain is not allowed for this provider"}`
+
+// oauthDomainDeniedBody is go-api's OAuth domain refusal body, byte for byte (internal/api/sso oauthDomainDeniedDetail).
+const oauthDomainDeniedBody = `{"detail":{"message":"Email domain is not allowed for this provider","reason":"oauth_domain_not_allowed"}}`
 
 func resolveWithList(t *testing.T, protocol string, linked bool, list []string, p profile) (refusal, *orderIdentities, *resolveSessions) {
 	t.Helper()
@@ -23,13 +27,15 @@ func resolveWithList(t *testing.T, protocol string, linked bool, list []string, 
 
 // The provider's allowed_domains decide every sign-in, linked or new (go-api oidc.go/oauth.go parity): a linked key
 // whose asserted domain is off the list is refused before the lookup, with the answer an unknown key gets. An address
-// with no "@" is go-api's 400 on an OIDC row and its domain 403 on an OAuth row (oauth.go has no malformed branch).
+// with no "@" is go-api's 400 on an OIDC row and its domain 403 on an OAuth row (oauth.go has no malformed branch);
+// on an OAuth row the domain 403 carries go-api's OAuth detail object.
 func TestResolveRefusesALinkedIdentityOffTheDomainList(t *testing.T) {
-	denied := refusal{status: http.StatusForbidden, reason: ReasonDomainNotAllowed, detail: domainDeniedDetail}
 	malformed := refusal{status: http.StatusBadRequest, reason: ReasonMalformed, detail: `{"detail":"Email address from OIDC claims is malformed"}`}
 	for _, protocol := range []string{"oidc", "oauth_gitlab", "oauth_github", "oauth_google"} {
+		denied := refusal{status: http.StatusForbidden, reason: ReasonDomainNotAllowed, detail: domainDeniedDetail}
 		noAt := malformed
 		if protocol != "oidc" {
+			denied.detail = oauthDomainDeniedBody
 			noAt = denied
 		}
 		for name, tc := range map[string]struct {
@@ -103,17 +109,38 @@ func TestOAuthCallbackRefusesALinkedUnverifiedEmail(t *testing.T) {
 	}
 }
 
-// Through the real OAuth callback (stored protocol oauth_gitlab): with a list, an address with no "@" is the domain
-// 403 for a linked and an unknown key alike, before any lookup (go-api oauth.go has no malformed branch).
+// Through the real OAuth callback (stored protocol oauth_gitlab): with a list, an address off the list or with no
+// "@" is go-api's OAuth domain 403 for a linked and an unknown key alike, before any lookup (go-api oauth.go has no
+// malformed branch).
 func TestOAuthCallbackAnswersNoAtWithTheDomainRefusal(t *testing.T) {
 	list := `["example.test"]`
-	want := refusal{status: http.StatusForbidden, reason: ReasonDomainNotAllowed, detail: domainDeniedDetail}
-	linked, linkedIDs := oauthCallbackRunWithList(t, "u.example.test", true, true, &list)
-	unknown, unknownIDs := oauthCallbackRunWithList(t, "u.example.test", true, false, &list)
-	if linked != want || unknown != want || linkedIDs.calls+unknownIDs.calls != 0 {
-		t.Fatalf("linked %+v, unknown %+v, %d store calls; want both %+v and none", linked, unknown, linkedIDs.calls+unknownIDs.calls, want)
+	want := refusal{status: http.StatusForbidden, reason: ReasonDomainNotAllowed, detail: oauthDomainDeniedBody}
+	for _, email := range []string{"u.example.test", "u@other.test"} {
+		linked, linkedIDs := oauthCallbackRunWithList(t, email, true, true, &list)
+		unknown, unknownIDs := oauthCallbackRunWithList(t, email, true, false, &list)
+		if linked != want || unknown != want || linkedIDs.calls+unknownIDs.calls != 0 {
+			t.Fatalf("%s: linked %+v, unknown %+v, %d store calls; want both %+v and none", email, linked, unknown, linkedIDs.calls+unknownIDs.calls, want)
+		}
 	}
 	if got, ids := oauthCallbackRunWithList(t, "u@example.test", true, true, &list); got != (refusal{}) || ids.calls == 0 {
 		t.Fatalf("control, domain on the list: %+v with %d store calls", got, ids.calls)
+	}
+}
+
+// The OAuth domain refusal goes over the wire as go-api's body, byte for byte; an OIDC row keeps its string detail.
+func TestOAuthDomainRefusalWritesGoAPIBytes(t *testing.T) {
+	for protocol, want := range map[string]string{"oauth_gitlab": oauthDomainDeniedBody, "oidc": domainDeniedDetail} {
+		svc := &Service{cfg: Config{Identities: &orderIdentities{linked: true}, Memberships: resolveMembers{found: true, role: "member"},
+			Sessions: &resolveSessions{}, MembershipJIT: &resolveJIT{}}}
+		row := Provider{ID: uuid.New(), OrgID: uuid.New(), Protocol: protocol, AutoProvision: true, AllowedDomains: []string{"example.test"}}
+		_, failure := svc.resolve(context.Background(), row, validated{profile: profile{Email: "u@other.test", EmailVerified: true}}, nil)
+		if failure == nil {
+			t.Fatalf("%s: no refusal", protocol)
+		}
+		rec := httptest.NewRecorder()
+		svc.writeError(rec, failure)
+		if rec.Code != http.StatusForbidden || rec.Body.String() != want || failure.Reason != ReasonDomainNotAllowed {
+			t.Fatalf("%s: %d %s (reason %s), want 403 %s", protocol, rec.Code, rec.Body.String(), failure.Reason, want)
+		}
 	}
 }

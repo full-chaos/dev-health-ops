@@ -1495,5 +1495,5 @@
     }
   ],
   "schema_version": "endpoint-profile.v1",
-  "source_commit": "40037f768ee6d0919cd7692cfba2aa4ba496805d"
+  "source_commit": "de0d6ae8c15979e4ea3f64085eb4fdf944a8c79a"
 }

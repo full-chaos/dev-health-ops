@@ -379,6 +379,9 @@ type Mutation struct {
 	Audit     AuditEvent
 	Events    []OutboxEvent
 	OffStream string
+	// Refusals are Apply errors that are expected domain refusals: Commit still
+	// rolls back, and logs them at WARN, not ERROR.
+	Refusals []error
 }
 
 func (m Mutation) validate() error {
@@ -424,9 +427,7 @@ func (m Mutation) validate() error {
 func Commit(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier, m Mutation) (err error) {
 	defer func() {
 		if err != nil {
-			slog.ErrorContext(ctx, "audit: Commit failed; its own transaction rolled back",
-				"audit_event_type", m.Audit.EventType, "outbox_events", len(m.Events),
-				"aggregate_types", aggregateTypes(m.Events), "off_stream", m.OffStream, logging.ErrorAttr(err))
+			logCommitFailure(ctx, m, err)
 		}
 	}()
 	if pool == nil {
@@ -492,6 +493,18 @@ func Commit(ctx context.Context, pool *pgxpool.Pool, schema authschema.Validated
 		return fmt.Errorf("%w: committing", ErrMutationFailed)
 	}
 	return nil
+}
+
+func logCommitFailure(ctx context.Context, m Mutation, err error) {
+	level, msg := slog.LevelError, "audit: Commit failed; its own transaction rolled back"
+	for _, refusal := range m.Refusals {
+		if errors.Is(err, refusal) {
+			level, msg = slog.LevelWarn, "audit: Commit refused; its own transaction rolled back"
+			break
+		}
+	}
+	slog.Log(ctx, level, msg, "audit_event_type", m.Audit.EventType, "outbox_events", len(m.Events),
+		"aggregate_types", aggregateTypes(m.Events), "off_stream", m.OffStream, logging.ErrorAttr(err))
 }
 
 // outboxOrder is the order a mutation's events are written in:

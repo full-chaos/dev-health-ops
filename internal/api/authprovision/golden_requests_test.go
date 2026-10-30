@@ -122,7 +122,9 @@ func newGoldenServer(t *testing.T) *goldenServer {
 		for name, values := range r.Header {
 			headers[name] = append([]string(nil), values...)
 			if name == "Authorization" {
-				headers[name] = []string{bearerPlaceholder(values[0])}
+				for i, value := range values {
+					headers[name][i] = bearerPlaceholder(value)
+				}
 			}
 		}
 		g.mu.Lock()

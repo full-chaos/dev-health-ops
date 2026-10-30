@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -159,7 +160,10 @@ func TestSocialLoginAnswersTheProviderEmailParityTable(t *testing.T) {
 	}
 }
 
-// shapeBody applies a row's shape to a served profile body: "key=<K>" renames the email member to K, "utf16le" sends the
+// noEmailMember is an "email" member with its value and the separator after it.
+var noEmailMember = regexp.MustCompile(`"email": (?:"(?:[^"\\]|\\.)*"|[^,}\]]*)(?:, )?`)
+
+// shapeBody applies a row's shape to a served profile body: "noemail" drops every "email" member, "key=<K>" renames the email member to K, "utf16le" sends the
 // body as UTF-16LE with a byte order mark (a body Python's response.json() reads), "-" leaves it as it is.
 func shapeBody(shape string, body []byte) []byte {
 	if key, ok := strings.CutPrefix(shape, "key="); ok {
@@ -171,6 +175,9 @@ func shapeBody(shape string, body []byte) []byte {
 			panic(err)
 		}
 		body = bytes.Replace(body, []byte(`"email": `), append(append([]byte(`"email": `), value...), []byte(`, "email": `)...), 1)
+	}
+	if shape == "noemail" {
+		body = bytes.ReplaceAll(noEmailMember.ReplaceAll(body, nil), []byte(", }"), []byte("}"))
 	}
 	if shape == "utf16le" {
 		units := utf16.Encode([]rune("\ufeff" + string(body)))

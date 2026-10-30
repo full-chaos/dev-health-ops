@@ -109,15 +109,38 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 }
 
 // deleteOrganizationWithoutMembers deletes the organization only while no
-// membership of it exists, in one statement; false when it kept the row.
+// membership of it exists; false when it kept the row. It locks the org row
+// first and checks for a membership in a statement of its own after the lock:
+// a membership insert holds the org row (its foreign key check) until it
+// commits, and a one-statement DELETE ... NOT EXISTS would re-read only the org
+// row after that wait, then cascade the new membership away.
 func (s pgStore) deleteOrganizationWithoutMembers(ctx context.Context, orgID uuid.UUID) (bool, error) {
-	tag, err := s.Pool.Exec(ctx, `
-DELETE FROM organizations WHERE id = $1
-AND NOT EXISTS (SELECT 1 FROM memberships WHERE org_id = $1)`, orgID)
+	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return false, err
 	}
-	return tag.RowsAffected() == 1, nil
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	var one int
+	if err := tx.QueryRow(ctx, `SELECT 1 FROM organizations WHERE id = $1 FOR UPDATE`, orgID).Scan(&one); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	var member bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM memberships WHERE org_id = $1)`, orgID).Scan(&member); err != nil {
+		return false, err
+	}
+	if member {
+		return false, nil
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM organizations WHERE id = $1`, orgID); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // pgExecer is the Exec/QueryRow surface both *pgxpool.Pool and pgx.Tx

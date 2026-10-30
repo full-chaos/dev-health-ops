@@ -87,8 +87,25 @@ func (s *Store) EndOrgInTx(ctx context.Context, tx audit.TxOps, principalID, org
 // NOWAIT: a legacy exchange holds its go-api refresh token and then waits for
 // a key-share lock on that row (the new session's foreign key), and waiting
 // for its token would close a deadlock. A row another writer holds is ErrBusy.
-func (s *Store) EndOrganizationInTx(context.Context, audit.TxOps, uuid.UUID) (Ended, error) {
-	return Ended{}, nil
+func (s *Store) EndOrganizationInTx(ctx context.Context, tx audit.TxOps, organizationID uuid.UUID) (Ended, error) {
+	sessions, err := s.endLockedSessions(ctx, tx, `
+		SELECT s.id::text, `+s.effectiveExpiry()+` > clock_timestamp()
+		FROM `+s.q+`.sessions s
+		WHERE s.organization_id = $1 AND s.revoked_at IS NULL
+		ORDER BY s.id FOR UPDATE OF s NOWAIT`, organizationID)
+	if err != nil {
+		return Ended{}, err
+	}
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM public.refresh_tokens
+		WHERE org_id = $1 AND revoked_at IS NULL ORDER BY token_hash FOR UPDATE NOWAIT`, organizationID); err != nil {
+		return Ended{}, endOrgErr("locking the go-api refresh tokens", err)
+	}
+	tag, err := tx.Exec(ctx, `UPDATE public.refresh_tokens SET revoked_at = clock_timestamp()
+		WHERE org_id = $1 AND revoked_at IS NULL`, organizationID)
+	if err != nil {
+		return Ended{}, endOrgErr("revoking the go-api refresh tokens", err)
+	}
+	return Ended{Sessions: sessions, RefreshTokens: tag.RowsAffected()}, nil
 }
 
 // endLockedSessions runs lock, which reads (id, live) of the sessions to end

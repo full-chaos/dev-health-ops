@@ -52,21 +52,6 @@ var setupCallbackTimeout = setupCallbackDeadline
 // setupRevocationStaleInterval is the cutoff as the SQL interval.
 var setupRevocationStaleInterval = fmt.Sprintf("%d seconds", int64(setupRevocationStaleAfter/time.Second))
 
-// nameExhaustedPagerDutyRevocation writes the one WARN line for a row a route
-// sender just pushed to the worker's attempt limit (the worker's own
-// "provider_oauth_revocations.exhausted" line, id and reason only): the worker
-// no longer claims it, so this is where it is named. Once per row: only the
-// refusal that reaches the limit, never a later one.
-func (h *handlers) nameExhaustedPagerDutyRevocation(ctx context.Context, id uuid.UUID, attempts int) {
-	if attempts != pagerDutyRevocationMaxAttempts {
-		return
-	}
-	h.logger.WarnContext(ctx, "provider_oauth_revocations.exhausted",
-		slog.String("revocation_id", id.String()),
-		slog.Int("attempts", attempts),
-		slog.String("reason", "remote_revoke_failed"))
-}
-
 // enqueuePagerDutySetupRevocation durably records a token PagerDuty just
 // issued, in its own transaction, before the callback does anything else
 // with it.
@@ -92,13 +77,11 @@ VALUES ($1, $2, 'pagerduty', '', 'setup', $3, 'v1', 'pending', 0, now(), now())`
 func (h *handlers) revokePagerDutySetupToken(ctx context.Context, setupID uuid.UUID, tokens providerfoundation.PagerDutyOAuthTokens) {
 	if err := providerfoundation.RevokePagerDutyOAuthToken(ctx, h.httpDoer, h.pagerDuty, tokens.RevocationToken()); err != nil {
 		// The request's own context may be the reason the revoke failed.
-		var attempts int
-		if dbErr := h.store.Pool.QueryRow(context.WithoutCancel(ctx),
-			`UPDATE provider_oauth_revocations SET attempts = attempts + 1, last_error = 'remote_revoke_failed', updated_at = now() WHERE id = $1 RETURNING attempts`, setupID).Scan(&attempts); dbErr != nil {
+		if _, dbErr := h.store.Pool.Exec(context.WithoutCancel(ctx),
+			`UPDATE provider_oauth_revocations SET attempts = attempts + 1, last_error = 'remote_revoke_failed', updated_at = now() WHERE id = $1`, setupID); dbErr != nil {
 			h.logger.ErrorContext(ctx, "admin: recording a refused pagerduty setup revoke failed", slog.String("error", dbErr.Error()))
 			return
 		}
-		h.nameExhaustedPagerDutyRevocation(ctx, setupID, attempts)
 		h.logger.ErrorContext(ctx, "admin: pagerduty setup revoke refused; the token is kept for retry", slog.String("revocation_id", setupID.String()))
 		return
 	}

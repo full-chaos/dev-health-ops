@@ -252,9 +252,8 @@ func pagerDutyRevocationClaimSQL(predicate string) string {
 // predicate selects ($1 is the organisation, further arguments follow). Every
 // sender, the revocation worker included (internal/jobs/providerrevocation),
 // claims with FOR UPDATE SKIP LOCKED: a row another sender holds is mid-call,
-// so it is skipped, never waited on, and the answer is incomplete while it is
-// still owed. A row is deleted only after PagerDuty accepted the revoke; a lost
-// delete may send the same revoke again (at least once).
+// so it is skipped, never waited on and sent again, and the answer is
+// incomplete while it is still owed.
 func (h *handlers) retryPagerDutyRevocationRows(ctx context.Context, orgID, predicate string, args ...any) (bool, error) {
 	query := pagerDutyRevocationClaimSQL(predicate)
 	args = append([]any{orgID}, args...)
@@ -299,11 +298,9 @@ func (h *handlers) retryPagerDutyRevocationRows(ctx context.Context, orgID, pred
 			revokeErr = providerfoundation.RevokePagerDutyOAuthToken(ctx, h.httpDoer, h.pagerDuty, string(plaintext))
 		}
 		if revokeErr != nil {
-			var attempts int
-			if err := tx.QueryRow(ctx, `UPDATE provider_oauth_revocations SET attempts = attempts + 1, last_error = 'remote_revoke_failed', updated_at = now() WHERE id = $1 RETURNING attempts`, row.id).Scan(&attempts); err != nil {
+			if _, err := tx.Exec(ctx, `UPDATE provider_oauth_revocations SET attempts = attempts + 1, last_error = 'remote_revoke_failed', updated_at = now() WHERE id = $1`, row.id); err != nil {
 				return false, err
 			}
-			h.nameExhaustedPagerDutyRevocation(ctx, row.id, attempts)
 			complete = false
 			continue
 		}

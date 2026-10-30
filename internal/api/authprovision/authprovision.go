@@ -303,11 +303,15 @@ func (c *Client) TransferOwnership(ctx context.Context, org, from, to, actor uui
 	return nil
 }
 
-// CreateInvite mints an invite. Request metadata over the route's bound is
-// left out (auth-service then records "{}").
+// CreateInvite mints an invite. An empty description and request metadata
+// over the route's bound are left out (the route refuses an empty text as
+// malformed; auth-service then records its default).
 func (c *Client) CreateInvite(ctx context.Context, in InviteRequest) (Invite, error) {
 	request := map[string]any{"organization_id": in.OrgID.String(), "email": in.Email, "role": in.Role,
-		"ttl_seconds": int64(in.TTL / time.Second), "actor_principal_id": in.Actor.String(), "description": in.Description}
+		"ttl_seconds": int64(in.TTL / time.Second), "actor_principal_id": in.Actor.String()}
+	if in.Description != "" {
+		request["description"] = in.Description
+	}
 	if len(in.RequestMetadata) > 0 && len(in.RequestMetadata) <= maxRequestMetadataBytes {
 		request["request_metadata"] = in.RequestMetadata
 	}

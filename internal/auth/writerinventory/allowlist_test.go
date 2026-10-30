@@ -83,6 +83,8 @@ var Allowlist = []Entry{
 	{File: "internal/auth/identity/backfill.go", Func: "Store.revokeBackfillRole", Table: "auth.platform_role_assignments", Verb: "DELETE"},
 	{File: "internal/auth/identity/backfill_orgs.go", Func: "Store.insertMembership", Table: "auth.memberships", Verb: "INSERT"},
 	{File: "internal/auth/identity/backfill_orgs.go", Func: "Store.updateMembershipRole", Table: "auth.memberships", Verb: "UPDATE"},
+	// acp ruling, CHAOS-11826 (D6484): the orgs backfill fills a missing invited_by / joined_at on an active membership, via audit.Commit.
+	{File: "internal/auth/identity/backfill_orgs.go", Func: "Store.fillMembership", Table: "auth.memberships", Verb: "UPDATE"},
 	{File: "internal/auth/identity/identities.go", Func: "Store.ProvisionFederated", Table: "auth.principals", Verb: "INSERT"},
 	{File: "internal/auth/identity/identities.go", Func: "Store.ProvisionFederated", Table: "auth.users", Verb: "INSERT"},
 	{File: "internal/auth/identity/identities.go", Func: "Store.UnlinkIdentity", Table: "auth.external_identities", Verb: "DELETE"},

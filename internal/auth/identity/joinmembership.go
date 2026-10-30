@@ -50,7 +50,7 @@ var joinPublicMembershipColumns = []string{"id", "user_id", "org_id", "role", "j
 //
 // It locks the auth principal row, then the public.users row (the lock
 // go-api's own JIT join takes), then the auth organization row FOR SHARE: the
-// order every membership writer uses, so the joins and membership changes of
+// auth lock order (membership.Store readPairs), so the joins and membership changes of
 // one account run one after the other. A missing auth organization is
 // ErrOrganizationNotFound and a suspended one ErrOrganizationSuspended; neither
 // writes. A public row in the
@@ -77,7 +77,7 @@ func (s *Store) insertJoinMembership(ctx context.Context, tx audit.TxOps, m memb
 		return ErrBackfillRole
 	}
 	var locked uuid.UUID
-	// The principal row first, then the public.users row: the one lock order
+	// The principal row first, then the public.users row: the auth lock order
 	// of every membership writer (internal/auth/membership), whatever the
 	// caller already holds.
 	err := tx.QueryRow(ctx, `SELECT id FROM `+s.q+`.principals WHERE id = $1 FOR UPDATE`, m.Principal).Scan(&locked)

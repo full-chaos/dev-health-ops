@@ -239,3 +239,10 @@ func (h handlers) sendAccountExists(ctx context.Context, user *userRow) error {
 		"reset_url":  h.Mail.BaseURL() + "/auth/forgot-password",
 	})
 }
+
+// refreshOrgGone reports the refresh token write's foreign key violation on
+// its organization: the organization row is gone.
+func refreshOrgGone(err error) bool {
+	var pg *pgconn.PgError
+	return errors.As(err, &pg) && pg.Code == "23503" && pg.ConstraintName == "refresh_tokens_org_id_fkey"
+}

@@ -203,6 +203,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		// The api's own ClickHouse login: organization activity.
 		ClickHouse: deps.ClickHouse, Limits: limits, Write: WriteError, OAuth: deps.SessionOAuth, Logger: logger,
 		Mail: deps.Invites, RegisterLimit: deps.RegisterLimit, Inner: proxy.inner, Issuer: deps.SessionIssuer,
+		Provision: deps.OrgProvisioner,
 	})...)
 	if deps.Guard != nil {
 		routes = append(routes, orgs.Routes(deps.Pool, deps.Guard, logger)...)
@@ -267,6 +268,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			Invites:        deps.Invites,
 			UsersOwned:     deps.UsersOwned,
 			OrgReactivator: deps.OrgReactivator,
+			OrgProvisioner: deps.OrgProvisioner,
 			OrgSuspender:   deps.OrgSuspender,
 		})...)
 	}
@@ -402,6 +404,11 @@ func configureWith(
 	}
 	if orgClient != nil {
 		deps.OrgReactivator, deps.OrgSuspender = orgClient, orgClient
+	}
+	deps.OrgProvisioner, err = orgProvisioner(authProxy, envsecrets.ProcessLookup)
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_org_provisioning", "api_org_provisioning_config_invalid", err)
 	}
 	var scope []func(http.Handler) http.Handler
 	if deps.Pool != nil {

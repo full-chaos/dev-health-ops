@@ -119,6 +119,9 @@ func (h handlers) refresh(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		if done := h.refuseRevokedOfAGoneMember(w, r, tx, record, userIDText, orgIDText); done {
+			return
+		}
 		if err := revokeFamily(ctx, tx, record.FamilyID, h.Now()); err != nil {
 			h.fail(w, r, "revoke family", err)
 			return
@@ -320,6 +323,51 @@ func (h handlers) refreshRole(w http.ResponseWriter, r *http.Request, tx pgx.Tx,
 		return "member", true
 	}
 	return roleText(role), true
+}
+
+// refuseRevokedOfAGoneMember answers a revoked token with no live successor
+// whose (non-superuser) user has no membership in the token's org any more
+// (a member removal revokes the org's tokens, D6507) with the not-a-member
+// refusal of refreshRole instead of the reuse branch. It returns true when it
+// answered; false keeps the reuse branch unchanged.
+func (h handlers) refuseRevokedOfAGoneMember(w http.ResponseWriter, r *http.Request, tx pgx.Tx, record *refreshRecord, userIDText, orgIDText string) bool {
+	if orgIDText == "" {
+		return false
+	}
+	ctx := r.Context()
+	if record.SuccessorJTI != nil {
+		successor, err := refreshByHash(ctx, tx, *record.SuccessorJTI, false)
+		if err != nil {
+			h.fail(w, r, "load successor", err)
+			return true
+		}
+		if successor != nil && successor.RevokedAt == nil {
+			return false
+		}
+	}
+	userID, okUser := policy.ParsePyUUID(userIDText)
+	orgID, okOrg := policy.ParsePyUUID(orgIDText)
+	if !okUser || !okOrg {
+		return false
+	}
+	user, err := userByID(ctx, tx, userID)
+	if err != nil {
+		h.fail(w, r, "load user", err)
+		return true
+	}
+	if user == nil || user.IsSuperuser {
+		return false
+	}
+	_, found, err := membershipRole(ctx, tx, user.ID, orgID)
+	if err != nil {
+		h.fail(w, r, "membership role", err)
+		return true
+	}
+	if found {
+		return false
+	}
+	_, ok := h.refreshRole(w, r, tx, user, record, userIDText, orgIDText)
+	return !ok
 }
 
 // replaySuccessor is the grace-window branch: when the successor is still

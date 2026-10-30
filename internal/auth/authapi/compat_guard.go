@@ -20,6 +20,10 @@ type userStateOn interface {
 	StateOn(ctx context.Context, q session.Queryer, userID uuid.UUID) (UserState, bool, error)
 }
 
+type userRoleOn interface {
+	RoleOn(ctx context.Context, q session.Queryer, userID, orgID uuid.UUID) (*string, bool, error)
+}
+
 // refreshGuard refuses a refresh whose user is missing or inactive, whose
 // session pin is missing or stale, or whose organization membership is gone
 // (a non-superuser), before the credential is rotated. The
@@ -44,7 +48,12 @@ func (h compatHandlers) refreshGuard(ctx context.Context, q session.Queryer, rec
 	if record.OrganizationID != nil && !user.IsSuperuser {
 		// A session whose organization membership is gone (D6507) is not
 		// rotated; the handler refuses and revokes it.
-		_, member, err := h.Users.Role(ctx, record.PrincipalID, *record.OrganizationID)
+		var member bool
+		if on, ok := h.Users.(userRoleOn); ok {
+			_, member, err = on.RoleOn(ctx, q, record.PrincipalID, *record.OrganizationID)
+		} else {
+			_, member, err = h.Users.Role(ctx, record.PrincipalID, *record.OrganizationID)
+		}
 		if err != nil {
 			return err
 		}

@@ -57,6 +57,8 @@ func isOrganizationRole(role string) bool {
 type Actor struct {
 	PrincipalID *uuid.UUID
 	RequestID   *string
+	// Caller is the credential the request came with; the audit row names it.
+	Caller audit.Caller
 }
 
 // state is the effective membership of one (organization, principal) pair.
@@ -223,6 +225,7 @@ func auditFor(v verb, orgID, principalID, id uuid.UUID, a Actor, prev, next stat
 		actor := a.PrincipalID.String()
 		ev.ActorPrincipalID = &actor
 	}
+	a.Caller.Annotate(ev.Attributes)
 	switch v {
 	case verbAdd:
 		ev.Attributes["reason_code"] = "membership_added"

@@ -516,6 +516,38 @@ func TestCompatLoginRefusalsAnswerGoAPIsWireAndAreAudited(t *testing.T) {
 	}
 }
 
+// A refused sign-in whose principal cannot be projected is audited in the
+// shape of an unknown address's row (no subject, no organization) plus the
+// principal id as the principal_id attribute, and nothing else differs.
+func TestARefusedSignInWhosePrincipalCannotBeProjectedIsAuditedLikeAnUnknownAddressWithItsPrincipalID(t *testing.T) {
+	unknown := newCompatFixture(t)
+	unknown.do(http.MethodPost, PatternCompatLogin, loginBody("nobody@example.com", "x", ""), nil)
+	known := newCompatFixture(t)
+	known.projector.userErr = errors.New("projection store down")
+	known.do(http.MethodPost, PatternCompatLogin, loginBody(compatEmail, "wrong", ""), nil)
+	if len(unknown.appended) != 1 || len(known.appended) != 1 {
+		t.Fatalf("audit rows unknown %d, known %d, want one each", len(unknown.appended), len(known.appended))
+	}
+	u, k := unknown.appended[0], known.appended[0]
+	if k.Attributes["principal_id"] != known.principal.String() {
+		t.Fatalf("principal_id %v, want %s", k.Attributes["principal_id"], known.principal)
+	}
+	attributes := map[string]any{}
+	for key, value := range k.Attributes {
+		if key != "principal_id" {
+			attributes[key] = value
+		}
+	}
+	u.RequestID, k.RequestID = nil, nil
+	k.Attributes = attributes
+	if !reflect.DeepEqual(u, k) {
+		t.Fatalf("the rows differ beyond principal_id:\nunknown %+v\nknown   %+v", u, k)
+	}
+	if err := audit.ValidateAttributes(known.appended[0].Attributes); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCompatLoginAuditsAKnownUsersFailureAtTheirFirstMembership(t *testing.T) {
 	f := newCompatFixture(t)
 	f.do(http.MethodPost, PatternCompatLogin, loginBody(compatEmail, "wrong", ""), nil)
@@ -1378,8 +1410,8 @@ func TestARefusedSignInAnswersTheSameForAnUnknownAndAKnownAddressUnderAStoreFaul
 					t.Errorf("%s: the known row names organization %s, want none", label, *row.OrganizationID)
 				}
 			case "principal projection":
-				if row.SubjectPrincipalID != nil {
-					t.Errorf("%s: the known row names subject %s, want none", label, *row.SubjectPrincipalID)
+				if row.SubjectPrincipalID != nil || row.OrganizationID != nil || row.Attributes["principal_id"] != kf.principal.String() {
+					t.Errorf("%s: the known row is %+v, want no subject, no organization and principal_id %s", label, row, kf.principal)
 				}
 			}
 			logs := kf.logs.String()

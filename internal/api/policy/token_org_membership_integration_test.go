@@ -22,7 +22,7 @@ import (
 // that row's role is owner or admin: a demotion and a removal take effect on
 // the next request with the same access token, and a re-added member is
 // served again. The read is one per request behind ReadOnce, and it is served
-// by the unique (user_id, org_id) key.
+// by an index on user_id.
 func TestTokenOrgMembershipIsTheLivePublicRow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -86,35 +86,72 @@ func TestTokenOrgMembershipIsTheLivePublicRow(t *testing.T) {
 		t.Fatalf("re-added as owner: %d %q, want 200", got.status, got.body)
 	}
 
-	// The read is served by the unique (user_id, org_id) key at a realistic
-	// size: one indexed row lookup per request.
+	// At a realistic shape (each user in 1 to 3 of 20 orgs, and one org of
+	// 50000 members) the read is an index read on user_id, bounded by the
+	// user's own memberships: no plan filters user_id out of an org-wide scan.
+	if _, err := pool.Exec(ctx, `
+WITH o AS (INSERT INTO organizations (id, slug, name, tier, is_active, created_at, updated_at)
+           SELECT gen_random_uuid(), 'o-' || g, 'o ' || g, 'free', true, now(), now() FROM generate_series(1, 20) g RETURNING id),
+     oa AS (SELECT array_agg(id ORDER BY id) AS a FROM o),
+     u AS (INSERT INTO users (id, email, created_at, updated_at)
+           SELECT gen_random_uuid(), gen_random_uuid()::text || '@example.test', now(), now() FROM generate_series(1, 2000) RETURNING id),
+     un AS (SELECT id, row_number() OVER (ORDER BY id) AS n FROM u)
+INSERT INTO memberships (id, user_id, org_id, role, created_at)
+SELECT gen_random_uuid(), un.id, oa.a[((un.n + k) % 20)::int + 1], 'member', now()
+FROM un, oa, unnest(ARRAY[0, 7, 13]) AS k
+WHERE k = 0 OR (k = 7 AND un.n % 3 >= 1) OR (k = 13 AND un.n % 3 = 2)`); err != nil {
+		t.Fatal(err)
+	}
+	big := uuid.New()
+	pgseed.Org(ctx, t, pool, big.String(), "free")
 	if _, err := pool.Exec(ctx, `
 WITH u AS (INSERT INTO users (id, email, created_at, updated_at)
-           SELECT gen_random_uuid(), gen_random_uuid()::text || '@example.test', now(), now() FROM generate_series(1, 2000) RETURNING id),
-     o AS (INSERT INTO organizations (id, slug, name, tier, is_active, created_at, updated_at)
-           SELECT gen_random_uuid(), 'o-' || g, 'o ' || g, 'free', true, now(), now() FROM generate_series(1, 20) g RETURNING id)
+           SELECT gen_random_uuid(), gen_random_uuid()::text || '@example.test', now(), now() FROM generate_series(1, 50000) RETURNING id)
 INSERT INTO memberships (id, user_id, org_id, role, created_at)
-SELECT gen_random_uuid(), u.id, o.id, 'member', now() FROM u CROSS JOIN o`); err != nil {
+SELECT gen_random_uuid(), u.id, $1::uuid, 'member', now() FROM u`, big); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `ANALYZE memberships`); err != nil {
 		t.Fatal(err)
 	}
-	var plan strings.Builder
-	rows, err := pool.Query(ctx, `EXPLAIN SELECT role FROM memberships WHERE user_id = $1 AND org_id = $2 LIMIT 1`, user, org)
-	if err != nil {
+	var bigMember uuid.UUID
+	if err := pool.QueryRow(ctx, `SELECT user_id FROM memberships WHERE org_id = $1 LIMIT 1`, big).Scan(&bigMember); err != nil {
 		t.Fatal(err)
 	}
-	for rows.Next() {
-		var line string
-		if err := rows.Scan(&line); err != nil {
+	for _, read := range []struct {
+		name      string
+		user, org uuid.UUID
+	}{{"the token's member", user, org}, {"a member of the 50000-member org", bigMember, big}} {
+		rows, err := pool.Query(ctx, "EXPLAIN "+membershipSQL, read.user, read.org)
+		if err != nil {
 			t.Fatal(err)
 		}
-		plan.WriteString(line + "\n")
-	}
-	rows.Close()
-	t.Logf("membership read plan:\n%s", plan.String())
-	if !strings.Contains(plan.String(), "uq_membership_user_org") {
-		t.Fatalf("the membership read is not served by uq_membership_user_org:\n%s", plan.String())
+		var plan []string
+		for rows.Next() {
+			var line string
+			if err := rows.Scan(&line); err != nil {
+				t.Fatal(err)
+			}
+			plan = append(plan, line)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		text := strings.Join(plan, "\n")
+		t.Logf("membership read plan, %s:\n%s", read.name, text)
+		userIndexed := false
+		for _, line := range plan {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "Index Cond:") && strings.Contains(line, "user_id") {
+				userIndexed = true
+			}
+			if strings.HasPrefix(line, "Filter:") && strings.Contains(line, "user_id") {
+				t.Fatalf("%s: the membership read filters user_id out of a wider scan:\n%s", read.name, text)
+			}
+		}
+		if !userIndexed {
+			t.Fatalf("%s: the membership read has no index condition on user_id:\n%s", read.name, text)
+		}
 	}
 }

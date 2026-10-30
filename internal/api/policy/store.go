@@ -136,14 +136,14 @@ func (s PGStore) UserState(ctx context.Context, id uuid.UUID) (UserState, bool, 
 	return state, true, nil
 }
 
+const membershipSQL = `SELECT role FROM memberships WHERE user_id = $1 AND org_id = $2 LIMIT 1`
+
 // Membership is user_is_member_of_org's query, reading the row's role too:
 // the existence answers the membership check, the role is the user's role in
 // that org. A NULL role reads as "".
 func (s PGStore) Membership(ctx context.Context, userID, orgID uuid.UUID) (string, bool, error) {
 	var role *string
-	err := s.Pool.QueryRow(ctx,
-		`SELECT role FROM memberships WHERE user_id = $1 AND org_id = $2 LIMIT 1`, userID, orgID,
-	).Scan(&role)
+	err := s.Pool.QueryRow(ctx, membershipSQL, userID, orgID).Scan(&role)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", false, nil
 	}

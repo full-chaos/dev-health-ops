@@ -11,7 +11,7 @@ import (
 
 func TestQueryAPIPostureHoldsMembershipsAsThreeColumnsAndNothingInTheAuthMembershipTables(t *testing.T) {
 	t.Parallel()
-	if got := queryAPIAuthSurfaceDefects(QueryAPIPosture(), QueryAPISessionReadFor("auth")); len(got) != 0 {
+	if got := queryAPIAuthSurfaceDefects(QueryAPIPosture(), QueryAPISessionReadFor("auth", false)); len(got) != 0 {
 		t.Fatalf("the declared query-api posture breaks the membership read pin: %q", got)
 	}
 }
@@ -54,7 +54,7 @@ func TestTheMembershipSurfaceCheckRefusesEachPlantedWidening(t *testing.T) {
 		p := QueryAPIPosture()
 		p.RequiredTables = append([]TablePrivilege{}, p.RequiredTables...)
 		p.ColumnScoped = append([]ColumnPrivilege{}, p.ColumnScoped...)
-		s := QueryAPISessionReadFor("auth")
+		s := QueryAPISessionReadFor("auth", false)
 		c.mutate(&p, &s)
 		got := strings.Join(queryAPIAuthSurfaceDefects(p, s), "\n")
 		if got == "" {

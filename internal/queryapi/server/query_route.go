@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/chclient"
 	"io"
 	"log"
@@ -6150,28 +6151,51 @@ func queryAPIPostureCheckWith(
 	return func(context.Context) error { return cached.CheckNoWait() }
 }
 
-// queryAPISessionRead is the auth session read the role must hold while
-// auth-service owns sessions (AUTH_PROXY_SESSIONS, read as go-api reads it), or
-// nil when the flag is off. The schema is AUTH_DATABASE_SCHEMA, the one the
-// session check reads.
+// queryAPISessionRead is the auth read the role must hold while auth-service
+// owns sessions (AUTH_PROXY_SESSIONS, read as go-api reads it), or nil when the
+// flag is off. While auth-service also owns the platform roles
+// (AUTH_PLATFORM_ROLES_OWNED, rule.OwnedFromLookup) it carries the
+// platform role read, which needs the session read. The schema is
+// AUTH_DATABASE_SCHEMA, the one the session check reads.
 func queryAPISessionRead(getenv getenvFunc) (*postgresstore.QueryAPISessionRead, error) {
-	raw := strings.TrimSpace(getenv("AUTH_PROXY_SESSIONS"))
-	if raw == "" {
-		return nil, nil
-	}
-	on, err := strconv.ParseBool(raw)
+	platformRolesOwned, err := queryAPIPlatformRolesOwned(getenv)
 	if err != nil {
-		return nil, fmt.Errorf("AUTH_PROXY_SESSIONS must be true or false")
+		return nil, err
+	}
+	raw := strings.TrimSpace(getenv("AUTH_PROXY_SESSIONS"))
+	on := false
+	if raw != "" {
+		if on, err = strconv.ParseBool(raw); err != nil {
+			return nil, fmt.Errorf("AUTH_PROXY_SESSIONS must be true or false")
+		}
 	}
 	if !on {
+		if platformRolesOwned {
+			return nil, fmt.Errorf("%s is on: AUTH_PROXY_SESSIONS must be on too", rule.OwnedEnv)
+		}
 		return nil, nil
 	}
 	schema, err := policy.AuthSchemaFromEnv(getenv)
 	if err != nil {
 		return nil, err
 	}
-	read := postgresstore.QueryAPISessionReadFor(schema)
+	read := postgresstore.QueryAPISessionReadFor(schema, platformRolesOwned)
 	return &read, nil
+}
+
+// platformRolesOwnedEnv is rule.OwnedEnv, spelled here so the settings census
+// can resolve the name the routes read.
+const platformRolesOwnedEnv = "AUTH_PLATFORM_ROLES_OWNED"
+
+// queryAPIPlatformRolesOwned reads AUTH_PLATFORM_ROLES_OWNED through the one parse.
+func queryAPIPlatformRolesOwned(getenv getenvFunc) (bool, error) {
+	value := getenv(platformRolesOwnedEnv)
+	return rule.OwnedFromLookup(func(name string) (string, bool) {
+		if name != platformRolesOwnedEnv {
+			return "", false
+		}
+		return value, value != ""
+	})
 }
 
 // queryAPIRiverSchema is the River schema the posture check asserts the role

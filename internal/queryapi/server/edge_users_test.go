@@ -311,3 +311,5 @@ func TestOrglessEdgeTokenNeverReachesAPlantedRoute(t *testing.T) {
 		})
 	}
 }
+
+func (fakeEdgeUsers) ReadsPlatformRoles() bool { return false }

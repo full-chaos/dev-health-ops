@@ -32,6 +32,7 @@
 package sso
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"time"
@@ -59,13 +60,11 @@ type Deps struct {
 	Logger *slog.Logger
 	// Now stamps updated_at; nil means time.Now.
 	Now func() time.Time
-	// Write renders the 404 and 405 the two-segment /oauth dispatcher
-	// answers; nil means httpapi.WriteError.
+	// Write renders the 404 and 405 of the two-segment /oauth dispatcher; nil means httpapi.WriteError.
 	Write httpapi.ErrorWriter
 
-	// The following four are used only by initiateOIDCAuth and
-	// oidcCallback (CHAOS-6658); the other 15 routes are still the
-	// license-shim gated() serves and need none of them.
+	// The following four are used only by initiateOIDCAuth and oidcCallback (CHAOS-6658); the other 15
+	// routes are still the license-shim gated() serves and need none of them.
 
 	// Cipher decrypts sso_providers.encrypted_secrets' client_secret the
 	// way core.encryption.decrypt_value does; nil or unconfigured leaves
@@ -97,10 +96,11 @@ type Deps struct {
 	// and its body checks in front stay. It gets the full route pattern; nil
 	// serves local.
 	Inner func(pattern string, local http.Handler) http.Handler
-	// Issuer, set when auth-service owns sessions (AUTH_PROXY_SESSIONS),
-	// issues the SSO login's token pair; go-api then mints none and writes
-	// no refresh_tokens row. nil mints in go-api.
+	// Issuer, set when auth-service owns sessions (AUTH_PROXY_SESSIONS), issues the SSO login's
+	// token pair; go-api then mints none and writes no refresh_tokens row. nil mints in go-api.
 	Issuer sessionissue.Issuer
+	// PlatformRoles is how the sign-in reads take is_superuser (AUTH_PLATFORM_ROLES_OWNED).
+	PlatformRoles policy.PlatformRoleRead
 }
 
 type handlers struct{ Deps }
@@ -293,4 +293,24 @@ func newHandlers(deps Deps) handlers {
 		deps.HTTPClient = defaultOIDCClient()
 	}
 	return handlers{deps}
+}
+
+// userReadSQL is the sign-in read of a users row by id: columns, then
+// is_superuser (by the platform roles switch) and token_version.
+func (h handlers) userReadSQL(columns string) (string, error) {
+	superuser, err := h.PlatformRoles.Superuser("is_superuser", "users.id")
+	if err != nil {
+		return "", err
+	}
+	return `SELECT ` + columns + superuser + `, token_version
+FROM users WHERE id = $1::uuid`, nil
+}
+
+// signInUser reads a sign-in's users row by id into dest (userReadSQL).
+func (h handlers) signInUser(ctx context.Context, columns string, userID any, dest ...any) error {
+	query, err := h.userReadSQL(columns)
+	if err != nil {
+		return err
+	}
+	return h.Pool.QueryRow(ctx, query, userID).Scan(dest...)
 }

@@ -13,16 +13,24 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
-// activeSQL is the current-state rule of an assignment, on the database clock
-// of the statement that reads it (a guard statement runs after the write
-// lock, so the wait for the lock is not counted as earlier time): a user
-// principal that is not disabled, and an assignment that has not expired. r is
-// the assignment row, p its principal.
-const activeSQL = `(p.kind = 'user' AND p.disabled_at IS NULL AND (r.expires_at IS NULL OR r.expires_at > statement_timestamp()))`
+// activeSQL is the store's current-state rule (rule.ActiveRule) over its own
+// aliases: r the assignment, p its principal. It is read on the database clock
+// of the statement that reads it, and a guard statement runs after the write
+// lock, so the wait for the lock is not counted as earlier time.
+var activeSQL = rule.ActiveRule("r", "p")
+
+// HoldsSQL is the one SQL condition that principalExpr holds the platform role
+// roleExpr now, under the store's rule; it is rule.HoldsSQL. schema is a quoted
+// auth schema; principalExpr and roleExpr are SQL expressions of the caller's
+// own statement.
+func HoldsSQL(schema, principalExpr, roleExpr string) string {
+	return rule.HoldsSQL(schema, principalExpr, roleExpr)
+}
 
 // writeLock is the advisory transaction lock every grant and revoke takes
 // first, so the store's writes run one at a time.

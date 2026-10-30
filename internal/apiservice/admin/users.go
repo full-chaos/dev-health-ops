@@ -273,6 +273,10 @@ func (h *handlers) createUser(w http.ResponseWriter, r *http.Request) {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 		return
 	}
+	if refuseSuperuserWhileOwned(h.store.PlatformRolesOwned, isSuperuser) != nil {
+		writePlatformRolesOwned(w)
+		return
+	}
 	if password != "" && refusePasswordPolicy(w, password) {
 		return
 	}
@@ -342,6 +346,9 @@ func (h *handlers) createUser(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case err == ErrUsersOwned:
 			writeUsersOwned(w)
+			return nil
+		case err == ErrPlatformRolesOwned:
+			writePlatformRolesOwned(w)
 			return nil
 		case err == errEmailExists:
 			policy.WriteDetail(w, http.StatusBadRequest, "User with email "+email+" already exists", nil)
@@ -436,6 +443,10 @@ func (h *handlers) updateUser(w http.ResponseWriter, r *http.Request) {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 		return
 	}
+	if refuseSuperuserWhileOwned(h.store.PlatformRolesOwned, patch.IsSuperuser != nil) != nil {
+		writePlatformRolesOwned(w)
+		return
+	}
 	existing, err := h.store.fullUserByID(ctx, targetID)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "admin: update user lookup failed", "error", err)
@@ -463,6 +474,9 @@ func (h *handlers) updateUser(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case err == ErrUsersOwned:
 			writeUsersOwned(w)
+			return nil
+		case err == ErrPlatformRolesOwned:
+			writePlatformRolesOwned(w)
 			return nil
 		case err == errEmailExists:
 			policy.WriteDetail(w, http.StatusBadRequest, "Email "+deref(patch.Email)+" already in use", nil)

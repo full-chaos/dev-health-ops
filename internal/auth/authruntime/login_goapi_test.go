@@ -147,3 +147,5 @@ func TestGoAPIProxiedLoginAnswers503WhileTheLockoutKeyIsUnsetAlsoOnTheRollbackCo
 		t.Fatalf("auth-service limiter hit %d times; want 0", hits.Load())
 	}
 }
+
+func (goAPIScopeStore) ReadsPlatformRoles() bool { return false }

@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -423,5 +424,167 @@ func TestAnExchangeAfterTheRemovalIsRefused(t *testing.T) {
 	}
 	if !s.sessionEnded(t, ctx, issued.Session.ID) {
 		t.Fatal("the session is not ended")
+	}
+}
+
+// holdingEnder holds the removal's transaction open after EndOrgInTx wrote:
+// the session row stays locked by the uncommitted removal until proceed.
+type holdingEnder struct {
+	*session.Store
+	held, proceed chan struct{}
+}
+
+func (h holdingEnder) EndOrgInTx(ctx context.Context, tx audit.TxOps, principalID, organizationID uuid.UUID) (session.Ended, error) {
+	ended, err := h.Store.EndOrgInTx(ctx, tx, principalID, organizationID)
+	close(h.held)
+	<-h.proceed
+	return ended, err
+}
+
+// waiters counts the backends of this database that wait on a lock.
+func (s *sessionEnv) waiters(t *testing.T, ctx context.Context) int {
+	t.Helper()
+	return s.count(t, ctx, `SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+WHERE NOT l.granted AND a.datname = current_database()`)
+}
+
+// An Exchange that starts while the uncommitted removal holds the session waits
+// for it, and when the removal commits it is refused and mints nothing.
+func TestAnExchangeWaitingOnTheRemovalIsRefusedWhenTheRemovalCommits(t *testing.T) {
+	s := newSessionEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	org, user, owner := s.seedOrg(t, ctx), s.seedUser(t, ctx), s.seedUser(t, ctx)
+	s.add(t, ctx, org, owner, "owner")
+	s.add(t, ctx, org, user, "member")
+	issued, err := s.sessions.Create(ctx, user, &org, []string{"pwd"})
+	if err != nil {
+		t.Fatalf("session Create: %v", err)
+	}
+	schema, err := authschema.NewValidatedIdentifier("auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ender := holdingEnder{Store: s.sessions, held: make(chan struct{}), proceed: make(chan struct{})}
+	var once sync.Once
+	release := func() { once.Do(func() { close(ender.proceed) }) }
+	defer release()
+	members, err := New(Config{Pool: s.runtime, Schema: schema, OwnsUsers: true, Sessions: ender})
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed := make(chan error, 1)
+	go func() {
+		_, err := members.Remove(ctx, Change{OrgID: org, PrincipalID: user, Authorize: allowAll})
+		removed <- err
+	}()
+	select {
+	case <-ender.held:
+	case err := <-removed:
+		t.Fatalf("Remove ended before it held the session: %v", err)
+	case <-ctx.Done():
+		t.Fatal("the removal never held the session")
+	}
+	type answer struct {
+		result session.Result
+		err    error
+	}
+	exchanged := make(chan answer, 1)
+	go func() {
+		result, err := s.sessions.Exchange(ctx, issued.Credential)
+		exchanged <- answer{result, err}
+	}()
+	for s.waiters(t, ctx) != 1 {
+		select {
+		case got := <-exchanged:
+			t.Fatalf("Exchange answered %q (%v) without waiting for the removal", got.result.Reason, got.err)
+		default:
+		}
+	}
+	release()
+	if err := <-removed; err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	got := <-exchanged
+	if got.err != nil {
+		t.Fatalf("Exchange: %v", got.err)
+	}
+	if got.result.Reason != session.ReasonSessionRevoked {
+		t.Fatalf("Exchange after the removal committed = %q, want %q", got.result.Reason, session.ReasonSessionRevoked)
+	}
+	if n := s.count(t, ctx, `SELECT count(*) FROM auth.refresh_credentials WHERE session_id = $1`, issued.Session.ID); n != 1 {
+		t.Fatalf("credentials of the session = %d, want 1 (nothing minted)", n)
+	}
+	if !s.sessionEnded(t, ctx, issued.Session.ID) {
+		t.Fatal("the session is not ended")
+	}
+}
+
+// legacyToken seeds a live go-api refresh token in a family and returns its id and jti.
+func (s *sessionEnv) legacyToken(t *testing.T, ctx context.Context, user uuid.UUID, org *uuid.UUID, family uuid.UUID) (uuid.UUID, string) {
+	t.Helper()
+	id := uuid.New()
+	jti := id.String()
+	digest := sha256.Sum256([]byte(jti))
+	if _, err := s.admin.Exec(ctx, `INSERT INTO public.refresh_tokens (id, user_id, org_id, token_hash, family_id, expires_at, created_at)
+		VALUES ($1, $2, $3, $4, $5, now() + interval '1 day', now())`, id, user, org, hex.EncodeToString(digest[:]), family); err != nil {
+		t.Fatalf("seed go-api refresh token: %v", err)
+	}
+	return id, jti
+}
+
+// A go-api refresh token the removal revoked is presented at once, inside
+// GraceWindow of that revocation: it is refused as reuse, whether or not it was
+// exchanged before, no session is minted or replayed, and its family is revoked
+// (the family's row of another organization, which the removal left live).
+func TestAGoAPIRefreshTokenTheRemovalRevokedIsRefusedInsideTheGraceWindow(t *testing.T) {
+	for name, exchangedFirst := range map[string]bool{"never exchanged": false, "exchanged before the removal": true} {
+		t.Run(name, func(t *testing.T) {
+			s := newSessionEnv(t)
+			ctx := context.Background()
+			org, other, user, owner := s.seedOrg(t, ctx), s.seedOrg(t, ctx), s.seedUser(t, ctx), s.seedUser(t, ctx)
+			s.add(t, ctx, org, owner, "owner")
+			s.add(t, ctx, other, owner, "owner")
+			s.add(t, ctx, org, user, "member")
+			s.add(t, ctx, other, user, "member")
+			family := uuid.New()
+			token, jti := s.legacyToken(t, ctx, user, &org, family)
+			sibling, _ := s.legacyToken(t, ctx, user, &other, family)
+			legacy := session.LegacyRefresh{PrincipalID: user, OrganizationID: &org, JTI: contracts.NewSecretString(jti)}
+			var first uuid.UUID
+			if exchangedFirst {
+				result, err := s.sessions.ExchangeLegacy(ctx, legacy)
+				if err != nil || result.Reason != session.ReasonAccepted {
+					t.Fatalf("first ExchangeLegacy = %q, %v", result.Reason, err)
+				}
+				first = result.Issued.Session.ID
+			}
+			if _, err := s.members.Remove(ctx, Change{OrgID: org, PrincipalID: user, Authorize: allowAll}); err != nil {
+				t.Fatalf("Remove: %v", err)
+			}
+			if !s.goTokenRevoked(t, ctx, token) {
+				t.Fatal("the removal left the go-api refresh token live")
+			}
+			if s.goTokenRevoked(t, ctx, sibling) {
+				t.Fatal("the removal revoked the family's row of another organization")
+			}
+			if exchangedFirst && !s.sessionEnded(t, ctx, first) {
+				t.Fatal("the removal left the exchanged session live")
+			}
+			sessions := s.count(t, ctx, `SELECT count(*) FROM auth.sessions WHERE principal_id = $1`, user)
+			result, err := s.sessions.ExchangeLegacy(ctx, legacy)
+			if err != nil {
+				t.Fatalf("ExchangeLegacy after the removal: %v", err)
+			}
+			if result.Reason != session.ReasonRefreshReused {
+				t.Fatalf("ExchangeLegacy after the removal = %q, want %q", result.Reason, session.ReasonRefreshReused)
+			}
+			if after := s.count(t, ctx, `SELECT count(*) FROM auth.sessions WHERE principal_id = $1`, user); after != sessions {
+				t.Fatalf("sessions of the member %d -> %d, want no new session", sessions, after)
+			}
+			if !s.goTokenRevoked(t, ctx, sibling) {
+				t.Fatal("the family was not revoked")
+			}
+		})
 	}
 }

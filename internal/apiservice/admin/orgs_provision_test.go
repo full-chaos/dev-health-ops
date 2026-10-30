@@ -19,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/audit"
 	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity/emailvalidator"
 )
 
 var (
@@ -483,7 +484,7 @@ func TestProvisionRefusalsMapToTodaysAnswers(t *testing.T) {
 			{refusedWith(404, "organization_not_found"), 404, provDetail("Organization not found")},
 			{refusedWith(400, "role_invalid"), 400, provDetail("Invalid role: member")},
 			{refusedWith(403, "admin_required"), 403, provDetail("Admin access required for organization")},
-			{refusedWith(400, "email_invalid"), 503, provUnavailable},
+			{refusedWith(400, "email_invalid"), 400, provDetail("value is not a valid email address")},
 		}, unavailable...),
 	}
 	for _, route := range provisionRoutes {
@@ -533,6 +534,29 @@ func TestProvisionLocalRefusalsMakeNoAuthCall(t *testing.T) {
 		code, body := callRoute(newProvisionHandlers(db, auth), tc.route)
 		if code != tc.code || body != tc.body || len(auth.calls) != 0 {
 			t.Fatalf("%s %s: %d %s calls %v, want %d %s and no call", tc.route.name, tc.route.body, code, body, auth.calls, tc.code, tc.body)
+		}
+	}
+}
+
+// auth's email_invalid is a client error: 400 with go-api's invalid-email
+// text, never the 503 that invites a retry. When go-api's own validator also
+// refuses the address, its reason is named, as the request validators do.
+func TestProvisionInviteEmailRefusalIsAClientError(t *testing.T) {
+	for _, email := range []string{"new@example.com", "no-at-sign"} {
+		db := &provisionDB{rows: provisionRowsFor()}
+		auth := &fakeProvisioner{db: db, err: refusedWith(400, "email_invalid")}
+		h := newProvisionHandlers(db, auth)
+		r := answerWith(h.createOrgInvite, http.MethodPost, func(req *http.Request) *http.Request {
+			req = req.WithContext(policy.WithUser(req.Context(), &policy.User{IsSuperuser: true, UserID: validUUID, ID: provActor}))
+			req = pathValues("org_id", provOrg.String())(req)
+			return req.WithContext(context.WithValue(req.Context(), inviteInputKey{}, inviteInput{Email: email, Role: "member"}))
+		})
+		want := "value is not a valid email address"
+		if _, reason, ok := emailvalidator.ValidateEmail([]rune(email)); !ok {
+			want += ": " + reason
+		}
+		if r.Code != http.StatusBadRequest || strings.TrimSpace(r.Body.String()) != provDetail(want) || len(auth.calls) != 1 {
+			t.Fatalf("%s: %d %s calls %v, want 400 %s", email, r.Code, r.Body.String(), auth.calls, provDetail(want))
 		}
 	}
 }

@@ -400,7 +400,7 @@ func composePort(p any) doc {
 	return doc{"mode": "ingress", "host_ip": parts[1], "published": parts[2], "target": t, "protocol": proto}
 }
 
-var composeRequiredRe = regexp.MustCompile(`\$\{([A-Za-z_]+):\?`)
+var composeRequiredRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*):?\?`)
 
 func composeRequired(g *guard) []string {
 	seen := map[string]bool{}

@@ -203,3 +203,35 @@ func TestComposeBugsinkFileFindingsReadsTheFile(t *testing.T) {
 		})
 	}
 }
+
+func TestComposeRequiredVariablesReachTheShapeCheck(t *testing.T) {
+	base := []string{"BIGBOY_DHO_IMAGE", "DHO_API_CH_USERS_XML"}
+	head := "services:\n  bugsink:\n    env_file:\n    - path: " + composeBugsinkEnvFile + "\n      required: true\n  web:\n    environment:\n" +
+		"      A: ${BIGBOY_DHO_IMAGE:?set}\n      B: ${DHO_API_CH_USERS_XML:?set}\n"
+	for _, c := range []struct {
+		name, extra string
+		ok          bool
+	}{
+		{"pins only", "", true},
+		{"extra required with colon", "      C: ${PROVE_ORG:?m}\n", false},
+		{"extra required without colon", "      C: ${PROVE_ORG?m}\n", false},
+		{"extra required with a digit in the name, colon", "      C: ${PROVE_ORG2:?m}\n", false},
+		{"extra required with a digit in the name, no colon", "      C: ${PROVE_ORG2?m}\n", false},
+		{"default with colon is not required", "      C: ${PROVE_ORG:-d}\n", true},
+		{"default without colon is not required", "      C: ${PROVE_ORG-d}\n", true},
+		{"plain braced variable is not required", "      C: ${PROVE_ORG}\n", true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeFile(t, root, composeFile, head+c.extra)
+			g := &guard{root: root, tmp: t.TempDir()}
+			got := composeBugsinkFileFindings(g, composeRequired(g), base)
+			if len(g.v) != 0 {
+				t.Fatalf("guard errors: %v", g.v)
+			}
+			if c.ok != (len(got) == 0) {
+				t.Fatalf("want accepted=%v, findings %v", c.ok, got)
+			}
+		})
+	}
+}

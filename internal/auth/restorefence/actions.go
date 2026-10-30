@@ -17,6 +17,14 @@ const (
 	// ActionRequeueProviderRevocation: a provider token revocation queued after
 	// the target is gone; the operator re-disconnects or revokes at the provider.
 	ActionRequeueProviderRevocation ActionKind = "requeue_provider_revocation"
+	// ActionProviderRevocationRequeued: revocations queued after the target were put back from the source. A disconnect
+	// or a reconnect of the credential of each named revocation (with the PagerDuty client id set) delivers them; a setup
+	// revoke is drained by any disconnect or callback of its org.
+	ActionProviderRevocationRequeued ActionKind = "provider_revocation_requeued"
+	// ActionProviderRevocationRequeuedBlocked: revocations put back from the source whose credential was connected after
+	// the target: the restored database has no credential row, so no disconnect delivers them. Delivery waits for the
+	// revocation worker.
+	ActionProviderRevocationRequeuedBlocked ActionKind = "provider_revocation_requeued_blocked"
 	// ActionUserTombstoned: the source deleted these legacy users after the target. The restored rows are
 	// disabled and their token_version is bumped, not deleted. Nothing is required of the operator; the ids are
 	// named so the deletion is visible.
@@ -41,14 +49,16 @@ const (
 // followUp names the follow-up leaf that automates each action; the operator
 // action line prints it.
 var followUp = map[ActionKind]string{
-	ActionForcePasswordReset:        "none",
-	ActionRequeueProviderRevocation: "CHAOS-11835",
-	ActionUserTombstoned:            "none",
-	ActionReviewIPAllowlist:         "none",
-	ActionReviewAfterBlindMargin:    "none",
-	ActionReviewScopeEmptied:        "none",
-	ActionReviewMembershipOwner:     "none",
-	ActionReviewMembershipRole:      "none",
+	ActionForcePasswordReset:                "none",
+	ActionRequeueProviderRevocation:         "none",
+	ActionProviderRevocationRequeued:        "none",
+	ActionProviderRevocationRequeuedBlocked: "CHAOS-0",
+	ActionUserTombstoned:                    "none",
+	ActionReviewIPAllowlist:                 "none",
+	ActionReviewAfterBlindMargin:            "none",
+	ActionReviewScopeEmptied:                "none",
+	ActionReviewMembershipOwner:             "none",
+	ActionReviewMembershipRole:              "none",
 }
 
 // OperatorAction is the ids a section names for one action. Ids only: never a

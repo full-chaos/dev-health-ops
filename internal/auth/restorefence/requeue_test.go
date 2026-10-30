@@ -152,7 +152,18 @@ func TestTheRequeueActionsNameTheirFollowUps(t *testing.T) {
 	if f := followUp[ActionProviderRevocationRequeuedBlocked]; !regexp.MustCompile(`^CHAOS-[0-9]+$`).MatchString(f) || f == "CHAOS-11835" {
 		t.Errorf("the blocked requeue follow-up = %q, want the revocation worker ticket", f)
 	}
-	if followUp[ActionRequeueProviderRevocation] != "none" {
-		t.Errorf("requeue_provider_revocation follow-up = %q, want none once this leaf ships", followUp[ActionRequeueProviderRevocation])
+	if f := followUpOf(OperatorAction{Kind: ActionRequeueProviderRevocation, Source: revocationSection}); f != requeueRunbookStep {
+		t.Errorf("requeue_provider_revocation of the revocation table follow-up = %q, want the runbook step %q", f, requeueRunbookStep)
+	}
+	if !strings.Contains(requeueRunbookStep, "backup-and-restore.md") || !strings.Contains(requeueRunbookStep, "RESTORE_FENCE_SOURCE_URI") {
+		t.Errorf("the runbook follow-up does not name the runbook and the variable: %q", requeueRunbookStep)
+	}
+	if f := followUpOf(OperatorAction{Kind: ActionRequeueProviderRevocation, Source: "public.provider_oauth_credentials"}); f != "CHAOS-12010" {
+		t.Errorf("requeue_provider_revocation of the deleted credentials follow-up = %q, want the revocation worker ticket", f)
+	}
+	for _, k := range []ActionKind{ActionForcePasswordReset, ActionUserTombstoned, ActionProviderRevocationRequeuedBlocked} {
+		if followUpOf(OperatorAction{Kind: k, Source: "x"}) != followUp[k] {
+			t.Errorf("%s: the follow-up does not come from the kind", k)
+		}
 	}
 }

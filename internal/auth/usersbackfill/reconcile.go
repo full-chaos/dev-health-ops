@@ -28,7 +28,9 @@ type AuthRow struct {
 	TokenVersion int64
 	LastLoginAt  *time.Time
 	DisplayName  string
-	// RoleHeld is a platform_admin assignment that has not expired; RoleBackfilled one with no granter, expired or not.
+	// RoleHeld is the platform role store's rule (platformrole.HoldsSQL): an
+	// assignment that has not expired, of a principal that is not disabled;
+	// RoleBackfilled is one with no granter, expired or not.
 	RoleHeld       bool
 	RoleBackfilled bool
 	// Identities are every auth.external_identities row of the principal.
@@ -60,6 +62,10 @@ const (
 	// active while public.memberships holds the member: go-api would still
 	// grant the membership.
 	DiffMembershipInactiveInPublic = "membership_inactive_in_public"
+	// DiffPlatformRoleDisabled counts public superusers whose auth principal
+	// is disabled: the backfill's assignment of such a principal gives no
+	// platform authority, so the platform roles switch would take it away.
+	DiffPlatformRoleDisabled = "platform_role_disabled_superuser"
 )
 
 // GatedClasses lists every class the gate counts, in report order: the diff
@@ -67,7 +73,7 @@ const (
 var GatedClasses = []string{
 	DiffMissingInAuth, DiffExtraInAuth, DiffPrincipalKind, DiffEmail, DiffActive, DiffVerified,
 	DiffPasswordHash, DiffPlatformRole, DiffTokenVersion, DiffIdentityMissing, DiffIdentityConflict, DiffExtraIdentity,
-	SkipUnknownHashFormat, SkipInvalidIdentity, DiffMembershipInactiveInPublic,
+	SkipUnknownHashFormat, SkipInvalidIdentity, DiffMembershipInactiveInPublic, DiffPlatformRoleDisabled,
 }
 
 // Reconciliation is the outcome of a read-only comparison of public.users with
@@ -252,7 +258,10 @@ func compareOne(ctx context.Context, tgt Target, row Row, a AuthRow, rep *Reconc
 		if !contains(skips, SkipUnknownHashFormat) && differsString(a.PasswordHash, target.PasswordHash) {
 			classes = append(classes, DiffPasswordHash)
 		}
-		if (row.Superuser && !a.RoleHeld) || (!row.Superuser && a.RoleBackfilled) {
+		switch {
+		case row.Superuser && !a.RoleHeld && !a.Active:
+			classes = append(classes, DiffPlatformRoleDisabled)
+		case (row.Superuser && !a.RoleHeld) || (!row.Superuser && a.RoleBackfilled):
 			classes = append(classes, DiffPlatformRole)
 		}
 		if a.TokenVersion != row.TokenVersion {

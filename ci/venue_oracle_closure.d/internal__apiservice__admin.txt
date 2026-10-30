@@ -55,6 +55,9 @@ internal/auth/httpapi
 internal/auth/identity
 internal/auth/passwordhash
 internal/auth/passwordpolicy
+internal/auth/platformrole
+internal/auth/platformrole/rule
+internal/auth/policycatalog
 internal/auth/ratelimitvalkey
 internal/auth/requestid
 internal/auth/session
@@ -147,6 +150,7 @@ internal/testsupport/moduleroot
 internal/testsupport/pgschema
 internal/testsupport/pgseed
 internal/testsupport/pinrig
+internal/testsupport/platformroleseam
 internal/testsupport/pydanticecho
 internal/testsupport/redirectprobe
 internal/testsupport/smtpcapture

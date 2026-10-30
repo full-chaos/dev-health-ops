@@ -33,20 +33,19 @@ type Deps struct {
 	Guard  *policy.Guard
 	Stripe *stripeclient.Provider
 	Config config.BillingConfig
-	// WebhookSecret is STRIPE_WEBHOOK_SECRET; LicensePrivateKey is
-	// LICENSE_PRIVATE_KEY (the Stripe webhook's two secrets).
+	// WebhookSecret is STRIPE_WEBHOOK_SECRET; LicensePrivateKey is LICENSE_PRIVATE_KEY (the Stripe webhook's two secrets).
 	WebhookSecret     secrets.Value
 	LicensePrivateKey secrets.Value
-	// StripeKey is STRIPE_SECRET_KEY, read by the billing edge's /health
-	// only (the routes call Stripe through Stripe).
+	// StripeKey is STRIPE_SECRET_KEY, read by the billing edge's /health only (the routes call Stripe through Stripe).
 	StripeKey secrets.Value
-	// Producer publishes the billing notification handoffs the webhook
-	// queues (nil: an enqueue fails and is logged, as a route failure is
-	// in Python).
+	// Producer publishes the billing notification handoffs the webhook queues
+	// (nil: an enqueue fails and is logged, as a route failure is in Python).
 	Producer *joboutbox.Producer
 	Logger   *slog.Logger
 	// Now is the clock (nil = time.Now).
 	Now func() time.Time
+	// PlatformRoles is how the entitlement access check reads is_superuser (AUTH_PLATFORM_ROLES_OWNED).
+	PlatformRoles policy.PlatformRoleRead
 }
 
 type handlers struct {
@@ -59,13 +58,14 @@ type handlers struct {
 	producer      *joboutbox.Producer
 	logger        *slog.Logger
 	now           func() time.Time
+	platformRoles policy.PlatformRoleRead
 }
 
 // newHandlers is the handlers of deps, with the defaults a nil logger and
 // clock take.
 func newHandlers(deps Deps) handlers {
 	h := handlers{pool: deps.Pool, stripe: deps.Stripe, config: deps.Config, webhookSecret: newWebhookCredential(deps.WebhookSecret),
-		licenseKey: deps.LicensePrivateKey, stripeKey: deps.StripeKey, producer: deps.Producer, logger: deps.Logger, now: deps.Now}
+		licenseKey: deps.LicensePrivateKey, stripeKey: deps.StripeKey, producer: deps.Producer, logger: deps.Logger, now: deps.Now, platformRoles: deps.PlatformRoles}
 	if h.logger == nil {
 		h.logger = slog.Default()
 	}

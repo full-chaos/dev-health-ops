@@ -75,6 +75,11 @@ func (s *stubStore) Close() { s.closed = true }
 
 func runExec(t *testing.T, store *stubStore, openErr error, args ...string) (rc int, stdout, stderr string) {
 	t.Helper()
+	return runExecEnv(t, store, openErr, nil, args...)
+}
+
+func runExecEnv(t *testing.T, store *stubStore, openErr error, extra map[string]string, args ...string) (rc int, stdout, stderr string) {
+	t.Helper()
 	prev := openRestoreFenceStore
 	t.Cleanup(func() { openRestoreFenceStore = prev })
 	openRestoreFenceStore = func(context.Context, string, io.Writer) (restoreFenceStore, error) {
@@ -86,6 +91,9 @@ func runExec(t *testing.T, store *stubStore, openErr error, args ...string) (rc 
 	env := map[string]string{
 		envMigrationURI: "host=db port=5432 user=postgres password='" + execTestPassword + "' dbname=postgres sslmode=disable",
 		envRuntimeRole:  "devhealth_auth",
+	}
+	for k, v := range extra {
+		env[k] = v
 	}
 	lookup := secrets.LookupEnv(func(k string) (string, bool) { v, ok := env[k]; return v, ok })
 	var out, errb bytes.Buffer

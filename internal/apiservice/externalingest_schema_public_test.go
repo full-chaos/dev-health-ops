@@ -137,3 +137,5 @@ func TestExternalPushSchemaRoutesAreGlobalOnTheRealListenerChain(t *testing.T) {
 		t.Errorf("the schema handlers reached the database: %d connection attempt(s), want 0", got)
 	}
 }
+
+func (*orgScopeStore) ReadsPlatformRoles() bool { return false }

@@ -153,7 +153,7 @@ func (h handlers) callerRow(w http.ResponseWriter, r *http.Request, tx pgx.Tx) (
 		refuse(w, http.StatusUnauthorized, "Invalid user identity")
 		return nil, false
 	}
-	user, err := userByID(r.Context(), tx, *id)
+	user, err := h.userByID(r.Context(), tx, *id)
 	if err != nil {
 		h.fail(w, r, "load user", err)
 		return nil, false

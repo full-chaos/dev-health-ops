@@ -2,6 +2,7 @@ package authschema
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -57,5 +58,71 @@ func TestExcuseRetainedDropsOnlyTheRetainedRecords(t *testing.T) {
 	}
 	if got := excuseRetained(kept, nil); !reflect.DeepEqual(got, kept) {
 		t.Errorf("excuseRetained without retained records = %v, want %v", got, kept)
+	}
+}
+
+// A session reader's lost platform role read is a record of its own: named by
+// the reader, with a digest apart from the runtime role's, retained only for
+// the platform reader columns, and excused only for that reader.
+func TestReaderPlatformReadNarrowingIsTheReaders(t *testing.T) {
+	record := GrantRecord{Kind: "column", Object: "principals", Column: "kind", Privilege: "SELECT", Role: "devhealth_api"}
+	runtime := record
+	runtime.Role = ""
+	if narrowingDigest([]GrantRecord{record}) == narrowingDigest([]GrantRecord{runtime}) {
+		t.Error("a reader's loss has the runtime role's digest")
+	}
+	if !strings.Contains(record.String(), `session reader "devhealth_api"`) || strings.Contains(runtime.String(), "session reader") {
+		t.Errorf("records: %s / %s", record, runtime)
+	}
+	if !runtime.less(record) || record.less(runtime) {
+		t.Error("runtime role records sort before reader records")
+	}
+	for _, grant := range PlatformRoleReaderColumns() {
+		for _, column := range grant.Columns {
+			if !isPlatformReaderColumn(grant.Table, column) {
+				t.Errorf("%s.%s is not a platform reader column", grant.Table, column)
+			}
+		}
+	}
+	for table, column := range map[string]string{"principals": "display_name", "platform_role_assignments": "granted_by", "sessions": "id"} {
+		if isPlatformReaderColumn(table, column) {
+			t.Errorf("%s.%s is a platform reader column", table, column)
+		}
+	}
+	excused := Violation{Kind: "session_reader", Schema: "auth", Object: "principals.kind", Privilege: "SELECT",
+		Detail: "session reader devhealth_api holds an undeclared column privilege"}
+	kept := []Violation{
+		{Kind: "session_reader", Schema: "auth", Object: "principals.kind", Privilege: "SELECT",
+			Detail: "session reader devhealth_query holds an undeclared column privilege"},
+		{Kind: "session_reader", Schema: "auth", Object: "principals.display_name", Privilege: "SELECT",
+			Detail: "session reader devhealth_api holds an undeclared column privilege"},
+		{Kind: "column", Schema: publicSchema, Object: "principals.kind", Privilege: "SELECT"},
+	}
+	if got := excuseRetained(append([]Violation{excused}, kept...), []GrantRecord{record}); !reflect.DeepEqual(got, kept) {
+		t.Errorf("excuseRetained = %v, want %v", got, kept)
+	}
+}
+
+// A reader's loss counts only for the platform role read: a re-apply that
+// drops a grant the reader grant never declared is not a narrowing.
+func TestReaderNarrowingIsOnlyThePlatformRoleRead(t *testing.T) {
+	before := []GrantRecord{
+		{Kind: "column", Object: "sessions", Column: "id", Privilege: "SELECT"},
+		{Kind: "column", Object: "principals", Column: "kind", Privilege: "SELECT"},
+		{Kind: "column", Object: "platform_role_assignments", Column: "expires_at", Privilege: "SELECT"},
+		{Kind: "column", Object: "platform_role_assignments", Column: "granted_by", Privilege: "SELECT"},
+		{Kind: "column", Object: "principals", Column: "kind", Privilege: "UPDATE"},
+		{Kind: "relation", Object: "principals", Privilege: "SELECT"},
+	}
+	after := before[:1]
+	want := []GrantRecord{
+		{Kind: "column", Object: "platform_role_assignments", Column: "expires_at", Privilege: "SELECT", Role: "devhealth_api"},
+		{Kind: "column", Object: "principals", Column: "kind", Privilege: "SELECT", Role: "devhealth_api"},
+	}
+	if got := readerNarrowing("devhealth_api", before, after); !reflect.DeepEqual(got, want) {
+		t.Errorf("readerNarrowing = %v, want %v", got, want)
+	}
+	if got := readerNarrowing("devhealth_api", before, before); len(got) != 0 {
+		t.Errorf("no loss: %v", got)
 	}
 }

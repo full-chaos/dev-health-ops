@@ -762,8 +762,7 @@ func (h handlers) oauthProvisionUser(ctx context.Context, row *providerRow, prov
 	}
 	err = pgx.ErrNoRows
 	if found {
-		err = h.Pool.QueryRow(ctx, `SELECT id, email, username, full_name, avatar_url, is_superuser, token_version
-FROM users WHERE id = $1::uuid`, userID).Scan(&id, &existingEmail, &username, &existingFullName,
+		err = h.signInUser(ctx, `id, email, username, full_name, avatar_url, `, userID, &id, &existingEmail, &username, &existingFullName,
 			&existingAvatarURL, &isSuperuser, &tokenVersion)
 	}
 

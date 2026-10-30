@@ -161,6 +161,7 @@ on:
       - 'internal/cigates/outboundtransport/*.tsv'
       - 'internal/platform/otlpmetrics/*.tsv'
       - 'internal/cigates/chconstructor/*.tsv'
+      - 'internal/auth/contracts/credentialanchors/*.tsv'
       - 'ci/check_venue_oracle_registry.sh'
       - 'ci/lib/venue_oracle_registry.sh'
       - 'ci/check_go_containers.sh'

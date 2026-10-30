@@ -991,6 +991,8 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		"DO $$ BEGIN IF to_regclass('public.github_app_installations') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.github_app_installations TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.webhook_sync_requests') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.webhook_sync_requests TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.provider_oauth_credentials') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.provider_oauth_credentials TO " + domainRole + "; END IF; END $$",
+		// CHAOS-12010: the revocation worker's claim, delete and attempt update; no INSERT.
+		"DO $$ BEGIN IF to_regclass('public.provider_oauth_revocations') IS NOT NULL THEN GRANT SELECT, UPDATE, DELETE ON TABLE public.provider_oauth_revocations TO " + domainRole + "; END IF; END $$",
 		// worker_job_routes, scheduled_sync_occurrences, and
 		// fixed_schedule_occurrences are coordinator-exclusive under the
 		// Option B two-role split (role-partition manifest, removed in

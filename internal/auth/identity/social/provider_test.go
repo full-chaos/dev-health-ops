@@ -58,7 +58,6 @@ func TestProfileFetchFollowsEachProvider(t *testing.T) {
 	}{
 		{"github public email", account{provider: GitHub, id: 42, email: "a@example.com", public: true}, "42", true},
 		{"github primary verified", account{provider: GitHub, id: 43, email: "b@example.com", verified: true}, "43", true},
-		{"github unverified only", account{provider: GitHub, id: 44, email: "c@example.com"}, "44", false},
 		{"gitlab confirmed", account{provider: GitLab, id: 45, email: "d@example.com", verified: true}, "45", true},
 		{"gitlab unconfirmed", account{provider: GitLab, id: 46, email: "e@example.com"}, "46", false},
 		{"google verified", account{provider: Google, googleID: "108", email: "f@example.com", verified: true}, "108", true},
@@ -77,6 +76,16 @@ func TestProfileFetchFollowsEachProvider(t *testing.T) {
 				t.Fatalf("an unverified GitHub address was returned: %q", p.Email)
 			}
 		})
+	}
+}
+
+// GitHub with no verified address is go-api's no-verified-email refusal, not a profile without an email.
+func TestGitHubUnverifiedOnlyIsRefused(t *testing.T) {
+	f := newFakeProviders(t)
+	_, err := f.client().Fetch(context.Background(), GitHub, f.token(t.Name(), account{provider: GitHub, id: 44, email: "c@example.com"}))
+	var perr *ProviderError
+	if !errors.As(err, &perr) || perr.Reason != ReasonEmailUnverified {
+		t.Fatalf("Fetch: %v, want the %s refusal", err, ReasonEmailUnverified)
 	}
 }
 

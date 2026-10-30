@@ -101,6 +101,8 @@ func TestComposeBugsinkShapeCells(t *testing.T) {
 	base := []string{"BIGBOY_DHO_IMAGE", "DHO_API_CH_USERS_XML"}
 	withVars := []string{"BIGBOY_DHO_IMAGE", "BUGSINK_CREATE_SUPERUSER", "BUGSINK_DB_PASSWORD", "BUGSINK_SECRET_KEY", "DHO_API_CH_USERS_XML"}
 	oldText := "environment:\n  DATABASE_URL: postgresql://devhealth:${BUGSINK_DB_PASSWORD:?set}@postgres:5432/bugsink\n"
+	oldUse := doc{"environment": map[string]any{"DATABASE_URL": "postgresql://devhealth:${BUGSINK_DB_PASSWORD:?set}@postgres:5432/bugsink",
+		"SECRET_KEY": "${BUGSINK_SECRET_KEY:?set}", "CREATE_SUPERUSER": "${BUGSINK_CREATE_SUPERUSER:?set}"}}
 	newText := "environment:\n  BASE_URL: ${BUGSINK_BASE_URL:-http://localhost:8800}\n  PORT: '8000'\n"
 	own := doc{"env_file": []any{doc{"path": composeBugsinkEnvFile, "required": true}}}
 	env := func(v string) string { return "environment:\n  SECRET_KEY: " + v + "\n" }
@@ -111,7 +113,13 @@ func TestComposeBugsinkShapeCells(t *testing.T) {
 		text     string
 		ok       bool
 	}{
-		{"old form: the three variables, no own env file", withVars, doc{}, oldText, true},
+		{"old form: the three variables, no own env file", withVars, oldUse, oldText, true},
+		{"old form: the three names required only in an unused extension field, bugsink static", withVars,
+			doc{"environment": map[string]any{"SECRET_KEY": "static-secret", "CREATE_SUPERUSER": "static-admin", "DATABASE_URL": "postgresql://x"}},
+			"x-unused: ${BUGSINK_DB_PASSWORD:?a} ${BUGSINK_SECRET_KEY:?b} ${BUGSINK_CREATE_SUPERUSER:?c}\n", false},
+		{"old form: bugsink uses two of the three", withVars,
+			doc{"environment": map[string]any{"DATABASE_URL": "postgresql://devhealth:${BUGSINK_DB_PASSWORD:?set}@postgres:5432/bugsink", "SECRET_KEY": "${BUGSINK_SECRET_KEY:?set}", "CREATE_SUPERUSER": "static-admin"}},
+			oldText, false},
 		{"new form: own env file, no variables", base, own, newText, true},
 		{"neither: no env file and no variables", base, doc{}, newText, false},
 		{"both: variables and the own env file", withVars, own, oldText, false},

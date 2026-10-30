@@ -63,8 +63,15 @@ func reservePorts(t *testing.T, n int) []string {
 			t.Fatalf("release reserved port: %v", err)
 		}
 	}
+	if afterFreed != nil {
+		afterFreed(t, addresses)
+	}
 	return addresses
 }
+
+// afterFreed runs once the addresses are released and before the caller can use them: a test sets it to play the other
+// process on a busy runner that takes a released port.
+var afterFreed func(t *testing.T, addrs []string)
 
 // brokenEnvironment is the deliberately-broken deployment CHAOS-4881's
 // executed proof calls for: a syntactically valid DSN pointing at a port

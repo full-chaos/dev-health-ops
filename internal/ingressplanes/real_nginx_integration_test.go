@@ -370,8 +370,15 @@ func freeAddress(t *testing.T) string {
 	if err := listener.Close(); err != nil {
 		t.Fatal(err)
 	}
+	if afterFreed != nil {
+		afterFreed(t, address)
+	}
 	return address
 }
+
+// afterFreed runs once the address is released and before the caller can use it: a test sets it to play the other
+// process on a busy runner that takes a released port.
+var afterFreed func(t *testing.T, address string)
 
 // startStubAt starts a stub plane of this process on address.
 func startStubAt(t *testing.T, address, plane string) {
@@ -612,4 +619,19 @@ func TestRealNginxRoutesEveryPathToItsPlane(t *testing.T) {
 			}
 		}
 	})
+}
+
+// A busy runner hands a released port to another process before the stub plane binds it. The test plays that process:
+// it takes the address the moment it is freed.
+func TestAStubPlaneStartsOnAnAddressTakenAfterItWasFreed(t *testing.T) {
+	afterFreed = func(t *testing.T, address string) {
+		thief, err := net.Listen("tcp", address)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = thief.Close() })
+	}
+	t.Cleanup(func() { afterFreed = nil })
+
+	startStubAt(t, freeAddress(t), PlaneGoAPI)
 }

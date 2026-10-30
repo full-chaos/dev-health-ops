@@ -15,7 +15,7 @@ type enableStore interface {
 	EnableWorkload(ctx context.Context, name string, in workload.EnableInput) (workload.EnablePlan, error)
 }
 
-const enableMintsNothing = "no credential was minted: run bootstrap-rotate (or bootstrap-create) next"
+const enableMintsNothing = "no credential was minted: run bootstrap-create next"
 
 // runEnable runs `workloads enable`. Without -apply it reads and reports the
 // planned changes; it prints ids and states only.

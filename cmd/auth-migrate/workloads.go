@@ -29,7 +29,7 @@ const workloadsUsage = "usage: auth-migrate workloads seed [-apply] | bind -work
 	"\nPut -out in a directory writable only by the operator: a failed verb's file is removed by path." +
 	"\nbootstrap-disable revokes every live bootstrap value of N at once; workload tokens issued before it live at most 300 s." +
 	"\nenable clears the workload row's disabled mark (and, with -enable-principal, its workload principal's); ID is the enabled" +
-	" principal who enables it, named in the audit row. enable mints no credential: run bootstrap-rotate or bootstrap-create after it."
+	" principal who enables it, named in the audit row. enable mints no credential: run bootstrap-create after it."
 
 type workloadsArgs struct {
 	verb    string
@@ -295,9 +295,9 @@ func failureClass(err error) string {
 	case errors.Is(err, workload.ErrBootstrapNotFound):
 		return "bootstrap credential not found"
 	case errors.Is(err, workload.ErrBootstrapWorkloadDisabled):
-		return "the workload row is disabled; run auth-migrate workloads enable -workload NAME -operator ID, then rotate its credential"
+		return "the workload row is disabled; to recover: bootstrap-disable -workload NAME -apply (revokes its live values), then auth-migrate workloads enable -workload NAME -operator ID, then bootstrap-create"
 	case errors.Is(err, workload.ErrBootstrapPrincipalDisabled):
-		return "the workload's principal is disabled, its row is not; run auth-migrate workloads enable -workload NAME -operator ID -enable-principal, then rotate its credential"
+		return "the workload's principal is disabled, its row is not; to recover: bootstrap-disable -workload NAME -apply (revokes its live values), then auth-migrate workloads enable -workload NAME -operator ID -enable-principal, then bootstrap-create"
 	case errors.Is(err, workload.ErrOperatorNotFound):
 		return "the operator principal does not exist"
 	case errors.Is(err, workload.ErrOperatorDisabled):

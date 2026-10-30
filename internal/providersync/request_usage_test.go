@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -161,8 +162,26 @@ func (sink *memoryRequestUsageSink) WriteRequestUsage(_ context.Context, rows []
 		}
 		return errScriptedTransport
 	}
-	sink.rows = append(sink.rows, rows...)
+	for _, row := range rows {
+		sink.rows = append(sink.rows, snapshotRequestUsageRow(row))
+	}
 	return nil
+}
+
+// snapshotRequestUsageRow copies the values row points to, so a row the store
+// holds does not change when the writer's own copy of a nullable field does.
+func snapshotRequestUsageRow(row RequestUsageRow) RequestUsageRow {
+	if row.LatestStatus != nil {
+		value := *row.LatestStatus
+		row.LatestStatus = &value
+	}
+	for _, field := range []**int64{&row.RateLimitRemaining, &row.RateLimitLimit, &row.RateLimitUsed} {
+		if *field != nil {
+			value := **field
+			*field = &value
+		}
+	}
+	return row
 }
 
 // stored is the store after its merge: provider_request_usage collapses a row
@@ -172,12 +191,17 @@ func (sink *memoryRequestUsageSink) WriteRequestUsage(_ context.Context, rows []
 func (sink *memoryRequestUsageSink) stored() []RequestUsageRow {
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
-	seen := make(map[RequestUsageRow]struct{}, len(sink.rows))
 	rows := make([]RequestUsageRow, 0, len(sink.rows))
 	for _, row := range sink.rows {
-		if _, duplicate := seen[row]; !duplicate {
-			seen[row] = struct{}{}
-			rows = append(rows, row)
+		duplicate := false
+		for _, kept := range rows {
+			if reflect.DeepEqual(kept, row) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			rows = append(rows, snapshotRequestUsageRow(row))
 		}
 	}
 	return rows
@@ -187,7 +211,11 @@ func (sink *memoryRequestUsageSink) stored() []RequestUsageRow {
 func (sink *memoryRequestUsageSink) storedWrites() []RequestUsageRow {
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
-	return append([]RequestUsageRow(nil), sink.rows...)
+	rows := make([]RequestUsageRow, 0, len(sink.rows))
+	for _, row := range sink.rows {
+		rows = append(rows, snapshotRequestUsageRow(row))
+	}
+	return rows
 }
 
 func (sink *memoryRequestUsageSink) writeCount() int {
@@ -1009,6 +1037,37 @@ func TestManyExecutionsShareOneWriter(t *testing.T) {
 	}
 }
 
+// TestMemorySinkComparesNullableFieldsByValue pins the sink's merged view: a
+// re-send equal by value collapses even when its nullable fields are separate
+// allocations, and a re-send whose pointed-to value changed after the first
+// write stays visible instead of aliasing the stored one.
+func TestMemorySinkComparesNullableFieldsByValue(t *testing.T) {
+	t.Parallel()
+	status, remaining := uint16(200), int64(10)
+	row := RequestUsageRow{ExecutionID: "e1", Transport: requestTransportREST, Requests: 1, LatestStatus: &status, RateLimitRemaining: &remaining}
+	sink := &memoryRequestUsageSink{}
+	if err := sink.WriteRequestUsage(context.Background(), []RequestUsageRow{row}); err != nil {
+		t.Fatal(err)
+	}
+	status2, remaining2 := uint16(200), int64(10)
+	again := row
+	again.LatestStatus, again.RateLimitRemaining = &status2, &remaining2
+	if err := sink.WriteRequestUsage(context.Background(), []RequestUsageRow{again}); err != nil {
+		t.Fatal(err)
+	}
+	if rows := sink.stored(); len(rows) != 1 {
+		t.Fatalf("a re-send equal by value did not collapse: %+v", rows)
+	}
+	status = 500
+	if err := sink.WriteRequestUsage(context.Background(), []RequestUsageRow{row}); err != nil {
+		t.Fatal(err)
+	}
+	rows := sink.stored()
+	if len(rows) != 2 || *rows[0].LatestStatus != 200 || *rows[1].LatestStatus != 500 {
+		t.Fatalf("a re-send that changed a pointed-to value was hidden or aliased: %d rows", len(rows))
+	}
+}
+
 // commitThenCancelSink commits its first write, then holds it until the
 // writer cancels it and reports it failed: the store applied the rows, the
 // writer cannot know, and so it re-sends them.
@@ -1050,7 +1109,7 @@ func TestWriterResendAfterACommittedCancelledWriteStoresOneRow(t *testing.T) {
 	}
 	writer.Close(time.Second)
 	writes := sink.storedWrites()
-	if len(writes) != 2 || writes[0] != writes[1] {
+	if len(writes) != 2 || !reflect.DeepEqual(writes[0], writes[1]) {
 		t.Fatalf("the writer did not re-send the batch unchanged: writes=%+v", writes)
 	}
 	if rows := sink.stored(); len(rows) != 1 || sumRequestUsage(rows).Requests != 3 {

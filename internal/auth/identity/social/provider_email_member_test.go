@@ -135,3 +135,29 @@ func TestGitHubWithNoVerifiedAddressIsAFetchRefusal(t *testing.T) {
 		t.Fatalf("fetch: %v, want a ProviderError with reason %s", err, ReasonEmailUnverified)
 	}
 }
+
+// go-api checks the email member before the id (oauthprovider requiredFields): a GitLab or Google profile with neither
+// is the refused token, not the invalid user id.
+func TestTheEmailMemberIsCheckedBeforeTheID(t *testing.T) {
+	for _, provider := range []string{"gitlab", "google"} {
+		t.Run(provider, func(t *testing.T) {
+			row := parityRow{provider: provider, email: []byte(`"user@example.test"`), verified: "true", name: []byte(`"N"`), shape: "noemail"}
+			inner := rawProviders(row)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				rec := httptest.NewRecorder()
+				inner.ServeHTTP(rec, r)
+				body := strings.Replace(rec.Body.String(), `{"id": 7, `, `{`, 1)
+				body = strings.Replace(body, `{"id": "g7", `, `{`, 1)
+				w.WriteHeader(rec.Code)
+				_, _ = w.Write([]byte(body))
+			}))
+			t.Cleanup(server.Close)
+			p, _ := ParseProvider(provider)
+			_, err := rawClient(server).Fetch(context.Background(), p, secretOf("tok"))
+			var perr *ProviderError
+			if !errors.As(err, &perr) || perr.Reason != ReasonInvalidCredentials || perr.InvalidID {
+				t.Fatalf("fetch: %+v (%v), want the refused token, not the invalid id", perr, err)
+			}
+		})
+	}
+}

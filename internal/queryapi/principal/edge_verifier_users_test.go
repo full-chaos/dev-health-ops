@@ -234,3 +234,5 @@ func TestEdgeVerifier_OrglessTokenNeedsALiveSuperuserRow(t *testing.T) {
 		}
 	})
 }
+
+func (fakeUsers) ReadsPlatformRoles() bool { return false }

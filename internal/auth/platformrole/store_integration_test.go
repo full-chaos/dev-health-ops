@@ -708,6 +708,25 @@ VALUES ($1, $2, 'platform_admin', $2, statement_timestamp() - interval '1 minute
 	if n := e.bootstrapAudits(t, ctx, target); n != 1 {
 		t.Fatalf("bootstrap audit rows (reason restore_fence_bootstrap) = %d, want 1", n)
 	}
+	// The two events are on two aggregates: each one's revision is contiguous
+	// on its own aggregate (the consumer contract); their order across the two
+	// is the aggregate id order and is not asserted.
+	for _, c := range []struct {
+		aggregate, event string
+		revision         int
+	}{
+		{"pra_" + expired.String(), "platform_role_assignment.revoked", 2},
+		{"pra_" + id.String(), "platform_role_assignment.granted", 1},
+	} {
+		if got := e.count(t, ctx, `SELECT (payload->>'revision')::int FROM auth.auth_outbox_events WHERE aggregate_id = $1 AND event_type = $2`,
+			c.aggregate, c.event); got != c.revision {
+			t.Errorf("%s %s at revision %d, want %d", c.aggregate, c.event, got, c.revision)
+		}
+		if got := e.count(t, ctx, `SELECT revision FROM auth.aggregate_revisions WHERE aggregate_type = 'platform_role_assignment' AND aggregate_id = $1`,
+			c.aggregate); got != c.revision {
+			t.Errorf("%s revision row = %d, want %d", c.aggregate, got, c.revision)
+		}
+	}
 }
 
 // plantAssignment writes one platform_admin row of principal through

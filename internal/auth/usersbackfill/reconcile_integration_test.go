@@ -20,6 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -451,4 +452,58 @@ func reconcileVerbForTest() cli.Command {
 		}
 	}
 	panic("no users-reconcile verb")
+}
+
+// A disabled public superuser (Q1): the backfill gives it the no-granter
+// assignment once (it mirrors public), which grants no platform authority; a
+// second run writes nothing; the reconcile names it in its own class.
+func TestBackfillAndReconcileUseTheStoreRule(t *testing.T) {
+	e := getReconEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	id := e.seed(t, ctx, uniq("disabledsu"), false, true)
+	if _, err := e.admin.Exec(ctx, `UPDATE public.users SET is_superuser = true WHERE id = $1`, id); err != nil {
+		t.Fatal(err)
+	}
+	e.backfill(t, ctx)
+	writes := func() (assignments, audits, events int) {
+		t.Helper()
+		if err := e.admin.QueryRow(ctx, `SELECT
+	(SELECT count(*) FROM auth.platform_role_assignments WHERE principal_id = $1 AND granted_by IS NULL),
+	(SELECT count(*) FROM auth.security_audit_events WHERE subject_principal_id = $1),
+	(SELECT count(*) FROM auth.auth_outbox_events WHERE aggregate_type = 'platform_role_assignment')`, id).Scan(&assignments, &audits, &events); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	assignments, audits, events := writes()
+	if assignments != 1 {
+		t.Fatalf("no-granter assignments of the disabled superuser = %d, want 1", assignments)
+	}
+	rep, err := Run(ctx, PGSource{Pool: e.runtime}, e.store, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a, au, ev := writes(); a != assignments || au != audits || ev != events {
+		t.Fatalf("second run wrote: assignments %d->%d, audit rows %d->%d, role events %d->%d\n%s",
+			assignments, a, audits, au, events, ev, strings.Join(rep.Lines(), "\n"))
+	}
+	roles, err := platformrole.New(platformrole.Config{Pool: e.runtime, Schema: e.schema})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if authority, err := roles.Resolve(ctx, id); err != nil || authority.Any() {
+		t.Fatalf("Resolve of the disabled superuser = %v, %v; want no authority", authority.Roles(), err)
+	}
+	if rep := e.reconcile(t, ctx); rep.Diffs[DiffPlatformRoleDisabled] != 1 || rep.Diffs[DiffPlatformRole] != 0 || rep.GatedTotal() != 1 {
+		t.Fatalf("a disabled superuser: %+v", rep.Diffs)
+	}
+	// Clear it so the shared database is zero-diff for the next test.
+	if _, err := e.admin.Exec(ctx, `UPDATE public.users SET is_superuser = false WHERE id = $1`, id); err != nil {
+		t.Fatal(err)
+	}
+	e.backfill(t, ctx)
+	if rep := e.reconcile(t, ctx); rep.GatedTotal() != 0 {
+		t.Fatalf("after clearing is_superuser: %+v", rep.Diffs)
+	}
 }

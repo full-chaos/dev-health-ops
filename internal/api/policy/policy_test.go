@@ -44,7 +44,11 @@ type fakeStore struct {
 	userCalls      int
 	sessionCalls   int
 	membershipSeen [][2]uuid.UUID
+	// platformRolesOwned is the AUTH_PLATFORM_ROLES_OWNED the double reads under.
+	platformRolesOwned bool
 }
+
+func (f *fakeStore) ReadsPlatformRoles() bool { return f.platformRolesOwned }
 
 func (f *fakeStore) UserState(_ context.Context, id uuid.UUID) (UserState, bool, error) {
 	f.userCalls++

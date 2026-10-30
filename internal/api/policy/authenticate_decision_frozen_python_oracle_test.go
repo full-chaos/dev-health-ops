@@ -167,3 +167,5 @@ func TestAuthenticateDecisionsMatchFrozenPython(t *testing.T) {
 	}
 	t.Logf("%d cases: %d accepted, %d refused", len(cases), accepted, refused)
 }
+
+func (authenticateStore) ReadsPlatformRoles() bool { return false }

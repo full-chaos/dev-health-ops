@@ -1074,23 +1074,26 @@ func TestTheOpenAPIPathGateReportsEveryDroppedShape(t *testing.T) {
 			t.Errorf("%s: the gate reported %q, want a problem containing %q", c.name, problems, c.want)
 		}
 	}
-	for name, mutate := range map[string]func(row map[string]any){
-		"a row whose id is not a string":    func(row map[string]any) { row["id"] = 5 },
-		"a row whose route is not a string": func(row map[string]any) { row["route"] = 5 },
-		"a row whose credential classes is not a list": func(row map[string]any) {
-			row["accepted_credential_classes"] = "ops_access_token_hs256"
-		},
+	for _, c := range []struct {
+		name   string
+		mutate func(row map[string]any)
+		want   string
+	}{
+		{"a row whose id is not a string", func(row map[string]any) { row["id"] = 5 }, "has an id that is not a string"},
+		{"a row whose route is not a string", func(row map[string]any) { row["route"] = 5 }, "has a route that is not a string"},
+		{"a row whose method is not a string", func(row map[string]any) { row["method"] = 5 }, "has a method that is not a string"},
+		{"a row whose credential classes is not a list", func(row map[string]any) { row["accepted_credential_classes"] = "ops_access_token_hs256" }, "accepted_credential_classes that is not a list of strings"},
 	} {
 		mutated := authServiceRows(t)
 		for _, row := range mutated {
 			if id, _ := row["id"].(string); strings.HasSuffix(id, "@api]") {
-				mutate(row)
+				c.mutate(row)
 				break
 			}
 		}
 		problems := strings.Join(openAPIPathProblems(loadOpenAPIRaw(t), mutated), "\n")
-		if !strings.Contains(problems, "profile row") {
-			t.Errorf("%s: the gate reported %q, want a profile row problem", name, problems)
+		if !strings.Contains(problems, c.want) {
+			t.Errorf("%s: the gate reported %q, want a problem containing %q", c.name, problems, c.want)
 		}
 	}
 }

@@ -380,7 +380,11 @@ func (r SystemOneRequest) Body(defaultModel string) ([]byte, error) {
 type SystemOneUsage struct {
 	InputTokens  int64
 	OutputTokens int64
-	Reported     bool
+	// OutputComputed is true when the response gave no output_tokens and
+	// OutputTokens is the client's count (see computeOutputTokens).
+	OutputComputed bool
+	Reported       bool
+	outputPresent  bool
 	// Rejected is true when a usage object was present but a number in it was
 	// out of range, not an integer, or not a number. Reported is then false.
 	Rejected bool
@@ -726,6 +730,9 @@ func (c *TypeSafeClient) once(ctx context.Context, body []byte, lenient bool, ca
 		}
 	}
 	out.Usage = parseUsage(probe.Usage)
+	if c.target.provider == ClefProviderName {
+		out.Body = fillOutputTokens(&out.Usage, out.Body)
+	}
 	return out, att, nil
 }
 
@@ -868,6 +875,38 @@ const maxPeerModelLen = 64
 
 var safeModelPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]+$`)
 
+// fillOutputTokens gives a reported usage with no output_tokens an output
+// count, in the usage and in the body the caller parses. The clef account
+// reports input_tokens only; a zero would price and record the call as if it had
+// no output. The count is the byte length of the answers object: a byte is at
+// most one token, the same bound the budget guard uses for input.
+func fillOutputTokens(usage *SystemOneUsage, payload []byte) []byte {
+	if !usage.Reported || usage.outputPresent {
+		return payload
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(payload, &fields) != nil || len(fields["answers"]) == 0 {
+		return payload
+	}
+	var counts map[string]json.RawMessage
+	if json.Unmarshal(fields["usage"], &counts) != nil || counts == nil {
+		return payload
+	}
+	computed := int64(len(fields["answers"]))
+	counts["output_tokens"] = json.RawMessage(strconv.FormatInt(computed, 10))
+	encodedUsage, err := json.Marshal(counts)
+	if err != nil {
+		return payload
+	}
+	fields["usage"] = encodedUsage
+	filled, err := json.Marshal(fields)
+	if err != nil {
+		return payload
+	}
+	usage.OutputTokens, usage.OutputComputed = computed, true
+	return filled
+}
+
 // parseUsage reads the usage object. Reported needs a valid input count; an
 // output count, when present, must be valid too. Anything else present but
 // unusable sets Rejected.
@@ -887,10 +926,12 @@ func parseUsage(raw json.RawMessage) SystemOneUsage {
 		return SystemOneUsage{Rejected: true}
 	}
 	var out int64
+	present := false
 	if len(u.OutputTokens) > 0 && string(u.OutputTokens) != "null" {
 		if out, ok = parseTokens(u.OutputTokens); !ok {
 			return SystemOneUsage{Rejected: true}
 		}
+		present = true
 	}
-	return SystemOneUsage{InputTokens: in, OutputTokens: out, Reported: true}
+	return SystemOneUsage{InputTokens: in, OutputTokens: out, Reported: true, outputPresent: present}
 }

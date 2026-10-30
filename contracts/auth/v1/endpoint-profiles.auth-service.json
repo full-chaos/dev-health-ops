@@ -453,7 +453,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 124,
+          "line": 128,
           "note": "func (s *Service) Exchange",
           "path": "internal/auth/identity/social/service.go"
         },

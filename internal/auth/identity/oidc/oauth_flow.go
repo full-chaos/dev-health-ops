@@ -365,6 +365,11 @@ func (s *Service) callbackOAuth(ctx context.Context, admitted StoredProvider, in
 		}
 		return Login{}, clear, oauthFailure(reason, "oauth_userinfo_fetch_failed", err)
 	}
+	// The email text rule runs first, as go-api's profile fetch runs it: an
+	// unusable address is the same 400 verified or not.
+	if failure := refuseUnusableEmail(prof.Email); failure != nil {
+		return Login{}, clear, failure
+	}
 	// An unverified provider email never links or provisions, so it is refused
 	// before any lookup (go-api D2745).
 	if !prof.EmailVerified {

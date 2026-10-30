@@ -182,7 +182,7 @@ func composeExtendsChain(services doc, name string) ([]doc, []string) {
 	seen := map[string]bool{}
 	for cur := name; cur != ""; {
 		if seen[cur] {
-			errs = append(errs, "has an extends loop through "+cur)
+			errs = append(errs, "has an extends loop through "+cur+", so its bugsink credentials cannot be checked")
 			break
 		}
 		seen[cur] = true

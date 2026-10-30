@@ -4,9 +4,12 @@
 // credential that is gone (one the restore fence requeued, CHAOS-11835) would
 // stay owed forever (CHAOS-12010).
 //
-// A row exists exactly while its token is owed a revoke: a sent row is deleted,
-// a refused one keeps its place with attempts+1 and a reason code, and is
-// claimed again after a backoff. At MaxAttempts the worker stops claiming it;
+// A row exists exactly while its token is owed a revoke: a row is deleted only
+// after PagerDuty accepted the revoke, and a refused one keeps its place with
+// attempts+1 and a reason code, and is claimed again after a backoff. Delivery
+// is at least once: a lost delete (the DELETE after an accepted revoke does not
+// commit) may send the same revoke again, which PagerDuty answers as for a
+// revoked token (RFC 7009 section 2.2: 200). At MaxAttempts the worker stops claiming it;
 // the row stays pending (a disconnect, callback or org deletion still sends it)
 // and is counted and named by id. Nothing here logs, returns or records a
 // token, a ciphertext or a provider answer.

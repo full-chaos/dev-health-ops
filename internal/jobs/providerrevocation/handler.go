@@ -45,7 +45,18 @@ const (
 
 	ReasonRemoteRevokeFailed = "remote_revoke_failed"
 	ReasonTokenDecryptFailed = "token_decrypt_failed"
+
+	// ExhaustedNameLimit bounds the row ids one run names in its exhausted-rows
+	// WARN line; the line also carries the total.
+	ExhaustedNameLimit = 25
 )
+
+// ExhaustedRow is one pending row at MaxAttempts, named by id and the class of
+// its last refusal (never its text).
+type ExhaustedRow struct {
+	ID     uuid.UUID
+	Reason string
+}
 
 // Row is one claimed revocation row. Ciphertext never leaves this package.
 type Row struct {
@@ -72,6 +83,9 @@ type Store interface {
 	Next(ctx context.Context) (Claim, bool, error)
 	// Totals counts the pending rows and the ones at MaxAttempts.
 	Totals(ctx context.Context) (pending, exhausted int64, err error)
+	// Exhausted lists up to limit pending rows at MaxAttempts, by id, whoever
+	// pushed them there (the worker, or a disconnect or callback sender).
+	Exhausted(ctx context.Context, limit int) ([]ExhaustedRow, error)
 }
 
 // Decryptor opens a row's sealed token.

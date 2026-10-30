@@ -5,11 +5,13 @@ package providerrevocation
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -375,5 +377,52 @@ func TestWorkerLogsCountsOnly(t *testing.T) {
 	}
 	if !named || len(records) < 2 {
 		t.Fatalf("the run did not log the exhausted row by id (%d records): %s", len(records), logs.String())
+	}
+}
+
+// D6501 r2 P2a: rows a route sender pushed to the limit (seeded at MaxAttempts, never claimed by the worker) are
+// named every run in one WARN line: the total, the first ExhaustedNameLimit by id, each with its reason class.
+func TestEveryRunNamesRoutePushedExhaustedRows(t *testing.T) {
+	c := newCell(t)
+	var ids []string
+	for index := 0; index < ExhaustedNameLimit+5; index++ {
+		id := c.seed(t, "disconnect", fmt.Sprintf("route-%02d", index), fmt.Sprintf("tok-route-%02d", index), MaxAttempts, time.Hour, time.Minute)
+		ids = append(ids, id.String())
+	}
+	if _, err := c.admin.Exec(context.Background(), `UPDATE provider_oauth_revocations SET last_error = 'remote_revoke_failed'`); err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(ids)
+	logs := &bytes.Buffer{}
+	handler := c.handler(t, true, logs)
+	c.run(t, handler)
+	c.run(t, handler)
+	var lines []string
+	for _, record := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		if strings.Contains(record, `"msg":"provider_oauth_revocations.exhausted_rows"`) {
+			lines = append(lines, record)
+		}
+	}
+	if len(lines) != 2 {
+		t.Fatalf("%d exhausted_rows lines after 2 runs, want 2:\n%s", len(lines), logs.String())
+	}
+	for _, line := range lines {
+		if !strings.Contains(line, `"level":"WARN"`) || !strings.Contains(line, fmt.Sprintf(`"exhausted_total":%d`, len(ids))) {
+			t.Fatalf("line lacks WARN or the total: %s", line)
+		}
+		for index, id := range ids {
+			if listed := strings.Contains(line, id+":"+ReasonRemoteRevokeFailed); listed != (index < ExhaustedNameLimit) {
+				t.Fatalf("row %d (%s) listed=%v, want %v: %s", index, id, listed, index < ExhaustedNameLimit, line)
+			}
+		}
+		if strings.Contains(line, "tok-route-") {
+			t.Fatalf("a token reached the log: %s", line)
+		}
+	}
+	c.fake.mu.Lock()
+	calls := len(c.fake.calls)
+	c.fake.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("the worker sent %d exhausted rows, want none", calls)
 	}
 }

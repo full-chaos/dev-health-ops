@@ -53,6 +53,9 @@ type fakeStore struct {
 	exhausted   int64
 	totalCalls  int
 	lost        bool
+	// exhaustedRows are the rows at MaxAttempts the store names, in id order.
+	exhaustedRows   []ExhaustedRow
+	exhaustedLimits []int
 }
 
 func (store *fakeStore) Next(context.Context) (Claim, bool, error) {
@@ -71,6 +74,14 @@ func (store *fakeStore) Next(context.Context) (Claim, bool, error) {
 func (store *fakeStore) Totals(context.Context) (int64, int64, error) {
 	store.totalCalls++
 	return store.pending, store.exhausted, store.totalsErr
+}
+
+func (store *fakeStore) Exhausted(_ context.Context, limit int) ([]ExhaustedRow, error) {
+	store.exhaustedLimits = append(store.exhaustedLimits, limit)
+	if limit < len(store.exhaustedRows) {
+		return store.exhaustedRows[:limit], nil
+	}
+	return store.exhaustedRows, nil
 }
 
 type fakeClaim struct {
@@ -460,5 +471,111 @@ func TestALostDeleteSendsTheRevokeOnceMoreAndEndsDeleted(t *testing.T) {
 	}
 	if h.counter(t, "exhausted") != 0 || h.counter(t, "revoked") != 1 {
 		t.Fatalf("counters exhausted=%d revoked=%d, want 0 and 1", h.counter(t, "exhausted"), h.counter(t, "revoked"))
+	}
+}
+
+// warnLines returns the WARN records with msg.
+func warnLines(logs string, msg string) []string {
+	var out []string
+	for _, record := range strings.Split(strings.TrimSpace(logs), "\n") {
+		if strings.Contains(record, `"level":"WARN"`) && strings.Contains(record, `"msg":"`+msg+`"`) {
+			out = append(out, record)
+		}
+	}
+	return out
+}
+
+func exhaustedRowsOf(n int) []ExhaustedRow {
+	rows := make([]ExhaustedRow, 0, n)
+	for index := 0; index < n; index++ {
+		reason := ReasonRemoteRevokeFailed
+		if index%3 == 1 {
+			reason = ReasonTokenDecryptFailed
+		}
+		rows = append(rows, ExhaustedRow{ID: uuid.New(), Reason: reason})
+	}
+	return rows
+}
+
+// D6501 r2 P2a: every run names the exhausted rows in ONE WARN line (the total and up to ExhaustedNameLimit
+// "id:reason class" entries), whoever pushed them to the limit; a run with none writes no such line.
+func TestEveryRunNamesTheExhaustedRowsInOneWarnLine(t *testing.T) {
+	rows := exhaustedRowsOf(ExhaustedNameLimit + 5)
+	store := &fakeStore{exhausted: int64(len(rows)), exhaustedRows: rows}
+	h := newHarness(t, store, true)
+	for run := 1; run <= 2; run++ {
+		if err := h.handler.Work(context.Background(), execution(due)); err != nil {
+			t.Fatal(err)
+		}
+		lines := warnLines(h.logs.String(), "provider_oauth_revocations.exhausted_rows")
+		if len(lines) != run {
+			t.Fatalf("after run %d: %d exhausted_rows WARN lines, want one per run:\n%s", run, len(lines), h.logs.String())
+		}
+		line := lines[run-1]
+		if !strings.Contains(line, fmt.Sprintf(`"exhausted_total":%d`, len(rows))) || !strings.Contains(line, fmt.Sprintf(`"listed":%d`, ExhaustedNameLimit)) {
+			t.Fatalf("line lacks the total or the listed count: %s", line)
+		}
+		for index, row := range rows {
+			entry := row.ID.String() + ":" + row.Reason
+			if listed := strings.Contains(line, entry); listed != (index < ExhaustedNameLimit) {
+				t.Fatalf("row %d listed=%v, want %v: %s", index, listed, index < ExhaustedNameLimit, line)
+			}
+		}
+	}
+	if len(store.exhaustedLimits) == 0 {
+		t.Fatal("the store was never asked for the exhausted rows")
+	}
+	for _, limit := range store.exhaustedLimits {
+		if limit != ExhaustedNameLimit {
+			t.Fatalf("the store was asked for %d rows, want %d", limit, ExhaustedNameLimit)
+		}
+	}
+	quiet := newHarness(t, &fakeStore{}, true)
+	if err := quiet.handler.Work(context.Background(), execution(due)); err != nil {
+		t.Fatal(err)
+	}
+	if lines := warnLines(quiet.logs.String(), "provider_oauth_revocations.exhausted_rows"); len(lines) != 0 {
+		t.Fatalf("a run with no exhausted row wrote %d exhausted_rows lines", len(lines))
+	}
+}
+
+// The unconfigured run (no client id) names them too: they wait for the operator either way.
+func TestAnUnconfiguredRunNamesTheExhaustedRows(t *testing.T) {
+	rows := exhaustedRowsOf(2)
+	h := newHarness(t, &fakeStore{exhausted: 2, exhaustedRows: rows}, false)
+	if err := h.handler.Work(context.Background(), execution(due)); err != nil {
+		t.Fatal(err)
+	}
+	lines := warnLines(h.logs.String(), "provider_oauth_revocations.exhausted_rows")
+	if len(lines) != 1 || !strings.Contains(lines[0], rows[0].ID.String()+":"+rows[0].Reason) {
+		t.Fatalf("unconfigured run lines %v", lines)
+	}
+}
+
+// A repeat revoke PagerDuty refuses with a 4xx is refused, backed off and finally named as exhausted:
+// the at-least-once contract never hides a refused repeat.
+func TestARefusedRepeatRevokeEndsVisiblyAsAnExhaustedRow(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer server.Close()
+	config := providerfoundation.PagerDutyRevokeConfig{ClientID: "client", RevokeURL: server.URL}
+	row := dueRow("sealed:tok-repeat-400", MaxAttempts-1)
+	store := &fakeStore{due: []*fakeRow{row}}
+	logs := &bytes.Buffer{}
+	handler, err := NewHandler(store, fakeDecryptor{}, func(ctx context.Context, token string) error {
+		return providerfoundation.RevokePagerDutyOAuthToken(ctx, server.Client(), config, token)
+	}, true, slog.New(slog.NewJSONHandler(logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.Work(context.Background(), execution(due)); err != nil {
+		t.Fatal(err)
+	}
+	if row.sent || row.attempts != MaxAttempts {
+		t.Fatalf("sent=%v attempts=%d, want refused at %d attempts", row.sent, row.attempts, MaxAttempts)
+	}
+	if lines := warnLines(logs.String(), "provider_oauth_revocations.exhausted"); len(lines) != 1 || !strings.Contains(lines[0], row.row.ID.String()) {
+		t.Fatalf("the refused repeat was not named: %s", logs.String())
 	}
 }

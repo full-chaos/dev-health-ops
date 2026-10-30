@@ -12,6 +12,7 @@ import (
 type Beginner interface {
 	Begin(ctx context.Context) (pgx.Tx, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 
 // claimSQL selects one due row and holds it: the claim rule every sender
@@ -31,6 +32,12 @@ FOR UPDATE SKIP LOCKED`, MaxAttempts, int64(SetupStaleAfter.Seconds()))
 
 var totalsSQL = fmt.Sprintf(`SELECT count(*), count(*) FILTER (WHERE attempts >= %d)
 FROM provider_oauth_revocations WHERE provider = 'pagerduty' AND status = 'pending'`, MaxAttempts)
+
+// exhaustedSQL takes no lock: it only names rows.
+var exhaustedSQL = fmt.Sprintf(`SELECT id, COALESCE(last_error, '') FROM provider_oauth_revocations
+WHERE provider = 'pagerduty' AND status = 'pending' AND attempts >= %d
+ORDER BY id
+LIMIT $1`, MaxAttempts)
 
 const (
 	sentSQL   = `DELETE FROM provider_oauth_revocations WHERE id = $1`
@@ -65,6 +72,41 @@ func (store PgStore) Totals(ctx context.Context) (pending, exhausted int64, err 
 	}
 	err = store.DB.QueryRow(ctx, totalsSQL).Scan(&pending, &exhausted)
 	return pending, exhausted, err
+}
+
+func (store PgStore) Exhausted(ctx context.Context, limit int) ([]ExhaustedRow, error) {
+	if store.DB == nil {
+		return nil, errors.New("provider revocation store has no database")
+	}
+	rows, err := store.DB.Query(ctx, exhaustedSQL, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ExhaustedRow
+	for rows.Next() {
+		var row ExhaustedRow
+		var lastError string
+		if err := rows.Scan(&row.ID, &lastError); err != nil {
+			return nil, err
+		}
+		row.Reason = reasonClass(lastError)
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// reasonClass maps a stored last_error to its class: one of the reason codes,
+// or "other". The text itself is never logged.
+func reasonClass(lastError string) string {
+	switch lastError {
+	case ReasonRemoteRevokeFailed, ReasonTokenDecryptFailed:
+		return lastError
+	case "":
+		return "none"
+	default:
+		return "other"
+	}
 }
 
 type pgClaim struct {

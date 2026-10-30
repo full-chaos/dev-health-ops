@@ -109,15 +109,38 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 }
 
 // deleteOrganizationWithoutMembers deletes the organization only while no
-// membership of it exists, in one statement; false when it kept the row.
+// membership of it exists; false when it kept the row. It locks the org row
+// first and checks for a membership in a statement of its own after the lock:
+// a membership insert holds the org row (its foreign key check) until it
+// commits, and a one-statement DELETE ... NOT EXISTS would re-read only the org
+// row after that wait, then cascade the new membership away.
 func (s pgStore) deleteOrganizationWithoutMembers(ctx context.Context, orgID uuid.UUID) (bool, error) {
-	tag, err := s.Pool.Exec(ctx, `
-DELETE FROM organizations WHERE id = $1
-AND NOT EXISTS (SELECT 1 FROM memberships WHERE org_id = $1)`, orgID)
+	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return false, err
 	}
-	return tag.RowsAffected() == 1, nil
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	var one int
+	if err := tx.QueryRow(ctx, `SELECT 1 FROM organizations WHERE id = $1 FOR UPDATE`, orgID).Scan(&one); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	var member bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM memberships WHERE org_id = $1)`, orgID).Scan(&member); err != nil {
+		return false, err
+	}
+	if member {
+		return false, nil
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM organizations WHERE id = $1`, orgID); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // pgExecer is the Exec/QueryRow surface both *pgxpool.Pool and pgx.Tx
@@ -141,8 +164,22 @@ type orgUpdate struct {
 // updateOrganization is OrganizationService.update, minus the license-tier
 // sync side effect (org_licenses is out of this route's scope; a tier
 // change here does not touch OrgLicense -- see RISK-NOTES).
-func (s pgStore) updateOrganization(ctx context.Context, id uuid.UUID, patch orgUpdate) (*organization, error) {
-	existing, err := s.orgByID(ctx, id)
+func (s pgStore) updateOrganization(ctx context.Context, id uuid.UUID, patch orgUpdate, authActive orgAuthStateFunc) (*organization, error) {
+	var tx pgx.Tx
+	var existing *organization
+	var err error
+	if authActive != nil {
+		// With an auth state hook the row is locked first, and auth is read while the lock is held: the writes of
+		// two PATCHes of one organization are ordered by the lock, so the last write read auth last.
+		tx, err = s.Pool.Begin(ctx)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		existing, err = scanOrganization(tx.QueryRow(ctx, `SELECT `+orgColumns+` FROM organizations WHERE id = $1 FOR UPDATE`, id))
+	} else {
+		existing, err = s.orgByID(ctx, id)
+	}
 	if err != nil || existing == nil {
 		return existing, err
 	}
@@ -170,13 +207,20 @@ func (s pgStore) updateOrganization(ctx context.Context, id uuid.UUID, patch org
 	if patch.IsActive != nil {
 		isActive = *patch.IsActive
 	}
+	if authActive != nil {
+		if isActive, err = authActive(ctx); err != nil {
+			return nil, err
+		}
+	}
 	now := s.now().UTC()
 
-	tx, err := s.Pool.Begin(ctx)
-	if err != nil {
-		return nil, err
+	if tx == nil {
+		tx, err = s.Pool.Begin(ctx)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
 
 	if _, err := tx.Exec(ctx, `
 UPDATE organizations SET name = $2, description = $3, settings = $4, tier = $5, managed_by = $6, is_active = $7, updated_at = $8

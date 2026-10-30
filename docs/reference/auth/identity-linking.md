@@ -124,11 +124,17 @@ writes an `SSO_LOGIN` audit row, with status success or failure.
 
 **auth-service.** Social exchange, link and unlink outcomes are counted by
 `auth.social.outcomes` and logged with a reason code; OIDC outcomes are counted
-by `auth.oidc.outcomes`. An OAuth sign-in refused for its email domain also
-writes the `sso_login` failure row go-api writes (stage `domain_check`; the error
-message names the domain) before it answers; when that row cannot be written,
-the sign-in answers 500. No other auth-service sign-in refusal writes an audit
-row. The reason codes are:
+by `auth.oidc.outcomes`. An OAuth sign-in refusal that go-api audits also writes
+the `sso_login` failure row go-api writes, with go-api's stage and message,
+before it answers: `state_auth` (the state expired or does not match, or the
+login cookie is missing or wrong), `provider_profile` (the profile has no user
+id), `email_verification` (no verified email), `provisioning` (an unusable email
+or subject, auto-provisioning off, an identity conflict or an email another
+account holds, or no membership) and
+`domain_check` (the domain is off the list; the message names it). When that
+row cannot be written, the sign-in answers 500. A provider error (the token
+exchange or the profile fetch failing) writes no row yet, and no OIDC or SAML
+refusal writes one. The reason codes are:
 
 | Reason | Meaning |
 | --- | --- |

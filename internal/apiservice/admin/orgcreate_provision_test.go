@@ -13,7 +13,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
@@ -21,43 +20,68 @@ import (
 )
 
 const (
-	orgCreateSlugRead      = "SELECT id, slug, name, description, settings, tier, managed_by, is_active, created_at, updated_at FROM organizations WHERE lower(slug) = $1"
-	orgCreateOwnerRead     = "SELECT id, email, is_active, is_superuser FROM users WHERE id = $1"
-	orgCreateOrgInsert     = "INSERT INTO organizations (id, slug, name, description, settings, tier, managed_by, is_active, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"
-	orgCreateMemberRead    = "SELECT id, org_id, user_id, role, invited_by_id, joined_at, created_at, updated_at FROM memberships WHERE org_id = $1 AND user_id = $2"
-	orgCreateMemberInsert  = "INSERT INTO memberships (id, org_id, user_id, role, invited_by_id, joined_at, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"
-	orgCreateGuardedDelete = "DELETE FROM organizations WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM memberships WHERE org_id = $1)"
-	orgCreateOwnerEmail    = "owner@example.com"
+	orgCreateSlugRead     = "SELECT id, slug, name, description, settings, tier, managed_by, is_active, created_at, updated_at FROM organizations WHERE lower(slug) = $1"
+	orgCreateOwnerRead    = "SELECT id, email, is_active, is_superuser FROM users WHERE id = $1"
+	orgCreateOrgInsert    = "INSERT INTO organizations (id, slug, name, description, settings, tier, managed_by, is_active, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"
+	orgCreateMemberRead   = "SELECT id, org_id, user_id, role, invited_by_id, joined_at, created_at, updated_at FROM memberships WHERE org_id = $1 AND user_id = $2"
+	orgCreateMemberInsert = "INSERT INTO memberships (id, org_id, user_id, role, invited_by_id, joined_at, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"
+	orgCreateGuardLock    = "SELECT 1 FROM organizations WHERE id = $1 FOR UPDATE"
+	orgCreateGuardMembers = "SELECT EXISTS (SELECT 1 FROM memberships WHERE org_id = $1)"
+	orgCreateGuardDelete  = "DELETE FROM organizations WHERE id = $1"
+	orgCreateOwnerEmail   = "owner@example.com"
+)
+
+// The guarded delete of an ownerless organization: the org row locked, then
+// the membership check after the lock, then the delete, in one transaction.
+var (
+	orgCreateGuardDeletes = []string{"BEGIN", "tx:" + orgCreateGuardLock, "tx:" + orgCreateGuardMembers, "tx:" + orgCreateGuardDelete, "COMMIT", "ROLLBACK"}
+	orgCreateGuardKeeps   = []string{"BEGIN", "tx:" + orgCreateGuardLock, "tx:" + orgCreateGuardMembers, "ROLLBACK"}
 )
 
 var orgCreateWithOwner = `{"name": "Acme", "owner_user_id": "` + provOwner.String() + `"}`
 
-// orgCreateDB is a provisionDB whose guarded organization DELETE answers
-// deleteTag, and whose owner membership row exists when ownerRow is set, or
-// appears once the DELETE ran when ownerAfterDelete is set.
+// orgCreateDB is a provisionDB whose guard transaction finds a membership of
+// the org when memberExists is set (it then keeps the org), and whose owner
+// membership row exists when ownerRow is set, or appears once the guard ran
+// when ownerAfterGuard is set.
 type orgCreateDB struct {
 	*provisionDB
-	deleteTag        string
-	ownerRow         bool
-	ownerAfterDelete bool
-	ownerReadFails   bool
+	memberExists    bool
+	ownerRow        bool
+	ownerAfterGuard bool
+	ownerReadFails  bool
 }
 
-func (d *orgCreateDB) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
-	if strings.HasPrefix(fold(sql), "DELETE FROM organizations") {
-		d.add(fold(sql))
-		tag := d.deleteTag
-		if tag == "" {
-			tag = "DELETE 1"
-		}
-		return pgconn.NewCommandTag(tag), nil
+// orgCreateTx is the guard's transaction on an orgCreateDB.
+type orgCreateTx struct {
+	*provisionTx
+	d *orgCreateDB
+}
+
+func (t *orgCreateTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	switch fold(sql) {
+	case orgCreateGuardLock:
+		t.d.add("tx:" + fold(sql))
+		return provisionRow{values: []any{1}, ok: true}
+	case orgCreateGuardMembers:
+		t.d.add("tx:" + fold(sql))
+		return provisionRow{values: []any{t.d.memberExists}, ok: true}
 	}
-	return d.provisionDB.Exec(ctx, sql, args...)
+	return t.provisionTx.QueryRow(ctx, sql, args...)
 }
 
 func (d *orgCreateDB) deleted() bool {
 	for _, step := range d.log {
-		if strings.HasPrefix(step, "DELETE FROM organizations") {
+		if step == "tx:"+orgCreateGuardDelete {
+			return true
+		}
+	}
+	return false
+}
+
+func (d *orgCreateDB) guardRan() bool {
+	for _, step := range d.log {
+		if step == "tx:"+orgCreateGuardMembers {
 			return true
 		}
 	}
@@ -70,7 +94,7 @@ func (d *orgCreateDB) QueryRow(ctx context.Context, sql string, args ...any) pgx
 		if d.ownerReadFails {
 			return provisionRow{values: []any{failRead{}}, ok: true}
 		}
-		if d.ownerRow || (d.ownerAfterDelete && d.deleted()) {
+		if d.ownerRow || (d.ownerAfterGuard && d.guardRan()) {
 			joined := provStamp
 			return provisionRow{values: []any{provMember, provOrg, provOwner, "owner", (*uuid.UUID)(nil), &joined, provStamp, provStamp}, ok: true}
 		}
@@ -79,7 +103,10 @@ func (d *orgCreateDB) QueryRow(ctx context.Context, sql string, args ...any) pgx
 	return d.provisionDB.QueryRow(ctx, sql, args...)
 }
 
-func (d *orgCreateDB) Begin(ctx context.Context) (pgx.Tx, error) { return d.provisionDB.Begin(ctx) }
+func (d *orgCreateDB) Begin(ctx context.Context) (pgx.Tx, error) {
+	d.add("BEGIN")
+	return &orgCreateTx{provisionTx: &provisionTx{db: d.provisionDB}, d: d}, nil
+}
 
 func (d *orgCreateDB) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
 	return d.provisionDB.Query(ctx, sql, args...)
@@ -277,7 +304,7 @@ func TestOrgCreateRefusedOwnerCleansUp(t *testing.T) {
 			if code != http.StatusServiceUnavailable || body != unavailableBody() {
 				t.Fatalf("answer %d %s, want the 503", code, body)
 			}
-			want := []string{orgCreateSlugRead, orgCreateOwnerRead, orgCreateOrgInsert, "auth:add", orgCreateMemberRead, "auth:deprovision", orgCreateGuardedDelete}
+			want := append([]string{orgCreateSlugRead, orgCreateOwnerRead, orgCreateOrgInsert, "auth:add", orgCreateMemberRead, "auth:deprovision"}, orgCreateGuardDeletes...)
 			if !reflect.DeepEqual(db.log, want) {
 				t.Fatalf("steps:\n got %q\nwant %q", db.log, want)
 			}
@@ -307,7 +334,7 @@ func TestOrgCreateUnavailableWithoutOwnerCleansUpAnd503(t *testing.T) {
 	if code != http.StatusServiceUnavailable || body != unavailableBody() {
 		t.Fatalf("answer %d %s, want the 503", code, body)
 	}
-	want := []string{orgCreateSlugRead, orgCreateOwnerRead, orgCreateOrgInsert, "auth:add", orgCreateMemberRead, "auth:deprovision", orgCreateGuardedDelete}
+	want := append([]string{orgCreateSlugRead, orgCreateOwnerRead, orgCreateOrgInsert, "auth:add", orgCreateMemberRead, "auth:deprovision"}, orgCreateGuardDeletes...)
 	if !reflect.DeepEqual(db.log, want) {
 		t.Fatalf("steps:\n got %q\nwant %q", db.log, want)
 	}
@@ -382,13 +409,13 @@ func TestOrgCreateCleanupOrgNotInAuthStillDeletes(t *testing.T) {
 // was added meanwhile): 500 and an ERROR naming the org, no address.
 func TestOrgCreateGuardKeepsOrgWithoutOwnerIs500(t *testing.T) {
 	db := newOrgCreateDB()
-	db.deleteTag = "DELETE 0"
+	db.memberExists = true
 	auth := &orgCreateProvisioner{fakeProvisioner: fakeProvisioner{db: db.provisionDB}, addErr: authprovision.ErrUnavailable}
 	code, body, logs := callCreateOrg(db, auth, orgCreateWithOwner)
 	if code != http.StatusInternalServerError || body != internalBody() {
 		t.Fatalf("answer %d %s, want the 500 of a failed cleanup", code, body)
 	}
-	want := []string{orgCreateSlugRead, orgCreateOwnerRead, orgCreateOrgInsert, "auth:add", orgCreateMemberRead, "auth:deprovision", orgCreateGuardedDelete, orgCreateMemberRead}
+	want := append(append([]string{orgCreateSlugRead, orgCreateOwnerRead, orgCreateOrgInsert, "auth:add", orgCreateMemberRead, "auth:deprovision"}, orgCreateGuardKeeps...), orgCreateMemberRead)
 	if !reflect.DeepEqual(db.log, want) {
 		t.Fatalf("steps:\n got %q\nwant %q", db.log, want)
 	}
@@ -398,8 +425,8 @@ func TestOrgCreateGuardKeepsOrgWithoutOwnerIs500(t *testing.T) {
 // U9: the guarded DELETE takes no row and the owner row is there now: 201.
 func TestOrgCreateGuardKeepsOrgWithOwnerIs201(t *testing.T) {
 	db := newOrgCreateDB()
-	db.deleteTag = "DELETE 0"
-	db.ownerAfterDelete = true
+	db.memberExists = true
+	db.ownerAfterGuard = true
 	auth := &orgCreateProvisioner{fakeProvisioner: fakeProvisioner{db: db.provisionDB}, addErr: authprovision.ErrUnavailable}
 	code, body, _ := callCreateOrg(db, auth, orgCreateWithOwner)
 	if code != http.StatusCreated {

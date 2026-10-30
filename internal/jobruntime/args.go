@@ -93,6 +93,24 @@ func (args LLMBudgetStaleReservationsArgs) ContractEnvelope() jobcontract.Envelo
 	return args.envelope()
 }
 
+// ProviderOAuthRevocationsArgs is the River-facing typed form of
+// sync.provider_oauth_revocations.v1.
+type ProviderOAuthRevocationsArgs struct {
+	EnvelopeArgs[jobcontract.ProviderOAuthRevocationsPayload]
+}
+
+func (ProviderOAuthRevocationsArgs) Kind() string {
+	return jobcontract.KindProviderOAuthRevocations
+}
+
+func (ProviderOAuthRevocationsArgs) SupportedContractVersions() []int {
+	return []int{jobcontract.ContractVersionV1}
+}
+
+func (args ProviderOAuthRevocationsArgs) ContractEnvelope() jobcontract.Envelope {
+	return args.envelope()
+}
+
 // SyncCoverageRefreshArgs is the River-facing typed form of
 // system.sync_coverage_refresh.v1.
 type SyncCoverageRefreshArgs struct {

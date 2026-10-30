@@ -61,6 +61,7 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"CREATE TABLE public.provider_oauth_credentials (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.github_app_installations (id bigint PRIMARY KEY, installation_id bigint, account_login text, account_type text, org_id text, suspended_at timestamptz, created_at timestamptz, updated_at timestamptz)",
 		"CREATE TABLE public.webhook_sync_requests (delivery_id bigint PRIMARY KEY, org_id text, sync_config_id uuid, mode text, source_ids text[], scheduled_for timestamptz, created_at timestamptz, attempts int, next_attempt_at timestamptz, last_error text, refused_at timestamptz, refused_reason text, minted_at timestamptz, occurrence_id text)",
+		"CREATE TABLE public.provider_oauth_revocations (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.sync_runs (id bigint PRIMARY KEY)",
 		// worker_job_routes is coordinator-exclusive under the Option B split
 		// (role-partition manifest, removed in e23ede618; see git history at
@@ -165,6 +166,7 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"GRANT SELECT, UPDATE ON TABLE public.provider_oauth_credentials TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.github_app_installations TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT ON TABLE public.webhook_sync_requests TO " + authorizedDomainRole,
+		"GRANT SELECT, UPDATE, DELETE ON TABLE public.provider_oauth_revocations TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.integration_sources, public.integration_datasets, public.sync_runs, public.sync_run_units TO " + authorizedDomainRole,
 		"GRANT SELECT, UPDATE ON TABLE public.report_runs, public.saved_reports TO " + authorizedDomainRole,
 		// CHAOS-4209: observeTerminalSyncRun terminalizes the backfill and
@@ -405,6 +407,16 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 			name:   "missing EXECUTE on the categorize settings function",
 			grant:  "REVOKE EXECUTE ON FUNCTION public.categorize_byo_settings(text) FROM " + authorizedDomainRole,
 			revoke: "GRANT EXECUTE ON FUNCTION public.categorize_byo_settings(text) TO " + authorizedDomainRole,
+		},
+		{
+			name:   "provider revocation INSERT the worker never uses",
+			grant:  "GRANT INSERT ON TABLE public.provider_oauth_revocations TO " + authorizedDomainRole,
+			revoke: "REVOKE INSERT ON TABLE public.provider_oauth_revocations FROM " + authorizedDomainRole,
+		},
+		{
+			name:   "missing provider revocation DELETE",
+			grant:  "REVOKE DELETE ON TABLE public.provider_oauth_revocations FROM " + authorizedDomainRole,
+			revoke: "GRANT DELETE ON TABLE public.provider_oauth_revocations TO " + authorizedDomainRole,
 		},
 		{
 			name:   "missing budget-reservation INSERT",

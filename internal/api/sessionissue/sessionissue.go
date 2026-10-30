@@ -61,6 +61,41 @@ var ErrUnavailable = errors.New("sessionissue: session issue route unavailable")
 // switch from it. A route answers it with 401 and mints nothing.
 var ErrSessionEnded = errors.New("sessionissue: the predecessor session has ended")
 
+// RefusedError is a refusal the issue route answered with its error.v1
+// document. It is ErrUnavailable too, so a caller that answers 503 for every
+// failure still does.
+type RefusedError struct {
+	Status int
+	Reason string
+}
+
+func (e *RefusedError) Error() string {
+	return fmt.Sprintf("%v: status %d, reason %s", ErrUnavailable, e.Status, e.Reason)
+}
+
+func (e *RefusedError) Unwrap() error { return ErrUnavailable }
+
+// reasonCodePattern is an error.v1 reason code.
+var reasonCodePattern = regexp.MustCompile(`^[a-z][a-z_]{0,63}$`)
+
+// refusalIn is the refusal of a non-200 answer when its body is the error.v1
+// document for that status, else nil.
+func refusalIn(status int, answer []byte) *RefusedError {
+	if len(answer) > maxAnswerBytes {
+		return nil
+	}
+	var doc struct {
+		SchemaVersion string `json:"schema_version"`
+		Status        int    `json:"status"`
+		ReasonCode    string `json:"reason_code"`
+	}
+	if json.Unmarshal(answer, &doc) != nil || doc.SchemaVersion != "error.v1" || doc.Status != status ||
+		!reasonCodePattern.MatchString(doc.ReasonCode) {
+		return nil
+	}
+	return &RefusedError{Status: status, Reason: doc.ReasonCode}
+}
+
 // Request names the session to issue.
 type Request struct {
 	PrincipalID    uuid.UUID
@@ -131,11 +166,6 @@ type issueBody struct {
 	PredecessorSessionID *string  `json:"predecessor_session_id,omitempty"`
 }
 
-// refusalBody is the reason of an error.v1 refusal.
-type refusalBody struct {
-	ReasonCode string `json:"reason_code"`
-}
-
 type issueAnswer struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
@@ -179,13 +209,15 @@ func (c *Client) Issue(ctx context.Context, r *http.Request, req Request) (Pair,
 	if err != nil {
 		return Pair{}, fmt.Errorf("%w: reading the answer: %w", ErrUnavailable, err)
 	}
-	if response.StatusCode == http.StatusUnauthorized && req.PredecessorSessionID != nil {
-		var refusal refusalBody
-		if json.Unmarshal(answer, &refusal) == nil && refusal.ReasonCode == "session_revoked" {
-			return Pair{}, ErrSessionEnded
-		}
-	}
 	if response.StatusCode != http.StatusOK {
+		if refused := refusalIn(response.StatusCode, answer); refused != nil {
+			// A superseding issue refused because the predecessor already
+			// ended is the caller's own session ending, not an outage.
+			if req.PredecessorSessionID != nil && refused.Status == http.StatusUnauthorized && refused.Reason == "session_revoked" {
+				return Pair{}, ErrSessionEnded
+			}
+			return Pair{}, refused
+		}
 		return Pair{}, fmt.Errorf("%w: status %d", ErrUnavailable, response.StatusCode)
 	}
 	if len(answer) > maxAnswerBytes {

@@ -96,3 +96,17 @@ func TestGoAPIExtraVolumesSchemaRefusesNonLists(t *testing.T) {
 		}
 	}
 }
+
+func TestGoAPIExtraVolumesSchemaRefusesEveryNonListShape(t *testing.T) {
+	shapes := map[string]string{"string": `"oops"`, "object": `{"name":"x"}`, "number": `17`, "boolean": `true`, "null": `null`}
+	for _, key := range []string{"extraVolumes", "extraVolumeMounts"} {
+		for shape, value := range shapes {
+			_, out, err := renderAuth(t, "--set", "goApi.enabled=true", "--set-json", "goApi."+key+"="+value)
+			if err == nil {
+				t.Errorf("goApi.%s=%s (%s) rendered; the schema must refuse a non-list", key, value, shape)
+			} else if !strings.Contains(out, key) {
+				t.Errorf("goApi.%s=%s (%s) refusal does not name the key:\n%.400s", key, value, shape, out)
+			}
+		}
+	}
+}

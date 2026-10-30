@@ -50,6 +50,10 @@ const (
 // second apply of the same manifest changes nothing, so the source must be set before the -apply run.
 const requeueRunbookStep = "docs/operate/maintain/backup-and-restore.md#step-5:set-RESTORE_FENCE_SOURCE_URI-before-the-apply-run"
 
+// credentialRevokeStep is the follow-up of provider credentials the fence deleted: the delete writes no revocation row,
+// and a token rotated by a refresh after the target has none anywhere, so nothing sends the old token's revoke.
+const credentialRevokeStep = "docs/operate/maintain/backup-and-restore.md#step-6:revoke-the-old-token-at-the-provider-by-hand-then-reconnect-the-credential"
+
 // followUp names the follow-up leaf that automates each action; the operator
 // action line prints it.
 var followUp = map[ActionKind]string{
@@ -108,11 +112,11 @@ func mergeActions(in []OperatorAction) []OperatorAction {
 }
 
 // followUpOf is the follow-up of one action. requeue_provider_revocation names two things: revocations an apply
-// without a source only named (the runbook step), and provider credentials the fence deleted, whose old token waits
-// for the revocation worker.
+// without a source only named (the runbook step that sets the source), and provider credentials the fence deleted
+// (the manual revoke at the provider, then a reconnect).
 func followUpOf(a OperatorAction) string {
 	if a.Kind == ActionRequeueProviderRevocation && a.Source != revocationSection {
-		return followUp[ActionProviderRevocationRequeuedBlocked]
+		return credentialRevokeStep
 	}
 	return followUp[a.Kind]
 }

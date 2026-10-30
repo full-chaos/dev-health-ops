@@ -13,7 +13,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -92,8 +91,6 @@ type Core struct {
 	http  *http.Client
 }
 
-func noRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-
 // NewCore builds a Core for base (AUTH_PROXY_URL's origin) and token. It
 // refuses a token that is not an auth-session-issuer credential, and never
 // prints it.
@@ -107,21 +104,8 @@ func NewCore(base *url.URL, token string, timeout time.Duration) (*Core, error) 
 	if timeout <= 0 {
 		timeout = defaultTimeout
 	}
-	transport := &http.Transport{
-		Proxy:                 nil,
-		DialContext:           (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
-		MaxIdleConns:          4,
-		MaxIdleConnsPerHost:   4,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   5 * time.Second,
-		ExpectContinueTimeout: time.Second,
-		ForceAttemptHTTP2:     true,
-	}
-	return &Core{base: url.URL{Scheme: base.Scheme, Host: base.Host}, token: token, http: &http.Client{
-		Transport:     transport,
-		Timeout:       timeout,
-		CheckRedirect: noRedirect,
-	}}, nil
+	client := httpguard.NoRedirects(&http.Client{Transport: httpguard.SharedTransport(), Timeout: timeout})
+	return &Core{base: url.URL{Scheme: base.Scheme, Host: base.Host}, token: token, http: client}, nil
 }
 
 // NewWorkloadCore builds a Core that presents the workload token of workload
@@ -140,12 +124,12 @@ func NewWorkloadCore(base *url.URL, workload *workloadtoken.Client, timeout time
 		timeout = defaultTimeout
 	}
 	origin := url.URL{Scheme: base.Scheme, Host: base.Host}
-	client, err := workload.HTTPClient(httpguard.Transport(), origin.String(), WorkloadAudience)
+	client, err := workload.HTTPClient(httpguard.SharedTransport(), origin.String(), WorkloadAudience)
 	if err != nil {
 		return nil, fmt.Errorf("authprovision: workload token transport: %w", err)
 	}
 	client.Timeout = timeout
-	return &Core{base: origin, http: client}, nil
+	return &Core{base: origin, http: httpguard.NoRedirects(client)}, nil
 }
 
 // HTTP is the Core's client (its redirect policy is checked by tests).

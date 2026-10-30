@@ -216,9 +216,9 @@ var shardRuns runCache
 func runShardWithFakeGo(t *testing.T, shard int, slowPackage string, extraEnv ...string) (cmdResult, []string) {
 	t.Helper()
 	key := fmt.Sprint(shard, "|", slowPackage, "|", strings.Join(extraEnv, "\x00"))
-	run := shardRuns.get(t, key, func() (shardRun, error) {
+	run := shardRuns.get(t, key, func() shardRun {
 		res, lines := runShardWithFakeGoOnce(t, shard, slowPackage, extraEnv...)
-		return shardRun{res: res, lines: lines}, nil
+		return shardRun{res: res, lines: lines}
 	})
 	return run.res, run.lines
 }

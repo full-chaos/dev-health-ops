@@ -14,6 +14,9 @@ import (
 const (
 	bigboyComposePath      = "ci/bigboy/compose.bigboy.yml"
 	bigboySystemLogsSource = "./ops/docker/clickhouse-config.d/system-logs.xml"
+	// The deploy copy reads every ops path through BIGBOY_OPS_REPO, a pinned clean ops worktree (CHAOS-11970). Until that
+	// change merges, either exact source is accepted.
+	bigboySystemLogsOpsRepoSource = "${BIGBOY_OPS_REPO:-/home/ubuntu/devhealth/ops-bigboy}/docker/clickhouse-config.d/system-logs.xml"
 )
 
 // bigboy runs ci/bigboy/compose.bigboy.yml, not the root compose.yml, so the mount must be in that file too.
@@ -45,8 +48,8 @@ func bigboySystemLogsFindings(text []byte) ([]string, error) {
 			continue
 		}
 		mounted = true
-		if volume.Type != "bind" || volume.Source != bigboySystemLogsSource {
-			findings = append(findings, fmt.Sprintf("clickhouse mounts %s (%s) at %s, want the checked-in file %s", volume.Source, volume.Type, systemLogsFileTarget, bigboySystemLogsSource))
+		if volume.Type != "bind" || (volume.Source != bigboySystemLogsSource && volume.Source != bigboySystemLogsOpsRepoSource) {
+			findings = append(findings, fmt.Sprintf("clickhouse mounts %s (%s) at %s, want the checked-in file %s or %s", volume.Source, volume.Type, systemLogsFileTarget, bigboySystemLogsSource, bigboySystemLogsOpsRepoSource))
 		}
 		if !volume.ReadOnly {
 			findings = append(findings, "the system logs file is mounted read-write")
@@ -99,5 +102,34 @@ func TestBigboySystemLogsCheckSeesEachDefect(t *testing.T) {
 	}
 	if got, _ := bigboySystemLogsFindings([]byte("services:\n  web: {}\n")); len(got) != 1 {
 		t.Errorf("no clickhouse service: findings %v", got)
+	}
+}
+
+func TestBigboySystemLogsSourceTransitionCells(t *testing.T) {
+	file := func(source string) []byte {
+		return []byte("services:\n  clickhouse:\n    volumes:\n    - read_only: true\n      source: " + source + "\n      target: " + systemLogsFileTarget + "\n      type: bind\n")
+	}
+	for name, c := range map[string]struct {
+		source string
+		ok     bool
+	}{
+		"old form ./ops":                        {bigboySystemLogsSource, true},
+		"new form BIGBOY_OPS_REPO":              {bigboySystemLogsOpsRepoSource, true},
+		"default is the shared checkout":        {"${BIGBOY_OPS_REPO:-/home/ubuntu/devhealth/ops}/docker/clickhouse-config.d/system-logs.xml", false},
+		"no default":                            {"${BIGBOY_OPS_REPO}/docker/clickhouse-config.d/system-logs.xml", false},
+		"required form":                         {"${BIGBOY_OPS_REPO:?set}/docker/clickhouse-config.d/system-logs.xml", false},
+		"other prefix with the same suffix":     {"/srv/ops/docker/clickhouse-config.d/system-logs.xml", false},
+		"absolute shared checkout":              {"/home/ubuntu/devhealth/ops/docker/clickhouse-config.d/system-logs.xml", false},
+		"new form with a trailing path element": {bigboySystemLogsOpsRepoSource + ".bak", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := bigboySystemLogsFindings(file(c.source))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.ok != (len(got) == 0) {
+				t.Fatalf("source %q: want accepted=%v, findings %v", c.source, c.ok, got)
+			}
+		})
 	}
 }

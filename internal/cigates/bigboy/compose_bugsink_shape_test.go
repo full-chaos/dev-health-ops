@@ -50,11 +50,12 @@ func composeBugsinkShape(required, base []string, bugsink doc, scalars []string)
 		required, files, interpolated, base, composeBugsinkVars, composeBugsinkEnvFile)}
 }
 
-// composeBugsinkFileFindings applies composeBugsinkShape to the compose file the guard reads: its bugsink service and every
-// scalar of the file.
+// composeBugsinkFileFindings applies composeBugsinkShape (bugsink service + every scalar) and composeBugsinkPassThrough (every
+// service) to the compose file the guard reads.
 func composeBugsinkFileFindings(g *guard, required, base []string) []string {
 	f := g.yamlFile(composeFile)
-	return composeBugsinkShape(required, base, mp(mp(f["services"])["bugsink"]), composeScalars(f))
+	services := mp(f["services"])
+	return append(composeBugsinkShape(required, base, mp(services["bugsink"]), composeScalars(f)), composeBugsinkPassThrough(services)...)
 }
 
 // composeInterpolatedNames returns the variable names Compose interpolates in one scalar: $NAME, ${NAME} and ${NAME<op>...}

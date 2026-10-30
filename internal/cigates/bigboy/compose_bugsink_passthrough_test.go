@@ -1,6 +1,9 @@
 package bigboy_test
 
 import (
+	"fmt"
+	"path"
+	"sort"
 	"strings"
 	"testing"
 
@@ -12,7 +15,63 @@ import (
 // null included, or list form NAME / NAME=value) in a service other than bugsink, or in bugsink itself when bugsink loads
 // its own env file; and any service other than bugsink whose env_file names bugsink's env file.
 func composeBugsinkPassThrough(services doc) []string {
-	return nil
+	isCredential := func(name string) bool {
+		for _, v := range composeBugsinkVars {
+			if name == v {
+				return true
+			}
+		}
+		return false
+	}
+	isOwnFile := func(p string) bool { return path.Clean(p) == path.Clean(composeBugsinkEnvFile) }
+	var findings []string
+	names := make([]string, 0, len(services))
+	for name := range services {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		svc := mp(services[name])
+		ownFile := false
+		ef := svc["env_file"]
+		if _, one := ef.(string); one {
+			ef = []any{ef}
+		}
+		for _, e := range list(ef) {
+			p := str(e)
+			if m := mp(e); m != nil {
+				p = str(m["path"])
+			}
+			if isOwnFile(p) {
+				ownFile = true
+			}
+		}
+		if ownFile && name != "bugsink" {
+			findings = append(findings, fmt.Sprintf("service %s loads bugsink's env file %s", name, composeBugsinkEnvFile))
+		}
+		if name == "bugsink" && !ownFile {
+			continue // the old form: bugsink's credentials are interpolated values, checked by composeBugsinkShape
+		}
+		var keys []string
+		switch e := svc["environment"].(type) {
+		case map[string]any:
+			for k := range e {
+				keys = append(keys, k)
+			}
+		case []any:
+			for _, x := range e {
+				k, _, _ := strings.Cut(str(x), "=")
+				keys = append(keys, k)
+			}
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			if isCredential(k) {
+				findings = append(findings, fmt.Sprintf("service %s gets the bugsink credential %s by name from the compose environment", name, k))
+			}
+		}
+	}
+	return findings
 }
 
 func TestComposeBugsinkPassThroughCells(t *testing.T) {

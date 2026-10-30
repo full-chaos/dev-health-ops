@@ -450,7 +450,8 @@ func createOperatorIntegrationSchema(
 		`CREATE TABLE public.integration_credentials (
 			id uuid PRIMARY KEY, org_id text, provider text,
 			is_active boolean, config json, credentials_encrypted text,
-			updated_at timestamptz
+			updated_at timestamptz,
+			last_test_at timestamptz, last_test_success boolean, last_test_error text
 		)`,
 		"CREATE TABLE public.provider_oauth_credentials (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.github_app_installations (id uuid PRIMARY KEY, installation_id bigint, account_login text, account_type text, org_id text, suspended_at timestamptz, created_at timestamptz, updated_at timestamptz)",

@@ -11,15 +11,15 @@ import (
 var provisioningPatterns = []string{PatternMembershipAdd, PatternMembershipRole, PatternMembershipRemove,
 	PatternMembershipTransfer, PatternInviteCreate, PatternInviteAccept, PatternOrgDeprovision, PatternOrgReactivate}
 
-// serviceSessionIssuerClass is the endpoint-profile credential class of the
-// session issuer credential (svc_authsess_) the routes take.
-const serviceSessionIssuerClass = "internal_svc_authsess_token"
+// workloadTokenClass is the endpoint-profile credential class of the go-api
+// workload token, the one bearer the routes take.
+const workloadTokenClass = "workload_token"
 
 var errProvisioningRows = errors.New("authapi: the provisioning routes need their endpoint-profile rows")
 
 // provisioningRowsPresent refuses the provisioning routes unless the
 // endpoint-profile document (the one this binary embeds) holds, for each
-// route, an auth-service row accepting the session issuer credential: the
+// route, an auth-service row accepting the go-api workload token: the
 // switch may turn the routes on only in a build that profiles them. The error
 // names the route only.
 func provisioningRowsPresent(raw []byte) error {
@@ -43,13 +43,13 @@ func rowsPresentFor(raw []byte, patterns []string) error {
 		found := false
 		for _, row := range document.Rows {
 			if row.Service == AccessService && row.Method == "POST" && row.Route == pattern &&
-				slices.Contains(row.AcceptedClasses, serviceSessionIssuerClass) {
+				slices.Contains(row.AcceptedClasses, workloadTokenClass) {
 				found = true
 				break
 			}
 		}
 		if !found {
-			return fmt.Errorf("%w: POST %s has no row accepting %s", errProvisioningRows, pattern, serviceSessionIssuerClass)
+			return fmt.Errorf("%w: POST %s has no row accepting %s", errProvisioningRows, pattern, workloadTokenClass)
 		}
 	}
 	return nil

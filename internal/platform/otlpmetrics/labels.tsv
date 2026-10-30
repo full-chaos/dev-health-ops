@@ -6,7 +6,7 @@ auth.identity.wire_slug_omitted		code: internal/auth/identity/store.go
 auth.oidc.outcomes	outcome,reason,route	code: internal/auth/identity/oidc/service.go
 auth.org.mutations	outcome,verb	code: internal/auth/org/store.go
 auth.org.deprovisions	outcome	code: internal/auth/orgdeprovision/deprovision.go
-auth.provisioning.compat_credential_uses	operation	code: internal/auth/authapi/provisioning.go
+auth.provisioning.retired_credential_refusals	operation	code: internal/auth/authapi/provisioning.go
 auth.invite.mutations	outcome,verb	code: internal/auth/invite/store.go
 auth.membership.mutations	outcome,verb	code: internal/auth/membership/store.go
 auth.session.issue_compat_uses	class	code: internal/auth/authapi/wire.go

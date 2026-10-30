@@ -123,16 +123,15 @@ the session cutover.
 `internal_service_credentials` table with `svc_acr_` and `svc_worker_`, which
 carry other prefixes, services and scopes. auth-service is its only validator
 (`servicecred.PG.Check`); the verbs of `dev-hops service-credentials` mint,
-rotate and revoke it. A second scope, `memberships:write`, which no other
-service may hold, lets go-api call the internal provisioning routes
-(`/internal/v1/memberships/*`, `/internal/v1/invites/*`,
-`/internal/v1/organizations/{deprovision,reactivate}`, mounted by `AUTH_MEMBERSHIP_ROUTES`;
-`servicecred.PG.CheckScope`). The route, the eight provisioning routes and
-go-api's four compatibility routes (`/api/v1/auth/{login,refresh,logout,social-login}`)
-have rows in `contracts/auth/v1/endpoint-profiles.auth-service.json`. The
-provisioning audit rows name the actor, the request id and the calling
-credential (`credential_id` here, or `caller_principal_id` and `workload_jti`
-for the go-api workload token).
+rotate and revoke it. Its second scope, `memberships:write`, is retired: the
+internal provisioning routes (`/internal/v1/memberships/*`,
+`/internal/v1/invites/*`, `/internal/v1/organizations/*`, mounted by
+`AUTH_MEMBERSHIP_ROUTES`) take only the go-api workload token, refuse
+`svc_authsess_` before any read, and count each such refusal in
+`auth.provisioning.retired_credential_refusals`; no mint may ask for the scope.
+The route and go-api's four compatibility routes
+(`/api/v1/auth/{login,refresh,logout,social-login}`) have rows in
+`contracts/auth/v1/endpoint-profiles.auth-service.json`.
 
 **`org_invite_token` (CHAOS-11798).** The invite link token: `signedtoken.Build`
 over the invite id (32 lowercase hex characters, a dot, 64 lowercase hex

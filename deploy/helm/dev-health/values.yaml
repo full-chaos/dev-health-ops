@@ -37,7 +37,7 @@ goApi:
   #    go-api's PATCH /api/v1/admin/orgs/{org_id} with is_active=true reactivates the organization in
   #    auth-service first and writes its own row only on success (503 and no write when auth-service
   #    refuses or is down). Needs authService.phase 2 or higher, auth-service's AUTH_MEMBERSHIP_ROUTES on (authService.extraEnv, name AUTH_MEMBERSHIP_ROUTES, value "true": the render refuses the switch without it),
-  #    and a go-api credential (goApi.sessionIssue) minted with the memberships:write scope. Off renders nothing.
+  #    and go-api's workload token (auth-service's AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT names go-api's workload principal). Off renders nothing.
   #    The key is absent by default (an empty goApi.authProxy map is refused like any other hand-set flag map):
   #    authProxy:
   #      orgProvisioning: true

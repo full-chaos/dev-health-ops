@@ -1132,11 +1132,11 @@ func TestOrgSuspendIsServedWithItsProfileRow(t *testing.T) {
 	}
 }
 
-func TestOrgSuspendNeedsAnAuthServicePostRowAcceptingTheIssuerCredential(t *testing.T) {
+func TestOrgSuspendNeedsAnAuthServicePostRowAcceptingTheWorkloadToken(t *testing.T) {
 	for name, edit := range map[string]func(row map[string]any){
 		"another service": func(row map[string]any) { row["service"] = "dev-health-ops-api" },
 		"another method":  func(row map[string]any) { row["method"] = "GET" },
-		"another class":   func(row map[string]any) { row["accepted_credential_classes"] = []any{"workload_token"} },
+		"another class":   func(row map[string]any) { row["accepted_credential_classes"] = []any{"internal_svc_authsess_token"} },
 	} {
 		var document map[string]any
 		if err := json.Unmarshal(docWithRow(t, PatternOrgSuspend), &document); err != nil {

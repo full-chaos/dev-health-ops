@@ -44,7 +44,7 @@ const (
 var serviceScopes = map[string][]string{
 	ServiceACR:               {"entitlements:read", "llm_config:read"},
 	ServiceWorkerOperator:    {"workers:read", "workers:operate"},
-	ServiceAuthSessionIssuer: {"sessions:issue", "memberships:write"},
+	ServiceAuthSessionIssuer: {"sessions:issue"},
 }
 
 // ServiceNames are the services `--service` accepts, sorted as argparse's choices are.

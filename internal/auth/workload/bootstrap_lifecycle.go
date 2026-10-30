@@ -131,10 +131,17 @@ func (s *Store) lockIssuingWorkload(ctx context.Context, tx audit.TxOps, id uuid
 		}
 		return nil, fault(err)
 	}
-	if disabled || principalDisabled {
-		return nil, ErrBootstrapWorkloadDisabled
+	if err := disabledRefusal(disabled, principalDisabled); err != nil {
+		return nil, err
 	}
 	return audiences, nil
+}
+
+func disabledRefusal(rowDisabled, principalDisabled bool) error {
+	if rowDisabled || principalDisabled {
+		return ErrBootstrapWorkloadDisabled
+	}
+	return nil
 }
 
 func credentialWire(id uuid.UUID) string { return "crd_" + id.String() }

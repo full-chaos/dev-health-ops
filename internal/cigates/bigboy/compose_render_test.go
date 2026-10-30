@@ -3,7 +3,9 @@ package bigboy_test
 import (
 	"context"
 	"fmt"
+	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -12,6 +14,8 @@ import (
 	"github.com/compose-spec/compose-go/v2/loader"
 	"github.com/compose-spec/compose-go/v2/types"
 	"gopkg.in/yaml.v3"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/bigboydir"
 )
 
 // No docker on the runners: composeRender does what `docker compose config` does, on the parsed file.
@@ -45,10 +49,27 @@ type composeOut struct {
 	err      string
 }
 
+// composeBugsinkEnv is the three bugsink variables the deploy copy of the file requires (`:?`). It supplies
+// them only for a tree outside the repo (BIGBOY_DIR): the in-repo ci/bigboy keeps its defaults, and a render or
+// required-set check of it must fail if those become required. Test-only values.
+func composeBugsinkEnv() map[string]string {
+	if bigboydir.InRepo(moduleRootNoT()) {
+		return map[string]string{} // non-nil: a fresh-root render reads it as "no process env at all"
+	}
+	return map[string]string{
+		"BUGSINK_DB_PASSWORD":      "test-only-bugsink-db",
+		"BUGSINK_SECRET_KEY":       "test-only-bugsink-key",
+		"BUGSINK_CREATE_SUPERUSER": "test@example.invalid:test-only",
+	}
+}
+
 func composeEnv(extra map[string]string) map[string]string {
 	env := map[string]string{
 		"BIGBOY_OPERATOR_IMAGE": composeOperatorImage,
 		"DHO_API_CH_USERS_XML":  composeProject + "/.go-api-dev/dho_api_ch.xml",
+	}
+	for k, v := range composeBugsinkEnv() {
+		env[k] = v
 	}
 	for k, v := range extra {
 		env[k] = v
@@ -482,4 +503,22 @@ func composeSchemaError(content string, env map[string]string) string {
 		return err.Error()
 	}
 	return ""
+}
+
+// moduleRootNoT is the module root for helpers that have no *testing.T.
+func moduleRootNoT() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		panic(err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			panic("go.mod not found above the test directory")
+		}
+		dir = parent
+	}
 }

@@ -458,6 +458,87 @@ func TestTheOpenAPIPathGateChecksTheOneOfExtraMembers(t *testing.T) {
 			m["properties"].(map[string]any)["detail"].(map[string]any)["properties"].(map[string]any)["message"] = map[string]any{"type": []any{"object", "null"}, "additionalProperties": false}
 			plantOneOf(d, "/v1/identities/social", "post", "400", m)
 		}, false},
+		"a boolean true items schema": {func(d map[string]any) {
+			m := closedGoAPIMember()
+			message := m["properties"].(map[string]any)["detail"].(map[string]any)["properties"].(map[string]any)
+			message["message"] = map[string]any{"type": "array", "items": true}
+			plantOneOf(d, "/v1/identities/social", "post", "400", m)
+		}, true},
+		"a boolean false items schema": {func(d map[string]any) {
+			m := closedGoAPIMember()
+			message := m["properties"].(map[string]any)["detail"].(map[string]any)["properties"].(map[string]any)
+			message["message"] = map[string]any{"type": "array", "items": false}
+			plantOneOf(d, "/v1/identities/social", "post", "400", m)
+		}, true},
+		"items as a list": {func(d map[string]any) {
+			m := closedGoAPIMember()
+			message := m["properties"].(map[string]any)["detail"].(map[string]any)["properties"].(map[string]any)
+			message["message"] = map[string]any{"type": "array", "items": []any{map[string]any{"type": "string"}}}
+			plantOneOf(d, "/v1/identities/social", "post", "400", m)
+		}, true},
+		"a boolean oneOf member": {func(d map[string]any) {
+			m := closedGoAPIMember()
+			message := m["properties"].(map[string]any)["detail"].(map[string]any)["properties"].(map[string]any)
+			message["message"] = map[string]any{"oneOf": []any{true}}
+			plantOneOf(d, "/v1/identities/social", "post", "400", m)
+		}, true},
+		"a boolean anyOf member": {func(d map[string]any) {
+			m := closedGoAPIMember()
+			message := m["properties"].(map[string]any)["detail"].(map[string]any)["properties"].(map[string]any)
+			message["message"] = map[string]any{"anyOf": []any{map[string]any{"type": "string"}, true}}
+			plantOneOf(d, "/v1/identities/social", "post", "400", m)
+		}, true},
+		"a boolean allOf member": {func(d map[string]any) {
+			m := closedGoAPIMember()
+			message := m["properties"].(map[string]any)["detail"].(map[string]any)["properties"].(map[string]any)
+			message["message"] = map[string]any{"allOf": []any{false}}
+			plantOneOf(d, "/v1/identities/social", "post", "400", m)
+		}, true},
+		"a null allOf member": {func(d map[string]any) {
+			m := closedGoAPIMember()
+			message := m["properties"].(map[string]any)["detail"].(map[string]any)["properties"].(map[string]any)
+			message["message"] = map[string]any{"allOf": []any{nil}}
+			plantOneOf(d, "/v1/identities/social", "post", "400", m)
+		}, true},
+		"a oneOf that is an object": {func(d map[string]any) {
+			m := closedGoAPIMember()
+			message := m["properties"].(map[string]any)["detail"].(map[string]any)["properties"].(map[string]any)
+			message["message"] = map[string]any{"oneOf": map[string]any{"type": "string"}}
+			plantOneOf(d, "/v1/identities/social", "post", "400", m)
+		}, true},
+		"a boolean property schema": {func(d map[string]any) {
+			m := closedGoAPIMember()
+			message := m["properties"].(map[string]any)["detail"].(map[string]any)["properties"].(map[string]any)
+			message["message"] = true
+			plantOneOf(d, "/v1/identities/social", "post", "400", m)
+		}, true},
+		"a null property schema": {func(d map[string]any) {
+			m := closedGoAPIMember()
+			message := m["properties"].(map[string]any)["detail"].(map[string]any)["properties"].(map[string]any)
+			message["message"] = nil
+			plantOneOf(d, "/v1/identities/social", "post", "400", m)
+		}, true},
+		"a string property schema": {func(d map[string]any) {
+			m := closedGoAPIMember()
+			message := m["properties"].(map[string]any)["detail"].(map[string]any)["properties"].(map[string]any)
+			message["message"] = "string"
+			plantOneOf(d, "/v1/identities/social", "post", "400", m)
+		}, true},
+		"properties that is a list": {func(d map[string]any) {
+			m := closedGoAPIMember()
+			m["properties"].(map[string]any)["detail"].(map[string]any)["properties"] = []any{}
+			plantOneOf(d, "/v1/identities/social", "post", "400", m)
+		}, true},
+		"additionalProperties as an empty schema": {func(d map[string]any) {
+			m := closedGoAPIMember()
+			m["additionalProperties"] = map[string]any{}
+			plantOneOf(d, "/v1/identities/social", "post", "400", m)
+		}, true},
+		"additionalProperties as a typed schema": {func(d map[string]any) {
+			m := closedGoAPIMember()
+			m["properties"].(map[string]any)["detail"].(map[string]any)["additionalProperties"] = map[string]any{"type": "string"}
+			plantOneOf(d, "/v1/identities/social", "post", "400", m)
+		}, true},
 		"an open object under items": {func(d map[string]any) {
 			m := closedGoAPIMember()
 			m["properties"].(map[string]any)["detail"].(map[string]any)["properties"].(map[string]any)["message"] = map[string]any{"type": "array", "items": map[string]any{"type": "object"}}

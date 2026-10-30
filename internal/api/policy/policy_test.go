@@ -76,12 +76,22 @@ func (f *fakeStore) ActiveImpersonation(_ context.Context, admin uuid.UUID) (*Im
 	return f.sessions[admin], nil
 }
 
+// newStore is the caller (userID) as a member of its token's own org
+// (ownOrg, role member) and of memberOrg.
 func newStore() *fakeStore {
 	return &fakeStore{
 		users:    map[uuid.UUID]UserState{userID: {IsActive: true}},
-		members:  map[[2]uuid.UUID]bool{{userID, uuid.MustParse(memberOrg)}: true},
+		members:  map[[2]uuid.UUID]bool{{userID, uuid.MustParse(memberOrg)}: true, {userID, uuid.MustParse(ownOrg)}: true},
+		roles:    map[[2]uuid.UUID]string{{userID, uuid.MustParse(ownOrg)}: "member"},
 		sessions: map[uuid.UUID]*Impersonation{},
 	}
+}
+
+// withClaimRole gives the caller, in its token's own org, the role c claims:
+// the membership row the guard reads is the claim's.
+func withClaimRole(store *fakeStore, c jwt.MapClaims) {
+	role, _ := c["role"].(string)
+	store.roles[[2]uuid.UUID{userID, uuid.MustParse(ownOrg)}] = role
 }
 
 func claims(mutate func(jwt.MapClaims)) jwt.MapClaims {
@@ -346,6 +356,7 @@ func TestGuardDecisionTable(t *testing.T) {
 			if test.store != nil {
 				test.store(store)
 			}
+			withClaimRole(store, claims(test.claims))
 			auth := authenticator(t, store)
 			headers := map[string]string{}
 			switch test.auth {

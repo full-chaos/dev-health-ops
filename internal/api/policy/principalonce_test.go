@@ -456,8 +456,9 @@ func TestOnlyThePrincipalStepReadsAuthorization(t *testing.T) {
 }
 
 // TestProductionChainsInstallPrincipalFirst pins the two production scope
-// chains: the api listener's scope list starts with Principal, and query-api's
-// /graphql wraps OrgScope (which wraps Impersonation) in Principal.
+// chains: the api listener's scope list is ReadOnce (one membership read per
+// request for the org scope and the route's guard), then Principal, and
+// query-api's /graphql wraps OrgScope (which wraps Impersonation) in Principal.
 func TestProductionChainsInstallPrincipalFirst(t *testing.T) {
 	root, err := moduleroot.Root()
 	if err != nil {
@@ -490,8 +491,8 @@ func TestProductionChainsInstallPrincipalFirst(t *testing.T) {
 		}
 		return true
 	})
-	if len(apiLists) != 1 || !slices.Equal(apiLists[0], []string{"Principal", "OrgScope", "Impersonation"}) {
-		t.Fatalf("api listener scope lists %v, want one [Principal OrgScope Impersonation]", apiLists)
+	if len(apiLists) != 1 || !slices.Equal(apiLists[0], []string{"ReadOnce", "Principal", "OrgScope", "Impersonation"}) {
+		t.Fatalf("api listener scope lists %v, want one [ReadOnce Principal OrgScope Impersonation]", apiLists)
 	}
 	var edge []string
 	ast.Inspect(parse("internal/queryapi/server/graphql_edge_route.go"), func(node ast.Node) bool {

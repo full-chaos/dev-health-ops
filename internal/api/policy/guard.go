@@ -107,7 +107,7 @@ func (g *Guard) Wrap(level Authz, next http.Handler) http.Handler {
 		})
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		user, ok := g.currentUser(w, r)
+		user, ok := g.currentUser(w, r, level)
 		if !ok {
 			return
 		}
@@ -143,8 +143,9 @@ func (g *Guard) Wrap(level Authz, next http.Handler) http.Handler {
 	})
 }
 
-// currentUser is get_current_user. It writes the refusal itself.
-func (g *Guard) currentUser(w http.ResponseWriter, r *http.Request) (*User, bool) {
+// currentUser is get_current_user. It writes the refusal itself. At the admin
+// levels the role is the token org's membership row's (adminRole).
+func (g *Guard) currentUser(w http.ResponseWriter, r *http.Request, level Authz) (*User, bool) {
 	authorization := r.Header.Get("Authorization")
 	if authorization == "" {
 		authFailure(w, "Not authenticated", nil)
@@ -163,6 +164,30 @@ func (g *Guard) currentUser(w http.ResponseWriter, r *http.Request) (*User, bool
 		}
 		authFailure(w, "Invalid or expired token", err)
 		return nil, false
+	}
+	if (level != Admin && level != AdminOrg) || user.IsSuperuser || user.OrgID == "" {
+		return user, true
+	}
+	// At an admin level the caller's role in the token's own org is the
+	// membership row's now, not the role claim; no row is the org scope's
+	// X-Org-Id refusal, and a failed read 503 or 500. Behind ReadOnce this
+	// is the org scope's read.
+	role, member, err := g.auth.Membership(r.Context(), user.UserID, user.OrgID)
+	if err != nil {
+		g.logger.ErrorContext(r.Context(), "api guard: membership lookup failed",
+			slog.String("path", r.Pattern), slog.Bool("unavailable", isUnavailable(err)),
+			slog.String("missing_grant", MissingGrant(err)))
+		WriteAuthFailure(w, "", err)
+		return nil, false
+	}
+	if !member {
+		writeOrgDenied(w)
+		return nil, false
+	}
+	if role != user.Role {
+		acting := *user
+		acting.Role = role
+		user = &acting
 	}
 	return user, true
 }

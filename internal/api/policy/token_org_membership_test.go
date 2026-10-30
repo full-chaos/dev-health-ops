@@ -16,6 +16,7 @@ var ownOrgKey = [2]uuid.UUID{userID, uuid.MustParse(ownOrg)}
 // org set as given ("" role and member=false: no row).
 func tokenOrgStore(member bool, role string) *fakeStore {
 	store := newStore()
+	delete(store.members, ownOrgKey)
 	store.roles = map[[2]uuid.UUID]string{}
 	if member {
 		store.members[ownOrgKey] = true
@@ -98,7 +99,7 @@ func TestTokenOrgMembershipReadErrorIsNeverAPassOrA403(t *testing.T) {
 		status int
 		body   string
 	}{
-		"unavailable": {err: errors.Join(ErrUnavailable, errors.New("timeout")), status: 503, body: `{"detail":"Database temporarily unavailable"}`},
+		"unavailable": {err: errors.Join(ErrUnavailable, errors.New("timeout")), status: 503, body: `{"detail":{"message":"Database temporarily unavailable"}}`},
 		"other":       {err: errors.New("x"), status: 500, body: `{"detail":"Internal Server Error"}`},
 	} {
 		for _, header := range []string{"", ownOrg} {
@@ -152,8 +153,11 @@ func TestGuardReadsTheRoleOfTheTokensOwnOrgMembership(t *testing.T) {
 		{name: "claim admin, now member, admin org", level: AdminOrg, claim: "admin", member: true, role: "member", status: 403, body: `{"detail":"Admin access required"}`},
 		{name: "claim member, now admin", level: Admin, claim: "member", member: true, role: "admin", status: 200},
 		{name: "claim owner, still owner", level: AdminOrg, claim: "owner", member: true, role: "owner", status: 200},
-		{name: "removed, authenticated", level: Authenticated, claim: "member", status: 403, body: `{"detail": "X-Org-Id not permitted for this user"}`},
+		{name: "removed, admin", level: Admin, claim: "admin", status: 403, body: `{"detail": "X-Org-Id not permitted for this user"}`},
 		{name: "removed, admin org", level: AdminOrg, claim: "admin", status: 403, body: `{"detail": "X-Org-Id not permitted for this user"}`},
+		// Below the admin levels the guard reads no membership; the org
+		// scope is the check (TestOrgScopeReadsTheMembershipOfTheTokensOwnOrg).
+		{name: "removed, authenticated, guard only", level: Authenticated, claim: "member", status: 200},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

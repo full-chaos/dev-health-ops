@@ -126,11 +126,12 @@ func TestExternalPushSchemaRoutesAreGlobalOnTheRealListenerChain(t *testing.T) {
 			t.Errorf("%s: the foreign-organisation refusal made %d policy-store calls, want 2 (user row, membership)", path, calls)
 		}
 		usertokens.NoLeak(t, path+" refusal body", refused.Body.String(), tokens)
-		// The member organisation is a single policy-store call (the user row) and the handler's answer.
+		// The member organisation is the same two policy-store calls (the user row, then the membership read
+		// that an X-Org-Id naming the token's own org gets too) and the handler's answer.
 		member, calls := do(path, "Bearer "+access, claims.Org)
 		same("the HS256 access token with its own organisation (recheck)", member)
-		if calls != 1 {
-			t.Errorf("%s: the member-organisation request made %d policy-store calls, want 1", path, calls)
+		if calls != 2 {
+			t.Errorf("%s: the member-organisation request made %d policy-store calls, want 2 (user row, membership)", path, calls)
 		}
 	}
 	if got := connects.Count(); got != 0 {

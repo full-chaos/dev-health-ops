@@ -22,9 +22,12 @@ var (
 	ErrBootstrapRotating = errors.New("workload: a bootstrap rotation is still in its overlap")
 	ErrBootstrapNone     = errors.New("workload: the workload has no live bootstrap credential")
 	ErrBootstrapNotFound = errors.New("workload: bootstrap credential not found")
-	// ErrBootstrapWorkloadDisabled: create and rotate refuse a workload whose
-	// row or principal row is disabled; revoke and disable stay allowed.
-	ErrBootstrapWorkloadDisabled = errors.New("workload: the workload is disabled")
+	// ErrBootstrapWorkloadDisabled and ErrBootstrapPrincipalDisabled: create
+	// and rotate refuse a workload whose row is disabled (the first) or whose
+	// principal row alone is disabled (the second); revoke and disable stay
+	// allowed.
+	ErrBootstrapWorkloadDisabled  = errors.New("workload: the workload is disabled")
+	ErrBootstrapPrincipalDisabled = errors.New("workload: the workload's principal is disabled")
 
 	// ErrRefused is the only refusal Resolve and Narrow return. The reason
 	// (unknown tuple, disabled, uid mismatch, no audience) stays inside this

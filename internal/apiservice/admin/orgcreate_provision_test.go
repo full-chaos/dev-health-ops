@@ -263,16 +263,19 @@ func TestOrgCreateSwitchOnUnknownOwnerIsTodays500(t *testing.T) {
 	}
 }
 
-// U2: auth refuses the owner, no owner row is there: the org is denied in
-// auth and deleted with the guarded statement; the answer is today's 500.
+// U2: auth refuses an owner go-api holds, no owner row is there: the org is
+// denied in auth and deleted with the guarded statement. With the switch off
+// the same input is a 201 (go-api writes the owner), which cannot be given
+// without an owner: the answer is the 503 of the other proxied routes for a
+// refusal with no go-api answer; a 500 is only today's unknown-owner answer.
 func TestOrgCreateRefusedOwnerCleansUp(t *testing.T) {
 	for _, reason := range []string{"principal_not_found", "principal_deactivated"} {
 		t.Run(reason, func(t *testing.T) {
 			db := newOrgCreateDB()
 			auth := &orgCreateProvisioner{fakeProvisioner: fakeProvisioner{db: db.provisionDB}, addErr: refusedWith(http.StatusConflict, reason)}
 			code, body, _ := callCreateOrg(db, auth, orgCreateWithOwner)
-			if code != http.StatusInternalServerError || body != internalBody() {
-				t.Fatalf("answer %d %s, want today's 500", code, body)
+			if code != http.StatusServiceUnavailable || body != unavailableBody() {
+				t.Fatalf("answer %d %s, want the 503", code, body)
 			}
 			want := []string{orgCreateSlugRead, orgCreateOwnerRead, orgCreateOrgInsert, "auth:add", orgCreateMemberRead, "auth:deprovision", orgCreateGuardedDelete}
 			if !reflect.DeepEqual(db.log, want) {
@@ -369,8 +372,8 @@ func TestOrgCreateCleanupOrgNotInAuthStillDeletes(t *testing.T) {
 	auth := &orgCreateProvisioner{fakeProvisioner: fakeProvisioner{db: db.provisionDB}, addErr: refusedWith(http.StatusNotFound, "principal_not_found"),
 		deprovisionErr: refusedWith(http.StatusNotFound, "organization_not_found")}
 	code, _, _ := callCreateOrg(db, auth, orgCreateWithOwner)
-	if code != http.StatusInternalServerError || !db.deleted() {
-		t.Fatalf("answer %d, deleted %v; want today's 500 after the DELETE", code, db.deleted())
+	if code != http.StatusServiceUnavailable || !db.deleted() {
+		t.Fatalf("answer %d, deleted %v; want the 503 after the DELETE", code, db.deleted())
 	}
 }
 

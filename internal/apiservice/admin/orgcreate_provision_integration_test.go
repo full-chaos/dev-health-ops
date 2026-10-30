@@ -106,6 +106,14 @@ func TestOrgCreateWithOwnerOnARealDatabase(t *testing.T) {
 			t.Fatalf("%d %s: org %s, members %d owners %d", code, body, org, all, owners)
 		}
 	})
+	t.Run("I4b switch off and on, an owner go-api does not hold: today's 500, nothing written", func(t *testing.T) {
+		for _, auth := range []authprovision.Provisioner{nil, fake(nil, nil)} {
+			code, body, _, org := create(t, auth, uuid.New())
+			if code != http.StatusInternalServerError || body != `{"detail":"Internal Server Error"}` || org != uuid.Nil {
+				t.Fatalf("switch on %v: %d %s, org %s", auth != nil, code, body, org)
+			}
+		}
+	})
 	t.Run("I1 switch on: org row, the add, no go-api membership", func(t *testing.T) {
 		auth := fake(nil, nil)
 		owner := newOwner()
@@ -117,10 +125,10 @@ func TestOrgCreateWithOwnerOnARealDatabase(t *testing.T) {
 			t.Fatalf("auth calls %v %v", auth.calls, auth.args)
 		}
 	})
-	t.Run("I2 refused owner: no org left, today's 500", func(t *testing.T) {
+	t.Run("I2 owner with no auth principal: no org left, 503 (switch off: 201)", func(t *testing.T) {
 		auth := fake(refusedWith(404, "principal_not_found"), nil)
 		code, body, _, org := create(t, auth, newOwner())
-		if code != http.StatusInternalServerError || org != uuid.Nil || len(auth.calls) != 2 {
+		if code != http.StatusServiceUnavailable || body != provUnavailable || org != uuid.Nil || len(auth.calls) != 2 {
 			t.Fatalf("%d %s: org %s, auth calls %v", code, body, org, auth.calls)
 		}
 	})

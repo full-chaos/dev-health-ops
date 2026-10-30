@@ -43,7 +43,7 @@ var workloadReasons = []string{
 	ReasonNotYetValid, ReasonExpired, ReasonPrincipal, ReasonNotConfigured, ReasonUnavailable,
 }
 
-var workloadRoutes = []string{routeHealth, routeEntitlement, routeLLMConfig, routePrincipalAccess}
+var workloadRoutes = []string{routeHealth, routeEntitlement, routeLLMConfig}
 
 // WorkloadVerifier is satisfied by *authverify.WorkloadVerifier.
 type WorkloadVerifier interface {

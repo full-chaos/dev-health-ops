@@ -104,6 +104,29 @@ type PrincipalAccessStore interface {
 	Access(ctx context.Context, query AccessQuery) (PrincipalAccess, error)
 }
 
+// principalAccessRoute is the principal access read's registration. Routes
+// does not mount it yet: a go-api route ships with its endpoint-profile row,
+// and that row's anchor must hold at a commit on main (the auth-test history
+// check), so the row and the mount land after this registration line does.
+//
+// The route is not audited: acr-api calls it on every protected request, so a
+// row and a last_used_at stamp per call would put a write on the read path;
+// refusals are logged and counted (routeAuth).
+//
+// deps carries the svc_acr_ credential store and the workload auth; access is
+// the store (nil answers 503) and limiter its own attempt bucket
+// (AccessAttemptLimit; nil does not rate limit).
+func principalAccessRoute(deps Deps, access PrincipalAccessStore, limiter *httpapi.KeyedLimiter, logger *slog.Logger) httpapi.Route {
+	limiter.Declare()
+	return httpapi.Route{
+		Method: http.MethodGet, Pattern: PrincipalAccessPattern,
+		Handler: principalAccessHandler(access, routeAuth{
+			store: deps.Auth, limiter: limiter, logger: logger, route: routePrincipalAccess,
+			workload: deps.Workload, scope: PrincipalAccessScope, limitPath: principalAccessPath,
+		}, logger),
+	}
+}
+
 func principalAccessHandler(store PrincipalAccessStore, auth routeAuth, logger *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -140,18 +163,19 @@ func principalAccessHandler(store PrincipalAccessStore, auth routeAuth, logger *
 		// ("sid=%zz"), which would read as no sid and skip the session check.
 		values, err := url.ParseQuery(r.URL.RawQuery)
 		if err != nil {
-			refuse(http.StatusBadRequest, outcomeInvalidRequest, InvalidQueryCode, slog.String("parse_error", err.Error()))
+			// No query text reaches a log line (the parse error quotes it); only the reason.
+			refuse(http.StatusBadRequest, outcomeInvalidRequest, InvalidQueryCode, slog.String("reason", "undecodable_query"))
 			return
 		}
 		for key := range values {
 			if key != "sid" {
-				refuse(http.StatusBadRequest, outcomeInvalidRequest, InvalidQueryCode, slog.String("parameter", key))
+				refuse(http.StatusBadRequest, outcomeInvalidRequest, InvalidQueryCode, slog.String("reason", "unknown_parameter"))
 				return
 			}
 		}
 		if sids, present := values["sid"]; present {
 			if len(sids) != 1 {
-				refuse(http.StatusBadRequest, outcomeInvalidRequest, InvalidQueryCode, slog.Int("sid_values", len(sids)))
+				refuse(http.StatusBadRequest, outcomeInvalidRequest, InvalidQueryCode, slog.String("reason", "repeated_sid"))
 				return
 			}
 			id, err := sessionid.Parse(sids[0])

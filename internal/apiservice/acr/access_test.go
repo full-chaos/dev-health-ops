@@ -45,18 +45,37 @@ func accessCreds() *fakeCredentials {
 	return f
 }
 
-func accessServer(t *testing.T, store PrincipalAccessStore, creds CredentialStore, deps Deps) http.Handler {
+// accessServer mounts Routes and the principal access read (not in Routes
+// yet) with limiter as its own attempt bucket.
+func accessServer(t *testing.T, store PrincipalAccessStore, creds CredentialStore, deps Deps, limiter ...*httpapi.KeyedLimiter) http.Handler {
 	t.Helper()
-	deps.Access, deps.Auth = store, creds
+	deps.Auth = creds
 	deps.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	if deps.Store == nil {
 		deps.Store = &fakeStore{}
 	}
+	var own *httpapi.KeyedLimiter
+	if len(limiter) > 0 {
+		own = limiter[0]
+	}
 	mux := http.NewServeMux()
-	for _, route := range Routes(deps) {
+	for _, route := range append(Routes(deps), principalAccessRoute(deps, store, own, deps.Logger)) {
 		mux.Handle(route.Method+" "+route.Pattern, route.Handler)
 	}
 	return mux
+}
+
+// Routes does not mount the access read yet (its endpoint-profile row lands
+// with the mount); the constructor is the only registration.
+func TestRoutesDoNotMountThePrincipalAccessReadYet(t *testing.T) {
+	for _, route := range Routes(Deps{}) {
+		if route.Pattern == PrincipalAccessPattern {
+			t.Fatal("Routes mounts the principal access read before its endpoint-profile row")
+		}
+	}
+	if route := principalAccessRoute(Deps{}, &fakeAccessStore{}, nil, slog.Default()); route.Pattern != PrincipalAccessPattern || route.Method != http.MethodGet {
+		t.Fatalf("constructor registers %s %s", route.Method, route.Pattern)
+	}
 }
 
 // fakeAccessStore answers one canned PrincipalAccess and records each query.
@@ -129,7 +148,7 @@ func TestPrincipalAccessHasItsOwnAttemptBucket(t *testing.T) {
 	counters := httpapi.NewMemoryCounters(time.Now)
 	shared := httpapi.NewKeyedLimiter(counters, httpapi.Limit{ID: "internal_acr_auth_attempt", Count: 1, Window: time.Minute})
 	own := httpapi.NewKeyedLimiter(counters, httpapi.Limit{ID: AccessAttemptLimit.ID, Count: 2, Window: time.Minute})
-	h := accessServer(t, &fakeAccessStore{}, accessCreds(), Deps{Limiter: shared, AccessLimiter: own})
+	h := accessServer(t, &fakeAccessStore{}, accessCreds(), Deps{Limiter: shared}, own)
 	if rec := do(h, healthPath, "Bearer "+entToken); rec.Code != http.StatusOK {
 		t.Fatalf("health = %d", rec.Code)
 	}

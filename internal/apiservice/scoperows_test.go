@@ -53,7 +53,7 @@ func TestScopeRowsReadTheValidatorsClassField(t *testing.T) {
 			t.Errorf("domain row %s is neither an external-ingest nor an internal acr row", profile)
 		}
 	}
-	if len(domain) != 9 {
-		t.Errorf("domain rows %v, want the 5 fcpush and 4 svc_acr rows", domain)
+	if len(domain) != 8 {
+		t.Errorf("domain rows %v, want the 5 fcpush and 3 svc_acr rows", domain)
 	}
 }

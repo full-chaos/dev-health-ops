@@ -31,7 +31,6 @@
         <query>GRANT SELECT ON default.llm_token_usage</query>
         <query>GRANT SELECT ON default.work_unit_investments</query>
         <query>GRANT SELECT ON default.work_items</query>
-        <query>GRANT SELECT ON default.repos</query>
       </grants>
     </dho_api_ch>
   </users>

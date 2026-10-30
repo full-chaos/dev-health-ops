@@ -559,15 +559,8 @@ func InternalRoutes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	var llmConfig acr.LLMConfigSource
 	var credentials acr.CredentialVerifier
 	var auth acr.CredentialStore
-	var access acr.PrincipalAccessStore
 	if deps.Pool != nil {
 		store = acr.PostgresEntitlementStore{Pool: deps.Pool}
-		var inventory acr.RepositoryInventory
-		if deps.ClickHouse != nil {
-			inventory = acr.ClickHouseRepositoryInventory{Conn: deps.ClickHouse}
-		}
-		access = acr.NewPostgresAccessStore(deps.Pool,
-			policy.PGStore{Pool: deps.Pool, AuthSchema: deps.AuthSchema, PlatformRolesOwned: deps.PlatformRolesOwned}, inventory)
 		llmConfig = llmorgsettings.Store{Pool: deps.Pool, Decryptor: deps.Decryptor}.ForPurpose(llmorgsettings.PurposeInvestigate)
 		credentials = acr.PostgresCredentialVerifier{Pool: deps.Pool}
 		auth = acr.PostgresCredentialStore{Pool: deps.Pool, Now: deps.Now}
@@ -581,7 +574,6 @@ func InternalRoutes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		Store: store, Logger: logger, LLMConfig: llmConfig, Credentials: credentials,
 		Auth: auth, Limiter: httpapi.NewKeyedLimiter(counters, acr.AuthAttemptLimit),
 		Workload: deps.ACRWorkload,
-		Access:   access, AccessLimiter: httpapi.NewKeyedLimiter(counters, acr.AccessAttemptLimit),
 	})
 }
 

@@ -120,6 +120,9 @@ type ProviderError struct {
 	Step   string
 	// InvalidID: the profile has no user id (absent, null or empty), go-api's ErrMissingProviderID.
 	InvalidID bool
+	// ProfileRequest: a request for the profile go-api also fetches failed in transport or answered a non-2xx
+	// status, go-api's OAuthUserInfoError (oauthprovider get), which go-api records as a provider failure.
+	ProfileRequest bool
 }
 
 func (e *ProviderError) Error() string { return "social: " + e.Step + ": " + string(e.Reason) }
@@ -184,9 +187,10 @@ func (c *ProviderClient) do(ctx context.Context, r request, out any) error {
 	if r.body != nil {
 		body = bytes.NewReader(r.body)
 	}
+	profileRequest := r.profile != nil
 	req, err := http.NewRequestWithContext(ctx, r.method, r.url, body)
 	if err != nil {
-		return &ProviderError{Reason: ReasonDependency, Step: r.step}
+		return &ProviderError{Reason: ReasonDependency, Step: r.step, ProfileRequest: profileRequest}
 	}
 	for k, v := range r.headers {
 		req.Header.Set(k, v)
@@ -197,18 +201,21 @@ func (c *ProviderClient) do(ctx context.Context, r request, out any) error {
 	}
 	resp, err := httpguard.NoRedirects(client).Do(req)
 	if err != nil {
-		return &ProviderError{Reason: ReasonDependency, Step: r.step}
+		return &ProviderError{Reason: ReasonDependency, Step: r.step, ProfileRequest: profileRequest}
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
-	if err != nil || len(raw) > maxBody {
+	if err != nil {
+		return &ProviderError{Reason: ReasonDependency, Step: r.step, ProfileRequest: profileRequest}
+	}
+	if len(raw) > maxBody {
 		return &ProviderError{Reason: ReasonDependency, Step: r.step}
 	}
 	switch {
 	case resp.StatusCode >= 500:
-		return &ProviderError{Reason: ReasonDependency, Step: r.step}
+		return &ProviderError{Reason: ReasonDependency, Step: r.step, ProfileRequest: profileRequest}
 	case resp.StatusCode > 299 || resp.StatusCode < 200:
-		return &ProviderError{Reason: ReasonInvalidCredentials, Step: r.step}
+		return &ProviderError{Reason: ReasonInvalidCredentials, Step: r.step, ProfileRequest: profileRequest}
 	}
 	if r.profile != nil {
 		// go-api decodes a profile with pyjson and answers a body it refuses (not UTF-8, or not JSON to Python) with

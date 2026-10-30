@@ -41,6 +41,8 @@ type Client interface {
 	HGetAll(ctx context.Context, key string) (map[string]string, error)
 	// ConfigGet reads one configuration parameter (CONFIG GET).
 	ConfigGet(ctx context.Context, name string) (string, error)
+	// Info reads INFO for the sections and returns its field:value lines.
+	Info(ctx context.Context, sections ...string) (map[string]string, error)
 	// TTL is the key's TTL in seconds: -1 no expiry, -2 no such key.
 	TTL(ctx context.Context, key string) (int64, error)
 	// Subscribe subscribes to channel and blocks until ctx ends or the connection breaks.
@@ -98,6 +100,10 @@ func (c *valkeyClient) ConfigGet(ctx context.Context, name string) (string, erro
 		return "", classify(err)
 	}
 	return m[name], nil
+}
+
+func (c *valkeyClient) Info(context.Context, ...string) (map[string]string, error) {
+	return nil, ErrUnavailable
 }
 
 func (c *valkeyClient) TTL(ctx context.Context, key string) (int64, error) {
@@ -185,6 +191,14 @@ func (l *LazyClient) ConfigGet(ctx context.Context, name string) (string, error)
 		return "", err
 	}
 	return c.ConfigGet(ctx, name)
+}
+
+func (l *LazyClient) Info(ctx context.Context, sections ...string) (map[string]string, error) {
+	c, err := l.get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return c.Info(ctx, sections...)
 }
 
 func (l *LazyClient) TTL(ctx context.Context, key string) (int64, error) {

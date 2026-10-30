@@ -20,8 +20,14 @@ type fakeClient struct {
 	evalResult int64
 	evalErr    error
 
-	hash       map[string]string
-	hgetallErr error
+	hash         map[string]string
+	hgetallErr   error
+	hgetallCalls int
+
+	info     map[string]string
+	infoErr  error
+	infoLog  [][]string
+	cfgCalls int
 
 	config    map[string]string
 	configErr error
@@ -42,12 +48,69 @@ func (f *fakeClient) EvalInt(_ context.Context, script string, keys, args []stri
 func (f *fakeClient) HGetAll(context.Context, string) (map[string]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.hgetallCalls++
 	return f.hash, f.hgetallErr
+}
+
+func (f *fakeClient) Info(_ context.Context, sections ...string) (map[string]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.infoLog = append(f.infoLog, sections)
+	if f.infoErr != nil {
+		return nil, f.infoErr
+	}
+	return f.info, nil
+}
+
+func (f *fakeClient) hgetalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.hgetallCalls
+}
+
+func (f *fakeClient) setHGetAll(hash map[string]string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.hash, f.hgetallErr = hash, err
+}
+
+func (f *fakeClient) infoCalls() [][]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([][]string(nil), f.infoLog...)
+}
+
+func (f *fakeClient) configGets() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.cfgCalls
+}
+
+// infoFields is what INFO persistence and INFO memory give for a healthy AOF and the policy; a modification with an empty
+// value removes the field (a server that does not report it).
+func infoFields(policy string, mods ...map[string]string) map[string]string {
+	m := map[string]string{
+		"aof_enabled": "1", "aof_last_write_status": "ok", "aof_last_bgrewrite_status": "ok", "maxmemory_policy": policy,
+	}
+	for _, mod := range mods {
+		for k, v := range mod {
+			if v == "" {
+				delete(m, k)
+			} else {
+				m[k] = v
+			}
+		}
+	}
+	if policy == "" {
+		delete(m, "maxmemory_policy")
+	}
+	return m
 }
 
 func (f *fakeClient) ConfigGet(_ context.Context, name string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.cfgCalls++
 	if f.configErr != nil {
 		return "", f.configErr
 	}

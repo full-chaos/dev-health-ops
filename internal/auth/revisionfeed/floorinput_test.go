@@ -23,27 +23,28 @@ func TestTheFloorInputNamesItselfAndReadsThePublishedFloors(t *testing.T) {
 }
 
 func TestTheFloorInputIsUsableOnlyWhileTheStatusRuleHolds(t *testing.T) {
-	usable := &fakeClient{config: map[string]string{"appendonly": "yes", "maxmemory-policy": "noeviction"}, ttl: -1}
+	usable := &fakeClient{info: infoFields("noeviction"), ttl: -1}
 	if err := NewFloorInput(usable).Status(context.Background()); err != nil {
 		t.Fatalf("a usable store: %v", err)
 	}
-	for name, config := range map[string]map[string]string{
-		"appendonly off": {"appendonly": "no", "maxmemory-policy": "noeviction"},
-		"evicting":       {"appendonly": "yes", "maxmemory-policy": "allkeys-lru"},
+	for name, info := range map[string]map[string]string{
+		"appendonly off":   infoFields("noeviction", map[string]string{"aof_enabled": "0"}),
+		"evicting":         infoFields("allkeys-lru"),
+		"aof write failed": infoFields("noeviction", map[string]string{"aof_last_write_status": "err"}),
 	} {
-		err := NewFloorInput(&fakeClient{config: config}).Status(context.Background())
+		err := NewFloorInput(&fakeClient{info: info}).Status(context.Background())
 		if !errors.Is(err, ErrNotUsableAsFloorSource) {
 			t.Fatalf("%s: err = %v, want ErrNotUsableAsFloorSource", name, err)
 		}
 	}
-	err := NewFloorInput(&fakeClient{configErr: errors.New("boom SENTINEL")}).Status(context.Background())
+	err := NewFloorInput(&fakeClient{infoErr: errors.New("boom SENTINEL")}).Status(context.Background())
 	if !errors.Is(err, ErrUnavailable) || strings.Contains(err.Error(), "SENTINEL") {
 		t.Fatalf("an unreachable store: err = %v", err)
 	}
 }
 
 func TestTheNotUsableErrorNamesTheClosedReason(t *testing.T) {
-	err := NewFloorInput(&fakeClient{config: map[string]string{"appendonly": "no", "maxmemory-policy": "noeviction"}}).Status(context.Background())
+	err := NewFloorInput(&fakeClient{info: infoFields("noeviction", map[string]string{"aof_enabled": "0"})}).Status(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "appendonly_off") {
 		t.Fatalf("err = %v", err)
 	}
@@ -52,21 +53,21 @@ func TestTheNotUsableErrorNamesTheClosedReason(t *testing.T) {
 // ACP ruling on PR B (C1): the input fails closed. It never passes and never gives a zero floor.
 func TestTheFloorInputFailsClosed(t *testing.T) {
 	ctx := context.Background()
-	usable := map[string]string{"appendonly": "yes", "maxmemory-policy": "noeviction"}
+	usable := infoFields("noeviction")
 	t.Run("not usable: the chart default policy", func(t *testing.T) {
-		err := NewFloorInput(&fakeClient{config: map[string]string{"appendonly": "yes", "maxmemory-policy": "allkeys-lru"}}).Status(ctx)
+		err := NewFloorInput(&fakeClient{info: infoFields("allkeys-lru")}).Status(ctx)
 		if !errors.Is(err, ErrNotUsableAsFloorSource) {
 			t.Fatalf("err = %v", err)
 		}
 	})
 	t.Run("not usable: appendonly off", func(t *testing.T) {
-		err := NewFloorInput(&fakeClient{config: map[string]string{"appendonly": "no", "maxmemory-policy": "noeviction"}}).Status(ctx)
+		err := NewFloorInput(&fakeClient{info: infoFields("noeviction", map[string]string{"aof_enabled": "0"})}).Status(ctx)
 		if !errors.Is(err, ErrNotUsableAsFloorSource) {
 			t.Fatalf("err = %v", err)
 		}
 	})
 	t.Run("unreachable: status and floors both fail, floors are nil", func(t *testing.T) {
-		client := &fakeClient{configErr: ErrUnavailable, hgetallErr: ErrUnavailable}
+		client := &fakeClient{infoErr: ErrUnavailable, hgetallErr: ErrUnavailable}
 		input := NewFloorInput(client)
 		if err := input.Status(ctx); err == nil || !errors.Is(err, ErrUnavailable) {
 			t.Fatalf("status err = %v, want ErrUnavailable (never nil)", err)
@@ -77,7 +78,7 @@ func TestTheFloorInputFailsClosed(t *testing.T) {
 		}
 	})
 	t.Run("usable status and an empty hash: an explicit no-data error, never an empty map or a zero floor", func(t *testing.T) {
-		input := NewFloorInput(&fakeClient{config: usable, ttl: -1, hash: map[string]string{}})
+		input := NewFloorInput(&fakeClient{info: usable, ttl: -1, hash: map[string]string{}})
 		if err := input.Status(ctx); err != nil {
 			t.Fatalf("status err = %v", err)
 		}
@@ -87,7 +88,7 @@ func TestTheFloorInputFailsClosed(t *testing.T) {
 		}
 	})
 	t.Run("usable status and floors: the floors", func(t *testing.T) {
-		floors, err := NewFloorInput(&fakeClient{config: usable, ttl: -1, hash: map[string]string{"principal:p": "3"}}).Floors(ctx)
+		floors, err := NewFloorInput(&fakeClient{info: usable, ttl: -1, hash: map[string]string{"principal:p": "3"}}).Floors(ctx)
 		if err != nil || floors["principal:p"] != 3 {
 			t.Fatalf("floors %v, %v", floors, err)
 		}

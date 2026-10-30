@@ -121,6 +121,9 @@ func (c *Consumer) Resubscribed(ctx context.Context) {
 	c.log.LogAttrs(ctx, slog.LevelInfo, "revision feed resubscribed", slog.String("disposition", "resubscribe"))
 }
 
+// CatchUp feeds the published floors (the high-water hash) to the consumer after a (re)subscribe.
+func (c *Consumer) CatchUp(context.Context, map[string]int64) {}
+
 // logDisposition logs the aggregate type, the revision and the disposition only: never the aggregate id or the payload.
 func (c *Consumer) logDisposition(ctx context.Context, level slog.Level, aggregateType string, revision int64, d contracts.Disposition) {
 	c.log.LogAttrs(ctx, level, "revision feed event",

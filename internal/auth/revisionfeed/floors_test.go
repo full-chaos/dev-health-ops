@@ -57,29 +57,36 @@ func TestPublishedFloorsMapsAnyClientFailureToErrUnavailable(t *testing.T) {
 
 func TestStatusRule(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		appendonly string
-		policy     string
-		ttl        int64
-		usable     bool
-		reason     string
+		name   string
+		policy string
+		mods   map[string]string
+		ttl    int64
+		usable bool
+		reason string
 	}{
-		{"appendonly yes and noeviction", "yes", "noeviction", -1, true, "ok"},
-		{"appendonly no", "no", "noeviction", -1, false, "appendonly_off"},
-		{"appendonly no and an evicting policy", "no", "allkeys-lru", -1, false, "appendonly_off"},
-		{"allkeys-lru evicts the hash", "yes", "allkeys-lru", -1, false, "policy_evicts"},
-		{"allkeys-lfu evicts the hash", "yes", "allkeys-lfu", -1, false, "policy_evicts"},
-		{"allkeys-random evicts the hash", "yes", "allkeys-random", -1, false, "policy_evicts"},
-		{"volatile-lru and the hash has no TTL", "yes", "volatile-lru", -1, true, "ok"},
-		{"volatile-ttl and the hash has no TTL", "yes", "volatile-ttl", -1, true, "ok"},
-		{"volatile-lru and the hash is absent", "yes", "volatile-lru", -2, true, "ok"},
-		{"volatile-lru and the hash has a TTL", "yes", "volatile-lru", 3600, false, "hash_has_ttl"},
-		{"volatile-random and the hash has a TTL", "yes", "volatile-random", 10, false, "hash_has_ttl"},
-		{"an unknown policy is not usable", "yes", "mystery", -1, false, "policy_evicts"},
-		{"an empty policy is not usable", "yes", "", -1, false, "policy_evicts"},
+		{"aof on, healthy, noeviction", "noeviction", nil, -1, true, "ok"},
+		{"aof off", "noeviction", map[string]string{"aof_enabled": "0"}, -1, false, "appendonly_off"},
+		{"aof off and an evicting policy", "allkeys-lru", map[string]string{"aof_enabled": "0"}, -1, false, "appendonly_off"},
+		{"aof_enabled missing", "noeviction", map[string]string{"aof_enabled": ""}, -1, false, "aof_status_unknown"},
+		{"aof_enabled garbage", "noeviction", map[string]string{"aof_enabled": "maybe"}, -1, false, "aof_status_unknown"},
+		{"last write failed", "noeviction", map[string]string{"aof_last_write_status": "err"}, -1, false, "aof_write_failed"},
+		{"last write status missing", "noeviction", map[string]string{"aof_last_write_status": ""}, -1, false, "aof_status_unknown"},
+		{"last write status unknown value", "noeviction", map[string]string{"aof_last_write_status": "?"}, -1, false, "aof_write_failed"},
+		{"last rewrite failed", "noeviction", map[string]string{"aof_last_bgrewrite_status": "err"}, -1, false, "aof_rewrite_failed"},
+		{"last rewrite status missing", "noeviction", map[string]string{"aof_last_bgrewrite_status": ""}, -1, false, "aof_status_unknown"},
+		{"maxmemory_policy missing", "", nil, -1, false, "policy_evicts"},
+		{"allkeys-lru evicts the hash", "allkeys-lru", nil, -1, false, "policy_evicts"},
+		{"allkeys-lfu evicts the hash", "allkeys-lfu", nil, -1, false, "policy_evicts"},
+		{"allkeys-random evicts the hash", "allkeys-random", nil, -1, false, "policy_evicts"},
+		{"volatile-lru and the hash has no TTL", "volatile-lru", nil, -1, true, "ok"},
+		{"volatile-ttl and the hash has no TTL", "volatile-ttl", nil, -1, true, "ok"},
+		{"volatile-lru and the hash is absent", "volatile-lru", nil, -2, true, "ok"},
+		{"volatile-lru and the hash has a TTL", "volatile-lru", nil, 3600, false, "hash_has_ttl"},
+		{"volatile-random and the hash has a TTL", "volatile-random", nil, 10, false, "hash_has_ttl"},
+		{"an unknown policy is not usable", "mystery", nil, -1, false, "policy_evicts"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			client := &fakeClient{config: map[string]string{"appendonly": tc.appendonly, "maxmemory-policy": tc.policy}, ttl: tc.ttl}
+			client := &fakeClient{info: infoFields(tc.policy, tc.mods), ttl: tc.ttl}
 			got, err := ReadStatus(context.Background(), client)
 			if err != nil {
 				t.Fatal(err)
@@ -87,15 +94,30 @@ func TestStatusRule(t *testing.T) {
 			if got.Usable != tc.usable || got.Reason != tc.reason {
 				t.Fatalf("status %+v, want usable=%v reason=%q", got, tc.usable, tc.reason)
 			}
-			if got.AppendOnly != (tc.appendonly == "yes") || got.MaxMemoryPolicy != tc.policy {
-				t.Fatalf("status %+v does not report what it read", got)
+			if got.MaxMemoryPolicy != tc.policy {
+				t.Fatalf("status %+v does not report the policy it read", got)
 			}
 		})
 	}
 }
 
+// ACP ruling on PR B r1 (P1-2): the status reads INFO persistence and INFO memory only, never CONFIG GET; any failed,
+// missing or unknown AOF field is not usable.
+func TestStatusReadsInfoOnlyAndNeverConfigGet(t *testing.T) {
+	client := &fakeClient{info: infoFields("noeviction"), config: map[string]string{"appendonly": "yes", "maxmemory-policy": "noeviction"}}
+	if _, err := ReadStatus(context.Background(), client); err != nil {
+		t.Fatal(err)
+	}
+	if n := client.configGets(); n != 0 {
+		t.Fatalf("ReadStatus issued %d CONFIG GET calls, want 0", n)
+	}
+	if got := client.infoCalls(); len(got) != 1 {
+		t.Fatalf("ReadStatus issued %d INFO calls, want exactly 1: %v", len(got), got)
+	}
+}
+
 func TestStatusReasonsAreAClosedSet(t *testing.T) {
-	want := []string{"ok", "appendonly_off", "policy_evicts", "hash_has_ttl"}
+	want := []string{"ok", "appendonly_off", "aof_status_unknown", "aof_write_failed", "aof_rewrite_failed", "policy_evicts", "hash_has_ttl"}
 	got := StatusReasons()
 	if len(got) != len(want) {
 		t.Fatalf("reasons %v", got)
@@ -109,8 +131,8 @@ func TestStatusReasonsAreAClosedSet(t *testing.T) {
 
 func TestStatusMapsAnyClientFailureToErrUnavailable(t *testing.T) {
 	for name, client := range map[string]*fakeClient{
-		"config get": {configErr: errors.New("boom SENTINEL")},
-		"ttl":        {config: map[string]string{"appendonly": "yes", "maxmemory-policy": "volatile-lru"}, ttlErr: errors.New("boom SENTINEL")},
+		"info": {infoErr: errors.New("boom SENTINEL")},
+		"ttl":  {info: infoFields("volatile-lru"), ttlErr: errors.New("boom SENTINEL")},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := ReadStatus(context.Background(), client)

@@ -240,6 +240,80 @@ func TestTheAuthAclLoginRunsTheFeedAndNothingElse(t *testing.T) {
 	if err := raw.Do(ctx, raw.B().Del().Key(HighWaterKey).Build()).Error(); err == nil {
 		t.Fatal("the login deleted the hash")
 	}
+	// P1-1: the catch-up read is HGETALL on the ONE hash (a selector), never on another key under the prefix.
+	floors, err := PublishedFloors(ctx, client)
+	if err != nil || floors["organization:"+id] != 1 {
+		t.Fatalf("the catch-up read under the ACL login: %v, %v", floors, err)
+	}
+	if err := raw.Do(ctx, raw.B().Hset().Key("dho:rl:auth_svc_other").FieldValue().FieldValue("a", "1").Build()).Error(); err != nil {
+		t.Fatalf("the login cannot write another auth_svc_ key (HSET is granted under the prefix): %v", err)
+	}
+	if err := raw.Do(ctx, raw.B().Hgetall().Key("dho:rl:auth_svc_other").Build()).Error(); err == nil {
+		t.Fatal("the login read another auth_svc_ hash with HGETALL: the selector must name the one hash")
+	}
+	if err := raw.Do(ctx, raw.B().Hscan().Key(HighWaterKey).Cursor(0).Build()).Error(); err == nil {
+		t.Fatal("the login ran HSCAN: it is not granted")
+	}
+	if err := raw.Do(ctx, raw.B().Info().Section("persistence").Build()).Error(); err == nil {
+		t.Fatal("the auth login ran INFO: the status read belongs to the restore fence's own login")
+	}
+}
+
+// P1-1 (acp ruling on r1): an event delivered while a replica's subscription is down reaches the replica after it
+// reconnects, with no further event: subscribe first, then read the hash, then the marks move.
+func TestAReplicaThatWasDisconnectedReachesTheMarkWithNoFurtherEvent(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	adminClient, admin, instance := startValkeyClient(t, ctx)
+	sink, _ := NewSink(adminClient)
+	replicaRaw, err := valkeystore.Open(ctx, valkeystore.DefaultConfig(instance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(replicaRaw.Close)
+	rec := &recorder{}
+	consumer, err := NewConsumer(Config{Invalidator: rec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub, err := NewSubscriber(SubscriberConfig{Client: NewClient(replicaRaw), Consumer: consumer, Backoff: func(int) time.Duration { return 3 * time.Second }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runCtx, stop := context.WithCancel(ctx)
+	defer stop()
+	go sub.Run(runCtx)
+	const id = "org_DDDDDDDDDDDDDDDDDDDDDD"
+	waitMark := func(want int64) {
+		t.Helper()
+		deadline := time.Now().Add(30 * time.Second)
+		for time.Now().Before(deadline) {
+			if got, _ := consumer.Watermarks().Latest("organization", id); got == want {
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		got, _ := consumer.Watermarks().Latest("organization", id)
+		t.Fatalf("the replica is at revision %d, want %d", got, want)
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for countAll(rec) < 1 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := sink.Deliver(ctx, outboxEventAt(id, 1)); err != nil {
+		t.Fatal(err)
+	}
+	waitMark(1)
+	if err := admin.Do(ctx, admin.B().Arbitrary("CLIENT", "KILL", "TYPE", "pubsub").Build()).Error(); err != nil {
+		t.Fatalf("client kill: %v", err)
+	}
+	if err := sink.Deliver(ctx, outboxEventAt(id, 2)); err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.Deliver(ctx, outboxEventAt(id, 3)); err != nil {
+		t.Fatal(err)
+	}
+	waitMark(3)
 }
 
 // --- PostgreSQL + Valkey: the outbox publisher through the sink ---

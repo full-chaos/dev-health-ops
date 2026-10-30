@@ -356,6 +356,22 @@ func TestLinkInvalidProviderIDAnswersGoAPIsBytesAndADeclaredBody(t *testing.T) {
 		if resolved.Validate(body) == nil {
 			matched++
 		}
+		for name, refused := range map[string]string{
+			"another text":        `{"detail":{"message":"The provider returned an invalid user ID"}}`,
+			"an extra detail key": `{"detail":{"message":"The provider returned an invalid user id","extra":1}}`,
+			"an extra top-level":  `{"detail":{"message":"The provider returned an invalid user id"},"extra":1}`,
+			"a text detail":       `{"detail":"The provider returned an invalid user id"}`,
+			"a missing message":   `{"detail":{}}`,
+			"a missing detail":    `{}`,
+		} {
+			var doc any
+			if err := json.Unmarshal([]byte(refused), &doc); err != nil {
+				t.Fatal(err)
+			}
+			if resolved.Validate(doc) == nil {
+				t.Errorf("the declared go-api member accepts %s: %s", name, refused)
+			}
+		}
 	}
 	if matched != 1 {
 		t.Fatalf("the 400 body validates against %d declared members, want exactly 1", matched)

@@ -334,11 +334,12 @@ func (h *handlers) createOrganizationInAuth(ctx context.Context, w http.Response
 	h.writeProvisionUnavailable(w)
 }
 
-// ownerlessOrganization answers the 503 for a created organization that may
-// have no owner; the ERROR names the org only (the runbook query finds it).
+// ownerlessOrganization answers a created organization that may have no
+// owner: a 500, not a 503, so no retry meets the half-written state; the ERROR
+// names the org only (the runbook query finds it).
 func (h *handlers) ownerlessOrganization(ctx context.Context, w http.ResponseWriter, orgID uuid.UUID, why string) {
 	h.logger.ErrorContext(ctx, "admin: organization created without its owner", "org_id", orgID.String(), "cause", why)
-	h.writeProvisionUnavailable(w)
+	policy.WriteInternal(w)
 }
 
 func (h *handlers) writeCreatedOrganization(ctx context.Context, w http.ResponseWriter, org *organization) {

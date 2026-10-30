@@ -183,19 +183,32 @@ func (f *fakeLoginUsers) Project(_ context.Context, id uuid.UUID) error {
 	return nil
 }
 
-// fakeAttempts is local.Attempts with a programmable lock.
+// fakeAttempts is local.Attempts with a programmable lock. With threshold set
+// it counts failures per lockout identifier instead and locks an identifier
+// at threshold failures, as auth.login_attempts does.
 type fakeAttempts struct {
 	locked    bool
 	remaining time.Duration
 	failures  int
+	threshold int
+	perID     map[string]int
 }
 
-func (f *fakeAttempts) Check(context.Context, []byte) (bool, time.Duration, error) {
+func (f *fakeAttempts) Check(_ context.Context, id []byte) (bool, time.Duration, error) {
+	if f.threshold > 0 {
+		return f.perID[string(id)] >= f.threshold, f.remaining, nil
+	}
 	return f.locked, f.remaining, nil
 }
 
-func (f *fakeAttempts) RecordFailure(context.Context, []byte) error {
+func (f *fakeAttempts) RecordFailure(_ context.Context, id []byte) error {
 	f.failures++
+	if f.threshold > 0 {
+		if f.perID == nil {
+			f.perID = map[string]int{}
+		}
+		f.perID[string(id)]++
+	}
 	return nil
 }
 
@@ -1419,5 +1432,32 @@ func TestARefusedSignInAnswersTheSameForAnUnknownAndAKnownAddressUnderAStoreFaul
 				t.Errorf("%s: want an error line without the email or the organization id, logs:\n%s", label, logs)
 			}
 		}
+	}
+}
+
+// The lockout is keyed by the address, not by an account: an unknown address
+// locks after the same number of refused tries as a known one, and both then
+// answer the same 429 with the same body. Today's answer, pinned (go-api's
+// lockout, 5 failures; the lock answer itself is outside 11859).
+func TestALockedAddressAnswersTheSame429WhetherTheAccountExists(t *testing.T) {
+	const threshold = 5
+	answers := map[string]*httptest.ResponseRecorder{}
+	for _, email := range []string{compatEmail, "nobody@example.com"} {
+		f := newCompatFixture(t)
+		f.attempts.threshold, f.attempts.remaining = threshold, 15*time.Minute
+		for try := 1; try <= threshold; try++ {
+			response := f.do(http.MethodPost, PatternCompatLogin, loginBody(email, "wrong", ""), nil)
+			if response.Code != http.StatusUnauthorized {
+				t.Fatalf("%s try %d: status %d before the lock, want 401", email, try, response.Code)
+			}
+		}
+		if len(f.attempts.perID) != 1 {
+			t.Fatalf("%s: failures under %d lockout identifiers, want one (the address)", email, len(f.attempts.perID))
+		}
+		answers[email] = f.do(http.MethodPost, PatternCompatLogin, loginBody(email, "wrong", ""), nil)
+	}
+	known, unknown := answers[compatEmail], answers["nobody@example.com"]
+	if known.Code != http.StatusTooManyRequests || unknown.Code != known.Code || unknown.Body.String() != known.Body.String() {
+		t.Fatalf("after %d refused tries: known %d %s, unknown %d %s; want the same 429", threshold, known.Code, known.Body, unknown.Code, unknown.Body)
 	}
 }

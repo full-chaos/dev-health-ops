@@ -209,8 +209,9 @@ func (s *Service) BoundToRoute(ctx context.Context, p Provider, routeID uuid.UUI
 
 // ConsumeFor verifies a posted SAMLResponse for a resolved provider and
 // resolves the account. cookie returns a request cookie value by name (""
-// when absent). On an identity key hit the account signs in from its stored
-// state and the assertion's email is not read; only a miss needs the email.
+// when absent). Before the lookup, the assertion's email must be usable,
+// present and allowed by the provider's domain list, on a key hit or a miss;
+// on a hit the account then signs in from its stored state.
 // Every sign-in ends in the provider's organization: an account that is not
 // a member after the membership seam ran is ErrNotOrgMember, and a miss
 // creates an account only through the membership seam (see provisionNew).

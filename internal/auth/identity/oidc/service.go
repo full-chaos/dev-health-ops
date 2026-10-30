@@ -666,6 +666,7 @@ func (s *Service) checkNewAccount(ctx context.Context, row Provider, v validated
 
 // checkProviderEmail is go-api's e-mail block of the OIDC callback (oidc.go), run on every sign-in before the
 // lookup: a missing address is 400; with a domain list, an address with no "@" is 400 and a domain off the list 403.
+// go-api's OAuth callback (oauth.go) has no malformed branch: there an address with no "@" is the domain 403.
 func checkProviderEmail(row Provider, email string) *Error {
 	if email == "" {
 		return deny(http.StatusBadRequest, ReasonMalformed, "Email address is missing from OIDC claims")
@@ -673,7 +674,7 @@ func checkProviderEmail(row Provider, email string) *Error {
 	if len(row.AllowedDomains) == 0 {
 		return nil
 	}
-	if !strings.Contains(email, "@") {
+	if !strings.Contains(email, "@") && !strings.HasPrefix(row.Protocol, "oauth_") {
 		return deny(http.StatusBadRequest, ReasonMalformed, "Email address from OIDC claims is malformed")
 	}
 	if !emaildomain.Allowed(row.AllowedDomains, emailDomain(email)) {

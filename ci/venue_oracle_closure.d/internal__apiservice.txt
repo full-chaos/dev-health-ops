@@ -163,6 +163,7 @@ internal/testsupport/pgschema
 internal/testsupport/pgseed
 internal/testsupport/proxycapture
 internal/testsupport/pydanticecho
+internal/testsupport/redirectprobe
 internal/testsupport/usertokens
 internal/testsupport/venueoracle
 internal/token

@@ -185,7 +185,7 @@ func (h handlers) socialLogin(w http.ResponseWriter, r *http.Request) {
 		orgUUID = &id
 	}
 	if h.Issuer != nil {
-		pair, err := h.issueSession(ctx, r, user.ID, orgUUID, amrFederated)
+		pair, err := h.issueSession(ctx, r, user.ID, orgUUID, amrFederated, nil)
 		if err != nil {
 			h.fail(w, r, "issue session", err)
 			return

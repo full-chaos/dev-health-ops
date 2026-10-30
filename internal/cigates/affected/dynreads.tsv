@@ -34,6 +34,7 @@ internal/apiservice	accessroute_unset_test.go
 internal/apiservice	endpoint_profile_rows_test.go
 internal/apiservice	endpoint_profile_scan_test.go
 internal/apiservice	githubapp_config.go
+internal/apiservice	provisioning_credential.go
 internal/apiservice/admin	routeguard_test.go
 internal/apiservice/authflowvenue	auth_flow_venue_oracle_integration_test.go
 internal/apiservice/authflowvenue	linkformat_test.go

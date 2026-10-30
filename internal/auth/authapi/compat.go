@@ -43,7 +43,7 @@ type CompatSessions interface {
 	RevokeByCredential(ctx context.Context, credential contracts.SecretString, actor session.Actor) (bool, error)
 	ExchangeLegacy(ctx context.Context, legacy session.LegacyRefresh) (session.Result, error)
 	RevokeLegacy(ctx context.Context, legacy session.LegacyRefresh, actor session.Actor) (bool, error)
-	CreateAudited(ctx context.Context, principalID uuid.UUID, organizationID *uuid.UUID, amr []string, event audit.AuditEvent) (session.Issued, error)
+	IssueSessions
 }
 
 // SocialExchange is the social sign-in domain (*social.Service).

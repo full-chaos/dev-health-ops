@@ -25,8 +25,8 @@
 // possession of a state token this package minted for this exact
 // provider/org is unauthenticated -- recordSSOUnauthenticated, no
 // sso_providers mutation. Everything after state verification (token
-// exchange, userinfo fetch) legitimately flips the row on failure, via
-// recordSSOFailure.
+// exchange, userinfo fetch) is recorded on the row on failure (last_error),
+// via recordSSOFailure.
 //
 // D2742 (team-lead): two deltas from OIDC/SAML's shape were flagged in an
 // earlier version of this file and preserved faithfully per Python's
@@ -42,7 +42,7 @@
 //     this; OIDC/SAML's own ssoErr call sites are unaffected (reason
 //     stays empty, their messages were already fixed and non-echoing).
 //  2. auto-provisioning-disabled is a THIRD bucket, distinct from both
-//     recordSSOFailure (flips the row) and recordSSOUnauthenticated (no
+//     recordSSOFailure (records last_error on the row) and recordSSOUnauthenticated (no
 //     mutation because the caller proved nothing): the state DID
 //     authenticate here, but auto-provisioning-disabled reflects a
 //     per-user access decision, not IdP-provider health, so it is
@@ -632,7 +632,7 @@ func (h handlers) oauthCallback(w http.ResponseWriter, r *http.Request) {
 // errOAuthAutoProvisionDisabled is router.py:1222's HTTPException(403) --
 // a distinct sentinel so oauthCallback can route it to
 // recordSSOAuthenticatedDenial (D2742) rather than ssoProcessing's
-// recordSSOFailure (which flips the row -- wrong here, see the call site).
+// recordSSOFailure (which records last_error on the row -- wrong here, see the call site).
 var errOAuthAutoProvisionDisabled = errors.New("user not found and auto-provisioning is disabled")
 
 // oauthFailureDetail is D2742's client-facing body for an authenticated-
@@ -720,7 +720,7 @@ func (h handlers) oauthExchangeAndFetch(ctx context.Context, w http.ResponseWrit
 			// this authenticated (the state verified; the access token
 			// exchange succeeded) but a per-account access decision, not
 			// IdP-provider health, is oauthCallback's job to route to
-			// recordSSOAuthenticatedDenial (no row flip), the same bucket
+			// recordSSOAuthenticatedDenial (no row write), the same bucket
 			// as auto-provisioning-disabled just below in this file.
 			return oauthClaims{}, err
 		}

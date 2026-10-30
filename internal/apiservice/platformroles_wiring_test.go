@@ -1,10 +1,14 @@
 package apiservice
 
 import (
+	"bytes"
 	"go/ast"
 	"go/parser"
+	"go/printer"
 	"go/token"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 )
 
 // The request scope's impersonation gate reads the switch startup parsed.
@@ -20,18 +24,31 @@ func TestTheRequestScopeGetsThePlatformRolesSwitch(t *testing.T) {
 	}
 }
 
+// The read every route set gets is the startup switch and schema.
+func TestDepsPlatformRolesIsTheStartupSwitch(t *testing.T) {
+	for _, owned := range []bool{false, true} {
+		deps := Deps{PlatformRolesOwned: owned, AuthSchema: "auth_x"}
+		if got, want := deps.platformRoles(), (policy.PlatformRoleRead{Owned: owned, AuthSchema: "auth_x"}); got != want {
+			t.Errorf("owned %v: %+v, want %+v", owned, got, want)
+		}
+	}
+}
+
 // Every go-api route set that reads public.users gets the platform roles
 // switch from startup: session, sso and billing take PlatformRoles, admin
-// takes PlatformRolesOwned and AuthSchema. A Deps literal without them would
-// read the public is_superuser column while the switch is on.
+// takes PlatformRolesOwned and AuthSchema, each from deps. A Deps literal
+// without them, or with any other value, would read the public is_superuser
+// column while the switch is on.
 func TestEveryUsersReaderGetsThePlatformRoleRead(t *testing.T) {
-	file, err := parser.ParseFile(token.NewFileSet(), "service.go", nil, parser.SkipObjectResolution)
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "service.go", nil, parser.SkipObjectResolution)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string][]string{
-		"session": {"PlatformRoles"}, "sso": {"PlatformRoles"}, "billing": {"PlatformRoles"},
-		"admin": {"PlatformRolesOwned", "AuthSchema"},
+	read := map[string]string{"PlatformRoles": "deps.platformRoles()"}
+	want := map[string]map[string]string{
+		"session": read, "sso": read, "billing": read,
+		"admin": {"PlatformRolesOwned": "deps.PlatformRolesOwned", "AuthSchema": "deps.AuthSchema"},
 	}
 	seen := map[string]int{}
 	ast.Inspect(file, func(n ast.Node) bool {
@@ -48,17 +65,21 @@ func TestEveryUsersReaderGetsThePlatformRoleRead(t *testing.T) {
 			return true
 		}
 		seen[pkg.Name]++
-		keys := map[string]bool{}
+		values := map[string]string{}
 		for _, elt := range lit.Elts {
 			if kv, ok := elt.(*ast.KeyValueExpr); ok {
 				if key, ok := kv.Key.(*ast.Ident); ok {
-					keys[key.Name] = true
+					var text bytes.Buffer
+					if err := printer.Fprint(&text, fset, kv.Value); err != nil {
+						t.Fatal(err)
+					}
+					values[key.Name] = text.String()
 				}
 			}
 		}
-		for _, key := range want[pkg.Name] {
-			if !keys[key] {
-				t.Errorf("%s.Deps literal at offset %d has no %s", pkg.Name, lit.Pos(), key)
+		for key, value := range want[pkg.Name] {
+			if got, ok := values[key]; !ok || got != value {
+				t.Errorf("%s.Deps literal at %s: %s is %q, want %q", pkg.Name, fset.Position(lit.Pos()), key, got, value)
 			}
 		}
 		return true

@@ -26,7 +26,7 @@ internal/apiservice/admin/users.go	parseUserUpdate	1	request key (refused while 
 internal/apiservice/admin/users.go	userResponseObject	1	response key
 internal/apiservice/admin/userstore.go	-	1	read: fullUserColumns, used only through userColumns
 internal/apiservice/admin/userstore.go	pgStore.insertUser	1	write (refused while owned)
-internal/apiservice/admin/userstore.go	pgStore.updateUser	1	write (refused while owned)
+internal/apiservice/admin/userstore.go	pgStore.updateUser	1	write (an explicit value refused while owned; the owned statement leaves the column)
 internal/apiservice/admin/userstore.go	pgStore.userColumns	2	read: the off column of PlatformRoleRead
 internal/auth/authapi/compat.go	refreshUserInfo	1	response key
 internal/auth/authapi/login.go	userInfo	1	response key

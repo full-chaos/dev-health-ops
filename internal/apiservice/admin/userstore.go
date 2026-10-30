@@ -329,9 +329,17 @@ func (s pgStore) updateUser(ctx context.Context, id uuid.UUID, patch userUpdate)
 		isSuperuser = *patch.IsSuperuser
 	}
 	now := s.now().UTC()
-	_, err = s.Pool.Exec(ctx, `
+	if s.PlatformRolesOwned {
+		// The row's is_superuser is the switched (auth) read: writing it back
+		// would move the public column, so the owned statement leaves it.
+		_, err = s.Pool.Exec(ctx, `
+UPDATE users SET email = $2, username = $3, full_name = $4, avatar_url = $5, is_active = $6, is_verified = $7, updated_at = $8
+WHERE id = $1`, id, email, username, fullName, avatarURL, isActive, isVerified, now)
+	} else {
+		_, err = s.Pool.Exec(ctx, `
 UPDATE users SET email = $2, username = $3, full_name = $4, avatar_url = $5, is_active = $6, is_verified = $7, is_superuser = $8, updated_at = $9
 WHERE id = $1`, id, email, username, fullName, avatarURL, isActive, isVerified, isSuperuser, now)
+	}
 	if err != nil {
 		return nil, err
 	}

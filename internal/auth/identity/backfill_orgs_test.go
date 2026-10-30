@@ -160,22 +160,37 @@ func TestFillAuditReusesTheProjectedEventAndNamesTheFields(t *testing.T) {
 	}
 }
 
-// The report takes the flags of what the transaction changed, not of the first read.
+// The report takes the flags of what the transaction decided, not of the first read: the unresolved count included.
 func TestApplyFillTakesTheFlagsOfWhatTheTransactionChanged(t *testing.T) {
 	in := MembershipBackfillResult{RoleUpdated: true, InviterSet: true, JoinedSet: true, InviterUnresolved: true}
 	cases := []struct {
 		name    string
+		in      MembershipBackfillResult
 		changed fillDecision
 		want    MembershipBackfillResult
 	}{
-		{"both changed", fillDecision{Inviter: true, Joined: true}, in},
-		{"only the inviter changed", fillDecision{Inviter: true}, MembershipBackfillResult{RoleUpdated: true, InviterSet: true, InviterUnresolved: true}},
-		{"only the join changed", fillDecision{Joined: true}, MembershipBackfillResult{RoleUpdated: true, JoinedSet: true, InviterUnresolved: true}},
-		{"nothing changed", fillDecision{}, MembershipBackfillResult{RoleUpdated: true, InviterUnresolved: true}},
+		{"both changed, the inviter now resolved", in, fillDecision{Inviter: true, Joined: true}, MembershipBackfillResult{RoleUpdated: true, InviterSet: true, JoinedSet: true}},
+		{"only the join changed, the inviter still unresolved", in, fillDecision{Joined: true, Unresolved: true}, MembershipBackfillResult{RoleUpdated: true, JoinedSet: true, InviterUnresolved: true}},
+		{"nothing changed", in, fillDecision{}, MembershipBackfillResult{RoleUpdated: true}},
+		{"resolved at the first read, unresolved under the lock", MembershipBackfillResult{InviterSet: true, JoinedSet: true}, fillDecision{Joined: true, Unresolved: true}, MembershipBackfillResult{JoinedSet: true, InviterUnresolved: true}},
 	}
 	for _, c := range cases {
-		if got := applyFill(in, c.changed); got != c.want {
+		if got := applyFill(c.in, c.changed); got != c.want {
 			t.Fatalf("%s: got %+v, want %+v", c.name, got, c.want)
+		}
+	}
+}
+
+// The inviter is resolved only by the locked read of its principal row, and only as a user principal.
+func TestLockedInviterResolved(t *testing.T) {
+	cases := []struct {
+		found bool
+		kind  string
+		want  bool
+	}{{true, "user", true}, {true, "service_account", false}, {true, "", false}, {false, "user", false}}
+	for _, c := range cases {
+		if got := lockedInviterResolved(c.found, c.kind); got != c.want {
+			t.Fatalf("found=%v kind=%q: got %v, want %v", c.found, c.kind, got, c.want)
 		}
 	}
 }

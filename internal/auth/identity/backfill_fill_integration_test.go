@@ -244,3 +244,86 @@ func TestFillHoldsTheMembershipRowBetweenItsReadAndItsWrite(t *testing.T) {
 		t.Fatalf("joined_at after the writer: got %v, want %v (the writer ran after the fill)", gotJoined, t2)
 	}
 }
+
+// The inviter is projected after the fill's first read: the fill's own transaction resolves it, so the report
+// counts it set and no longer unresolved, and the row carries it.
+func TestFillCountsTheInviterResolutionOfItsOwnTransaction(t *testing.T) {
+	e := getEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	org := e.seedAuthOwnedOrg(t, ctx)
+	inviter := e.seedUser(t, ctx, uniqueEmail("ri"), true, true)
+	member := e.seedUser(t, ctx, uniqueEmail("rm"), true, true)
+	e.project(t, ctx, member)
+	t0 := time.Now().UTC().Truncate(time.Second).Add(-72 * time.Hour)
+	if _, err := e.store.BackfillMembership(ctx, MembershipBackfillTarget{OrgID: org, UserID: member, Role: "member", JoinedAt: &t0}, false); err != nil {
+		t.Fatal(err)
+	}
+	id := e.setAuthJoin(t, ctx, org, member, nil)
+	t1 := t0.Add(time.Hour)
+	afterFillRead = func(ctx context.Context) {
+		afterFillRead = nil
+		e.project(t, ctx, inviter)
+	}
+	t.Cleanup(func() { afterFillRead = nil })
+	res, err := e.store.BackfillMembership(ctx, MembershipBackfillTarget{OrgID: org, UserID: member, Role: "member", JoinedAt: &t1, InvitedBy: &inviter}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.InviterSet || !res.JoinedSet || res.InviterUnresolved {
+		t.Fatalf("report: got inviter_set=%v joined_set=%v inviter_unresolved=%v, want true, true, false", res.InviterSet, res.JoinedSet, res.InviterUnresolved)
+	}
+	var gotInviter *uuid.UUID
+	if err := e.admin.QueryRow(ctx, `SELECT invited_by FROM auth.memberships WHERE id = $1`, id).Scan(&gotInviter); err != nil {
+		t.Fatal(err)
+	}
+	if gotInviter == nil || *gotInviter != inviter {
+		t.Fatalf("row invited_by: got %v, want %v", gotInviter, inviter)
+	}
+}
+
+// The inviter is projected after the fill's principal lock found no row: the fill does not take it in this run
+// (it holds no lock on it, and its foreign-key check would take that lock after the row lock). It stays unresolved
+// for this run and the next run fills it.
+func TestFillTreatsAnInviterThatAppearsAfterTheLockMissAsUnresolved(t *testing.T) {
+	e := getEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	org := e.seedAuthOwnedOrg(t, ctx)
+	inviter := e.seedUser(t, ctx, uniqueEmail("li"), true, true)
+	member := e.seedUser(t, ctx, uniqueEmail("lm"), true, true)
+	e.project(t, ctx, member)
+	t0 := time.Now().UTC().Truncate(time.Second).Add(-72 * time.Hour)
+	if _, err := e.store.BackfillMembership(ctx, MembershipBackfillTarget{OrgID: org, UserID: member, Role: "member", JoinedAt: &t0}, false); err != nil {
+		t.Fatal(err)
+	}
+	id := e.setAuthJoin(t, ctx, org, member, nil)
+	t1 := t0.Add(time.Hour)
+	afterFillRowLock = func(ctx context.Context) {
+		afterFillRowLock = nil
+		e.project(t, ctx, inviter)
+	}
+	t.Cleanup(func() { afterFillRowLock = nil })
+	target := MembershipBackfillTarget{OrgID: org, UserID: member, Role: "member", JoinedAt: &t1, InvitedBy: &inviter}
+	res, err := e.store.BackfillMembership(ctx, target, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.InviterSet || !res.JoinedSet || !res.InviterUnresolved {
+		t.Fatalf("first run report: got inviter_set=%v joined_set=%v inviter_unresolved=%v, want false, true, true", res.InviterSet, res.JoinedSet, res.InviterUnresolved)
+	}
+	var gotInviter *uuid.UUID
+	if err := e.admin.QueryRow(ctx, `SELECT invited_by FROM auth.memberships WHERE id = $1`, id).Scan(&gotInviter); err != nil {
+		t.Fatal(err)
+	}
+	if gotInviter != nil {
+		t.Fatalf("row invited_by after the first run: got %v, want nil", gotInviter)
+	}
+	res, err = e.store.BackfillMembership(ctx, target, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.InviterSet || res.JoinedSet || res.InviterUnresolved {
+		t.Fatalf("second run report: got inviter_set=%v joined_set=%v inviter_unresolved=%v, want true, false, false", res.InviterSet, res.JoinedSet, res.InviterUnresolved)
+	}
+}

@@ -140,14 +140,14 @@ func TestTheReactivateRouteIsInTheStartupGate(t *testing.T) {
 	}
 	f := newProvFixture(t)
 	routes := 0
-	for _, c := range routeCases()[:8] {
+	for _, c := range routeCases() {
 		if got := f.post(c.path, encode(c.body(f, f.super)), nil); got.Code != http.StatusOK {
 			t.Fatalf("%s on the embedded document: %d %s, want 200", c.op, got.Code, got.Body)
 		}
 		routes++
 	}
-	if routes != 9 {
-		t.Fatalf("%d provisioning routes served, want 9", routes)
+	if routes != 10 {
+		t.Fatalf("%d provisioning routes served, want 10", routes)
 	}
 	if strings.Contains(f.logs.String(), "not mounted") {
 		t.Fatalf("a not-mounted line was logged: %s", f.logs.String())

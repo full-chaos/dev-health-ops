@@ -35,6 +35,7 @@ var responseModelRoutes = map[string]bool{
 	"POST /internal/v1/invites/create":                false,
 	"POST /internal/v1/invites/accept":                false,
 	"POST /internal/v1/invites/revoke":                false,
+	"POST /internal/v1/organizations/suspend":         false,
 	"POST /internal/v1/organizations/deprovision":     false,
 	"POST /internal/v1/organizations/reactivate":      false,
 	"POST /v1/token/refresh":                          false,

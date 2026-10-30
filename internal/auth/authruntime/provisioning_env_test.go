@@ -17,5 +17,5 @@ var provisioningServedRoutes = []string{
 	"POST /internal/v1/memberships/remove@api", "POST /internal/v1/memberships/transfer@api",
 	"POST /internal/v1/invites/create@api", "POST /internal/v1/invites/accept@api",
 	"POST /internal/v1/organizations/deprovision@api", "POST /internal/v1/organizations/reactivate@api",
-	"POST /internal/v1/invites/revoke@api",
+	"POST /internal/v1/invites/revoke@api", "POST /internal/v1/organizations/suspend@api",
 }

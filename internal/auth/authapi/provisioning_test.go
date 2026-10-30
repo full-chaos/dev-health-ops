@@ -285,12 +285,12 @@ func newProvFixture(t *testing.T) *provFixture {
 	return newProvFixtureWith(t, docWithRow(t, PatternOrgSuspend))
 }
 
-// docWithRow is the embedded endpoint-profile document plus a row for route (a copy of the deprovision row): the
-// suspend route is mounted only when its row exists, and the embedded document does not hold it yet.
+// docWithRow is the embedded endpoint-profile document with its row for route (if any) replaced by a copy of the
+// deprovision row, last: the suspend route is mounted only when its row exists.
 func docWithRow(t testing.TB, route string) []byte {
 	t.Helper()
 	var document map[string]any
-	if err := json.Unmarshal(authv1.AuthServiceEndpointProfiles, &document); err != nil {
+	if err := json.Unmarshal(docWithoutRow(t, route), &document); err != nil {
 		t.Fatal(err)
 	}
 	rows := document["rows"].([]any)
@@ -313,6 +313,27 @@ func docWithRow(t testing.TB, route string) []byte {
 	}
 	t.Fatal("no deprovision row in the embedded document")
 	return nil
+}
+
+// docWithoutRow is the embedded endpoint-profile document without the rows for route.
+func docWithoutRow(t testing.TB, route string) []byte {
+	t.Helper()
+	var document map[string]any
+	if err := json.Unmarshal(authv1.AuthServiceEndpointProfiles, &document); err != nil {
+		t.Fatal(err)
+	}
+	var kept []any
+	for _, item := range document["rows"].([]any) {
+		if item.(map[string]any)["route"] != route {
+			kept = append(kept, item)
+		}
+	}
+	document["rows"] = kept
+	raw, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
 }
 
 // newProvFixtureWith builds the routes over the given endpoint-profile
@@ -1093,18 +1114,18 @@ func TestOrgSuspendRefusalsAreNamedReasonCodes(t *testing.T) {
 	}
 }
 
-// The suspend route is mounted only when the embedded endpoint-profile document holds its row. Without it the route is
-// not mounted (404), the other eight routes are served, the service starts and one startup line names the route;
-// the other routes' switch (provisioningPatterns) is unaffected.
+// The suspend route is mounted only when the endpoint-profile document holds its row. Without it the route is not
+// mounted (404), the other nine routes are served, the service starts and one startup line names the route; the other
+// routes' switch (provisioningPatterns) is unaffected.
 func TestOrgSuspendIsDarkWithoutItsProfileRow(t *testing.T) {
-	f := newProvFixtureWith(t, nil)
+	f := newProvFixtureWith(t, docWithoutRow(t, PatternOrgSuspend))
 	if got := f.post(PatternOrgSuspend, encode(routeCases()[8].body(f, f.super)), nil); got.Code != http.StatusNotFound {
 		t.Fatalf("suspend without its row: %d %s, want 404", got.Code, got.Body)
 	}
 	if f.reactivate.suspends != 0 {
 		t.Fatal("the verb ran for a route that is not mounted")
 	}
-	for _, c := range routeCases()[:8] {
+	for _, c := range append(routeCases()[:8], routeCases()[9]) {
 		if got := f.post(c.path, encode(c.body(f, f.super)), nil); got.Code != http.StatusOK {
 			t.Fatalf("%s with the suspend row absent: %d %s, want 200", c.op, got.Code, got.Body)
 		}

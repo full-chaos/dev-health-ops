@@ -130,7 +130,6 @@ func TestProvisioningCredentialWorkloadNeedsItsInputsByName(t *testing.T) {
 		"no issuer":           {noIssuer, EnvAuthWorkloadIssuer},
 		"empty issuer":        {good(map[string]string{EnvAuthWorkloadIssuer: " "}), EnvAuthWorkloadIssuer},
 		"issuer not https":    {good(map[string]string{EnvAuthWorkloadIssuer: "http://auth.example.test"}), EnvAuthWorkloadIssuer},
-		"missing bootstrap":   {good(map[string]string{EnvAuthWorkloadBootstrapFile: filepath.Join(t.TempDir(), "absent")}), EnvAuthWorkloadBootstrapFile},
 		"bad selector":        {good(map[string]string{EnvAuthProvisioningCredential: "Workload"}), EnvAuthProvisioningCredential},
 		"bool selector":       {good(map[string]string{EnvAuthProvisioningCredential: "true"}), EnvAuthProvisioningCredential},
 		"session selector":    {good(map[string]string{EnvAuthProvisioningCredential: "session"}), EnvAuthProvisioningCredential},

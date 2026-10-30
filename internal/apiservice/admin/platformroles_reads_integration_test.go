@@ -14,6 +14,9 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/platformroleseam"
 )
 
@@ -122,6 +125,88 @@ func TestTransferOwnershipGuardReadsThePlatformRoleWhileOwned(t *testing.T) {
 			if recorder.Code != want {
 				t.Errorf("owned %v: transfer to %s: status %d %s, want %d", owned, who, recorder.Code, recorder.Body.String(), want)
 			}
+		}
+	}
+}
+
+// While owned, a guarded write waits for a platform role grant in flight and
+// then decides on it: conn A holds the platform role write lock and has
+// inserted the target's assignment, uncommitted; the guarded write of a
+// non-superuser caller blocks on the lock (seen in pg_locks, not timed) and,
+// once A commits, refuses with 403. Off, the guarded write does not wait.
+func TestGuardedWriteWaitsForAnInFlightPlatformRoleGrant(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	env := platformroleseam.Start(ctx, t, true)
+	caller := &policy.User{UserID: uuid.NewString(), ID: uuid.New()}
+	for _, owned := range []bool{true, false} {
+		target := env.User(ctx, t, false, false)
+		locked, release, granted := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+		go func() {
+			assignment, principal := uuid.New(), target.String()
+			granted <- audit.Commit(ctx, env.Admin, env.Schema, audit.Mutation{
+				Apply: func(ctx context.Context, tx audit.TxOps) error {
+					if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, rule.WriteLock); err != nil {
+						return err
+					}
+					if _, err := tx.Exec(ctx, `INSERT INTO auth.platform_role_assignments (id, principal_id, role_key) VALUES ($1, $2, $3)`, assignment, target, rule.PlatformAdmin); err != nil {
+						return err
+					}
+					close(locked)
+					<-release
+					return nil
+				},
+				Audit: audit.AuditEvent{EventType: "auth.platform_role.granted", Outcome: audit.OutcomeAllowed, SubjectPrincipalID: &principal,
+					Attributes: map[string]any{"reason_code": "role_granted", "target_kind": "principal", "target_id": principal}},
+				Events: []audit.OutboxEvent{{AggregateType: "platform_role_assignment", AggregateID: provisioning.WireID("platform_role_assignment", assignment.String()),
+					EventType: "platform_role_assignment.granted", Change: map[string]any{"status": "active"}}},
+			})
+		}()
+		select {
+		case <-locked:
+		case err := <-granted:
+			t.Fatalf("owned %v: the grant ended before it held the lock: %v", owned, err)
+		}
+		h := &handlers{store: pgStore{Pool: env.Admin, PlatformRolesOwned: owned, AuthSchema: "auth"}, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+		answered := make(chan int, 1)
+		go func() {
+			recorder := httptest.NewRecorder()
+			h.superuserGuardedWrite(ctx, recorder, caller, nil, "update_user", func(g *superuserTx) func() {
+				if g.refuse(target) {
+					return nil
+				}
+				return func() { recorder.WriteHeader(http.StatusOK) }
+			})
+			answered <- recorder.Code
+		}()
+		if !owned {
+			if code := <-answered; code != http.StatusOK {
+				t.Errorf("off: the guarded write answered %d while the grant was in flight, want 200", code)
+			}
+			close(release)
+			if err := <-granted; err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		for waiting := false; !waiting; {
+			select {
+			case code := <-answered:
+				t.Fatalf("owned: the guarded write answered %d before the grant committed: it did not wait for the platform role write lock", code)
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			default:
+			}
+			if err := env.Admin.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND NOT granted)`).Scan(&waiting); err != nil {
+				t.Fatal(err)
+			}
+		}
+		close(release)
+		if err := <-granted; err != nil {
+			t.Fatal(err)
+		}
+		if code := <-answered; code != http.StatusForbidden {
+			t.Errorf("owned: the guarded write answered %d after the grant committed, want 403", code)
 		}
 	}
 }

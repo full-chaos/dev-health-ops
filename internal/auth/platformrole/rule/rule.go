@@ -17,6 +17,15 @@ import (
 // PlatformAdmin is the catalog's platform administrator role key.
 const PlatformAdmin = "platform_admin"
 
+// WriteLock is the advisory transaction lock key every writer of
+// platform_role_assignments takes exclusively before it writes. A decision
+// that must not interleave with a write takes it shared (SharedWriteLockSQL).
+const WriteLock = "auth.platform_role_assignments:write"
+
+// SharedWriteLockSQL takes WriteLock ($1) shared for the rest of the
+// transaction.
+const SharedWriteLockSQL = `SELECT pg_advisory_xact_lock_shared(hashtextextended($1, 0))`
+
 // OwnedEnv is the platform roles switch: while it is not true, public
 // users.is_superuser is the platform authority.
 const OwnedEnv = "AUTH_PLATFORM_ROLES_OWNED"

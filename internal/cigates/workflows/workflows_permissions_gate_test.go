@@ -20,9 +20,6 @@ type permRow struct {
 }
 
 var workflowPermAllowlist = []permRow{
-	{"arc-runner-image.yml", map[string]string{"contents": "read", "packages": "write"}, "the single build job publishes the runner image to ghcr; the write scope should move to that job"},
-	{"auto-release.yml", map[string]string{"id-token": "write", "contents": "write", "attestations": "write"}, "the single release job signs and attests the release; id-token and attestations should move to that job"},
-	{"docker-images.yml", map[string]string{"contents": "read", "packages": "write", "id-token": "write"}, "the image jobs build, push and sign; six jobs inherit the grant today, so each needs its own block before it can leave the workflow level"},
 	{"freeze-provider-worlds.yml", map[string]string{"contents": "read", "packages": "read"}, "the job pulls images from ghcr"},
 	{"go-quality.yml", map[string]string{"contents": "read", "packages": "read"}, "the legs pull images from ghcr; the plan job adds actions: read at job level"},
 	{"go-workers-compose-proof.yml", map[string]string{"contents": "read", "packages": "read"}, "the proof pulls images from ghcr"},
@@ -43,10 +40,15 @@ type jobPermRow struct {
 }
 
 var jobPermAllowlist = map[jobKey]jobPermRow{
+	{"arc-runner-image.yml", "build"}:              {map[string]string{"contents": "read", "packages": "write"}, "pushes the runner image to ghcr"},
 	{"auto-release.yml", "tag-and-release"}:        {map[string]string{"contents": "write"}, "creates the release tag and the release"},
 	{"codeql-analysis.yml", "analyze-docs-only"}:   {map[string]string{"actions": "read", "contents": "read", "security-events": "write"}, "uploads the code scanning result of the docs-only twin"},
 	{"codeql-analysis.yml", "analyze"}:             {map[string]string{"actions": "read", "contents": "read", "security-events": "write"}, "uploads the code scanning result"},
 	{"docker-images.yml", "resolve"}:               {map[string]string{"contents": "read", "packages": "write", "pull-requests": "read", "attestations": "read"}, "reads the promotion state (pull requests, attestations) and writes the lookup package"},
+	{"docker-images.yml", "go-build"}:              {map[string]string{"contents": "read", "packages": "write"}, "pushes the platform image by digest to ghcr"},
+	{"docker-images.yml", "go-build-dho-arm64"}:    {map[string]string{"contents": "read", "packages": "write"}, "pushes the arm64 dho image by digest to ghcr"},
+	{"docker-images.yml", "go-api-tools-build"}:    {map[string]string{"contents": "read", "packages": "write"}, "pushes the platform go-api-tools images by digest to ghcr"},
+	{"docker-images.yml", "fan-in-latest"}:         {map[string]string{"contents": "read", "packages": "write"}, "applies the moving tags in ghcr"},
 	{"docker-images.yml", "go-merge"}:              {map[string]string{"contents": "read", "packages": "write", "id-token": "write", "attestations": "write"}, "merges the multi-arch image, signs and attests it"},
 	{"docker-images.yml", "go-api-tools-merge"}:    {map[string]string{"contents": "read", "packages": "write", "id-token": "write", "attestations": "write"}, "merges the multi-arch image, signs and attests it"},
 	{"go-quality.yml", "go-quality-plan"}:          {map[string]string{"contents": "read", "packages": "read", "actions": "read"}, "lists runs and pulls images to plan the legs"},
@@ -63,8 +65,6 @@ var jobPermAllowlist = map[jobKey]jobPermRow{
 	{"security-scan.yml", "semgrep"}:               {map[string]string{"contents": "read", "security-events": "write"}, "uploads the code scanning result"},
 	{"security-scan.yml", "gitleaks"}:              {map[string]string{"contents": "read", "security-events": "write"}, "uploads the code scanning result"},
 	{"venue-oracles-main-alert.yml", "alert"}:      {map[string]string{"contents": "read", "actions": "read", "issues": "write"}, "opens the issue for a red main run"},
-	{"arc-runner-image.yml", "*"}:                  {map[string]string{"contents": "read", "packages": "write"}, "the jobs without a block inherit the workflow-level grant (see its workflow row); each must keep inheriting exactly this map"},
-	{"docker-images.yml", "*"}:                     {map[string]string{"contents": "read", "packages": "write", "id-token": "write"}, "the jobs without a block inherit the workflow-level grant (see its workflow row); each must keep inheriting exactly this map"},
 	{"freeze-provider-worlds.yml", "*"}:            {map[string]string{"contents": "read", "packages": "read"}, "the jobs without a block inherit the workflow-level grant (see its workflow row); each must keep inheriting exactly this map"},
 	{"go-quality.yml", "*"}:                        {map[string]string{"contents": "read", "packages": "read"}, "the jobs without a block inherit the workflow-level grant (see its workflow row); each must keep inheriting exactly this map"},
 	{"go-workers-compose-proof.yml", "*"}:          {map[string]string{"contents": "read", "packages": "read"}, "the jobs without a block inherit the workflow-level grant (see its workflow row); each must keep inheriting exactly this map"},
@@ -77,8 +77,6 @@ var jobPermAllowlist = map[jobKey]jobPermRow{
 // inheriting job is not approved by the row; it needs an entry here (or a block and a row of its own), and an entry whose job is
 // gone, has its own block or no longer inherits is refused.
 var wildcardJobs = map[string][]string{
-	"arc-runner-image.yml":         {"build"},
-	"docker-images.yml":            {"changes", "go-build", "dind-smoke-test", "go-build-dho-arm64", "go-api-tools-build", "fan-in-latest"},
 	"freeze-provider-worlds.yml":   {"freeze"},
 	"go-quality.yml":               {"go-quality-leg", "go-quality"},
 	"go-workers-compose-proof.yml": {"go-workers-compose-proof"},
@@ -88,17 +86,7 @@ var wildcardJobs = map[string][]string{
 }
 
 var persistAllowlist = map[jobKey]string{
-	{"arc-runner-image.yml", "build"}:           "publishing job; follow-up: persist-credentials: false",
-	{"auto-release.yml", "tag-and-release"}:     "pushes the release tag with the persisted token; check before changing",
-	{"codeql-analysis.yml", "analyze"}:          "follow-up: persist-credentials: false",
-	{"docker-images.yml", "changes"}:            "follow-up: persist-credentials: false",
-	{"docker-images.yml", "resolve"}:            "follow-up: persist-credentials: false",
-	{"docker-images.yml", "go-build"}:           "follow-up: persist-credentials: false",
-	{"docker-images.yml", "go-build-dho-arm64"}: "follow-up: persist-credentials: false",
-	{"docker-images.yml", "go-api-tools-build"}: "follow-up: persist-credentials: false",
-	{"docker-images.yml", "fan-in-latest"}:      "follow-up: persist-credentials: false",
-	{"security-scan.yml", "semgrep"}:            "follow-up: persist-credentials: false",
-	{"security-scan.yml", "gitleaks"}:           "follow-up: persist-credentials: false",
+	{"auto-release.yml", "tag-and-release"}: "git push origin $TAG at auto-release.yml:59 pushes the release tag with the persisted checkout token",
 }
 
 // permsOf reports the mapping of a permissions value, whether the key is present and whether it is a mapping.
@@ -306,9 +294,8 @@ func TestWorkflowPermissionsGateRefusesEachDefectClass(t *testing.T) {
 		{"workflow block gains a scope", mutation{testWf, topRead, "permissions:\n  contents: read\n  packages: write\n"}, "test.yml: workflow-level permissions map[contents:read packages:write], want exactly contents: read"},
 		{"a job adds a read scope", mutation{testWf, jobRead, "    permissions:\n      contents: read\n      packages: read\n    outputs:\n"}, "test.yml job changes: effective permissions map[contents:read packages:read] are not exactly contents: read and have no allowlist row"},
 		{"a job without a block inherits a non-read workflow map", mutation{testWf, topRead, "permissions:\n  contents: read\n  packages: read\n"}, "test.yml job test: effective permissions map[contents:read packages:read] are not exactly contents: read and have no allowlist row"},
-		{"a new job inherits a workflow-level write grant", mutation{".github/workflows/arc-runner-image.yml", "jobs:\n  build:\n", "jobs:\n  unreviewed-job:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n  build:\n"}, "arc-runner-image.yml job unreviewed-job: inherits effective permissions map[contents:read packages:write] but is not in the job list of its wildcard row"},
 		{"a new job inherits a workflow-level read grant", mutation{".github/workflows/go-quality.yml", "jobs:\n", "jobs:\n  unreviewed-job:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n"}, "go-quality.yml job unreviewed-job: inherits effective permissions map[contents:read packages:read] but is not in the job list of its wildcard row"},
-		{"a listed job is renamed away", mutation{".github/workflows/arc-runner-image.yml", "jobs:\n  build:\n", "jobs:\n  build-renamed:\n"}, "arc-runner-image.yml: the wildcard row lists job build, which has no inheriting job of that name"},
+		{"a listed job is renamed away", mutation{".github/workflows/go-workers-compose-proof.yml", "jobs:\n  go-workers-compose-proof:\n", "jobs:\n  go-workers-compose-proof-renamed:\n"}, "go-workers-compose-proof.yml: the wildcard row lists job go-workers-compose-proof, which has no inheriting job of that name"},
 		{"job block widened to write", mutation{testWf, jobRead, "    permissions:\n      contents: write\n    outputs:\n"}, "test.yml job changes: effective permissions map[contents:write] are not exactly contents: read and have no allowlist row"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -319,6 +306,43 @@ func TestWorkflowPermissionsGateRefusesEachDefectClass(t *testing.T) {
 			}
 		})
 	}
+	t.Run("a workflow-level write grant that was moved to its jobs comes back", func(t *testing.T) {
+		const wf = ".github/workflows/"
+		for _, c := range []struct {
+			name string
+			m    mutation
+			want string
+		}{
+			{"arc-runner-image", mutation{wf + "arc-runner-image.yml", "permissions:\n  contents: read\n\njobs:\n", "permissions:\n  contents: read\n  packages: write\n\njobs:\n"}, "arc-runner-image.yml: workflow-level permissions map[contents:read packages:write], want exactly contents: read or an allowlist row with a reason"},
+			{"auto-release", mutation{wf + "auto-release.yml", "permissions:\n  contents: read\non:\n", "permissions:\n  id-token: write\n  contents: write\n  attestations: write\non:\n"}, "auto-release.yml: workflow-level permissions map[attestations:write contents:write id-token:write], want exactly contents: read or an allowlist row with a reason"},
+			{"docker-images", mutation{wf + "docker-images.yml", "permissions:\n  contents: read\n\njobs:\n", "permissions:\n  contents: read\n  packages: write\n  id-token: write\n\njobs:\n"}, "docker-images.yml: workflow-level permissions map[contents:read id-token:write packages:write], want exactly contents: read or an allowlist row with a reason"},
+		} {
+			tmp := plantTree(t, root, files, c.m)
+			if d := strings.Join(permissionsDefects(t, tmp, workflowPermAllowlist, jobPermAllowlist, wildcardJobs, persistAllowlist), "\n"); !strings.Contains(d, c.want) {
+				t.Errorf("%s: want %q in:\n%s", c.name, c.want, d)
+			}
+		}
+	})
+	t.Run("a checkout that persists credentials comes back on a fixed job", func(t *testing.T) {
+		const wf = ".github/workflows/"
+		for _, c := range []struct {
+			file string
+			jobs []string
+		}{
+			{"arc-runner-image.yml", []string{"build"}},
+			{"codeql-analysis.yml", []string{"analyze"}},
+			{"docker-images.yml", []string{"resolve", "go-build", "go-build-dho-arm64", "go-api-tools-build", "fan-in-latest"}},
+			{"security-scan.yml", []string{"semgrep", "gitleaks"}},
+		} {
+			tmp := plantTree(t, root, files, mutation{wf + c.file, "          persist-credentials: false\n", allMarker + "          lfs: false\n"})
+			d := strings.Join(permissionsDefects(t, tmp, workflowPermAllowlist, jobPermAllowlist, wildcardJobs, persistAllowlist), "\n")
+			for _, j := range c.jobs {
+				if want := c.file + " job " + j + ": checkout in a job that can write must set persist-credentials: false"; !strings.Contains(d, want) {
+					t.Errorf("want %q in:\n%s", want, d)
+				}
+			}
+		}
+	})
 	t.Run("the mirror checkout persists credentials", func(t *testing.T) {
 		tmp := plantTree(t, root, files, mutation{mirror, "          persist-credentials: false\n", allMarker})
 		d := strings.Join(permissionsDefects(t, tmp, workflowPermAllowlist, jobPermAllowlist, wildcardJobs, persistAllowlist), "\n")

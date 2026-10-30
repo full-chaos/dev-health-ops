@@ -42,6 +42,7 @@ internal/apiservice/billingvenue	billing_webhook_venue_oracle_integration_test.g
 internal/atlassianteams	absence_test.go
 internal/atlassianteams	vendored_documents_test.go
 internal/atlassianteams	vendored_patch_chain_test.go
+internal/audit	drill_attempt_integration_test.go
 internal/audit	drill_pitr_integration_test.go
 internal/auth/authapi	hung_read_test.go
 internal/auth/authapi	issuer_eddsa_test.go
@@ -55,6 +56,7 @@ internal/auth/contracts	anchor_ranges_test.go
 internal/auth/contracts	authorization_goldens_test.go
 internal/auth/contracts	authorization_schema_test.go
 internal/auth/contracts	contracts.go
+internal/auth/contracts	credential_anchor_lines_test.go
 internal/auth/contracts	credential_class_vocabulary_test.go
 internal/auth/contracts	credential_columns_test.go
 internal/auth/contracts	credential_goldens_test.go
@@ -609,6 +611,7 @@ internal/teamresolve	golden_test.go
 internal/testsupport/authrows	credentials_test.go
 internal/testsupport/authrows	golden_test.go
 internal/testsupport/authrows	responses_test.go
+internal/testsupport/bigboydir	bigboydir.go
 internal/testsupport/chschema	contract_test.go
 internal/testsupport/goldenscan	tree.go
 internal/testsupport/goldenscan	vectors_test.go

@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -215,37 +217,47 @@ func TestAnAllowlistEntryWithAnEditedRangeIsNotHeldAndItsExpiryOnlyShortens(t *t
 	}
 }
 
-// G4: the manifest format is version 2. A version 1 manifest (written before these sections) is refused with a clear
-// message at ParseManifest and at Apply, before any database work.
+// G4 (and the provider credential section after it): the manifest format is version 3. A manifest of an earlier version
+// (written by an earlier binary, without the newer sections) is refused with a clear message at ParseManifest and at
+// Apply, before any database work.
 func TestAVersionOneManifestIsRefusedWithAClearMessage(t *testing.T) {
-	if ManifestVersion != 2 {
-		t.Fatalf("ManifestVersion = %d, want 2", ManifestVersion)
+	if ManifestVersion != 4 {
+		t.Fatalf("ManifestVersion = %d, want 4", ManifestVersion)
 	}
-	m := sampleManifest(t)
-	m.Version = 1
-	if err := m.Seal(); err != nil {
-		t.Fatal(err)
-	}
-	raw, err := m.Marshal()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ParseManifest(raw); !errors.Is(err, ErrManifest) || !strings.Contains(err.Error(), "export it again with this auth-migrate binary") {
-		t.Errorf("a version 1 manifest = %v, want ErrManifest naming the re-export", err)
-	}
-	if _, err := Apply(context.Background(), nil, testSchema(t), &m, Options{}); !errors.Is(err, ErrManifest) || !strings.Contains(err.Error(), "version 1") {
-		t.Errorf("Apply of a version 1 manifest = %v, want ErrManifest", err)
+	for _, v := range []int{1, 2, 3} {
+		m := sampleManifest(t)
+		m.Version = v
+		if err := m.Seal(); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := m.Marshal()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ParseManifest(raw); !errors.Is(err, ErrManifest) || !strings.Contains(err.Error(), "export it again with this auth-migrate binary") {
+			t.Errorf("a version %d manifest = %v, want ErrManifest naming the re-export", v, err)
+		}
+		if _, err := Apply(context.Background(), nil, testSchema(t), &m, Options{}); !errors.Is(err, ErrManifest) || !strings.Contains(err.Error(), fmt.Sprintf("version %d", v)) {
+			t.Errorf("Apply of a version %d manifest = %v, want ErrManifest", v, err)
+		}
 	}
 }
 
 // pinnedSectionSet is the digest of what a version 2 manifest holds: every section's name, columns and export query.
 // A change to any of them without a ManifestVersion bump fails here.
-var pinnedSectionSet = map[int]string{2: "1ce899a3a8cfc45c8579eb54ee13d46bc5421c765c9f46d33f5809b0c4344b9d"}
+var pinnedSectionSet = map[int]string{
+	2: "1ce899a3a8cfc45c8579eb54ee13d46bc5421c765c9f46d33f5809b0c4344b9d",
+	3: "de43468c86eb3895268e1e9bfe141595e3863c044af353f09e41aa5ced16bb43",
+	4: "16d5494b3fef7ff7ca46007e9cf10b3375d14f1f9b9cf3eac9b21cdd776dd324",
+}
 
-func sectionSetDigest(t *testing.T) string {
+func sectionSetDigest(t *testing.T, skip ...string) string {
 	t.Helper()
 	var lines []string
 	for _, s := range sections {
+		if slices.Contains(skip, s.name) {
+			continue
+		}
 		lines = append(lines, s.name+"|"+s.recordset()+"|"+s.exportSQL(testSchema(t)))
 	}
 	sort.Strings(lines)

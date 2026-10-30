@@ -45,6 +45,6 @@ func provisioningRoutes(cfg authconfig.Config, logger *slog.Logger, pool *pgxpoo
 	}
 	return authapi.ProvisioningRoutes(authapi.ProvisioningDeps{
 		Credentials: servicecred.PG{Pool: pool}, Users: authapi.PGUsers{Pool: pool}, Reader: pool, Organizations: identities,
-		Memberships: members, Invites: invites, Deprovision: deprovision, Logger: logger,
+		Memberships: members, Invites: invites, Deprovision: deprovision, Orgs: orgs, Logger: logger,
 	})
 }

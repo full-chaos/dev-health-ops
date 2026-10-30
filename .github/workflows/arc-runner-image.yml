@@ -55,11 +55,13 @@ concurrency:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   build:
     name: Build and publish
+    permissions:
+      contents: read
+      packages: write
     # ubuntu-26.04-arm is not a real enterprise hosted label (chris
     # 2026-09-04 16:59) -- routed to the ARC pool instead. Fork PRs and the
     # disabled state fall back to ubuntu-latest (x64): the Build step below
@@ -73,6 +75,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up QEMU
         # Required for the x64 (fork-PR / disabled-variable) leg to

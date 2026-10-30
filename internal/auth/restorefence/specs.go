@@ -16,6 +16,8 @@ type column struct {
 	// narrow marks an array column: it travels as the PostgreSQL array literal text and the restored set is cut to its
 	// intersection with the source (a NULL source is the empty set). Nothing is ever added.
 	narrow bool
+	// guardOnly marks a column the section's guard reads but never writes (a revoke section's SET leaves it).
+	guardOnly bool
 }
 
 type kind int
@@ -66,9 +68,11 @@ type section struct {
 	deleteGuard string
 	// retireSet is the SET clause of a retire section.
 	retireSet string
-	// match is the predicate (aliases x, t) a retire section uses to find the source row of a restored row; empty means
-	// the keys are equal.
+	// match is the predicate (aliases x, t) a retire or presence section uses to find the source row of a restored row;
+	// empty means the keys are equal.
 	match string
+	// idExpr is the operator id of a restored row (alias t) when the key alone does not name it; empty means t.<key>::text.
+	idExpr string
 	// revokeSet replaces the SET clause a revoke section builds from cols: a section that carries ids only.
 	revokeSet string
 	// blindReview is the predicate (alias t) on the restored rows a blind margin leaves as they are but names for the
@@ -205,6 +209,17 @@ var sections = []section{
 	// password_updated_at is newer in the source).
 	{name: "auth.users", table: "users", kind: kindReport, key: colUUID("principal_id"),
 		cols: []column{colTS("password_updated_at")}, revoked: "s.password_updated_at IS NOT NULL", action: ActionForcePasswordReset},
+	// A password changed after the target (auth-service: password_updated_at; go-api: its token_version, mirrored as
+	// legacy_token_version) comes back with the restore: the older hash works again. The restored hash and its algorithm
+	// are cleared (fail closed: both logins refuse a NULL hash; the user resets by the forgot-password mail). Only a
+	// timestamp and a counter travel, never the hash. A user without a password is never touched.
+	{name: "auth.users.password", suffix: ".password", table: "users", kind: kindRevoke, key: colUUID("principal_id"),
+		cols:    []column{{name: "password_updated_at", pgType: "timestamptz", guardOnly: true}, {name: "legacy_token_version", pgType: "bigint", guardOnly: true}},
+		revoked: "s.password_updated_at IS NOT NULL OR s.legacy_token_version > 0",
+		active: "t.password_hash IS NOT NULL AND ((x.password_updated_at IS NOT NULL AND (t.password_updated_at IS NULL OR t.password_updated_at < x.password_updated_at)) OR " +
+			"t.legacy_token_version < x.legacy_token_version)",
+		revokeSet: "password_hash = NULL, password_algorithm = NULL", touch: true, manifestOnly: true,
+		action: ActionForcePasswordReset, blindReview: "t.password_hash IS NOT NULL"},
 
 	// The legacy public schema: credential and revocation state the same
 	// restore rolls back while legacy auth stays on.
@@ -230,6 +245,14 @@ var sections = []section{
 	{name: "public.memberships.role", suffix: ".role", legacy: true, table: "memberships", kind: kindRevoke, key: colUUID("id"),
 		cols: []column{colText("role")}, active: roleLowered("org_id", ""), touch: true,
 		action: ActionReviewMembershipOwner, blindReview: "t.role IN ('admin', 'owner')"},
+	// The legacy hash of a user whose password go-api (or the auth-service mirror) changed after the target: every such
+	// write bumps token_version. Cleared like auth.users.password. It runs BEFORE the counter section below, which raises
+	// the restored token_version to the source's. A deactivation also bumps token_version; that user is disabled anyway.
+	{name: "public.users.password", suffix: ".password", legacy: true, table: "users", kind: kindRevoke, key: colUUID("id"),
+		cols:    []column{{name: "token_version", pgType: "integer", guardOnly: true}},
+		revoked: "s.token_version > 0", active: "t.password_hash IS NOT NULL AND t.token_version < x.token_version",
+		revokeSet: "password_hash = NULL", touch: true, manifestOnly: true,
+		action: ActionForcePasswordReset, blindReview: "t.password_hash IS NOT NULL"},
 	{name: "public.users", legacy: true, table: "users", kind: kindCounter, key: colUUID("id"),
 		cols: []column{{name: "is_active", pgType: "boolean"}, {name: "token_version", pgType: "integer"}}, revoked: "s.token_version > 0 OR NOT s.is_active", touch: true,
 		action: ActionForcePasswordReset},
@@ -243,6 +266,13 @@ var sections = []section{
 		blindReview: "t.is_superuser"},
 	{name: "public.provider_oauth_revocations", legacy: true, table: "provider_oauth_revocations", kind: kindReport, key: colUUID("id"),
 		cols: []column{colText("org_id"), colText("provider"), colText("purpose")}, action: ActionRequeueProviderRevocation},
+	// A provider credential rotated (refresh, reconnect) or removed (disconnect) after T comes back with its OLD token,
+	// which may still be live at the provider. The restored row is deleted unless the source holds the same key with the
+	// same version and binding (every token or scope change bumps version), and named for the operator: revoke the old
+	// token at the provider, reconnect. Only ids, the version and the binding id travel; never the token or the scopes.
+	{name: "public.provider_oauth_credentials", legacy: true, table: "provider_oauth_credentials", kind: kindPresence, key: colText("org_id"),
+		cols:         []column{colText("provider"), colText("credential_name"), {name: "version", pgType: "integer"}, colText("binding_id")},
+		manifestOnly: true, match: oauthHeld, idExpr: oauthIDExpr, action: ActionRequeueProviderRevocation, blindReview: "true"},
 	// The legacy SAML replay table: an assertion id used after the target must stay used.
 	{name: "public.saml_assertion_replays", legacy: true, table: "saml_assertion_replays", kind: kindInsert, key: colUUID("provider_id"),
 		cols: []column{colText("assertion_id"), colTS("expires_at")}},
@@ -288,6 +318,17 @@ var sections = []section{
 // allowlistKeepsASharedEntry holds (alias t, manifest m) while the org of t keeps an active entry the source also
 // holds active.
 const allowlistKeepsASharedEntry = "EXISTS (SELECT 1 FROM public.org_ip_allowlist k JOIN m y ON y.id = k.id AND y.ip_range = k.ip_range WHERE k.org_id = t.org_id AND k.is_active)"
+
+// oauthHeld matches a restored provider credential (t) to the source's (x): the same key, version and binding.
+const oauthHeld = "x.org_id = t.org_id AND x.provider = t.provider AND x.credential_name = t.credential_name AND x.version = t.version AND x.binding_id IS NOT DISTINCT FROM t.binding_id"
+
+// oauthIDExpr names a provider credential as org/provider/name, each part percent-encoded (%, /, comma, LF, CR): the three
+// text columns have no CHECK, and the operator action line joins ids with commas.
+var oauthIDExpr = strings.Join([]string{pctEncode("t.org_id"), pctEncode("t.provider"), pctEncode("t.credential_name")}, " || '/' || ")
+
+func pctEncode(e string) string {
+	return "replace(replace(replace(replace(replace(" + e + ", '%', '%25'), '/', '%2F'), ',', '%2C'), chr(10), '%0A'), chr(13), '%0D')"
+}
 
 // allowlistHeld matches a restored entry (t) to the source's active entry (x): the same id and the same range.
 const allowlistHeld = "x.id = t.id AND x.ip_range = t.ip_range"
@@ -351,6 +392,7 @@ func (s section) applySQL(schema authschema.ValidatedIdentifier) string {
 		}
 		for _, c := range s.cols {
 			switch {
+			case c.guardOnly:
 			case c.narrow:
 				sets = append(sets, fmt.Sprintf("%s = ARRAY(SELECT a FROM unnest(t.%s) WITH ORDINALITY e(a, o) WHERE a::text = ANY(COALESCE(x.%s::text[], '{}'::text[])) ORDER BY o)",
 					c.name, c.name, c.name))
@@ -403,9 +445,9 @@ SELECT 0::bigint, (SELECT count(*) FROM m x WHERE NOT EXISTS (SELECT 1 FROM %s t
 			guard = " AND " + s.deleteGuard
 		}
 		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s),
-d AS (DELETE FROM %s t WHERE NOT EXISTS (SELECT 1 FROM m x WHERE x.%s = t.%s)%s RETURNING 1)
+d AS (DELETE FROM %s t WHERE NOT EXISTS (SELECT 1 FROM m x WHERE %s)%s RETURNING 1)
 SELECT (SELECT count(*) FROM d), 0::bigint`,
-			s.recordset(), tbl, s.key.name, s.key.name, guard)
+			s.recordset(), tbl, s.matchSQL(), guard)
 	}
 }
 
@@ -422,6 +464,12 @@ func (s section) matchSQL() string {
 func (s section) idsSQL(schema authschema.ValidatedIdentifier) string {
 	tbl := s.qualified(schema)
 	switch {
+	case s.kind == kindRevoke && s.action == ActionForcePasswordReset:
+		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s)
+SELECT t.%s::text FROM %s t JOIN m x ON x.%s = t.%s WHERE (%s) ORDER BY 1`, s.recordset(), s.key.name, tbl, s.key.name, s.key.name, s.sub(s.active, schema))
+	case s.kind == kindPresence && s.action == ActionRequeueProviderRevocation:
+		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s)
+SELECT %s FROM %s t WHERE NOT EXISTS (SELECT 1 FROM m x WHERE %s) ORDER BY 1`, s.recordset(), s.idSQL(), tbl, s.matchSQL())
 	case s.action == ActionReviewScopeEmptied:
 		var emptied []string
 		for _, c := range s.cols {
@@ -475,7 +523,15 @@ func blindReviewSQL(s section, schema authschema.ValidatedIdentifier) string {
 	if s.blindReview == "" {
 		return ""
 	}
-	return `SELECT t.` + s.key.name + `::text FROM ` + s.qualified(schema) + ` t WHERE ` + s.blindReview + ` ORDER BY 1`
+	return `SELECT ` + s.idSQL() + ` FROM ` + s.qualified(schema) + ` t WHERE ` + s.blindReview + ` ORDER BY 1`
+}
+
+// idSQL is the operator id of a restored row (alias t).
+func (s section) idSQL() string {
+	if s.idExpr != "" {
+		return s.idExpr
+	}
+	return "t." + s.key.name + "::text"
 }
 
 // flowStatesSQL invalidates every SSO flow state the restored database holds: no per-row export

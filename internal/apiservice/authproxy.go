@@ -22,6 +22,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/clientip"
+	"github.com/full-chaos/dev-health-ops/internal/api/orgreactivate"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
@@ -46,6 +47,12 @@ var AuthAggregates = []AuthAggregate{AuthSessions, AuthLocalLogin, AuthCredentia
 // EnvAuthProxyURL is auth-service's base URL (scheme and host only).
 const EnvAuthProxyURL = "AUTH_PROXY_URL"
 
+// EnvAuthProxyOrgProvisioning is the switch that sends an organization
+// reactivation (PATCH is_active=true) to auth-service first (CHAOS-11858). It
+// is no aggregate: it moves no /api/v1/auth route, needs no sessions flag, and
+// is off by default.
+const EnvAuthProxyOrgProvisioning = "AUTH_PROXY_ORG_PROVISIONING"
+
 // AuthProxyFlagEnv is the routing flag of an aggregate, AUTH_PROXY_<NAME>.
 func AuthProxyFlagEnv(a AuthAggregate) string { return "AUTH_PROXY_" + strings.ToUpper(string(a)) }
 
@@ -63,10 +70,16 @@ type AuthProxyConfig struct {
 	On       map[AuthAggregate]bool
 	// Timeout bounds one upstream exchange; zero means defaultAuthProxyTimeout.
 	Timeout time.Duration
+	// OrgProvisioning is AUTH_PROXY_ORG_PROVISIONING.
+	OrgProvisioning bool
 }
 
 // Enabled reports whether a's routes go to auth-service.
 func (c AuthProxyConfig) Enabled(a AuthAggregate) bool { return c.Upstream != nil && c.On[a] }
+
+// OrgProvisioningOn reports whether go-api reactivates organizations through
+// auth-service.
+func (c AuthProxyConfig) OrgProvisioningOn() bool { return c.Upstream != nil && c.OrgProvisioning }
 
 // ParseAuthProxyConfig reads AUTH_PROXY_URL and the AUTH_PROXY_<aggregate>
 // flags. Every flag defaults off. It refuses a flag without a URL, a URL
@@ -87,6 +100,14 @@ func ParseAuthProxyConfig(lookup func(string) (string, bool)) (AuthProxyConfig, 
 			return AuthProxyConfig{}, fmt.Errorf("%s must be true or false", name)
 		}
 		cfg.On[aggregate] = on
+		anyOn = anyOn || on
+	}
+	if raw, ok := lookup(EnvAuthProxyOrgProvisioning); ok && strings.TrimSpace(raw) != "" {
+		on, err := strconv.ParseBool(strings.TrimSpace(raw))
+		if err != nil {
+			return AuthProxyConfig{}, fmt.Errorf("%s must be true or false", EnvAuthProxyOrgProvisioning)
+		}
+		cfg.OrgProvisioning = on
 		anyOn = anyOn || on
 	}
 	raw, _ := lookup(EnvAuthProxyURL)
@@ -130,6 +151,22 @@ func sessionIssuer(cfg AuthProxyConfig, lookup func(string) (string, bool)) (ses
 	return client, nil
 }
 
+// orgReactivator is the client of auth-service's organization reactivate route
+// when AUTH_PROXY_ORG_PROVISIONING is on, built from AUTH_SESSION_ISSUE_TOKEN;
+// nil when off, so go-api's PATCH never calls auth-service. On without a usable
+// token is a start-up error: every reactivation would answer 503.
+func orgReactivator(cfg AuthProxyConfig, lookup func(string) (string, bool)) (orgreactivate.Reactivator, error) {
+	if !cfg.OrgProvisioningOn() {
+		return nil, nil
+	}
+	token, _ := lookup(sessionissue.EnvToken)
+	client, err := orgreactivate.New(cfg.Upstream, strings.TrimSpace(token), cfg.Timeout)
+	if err != nil {
+		return nil, fmt.Errorf("%s is on: %w", EnvAuthProxyOrgProvisioning, err)
+	}
+	return client, nil
+}
+
 // logAuthProxyRouting states, at Info, the routing go-api starts with: each
 // aggregate on or off and the upstream host (never a credential, path or
 // query), whatever set the flags.
@@ -142,6 +179,7 @@ func logAuthProxyRouting(ctx context.Context, logger *slog.Logger, cfg AuthProxy
 	for _, aggregate := range AuthAggregates {
 		attrs = append(attrs, slog.Bool(string(aggregate), cfg.Enabled(aggregate)))
 	}
+	attrs = append(attrs, slog.Bool("org_provisioning", cfg.OrgProvisioningOn()))
 	logger.LogAttrs(ctx, slog.LevelInfo, "auth proxy routing", attrs...)
 }
 

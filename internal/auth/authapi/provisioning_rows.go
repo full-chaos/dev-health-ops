@@ -9,7 +9,7 @@ import (
 
 // provisioningPatterns are the routes AUTH_MEMBERSHIP_ROUTES mounts.
 var provisioningPatterns = []string{PatternMembershipAdd, PatternMembershipRole, PatternMembershipRemove,
-	PatternMembershipTransfer, PatternInviteCreate, PatternInviteAccept, PatternOrgDeprovision}
+	PatternMembershipTransfer, PatternInviteCreate, PatternInviteAccept, PatternOrgDeprovision, PatternOrgReactivate}
 
 // serviceSessionIssuerClass is the endpoint-profile credential class of the
 // session issuer credential (svc_authsess_) the routes take.
@@ -23,6 +23,11 @@ var errProvisioningRows = errors.New("authapi: the provisioning routes need thei
 // switch may turn the routes on only in a build that profiles them. The error
 // names the route only.
 func provisioningRowsPresent(raw []byte) error {
+	return rowsPresentFor(raw, provisioningPatterns)
+}
+
+// rowsPresentFor is provisioningRowsPresent over patterns.
+func rowsPresentFor(raw []byte, patterns []string) error {
 	var document struct {
 		Rows []struct {
 			Service         string   `json:"service"`
@@ -34,7 +39,7 @@ func provisioningRowsPresent(raw []byte) error {
 	if err := json.Unmarshal(raw, &document); err != nil {
 		return fmt.Errorf("%w: the document does not parse", errProvisioningRows)
 	}
-	for _, pattern := range provisioningPatterns {
+	for _, pattern := range patterns {
 		found := false
 		for _, row := range document.Rows {
 			if row.Service == AccessService && row.Method == "POST" && row.Route == pattern &&

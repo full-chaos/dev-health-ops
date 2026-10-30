@@ -589,6 +589,14 @@ internal/syncdispatchcontract	routes.go	internal/reconcilerservice
 internal/syncdispatchcontract	routes.go	internal/syncdispatchcontract
 internal/syncdispatchcontract	routes.go	internal/syncroute
 internal/syncdispatchcontract	routes.go	internal/workersctl
+internal/testsupport/bigboydir	bigboydir.go	internal/auth/contracts
+internal/testsupport/bigboydir	bigboydir.go	internal/bigboycompose
+internal/testsupport/bigboydir	bigboydir.go	internal/cigates/bigboy
+internal/testsupport/bigboydir	bigboydir.go	internal/cigates/bigboyrender
+internal/testsupport/bigboydir	bigboydir.go	internal/cigates/chpin
+internal/testsupport/bigboydir	bigboydir.go	internal/cigates/routing
+internal/testsupport/bigboydir	bigboydir.go	internal/ingressplanes
+internal/testsupport/bigboydir	bigboydir.go	internal/testsupport/bigboydir
 internal/testsupport/goldenscan	tree.go	internal/testsupport/goldenscan/treegate
 internal/testsupport/goldenscan	tree.go	internal/testsupport/recordedfiles/manifest
 internal/testsupport/oraclecompare	oraclecompare.go	internal/jobs/investment/categorize/decision

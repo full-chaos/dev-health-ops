@@ -10,9 +10,9 @@ import (
 type ActionKind string
 
 const (
-	// ActionForcePasswordReset: these users' passwords may have changed after the
-	// restore target, so the restored (older) password hash is live again. The
-	// operator forces a reset for each BEFORE readiness is acked back.
+	// ActionForcePasswordReset: these users' passwords may have changed after the restore target. From the sections
+	// auth.users.password and public.users.password: the fence cleared the restored (older) hash; the user resets by the
+	// forgot-password mail. From auth.users and public.users: the operator checks each user BEFORE readiness is acked.
 	ActionForcePasswordReset ActionKind = "force_password_reset"
 	// ActionRequeueProviderRevocation: a provider token revocation queued after
 	// the target is gone; the operator re-disconnects or revokes at the provider.
@@ -41,7 +41,7 @@ const (
 // followUp names the follow-up leaf that automates each action; the operator
 // action line prints it.
 var followUp = map[ActionKind]string{
-	ActionForcePasswordReset:        "CHAOS-11834",
+	ActionForcePasswordReset:        "none",
 	ActionRequeueProviderRevocation: "CHAOS-11835",
 	ActionUserTombstoned:            "none",
 	ActionReviewIPAllowlist:         "none",

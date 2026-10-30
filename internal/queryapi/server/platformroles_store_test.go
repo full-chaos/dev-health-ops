@@ -7,7 +7,27 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 )
+
+// The settings constant query-api reads the switch by is the switch's name,
+// and the parse sees only that name.
+func TestQueryAPIPlatformRolesOwnedReadsTheSwitchByItsName(t *testing.T) {
+	if platformRolesOwnedEnv != rule.OwnedEnv {
+		t.Fatalf("platformRolesOwnedEnv = %q, rule.OwnedEnv = %q", platformRolesOwnedEnv, rule.OwnedEnv)
+	}
+	var read []string
+	owned, err := queryAPIPlatformRolesOwned(func(name string) string {
+		read = append(read, name)
+		return map[string]string{rule.OwnedEnv: " True "}[name]
+	})
+	if err != nil || !owned || len(read) != 1 || read[0] != rule.OwnedEnv {
+		t.Fatalf("owned %v err %v, read %v; want true, nil, [%s]", owned, err, read, rule.OwnedEnv)
+	}
+	if _, err := queryAPIPlatformRolesOwned(func(string) string { return "yes" }); err == nil {
+		t.Fatal("a malformed switch parsed")
+	}
+}
 
 // Both users stores query-api builds read is_superuser by the platform roles
 // switch; a malformed switch builds neither.

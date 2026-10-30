@@ -27,11 +27,14 @@ var ownedParseCallers = []string{
 	"internal/rivermigrate/rivermigrate.go",
 }
 
-// ownedNameDeclarations name the switch without reading it: the constant and
-// the option registries that list it for --help.
+// ownedNameDeclarations spell the switch's name: the constant, the option
+// registries that list it for --help, and query-api's settings constant (its
+// settings census resolves only string constants of the server package; a
+// test there holds it equal to rule.OwnedEnv).
 var ownedNameDeclarations = []string{
 	"internal/auth/platformrole/rule/rule.go",
 	"internal/platform/config/queryapi_options.go",
+	"internal/queryapi/server/query_route.go",
 }
 
 // The switch has one parse (rule.OwnedFromLookup, which OwnedFromLookup is):

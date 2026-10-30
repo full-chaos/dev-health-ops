@@ -6183,10 +6183,17 @@ func queryAPISessionRead(getenv getenvFunc) (*postgresstore.QueryAPISessionRead,
 	return &read, nil
 }
 
+// platformRolesOwnedEnv is rule.OwnedEnv, spelled here so the settings census
+// can resolve the name the routes read.
+const platformRolesOwnedEnv = "AUTH_PLATFORM_ROLES_OWNED"
+
 // queryAPIPlatformRolesOwned reads AUTH_PLATFORM_ROLES_OWNED through the one parse.
 func queryAPIPlatformRolesOwned(getenv getenvFunc) (bool, error) {
+	value := getenv(platformRolesOwnedEnv)
 	return rule.OwnedFromLookup(func(name string) (string, bool) {
-		value := getenv(name)
+		if name != platformRolesOwnedEnv {
+			return "", false
+		}
 		return value, value != ""
 	})
 }

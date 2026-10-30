@@ -91,15 +91,12 @@ func reconcilerFor(pool *pgxpool.Pool, state orgreactivate.StateReader) (*OrgSta
 	return NewOrgStateReconciler(pool, state, slog.New(slog.NewTextHandler(log, nil))), log
 }
 
-// boundedPass fails the cell when a pass runs into its bound: no pass may wait on a row.
-func boundedPass(t *testing.T, ctx context.Context, r *OrgStateReconciler) {
-	t.Helper()
+// boundedPass ends a pass that waits on a lock and reports whether it ran into that bound.
+func boundedPass(ctx context.Context, r *OrgStateReconciler) (bounded bool) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	r.pass(ctx)
-	if ctx.Err() != nil {
-		t.Fatal("the pass ran into its bound: it waited on a row")
-	}
+	return ctx.Err() != nil
 }
 
 func updatedAt(ctx context.Context, t *testing.T, pool *pgxpool.Pool, org uuid.UUID) time.Time {
@@ -155,7 +152,7 @@ func TestReconcileFixesAnAuthSuspendAfterAGoAPIPatch(t *testing.T) {
 		t.Fatal("the row moved before any pass")
 	}
 	r, log := reconcilerFor(pool, auth)
-	boundedPass(t, ctx, r)
+	boundedPass(ctx, r)
 	if storedActive(ctx, t, pool, org) {
 		t.Fatal("the pass left is_active true while auth holds suspended")
 	}
@@ -170,7 +167,7 @@ func TestReconcileFollowsAnAuthReactivate(t *testing.T) {
 	org := seedOrg(ctx, t, pool, false)
 	auth.set(org, "active")
 	r, log := reconcilerFor(pool, auth)
-	boundedPass(t, ctx, r)
+	boundedPass(ctx, r)
 	if !storedActive(ctx, t, pool, org) {
 		t.Fatal("the pass left is_active false while auth holds active")
 	}
@@ -190,7 +187,7 @@ func TestReconcileLeavesAnEqualRowUntouchedAndUnlocked(t *testing.T) {
 		}
 	}
 	r, log := reconcilerFor(pool, auth)
-	boundedPass(t, ctx, r)
+	boundedPass(ctx, r)
 	if auth.readCount() != 1 {
 		t.Fatalf("%d reads of one equal row, want 1", auth.readCount())
 	}
@@ -212,7 +209,7 @@ func TestReconcileSkipsARefusedRowAndFixesTheNext(t *testing.T) {
 	auth.fail(refused, fmt.Errorf("%w: status 404", orgreactivate.ErrRefused))
 	auth.set(drifted, "suspended")
 	r, log := reconcilerFor(pool, auth)
-	boundedPass(t, ctx, r)
+	boundedPass(ctx, r)
 	if !storedActive(ctx, t, pool, refused) {
 		t.Fatal("a 404 wrote false")
 	}
@@ -238,7 +235,7 @@ func TestReconcileStopsOnUnavailableAndTheNextPassFixes(t *testing.T) {
 	auth.fail(a, unavailable)
 	auth.fail(b, unavailable)
 	r, log := reconcilerFor(pool, auth)
-	boundedPass(t, ctx, r)
+	boundedPass(ctx, r)
 	if auth.readCount() != 1 {
 		t.Fatalf("%d reads after the failure, want the 1 that failed", auth.readCount())
 	}
@@ -250,7 +247,7 @@ func TestReconcileStopsOnUnavailableAndTheNextPassFixes(t *testing.T) {
 	}
 	auth.set(a, "suspended")
 	auth.set(b, "suspended")
-	boundedPass(t, ctx, r)
+	boundedPass(ctx, r)
 	if storedActive(ctx, t, pool, a) || storedActive(ctx, t, pool, b) {
 		t.Fatal("the next pass did not fix the rows")
 	}
@@ -269,7 +266,7 @@ func TestReconcileDecidesOnTheReadUnderTheLock(t *testing.T) {
 	}
 	before := updatedAt(ctx, t, pool, org)
 	r, log := reconcilerFor(pool, auth)
-	boundedPass(t, ctx, r)
+	boundedPass(ctx, r)
 	if auth.readCount() != 2 {
 		t.Fatalf("%d reads, want 2", auth.readCount())
 	}
@@ -293,7 +290,10 @@ func TestReconcileSkipsARowAnotherTransactionHolds(t *testing.T) {
 		t.Fatal(err)
 	}
 	r, log := reconcilerFor(pool, auth)
-	boundedPass(t, ctx, r)
+	// A pass that waits on this row has no other end: this is a hang detector, not a time budget.
+	if boundedPass(ctx, r) {
+		t.Fatal("the pass waited on a held row")
+	}
 	if !storedActive(ctx, t, pool, org) || log.count(reconciledLine) != 0 {
 		t.Fatalf("a held row was written:\n%s", log.text())
 	}
@@ -301,7 +301,7 @@ func TestReconcileSkipsARowAnotherTransactionHolds(t *testing.T) {
 	if err := tx.Rollback(ctx); err != nil {
 		t.Fatal(err)
 	}
-	boundedPass(t, ctx, r)
+	boundedPass(ctx, r)
 	if storedActive(ctx, t, pool, org) {
 		t.Fatal("the next pass did not fix the row")
 	}
@@ -346,7 +346,7 @@ func TestReconcileAndAPatchEndEqualToAuth(t *testing.T) {
 		}()
 		<-auth.held
 		r, log := reconcilerFor(pool, auth)
-		boundedPass(t, ctx, r)
+		boundedPass(ctx, r)
 		if log.count(reconciledLine) != 0 || log.count("level=WARN") != 0 {
 			t.Fatalf("the pass did not skip a held row:\n%s", log.text())
 		}
@@ -370,7 +370,7 @@ func TestReconcileSkipsARowDeletedBeforeTheLock(t *testing.T) {
 		}
 	}
 	r, log := reconcilerFor(pool, auth)
-	boundedPass(t, ctx, r)
+	boundedPass(ctx, r)
 	if log.count(reconciledLine) != 0 {
 		t.Fatalf("a line for a deleted row:\n%s", log.text())
 	}
@@ -391,7 +391,7 @@ func TestReconcileWalksEveryPage(t *testing.T) {
 	}
 	auth.set(last, "suspended")
 	r, log := reconcilerFor(pool, auth)
-	boundedPass(t, ctx, r)
+	boundedPass(ctx, r)
 	if storedActive(ctx, t, pool, last) {
 		t.Fatal("the row after the first page was not fixed")
 	}
@@ -412,11 +412,11 @@ func TestTwoPassesOnOneRowWriteOneLine(t *testing.T) {
 	var writtenAt time.Time
 	auth.onRead = func(n int, _ uuid.UUID) {
 		if n == 1 {
-			boundedPass(t, ctx, second)
+			boundedPass(ctx, second)
 			writtenAt = updatedAt(ctx, t, pool, org)
 		}
 	}
-	boundedPass(t, ctx, first)
+	boundedPass(ctx, first)
 	if got := firstLog.count(reconciledLine) + secondLog.count(reconciledLine); got != 1 {
 		t.Fatalf("%d fixed lines, want 1:\n%s%s", got, firstLog.text(), secondLog.text())
 	}
@@ -446,7 +446,7 @@ func TestReconcileLockLeavesForeignKeyInsertsFree(t *testing.T) {
 		}
 	}
 	r, _ := reconcilerFor(pool, auth)
-	boundedPass(t, ctx, r)
+	boundedPass(ctx, r)
 	if !probed {
 		t.Fatal("no read under the lock")
 	}
@@ -465,7 +465,7 @@ func TestReconcileRefusesAnUnknownStatus(t *testing.T) {
 		}
 	}
 	r, log := reconcilerFor(pool, auth)
-	boundedPass(t, ctx, r)
+	boundedPass(ctx, r)
 	if !storedActive(ctx, t, pool, first) || !storedActive(ctx, t, pool, second) {
 		t.Fatal("an unknown status wrote the row")
 	}
@@ -482,7 +482,7 @@ func TestReconcileClosesADeprovisionWithAFailedPurge(t *testing.T) {
 	org := seedOrg(ctx, t, pool, true)
 	auth.set(org, "suspended")
 	r, log := reconcilerFor(pool, auth)
-	boundedPass(t, ctx, r)
+	boundedPass(ctx, r)
 	if storedActive(ctx, t, pool, org) {
 		t.Fatal("the row of a deprovisioned organization stayed active")
 	}

@@ -397,7 +397,12 @@ func configureWith(
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_session_issue", "api_session_issue_config_invalid", err)
 	}
-	orgClient, err := orgLifecycleClient(authProxy, envsecrets.ProcessLookup)
+	provisioningCred, err := newProvisioningCredential(authProxy, envsecrets.ProcessLookup)
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_org_provisioning", "api_org_provisioning_config_invalid", err)
+	}
+	orgClient, err := orgLifecycleClient(authProxy, envsecrets.ProcessLookup, provisioningCred)
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_org_provisioning", "api_org_provisioning_config_invalid", err)
@@ -405,7 +410,7 @@ func configureWith(
 	if orgClient != nil {
 		deps.OrgReactivator, deps.OrgSuspender = orgClient, orgClient
 	}
-	deps.OrgProvisioner, err = orgProvisioner(authProxy, envsecrets.ProcessLookup)
+	deps.OrgProvisioner, err = orgProvisioner(authProxy, envsecrets.ProcessLookup, provisioningCred)
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_org_provisioning", "api_org_provisioning_config_invalid", err)

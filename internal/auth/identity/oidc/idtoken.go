@@ -54,14 +54,14 @@ func parseJOSEHeader(raw string) (joseHeader, error) {
 	}
 	parts := strings.Split(raw, ".")
 	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
-		return joseHeader{}, errMalformedToken
+		return joseHeader{}, recordAs(msgIDTokenInvalid, errMalformedToken)
 	}
 	if base64.RawURLEncoding.DecodedLen(len(parts[0])) > maxHeaderBytes {
 		return joseHeader{}, errMalformedToken
 	}
 	headerJSON, err := base64.RawURLEncoding.Strict().DecodeString(parts[0])
 	if err != nil {
-		return joseHeader{}, errMalformedToken
+		return joseHeader{}, recordAs(msgIDTokenInvalid, errMalformedToken)
 	}
 	if err := checkJSONObject(headerJSON); err != nil {
 		return joseHeader{}, errMalformedToken
@@ -80,7 +80,7 @@ func parseJOSEHeader(raw string) (joseHeader, error) {
 		return joseHeader{}, errMalformedToken
 	}
 	if !algAllowed(alg) {
-		return joseHeader{}, errAlgNotAllowed
+		return joseHeader{}, recordAs(msgIDTokenInvalid, errAlgNotAllowed)
 	}
 	out := joseHeader{Alg: alg}
 	if kid, present := header["kid"]; present {
@@ -227,11 +227,11 @@ func checkClaims(payload []byte, rules claimRules) (idClaims, error) {
 
 	iss, ok := all["iss"].(string)
 	if !ok || rules.Issuer == "" || iss != rules.Issuer {
-		return idClaims{}, claimFail(ReasonIssuer, "issuer mismatch")
+		return idClaims{}, recordAs(msgIDTokenInvalid, claimFail(ReasonIssuer, "issuer mismatch"))
 	}
 	audiences, ok := stringOrStrings(all["aud"])
 	if !ok || len(audiences) == 0 || rules.ClientID == "" || !contains(audiences, rules.ClientID) {
-		return idClaims{}, claimFail(ReasonAudience, "audience mismatch")
+		return idClaims{}, recordAs(msgIDTokenInvalid, claimFail(ReasonAudience, "audience mismatch"))
 	}
 	azp, azpPresent := all["azp"]
 	if azpPresent {
@@ -245,15 +245,15 @@ func checkClaims(payload []byte, rules claimRules) (idClaims, error) {
 
 	exp, ok := numericDate(all["exp"])
 	if !ok {
-		return idClaims{}, claimFail(ReasonMalformed, "exp missing or not a number")
+		return idClaims{}, recordAs(msgIDTokenInvalid, claimFail(ReasonMalformed, "exp missing or not a number"))
 	}
 	iat, ok := numericDate(all["iat"])
 	if !ok {
-		return idClaims{}, claimFail(ReasonMalformed, "iat missing or not a number")
+		return idClaims{}, recordAs(msgIDTokenInvalid, claimFail(ReasonMalformed, "iat missing or not a number"))
 	}
 	now := rules.Now
 	if !now.Before(exp.Add(clockSkew)) {
-		return idClaims{}, claimFail(ReasonExpired, "expired")
+		return idClaims{}, recordAs(msgIDTokenInvalid, claimFail(ReasonExpired, "expired"))
 	}
 	if iat.After(now.Add(clockSkew)) {
 		return idClaims{}, claimFail(ReasonNotYetValid, "issued in the future")
@@ -264,16 +264,16 @@ func checkClaims(payload []byte, rules claimRules) (idClaims, error) {
 	if raw, present := all["nbf"]; present {
 		nbf, ok := numericDate(raw)
 		if !ok {
-			return idClaims{}, claimFail(ReasonMalformed, "nbf not a number")
+			return idClaims{}, recordAs(msgIDTokenInvalid, claimFail(ReasonMalformed, "nbf not a number"))
 		}
 		if nbf.After(now.Add(clockSkew)) {
-			return idClaims{}, claimFail(ReasonNotYetValid, "not yet valid")
+			return idClaims{}, recordAs(msgIDTokenInvalid, claimFail(ReasonNotYetValid, "not yet valid"))
 		}
 	}
 
 	nonce, ok := all["nonce"].(string)
 	if !ok || rules.Nonce == "" || !constantTimeEqual(nonce, rules.Nonce) {
-		return idClaims{}, claimFail(ReasonNonceMismatch, "nonce mismatch")
+		return idClaims{}, recordAs(msgNonceMismatch, claimFail(ReasonNonceMismatch, "nonce mismatch"))
 	}
 	sub, ok := all["sub"].(string)
 	if !ok || !validSubject(sub) {
@@ -344,7 +344,7 @@ func verifyIDToken(ctx context.Context, keys gooidc.KeySet, raw string, rules cl
 	})
 	token, err := verifier.Verify(ctx, raw)
 	if err != nil {
-		return idClaims{}, fmt.Errorf("oidc: ID token signature: %w", err)
+		return idClaims{}, recordAs(msgIDTokenInvalid, fmt.Errorf("oidc: ID token signature: %w", err))
 	}
 	var payload json.RawMessage
 	if err := token.Claims(&payload); err != nil {

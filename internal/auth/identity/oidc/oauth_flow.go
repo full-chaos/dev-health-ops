@@ -15,7 +15,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/social"
-	"github.com/full-chaos/dev-health-ops/internal/auth/identity/ssoaudit"
 )
 
 const (
@@ -354,7 +353,7 @@ func (s *Service) callbackOAuth(ctx context.Context, admitted StoredProvider, in
 		Endpoint: oauth2.Endpoint{AuthURL: target.authorize, TokenURL: target.token, AuthStyle: oauth2.AuthStyleInParams},
 	}, in.Code, state.CodeVerifier)
 	if err != nil || token.AccessToken == "" {
-		return Login{}, clear, s.recordedProviderFailure(ctx, row, msgTokenExchangeFailed,
+		return Login{}, clear, s.recordedProviderFailure(ctx, row, protocolOAuthRecord, stageNone, msgTokenExchangeFailed,
 			oauthFailure(ReasonDependency, "oauth_token_exchange_failed", err))
 	}
 	client := &social.ProviderClient{HTTP: s.cfg.HTTPClient, Endpoints: target.endpoints,
@@ -371,7 +370,7 @@ func (s *Service) callbackOAuth(ctx context.Context, admitted StoredProvider, in
 		case perr != nil && perr.InvalidID:
 			failure = s.auditedOAuthRefusal(ctx, row, stageProviderProfile, msgMissingProviderID, failure)
 		case perr != nil && perr.ProfileRequest:
-			failure = s.recordedProviderFailure(ctx, row, msgUserinfoFailed, failure)
+			failure = s.recordedProviderFailure(ctx, row, protocolOAuthRecord, stageNone, msgUserinfoFailed, failure)
 		}
 		return Login{}, clear, failure
 	}
@@ -447,19 +446,6 @@ var provisioningMessages = map[Reason]string{
 func (s *Service) auditedOAuthRefusal(ctx context.Context, row Provider, stage, message string, failure *Error) *Error {
 	if f := s.auditDenial(ctx, row, stage, message); f != nil {
 		return f
-	}
-	return failure
-}
-
-// recordedProviderFailure records an OAuth provider error as go-api's recordSSOFailure does (protocol oauth, no
-// stage) before failure answers; a write error is the 500 go-api answers.
-func (s *Service) recordedProviderFailure(ctx context.Context, row Provider, message string, failure *Error) *Error {
-	if s.cfg.ProviderFailure == nil {
-		return failure
-	}
-	if err := s.cfg.ProviderFailure.Failed(ctx, ssoaudit.Row{OrgID: row.OrgID, ProviderID: row.ID, Protocol: "oauth",
-		ErrorMessage: message}); err != nil {
-		return internal(ReasonStoreUnavailable, err)
 	}
 	return failure
 }

@@ -51,49 +51,50 @@ func AuthSchemaFromEnv(getenv func(string) string) (string, error) {
 }
 
 // checkSession decides the sid claim: absent, nothing to check (a go-api
-// token); present, it must name a live session of subject. A lookup that
-// fails is that error, never a pass.
-func (a *Authenticator) checkSession(ctx context.Context, claims map[string]any, subject uuid.UUID, userVersion int64) error {
+// token) and no session; present, it must name a live session of subject,
+// and that session's id is returned (User.SessionID). A lookup that fails is
+// that error, never a pass.
+func (a *Authenticator) checkSession(ctx context.Context, claims map[string]any, subject uuid.UUID, userVersion int64) (*uuid.UUID, error) {
 	raw, present := claims["sid"]
 	if !present {
-		return nil
+		return nil, nil
 	}
 	text, _ := raw.(string)
 	id, err := sessionid.Parse(text)
 	if err != nil {
 		a.logger.WarnContext(ctx, "api access denied: unusable session claim", slog.String("user_id", subject.String()))
-		return errRejected
+		return nil, errRejected
 	}
 	store, ok := a.store.(SessionStore)
 	if !ok {
 		a.logger.WarnContext(ctx, "api access denied: session claim with no session store", slog.String("user_id", subject.String()))
-		return errRejected
+		return nil, errRejected
 	}
 	row, found, err := store.SessionState(ctx, id)
 	if err != nil {
 		a.logger.WarnContext(ctx, "api access token session lookup failed",
 			slog.String("user_id", subject.String()), slog.Bool("unavailable", errors.Is(err, ErrUnavailable)))
-		return err
+		return nil, err
 	}
 	switch {
 	case !found:
 		a.logger.WarnContext(ctx, "api access denied: session not found", slog.String("user_id", subject.String()))
-		return errRejected
+		return nil, errRejected
 	case row.PrincipalID != subject:
 		a.logger.WarnContext(ctx, "api access denied: session of another principal", slog.String("user_id", subject.String()))
-		return errRejected
+		return nil, errRejected
 	case row.Revoked:
 		a.logger.WarnContext(ctx, "api access denied: session revoked", slog.String("user_id", subject.String()))
-		return errRejected
+		return nil, errRejected
 	case row.LegacyTokenVersion == nil:
 		a.logger.WarnContext(ctx, "api access denied: session has no token_version pin",
 			slog.String("user_id", subject.String()), slog.String("reason_code", "session_pin_missing"))
-		return errRejected
+		return nil, errRejected
 	case *row.LegacyTokenVersion != userVersion:
 		a.logger.WarnContext(ctx, "api access denied: session predates the token_version", slog.String("user_id", subject.String()))
-		return errRejected
+		return nil, errRejected
 	}
-	return nil
+	return &id, nil
 }
 
 // sessionStateQuery reads one auth-service session in PostgreSQL by its

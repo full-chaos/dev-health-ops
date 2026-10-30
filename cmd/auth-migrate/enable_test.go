@@ -127,8 +127,8 @@ func TestEnableReportsThePlannedAndTheDoneChanges(t *testing.T) {
 			[]string{"would enable: workload row", "would enable: principal " + id.String() + " (kind workload)", "no change written", "row=disabled principal=disabled"},
 			[]string{"enabled: ", "minted"}},
 		"apply, both": {true, both,
-			[]string{"enabled: workload row", "enabled: principal " + id.String(), "no credential was minted: run bootstrap-rotate (or bootstrap-create) next", "operator=" + op},
-			[]string{"would enable"}},
+			[]string{"enabled: workload row", "enabled: principal " + id.String(), "no credential was minted: run bootstrap-create next", "operator=" + op},
+			[]string{"would enable", "rotate"}},
 		"apply, row only": {true, workload.EnablePlan{PrincipalID: id, RowDisabled: true, EnableRow: true},
 			[]string{"enabled: workload row", "no credential was minted"},
 			[]string{"principal " + id.String()}},
@@ -200,9 +200,14 @@ func TestEnableRefusalsAreNamed(t *testing.T) {
 }
 
 func TestTheUsageNamesTheEnableVerbAndThatItMintsNothing(t *testing.T) {
-	for _, want := range []string{"enable -workload N -operator ID [-enable-principal] [-apply]", "enable mints no credential"} {
+	for _, want := range []string{"enable -workload N -operator ID [-enable-principal] [-apply]", "enable mints no credential: run bootstrap-create after it."} {
 		if !strings.Contains(workloadsUsage, want) {
 			t.Errorf("the usage text lacks %q", want)
 		}
+	}
+	// After an enable no value is live (enable refuses while one is), so a
+	// rotation would fail with "no live bootstrap value": the advice is create.
+	if strings.Contains(workloadsUsage, "bootstrap-rotate or bootstrap-create after") {
+		t.Error("the usage text advises a rotation after enable")
 	}
 }

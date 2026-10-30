@@ -165,8 +165,9 @@ type request struct {
 	headers map[string]string
 	body    []byte
 	step    string
-	// profile, when set, receives the body as go-api's decoder reads it (pyjson: a lone surrogate escape stays a
-	// lone surrogate; encoding/json makes it U+FFFD).
+	// profile, when set, receives the body as go-api's decoder reads it (pyjson: a UTF-16/32 body with a byte order
+	// mark is read, a lone surrogate escape stays a lone surrogate; encoding/json makes it U+FFFD), and out is decoded
+	// from that same text.
 	profile *pyjson.Value
 }
 
@@ -204,14 +205,9 @@ func (c *ProviderClient) do(ctx context.Context, r request, out any) error {
 	case resp.StatusCode > 299 || resp.StatusCode < 200:
 		return &ProviderError{Reason: ReasonInvalidCredentials, Step: r.step}
 	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.UseNumber()
-	if err := decodeOne(dec, out); err != nil {
-		return &ProviderError{Reason: ReasonInvalidCredentials, Step: r.step}
-	}
 	if r.profile != nil {
 		// go-api decodes a profile with pyjson and answers a body it refuses (not UTF-8, or not JSON to Python) with
-		// a 500 (oauthprovider ErrUnexpected).
+		// a 500 (oauthprovider ErrUnexpected). The struct decode below reads the same text.
 		text, err := pyjson.DecodeBody(raw)
 		if err != nil {
 			return &ProviderError{Reason: ReasonDependency, Step: r.step}
@@ -219,19 +215,31 @@ func (c *ProviderClient) do(ctx context.Context, r request, out any) error {
 		if *r.profile, err = pyjson.DecodeString(text); err != nil {
 			return &ProviderError{Reason: ReasonDependency, Step: r.step}
 		}
+		raw = []byte(text)
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	if err := decodeOne(dec, out); err != nil {
+		return &ProviderError{Reason: ReasonInvalidCredentials, Step: r.step}
 	}
 	return nil
 }
 
 // loneSurrogateEmail reports whether the email member of a profile object, as go-api's decoder reads it, holds a lone
 // surrogate. go-api makes such a profile unverified (oauthprovider cleanProfileText), so it is refused as an unverified
-// email, while a literal U+FFFD in a verified profile is refused as an unusable address.
+// email, while a literal U+FFFD in a verified profile is refused as an unusable address. The member read is the one
+// encoding/json fills the Email field from: the last key that equals "email" without regard to case.
 func loneSurrogateEmail(v pyjson.Value) bool {
 	object, ok := v.(*pyjson.Object)
 	if !ok {
 		return false
 	}
-	email, _ := object.Get("email")
+	var email pyjson.Value
+	for _, key := range object.Keys() {
+		if strings.EqualFold(key, "email") {
+			email, _ = object.Get(key)
+		}
+	}
 	text, ok := email.(string)
 	return ok && pyjson.HasLoneSurrogate(text)
 }

@@ -210,8 +210,8 @@ func (q poolQuerier) queryRow(ctx context.Context, sql string, args ...any) pgx.
 // member routes, the session invite accept, the organization delete). They
 // cite it by this name.
 //
-//	-1. the platform role write lock, shared (platformrole.LockWritesShared): every verb that locks takes it before anything
-//	    else, because a grant holds it exclusively and then wants principal rows;
+//	-1. advisory auth.platform_role_assignments:write, shared (exclusive in platformrole Grant/Revoke/Bootstrap, first);
+//	    platformrole.LockWritesShared, taken at the top of this function when lock is true;
 //	0. auth.workloads rows (workload verbs, before their principals);
 //	1. auth.principals rows, one row per statement, in ascending id order;
 //	2. public.users rows of the same ids, the same way;

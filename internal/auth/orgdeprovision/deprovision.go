@@ -21,6 +21,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/invite"
 	"github.com/full-chaos/dev-health-ops/internal/auth/membership"
 	"github.com/full-chaos/dev-health-ops/internal/auth/org"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
@@ -171,6 +172,10 @@ func (s *Service) once(ctx context.Context, in Input, p plan) (*Result, error) {
 	}
 	err := s.commit(ctx, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			// The auth lock order (membership.Store readPairs), step -1: authorize decides under this lock.
+			if err := platformrole.LockWritesShared(ctx, tx); err != nil {
+				return err
+			}
 			named := append(p.members.Referenced(), p.invites.Referenced()...)
 			if in.Actor.PrincipalID != nil {
 				// The audit row names the actor (a foreign key, KEY SHARE at commit).

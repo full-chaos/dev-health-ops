@@ -79,14 +79,14 @@ func bodyKeys(body []byte) []string {
 }
 
 // unknownPassAnswer is what an unknown identity gets on a "pass" row, from the row's email form (go-api's rule, both
-// planes): a JSON string the provider verified makes a new account, an unverified one is refused 403, and a verified
-// value that is not a string is the 500.
+// planes): an unverified address is refused 403 (go-api checks verified before the text), a verified value that is not
+// a string is the 500, and a verified JSON string makes a new account.
 func unknownPassAnswer(row parityRow) string {
 	switch {
-	case row.email[0] != '"':
-		return "500 Internal Server Error"
 	case row.verified == "false":
 		return "403 The provider has not verified this email address"
+	case row.email[0] != '"':
+		return "500 Internal Server Error"
 	}
 	return "new account"
 }
@@ -122,6 +122,7 @@ func TestSocialLoginParityTableOnARealDatabase(t *testing.T) {
 		}
 		return n
 	}
+	answered := 0
 	for i, row := range readParityRows(t, filepath.Join("..", "..", "..", "ci", "social_provider_email_parity.tsv")) {
 		if strings.HasPrefix(row.shape, "id=") {
 			continue
@@ -190,6 +191,10 @@ is_verified, is_superuser, token_version, created_at, updated_at) VALUES ($1, $2
 					}
 				}
 			}
+			answered++
 		})
+	}
+	if rows, idRows := parityTableCount(t, parityTablePath); answered != rows-idRows {
+		t.Fatalf("go-api answered %d rows, the table holds %d apart from its %d \"id=\" rows", answered, rows-idRows, idRows)
 	}
 }

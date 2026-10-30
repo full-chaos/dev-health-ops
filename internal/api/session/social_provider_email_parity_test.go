@@ -18,6 +18,28 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/oauthprovider"
 )
 
+var parityTablePath = filepath.Join("..", "..", "..", "ci", "social_provider_email_parity.tsv")
+
+// parityTableCount counts the table's data rows from the raw file, apart from readParityRows, and how many of them carry
+// an "id=" shape, so a driver that skips a row is caught: each plane must answer every row.
+func parityTableCount(t *testing.T, path string) (rows, idRows int) {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		rows++
+		if f := strings.Split(line, "\t"); len(f) == 7 && strings.HasPrefix(f[6], "id=") {
+			idRows++
+		}
+	}
+	return rows, idRows
+}
+
 // parityRow is one row of ci/social_provider_email_parity.tsv: a provider email form and the answer both planes give.
 type parityRow struct {
 	id, provider, verified, want, shape string
@@ -115,7 +137,8 @@ func detailMessage(body string) string {
 // go-api's social login answers every row of the shared parity table as the table says; "pass" means the email guard
 // let the profile through (the handler went on to the database, which the zero pool turns into a panic).
 func TestSocialLoginAnswersTheProviderEmailParityTable(t *testing.T) {
-	for _, row := range readParityRows(t, filepath.Join("..", "..", "..", "ci", "social_provider_email_parity.tsv")) {
+	answered := 0
+	for _, row := range readParityRows(t, parityTablePath) {
 		t.Run(row.id, func(t *testing.T) {
 			provider := httptest.NewServer(goAPIProviderProfile(row))
 			t.Cleanup(provider.Close)
@@ -156,7 +179,11 @@ func TestSocialLoginAnswersTheProviderEmailParityTable(t *testing.T) {
 			if strings.Contains(logs.String(), "MARK") {
 				t.Fatal("the email value is in a log line (any level, Debug included)")
 			}
+			answered++
 		})
+	}
+	if rows, _ := parityTableCount(t, parityTablePath); answered != rows {
+		t.Fatalf("go-api answered %d rows, the table holds %d", answered, rows)
 	}
 }
 

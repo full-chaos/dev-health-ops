@@ -19,6 +19,28 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 )
 
+var parityTablePath = filepath.Join("..", "..", "..", "..", "ci", "social_provider_email_parity.tsv")
+
+// parityTableCount counts the table's data rows from the raw file, apart from readParityRows, and how many of them carry
+// an "id=" shape, so a driver that skips a row is caught: each plane must answer every row.
+func parityTableCount(t *testing.T, path string) (rows, idRows int) {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		rows++
+		if f := strings.Split(line, "\t"); len(f) == 7 && strings.HasPrefix(f[6], "id=") {
+			idRows++
+		}
+	}
+	return rows, idRows
+}
+
 // parityRow is one row of ci/social_provider_email_parity.tsv: a provider email form and the answer both planes give.
 type parityRow struct {
 	id, provider, verified, want, shape string
@@ -27,7 +49,7 @@ type parityRow struct {
 
 func readParityRows(t *testing.T) []parityRow {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "ci", "social_provider_email_parity.tsv"))
+	raw, err := os.ReadFile(parityTablePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,6 +144,7 @@ func parityDetail(body string) string {
 // auth-service's social exchange, through its real provider client, answers every row of the shared parity table as
 // go-api does; "pass" means the email guard let the profile through to the identity lookup.
 func TestExchangeAnswersTheProviderEmailParityTable(t *testing.T) {
+	answered := 0
 	for _, row := range readParityRows(t) {
 		t.Run(row.id, func(t *testing.T) {
 			server := httptest.NewServer(rawProviders(row))
@@ -155,7 +178,11 @@ func TestExchangeAnswersTheProviderEmailParityTable(t *testing.T) {
 			if strings.Contains(logs.String(), "MARK") {
 				t.Fatal("the email value is in a log line (any level, Debug included)")
 			}
+			answered++
 		})
+	}
+	if rows, _ := parityTableCount(t, parityTablePath); answered != rows {
+		t.Fatalf("auth-service answered %d rows, the table holds %d", answered, rows)
 	}
 }
 

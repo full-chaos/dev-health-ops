@@ -44,6 +44,8 @@ const (
 type Actor struct {
 	PrincipalID *uuid.UUID
 	RequestID   *string
+	// Caller is the credential the request came with; the audit row names it.
+	Caller audit.Caller
 }
 
 // row is one invite as the store reads it.
@@ -154,6 +156,7 @@ func auditFor(v verb, orgID, id uuid.UUID, subject *uuid.UUID, a Actor) audit.Au
 		actor := a.PrincipalID.String()
 		ev.ActorPrincipalID = &actor
 	}
+	a.Caller.Annotate(ev.Attributes)
 	return ev
 }
 

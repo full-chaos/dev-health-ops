@@ -144,6 +144,8 @@ func TestProvisioningRefusesTheWorkloadTokenWhenThePathIsOff(t *testing.T) {
 		if len(f.creds.scopes) != 0 || f.storeCalls() != 0 || f.users.reads != 0 || w.keys.reads != 0 {
 			t.Fatalf("%s: a workload token with the path off reached a store", c.op)
 		}
+	}
+	for _, c := range routeCases() {
 		if response := f.post(c.path, encode(c.body(f, f.super)), nil); response.Code != http.StatusOK {
 			t.Fatalf("%s with the service credential: %d", c.op, response.Code)
 		}

@@ -29,8 +29,8 @@ import (
 // Internal provisioning route patterns: the membership, invite and
 // organization deprovision writes go-api makes through auth-service while
 // auth-service owns users. go-api is the policy enforcement point and calls
-// them with its session issuer credential holding memberships:write; the go-api
-// proxy never forwards them (it forwards only /api/v1/auth routes).
+// them with its workload token, or its session issuer credential holding
+// memberships:write; the go-api proxy forwards only /api/v1/auth routes.
 const (
 	PatternMembershipAdd      = "/internal/v1/memberships/add"
 	PatternMembershipRole     = "/internal/v1/memberships/role"
@@ -138,8 +138,11 @@ type ProvisioningDeps struct {
 	Invites       Invites
 	Deprovision   Deprovisioner
 	Orgs          OrganizationReactivator
-	Logger        *slog.Logger
-	Meter         metric.Meter
+	// Workload is the go-api workload token path the session issue route
+	// takes too (one subject); nil refuses every workload token.
+	Workload *SessionIssueWorkload
+	Logger   *slog.Logger
+	Meter    metric.Meter
 	// ProfileRows is the endpoint-profile document the routes are checked
 	// against; nil is the one the binary embeds. Tests plant others.
 	ProfileRows []byte
@@ -150,7 +153,7 @@ type provisioningHandlers struct {
 	rec recorder
 	// provisioningUses counts every request a session issuer credential with
 	// memberships:write was accepted on, by operation: the compatibility
-	// credential these routes take until go-api presents its workload token.
+	// credential these routes take until it is retired; a workload call is not counted.
 	provisioningUses metric.Int64Counter
 }
 
@@ -200,33 +203,61 @@ func ProvisioningRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 	}, nil
 }
 
-// admit checks the bearer (the session issuer credential holding
-// memberships:write) and reads the body as one strict object of the allowed
-// members. It writes the refusal and returns false when either fails.
-func (h provisioningHandlers) admit(w http.ResponseWriter, r *http.Request, op string, allowed ...string) (strictObject, bool) {
-	ctx := r.Context()
+// admit checks the bearer and reads the body as one strict object of the
+// allowed members. It writes the refusal and returns false when either fails.
+func (h provisioningHandlers) admit(w http.ResponseWriter, r *http.Request, op string, allowed ...string) (strictObject, audit.Caller, bool) {
 	token, ok := bearerToken(r)
 	if !ok {
 		h.rec.refuse(w, r, op, unauthorized(reasonInvalidCredentials), nil)
-		return nil, false
+		return nil, audit.Caller{}, false
 	}
-	_, refused, err := h.Credentials.CheckScope(ctx, contracts.NewSecretString(token), servicecred.ScopeMembershipsWrite)
-	if err != nil {
-		h.rec.refuse(w, r, op, unavailable(reasonStoreUnavailable), err)
-		return nil, false
+	caller, ok := h.caller(w, r, op, token)
+	if !ok {
+		return nil, audit.Caller{}, false
 	}
-	if refused != "" {
-		h.rec.logger.WarnContext(ctx, "provisioning route refused: service credential", "operation", op, "refusal", string(refused))
-		h.rec.refuse(w, r, op, unauthorized(reasonInvalidCredentials), nil)
-		return nil, false
-	}
-	h.provisioningUses.Add(ctx, 1, metric.WithAttributes(attribute.String("operation", op)))
 	body, err := readStrictObject(http.MaxBytesReader(w, r.Body, maxProvisioningBody), allowed...)
 	if err != nil {
 		h.rec.refuse(w, r, op, refusal{http.StatusBadRequest, reasonMalformed}, nil)
-		return nil, false
+		return nil, audit.Caller{}, false
 	}
-	return body, true
+	return body, caller, true
+}
+
+// caller authorizes the bearer, its class read from the text before any store
+// or key-set read: the session issuer credential holding memberships:write
+// (counted until it is retired), or the go-api workload token (audience
+// auth-service, the configured go-api subject). Every refusal is the one 401;
+// the reason is only logged. On a refusal it has already answered.
+func (h provisioningHandlers) caller(w http.ResponseWriter, r *http.Request, op, bearer string) (audit.Caller, bool) {
+	ctx := r.Context()
+	class, reason := classifyIssueBearer(bearer)
+	switch class {
+	case issueClassCompat:
+		credential, refused, err := h.Credentials.CheckScope(ctx, contracts.NewSecretString(bearer), servicecred.ScopeMembershipsWrite)
+		if err != nil {
+			h.rec.refuse(w, r, op, unavailable(reasonStoreUnavailable), err)
+			return audit.Caller{}, false
+		}
+		if refused == "" {
+			h.provisioningUses.Add(ctx, 1, metric.WithAttributes(attribute.String("operation", op)))
+			return audit.Caller{CredentialID: credential.ID}, true
+		}
+		h.rec.logger.WarnContext(ctx, "provisioning route refused: service credential", "operation", op, "refusal", string(refused))
+	case issueClassWorkload:
+		workload, why, err := h.Workload.authorize(bearer)
+		if err != nil {
+			h.rec.refuse(w, r, op, unavailable(reasonDependency), err)
+			return audit.Caller{}, false
+		}
+		if why == "" {
+			return audit.Caller{Workload: workload.workload, JTI: workload.jti}, true
+		}
+		h.rec.logger.WarnContext(ctx, "provisioning route refused: workload token", "operation", op, "refusal", why)
+	default:
+		h.rec.logger.WarnContext(ctx, "provisioning route refused: bearer", "operation", op, "refusal", reason)
+	}
+	h.rec.refuse(w, r, op, unauthorized(reasonInvalidCredentials), nil)
+	return audit.Caller{}, false
 }
 
 // errActorRefused is the actor rule's refusal; reason names which rule.
@@ -332,12 +363,12 @@ func (h provisioningHandlers) membershipAuthorize(actor uuid.UUID) membership.Au
 	}
 }
 
-func actorOf(ctx context.Context, actor uuid.UUID) membership.Actor {
-	return membership.Actor{PrincipalID: &actor, RequestID: requestid.Audit(ctx)}
+func actorOf(ctx context.Context, actor uuid.UUID, caller audit.Caller) membership.Actor {
+	return membership.Actor{PrincipalID: &actor, RequestID: requestid.Audit(ctx), Caller: caller}
 }
 
 func (h provisioningHandlers) membershipAdd(w http.ResponseWriter, r *http.Request) {
-	body, ok := h.admit(w, r, opMembershipAdd, "organization_id", "principal_id", "actor_principal_id", "role", "invited_by_principal_id")
+	body, caller, ok := h.admit(w, r, opMembershipAdd, "organization_id", "principal_id", "actor_principal_id", "role", "invited_by_principal_id")
 	if !ok {
 		return
 	}
@@ -354,12 +385,12 @@ func (h provisioningHandlers) membershipAdd(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	m, err := h.Memberships.Add(r.Context(), membership.Change{OrgID: orgID, PrincipalID: principal, Role: role, InvitedBy: inviter,
-		Actor: actorOf(r.Context(), actor), Authorize: h.membershipAuthorize(actor)})
+		Actor: actorOf(r.Context(), actor, caller), Authorize: h.membershipAuthorize(actor)})
 	h.answerMembership(w, r, opMembershipAdd, m, err)
 }
 
 func (h provisioningHandlers) membershipRole(w http.ResponseWriter, r *http.Request) {
-	body, ok := h.admit(w, r, opMembershipRole, "organization_id", "principal_id", "actor_principal_id", "role", "expected_revision")
+	body, caller, ok := h.admit(w, r, opMembershipRole, "organization_id", "principal_id", "actor_principal_id", "role", "expected_revision")
 	if !ok {
 		return
 	}
@@ -376,12 +407,12 @@ func (h provisioningHandlers) membershipRole(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	m, err := h.Memberships.ChangeRole(r.Context(), membership.Change{OrgID: orgID, PrincipalID: principal, Role: role, ExpectedRevision: revision,
-		Actor: actorOf(r.Context(), actor), Authorize: h.membershipAuthorize(actor)})
+		Actor: actorOf(r.Context(), actor, caller), Authorize: h.membershipAuthorize(actor)})
 	h.answerMembership(w, r, opMembershipRole, m, err)
 }
 
 func (h provisioningHandlers) membershipRemove(w http.ResponseWriter, r *http.Request) {
-	body, ok := h.admit(w, r, opMembershipRemove, "organization_id", "principal_id", "actor_principal_id")
+	body, caller, ok := h.admit(w, r, opMembershipRemove, "organization_id", "principal_id", "actor_principal_id")
 	if !ok {
 		return
 	}
@@ -396,7 +427,7 @@ func (h provisioningHandlers) membershipRemove(w http.ResponseWriter, r *http.Re
 		return
 	}
 	m, err := h.Memberships.Remove(r.Context(), membership.Change{OrgID: orgID, PrincipalID: principal,
-		Actor: actorOf(r.Context(), actor), Authorize: h.membershipAuthorize(actor)})
+		Actor: actorOf(r.Context(), actor, caller), Authorize: h.membershipAuthorize(actor)})
 	h.answerMembership(w, r, opMembershipRemove, m, err)
 }
 
@@ -407,7 +438,7 @@ type transferAnswer struct {
 }
 
 func (h provisioningHandlers) membershipTransfer(w http.ResponseWriter, r *http.Request) {
-	body, ok := h.admit(w, r, opMembershipTransfer, "organization_id", "from_principal_id", "to_principal_id", "actor_principal_id")
+	body, caller, ok := h.admit(w, r, opMembershipTransfer, "organization_id", "from_principal_id", "to_principal_id", "actor_principal_id")
 	if !ok {
 		return
 	}
@@ -423,7 +454,7 @@ func (h provisioningHandlers) membershipTransfer(w http.ResponseWriter, r *http.
 		return
 	}
 	err := h.Memberships.TransferOwnership(r.Context(), membership.Transfer{OrgID: orgID, From: from, To: to,
-		Actor: actorOf(r.Context(), actor), Authorize: h.membershipAuthorize(actor)})
+		Actor: actorOf(r.Context(), actor, caller), Authorize: h.membershipAuthorize(actor)})
 	if err != nil {
 		answer := membershipRefusal(err)
 		h.rec.refuse(w, r, opMembershipTransfer, answer, failure(answer, err))
@@ -506,7 +537,7 @@ type inviteAnswer struct {
 }
 
 func (h provisioningHandlers) inviteCreate(w http.ResponseWriter, r *http.Request) {
-	body, ok := h.admit(w, r, opInviteCreate, "organization_id", "email", "role", "ttl_seconds", "actor_principal_id",
+	body, caller, ok := h.admit(w, r, opInviteCreate, "organization_id", "email", "role", "ttl_seconds", "actor_principal_id",
 		"description", "request_metadata")
 	if !ok {
 		return
@@ -531,7 +562,7 @@ func (h provisioningHandlers) inviteCreate(w http.ResponseWriter, r *http.Reques
 		ttl = &d
 	}
 	created, err := h.Invites.Create(r.Context(), invite.CreateInput{OrgID: orgID, Email: email, Role: role, TTL: ttl, InvitedBy: actor,
-		Actor:       invite.Actor{PrincipalID: &actor, RequestID: requestid.Audit(r.Context())},
+		Actor:       invite.Actor{PrincipalID: &actor, RequestID: requestid.Audit(r.Context()), Caller: caller},
 		Authorize:   h.inviteAuthorize(actor),
 		PublicAudit: &invite.PublicAudit{Description: description, RequestMetadata: metadata}})
 	if err != nil {
@@ -568,7 +599,7 @@ type acceptAnswer struct {
 // invite's organization when the auth schema has none yet, once the token
 // names a pending, unexpired invite.
 func (h provisioningHandlers) inviteAccept(w http.ResponseWriter, r *http.Request) {
-	body, ok := h.admit(w, r, opInviteAccept, "token", "principal_id", "description", "request_metadata")
+	body, caller, ok := h.admit(w, r, opInviteAccept, "token", "principal_id", "description", "request_metadata")
 	if !ok {
 		return
 	}
@@ -591,7 +622,7 @@ func (h provisioningHandlers) inviteAccept(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	accepted, err := h.Invites.Accept(ctx, invite.AcceptInput{Token: token, PrincipalID: principal,
-		Actor:              invite.Actor{PrincipalID: &principal, RequestID: requestid.Audit(ctx)},
+		Actor:              invite.Actor{PrincipalID: &principal, RequestID: requestid.Audit(ctx), Caller: caller},
 		PublicAudit:        &invite.PublicAudit{Description: description, RequestMetadata: metadata},
 		EnsureOrganization: h.Organizations.EnsureOrganization})
 	if err != nil {
@@ -647,7 +678,7 @@ type deprovisionAnswer struct {
 // orgDeprovision is go-api's organization deletion step in the auth schema:
 // a superuser actor only (go-api's DELETE /orgs/{org_id} is policy.Superuser).
 func (h provisioningHandlers) orgDeprovision(w http.ResponseWriter, r *http.Request) {
-	body, ok := h.admit(w, r, opOrgDeprovision, "organization_id", "actor_principal_id")
+	body, caller, ok := h.admit(w, r, opOrgDeprovision, "organization_id", "actor_principal_id")
 	if !ok {
 		return
 	}
@@ -662,7 +693,7 @@ func (h provisioningHandlers) orgDeprovision(w http.ResponseWriter, r *http.Requ
 	}
 	ctx := r.Context()
 	res, err := h.Deprovision.Deprovision(ctx, orgdeprovision.Input{OrgID: orgID,
-		Actor: orgdeprovision.Actor{PrincipalID: &actor, RequestID: requestid.Audit(ctx)},
+		Actor: orgdeprovision.Actor{PrincipalID: &actor, RequestID: requestid.Audit(ctx), Caller: caller},
 		Authorize: func(ctx context.Context, tx audit.TxOps, orgID uuid.UUID) error {
 			_, err := h.actorRule(ctx, tx, actor, orgID, true)
 			var refused errActorRefused
@@ -703,7 +734,7 @@ type reactivateAnswer struct {
 // verb's transaction after the row lock. An organization that is not
 // suspended answers 200 with reactivated false and writes nothing.
 func (h provisioningHandlers) orgReactivate(w http.ResponseWriter, r *http.Request) {
-	body, ok := h.admit(w, r, opOrgReactivate, "organization_id", "actor_principal_id")
+	body, caller, ok := h.admit(w, r, opOrgReactivate, "organization_id", "actor_principal_id")
 	if !ok {
 		return
 	}
@@ -717,7 +748,7 @@ func (h provisioningHandlers) orgReactivate(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	ctx := r.Context()
-	changed, err := h.Orgs.ReactivateAuthorized(ctx, orgID, nil, org.Actor{PrincipalID: &actor, RequestID: requestid.Audit(ctx)},
+	changed, err := h.Orgs.ReactivateAuthorized(ctx, orgID, nil, org.Actor{PrincipalID: &actor, RequestID: requestid.Audit(ctx), Caller: caller},
 		func(ctx context.Context, tx audit.TxOps, orgID uuid.UUID) error {
 			_, err := h.actorRule(ctx, tx, actor, orgID, true)
 			var refused errActorRefused

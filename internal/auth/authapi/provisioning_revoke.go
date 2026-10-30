@@ -42,7 +42,7 @@ type revokeAnswer struct {
 // rows, then the organization row). A repeat is a 200 no-op.
 func (h provisioningHandlers) inviteRevoke(revoker InviteRevoker) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		body, ok := h.admit(w, r, opInviteRevoke, "organization_id", "invite_id", "actor_principal_id")
+		body, caller, ok := h.admit(w, r, opInviteRevoke, "organization_id", "invite_id", "actor_principal_id")
 		if !ok {
 			return
 		}
@@ -57,7 +57,7 @@ func (h provisioningHandlers) inviteRevoke(revoker InviteRevoker) http.HandlerFu
 			return
 		}
 		err := revoker.Revoke(r.Context(), invite.RevokeInput{OrgID: orgID, InviteID: inviteID,
-			Actor:     invite.Actor{PrincipalID: &actor, RequestID: requestid.Audit(r.Context())},
+			Actor:     invite.Actor{PrincipalID: &actor, RequestID: requestid.Audit(r.Context()), Caller: caller},
 			Authorize: h.inviteAuthorize(actor)})
 		if err != nil {
 			answer := inviteRefusal(err)

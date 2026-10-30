@@ -184,7 +184,10 @@ user access token (`at+jwt`). The auth-service workload-token exchange mints it
 (`POST /internal/v1/sessions`) also accepts it, for audience `auth-service` and
 the one workload principal in `AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT` (the token
 has no action claim, so that subject is the `sessions.issue` binding); with the
-variable unset the route refuses it.
+variable unset the route refuses it. The internal provisioning routes (mounted
+by `AUTH_MEMBERSHIP_ROUTES`) accept it on the same terms and the same subject,
+so one go-api token covers both; their audit rows name it by
+`caller_principal_id` and `workload_jti`.
 
 **`kubernetes_sa_token_exchange`.** The Kubernetes projected ServiceAccount
 token a workload presents to auth-service's workload-token exchange

@@ -424,7 +424,7 @@ func (s *Store) acceptOnce(ctx context.Context, in AcceptInput, digest string) (
 		}
 	}
 	change := membership.Change{OrgID: planned.orgID, PrincipalID: in.PrincipalID, Role: planned.role, InvitedBy: planned.inviter,
-		Actor: membership.Actor{PrincipalID: in.Actor.PrincipalID, RequestID: in.Actor.RequestID}}
+		Actor: membershipActor(in.Actor)}
 	plan, err := s.members.PlanAdd(ctx, change)
 	if errors.Is(err, membership.ErrInviterNotFound) {
 		// The inviter left (go-api's ON DELETE SET NULL): the membership records none.
@@ -608,4 +608,10 @@ FROM public.org_invites p WHERE p.id = $1`, in.InviteID, now, inviter); err != n
 		Audit:  auditFor(verbRevoke, in.OrgID, in.InviteID, nil, in.Actor),
 		Events: []audit.OutboxEvent{eventFor(verbRevoke, in.InviteID)},
 	})
+}
+
+// membershipActor is the actor of the membership an accept adds: the accept's
+// own principal, request and caller.
+func membershipActor(a Actor) membership.Actor {
+	return membership.Actor{PrincipalID: a.PrincipalID, RequestID: a.RequestID, Caller: a.Caller}
 }

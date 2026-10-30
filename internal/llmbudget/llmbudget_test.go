@@ -67,7 +67,7 @@ func TestReliablePrice(t *testing.T) {
 		{"openai", "gpt-5-nano-2026-01-01", "", true, false},
 		{"openai", " gpt-5-nano ", "", true, false},
 		{"openai", "GPT-5-NANO", "", false, false}, // the borrowed table is case-sensitive
-		{"openai", "gpt-5", "", false, false},
+		{"openai", "gpt-4o", "", false, false},
 		{"anthropic", "gpt-5-mini", "", false, false},
 		{"", "", "", false, false},
 		{"openai", "gpt-5-mini", "https://api.openai.com", true, false},

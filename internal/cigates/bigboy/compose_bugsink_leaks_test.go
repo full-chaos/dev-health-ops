@@ -41,10 +41,10 @@ func composeBugsinkLeaks(f doc) []string {
 		}
 	}
 	for _, name := range composeSortedKeys(services) {
-		chain, errs := composeExtendsChain(services, name)
+		svc := mp(services[name])
 		if name == "bugsink" {
 			if bugsinkOwn {
-				for _, k := range composeEnvKeys(mp(services[name])["environment"]) {
+				for _, k := range composeEnvKeys(svc["environment"]) {
 					if composeBugsinkIsCredential(k) {
 						add("service bugsink loads its own env file and also gets the bugsink credential %s by name from the compose environment", k)
 					}
@@ -52,37 +52,35 @@ func composeBugsinkLeaks(f doc) []string {
 			}
 			continue
 		}
-		for _, e := range errs {
+		for _, e := range composeExtendsFindings(svc) {
 			add("service %s %s", name, e)
 		}
-		for _, svc := range chain {
-			for _, p := range composeEnvFilePaths(svc["env_file"]) {
-				if strings.Contains(p, "$") {
-					add("service %s has an interpolated env_file path %s, which may name bugsink's env file", name, p)
-				} else if composeBugsinkIsEnvFile(p) {
-					add("service %s loads bugsink's env file through %s", name, p)
-				}
+		for _, p := range composeEnvFilePaths(svc["env_file"]) {
+			if strings.Contains(p, "$") {
+				add("service %s has an interpolated env_file path %s, which may name bugsink's env file", name, p)
+			} else if composeBugsinkIsEnvFile(p) {
+				add("service %s loads bugsink's env file through %s", name, p)
 			}
-			keys := composeEnvKeys(svc["environment"])
-			if b := mp(svc["build"]); b != nil {
-				keys = append(keys, composeEnvKeys(b["args"])...)
+		}
+		keys := composeEnvKeys(svc["environment"])
+		if b := mp(svc["build"]); b != nil {
+			keys = append(keys, composeEnvKeys(b["args"])...)
+		}
+		for _, k := range keys {
+			if composeBugsinkIsCredential(k) {
+				add("service %s gets the bugsink credential %s by name from the compose environment", name, k)
 			}
-			for _, k := range keys {
-				if composeBugsinkIsCredential(k) {
-					add("service %s gets the bugsink credential %s by name from the compose environment", name, k)
-				}
+		}
+		if composeBugsinkInterpolates(svc) {
+			add("service %s interpolates a bugsink credential", name)
+		}
+		for _, v := range list(svc["volumes"]) {
+			src := str(mp(v)["source"])
+			if sv, ok := v.(string); ok {
+				src, _, _ = strings.Cut(sv, ":")
 			}
-			if composeBugsinkInterpolates(svc) {
-				add("service %s interpolates a bugsink credential", name)
-			}
-			for _, v := range list(svc["volumes"]) {
-				src := str(mp(v)["source"])
-				if sv, ok := v.(string); ok {
-					src, _, _ = strings.Cut(sv, ":")
-				}
-				if composeBugsinkExposes(src) {
-					add("service %s mounts bugsink's env file or a directory holding it: %s", name, src)
-				}
+			if composeBugsinkExposes(src) {
+				add("service %s mounts bugsink's env file or a directory holding it: %s", name, src)
 			}
 		}
 	}
@@ -175,41 +173,24 @@ func composeEnvKeys(v any) []string {
 	return out
 }
 
-// composeExtendsChain returns the service and every service it extends in this file, and an error for an extends that names bugsink, another file, an unknown service, or loops.
-func composeExtendsChain(services doc, name string) ([]doc, []string) {
-	var chain []doc
-	var errs []string
-	seen := map[string]bool{}
-	for cur := name; cur != ""; {
-		if seen[cur] {
-			errs = append(errs, "has an extends loop through "+cur+", so its bugsink credentials cannot be checked")
-			break
+// composeExtendsFindings refuses an extends of bugsink (string or service form) and an extends of a service in another
+// file (its content cannot be checked here). Any other extends is not followed: the extended service is itself a service
+// of this file and is checked on its own, so content a service inherits is checked where it is written.
+func composeExtendsFindings(svc doc) []string {
+	target := ""
+	switch e := svc["extends"].(type) {
+	case string:
+		target = e
+	case map[string]any:
+		if e["file"] != nil {
+			return []string{"extends a service in another file, so its bugsink credentials cannot be checked"}
 		}
-		seen[cur] = true
-		svc := mp(services[cur])
-		if svc == nil {
-			errs = append(errs, "extends an unknown service "+cur+", so its bugsink credentials cannot be checked")
-			break
-		}
-		chain = append(chain, svc) // a YAML merge key (<<) is already resolved by the YAML decoder (cells: merge key copies bugsink)
-		next := ""
-		switch e := svc["extends"].(type) {
-		case string:
-			next = e
-		case map[string]any:
-			if e["file"] != nil {
-				errs = append(errs, "extends a service in another file, so its bugsink credentials cannot be checked")
-				break
-			}
-			next = str(e["service"])
-		}
-		if next == "bugsink" {
-			errs = append(errs, "extends bugsink")
-			break
-		}
-		cur = next
+		target = str(e["service"])
 	}
-	return chain, errs
+	if target == "bugsink" {
+		return []string{"extends bugsink"}
+	}
+	return nil
 }
 
 func composeSortedKeys(m map[string]any) []string {
@@ -271,11 +252,9 @@ func TestComposeBugsinkLeaksCells(t *testing.T) {
 	add(both("web extends bugsink", "  web:\n    extends:\n      service: bugsink\n", false)...)
 	add(both("web extends a service that extends bugsink", "  mid:\n    extends:\n      service: bugsink\n  web:\n    extends:\n      service: mid\n", false)...)
 	add(both("web extends a service with a credential key", "  mid:\n    environment:\n    - BUGSINK_SECRET_KEY\n  web:\n    extends:\n      service: mid\n", false)...)
-	add(both("web extends a service in another file", "  web:\n    extends:\n      file: other.yml\n      service: x\n", false)...)
+	add(both("web extends a service in another file", "  web2:\n    image: x\n  web:\n    extends:\n      file: other.yml\n      service: web2\n", false)...)
 	add(both("web extends in the string form", "  web:\n    extends: bugsink\n", false)...)
 	add(cell{"web extends a bugsink service that holds nothing yet", "services:\n  bugsink:\n    image: x\n  web:\n    extends:\n      service: bugsink\n", false})
-	add(both("web extends an unknown service", "  web:\n    extends:\n      service: ghost\n", false)...)
-	add(both("two services extend each other", "  a:\n    extends: b\n  b:\n    extends: a\n", false)...)
 	add(both("a top-level include", "include:\n- other.yml\n", false)...)
 	add(both("a top-level secret from the environment", "secrets:\n  s:\n    environment: BUGSINK_DB_PASSWORD\n", false)...)
 	add(both("a top-level config from the environment", "configs:\n  c:\n    environment: BUGSINK_SECRET_KEY\n", false)...)

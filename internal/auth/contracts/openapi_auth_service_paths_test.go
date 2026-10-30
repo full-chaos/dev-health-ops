@@ -953,6 +953,14 @@ func TestTheOpenAPIPathGateClosesEveryObjectItReads(t *testing.T) {
 	}{func(d map[string]any) {
 		social(d)["security"] = []any{map[string]any{"opsAccessToken": "x"}}
 	}, true}
+	cases["a document key outside the table"] = struct {
+		plant func(d map[string]any)
+		want  bool
+	}{func(d map[string]any) { d["webhooks"] = map[string]any{} }, true}
+	cases["a components key outside the table"] = struct {
+		plant func(d map[string]any)
+		want  bool
+	}{func(d map[string]any) { d["components"].(map[string]any)["responses"] = map[string]any{} }, true}
 	cases["a security scheme key outside the table"] = struct {
 		plant func(d map[string]any)
 		want  bool

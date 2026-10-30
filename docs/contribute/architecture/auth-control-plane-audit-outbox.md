@@ -121,7 +121,14 @@ channel.
   logged. A row whose idempotency key disagrees with its revision is
   `consumer_rejected` and never reaches Valkey.
 - **The consumer.** Every replica subscribes, and every (re)subscribe calls
-  `InvalidateAll` on the consumer's invalidator (pub/sub has no replay). Per
+  `InvalidateAll` on the consumer's invalidator (pub/sub has no replay) and then
+  **catches up**: once the subscription is confirmed it reads the hash with
+  `HGETALL` and gives each `<type>:<id>` floor to the consumer, so a revision
+  delivered while the replica was away is reached with no further event. The order
+  is subscribe, then read, then the marks move; a live event is revision-idempotent
+  with the read (a floor at or below the mark is ignored). The read runs off the
+  connection's read loop and retries with the backoff; `subscription_up` is 1 only
+  after it succeeded. Per
   aggregate: the next revision applies (the aggregate is invalidated), a duplicate
   or older one is ignored, a revision that skips ahead is a gap (the aggregate is
   invalidated and the mark moves to the gap revision, so the gap does not repeat).
@@ -129,24 +136,31 @@ channel.
   consumer keeps its watermarks and metrics. Metrics:
   `devhealth_auth_revision_feed_events_total{disposition=apply|ignore|gap}`,
   `devhealth_auth_revision_feed_resync_total{cause=gap|resubscribe}` and
-  `devhealth_auth_revision_feed_subscription_up` (1 while subscribed). No
+  `devhealth_auth_revision_feed_subscription_up` (1 while subscribed and caught up). No
   aggregate id is a label, and no log line carries an id or a payload.
 - **ACL.** The auth Valkey login (`auth-service-ratelimit`) keeps its one key
-  prefix and database; the feed needs one more channel pattern and four more
-  commands (`+hget +hset` run inside the script, `+publish`, `+subscribe`):
-  `resetkeys ~dho:rl:auth_svc_* resetchannels &auth_svc_* -@all +hello +select +ping +get +eval +incr +pexpire +hget +hset +publish +subscribe +client|tracking`.
+  prefix and database; the feed needs one more channel pattern and more commands
+  (`+hget +hset` run inside the script, `+publish`, `+subscribe`, and `+hgetall`
+  for the catch-up read, granted by a **selector** that names the one hash, so
+  `HGETALL` of any other `auth_svc_` key is refused; the selector needs Valkey 7 or
+  later, the chart's Valkey is 9):
+  `resetkeys ~dho:rl:auth_svc_* resetchannels &auth_svc_* -@all +hello +select +ping +get +eval +incr +pexpire +hget +hset +publish +subscribe +client|tracking (~dho:rl:auth_svc_rev_hwm +hgetall)`.
   The key `dho:rl:auth_svc_rev_hwm` and the channel `auth_svc_rev` sit under the
   existing `auth_svc_` prefixes; the ACL prefix is the separation, not the
   database number. Roll the ACL (chart `valkey.acl`, or `ACL SETUSER`) **before**
   turning the flag on, or the sink answers `consumer_rejected`.
 - **The published floors (a stable interface).** `revisionfeed.PublishedFloors`
   returns the hash as `map[<type>:<id>]revision`, and `revisionfeed.ReadStatus`
-  says whether the hash can be trusted: usable only when `appendonly yes` **and**
-  `maxmemory-policy noeviction` (or `volatile-*` with no TTL on the hash). The
+  says whether the hash can be trusted, from one `INFO persistence memory` read (no
+  `CONFIG GET`): usable only when `aof_enabled` is 1, `aof_last_write_status` and
+  `aof_last_bgrewrite_status` are `ok`, **and** `maxmemory_policy` is `noeviction`
+  (or `volatile-*` with no TTL on the hash). A missing, unknown or failed field is
+  not usable. The `appendfsync` policy is not in `INFO`; the chart sets none (the
+  server default `everysec`) and a chart test pins that it is never `no`. The
   chart's default `--maxmemory-policy allkeys-lru` is **not** usable. A hash that
   was evicted or lost gives a lower floor, the unsafe direction, so it is an
-  advisory second input, never the only source. `ReadStatus` needs `CONFIG GET`,
-  which the auth-service login does not have: the reader uses its own login.
+  advisory second input, never the only source. `ReadStatus` needs `+info`, which
+  the auth-service login does not have: the reader uses its own login.
 - **A restore-fence floor input.** The restore fence's census requires every outbox
   consumer to hand its high-water marks to the fence, so the feed is one
   (`revisionfeed.NewFloorInput`): an advisory lower bound that the fence uses only

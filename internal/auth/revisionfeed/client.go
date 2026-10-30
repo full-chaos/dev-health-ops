@@ -3,6 +3,7 @@ package revisionfeed
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 
 	valkeygo "github.com/valkey-io/valkey-go"
@@ -39,9 +40,8 @@ type Client interface {
 	EvalInt(ctx context.Context, script string, keys, args []string) (int64, error)
 	// HGetAll reads a whole hash.
 	HGetAll(ctx context.Context, key string) (map[string]string, error)
-	// ConfigGet reads one configuration parameter (CONFIG GET).
-	ConfigGet(ctx context.Context, name string) (string, error)
-	// Info reads INFO for the sections and returns its field:value lines.
+	// Info reads INFO for the sections and returns its field:value lines (INFO persistence, INFO memory). There is no
+	// CONFIG GET: the status rule reads INFO only (acp ruling on PR B r1).
 	Info(ctx context.Context, sections ...string) (map[string]string, error)
 	// TTL is the key's TTL in seconds: -1 no expiry, -2 no such key.
 	TTL(ctx context.Context, key string) (int64, error)
@@ -94,16 +94,22 @@ func (c *valkeyClient) HGetAll(ctx context.Context, key string) (map[string]stri
 	return m, classify(err)
 }
 
-func (c *valkeyClient) ConfigGet(ctx context.Context, name string) (string, error) {
-	m, err := c.client.Do(ctx, c.client.B().ConfigGet().Parameter(name).Build()).AsStrMap()
+func (c *valkeyClient) Info(ctx context.Context, sections ...string) (map[string]string, error) {
+	text, err := c.client.Do(ctx, c.client.B().Info().Section(sections...).Build()).ToString()
 	if err != nil {
-		return "", classify(err)
+		return nil, classify(err)
 	}
-	return m[name], nil
-}
-
-func (c *valkeyClient) Info(context.Context, ...string) (map[string]string, error) {
-	return nil, ErrUnavailable
+	fields := map[string]string{}
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if k, v, ok := strings.Cut(line, ":"); ok {
+			fields[k] = v
+		}
+	}
+	return fields, nil
 }
 
 func (c *valkeyClient) TTL(ctx context.Context, key string) (int64, error) {
@@ -183,14 +189,6 @@ func (l *LazyClient) HGetAll(ctx context.Context, key string) (map[string]string
 		return nil, err
 	}
 	return c.HGetAll(ctx, key)
-}
-
-func (l *LazyClient) ConfigGet(ctx context.Context, name string) (string, error) {
-	c, err := l.get(ctx)
-	if err != nil {
-		return "", err
-	}
-	return c.ConfigGet(ctx, name)
 }
 
 func (l *LazyClient) Info(ctx context.Context, sections ...string) (map[string]string, error) {

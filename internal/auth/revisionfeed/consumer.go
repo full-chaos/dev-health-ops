@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 
 	"go.opentelemetry.io/otel"
@@ -121,8 +122,22 @@ func (c *Consumer) Resubscribed(ctx context.Context) {
 	c.log.LogAttrs(ctx, slog.LevelInfo, "revision feed resubscribed", slog.String("disposition", "resubscribe"))
 }
 
-// CatchUp feeds the published floors (the high-water hash) to the consumer after a (re)subscribe.
-func (c *Consumer) CatchUp(context.Context, map[string]int64) {}
+// CatchUp feeds the published floors (the high-water hash, read AFTER the subscribe was confirmed) to the consumer: a floor
+// above the mark moves it (Gap: ResyncTo) and invalidates the aggregate, a floor at or below it is ignored. It goes through
+// Handle, so it is revision-idempotent with a live event that arrives before, during or after it. A field that is not
+// "<type>:<id>" is skipped.
+func (c *Consumer) CatchUp(ctx context.Context, floors map[string]int64) {
+	for field, revision := range floors {
+		typ, id, ok := strings.Cut(field, ":")
+		if !ok || typ == "" || id == "" || revision < 1 {
+			continue
+		}
+		c.Handle(ctx, contracts.ProvisioningEvent{
+			AggregateType: typ, AggregateID: id,
+			Payload: contracts.ProvisioningPayload{Revision: contracts.Revision(revision)},
+		})
+	}
+}
 
 // logDisposition logs the aggregate type, the revision and the disposition only: never the aggregate id or the payload.
 func (c *Consumer) logDisposition(ctx context.Context, level slog.Level, aggregateType string, revision int64, d contracts.Disposition) {

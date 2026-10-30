@@ -1725,7 +1725,7 @@ valkey:
   #    it, exactly as today) and the auth-service rate-limit user with a HASHED
   #    password:
   #      user default on nopass ~* &* +@all
-  #      user auth-service-ratelimit on #<sha256 hex of the password> resetkeys ~dho:rl:auth_svc_* resetchannels &auth_svc_* -@all +hello +select +ping +get +eval +incr +pexpire +hget +hset +publish +subscribe +client|tracking
+  #      user auth-service-ratelimit on #<sha256 hex of the password> resetkeys ~dho:rl:auth_svc_* resetchannels &auth_svc_* -@all +hello +select +ping +get +eval +incr +pexpire +hget +hset +publish +subscribe +client|tracking (~dho:rl:auth_svc_rev_hwm +hgetall)
   #    The rule after the hash is internal/auth/ratelimitvalkey ACLRules. LIMIT: the
   #    default user keeps access to every key, the auth rate-limit counters
   #    (dho:rl:auth_svc_*) included, so what bounds who can touch them is the

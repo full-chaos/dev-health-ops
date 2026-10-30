@@ -74,18 +74,28 @@ func defaultBackoff(attempt int) time.Duration {
 }
 
 // Run subscribes and reconnects until ctx ends. It logs that the subscription was lost, never why: a connection error
-// can quote the URI.
+// can quote the URI. After every confirmed subscribe it catches up (see catchUp): the gauge reads 1 only once the hash
+// was read and applied.
 func (s *Subscriber) Run(ctx context.Context) {
 	for ctx.Err() == nil {
 		s.up.Store(0)
+		cycleCtx, endCycle := context.WithCancel(ctx)
+		subscribed := make(chan struct{}, 1)
+		catchUpDone := make(chan struct{})
+		go func() { defer close(catchUpDone); s.catchUpOnSignal(cycleCtx, subscribed) }()
 		_ = s.client.Subscribe(ctx, Channel, SubscribeHooks{
 			OnSubscribed: func() {
 				s.attempt.Store(0)
-				s.up.Store(1)
 				s.consumer.Resubscribed(ctx)
+				select {
+				case subscribed <- struct{}{}:
+				default:
+				}
 			},
 			OnMessage: func(message string) { s.onMessage(ctx, message) },
 		})
+		endCycle()
+		<-catchUpDone
 		s.up.Store(0)
 		if ctx.Err() != nil {
 			return
@@ -96,6 +106,40 @@ func (s *Subscriber) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-time.After(wait):
+		}
+	}
+}
+
+// catchUpOnSignal runs the catch-up each time the subscription is confirmed, off the connection's read loop (a read on the
+// same client from inside the hook could block it).
+func (s *Subscriber) catchUpOnSignal(ctx context.Context, subscribed <-chan struct{}) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-subscribed:
+			s.catchUp(ctx)
+		}
+	}
+}
+
+// catchUp reads the high-water hash and gives it to the consumer, retrying with the backoff until it works or ctx ends. It
+// runs only after the subscribe was confirmed: an event published before the read is in the hash, one published after it
+// arrives on the channel, and a live event is revision-idempotent with the read. Nothing but the failure is logged, never
+// its cause.
+func (s *Subscriber) catchUp(ctx context.Context) {
+	for attempt := 1; ctx.Err() == nil; attempt++ {
+		floors, err := PublishedFloors(ctx, s.client)
+		if err == nil {
+			s.consumer.CatchUp(ctx, floors)
+			s.up.Store(1)
+			return
+		}
+		s.log.WarnContext(ctx, "revision feed catch-up failed; retrying")
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(s.backoff(attempt)):
 		}
 	}
 }

@@ -348,6 +348,7 @@ func newHarness(t *testing.T, opts harnessOpts) *harness {
 		Memberships: PGMemberships{Pool: env.runtime}, Entitlements: LicensingEntitlements{Pool: env.runtime}, Sessions: h.sessions,
 		StateSecret: secret, AppBaseURL: "https://app.example", HTTPClient: idp.server.Client(),
 		OAuthEndpoints: idp.oauth.endpoints(idp.server.URL),
+		DenialAudit:    PGDenialAudit{Exec: env.runtime, Now: func() time.Time { return h.now }},
 		Now:            func() time.Time { return h.now },
 	})
 	if err != nil {

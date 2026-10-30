@@ -92,8 +92,8 @@ func TestWorkloadCredentialCarriesOnlyTheWorkloadToken(t *testing.T) {
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if len(g.provisioning) != 18 {
-		t.Fatalf("%d provisioning requests, want 18", len(g.provisioning))
+	if want := 2 * len(goldenCalls(prov, life)); len(g.provisioning) != want {
+		t.Fatalf("%d provisioning requests, want %d", len(g.provisioning), want)
 	}
 	for _, request := range g.provisioning {
 		if len(request.Auth) != 1 || request.Auth[0] != "Bearer "+token {
@@ -104,7 +104,7 @@ func TestWorkloadCredentialCarriesOnlyTheWorkloadToken(t *testing.T) {
 		}
 	}
 	if g.exchanges != 1 {
-		t.Errorf("%d exchanges for 18 calls, want 1", g.exchanges)
+		t.Errorf("%d exchanges for %d calls, want 1", g.exchanges, len(g.provisioning))
 	}
 }
 

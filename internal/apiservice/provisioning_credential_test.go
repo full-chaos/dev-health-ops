@@ -242,6 +242,7 @@ func newWiringServer(t *testing.T) *wiringServer {
 			authprovision.PathOrgDeprovision:     `{"organization_id":"` + org + `"}`,
 			orgreactivate.Path:                   `{"organization_id":"` + org + `","status":"active"}`,
 			orgreactivate.SuspendPath:            `{"organization_id":"` + org + `","status":"suspended"}`,
+			orgreactivate.StatePath:              `{"organization_id":"` + org + `","status":"active","revision":4}`,
 		}
 		_, _ = io.WriteString(rw, answers[r.URL.Path])
 	}))
@@ -255,12 +256,19 @@ type wiringCall struct {
 	do   func() error
 }
 
-func wiringCalls(prov authprovision.Provisioner, react orgreactivate.Reactivator, susp orgreactivate.Suspender) []wiringCall {
+type wiringLifecycle interface {
+	orgreactivate.Reactivator
+	orgreactivate.Suspender
+	orgreactivate.StateReader
+}
+
+func wiringCalls(prov authprovision.Provisioner, life wiringLifecycle) []wiringCall {
 	ctx := context.Background()
 	org, principal := uuid.MustParse("11111111-1111-4111-8111-111111111111"), uuid.MustParse("22222222-2222-4222-8222-222222222222")
 	actor, to := uuid.MustParse("33333333-3333-4333-8333-333333333333"), uuid.MustParse("44444444-4444-4444-8444-444444444444")
 	invitedBy := uuid.MustParse("55555555-5555-4555-8555-555555555555")
 	metadata := json.RawMessage(`{"source":"golden"}`)
+	reactivateRevision, suspendRevision := int64(3), int64(5)
 	return []wiringCall{
 		{"memberships_add", func() error { _, err := prov.AddMember(ctx, org, principal, actor, "member", &invitedBy); return err }},
 		{"memberships_role", func() error { _, err := prov.ChangeRole(ctx, org, principal, actor, "admin"); return err }},
@@ -277,8 +285,9 @@ func wiringCalls(prov authprovision.Provisioner, react orgreactivate.Reactivator
 			return err
 		}},
 		{"organizations_deprovision", func() error { return prov.Deprovision(ctx, org, actor) }},
-		{"organizations_reactivate", func() error { return react.Reactivate(ctx, org, actor) }},
-		{"organizations_suspend", func() error { return susp.Suspend(ctx, org, actor) }},
+		{"organizations_reactivate", func() error { return life.Reactivate(ctx, org, actor, &reactivateRevision) }},
+		{"organizations_suspend", func() error { return life.Suspend(ctx, org, actor, &suspendRevision) }},
+		{"organizations_state", func() error { _, err := life.State(ctx, org); return err }},
 	}
 }
 
@@ -298,7 +307,7 @@ func (w *wiringServer) runAll(t *testing.T, cfg AuthProxyConfig, env map[string]
 		t.Fatal(err)
 	}
 	var out []wiringRequest
-	for _, call := range wiringCalls(prov, life, life) {
+	for _, call := range wiringCalls(prov, life) {
 		if err := call.do(); err != nil {
 			t.Fatalf("%s: %v", call.verb, err)
 		}
@@ -369,8 +378,8 @@ func TestWorkloadSelectorSendsOnlyTheWorkloadToken(t *testing.T) {
 	w.runAll(t, cfg, env)
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.provisioning != 18 {
-		t.Fatalf("%d provisioning requests, want 18", w.provisioning)
+	if want := 2 * 10; w.provisioning != want {
+		t.Fatalf("%d provisioning requests, want %d", w.provisioning, want)
 	}
 	for i, auth := range w.auths {
 		if len(auth) != 1 || auth[0] != "Bearer "+token {
@@ -400,7 +409,7 @@ func TestWorkloadSelectorExchangeFailureSendsNothing(t *testing.T) {
 	}
 	life, _ := orgLifecycleClient(cfg, lookup, cred)
 	prov, _ := orgProvisioner(cfg, lookup, cred)
-	for _, call := range wiringCalls(prov, life, life) {
+	for _, call := range wiringCalls(prov, life) {
 		if err := call.do(); err == nil {
 			t.Errorf("%s: no error after a failed exchange", call.verb)
 		}

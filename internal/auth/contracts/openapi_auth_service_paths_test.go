@@ -303,6 +303,8 @@ func closedKeys(object map[string]any, path string, allowed ...string) []string 
 
 // Keys the gate allows on the objects it reads (see the table in the change that added this test).
 var (
+	documentKeys        = []string{"openapi", "info", "paths", "components"}
+	componentsKeys      = []string{"schemas", "securitySchemes"}
 	pathItemMethods     = []string{"get", "post", "put", "patch", "delete", "head"}
 	operationKeys       = []string{"operationId", "summary", "description", "parameters", "requestBody", "responses", "security"}
 	securitySchemeKeys  = []string{"type", "scheme", "bearerFormat", "description"}
@@ -333,7 +335,9 @@ func openAPIPathProblems(document map[string]any, rows []map[string]any) []strin
 			}
 		}
 	}
+	problems = append(problems, closedKeys(document, "OpenAPI document", documentKeys...)...)
 	components, _ := document["components"].(map[string]any)
+	problems = append(problems, closedKeys(components, "OpenAPI components", componentsKeys...)...)
 	schemas, _ := components["schemas"].(map[string]any)
 	schemes, _ := components["securitySchemes"].(map[string]any)
 	paths, _ := document["paths"].(map[string]any)

@@ -116,18 +116,18 @@ func (s AccessStore) postgresFacts(ctx context.Context, query AccessQuery) (Prin
 	if err != nil {
 		return PrincipalAccess{}, fmt.Errorf("memberships read: %w", err)
 	}
-	access := PrincipalAccess{Member: userFound && user.IsActive && membership}
+	impersonation, err := s.Reads.ActiveImpersonation(ctx, query.UserID)
+	if err != nil {
+		return PrincipalAccess{}, fmt.Errorf("impersonation read: %w", err)
+	}
+	access := PrincipalAccess{Member: userFound && user.IsActive && membership, Impersonating: impersonation != nil}
 	if query.SessionID != nil {
 		row, sessionFound, err := s.Reads.SessionState(ctx, *query.SessionID)
 		if err != nil {
 			return PrincipalAccess{}, fmt.Errorf("session read: %w", err)
 		}
-		impersonation, err := s.Reads.ActiveImpersonation(ctx, query.UserID)
-		if err != nil {
-			return PrincipalAccess{}, fmt.Errorf("impersonation read: %w", err)
-		}
 		live, reason := sessionLive(query.UserID, row, sessionFound, user, userFound)
-		access.Session = &SessionAccess{Live: live, Reason: reason, Impersonating: impersonation != nil}
+		access.Session = &SessionAccess{Live: live, Reason: reason, Impersonating: access.Impersonating}
 	}
 	orgID := query.OrgID.String()
 	askDev, err := s.Features.Decide(ctx, orgID, askDevFeatureKey)

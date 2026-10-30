@@ -160,8 +160,11 @@ func TestPrincipalAccessReadsLiveStateEndToEnd(t *testing.T) {
 VALUES ($1, $2, $3, $4, 'member', now() + interval '1 hour', now())`, impersonation, alice, bob, org); err != nil {
 			t.Fatal(err)
 		}
-		if got := read(t, org, alice, &aliceSession); !got.Session.Impersonating {
-			t.Fatalf("impersonating = false while an impersonation is active: %+v", got.Session)
+		if got := read(t, org, alice, &aliceSession); !got.Impersonating || !got.Session.Impersonating {
+			t.Fatalf("impersonating = %v (session %+v) while an impersonation is active", got.Impersonating, got.Session)
+		}
+		if got := read(t, org, alice, nil); !got.Impersonating {
+			t.Fatal("a row-only read (no sid) does not see an active impersonation")
 		}
 		if got := read(t, org, bob, &bobSession); got.Session.Impersonating {
 			t.Fatal("the impersonated user is not the one impersonating")
@@ -169,7 +172,7 @@ VALUES ($1, $2, $3, $4, 'member', now() + interval '1 hour', now())`, impersonat
 		if _, err := pool.Exec(ctx, `UPDATE impersonation_sessions SET ended_at = now() WHERE id = $1`, impersonation); err != nil {
 			t.Fatal(err)
 		}
-		if got := read(t, org, alice, &aliceSession); got.Session.Impersonating {
+		if got := read(t, org, alice, &aliceSession); got.Impersonating || got.Session.Impersonating {
 			t.Fatal("impersonating = true after the impersonation ended")
 		}
 	})

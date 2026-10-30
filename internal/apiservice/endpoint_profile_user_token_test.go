@@ -81,9 +81,10 @@ func TestEveryHS256RowAlsoAcceptsTheUserAccessToken(t *testing.T) {
 			t.Errorf("%s: class_disambiguator %v, want %v", row["id"], row["class_disambiguator"], wantSelector)
 		}
 	}
-	// CHAOS-11813 retired the 6 legacy ingest rows, which had no HS256 opt-in (48 before).
-	if hs != 196 || plain != 42 {
-		t.Errorf("rows with the HS256 opt-in %d, without %d; want 196 and 42", hs, plain)
+	// CHAOS-11813 retired the 6 legacy ingest rows, which had no HS256 opt-in (48 before);
+	// CHAOS-12084 added the internal principal access read, which has none (svc_acr_ or workload token).
+	if hs != 196 || plain != 43 {
+		t.Errorf("rows with the HS256 opt-in %d, without %d; want 196 and 43", hs, plain)
 	}
 }
 
@@ -190,8 +191,8 @@ func TestRowsWithoutTheAccessTokenOptInStillRefuseAUserAccessToken(t *testing.T)
 		}
 		unchanged++
 	}
-	if unchanged != 45 {
-		t.Errorf("checked %d rows, want 45 (42 api + 3 billing-edge; CHAOS-11813 retired 6 legacy ingest rows)", unchanged)
+	if unchanged != 46 {
+		t.Errorf("checked %d rows, want 46 (43 api + 3 billing-edge; CHAOS-11813 retired 6 legacy ingest rows, CHAOS-12084 added the principal access read)", unchanged)
 	}
 }
 

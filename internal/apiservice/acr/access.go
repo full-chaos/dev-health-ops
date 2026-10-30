@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/google/uuid"
@@ -69,8 +70,8 @@ type SessionAccess struct {
 	// revoked, carries a token_version pin, and that pin equals the user's
 	// current users.token_version.
 	Live bool
-	// Impersonating is true while the user holds an active impersonation
-	// (impersonation_sessions is keyed by the admin user, not by session).
+	// Impersonating mirrors PrincipalAccess.Impersonating, the contract's
+	// session.impersonating.
 	Impersonating bool
 	// Reason names why Live is false ("live" when it is true). It is logged,
 	// never served.
@@ -82,6 +83,11 @@ type PrincipalAccess struct {
 	// Member is true only when the users row is active and a memberships row
 	// joins the user to the organization. There is no superuser bypass.
 	Member bool
+	// Impersonating is true while the user holds an active impersonation as
+	// the admin. impersonation_sessions is keyed by the user, not by session,
+	// so it is read on every call, with or without sid: acr denies every
+	// user-class call while it is true (design §3.1 step 3, chris decision 6).
+	Impersonating bool
 	// Session is nil when the query names no session.
 	Session             *SessionAccess
 	AskDev              bool
@@ -130,7 +136,13 @@ func principalAccessHandler(store PrincipalAccessStore, auth routeAuth, logger *
 			return
 		}
 		query := AccessQuery{OrgID: orgID, UserID: userID}
-		values := r.URL.Query()
+		// url.ParseQuery, not r.URL.Query: Query drops a pair it cannot decode
+		// ("sid=%zz"), which would read as no sid and skip the session check.
+		values, err := url.ParseQuery(r.URL.RawQuery)
+		if err != nil {
+			refuse(http.StatusBadRequest, outcomeInvalidRequest, InvalidQueryCode, slog.String("parse_error", err.Error()))
+			return
+		}
 		for key := range values {
 			if key != "sid" {
 				refuse(http.StatusBadRequest, outcomeInvalidRequest, InvalidQueryCode, slog.String("parameter", key))
@@ -181,13 +193,13 @@ func principalAccessHandler(store PrincipalAccessStore, auth routeAuth, logger *
 		}
 		attrs := []slog.Attr{
 			slog.String("org_id", orgRaw), slog.String("user_id", userRaw), slog.String("credential_id", cred.ID),
-			slog.Bool("member", access.Member), slog.Bool("ask_dev", access.AskDev),
+			slog.Bool("member", access.Member), slog.Bool("impersonating", access.Impersonating), slog.Bool("ask_dev", access.AskDev),
 			slog.Bool("agent_context_runtime", access.AgentContextRuntime),
 			slog.Int("repositories", len(access.Repositories)), slog.Duration("elapsed", elapsed),
 		}
 		if access.Session != nil {
 			attrs = append(attrs, slog.Bool("session_live", access.Session.Live),
-				slog.String("session_reason", access.Session.Reason), slog.Bool("impersonating", access.Session.Impersonating))
+				slog.String("session_reason", access.Session.Reason))
 		}
 		countInternal(ctx, routePrincipalAccess, outcomeSuccess)
 		logger.LogAttrs(ctx, slog.LevelInfo, "acr principal access: answered", attrs...)
@@ -202,6 +214,7 @@ func principalAccessBody(orgID, userID string, access PrincipalAccess) *pyjson.O
 	body.Set("org_id", orgID)
 	body.Set("user_id", userID)
 	body.Set("member", access.Member)
+	body.Set("impersonating", access.Impersonating)
 	if access.Session != nil {
 		session := pyjson.NewObject()
 		session.Set("live", access.Session.Live)

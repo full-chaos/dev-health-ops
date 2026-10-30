@@ -162,6 +162,10 @@ func TestPrincipalAccessRefusesMalformedInput(t *testing.T) {
 		{"empty sid", accessOrg.String(), accessUser.String(), "sid=", http.StatusBadRequest, InvalidSessionCode},
 		{"bare uuid sid", accessOrg.String(), accessUser.String(), "sid=" + accessSession.String(), http.StatusBadRequest, InvalidSessionCode},
 		{"short sid", accessOrg.String(), accessUser.String(), "sid=ses_AAAA", http.StatusBadRequest, InvalidSessionCode},
+		// url.Query would drop these pairs and read the request as having no sid.
+		{"undecodable sid", accessOrg.String(), accessUser.String(), "sid=%zz", http.StatusBadRequest, InvalidQueryCode},
+		{"undecodable key", accessOrg.String(), accessUser.String(), "%zz=" + wire, http.StatusBadRequest, InvalidQueryCode},
+		{"semicolon separator", accessOrg.String(), accessUser.String(), "sid=" + wire + ";x=1", http.StatusBadRequest, InvalidQueryCode},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -229,15 +233,18 @@ func TestPrincipalAccessBody(t *testing.T) {
 		want   string
 	}{
 		{"row-only, empty inventory", PrincipalAccess{Member: true, AskDev: true, AgentContextRuntime: false},
-			`{"schema_version":"acr_principal_access.v1","org_id":"ORG","user_id":"USER","member":true,` +
+			`{"schema_version":"acr_principal_access.v1","org_id":"ORG","user_id":"USER","member":true,"impersonating":false,` +
 				`"entitlements":{"ask_dev":true,"agent_context_runtime":false},"repository_scope":{"kind":"none"}}`},
-		{"session, repos", PrincipalAccess{Member: false, Session: &SessionAccess{Live: true, Impersonating: true},
+		{"row-only, impersonating", PrincipalAccess{Member: true, Impersonating: true},
+			`{"schema_version":"acr_principal_access.v1","org_id":"ORG","user_id":"USER","member":true,"impersonating":true,` +
+				`"entitlements":{"ask_dev":false,"agent_context_runtime":false},"repository_scope":{"kind":"none"}}`},
+		{"session, repos", PrincipalAccess{Member: false, Impersonating: true, Session: &SessionAccess{Live: true, Impersonating: true},
 			AgentContextRuntime: true, Repositories: []string{"acme/a", "acme/b"}},
-			`{"schema_version":"acr_principal_access.v1","org_id":"ORG","user_id":"USER","member":false,` +
+			`{"schema_version":"acr_principal_access.v1","org_id":"ORG","user_id":"USER","member":false,"impersonating":true,` +
 				`"session":{"live":true,"impersonating":true},"entitlements":{"ask_dev":false,"agent_context_runtime":true},` +
 				`"repository_scope":{"kind":"repos","repos":["acme/a","acme/b"]}}`},
 		{"empty non-nil inventory is none", PrincipalAccess{Repositories: []string{}},
-			`{"schema_version":"acr_principal_access.v1","org_id":"ORG","user_id":"USER","member":false,` +
+			`{"schema_version":"acr_principal_access.v1","org_id":"ORG","user_id":"USER","member":false,"impersonating":false,` +
 				`"entitlements":{"ask_dev":false,"agent_context_runtime":false},"repository_scope":{"kind":"none"}}`},
 	}
 	for _, tc := range cases {
@@ -483,6 +490,9 @@ func TestAccessStoreSessionLiveness(t *testing.T) {
 	}
 }
 
+// Impersonation is keyed by the user, not by session, so it is read and
+// served on every call, with or without sid: acr denies every user-class call
+// while it is on (design §3.1 step 3).
 func TestAccessStoreImpersonation(t *testing.T) {
 	for _, on := range []bool{false, true} {
 		f := newAccessFixture()
@@ -491,12 +501,19 @@ func TestAccessStoreImpersonation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got.Session == nil || got.Session.Impersonating != on {
-			t.Fatalf("impersonating = %+v, want %v", got.Session, on)
+		if got.Impersonating != on || got.Session == nil || got.Session.Impersonating != on {
+			t.Fatalf("impersonating = %v, session %+v, want %v", got.Impersonating, got.Session, on)
 		}
 		// Impersonation does not change liveness: acr denies on either.
 		if !got.Session.Live {
 			t.Fatalf("session = %+v", got.Session)
+		}
+		rowOnly, err := f.read(t, accessUser, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rowOnly.Impersonating != on {
+			t.Fatalf("row-only impersonating = %v, want %v", rowOnly.Impersonating, on)
 		}
 	}
 }
@@ -508,8 +525,11 @@ func TestAccessStoreWithoutSidReadsNoSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Session != nil || f.reads.calls["sessions"] != 0 || f.reads.calls["impersonation"] != 0 {
+	if got.Session != nil || f.reads.calls["sessions"] != 0 {
 		t.Fatalf("session %+v, calls %v: a row-only read must omit the session", got.Session, f.reads.calls)
+	}
+	if !got.Impersonating || f.reads.calls["impersonation"] != 1 {
+		t.Fatalf("impersonating %v, calls %v: a row-only read still reads impersonation", got.Impersonating, f.reads.calls)
 	}
 }
 

@@ -236,8 +236,7 @@ func (h handlers) commitThenIssue(w http.ResponseWriter, r *http.Request, tx pgx
 		// An organization delete committed after the membership did: the
 		// delete removed the membership, and the token cannot name the
 		// organization.
-		h.Logger.WarnContext(ctx, "api session route refused", "path", r.URL.Path, "step", "issue tokens",
-			"reason", "organization deleted")
+		h.Logger.WarnContext(ctx, "api session route refused", "step", "issue tokens", "reason", "organization deleted")
 		refuse(w, http.StatusNotFound, "Organization not found")
 		return
 	}

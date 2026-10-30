@@ -159,3 +159,15 @@ func TestFillAuditReusesTheProjectedEventAndNamesTheFields(t *testing.T) {
 		t.Fatalf("joined-only changed_fields = %v", one.Attributes["changed_fields"])
 	}
 }
+
+// A fill whose audited UPDATE changed no row (a concurrent change took the value first) is not counted as a fill.
+func TestClearUnchangedFill(t *testing.T) {
+	in := MembershipBackfillResult{RoleUpdated: true, InviterSet: true, JoinedSet: true, InviterUnresolved: true}
+	if got := clearUnchangedFill(in, true); got != in {
+		t.Fatalf("a changed fill: got %+v, want %+v", got, in)
+	}
+	want := MembershipBackfillResult{RoleUpdated: true, InviterUnresolved: true}
+	if got := clearUnchangedFill(in, false); got != want {
+		t.Fatalf("an unchanged fill: got %+v, want %+v", got, want)
+	}
+}

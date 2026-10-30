@@ -516,3 +516,43 @@ func TestOrgsBackfillWithoutTheInviterGrantFailsAndWritesNothing(t *testing.T) {
 		t.Fatalf("auth rows for the member after a refused read: got %d, want 0", got)
 	}
 }
+
+// A missing source grant fails before any write, even on a fresh organization nothing has projected yet.
+func TestOrgsBackfillWithoutTheInviterGrantOnAFreshOrganizationWritesNothing(t *testing.T) {
+	e := getReconEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	inv := e.seed(t, ctx, uniq("if"), true, true)
+	m := e.seed(t, ctx, uniq("if"), true, true)
+	e.backfill(t, ctx)
+	e.runOrgs(t, ctx, false)
+	org, _ := e.seedOrg(t, ctx, true)
+	e.seedMemberInvitedBy(t, ctx, org, m, "member", &inv)
+	var role string
+	if err := e.runtime.QueryRow(ctx, `SELECT current_user`).Scan(&role); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.admin.Exec(ctx, `REVOKE SELECT (invited_by_id) ON public.memberships FROM `+pgx.Identifier{role}.Sanitize()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if _, err := e.admin.Exec(context.Background(), `GRANT SELECT (invited_by_id) ON public.memberships TO `+pgx.Identifier{role}.Sanitize()); err != nil {
+			t.Errorf("restore the invited_by_id grant: %v", err)
+		}
+		e.runOrgs(t, context.Background(), false)
+	})
+	before := e.writes(t, ctx)
+	_, err := RunOrgs(ctx, PGOrgSource{Pool: e.runtime}, e.store, PGAuthOnly{Pool: e.runtime, Schema: e.schema}, Options{BatchSize: 2})
+	if err == nil || err.Error() != "usersbackfill: reading public.memberships failed" {
+		t.Fatalf("error: got %v, want usersbackfill: reading public.memberships failed", err)
+	}
+	if got := e.writes(t, ctx); got != before {
+		t.Fatalf("a refused read wrote: got audit/outbox/revision %v, want %v", got, before)
+	}
+	if got := e.count(t, ctx, `SELECT count(*) FROM auth.organizations WHERE id = $1`, org); got != 0 {
+		t.Fatalf("auth organization rows of the fresh organization: got %d, want 0", got)
+	}
+	if got := e.count(t, ctx, `SELECT count(*) FROM auth.memberships WHERE organization_id = $1`, org); got != 0 {
+		t.Fatalf("auth membership rows of the fresh organization: got %d, want 0", got)
+	}
+}

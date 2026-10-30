@@ -94,10 +94,12 @@ func TestMapMembership(t *testing.T) {
 }
 
 type fakeOrgSource struct {
-	orgs    []OrgRow
-	members []MemberRow
-	pages   int
-	failOrg bool
+	orgs        []OrgRow
+	members     []MemberRow
+	pages       int
+	failOrg     bool
+	failMembers bool
+	memberReads int
 }
 
 func (f *fakeOrgSource) PageOrgs(_ context.Context, after *uuid.UUID, limit int) ([]OrgRow, error) {
@@ -121,6 +123,10 @@ func (f *fakeOrgSource) PageOrgs(_ context.Context, after *uuid.UUID, limit int)
 }
 
 func (f *fakeOrgSource) PageMemberships(_ context.Context, after *MemberKey, limit int) ([]MemberRow, error) {
+	f.memberReads++
+	if f.failMembers {
+		return nil, errors.New("permission denied for table memberships")
+	}
 	var out []MemberRow
 	skipping := after != nil
 	for _, m := range f.members {
@@ -565,5 +571,26 @@ func TestRunOrgsCountsInviterAndJoinFills(t *testing.T) {
 		if strings.Contains(l, "-") && strings.Count(l, "-") >= 4 {
 			t.Errorf("a line carries an id: %q", l)
 		}
+	}
+}
+
+// A missing grant on the membership source fails before any write: the same read the run uses is tried first.
+func TestRunOrgsPreflightsTheMembershipReadBeforeAnyWrite(t *testing.T) {
+	orgs := orgRows(2)
+	src := &fakeOrgSource{orgs: orgs, failMembers: true, members: []MemberRow{{OrgID: orgs[0].ID, UserID: uuid.New(), Role: str("member"), Copies: 1, CreatedAt: &testTime}}}
+	sink := &fakeOrgSink{
+		org: func(identity.OrgBackfillTarget) (identity.OrgBackfillResult, error) {
+			return identity.OrgBackfillResult{Inserted: true}, nil
+		},
+		member: func(identity.MembershipBackfillTarget) (identity.MembershipBackfillResult, error) {
+			return identity.MembershipBackfillResult{}, nil
+		},
+	}
+	rep, err := RunOrgs(context.Background(), src, sink, nil, Options{})
+	if err == nil || err.Error() != "usersbackfill: reading public.memberships failed" {
+		t.Fatalf("error: got %v, want the membership read failure", err)
+	}
+	if sink.orgCalls != 0 || sink.memberCalls != 0 || rep.OrgsSeen != 0 || rep.OrgsInserted != 0 {
+		t.Fatalf("writes before the refused read: got org calls %d, member calls %d, report %+v; want none", sink.orgCalls, sink.memberCalls, rep)
 	}
 }

@@ -356,3 +356,72 @@ func TestARemovalRacingAnExchangeEndsTheNewCredentialWithoutADeadlock(t *testing
 		t.Fatalf("rows after remove = %+v", got)
 	}
 }
+
+// A go-api refresh token row another writer holds is met like a held session:
+// the removal gives up after its attempts with nothing written.
+func TestARemovalThatFindsAGoAPIRefreshTokenLockedGivesUpWithNothingWritten(t *testing.T) {
+	s := newSessionEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	org, user, owner := s.seedOrg(t, ctx), s.seedUser(t, ctx), s.seedUser(t, ctx)
+	s.add(t, ctx, org, owner, "owner")
+	m := s.add(t, ctx, org, user, "member")
+	sess, goTok := s.open(t, ctx, user, &org), s.goToken(t, ctx, user, &org)
+	tx, err := s.admin.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM public.refresh_tokens WHERE id = $1 FOR UPDATE`, goTok); err != nil {
+		t.Fatalf("lock the go-api refresh token: %v", err)
+	}
+	_, err = s.members.Remove(ctx, Change{OrgID: org, PrincipalID: user, Authorize: allowAll})
+	if !errors.Is(err, ErrStore) || !errors.Is(err, errSessionsBusy) {
+		t.Fatalf("Remove with the go-api refresh token held = %v, want ErrStore after the busy attempts", err)
+	}
+	if n := s.replanned(t); n != planAttempts {
+		t.Fatalf("replanned attempts = %d, want %d", n, planAttempts)
+	}
+	if got := s.rows(t, ctx, org, user); got != (rows{"member", "active", "member"}) {
+		t.Fatalf("rows = %+v, want unchanged", got)
+	}
+	if !s.sessionLive(t, ctx, sess) {
+		t.Fatal("the session ended although the removal wrote nothing")
+	}
+	if n := s.auditRows(t, ctx, "auth.membership.removed", org); n != 0 {
+		t.Fatalf("audit rows = %d, want 0", n)
+	}
+	if n := s.outboxRows(t, ctx, "membership.removed", m.ID); n != 0 {
+		t.Fatalf("outbox rows = %d, want 0", n)
+	}
+}
+
+// After the removal commits, the member's refresh credential of the
+// organization exchanges nothing: no new credential, and the session stays ended.
+func TestAnExchangeAfterTheRemovalIsRefused(t *testing.T) {
+	s := newSessionEnv(t)
+	ctx := context.Background()
+	org, user, owner := s.seedOrg(t, ctx), s.seedUser(t, ctx), s.seedUser(t, ctx)
+	s.add(t, ctx, org, owner, "owner")
+	s.add(t, ctx, org, user, "member")
+	issued, err := s.sessions.Create(ctx, user, &org, []string{"pwd"})
+	if err != nil {
+		t.Fatalf("session Create: %v", err)
+	}
+	if _, err := s.members.Remove(ctx, Change{OrgID: org, PrincipalID: user, Authorize: allowAll}); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	result, err := s.sessions.Exchange(ctx, issued.Credential)
+	if err != nil {
+		t.Fatalf("Exchange: %v", err)
+	}
+	if result.Reason.Success() {
+		t.Fatalf("Exchange after the removal = %q, want a refusal", result.Reason)
+	}
+	if n := s.count(t, ctx, `SELECT count(*) FROM auth.refresh_credentials WHERE session_id = $1`, issued.Session.ID); n != 1 {
+		t.Fatalf("credentials of the session = %d, want 1", n)
+	}
+	if !s.sessionEnded(t, ctx, issued.Session.ID) {
+		t.Fatal("the session is not ended")
+	}
+}

@@ -3,6 +3,7 @@ package revisionfeed
 import (
 	"context"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -78,7 +79,10 @@ func startedlessSubscriber(t *testing.T) *Subscriber {
 // Shutdown waits for the stop and closes the client exactly once.
 func TestAShutdownThatTimesOutCanBeRetriedAndClosesTheClientOnce(t *testing.T) {
 	release := make(chan struct{})
+	entered := make(chan struct{})
+	var once sync.Once
 	client := &fakeClient{subscribe: func(ctx context.Context, _ string, _ SubscribeHooks) error {
+		once.Do(func() { close(entered) })
 		<-release
 		return ctx.Err()
 	}}
@@ -95,6 +99,7 @@ func TestAShutdownThatTimesOutCanBeRetriedAndClosesTheClientOnce(t *testing.T) {
 	if err := component.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	<-entered
 	short, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	if err := component.Shutdown(short); err == nil {

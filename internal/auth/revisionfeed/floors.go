@@ -48,7 +48,7 @@ func PublishedFloors(ctx context.Context, client Client) (map[string]int64, erro
 
 // Status is whether the hash can be trusted as a floor source. Usable needs ALL of: the AOF is on (aof_enabled 1), its last
 // write and its last rewrite succeeded (aof_last_write_status ok, aof_last_bgrewrite_status ok), and the server does not
-// evict the hash (maxmemory_policy noeviction, or volatile-* with no TTL on the hash). An evicted, unflushed or lost hash
+// evict the hash (maxmemory_policy noeviction or volatile-*) and the hash must have no TTL. An evicted, unflushed or lost hash
 // gives a LOWER floor, the unsafe direction, so a missing, unknown or failed field is not usable.
 //
 // appendfsync is NOT in INFO persistence (INFO reports aof_delayed_fsync, a counter, not the policy), and CONFIG GET is
@@ -59,7 +59,7 @@ type Status struct {
 	AOFWriteOK      bool
 	AOFRewriteOK    bool
 	MaxMemoryPolicy string
-	// HashHasTTL is read only under a volatile-* policy, the one case where a TTL decides eviction.
+	// HashHasTTL is read under every policy that could otherwise be usable (noeviction and volatile-*): a hash with a TTL expires.
 	HashHasTTL bool
 	Usable     bool
 	// Reason is one of StatusReasons.
@@ -89,9 +89,9 @@ func ReadStatus(ctx context.Context, client Client) (Status, error) {
 		status.Reason = "aof_write_failed"
 	case !status.AOFRewriteOK:
 		status.Reason = "aof_rewrite_failed"
-	case policy == "noeviction":
-		status.Usable, status.Reason = true, "ok"
-	case strings.HasPrefix(policy, "volatile-"):
+	case policy == "noeviction" || strings.HasPrefix(policy, "volatile-"):
+		// A TTL on the hash is checked under every otherwise-usable policy: noeviction keeps an expiring key until it
+		// expires, and an expired hash gives a lower floor, the unsafe direction.
 		ttl, err := client.TTL(ctx, HighWaterKey)
 		if err != nil {
 			return Status{}, ErrUnavailable

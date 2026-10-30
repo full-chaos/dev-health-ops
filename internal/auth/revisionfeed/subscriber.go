@@ -200,19 +200,21 @@ func (c *Component) Start(ctx context.Context) error {
 		return errors.New("revisionfeed: the subscriber is already started")
 	}
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	c.cancel = cancel
-	c.done = make(chan struct{})
+	done := make(chan struct{})
+	c.cancel, c.done = cancel, done
 	go func() {
-		defer close(c.done)
+		defer close(done)
 		c.sub.Run(runCtx)
 	}()
 	return nil
 }
 
+// Shutdown stops the subscriber and then closes the client. The goroutine of Start closes its own local channel, never a
+// field that Shutdown may have reset. A Shutdown whose ctx ends first reports it and leaves the component stoppable: the
+// fields are cleared only after the subscriber stopped, so a later Shutdown waits again and closes the client.
 func (c *Component) Shutdown(ctx context.Context) error {
 	c.mu.Lock()
 	cancel, done := c.cancel, c.done
-	c.cancel, c.done = nil, nil
 	c.mu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -221,6 +223,11 @@ func (c *Component) Shutdown(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		}
+		c.mu.Lock()
+		if c.done == done {
+			c.cancel, c.done = nil, nil
+		}
+		c.mu.Unlock()
 	}
 	if c.close != nil {
 		c.close()

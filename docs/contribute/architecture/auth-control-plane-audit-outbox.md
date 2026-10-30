@@ -154,7 +154,8 @@ channel.
   says whether the hash can be trusted, from one `INFO persistence memory` read (no
   `CONFIG GET`): usable only when `aof_enabled` is 1, `aof_last_write_status` and
   `aof_last_bgrewrite_status` are `ok`, **and** `maxmemory_policy` is `noeviction`
-  (or `volatile-*` with no TTL on the hash). A missing, unknown or failed field is
+  or `volatile-*`, **and** the hash has no TTL (checked under both policies: an
+  expiring hash gives a lower floor). A missing, unknown or failed field is
   not usable. The `appendfsync` policy is not in `INFO`; the chart sets none (the
   server default `everysec`) and a chart test pins that it is never `no`. The
   chart's default `--maxmemory-policy allkeys-lru` is **not** usable. A hash that

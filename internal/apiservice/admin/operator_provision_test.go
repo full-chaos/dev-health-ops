@@ -15,7 +15,7 @@ func strp(s string) *string { return &s }
 func operatorRows() map[string][]any {
 	return map[string][]any{
 		"FROM users WHERE lower(email) = $1":         {zeroFill{}},
-		"FROM organizations WHERE slug = $1":         {zeroFill{}},
+		"FROM organizations WHERE lower(slug) = $1":  {zeroFill{}},
 		"SELECT is_superuser FROM users WHERE id = ": {false},
 	}
 }
@@ -68,13 +68,20 @@ func TestOperatorProfileUpdateIsNotRefusedByTheSwitch(t *testing.T) {
 
 // With the switch off the membership update runs today's SQL.
 var operatorSwitchOffSQL = map[string][]string{
-	"add or role": nil,
-	"remove":      nil,
+	"add or role": {"BEGIN", "tx:SELECT id, email, username, password_hash, full_name, avatar_url, auth_provider, auth_provider_id, is_active, is_verified, is_superuser, token_version, last_login_at, created_at, updated_at FROM users WHERE lower(email) = $1", "tx:SELECT id, slug, name, description, settings, tier, managed_by, is_active, created_at, updated_at FROM organizations WHERE lower(slug) = $1", "tx:SELECT id, org_id, user_id, role, invited_by_id, joined_at, created_at, updated_at FROM memberships WHERE org_id = $1 AND user_id = $2", "tx:SELECT id, org_id, user_id, role, invited_by_id, joined_at, created_at, updated_at FROM memberships WHERE org_id = $1 AND user_id = $2",
+		"tx:INSERT INTO memberships (id, org_id, user_id, role, invited_by_id, joined_at, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+		"COMMIT", "ROLLBACK"},
+	"remove": {"BEGIN", "tx:SELECT id, email, username, password_hash, full_name, avatar_url, auth_provider, auth_provider_id, is_active, is_verified, is_superuser, token_version, last_login_at, created_at, updated_at FROM users WHERE lower(email) = $1", "tx:SELECT id, slug, name, description, settings, tier, managed_by, is_active, created_at, updated_at FROM organizations WHERE lower(slug) = $1", "tx:SELECT id, org_id, user_id, role, invited_by_id, joined_at, created_at, updated_at FROM memberships WHERE org_id = $1 AND user_id = $2",
+		"tx:DELETE FROM memberships WHERE org_id = $1 AND user_id = $2", "COMMIT", "ROLLBACK"},
 }
 
 func TestOperatorSwitchOffRunsTodaysMembershipSQL(t *testing.T) {
 	for name, in := range operatorMembershipUpdates {
 		db := &provisionDB{rows: operatorRows()}
+		if name == "remove" {
+			// a member, so the removal runs to its delete
+			db.rows["FROM memberships WHERE org_id = $1 AND user_id = $2"] = []any{zeroFill{}}
+		}
 		_, _ = Operator{db: db}.UpdateUser(context.Background(), in)
 		if !reflect.DeepEqual(db.log, operatorSwitchOffSQL[name]) {
 			t.Fatalf("%s: switch-off SQL:\n got %q\nwant %q", name, db.log, operatorSwitchOffSQL[name])

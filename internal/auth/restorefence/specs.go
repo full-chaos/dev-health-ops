@@ -16,6 +16,8 @@ type column struct {
 	// narrow marks an array column: it travels as the PostgreSQL array literal text and the restored set is cut to its
 	// intersection with the source (a NULL source is the empty set). Nothing is ever added.
 	narrow bool
+	// guardOnly marks a column the section's guard reads but never writes (a revoke section's SET leaves it).
+	guardOnly bool
 }
 
 type kind int
@@ -207,6 +209,17 @@ var sections = []section{
 	// password_updated_at is newer in the source).
 	{name: "auth.users", table: "users", kind: kindReport, key: colUUID("principal_id"),
 		cols: []column{colTS("password_updated_at")}, revoked: "s.password_updated_at IS NOT NULL", action: ActionForcePasswordReset},
+	// A password changed after the target (auth-service: password_updated_at; go-api: its token_version, mirrored as
+	// legacy_token_version) comes back with the restore: the older hash works again. The restored hash and its algorithm
+	// are cleared (fail closed: both logins refuse a NULL hash; the user resets by the forgot-password mail). Only a
+	// timestamp and a counter travel, never the hash. A user without a password is never touched.
+	{name: "auth.users.password", suffix: ".password", table: "users", kind: kindRevoke, key: colUUID("principal_id"),
+		cols:    []column{{name: "password_updated_at", pgType: "timestamptz", guardOnly: true}, {name: "legacy_token_version", pgType: "bigint", guardOnly: true}},
+		revoked: "s.password_updated_at IS NOT NULL OR s.legacy_token_version > 0",
+		active: "t.password_hash IS NOT NULL AND ((x.password_updated_at IS NOT NULL AND (t.password_updated_at IS NULL OR t.password_updated_at < x.password_updated_at)) OR " +
+			"t.legacy_token_version < x.legacy_token_version)",
+		revokeSet: "password_hash = NULL, password_algorithm = NULL", touch: true, manifestOnly: true,
+		action: ActionForcePasswordReset, blindReview: "t.password_hash IS NOT NULL"},
 
 	// The legacy public schema: credential and revocation state the same
 	// restore rolls back while legacy auth stays on.
@@ -232,6 +245,14 @@ var sections = []section{
 	{name: "public.memberships.role", suffix: ".role", legacy: true, table: "memberships", kind: kindRevoke, key: colUUID("id"),
 		cols: []column{colText("role")}, active: roleLowered("org_id", ""), touch: true,
 		action: ActionReviewMembershipOwner, blindReview: "t.role IN ('admin', 'owner')"},
+	// The legacy hash of a user whose password go-api (or the auth-service mirror) changed after the target: every such
+	// write bumps token_version. Cleared like auth.users.password. It runs BEFORE the counter section below, which raises
+	// the restored token_version to the source's. A deactivation also bumps token_version; that user is disabled anyway.
+	{name: "public.users.password", suffix: ".password", legacy: true, table: "users", kind: kindRevoke, key: colUUID("id"),
+		cols:    []column{{name: "token_version", pgType: "integer", guardOnly: true}},
+		revoked: "s.token_version > 0", active: "t.password_hash IS NOT NULL AND t.token_version < x.token_version",
+		revokeSet: "password_hash = NULL", touch: true, manifestOnly: true,
+		action: ActionForcePasswordReset, blindReview: "t.password_hash IS NOT NULL"},
 	{name: "public.users", legacy: true, table: "users", kind: kindCounter, key: colUUID("id"),
 		cols: []column{{name: "is_active", pgType: "boolean"}, {name: "token_version", pgType: "integer"}}, revoked: "s.token_version > 0 OR NOT s.is_active", touch: true,
 		action: ActionForcePasswordReset},
@@ -371,6 +392,7 @@ func (s section) applySQL(schema authschema.ValidatedIdentifier) string {
 		}
 		for _, c := range s.cols {
 			switch {
+			case c.guardOnly:
 			case c.narrow:
 				sets = append(sets, fmt.Sprintf("%s = ARRAY(SELECT a FROM unnest(t.%s) WITH ORDINALITY e(a, o) WHERE a::text = ANY(COALESCE(x.%s::text[], '{}'::text[])) ORDER BY o)",
 					c.name, c.name, c.name))
@@ -442,6 +464,9 @@ func (s section) matchSQL() string {
 func (s section) idsSQL(schema authschema.ValidatedIdentifier) string {
 	tbl := s.qualified(schema)
 	switch {
+	case s.kind == kindRevoke && s.action == ActionForcePasswordReset:
+		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s)
+SELECT t.%s::text FROM %s t JOIN m x ON x.%s = t.%s WHERE (%s) ORDER BY 1`, s.recordset(), s.key.name, tbl, s.key.name, s.key.name, s.sub(s.active, schema))
 	case s.kind == kindPresence && s.action == ActionRequeueProviderRevocation:
 		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s)
 SELECT %s FROM %s t WHERE NOT EXISTS (SELECT 1 FROM m x WHERE %s) ORDER BY 1`, s.recordset(), s.idSQL(), tbl, s.matchSQL())

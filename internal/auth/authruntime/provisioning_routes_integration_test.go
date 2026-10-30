@@ -13,8 +13,6 @@ import (
 
 	"github.com/google/uuid"
 
-	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
-	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 )
 
@@ -419,7 +417,6 @@ func TestDeprovisionedOrganizationStaysSuspendedOnSignIn(t *testing.T) {
 func TestProvisioningReactivateThroughConfigure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	withReactivateProfileRow(t)
 	e, header := newProvisioningEnv(t, ctx)
 	owner, org := e.seed(t, ctx)
 	super := e.account(t, ctx, acctMail(), true, true)
@@ -471,36 +468,4 @@ func TestProvisioningReactivateThroughConfigure(t *testing.T) {
 	if err := e.admin.QueryRow(ctx, auditSQL, org, super).Scan(&rows); err != nil || rows != 1 {
 		t.Fatalf("a repeat wrote a second audit row (%d, %v)", rows, err)
 	}
-}
-
-// withReactivateProfileRow makes the stack mount the reactivate route: the
-// route is mounted only when the endpoint-profile document holds its row, and
-// the embedded document does not yet (the follow-up adds it). The plant is
-// the embedded document plus a copy of the deprovision row for the route.
-func withReactivateProfileRow(t *testing.T) {
-	t.Helper()
-	var document map[string]any
-	if err := json.Unmarshal(authv1.AuthServiceEndpointProfiles, &document); err != nil {
-		t.Fatal(err)
-	}
-	rows := document["rows"].([]any)
-	for _, item := range rows {
-		row := item.(map[string]any)
-		if row["route"] == "/internal/v1/organizations/deprovision" && row["service"] == authapi.AccessService {
-			clone := map[string]any{}
-			for k, v := range row {
-				clone[k] = v
-			}
-			clone["route"] = authapi.PatternOrgReactivate
-			document["rows"] = append(rows, clone)
-			raw, err := json.Marshal(document)
-			if err != nil {
-				t.Fatal(err)
-			}
-			provisioningProfileRows = raw
-			t.Cleanup(func() { provisioningProfileRows = nil })
-			return
-		}
-	}
-	t.Fatal("no deprovision row in the embedded document")
 }

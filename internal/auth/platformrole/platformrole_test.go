@@ -309,3 +309,14 @@ func TestBootstrapRefusalsAreKept(t *testing.T) {
 		}
 	}
 }
+
+// The shared form of the write lock is the same advisory key as the exclusive form every grant and revoke takes, so
+// a shared holder and an exclusive requester conflict and two shared holders do not.
+func TestSharedWriteLockUsesTheWriterKey(t *testing.T) {
+	if !strings.Contains(lockWritesSharedSQL, "pg_advisory_xact_lock_shared(hashtextextended($1, 0))") {
+		t.Fatalf("shared lock statement = %q, want pg_advisory_xact_lock_shared over hashtextextended($1, 0)", lockWritesSharedSQL)
+	}
+	if !strings.Contains(lockWritesSQL, "pg_advisory_xact_lock(hashtextextended($1, 0))") {
+		t.Fatalf("exclusive lock statement = %q, want pg_advisory_xact_lock over hashtextextended($1, 0)", lockWritesSQL)
+	}
+}

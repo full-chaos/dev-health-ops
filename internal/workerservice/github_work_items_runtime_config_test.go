@@ -174,6 +174,32 @@ func TestDeprecatedInvestmentConfigPathIsIgnoredAndWarnedOnce(t *testing.T) {
 	}
 }
 
+// A worker that never sets the deprecated env must not log the "is set and ignored" warning: the loaded default
+// must not stand in for an operator's setting.
+func TestUnsetInvestmentConfigPathLoadsNoWarning(t *testing.T) {
+	t.Setenv("STATUS_MAPPING_PATH", "")
+	logged := &lockedBuffer{}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(logged, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	investmentConfigPathIgnoredWarning = sync.Once{}
+
+	cfg, err := config.Load(config.Spec{
+		Service:   "dev-health-worker",
+		LookupEnv: func(string) (string, bool) { return "", false },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.WorkerGithubWorkItemsStatusMappingPath = validGitHubWorkItemsRuntimeConfig(t).WorkerGithubWorkItemsStatusMappingPath
+	if _, err := githubWorkItemsRuntimeConfigFrom(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(logged.String(), "WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH is set and ignored") {
+		t.Fatalf("an unset env logged the warning: %s", logged.String())
+	}
+}
+
 type lockedBuffer struct {
 	mu     sync.Mutex
 	buffer bytes.Buffer

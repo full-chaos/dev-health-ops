@@ -59,13 +59,13 @@ func TestOrgReactivatorFollowsTheSwitchAndNeedsTheCredential(t *testing.T) {
 	token := testIssueToken(t)
 	on := mustProxyConfig(t, map[string]string{EnvAuthProxyURL: "http://auth-service:8095", EnvAuthProxyOrgProvisioning: "true"})
 	off := mustProxyConfig(t, map[string]string{EnvAuthProxyURL: "http://auth-service:8095"})
-	if r, err := orgReactivator(off, issueEnv(map[string]string{sessionissue.EnvToken: token})); r != nil || err != nil {
+	if r, err := orgReactivator(off, issueEnv(map[string]string{sessionissue.EnvToken: token}), provisioningCredential{}); r != nil || err != nil {
 		t.Fatalf("switch off with a token: %v %v, want no client", r, err)
 	}
-	if r, err := orgReactivator(off, issueEnv(map[string]string{})); r != nil || err != nil {
+	if r, err := orgReactivator(off, issueEnv(map[string]string{}), provisioningCredential{}); r != nil || err != nil {
 		t.Fatalf("switch off with no token: %v %v, want no client and no error", r, err)
 	}
-	if r, err := orgReactivator(on, issueEnv(map[string]string{sessionissue.EnvToken: " " + token + "\n"})); r == nil || err != nil {
+	if r, err := orgReactivator(on, issueEnv(map[string]string{sessionissue.EnvToken: " " + token + "\n"}), provisioningCredential{}); r == nil || err != nil {
 		t.Fatalf("switch on with a credential: %v %v, want a client", r, err)
 	}
 	for name, env := range map[string]map[string]string{
@@ -73,7 +73,7 @@ func TestOrgReactivatorFollowsTheSwitchAndNeedsTheCredential(t *testing.T) {
 		"empty":          {sessionissue.EnvToken: ""},
 		"acr credential": {sessionissue.EnvToken: "svc_acr_" + token[len("svc_authsess_"):]},
 	} {
-		r, err := orgReactivator(on, issueEnv(env))
+		r, err := orgReactivator(on, issueEnv(env), provisioningCredential{})
 		if err == nil || r != nil {
 			t.Errorf("switch on, %s: %v %v, want a start-up error", name, r, err)
 			continue
@@ -90,17 +90,17 @@ func TestOrgProvisionerFollowsTheSwitchAndNeedsTheCredential(t *testing.T) {
 	token := testIssueToken(t)
 	on := mustProxyConfig(t, map[string]string{EnvAuthProxyURL: "http://auth-service:8095", EnvAuthProxyOrgProvisioning: "true"})
 	off := mustProxyConfig(t, map[string]string{EnvAuthProxyURL: "http://auth-service:8095"})
-	if p, err := orgProvisioner(off, issueEnv(map[string]string{sessionissue.EnvToken: token})); p != nil || err != nil {
+	if p, err := orgProvisioner(off, issueEnv(map[string]string{sessionissue.EnvToken: token}), provisioningCredential{}); p != nil || err != nil {
 		t.Fatalf("switch off with a token: %v %v, want no client", p, err)
 	}
-	if p, err := orgProvisioner(on, issueEnv(map[string]string{sessionissue.EnvToken: " " + token + "\n"})); p == nil || err != nil {
+	if p, err := orgProvisioner(on, issueEnv(map[string]string{sessionissue.EnvToken: " " + token + "\n"}), provisioningCredential{}); p == nil || err != nil {
 		t.Fatalf("switch on with a credential: %v %v, want a client", p, err)
 	}
 	for name, env := range map[string]map[string]string{
 		"no credential":  {},
 		"acr credential": {sessionissue.EnvToken: "svc_acr_" + token[len("svc_authsess_"):]},
 	} {
-		p, err := orgProvisioner(on, issueEnv(env))
+		p, err := orgProvisioner(on, issueEnv(env), provisioningCredential{})
 		if err == nil || p != nil {
 			t.Errorf("switch on, %s: %v %v, want a start-up error", name, p, err)
 			continue
@@ -116,13 +116,13 @@ func TestOrgSuspenderFollowsTheSwitchAndNeedsTheCredential(t *testing.T) {
 	token := testIssueToken(t)
 	on := mustProxyConfig(t, map[string]string{EnvAuthProxyURL: "http://auth-service:8095", EnvAuthProxyOrgProvisioning: "true"})
 	off := mustProxyConfig(t, map[string]string{EnvAuthProxyURL: "http://auth-service:8095"})
-	if s, err := orgSuspender(off, issueEnv(map[string]string{sessionissue.EnvToken: token})); s != nil || err != nil {
+	if s, err := orgSuspender(off, issueEnv(map[string]string{sessionissue.EnvToken: token}), provisioningCredential{}); s != nil || err != nil {
 		t.Fatalf("switch off with a token: %v %v, want no client", s, err)
 	}
-	if s, err := orgSuspender(off, issueEnv(map[string]string{})); s != nil || err != nil {
+	if s, err := orgSuspender(off, issueEnv(map[string]string{}), provisioningCredential{}); s != nil || err != nil {
 		t.Fatalf("switch off with no token: %v %v, want no client and no error", s, err)
 	}
-	if s, err := orgSuspender(on, issueEnv(map[string]string{sessionissue.EnvToken: " " + token + "\n"})); s == nil || err != nil {
+	if s, err := orgSuspender(on, issueEnv(map[string]string{sessionissue.EnvToken: " " + token + "\n"}), provisioningCredential{}); s == nil || err != nil {
 		t.Fatalf("switch on with a credential: %v %v, want a client", s, err)
 	}
 	for name, env := range map[string]map[string]string{
@@ -130,7 +130,7 @@ func TestOrgSuspenderFollowsTheSwitchAndNeedsTheCredential(t *testing.T) {
 		"empty":          {sessionissue.EnvToken: ""},
 		"acr credential": {sessionissue.EnvToken: "svc_acr_" + token[len("svc_authsess_"):]},
 	} {
-		s, err := orgSuspender(on, issueEnv(env))
+		s, err := orgSuspender(on, issueEnv(env), provisioningCredential{})
 		if err == nil || s != nil {
 			t.Errorf("switch on, %s: %v %v, want a start-up error", name, s, err)
 			continue

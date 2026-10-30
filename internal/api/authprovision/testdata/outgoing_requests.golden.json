@@ -1,0 +1,262 @@
+[
+  {
+    "verb": "memberships_add",
+    "method": "POST",
+    "path": "/internal/v1/memberships/add",
+    "headers": {
+      "Accept": [
+        "application/json"
+      ],
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Authorization": [
+        "Bearer svc_authsess_\u003cPLACEHOLDER\u003e"
+      ],
+      "Content-Length": [
+        "253"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "User-Agent": [
+        "Go-http-client/1.1"
+      ]
+    },
+    "body": "{\"actor_principal_id\":\"33333333-3333-4333-8333-333333333333\",\"invited_by_principal_id\":\"55555555-5555-4555-8555-555555555555\",\"organization_id\":\"11111111-1111-4111-8111-111111111111\",\"principal_id\":\"22222222-2222-4222-8222-222222222222\",\"role\":\"member\"}"
+  },
+  {
+    "verb": "memberships_role",
+    "method": "POST",
+    "path": "/internal/v1/memberships/role",
+    "headers": {
+      "Accept": [
+        "application/json"
+      ],
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Authorization": [
+        "Bearer svc_authsess_\u003cPLACEHOLDER\u003e"
+      ],
+      "Content-Length": [
+        "187"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "User-Agent": [
+        "Go-http-client/1.1"
+      ]
+    },
+    "body": "{\"actor_principal_id\":\"33333333-3333-4333-8333-333333333333\",\"organization_id\":\"11111111-1111-4111-8111-111111111111\",\"principal_id\":\"22222222-2222-4222-8222-222222222222\",\"role\":\"admin\"}"
+  },
+  {
+    "verb": "memberships_remove",
+    "method": "POST",
+    "path": "/internal/v1/memberships/remove",
+    "headers": {
+      "Accept": [
+        "application/json"
+      ],
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Authorization": [
+        "Bearer svc_authsess_\u003cPLACEHOLDER\u003e"
+      ],
+      "Content-Length": [
+        "172"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "User-Agent": [
+        "Go-http-client/1.1"
+      ]
+    },
+    "body": "{\"actor_principal_id\":\"33333333-3333-4333-8333-333333333333\",\"organization_id\":\"11111111-1111-4111-8111-111111111111\",\"principal_id\":\"22222222-2222-4222-8222-222222222222\"}"
+  },
+  {
+    "verb": "memberships_transfer",
+    "method": "POST",
+    "path": "/internal/v1/memberships/transfer",
+    "headers": {
+      "Accept": [
+        "application/json"
+      ],
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Authorization": [
+        "Bearer svc_authsess_\u003cPLACEHOLDER\u003e"
+      ],
+      "Content-Length": [
+        "234"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "User-Agent": [
+        "Go-http-client/1.1"
+      ]
+    },
+    "body": "{\"actor_principal_id\":\"33333333-3333-4333-8333-333333333333\",\"from_principal_id\":\"33333333-3333-4333-8333-333333333333\",\"organization_id\":\"11111111-1111-4111-8111-111111111111\",\"to_principal_id\":\"44444444-4444-4444-8444-444444444444\"}"
+  },
+  {
+    "verb": "invites_create",
+    "method": "POST",
+    "path": "/internal/v1/invites/create",
+    "headers": {
+      "Accept": [
+        "application/json"
+      ],
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Authorization": [
+        "Bearer svc_authsess_\u003cPLACEHOLDER\u003e"
+      ],
+      "Content-Length": [
+        "254"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "User-Agent": [
+        "Go-http-client/1.1"
+      ]
+    },
+    "body": "{\"actor_principal_id\":\"33333333-3333-4333-8333-333333333333\",\"description\":\"golden invite\",\"email\":\"golden@example.test\",\"organization_id\":\"11111111-1111-4111-8111-111111111111\",\"request_metadata\":{\"source\":\"golden\"},\"role\":\"member\",\"ttl_seconds\":259200}"
+  },
+  {
+    "verb": "invites_accept",
+    "method": "POST",
+    "path": "/internal/v1/invites/accept",
+    "headers": {
+      "Accept": [
+        "application/json"
+      ],
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Authorization": [
+        "Bearer svc_authsess_\u003cPLACEHOLDER\u003e"
+      ],
+      "Content-Length": [
+        "147"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "User-Agent": [
+        "Go-http-client/1.1"
+      ]
+    },
+    "body": "{\"description\":\"golden accept\",\"principal_id\":\"22222222-2222-4222-8222-222222222222\",\"request_metadata\":{\"source\":\"golden\"},\"token\":\"invite-token\"}"
+  },
+  {
+    "verb": "organizations_deprovision",
+    "method": "POST",
+    "path": "/internal/v1/organizations/deprovision",
+    "headers": {
+      "Accept": [
+        "application/json"
+      ],
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Authorization": [
+        "Bearer svc_authsess_\u003cPLACEHOLDER\u003e"
+      ],
+      "Content-Length": [
+        "118"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "User-Agent": [
+        "Go-http-client/1.1"
+      ]
+    },
+    "body": "{\"actor_principal_id\":\"33333333-3333-4333-8333-333333333333\",\"organization_id\":\"11111111-1111-4111-8111-111111111111\"}"
+  },
+  {
+    "verb": "organizations_reactivate",
+    "method": "POST",
+    "path": "/internal/v1/organizations/reactivate",
+    "headers": {
+      "Accept": [
+        "application/json"
+      ],
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Authorization": [
+        "Bearer svc_authsess_\u003cPLACEHOLDER\u003e"
+      ],
+      "Content-Length": [
+        "134"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "User-Agent": [
+        "Go-http-client/1.1"
+      ]
+    },
+    "body": "{\"organization_id\":\"11111111-1111-4111-8111-111111111111\",\"actor_principal_id\":\"33333333-3333-4333-8333-333333333333\",\"if_revision\":3}"
+  },
+  {
+    "verb": "organizations_suspend",
+    "method": "POST",
+    "path": "/internal/v1/organizations/suspend",
+    "headers": {
+      "Accept": [
+        "application/json"
+      ],
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Authorization": [
+        "Bearer svc_authsess_\u003cPLACEHOLDER\u003e"
+      ],
+      "Content-Length": [
+        "134"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "User-Agent": [
+        "Go-http-client/1.1"
+      ]
+    },
+    "body": "{\"organization_id\":\"11111111-1111-4111-8111-111111111111\",\"actor_principal_id\":\"33333333-3333-4333-8333-333333333333\",\"if_revision\":5}"
+  },
+  {
+    "verb": "organizations_state",
+    "method": "POST",
+    "path": "/internal/v1/organizations/state",
+    "headers": {
+      "Accept": [
+        "application/json"
+      ],
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Authorization": [
+        "Bearer svc_authsess_\u003cPLACEHOLDER\u003e"
+      ],
+      "Content-Length": [
+        "58"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "User-Agent": [
+        "Go-http-client/1.1"
+      ]
+    },
+    "body": "{\"organization_id\":\"11111111-1111-4111-8111-111111111111\"}"
+  }
+]

@@ -1,8 +1,12 @@
 package providerfoundation
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
+	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 // PagerDutyStoredRevokeToken must reject what OAuthTokens.model_validate_json
@@ -67,5 +71,40 @@ func TestPagerDutyRevocationTokenDecodesByKeyVersion(t *testing.T) {
 	}
 	if RevocationKeyToken != "v1" || RevocationKeyOAuth != "oauth-v1" {
 		t.Error("the key version strings are stored in rows: they never change")
+	}
+}
+
+// The value the rotation writes to provider_oauth_credentials.token_encrypted (json.Marshal of pagerDutyOAuthTokens,
+// sealed by the same Fernet cipher, refreshTokens) is what the fence copies as oauth-v1: opened and decoded it gives the
+// refresh_token, or the access_token when the grant has none (refresh_token null).
+func TestTheStoredCredentialSealDecodesAsOAuthV1(t *testing.T) {
+	cipher, err := NewFernetDecryptor(secrets.NewValue("oauth-v1-seal-cell-key-for-tests-only"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	refresh := "seal-cell-refresh"
+	for _, tc := range []struct {
+		tokens pagerDutyOAuthTokens
+		want   string
+	}{
+		{pagerDutyOAuthTokens{AccessToken: "seal-cell-access", RefreshToken: &refresh, ExpiresAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), GrantedScopes: []string{"read"}}, refresh},
+		{pagerDutyOAuthTokens{AccessToken: "seal-cell-access-only", ExpiresAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), GrantedScopes: []string{"read"}}, "seal-cell-access-only"},
+	} {
+		encoded, err := json.Marshal(tc.tokens)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sealed, err := cipher.Encrypt(encoded)
+		if err != nil {
+			t.Fatal(err)
+		}
+		opened, err := cipher.Decrypt(sealed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := PagerDutyRevocationToken(RevocationKeyOAuth, opened)
+		if err != nil || got != tc.want {
+			t.Errorf("decoded %q, %v; want %q", got, err, tc.want)
+		}
 	}
 }

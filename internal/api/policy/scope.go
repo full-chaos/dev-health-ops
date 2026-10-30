@@ -149,7 +149,7 @@ func (s *Scope) OrgScope(next http.Handler) http.Handler {
 			allowed, err := s.mayUseOrg(r.Context(), user, headerOrgID)
 			if err != nil {
 				s.logger.ErrorContext(r.Context(), "api org scope: membership lookup failed", slog.String("user_id", user.UserID), slog.Bool("unavailable", isUnavailable(err)), slog.String("missing_grant", MissingGrant(err)))
-				WriteInternal(w)
+				s.writeLookupFailure(w, r, err)
 				return
 			}
 			if !allowed {
@@ -342,4 +342,16 @@ func (s *Scope) readsTokenOrg(r *http.Request) bool {
 	}
 	row, found := s.rows(RouteProfileFrom(r.Context()))
 	return !found || !row.NotOrgScoped
+}
+
+// writeLookupFailure answers a failed membership read of an X-Org-Id: on a
+// route that acts in an org (readsTokenOrg, go-api) 503 when the database is
+// temporarily unavailable, else 500, as the token org's read answers; on
+// every other route main's 500.
+func (s *Scope) writeLookupFailure(w http.ResponseWriter, r *http.Request, err error) {
+	if s.readsTokenOrg(r) {
+		WriteAuthFailure(w, "", err)
+		return
+	}
+	WriteInternal(w)
 }

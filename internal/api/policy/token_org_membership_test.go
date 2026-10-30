@@ -233,3 +233,27 @@ func TestTokenOrgIsReadOnARouteWithoutARow(t *testing.T) {
 		t.Fatalf("%d %q, reads %d; want the X-Org-Id refusal after one read", got.status, got.body, countReads(store, ownOrgKey))
 	}
 }
+
+// A failed membership read of an X-Org-Id naming another org answers 503 on a
+// go-api org-scoped route when the database is temporarily unavailable (as
+// the token org's read), and main's 500 where the token org is not read.
+func TestHeaderOrgMembershipReadErrorOnAnOrgScopedRoute(t *testing.T) {
+	unavailable := errors.Join(ErrUnavailable, errors.New("timeout"))
+	for name, tc := range map[string]struct {
+		scope  func(*fakeStore) *Scope
+		status int
+		body   string
+	}{
+		"go-api org-scoped route": {func(s *fakeStore) *Scope { return goAPIScope(t, s) }, 503, `{"detail":{"message":"Database temporarily unavailable"}}`},
+		"no declared rows":        {func(s *fakeStore) *Scope { return NewScope(authenticator(t, s), quiet()) }, 500, `{"detail":"Internal Server Error"}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := tokenOrgStore(true, "member")
+			store.errMember = unavailable
+			got := serve(orgScoped(tc.scope(store)), http.MethodGet, "/x", map[string]string{"Authorization": "Bearer " + sign(t, claims(nil)), "X-Org-Id": strangerOrg})
+			if got.status != tc.status || got.body != tc.body {
+				t.Fatalf("%d %q, want %d %q", got.status, got.body, tc.status, tc.body)
+			}
+		})
+	}
+}

@@ -357,7 +357,7 @@ func (h *handlers) updateOrganization(w http.ResponseWriter, r *http.Request) {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 		return
 	}
-	if h.orgReactivator != nil && patch.IsActive != nil && *patch.IsActive && !h.reactivateInAuth(w, r, orgID) {
+	if patch.IsActive != nil && !h.orgStatusInAuth(w, r, orgID, *patch.IsActive) {
 		return
 	}
 	updated, err := h.store.updateOrganization(ctx, orgID, patch)

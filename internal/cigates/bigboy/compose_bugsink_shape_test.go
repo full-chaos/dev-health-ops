@@ -15,7 +15,7 @@ var composeBugsinkVars = []string{"BUGSINK_CREATE_SUPERUSER", "BUGSINK_DB_PASSWO
 const composeBugsinkEnvFile = "./.bugsink-dev/bugsink.env"
 
 // composeBugsinkShape returns a finding unless the file is in exactly one of the two shapes:
-// old: the required variables are base plus the three BUGSINK_*, bugsink itself interpolates all three, and bugsink loads no
+// old: the required variables are base plus the three BUGSINK_*, bugsink's own environment interpolates all three, and bugsink loads no
 // .bugsink-dev env file;
 // new: the required variables are base only, bugsink's env_file is exactly the required .bugsink-dev/bugsink.env, and no
 // scalar of the file interpolates one of the three bugsink credential variables in any Compose form.
@@ -41,7 +41,7 @@ func composeBugsinkShape(required, base []string, bugsink doc, scalars []string)
 		}
 	}
 	used := map[string]bool{}
-	for _, s := range composeScalars(bugsink) {
+	for _, s := range composeScalars(bugsink["environment"]) {
 		for _, name := range composeInterpolatedNames(s) {
 			used[name] = true
 		}
@@ -56,8 +56,8 @@ func composeBugsinkShape(required, base []string, bugsink doc, scalars []string)
 	case equal(required, base) && exactFile && !interpolated:
 		return nil
 	}
-	return []string{fmt.Sprintf("compose.bigboy.yml requires %v (bugsink env_file %v, BUGSINK_* interpolated %v, bugsink uses all three %v): want the pins and DHO_API_CH_USERS_XML %v "+
-		"plus either the three bugsink variables %v, each used by bugsink (old form), or none of them with bugsink's env_file exactly %s, required (new form)",
+	return []string{fmt.Sprintf("compose.bigboy.yml requires %v (bugsink env_file %v, BUGSINK_* interpolated %v, bugsink's environment uses all three %v): want the pins and DHO_API_CH_USERS_XML %v "+
+		"plus either the three bugsink variables %v, each used in bugsink's own environment (old form), or none of them with bugsink's env_file exactly %s, required (new form)",
 		required, files, interpolated, bugsinkUsesAll, base, composeBugsinkVars, composeBugsinkEnvFile)}
 }
 

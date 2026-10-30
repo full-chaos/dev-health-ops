@@ -3,6 +3,7 @@ package policy
 import (
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -23,6 +24,17 @@ func tokenOrgStore(member bool, role string) *fakeStore {
 		store.roles[ownOrgKey] = role
 	}
 	return store
+}
+
+// goAPIScope is a scope with declared rows, as go-api's: every route is an
+// org-scoped row unless notOrgScoped names its profile.
+func goAPIScope(t *testing.T, store *fakeStore, notOrgScoped ...string) *Scope {
+	t.Helper()
+	scope := NewScope(authenticator(t, store), quiet())
+	scope.DeclaredRows(func(profile string) (BearerRow, bool) {
+		return BearerRow{AccessToken: true, NotOrgScoped: slices.Contains(notOrgScoped, profile)}, true
+	})
+	return scope
 }
 
 func countReads(store *fakeStore, key [2]uuid.UUID) int {
@@ -59,7 +71,7 @@ func TestOrgScopeReadsTheMembershipOfTheTokensOwnOrg(t *testing.T) {
 			if tc.header != "" {
 				headers["X-Org-Id"] = tc.header
 			}
-			got := serve(orgScoped(NewScope(authenticator(t, store), quiet())), http.MethodGet, "/x", headers)
+			got := serve(orgScoped(goAPIScope(t, store)), http.MethodGet, "/x", headers)
 			if got.status != tc.status || got.body != tc.body && !strings.HasPrefix(got.body, tc.body) {
 				t.Fatalf("%d %q, want %d %q", got.status, got.body, tc.status, tc.body)
 			}
@@ -73,7 +85,7 @@ func TestOrgScopeReadsTheMembershipOfTheTokensOwnOrg(t *testing.T) {
 // The refusal for the token's own org is the header refusal: same status,
 // body and headers.
 func TestTokenOrgRefusalIsTheHeaderRefusalByteForByte(t *testing.T) {
-	scope := NewScope(authenticator(t, tokenOrgStore(false, "")), quiet())
+	scope := goAPIScope(t, tokenOrgStore(false, ""))
 	token := "Bearer " + sign(t, claims(nil))
 	header := serve(orgScoped(scope), http.MethodGet, "/x", map[string]string{"Authorization": token, "X-Org-Id": strangerOrg})
 	tokenOrg := serve(orgScoped(scope), http.MethodGet, "/x", map[string]string{"Authorization": token})
@@ -110,7 +122,7 @@ func TestTokenOrgMembershipReadErrorIsNeverAPassOrA403(t *testing.T) {
 				if header != "" {
 					headers["X-Org-Id"] = header
 				}
-				got := serve(orgScoped(NewScope(authenticator(t, store), quiet())), http.MethodGet, "/x", headers)
+				got := serve(orgScoped(goAPIScope(t, store)), http.MethodGet, "/x", headers)
 				if got.status != tc.status || !strings.HasPrefix(got.body, tc.body) {
 					t.Fatalf("%d %q, want %d %q", got.status, got.body, tc.status, tc.body)
 				}
@@ -124,12 +136,12 @@ func TestTokenOrgMembershipReadErrorIsNeverAPassOrA403(t *testing.T) {
 func TestTokenOrgMembershipIsNotReadForASuperuserOrAnOrglessToken(t *testing.T) {
 	superuser := tokenOrgStore(false, "")
 	superuser.users[userID] = UserState{IsActive: true, IsSuperuser: true}
-	got := serve(orgScoped(NewScope(authenticator(t, superuser), quiet())), http.MethodGet, "/x", map[string]string{"Authorization": "Bearer " + sign(t, claims(nil))})
+	got := serve(orgScoped(goAPIScope(t, superuser)), http.MethodGet, "/x", map[string]string{"Authorization": "Bearer " + sign(t, claims(nil))})
 	if got.status != 200 || !strings.HasPrefix(got.body, "org="+ownOrg+" ") || len(superuser.membershipSeen) != 0 {
 		t.Fatalf("superuser: %d %q, reads %v", got.status, got.body, superuser.membershipSeen)
 	}
 	orgless := tokenOrgStore(false, "")
-	got = serve(orgScoped(NewScope(authenticator(t, orgless), quiet())), http.MethodGet, "/x",
+	got = serve(orgScoped(goAPIScope(t, orgless)), http.MethodGet, "/x",
 		map[string]string{"Authorization": "Bearer " + sign(t, claims(func(c jwt.MapClaims) { delete(c, "org_id") }))})
 	if got.status != 200 || !strings.HasPrefix(got.body, "org= ") || len(orgless.membershipSeen) != 0 {
 		t.Fatalf("orgless: %d %q, reads %v", got.status, got.body, orgless.membershipSeen)
@@ -174,11 +186,50 @@ func TestGuardReadsTheRoleOfTheTokensOwnOrgMembership(t *testing.T) {
 // Behind ReadOnce the org scope and the guard share one membership read.
 func TestOrgScopeAndGuardReadTheTokenOrgMembershipOncePerRequest(t *testing.T) {
 	store := tokenOrgStore(true, "admin")
-	auth := authenticator(t, store)
-	scope := NewScope(auth, quiet())
+	scope := goAPIScope(t, store)
+	auth := scope.auth
 	handler := auth.ReadOnce(scope.Principal(scope.OrgScope(scope.Impersonation(NewGuard(auth, quiet()).Wrap(AdminOrg, echo)))))
 	got := serve(handler, http.MethodGet, "/x", map[string]string{"Authorization": "Bearer " + sign(t, claims(func(c jwt.MapClaims) { c["role"] = "admin" }))})
 	if got.status != 200 || countReads(store, ownOrgKey) != 1 {
 		t.Fatalf("%d %q, reads %d, want 200 and 1", got.status, got.body, countReads(store, ownOrgKey))
+	}
+}
+
+// A route not acting in an org (a declared row with tenant requirement none or
+// cross_org_superuser_only) and a scope with no declared rows (query-api's
+// /graphql, whose edge reads the membership itself) answer a removed member's
+// token as on main, with no header and with an X-Org-Id naming the token's
+// org, and read no membership for it here.
+func TestTokenOrgIsNotReadOffOrgScopedRoutesOrWithoutDeclaredRows(t *testing.T) {
+	for name, build := range map[string]func(*fakeStore) *Scope{
+		"not org-scoped row": func(store *fakeStore) *Scope { return goAPIScope(t, store, rigProfile) },
+		"no declared rows":   func(store *fakeStore) *Scope { return NewScope(authenticator(t, store), quiet()) },
+	} {
+		for _, header := range []string{"", ownOrg} {
+			t.Run(name+"/header="+header, func(t *testing.T) {
+				store := tokenOrgStore(false, "")
+				headers := map[string]string{"Authorization": "Bearer " + sign(t, claims(nil))}
+				if header != "" {
+					headers["X-Org-Id"] = header
+				}
+				handler := RouteProfiles(func(*http.Request) (string, bool) { return rigProfile, true })(orgScoped(build(store)))
+				got := serve(handler, http.MethodGet, "/x", headers)
+				if got.status != 200 || !strings.HasPrefix(got.body, "org="+ownOrg+" ") || countReads(store, ownOrgKey) != 0 {
+					t.Fatalf("%d %q, reads %d; want main's 200 in the token's org and no read", got.status, got.body, countReads(store, ownOrgKey))
+				}
+			})
+		}
+	}
+}
+
+// A route without a declared row in a scope that declares rows reads the
+// token org's membership (fail closed).
+func TestTokenOrgIsReadOnARouteWithoutARow(t *testing.T) {
+	store := tokenOrgStore(false, "")
+	scope := NewScope(authenticator(t, store), quiet())
+	scope.DeclaredRows(func(string) (BearerRow, bool) { return BearerRow{}, false })
+	got := serve(orgScoped(scope), http.MethodGet, "/x", map[string]string{"Authorization": "Bearer " + sign(t, claims(nil))})
+	if got.status != http.StatusForbidden || countReads(store, ownOrgKey) != 1 {
+		t.Fatalf("%d %q, reads %d; want the X-Org-Id refusal after one read", got.status, got.body, countReads(store, ownOrgKey))
 	}
 }

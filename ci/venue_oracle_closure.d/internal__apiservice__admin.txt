@@ -77,6 +77,7 @@ internal/jobs/metrics/querybound
 internal/jobs/metrics/workitemblockers
 internal/jobs/metrics/workitemengine
 internal/jobs/metrics/workitemmetrics
+internal/jobs/providerrevocation
 internal/jobs/workgraph/linktier
 internal/jobs/workgraph/units
 internal/llmbudget

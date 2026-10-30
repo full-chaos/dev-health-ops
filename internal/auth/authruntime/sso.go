@@ -92,7 +92,7 @@ func oidcService(
 		Sessions:     sessions.OIDC(),
 		Secrets:      providerSecrets{cipher},
 		StateSecret:  contracts.NewSecretString(cfg.SSO.StateKey.Reveal()),
-		AppBaseURL:   cfg.SSO.AppBaseURL, DenialAudit: oidc.PGDenialAudit{Exec: pool},
+		AppBaseURL:   cfg.SSO.AppBaseURL, DenialAudit: oidc.PGDenialAudit{Exec: pool}, ProviderFailure: providerFailure(pool),
 		Logger: logger,
 	})
 }
@@ -135,7 +135,7 @@ func samlService(
 		Store:        samlIdentities{identities},
 		Memberships:  store,
 		BaseURL:      func() string { return base },
-		Logger:       logger,
+		Logger:       logger, ProviderFailure: providerFailure(pool),
 	}, nil
 }
 

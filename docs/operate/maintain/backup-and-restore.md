@@ -236,7 +236,10 @@ Order (nothing serves traffic until the last step):
    another timeline than the export, or lacks a revocation that the manifest names and the restored copy also lacks (a
    revocation the restored copy already holds is left as it is). Environment only, never a flag. Without it
    the revocations are only named (`requeue_provider_revocation`), and a second apply of the same manifest changes
-   nothing: set it before the `-apply` run (the dry run already names what it will queue again).
+   nothing: set it before the `-apply` run (the dry run already names what it will queue again). With it the apply also
+   carries the shadow copy's live login lockouts (auth and legacy `login_attempts`; a lock holds 15 minutes), raising
+   only: a restored lock is never shortened. Without it no lockout moves; a lock set after the target has usually
+   expired by the time a restore finishes anyway.
 6. Act on the `operator-action` lines the apply prints (ids only): users whose password may have changed after the
    target (their older password is live again: force a reset, ticket 11834); `provider_revocation_requeued`: with the
    PagerDuty client id configured on the API, disconnect or reconnect the credential of each named revocation once
@@ -244,8 +247,8 @@ Order (nothing serves traffic until the last step):
    revoke (a setup revoke is sent by a disconnect or callback of its org once the row is 15 minutes old: the apply
    keeps its created_at and sets attempts to 0, and the route skips a younger one, so it stays pending until then);
    `provider_revocation_requeued_blocked`:
-   the credential was connected after the target, so the restored copy has no credential row and a disconnect does not
-   send the revoke (it answers `disconnected: true` anyway); these wait for the revocation worker (the ticket the line
+   the credential was connected after the target, so the restored copy has no credential row; a disconnect of the name
+   still sends them (ticket 12011), and the revocation worker sends them (the ticket the line
    names); `requeue_provider_revocation`: tokens the apply could only name: revocations of an apply with no source set
    (revoke those tokens at the provider by hand), and provider credentials it deleted (`source=public.provider_oauth_credentials`):
    their restored token was rotated, reconnected or disconnected after the target, the delete writes no revocation row,
@@ -256,6 +259,14 @@ Order (nothing serves traffic until the last step):
    `auth-migrate restore-fence status`, or read-only:
    `SELECT jsonb_array_elements_text(a->'ids') FROM auth.restore_fence_state s, jsonb_array_elements(s.operator_actions) a WHERE a->>'kind' = 'requeue_provider_revocation' AND a->>'source' = 'public.provider_oauth_credentials';`
    (the schema is `AUTH_DATABASE_SCHEMA`, `auth` by default).
+   A re-queued revocation row needs no route afterwards: the revocation worker (`sync.provider_oauth_revocations`, on
+   the sync worker, every 5 to 10 minutes) sends every pending row once `PAGER_DUTY_CLIENT_ID` is set, also for a
+   credential the restored database never had. A re-queued row is due at its first run (only a setup row created less
+   than 15 minutes ago waits, as its callback may still be running); after a refusal it waits 1, 2, 4 ... minutes. A row PagerDuty refuses 10 times stays pending and is named by id in a
+   `provider_oauth_revocations.exhausted` WARN line (the `provider_oauth_revocations_exhausted` gauge counts them), and
+   every run lists such rows, also the ones a disconnect pushed there, in one `provider_oauth_revocations.exhausted_rows`
+   WARN line (the total and up to 25 ids with the class of the last refusal): disconnect that credential again, or
+   revoke the token at PagerDuty by hand.
 7. Reset the read-only default: `ALTER SYSTEM RESET default_transaction_read_only;` then `SELECT pg_reload_conf();`.
 8. Start auth-service. Its readiness check `restore_fence` must be true (`/readyz`).
 9. `auth-migrate restore-fence status` prints `fenced=true` and the timeline (and the stored operator actions).
@@ -264,6 +275,9 @@ What the apply puts back, so that nothing removed after the target time stays al
 credential registry, signing keys, resource grants, memberships, service accounts, workloads, workload bindings,
 principals and organizations disabled, consumed link credentials and consumed refresh credentials, replaced link
 credentials, a pending invite the source no longer holds pending (it ends revoked, never accepted), SAML replay evidence, every SSO flow state (users start the flow again),
+external identities unlinked after the target (deleted again and named in `identity_unlinked`, ids only; a link made or
+re-made after the target is not carried, the user links again; a blind margin deletes none and lists every link for
+review),
 and the legacy public tables: refresh tokens, service and ingest credentials, webhook bindings, invites, users (disabled,
 token version, and a user the source deleted is disabled, never deleted), membership mirror rows, single-use reset and
 verification tokens, and SAML replays. Revision floors are raised past everything the source reached, so no

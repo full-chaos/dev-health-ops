@@ -212,10 +212,12 @@ VALUES ($1, $2, $3, $4, $5, $6, NULL, NULL, NULL, $7, $8, $9)`,
 
 // recordSSOFailure is process_oidc_callback's / process_saml_response's /
 // provision_or_get_user's `except SSOProcessingError` block, shared across
-// both protocols: record_error onto the provider (last_error, status
-// "error"), an SSO_LOGIN audit row (status failure, resource
-// SSO_PROVIDER), commit, then the response. protocol is "oidc" or "saml";
-// stage is "" for an exchange/validation failure or "provisioning" for a
+// the protocols: the failure is recorded on the provider (last_error,
+// last_error_at, updated_at; its status is left as it was, so a failed
+// sign-in never changes whether the provider is active), an SSO_LOGIN
+// audit row (status failure, resource SSO_PROVIDER), commit, then the
+// response. protocol is "oidc", "oauth" or "saml"; stage is "" for an
+// exchange/validation failure or "provisioning" for a
 // provision_or_get_user failure, matching extra_metadata's own shape.
 func (h handlers) recordSSOFailure(ctx context.Context, w http.ResponseWriter, r *http.Request,
 	orgID string, providerID uuid.UUID, errMsg string, status int, detail pyjson.Value, protocol, stage string) {
@@ -227,8 +229,7 @@ func (h handlers) recordSSOFailure(ctx context.Context, w http.ResponseWriter, r
 	defer func() { _ = tx.Rollback(context.Background()) }()
 	sanitized := pythonparity.SanitizeErrorTextHardened(errMsg, 4000)
 	now := h.Now()
-	if _, err := tx.Exec(ctx, `UPDATE sso_providers SET last_error = $2, last_error_at = $3, status = 'error', updated_at = $3
-WHERE id = $1::uuid`, providerID, sanitized, now.UTC()); err != nil {
+	if _, err := tx.Exec(ctx, recordProviderFailureSQL, providerID, sanitized, now.UTC()); err != nil {
 		h.fail(w, r, "record provider error", err)
 		return
 	}
@@ -255,6 +256,11 @@ WHERE id = $1::uuid`, providerID, sanitized, now.UTC()); err != nil {
 	}
 	policy.WriteDetail(w, status, detail, nil)
 }
+
+// recordProviderFailureSQL records a failure on the provider row: the error
+// text and its time, never the provider's status.
+const recordProviderFailureSQL = `UPDATE sso_providers SET last_error = $2, last_error_at = $3, updated_at = $3
+WHERE id = $1::uuid`
 
 // recordSSOUnauthenticated is D2738's ruling on the r1 P1 (an
 // unauthenticated invalid callback disabling the provider org-wide): a
@@ -286,7 +292,7 @@ func (h handlers) recordSSOUnauthenticated(ctx context.Context, w http.ResponseW
 }
 
 // recordSSOAuthenticatedDenial is D2742/D2744's third bucket, alongside
-// recordSSOFailure (flips the row) and recordSSOUnauthenticated (D2738,
+// recordSSOFailure (records last_error on the row) and recordSSOUnauthenticated (D2738,
 // no mutation because the caller proved nothing): a failure that occurs
 // AFTER the caller authenticated (a state token verified, or an
 // assertion's signature verified) but reflects a per-REQUEST access
@@ -295,7 +301,7 @@ func (h handlers) recordSSOUnauthenticated(ctx context.Context, w http.ResponseW
 // saml.go) is the second: the caller genuinely holds a real, validly-
 // signed, unexpired assertion, but reusing an already-consumed one says
 // nothing about whether the PROVIDER is broken (unlike a real signature/
-// config failure, which legitimately flips the row via recordSSOFailure),
+// config failure, which is recorded on the row via recordSSOFailure),
 // so it is audited (a defender should see repeated denials/replays) but
 // never mutates sso_providers, at its own status code (403 for OAuth's
 // auto-provision-disabled, 400 for SAML's replay -- matching each

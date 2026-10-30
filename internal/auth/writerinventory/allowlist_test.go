@@ -114,13 +114,23 @@ var Allowlist = []Entry{
 	{File: "internal/auth/restorefence/apply.go", Func: "Apply", Table: "auth.restore_fence_state", Verb: "INSERT"},
 	{File: "internal/auth/restorefence/apply.go", Func: "Apply", Table: "auth.sso_flow_states", Verb: "UPDATE"},
 	{File: "internal/auth/restorefence/init.go", Func: "initInTx", Table: "auth.restore_fence_state", Verb: "INSERT"},
+	// 11848 (acp GO on PLAN-11848 v1, Q3): the fence raises the live login lockouts it reads from the source, raise-only, in the apply transaction.
+	{File: "internal/auth/restorefence/lockouts.go", Func: "authLocksRaiseSQL", Table: "auth.login_attempts", Verb: "UPSERT"},
+	{File: "internal/auth/restorefence/lockouts.go", Func: "raiseLockouts", Table: "auth.login_attempts", Verb: "UPSERT"},
+	{File: "internal/auth/restorefence/lockouts.go", Func: "raiseLockouts", Table: "public.login_attempts", Verb: "UPSERT"},
 	{File: "internal/auth/restorefence/init.go", Func: "initInsertSQL", Table: "auth.restore_fence_state", Verb: "INSERT"},
 	{File: "internal/auth/restorefence/specs.go", Func: "flowStatesSQL", Table: "auth.sso_flow_states", Verb: "UPDATE"},
 	{File: "internal/auth/session/end_all.go", Func: "Store.EndAllInTx", Table: "public.refresh_tokens", Verb: "UPDATE"},
+	// acp ruling D6512 (CHAOS-12045): a membership removal revokes the member's go-api refresh tokens of that organization
+	// (revoked_at only, rows locked NOWAIT) inside the removal's audit.Commit; its auth sessions and credentials end
+	// through Store.revokeSessions (the rows below).
+	{File: "internal/auth/session/end_org.go", Func: "Store.EndOrgInTx", Table: "public.refresh_tokens", Verb: "UPDATE"},
 	{File: "internal/auth/identity/oidc/flowstore.go", Func: "PGFlowStore.Begin", Table: "auth.sso_flow_states", Verb: "INSERT"},
 	{File: "internal/auth/identity/oidc/flowstore.go", Func: "PGFlowStore.Consume", Table: "auth.sso_flow_states", Verb: "UPDATE"},
 	{File: "internal/auth/identity/organization.go", Func: "Store.insertOrganization", Table: "auth.organizations", Verb: "INSERT"},
 	{File: "internal/auth/identity/organization.go", Func: "Store.updateOrganization", Table: "auth.organizations", Verb: "UPDATE"},
+	// acp ruling, CHAOS-12032 (D6515): go-api's provider failure record (recordSSOFailure) by the OAuth and SAML sign-ins: last_error, last_error_at and updated_at, never the status, one transaction with the audit row.
+	{File: "internal/auth/identity/ssoaudit/ssoaudit.go", Func: "PGProviderFailure.Failed", Table: "public.sso_providers", Verb: "UPDATE"},
 	// The users-owned projection (CHAOS-10630): written only inside the audit.Commit that writes the auth rows; the runtime role holds the matching column grants only while AUTH_USERS_OWNED is on.
 	{File: "internal/auth/identity/publicusers.go", Func: "insertPublicOwnedOrganization", Table: "public.memberships", Verb: "INSERT"},
 	{File: "internal/auth/identity/publicusers.go", Func: "insertPublicOwnedOrganization", Table: "public.organizations", Verb: "INSERT"},
@@ -167,6 +177,8 @@ var Allowlist = []Entry{
 	{File: "internal/auth/session/unpinned.go", Func: "RevokeUnpinned", Table: "auth.refresh_credentials", Verb: "UPDATE"},
 	{File: "internal/auth/session/unpinned.go", Func: "RevokeUnpinned", Table: "auth.sessions", Verb: "UPDATE"},
 	// The workload registry (CHAOS-10980; new auth-table writers ruled by acp 10-26 00:4xZ): written by the auth-migrate operator role, inside audit.Commit.
+	{File: "internal/auth/workload/enable.go", Func: "Store.EnableWorkload", Table: "auth.principals", Verb: "UPDATE"},
+	{File: "internal/auth/workload/enable.go", Func: "Store.EnableWorkload", Table: "auth.workloads", Verb: "UPDATE"},
 	{File: "internal/auth/workload/store.go", Func: "Store.AddBinding", Table: "auth.workload_bindings", Verb: "INSERT"},
 	{File: "internal/auth/workload/store.go", Func: "Store.Register", Table: "auth.principals", Verb: "INSERT"},
 	{File: "internal/auth/workload/store.go", Func: "Store.Register", Table: "auth.workloads", Verb: "INSERT"},

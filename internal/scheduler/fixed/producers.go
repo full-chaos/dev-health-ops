@@ -147,6 +147,35 @@ func (LLMBudgetStaleProducer) Produce(
 	return Outcome{Requests: []JobRequest{{Kind: jobcontract.KindLLMBudgetStaleReservations, Envelope: envelope}}}, nil
 }
 
+// ProviderRevocationsProducer emits one send of the due provider OAuth
+// revocation rows. The envelope carries only the due time: never a row id or a token.
+type ProviderRevocationsProducer struct{}
+
+// NewProviderRevocationsProducer constructs the provider revocation producer.
+func NewProviderRevocationsProducer() Producer { return ProviderRevocationsProducer{} }
+
+func (ProviderRevocationsProducer) ID() string { return ProducerProviderRevocations }
+
+func (ProviderRevocationsProducer) Produce(
+	_ context.Context,
+	_ pgx.Tx,
+	schedule Schedule,
+	occurrence Occurrence,
+) (Outcome, error) {
+	scheduledFor := occurrence.ScheduledFor.UTC().Format(time.RFC3339)
+	envelope := jobcontract.Envelope{
+		ContractVersion: jobcontract.ContractVersionV1,
+		CorrelationID:   "fixed-schedule:" + schedule.ID + ":" + scheduledFor,
+		IdempotencyKey:  "provider-oauth-revocations:" + scheduledFor,
+		Domain: jobcontract.DomainLink{
+			Type: "schedule_occurrence",
+			ID:   OccurrenceDomainID(occurrence),
+		},
+		Payload: jobcontract.ProviderOAuthRevocationsPayload{ScheduledFor: scheduledFor},
+	}
+	return Outcome{Requests: []JobRequest{{Kind: jobcontract.KindProviderOAuthRevocations, Envelope: envelope}}}, nil
+}
+
 // DimensionFoldProducer emits one fold of the declared dimension tables. The
 // worker owns the table list and every guard, so the envelope carries only the
 // due time.

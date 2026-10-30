@@ -743,6 +743,10 @@ func domainPosture() RolePosture {
 			// through this encrypted token row and atomically rotate an expiring
 			// token. They need no INSERT or DELETE authority.
 			{"provider_oauth_credentials", false, true, false},
+			// CHAOS-12010: the revocation worker claims a pending row (SELECT ...
+			// FOR UPDATE), then deletes it once sent or records a refused attempt
+			// (UPDATE attempts/last_error/updated_at). It never queues one: no INSERT.
+			{"provider_oauth_revocations", false, true, true},
 			// The daily metrics finalize upserts one row per organization (the activity
 			// projection the auth plane reads for the login organization choice):
 			// INSERT ... ON CONFLICT DO UPDATE, never DELETE (the row goes with its

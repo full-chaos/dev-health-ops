@@ -45,7 +45,7 @@ func (s *removedMemberStore) ActiveImpersonation(context.Context, uuid.UUID) (*p
 
 func (s *removedMemberStore) ReadsPlatformRoles() bool { return false }
 
-var routeParameter = regexp.MustCompile(`\{[^}]+\}`)
+var tokenOrgRouteParameter = regexp.MustCompile(`\{[^}]+\}`)
 
 // TestEveryOrgScopedRouteReadsTheTokenOrgMembership is the census of the
 // go-api routes declared org_scoped: on the real listener chain (ReadOnce,
@@ -125,7 +125,7 @@ func TestEveryOrgScopedRouteReadsTheTokenOrgMembership(t *testing.T) {
 			store.mu.Lock()
 			store.reads = map[[2]uuid.UUID]int{}
 			store.mu.Unlock()
-			path := routeParameter.ReplaceAllStringFunc(row.Route, func(string) string { return uuid.NewString() })
+			path := tokenOrgRouteParameter.ReplaceAllStringFunc(row.Route, func(string) string { return uuid.NewString() })
 			request := httptest.NewRequest(row.Method, path, strings.NewReader("{}"))
 			request.Header.Set("Authorization", "Bearer "+access)
 			request.Header.Set("Content-Type", "application/json")

@@ -418,13 +418,9 @@ func (h *handlers) orgDeletionSendOneRevocation(ctx context.Context, orgIDStr st
 		}
 		return false, fmt.Errorf("claim pagerduty revocation: %w", err)
 	}
-	plaintext, decryptErr := h.decryptor.Decrypt(secrets.NewValue(encrypted))
-	if decryptErr != nil {
-		return false, fmt.Errorf("decrypt pagerduty revocation %s: %w", id, decryptErr)
-	}
-	token, decodeErr := providerfoundation.PagerDutyRevocationToken(keyVersion, plaintext)
+	token, decodeErr := pagerDutyRevocationTokenOf(h.decryptor, encrypted, keyVersion)
 	if decodeErr != nil {
-		return false, fmt.Errorf("decode pagerduty revocation %s: %w", id, decodeErr)
+		return false, fmt.Errorf("open pagerduty revocation %s: %w", id, decodeErr)
 	}
 	if revokeErr := providerfoundation.RevokePagerDutyOAuthToken(ctx, h.httpDoer, h.pagerDuty, token); revokeErr != nil {
 		return false, fmt.Errorf("revoke pagerduty pending revocation %s: %w", id, revokeErr)

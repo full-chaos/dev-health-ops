@@ -248,6 +248,18 @@ func pagerDutyRevocationClaimSQL(predicate string) string {
 	return `SELECT id, token_encrypted, token_key_version FROM provider_oauth_revocations WHERE ` + predicate + ` ORDER BY created_at FOR UPDATE SKIP LOCKED`
 }
 
+// pagerDutyRevocationTokenOf opens a claimed row and decodes it by its key version: the token every route sender
+// revokes (an oauth-v1 row holds a stored credential's OAuthTokens JSON).
+func pagerDutyRevocationTokenOf(decryptor interface {
+	Decrypt(secrets.Value) ([]byte, error)
+}, encrypted, keyVersion string) (string, error) {
+	plaintext, err := decryptor.Decrypt(secrets.NewValue(encrypted))
+	if err != nil {
+		return "", err
+	}
+	return providerfoundation.PagerDutyRevocationToken(keyVersion, plaintext)
+}
+
 // pagerDutyRevocationClaimOneSQL is the same claim for one row (org deletion
 // sends each row in its own transaction).
 func pagerDutyRevocationClaimOneSQL(predicate string) string {
@@ -299,11 +311,7 @@ func (h *handlers) retryPagerDutyRevocationRows(ctx context.Context, orgID, pred
 
 	complete := true
 	for _, row := range pending {
-		plaintext, decErr := h.decryptor.Decrypt(secrets.NewValue(row.encrypted))
-		var token string
-		if decErr == nil {
-			token, decErr = providerfoundation.PagerDutyRevocationToken(row.keyVersion, plaintext)
-		}
+		token, decErr := pagerDutyRevocationTokenOf(h.decryptor, row.encrypted, row.keyVersion)
 		revokeErr := decErr
 		if decErr == nil {
 			revokeErr = providerfoundation.RevokePagerDutyOAuthToken(ctx, h.httpDoer, h.pagerDuty, token)

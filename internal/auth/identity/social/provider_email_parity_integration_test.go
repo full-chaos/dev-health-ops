@@ -23,7 +23,8 @@ const pinnedNonTextRow = "gitlab_number_email_verified"
 // bodies, so each row and scenario has its own provider identity.
 func subjectRewrite(inner http.Handler, n int) http.Handler {
 	digits := strconv.Itoa(n)
-	pairs := [][2]string{{`"id": 7`, `"id": ` + digits}, {`"resource_owner_id": 7`, `"resource_owner_id": ` + digits}, {`"g7"`, `"g` + digits + `"`}}
+	pairs := [][2]string{{`"id": 7`, `"id": ` + digits}, {`"resource_owner_id": 7`, `"resource_owner_id": ` + digits}, {`"g7"`, `"g` + digits + `"`},
+		{`user@example.test`, `user-` + digits + `@example.test`}}
 	utf16le := func(s string) []byte {
 		var out []byte
 		for _, u := range utf16.Encode([]rune(s)) {
@@ -47,11 +48,25 @@ func subjectRewrite(inner http.Handler, n int) http.Handler {
 	})
 }
 
+// unknownPassAnswer is what an unknown identity gets on a "pass" row, from the row's email form (go-api's rule, both
+// planes): a JSON string the provider verified makes a new account, an unverified one is refused 403, and a verified
+// value that is not a string is the 500.
+func unknownPassAnswer(row parityRow) string {
+	switch {
+	case row.email[0] != '"':
+		return "500 Internal Server Error"
+	case row.verified == "false":
+		return "403 The provider has not verified this email address"
+	}
+	return "new account"
+}
+
 // The full sign-in on a real identity store for every row of ci/social_provider_email_parity.tsv (PLAN-12026 Q6), for
 // an unknown identity and for one linked to a go-api account: a refused row answers the table's answer and writes
-// nothing, linked or not; a passing row signs the linked account in. The pinned non-text row answers an unknown
-// identity with go-api's 500, users owned by auth-service or not, and writes nothing. ("id=" rows serve one fixed id
-// and stay unit cells.)
+// nothing, linked or not; a passing row signs the linked account in, and gives an unknown identity unknownPassAnswer:
+// a new account (users owned by auth-service: 200 and a session; not owned: the sign-up refusal, nothing written), or
+// the 403 or 500 with nothing written (the pinned non-text row among them). Each row serves its own address. ("id=" rows
+// serve one fixed id and stay unit cells.)
 func TestExchangeParityTableOnARealIdentityStore(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t, ctx)
@@ -93,12 +108,19 @@ func TestExchangeParityTableOnARealIdentityStore(t *testing.T) {
 					strings.NewReader(`{"provider":"`+string(provider)+`","provider_access_token":"tok"}`)))
 				server.Close()
 				got := strconv.Itoa(rec.Code) + " " + parityDetail(rec.Body.String())
-				switch {
-				case row.want != "pass" || (row.id == pinnedNonTextRow && !scenario.linked):
-					want := row.want
-					if row.want == "pass" {
-						want = "500 Internal Server Error"
+				want := row.want
+				if want == "pass" && !scenario.linked {
+					want = unknownPassAnswer(row)
+					if want == "new account" && !scenario.owns {
+						want = "403 Sign-up with " + providerLabel(provider) + " is not available"
 					}
+				}
+				switch {
+				case want == "new account":
+					if rec.Code != http.StatusOK || sessions.written.Load() != 1 {
+						t.Fatalf("%s: %s with %d sessions, want a new account and its session", scenario.name, got, sessions.written.Load())
+					}
+				case want != "pass":
 					if got != want || sessions.written.Load() != 0 {
 						t.Fatalf("%s: %s with %d sessions, want %s and none", scenario.name, got, sessions.written.Load(), want)
 					}

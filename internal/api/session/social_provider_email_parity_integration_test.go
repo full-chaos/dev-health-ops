@@ -36,7 +36,8 @@ const pinnedNonTextRow = "gitlab_number_email_verified"
 // bodies, so each row and scenario has its own provider identity.
 func subjectRewrite(inner http.Handler, n int) http.Handler {
 	digits := strconv.Itoa(n)
-	pairs := [][2]string{{`"id": 7`, `"id": ` + digits}, {`"resource_owner_id": 7`, `"resource_owner_id": ` + digits}, {`"g7"`, `"g` + digits + `"`}}
+	pairs := [][2]string{{`"id": 7`, `"id": ` + digits}, {`"resource_owner_id": 7`, `"resource_owner_id": ` + digits}, {`"g7"`, `"g` + digits + `"`},
+		{`user@example.test`, `user-` + digits + `@example.test`}}
 	utf16le := func(s string) []byte {
 		var out []byte
 		for _, u := range utf16.Encode([]rune(s)) {
@@ -74,11 +75,26 @@ func bodyKeys(body []byte) []string {
 	return keys
 }
 
+// unknownPassAnswer is what an unknown identity gets on a "pass" row, from the row's email form (go-api's rule, both
+// planes): a JSON string the provider verified makes a new account, an unverified one is refused 403, and a verified
+// value that is not a string is the 500.
+func unknownPassAnswer(row parityRow) string {
+	switch {
+	case row.email[0] != '"':
+		return "500 Internal Server Error"
+	case row.verified == "false":
+		return "403 The provider has not verified this email address"
+	}
+	return "new account"
+}
+
 // go-api's social login on a real database for every row of ci/social_provider_email_parity.tsv (the reference plane
 // of PLAN-12026 Q6), for an unknown identity and for one linked to a users row: a refused row answers the table's
 // answer and writes nothing, linked or not; a passing row signs the linked user in (go-api records the refresh token
-// only for a user with a membership, so the linked user is a member of one organization: one refresh_tokens row). The pinned
-// non-text row answers an unknown identity with the 500 and writes nothing. ("id=" rows stay unit cells.)
+// only for a user with a membership, so the linked user is a member of one organization: one refresh_tokens row). An
+// unknown identity on a passing row gets unknownPassAnswer: a new account (one users row, no refresh row), or the 403 or
+// 500 with nothing written (the pinned non-text row among them). Each row serves its own address. ("id=" rows stay unit
+// cells.)
 func TestSocialLoginParityTableOnARealDatabase(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
@@ -149,12 +165,17 @@ is_verified, is_superuser, token_version, created_at, updated_at) VALUES ($1, $2
 				handler.ServeHTTP(w, r)
 				server.Close()
 				got := strconv.Itoa(w.Code) + " " + detailMessage(w.Body.String())
+				want := row.want
+				if want == "pass" && !linked {
+					want = unknownPassAnswer(row)
+				}
 				switch {
-				case row.want != "pass" || (row.id == pinnedNonTextRow && !linked):
-					want := row.want
-					if row.want == "pass" {
-						want = "500 Internal Server Error"
+				case want == "new account":
+					if w.Code != http.StatusOK || count("users") != users+1 || count("refresh_tokens") != tokens {
+						t.Fatalf("unknown: %d with body keys %v, users %d -> %d, refresh tokens %d -> %d; want a new account (no membership, no refresh row)",
+							w.Code, bodyKeys(w.Body.Bytes()), users, count("users"), tokens, count("refresh_tokens"))
 					}
+				case want != "pass":
 					if got != want || count("users") != users || count("refresh_tokens") != tokens {
 						t.Fatalf("linked %v: %s, users %d -> %d, refresh tokens %d -> %d; want %s and no row", linked, got,
 							users, count("users"), tokens, count("refresh_tokens"), want)

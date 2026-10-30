@@ -19,6 +19,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
+	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
@@ -29,8 +30,18 @@ type Config struct {
 	// OwnsUsers is AUTH_USERS_OWNED. Off, go-api writes memberships and every
 	// verb refuses with ErrNotOwned.
 	OwnsUsers bool
-	Logger    *slog.Logger
-	Meter     metric.Meter
+	// Sessions ends a removed member's sessions of the organization in the
+	// removal's transaction; nil ends none.
+	Sessions SessionEnder
+	Logger   *slog.Logger
+	Meter    metric.Meter
+}
+
+// SessionEnder is the session domain a removal ends credentials through
+// (*session.Store).
+type SessionEnder interface {
+	EndOrgInTx(ctx context.Context, tx audit.TxOps, principalID, organizationID uuid.UUID) (session.Ended, error)
+	RecordEnded(ctx context.Context, ended session.Ended)
 }
 
 // Locked is what Authorize sees: the organization and the principals the verb
@@ -78,6 +89,7 @@ type Store struct {
 	pool      *pgxpool.Pool
 	q         string
 	ownsUsers bool
+	sessions  SessionEnder
 	commit    func(context.Context, audit.Mutation) error
 	logger    *slog.Logger
 	mutations metric.Int64Counter
@@ -90,7 +102,7 @@ func New(cfg Config) (*Store, error) {
 	if cfg.Schema.String() == "" {
 		return nil, errors.New("membership: no auth schema")
 	}
-	s := &Store{pool: cfg.Pool, q: authschema.Quote(cfg.Schema), ownsUsers: cfg.OwnsUsers, logger: cfg.Logger}
+	s := &Store{pool: cfg.Pool, q: authschema.Quote(cfg.Schema), ownsUsers: cfg.OwnsUsers, sessions: cfg.Sessions, logger: cfg.Logger}
 	s.commit = func(ctx context.Context, m audit.Mutation) error { return audit.Commit(ctx, cfg.Pool, cfg.Schema, m) }
 	if s.logger == nil {
 		s.logger = slog.Default()
@@ -115,7 +127,7 @@ func (s *Store) record(ctx context.Context, v verb, err error) {
 // wrapped in ErrStore.
 var refusals = []error{ErrNotOwned, ErrRoleInvalid, ErrNotMember, ErrAlreadyMember, ErrSuspended, ErrLastOwner,
 	ErrNotOwner, ErrTargetNotMember, ErrRoleMissing, ErrRevisionConflict, ErrOrgNotFound, ErrOrgSuspended,
-	ErrPrincipalNotFound, ErrInviterNotFound, ErrDenied, ErrSuperuserRequired, errStateMoved}
+	ErrPrincipalNotFound, ErrInviterNotFound, ErrDenied, ErrSuperuserRequired, errStateMoved, errSessionsBusy}
 
 func (s *Store) run(ctx context.Context, v verb, m audit.Mutation) (err error) {
 	defer func() {
@@ -215,6 +227,13 @@ func (q poolQuerier) queryRow(ctx context.Context, sql string, args ...any) pgx.
 //  4. invite rows: auth.invites, then public.org_invites, FOR UPDATE;
 //  5. public.memberships: the organization's owner rows and the pairs, FOR UPDATE, ORDER BY id;
 //  6. auth.memberships pair rows FOR UPDATE, ORDER BY id;
+//     6a. a removal only: the pair's auth.sessions FOR UPDATE NOWAIT, ORDER
+//     BY id, then their refresh credentials, then the pair's
+//     public.refresh_tokens FOR UPDATE NOWAIT (session.Store.EndOrgInTx). An
+//     Exchange holds its session row and then needs a key-share lock on the
+//     principal (the new credential's foreign key), so waiting here would
+//     close a cycle with step 1: a locked row rolls the removal back and it
+//     is planned again;
 //  7. aggregate_revisions, inside audit.Commit.
 //
 // Steps 1 and 2 take every id any later statement of the verb references,
@@ -510,8 +529,17 @@ func refusedNext(prev state) state {
 // locks: the verb is planned again.
 var errStateMoved = errors.New("membership: the rows changed while the change was planned")
 
+// errSessionsBusy reports that a removal found a session or go-api refresh
+// token row of the pair locked by another writer (session.ErrBusy). The whole
+// transaction is rolled back, which releases the principal locks the other
+// writer may be waiting for, and the verb is planned again.
+var errSessionsBusy = errors.New("membership: a session of the removed member is locked by another writer")
+
 // planAttempts bounds the plan-then-lock loop.
 const planAttempts = 3
+
+// busyBackoff is the wait before the next attempt after errSessionsBusy.
+var busyBackoff = [planAttempts - 1]time.Duration{25 * time.Millisecond, 75 * time.Millisecond}
 
 // pairPlan is one pair's change as planned from a lock-free read: the audit
 // row and the event are fixed before the transaction (audit.Mutation), and
@@ -559,7 +587,14 @@ func (s *Store) mutate(ctx context.Context, v verb, c Change) (*Membership, erro
 	}
 	ids := []uuid.UUID{c.PrincipalID}
 	var err error
-	for range planAttempts {
+	var ended session.Ended
+	for attempt := range planAttempts {
+		if attempt > 0 && errors.Is(err, errSessionsBusy) {
+			if werr := sleepCtx(ctx, busyBackoff[attempt-1]); werr != nil {
+				return nil, fmt.Errorf("%w: %s: %w", ErrStore, v, werr)
+			}
+		}
+		ended = session.Ended{}
 		var read *locked
 		read, err = s.readPairs(ctx, poolQuerier{s.pool}, c.OrgID, ids, c.InvitedBy, c.Actor.PrincipalID, nil, false, nil)
 		if err != nil {
@@ -601,17 +636,39 @@ func (s *Store) mutate(ctx context.Context, v verb, c Change) (*Membership, erro
 				if d.noop {
 					return nil
 				}
-				return s.write(ctx, tx, c.OrgID, p, plan.id, d.next, v == verbAdd, c.InvitedBy)
+				if err := s.write(ctx, tx, c.OrgID, p, plan.id, d.next, v == verbAdd, c.InvitedBy); err != nil {
+					return err
+				}
+				if v != verbRemove || s.sessions == nil {
+					return nil
+				}
+				ended, err = s.sessions.EndOrgInTx(ctx, tx, c.PrincipalID, c.OrgID)
+				if errors.Is(err, session.ErrBusy) {
+					return errSessionsBusy
+				}
+				return err
 			},
-			Audit:  auditFor(v, c.OrgID, c.PrincipalID, plan.id, c.Actor, plan.prev, plan.next),
-			Events: []audit.OutboxEvent{eventFor(v, plan.id, plan.next)},
+			Audit:    auditFor(v, c.OrgID, c.PrincipalID, plan.id, c.Actor, plan.prev, plan.next),
+			Events:   []audit.OutboxEvent{eventFor(v, plan.id, plan.next)},
+			Refusals: []error{errSessionsBusy},
 		})
-		if !errors.Is(err, errStateMoved) {
+		if !errors.Is(err, errStateMoved) && !errors.Is(err, errSessionsBusy) {
 			break
 		}
 	}
+	if errors.Is(err, errSessionsBusy) {
+		s.logger.WarnContext(ctx, "membership: removal gave up: a session of the member stayed locked", "verb", string(v))
+		return nil, fmt.Errorf("%w: %s: %w", ErrStore, v, err)
+	}
 	if err != nil {
 		return nil, err
+	}
+	if s.sessions != nil {
+		s.sessions.RecordEnded(ctx, ended)
+		if ended != (session.Ended{}) {
+			s.logger.InfoContext(ctx, "membership removed; its sessions of the organization ended", "organization_id", c.OrgID.String(),
+				"principal_id", c.PrincipalID.String(), "sessions", ended.Sessions, "refresh_tokens", ended.RefreshTokens)
+		}
 	}
 	return s.Get(ctx, c.OrgID, c.PrincipalID)
 }
@@ -774,4 +831,15 @@ WHERE m.organization_id = $1 AND m.principal_id = $2`, orgID, principalID).
 		return nil, fmt.Errorf("%w: read: %w", ErrStore, err)
 	}
 	return &m, nil
+}
+
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }

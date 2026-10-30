@@ -370,6 +370,9 @@ func TestTheOpenAPIPathGateChecksTheOneOfExtraMembers(t *testing.T) {
 		"an extra member that is a ref": {func(d map[string]any) {
 			plantOneOf(d, "/v1/identities/social", "post", "400", map[string]any{"$ref": "#/components/schemas/Error"})
 		}, true},
+		"an extra member that is a string schema": {func(d map[string]any) {
+			plantOneOf(d, "/v1/identities/social", "post", "400", map[string]any{"type": "string"})
+		}, true},
 		"an extra member that nests a oneOf the gate cannot read": {func(d map[string]any) {
 			m := closedGoAPIMember()
 			m["properties"].(map[string]any)["detail"].(map[string]any)["oneOf"] = []any{map[string]any{"type": "string"}}

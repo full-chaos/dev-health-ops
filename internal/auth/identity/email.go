@@ -40,6 +40,21 @@ func NormalizeFederatedEmail(raw string) (string, error) {
 	return NormalizeEmail(raw)
 }
 
+// ErrUnusableProviderEmail: an identity provider returned an address the shared email text rule refuses. The text
+// names no value.
+var ErrUnusableProviderEmail = errors.New("identity: the provider returned an unusable email address")
+
+// RefuseProviderEmail is the one provider email text rule of every federated sign-in and link (go-api and
+// auth-service): pyjson.ClassEmail (lone surrogate, invalid UTF-8, NUL, control characters, U+FFFD after the edge
+// trim). Callers apply it before any identity lookup, so the answer never depends on which accounts exist. An empty
+// address passes; the callers that need one refuse it themselves.
+func RefuseProviderEmail(raw string) error {
+	if pyjson.BadTextForm(pyjson.ClassEmail, raw) != pyjson.TextFormNone {
+		return ErrUnusableProviderEmail
+	}
+	return nil
+}
+
 // NormalizeLocalRegisterEmail is NormalizeEmail for an address a new local account is created with: it also refuses
 // the forms the register routes refuse (pyjson.ClassEmail: U+FFFD, control characters, a lone surrogate), so a caller
 // that skips the route validator cannot store them. Sign-in keeps NormalizeEmail: a stored address must still log in.

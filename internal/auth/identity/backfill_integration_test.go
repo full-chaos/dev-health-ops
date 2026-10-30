@@ -47,6 +47,27 @@ func TestBackfillInsertsThenRerunWritesNothing(t *testing.T) {
 	}
 }
 
+func TestBackfillNilPasswordHashClearsHashAndAlgorithm(t *testing.T) {
+	e := getEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	target := BackfillTarget{ID: uuid.New(), Email: uniqueEmail("bfn"), Active: true, PasswordHash: bcryptFor(t, "clear-test-material")}
+	if res, err := e.store.BackfillUser(ctx, target, false); err != nil || !res.Inserted {
+		t.Fatalf("insert: %+v %v", res, err)
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.users WHERE principal_id = $1 AND password_hash IS NOT NULL AND password_algorithm IS NOT NULL`, target.ID); n != 1 {
+		t.Fatalf("first backfill did not write hash and algorithm: %d", n)
+	}
+	target.PasswordHash = nil
+	res, err := e.store.BackfillUser(ctx, target, false)
+	if err != nil || !res.Updated {
+		t.Fatalf("nil-hash backfill: %+v %v", res, err)
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.users WHERE principal_id = $1 AND password_hash IS NULL AND password_algorithm IS NULL`, target.ID); n != 1 {
+		t.Fatalf("nil hash did not clear both hash and algorithm: %d", n)
+	}
+}
+
 func TestBackfillDryRunWritesNothing(t *testing.T) {
 	e := getEnv(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)

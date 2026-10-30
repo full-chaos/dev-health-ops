@@ -123,8 +123,7 @@ func composeOneOffNeedsNoOwnVariables(g *guard) {
 		g.expect(equal(got, want), "compose.bigboy.yml requires %v, want only the pins and DHO_API_CH_USERS_XML %v", got, want)
 		return
 	}
-	bugsink := mp(mp(g.yamlFile(composeFile)["services"])["bugsink"])
-	for _, f := range composeBugsinkShape(got, want, bugsink, composeScalars(g.yamlFile(composeFile))) {
+	for _, f := range composeBugsinkFileFindings(g, got, want) {
 		g.failf("%s", f)
 	}
 }

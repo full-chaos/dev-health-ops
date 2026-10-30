@@ -50,6 +50,13 @@ func composeBugsinkShape(required, base []string, bugsink doc, scalars []string)
 		required, files, interpolated, base, composeBugsinkVars, composeBugsinkEnvFile)}
 }
 
+// composeBugsinkFileFindings applies composeBugsinkShape to the compose file the guard reads: its bugsink service and every
+// scalar of the file.
+func composeBugsinkFileFindings(g *guard, required, base []string) []string {
+	f := g.yamlFile(composeFile)
+	return composeBugsinkShape(required, base, mp(mp(f["services"])["bugsink"]), composeScalars(f))
+}
+
 // composeInterpolatedNames returns the variable names Compose interpolates in one scalar: $NAME, ${NAME} and ${NAME<op>...}
 // for every operator (:- - :? ? :+ +), including a ${...} nested in a default. $$ is a literal dollar and interpolates nothing.
 func composeInterpolatedNames(s string) []string {
@@ -168,5 +175,31 @@ func TestComposeInterpolatedNamesCells(t *testing.T) {
 		if got := fmt.Sprint(composeInterpolatedNames(in)); got != "["+want+"]" {
 			t.Errorf("%q: names %s, want [%s]", in, got, want)
 		}
+	}
+}
+
+func TestComposeBugsinkFileFindingsReadsTheFile(t *testing.T) {
+	base := []string{"BIGBOY_DHO_IMAGE", "DHO_API_CH_USERS_XML"}
+	head := "services:\n  bugsink:\n    env_file:\n    - path: " + composeBugsinkEnvFile + "\n      required: true\n    environment:\n      PORT: '8000'\n"
+	for _, c := range []struct {
+		name, extra string
+		ok          bool
+	}{
+		{"new form", "", true},
+		{"new form plus a bare credential variable", "      SECRET_KEY: $BUGSINK_SECRET_KEY\n", false},
+		{"new form plus a credential variable in another service", "  web:\n    environment:\n    - X=${BUGSINK_DB_PASSWORD}\n", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeFile(t, root, composeFile, head+c.extra)
+			g := &guard{root: root, tmp: t.TempDir()}
+			got := composeBugsinkFileFindings(g, base, base)
+			if len(g.v) != 0 {
+				t.Fatalf("guard errors: %v", g.v)
+			}
+			if c.ok != (len(got) == 0) {
+				t.Fatalf("want accepted=%v, findings %v", c.ok, got)
+			}
+		})
 	}
 }

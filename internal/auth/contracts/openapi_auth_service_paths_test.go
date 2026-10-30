@@ -531,6 +531,11 @@ func TestTheOpenAPIPathGateChecksTheOneOfExtraMembers(t *testing.T) {
 			m["properties"].(map[string]any)["error"] = map[string]any{"type": "object", "additionalProperties": false}
 			plantOneOf(d, "/v1/identities/social", "post", "400", m)
 		}, true},
+		"an extra member that requires the envelope's error": {func(d map[string]any) {
+			m := closedGoAPIMember()
+			m["required"] = []any{"detail", "error"}
+			plantOneOf(d, "/v1/identities/social", "post", "400", m)
+		}, true},
 		"an extra member that is a ref": {func(d map[string]any) {
 			plantOneOf(d, "/v1/identities/social", "post", "400", map[string]any{"$ref": "#/components/schemas/Error"})
 		}, true},

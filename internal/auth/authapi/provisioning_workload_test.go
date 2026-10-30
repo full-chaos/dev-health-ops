@@ -22,7 +22,7 @@ type provWorkloadFixture struct {
 func newProvWorkloadFixture(t *testing.T) *provWorkloadFixture {
 	t.Helper()
 	w := newWorkloadIssueFixture(t)
-	return &provWorkloadFixture{provFixture: newProvFixtureFor(t, nil, w.workload), w: w}
+	return &provWorkloadFixture{provFixture: newProvFixtureFor(t, docWithRow(t, PatternOrgSuspend), w.workload), w: w}
 }
 
 // callerOf is the caller the route handed to its verb.
@@ -40,6 +40,8 @@ func callerOf(f *provFixture, op string) audit.Caller {
 		return f.deprovision.in.Actor.Caller
 	case opOrgReactivate:
 		return f.reactivate.actor.Caller
+	case opOrgSuspend:
+		return f.reactivate.sactor.Caller
 	}
 	f.t.Fatalf("no caller for %s", op)
 	return audit.Caller{}

@@ -19,6 +19,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
+	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
@@ -217,6 +218,26 @@ type fakeReactivate struct {
 	id         uuid.UUID
 	ifRevision *int64
 	actor      org.Actor
+	// suspends counts SuspendAuthorized calls; sid/sactor/sIfRevision are the last call's arguments.
+	suspends    int
+	sid         uuid.UUID
+	sIfRevision *int64
+	sactor      org.Actor
+}
+
+func (f *fakeReactivate) SuspendAuthorized(ctx context.Context, id uuid.UUID, ifRevision *int64, a org.Actor, authz org.Authorize) (bool, error) {
+	f.suspends++
+	f.sid, f.sIfRevision, f.sactor = id, ifRevision, a
+	if authz == nil {
+		return false, org.ErrDenied
+	}
+	if err := authz(ctx, audit.TxOps{}, id); err != nil {
+		return false, err
+	}
+	if f.err != nil {
+		return false, f.err
+	}
+	return !f.noop, nil
 }
 
 func (f *fakeReactivate) ReactivateAuthorized(ctx context.Context, id uuid.UUID, ifRevision *int64, a org.Actor, authz org.Authorize) (bool, error) {
@@ -251,7 +272,37 @@ type provFixture struct {
 
 func newProvFixture(t *testing.T) *provFixture {
 	t.Helper()
-	return newProvFixtureWith(t, nil)
+	return newProvFixtureWith(t, docWithRow(t, PatternOrgSuspend))
+}
+
+// docWithRow is the embedded endpoint-profile document plus a row for route (a copy of the deprovision row): the
+// suspend route is mounted only when its row exists, and the embedded document does not hold it yet.
+func docWithRow(t testing.TB, route string) []byte {
+	t.Helper()
+	var document map[string]any
+	if err := json.Unmarshal(authv1.AuthServiceEndpointProfiles, &document); err != nil {
+		t.Fatal(err)
+	}
+	rows := document["rows"].([]any)
+	for _, item := range rows {
+		row := item.(map[string]any)
+		if row["route"] == PatternOrgDeprovision && row["service"] == AccessService {
+			clone := map[string]any{}
+			for k, v := range row {
+				clone[k] = v
+			}
+			clone["route"] = route
+			clone["id"] = "POST " + route + " [dev-health-auth-service @api]"
+			document["rows"] = append(rows, clone)
+			raw, err := json.Marshal(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return raw
+		}
+	}
+	t.Fatal("no deprovision row in the embedded document")
+	return nil
 }
 
 // newProvFixtureWith builds the routes over the given endpoint-profile
@@ -304,7 +355,7 @@ func (f *provFixture) post(path, body string, header map[string]string) *httptes
 }
 
 func (f *provFixture) storeCalls() int {
-	return f.orgs.calls + f.members.calls + f.invites.calls + f.deprovision.calls + f.reactivate.calls
+	return f.orgs.calls + f.members.calls + f.invites.calls + f.deprovision.calls + f.reactivate.calls + f.reactivate.suspends
 }
 
 func (f *provFixture) uses(op string) (int64, bool) {
@@ -396,6 +447,9 @@ func routeCases() []routeCase {
 			return map[string]any{"organization_id": f.org.String(), "actor_principal_id": a.String()}
 		}, []string{"organization_id", "actor_principal_id"}},
 		{opOrgReactivate, PatternOrgReactivate, func(f *provFixture, a uuid.UUID) map[string]any {
+			return map[string]any{"organization_id": f.org.String(), "actor_principal_id": a.String()}
+		}, []string{"organization_id", "actor_principal_id"}},
+		{opOrgSuspend, PatternOrgSuspend, func(f *provFixture, a uuid.UUID) map[string]any {
 			return map[string]any{"organization_id": f.org.String(), "actor_principal_id": a.String()}
 		}, []string{"organization_id", "actor_principal_id"}},
 	}
@@ -627,10 +681,10 @@ func TestProvisioningEnsuresTheOrganization(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := newProvFixture(t)
 			f.orgs.err = tc.err
-			for _, c := range append(routeCases()[:5], routeCases()[6], routeCases()[7]) {
+			for _, c := range append(routeCases()[:5], routeCases()[6], routeCases()[7], routeCases()[8]) {
 				expectRefusal(t, f.post(c.path, encode(c.body(f, f.super)), nil), tc.status, tc.reason)
 			}
-			if f.members.calls+f.invites.calls+f.deprovision.calls+f.reactivate.calls != 0 {
+			if f.members.calls+f.invites.calls+f.deprovision.calls+f.reactivate.calls+f.reactivate.suspends != 0 {
 				t.Fatal("a verb ran without its organization")
 			}
 		})
@@ -933,5 +987,163 @@ func TestProvisioningRoutesNeedTheOrganizationVerb(t *testing.T) {
 		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision})
 	if err == nil {
 		t.Fatal("ProvisioningRoutes accepted deps with no organization verb")
+	}
+}
+
+// The suspend route mirrors reactivate: superuser only through the users seam alone, the rule again under the row
+// lock, no revision sent, and the verb is given the org, the actor and a request id.
+func TestOrgSuspendIsSuperuserOnlyThroughTheUsersSeam(t *testing.T) {
+	f := newProvFixture(t)
+	f.users.states[f.x] = UserState{IsActive: false, IsSuperuser: true}
+	c := routeCases()[8]
+	for name, tc := range map[string]struct {
+		actor  uuid.UUID
+		reason string
+	}{
+		"admin of the org":   {f.admin, reasonSuperuserRequired},
+		"owner of the org":   {f.owner, reasonSuperuserRequired},
+		"member of no org":   {f.target, reasonSuperuserRequired},
+		"inactive superuser": {f.x, reasonDeactivated},
+		"unknown actor":      {uuid.New(), reasonDeactivated},
+	} {
+		expectRefusal(t, f.post(c.path, encode(c.body(f, tc.actor)), nil), http.StatusForbidden, tc.reason)
+		if f.reactivate.suspends != 0 {
+			t.Fatalf("%s: a refused actor reached the verb", name)
+		}
+	}
+	if response := f.post(c.path, encode(c.body(f, f.super)), nil); response.Code != http.StatusOK {
+		t.Fatalf("suspend by a superuser: %d %s", response.Code, response.Body)
+	}
+	if f.users.roleReads != 0 {
+		t.Fatalf("the route read %d roles; the actor rule of a superuser-only route reads none", f.users.roleReads)
+	}
+	if f.reactivate.sid != f.org || f.reactivate.sactor.PrincipalID == nil || *f.reactivate.sactor.PrincipalID != f.super ||
+		f.reactivate.sactor.RequestID == nil || f.reactivate.sIfRevision != nil || f.reactivate.calls != 0 {
+		t.Fatalf("the suspend verb was given %+v, want the org, the actor, a request id, no revision, and no reactivate call", f.reactivate)
+	}
+}
+
+func TestOrgSuspendRunsTheActorRuleAgainUnderTheLock(t *testing.T) {
+	f := newProvFixture(t)
+	c := routeCases()[8]
+	f.users.inTx = &fakeProvUsers{states: map[uuid.UUID]UserState{f.super: {IsActive: true}}}
+	expectRefusal(t, f.post(c.path, encode(c.body(f, f.super)), nil), http.StatusForbidden, reasonSuperuserRequired)
+	f.users.inTx = &fakeProvUsers{err: errors.New("read failed")}
+	expectRefusal(t, f.post(c.path, encode(c.body(f, f.super)), nil), http.StatusServiceUnavailable, reasonStoreUnavailable)
+}
+
+func TestOrgSuspendAnswers(t *testing.T) {
+	f := newProvFixture(t)
+	c := routeCases()[8]
+	decode := func() map[string]any {
+		t.Helper()
+		response := f.post(c.path, encode(c.body(f, f.super)), nil)
+		if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" {
+			t.Fatalf("answer %d (Cache-Control %q): %s", response.Code, response.Header().Get("Cache-Control"), response.Body)
+		}
+		var doc map[string]any
+		if err := json.Unmarshal(response.Body.Bytes(), &doc); err != nil {
+			t.Fatal(err)
+		}
+		return doc
+	}
+	got := decode()
+	if len(got) != 3 || got["organization_id"] != f.org.String() || got["status"] != "suspended" || got["suspended"] != true {
+		t.Fatalf("suspend answer = %v", got)
+	}
+	f.reactivate.noop = true
+	got = decode()
+	if len(got) != 3 || got["status"] != "suspended" || got["suspended"] != false {
+		t.Fatalf("answer for an organization that is already suspended = %v, want 200 with suspended false", got)
+	}
+}
+
+// Every fault is a named refusal, and a fault of the store is the same fail-closed 503 store_unavailable, never a 500:
+// the acting account has no auth.principals row (the audit row's actor foreign key fails), or the store is down.
+func TestOrgSuspendRefusalsAreNamedReasonCodes(t *testing.T) {
+	f := newProvFixture(t)
+	c := routeCases()[8]
+	missingPrincipal := errors.New(`audit: security mutation failed: inserting the audit row: ERROR: insert or update on table "security_audit_events" violates foreign key constraint "security_audit_events_actor_principal_id_fkey" (SQLSTATE 23503)`)
+	for name, tc := range map[string]struct {
+		err    error
+		status int
+		reason string
+	}{
+		"missing organization":          {org.ErrNotFound, http.StatusNotFound, reasonOrganizationNotFound},
+		"denied under the lock":         {org.ErrDenied, http.StatusForbidden, reasonSuperuserRequired},
+		"store down":                    {fmt.Errorf("%w: suspend: down", org.ErrStore), http.StatusServiceUnavailable, reasonStoreUnavailable},
+		"actor has no principal row":    {fmt.Errorf("%w: suspend: %w", org.ErrStore, missingPrincipal), http.StatusServiceUnavailable, reasonStoreUnavailable},
+		"the raw foreign key violation": {missingPrincipal, http.StatusServiceUnavailable, reasonStoreUnavailable},
+		"unclassified":                  {errors.New("unclassified"), http.StatusServiceUnavailable, reasonStoreUnavailable},
+	} {
+		f.reactivate.err = tc.err
+		response := f.post(c.path, encode(c.body(f, f.super)), nil)
+		expectRefusal(t, response, tc.status, tc.reason)
+		if strings.Contains(response.Body.String(), "SQLSTATE") {
+			t.Fatalf("%s: the answer carries database text: %s", name, response.Body)
+		}
+	}
+}
+
+// The suspend route is mounted only when the embedded endpoint-profile document holds its row. Without it the route is
+// not mounted (404), the other eight routes are served, the service starts and one startup line names the route;
+// the other routes' switch (provisioningPatterns) is unaffected.
+func TestOrgSuspendIsDarkWithoutItsProfileRow(t *testing.T) {
+	f := newProvFixtureWith(t, nil)
+	if got := f.post(PatternOrgSuspend, encode(routeCases()[8].body(f, f.super)), nil); got.Code != http.StatusNotFound {
+		t.Fatalf("suspend without its row: %d %s, want 404", got.Code, got.Body)
+	}
+	if f.reactivate.suspends != 0 {
+		t.Fatal("the verb ran for a route that is not mounted")
+	}
+	for _, c := range routeCases()[:8] {
+		if got := f.post(c.path, encode(c.body(f, f.super)), nil); got.Code != http.StatusOK {
+			t.Fatalf("%s with the suspend row absent: %d %s, want 200", c.op, got.Code, got.Body)
+		}
+	}
+	lines := 0
+	for _, line := range strings.Split(strings.TrimSpace(f.logs.String()), "\n") {
+		if strings.Contains(line, PatternOrgSuspend) {
+			lines++
+			if !strings.Contains(line, "not mounted") {
+				t.Fatalf("the startup line does not say the route is not mounted: %s", line)
+			}
+		}
+	}
+	if lines != 1 {
+		t.Fatalf("%d startup lines name the suspend route, want 1: %s", lines, f.logs.String())
+	}
+}
+
+func TestOrgSuspendIsServedWithItsProfileRow(t *testing.T) {
+	f := newProvFixtureWith(t, docWithRow(t, PatternOrgSuspend))
+	if got := f.post(PatternOrgSuspend, encode(routeCases()[8].body(f, f.super)), nil); got.Code != http.StatusOK {
+		t.Fatalf("suspend with its row: %d %s, want 200", got.Code, got.Body)
+	}
+	if strings.Contains(f.logs.String(), "not mounted") {
+		t.Fatalf("a not-mounted line was logged with the row present: %s", f.logs.String())
+	}
+}
+
+func TestOrgSuspendNeedsAnAuthServicePostRowAcceptingTheIssuerCredential(t *testing.T) {
+	for name, edit := range map[string]func(row map[string]any){
+		"another service": func(row map[string]any) { row["service"] = "dev-health-ops-api" },
+		"another method":  func(row map[string]any) { row["method"] = "GET" },
+		"another class":   func(row map[string]any) { row["accepted_credential_classes"] = []any{"workload_token"} },
+	} {
+		var document map[string]any
+		if err := json.Unmarshal(docWithRow(t, PatternOrgSuspend), &document); err != nil {
+			t.Fatal(err)
+		}
+		rows := document["rows"].([]any)
+		edit(rows[len(rows)-1].(map[string]any))
+		raw, err := json.Marshal(document)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f := newProvFixtureWith(t, raw)
+		if got := f.post(PatternOrgSuspend, encode(routeCases()[8].body(f, f.super)), nil); got.Code != http.StatusNotFound {
+			t.Fatalf("%s: suspend %d, want 404", name, got.Code)
+		}
 	}
 }

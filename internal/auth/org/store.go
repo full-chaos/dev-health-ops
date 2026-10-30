@@ -163,6 +163,18 @@ func (s *Store) ReactivateAuthorized(ctx context.Context, id uuid.UUID, ifRevisi
 	return s.mutate(ctx, verbReactivate, id, "", ifRevision, a, authz)
 }
 
+// SuspendAuthorized is Suspend for a caller that must authorize the actor under
+// the row lock, exactly as ReactivateAuthorized: authz runs after the lock and
+// before any write, and a nil authz is ErrDenied before anything is planned.
+// changed is false for an organization that was already suspended.
+func (s *Store) SuspendAuthorized(ctx context.Context, id uuid.UUID, ifRevision *int64, a Actor, authz Authorize) (changed bool, err error) {
+	if authz == nil {
+		s.record(ctx, verbSuspend, ErrDenied)
+		return false, ErrDenied
+	}
+	return s.mutate(ctx, verbSuspend, id, "", ifRevision, a, authz)
+}
+
 func (s *Store) mutate(ctx context.Context, v verb, id uuid.UUID, newName string, ifRevision *int64, a Actor, authz Authorize) (bool, error) {
 	prev, next := StatusActive, StatusActive
 	switch v {

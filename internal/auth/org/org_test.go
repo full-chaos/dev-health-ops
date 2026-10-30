@@ -226,3 +226,58 @@ func TestReactivateAuthorizedPlansTheReactivateAuditAndEvent(t *testing.T) {
 		t.Fatalf("events = %+v", got.Events)
 	}
 }
+
+// A nil Authorize refuses before the commit is built: no row is read and no write is planned.
+func TestSuspendAuthorizedWithoutAuthorizeIsDeniedBeforeAnyCommit(t *testing.T) {
+	committed := false
+	s := newTestStore(func(context.Context, audit.Mutation) error { committed = true; return nil })
+	changed, err := s.SuspendAuthorized(context.Background(), uuid.New(), nil, Actor{}, nil)
+	if !errors.Is(err, ErrDenied) || changed || committed {
+		t.Fatalf("nil Authorize: changed=%v err=%v committed=%v, want denied and no commit", changed, err, committed)
+	}
+}
+
+func TestSuspendAuthorizedReportsChangedAndNoop(t *testing.T) {
+	for name, tc := range map[string]struct {
+		commitErr error
+		changed   bool
+	}{"a change": {nil, true}, "an already suspended org": {audit.ErrNoStateChange, false}} {
+		s := newTestStore(func(context.Context, audit.Mutation) error { return tc.commitErr })
+		changed, err := s.SuspendAuthorized(context.Background(), uuid.New(), nil, Actor{}, allowAll)
+		if err != nil || changed != tc.changed {
+			t.Fatalf("%s: changed=%v err=%v, want changed=%v and no error", name, changed, err, tc.changed)
+		}
+	}
+}
+
+func TestSuspendAuthorizedAnswersDenialAndMissingOrgAsTheyAre(t *testing.T) {
+	for _, want := range []error{ErrDenied, ErrNotFound, ErrRevisionConflict} {
+		s := newTestStore(func(context.Context, audit.Mutation) error { return want })
+		_, err := s.SuspendAuthorized(context.Background(), uuid.New(), nil, Actor{}, allowAll)
+		if !errors.Is(err, want) || errors.Is(err, ErrStore) {
+			t.Fatalf("commit error %v came back as %v", want, err)
+		}
+	}
+	s := newTestStore(func(context.Context, audit.Mutation) error { return errors.New("down") })
+	if _, err := s.SuspendAuthorized(context.Background(), uuid.New(), nil, Actor{}, allowAll); !errors.Is(err, ErrStore) {
+		t.Fatalf("an unknown commit error = %v, want ErrStore", err)
+	}
+}
+
+// The mutation is the one Suspend plans: the same audit row and event, with the actor on the audit row.
+func TestSuspendAuthorizedPlansTheSuspendAuditAndEvent(t *testing.T) {
+	var got audit.Mutation
+	s := newTestStore(func(_ context.Context, m audit.Mutation) error { got = m; return nil })
+	org, actor := uuid.New(), uuid.New()
+	if _, err := s.SuspendAuthorized(context.Background(), org, nil, Actor{PrincipalID: &actor}, allowAll); err != nil {
+		t.Fatal(err)
+	}
+	if got.Audit.EventType != "auth.organization.suspended" || got.Audit.ActorPrincipalID == nil || *got.Audit.ActorPrincipalID != actor.String() ||
+		got.Audit.Attributes["reason_code"] != "organization_updated" || got.Audit.Attributes["previous_status"] != "active" ||
+		got.Audit.Attributes["new_status"] != "suspended" {
+		t.Fatalf("audit = %+v", got.Audit)
+	}
+	if len(got.Events) != 1 || got.Events[0].EventType != "organization.suspended" || got.Events[0].Change["status"] != "suspended" {
+		t.Fatalf("events = %+v", got.Events)
+	}
+}

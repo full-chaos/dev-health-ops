@@ -13,6 +13,8 @@ import (
 
 	"github.com/google/uuid"
 
+	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
+	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 )
 
@@ -355,7 +357,7 @@ func TestProvisioningRoutesOffByDefault(t *testing.T) {
 	token, _ := e.issuerCredential(t, ctx, "auth-session-issuer", `["memberships:write", "sessions:issue"]`, false, false)
 	for _, path := range []string{"/internal/v1/memberships/add", "/internal/v1/memberships/role", "/internal/v1/memberships/remove",
 		"/internal/v1/memberships/transfer", "/internal/v1/invites/create", "/internal/v1/invites/accept", "/internal/v1/organizations/deprovision",
-		"/internal/v1/organizations/reactivate"} {
+		"/internal/v1/organizations/reactivate", "/internal/v1/organizations/suspend"} {
 		if got := e.doWith(t, path, `{}`, map[string]string{"Authorization": "Bearer " + token}); got.status != http.StatusNotFound {
 			t.Fatalf("%s with the switch off: %d, want 404", path, got.status)
 		}
@@ -467,5 +469,115 @@ func TestProvisioningReactivateThroughConfigure(t *testing.T) {
 	}
 	if err := e.admin.QueryRow(ctx, auditSQL, org, super).Scan(&rows); err != nil || rows != 1 {
 		t.Fatalf("a repeat wrote a second audit row (%d, %v)", rows, err)
+	}
+}
+
+// withProfileRow makes the stack mount a dark provisioning route: the route is mounted only when the endpoint-profile
+// document holds its row, and the embedded document does not yet. The plant is the embedded document plus a copy of
+// the deprovision row for the route.
+func withProfileRow(t *testing.T, route string) {
+	t.Helper()
+	var document map[string]any
+	if err := json.Unmarshal(authv1.AuthServiceEndpointProfiles, &document); err != nil {
+		t.Fatal(err)
+	}
+	rows := document["rows"].([]any)
+	for _, item := range rows {
+		row := item.(map[string]any)
+		if row["route"] == "/internal/v1/organizations/deprovision" && row["service"] == authapi.AccessService {
+			clone := map[string]any{}
+			for k, v := range row {
+				clone[k] = v
+			}
+			clone["route"] = route
+			document["rows"] = append(rows, clone)
+			raw, err := json.Marshal(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			provisioningProfileRows = raw
+			t.Cleanup(func() { provisioningProfileRows = nil })
+			return
+		}
+	}
+	t.Fatal("no deprovision row in the embedded document")
+}
+
+// A suspend is a superuser's: the organization row is suspended in the auth schema (go-api's row stays as it was),
+// one audit row names the actor, membership writes are refused afterwards, and a repeat is a no-op with no second
+// audit row. An actor with no auth.principals row (a go-api superuser that was never projected) gets the fail-closed
+// 503 store_unavailable, never a 500, and the organization stays active.
+func TestProvisioningSuspendThroughConfigure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	withProfileRow(t, authapi.PatternOrgSuspend)
+	e, header := newProvisioningEnv(t, ctx)
+	owner, org := e.seed(t, ctx)
+	super := e.account(t, ctx, acctMail(), true, true)
+	suspend := func(actor, target uuid.UUID) answer {
+		return e.doWith(t, authapi.PatternOrgSuspend, jsonBody(t, map[string]any{"organization_id": target.String(),
+			"actor_principal_id": actor.String()}), header)
+	}
+	activeRows := func(target uuid.UUID) int {
+		var n int
+		if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.organizations WHERE id = $1 AND disabled_at IS NULL`, target).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if got := suspend(owner, org); got.status != http.StatusForbidden || object(t, got)["reason_code"] != "superuser_required" {
+		t.Fatalf("suspend by the owner: %d %s", got.status, got.body)
+	}
+	if got := suspend(super, uuid.New()); got.status != http.StatusNotFound || object(t, got)["reason_code"] != "organization_not_found" {
+		t.Fatalf("suspend of an unknown organization: %d %s", got.status, got.body)
+	}
+	if activeRows(org) != 1 {
+		t.Fatal("a refused suspend suspended the organization")
+	}
+	got := suspend(super, org)
+	if got.status != http.StatusOK {
+		t.Fatalf("suspend: %d %s", got.status, got.body)
+	}
+	if out := object(t, got); out["organization_id"] != org.String() || out["status"] != "suspended" || out["suspended"] != true {
+		t.Fatalf("suspend answer = %v", out)
+	}
+	auditSQL := `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.organization.suspended' AND organization_id = $1 AND actor_principal_id = $2`
+	var rows int
+	if activeRows(org) != 0 {
+		t.Fatal("the auth organization is still active after the suspend")
+	}
+	if err := e.admin.QueryRow(ctx, auditSQL, org, super).Scan(&rows); err != nil || rows != 1 {
+		t.Fatalf("%d suspended audit rows naming the actor (%v), want 1", rows, err)
+	}
+	var publicActive bool
+	if err := e.admin.QueryRow(ctx, `SELECT is_active FROM public.organizations WHERE id = $1`, org).Scan(&publicActive); err != nil || !publicActive {
+		t.Fatalf("go-api's row changed (%v, %v): the route writes the auth schema only", publicActive, err)
+	}
+	late := e.account(t, ctx, acctMail(), false, true)
+	add := e.doWith(t, "/internal/v1/memberships/add", jsonBody(t, map[string]any{"organization_id": org.String(), "principal_id": late.String(),
+		"actor_principal_id": super.String(), "role": "member"}), header)
+	if add.status != http.StatusConflict || object(t, add)["reason_code"] != "organization_suspended" {
+		t.Fatalf("add after the suspend: %d %s", add.status, add.body)
+	}
+	if again := suspend(super, org); again.status != http.StatusOK || object(t, again)["suspended"] != false {
+		t.Fatalf("repeat suspend: %d %s", again.status, again.body)
+	}
+	if err := e.admin.QueryRow(ctx, auditSQL, org, super).Scan(&rows); err != nil || rows != 1 {
+		t.Fatalf("a repeat wrote a second audit row (%d, %v)", rows, err)
+	}
+
+	// An actor that is a go-api superuser with no auth.principals row.
+	ghost := uuid.New()
+	if _, err := e.admin.Exec(ctx, `INSERT INTO users (id, email, password_hash, auth_provider, is_active, is_verified, is_superuser,
+token_version, created_at, updated_at) VALUES ($1, $2, NULL, 'local', true, true, true, 0, now(), now())`, ghost, acctMail()); err != nil {
+		t.Fatalf("seed the unprojected superuser: %v", err)
+	}
+	_, other := e.seed(t, ctx)
+	got = suspend(ghost, other)
+	if got.status != http.StatusServiceUnavailable || object(t, got)["reason_code"] != "store_unavailable" {
+		t.Fatalf("suspend by an actor with no principal row: %d %s, want 503 store_unavailable", got.status, got.body)
+	}
+	if activeRows(other) != 1 {
+		t.Fatal("a failed suspend suspended the organization")
 	}
 }

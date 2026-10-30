@@ -197,3 +197,110 @@ func TestReactivateNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
 		t.Fatalf("the redirect target saw %d request(s)", len(reached))
 	}
 }
+
+func TestSuspendPathIsTheOrganizationSuspendRoute(t *testing.T) {
+	if SuspendPath != "/internal/v1/organizations/suspend" {
+		t.Fatalf("SuspendPath = %q", SuspendPath)
+	}
+	var _ Suspender = (*Client)(nil)
+}
+
+func TestSuspendSendsTheOrgAndTheActorWithTheServiceCredential(t *testing.T) {
+	org, actor := uuid.New(), uuid.New()
+	var gotAuth, gotMethod, gotPath, gotType string
+	var body map[string]any
+	client, _ := newClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotAuth, gotMethod, gotPath, gotType = r.Header.Get("Authorization"), r.Method, r.URL.Path, r.Header.Get("Content-Type")
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &body)
+		_, _ = w.Write([]byte(`{"organization_id":"` + org.String() + `","status":"suspended","suspended":true}`))
+	})
+	if err := client.Suspend(context.Background(), org, actor); err != nil {
+		t.Fatalf("Suspend = %v", err)
+	}
+	if gotMethod != http.MethodPost || gotPath != SuspendPath || gotAuth != "Bearer "+testToken || gotType != "application/json" {
+		t.Fatalf("request = %s %s auth=%v type=%q", gotMethod, gotPath, gotAuth == "Bearer "+testToken, gotType)
+	}
+	if len(body) != 2 || body["organization_id"] != org.String() || body["actor_principal_id"] != actor.String() {
+		t.Fatalf("body = %v, want exactly organization_id and actor_principal_id", body)
+	}
+}
+
+func TestAnAlreadySuspendedOrganizationIsSuccess(t *testing.T) {
+	org := uuid.New()
+	client, _ := newClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"organization_id":"` + org.String() + `","status":"suspended","suspended":false}`))
+	})
+	if err := client.Suspend(context.Background(), org, uuid.New()); err != nil {
+		t.Fatalf("a no-op answer = %v, want success", err)
+	}
+}
+
+func TestSuspendFailuresAreErrorsAndNameTheirClass(t *testing.T) {
+	org := uuid.New()
+	for name, tc := range map[string]struct {
+		status int
+		body   string
+		want   error
+	}{
+		"401":                {http.StatusUnauthorized, `{}`, ErrRefused},
+		"403":                {http.StatusForbidden, `{}`, ErrRefused},
+		"404":                {http.StatusNotFound, `{}`, ErrRefused},
+		"409":                {http.StatusConflict, `{}`, ErrRefused},
+		"500":                {http.StatusInternalServerError, `{}`, ErrUnavailable},
+		"503":                {http.StatusServiceUnavailable, `{}`, ErrUnavailable},
+		"200, not JSON":      {http.StatusOK, `nope`, ErrUnavailable},
+		"200, still active":  {http.StatusOK, `{"organization_id":"` + org.String() + `","status":"active","suspended":false}`, ErrUnavailable},
+		"200, another org":   {http.StatusOK, `{"organization_id":"` + uuid.NewString() + `","status":"suspended","suspended":true}`, ErrUnavailable},
+		"200, oversize body": {http.StatusOK, `{"organization_id":"` + strings.Repeat("a", 128<<10) + `"}`, ErrUnavailable},
+	} {
+		t.Run(name, func(t *testing.T) {
+			client, _ := newClient(t, func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			})
+			err := client.Suspend(context.Background(), org, uuid.New())
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("Suspend = %v, want %v", err, tc.want)
+			}
+			if tc.want == ErrRefused && errors.Is(err, ErrUnavailable) {
+				t.Fatalf("a refusal is not unavailable: %v", err)
+			}
+		})
+	}
+}
+
+func TestSuspendNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
+	reached := make(chan struct{}, 4)
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reached <- struct{}{}
+		_, _ = w.Write([]byte(`{"status":"suspended"}`))
+	}))
+	defer other.Close()
+	redirecting := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+SuspendPath, http.StatusTemporaryRedirect)
+	}))
+	defer redirecting.Close()
+	base, _ := url.Parse(redirecting.URL)
+	client, err := New(base, testToken, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Suspend(context.Background(), uuid.New(), uuid.New()); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("redirect = %v, want ErrUnavailable", err)
+	}
+	if len(reached) != 0 {
+		t.Fatalf("the redirect target saw %d request(s)", len(reached))
+	}
+}
+
+func TestNoSuspendErrorCarriesTheCredentialOrTheAnswerBody(t *testing.T) {
+	client, _ := newClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"detail":"SENTINEL-ANSWER-TEXT"}`))
+	})
+	err := client.Suspend(context.Background(), uuid.New(), uuid.New())
+	if err == nil || strings.Contains(err.Error(), testToken) || strings.Contains(err.Error(), "SENTINEL-ANSWER-TEXT") {
+		t.Fatalf("error = %v", err)
+	}
+}

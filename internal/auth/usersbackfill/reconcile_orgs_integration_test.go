@@ -342,3 +342,34 @@ func TestOrgsReconcileIsZeroAfterTheAuthReactivate(t *testing.T) {
 		t.Fatalf("after the auth reactivate: classes %v, want none (a zero diff)", classes)
 	}
 }
+
+// The suspension window: with the auth-owned suspend, a go-api suspend reaches the auth schema before go-api writes
+// its own row (org_active_diff while only the auth side is suspended), and once go-api's row is inactive too the
+// organization is listed with no class, with no refresh needed.
+func TestOrgsReconcileIsZeroAfterTheAuthSuspend(t *testing.T) {
+	e := getReconEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	id, _ := e.seedOrg(t, ctx, true)
+	e.runOrgs(t, ctx, false)
+	if _, ok := classesOf(e.orgsSnapshot(t, ctx), id); ok {
+		t.Fatal("a freshly copied organization is a mismatch")
+	}
+	orgs, err := org.New(org.Config{Pool: e.runtime, Schema: e.schema})
+	if err != nil {
+		t.Fatal(err)
+	}
+	allow := func(context.Context, audit.TxOps, uuid.UUID) error { return nil }
+	if changed, err := orgs.SuspendAuthorized(ctx, id, nil, org.Actor{}, allow); err != nil || !changed {
+		t.Fatalf("auth suspend: changed=%v err=%v", changed, err)
+	}
+	if classes, ok := classesOf(e.orgsSnapshot(t, ctx), id); !ok || strings.Join(classes, ",") != ClassOrgActive {
+		t.Fatalf("the auth side suspended alone: classes %v (listed %v), want %s", classes, ok, ClassOrgActive)
+	}
+	if _, err := e.admin.Exec(ctx, `UPDATE public.organizations SET is_active = false WHERE id = $1`, id); err != nil {
+		t.Fatal(err)
+	}
+	if classes, ok := classesOf(e.orgsSnapshot(t, ctx), id); ok {
+		t.Fatalf("after go-api's row is inactive too: classes %v, want none (a zero diff, no refresh needed)", classes)
+	}
+}

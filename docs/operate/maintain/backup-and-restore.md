@@ -240,7 +240,9 @@ Order (nothing serves traffic until the last step):
    target (their older password is live again: force a reset, ticket 11834); `provider_revocation_requeued`: with the
    PagerDuty client id configured on the API, disconnect or reconnect the credential of each named revocation once
    (`SELECT org_id, credential_name FROM public.provider_oauth_revocations WHERE id = ...`), which sends the queued
-   revoke (a setup revoke is sent by any disconnect or callback of its org); `provider_revocation_requeued_blocked`:
+   revoke (a setup revoke is sent by a disconnect or callback of its org once the row is 15 minutes old: the apply
+   keeps its created_at and sets attempts to 0, and the route skips a younger one, so it stays pending until then);
+   `provider_revocation_requeued_blocked`:
    the credential was connected after the target, so the restored copy has no credential row and a disconnect does not
    send the revoke (it answers `disconnected: true` anyway); these wait for the revocation worker (the ticket the line
    names); `requeue_provider_revocation`: tokens the apply could only name: revocations of an apply with no source set

@@ -52,7 +52,7 @@ var followUp = map[ActionKind]string{
 	ActionForcePasswordReset:                "none",
 	ActionRequeueProviderRevocation:         "none",
 	ActionProviderRevocationRequeued:        "none",
-	ActionProviderRevocationRequeuedBlocked: "CHAOS-0",
+	ActionProviderRevocationRequeuedBlocked: "CHAOS-12010",
 	ActionUserTombstoned:                    "none",
 	ActionReviewIPAllowlist:                 "none",
 	ActionReviewAfterBlindMargin:            "none",

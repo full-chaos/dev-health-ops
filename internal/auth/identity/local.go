@@ -138,8 +138,9 @@ WHERE principal_id = $1 AND email_verified_at IS DISTINCT FROM $2`, principal, a
 			}
 			return nil
 		},
-		Audit:  verifiedAudit(subject, actor, org),
-		Events: []audit.OutboxEvent{userEvent(subject, "user.email_verified")},
+		Audit:    verifiedAudit(subject, actor, org),
+		Events:   []audit.OutboxEvent{userEvent(subject, "user.email_verified")},
+		Refusals: []error{ErrLinkUnusable},
 	})
 	return s.localErr(ctx, "set email verified", err)
 }
@@ -212,8 +213,9 @@ WHERE principal_id = $1`, principal, hash, passwordAlgorithm); err != nil {
 			}
 			return nil
 		},
-		Audit:  passwordAudit(cause, subject, actor, org),
-		Events: []audit.OutboxEvent{userEvent(subject, "user.credentials_changed")},
+		Audit:    passwordAudit(cause, subject, actor, org),
+		Events:   []audit.OutboxEvent{userEvent(subject, "user.credentials_changed")},
+		Refusals: []error{ErrLinkUnusable},
 	})
 	return version, s.localErr(ctx, "set password hash", err)
 }

@@ -125,8 +125,8 @@ func TestTheFenceRequeuesRevocationsQueuedAfterTFromTheSource(t *testing.T) {
 	if s := restored.revocationState(t, ctx, "both"); s.attempts != 2 {
 		t.Errorf("a revocation the restored database holds was written: attempts %d, want 2", s.attempts)
 	}
-	sameSet(t, "provider_revocation_requeued", reviewIDs(report, "provider_revocation_requeued", "public.provider_oauth_revocations"), sortedIDs(revocationID("kept"), revocationID("setup")))
-	sameSet(t, "provider_revocation_requeued_blocked", reviewIDs(report, "provider_revocation_requeued_blocked", "public.provider_oauth_revocations"), sortedIDs(revocationID("late")))
+	sameSet(t, "provider_revocation_requeued", reviewIDs(report, "provider_revocation_requeued", "public.provider_oauth_revocations"), revocationIDs(revocationID("kept"), revocationID("setup")))
+	sameSet(t, "provider_revocation_requeued_blocked", reviewIDs(report, "provider_revocation_requeued_blocked", "public.provider_oauth_revocations"), revocationIDs(revocationID("late")))
 	if ids := reviewIDs(report, "requeue_provider_revocation", "public.provider_oauth_revocations"); len(ids) != 0 {
 		t.Errorf("requeued revocations are still named as missing: %v", ids)
 	}
@@ -185,7 +185,7 @@ func TestWithoutTheSourceTheRevocationsAreOnlyNamed(t *testing.T) {
 		t.Fatalf("apply: %v", err)
 	}
 	sameSet(t, "requeue_provider_revocation", reviewIDs(report, "requeue_provider_revocation", "public.provider_oauth_revocations"),
-		sortedIDs(revocationID("kept"), revocationID("late"), revocationID("setup")))
+		revocationIDs(revocationID("kept"), revocationID("late"), revocationID("setup")))
 	if n := restored.count(t, ctx, `SELECT count(*) FROM public.provider_oauth_revocations`); n != 1 {
 		t.Errorf("without a source the fence wrote revocations: %d rows, want 1", n)
 	}
@@ -232,7 +232,7 @@ func assertNothingWritten(t *testing.T, ctx context.Context, d *fenceDB) {
 	}
 }
 
-func sortedIDs(ids ...string) []string {
+func revocationIDs(ids ...string) []string {
 	out := append([]string(nil), ids...)
 	sort.Strings(out)
 	return out

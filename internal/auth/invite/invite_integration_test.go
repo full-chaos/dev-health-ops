@@ -34,6 +34,15 @@ type env struct {
 	identity *identity.Store
 	secret   string
 	now      time.Time
+	// clockMu guards now for a test that moves the clock while a verb runs.
+	clockMu sync.Mutex
+}
+
+// setNow moves the store's clock; safe while a verb runs.
+func (e *env) setNow(at time.Time) {
+	e.clockMu.Lock()
+	defer e.clockMu.Unlock()
+	e.now = at
 }
 
 var (
@@ -108,7 +117,11 @@ func newEnv(t *testing.T) (*env, error) {
 	}
 	e := &env{admin: admin, runtime: runtime, members: members, secret: "invite-secret-" + uuid.NewString(),
 		now: time.Now().UTC()}
-	clock := func() time.Time { return e.now }
+	clock := func() time.Time {
+		e.clockMu.Lock()
+		defer e.clockMu.Unlock()
+		return e.now
+	}
 	if e.store, err = New(Config{Pool: runtime, Schema: schema, OwnsUsers: true, Memberships: members,
 		Secret: e.secret, AcceptSecrets: []string{e.secret}, Now: clock}); err != nil {
 		return nil, err

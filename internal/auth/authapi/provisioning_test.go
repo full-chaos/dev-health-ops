@@ -168,6 +168,16 @@ type fakeInvites struct {
 	calls  int
 	create invite.CreateInput
 	accept invite.AcceptInput
+	revoke invite.RevokeInput
+}
+
+func (f *fakeInvites) Revoke(_ context.Context, in invite.RevokeInput) error {
+	f.calls++
+	f.revoke = in
+	if err := in.Authorize(context.Background(), audit.TxOps{}, in.OrgID); err != nil {
+		return err
+	}
+	return f.err
 }
 
 func (f *fakeInvites) Create(_ context.Context, in invite.CreateInput) (*invite.Created, error) {
@@ -292,12 +302,12 @@ func newProvFixture(t *testing.T) *provFixture {
 	return newProvFixtureWith(t, docWithRow(t, PatternOrgSuspend))
 }
 
-// docWithRow is the embedded endpoint-profile document plus a row for route (a copy of the deprovision row): the
-// suspend route is mounted only when its row exists, and the embedded document does not hold it yet.
+// docWithRow is the embedded endpoint-profile document with its row for route (if any) replaced by a copy of the
+// deprovision row, last: the suspend route is mounted only when its row exists.
 func docWithRow(t testing.TB, route string) []byte {
 	t.Helper()
 	var document map[string]any
-	if err := json.Unmarshal(authv1.AuthServiceEndpointProfiles, &document); err != nil {
+	if err := json.Unmarshal(embeddedDocWithoutRow(t, route), &document); err != nil {
 		t.Fatal(err)
 	}
 	rows := document["rows"].([]any)
@@ -320,6 +330,27 @@ func docWithRow(t testing.TB, route string) []byte {
 	}
 	t.Fatal("no deprovision row in the embedded document")
 	return nil
+}
+
+// embeddedDocWithoutRow is the embedded endpoint-profile document without the rows for route.
+func embeddedDocWithoutRow(t testing.TB, route string) []byte {
+	t.Helper()
+	var document map[string]any
+	if err := json.Unmarshal(authv1.AuthServiceEndpointProfiles, &document); err != nil {
+		t.Fatal(err)
+	}
+	var kept []any
+	for _, item := range document["rows"].([]any) {
+		if item.(map[string]any)["route"] != route {
+			kept = append(kept, item)
+		}
+	}
+	document["rows"] = kept
+	raw, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
 }
 
 // newProvFixtureWith builds the routes over the given endpoint-profile
@@ -469,8 +500,17 @@ func routeCases() []routeCase {
 		{opOrgSuspend, PatternOrgSuspend, func(f *provFixture, a uuid.UUID) map[string]any {
 			return map[string]any{"organization_id": f.org.String(), "actor_principal_id": a.String()}
 		}, []string{"organization_id", "actor_principal_id"}},
+		{opInviteRevoke, PatternInviteRevoke, func(f *provFixture, a uuid.UUID) map[string]any {
+			return map[string]any{"organization_id": f.org.String(), "invite_id": fakeInviteID.String(), "actor_principal_id": a.String()}
+		}, []string{"organization_id", "invite_id", "actor_principal_id"}},
+		{opOrgState, PatternOrgState, func(f *provFixture, _ uuid.UUID) map[string]any {
+			return map[string]any{"organization_id": f.org.String()}
+		}, []string{"organization_id"}},
 	}
 }
+
+// fakeInviteID is the invite the revoke route case names.
+var fakeInviteID = uuid.MustParse("6f1b8f1e-7c43-4a7e-9b62-1d2a3c4e5f60")
 
 // Every route serves only the session issuer credential holding
 // memberships:write: any other bearer is a 401 with no read and no write, and
@@ -536,6 +576,10 @@ func TestProvisioningBodiesAreStrict(t *testing.T) {
 	f := newProvFixture(t)
 	for _, c := range routeCases() {
 		valid := c.body(f, f.super)
+		id := f.super.String()
+		if !strings.Contains(encode(valid), id) {
+			id = f.org.String() // a body with no actor (the state read)
+		}
 		bad := map[string]string{
 			"not an object":   `[]`,
 			"empty":           ``,
@@ -543,7 +587,7 @@ func TestProvisioningBodiesAreStrict(t *testing.T) {
 			"unknown member":  encode(merged(valid, map[string]any{"schema_version": "x"})),
 			"duplicate":       strings.Replace(encode(valid), "{", `{"`+c.required[0]+`":null,`, 1),
 			"over the bound":  encode(merged(valid, map[string]any{c.required[0]: strings.Repeat("a", maxProvisioningBody)})),
-			"upper-case uuid": strings.Replace(encode(valid), `"`+f.super.String()+`"`, `"`+strings.ToUpper(f.super.String())+`"`, 1),
+			"upper-case uuid": strings.Replace(encode(valid), `"`+id+`"`, `"`+strings.ToUpper(id)+`"`, 1),
 		}
 		for _, name := range c.required {
 			bad["missing "+name] = encode(without(valid, name))
@@ -1102,18 +1146,18 @@ func TestOrgSuspendRefusalsAreNamedReasonCodes(t *testing.T) {
 	}
 }
 
-// The suspend route is mounted only when the embedded endpoint-profile document holds its row. Without it the route is
-// not mounted (404), the other eight routes are served, the service starts and one startup line names the route;
-// the other routes' switch (provisioningPatterns) is unaffected.
+// The suspend route is mounted only when the endpoint-profile document holds its row. Without it the route is not
+// mounted (404), the other nine routes are served, the service starts and one startup line names the route; the other
+// routes' switch (provisioningPatterns) is unaffected.
 func TestOrgSuspendIsDarkWithoutItsProfileRow(t *testing.T) {
-	f := newProvFixtureWith(t, nil)
+	f := newProvFixtureWith(t, embeddedDocWithoutRow(t, PatternOrgSuspend))
 	if got := f.post(PatternOrgSuspend, encode(routeCases()[8].body(f, f.super)), nil); got.Code != http.StatusNotFound {
 		t.Fatalf("suspend without its row: %d %s, want 404", got.Code, got.Body)
 	}
 	if f.reactivate.suspends != 0 {
 		t.Fatal("the verb ran for a route that is not mounted")
 	}
-	for _, c := range routeCases()[:8] {
+	for _, c := range append(routeCases()[:8], routeCases()[9]) {
 		if got := f.post(c.path, encode(c.body(f, f.super)), nil); got.Code != http.StatusOK {
 			t.Fatalf("%s with the suspend row absent: %d %s, want 200", c.op, got.Code, got.Body)
 		}

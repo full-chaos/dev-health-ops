@@ -559,7 +559,6 @@ func (s *Store) Revoke(ctx context.Context, in RevokeInput) error {
 			if err := s.lockOrg(ctx, tx, in.OrgID, in.Authorize); err != nil {
 				return err
 			}
-			now := s.now().UTC()
 			var status string
 			var expiresAt time.Time
 			inAuth := true
@@ -576,6 +575,9 @@ func (s *Store) Revoke(ctx context.Context, in RevokeInput) error {
 			if err != nil {
 				return err
 			}
+			// The clock is read after the invite row lock: a revoke that waited for
+			// the row past the expiry sees the invite expired.
+			now := s.now().UTC()
 			noop, err := decideRevoke(Status(status), expiresAt, now)
 			if err != nil || noop {
 				return err

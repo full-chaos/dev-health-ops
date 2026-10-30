@@ -67,6 +67,11 @@ func (c *exchangeCounter) Exchange(ctx context.Context, credential contracts.Sec
 	return c.fakeSessions.Exchange(ctx, credential)
 }
 
+func (c *exchangeCounter) ExchangeGuarded(ctx context.Context, credential contracts.SecretString, guard session.Guard) (session.Result, error) {
+	c.exchanges.Add(1)
+	return c.fakeSessions.ExchangeGuarded(ctx, credential, guard)
+}
+
 // newEdDSARefreshFixture is newRefreshFixtureWith over an EdDSA issuer on signer.
 func newEdDSARefreshFixture(t *testing.T, signer AccessSigner) (*fixture, *exchangeCounter) {
 	t.Helper()

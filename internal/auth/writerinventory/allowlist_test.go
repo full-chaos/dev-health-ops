@@ -49,9 +49,12 @@ var Allowlist = []Entry{
 	{File: "internal/api/sso/provision.go", Func: "handlers.membershipOrJoin", Table: "public.memberships", Verb: "INSERT"},
 	{File: "internal/api/sso/provision.go", Func: "handlers.provisionOrGetUser", Table: "public.users", Verb: "UPDATE"},
 	{File: "internal/apiservice/admin/invites.go", Func: "handlers.createInvite", Table: "public.org_invites", Verb: "INSERT"},
+	{File: "internal/apiservice/admin/orgstore.go", Func: "pgStore.deleteOrganizationWithoutMembers", Table: "public.organizations", Verb: "DELETE"},
 	{File: "internal/apiservice/admin/orgstore.go", Func: "pgStore.insertMembershipTx", Table: "public.memberships", Verb: "INSERT"},
 	{File: "internal/apiservice/admin/orgstore.go", Func: "pgStore.insertOrganizationTx", Table: "public.organizations", Verb: "INSERT"},
 	{File: "internal/apiservice/admin/orgstore.go", Func: "pgStore.removeMembership", Table: "public.memberships", Verb: "DELETE"},
+	// D6507 (ticket 12038): a member removal revokes that member's refresh tokens for the organization.
+	{File: "internal/apiservice/admin/orgstore.go", Func: "pgStore.removeMembership", Table: "public.refresh_tokens", Verb: "UPDATE"},
 	{File: "internal/apiservice/admin/orgstore.go", Func: "pgStore.transferOwnership", Table: "public.memberships", Verb: "UPDATE"},
 	{File: "internal/apiservice/admin/orgstore.go", Func: "pgStore.updateMembershipRole", Table: "public.memberships", Verb: "UPDATE"},
 	{File: "internal/apiservice/admin/orgstore.go", Func: "pgStore.updateOrganization", Table: "public.organizations", Verb: "UPDATE"},

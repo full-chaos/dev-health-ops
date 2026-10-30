@@ -55,7 +55,7 @@ const (
 )
 
 var provisioningOperations = []string{opMembershipAdd, opMembershipRole, opMembershipRemove, opMembershipTransfer,
-	opInviteCreate, opInviteAccept, opOrgDeprovision, opOrgReactivate, opOrgSuspend, opInviteRevoke}
+	opInviteCreate, opInviteAccept, opOrgDeprovision, opOrgReactivate, opOrgSuspend, opInviteRevoke, opOrgState}
 
 // Provisioning refusal codes beyond the shared ones.
 const (
@@ -210,6 +210,7 @@ func ProvisioningRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 	} else {
 		deps.Logger.Info("auth provisioning route not mounted: no endpoint-profile row", "route", PatternOrgSuspend)
 	}
+	routes = h.withStateRoute(routes, rows)
 	return routes, nil
 }
 
@@ -755,13 +756,14 @@ type reactivateAnswer struct {
 // verb's transaction after the row lock. An organization that is not
 // suspended answers 200 with reactivated false and writes nothing.
 func (h provisioningHandlers) orgReactivate(w http.ResponseWriter, r *http.Request) {
-	body, caller, ok := h.admit(w, r, opOrgReactivate, "organization_id", "actor_principal_id")
+	body, caller, ok := h.admit(w, r, opOrgReactivate, "organization_id", "actor_principal_id", "if_revision")
 	if !ok {
 		return
 	}
 	orgID, err1 := body.uuid("organization_id")
 	actor, err2 := body.uuid("actor_principal_id")
-	if errors.Join(err1, err2) != nil {
+	ifRevision, err3 := body.optionalInt("if_revision", 0, maxIfRevision)
+	if errors.Join(err1, err2, err3) != nil {
 		h.rec.refuse(w, r, opOrgReactivate, refusal{http.StatusBadRequest, reasonMalformed}, nil)
 		return
 	}
@@ -769,7 +771,7 @@ func (h provisioningHandlers) orgReactivate(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	ctx := r.Context()
-	changed, err := h.Orgs.ReactivateAuthorized(ctx, orgID, nil, org.Actor{PrincipalID: &actor, RequestID: requestid.Audit(ctx), Caller: caller},
+	changed, err := h.Orgs.ReactivateAuthorized(ctx, orgID, ifRevision, org.Actor{PrincipalID: &actor, RequestID: requestid.Audit(ctx), Caller: caller},
 		func(ctx context.Context, tx audit.TxOps, orgID uuid.UUID) error {
 			_, err := h.actorRule(ctx, tx, actor, orgID, true)
 			var refused errActorRefused
@@ -785,6 +787,8 @@ func (h provisioningHandlers) orgReactivate(w http.ResponseWriter, r *http.Reque
 			answer = refusal{http.StatusForbidden, reasonSuperuserRequired}
 		case errors.Is(err, org.ErrNotFound):
 			answer = refusal{http.StatusNotFound, reasonOrganizationNotFound}
+		case errors.Is(err, org.ErrRevisionConflict):
+			answer = refusal{http.StatusConflict, reasonStateChanged}
 		}
 		h.rec.refuse(w, r, opOrgReactivate, answer, failure(answer, err))
 		return

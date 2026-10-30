@@ -392,6 +392,24 @@ func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
 		h.refuseCompat(w, r, opCompatRefresh, http.StatusUnauthorized, reasonRevisionStale, textRefreshReused)
 		return
 	}
+	if record.OrganizationID != nil && !user.IsSuperuser {
+		_, member, err := h.Users.Role(ctx, record.PrincipalID, *record.OrganizationID)
+		if err != nil {
+			h.fail(w, r, opCompatRefresh, err)
+			return
+		}
+		if !member {
+			// The membership the session was minted for is gone (the member
+			// was removed or left, D6507): end the session, never re-mint
+			// org-scoped access for it.
+			if _, err := h.Sessions.Revoke(ctx, record.ID, session.Actor{RequestID: requestid.Audit(ctx)}); err != nil {
+				h.fail(w, r, opCompatRefresh, err)
+				return
+			}
+			h.refuseCompat(w, r, opCompatRefresh, http.StatusUnauthorized, reasonNotEntitled, textInvalidRefresh)
+			return
+		}
+	}
 	if guardRefused {
 		h.refuseCompat(w, r, opCompatRefresh, http.StatusUnauthorized, reasonRevisionStale, textInvalidRefresh)
 		return

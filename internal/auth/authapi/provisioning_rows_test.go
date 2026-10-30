@@ -149,8 +149,10 @@ func TestTheReactivateRouteIsInTheStartupGate(t *testing.T) {
 	if routes != 10 {
 		t.Fatalf("%d provisioning routes served, want 10", routes)
 	}
-	if strings.Contains(f.logs.String(), "not mounted") {
-		t.Fatalf("a not-mounted line was logged: %s", f.logs.String())
+	for _, line := range strings.Split(f.logs.String(), "\n") {
+		if strings.Contains(line, "not mounted") && !strings.Contains(line, PatternOrgState) {
+			t.Fatalf("a not-mounted line was logged for a route other than the dark state route: %s", line)
+		}
 	}
 }
 

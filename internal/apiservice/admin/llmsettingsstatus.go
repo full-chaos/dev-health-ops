@@ -187,6 +187,11 @@ type agentReadinessRecord struct {
 	CheckedAt        string  `json:"checked_at"`
 	Outcome          string  `json:"outcome"`
 	SafeErrorCode    *string `json:"safe_error_code"`
+	// Go-only additions: the provider's vetted error.param/error.code of the
+	// failed probe, and the request parameters the probe dropped to pass.
+	ErrorParam    string   `json:"error_param,omitempty"`
+	ErrorCode     string   `json:"error_code,omitempty"`
+	DroppedParams []string `json:"dropped_params,omitempty"`
 }
 
 // loadAgentReadinessRecord is SettingsAgentReadinessStore.load, minus the
@@ -267,6 +272,17 @@ func readinessSafeFailureMessage(safeErrorCode *string) string {
 	}
 }
 
+// readinessFailureMessage is readinessSafeFailureMessage, naming the refused
+// request parameter when the record holds one that is a plain token.
+func readinessFailureMessage(record *agentReadinessRecord) string {
+	if record.SafeErrorCode != nil && *record.SafeErrorCode == errCodeInvalidRequest {
+		if param := vetProviderToken(record.ErrorParam); param != "" {
+			return "The configured Ask Dev model refused the request parameter " + param + "."
+		}
+	}
+	return readinessSafeFailureMessage(record.SafeErrorCode)
+}
+
 // llmSettingsStatusResponse assembles LLMSettingsStatusResponse (settings.py's
 // _llm_settings_status_response, CHAOS-6252a scope -- see this file's doc
 // comment for exactly what is and is not reproduced).
@@ -318,7 +334,7 @@ func (h *handlers) llmSettingsStatusResponse(ctx context.Context, orgID string) 
 				readiness = "ready"
 			} else {
 				readiness = "failed"
-				message := readinessSafeFailureMessage(record.SafeErrorCode)
+				message := readinessFailureMessage(record)
 				readinessFailureReason = &message
 			}
 		}

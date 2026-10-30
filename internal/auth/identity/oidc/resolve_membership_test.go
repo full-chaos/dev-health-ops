@@ -189,7 +189,7 @@ func TestResolveNewAccountChecksPrecedeTheJITStep(t *testing.T) {
 	}{
 		"unverified": {&resolveIdentities{err: ErrIdentityNotFound}, func(*Provider) {}, profile{Email: "p@example.com"}, http.StatusForbidden, ReasonEmailUnverified},
 		"collision":  {&resolveIdentities{err: ErrIdentityNotFound, inUse: true}, func(*Provider) {}, profile{Email: "p@example.com", EmailVerified: true}, http.StatusConflict, ReasonEmailCollision},
-		"disabled":   {&resolveIdentities{err: ErrIdentityNotFound}, func(r *Provider) { r.AutoProvision = false }, profile{Email: "p@example.com", EmailVerified: true}, http.StatusForbidden, ReasonProvisioningDisabled},
+		"disabled":   {&resolveIdentities{err: ErrIdentityNotFound}, func(r *Provider) { r.AutoProvision = false }, profile{Email: "p@example.com", EmailVerified: true}, http.StatusBadRequest, ReasonProvisioningDisabled},
 	} {
 		t.Run(name, func(t *testing.T) {
 			jit := &resolveJIT{}

@@ -132,19 +132,24 @@ id), `email_verification` (no verified email), `provisioning` (an unusable email
 or subject, auto-provisioning off, an identity conflict or an email another
 account holds, or no membership) and
 `domain_check` (the domain is off the list; the message names it). When that
-row cannot be written, the sign-in answers 500. A provider error go-api records (the OAuth
-token exchange failing, the OAuth profile request failing in transport or with
-a non-2xx status, or a SAML assertion without an email) is recorded as go-api
-records it: the provider row's `last_error`, `last_error_at`
-and `updated_at` (its status is left as it was) and an `sso_login` failure row
-with no stage, in one transaction, before the sign-in answers; the SAML answer
-is 400 `SAML authentication failed`. When the record cannot be written, the
-sign-in answers 500. No other OIDC or SAML refusal writes a row. A completed
-OIDC, OAuth or SAML sign-in is recorded as go-api records it: the provider
-row's `last_login_at` and `updated_at` and an `sso_login` success row on
-resource `session`, in one transaction, after the session is issued and before
-the tokens answer. When that record cannot be written, the sign-in answers 500
-and the tokens are withheld. The reason codes are:
+row cannot be written, the sign-in answers 500. A provider error go-api records is recorded as go-api
+records it, with go-api's fixed text: the provider row's `last_error`,
+`last_error_at` and `updated_at` (its status is left as it was) and an
+`sso_login` failure row, in one transaction, before the sign-in answers. These
+are: the OAuth token exchange or profile request failing (profile: in transport
+or with a non-2xx status); an OIDC discovery, token exchange, ID token or
+userinfo failure, and OIDC claims without an email; a SAML provider without a
+usable certificate, a signed assertion with no subject confirmation or no email;
+and, with stage `provisioning`, a new OIDC or SAML account with auto-provisioning
+off. The OIDC answers are `OIDC authentication failed` and, for
+auto-provisioning off, 400 `OIDC user provisioning failed`; the SAML answers are
+`SAML authentication failed` and `SAML user provisioning failed`. Checks only
+auth-service makes record nothing. When the record cannot be written, the
+sign-in answers 500. A completed OIDC, OAuth or SAML sign-in is recorded as go-api
+records it: the provider row's `last_login_at` and `updated_at` and an `sso_login`
+success row on resource `session`, in one transaction, after the session is issued
+and before the tokens answer. When that record cannot be written, the sign-in
+answers 500 and the tokens are withheld. The reason codes are:
 
 | Reason | Meaning |
 | --- | --- |

@@ -521,10 +521,11 @@ type validated struct {
 func (s *Service) exchangeAndValidate(ctx context.Context, row Provider, state flowState, code string) (validated, *Error) {
 	meta, err := resolveMetadata(ctx, s.cfg.HTTPClient, row.Config)
 	if err != nil {
-		return validated{}, authFailed(ReasonDependency, err)
+		return validated{}, s.recordedIfGoAPIRecords(ctx, row, err, authFailed(ReasonDependency, err))
 	}
 	if meta.Issuer == "" || row.Config.ClientID == "" || meta.JWKSURI == "" {
-		return validated{}, authFailed(ReasonMalformed, errors.New("provider configuration missing issuer, client_id or jwks_uri"))
+		return validated{}, s.recordedProviderFailure(ctx, row, ProviderKind, stageNone, msgOIDCConfig,
+			authFailed(ReasonMalformed, errors.New("provider configuration missing issuer, client_id or jwks_uri")))
 	}
 	oauthCfg := oauth2.Config{
 		ClientID: row.Config.ClientID, ClientSecret: clientSecret(s.cfg.Secrets, row.EncryptedSecrets),
@@ -533,23 +534,24 @@ func (s *Service) exchangeAndValidate(ctx context.Context, row Provider, state f
 	}
 	token, err := exchangeCode(ctx, s.cfg.HTTPClient, oauthCfg, code, state.CodeVerifier)
 	if err != nil {
-		return validated{}, authFailed(ReasonDependency, err)
+		return validated{}, s.recordedProviderFailure(ctx, row, ProviderKind, stageNone, msgOIDCExchange, authFailed(ReasonDependency, err))
 	}
 	rawIDToken, _ := token.Extra("id_token").(string)
-	if token.AccessToken == "" || rawIDToken == "" {
-		return validated{}, authFailed(ReasonMalformed, errors.New("token response missing access_token or id_token"))
+	if text := missingTokenText(token.AccessToken, rawIDToken); text != "" {
+		return validated{}, s.recordedProviderFailure(ctx, row, ProviderKind, stageNone, text,
+			authFailed(ReasonMalformed, errors.New("token response missing access_token or id_token")))
 	}
 	keys := gooidc.NewRemoteKeySet(gooidc.ClientContext(ctx, s.cfg.HTTPClient), meta.JWKSURI)
 	claims, err := verifyIDToken(ctx, keys, rawIDToken, claimRules{
 		Issuer: meta.Issuer, ClientID: row.Config.ClientID, Nonce: state.Nonce, Now: s.cfg.Now(),
 	})
 	if err != nil {
-		return validated{}, authFailed(reasonOf(err), err)
+		return validated{}, s.recordedIfGoAPIRecords(ctx, row, err, authFailed(reasonOf(err), err))
 	}
 	var userinfo map[string]any
 	if meta.UserinfoEndpoint != "" {
 		if userinfo, err = fetchUserinfo(ctx, s.cfg.HTTPClient, meta.UserinfoEndpoint, token.AccessToken); err != nil {
-			return validated{}, authFailed(ReasonDependency, err)
+			return validated{}, s.recordedIfGoAPIRecords(ctx, row, err, authFailed(ReasonDependency, err))
 		}
 		if sub, _ := userinfo["sub"].(string); sub != claims.Subject {
 			return validated{}, authFailed(ReasonMalformed, errors.New("userinfo subject differs from the ID token subject"))
@@ -573,6 +575,9 @@ func (s *Service) resolve(ctx context.Context, row Provider, v validated, reques
 		return Login{}, failure
 	}
 	if failure := checkProviderEmail(row, v.profile.Email); failure != nil {
+		if v.profile.Email == "" && !strings.HasPrefix(row.Protocol, "oauth_") {
+			return Login{}, s.recordedProviderFailure(ctx, row, ProviderKind, stageNone, msgClaimsNoEmail, failure)
+		}
 		if failure.Reason == ReasonDomainNotAllowed && strings.HasPrefix(row.Protocol, "oauth_") {
 			if f := s.auditDenial(ctx, row, "domain_check",
 				fmt.Sprintf("Email domain '%s' is not allowed for this provider", emailDomain(v.profile.Email))); f != nil {
@@ -691,18 +696,25 @@ func (s *Service) checkNewAccount(ctx context.Context, row Provider, v validated
 		return conflict()
 	}
 	if !row.AutoProvision {
-		return deny(http.StatusForbidden, ReasonProvisioningDisabled, "User not found and auto-provisioning is disabled")
+		if strings.HasPrefix(row.Protocol, "oauth_") {
+			return deny(http.StatusForbidden, ReasonProvisioningDisabled, "User not found and auto-provisioning is disabled")
+		}
+		return s.recordedProviderFailure(ctx, row, ProviderKind, stageProvisioning, msgAutoProvisionOff,
+			deny(http.StatusBadRequest, ReasonProvisioningDisabled, detailProvisioningFails))
 	}
 	return nil
 }
 
 // checkProviderEmail is go-api's e-mail block of the OIDC callback (oidc.go), run on every sign-in before the
-// lookup: a missing address is 400; with a domain list, an address with no "@" is 400 and a domain off the list 403.
+// lookup: a missing address is 400 (go-api's "OIDC claims missing email", answered as the authentication failure); with a domain list, an address with no "@" is 400 and a domain off the list 403.
 // go-api's OAuth callback (oauth.go) has no malformed branch: there an address with no "@" is the domain 403, and
 // the domain 403 carries its OAuth detail object (oauthDomainDeniedDetail).
 func checkProviderEmail(row Provider, email string) *Error {
 	if email == "" {
-		return deny(http.StatusBadRequest, ReasonMalformed, "Email address is missing from OIDC claims")
+		if strings.HasPrefix(row.Protocol, "oauth_") {
+			return deny(http.StatusBadRequest, ReasonMalformed, "Email address is missing from OIDC claims")
+		}
+		return authFailed(ReasonMalformed, errors.New("claims missing email"))
 	}
 	if len(row.AllowedDomains) == 0 {
 		return nil

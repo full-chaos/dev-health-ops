@@ -33,14 +33,17 @@ func (h *harness) providerRecord(t *testing.T, provider uuid.UUID) providerRecor
 	return r
 }
 
-// goAPIFailureRow writes, through go-api's own writer and as recordSSOFailure builds it (protocol, no stage), go-api's
+// goAPIFailureRow writes, through go-api's own writer and as recordSSOFailure builds it (protocol, the stage if any), go-api's
 // row for a provider failure with message, under a marker resource id, and reads it back.
-func (h *harness) goAPIFailureRow(t *testing.T, orgID uuid.UUID, protocol, message string) auditRow {
+func (h *harness) goAPIFailureRow(t *testing.T, orgID uuid.UUID, protocol, stage, message string) auditRow {
 	t.Helper()
 	marker := "go-api-" + uuid.NewString()
 	sanitized := pythonparity.SanitizeErrorTextHardened(message, 4000)
 	meta := pyjson.NewObject()
 	meta.Set("protocol", protocol)
+	if stage != "" {
+		meta.Set("stage", stage)
+	}
 	metaJSON, err := pyjson.Dumps(meta)
 	if err != nil {
 		t.Fatal(err)
@@ -99,7 +102,7 @@ func TestOAuthProviderErrorsRecordTheFailureAndKeepTheProviderActive(t *testing.
 			if len(got) != 1 {
 				t.Fatalf("audit rows %+v, want exactly one", got)
 			}
-			want := h.goAPIFailureRow(t, h.orgID, "oauth", tc.message)
+			want := h.goAPIFailureRow(t, h.orgID, "oauth", "", tc.message)
 			want.resourceID = provider.String()
 			if got[0] != want {
 				t.Fatalf("row %+v\ngo-api %+v", got[0], want)

@@ -86,8 +86,8 @@ func TestGuardedWriteTakesThePlatformRoleWriteLockFirstWhileOwned(t *testing.T) 
 				t.Fatalf("owned %v: statement %d is %q, want %q", owned, i, tx.statements[i], want[i])
 			}
 		}
-		if owned && (len(tx.args[0]) != 1 || tx.args[0][0] != rule.WriteLock) {
-			t.Fatalf("owned: lock args %v, want [%s]", tx.args[0], rule.WriteLock)
+		if owned && (tx.statements[0] != "SELECT pg_advisory_xact_lock_shared(hashtextextended($1, 0))" || len(tx.args[0]) != 1 || tx.args[0][0] != "auth.platform_role_assignments:write") {
+			t.Fatalf("owned: lock %q %v, want the shared transaction lock on auth.platform_role_assignments:write", tx.statements[0], tx.args[0])
 		}
 	}
 }

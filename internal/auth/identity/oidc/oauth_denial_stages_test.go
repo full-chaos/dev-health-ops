@@ -145,17 +145,18 @@ func TestOAuthRefusalsWriteGoAPIsStageRow(t *testing.T) {
 		message string
 		reason  Reason
 	}{
-		"state expired":           {stageCase{email: "u@example.test", confirmed: true, late: 11 * time.Minute}, "state_auth", "OAuth state expired", ReasonExpired},
-		"state of another org":    {stageCase{email: "u@example.test", confirmed: true, stateOrg: &other}, "state_auth", "OAuth state mismatch", ReasonMalformed},
-		"login cookie wrong":      {stageCase{email: "u@example.test", confirmed: true, cookie: "other"}, "state_auth", "OAuth state mismatch", ReasonMalformed},
-		"profile without an id":   {stageCase{email: "u@example.test", confirmed: true, noID: true}, "provider_profile", msgMissingProviderID, ReasonInvalidCredentials},
-		"unusable email":          {stageCase{email: "u\x00@example.test", confirmed: true}, "provisioning", msgInvalidProviderEmail, ReasonMalformed},
-		"unverified email":        {stageCase{email: "u@example.test", confirmed: false}, "email_verification", msgNoVerifiedEmail, ReasonEmailUnverified},
-		"subject not a key":       {stageCase{email: "u@example.test", confirmed: true, badSubject: true}, "provisioning", msgInvalidProviderID, ReasonMissingSub},
-		"auto-provisioning off":   {stageCase{email: "u@example.test", confirmed: true, identities: &resolveIdentities{err: ErrIdentityNotFound}}, "provisioning", "user not found and auto-provisioning is disabled", ReasonProvisioningDisabled},
-		"identity conflict":       {stageCase{email: "u@example.test", confirmed: true, autoProvision: true, identities: &resolveIdentities{err: ErrIdentityAmbiguous}}, "provisioning", "identity conflict", ReasonIdentityConflict},
-		"not an org member":       {stageCase{email: "u@example.test", confirmed: true, autoProvision: true, identities: &resolveIdentities{err: ErrNotOrgMember}}, "provisioning", "membership required", ReasonMembershipRequired},
-		"new account, no JIT set": {stageCase{email: "u@example.test", confirmed: true, autoProvision: true, identities: &resolveIdentities{err: ErrIdentityNotFound}}, "provisioning", "membership required", ReasonMembershipRequired},
+		"state expired":                 {stageCase{email: "u@example.test", confirmed: true, late: 11 * time.Minute}, "state_auth", "OAuth state expired", ReasonExpired},
+		"state of another org":          {stageCase{email: "u@example.test", confirmed: true, stateOrg: &other}, "state_auth", "OAuth state mismatch", ReasonMalformed},
+		"login cookie wrong":            {stageCase{email: "u@example.test", confirmed: true, cookie: "other"}, "state_auth", "OAuth state mismatch", ReasonMalformed},
+		"profile without an id":         {stageCase{email: "u@example.test", confirmed: true, noID: true}, "provider_profile", msgMissingProviderID, ReasonInvalidCredentials},
+		"unusable email":                {stageCase{email: "u\x00@example.test", confirmed: true}, "provisioning", msgInvalidProviderEmail, ReasonMalformed},
+		"unverified email":              {stageCase{email: "u@example.test", confirmed: false}, "email_verification", msgNoVerifiedEmail, ReasonEmailUnverified},
+		"subject not a key":             {stageCase{email: "u@example.test", confirmed: true, badSubject: true}, "provisioning", msgInvalidProviderID, ReasonMissingSub},
+		"auto-provisioning off":         {stageCase{email: "u@example.test", confirmed: true, identities: &resolveIdentities{err: ErrIdentityNotFound}}, "provisioning", "user not found and auto-provisioning is disabled", ReasonProvisioningDisabled},
+		"identity conflict":             {stageCase{email: "u@example.test", confirmed: true, autoProvision: true, identities: &resolveIdentities{err: ErrIdentityAmbiguous}}, "provisioning", "identity conflict", ReasonIdentityConflict},
+		"not an org member":             {stageCase{email: "u@example.test", confirmed: true, autoProvision: true, identities: &resolveIdentities{err: ErrNotOrgMember}}, "provisioning", "membership required", ReasonMembershipRequired},
+		"new account, no JIT set":       {stageCase{email: "u@example.test", confirmed: true, autoProvision: true, identities: &resolveIdentities{err: ErrIdentityNotFound}}, "provisioning", "membership required", ReasonMembershipRequired},
+		"email held by another account": {stageCase{email: "u@example.test", confirmed: true, autoProvision: true, identities: &resolveIdentities{err: ErrIdentityNotFound, inUse: true}}, "provisioning", "identity conflict", ReasonEmailCollision},
 	} {
 		t.Run(name, func(t *testing.T) {
 			without, _, _ := runStage(t, tc.c, nil)

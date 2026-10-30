@@ -89,3 +89,25 @@ func TestOAuthRefusalStagesWriteGoAPIsRows(t *testing.T) {
 		})
 	}
 }
+
+// A new account whose email another account already holds: go-api's identity conflict (provision.go) is the
+// provisioning row "identity conflict"; the 409 answers as before and nothing else is written.
+func TestOAuthEmailCollisionWritesGoAPIsIdentityConflictRow(t *testing.T) {
+	h := newHarness(t, harnessOpts{signup: false})
+	provider, client := h.seedOAuthProvider(t, h.orgID, "oauth_gitlab", nil)
+	email := uniqueEmail("held")
+	h.seedPublicUser(t, email, "local", "")
+	before := h.snapshot(t)
+	_, failure := h.finishOAuth(t, provider, client, h.startOAuth(t, provider), fakeAccountWith(email, true), true)
+	wantDenied(t, failure, http.StatusConflict, ReasonEmailCollision)
+	wantUnchanged(t, h, before)
+	got := h.auditRows(t, `resource_id = $1`, provider.String())
+	if len(got) != 1 {
+		t.Fatalf("audit rows %+v, want exactly one", got)
+	}
+	want := h.goAPIStageRow(t, h.orgID, "provisioning", "identity conflict")
+	want.resourceID = provider.String()
+	if got[0] != want {
+		t.Fatalf("row %+v\ngo-api %+v", got[0], want)
+	}
+}

@@ -127,3 +127,34 @@ func TestProvisioningRoutesRefuseUserTokens(t *testing.T) {
 	}
 	usertokens.NoLeak(t, "the logs", f.logs.String(), tokens)
 }
+
+// The rows gate needs the invite revoke route's row, named by its literal
+// route (not through provisioningPatterns): without it the switch builds no
+// route.
+func TestTheRowsGateNeedsTheInviteRevokeRow(t *testing.T) {
+	const route = "/internal/v1/invites/revoke"
+	var document map[string]any
+	if err := json.Unmarshal(authv1.AuthServiceEndpointProfiles, &document); err != nil {
+		t.Fatal(err)
+	}
+	var kept []any
+	found := false
+	for _, item := range document["rows"].([]any) {
+		if item.(map[string]any)["route"] == route {
+			found = true
+			continue
+		}
+		kept = append(kept, item)
+	}
+	if !found {
+		t.Fatalf("the embedded document has no %s row", route)
+	}
+	document["rows"] = kept
+	raw, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := provisioningRowsPresent(raw); !errors.Is(err, errProvisioningRows) || !strings.Contains(err.Error(), "POST "+route+" ") {
+		t.Fatalf("without the revoke row: %v, want a refusal naming the route", err)
+	}
+}

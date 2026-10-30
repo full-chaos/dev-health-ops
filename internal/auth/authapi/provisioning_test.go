@@ -168,6 +168,16 @@ type fakeInvites struct {
 	calls  int
 	create invite.CreateInput
 	accept invite.AcceptInput
+	revoke invite.RevokeInput
+}
+
+func (f *fakeInvites) Revoke(_ context.Context, in invite.RevokeInput) error {
+	f.calls++
+	f.revoke = in
+	if err := in.Authorize(context.Background(), audit.TxOps{}, in.OrgID); err != nil {
+		return err
+	}
+	return f.err
 }
 
 func (f *fakeInvites) Create(_ context.Context, in invite.CreateInput) (*invite.Created, error) {

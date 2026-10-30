@@ -71,22 +71,17 @@ func (f *provFixture) revokeBody(actor uuid.UUID, inviteID uuid.UUID) map[string
 	return map[string]any{"organization_id": f.org.String(), "invite_id": inviteID.String(), "actor_principal_id": actor.String()}
 }
 
-// The revoke route is not mounted: ProvisioningRoutes serves no revoke, so
-// the served-route census and the rows gate are unchanged until its row lands.
-func TestInviteRevokeIsNotMountedYet(t *testing.T) {
+// The revoke route is mounted with the other provisioning routes and reaches
+// the invite aggregate's revoke.
+func TestInviteRevokeIsMounted(t *testing.T) {
 	f := newProvFixture(t)
-	if response := f.post(PatternInviteRevoke, encode(f.revokeBody(f.owner, uuid.New())), nil); response.Code != http.StatusNotFound {
-		t.Fatalf("POST %s through the provisioning routes = %d, want 404", PatternInviteRevoke, response.Code)
+	id := uuid.New()
+	response := f.post(PatternInviteRevoke, encode(f.revokeBody(f.owner, id)), nil)
+	if response.Code != http.StatusOK || f.invites.revoke.InviteID != id {
+		t.Fatalf("POST %s through the provisioning routes = %d %s, want 200 from the store's revoke", PatternInviteRevoke, response.Code, response.Body)
 	}
-	routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
-		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, route := range routes {
-		if route.Pattern == PatternInviteRevoke {
-			t.Fatal("ProvisioningRoutes mounts the invite revoke route")
-		}
+	if got, ok := f.uses(opInviteRevoke); !ok || got != 1 {
+		t.Fatalf("compat credential uses for %s = %d (%v), want 1", opInviteRevoke, got, ok)
 	}
 }
 

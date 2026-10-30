@@ -39,7 +39,7 @@ the person. The email address never selects an account.
 | The key is new, and an account already holds the email | Refused with a conflict. Nothing is written or linked. For a social sign-in the answer names the existing sign-in method, so the user can sign in that way and then link. |
 | The key is new, no account holds the email, and creation is allowed | An account is created (see below). |
 | The key is new and creation is not allowed | Refused. Nothing is written. |
-| The key is new and the provider cannot show a verified email (social, OAuth) | Refused. No account is created or linked. A key that is already bound signs in without this check. |
+| The key is new and the provider cannot show a verified email (social, OAuth) | Refused. No account is created or linked. A social key that is already bound signs in without this check; an SSO OAuth sign-in is checked every time. |
 
 ## Explicit link and unlink
 
@@ -78,7 +78,10 @@ default role (`member` when unset). With `auto_provision_users` on:
 
 1. The response must carry an email. When `allowed_domains` is set, the email
    domain must be in the list (compared exactly). An email with no domain is
-   refused when the list is set.
+   refused when the list is set. These checks run on every sign-in, also for a
+   key that is already linked: when its domain leaves the list, or the provider
+   sends no email, the next sign-in is refused. To let the user in again, an
+   organization admin adds the domain to `allowed_domains`.
 2. A new key whose email is held by another account is refused with an
    identity conflict.
 3. Otherwise the user, the identity and the membership in the provider's

@@ -249,6 +249,17 @@ func (s *Service) ConsumeFor(ctx context.Context, p Provider, posted string, coo
 	if identity.RefuseProviderEmail(email) != nil {
 		return SignIn{}, s.refuse(ctx, p, ErrUnusableEmail)
 	}
+	// The address and the provider's domain list decide every sign-in, linked
+	// or not, before the lookup (go-api saml.go).
+	if email == "" {
+		return SignIn{}, s.refuse(ctx, p, ErrEmailMissing)
+	}
+	if len(p.AllowedDomains) > 0 && !strings.Contains(email, "@") {
+		return SignIn{}, s.refuse(ctx, p, ErrEmailMalformed)
+	}
+	if !p.DomainAllowed(email) {
+		return SignIn{}, s.refuse(ctx, p, ErrDomainNotAllowed)
+	}
 	legacy := &LegacyMatch{AuthProvider: "saml", Subject: v.NameID.Value, MembershipOrg: p.OrgID}
 	principal, found, err := s.Store.IdentityBySubject(ctx, id, legacy)
 	if errors.Is(err, ErrNotOrgMember) || errors.Is(err, ErrIdentityAmbiguous) {
@@ -258,15 +269,6 @@ func (s *Service) ConsumeFor(ctx context.Context, p Provider, posted string, coo
 		return SignIn{}, err
 	}
 	if !found {
-		if email == "" {
-			return SignIn{}, s.refuse(ctx, p, ErrEmailMissing)
-		}
-		if len(p.AllowedDomains) > 0 && !strings.Contains(email, "@") {
-			return SignIn{}, s.refuse(ctx, p, ErrEmailMalformed)
-		}
-		if !p.DomainAllowed(email) {
-			return SignIn{}, s.refuse(ctx, p, ErrDomainNotAllowed)
-		}
 		principalID, err := s.provisionNew(ctx, p, id, email, s.fullName(p, v))
 		if err != nil {
 			return SignIn{}, err

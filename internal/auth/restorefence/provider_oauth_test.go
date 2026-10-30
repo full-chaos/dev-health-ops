@@ -143,10 +143,10 @@ func TestTheCanonicalDigestBreaksKeyTiesAndKeepsOldDigests(t *testing.T) {
 	}
 }
 
-// C3: adding the provider section is the only change of the section set: every other section exports exactly what the
-// version 2 manifest held.
+// C3: the sections added after version 2 (the provider section, then the password sections) are the only changes of the
+// section set: every other section exports exactly what the version 2 manifest held.
 func TestEveryOtherSectionExportsWhatVersionTwoHeld(t *testing.T) {
-	if got := sectionSetDigest(t, oauthSection); got != pinnedSectionSet[2] {
+	if got := sectionSetDigest(t, oauthSection, authPasswordSection, legacyPasswordSection); got != pinnedSectionSet[2] {
 		t.Errorf("a section other than %s changed its export (digest %s, version 2 pinned %s)", oauthSection, got, pinnedSectionSet[2])
 	}
 }

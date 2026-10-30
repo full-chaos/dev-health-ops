@@ -467,6 +467,26 @@ func TestOrgsBackfillLeavesAnInactiveMembershipAlone(t *testing.T) {
 	if _, err := e.admin.Exec(ctx, `UPDATE public.memberships SET invited_by_id = $3 WHERE org_id = $1 AND user_id = $2`, org, m, inv); err != nil {
 		t.Fatal(err)
 	}
+	type rowState struct {
+		ID      uuid.UUID
+		Status  string
+		Inviter *uuid.UUID
+		Joined  *time.Time
+		Updated time.Time
+	}
+	readRow := func() rowState {
+		var r rowState
+		if err := e.admin.QueryRow(ctx, `SELECT id, status, invited_by, joined_at, updated_at FROM auth.memberships WHERE organization_id = $1 AND principal_id = $2`, org, m).
+			Scan(&r.ID, &r.Status, &r.Inviter, &r.Joined, &r.Updated); err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	auditRows := func(id uuid.UUID) int {
+		return e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE attributes->>'target_id' = $1`, id.String())
+	}
+	rowBefore := readRow()
+	auditBefore := auditRows(rowBefore.ID)
 	before := e.writes(t, ctx)
 	rep := e.runOrgs(t, ctx, false)
 	if rep.InvitersSet != 0 || rep.JoinedSet != 0 || rep.AuthDiverged != 1 {
@@ -475,8 +495,13 @@ func TestOrgsBackfillLeavesAnInactiveMembershipAlone(t *testing.T) {
 	if got := e.writes(t, ctx); got != before {
 		t.Fatalf("inactive run wrote: got audit/outbox/revision %v, want %v", got, before)
 	}
-	if got := e.authInviter(t, ctx, org, m); got != nil {
-		t.Fatalf("inactive row inviter: got %v, want nil", got)
+	rowAfter := readRow()
+	if rowAfter.Status != "removed" || rowAfter.Inviter != nil || !rowAfter.Updated.Equal(rowBefore.Updated) ||
+		(rowAfter.Joined == nil) != (rowBefore.Joined == nil) || (rowAfter.Joined != nil && !rowAfter.Joined.Equal(*rowBefore.Joined)) {
+		t.Fatalf("inactive row: got %+v, want status removed, inviter nil and the other columns as before %+v", rowAfter, rowBefore)
+	}
+	if got := auditRows(rowBefore.ID); got != auditBefore {
+		t.Fatalf("audit rows naming the inactive membership: got %d, want %d", got, auditBefore)
 	}
 	e.setAuthMembershipStatus(t, ctx, org, m, "active")
 }

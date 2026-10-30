@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -18,6 +21,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
 const (
@@ -34,17 +38,21 @@ type fakeRow struct {
 }
 
 type fakeStore struct {
-	due        []*fakeRow
-	next       int
-	nextErr    error
-	sentErr    error
-	failedErr  error
-	totalsErr  error
-	nextCalls  int
-	released   int
-	pending    int64
-	exhausted  int64
-	totalCalls int
+	due     []*fakeRow
+	next    int
+	nextErr error
+	sentErr error
+	// lostDeletes makes that many Sent calls fail after the provider call, as
+	// a DELETE whose commit is lost; the released row is then due again.
+	lostDeletes int
+	failedErr   error
+	totalsErr   error
+	nextCalls   int
+	released    int
+	pending     int64
+	exhausted   int64
+	totalCalls  int
+	lost        bool
 }
 
 func (store *fakeStore) Next(context.Context) (Claim, bool, error) {
@@ -76,6 +84,11 @@ func (claim *fakeClaim) Sent(context.Context) error {
 	if claim.store.sentErr != nil {
 		return claim.store.sentErr
 	}
+	if claim.store.lostDeletes > 0 {
+		claim.store.lostDeletes--
+		claim.store.lost = true
+		return errors.New("commit lost")
+	}
 	claim.row.sent = true
 	return nil
 }
@@ -89,7 +102,13 @@ func (claim *fakeClaim) Failed(_ context.Context, reason string) (int, error) {
 	return claim.row.attempts, nil
 }
 
-func (claim *fakeClaim) Release(context.Context) { claim.store.released++ }
+func (claim *fakeClaim) Release(context.Context) {
+	claim.store.released++
+	if claim.store.lost {
+		claim.store.lost = false
+		claim.store.next--
+	}
+}
 
 // fakeDecryptor opens "sealed:<token>" and refuses anything else.
 type fakeDecryptor struct{}
@@ -374,5 +393,72 @@ func TestNewHandlerRefusesMissingDependencies(t *testing.T) {
 	}
 	if _, err := NewHandler(&fakeStore{}, fakeDecryptor{}, nil, true, logger); err == nil {
 		t.Fatal("nil revoker accepted")
+	}
+}
+
+// RFC 7009 section 2.2: the revocation endpoint answers 200 for a token that is
+// invalid or already revoked ("invalid tokens do not cause an error response").
+// The repository holds no PagerDuty document or recorded answer that says
+// otherwise, so the cell pins the RFC answer on the real client: a 200 for an
+// already-revoked token counts as sent; a 4xx never does.
+func TestAnAlreadyRevokedAnswerCountsAsSentAndA4xxDoesNot(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		values, _ := url.ParseQuery(string(body))
+		switch values.Get("token") {
+		case "tok-already-revoked":
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":"invalid_request"}`))
+		}
+	}))
+	defer server.Close()
+	config := providerfoundation.PagerDutyRevokeConfig{ClientID: "client", RevokeURL: server.URL}
+	revoked, refused := dueRow("sealed:tok-already-revoked", 0), dueRow("sealed:tok-400", 0)
+	store := &fakeStore{due: []*fakeRow{revoked, refused}}
+	handler, err := NewHandler(store, fakeDecryptor{}, func(ctx context.Context, token string) error {
+		return providerfoundation.RevokePagerDutyOAuthToken(ctx, server.Client(), config, token)
+	}, true, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.Work(context.Background(), execution(due)); err != nil {
+		t.Fatal(err)
+	}
+	if !revoked.sent || revoked.attempts != 0 {
+		t.Fatalf("already-revoked answer: sent=%v attempts=%d, want sent", revoked.sent, revoked.attempts)
+	}
+	if refused.sent || !reflect.DeepEqual(refused.failures, []string{ReasonRemoteRevokeFailed}) {
+		t.Fatalf("4xx answer: sent=%v failures=%v, want refused", refused.sent, refused.failures)
+	}
+}
+
+// A lost delete (PagerDuty accepted, the DELETE did not commit) sends the same
+// revoke once more on the next run, which PagerDuty answers as for a revoked
+// token; the row then ends deleted and nothing is named as exhausted.
+func TestALostDeleteSendsTheRevokeOnceMoreAndEndsDeleted(t *testing.T) {
+	row := dueRow("sealed:tok-lost-delete", 0)
+	store := &fakeStore{due: []*fakeRow{row}, lostDeletes: 1}
+	h := newHarness(t, store, true)
+	first := h.handler.Work(context.Background(), execution(due))
+	if first == nil || !strings.Contains(first.Error(), string(jobruntime.CategoryRetryable)) {
+		t.Fatalf("first run = %v, want retryable", first)
+	}
+	if row.sent || row.attempts != 0 {
+		t.Fatalf("after the lost delete: sent=%v attempts=%d, want pending at 0 attempts", row.sent, row.attempts)
+	}
+	if err := h.handler.Work(context.Background(), execution(due)); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if !row.sent || len(h.revoker.calls) != 2 {
+		t.Fatalf("sent=%v provider calls=%d, want the row deleted after exactly 2 calls", row.sent, len(h.revoker.calls))
+	}
+	if strings.Contains(h.logs.String(), `"level":"WARN"`) {
+		t.Fatalf("a lost delete produced a WARN line: %s", h.logs.String())
+	}
+	if h.counter(t, "exhausted") != 0 || h.counter(t, "revoked") != 1 {
+		t.Fatalf("counters exhausted=%d revoked=%d, want 0 and 1", h.counter(t, "exhausted"), h.counter(t, "revoked"))
 	}
 }

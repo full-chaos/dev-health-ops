@@ -64,7 +64,7 @@ func TestReactivateSendsTheOrgAndTheActorWithTheServiceCredential(t *testing.T) 
 		_ = json.Unmarshal(raw, &body)
 		_, _ = w.Write([]byte(`{"organization_id":"` + org.String() + `","status":"active","reactivated":true}`))
 	})
-	if err := client.Reactivate(context.Background(), org, actor); err != nil {
+	if err := client.Reactivate(context.Background(), org, actor, nil); err != nil {
 		t.Fatalf("Reactivate = %v", err)
 	}
 	if gotMethod != http.MethodPost || gotPath != Path || gotAuth != "Bearer "+testToken || gotType != "application/json" {
@@ -80,7 +80,7 @@ func TestAnAlreadyActiveOrganizationIsSuccess(t *testing.T) {
 	client, _ := newClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"organization_id":"` + org.String() + `","status":"active","reactivated":false}`))
 	})
-	if err := client.Reactivate(context.Background(), org, uuid.New()); err != nil {
+	if err := client.Reactivate(context.Background(), org, uuid.New(), nil); err != nil {
 		t.Fatalf("a no-op answer = %v, want success", err)
 	}
 }
@@ -115,7 +115,7 @@ func TestEveryFailureIsAnErrorAndNamesItsClass(t *testing.T) {
 				w.WriteHeader(tc.status)
 				_, _ = w.Write([]byte(tc.body))
 			})
-			err := client.Reactivate(context.Background(), org, uuid.New())
+			err := client.Reactivate(context.Background(), org, uuid.New(), nil)
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("Reactivate = %v, want %v", err, tc.want)
 			}
@@ -139,14 +139,14 @@ func TestATimeoutAndAnUnreachableServerAreUnavailable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := client.Reactivate(context.Background(), uuid.New(), uuid.New()); !errors.Is(err, ErrUnavailable) {
+	if err := client.Reactivate(context.Background(), uuid.New(), uuid.New(), nil); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("timeout = %v, want ErrUnavailable", err)
 	}
 	closed := httptest.NewServer(http.NotFoundHandler())
 	base, _ = url.Parse(closed.URL)
 	closed.Close()
 	client, _ = New(base, testToken, time.Second)
-	if err := client.Reactivate(context.Background(), uuid.New(), uuid.New()); !errors.Is(err, ErrUnavailable) {
+	if err := client.Reactivate(context.Background(), uuid.New(), uuid.New(), nil); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("unreachable = %v, want ErrUnavailable", err)
 	}
 }
@@ -156,7 +156,7 @@ func TestNoErrorCarriesTheCredentialOrTheAnswerBody(t *testing.T) {
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = w.Write([]byte(`{"detail":"SENTINEL-ANSWER-TEXT"}`))
 	})
-	err := client.Reactivate(context.Background(), uuid.New(), uuid.New())
+	err := client.Reactivate(context.Background(), uuid.New(), uuid.New(), nil)
 	if err == nil || strings.Contains(err.Error(), testToken) || strings.Contains(err.Error(), "SENTINEL-ANSWER-TEXT") {
 		t.Fatalf("error = %v", err)
 	}
@@ -166,7 +166,7 @@ func TestAnAnswerOverTheBoundIsUnavailable(t *testing.T) {
 	client, _ := newClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"organization_id":"` + strings.Repeat("a", 128<<10) + `"}`))
 	})
-	if err := client.Reactivate(context.Background(), uuid.New(), uuid.New()); !errors.Is(err, ErrUnavailable) {
+	if err := client.Reactivate(context.Background(), uuid.New(), uuid.New(), nil); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("an oversized answer = %v, want ErrUnavailable", err)
 	}
 }
@@ -190,7 +190,7 @@ func TestReactivateNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
 	if client.http.CheckRedirect == nil || client.http.CheckRedirect(nil, nil) != http.ErrUseLastResponse {
 		t.Fatal("the client's own CheckRedirect does not answer http.ErrUseLastResponse")
 	}
-	if err := client.Reactivate(context.Background(), uuid.New(), uuid.New()); !errors.Is(err, ErrUnavailable) {
+	if err := client.Reactivate(context.Background(), uuid.New(), uuid.New(), nil); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("redirect = %v, want ErrUnavailable", err)
 	}
 	if len(reached) != 0 {
@@ -215,7 +215,7 @@ func TestSuspendSendsTheOrgAndTheActorWithTheServiceCredential(t *testing.T) {
 		_ = json.Unmarshal(raw, &body)
 		_, _ = w.Write([]byte(`{"organization_id":"` + org.String() + `","status":"suspended","suspended":true}`))
 	})
-	if err := client.Suspend(context.Background(), org, actor); err != nil {
+	if err := client.Suspend(context.Background(), org, actor, nil); err != nil {
 		t.Fatalf("Suspend = %v", err)
 	}
 	if gotMethod != http.MethodPost || gotPath != SuspendPath || gotAuth != "Bearer "+testToken || gotType != "application/json" {
@@ -231,7 +231,7 @@ func TestAnAlreadySuspendedOrganizationIsSuccess(t *testing.T) {
 	client, _ := newClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"organization_id":"` + org.String() + `","status":"suspended","suspended":false}`))
 	})
-	if err := client.Suspend(context.Background(), org, uuid.New()); err != nil {
+	if err := client.Suspend(context.Background(), org, uuid.New(), nil); err != nil {
 		t.Fatalf("a no-op answer = %v, want success", err)
 	}
 }
@@ -259,7 +259,7 @@ func TestSuspendFailuresAreErrorsAndNameTheirClass(t *testing.T) {
 				w.WriteHeader(tc.status)
 				_, _ = w.Write([]byte(tc.body))
 			})
-			err := client.Suspend(context.Background(), org, uuid.New())
+			err := client.Suspend(context.Background(), org, uuid.New(), nil)
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("Suspend = %v, want %v", err, tc.want)
 			}
@@ -286,7 +286,7 @@ func TestSuspendNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := client.Suspend(context.Background(), uuid.New(), uuid.New()); !errors.Is(err, ErrUnavailable) {
+	if err := client.Suspend(context.Background(), uuid.New(), uuid.New(), nil); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("redirect = %v, want ErrUnavailable", err)
 	}
 	if len(reached) != 0 {
@@ -299,7 +299,7 @@ func TestNoSuspendErrorCarriesTheCredentialOrTheAnswerBody(t *testing.T) {
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = w.Write([]byte(`{"detail":"SENTINEL-ANSWER-TEXT"}`))
 	})
-	err := client.Suspend(context.Background(), uuid.New(), uuid.New())
+	err := client.Suspend(context.Background(), uuid.New(), uuid.New(), nil)
 	if err == nil || strings.Contains(err.Error(), testToken) || strings.Contains(err.Error(), "SENTINEL-ANSWER-TEXT") {
 		t.Fatalf("error = %v", err)
 	}

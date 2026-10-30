@@ -279,6 +279,11 @@ func (h *handlers) createOrganization(w http.ResponseWriter, r *http.Request) {
 		org.Description = &description
 	}
 
+	if h.orgProvision != nil && ownerUserID != "" {
+		h.createOrganizationInAuth(ctx, w, org, ownerID)
+		return
+	}
+
 	// OrganizationService.create: the org row and its owner membership (if
 	// any) are one SQLAlchemy session, durable only when the router's
 	// commit runs -- a failed owner-membership insert must not leave a

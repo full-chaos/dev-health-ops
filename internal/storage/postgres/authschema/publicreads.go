@@ -60,6 +60,26 @@ func SessionReaderColumns() ColumnGrant {
 	return ColumnGrant{Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at", "legacy_token_version"}}
 }
 
+// PlatformRoleReaderColumns is what a session reader role also reads while the
+// platform roles switch is on: the columns platformrole.HoldsSQL reads.
+func PlatformRoleReaderColumns() []ColumnGrant {
+	return []ColumnGrant{
+		{Table: "platform_role_assignments", Columns: []string{"principal_id", "role_key", "expires_at"}},
+		{Table: "principals", Columns: []string{"id", "kind", "disabled_at"}},
+	}
+}
+
+// SessionReaderReads is everything a session reader role reads in the auth
+// schema: SessionReaderColumns, then PlatformRoleReaderColumns while
+// platformRolesOwned.
+func SessionReaderReads(platformRolesOwned bool) []ColumnGrant {
+	reads := []ColumnGrant{SessionReaderColumns()}
+	if platformRolesOwned {
+		reads = append(reads, PlatformRoleReaderColumns()...)
+	}
+	return reads
+}
+
 // TableWriteGrant is a column-level SELECT and UPDATE grant on one ops-schema
 // table, outside PublicReadColumns' read-only rule.
 type TableWriteGrant struct {
@@ -737,6 +757,9 @@ func publicReadViolations(ctx context.Context, conn *pgx.Conn, options Options) 
 		if options.UsersOwned && schema == publicSchema && (kind == "r" || kind == "p") && isInviteWriteColumn(table, privilege, column) {
 			continue
 		}
+		if schema == publicSchema && (kind == "r" || kind == "p") && isPublicAuditWriteColumn(table, privilege, column) {
+			continue
+		}
 		violations = append(violations, Violation{
 			Kind: "column", Schema: schema, Object: table + "." + column, Privilege: privilege,
 			Detail: "not declared in PublicReadColumns",
@@ -753,5 +776,9 @@ func publicReadViolations(ctx context.Context, conn *pgx.Conn, options Options) 
 	if err != nil {
 		return nil, err
 	}
-	return append(append(violations, missing...), inviteMissing...), nil
+	auditMissing, err := publicAuditWriteMissing(ctx, conn, options)
+	if err != nil {
+		return nil, err
+	}
+	return append(append(append(violations, missing...), inviteMissing...), auditMissing...), nil
 }

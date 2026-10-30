@@ -393,6 +393,101 @@ func TestRefreshMintsAGoAPIAccessTokenWithSidAndAnswersRefreshResponseV1(t *test
 	}
 }
 
+// A session whose organization has no membership row for its principal (the
+// member was removed or left) is refused and revoked; a superuser keeps it.
+func TestRefreshOfASessionWithoutAMembershipRefusesAndRevokes(t *testing.T) {
+	f := newFixture(t)
+	state := f.users.users[f.principal]
+	state.IsSuperuser = false
+	f.users.users[f.principal] = state
+	f.users.roles = map[[2]uuid.UUID]*string{}
+	f.build()
+	f.sessions.result = session.Result{Reason: session.ReasonGraceReplay, Issued: session.Issued{
+		Session: f.record, Credential: contracts.NewSecretString(credential()), ExpiresAt: time.Now().Add(time.Hour)}}
+	response := f.do(http.MethodPost, PatternRefresh, refreshBody(credential()), nil)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("answer %d %.200s, want 401", response.Code, response.Body)
+	}
+	var body map[string]any
+	_ = json.Unmarshal(response.Body.Bytes(), &body)
+	if body["reason_code"] != "not_entitled" {
+		t.Fatalf("reason_code %v, want not_entitled", body["reason_code"])
+	}
+	if len(f.sessions.revoked) != 1 || f.sessions.revoked[0] != f.record.ID {
+		t.Fatalf("revoked %v, want the session", f.sessions.revoked)
+	}
+}
+
+// The membership check runs before the credential rotates: a removed member's
+// live credential mints no successor.
+func TestRefreshWithoutAMembershipRotatesNothing(t *testing.T) {
+	for name, superuser := range map[string]bool{"member removed": false, "superuser without a membership": true} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			state := f.users.users[f.principal]
+			state.IsSuperuser = superuser
+			f.users.users[f.principal] = state
+			f.users.roles = map[[2]uuid.UUID]*string{}
+			f.build()
+			f.sessions.result = session.Result{Reason: session.ReasonAccepted, Issued: session.Issued{
+				Session: f.record, Credential: contracts.NewSecretString(credential()), ExpiresAt: time.Now().Add(time.Hour)}}
+			response := f.do(http.MethodPost, PatternRefresh, refreshBody(credential()), nil)
+			if superuser {
+				if response.Code != http.StatusOK || len(f.sessions.revoked) != 0 || f.sessions.minted != 1 {
+					t.Fatalf("superuser: answer %d %.200s, revoked %v, minted %d; want 200, nothing revoked, 1 minted",
+						response.Code, response.Body, f.sessions.revoked, f.sessions.minted)
+				}
+				return
+			}
+			var body map[string]any
+			_ = json.Unmarshal(response.Body.Bytes(), &body)
+			if response.Code != http.StatusUnauthorized || body["reason_code"] != "not_entitled" {
+				t.Fatalf("answer %d %.200s, want 401 not_entitled", response.Code, response.Body)
+			}
+			if len(f.sessions.revoked) != 1 || f.sessions.revoked[0] != f.record.ID {
+				t.Fatalf("revoked %v, want the session", f.sessions.revoked)
+			}
+			if f.sessions.minted != 0 {
+				t.Fatalf("%d successors minted before the refusal, want 0", f.sessions.minted)
+			}
+		})
+	}
+}
+
+// guardRefusingSessions refuses every exchange in its guard step, as the guard
+// does when the session changed between the guard's read and the handler's.
+type guardRefusingSessions struct{ *fakeSessions }
+
+func (s guardRefusingSessions) ExchangeGuarded(context.Context, contracts.SecretString, session.Guard) (session.Result, error) {
+	return session.Result{Issued: session.Issued{Session: s.result.Session}}, session.ErrGuardRefused
+}
+
+// A guard refusal that the handler's own reads no longer confirm still
+// refuses: nothing was rotated, so no access token is answered.
+func TestRefreshRefusedByTheGuardAnswersNoToken(t *testing.T) {
+	f := newFixture(t)
+	f.sessions.result = session.Result{Reason: session.ReasonAccepted, Issued: session.Issued{Session: f.record}}
+	routes, err := Routes(Deps{Sessions: guardRefusingSessions{f.sessions}, Users: f.users, Issuer: f.issuer,
+		Logger: slog.New(slog.NewJSONHandler(f.logs, nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	for _, route := range routes {
+		mux.Handle(route.Method+" "+route.Pattern, requestid.Middleware(route.Handler))
+	}
+	f.server = mux
+	response := f.do(http.MethodPost, PatternRefresh, refreshBody(credential()), nil)
+	var body map[string]any
+	_ = json.Unmarshal(response.Body.Bytes(), &body)
+	if response.Code != http.StatusUnauthorized || body["reason_code"] != "revision_stale" || body["access_token"] != nil {
+		t.Fatalf("answer %d %.200s, want 401 revision_stale and no token", response.Code, response.Body)
+	}
+	if len(f.sessions.revoked) != 0 {
+		t.Fatalf("revoked %v, want nothing: the handler's reads allow the session", f.sessions.revoked)
+	}
+}
+
 func TestRefreshTakesGoAPIsRoleRules(t *testing.T) {
 	cases := map[string]struct {
 		org  bool
@@ -400,10 +495,10 @@ func TestRefreshTakesGoAPIsRoleRules(t *testing.T) {
 		has  bool
 		want string
 	}{
-		"no organization": {org: false, want: "member"},
-		"no membership":   {org: true, has: false, want: "member"},
-		"NULL role":       {org: true, has: true, role: nil, want: "None"},
-		"membership role": {org: true, has: true, role: ptr("owner"), want: "owner"},
+		"no organization":          {org: false, want: "member"},
+		"no membership, superuser": {org: true, has: false, want: "member"},
+		"NULL role":                {org: true, has: true, role: nil, want: "None"},
+		"membership role":          {org: true, has: true, role: ptr("owner"), want: "owner"},
 	}
 	for name, c := range cases {
 		f := newFixture(t)

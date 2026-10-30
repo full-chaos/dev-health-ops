@@ -230,9 +230,35 @@ Order (nothing serves traffic until the last step):
    apply carries `options='-c default_transaction_read_only=off'` so the apply can write although the copy is read-only.
    One transaction does everything: the revision floors, every revocation made after the target time, and the fence row
    for the new timeline. It is idempotent: a second run for the same timeline and manifest changes nothing.
+   Set `RESTORE_FENCE_SOURCE_URI` (or `RESTORE_FENCE_SOURCE_URI_FILE`) to the shadow copy's migration DSN for both runs:
+   the apply then copies the provider token revocations queued after the target time from the shadow copy into the
+   restored copy, in the same transaction, as pending work. It refuses (and writes nothing) when the shadow copy is on
+   another timeline than the export, or lacks a revocation that the manifest names and the restored copy also lacks (a
+   revocation the restored copy already holds is left as it is). Environment only, never a flag. Without it
+   the revocations are only named (`requeue_provider_revocation`), and a second apply of the same manifest changes
+   nothing: set it before the `-apply` run (the dry run already names what it will queue again). With it the apply also
+   carries the shadow copy's live login lockouts (auth and legacy `login_attempts`; a lock holds 15 minutes), raising
+   only: a restored lock is never shortened. Without it no lockout moves; a lock set after the target has usually
+   expired by the time a restore finishes anyway.
 6. Act on the `operator-action` lines the apply prints (ids only): users whose password may have changed after the
-   target (their older password is live again: force a reset, ticket 11834) and provider token revocations queued after
-   the target (re-queue them, ticket 11835).
+   target (their older password is live again: force a reset, ticket 11834); `provider_revocation_requeued`: with the
+   PagerDuty client id configured on the API, disconnect or reconnect the credential of each named revocation once
+   (`SELECT org_id, credential_name FROM public.provider_oauth_revocations WHERE id = ...`), which sends the queued
+   revoke (a setup revoke is sent by a disconnect or callback of its org once the row is 15 minutes old: the apply
+   keeps its created_at and sets attempts to 0, and the route skips a younger one, so it stays pending until then);
+   `provider_revocation_requeued_blocked`:
+   the credential was connected after the target, so the restored copy has no credential row and a disconnect does not
+   send the revoke (it answers `disconnected: true` anyway); these wait for the revocation worker (the ticket the line
+   names); `requeue_provider_revocation`: tokens the apply could only name: revocations of an apply with no source set
+   (revoke those tokens at the provider by hand), and provider credentials it deleted (`source=public.provider_oauth_credentials`):
+   their restored token was rotated, reconnected or disconnected after the target, the delete writes no revocation row,
+   and a token rotated by a refresh has none anywhere, so nothing sends its revoke: revoke the old token at the provider
+   by hand, then reconnect the credential (ticket 12035 tracks revocation rows for the tokens the fence can know). The
+   exact list is the ids of that line, one per credential as `<org>/<provider>/<credential name>` (each part
+   percent-encodes `%`, `/`, `,` and line breaks; no token value), also stored for the live timeline and printed by
+   `auth-migrate restore-fence status`, or read-only:
+   `SELECT jsonb_array_elements_text(a->'ids') FROM auth.restore_fence_state s, jsonb_array_elements(s.operator_actions) a WHERE a->>'kind' = 'requeue_provider_revocation' AND a->>'source' = 'public.provider_oauth_credentials';`
+   (the schema is `AUTH_DATABASE_SCHEMA`, `auth` by default).
 7. Reset the read-only default: `ALTER SYSTEM RESET default_transaction_read_only;` then `SELECT pg_reload_conf();`.
 8. Start auth-service. Its readiness check `restore_fence` must be true (`/readyz`).
 9. `auth-migrate restore-fence status` prints `fenced=true` and the timeline (and the stored operator actions).
@@ -241,6 +267,9 @@ What the apply puts back, so that nothing removed after the target time stays al
 credential registry, signing keys, resource grants, memberships, service accounts, workloads, workload bindings,
 principals and organizations disabled, consumed link credentials and consumed refresh credentials, replaced link
 credentials, a pending invite the source no longer holds pending (it ends revoked, never accepted), SAML replay evidence, every SSO flow state (users start the flow again),
+external identities unlinked after the target (deleted again and named in `identity_unlinked`, ids only; a link made or
+re-made after the target is not carried, the user links again; a blind margin deletes none and lists every link for
+review),
 and the legacy public tables: refresh tokens, service and ingest credentials, webhook bindings, invites, users (disabled,
 token version, and a user the source deleted is disabled, never deleted), membership mirror rows, single-use reset and
 verification tokens, and SAML replays. Revision floors are raised past everything the source reached, so no

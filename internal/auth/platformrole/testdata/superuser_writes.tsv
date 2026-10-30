@@ -1,0 +1,9 @@
+# The writes of public users.is_superuser that are not a constant false, by file and function, with the values they
+# write and the proof of their owned behaviour: the tests (comma-separated, in the same package) that hold the write
+# refused or the column left out while AUTH_PLATFORM_ROLES_OWNED, or "fixture" under internal/testsupport.
+# TestEverySuperuserWriteIsProvenWhileOwned holds this list.
+# file	function	values	proof
+internal/apiservice/admin/userstore.go	pgStore.insertUser	$10	TestAdminStoreRefusesASuperuserWriteWhileOwned,TestAdminSuperuserWritesRefuseWhileOwned
+internal/apiservice/admin/userstore.go	pgStore.updateUser	$8	TestAdminProfileUpdateWritesNoSuperuserWhileOwned,TestAdminStoreRefusesASuperuserWriteWhileOwned
+internal/testsupport/pgseed/pgseed.go	SetUserState	$3	fixture
+internal/testsupport/sessionscenario/sessionscenario.go	Seed	$10	fixture

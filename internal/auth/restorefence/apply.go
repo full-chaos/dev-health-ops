@@ -38,6 +38,9 @@ type Options struct {
 	BlindMargin int64
 	// Inputs are consumer high-water inputs besides the registered ones.
 	Inputs []FloorInput
+	// Source, when set, is the shadow restore that exported the manifest: the provider revocations the manifest names
+	// and the restored database lacks are copied from it and queued again. It needs a manifest.
+	Source RevocationSource
 }
 
 // SectionReport is the count of one table.
@@ -70,6 +73,11 @@ type Report struct {
 
 // Preflight lists the tables the migration role cannot write, by name only.
 func Preflight(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier) ([]string, error) {
+	return preflight(ctx, pool, schema, false)
+}
+
+// preflight is Preflight plus, for a re-queue from the source, INSERT on the revocation table.
+func preflight(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier, requeue bool) ([]string, error) {
 	var missing []string
 	var user string
 	if err := pool.QueryRow(ctx, `SELECT current_user`).Scan(&user); err != nil {
@@ -110,6 +118,20 @@ func Preflight(ctx context.Context, pool *pgxpool.Pool, schema authschema.Valida
 		}
 		if err := check(s.name, s.qualified(schema), privilege); err != nil {
 			return nil, err
+		}
+		if requeue && s.name == revocationSection {
+			if err := check(s.name, s.qualified(schema), "INSERT"); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if requeue {
+		for _, t := range []struct{ name, qualified string }{{"auth.login_attempts", q + ".login_attempts"}, {"public.login_attempts", "public.login_attempts"}} {
+			for _, p := range []string{"INSERT", "UPDATE"} {
+				if err := check(t.name, t.qualified, p); err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
 	return missing, nil
@@ -153,11 +175,22 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedI
 			return Report{}, fmt.Errorf("%w: digest does not match the content", ErrManifest)
 		}
 	}
+	var requeue *revocationRequeue
+	if opts.Source != nil {
+		if m == nil {
+			return Report{}, fmt.Errorf("%w: the revocation source needs a manifest (a blind margin names no revocation)", ErrApply)
+		}
+		rq, err := readRevocationSource(ctx, opts.Source, schema, *m)
+		if err != nil {
+			return Report{}, err
+		}
+		requeue = &rq
+	}
 	plan, err := resolveInputs(ctx, m, opts, append(RegisteredFloorInputs(), opts.Inputs...))
 	if err != nil {
 		return Report{}, err
 	}
-	missing, err := Preflight(ctx, pool, schema)
+	missing, err := preflight(ctx, pool, schema, requeue != nil)
 	if err != nil {
 		return Report{}, err
 	}
@@ -205,6 +238,14 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedI
 				return fmt.Errorf("raising the revision floors (sqlstate %s)", sqlState(err))
 			}
 			report.FloorsRaised = tag.RowsAffected()
+			if requeue != nil {
+				if err := requeueRevocations(ctx, tx, *requeue, &report); err != nil {
+					return err
+				}
+				if err := raiseLockouts(ctx, tx, schema, *requeue, &report); err != nil {
+					return err
+				}
+			}
 			for _, s := range sections {
 				if m == nil {
 					if q := blindReviewSQL(s, schema); q != "" {

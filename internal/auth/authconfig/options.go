@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 )
 
 // Kind is the parse type of an option value. It tells the flag layer which
@@ -242,8 +243,17 @@ var optionRegistry = []Option{
 		Usage: "true when auth-service owns user creation and local credential links; with the session secrets it mounts the password and e-mail verification routes",
 	},
 	{
+		Flag: "platform-roles-owned", Env: rule.OwnedEnv, Kind: KindString, Default: "false", Group: GroupSession,
+		Usage: "true when auth-service owns the platform roles: the sign-in state reads is_superuser from the auth platform role assignments. Mounts no route",
+	},
+	{
 		Flag: "orgs-owned", Env: EnvOrgsOwned, Kind: KindString, Default: "false", Group: GroupSession,
 		Usage: "true when auth-service is the only writer of organizations; the sign-in organization projection then reads no public table and writes nothing. Mounts no route",
+	},
+	{
+		Flag: "revision-feed", Env: EnvRevisionFeed, Kind: KindString, Default: "off", Group: GroupSession,
+		Usage: "on gives the auth outbox publisher a Valkey sink and subscribes this replica to the revision feed channel; off (default) keeps publishing disabled. Needs " +
+			EnvValkeyURI + ". Mounts no route",
 	},
 	{
 		Flag: "social-link-routes", Env: EnvSocialLinkRoutes, Kind: KindString, Group: GroupSession, Default: "false",

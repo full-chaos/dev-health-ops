@@ -507,21 +507,33 @@ func logCommitFailure(ctx context.Context, m Mutation, err error) {
 		"aggregate_types", aggregateTypes(m.Events), "off_stream", m.OffStream, logging.ErrorAttr(err))
 }
 
-// insertOutboxEvents bumps each event's aggregate revision and writes the
-// event with that revision. Events are taken in (aggregate_type, aggregate_id)
-// order, so every transaction locks revision rows in one order and two
-// mutations over the same aggregates cannot deadlock; events of one aggregate
-// keep the caller's order. The upsert's row lock is held to commit, so the
-// next writer of an aggregate reads the committed value (contiguous), and a
-// rollback undoes the bump (no gap).
-func insertOutboxEvents(ctx context.Context, tx pgx.Tx, schema authschema.ValidatedIdentifier, m Mutation) error {
-	events := append([]OutboxEvent(nil), m.Events...)
-	sort.SliceStable(events, func(i, j int) bool {
-		if events[i].AggregateType != events[j].AggregateType {
-			return events[i].AggregateType < events[j].AggregateType
+// outboxOrder is the order a mutation's events are written in:
+// (aggregate_type, aggregate_id), so every transaction locks revision rows in
+// one order and two mutations over the same aggregates cannot deadlock; events
+// of one aggregate keep the caller's order. The order across aggregates is
+// therefore not the caller's: a mutation over two aggregates (a replace that
+// revokes one assignment and grants another) writes them in id order. The
+// consumer contract is per aggregate only (contiguous revisions); a consumer
+// keyed by something else (a principal, a role) must re-read the current state
+// when it applies an event (for a platform role, rule.HoldsSQL) and never
+// apply the event as a delta.
+func outboxOrder(events []OutboxEvent) []OutboxEvent {
+	ordered := append([]OutboxEvent(nil), events...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		if ordered[i].AggregateType != ordered[j].AggregateType {
+			return ordered[i].AggregateType < ordered[j].AggregateType
 		}
-		return events[i].AggregateID < events[j].AggregateID
+		return ordered[i].AggregateID < ordered[j].AggregateID
 	})
+	return ordered
+}
+
+// insertOutboxEvents bumps each event's aggregate revision and writes the
+// event with that revision, in outboxOrder. The upsert's row lock is held to
+// commit, so the next writer of an aggregate reads the committed value
+// (contiguous), and a rollback undoes the bump (no gap).
+func insertOutboxEvents(ctx context.Context, tx pgx.Tx, schema authschema.ValidatedIdentifier, m Mutation) error {
+	events := outboxOrder(m.Events)
 	q := authschema.Quote(schema)
 	for _, e := range events {
 		var revision int64

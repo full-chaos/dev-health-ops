@@ -23,7 +23,9 @@ role is refused.
   another user who can write the directory could change what is removed.
 - `-out` must not exist yet. Hand the file to the workload's secret mount, then remove your copy.
 - Every value expires: `-expires-in` defaults to `720h` (30 days), at most `2160h` (90 days).
-- `bootstrap-create` and `bootstrap-rotate` refuse a disabled workload. `bootstrap-revoke` and
+- `bootstrap-create` and `bootstrap-rotate` refuse a disabled workload. The class says which row is disabled:
+  `the workload row is disabled` or `the workload's principal is disabled, its row is not`. No auth-migrate
+  verb enables a workload or its principal today: re-enabling needs a reviewed change. `bootstrap-revoke` and
   `bootstrap-disable` work on a disabled workload.
 
 ## Create

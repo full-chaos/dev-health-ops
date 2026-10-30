@@ -64,6 +64,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/customerpush"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
@@ -203,6 +204,8 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		// The api's own ClickHouse login: organization activity.
 		ClickHouse: deps.ClickHouse, Limits: limits, Write: WriteError, OAuth: deps.SessionOAuth, Logger: logger,
 		Mail: deps.Invites, RegisterLimit: deps.RegisterLimit, Inner: proxy.inner, Issuer: deps.SessionIssuer,
+		PlatformRoles: deps.platformRoles(),
+		Provision:     deps.OrgProvisioner,
 	})...)
 	if deps.Guard != nil {
 		routes = append(routes, orgs.Routes(deps.Pool, deps.Guard, logger)...)
@@ -237,7 +240,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			// a distinct key from it, state.go) -- no new secret material
 			// either way.
 			Cipher: deps.Decryptor, StateSecret: deps.GitHubStateSigner.Secret, Signer: deps.Signer, Inner: proxy.inner,
-			Issuer: deps.SessionIssuer,
+			Issuer: deps.SessionIssuer, PlatformRoles: deps.platformRoles(),
 		})...)
 		billing.LogUnconfigured(logger, deps.StripeWebhookSecret, deps.StripeSecretKey)
 		routes = append(routes, billing.Routes(billing.Deps{
@@ -249,24 +252,28 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			// first caller that actually injects a fixed clock, so the Stripe
 			// signature timestamp check judges a replay at the instant it was
 			// recorded for, not the instant it happens to replay at.
-			Now: deps.Now,
+			Now: deps.Now, PlatformRoles: deps.platformRoles(),
 		})...)
 		routes = append(routes, admin.Routes(admin.Deps{
-			Pool:           deps.Pool,
-			Valkey:         deps.Valkey,
-			Guard:          deps.Guard,
-			Logger:         logger,
-			ClickHouseDSN:  deps.ClickHouseDSN,
-			ClickHouse:     deps.ClickHouse,
-			Decryptor:      deps.Decryptor,
-			PagerDuty:      deps.PagerDuty,
-			HTTPDoer:       deps.HTTPDoer,
-			Now:            deps.Now,
-			Write:          WriteError,
-			Limits:         limits,
-			Invites:        deps.Invites,
-			UsersOwned:     deps.UsersOwned,
-			OrgReactivator: deps.OrgReactivator,
+			Pool:               deps.Pool,
+			Valkey:             deps.Valkey,
+			Guard:              deps.Guard,
+			Logger:             logger,
+			ClickHouseDSN:      deps.ClickHouseDSN,
+			ClickHouse:         deps.ClickHouse,
+			Decryptor:          deps.Decryptor,
+			PagerDuty:          deps.PagerDuty,
+			HTTPDoer:           deps.HTTPDoer,
+			Now:                deps.Now,
+			Write:              WriteError,
+			Limits:             limits,
+			Invites:            deps.Invites,
+			UsersOwned:         deps.UsersOwned,
+			PlatformRolesOwned: deps.PlatformRolesOwned,
+			AuthSchema:         deps.AuthSchema,
+			OrgReactivator:     deps.OrgReactivator,
+			OrgProvisioner:     deps.OrgProvisioner,
+			OrgSuspender:       deps.OrgSuspender,
 		})...)
 	}
 	webhookintake.LogUnconfiguredSecrets(logger)
@@ -389,24 +396,37 @@ func configureWith(
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_users_owned", "api_users_owned_config_invalid", err)
 	}
+	deps.PlatformRolesOwned, err = rule.OwnedFromLookup(envsecrets.ProcessLookup)
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_platform_roles_owned", "api_platform_roles_owned_config_invalid", err)
+	}
 	deps.SessionIssuer, err = sessionIssuer(authProxy, envsecrets.ProcessLookup)
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_session_issue", "api_session_issue_config_invalid", err)
 	}
-	deps.OrgReactivator, err = orgReactivator(authProxy, envsecrets.ProcessLookup)
+	orgClient, err := orgLifecycleClient(authProxy, envsecrets.ProcessLookup)
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_org_provisioning", "api_org_provisioning_config_invalid", err)
+	}
+	if orgClient != nil {
+		deps.OrgReactivator, deps.OrgSuspender = orgClient, orgClient
+	}
+	deps.OrgProvisioner, err = orgProvisioner(authProxy, envsecrets.ProcessLookup)
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_org_provisioning", "api_org_provisioning_config_invalid", err)
 	}
 	var scope []func(http.Handler) http.Handler
 	if deps.Pool != nil {
-		protected, err := newProtection(cfg, deps.Pool, logger)
+		protected, err := newProtection(cfg, deps.Pool, deps.PlatformRolesOwned, logger)
 		if err != nil {
 			closeComponents(depComponents)
 			return nil, dependencyFailure(ctx, logger, "api_access_token_verifier", "api_protection_config_failed", err)
 		}
-		deps.Auth, deps.Guard = protected.auth, protected.guard
+		deps.Auth, deps.Guard, deps.AuthSchema = protected.auth, protected.guard, protected.authSchema
 		deps.Verifier, deps.Signer = protected.verifier, protected.signer
 		scope = []func(http.Handler) http.Handler{protected.scope.Principal, protected.scope.OrgScope, protected.scope.Impersonation}
 	}
@@ -477,6 +497,7 @@ func configureWith(
 		edge, err := NewEdgeServer(cfg, logger, billing.EdgeRoutes(billing.Deps{
 			Pool: deps.Pool, Stripe: deps.Stripe, Config: deps.BillingConfig, Logger: logger.With(slog.String("listener", "billing-edge")),
 			WebhookSecret: deps.StripeWebhookSecret, LicensePrivateKey: deps.LicensePrivateKey, StripeKey: deps.StripeSecretKey, Producer: deps.Producer,
+			PlatformRoles: deps.platformRoles(),
 		}))
 		if err != nil {
 			return nil, dependencyFailure(ctx, logger, "api_server", "api_billing_edge_server_config_failed", err)
@@ -595,12 +616,14 @@ type protection struct {
 	guard    *policy.Guard
 	verifier *edgetoken.Verifier
 	signer   *edgetoken.Signer
+	// authSchema is AUTH_DATABASE_SCHEMA, as the users store reads it.
+	authSchema string
 }
 
 // newProtection builds the principal service. The api verifies the access
 // token the Python api mints, so with a database it needs the same key:
 // JWT_SECRET_KEY is required, and a missing or short key stops startup.
-func newProtection(cfg config.Config, pool *pgxpool.Pool, logger *slog.Logger) (protection, error) {
+func newProtection(cfg config.Config, pool *pgxpool.Pool, platformRolesOwned bool, logger *slog.Logger) (protection, error) {
 	if !cfg.APIJWTSecret.Configured() {
 		return protection{}, errors.New("JWT_SECRET_KEY is required by dho api when API_DATABASE_URI is set")
 	}
@@ -616,7 +639,7 @@ func newProtection(cfg config.Config, pool *pgxpool.Pool, logger *slog.Logger) (
 	if err != nil {
 		return protection{}, err
 	}
-	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool, AuthSchema: authSchema}, logger)
+	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool, AuthSchema: authSchema, PlatformRolesOwned: platformRolesOwned}, logger)
 	if err != nil {
 		return protection{}, err
 	}
@@ -626,7 +649,7 @@ func newProtection(cfg config.Config, pool *pgxpool.Pool, logger *slog.Logger) (
 	}
 	scope := policy.NewScope(auth, logger)
 	scope.DeclaredRows(rows)
-	return protection{auth: auth, scope: scope, guard: policy.NewGuard(auth, logger),
+	return protection{auth: auth, scope: scope, guard: policy.NewGuard(auth, logger), authSchema: authSchema,
 		verifier: verifier, signer: signer}, nil
 }
 

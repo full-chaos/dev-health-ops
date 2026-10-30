@@ -39,8 +39,8 @@ func (s PGOrgSource) PageMemberships(ctx context.Context, after *MemberKey, limi
 	if after != nil {
 		org, user = &after.OrgID, &after.UserID
 	}
-	rows, err := s.Pool.Query(ctx, `SELECT org_id, user_id, role, joined_at, created_at, copies FROM (
-  SELECT org_id, user_id, role, joined_at, created_at, count(*) OVER (PARTITION BY org_id, user_id) AS copies
+	rows, err := s.Pool.Query(ctx, `SELECT org_id, user_id, role, joined_at, created_at, invited_by_id, copies FROM (
+  SELECT org_id, user_id, role, joined_at, created_at, invited_by_id, count(*) OVER (PARTITION BY org_id, user_id) AS copies
   FROM public.memberships) m
 WHERE ($1::uuid IS NULL OR (org_id, user_id) > ($1::uuid, $2::uuid))
 ORDER BY org_id, user_id LIMIT $3`, org, user, limit)
@@ -51,7 +51,7 @@ ORDER BY org_id, user_id LIMIT $3`, org, user, limit)
 	var out []MemberRow
 	for rows.Next() {
 		var r MemberRow
-		if err := rows.Scan(&r.OrgID, &r.UserID, &r.Role, &r.JoinedAt, &r.CreatedAt, &r.Copies); err != nil {
+		if err := rows.Scan(&r.OrgID, &r.UserID, &r.Role, &r.JoinedAt, &r.CreatedAt, &r.InvitedByID, &r.Copies); err != nil {
 			return nil, err
 		}
 		out = append(out, r)

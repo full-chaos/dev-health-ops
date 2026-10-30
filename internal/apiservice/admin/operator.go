@@ -42,6 +42,16 @@ type Operator struct {
 	// UsersOwned is AUTH_USERS_OWNED: auth-service owns users, so the verbs
 	// that write public.users refuse with ErrUsersOwned.
 	UsersOwned bool
+	// PlatformRolesOwned is AUTH_PLATFORM_ROLES_OWNED: a verb that writes
+	// is_superuser refuses with ErrPlatformRolesOwned, and the users reads
+	// take is_superuser from the auth platform roles in AuthSchema.
+	PlatformRolesOwned bool
+	// AuthSchema is AUTH_DATABASE_SCHEMA (empty: "auth").
+	AuthSchema string
+	// OrgProvisioning is AUTH_PROXY_ORG_PROVISIONING: the HTTP member and
+	// delete routes go to auth-service, so the verbs that would write those
+	// rows in go-api only refuse with ErrOrgProvisioningOn.
+	OrgProvisioning bool
 	// readGrants replaces the org deletion's ClickHouse grant read in a test.
 	readGrants func(context.Context, driver.Conn) ([]string, error)
 }
@@ -58,6 +68,11 @@ func (o Operator) logger() *slog.Logger {
 type OperatorError struct{ Message string }
 
 func (err *OperatorError) Error() string { return err.Message }
+
+// ErrOrgProvisioningOn refuses a membership change or a real organization
+// delete while AUTH_PROXY_ORG_PROVISIONING is on: done here, it would write
+// go-api's rows only and leave auth-service's apart.
+var ErrOrgProvisioningOn = &OperatorError{Message: "AUTH_PROXY_ORG_PROVISIONING is on: membership changes and organization deletes go through the admin API, which sends them to the authentication service; this command would change go-api's rows only."}
 
 func refuse(format string, args ...any) error {
 	return &OperatorError{Message: fmt.Sprintf(format, args...)}
@@ -110,7 +125,7 @@ func (o Operator) refuseWhileUsersOwned(writes bool) error {
 }
 
 func (o Operator) store(db pgDB) pgStore {
-	return pgStore{Pool: db, Now: o.Now, UsersOwned: o.UsersOwned}
+	return pgStore{Pool: db, Now: o.Now, UsersOwned: o.UsersOwned, PlatformRolesOwned: o.PlatformRolesOwned, AuthSchema: o.AuthSchema}
 }
 
 // inTransaction runs fn over one transaction: committed when it returns nil,
@@ -154,6 +169,9 @@ type CreateUserInput struct {
 // username must be free, then the password passes the shared policy.
 func (o Operator) CreateUser(ctx context.Context, in CreateUserInput) (*User, error) {
 	if err := o.refuseWhileUsersOwned(true); err != nil {
+		return nil, err
+	}
+	if err := refuseSuperuserWhileOwned(o.PlatformRolesOwned, in.Superuser); err != nil {
 		return nil, err
 	}
 	var created *fullUser
@@ -404,6 +422,12 @@ func (o Operator) DeleteUser(ctx context.Context, in DeleteUserInput) (*DeleteUs
 func (o Operator) UpdateUser(ctx context.Context, in UpdateUserInput) (*UpdateUserResult, error) {
 	if err := o.refuseWhileUsersOwned(in.WritesUsers()); err != nil {
 		return nil, err
+	}
+	if err := refuseSuperuserWhileOwned(o.PlatformRolesOwned, in.Superuser != nil); err != nil {
+		return nil, err
+	}
+	if o.OrgProvisioning && (in.MembershipOrg != nil || in.RemoveFromOrg != nil) {
+		return nil, ErrOrgProvisioningOn
 	}
 	hasProfileChange := in.hasProfileChange()
 	if !hasProfileChange && in.Password == nil && in.MembershipOrg == nil && in.RemoveFromOrg == nil {
@@ -676,6 +700,9 @@ func (o Operator) DeleteOrg(ctx context.Context, orgID string, dryRun bool, conf
 	orgUUID, err := pyUUID(orgID)
 	if err != nil {
 		return nil, refuse("Invalid organization id")
+	}
+	if o.OrgProvisioning && !dryRun {
+		return nil, ErrOrgProvisioningOn
 	}
 	httpDoer := revokeDoer(config.HTTPDoer)
 	var db pgDB = o.Pool

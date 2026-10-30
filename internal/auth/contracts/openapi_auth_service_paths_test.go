@@ -60,6 +60,17 @@ const compatPathPrefix = "/api/v1/auth/"
 // browser or SDK surface, so auth-v1's public OpenAPI describes none of it.
 const internalPathPrefix = "/internal/v1/"
 
+// oneOfHasTransportError: a transport status may also carry a route's own refusal, declared as a oneOf whose
+// first member is the transport envelope.
+func oneOfHasTransportError(schema map[string]any) bool {
+	members, _ := schema["oneOf"].([]any)
+	if len(members) == 0 {
+		return false
+	}
+	first, _ := members[0].(map[string]any)
+	return first["$ref"] == transportErrorRef
+}
+
 // openAPIPathProblems checks the OpenAPI document against the auth-service API
 // rows: one operation per API row outside go-api's path space and no other,
 // every $ref inside an operation names an existing component schema, and
@@ -142,7 +153,7 @@ func openAPIPathProblems(document map[string]any, rows []map[string]any) []strin
 				content, _ := response["content"].(map[string]any)
 				body, _ := content["application/json"].(map[string]any)
 				schema, _ := body["schema"].(map[string]any)
-				if schema["$ref"] != transportErrorRef {
+				if schema["$ref"] != transportErrorRef && !oneOfHasTransportError(schema) {
 					problems = append(problems, fmt.Sprintf("OpenAPI operation %s: its %s is the transport's answer and must reference %s", key, status, transportErrorRef))
 				}
 			}
@@ -212,6 +223,17 @@ func TestTheOpenAPIPathGateRefusesPlantedMismatches(t *testing.T) {
 		"a transport 400 loses its envelope schema": func(document map[string]any) {
 			op := document["paths"].(map[string]any)["/v1/sessions/current"].(map[string]any)["get"].(map[string]any)
 			delete(op["responses"].(map[string]any)["400"].(map[string]any), "content")
+		},
+		"a transport 400 oneOf without the envelope first": func(document map[string]any) {
+			op := document["paths"].(map[string]any)["/v1/identities/social"].(map[string]any)["post"].(map[string]any)
+			schema := op["responses"].(map[string]any)["400"].(map[string]any)["content"].(map[string]any)["application/json"].(map[string]any)["schema"].(map[string]any)
+			members := schema["oneOf"].([]any)
+			schema["oneOf"] = []any{members[1], members[0]}
+		},
+		"a transport 400 oneOf with no envelope": func(document map[string]any) {
+			op := document["paths"].(map[string]any)["/v1/identities/social"].(map[string]any)["post"].(map[string]any)
+			schema := op["responses"].(map[string]any)["400"].(map[string]any)["content"].(map[string]any)["application/json"].(map[string]any)["schema"].(map[string]any)
+			schema["oneOf"] = schema["oneOf"].([]any)[1:]
 		},
 		"an operation in go-api's internal path space": func(document map[string]any) {
 			document["paths"].(map[string]any)["/internal/v1/sessions"] = map[string]any{"post": map[string]any{"responses": map[string]any{"200": map[string]any{"description": "x", "content": map[string]any{"application/json": map[string]any{"schema": map[string]any{"$ref": "#/components/schemas/Session"}}}}}}}

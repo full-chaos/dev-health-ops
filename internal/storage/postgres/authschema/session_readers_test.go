@@ -34,3 +34,22 @@ func TestSessionReaderRolesAreValidated(t *testing.T) {
 		t.Errorf("two distinct readers: %v", err)
 	}
 }
+
+// The platform role read is the reviewed one (the columns of
+// platformrole.HoldsSQL), held only while the switch is on.
+func TestPlatformRoleReaderColumnsAreTheReviewedOnes(t *testing.T) {
+	platform := []ColumnGrant{
+		{Table: "platform_role_assignments", Columns: []string{"principal_id", "role_key", "expires_at"}},
+		{Table: "principals", Columns: []string{"id", "kind", "disabled_at"}},
+	}
+	if got := PlatformRoleReaderColumns(); !reflect.DeepEqual(got, platform) {
+		t.Fatalf("PlatformRoleReaderColumns() = %+v, want %+v", got, platform)
+	}
+	session := ColumnGrant{Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at", "legacy_token_version"}}
+	if got := SessionReaderReads(false); !reflect.DeepEqual(got, []ColumnGrant{session}) {
+		t.Errorf("SessionReaderReads(false) = %+v, want the session read alone", got)
+	}
+	if got, want := SessionReaderReads(true), append([]ColumnGrant{session}, platform...); !reflect.DeepEqual(got, want) {
+		t.Errorf("SessionReaderReads(true) = %+v, want %+v", got, want)
+	}
+}

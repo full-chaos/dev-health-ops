@@ -35,6 +35,7 @@ internal/auth/authruntime	audit_request_id_scan_test.go	unexpressed	-	-
 internal/auth/authruntime	fixed_credential_scan_test.go	internal/auth/authruntime	dir	*
 internal/auth/authruntime	keystate_source_test.go	internal/auth/authruntime	dir	*
 internal/auth/authruntime	kidwiring_callers_test.go	internal/auth/authruntime	dir	*
+internal/auth/authruntime	pgusers_census_test.go	internal/auth/authruntime	dir	*
 internal/auth/contracts	access_token_goldens_test.go	unexpressed	-	-
 internal/auth/contracts	anchor_ranges_test.go	unexpressed	-	-
 internal/auth/contracts	authorization_goldens_test.go	unexpressed	-	-
@@ -67,6 +68,11 @@ internal/auth/identity	placeholder_copies_test.go	internal/auth/usersbackfill	di
 internal/auth/identity	service_provider_callers_test.go	internal/auth	tree	*
 internal/auth/identity/local	linkbind_census_test.go	.	tree	*
 internal/auth/keystore	custody_test.go	internal/auth/keystore	dir	*
+internal/auth/platformrole	owned_parse_census_test.go	unexpressed	-	-
+internal/auth/platformrole	superuser_fills_census_test.go	unexpressed	-	-
+internal/auth/platformrole	superuser_literals_census_test.go	unexpressed	-	-
+internal/auth/platformrole	superuser_sites_census_test.go	unexpressed	-	-
+internal/auth/platformrole	superuser_writes_census_test.go	unexpressed	-	-
 internal/auth/restorefence	consumers_test.go	unexpressed	-	*.go
 internal/auth/restorefence	inventory_completeness_test.go	.	tree	*.go
 internal/auth/restorefence	specs_test.go	internal/pgmigrate/sql	dir	*

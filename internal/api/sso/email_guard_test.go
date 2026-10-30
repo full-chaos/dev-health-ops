@@ -48,20 +48,6 @@ func TestProvisionOrGetUserRefusesAnUnusableEmailBeforeAnyStatement(t *testing.T
 	}
 }
 
-func TestOAuthProvisionUserRefusesAnUnusableEmailBeforeAnyStatement(t *testing.T) {
-	for _, providerType := range []string{"github", "gitlab", "google"} {
-		for name, email := range unusableEmails() {
-			t.Run(providerType+"/"+name, func(t *testing.T) {
-				h, dials, logs := subjectGuardHandlers(t)
-				row := &providerRow{OrgID: uuid.NewString(), Protocol: "oauth", AutoProvision: true}
-				_, _, err := h.oauthProvisionUser(context.Background(), row, providerType,
-					oauthClaims{email: email, fullName: "A", externalID: "12345"})
-				assertEmailRefusedBeforeAnyStatement(t, err, dials.Load(), logs.String())
-			})
-		}
-	}
-}
-
 // A usable address reaches the database (control), including one whose edge characters the address validator trims.
 func TestAUsableEmailReachesTheDatabase(t *testing.T) {
 	for name, email := range map[string]string{"plain": "a@example.test", "edge tab": "\ta@example.test", "unicode local part": "jürgen@example.test"} {

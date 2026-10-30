@@ -99,14 +99,16 @@ func (s PGStore) AccessUser(ctx context.Context, id uuid.UUID) (AccessUserRow, b
 	var version *int64
 	var email *string
 	var row AccessUserRow
-	err := s.Pool.QueryRow(ctx,
-		`SELECT is_active, is_superuser, token_version, email, username, full_name FROM users WHERE id = $1`, id,
-	).Scan(&active, &superuser, &version, &email, &row.Username, &row.FullName)
+	query, err := s.accessUserSQL()
+	if err != nil {
+		return AccessUserRow{}, false, err
+	}
+	err = s.Pool.QueryRow(ctx, query, id).Scan(&active, &superuser, &version, &email, &row.Username, &row.FullName)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AccessUserRow{}, false, nil
 	}
 	if err != nil {
-		return AccessUserRow{}, false, storeError(err, "SELECT on users (id, is_active, is_superuser, token_version, email, username, full_name)")
+		return AccessUserRow{}, false, storeError(err, "SELECT on users (id, is_active, is_superuser, token_version, email, username, full_name)"+s.superuserGrant())
 	}
 	row.State = UserState{IsActive: active != nil && *active, IsSuperuser: superuser != nil && *superuser}
 	if version != nil {

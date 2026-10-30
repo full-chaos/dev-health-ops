@@ -3,6 +3,7 @@ contracts/auth/v1/vocabulary
 internal/api/apimetrics
 internal/api/audit
 internal/api/authmail
+internal/api/authprovision
 internal/api/billing
 internal/api/billing/stripeclient
 internal/api/buildinfo
@@ -59,6 +60,7 @@ internal/auth/keystore
 internal/auth/linkmail
 internal/auth/passwordhash
 internal/auth/passwordpolicy
+internal/auth/platformrole/rule
 internal/auth/policycatalog
 internal/auth/ratelimitvalkey
 internal/auth/requestid

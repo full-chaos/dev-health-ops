@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 )
 
 // baseEnv is a minimally valid environment: the two settings Load requires and
@@ -318,6 +320,7 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvUsersOwned:                  "true",
 		EnvOrgsOwned:                   "true",
 		EnvRevisionFeed:                "on",
+		rule.OwnedEnv:                  "true",
 		EnvLogLevel:                    "debug",
 		EnvShutdownTimeout:             "42s",
 		EnvHealthCheckTimeout:          "1500ms",
@@ -352,6 +355,7 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvUsersOwned:                  func(c Config) string { return strconv.FormatBool(c.UsersOwned) },
 		EnvOrgsOwned:                   func(c Config) string { return strconv.FormatBool(c.OrgsOwned) },
 		EnvRevisionFeed:                func(c Config) string { return strconv.FormatBool(c.RevisionFeed) },
+		rule.OwnedEnv:                  func(c Config) string { return strconv.FormatBool(c.PlatformRolesOwned) },
 		EnvLogLevel:                    func(c Config) string { return c.LogLevel.String() },
 		EnvShutdownTimeout:             func(c Config) string { return c.ShutdownTimeout.String() },
 		EnvHealthCheckTimeout:          func(c Config) string { return c.HealthCheckTimeout.String() },

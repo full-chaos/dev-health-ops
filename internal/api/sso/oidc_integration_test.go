@@ -27,7 +27,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -195,6 +194,7 @@ type stack struct {
 	pool   *pgxpool.Pool
 	server *httptest.Server
 	clock  *testClock
+	logs   *syncBuffer // every log line of the stack's handlers
 }
 
 func startStack(t *testing.T, ctx context.Context) stack {
@@ -226,7 +226,8 @@ func startStackWith(t *testing.T, ctx context.Context, issuer sessionissue.Issue
 	if err != nil {
 		t.Fatal(err)
 	}
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logs := &syncBuffer{}
+	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool}, logger)
 	if err != nil {
 		t.Fatal(err)
@@ -266,7 +267,7 @@ func startStackWith(t *testing.T, ctx context.Context, issuer sessionissue.Issue
 	}
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
-	return stack{pool: pool, server: server, clock: clock}
+	return stack{pool: pool, server: server, clock: clock, logs: logs}
 }
 
 // seedOrg inserts one organization at the given tier ("enterprise" is

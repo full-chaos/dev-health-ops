@@ -81,6 +81,43 @@ func inviteEmailRefusal(invite *pendingInvite, user *userRow) string {
 // new membership, or errInviteRefused when the user already belongs to
 // the organization.
 func (h handlers) acceptInvite(ctx context.Context, tx pgx.Tx, invite *pendingInvite, userID uuid.UUID, now time.Time) (uuid.UUID, error) {
+	// The auth lock order (internal/auth/membership readPairs): the users rows
+	// the INSERT's foreign keys check (the account, the inviter) FOR KEY SHARE,
+	// one row per statement in id order (the text order of the lowercase uuid
+	// is Postgres's uuid order), before the INSERT checks them in its own
+	// trigger order.
+	referenced := []uuid.UUID{userID}
+	if invite.InvitedByID != nil && *invite.InvitedByID != userID {
+		referenced = append(referenced, *invite.InvitedByID)
+		if referenced[1].String() < referenced[0].String() {
+			referenced[0], referenced[1] = referenced[1], referenced[0]
+		}
+	}
+	for _, id := range referenced {
+		if _, err := tx.Exec(ctx, `SELECT 1 FROM users WHERE id = $1::uuid FOR KEY SHARE`, id); err != nil {
+			return uuid.UUID{}, err
+		}
+	}
+	// Then the invite row FOR UPDATE (step 4), before the membership check and
+	// INSERT (step 5; its foreign key check holds the organization row): the
+	// organization delete takes the invite rows before the membership rows.
+	// validateInvite read the row with no lock: an organization delete or a
+	// revoke that committed since is seen here, and refused as validateInvite
+	// refuses it.
+	var status string
+	var expiresAt time.Time
+	err := tx.QueryRow(ctx, `SELECT status, expires_at FROM org_invites WHERE id = $1::uuid FOR UPDATE`, invite.ID).Scan(&status, &expiresAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.UUID{}, errInviteRefused{"Invalid or expired invite"}
+	}
+	if err != nil {
+		return uuid.UUID{}, err
+	}
+	// The expiry is judged now, with the row held: the request may have
+	// waited for the row past the time it started at.
+	if status != "pending" || expiresAt.Before(h.Now()) {
+		return uuid.UUID{}, errInviteRefused{"Invalid or expired invite"}
+	}
 	var member bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM memberships WHERE org_id = $1::uuid AND user_id = $2::uuid)`,
 		invite.OrgID, userID).Scan(&member); err != nil {
@@ -93,7 +130,7 @@ func (h handlers) acceptInvite(ctx context.Context, tx pgx.Tx, invite *pendingIn
 	if err := insertMembership(ctx, tx, id, userID, invite.OrgID, invite.Role, invite.InvitedByID, now); err != nil {
 		return uuid.UUID{}, err
 	}
-	_, err := tx.Exec(ctx, `UPDATE org_invites SET status = 'accepted', accepted_at = $2, updated_at = $2 WHERE id = $1::uuid`,
+	_, err = tx.Exec(ctx, `UPDATE org_invites SET status = 'accepted', accepted_at = $2, updated_at = $2 WHERE id = $1::uuid`,
 		invite.ID, now.UTC())
 	return id, err
 }
@@ -116,7 +153,7 @@ func (h handlers) callerRow(w http.ResponseWriter, r *http.Request, tx pgx.Tx) (
 		refuse(w, http.StatusUnauthorized, "Invalid user identity")
 		return nil, false
 	}
-	user, err := userByID(r.Context(), tx, *id)
+	user, err := h.userByID(r.Context(), tx, *id)
 	if err != nil {
 		h.fail(w, r, "load user", err)
 		return nil, false
@@ -195,6 +232,14 @@ func (h handlers) commitThenIssue(w http.ResponseWriter, r *http.Request, tx pgx
 	}
 	defer func() { _ = issue.Rollback(context.Background()) }()
 	pair, err := h.issueMembershipTokens(ctx, issue, r, user, membership)
+	if refreshOrgGone(err) {
+		// An organization delete committed after the membership did: the
+		// delete removed the membership, and the token cannot name the
+		// organization.
+		h.Logger.WarnContext(ctx, "api session route refused", "step", "issue tokens", "reason", "organization deleted")
+		refuse(w, http.StatusNotFound, "Organization not found")
+		return
+	}
 	if err != nil {
 		h.fail(w, r, "issue tokens", err)
 		return
@@ -225,6 +270,10 @@ func (h handlers) acceptInviteRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(errs) > 0 {
 		writeValidation(w, errs)
+		return
+	}
+	if h.Provision != nil {
+		h.joinInAuth(w, r, token, "Invite accepted", false)
 		return
 	}
 	tx, err := h.Pool.Begin(ctx)
@@ -277,6 +326,14 @@ func (h handlers) onboard(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(errs) > 0 {
 		writeValidation(w, errs)
+		return
+	}
+	if h.Provision != nil && action == "join_org" {
+		code := ""
+		if inviteCode != nil {
+			code = *inviteCode
+		}
+		h.joinInAuth(w, r, code, "Invite accepted during onboarding", true)
 		return
 	}
 	tx, err := h.Pool.Begin(ctx)

@@ -1,6 +1,7 @@
 package social
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -38,6 +39,39 @@ type account struct {
 	// profileOf serves this other token's profile from the user endpoint
 	// while the token check reports this account.
 	profileOf string
+	// rawID, when set, is the raw JSON text of the id member the user endpoint serves; "-" omits the member.
+	rawID string
+}
+
+// rawIDMarker stands in for the id value of a user endpoint body until replyUser swaps in the raw JSON text.
+const rawIDMarker = "__raw_id__"
+
+// replyUser writes body as JSON with a.rawID as the id member's raw text ("-" omits the member), so a text that
+// is not valid JSON ("01") reaches the provider decoder as served.
+func (a account) replyUser(t *testing.T, w http.ResponseWriter, body map[string]any) {
+	t.Helper()
+	switch a.rawID {
+	case "":
+		reply(w, body)
+		return
+	case "-":
+		delete(body, "id")
+		reply(w, body)
+		return
+	}
+	body["id"] = rawIDMarker
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		t.Errorf("fake provider: encoding the user body: %v", err)
+		http.Error(w, "{}", http.StatusInternalServerError)
+		return
+	}
+	served := bytes.Replace(encoded, []byte(`"`+rawIDMarker+`"`), []byte(a.rawID), 1)
+	if bytes.Equal(served, encoded) {
+		t.Errorf("fake provider: the id marker is missing from %s", encoded)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(served)
 }
 
 // fakeProviders serves GitHub, GitLab and Google from one httptest server.
@@ -142,7 +176,7 @@ func (f *fakeProviders) githubUser(w http.ResponseWriter, r *http.Request) {
 	if a.public {
 		body["email"] = a.email
 	}
-	reply(w, body)
+	a.replyUser(f.t, w, body)
 }
 
 func (f *fakeProviders) githubEmails(w http.ResponseWriter, r *http.Request) {
@@ -173,7 +207,7 @@ func (f *fakeProviders) gitlabUser(w http.ResponseWriter, r *http.Request) {
 	if a.verified {
 		confirmed = "2026-01-01T00:00:00Z"
 	}
-	reply(w, map[string]any{"id": a.id, "username": "u", "name": "Test User", "email": a.email, "confirmed_at": confirmed})
+	a.replyUser(f.t, w, map[string]any{"id": a.id, "username": "u", "name": "Test User", "email": a.email, "confirmed_at": confirmed})
 }
 
 func (f *fakeProviders) googleInfo(w http.ResponseWriter, r *http.Request) {
@@ -200,5 +234,5 @@ func (f *fakeProviders) googleUser(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"id":"` + a.googleID + `","email":"` + a.rawEmail + `","verified_email":true,"name":"Test User"}`))
 		return
 	}
-	reply(w, map[string]any{"id": a.googleID, "email": a.email, "verified_email": a.verified, "name": "Test User"})
+	a.replyUser(f.t, w, map[string]any{"id": a.googleID, "email": a.email, "verified_email": a.verified, "name": "Test User"})
 }

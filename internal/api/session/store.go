@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -35,6 +36,20 @@ type userRow struct {
 const userColumns = `id, email, username, full_name, password_hash, auth_provider, auth_provider_id,
        is_active, is_verified, is_superuser, token_version`
 
+// userColumnsFor is userColumns (prefixed with alias when it is set), with
+// is_superuser read by the platform roles switch (policy.PlatformRoleRead).
+func (h handlers) userColumnsFor(alias string) (string, error) {
+	columns, superuser, id := userColumns, "is_superuser", "users.id"
+	if alias != "" {
+		columns, superuser, id = prefixed(alias, userColumns), alias+".is_superuser", alias+".id"
+	}
+	expr, err := h.PlatformRoles.Superuser(superuser, id)
+	if err != nil {
+		return "", err
+	}
+	return strings.Replace(columns, superuser+",", expr+",", 1), nil
+}
+
 func scanUsers(rows pgx.Rows) (*userRow, error) {
 	defer rows.Close()
 	var found *userRow
@@ -54,8 +69,12 @@ func scanUsers(rows pgx.Rows) (*userRow, error) {
 }
 
 // userByEmail is select(User).where(func.lower(User.email) == email).
-func userByEmail(ctx context.Context, tx pgx.Tx, email string) (*userRow, error) {
-	rows, err := tx.Query(ctx, `SELECT `+userColumns+` FROM users WHERE lower(email) = $1::text`, email)
+func (h handlers) userByEmail(ctx context.Context, tx pgx.Tx, email string) (*userRow, error) {
+	columns, err := h.userColumnsFor("")
+	if err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(ctx, `SELECT `+columns+` FROM users WHERE lower(email) = $1::text`, email)
 	if err != nil {
 		return nil, err
 	}
@@ -63,8 +82,12 @@ func userByEmail(ctx context.Context, tx pgx.Tx, email string) (*userRow, error)
 }
 
 // userByID is select(User).where(User.id == id).
-func userByID(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*userRow, error) {
-	rows, err := tx.Query(ctx, `SELECT `+userColumns+` FROM users WHERE id = $1::uuid`, id)
+func (h handlers) userByID(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*userRow, error) {
+	columns, err := h.userColumnsFor("")
+	if err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(ctx, `SELECT `+columns+` FROM users WHERE id = $1::uuid`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -72,8 +95,12 @@ func userByID(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*userRow, error) {
 }
 
 // userByProvider is the social-login lookup by provider identity.
-func userByProvider(ctx context.Context, tx pgx.Tx, providerUserID, provider string) (*userRow, error) {
-	rows, err := tx.Query(ctx, `SELECT `+userColumns+` FROM users WHERE auth_provider_id = $1::text AND auth_provider = $2::text`,
+func (h handlers) userByProvider(ctx context.Context, tx pgx.Tx, providerUserID, provider string) (*userRow, error) {
+	columns, err := h.userColumnsFor("")
+	if err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(ctx, `SELECT `+columns+` FROM users WHERE auth_provider_id = $1::text AND auth_provider = $2::text`,
 		providerUserID, provider)
 	if err != nil {
 		return nil, err
@@ -266,8 +293,12 @@ type attemptRow struct {
 
 // attemptByEmail is login_attempts._get_attempt.
 func attemptByEmail(ctx context.Context, tx pgx.Tx, email string) (*attemptRow, error) {
-	rows, err := tx.Query(ctx, `SELECT id, attempt_count, first_attempt_at, locked_until FROM login_attempts
+	return queryAttempt(ctx, tx, `SELECT id, attempt_count, first_attempt_at, locked_until FROM login_attempts
 WHERE lower(email) = $1::text`, email)
+}
+
+func queryAttempt(ctx context.Context, tx pgx.Tx, query string, args ...any) (*attemptRow, error) {
+	rows, err := tx.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

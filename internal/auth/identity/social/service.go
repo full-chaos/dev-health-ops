@@ -24,6 +24,7 @@ const DefaultLinkFreshness = 10 * time.Minute
 // Domain errors. Each maps to one response; none carries provider text.
 var (
 	ErrProviderRefused          = errors.New("social: the provider token was refused")
+	ErrInvalidProviderID        = errors.New("social: the provider returned an invalid user id")
 	ErrProviderUnavailable      = errors.New("social: the provider could not be reached")
 	ErrEmailUnverified          = errors.New("social: the provider has not verified the email")
 	ErrPrincipalDisabled        = errors.New("social: the principal is disabled")
@@ -31,6 +32,8 @@ var (
 	ErrAccountConflict          = errors.New("social: an existing account holds this email")
 	ErrUnavailable              = errors.New("social: identity store unavailable")
 	ErrProviderLinked           = errors.New("social: the principal already has an identity at this provider")
+	// ErrUnusableEmail: a verified provider address the shared email text rule refuses.
+	ErrUnusableEmail = identity.ErrUnusableProviderEmail
 )
 
 // ConflictError is ErrAccountConflict with the existing account's sign-in
@@ -127,6 +130,9 @@ func (s *Service) Exchange(ctx context.Context, provider Provider, token contrac
 
 	profile, reason, err := s.fetch(ctx, provider, token)
 	if err != nil {
+		return ExchangeResult{}, err
+	}
+	if reason, err = refuseProfileEmail(profile); err != nil {
 		return ExchangeResult{}, err
 	}
 	principal, found, err := s.lookup(ctx, profile.ExternalKey)
@@ -260,6 +266,20 @@ func lookupReason(err error) Reason {
 	return ReasonStoreUnavailable
 }
 
+// refuseProfileEmail is go-api's social email rule (internal/api/session/social.go), run before any lookup so the
+// answer never depends on which accounts exist: an address the shared rule refuses is an unverified email when the
+// provider did not verify it (a lone surrogate in the provider's email makes the profile unverified, as on go-api),
+// and ErrUnusableEmail otherwise. ci/social_provider_email_parity.tsv holds the answers of both planes.
+func refuseProfileEmail(p Profile) (Reason, error) {
+	if identity.RefuseProviderEmail(p.Email) == nil {
+		return ReasonAccepted, nil
+	}
+	if !p.EmailVerified {
+		return ReasonEmailUnverified, ErrEmailUnverified
+	}
+	return ReasonMalformed, ErrUnusableEmail
+}
+
 func signInTo(p identity.Principal) (Reason, error) {
 	if p.DisabledAt != nil || p.ServiceProvider {
 		return ReasonPrincipalDeactivated, ErrPrincipalDisabled
@@ -279,6 +299,9 @@ func (s *Service) Link(ctx context.Context, who SignedIn, provider Provider, tok
 	}
 	profile, reason, err := s.fetch(ctx, provider, token)
 	if err != nil {
+		return identity.Identity{}, err
+	}
+	if reason, err = refuseProfileEmail(profile); err != nil {
 		return identity.Identity{}, err
 	}
 	key := profile.ExternalKey
@@ -420,12 +443,17 @@ func (s *Service) fetch(ctx context.Context, provider Provider, token contracts.
 	case err == nil:
 	case errors.As(err, &perr) && perr.Reason == ReasonDependency:
 		return Profile{}, perr.Reason, fmt.Errorf("%w: %s", ErrProviderUnavailable, perr.Step)
+	case errors.As(err, &perr) && perr.InvalidID:
+		return Profile{}, ReasonMalformed, fmt.Errorf("%w: %s", ErrInvalidProviderID, perr.Step)
 	case errors.As(err, &perr):
 		return Profile{}, perr.Reason, fmt.Errorf("%w: %s", ErrProviderRefused, perr.Step)
 	case errors.Is(err, ErrProviderNotConfigured):
 		return Profile{}, ReasonDependency, err
 	default:
 		return Profile{}, ReasonDependency, ErrProviderUnavailable
+	}
+	if profile.Issuer == s.providers.Issuer(provider) && profile.Provider == provider && !identity.ValidSubject(profile.Subject) {
+		return Profile{}, ReasonMalformed, fmt.Errorf("%w: profile subject", ErrInvalidProviderID)
 	}
 	if profile.Issuer != s.providers.Issuer(provider) || profile.Provider != provider || profile.Validate() != nil {
 		return Profile{}, ReasonAudience, fmt.Errorf("%w: profile identity does not match the provider", ErrProviderRefused)

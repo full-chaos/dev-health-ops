@@ -51,6 +51,8 @@ type Config struct {
 type Actor struct {
 	PrincipalID *uuid.UUID
 	RequestID   *string
+	// Caller is the credential the request came with; the audit row names it.
+	Caller audit.Caller
 }
 
 // Authorize decides, inside the commit and after the organization row lock,
@@ -119,7 +121,7 @@ type plan struct {
 	invites *invite.OrgRevocation
 }
 
-// Deprovision runs the one commit, in the one lock order: the principal rows
+// Deprovision runs the one commit, in the auth lock order (membership.Store readPairs): the principal rows
 // its rows name FOR KEY SHARE (step 1: members go-api wrote with no auth row,
 // inviters of go-api-only invites, the actor of its audit row), the organization row FOR UPDATE
 // (step 3, exclusive), Authorize, the pending invites (step 4), every
@@ -253,6 +255,7 @@ func auditFor(in Input, wasActive bool) audit.AuditEvent {
 		actor := in.Actor.PrincipalID.String()
 		ev.ActorPrincipalID = &actor
 	}
+	in.Actor.Caller.Annotate(ev.Attributes)
 	if wasActive {
 		ev.Attributes["changed_fields"] = []string{"status", "disabled_at"}
 		ev.Attributes["previous_status"] = string(org.StatusActive)

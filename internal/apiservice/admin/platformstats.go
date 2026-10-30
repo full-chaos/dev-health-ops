@@ -56,9 +56,22 @@ type platformStatsRow struct {
 	recentSyncsSuccess, recentSyncsFailed                            int64
 }
 
+// superuserCountSQL counts the superusers, by the platform roles switch.
+func (s pgStore) superuserCountSQL() (string, error) {
+	superuser, err := s.platformRoles().Superuser("users.is_superuser IS true", "users.id")
+	if err != nil {
+		return "", err
+	}
+	return `SELECT count(*) FROM users WHERE ` + superuser, nil
+}
+
 // platformStats runs platform.py's eleven counts against one snapshot.
 func (s pgStore) platformStats(ctx context.Context, since time.Time) (*platformStatsRow, error) {
 	var out platformStatsRow
+	superuserCount, err := s.superuserCountSQL()
+	if err != nil {
+		return nil, err
+	}
 	counts := []struct {
 		dest *int64
 		sql  string
@@ -68,7 +81,7 @@ func (s pgStore) platformStats(ctx context.Context, since time.Time) (*platformS
 		{&out.activeOrganizations, `SELECT count(*) FROM organizations WHERE organizations.is_active IS true`, nil},
 		{&out.totalUsers, `SELECT count(*) FROM users`, nil},
 		{&out.activeUsers, `SELECT count(*) FROM users WHERE users.is_active IS true`, nil},
-		{&out.superuserCount, `SELECT count(*) FROM users WHERE users.is_superuser IS true`, nil},
+		{&out.superuserCount, superuserCount, nil},
 		{&out.totalMemberships, `SELECT count(*) FROM memberships`, nil},
 		{&out.totalSyncConfigs, `SELECT count(*) FROM sync_configurations`, nil},
 		{&out.activeSyncConfigs, `SELECT count(*) FROM sync_configurations WHERE sync_configurations.is_active IS true`, nil},

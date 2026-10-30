@@ -8,3 +8,6 @@ import (
 
 // writeUsersOwned answers a refused users write: 409, the moved operation.
 func writeUsersOwned(w http.ResponseWriter) { usersowned.Write(w) }
+
+// writePlatformRolesOwned answers a refused is_superuser write: 409, the moved operation.
+func writePlatformRolesOwned(w http.ResponseWriter) { usersowned.WritePlatformRoles(w) }

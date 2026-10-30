@@ -453,7 +453,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 124,
+          "line": 127,
           "note": "func (s *Service) Exchange",
           "path": "internal/auth/identity/social/service.go"
         },
@@ -533,11 +533,16 @@
     },
     {
       "accepted_credential_classes": [
-        "internal_svc_authsess_token"
+        "internal_svc_authsess_token",
+        "workload_token"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "workload+jwt"
+      },
       "classification": "protected",
-      "current_state_cache_behavior": "No cache: the credential row is read live by token hash on every call; the actor's public.users and public.memberships rows are read live before the write and again under the write's locks.",
-      "disclosure_behavior": "Every bearer refusal is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed with no read; a refused actor gets 403 (principal_deactivated, admin_required or superuser_required) before any row of the request is read, so a missing organization, principal or inviter is named only to an actor the rule allows; a store failure is 503.",
+      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the actor's public.users and public.memberships rows are read live before the write and again under the write's locks.",
+      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed with no read; a refused actor gets 403 (principal_deactivated, admin_required or superuser_required) before any row of the request is read, so a missing organization, principal or inviter is named only to an actor the rule allows; a store failure is 503; a key set that cannot be read is a 503.",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /internal/v1/memberships/add [dev-health-auth-service @api]",
@@ -549,24 +554,29 @@
           "note": "func (p PG) CheckScope",
           "path": "internal/auth/servicecred/scope.go"
         },
-        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). Any other bearer is refused before the body is read; then the actor rule (go-api's ensureOrgAdminAccess and refuseSuperuserWrite): the actor is an active superuser, or an active owner or admin member of the organization, and a non-superuser actor may not change a superuser member. It runs on the live users and membership rows before anything is read for the request, and again inside the write's transaction after its locks."
+        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). A workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read by internal/auth/authapi/issue_workload.go SessionIssueWorkload.authorize, the session issue route's path: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. Any other bearer is refused before any read and before the body is read; then the actor rule (go-api's ensureOrgAdminAccess and refuseSuperuserWrite): the actor is an active superuser, or an active owner or admin member of the organization, and a non-superuser actor may not change a superuser member. It runs on the live users and membership rows before anything is read for the request, and again inside the write's transaction after its locks."
       },
       "route": "/internal/v1/memberships/add",
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/provisioning.go",
-        "line": 192
+        "line": 195
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped"
     },
     {
       "accepted_credential_classes": [
-        "internal_svc_authsess_token"
+        "internal_svc_authsess_token",
+        "workload_token"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "workload+jwt"
+      },
       "classification": "protected",
-      "current_state_cache_behavior": "No cache: the credential row is read live by token hash on every call; the actor's public.users and public.memberships rows are read live before the write and again under the write's locks.",
-      "disclosure_behavior": "Every bearer refusal is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed with no read; a refused actor gets 403 (principal_deactivated, admin_required or superuser_required) before any row of the request is read, so a missing organization, principal or inviter is named only to an actor the rule allows; a store failure is 503.",
+      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the actor's public.users and public.memberships rows are read live before the write and again under the write's locks.",
+      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed with no read; a refused actor gets 403 (principal_deactivated, admin_required or superuser_required) before any row of the request is read, so a missing organization, principal or inviter is named only to an actor the rule allows; a store failure is 503; a key set that cannot be read is a 503.",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /internal/v1/memberships/role [dev-health-auth-service @api]",
@@ -578,24 +588,29 @@
           "note": "func (p PG) CheckScope",
           "path": "internal/auth/servicecred/scope.go"
         },
-        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). Any other bearer is refused before the body is read; then the actor rule (go-api's ensureOrgAdminAccess and refuseSuperuserWrite): the actor is an active superuser, or an active owner or admin member of the organization, and a non-superuser actor may not change a superuser member. It runs on the live users and membership rows before anything is read for the request, and again inside the write's transaction after its locks."
+        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). A workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read by internal/auth/authapi/issue_workload.go SessionIssueWorkload.authorize, the session issue route's path: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. Any other bearer is refused before any read and before the body is read; then the actor rule (go-api's ensureOrgAdminAccess and refuseSuperuserWrite): the actor is an active superuser, or an active owner or admin member of the organization, and a non-superuser actor may not change a superuser member. It runs on the live users and membership rows before anything is read for the request, and again inside the write's transaction after its locks."
       },
       "route": "/internal/v1/memberships/role",
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/provisioning.go",
-        "line": 193
+        "line": 196
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped"
     },
     {
       "accepted_credential_classes": [
-        "internal_svc_authsess_token"
+        "internal_svc_authsess_token",
+        "workload_token"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "workload+jwt"
+      },
       "classification": "protected",
-      "current_state_cache_behavior": "No cache: the credential row is read live by token hash on every call; the actor's public.users and public.memberships rows are read live before the write and again under the write's locks.",
-      "disclosure_behavior": "Every bearer refusal is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed with no read; a refused actor gets 403 (principal_deactivated, admin_required or superuser_required) before any row of the request is read, so a missing organization, principal or inviter is named only to an actor the rule allows; a store failure is 503.",
+      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the actor's public.users and public.memberships rows are read live before the write and again under the write's locks.",
+      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed with no read; a refused actor gets 403 (principal_deactivated, admin_required or superuser_required) before any row of the request is read, so a missing organization, principal or inviter is named only to an actor the rule allows; a store failure is 503; a key set that cannot be read is a 503.",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /internal/v1/memberships/remove [dev-health-auth-service @api]",
@@ -607,24 +622,29 @@
           "note": "func (p PG) CheckScope",
           "path": "internal/auth/servicecred/scope.go"
         },
-        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). Any other bearer is refused before the body is read; then the actor rule (go-api's ensureOrgAdminAccess and refuseSuperuserWrite): the actor is an active superuser, or an active owner or admin member of the organization, and a non-superuser actor may not change a superuser member. It runs on the live users and membership rows before anything is read for the request, and again inside the write's transaction after its locks."
+        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). A workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read by internal/auth/authapi/issue_workload.go SessionIssueWorkload.authorize, the session issue route's path: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. Any other bearer is refused before any read and before the body is read; then the actor rule (go-api's ensureOrgAdminAccess and refuseSuperuserWrite): the actor is an active superuser, or an active owner or admin member of the organization, and a non-superuser actor may not change a superuser member. It runs on the live users and membership rows before anything is read for the request, and again inside the write's transaction after its locks."
       },
       "route": "/internal/v1/memberships/remove",
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/provisioning.go",
-        "line": 194
+        "line": 197
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped"
     },
     {
       "accepted_credential_classes": [
-        "internal_svc_authsess_token"
+        "internal_svc_authsess_token",
+        "workload_token"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "workload+jwt"
+      },
       "classification": "protected",
-      "current_state_cache_behavior": "No cache: the credential row is read live by token hash on every call; the actor's public.users and public.memberships rows are read live before the write and again under the write's locks.",
-      "disclosure_behavior": "Every bearer refusal is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed with no read; a refused actor gets 403 (principal_deactivated, admin_required or superuser_required) before any row of the request is read, so a missing organization, principal or inviter is named only to an actor the rule allows; a store failure is 503.",
+      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the actor's public.users and public.memberships rows are read live before the write and again under the write's locks.",
+      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed with no read; a refused actor gets 403 (principal_deactivated, admin_required or superuser_required) before any row of the request is read, so a missing organization, principal or inviter is named only to an actor the rule allows; a store failure is 503; a key set that cannot be read is a 503.",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /internal/v1/memberships/transfer [dev-health-auth-service @api]",
@@ -636,24 +656,29 @@
           "note": "func (p PG) CheckScope",
           "path": "internal/auth/servicecred/scope.go"
         },
-        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). Any other bearer is refused before the body is read; then the actor rule (go-api's ensureOrgAdminAccess and refuseSuperuserWrite): the actor is an active superuser, or an active owner or admin member of the organization, and a non-superuser actor may not change a superuser member. It runs on the live users and membership rows before anything is read for the request, and again inside the write's transaction after its locks."
+        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). A workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read by internal/auth/authapi/issue_workload.go SessionIssueWorkload.authorize, the session issue route's path: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. Any other bearer is refused before any read and before the body is read; then the actor rule (go-api's ensureOrgAdminAccess and refuseSuperuserWrite): the actor is an active superuser, or an active owner or admin member of the organization, and a non-superuser actor may not change a superuser member. It runs on the live users and membership rows before anything is read for the request, and again inside the write's transaction after its locks."
       },
       "route": "/internal/v1/memberships/transfer",
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/provisioning.go",
-        "line": 195
+        "line": 198
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped"
     },
     {
       "accepted_credential_classes": [
-        "internal_svc_authsess_token"
+        "internal_svc_authsess_token",
+        "workload_token"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "workload+jwt"
+      },
       "classification": "protected",
-      "current_state_cache_behavior": "No cache: the credential row is read live by token hash on every call; the actor's public.users and public.memberships rows are read live before the write and again under the write's locks.",
-      "disclosure_behavior": "Every bearer refusal is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed with no read; a refused actor gets 403 (principal_deactivated, admin_required or superuser_required) before any row of the request is read, so a missing organization, principal or inviter is named only to an actor the rule allows; a store failure is 503.",
+      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the actor's public.users and public.memberships rows are read live before the write and again under the write's locks.",
+      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed with no read; a refused actor gets 403 (principal_deactivated, admin_required or superuser_required) before any row of the request is read, so a missing organization, principal or inviter is named only to an actor the rule allows; a store failure is 503; a key set that cannot be read is a 503.",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /internal/v1/invites/create [dev-health-auth-service @api]",
@@ -661,7 +686,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 280,
+            "line": 263,
             "note": "signedtoken.Build(id, s.secret)",
             "path": "internal/auth/invite/store.go"
           },
@@ -680,24 +705,29 @@
           "note": "func (p PG) CheckScope",
           "path": "internal/auth/servicecred/scope.go"
         },
-        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). Any other bearer is refused before the body is read; then the actor rule (go-api's ensureOrgAdminAccess): the actor is an active superuser, or an active owner or admin member of the organization (an invite names an address, so there is no target rule). It runs on the live users and membership rows before anything is read for the request, and again inside the write's transaction after the organization row lock."
+        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). A workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read by internal/auth/authapi/issue_workload.go SessionIssueWorkload.authorize, the session issue route's path: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. Any other bearer is refused before any read and before the body is read; then the actor rule (go-api's ensureOrgAdminAccess): the actor is an active superuser, or an active owner or admin member of the organization (an invite names an address, so there is no target rule). It runs on the live users and membership rows before anything is read for the request, and again inside the write's transaction after the organization row lock."
       },
       "route": "/internal/v1/invites/create",
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/provisioning.go",
-        "line": 196
+        "line": 199
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped"
     },
     {
       "accepted_credential_classes": [
-        "internal_svc_authsess_token"
+        "internal_svc_authsess_token",
+        "workload_token"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "workload+jwt"
+      },
       "classification": "protected",
-      "current_state_cache_behavior": "No cache: the credential row is read live by token hash on every call; the account's public.users row is read live before the write and again under the write's locks.",
-      "disclosure_behavior": "Every bearer refusal is the same 401 error.v1 invalid_credentials; an inactive account is 403 principal_deactivated before the invite store is called and again under the account's users-row lock; an unknown, badly signed, expired, used or revoked invite token is the same 400 invite_invalid; a store failure is 503.",
+      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the account's public.users row is read live before the write and again under the write's locks.",
+      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials; an inactive account is 403 principal_deactivated before the invite store is called and again under the account's users-row lock; an unknown, badly signed, expired, used or revoked invite token is the same 400 invite_invalid; a store failure is 503; a key set that cannot be read is a 503.",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /internal/v1/invites/accept [dev-health-auth-service @api]",
@@ -709,24 +739,29 @@
           "note": "func (p PG) CheckScope",
           "path": "internal/auth/servicecred/scope.go"
         },
-        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). Any other bearer is refused before the body is read; then the account named in the body must be active, checked before the invite store is called and again under the account's users-row lock; there is no actor rule: the invite token and the account's verified address, equal to the invite's, authorize the join (internal/auth/invite)."
+        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). A workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read by internal/auth/authapi/issue_workload.go SessionIssueWorkload.authorize, the session issue route's path: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. Any other bearer is refused before any read and before the body is read; then the account named in the body must be active, checked before the invite store is called and again under the account's users-row lock; there is no actor rule: the invite token and the account's verified address, equal to the invite's, authorize the join (internal/auth/invite)."
       },
       "route": "/internal/v1/invites/accept",
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/provisioning.go",
-        "line": 197
+        "line": 200
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
     },
     {
       "accepted_credential_classes": [
-        "internal_svc_authsess_token"
+        "internal_svc_authsess_token",
+        "workload_token"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "workload+jwt"
+      },
       "classification": "protected",
-      "current_state_cache_behavior": "No cache: the credential row is read live by token hash on every call; the actor's public.users and public.memberships rows are read live before the write and again under the write's locks.",
-      "disclosure_behavior": "Every bearer refusal is the same 401 error.v1 invalid_credentials; an actor that is not an active superuser gets 403 (principal_deactivated or superuser_required) before any row of the request is read, and the same rule runs again after the organization row lock, so a missing organization is named only to a superuser; a store failure is 503.",
+      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the actor's public.users and public.memberships rows are read live before the write and again under the write's locks.",
+      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials; an actor that is not an active superuser gets 403 (principal_deactivated or superuser_required) before any row of the request is read, and the same rule runs again after the organization row lock, so a missing organization is named only to a superuser; a store failure is 503; a key set that cannot be read is a 503.",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /internal/v1/organizations/deprovision [dev-health-auth-service @api]",
@@ -738,24 +773,29 @@
           "note": "func (p PG) CheckScope",
           "path": "internal/auth/servicecred/scope.go"
         },
-        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). Any other bearer is refused before the body is read; then the actor must be an active superuser (go-api's DELETE /api/v1/admin/orgs/{org_id} is superuser only), checked on the live users row before anything is read for the request, and again inside the commit after the organization row lock."
+        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). A workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read by internal/auth/authapi/issue_workload.go SessionIssueWorkload.authorize, the session issue route's path: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. Any other bearer is refused before any read and before the body is read; then the actor must be an active superuser (go-api's DELETE /api/v1/admin/orgs/{org_id} is superuser only), checked on the live users row before anything is read for the request, and again inside the commit after the organization row lock."
       },
       "route": "/internal/v1/organizations/deprovision",
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/provisioning.go",
-        "line": 198
+        "line": 201
       },
       "surface_kind": "rest",
       "tenant_requirement": "cross_org_superuser_only"
     },
     {
       "accepted_credential_classes": [
-        "internal_svc_authsess_token"
+        "internal_svc_authsess_token",
+        "workload_token"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "workload+jwt"
+      },
       "classification": "protected",
-      "current_state_cache_behavior": "No cache: the credential row is read live by token hash on every call; the actor's public.users row is read live before the write and again under the write's locks.",
-      "disclosure_behavior": "Every bearer refusal is the same 401 error.v1 invalid_credentials; an actor that is not an active superuser gets 403 (principal_deactivated or superuser_required) before any row of the request is read, and the same rule runs again after the organization row lock, so a missing organization is named only to a superuser; an organization that is not suspended answers 200 with reactivated false and writes nothing; a store failure is 503.",
+      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the actor's public.users row is read live before the write and again under the write's locks.",
+      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials; an actor that is not an active superuser gets 403 (principal_deactivated or superuser_required) before any row of the request is read, and the same rule runs again after the organization row lock, so a missing organization is named only to a superuser; an organization that is not suspended answers 200 with reactivated false and writes nothing; a store failure is 503; a key set that cannot be read is a 503.",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /internal/v1/organizations/reactivate [dev-health-auth-service @api]",
@@ -767,7 +807,7 @@
           "note": "func (p PG) CheckScope",
           "path": "internal/auth/servicecred/scope.go"
         },
-        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). Any other bearer is refused before the body is read; then the actor must be an active superuser (go-api's PATCH /api/v1/admin/orgs/{org_id} is superuser only), checked on the live users row before anything is read for the request, and again inside the commit after the organization row lock."
+        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). A workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read by internal/auth/authapi/issue_workload.go SessionIssueWorkload.authorize, the session issue route's path: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. Any other bearer is refused before any read and before the body is read; then the actor must be an active superuser (go-api's PATCH /api/v1/admin/orgs/{org_id} is superuser only), checked on the live users row before anything is read for the request, and again inside the commit after the organization row lock."
       },
       "route": "/internal/v1/organizations/reactivate",
       "service": "dev-health-auth-service",

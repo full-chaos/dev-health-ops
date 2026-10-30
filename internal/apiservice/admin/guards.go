@@ -99,6 +99,16 @@ func (h *handlers) refuseSuperuserWrite(ctx context.Context, w http.ResponseWrit
 	return true
 }
 
+// targetsSuperuserSQL locks the targets' users rows in id order and reads
+// is_superuser of each, by the platform roles switch.
+func (s pgStore) targetsSuperuserSQL() (string, error) {
+	superuser, err := s.platformRoles().Superuser("is_superuser", "users.id")
+	if err != nil {
+		return "", err
+	}
+	return `SELECT ` + superuser + ` FROM users WHERE id = ANY($1) ORDER BY id FOR UPDATE`, nil
+}
+
 // superuserTx is the one transaction of an admin write that targets a user.
 // The superuser check and the write run in it, so a grant cannot commit
 // between them.
@@ -122,7 +132,11 @@ func (g *superuserTx) refuse(targetIDs ...uuid.UUID) bool {
 	var target func() (bool, error)
 	if len(targetIDs) > 0 {
 		target = func() (bool, error) {
-			rows, err := g.tx.Query(g.ctx, `SELECT is_superuser FROM users WHERE id = ANY($1) ORDER BY id FOR UPDATE`, targetIDs)
+			query, err := g.store.targetsSuperuserSQL()
+			if err != nil {
+				return false, err
+			}
+			rows, err := g.tx.Query(g.ctx, query, targetIDs)
 			if err != nil {
 				return false, err
 			}
@@ -141,6 +155,18 @@ func (g *superuserTx) refuse(targetIDs ...uuid.UUID) bool {
 	return g.h.refuseSuperuserWrite(g.ctx, g.w, g.user, g.requested, target, g.route)
 }
 
+// keyShare locks a users row the write only references (its foreign key
+// check's lock) FOR KEY SHARE, in this transaction. A missing row is no error
+// here. On a failure it writes the error response and returns false.
+func (g *superuserTx) keyShare(id uuid.UUID) bool {
+	if _, err := g.tx.Exec(g.ctx, `SELECT 1 FROM users WHERE id = $1 FOR KEY SHARE`, id); err != nil {
+		g.h.logger.ErrorContext(g.ctx, "admin: key-share lock failed", "route", g.route, "error", err)
+		policy.WriteInternal(g.w)
+		return false
+	}
+	return true
+}
+
 // superuserGuardedWrite is the seam for every admin write that targets a
 // user. write runs in one transaction and calls g.refuse before its first
 // write there. It returns the success response, or nil after it wrote an
@@ -154,8 +180,9 @@ func (h *handlers) superuserGuardedWrite(ctx context.Context, w http.ResponseWri
 		return
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	respond := write(&superuserTx{h: h, ctx: ctx, w: w, user: user, requested: requested, route: route,
-		tx: tx, store: pgStore{Pool: tx, Now: h.store.Now, UsersOwned: h.store.UsersOwned}})
+	store := h.store
+	store.Pool = tx
+	respond := write(&superuserTx{h: h, ctx: ctx, w: w, user: user, requested: requested, route: route, tx: tx, store: store})
 	if respond == nil {
 		return
 	}

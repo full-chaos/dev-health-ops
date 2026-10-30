@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 )
 
 // Kind is the parse type of an option value. It tells the flag layer which
@@ -240,6 +241,10 @@ var optionRegistry = []Option{
 	{
 		Flag: "users-owned", Env: EnvUsersOwned, Kind: KindString, Default: "false", Group: GroupSession,
 		Usage: "true when auth-service owns user creation and local credential links; with the session secrets it mounts the password and e-mail verification routes",
+	},
+	{
+		Flag: "platform-roles-owned", Env: rule.OwnedEnv, Kind: KindString, Default: "false", Group: GroupSession,
+		Usage: "true when auth-service owns the platform roles: the sign-in state reads is_superuser from the auth platform role assignments. Mounts no route",
 	},
 	{
 		Flag: "orgs-owned", Env: EnvOrgsOwned, Kind: KindString, Default: "false", Group: GroupSession,

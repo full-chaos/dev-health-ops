@@ -55,6 +55,7 @@ internal/api/teamsidentity	environment_proxy_test.go	unexpressed
 internal/apiservice	environment_proxy_test.go	unexpressed
 internal/atlassianteams	environment_proxy_test.go	unexpressed
 internal/atlassianteams	vendored_redirect_test.go	unexpressed
+internal/auth/contracts	credential_anchor_history_test.go	unexpressed
 internal/auth/contracts	endpoint_profile_source_commit_test.go	unexpressed
 internal/auth/identity/oidc	environment_proxy_test.go	unexpressed
 internal/cigates	governance.go	unexpressed

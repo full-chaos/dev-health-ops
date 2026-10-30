@@ -1,12 +1,10 @@
 package invite
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -188,30 +186,15 @@ func authorize(ctx context.Context, tx audit.TxOps, auth Authorize, orgID uuid.U
 	return nil
 }
 
-// lockActor takes the actor's rows FOR UPDATE in steps 1 and 2 of the
-// membership lock order, before the organization row: every auth.principals
-// row, then every public.users row, each in id order. Authorize then reads the
-// actor's account and role as they stay until the commit: a demotion, a
-// disable or a superuser change of the actor commits before it or waits for
-// the verb. A missing row is no refusal here (Authorize decides on the actor).
-func (s *Store) lockActor(ctx context.Context, tx audit.TxOps, ids ...*uuid.UUID) error {
-	seen := map[uuid.UUID]bool{}
-	var order []uuid.UUID
-	for _, id := range ids {
-		if id != nil && !seen[*id] {
-			seen[*id] = true
-			order = append(order, *id)
-		}
-	}
-	sort.Slice(order, func(i, j int) bool { return bytes.Compare(order[i][:], order[j][:]) < 0 })
-	for _, table := range []string{s.q + ".principals", "public.users"} {
-		for _, id := range order {
-			if _, err := tx.Exec(ctx, `SELECT 1 FROM `+table+` WHERE id = $1 FOR UPDATE`, id); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+// lockActor takes steps 1 and 2 of the auth lock order (membership.Store
+// readPairs): the actor's auth.principals and public.users rows FOR SHARE, the
+// inviter's FOR KEY SHARE (the invite rows name it: a foreign key), one row per
+// statement in id order. Authorize then reads the actor's account and role as
+// they stay until the commit: a demotion, a disable or a superuser change of
+// the actor commits before it or waits for the verb. A missing row is no
+// refusal here (Authorize decides on the actor).
+func (s *Store) lockActor(ctx context.Context, tx audit.TxOps, actor, inviter *uuid.UUID) error {
+	return s.members.LockRows(ctx, tx, membership.LockOrder(nil, inviter, actor))
 }
 
 // lockOrg takes the organization row FOR SHARE (step 3 of the membership lock
@@ -366,6 +349,14 @@ func (s *Store) readInvite(ctx context.Context, rowOf func(string, ...any) pgx.R
 		`.invites WHERE token_hash = $1`+forUpdate, digest))
 	if err == nil {
 		r.found, r.inAuth = true, true
+		if lock {
+			// Step 4 of the auth lock order holds go-api's row too, before the
+			// membership rows: the accept updates it last.
+			var id uuid.UUID
+			if err := rowOf(`SELECT id FROM public.org_invites WHERE id = $1 FOR UPDATE`, r.id).Scan(&id); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				return r, err
+			}
+		}
 		return r, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
@@ -424,7 +415,7 @@ func (s *Store) acceptOnce(ctx context.Context, in AcceptInput, digest string) (
 		}
 	}
 	change := membership.Change{OrgID: planned.orgID, PrincipalID: in.PrincipalID, Role: planned.role, InvitedBy: planned.inviter,
-		Actor: membership.Actor{PrincipalID: in.Actor.PrincipalID, RequestID: in.Actor.RequestID}}
+		Actor: membershipActor(in.Actor)}
 	plan, err := s.members.PlanAdd(ctx, change)
 	if errors.Is(err, membership.ErrInviterNotFound) {
 		// The inviter left (go-api's ON DELETE SET NULL): the membership records none.
@@ -608,4 +599,10 @@ FROM public.org_invites p WHERE p.id = $1`, in.InviteID, now, inviter); err != n
 		Audit:  auditFor(verbRevoke, in.OrgID, in.InviteID, nil, in.Actor),
 		Events: []audit.OutboxEvent{eventFor(verbRevoke, in.InviteID)},
 	})
+}
+
+// membershipActor is the actor of the membership an accept adds: the accept's
+// own principal, request and caller.
+func membershipActor(a Actor) membership.Actor {
+	return membership.Actor{PrincipalID: a.PrincipalID, RequestID: a.RequestID, Caller: a.Caller}
 }

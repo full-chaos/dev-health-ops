@@ -325,6 +325,11 @@ func fetchOAuthUserInfo(ctx context.Context, client *oauthprovider.Client, provi
 	if !ok {
 		return oauthClaims{}, fmt.Errorf("%w: oauth user info email", errShape)
 	}
+	// The email text rule runs before the verified-email check: a lone surrogate (which the profile reader turns
+	// into "unverified") and every other refused form get the one invalid_provider_email answer.
+	if err := refuseUnusableEmail(email); err != nil {
+		return oauthClaims{}, err
+	}
 	// D2745 (team-lead, CHAOS-6986 r1 P1-1): never look up or link an
 	// existing user, and never auto-provision a new one, by an email the
 	// provider itself has not verified -- an attacker who controls an
@@ -512,6 +517,12 @@ func (h handlers) oauthCallback(w http.ResponseWriter, r *http.Request) {
 				invalidProviderIDDetail(), "oauth", "provider_profile")
 			return
 		}
+		if errors.Is(err, errInvalidProviderEmail) {
+			h.Logger.WarnContext(ctx, "sso sign-in refused: the identity provider returned an unusable email address", "protocol", "oauth")
+			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusBadRequest,
+				invalidProviderEmailDetail(), "oauth", "provisioning")
+			return
+		}
 		if errors.Is(err, errOAuthNoVerifiedEmail) {
 			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusForbidden,
 				"No verified email address is available from this OAuth provider", "oauth", "email_verification")
@@ -611,12 +622,6 @@ func (h handlers) oauthCallback(w http.ResponseWriter, r *http.Request) {
 				invalidProviderIDDetail(), "oauth", "provisioning")
 			return
 		}
-		if errors.Is(err, errInvalidProviderEmail) {
-			h.Logger.WarnContext(ctx, "sso sign-in refused: the identity provider returned an unusable email address", "protocol", "oauth")
-			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusBadRequest,
-				invalidProviderEmailDetail(), "oauth", "provisioning")
-			return
-		}
 		h.fail(w, r, "oauth provisioning", err)
 		return
 	}
@@ -707,6 +712,9 @@ func (h handlers) oauthExchangeAndFetch(ctx context.Context, w http.ResponseWrit
 		if errors.Is(err, errShape) || errors.Is(err, oauthprovider.ErrUnexpected) {
 			return oauthClaims{}, err // the bare 500, matching an uncaught Python exception.
 		}
+		if errors.Is(err, errInvalidProviderEmail) {
+			return oauthClaims{}, err // answered by the callback with invalid_provider_email, as the provisioning step did.
+		}
 		if errors.Is(err, errOAuthNoVerifiedEmail) {
 			// D2745 P1-1: propagated as-is, NOT wrapped in ssoErrReason --
 			// this authenticated (the state verified; the access token
@@ -748,17 +756,13 @@ func (h handlers) oauthProvisionUser(ctx context.Context, row *providerRow, prov
 	if err := refuseUnusableSubject(authProviderValue, claims.externalID); err != nil {
 		return nil, nil, err
 	}
-	if err := refuseUnusableEmail(claims.email); err != nil {
-		return nil, nil, err
-	}
 	userID, found, err := h.resolveSSOIdentity(ctx, authProviderValue, claims.externalID, claims.email)
 	if err != nil {
 		return nil, nil, err
 	}
 	err = pgx.ErrNoRows
 	if found {
-		err = h.Pool.QueryRow(ctx, `SELECT id, email, username, full_name, avatar_url, is_superuser, token_version
-FROM users WHERE id = $1::uuid`, userID).Scan(&id, &existingEmail, &username, &existingFullName,
+		err = h.signInUser(ctx, `id, email, username, full_name, avatar_url, `, userID, &id, &existingEmail, &username, &existingFullName,
 			&existingAvatarURL, &isSuperuser, &tokenVersion)
 	}
 

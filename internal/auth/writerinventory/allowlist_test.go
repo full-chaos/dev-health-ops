@@ -24,7 +24,7 @@ var Allowlist = []Entry{
 	{File: "internal/api/session/linktokens.go", Func: "handlers.replaceLinkToken", Table: "public.password_reset_tokens", Verb: "DELETE"},
 	{File: "internal/api/session/linktokens.go", Func: "handlers.replaceLinkToken", Table: "public.password_reset_tokens", Verb: "INSERT"},
 	{File: "internal/api/session/lockout.go", Func: "clearAttempts", Table: "public.login_attempts", Verb: "DELETE"},
-	{File: "internal/api/session/lockout.go", Func: "handlers.recordFailedAttempt", Table: "public.login_attempts", Verb: "INSERT"},
+	{File: "internal/api/session/lockout.go", Func: "handlers.recordFailedAttempt", Table: "public.login_attempts", Verb: "UPSERT"},
 	{File: "internal/api/session/onboarding.go", Func: "handlers.skipIntegration", Table: "public.organizations", Verb: "UPDATE"},
 	{File: "internal/api/session/register.go", Func: "handlers.register", Table: "public.users", Verb: "INSERT"},
 	{File: "internal/api/session/register.go", Func: "insertMembership", Table: "public.memberships", Verb: "INSERT"},
@@ -83,6 +83,8 @@ var Allowlist = []Entry{
 	{File: "internal/auth/identity/backfill.go", Func: "Store.revokeBackfillRole", Table: "auth.platform_role_assignments", Verb: "DELETE"},
 	{File: "internal/auth/identity/backfill_orgs.go", Func: "Store.insertMembership", Table: "auth.memberships", Verb: "INSERT"},
 	{File: "internal/auth/identity/backfill_orgs.go", Func: "Store.updateMembershipRole", Table: "auth.memberships", Verb: "UPDATE"},
+	// acp ruling, CHAOS-11826 (D6484): the orgs backfill fills a missing invited_by / joined_at on an active membership, via audit.Commit.
+	{File: "internal/auth/identity/backfill_orgs.go", Func: "Store.fillMembership", Table: "auth.memberships", Verb: "UPDATE"},
 	{File: "internal/auth/identity/identities.go", Func: "Store.ProvisionFederated", Table: "auth.principals", Verb: "INSERT"},
 	{File: "internal/auth/identity/identities.go", Func: "Store.ProvisionFederated", Table: "auth.users", Verb: "INSERT"},
 	{File: "internal/auth/identity/identities.go", Func: "Store.UnlinkIdentity", Table: "auth.external_identities", Verb: "DELETE"},

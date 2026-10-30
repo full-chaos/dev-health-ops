@@ -99,6 +99,11 @@ func (h *handlers) deleteOrganization(w http.ResponseWriter, r *http.Request) {
 			policy.WriteDetail(w, http.StatusInternalServerError, orgDeletionIncompleteDetail, nil)
 			return
 		}
+		var denied *orgDeletionAuthError
+		if errors.As(err, &denied) {
+			writeOrgDeletionAuthError(w)
+			return
+		}
 		var step *orgDeletionStepError
 		if errors.As(err, &step) {
 			h.logger.ErrorContext(ctx, "admin: org deletion "+step.step+" failed", "error", step.err)
@@ -137,6 +142,11 @@ func (h *handlers) deleteOrganizationData(ctx context.Context, orgUUID uuid.UUID
 		return nil, err
 	}
 	defer func() { _ = ch.conn.Close() }()
+	if !dryRun && h.orgProvision != nil {
+		if err := h.deprovisionInAuth(ctx, orgUUID); err != nil {
+			return nil, err
+		}
+	}
 
 	result := &orgDeletionResult{
 		organizationID:     orgIDStr,
@@ -486,6 +496,18 @@ func (h *handlers) orgDeletionPurgePostgres(ctx context.Context, orgUUID uuid.UU
 		return fmt.Errorf("begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+
+	// The auth lock order (internal/auth/membership readPairs): the invite
+	// rows, then the membership rows, each ORDER BY id, before any delete
+	// (a DELETE takes its rows in scan order).
+	for _, lock := range []string{
+		`SELECT 1 FROM org_invites WHERE org_id = $1 ORDER BY id FOR UPDATE`,
+		`SELECT 1 FROM memberships WHERE org_id = $1 ORDER BY id FOR UPDATE`,
+	} {
+		if _, err := tx.Exec(ctx, lock, orgUUID); err != nil {
+			return fmt.Errorf("lock: %w", err)
+		}
+	}
 
 	if _, err := tx.Exec(ctx,
 		`UPDATE scheduled_jobs SET status = $2, is_running = false, next_run_at = NULL, updated_at = $3 WHERE org_id = $1`,

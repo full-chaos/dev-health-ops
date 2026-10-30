@@ -380,6 +380,9 @@ func (service *NativeFinalizeSyncRunService) finalize(
 			return err
 		}
 	}
+	if err := stampCredentialConnected(ctx, tx, run, *completedAt, aggregate.successCount); err != nil {
+		return err
+	}
 	if err := observeTerminalSyncRun(ctx, tx, run, *completedAt, newStatus, aggregate.successCount, aggregate.failedCount, resultPayload, stampError); err != nil {
 		return err
 	}
@@ -902,6 +905,49 @@ LIMIT 1`, orgID, integrationID).Scan(&configID)
 UPDATE public.sync_configurations
 SET last_sync_at = $2, last_sync_success = $3, last_sync_error = $4, last_sync_stats = $5::json
 WHERE id = $1::uuid`, configID, completedAt, success, errorText, encodedStats)
+	if err != nil {
+		return ErrFinalizeSyncRunUnavailable
+	}
+	return nil
+}
+
+// credentialStampRefresh is how old a connected credential's last_test_at must
+// be before another successful run rewrites it.
+const credentialStampRefresh = "15 minutes"
+
+// stampCredentialConnected marks the run's credential connected (CHAOS-11881):
+// a run with at least one successful unit proves the credential authenticates.
+// A run with no successful unit never writes, so a failed run cannot turn a
+// connected credential back into "needs verification". A run that finished
+// before the credential's latest result (a late or repeated finalize) never
+// overwrites it. The run's own
+// credential wins over the integration's; no credential is a no-op, and a run
+// that authenticated from the environment, or that carries neither a credential
+// nor an auth source (a legacy run), stamps nothing, because the
+// integration may have gained a stored credential after the run started.
+func stampCredentialConnected(ctx context.Context, tx pgx.Tx, run *finalizeSyncRun, completedAt time.Time, successCount int) error {
+	if successCount <= 0 {
+		return nil
+	}
+	_, err := tx.Exec(ctx, `
+UPDATE public.integration_credentials AS credential
+SET last_test_at = $3, last_test_success = true, last_test_error = NULL
+FROM (
+  SELECT COALESCE(run.credential_id, integration.credential_id) AS credential_id
+  FROM public.sync_runs AS run
+  JOIN public.integrations AS integration
+    ON integration.id = run.integration_id
+  WHERE run.id = $1::uuid AND run.org_id = $2
+    AND (run.credential_id IS NOT NULL OR run.auth_source = 'integration_credential')
+) AS target
+WHERE credential.id = target.credential_id
+  AND credential.org_id = $2
+  AND credential.is_active
+  AND (credential.last_test_at IS NULL OR credential.last_test_at < $3)
+  AND (credential.last_test_success IS DISTINCT FROM true
+       OR credential.last_test_at IS NULL
+       OR credential.last_test_at < $3::timestamptz - interval '`+credentialStampRefresh+`')`,
+		run.id, run.orgID, completedAt)
 	if err != nil {
 		return ErrFinalizeSyncRunUnavailable
 	}

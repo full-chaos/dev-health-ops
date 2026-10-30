@@ -156,6 +156,10 @@ func (h *handlers) createOrgInvite(w http.ResponseWriter, r *http.Request) {
 	if role == "" {
 		role = "member"
 	}
+	if h.orgProvision != nil {
+		h.createOrgInviteInAuth(ctx, w, r, org.Name, displayName, orgID, normalizedEmail, role, invitedByID)
+		return
+	}
 	invite, token, err := h.createInvite(ctx, r, orgID, normalizedEmail, role, invitedByID)
 	if errors.Is(err, errPendingInviteExists) {
 		policy.WriteDetail(w, http.StatusConflict, err.Error(), nil)

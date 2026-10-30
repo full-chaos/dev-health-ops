@@ -35,7 +35,7 @@ func PublicReadColumns() []ColumnGrant {
 			"id", "email", "password_hash", "full_name", "username", "auth_provider", "auth_provider_id",
 			"is_active", "is_verified", "is_superuser", "token_version", "last_login_at", "sso_provider_id", "saml_nameid_format", "saml_sp_name_qualifier",
 		}},
-		{Table: "memberships", Columns: []string{"user_id", "org_id", "role", "joined_at", "created_at"}},
+		{Table: "memberships", Columns: []string{"user_id", "org_id", "role", "joined_at", "created_at", "invited_by_id"}},
 		{Table: "sso_providers", Columns: []string{
 			"id", "org_id", "protocol", "status", "allow_idp_initiated", "auto_provision_users",
 			"config", "allowed_domains", "encrypted_secrets", "is_default", "created_at",
@@ -58,6 +58,26 @@ func PublicReadColumns() []ColumnGrant {
 // schema: column-level, on the sessions table only.
 func SessionReaderColumns() ColumnGrant {
 	return ColumnGrant{Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at", "legacy_token_version"}}
+}
+
+// PlatformRoleReaderColumns is what a session reader role also reads while the
+// platform roles switch is on: the columns platformrole.HoldsSQL reads.
+func PlatformRoleReaderColumns() []ColumnGrant {
+	return []ColumnGrant{
+		{Table: "platform_role_assignments", Columns: []string{"principal_id", "role_key", "expires_at"}},
+		{Table: "principals", Columns: []string{"id", "kind", "disabled_at"}},
+	}
+}
+
+// SessionReaderReads is everything a session reader role reads in the auth
+// schema: SessionReaderColumns, then PlatformRoleReaderColumns while
+// platformRolesOwned.
+func SessionReaderReads(platformRolesOwned bool) []ColumnGrant {
+	reads := []ColumnGrant{SessionReaderColumns()}
+	if platformRolesOwned {
+		reads = append(reads, PlatformRoleReaderColumns()...)
+	}
+	return reads
 }
 
 // TableWriteGrant is a column-level SELECT and UPDATE grant on one ops-schema

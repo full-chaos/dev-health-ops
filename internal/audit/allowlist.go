@@ -44,7 +44,9 @@ var allowedAttributeKeys = map[string]struct{}{
 	"audience":     {},
 	"actions":      {},
 	// The auth.session.issued row of a workload call: the verified token's jti.
-	"workload_jti": {},
+	// A provisioning row of a workload call also names the workload principal.
+	"workload_jti":        {},
+	"caller_principal_id": {},
 
 	"purged_email_verification_tokens": {},
 	"purged_password_reset_tokens":     {},
@@ -189,7 +191,7 @@ var attributeVocabulary = map[string][]string{
 	"amr": {"pwd", "otp", "mfa", "hwk", "swk", "fed"},
 	"changed_fields": {
 		"role_key", "status", "display_name", "disabled_at", "expires_at", "revoked_at", "email", "email_verified_at",
-		"scopes", "audiences", "organization_id", "allowed_actions", "binding",
+		"scopes", "audiences", "organization_id", "allowed_actions", "binding", "invited_by", "joined_at",
 	},
 }
 
@@ -214,10 +216,11 @@ var attributeIDRules = map[string]*regexp.Regexp{
 	"key_id": regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`),
 	"jti":    uuidPattern,
 	// The workload-token schema's jti pattern, so every jti the verifier accepts is valid here.
-	"workload_jti":   regexp.MustCompile(`^[A-Za-z0-9_-]{22,64}$`),
-	"principal_id":   uuidPattern,
-	"binding_id":     uuidPattern,
-	"related_key_id": regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`),
+	"workload_jti":        regexp.MustCompile(`^[A-Za-z0-9_-]{22,64}$`),
+	"principal_id":        uuidPattern,
+	"caller_principal_id": uuidPattern,
+	"binding_id":          uuidPattern,
+	"related_key_id":      regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`),
 	// run_id names one operator run (a roll's purge Job): a short slug, never free text.
 	"run_id": regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`),
 }

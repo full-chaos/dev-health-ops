@@ -40,6 +40,7 @@ internal/api/credentials	probes.go	internal/apiservice/ownershipvenue
 internal/api/credentials	probes.go	internal/apiservice/ssovenue
 internal/api/credentials	probes.go	internal/auth/authapi
 internal/api/credentials	probes.go	internal/auth/authruntime
+internal/api/credentials	probes.go	internal/auth/lockorder
 internal/api/credentials	probes.go	internal/billingcli
 internal/api/credentials	probes.go	internal/clicredentials
 internal/apiservice	githubapp_config.go	cmd/dho
@@ -98,7 +99,6 @@ internal/auth/contracts	contracts.go	internal/auth/linkmail
 internal/auth/contracts	contracts.go	internal/auth/membership
 internal/auth/contracts	contracts.go	internal/auth/orgdeprovision
 internal/auth/contracts	contracts.go	internal/auth/passwordpolicy
-internal/auth/contracts	contracts.go	internal/auth/platformrole
 internal/auth/contracts	contracts.go	internal/auth/policycatalog
 internal/auth/contracts	contracts.go	internal/auth/revisionfeed
 internal/auth/contracts	contracts.go	internal/auth/servicecred
@@ -514,6 +514,7 @@ internal/providerfoundation	clients.go	internal/apiservice/ownershipvenue
 internal/providerfoundation	clients.go	internal/apiservice/ssovenue
 internal/providerfoundation	clients.go	internal/auth/authapi
 internal/providerfoundation	clients.go	internal/auth/authruntime
+internal/providerfoundation	clients.go	internal/auth/lockorder
 internal/providerfoundation	clients.go	internal/backfillrun
 internal/providerfoundation	clients.go	internal/billingcli
 internal/providerfoundation	clients.go	internal/cigates/queuecreds

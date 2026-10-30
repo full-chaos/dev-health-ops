@@ -108,7 +108,7 @@ func (h handlers) register(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
 
-	existing, err := userByEmail(ctx, tx, email)
+	existing, err := h.userByEmail(ctx, tx, email)
 	if err != nil {
 		h.fail(w, r, "load user", err)
 		return
@@ -238,4 +238,11 @@ func (h handlers) sendAccountExists(ctx context.Context, user *userRow) error {
 		"signin_url": h.Mail.BaseURL() + "/auth/signin",
 		"reset_url":  h.Mail.BaseURL() + "/auth/forgot-password",
 	})
+}
+
+// refreshOrgGone reports the refresh token write's foreign key violation on
+// its organization: the organization row is gone.
+func refreshOrgGone(err error) bool {
+	var pg *pgconn.PgError
+	return errors.As(err, &pg) && pg.Code == "23503" && pg.ConstraintName == "refresh_tokens_org_id_fkey"
 }

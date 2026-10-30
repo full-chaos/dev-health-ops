@@ -273,7 +273,9 @@ func failureClass(err error) string {
 	case errors.Is(err, workload.ErrBootstrapNotFound):
 		return "bootstrap credential not found"
 	case errors.Is(err, workload.ErrBootstrapWorkloadDisabled):
-		return "the workload is disabled; enable it first"
+		return "the workload row is disabled; no auth-migrate verb enables it today: re-enabling needs a reviewed change"
+	case errors.Is(err, workload.ErrBootstrapPrincipalDisabled):
+		return "the workload's principal is disabled, its row is not; no auth-migrate verb enables it today: re-enabling needs a reviewed change"
 	case errors.Is(err, workload.ErrAudienceInvalid):
 		return "audience refused"
 	case errors.Is(err, workload.ErrStore):

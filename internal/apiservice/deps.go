@@ -1,6 +1,7 @@
 package apiservice
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
 	"github.com/full-chaos/dev-health-ops/internal/api/githubapp"
 	"github.com/full-chaos/dev-health-ops/internal/api/oauthprovider"
 	"github.com/full-chaos/dev-health-ops/internal/api/orgreactivate"
@@ -204,9 +205,23 @@ type Deps struct {
 	// admin PATCH writes is_active=true; nil (AUTH_PROXY_ORG_PROVISIONING off)
 	// leaves the PATCH as it was.
 	OrgReactivator orgreactivate.Reactivator
+	// OrgProvisioner sends member, invite and organization delete changes to
+	// auth-service; nil (AUTH_PROXY_ORG_PROVISIONING off) leaves go-api the
+	// writer.
+	OrgProvisioner authprovision.Provisioner
+	// OrgSuspender suspends an organization in auth-service before the admin PATCH writes is_active=false; nil with
+	// AUTH_PROXY_ORG_PROVISIONING off.
+	OrgSuspender orgreactivate.Suspender
 	// UsersOwned is AUTH_USERS_OWNED: auth-service owns users, so the go-api
 	// routes and verbs that write public.users refuse.
 	UsersOwned bool
+	// PlatformRolesOwned is AUTH_PLATFORM_ROLES_OWNED: is_superuser is read
+	// from the auth platform role assignments and a public is_superuser write
+	// refuses.
+	PlatformRolesOwned bool
+	// AuthSchema is AUTH_DATABASE_SCHEMA, where the platform role rule reads
+	// while PlatformRolesOwned (empty: "auth").
+	AuthSchema string
 	// Limits is the rate-limit store every limited route counts through
 	// (see limitStore); nil means the Valkey-backed store when Valkey is
 	// configured, else an in-process one.
@@ -422,4 +437,9 @@ func buildDeps(
 		slog.Bool("webhook_secret_decryptor_configured", deps.Pool != nil && cfg.SettingsEncryptionKey.Configured()),
 	)
 	return deps, components, nil
+}
+
+// platformRoles is how the go-api users reads take is_superuser.
+func (d Deps) platformRoles() policy.PlatformRoleRead {
+	return policy.PlatformRoleRead{Owned: d.PlatformRolesOwned, AuthSchema: d.AuthSchema}
 }

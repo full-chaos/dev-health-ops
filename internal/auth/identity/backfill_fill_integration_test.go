@@ -170,3 +170,77 @@ func TestFillAndTransferOwnershipShareOneLockOrder(t *testing.T) {
 		}
 	}
 }
+
+// The fill holds the membership row between its read and its write: a writer that starts after the fill read the row
+// cannot finish before the fill commits, so the decision the fill took is the decision it writes.
+func TestFillHoldsTheMembershipRowBetweenItsReadAndItsWrite(t *testing.T) {
+	e := getEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	org := e.seedAuthOwnedOrg(t, ctx)
+	inviter := e.seedUser(t, ctx, uniqueEmail("hi"), true, true)
+	member := e.seedUser(t, ctx, uniqueEmail("hm"), true, true)
+	e.project(t, ctx, inviter)
+	e.project(t, ctx, member)
+	t0 := time.Now().UTC().Truncate(time.Second).Add(-72 * time.Hour)
+	if _, err := e.store.BackfillMembership(ctx, MembershipBackfillTarget{OrgID: org, UserID: member, Role: "member", JoinedAt: &t0}, false); err != nil {
+		t.Fatal(err)
+	}
+	id := e.setAuthJoin(t, ctx, org, member, nil)
+	t1, t2 := t0.Add(time.Hour), t0.Add(2*time.Hour)
+	schema, err := authschema.NewValidatedIdentifier("auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	orgText, subject, target := org.String(), member.String(), id.String()
+	writerDone := make(chan error, 1)
+	writerEarly := false
+	afterFillRowLock = func(context.Context) {
+		afterFillRowLock = nil
+		go func() {
+			writerDone <- audit.Commit(ctx, e.runtime, schema, audit.Mutation{
+				Apply: func(ctx context.Context, tx audit.TxOps) error {
+					_, err := tx.Exec(ctx, `UPDATE auth.memberships SET joined_at = $2, updated_at = clock_timestamp() WHERE id = $1`, id, t2)
+					return err
+				},
+				Audit: audit.AuditEvent{
+					EventType: "auth.membership.status_changed", Outcome: audit.OutcomeAllowed, OrganizationID: &orgText, SubjectPrincipalID: &subject,
+					Attributes: map[string]any{"reason_code": "membership_status_changed", "target_kind": "membership", "target_id": target},
+				},
+				Events: []audit.OutboxEvent{{AggregateType: "membership", AggregateID: provisioning.WireID("membership", target),
+					EventType: "membership.activated", Change: map[string]any{"status": "active"}}},
+			})
+		}()
+		select {
+		case <-writerDone:
+			writerEarly = true
+		case <-time.After(3 * time.Second):
+		}
+	}
+	t.Cleanup(func() { afterFillRowLock = nil })
+	res, err := e.store.BackfillMembership(ctx, MembershipBackfillTarget{OrgID: org, UserID: member, Role: "member", JoinedAt: &t1, InvitedBy: &inviter}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if writerEarly {
+		t.Fatal("a writer finished while the fill held its read of the membership row: got a finished writer, want it blocked until the fill commits")
+	}
+	if !res.InviterSet || !res.JoinedSet {
+		t.Fatalf("report: got inviter_set=%v joined_set=%v, want true and true (the fill wrote both)", res.InviterSet, res.JoinedSet)
+	}
+	select {
+	case err := <-writerDone:
+		if err != nil {
+			t.Fatalf("the blocked writer: got %v, want nil", err)
+		}
+	case <-time.After(60 * time.Second):
+		t.Fatal("the blocked writer did not finish after the fill committed")
+	}
+	var gotJoined *time.Time
+	if err := e.admin.QueryRow(ctx, `SELECT joined_at FROM auth.memberships WHERE id = $1`, id).Scan(&gotJoined); err != nil {
+		t.Fatal(err)
+	}
+	if gotJoined == nil || !gotJoined.Equal(t2) {
+		t.Fatalf("joined_at after the writer: got %v, want %v (the writer ran after the fill)", gotJoined, t2)
+	}
+}

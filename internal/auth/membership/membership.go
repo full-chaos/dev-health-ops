@@ -274,7 +274,7 @@ func outcomeLabel(err error) string {
 		return "denied"
 	case errors.Is(err, ErrNotOwned):
 		return "not_owned"
-	case errors.Is(err, errStateMoved):
+	case errors.Is(err, errStateMoved), errors.Is(err, errSessionsBusy):
 		return "replanned"
 	}
 	return "error"

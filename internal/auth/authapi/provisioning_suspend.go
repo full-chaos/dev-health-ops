@@ -43,7 +43,7 @@ type suspendAnswer struct {
 // transaction after the row lock. An organization that is already suspended answers 200 with suspended false and
 // writes nothing. A fault of the store, an actor with no auth.principals row included, is the fail-closed 503.
 func (h provisioningHandlers) orgSuspend(w http.ResponseWriter, r *http.Request) {
-	body, ok := h.admit(w, r, opOrgSuspend, "organization_id", "actor_principal_id")
+	body, caller, ok := h.admit(w, r, opOrgSuspend, "organization_id", "actor_principal_id")
 	if !ok {
 		return
 	}
@@ -57,7 +57,7 @@ func (h provisioningHandlers) orgSuspend(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	ctx := r.Context()
-	changed, err := h.Orgs.SuspendAuthorized(ctx, orgID, nil, org.Actor{PrincipalID: &actor, RequestID: requestid.Audit(ctx)},
+	changed, err := h.Orgs.SuspendAuthorized(ctx, orgID, nil, org.Actor{PrincipalID: &actor, RequestID: requestid.Audit(ctx), Caller: caller},
 		func(ctx context.Context, tx audit.TxOps, orgID uuid.UUID) error {
 			_, err := h.actorRule(ctx, tx, actor, orgID, true)
 			var refused errActorRefused

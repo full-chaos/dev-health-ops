@@ -274,12 +274,12 @@ func uuidOfWire(t *testing.T, subject string) uuid.UUID {
 	return id
 }
 
-// T2-T10: every wrong credential gets the same 401 error.v1 body (only the per-request
-// request_id and occurred_at differ), and no store is read.
-// The prefix, shape, typ, audience and subject refusals also read no key set.
-func TestIssueSessionRefusesWrongCredentialsBeforeAnyRead(t *testing.T) {
+// issuePreKeyRefusals are bearers refused on their text or unverified payload,
+// before any key-set read: every other credential class, a wrong audience or
+// subject, a wrong typ and malformed or oversized values.
+func issuePreKeyRefusals() map[string]func(*workloadIssueFixture) map[string]string {
 	forty3 := strings.Repeat("A", 43)
-	preKey := map[string]func(*workloadIssueFixture) map[string]string{
+	return map[string]func(*workloadIssueFixture) map[string]string{
 		"wrong audience": func(w *workloadIssueFixture) map[string]string {
 			h, _ := w.mint("workload+jwt", func(c *contracts.WorkloadTokenClaims) { c.Aud = "dev-health-api" })
 			return h
@@ -324,8 +324,14 @@ func TestIssueSessionRefusesWrongCredentialsBeforeAnyRead(t *testing.T) {
 		},
 		"longer typ": func(w *workloadIssueFixture) map[string]string { h, _ := w.mint("workload+jwt-x", nil); return h },
 	}
+}
+
+// T2-T10: every wrong credential gets the same 401 error.v1 body (only the per-request
+// request_id and occurred_at differ), and no store is read.
+// The prefix, shape, typ, audience and subject refusals also read no key set.
+func TestIssueSessionRefusesWrongCredentialsBeforeAnyRead(t *testing.T) {
 	var golden string
-	for name, build := range preKey {
+	for name, build := range issuePreKeyRefusals() {
 		w := newWorkloadIssueFixture(t)
 		response := w.issue(build(w))
 		expectError(t, response, http.StatusUnauthorized, "invalid_credentials")
@@ -353,10 +359,10 @@ func bearerOf(value string) map[string]string {
 	return map[string]string{"Authorization": "Bearer " + value}
 }
 
-// T10: a token that passes the class, audience and subject peek but fails the
-// verifier is refused: no store is read, and the body is the same.
-func TestIssueSessionRefusesATokenTheVerifierRefuses(t *testing.T) {
-	cases := map[string]func(*workloadIssueFixture) map[string]string{
+// issueVerifierRefusals are workload tokens that pass the class, audience and
+// subject peek and are refused by the verifier.
+func issueVerifierRefusals() map[string]func(*workloadIssueFixture) map[string]string {
+	return map[string]func(*workloadIssueFixture) map[string]string{
 		"expired": func(w *workloadIssueFixture) map[string]string {
 			h, _ := w.mint("workload+jwt", func(c *contracts.WorkloadTokenClaims) {
 				c.Iat, c.Nbf, c.Exp = c.Iat-400, c.Nbf-400, c.Exp-400
@@ -392,8 +398,13 @@ func TestIssueSessionRefusesATokenTheVerifierRefuses(t *testing.T) {
 			return bearerOf(strings.Join(parts, "."))
 		},
 	}
+}
+
+// T10: a token that passes the class, audience and subject peek but fails the
+// verifier is refused: no store is read, and the body is the same.
+func TestIssueSessionRefusesATokenTheVerifierRefuses(t *testing.T) {
 	var golden string
-	for name, build := range cases {
+	for name, build := range issueVerifierRefusals() {
 		w := newWorkloadIssueFixture(t)
 		response := w.issue(build(w))
 		expectError(t, response, http.StatusUnauthorized, "invalid_credentials")

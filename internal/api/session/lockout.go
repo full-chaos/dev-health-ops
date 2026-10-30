@@ -33,15 +33,14 @@ func (h handlers) checkLockout(ctx context.Context, tx pgx.Tx, email string) (lo
 // recordFailedAttempt is record_failed_attempt.
 func (h handlers) recordFailedAttempt(ctx context.Context, tx pgx.Tx, email string) error {
 	now := h.Now()
-	// The row exists before the locked read, so a first failure and
-	// concurrent ones all queue on it instead of racing on UNIQUE(email).
-	if _, err := tx.Exec(ctx, `INSERT INTO login_attempts
+	// One upsert creates the row if missing and locks it either way, so
+	// concurrent failures queue on it, and a concurrent clear cannot remove
+	// the row between the insert and the read. The no-op SET keeps every value.
+	attempt, err := queryAttempt(ctx, tx, `INSERT INTO login_attempts
 	(id, email, attempt_count, first_attempt_at, locked_until, created_at, updated_at)
 VALUES ($1, $2, 0, NULL, NULL, $3, $3)
-ON CONFLICT (email) DO NOTHING`, h.NewUUID(), email, now.UTC()); err != nil {
-		return err
-	}
-	attempt, err := attemptByEmailForUpdate(ctx, tx, email)
+ON CONFLICT (email) DO UPDATE SET updated_at = login_attempts.updated_at
+RETURNING id, attempt_count, first_attempt_at, locked_until`, h.NewUUID(), email, now.UTC())
 	if err != nil {
 		return err
 	}

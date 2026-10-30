@@ -45,21 +45,20 @@ func (r *lockoutOneRow) Scan(dest ...any) error {
 func (*lockoutOneRow) Err() error { return nil }
 func (*lockoutOneRow) Close()     {}
 
-// The failed-login counter takes the row lock before it reads: INSERT .. ON
-// CONFLICT DO NOTHING, then SELECT .. FOR UPDATE, then the write.
+// The failed-login counter takes the row lock in one upsert, then writes.
 func TestRecordFailedAttemptStatementOrder(t *testing.T) {
 	h := handlers{Deps: Deps{Now: time.Now, NewUUID: uuid.New}}
 	tx := &lockoutStmtTx{}
 	if err := h.recordFailedAttempt(context.Background(), tx, "a@example.com"); err != nil {
 		t.Fatal(err)
 	}
-	if len(tx.stmts) < 3 {
+	if len(tx.stmts) != 2 {
 		t.Fatalf("statements %q", tx.stmts)
 	}
-	if s := tx.stmts[0]; !strings.Contains(s, "INSERT INTO login_attempts") || !strings.Contains(s, "ON CONFLICT (email) DO NOTHING") {
-		t.Errorf("first statement is not INSERT .. ON CONFLICT DO NOTHING: %s", s)
+	if s := tx.stmts[0]; !strings.Contains(s, "INSERT INTO login_attempts") || !strings.Contains(s, "ON CONFLICT (email) DO UPDATE") || !strings.Contains(s, "RETURNING") {
+		t.Errorf("first statement is not the locking upsert: %s", s)
 	}
-	if s := tx.stmts[1]; !strings.Contains(s, "FROM login_attempts") || !strings.HasSuffix(strings.TrimSpace(s), "FOR UPDATE") {
-		t.Errorf("second statement is not SELECT .. FOR UPDATE: %s", s)
+	if s := tx.stmts[1]; !strings.HasPrefix(s, "UPDATE login_attempts") {
+		t.Errorf("second statement is not the UPDATE: %s", s)
 	}
 }

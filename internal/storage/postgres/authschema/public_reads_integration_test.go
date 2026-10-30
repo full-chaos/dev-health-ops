@@ -69,7 +69,7 @@ func newPublicReadsFixture(t *testing.T, ctx context.Context, hide ...string) *p
 		if _, err := conn.Exec(ctx, fmt.Sprintf(`GRANT CREATE ON SCHEMA public TO %s`, Quote(mustValidatedIdentifier(migrationRole)))); err != nil {
 			t.Fatal(err)
 		}
-		owned := []string{LegacyRefreshTokenGrant().Table, "email_verification_tokens", "password_reset_tokens"}
+		owned := []string{LegacyRefreshTokenGrant().Table, "email_verification_tokens", "password_reset_tokens", publicAuditTable}
 		for table := range publicReadOracle {
 			owned = append(owned, table)
 		}

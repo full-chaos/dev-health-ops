@@ -233,6 +233,11 @@ Order (nothing serves traffic until the last step):
 6. Act on the `operator-action` lines the apply prints (ids only): users whose password may have changed after the
    target (their older password is live again: force a reset, ticket 11834) and provider token revocations queued after
    the target (re-queue them, ticket 11835).
+   A re-queued revocation row needs no route afterwards: the revocation worker (`sync.provider_oauth_revocations`, on
+   the sync worker, every 5 to 10 minutes) sends every due pending row once `PAGER_DUTY_CLIENT_ID` is set, also for a
+   credential the restored database never had. A row PagerDuty refuses 10 times stays pending and is named by id in a
+   `provider_oauth_revocations.exhausted` WARN line (the `provider_oauth_revocations_exhausted` gauge counts them):
+   disconnect that credential again, or revoke the token at PagerDuty by hand.
 7. Reset the read-only default: `ALTER SYSTEM RESET default_transaction_read_only;` then `SELECT pg_reload_conf();`.
 8. Start auth-service. Its readiness check `restore_fence` must be true (`/readyz`).
 9. `auth-migrate restore-fence status` prints `fenced=true` and the timeline (and the stored operator actions).

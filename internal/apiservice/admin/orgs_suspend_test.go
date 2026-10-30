@@ -31,7 +31,8 @@ func (f *fakeAuthSuspender) Suspend(_ context.Context, org, actor uuid.UUID, _ *
 
 func newLifecycleHandlers(db *reactivationDB, re orgreactivate.Reactivator, su orgreactivate.Suspender) *handlers {
 	return &handlers{store: pgStore{Pool: db}, orgReactivator: re, orgSuspender: su,
-		logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+		orgState: &fakeAuthState{log: db.log, seq: []orgreactivate.State{{Status: "active", Revision: 1}}},
+		logger:   slog.New(slog.NewTextHandler(io.Discard, nil))}
 }
 
 // With the switch off (no clients) a PATCH is_active=false is what it is today: the one read of the row, then the write

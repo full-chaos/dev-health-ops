@@ -137,7 +137,8 @@ func patchOrg(h *handlers, body string) (code int, text string) {
 }
 
 func newReactivationHandlers(db *reactivationDB, auth orgreactivate.Reactivator) *handlers {
-	return &handlers{store: pgStore{Pool: db}, orgReactivator: auth, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	return &handlers{store: pgStore{Pool: db}, orgReactivator: auth, orgState: &fakeAuthState{log: db.log, seq: []orgreactivate.State{{Status: "suspended", Revision: 1}}},
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 }
 
 // With the switch off (no reactivator) the PATCH is what it is today: one

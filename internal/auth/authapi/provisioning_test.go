@@ -1137,8 +1137,10 @@ func TestOrgSuspendIsServedWithItsProfileRow(t *testing.T) {
 	if got := f.post(PatternOrgSuspend, encode(routeCases()[8].body(f, f.super)), nil); got.Code != http.StatusOK {
 		t.Fatalf("suspend with its row: %d %s, want 200", got.Code, got.Body)
 	}
-	if strings.Contains(f.logs.String(), "not mounted") {
-		t.Fatalf("a not-mounted line was logged with the row present: %s", f.logs.String())
+	for _, line := range strings.Split(f.logs.String(), "\n") {
+		if strings.Contains(line, "not mounted") && strings.Contains(line, PatternOrgSuspend) {
+			t.Fatalf("a not-mounted line for the suspend route was logged with its row present: %s", line)
+		}
 	}
 }
 

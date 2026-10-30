@@ -2,33 +2,21 @@ package bigboy_test
 
 import (
 	"fmt"
-	"sort"
 	"testing"
 
 	"gopkg.in/yaml.v3"
 )
 
-// The deploy copy of the file moves bugsink's credentials from three required variables to bugsink's own env file
-// (CHAOS-11970). Until that deploy change merges, the BIGBOY_DIR tree may have either shape, and only these two.
+// The deploy copy of the file keeps bugsink's credentials in bugsink's own env file, never in compose variables (CHAOS-11970).
 var composeBugsinkVars = []string{"BUGSINK_CREATE_SUPERUSER", "BUGSINK_DB_PASSWORD", "BUGSINK_SECRET_KEY"}
 
 const composeBugsinkEnvFile = "./.bugsink-dev/bugsink.env"
 
-// composeBugsinkShape returns a finding unless the file is in exactly one of the two shapes:
-// old: the required variables are base plus the three BUGSINK_*, bugsink's own environment interpolates all three, and bugsink loads no
-// .bugsink-dev env file;
-// new: the required variables are base only, bugsink's env_file is exactly the required .bugsink-dev/bugsink.env, and no
-// scalar of the file interpolates one of the three bugsink credential variables in any Compose form.
+// composeBugsinkShape returns a finding unless the file is in the one accepted shape: the required variables are base only,
+// bugsink's env_file is exactly the required .bugsink-dev/bugsink.env, and no scalar of the file interpolates one of the
+// three bugsink credential variables in any Compose form. (The old three-variable shape was accepted during the move only.)
 func composeBugsinkShape(required, base []string, bugsink doc, scalars []string) []string {
-	old := append(append([]string(nil), base...), composeBugsinkVars...)
-	sort.Strings(old)
 	files := list(bugsink["env_file"])
-	ownFile := false
-	for _, e := range files {
-		if p := str(e); p == composeBugsinkEnvFile || str(mp(e)["path"]) == composeBugsinkEnvFile {
-			ownFile = true
-		}
-	}
 	exactFile := len(files) == 1 && str(mp(files[0])["path"]) == composeBugsinkEnvFile && mp(files[0])["required"] == true
 	interpolated := false
 	for _, s := range scalars {
@@ -40,25 +28,12 @@ func composeBugsinkShape(required, base []string, bugsink doc, scalars []string)
 			}
 		}
 	}
-	used := map[string]bool{}
-	for _, s := range composeScalars(bugsink["environment"]) {
-		for _, name := range composeInterpolatedNames(s) {
-			used[name] = true
-		}
-	}
-	bugsinkUsesAll := true
-	for _, v := range composeBugsinkVars {
-		bugsinkUsesAll = bugsinkUsesAll && used[v]
-	}
-	switch {
-	case equal(required, old) && !ownFile && bugsinkUsesAll:
-		return nil
-	case equal(required, base) && exactFile && !interpolated:
+	if equal(required, base) && exactFile && !interpolated {
 		return nil
 	}
-	return []string{fmt.Sprintf("compose.bigboy.yml requires %v (bugsink env_file %v, BUGSINK_* interpolated %v, bugsink's environment uses all three %v): want the pins and DHO_API_CH_USERS_XML %v "+
-		"plus either the three bugsink variables %v, each used in bugsink's own environment (old form), or none of them with bugsink's env_file exactly %s, required (new form)",
-		required, files, interpolated, bugsinkUsesAll, base, composeBugsinkVars, composeBugsinkEnvFile)}
+	return []string{fmt.Sprintf("compose.bigboy.yml requires %v (bugsink env_file %v, BUGSINK_* interpolated %v): want only the pins and DHO_API_CH_USERS_XML %v "+
+		"and bugsink's env_file exactly %s, required, with none of the bugsink variables %v interpolated",
+		required, files, interpolated, base, composeBugsinkEnvFile, composeBugsinkVars)}
 }
 
 // composeBugsinkFileFindings applies composeBugsinkShape (bugsink service + every scalar) and composeBugsinkLeaks (every way
@@ -124,7 +99,7 @@ func TestComposeBugsinkShapeCells(t *testing.T) {
 		text     string
 		ok       bool
 	}{
-		{"old form: the three variables, no own env file", withVars, oldUse, oldText, true},
+		{"old form: the three variables, no own env file (dropped after the deploy move)", withVars, oldUse, oldText, false},
 		{"old form: the three names required only in an unused extension field, bugsink static", withVars,
 			doc{"environment": map[string]any{"SECRET_KEY": "static-secret", "CREATE_SUPERUSER": "static-admin", "DATABASE_URL": "postgresql://x"}},
 			"x-unused: ${BUGSINK_DB_PASSWORD:?a} ${BUGSINK_SECRET_KEY:?b} ${BUGSINK_CREATE_SUPERUSER:?c}\n", false},

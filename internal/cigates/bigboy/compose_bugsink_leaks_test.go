@@ -310,7 +310,7 @@ func TestComposeBugsinkFileFindingsBothForms(t *testing.T) {
 		required   []string
 		ok         bool
 	}{
-		{"old form", oldHead, withVars, true},
+		{"old form (dropped after the deploy move)", oldHead, withVars, false},
 		{"old form, another service interpolates a credential", oldHead + "  web:\n    environment:\n      LEAK: ${BUGSINK_DB_PASSWORD}\n", withVars, false},
 		{"old form, another service passes a credential by name", oldHead + "  web:\n    environment:\n      BUGSINK_SECRET_KEY: null\n", withVars, false},
 		{"old form, the names only in an unused extension field and bugsink static", "x-unused: ${BUGSINK_DB_PASSWORD:?a} ${BUGSINK_SECRET_KEY:?b} ${BUGSINK_CREATE_SUPERUSER:?c}\nservices:\n  bugsink:\n    environment:\n      SECRET_KEY: static-secret\n      CREATE_SUPERUSER: static-admin\n", withVars, false},

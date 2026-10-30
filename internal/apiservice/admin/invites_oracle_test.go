@@ -278,6 +278,7 @@ VALUES ($1, $2, $3, true, true, $4, 0, now(), now())`, row.id, row.email, row.fu
 			}{
 				{orgID, ownerID, "owner"}, {orgID, adminID, "admin"}, {orgID, secondAdminID, "admin"},
 				{orgID, memberID, "member"}, {plainOrgID, plainOwnerID, "owner"}, {otherOrgID, otherAdminID, "admin"},
+				{otherOrgID, outsiderID, "member"},
 			} {
 				exec(`INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
 VALUES ($1, $2, $3, $4, now(), now(), now())`, nextID(), row.org, row.user, row.role)

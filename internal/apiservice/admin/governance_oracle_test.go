@@ -53,7 +53,7 @@ func TestGovernanceRoutesVenueOracle(t *testing.T) {
 		Golden: golden,
 		Root:   root,
 		JWTKey: jwtKey,
-		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
+		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {
 				t.Helper()
@@ -150,7 +150,7 @@ VALUES ($1, $2, (SELECT id FROM feature_flags ORDER BY key LIMIT 1), true, NULL,
 				"none":     admin2(adminNoLicense, orgAnyNoLicense, "gov-adminnone@example.com"),
 				"member":   {"user_id": memberEnt.String(), "email": "gov-memberent@example.com", "org_id": orgEnterprise.String(), "role": "member"},
 			}
-		},
+		}),
 	})
 
 	flagIDs := strings.Split(venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB),

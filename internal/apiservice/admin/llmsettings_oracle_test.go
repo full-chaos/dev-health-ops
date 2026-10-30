@@ -176,7 +176,7 @@ func runLLMSettingsOracle(t *testing.T, withKey bool, mode, digest, pinDigest st
 		Root:      root,
 		JWTKey:    jwtKey,
 		PythonEnv: pythonEnv,
-		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
+		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {
 				t.Helper()
@@ -257,7 +257,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, '2026-02-01T00:00:00+00:00', '2026-02-01T00:
 				tokens[slug] = map[string]any{"user_id": adminID.String(), "email": "llm-admin@example.com", "org_id": org.id.String(), "role": "admin"}
 			}
 			return tokens
-		},
+		}),
 	})
 
 	auth := func(name string) map[string]string {

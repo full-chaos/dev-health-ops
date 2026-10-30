@@ -33,7 +33,7 @@ func TestLLMSettingsRefusesABYOProviderWithoutAModel(t *testing.T) {
 		GoOnly: true,
 		Root:   root,
 		JWTKey: jwtKey,
-		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
+		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			for _, stmt := range []struct {
 				sql  string
@@ -49,7 +49,7 @@ VALUES ($1, 'llmmodelrule-admin@example.com', true, true, false, 0, now(), now()
 				}
 			}
 			return map[string]map[string]any{"a": {"user_id": adminUserID.String(), "email": "llmmodelrule-admin@example.com", "org_id": org.String(), "role": "admin"}}
-		},
+		}),
 	})
 	base, _ := startGoServer(t, ctx, venue, jwtKey, func(deps *apiservice.Deps) {
 		decryptor, err := providerfoundation.NewFernetDecryptor(secrets.NewValue(llmVenueEncryptionKey), "")

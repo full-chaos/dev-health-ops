@@ -49,6 +49,8 @@ type fakeOAuth struct {
 	// rejectVerifier plays a provider that refuses any code_verifier.
 	rejectVerifier bool
 	tokenCalls     int
+	// failProfile plays a provider whose profile endpoint answers 502.
+	failProfile bool
 }
 
 func newFakeOAuth() *fakeOAuth {
@@ -151,6 +153,13 @@ func (f *fakeOAuth) serveGitLab(w http.ResponseWriter, r *http.Request) {
 		writeFakeJSON(w, http.StatusOK, map[string]any{"resource_owner_id": json.Number(g.account.ID),
 			"application": map[string]any{"uid": f.issuedTo(g)}})
 	case strings.HasSuffix(r.URL.Path, "/api/v4/user"):
+		f.mu.Lock()
+		fail := f.failProfile
+		f.mu.Unlock()
+		if fail {
+			writeFakeJSON(w, http.StatusBadGateway, map[string]any{"error": "unavailable"})
+			return
+		}
 		var confirmed any
 		if g.account.Verified {
 			confirmed = "2026-01-01T00:00:00Z"

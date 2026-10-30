@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/org"
 	"github.com/full-chaos/dev-health-ops/internal/auth/orgdeprovision"
 	"github.com/full-chaos/dev-health-ops/internal/auth/servicecred"
+	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
@@ -25,12 +26,14 @@ var provisioningProfileRows []byte
 // deprovision routes when AUTH_MEMBERSHIP_ROUTES is on, and none otherwise.
 // Every verb behind them refuses while auth-service does not own users. They
 // take the session issue route's workload path (nil refuses workload tokens).
+// A membership removal ends the member's sessions of the organization through
+// sessions, in the removal's transaction.
 func provisioningRoutes(cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
-	identities *identity.Store, workload *authapi.SessionIssueWorkload) ([]httpapi.Route, error) {
+	identities *identity.Store, workload *authapi.SessionIssueWorkload, sessions *session.Store) ([]httpapi.Route, error) {
 	if !cfg.Provisioning.Routes {
 		return nil, nil
 	}
-	members, err := membership.New(membership.Config{Pool: pool, Schema: schema, OwnsUsers: cfg.UsersOwned, Logger: logger})
+	members, err := membership.New(membership.Config{Pool: pool, Schema: schema, OwnsUsers: cfg.UsersOwned, Sessions: sessions, Logger: logger})
 	if err != nil {
 		return nil, err
 	}

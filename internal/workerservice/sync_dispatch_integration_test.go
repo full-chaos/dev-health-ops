@@ -70,12 +70,12 @@ func TestSyncCoordinatorReportsItsRegisteredKind(t *testing.T) {
 			// so buildSyncCoordinatorWorker always reports it regardless of
 			// team_autoimport's own promotion state.
 			name:      "celery routed kind is not consumed at all",
-			wantKinds: []string{jobcontract.KindTeamRepoOwnershipDerivation},
+			wantKinds: []string{jobcontract.KindTeamRepoOwnershipDerivation, jobcontract.KindProviderOAuthRevocations},
 		},
 		{
 			name:      "promoted kind is registered and reported",
 			promote:   []string{jobcontract.KindTeamAutoimport},
-			wantKinds: []string{jobcontract.KindTeamAutoimport, jobcontract.KindTeamRepoOwnershipDerivation},
+			wantKinds: []string{jobcontract.KindTeamAutoimport, jobcontract.KindTeamRepoOwnershipDerivation, jobcontract.KindProviderOAuthRevocations},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {

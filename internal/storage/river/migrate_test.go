@@ -496,6 +496,7 @@ func TestRuntimeGrantStatementsMatchProvisionedLeastPrivilegePolicy(t *testing.T
 		"DO $$ BEGIN IF to_regclass('public.github_app_installations') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.github_app_installations TO \"domain_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.webhook_sync_requests') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.webhook_sync_requests TO \"domain_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.provider_oauth_credentials') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.provider_oauth_credentials TO \"domain_runtime\"; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.provider_oauth_revocations') IS NOT NULL THEN GRANT SELECT, UPDATE, DELETE ON TABLE public.provider_oauth_revocations TO \"domain_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_runs') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_runs TO \"domain_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_dispatch_transport_routes') IS NOT NULL THEN GRANT SELECT ON TABLE public.sync_dispatch_transport_routes TO \"domain_runtime\"; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.sync_run_units') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.sync_run_units TO \"domain_runtime\"; END IF; END $$",

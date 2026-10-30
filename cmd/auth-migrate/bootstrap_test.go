@@ -398,11 +398,12 @@ func TestBootstrapDirSyncFailureRegistersNothingAndLeavesNoFile(t *testing.T) {
 
 // TestBootstrapADisabledWorkloadIsNamedAndLeavesNoFile: create and rotate of a
 // disabled workload fail with a class that says which row is disabled (the
-// workload row, or the principal alone) and that no verb enables it, and the
-// out-file is removed.
+// workload row, or the principal alone) and names the enable verb that
+// recovers it (with -enable-principal for the principal), and the out-file is
+// removed.
 func TestBootstrapADisabledWorkloadIsNamedAndLeavesNoFile(t *testing.T) {
-	const row = "(the workload row is disabled; no auth-migrate verb enables it today: re-enabling needs a reviewed change)"
-	const principal = "(the workload's principal is disabled, its row is not; no auth-migrate verb enables it today: re-enabling needs a reviewed change)"
+	const row = "(the workload row is disabled; to recover: bootstrap-disable -workload NAME -apply (revokes its live values), then auth-migrate workloads enable -workload NAME -operator ID, then bootstrap-create)"
+	const principal = "(the workload's principal is disabled, its row is not; to recover: bootstrap-disable -workload NAME -apply (revokes its live values), then auth-migrate workloads enable -workload NAME -operator ID -enable-principal, then bootstrap-create)"
 	for refusal, want := range map[error]string{
 		workload.ErrBootstrapWorkloadDisabled:  row,
 		workload.ErrBootstrapPrincipalDisabled: principal,
@@ -423,7 +424,7 @@ func TestBootstrapADisabledWorkloadIsNamedAndLeavesNoFile(t *testing.T) {
 				t.Fatalf("%s/%v exit = %d, want 1", verb, refusal, code)
 			}
 			got := stderr.String()
-			if !strings.Contains(got, want) || strings.Contains(got, other) || strings.Contains(got, "enable it first") {
+			if !strings.Contains(got, want) || strings.Contains(got, other) || strings.Contains(got, "enable it first") || strings.Contains(got, "no auth-migrate verb") || strings.Contains(got, "then rotate") {
 				t.Fatalf("%s/%v stderr = %q, want %q", verb, refusal, got, want)
 			}
 			if _, err := os.Lstat(out); !errors.Is(err, os.ErrNotExist) {

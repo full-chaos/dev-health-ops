@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"time"
@@ -104,6 +105,24 @@ func (h handlers) issueSession(ctx context.Context, r *http.Request, userID uuid
 		return tokenPair{}, err
 	}
 	return tokenPair{access: pair.Access, refresh: pair.Refresh}, nil
+}
+
+// issuerRefusedTheOrg reports whether the issue route refused the session as
+// not entitled: the one refusal an organization deleted after the membership
+// commit gives (its delete removed the membership).
+func issuerRefusedTheOrg(err error) bool {
+	var refused *sessionissue.RefusedError
+	return errors.As(err, &refused) && refused.Status == http.StatusForbidden && refused.Reason == "not_entitled"
+}
+
+// orgGone reports whether orgID has no organizations row. A failed read
+// reports false: the caller keeps its 503.
+func orgGone(ctx context.Context, tx pgx.Tx, orgID uuid.UUID) bool {
+	var exists bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM organizations WHERE id = $1)`, orgID).Scan(&exists); err != nil {
+		return false
+	}
+	return !exists
 }
 
 // issueMembershipTokens is _issue_membership_tokens.

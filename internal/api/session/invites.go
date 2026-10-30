@@ -232,10 +232,11 @@ func (h handlers) commitThenIssue(w http.ResponseWriter, r *http.Request, tx pgx
 	}
 	defer func() { _ = issue.Rollback(context.Background()) }()
 	pair, err := h.issueMembershipTokens(ctx, issue, r, user, membership)
-	if refreshOrgGone(err) {
+	if refreshOrgGone(err) || (issuerRefusedTheOrg(err) && orgGone(ctx, issue, membership.OrgID)) {
 		// An organization delete committed after the membership did: the
 		// delete removed the membership, and the token cannot name the
-		// organization.
+		// organization (the local token write's FK; with auth-service
+		// issuing, its not_entitled refusal and no organization row).
 		h.Logger.WarnContext(ctx, "api session route refused", "step", "issue tokens", "reason", "organization deleted")
 		refuse(w, http.StatusNotFound, "Organization not found")
 		return

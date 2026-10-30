@@ -594,10 +594,10 @@ func TestOAuthCallbackRefusesAProfileWithoutAUsableUserID(t *testing.T) {
 	}
 }
 
-// TestOAuthCallbackRefusesATokenExchangeFailure pins the other side of
-// D2738 for OAuth: a genuinely-authenticated state whose later exchange
-// fails DOES flip the provider row. D2742: the public detail is a fixed
-// message + a stable reason code, never the upstream error text.
+// TestOAuthCallbackRefusesATokenExchangeFailure: a state whose later exchange
+// fails records last_error on the provider row and leaves its status as it
+// was. D2742: the public detail is a fixed message + a stable reason code,
+// never the upstream error text.
 func TestOAuthCallbackRefusesATokenExchangeFailure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -638,8 +638,61 @@ func TestOAuthCallbackRefusesATokenExchangeFailure(t *testing.T) {
 	if lastError == nil {
 		t.Fatal("last_error: want a recorded exchange-failure reason")
 	}
-	if providerStatus != "error" {
-		t.Fatalf("provider status = %q, want %q: an authenticated-but-failed exchange must still flip it", providerStatus, "error")
+	if providerStatus != "active" {
+		t.Fatalf("provider status = %q, want %q: a failure record leaves the status as it was", providerStatus, "active")
+	}
+}
+
+// TestAFailedOAuthCallbackKeepsTheProviderActive: after a callback whose
+// token exchange fails, the provider stays active, the failure is recorded
+// (last_error, one sso_login failure row), and the next flow signs in.
+func TestAFailedOAuthCallbackKeepsTheProviderActive(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	st := startStack(t, ctx)
+	orgID := seedOrg(t, ctx, st.pool, "enterprise")
+	gitlab := startFakeGitLab(t)
+	gitlab.email = "kept.active@allowed.example"
+	seedMember(t, ctx, st.pool, orgID, gitlab.email, "gitlab", gitlab.userID)
+	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
+		protocol: "oauth_gitlab", status: "active", config: gitlabConfig(gitlab.server.URL), autoProvision: true,
+	})
+	flow := func() (int, map[string]any) {
+		t.Helper()
+		client := newCookieClient(t)
+		status, authResp := postJSONWithClient(t, client, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/authorize", map[string]any{})
+		if status != http.StatusOK {
+			t.Fatalf("authorize: %d %v", status, authResp)
+		}
+		return postJSONWithClient(t, client, st.server, "/api/v1/auth/oauth/"+providerID.String()+"/callback",
+			map[string]any{"code": "c", "state": authResp["state"]})
+	}
+
+	gitlab.tokenStatus = http.StatusBadRequest
+	if status, body := flow(); status != http.StatusBadRequest {
+		t.Fatalf("failed callback: status=%d body=%v, want 400", status, body)
+	}
+	var lastError *string
+	var providerStatus string
+	if err := st.pool.QueryRow(ctx, `SELECT last_error, status FROM sso_providers WHERE id = $1`, providerID).
+		Scan(&lastError, &providerStatus); err != nil {
+		t.Fatal(err)
+	}
+	if providerStatus != "active" || lastError == nil {
+		t.Fatalf("after a failed callback: status=%q last_error set=%v, want active and set", providerStatus, lastError != nil)
+	}
+	var failures int
+	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM audit_logs WHERE org_id = $1 AND action = 'sso_login' AND status = 'failure' AND resource_id = $2`,
+		orgID, providerID.String()).Scan(&failures); err != nil {
+		t.Fatal(err)
+	}
+	if failures != 1 {
+		t.Fatalf("audit_logs: %d sso_login failure rows, want 1", failures)
+	}
+
+	gitlab.tokenStatus = 0
+	if status, body := flow(); status != http.StatusOK || body["email"] != gitlab.email {
+		t.Fatalf("the next flow: status=%d body=%v, want 200 for %s", status, body, gitlab.email)
 	}
 }
 
@@ -678,8 +731,8 @@ func TestOAuthCallbackRefusesAUserinfoFetchFailure(t *testing.T) {
 	if err := st.pool.QueryRow(ctx, `SELECT status FROM sso_providers WHERE id = $1`, providerID).Scan(&providerStatus); err != nil {
 		t.Fatal(err)
 	}
-	if providerStatus != "error" {
-		t.Fatalf("provider status = %q, want %q", providerStatus, "error")
+	if providerStatus != "active" {
+		t.Fatalf("provider status = %q, want %q", providerStatus, "active")
 	}
 }
 

@@ -40,6 +40,8 @@ devhealth_auth_linkmail_sends_total	outcome,purpose	code: internal/auth/linkmail
 devhealth_auth_outbox_delivered_total		code: internal/audit/publisher.go
 devhealth_auth_outbox_delivery_failures_total	reason	code: internal/audit/publisher.go
 devhealth_auth_outbox_oldest_pending_age_seconds		code: internal/audit/outboxloop.go
+devhealth_auth_revision_feed_events_total	disposition	code: internal/auth/revisionfeed/consumer.go
+devhealth_auth_revision_feed_resync_total	cause	code: internal/auth/revisionfeed/consumer.go
 devhealth_auth_outbox_publisher_enabled		code: internal/audit/outboxloop.go
 dev_health_categorize_byo_optin_unreadable_total	reason	code: internal/jobs/investment/categorizebyo.go
 dev_health_generation_repair_failures_total	step	code: internal/jobs/metrics/daily/generation_repair_metrics.go

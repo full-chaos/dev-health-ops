@@ -189,7 +189,7 @@ func ProvisioningRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 		uses.Add(context.Background(), 0, metric.WithAttributes(attribute.String("operation", op)))
 	}
 	h := provisioningHandlers{ProvisioningDeps: deps, rec: rec, provisioningUses: uses}
-	routes := []httpapi.Route{
+	return []httpapi.Route{
 		{Method: http.MethodPost, Pattern: PatternMembershipAdd, Handler: http.HandlerFunc(h.membershipAdd)},
 		{Method: http.MethodPost, Pattern: PatternMembershipRole, Handler: http.HandlerFunc(h.membershipRole)},
 		{Method: http.MethodPost, Pattern: PatternMembershipRemove, Handler: http.HandlerFunc(h.membershipRemove)},
@@ -197,16 +197,9 @@ func ProvisioningRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 		{Method: http.MethodPost, Pattern: PatternInviteCreate, Handler: http.HandlerFunc(h.inviteCreate)},
 		{Method: http.MethodPost, Pattern: PatternInviteAccept, Handler: http.HandlerFunc(h.inviteAccept)},
 		{Method: http.MethodPost, Pattern: PatternOrgDeprovision, Handler: http.HandlerFunc(h.orgDeprovision)},
+		{Method: http.MethodPost, Pattern: PatternOrgReactivate, Handler: http.HandlerFunc(h.orgReactivate)},
 		h.revokeRoute(h.Invites),
-	}
-	// Mounted only when the profile document holds its row: without it the route answers 404, the routes above are
-	// unaffected and the service starts. One line names the route and nothing else.
-	if rowsPresentFor(rows, darkPatterns) == nil {
-		routes = append(routes, httpapi.Route{Method: http.MethodPost, Pattern: PatternOrgReactivate, Handler: http.HandlerFunc(h.orgReactivate)})
-	} else {
-		deps.Logger.Info("auth provisioning route not mounted: no endpoint-profile row", "route", PatternOrgReactivate)
-	}
-	return routes, nil
+	}, nil
 }
 
 // admit checks the bearer (the session issuer credential holding

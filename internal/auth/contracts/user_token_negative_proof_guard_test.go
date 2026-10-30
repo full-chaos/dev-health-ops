@@ -73,6 +73,7 @@ var negativeProofs = map[string]negativeProof{
 	"auth-service|POST /internal/v1/invites/create [dev-health-auth-service @api]":            {file: proofProvision, test: provisionTest},
 	"auth-service|POST /internal/v1/invites/accept [dev-health-auth-service @api]":            {file: proofProvision, test: provisionTest},
 	"auth-service|POST /internal/v1/organizations/deprovision [dev-health-auth-service @api]": {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/organizations/reactivate [dev-health-auth-service @api]":  {file: proofProvision, test: provisionTest},
 	"auth-service|POST /internal/v1/invites/revoke [dev-health-auth-service @api]":            {file: proofProvision, test: provisionTest},
 	"auth-service|POST /v1/token/refresh [dev-health-auth-service @api]":                      {file: proofRefresh, test: refreshTest},
 	"auth-service|POST /api/v1/auth/refresh [dev-health-auth-service @api]":                   {file: proofRefresh, test: refreshTest},
@@ -179,7 +180,7 @@ func TestEveryNegativeProofNamesARealTestThatSendsUserTokens(t *testing.T) {
 	}
 }
 
-// The census: 28 derived rows = 27 proven + 1 exempt. A change to either count is a decision, made here.
+// The census: 29 derived rows = 28 proven + 1 exempt. A change to either count is a decision, made here.
 func TestNegativeProofCensus(t *testing.T) {
 	proven, exempt := 0, 0
 	for _, proof := range negativeProofs {
@@ -190,8 +191,8 @@ func TestNegativeProofCensus(t *testing.T) {
 		}
 	}
 	// CHAOS-11813 retired the 6 legacy ingest rows (26, 25, 1 before); CHAOS-11798 added the 7 provisioning rows (20, 19, 1 before);
-	// CHAOS-11887 added the invite revoke row (27, 26, 1 before).
-	if len(derivedRows(t)) != 28 || proven != 27 || exempt != 1 {
-		t.Fatalf("derived %d rows, %d proven, %d exempt; want 28, 27, 1", len(derivedRows(t)), proven, exempt)
+	// CHAOS-11885 added the organization reactivate row and CHAOS-11887 the invite revoke row.
+	if len(derivedRows(t)) != 29 || proven != 28 || exempt != 1 {
+		t.Fatalf("derived %d rows, %d proven, %d exempt; want 29, 28, 1", len(derivedRows(t)), proven, exempt)
 	}
 }

@@ -19,7 +19,6 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
-	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
@@ -262,37 +261,7 @@ type provFixture struct {
 
 func newProvFixture(t *testing.T) *provFixture {
 	t.Helper()
-	return newProvFixtureWith(t, docWithReactivateRow(t))
-}
-
-// docWithReactivateRow is the embedded endpoint-profile document plus the row
-// the follow-up adds for the reactivate route (a copy of the deprovision row).
-func docWithReactivateRow(t testing.TB) []byte {
-	t.Helper()
-	var document map[string]any
-	if err := json.Unmarshal(authv1.AuthServiceEndpointProfiles, &document); err != nil {
-		t.Fatal(err)
-	}
-	rows := document["rows"].([]any)
-	for _, item := range rows {
-		row := item.(map[string]any)
-		if row["route"] == PatternOrgDeprovision && row["service"] == AccessService {
-			clone := map[string]any{}
-			for k, v := range row {
-				clone[k] = v
-			}
-			clone["route"] = PatternOrgReactivate
-			clone["id"] = "POST " + PatternOrgReactivate + " [dev-health-auth-service @api]"
-			document["rows"] = append(rows, clone)
-			raw, err := json.Marshal(document)
-			if err != nil {
-				t.Fatal(err)
-			}
-			return raw
-		}
-	}
-	t.Fatal("no deprovision row in the embedded document")
-	return nil
+	return newProvFixtureWith(t, nil)
 }
 
 // newProvFixtureWith builds the routes over the given endpoint-profile
@@ -972,71 +941,5 @@ func TestProvisioningRoutesNeedTheOrganizationVerb(t *testing.T) {
 		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision})
 	if err == nil {
 		t.Fatal("ProvisioningRoutes accepted deps with no organization verb")
-	}
-}
-
-// The reactivate route is mounted only when the embedded endpoint-profile
-// document holds its row (auth-service, POST, accepting the session issuer
-// credential). Without it the route is not mounted (404), the other seven
-// routes are served, the service starts, and one startup line names the route.
-func TestOrgReactivateIsDarkWithoutItsProfileRow(t *testing.T) {
-	f := newProvFixtureWith(t, nil)
-	if got := f.post(PatternOrgReactivate, encode(routeCases()[7].body(f, f.super)), nil); got.Code != http.StatusNotFound {
-		t.Fatalf("reactivate without its row: %d %s, want 404", got.Code, got.Body)
-	}
-	if f.reactivate.calls != 0 {
-		t.Fatal("the verb ran for a route that is not mounted")
-	}
-	for _, c := range routeCases()[:7] {
-		if got := f.post(c.path, encode(c.body(f, f.super)), nil); got.Code != http.StatusOK {
-			t.Fatalf("%s with the reactivate row absent: %d %s, want 200", c.op, got.Code, got.Body)
-		}
-	}
-	lines := 0
-	for _, line := range strings.Split(strings.TrimSpace(f.logs.String()), "\n") {
-		if strings.Contains(line, PatternOrgReactivate) {
-			lines++
-			if !strings.Contains(line, "not mounted") {
-				t.Fatalf("the startup line does not say the route is not mounted: %s", line)
-			}
-		}
-	}
-	if lines != 1 {
-		t.Fatalf("%d startup lines name the reactivate route, want 1: %s", lines, f.logs.String())
-	}
-}
-
-func TestOrgReactivateIsServedWithItsProfileRow(t *testing.T) {
-	f := newProvFixtureWith(t, docWithReactivateRow(t))
-	if got := f.post(PatternOrgReactivate, encode(routeCases()[7].body(f, f.super)), nil); got.Code != http.StatusOK {
-		t.Fatalf("reactivate with its row: %d %s, want 200", got.Code, got.Body)
-	}
-	if strings.Contains(f.logs.String(), "not mounted") {
-		t.Fatalf("a not-mounted line was logged with the row present: %s", f.logs.String())
-	}
-}
-
-// A row for another service, another method or a class other than the session
-// issuer credential does not mount the route.
-func TestOrgReactivateNeedsAnAuthServicePostRowAcceptingTheIssuerCredential(t *testing.T) {
-	for name, edit := range map[string]func(row map[string]any){
-		"another service": func(row map[string]any) { row["service"] = "dev-health-ops-api" },
-		"another method":  func(row map[string]any) { row["method"] = "GET" },
-		"another class":   func(row map[string]any) { row["accepted_credential_classes"] = []any{"workload_token"} },
-	} {
-		var document map[string]any
-		if err := json.Unmarshal(docWithReactivateRow(t), &document); err != nil {
-			t.Fatal(err)
-		}
-		rows := document["rows"].([]any)
-		edit(rows[len(rows)-1].(map[string]any))
-		raw, err := json.Marshal(document)
-		if err != nil {
-			t.Fatal(err)
-		}
-		f := newProvFixtureWith(t, raw)
-		if got := f.post(PatternOrgReactivate, encode(routeCases()[7].body(f, f.super)), nil); got.Code != http.StatusNotFound {
-			t.Fatalf("%s: reactivate %d, want 404", name, got.Code)
-		}
 	}
 }

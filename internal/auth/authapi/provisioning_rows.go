@@ -9,7 +9,7 @@ import (
 
 // provisioningPatterns are the routes AUTH_MEMBERSHIP_ROUTES mounts.
 var provisioningPatterns = []string{PatternMembershipAdd, PatternMembershipRole, PatternMembershipRemove,
-	PatternMembershipTransfer, PatternInviteCreate, PatternInviteAccept, PatternOrgDeprovision, PatternInviteRevoke}
+	PatternMembershipTransfer, PatternInviteCreate, PatternInviteAccept, PatternOrgDeprovision, PatternOrgReactivate, PatternInviteRevoke}
 
 // serviceSessionIssuerClass is the endpoint-profile credential class of the
 // session issuer credential (svc_authsess_) the routes take.
@@ -25,12 +25,6 @@ var errProvisioningRows = errors.New("authapi: the provisioning routes need thei
 func provisioningRowsPresent(raw []byte) error {
 	return rowsPresentFor(raw, provisioningPatterns)
 }
-
-// darkPatterns are the routes mounted only when the document holds their row
-// (the rest of provisioningPatterns refuse the whole switch without one): the
-// reactivate route's profile row is added by a follow-up, and until then the
-// route is not mounted while the other routes are unaffected.
-var darkPatterns = []string{PatternOrgReactivate}
 
 // rowsPresentFor is provisioningRowsPresent over patterns.
 func rowsPresentFor(raw []byte, patterns []string) error {

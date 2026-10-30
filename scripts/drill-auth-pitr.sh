@@ -285,7 +285,7 @@ dc --profile pitr up -d --wait pitr
 wait_promoted pitr
 drill "$port_pitr" verify DRILL_EXPECT=T DRILL_MODE=exact || result=1
 drill "$port_pitr" verify DRILL_EXPECT=A DRILL_MODE=atleast || result=1
-drill_attempt "$port_pitr" attempt DRILL_EXPECT=T DRILL_LABEL=pitr || result=1 # measured, not failed: the gap
+drill_attempt "$port_pitr" attempt DRILL_EXPECT=T DRILL_LABEL=pitr || result=1 # the unfenced copy must accept both secrets (the gap); a drill that does not reproduce it fails
 drill "$port_pitr" post DRILL_EXPECT=T DRILL_FINAL=F || result=1
 dc --profile pitr stop pitr
 

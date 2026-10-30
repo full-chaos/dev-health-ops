@@ -108,7 +108,7 @@ internal/storage/postgres/domain_authorization_integration_test.go	external_inge
 internal/storage/postgres/domain_authorization_integration_test.go	external_ingest_rejections	PROBE	
 internal/storage/postgres/domain_authorization_integration_test.go	external_ingest_sources	PROBE	
 internal/storage/postgres/domain_authorization_integration_test.go	feature_flags	PROBE	
-internal/storage/postgres/domain_authorization_integration_test.go	integration_credentials	PROBE	
+internal/storage/postgres/domain_authorization_integration_test.go	integration_credentials	SUBSET	
 internal/storage/postgres/domain_authorization_integration_test.go	integration_datasets	PROBE	
 internal/storage/postgres/domain_authorization_integration_test.go	integration_sources	PROBE	
 internal/storage/postgres/domain_authorization_integration_test.go	integrations	PROBE	
@@ -220,7 +220,7 @@ internal/storage/postgres/runtime_authorization_integration_test.go	external_ing
 internal/storage/postgres/runtime_authorization_integration_test.go	external_ingest_rejections	PROBE	
 internal/storage/postgres/runtime_authorization_integration_test.go	external_ingest_sources	PROBE	
 internal/storage/postgres/runtime_authorization_integration_test.go	feature_flags	PROBE	
-internal/storage/postgres/runtime_authorization_integration_test.go	integration_credentials	PROBE	
+internal/storage/postgres/runtime_authorization_integration_test.go	integration_credentials	SUBSET	
 internal/storage/postgres/runtime_authorization_integration_test.go	integration_datasets	PROBE	
 internal/storage/postgres/runtime_authorization_integration_test.go	integration_sources	PROBE	
 internal/storage/postgres/runtime_authorization_integration_test.go	integrations	PROBE	
@@ -274,7 +274,7 @@ internal/storage/river/migrate_integration_test.go	external_ingest_recompute_job
 internal/storage/river/migrate_integration_test.go	external_ingest_rejections	PROBE	
 internal/storage/river/migrate_integration_test.go	external_ingest_sources	PROBE	
 internal/storage/river/migrate_integration_test.go	feature_flags	PROBE	
-internal/storage/river/migrate_integration_test.go	integration_credentials	PROBE	
+internal/storage/river/migrate_integration_test.go	integration_credentials	SUBSET	
 internal/storage/river/migrate_integration_test.go	integration_datasets	PROBE	
 internal/storage/river/migrate_integration_test.go	integration_sources	PROBE	
 internal/storage/river/migrate_integration_test.go	integrations	PROBE	
@@ -304,6 +304,7 @@ internal/storage/river/migrate_integration_test.go	worker_job_routes	PROBE	id
 internal/storage/river/migrate_integration_test.go	worker_job_runs	PROBE	
 internal/syncdispatchruntime/domain_role_statement_privileges_integration_test.go	backfill_jobs	SUBSET	
 internal/syncdispatchruntime/domain_role_statement_privileges_integration_test.go	feature_flags	SUBSET	
+internal/syncdispatchruntime/domain_role_statement_privileges_integration_test.go	integration_credentials	SUBSET	
 internal/syncdispatchruntime/domain_role_statement_privileges_integration_test.go	integration_datasets	SUBSET	
 internal/syncdispatchruntime/domain_role_statement_privileges_integration_test.go	integration_sources	SUBSET	
 internal/syncdispatchruntime/domain_role_statement_privileges_integration_test.go	integrations	SUBSET	
@@ -338,7 +339,7 @@ internal/syncreconciler/kernel_integration_test.go	external_ingest_recompute_job
 internal/syncreconciler/kernel_integration_test.go	external_ingest_rejections	PROBE	
 internal/syncreconciler/kernel_integration_test.go	external_ingest_sources	PROBE	
 internal/syncreconciler/kernel_integration_test.go	feature_flags	PROBE	
-internal/syncreconciler/kernel_integration_test.go	integration_credentials	PROBE	
+internal/syncreconciler/kernel_integration_test.go	integration_credentials	SUBSET	
 internal/syncreconciler/kernel_integration_test.go	integration_datasets	PROBE	
 internal/syncreconciler/kernel_integration_test.go	integration_sources	PROBE	
 internal/syncreconciler/kernel_integration_test.go	integrations	PROBE	

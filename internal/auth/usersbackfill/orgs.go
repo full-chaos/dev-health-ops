@@ -29,7 +29,9 @@ type MemberRow struct {
 	Role      *string
 	JoinedAt  *time.Time
 	CreatedAt *time.Time
-	Copies    int
+	// InvitedByID is public.memberships.invited_by_id.
+	InvitedByID *uuid.UUID
+	Copies      int
 }
 
 // MemberKey is the keyset position of a membership page.
@@ -82,6 +84,9 @@ type OrgReport struct {
 	MembershipsSeen      int
 	MembershipsInserted  int
 	MembershipsRoleSet   int
+	InvitersSet          int
+	JoinedSet            int
+	InviterUnresolved    int
 	MembershipsUnchanged int
 	AuthDiverged         int
 	AuthOnlyOrgs         int
@@ -117,6 +122,9 @@ func (r OrgReport) Lines() []string {
 		fmt.Sprintf("memberships_seen=%d", r.MembershipsSeen),
 		fmt.Sprintf("memberships_inserted=%d", r.MembershipsInserted),
 		fmt.Sprintf("memberships_role_updated=%d", r.MembershipsRoleSet),
+		fmt.Sprintf("memberships_inviter_set=%d", r.InvitersSet),
+		fmt.Sprintf("memberships_joined_set=%d", r.JoinedSet),
+		fmt.Sprintf("memberships_inviter_unresolved=%d", r.InviterUnresolved),
 		fmt.Sprintf("memberships_unchanged=%d", r.MembershipsUnchanged),
 		fmt.Sprintf("auth_diverged_memberships=%d", r.AuthDiverged),
 		fmt.Sprintf("auth_only_orgs=%d", r.AuthOnlyOrgs),
@@ -149,7 +157,7 @@ func MapOrg(row OrgRow) (identity.OrgBackfillTarget, string) {
 // coerced, and so is a row with neither joined_at nor created_at (an active
 // membership needs a join time).
 func MapMembership(row MemberRow) (identity.MembershipBackfillTarget, string) {
-	t := identity.MembershipBackfillTarget{OrgID: row.OrgID, UserID: row.UserID, JoinedAt: row.JoinedAt}
+	t := identity.MembershipBackfillTarget{OrgID: row.OrgID, UserID: row.UserID, JoinedAt: row.JoinedAt, InvitedBy: row.InvitedByID}
 	if t.JoinedAt == nil {
 		t.JoinedAt = row.CreatedAt
 	}
@@ -176,6 +184,10 @@ func RunOrgs(ctx context.Context, src OrgSource, sink OrgSink, auth AuthOnlyRead
 		batch = 500
 	}
 	rep := OrgReport{DryRun: opts.DryRun, Skipped: map[string]int{}}
+	// The membership read is tried first, by the same function the run uses, so a missing column grant fails before any write.
+	if _, err := src.PageMemberships(ctx, nil, 1); err != nil {
+		return rep, errors.New("usersbackfill: reading public.memberships failed")
+	}
 	pending := map[uuid.UUID]struct{}{}
 	var afterOrg *uuid.UUID
 	for {
@@ -267,8 +279,17 @@ func RunOrgs(ctx context.Context, src OrgSource, sink OrgSink, auth AuthOnlyRead
 				rep.MembershipsRoleSet++
 			case res.Diverged:
 				rep.AuthDiverged++
-			default:
+			case !res.InviterSet && !res.JoinedSet:
 				rep.MembershipsUnchanged++
+			}
+			if res.InviterSet {
+				rep.InvitersSet++
+			}
+			if res.JoinedSet {
+				rep.JoinedSet++
+			}
+			if res.InviterUnresolved {
+				rep.InviterUnresolved++
 			}
 		}
 		last := MemberKey{OrgID: rows[len(rows)-1].OrgID, UserID: rows[len(rows)-1].UserID}

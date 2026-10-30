@@ -40,6 +40,7 @@ internal/api/credentials	probes.go	internal/apiservice/ownershipvenue
 internal/api/credentials	probes.go	internal/apiservice/ssovenue
 internal/api/credentials	probes.go	internal/auth/authapi
 internal/api/credentials	probes.go	internal/auth/authruntime
+internal/api/credentials	probes.go	internal/auth/lockorder
 internal/api/credentials	probes.go	internal/billingcli
 internal/api/credentials	probes.go	internal/clicredentials
 internal/apiservice	githubapp_config.go	cmd/dho
@@ -100,6 +101,7 @@ internal/auth/contracts	contracts.go	internal/auth/orgdeprovision
 internal/auth/contracts	contracts.go	internal/auth/passwordpolicy
 internal/auth/contracts	contracts.go	internal/auth/platformrole
 internal/auth/contracts	contracts.go	internal/auth/policycatalog
+internal/auth/contracts	contracts.go	internal/auth/revisionfeed
 internal/auth/contracts	contracts.go	internal/auth/servicecred
 internal/auth/contracts	contracts.go	internal/auth/session
 internal/auth/contracts	contracts.go	internal/auth/usersbackfill
@@ -513,6 +515,7 @@ internal/providerfoundation	clients.go	internal/apiservice/ownershipvenue
 internal/providerfoundation	clients.go	internal/apiservice/ssovenue
 internal/providerfoundation	clients.go	internal/auth/authapi
 internal/providerfoundation	clients.go	internal/auth/authruntime
+internal/providerfoundation	clients.go	internal/auth/lockorder
 internal/providerfoundation	clients.go	internal/backfillrun
 internal/providerfoundation	clients.go	internal/billingcli
 internal/providerfoundation	clients.go	internal/cigates/queuecreds
@@ -588,6 +591,14 @@ internal/syncdispatchcontract	routes.go	internal/reconcilerservice
 internal/syncdispatchcontract	routes.go	internal/syncdispatchcontract
 internal/syncdispatchcontract	routes.go	internal/syncroute
 internal/syncdispatchcontract	routes.go	internal/workersctl
+internal/testsupport/bigboydir	bigboydir.go	internal/auth/contracts
+internal/testsupport/bigboydir	bigboydir.go	internal/bigboycompose
+internal/testsupport/bigboydir	bigboydir.go	internal/cigates/bigboy
+internal/testsupport/bigboydir	bigboydir.go	internal/cigates/bigboyrender
+internal/testsupport/bigboydir	bigboydir.go	internal/cigates/chpin
+internal/testsupport/bigboydir	bigboydir.go	internal/cigates/routing
+internal/testsupport/bigboydir	bigboydir.go	internal/ingressplanes
+internal/testsupport/bigboydir	bigboydir.go	internal/testsupport/bigboydir
 internal/testsupport/goldenscan	tree.go	internal/testsupport/goldenscan/treegate
 internal/testsupport/goldenscan	tree.go	internal/testsupport/recordedfiles/manifest
 internal/testsupport/oraclecompare	oraclecompare.go	internal/jobs/investment/categorize/decision

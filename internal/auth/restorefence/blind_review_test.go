@@ -20,6 +20,8 @@ func TestABlindMarginNamesTheActiveLegacyRowsForReview(t *testing.T) {
 		"public.memberships.role":           "t.role IN ('admin', 'owner')",
 		"public.users.superuser":            "t.is_superuser",
 		"public.provider_oauth_credentials": "true",
+		"auth.users.password":               "t.password_hash IS NOT NULL",
+		"public.users.password":             "t.password_hash IS NOT NULL",
 	}
 	for name, pred := range want {
 		def := mustSection(t, name)

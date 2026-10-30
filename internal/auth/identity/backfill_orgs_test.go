@@ -3,6 +3,7 @@ package identity
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -104,5 +105,69 @@ func TestRoleChangeAuditNamesTheChangedFieldAndIsAccepted(t *testing.T) {
 		if s, ok := v.(string); ok && (s == "owner" || s == "admin") {
 			t.Fatalf("attribute %s carries a role value", k)
 		}
+	}
+}
+
+func TestDecideFill(t *testing.T) {
+	a, b := uuid.New(), uuid.New()
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	later := now.Add(time.Hour)
+	cases := []struct {
+		name       string
+		active     bool
+		curInviter *uuid.UUID
+		curJoined  *time.Time
+		want       *uuid.UUID
+		resolved   bool
+		wantJoined *time.Time
+		out        fillDecision
+	}{
+		{"missing inviter and join are filled", true, nil, nil, &a, true, &now, fillDecision{Inviter: true, Joined: true}},
+		{"a set inviter is never overwritten", true, &b, &now, &a, true, &now, fillDecision{}},
+		{"a set join is never overwritten", true, nil, &now, nil, false, &later, fillDecision{}},
+		{"unresolved inviter is counted, not written", true, nil, &now, &a, false, &now, fillDecision{Unresolved: true}},
+		{"a set auth inviter makes an unresolved public one irrelevant", true, &b, &now, &a, false, &now, fillDecision{}},
+		{"no public inviter writes nothing", true, nil, &now, nil, false, &now, fillDecision{}},
+		{"an inactive row is untouched", false, nil, nil, &a, true, &now, fillDecision{}},
+		{"join only", true, &b, nil, &a, true, &now, fillDecision{Joined: true}},
+		{"no public join writes no join", true, nil, nil, nil, false, nil, fillDecision{}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := decideFill(c.active, c.curInviter, c.curJoined, c.want, c.resolved, c.wantJoined); got != c.out {
+				t.Fatalf("decideFill = %+v, want %+v", got, c.out)
+			}
+		})
+	}
+}
+
+// The fill reuses the projected-membership event the INSERT emits; it is not a role change.
+func TestFillAuditReusesTheProjectedEventAndNamesTheFields(t *testing.T) {
+	ev := fillAudit(MembershipBackfillTarget{OrgID: uuid.New(), UserID: uuid.New()}, uuid.New(), fillDecision{Inviter: true, Joined: true})
+	if ev.EventType != "auth.membership.projected" || ev.Attributes["reason_code"] != "membership_added" {
+		t.Fatalf("event = %q reason %v", ev.EventType, ev.Attributes["reason_code"])
+	}
+	fields, ok := ev.Attributes["changed_fields"].([]string)
+	if !ok || len(fields) != 2 || fields[0] != "invited_by" || fields[1] != "joined_at" {
+		t.Fatalf("changed_fields = %v", ev.Attributes["changed_fields"])
+	}
+	if err := audit.ValidateAttributes(ev.Attributes); err != nil {
+		t.Fatalf("the audit allowlist refuses the attributes: %v", err)
+	}
+	one := fillAudit(MembershipBackfillTarget{OrgID: uuid.New(), UserID: uuid.New()}, uuid.New(), fillDecision{Joined: true})
+	if f, _ := one.Attributes["changed_fields"].([]string); len(f) != 1 || f[0] != "joined_at" {
+		t.Fatalf("joined-only changed_fields = %v", one.Attributes["changed_fields"])
+	}
+}
+
+// A fill whose audited UPDATE changed no row (a concurrent change took the value first) is not counted as a fill.
+func TestClearUnchangedFill(t *testing.T) {
+	in := MembershipBackfillResult{RoleUpdated: true, InviterSet: true, JoinedSet: true, InviterUnresolved: true}
+	if got := clearUnchangedFill(in, true); got != in {
+		t.Fatalf("a changed fill: got %+v, want %+v", got, in)
+	}
+	want := MembershipBackfillResult{RoleUpdated: true, InviterUnresolved: true}
+	if got := clearUnchangedFill(in, false); got != want {
+		t.Fatalf("an unchanged fill: got %+v, want %+v", got, want)
 	}
 }

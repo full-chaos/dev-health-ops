@@ -808,6 +808,114 @@ func TestTheOpenAPIPathGateChecksEveryKeywordShape(t *testing.T) {
 	}
 }
 
+// Every object the gate reads is closed: the wrapper schema of a transport status holds exactly "oneOf" (a plain
+// status schema exactly the envelope ref), and the response, content and media-type objects on that path, the path
+// item, the operation, the security requirement and the security scheme hold only the keys the table allows.
+func TestTheOpenAPIPathGateClosesEveryObjectItReads(t *testing.T) {
+	rows := authServiceRows(t)
+	social := func(d map[string]any) map[string]any {
+		return d["paths"].(map[string]any)["/v1/identities/social"].(map[string]any)["post"].(map[string]any)
+	}
+	statusSchema := func(d map[string]any, route, method, status string) map[string]any {
+		op := d["paths"].(map[string]any)[route].(map[string]any)[method].(map[string]any)
+		return op["responses"].(map[string]any)[status].(map[string]any)["content"].(map[string]any)["application/json"].(map[string]any)["schema"].(map[string]any)
+	}
+	type target struct{ route, method, status string }
+	targets := map[string]target{
+		"400": {"/v1/identities/social", "post", "400"},
+		"413": {"/v1/identities/social", "post", "413"},
+		"429": {"/v1/token/refresh", "post", "429"},
+	}
+	cases := map[string]struct {
+		plant func(d map[string]any)
+		want  bool
+	}{}
+	for status, tg := range targets {
+		tg, status := tg, status
+		for _, sibling := range []string{"not", "if", "allOf", "description"} {
+			sibling := sibling
+			cases["a "+sibling+" sibling on the schema of the "+status] = struct {
+				plant func(d map[string]any)
+				want  bool
+			}{func(d map[string]any) {
+				schema := statusSchema(d, tg.route, tg.method, tg.status)
+				value := any(map[string]any{})
+				if sibling == "allOf" {
+					value = []any{map[string]any{"type": "string"}}
+				}
+				if sibling == "description" {
+					value = "d"
+				}
+				schema[sibling] = value
+			}, true}
+		}
+		cases["a media-type sibling on the "+status] = struct {
+			plant func(d map[string]any)
+			want  bool
+		}{func(d map[string]any) {
+			op := d["paths"].(map[string]any)[tg.route].(map[string]any)[tg.method].(map[string]any)
+			op["responses"].(map[string]any)[tg.status].(map[string]any)["content"].(map[string]any)["application/json"].(map[string]any)["encoding"] = map[string]any{}
+		}, true}
+		cases["a second content type on the "+status] = struct {
+			plant func(d map[string]any)
+			want  bool
+		}{func(d map[string]any) {
+			op := d["paths"].(map[string]any)[tg.route].(map[string]any)[tg.method].(map[string]any)
+			op["responses"].(map[string]any)[tg.status].(map[string]any)["content"].(map[string]any)["text/plain"] = map[string]any{"schema": map[string]any{"type": "string"}}
+		}, true}
+		cases["a response sibling on the "+status] = struct {
+			plant func(d map[string]any)
+			want  bool
+		}{func(d map[string]any) {
+			op := d["paths"].(map[string]any)[tg.route].(map[string]any)[tg.method].(map[string]any)
+			op["responses"].(map[string]any)[tg.status].(map[string]any)["links"] = map[string]any{}
+		}, true}
+	}
+	cases["a oneOf wrapper with a not sibling beside a closed member"] = struct {
+		plant func(d map[string]any)
+		want  bool
+	}{func(d map[string]any) {
+		statusSchema(d, "/v1/identities/social", "post", "400")["not"] = map[string]any{}
+	}, true}
+	cases["an operation key outside the table"] = struct {
+		plant func(d map[string]any)
+		want  bool
+	}{func(d map[string]any) { social(d)["callbacks"] = map[string]any{} }, true}
+	cases["a path item key that is not a method"] = struct {
+		plant func(d map[string]any)
+		want  bool
+	}{func(d map[string]any) {
+		d["paths"].(map[string]any)["/v1/identities/social"].(map[string]any)["parameters"] = []any{}
+	}, true}
+	cases["a security requirement whose value is not a list"] = struct {
+		plant func(d map[string]any)
+		want  bool
+	}{func(d map[string]any) {
+		social(d)["security"] = []any{map[string]any{"opsAccessToken": "x"}}
+	}, true}
+	cases["a security scheme key outside the table"] = struct {
+		plant func(d map[string]any)
+		want  bool
+	}{func(d map[string]any) {
+		d["components"].(map[string]any)["securitySchemes"].(map[string]any)["opsAccessToken"].(map[string]any)["flows"] = map[string]any{}
+	}, true}
+	for name, c := range cases {
+		document := loadOpenAPIRaw(t)
+		c.plant(document)
+		problems := openAPIPathProblems(document, rows)
+		if c.want && len(problems) == 0 {
+			t.Errorf("%s: the gate reported nothing", name)
+		}
+		if !c.want && len(problems) != 0 {
+			t.Errorf("%s: the gate reported %v", name, problems)
+		}
+	}
+	document := loadOpenAPIRaw(t)
+	if problems := openAPIPathProblems(document, rows); len(problems) != 0 {
+		t.Errorf("the live document: the gate reported %v", problems)
+	}
+}
+
 // Only go-api's own path space is exempt: an API row anywhere else, one that
 // merely starts like it included, still needs its operation.
 func TestTheOpenAPIPathGateExemptsOnlyGoAPIsPathSpace(t *testing.T) {

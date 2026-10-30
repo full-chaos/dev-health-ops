@@ -377,7 +377,7 @@ func withNoPythonShims(env []string) []string {
 	return out
 }
 
-// failureTail is the end of a failed script run for an error message.
+// failureTail is the end of a failed script run for an error message: stderr first and alone, then stdout.
 func failureTail(res cmdResult) string {
-	return tail(res.stderr+res.stdout, 2000)
+	return "stderr: " + tail(res.stderr, 1500) + "\nstdout: " + tail(res.stdout, 500)
 }

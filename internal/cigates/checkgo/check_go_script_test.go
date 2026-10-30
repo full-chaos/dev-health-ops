@@ -504,6 +504,10 @@ func recordedGoTestRaw(work, script string, env []string, verb ...string) ([]str
 	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(fake), 0o755); err != nil {
 		return nil, cmdResult{}, err
 	}
+	// A stand-in docker answers the reap step's `docker ps` with no containers, so a run never reaches a docker of the host.
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte("#!/bin/sh\n[ \"$1\" = ps ] && exit 0\nexit 127\n"), 0o755); err != nil {
+		return nil, cmdResult{}, err
+	}
 	logPath := filepath.Join(work, "go_test.log")
 	if err := os.WriteFile(logPath, nil, 0o644); err != nil {
 		return nil, cmdResult{}, err

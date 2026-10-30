@@ -249,9 +249,22 @@ func (s pgStore) soleOwner(ctx context.Context, orgID uuid.UUID) (uuid.UUID, err
 	return owners[0], nil
 }
 
+// isSuperuserSQL reads the user's is_superuser by the platform roles switch.
+func (s pgStore) isSuperuserSQL() (string, error) {
+	superuser, err := s.platformRoles().Superuser("is_superuser", "users.id")
+	if err != nil {
+		return "", err
+	}
+	return `SELECT ` + superuser + ` FROM users WHERE id = $1`, nil
+}
+
 func (s pgStore) isSuperuser(ctx context.Context, userID uuid.UUID) (bool, error) {
+	statement, err := s.isSuperuserSQL()
+	if err != nil {
+		return false, err
+	}
 	var superuser bool
-	err := s.Pool.QueryRow(ctx, `SELECT is_superuser FROM users WHERE id = $1`, userID).Scan(&superuser)
+	err = s.Pool.QueryRow(ctx, statement, userID).Scan(&superuser)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}

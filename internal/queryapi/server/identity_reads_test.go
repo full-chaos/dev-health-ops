@@ -229,3 +229,5 @@ func TestQueryProofWriteReadsTheOrgAllowlistOncePerRequest(t *testing.T) {
 		t.Fatalf("%d ran=%d allowlist asked %d time(s), want 200, one run, one ask", recorder.Code, ran, asked)
 	}
 }
+
+func (*countingIdentityStore) ReadsPlatformRoles() bool { return false }

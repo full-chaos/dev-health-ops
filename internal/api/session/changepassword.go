@@ -114,7 +114,7 @@ func (h handlers) changePassword(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, "lock user", err)
 		return
 	}
-	user, err := userByID(ctx, tx, userID)
+	user, err := h.userByID(ctx, tx, userID)
 	if err != nil {
 		h.fail(w, r, "load user", err)
 		return

@@ -1062,6 +1062,26 @@ func TestTheOpenAPIPathGateReportsEveryDroppedShape(t *testing.T) {
 		{"a HEAD answer that is a string", func(d map[string]any) {
 			d["paths"].(map[string]any)["/.well-known/jwks.json"].(map[string]any)["head"].(map[string]any)["responses"].(map[string]any)["200"] = "x"
 		}, "its 200 must be a response object"},
+		{"a transport status oneOf that is an object", func(d map[string]any) {
+			op := d["paths"].(map[string]any)["/v1/identities/social"].(map[string]any)["post"].(map[string]any)
+			op["responses"].(map[string]any)["400"].(map[string]any)["content"].(map[string]any)["application/json"].(map[string]any)["schema"].(map[string]any)["oneOf"] = map[string]any{}
+		}, "must reference"},
+		{"a transport status with no content", func(d map[string]any) {
+			op := d["paths"].(map[string]any)["/v1/identities/social"].(map[string]any)["post"].(map[string]any)
+			delete(op["responses"].(map[string]any)["413"].(map[string]any), "content")
+		}, "must reference"},
+		{"a transport status content that is a list", func(d map[string]any) {
+			op := d["paths"].(map[string]any)["/v1/identities/social"].(map[string]any)["post"].(map[string]any)
+			op["responses"].(map[string]any)["413"].(map[string]any)["content"] = []any{}
+		}, "must reference"},
+		{"a transport status media type that is a string", func(d map[string]any) {
+			op := d["paths"].(map[string]any)["/v1/identities/social"].(map[string]any)["post"].(map[string]any)
+			op["responses"].(map[string]any)["413"].(map[string]any)["content"].(map[string]any)["application/json"] = "x"
+		}, "must reference"},
+		{"a transport status schema that is a string", func(d map[string]any) {
+			op := d["paths"].(map[string]any)["/v1/identities/social"].(map[string]any)["post"].(map[string]any)
+			op["responses"].(map[string]any)["413"].(map[string]any)["content"].(map[string]any)["application/json"].(map[string]any)["schema"] = "x"
+		}, "must reference"},
 		{"a non-string $ref in an operation", func(d map[string]any) {
 			sessions(d)["parameters"] = []any{map[string]any{"$ref": 5}}
 		}, "references"},

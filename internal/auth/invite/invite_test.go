@@ -90,14 +90,22 @@ func TestLifetimeBounds(t *testing.T) {
 }
 
 func TestDecideRevokeIsMonotonic(t *testing.T) {
-	if noop, err := decideRevoke(StatusPending); noop || err != nil {
+	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	later, earlier := now.Add(time.Hour), now.Add(-time.Second)
+	if noop, err := decideRevoke(StatusPending, later, now); noop || err != nil {
 		t.Fatalf("revoke pending = %v, %v", noop, err)
 	}
-	if noop, err := decideRevoke(StatusRevoked); !noop || err != nil {
+	if noop, err := decideRevoke(StatusPending, now, now); noop || err != nil {
+		t.Fatalf("revoke pending at its expiry instant = %v, %v, want a revoke", noop, err)
+	}
+	if noop, err := decideRevoke(StatusRevoked, earlier, now); !noop || err != nil {
 		t.Fatalf("revoke revoked = %v, %v, want a no-op", noop, err)
 	}
-	if _, err := decideRevoke(StatusAccepted); !errors.Is(err, ErrNotPending) {
+	if _, err := decideRevoke(StatusAccepted, later, now); !errors.Is(err, ErrNotPending) {
 		t.Fatalf("revoke accepted = %v, want ErrNotPending", err)
+	}
+	if _, err := decideRevoke(StatusPending, earlier, now); !errors.Is(err, ErrNotPending) {
+		t.Fatalf("revoke expired = %v, want ErrNotPending", err)
 	}
 }
 

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/bigboydir"
 )
 
 const goMissingLine = "FAIL: bigboy-cut: go not found on PATH; needed to build cigate for the DEPLOY_SHA STEPs\n"
@@ -25,15 +27,16 @@ func runCut(t *testing.T, bin string, deploySHA string) result {
 		t.Fatal(err)
 	}
 	writeFile(t, filepath.Join(root, "_records"), "images.env", nil)
-	script := filepath.Join(repo, "ci", "bigboy", "bigboy-cut.sh")
+	tools := bigboydir.Dir(t, repo)
+	script := filepath.Join(tools, "bigboy-cut.sh")
 	// go test keys its cache on the files this process opens; bash reads the script in another process.
-	for _, f := range []string{script, filepath.Join(repo, "ci", "bigboy", "arm64-child-digest.sh")} {
+	for _, f := range []string{script, filepath.Join(tools, "arm64-child-digest.sh")} {
 		if _, err := os.ReadFile(f); err != nil {
 			t.Fatal(err)
 		}
 	}
 	cmd := exec.Command(bash, script, "aaaaaaaa", strings.Repeat("a", 40))
-	cmd.Env = []string{"PATH=" + bin, "BIGBOY_ROOT=" + root, "BIGBOY_TOOLS_DIR=" + filepath.Join(repo, "ci", "bigboy"), "BIGBOY_OPS_REPO=" + repo}
+	cmd.Env = []string{"PATH=" + bin, "BIGBOY_ROOT=" + root, "BIGBOY_TOOLS_DIR=" + tools, "BIGBOY_OPS_REPO=" + repo}
 	if deploySHA != "" {
 		cmd.Env = append(cmd.Env, "DEPLOY_SHA="+deploySHA)
 	}

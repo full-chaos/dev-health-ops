@@ -996,6 +996,62 @@ func TestTheOpenAPIPathGateClosesEveryObjectItReads(t *testing.T) {
 	}
 }
 
+// No read of the gate drops a wrong shape silently: a security list or item, a path item, the document objects, a
+// HEAD answer, a non-string $ref and a malformed profile row are each reported.
+func TestTheOpenAPIPathGateReportsEveryDroppedShape(t *testing.T) {
+	rows := authServiceRows(t)
+	sessions := func(d map[string]any) map[string]any {
+		return d["paths"].(map[string]any)["/v1/sessions/current"].(map[string]any)["get"].(map[string]any)
+	}
+	cases := []struct {
+		name  string
+		plant func(d map[string]any)
+		want  string
+	}{
+		{"security as a list of strings", func(d map[string]any) { sessions(d)["security"] = []any{"opsAccessToken"} }, "security requirement must be an object"},
+		{"security as an object", func(d map[string]any) { sessions(d)["security"] = map[string]any{"opsAccessToken": []any{}} }, "security must be a list"},
+		{"security as a string", func(d map[string]any) { sessions(d)["security"] = "opsAccessToken" }, "security must be a list"},
+		{"components as a list", func(d map[string]any) { d["components"] = []any{} }, "OpenAPI components must be an object"},
+		{"schemas as a list", func(d map[string]any) { d["components"].(map[string]any)["schemas"] = []any{} }, "OpenAPI components schemas must be an object"},
+		{"securitySchemes as a string", func(d map[string]any) { d["components"].(map[string]any)["securitySchemes"] = "x" }, "OpenAPI components securitySchemes must be an object"},
+		{"paths as a list", func(d map[string]any) { d["paths"] = []any{} }, "OpenAPI paths must be an object"},
+		{"a path item that is a string", func(d map[string]any) { d["paths"].(map[string]any)["/v1/extra"] = "x" }, "OpenAPI path /v1/extra must be an object"},
+		{"a HEAD answer that is a string", func(d map[string]any) {
+			d["paths"].(map[string]any)["/.well-known/jwks.json"].(map[string]any)["head"].(map[string]any)["responses"].(map[string]any)["200"] = "x"
+		}, "its 200 must be a response object"},
+		{"a non-string $ref in an operation", func(d map[string]any) {
+			sessions(d)["parameters"] = []any{map[string]any{"$ref": 5}}
+		}, "references"},
+	}
+	for _, c := range cases {
+		document := loadOpenAPIRaw(t)
+		c.plant(document)
+		problems := strings.Join(openAPIPathProblems(document, rows), "\n")
+		if !strings.Contains(problems, c.want) {
+			t.Errorf("%s: the gate reported %q, want a problem containing %q", c.name, problems, c.want)
+		}
+	}
+	for name, mutate := range map[string]func(row map[string]any){
+		"a row whose id is not a string":    func(row map[string]any) { row["id"] = 5 },
+		"a row whose route is not a string": func(row map[string]any) { row["route"] = 5 },
+		"a row whose credential classes is not a list": func(row map[string]any) {
+			row["accepted_credential_classes"] = "ops_access_token_hs256"
+		},
+	} {
+		mutated := authServiceRows(t)
+		for _, row := range mutated {
+			if id, _ := row["id"].(string); strings.HasSuffix(id, "@api]") {
+				mutate(row)
+				break
+			}
+		}
+		problems := strings.Join(openAPIPathProblems(loadOpenAPIRaw(t), mutated), "\n")
+		if !strings.Contains(problems, "profile row") {
+			t.Errorf("%s: the gate reported %q, want a profile row problem", name, problems)
+		}
+	}
+}
+
 // Only go-api's own path space is exempt: an API row anywhere else, one that
 // merely starts like it included, still needs its operation.
 func TestTheOpenAPIPathGateExemptsOnlyGoAPIsPathSpace(t *testing.T) {

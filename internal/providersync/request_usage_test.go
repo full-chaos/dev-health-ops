@@ -165,7 +165,26 @@ func (sink *memoryRequestUsageSink) WriteRequestUsage(_ context.Context, rows []
 	return nil
 }
 
+// stored is the store after its merge: provider_request_usage collapses a row
+// the writer re-sent unchanged (a write cancelled after the store applied it),
+// so a row equal to one already stored counts once. A row that differs, even
+// under the same key, stays visible: the writer promised an unchanged re-send.
 func (sink *memoryRequestUsageSink) stored() []RequestUsageRow {
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	seen := make(map[RequestUsageRow]struct{}, len(sink.rows))
+	rows := make([]RequestUsageRow, 0, len(sink.rows))
+	for _, row := range sink.rows {
+		if _, duplicate := seen[row]; !duplicate {
+			seen[row] = struct{}{}
+			rows = append(rows, row)
+		}
+	}
+	return rows
+}
+
+// storedWrites is every row the store was given, re-sends included.
+func (sink *memoryRequestUsageSink) storedWrites() []RequestUsageRow {
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
 	return append([]RequestUsageRow(nil), sink.rows...)
@@ -987,6 +1006,55 @@ func TestManyExecutionsShareOneWriter(t *testing.T) {
 	}
 	if got := sumRequestUsage(rows); got.Requests != 3*executions || len(keys) != len(rows) || len(rows) != executions {
 		t.Fatalf("stored=%+v rows=%d keys=%d", got, len(rows), len(keys))
+	}
+}
+
+// commitThenCancelSink commits its first write, then holds it until the
+// writer cancels it and reports it failed: the store applied the rows, the
+// writer cannot know, and so it re-sends them.
+type commitThenCancelSink struct {
+	memoryRequestUsageSink
+	committed chan struct{}
+	first     sync.Once
+}
+
+func (sink *commitThenCancelSink) WriteRequestUsage(ctx context.Context, rows []RequestUsageRow) error {
+	if err := sink.memoryRequestUsageSink.WriteRequestUsage(ctx, rows); err != nil {
+		return err
+	}
+	cancelled := false
+	sink.first.Do(func() {
+		close(sink.committed)
+		<-ctx.Done()
+		cancelled = true
+	})
+	if cancelled {
+		return ctx.Err()
+	}
+	return nil
+}
+
+// TestWriterResendAfterACommittedCancelledWriteStoresOneRow closes the writer
+// while a write the store has already applied is in flight: the writer re-sends
+// the batch unchanged, and the store holds one row, as the real store does once
+// it collapses the duplicate on its sorting key.
+func TestWriterResendAfterACommittedCancelledWriteStoresOneRow(t *testing.T) {
+	t.Parallel()
+	sink := &commitThenCancelSink{committed: make(chan struct{})}
+	writer, _ := newTestRequestUsageWriter(t, sink)
+	writer.Offer([]RequestUsageRow{{UnitID: "ABC-123", ExecutionID: "e1", Transport: requestTransportREST, Requests: 3}})
+	select {
+	case <-sink.committed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first write never reached the store")
+	}
+	writer.Close(time.Second)
+	writes := sink.storedWrites()
+	if len(writes) != 2 || writes[0] != writes[1] {
+		t.Fatalf("the writer did not re-send the batch unchanged: writes=%+v", writes)
+	}
+	if rows := sink.stored(); len(rows) != 1 || sumRequestUsage(rows).Requests != 3 {
+		t.Fatalf("stored=%+v after a byte-identical re-send", rows)
 	}
 }
 

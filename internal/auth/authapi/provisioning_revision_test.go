@@ -240,7 +240,7 @@ func TestOrgStateIsDarkWithoutItsProfileRow(t *testing.T) {
 			t.Fatalf("%s: %d startup lines name the state route, want 1: %s", name, lines, f.logs.String())
 		}
 	}
-	f := newProvFixtureWith(t, docWithExtraRow(t, docWithoutRow(t, PatternOrgSuspend), stateRoute))
+	f := newProvFixtureWith(t, docWithExtraRow(t, embeddedDocWithoutRow(t, PatternOrgSuspend), stateRoute))
 	if got := f.post(PatternOrgSuspend, f.bodyWith(""), nil); got.Code != http.StatusNotFound {
 		t.Fatalf("suspend with only the state row: %d, want 404", got.Code)
 	}

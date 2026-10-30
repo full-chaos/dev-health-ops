@@ -314,7 +314,7 @@ func provDoc(t *testing.T) []byte {
 func docWithRow(t testing.TB, route string) []byte {
 	t.Helper()
 	var document map[string]any
-	if err := json.Unmarshal(docWithoutRow(t, route), &document); err != nil {
+	if err := json.Unmarshal(embeddedDocWithoutRow(t, route), &document); err != nil {
 		t.Fatal(err)
 	}
 	rows := document["rows"].([]any)
@@ -339,8 +339,8 @@ func docWithRow(t testing.TB, route string) []byte {
 	return nil
 }
 
-// docWithoutRow is the embedded endpoint-profile document without the rows for route.
-func docWithoutRow(t testing.TB, route string) []byte {
+// embeddedDocWithoutRow is the embedded endpoint-profile document without the rows for route.
+func embeddedDocWithoutRow(t testing.TB, route string) []byte {
 	t.Helper()
 	var document map[string]any
 	if err := json.Unmarshal(authv1.AuthServiceEndpointProfiles, &document); err != nil {
@@ -1157,7 +1157,7 @@ func TestOrgSuspendRefusalsAreNamedReasonCodes(t *testing.T) {
 // mounted (404), the other nine routes are served, the service starts and one startup line names the route; the other
 // routes' switch (provisioningPatterns) is unaffected.
 func TestOrgSuspendIsDarkWithoutItsProfileRow(t *testing.T) {
-	f := newProvFixtureWith(t, docWithoutRow(t, PatternOrgSuspend))
+	f := newProvFixtureWith(t, embeddedDocWithoutRow(t, PatternOrgSuspend))
 	if got := f.post(PatternOrgSuspend, encode(routeCases()[8].body(f, f.super)), nil); got.Code != http.StatusNotFound {
 		t.Fatalf("suspend without its row: %d %s, want 404", got.Code, got.Body)
 	}

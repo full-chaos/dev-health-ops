@@ -141,7 +141,7 @@ func TestExchangeParityTableOnARealIdentityStore(t *testing.T) {
 			answered++
 		})
 	}
-	if rows, idRows := parityTableCount(t, parityTablePath); answered != rows-idRows {
+	if rows, idRows := parityTableCount(t); answered != rows-idRows {
 		t.Fatalf("auth-service answered %d rows, the table holds %d apart from its %d \"id=\" rows", answered, rows-idRows, idRows)
 	}
 }

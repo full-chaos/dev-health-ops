@@ -194,7 +194,7 @@ is_verified, is_superuser, token_version, created_at, updated_at) VALUES ($1, $2
 			answered++
 		})
 	}
-	if rows, idRows := parityTableCount(t, parityTablePath); answered != rows-idRows {
+	if rows, idRows := parityTableCount(t); answered != rows-idRows {
 		t.Fatalf("go-api answered %d rows, the table holds %d apart from its %d \"id=\" rows", answered, rows-idRows, idRows)
 	}
 }

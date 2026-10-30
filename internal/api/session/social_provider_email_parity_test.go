@@ -18,13 +18,11 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/oauthprovider"
 )
 
-var parityTablePath = filepath.Join("..", "..", "..", "ci", "social_provider_email_parity.tsv")
-
 // parityTableCount counts the table's data rows from the raw file, apart from readParityRows, and how many of them carry
 // an "id=" shape, so a driver that skips a row is caught: each plane must answer every row.
-func parityTableCount(t *testing.T, path string) (rows, idRows int) {
+func parityTableCount(t *testing.T) (rows, idRows int) {
 	t.Helper()
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "ci", "social_provider_email_parity.tsv"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +136,7 @@ func detailMessage(body string) string {
 // let the profile through (the handler went on to the database, which the zero pool turns into a panic).
 func TestSocialLoginAnswersTheProviderEmailParityTable(t *testing.T) {
 	answered := 0
-	for _, row := range readParityRows(t, parityTablePath) {
+	for _, row := range readParityRows(t, filepath.Join("..", "..", "..", "ci", "social_provider_email_parity.tsv")) {
 		t.Run(row.id, func(t *testing.T) {
 			provider := httptest.NewServer(goAPIProviderProfile(row))
 			t.Cleanup(provider.Close)
@@ -182,7 +180,7 @@ func TestSocialLoginAnswersTheProviderEmailParityTable(t *testing.T) {
 			answered++
 		})
 	}
-	if rows, _ := parityTableCount(t, parityTablePath); answered != rows {
+	if rows, _ := parityTableCount(t); answered != rows {
 		t.Fatalf("go-api answered %d rows, the table holds %d", answered, rows)
 	}
 }

@@ -19,13 +19,11 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 )
 
-var parityTablePath = filepath.Join("..", "..", "..", "..", "ci", "social_provider_email_parity.tsv")
-
 // parityTableCount counts the table's data rows from the raw file, apart from readParityRows, and how many of them carry
 // an "id=" shape, so a driver that skips a row is caught: each plane must answer every row.
-func parityTableCount(t *testing.T, path string) (rows, idRows int) {
+func parityTableCount(t *testing.T) (rows, idRows int) {
 	t.Helper()
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "ci", "social_provider_email_parity.tsv"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +47,7 @@ type parityRow struct {
 
 func readParityRows(t *testing.T) []parityRow {
 	t.Helper()
-	raw, err := os.ReadFile(parityTablePath)
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "ci", "social_provider_email_parity.tsv"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +179,7 @@ func TestExchangeAnswersTheProviderEmailParityTable(t *testing.T) {
 			answered++
 		})
 	}
-	if rows, _ := parityTableCount(t, parityTablePath); answered != rows {
+	if rows, _ := parityTableCount(t); answered != rows {
 		t.Fatalf("auth-service answered %d rows, the table holds %d", answered, rows)
 	}
 }

@@ -200,7 +200,7 @@ func TestTwoSubscribersEachSeeEveryEvent(t *testing.T) {
 func TestTheAuthAclLoginRunsTheFeedAndNothingElse(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	const password = "feed-acl-test-password"
+	const password = "feed-test-pass"
 	instance, err := containers.StartValkeyWithACLFile(ctx, ratelimitvalkey.ACLFile(password))
 	if err != nil {
 		t.Fatal(err)

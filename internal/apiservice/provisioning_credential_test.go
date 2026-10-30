@@ -421,3 +421,70 @@ func TestWorkloadSelectorExchangeFailureSendsNothing(t *testing.T) {
 		t.Fatalf("%d provisioning requests after a failed exchange, want 0", w.provisioning)
 	}
 }
+
+// A SET subject or bootstrap path that is missing, unreadable or a directory is
+// a start-up error that names the variable and holds no byte of the path.
+func TestProvisioningCredentialSetFileMustBeReadable(t *testing.T) {
+	cfg := provisioningOn(t, "http://auth-service:8095")
+	dir := t.TempDir()
+	unreadable := filepath.Join(dir, "unreadable-secret-name")
+	if err := os.WriteFile(unreadable, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(unreadable, 0); err != nil {
+		t.Fatal(err)
+	}
+	paths := map[string]string{
+		"missing":   filepath.Join(dir, "missing-secret-name"),
+		"directory": filepath.Join(dir, "directory-secret-name"),
+	}
+	if err := os.Mkdir(paths["directory"], 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if os.Getuid() != 0 {
+		paths["unreadable"] = unreadable
+	}
+	for _, variable := range []string{EnvAuthWorkloadSubjectFile, EnvAuthWorkloadBootstrapFile} {
+		for name, path := range paths {
+			env := map[string]string{EnvAuthProvisioningCredential: "workload", EnvAuthWorkloadIssuer: testWorkloadIssuer, variable: path}
+			cred, err := newProvisioningCredential(cfg, issueEnv(env))
+			if err == nil || cred.workload != nil {
+				t.Errorf("%s %s: %v %v, want a start-up error and no client", variable, name, cred.workload, err)
+				continue
+			}
+			if !strings.Contains(err.Error(), variable) || strings.Contains(err.Error(), filepath.Base(path)) || strings.Contains(err.Error(), dir) {
+				t.Errorf("%s %s: error %q must name the variable and no byte of the path", variable, name, err)
+			}
+		}
+	}
+}
+
+// A file removed after start-up is not a start-up error: the first exchange
+// fails, every verb fails and nothing reaches the provisioning routes.
+func TestWorkloadSubjectRemovedAfterStartFailsTheCallWithNoRequest(t *testing.T) {
+	w := newWiringServer(t)
+	w.exchange = func() (int, string) { return http.StatusInternalServerError, `{}` }
+	path := bootstrapFile(t)
+	env := map[string]string{EnvAuthProvisioningCredential: "workload", EnvAuthWorkloadIssuer: testWorkloadIssuer, EnvAuthWorkloadBootstrapFile: path}
+	cfg := provisioningOn(t, w.URL)
+	lookup := issueEnv(env)
+	cred, err := newProvisioningCredential(cfg, lookup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	life, _ := orgLifecycleClient(cfg, lookup, cred)
+	prov, _ := orgProvisioner(cfg, lookup, cred)
+	for _, call := range wiringCalls(prov, life) {
+		if err := call.do(); err == nil {
+			t.Errorf("%s: no error with the subject file gone", call.verb)
+		}
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.provisioning != 0 || w.exchanges != 0 {
+		t.Fatalf("%d provisioning requests and %d exchanges with the subject file gone, want 0 and 0", w.provisioning, w.exchanges)
+	}
+}

@@ -78,7 +78,7 @@ func newProvisioningCredential(cfg AuthProxyConfig, lookup func(string) (string,
 	default:
 		return fail("set %s or %s", EnvAuthWorkloadSubjectFile, EnvAuthWorkloadBootstrapFile)
 	}
-	if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
+	if !readableFile(path) {
 		return fail("%s must name a readable file", subjectEnv)
 	}
 	issuer, _ := lookup(EnvAuthWorkloadIssuer)
@@ -116,4 +116,19 @@ func exchangeTransport() *http.Transport {
 		ExpectContinueTimeout: time.Second,
 		ForceAttemptHTTP2:     true,
 	}
+}
+
+// readableFile reports whether path is a regular file this process can open.
+// It reads nothing from it, and callers never put the path in an error.
+func readableFile(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	_ = file.Close()
+	return true
 }

@@ -266,6 +266,9 @@ func (h Handlers) writeError(w http.ResponseWriter, r *http.Request, err error) 
 		writeDetail(w, http.StatusForbidden, "Sign-up through SSO is not available")
 	case errors.Is(err, ErrAutoProvisionDisabled), errors.Is(err, ErrInvalidEmailAddress):
 		writeDetail(w, http.StatusBadRequest, "SAML user provisioning failed")
+	case errors.Is(err, ErrUnusableEmail):
+		writeJSON(w, http.StatusBadRequest, map[string]any{"detail": map[string]string{
+			"message": "The identity provider returned an unusable email address", "reason": "invalid_provider_email"}})
 	case errors.Is(err, ErrEmailMissing):
 		writeDetail(w, http.StatusBadRequest, "Email address is missing from SAML response")
 	case errors.Is(err, ErrEmailMalformed):

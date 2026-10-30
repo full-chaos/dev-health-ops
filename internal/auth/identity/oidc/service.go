@@ -18,6 +18,7 @@ import (
 	"golang.org/x/oauth2"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
@@ -540,6 +541,9 @@ func (s *Service) exchangeAndValidate(ctx context.Context, row Provider, state f
 // by the provider, and held by no account; then a new account is created
 // only if the provider and the identity store both allow it.
 func (s *Service) resolve(ctx context.Context, row Provider, v validated, requestID *string) (Login, *Error) {
+	if failure := refuseUnusableEmail(v.profile.Email); failure != nil {
+		return Login{}, failure
+	}
 	principal, err := s.cfg.Identities.IdentityBySubject(ctx, v.key, LegacyMatch{AuthProvider: v.legacyAuthProvider, MembershipOrg: row.OrgID})
 	switch {
 	case err == nil:
@@ -584,6 +588,16 @@ func (s *Service) resolve(ctx context.Context, row Provider, v validated, reques
 		return Login{}, internal(ReasonStoreUnavailable, err)
 	}
 	return Login{PrincipalID: principal.ID, Email: principal.Email, OrgID: &org, Role: role, Tokens: tokens}, nil
+}
+
+// refuseUnusableEmail answers an address the shared provider email rule refuses with go-api's 400
+// (internal/api/sso invalidProviderEmailDetail), before any identity lookup; the answer names no value.
+func refuseUnusableEmail(email string) *Error {
+	if identity.RefuseProviderEmail(email) == nil {
+		return nil
+	}
+	return deny(http.StatusBadRequest, ReasonMalformed,
+		map[string]any{"message": "The identity provider returned an unusable email address", "reason": "invalid_provider_email"})
 }
 
 func notMember() *Error {

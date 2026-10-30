@@ -453,7 +453,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 124,
+          "line": 128,
           "note": "func (s *Service) Exchange",
           "path": "internal/auth/identity/social/service.go"
         },
@@ -686,7 +686,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 280,
+            "line": 263,
             "note": "signedtoken.Build(id, s.secret)",
             "path": "internal/auth/invite/store.go"
           },

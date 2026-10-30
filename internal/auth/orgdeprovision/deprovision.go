@@ -121,7 +121,7 @@ type plan struct {
 	invites *invite.OrgRevocation
 }
 
-// Deprovision runs the one commit, in the one lock order: the principal rows
+// Deprovision runs the one commit, in the auth lock order (membership.Store readPairs): the principal rows
 // its rows name FOR KEY SHARE (step 1: members go-api wrote with no auth row,
 // inviters of go-api-only invites, the actor of its audit row), the organization row FOR UPDATE
 // (step 3, exclusive), Authorize, the pending invites (step 4), every

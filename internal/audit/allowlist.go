@@ -191,7 +191,7 @@ var attributeVocabulary = map[string][]string{
 	"amr": {"pwd", "otp", "mfa", "hwk", "swk", "fed"},
 	"changed_fields": {
 		"role_key", "status", "display_name", "disabled_at", "expires_at", "revoked_at", "email", "email_verified_at",
-		"scopes", "audiences", "organization_id", "allowed_actions", "binding",
+		"scopes", "audiences", "organization_id", "allowed_actions", "binding", "invited_by", "joined_at",
 	},
 }
 

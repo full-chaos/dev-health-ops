@@ -104,10 +104,10 @@ type PrincipalAccessStore interface {
 	Access(ctx context.Context, query AccessQuery) (PrincipalAccess, error)
 }
 
-// principalAccessRoute is the principal access read's registration. Routes
-// does not mount it yet: a go-api route ships with its endpoint-profile row,
-// and that row's anchor must hold at a commit on main (the auth-test history
-// check), so the row and the mount land after this registration line does.
+// principalAccessRoute is the principal access read's registration; Routes
+// mounts it with deps.Access and deps.AccessLimiter. Its endpoint-profile row
+// anchors to the Pattern line below, which reached main before the mount did
+// (the auth-test history check reads every anchor at source_commit).
 //
 // The route is not audited: acr-api calls it on every protected request, so a
 // row and a last_used_at stamp per call would put a write on the read path;
@@ -150,7 +150,7 @@ func principalAccessHandler(store PrincipalAccessStore, auth routeAuth, logger *
 			if code != "" {
 				body.Set("code", code)
 			}
-			writeModel(w, status, body)
+			writeAccess(w, status, body)
 		}
 		orgID, orgErr := uuid.Parse(orgRaw)
 		userID, userErr := uuid.Parse(userRaw)
@@ -204,7 +204,7 @@ func principalAccessHandler(store PrincipalAccessStore, auth routeAuth, logger *
 			body := pyjson.NewObject()
 			body.Set("detail", "Not found")
 			body.Set("code", UnknownOrganizationCode)
-			writeModel(w, http.StatusNotFound, body)
+			writeAccess(w, http.StatusNotFound, body)
 			return
 		default:
 			countInternal(ctx, routePrincipalAccess, outcomeAccessUnavailable)
@@ -227,7 +227,7 @@ func principalAccessHandler(store PrincipalAccessStore, auth routeAuth, logger *
 		}
 		countInternal(ctx, routePrincipalAccess, outcomeSuccess)
 		logger.LogAttrs(ctx, slog.LevelInfo, "acr principal access: answered", attrs...)
-		writeModel(w, http.StatusOK, principalAccessBody(orgRaw, userRaw, access))
+		writeAccess(w, http.StatusOK, principalAccessBody(orgRaw, userRaw, access))
 	})
 }
 
@@ -258,4 +258,12 @@ func principalAccessBody(orgID, userID string, access PrincipalAccess) *pyjson.O
 	}
 	body.Set("repository_scope", scope)
 	return body
+}
+
+// writeAccess writes one answer of the principal access read. The read is a
+// Go-only route (no FastAPI ancestor, so no response-model entry): it writes
+// with the JSONResponse writer, as the llm-config route does, never WriteModel,
+// which records a writer violation on a route the table does not name.
+func writeAccess(w http.ResponseWriter, status int, body *pyjson.Object) {
+	policy.WriteJSON(w, status, body, http.Header{"X-Content-Type-Options": {"nosniff"}})
 }

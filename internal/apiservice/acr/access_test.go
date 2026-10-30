@@ -45,8 +45,8 @@ func accessCreds() *fakeCredentials {
 	return f
 }
 
-// accessServer mounts Routes and the principal access read (not in Routes
-// yet) with limiter as its own attempt bucket.
+// accessServer mounts Routes, which serves the principal access read from
+// store, with limiter as its own attempt bucket.
 func accessServer(t *testing.T, store PrincipalAccessStore, creds CredentialStore, deps Deps, limiter ...*httpapi.KeyedLimiter) http.Handler {
 	t.Helper()
 	deps.Auth = creds
@@ -54,27 +54,36 @@ func accessServer(t *testing.T, store PrincipalAccessStore, creds CredentialStor
 	if deps.Store == nil {
 		deps.Store = &fakeStore{}
 	}
-	var own *httpapi.KeyedLimiter
+	deps.Access = store
 	if len(limiter) > 0 {
-		own = limiter[0]
+		deps.AccessLimiter = limiter[0]
 	}
 	mux := http.NewServeMux()
-	for _, route := range append(Routes(deps), principalAccessRoute(deps, store, own, deps.Logger)) {
+	for _, route := range Routes(deps) {
 		mux.Handle(route.Method+" "+route.Pattern, route.Handler)
 	}
 	return mux
 }
 
-// Routes does not mount the access read yet (its endpoint-profile row lands
-// with the mount); the constructor is the only registration.
-func TestRoutesDoNotMountThePrincipalAccessReadYet(t *testing.T) {
-	for _, route := range Routes(Deps{}) {
+// Routes mounts the principal access read exactly once, as GET, and serves it
+// from deps.Access: a Routes without the read, or one that reads another
+// store, fails here.
+func TestRoutesMountThePrincipalAccessRead(t *testing.T) {
+	store := &fakeAccessStore{access: PrincipalAccess{Member: true}}
+	var mounted []httpapi.Route
+	for _, route := range Routes(Deps{Auth: accessCreds(), Access: store, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}) {
 		if route.Pattern == PrincipalAccessPattern {
-			t.Fatal("Routes mounts the principal access read before its endpoint-profile row")
+			mounted = append(mounted, route)
 		}
 	}
-	if route := principalAccessRoute(Deps{}, &fakeAccessStore{}, nil, slog.Default()); route.Pattern != PrincipalAccessPattern || route.Method != http.MethodGet {
-		t.Fatalf("constructor registers %s %s", route.Method, route.Pattern)
+	if len(mounted) != 1 || mounted[0].Method != http.MethodGet {
+		t.Fatalf("Routes mounts the principal access read %d time(s) (%v), want once as GET", len(mounted), mounted)
+	}
+	mux := http.NewServeMux()
+	mux.Handle(mounted[0].Method+" "+mounted[0].Pattern, mounted[0].Handler)
+	rec := do(mux, accessPath(accessOrg.String(), accessUser.String(), ""), "Bearer "+accessToken)
+	if rec.Code != http.StatusOK || len(store.queries) != 1 {
+		t.Fatalf("mounted read = %d after %d store call(s), want 200 after 1: %s", rec.Code, len(store.queries), rec.Body.String())
 	}
 }
 

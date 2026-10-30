@@ -542,6 +542,7 @@ const (
 var internalOrgScopedIDs = []string{
 	"GET /api/v1/internal/acr/entitlements/{org_id} [dev-health-ops-api @internal]",
 	"GET /api/v1/internal/acr/orgs/{org_id}/llm-config [dev-health-ops-api @internal]",
+	"GET /api/v1/internal/acr/orgs/{org_id}/principals/{user_id}/access [dev-health-ops-api @internal]",
 }
 
 var internalACRCacheIDs = append([]string{"GET /api/v1/internal/acr/health [dev-health-ops-api @internal]"}, internalOrgScopedIDs...)

@@ -88,13 +88,14 @@ func (h *handlers) updateMemberRoleInAuth(ctx context.Context, w http.ResponseWr
 }
 
 // writeMembershipReadBack answers the public row auth-service wrote in its
-// commit. A row gone by now (a later change) is the 503: go-api cannot show
-// the state it was asked for.
+// commit. A failed read or a row gone by now (a later change) is the 503:
+// go-api cannot show the state it was asked for; a retry meets the defined
+// refusal.
 func (h *handlers) writeMembershipReadBack(ctx context.Context, w http.ResponseWriter, orgID, target uuid.UUID, status int) {
 	m, err := h.store.membershipByOrgUser(ctx, orgID, target)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "admin: read membership after auth change failed", "error", err)
-		policy.WriteInternal(w)
+		h.writeProvisionUnavailable(w)
 		return
 	}
 	if m == nil {
@@ -168,17 +169,19 @@ func (h *handlers) createOrgInviteInAuth(ctx context.Context, w http.ResponseWri
 		h.writeProvisionRefusal(ctx, w, "create_org_invite", err, answers)
 		return
 	}
+	// The mail needs only what go-api holds and the answered token, so it goes
+	// out before the read-back: a failed read-back loses no invite.
+	h.sendInviteEmail(ctx, orgName, inviter, &orgInvite{ID: created.ID, OrgID: orgID, Email: email}, created.Token)
 	invite, err := h.store.inviteByID(ctx, created.ID)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "admin: read invite after auth create failed", "error", err)
-		policy.WriteInternal(w)
+		h.writeProvisionUnavailable(w)
 		return
 	}
 	if invite == nil {
 		h.writeProvisionUnavailable(w)
 		return
 	}
-	h.sendInviteEmail(ctx, orgName, inviter, invite, created.Token)
 	policy.WriteModel(w, http.StatusCreated, orgInviteResponseObject(invite), nil)
 }
 

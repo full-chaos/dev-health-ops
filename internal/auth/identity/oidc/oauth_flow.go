@@ -370,7 +370,7 @@ func (s *Service) callbackOAuth(ctx context.Context, admitted StoredProvider, in
 		switch {
 		case perr != nil && perr.InvalidID:
 			failure = s.auditedOAuthRefusal(ctx, row, stageProviderProfile, msgMissingProviderID, failure)
-		case perr != nil:
+		case perr != nil && perr.ProfileRequest:
 			failure = s.recordedProviderFailure(ctx, row, msgUserinfoFailed, failure)
 		}
 		return Login{}, clear, failure

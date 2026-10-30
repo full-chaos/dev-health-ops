@@ -41,7 +41,7 @@ internal/joboperator/postgres_integration_test.go	org_feature_overrides	PROBE
 internal/joboperator/postgres_integration_test.go	org_licenses	PROBE	
 internal/joboperator/postgres_integration_test.go	organizations	PROBE	
 internal/joboperator/postgres_integration_test.go	provider_oauth_credentials	PROBE	id
-internal/joboperator/postgres_integration_test.go	provider_oauth_revocations	PROBE	id
+internal/joboperator/postgres_integration_test.go	provider_oauth_revocations	PROBE	
 internal/joboperator/postgres_integration_test.go	provider_rate_limit_observations	PROBE	
 internal/joboperator/postgres_integration_test.go	remaining_metric_partitions	PROBE	
 internal/joboperator/postgres_integration_test.go	remaining_metric_runs	PROBE	
@@ -119,7 +119,7 @@ internal/storage/postgres/domain_authorization_integration_test.go	org_feature_o
 internal/storage/postgres/domain_authorization_integration_test.go	org_licenses	PROBE	
 internal/storage/postgres/domain_authorization_integration_test.go	organizations	PROBE	
 internal/storage/postgres/domain_authorization_integration_test.go	provider_oauth_credentials	PROBE	id
-internal/storage/postgres/domain_authorization_integration_test.go	provider_oauth_revocations	PROBE	id
+internal/storage/postgres/domain_authorization_integration_test.go	provider_oauth_revocations	PROBE	
 internal/storage/postgres/domain_authorization_integration_test.go	provider_rate_limit_observations	PROBE	
 internal/storage/postgres/domain_authorization_integration_test.go	remaining_metric_partitions	PROBE	
 internal/storage/postgres/domain_authorization_integration_test.go	remaining_metric_runs	PROBE	
@@ -232,7 +232,7 @@ internal/storage/postgres/runtime_authorization_integration_test.go	org_feature_
 internal/storage/postgres/runtime_authorization_integration_test.go	org_licenses	PROBE	
 internal/storage/postgres/runtime_authorization_integration_test.go	organizations	PROBE	
 internal/storage/postgres/runtime_authorization_integration_test.go	provider_oauth_credentials	PROBE	id
-internal/storage/postgres/runtime_authorization_integration_test.go	provider_oauth_revocations	PROBE	id
+internal/storage/postgres/runtime_authorization_integration_test.go	provider_oauth_revocations	PROBE	
 internal/storage/postgres/runtime_authorization_integration_test.go	provider_rate_limit_observations	PROBE	
 internal/storage/postgres/runtime_authorization_integration_test.go	remaining_metric_partitions	PROBE	
 internal/storage/postgres/runtime_authorization_integration_test.go	remaining_metric_runs	PROBE	
@@ -352,7 +352,7 @@ internal/syncreconciler/kernel_integration_test.go	org_feature_overrides	PROBE
 internal/syncreconciler/kernel_integration_test.go	org_licenses	PROBE	
 internal/syncreconciler/kernel_integration_test.go	organizations	PROBE	
 internal/syncreconciler/kernel_integration_test.go	provider_oauth_credentials	PROBE	id
-internal/syncreconciler/kernel_integration_test.go	provider_oauth_revocations	PROBE	id
+internal/syncreconciler/kernel_integration_test.go	provider_oauth_revocations	PROBE	
 internal/syncreconciler/kernel_integration_test.go	provider_rate_limit_observations	PROBE	
 internal/syncreconciler/kernel_integration_test.go	remaining_metric_partitions	PROBE	
 internal/syncreconciler/kernel_integration_test.go	remaining_metric_runs	PROBE	

@@ -1048,6 +1048,11 @@ password is re-applied every run) and `RIVER_DATABASE_SCHEMA` (default `river`;
 the KEDA login needs that schema to exist, so on a fresh database provision the
 KEDA login after `dho migrate river`).
 
+In the chart the provision-roles Job passes the api login when `migrations.hook.provisionRoles.apiRole.name` is set
+(CHAOS-12081): `API_DATABASE_ROLE` is that name and `API_DATABASE_PASSWORD` is a `secretKeyRef` to the operator-created
+Secret `apiRole.secretName` / `secretKey`. Empty `name` (the default) adds nothing to the Job. The name must equal go-api's
+`API_DATABASE_ROLE` and the password must be the one inside `API_DATABASE_URI`.
+
 It does what the script did and nothing else: create a login only when missing
 (an existing eligible role keeps its attributes and password; an existing one that is
 not an unprivileged login, e.g. NOLOGIN or with CREATEDB, is REFUSED before any

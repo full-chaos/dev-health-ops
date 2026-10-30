@@ -91,6 +91,12 @@ func TestSessionRollingUpdateUnsetRendersByteEqual(t *testing.T) {
 			t.Errorf("%s render: %d keep annotations on the PgBouncer Secret, want one per Secret", name, n)
 		}
 		tip = strings.ReplaceAll(tip, keepAnn, "type: Opaque\n")
+		// The Valkey args gained a pinned --appendfsync after the base: that one pair is left out of the tip, exactly once.
+		fsyncArgs := "            - --appendfsync\n            - everysec\n"
+		if n := strings.Count(tipValkey, fsyncArgs); n != 1 {
+			t.Errorf("%s render: %d pinned appendfsync pairs on the Valkey Deployment, want 1", name, n)
+		}
+		tipValkey = strings.ReplaceAll(tipValkey, fsyncArgs, "")
 		if b, c := withoutSpecStrategy(t, baseValkey, false), withoutSpecStrategy(t, tipValkey, true); b != c {
 			t.Errorf("%s render: the Valkey Deployment differs from base %s beyond spec.strategy:\n  base: %q\n  tip:  %q", name, goldenBaseSha[:10], b, c)
 		}

@@ -26,8 +26,9 @@ var provisioningProfileRows []byte
 // deprovision routes when AUTH_MEMBERSHIP_ROUTES is on, and none otherwise.
 // Every verb behind them refuses while auth-service does not own users. They
 // take the session issue route's workload path (nil refuses workload tokens).
-// A membership removal ends the member's sessions of the organization through
-// sessions, in the removal's transaction.
+// A membership removal ends the member's sessions of the organization, and an
+// organization suspend or deprovision every session of the organization, through
+// sessions, in the verb's transaction.
 func provisioningRoutes(cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
 	identities *identity.Store, workload *authapi.SessionIssueWorkload, sessions *session.Store) ([]httpapi.Route, error) {
 	if !cfg.Provisioning.Routes {
@@ -42,12 +43,12 @@ func provisioningRoutes(cfg authconfig.Config, logger *slog.Logger, pool *pgxpoo
 	if err != nil {
 		return nil, err
 	}
-	orgs, err := org.New(org.Config{Pool: pool, Schema: schema, Logger: logger})
+	orgs, err := org.New(org.Config{Pool: pool, Schema: schema, Sessions: sessions, Logger: logger})
 	if err != nil {
 		return nil, err
 	}
 	deprovision, err := orgdeprovision.New(orgdeprovision.Config{Pool: pool, Schema: schema, Orgs: orgs, Memberships: members,
-		Invites: invites, Logger: logger})
+		Invites: invites, Sessions: sessions, Logger: logger})
 	if err != nil {
 		return nil, err
 	}

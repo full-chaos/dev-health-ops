@@ -10,6 +10,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
+	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
 
 func TestCreateRefusesBadSlugBeforeAnyWrite(t *testing.T) {
@@ -279,5 +280,37 @@ func TestSuspendAuthorizedPlansTheSuspendAuditAndEvent(t *testing.T) {
 	}
 	if len(got.Events) != 1 || got.Events[0].EventType != "organization.suspended" || got.Events[0].Change["status"] != "suspended" {
 		t.Fatalf("events = %+v", got.Events)
+	}
+}
+
+// A suspend that finds a session busy runs again, a bounded number of times, then answers ErrStore.
+func TestSuspendRetriesBusySessionsThenAnswersErrStore(t *testing.T) {
+	attempts := 0
+	s := newTestStore(func(context.Context, audit.Mutation) error { attempts++; return errSessionsBusy })
+	changed, err := s.SuspendAuthorized(context.Background(), uuid.New(), nil, Actor{}, allowAll)
+	if !errors.Is(err, ErrStore) || changed || attempts != session.BusyAttempts {
+		t.Fatalf("changed=%v err=%v attempts=%d, want ErrStore after %d attempts", changed, err, attempts, session.BusyAttempts)
+	}
+	attempts = 0
+	s = newTestStore(func(context.Context, audit.Mutation) error {
+		attempts++
+		if attempts < session.BusyAttempts {
+			return errSessionsBusy
+		}
+		return nil
+	})
+	if changed, err := s.SuspendAuthorized(context.Background(), uuid.New(), nil, Actor{}, allowAll); err != nil || !changed || attempts != session.BusyAttempts {
+		t.Fatalf("changed=%v err=%v attempts=%d, want the last attempt to win", changed, err, attempts)
+	}
+}
+
+func TestABusySuspendIsADomainRefusalOfItsCommit(t *testing.T) {
+	var got audit.Mutation
+	s := newTestStore(func(_ context.Context, m audit.Mutation) error { got = m; return nil })
+	if _, err := s.SuspendAuthorized(context.Background(), uuid.New(), nil, Actor{}, allowAll); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Refusals) != 1 || !errors.Is(got.Refusals[0], errSessionsBusy) {
+		t.Fatalf("refusals %v", got.Refusals)
 	}
 }

@@ -1,0 +1,233 @@
+// Package providerrevocation sends the pending provider OAuth revocation rows
+// (public.provider_oauth_revocations) that no route sends: a row is otherwise
+// sent only by a disconnect or a callback of the same credential, so a row for a
+// credential that is gone (one the restore fence requeued, CHAOS-11835) would
+// stay owed forever (CHAOS-12010).
+//
+// A row exists exactly while its token is owed a revoke: a sent row is deleted,
+// a refused one keeps its place with attempts+1 and a reason code, and is
+// claimed again after a backoff. At MaxAttempts the worker stops claiming it;
+// the row stays pending (a disconnect, callback or org deletion still sends it)
+// and is counted and named by id. Nothing here logs, returns or records a
+// token, a ciphertext or a provider answer.
+package providerrevocation
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+)
+
+const (
+	// BatchLimit bounds the rows one run sends: each is one provider call of
+	// at most 10 s, inside the kind's 300 s timeout.
+	BatchLimit = 25
+	// MaxAttempts is where the worker stops claiming a row (backoff 1, 2, 4 ...
+	// 256 min, capped at 6 h: about 14.5 h of retries).
+	MaxAttempts = 10
+	// SetupStaleAfter is the callback's own cutoff
+	// (admin.setupRevocationStaleAfter): a setup row that never failed a
+	// revoke and is younger belongs to a callback still in flight.
+	SetupStaleAfter = 15 * time.Minute
+
+	ReasonRemoteRevokeFailed = "remote_revoke_failed"
+	ReasonTokenDecryptFailed = "token_decrypt_failed"
+)
+
+// Row is one claimed revocation row. Ciphertext never leaves this package.
+type Row struct {
+	ID         uuid.UUID
+	Ciphertext string
+}
+
+// Claim is one row held by its own transaction until Sent, Failed or Release.
+type Claim interface {
+	Row() Row
+	// Sent deletes the row and commits.
+	Sent(ctx context.Context) error
+	// Failed records one refused attempt with reason and commits; it returns
+	// the row's attempts after the update.
+	Failed(ctx context.Context, reason string) (int, error)
+	// Release rolls the claim back.
+	Release(ctx context.Context)
+}
+
+// Store claims due rows and counts them.
+type Store interface {
+	// Next claims one due row, skipping a row another sender holds; ok is
+	// false when no row is due.
+	Next(ctx context.Context) (Claim, bool, error)
+	// Totals counts the pending rows and the ones at MaxAttempts.
+	Totals(ctx context.Context) (pending, exhausted int64, err error)
+}
+
+// Decryptor opens a row's sealed token.
+type Decryptor interface {
+	Decrypt(ciphertext secrets.Value) ([]byte, error)
+}
+
+// Revoker sends one revoke to the provider.
+type Revoker func(ctx context.Context, token string) error
+
+// Handler binds the scheduled send to the River job runtime.
+type Handler struct {
+	store      Store
+	decryptor  Decryptor
+	revoke     Revoker
+	configured bool
+	logger     *slog.Logger
+	metrics    instruments
+}
+
+// NewHandler constructs the sync.provider_oauth_revocations job owner.
+// configured is false when the PagerDuty client id is unset: a run then
+// touches no row (the row waits for the configuration, CHAOS-6619).
+func NewHandler(store Store, decryptor Decryptor, revoke Revoker, configured bool, logger *slog.Logger) (*Handler, error) {
+	if store == nil || decryptor == nil || revoke == nil || logger == nil {
+		return nil, errors.New("provider revocation store, decryptor, revoker and logger are required")
+	}
+	return &Handler{store: store, decryptor: decryptor, revoke: revoke, configured: configured, logger: logger, metrics: defaultInstruments}, nil
+}
+
+type tally struct {
+	claimed, revoked, retried, exhaustedNow, decryptFailed int
+}
+
+// Work sends up to BatchLimit due rows, one transaction each.
+func (handler *Handler) Work(
+	ctx context.Context,
+	execution *jobruntime.Execution[jobruntime.ProviderOAuthRevocationsArgs],
+) error {
+	if handler == nil || handler.store == nil || execution == nil {
+		return jobruntime.Permanent(errors.New("provider revocation handler is not configured"))
+	}
+	scheduledFor, err := time.Parse(time.RFC3339, execution.Args.Payload.ScheduledFor)
+	if err != nil || scheduledFor.Location() != time.UTC {
+		return jobruntime.Permanent(errors.New("provider revocation request is invalid"))
+	}
+	if !handler.configured {
+		pending, exhausted, err := handler.store.Totals(ctx)
+		if err != nil {
+			handler.logger.ErrorContext(ctx, "provider_oauth_revocations.run", slog.String("outcome", "count_failed"))
+			return jobruntime.Retryable(fmt.Errorf("count provider revocations: %w", err))
+		}
+		handler.metrics.exhausted.Record(ctx, exhausted)
+		handler.logger.WarnContext(ctx, "provider_oauth_revocations.run",
+			slog.String("outcome", "unconfigured"),
+			slog.Int64("skipped_unconfigured", pending),
+			slog.Int64("exhausted_total", exhausted))
+		return nil
+	}
+	var counts tally
+	for counts.claimed < BatchLimit {
+		claim, ok, err := handler.store.Next(ctx)
+		if err != nil {
+			handler.logRun(ctx, "claim_failed", counts, -1)
+			return jobruntime.Retryable(fmt.Errorf("claim provider revocation: %w", err))
+		}
+		if !ok {
+			break
+		}
+		counts.claimed++
+		if err := handler.send(ctx, claim, &counts); err != nil {
+			handler.logRun(ctx, "write_failed", counts, -1)
+			return jobruntime.Retryable(err)
+		}
+	}
+	_, exhausted, err := handler.store.Totals(ctx)
+	if err != nil {
+		handler.logRun(ctx, "count_failed", counts, -1)
+		return jobruntime.Retryable(fmt.Errorf("count provider revocations: %w", err))
+	}
+	handler.metrics.exhausted.Record(ctx, exhausted)
+	handler.logRun(ctx, "sent", counts, exhausted)
+	return nil
+}
+
+func (handler *Handler) send(ctx context.Context, claim Claim, counts *tally) error {
+	row := claim.Row()
+	reason := ""
+	plaintext, err := handler.decryptor.Decrypt(secrets.NewValue(row.Ciphertext))
+	if err != nil {
+		reason = ReasonTokenDecryptFailed
+	} else if err := handler.revoke(ctx, string(plaintext)); err != nil {
+		reason = ReasonRemoteRevokeFailed
+	}
+	if reason == "" {
+		if err := claim.Sent(ctx); err != nil {
+			claim.Release(ctx)
+			return fmt.Errorf("delete sent provider revocation: %w", err)
+		}
+		counts.revoked++
+		handler.metrics.rows.Add(ctx, 1, metric.WithAttributes(attribute.String("outcome", "revoked")))
+		return nil
+	}
+	attempts, err := claim.Failed(ctx, reason)
+	if err != nil {
+		claim.Release(ctx)
+		return fmt.Errorf("record refused provider revocation: %w", err)
+	}
+	if reason == ReasonTokenDecryptFailed {
+		counts.decryptFailed++
+	}
+	if attempts >= MaxAttempts {
+		counts.exhaustedNow++
+		handler.metrics.rows.Add(ctx, 1, metric.WithAttributes(attribute.String("outcome", "exhausted")))
+		handler.logger.WarnContext(ctx, "provider_oauth_revocations.exhausted",
+			slog.String("revocation_id", row.ID.String()),
+			slog.Int("attempts", attempts),
+			slog.String("reason", reason))
+		return nil
+	}
+	counts.retried++
+	handler.metrics.rows.Add(ctx, 1, metric.WithAttributes(attribute.String("outcome", "retried")))
+	return nil
+}
+
+// logRun writes the one line per run: counts only.
+func (handler *Handler) logRun(ctx context.Context, outcome string, counts tally, exhaustedTotal int64) {
+	handler.logger.InfoContext(ctx, "provider_oauth_revocations.run",
+		slog.String("outcome", outcome),
+		slog.Int("claimed", counts.claimed),
+		slog.Int("revoked", counts.revoked),
+		slog.Int("retried", counts.retried),
+		slog.Int("exhausted_now", counts.exhaustedNow),
+		slog.Int("decrypt_failed", counts.decryptFailed),
+		slog.Int64("exhausted_total", exhaustedTotal))
+}
+
+const (
+	rowsInstrument      = "provider_oauth_revocations_total"
+	exhaustedInstrument = "provider_oauth_revocations_exhausted"
+)
+
+type instruments struct {
+	rows      metric.Int64Counter
+	exhausted metric.Int64Gauge
+}
+
+var defaultInstruments = newInstruments(otel.Meter("github.com/full-chaos/dev-health-ops/internal/jobs/providerrevocation"))
+
+func newInstruments(meter metric.Meter) instruments {
+	rows, err := meter.Int64Counter(rowsInstrument,
+		metric.WithDescription("Provider OAuth revocation rows the worker sent, retried or stopped retrying, by outcome."))
+	if err != nil {
+		rows, _ = otel.GetMeterProvider().Meter("noop").Int64Counter(rowsInstrument)
+	}
+	exhausted, err := meter.Int64Gauge(exhaustedInstrument,
+		metric.WithDescription("Pending provider OAuth revocation rows at the worker's attempt limit."))
+	if err != nil {
+		exhausted, _ = otel.GetMeterProvider().Meter("noop").Int64Gauge(exhaustedInstrument)
+	}
+	return instruments{rows: rows, exhausted: exhausted}
+}

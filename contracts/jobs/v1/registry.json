@@ -489,6 +489,39 @@
       }
     },
     {
+      "kind": "sync.provider_oauth_revocations",
+      "current_version": 1,
+      "supported_versions": [
+        1
+      ],
+      "queue": "sync",
+      "handler_owner": "internal/jobs/providerrevocation",
+      "execution_mode": "command",
+      "priority": 3,
+      "timeout_seconds": 300,
+      "max_attempts": 2,
+      "retry_policy": "bounded_exponential_jitter",
+      "cancellation": "cooperative_checkpoint",
+      "delivery": "replay_safe_at_least_once",
+      "idempotency": "unique_schedule_occurrence",
+      "concurrency": {
+        "scope": "fleet",
+        "limit": 1
+      },
+      "sensitive_fields": [],
+      "domain_link": "schedule_occurrence",
+      "organization_scope": "global",
+      "schema_versions": {
+        "1": "schemas/sync.provider_oauth_revocations.v1.schema.json"
+      },
+      "fixtures": {
+        "1": [
+          "examples/sync.provider_oauth_revocations.v1.json"
+        ]
+      },
+      "go_only": true
+    },
+    {
       "kind": "sync.provider_unit",
       "current_version": 1,
       "supported_versions": [

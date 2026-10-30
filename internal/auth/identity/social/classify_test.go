@@ -14,7 +14,7 @@ import (
 func TestClassifyIsTheStatusWriteErrorAnswers(t *testing.T) {
 	for _, err := range []error{
 		&ConflictError{ExistingMethod: "github"}, ErrProviderUnavailable, ErrProviderNotConfigured,
-		fmt.Errorf("fetch: %w", ErrProviderRefused), ErrEmailUnverified, ErrPrincipalDisabled,
+		fmt.Errorf("fetch: %w", ErrProviderRefused), fmt.Errorf("fetch: %w", ErrInvalidProviderID), ErrEmailUnverified, ErrPrincipalDisabled,
 		identity.ErrSignupNotAvailable, ErrReauthenticationRequired, identity.ErrIdentityConflict, ErrProviderLinked,
 		identity.ErrNotFound, identity.ErrLastSignInMethod, errors.New("anything else"),
 	} {
@@ -33,6 +33,7 @@ func TestClassifyIsTheStatusWriteErrorAnswers(t *testing.T) {
 func TestClassifyNamesTheExchangeReasons(t *testing.T) {
 	for err, want := range map[error]Reason{
 		ErrProviderRefused:             ReasonInvalidCredentials,
+		ErrInvalidProviderID:           ReasonMalformed,
 		&ConflictError{}:               ReasonEmailCollision,
 		ErrEmailUnverified:             ReasonEmailUnverified,
 		ErrPrincipalDisabled:           ReasonPrincipalDeactivated,

@@ -351,11 +351,36 @@
             }
           },
           "400": {
-            "description": "The request body could not be read (a transport failure within the size limit); answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1).",
+            "description": "Either the request body could not be read (a transport failure within the size limit), answered by the transport before the route in its own error envelope, transport-error.v1 (not error.v1); or the go-api shaped refusal {\"detail\": {\"message\": ...}} for a provider profile with no usable user id, with exactly the text go-api answers. The body is one of the two, never both.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TransportError"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/TransportError"
+                    },
+                    {
+                      "type": "object",
+                      "required": [
+                        "detail"
+                      ],
+                      "additionalProperties": false,
+                      "properties": {
+                        "detail": {
+                          "type": "object",
+                          "required": [
+                            "message"
+                          ],
+                          "additionalProperties": false,
+                          "properties": {
+                            "message": {
+                              "const": "The provider returned an invalid user id"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
                 }
               }
             }

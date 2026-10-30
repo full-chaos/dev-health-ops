@@ -1,7 +1,6 @@
 package admin
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"net/http"
@@ -363,7 +362,7 @@ func (h *handlers) updateOrganization(w http.ResponseWriter, r *http.Request) {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 		return
 	}
-	var authActive func(context.Context) (bool, error)
+	var authActive orgAuthStateFunc
 	if patch.IsActive != nil {
 		accepted, ok := h.orgStatusInAuth(w, r, orgID, *patch.IsActive)
 		if !ok {

@@ -141,7 +141,7 @@ type orgUpdate struct {
 // updateOrganization is OrganizationService.update, minus the license-tier
 // sync side effect (org_licenses is out of this route's scope; a tier
 // change here does not touch OrgLicense -- see RISK-NOTES).
-func (s pgStore) updateOrganization(ctx context.Context, id uuid.UUID, patch orgUpdate, authActive func(context.Context) (bool, error)) (*organization, error) {
+func (s pgStore) updateOrganization(ctx context.Context, id uuid.UUID, patch orgUpdate, authActive orgAuthStateFunc) (*organization, error) {
 	var tx pgx.Tx
 	var existing *organization
 	var err error

@@ -99,10 +99,13 @@ func (h *handlers) writeStateChanged(w http.ResponseWriter, r *http.Request, org
 // context does not bound it.
 const orgAuthReReadTimeout = 3 * time.Second
 
+// orgAuthStateFunc is the store's hook that answers the is_active to write while the row is locked.
+type orgAuthStateFunc = func(context.Context) (bool, error)
+
 // authStateHook is the store's read of auth's state under the row lock: the PATCH stores what auth holds, not the
 // PATCH value. When the read fails, the state the accepted call set is stored and the failure is logged by verb and
 // reason class only.
-func (h *handlers) authStateHook(orgID uuid.UUID, accepted bool) func(context.Context) (bool, error) {
+func (h *handlers) authStateHook(orgID uuid.UUID, accepted bool) orgAuthStateFunc {
 	return func(ctx context.Context) (bool, error) {
 		readCtx, cancel := context.WithTimeout(ctx, orgAuthReReadTimeout)
 		defer cancel()

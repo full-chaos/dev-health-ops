@@ -36,6 +36,9 @@ var (
 	ErrOperatorIsSubject    = errors.New("workload: the operator is the workload's own principal")
 	ErrPrincipalNotWorkload = errors.New("workload: the workload's principal is not of kind workload")
 	ErrEnableStateChanged   = errors.New("workload: the workload changed between the read and the locks")
+	// ErrEnableLiveBootstrap: enable would revive a bootstrap value that was
+	// live before the disable; revoke it first (D6505).
+	ErrEnableLiveBootstrap = errors.New("workload: the workload holds a live bootstrap credential")
 
 	// ErrRefused is the only refusal Resolve and Narrow return. The reason
 	// (unknown tuple, disabled, uid mismatch, no audience) stays inside this

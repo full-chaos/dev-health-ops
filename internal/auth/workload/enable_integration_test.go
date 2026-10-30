@@ -368,3 +368,65 @@ func TestEnableOfAnEnabledWorkloadWritesNothing(t *testing.T) {
 		}
 	}
 }
+
+// TestEnableRefusesWhileABootstrapValueIsLiveAndRevokeWhileDisabledOpensIt
+// (D6505): a value live before the disable would be accepted again, so enable
+// refuses (no row, no event, no audit row) until it is revoked. Rotate is
+// refused while disabled; revoke and bootstrap-disable work, then enable does.
+func TestEnableRefusesWhileABootstrapValueIsLiveAndRevokeWhileDisabledOpensIt(t *testing.T) {
+	e := getEnv(t)
+	ctx := ctxT(t)
+	for _, revoke := range []string{"bootstrap-disable", "bootstrap-revoke"} {
+		for _, both := range []bool{false, true} {
+			n, principal := registerWorkload(t, e, []string{"auth-service"})
+			operator := newPrincipal(t, e, "user", false)
+			v := mint(t)
+			created, err := e.writer.CreateBootstrap(ctx, n, v, nil, time.Hour, Actor{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if both {
+				if err := e.writer.Disable(ctx, n, Actor{}); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				disableRowOnly(t, e, principal)
+			}
+			in := EnableInput{Operator: operator, EnablePrincipal: both}
+			before, beforeBootstrap := enableWrites(t, e, principal), bootstrapWrites(t, e, principal)
+			if _, err := e.writer.PlanEnable(ctx, n, in); err != ErrEnableLiveBootstrap {
+				t.Fatalf("%s both=%t: plan = %v, want ErrEnableLiveBootstrap", revoke, both, err)
+			}
+			if _, err := e.writer.EnableWorkload(ctx, n, in); err != ErrEnableLiveBootstrap {
+				t.Fatalf("%s both=%t: enable = %v, want ErrEnableLiveBootstrap", revoke, both, err)
+			}
+			if after := enableWrites(t, e, principal); after != before || bootstrapWrites(t, e, principal) != beforeBootstrap {
+				t.Fatalf("%s both=%t: a refused enable wrote: %s -> %s", revoke, both, before, after)
+			}
+			if rows := enableAuditRows(t, e, principal); len(rows) != 0 {
+				t.Fatalf("%s both=%t: a refused enable wrote %d audit rows", revoke, both, len(rows))
+			}
+			if _, err := e.writer.RotateBootstrap(ctx, n, mint(t), 0, time.Hour, Actor{}); err == nil {
+				t.Fatalf("%s both=%t: rotate worked on a disabled workload; the refusal must not name revoke only", revoke, both)
+			}
+			if revoke == "bootstrap-disable" {
+				if _, err := e.writer.DisableBootstrap(ctx, n, Actor{}); err != nil {
+					t.Fatalf("bootstrap-disable while disabled: %v", err)
+				}
+			} else if err := e.writer.RevokeBootstrap(ctx, created.CredentialID, BootstrapReasonCompromised, Actor{}); err != nil {
+				t.Fatalf("bootstrap-revoke while disabled: %v", err)
+			}
+			if _, err := e.writer.EnableWorkload(ctx, n, in); err != nil {
+				t.Fatalf("%s both=%t: enable after the revoke: %v", revoke, both, err)
+			}
+			if row, prin := rowsEnabled(t, e, principal); !row || !prin {
+				t.Fatalf("%s both=%t: row enabled %t, principal enabled %t", revoke, both, row, prin)
+			}
+			if _, err := e.reader.ResolveBootstrap(ctx, BootstrapDigest(v), time.Now()); err == nil {
+				t.Fatalf("%s both=%t: the value live before the disable resolves after enable", revoke, both)
+			}
+			noSecretIn(t, e, principal, v)
+			createWorks(t, e, n)
+		}
+	}
+}

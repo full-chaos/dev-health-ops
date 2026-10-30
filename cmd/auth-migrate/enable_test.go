@@ -169,6 +169,7 @@ func TestEnableRefusalsAreNamed(t *testing.T) {
 		workload.ErrBootstrapPrincipalDisabled: "(the workload's principal is disabled; add -enable-principal to enable it too)",
 		workload.ErrPrincipalNotWorkload:       "(the workload's principal is not of kind workload; -enable-principal refuses it)",
 		workload.ErrEnableStateChanged:         "(the workload changed during the run; run again)",
+		workload.ErrEnableLiveBootstrap:        "(the workload holds a live bootstrap value; revoke it first (bootstrap-disable -workload NAME -apply, or bootstrap-revoke), then enable)",
 		workload.ErrStore:                      "(store unavailable)",
 	}
 	for refusal, want := range cases {
@@ -185,6 +186,13 @@ func TestEnableRefusalsAreNamed(t *testing.T) {
 				t.Errorf("%v apply=%t: stderr %q stdout %q, want %q", refusal, apply, stderr.String(), stdout.String(), want)
 			}
 		}
+	}
+	// Rotate is refused while the workload is disabled, so the live-value
+	// refusal names revoke only (D6505).
+	var stderr bytes.Buffer
+	runEnable(t.Context(), &fakeEnable{err: workload.ErrEnableLiveBootstrap}, mustParse(t, "enable", "-workload", "api", "-operator", uuid.NewString()), io.Discard, &stderr)
+	if strings.Contains(stderr.String(), "rotate") || strings.Contains(stderr.String(), "create") {
+		t.Errorf("the live-value refusal names a verb refused while disabled: %q", stderr.String())
 	}
 	if errors.Is(workload.ErrPrincipalNotWorkload, workload.ErrBootstrapPrincipalDisabled) {
 		t.Fatal("the two principal refusals are one error")

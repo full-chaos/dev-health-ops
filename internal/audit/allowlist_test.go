@@ -251,3 +251,14 @@ func TestPrincipalEnabledTakesOnlyTheStringTrue(t *testing.T) {
 		}
 	}
 }
+
+// TestPrincipalEnabledAcceptsTheOneMemberList pins what the closed
+// vocabulary rule admits for an enumerated key: the list ["true"] too.
+func TestPrincipalEnabledAcceptsTheOneMemberList(t *testing.T) {
+	if err := ValidateAttributes(map[string]any{"principal_enabled": []string{"true"}}); err != nil {
+		t.Fatalf("principal_enabled [\"true\"] refused: %v", err)
+	}
+	if err := ValidateAttributes(map[string]any{"principal_enabled": []string{}}); err == nil {
+		t.Fatal("principal_enabled [] accepted")
+	}
+}

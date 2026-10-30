@@ -44,6 +44,7 @@ type enableState struct {
 	principalDisabled bool
 	operatorFound     bool
 	operatorDisabled  bool
+	liveBootstrap     int
 }
 
 var enableRefusals = []error{

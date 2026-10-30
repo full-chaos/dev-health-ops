@@ -161,3 +161,39 @@ func TestEnableRefusalsAreLabelledInvalid(t *testing.T) {
 		}
 	}
 }
+
+// TestDecideEnableRefusesWhileABootstrapValueIsLive (D6505): an enable that
+// would change a row is refused while a bootstrap value is live, as the value
+// would be accepted again; a workload with nothing disabled stays a no-op.
+func TestDecideEnableRefusesWhileABootstrapValueIsLive(t *testing.T) {
+	cases := map[string]struct {
+		row, principal, flag bool
+		live                 int
+		want                 error
+	}{
+		"row disabled, one live":          {row: true, live: 1, want: ErrEnableLiveBootstrap},
+		"both disabled, flag, two live":   {row: true, principal: true, flag: true, live: 2, want: ErrEnableLiveBootstrap},
+		"principal alone, flag, one live": {principal: true, flag: true, live: 1, want: ErrEnableLiveBootstrap},
+		"nothing disabled, one live":      {live: 1},
+		"row disabled, none live":         {row: true},
+	}
+	for name, c := range cases {
+		st, in := enableFixture()
+		st.rowDisabled, st.principalDisabled, st.liveBootstrap, in.EnablePrincipal = c.row, c.principal, c.live, c.flag
+		plan, err := decideEnable(st, in)
+		if !errors.Is(err, c.want) || (c.want == nil && err != nil) {
+			t.Errorf("%s: err = %v, want %v", name, err, c.want)
+		}
+		if c.want != nil && (plan.EnableRow || plan.EnablePrincipal) {
+			t.Errorf("%s: a refused plan enables something: %+v", name, plan)
+		}
+	}
+	st, in := enableFixture()
+	st.rowDisabled, st.liveBootstrap, st.operatorFound = true, 1, false
+	if _, err := decideEnable(st, in); !errors.Is(err, ErrOperatorNotFound) {
+		t.Errorf("an unknown operator with a live value = %v, want ErrOperatorNotFound first", err)
+	}
+	if got := outcomeLabel(ErrEnableLiveBootstrap); got != "taken" {
+		t.Errorf("outcomeLabel(ErrEnableLiveBootstrap) = %q, want taken", got)
+	}
+}

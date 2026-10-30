@@ -252,8 +252,9 @@ func pagerDutyRevocationClaimSQL(predicate string) string {
 // predicate selects ($1 is the organisation, further arguments follow). Every
 // sender, the revocation worker included (internal/jobs/providerrevocation),
 // claims with FOR UPDATE SKIP LOCKED: a row another sender holds is mid-call,
-// so it is skipped, never waited on and sent again, and the answer is
-// incomplete while it is still owed.
+// so it is skipped, never waited on, and the answer is incomplete while it is
+// still owed. A row is deleted only after PagerDuty accepted the revoke; a lost
+// delete may send the same revoke again (at least once).
 func (h *handlers) retryPagerDutyRevocationRows(ctx context.Context, orgID, predicate string, args ...any) (bool, error) {
 	query := pagerDutyRevocationClaimSQL(predicate)
 	args = append([]any{orgID}, args...)

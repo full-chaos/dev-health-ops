@@ -536,12 +536,17 @@ func (s *Service) exchangeAndValidate(ctx context.Context, row Provider, state f
 	}, nil
 }
 
-// resolve turns a validated identity into a session. The key decides; on a
-// hit the e-mail is not read. On a miss the e-mail must be verified, allowed
-// by the provider, and held by no account; then a new account is created
-// only if the provider and the identity store both allow it.
+// resolve turns a validated identity into a session. Before the key is
+// looked up, the asserted e-mail must be usable, present and allowed by the
+// provider's domain list, linked or not (go-api oidc.go). The key decides the
+// account. On a miss the e-mail must also be verified and held by no account;
+// then a new account is created only if the provider and the identity store
+// both allow it.
 func (s *Service) resolve(ctx context.Context, row Provider, v validated, requestID *string) (Login, *Error) {
 	if failure := refuseUnusableEmail(v.profile.Email); failure != nil {
+		return Login{}, failure
+	}
+	if failure := checkProviderEmail(row, v.profile.Email); failure != nil {
 		return Login{}, failure
 	}
 	principal, err := s.cfg.Identities.IdentityBySubject(ctx, v.key, LegacyMatch{AuthProvider: v.legacyAuthProvider, MembershipOrg: row.OrgID})
@@ -640,14 +645,8 @@ func (s *Service) newAccount(ctx context.Context, row Provider, v validated, req
 
 func (s *Service) checkNewAccount(ctx context.Context, row Provider, v validated) *Error {
 	p := v.profile
-	if p.Email == "" {
-		return deny(http.StatusBadRequest, ReasonMalformed, "Email address is missing from OIDC claims")
-	}
 	if !p.EmailVerified {
 		return deny(http.StatusForbidden, ReasonEmailUnverified, "No verified email address is available from this OIDC provider")
-	}
-	if len(row.AllowedDomains) > 0 && !emaildomain.Allowed(row.AllowedDomains, emailDomain(p.Email)) {
-		return deny(http.StatusForbidden, ReasonDomainNotAllowed, "Email domain is not allowed for this provider")
 	}
 	inUse, err := s.cfg.Identities.EmailInUse(ctx, p.Email)
 	if errors.Is(err, ErrInvalidEmail) {
@@ -663,6 +662,31 @@ func (s *Service) checkNewAccount(ctx context.Context, row Provider, v validated
 		return deny(http.StatusForbidden, ReasonProvisioningDisabled, "User not found and auto-provisioning is disabled")
 	}
 	return nil
+}
+
+// checkProviderEmail is go-api's e-mail block of the OIDC callback (oidc.go), run on every sign-in before the
+// lookup: a missing address is 400; with a domain list, an address with no "@" is 400 and a domain off the list 403.
+// go-api's OAuth callback (oauth.go) has no malformed branch: there an address with no "@" is the domain 403, and
+// the domain 403 carries its OAuth detail object (oauthDomainDeniedDetail).
+func checkProviderEmail(row Provider, email string) *Error {
+	if email == "" {
+		return deny(http.StatusBadRequest, ReasonMalformed, "Email address is missing from OIDC claims")
+	}
+	if len(row.AllowedDomains) == 0 {
+		return nil
+	}
+	oauth := strings.HasPrefix(row.Protocol, "oauth_")
+	if !strings.Contains(email, "@") && !oauth {
+		return deny(http.StatusBadRequest, ReasonMalformed, "Email address from OIDC claims is malformed")
+	}
+	if emaildomain.Allowed(row.AllowedDomains, emailDomain(email)) {
+		return nil
+	}
+	if oauth {
+		return deny(http.StatusForbidden, ReasonDomainNotAllowed,
+			map[string]string{"message": "Email domain is not allowed for this provider", "reason": "oauth_domain_not_allowed"})
+	}
+	return deny(http.StatusForbidden, ReasonDomainNotAllowed, "Email domain is not allowed for this provider")
 }
 
 func conflict() *Error {

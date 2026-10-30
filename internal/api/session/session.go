@@ -23,6 +23,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/audit"
 	"github.com/full-chaos/dev-health-ops/internal/api/authmail"
+	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
 	"github.com/full-chaos/dev-health-ops/internal/api/oauthprovider"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
@@ -69,6 +70,8 @@ type Deps struct {
 	// issues every token pair these routes hand out; go-api then mints none
 	// and writes no refresh_tokens row. nil mints in go-api.
 	Issuer sessionissue.Issuer
+	// Provision (AUTH_PROXY_ORG_PROVISIONING) sends the invite joins to auth-service; nil joins in go-api.
+	Provision authprovision.Provisioner
 }
 
 type handlers struct {

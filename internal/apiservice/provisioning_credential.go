@@ -2,14 +2,14 @@ package apiservice
 
 import (
 	"fmt"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/full-chaos/dev-health-go/workloadtoken"
+
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 )
 
 // The credential go-api's provisioning clients (member, invite, organization
@@ -103,20 +103,8 @@ func newProvisioningCredential(cfg AuthProxyConfig, lookup func(string) (string,
 	return provisioningCredential{workload: client}, nil
 }
 
-// exchangeTransport carries the workload exchange: a dedicated transport with
-// no environment proxy, as the provisioning transport.
-func exchangeTransport() *http.Transport {
-	return &http.Transport{
-		Proxy:                 nil,
-		DialContext:           (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
-		MaxIdleConns:          2,
-		MaxIdleConnsPerHost:   2,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   5 * time.Second,
-		ExpectContinueTimeout: time.Second,
-		ForceAttemptHTTP2:     true,
-	}
-}
+// exchangeTransport carries the workload exchange: the shared outbound transport, no environment proxy.
+func exchangeTransport() *http.Transport { return httpguard.SharedTransport() }
 
 // readableFile reports whether path is a regular file this process can open.
 // It reads nothing from it, and callers never put the path in an error.

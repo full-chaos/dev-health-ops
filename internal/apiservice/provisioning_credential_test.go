@@ -24,6 +24,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
 	"github.com/full-chaos/dev-health-ops/internal/api/orgreactivate"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/redirectprobe"
 )
 
 const (
@@ -498,4 +499,25 @@ func TestWorkloadSubjectRemovedAfterStartFailsTheCallWithNoRequest(t *testing.T)
 	if w.provisioning != 0 || w.exchanges != 0 {
 		t.Fatalf("%d provisioning requests and %d exchanges with the subject file gone, want 0 and 0", w.provisioning, w.exchanges)
 	}
+}
+
+// The workload exchange answers a redirect without following it: with the exchange URL on an origin that redirects,
+// the second origin sees no request and every verb fails.
+func TestWorkloadExchangeNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
+	probe := redirectprobe.New(t)
+	env := map[string]string{EnvAuthProvisioningCredential: "workload", EnvAuthWorkloadIssuer: testWorkloadIssuer,
+		EnvAuthWorkloadBootstrapFile: bootstrapFile(t)}
+	cfg := provisioningOn(t, probe.Base.URL)
+	lookup := issueEnv(env)
+	cred, err := newProvisioningCredential(cfg, lookup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	life, _ := orgLifecycleClient(cfg, lookup, cred)
+	prov, _ := orgProvisioner(cfg, lookup, cred)
+	calls := wiringCalls(prov, life)
+	if err := calls[0].do(); err == nil {
+		t.Fatal("a redirect answer was taken for a token")
+	}
+	probe.Assert(t)
 }

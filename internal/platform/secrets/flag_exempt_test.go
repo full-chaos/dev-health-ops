@@ -29,7 +29,7 @@ func lookupWarnings(t *testing.T, name, value string) string {
 func TestAuthProxyFlagsAreNotRegisteredAsSecrets(t *testing.T) {
 	for _, name := range []string{
 		"AUTH_PROXY_SESSIONS", "AUTH_PROXY_LOCAL_LOGIN", "AUTH_PROXY_CREDENTIALS",
-		"AUTH_PROXY_SOCIAL", "AUTH_PROXY_OIDC", "AUTH_PROXY_SAML",
+		"AUTH_PROXY_SOCIAL", "AUTH_PROXY_OIDC", "AUTH_PROXY_SAML", "AUTH_PROXY_ORG_PROVISIONING",
 	} {
 		if LooksSecret(name) {
 			t.Errorf("%s is a boolean routing flag; LooksSecret must be false", name)

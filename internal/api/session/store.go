@@ -266,8 +266,20 @@ type attemptRow struct {
 
 // attemptByEmail is login_attempts._get_attempt.
 func attemptByEmail(ctx context.Context, tx pgx.Tx, email string) (*attemptRow, error) {
-	rows, err := tx.Query(ctx, `SELECT id, attempt_count, first_attempt_at, locked_until FROM login_attempts
+	return queryAttempt(ctx, tx, `SELECT id, attempt_count, first_attempt_at, locked_until FROM login_attempts
 WHERE lower(email) = $1::text`, email)
+}
+
+// attemptByEmailForUpdate is attemptByEmail holding the row lock until the
+// transaction ends, so concurrent failures for one address serialise.
+func attemptByEmailForUpdate(ctx context.Context, tx pgx.Tx, email string) (*attemptRow, error) {
+	return queryAttempt(ctx, tx, `SELECT id, attempt_count, first_attempt_at, locked_until FROM login_attempts
+WHERE email = $1::text
+FOR UPDATE`, email)
+}
+
+func queryAttempt(ctx context.Context, tx pgx.Tx, query, email string) (*attemptRow, error) {
+	rows, err := tx.Query(ctx, query, email)
 	if err != nil {
 		return nil, err
 	}

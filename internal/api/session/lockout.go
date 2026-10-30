@@ -33,15 +33,20 @@ func (h handlers) checkLockout(ctx context.Context, tx pgx.Tx, email string) (lo
 // recordFailedAttempt is record_failed_attempt.
 func (h handlers) recordFailedAttempt(ctx context.Context, tx pgx.Tx, email string) error {
 	now := h.Now()
-	attempt, err := attemptByEmail(ctx, tx, email)
+	// The row exists before the locked read, so a first failure and
+	// concurrent ones all queue on it instead of racing on UNIQUE(email).
+	if _, err := tx.Exec(ctx, `INSERT INTO login_attempts
+	(id, email, attempt_count, first_attempt_at, locked_until, created_at, updated_at)
+VALUES ($1, $2, 0, NULL, NULL, $3, $3)
+ON CONFLICT (email) DO NOTHING`, h.NewUUID(), email, now.UTC()); err != nil {
+		return err
+	}
+	attempt, err := attemptByEmailForUpdate(ctx, tx, email)
 	if err != nil {
 		return err
 	}
 	if attempt == nil {
-		_, err := tx.Exec(ctx, `INSERT INTO login_attempts
-	(id, email, attempt_count, first_attempt_at, locked_until, created_at, updated_at)
-VALUES ($1, $2, 1, $3, NULL, $3, $3)`, h.NewUUID(), email, now.UTC())
-		return err
+		return pgx.ErrNoRows
 	}
 	if attempt.LockedUntil != nil && attempt.LockedUntil.After(now) {
 		// Only updated_at moves while a lock holds.

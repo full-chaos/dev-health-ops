@@ -57,6 +57,8 @@
           "type": "object",
           "properties": { "preStopSeconds": { "type": "integer", "minimum": 0, "maximum": 600 } }
         },
+        "extraVolumes": { "type": "array" },
+        "extraVolumeMounts": { "type": "array" },
         "sessionIssue": {
           "description": "CHAOS-11217: the Secret and key go-api reads AUTH_SESSION_ISSUE_TOKEN from. Empty secretName keeps the shared Secret.",
           "type": "object",

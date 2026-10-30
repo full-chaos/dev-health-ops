@@ -291,10 +291,12 @@ func TestRowsDeletedBetweenTheSessionAndItsRecord(t *testing.T) {
 		h := newHarness(t, harnessOpts{signup: false})
 		h.recordSignIns()
 		email := uniqueEmail("window")
-		user := h.seedOIDCMember(t, "sub-window", email)
+		// Unique per subtest: an account outlives its harness, and a deleted provider row leaves it a legacy match.
+		subject := "sub-window-" + uuid.NewString()
+		user := h.seedOIDCMember(t, subject, email)
 		h.svc.cfg.Sessions = afterIssue{SessionIssuer: h.sessions, then: func() { then(h, user) }}
 		s := h.start(t)
-		login, failure := h.finish(t, s, h.sign(t, h.claims(s.nonce, "sub-window", email)))
+		login, failure := h.finish(t, s, h.sign(t, h.claims(s.nonce, subject, email)))
 		return h, login, failure
 	}
 	remove := func(t *testing.T, h *harness, sql string, id uuid.UUID) {

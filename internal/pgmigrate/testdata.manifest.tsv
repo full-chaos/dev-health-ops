@@ -10,7 +10,7 @@
 -	header	golden/old_script_heads.json
 -	header	golden/preflight_states.json
 -	header	golden/revisions.json
-88378fcac0aea1bfeecceb2a9fc18137b61a36a6e8dc69d32842517a9eb511f3	hand-written	hand_ddl_ledger.tsv
+332c22c91fa4160363a2bb5ce373703675e81f690f86553faeadd09d72b59c37	hand-written	hand_ddl_ledger.tsv
 2ff6c28492ea448b275d9fcd0611937f82abfd66ae4f22e743d8d528f7d55c1b	go-generated	history_before_squash.txt
 387f283098879f3921d2de27ff07adf06d1dc779323d3f5d4792bc831e79a778	hand-written	postfreeze/duplicate/sql/0163_plant_a.sql
 387f283098879f3921d2de27ff07adf06d1dc779323d3f5d4792bc831e79a778	hand-written	postfreeze/duplicate/sql/0163_plant_b.sql

@@ -223,6 +223,13 @@ func (h *handlers) retryPagerDutyRevocations(ctx context.Context, orgID, credent
 	return h.retryPagerDutyRevocationRows(ctx, orgID, `org_id = $1 AND provider = 'pagerduty' AND credential_name = $2 AND status = 'pending'`, credentialName)
 }
 
+// pagerDutyRevocationClaimSQL is the claim every route sender (disconnect,
+// callback, setup drain) runs: the rows a predicate selects, oldest first, held
+// FOR UPDATE SKIP LOCKED.
+func pagerDutyRevocationClaimSQL(predicate string) string {
+	return `SELECT id, token_encrypted FROM provider_oauth_revocations WHERE ` + predicate + ` ORDER BY created_at FOR UPDATE SKIP LOCKED`
+}
+
 // retryPagerDutyRevocationRows is retryPagerDutyRevocations over the rows a
 // predicate selects ($1 is the organisation, further arguments follow). Every
 // sender, the revocation worker included (internal/jobs/providerrevocation),
@@ -230,7 +237,7 @@ func (h *handlers) retryPagerDutyRevocations(ctx context.Context, orgID, credent
 // so it is skipped, never waited on and sent again, and the answer is
 // incomplete while it is still owed.
 func (h *handlers) retryPagerDutyRevocationRows(ctx context.Context, orgID, predicate string, args ...any) (bool, error) {
-	query := `SELECT id, token_encrypted FROM provider_oauth_revocations WHERE ` + predicate + ` ORDER BY created_at FOR UPDATE SKIP LOCKED`
+	query := pagerDutyRevocationClaimSQL(predicate)
 	args = append([]any{orgID}, args...)
 	tx, err := h.store.Pool.Begin(ctx)
 	if err != nil {

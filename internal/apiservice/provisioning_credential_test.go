@@ -333,11 +333,22 @@ func TestUnsetAndSessionCompatSendTheGoldenRequests(t *testing.T) {
 	}
 	for name, selector := range map[string]map[string]string{"unset": {}, "session_compat": {EnvAuthProvisioningCredential: "session_compat"}} {
 		w := newWiringServer(t)
-		env := map[string]string{sessionissue.EnvToken: testIssueToken(t)}
+		token := testIssueToken(t)
+		env := map[string]string{sessionissue.EnvToken: token}
 		for k, v := range selector {
 			env[k] = v
 		}
 		got := w.runAll(t, provisioningOn(t, w.URL), env)
+		w.mu.Lock()
+		if len(w.auths) != 10 {
+			t.Errorf("%s: %d provisioning requests, want 10", name, len(w.auths))
+		}
+		for i, auth := range w.auths {
+			if len(auth) != 1 || auth[0] != "Bearer "+token {
+				t.Errorf("%s: request %d Authorization is not exactly the AUTH_SESSION_ISSUE_TOKEN value", name, i)
+			}
+		}
+		w.mu.Unlock()
 		gotJSON, _ := json.Marshal(got)
 		wantJSON, _ := json.Marshal(want)
 		if string(gotJSON) != string(wantJSON) {

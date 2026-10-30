@@ -117,7 +117,21 @@ func (r provisionRow) Scan(dest ...any) error {
 	return scanValues(r.values, dest)
 }
 
+// zeroFill as a row's only value scans the zero value into every target and
+// provTarget into every uuid.UUID: a row whose columns the test does not read.
+type zeroFill struct{}
+
 func scanValues(values, dest []any) error {
+	if len(values) == 1 && values[0] == (zeroFill{}) {
+		for _, target := range dest {
+			v := reflect.ValueOf(target).Elem()
+			v.Set(reflect.Zero(v.Type()))
+			if id, ok := target.(*uuid.UUID); ok {
+				*id = provTarget
+			}
+		}
+		return nil
+	}
 	if len(values) != len(dest) {
 		return errProvNoDB
 	}

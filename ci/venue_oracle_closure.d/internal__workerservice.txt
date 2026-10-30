@@ -66,6 +66,7 @@ internal/jobs/metrics/workitemblockers
 internal/jobs/metrics/workitemengine
 internal/jobs/metrics/workitemmetrics
 internal/jobs/operational
+internal/jobs/providerrevocation
 internal/jobs/providerunit
 internal/jobs/report
 internal/jobs/synccoverage

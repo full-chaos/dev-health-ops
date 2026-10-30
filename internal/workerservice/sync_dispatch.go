@@ -915,6 +915,17 @@ func buildSyncCoordinatorWorker(
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	handlers = append(handlers, teamRepoOwnershipDerivation)
+	// CHAOS-12010: the pending provider OAuth revocation rows no route sends.
+	providerRevocations, err := registerProviderRevocationsWorker(
+		cfg, registry, postgresDatabase, credentialCipher, observer, logger, workers,
+	)
+	if err != nil {
+		closeClickHouse()
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
+	if providerRevocations != nil {
+		handlers = append(handlers, *providerRevocations)
+	}
 	return workerFamily{
 		handlers: handlers,
 		queues:   queues,

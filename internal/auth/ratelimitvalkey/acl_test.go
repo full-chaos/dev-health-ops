@@ -90,8 +90,21 @@ func TestTheAclCommandsAreExactlyTheOnesTheCodeCalls(t *testing.T) {
 			used[strings.ToLower(m[1])] = true
 		}
 	}
+	// The revision feed under the same login (CHAOS-10983): the commands inside its script, and the subscriber's SUBSCRIBE.
+	// The catch-up read of the hash (HGETALL) runs under this login too, scoped by a selector to the one hash. The status
+	// read (INFO) and the fence's reads belong to the restore fence's own login, not to this one.
+	for _, m := range regexp.MustCompile(`redis\.call\('(\w+)'`).FindAllStringSubmatch(read("../revisionfeed/sink.go"), -1) {
+		used[strings.ToLower(m[1])] = true
+	}
+	if regexp.MustCompile(`\.B\(\)\.Subscribe\(\)`).MatchString(read("../revisionfeed/client.go")) {
+		used["subscribe"] = true
+	}
+	if regexp.MustCompile(`\.B\(\)\.Hgetall\(\)`).MatchString(read("../revisionfeed/client.go")) {
+		used["hgetall"] = true
+	}
 	granted := map[string]bool{}
 	for _, token := range strings.Fields(ACLRules) {
+		token = strings.TrimSuffix(token, ")")
 		if strings.HasPrefix(token, "+") {
 			granted[strings.TrimPrefix(token, "+")] = true
 		}
@@ -106,7 +119,7 @@ func TestTheAclCommandsAreExactlyTheOnesTheCodeCalls(t *testing.T) {
 			t.Errorf("the rule grants %q and nothing in the code calls it", command)
 		}
 	}
-	if len(used) != 8 {
-		t.Errorf("%d commands found in the code (%v), want 8: a parser that reads less must not pass", len(used), used)
+	if len(used) != 13 {
+		t.Errorf("%d commands found in the code (%v), want 13: a parser that reads less must not pass", len(used), used)
 	}
 }

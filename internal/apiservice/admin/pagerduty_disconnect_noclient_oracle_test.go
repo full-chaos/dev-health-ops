@@ -33,6 +33,12 @@ import (
 // line with none of them sharing it.
 const pagerDutyDisconnectUnconfiguredGoldenDigest = "0f0082dda881b4fe43e504ede265ca8a4337559bb0272610f424e25e839683ae"
 
+// pagerDutyDisconnectUnconfiguredGoPinDigest pins Go's answer to the one request whose Python answer
+// pagerDutyDisconnectOwedRuling retired.
+const pagerDutyDisconnectUnconfiguredGoPinDigest = "986c6d37974b497bae3b6d171358b8f51cd259872fa093312e93ae113328dbae"
+
+const pagerDutyDisconnectOwedRuling = "D6501 P2a: a disconnect without a client id answers pending retry while a revocation of the name is owed"
+
 func TestPagerDutyDisconnectWithoutClientIDVenueOracle(t *testing.T) {
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, pagerDutyGolden("disconnect_noclient", "TestPagerDutyDisconnectWithoutClientIDVenueOracle", pagerDutyDisconnectUnconfiguredGoldenDigest))
@@ -131,7 +137,18 @@ VALUES ($1, 'pagerduty', 'default', 'garbage-not-fernet', 1, now(), now(), false
 		// set so a plane that tried to revoke anyway would reach the fake.
 		deps.PagerDuty = providerfoundation.PagerDutyRevokeConfig{RevokeURL: fakeServer.URL}
 	})
-	t.Log(venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{Golden: golden}))
+	// D6501 P2a: once the first disconnect queued a revocation it could not send, Go answers the repeat disconnect
+	// "pending retry" (503) while the row is owed; Python queued nothing and answers 200. The Python answer is
+	// retired and Go's is pinned.
+	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/pagerduty/disconnect_noclient.go-pin.json", SHA256: pagerDutyDisconnectUnconfiguredGoPinDigest, Ruling: pagerDutyDisconnectOwedRuling})
+	t.Log(venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
+		Golden: golden,
+		Pin:    pin,
+		Retire: func(request venueoracle.Request) bool {
+			return request.Name == "W disconnect again once nothing is stored"
+		},
+	}))
+	pin.Finish(t)
 
 	rows := func(db, query string) string {
 		t.Helper()

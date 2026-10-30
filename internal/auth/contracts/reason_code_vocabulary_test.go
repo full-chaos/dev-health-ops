@@ -265,6 +265,7 @@ var approvedAuditReasonCodes = []string{
 	"invite_accepted",
 	"invite_revoked",
 	"restore_fence_bootstrap",
+	"workload_enabled",
 }
 
 func TestTheVocabularyFileIsExactlyTheApprovedLists(t *testing.T) {

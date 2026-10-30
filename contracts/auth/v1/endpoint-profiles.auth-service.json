@@ -824,7 +824,7 @@
       ],
       "classification": "protected",
       "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; the organization's status and aggregate revision are read live, in one statement, on every call.",
-      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, a go-api workload token included (the route is outside the workload per-operation set), is the same 401 error.v1 invalid_credentials; a body that is not exactly one canonical organization_id is 400 malformed; an organization that does not exist is 404 organization_not_found, named to any holder of the service credential; a store failure is 503 store_unavailable. The answer is the organization_id, its status and its revision read in one statement. The route writes nothing and no audit row.",
+      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials, and so is a go-api workload token with a well-formed body (the route is outside the workload per-operation set); a body that is not exactly one canonical organization_id is 400 malformed, a workload token's included (admit reads the body before the route refuses the workload); an organization that does not exist is 404 organization_not_found, named to any holder of the service credential; a store failure is 503 store_unavailable. The answer is the organization_id, its status and its revision read in one statement. The route writes nothing and no audit row.",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /internal/v1/organizations/state [dev-health-auth-service @api]",

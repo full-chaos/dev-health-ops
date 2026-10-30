@@ -197,3 +197,26 @@ func TestDecideEnableRefusesWhileABootstrapValueIsLive(t *testing.T) {
 		t.Errorf("outcomeLabel(ErrEnableLiveBootstrap) = %q, want taken", got)
 	}
 }
+
+// TestAPrincipalOnlyEnableStillWritesItsAuditEvent: when only the principal
+// row changes, the one auth.workload.enabled event is still written with its
+// actor and action, and it carries no change fields of the workload row.
+func TestAPrincipalOnlyEnableStillWritesItsAuditEvent(t *testing.T) {
+	s := &Store{}
+	id, operator := uuid.New(), uuid.New()
+	ev := s.enableAudit(EnablePlan{PrincipalID: id, PrincipalDisabled: true, EnablePrincipal: true}, EnableInput{Operator: operator, EnablePrincipal: true})
+	if ev.EventType != "auth.workload.enabled" || ev.Attributes["reason_code"] != "workload_enabled" {
+		t.Fatalf("event %q reason %v, want auth.workload.enabled / workload_enabled", ev.EventType, ev.Attributes["reason_code"])
+	}
+	if ev.ActorPrincipalID == nil || *ev.ActorPrincipalID != operator.String() {
+		t.Fatalf("actor %v, want the operator", ev.ActorPrincipalID)
+	}
+	for _, key := range []string{"changed_fields", "previous_status", "new_status"} {
+		if _, ok := ev.Attributes[key]; ok {
+			t.Errorf("a principal-only enable carries %s = %v", key, ev.Attributes[key])
+		}
+	}
+	if ev.Attributes["principal_enabled"] != "true" || ev.Attributes["principal_id"] != id.String() {
+		t.Fatalf("principal attributes %v", ev.Attributes)
+	}
+}

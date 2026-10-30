@@ -430,3 +430,29 @@ func TestEnableRefusesWhileABootstrapValueIsLiveAndRevokeWhileDisabledOpensIt(t 
 		}
 	}
 }
+
+// TestAPrincipalOnlyEnableWritesItsAuditEventWithNoChangeFields: the row was
+// not disabled, so the one audit row has no change fields of the workload
+// row, but it exists, with the operator as actor and the enable action.
+func TestAPrincipalOnlyEnableWritesItsAuditEventWithNoChangeFields(t *testing.T) {
+	e := getEnv(t)
+	ctx := ctxT(t)
+	n, principal := registerWorkload(t, e, []string{"auth-service"})
+	operator := newPrincipal(t, e, "service_account", false)
+	disablePrincipalOnly(t, e, principal)
+	if _, err := e.writer.EnableWorkload(ctx, n, EnableInput{Operator: operator, EnablePrincipal: true}); err != nil {
+		t.Fatal(err)
+	}
+	rows := enableAuditRows(t, e, principal)
+	if len(rows) != 1 {
+		t.Fatalf("auth.workload.enabled rows = %d, want 1", len(rows))
+	}
+	if rows[0].actor == nil || *rows[0].actor != operator || rows[0].attributes["reason_code"] != "workload_enabled" {
+		t.Fatalf("audit row actor %v reason %v", rows[0].actor, rows[0].attributes["reason_code"])
+	}
+	for _, key := range []string{"changed_fields", "previous_status", "new_status"} {
+		if _, ok := rows[0].attributes[key]; ok {
+			t.Errorf("the principal-only audit row carries %s", key)
+		}
+	}
+}

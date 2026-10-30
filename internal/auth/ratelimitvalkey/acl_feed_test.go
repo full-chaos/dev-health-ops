@@ -30,7 +30,7 @@ func TestTheAclRuleScopesTheFeedToTheExistingPrefixes(t *testing.T) {
 	if !ok || selector != "~dho:rl:auth_svc_rev_hwm +hgetall)" || strings.Contains(root, "hgetall") {
 		t.Fatalf("hgetall is not confined to a selector on the hwm hash: %s", ACLRules)
 	}
-	for _, forbidden := range []string{"&*", "allchannels", "+psubscribe", "+hscan", "+hdel", "+del", "+unlink", "+expire", "+config", "+@pubsub", "+@hash", "+evalsha", "+script"} {
+	for _, forbidden := range []string{"&*", "allchannels", "+psubscribe", "+hscan", "+info", "+config", "+hdel", "+del", "+unlink", "+expire", "+config", "+@pubsub", "+@hash", "+evalsha", "+script"} {
 		if strings.Contains(ACLRules, forbidden) {
 			t.Errorf("the rule grants %s", forbidden)
 		}

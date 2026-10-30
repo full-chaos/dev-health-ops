@@ -46,10 +46,10 @@ func TestProviderUserIDClassesAnswerLikeGoAPI(t *testing.T) {
 	}{
 		{GitHub, "absent", "-", 400}, {GitHub, "null", "null", 400}, {GitHub, "empty string", `""`, 400},
 		{GitHub, "float", "1.5", 401}, {GitHub, "negative", "-1", 401}, {GitHub, "exponent", "1e3", 401},
-		{GitHub, "text", `"abc"`, 401}, {GitHub, "boolean", "true", 401}, {GitHub, "leading zero", "01", 401},
+		{GitHub, "text", `"abc"`, 401}, {GitHub, "boolean", "true", 401}, {GitHub, "leading zero (not JSON, go-api 500)", "01", 500},
 		{GitLab, "absent", "-", 400}, {GitLab, "null", "null", 400}, {GitLab, "empty string", `""`, 400},
 		{GitLab, "float", "1.5", 401}, {GitLab, "negative", "-1", 401}, {GitLab, "exponent", "1e3", 401},
-		{GitLab, "text", `"abc"`, 401}, {GitLab, "boolean", "true", 401}, {GitLab, "leading zero", "01", 401},
+		{GitLab, "text", `"abc"`, 401}, {GitLab, "boolean", "true", 401}, {GitLab, "leading zero (not JSON, go-api 500)", "01", 500},
 		{Google, "absent", "-", 400}, {Google, "null", "null", 400}, {Google, "empty string", `""`, 400},
 		{Google, "leading space", `" g1"`, 400}, {Google, "trailing space", `"g1 "`, 400},
 		{Google, "control character", `"g\u00001"`, 400}, {Google, "over 1024 bytes", long, 400},

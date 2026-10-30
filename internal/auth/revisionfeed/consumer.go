@@ -20,7 +20,9 @@ import (
 
 // Invalidator is what a cache gives the consumer. Invalidate evicts what the cache holds for one aggregate (a new
 // revision, or a gap: a resync); InvalidateAll evicts everything. Both only evict: they are idempotent and may be
-// called twice for one revision.
+// called twice for one revision. Invalidate at revision N covers EVERY revision <= N of that aggregate: the feed is a
+// high-water mark per aggregate, so a replica that reconnects reaches the latest revision and the revisions in between are
+// covered by the invalidation at the latest, not replayed.
 type Invalidator interface {
 	Invalidate(ctx context.Context, aggregateType, aggregateID string, revision int64)
 	InvalidateAll(ctx context.Context)

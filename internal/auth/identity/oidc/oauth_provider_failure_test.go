@@ -33,6 +33,8 @@ type providerCase struct {
 	noToken     bool
 	noID        bool
 	tokenOwner  string // "" = the client
+	infoStatus  int    // the token info endpoint (no go-api twin); 0 = 200
+	userBody    string // a raw profile body; "" = the JSON profile
 }
 
 func runProviderCase(t *testing.T, c providerCase, failures ssoaudit.ProviderFailure, denials DenialAudit) (refusal, StoredProvider, *Error) {
@@ -58,12 +60,17 @@ func runProviderCase(t *testing.T, c providerCase, failures ssoaudit.ProviderFai
 		owner = "client-1"
 	}
 	mux.HandleFunc("GET /oauth/token/info", func(w http.ResponseWriter, _ *http.Request) {
-		reply(w, 0, map[string]any{"resource_owner_id": 7, "application": map[string]any{"uid": owner}})
+		reply(w, c.infoStatus, map[string]any{"resource_owner_id": 7, "application": map[string]any{"uid": owner}})
 	})
 	mux.HandleFunc("GET /api/v4/user", func(w http.ResponseWriter, _ *http.Request) {
 		user := map[string]any{"id": 7, "username": "u", "name": "U", "email": "u@example.test", "confirmed_at": "2026-01-01T00:00:00Z"}
 		if c.noID {
 			delete(user, "id")
+		}
+		if c.userBody != "" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(c.userBody))
+			return
 		}
 		reply(w, c.userStatus, user)
 	})
@@ -100,20 +107,20 @@ func runProviderCase(t *testing.T, c providerCase, failures ssoaudit.ProviderFai
 	return refusalOf(t, failure), row, failure
 }
 
-// A provider error of the OAuth callback (go-api's recordSSOFailure, protocol oauth, no stage) records the failure
-// once before it answers, with the fixed text of its reason, naming the admitted provider and organization; the
-// answer is unchanged.
+// A provider error of the OAuth callback that go-api records (recordSSOFailure, protocol oauth, no stage: a failed
+// token exchange, and a profile request that fails in transport or with a non-2xx status) records the failure once
+// before it answers, with the fixed text of its reason, naming the admitted provider and organization; the answer is
+// unchanged.
 func TestOAuthProviderErrorsRecordTheProviderFailure(t *testing.T) {
 	for name, tc := range map[string]struct {
 		c       providerCase
 		message string
 	}{
-		"token exchange refused":  {providerCase{tokenStatus: http.StatusBadRequest}, "OAuth token exchange failed"},
-		"token exchange 5xx":      {providerCase{tokenStatus: http.StatusBadGateway}, "OAuth token exchange failed"},
-		"no access token":         {providerCase{noToken: true}, "OAuth token exchange failed"},
-		"profile fetch 5xx":       {providerCase{userStatus: http.StatusBadGateway}, "OAuth userinfo request failed"},
-		"profile fetch refused":   {providerCase{userStatus: http.StatusUnauthorized}, "OAuth userinfo request failed"},
-		"token of another client": {providerCase{tokenOwner: "client-2"}, "OAuth userinfo request failed"},
+		"token exchange refused": {providerCase{tokenStatus: http.StatusBadRequest}, "OAuth token exchange failed"},
+		"token exchange 5xx":     {providerCase{tokenStatus: http.StatusBadGateway}, "OAuth token exchange failed"},
+		"no access token":        {providerCase{noToken: true}, "OAuth token exchange failed"},
+		"profile fetch 5xx":      {providerCase{userStatus: http.StatusBadGateway}, "OAuth userinfo request failed"},
+		"profile fetch refused":  {providerCase{userStatus: http.StatusUnauthorized}, "OAuth userinfo request failed"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			without, _, _ := runProviderCase(t, tc.c, nil, nil)
@@ -131,10 +138,18 @@ func TestOAuthProviderErrorsRecordTheProviderFailure(t *testing.T) {
 	}
 }
 
-// The profile without an id is go-api's provider_profile denial row, not a provider failure; a sign-in that
-// succeeds records nothing.
+// Only where go-api records: the profile without an id is go-api's provider_profile denial row; a token of another
+// client and a failed token info request are checks go-api does not make; a profile body that is not JSON is go-api's
+// bare 500 (oauthprovider ErrUnexpected), recorded nowhere; a sign-in that succeeds records nothing.
 func TestOAuthOnlyProviderErrorsRecordTheProviderFailure(t *testing.T) {
-	for name, c := range map[string]providerCase{"profile without an id": {noID: true}, "success": {}} {
+	for name, c := range map[string]providerCase{
+		"profile without an id":   {noID: true},
+		"token of another client": {tokenOwner: "client-2"},
+		"token info 5xx":          {infoStatus: http.StatusBadGateway},
+		"token info refused":      {infoStatus: http.StatusUnauthorized},
+		"profile body not JSON":   {userBody: "<html>"},
+		"success":                 {},
+	} {
 		failures := &recordedFailures{}
 		runProviderCase(t, c, failures, &recordedDenials{})
 		if len(failures.rows) != 0 {

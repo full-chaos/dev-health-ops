@@ -146,3 +146,23 @@ func TestOAuthProviderFailureRecordWriteFailureIsThe500(t *testing.T) {
 		t.Fatalf("provider %+v, want untouched", got)
 	}
 }
+
+// A token issued to another client is auth-service's own check (go-api's profile fetch makes no such check, so go-api
+// records nothing there): the refusal answers as before and writes nothing to sso_providers or audit_logs.
+func TestOAuthAudienceRefusalRecordsNothing(t *testing.T) {
+	h := newHarness(t, harnessOpts{signup: true})
+	provider, client := h.seedOAuthProvider(t, h.orgID, "oauth_gitlab", nil)
+	h.idp.oauth.mu.Lock()
+	h.idp.oauth.tokenClient = "client-of-another-app"
+	h.idp.oauth.mu.Unlock()
+	before := h.snapshot(t)
+	_, failure := h.finishOAuth(t, provider, client, h.startOAuth(t, provider), fakeAccountWith(uniqueEmail("aud"), true), true)
+	wantDenied(t, failure, http.StatusBadRequest, ReasonAudience)
+	wantUnchanged(t, h, before)
+	if got := h.providerRecord(t, provider); got.status != "active" || got.lastError != "<null>" {
+		t.Fatalf("provider %+v, want untouched", got)
+	}
+	if got := h.auditRows(t, `resource_id = $1`, provider.String()); len(got) != 0 {
+		t.Fatalf("audit rows %+v, want none", got)
+	}
+}

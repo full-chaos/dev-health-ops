@@ -7,13 +7,10 @@
 package orgreactivate
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -21,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 )
 
@@ -31,11 +29,6 @@ const (
 	SuspendPath = "/internal/v1/organizations/suspend"
 	// StatePath is the organization state read route on auth-service's API listener.
 	StatePath = "/internal/v1/organizations/state"
-)
-
-const (
-	maxAnswerBytes = 64 << 10
-	defaultTimeout = 10 * time.Second
 )
 
 var (
@@ -72,11 +65,11 @@ type StateReader interface {
 	State(ctx context.Context, orgID uuid.UUID) (State, error)
 }
 
-// Client calls the reactivate and suspend routes of one auth-service.
+// Client calls the reactivate and suspend routes of one auth-service over the
+// shared provisioning transport (authprovision.Core).
 type Client struct {
-	origin string
-	token  string
-	http   *http.Client
+	core *authprovision.Core
+	http *http.Client
 }
 
 // New builds a Client for base (AUTH_PROXY_URL's origin) and token. It refuses
@@ -88,25 +81,11 @@ func New(base *url.URL, token string, timeout time.Duration) (*Client, error) {
 	if !sessionissue.ValidToken(token) {
 		return nil, fmt.Errorf("%s must be an auth-session-issuer service credential (svc_authsess_...)", sessionissue.EnvToken)
 	}
-	if timeout <= 0 {
-		timeout = defaultTimeout
+	core, err := authprovision.NewCore(base, token, timeout)
+	if err != nil {
+		return nil, err
 	}
-	origin := url.URL{Scheme: base.Scheme, Host: base.Host}
-	transport := &http.Transport{
-		Proxy:                 nil,
-		DialContext:           (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
-		MaxIdleConns:          4,
-		MaxIdleConnsPerHost:   4,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   5 * time.Second,
-		ExpectContinueTimeout: time.Second,
-		ForceAttemptHTTP2:     true,
-	}
-	return &Client{origin: origin.String(), token: token, http: &http.Client{
-		Transport:     transport,
-		Timeout:       timeout,
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}}, nil
+	return &Client{core: core, http: core.HTTP()}, nil
 }
 
 type request struct {
@@ -148,17 +127,14 @@ func (c *Client) Suspend(ctx context.Context, orgID, actor uuid.UUID, ifRevision
 
 // State reads orgID's status and aggregate revision from auth-service in one call.
 func (c *Client) State(ctx context.Context, orgID uuid.UUID) (State, error) {
-	raw, err := json.Marshal(stateRequest{OrganizationID: orgID.String()})
-	if err != nil {
-		return State{}, fmt.Errorf("%w: encoding the request", ErrUnavailable)
-	}
-	body, err := c.exchange(ctx, StatePath, raw, false)
-	if err != nil {
-		return State{}, err
-	}
 	var got stateAnswer
-	if err := json.Unmarshal(body, &got); err != nil {
-		return State{}, fmt.Errorf("%w: answer is not JSON", ErrUnavailable)
+	err := c.core.Post(ctx, StatePath, stateRequest{OrganizationID: orgID.String()}, &got)
+	var refused *authprovision.Refused
+	switch {
+	case errors.As(err, &refused):
+		return State{}, fmt.Errorf("%w: status %d", ErrRefused, refused.Status)
+	case err != nil:
+		return State{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	revision, ok := parseRevision(got.Revision)
 	if got.OrganizationID != orgID.String() || (got.Status != "active" && got.Status != "suspended") || !ok {
@@ -181,51 +157,19 @@ func parseRevision(raw json.RawMessage) (int64, bool) {
 }
 
 func (c *Client) post(ctx context.Context, path string, orgID, actor uuid.UUID, wantStatus string, ifRevision *int64) error {
-	raw, err := json.Marshal(request{OrganizationID: orgID.String(), ActorPrincipalID: actor.String(), IfRevision: ifRevision})
-	if err != nil {
-		return fmt.Errorf("%w: encoding the request", ErrUnavailable)
-	}
-	body, err := c.exchange(ctx, path, raw, ifRevision != nil)
-	if err != nil {
-		return err
-	}
 	var got answer
-	if err := json.Unmarshal(body, &got); err != nil {
-		return fmt.Errorf("%w: answer is not JSON", ErrUnavailable)
-	}
-	if got.OrganizationID != orgID.String() || got.Status != wantStatus {
+	err := c.core.Post(ctx, path, request{OrganizationID: orgID.String(), ActorPrincipalID: actor.String(), IfRevision: ifRevision}, &got)
+	var refused *authprovision.Refused
+	switch {
+	case errors.As(err, &refused):
+		if refused.Status == http.StatusConflict && ifRevision != nil {
+			return fmt.Errorf("%w: status %d", ErrStateChanged, refused.Status)
+		}
+		return fmt.Errorf("%w: status %d", ErrRefused, refused.Status)
+	case err != nil:
+		return fmt.Errorf("%w: %w", ErrUnavailable, err)
+	case got.OrganizationID != orgID.String() || got.Status != wantStatus:
 		return fmt.Errorf("%w: answer is not the organization %s", ErrUnavailable, wantStatus)
 	}
 	return nil
-}
-
-// exchange posts raw to path and returns the 200 answer body. A 409 is ErrStateChanged when conflictIsStale (a revision
-// was sent), else a refusal like any 4xx.
-func (c *Client) exchange(ctx context.Context, path string, raw []byte, conflictIsStale bool) ([]byte, error) {
-	out, err := http.NewRequestWithContext(ctx, http.MethodPost, c.origin+path, bytes.NewReader(raw))
-	if err != nil {
-		return nil, fmt.Errorf("%w: building the request", ErrUnavailable)
-	}
-	out.Header.Set("Authorization", "Bearer "+c.token)
-	out.Header.Set("Content-Type", "application/json")
-	out.Header.Set("Accept", "application/json")
-	response, err := c.http.Do(out)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrUnavailable, errors.Unwrap(err))
-	}
-	defer response.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(response.Body, maxAnswerBytes+1))
-	switch {
-	case conflictIsStale && response.StatusCode == http.StatusConflict:
-		return nil, fmt.Errorf("%w: status %d", ErrStateChanged, response.StatusCode)
-	case response.StatusCode >= 400 && response.StatusCode < 500:
-		return nil, fmt.Errorf("%w: status %d", ErrRefused, response.StatusCode)
-	case response.StatusCode != http.StatusOK:
-		return nil, fmt.Errorf("%w: status %d", ErrUnavailable, response.StatusCode)
-	case err != nil:
-		return nil, fmt.Errorf("%w: reading the answer", ErrUnavailable)
-	case len(body) > maxAnswerBytes:
-		return nil, fmt.Errorf("%w: answer over %d bytes", ErrUnavailable, maxAnswerBytes)
-	}
-	return body, nil
 }

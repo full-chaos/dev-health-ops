@@ -21,6 +21,7 @@ import (
 	valkeygo "github.com/valkey-io/valkey-go"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/audit"
+	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
 	"github.com/full-chaos/dev-health-ops/internal/api/orgreactivate"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
@@ -83,6 +84,10 @@ type Deps struct {
 	// route (AUTH_PROXY_ORG_PROVISIONING). Nil leaves PATCH is_active as it
 	// was: public.organizations only, no auth call.
 	OrgReactivator orgreactivate.Reactivator
+	// OrgProvisioner is the client of auth-service's provisioning routes
+	// (AUTH_PROXY_ORG_PROVISIONING). Nil leaves the member, invite and delete
+	// routes as they were: go-api writes, no auth call.
+	OrgProvisioner authprovision.Provisioner
 	// OrgSuspender is the client of auth-service's organization suspend route, from the same switch; nil leaves PATCH
 	// is_active=false as it was.
 	OrgSuspender orgreactivate.Suspender
@@ -128,6 +133,7 @@ func Routes(deps Deps) []httpapi.Route {
 		inviteLimiter:   httpapi.NewKeyedLimiter(limits, inviteLimit),
 		invites:         deps.Invites,
 		orgReactivator:  deps.OrgReactivator,
+		orgProvision:    deps.OrgProvisioner,
 		orgSuspender:    deps.OrgSuspender,
 		orgState:        deps.OrgState,
 	}
@@ -190,6 +196,9 @@ type handlers struct {
 	// orgReactivator is Deps.OrgReactivator: when set, a PATCH that turns an
 	// inactive organization active reaches auth-service before any write.
 	orgReactivator orgreactivate.Reactivator
+	// orgProvision is Deps.OrgProvisioner: when set, the member, invite and
+	// delete routes ask auth-service and write nothing of their own.
+	orgProvision authprovision.Provisioner
 	// orgSuspender is Deps.OrgSuspender, the PATCH is_active=false counterpart.
 	orgSuspender orgreactivate.Suspender
 	// orgState is Deps.OrgState: the read whose revision the is_active call sends.

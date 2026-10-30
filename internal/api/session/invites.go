@@ -101,8 +101,22 @@ func (h handlers) acceptInvite(ctx context.Context, tx pgx.Tx, invite *pendingIn
 	// Then the invite row FOR UPDATE (step 4), before the membership check and
 	// INSERT (step 5; its foreign key check holds the organization row): the
 	// organization delete takes the invite rows before the membership rows.
-	if _, err := tx.Exec(ctx, `SELECT 1 FROM org_invites WHERE id = $1::uuid FOR UPDATE`, invite.ID); err != nil {
+	// validateInvite read the row with no lock: an organization delete or a
+	// revoke that committed since is seen here, and refused as validateInvite
+	// refuses it.
+	var status string
+	var expiresAt time.Time
+	err := tx.QueryRow(ctx, `SELECT status, expires_at FROM org_invites WHERE id = $1::uuid FOR UPDATE`, invite.ID).Scan(&status, &expiresAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.UUID{}, errInviteRefused{"Invalid or expired invite"}
+	}
+	if err != nil {
 		return uuid.UUID{}, err
+	}
+	// The expiry is judged now, with the row held: the request may have
+	// waited for the row past the time it started at.
+	if status != "pending" || expiresAt.Before(h.Now()) {
+		return uuid.UUID{}, errInviteRefused{"Invalid or expired invite"}
 	}
 	var member bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM memberships WHERE org_id = $1::uuid AND user_id = $2::uuid)`,
@@ -116,7 +130,7 @@ func (h handlers) acceptInvite(ctx context.Context, tx pgx.Tx, invite *pendingIn
 	if err := insertMembership(ctx, tx, id, userID, invite.OrgID, invite.Role, invite.InvitedByID, now); err != nil {
 		return uuid.UUID{}, err
 	}
-	_, err := tx.Exec(ctx, `UPDATE org_invites SET status = 'accepted', accepted_at = $2, updated_at = $2 WHERE id = $1::uuid`,
+	_, err = tx.Exec(ctx, `UPDATE org_invites SET status = 'accepted', accepted_at = $2, updated_at = $2 WHERE id = $1::uuid`,
 		invite.ID, now.UTC())
 	return id, err
 }
@@ -218,6 +232,14 @@ func (h handlers) commitThenIssue(w http.ResponseWriter, r *http.Request, tx pgx
 	}
 	defer func() { _ = issue.Rollback(context.Background()) }()
 	pair, err := h.issueMembershipTokens(ctx, issue, r, user, membership)
+	if refreshOrgGone(err) {
+		// An organization delete committed after the membership did: the
+		// delete removed the membership, and the token cannot name the
+		// organization.
+		h.Logger.WarnContext(ctx, "api session route refused", "step", "issue tokens", "reason", "organization deleted")
+		refuse(w, http.StatusNotFound, "Organization not found")
+		return
+	}
 	if err != nil {
 		h.fail(w, r, "issue tokens", err)
 		return

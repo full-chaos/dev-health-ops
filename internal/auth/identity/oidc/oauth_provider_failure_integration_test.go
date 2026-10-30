@@ -71,7 +71,7 @@ func TestOAuthProviderErrorsRecordTheFailureAndKeepTheProviderActive(t *testing.
 		"profile fetch 502":      {func(h *harness) { h.idp.oauth.failProfile = true }, "", "OAuth userinfo request failed"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			h := newHarness(t, harnessOpts{signup: true})
+			h := newHarness(t, harnessOpts{signup: false})
 			provider, client := h.seedOAuthProvider(t, h.orgID, "oauth_gitlab", nil)
 			if tc.fail != nil {
 				h.idp.oauth.mu.Lock()

@@ -75,6 +75,8 @@ func goldenAnswer(path string) string {
 		return `{"organization_id":"` + org + `","status":"active"}`
 	case orgreactivate.SuspendPath:
 		return `{"organization_id":"` + org + `","status":"suspended"}`
+	case orgreactivate.StatePath:
+		return `{"organization_id":"` + org + `","status":"active","revision":4}`
 	}
 	return `{}`
 }
@@ -156,13 +158,15 @@ type goldenCall struct {
 type lifecycle interface {
 	orgreactivate.Reactivator
 	orgreactivate.Suspender
+	orgreactivate.StateReader
 }
 
-// goldenCalls are the 9 outgoing verbs with fixed inputs, in a fixed order.
+// goldenCalls are the 10 outgoing verbs with fixed inputs, in a fixed order.
 func goldenCalls(prov authprovision.Provisioner, life lifecycle) []goldenCall {
 	ctx := context.Background()
 	invitedBy := goldenInvitedBy
 	metadata := json.RawMessage(`{"source":"golden"}`)
+	reactivateRevision, suspendRevision := int64(3), int64(5)
 	return []goldenCall{
 		{"memberships_add", func() error {
 			_, err := prov.AddMember(ctx, goldenOrg, goldenPrincipal, goldenActor, "member", &invitedBy)
@@ -185,12 +189,13 @@ func goldenCalls(prov authprovision.Provisioner, life lifecycle) []goldenCall {
 			return err
 		}},
 		{"organizations_deprovision", func() error { return prov.Deprovision(ctx, goldenOrg, goldenActor) }},
-		{"organizations_reactivate", func() error { return life.Reactivate(ctx, goldenOrg, goldenActor) }},
-		{"organizations_suspend", func() error { return life.Suspend(ctx, goldenOrg, goldenActor) }},
+		{"organizations_reactivate", func() error { return life.Reactivate(ctx, goldenOrg, goldenActor, &reactivateRevision) }},
+		{"organizations_suspend", func() error { return life.Suspend(ctx, goldenOrg, goldenActor, &suspendRevision) }},
+		{"organizations_state", func() error { _, err := life.State(ctx, goldenOrg); return err }},
 	}
 }
 
-// goldenVerbs drives the 9 verbs and returns the request each one sent.
+// goldenVerbs drives the 10 verbs and returns the request each one sent.
 func goldenVerbs(t *testing.T, g *goldenServer, prov authprovision.Provisioner, life lifecycle) []goldenRequest {
 	t.Helper()
 	calls := goldenCalls(prov, life)

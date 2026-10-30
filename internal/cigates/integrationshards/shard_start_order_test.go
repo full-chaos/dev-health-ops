@@ -146,8 +146,14 @@ func TestTheSortDoesNotChangeTheLocaleOfTheGoTestChild(t *testing.T) {
 		t.Fatalf("shard %d with a stub go: exit %d: %s%s", shard, r.code, r.stdout, r.stderr)
 	}
 	got := fileLines(dir, "child-locale")
-	if len(got) != 1 || got[0] != callerLocale {
-		t.Errorf("the go test child saw LC_ALL %v, want the caller's %q", got, callerLocale)
+	groups := len(lineValues(r.stdout, "  SHARD-GROUP "))
+	if groups == 0 || len(got) != groups {
+		t.Errorf("the shard plans %d go test group(s) but the stub go saw %d call(s)", groups, len(got))
+	}
+	for i, l := range got {
+		if l != callerLocale {
+			t.Errorf("go test call %d saw LC_ALL %q, want the caller's %q", i+1, l, callerLocale)
+		}
 	}
 	want := lineValues(r.stdout, "  SHARD-RUN ")
 	sort.SliceStable(want, func(i, j int) bool {

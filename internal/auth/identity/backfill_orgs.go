@@ -222,9 +222,9 @@ FROM (SELECT 1) x LEFT JOIN `+s.q+`.memberships m ON m.organization_id = $1 AND 
 	return res, nil
 }
 
-// applyFill sets the fill flags to what the fill transaction changed, not to what the first read planned.
+// applyFill sets the fill flags to what the fill transaction decided and changed, not to what the first read planned.
 func applyFill(res MembershipBackfillResult, changed fillDecision) MembershipBackfillResult {
-	res.InviterSet, res.JoinedSet = changed.Inviter, changed.Joined
+	res.InviterSet, res.JoinedSet, res.InviterUnresolved = changed.Inviter, changed.Joined, changed.Unresolved
 	return res
 }
 
@@ -372,6 +372,13 @@ func fillLockIDs(inviter *uuid.UUID, member uuid.UUID) []uuid.UUID {
 	return ids
 }
 
+// lockedInviterResolved is the only way the fill resolves its inviter: the FOR KEY SHARE read of the principal row
+// returned a user principal. An inviter that appears after that read found nothing is unresolved for this run (no lock
+// is held on it, and writing invited_by would take its lock after the membership row); the next run fills it.
+func lockedInviterResolved(found bool, kind string) bool {
+	return found && kind == "user"
+}
+
 // afterFillRead and afterFillRowLock are test seams: nil in production, assigned only from _test.go files.
 var afterFillRead, afterFillRowLock func(context.Context)
 
@@ -387,15 +394,20 @@ func (s *Store) fillMembership(ctx context.Context, id uuid.UUID, t MembershipBa
 	if afterFillRead != nil {
 		afterFillRead(ctx)
 	}
-	var done fillDecision
+	var done, decided fillDecision
 	ev := fillAudit(t, id, planned)
 	err := audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			resolved := false
 			for _, p := range fillLockIDs(t.InvitedBy, t.UserID) {
-				var locked uuid.UUID
-				err := tx.QueryRow(ctx, `SELECT id FROM `+s.q+`.principals WHERE id = $1 FOR KEY SHARE`, p).Scan(&locked)
+				var kind string
+				err := tx.QueryRow(ctx, `SELECT kind::text FROM `+s.q+`.principals WHERE id = $1 FOR KEY SHARE`, p).Scan(&kind)
+				found := err == nil
 				if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 					return err
+				}
+				if t.InvitedBy != nil && p == *t.InvitedBy {
+					resolved = lockedInviterResolved(found, kind)
 				}
 			}
 			var status string
@@ -412,13 +424,8 @@ func (s *Store) fillMembership(ctx context.Context, id uuid.UUID, t MembershipBa
 			if afterFillRowLock != nil {
 				afterFillRowLock(ctx)
 			}
-			resolved := false
-			if t.InvitedBy != nil {
-				if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM `+s.q+`.principals WHERE id = $1 AND kind = 'user')`, *t.InvitedBy).Scan(&resolved); err != nil {
-					return err
-				}
-			}
 			d := decideFill(status == "active", curInviter, curJoined, t.InvitedBy, resolved, t.JoinedAt)
+			decided = d
 			if !d.Inviter && !d.Joined {
 				return nil
 			}
@@ -439,7 +446,7 @@ WHERE id = $1 AND status = 'active'`, id, inviter, joined)
 			if tag.RowsAffected() != 1 {
 				return errFillRows
 			}
-			done = fillDecision{Inviter: d.Inviter, Joined: d.Joined}
+			done = fillDecision{Inviter: d.Inviter, Joined: d.Joined, Unresolved: d.Unresolved}
 			ev.Attributes["changed_fields"] = fillFields(done)
 			return nil
 		},
@@ -451,7 +458,7 @@ WHERE id = $1 AND status = 'active'`, id, inviter, joined)
 	case err == nil:
 		return done, nil
 	case errors.Is(err, audit.ErrNoStateChange):
-		return fillDecision{}, nil
+		return fillDecision{Unresolved: decided.Unresolved}, nil
 	}
 	return fillDecision{}, s.storeErr(ctx, "fill membership", err)
 }

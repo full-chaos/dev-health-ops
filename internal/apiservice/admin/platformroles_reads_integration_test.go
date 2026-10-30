@@ -60,3 +60,43 @@ func TestAdminSuperuserReadsFollowThePlatformRoleWhileOwned(t *testing.T) {
 		}
 	}
 }
+
+// While owned, a profile-only update (the HTTP PATCH and the dho verb) leaves
+// public users.is_superuser as it was, in both directions: the row it reads
+// carries the auth value, and none of it is written back. Off, the column is
+// written with its own value, unchanged too.
+func TestAdminProfileUpdateLeavesThePublicColumnWhileOwned(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	env := platformroleseam.Start(ctx, t, true)
+	public := func(id uuid.UUID) bool {
+		t.Helper()
+		var superuser bool
+		if err := env.Admin.QueryRow(ctx, `SELECT is_superuser FROM public.users WHERE id = $1`, id).Scan(&superuser); err != nil {
+			t.Fatal(err)
+		}
+		return superuser
+	}
+	caller := &policy.User{UserID: uuid.NewString(), ID: uuid.New(), IsSuperuser: true}
+	for _, owned := range []bool{true, false} {
+		publicOnly := env.User(ctx, t, true, false)
+		assigned := env.User(ctx, t, false, true)
+		store := pgStore{Pool: env.Admin, PlatformRolesOwned: owned, AuthSchema: "auth"}
+		h := &handlers{store: store, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+		operator := Operator{Pool: env.Admin, PlatformRolesOwned: owned, AuthSchema: "auth"}
+		for who, before := range map[uuid.UUID]bool{publicOnly: true, assigned: false} {
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPatch, "/api/v1/admin/users/"+who.String(), nil)
+			request.SetPathValue("user_id", who.String())
+			request = withBody(`{"full_name":"renamed"}`)(request.WithContext(policy.WithUser(request.Context(), caller)))
+			h.updateUser(recorder, request)
+			if recorder.Code != http.StatusOK || public(who) != before {
+				t.Errorf("owned %v: PATCH full_name of %s: status %d %s, public is_superuser %v, want %v", owned, who, recorder.Code, recorder.Body.String(), public(who), before)
+			}
+			id, name := who.String(), "renamed again"
+			if _, err := operator.UpdateUser(ctx, UpdateUserInput{ID: &id, FullName: &name}); err != nil || public(who) != before {
+				t.Errorf("owned %v: dho users update of %s: %v, public is_superuser %v, want %v", owned, who, err, public(who), before)
+			}
+		}
+	}
+}

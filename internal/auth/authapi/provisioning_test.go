@@ -299,7 +299,14 @@ type provFixture struct {
 
 func newProvFixture(t *testing.T) *provFixture {
 	t.Helper()
-	return newProvFixtureWith(t, docWithRow(t, PatternOrgSuspend))
+	return newProvFixtureWith(t, provDoc(t))
+}
+
+// provDoc is the embedded endpoint-profile document with rows for the dark suspend and state routes, so every route
+// case is mounted.
+func provDoc(t *testing.T) []byte {
+	t.Helper()
+	return docWithExtraRow(t, docWithRow(t, PatternOrgSuspend), PatternOrgState)
 }
 
 // docWithRow is the embedded endpoint-profile document with its row for route (if any) replaced by a copy of the
@@ -503,6 +510,9 @@ func routeCases() []routeCase {
 		{opInviteRevoke, PatternInviteRevoke, func(f *provFixture, a uuid.UUID) map[string]any {
 			return map[string]any{"organization_id": f.org.String(), "invite_id": fakeInviteID.String(), "actor_principal_id": a.String()}
 		}, []string{"organization_id", "invite_id", "actor_principal_id"}},
+		{opOrgState, PatternOrgState, func(f *provFixture, _ uuid.UUID) map[string]any {
+			return map[string]any{"organization_id": f.org.String()}
+		}, []string{"organization_id"}},
 	}
 }
 
@@ -573,6 +583,10 @@ func TestProvisioningBodiesAreStrict(t *testing.T) {
 	f := newProvFixture(t)
 	for _, c := range routeCases() {
 		valid := c.body(f, f.super)
+		id := f.super.String()
+		if !strings.Contains(encode(valid), id) {
+			id = f.org.String() // a body with no actor (the state read)
+		}
 		bad := map[string]string{
 			"not an object":   `[]`,
 			"empty":           ``,
@@ -580,7 +594,7 @@ func TestProvisioningBodiesAreStrict(t *testing.T) {
 			"unknown member":  encode(merged(valid, map[string]any{"schema_version": "x"})),
 			"duplicate":       strings.Replace(encode(valid), "{", `{"`+c.required[0]+`":null,`, 1),
 			"over the bound":  encode(merged(valid, map[string]any{c.required[0]: strings.Repeat("a", maxProvisioningBody)})),
-			"upper-case uuid": strings.Replace(encode(valid), `"`+f.super.String()+`"`, `"`+strings.ToUpper(f.super.String())+`"`, 1),
+			"upper-case uuid": strings.Replace(encode(valid), `"`+id+`"`, `"`+strings.ToUpper(id)+`"`, 1),
 		}
 		for _, name := range c.required {
 			bad["missing "+name] = encode(without(valid, name))

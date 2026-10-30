@@ -98,7 +98,7 @@ func TestProvisioningRoutesRefuseUserTokens(t *testing.T) {
 	pool, connects := usertokens.CountingPool(t)
 	f := newProvFixture(t)
 	routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: servicecred.PG{Pool: pool}, Users: f.users, Reader: noRows{},
-		Organizations: f.orgs, Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ProfileRows: docWithRow(t, PatternOrgSuspend),
+		Organizations: f.orgs, Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ProfileRows: provDoc(t),
 		Logger: slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))})
 	if err != nil {
 		t.Fatal(err)
@@ -146,8 +146,8 @@ func TestTheReactivateRouteIsInTheStartupGate(t *testing.T) {
 		}
 		routes++
 	}
-	if routes != 10 {
-		t.Fatalf("%d provisioning routes served, want 10", routes)
+	if routes != 11 {
+		t.Fatalf("%d provisioning routes served, want 11", routes)
 	}
 	for _, line := range strings.Split(f.logs.String(), "\n") {
 		if strings.Contains(line, "not mounted") && !strings.Contains(line, PatternOrgState) {

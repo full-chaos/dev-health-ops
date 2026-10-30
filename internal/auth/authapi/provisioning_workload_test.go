@@ -23,7 +23,7 @@ type provWorkloadFixture struct {
 func newProvWorkloadFixture(t *testing.T) *provWorkloadFixture {
 	t.Helper()
 	w := newWorkloadIssueFixture(t)
-	return &provWorkloadFixture{provFixture: newProvFixtureFor(t, docWithRow(t, PatternOrgSuspend), w.workload), w: w}
+	return &provWorkloadFixture{provFixture: newProvFixtureFor(t, provDoc(t), w.workload), w: w}
 }
 
 // workloadRouteOps are the routes that take the go-api workload token; every
@@ -103,6 +103,12 @@ func TestProvisioningServiceCredentialCallerIsTheCredentialRow(t *testing.T) {
 	for _, c := range routeCases() {
 		if response := f.post(c.path, encode(c.body(f.provFixture, f.super)), nil); response.Code != http.StatusOK {
 			t.Fatalf("%s with the service credential: %d %s", c.op, response.Code, response.Body)
+		}
+		if got, _ := f.uses(c.op); got != 1 {
+			t.Fatalf("%s: compat uses = %d, want 1", c.op, got)
+		}
+		if c.op == opOrgState {
+			continue // a read-only route: no actor, no verb caller, no audit row
 		}
 		caller := callerOf(f.provFixture, c.op)
 		if caller.CredentialID != "cred-1" || caller.Workload != nil || caller.JTI != "" {
@@ -237,7 +243,7 @@ func TestProvisioningRoutesOffTheWorkloadListRefuseTheWorkloadToken(t *testing.T
 		ops = append(ops, c.op)
 	}
 	slices.Sort(ops)
-	if want := []string{opInviteRevoke, opOrgSuspend}; !slices.Equal(ops, want) {
+	if want := []string{opInviteRevoke, opOrgState, opOrgSuspend}; !slices.Equal(ops, want) {
 		t.Fatalf("routes off the workload list = %v, want %v", ops, want)
 	}
 	for _, c := range off {

@@ -74,13 +74,15 @@ type fakeSessions struct {
 	exchanges int
 }
 
-// createdSession is one CreateAudited call.
+// createdSession is one CreateAudited or CreateSupersedingAudited call;
+// predecessor is set only for the second.
 type createdSession struct {
-	principal uuid.UUID
-	org       *uuid.UUID
-	amr       []string
-	event     audit.AuditEvent
-	issued    session.Issued
+	principal   uuid.UUID
+	org         *uuid.UUID
+	amr         []string
+	event       audit.AuditEvent
+	issued      session.Issued
+	predecessor *uuid.UUID
 }
 
 func (f *fakeSessions) RevokeByCredential(_ context.Context, credential contracts.SecretString, actor session.Actor) (bool, error) {
@@ -106,6 +108,18 @@ func (f *fakeSessions) CreateAudited(ctx context.Context, principal uuid.UUID, o
 		Credential: contracts.NewSecretString("dhr1_" + strings.Repeat("c", 43)), ExpiresAt: now.Add(7 * 24 * time.Hour),
 	}
 	f.created = append(f.created, createdSession{principal: principal, org: org, amr: amr, event: event, issued: issued})
+	return issued, nil
+}
+
+func (f *fakeSessions) CreateSupersedingAudited(ctx context.Context, principal uuid.UUID, org *uuid.UUID, amr []string,
+	predecessor uuid.UUID, event audit.AuditEvent) (session.Issued, error) {
+	issued, err := f.CreateAudited(ctx, principal, org, amr, event)
+	if err != nil {
+		return issued, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.created[len(f.created)-1].predecessor = &predecessor
 	return issued, nil
 }
 

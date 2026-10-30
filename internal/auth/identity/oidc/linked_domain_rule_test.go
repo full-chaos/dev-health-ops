@@ -63,7 +63,7 @@ func TestResolveRefusesALinkedIdentityOffTheDomainList(t *testing.T) {
 
 // A linked sign-in with no asserted email is the 400 a new one gets (go-api oidc.go missing-email check).
 func TestResolveRefusesALinkedIdentityWithNoEmail(t *testing.T) {
-	want := refusal{status: http.StatusBadRequest, reason: ReasonMalformed, detail: `{"detail":"Email address is missing from OIDC claims"}`}
+	want := refusal{status: http.StatusBadRequest, reason: ReasonMalformed, detail: `{"detail":"OIDC authentication failed"}`}
 	for _, list := range [][]string{nil, {"example.test"}} {
 		got, ids, _ := resolveWithList(t, "oidc", true, list, profile{EmailVerified: true})
 		if got != want || ids.calls != 0 {

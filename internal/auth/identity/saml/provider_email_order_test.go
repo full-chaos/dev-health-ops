@@ -66,10 +66,30 @@ func postACSEmailWithList(t *testing.T, email string, linked bool, list []string
 // postACSEmailRecorded is postACSEmailWithList with the provider failure seam.
 func postACSEmailRecorded(t *testing.T, email string, linked bool, list []string, failures ssoaudit.ProviderFailure) acsAnswer {
 	t.Helper()
+	return postACSCase(t, acsCase{email: email, linked: linked, list: list, failures: failures})
+}
+
+// acsCase is one post to the ACS handler: the assertion, the account, the provider row and the failure seam.
+type acsCase struct {
+	email    string
+	linked   bool
+	list     []string
+	failures ssoaudit.ProviderFailure
+	provider func(*saml.Provider)
+	response func(*resp)
+	raw      string
+}
+
+func postACSCase(t *testing.T, c acsCase) acsAnswer {
+	t.Helper()
+	email, linked, list, failures := c.email, c.linked, c.list, c.failures
 	idp := newTestIdP(t)
 	p := saml.Provider{
 		ID: uuid.New(), OrgID: uuid.New(), Protocol: "saml", Status: "active", AllowIdPInitiated: true, AutoProvision: true,
 		Config: saml.Config{EntityID: idp.entityID, Certificate: encodeCert(idp)}, AllowedDomains: list,
+	}
+	if c.provider != nil {
+		c.provider(&p)
 	}
 	store := &orderStore{}
 	members := &memberSet{ids: map[uuid.UUID]bool{}}
@@ -89,10 +109,17 @@ func postACSEmailRecorded(t *testing.T, email string, linked bool, list []string
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /saml/{provider_id}/acs", h.ACS)
 	acs := p.ACSURL(refusalBase)
-	posted := b64(idp.response(t, resp{
+	o := resp{
 		nameID: saml.NameID{Value: "user-" + uuid.NewString()}, email: email,
 		destination: strp(acs), recipient: strp(acs), audiences: [][]string{{p.SPEntityID(refusalBase)}},
-	}))
+	}
+	if c.response != nil {
+		c.response(&o)
+	}
+	posted := b64(idp.response(t, o))
+	if c.raw != "" {
+		posted = c.raw
+	}
 	req := httptest.NewRequest(http.MethodPost, "/saml/"+p.ID.String()+"/acs", strings.NewReader(url.Values{"SAMLResponse": {posted}}.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
@@ -39,28 +40,47 @@ func randomText(n int) (string, error) {
 // the session issue route) as auth-service wires them (authruntime
 // compatRoutes), over the auth stores on the runtime role.
 func (e *env) startAuthPlane(ctx context.Context, schema authschema.ValidatedIdentifier, logger *slog.Logger, jwtKey string) error {
-	successor, err := randomText(32)
+	server, err := e.authPlaneOn(e.runtime, schema, logger, jwtKey)
 	if err != nil {
 		return err
 	}
-	sessions, err := session.New(session.Config{Pool: e.runtime, Schema: schema, Logger: logger, UsersOwned: true,
+	e.authServer = server
+	// The same routes on a one-connection pool (AUTH_DATABASE_MAX_CONNS=1 is a
+	// valid setting): a refresh must never need a second connection while its
+	// exchange transaction holds the only one.
+	cfg := e.runtime.Config().Copy()
+	cfg.MaxConns = 1
+	if e.runtimeOne, err = pgxpool.NewWithConfig(ctx, cfg); err != nil {
+		return fmt.Errorf("one-connection pool: %w", err)
+	}
+	closers = append(closers, e.runtimeOne.Close)
+	e.authServerOne, err = e.authPlaneOn(e.runtimeOne, schema, logger, jwtKey)
+	return err
+}
+
+func (e *env) authPlaneOn(pool *pgxpool.Pool, schema authschema.ValidatedIdentifier, logger *slog.Logger, jwtKey string) (*httptest.Server, error) {
+	successor, err := randomText(32)
+	if err != nil {
+		return nil, err
+	}
+	sessions, err := session.New(session.Config{Pool: pool, Schema: schema, Logger: logger, UsersOwned: true,
 		SuccessorKey: contracts.NewSecretString(successor)})
 	if err != nil {
-		return fmt.Errorf("session store: %w", err)
+		return nil, fmt.Errorf("session store: %w", err)
 	}
 	issuer, err := authapi.NewIssuer(jwtKey, "dev-health-ops", "dev-health-api")
 	if err != nil {
-		return fmt.Errorf("issuer: %w", err)
+		return nil, fmt.Errorf("issuer: %w", err)
 	}
 	limitKey, err := randomText(32)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	limits, err := authapi.NewLimits(httpapi.NewMemoryCounters(nil), limitKey)
 	if err != nil {
-		return fmt.Errorf("limits: %w", err)
+		return nil, fmt.Errorf("limits: %w", err)
 	}
-	runtime := e.runtime
+	runtime := pool
 	routes, err := authapi.CompatRoutes(authapi.CompatDeps{
 		Sessions: sessions, Users: authapi.PGUsers{Pool: runtime}, Issuer: issuer, Logger: logger,
 		Projector: e.identity, ServiceCredentials: servicecred.PG{Pool: runtime},
@@ -70,15 +90,15 @@ func (e *env) startAuthPlane(ctx context.Context, schema authschema.ValidatedIde
 		Limits: limits,
 	})
 	if err != nil {
-		return fmt.Errorf("compat routes: %w", err)
+		return nil, fmt.Errorf("compat routes: %w", err)
 	}
 	mux := http.NewServeMux()
 	for _, route := range routes {
 		mux.Handle(route.Method+" "+route.Pattern, route.Handler)
 	}
-	e.authServer = httptest.NewServer(mux)
-	closers = append(closers, e.authServer.Close)
-	return nil
+	server := httptest.NewServer(mux)
+	closers = append(closers, server.Close)
+	return server, nil
 }
 
 // seedIssueClient stores one session issue credential (go-api's
@@ -98,6 +118,13 @@ VALUES ($1, $2, $3, $4, $5::json, now())`, uuid.New(), servicecred.ServiceSessio
 	}
 	base, err := url.Parse(e.authServer.URL)
 	if err != nil {
+		return nil, err
+	}
+	one, err := url.Parse(e.authServerOne.URL)
+	if err != nil {
+		return nil, err
+	}
+	if e.issueOne, err = sessionissue.New(one, token, 5*time.Second); err != nil {
 		return nil, err
 	}
 	return sessionissue.New(base, token, 5*time.Second)

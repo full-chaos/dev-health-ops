@@ -26,6 +26,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/authmail"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/session"
+	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
@@ -60,11 +61,16 @@ type env struct {
 	// issuerServer is go-api's session routes with auth-service owning
 	// sessions (AUTH_PROXY_SESSIONS): the session comes from authServer.
 	issuerServer *httptest.Server
-	signer       *edgetoken.Signer
-	linkSecret   string
-	inviteKey    string
-	root         string
-	goLog        *syncBuffer
+	// authServerOne is authServer's routes over runtimeOne, a one-connection
+	// pool on the runtime role; issueOne is go-api's issue client for it.
+	authServerOne *httptest.Server
+	runtimeOne    *pgxpool.Pool
+	issueOne      *sessionissue.Client
+	signer        *edgetoken.Signer
+	linkSecret    string
+	inviteKey     string
+	root          string
+	goLog         *syncBuffer
 }
 
 var (
@@ -290,6 +296,13 @@ func (s *syncBuffer) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.buf.Write(p)
+}
+
+// contains reports whether go-api's log holds text.
+func (s *syncBuffer) contains(text string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return strings.Contains(s.buf.String(), text)
 }
 
 // deadlockLines are go-api's logged errors that name a deadlock.

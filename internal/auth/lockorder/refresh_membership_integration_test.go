@@ -6,12 +6,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"sort"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 )
 
 // The cells below hold the refresh of an org-scoped session or token to the
@@ -21,12 +26,21 @@ import (
 // and auth-service's when it owns sessions). A superuser keeps refreshing,
 // and a session minted by an invite accept or an onboard join refreshes.
 
-// cut keeps a failure message free of whole token bodies.
-func cut(s string) string {
-	if len(s) > 200 {
-		return s[:200] + "..."
+// shape is a failure message's view of an answer: its status, the keys of
+// its JSON body and the refusal detail; never a token or other value.
+func shape(r response) string {
+	keys := make([]string, 0, len(r.body))
+	for k := range r.body {
+		keys = append(keys, k)
 	}
-	return s
+	sort.Strings(keys)
+	detail := ""
+	if d, ok := r.body["detail"]; ok {
+		if encoded, err := json.Marshal(d); err == nil && len(encoded) <= 120 {
+			detail = " detail=" + string(encoded)
+		}
+	}
+	return fmt.Sprintf("%d keys=%v%s", r.status, keys, detail)
 }
 
 func (e *env) post(ctx context.Context, base, path, bearer string, body any) response {
@@ -70,7 +84,7 @@ func (e *env) join(t *testing.T, ctx context.Context, cell, base string, user, o
 	}
 	refresh, _ := got.body["refresh_token"].(string)
 	if got.status != http.StatusOK || refresh == "" {
-		t.Fatalf("%s: fixture: join answered %d %s", cell, got.status, cut(got.raw))
+		t.Fatalf("%s: fixture: join answered %s", cell, shape(got))
 	}
 	return refresh
 }
@@ -94,14 +108,14 @@ func (e *env) seedSuperuser(t *testing.T, ctx context.Context) uuid.UUID {
 func wantRefreshRefused(t *testing.T, cell string, got response) {
 	t.Helper()
 	if got.status != http.StatusUnauthorized || !strings.Contains(got.raw, "Invalid or expired refresh token") {
-		t.Fatalf("%s: refresh answer: %d %s, want 401 Invalid or expired refresh token", cell, got.status, cut(got.raw))
+		t.Fatalf("%s: refresh answer: %s, want 401 Invalid or expired refresh token", cell, shape(got))
 	}
 }
 
 func wantRefreshOK(t *testing.T, cell string, got response) {
 	t.Helper()
 	if got.status != http.StatusOK {
-		t.Fatalf("%s: refresh answer: %d %s, want 200", cell, got.status, cut(got.raw))
+		t.Fatalf("%s: refresh answer: %s, want 200", cell, shape(got))
 	}
 }
 
@@ -128,7 +142,7 @@ func TestAuthRefreshOfARemovedMemberIsRefusedAndRevoked(t *testing.T) {
 			refresh := e.join(t, ctx, cell, e.issuerServer.URL, user, org, owner, false)
 			removed := e.call(ctx, e.root, http.MethodDelete, "/api/v1/admin/orgs/"+org.String()+"/members/"+user.String(), nil)
 			if removed.status != http.StatusOK {
-				t.Fatalf("%s: fixture: remove_member answered %d %s", cell, removed.status, cut(removed.raw))
+				t.Fatalf("%s: fixture: remove_member answered %s", cell, shape(removed))
 			}
 
 			got := e.refreshAt(ctx, e.authServer.URL, refresh)
@@ -210,7 +224,7 @@ func TestGoAPIMemberRemovalRevokesTheOrgsRefreshTokens(t *testing.T) {
 
 	removed := e.call(ctx, e.root, http.MethodDelete, "/api/v1/admin/orgs/"+org1.String()+"/members/"+user.String(), nil)
 	if removed.status != http.StatusOK {
-		t.Fatalf("%s: remove_member answered %d %s", cell, removed.status, cut(removed.raw))
+		t.Fatalf("%s: fixture: remove_member answered %s", cell, shape(removed))
 	}
 	live := func(org uuid.UUID) string {
 		return e.scalar(t, ctx, `SELECT count(*)::text FROM public.refresh_tokens WHERE user_id = $1 AND org_id = $2 AND revoked_at IS NULL`, user, org)
@@ -221,10 +235,60 @@ func TestGoAPIMemberRemovalRevokesTheOrgsRefreshTokens(t *testing.T) {
 	if got := live(org2); got == "0" {
 		t.Fatalf("%s: removal answer: the other org's refresh tokens were revoked too", cell)
 	}
-	if got := e.refreshAt(ctx, e.server.URL, refresh1); got.status != http.StatusUnauthorized {
-		t.Fatalf("%s: refresh of the removed org's token: %d %s, want 401", cell, got.status, cut(got.raw))
+	// The revoked token of a member who is gone is the not-a-member refusal,
+	// with its audit row, not go-api's reuse answer.
+	wantRefreshRefused(t, cell, e.refreshAt(ctx, e.server.URL, refresh1))
+	if got := e.scalar(t, ctx, `SELECT count(*)::text FROM public.audit_logs WHERE user_id = $1 AND org_id = $2 AND action = 'login_failed'`,
+		user, org1); got != "1" {
+		t.Fatalf("%s: refresh answer: %s login_failed rows for the removed org, want 1", cell, got)
+	}
+	if e.goLog.contains("refresh token reuse detected") {
+		t.Fatalf("%s: refresh answer: a removed member's refresh logged reuse", cell)
 	}
 	wantRefreshOK(t, cell, e.refreshAt(ctx, e.server.URL, refresh2))
+}
+
+// A revoked go-api token keeps the reuse answer (401 "Refresh token reuse
+// detected", the reuse Warn, no login_failed row) when the membership is still
+// there, or when the user is a superuser without one.
+func TestGoAPIRevokedTokenKeepsTheReuseAnswer(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		superuser bool
+	}{{"still a member", false}, {"superuser without a membership", true}} {
+		t.Run(c.name, func(t *testing.T) {
+			cell := "go-api-refresh/revoked/" + c.name
+			e, ctx := getEnv(t), cellContext(t)
+			e.cleanup(t)
+			org, owner := e.seedOrg(t, ctx), e.seedUser(t, ctx)
+			e.add(t, ctx, org, owner, "owner", nil)
+			user := e.seedUser(t, ctx)
+			if c.superuser {
+				user = e.seedSuperuser(t, ctx)
+			}
+			refresh := e.join(t, ctx, cell, e.server.URL, user, org, owner, false)
+			if c.superuser {
+				if _, err := e.admin.Exec(ctx, `DELETE FROM public.memberships WHERE org_id = $1 AND user_id = $2`, org, user); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := e.admin.Exec(ctx, `UPDATE public.refresh_tokens SET revoked_at = now() WHERE user_id = $1 AND org_id = $2 AND revoked_at IS NULL`,
+				user, org); err != nil {
+				t.Fatal(err)
+			}
+			got := e.refreshAt(ctx, e.server.URL, refresh)
+			if got.status != http.StatusUnauthorized || !strings.Contains(got.raw, "Refresh token reuse detected") {
+				t.Fatalf("%s: refresh answer: %s, want 401 Refresh token reuse detected", cell, shape(got))
+			}
+			if !e.goLog.contains("refresh token reuse detected") {
+				t.Fatalf("%s: refresh answer: no reuse Warn logged", cell)
+			}
+			if got := e.scalar(t, ctx, `SELECT count(*)::text FROM public.audit_logs WHERE user_id = $1 AND org_id = $2 AND action = 'login_failed'`,
+				user, org); got != "0" {
+				t.Fatalf("%s: refresh answer: %s login_failed rows, want 0 (the reuse branch writes none)", cell, got)
+			}
+		})
+	}
 }
 
 // No false refusal: a session or token minted right after the membership
@@ -253,4 +317,31 @@ func TestRefreshAfterAJoinIsNotRefused(t *testing.T) {
 			})
 		}
 	}
+}
+
+// On a one-connection pool (AUTH_DATABASE_MAX_CONNS=1) auth-service's refresh
+// of an org-scoped member session ends: the refresh guard's membership read
+// runs on the exchange transaction, never on a second connection.
+func TestAuthRefreshEndsOnAOneConnectionPool(t *testing.T) {
+	const cell = "auth-refresh/one-connection-pool"
+	e, ctx := getEnv(t), cellContext(t)
+	e.cleanup(t)
+	org, owner := e.seedOrg(t, ctx), e.seedUser(t, ctx)
+	e.add(t, ctx, org, owner, "owner", nil)
+	user := e.seedUser(t, ctx)
+	e.add(t, ctx, org, user, "member", nil)
+	pair, err := e.issueOne.Issue(ctx, httptest.NewRequest(http.MethodPost, "/api/v1/auth/accept-invite", nil),
+		sessionissue.Request{PrincipalID: user, OrganizationID: &org, AMR: []string{"pwd"}})
+	if err != nil {
+		t.Fatalf("%s: fixture: session issue: %v", cell, err)
+	}
+	// A wait bound, not a timing assert: a refresh that needs a second
+	// connection never ends, and the bound turns that into a named failure.
+	bounded, cancel := context.WithTimeout(ctx, choreographyBound)
+	defer cancel()
+	got := e.refreshAt(bounded, e.authServerOne.URL, pair.Refresh)
+	if got.status < 0 {
+		t.Fatalf("%s: refresh answer: no answer within %s on a one-connection pool (%s)", cell, choreographyBound, got.raw)
+	}
+	wantRefreshOK(t, cell, got)
 }

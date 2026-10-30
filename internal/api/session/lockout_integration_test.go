@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -192,5 +194,64 @@ func TestRecordFailedAttemptConcurrentNoLostUpdate(t *testing.T) {
 	}
 	if count != k || locked != nil {
 		t.Errorf("count %d locked %v, want count %d and no lock", count, locked, k)
+	}
+}
+
+// clearAfterFirstExec runs onFirstExec right after the first Exec returns.
+type clearAfterFirstExec struct {
+	pgx.Tx
+	onFirstExec func() error
+	fired       bool
+}
+
+func (c *clearAfterFirstExec) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	tag, err := c.Tx.Exec(ctx, sql, args...)
+	if err != nil || c.fired {
+		return tag, err
+	}
+	c.fired = true
+	return tag, c.onFirstExec()
+}
+
+// A successful login (clearAttempts) may commit after the failure's INSERT
+// .. ON CONFLICT and before its next statement. The failure still counts as
+// the first one of a fresh row, and does not error.
+func TestRecordFailedAttemptSurvivesAConcurrentClear(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	pool := startLockoutPool(t, ctx)
+	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	h := handlers{Deps: Deps{Now: func() time.Time { return now }, NewUUID: uuid.New}}
+	const email = "clear-race@example.com"
+	if _, err := pool.Exec(ctx, `INSERT INTO login_attempts VALUES ($1, $2, 2, $3, NULL, $3, $3)`,
+		uuid.New(), email, now.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapped := &clearAfterFirstExec{Tx: tx, onFirstExec: func() error {
+		_, err := pool.Exec(ctx, `DELETE FROM login_attempts WHERE email = $1`, email)
+		return err
+	}}
+	if err := h.recordFailedAttempt(ctx, wrapped, email); err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatalf("recordFailedAttempt: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var rows, count int
+	var first, locked *time.Time
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM login_attempts WHERE email = $1`, email).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT attempt_count, first_attempt_at, locked_until FROM login_attempts WHERE email = $1`,
+		email).Scan(&count, &first, &locked); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 1 || count != 1 || first == nil || !first.Equal(now) || locked != nil {
+		t.Errorf("rows %d count %d first %v locked %v, want 1 row, count 1, first %v, no lock", rows, count, first, locked, now)
 	}
 }

@@ -4,17 +4,21 @@ package authapi
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -250,5 +254,107 @@ func TestSwitchRefusesAnotherPrincipalsSession(t *testing.T) {
 	}
 	if n := l.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events`); n != audits {
 		t.Fatalf("%d audit rows written by a refused switch", n-audits)
+	}
+}
+
+// An expired predecessor (its absolute session lifetime passed) refuses the
+// switch like a revoked one: 401 and nothing written.
+func TestSwitchRefusesAnExpiredPredecessor(t *testing.T) {
+	ctx := context.Background()
+	l := newSwitchLive(t, ctx)
+	schema, err := authschema.NewValidatedIdentifier("auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatal(err)
+	}
+	short, err := session.New(session.Config{Pool: l.admin, Schema: schema, SessionLifetime: time.Second,
+		SuccessorKey: contracts.NewSecretString(base64.RawURLEncoding.EncodeToString(key))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	org := l.orgA
+	issued, err := short.Create(ctx, l.user, &org, []string{"pwd"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expired := issued.Session.ID
+	time.Sleep(1500 * time.Millisecond)
+	if current, err := l.store.Current(ctx, expired); err != nil || current.ExpiresAt.After(time.Now()) {
+		t.Fatalf("the predecessor is not expired yet: %+v %v", current, err)
+	}
+	sessions := l.count(t, ctx, `SELECT count(*) FROM auth.sessions`)
+	audits := l.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events`)
+	if status, _ := l.issue(t, l.orgB, &expired); status != http.StatusUnauthorized {
+		t.Fatalf("switch from an expired session: %d, want 401", status)
+	}
+	if n := l.count(t, ctx, `SELECT count(*) FROM auth.sessions`); n != sessions {
+		t.Fatalf("%d sessions created by a refused switch", n-sessions)
+	}
+	if n := l.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events`); n != audits {
+		t.Fatalf("%d audit rows written by a refused switch", n-audits)
+	}
+}
+
+// A refresh of the predecessor racing its supersede: whichever takes the
+// session lock first, the switch issues its successor, the predecessor ends
+// with no live credential, and a credential the refresh handed out is refused
+// afterwards.
+func TestARefreshRacingASupersedeLeavesNoLivePredecessor(t *testing.T) {
+	ctx := context.Background()
+	l := newSwitchLive(t, ctx)
+	for round := 0; round < 8; round++ {
+		response := post(l.server, PatternIssueSession, issueBody(l.user, l.orgA.String(), "pwd"), issuerBearer)
+		if response.Code != http.StatusOK {
+			t.Fatalf("round %d: sign in %d", round, response.Code)
+		}
+		var answer struct {
+			RefreshToken string `json:"refresh_token"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &answer); err != nil {
+			t.Fatal(err)
+		}
+		var predecessor uuid.UUID
+		if err := l.admin.QueryRow(ctx, `SELECT session_id FROM auth.refresh_credentials WHERE token_hash IS NOT NULL ORDER BY created_at DESC LIMIT 1`).Scan(&predecessor); err != nil {
+			t.Fatal(err)
+		}
+		var (
+			wg       sync.WaitGroup
+			result   session.Result
+			exErr    error
+			switched int
+		)
+		start := make(chan struct{})
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			result, exErr = l.store.Exchange(ctx, contracts.NewSecretString(answer.RefreshToken))
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			switched = post(l.server, PatternIssueSession, issueBodyWithPredecessor(l.user, l.orgB.String(), `"`+predecessor.String()+`"`), issuerBearer).Code
+		}()
+		close(start)
+		wg.Wait()
+		if exErr != nil {
+			t.Fatalf("round %d: exchange error %v", round, exErr)
+		}
+		if switched != http.StatusOK {
+			t.Fatalf("round %d: switch %d, want 200 whichever order the lock gave", round, switched)
+		}
+		if l.live(t, predecessor) || l.liveCredentials(t, predecessor) != 0 {
+			t.Fatalf("round %d: predecessor live=%v with %d live credentials", round, l.live(t, predecessor), l.liveCredentials(t, predecessor))
+		}
+		if result.Reason.Success() {
+			again, err := l.store.Exchange(ctx, result.Credential)
+			if err != nil || again.Reason.Success() {
+				t.Fatalf("round %d: the refresh's successor still exchanges after the supersede: %+v %v", round, again.Reason, err)
+			}
+		}
+		t.Logf("round %d: refresh %s, switch %d", round, result.Reason, switched)
 	}
 }

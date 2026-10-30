@@ -89,7 +89,13 @@ func TestOAuthUnverifiedEmailNeverLinksOrProvisions(t *testing.T) {
 		provider, client := h.seedOAuthProvider(t, h.orgID, "oauth_github", nil)
 		before := h.snapshot(t)
 		_, failure := h.finishOAuth(t, provider, client, h.startOAuth(t, provider), fakeAccountWith(uniqueEmail("gh"), false), true)
-		wantDenied(t, failure, http.StatusForbidden, ReasonEmailUnverified)
+		// GitHub with no verified address is the provider client's refusal, answered before any lookup as go-api's
+		// OAuth callback answers its UserInfoError: 400 oauth_userinfo_fetch_failed (internal/api/sso/oauth.go
+		// fetchOAuthUserInfo, ssoErrReason), here with the email_unverified reason.
+		wantDenied(t, failure, http.StatusBadRequest, ReasonEmailUnverified)
+		if detail, _ := failure.Detail.(map[string]any); detail["reason"] != "oauth_userinfo_fetch_failed" {
+			t.Fatalf("detail %v, want reason oauth_userinfo_fetch_failed", failure.Detail)
+		}
 		wantUnchanged(t, h, before)
 	})
 }

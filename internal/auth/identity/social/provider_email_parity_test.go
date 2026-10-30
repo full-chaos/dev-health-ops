@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -17,6 +18,26 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 )
+
+// parityTableCount counts the table's data rows from the raw file, apart from readParityRows, and how many of them carry
+// an "id=" shape, so a driver that skips a row is caught: each plane must answer every row.
+func parityTableCount(t *testing.T) (rows, idRows int) {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "ci", "social_provider_email_parity.tsv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		rows++
+		if f := strings.Split(line, "\t"); len(f) == 7 && strings.HasPrefix(f[6], "id=") {
+			idRows++
+		}
+	}
+	return rows, idRows
+}
 
 // parityRow is one row of ci/social_provider_email_parity.tsv: a provider email form and the answer both planes give.
 type parityRow struct {
@@ -121,6 +142,7 @@ func parityDetail(body string) string {
 // auth-service's social exchange, through its real provider client, answers every row of the shared parity table as
 // go-api does; "pass" means the email guard let the profile through to the identity lookup.
 func TestExchangeAnswersTheProviderEmailParityTable(t *testing.T) {
+	answered := 0
 	for _, row := range readParityRows(t) {
 		t.Run(row.id, func(t *testing.T) {
 			server := httptest.NewServer(rawProviders(row))
@@ -154,7 +176,11 @@ func TestExchangeAnswersTheProviderEmailParityTable(t *testing.T) {
 			if strings.Contains(logs.String(), "MARK") {
 				t.Fatal("the email value is in a log line (any level, Debug included)")
 			}
+			answered++
 		})
+	}
+	if rows, _ := parityTableCount(t); answered != rows {
+		t.Fatalf("auth-service answered %d rows, the table holds %d", answered, rows)
 	}
 }
 
@@ -162,7 +188,7 @@ func TestExchangeAnswersTheProviderEmailParityTable(t *testing.T) {
 // the name leaves a verified profile verified (go-api replaces it), and a literal U+FFFD leaves it verified too.
 func TestFetchUnverifiesOnlyALoneSurrogateEmail(t *testing.T) {
 	for _, row := range readParityRows(t) {
-		if row.verified != "true" || row.shape != "-" || strings.HasSuffix(row.id, "not_utf8_verified") {
+		if row.verified != "true" || row.shape != "-" || strings.HasSuffix(row.id, "not_utf8_verified") || row.email[0] != '"' {
 			continue
 		}
 		t.Run(row.id, func(t *testing.T) {
@@ -186,9 +212,23 @@ func TestFetchUnverifiesOnlyALoneSurrogateEmail(t *testing.T) {
 	}
 }
 
-// shapeBody applies a row's shape to a served profile body: "key=<K>" renames the email member to K, "utf16le" sends the
+// noEmailMember is an "email" member with its value and the separator after it.
+var noEmailMember = regexp.MustCompile(`"email": (?:"(?:[^"\\]|\\.)*"|[^,}\]]*)(?:, )?`)
+
+// shapeBody applies a row's shape to a served profile body: "a+b" applies a then b, "noid" drops the profile's "id"
+// member, "noemail" drops every "email" member, "key=<K>" renames the email member to K, "utf16le" sends the
 // body as UTF-16LE with a byte order mark (a body Python's response.json() reads), "-" leaves it as it is.
 func shapeBody(shape string, body []byte) []byte {
+	if strings.Contains(shape, "+") {
+		for _, one := range strings.Split(shape, "+") {
+			body = shapeBody(one, body)
+		}
+		return body
+	}
+	if shape == "noid" {
+		body = bytes.Replace(body, []byte(`{"id": 7, `), []byte(`{`), 1)
+		body = bytes.Replace(body, []byte(`{"id": "g7", `), []byte(`{`), 1)
+	}
 	if key, ok := strings.CutPrefix(shape, "key="); ok {
 		body = bytes.ReplaceAll(body, []byte(`"email": `), []byte(`"`+key+`": `))
 	}
@@ -198,6 +238,9 @@ func shapeBody(shape string, body []byte) []byte {
 			panic(err)
 		}
 		body = bytes.Replace(body, []byte(`"email": `), append(append([]byte(`"email": `), value...), []byte(`, "email": `)...), 1)
+	}
+	if shape == "noemail" {
+		body = bytes.ReplaceAll(noEmailMember.ReplaceAll(body, nil), []byte(", }"), []byte("}"))
 	}
 	if shape == "utf16le" {
 		units := utf16.Encode([]rune("\ufeff" + string(body)))
@@ -210,16 +253,17 @@ func shapeBody(shape string, body []byte) []byte {
 	return body
 }
 
-// When a profile carries the email under two keys that differ only in case, encoding/json fills Email from the last
-// one, so the lone-surrogate check reads that same member: the profile is unverified only when that member holds the
-// lone surrogate.
-func TestFetchReadsTheLastCaseFoldedEmailMember(t *testing.T) {
+// The email member is the exact key "email", as go-api reads it: a member under "Email" is no email, so with both keys
+// the email and the lone-surrogate check read "email" only.
+func TestFetchReadsTheExactEmailMember(t *testing.T) {
 	for name, tc := range map[string]struct {
 		body         string
+		wantPrefix   string
 		wantVerified bool
 	}{
-		"surrogate first, usable last": {`{"id": 7, "login": "u", "email": "MARK\ud800@example.test", "Email": "user@example.test"}`, true},
-		"usable first, surrogate last": {`{"id": 7, "login": "u", "email": "user@example.test", "Email": "MARK\ud800@example.test"}`, false},
+		"surrogate under email, usable under Email": {`{"id": 7, "login": "u", "email": "MARK\ud800@example.test", "Email": "user@example.test"}`, "MARK", false},
+		"usable under email, surrogate under Email": {`{"id": 7, "login": "u", "email": "user@example.test", "Email": "MARK\ud800@example.test"}`, "user@", true},
+		"usable under Email, surrogate under email": {`{"id": 7, "login": "u", "Email": "user@example.test", "email": "MARK\ud800@example.test"}`, "MARK", false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -240,8 +284,9 @@ func TestFetchReadsTheLastCaseFoldedEmailMember(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if profile.EmailVerified != tc.wantVerified {
-				t.Fatalf("EmailVerified = %v, want %v (Email %q)", profile.EmailVerified, tc.wantVerified, profile.Email)
+			if profile.EmailVerified != tc.wantVerified || !strings.HasPrefix(profile.Email, tc.wantPrefix) {
+				t.Fatalf("verified %v (email prefix %v), want %v from the member starting %q", profile.EmailVerified,
+					strings.HasPrefix(profile.Email, tc.wantPrefix), tc.wantVerified, tc.wantPrefix)
 			}
 		})
 	}

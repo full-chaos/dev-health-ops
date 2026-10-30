@@ -25,6 +25,7 @@ internal/api/policy/principal.go	User.IsAdmin	1	1
 internal/api/policy/scope.go	EffectiveOrgID	1	4
 internal/api/policy/scope.go	Scope.Impersonation	1	-
 internal/api/policy/scope.go	Scope.mayUseOrg	1	4
+internal/api/policy/scope.go	Scope.useTokenOrg	1	4
 internal/api/session/changepassword.go	handlers.changePassword	1	-
 internal/api/session/login.go	handlers.loginInTx	1	-
 internal/api/session/onboarding.go	handlers.buildOnboardingState	2	-

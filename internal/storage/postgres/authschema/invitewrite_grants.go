@@ -22,9 +22,10 @@ type InviteWriteGrant struct {
 
 // InviteWriteGrants: go-api's org_invites row of each invite (insert, the
 // accept and revoke status update, and the read an accept or a take-over of a
-// go-api invite needs), and go-api's audit_logs row of a create and an accept
-// (one writer per audit row, acp ruling round1062 Q-D1). No DELETE, no
-// TRUNCATE, no other column. Off, every privilege on both tables is revoked.
+// go-api invite needs). No DELETE, no TRUNCATE, no other column. Off, every
+// privilege on the table is revoked. go-api's audit_logs row of a create and
+// an accept (one writer per audit row, acp ruling round1062 Q-D1) is inserted
+// under PublicAuditWriteColumns, which no switch gates.
 func InviteWriteGrants() []InviteWriteGrant {
 	return []InviteWriteGrant{
 		{
@@ -32,10 +33,6 @@ func InviteWriteGrants() []InviteWriteGrant {
 			Select: []string{"id", "org_id", "email", "role", "token_hash", "invited_by_id", "status", "expires_at", "created_at"},
 			Insert: []string{"id", "org_id", "email", "role", "token_hash", "invited_by_id", "status", "expires_at", "created_at", "updated_at"},
 			Update: []string{"status", "accepted_at", "updated_at"},
-		},
-		{
-			Table:  "audit_logs",
-			Insert: []string{"id", "org_id", "user_id", "action", "resource_type", "resource_id", "description", "changes", "request_metadata", "status", "created_at"},
 		},
 	}
 }
@@ -60,8 +57,8 @@ func isInviteWriteColumn(table, privilege, column string) bool {
 }
 
 // inviteWriteStatements grants InviteWriteGrants when the switch is on and
-// revokes everything the role holds on those tables when it is off (neither
-// table is in PublicReadColumns, so no other pass revokes it).
+// revokes everything the role holds on that table when it is off (it is not
+// in PublicReadColumns, so no other pass revokes it).
 func inviteWriteStatements(ctx context.Context, conn querier, options Options, logger *slog.Logger) ([]string, error) {
 	roleID, err := NewValidatedIdentifier(options.RuntimeRole)
 	if err != nil {

@@ -159,6 +159,14 @@ func oauthCallbackRunWithList(t *testing.T, email string, confirmed, linked bool
 // oauthCallbackRunOnWithList is oauthCallbackRunOn for a provider row whose allowed_domains is the JSON text list.
 func oauthCallbackRunOnWithList(t *testing.T, server *httptest.Server, linked bool, list *string) (refusal, *orderIdentities) {
 	t.Helper()
+	got, ids, _ := oauthCallbackRunAudited(t, server, linked, list, nil)
+	return got, ids
+}
+
+// oauthCallbackRunAudited is oauthCallbackRunOnWithList with the service's DenialAudit (nil: none); it also returns
+// the provider row the callback admitted.
+func oauthCallbackRunAudited(t *testing.T, server *httptest.Server, linked bool, list *string, denials DenialAudit) (refusal, *orderIdentities, StoredProvider) {
+	t.Helper()
 	var secret contracts.SecretString
 	raw, _ := json.Marshal(uuid.NewString())
 	if err := json.Unmarshal(raw, &secret); err != nil {
@@ -171,7 +179,7 @@ func oauthCallbackRunOnWithList(t *testing.T, server *httptest.Server, linked bo
 		Memberships: resolveMembers{found: true, role: "member"}, Entitlements: &countingEntitlements{allowed: true},
 		Sessions: &resolveSessions{}, MembershipJIT: &resolveJIT{}, StateSecret: secret, AppBaseURL: "https://app.example",
 		HTTPClient: server.Client(), OAuthEndpoints: &OAuthEndpoints{Social: social.Endpoints{GitLabBase: server.URL}},
-		Now: func() time.Time { return now },
+		DenialAudit: denials, Now: func() time.Time { return now },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -188,7 +196,7 @@ func oauthCallbackRunOnWithList(t *testing.T, server *httptest.Server, linked bo
 	cookieName := oauthLoginNonceCookieName(state.ID)
 	_, _, failure := svc.callbackOAuth(context.Background(), row, CallbackInput{Code: "c", State: token,
 		Cookie: func(name string) (string, bool) { return "cookie-1", name == cookieName }})
-	return refusalOf(t, failure), ids
+	return refusalOf(t, failure), ids, row
 }
 
 // An OAuth callback refuses an unusable provider address before the verified-email check and before the lookup:

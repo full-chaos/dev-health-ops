@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -66,15 +67,19 @@ func newProvisioningCredential(cfg AuthProxyConfig, lookup func(string) (string,
 	bootstrapPath, _ := lookup(EnvAuthWorkloadBootstrapFile)
 	subjectPath, bootstrapPath = strings.TrimSpace(subjectPath), strings.TrimSpace(bootstrapPath)
 	var subject workloadtoken.Subject
+	var subjectEnv, path string
 	switch {
 	case subjectPath != "" && bootstrapPath != "":
 		return fail("set only one of %s and %s", EnvAuthWorkloadSubjectFile, EnvAuthWorkloadBootstrapFile)
 	case subjectPath != "":
-		subject = workloadtoken.KubernetesTokenFile(subjectPath)
+		subject, subjectEnv, path = workloadtoken.KubernetesTokenFile(subjectPath), EnvAuthWorkloadSubjectFile, subjectPath
 	case bootstrapPath != "":
-		subject = workloadtoken.BootstrapCredentialFile(bootstrapPath)
+		subject, subjectEnv, path = workloadtoken.BootstrapCredentialFile(bootstrapPath), EnvAuthWorkloadBootstrapFile, bootstrapPath
 	default:
 		return fail("set %s or %s", EnvAuthWorkloadSubjectFile, EnvAuthWorkloadBootstrapFile)
+	}
+	if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
+		return fail("%s must name a readable file", subjectEnv)
 	}
 	issuer, _ := lookup(EnvAuthWorkloadIssuer)
 	issuer = strings.TrimSpace(issuer)

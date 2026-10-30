@@ -115,7 +115,9 @@ VALUES ($1, $2, 'pagerduty', 'default', true, NULL, '{"auth_mode":"oauth","regio
 		deps.PagerDuty = providerfoundation.PagerDutyRevokeConfig{RevokeURL: fakeServer.URL}
 	})
 
-	disconnect := func(base, slug string) (int, string) {
+	// The helpers take the calling subtest's t: a failure ends that subtest, never the parent test from a subtest
+	// (that is a FailNow on the parent, which hangs the run until the test binary's timeout).
+	disconnect := func(t *testing.T, base, slug string) (int, string) {
 		t.Helper()
 		requestCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
@@ -133,9 +135,11 @@ VALUES ($1, $2, 'pagerduty', 'default', true, NULL, '{"auth_mode":"oauth","regio
 		body, _ := io.ReadAll(response.Body)
 		return response.StatusCode, string(body)
 	}
-	pending := func(slug, name string) (rows, attempts int) {
+	pending := func(t *testing.T, slug, name string) (rows, attempts int) {
 		t.Helper()
-		if err := pool.QueryRow(ctx, `SELECT count(*), COALESCE(max(attempts), 0) FROM provider_oauth_revocations WHERE org_id = $1 AND credential_name = $2`,
+		queryCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		if err := pool.QueryRow(queryCtx, `SELECT count(*), COALESCE(max(attempts), 0) FROM provider_oauth_revocations WHERE org_id = $1 AND credential_name = $2`,
 			orgs[slug].String(), name).Scan(&rows, &attempts); err != nil {
 			t.Fatal(err)
 		}
@@ -154,34 +158,34 @@ VALUES ($1, $2, 'pagerduty', 'default', true, NULL, '{"auth_mode":"oauth","regio
 	}
 
 	t.Run("missing credential with a pending row sends it", func(t *testing.T) {
-		status, body := disconnect(base, "missing-ok")
+		status, body := disconnect(t, base, "missing-ok")
 		if status != http.StatusOK || !strings.Contains(body, `"disconnected":true`) {
 			t.Fatalf("status %d body %s, want 200 disconnected", status, body)
 		}
-		if rows, _ := pending("missing-ok", "default"); rows != 0 {
+		if rows, _ := pending(t, "missing-ok", "default"); rows != 0 {
 			t.Fatalf("pending rows %d, want 0: the row was not sent", rows)
 		}
 		if calls("pd-pending-ok-token") != 1 {
 			t.Fatalf("revoke calls %d, want 1", calls("pd-pending-ok-token"))
 		}
-		if rows, _ := pending("missing-ok", "other"); rows != 1 || calls("pd-pending-other-token") != 0 {
+		if rows, _ := pending(t, "missing-ok", "other"); rows != 1 || calls("pd-pending-other-token") != 0 {
 			t.Fatalf("another credential's row was touched: rows %d calls %d", rows, calls("pd-pending-other-token"))
 		}
 	})
 
 	t.Run("missing credential with a refused revoke answers pending retry", func(t *testing.T) {
-		status, body := disconnect(base, "missing-fails")
+		status, body := disconnect(t, base, "missing-fails")
 		if status != http.StatusServiceUnavailable || !strings.Contains(body, "pending retry") {
 			t.Fatalf("status %d body %s, want 503 pending retry", status, body)
 		}
-		if rows, attempts := pending("missing-fails", "default"); rows != 1 || attempts != 1 {
+		if rows, attempts := pending(t, "missing-fails", "default"); rows != 1 || attempts != 1 {
 			t.Fatalf("rows %d attempts %d, want 1 row at 1 attempt", rows, attempts)
 		}
 	})
 
 	t.Run("missing credential with nothing pending stays 200", func(t *testing.T) {
 		before := fake.count()
-		status, body := disconnect(base, "missing-empty")
+		status, body := disconnect(t, base, "missing-empty")
 		if status != http.StatusOK || !strings.Contains(body, `"disconnected":true`) {
 			t.Fatalf("status %d body %s, want 200 disconnected", status, body)
 		}
@@ -191,11 +195,11 @@ VALUES ($1, $2, 'pagerduty', 'default', true, NULL, '{"auth_mode":"oauth","regio
 	})
 
 	t.Run("missing credential without a client id answers pending retry", func(t *testing.T) {
-		status, body := disconnect(noClientBase, "missing-noclient")
+		status, body := disconnect(t, noClientBase, "missing-noclient")
 		if status != http.StatusServiceUnavailable || !strings.Contains(body, "pending retry") {
 			t.Fatalf("status %d body %s, want 503 pending retry", status, body)
 		}
-		if rows, attempts := pending("missing-noclient", "default"); rows != 1 || attempts != 0 || calls("pd-pending-noclient-token") != 0 {
+		if rows, attempts := pending(t, "missing-noclient", "default"); rows != 1 || attempts != 0 || calls("pd-pending-noclient-token") != 0 {
 			t.Fatalf("rows %d attempts %d calls %d, want the row untouched", rows, attempts, calls("pd-pending-noclient-token"))
 		}
 	})
@@ -204,11 +208,11 @@ VALUES ($1, $2, 'pagerduty', 'default', true, NULL, '{"auth_mode":"oauth","regio
 	// still answers the owed state while an older revocation of the name is pending.
 	for _, slug := range []string{"owed-no-token", "owed-bad-cipher"} {
 		t.Run("no client id and no usable token with a row owed answers pending retry: "+slug, func(t *testing.T) {
-			status, body := disconnect(noClientBase, slug)
+			status, body := disconnect(t, noClientBase, slug)
 			if status != http.StatusServiceUnavailable || !strings.Contains(body, "pending retry") {
 				t.Fatalf("status %d body %s, want 503 pending retry while a revocation is owed", status, body)
 			}
-			if rows, attempts := pending(slug, "default"); rows != 1 || attempts != 0 || calls("pd-pending-"+slug+"-token") != 0 {
+			if rows, attempts := pending(t, slug, "default"); rows != 1 || attempts != 0 || calls("pd-pending-"+slug+"-token") != 0 {
 				t.Fatalf("rows %d attempts %d calls %d, want the owed row untouched", rows, attempts, calls("pd-pending-"+slug+"-token"))
 			}
 		})
@@ -217,11 +221,11 @@ VALUES ($1, $2, 'pagerduty', 'default', true, NULL, '{"auth_mode":"oauth","regio
 	// No over-refusal: without a client id, a credential with nothing stored and nothing owed still disconnects (200).
 	t.Run("no client id with nothing stored and nothing owed answers 200", func(t *testing.T) {
 		before := fake.count()
-		status, body := disconnect(noClientBase, "nothing-owed")
+		status, body := disconnect(t, noClientBase, "nothing-owed")
 		if status != http.StatusOK || !strings.Contains(body, `"disconnected":true`) {
 			t.Fatalf("status %d body %s, want 200 disconnected", status, body)
 		}
-		if rows, _ := pending("nothing-owed", "default"); rows != 0 || fake.count() != before {
+		if rows, _ := pending(t, "nothing-owed", "default"); rows != 0 || fake.count() != before {
 			t.Fatalf("rows %d calls %d, want no row and no provider call", rows, fake.count()-before)
 		}
 	})
@@ -231,12 +235,13 @@ VALUES ($1, $2, 'pagerduty', 'default', true, NULL, '{"auth_mode":"oauth","regio
 		if err != nil {
 			t.Fatal(err)
 		}
+		// Released however the subtest ends, so a failed or timed-out request never leaves the row locked.
+		t.Cleanup(func() { _ = holder.Rollback(context.Background()) })
 		var held uuid.UUID
 		if err := holder.QueryRow(ctx, `SELECT id FROM provider_oauth_revocations WHERE id = $1 FOR UPDATE`, heldRow).Scan(&held); err != nil {
-			_ = holder.Rollback(ctx)
 			t.Fatal(err)
 		}
-		status, body := disconnect(base, "held")
+		status, body := disconnect(t, base, "held")
 		_ = holder.Rollback(ctx)
 		if status != http.StatusServiceUnavailable {
 			t.Fatalf("status %d body %s, want 503 while another sender holds the row", status, body)
@@ -244,10 +249,10 @@ VALUES ($1, $2, 'pagerduty', 'default', true, NULL, '{"auth_mode":"oauth","regio
 		if calls("pd-pending-held-token") != 0 {
 			t.Fatalf("the held row was sent by a second sender")
 		}
-		if rows, attempts := pending("held", "default"); rows != 1 || attempts != 0 {
+		if rows, attempts := pending(t, "held", "default"); rows != 1 || attempts != 0 {
 			t.Fatalf("rows %d attempts %d, want the held row untouched", rows, attempts)
 		}
-		status, body = disconnect(base, "held")
+		status, body = disconnect(t, base, "held")
 		if status != http.StatusOK {
 			t.Fatalf("status %d body %s, want 200 once the row is free", status, body)
 		}

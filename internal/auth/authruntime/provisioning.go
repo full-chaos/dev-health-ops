@@ -23,9 +23,10 @@ var provisioningProfileRows []byte
 
 // provisioningRoutes builds the internal membership, invite and organization
 // deprovision routes when AUTH_MEMBERSHIP_ROUTES is on, and none otherwise.
-// Every verb behind them refuses while auth-service does not own users.
+// Every verb behind them refuses while auth-service does not own users. They
+// take the session issue route's workload path (nil refuses workload tokens).
 func provisioningRoutes(cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
-	identities *identity.Store) ([]httpapi.Route, error) {
+	identities *identity.Store, workload *authapi.SessionIssueWorkload) ([]httpapi.Route, error) {
 	if !cfg.Provisioning.Routes {
 		return nil, nil
 	}
@@ -49,6 +50,6 @@ func provisioningRoutes(cfg authconfig.Config, logger *slog.Logger, pool *pgxpoo
 	}
 	return authapi.ProvisioningRoutes(authapi.ProvisioningDeps{
 		Credentials: servicecred.PG{Pool: pool}, Users: authapi.PGUsers{Pool: pool}, Reader: pool, Organizations: identities,
-		Memberships: members, Invites: invites, Deprovision: deprovision, Orgs: orgs, Logger: logger, ProfileRows: provisioningProfileRows,
+		Memberships: members, Invites: invites, Deprovision: deprovision, Orgs: orgs, Workload: workload, Logger: logger, ProfileRows: provisioningProfileRows,
 	})
 }

@@ -71,6 +71,72 @@ func oneOfHasTransportError(schema map[string]any) bool {
 	return first["$ref"] == transportErrorRef
 }
 
+// uncheckedKeywords are schema keywords the extra-member check does not read; a member that uses one fails closed.
+var uncheckedKeywords = []string{"$ref", "oneOf", "anyOf", "allOf", "not", "if", "patternProperties", "additionalItems", "prefixItems"}
+
+// closedSchemaProblems walks an inline schema: every object (type object, or one that lists properties) must set
+// additionalProperties to false, and no keyword the walk cannot read may appear.
+func closedSchemaProblems(schema map[string]any, path string) []string {
+	var problems []string
+	for _, keyword := range uncheckedKeywords {
+		if _, present := schema[keyword]; present {
+			problems = append(problems, fmt.Sprintf("%s uses %q, which the gate does not check", path, keyword))
+		}
+	}
+	properties, hasProperties := schema["properties"].(map[string]any)
+	if schema["type"] == "object" || hasProperties {
+		if schema["additionalProperties"] != false {
+			problems = append(problems, fmt.Sprintf("%s is open (additionalProperties is not false)", path))
+		}
+	}
+	names := make([]string, 0, len(properties))
+	for name := range properties {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if child, ok := properties[name].(map[string]any); ok {
+			problems = append(problems, closedSchemaProblems(child, path+"/properties/"+name)...)
+		}
+	}
+	if items, ok := schema["items"].(map[string]any); ok {
+		problems = append(problems, closedSchemaProblems(items, path+"/items")...)
+	}
+	return problems
+}
+
+// oneOfExtraMemberProblems checks every member of a transport status oneOf after the envelope: an inline object
+// schema, closed at every level, and disjoint from the envelope. The envelope is closed and requires "error", so a
+// closed member without an "error" property cannot match the same body.
+func oneOfExtraMemberProblems(key, status string, schema map[string]any) []string {
+	members, _ := schema["oneOf"].([]any)
+	var problems []string
+	for index, raw := range members {
+		if index == 0 {
+			continue
+		}
+		path := fmt.Sprintf("OpenAPI operation %s: its %s oneOf member %d", key, status, index)
+		member, ok := raw.(map[string]any)
+		if !ok || member["type"] != "object" || member["$ref"] != nil {
+			problems = append(problems, path+" must be an inline object schema")
+			continue
+		}
+		problems = append(problems, closedSchemaProblems(member, path)...)
+		properties, _ := member["properties"].(map[string]any)
+		required, _ := member["required"].([]any)
+		_, namesError := properties["error"]
+		for _, name := range required {
+			if name == "error" {
+				namesError = true
+			}
+		}
+		if namesError {
+			problems = append(problems, path+" names \"error\" and can match the transport envelope")
+		}
+	}
+	return problems
+}
+
 // openAPIPathProblems checks the OpenAPI document against the auth-service API
 // rows: one operation per API row outside go-api's path space and no other,
 // every $ref inside an operation names an existing component schema, and
@@ -156,6 +222,7 @@ func openAPIPathProblems(document map[string]any, rows []map[string]any) []strin
 				if schema["$ref"] != transportErrorRef && !oneOfHasTransportError(schema) {
 					problems = append(problems, fmt.Sprintf("OpenAPI operation %s: its %s is the transport's answer and must reference %s", key, status, transportErrorRef))
 				}
+				problems = append(problems, oneOfExtraMemberProblems(key, status, schema)...)
 			}
 		}
 	}

@@ -148,6 +148,11 @@ func (s *Service) Exchange(ctx context.Context, provider Provider, token contrac
 		reason = ReasonEmailUnverified
 		return ExchangeResult{}, ErrEmailUnverified
 	}
+	if profile.EmailNotText {
+		// go-api's str check on a verified email that is not text fails after its lookup: a 500.
+		reason = ReasonMalformed
+		return ExchangeResult{}, fmt.Errorf("%w: the provider email is not text", ErrUnavailable)
+	}
 	email, err := identity.NormalizeFederatedEmail(profile.Email)
 	if err != nil {
 		reason = ReasonEmailUnverified
@@ -271,7 +276,7 @@ func lookupReason(err error) Reason {
 // provider did not verify it (a lone surrogate in the provider's email makes the profile unverified, as on go-api),
 // and ErrUnusableEmail otherwise. ci/social_provider_email_parity.tsv holds the answers of both planes.
 func refuseProfileEmail(p Profile) (Reason, error) {
-	if identity.RefuseProviderEmail(p.Email) == nil {
+	if p.EmailNotText || identity.RefuseProviderEmail(p.Email) == nil {
 		return ReasonAccepted, nil
 	}
 	if !p.EmailVerified {
@@ -443,6 +448,8 @@ func (s *Service) fetch(ctx context.Context, provider Provider, token contracts.
 	case err == nil:
 	case errors.As(err, &perr) && perr.Reason == ReasonDependency:
 		return Profile{}, perr.Reason, fmt.Errorf("%w: %s", ErrProviderUnavailable, perr.Step)
+	case errors.As(err, &perr) && perr.Reason == ReasonEmailUnverified:
+		return Profile{}, perr.Reason, fmt.Errorf("%w: %s", ErrEmailUnverified, perr.Step)
 	case errors.As(err, &perr) && perr.InvalidID:
 		return Profile{}, ReasonMalformed, fmt.Errorf("%w: %s", ErrInvalidProviderID, perr.Step)
 	case errors.As(err, &perr):

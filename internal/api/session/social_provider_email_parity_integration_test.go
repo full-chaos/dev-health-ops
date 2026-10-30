@@ -5,12 +5,14 @@ package session
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -23,6 +25,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/oauthprovider"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 )
 
 // pinnedNonTextRow is the one pinned cell for an email member that is not text (PLAN-12026 Q4): an unknown identity is
@@ -57,9 +60,24 @@ func subjectRewrite(inner http.Handler, n int) http.Handler {
 	})
 }
 
+// bodyKeys is the top-level member names of a JSON answer: a failure names them and never prints a token.
+func bodyKeys(body []byte) []string {
+	var object map[string]json.RawMessage
+	if json.Unmarshal(body, &object) != nil {
+		return []string{"<not a JSON object>"}
+	}
+	keys := make([]string, 0, len(object))
+	for key := range object {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 // go-api's social login on a real database for every row of ci/social_provider_email_parity.tsv (the reference plane
 // of PLAN-12026 Q6), for an unknown identity and for one linked to a users row: a refused row answers the table's
-// answer and writes nothing, linked or not; a passing row signs the linked user in (a refresh token row). The pinned
+// answer and writes nothing, linked or not; a passing row signs the linked user in (go-api records the refresh token
+// only for a user with a membership, so the linked user is a member of one organization: one refresh_tokens row). The pinned
 // non-text row answers an unknown identity with the 500 and writes nothing. ("id=" rows stay unit cells.)
 func TestSocialLoginParityTableOnARealDatabase(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
@@ -75,6 +93,8 @@ func TestSocialLoginParityTableOnARealDatabase(t *testing.T) {
 	}
 	t.Cleanup(pool.Close)
 	pgschema.Apply(ctx, t, pool)
+	org := uuid.New()
+	pgseed.Org(ctx, t, pool, org.String(), "community")
 	count := func(table string) int {
 		t.Helper()
 		var n int
@@ -99,11 +119,13 @@ func TestSocialLoginParityTableOnARealDatabase(t *testing.T) {
 					subject = "g" + subject
 				}
 				if linked {
+					user := uuid.New()
 					if _, err := pool.Exec(ctx, `INSERT INTO users (id, email, password_hash, auth_provider, auth_provider_id, is_active,
 is_verified, is_superuser, token_version, created_at, updated_at) VALUES ($1, $2, NULL, $3, $4, true, true, false, 0, now(), now())`,
-						uuid.New(), fmt.Sprintf("linked-%d@example.com", n), name, subject); err != nil {
+						user, fmt.Sprintf("linked-%d@example.com", n), name, subject); err != nil {
 						t.Fatal(err)
 					}
+					pgseed.Membership(ctx, t, pool, uuid.NewString(), user.String(), org.String(), "member")
 				}
 				server := httptest.NewServer(subjectRewrite(goAPIProviderProfile(row), n))
 				deps := completeDeps(t)
@@ -139,7 +161,8 @@ is_verified, is_superuser, token_version, created_at, updated_at) VALUES ($1, $2
 					}
 				case linked:
 					if w.Code != http.StatusOK || count("refresh_tokens") != tokens+1 || count("users") != users {
-						t.Fatalf("linked: %s (%s), refresh tokens %d -> %d; want the sign-in", got, w.Body.String(), tokens, count("refresh_tokens"))
+						t.Fatalf("linked: %d with body keys %v, refresh tokens %d -> %d; want the sign-in", w.Code, bodyKeys(w.Body.Bytes()),
+							tokens, count("refresh_tokens"))
 					}
 				}
 			}

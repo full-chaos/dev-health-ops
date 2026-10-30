@@ -596,6 +596,9 @@ func validateOrganizationName(name string) (string, error) {
 // slug is the name's slug unless given, and an existing slug gets a random
 // eight-hex-digit suffix; a paid tier is managed "manual", community "stripe".
 func (o Operator) CreateOrg(ctx context.Context, in CreateOrgInput) (*CreateOrgResult, error) {
+	if o.OrgProvisioning && in.OwnerEmail != nil && *in.OwnerEmail != "" {
+		return nil, ErrOrgProvisioningOn
+	}
 	var result *CreateOrgResult
 	err := o.inTransaction(ctx, func(store pgStore) error {
 		var ownerID *uuid.UUID

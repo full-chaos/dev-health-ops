@@ -108,6 +108,18 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 	return err
 }
 
+// deleteOrganizationWithoutMembers deletes the organization only while no
+// membership of it exists, in one statement; false when it kept the row.
+func (s pgStore) deleteOrganizationWithoutMembers(ctx context.Context, orgID uuid.UUID) (bool, error) {
+	tag, err := s.Pool.Exec(ctx, `
+DELETE FROM organizations WHERE id = $1
+AND NOT EXISTS (SELECT 1 FROM memberships WHERE org_id = $1)`, orgID)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
 // pgExecer is the Exec/QueryRow surface both *pgxpool.Pool and pgx.Tx
 // satisfy -- the same Execer-generalization shape internal/api/audit
 // already uses, so a store method can run standalone or inside a caller's

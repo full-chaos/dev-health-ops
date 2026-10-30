@@ -42,6 +42,8 @@ func TestTokenOrgMembershipIsTheLivePublicRow(t *testing.T) {
 
 	auth := authenticator(t, PGStore{Pool: pool})
 	scope := NewScope(auth, quiet())
+	// go-api's scope declares rows; every route here is an org-scoped one.
+	scope.DeclaredRows(func(string) (BearerRow, bool) { return BearerRow{AccessToken: true}, true })
 	chain := func(level Authz) http.Handler {
 		return auth.ReadOnce(scope.Principal(scope.OrgScope(scope.Impersonation(NewGuard(auth, quiet()).Wrap(level, echo)))))
 	}
@@ -50,6 +52,9 @@ func TestTokenOrgMembershipIsTheLivePublicRow(t *testing.T) {
 	}))
 	call := func(level Authz) response {
 		return serve(chain(level), http.MethodGet, "/x", map[string]string{"Authorization": token})
+	}
+	callWithHeader := func(level Authz) response {
+		return serve(chain(level), http.MethodGet, "/x", map[string]string{"Authorization": token, "X-Org-Id": org.String()})
 	}
 	denied := `{"detail": "X-Org-Id not permitted for this user"}`
 
@@ -71,6 +76,9 @@ func TestTokenOrgMembershipIsTheLivePublicRow(t *testing.T) {
 	for _, level := range []Authz{Authenticated, Admin, AdminOrg} {
 		if got := call(level); got.status != http.StatusForbidden || got.body != denied {
 			t.Fatalf("removed, level %v: %d %q, want the X-Org-Id refusal", level, got.status, got.body)
+		}
+		if got := callWithHeader(level); got.status != http.StatusForbidden || got.body != denied {
+			t.Fatalf("removed, X-Org-Id = the token's org, level %v: %d %q, want the X-Org-Id refusal", level, got.status, got.body)
 		}
 	}
 	pgseed.Membership(ctx, t, pool, uuid.NewString(), user.String(), org.String(), "owner")

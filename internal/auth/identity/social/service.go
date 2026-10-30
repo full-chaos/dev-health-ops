@@ -5,9 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
@@ -26,6 +24,7 @@ const DefaultLinkFreshness = 10 * time.Minute
 // Domain errors. Each maps to one response; none carries provider text.
 var (
 	ErrProviderRefused          = errors.New("social: the provider token was refused")
+	ErrInvalidProviderID        = errors.New("social: the provider returned an invalid user id")
 	ErrProviderUnavailable      = errors.New("social: the provider could not be reached")
 	ErrEmailUnverified          = errors.New("social: the provider has not verified the email")
 	ErrPrincipalDisabled        = errors.New("social: the principal is disabled")
@@ -269,13 +268,13 @@ func lookupReason(err error) Reason {
 
 // refuseProfileEmail is go-api's social email rule (internal/api/session/social.go), run before any lookup so the
 // answer never depends on which accounts exist: an address the shared rule refuses is an unverified email when the
-// provider did not verify it or when it holds U+FFFD (encoding/json makes a lone surrogate escape U+FFFD, and go-api
-// answers a lone surrogate as unverified), and ErrUnusableEmail otherwise.
+// provider did not verify it (a lone surrogate in the provider's email makes the profile unverified, as on go-api),
+// and ErrUnusableEmail otherwise. ci/social_provider_email_parity.tsv holds the answers of both planes.
 func refuseProfileEmail(p Profile) (Reason, error) {
 	if identity.RefuseProviderEmail(p.Email) == nil {
 		return ReasonAccepted, nil
 	}
-	if !p.EmailVerified || strings.ContainsRune(p.Email, utf8.RuneError) {
+	if !p.EmailVerified {
 		return ReasonEmailUnverified, ErrEmailUnverified
 	}
 	return ReasonMalformed, ErrUnusableEmail
@@ -444,12 +443,17 @@ func (s *Service) fetch(ctx context.Context, provider Provider, token contracts.
 	case err == nil:
 	case errors.As(err, &perr) && perr.Reason == ReasonDependency:
 		return Profile{}, perr.Reason, fmt.Errorf("%w: %s", ErrProviderUnavailable, perr.Step)
+	case errors.As(err, &perr) && perr.InvalidID:
+		return Profile{}, ReasonMalformed, fmt.Errorf("%w: %s", ErrInvalidProviderID, perr.Step)
 	case errors.As(err, &perr):
 		return Profile{}, perr.Reason, fmt.Errorf("%w: %s", ErrProviderRefused, perr.Step)
 	case errors.Is(err, ErrProviderNotConfigured):
 		return Profile{}, ReasonDependency, err
 	default:
 		return Profile{}, ReasonDependency, ErrProviderUnavailable
+	}
+	if profile.Issuer == s.providers.Issuer(provider) && profile.Provider == provider && !identity.ValidSubject(profile.Subject) {
+		return Profile{}, ReasonMalformed, fmt.Errorf("%w: profile subject", ErrInvalidProviderID)
 	}
 	if profile.Issuer != s.providers.Issuer(provider) || profile.Provider != provider || profile.Validate() != nil {
 		return Profile{}, ReasonAudience, fmt.Errorf("%w: profile identity does not match the provider", ErrProviderRefused)

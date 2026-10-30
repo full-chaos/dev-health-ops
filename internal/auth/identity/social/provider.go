@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
@@ -114,6 +115,8 @@ type Profile struct {
 type ProviderError struct {
 	Reason Reason
 	Step   string
+	// InvalidID: the profile has no user id (absent, null or empty), go-api's ErrMissingProviderID.
+	InvalidID bool
 }
 
 func (e *ProviderError) Error() string { return "social: " + e.Step + ": " + string(e.Reason) }
@@ -164,6 +167,10 @@ type request struct {
 	headers map[string]string
 	body    []byte
 	step    string
+	// profile, when set, receives the body as go-api's decoder reads it (pyjson: a UTF-16/32 body with a byte order
+	// mark is read, a lone surrogate escape stays a lone surrogate; encoding/json makes it U+FFFD), and out is decoded
+	// from that same text.
+	profile *pyjson.Value
 }
 
 // do sends one request and decodes a 2xx JSON object into out. A transport
@@ -200,12 +207,43 @@ func (c *ProviderClient) do(ctx context.Context, r request, out any) error {
 	case resp.StatusCode > 299 || resp.StatusCode < 200:
 		return &ProviderError{Reason: ReasonInvalidCredentials, Step: r.step}
 	}
+	if r.profile != nil {
+		// go-api decodes a profile with pyjson and answers a body it refuses (not UTF-8, or not JSON to Python) with
+		// a 500 (oauthprovider ErrUnexpected). The struct decode below reads the same text.
+		text, err := pyjson.DecodeBody(raw)
+		if err != nil {
+			return &ProviderError{Reason: ReasonDependency, Step: r.step}
+		}
+		if *r.profile, err = pyjson.DecodeString(text); err != nil {
+			return &ProviderError{Reason: ReasonDependency, Step: r.step}
+		}
+		raw = []byte(text)
+	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
 	if err := decodeOne(dec, out); err != nil {
 		return &ProviderError{Reason: ReasonInvalidCredentials, Step: r.step}
 	}
 	return nil
+}
+
+// loneSurrogateEmail reports whether the email member of a profile object, as go-api's decoder reads it, holds a lone
+// surrogate. go-api makes such a profile unverified (oauthprovider cleanProfileText), so it is refused as an unverified
+// email, while a literal U+FFFD in a verified profile is refused as an unusable address. The member read is the one
+// encoding/json fills the Email field from: the last key that equals "email" without regard to case.
+func loneSurrogateEmail(v pyjson.Value) bool {
+	object, ok := v.(*pyjson.Object)
+	if !ok {
+		return false
+	}
+	var email pyjson.Value
+	for _, key := range object.Keys() {
+		if strings.EqualFold(key, "email") {
+			email, _ = object.Get(key)
+		}
+	}
+	text, ok := email.(string)
+	return ok && pyjson.HasLoneSurrogate(text)
 }
 
 // decodeOne decodes exactly one JSON value: anything after it but white space
@@ -242,6 +280,37 @@ func optionalPointer(v any) *string {
 		return &s
 	}
 	return nil
+}
+
+// idState says what a profile's id member is. idMissing is go-api's invalid user id; idUnusable keeps the refusal
+// as a bad token.
+type idState int
+
+const (
+	idUsable idState = iota
+	idMissing
+	idUnusable
+)
+
+// numericProfileID is a GitHub or GitLab profile id: absent, null and "" are missing, a JSON integer is usable.
+func numericProfileID(v any) (string, idState) {
+	switch t := v.(type) {
+	case nil:
+		return "", idMissing
+	case string:
+		if t == "" {
+			return "", idMissing
+		}
+	case json.Number:
+		if id, ok := integerID(t); ok {
+			return id, idUsable
+		}
+	}
+	return "", idUnusable
+}
+
+func idRefusal(state idState, step string) *ProviderError {
+	return &ProviderError{Reason: ReasonInvalidCredentials, Step: step, InvalidID: state == idMissing}
 }
 
 func optionalString(v any) string {
@@ -289,17 +358,18 @@ func (c *ProviderClient) github(ctx context.Context, creds ClientCredentials, to
 		"X-GitHub-Api-Version": "2022-11-28",
 	}
 	var user struct {
-		ID    json.Number `json:"id"`
-		Login any         `json:"login"`
-		Name  any         `json:"name"`
-		Email any         `json:"email"`
+		ID    any `json:"id"`
+		Login any `json:"login"`
+		Name  any `json:"name"`
+		Email any `json:"email"`
 	}
-	if err := c.do(ctx, request{method: http.MethodGet, url: api + "/user", headers: headers, step: "github user"}, &user); err != nil {
+	var userProfile pyjson.Value
+	if err := c.do(ctx, request{method: http.MethodGet, url: api + "/user", headers: headers, step: "github user", profile: &userProfile}, &user); err != nil {
 		return Profile{}, err
 	}
-	subject, ok := integerID(user.ID)
-	if !ok {
-		return Profile{}, &ProviderError{Reason: ReasonInvalidCredentials, Step: "github user"}
+	subject, state := numericProfileID(user.ID)
+	if state != idUsable {
+		return Profile{}, idRefusal(state, "github user")
 	}
 	if subject != owner {
 		return Profile{}, &ProviderError{Reason: ReasonAudience, Step: "github user"}
@@ -310,7 +380,7 @@ func (c *ProviderClient) github(ctx context.Context, creds ClientCredentials, to
 	}
 	// GitHub lets only a verified address be the public profile email.
 	if email := optionalString(user.Email); email != "" {
-		profile.Email, profile.EmailVerified = email, true
+		profile.Email, profile.EmailVerified = email, !loneSurrogateEmail(userProfile)
 		return profile, nil
 	}
 	var emails []struct {
@@ -318,28 +388,33 @@ func (c *ProviderClient) github(ctx context.Context, creds ClientCredentials, to
 		Primary  bool `json:"primary"`
 		Verified bool `json:"verified"`
 	}
-	if err := c.do(ctx, request{method: http.MethodGet, url: api + "/user/emails", headers: headers, step: "github emails"}, &emails); err != nil {
+	var emailsProfile pyjson.Value
+	if err := c.do(ctx, request{method: http.MethodGet, url: api + "/user/emails", headers: headers, step: "github emails", profile: &emailsProfile}, &emails); err != nil {
 		return Profile{}, err
 	}
 	// go-api's order: the primary verified address, else the first verified
 	// one. An unverified address is never returned.
-	pick := ""
-	for _, e := range emails {
+	pick := -1
+	for i, e := range emails {
 		if e.Primary && e.Verified && optionalString(e.Email) != "" {
-			pick = optionalString(e.Email)
+			pick = i
 			break
 		}
 	}
-	if pick == "" {
-		for _, e := range emails {
+	if pick < 0 {
+		for i, e := range emails {
 			if e.Verified && optionalString(e.Email) != "" {
-				pick = optionalString(e.Email)
+				pick = i
 				break
 			}
 		}
 	}
-	if pick != "" {
-		profile.Email, profile.EmailVerified = pick, true
+	if pick >= 0 {
+		lone := false
+		if list, ok := emailsProfile.([]pyjson.Value); ok && pick < len(list) {
+			lone = loneSurrogateEmail(list[pick])
+		}
+		profile.Email, profile.EmailVerified = optionalString(emails[pick].Email), !lone
 	}
 	return profile, nil
 }
@@ -368,18 +443,19 @@ func (c *ProviderClient) gitlab(ctx context.Context, creds ClientCredentials, to
 		return Profile{}, &ProviderError{Reason: ReasonAudience, Step: "gitlab token info"}
 	}
 	var user struct {
-		ID          json.Number `json:"id"`
-		Username    any         `json:"username"`
-		Name        any         `json:"name"`
-		Email       any         `json:"email"`
-		ConfirmedAt any         `json:"confirmed_at"`
+		ID          any `json:"id"`
+		Username    any `json:"username"`
+		Name        any `json:"name"`
+		Email       any `json:"email"`
+		ConfirmedAt any `json:"confirmed_at"`
 	}
-	if err := c.do(ctx, request{method: http.MethodGet, url: base + "/api/v4/user", headers: headers, step: "gitlab user"}, &user); err != nil {
+	var userProfile pyjson.Value
+	if err := c.do(ctx, request{method: http.MethodGet, url: base + "/api/v4/user", headers: headers, step: "gitlab user", profile: &userProfile}, &user); err != nil {
 		return Profile{}, err
 	}
-	subject, ok := integerID(user.ID)
-	if !ok {
-		return Profile{}, &ProviderError{Reason: ReasonInvalidCredentials, Step: "gitlab user"}
+	subject, state := numericProfileID(user.ID)
+	if state != idUsable {
+		return Profile{}, idRefusal(state, "gitlab user")
 	}
 	if subject != owner {
 		return Profile{}, &ProviderError{Reason: ReasonAudience, Step: "gitlab user"}
@@ -389,7 +465,7 @@ func (c *ProviderClient) gitlab(ctx context.Context, creds ClientCredentials, to
 		ExternalKey: identity.ExternalKey{Issuer: c.Issuer(GitLab), Provider: GitLab, Subject: subject},
 		Email:       email,
 		// GitLab's account confirmation timestamp (go-api D2745).
-		EmailVerified: email != "" && optionalString(user.ConfirmedAt) != "",
+		EmailVerified: email != "" && optionalString(user.ConfirmedAt) != "" && !loneSurrogateEmail(userProfile),
 		Username:      optionalString(user.Username), FullName: optionalPointer(user.Name),
 	}, nil
 }
@@ -419,13 +495,18 @@ func (c *ProviderClient) google(ctx context.Context, creds ClientCredentials, to
 		VerifiedEmail any `json:"verified_email"`
 		Name          any `json:"name"`
 	}
+	var userProfile pyjson.Value
 	if err := c.do(ctx, request{method: http.MethodGet, url: c.Endpoints.GoogleUserInfo,
-		headers: map[string]string{"Authorization": bearer(token)}, step: "google user"}, &user); err != nil {
+		headers: map[string]string{"Authorization": bearer(token)}, step: "google user", profile: &userProfile}, &user); err != nil {
 		return Profile{}, err
 	}
 	subject := optionalString(user.ID)
 	if subject == "" {
-		return Profile{}, &ProviderError{Reason: ReasonInvalidCredentials, Step: "google user"}
+		state := idUnusable
+		if user.ID == nil || user.ID == "" {
+			state = idMissing
+		}
+		return Profile{}, idRefusal(state, "google user")
 	}
 	if subject != info.UserID {
 		return Profile{}, &ProviderError{Reason: ReasonAudience, Step: "google user"}
@@ -435,7 +516,7 @@ func (c *ProviderClient) google(ctx context.Context, creds ClientCredentials, to
 	return Profile{
 		ExternalKey:   identity.ExternalKey{Issuer: SocialIssuer(Google), Provider: Google, Subject: subject},
 		Email:         email,
-		EmailVerified: email != "" && verified,
+		EmailVerified: email != "" && verified && !loneSurrogateEmail(userProfile),
 		FullName:      optionalPointer(user.Name),
 	}, nil
 }

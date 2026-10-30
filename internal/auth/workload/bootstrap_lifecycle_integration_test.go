@@ -400,15 +400,15 @@ func bootstrapWrites(t *testing.T, e *env, principal uuid.UUID) string {
 
 // refusesDisabled: with a live value present, create and rotate are refused
 // as disabled and write nothing; revoke and disable still work.
-func refusesDisabled(t *testing.T, e *env, n string, principal, live uuid.UUID) {
+func refusesDisabled(t *testing.T, e *env, n string, principal, live uuid.UUID, want error) {
 	t.Helper()
 	ctx := ctxT(t)
 	before := bootstrapWrites(t, e, principal)
-	if _, err := e.writer.CreateBootstrap(ctx, n, mint(t), nil, time.Hour, Actor{}); !errors.Is(err, ErrBootstrapWorkloadDisabled) {
-		t.Fatalf("create on a disabled workload = %v, want ErrBootstrapWorkloadDisabled", err)
+	if _, err := e.writer.CreateBootstrap(ctx, n, mint(t), nil, time.Hour, Actor{}); err != want {
+		t.Fatalf("create on a disabled workload = %v, want %v", err, want)
 	}
-	if _, err := e.writer.RotateBootstrap(ctx, n, mint(t), 0, time.Hour, Actor{}); !errors.Is(err, ErrBootstrapWorkloadDisabled) {
-		t.Fatalf("rotate on a disabled workload = %v, want ErrBootstrapWorkloadDisabled", err)
+	if _, err := e.writer.RotateBootstrap(ctx, n, mint(t), 0, time.Hour, Actor{}); err != want {
+		t.Fatalf("rotate on a disabled workload = %v, want %v", err, want)
 	}
 	if after := bootstrapWrites(t, e, principal); after != before {
 		t.Fatalf("a refused create or rotate wrote: %s -> %s", before, after)
@@ -432,7 +432,7 @@ func TestBootstrapCreateAndRotateRefuseADisabledWorkload(t *testing.T) {
 	if err := e.writer.Disable(ctx, n, Actor{}); err != nil {
 		t.Fatal(err)
 	}
-	refusesDisabled(t, e, n, principal, first.CredentialID)
+	refusesDisabled(t, e, n, principal, first.CredentialID, ErrBootstrapWorkloadDisabled)
 	if err := e.writer.Enable(ctx, n, Actor{}); err != nil {
 		t.Fatal(err)
 	}
@@ -456,7 +456,7 @@ func TestBootstrapCreateAndRotateRefuseADisabledPrincipal(t *testing.T) {
 	if info, err := e.writer.Lookup(ctx, n); err != nil || info.Disabled {
 		t.Fatalf("the workload row is disabled too (%v); the cell needs the principal alone", err)
 	}
-	refusesDisabled(t, e, n, principal, first.CredentialID)
+	refusesDisabled(t, e, n, principal, first.CredentialID, ErrBootstrapPrincipalDisabled)
 }
 
 // TestBootstrapCreateRefusesADisabledWorkloadWithNoLiveValue: with no
@@ -466,25 +466,28 @@ func TestBootstrapCreateAndRotateRefuseADisabledPrincipal(t *testing.T) {
 func TestBootstrapCreateRefusesADisabledWorkloadWithNoLiveValue(t *testing.T) {
 	e := getEnv(t)
 	ctx := ctxT(t)
-	disable := map[string]func(n string, principal uuid.UUID){
-		"workload disabled": func(n string, _ uuid.UUID) {
+	disable := map[string]struct {
+		off  func(n string, principal uuid.UUID)
+		want error
+	}{
+		"workload disabled": {func(n string, _ uuid.UUID) {
 			if err := e.writer.Disable(ctx, n, Actor{}); err != nil {
 				t.Fatal(err)
 			}
-		},
-		"principal only": func(_ string, principal uuid.UUID) {
+		}, ErrBootstrapWorkloadDisabled},
+		"principal only": {func(_ string, principal uuid.UUID) {
 			commitSeed(t, e, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1 RETURNING id`, principal)
-		},
+		}, ErrBootstrapPrincipalDisabled},
 	}
-	for name, off := range disable {
+	for name, c := range disable {
 		t.Run(name, func(t *testing.T) {
 			n, principal := registerWorkload(t, e, []string{"auth-service"})
-			off(n, principal)
+			c.off(n, principal)
 			if got := bootstrapWrites(t, e, principal); got != "0//0/0" {
 				t.Fatalf("the workload starts with bootstrap writes: %s", got)
 			}
-			if _, err := e.writer.CreateBootstrap(ctx, n, mint(t), nil, time.Hour, Actor{}); !errors.Is(err, ErrBootstrapWorkloadDisabled) {
-				t.Fatalf("create = %v, want ErrBootstrapWorkloadDisabled", err)
+			if _, err := e.writer.CreateBootstrap(ctx, n, mint(t), nil, time.Hour, Actor{}); err != c.want {
+				t.Fatalf("create = %v, want %v", err, c.want)
 			}
 			if got := bootstrapWrites(t, e, principal); got != "0//0/0" {
 				t.Fatalf("a refused create wrote: %s", got)

@@ -340,6 +340,13 @@ func docWithoutRow(t testing.TB, route string) []byte {
 // document (nil is the one the binary embeds).
 func newProvFixtureWith(t *testing.T, profileRows []byte) *provFixture {
 	t.Helper()
+	return newProvFixtureFor(t, profileRows, nil)
+}
+
+// newProvFixtureFor is newProvFixtureWith with the go-api workload path
+// (nil refuses every workload token).
+func newProvFixtureFor(t *testing.T, profileRows []byte, workload *SessionIssueWorkload) *provFixture {
+	t.Helper()
 	f := &provFixture{t: t, creds: &fakeScopeCredentials{}, orgs: &fakeEnsurer{}, members: &fakeMembers{}, invites: &fakeInvites{},
 		deprovision: &fakeDeprovision{}, reactivate: &fakeReactivate{}, reader: sdkmetric.NewManualReader(), logs: &bytes.Buffer{},
 		org: uuid.New(), admin: uuid.New(), owner: uuid.New(), viewer: uuid.New(), super: uuid.New(), target: uuid.New(), x: uuid.New()}
@@ -352,8 +359,9 @@ func newProvFixtureWith(t *testing.T, profileRows []byte) *provFixture {
 	}
 	routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
 		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ProfileRows: profileRows,
-		Logger: slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
-		Meter:  sdkmetric.NewMeterProvider(sdkmetric.WithReader(f.reader)).Meter("test")})
+		Workload: workload,
+		Logger:   slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		Meter:    sdkmetric.NewMeterProvider(sdkmetric.WithReader(f.reader)).Meter("test")})
 	if err != nil {
 		t.Fatal(err)
 	}

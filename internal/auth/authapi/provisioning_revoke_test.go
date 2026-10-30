@@ -145,7 +145,8 @@ func TestInviteRevokePassesTheRequestAndTheLockedActorRule(t *testing.T) {
 		t.Fatalf("revoke: %d %s", response.Code, response.Body)
 	}
 	in := revoker.in
-	if in.OrgID != f.org || in.InviteID != id || in.Actor.PrincipalID == nil || *in.Actor.PrincipalID != f.admin || in.Actor.RequestID == nil {
+	if in.OrgID != f.org || in.InviteID != id || in.Actor.PrincipalID == nil || *in.Actor.PrincipalID != f.admin || in.Actor.RequestID == nil ||
+		in.Actor.Caller.CredentialID != "cred-1" || in.Actor.Caller.Workload != nil {
 		t.Fatalf("the store got %+v", in)
 	}
 	f.users.roles[[2]uuid.UUID{f.admin, f.org}] = "viewer"

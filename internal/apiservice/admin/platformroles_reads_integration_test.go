@@ -100,3 +100,28 @@ func TestAdminProfileUpdateLeavesThePublicColumnWhileOwned(t *testing.T) {
 		}
 	}
 }
+
+// The transfer-ownership guard's target read follows the switch: for a
+// non-superuser caller and an organization with no owner, a target that holds
+// only the platform role is refused (403) while owned and passes the guard
+// (400, not an owner) while off; a public-only superuser the reverse.
+func TestTransferOwnershipGuardReadsThePlatformRoleWhileOwned(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	env := platformroleseam.Start(ctx, t, true)
+	publicOnly := env.User(ctx, t, true, false)
+	assigned := env.User(ctx, t, false, true)
+	org := env.Member(ctx, t, env.User(ctx, t, false, false), "member")
+	caller := &policy.User{UserID: uuid.NewString(), ID: uuid.New()}
+	for _, owned := range []bool{true, false} {
+		h := &handlers{store: pgStore{Pool: env.Admin, PlatformRolesOwned: owned, AuthSchema: "auth"}, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+		for who, refused := range map[uuid.UUID]bool{assigned: owned, publicOnly: !owned} {
+			recorder := httptest.NewRecorder()
+			h.transferOwnershipInAuth(ctx, recorder, caller, org, who)
+			want := map[bool]int{true: http.StatusForbidden, false: http.StatusBadRequest}[refused]
+			if recorder.Code != want {
+				t.Errorf("owned %v: transfer to %s: status %d %s, want %d", owned, who, recorder.Code, recorder.Body.String(), want)
+			}
+		}
+	}
+}

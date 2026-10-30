@@ -184,6 +184,10 @@ func RunOrgs(ctx context.Context, src OrgSource, sink OrgSink, auth AuthOnlyRead
 		batch = 500
 	}
 	rep := OrgReport{DryRun: opts.DryRun, Skipped: map[string]int{}}
+	// The membership read is tried first, by the same function the run uses, so a missing column grant fails before any write.
+	if _, err := src.PageMemberships(ctx, nil, 1); err != nil {
+		return rep, errors.New("usersbackfill: reading public.memberships failed")
+	}
 	pending := map[uuid.UUID]struct{}{}
 	var afterOrg *uuid.UUID
 	for {

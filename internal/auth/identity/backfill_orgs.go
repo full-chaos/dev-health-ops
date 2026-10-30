@@ -210,12 +210,22 @@ FROM (SELECT 1) x LEFT JOIN `+s.q+`.memberships m ON m.organization_id = $1 AND 
 		err = s.updateMembershipRole(ctx, *id, t)
 	}
 	if err == nil && action != memberInsert && (fill.Inviter || fill.Joined) {
-		err = s.fillMembership(ctx, *id, t, fill)
+		var changed bool
+		changed, err = s.fillMembership(ctx, *id, t, fill)
+		res = clearUnchangedFill(res, changed)
 	}
 	if err != nil {
 		return MembershipBackfillResult{}, err
 	}
 	return res, nil
+}
+
+// clearUnchangedFill drops the fill flags when the audited UPDATE changed no row (a concurrent change took the value first).
+func clearUnchangedFill(res MembershipBackfillResult, changed bool) MembershipBackfillResult {
+	if !changed {
+		res.InviterSet, res.JoinedSet = false, false
+	}
+	return res
 }
 
 // fillDecision is what BackfillMembership fills on an existing membership. Unresolved counts a public
@@ -342,7 +352,7 @@ func fillAudit(t MembershipBackfillTarget, id uuid.UUID, d fillDecision) audit.A
 	return ev
 }
 
-func (s *Store) fillMembership(ctx context.Context, id uuid.UUID, t MembershipBackfillTarget, d fillDecision) error {
+func (s *Store) fillMembership(ctx context.Context, id uuid.UUID, t MembershipBackfillTarget, d fillDecision) (bool, error) {
 	var inviter *uuid.UUID
 	if d.Inviter {
 		inviter = t.InvitedBy
@@ -364,8 +374,11 @@ WHERE id = $1 AND status = 'active'
 		Events: []audit.OutboxEvent{membershipEvent(id, "membership.activated",
 			map[string]any{"status": "active", "role_id": "rol_" + t.Role})},
 	})
-	if err == nil || errors.Is(err, audit.ErrNoStateChange) {
-		return nil
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, audit.ErrNoStateChange):
+		return false, nil
 	}
-	return s.storeErr(ctx, "fill membership", err)
+	return false, s.storeErr(ctx, "fill membership", err)
 }

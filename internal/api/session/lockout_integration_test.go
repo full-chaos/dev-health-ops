@@ -4,6 +4,8 @@ package session
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -197,25 +199,49 @@ func TestRecordFailedAttemptConcurrentNoLostUpdate(t *testing.T) {
 	}
 }
 
-// clearAfterFirstExec runs onFirstExec right after the first Exec returns.
-type clearAfterFirstExec struct {
+// afterFirstStatement runs hook once, right after the first statement of any
+// kind (Exec, Query or QueryRow) returns.
+type afterFirstStatement struct {
 	pgx.Tx
-	onFirstExec func() error
-	fired       bool
+	hook  func() error
+	fired bool
+	err   error
 }
 
-func (c *clearAfterFirstExec) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
-	tag, err := c.Tx.Exec(ctx, sql, args...)
-	if err != nil || c.fired {
-		return tag, err
+func (c *afterFirstStatement) after() {
+	if c.fired {
+		return
 	}
 	c.fired = true
-	return tag, c.onFirstExec()
+	c.err = c.hook()
 }
 
-// A successful login (clearAttempts) may commit after the failure's INSERT
-// .. ON CONFLICT and before its next statement. The failure still counts as
-// the first one of a fresh row, and does not error.
+func (c *afterFirstStatement) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	tag, err := c.Tx.Exec(ctx, sql, args...)
+	if err == nil {
+		c.after()
+	}
+	return tag, err
+}
+
+func (c *afterFirstStatement) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	rows, err := c.Tx.Query(ctx, sql, args...)
+	if err == nil {
+		c.after()
+	}
+	return rows, err
+}
+
+func (c *afterFirstStatement) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	row := c.Tx.QueryRow(ctx, sql, args...)
+	c.after()
+	return row
+}
+
+// A successful login (clearAttempts) may run while a failure is in flight.
+// The failure must not error. Two outcomes are valid: the clear committed
+// before the failure took its row lock (a fresh row, count 1), or it waited
+// on that lock and ran after the failure (no row).
 func TestRecordFailedAttemptSurvivesAConcurrentClear(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -231,27 +257,83 @@ func TestRecordFailedAttemptSurvivesAConcurrentClear(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wrapped := &clearAfterFirstExec{Tx: tx, onFirstExec: func() error {
-		_, err := pool.Exec(ctx, `DELETE FROM login_attempts WHERE email = $1`, email)
-		return err
-	}}
+	pidCh := make(chan int, 1)
+	deleteDone := make(chan error, 1)
+	hook := func() error {
+		go func() {
+			conn, err := pool.Acquire(ctx)
+			if err != nil {
+				pidCh <- 0
+				deleteDone <- err
+				return
+			}
+			defer conn.Release()
+			var pid int
+			if err := conn.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
+				pidCh <- 0
+				deleteDone <- err
+				return
+			}
+			pidCh <- pid
+			_, err = conn.Exec(ctx, `DELETE FROM login_attempts WHERE email = $1`, email)
+			deleteDone <- err
+		}()
+		pid := <-pidCh
+		if pid == 0 {
+			return fmt.Errorf("delete connection: %w", <-deleteDone)
+		}
+		for i := 0; i < 200; i++ {
+			select {
+			case err := <-deleteDone:
+				deleteDone <- err
+				return nil
+			default:
+			}
+			var waiting bool
+			if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid = $1 AND wait_event_type = 'Lock')`,
+				pid).Scan(&waiting); err != nil {
+				return err
+			}
+			if waiting {
+				return nil
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		return errors.New("the DELETE neither committed nor waited on a lock")
+	}
+	wrapped := &afterFirstStatement{Tx: tx, hook: hook}
 	if err := h.recordFailedAttempt(ctx, wrapped, email); err != nil {
 		_ = tx.Rollback(ctx)
 		t.Fatalf("recordFailedAttempt: %v", err)
 	}
+	if wrapped.err != nil {
+		_ = tx.Rollback(ctx)
+		t.Fatalf("hook: %v", wrapped.err)
+	}
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
+	}
+	if err := <-deleteDone; err != nil {
+		t.Fatalf("delete: %v", err)
 	}
 	var rows, count int
 	var first, locked *time.Time
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM login_attempts WHERE email = $1`, email).Scan(&rows); err != nil {
 		t.Fatal(err)
 	}
-	if err := pool.QueryRow(ctx, `SELECT attempt_count, first_attempt_at, locked_until FROM login_attempts WHERE email = $1`,
-		email).Scan(&count, &first, &locked); err != nil {
-		t.Fatal(err)
-	}
-	if rows != 1 || count != 1 || first == nil || !first.Equal(now) || locked != nil {
-		t.Errorf("rows %d count %d first %v locked %v, want 1 row, count 1, first %v, no lock", rows, count, first, locked, now)
+	switch rows {
+	case 0:
+		t.Log("the clear waited on the row lock and ran after the failure")
+	case 1:
+		if err := pool.QueryRow(ctx, `SELECT attempt_count, first_attempt_at, locked_until FROM login_attempts WHERE email = $1`,
+			email).Scan(&count, &first, &locked); err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 || first == nil || !first.Equal(now) || locked != nil {
+			t.Errorf("count %d first %v locked %v, want count 1, first %v, no lock", count, first, locked, now)
+		}
+		t.Log("the clear committed first; the failure made a fresh row")
+	default:
+		t.Errorf("%d rows for one address", rows)
 	}
 }

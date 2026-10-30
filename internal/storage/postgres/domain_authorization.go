@@ -573,7 +573,7 @@ type TablePrivilege struct {
 // A table may also appear in RequiredTables (CHAOS-6747). It is then mixed:
 // RequiredTables states its table-wide privileges and ColumnScoped adds
 // column privileges on top of them (integration_credentials: table-wide
-// SELECT, column-scoped UPDATE of is_active and updated_at). Any column
+// SELECT, column-scoped UPDATE of is_active, updated_at and the last_test_* result). Any column
 // privilege not declared there, and any table-wide privilege beyond the
 // flags, is refused.
 type ColumnPrivilege struct {
@@ -929,6 +929,10 @@ func domainPosture() RolePosture {
 		ColumnScoped: []ColumnPrivilege{
 			{"integration_credentials", "is_active", "UPDATE"},
 			{"integration_credentials", "updated_at", "UPDATE"},
+			// CHAOS-11881: finalize stamps a credential connected after a run with a successful unit.
+			{"integration_credentials", "last_test_at", "UPDATE"},
+			{"integration_credentials", "last_test_success", "UPDATE"},
+			{"integration_credentials", "last_test_error", "UPDATE"},
 			{"worker_job_completion_fences", "completion_key", "SELECT"},
 			{"worker_job_completion_fences", "completion_key", "INSERT"},
 			// The columns llmbudget.PgStore.Settle writes, and no other.

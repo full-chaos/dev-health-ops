@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 
 	"go.opentelemetry.io/otel"
@@ -128,8 +127,8 @@ func (c *Consumer) Resubscribed(ctx context.Context) {
 // "<type>:<id>" is skipped.
 func (c *Consumer) CatchUp(ctx context.Context, floors map[string]int64) {
 	for field, revision := range floors {
-		typ, id, ok := strings.Cut(field, ":")
-		if !ok || typ == "" || id == "" || revision < 1 {
+		typ, id, ok := splitAggregateKey(field)
+		if !ok || revision < 1 {
 			continue
 		}
 		c.Handle(ctx, contracts.ProvisioningEvent{

@@ -11,7 +11,17 @@ import (
 // them as an ADVISORY second input, never a sole source: floor = max(WAL manifest, these floors), and only while
 // ReadStatus says Usable. A change to a name, a return shape, the key layout or the usable rule is a contract change.
 
-// ErrCorruptFloors: a value of the hash is not a positive decimal integer. The text never quotes the field (it holds an
+// splitAggregateKey is the inverse of contracts.AggregateKey: the type ends at the first colon (aggregate types have none),
+// the id is the rest (it may hold colons). Both must be non-empty.
+func splitAggregateKey(field string) (typ, id string, ok bool) {
+	typ, id, ok = strings.Cut(field, ":")
+	if !ok || typ == "" || id == "" {
+		return "", "", false
+	}
+	return typ, id, true
+}
+
+// ErrCorruptFloors: a field of the hash is not "<type>:<id>", or a value is not a positive decimal integer. The text never quotes the field (it holds an
 // aggregate id) or the value.
 var ErrCorruptFloors = errors.New("revisionfeed: the published floors are corrupt")
 
@@ -24,6 +34,9 @@ func PublishedFloors(ctx context.Context, client Client) (map[string]int64, erro
 	}
 	floors := make(map[string]int64, len(raw))
 	for field, value := range raw {
+		if _, _, ok := splitAggregateKey(field); !ok {
+			return nil, ErrCorruptFloors
+		}
 		revision, err := strconv.ParseInt(value, 10, 64)
 		if err != nil || revision < 1 {
 			return nil, ErrCorruptFloors

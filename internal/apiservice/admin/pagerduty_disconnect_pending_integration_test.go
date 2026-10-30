@@ -217,4 +217,5 @@ VALUES ($1, $2, 'pagerduty', 'default', true, NULL, '{"auth_mode":"oauth","regio
 			t.Fatalf("revoke calls %d, want exactly 1", calls("pd-pending-held-token"))
 		}
 	})
+	venueoracle.WriteGoOnlyProof(t, "Go-only rule test: a disconnect of a missing credential sends its pending revocation rows (Go-only rows, a named divergence) and a row another sender holds is skipped and sent once; there is no Python answer to compare, the answers, rows and provider calls are asserted directly")
 }

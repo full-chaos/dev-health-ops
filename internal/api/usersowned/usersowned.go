@@ -74,3 +74,20 @@ func Detail() *pyjson.Object {
 func Write(w http.ResponseWriter) {
 	policy.WriteDetail(w, http.StatusConflict, Detail(), nil)
 }
+
+// PlatformRolesMessage is the human-readable answer of a public is_superuser
+// write while auth-service owns the platform roles (AUTH_PLATFORM_ROLES_OWNED).
+const PlatformRolesMessage = "This operation is served by the authentication service while it owns platform roles"
+
+// ErrPlatformRolesRefused is the refusal of a public is_superuser write while
+// auth-service owns the platform roles.
+var ErrPlatformRolesRefused = errors.New(PlatformRolesMessage)
+
+// WritePlatformRoles answers a refused is_superuser write: 409 with the
+// operation_moved reason.
+func WritePlatformRoles(w http.ResponseWriter) {
+	detail := pyjson.NewObject()
+	detail.Set("message", PlatformRolesMessage)
+	detail.Set("reason", Reason)
+	policy.WriteDetail(w, http.StatusConflict, detail, nil)
+}

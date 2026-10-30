@@ -10,6 +10,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 )
 
 // BackfillTarget is the state of one public.users row that the users backfill
@@ -38,15 +39,9 @@ type BackfillTarget struct {
 	PlatformRolesOwned bool
 }
 
-// PlatformRoleHeldSQL is the one SQL condition, shared by the users backfill
-// and the users reconciliation, that principalExpr holds the platform role
-// roleExpr now: an assignment that has not expired on the statement clock
-// (the platform role store's expiry rule). schema is a quoted auth schema;
-// principalExpr and roleExpr are SQL expressions of the caller's own query.
-func PlatformRoleHeldSQL(schema, principalExpr, roleExpr string) string {
-	return `EXISTS (SELECT 1 FROM ` + schema + `.platform_role_assignments h WHERE h.principal_id = ` + principalExpr +
-		` AND h.role_key = ` + roleExpr + ` AND (h.expires_at IS NULL OR h.expires_at > statement_timestamp()))`
-}
+// notExpiredSQL is the expiry half of the platform role store's rule, over the
+// assignment r on the statement clock.
+const notExpiredSQL = `(r.expires_at IS NULL OR r.expires_at > statement_timestamp())`
 
 // errExpiredRoleChanged is a grant that found the expired assignment it was to
 // replace already changed; nothing is written and the next run reads again.
@@ -90,12 +85,17 @@ type backfillState struct {
 	algorithm   *string
 	tokenVer    int64
 	lastLogin   *time.Time
-	// roleHeld is a platform_admin assignment that has not expired
-	// (PlatformRoleHeldSQL); roleBackfilled is one with no granter, expired or
-	// not (the only kind the backfill revokes); roleExpired is the id of an
-	// expired one with no granter, which a grant replaces; roleExpiredGranted
-	// is the id of an expired one a person granted, which the backfill leaves.
+	// roleHeld is the platform role store's rule (rule.HoldsSQL): an
+	// assignment that has not expired, of a user principal that is not
+	// disabled. roleLive is an assignment that has not expired, whatever the
+	// principal's state: the grant decision reads it, so a disabled superuser
+	// with its assignment is not granted again on every run. roleBackfilled is
+	// one with no granter, expired or not (the only kind the backfill revokes);
+	// roleExpired is the id of an expired one with no granter, which a grant
+	// replaces; roleExpiredGranted is the id of an expired one a person
+	// granted, which the backfill leaves.
 	roleHeld           bool
+	roleLive           bool
 	roleBackfilled     bool
 	roleExpired        *uuid.UUID
 	roleExpiredGranted *uuid.UUID
@@ -176,9 +176,9 @@ func (s *Store) backfillExtras(ctx context.Context, t BackfillTarget, st backfil
 	switch {
 	case t.PlatformRolesOwned:
 		res.RoleSkipped = t.Superuser && !st.roleHeld || !t.Superuser && st.roleBackfilled
-	case t.Superuser && !st.roleHeld && st.roleExpiredGranted != nil:
+	case t.Superuser && !st.roleLive && st.roleExpiredGranted != nil:
 		res.RoleExpiredGranted = st.roleExpiredGranted
-	case t.Superuser && !st.roleHeld:
+	case t.Superuser && !st.roleLive:
 		res.Updated, res.RoleGranted = true, true
 		if !dryRun {
 			if err := s.grantBackfillRole(ctx, t.ID, st.roleExpired); err != nil {
@@ -219,15 +219,16 @@ func (s *Store) readBackfillState(ctx context.Context, id uuid.UUID) (backfillSt
 	err := s.pool.QueryRow(ctx, `SELECT p.kind, p.disabled_at IS NOT NULL, p.display_name,
        u.email, u.email_lower, u.email_verified_at IS NOT NULL, u.password_hash, u.password_algorithm,
        COALESCE(u.legacy_token_version, 0), u.last_login_at,
-       `+PlatformRoleHeldSQL(s.q, "p.id", "$2")+`,
+       `+rule.HoldsSQL(s.q, "p.id", "$2")+`,
+       EXISTS (SELECT 1 FROM `+s.q+`.platform_role_assignments r WHERE r.principal_id = p.id AND r.role_key = $2 AND `+notExpiredSQL+`),
        EXISTS (SELECT 1 FROM `+s.q+`.platform_role_assignments r WHERE r.principal_id = p.id AND r.role_key = $2 AND r.granted_by IS NULL),
        (SELECT r.id FROM `+s.q+`.platform_role_assignments r WHERE r.principal_id = p.id AND r.role_key = $2
-               AND r.granted_by IS NULL AND NOT `+PlatformRoleHeldSQL(s.q, "p.id", "$2")+`),
+               AND r.granted_by IS NULL AND NOT `+notExpiredSQL+`),
        (SELECT r.id FROM `+s.q+`.platform_role_assignments r WHERE r.principal_id = p.id AND r.role_key = $2
-               AND r.granted_by IS NOT NULL AND NOT `+PlatformRoleHeldSQL(s.q, "p.id", "$2")+`)
+               AND r.granted_by IS NOT NULL AND NOT `+notExpiredSQL+`)
 FROM `+s.q+`.principals p LEFT JOIN `+s.q+`.users u ON u.principal_id = p.id
 WHERE p.id = $1`, id, PlatformAdminRole).Scan(&st.kind, &st.disabled, &st.displayName, &email, &emailLower, &verified, &st.hash, &st.algorithm,
-		&st.tokenVer, &st.lastLogin, &st.roleHeld, &st.roleBackfilled, &st.roleExpired, &st.roleExpiredGranted)
+		&st.tokenVer, &st.lastLogin, &st.roleHeld, &st.roleLive, &st.roleBackfilled, &st.roleExpired, &st.roleExpiredGranted)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return st, false, nil
 	}
@@ -383,7 +384,7 @@ func (s *Store) grantBackfillRole(ctx context.Context, id uuid.UUID, expired *uu
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			if expired != nil {
 				tag, err := tx.Exec(ctx, `DELETE FROM `+s.q+`.platform_role_assignments
-WHERE id = $1 AND principal_id = $2 AND granted_by IS NULL AND NOT `+PlatformRoleHeldSQL(s.q, "$2", "$3"), *expired, id, PlatformAdminRole)
+WHERE id = $1 AND principal_id = $2 AND role_key = $3 AND granted_by IS NULL AND expires_at <= statement_timestamp()`, *expired, id, PlatformAdminRole)
 				if err != nil {
 					return err
 				}

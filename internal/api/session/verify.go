@@ -160,7 +160,7 @@ func (h handlers) lookupByEmail(ctx context.Context, email string) (*userRow, er
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
-	return userByEmail(ctx, tx, pythonparity.Strip(pythonparity.Lower(email)))
+	return h.userByEmail(ctx, tx, pythonparity.Strip(pythonparity.Lower(email)))
 }
 
 // issueVerificationLink replaces the user's verification token and mails it.

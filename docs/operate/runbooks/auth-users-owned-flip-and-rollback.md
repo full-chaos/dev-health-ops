@@ -53,6 +53,8 @@ Phase 4 moves ownership of users from go-api to auth-service. While the roll run
 
    Memberships: `diff.membership_inactive_in_public` is gated (an `auth.memberships` row that is not active while `public.memberships` still holds the member). The `info.membership_*` lines are printed and never gated. After U3, go-api still removes a member with a DELETE in `public.memberships` only and changes a role in `public.memberships` only; the `auth.memberships` row stays active with the old role. So `info.membership_public_missing` grows with each go-api member removal and `info.membership_role_diff` with each go-api role change. That is expected and is not a STOP. With `goApi.authProxy.orgProvisioning` on (the line above), go-api's member writes go to auth-service and these lines do not grow from them.
 
+   Platform roles: `diff.platform_role_disabled_superuser` is gated. It counts public superusers whose auth principal is disabled. The backfill gives such a user its assignment once, but the platform role rule ignores a disabled principal, so the user holds no platform power in the auth schema. Clear it before the platform roles flip: clear `is_superuser` in `public.users` for that user, or enable the user.
+
 ## Rollback: owned to phase 3
 
 Roll back in the opposite order. auth-service stops owning users first, so no owned pod writes while a local writer exists.

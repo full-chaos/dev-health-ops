@@ -324,3 +324,5 @@ func probeAnswers(handler http.Handler, requests []probeRequest) []probeAnswer {
 	sort.SliceStable(answers, func(i, j int) bool { return strings.Compare(answers[i].Name, answers[j].Name) < 0 })
 	return answers
 }
+
+func (probeStore) ReadsPlatformRoles() bool { return false }

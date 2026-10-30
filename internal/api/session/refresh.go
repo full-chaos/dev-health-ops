@@ -140,7 +140,7 @@ func (h handlers) refresh(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, "refresh sub is not a UUID", nil)
 		return
 	}
-	user, err := userByID(ctx, tx, userID)
+	user, err := h.userByID(ctx, tx, userID)
 	if err != nil {
 		h.fail(w, r, "load user", err)
 		return
@@ -389,7 +389,7 @@ func (h handlers) replaySuccessor(w http.ResponseWriter, r *http.Request, tx pgx
 		h.fail(w, r, "refresh sub is not a UUID", nil)
 		return true
 	}
-	user, err := userByID(ctx, tx, userID)
+	user, err := h.userByID(ctx, tx, userID)
 	if err != nil {
 		h.fail(w, r, "load user", err)
 		return true

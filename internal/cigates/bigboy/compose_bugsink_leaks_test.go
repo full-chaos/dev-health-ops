@@ -290,6 +290,7 @@ func TestComposeBugsinkLeaksCells(t *testing.T) {
 		{"the project directory", "    volumes:\n    - .:/app\n"},
 		{"the documented project root", "    volumes:\n    - /home/ubuntu/devhealth:/root-dir\n"},
 		{"a parent of the project root", "    volumes:\n    - /home/ubuntu:/home-dir\n"},
+		{"the project root as a variable default", "    volumes:\n    - type: bind\n      source: ${ROOT:-/home/ubuntu/devhealth}\n      target: /root-dir\n"},
 	} {
 		add(both("web mounts "+v.name, "  web:\n"+v.yaml, false)...)
 	}

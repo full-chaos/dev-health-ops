@@ -107,7 +107,9 @@ func TestOAuthProviderErrorsRecordTheFailureAndKeepTheProviderActive(t *testing.
 			h.idp.oauth.mu.Lock()
 			h.idp.oauth.failProfile = false
 			h.idp.oauth.mu.Unlock()
-			if _, failure := h.finishOAuth(t, provider, client, h.startOAuth(t, provider), fakeAccountWith(uniqueEmail("next"), true), true); failure != nil {
+			next := fakeAccountWith(uniqueEmail("next"), true)
+			h.seedOAuthMember(t, h.orgID, "oauth_gitlab", next)
+			if _, failure := h.finishOAuth(t, provider, client, h.startOAuth(t, provider), next, true); failure != nil {
 				t.Fatalf("the next sign-in through the provider: %+v", failure)
 			}
 		})

@@ -445,10 +445,16 @@ func (h *handlers) orgDeletionPurgePostgres(ctx context.Context, orgUUID uuid.UU
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// The auth lock order (internal/auth/membership readPairs): the invite
-	// rows, then the membership rows, each ORDER BY id, before any delete
-	// (a DELETE takes its rows in scan order).
+	// The auth lock order (internal/auth/membership readPairs): the
+	// public.organizations row, in the same position as step 3, then the
+	// invite rows, then the membership rows, each ORDER BY id, before any
+	// delete (a DELETE takes its rows in scan order). The organization comes
+	// first, as in the admin PATCH and the Stripe subscription event, and
+	// holds NO KEY UPDATE: an invite accept that holds its invite takes the
+	// foreign key's KEY SHARE on this row, and FOR UPDATE here would cycle
+	// with it. The final DELETE takes FOR UPDATE, as it always did.
 	for _, lock := range []string{
+		`SELECT 1 FROM organizations WHERE id = $1 FOR NO KEY UPDATE`,
 		`SELECT 1 FROM org_invites WHERE org_id = $1 ORDER BY id FOR UPDATE`,
 		`SELECT 1 FROM memberships WHERE org_id = $1 ORDER BY id FOR UPDATE`,
 	} {

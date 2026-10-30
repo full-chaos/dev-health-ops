@@ -375,8 +375,13 @@ func (e errRow) Scan(...any) error { return e.err }
 // one of the two is set: a mutation cannot forget its events by leaving a
 // slice empty.
 type Mutation struct {
-	Apply     func(ctx context.Context, tx TxOps) error
-	Audit     AuditEvent
+	Apply func(ctx context.Context, tx TxOps) error
+	Audit AuditEvent
+	// Also are further audit rows of the same mutation, written after Audit
+	// in the same transaction: one state change that ends one thing and
+	// starts another (an organization switch revokes the predecessor session
+	// it issues a successor for) records each half as its own row.
+	Also      []AuditEvent
 	Events    []OutboxEvent
 	OffStream string
 	// Refusals are Apply errors that are expected domain refusals: Commit still
@@ -388,11 +393,13 @@ func (m Mutation) validate() error {
 	if m.Apply == nil {
 		return fmt.Errorf("%w: no state mutation", ErrMutationFailed)
 	}
-	if err := m.Audit.validate(); err != nil {
-		return err
-	}
-	if appendOnlyEventTypes[m.Audit.EventType] || publicPurgeEventTypes[m.Audit.EventType] {
-		return fmt.Errorf("%w: audit event_type %q is append-only and has no state mutation", ErrMutationFailed, m.Audit.EventType)
+	for _, event := range append([]AuditEvent{m.Audit}, m.Also...) {
+		if err := event.validate(); err != nil {
+			return err
+		}
+		if appendOnlyEventTypes[event.EventType] || publicPurgeEventTypes[event.EventType] {
+			return fmt.Errorf("%w: audit event_type %q is append-only and has no state mutation", ErrMutationFailed, event.EventType)
+		}
 	}
 	switch {
 	case len(m.Events) > 0 && m.OffStream != "":
@@ -486,8 +493,10 @@ func Commit(ctx context.Context, pool *pgxpool.Pool, schema authschema.Validated
 	if err := insertOutboxEvents(ctx, tx, schema, m); err != nil {
 		return err
 	}
-	if err := insertAuditEvent(ctx, tx, schema, m.Audit); err != nil {
-		return err
+	for _, event := range append([]AuditEvent{m.Audit}, m.Also...) {
+		if err := insertAuditEvent(ctx, tx, schema, event); err != nil {
+			return err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("%w: committing", ErrMutationFailed)

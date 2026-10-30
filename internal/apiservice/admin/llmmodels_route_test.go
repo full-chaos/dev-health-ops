@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
+	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -90,8 +92,16 @@ VALUES ($1, $2, 'llm', $3, $4, false, NULL, now(), now())`, uuid.New(), orgID.St
 		return strings.Join(parts, ",")
 	}
 
+	// The live ids come first, then the catalog ids the provider did not list, sorted.
+	wantIDs := "gpt-5,gpt-5-mini"
+	for _, id := range llmbudget.CatalogModels("openai") {
+		if !slices.Contains([]string{"gpt-5", "gpt-5-mini"}, id) {
+			wantIDs += "," + id
+		}
+	}
+
 	first := decode(doRouteRequest(t, base, "GET", "/api/v1/admin/llm-settings/models", auth("set")))
-	if first["source"] != "live" || ids(first) != "gpt-5,gpt-5-mini,gpt-5-nano" || first["reason"] != nil || first["provider"] != "openai" {
+	if first["source"] != "live" || ids(first) != wantIDs || first["reason"] != nil || first["provider"] != "openai" {
 		t.Fatalf("first read = %v", first)
 	}
 	if lastAuth.Load() != "Bearer sk-models-route" || lastURL.Load() != "https://example.invalid/v1/models" || calls.Load() != 1 {
@@ -99,7 +109,7 @@ VALUES ($1, $2, 'llm', $3, $4, false, NULL, now(), now())`, uuid.New(), orgID.St
 	}
 
 	second := decode(doRouteRequest(t, base, "GET", "/api/v1/admin/llm-settings/models", auth("set")))
-	if second["source"] != "cache" || ids(second) != "gpt-5,gpt-5-mini,gpt-5-nano" || calls.Load() != 1 {
+	if second["source"] != "cache" || ids(second) != wantIDs || calls.Load() != 1 {
 		t.Fatalf("second read = %v calls=%d", second, calls.Load())
 	}
 

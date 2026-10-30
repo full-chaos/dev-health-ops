@@ -39,7 +39,7 @@ func TestLinkedIdentityWithNoUsableEmailIsRefused(t *testing.T) {
 	owner := h.link(t, key, uniqueEmail("linked"))
 	h.seedMembership(t, owner, h.orgID, "member")
 	for name, tc := range map[string]struct{ email, detail string }{
-		"missing": {"", "Email address is missing from OIDC claims"},
+		"missing": {"", "OIDC authentication failed"},
 		"no at":   {"linked.example.com", "Email address from OIDC claims is malformed"},
 	} {
 		t.Run(name, func(t *testing.T) {

@@ -67,6 +67,26 @@ type routeAuth struct {
 	audited bool
 	// workload lets the route also accept the acr-api workload token.
 	workload *WorkloadAuth
+	// scope is the scope a svc_acr_ credential must hold; empty means
+	// EntitlementScope (the health and entitlement routes).
+	scope string
+	// limitPath is the attempt limiter's path key; empty means
+	// authAttemptPath, the bucket the health and entitlement routes share.
+	limitPath string
+}
+
+func (a routeAuth) requiredScope() string {
+	if a.scope == "" {
+		return EntitlementScope
+	}
+	return a.scope
+}
+
+func (a routeAuth) attemptPath() string {
+	if a.limitPath == "" {
+		return authAttemptPath
+	}
+	return a.limitPath
 }
 
 // extractToken is _extract_token: a case-sensitive "Bearer " header whose
@@ -111,7 +131,7 @@ func (a routeAuth) authenticate(w http.ResponseWriter, r *http.Request, orgID st
 		a.unavailable(w, r, "unconfigured")
 		return Credential{}, false
 	}
-	allowed, err := a.limiter.AllowCounted(ctx, ratelimit.ForwardedIP(r), authAttemptPath)
+	allowed, err := a.limiter.AllowCounted(ctx, ratelimit.ForwardedIP(r), a.attemptPath())
 	if err != nil {
 		countInternal(ctx, a.route, "rate_limit_store_failed")
 		policy.WriteInternal(w)
@@ -163,7 +183,7 @@ func (a routeAuth) authenticate(w http.ResponseWriter, r *http.Request, orgID st
 			return Credential{}, false
 		}
 	}
-	if !cred.Has(EntitlementScope) {
+	if !cred.Has(a.requiredScope()) {
 		return deny(cred.ID, outcomeInsufficient, http.StatusForbidden, "Forbidden")
 	}
 	a.logger.DebugContext(ctx, "acr internal: credential accepted",

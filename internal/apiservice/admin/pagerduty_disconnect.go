@@ -248,6 +248,12 @@ func pagerDutyRevocationClaimSQL(predicate string) string {
 	return `SELECT id, token_encrypted FROM provider_oauth_revocations WHERE ` + predicate + ` ORDER BY created_at FOR UPDATE SKIP LOCKED`
 }
 
+// pagerDutyRevocationClaimOneSQL is the same claim for one row (org deletion
+// sends each row in its own transaction).
+func pagerDutyRevocationClaimOneSQL(predicate string) string {
+	return `SELECT id, token_encrypted FROM provider_oauth_revocations WHERE ` + predicate + ` ORDER BY created_at, id LIMIT 1 FOR UPDATE SKIP LOCKED`
+}
+
 // retryPagerDutyRevocationRows is retryPagerDutyRevocations over the rows a
 // predicate selects ($1 is the organisation, further arguments follow). Every
 // sender, the revocation worker included (internal/jobs/providerrevocation),

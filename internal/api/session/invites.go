@@ -250,6 +250,10 @@ func (h handlers) acceptInviteRoute(w http.ResponseWriter, r *http.Request) {
 		writeValidation(w, errs)
 		return
 	}
+	if h.Provision != nil {
+		h.joinInAuth(w, r, token, "Invite accepted", false)
+		return
+	}
 	tx, err := h.Pool.Begin(ctx)
 	if err != nil {
 		h.fail(w, r, "begin", err)
@@ -300,6 +304,14 @@ func (h handlers) onboard(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(errs) > 0 {
 		writeValidation(w, errs)
+		return
+	}
+	if h.Provision != nil && action == "join_org" {
+		code := ""
+		if inviteCode != nil {
+			code = *inviteCode
+		}
+		h.joinInAuth(w, r, code, "Invite accepted during onboarding", true)
 		return
 	}
 	tx, err := h.Pool.Begin(ctx)

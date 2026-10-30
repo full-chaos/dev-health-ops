@@ -23,6 +23,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/audit"
 	"github.com/full-chaos/dev-health-ops/internal/api/authmail"
+	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
 	"github.com/full-chaos/dev-health-ops/internal/api/oauthprovider"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
@@ -69,6 +70,8 @@ type Deps struct {
 	Issuer sessionissue.Issuer
 	// PlatformRoles is how the users reads take is_superuser (AUTH_PLATFORM_ROLES_OWNED).
 	PlatformRoles policy.PlatformRoleRead
+	// Provision (AUTH_PROXY_ORG_PROVISIONING) sends the invite joins to auth-service; nil joins in go-api.
+	Provision authprovision.Provisioner
 }
 
 type handlers struct {

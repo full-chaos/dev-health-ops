@@ -89,6 +89,9 @@ func wantInvalidProviderEmail(t *testing.T, a ssoAnswer, stage string) {
 	if strings.Contains(fmt.Sprint(a.body), emailLeakMarker) || strings.Contains(a.audits[0], emailLeakMarker) {
 		t.Fatal("the address is in the answer or the audit row")
 	}
+	if strings.Contains(a.logs, emailLeakMarker) {
+		t.Fatal("the address is in a log line (any level, Debug included)")
+	}
 }
 
 func wantDomainDenied(t *testing.T, a ssoAnswer, protocol string) {
@@ -201,4 +204,33 @@ func TestProviderEmailOrderOAuthSurrogateIsTheEmailRule(t *testing.T) {
 	sameAnswer(t, linked, unknown)
 	wantInvalidProviderEmail(t, linked, "provisioning")
 	wantInvalidProviderEmail(t, unknown, "provisioning")
+}
+
+// The stack's captured logger runs at Debug, so a Debug-only line is seen by the address assertions above: a refused
+// refresh token writes its Debug line, and no captured line at any level carries the token or an address.
+func TestTheSSOStackCapturesDebugLines(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	st := startStack(t, ctx)
+	const token = "not-a-refresh-token-" + emailLeakMarker
+	status, body := postJSON(t, st.server, "/api/v1/auth/refresh", map[string]any{"refresh_token": token})
+	if status < 400 || status >= 500 {
+		t.Fatalf("refresh with a bad token: status=%d body=%v, want a 4xx refusal", status, body)
+	}
+	var debug []string
+	for _, line := range strings.Split(st.logs.String(), "\n") {
+		if strings.Contains(line, "level=DEBUG") {
+			debug = append(debug, line)
+		}
+	}
+	found := false
+	for _, line := range debug {
+		found = found || strings.Contains(line, `msg="refresh token refused"`)
+	}
+	if !found {
+		t.Fatalf("no Debug line captured for the refused refresh token; Debug lines: %q", debug)
+	}
+	if strings.Contains(st.logs.String(), emailLeakMarker) {
+		t.Fatal("the refused token is in a log line")
+	}
 }

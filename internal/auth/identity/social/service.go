@@ -5,9 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
@@ -269,13 +267,13 @@ func lookupReason(err error) Reason {
 
 // refuseProfileEmail is go-api's social email rule (internal/api/session/social.go), run before any lookup so the
 // answer never depends on which accounts exist: an address the shared rule refuses is an unverified email when the
-// provider did not verify it or when it holds U+FFFD (encoding/json makes a lone surrogate escape U+FFFD, and go-api
-// answers a lone surrogate as unverified), and ErrUnusableEmail otherwise.
+// provider did not verify it (a lone surrogate in the provider's email makes the profile unverified, as on go-api),
+// and ErrUnusableEmail otherwise. ci/social_provider_email_parity.tsv holds the answers of both planes.
 func refuseProfileEmail(p Profile) (Reason, error) {
 	if identity.RefuseProviderEmail(p.Email) == nil {
 		return ReasonAccepted, nil
 	}
-	if !p.EmailVerified || strings.ContainsRune(p.Email, utf8.RuneError) {
+	if !p.EmailVerified {
 		return ReasonEmailUnverified, ErrEmailUnverified
 	}
 	return ReasonMalformed, ErrUnusableEmail

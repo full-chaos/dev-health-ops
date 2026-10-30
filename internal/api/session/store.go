@@ -293,8 +293,12 @@ type attemptRow struct {
 
 // attemptByEmail is login_attempts._get_attempt.
 func attemptByEmail(ctx context.Context, tx pgx.Tx, email string) (*attemptRow, error) {
-	rows, err := tx.Query(ctx, `SELECT id, attempt_count, first_attempt_at, locked_until FROM login_attempts
+	return queryAttempt(ctx, tx, `SELECT id, attempt_count, first_attempt_at, locked_until FROM login_attempts
 WHERE lower(email) = $1::text`, email)
+}
+
+func queryAttempt(ctx context.Context, tx pgx.Tx, query string, args ...any) (*attemptRow, error) {
+	rows, err := tx.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

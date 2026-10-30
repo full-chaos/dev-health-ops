@@ -3,6 +3,7 @@ contracts/auth/v1/vocabulary
 internal/api/apimetrics
 internal/api/audit
 internal/api/authmail
+internal/api/authprovision
 internal/api/billing
 internal/api/billing/stripeclient
 internal/api/buildinfo

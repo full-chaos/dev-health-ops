@@ -100,7 +100,7 @@ func outcomeLabel(err error) string {
 		return "taken"
 	case errors.Is(err, ErrNameInvalid), errors.Is(err, ErrAudienceInvalid), errors.Is(err, ErrActionInvalid), errors.Is(err, ErrBindingInvalid),
 		errors.Is(err, ErrBootstrapValue), errors.Is(err, ErrBootstrapExpiry), errors.Is(err, ErrBootstrapOverlap), errors.Is(err, ErrBootstrapReason),
-		errors.Is(err, ErrBootstrapWorkloadDisabled):
+		errors.Is(err, ErrBootstrapWorkloadDisabled), errors.Is(err, ErrBootstrapPrincipalDisabled):
 		return "invalid"
 	}
 	return "error"

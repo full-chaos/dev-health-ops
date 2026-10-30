@@ -165,3 +165,67 @@ func TestADisabledBootstrapWorkloadIsRefusedAtOnce(t *testing.T) {
 		t.Fatalf("counter refused/disabled = %d; points %v", got, nonZero(h.bootstrapPoints()))
 	}
 }
+
+// TestDisableBootstrapRevokesTheLiveValueOfADisabledWorkload: a workload that
+// holds a live bootstrap value is disabled; bootstrap-disable (allowed on a
+// disabled workload) revokes the value, and the exchange refuses it, also
+// after the workload is enabled again.
+func TestDisableBootstrapRevokesTheLiveValueOfADisabledWorkload(t *testing.T) {
+	e := getStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	name := "b-" + uuid.NewString()[:8]
+	principal, err := e.writer.Register(ctx, workload.Spec{Name: name, Audiences: []string{"auth-service"}}, workload.Actor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := workload.MintBootstrap()
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := e.writer.CreateBootstrap(ctx, name, value, nil, time.Hour, workload.Actor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newHarness(t, withoutKubernetes(), func(h *harness, d *Deps) {
+		d.Bootstrap = storeBootstrap{store: e.reader}
+		d.Audit = func(ctx context.Context, event audit.AuditEvent) error {
+			return audit.Append(ctx, e.runtime, e.schema, event)
+		}
+	})
+	h.now = time.Now().UTC().Truncate(time.Second)
+	decodeAnswer(t, h.post(bootstrapForm(value, "auth-service", "").Encode()))
+	refused := func(when string) {
+		t.Helper()
+		rec := h.post(bootstrapForm(value, "auth-service", "").Encode())
+		if rec.Code != http.StatusBadRequest || rec.Body.String() != "{\"error\":\"invalid_grant\"}\n" {
+			t.Fatalf("%s: %d %q, want the uniform 400", when, rec.Code, rec.Body.String())
+		}
+	}
+
+	if err := e.writer.Disable(ctx, name, workload.Actor{}); err != nil {
+		t.Fatal(err)
+	}
+	refused("after disable")
+	if got := h.bootstrapPoints()["refused/disabled/auth-service"]; got != 1 {
+		t.Fatalf("counter refused/disabled = %d; points %v", got, nonZero(h.bootstrapPoints()))
+	}
+
+	res, err := e.writer.DisableBootstrap(ctx, name, workload.Actor{})
+	if err != nil || res.Revoked != 1 {
+		t.Fatalf("bootstrap-disable on a disabled workload revoked %d (%v), want 1", res.Revoked, err)
+	}
+	var reason string
+	if err := e.admin.QueryRow(ctx, `SELECT revoked_reason FROM auth.credential_registry WHERE id = $1 AND principal_id = $2 AND revoked_at IS NOT NULL`,
+		created.CredentialID, principal).Scan(&reason); err != nil || reason != workload.BootstrapReasonCompromised {
+		t.Fatalf("the live value after bootstrap-disable: reason %q (%v), want revoked %s", reason, err, workload.BootstrapReasonCompromised)
+	}
+
+	if err := e.writer.Enable(ctx, name, workload.Actor{}); err != nil {
+		t.Fatal(err)
+	}
+	refused("after enable")
+	if got := h.bootstrapPoints()["refused/revoked/auth-service"]; got != 1 {
+		t.Fatalf("counter refused/revoked = %d; points %v", got, nonZero(h.bootstrapPoints()))
+	}
+}

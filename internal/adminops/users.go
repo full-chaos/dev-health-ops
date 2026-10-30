@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -202,6 +203,20 @@ func usersWriteOperator(ctx context.Context, env cli.Env, writesUsers, writesSup
 	return accountOperator(ctx, env)
 }
 
+// orgProvisioningFromEnv reads AUTH_PROXY_ORG_PROVISIONING as go-api does: a
+// strict bool, off when unset or blank.
+func orgProvisioningFromEnv(env cli.Env) (bool, error) {
+	raw, ok := env.Lookup("AUTH_PROXY_ORG_PROVISIONING")
+	if !ok || strings.TrimSpace(raw) == "" {
+		return false, nil
+	}
+	on, err := strconv.ParseBool(strings.TrimSpace(raw))
+	if err != nil {
+		return false, errors.New("AUTH_PROXY_ORG_PROVISIONING must be true or false")
+	}
+	return on, nil
+}
+
 func operatorFor(ctx context.Context, env cli.Env, resolve dsnResolver) (admin.Operator, func(), int) {
 	owned, err := usersOwnedFromEnv(env)
 	if err != nil {
@@ -215,6 +230,10 @@ func operatorFor(ctx context.Context, env cli.Env, resolve dsnResolver) (admin.O
 	if err != nil {
 		return admin.Operator{}, func() {}, writeError(env.Stderr, "auth_schema_invalid", err.Error())
 	}
+	provisioning, err := orgProvisioningFromEnv(env)
+	if err != nil {
+		return admin.Operator{}, func() {}, writeError(env.Stderr, "org_provisioning_invalid", err.Error())
+	}
 	dsn, ok := resolve(env.Lookup, env.Stderr)
 	if !ok {
 		return admin.Operator{}, func() {}, cli.ExitFailure
@@ -224,7 +243,7 @@ func operatorFor(ctx context.Context, env cli.Env, resolve dsnResolver) (admin.O
 	if err != nil {
 		return admin.Operator{}, func() {}, writeError(env.Stderr, "postgres_unavailable", boundary.Redact(err).Error())
 	}
-	return admin.Operator{Pool: pool, Now: time.Now, UsersOwned: owned, PlatformRolesOwned: platformRolesOwned, AuthSchema: authSchema}, pool.Close, 0
+	return admin.Operator{Pool: pool, Now: time.Now, UsersOwned: owned, PlatformRolesOwned: platformRolesOwned, AuthSchema: authSchema, OrgProvisioning: provisioning}, pool.Close, 0
 }
 
 // report prints an operator-facing refusal the way the Python verbs did

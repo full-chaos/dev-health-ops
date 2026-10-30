@@ -632,3 +632,46 @@ func TestTwoPublishersAndTwoConsumersSeeEveryEventOnce(t *testing.T) {
 		}
 	}
 }
+
+// Codex r3 P1: under noeviction an expiring hash is not a usable floor source. A real Valkey with the AOF switched on:
+// usable while the hash has no TTL, not usable (hash_has_ttl) with an EXPIRE, usable again after PERSIST.
+func TestTheStatusIsNotUsableWhileTheHashHasAnExpireUnderNoeviction(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	client, admin, _ := startValkeyClient(t, ctx)
+	if err := admin.Do(ctx, admin.B().Arbitrary("CONFIG", "SET", "appendonly", "yes").Build()).Error(); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		info, err := client.Info(ctx, "persistence", "memory")
+		if err == nil && info["aof_enabled"] == "1" && info["aof_rewrite_in_progress"] == "0" && info["aof_last_bgrewrite_status"] == "ok" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the AOF did not come up: %v, %v", info, err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	sink, _ := NewSink(client)
+	if err := sink.Deliver(ctx, outboxEventAt("org_EEEEEEEEEEEEEEEEEEEEEE", 1)); err != nil {
+		t.Fatal(err)
+	}
+	status, err := ReadStatus(ctx, client)
+	if err != nil || !status.Usable || status.MaxMemoryPolicy != "noeviction" {
+		t.Fatalf("status %+v, %v: want usable under noeviction with no TTL", status, err)
+	}
+	if err := admin.Do(ctx, admin.B().Expire().Key(HighWaterKey).Seconds(3600).Build()).Error(); err != nil {
+		t.Fatal(err)
+	}
+	status, err = ReadStatus(ctx, client)
+	if err != nil || status.Usable || status.Reason != "hash_has_ttl" || !status.HashHasTTL {
+		t.Fatalf("status %+v, %v: want not usable with hash_has_ttl", status, err)
+	}
+	if err := admin.Do(ctx, admin.B().Persist().Key(HighWaterKey).Build()).Error(); err != nil {
+		t.Fatal(err)
+	}
+	if status, err = ReadStatus(ctx, client); err != nil || !status.Usable {
+		t.Fatalf("status %+v, %v: want usable after PERSIST", status, err)
+	}
+}

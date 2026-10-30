@@ -94,3 +94,12 @@ func TestTheFloorInputFailsClosed(t *testing.T) {
 		}
 	})
 }
+
+// Codex r3 P1: an expiring hash is not a floor source under ANY policy, noeviction included.
+func TestTheFloorInputIsNotUsableWhileTheHashHasATTLUnderNoeviction(t *testing.T) {
+	client := &fakeClient{info: infoFields("noeviction"), ttl: 120, hash: map[string]string{"user:u1": "3"}}
+	err := NewFloorInput(client).Status(context.Background())
+	if !errors.Is(err, ErrNotUsableAsFloorSource) || !strings.Contains(err.Error(), "hash_has_ttl") {
+		t.Fatalf("err = %v, want ErrNotUsableAsFloorSource with hash_has_ttl", err)
+	}
+}

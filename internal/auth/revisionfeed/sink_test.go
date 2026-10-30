@@ -3,6 +3,7 @@ package revisionfeed
 import (
 	"context"
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -142,6 +143,18 @@ func TestTheHighWaterScriptTakesTheMaxBeforeItWritesAndPublishesAfterwards(t *te
 	ifIndex := strings.LastIndex(s[:hset], "if ")
 	if ifIndex < 0 || !strings.Contains(s[ifIndex:hset], "incoming > current") || !strings.Contains(s[ifIndex:hset], "then") {
 		t.Fatalf("the HSET is not guarded by incoming > current:\n%s", s)
+	}
+	// Codex r3 P3: the guard is EXACTLY "current == nil or incoming > current": a constant, an extra `or`, a reversed or
+	// widened comparison, or a second branch around the HSET fails here (the module set has no Lua interpreter to run it).
+	block := regexp.MustCompile(`(?m)^if current == nil or incoming > current then\n  redis\.call\('HSET', KEYS\[1\], ARGV\[1\], ARGV\[2\]\)\n  raised = 1\nend\nredis\.call\('PUBLISH', ARGV\[3\], ARGV\[1\] \.\. ':' \.\. ARGV\[2\]\)\n`)
+	if !block.MatchString(s) {
+		t.Fatalf("the guarded HSET block is not exactly the reviewed one:\n%s", s)
+	}
+	if strings.Count(s, "if ") != 1 || strings.Count(s, " or ") != 1 || strings.Contains(s, "true") || strings.Contains(s, "else") || strings.Contains(s, "not ") {
+		t.Fatalf("the script has a branch, a constant or an operator the reviewed one does not:\n%s", s)
+	}
+	if !regexp.MustCompile(`(?m)^local current = tonumber\(redis\.call\('HGET', KEYS\[1\], ARGV\[1\]\)\)\nlocal incoming = tonumber\(ARGV\[2\]\)\n`).MatchString(s) {
+		t.Fatalf("current and incoming are not read as numbers from the hash and the revision:\n%s", s)
 	}
 	if strings.Contains(s[publish:], "'HSET'") {
 		t.Fatal("a write after the publish")

@@ -65,6 +65,9 @@ func TestStatusRule(t *testing.T) {
 		reason string
 	}{
 		{"aof on, healthy, noeviction", "noeviction", nil, -1, true, "ok"},
+		{"noeviction and the hash is absent", "noeviction", nil, -2, true, "ok"},
+		{"noeviction and the hash has a TTL", "noeviction", nil, 3600, false, "hash_has_ttl"},
+		{"noeviction and the hash expires in 1 s", "noeviction", nil, 1, false, "hash_has_ttl"},
 		{"aof off", "noeviction", map[string]string{"aof_enabled": "0"}, -1, false, "appendonly_off"},
 		{"aof off and an evicting policy", "allkeys-lru", map[string]string{"aof_enabled": "0"}, -1, false, "appendonly_off"},
 		{"aof_enabled missing", "noeviction", map[string]string{"aof_enabled": ""}, -1, false, "aof_status_unknown"},

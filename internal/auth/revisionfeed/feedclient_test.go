@@ -117,9 +117,13 @@ func (f *fakeClient) ConfigGet(_ context.Context, name string) (string, error) {
 	return f.config[name], nil
 }
 
+// TTL answers the field ttl; the zero value means "no expiry" (-1), the state of a hash nobody set a TTL on.
 func (f *fakeClient) TTL(context.Context, string) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.ttl == 0 {
+		return -1, f.ttlErr
+	}
 	return f.ttl, f.ttlErr
 }
 

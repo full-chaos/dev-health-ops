@@ -140,7 +140,8 @@ func TestOAuthProviderErrorsRecordTheProviderFailure(t *testing.T) {
 
 // Only where go-api records: the profile without an id is go-api's provider_profile denial row; a token of another
 // client and a failed token info request are checks go-api does not make; a profile body that is not JSON is go-api's
-// bare 500 (oauthprovider ErrUnexpected), recorded nowhere; a sign-in that succeeds records nothing.
+// bare 500 (oauthprovider ErrUnexpected), recorded nowhere, and so is an email member that is not text (oauth.go
+// errShape); a sign-in that succeeds records nothing.
 func TestOAuthOnlyProviderErrorsRecordTheProviderFailure(t *testing.T) {
 	for name, c := range map[string]providerCase{
 		"profile without an id":   {noID: true},
@@ -148,6 +149,7 @@ func TestOAuthOnlyProviderErrorsRecordTheProviderFailure(t *testing.T) {
 		"token info 5xx":          {infoStatus: http.StatusBadGateway},
 		"token info refused":      {infoStatus: http.StatusUnauthorized},
 		"profile body not JSON":   {userBody: "<html>"},
+		"email not text":          {userBody: `{"id":7,"username":"u","name":"U","email":5,"confirmed_at":"2026-01-01T00:00:00Z"}`},
 		"success":                 {},
 	} {
 		failures := &recordedFailures{}

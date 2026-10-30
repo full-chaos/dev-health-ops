@@ -1,6 +1,7 @@
 package social
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"log/slog"
@@ -143,6 +144,34 @@ func TestExchangeAnswersTheProviderEmailParityTable(t *testing.T) {
 			}
 			if strings.Contains(logs.String(), "MARK") {
 				t.Fatal("the email value is in the logs")
+			}
+		})
+	}
+}
+
+// The provider client makes a profile unverified only for a lone surrogate in the email member: a lone surrogate in
+// the name leaves a verified profile verified (go-api replaces it), and a literal U+FFFD leaves it verified too.
+func TestFetchUnverifiesOnlyALoneSurrogateEmail(t *testing.T) {
+	for _, row := range readParityRows(t) {
+		if row.verified != "true" || strings.HasSuffix(row.id, "not_utf8_verified") {
+			continue
+		}
+		t.Run(row.id, func(t *testing.T) {
+			server := httptest.NewServer(rawProviders(row))
+			t.Cleanup(server.Close)
+			creds := NewClientCredentials(testClientID, testClientSecret)
+			client := &ProviderClient{HTTP: server.Client(), Endpoints: Endpoints{
+				GitHubAPI: server.URL + "/github", GitLabBase: server.URL + "/gitlab",
+				GoogleUserInfo: server.URL + "/google/userinfo", GoogleTokenInfo: server.URL + "/google/tokeninfo"},
+				Clients: map[Provider]ClientCredentials{GitHub: creds, GitLab: creds, Google: creds}}
+			provider, _ := ParseProvider(strings.SplitN(row.provider, "_", 2)[0])
+			profile, err := client.Fetch(context.Background(), provider, secretOf("tok"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantVerified := !strings.Contains(row.id, "lone_surrogate_verified")
+			if profile.EmailVerified != wantVerified {
+				t.Fatalf("EmailVerified = %v, want %v", profile.EmailVerified, wantVerified)
 			}
 		})
 	}

@@ -24,7 +24,7 @@ import (
 // let the write set is_active with no auth call, and for an organization already in
 // that state auth answers a no-op and writes nothing.
 func (h *handlers) orgStatusInAuth(w http.ResponseWriter, r *http.Request, orgID uuid.UUID, active bool) bool {
-	var call func(ctx context.Context, orgID, actor uuid.UUID) error
+	var call func(ctx context.Context, orgID, actor uuid.UUID, ifRevision *int64) error
 	verb := "suspend"
 	if active {
 		verb = "reactivate"
@@ -53,7 +53,7 @@ func (h *handlers) orgStatusInAuth(w http.ResponseWriter, r *http.Request, orgID
 		policy.WriteInternal(w)
 		return false
 	}
-	if err := call(ctx, orgID, user.ID); err != nil {
+	if err := call(ctx, orgID, user.ID, nil); err != nil {
 		h.logger.WarnContext(ctx, "admin: auth-service did not change the organization; nothing was written",
 			"verb", verb, "refused", errors.Is(err, orgreactivate.ErrRefused))
 		policy.WriteDetail(w, http.StatusServiceUnavailable, policy.ErrorDetail(sessionissue.UnavailableText), nil)

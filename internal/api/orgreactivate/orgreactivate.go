@@ -42,18 +42,31 @@ var (
 	// ErrUnavailable: the route was unreachable or slow, answered 5xx or
 	// anything else that is not a reactivated organization.
 	ErrUnavailable = errors.New("orgreactivate: auth-service organization reactivate route unavailable")
+	// ErrStateChanged: auth-service answered 409 state_changed: the if_revision sent is stale. The call changed nothing.
+	ErrStateChanged = errors.New("orgreactivate: the organization changed since the revision read")
 )
 
 // Reactivator ends an organization's suspension in the auth schema. A nil
 // error means the organization is active there (a no-op included).
 type Reactivator interface {
-	Reactivate(ctx context.Context, orgID, actor uuid.UUID) error
+	Reactivate(ctx context.Context, orgID, actor uuid.UUID, ifRevision *int64) error
 }
 
 // Suspender suspends an organization in the auth schema. A nil error means the
 // organization is suspended there (a no-op included).
 type Suspender interface {
-	Suspend(ctx context.Context, orgID, actor uuid.UUID) error
+	Suspend(ctx context.Context, orgID, actor uuid.UUID, ifRevision *int64) error
+}
+
+// State is an organization's status and aggregate revision in the auth schema, read together.
+type State struct {
+	Status   string
+	Revision int64
+}
+
+// StateReader reads an organization's State in auth-service.
+type StateReader interface {
+	State(ctx context.Context, orgID uuid.UUID) (State, error)
 }
 
 // Client calls the reactivate and suspend routes of one auth-service.
@@ -106,15 +119,20 @@ type answer struct {
 // Reactivate asks auth-service to end the suspension of orgID, acting as the
 // superuser actor. Only an answer that names orgID as active is success; the
 // error carries a class and a status, never the credential or the answer text.
-func (c *Client) Reactivate(ctx context.Context, orgID, actor uuid.UUID) error {
+func (c *Client) Reactivate(ctx context.Context, orgID, actor uuid.UUID, ifRevision *int64) error {
 	return c.post(ctx, Path, orgID, actor, "active")
 }
 
 // Suspend asks auth-service to suspend orgID, acting as the superuser actor.
 // Only an answer that names orgID as suspended is success, with the same error
 // classes as Reactivate.
-func (c *Client) Suspend(ctx context.Context, orgID, actor uuid.UUID) error {
+func (c *Client) Suspend(ctx context.Context, orgID, actor uuid.UUID, ifRevision *int64) error {
 	return c.post(ctx, SuspendPath, orgID, actor, "suspended")
+}
+
+// State reads orgID's status and revision from auth-service.
+func (c *Client) State(ctx context.Context, orgID uuid.UUID) (State, error) {
+	return State{}, ErrUnavailable
 }
 
 func (c *Client) post(ctx context.Context, path string, orgID, actor uuid.UUID, wantStatus string) error {

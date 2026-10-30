@@ -119,7 +119,7 @@ type fakeAuthReactivator struct {
 	actor uuid.UUID
 }
 
-func (f *fakeAuthReactivator) Reactivate(_ context.Context, org, actor uuid.UUID) error {
+func (f *fakeAuthReactivator) Reactivate(_ context.Context, org, actor uuid.UUID, _ *int64) error {
 	f.log.add("auth")
 	f.calls++
 	f.org, f.actor = org, actor

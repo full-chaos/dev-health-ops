@@ -22,7 +22,7 @@ type fakeAuthSuspender struct {
 	actor uuid.UUID
 }
 
-func (f *fakeAuthSuspender) Suspend(_ context.Context, org, actor uuid.UUID) error {
+func (f *fakeAuthSuspender) Suspend(_ context.Context, org, actor uuid.UUID, _ *int64) error {
 	f.log.add("auth-suspend")
 	f.calls++
 	f.org, f.actor = org, actor

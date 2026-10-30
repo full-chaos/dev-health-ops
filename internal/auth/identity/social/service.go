@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
@@ -32,6 +34,8 @@ var (
 	ErrAccountConflict          = errors.New("social: an existing account holds this email")
 	ErrUnavailable              = errors.New("social: identity store unavailable")
 	ErrProviderLinked           = errors.New("social: the principal already has an identity at this provider")
+	// ErrUnusableEmail: a verified provider address the shared email text rule refuses.
+	ErrUnusableEmail = identity.ErrUnusableProviderEmail
 )
 
 // ConflictError is ErrAccountConflict with the existing account's sign-in
@@ -128,6 +132,9 @@ func (s *Service) Exchange(ctx context.Context, provider Provider, token contrac
 
 	profile, reason, err := s.fetch(ctx, provider, token)
 	if err != nil {
+		return ExchangeResult{}, err
+	}
+	if reason, err = refuseProfileEmail(profile); err != nil {
 		return ExchangeResult{}, err
 	}
 	principal, found, err := s.lookup(ctx, profile.ExternalKey)
@@ -261,6 +268,20 @@ func lookupReason(err error) Reason {
 	return ReasonStoreUnavailable
 }
 
+// refuseProfileEmail is go-api's social email rule (internal/api/session/social.go), run before any lookup so the
+// answer never depends on which accounts exist: an address the shared rule refuses is an unverified email when the
+// provider did not verify it or when it holds U+FFFD (encoding/json makes a lone surrogate escape U+FFFD, and go-api
+// answers a lone surrogate as unverified), and ErrUnusableEmail otherwise.
+func refuseProfileEmail(p Profile) (Reason, error) {
+	if identity.RefuseProviderEmail(p.Email) == nil {
+		return ReasonAccepted, nil
+	}
+	if !p.EmailVerified || strings.ContainsRune(p.Email, utf8.RuneError) {
+		return ReasonEmailUnverified, ErrEmailUnverified
+	}
+	return ReasonMalformed, ErrUnusableEmail
+}
+
 func signInTo(p identity.Principal) (Reason, error) {
 	if p.DisabledAt != nil || p.ServiceProvider {
 		return ReasonPrincipalDeactivated, ErrPrincipalDisabled
@@ -280,6 +301,9 @@ func (s *Service) Link(ctx context.Context, who SignedIn, provider Provider, tok
 	}
 	profile, reason, err := s.fetch(ctx, provider, token)
 	if err != nil {
+		return identity.Identity{}, err
+	}
+	if reason, err = refuseProfileEmail(profile); err != nil {
 		return identity.Identity{}, err
 	}
 	key := profile.ExternalKey

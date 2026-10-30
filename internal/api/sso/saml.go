@@ -62,7 +62,6 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"github.com/full-chaos/dev-health-ops/internal/auth/emaildomain"
 	"net/http"
 	"net/url"
 	"strings"
@@ -842,26 +841,18 @@ func (h handlers) samlACSCallback(w http.ResponseWriter, r *http.Request) {
 		policy.WriteDetail(w, http.StatusBadRequest, "Email address is missing from SAML response", nil)
 		return
 	}
-	allowedDomains, err := decodeAllowedDomains(row.AllowedDomains)
+	user, membership, err := h.provisionOrGetUser(ctx, row, email, claims.fullName, providerID, claims.externalID, &samlNameIDParts{format: claims.nameIDFormat, spNameQualifier: claims.spNameQualifier})
 	if err != nil {
-		h.fail(w, r, "decode allowed domains", err)
-		return
-	}
-	if len(allowedDomains) > 0 {
-		at := strings.LastIndex(email, "@")
-		if at < 0 {
+		if errors.Is(err, errProviderEmailMalformed) {
 			policy.WriteDetail(w, http.StatusBadRequest, "Email address from SAML response is malformed", nil)
 			return
 		}
-		domain := email[at+1:]
-		if !emaildomain.Allowed(allowedDomains, domain) {
-			policy.WriteDetail(w, http.StatusForbidden, fmt.Sprintf("Email domain '%s' is not allowed for this provider", domain), nil)
+		var denied *domainNotAllowedError
+		if errors.As(err, &denied) {
+			h.Logger.WarnContext(ctx, "sso sign-in refused: email domain is not allowed for this provider", "protocol", "saml", "domain", denied.domain)
+			policy.WriteDetail(w, http.StatusForbidden, domainNotAllowedText, nil)
 			return
 		}
-	}
-
-	user, membership, err := h.provisionOrGetUser(ctx, row, email, claims.fullName, providerID, claims.externalID, &samlNameIDParts{format: claims.nameIDFormat, spNameQualifier: claims.spNameQualifier})
-	if err != nil {
 		if errors.Is(err, errIdentityConflict) {
 			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusConflict,
 				identityConflictDetail(), "saml", "provisioning")

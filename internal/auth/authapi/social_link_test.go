@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
@@ -284,10 +285,10 @@ func TestEverySocialLinkAnswerIsADeclaredOpenAPIResponse(t *testing.T) {
 	}
 }
 
-// TestLinkInvalidProviderIDAnswersTheDeclaredTransportError: the 400 of POST /v1/identities/social is declared as
-// transport-error.v1 (top-level error, no other member), so the link route answers an invalid provider user id in
-// that shape and not in the go-api detail shape the sign-in route keeps.
-func TestLinkInvalidProviderIDAnswersTheDeclaredTransportError(t *testing.T) {
+// TestLinkInvalidProviderIDAnswersGoAPIsBytesAndADeclaredBody: the link route answers an invalid provider user id
+// with go-api's exact bytes (as the sign-in route does), and that body validates against exactly one member of
+// the 400 schema the OpenAPI document declares for POST /v1/identities/social.
+func TestLinkInvalidProviderIDAnswersGoAPIsBytesAndADeclaredBody(t *testing.T) {
 	f := newFixture(t)
 	routes, err := SocialLinkRoutes(SocialLinkDeps{Sessions: f.sessions, Users: f.users, Issuer: f.issuer,
 		Logger: slog.New(slog.NewJSONHandler(f.logs, nil)), Social: failingLinkDomain{err: social.ErrInvalidProviderID}, Limits: mustLimits(t, httpapi.NewMemoryCounters(nil))})
@@ -298,19 +299,65 @@ func TestLinkInvalidProviderIDAnswersTheDeclaredTransportError(t *testing.T) {
 	for _, route := range routes {
 		mux.Handle(route.Method+" "+route.Pattern, requestid.Middleware(route.Handler))
 	}
-	f.server = mux
+	f.server = httpapi.RequestID(mux)
 	response := f.do(http.MethodPost, PatternSocialLink, linkBody, f.bearer(f.grant()))
-	if response.Code != http.StatusBadRequest {
-		t.Fatalf("status %d %s, want 400", response.Code, response.Body)
+	const want = `{"detail":{"message":"The provider returned an invalid user id"}}`
+	if response.Code != http.StatusBadRequest || response.Body.String() != want {
+		t.Fatalf("status %d body %q, want 400 %q", response.Code, response.Body.String(), want)
 	}
 	var body any
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
-		t.Fatalf("body %q: %v", response.Body, err)
+		t.Fatal(err)
 	}
-	if err := contracts.Validate(repoRoot(t), "transport-error.v1", body); err != nil {
-		t.Fatalf("the 400 body %s does not validate as transport-error.v1: %v", response.Body, err)
+	raw, err := os.ReadFile(filepath.Join(repoRoot(t), "contracts", "auth", "v1", "openapi", "auth-v1.openapi.json"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if strings.Contains(response.Body.String(), "detail") || strings.Contains(response.Body.String(), "invalid user id") {
-		t.Fatalf("the 400 body %s is in the go-api shape", response.Body)
+	var document struct {
+		Paths map[string]map[string]struct {
+			Responses map[string]struct {
+				Content map[string]struct {
+					Schema struct {
+						OneOf []json.RawMessage `json:"oneOf"`
+					} `json:"schema"`
+				} `json:"content"`
+			} `json:"responses"`
+		} `json:"paths"`
+	}
+	if err := json.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+	members := document.Paths["/v1/identities/social"]["post"].Responses["400"].Content["application/json"].Schema.OneOf
+	if len(members) != 2 {
+		t.Fatalf("the declared 400 of POST /v1/identities/social has %d oneOf members, want the transport error and the go-api refusal", len(members))
+	}
+	matched := 0
+	for _, member := range members {
+		var ref struct {
+			Ref string `json:"$ref"`
+		}
+		if err := json.Unmarshal(member, &ref); err != nil {
+			t.Fatal(err)
+		}
+		if ref.Ref == "#/components/schemas/TransportError" {
+			if contracts.Validate(repoRoot(t), "transport-error.v1", body) == nil {
+				matched++
+			}
+			continue
+		}
+		var schema jsonschema.Schema
+		if err := json.Unmarshal(member, &schema); err != nil {
+			t.Fatal(err)
+		}
+		resolved, err := schema.Resolve(nil)
+		if err != nil {
+			t.Fatalf("the go-api member does not compile: %v", err)
+		}
+		if resolved.Validate(body) == nil {
+			matched++
+		}
+	}
+	if matched != 1 {
+		t.Fatalf("the 400 body validates against %d declared members, want exactly 1", matched)
 	}
 }

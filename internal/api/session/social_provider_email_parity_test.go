@@ -1,8 +1,10 @@
 package session
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,14 +12,15 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf16"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/oauthprovider"
 )
 
 // parityRow is one row of ci/social_provider_email_parity.tsv: a provider email form and the answer both planes give.
 type parityRow struct {
-	id, provider, verified, want string
-	email, name                  []byte
+	id, provider, verified, want, shape string
+	email, name                         []byte
 }
 
 func readParityRows(t *testing.T, path string) []parityRow {
@@ -32,8 +35,8 @@ func readParityRows(t *testing.T, path string) []parityRow {
 			continue
 		}
 		f := strings.Split(line, "\t")
-		if len(f) != 6 {
-			t.Fatalf("row %q: %d fields, want 6", line, len(f))
+		if len(f) != 7 {
+			t.Fatalf("row %q: %d fields, want 7", line, len(f))
 		}
 		email, err := hex.DecodeString(f[2])
 		if err != nil {
@@ -45,7 +48,7 @@ func readParityRows(t *testing.T, path string) []parityRow {
 				t.Fatalf("row %s: name_hex: %v", f[0], err)
 			}
 		}
-		rows = append(rows, parityRow{id: f[0], provider: f[1], email: email, verified: f[3], name: name, want: f[5]})
+		rows = append(rows, parityRow{id: f[0], provider: f[1], email: email, verified: f[3], name: name, want: f[5], shape: f[6]})
 	}
 	if len(rows) == 0 {
 		t.Fatal("the parity table holds no rows")
@@ -66,19 +69,24 @@ func goAPIProviderProfile(row parityRow) http.Handler {
 			_, _ = w.Write(p)
 		}
 	}
+	writeProfile := func(w http.ResponseWriter, parts ...[]byte) {
+		write(w, shapeBody(row.shape, bytes.Join(parts, nil)))
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/github/user" && row.provider == "github_user":
-			write(w, []byte(`{"id": 7, "login": "u", "name": `), row.name, []byte(`, "email": `), row.email, []byte(`}`))
+			writeProfile(w, []byte(`{"id": 7, "login": "u", "name": `), row.name, []byte(`, "email": `), row.email, []byte(`}`))
 		case r.URL.Path == "/github/user" && row.provider == "github_emails":
-			write(w, []byte(`{"id": 7, "login": "u", "name": `), row.name, []byte(`, "email": null}`))
+			writeProfile(w, []byte(`{"id": 7, "login": "u", "name": `), row.name, []byte(`, "email": null}`))
+		case r.URL.Path == "/github/emails" && row.provider == "github_user":
+			write(w, []byte(`[]`))
 		case r.URL.Path == "/github/emails" && row.provider == "github_emails":
-			write(w, []byte(`[{"email": `), row.email, []byte(`, "primary": true, "verified": `+row.verified+`}]`))
+			writeProfile(w, []byte(`[{"email": `), row.email, []byte(`, "primary": true, "verified": `+row.verified+`}]`))
 		case r.URL.Path == "/gitlab/api/v4/user" && row.provider == "gitlab":
-			write(w, []byte(`{"id": 7, "username": "u", "name": `), row.name, []byte(`, "email": `), row.email,
+			writeProfile(w, []byte(`{"id": 7, "username": "u", "name": `), row.name, []byte(`, "email": `), row.email,
 				[]byte(`, "confirmed_at": `+confirmed+`}`))
 		case r.URL.Path == "/google/userinfo" && row.provider == "google":
-			write(w, []byte(`{"id": "g7", "name": `), row.name, []byte(`, "email": `), row.email,
+			writeProfile(w, []byte(`{"id": "g7", "name": `), row.name, []byte(`, "email": `), row.email,
 				[]byte(`, "verified_email": `+row.verified+`}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
@@ -113,6 +121,8 @@ func TestSocialLoginAnswersTheProviderEmailParityTable(t *testing.T) {
 			provider := httptest.NewServer(goAPIProviderProfile(row))
 			t.Cleanup(provider.Close)
 			deps := completeDeps(t)
+			var logs bytes.Buffer
+			deps.Logger = slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 			deps.Getenv = func(string) string { return "set" }
 			deps.OAuth = &oauthprovider.Client{HTTP: provider.Client(), Endpoints: oauthprovider.Endpoints{
 				GitHubUser: provider.URL + "/github/user", GitHubEmails: provider.URL + "/github/emails",
@@ -144,6 +154,26 @@ func TestSocialLoginAnswersTheProviderEmailParityTable(t *testing.T) {
 			if got != row.want {
 				t.Fatalf("go-api answered %q, the table wants %q (body %s)", got, row.want, w.Body.String())
 			}
+			if strings.Contains(logs.String(), "MARK") {
+				t.Fatal("the email value is in a log line (any level, Debug included)")
+			}
 		})
 	}
+}
+
+// shapeBody applies a row's shape to a served profile body: "key=<K>" renames the email member to K, "utf16le" sends the
+// body as UTF-16LE with a byte order mark (a body Python's response.json() reads), "-" leaves it as it is.
+func shapeBody(shape string, body []byte) []byte {
+	if key, ok := strings.CutPrefix(shape, "key="); ok {
+		body = bytes.ReplaceAll(body, []byte(`"email": `), []byte(`"`+key+`": `))
+	}
+	if shape == "utf16le" {
+		units := utf16.Encode([]rune("\ufeff" + string(body)))
+		out := make([]byte, 0, 2*len(units))
+		for _, u := range units {
+			out = append(out, byte(u), byte(u>>8))
+		}
+		return out
+	}
+	return body
 }

@@ -91,7 +91,9 @@ bill the request.
 `GET /api/v1/admin/llm-settings/models` lists the model ids a provider offers.
 It needs no key: without one it returns the platform catalog, the models the
 cost rate table prices for that provider (`anthropic`, `gemini`, `openai`,
-`qwen`). With a saved key it also reads the saved provider's own list and marks
+`qwen`); a model is in the catalog exactly when the table prices it. The
+OpenAI platform default is `gpt-6-luna` (an `LLM_MODEL_OPENAI` or `LLM_MODEL`
+setting still wins), then `gpt-5-mini`. With a saved key it also reads the saved provider's own list and marks
 those ids `verified`. The optional `provider` query parameter names the provider
 to list (an unknown name answers 400 `unknown_provider`); the saved key and base
 URL are used only for the saved provider, never for another one. The saved model

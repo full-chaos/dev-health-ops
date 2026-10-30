@@ -139,6 +139,9 @@ goApi:
   #    name (*_SECRET, *_PASSWORD, *_TOKEN, *_KEY, *_DSN, *_CREDENTIALS, any
   #    case); such a name may come only by valueFrom.secretKeyRef.
   extraEnv: []
+  # -- Extra pod volumes and go-api container mounts (for example a projected serviceAccountToken). Empty renders no key.
+  extraVolumes: []
+  extraVolumeMounts: []
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -1294,6 +1297,19 @@ migrations:
         name: ""
         secretName: "otel-collector-postgres"
         secretKey: "POSTGRES_MONITOR_PASSWORD"
+      # -- CHAOS-12081: optional LOGIN for the Go api (go-api's API_DATABASE_ROLE, default
+      #    devhealth_api). EMPTY name = OFF (nothing is provisioned, no env is added to the
+      #    Job). When set, `dho migrate roles` creates it if missing (unprivileged login,
+      #    CONNECT on the application database, USAGE and no CREATE on schema public; table
+      #    privileges are `dho migrate river`'s) and the password is read from an
+      #    OPERATOR-CREATED Secret named by secretName / secretKey (this chart never creates
+      #    it; the render fails if name is set while either is empty). An existing login keeps
+      #    its password (never rotated). Must equal go-api's API_DATABASE_ROLE and the
+      #    password inside API_DATABASE_URI.
+      apiRole:
+        name: ""
+        secretName: ""
+        secretKey: "API_DATABASE_PASSWORD"
     riverMigrate:
       # -- OFF is not "River never happens". With the hook off there are two
       #    paths, and which one you are on depends on secretData below:

@@ -150,14 +150,14 @@ func TestTheReactivateRouteIsInTheStartupGate(t *testing.T) {
 	}
 	f := newProvFixture(t)
 	routes := 0
-	for _, c := range routeCases()[:8] {
+	for _, c := range routeCases() {
 		if got := f.post(c.path, encode(c.body(f, f.super)), nil); got.Code != http.StatusOK {
 			t.Fatalf("%s on the embedded document: %d %s, want 200", c.op, got.Code, got.Body)
 		}
 		routes++
 	}
-	if routes != 8 {
-		t.Fatalf("%d provisioning routes served, want 8", routes)
+	if routes != 11 {
+		t.Fatalf("%d provisioning routes served, want 11", routes)
 	}
 	for _, line := range strings.Split(f.logs.String(), "\n") {
 		if strings.Contains(line, "not mounted") && !strings.Contains(line, PatternOrgState) {
@@ -166,7 +166,7 @@ func TestTheReactivateRouteIsInTheStartupGate(t *testing.T) {
 	}
 }
 
-// A document without the reactivate row refuses the whole switch (all eight routes), like any other missing row.
+// A document without the reactivate row refuses the whole switch (all nine routes), like any other missing row.
 func TestAMissingReactivateRowRefusesTheWholeSwitch(t *testing.T) {
 	var document map[string]any
 	if err := json.Unmarshal(authv1.AuthServiceEndpointProfiles, &document); err != nil {
@@ -186,5 +186,36 @@ func TestAMissingReactivateRowRefusesTheWholeSwitch(t *testing.T) {
 	err = provisioningRowsPresent(raw)
 	if !errors.Is(err, errProvisioningRows) || !strings.Contains(err.Error(), "POST "+PatternOrgReactivate+" ") {
 		t.Fatalf("a document without the reactivate row: %v, want a refusal naming the route", err)
+	}
+}
+
+// The rows gate needs the invite revoke route's row, named by its literal
+// route (not through provisioningPatterns): without it the switch builds no
+// route.
+func TestTheRowsGateNeedsTheInviteRevokeRow(t *testing.T) {
+	const route = "/internal/v1/invites/revoke"
+	var document map[string]any
+	if err := json.Unmarshal(authv1.AuthServiceEndpointProfiles, &document); err != nil {
+		t.Fatal(err)
+	}
+	var kept []any
+	found := false
+	for _, item := range document["rows"].([]any) {
+		if item.(map[string]any)["route"] == route {
+			found = true
+			continue
+		}
+		kept = append(kept, item)
+	}
+	if !found {
+		t.Fatalf("the embedded document has no %s row", route)
+	}
+	document["rows"] = kept
+	raw, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := provisioningRowsPresent(raw); !errors.Is(err, errProvisioningRows) || !strings.Contains(err.Error(), "POST "+route+" ") {
+		t.Fatalf("without the revoke row: %v, want a refusal naming the route", err)
 	}
 }

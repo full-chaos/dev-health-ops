@@ -10,9 +10,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 )
 
-// PatternInviteRevoke is the individual invite revoke route. It is handled
-// here but not mounted yet: ProvisioningRoutes serves it once its
-// endpoint-profile row exists.
+// PatternInviteRevoke is the individual invite revoke route, served by
+// ProvisioningRoutes with the other provisioning routes.
 const PatternInviteRevoke = "/internal/v1/invites/revoke"
 
 const (
@@ -26,7 +25,8 @@ type InviteRevoker interface {
 	Revoke(ctx context.Context, in invite.RevokeInput) error
 }
 
-// revokeRoute is the invite revoke route on revoker. Nothing mounts it yet.
+// revokeRoute is the invite revoke route on revoker. Its endpoint-profile row
+// anchors the return line below; keep that line as it is.
 func (h provisioningHandlers) revokeRoute(revoker InviteRevoker) httpapi.Route {
 	return httpapi.Route{Method: http.MethodPost, Pattern: PatternInviteRevoke, Handler: http.HandlerFunc(h.inviteRevoke(revoker))}
 }

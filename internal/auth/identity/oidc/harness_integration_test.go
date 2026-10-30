@@ -27,6 +27,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity/ssoaudit"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
@@ -184,6 +185,8 @@ type fakeIdP struct {
 	userinfo   map[string]any
 	docIssuer  *string
 	oauth      *fakeOAuth
+	// failDiscovery and failUserinfo play a provider whose endpoint answers 502.
+	failDiscovery, failUserinfo bool
 }
 
 type pendingCode struct{ challenge, idToken string }
@@ -240,6 +243,10 @@ func (idp *fakeIdP) serveToken(w http.ResponseWriter, r *http.Request) {
 func (idp *fakeIdP) serveUserinfo(w http.ResponseWriter, _ *http.Request) {
 	idp.mu.Lock()
 	defer idp.mu.Unlock()
+	if idp.failUserinfo {
+		http.Error(w, "unavailable", http.StatusBadGateway)
+		return
+	}
 	_ = json.NewEncoder(w).Encode(idp.userinfo)
 }
 
@@ -250,6 +257,11 @@ func (idp *fakeIdP) serveDiscovery(w http.ResponseWriter, r *http.Request) {
 	}
 	issuer := idp.server.URL + strings.TrimSuffix(r.URL.Path, "/.well-known/openid-configuration")
 	idp.mu.Lock()
+	if idp.failDiscovery {
+		idp.mu.Unlock()
+		http.Error(w, "unavailable", http.StatusBadGateway)
+		return
+	}
 	if idp.docIssuer != nil {
 		issuer = *idp.docIssuer
 	}
@@ -347,9 +359,10 @@ func newHarness(t *testing.T, opts harnessOpts) *harness {
 		Providers: PGProviders{Pool: env.runtime}, Flows: flows, Identities: h.ids,
 		Memberships: PGMemberships{Pool: env.runtime}, Entitlements: LicensingEntitlements{Pool: env.runtime}, Sessions: h.sessions,
 		StateSecret: secret, AppBaseURL: "https://app.example", HTTPClient: idp.server.Client(),
-		OAuthEndpoints: idp.oauth.endpoints(idp.server.URL),
-		DenialAudit:    PGDenialAudit{Exec: env.runtime, Now: func() time.Time { return h.now }},
-		Now:            func() time.Time { return h.now },
+		OAuthEndpoints:  idp.oauth.endpoints(idp.server.URL),
+		DenialAudit:     PGDenialAudit{Exec: env.runtime, Now: func() time.Time { return h.now }},
+		ProviderFailure: ssoaudit.PGProviderFailure{DB: env.runtime, Now: func() time.Time { return h.now }},
+		Now:             func() time.Time { return h.now },
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -19,6 +19,8 @@ func TestADeletedBoundPagerDutyCredentialQueuesItsOldTokenInTheDeleteStatement(t
 		"CASE WHEN EXISTS (SELECT 1 FROM m y WHERE y.org_id = d.org_id AND y.provider = d.provider AND y.credential_name = d.credential_name) THEN 'replacement' ELSE 'disconnect' END",
 		"d.provider = 'pagerduty' AND d.binding_id IS NOT NULL",
 		"y.binding_id IS NOT NULL AND y.binding_id <> d.binding_id",
+		"\n  FROM d WHERE (d.provider = 'pagerduty'",
+		"SELECT (SELECT count(*) FROM d), (SELECT count(*) FROM q)",
 	} {
 		if !strings.Contains(sql, want) {
 			t.Errorf("the credential apply lacks %q:\n%s", want, sql)

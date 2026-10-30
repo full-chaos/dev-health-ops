@@ -19,6 +19,7 @@ import (
 
 	jobsv1 "github.com/full-chaos/dev-health-ops/contracts/jobs/v1"
 	syncdispatchv1 "github.com/full-chaos/dev-health-ops/contracts/sync-dispatch/v1"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
@@ -515,12 +516,21 @@ func queryAPILeg(lookup func(string) (string, bool)) (string, []riverstore.Table
 	return value, grants, columns
 }
 
-// queryAPISessionReadFor is the auth session read the query-api role holds while
-// auth-service owns sessions (AUTH_PROXY_SESSIONS): nil when the flag is off. The
-// schema is AUTH_DATABASE_SCHEMA (default "auth"), the same value go-api and
-// query-api read sessions in.
+// queryAPISessionReadFor is the auth read the query-api role holds while
+// auth-service owns sessions (AUTH_PROXY_SESSIONS): nil when the flag is off.
+// While auth-service also owns the platform roles (AUTH_PLATFORM_ROLES_OWNED,
+// rule.OwnedFromLookup, the parse rule.OwnedFromLookup is) it carries the platform role read, which needs
+// the session read. The schema is AUTH_DATABASE_SCHEMA (default "auth"), the
+// same value go-api and query-api read in.
 func queryAPISessionReadFor(lookup func(string) (string, bool), sessionsOwnedByAuth bool) (*riverstore.SessionReadGrant, error) {
+	platformRolesOwned, err := rule.OwnedFromLookup(lookup)
+	if err != nil {
+		return nil, err
+	}
 	if !sessionsOwnedByAuth {
+		if platformRolesOwned {
+			return nil, fmt.Errorf("%s is on: %s must be on too", rule.OwnedEnv, envAuthProxySessions)
+		}
 		return nil, nil
 	}
 	schema := "auth"
@@ -530,8 +540,12 @@ func queryAPISessionReadFor(lookup func(string) (string, bool), sessionsOwnedByA
 	if !riverstore.ValidIdentifier(schema) {
 		return nil, fmt.Errorf("AUTH_DATABASE_SCHEMA holds an unusable schema name")
 	}
-	read := postgresstore.QueryAPISessionReadFor(schema)
-	return &riverstore.SessionReadGrant{Schema: read.Schema, Table: read.Table, Columns: read.Columns}, nil
+	read := postgresstore.QueryAPISessionReadFor(schema, platformRolesOwned)
+	grant := &riverstore.SessionReadGrant{Schema: read.Schema, Table: read.Table, Columns: read.Columns}
+	for _, table := range read.Also {
+		grant.Also = append(grant.Also, riverstore.SessionReadTable{Table: table.Table, Columns: table.Columns})
+	}
+	return grant, nil
 }
 
 // postureGrants converts one role's declared posture into the migration's

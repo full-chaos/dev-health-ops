@@ -209,8 +209,9 @@ func (s *Service) BoundToRoute(ctx context.Context, p Provider, routeID uuid.UUI
 
 // ConsumeFor verifies a posted SAMLResponse for a resolved provider and
 // resolves the account. cookie returns a request cookie value by name (""
-// when absent). On an identity key hit the account signs in from its stored
-// state and the assertion's email is not read; only a miss needs the email.
+// when absent). Before the lookup, the assertion's email must be usable,
+// present and allowed by the provider's domain list, on a key hit or a miss;
+// on a hit the account then signs in from its stored state.
 // Every sign-in ends in the provider's organization: an account that is not
 // a member after the membership seam ran is ErrNotOrgMember, and a miss
 // creates an account only through the membership seam (see provisionNew).
@@ -249,6 +250,17 @@ func (s *Service) ConsumeFor(ctx context.Context, p Provider, posted string, coo
 	if identity.RefuseProviderEmail(email) != nil {
 		return SignIn{}, s.refuse(ctx, p, ErrUnusableEmail)
 	}
+	// The address and the provider's domain list decide every sign-in, linked
+	// or not, before the lookup (go-api saml.go).
+	if email == "" {
+		return SignIn{}, s.refuse(ctx, p, ErrEmailMissing)
+	}
+	if len(p.AllowedDomains) > 0 && !strings.Contains(email, "@") {
+		return SignIn{}, s.refuse(ctx, p, ErrEmailMalformed)
+	}
+	if !p.DomainAllowed(email) {
+		return SignIn{}, s.refuse(ctx, p, ErrDomainNotAllowed)
+	}
 	legacy := &LegacyMatch{AuthProvider: "saml", Subject: v.NameID.Value, MembershipOrg: p.OrgID}
 	principal, found, err := s.Store.IdentityBySubject(ctx, id, legacy)
 	if errors.Is(err, ErrNotOrgMember) || errors.Is(err, ErrIdentityAmbiguous) {
@@ -258,15 +270,6 @@ func (s *Service) ConsumeFor(ctx context.Context, p Provider, posted string, coo
 		return SignIn{}, err
 	}
 	if !found {
-		if email == "" {
-			return SignIn{}, s.refuse(ctx, p, ErrEmailMissing)
-		}
-		if len(p.AllowedDomains) > 0 && !strings.Contains(email, "@") {
-			return SignIn{}, s.refuse(ctx, p, ErrEmailMalformed)
-		}
-		if !p.DomainAllowed(email) {
-			return SignIn{}, s.refuse(ctx, p, ErrDomainNotAllowed)
-		}
 		principalID, err := s.provisionNew(ctx, p, id, email, s.fullName(p, v))
 		if err != nil {
 			return SignIn{}, err

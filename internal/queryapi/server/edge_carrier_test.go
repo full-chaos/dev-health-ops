@@ -480,3 +480,5 @@ func TestEdgeCarrier_OrglessTokenNeedsALiveSuperuserRow(t *testing.T) {
 		})
 	}
 }
+
+func (fakeEdgeStore) ReadsPlatformRoles() bool { return false }

@@ -30,7 +30,7 @@ func TestQueryAPIRoleReadsMembershipsFromThePublicTableOnlyAndNeverFromTheAuthSc
 			t.Fatalf("%s: %v", statement, err)
 		}
 	}
-	read := QueryAPISessionReadFor("auth")
+	read := QueryAPISessionReadFor("auth", false)
 	if err := h.applyLeg(ctx, &read); err != nil {
 		t.Fatalf("the migrate leg: %v", err)
 	}

@@ -80,6 +80,12 @@ type Deps struct {
 	// UsersOwned is AUTH_USERS_OWNED: auth-service owns users, so the routes
 	// that write public.users answer the moved operation.
 	UsersOwned bool
+	// PlatformRolesOwned is AUTH_PLATFORM_ROLES_OWNED: a write of
+	// is_superuser answers the moved operation, and the users reads take
+	// is_superuser from the auth platform roles in AuthSchema.
+	PlatformRolesOwned bool
+	// AuthSchema is AUTH_DATABASE_SCHEMA (empty: "auth").
+	AuthSchema string
 	// OrgReactivator is the client of auth-service's organization reactivate
 	// route (AUTH_PROXY_ORG_PROVISIONING). Nil leaves PATCH is_active as it
 	// was: public.organizations only, no auth call.
@@ -101,7 +107,7 @@ func Routes(deps Deps) []httpapi.Route {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	store := pgStore{Pool: deps.Pool, Now: deps.Now, UsersOwned: deps.UsersOwned}
+	store := pgStore{Pool: deps.Pool, Now: deps.Now, UsersOwned: deps.UsersOwned, PlatformRolesOwned: deps.PlatformRolesOwned, AuthSchema: deps.AuthSchema}
 	auditWriter := audit.PGWriter{Now: deps.Now}
 	cache := newImpersonationCache(deps.Valkey, store, logger)
 	if deps.Now != nil {

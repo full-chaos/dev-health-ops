@@ -110,3 +110,5 @@ func TestMountedUserRoutesValidateTheBodyBeforeAnyStoreCall(t *testing.T) {
 		}
 	})
 }
+
+func (superuserPolicyStore) ReadsPlatformRoles() bool { return false }

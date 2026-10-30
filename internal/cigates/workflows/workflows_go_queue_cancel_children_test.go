@@ -26,15 +26,22 @@ const (
 )
 
 func cancelJobDefects(doc yamlMap) []string {
+	return cancelJobDefectsNeeds(doc, cancelJobName, "[go-storage-integration]")
+}
+
+func cancelJobDefectsNeeds(doc yamlMap, key, wantNeeds string) []string {
 	var out []string
 	jobs := jobsOf(doc)
-	raw, ok := jobs[cancelJobName]
+	raw, ok := jobs[key]
 	if !ok {
-		return []string{"job " + cancelJobName + " is absent"}
+		return []string{"job " + key + " is absent"}
 	}
 	job := asMap(raw)
-	if got := fmt.Sprint(job["needs"]); got != "[go-storage-integration]" {
-		out = append(out, "needs is "+got+", want exactly [go-storage-integration]")
+	if got := asString(job["name"]); got != cancelJobName {
+		out = append(out, fmt.Sprintf("name is %q, want %q", got, cancelJobName))
+	}
+	if got := fmt.Sprint(job["needs"]); got != wantNeeds {
+		out = append(out, "needs is "+got+", want exactly "+wantNeeds)
 	}
 	if got := asString(job["if"]); got != cancelIf {
 		out = append(out, fmt.Sprintf("if is %q, want %q", got, cancelIf))

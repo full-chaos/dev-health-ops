@@ -120,6 +120,25 @@ already exist, so naming a login without naming its Secret is a render error.
 {{- end }}
 {{- end }}
 {{- /*
+CHAOS-12081: the optional go-api login (API_DATABASE_ROLE, default devhealth_api). `dho migrate roles` already provisions it when
+API_DATABASE_ROLE/API_DATABASE_PASSWORD are set (internal/rivermigrate/roles.go); the Job never passed them, so a fresh stack had no
+such login and the role was created by hand. OFF unless apiRole.name is set. The password comes from an operator-created Secret
+(apiRole.secretName / secretKey), like monitorRole: this chart never creates that Secret, and naming a login without its Secret is a
+render error. An existing login keeps its password (never rotated). The name must equal go-api's API_DATABASE_ROLE.
+*/}}
+{{- $apiRole := .Values.migrations.hook.provisionRoles.apiRole | default dict }}
+{{- $apiName := toString ($apiRole.name | default "") }}
+{{- $apiSecretName := toString ($apiRole.secretName | default "") }}
+{{- $apiSecretKey := toString ($apiRole.secretKey | default "") }}
+{{- if $apiName }}
+{{- if not $apiSecretName }}
+{{- fail "migrations.hook.provisionRoles.apiRole.name is set but apiRole.secretName is empty: the go-api login's password is read from an operator-created Secret (this chart never creates it); set apiRole.secretName, or clear apiRole.name to leave the go-api login off." }}
+{{- end }}
+{{- if not $apiSecretKey }}
+{{- fail "migrations.hook.provisionRoles.apiRole.name is set but apiRole.secretKey is empty: name the key in apiRole.secretName that holds the go-api login's password." }}
+{{- end }}
+{{- end }}
+{{- /*
 CHAOS-6951: this Job runs `dho migrate roles` (CHAOS-6901), so, like the River
 hook below, its image must be a pinned operator image carrying dho as the
 entrypoint. It is provisionRoles.image, else riverMigrate.image, else
@@ -298,6 +317,15 @@ spec:
                 secretKeyRef:
                   name: {{ $provisionSecretName }}
                   key: RIVER_KEDA_READONLY_PASSWORD
+{{- end }}
+{{- if $apiName }}
+            - name: API_DATABASE_ROLE
+              value: {{ $apiName | quote }}
+            - name: API_DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $apiSecretName | quote }}
+                  key: {{ $apiSecretKey | quote }}
 {{- end }}
 {{- if $monitorName }}
             - name: OTEL_PG_MONITOR_DATABASE_ROLE

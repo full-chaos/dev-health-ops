@@ -281,6 +281,42 @@ func oneOfExtraMemberProblems(key, status string, schema map[string]any) []strin
 	return problems
 }
 
+// exactKeys reports a problem unless the object's keys are all in allowed (and, when required is set, exactly those).
+func exactKeys(object map[string]any, path string, exact bool, allowed ...string) []string {
+	set := map[string]bool{}
+	for _, key := range allowed {
+		set[key] = true
+	}
+	var problems []string
+	keys := make([]string, 0, len(object))
+	for key := range object {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if !set[key] {
+			problems = append(problems, fmt.Sprintf("%s has the key %q, which the gate does not allow there", path, key))
+		}
+	}
+	if exact {
+		for _, key := range allowed {
+			if _, present := object[key]; !present {
+				problems = append(problems, fmt.Sprintf("%s lacks the key %q", path, key))
+			}
+		}
+	}
+	return problems
+}
+
+// Keys the gate allows on the objects it reads (see the table in the change that added this test).
+var (
+	pathItemMethods     = []string{"get", "post", "put", "patch", "delete", "head"}
+	operationKeys       = []string{"operationId", "summary", "description", "parameters", "requestBody", "responses", "security"}
+	securitySchemeKeys  = []string{"type", "scheme", "bearerFormat", "description"}
+	transportResponse   = []string{"description", "content"}
+	transportContentKey = "application/json"
+)
+
 // openAPIPathProblems checks the OpenAPI document against the auth-service API
 // rows: one operation per API row outside go-api's path space and no other,
 // every $ref inside an operation names an existing component schema, and
@@ -311,6 +347,7 @@ func openAPIPathProblems(document map[string]any, rows []map[string]any) []strin
 	got := map[string]bool{}
 	for path, item := range paths {
 		operations, _ := item.(map[string]any)
+		problems = append(problems, exactKeys(operations, "OpenAPI path "+path, false, pathItemMethods...)...)
 		for method, op := range operations {
 			key := method + " " + path
 			got[key] = true
@@ -329,12 +366,17 @@ func openAPIPathProblems(document map[string]any, rows []map[string]any) []strin
 			if !isOperation {
 				problems = append(problems, fmt.Sprintf("OpenAPI operation %s must be an object", key))
 			}
+			problems = append(problems, exactKeys(operation, "OpenAPI operation "+key, false, operationKeys...)...)
 			security, _ := operation["security"].([]any)
 			bearerScheme := false
 			for _, requirement := range security {
 				names, _ := requirement.(map[string]any)
-				for name := range names {
+				for name, scopes := range names {
+					if _, isList := scopes.([]any); !isList {
+						problems = append(problems, fmt.Sprintf("OpenAPI operation %s: security requirement %q must be a list", key, name))
+					}
 					scheme, _ := schemes[name].(map[string]any)
+					problems = append(problems, exactKeys(scheme, fmt.Sprintf("OpenAPI security scheme %q", name), false, securitySchemeKeys...)...)
 					if scheme == nil {
 						problems = append(problems, fmt.Sprintf("OpenAPI operation %s requires security scheme %q, which is not defined", key, name))
 						continue
@@ -371,9 +413,16 @@ func openAPIPathProblems(document map[string]any, rows []map[string]any) []strin
 					problems = append(problems, fmt.Sprintf("OpenAPI operation %s: its %s must be a response object", key, status))
 					continue
 				}
+				at := fmt.Sprintf("OpenAPI operation %s: its %s", key, status)
+				problems = append(problems, exactKeys(response, at, false, transportResponse...)...)
 				content, _ := response["content"].(map[string]any)
-				body, _ := content["application/json"].(map[string]any)
+				problems = append(problems, exactKeys(content, at+" content", false, transportContentKey)...)
+				body, _ := content[transportContentKey].(map[string]any)
+				problems = append(problems, exactKeys(body, at+" media type", false, "schema")...)
 				schema, _ := body["schema"].(map[string]any)
+				if _, wrapped := schema["oneOf"]; wrapped {
+					problems = append(problems, exactKeys(schema, at+" schema", true, "oneOf")...)
+				}
 				if !isTransportErrorRef(schema) && !oneOfHasTransportError(schema) {
 					problems = append(problems, fmt.Sprintf("OpenAPI operation %s: its %s is the transport's answer and must reference %s", key, status, transportErrorRef))
 				}

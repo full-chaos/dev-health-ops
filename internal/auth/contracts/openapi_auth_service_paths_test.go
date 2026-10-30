@@ -32,7 +32,11 @@ func collectRefs(node any, out *[]string) {
 	switch value := node.(type) {
 	case map[string]any:
 		for key, child := range value {
-			if ref, ok := child.(string); ok && key == "$ref" {
+			if key == "$ref" {
+				ref, ok := child.(string)
+				if !ok {
+					ref = "<a $ref that is not a string>" // never a component schema, so the caller reports it
+				}
 				*out = append(*out, ref)
 			}
 			collectRefs(child, out)
@@ -312,6 +316,15 @@ var (
 	transportContentKey = "application/json"
 )
 
+// objectAt reads parent[key] as an object; an absent or non-object value is a reported problem.
+func objectAt(parent map[string]any, key, path string, problems *[]string) map[string]any {
+	object, ok := parent[key].(map[string]any)
+	if !ok {
+		*problems = append(*problems, path+" must be an object")
+	}
+	return object
+}
+
 // openAPIPathProblems checks the OpenAPI document against the auth-service API
 // rows: one operation per API row outside go-api's path space and no other,
 // every $ref inside an operation names an existing component schema, and
@@ -320,30 +333,49 @@ func openAPIPathProblems(document map[string]any, rows []map[string]any) []strin
 	var problems []string
 	want := map[string]bool{}
 	bearer := map[string]bool{}
-	for _, row := range rows {
-		id, _ := row["id"].(string)
-		route, _ := row["route"].(string)
+	for index, row := range rows {
+		id, isID := row["id"].(string)
+		if !isID {
+			problems = append(problems, fmt.Sprintf("profile row %d has an id that is not a string", index))
+			continue
+		}
+		route, isRoute := row["route"].(string)
+		if strings.HasSuffix(id, "@api]") && !isRoute {
+			problems = append(problems, fmt.Sprintf("profile row %q has a route that is not a string", id))
+			continue
+		}
 		if !strings.HasSuffix(id, "@api]") || strings.HasPrefix(route, compatPathPrefix) || strings.HasPrefix(route, internalPathPrefix) {
 			continue
 		}
-		key := strings.ToLower(row["method"].(string)) + " " + row["route"].(string)
+		method, isMethod := row["method"].(string)
+		if !isMethod {
+			problems = append(problems, fmt.Sprintf("profile row %q has a method that is not a string", id))
+			continue
+		}
+		key := strings.ToLower(method) + " " + route
 		want[key] = true
-		classes, _ := row["accepted_credential_classes"].([]any)
+		classes, isClasses := jsonStringList(row["accepted_credential_classes"])
+		if _, present := row["accepted_credential_classes"]; present && !isClasses {
+			problems = append(problems, fmt.Sprintf("profile row %q has accepted_credential_classes that is not a list of strings", id))
+		}
 		for _, class := range classes {
-			if bearerClasses[class.(string)] {
+			if bearerClasses[class] {
 				bearer[key] = true
 			}
 		}
 	}
 	problems = append(problems, closedKeys(document, "OpenAPI document", documentKeys...)...)
-	components, _ := document["components"].(map[string]any)
+	components := objectAt(document, "components", "OpenAPI components", &problems)
 	problems = append(problems, closedKeys(components, "OpenAPI components", componentsKeys...)...)
-	schemas, _ := components["schemas"].(map[string]any)
-	schemes, _ := components["securitySchemes"].(map[string]any)
-	paths, _ := document["paths"].(map[string]any)
+	schemas := objectAt(components, "schemas", "OpenAPI components schemas", &problems)
+	schemes := objectAt(components, "securitySchemes", "OpenAPI components securitySchemes", &problems)
+	paths := objectAt(document, "paths", "OpenAPI paths", &problems)
 	got := map[string]bool{}
 	for path, item := range paths {
-		operations, _ := item.(map[string]any)
+		operations, isItem := item.(map[string]any)
+		if !isItem {
+			problems = append(problems, fmt.Sprintf("OpenAPI path %s must be an object", path))
+		}
 		problems = append(problems, closedKeys(operations, "OpenAPI path "+path, pathItemMethods...)...)
 		for method, op := range operations {
 			key := method + " " + path
@@ -364,10 +396,17 @@ func openAPIPathProblems(document map[string]any, rows []map[string]any) []strin
 				problems = append(problems, fmt.Sprintf("OpenAPI operation %s must be an object", key))
 			}
 			problems = append(problems, closedKeys(operation, "OpenAPI operation "+key, operationKeys...)...)
-			security, _ := operation["security"].([]any)
+			rawSecurity, hasSecurity := operation["security"]
+			security, isSecurityList := rawSecurity.([]any)
+			if hasSecurity && !isSecurityList {
+				problems = append(problems, fmt.Sprintf("OpenAPI operation %s: security must be a list", key))
+			}
 			bearerScheme := false
 			for _, requirement := range security {
-				names, _ := requirement.(map[string]any)
+				names, isRequirement := requirement.(map[string]any)
+				if !isRequirement {
+					problems = append(problems, fmt.Sprintf("OpenAPI operation %s: security requirement must be an object", key))
+				}
 				for name, scopes := range names {
 					if _, isList := scopes.([]any); !isList {
 						problems = append(problems, fmt.Sprintf("OpenAPI operation %s: security requirement %q must be a list", key, name))
@@ -395,7 +434,11 @@ func openAPIPathProblems(document map[string]any, rows []map[string]any) []strin
 			}
 			if method == "head" {
 				for status, answer := range responses {
-					if body, _ := answer.(map[string]any); body["content"] != nil {
+					body, isAnswer := answer.(map[string]any)
+					if !isAnswer {
+						problems = append(problems, fmt.Sprintf("OpenAPI operation %s: its %s must be a response object", key, status))
+					}
+					if body["content"] != nil {
 						problems = append(problems, fmt.Sprintf("OpenAPI operation %s: its %s declares a body, and a HEAD answer carries none", key, status))
 					}
 				}

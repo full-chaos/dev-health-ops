@@ -30,15 +30,11 @@ func (h provisioningHandlers) withStateRoute(routes []httpapi.Route, rows []byte
 }
 
 // orgState answers an organization's status and aggregate revision, read in one statement, for go-api's admin PATCH to
-// send as if_revision. It takes the session issuer service credential only: a workload token is refused here as any
-// other bad credential, since the route is outside the workload per-operation set. Read-only: no actor, no audit row.
+// send as if_revision. It takes the session issuer service credential or the go-api workload token, admitted as the
+// other provisioning routes are. Read-only: no actor, no audit row.
 func (h provisioningHandlers) orgState(w http.ResponseWriter, r *http.Request) {
-	body, caller, ok := h.admit(w, r, opOrgState, "organization_id")
+	body, _, ok := h.admit(w, r, opOrgState, "organization_id")
 	if !ok {
-		return
-	}
-	if caller.Workload != nil {
-		h.rec.refuse(w, r, opOrgState, unauthorized(reasonInvalidCredentials), nil)
 		return
 	}
 	orgID, err := body.uuid("organization_id")

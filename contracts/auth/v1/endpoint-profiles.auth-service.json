@@ -880,11 +880,16 @@
     },
     {
       "accepted_credential_classes": [
-        "internal_svc_authsess_token"
+        "internal_svc_authsess_token",
+        "workload_token"
       ],
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "workload+jwt"
+      },
       "classification": "protected",
-      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; the organization's status and aggregate revision are read live, in one statement, on every call.",
-      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials, and so is a go-api workload token with a well-formed body (the route is outside the workload per-operation set); a body that is not exactly one canonical organization_id is 400 malformed, a workload token's included (admit reads the body before the route refuses the workload); an organization that does not exist is 404 organization_not_found, named to any holder of the service credential; a store failure is 503 store_unavailable. The answer is the organization_id, its status and its revision read in one statement. The route writes nothing and no audit row.",
+      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the organization's status and aggregate revision are read live, in one statement, on every call.",
+      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials; a body that is not exactly one canonical organization_id is 400 malformed; an organization that does not exist is 404 organization_not_found, named to any holder of the service credential or of the go-api workload token; a store failure is 503 store_unavailable; a key set that cannot be read is a 503. The answer is the organization_id, its status and its revision read in one statement. The route writes nothing and no audit row.",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /internal/v1/organizations/state [dev-health-auth-service @api]",
@@ -896,7 +901,7 @@
           "note": "func (p PG) CheckScope",
           "path": "internal/auth/servicecred/scope.go"
         },
-        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). A go-api workload token that passes admit is refused by the route itself (internal/auth/authapi/provisioning_state.go orgState): the route takes the session issuer service credential only. Any other bearer is refused before any read and before the body is read. The route reads no actor: it answers the status and revision of the organization named, for go-api's superuser PATCH of an organization's is_active."
+        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). A workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read by internal/auth/authapi/issue_workload.go SessionIssueWorkload.authorize, the session issue route's path: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. Any other bearer is refused before any read and before the body is read. The route reads no actor: it answers the status and revision of the organization named, for go-api's superuser PATCH of an organization's is_active."
       },
       "route": "/internal/v1/organizations/state",
       "service": "dev-health-auth-service",

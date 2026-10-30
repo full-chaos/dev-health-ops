@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/bigboydir"
 )
 
 const (
@@ -156,6 +158,9 @@ func cutCheckGrantsReadsGivenClone(g *guard) {
 }
 
 func cutCheckContentsDefaultsToToolsCheckout(g *guard) {
+	if g.t != nil && g.bigboy != filepath.Join(g.root, "ci", "bigboy") {
+		g.t.Skip("the tools tree is outside this checkout (" + bigboydir.Env + "): its HERE/../.. default is not the ops clone")
+	}
 	e := cutOpsTools(g, "")
 	r := cutExec(g, g.tmp, e.env, "bash", g.path(cutContents), "HEAD", "HEAD", filepath.Join(g.tmp, "o.txt"))
 	g.expect(r.code == 0, "cut-contents.sh without BIGBOY_OPS_REPO failed rc=%d: %s %s", r.code, r.stdout, r.stderr)

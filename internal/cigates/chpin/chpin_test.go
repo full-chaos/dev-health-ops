@@ -13,6 +13,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/bigboydir"
 )
 
 type venue struct {
@@ -191,7 +193,15 @@ func repoVenues(t *testing.T, root string) []venue {
 		vs = append(vs, got...)
 	}
 	one("compose", "compose.yml", imageLine, true)
-	one("bigboy", "ci/bigboy/compose.bigboy.yml", imageLine, true)
+	if dir, ok := bigboydir.Lookup(root); ok { // the private tree: deploy CI sets BIGBOY_DIR; absent here means that venue is not checked
+		rel, err := filepath.Rel(root, filepath.Join(dir, "compose.bigboy.yml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		one("bigboy", rel, imageLine, true)
+	} else {
+		t.Run("bigboy_venue", func(t *testing.T) { bigboydir.Dir(t, root) }) // reports the skip the deploy job fails on
+	}
 	one("testimage", "internal/testsupport/containers/harness.go", harnessLine, false)
 	one("live-e2e", ".github/workflows/live-e2e.yml", imageLine, false)
 	one("gitlab-ci", ".gitlab-ci.yml", imageLine, false)

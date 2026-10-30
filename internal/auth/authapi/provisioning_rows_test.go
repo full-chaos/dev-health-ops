@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -97,7 +98,7 @@ func TestProvisioningRoutesRefuseUserTokens(t *testing.T) {
 	pool, connects := usertokens.CountingPool(t)
 	f := newProvFixture(t)
 	routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: servicecred.PG{Pool: pool}, Users: f.users, Reader: noRows{},
-		Organizations: f.orgs, Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ProfileRows: docWithReactivateRow(t),
+		Organizations: f.orgs, Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate,
 		Logger: slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))})
 	if err != nil {
 		t.Fatal(err)
@@ -126,4 +127,52 @@ func TestProvisioningRoutesRefuseUserTokens(t *testing.T) {
 		t.Errorf("a user token reached the stores: %d calls, %d reads", f.storeCalls(), f.users.reads)
 	}
 	usertokens.NoLeak(t, "the logs", f.logs.String(), tokens)
+}
+
+// The reactivate route is one of the routes the startup gate covers: it is in provisioningPatterns, the embedded
+// document holds its row, and the default build serves it (no planted document).
+func TestTheReactivateRouteIsInTheStartupGate(t *testing.T) {
+	if !slices.Contains(provisioningPatterns, PatternOrgReactivate) {
+		t.Fatalf("provisioningPatterns %v does not hold %s", provisioningPatterns, PatternOrgReactivate)
+	}
+	if err := provisioningRowsPresent(authv1.AuthServiceEndpointProfiles); err != nil {
+		t.Fatalf("the embedded document: %v", err)
+	}
+	f := newProvFixture(t)
+	routes := 0
+	for _, c := range routeCases() {
+		if got := f.post(c.path, encode(c.body(f, f.super)), nil); got.Code != http.StatusOK {
+			t.Fatalf("%s on the embedded document: %d %s, want 200", c.op, got.Code, got.Body)
+		}
+		routes++
+	}
+	if routes != 8 {
+		t.Fatalf("%d provisioning routes served, want 8", routes)
+	}
+	if strings.Contains(f.logs.String(), "not mounted") {
+		t.Fatalf("a not-mounted line was logged: %s", f.logs.String())
+	}
+}
+
+// A document without the reactivate row refuses the whole switch (all eight routes), like any other missing row.
+func TestAMissingReactivateRowRefusesTheWholeSwitch(t *testing.T) {
+	var document map[string]any
+	if err := json.Unmarshal(authv1.AuthServiceEndpointProfiles, &document); err != nil {
+		t.Fatal(err)
+	}
+	var kept []any
+	for _, item := range document["rows"].([]any) {
+		if item.(map[string]any)["route"] != PatternOrgReactivate {
+			kept = append(kept, item)
+		}
+	}
+	document["rows"] = kept
+	raw, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = provisioningRowsPresent(raw)
+	if !errors.Is(err, errProvisioningRows) || !strings.Contains(err.Error(), "POST "+PatternOrgReactivate+" ") {
+		t.Fatalf("a document without the reactivate row: %v, want a refusal naming the route", err)
+	}
 }

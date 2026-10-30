@@ -98,6 +98,12 @@ func (h handlers) acceptInvite(ctx context.Context, tx pgx.Tx, invite *pendingIn
 			return uuid.UUID{}, err
 		}
 	}
+	// Then the invite row FOR UPDATE (step 4), before the membership check and
+	// INSERT (step 5; its foreign key check holds the organization row): the
+	// organization delete takes the invite rows before the membership rows.
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM org_invites WHERE id = $1::uuid FOR UPDATE`, invite.ID); err != nil {
+		return uuid.UUID{}, err
+	}
 	var member bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM memberships WHERE org_id = $1::uuid AND user_id = $2::uuid)`,
 		invite.OrgID, userID).Scan(&member); err != nil {

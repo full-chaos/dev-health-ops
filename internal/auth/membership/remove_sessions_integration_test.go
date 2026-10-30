@@ -211,11 +211,11 @@ func TestARefusedRemoveEndsNoSession(t *testing.T) {
 	}
 }
 
-// The sessions end in the removal's transaction: a failure of the commit's
-// audit row (after the sessions ended) or of the session write itself (after
-// the membership changed) leaves the membership and every session as they were.
+// The sessions end in the removal's transaction: a failure of the membership
+// write, of the session write or of the commit's audit row leaves the
+// membership and every session as they were.
 func TestAFailedRemovalCommitLeavesTheSessionsLive(t *testing.T) {
-	for _, table := range []string{"auth.security_audit_events", "auth.sessions"} {
+	for _, table := range []string{"auth.memberships", "auth.sessions", "auth.security_audit_events"} {
 		t.Run(table, func(t *testing.T) {
 			s := newSessionEnv(t)
 			ctx := context.Background()

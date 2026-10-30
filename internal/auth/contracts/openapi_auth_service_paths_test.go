@@ -334,7 +334,10 @@ func openAPIPathProblems(document map[string]any, rows []map[string]any) []strin
 					problems = append(problems, fmt.Sprintf("OpenAPI operation %s references %q, which is not a component schema", key, ref))
 				}
 			}
-			operation, _ := op.(map[string]any)
+			operation, isOperation := op.(map[string]any)
+			if !isOperation {
+				problems = append(problems, fmt.Sprintf("OpenAPI operation %s must be an object", key))
+			}
 			security, _ := operation["security"].([]any)
 			bearerScheme := false
 			for _, requirement := range security {
@@ -356,7 +359,10 @@ func openAPIPathProblems(document map[string]any, rows []map[string]any) []strin
 			if len(refs) == 0 && method != "head" {
 				problems = append(problems, fmt.Sprintf("OpenAPI operation %s references no schema", key))
 			}
-			responses, _ := operation["responses"].(map[string]any)
+			responses, isResponses := operation["responses"].(map[string]any)
+			if !isResponses {
+				problems = append(problems, fmt.Sprintf("OpenAPI operation %s must declare a responses object", key))
+			}
 			if method == "head" {
 				for status, answer := range responses {
 					if body, _ := answer.(map[string]any); body["content"] != nil {

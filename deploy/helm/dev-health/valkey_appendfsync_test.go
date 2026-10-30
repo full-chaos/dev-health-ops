@@ -89,3 +89,25 @@ func TestValkeyAppendfsyncValidValuesRenderWhenValkeyIsDisabled(t *testing.T) {
 		}
 	}
 }
+
+func TestValkeyAppendfsyncNullIsRefused(t *testing.T) {
+	requireHelmUnderCI(t)
+	for name, args := range map[string][]string{
+		"set-json null":           {"--set-json", "valkey.appendfsync=null"},
+		"set null":                {"--set", "valkey.appendfsync=null"},
+		"set empty":               {"--set", "valkey.appendfsync="},
+		"set-json null, disabled": {"--set", "valkey.enabled=false", "--set-json", "valkey.appendfsync=null"},
+		"set null, disabled":      {"--set", "valkey.enabled=false", "--set", "valkey.appendfsync=null"},
+		"set empty, disabled":     {"--set", "valkey.enabled=false", "--set", "valkey.appendfsync="},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, out, err := renderAuth(t, args...)
+			if err == nil {
+				t.Fatalf("the render accepted %v; it must refuse", args)
+			}
+			if !strings.Contains(out, "appendfsync") {
+				t.Fatalf("the refusal does not name the key: %.400s", out)
+			}
+		})
+	}
+}

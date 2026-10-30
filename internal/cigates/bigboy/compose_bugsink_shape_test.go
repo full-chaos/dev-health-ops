@@ -220,6 +220,11 @@ func TestComposeRequiredVariablesReachTheShapeCheck(t *testing.T) {
 		{"default with colon is not required", "      C: ${PROVE_ORG:-d}\n", true},
 		{"default without colon is not required", "      C: ${PROVE_ORG-d}\n", true},
 		{"plain braced variable is not required", "      C: ${PROVE_ORG}\n", true},
+		{"escaped required without colon is a literal", "      C: $${PROVE_ORG?m}\n", true},
+		{"escaped required with colon is a literal", "      C: $${PROVE_ORG:?m}\n", true},
+		{"escaped required with a digit in the name is a literal", "      C: $${PROVE_ORG2?m}\n", true},
+		{"required after an escaped dollar is a reference", "      C: $$${PROVE_ORG?m}\n", false},
+		{"required without escape is a reference", "      C: ${PROVE_ORG?m}\n", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			root := t.TempDir()

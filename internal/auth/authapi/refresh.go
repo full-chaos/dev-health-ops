@@ -96,7 +96,8 @@ func refreshExpiresIn(expiresAt, now time.Time) int {
 // is minted from the user's state read after the exchange, as go-api's
 // refresh route reads it (internal/api/session/refresh.go). A user that is
 // gone or deactivated gets no token and the session is revoked, as go-api
-// revokes the family of a deactivated user.
+// revokes the family of a deactivated user. The same checks first run as the
+// exchange's guard, so a refused session's credential is never rotated.
 func (h handlers) refresh(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	credential, err := parseRefreshRequest(r.Body)
@@ -108,8 +109,9 @@ func (h handlers) refresh(w http.ResponseWriter, r *http.Request) {
 		h.rec.refuse(w, r, opRefresh, unavailable(reasonDependency), err)
 		return
 	}
-	result, err := h.Sessions.Exchange(ctx, credential)
-	if err != nil || !result.Reason.Success() {
+	result, err := h.Sessions.ExchangeGuarded(ctx, credential, h.refreshGuard)
+	guardRefused := errors.Is(err, session.ErrGuardRefused)
+	if !guardRefused && (err != nil || !result.Reason.Success()) {
 		h.rec.refuse(w, r, opRefresh, exchangeRefusal(result.Reason), err)
 		return
 	}
@@ -150,7 +152,22 @@ func (h handlers) refresh(w http.ResponseWriter, r *http.Request) {
 			h.rec.refuse(w, r, opRefresh, unavailable(reasonStoreUnavailable), roleErr)
 			return
 		}
+		if !member && !user.IsSuperuser {
+			// The membership the session was minted for is gone (D6507).
+			if _, revokeErr := h.Sessions.Revoke(ctx, record.ID, session.Actor{RequestID: requestid.Audit(ctx)}); revokeErr != nil {
+				h.rec.refuse(w, r, opRefresh, unavailable(reasonStoreUnavailable), revokeErr)
+				return
+			}
+			h.rec.refuse(w, r, opRefresh, unauthorized(reasonNotEntitled), nil)
+			return
+		}
 		role = roleText(value, member)
+	}
+	if guardRefused {
+		// The guard refused; the reads above no longer do (a concurrent
+		// change). Nothing was rotated, so there is no credential to answer.
+		h.rec.refuse(w, r, opRefresh, unauthorized(reasonRevisionStale), nil)
+		return
 	}
 	access, err := h.Issuer.AccessContext(ctx, Grant{
 		PrincipalID: record.PrincipalID, OrganizationID: record.OrganizationID, Role: role,

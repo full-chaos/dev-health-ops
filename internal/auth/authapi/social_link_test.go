@@ -239,7 +239,7 @@ func TestEverySocialLinkAnswerIsADeclaredOpenAPIResponse(t *testing.T) {
 	}
 	failures := []error{
 		&social.ConflictError{ExistingMethod: "password"}, social.ErrProviderUnavailable, social.ErrProviderNotConfigured,
-		social.ErrProviderRefused, social.ErrEmailUnverified, social.ErrPrincipalDisabled, identity.ErrSignupNotAvailable,
+		social.ErrProviderRefused, social.ErrInvalidProviderID, social.ErrEmailUnverified, social.ErrPrincipalDisabled, identity.ErrSignupNotAvailable,
 		social.ErrReauthenticationRequired, identity.ErrIdentityConflict, social.ErrProviderLinked, identity.ErrNotFound,
 		identity.ErrLastSignInMethod, social.ErrUnavailable, errors.New("unclassified"),
 	}
@@ -281,5 +281,36 @@ func TestEverySocialLinkAnswerIsADeclaredOpenAPIResponse(t *testing.T) {
 				t.Errorf("%s: %s answered %d, which the operation does not declare", call.openapiPath, name, response.Code)
 			}
 		}
+	}
+}
+
+// TestLinkInvalidProviderIDAnswersTheDeclaredTransportError: the 400 of POST /v1/identities/social is declared as
+// transport-error.v1 (top-level error, no other member), so the link route answers an invalid provider user id in
+// that shape and not in the go-api detail shape the sign-in route keeps.
+func TestLinkInvalidProviderIDAnswersTheDeclaredTransportError(t *testing.T) {
+	f := newFixture(t)
+	routes, err := SocialLinkRoutes(SocialLinkDeps{Sessions: f.sessions, Users: f.users, Issuer: f.issuer,
+		Logger: slog.New(slog.NewJSONHandler(f.logs, nil)), Social: failingLinkDomain{err: social.ErrInvalidProviderID}, Limits: mustLimits(t, httpapi.NewMemoryCounters(nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	for _, route := range routes {
+		mux.Handle(route.Method+" "+route.Pattern, requestid.Middleware(route.Handler))
+	}
+	f.server = mux
+	response := f.do(http.MethodPost, PatternSocialLink, linkBody, f.bearer(f.grant()))
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status %d %s, want 400", response.Code, response.Body)
+	}
+	var body any
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body %q: %v", response.Body, err)
+	}
+	if err := contracts.Validate(repoRoot(t), "transport-error.v1", body); err != nil {
+		t.Fatalf("the 400 body %s does not validate as transport-error.v1: %v", response.Body, err)
+	}
+	if strings.Contains(response.Body.String(), "detail") || strings.Contains(response.Body.String(), "invalid user id") {
+		t.Fatalf("the 400 body %s is in the go-api shape", response.Body)
 	}
 }

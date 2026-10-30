@@ -604,6 +604,8 @@ func (s *Store) countLink(ctx context.Context, action string, err error) {
 		outcome = "email_taken"
 	case errors.Is(err, ErrUserNotFound):
 		outcome = "user_not_found"
+	case errors.Is(err, ErrLinkUnusable):
+		outcome = "link_unusable"
 	case errors.Is(err, ErrInvalidExternalKey), errors.Is(err, ErrInvalidEmail), errors.Is(err, ErrInvalidPasswordHash):
 		outcome = "invalid_input"
 	default:

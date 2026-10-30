@@ -55,7 +55,7 @@ const (
 )
 
 var provisioningOperations = []string{opMembershipAdd, opMembershipRole, opMembershipRemove, opMembershipTransfer,
-	opInviteCreate, opInviteAccept, opOrgDeprovision, opOrgReactivate}
+	opInviteCreate, opInviteAccept, opOrgDeprovision, opOrgReactivate, opInviteRevoke}
 
 // Provisioning refusal codes beyond the shared ones.
 const (
@@ -109,6 +109,7 @@ type Memberships interface {
 type Invites interface {
 	Create(ctx context.Context, in invite.CreateInput) (*invite.Created, error)
 	Accept(ctx context.Context, in invite.AcceptInput) (*invite.Accepted, error)
+	Revoke(ctx context.Context, in invite.RevokeInput) error
 }
 
 // Deprovisioner ends an organization (*orgdeprovision.Service).
@@ -196,6 +197,7 @@ func ProvisioningRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 		{Method: http.MethodPost, Pattern: PatternInviteCreate, Handler: http.HandlerFunc(h.inviteCreate)},
 		{Method: http.MethodPost, Pattern: PatternInviteAccept, Handler: http.HandlerFunc(h.inviteAccept)},
 		{Method: http.MethodPost, Pattern: PatternOrgDeprovision, Handler: http.HandlerFunc(h.orgDeprovision)},
+		h.revokeRoute(h.Invites),
 	}
 	// Mounted only when the profile document holds its row: without it the route answers 404, the routes above are
 	// unaffected and the service starts. One line names the route and nothing else.

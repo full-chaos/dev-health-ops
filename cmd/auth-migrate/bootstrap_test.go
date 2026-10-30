@@ -397,26 +397,40 @@ func TestBootstrapDirSyncFailureRegistersNothingAndLeavesNoFile(t *testing.T) {
 }
 
 // TestBootstrapADisabledWorkloadIsNamedAndLeavesNoFile: create and rotate of a
-// disabled workload fail with that class, and the out-file is removed.
+// disabled workload fail with a class that says which row is disabled (the
+// workload row, or the principal alone) and that no verb enables it, and the
+// out-file is removed.
 func TestBootstrapADisabledWorkloadIsNamedAndLeavesNoFile(t *testing.T) {
-	for _, verb := range []string{"bootstrap-create", "bootstrap-rotate"} {
-		store := &fakeBootstrap{refusal: workload.ErrBootstrapWorkloadDisabled}
-		out := filepath.Join(t.TempDir(), "value")
-		args := []string{verb, "-workload", "api", "-out", out, "-apply"}
-		if verb == "bootstrap-rotate" {
-			args = append(args, "-overlap", "5m")
+	const row = "(the workload row is disabled; no auth-migrate verb enables it today: re-enabling needs a reviewed change)"
+	const principal = "(the workload's principal is disabled, its row is not; no auth-migrate verb enables it today: re-enabling needs a reviewed change)"
+	for refusal, want := range map[error]string{
+		workload.ErrBootstrapWorkloadDisabled:  row,
+		workload.ErrBootstrapPrincipalDisabled: principal,
+	} {
+		other := principal
+		if want == principal {
+			other = row
 		}
-		var stdout, stderr bytes.Buffer
-		if code := runBootstrap(t.Context(), store, mustParse(t, args...), &stdout, &stderr); code != 1 {
-			t.Fatalf("%s exit = %d, want 1", verb, code)
+		for _, verb := range []string{"bootstrap-create", "bootstrap-rotate"} {
+			store := &fakeBootstrap{refusal: refusal}
+			out := filepath.Join(t.TempDir(), "value")
+			args := []string{verb, "-workload", "api", "-out", out, "-apply"}
+			if verb == "bootstrap-rotate" {
+				args = append(args, "-overlap", "5m")
+			}
+			var stdout, stderr bytes.Buffer
+			if code := runBootstrap(t.Context(), store, mustParse(t, args...), &stdout, &stderr); code != 1 {
+				t.Fatalf("%s/%v exit = %d, want 1", verb, refusal, code)
+			}
+			got := stderr.String()
+			if !strings.Contains(got, want) || strings.Contains(got, other) || strings.Contains(got, "enable it first") {
+				t.Fatalf("%s/%v stderr = %q, want %q", verb, refusal, got, want)
+			}
+			if _, err := os.Lstat(out); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("%s kept the out-file of a refused verb", verb)
+			}
+			noLeak(t, store.values[0], stdout.String(), stderr.String())
 		}
-		if !strings.Contains(stderr.String(), "(the workload is disabled; enable it first)") {
-			t.Fatalf("%s stderr = %q", verb, stderr.String())
-		}
-		if _, err := os.Lstat(out); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("%s kept the out-file of a refused verb", verb)
-		}
-		noLeak(t, store.values[0], stdout.String(), stderr.String())
 	}
 }
 

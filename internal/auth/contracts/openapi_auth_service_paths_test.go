@@ -615,6 +615,88 @@ func TestTheOpenAPIPathGateChecksTheOneOfExtraMembers(t *testing.T) {
 	}
 }
 
+// Every allowlisted keyword has one accepted value shape, checked at every walked level; any other shape fails
+// closed. The mutated schema is the member's detail.properties.message schema (a plain string schema at first).
+func TestTheOpenAPIPathGateChecksEveryKeywordShape(t *testing.T) {
+	rows := authServiceRows(t)
+	cases := []struct {
+		name   string
+		schema map[string]any
+		want   bool
+	}{
+		{"type as a number", map[string]any{"type": 5}, true},
+		{"type as an empty list", map[string]any{"type": []any{}}, true},
+		{"type as a list with a number", map[string]any{"type": []any{"string", 5}}, true},
+		{"type as an object", map[string]any{"type": map[string]any{}}, true},
+		{"type as a list of strings", map[string]any{"type": []any{"string", "null"}}, false},
+		{"required as a string", map[string]any{"type": "object", "additionalProperties": false, "required": "error"}, true},
+		{"required as an object", map[string]any{"type": "object", "additionalProperties": false, "required": map[string]any{}}, true},
+		{"required as a list with a number", map[string]any{"type": "object", "additionalProperties": false, "required": []any{1}}, true},
+		{"required with a duplicate", map[string]any{"type": "object", "additionalProperties": false, "required": []any{"a", "a"}}, true},
+		{"required as a list of unique strings", map[string]any{"type": "object", "additionalProperties": false, "required": []any{"a", "b"}}, false},
+		{"required as an empty list", map[string]any{"type": "object", "additionalProperties": false, "required": []any{}}, false},
+		{"properties as a string", map[string]any{"type": "object", "additionalProperties": false, "properties": "x"}, true},
+		{"items as a string", map[string]any{"type": "array", "items": "x"}, true},
+		{"oneOf as an empty list", map[string]any{"oneOf": []any{}}, true},
+		{"anyOf as an empty list", map[string]any{"anyOf": []any{}}, true},
+		{"allOf as a string", map[string]any{"allOf": "x"}, true},
+		{"anyOf of closed members", map[string]any{"anyOf": []any{map[string]any{"type": "string"}, map[string]any{"type": "null"}}}, false},
+		{"additionalProperties as a string", map[string]any{"type": "object", "additionalProperties": "no"}, true},
+		{"$ref as a number", map[string]any{"$ref": 5}, true},
+		{"$ref as a string", map[string]any{"$ref": "#/components/schemas/Error"}, true},
+		{"enum as a string", map[string]any{"type": "string", "enum": "a"}, true},
+		{"enum as an empty list", map[string]any{"type": "string", "enum": []any{}}, true},
+		{"enum as a list", map[string]any{"type": "string", "enum": []any{"a", "b"}}, false},
+		{"description as a number", map[string]any{"type": "string", "description": 5}, true},
+		{"description as a string", map[string]any{"type": "string", "description": "d"}, false},
+		{"format as a list", map[string]any{"type": "string", "format": []any{"uuid"}}, true},
+		{"format as a string", map[string]any{"type": "string", "format": "uuid"}, false},
+		{"const as an object", map[string]any{"const": map[string]any{"a": 1}}, false},
+		{"const as null", map[string]any{"const": nil}, false},
+		{"const as a list", map[string]any{"const": []any{1, "x"}}, false},
+	}
+	for _, c := range cases {
+		for _, level := range []string{"nested", "top"} {
+			document := loadOpenAPIRaw(t)
+			member := closedGoAPIMember()
+			if level == "nested" {
+				member["properties"].(map[string]any)["detail"].(map[string]any)["properties"].(map[string]any)["message"] = c.schema
+			} else {
+				if c.schema["type"] != nil && c.schema["type"] != "object" {
+					continue
+				}
+				member = map[string]any{"type": "object", "additionalProperties": false}
+				for keyword, value := range c.schema {
+					if keyword == "type" {
+						continue
+					}
+					member[keyword] = value
+				}
+			}
+			plantOneOf(document, "/v1/identities/social", "post", "400", member)
+			problems := openAPIPathProblems(document, rows)
+			if c.want && len(problems) == 0 {
+				t.Errorf("%s (%s level): the gate reported nothing", c.name, level)
+			}
+			if !c.want && len(problems) != 0 {
+				t.Errorf("%s (%s level): the gate reported %v", c.name, level, problems)
+			}
+		}
+	}
+	for _, status := range []string{"400", "413", "429"} {
+		document := loadOpenAPIRaw(t)
+		route, method := "/v1/token/refresh", "post"
+		if status == "413" {
+			route = "/v1/sessions/revoke"
+		}
+		responses := document["paths"].(map[string]any)[route].(map[string]any)[method].(map[string]any)["responses"].(map[string]any)
+		responses[status] = "not a response object"
+		if len(openAPIPathProblems(document, rows)) == 0 {
+			t.Errorf("a transport %s that is not an object: the gate reported nothing", status)
+		}
+	}
+}
+
 // Only go-api's own path space is exempt: an API row anywhere else, one that
 // merely starts like it included, still needs its operation.
 func TestTheOpenAPIPathGateExemptsOnlyGoAPIsPathSpace(t *testing.T) {

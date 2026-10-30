@@ -244,8 +244,8 @@ Order (nothing serves traffic until the last step):
    revoke (a setup revoke is sent by a disconnect or callback of its org once the row is 15 minutes old: the apply
    keeps its created_at and sets attempts to 0, and the route skips a younger one, so it stays pending until then);
    `provider_revocation_requeued_blocked`:
-   the credential was connected after the target, so the restored copy has no credential row and a disconnect does not
-   send the revoke (it answers `disconnected: true` anyway); these wait for the revocation worker (the ticket the line
+   the credential was connected after the target, so the restored copy has no credential row; a disconnect of the name
+   still sends them (ticket 12011), and the revocation worker sends them (the ticket the line
    names); `requeue_provider_revocation`: tokens the apply could only name: revocations of an apply with no source set
    (revoke those tokens at the provider by hand), and provider credentials it deleted (`source=public.provider_oauth_credentials`):
    their restored token was rotated, reconnected or disconnected after the target, the delete writes no revocation row,

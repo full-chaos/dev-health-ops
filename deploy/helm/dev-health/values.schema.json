@@ -49,6 +49,16 @@
     }
   },
   "properties": {
+    "valkey": {
+      "type": "object",
+      "properties": {
+        "appendfsync": {
+          "description": "AOF fsync policy of the in-chart Valkey, checked for every render whether or not valkey.enabled is set. no is refused: the revision-feed floor rule needs a durable AOF.",
+          "type": "string",
+          "enum": ["everysec", "always"]
+        }
+      }
+    },
     "goApi": {
       "type": "object",
       "properties": {

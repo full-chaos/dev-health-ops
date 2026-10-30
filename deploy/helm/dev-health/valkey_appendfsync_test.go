@@ -36,7 +36,7 @@ func TestValkeyAppendfsyncRefusesOtherValues(t *testing.T) {
 			if err == nil {
 				t.Fatalf("the render accepted appendfsync %q; it must refuse", value)
 			}
-			if !strings.Contains(out, "valkey.appendfsync must be one of everysec, always") {
+			if !strings.Contains(out, "/valkey/appendfsync") {
 				t.Fatalf("the refusal does not say so: %.400s", out)
 			}
 		})

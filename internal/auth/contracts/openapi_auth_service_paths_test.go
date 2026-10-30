@@ -266,7 +266,7 @@ func oneOfExtraMemberProblems(key, status string, schema map[string]any) []strin
 			continue
 		}
 		problems = append(problems, closedSchemaProblems(member, path)...)
-		properties, _ := member["properties"].(map[string]any) // a non-map properties is reported by closedSchemaProblems
+		properties, _ := member["properties"].(map[string]any) // a non-map properties is reported by keywordShapeProblems
 		required, _ := jsonStringList(member["required"])      // a malformed or absent required is reported by keywordShapeProblems or has no name
 		_, namesError := properties["error"]
 		for _, name := range required {

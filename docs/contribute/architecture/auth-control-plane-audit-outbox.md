@@ -12,6 +12,10 @@ source_of_truth:
   - internal/storage/postgres/authschema/migrations/0005_audit_and_outbox.sql
   - internal/storage/postgres/authschema/migrations/0006_audit_commit_guard.sql
   - internal/auth/authruntime/runtime.go
+  - internal/auth/authruntime/feed.go
+  - internal/auth/revisionfeed/sink.go
+  - internal/auth/revisionfeed/floors.go
+  - internal/auth/revisionfeed/floorinput.go
 applicability: current
 lifecycle: active
 ---
@@ -75,12 +79,14 @@ it cannot update or delete them.
 
 ## What runs in Wave 1
 
-`authruntime` builds one **outbox loop** with `audit.NewOutboxLoop(pool, nil,
-config)`: a loop with **no sink**. No consumer of auth events exists yet, so:
+`authruntime` builds one **outbox loop**. By default (`AUTH_REVISION_FEED` unset
+or `off`) it is built with `audit.NewOutboxLoop(pool, nil, config)`: a loop with
+**no sink**, exactly as before the revision feed existed. With
+`AUTH_REVISION_FEED=on` it is built with the Valkey sink (see "The revision
+feed" below). Without it:
 
 - **Publishing is off.** A sink-less publisher would mark events delivered that
-  nobody received. Events accumulate as pending until a sink is injected, which
-  is a one-line change when the first consumer lands.
+  nobody received. Events accumulate as pending until a sink is switched on.
 - **The reaper runs.** Once a second the loop deletes published events older
   than the retention (default 7 days), at most 1000 per sweep. The reaper never
   deletes an unpublished event at any age.
@@ -95,6 +101,80 @@ config)`: a loop with **no sink**. No consumer of auth events exists yet, so:
 
 Defaults are `audit.DefaultLoopConfig`: poll 1 s, publish limit 50, retention
 7 days, reap limit 1000.
+
+## The revision feed
+
+Shipped dark. `AUTH_REVISION_FEED=on` (default `off`; it needs `AUTH_VALKEY_URI`,
+database 1) gives the outbox publisher a sink that raises a per-aggregate
+high-water revision and publishes it, and subscribes every replica to the
+channel.
+
+- **The sink.** One Lua call (`EVAL`) per event: `HSET` the field
+  `<aggregate_type>:<aggregate_id>` of the hash `dho:rl:auth_svc_rev_hwm` to the
+  event's revision **only when it is higher than the stored one** (a delayed or
+  redelivered lower revision never lowers it), then `PUBLISH`
+  `<aggregate_type>:<aggregate_id>:<revision>` on the channel `auth_svc_rev`.
+  `Deliver` returns nil only after the script succeeded. A Valkey that cannot be
+  reached is the closed reason `consumer_unavailable` (the event stays pending
+  and retries with backoff; the lag gauge rises); an error reply (an ACL
+  refusal) is `consumer_rejected`. No error text is stored, and the URI is never
+  logged. A row whose idempotency key disagrees with its revision is
+  `consumer_rejected` and never reaches Valkey.
+- **The consumer.** Every replica subscribes, and every (re)subscribe calls
+  `InvalidateAll` on the consumer's invalidator (pub/sub has no replay) and then
+  **catches up**: once the subscription is confirmed it reads the hash with
+  `HGETALL` and gives each `<type>:<id>` floor to the consumer, so a revision
+  delivered while the replica was away is reached with no further event. The order
+  is subscribe, then read, then the marks move; a live event is revision-idempotent
+  with the read (a floor at or below the mark is ignored). The read runs off the
+  connection's read loop and retries with the backoff; `subscription_up` is 1 only
+  after it succeeded. Per
+  aggregate: the next revision applies (the aggregate is invalidated), a duplicate
+  or older one is ignored, a revision that skips ahead is a gap (the aggregate is
+  invalidated and the mark moves to the gap revision, so the gap does not repeat).
+  No decision cache exists yet (5.8), so the invalidator is a no-op and the
+  consumer keeps its watermarks and metrics. Metrics:
+  `devhealth_auth_revision_feed_events_total{disposition=apply|ignore|gap|dropped}` (`dropped`: a live message or a catch-up floor refused before the cursor, because it is malformed or its revision is outside 1..2^53-1; the cursor never moves on it),
+  `devhealth_auth_revision_feed_resync_total{cause=gap|resubscribe}` and
+  `devhealth_auth_revision_feed_subscription_up` (1 while subscribed and caught up). No
+  aggregate id is a label, and no log line carries an id or a payload.
+- **ACL.** The auth Valkey login (`auth-service-ratelimit`) keeps its one key
+  prefix and database; the feed needs one more channel pattern and more commands
+  (`+hget +hset` run inside the script, `+publish`, `+subscribe`, and `+hgetall`
+  for the catch-up read, granted by a **selector** that names the one hash, so
+  `HGETALL` of any other `auth_svc_` key is refused; the selector needs Valkey 7 or
+  later, the chart's Valkey is 9):
+  `resetkeys ~dho:rl:auth_svc_* resetchannels &auth_svc_* -@all +hello +select +ping +get +eval +incr +pexpire +hget +hset +publish +subscribe +client|tracking (~dho:rl:auth_svc_rev_hwm +hgetall)`.
+  The key `dho:rl:auth_svc_rev_hwm` and the channel `auth_svc_rev` sit under the
+  existing `auth_svc_` prefixes; the ACL prefix is the separation, not the
+  database number. Roll the ACL (chart `valkey.acl`, or `ACL SETUSER`) **before**
+  turning the flag on, or the sink answers `consumer_rejected`.
+- **The published floors (a stable interface).** `revisionfeed.PublishedFloors`
+  returns the hash as `map[<type>:<id>]revision`, and `revisionfeed.ReadStatus`
+  says whether the hash can be trusted, from one `INFO persistence memory` read (no
+  `CONFIG GET`): usable only when `aof_enabled` is 1, `aof_last_write_status` and
+  `aof_last_bgrewrite_status` are `ok`, **and** `maxmemory_policy` is `noeviction`
+  or `volatile-*`, **and** the hash has no TTL (checked under both policies: an
+  expiring hash gives a lower floor). A missing, unknown or failed field is
+  not usable. The `appendfsync` policy is not in `INFO`; the chart sets none (the
+  server default `everysec`) and a chart test pins that it is never `no`. The
+  chart's default `--maxmemory-policy allkeys-lru` is **not** usable. A hash that
+  was evicted or lost gives a lower floor, the unsafe direction, so it is an
+  advisory second input, never the only source. `ReadStatus` needs `+info`, which
+  the auth-service login does not have: the reader uses its own login.
+- **A restore-fence floor input.** The restore fence's census requires every outbox
+  consumer to hand its high-water marks to the fence, so the feed is one
+  (`revisionfeed.NewFloorInput`): an advisory lower bound that the fence uses only
+  while `ReadStatus` says usable. It fails closed: a store that is not usable
+  (including the chart default `allkeys-lru`) or unreachable is reported as such,
+  and an empty hash is `ErrNoFloors`, never an empty map or a zero floor (the fence
+  would count an empty input as a usable source and refuse the blind margin). The
+  registry is per process; the auth-service registers its input only when the feed
+  is on, and the restore-fence CLI will register its own with its own Valkey login
+  (CHAOS-11978, which blocks the production flag flip).
+- **Restore.** Until the restore-fence leaf that reads these floors ships, a
+  restore does not use the Valkey hash, and **the flag must stay off in
+  production**.
 
 ## Observe it
 

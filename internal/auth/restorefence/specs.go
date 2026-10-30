@@ -75,6 +75,8 @@ type section struct {
 	idExpr string
 	// revokeSet replaces the SET clause a revoke section builds from cols: a section that carries ids only.
 	revokeSet string
+	// blindIDExpr is the operator id of a row a blind margin lists (alias t) when it differs from idExpr.
+	blindIDExpr string
 	// blindReview is the predicate (alias t) on the restored rows a blind margin leaves as they are but names for the
 	// operator to review (ids only).
 	blindReview string
@@ -201,6 +203,14 @@ var sections = []section{
 	// every unconsumed link credential is removed: fail closed, users ask for a new link (D6459).
 	{name: "auth.link_credentials.ids", suffix: ".ids", table: "link_credentials", kind: kindPresence, key: colUUID("id"),
 		revoked: "s.consumed_at IS NULL", deleteGuard: "t.consumed_at IS NULL"},
+	// An external identity unlinked after T (a DELETE) comes back with the restore, and its IdP subject can sign in as the
+	// principal again. A restored link survives only if the source holds the same id: an unlink + re-link after T deletes
+	// the restored row and the user links again (fail closed). A link made after T is never inserted. Only the id and the
+	// principal travel; never the issuer, provider or subject. With no manifest nothing is deleted and every link is
+	// listed for review (id, principal, provider).
+	{name: "auth.external_identities", table: "external_identities", kind: kindPresence, key: colUUID("id"),
+		cols: []column{colUUID("principal_id")}, manifestOnly: true, action: ActionIdentityUnlinked,
+		blindReview: "true", blindIDExpr: identityReviewExpr},
 	// Replay evidence: the identifier hash of a used SAML assertion is a hash of a
 	// public assertion id, not a credential; it travels as hex.
 	{name: "auth.saml_assertion_uses", table: "saml_assertion_uses", kind: kindInsert, key: colText("issuer"),
@@ -324,6 +334,9 @@ const oauthHeld = "x.org_id = t.org_id AND x.provider = t.provider AND x.credent
 
 // oauthIDExpr names a provider credential as org/provider/name, each part percent-encoded (%, /, comma, LF, CR): the three
 // text columns have no CHECK, and the operator action line joins ids with commas.
+// identityReviewExpr is the blind-margin id of an external identity: id/principal/provider, never the subject.
+var identityReviewExpr = "t.id::text || '/' || t.principal_id::text || '/' || " + pctEncode("t.provider")
+
 var oauthIDExpr = strings.Join([]string{pctEncode("t.org_id"), pctEncode("t.provider"), pctEncode("t.credential_name")}, " || '/' || ")
 
 func pctEncode(e string) string {
@@ -467,7 +480,7 @@ func (s section) idsSQL(schema authschema.ValidatedIdentifier) string {
 	case s.kind == kindRevoke && s.action == ActionForcePasswordReset:
 		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s)
 SELECT t.%s::text FROM %s t JOIN m x ON x.%s = t.%s WHERE (%s) ORDER BY 1`, s.recordset(), s.key.name, tbl, s.key.name, s.key.name, s.sub(s.active, schema))
-	case s.kind == kindPresence && s.action == ActionRequeueProviderRevocation:
+	case s.kind == kindPresence && (s.action == ActionRequeueProviderRevocation || s.action == ActionIdentityUnlinked):
 		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s)
 SELECT %s FROM %s t WHERE NOT EXISTS (SELECT 1 FROM m x WHERE %s) ORDER BY 1`, s.recordset(), s.idSQL(), tbl, s.matchSQL())
 	case s.action == ActionReviewScopeEmptied:
@@ -523,7 +536,11 @@ func blindReviewSQL(s section, schema authschema.ValidatedIdentifier) string {
 	if s.blindReview == "" {
 		return ""
 	}
-	return `SELECT ` + s.idSQL() + ` FROM ` + s.qualified(schema) + ` t WHERE ` + s.blindReview + ` ORDER BY 1`
+	id := s.idSQL()
+	if s.blindIDExpr != "" {
+		id = s.blindIDExpr
+	}
+	return `SELECT ` + id + ` FROM ` + s.qualified(schema) + ` t WHERE ` + s.blindReview + ` ORDER BY 1`
 }
 
 // idSQL is the operator id of a restored row (alias t).

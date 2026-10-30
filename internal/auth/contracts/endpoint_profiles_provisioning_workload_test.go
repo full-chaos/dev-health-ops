@@ -10,7 +10,7 @@ import (
 var provisioningRoutes = []string{
 	"/internal/v1/memberships/add", "/internal/v1/memberships/role", "/internal/v1/memberships/remove",
 	"/internal/v1/memberships/transfer", "/internal/v1/invites/create", "/internal/v1/invites/accept",
-	"/internal/v1/organizations/deprovision", "/internal/v1/organizations/reactivate",
+	"/internal/v1/organizations/deprovision", "/internal/v1/organizations/reactivate", "/internal/v1/organizations/state",
 }
 
 func provisioningRows(t *testing.T) map[string]map[string]any {

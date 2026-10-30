@@ -20,8 +20,12 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 )
 
-// Path is the reactivate route on auth-service's API listener.
-const Path = "/internal/v1/organizations/reactivate"
+const (
+	// Path is the reactivate route on auth-service's API listener.
+	Path = "/internal/v1/organizations/reactivate"
+	// SuspendPath is the suspend route on auth-service's API listener.
+	SuspendPath = "/internal/v1/organizations/suspend"
+)
 
 var (
 	// ErrRefused: auth-service answered with a refusal (any 4xx). The call
@@ -38,8 +42,14 @@ type Reactivator interface {
 	Reactivate(ctx context.Context, orgID, actor uuid.UUID) error
 }
 
-// Client calls the reactivate route of one auth-service over the shared
-// provisioning transport (authprovision.Core).
+// Suspender suspends an organization in the auth schema. A nil error means the
+// organization is suspended there (a no-op included).
+type Suspender interface {
+	Suspend(ctx context.Context, orgID, actor uuid.UUID) error
+}
+
+// Client calls the reactivate and suspend routes of one auth-service over the
+// shared provisioning transport (authprovision.Core).
 type Client struct {
 	core *authprovision.Core
 	http *http.Client
@@ -75,16 +85,27 @@ type answer struct {
 // superuser actor. Only an answer that names orgID as active is success; the
 // error carries a class and a status, never the credential or the answer text.
 func (c *Client) Reactivate(ctx context.Context, orgID, actor uuid.UUID) error {
+	return c.post(ctx, Path, orgID, actor, "active")
+}
+
+// Suspend asks auth-service to suspend orgID, acting as the superuser actor.
+// Only an answer that names orgID as suspended is success, with the same error
+// classes as Reactivate.
+func (c *Client) Suspend(ctx context.Context, orgID, actor uuid.UUID) error {
+	return c.post(ctx, SuspendPath, orgID, actor, "suspended")
+}
+
+func (c *Client) post(ctx context.Context, path string, orgID, actor uuid.UUID, wantStatus string) error {
 	var got answer
-	err := c.core.Post(ctx, Path, request{OrganizationID: orgID.String(), ActorPrincipalID: actor.String()}, &got)
+	err := c.core.Post(ctx, path, request{OrganizationID: orgID.String(), ActorPrincipalID: actor.String()}, &got)
 	var refused *authprovision.Refused
 	switch {
 	case errors.As(err, &refused):
 		return fmt.Errorf("%w: status %d", ErrRefused, refused.Status)
 	case err != nil:
 		return fmt.Errorf("%w: %w", ErrUnavailable, err)
-	case got.OrganizationID != orgID.String() || got.Status != "active":
-		return fmt.Errorf("%w: answer is not the organization active", ErrUnavailable)
+	case got.OrganizationID != orgID.String() || got.Status != wantStatus:
+		return fmt.Errorf("%w: answer is not the organization %s", ErrUnavailable, wantStatus)
 	}
 	return nil
 }

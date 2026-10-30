@@ -152,11 +152,12 @@ func sessionIssuer(cfg AuthProxyConfig, lookup func(string) (string, bool)) (ses
 	return client, nil
 }
 
-// orgReactivator is the client of auth-service's organization reactivate route
-// when AUTH_PROXY_ORG_PROVISIONING is on, built from AUTH_SESSION_ISSUE_TOKEN;
-// nil when off, so go-api's PATCH never calls auth-service. On without a usable
-// token is a start-up error: every reactivation would answer 503.
-func orgReactivator(cfg AuthProxyConfig, lookup func(string) (string, bool)) (orgreactivate.Reactivator, error) {
+// orgLifecycleClient is the client of auth-service's organization reactivate and
+// suspend routes when AUTH_PROXY_ORG_PROVISIONING is on, built from
+// AUTH_SESSION_ISSUE_TOKEN; nil when off, so go-api's PATCH never calls
+// auth-service. On without a usable token is a start-up error: every change would
+// answer 503.
+func orgLifecycleClient(cfg AuthProxyConfig, lookup func(string) (string, bool)) (*orgreactivate.Client, error) {
 	if !cfg.OrgProvisioningOn() {
 		return nil, nil
 	}
@@ -164,6 +165,24 @@ func orgReactivator(cfg AuthProxyConfig, lookup func(string) (string, bool)) (or
 	client, err := orgreactivate.New(cfg.Upstream, strings.TrimSpace(token), cfg.Timeout)
 	if err != nil {
 		return nil, fmt.Errorf("%s is on: %w", EnvAuthProxyOrgProvisioning, err)
+	}
+	return client, nil
+}
+
+// orgReactivator is the reactivate side of orgLifecycleClient (nil when off).
+func orgReactivator(cfg AuthProxyConfig, lookup func(string) (string, bool)) (orgreactivate.Reactivator, error) {
+	client, err := orgLifecycleClient(cfg, lookup)
+	if client == nil {
+		return nil, err
+	}
+	return client, nil
+}
+
+// orgSuspender is the suspend side of orgLifecycleClient (nil when off).
+func orgSuspender(cfg AuthProxyConfig, lookup func(string) (string, bool)) (orgreactivate.Suspender, error) {
+	client, err := orgLifecycleClient(cfg, lookup)
+	if client == nil {
+		return nil, err
 	}
 	return client, nil
 }

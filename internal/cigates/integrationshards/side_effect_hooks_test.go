@@ -200,10 +200,11 @@ func tagOnlyTestFiles(t *testing.T) []string {
 // ones joined on main with CHAOS-10980) and two init packages,
 // which no reviewed row can cover, internal/fixturescli, whose init registers demo repositories, and three packages whose
 // tag-only files import the clickhouse-go/v2 root package (it registers the "clickhouse" database/sql driver) while their
-// plain test binary does not load it. The list is written out on purpose: a new entry means a package gave up its filter,
+// plain test binary does not load it. internal/auth/lockorder (a TestMain package) has tag-only tests alone, so it has no
+// filter to give up. The list is written out on purpose: a new entry means a package gave up its filter,
 // and that must be a decision.
 var unfilteredTestPackages = []string{
-	"internal/auth/identity", "internal/auth/identity/oidc", "internal/auth/identity/saml", "internal/auth/invite", "internal/auth/membership", "internal/auth/org",
+	"internal/auth/identity", "internal/auth/identity/oidc", "internal/auth/identity/saml", "internal/auth/invite", "internal/auth/lockorder", "internal/auth/membership", "internal/auth/org",
 	"internal/auth/orgdeprovision", "internal/auth/platformrole", "internal/auth/usersbackfill", "internal/auth/workload", "internal/auth/workloadexchange", "internal/fixturescli", "internal/jobs/metrics/changefailure", "internal/jobs/metrics/remaining", "internal/queryapi/scancensus", "internal/storage/clickhouse/liverow", "internal/storage/postgres",
 }
 

@@ -497,6 +497,18 @@ func (h *handlers) orgDeletionPurgePostgres(ctx context.Context, orgUUID uuid.UU
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	// The auth lock order (internal/auth/membership readPairs): the invite
+	// rows, then the membership rows, each ORDER BY id, before any delete
+	// (a DELETE takes its rows in scan order).
+	for _, lock := range []string{
+		`SELECT 1 FROM org_invites WHERE org_id = $1 ORDER BY id FOR UPDATE`,
+		`SELECT 1 FROM memberships WHERE org_id = $1 ORDER BY id FOR UPDATE`,
+	} {
+		if _, err := tx.Exec(ctx, lock, orgUUID); err != nil {
+			return fmt.Errorf("lock: %w", err)
+		}
+	}
+
 	if _, err := tx.Exec(ctx,
 		`UPDATE scheduled_jobs SET status = $2, is_running = false, next_run_at = NULL, updated_at = $3 WHERE org_id = $1`,
 		orgIDStr, jobStatusDisabled, h.now()); err != nil {

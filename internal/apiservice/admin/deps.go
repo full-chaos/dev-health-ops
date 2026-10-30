@@ -88,6 +88,9 @@ type Deps struct {
 	// (AUTH_PROXY_ORG_PROVISIONING). Nil leaves the member, invite and delete
 	// routes as they were: go-api writes, no auth call.
 	OrgProvisioner authprovision.Provisioner
+	// OrgSuspender is the client of auth-service's organization suspend route, from the same switch; nil leaves PATCH
+	// is_active=false as it was.
+	OrgSuspender orgreactivate.Suspender
 }
 
 // Routes is the admin area's route set.
@@ -129,6 +132,7 @@ func Routes(deps Deps) []httpapi.Route {
 		invites:         deps.Invites,
 		orgReactivator:  deps.OrgReactivator,
 		orgProvision:    deps.OrgProvisioner,
+		orgSuspender:    deps.OrgSuspender,
 	}
 	if deps.ClickHouse != nil {
 		area.spend = clickhouseSpend{conn: deps.ClickHouse}
@@ -192,6 +196,8 @@ type handlers struct {
 	// orgProvision is Deps.OrgProvisioner: when set, the member, invite and
 	// delete routes ask auth-service and write nothing of their own.
 	orgProvision authprovision.Provisioner
+	// orgSuspender is Deps.OrgSuspender, the PATCH is_active=false counterpart.
+	orgSuspender orgreactivate.Suspender
 }
 
 // passwordLimit is users.py's `@limiter.limit(ADMIN_PASSWORD_LIMIT =

@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 )
@@ -99,7 +101,12 @@ func TestTheFenceRemovesAnIdentityUnlinkedAfterT(t *testing.T) {
 	end.link(t, ctx, "relinked", identityID("relinked-2"))
 	end.link(t, ctx, "late", identityID("late"))
 	manifest := exportEnd(t, ctx, end)
-	report, err := Apply(ctx, restored.admin, restored.schema, manifest, Options{Apply: true})
+	// A delete that blocks (a lock wait, or a write outside the apply transaction) fails within seconds, not at the
+	// cell's 10-minute deadline: the apply pool waits at most 10 s for a lock and the apply at most 2 minutes.
+	applyPool := lockTimeoutPool(t, ctx, restored)
+	applyCtx, applyCancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer applyCancel()
+	report, err := Apply(applyCtx, applyPool, restored.schema, manifest, Options{Apply: true})
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}
@@ -117,6 +124,22 @@ func TestTheFenceRemovesAnIdentityUnlinkedAfterT(t *testing.T) {
 		}
 	}
 	assertNoIdentitySentinel(t, ctx, restored, manifest, report)
+}
+
+// lockTimeoutPool is a pool on d's database whose sessions wait at most 10 s for a lock (SQLSTATE 55P03 after that).
+func lockTimeoutPool(t *testing.T, ctx context.Context, d *fenceDB) *pgxpool.Pool {
+	t.Helper()
+	cfg := d.admin.Config().Copy()
+	cfg.AfterConnect = func(ctx context.Context, c *pgx.Conn) error {
+		_, err := c.Exec(ctx, "SET lock_timeout = '10s'")
+		return err
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	return pool
 }
 
 // Q2: a blind margin deletes no link and lists every restored link as id/principal/provider (never the subject).

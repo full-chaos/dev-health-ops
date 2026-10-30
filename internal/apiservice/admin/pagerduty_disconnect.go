@@ -172,9 +172,8 @@ VALUES ($1, $2, 'pagerduty', $3, 'disconnect', $4, 'v1', 'pending', 0, now(), no
 		// CHAOS-12011: rows still owed for this name (a credential connected after a
 		// restore point, or one removed) are sent like a found credential's; only
 		// "nothing owed" keeps Python's None. Go-only rows, so a named divergence.
-		var owed bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM provider_oauth_revocations WHERE org_id = $1 AND provider = 'pagerduty' AND credential_name = $2 AND status = 'pending')`,
-			orgID, credentialName).Scan(&owed); err != nil {
+		owed, err := pagerDutyRevocationsOwed(ctx, tx, orgID, credentialName)
+		if err != nil {
 			return nil, err
 		}
 		if err := tx.Commit(ctx); err != nil {
@@ -204,7 +203,15 @@ VALUES ($1, $2, 'pagerduty', $3, 'disconnect', $4, 'v1', 'pending', 0, now(), no
 	committed = true
 
 	if !configPresent {
-		result := revokeCandidate == nil
+		// D6501 P2a: without a client id nothing is sent now, so the answer is
+		// "pending retry" while any revocation of the name is owed: this
+		// disconnect's own row, or an older one (its current token missing or
+		// undecryptable). Python answers success then (a named divergence).
+		owed, err := pagerDutyRevocationsOwed(ctx, h.store.Pool, orgID, credentialName)
+		if err != nil {
+			return nil, err
+		}
+		result := !owed
 		return &result, nil
 	}
 	complete, err := h.retryPagerDutyRevocations(ctx, orgID, credentialName)
@@ -221,6 +228,17 @@ VALUES ($1, $2, 'pagerduty', $3, 'disconnect', $4, 'v1', 'pending', 0, now(), no
 // raised, matching Python's `except (ValueError, httpx.HTTPError)`.
 func (h *handlers) retryPagerDutyRevocations(ctx context.Context, orgID, credentialName string) (bool, error) {
 	return h.retryPagerDutyRevocationRows(ctx, orgID, `org_id = $1 AND provider = 'pagerduty' AND credential_name = $2 AND status = 'pending'`, credentialName)
+}
+
+// pagerDutyRevocationsOwed reports whether a revocation of the credential name
+// is still pending.
+func pagerDutyRevocationsOwed(ctx context.Context, q interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}, orgID, credentialName string) (bool, error) {
+	var owed bool
+	err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM provider_oauth_revocations WHERE org_id = $1 AND provider = 'pagerduty' AND credential_name = $2 AND status = 'pending')`,
+		orgID, credentialName).Scan(&owed)
+	return owed, err
 }
 
 // pagerDutyRevocationClaimSQL is the claim every route sender (disconnect,

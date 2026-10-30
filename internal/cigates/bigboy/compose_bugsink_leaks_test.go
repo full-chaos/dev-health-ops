@@ -251,6 +251,22 @@ func TestComposeBugsinkLeaksCells(t *testing.T) {
 	add(both("a top-level config from the environment", "configs:\n  c:\n    environment: BUGSINK_SECRET_KEY\n", false)...)
 	add(both("a top-level config content", "configs:\n  c:\n    content: ${BUGSINK_SECRET_KEY}\n", false)...)
 	add(cell{"new form: bugsink with a credential key", "services:\n" + newBugsink + "      BUGSINK_SECRET_KEY: null\n", false})
+	// bugsink's env file reached as a mounted file
+	add(both("web binds an unrelated host file", "  web:\n    volumes:\n    - ./_records:/records\n    - type: bind\n      source: ${OPS:-/home/ubuntu/devhealth/ops-bigboy}/x.xml\n      target: /x.xml\n", true)...)
+	add(both("web binds a secret file that is not bugsink's", "  web:\n    secrets:\n    - s\nsecrets:\n  s:\n    file: ${S_FILE:-/var/lib/x/secret}\n", true)...)
+	for _, v := range []struct{ name, yaml string }{
+		{"the env file, short form", "    volumes:\n    - ./.bugsink-dev/bugsink.env:/run/b.env:ro\n"},
+		{"the env file directory, short form", "    volumes:\n    - ./.bugsink-dev:/run/b\n"},
+		{"the env file directory, long form, absolute", "    volumes:\n    - type: bind\n      source: /home/ubuntu/devhealth/.bugsink-dev\n      target: /run/b\n"},
+		{"the env file, long form, default of a variable", "    volumes:\n    - type: bind\n      source: ${B:-./.bugsink-dev}/bugsink.env\n      target: /run/b.env\n"},
+		{"the project directory", "    volumes:\n    - .:/app\n"},
+		{"the documented project root", "    volumes:\n    - /home/ubuntu/devhealth:/root-dir\n"},
+		{"a parent of the project root", "    volumes:\n    - /home/ubuntu:/home-dir\n"},
+	} {
+		add(both("web mounts "+v.name, "  web:\n"+v.yaml, false)...)
+	}
+	add(both("a top-level secret from bugsink's env file", "  web:\n    secrets:\n    - s\nsecrets:\n  s:\n    file: ./.bugsink-dev/bugsink.env\n", false)...)
+	add(both("a top-level config from bugsink's env file", "configs:\n  c:\n    file: ${C:-/home/ubuntu/devhealth/.bugsink-dev/bugsink.env}\n", false)...)
 	names := map[string]bool{}
 	for _, c := range cells {
 		if names[c.name] {

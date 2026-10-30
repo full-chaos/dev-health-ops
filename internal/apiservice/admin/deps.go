@@ -97,6 +97,8 @@ type Deps struct {
 	// OrgSuspender is the client of auth-service's organization suspend route, from the same switch; nil leaves PATCH
 	// is_active=false as it was.
 	OrgSuspender orgreactivate.Suspender
+	// OrgState reads the organization's state in auth-service; set with the two verbs above, nil with them.
+	OrgState orgreactivate.StateReader
 }
 
 // Routes is the admin area's route set.
@@ -139,6 +141,7 @@ func Routes(deps Deps) []httpapi.Route {
 		orgReactivator:  deps.OrgReactivator,
 		orgProvision:    deps.OrgProvisioner,
 		orgSuspender:    deps.OrgSuspender,
+		orgState:        deps.OrgState,
 	}
 	if deps.ClickHouse != nil {
 		area.spend = clickhouseSpend{conn: deps.ClickHouse}
@@ -204,6 +207,8 @@ type handlers struct {
 	orgProvision authprovision.Provisioner
 	// orgSuspender is Deps.OrgSuspender, the PATCH is_active=false counterpart.
 	orgSuspender orgreactivate.Suspender
+	// orgState is Deps.OrgState: the read whose revision the is_active call sends.
+	orgState orgreactivate.StateReader
 }
 
 // passwordLimit is users.py's `@limiter.limit(ADMIN_PASSWORD_LIMIT =

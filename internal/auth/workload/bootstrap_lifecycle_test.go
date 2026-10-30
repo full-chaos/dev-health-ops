@@ -211,3 +211,38 @@ func TestBootstrapAuditAndEventsAreInsideTheVocabularies(t *testing.T) {
 		}
 	}
 }
+
+// TestDisabledRefusalNamesWhichRowIsOff: a disabled workload row is named as
+// such (its principal may be off too); a principal that alone is disabled is
+// named apart, because the two have different recovery paths.
+func TestDisabledRefusalNamesWhichRowIsOff(t *testing.T) {
+	for _, c := range []struct {
+		row, principal bool
+		want           error
+	}{
+		{false, false, nil},
+		{true, false, ErrBootstrapWorkloadDisabled},
+		{true, true, ErrBootstrapWorkloadDisabled},
+		{false, true, ErrBootstrapPrincipalDisabled},
+	} {
+		if got := disabledRefusal(c.row, c.principal); got != c.want {
+			t.Errorf("row=%t principal=%t: %v, want %v", c.row, c.principal, got, c.want)
+		}
+	}
+}
+
+// TestBootstrapVerbsReturnEachDisabledRefusalAsItIs: a refusal from inside the
+// transaction keeps its own sentinel; it is not read as a store failure, and
+// the counter files it as invalid.
+func TestBootstrapVerbsReturnEachDisabledRefusalAsItIs(t *testing.T) {
+	for _, want := range []error{ErrBootstrapWorkloadDisabled, ErrBootstrapPrincipalDisabled} {
+		s := offlineStore(t)
+		s.commit = func(context.Context, audit.Mutation) error { return fmt.Errorf("apply: %w", want) }
+		if err := s.runBootstrap(context.Background(), verbBootstrapCreate, audit.Mutation{}); err != want {
+			t.Errorf("runBootstrap = %v, want %v", err, want)
+		}
+		if got := outcomeLabel(want); got != "invalid" {
+			t.Errorf("outcomeLabel(%v) = %q, want invalid", want, got)
+		}
+	}
+}

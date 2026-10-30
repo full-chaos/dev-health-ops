@@ -22,9 +22,9 @@ const (
 	unverifiedEmailBody = `{"detail":{"message":"The provider has not verified this email address"}}`
 )
 
-// providerEmailForms are addresses the shared provider email rule refuses, with the answer go-api's social login
-// gives a verified profile carrying each. A form that decodes to U+FFFD (a lone surrogate escape or invalid UTF-8
-// after encoding/json) is no verified address, as go-api's surrogate rule makes it.
+// providerEmailForms are addresses the shared provider email rule refuses (as a decoded profile carries them), with
+// the answer go-api's social login gives a verified profile carrying each. A lone surrogate never reaches a profile as
+// such: the provider client makes that profile unverified (ci/social_provider_email_parity.tsv).
 func providerEmailForms() map[string]struct {
 	email          string
 	verifiedStatus int
@@ -40,8 +40,8 @@ func providerEmailForms() map[string]struct {
 		"control":          {emailMarker + "\x01@example.test", http.StatusBadRequest, unusableEmailBody},
 		"del":              {emailMarker + "\x7f@example.test", http.StatusBadRequest, unusableEmailBody},
 		"c1":               {emailMarker + "\u0085x@example.test", http.StatusBadRequest, unusableEmailBody},
-		"replacement char": {emailMarker + "�@example.test", http.StatusForbidden, unverifiedEmailBody},
-		"invalid utf8":     {emailMarker + "\xff@example.test", http.StatusForbidden, unverifiedEmailBody},
+		"replacement char": {emailMarker + "�@example.test", http.StatusBadRequest, unusableEmailBody},
+		"invalid utf8":     {emailMarker + "\xff@example.test", http.StatusBadRequest, unusableEmailBody},
 	}
 }
 
@@ -51,10 +51,12 @@ type orderStore struct {
 	Store
 	linked                          *identity.Principal
 	lookups, byEmail, writes, lists int
+	subject                         string
 }
 
-func (s *orderStore) IdentityBySubject(context.Context, string, identity.Provider, string, *identity.LegacyMatch) (identity.Principal, bool, error) {
+func (s *orderStore) IdentityBySubject(_ context.Context, _ string, _ identity.Provider, subject string, _ *identity.LegacyMatch) (identity.Principal, bool, error) {
 	s.lookups++
+	s.subject = subject
 	if s.linked != nil {
 		return *s.linked, true, nil
 	}

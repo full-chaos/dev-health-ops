@@ -29,30 +29,39 @@ type userRoleOn interface {
 // (a non-superuser), before the credential is rotated. The
 // handler then answers and revokes exactly as it does after an exchange.
 func (h compatHandlers) refreshGuard(ctx context.Context, q session.Queryer, record session.Record) error {
+	return guardRefresh(ctx, h.Users, h.rec, q, record)
+}
+
+// refreshGuard is the same guard for POST /v1/token/refresh.
+func (h handlers) refreshGuard(ctx context.Context, q session.Queryer, record session.Record) error {
+	return guardRefresh(ctx, h.Users, h.rec, q, record)
+}
+
+func guardRefresh(ctx context.Context, users Users, rec recorder, q session.Queryer, record session.Record) error {
 	var (
 		user  UserState
 		found bool
 		err   error
 	)
-	if on, ok := h.Users.(userStateOn); ok {
+	if on, ok := users.(userStateOn); ok {
 		user, found, err = on.StateOn(ctx, q, record.PrincipalID)
 	} else {
-		user, found, err = h.Users.State(ctx, record.PrincipalID)
+		user, found, err = users.State(ctx, record.PrincipalID)
 	}
 	if err != nil {
 		return err
 	}
-	if !found || !user.IsActive || checkPin(ctx, h.rec.logger, record, user) != pinCurrent {
+	if !found || !user.IsActive || checkPin(ctx, rec.logger, record, user) != pinCurrent {
 		return session.ErrGuardRefused
 	}
 	if record.OrganizationID != nil && !user.IsSuperuser {
 		// A session whose organization membership is gone (D6507) is not
 		// rotated; the handler refuses and revokes it.
 		var member bool
-		if on, ok := h.Users.(userRoleOn); ok {
+		if on, ok := users.(userRoleOn); ok {
 			_, member, err = on.RoleOn(ctx, q, record.PrincipalID, *record.OrganizationID)
 		} else {
-			_, member, err = h.Users.Role(ctx, record.PrincipalID, *record.OrganizationID)
+			_, member, err = users.Role(ctx, record.PrincipalID, *record.OrganizationID)
 		}
 		if err != nil {
 			return err

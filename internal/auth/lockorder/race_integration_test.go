@@ -132,11 +132,10 @@ func TestRacesOfEveryPairEndWithoutADeadlock(t *testing.T) {
 					if g.resp.status != http.StatusOK {
 						t.Fatalf("race/%s round %d: %s, want 200", pair.name, i, g)
 					}
-					switch classifyAfterDelete(s.err) {
-					case afterDeleteOther:
+					outcome := classifyAfterDelete(s.err)
+					t.Logf("race/%s round %d: after-delete outcome %s: %s", pair.name, i, outcome, s)
+					if outcome == afterDeleteOther {
 						t.Fatalf("race/%s round %d: %s: no named refusal of a verb that ran after the delete", pair.name, i, s)
-					case afterDeleteRefused, afterDeleteOrgGone:
-						t.Logf("race/%s round %d: %s (after the delete committed, not a deadlock)", pair.name, i, s)
 					}
 				}
 			}

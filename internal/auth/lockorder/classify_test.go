@@ -26,6 +26,19 @@ const (
 	afterDeleteOther
 )
 
+func (a afterDelete) String() string {
+	switch a {
+	case afterDeleteOK:
+		return "ok"
+	case afterDeleteRefused:
+		return "refused"
+	case afterDeleteOrgGone:
+		return "org-gone"
+	default:
+		return "other"
+	}
+}
+
 func classifyAfterDelete(err error) afterDelete {
 	if err == nil {
 		return afterDeleteOK

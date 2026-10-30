@@ -33,7 +33,7 @@ func TestClassifyAfterDeleteAcceptsOnlyNamedOutcomes(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := classifyAfterDelete(tc.err); got != tc.want {
-				t.Fatalf("classifyAfterDelete(%v) = %d, want %d", tc.err, got, tc.want)
+				t.Fatalf("classifyAfterDelete(%v) = %s, want %s", tc.err, got, tc.want)
 			}
 		})
 	}

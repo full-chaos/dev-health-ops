@@ -96,7 +96,8 @@ func outcomeLabel(err error) string {
 		return "noop"
 	case errors.Is(err, ErrNotFound), errors.Is(err, ErrBindingNotFound), errors.Is(err, ErrBootstrapNotFound), errors.Is(err, ErrBootstrapNone):
 		return "not_found"
-	case errors.Is(err, ErrNameTaken), errors.Is(err, ErrBindingTaken), errors.Is(err, ErrBootstrapLive), errors.Is(err, ErrBootstrapRotating):
+	case errors.Is(err, ErrNameTaken), errors.Is(err, ErrBindingTaken), errors.Is(err, ErrBootstrapLive), errors.Is(err, ErrBootstrapRotating),
+		errors.Is(err, ErrEnableLiveBootstrap):
 		return "taken"
 	case errors.Is(err, ErrNameInvalid), errors.Is(err, ErrAudienceInvalid), errors.Is(err, ErrActionInvalid), errors.Is(err, ErrBindingInvalid),
 		errors.Is(err, ErrBootstrapValue), errors.Is(err, ErrBootstrapExpiry), errors.Is(err, ErrBootstrapOverlap), errors.Is(err, ErrBootstrapReason),

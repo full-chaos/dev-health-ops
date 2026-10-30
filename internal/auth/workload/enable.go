@@ -49,7 +49,7 @@ type enableState struct {
 
 var enableRefusals = []error{
 	ErrNotFound, ErrOperatorIsSubject, ErrOperatorNotFound, ErrOperatorDisabled,
-	ErrBootstrapPrincipalDisabled, ErrPrincipalNotWorkload, ErrEnableStateChanged,
+	ErrBootstrapPrincipalDisabled, ErrPrincipalNotWorkload, ErrEnableLiveBootstrap, ErrEnableStateChanged,
 }
 
 func decideEnable(st enableState, in EnableInput) (EnablePlan, error) {
@@ -66,8 +66,12 @@ func decideEnable(st enableState, in EnableInput) (EnablePlan, error) {
 	case in.EnablePrincipal && st.principalKind != "workload":
 		return plan, ErrPrincipalNotWorkload
 	}
-	plan.EnableRow = st.rowDisabled
-	plan.EnablePrincipal = in.EnablePrincipal && st.principalDisabled
+	enableRow, enablePrincipal := st.rowDisabled, in.EnablePrincipal && st.principalDisabled
+	// D6505: a bootstrap value live before the disable would be accepted again.
+	if (enableRow || enablePrincipal) && st.liveBootstrap > 0 {
+		return plan, ErrEnableLiveBootstrap
+	}
+	plan.EnableRow, plan.EnablePrincipal = enableRow, enablePrincipal
 	return plan, nil
 }
 
@@ -107,11 +111,12 @@ func enableEvents(plan EnablePlan) []audit.OutboxEvent {
 func (s *Store) readEnableState(ctx context.Context, name string, operator uuid.UUID) (enableState, error) {
 	var st enableState
 	err := s.pool.QueryRow(ctx, `SELECT w.principal_id, w.disabled_at IS NOT NULL, p.kind, p.disabled_at IS NOT NULL,
-o.id IS NOT NULL, coalesce(o.disabled_at IS NOT NULL, false)
+o.id IS NOT NULL, coalesce(o.disabled_at IS NOT NULL, false),
+(SELECT count(*) FROM `+s.q+`.credential_registry c WHERE c.principal_id = w.principal_id AND `+liveBootstrap+`)
 FROM `+s.q+`.workloads w JOIN `+s.q+`.principals p ON p.id = w.principal_id
 LEFT JOIN `+s.q+`.principals o ON o.id = $2
 WHERE w.organization_id IS NULL AND w.name = $1`, name, operator).
-		Scan(&st.principalID, &st.rowDisabled, &st.principalKind, &st.principalDisabled, &st.operatorFound, &st.operatorDisabled)
+		Scan(&st.principalID, &st.rowDisabled, &st.principalKind, &st.principalDisabled, &st.operatorFound, &st.operatorDisabled, &st.liveBootstrap)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return enableState{}, ErrNotFound
 	}
@@ -154,6 +159,12 @@ func (s *Store) lockEnableState(ctx context.Context, tx audit.TxOps, principalID
 		default:
 			st.operatorFound = true
 		}
+	}
+	// The workload row lock holds off create and rotate; a revoke or an
+	// expiry in between only differs from the read, which is refused.
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM `+s.q+`.credential_registry WHERE principal_id = $1 AND `+liveBootstrap, principalID).
+		Scan(&st.liveBootstrap); err != nil {
+		return st, fault(err)
 	}
 	return st, nil
 }

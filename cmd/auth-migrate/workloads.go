@@ -306,6 +306,8 @@ func failureClass(err error) string {
 		return "the operator cannot be the workload's own principal"
 	case errors.Is(err, workload.ErrPrincipalNotWorkload):
 		return "the workload's principal is not of kind workload; -enable-principal refuses it"
+	case errors.Is(err, workload.ErrEnableLiveBootstrap):
+		return "the workload holds a live bootstrap value; revoke it first (bootstrap-disable -workload NAME -apply, or bootstrap-revoke), then enable"
 	case errors.Is(err, workload.ErrEnableStateChanged):
 		return "the workload changed during the run; run again"
 	case errors.Is(err, workload.ErrAudienceInvalid):

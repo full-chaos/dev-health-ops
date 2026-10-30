@@ -80,13 +80,25 @@ auth-migrate workloads enable -workload NAME -operator ID -enable-principal -app
   whose principal is disabled (`the workload's principal is disabled; add -enable-principal to enable it
   too`) and writes nothing. `Store.Disable` and the restore fence disable both rows, so such a workload needs
   the flag.
+- The verb refuses while the workload holds a live bootstrap value (`the workload holds a live bootstrap
+  value; revoke it first`) and writes nothing, not even an audit row: the value would be accepted again after
+  `enable`. Rotate and create are refused while the workload is disabled; revoke works.
 - With `-enable-principal` the verb also clears the principal's disabled mark, in the same transaction and
   the same audit row (`principal_enabled` = `true`, `principal_id`). It refuses a principal that is not of
   kind `workload`.
 - The dry run prints what it would enable. A workload with nothing disabled writes nothing.
-- The verb mints no credential and revokes none. A bootstrap value that was live before the disable (and has
-  not expired) is accepted again after `enable`. So after `enable`, run `bootstrap-rotate -overlap 0s` (or
-  `bootstrap-create` when no value is live) and deliver the new file.
+- The verb mints no credential.
+
+Recovery after the restore fence or `Store.Disable` (both rows disabled): revoke, then enable, then create.
+
+```sh
+auth-migrate workloads bootstrap-disable -workload NAME -apply
+auth-migrate workloads enable -workload NAME -operator ID -enable-principal -apply
+auth-migrate workloads bootstrap-create -workload NAME -out /secure/dir/NAME.bootstrap -apply
+```
+
+`bootstrap-disable` revokes every live value; `bootstrap-revoke -credential ID -reason compromised -apply`
+revokes one. Deliver the new file to the workload's secret mount.
 
 ## A verb fails
 

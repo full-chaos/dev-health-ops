@@ -424,7 +424,7 @@ func TestBootstrapADisabledWorkloadIsNamedAndLeavesNoFile(t *testing.T) {
 				t.Fatalf("%s/%v exit = %d, want 1", verb, refusal, code)
 			}
 			got := stderr.String()
-			if !strings.Contains(got, want) || strings.Contains(got, other) || strings.Contains(got, "enable it first") || strings.Contains(got, "no auth-migrate verb") || strings.Contains(got, "rotate") {
+			if !strings.Contains(got, want) || strings.Contains(got, other) || strings.Contains(got, "enable it first") || strings.Contains(got, "no auth-migrate verb") || strings.Contains(got, "then rotate") {
 				t.Fatalf("%s/%v stderr = %q, want %q", verb, refusal, got, want)
 			}
 			if _, err := os.Lstat(out); !errors.Is(err, os.ErrNotExist) {

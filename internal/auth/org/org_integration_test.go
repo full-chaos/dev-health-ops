@@ -359,3 +359,113 @@ func TestReactivateMovesTheRevisionPastASuspendAndAStaleSuspendIsRefused(t *test
 		t.Fatal("a no-op reactivate wrote an audit row or an event")
 	}
 }
+
+// Authorize runs under the row lock and before any write: a denial writes no row, no audit row, no event and no
+// revision; an allowed call writes all four once; a repeat is a no-op with no second audit row.
+func TestSuspendAuthorizedDeniedWritesNothingAllowedWritesAllOnce(t *testing.T) {
+	e := getEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	id, err := e.store.Create(ctx, CreateInput{Name: "Org", Slug: slugFor()}, Actor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	actor := uuid.New()
+	if _, err := e.runtime.Exec(ctx, `INSERT INTO auth.principals (id, kind, display_name) VALUES ($1, 'user', '')`, actor); err != nil {
+		t.Fatalf("seed the acting principal: %v", err)
+	}
+	auditSQL := `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.organization.suspended' AND organization_id = $1`
+	outboxSQL := `SELECT count(*) FROM auth.auth_outbox_events WHERE aggregate_type = 'organization' AND aggregate_id = $1 AND event_type = 'organization.suspended'`
+	deny := func(context.Context, audit.TxOps, uuid.UUID) error { return ErrDenied }
+	if changed, err := e.store.SuspendAuthorized(ctx, id, nil, Actor{PrincipalID: &actor}, deny); !errors.Is(err, ErrDenied) || changed {
+		t.Fatalf("denied call: changed=%v err=%v", changed, err)
+	}
+	if o, err := e.store.Get(ctx, id); err != nil || o.Status != StatusActive || o.Revision != 1 {
+		t.Fatalf("after the denial: %+v, %v", o, err)
+	}
+	if e.count(t, ctx, auditSQL, id) != 0 || e.count(t, ctx, outboxSQL, "org_"+id.String()) != 0 {
+		t.Fatal("a denied suspend left an audit row or an event")
+	}
+	saw := false
+	allow := func(_ context.Context, _ audit.TxOps, got uuid.UUID) error { saw = got == id; return nil }
+	if changed, err := e.store.SuspendAuthorized(ctx, id, nil, Actor{PrincipalID: &actor}, allow); err != nil || !changed || !saw {
+		t.Fatalf("allowed call: changed=%v err=%v authorize saw org=%v", changed, err, saw)
+	}
+	if o, err := e.store.Get(ctx, id); err != nil || o.Status != StatusSuspended || o.SuspendedAt == nil || o.Revision != 2 {
+		t.Fatalf("after the suspend: %+v, %v", o, err)
+	}
+	if e.count(t, ctx, auditSQL, id) != 1 || e.count(t, ctx, outboxSQL, "org_"+id.String()) != 1 {
+		t.Fatal("an allowed suspend must leave one audit row and one event")
+	}
+	if changed, err := e.store.SuspendAuthorized(ctx, id, nil, Actor{PrincipalID: &actor}, allow); err != nil || changed {
+		t.Fatalf("repeat: changed=%v err=%v, want a no-op", changed, err)
+	}
+	if o, _ := e.store.Get(ctx, id); o.Revision != 2 || e.count(t, ctx, auditSQL, id) != 1 {
+		t.Fatalf("a repeat bumped the revision or wrote a second audit row: %+v", o)
+	}
+	if _, err := e.store.SuspendAuthorized(ctx, uuid.New(), nil, Actor{}, allow); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown org = %v", err)
+	}
+}
+
+// An acting principal with no auth.principals row fails the audit row's actor foreign key: the store answers ErrStore
+// (the route's fail-closed 503) and writes nothing; the organization stays active.
+func TestSuspendAuthorizedWithAnActorThatHasNoPrincipalRowIsAnErrStoreAndWritesNothing(t *testing.T) {
+	e := getEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	id, err := e.store.Create(ctx, CreateInput{Name: "Org", Slug: slugFor()}, Actor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ghost := uuid.New()
+	allow := func(context.Context, audit.TxOps, uuid.UUID) error { return nil }
+	changed, err := e.store.SuspendAuthorized(ctx, id, nil, Actor{PrincipalID: &ghost}, allow)
+	if !errors.Is(err, ErrStore) || changed {
+		t.Fatalf("an actor with no principal row: changed=%v err=%v, want ErrStore", changed, err)
+	}
+	if o, err := e.store.Get(ctx, id); err != nil || o.Status != StatusActive || o.Revision != 1 {
+		t.Fatalf("after the failed suspend: %+v, %v; want the organization active at revision 1", o, err)
+	}
+}
+
+// Suspend moves the revision like reactivate: a reactivate that still carries the revision read before the suspend is
+// refused as a conflict and changes nothing.
+func TestSuspendMovesTheRevisionPastAReactivateAndAStaleReactivateIsRefused(t *testing.T) {
+	e := getEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	id, err := e.store.Create(ctx, CreateInput{Name: "Org", Slug: slugFor()}, Actor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	actor := uuid.New()
+	if _, err := e.runtime.Exec(ctx, `INSERT INTO auth.principals (id, kind, display_name) VALUES ($1, 'user', '')`, actor); err != nil {
+		t.Fatalf("seed the acting principal: %v", err)
+	}
+	allow := func(context.Context, audit.TxOps, uuid.UUID) error { return nil }
+	if err := e.store.Suspend(ctx, id, nil, Actor{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.store.Reactivate(ctx, id, nil, Actor{}); err != nil {
+		t.Fatal(err)
+	}
+	active, err := e.store.Get(ctx, id)
+	if err != nil || active.Status != StatusActive {
+		t.Fatalf("after the reactivate: %+v, %v", active, err)
+	}
+	n := active.Revision
+	if changed, err := e.store.SuspendAuthorized(ctx, id, nil, Actor{PrincipalID: &actor}, allow); err != nil || !changed {
+		t.Fatalf("suspend: changed=%v err=%v", changed, err)
+	}
+	suspended, err := e.store.Get(ctx, id)
+	if err != nil || suspended.Status != StatusSuspended || suspended.Revision <= n {
+		t.Fatalf("after the suspend: %+v (revision must be past %d), %v", suspended, n, err)
+	}
+	if err := e.store.Reactivate(ctx, id, &n, Actor{}); !errors.Is(err, ErrRevisionConflict) {
+		t.Fatalf("a reactivate with the old revision %d = %v, want ErrRevisionConflict", n, err)
+	}
+	if after, err := e.store.Get(ctx, id); err != nil || after.Status != StatusSuspended || after.Revision != suspended.Revision {
+		t.Fatalf("after the refused reactivate: %+v, %v; want the suspended state unchanged", after, err)
+	}
+}

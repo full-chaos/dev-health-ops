@@ -184,10 +184,9 @@ func TestCompatLoginRefusalsTakeOneStepSequence(t *testing.T) {
 			if event.Attributes["reason_code"] != noPassword.Attributes["reason_code"] {
 				t.Errorf("reason codes differ: unknown %v, no password %v", event.Attributes["reason_code"], noPassword.Attributes["reason_code"])
 			}
-			extra := []string{"Project"}
-			if !requested {
-				extra = []string{"Memberships", "ProjectOrganization", "Project"}
-			}
+			// The requested organization is one no account is a member of, so with or without it a known
+			// account adds the same steps over an unknown one: its memberships, its first organization and itself.
+			extra := []string{"Memberships", "ProjectOrganization", "Project"}
 			callseq.Delta(t, "no password vs unknown", unknown, sequences["no password"], extra)
 		})
 	}

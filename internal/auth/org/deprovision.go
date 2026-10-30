@@ -11,10 +11,10 @@ import (
 )
 
 // LockForUpdate takes the organization row FOR UPDATE inside the caller's
-// audit.Commit: step 3 of the one membership lock order, exclusive, so no
-// membership or invite verb of the organization (they take it FOR SHARE) runs
-// until the commit. active is false for a suspended organization; a missing
-// one is ErrNotFound.
+// audit.Commit: step 3 of the auth lock order (membership.Store readPairs),
+// exclusive, so no membership or invite verb of the organization (they take it
+// FOR SHARE) runs until the commit. active is false for a suspended
+// organization; a missing one is ErrNotFound.
 func (s *Store) LockForUpdate(ctx context.Context, tx audit.TxOps, id uuid.UUID) (active bool, err error) {
 	err = tx.QueryRow(ctx, `SELECT disabled_at IS NULL FROM `+s.q+`.organizations WHERE id = $1 FOR UPDATE`, id).Scan(&active)
 	if errors.Is(err, pgx.ErrNoRows) {

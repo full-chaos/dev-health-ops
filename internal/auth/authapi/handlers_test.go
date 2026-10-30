@@ -454,6 +454,40 @@ func TestRefreshWithoutAMembershipRotatesNothing(t *testing.T) {
 	}
 }
 
+// guardRefusingSessions refuses every exchange in its guard step, as the guard
+// does when the session changed between the guard's read and the handler's.
+type guardRefusingSessions struct{ *fakeSessions }
+
+func (s guardRefusingSessions) ExchangeGuarded(context.Context, contracts.SecretString, session.Guard) (session.Result, error) {
+	return session.Result{Issued: session.Issued{Session: s.result.Session}}, session.ErrGuardRefused
+}
+
+// A guard refusal that the handler's own reads no longer confirm still
+// refuses: nothing was rotated, so no access token is answered.
+func TestRefreshRefusedByTheGuardAnswersNoToken(t *testing.T) {
+	f := newFixture(t)
+	f.sessions.result = session.Result{Reason: session.ReasonAccepted, Issued: session.Issued{Session: f.record}}
+	routes, err := Routes(Deps{Sessions: guardRefusingSessions{f.sessions}, Users: f.users, Issuer: f.issuer,
+		Logger: slog.New(slog.NewJSONHandler(f.logs, nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	for _, route := range routes {
+		mux.Handle(route.Method+" "+route.Pattern, requestid.Middleware(route.Handler))
+	}
+	f.server = mux
+	response := f.do(http.MethodPost, PatternRefresh, refreshBody(credential()), nil)
+	var body map[string]any
+	_ = json.Unmarshal(response.Body.Bytes(), &body)
+	if response.Code != http.StatusUnauthorized || body["reason_code"] != "revision_stale" || body["access_token"] != nil {
+		t.Fatalf("answer %d %.200s, want 401 revision_stale and no token", response.Code, response.Body)
+	}
+	if len(f.sessions.revoked) != 0 {
+		t.Fatalf("revoked %v, want nothing: the handler's reads allow the session", f.sessions.revoked)
+	}
+}
+
 func TestRefreshTakesGoAPIsRoleRules(t *testing.T) {
 	cases := map[string]struct {
 		org  bool

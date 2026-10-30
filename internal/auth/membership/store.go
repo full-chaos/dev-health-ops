@@ -204,47 +204,48 @@ func (q poolQuerier) queryRow(ctx context.Context, sql string, args ...any) pgx.
 }
 
 // readPairs reads the pairs of one verb. With lock it takes the locks in the
-// one order every membership writer uses (the JIT join takes 1, 2, 5, 6):
-//  1. auth.principals rows FOR UPDATE, by id;
-//  2. public.users rows FOR UPDATE, by id (go-api's guard and JIT join lock);
+// auth lock order: the one order every writer of these rows uses, in auth
+// (membership, invite, organization verbs, the JIT join) and in go-api (admin
+// member routes, the session invite accept, the organization delete). They
+// cite it by this name.
+//  0. auth.workloads rows (workload verbs, before their principals);
+//  1. auth.principals rows, one row per statement, in ascending id order;
+//  2. public.users rows of the same ids, the same way;
 //  3. the auth.organizations row FOR SHARE (organization verbs take it FOR UPDATE);
-//  4. (invites: the invite aggregate locks them between 3 and 5);
-//  5. public.memberships: the organization's owner rows and the pairs, FOR UPDATE, by id;
-//  6. auth.memberships pair rows FOR UPDATE, by id;
+//  4. invite rows: auth.invites, then public.org_invites, FOR UPDATE;
+//  5. public.memberships: the organization's owner rows and the pairs, FOR UPDATE, ORDER BY id;
+//  6. auth.memberships pair rows FOR UPDATE, ORDER BY id;
 //  7. aggregate_revisions, inside audit.Commit.
 //
-// An inviter is locked with the principals, in the same id order, so a
-// membership insert never takes a later lock on a principal or users row; a
-// missing inviter is ErrInviterNotFound before anything is written. The actor
-// is locked with them too: the audit row names it (a foreign key, so a KEY
-// SHARE lock at commit), and a verb that targets the actor holds its principal
-// FOR UPDATE from step 1, so taking it any later could wait in a cycle. A
-// missing actor is no refusal here (Authorize decides on the actor).
-func (s *Store) readPairs(ctx context.Context, q querier, orgID uuid.UUID, principals []uuid.UUID, inviter, actor *uuid.UUID, lock bool, step4 func() error) (*locked, error) {
+// Steps 1 and 2 take every id any later statement of the verb references,
+// each once in the strongest mode its roles need (LockOrder): a target FOR
+// UPDATE, the actor FOR SHARE (Authorize reads its account and role; a
+// demotion, disable or superuser change of the actor waits), an inviter and
+// any other referenced id (an old inviter a write names again) FOR KEY SHARE,
+// the lock its foreign key check takes. No writer takes a principals or users
+// lock after step 2, so no two writers wait on each other in a cycle; a
+// key-share lock still lets two verbs that only name a row run together. A
+// missing target is ErrPrincipalNotFound and a missing inviter
+// ErrInviterNotFound, before anything is written; a missing actor is no
+// refusal here (Authorize decides on the actor). referenced are the old
+// inviters of the planned pairs: a locked pair whose auth row names another
+// inviter is errStateMoved (plan again).
+func (s *Store) readPairs(ctx context.Context, q querier, orgID uuid.UUID, principals []uuid.UUID, inviter, actor *uuid.UUID, referenced []uuid.UUID, lock bool, step4 func() error) (*locked, error) {
 	forUpdate, forShare := "", ""
 	if lock {
 		forUpdate, forShare = " FOR UPDATE", " FOR SHARE"
 	}
 	ids := sortedUnique(principals)
-	lockIDs := append([]uuid.UUID(nil), ids...)
-	for _, extra := range []*uuid.UUID{inviter, actor} {
-		if extra != nil {
-			lockIDs = append(lockIDs, *extra)
-		}
-	}
-	lockIDs = sortedUnique(lockIDs)
+	order := LockOrder(ids, inviter, actor, referenced...)
 	// The id array goes as one array literal with an explicit ::uuid[] cast: a
 	// statement inside audit.Commit has no parameter types to encode a
 	// []uuid.UUID with.
-	idText, lockText := uuidArray(ids), uuidArray(lockIDs)
-	for _, sql := range []string{
-		`SELECT id FROM ` + s.q + `.principals WHERE id = ANY($1::uuid[]) ORDER BY id` + forUpdate,
-		`SELECT id FROM public.users WHERE id = ANY($1::uuid[]) ORDER BY id` + forUpdate,
-	} {
-		found, err := foundIDs(ctx, q, sql, lockText)
-		if err != nil {
-			return nil, err
-		}
+	idText := uuidArray(ids)
+	inPrincipals, inUsers, err := s.lockRows(ctx, q, order, lock)
+	if err != nil {
+		return nil, err
+	}
+	for _, found := range []map[uuid.UUID]bool{inPrincipals, inUsers} {
 		for _, id := range ids {
 			if !found[id] {
 				return nil, ErrPrincipalNotFound
@@ -255,7 +256,7 @@ func (s *Store) readPairs(ctx context.Context, q querier, orgID uuid.UUID, princ
 		}
 	}
 	var orgActive bool
-	err := q.queryRow(ctx, `SELECT disabled_at IS NULL FROM `+s.q+`.organizations WHERE id = $1`+forShare, orgID).Scan(&orgActive)
+	err = q.queryRow(ctx, `SELECT disabled_at IS NULL FROM `+s.q+`.organizations WHERE id = $1`+forShare, orgID).Scan(&orgActive)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrOrgNotFound
 	}
@@ -316,7 +317,33 @@ WHERE organization_id = $1 AND principal_id = ANY($2::uuid[]) ORDER BY id`+forUp
 		p.authID, p.authStatus, p.authRole, p.authJoinedAt, p.authInvitedBy = &id, &status, role, joined, inviter
 	}
 	rows.Close()
-	return l, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if lock {
+		held := map[uuid.UUID]bool{}
+		for _, r := range order {
+			held[r.ID] = true
+		}
+		for _, p := range l.pairs {
+			if p.authInvitedBy != nil && !held[*p.authInvitedBy] {
+				return nil, errStateMoved
+			}
+		}
+	}
+	return l, nil
+}
+
+// referenced are the old inviters the auth rows of a read name: a write may
+// name them again (go-api's row of a reactivated membership).
+func (l *locked) referenced() []uuid.UUID {
+	var out []uuid.UUID
+	for _, p := range l.pairs {
+		if p.authInvitedBy != nil {
+			out = append(out, *p.authInvitedBy)
+		}
+	}
+	return out
 }
 
 func uuidArray(ids []uuid.UUID) string {
@@ -534,7 +561,7 @@ func (s *Store) mutate(ctx context.Context, v verb, c Change) (*Membership, erro
 	var err error
 	for range planAttempts {
 		var read *locked
-		read, err = s.readPairs(ctx, poolQuerier{s.pool}, c.OrgID, ids, c.InvitedBy, c.Actor.PrincipalID, false, nil)
+		read, err = s.readPairs(ctx, poolQuerier{s.pool}, c.OrgID, ids, c.InvitedBy, c.Actor.PrincipalID, nil, false, nil)
 		if err != nil {
 			// The locked read below decides the refusal after Authorize, so
 			// a refusal is not disclosed to an actor Authorize refuses.
@@ -547,7 +574,7 @@ func (s *Store) mutate(ctx context.Context, v verb, c Change) (*Membership, erro
 		}
 		err = s.run(ctx, v, audit.Mutation{
 			Apply: func(ctx context.Context, tx audit.TxOps) error {
-				l, err := s.readPairs(ctx, txQuerier{tx}, c.OrgID, ids, c.InvitedBy, c.Actor.PrincipalID, true, nil)
+				l, err := s.readPairs(ctx, txQuerier{tx}, c.OrgID, ids, c.InvitedBy, c.Actor.PrincipalID, read.referenced(), true, nil)
 				if err != nil {
 					return authorizeLookup(ctx, tx, c.Authorize, Locked{OrgID: c.OrgID, Principals: ids}, err)
 				}
@@ -621,8 +648,10 @@ func (s *Store) TransferOwnership(ctx context.Context, t Transfer) error {
 	var err error
 	for range planAttempts {
 		var from, to pairPlan
-		if read, rerr := s.readPairs(ctx, poolQuerier{s.pool}, t.OrgID, ids, nil, t.Actor.PrincipalID, false, nil); rerr == nil {
+		var referenced []uuid.UUID
+		if read, rerr := s.readPairs(ctx, poolQuerier{s.pool}, t.OrgID, ids, nil, t.Actor.PrincipalID, nil, false, nil); rerr == nil {
 			from, to = planOf(read.pairs[t.From]), planOf(read.pairs[t.To])
+			referenced = read.referenced()
 		} else {
 			from, to = planOf(&pairRows{principal: t.From}), planOf(&pairRows{principal: t.To})
 		}
@@ -632,7 +661,7 @@ func (s *Store) TransferOwnership(ctx context.Context, t Transfer) error {
 		}
 		err = s.run(ctx, verbTransfer, audit.Mutation{
 			Apply: func(ctx context.Context, tx audit.TxOps) error {
-				l, err := s.readPairs(ctx, txQuerier{tx}, t.OrgID, ids, nil, t.Actor.PrincipalID, true, nil)
+				l, err := s.readPairs(ctx, txQuerier{tx}, t.OrgID, ids, nil, t.Actor.PrincipalID, referenced, true, nil)
 				if err != nil {
 					return authorizeLookup(ctx, tx, t.Authorize, Locked{OrgID: t.OrgID, Principals: sortedUnique(ids)}, err)
 				}
@@ -673,8 +702,9 @@ var ErrStateMoved = errStateMoved
 // own row decides the add (an invite accept). Its membership id and event are
 // fixed before the transaction, as audit.Mutation needs.
 type AddPlan struct {
-	change Change
-	plan   pairPlan
+	change     Change
+	plan       pairPlan
+	referenced []uuid.UUID
 }
 
 // MembershipID is the id the planned membership has in both tables.
@@ -692,7 +722,7 @@ func (s *Store) PlanAdd(ctx context.Context, c Change) (*AddPlan, error) {
 	if !isOrganizationRole(c.Role) {
 		return nil, ErrRoleInvalid
 	}
-	read, err := s.readPairs(ctx, poolQuerier{s.pool}, c.OrgID, []uuid.UUID{c.PrincipalID}, c.InvitedBy, c.Actor.PrincipalID, false, nil)
+	read, err := s.readPairs(ctx, poolQuerier{s.pool}, c.OrgID, []uuid.UUID{c.PrincipalID}, c.InvitedBy, c.Actor.PrincipalID, nil, false, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -702,7 +732,7 @@ func (s *Store) PlanAdd(ctx context.Context, c Change) (*AddPlan, error) {
 		return nil, err
 	}
 	plan.next = d.next
-	return &AddPlan{change: c, plan: plan}, nil
+	return &AddPlan{change: c, plan: plan, referenced: read.referenced()}, nil
 }
 
 // ApplyAdd writes a planned add inside the caller's audit.Commit, in the one
@@ -714,7 +744,7 @@ func (s *Store) ApplyAdd(ctx context.Context, tx audit.TxOps, p *AddPlan, step4 
 		return ErrDenied
 	}
 	c := p.change
-	l, err := s.readPairs(ctx, txQuerier{tx}, c.OrgID, []uuid.UUID{c.PrincipalID}, c.InvitedBy, c.Actor.PrincipalID, true, step4)
+	l, err := s.readPairs(ctx, txQuerier{tx}, c.OrgID, []uuid.UUID{c.PrincipalID}, c.InvitedBy, c.Actor.PrincipalID, p.referenced, true, step4)
 	if err != nil {
 		return err
 	}

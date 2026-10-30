@@ -229,3 +229,12 @@ func TestWorkloadTokenIssuedAttributesAreAllowed(t *testing.T) {
 		}
 	}
 }
+
+// A projected membership's fill of an inviter or a join time names the field, not its value.
+func TestChangedFieldsNameMembershipInviterAndJoin(t *testing.T) {
+	for _, f := range []string{"invited_by", "joined_at"} {
+		if err := ValidateAttributes(map[string]any{"changed_fields": []string{f}}); err != nil {
+			t.Errorf("changed_fields %q refused: %v", f, err)
+		}
+	}
+}

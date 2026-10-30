@@ -23,8 +23,12 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 )
 
-// Path is the reactivate route on auth-service's API listener.
-const Path = "/internal/v1/organizations/reactivate"
+const (
+	// Path is the reactivate route on auth-service's API listener.
+	Path = "/internal/v1/organizations/reactivate"
+	// SuspendPath is the suspend route on auth-service's API listener.
+	SuspendPath = "/internal/v1/organizations/suspend"
+)
 
 const (
 	maxAnswerBytes = 64 << 10
@@ -46,11 +50,17 @@ type Reactivator interface {
 	Reactivate(ctx context.Context, orgID, actor uuid.UUID) error
 }
 
-// Client calls the reactivate route of one auth-service.
+// Suspender suspends an organization in the auth schema. A nil error means the
+// organization is suspended there (a no-op included).
+type Suspender interface {
+	Suspend(ctx context.Context, orgID, actor uuid.UUID) error
+}
+
+// Client calls the reactivate and suspend routes of one auth-service.
 type Client struct {
-	endpoint string
-	token    string
-	http     *http.Client
+	origin string
+	token  string
+	http   *http.Client
 }
 
 // New builds a Client for base (AUTH_PROXY_URL's origin) and token. It refuses
@@ -65,7 +75,7 @@ func New(base *url.URL, token string, timeout time.Duration) (*Client, error) {
 	if timeout <= 0 {
 		timeout = defaultTimeout
 	}
-	endpoint := url.URL{Scheme: base.Scheme, Host: base.Host, Path: Path}
+	origin := url.URL{Scheme: base.Scheme, Host: base.Host}
 	transport := &http.Transport{
 		Proxy:                 nil,
 		DialContext:           (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
@@ -76,7 +86,7 @@ func New(base *url.URL, token string, timeout time.Duration) (*Client, error) {
 		ExpectContinueTimeout: time.Second,
 		ForceAttemptHTTP2:     true,
 	}
-	return &Client{endpoint: endpoint.String(), token: token, http: &http.Client{
+	return &Client{origin: origin.String(), token: token, http: &http.Client{
 		Transport:     transport,
 		Timeout:       timeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
@@ -97,11 +107,22 @@ type answer struct {
 // superuser actor. Only an answer that names orgID as active is success; the
 // error carries a class and a status, never the credential or the answer text.
 func (c *Client) Reactivate(ctx context.Context, orgID, actor uuid.UUID) error {
+	return c.post(ctx, Path, orgID, actor, "active")
+}
+
+// Suspend asks auth-service to suspend orgID, acting as the superuser actor.
+// Only an answer that names orgID as suspended is success, with the same error
+// classes as Reactivate.
+func (c *Client) Suspend(ctx context.Context, orgID, actor uuid.UUID) error {
+	return c.post(ctx, SuspendPath, orgID, actor, "suspended")
+}
+
+func (c *Client) post(ctx context.Context, path string, orgID, actor uuid.UUID, wantStatus string) error {
 	raw, err := json.Marshal(request{OrganizationID: orgID.String(), ActorPrincipalID: actor.String()})
 	if err != nil {
 		return fmt.Errorf("%w: encoding the request", ErrUnavailable)
 	}
-	out, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(raw))
+	out, err := http.NewRequestWithContext(ctx, http.MethodPost, c.origin+path, bytes.NewReader(raw))
 	if err != nil {
 		return fmt.Errorf("%w: building the request", ErrUnavailable)
 	}
@@ -128,8 +149,8 @@ func (c *Client) Reactivate(ctx context.Context, orgID, actor uuid.UUID) error {
 	if err := json.Unmarshal(body, &got); err != nil {
 		return fmt.Errorf("%w: answer is not JSON", ErrUnavailable)
 	}
-	if got.OrganizationID != orgID.String() || got.Status != "active" {
-		return fmt.Errorf("%w: answer is not the organization active", ErrUnavailable)
+	if got.OrganizationID != orgID.String() || got.Status != wantStatus {
+		return fmt.Errorf("%w: answer is not the organization %s", ErrUnavailable, wantStatus)
 	}
 	return nil
 }

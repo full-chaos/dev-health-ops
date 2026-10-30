@@ -544,9 +544,10 @@ already reads; GitLab costs one call per non-archived project per sync
 
 GitLab GROUP milestones count: the same call lists the milestones of every
 ancestor group (`include_ancestors`, the documented name since GitLab deprecated
-`include_parent_milestones`; the request sends both, because the GitLab API
-docs state no minimum version for `include_ancestors` and an instance that does
-not know it would silently drop the group milestones). A group milestone that is
+`include_parent_milestones` in 16.7; the request sends `include_ancestors`
+alone, because GitLab declares the two names mutually exclusive and refuses a
+request that carries both with HTTP 400 (CHAOS-12145). An instance older than
+16.7 does not know `include_ancestors` and drops the group milestones). A group milestone that is
 the earliest open dated one supplies the target with source
 `gitlab.group_milestone.due_date` and a `target_ref` that names the group. It has
 a `sprints` row under the same key (the work-items unit lists the same ancestor milestones and writes a group milestone once, keyed by its group), so `target_ref` joins the sprint row.

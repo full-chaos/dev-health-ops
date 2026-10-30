@@ -180,6 +180,7 @@ internal/queryapi/throughputforecast
 internal/queryapi/timewindow
 internal/queryapi/workgraph
 internal/queryapi/workunitexplain
+internal/repoinventory
 internal/scheduler/sync
 internal/storage/clickhouse
 internal/storage/clickhouse/engineclause

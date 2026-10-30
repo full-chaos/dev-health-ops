@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
@@ -104,6 +105,10 @@ func (h *handlers) deleteOrganization(w http.ResponseWriter, r *http.Request) {
 			writeOrgDeletionAuthError(w)
 			return
 		}
+		if errors.Is(err, errOrgDeletionRevocationInFlight) {
+			policy.WriteDetail(w, http.StatusServiceUnavailable, orgDeletionRevocationInFlightDetail, nil)
+			return
+		}
 		var step *orgDeletionStepError
 		if errors.As(err, &step) {
 			h.logger.ErrorContext(ctx, "admin: org deletion "+step.step+" failed", "error", step.err)
@@ -114,6 +119,11 @@ func (h *handlers) deleteOrganization(w http.ResponseWriter, r *http.Request) {
 
 	policy.WriteModel(w, http.StatusOK, result.json(), nil)
 }
+
+// orgDeletionRevocationInFlightDetail is the answer to a delete that found a
+// pending PagerDuty revocation of the organization held by another sender
+// (the revocation worker mid-send): nothing was purged; the delete is repeated.
+const orgDeletionRevocationInFlightDetail = "A PagerDuty revocation of this organization is being sent; run the delete again. Nothing was deleted."
 
 // orgDeletionStepError names which step of an organization deletion failed;
 // the route logs the step, the operator verb prints the cause.
@@ -330,27 +340,11 @@ func (h *handlers) orgDeletionRevokePagerDuty(ctx context.Context, orgIDStr stri
 	}
 	credentialRowsQuery.Close()
 
-	type revocationRow struct {
-		id        uuid.UUID
-		encrypted string
-	}
-	revocationRowsQuery, err := h.store.Pool.Query(ctx,
-		`SELECT id, token_encrypted FROM provider_oauth_revocations WHERE org_id = $1 AND provider = 'pagerduty'`, orgIDStr)
+	owed, err := h.orgDeletionRevocationsOwed(ctx, orgIDStr)
 	if err != nil {
-		return fmt.Errorf("query pagerduty revocations: %w", err)
+		return err
 	}
-	var revocations []revocationRow
-	for revocationRowsQuery.Next() {
-		var row revocationRow
-		if err := revocationRowsQuery.Scan(&row.id, &row.encrypted); err != nil {
-			revocationRowsQuery.Close()
-			return fmt.Errorf("scan pagerduty revocation: %w", err)
-		}
-		revocations = append(revocations, row)
-	}
-	revocationRowsQuery.Close()
-
-	if len(credentials) == 0 && len(revocations) == 0 {
+	if len(credentials) == 0 && !owed {
 		return nil
 	}
 	if h.pagerDuty.ClientID == "" {
@@ -370,19 +364,76 @@ func (h *handlers) orgDeletionRevokePagerDuty(ctx context.Context, orgIDStr stri
 			return fmt.Errorf("revoke pagerduty credential %s: %w", row.credentialName, revokeErr)
 		}
 	}
-	for _, row := range revocations {
-		plaintext, decryptErr := h.decryptor.Decrypt(secrets.NewValue(row.encrypted))
-		if decryptErr != nil {
-			return fmt.Errorf("decrypt pagerduty revocation %s: %w", row.id, decryptErr)
+	// The pending revocations, one row per transaction, claimed like every
+	// other sender (pagerDutyRevocationClaimSQL, FOR UPDATE SKIP LOCKED): a row
+	// another sender holds is mid-send, so it is skipped, never sent twice.
+	for {
+		sent, err := h.orgDeletionSendOneRevocation(ctx, orgIDStr)
+		if err != nil {
+			return err
 		}
-		if revokeErr := providerfoundation.RevokePagerDutyOAuthToken(ctx, h.httpDoer, h.pagerDuty, string(plaintext)); revokeErr != nil {
-			return fmt.Errorf("revoke pagerduty pending revocation %s: %w", row.id, revokeErr)
-		}
-		if _, err := h.store.Pool.Exec(ctx, `DELETE FROM provider_oauth_revocations WHERE id = $1`, row.id); err != nil {
-			return fmt.Errorf("delete pagerduty revocation %s: %w", row.id, err)
+		if !sent {
+			break
 		}
 	}
+	// A row still owed now is one another sender holds (or one queued
+	// meanwhile): purging would drop it while its send may still be refused.
+	if owed, err := h.orgDeletionRevocationsOwed(ctx, orgIDStr); err != nil {
+		return err
+	} else if owed {
+		return errOrgDeletionRevocationInFlight
+	}
 	return nil
+}
+
+// errOrgDeletionRevocationInFlight: a pending PagerDuty revocation of the
+// organization is held by another sender; the delete stops before any purge.
+var errOrgDeletionRevocationInFlight = errors.New("a pending PagerDuty revocation of the organization is being sent by another sender")
+
+// orgDeletionRevocationOrgPredicate selects the organization's pending
+// PagerDuty revocations ($1 is the organization).
+const orgDeletionRevocationOrgPredicate = `org_id = $1 AND provider = 'pagerduty' AND status = 'pending'`
+
+func (h *handlers) orgDeletionRevocationsOwed(ctx context.Context, orgIDStr string) (bool, error) {
+	var owed bool
+	if err := h.store.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM provider_oauth_revocations WHERE `+orgDeletionRevocationOrgPredicate+`)`, orgIDStr).Scan(&owed); err != nil {
+		return false, fmt.Errorf("query pagerduty revocations: %w", err)
+	}
+	return owed, nil
+}
+
+// orgDeletionSendOneRevocation claims one pending revocation of the
+// organization, sends it and deletes it, in one transaction; false when no
+// row is free to claim. A decrypt or revoke failure rolls the row back and
+// stops the delete, as before (fail fast; no attempt is recorded).
+func (h *handlers) orgDeletionSendOneRevocation(ctx context.Context, orgIDStr string) (bool, error) {
+	tx, err := h.store.Pool.Begin(ctx)
+	if err != nil {
+		return false, fmt.Errorf("begin pagerduty revocation: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	var id uuid.UUID
+	var encrypted string
+	if err := tx.QueryRow(ctx, pagerDutyRevocationClaimOneSQL(orgDeletionRevocationOrgPredicate), orgIDStr).Scan(&id, &encrypted); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, fmt.Errorf("claim pagerduty revocation: %w", err)
+	}
+	plaintext, decryptErr := h.decryptor.Decrypt(secrets.NewValue(encrypted))
+	if decryptErr != nil {
+		return false, fmt.Errorf("decrypt pagerduty revocation %s: %w", id, decryptErr)
+	}
+	if revokeErr := providerfoundation.RevokePagerDutyOAuthToken(ctx, h.httpDoer, h.pagerDuty, string(plaintext)); revokeErr != nil {
+		return false, fmt.Errorf("revoke pagerduty pending revocation %s: %w", id, revokeErr)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM provider_oauth_revocations WHERE id = $1`, id); err != nil {
+		return false, fmt.Errorf("delete pagerduty revocation %s: %w", id, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, fmt.Errorf("commit pagerduty revocation %s: %w", id, err)
+	}
+	return true, nil
 }
 
 // pagerDutyRevokeToken is OAuthTokens.model_validate_json(...) followed by
@@ -497,10 +548,16 @@ func (h *handlers) orgDeletionPurgePostgres(ctx context.Context, orgUUID uuid.UU
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// The auth lock order (internal/auth/membership readPairs): the invite
-	// rows, then the membership rows, each ORDER BY id, before any delete
-	// (a DELETE takes its rows in scan order).
+	// The auth lock order (internal/auth/membership readPairs): the
+	// public.organizations row, in the same position as step 3, then the
+	// invite rows, then the membership rows, each ORDER BY id, before any
+	// delete (a DELETE takes its rows in scan order). The organization comes
+	// first, as in the admin PATCH and the Stripe subscription event, and
+	// holds NO KEY UPDATE: an invite accept that holds its invite takes the
+	// foreign key's KEY SHARE on this row, and FOR UPDATE here would cycle
+	// with it. The final DELETE takes FOR UPDATE, as it always did.
 	for _, lock := range []string{
+		`SELECT 1 FROM organizations WHERE id = $1 FOR NO KEY UPDATE`,
 		`SELECT 1 FROM org_invites WHERE org_id = $1 ORDER BY id FOR UPDATE`,
 		`SELECT 1 FROM memberships WHERE org_id = $1 ORDER BY id FOR UPDATE`,
 	} {

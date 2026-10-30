@@ -35,12 +35,20 @@ import (
 //     256K, Singapore over 256K). The page lists no qwen-plus cache price.
 //   - qwen on Cloudflare Workers AI: https://developers.cloudflare.com/workers-ai/platform/pricing/
 //     (last updated 2026-10-15). The daily free neurons are not deducted.
-//   - clef on Cloudflare Workers AI (rows added 2026-10-24, which is why the list
-//     version is that day's): same pricing page, last updated Oct 20, 2026.
+//   - clef on Cloudflare Workers AI (rows added 2026-10-24): same pricing page,
+//     last updated Oct 20, 2026.
+//   - openai, the models beyond the OpenAI book's two (rows added 2026-10-30,
+//     which is why the list version is that day's):
+//     https://developers.openai.com/api/docs/pricing (the page
+//     https://platform.openai.com/docs/pricing redirects to), Standard tier,
+//     short context (up to 272K input tokens), read 2026-10-30. A model the
+//     page lists with no cache price is not added here. A dated variant of
+//     these models is unpriced: only the exact id is a row. The pro, codex,
+//     cyber and search-api models and the other gpt-6 models are not rows.
 
 // ListPricingVersion is the version of this list, stored with each
 // reservation it prices. The OpenAI book keeps PricingVersion.
-const ListPricingVersion = "provider-list-2026-10-24.v1"
+const ListPricingVersion = "provider-list-2026-10-30.v1"
 
 type listPriceRow struct {
 	provider string
@@ -61,6 +69,7 @@ var (
 	dashscopeChinaHosts = []string{"dashscope.aliyuncs.com"}
 	dashscopeIntlHosts  = []string{"dashscope-intl.aliyuncs.com"}
 	workersAIHosts      = []string{"api.cloudflare.com"}
+	openAIHosts         = []string{"api.openai.com"}
 	// workersAIRoute is the Workers AI OpenAI-compatible base path; the client
 	// posts to <base>/chat/completions, so no other path reaches Workers AI.
 	workersAIRoute = regexp.MustCompile(`\A/client/v4/accounts/[^/]+/ai/v1/?\z`)
@@ -74,6 +83,7 @@ var (
 		"anthropic": "api.anthropic.com",
 		"gemini":    "generativelanguage.googleapis.com",
 		"qwen":      "dashscope.aliyuncs.com",
+		"openai":    "api.openai.com",
 	}
 )
 
@@ -112,6 +122,27 @@ var listPrices = []listPriceRow{
 	// updated Oct 20, 2026; read 2026-10-24).
 	{provider: "clef", hosts: workersAIHosts, route: clefRoute, model: "clef", rates: listRates(240_000, 240_000, 0)},
 	{provider: "clef", hosts: workersAIHosts, route: clefRoute, model: "clef-flash", rates: listRates(38_000, 38_000, 0)},
+
+	// openai, beyond the OpenAI book's gpt-5-mini and gpt-5-nano: Standard tier,
+	// short context, https://developers.openai.com/api/docs/pricing, read 2026-10-30.
+	{provider: "openai", hosts: openAIHosts, model: "gpt-6-luna", rates: listRates(100_000, 10_000, 500_000)},
+	{provider: "openai", hosts: openAIHosts, model: "gpt-5.6-sol", rates: listRates(4_000_000, 400_000, 20_000_000)},
+	{provider: "openai", hosts: openAIHosts, model: "gpt-5.6-terra", rates: listRates(2_000_000, 200_000, 12_000_000)},
+	{provider: "openai", hosts: openAIHosts, model: "gpt-5.6-luna", rates: listRates(200_000, 20_000, 1_200_000)},
+	{provider: "openai", hosts: openAIHosts, model: "gpt-5.5", rates: listRates(5_000_000, 500_000, 30_000_000)},
+	{provider: "openai", hosts: openAIHosts, model: "gpt-5.4", rates: listRates(2_500_000, 250_000, 15_000_000)},
+	{provider: "openai", hosts: openAIHosts, model: "gpt-5.4-mini", rates: listRates(750_000, 75_000, 4_500_000)},
+	{provider: "openai", hosts: openAIHosts, model: "gpt-5.4-nano", rates: listRates(200_000, 20_000, 1_250_000)},
+	{provider: "openai", hosts: openAIHosts, model: "gpt-5.2", rates: listRates(1_750_000, 175_000, 14_000_000)},
+	{provider: "openai", hosts: openAIHosts, model: "gpt-5.1", rates: listRates(1_250_000, 125_000, 10_000_000)},
+	{provider: "openai", hosts: openAIHosts, model: "gpt-5", rates: listRates(1_250_000, 125_000, 10_000_000)},
+	{provider: "openai", hosts: openAIHosts, model: "gpt-4.1", rates: listRates(2_000_000, 500_000, 8_000_000)},
+	{provider: "openai", hosts: openAIHosts, model: "gpt-4.1-mini", rates: listRates(400_000, 100_000, 1_600_000)},
+	{provider: "openai", hosts: openAIHosts, model: "gpt-4.1-nano", rates: listRates(100_000, 25_000, 400_000)},
+	{provider: "openai", hosts: openAIHosts, model: "o1", rates: listRates(15_000_000, 7_500_000, 60_000_000)},
+	{provider: "openai", hosts: openAIHosts, model: "o3", rates: listRates(2_000_000, 500_000, 8_000_000)},
+	{provider: "openai", hosts: openAIHosts, model: "o3-mini", rates: listRates(1_100_000, 550_000, 4_400_000)},
+	{provider: "openai", hosts: openAIHosts, model: "o4-mini", rates: listRates(1_100_000, 275_000, 4_400_000)},
 }
 
 func utcDay(year int, month time.Month, day int) time.Time {

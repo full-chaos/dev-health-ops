@@ -67,28 +67,70 @@ func oneOfHasTransportError(schema map[string]any) bool {
 	if len(members) == 0 {
 		return false
 	}
-	first, _ := members[0].(map[string]any)
-	return first["$ref"] == transportErrorRef
+	return isTransportErrorRef(members[0])
 }
 
-// uncheckedKeywords are schema keywords the extra-member check does not read; a member that uses one fails closed.
-var uncheckedKeywords = []string{"$ref", "oneOf", "anyOf", "allOf", "not", "if", "patternProperties", "additionalItems", "prefixItems"}
+// isTransportErrorRef: exactly {"$ref": TransportError}; a sibling keyword (not, if, ...) could make the envelope
+// match nothing, so it is not the envelope.
+func isTransportErrorRef(schema any) bool {
+	object, _ := schema.(map[string]any)
+	return len(object) == 1 && object["$ref"] == transportErrorRef
+}
 
-// closedSchemaProblems walks an inline schema: every object (type object, or one that lists properties) must set
-// additionalProperties to false, and no keyword the walk cannot read may appear.
+// checkedKeywords are the schema keywords an extra oneOf member may use, from the census of the keywords the live
+// OpenAPI document's inline schemas use (type, required, additionalProperties, properties, const, enum, description,
+// format); any other keyword fails closed. The census also holds $ref and oneOf; a member may not use $ref (the walk
+// does not resolve it), and oneOf is walked below.
+var checkedKeywords = map[string]bool{
+	"type": true, "required": true, "additionalProperties": true, "properties": true,
+	"const": true, "enum": true, "description": true, "format": true,
+}
+
+// walkedKeywords are the structural keywords the walk descends into: a schema in properties, items, or a list of
+// schemas in oneOf, anyOf and allOf.
+var walkedKeywords = map[string]bool{"items": true, "oneOf": true, "anyOf": true, "allOf": true}
+
+// isObjectSchema: type object (or a type list holding object), or any keyword that constrains an object.
+func isObjectSchema(schema map[string]any) bool {
+	switch typed := schema["type"].(type) {
+	case string:
+		if typed == "object" {
+			return true
+		}
+	case []any:
+		for _, name := range typed {
+			if name == "object" {
+				return true
+			}
+		}
+	}
+	for _, keyword := range []string{"properties", "required", "additionalProperties", "minProperties", "maxProperties"} {
+		if _, present := schema[keyword]; present {
+			return true
+		}
+	}
+	return false
+}
+
+// closedSchemaProblems walks an inline schema: a keyword outside checkedKeywords and walkedKeywords fails closed
+// (with its path), every object schema must set additionalProperties to false, and properties, items and the
+// members of oneOf, anyOf and allOf are walked the same way.
 func closedSchemaProblems(schema map[string]any, path string) []string {
 	var problems []string
-	for _, keyword := range uncheckedKeywords {
-		if _, present := schema[keyword]; present {
+	keywords := make([]string, 0, len(schema))
+	for keyword := range schema {
+		keywords = append(keywords, keyword)
+	}
+	sort.Strings(keywords)
+	for _, keyword := range keywords {
+		if !checkedKeywords[keyword] && !walkedKeywords[keyword] {
 			problems = append(problems, fmt.Sprintf("%s uses %q, which the gate does not check", path, keyword))
 		}
 	}
-	properties, hasProperties := schema["properties"].(map[string]any)
-	if schema["type"] == "object" || hasProperties {
-		if schema["additionalProperties"] != false {
-			problems = append(problems, fmt.Sprintf("%s is open (additionalProperties is not false)", path))
-		}
+	if isObjectSchema(schema) && schema["additionalProperties"] != false {
+		problems = append(problems, fmt.Sprintf("%s is open (additionalProperties is not false)", path))
 	}
+	properties, _ := schema["properties"].(map[string]any)
 	names := make([]string, 0, len(properties))
 	for name := range properties {
 		names = append(names, name)
@@ -101,6 +143,14 @@ func closedSchemaProblems(schema map[string]any, path string) []string {
 	}
 	if items, ok := schema["items"].(map[string]any); ok {
 		problems = append(problems, closedSchemaProblems(items, path+"/items")...)
+	}
+	for _, keyword := range []string{"oneOf", "anyOf", "allOf"} {
+		members, _ := schema[keyword].([]any)
+		for index, raw := range members {
+			if child, ok := raw.(map[string]any); ok {
+				problems = append(problems, closedSchemaProblems(child, fmt.Sprintf("%s/%s/%d", path, keyword, index))...)
+			}
+		}
 	}
 	return problems
 }
@@ -219,7 +269,7 @@ func openAPIPathProblems(document map[string]any, rows []map[string]any) []strin
 				content, _ := response["content"].(map[string]any)
 				body, _ := content["application/json"].(map[string]any)
 				schema, _ := body["schema"].(map[string]any)
-				if schema["$ref"] != transportErrorRef && !oneOfHasTransportError(schema) {
+				if !isTransportErrorRef(schema) && !oneOfHasTransportError(schema) {
 					problems = append(problems, fmt.Sprintf("OpenAPI operation %s: its %s is the transport's answer and must reference %s", key, status, transportErrorRef))
 				}
 				problems = append(problems, oneOfExtraMemberProblems(key, status, schema)...)

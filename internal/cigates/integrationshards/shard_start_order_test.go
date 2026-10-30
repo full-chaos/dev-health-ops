@@ -81,9 +81,45 @@ func TestAPackagesShardStartsItsLongestPackageFirstAndTheOrderIsStable(t *testin
 	}
 }
 
+const localeFixtureShards = 6
+
+// A manifest of fixed weights (60, 120, 180 in file order; a split package or one of 1000 s or more keeps its own weight) and a fixed shard
+// count, so the layout does not move when the real table does.
+func fixedWeightManifest(t *testing.T) (string, map[string]int) {
+	t.Helper()
+	dir := t.TempDir()
+	weights := map[string]int{}
+	i := 0
+	for _, f := range shardManifestFiles(t, rootOf(t)) {
+		name := filepath.Base(f)
+		if name == "_shards.tsv" {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte("shards\t"+strconv.Itoa(localeFixtureShards)+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		var key, real string
+		for _, l := range strings.Split(readText(t, f), "\n") {
+			if strings.TrimSpace(l) != "" && !strings.HasPrefix(l, "#") {
+				key, real, _ = strings.Cut(l, "\t")
+			}
+		}
+		w := 60 + 60*(i%3)
+		i++
+		if n, _ := strconv.Atoi(real); n >= 1000 || splitPackages[key] {
+			w = n
+		}
+		weights[key] = w
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(key+"\t"+strconv.Itoa(w)+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir, weights
+}
+
 func TestTheSortDoesNotChangeTheLocaleOfTheGoTestChild(t *testing.T) {
 	t.Parallel()
-	_, weights := manifestRows(t)
+	manifest, weights := fixedWeightManifest(t)
 	realGo, err := exec.LookPath("go")
 	if err != nil {
 		t.Fatal(err)
@@ -95,17 +131,17 @@ func TestTheSortDoesNotChangeTheLocaleOfTheGoTestChild(t *testing.T) {
 		t.Fatal(err)
 	}
 	shard := 0
-	var pkgs []string
-	for s, p := range packagesShardsOfThePlan(t) {
-		if len(p) >= 2 && (shard == 0 || s < shard) {
-			shard, pkgs = s, p
+	for s := 1; s <= localeFixtureShards && shard == 0; s++ {
+		d := runCheckGoSharding(t, shardEnv{manifest: manifest}, "integration-shard", "packages", strconv.Itoa(s), "--dry-run")
+		if d.code == 0 && len(lineValues(d.stdout, "  SHARD-RUN ")) >= 2 {
+			shard = s
 		}
 	}
 	if shard == 0 {
 		t.Fatal("no packages shard held two packages")
 	}
 	const callerLocale = "en_US.utf8"
-	r := runCheckGoSharding(t, shardEnv{extra: []string{"LC_ALL=" + callerLocale, "PATH=" + dir + string(os.PathListSeparator) + os.Getenv("PATH")}}, "integration-shard", "packages", strconv.Itoa(shard))
+	r := runCheckGoSharding(t, shardEnv{manifest: manifest, extra: []string{"LC_ALL=" + callerLocale, "PATH=" + dir + string(os.PathListSeparator) + os.Getenv("PATH")}}, "integration-shard", "packages", strconv.Itoa(shard))
 	if r.code != 0 {
 		t.Fatalf("shard %d with a stub go: exit %d: %s%s", shard, r.code, r.stdout, r.stderr)
 	}
@@ -113,7 +149,7 @@ func TestTheSortDoesNotChangeTheLocaleOfTheGoTestChild(t *testing.T) {
 	if len(got) != 1 || got[0] != callerLocale {
 		t.Errorf("the go test child saw LC_ALL %v, want the caller's %q", got, callerLocale)
 	}
-	want := append([]string(nil), pkgs...)
+	want := lineValues(r.stdout, "  SHARD-RUN ")
 	sort.SliceStable(want, func(i, j int) bool {
 		if weights[want[i]] != weights[want[j]] {
 			return weights[want[i]] > weights[want[j]]

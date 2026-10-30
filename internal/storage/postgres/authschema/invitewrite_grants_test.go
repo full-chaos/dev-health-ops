@@ -5,9 +5,9 @@ import (
 	"testing"
 )
 
-// The invite aggregate writes go-api's org_invites row and go-api's audit_logs
-// row (one writer per audit row, acp ruling round1062 Q-D1); nothing else, no
-// DELETE, and no token column beyond its digest.
+// The invite aggregate writes go-api's org_invites row; nothing else, no
+// DELETE, and no token column beyond its digest. Its go-api audit_logs row is
+// inserted under PublicAuditWriteColumns, which no switch gates.
 func TestInviteWriteGrantsAreTheReviewedColumns(t *testing.T) {
 	want := []InviteWriteGrant{
 		{
@@ -15,10 +15,6 @@ func TestInviteWriteGrantsAreTheReviewedColumns(t *testing.T) {
 			Select: []string{"id", "org_id", "email", "role", "token_hash", "invited_by_id", "status", "expires_at", "created_at"},
 			Insert: []string{"id", "org_id", "email", "role", "token_hash", "invited_by_id", "status", "expires_at", "created_at", "updated_at"},
 			Update: []string{"status", "accepted_at", "updated_at"},
-		},
-		{
-			Table:  "audit_logs",
-			Insert: []string{"id", "org_id", "user_id", "action", "resource_type", "resource_id", "description", "changes", "request_metadata", "status", "created_at"},
 		},
 	}
 	if got := InviteWriteGrants(); !reflect.DeepEqual(got, want) {

@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -33,8 +34,10 @@ func baseGrantsFor(t *testing.T) []roleacl.Grant {
 
 func sessionGrantsFor(read QueryAPISessionRead) []roleacl.Grant {
 	grants := []roleacl.Grant{{Class: "schema", Object: read.Schema, Privilege: "USAGE"}}
-	for _, column := range read.Columns {
-		grants = append(grants, roleacl.Grant{Class: "column", Object: read.Schema + "." + read.Table + "." + column, Privilege: "SELECT"})
+	for _, table := range read.Tables() {
+		for _, column := range table.Columns {
+			grants = append(grants, roleacl.Grant{Class: "column", Object: read.Schema + "." + table.Table + "." + column, Privilege: "SELECT"})
+		}
 	}
 	return grants
 }
@@ -42,7 +45,7 @@ func sessionGrantsFor(read QueryAPISessionRead) []roleacl.Grant {
 func TestDiffQueryAPIGrantsWithSessionsRequiresAndAllowsExactlyTheSessionRead(t *testing.T) {
 	t.Parallel()
 	posture := QueryAPIPosture()
-	read := QueryAPISessionReadFor("auth")
+	read := QueryAPISessionReadFor("auth", false)
 	base := baseGrantsFor(t)
 	with := append(append([]roleacl.Grant(nil), base...), sessionGrantsFor(read)...)
 
@@ -73,5 +76,43 @@ func TestDiffQueryAPIGrantsWithSessionsRequiresAndAllowsExactlyTheSessionRead(t 
 	missing := append(append([]roleacl.Grant(nil), base...), sessionGrantsFor(read)[:2]...)
 	if got := diffQueryAPIGrantsWithSessions("db", posture, &read, missing); !strings.HasPrefix(got, "lacks ") {
 		t.Errorf("a missing session column must be named: %q", got)
+	}
+}
+
+// While auth-service owns the platform roles the manifest is the session read
+// plus the platform role read, exactly; off, the platform read is outside it.
+func TestQueryAPIManifestHoldsThePlatformReadOnlyWhileOwned(t *testing.T) {
+	t.Parallel()
+	off, on := QueryAPISessionReadFor("auth", false), QueryAPISessionReadFor("auth", true)
+	session := QueryAPIAuthTable{Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at", "legacy_token_version"}}
+	if got := off.Tables(); !reflect.DeepEqual(got, []QueryAPIAuthTable{session}) {
+		t.Fatalf("off: %+v", got)
+	}
+	want := []QueryAPIAuthTable{session,
+		{Table: "platform_role_assignments", Columns: []string{"principal_id", "role_key", "expires_at"}},
+		{Table: "principals", Columns: []string{"id", "kind", "disabled_at"}}}
+	if got := on.Tables(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("on: %+v, want %+v", got, want)
+	}
+	posture := QueryAPIPosture()
+	base := baseGrantsFor(t)
+	withOn := append(append([]roleacl.Grant(nil), base...), sessionGrantsFor(on)...)
+	withOff := append(append([]roleacl.Grant(nil), base...), sessionGrantsFor(off)...)
+	if got := diffQueryAPIGrantsWithSessions("db", posture, &on, withOn); got != "" {
+		t.Errorf("on, exact: %q", got)
+	}
+	if got := diffQueryAPIGrantsWithSessions("db", posture, &on, withOff); !strings.HasPrefix(got, "lacks ") || !strings.Contains(got, "platform_role_assignments") {
+		t.Errorf("on, platform read missing: %q", got)
+	}
+	if got := diffQueryAPIGrantsWithSessions("db", posture, &off, withOn); !strings.Contains(got, "outside the manifest") {
+		t.Errorf("off, platform read held: %q", got)
+	}
+	for _, extra := range []roleacl.Grant{
+		{Class: "column", Object: "auth.principals.display_name", Privilege: "SELECT"},
+		{Class: "column", Object: "auth.platform_role_assignments.granted_by", Privilege: "SELECT"},
+	} {
+		if got := diffQueryAPIGrantsWithSessions("db", posture, &on, append(append([]roleacl.Grant(nil), withOn...), extra)); !strings.Contains(got, "outside the manifest") {
+			t.Errorf("on, extra %s: %q", extra.Object, got)
+		}
 	}
 }

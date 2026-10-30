@@ -212,9 +212,18 @@ type Deps struct {
 	// OrgSuspender suspends an organization in auth-service before the admin PATCH writes is_active=false; nil with
 	// AUTH_PROXY_ORG_PROVISIONING off.
 	OrgSuspender orgreactivate.Suspender
+	// OrgState reads the organization's state in auth-service whose revision the two verbs above send; set with them.
+	OrgState orgreactivate.StateReader
 	// UsersOwned is AUTH_USERS_OWNED: auth-service owns users, so the go-api
 	// routes and verbs that write public.users refuse.
 	UsersOwned bool
+	// PlatformRolesOwned is AUTH_PLATFORM_ROLES_OWNED: is_superuser is read
+	// from the auth platform role assignments and a public is_superuser write
+	// refuses.
+	PlatformRolesOwned bool
+	// AuthSchema is AUTH_DATABASE_SCHEMA, where the platform role rule reads
+	// while PlatformRolesOwned (empty: "auth").
+	AuthSchema string
 	// Limits is the rate-limit store every limited route counts through
 	// (see limitStore); nil means the Valkey-backed store when Valkey is
 	// configured, else an in-process one.
@@ -430,4 +439,9 @@ func buildDeps(
 		slog.Bool("webhook_secret_decryptor_configured", deps.Pool != nil && cfg.SettingsEncryptionKey.Configured()),
 	)
 	return deps, components, nil
+}
+
+// platformRoles is how the go-api users reads take is_superuser.
+func (d Deps) platformRoles() policy.PlatformRoleRead {
+	return policy.PlatformRoleRead{Owned: d.PlatformRolesOwned, AuthSchema: d.AuthSchema}
 }

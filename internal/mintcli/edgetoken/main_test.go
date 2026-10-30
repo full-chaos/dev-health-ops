@@ -13,6 +13,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/edgetokenmint"
 )
 
@@ -38,10 +39,11 @@ func (r fakeRow) Scan(dest ...any) error {
 type fakeDB struct {
 	active bool
 	args   []any
+	sql    string
 }
 
-func (d *fakeDB) QueryRow(_ context.Context, _ string, args ...any) pgx.Row {
-	d.args = args
+func (d *fakeDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
+	d.args, d.sql = args, sql
 	// The row answers for the principal the lookup bound: the admin
 	// principal holds admin, the proof principal viewer.
 	id, email, role := edgetokenmint.ProvePrincipalID, "go-api-prove@service.dev-health.invalid", "viewer"
@@ -244,5 +246,29 @@ func TestRunMintsForTheAdminProofPrincipalOnlyWhenAsked(t *testing.T) {
 				t.Fatalf("claims subject %s role %s, want %s %s", claims.Subject, claims.Role, tc.wantSubject, tc.wantRole)
 			}
 		})
+	}
+}
+
+// The minter reads AUTH_PLATFORM_ROLES_OWNED through the one parse: while on
+// the lookup also reads the auth platform roles; a malformed value refuses
+// before the database is opened.
+func TestRunReadsThePlatformRolesSwitch(t *testing.T) {
+	t.Setenv(edgetokenmint.SigningKeyEnvVar, testKey)
+	for value, auth := range map[string]bool{"": false, "false": false, "true": true, " TRUE ": true} {
+		t.Setenv(rule.OwnedEnv, value)
+		db := &fakeDB{active: true}
+		var opened, closed bool
+		if err := run(context.Background(), []string{"-org", testOrg}, &bytes.Buffer{}, io.Discard, opener(db, &opened, &closed)); err != nil {
+			t.Fatalf("%q: %v", value, err)
+		}
+		if got := strings.Contains(db.sql, "platform_role_assignments"); got != auth {
+			t.Errorf("%q: the lookup reads the auth platform roles = %v, want %v", value, got, auth)
+		}
+	}
+	t.Setenv(rule.OwnedEnv, "yes")
+	var opened, closed bool
+	err := run(context.Background(), []string{"-org", testOrg}, &bytes.Buffer{}, io.Discard, opener(&fakeDB{active: true}, &opened, &closed))
+	if err == nil || !strings.Contains(err.Error(), rule.OwnedEnv) || opened {
+		t.Fatalf("malformed switch: err %v opened %v, want a refusal naming the switch before the database", err, opened)
 	}
 }

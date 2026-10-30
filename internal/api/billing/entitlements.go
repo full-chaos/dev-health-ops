@@ -60,6 +60,16 @@ func (h handlers) entitlements(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// entitlementAccessSQL is the access check's read of the caller's users row;
+// is_superuser follows the platform roles switch (policy.PlatformRoleRead).
+func (h handlers) entitlementAccessSQL() (string, error) {
+	superuser, err := h.platformRoles.Superuser("is_superuser", "users.id")
+	if err != nil {
+		return "", err
+	}
+	return `SELECT is_active, ` + superuser + ` FROM users WHERE id = $1`, nil
+}
+
 // entitlementAccess is require_billing_entitlement_access: the caller's
 // users row must exist and be active; a superuser passes; anyone else must
 // carry this org in the token and hold a membership row for it.
@@ -68,8 +78,12 @@ func (h handlers) entitlementAccess(ctx context.Context, q querier, user *policy
 	if err != nil {
 		return &accessForbidden, nil
 	}
+	query, err := h.entitlementAccessSQL()
+	if err != nil {
+		return nil, err
+	}
 	var active, superuser *bool
-	switch err := q.QueryRow(ctx, `SELECT is_active, is_superuser FROM users WHERE id = $1`, userID).Scan(&active, &superuser); {
+	switch err := q.QueryRow(ctx, query, userID).Scan(&active, &superuser); {
 	case err == pgx.ErrNoRows:
 		return &accessForbidden, nil
 	case err != nil:

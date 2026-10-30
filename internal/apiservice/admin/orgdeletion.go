@@ -115,6 +115,11 @@ func (h *handlers) deleteOrganization(w http.ResponseWriter, r *http.Request) {
 	policy.WriteModel(w, http.StatusOK, result.json(), nil)
 }
 
+// orgDeletionRevocationInFlightDetail is the answer to a delete that found a
+// pending PagerDuty revocation of the organization held by another sender
+// (the revocation worker mid-send): nothing was purged; the delete is repeated.
+const orgDeletionRevocationInFlightDetail = "A PagerDuty revocation of this organization is being sent; run the delete again. Nothing was deleted."
+
 // orgDeletionStepError names which step of an organization deletion failed;
 // the route logs the step, the operator verb prints the cause.
 type orgDeletionStepError struct {

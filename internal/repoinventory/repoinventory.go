@@ -85,6 +85,9 @@ func Canonical(rows []Row) ([]Item, error) {
 	if len(counts) > Limit {
 		return nil, fmt.Errorf("%w: %d repositories", ErrOverLimit, len(counts))
 	}
+	if len(counts) == 0 {
+		return []Item{}, nil
+	}
 	slugs := make([]string, 0, len(counts))
 	for slug := range counts {
 		slugs = append(slugs, slug)

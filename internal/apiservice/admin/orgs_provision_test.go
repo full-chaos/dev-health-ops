@@ -19,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/audit"
 	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/mail"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity/emailvalidator"
 )
 
@@ -118,11 +119,19 @@ func (r provisionRow) Scan(dest ...any) error {
 	return scanValues(r.values, dest)
 }
 
+// failRead as a row's only value makes its read fail with errReadFailed.
+type failRead struct{}
+
+var errReadFailed = errors.New("provisionDB: the read failed")
+
 // zeroFill as a row's only value scans the zero value into every target and
 // provTarget into every uuid.UUID: a row whose columns the test does not read.
 type zeroFill struct{}
 
 func scanValues(values, dest []any) error {
+	if len(values) == 1 && values[0] == (failRead{}) {
+		return errReadFailed
+	}
 	if len(values) == 1 && values[0] == (zeroFill{}) {
 		for _, target := range dest {
 			v := reflect.ValueOf(target).Elem()
@@ -558,6 +567,60 @@ func TestProvisionInviteEmailRefusalIsAClientError(t *testing.T) {
 		if r.Code != http.StatusBadRequest || strings.TrimSpace(r.Body.String()) != provDetail(want) || len(auth.calls) != 1 {
 			t.Fatalf("%s: %d %s calls %v, want 400 %s", email, r.Code, r.Body.String(), auth.calls, provDetail(want))
 		}
+	}
+}
+
+// mailRecorder is the invite mail sender: it records each message.
+type mailRecorder struct{ sent []mail.Message }
+
+func (m *mailRecorder) Name() string { return "recorder" }
+func (m *mailRecorder) Send(_ context.Context, message mail.Message) error {
+	m.sent = append(m.sent, message)
+	return nil
+}
+
+// A read-back that fails after auth-service answered 200 is the 503 of every
+// other failure, never a 500: the change is committed in auth-service, and a
+// retry meets the defined refusal (already a member, pending invite). The
+// invite mail goes out before the read-back, with the token auth-service
+// answered, so a failed read-back loses no invite.
+func TestProvisionReadBackFailureAfterSuccessIs503(t *testing.T) {
+	readBack := map[string]string{
+		"add":    "SELECT id, org_id, user_id, role, invited_by_id, joined_at, created_at, updated_at FROM memberships WHERE org_id = $1 AND user_id = $2",
+		"role":   "SELECT id, org_id, user_id, role, invited_by_id, joined_at, created_at, updated_at FROM memberships WHERE org_id = $1 AND user_id = $2",
+		"invite": "FROM org_invites WHERE id = $1",
+	}
+	for _, route := range provisionRoutes {
+		key, ok := readBack[route.name]
+		if !ok {
+			continue
+		}
+		db := &provisionDB{rows: provisionRowsFor()}
+		db.rows[key] = []any{failRead{}}
+		auth := &fakeProvisioner{db: db}
+		h := newProvisionHandlers(db, auth)
+		sent := &mailRecorder{}
+		h.invites = InviteConfig{Mail: sent}
+		code, body := callRoute(h, route)
+		if code != http.StatusServiceUnavailable || body != provUnavailable || len(auth.calls) != 1 {
+			t.Fatalf("%s: %d %s calls %v, want 503 %s after one auth call", route.name, code, body, auth.calls, provUnavailable)
+		}
+		if route.name == "invite" {
+			if len(sent.sent) != 1 || !strings.Contains(sent.sent[0].HTML, "invite.token") {
+				t.Fatalf("invite: %d mails sent, want one carrying the answered token", len(sent.sent))
+			}
+		}
+	}
+}
+
+// The invite mail is sent once on success too, before the answer.
+func TestProvisionInviteMailIsSentOnce(t *testing.T) {
+	db := &provisionDB{rows: provisionRowsFor()}
+	h := newProvisionHandlers(db, &fakeProvisioner{db: db})
+	sent := &mailRecorder{}
+	h.invites = InviteConfig{Mail: sent}
+	if code, body := callRoute(h, provisionRoutes[4]); code != http.StatusCreated || len(sent.sent) != 1 {
+		t.Fatalf("%d %s, %d mails; want 201 and one mail", code, body, len(sent.sent))
 	}
 }
 

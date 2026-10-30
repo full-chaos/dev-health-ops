@@ -422,6 +422,31 @@ func (c *ProviderClient) github(ctx context.Context, creds ClientCredentials, to
 	if err := c.do(ctx, request{method: http.MethodGet, url: api + "/user", headers: headers, step: "github user", profile: &userProfile}, &user); err != nil {
 		return Profile{}, err
 	}
+	// go-api's order: the email first (its refusals answer first), then the id, then this service's own owner check.
+	// GitHub lets only a verified address be the public profile email: a truthy member is verified, as on go-api.
+	email, _ := emailMember(userProfile)
+	emailSource := userProfile
+	if !truthy(email) {
+		var emails []struct {
+			Primary  bool `json:"primary"`
+			Verified bool `json:"verified"`
+		}
+		var emailsProfile pyjson.Value
+		if err := c.do(ctx, request{method: http.MethodGet, url: api + "/user/emails", headers: headers, step: "github emails", profile: &emailsProfile}, &emails); err != nil {
+			return Profile{}, err
+		}
+		// An unverified address is never returned; the picked entry must have an "email" member (go-api: a KeyError, 500).
+		list, _ := emailsProfile.([]pyjson.Value)
+		entry, err := githubPick(list)
+		if err != nil {
+			return Profile{}, err
+		}
+		var ok bool
+		if email, ok = entry.Get("email"); !ok {
+			return Profile{}, &ProviderError{Reason: ReasonDependency, Step: "github emails"}
+		}
+		emailSource = entry
+	}
 	subject, state := numericProfileID(user.ID)
 	if state != idUsable {
 		return Profile{}, idRefusal(state, "github user")
@@ -433,32 +458,8 @@ func (c *ProviderClient) github(ctx context.Context, creds ClientCredentials, to
 		ExternalKey: identity.ExternalKey{Issuer: SocialIssuer(GitHub), Provider: GitHub, Subject: subject},
 		Username:    optionalString(user.Login), FullName: optionalPointer(user.Name),
 	}
-	// GitHub lets only a verified address be the public profile email: a truthy member is verified, as on go-api.
-	if email, _ := emailMember(userProfile); truthy(email) {
-		profile.Email, profile.EmailNotText = emailText(email)
-		profile.EmailVerified = !loneSurrogateEmail(userProfile)
-		return profile, nil
-	}
-	var emails []struct {
-		Primary  bool `json:"primary"`
-		Verified bool `json:"verified"`
-	}
-	var emailsProfile pyjson.Value
-	if err := c.do(ctx, request{method: http.MethodGet, url: api + "/user/emails", headers: headers, step: "github emails", profile: &emailsProfile}, &emails); err != nil {
-		return Profile{}, err
-	}
-	// An unverified address is never returned; the picked entry must have an "email" member (go-api: a KeyError, 500).
-	list, _ := emailsProfile.([]pyjson.Value)
-	entry, err := githubPick(list)
-	if err != nil {
-		return Profile{}, err
-	}
-	email, ok := entry.Get("email")
-	if !ok {
-		return Profile{}, &ProviderError{Reason: ReasonDependency, Step: "github emails"}
-	}
 	profile.Email, profile.EmailNotText = emailText(email)
-	profile.EmailVerified = !loneSurrogateEmail(entry)
+	profile.EmailVerified = !loneSurrogateEmail(emailSource)
 	return profile, nil
 }
 

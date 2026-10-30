@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -26,7 +27,8 @@ import (
 // whatever status the read saw: a change of state between the read and the write
 // must not let the write set is_active with no auth call, and for an organization
 // already in that state auth answers a no-op, still guarded by the revision.
-func (h *handlers) orgStatusInAuth(w http.ResponseWriter, r *http.Request, orgID uuid.UUID, active bool) bool {
+// It also answers the state the accepted call set (nil when no call was made).
+func (h *handlers) orgStatusInAuth(w http.ResponseWriter, r *http.Request, orgID uuid.UUID, active bool) (accepted *bool, ok bool) {
 	var call func(ctx context.Context, orgID, actor uuid.UUID, ifRevision *int64) error
 	verb := "suspend"
 	if active {
@@ -38,47 +40,47 @@ func (h *handlers) orgStatusInAuth(w http.ResponseWriter, r *http.Request, orgID
 		call = h.orgSuspender.Suspend
 	}
 	if call == nil {
-		return true
+		return nil, true
 	}
 	ctx := r.Context()
 	if h.orgState == nil {
 		h.logger.ErrorContext(ctx, "admin: no auth state reader wired for the organization lifecycle client", "verb", verb)
 		policy.WriteInternal(w)
-		return false
+		return nil, false
 	}
 	existing, err := h.store.orgByID(ctx, orgID)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "admin: read organization before the auth call failed", "error", err, "verb", verb)
 		policy.WriteInternal(w)
-		return false
+		return nil, false
 	}
 	if existing == nil {
 		policy.WriteDetail(w, http.StatusNotFound, "Organization not found", nil)
-		return false
+		return nil, false
 	}
 	user := policy.UserFrom(ctx)
 	if user == nil {
 		policy.WriteInternal(w)
-		return false
+		return nil, false
 	}
 	state, err := h.orgState.State(ctx, orgID)
 	if err != nil {
 		h.logger.WarnContext(ctx, "admin: auth-service state read failed; nothing was written",
 			"verb", verb, "refused", errors.Is(err, orgreactivate.ErrRefused))
 		policy.WriteDetail(w, http.StatusServiceUnavailable, policy.ErrorDetail(sessionissue.UnavailableText), nil)
-		return false
+		return nil, false
 	}
 	if err := call(ctx, orgID, user.ID, &state.Revision); err != nil {
 		if errors.Is(err, orgreactivate.ErrStateChanged) {
 			h.writeStateChanged(w, r, orgID, verb)
-			return false
+			return nil, false
 		}
 		h.logger.WarnContext(ctx, "admin: auth-service did not change the organization; nothing was written",
 			"verb", verb, "refused", errors.Is(err, orgreactivate.ErrRefused))
 		policy.WriteDetail(w, http.StatusServiceUnavailable, policy.ErrorDetail(sessionissue.UnavailableText), nil)
-		return false
+		return nil, false
 	}
-	return true
+	return &active, true
 }
 
 // writeStateChanged answers 409: the organization changed in auth-service after the state the request read. It
@@ -91,4 +93,37 @@ func (h *handlers) writeStateChanged(w http.ResponseWriter, r *http.Request, org
 	}
 	h.logger.InfoContext(ctx, "admin: organization state changed since it was read; nothing was written", "verb", verb)
 	policy.WriteDetail(w, http.StatusConflict, message, nil)
+}
+
+// orgAuthReReadTimeout bounds the one auth state read made while the organization row is locked; the request's own
+// context does not bound it.
+const orgAuthReReadTimeout = 3 * time.Second
+
+// authStateHook is the store's read of auth's state under the row lock: the PATCH stores what auth holds, not the
+// PATCH value. When the read fails, the state the accepted call set is stored and the failure is logged by verb and
+// reason class only.
+func (h *handlers) authStateHook(orgID uuid.UUID, accepted bool) func(context.Context) (bool, error) {
+	return func(ctx context.Context) (bool, error) {
+		readCtx, cancel := context.WithTimeout(ctx, orgAuthReReadTimeout)
+		defer cancel()
+		state, err := h.orgState.State(readCtx, orgID)
+		if err != nil {
+			verb := "suspend"
+			if accepted {
+				verb = "reactivate"
+			}
+			reason := "error"
+			switch {
+			case errors.Is(err, context.DeadlineExceeded):
+				reason = "timeout"
+			case errors.Is(err, orgreactivate.ErrRefused):
+				reason = "refused"
+			case errors.Is(err, orgreactivate.ErrUnavailable):
+				reason = "unavailable"
+			}
+			h.logger.WarnContext(ctx, "admin: auth state re-read failed after an accepted change", "verb", verb, "reason", reason)
+			return accepted, nil
+		}
+		return state.Status == "active", nil
+	}
 }

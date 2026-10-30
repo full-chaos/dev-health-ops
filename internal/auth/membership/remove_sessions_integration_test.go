@@ -212,29 +212,34 @@ func TestARefusedRemoveEndsNoSession(t *testing.T) {
 }
 
 // The sessions end in the removal's transaction: a failure of the commit's
-// audit row leaves the membership and every session as they were.
+// audit row (after the sessions ended) or of the session write itself (after
+// the membership changed) leaves the membership and every session as they were.
 func TestAFailedRemovalCommitLeavesTheSessionsLive(t *testing.T) {
-	s := newSessionEnv(t)
-	ctx := context.Background()
-	org, user, owner := s.seedOrg(t, ctx), s.seedUser(t, ctx), s.seedUser(t, ctx)
-	s.add(t, ctx, org, owner, "owner")
-	m := s.add(t, ctx, org, user, "member")
-	sess, goTok := s.open(t, ctx, user, &org), s.goToken(t, ctx, user, &org)
-	s.plantFailure(t, ctx, "auth.security_audit_events")
-	if _, err := s.members.Remove(ctx, Change{OrgID: org, PrincipalID: user, Authorize: allowAll}); err == nil {
-		t.Fatal("Remove with a failing audit insert succeeded")
-	}
-	if got := s.rows(t, ctx, org, user); got != (rows{"member", "active", "member"}) {
-		t.Fatalf("rows = %+v, want unchanged", got)
-	}
-	if !s.sessionLive(t, ctx, sess) {
-		t.Fatal("the session ended although the removal rolled back")
-	}
-	if s.goTokenRevoked(t, ctx, goTok) {
-		t.Fatal("the go-api refresh token was revoked although the removal rolled back")
-	}
-	if n := s.outboxRows(t, ctx, "membership.removed", m.ID); n != 0 {
-		t.Fatalf("outbox rows = %d, want 0", n)
+	for _, table := range []string{"auth.security_audit_events", "auth.sessions"} {
+		t.Run(table, func(t *testing.T) {
+			s := newSessionEnv(t)
+			ctx := context.Background()
+			org, user, owner := s.seedOrg(t, ctx), s.seedUser(t, ctx), s.seedUser(t, ctx)
+			s.add(t, ctx, org, owner, "owner")
+			m := s.add(t, ctx, org, user, "member")
+			sess, goTok := s.open(t, ctx, user, &org), s.goToken(t, ctx, user, &org)
+			s.plantFailure(t, ctx, table)
+			if _, err := s.members.Remove(ctx, Change{OrgID: org, PrincipalID: user, Authorize: allowAll}); err == nil {
+				t.Fatal("Remove with a planted failure succeeded")
+			}
+			if got := s.rows(t, ctx, org, user); got != (rows{"member", "active", "member"}) {
+				t.Fatalf("rows = %+v, want unchanged", got)
+			}
+			if !s.sessionLive(t, ctx, sess) {
+				t.Fatal("the session ended although the removal rolled back")
+			}
+			if s.goTokenRevoked(t, ctx, goTok) {
+				t.Fatal("the go-api refresh token was revoked although the removal rolled back")
+			}
+			if n := s.outboxRows(t, ctx, "membership.removed", m.ID); n != 0 {
+				t.Fatalf("outbox rows = %d, want 0", n)
+			}
+		})
 	}
 }
 

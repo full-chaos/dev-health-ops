@@ -139,6 +139,9 @@ goApi:
   #    name (*_SECRET, *_PASSWORD, *_TOKEN, *_KEY, *_DSN, *_CREDENTIALS, any
   #    case); such a name may come only by valueFrom.secretKeyRef.
   extraEnv: []
+  # -- Extra pod volumes and go-api container mounts (for example a projected serviceAccountToken). Empty renders no key.
+  extraVolumes: []
+  extraVolumeMounts: []
   nodeSelector: {}
   tolerations: []
   affinity: {}

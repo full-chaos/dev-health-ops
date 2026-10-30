@@ -206,17 +206,14 @@ func closedSchemaProblems(schema map[string]any, path string) []string {
 		}
 	}
 	problems = append(problems, keywordShapeProblems(schema, path)...)
-	if isObjectSchema(schema) && schema["additionalProperties"] != false {
-		problems = append(problems, fmt.Sprintf("%s is open (additionalProperties is not false)", path))
+	if _, present := schema["additionalProperties"]; isObjectSchema(schema) && !present {
+		problems = append(problems, fmt.Sprintf("%s is open (additionalProperties is missing)", path))
 	}
 	unreadable := func(at string) {
 		problems = append(problems, fmt.Sprintf("%s is not an object schema the gate can read", at))
 	}
 	if raw, present := schema["properties"]; present {
-		properties, ok := raw.(map[string]any)
-		if !ok {
-			unreadable(path + "/properties")
-		}
+		properties, _ := raw.(map[string]any) // a non-map value is reported by keywordShapeProblems
 		names := make([]string, 0, len(properties))
 		for name := range properties {
 			names = append(names, name)
@@ -231,10 +228,8 @@ func closedSchemaProblems(schema map[string]any, path string) []string {
 		}
 	}
 	if raw, present := schema["items"]; present {
-		if items, ok := raw.(map[string]any); ok {
+		if items, ok := raw.(map[string]any); ok { // a non-map value is reported by keywordShapeProblems
 			problems = append(problems, closedSchemaProblems(items, path+"/items")...)
-		} else {
-			unreadable(path + "/items")
 		}
 	}
 	for _, keyword := range []string{"oneOf", "anyOf", "allOf"} {
@@ -242,11 +237,7 @@ func closedSchemaProblems(schema map[string]any, path string) []string {
 		if !present {
 			continue
 		}
-		members, ok := raw.([]any)
-		if !ok {
-			unreadable(path + "/" + keyword)
-			continue
-		}
+		members, _ := raw.([]any) // a non-list or empty value is reported by keywordShapeProblems
 		for index, member := range members {
 			if child, ok := member.(map[string]any); ok {
 				problems = append(problems, closedSchemaProblems(child, fmt.Sprintf("%s/%s/%d", path, keyword, index))...)
@@ -791,8 +782,16 @@ func TestTheOpenAPIPathGateChecksEveryKeywordShape(t *testing.T) {
 	} {
 		document := loadOpenAPIRaw(t)
 		plant(document)
-		if len(openAPIPathProblems(document, rows)) == 0 {
+		problems := openAPIPathProblems(document, rows)
+		if len(problems) == 0 {
 			t.Errorf("%s: the gate reported nothing", name)
+		}
+		if want := map[string]string{
+			"an operation that is not an object":     "must be an object",
+			"an operation whose responses is a list": "must declare a responses object",
+			"an operation without responses":         "must declare a responses object",
+		}[name]; !strings.Contains(strings.Join(problems, "\n"), want) {
+			t.Errorf("%s: the gate reported %v, want a problem containing %q", name, problems, want)
 		}
 	}
 	for _, status := range []string{"400", "413", "429"} {

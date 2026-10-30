@@ -130,8 +130,9 @@ service may hold, lets go-api call the internal provisioning routes
 `servicecred.PG.CheckScope`). The route, the eight provisioning routes and
 go-api's four compatibility routes (`/api/v1/auth/{login,refresh,logout,social-login}`)
 have rows in `contracts/auth/v1/endpoint-profiles.auth-service.json`. The
-provisioning audit rows name the actor and the request id, not the credential
-row (a gap of the class; 11853 closes it).
+provisioning audit rows name the actor, the request id and the calling
+credential (`credential_id` here, or `caller_principal_id` and `workload_jti`
+for the go-api workload token).
 
 **`org_invite_token` (CHAOS-11798).** The invite link token: `signedtoken.Build`
 over the invite id (32 lowercase hex characters, a dot, 64 lowercase hex
@@ -184,7 +185,10 @@ user access token (`at+jwt`). The auth-service workload-token exchange mints it
 (`POST /internal/v1/sessions`) also accepts it, for audience `auth-service` and
 the one workload principal in `AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT` (the token
 has no action claim, so that subject is the `sessions.issue` binding); with the
-variable unset the route refuses it.
+variable unset the route refuses it. The internal provisioning routes (mounted
+by `AUTH_MEMBERSHIP_ROUTES`) accept it on the same terms and the same subject,
+so one go-api token covers both; their audit rows name it by
+`caller_principal_id` and `workload_jti`.
 
 **`kubernetes_sa_token_exchange`.** The Kubernetes projected ServiceAccount
 token a workload presents to auth-service's workload-token exchange

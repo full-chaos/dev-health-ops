@@ -46,11 +46,15 @@ const (
 	ActionReviewMembershipRole ActionKind = "review_membership_role"
 )
 
+// requeueRunbookStep is the follow-up of revocations an apply only named: the runbook step that sets the source. A
+// second apply of the same manifest changes nothing, so the source must be set before the -apply run.
+const requeueRunbookStep = "docs/operate/maintain/backup-and-restore.md#step-5:set-RESTORE_FENCE_SOURCE_URI-before-the-apply-run"
+
 // followUp names the follow-up leaf that automates each action; the operator
 // action line prints it.
 var followUp = map[ActionKind]string{
 	ActionForcePasswordReset:                "none",
-	ActionRequeueProviderRevocation:         "none",
+	ActionRequeueProviderRevocation:         requeueRunbookStep,
 	ActionProviderRevocationRequeued:        "none",
 	ActionProviderRevocationRequeuedBlocked: "CHAOS-12010",
 	ActionUserTombstoned:                    "none",
@@ -103,6 +107,16 @@ func mergeActions(in []OperatorAction) []OperatorAction {
 	return out
 }
 
+// followUpOf is the follow-up of one action. requeue_provider_revocation names two things: revocations an apply
+// without a source only named (the runbook step), and provider credentials the fence deleted, whose old token waits
+// for the revocation worker.
+func followUpOf(a OperatorAction) string {
+	if a.Kind == ActionRequeueProviderRevocation && a.Source != revocationSection {
+		return followUp[ActionProviderRevocationRequeuedBlocked]
+	}
+	return followUp[a.Kind]
+}
+
 // ActionLines prints one line per action that has ids.
 func ActionLines(actions []OperatorAction) []string {
 	var lines []string
@@ -110,7 +124,7 @@ func ActionLines(actions []OperatorAction) []string {
 		if len(a.IDs) == 0 {
 			continue
 		}
-		lines = append(lines, fmt.Sprintf("operator-action %s source=%s count=%d ids=%s follow-up=%s", a.Kind, a.Source, len(a.IDs), strings.Join(a.IDs, ","), followUp[a.Kind]))
+		lines = append(lines, fmt.Sprintf("operator-action %s source=%s count=%d ids=%s follow-up=%s", a.Kind, a.Source, len(a.IDs), strings.Join(a.IDs, ","), followUpOf(a)))
 	}
 	return lines
 }

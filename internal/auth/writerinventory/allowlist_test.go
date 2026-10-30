@@ -49,6 +49,8 @@ var Allowlist = []Entry{
 	{File: "internal/api/sso/provision.go", Func: "handlers.membershipOrJoin", Table: "public.memberships", Verb: "INSERT"},
 	{File: "internal/api/sso/provision.go", Func: "handlers.provisionOrGetUser", Table: "public.users", Verb: "UPDATE"},
 	{File: "internal/apiservice/admin/invites.go", Func: "handlers.createInvite", Table: "public.org_invites", Verb: "INSERT"},
+	// D6528: the reconcile pass writes is_active to auth's state.
+	{File: "internal/apiservice/admin/orgstate_reconcile.go", Func: "OrgStateReconciler.fix", Table: "public.organizations", Verb: "UPDATE"},
 	{File: "internal/apiservice/admin/orgstore.go", Func: "pgStore.deleteOrganizationWithoutMembers", Table: "public.organizations", Verb: "DELETE"},
 	{File: "internal/apiservice/admin/orgstore.go", Func: "pgStore.insertMembershipTx", Table: "public.memberships", Verb: "INSERT"},
 	{File: "internal/apiservice/admin/orgstore.go", Func: "pgStore.insertOrganizationTx", Table: "public.organizations", Verb: "INSERT"},

@@ -70,8 +70,8 @@ func (e *routesEnv) memberRows(t *testing.T, ctx context.Context, org, user uuid
 	return publicRole, authStatus
 }
 
-// The routes through configure, as the runtime role: only the go-api
-// credential holding memberships:write is served; a member is added, changed
+// The routes through configure, as the runtime role: only go-api's workload
+// token is served (any svc_authsess_ row is refused); a member is added, changed
 // and removed in both tables with its audit row naming the actor; go-api's
 // PEP rule is checked again by auth-service.
 func TestProvisioningMembershipRoutesThroughConfigure(t *testing.T) {

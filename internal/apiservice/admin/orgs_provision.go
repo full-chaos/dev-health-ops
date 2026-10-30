@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity/emailvalidator"
 )
 
 // With AUTH_PROXY_ORG_PROVISIONING on (h.orgProvision set) the member, invite
@@ -156,6 +157,10 @@ func (h *handlers) createOrgInviteInAuth(ctx context.Context, w http.ResponseWri
 	}
 	created, err := h.orgProvision.CreateInvite(ctx, authprovision.InviteRequest{OrgID: orgID, Email: email, Role: role, TTL: inviteTTL,
 		Actor: invitedBy, Description: "Organization invite created", RequestMetadata: requestAuditEntry(r, audit.Entry{}).RequestMetadata})
+	if authprovision.ReasonOf(err) == "email_invalid" {
+		policy.WriteDetail(w, http.StatusBadRequest, invalidEmailText(email), nil)
+		return
+	}
 	if err != nil {
 		answers := invalidRole(role)
 		answers["invite_pending"] = provisionAnswer{http.StatusConflict, errPendingInviteExists.Error()}
@@ -175,6 +180,17 @@ func (h *handlers) createOrgInviteInAuth(ctx context.Context, w http.ResponseWri
 	}
 	h.sendInviteEmail(ctx, orgName, inviter, invite, created.Token)
 	policy.WriteModel(w, http.StatusCreated, orgInviteResponseObject(invite), nil)
+}
+
+// invalidEmailText is go-api's invalid-email text for an address auth-service
+// refused: a client error, never the 503 of an outage. go-api's own validator
+// names its reason when it refuses the address too.
+func invalidEmailText(email string) string {
+	text := "value is not a valid email address"
+	if _, reason, ok := emailvalidator.ValidateEmail([]rune(email)); !ok {
+		text += ": " + reason
+	}
+	return text
 }
 
 // orgDeletionAuthError: auth-service did not deprovision the organization, so

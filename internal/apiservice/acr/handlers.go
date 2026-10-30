@@ -1,7 +1,7 @@
 // Package acr serves the internal routes acr's entitlement client calls
 // directly (bypassing ingress): GET /api/v1/internal/acr/health,
-// GET /api/v1/internal/acr/entitlements/{org_id} and the org llm-config
-// route. All are reachable only inside the cluster network (deploy/helm/dev-health's
+// GET /api/v1/internal/acr/entitlements/{org_id}, the org llm-config
+// route and the principal access read (access.go). All are reachable only inside the cluster network (deploy/helm/dev-health's
 // TestInternalACRRoutesStayOffThePublicIngress pins that no Ingress routes to
 // the Go api) and every one also checks a svc_acr_ bearer. Health and
 // entitlements port api/internal/acr.py (CHAOS-9993): 100/minute per client
@@ -51,9 +51,14 @@ type Deps struct {
 	// rate limit.
 	Auth    CredentialStore
 	Limiter *httpapi.KeyedLimiter
-	// Workload, when set, lets all three routes also accept the acr-api
+	// Workload, when set, lets every route also accept the acr-api
 	// workload token. Nil refuses every workload token as not_configured.
 	Workload *WorkloadAuth
+	// Access serves the principal access read (CHAOS-12084); nil answers 503.
+	// AccessLimiter is its own attempt bucket (AccessAttemptLimit); nil does
+	// not rate limit.
+	Access        PrincipalAccessStore
+	AccessLimiter *httpapi.KeyedLimiter
 }
 
 // Routes is the acr area's route set. Every path is internal and checks its
@@ -65,6 +70,7 @@ func Routes(deps Deps) []httpapi.Route {
 		logger = slog.Default()
 	}
 	deps.Limiter.Declare()
+	deps.AccessLimiter.Declare()
 	declareWorkloadSeries()
 	return []httpapi.Route{
 		{
@@ -80,6 +86,16 @@ func Routes(deps Deps) []httpapi.Route {
 		{
 			Method: http.MethodGet, Pattern: "/api/v1/internal/acr/orgs/{org_id}/llm-config",
 			Handler: llmConfigHandler(deps.Credentials, deps.LLMConfig, logger, deps.Workload),
+		},
+		{
+			// Not audited: acr-api calls it on every protected request, so a
+			// row and a last_used_at stamp per call would put a write on the
+			// read path; refusals are logged and counted (routeAuth).
+			Method: http.MethodGet, Pattern: PrincipalAccessPattern,
+			Handler: principalAccessHandler(deps.Access, routeAuth{
+				store: deps.Auth, limiter: deps.AccessLimiter, logger: logger, route: routePrincipalAccess,
+				workload: deps.Workload, scope: PrincipalAccessScope, limitPath: principalAccessPath,
+			}, logger),
 		},
 	}
 }

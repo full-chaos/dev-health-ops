@@ -6849,7 +6849,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 75,
+          "line": 81,
           "note": "Pattern:",
           "path": "internal/apiservice/acr/handlers.go"
         },
@@ -6861,7 +6861,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/acr/handlers.go",
-        "line": 75
+        "line": 81
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -6895,7 +6895,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 71,
+          "line": 77,
           "note": "Pattern:",
           "path": "internal/apiservice/acr/handlers.go"
         },
@@ -6907,7 +6907,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/acr/handlers.go",
-        "line": 71
+        "line": 77
       },
       "surface_kind": "rest",
       "tenant_requirement": "none",
@@ -6943,7 +6943,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 81,
+          "line": 87,
           "note": "Pattern:",
           "path": "internal/apiservice/acr/handlers.go"
         },
@@ -6955,7 +6955,56 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/acr/handlers.go",
-        "line": 81
+        "line": 87
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "EdDSA",
+        "audience": "dev-health-api",
+        "issuer": "AUTH_ACCESS_TOKEN_ISSUER (the auth-service issuer pin)",
+        "token_type": "workload+jwt (workload token; svc_acr_ is opaque)"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "internal_svc_acr_token",
+        "workload_token"
+      ],
+      "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "workload+jwt"
+      },
+      "classification": "protected",
+      "current_state_cache_behavior": "none: per-request read (internal/apiservice/acr/access_store.go): no cache by contract (North Star check 18); svc_acr_ credential: store read every request; workload token: signature verify only; the membership, session, impersonation, entitlement and repository inventory reads run on every call",
+      "disclosure_behavior": null,
+      "gaps": [
+        "action: no catalog action covers the internal service entitlement and configuration reads (this leaf does not extend the vocabulary)",
+        "impersonation_policy: the route has an organization context from the request path; the internal listener runs no organization-scope or impersonation middleware (internal/apiservice/service.go:390 names them on the main listener only); enum values seen in the schema: subject_to_impersonation_override, exempt_no_org_context, not_applicable_non_main_app, unknown; not_applicable_non_main_app recorded pending a ruling",
+        "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record",
+        "credential_binding: the service credential is not bound to an organization; any holder may name any organization; it closes with the organization-bound workload claim and the acr-to-ops workload-token work (W8/W9), not in this leaf",
+        "session_binding: session.live checks that the sid names a session of the user that is not revoked and whose token_version pin is current; the session reader grant (authschema.SessionReaderColumns) does not reach sessions.organization_id or the session expiry, so org binding and expiry are not read (CHAOS-12084 follow-up)"
+      ],
+      "graphql_field_name": null,
+      "id": "GET /api/v1/internal/acr/orgs/{org_id}/principals/{user_id}/access [dev-health-ops-api @internal]",
+      "impersonation_policy": "not_applicable_non_main_app",
+      "method": "GET",
+      "primary_validator": {
+        "anchor": {
+          "line": 94,
+          "note": "Pattern:",
+          "path": "internal/apiservice/acr/handlers.go"
+        },
+        "description": "routeAuth: the internal listener verifies, before any read, either the svc_acr_ service credential (hashed at rest; migration compat) holding the principal_access:read scope (a credential without it is refused with 403) or the acr-api workload token (workload-token.v1: EdDSA, typ workload+jwt, aud dev-health-api, issuer pin AUTH_ACCESS_TOKEN_ISSUER, sub equal to AUTH_ACR_WORKLOAD_SUBJECT; no scope claim), with its own keyed attempt limiter (internal_acr_access_attempt)."
+      },
+      "public_rationale": null,
+      "resource_resolver": "organization_from_path: the {org_id} path segment is the requested organization and {user_id} the principal whose access is read (internal/apiservice/acr/access.go); the service credential carries no organization binding that the handler compares with it",
+      "route": "/api/v1/internal/acr/orgs/{org_id}/principals/{user_id}/access",
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/apiservice/acr/handlers.go",
+        "line": 94
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",

@@ -30,6 +30,7 @@ type PinRig struct {
 	admin    *pgxpool.Pool
 	sessions *session.Store
 	auth     *policy.Authenticator
+	reader   policy.PGStore
 }
 
 // NewPinRig applies the auth schema on admin's database.
@@ -82,12 +83,25 @@ func NewPinRig(t *testing.T, ctx context.Context, admin *pgxpool.Pool, instance 
 	if err != nil {
 		t.Fatal(err)
 	}
-	auth, err := policy.NewAuthenticator(verifier, pinStore{PGStore: policy.PGStore{Pool: login(roles["pin_reader"]), AuthSchema: "auth"}, users: admin},
+	reader := policy.PGStore{Pool: login(roles["pin_reader"]), AuthSchema: "auth"}
+	auth, err := policy.NewAuthenticator(verifier, pinStore{PGStore: reader, users: admin},
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &PinRig{admin: admin, sessions: sessions, auth: auth}
+	return &PinRig{admin: admin, sessions: sessions, auth: auth, reader: reader}
+}
+
+// Reader is go-api's session read as the session reader role holds it: its
+// SessionState reads only the columns auth-migrate grants a reader.
+func (r *PinRig) Reader() policy.PGStore { return r.reader }
+
+// Revoke ends sid as auth-service's session revoke does.
+func (r *PinRig) Revoke(t *testing.T, ctx context.Context, sid uuid.UUID) {
+	t.Helper()
+	if revoked, err := r.sessions.Revoke(ctx, sid, session.Actor{}); err != nil || !revoked {
+		t.Fatalf("revoke %s: %v %v", sid, revoked, err)
+	}
 }
 
 // SignIn creates a session of user, pinned to the user's token_version now.

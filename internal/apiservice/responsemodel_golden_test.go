@@ -110,6 +110,7 @@ var wantResponseModelRoutes = map[string]bool{
 	"GET /api/v1/external-ingest/schemas/{schema_version}":                             true,
 	"GET /api/v1/internal/acr/entitlements/{org_id}":                                   true,
 	"GET /api/v1/internal/acr/health":                                                  true,
+	"GET /api/v1/internal/acr/orgs/{org_id}/principals/{user_id}/access":               true,
 	"GET /api/v1/licensing/entitlements/{org_id}":                                      true,
 	"GET /api/v1/orgs/me":                                                              true,
 	"GET /api/v1/telemetry/status":                                                     true,

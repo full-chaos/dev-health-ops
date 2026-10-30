@@ -99,6 +99,11 @@ func APIPosture(database string) Posture {
 		// fails closed on ACCESS_DENIED / AUTH_FAILED (an unreachable ClickHouse
 		// alone allows the sync, loudly: WARN + counter).
 		{Database: database, Table: "work_items", AllowSelect: true},
+		// GET /api/v1/internal/acr/orgs/{org_id}/principals/{user_id}/access
+		// (CHAOS-12128) reads the org's repository inventory
+		// (internal/repoinventory) on every call. Read-only. The prod users.d
+		// grant ships in the same deploy step as the image (CHAOS-12121).
+		{Database: database, Table: "repos", AllowSelect: true},
 	}}
 }
 

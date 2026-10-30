@@ -124,7 +124,7 @@ func composeOneOffNeedsNoOwnVariables(g *guard) {
 		return
 	}
 	bugsink := mp(mp(g.yamlFile(composeFile)["services"])["bugsink"])
-	for _, f := range composeBugsinkShape(got, want, bugsink, g.read(composeFile)) {
+	for _, f := range composeBugsinkShape(got, want, bugsink, composeScalars(g.yamlFile(composeFile))) {
 		g.failf("%s", f)
 	}
 }

@@ -3,6 +3,7 @@ package ingressplanes
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -17,7 +18,11 @@ const (
 	// The deploy copy reads every ops path through BIGBOY_OPS_REPO, a pinned clean ops worktree (CHAOS-11970). Until that
 	// change merges, either exact source is accepted.
 	bigboySystemLogsOpsRepoSource = "${BIGBOY_OPS_REPO:-/home/ubuntu/devhealth/ops-bigboy}/docker/clickhouse-config.d/system-logs.xml"
+	// The shared ops checkout: never the default of BIGBOY_OPS_REPO.
+	bigboySharedOpsCheckout = "/home/ubuntu/devhealth/ops"
 )
+
+var bigboyOpsRepoDefaultRe = regexp.MustCompile(`^\$\{BIGBOY_OPS_REPO:?-([^}]*)\}/`)
 
 // bigboy runs ci/bigboy/compose.bigboy.yml, not the root compose.yml, so the mount must be in that file too.
 func bigboySystemLogsFindings(text []byte) ([]string, error) {
@@ -50,6 +55,9 @@ func bigboySystemLogsFindings(text []byte) ([]string, error) {
 		mounted = true
 		if volume.Type != "bind" || (volume.Source != bigboySystemLogsSource && volume.Source != bigboySystemLogsOpsRepoSource) {
 			findings = append(findings, fmt.Sprintf("clickhouse mounts %s (%s) at %s, want the checked-in file %s or %s", volume.Source, volume.Type, systemLogsFileTarget, bigboySystemLogsSource, bigboySystemLogsOpsRepoSource))
+		}
+		if m := bigboyOpsRepoDefaultRe.FindStringSubmatch(volume.Source); m != nil && strings.TrimRight(m[1], "/") == bigboySharedOpsCheckout {
+			findings = append(findings, fmt.Sprintf("the BIGBOY_OPS_REPO default of %s is the shared ops checkout %s", volume.Source, bigboySharedOpsCheckout))
 		}
 		if !volume.ReadOnly {
 			findings = append(findings, "the system logs file is mounted read-write")
@@ -116,6 +124,8 @@ func TestBigboySystemLogsSourceTransitionCells(t *testing.T) {
 		"old form ./ops":                        {bigboySystemLogsSource, true},
 		"new form BIGBOY_OPS_REPO":              {bigboySystemLogsOpsRepoSource, true},
 		"default is the shared checkout":        {"${BIGBOY_OPS_REPO:-/home/ubuntu/devhealth/ops}/docker/clickhouse-config.d/system-logs.xml", false},
+		"default is the shared checkout + /":    {"${BIGBOY_OPS_REPO:-/home/ubuntu/devhealth/ops/}/docker/clickhouse-config.d/system-logs.xml", false},
+		"dash default is the shared checkout":   {"${BIGBOY_OPS_REPO-/home/ubuntu/devhealth/ops}/docker/clickhouse-config.d/system-logs.xml", false},
 		"no default":                            {"${BIGBOY_OPS_REPO}/docker/clickhouse-config.d/system-logs.xml", false},
 		"required form":                         {"${BIGBOY_OPS_REPO:?set}/docker/clickhouse-config.d/system-logs.xml", false},
 		"other prefix with the same suffix":     {"/srv/ops/docker/clickhouse-config.d/system-logs.xml", false},
@@ -129,6 +139,11 @@ func TestBigboySystemLogsSourceTransitionCells(t *testing.T) {
 			}
 			if c.ok != (len(got) == 0) {
 				t.Fatalf("source %q: want accepted=%v, findings %v", c.source, c.ok, got)
+			}
+			if strings.Contains(c.source, bigboySharedOpsCheckout+"}") || strings.Contains(c.source, bigboySharedOpsCheckout+"/}") {
+				if !strings.Contains(strings.Join(got, "\n"), "is the shared ops checkout") {
+					t.Fatalf("source %q: findings %v do not name the shared ops checkout", c.source, got)
+				}
 			}
 		})
 	}

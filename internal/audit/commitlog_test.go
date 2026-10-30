@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -55,6 +56,58 @@ func TestCommitLogsADeclaredRefusalAtWarnAndAnyOtherFailureAtError(t *testing.T)
 		}
 		if strings.Contains(lines[0], "probe refusal text") {
 			t.Errorf("%s: the error text reached the log: %s", tc.name, lines[0])
+		}
+	}
+}
+
+// A declared refusal is matched by errors.Is only: through any wrapping or a
+// join, never by its text. Its WARN line carries the fields the same error logs
+// at ERROR when the mutation declares nothing.
+func TestCommitRefusalIsMatchedByIdentityAndKeepsTheFailureFields(t *testing.T) {
+	refusal := errors.New("probe refusal text")
+	declared := Mutation{
+		Audit:    AuditEvent{EventType: "auth.probe.failed", Outcome: OutcomeError},
+		Events:   []OutboxEvent{{AggregateType: "user", AggregateID: "u-1", EventType: "user.email_verified"}},
+		Refusals: []error{refusal},
+	}
+	undeclared := declared
+	undeclared.Refusals = nil
+	logged := func(m Mutation, err error) map[string]any {
+		t.Helper()
+		var buf bytes.Buffer
+		previous := slog.Default()
+		slog.SetDefault(logging.NewJSON(&buf, slog.LevelDebug))
+		logCommitFailure(context.Background(), m, err)
+		slog.SetDefault(previous)
+		rec := map[string]any{}
+		if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &rec); err != nil {
+			t.Fatalf("%v: %s", err, buf.String())
+		}
+		if strings.Contains(buf.String(), "probe refusal text") {
+			t.Errorf("the error text reached the log: %s", buf.String())
+		}
+		delete(rec, "time")
+		return rec
+	}
+	for name, tc := range map[string]struct {
+		err   error
+		level string
+	}{
+		"wrapped twice":   {fmt.Errorf("%w: applying the state mutation: %w", ErrMutationFailed, fmt.Errorf("outer: %w", refusal)), "WARN"},
+		"joined":          {errors.Join(errors.New("other"), refusal), "WARN"},
+		"same text":       {fmt.Errorf("%w: %w", ErrMutationFailed, errors.New("probe refusal text")), "ERROR"},
+		"not in the list": {fmt.Errorf("%w: %w", ErrMutationFailed, ErrNoStateChange), "ERROR"},
+	} {
+		rec, failure := logged(declared, tc.err), logged(undeclared, tc.err)
+		if rec["level"] != tc.level || failure["level"] != "ERROR" {
+			t.Errorf("%s: level %v (undeclared %v), want %s (ERROR)", name, rec["level"], failure["level"], tc.level)
+		}
+		for _, r := range []map[string]any{rec, failure} {
+			delete(r, "level")
+			delete(r, "msg")
+		}
+		if !reflect.DeepEqual(rec, failure) {
+			t.Errorf("%s: fields %v, want the failure line's %v", name, rec, failure)
 		}
 	}
 }

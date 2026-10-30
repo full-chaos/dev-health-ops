@@ -148,7 +148,7 @@ func TestResetLateRefusalRollsBackEveryWriteAndTakesOneStatementShape(t *testing
 			t.Errorf("%s: the refused reset changed state: %+v, after the actor %+v", name, got, afterActor)
 		}
 		lateLog(t, name, buf.String(), link)
-		lateCount(t, ctx, name, reader)
+		lateCount(t, ctx, name, reader, "set_password/link_unusable")
 	}
 	callseq.Same(t, "late reset refusals", sequences)
 	for name, seq := range sequences {
@@ -189,7 +189,7 @@ func lateLog(t *testing.T, name, out, link string) {
 	}
 }
 
-func lateCount(t *testing.T, ctx context.Context, name string, reader *sdkmetric.ManualReader) {
+func lateCount(t *testing.T, ctx context.Context, name string, reader *sdkmetric.ManualReader, want string) {
 	t.Helper()
 	var rm metricdata.ResourceMetrics
 	if err := reader.Collect(ctx, &rm); err != nil {
@@ -209,7 +209,83 @@ func lateCount(t *testing.T, ctx context.Context, name string, reader *sdkmetric
 			}
 		}
 	}
-	if len(got) != 1 || got["set_password/link_unusable"] != 1 {
-		t.Errorf("%s: counted %v, want set_password/link_unusable once", name, got)
+	if len(got) != 1 || got[want] != 1 {
+		t.Errorf("%s: counted %v, want %s once", name, got, want)
+	}
+}
+
+type peekVerifyThen struct {
+	IdentityAccounts
+	write func()
+}
+
+func (p peekVerifyThen) PeekVerificationLink(ctx context.Context, tokenHash [32]byte) (uuid.UUID, bool, error) {
+	id, ok, err := p.IdentityAccounts.PeekVerificationLink(ctx, tokenHash)
+	if ok && err == nil {
+		p.write()
+	}
+	return id, ok, err
+}
+
+// A verification link used first or expired after the first read answers
+// FlowInvalidToken, leaves the address unverified by this call, counts
+// verify_email/link_unusable and logs one WARN line with no link value.
+func TestVerifyLateRefusalLogsOneWarnAndCountsLinkUnusable(t *testing.T) {
+	actors := map[string]func(t *testing.T, ctx context.Context, rig *endRig, id uuid.UUID, link string){
+		"used-first": func(t *testing.T, ctx context.Context, rig *endRig, _ uuid.UUID, link string) {
+			if out, err := rig.flows.Verify(ctx, link); err != nil || out.Kind != FlowOK {
+				t.Fatalf("the first verification = %+v, %v", out, err)
+			}
+		},
+		"expired": func(t *testing.T, ctx context.Context, rig *endRig, id uuid.UUID, _ string) {
+			if _, err := rig.env.admin.Exec(ctx, `UPDATE auth.link_credentials SET expires_at = now() - interval '1 second' WHERE principal_id = $1 AND consumed_at IS NULL`, id); err != nil {
+				t.Fatal(err)
+			}
+		},
+	}
+	schema, err := authschema.NewValidatedIdentifier("auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, actor := range actors {
+		ctx := context.Background()
+		rig := newEndRig(t, ctx)
+		reader := sdkmetric.NewManualReader()
+		store, err := identity.New(identity.Config{Pool: rig.env.runtime, Schema: schema, UsersOwnedByAuth: true,
+			Meter: sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("test")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		id := rig.account(t, ctx, "Old-pass-12345")
+		link := "late-verify-" + name
+		if err := rig.links.IssueBound(ctx, IssueRequest{PrincipalID: id, Purpose: PurposeEmailVerification, TokenHash: linkHash(link), TTL: VerificationTTL}); err != nil {
+			t.Fatal(err)
+		}
+		verified := func() int {
+			return rig.env.count(t, ctx, `SELECT count(*) FROM auth.users WHERE principal_id = $1 AND email_verified_at IS NOT NULL`, id)
+		}
+		afterActor := -1
+		flows, err := NewFlows(FlowsConfig{
+			Accounts: peekVerifyThen{IdentityAccounts: IdentityAccounts{Store: store, Sessions: rig.sessions, Links: rig.links},
+				write: func() { actor(t, ctx, rig, id, link); afterActor = verified() }},
+			Links: rig.links, Sessions: rig.sessions, Mail: &liveMail{}, Locker: rig.links, UsersOwnedByAuth: true, Hash: cheapHash})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var buf bytes.Buffer
+		previous := slog.Default()
+		slog.SetDefault(logging.NewJSON(&buf, slog.LevelDebug))
+		out, err := flows.Verify(ctx, link)
+		slog.SetDefault(previous)
+
+		if err != nil || !reflect.DeepEqual(out, FlowOutcome{Kind: FlowInvalidToken}) {
+			t.Fatalf("%s: Verify = %+v, %v; want only %s", name, out, err, FlowInvalidToken)
+		}
+		if got := verified(); got != afterActor {
+			t.Errorf("%s: verified rows %d after the refused call, %d after the actor", name, got, afterActor)
+		}
+		lateLog(t, name, buf.String(), link)
+		lateCount(t, ctx, name, reader, "verify_email/link_unusable")
 	}
 }

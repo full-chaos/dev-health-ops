@@ -72,7 +72,8 @@ var operatorSwitchOffSQL = map[string][]string{
 		"tx:INSERT INTO memberships (id, org_id, user_id, role, invited_by_id, joined_at, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
 		"COMMIT", "ROLLBACK"},
 	"remove": {"BEGIN", "tx:SELECT id, email, username, password_hash, full_name, avatar_url, auth_provider, auth_provider_id, is_active, is_verified, is_superuser, token_version, last_login_at, created_at, updated_at FROM users WHERE lower(email) = $1", "tx:SELECT id, slug, name, description, settings, tier, managed_by, is_active, created_at, updated_at FROM organizations WHERE lower(slug) = $1", "tx:SELECT id, org_id, user_id, role, invited_by_id, joined_at, created_at, updated_at FROM memberships WHERE org_id = $1 AND user_id = $2",
-		"tx:DELETE FROM memberships WHERE org_id = $1 AND user_id = $2", "COMMIT", "ROLLBACK"},
+		"tx:SAVEPOINT", "tx:DELETE FROM memberships WHERE org_id = $1 AND user_id = $2",
+		"tx:UPDATE refresh_tokens SET revoked_at = $3 WHERE user_id = $1 AND org_id = $2 AND revoked_at IS NULL", "tx:RELEASE SAVEPOINT", "COMMIT", "ROLLBACK"},
 }
 
 func TestOperatorSwitchOffRunsTodaysMembershipSQL(t *testing.T) {

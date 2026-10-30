@@ -7,6 +7,12 @@ import (
 	"testing"
 )
 
+// failureTail is the end of a failed script run for an error message: stderr first and alone, then stdout. It lives
+// outside ci_script_helpers_test.go, whose copies in the other cigates packages must stay byte-identical.
+func failureTail(res cmdResult) string {
+	return "stderr: " + tail(res.stderr, 1500) + "\nstdout: " + tail(res.stdout, 500)
+}
+
 // A failed script run reports its stderr: a long stdout (the script echoes its whole command line) must not push the
 // reason out of the message.
 func TestFailureTailKeepsStderrWhenStdoutIsLong(t *testing.T) {

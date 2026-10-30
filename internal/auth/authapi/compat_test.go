@@ -453,6 +453,41 @@ func TestCompatRefreshWithoutAnOrganizationAnswersAnEmptyOrgID(t *testing.T) {
 	}
 }
 
+// go-api's refresh of a session whose organization has no membership row for
+// a non-superuser (the member was removed or left): the generic 401 and the
+// session revoked; a superuser keeps the session.
+func TestCompatRefreshWithoutAMembershipRefusesAndRevokes(t *testing.T) {
+	for name, superuser := range map[string]bool{"member removed": false, "superuser without a membership": true} {
+		t.Run(name, func(t *testing.T) {
+			f := newCompatFixture(t)
+			state := f.users.users[f.principal]
+			state.IsSuperuser = superuser
+			f.users.users[f.principal] = state
+			f.users.roles = map[[2]uuid.UUID]*string{}
+			f.buildCompat()
+			f.sessions.result = session.Result{Reason: session.ReasonAccepted, Issued: session.Issued{
+				Session: f.record, Credential: contracts.NewSecretString(credential()), ExpiresAt: time.Now().Add(time.Hour),
+			}}
+			response := f.do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+credential()+`"}`, nil)
+			if superuser {
+				if response.Code != http.StatusOK || len(f.sessions.revoked) != 0 {
+					t.Fatalf("superuser: answer %d %.200s, revoked %v; want 200 and nothing revoked", response.Code, response.Body, f.sessions.revoked)
+				}
+				return
+			}
+			if response.Code != http.StatusUnauthorized || !strings.Contains(response.Body.String(), "Invalid or expired refresh token") {
+				t.Fatalf("answer %d %.200s, want 401 Invalid or expired refresh token", response.Code, response.Body)
+			}
+			if len(f.sessions.revoked) != 1 || f.sessions.revoked[0] != f.record.ID {
+				t.Fatalf("revoked %v, want the session", f.sessions.revoked)
+			}
+			if f.sessions.minted != 0 {
+				t.Fatalf("%d successors minted before the refusal, want 0", f.sessions.minted)
+			}
+		})
+	}
+}
+
 func TestCompatFailuresAnswerGoAPIs500WithoutTheirText(t *testing.T) {
 	f := newCompatFixture(t)
 	f.sessions.result = session.Result{Reason: session.ReasonStoreUnavailable}

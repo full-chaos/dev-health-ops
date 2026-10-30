@@ -54,11 +54,17 @@ type env struct {
 	authBarrier *barrier
 	goBarrier   *barrier
 	server      *httptest.Server
-	signer      *edgetoken.Signer
-	linkSecret  string
-	inviteKey   string
-	root        string
-	goLog       *syncBuffer
+	// authServer is auth-service's compatibility routes (go-api's refresh and
+	// the session issue route) over the auth stores on the runtime role.
+	authServer *httptest.Server
+	// issuerServer is go-api's session routes with auth-service owning
+	// sessions (AUTH_PROXY_SESSIONS): the session comes from authServer.
+	issuerServer *httptest.Server
+	signer       *edgetoken.Signer
+	linkSecret   string
+	inviteKey    string
+	root         string
+	goLog        *syncBuffer
 }
 
 var (
@@ -191,12 +197,30 @@ func newEnv(t *testing.T) (*env, error) {
 	}
 	for _, route := range session.Routes(session.Deps{Pool: goPool, Guard: guard, Auth: auth, Verifier: verifier, Signer: e.signer,
 		Mail: authmail.Config{LinkSecret: e.linkSecret}, Limits: httpapi.NewMemoryCounters(nil), Logger: logger}) {
-		if route.Pattern == "/api/v1/auth/accept-invite" {
+		switch route.Pattern {
+		case "/api/v1/auth/accept-invite", "/api/v1/auth/onboard", "/api/v1/auth/refresh":
 			mux.Handle(route.Method+" "+route.Pattern, route.Handler)
 		}
 	}
 	e.server = httptest.NewServer(mux)
 	closers = append(closers, e.server.Close)
+	if err := e.startAuthPlane(ctx, schema, logger, jwtKey); err != nil {
+		return nil, err
+	}
+	issuer, err := e.seedIssueClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	issuerMux := http.NewServeMux()
+	for _, route := range session.Routes(session.Deps{Pool: goPool, Guard: guard, Auth: auth, Verifier: verifier, Signer: e.signer,
+		Mail: authmail.Config{LinkSecret: e.linkSecret}, Limits: httpapi.NewMemoryCounters(nil), Logger: logger, Issuer: issuer}) {
+		switch route.Pattern {
+		case "/api/v1/auth/accept-invite", "/api/v1/auth/onboard":
+			issuerMux.Handle(route.Method+" "+route.Pattern, route.Handler)
+		}
+	}
+	e.issuerServer = httptest.NewServer(issuerMux)
+	closers = append(closers, e.issuerServer.Close)
 
 	rootID := uuid.New()
 	if _, err := admin0.Exec(ctx, `INSERT INTO public.users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)

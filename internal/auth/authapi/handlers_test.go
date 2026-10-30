@@ -393,6 +393,31 @@ func TestRefreshMintsAGoAPIAccessTokenWithSidAndAnswersRefreshResponseV1(t *test
 	}
 }
 
+// A session whose organization has no membership row for its principal (the
+// member was removed or left) is refused and revoked; a superuser keeps it.
+func TestRefreshOfASessionWithoutAMembershipRefusesAndRevokes(t *testing.T) {
+	f := newFixture(t)
+	state := f.users.users[f.principal]
+	state.IsSuperuser = false
+	f.users.users[f.principal] = state
+	f.users.roles = map[[2]uuid.UUID]*string{}
+	f.build()
+	f.sessions.result = session.Result{Reason: session.ReasonGraceReplay, Issued: session.Issued{
+		Session: f.record, Credential: contracts.NewSecretString(credential()), ExpiresAt: time.Now().Add(time.Hour)}}
+	response := f.do(http.MethodPost, PatternRefresh, refreshBody(credential()), nil)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("answer %d %.200s, want 401", response.Code, response.Body)
+	}
+	var body map[string]any
+	_ = json.Unmarshal(response.Body.Bytes(), &body)
+	if body["reason_code"] != "not_entitled" {
+		t.Fatalf("reason_code %v, want not_entitled", body["reason_code"])
+	}
+	if len(f.sessions.revoked) != 1 || f.sessions.revoked[0] != f.record.ID {
+		t.Fatalf("revoked %v, want the session", f.sessions.revoked)
+	}
+}
+
 func TestRefreshTakesGoAPIsRoleRules(t *testing.T) {
 	cases := map[string]struct {
 		org  bool
@@ -400,10 +425,10 @@ func TestRefreshTakesGoAPIsRoleRules(t *testing.T) {
 		has  bool
 		want string
 	}{
-		"no organization": {org: false, want: "member"},
-		"no membership":   {org: true, has: false, want: "member"},
-		"NULL role":       {org: true, has: true, role: nil, want: "None"},
-		"membership role": {org: true, has: true, role: ptr("owner"), want: "owner"},
+		"no organization":          {org: false, want: "member"},
+		"no membership, superuser": {org: true, has: false, want: "member"},
+		"NULL role":                {org: true, has: true, role: nil, want: "None"},
+		"membership role":          {org: true, has: true, role: ptr("owner"), want: "owner"},
 	}
 	for name, c := range cases {
 		f := newFixture(t)

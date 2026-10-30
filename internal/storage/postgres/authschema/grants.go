@@ -272,6 +272,11 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 		return err
 	}
 	publicStatements = append(publicStatements, inviteWrite...)
+	auditWrite, err := publicAuditWriteStatements(ctx, conn, options, logger)
+	if err != nil {
+		return err
+	}
+	publicStatements = append(publicStatements, auditWrite...)
 
 	tx, err := conn.Begin(ctx)
 	if err != nil {
@@ -289,6 +294,12 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 	beforePublic, err := snapshotDirectGrants(ctx, tx, publicSchema, options.RuntimeRole)
 	if err != nil {
 		return err
+	}
+	beforeReaders := make(map[string][]GrantRecord, len(options.SessionReaderRoles))
+	for _, reader := range options.SessionReaderRoles {
+		if beforeReaders[reader], err = snapshotDirectGrants(ctx, tx, options.Schema, reader); err != nil {
+			return err
+		}
 	}
 	statements = append(statements, publicStatements...)
 
@@ -319,6 +330,15 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 		g.Object = publicSchema + "." + g.Object
 		lost = append(lost, g)
 	}
+	// A session reader's lost platform role read counts too (the platform
+	// roles switch turned off), named by the reader.
+	for _, reader := range options.SessionReaderRoles {
+		afterReader, err := snapshotDirectGrants(ctx, tx, options.Schema, reader)
+		if err != nil {
+			return err
+		}
+		lost = append(lost, readerNarrowing(reader, beforeReaders[reader], afterReader)...)
+	}
 	sort.Slice(lost, func(i, j int) bool { return lost[i].less(lost[j]) })
 	if len(lost) > 0 {
 		digest := narrowingDigest(lost)
@@ -336,6 +356,11 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 			if err != nil {
 				return err
 			}
+			readers, err := retainReaderPlatformGrants(ctx, tx, lost, schemaID)
+			if err != nil {
+				return err
+			}
+			kept = append(kept, readers...)
 			logger.WarnContext(
 				ctx, "runtime grants narrowing deferred with operator acknowledgement",
 				"schema", options.Schema, "runtime_role", options.RuntimeRole,

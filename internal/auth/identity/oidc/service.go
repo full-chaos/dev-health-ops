@@ -3,6 +3,7 @@ package oidc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/auth/emaildomain"
 	"log/slog"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 // ProviderKind is the go-api users.auth_provider value of an OIDC account.
@@ -154,9 +156,12 @@ type Config struct {
 	// DefaultOAuthEndpoints. A self-hosted GitLab row's base_url overrides
 	// the GitLab base.
 	OAuthEndpoints *OAuthEndpoints
-	Now            func() time.Time
-	Logger         *slog.Logger
-	Meter          metric.Meter
+	// DenialAudit writes go-api's audit_logs row of an OAuth domain refusal
+	// (stage domain_check) before the refusal answers; nil writes none.
+	DenialAudit DenialAudit
+	Now         func() time.Time
+	Logger      *slog.Logger
+	Meter       metric.Meter
 }
 
 // Service runs the OIDC flow.
@@ -536,12 +541,23 @@ func (s *Service) exchangeAndValidate(ctx context.Context, row Provider, state f
 	}, nil
 }
 
-// resolve turns a validated identity into a session. The key decides; on a
-// hit the e-mail is not read. On a miss the e-mail must be verified, allowed
-// by the provider, and held by no account; then a new account is created
-// only if the provider and the identity store both allow it.
+// resolve turns a validated identity into a session. Before the key is
+// looked up, the asserted e-mail must be usable, present and allowed by the
+// provider's domain list, linked or not (go-api oidc.go). The key decides the
+// account. On a miss the e-mail must also be verified and held by no account;
+// then a new account is created only if the provider and the identity store
+// both allow it.
 func (s *Service) resolve(ctx context.Context, row Provider, v validated, requestID *string) (Login, *Error) {
 	if failure := refuseUnusableEmail(v.profile.Email); failure != nil {
+		return Login{}, failure
+	}
+	if failure := checkProviderEmail(row, v.profile.Email); failure != nil {
+		if failure.Reason == ReasonDomainNotAllowed && strings.HasPrefix(row.Protocol, "oauth_") {
+			if f := s.auditDenial(ctx, row, "domain_check",
+				fmt.Sprintf("Email domain '%s' is not allowed for this provider", emailDomain(v.profile.Email))); f != nil {
+				return Login{}, f
+			}
+		}
 		return Login{}, failure
 	}
 	principal, err := s.cfg.Identities.IdentityBySubject(ctx, v.key, LegacyMatch{AuthProvider: v.legacyAuthProvider, MembershipOrg: row.OrgID})
@@ -640,14 +656,8 @@ func (s *Service) newAccount(ctx context.Context, row Provider, v validated, req
 
 func (s *Service) checkNewAccount(ctx context.Context, row Provider, v validated) *Error {
 	p := v.profile
-	if p.Email == "" {
-		return deny(http.StatusBadRequest, ReasonMalformed, "Email address is missing from OIDC claims")
-	}
 	if !p.EmailVerified {
 		return deny(http.StatusForbidden, ReasonEmailUnverified, "No verified email address is available from this OIDC provider")
-	}
-	if len(row.AllowedDomains) > 0 && !emaildomain.Allowed(row.AllowedDomains, emailDomain(p.Email)) {
-		return deny(http.StatusForbidden, ReasonDomainNotAllowed, "Email domain is not allowed for this provider")
 	}
 	inUse, err := s.cfg.Identities.EmailInUse(ctx, p.Email)
 	if errors.Is(err, ErrInvalidEmail) {
@@ -661,6 +671,44 @@ func (s *Service) checkNewAccount(ctx context.Context, row Provider, v validated
 	}
 	if !row.AutoProvision {
 		return deny(http.StatusForbidden, ReasonProvisioningDisabled, "User not found and auto-provisioning is disabled")
+	}
+	return nil
+}
+
+// checkProviderEmail is go-api's e-mail block of the OIDC callback (oidc.go), run on every sign-in before the
+// lookup: a missing address is 400; with a domain list, an address with no "@" is 400 and a domain off the list 403.
+// go-api's OAuth callback (oauth.go) has no malformed branch: there an address with no "@" is the domain 403, and
+// the domain 403 carries its OAuth detail object (oauthDomainDeniedDetail).
+func checkProviderEmail(row Provider, email string) *Error {
+	if email == "" {
+		return deny(http.StatusBadRequest, ReasonMalformed, "Email address is missing from OIDC claims")
+	}
+	if len(row.AllowedDomains) == 0 {
+		return nil
+	}
+	oauth := strings.HasPrefix(row.Protocol, "oauth_")
+	if !strings.Contains(email, "@") && !oauth {
+		return deny(http.StatusBadRequest, ReasonMalformed, "Email address from OIDC claims is malformed")
+	}
+	if emaildomain.Allowed(row.AllowedDomains, emailDomain(email)) {
+		return nil
+	}
+	if oauth {
+		return deny(http.StatusForbidden, ReasonDomainNotAllowed,
+			map[string]string{"message": "Email domain is not allowed for this provider", "reason": "oauth_domain_not_allowed"})
+	}
+	return deny(http.StatusForbidden, ReasonDomainNotAllowed, "Email domain is not allowed for this provider")
+}
+
+// auditDenial writes go-api's OAuth denial row (recordSSOAuthenticatedDenial: protocol oauth, the stage, the
+// sanitized message) before the refusal answers; a write error is the 500 go-api answers.
+func (s *Service) auditDenial(ctx context.Context, row Provider, stage, message string) *Error {
+	if s.cfg.DenialAudit == nil {
+		return nil
+	}
+	if err := s.cfg.DenialAudit.Denied(ctx, DenialRow{OrgID: row.OrgID, ProviderID: row.ID, Protocol: "oauth", Stage: stage,
+		ErrorMessage: pythonparity.SanitizeErrorTextHardened(message, 4000)}); err != nil {
+		return internal(ReasonStoreUnavailable, err)
 	}
 	return nil
 }

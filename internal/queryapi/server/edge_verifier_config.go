@@ -124,7 +124,11 @@ func newEdgeUserStore(getenv getenvFunc, registryPool *pgxpool.Pool) (edgeUserSt
 	if err != nil {
 		return nil, fmt.Errorf("build edge users store: %w", err)
 	}
-	return newQueryAPIUserStore(policy.PGStore{Pool: registryPool, AuthSchema: authSchema}), nil
+	platformRolesOwned, err := queryAPIPlatformRolesOwned(getenv)
+	if err != nil {
+		return nil, fmt.Errorf("build edge users store: %w", err)
+	}
+	return newQueryAPIUserStore(policy.PGStore{Pool: registryPool, AuthSchema: authSchema, PlatformRolesOwned: platformRolesOwned}), nil
 }
 
 // edgeJWTConfigFromEnv resolves the shared GO_API_EDGE_JWT_* trio, applying
@@ -196,7 +200,11 @@ func buildQueryEdgeAuthenticatorFromEnv(getenv getenvFunc, pool *pgxpool.Pool) (
 	if err != nil {
 		return nil, nil, fmt.Errorf("build query edge authenticator: %w", err)
 	}
-	store := newQueryAPIUserStore(policy.PGStore{Pool: pool, AuthSchema: authSchema})
+	platformRolesOwned, err := queryAPIPlatformRolesOwned(getenv)
+	if err != nil {
+		return nil, nil, fmt.Errorf("build query edge authenticator: %w", err)
+	}
+	store := newQueryAPIUserStore(policy.PGStore{Pool: pool, AuthSchema: authSchema, PlatformRolesOwned: platformRolesOwned})
 	auth, err := policy.NewAuthenticator(verifier, store, nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("build query edge authenticator: %w", err)

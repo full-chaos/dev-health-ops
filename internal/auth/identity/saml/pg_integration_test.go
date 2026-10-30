@@ -732,21 +732,16 @@ func TestSAMLNameIDInTwoOrganizationsIsRefusedWithoutWrites(t *testing.T) {
 	}
 }
 
-// TestSAMLLinkedIdentitySignsInWithoutReadingTheEmail: on a key hit the stored
-// account signs in; the assertion's email is neither required nor compared.
-func TestSAMLLinkedIdentitySignsInWithoutReadingTheEmail(t *testing.T) {
+// TestSAMLLinkedIdentityAnswersWithTheStoredAccount: on a key hit the stored
+// account signs in whatever address the assertion carries (no list); a miss
+// still needs an email. The list and a missing email on a hit are
+// TestSAMLLinkedIdentityIsRefusedOnceItsDomainLeavesTheList.
+func TestSAMLLinkedIdentityAnswersWithTheStoredAccount(t *testing.T) {
 	h := newHarness(t, true)
 	user := h.linkedUser(uniqueEmail("u"), "user-1")
-	if _, err := h.db.admin.Exec(context.Background(), `UPDATE public.sso_providers SET allowed_domains = '["corp.example.com"]'::json WHERE id = $1`, h.provider.ID); err != nil {
-		t.Fatal(err)
-	}
-	for name, email := range map[string]string{"no email": "", "a domain outside the allowed list": "a@other.example.com"} {
-		t.Run(name, func(t *testing.T) {
-			signIn, err := h.consume(h.respond(resp{nameID: nid("user-1"), email: email}), nil)
-			if err != nil || signIn.PrincipalID != user {
-				t.Fatalf("sign-in %+v err %v, want the linked account", signIn, err)
-			}
-		})
+	signIn, err := h.consume(h.respond(resp{nameID: nid("user-1"), email: "a@other.example.com"}), nil)
+	if err != nil || signIn.PrincipalID != user {
+		t.Fatalf("sign-in %+v err %v, want the linked account", signIn, err)
 	}
 	t.Run("a miss still needs an email", func(t *testing.T) {
 		_, err := h.consume(h.respond(resp{nameID: nid("unlinked-" + uuid.NewString())}), nil)
@@ -926,7 +921,7 @@ func (failingSeam) ProvisionOnSignIn(context.Context, saml.NewAccount, saml.Prov
 
 // TestSAMLAllowedDomainsAreEnforcedOnAMiss: without a linked identity the
 // asserted email must be in an allowed domain; a key hit is covered by
-// TestSAMLLinkedIdentitySignsInWithoutReadingTheEmail.
+// TestSAMLLinkedIdentityIsRefusedOnceItsDomainLeavesTheList.
 func TestSAMLAllowedDomainsAreEnforcedOnAMiss(t *testing.T) {
 	h := newHarness(t, true)
 	h.withoutJoins()

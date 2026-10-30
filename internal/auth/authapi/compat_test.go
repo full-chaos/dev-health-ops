@@ -868,6 +868,7 @@ func TestCompatSocialRefusalsAreAuditedLikeEveryOtherSignInRefusal(t *testing.T)
 		reason   string
 	}{
 		{"provider refused", fmt.Errorf("fetch: %w", social.ErrProviderRefused), "github", 401, "social: github refused token", "invalid_credentials"},
+		{"provider invalid user id", fmt.Errorf("fetch: %w", social.ErrInvalidProviderID), "github", 400, "", "malformed"},
 		{"email of another provider", &social.ConflictError{ExistingMethod: "github"}, "gitlab", 409, "", "email_collision"},
 		{"email unverified", social.ErrEmailUnverified, "github", 403, "", "email_unverified"},
 		{"principal disabled", social.ErrPrincipalDisabled, "github", 403, "", "principal_deactivated"},
@@ -889,6 +890,11 @@ func TestCompatSocialRefusalsAreAuditedLikeEveryOtherSignInRefusal(t *testing.T)
 			if c.name == "email of another provider" {
 				if want := `{"detail":{"message":"` + social.AccountExistsMessage + `"}}`; strings.TrimSpace(response.Body.String()) != want {
 					t.Fatalf("body %s, want %s", response.Body, want)
+				}
+			}
+			if c.name == "provider invalid user id" {
+				if want := `{"detail":{"message":"The provider returned an invalid user id"}}`; response.Body.String() != want {
+					t.Fatalf("body %q, want exactly %q", response.Body.String(), want)
 				}
 			}
 			if len(f.sessions.created) != 0 {

@@ -160,14 +160,65 @@ func TestFillAuditReusesTheProjectedEventAndNamesTheFields(t *testing.T) {
 	}
 }
 
-// A fill whose audited UPDATE changed no row (a concurrent change took the value first) is not counted as a fill.
-func TestClearUnchangedFill(t *testing.T) {
+// The report takes the flags of what the transaction decided, not of the first read: the unresolved count included.
+func TestApplyFillTakesTheFlagsOfWhatTheTransactionChanged(t *testing.T) {
 	in := MembershipBackfillResult{RoleUpdated: true, InviterSet: true, JoinedSet: true, InviterUnresolved: true}
-	if got := clearUnchangedFill(in, true); got != in {
-		t.Fatalf("a changed fill: got %+v, want %+v", got, in)
+	cases := []struct {
+		name    string
+		in      MembershipBackfillResult
+		changed fillDecision
+		want    MembershipBackfillResult
+	}{
+		{"both changed, the inviter now resolved", in, fillDecision{Inviter: true, Joined: true}, MembershipBackfillResult{RoleUpdated: true, InviterSet: true, JoinedSet: true}},
+		{"only the join changed, the inviter still unresolved", in, fillDecision{Joined: true, Unresolved: true}, MembershipBackfillResult{RoleUpdated: true, JoinedSet: true, InviterUnresolved: true}},
+		{"nothing changed", in, fillDecision{}, MembershipBackfillResult{RoleUpdated: true}},
+		{"resolved at the first read, unresolved under the lock", MembershipBackfillResult{InviterSet: true, JoinedSet: true}, fillDecision{Joined: true, Unresolved: true}, MembershipBackfillResult{JoinedSet: true, InviterUnresolved: true}},
 	}
-	want := MembershipBackfillResult{RoleUpdated: true, InviterUnresolved: true}
-	if got := clearUnchangedFill(in, false); got != want {
-		t.Fatalf("an unchanged fill: got %+v, want %+v", got, want)
+	for _, c := range cases {
+		if got := applyFill(c.in, c.changed); got != c.want {
+			t.Fatalf("%s: got %+v, want %+v", c.name, got, c.want)
+		}
+	}
+}
+
+// The inviter is resolved only by the locked read of its principal row, and only as a user principal.
+func TestLockedInviterResolved(t *testing.T) {
+	cases := []struct {
+		found bool
+		kind  string
+		want  bool
+	}{{true, "user", true}, {true, "service_account", false}, {true, "", false}, {false, "user", false}}
+	for _, c := range cases {
+		if got := lockedInviterResolved(c.found, c.kind); got != c.want {
+			t.Fatalf("found=%v kind=%q: got %v, want %v", c.found, c.kind, got, c.want)
+		}
+	}
+}
+
+// The step-1 lock set: the member and the inviter once each, ascending by id (the auth lock order).
+func TestFillLockIDsAreUniqueAndAscending(t *testing.T) {
+	lo := uuid.MustParse("00000000-0000-0000-0000-000000000001")
+	hi := uuid.MustParse("00000000-0000-0000-0000-000000000002")
+	cases := []struct {
+		name    string
+		inviter *uuid.UUID
+		member  uuid.UUID
+		want    []uuid.UUID
+	}{
+		{"inviter below the member", &lo, hi, []uuid.UUID{lo, hi}},
+		{"inviter above the member", &hi, lo, []uuid.UUID{lo, hi}},
+		{"no inviter", nil, hi, []uuid.UUID{hi}},
+		{"the inviter is the member", &lo, lo, []uuid.UUID{lo}},
+	}
+	for _, c := range cases {
+		got := fillLockIDs(c.inviter, c.member)
+		if len(got) != len(c.want) {
+			t.Fatalf("%s: got %v, want %v", c.name, got, c.want)
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Fatalf("%s: got %v, want %v", c.name, got, c.want)
+			}
+		}
 	}
 }

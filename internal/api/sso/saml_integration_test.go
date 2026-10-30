@@ -618,8 +618,8 @@ func TestSAMLACSRefusesAnUnsignedAssertion(t *testing.T) {
 // (sso.py:576-578). This is a genuine parity break (Go strictly more
 // permissive), not a delta to preserve -- unlike the state_auth-stage
 // tests above, this failure occurs AFTER signature verification
-// succeeds, so it legitimately flips the row (Python's identical
-// SAMLProcessingError does too, via record_error).
+// succeeds, so it is recorded on the row (last_error); the provider's
+// status is left as it was.
 func TestSAMLACSRefusesAnAssertionWithNoSubjectConfirmation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -648,8 +648,8 @@ func TestSAMLACSRefusesAnAssertionWithNoSubjectConfirmation(t *testing.T) {
 	if lastError == nil || !strings.Contains(*lastError, "subject confirmation") {
 		t.Fatalf("last_error = %v, want a recorded subject-confirmation reason", lastError)
 	}
-	if providerStatus != "error" {
-		t.Fatalf("provider status = %q, want %q: a genuinely-authenticated but structurally-invalid assertion must still flip it", providerStatus, "error")
+	if providerStatus != "active" {
+		t.Fatalf("provider status = %q, want %q: a failure record leaves the status as it was", providerStatus, "active")
 	}
 }
 

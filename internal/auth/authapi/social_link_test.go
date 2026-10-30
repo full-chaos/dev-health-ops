@@ -298,7 +298,7 @@ func TestLinkInvalidProviderIDAnswersTheDeclaredTransportError(t *testing.T) {
 	for _, route := range routes {
 		mux.Handle(route.Method+" "+route.Pattern, requestid.Middleware(route.Handler))
 	}
-	f.server = httpapi.RequestID(mux)
+	f.server = mux
 	response := f.do(http.MethodPost, PatternSocialLink, linkBody, f.bearer(f.grant()))
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("status %d %s, want 400", response.Code, response.Body)

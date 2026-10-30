@@ -50,9 +50,6 @@ type Handlers struct {
 	// is called. It answers a refusal itself and returns false to stop. A
 	// request that fails validation never reaches it, so it costs nothing.
 	Admit func(w http.ResponseWriter, r *http.Request) bool
-	// InvalidProviderID, when set, answers a link whose provider profile has no usable user id in place of
-	// go-api's detail body, for a route whose contract declares another 400 shape. Exchange never uses it.
-	InvalidProviderID func(w http.ResponseWriter, r *http.Request)
 }
 
 type tokenRequest struct {
@@ -114,10 +111,6 @@ func (h Handlers) Link(w http.ResponseWriter, r *http.Request) {
 	who.RequestID = requestid.Audit(r.Context())
 	linked, err := h.Service.Link(r.Context(), who, provider, token)
 	if err != nil {
-		if errors.Is(err, ErrInvalidProviderID) && h.InvalidProviderID != nil {
-			h.InvalidProviderID(w, r)
-			return
-		}
 		writeError(w, provider, err)
 		return
 	}

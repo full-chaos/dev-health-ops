@@ -99,8 +99,7 @@ func (h socialLinkHandlers) serve(w http.ResponseWriter, r *http.Request, operat
 	admitted := func(w http.ResponseWriter, r *http.Request) bool {
 		return admit(w, r, v1Refusal, socialLinkRoute, charge{h.limiter, h.limits.principalKey(r, bearer.PrincipalID.String())})
 	}
-	run(social.Handlers{Service: h.social, Auth: signedInBearer{who: who}, Admit: admitted,
-		InvalidProviderID: func(w http.ResponseWriter, r *http.Request) { httpapi.WriteError(w, r, httpapi.CodeInvalidRequest) }})
+	run(social.Handlers{Service: h.social, Auth: signedInBearer{who: who}, Admit: admitted})
 }
 
 func (h socialLinkHandlers) link(w http.ResponseWriter, r *http.Request) {

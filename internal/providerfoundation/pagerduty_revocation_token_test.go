@@ -1,8 +1,11 @@
-package admin
+package providerfoundation
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
-// pagerDutyRevokeToken must reject what OAuthTokens.model_validate_json
+// PagerDutyStoredRevokeToken must reject what OAuthTokens.model_validate_json
 // rejects (Python then skips the revocation) and pick refresh_token or
 // access_token otherwise.
 func TestPagerDutyRevokeTokenValidatesTheOAuthTokensModel(t *testing.T) {
@@ -31,9 +34,38 @@ func TestPagerDutyRevokeTokenValidatesTheOAuthTokensModel(t *testing.T) {
 		{"not json", `nope`, "", true},
 	}
 	for _, tc := range cases {
-		got, err := pagerDutyRevokeToken([]byte(tc.payload))
+		got, err := PagerDutyStoredRevokeToken([]byte(tc.payload))
 		if (err != nil) != tc.wantErr || got != tc.want {
 			t.Errorf("%s: got %q, err %v; want %q, error %v", tc.name, got, err, tc.want, tc.wantErr)
 		}
+	}
+}
+
+// A revocation row is decoded by its key version: v1 is the token itself; oauth-v1 is a stored credential's
+// OAuthTokens JSON (refresh_token, else access_token); any other version is refused and nothing is sent.
+func TestPagerDutyRevocationTokenDecodesByKeyVersion(t *testing.T) {
+	stored := `{"access_token":"acc-1","refresh_token":"ref-1","expires_at":"2026-01-01T00:00:00Z"}`
+	accessOnly := `{"access_token":"acc-2","expires_at":"2026-01-01T00:00:00Z"}`
+	for _, tc := range []struct {
+		version, plaintext, want string
+		err                      error
+	}{
+		{RevocationKeyToken, "raw-token", "raw-token", nil},
+		{RevocationKeyToken, stored, stored, nil},
+		{RevocationKeyOAuth, stored, "ref-1", nil},
+		{RevocationKeyOAuth, accessOnly, "acc-2", nil},
+		{"v2", "raw-token", "", ErrRevocationKeyVersion},
+		{"", "raw-token", "", ErrRevocationKeyVersion},
+	} {
+		got, err := PagerDutyRevocationToken(tc.version, []byte(tc.plaintext))
+		if got != tc.want || (tc.err != nil && !errors.Is(err, tc.err)) || (tc.err == nil && err != nil) {
+			t.Errorf("version %q: got %q, %v; want %q, %v", tc.version, got, err, tc.want, tc.err)
+		}
+	}
+	if got, err := PagerDutyRevocationToken(RevocationKeyOAuth, []byte("raw-token")); err == nil || got != "" {
+		t.Errorf("oauth-v1 over a raw token: got %q, %v; want a refusal", got, err)
+	}
+	if RevocationKeyToken != "v1" || RevocationKeyOAuth != "oauth-v1" {
+		t.Error("the key version strings are stored in rows: they never change")
 	}
 }

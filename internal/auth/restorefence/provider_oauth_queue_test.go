@@ -36,3 +36,20 @@ func TestQueuedCredentialsAreNamedApartFromTheManualRevoke(t *testing.T) {
 		t.Errorf("the manual revoke must leave out the queued credentials: %s", ids)
 	}
 }
+
+// The preflight asks INSERT on the revocation table whenever the credential section can delete, with or without a
+// revocation source: the queue write is part of the delete statement.
+func TestTheCredentialSectionNeedsInsertOnTheRevocationTable(t *testing.T) {
+	for _, requeue := range []bool{false, true} {
+		got := mustSection(t, oauthSection).privileges(testSchema(t), requeue)
+		want := []tablePrivilege{{oauthSection, "public.provider_oauth_credentials", "DELETE"}, {"public.provider_oauth_revocations", "public.provider_oauth_revocations", "INSERT"}}
+		if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+			t.Errorf("requeue %v: privileges %v, want %v", requeue, got, want)
+		}
+	}
+	for _, s := range sections {
+		if s.queues != (s.name == oauthSection) {
+			t.Errorf("section %s queues = %v", s.name, s.queues)
+		}
+	}
+}

@@ -240,6 +240,15 @@ Order (nothing serves traffic until the last step):
    carries the shadow copy's live login lockouts (auth and legacy `login_attempts`; a lock holds 15 minutes), raising
    only: a restored lock is never shortened. Without it no lockout moves; a lock set after the target has usually
    expired by the time a restore finishes anyway.
+   **Gate: no `-apply` run until go-api and the sync worker run a build that decodes revocation rows by
+   `token_key_version`** (the build of ticket 12035 or later; roll go-api and the sync worker first, then auth-migrate).
+   The apply queues the stored token of some deleted provider credentials with key version `oauth-v1` (the sealed
+   OAuthTokens JSON, not the token). An older sender sends that JSON as the token: PagerDuty can answer 200 to the
+   revoke of an invalid token (RFC 7009 allows it; not verified against PagerDuty), the sender then deletes the row,
+   and the old token stays live with no row left to say so. The same holds after a rollback of go-api or the sync
+   worker while `oauth-v1` rows are pending: check first, read-only,
+   `SELECT count(*) FROM public.provider_oauth_revocations WHERE token_key_version = 'oauth-v1';` and roll back only at 0.
+   Nothing in the code enforces this gate.
 6. Act on the `operator-action` lines the apply prints (ids only): users whose password may have changed after the
    target (their older password is live again: force a reset, ticket 11834); `provider_revocation_requeued`: with the
    PagerDuty client id configured on the API, disconnect or reconnect the credential of each named revocation once
@@ -249,11 +258,17 @@ Order (nothing serves traffic until the last step):
    `provider_revocation_requeued_blocked`:
    the credential was connected after the target, so the restored copy has no credential row; a disconnect of the name
    still sends them (ticket 12011), and the revocation worker sends them (the ticket the line
-   names); `requeue_provider_revocation`: tokens the apply could only name: revocations of an apply with no source set
-   (revoke those tokens at the provider by hand), and provider credentials it deleted (`source=public.provider_oauth_credentials`):
-   their restored token was rotated, reconnected or disconnected after the target, the delete writes no revocation row,
-   and a token rotated by a refresh has none anywhere, so nothing sends its revoke: revoke the old token at the provider
-   by hand, then reconnect the credential (ticket 12035 tracks revocation rows for the tokens the fence can know). The
+   names); `provider_revocation_queued_from_credential`: bound PagerDuty credentials the apply deleted because the
+   source no longer holds them (a disconnect after the target) or holds them under another binding (a reconnect after
+   the target); the same statement queued the stored token of each as a pending revocation row (`disconnect` or
+   `replacement`, key version `oauth-v1`, attempts 0), which the revocation worker sends at its next run: nothing to do.
+   A row may revoke a token that a row put back from the source also revokes; a revoke is sent at least once, and a
+   second revoke of the same token is harmless. `requeue_provider_revocation`: tokens the apply could only name:
+   revocations of an apply with no source set (revoke those tokens at the provider by hand), and provider credentials
+   it deleted without a queued row (`source=public.provider_oauth_credentials`): the same binding at another version
+   (a refresh after the target: the stored token may be the one PagerDuty already rotated), no binding on either side,
+   or another provider. Nothing sends their revoke: revoke the old token at the provider by hand, then reconnect the
+   credential. A manual PagerDuty credential (an API key) lives in `integration_credentials` and is never queued. The
    exact list is the ids of that line, one per credential as `<org>/<provider>/<credential name>` (each part
    percent-encodes `%`, `/`, `,` and line breaks; no token value), also stored for the live timeline and printed by
    `auth-migrate restore-fence status`, or read-only:

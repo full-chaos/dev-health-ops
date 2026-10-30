@@ -146,7 +146,7 @@ func (revoker *fakeRevoker) revoke(_ context.Context, token string) error {
 }
 
 func dueRow(ciphertext string, attempts int) *fakeRow {
-	return &fakeRow{row: Row{ID: uuid.New(), Ciphertext: ciphertext}, attempts: attempts}
+	return &fakeRow{row: Row{ID: uuid.New(), Ciphertext: ciphertext, KeyVersion: providerfoundation.RevocationKeyToken}, attempts: attempts}
 }
 
 func execution(scheduledFor string) *jobruntime.Execution[jobruntime.ProviderOAuthRevocationsArgs] {
@@ -585,5 +585,68 @@ func TestARefusedRepeatRevokeEndsVisiblyAsAnExhaustedRow(t *testing.T) {
 func TestClaimSQLReadsTheTokenKeyVersion(t *testing.T) {
 	if !strings.HasPrefix(claimSQL, "SELECT id, token_encrypted, token_key_version FROM provider_oauth_revocations") {
 		t.Fatalf("claim SQL does not read token_key_version:\n%s", claimSQL)
+	}
+}
+
+func storedRow(json string, attempts int) *fakeRow {
+	row := dueRow("sealed:"+json, attempts)
+	row.row.KeyVersion = providerfoundation.RevocationKeyOAuth
+	return row
+}
+
+// A row the restore fence queued from a stored credential (oauth-v1) holds the OAuthTokens JSON: the worker revokes its
+// refresh_token, else its access_token, never the JSON itself.
+func TestWorkDecodesARowQueuedFromAStoredCredential(t *testing.T) {
+	both := storedRow(`{"access_token":"acc-1","refresh_token":"ref-1","expires_at":"2026-01-01T00:00:00Z"}`, 0)
+	access := storedRow(`{"access_token":"acc-2","expires_at":"2026-01-01T00:00:00Z"}`, 0)
+	h := newHarness(t, &fakeStore{due: []*fakeRow{both, access}}, true)
+	if err := h.handler.Work(context.Background(), execution(due)); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(h.revoker.calls, []string{"ref-1", "acc-2"}) || !both.sent || !access.sent {
+		t.Fatalf("revoke calls %v sent %v %v", h.revoker.calls, both.sent, access.sent)
+	}
+}
+
+// A key version this build does not read, or an oauth-v1 value that is not the OAuthTokens model, is refused like an
+// undecryptable row: nothing is sent.
+func TestWorkRefusesAnUnknownKeyVersion(t *testing.T) {
+	unknown := dueRow("sealed:tok-unknown", 0)
+	unknown.row.KeyVersion = "v9"
+	notModel := storedRow("tok-raw", 0)
+	h := newHarness(t, &fakeStore{due: []*fakeRow{unknown, notModel}}, true)
+	if err := h.handler.Work(context.Background(), execution(due)); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.revoker.calls) != 0 {
+		t.Fatalf("revoke calls %v, want none", h.revoker.calls)
+	}
+	for _, row := range []*fakeRow{unknown, notModel} {
+		if row.sent || !reflect.DeepEqual(row.failures, []string{ReasonTokenDecryptFailed}) {
+			t.Fatalf("row sent=%v failures=%v", row.sent, row.failures)
+		}
+	}
+	if strings.Contains(h.logs.String(), "tok-unknown") || strings.Contains(h.logs.String(), "tok-raw") {
+		t.Fatalf("a token reached the log: %s", h.logs.String())
+	}
+}
+
+// A queued stored-credential row PagerDuty refuses every time (a 4xx included) gains one attempt per run and stops at
+// MaxAttempts, named once by the exhausted WARN line.
+func TestWorkEndsARefusedStoredCredentialRowExhausted(t *testing.T) {
+	row := storedRow(`{"access_token":"acc-3","refresh_token":"ref-400","expires_at":"2026-01-01T00:00:00Z"}`, 0)
+	store := &fakeStore{due: []*fakeRow{row}}
+	h := newHarness(t, store, true, "ref-400")
+	for run := 0; run < MaxAttempts; run++ {
+		store.next = 0
+		if err := h.handler.Work(context.Background(), execution(due)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if row.attempts != MaxAttempts || row.sent || len(h.revoker.calls) != MaxAttempts {
+		t.Fatalf("attempts=%d sent=%v calls=%d", row.attempts, row.sent, len(h.revoker.calls))
+	}
+	if n := strings.Count(h.logs.String(), `"msg":"provider_oauth_revocations.exhausted"`); n != 1 {
+		t.Fatalf("exhausted WARN lines %d, want 1: %s", n, h.logs.String())
 	}
 }

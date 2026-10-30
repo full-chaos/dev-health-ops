@@ -86,6 +86,9 @@ type section struct {
 	// action is the operator action a report section (and the counter section)
 	// raises for the ids it names.
 	action ActionKind
+	// queues marks the provider credential section: a deleted row oauthQueued holds has its stored token queued for the
+	// revocation worker in the delete statement (ActionProviderRevocationQueuedFromCredential); action names the rest.
+	queues bool
 }
 
 func (s section) runsWithoutManifest() bool { return !s.manifestOnly }
@@ -278,11 +281,12 @@ var sections = []section{
 		cols: []column{colText("org_id"), colText("provider"), colText("purpose")}, action: ActionRequeueProviderRevocation},
 	// A provider credential rotated (refresh, reconnect) or removed (disconnect) after T comes back with its OLD token,
 	// which may still be live at the provider. The restored row is deleted unless the source holds the same key with the
-	// same version and binding (every token or scope change bumps version), and named for the operator: revoke the old
+	// same version and binding (every token or scope change bumps version). A deleted row oauthQueued holds has its stored
+	// token queued for the revocation worker in the same statement; the rest are named for the operator: revoke the old
 	// token at the provider, reconnect. Only ids, the version and the binding id travel; never the token or the scopes.
 	{name: "public.provider_oauth_credentials", legacy: true, table: "provider_oauth_credentials", kind: kindPresence, key: colText("org_id"),
 		cols:         []column{colText("provider"), colText("credential_name"), {name: "version", pgType: "integer"}, colText("binding_id")},
-		manifestOnly: true, match: oauthHeld, idExpr: oauthIDExpr, action: ActionRequeueProviderRevocation, blindReview: "true"},
+		manifestOnly: true, match: oauthHeld, idExpr: oauthIDExpr, action: ActionRequeueProviderRevocation, blindReview: "true", queues: true},
 	// The legacy SAML replay table: an assertion id used after the target must stay used.
 	{name: "public.saml_assertion_replays", legacy: true, table: "saml_assertion_replays", kind: kindInsert, key: colUUID("provider_id"),
 		cols: []column{colText("assertion_id"), colTS("expires_at")}},
@@ -331,6 +335,22 @@ const allowlistKeepsASharedEntry = "EXISTS (SELECT 1 FROM public.org_ip_allowlis
 
 // oauthHeld matches a restored provider credential (t) to the source's (x): the same key, version and binding.
 const oauthHeld = "x.org_id = t.org_id AND x.provider = t.provider AND x.credential_name = t.credential_name AND x.version = t.version AND x.binding_id IS NOT DISTINCT FROM t.binding_id"
+
+// oauthQueued holds (manifest m) for a deleted provider credential (alias a) whose stored token the fence queues for
+// the revocation worker: a bound PagerDuty row the source no longer holds (a disconnect) or holds under another binding
+// (a replacement). The same binding at any other version (a refresh), or no binding on either side, is a manual revoke:
+// the stored token may be the one PagerDuty already rotated, and the binding cannot tell.
+func oauthQueued(a string) string {
+	sameKey := "y.org_id = " + a + ".org_id AND y.provider = " + a + ".provider AND y.credential_name = " + a + ".credential_name"
+	return "(" + a + ".provider = 'pagerduty' AND " + a + ".binding_id IS NOT NULL AND (NOT EXISTS (SELECT 1 FROM m y WHERE " + sameKey +
+		") OR EXISTS (SELECT 1 FROM m y WHERE " + sameKey + " AND y.binding_id IS NOT NULL AND y.binding_id <> " + a + ".binding_id)))"
+}
+
+// oauthQueuedPurpose is the purpose of a queued row (alias a): replacement when the source holds the key, else disconnect.
+func oauthQueuedPurpose(a string) string {
+	return "CASE WHEN EXISTS (SELECT 1 FROM m y WHERE y.org_id = " + a + ".org_id AND y.provider = " + a + ".provider AND y.credential_name = " +
+		a + ".credential_name) THEN 'replacement' ELSE 'disconnect' END"
+}
 
 // oauthIDExpr names a provider credential as org/provider/name, each part percent-encoded (%, /, comma, LF, CR): the three
 // text columns have no CHECK, and the operator action line joins ids with commas.
@@ -452,16 +472,39 @@ SELECT (SELECT count(*) FROM u), 0::bigint`, s.recordset(), tbl, s.key.name, s.k
 	case kindReport:
 		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s)
 SELECT 0::bigint, (SELECT count(*) FROM m x WHERE NOT EXISTS (SELECT 1 FROM %s t WHERE t.%s = x.%s))`, s.recordset(), tbl, s.key.name, s.key.name)
-	default: // kindPresence
-		guard := ""
-		if s.deleteGuard != "" {
-			guard = " AND " + s.deleteGuard
+	case kindPresence:
+		if !s.queues {
+			break
 		}
+		// The queued token is copied as stored (the OAuthTokens JSON, sealed): key version oauth-v1 tells the senders to decode
+		// it. Attempts 0 and no error: due at the first worker run.
 		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s),
+d AS (DELETE FROM %s t WHERE NOT EXISTS (SELECT 1 FROM m x WHERE %s) RETURNING t.org_id, t.provider, t.credential_name, t.binding_id, t.token_encrypted),
+q AS (INSERT INTO public.provider_oauth_revocations (id, org_id, provider, credential_name, purpose, token_encrypted, token_key_version, status, attempts, last_error, created_at, updated_at)
+  SELECT gen_random_uuid(), d.org_id, d.provider, d.credential_name, %s, d.token_encrypted, 'oauth-v1', 'pending', 0, NULL, clock_timestamp(), clock_timestamp()
+  FROM d WHERE %s RETURNING 1)
+SELECT (SELECT count(*) FROM d), (SELECT count(*) FROM q)`,
+			s.recordset(), tbl, s.matchSQL(), oauthQueuedPurpose("d"), oauthQueued("d"))
+	}
+	// kindPresence
+	guard := ""
+	if s.deleteGuard != "" {
+		guard = " AND " + s.deleteGuard
+	}
+	return fmt.Sprintf(`WITH m AS (SELECT * FROM %s),
 d AS (DELETE FROM %s t WHERE NOT EXISTS (SELECT 1 FROM m x WHERE %s)%s RETURNING 1)
 SELECT (SELECT count(*) FROM d), 0::bigint`,
-			s.recordset(), tbl, s.matchSQL(), guard)
+		s.recordset(), tbl, s.matchSQL(), guard)
+}
+
+// queuedIDsSQL names the deleted rows whose stored token the apply queues (rows as $1), or "" for a section that queues
+// none. It runs before the apply statement deletes them.
+func (s section) queuedIDsSQL(schema authschema.ValidatedIdentifier) string {
+	if !s.queues {
+		return ""
 	}
+	return fmt.Sprintf(`WITH m AS (SELECT * FROM %s)
+SELECT %s FROM %s t WHERE NOT EXISTS (SELECT 1 FROM m x WHERE %s) AND %s ORDER BY 1`, s.recordset(), s.idSQL(), s.qualified(schema), s.matchSQL(), oauthQueued("t"))
 }
 
 // matchSQL is the predicate (aliases x, t) that pairs a restored row with its manifest row.
@@ -481,8 +524,12 @@ func (s section) idsSQL(schema authschema.ValidatedIdentifier) string {
 		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s)
 SELECT t.%s::text FROM %s t JOIN m x ON x.%s = t.%s WHERE (%s) ORDER BY 1`, s.recordset(), s.key.name, tbl, s.key.name, s.key.name, s.sub(s.active, schema))
 	case s.kind == kindPresence && (s.action == ActionRequeueProviderRevocation || s.action == ActionIdentityUnlinked):
+		queued := ""
+		if s.queues {
+			queued = " AND NOT " + oauthQueued("t")
+		}
 		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s)
-SELECT %s FROM %s t WHERE NOT EXISTS (SELECT 1 FROM m x WHERE %s) ORDER BY 1`, s.recordset(), s.idSQL(), tbl, s.matchSQL())
+SELECT %s FROM %s t WHERE NOT EXISTS (SELECT 1 FROM m x WHERE %s)%s ORDER BY 1`, s.recordset(), s.idSQL(), tbl, s.matchSQL(), queued)
 	case s.action == ActionReviewScopeEmptied:
 		var emptied []string
 		for _, c := range s.cols {

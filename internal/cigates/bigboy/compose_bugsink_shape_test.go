@@ -188,6 +188,8 @@ func TestComposeBugsinkFileFindingsReadsTheFile(t *testing.T) {
 		{"new form", "", true},
 		{"new form plus a bare credential variable", "      SECRET_KEY: $BUGSINK_SECRET_KEY\n", false},
 		{"new form plus a credential variable in another service", "  web:\n    environment:\n    - X=${BUGSINK_DB_PASSWORD}\n", false},
+		{"new form plus a null credential key in another service", "  web:\n    environment:\n      BUGSINK_SECRET_KEY: null\n", false},
+		{"new form plus another service loading the bugsink env file", "  web:\n    env_file:\n    - path: " + composeBugsinkEnvFile + "\n", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			root := t.TempDir()

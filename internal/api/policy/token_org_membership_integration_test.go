@@ -86,6 +86,47 @@ func TestTokenOrgMembershipIsTheLivePublicRow(t *testing.T) {
 		t.Fatalf("re-added as owner: %d %q, want 200", got.status, got.body)
 	}
 
+	// An org claim naming no organizations row, or not a UUID, is answered as
+	// on main: the request goes on in the claimed org on every level (the
+	// role claim decides an admin level); only an existing org without the
+	// row is refused.
+	for _, claimed := range []string{uuid.NewString(), "not-a-uuid"} {
+		other := "Bearer " + sign(t, claims(func(c jwt.MapClaims) {
+			c["sub"], c["org_id"], c["role"], c["tv"] = user.String(), claimed, "admin", 0
+		}))
+		for _, level := range []Authz{Authenticated, Admin, AdminOrg} {
+			for _, header := range []string{"", claimed} {
+				headers := map[string]string{"Authorization": other}
+				if header != "" {
+					headers["X-Org-Id"] = header
+				}
+				if got := serve(chain(level), http.MethodGet, "/x", headers); got.status != 200 || !strings.HasPrefix(got.body, "org="+claimed+" ") {
+					t.Fatalf("org claim %q, level %v, X-Org-Id %q: %d %q, want main's 200 in the claimed org", claimed, level, header, got.status, got.body)
+				}
+			}
+		}
+	}
+
+	// The one read tells a member, an existing org without the row and an org
+	// that does not exist apart.
+	stranger, missing := uuid.New(), uuid.New()
+	pgseed.User(ctx, t, pool, stranger.String())
+	for _, read := range []struct {
+		name             string
+		user, org        uuid.UUID
+		role             string
+		member, orgFound bool
+	}{
+		{"member", user, org, "owner", true, true},
+		{"existing org, no row", stranger, org, "", false, true},
+		{"org missing", user, missing, "", false, false},
+	} {
+		role, member, orgFound, err := (PGStore{Pool: pool}).OrgMembership(ctx, read.user, read.org)
+		if err != nil || role != read.role || member != read.member || orgFound != read.orgFound {
+			t.Fatalf("%s: OrgMembership = %q %v %v %v, want %q %v %v", read.name, role, member, orgFound, err, read.role, read.member, read.orgFound)
+		}
+	}
+
 	// At a realistic shape (each user in 1 to 3 of 20 orgs, and one org of
 	// 50000 members) the read is an index read on user_id, bounded by the
 	// user's own memberships: no plan filters user_id out of an org-wide scan.
@@ -122,36 +163,38 @@ SELECT gen_random_uuid(), u.id, $1::uuid, 'member', now() FROM u`, big); err != 
 		name      string
 		user, org uuid.UUID
 	}{{"the token's member", user, org}, {"a member of the 50000-member org", bigMember, big}} {
-		rows, err := pool.Query(ctx, "EXPLAIN "+membershipSQL, read.user, read.org)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var plan []string
-		for rows.Next() {
-			var line string
-			if err := rows.Scan(&line); err != nil {
+		for _, query := range []string{membershipSQL, orgMembershipSQL} {
+			rows, err := pool.Query(ctx, "EXPLAIN "+query, read.user, read.org)
+			if err != nil {
 				t.Fatal(err)
 			}
-			plan = append(plan, line)
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			t.Fatal(err)
-		}
-		text := strings.Join(plan, "\n")
-		t.Logf("membership read plan, %s:\n%s", read.name, text)
-		userIndexed := false
-		for _, line := range plan {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "Index Cond:") && strings.Contains(line, "user_id") {
-				userIndexed = true
+			var plan []string
+			for rows.Next() {
+				var line string
+				if err := rows.Scan(&line); err != nil {
+					t.Fatal(err)
+				}
+				plan = append(plan, line)
 			}
-			if strings.HasPrefix(line, "Filter:") && strings.Contains(line, "user_id") {
-				t.Fatalf("%s: the membership read filters user_id out of a wider scan:\n%s", read.name, text)
+			rows.Close()
+			if err := rows.Err(); err != nil {
+				t.Fatal(err)
 			}
-		}
-		if !userIndexed {
-			t.Fatalf("%s: the membership read has no index condition on user_id:\n%s", read.name, text)
+			text := strings.Join(plan, "\n")
+			t.Logf("membership read plan, %s:\n%s", read.name, text)
+			userIndexed := false
+			for _, line := range plan {
+				line = strings.TrimSpace(line)
+				if strings.HasPrefix(line, "Index Cond:") && strings.Contains(line, "user_id") {
+					userIndexed = true
+				}
+				if strings.HasPrefix(line, "Filter:") && strings.Contains(line, "user_id") {
+					t.Fatalf("%s: the membership read filters user_id out of a wider scan:\n%s", read.name, text)
+				}
+			}
+			if !userIndexed {
+				t.Fatalf("%s: the membership read has no index condition on user_id:\n%s", read.name, text)
+			}
 		}
 	}
 }

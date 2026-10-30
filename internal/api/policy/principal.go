@@ -59,6 +59,10 @@ type Store interface {
 	// Membership reads the memberships row linking user and org: the role
 	// the user holds in that org, and whether the row exists at all.
 	Membership(ctx context.Context, userID, orgID uuid.UUID) (role string, member bool, err error)
+	// OrgMembership is Membership's row and whether the org exists, read in
+	// one statement: an existing org without the row is told apart from an
+	// org that does not exist.
+	OrgMembership(ctx context.Context, userID, orgID uuid.UUID) (role string, member, orgFound bool, err error)
 	// ActiveImpersonation returns the admin's unexpired, unended session, or
 	// nil.
 	ActiveImpersonation(ctx context.Context, adminID uuid.UUID) (*Impersonation, error)

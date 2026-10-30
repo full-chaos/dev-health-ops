@@ -303,16 +303,17 @@ func (s *Scope) ReadsPlatformRoles() bool { return s.auth != nil && s.auth.store
 // useTokenOrg decides whether user may act in the token's own org, with or
 // without an X-Org-Id naming it, on a route that acts in an org
 // (readsTokenOrg): a token keeps its org_id claim after the member is
-// removed, so a membership row is read now, through the same predicate as an
-// X-Org-Id (IsMember). It writes the refusal itself: no row is the X-Org-Id refusal,
-// byte for byte; a failed read answers 503 (temporarily unavailable) or 500,
-// never a pass and never the refusal of a member. Behind ReadOnce the
-// route's guard gets the same row's answer.
+// removed, so the membership row is read now (tokenOrgMembership). It writes
+// the refusal itself: an existing org without the row is the X-Org-Id
+// refusal, byte for byte; an org that does not exist or a claim that is not
+// a UUID goes on as on main; a failed read answers 503 (temporarily
+// unavailable) or 500, never a pass and never the refusal of a member. Behind
+// ReadOnce the route's guard gets the same read's answer.
 func (s *Scope) useTokenOrg(w http.ResponseWriter, r *http.Request, user *User) bool {
 	if user.IsSuperuser {
 		return true
 	}
-	member, err := s.auth.IsMember(r.Context(), user.UserID, user.OrgID)
+	_, standing, err := s.auth.tokenOrgMembership(r.Context(), user.UserID, user.OrgID)
 	if err != nil {
 		s.logger.ErrorContext(r.Context(), "api org scope: membership lookup failed",
 			slog.String("user_id", user.UserID), slog.Bool("unavailable", isUnavailable(err)),
@@ -320,13 +321,80 @@ func (s *Scope) useTokenOrg(w http.ResponseWriter, r *http.Request, user *User) 
 		WriteAuthFailure(w, "", err)
 		return false
 	}
-	if !member {
+	if standing == tokenOrgNoRow {
 		s.logger.WarnContext(r.Context(), "token org without a membership rejected",
 			slog.String("user_id", user.UserID), slog.String("org_id", user.OrgID))
 		writeOrgDenied(w)
 		return false
 	}
 	return true
+}
+
+// tokenOrgStanding is a caller's standing in its token's own org.
+type tokenOrgStanding int
+
+const (
+	// tokenOrgMember: the membership row exists.
+	tokenOrgMember tokenOrgStanding = iota
+	// tokenOrgNoRow: the org exists and the caller has no row in it.
+	tokenOrgNoRow
+	// tokenOrgAsMain: the org does not exist, or the claim is not a UUID: no
+	// refusal comes from the membership; the request goes on as on main.
+	tokenOrgAsMain
+)
+
+// tokenOrgMembership is the caller's standing in the token's own org, and the
+// row's role for a member, from one read (OrgMembership). Within a request
+// bound to a (ReadOnce) it shares Membership's record of the pair: a row or
+// a failure read first is the answer, and an earlier "no row" stays the
+// answer while this read adds whether the org exists.
+func (a *Authenticator) tokenOrgMembership(ctx context.Context, userID, orgID string) (string, tokenOrgStanding, error) {
+	org, okOrg := ParsePyUUID(orgID)
+	if !okOrg {
+		return "", tokenOrgAsMain, nil
+	}
+	user, okUser := ParsePyUUID(userID)
+	if !okUser {
+		return "", tokenOrgNoRow, nil
+	}
+	read, err := a.orgMembershipRead(ctx, user, org)
+	switch {
+	case err != nil:
+		return "", tokenOrgNoRow, err
+	case read.member:
+		return read.role, tokenOrgMember, nil
+	case read.orgFound:
+		return "", tokenOrgNoRow, nil
+	}
+	return "", tokenOrgAsMain, nil
+}
+
+func (a *Authenticator) orgMembershipRead(ctx context.Context, user, org uuid.UUID) (memberRead, error) {
+	reads := a.readsFor(ctx)
+	if reads == nil {
+		role, member, orgFound, err := a.store.OrgMembership(ctx, user, org)
+		return memberRead{role: role, member: member, orgRead: true, orgFound: orgFound}, err
+	}
+	reads.mu.Lock()
+	defer reads.mu.Unlock()
+	key := [2]uuid.UUID{user, org}
+	got, seen := reads.members[key]
+	if seen && (got.err != nil || got.member || got.orgRead) {
+		return got, got.err
+	}
+	role, member, orgFound, err := a.store.OrgMembership(ctx, user, org)
+	if err != nil {
+		if !seen {
+			reads.members[key] = memberRead{err: err}
+		}
+		return memberRead{}, err
+	}
+	if !seen {
+		got = memberRead{role: role, member: member}
+	}
+	got.orgRead, got.orgFound = true, orgFound
+	reads.members[key] = got
+	return got, nil
 }
 
 // readsTokenOrg reports whether the request's route acts in an org, so the

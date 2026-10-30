@@ -70,6 +70,14 @@ func (f *fakeStore) Membership(_ context.Context, user, org uuid.UUID) (string, 
 	return f.roles[key], f.members[key], nil
 }
 
+func (f *fakeStore) OrgMembership(ctx context.Context, user, org uuid.UUID) (string, bool, bool, error) {
+	role, member, err := f.Membership(ctx, user, org)
+	if err != nil {
+		return "", false, false, err
+	}
+	return role, member, !f.absentOrgs[org], nil
+}
+
 func (f *fakeStore) ActiveImpersonation(_ context.Context, admin uuid.UUID) (*Impersonation, error) {
 	f.sessionCalls++
 	if f.errSession != nil {

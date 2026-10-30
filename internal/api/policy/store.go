@@ -156,6 +156,26 @@ func (s PGStore) Membership(ctx context.Context, userID, orgID uuid.UUID) (strin
 	return *role, true, nil
 }
 
+// orgMembershipSQL is membershipSQL with the org's existence: one row
+// whatever is stored, the membership columns NULL when there is no row.
+const orgMembershipSQL = `SELECT EXISTS (SELECT 1 FROM organizations WHERE id = $2), m.user_id IS NOT NULL, m.role
+FROM (SELECT 1) AS one
+LEFT JOIN (SELECT user_id, role FROM memberships WHERE user_id = $1 AND org_id = $2 LIMIT 1) AS m ON true`
+
+// OrgMembership is Membership with whether the org exists. A NULL role
+// reads as "".
+func (s PGStore) OrgMembership(ctx context.Context, userID, orgID uuid.UUID) (string, bool, bool, error) {
+	var orgFound, member bool
+	var role *string
+	if err := s.Pool.QueryRow(ctx, orgMembershipSQL, userID, orgID).Scan(&orgFound, &member, &role); err != nil {
+		return "", false, false, storeError(err, "SELECT on memberships (user_id, org_id, role) and organizations (id)")
+	}
+	if role == nil {
+		return "", member, orgFound, nil
+	}
+	return *role, member, orgFound, nil
+}
+
 // ActiveImpersonation is impersonation_cache._load_from_db: the admin's
 // session that has not ended and expires in the future, joined to the
 // target's users row.

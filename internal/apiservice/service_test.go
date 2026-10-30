@@ -393,6 +393,11 @@ func (s scopeStore) UserState(_ context.Context, id uuid.UUID) (policy.UserState
 func (scopeStore) Membership(context.Context, uuid.UUID, uuid.UUID) (string, bool, error) {
 	return "", false, nil
 }
+
+func (s scopeStore) OrgMembership(ctx context.Context, user, org uuid.UUID) (string, bool, bool, error) {
+	role, member, err := s.Membership(ctx, user, org)
+	return role, member, true, err
+}
 func (s scopeStore) ActiveImpersonation(_ context.Context, admin uuid.UUID) (*policy.Impersonation, error) {
 	if admin != s.admin {
 		return nil, nil

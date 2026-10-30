@@ -169,10 +169,11 @@ func (g *Guard) currentUser(w http.ResponseWriter, r *http.Request, level Authz)
 		return user, true
 	}
 	// At an admin level the caller's role in the token's own org is the
-	// membership row's now, not the role claim; no row is the org scope's
-	// X-Org-Id refusal, and a failed read 503 or 500. Behind ReadOnce this
-	// is the org scope's read.
-	role, member, err := g.auth.Membership(r.Context(), user.UserID, user.OrgID)
+	// membership row's now, not the role claim; an existing org without the
+	// row is the org scope's X-Org-Id refusal, an org that does not exist or
+	// a claim that is not a UUID keeps main's answer (the claim), and a
+	// failed read is 503 or 500. Behind ReadOnce this is the org scope's read.
+	role, standing, err := g.auth.tokenOrgMembership(r.Context(), user.UserID, user.OrgID)
 	if err != nil {
 		g.logger.ErrorContext(r.Context(), "api guard: membership lookup failed",
 			slog.String("path", r.Pattern), slog.Bool("unavailable", isUnavailable(err)),
@@ -180,9 +181,12 @@ func (g *Guard) currentUser(w http.ResponseWriter, r *http.Request, level Authz)
 		WriteAuthFailure(w, "", err)
 		return nil, false
 	}
-	if !member {
+	switch standing {
+	case tokenOrgNoRow:
 		writeOrgDenied(w)
 		return nil, false
+	case tokenOrgAsMain:
+		return user, true
 	}
 	if role != user.Role {
 		acting := *user

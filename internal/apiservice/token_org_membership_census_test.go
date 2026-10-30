@@ -39,6 +39,11 @@ func (s *removedMemberStore) Membership(_ context.Context, user, org uuid.UUID) 
 	return "", false, nil
 }
 
+func (s *removedMemberStore) OrgMembership(ctx context.Context, user, org uuid.UUID) (string, bool, bool, error) {
+	role, member, err := s.Membership(ctx, user, org)
+	return role, member, true, err
+}
+
 func (s *removedMemberStore) ActiveImpersonation(context.Context, uuid.UUID) (*policy.Impersonation, error) {
 	return nil, nil
 }

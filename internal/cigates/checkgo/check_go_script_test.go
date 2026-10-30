@@ -481,7 +481,7 @@ func recordedGoTest(work, script string, env []string, verb ...string) ([]string
 		return nil, err
 	}
 	if res.code != 0 {
-		return nil, fmt.Errorf("check_go.sh %v exited %d: %s", verb, res.code, tail(res.stderr+res.stdout, 2000))
+		return nil, fmt.Errorf("check_go.sh %v exited %d: %s", verb, res.code, failureTail(res))
 	}
 	return lines, nil
 }
@@ -547,7 +547,7 @@ func multiPackageShard(script string) (string, error) {
 		real := filepath.Join(repoRootNoT(), "ci", "check_go.sh")
 		res := cmdSpec{dir: filepath.Dir(filepath.Dir(real)), env: inheritedEnv(nil)}.run("bash", real, "integration-shard-plan")
 		if res.code != 0 {
-			multiShardErr = fmt.Errorf("integration-shard-plan exited %d: %s", res.code, tail(res.stderr+res.stdout, 2000))
+			multiShardErr = fmt.Errorf("integration-shard-plan exited %d: %s", res.code, failureTail(res))
 			return
 		}
 		re := regexp.MustCompile(`(?m)^integration shard (\d+): estimated \d+s, (\d+) package\(s\)$`)
@@ -896,7 +896,7 @@ func discoveryScenarios() []scenario {
 			return withDiscoveryTree(script, "zzsentinel_discovery_test.go", func(tree string) error {
 				res := cmdSpec{dir: tree, env: inheritedEnv(nil)}.run("bash", filepath.Join(tree, "ci", "check_go.sh"), "integration-shard-plan")
 				if res.code != 0 {
-					return fmt.Errorf("integration-shard-plan exited %d: %s", res.code, tail(res.stderr+res.stdout, 1500))
+					return fmt.Errorf("integration-shard-plan exited %d: %s", res.code, failureTail(res))
 				}
 				rows := 0
 				for _, l := range strings.Split(res.stdout, "\n") {

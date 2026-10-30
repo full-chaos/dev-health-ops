@@ -125,6 +125,15 @@ func preflight(ctx context.Context, pool *pgxpool.Pool, schema authschema.Valida
 			}
 		}
 	}
+	if requeue {
+		for _, t := range []struct{ name, qualified string }{{"auth.login_attempts", q + ".login_attempts"}, {"public.login_attempts", "public.login_attempts"}} {
+			for _, p := range []string{"INSERT", "UPDATE"} {
+				if err := check(t.name, t.qualified, p); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
 	return missing, nil
 }
 
@@ -171,7 +180,7 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedI
 		if m == nil {
 			return Report{}, fmt.Errorf("%w: the revocation source needs a manifest (a blind margin names no revocation)", ErrApply)
 		}
-		rq, err := readRevocationSource(ctx, opts.Source, *m)
+		rq, err := readRevocationSource(ctx, opts.Source, schema, *m)
 		if err != nil {
 			return Report{}, err
 		}
@@ -231,6 +240,9 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedI
 			report.FloorsRaised = tag.RowsAffected()
 			if requeue != nil {
 				if err := requeueRevocations(ctx, tx, *requeue, &report); err != nil {
+					return err
+				}
+				if err := raiseLockouts(ctx, tx, schema, *requeue, &report); err != nil {
 					return err
 				}
 			}

@@ -907,8 +907,8 @@ WHERE org_id = $1 AND action = 'sso_login' AND status = 'failure' ORDER BY creat
 	if lastError == nil || !strings.Contains(*lastError, "provisioning") {
 		t.Fatalf("last_error = %v, want a recorded provisioning-failure reason", lastError)
 	}
-	if providerStatus != "error" {
-		t.Fatalf("provider status = %q, want %q: a genuinely-authenticated later-stage failure must still flip it", providerStatus, "error")
+	if providerStatus != "active" {
+		t.Fatalf("provider status = %q, want %q: a failure record leaves the status as it was", providerStatus, "active")
 	}
 }
 
@@ -1019,6 +1019,60 @@ func TestOIDCCallbackRefusesAWrongNonce(t *testing.T) {
 	}
 	if lastError == nil || !strings.Contains(*lastError, "nonce") {
 		t.Fatalf("last_error = %v, want a recorded nonce-mismatch reason", lastError)
+	}
+}
+
+// TestAFailedOIDCCallbackKeepsTheProviderActive: after a callback that fails
+// (an id_token for another nonce), the provider stays active, the failure is
+// recorded, and the next flow signs in.
+func TestAFailedOIDCCallbackKeepsTheProviderActive(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	st := startStack(t, ctx)
+	idp := startFakeIdP(t)
+	orgID := seedOrg(t, ctx, st.pool, "enterprise")
+	config := fmt.Sprintf(`{"client_id":"test-client","issuer":%q,"token_endpoint":%q,"jwks_uri":%q,"userinfo_endpoint":%q,"scopes":["openid","email"]}`,
+		idp.server.URL, idp.server.URL+"/token", idp.server.URL+"/jwks", idp.server.URL+"/userinfo")
+	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
+		protocol: "oidc", status: "active", config: config, autoProvision: true,
+		clientSecretEncryptedFallback: "test-client-secret",
+	})
+	const email = "kept.active@allowed.example"
+	seedMember(t, ctx, st.pool, orgID, email, "oidc", "idp-subject-kept")
+	flow := func(rightNonce bool) (int, map[string]any) {
+		t.Helper()
+		client := newCookieClient(t)
+		status, authResp := postJSONWithClient(t, client, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/authorize", map[string]any{})
+		if status != http.StatusOK {
+			t.Fatalf("authorize: %d %v", status, authResp)
+		}
+		parsed, err := url.Parse(authResp["authorization_url"].(string))
+		if err != nil {
+			t.Fatal(err)
+		}
+		nonce := "another-nonce"
+		if rightNonce {
+			nonce = parsed.Query().Get("nonce")
+		}
+		idp.set(nonce, email, "Kept Active", "idp-subject-kept")
+		return postJSONWithClient(t, client, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/callback",
+			map[string]any{"code": "test-auth-code", "state": authResp["state"]})
+	}
+
+	if status, body := flow(false); status != http.StatusBadRequest {
+		t.Fatalf("failed callback: status=%d body=%v, want 400", status, body)
+	}
+	var lastError *string
+	var providerStatus string
+	if err := st.pool.QueryRow(ctx, `SELECT last_error, status FROM sso_providers WHERE id = $1`, providerID).
+		Scan(&lastError, &providerStatus); err != nil {
+		t.Fatal(err)
+	}
+	if providerStatus != "active" || lastError == nil {
+		t.Fatalf("after a failed callback: status=%q last_error set=%v, want active and set", providerStatus, lastError != nil)
+	}
+	if status, body := flow(true); status != http.StatusOK || body["email"] != email {
+		t.Fatalf("the next flow: status=%d body=%v, want 200 for %s", status, body, email)
 	}
 }
 

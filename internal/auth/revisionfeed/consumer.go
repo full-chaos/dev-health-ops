@@ -20,7 +20,9 @@ import (
 
 // Invalidator is what a cache gives the consumer. Invalidate evicts what the cache holds for one aggregate (a new
 // revision, or a gap: a resync); InvalidateAll evicts everything. Both only evict: they are idempotent and may be
-// called twice for one revision.
+// called twice for one revision. Invalidate at revision N covers EVERY revision <= N of that aggregate: the feed is a
+// high-water mark per aggregate, so a replica that reconnects reaches the latest revision and the revisions in between are
+// covered by the invalidation at the latest, not replayed.
 type Invalidator interface {
 	Invalidate(ctx context.Context, aggregateType, aggregateID string, revision int64)
 	InvalidateAll(ctx context.Context)
@@ -61,7 +63,7 @@ func NewConsumer(cfg Config) (*Consumer, error) {
 	}
 	var err error
 	if c.events, err = meter.Int64Counter("devhealth_auth_revision_feed_events_total",
-		metric.WithDescription("Outbox events the revision feed consumer classified, by disposition (apply, ignore, gap).")); err != nil {
+		metric.WithDescription("Outbox events the revision feed consumer classified, by disposition (apply, ignore, gap, dropped).")); err != nil {
 		return nil, fmt.Errorf("revisionfeed: events counter: %w", err)
 	}
 	if c.resyncs, err = meter.Int64Counter("devhealth_auth_revision_feed_resync_total",
@@ -119,6 +121,30 @@ func (c *Consumer) Resubscribed(ctx context.Context) {
 	c.resyncs.Add(ctx, 1, metric.WithAttributes(attribute.String("cause", "resubscribe")))
 	c.inv.InvalidateAll(ctx)
 	c.log.LogAttrs(ctx, slog.LevelInfo, "revision feed resubscribed", slog.String("disposition", "resubscribe"))
+}
+
+// CatchUp feeds the published floors (the high-water hash, read AFTER the subscribe was confirmed) to the consumer: a floor
+// above the mark moves it (Gap: ResyncTo) and invalidates the aggregate, a floor at or below it is ignored. It goes through
+// Handle, so it is revision-idempotent with a live event that arrives before, during or after it. A field that is not
+// "<type>:<id>" is skipped.
+func (c *Consumer) CatchUp(ctx context.Context, floors map[string]int64) {
+	for field, revision := range floors {
+		typ, id, ok := splitAggregateKey(field)
+		if !ok || !validRevision(revision) {
+			c.Dropped(ctx)
+			continue
+		}
+		c.Handle(ctx, contracts.ProvisioningEvent{
+			AggregateType: typ, AggregateID: id,
+			Payload: contracts.ProvisioningPayload{Revision: contracts.Revision(revision)},
+		})
+	}
+}
+
+// Dropped counts one message or floor that was refused before it reached the cursor (malformed, or a revision outside
+// 1..MaxRevision): events_total{disposition=dropped}. The cursor never moves on it.
+func (c *Consumer) Dropped(ctx context.Context) {
+	c.events.Add(ctx, 1, metric.WithAttributes(attribute.String("disposition", "dropped")))
 }
 
 // logDisposition logs the aggregate type, the revision and the disposition only: never the aggregate id or the payload.

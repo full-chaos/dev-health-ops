@@ -120,6 +120,16 @@ func TestProvisioningRoutesRefuseUserTokens(t *testing.T) {
 			usertokens.NoLeak(t, c.op+" "+tok.Kind+" body", response.Body.String(), tokens)
 		}
 	}
+	for _, tok := range tokens {
+		request := httptest.NewRequest(http.MethodPost, PatternOrgState, strings.NewReader(f.stateBody()))
+		request.Header.Set("Authorization", "Bearer "+tok.Value)
+		response := httptest.NewRecorder()
+		mux.ServeHTTP(response, request)
+		if response.Code != http.StatusUnauthorized || !strings.Contains(response.Body.String(), reasonInvalidCredentials) {
+			t.Errorf("%s %s: %d %s, want 401 %s", opOrgState, tok.Kind, response.Code, response.Body, reasonInvalidCredentials)
+		}
+		usertokens.NoLeak(t, opOrgState+" "+tok.Kind+" body", response.Body.String(), tokens)
+	}
 	if got := connects.Count(); got != 0 {
 		t.Errorf("a user token reached the credential table: %d connection attempt(s), want 0", got)
 	}
@@ -149,8 +159,10 @@ func TestTheReactivateRouteIsInTheStartupGate(t *testing.T) {
 	if routes != 8 {
 		t.Fatalf("%d provisioning routes served, want 8", routes)
 	}
-	if strings.Contains(f.logs.String(), "not mounted") {
-		t.Fatalf("a not-mounted line was logged: %s", f.logs.String())
+	for _, line := range strings.Split(f.logs.String(), "\n") {
+		if strings.Contains(line, "not mounted") && !strings.Contains(line, PatternOrgState) {
+			t.Fatalf("a not-mounted line was logged for a route other than the dark state route: %s", line)
+		}
 	}
 }
 

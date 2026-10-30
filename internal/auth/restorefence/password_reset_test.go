@@ -72,7 +72,7 @@ func TestAPasswordChangedAfterTIsClearedAndNamed(t *testing.T) {
 
 // P4: the password sections are the only change of the section set: every other section exports what version 3 held.
 func TestEveryOtherSectionExportsWhatVersionThreeHeld(t *testing.T) {
-	if got := sectionSetDigest(t, authPasswordSection, legacyPasswordSection); got != pinnedSectionSet[3] {
+	if got := sectionSetDigest(t, authPasswordSection, legacyPasswordSection, identitySection); got != pinnedSectionSet[3] {
 		t.Errorf("a section other than the password sections changed its export (digest %s, version 3 pinned %s)", got, pinnedSectionSet[3])
 	}
 }

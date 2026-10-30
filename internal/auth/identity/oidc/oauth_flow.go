@@ -375,6 +375,11 @@ func (s *Service) callbackOAuth(ctx context.Context, admitted StoredProvider, in
 		}
 		return Login{}, clear, failure
 	}
+	// An email member that is not text is no address (go-api: a 500); it is
+	// answered as a provider failure, before any lookup.
+	if prof.EmailNotText {
+		return Login{}, clear, oauthFailure(ReasonDependency, "oauth_userinfo_fetch_failed", errors.New("provider email is not text"))
+	}
 	// The email text rule runs first, as go-api's profile fetch runs it: an
 	// unusable address is the same 400 verified or not.
 	if failure := refuseUnusableEmail(prof.Email); failure != nil {

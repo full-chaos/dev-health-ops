@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
 const (
@@ -18,10 +19,20 @@ const (
 	revocationIDColumn = "id"
 )
 
-// RevocationSource reads the provider revocation rows of the shadow restore that exported the manifest. rows is a
-// jsonb array that only PostgreSQL reads: it holds the stored ciphertext, so the fence never parses or prints it.
+// SourceRead is what one snapshot of the shadow restore gives the apply. Every field but Timeline is a jsonb array that
+// only PostgreSQL reads: the revocations hold the stored ciphertext and the lockouts an identifier hash or an email, so
+// the fence never parses or prints them.
+type SourceRead struct {
+	Timeline    int64
+	Revocations string
+	AuthLocks   string
+	LegacyLocks string
+}
+
+// RevocationSource reads the shadow restore that exported the manifest: the provider revocation rows of the manifest's
+// ids and the live login lockouts.
 type RevocationSource interface {
-	Revocations(ctx context.Context, ids []string) (timeline int64, rows string, err error)
+	Revocations(ctx context.Context, schema authschema.ValidatedIdentifier, ids []string) (SourceRead, error)
 }
 
 // PGRevocationSource reads the source over its own connection, in one read-only repeatable-read transaction, so the
@@ -33,21 +44,26 @@ const revocationSourceSQL = `SELECT coalesce(jsonb_agg(jsonb_build_object('id', 
   'created_at', created_at) ORDER BY id), '[]'::jsonb)::text
 FROM public.provider_oauth_revocations WHERE id = ANY($1::uuid[])`
 
-func (s PGRevocationSource) Revocations(ctx context.Context, ids []string) (int64, string, error) {
+func (s PGRevocationSource) Revocations(ctx context.Context, schema authschema.ValidatedIdentifier, ids []string) (SourceRead, error) {
 	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
-		return 0, "", fmt.Errorf("opening the source transaction (sqlstate %s)", sqlState(err))
+		return SourceRead{}, fmt.Errorf("opening the source transaction (sqlstate %s)", sqlState(err))
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
-	timeline, err := Timeline(ctx, tx)
-	if err != nil {
-		return 0, "", fmt.Errorf("reading the source timeline")
+	var out SourceRead
+	if out.Timeline, err = Timeline(ctx, tx); err != nil {
+		return SourceRead{}, fmt.Errorf("reading the source timeline")
 	}
-	var rows string
-	if err := tx.QueryRow(ctx, revocationSourceSQL, ids).Scan(&rows); err != nil {
-		return 0, "", fmt.Errorf("reading the source revocations (sqlstate %s)", sqlState(err))
+	if err := tx.QueryRow(ctx, revocationSourceSQL, ids).Scan(&out.Revocations); err != nil {
+		return SourceRead{}, fmt.Errorf("reading the source revocations (sqlstate %s)", sqlState(err))
 	}
-	return timeline, rows, nil
+	if err := tx.QueryRow(ctx, authLocksSourceSQL(schema)).Scan(&out.AuthLocks); err != nil {
+		return SourceRead{}, fmt.Errorf("reading the source lockouts (sqlstate %s)", sqlState(err))
+	}
+	if err := tx.QueryRow(ctx, legacyLocksSourceSQL).Scan(&out.LegacyLocks); err != nil {
+		return SourceRead{}, fmt.Errorf("reading the source legacy lockouts (sqlstate %s)", sqlState(err))
+	}
+	return out, nil
 }
 
 // requeueMissingSQL counts the manifest revocations ($1) the restored database lacks and the source rows ($2) lack too.
@@ -72,14 +88,16 @@ FROM i ORDER BY 1`
 
 // revocationRequeue is what Apply read from the source before its transaction.
 type revocationRequeue struct {
-	ids  string // the manifest revocation ids, a jsonb array of {"id": ...}
-	rows string // the source rows, a jsonb array; never parsed here
+	ids         string // the manifest revocation ids, a jsonb array of {"id": ...}
+	rows        string // the source rows, a jsonb array; never parsed here
+	authLocks   string // the source's live auth lockouts, a jsonb array; never parsed here
+	legacyLocks string // the source's live legacy lockouts, a jsonb array; never parsed here
 }
 
 // readRevocationSource reads the source rows of the manifest's revocation ids. It refuses a source on another timeline
 // than the export's: the rows must come from the shadow restore that exported the manifest. Errors carry no source
 // text.
-func readRevocationSource(ctx context.Context, src RevocationSource, m Manifest) (revocationRequeue, error) {
+func readRevocationSource(ctx context.Context, src RevocationSource, schema authschema.ValidatedIdentifier, m Manifest) (revocationRequeue, error) {
 	ids := []string{}
 	for _, s := range m.Sections {
 		if s.Name != revocationSection {
@@ -92,12 +110,12 @@ func readRevocationSource(ctx context.Context, src RevocationSource, m Manifest)
 		}
 	}
 	sort.Strings(ids)
-	timeline, rows, err := src.Revocations(ctx, ids)
+	read, err := src.Revocations(ctx, schema, ids)
 	if err != nil {
 		return revocationRequeue{}, fmt.Errorf("%w: the revocation source is unreadable", ErrApply)
 	}
-	if timeline != m.SourceTimeline {
-		return revocationRequeue{}, fmt.Errorf("%w: the revocation source is on timeline %d, the manifest was exported on timeline %d: point it at the shadow restore that exported the manifest", ErrApply, timeline, m.SourceTimeline)
+	if read.Timeline != m.SourceTimeline {
+		return revocationRequeue{}, fmt.Errorf("%w: the revocation source is on timeline %d, the manifest was exported on timeline %d: point it at the shadow restore that exported the manifest", ErrApply, read.Timeline, m.SourceTimeline)
 	}
 	keyed := make([]map[string]string, len(ids))
 	for i, id := range ids {
@@ -107,7 +125,7 @@ func readRevocationSource(ctx context.Context, src RevocationSource, m Manifest)
 	if err != nil {
 		return revocationRequeue{}, fmt.Errorf("%w: encoding the revocation ids", ErrApply)
 	}
-	return revocationRequeue{ids: string(raw), rows: rows}, nil
+	return revocationRequeue{ids: string(raw), rows: read.Revocations, authLocks: read.AuthLocks, legacyLocks: read.LegacyLocks}, nil
 }
 
 // requeueRevocations runs inside the apply transaction. Any manifest revocation the restored database lacks and the

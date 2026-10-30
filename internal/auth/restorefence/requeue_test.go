@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
 // requeueSentinel stands in for a DSN or a stored ciphertext; it must never reach an error or a report.
@@ -20,10 +22,10 @@ type fakeRevocationSource struct {
 	err      error
 }
 
-func (f *fakeRevocationSource) Revocations(_ context.Context, ids []string) (int64, string, error) {
+func (f *fakeRevocationSource) Revocations(_ context.Context, _ authschema.ValidatedIdentifier, ids []string) (SourceRead, error) {
 	f.calls++
 	f.ids = append([]string(nil), ids...)
-	return f.timeline, f.rows, f.err
+	return SourceRead{Timeline: f.timeline, Revocations: f.rows, AuthLocks: "[]", LegacyLocks: "[]"}, f.err
 }
 
 func manifestWithRevocations(t *testing.T, ids ...string) Manifest {

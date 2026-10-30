@@ -102,9 +102,14 @@ func TestTheFenceRequeuesRevocationsQueuedAfterTFromTheSource(t *testing.T) {
 	defer cancel()
 	restored, end := requeuePair(t, ctx)
 	manifest := exportEnd(t, ctx, end)
+	// A source row the manifest does not name is never copied.
+	end.revocation(t, ctx, "after-export", "kept", "disconnect", 0)
 	report, err := Apply(ctx, restored.admin, restored.schema, manifest, Options{Apply: true, Source: PGRevocationSource{Pool: end.admin}})
 	if err != nil {
 		t.Fatalf("apply: %v", err)
+	}
+	if restored.revocationState(t, ctx, "after-export").present {
+		t.Error("a source revocation the manifest does not name was copied")
 	}
 	for _, name := range []string{"kept", "late", "setup"} {
 		got, want := restored.revocationState(t, ctx, name), end.revocationState(t, ctx, name)

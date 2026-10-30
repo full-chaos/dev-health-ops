@@ -53,3 +53,39 @@ func TestValkeyAppendfsyncStaysWithTheAclFile(t *testing.T) {
 		t.Errorf("--appendfsync = %q with the ACL file on, want everysec", got)
 	}
 }
+
+func TestValkeyAppendfsyncIsCheckedWhenValkeyIsDisabled(t *testing.T) {
+	requireHelmUnderCI(t)
+	for name, args := range map[string][]string{
+		"no":             {"--set-string", "valkey.appendfsync=no"},
+		"no plain":       {"--set", "valkey.appendfsync=no"},
+		"empty":          {"--set-string", "valkey.appendfsync="},
+		"EVERYSEC":       {"--set-string", "valkey.appendfsync=EVERYSEC"},
+		"ALWAYS":         {"--set-string", "valkey.appendfsync=ALWAYS"},
+		"Everysec":       {"--set-string", "valkey.appendfsync=Everysec"},
+		"trailing space": {"--set-string", "valkey.appendfsync=everysec "},
+		"integer 1":      {"--set", "valkey.appendfsync=1"},
+		"integer 0":      {"--set", "valkey.appendfsync=0"},
+		"float":          {"--set", "valkey.appendfsync=1.5"},
+		"numeric string": {"--set-string", "valkey.appendfsync=1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, out, err := renderAuth(t, append([]string{"--set", "valkey.enabled=false"}, args...)...)
+			if err == nil {
+				t.Fatalf("the render accepted %v with valkey.enabled=false; it must refuse", args)
+			}
+			if !strings.Contains(out, "appendfsync") {
+				t.Fatalf("the refusal does not name the key: %.400s", out)
+			}
+		})
+	}
+}
+
+func TestValkeyAppendfsyncValidValuesRenderWhenValkeyIsDisabled(t *testing.T) {
+	requireHelmUnderCI(t)
+	for _, value := range []string{"everysec", "always"} {
+		if _, out, err := renderAuth(t, "--set", "valkey.enabled=false", "--set", "valkey.appendfsync="+value); err != nil {
+			t.Errorf("appendfsync=%s with valkey.enabled=false was refused: %.400s", value, out)
+		}
+	}
+}

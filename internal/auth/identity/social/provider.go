@@ -115,6 +115,8 @@ type Profile struct {
 type ProviderError struct {
 	Reason Reason
 	Step   string
+	// InvalidID: the profile has no user id (absent, null or empty), go-api's ErrMissingProviderID.
+	InvalidID bool
 }
 
 func (e *ProviderError) Error() string { return "social: " + e.Step + ": " + string(e.Reason) }
@@ -280,6 +282,37 @@ func optionalPointer(v any) *string {
 	return nil
 }
 
+// idState says what a profile's id member is. idMissing is go-api's invalid user id; idUnusable keeps the refusal
+// as a bad token.
+type idState int
+
+const (
+	idUsable idState = iota
+	idMissing
+	idUnusable
+)
+
+// numericProfileID is a GitHub or GitLab profile id: absent, null and "" are missing, a JSON integer is usable.
+func numericProfileID(v any) (string, idState) {
+	switch t := v.(type) {
+	case nil:
+		return "", idMissing
+	case string:
+		if t == "" {
+			return "", idMissing
+		}
+	case json.Number:
+		if id, ok := integerID(t); ok {
+			return id, idUsable
+		}
+	}
+	return "", idUnusable
+}
+
+func idRefusal(state idState, step string) *ProviderError {
+	return &ProviderError{Reason: ReasonInvalidCredentials, Step: step, InvalidID: state == idMissing}
+}
+
 func optionalString(v any) string {
 	s, _ := v.(string)
 	return s
@@ -325,18 +358,18 @@ func (c *ProviderClient) github(ctx context.Context, creds ClientCredentials, to
 		"X-GitHub-Api-Version": "2022-11-28",
 	}
 	var user struct {
-		ID    json.Number `json:"id"`
-		Login any         `json:"login"`
-		Name  any         `json:"name"`
-		Email any         `json:"email"`
+		ID    any `json:"id"`
+		Login any `json:"login"`
+		Name  any `json:"name"`
+		Email any `json:"email"`
 	}
 	var userProfile pyjson.Value
 	if err := c.do(ctx, request{method: http.MethodGet, url: api + "/user", headers: headers, step: "github user", profile: &userProfile}, &user); err != nil {
 		return Profile{}, err
 	}
-	subject, ok := integerID(user.ID)
-	if !ok {
-		return Profile{}, &ProviderError{Reason: ReasonInvalidCredentials, Step: "github user"}
+	subject, state := numericProfileID(user.ID)
+	if state != idUsable {
+		return Profile{}, idRefusal(state, "github user")
 	}
 	if subject != owner {
 		return Profile{}, &ProviderError{Reason: ReasonAudience, Step: "github user"}
@@ -410,19 +443,19 @@ func (c *ProviderClient) gitlab(ctx context.Context, creds ClientCredentials, to
 		return Profile{}, &ProviderError{Reason: ReasonAudience, Step: "gitlab token info"}
 	}
 	var user struct {
-		ID          json.Number `json:"id"`
-		Username    any         `json:"username"`
-		Name        any         `json:"name"`
-		Email       any         `json:"email"`
-		ConfirmedAt any         `json:"confirmed_at"`
+		ID          any `json:"id"`
+		Username    any `json:"username"`
+		Name        any `json:"name"`
+		Email       any `json:"email"`
+		ConfirmedAt any `json:"confirmed_at"`
 	}
 	var userProfile pyjson.Value
 	if err := c.do(ctx, request{method: http.MethodGet, url: base + "/api/v4/user", headers: headers, step: "gitlab user", profile: &userProfile}, &user); err != nil {
 		return Profile{}, err
 	}
-	subject, ok := integerID(user.ID)
-	if !ok {
-		return Profile{}, &ProviderError{Reason: ReasonInvalidCredentials, Step: "gitlab user"}
+	subject, state := numericProfileID(user.ID)
+	if state != idUsable {
+		return Profile{}, idRefusal(state, "gitlab user")
 	}
 	if subject != owner {
 		return Profile{}, &ProviderError{Reason: ReasonAudience, Step: "gitlab user"}
@@ -469,7 +502,11 @@ func (c *ProviderClient) google(ctx context.Context, creds ClientCredentials, to
 	}
 	subject := optionalString(user.ID)
 	if subject == "" {
-		return Profile{}, &ProviderError{Reason: ReasonInvalidCredentials, Step: "google user"}
+		state := idUnusable
+		if user.ID == nil || user.ID == "" {
+			state = idMissing
+		}
+		return Profile{}, idRefusal(state, "google user")
 	}
 	if subject != info.UserID {
 		return Profile{}, &ProviderError{Reason: ReasonAudience, Step: "google user"}

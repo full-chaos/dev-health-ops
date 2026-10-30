@@ -52,10 +52,16 @@ type acsAnswer struct {
 // postACSEmail posts one signed IdP-initiated response asserting email through the real ACS handler.
 func postACSEmail(t *testing.T, email string, linked bool) acsAnswer {
 	t.Helper()
+	return postACSEmailWithList(t, email, linked, nil)
+}
+
+// postACSEmailWithList is postACSEmail for a provider with allowed_domains list.
+func postACSEmailWithList(t *testing.T, email string, linked bool, list []string) acsAnswer {
+	t.Helper()
 	idp := newTestIdP(t)
 	p := saml.Provider{
 		ID: uuid.New(), OrgID: uuid.New(), Protocol: "saml", Status: "active", AllowIdPInitiated: true, AutoProvision: true,
-		Config: saml.Config{EntityID: idp.entityID, Certificate: encodeCert(idp)},
+		Config: saml.Config{EntityID: idp.entityID, Certificate: encodeCert(idp)}, AllowedDomains: list,
 	}
 	store := &orderStore{}
 	members := &memberSet{ids: map[uuid.UUID]bool{}}

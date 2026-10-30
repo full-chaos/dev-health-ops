@@ -1,6 +1,7 @@
 # package<TAB>reason. A package that looks like auth (path segment auth*/audit*) or imports the auth schema adapter, but is not part of the Auth Control Plane tree.
 github.com/full-chaos/dev-health-ops/internal/api/audit	the shared audit_logs writer of the Go api's ported admin routes (api audit trail), not the Auth Control Plane audit and outbox package
 github.com/full-chaos/dev-health-ops/internal/api/authmail	signed-link e-mail of the existing login flows (org invite, e-mail verification, password reset), not the Auth Control Plane
+github.com/full-chaos/dev-health-ops/internal/api/authprovision	go-api's client of auth-service's provisioning routes (memberships, invites, organization deprovision) behind AUTH_PROXY_ORG_PROVISIONING; a go-api package, not part of the Auth Control Plane tree
 github.com/full-chaos/dev-health-ops/internal/api/sso	the go-api SSO handlers; imports the auth schema adapter only in an integration test, to prove an account provisioned under users-owned signs in through go-api after the switch back
 github.com/full-chaos/dev-health-ops/internal/apiservice/authflowvenue	venue oracle of the existing registration and login flows (integration-tagged)
 github.com/full-chaos/dev-health-ops/internal/queryapi/authctx	carries the query plane's verified effective-principal envelope through a request context; owned by the query plane

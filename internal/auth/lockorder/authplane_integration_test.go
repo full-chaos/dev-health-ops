@@ -92,6 +92,11 @@ func (e *env) authPlaneOn(pool *pgxpool.Pool, schema authschema.ValidatedIdentif
 	if err != nil {
 		return nil, fmt.Errorf("compat routes: %w", err)
 	}
+	v1, err := authapi.Routes(authapi.Deps{Sessions: sessions, Users: authapi.PGUsers{Pool: runtime}, Issuer: issuer, Logger: logger})
+	if err != nil {
+		return nil, fmt.Errorf("v1 routes: %w", err)
+	}
+	routes = append(routes, v1...)
 	mux := http.NewServeMux()
 	for _, route := range routes {
 		mux.Handle(route.Method+" "+route.Pattern, route.Handler)

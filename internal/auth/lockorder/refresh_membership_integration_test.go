@@ -93,6 +93,11 @@ func (e *env) refreshAt(ctx context.Context, base, token string) response {
 	return e.post(ctx, base, "/api/v1/auth/refresh", "", map[string]any{"refresh_token": token})
 }
 
+// refreshV1 is auth-service's own refresh, POST /v1/token/refresh.
+func (e *env) refreshV1(ctx context.Context, base, credential string) response {
+	return e.post(ctx, base, "/v1/token/refresh", "", map[string]any{"schema_version": "refresh-request.v1", "refresh_credential": credential})
+}
+
 func (e *env) seedSuperuser(t *testing.T, ctx context.Context) uuid.UUID {
 	t.Helper()
 	id := e.seedUser(t, ctx)
@@ -160,6 +165,61 @@ WHERE event_type = 'auth.session.revoked' AND subject_principal_id = $1`, user)
 			wantRefreshRefused(t, cell, got)
 			if live != "0" || revoked != "1" || audits != "1" {
 				t.Fatalf("%s: sessions live=%s revoked(session_revoked)=%s revoke audit rows=%s, want 0, 1, 1", cell, live, revoked, audits)
+			}
+		})
+	}
+}
+
+// Auth plane, v1 refresh: once go-api's admin removed the member, the refresh
+// is refused before the credential rotates: no successor row, no presented
+// row consumed, and the session revoked (session_revoked). A superuser in the
+// same position rotates.
+func TestAuthV1RefreshOfARemovedMemberRotatesNothing(t *testing.T) {
+	for _, superuser := range []bool{false, true} {
+		name := "member"
+		if superuser {
+			name = "superuser"
+		}
+		t.Run(name, func(t *testing.T) {
+			cell := "auth-v1-refresh/removed/" + name
+			e, ctx := getEnv(t), cellContext(t)
+			e.cleanup(t)
+			org, owner := e.seedOrg(t, ctx), e.seedUser(t, ctx)
+			e.add(t, ctx, org, owner, "owner", nil)
+			user := e.seedUser(t, ctx)
+			if superuser {
+				user = e.seedSuperuser(t, ctx)
+			}
+			refresh := e.join(t, ctx, cell, e.issuerServer.URL, user, org, owner, false)
+			removed := e.call(ctx, e.root, http.MethodDelete, "/api/v1/admin/orgs/"+org.String()+"/members/"+user.String(), nil)
+			if removed.status != http.StatusOK {
+				t.Fatalf("%s: fixture: remove_member answered %s", cell, shape(removed))
+			}
+			rows := func() string {
+				return e.scalar(t, ctx, `SELECT count(*)::text || '/' || count(*) FILTER (WHERE consumed_at IS NOT NULL OR superseded_by IS NOT NULL)::text
+FROM auth.refresh_credentials WHERE principal_id = $1`, user)
+			}
+			before := rows()
+
+			got := e.refreshV1(ctx, e.authServer.URL, refresh)
+			after := rows()
+			live := e.scalar(t, ctx, `SELECT count(*)::text FROM auth.sessions WHERE principal_id = $1 AND revoked_at IS NULL`, user)
+			revoked := e.scalar(t, ctx, `SELECT count(*)::text FROM auth.sessions WHERE principal_id = $1 AND revoked_reason = 'session_revoked'`, user)
+			if superuser {
+				if got.status != http.StatusOK || after == before || revoked != "0" {
+					t.Fatalf("%s: refresh answer: %s, credential rows (all/consumed) %s -> %s, revoked %s; want 200, a rotation, nothing revoked",
+						cell, shape(got), before, after, revoked)
+				}
+				return
+			}
+			if got.status != http.StatusUnauthorized || got.body["reason_code"] != "not_entitled" {
+				t.Fatalf("%s: refresh answer: %s reason_code=%v, want 401 not_entitled", cell, shape(got), got.body["reason_code"])
+			}
+			if after != before {
+				t.Fatalf("%s: credential rows (all/consumed) %s -> %s: the refused refresh rotated the credential", cell, before, after)
+			}
+			if live != "0" || revoked != "1" {
+				t.Fatalf("%s: sessions live=%s revoked(session_revoked)=%s, want 0, 1", cell, live, revoked)
 			}
 		})
 	}
@@ -344,4 +404,12 @@ func TestAuthRefreshEndsOnAOneConnectionPool(t *testing.T) {
 		t.Fatalf("%s: refresh answer: no answer within %s on a one-connection pool (%s)", cell, choreographyBound, got.raw)
 	}
 	wantRefreshOK(t, cell, got)
+	successor, _ := got.body["refresh_token"].(string)
+	v1 := e.refreshV1(bounded, e.authServerOne.URL, successor)
+	if v1.status < 0 {
+		t.Fatalf("%s: v1 refresh answer: no answer within %s on a one-connection pool (%s)", cell, choreographyBound, v1.raw)
+	}
+	if v1.status != http.StatusOK {
+		t.Fatalf("%s: v1 refresh answer: %s, want 200", cell, shape(v1))
+	}
 }

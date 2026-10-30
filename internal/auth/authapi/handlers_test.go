@@ -418,6 +418,42 @@ func TestRefreshOfASessionWithoutAMembershipRefusesAndRevokes(t *testing.T) {
 	}
 }
 
+// The membership check runs before the credential rotates: a removed member's
+// live credential mints no successor.
+func TestRefreshWithoutAMembershipRotatesNothing(t *testing.T) {
+	for name, superuser := range map[string]bool{"member removed": false, "superuser without a membership": true} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			state := f.users.users[f.principal]
+			state.IsSuperuser = superuser
+			f.users.users[f.principal] = state
+			f.users.roles = map[[2]uuid.UUID]*string{}
+			f.build()
+			f.sessions.result = session.Result{Reason: session.ReasonAccepted, Issued: session.Issued{
+				Session: f.record, Credential: contracts.NewSecretString(credential()), ExpiresAt: time.Now().Add(time.Hour)}}
+			response := f.do(http.MethodPost, PatternRefresh, refreshBody(credential()), nil)
+			if superuser {
+				if response.Code != http.StatusOK || len(f.sessions.revoked) != 0 || f.sessions.minted != 1 {
+					t.Fatalf("superuser: answer %d %.200s, revoked %v, minted %d; want 200, nothing revoked, 1 minted",
+						response.Code, response.Body, f.sessions.revoked, f.sessions.minted)
+				}
+				return
+			}
+			var body map[string]any
+			_ = json.Unmarshal(response.Body.Bytes(), &body)
+			if response.Code != http.StatusUnauthorized || body["reason_code"] != "not_entitled" {
+				t.Fatalf("answer %d %.200s, want 401 not_entitled", response.Code, response.Body)
+			}
+			if len(f.sessions.revoked) != 1 || f.sessions.revoked[0] != f.record.ID {
+				t.Fatalf("revoked %v, want the session", f.sessions.revoked)
+			}
+			if f.sessions.minted != 0 {
+				t.Fatalf("%d successors minted before the refusal, want 0", f.sessions.minted)
+			}
+		})
+	}
+}
+
 func TestRefreshTakesGoAPIsRoleRules(t *testing.T) {
 	cases := map[string]struct {
 		org  bool

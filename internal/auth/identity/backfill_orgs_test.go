@@ -222,3 +222,34 @@ func TestFillLockIDsAreUniqueAndAscending(t *testing.T) {
 		}
 	}
 }
+
+// An insert that lost ON CONFLICT, or whose inviter did not resolve under the lock, reports what its transaction did.
+func TestApplyInsertTakesTheOutcomeOfTheTransaction(t *testing.T) {
+	pre := MembershipBackfillResult{Inserted: true, InviterSet: true}
+	cases := []struct {
+		name string
+		o    insertOutcome
+		want MembershipBackfillResult
+	}{
+		{"inserted with the inviter", insertOutcome{Inserted: true, Inviter: true}, MembershipBackfillResult{Inserted: true, InviterSet: true}},
+		{"inserted, inviter unresolved under the lock", insertOutcome{Inserted: true, Unresolved: true}, MembershipBackfillResult{Inserted: true, InviterUnresolved: true}},
+		{"lost ON CONFLICT", insertOutcome{}, MembershipBackfillResult{}},
+	}
+	for _, c := range cases {
+		if got := applyInsert(pre, c.o); got != c.want {
+			t.Fatalf("%s: got %+v, want %+v", c.name, got, c.want)
+		}
+	}
+}
+
+// A role update that changed no row (another writer set the role first) is not counted as a role change.
+func TestApplyRoleTakesTheOutcomeOfTheTransaction(t *testing.T) {
+	pre := MembershipBackfillResult{RoleUpdated: true, InviterSet: true, InviterUnresolved: true}
+	if got := applyRole(pre, true); got != pre {
+		t.Fatalf("changed: got %+v, want %+v", got, pre)
+	}
+	want := MembershipBackfillResult{InviterSet: true, InviterUnresolved: true}
+	if got := applyRole(pre, false); got != want {
+		t.Fatalf("unchanged: got %+v, want %+v", got, want)
+	}
+}

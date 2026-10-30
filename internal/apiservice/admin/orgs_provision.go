@@ -324,15 +324,14 @@ func (h *handlers) createOrganizationInAuth(ctx context.Context, w http.Response
 	}
 	h.logger.WarnContext(ctx, "admin: auth-service did not add the organization owner; the organization was removed",
 		"org_id", org.ID.String(), "refused", errors.Is(addErr, authprovision.ErrRefused), "reason", authprovision.ReasonOf(addErr))
-	if !errors.Is(addErr, authprovision.ErrRefused) {
-		h.writeProvisionUnavailable(w)
-		return
-	}
-	if answer, ok := actorAnswers[authprovision.ReasonOf(addErr)]; ok {
+	// With the switch off this owner is added (201), which cannot be answered
+	// without an owner: a refusal is the 503 of the other proxied routes, an
+	// actor refusal its 403.
+	if answer, ok := actorAnswers[authprovision.ReasonOf(addErr)]; ok && errors.Is(addErr, authprovision.ErrRefused) {
 		policy.WriteDetail(w, answer.status, answer.detail, nil)
 		return
 	}
-	policy.WriteInternal(w)
+	h.writeProvisionUnavailable(w)
 }
 
 // ownerlessOrganization answers the 503 for a created organization that may

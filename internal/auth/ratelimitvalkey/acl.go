@@ -10,12 +10,16 @@ import (
 const ACLUser = "auth-service-ratelimit"
 
 // ACLRules is what that user may do: only the auth_svc_ counters of this store
-// (the key prefix keyPrefix plus the auth-service limiter ids), and only the
-// commands the store and the client handshake use. The documented ACL line
+// (the key prefix keyPrefix plus the auth-service limiter ids), the one revision
+// feed hash under the same prefix (internal/auth/revisionfeed HighWaterKey) and
+// the channels under &auth_svc_* (its Channel), and only the commands the
+// store, the feed script (+hget +hset inside EVAL, +publish), the subscriber
+// (+subscribe), the client handshake, and the catch-up read: +hgetall only
+// through a selector that names the one hash, never for the other auth_svc_ keys. The documented ACL line
 // (docs/reference/auth/configuration.md), the chart's ACL file format
 // (deploy/helm/dev-health/values.yaml valkey.acl) and the hosted ACL
 // integration test carry exactly this text after the password.
-const ACLRules = "resetkeys ~dho:rl:auth_svc_* resetchannels -@all +hello +select +ping +get +eval +incr +pexpire +client|tracking"
+const ACLRules = "resetkeys ~dho:rl:auth_svc_* resetchannels &auth_svc_* -@all +hello +select +ping +get +eval +incr +pexpire +hget +hset +publish +subscribe +client|tracking (~dho:rl:auth_svc_rev_hwm +hgetall)"
 
 // ACLDefaultUserLine keeps the default user as it is without the file: no
 // password, every key, every command. The in-chart Valkey's probes and the other

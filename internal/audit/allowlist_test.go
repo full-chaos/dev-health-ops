@@ -238,3 +238,27 @@ func TestChangedFieldsNameMembershipInviterAndJoin(t *testing.T) {
 		}
 	}
 }
+
+// TestPrincipalEnabledTakesOnlyTheStringTrue: the workload enable verb's
+// principal_enabled attribute is a closed vocabulary of one value.
+func TestPrincipalEnabledTakesOnlyTheStringTrue(t *testing.T) {
+	if err := ValidateAttributes(map[string]any{"principal_enabled": "true", "principal_id": "6f1c2d3e-4a5b-4c6d-8e7f-901a2b3c4d5e"}); err != nil {
+		t.Fatalf("principal_enabled \"true\" refused: %v", err)
+	}
+	for _, bad := range []any{"false", "", "TRUE", "True", "yes", "1", true, false, 1, []string{"false"}} {
+		if err := ValidateAttributes(map[string]any{"principal_enabled": bad}); !errors.Is(err, ErrAttributeNotAllowed) {
+			t.Errorf("principal_enabled %#v accepted (err %v)", bad, err)
+		}
+	}
+}
+
+// TestPrincipalEnabledAcceptsTheOneMemberList pins what the closed
+// vocabulary rule admits for an enumerated key: the list ["true"] too.
+func TestPrincipalEnabledAcceptsTheOneMemberList(t *testing.T) {
+	if err := ValidateAttributes(map[string]any{"principal_enabled": []string{"true"}}); err != nil {
+		t.Fatalf("principal_enabled [\"true\"] refused: %v", err)
+	}
+	if err := ValidateAttributes(map[string]any{"principal_enabled": []string{}}); err == nil {
+		t.Fatal("principal_enabled [] accepted")
+	}
+}

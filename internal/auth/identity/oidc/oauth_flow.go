@@ -321,10 +321,10 @@ func (s *Service) callbackOAuth(ctx context.Context, admitted StoredProvider, in
 	now := s.cfg.Now()
 	state, err := openOAuthState(s.cfg.StateSecret.Reveal(), in.State, row.ID.String(), now)
 	if errors.Is(err, errStateExpired) {
-		return Login{}, nil, oauthFailure(ReasonExpired, "oauth_state_expired", err)
+		return Login{}, nil, s.auditedOAuthRefusal(ctx, row, stageStateAuth, msgStateExpired, oauthFailure(ReasonExpired, "oauth_state_expired", err))
 	}
 	if err != nil || state.OrgID != row.OrgID.String() {
-		return Login{}, nil, oauthFailure(ReasonMalformed, "oauth_state_invalid", errStateInvalid)
+		return Login{}, nil, s.auditedOAuthRefusal(ctx, row, stageStateAuth, msgStateMismatch, oauthFailure(ReasonMalformed, "oauth_state_invalid", errStateInvalid))
 	}
 	clear := &http.Cookie{Name: oauthLoginNonceCookieName(state.ID), Value: "", Path: oauthCallbackPath(row.ID), MaxAge: -1,
 		HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode}
@@ -333,7 +333,8 @@ func (s *Service) callbackOAuth(ctx context.Context, admitted StoredProvider, in
 		cookie, _ = in.Cookie(oauthLoginNonceCookieName(state.ID))
 	}
 	if cookie == "" || !constantTimeEqual(hashLoginNonce(cookie), state.NonceHash) {
-		return Login{}, clear, oauthFailure(ReasonMalformed, "oauth_state_invalid", errors.New("login nonce cookie missing or wrong"))
+		return Login{}, clear, s.auditedOAuthRefusal(ctx, row, stageStateAuth, msgStateMismatch,
+			oauthFailure(ReasonMalformed, "oauth_state_invalid", errors.New("login nonce cookie missing or wrong")))
 	}
 	if err := s.cfg.Sessions.Preflight(ctx); err != nil {
 		return Login{}, nil, unavailable(err)
@@ -363,21 +364,31 @@ func (s *Service) callbackOAuth(ctx context.Context, admitted StoredProvider, in
 		if errors.As(err, &perr) {
 			reason = contractReason(string(perr.Reason))
 		}
-		return Login{}, clear, oauthFailure(reason, "oauth_userinfo_fetch_failed", err)
+		failure := oauthFailure(reason, "oauth_userinfo_fetch_failed", err)
+		if perr != nil && perr.InvalidID {
+			failure = s.auditedOAuthRefusal(ctx, row, stageProviderProfile, msgMissingProviderID, failure)
+		}
+		return Login{}, clear, failure
+	}
+	// An email member that is not text is no address (go-api: a 500); it is
+	// answered as a provider failure, before any lookup.
+	if prof.EmailNotText {
+		return Login{}, clear, oauthFailure(ReasonDependency, "oauth_userinfo_fetch_failed", errors.New("provider email is not text"))
 	}
 	// The email text rule runs first, as go-api's profile fetch runs it: an
 	// unusable address is the same 400 verified or not.
 	if failure := refuseUnusableEmail(prof.Email); failure != nil {
-		return Login{}, clear, failure
+		return Login{}, clear, s.auditedOAuthRefusal(ctx, row, stageProvisioning, msgInvalidProviderEmail, failure)
 	}
 	// An unverified provider email never links or provisions, so it is refused
 	// before any lookup (go-api D2745).
 	if !prof.EmailVerified {
-		return Login{}, clear, deny(http.StatusForbidden, ReasonEmailUnverified,
-			"No verified email address is available from this OAuth provider")
+		return Login{}, clear, s.auditedOAuthRefusal(ctx, row, stageEmailVerification, msgNoVerifiedEmail,
+			deny(http.StatusForbidden, ReasonEmailUnverified, "No verified email address is available from this OAuth provider"))
 	}
 	if !validSubject(prof.Subject) {
-		return Login{}, clear, oauthFailure(ReasonMissingSub, "oauth_userinfo_fetch_failed", errors.New("provider subject invalid"))
+		return Login{}, clear, s.auditedOAuthRefusal(ctx, row, stageProvisioning, msgInvalidProviderID,
+			oauthFailure(ReasonMissingSub, "oauth_userinfo_fetch_failed", errors.New("provider subject invalid")))
 	}
 	var displayName string
 	if prof.FullName != nil {
@@ -389,9 +400,47 @@ func (s *Service) callbackOAuth(ctx context.Context, admitted StoredProvider, in
 		legacyAuthProvider: string(target.provider),
 	}, in.RequestID)
 	if failure != nil {
+		if message, ok := provisioningMessages[failure.Reason]; ok {
+			failure = s.auditedOAuthRefusal(ctx, row, stageProvisioning, message, failure)
+		}
 		return Login{}, clear, failure
 	}
 	return login, clear, nil
+}
+
+// go-api's OAuth callback audit stages and messages (internal/api/sso oauth.go, recordSSOUnauthenticated and
+// recordSSOAuthenticatedDenial): the row's stage and its error_message before sanitizing. domain_check is written in
+// resolve; the stage without a name (recordSSOFailure, a provider error) is not written here.
+const (
+	stageStateAuth         = "state_auth"
+	stageProviderProfile   = "provider_profile"
+	stageProvisioning      = "provisioning"
+	stageEmailVerification = "email_verification"
+
+	msgStateExpired         = "OAuth state expired"
+	msgStateMismatch        = "OAuth state mismatch"
+	msgMissingProviderID    = "oauthprovider: provider response raised an uncaught exception: the profile has no user id"
+	msgInvalidProviderEmail = "sso: the identity provider returned an unusable email address"
+	msgNoVerifiedEmail      = "no verified email address is available from this OAuth provider"
+	msgInvalidProviderID    = "identity: a non-local provider user needs a valid provider id"
+)
+
+// provisioningMessages are the account refusals of resolve that go-api's OAuth provisioning step audits, by reason.
+var provisioningMessages = map[Reason]string{
+	ReasonProvisioningDisabled: "user not found and auto-provisioning is disabled",
+	ReasonIdentityConflict:     "identity conflict",
+	ReasonMembershipRequired:   "membership required",
+	// go-api's provisioning answers an email another account holds with its identity conflict (provision.go).
+	ReasonEmailCollision: "identity conflict",
+}
+
+// auditedOAuthRefusal writes go-api's audit row of an OAuth refusal before failure answers; a write error is the
+// 500 go-api answers.
+func (s *Service) auditedOAuthRefusal(ctx context.Context, row Provider, stage, message string, failure *Error) *Error {
+	if f := s.auditDenial(ctx, row, stage, message); f != nil {
+		return f
+	}
+	return failure
 }
 
 // contractReason keeps a provider reason that is an outcome code of this

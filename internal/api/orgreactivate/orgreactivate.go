@@ -174,7 +174,7 @@ func (c *Client) post(ctx context.Context, path string, orgID, actor uuid.UUID, 
 	var refused *authprovision.Refused
 	switch {
 	case errors.As(err, &refused):
-		if refused.Status == http.StatusConflict && ifRevision != nil {
+		if refused.Status == http.StatusConflict && ifRevision != nil && refused.Reason == "state_changed" {
 			return fmt.Errorf("%w: status %d", ErrStateChanged, refused.Status)
 		}
 		return fmt.Errorf("%w: status %d", ErrRefused, refused.Status)

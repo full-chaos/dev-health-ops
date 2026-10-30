@@ -22,6 +22,7 @@ const (
 	ProducerSyncCoverageRefresh    = "sync_coverage_refresh"
 	ProducerDimensionFold          = "dimension_fold"
 	ProducerLLMBudgetStale         = "llm_budget_stale_reservations"
+	ProducerProviderRevocations    = "provider_oauth_revocations"
 	ProducerRetentionCleanup       = "retention_cleanup"
 )
 
@@ -321,6 +322,22 @@ func checkedInSchedules() []Schedule {
 				"freed by age, so the log is the operator's cue to void one by id. A 30 minute " +
 				"period emits every 30 to 60 minutes (an interval schedule is released one period after its last run). Each run " +
 				"re-reads the whole table, so a missed run is repaired by the next one.",
+		},
+		{
+			ID:               "provider_oauth_revocations",
+			Native:           true,
+			Cadence:          EveryInterval(5 * time.Minute),
+			Timezone:         inventoryTimezone,
+			CatchUp:          CatchUpSkip,
+			UniquenessWindow: time.Hour,
+			TargetKind:       jobcontract.KindProviderOAuthRevocations,
+			ProducerID:       ProducerProviderRevocations,
+			MaxAttempts:      2,
+			AlertThreshold:   30 * time.Minute,
+			Rationale: "Sends the pending provider OAuth revocation rows no route sends (a row " +
+				"for a credential that is gone stays owed otherwise, CHAOS-12010). Each run " +
+				"re-reads the due rows, so a missed run is repaired by the next one; a 5 minute " +
+				"period emits every 5 to 10 minutes.",
 		},
 		{
 			ID: "phone_home_heartbeat",

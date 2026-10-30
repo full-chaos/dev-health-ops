@@ -108,6 +108,7 @@ internal/auth/httpapi	transport_error_contract_test.go
 internal/auth/identity	externalkey_test.go
 internal/auth/identity	placeholder_copies_test.go
 internal/auth/identity/local	corpus_helpers_integration_test.go
+internal/auth/identity/oidc	oauth_denial_stages_test.go
 internal/auth/keyrotation	rotation_integration_test.go
 internal/auth/keystore	keystore_test.go
 internal/auth/keystore	open_unix.go
@@ -116,6 +117,7 @@ internal/auth/platformrole	superuser_fills_census_test.go
 internal/auth/platformrole	superuser_literals_census_test.go
 internal/auth/platformrole	superuser_sites_census_test.go
 internal/auth/platformrole	superuser_writes_census_test.go
+internal/auth/ratelimitvalkey	acl_feed_test.go
 internal/auth/ratelimitvalkey	acl_test.go
 internal/auth/restorefence	consumers_test.go
 internal/auth/session	credential_test.go

@@ -26,6 +26,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/authmail"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/session"
+	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
@@ -54,11 +55,22 @@ type env struct {
 	authBarrier *barrier
 	goBarrier   *barrier
 	server      *httptest.Server
-	signer      *edgetoken.Signer
-	linkSecret  string
-	inviteKey   string
-	root        string
-	goLog       *syncBuffer
+	// authServer is auth-service's compatibility routes (go-api's refresh and
+	// the session issue route) over the auth stores on the runtime role.
+	authServer *httptest.Server
+	// issuerServer is go-api's session routes with auth-service owning
+	// sessions (AUTH_PROXY_SESSIONS): the session comes from authServer.
+	issuerServer *httptest.Server
+	// authServerOne is authServer's routes over runtimeOne, a one-connection
+	// pool on the runtime role; issueOne is go-api's issue client for it.
+	authServerOne *httptest.Server
+	runtimeOne    *pgxpool.Pool
+	issueOne      *sessionissue.Client
+	signer        *edgetoken.Signer
+	linkSecret    string
+	inviteKey     string
+	root          string
+	goLog         *syncBuffer
 }
 
 var (
@@ -191,12 +203,30 @@ func newEnv(t *testing.T) (*env, error) {
 	}
 	for _, route := range session.Routes(session.Deps{Pool: goPool, Guard: guard, Auth: auth, Verifier: verifier, Signer: e.signer,
 		Mail: authmail.Config{LinkSecret: e.linkSecret}, Limits: httpapi.NewMemoryCounters(nil), Logger: logger}) {
-		if route.Pattern == "/api/v1/auth/accept-invite" {
+		switch route.Pattern {
+		case "/api/v1/auth/accept-invite", "/api/v1/auth/onboard", "/api/v1/auth/refresh":
 			mux.Handle(route.Method+" "+route.Pattern, route.Handler)
 		}
 	}
 	e.server = httptest.NewServer(mux)
 	closers = append(closers, e.server.Close)
+	if err := e.startAuthPlane(ctx, schema, logger, jwtKey); err != nil {
+		return nil, err
+	}
+	issuer, err := e.seedIssueClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	issuerMux := http.NewServeMux()
+	for _, route := range session.Routes(session.Deps{Pool: goPool, Guard: guard, Auth: auth, Verifier: verifier, Signer: e.signer,
+		Mail: authmail.Config{LinkSecret: e.linkSecret}, Limits: httpapi.NewMemoryCounters(nil), Logger: logger, Issuer: issuer}) {
+		switch route.Pattern {
+		case "/api/v1/auth/accept-invite", "/api/v1/auth/onboard":
+			issuerMux.Handle(route.Method+" "+route.Pattern, route.Handler)
+		}
+	}
+	e.issuerServer = httptest.NewServer(issuerMux)
+	closers = append(closers, e.issuerServer.Close)
 
 	rootID := uuid.New()
 	if _, err := admin0.Exec(ctx, `INSERT INTO public.users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
@@ -266,6 +296,13 @@ func (s *syncBuffer) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.buf.Write(p)
+}
+
+// contains reports whether go-api's log holds text.
+func (s *syncBuffer) contains(text string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return strings.Contains(s.buf.String(), text)
 }
 
 // deadlockLines are go-api's logged errors that name a deadlock.

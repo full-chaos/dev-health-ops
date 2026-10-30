@@ -238,7 +238,7 @@ func (h provisioningHandlers) admit(w http.ResponseWriter, r *http.Request, op s
 // list is default-deny: any other operation (the invite revoke and organization
 // suspend among them) refuses a workload token before the key set is read.
 var workloadOperations = map[string]bool{opMembershipAdd: true, opMembershipRole: true, opMembershipRemove: true,
-	opMembershipTransfer: true, opInviteCreate: true, opInviteAccept: true, opOrgDeprovision: true, opOrgReactivate: true}
+	opMembershipTransfer: true, opInviteCreate: true, opInviteAccept: true, opOrgDeprovision: true, opOrgReactivate: true, opOrgState: true}
 
 // caller authorizes the bearer, its class read from the text before any store
 // or key-set read: the session issuer credential holding memberships:write

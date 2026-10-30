@@ -29,7 +29,7 @@ func newProvWorkloadFixture(t *testing.T) *provWorkloadFixture {
 // workloadRouteOps are the routes that take the go-api workload token; every
 // other provisioning route refuses it.
 var workloadRouteOps = []string{opMembershipAdd, opMembershipRole, opMembershipRemove, opMembershipTransfer,
-	opInviteCreate, opInviteAccept, opOrgDeprovision, opOrgReactivate}
+	opInviteCreate, opInviteAccept, opOrgDeprovision, opOrgReactivate, opOrgState}
 
 // workloadRouteCases and offWorkloadRouteCases split routeCases by workloadRouteOps.
 func workloadRouteCases() []routeCase { return routeCasesWhere(true) }
@@ -85,6 +85,9 @@ func TestProvisioningRoutesAcceptTheGoAPIWorkloadToken(t *testing.T) {
 		}
 		if got, _ := f.uses(c.op); got != 0 {
 			t.Fatalf("%s: compat uses = %d after a workload call, want 0", c.op, got)
+		}
+		if c.op == opOrgState {
+			continue // a read-only route: no actor, no verb caller, no audit row
 		}
 		caller := callerOf(f.provFixture, c.op)
 		if caller.Workload == nil || *caller.Workload != want || caller.JTI != jti || caller.CredentialID != "" {
@@ -243,7 +246,7 @@ func TestProvisioningRoutesOffTheWorkloadListRefuseTheWorkloadToken(t *testing.T
 		ops = append(ops, c.op)
 	}
 	slices.Sort(ops)
-	if want := []string{opInviteRevoke, opOrgState, opOrgSuspend}; !slices.Equal(ops, want) {
+	if want := []string{opInviteRevoke, opOrgSuspend}; !slices.Equal(ops, want) {
 		t.Fatalf("routes off the workload list = %v, want %v", ops, want)
 	}
 	for _, c := range off {

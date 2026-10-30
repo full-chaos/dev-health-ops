@@ -223,6 +223,23 @@ type fakeReactivate struct {
 	sid         uuid.UUID
 	sIfRevision *int64
 	sactor      org.Actor
+	// Get is the state read: gets counts calls, status/revision/revStep shape the answer (the revision grows by revStep on
+	// each further read), getErr fails it.
+	gets     int
+	gid      uuid.UUID
+	status   org.Status
+	revision int64
+	revStep  int64
+	getErr   error
+}
+
+func (f *fakeReactivate) Get(_ context.Context, id uuid.UUID) (*org.Organization, error) {
+	f.gets++
+	f.gid = id
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
+	return &org.Organization{ID: id, Status: f.status, Revision: f.revision + int64(f.gets-1)*f.revStep}, nil
 }
 
 func (f *fakeReactivate) SuspendAuthorized(ctx context.Context, id uuid.UUID, ifRevision *int64, a org.Actor, authz org.Authorize) (bool, error) {
@@ -1120,8 +1137,10 @@ func TestOrgSuspendIsServedWithItsProfileRow(t *testing.T) {
 	if got := f.post(PatternOrgSuspend, encode(routeCases()[8].body(f, f.super)), nil); got.Code != http.StatusOK {
 		t.Fatalf("suspend with its row: %d %s, want 200", got.Code, got.Body)
 	}
-	if strings.Contains(f.logs.String(), "not mounted") {
-		t.Fatalf("a not-mounted line was logged with the row present: %s", f.logs.String())
+	for _, line := range strings.Split(f.logs.String(), "\n") {
+		if strings.Contains(line, "not mounted") && strings.Contains(line, PatternOrgSuspend) {
+			t.Fatalf("a not-mounted line for the suspend route was logged with its row present: %s", line)
+		}
 	}
 }
 

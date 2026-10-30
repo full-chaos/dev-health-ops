@@ -22,11 +22,16 @@ func TestABlindMarginNamesTheActiveLegacyRowsForReview(t *testing.T) {
 		"public.provider_oauth_credentials": "true",
 		"auth.users.password":               "t.password_hash IS NOT NULL",
 		"public.users.password":             "t.password_hash IS NOT NULL",
+		"auth.external_identities":          "true",
 	}
 	for name, pred := range want {
 		def := mustSection(t, name)
 		sql := blindReviewSQL(def, testSchema(t))
-		if sql == "" || !strings.Contains(sql, "SELECT "+def.idSQL()+" FROM "+def.qualified(testSchema(t))+" t WHERE "+pred) {
+		id := def.idSQL()
+		if def.blindIDExpr != "" {
+			id = def.blindIDExpr
+		}
+		if sql == "" || !strings.Contains(sql, "SELECT "+id+" FROM "+def.qualified(testSchema(t))+" t WHERE "+pred) {
 			t.Errorf("%s: blind-margin review SQL = %q, want the ids where %s", name, sql, pred)
 		}
 	}

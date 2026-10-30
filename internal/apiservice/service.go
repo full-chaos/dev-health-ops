@@ -274,6 +274,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			OrgReactivator:     deps.OrgReactivator,
 			OrgProvisioner:     deps.OrgProvisioner,
 			OrgSuspender:       deps.OrgSuspender,
+			OrgState:           deps.OrgState,
 		})...)
 	}
 	webhookintake.LogUnconfiguredSecrets(logger)
@@ -412,7 +413,7 @@ func configureWith(
 		return nil, dependencyFailure(ctx, logger, "api_org_provisioning", "api_org_provisioning_config_invalid", err)
 	}
 	if orgClient != nil {
-		deps.OrgReactivator, deps.OrgSuspender = orgClient, orgClient
+		deps.OrgReactivator, deps.OrgSuspender, deps.OrgState = orgClient, orgClient, orgClient
 	}
 	deps.OrgProvisioner, err = orgProvisioner(authProxy, envsecrets.ProcessLookup)
 	if err != nil {

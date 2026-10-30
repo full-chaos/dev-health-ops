@@ -61,7 +61,7 @@ type CredentialFlows interface {
 // CredentialDeps are the credentials routes' collaborators.
 type CredentialDeps struct {
 	Flows    CredentialFlows
-	Sessions Sessions
+	Sessions GuardedSessions
 	Users    Users
 	Issuer   *Issuer
 	Logger   *slog.Logger

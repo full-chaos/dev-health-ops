@@ -319,6 +319,7 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 	distinct := map[string]string{
 		EnvUsersOwned:                  "true",
 		EnvOrgsOwned:                   "true",
+		EnvRevisionFeed:                "on",
 		rule.OwnedEnv:                  "true",
 		EnvLogLevel:                    "debug",
 		EnvShutdownTimeout:             "42s",
@@ -353,6 +354,7 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 	read := map[string]func(Config) string{
 		EnvUsersOwned:                  func(c Config) string { return strconv.FormatBool(c.UsersOwned) },
 		EnvOrgsOwned:                   func(c Config) string { return strconv.FormatBool(c.OrgsOwned) },
+		EnvRevisionFeed:                func(c Config) string { return strconv.FormatBool(c.RevisionFeed) },
 		rule.OwnedEnv:                  func(c Config) string { return strconv.FormatBool(c.PlatformRolesOwned) },
 		EnvLogLevel:                    func(c Config) string { return c.LogLevel.String() },
 		EnvShutdownTimeout:             func(c Config) string { return c.ShutdownTimeout.String() },
@@ -417,6 +419,9 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 			}
 			if option.Env == EnvSocialLinkRoutes {
 				env[EnvAccessTokenSecret], env[EnvSessionSuccessorKey] = testAccessSecret, testSuccessorKey
+				env[EnvValkeyURI] = testValkeyURI
+			}
+			if option.Env == EnvRevisionFeed {
 				env[EnvValkeyURI] = testValkeyURI
 			}
 			if option.Env == EnvSessionIssueWorkloadSubject {

@@ -559,13 +559,17 @@ func configureWithRoutes(
 		return nil, err
 	}
 
-	// No consumer of auth outbox events exists yet, so the loop is built with no
-	// sink: publishing stays off (a sink-less publisher would mark events
-	// delivered that nobody received) and the reaper runs. A sink is injected
-	// here when the first consumer lands.
+	// The loop is built with no sink unless AUTH_REVISION_FEED=on (default off): publishing then stays off (a
+	// sink-less publisher would mark events delivered that nobody received) and the reaper runs. On, the sink feeds the
+	// revision feed (revisionfeed), and the subscriber component runs beside the loop.
+	feedPublisher, feedComponents, err := revisionFeed(cfg, logger, store.Pool(), schemaID)
+	if err != nil {
+		closeStore()
+		return nil, err
+	}
 	loopConfig := audit.DefaultLoopConfig(schemaID, registry)
 	loopConfig.Logger = logger
-	outboxLoop, err := audit.NewOutboxLoop(store.Pool(), nil, loopConfig)
+	outboxLoop, err := audit.NewOutboxLoop(store.Pool(), feedPublisher, loopConfig)
 	if err != nil {
 		closeStore()
 		return nil, err
@@ -574,6 +578,7 @@ func configureWithRoutes(
 	components := []lifecycle.Component{store, keyStatesComponent{states: keyStates}}
 	components = append(components, limitComponents...)
 	components = append(components, credComponents...)
+	components = append(components, feedComponents...)
 	return append(components,
 		outboxLoop,
 		announcedListener{listener: operatorHTTP, logger: logger},

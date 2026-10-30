@@ -233,11 +233,18 @@ func (h provisioningHandlers) admit(w http.ResponseWriter, r *http.Request, op s
 	return body, caller, true
 }
 
+// workloadOperations are the operations that take the go-api workload token. The
+// list is default-deny: any other operation (the invite revoke and organization
+// suspend among them) refuses a workload token before the key set is read.
+var workloadOperations = map[string]bool{opMembershipAdd: true, opMembershipRole: true, opMembershipRemove: true,
+	opMembershipTransfer: true, opInviteCreate: true, opInviteAccept: true, opOrgDeprovision: true, opOrgReactivate: true}
+
 // caller authorizes the bearer, its class read from the text before any store
 // or key-set read: the session issuer credential holding memberships:write
-// (counted until it is retired), or the go-api workload token (audience
-// auth-service, the configured go-api subject). Every refusal is the one 401;
-// the reason is only logged. On a refusal it has already answered.
+// (counted until it is retired), or, on workloadOperations only, the go-api
+// workload token (audience auth-service, the configured go-api subject). Every
+// refusal is the one 401; the reason is only logged. On a refusal it has
+// already answered.
 func (h provisioningHandlers) caller(w http.ResponseWriter, r *http.Request, op, bearer string) (audit.Caller, bool) {
 	ctx := r.Context()
 	class, reason := classifyIssueBearer(bearer)
@@ -254,6 +261,10 @@ func (h provisioningHandlers) caller(w http.ResponseWriter, r *http.Request, op,
 		}
 		h.rec.logger.WarnContext(ctx, "provisioning route refused: service credential", "operation", op, "refusal", string(refused))
 	case issueClassWorkload:
+		if !workloadOperations[op] {
+			h.rec.logger.WarnContext(ctx, "provisioning route refused: workload token", "operation", op, "refusal", "operation")
+			break
+		}
 		workload, why, err := h.Workload.authorize(bearer)
 		if err != nil {
 			h.rec.refuse(w, r, op, unavailable(reasonDependency), err)

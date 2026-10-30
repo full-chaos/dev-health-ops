@@ -190,6 +190,41 @@ func TestProvisioningWorkloadKeySetOutageIs503(t *testing.T) {
 	}
 }
 
+// The production list is exactly workloadRouteOps, and every route case is
+// either on it and takes a workload token, or is off it and refuses one: a new
+// route takes no workload token until it is listed.
+func TestEveryProvisioningRouteIsOnTheWorkloadListOrRefusesTheToken(t *testing.T) {
+	var listed []string
+	for op := range workloadOperations {
+		listed = append(listed, op)
+	}
+	slices.Sort(listed)
+	want := slices.Clone(workloadRouteOps)
+	slices.Sort(want)
+	if !slices.Equal(listed, want) {
+		t.Fatalf("workloadOperations = %v, want %v", listed, want)
+	}
+	cased := map[string]bool{}
+	for _, c := range routeCases() {
+		cased[c.op] = true
+		f := newProvWorkloadFixture(t)
+		header, _ := f.w.mint("workload+jwt", nil)
+		response := f.post(c.path, encode(c.body(f.provFixture, f.super)), header)
+		if workloadOperations[c.op] {
+			if response.Code != http.StatusOK {
+				t.Fatalf("%s is on the list: %d %s", c.op, response.Code, response.Body)
+			}
+			continue
+		}
+		expectRefusal(t, response, http.StatusUnauthorized, reasonInvalidCredentials)
+	}
+	for _, op := range provisioningOperations {
+		if !cased[op] {
+			t.Fatalf("%s has no route case", op)
+		}
+	}
+}
+
 // The invite revoke and organization suspend routes are not in
 // workloadRouteOps: a valid go-api workload token is the same 401 body as a
 // refused session issuer credential, before the key set, the credential check,

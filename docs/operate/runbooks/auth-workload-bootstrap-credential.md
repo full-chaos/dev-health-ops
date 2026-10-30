@@ -24,8 +24,8 @@ role is refused.
 - `-out` must not exist yet. Hand the file to the workload's secret mount, then remove your copy.
 - Every value expires: `-expires-in` defaults to `720h` (30 days), at most `2160h` (90 days).
 - `bootstrap-create` and `bootstrap-rotate` refuse a disabled workload. The class says which row is disabled:
-  `the workload row is disabled` or `the workload's principal is disabled, its row is not`. No auth-migrate
-  verb enables a workload or its principal today: re-enabling needs a reviewed change. `bootstrap-revoke` and
+  `the workload row is disabled` or `the workload's principal is disabled, its row is not`. Each class names
+  the `enable` verb that recovers it (see Enable a disabled workload). `bootstrap-revoke` and
   `bootstrap-disable` work on a disabled workload.
 
 ## Create
@@ -64,6 +64,41 @@ auth-migrate workloads bootstrap-disable -workload NAME -apply
 This revokes every live bootstrap value of the workload (reason `compromised`) in one transaction. The exchange
 refuses them at once. Workload tokens issued before the disable stay valid for at most 300 seconds. The workload
 and its Kubernetes bindings are not changed.
+
+## Enable a disabled workload
+
+```sh
+auth-migrate workloads enable -workload NAME -operator ID
+auth-migrate workloads enable -workload NAME -operator ID -apply
+auth-migrate workloads enable -workload NAME -operator ID -enable-principal -apply
+```
+
+- `ID` is the auth principal id of the operator who enables the workload. It must exist, be enabled, and not
+  be the workload's own principal. The audit row `auth.workload.enabled` (reason `workload_enabled`) names it
+  as the actor.
+- Without `-enable-principal` the verb clears only the workload row's disabled mark. It refuses a workload
+  whose principal is disabled (`the workload's principal is disabled; add -enable-principal to enable it
+  too`) and writes nothing. `Store.Disable` and the restore fence disable both rows, so such a workload needs
+  the flag.
+- The verb refuses while the workload holds a live bootstrap value (`the workload holds a live bootstrap
+  value; revoke it first`) and writes nothing, not even an audit row: the value would be accepted again after
+  `enable`. Rotate and create are refused while the workload is disabled; revoke works.
+- With `-enable-principal` the verb also clears the principal's disabled mark, in the same transaction and
+  the same audit row (`principal_enabled` = `true`, `principal_id`). It refuses a principal that is not of
+  kind `workload`.
+- The dry run prints what it would enable. A workload with nothing disabled writes nothing.
+- The verb mints no credential.
+
+Recovery after the restore fence or `Store.Disable` (both rows disabled): revoke, then enable, then create.
+
+```sh
+auth-migrate workloads bootstrap-disable -workload NAME -apply
+auth-migrate workloads enable -workload NAME -operator ID -enable-principal -apply
+auth-migrate workloads bootstrap-create -workload NAME -out /secure/dir/NAME.bootstrap -apply
+```
+
+`bootstrap-disable` revokes every live value; `bootstrap-revoke -credential ID -reason compromised -apply`
+revokes one. Deliver the new file to the workload's secret mount.
 
 ## A verb fails
 

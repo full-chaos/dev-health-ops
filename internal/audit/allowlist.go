@@ -47,6 +47,9 @@ var allowedAttributeKeys = map[string]struct{}{
 	// A provisioning row of a workload call also names the workload principal.
 	"workload_jti":        {},
 	"caller_principal_id": {},
+	// The auth.workload.enabled row of an enable that also enabled the
+	// workload's principal (principal_id names it).
+	"principal_enabled": {},
 
 	"purged_email_verification_tokens": {},
 	"purged_password_reset_tokens":     {},
@@ -162,6 +165,7 @@ var attributeVocabulary = map[string][]string{
 		"email_collision", "signup_unavailable", "identity_conflict",
 		"provider_already_linked", "expired", "principal_not_found", "malformed", "compromised",
 		"invite_created", "invite_accepted", "invite_revoked", "restore_fence_bootstrap",
+		"workload_enabled",
 	},
 	"target_kind": {
 		"principal", "organization", "membership", "role_assignment", "resource_grant", "credential",
@@ -189,6 +193,8 @@ var attributeVocabulary = map[string][]string{
 	"source": {"go-api-delegated"},
 	// amr is session.v1's closed authentication-method set.
 	"amr": {"pwd", "otp", "mfa", "hwk", "swk", "fed"},
+	// principal_enabled is present only when the principal row was enabled.
+	"principal_enabled": {"true"},
 	"changed_fields": {
 		"role_key", "status", "display_name", "disabled_at", "expires_at", "revoked_at", "email", "email_verified_at",
 		"scopes", "audiences", "organization_id", "allowed_actions", "binding", "invited_by", "joined_at",

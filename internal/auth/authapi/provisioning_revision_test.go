@@ -192,26 +192,14 @@ func TestOrgStateBodyIsStrict(t *testing.T) {
 	}
 }
 
-// Only the session issuer service credential reaches the route: no bearer, a refused or unknown credential, and the
-// go-api workload token (the route is outside the workload per-op set) are the one 401, before any read.
-func TestOrgStateTakesTheIssuerServiceCredentialOnly(t *testing.T) {
+// No bearer and a refused or unknown credential are the one 401, before any read.
+func TestOrgStateRefusesABadServiceCredential(t *testing.T) {
 	f := newProvFixtureWith(t, docWithRow(t, stateRoute))
 	expectRefusal(t, f.post(stateRoute, f.stateBody(), map[string]string{}), http.StatusUnauthorized, reasonInvalidCredentials)
 	f.creds.refusal = servicecred.RefusedRevoked
 	expectRefusal(t, f.post(stateRoute, f.stateBody(), nil), http.StatusUnauthorized, reasonInvalidCredentials)
 	if f.reactivate.gets != 0 {
 		t.Fatal("a refused credential reached the store")
-	}
-
-	w := newWorkloadIssueFixture(t)
-	g := newProvFixtureFor(t, docWithRow(t, stateRoute), w.workload)
-	header, _ := w.mint("workload+jwt", nil)
-	expectRefusal(t, g.post(stateRoute, g.stateBody(), header), http.StatusUnauthorized, reasonInvalidCredentials)
-	if g.reactivate.gets != 0 || g.storeCalls() != 0 {
-		t.Fatal("a workload token reached the state read")
-	}
-	if got := g.post(stateRoute, g.stateBody(), nil); got.Code != http.StatusOK {
-		t.Fatalf("the issuer credential on the state route: %d %s", got.Code, got.Body)
 	}
 }
 

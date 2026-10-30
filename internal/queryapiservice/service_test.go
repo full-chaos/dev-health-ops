@@ -81,7 +81,7 @@ func startOnFreeAddrs(t *testing.T, n, operator int, build func(addrs []string) 
 		for time.Now().Before(deadline) {
 			select {
 			case code := <-r.done:
-				if code != 0 && strings.Contains(r.stderr.String(), "address already in use") && attempt < 5 {
+				if code != 0 && strings.Contains(r.stdout.String()+r.stderr.String(), "address already in use") && attempt < 5 {
 					t.Logf("attempt %d: a freed address was taken before the service bound it; retrying on new addresses", attempt)
 					r.cancel()
 					goto again

@@ -170,13 +170,14 @@ func (s pgStore) updateOrganization(ctx context.Context, id uuid.UUID, patch org
 	var err error
 	if authActive != nil {
 		// With an auth state hook the row is locked first, and auth is read while the lock is held: the writes of
-		// two PATCHes of one organization are ordered by the lock, so the last write read auth last.
+		// two PATCHes of one organization are ordered by the lock, so the last write read auth last. NO KEY UPDATE
+		// lets foreign key checks through during the re-read.
 		tx, err = s.Pool.Begin(ctx)
 		if err != nil {
 			return nil, err
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
-		existing, err = scanOrganization(tx.QueryRow(ctx, `SELECT `+orgColumns+` FROM organizations WHERE id = $1 FOR UPDATE`, id))
+		existing, err = scanOrganization(tx.QueryRow(ctx, `SELECT `+orgColumns+` FROM organizations WHERE id = $1 FOR NO KEY UPDATE`, id))
 	} else {
 		existing, err = s.orgByID(ctx, id)
 	}

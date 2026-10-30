@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"reflect"
 	"strings"
 	"sync"
@@ -363,5 +364,73 @@ func TestShutdownHonorsReviewedComponentBudget(t *testing.T) {
 	}
 	if reserved.deadline.After(tail.deadline) {
 		t.Fatalf("the reserved component's deadline %s is after the global deadline %s", reserved.deadline, tail.deadline)
+	}
+}
+
+type listeningComponent struct {
+	listener net.Listener
+}
+
+func (*listeningComponent) Name() string { return "listening" }
+
+func (c *listeningComponent) Start(context.Context) error {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	c.listener = listener
+	return err
+}
+
+func (c *listeningComponent) Shutdown(context.Context) error { return c.listener.Close() }
+
+func (c *listeningComponent) Address() string {
+	if c.listener == nil {
+		return ""
+	}
+	return c.listener.Addr().String()
+}
+
+// A component that reports a bound address gets one "runtime component listening" line carrying that exact address, so a
+// caller that asked for port 0 can read the real one; a component with no address logs no such line.
+func TestRuntimeLogsTheBoundAddressOfAListeningComponent(t *testing.T) {
+	t.Parallel()
+
+	handler := &capturingHandler{}
+	listening := &listeningComponent{}
+	plain := &recordingComponent{name: "plain", record: func(string) {}}
+	runtime, err := New(Options{Logger: slog.New(handler), ShutdownTimeout: time.Second, Components: []Component{plain, listening}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- runtime.Run(ctx) }()
+
+	deadline := time.Now().Add(5 * time.Second)
+	var record slog.Record
+	var ok bool
+	for !ok && time.Now().Before(deadline) {
+		record, ok = handler.find("runtime component listening")
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !ok {
+		t.Fatal("no runtime component listening line")
+	}
+	attrs := attrMap(record)
+	if attrs["component"] != "listening" || attrs["address"] != listening.Address() {
+		t.Fatalf("attrs = %v, want component listening and address %s", attrs, listening.Address())
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	handler.mu.Lock()
+	defer handler.mu.Unlock()
+	lines := 0
+	for _, r := range handler.records {
+		if r.Message == "runtime component listening" {
+			lines++
+		}
+	}
+	if lines != 1 {
+		t.Fatalf("%d listening lines, want 1 (the plain component has no address)", lines)
 	}
 }

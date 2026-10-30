@@ -29,6 +29,10 @@ type GrantRecord struct {
 	// Grantable is WITH GRANT OPTION. Losing the option is a narrowing even
 	// when the privilege itself survives.
 	Grantable bool
+	// Role is the session reader role that held the grant; empty for the
+	// runtime role. It is left out of the encoding when empty, so a runtime
+	// role narrowing keeps its digest.
+	Role string `json:",omitempty"`
 }
 
 // String is for humans only; identity and the digest never use it. Identifiers
@@ -39,13 +43,20 @@ func (g GrantRecord) String() string {
 	if g.Grantable {
 		option = " WITH GRANT OPTION"
 	}
-	if g.Column != "" {
-		return fmt.Sprintf("%s %q.%q %s%s", g.Kind, g.Object, g.Column, g.Privilege, option)
+	holder := ""
+	if g.Role != "" {
+		holder = fmt.Sprintf("session reader %q: ", g.Role)
 	}
-	return fmt.Sprintf("%s %q %s%s", g.Kind, g.Object, g.Privilege, option)
+	if g.Column != "" {
+		return fmt.Sprintf("%s%s %q.%q %s%s", holder, g.Kind, g.Object, g.Column, g.Privilege, option)
+	}
+	return fmt.Sprintf("%s%s %q %s%s", holder, g.Kind, g.Object, g.Privilege, option)
 }
 
 func (g GrantRecord) less(o GrantRecord) bool {
+	if g.Role != o.Role {
+		return g.Role < o.Role
+	}
 	if g.Kind != o.Kind {
 		return g.Kind < o.Kind
 	}

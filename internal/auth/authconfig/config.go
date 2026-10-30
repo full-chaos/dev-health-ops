@@ -41,6 +41,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
@@ -232,6 +233,11 @@ type Config struct {
 	// OrgsOwned is AUTH_ORGS_OWNED: auth-service is the only writer of
 	// auth.organizations; the legacy login projection writes nothing.
 	OrgsOwned bool
+
+	// PlatformRolesOwned is AUTH_PLATFORM_ROLES_OWNED, parsed by
+	// rule.OwnedFromLookup: the sign-in state reads is_superuser from
+	// the auth platform role assignments.
+	PlatformRolesOwned bool
 
 	// Provisioning mounts the internal membership and invite routes.
 	Provisioning Provisioning
@@ -508,6 +514,9 @@ func Load(spec Spec) (Config, error) {
 		return Config{}, err
 	}
 	if cfg.OrgsOwned, err = orgsOwned(lookup); err != nil {
+		return Config{}, err
+	}
+	if cfg.PlatformRolesOwned, err = rule.OwnedFromLookup(lookup); err != nil {
 		return Config{}, err
 	}
 	if cfg.Provisioning, err = provisioning(lookup, cfg.Session.Enabled); err != nil {

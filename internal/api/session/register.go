@@ -108,7 +108,7 @@ func (h handlers) register(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
 
-	existing, err := userByEmail(ctx, tx, email)
+	existing, err := h.userByEmail(ctx, tx, email)
 	if err != nil {
 		h.fail(w, r, "load user", err)
 		return

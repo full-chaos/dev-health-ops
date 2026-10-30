@@ -415,3 +415,5 @@ func TestDecodeStoredReadsNullAndRefusesMalformedText(t *testing.T) {
 		t.Fatal(value, err)
 	}
 }
+
+func (activeUsers) ReadsPlatformRoles() bool { return false }

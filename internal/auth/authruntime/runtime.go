@@ -114,7 +114,7 @@ func sessionRoutes(
 		return nil, err
 	}
 	routes, err := authapi.Routes(authapi.Deps{
-		Sessions: sessions, Users: authapi.PGUsers{Pool: pool}, Issuer: issuer, Logger: logger,
+		Sessions: sessions, Users: pgUsers(cfg, pool, schema), Issuer: issuer, Logger: logger,
 	})
 	if err != nil {
 		return nil, err
@@ -184,7 +184,7 @@ func compatRoutes(
 		return nil, err
 	}
 	deps := authapi.CompatDeps{
-		Sessions: sessions, Users: authapi.PGUsers{Pool: pool}, Issuer: issuer, Logger: logger, IssueWorkload: issueWorkload,
+		Sessions: sessions, Users: pgUsers(cfg, pool, schema), Issuer: issuer, Logger: logger, IssueWorkload: issueWorkload,
 		Projector: identities, Social: socialService, ServiceCredentials: servicecred.PG{Pool: pool},
 		AppendAudit: func(ctx context.Context, event audit.AuditEvent) error {
 			return audit.Append(ctx, pool, schema, event)
@@ -210,7 +210,7 @@ func compatRoutes(
 		link = socialService
 	}
 	links, err := authapi.SocialLinkRoutes(authapi.SocialLinkDeps{
-		Sessions: sessions, Users: authapi.PGUsers{Pool: pool}, Issuer: issuer, Logger: logger, Social: link, Limits: limits,
+		Sessions: sessions, Users: pgUsers(cfg, pool, schema), Issuer: issuer, Logger: logger, Social: link, Limits: limits,
 	})
 	if err != nil {
 		return nil, err
@@ -807,6 +807,11 @@ func runHealthcheck(parent context.Context, cfg authconfig.Config, streams IO) i
 // healthcheckSlack is added to the per-check readiness deadline so the probe
 // outlasts a readiness evaluation that runs to its own bound.
 const healthcheckSlack = time.Second
+
+// pgUsers is the routes' read of the go-api users, with the platform roles switch.
+func pgUsers(cfg authconfig.Config, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier) authapi.PGUsers {
+	return authapi.PGUsers{Pool: pool, AuthSchema: schema, PlatformRolesOwned: cfg.PlatformRolesOwned}
+}
 
 // fenceReason is the closed token the restore-fence check logs: never the error text.
 func fenceReason(err error) string {

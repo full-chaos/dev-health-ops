@@ -27,6 +27,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/edgetokenmint"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
@@ -136,6 +137,14 @@ func run(ctx context.Context, args []string, stdout, flagErrOutput io.Writer, op
 		return err
 	}
 
+	// The platform roles switch is read before the database is opened, so a
+	// malformed value refuses without a connection attempt.
+	platformRolesOwned, err := rule.OwnedFromLookup(envsecrets.ProcessLookup)
+	if err != nil {
+		return err
+	}
+	authSchema, _ := envsecrets.ProcessLookup("AUTH_DATABASE_SCHEMA")
+
 	ctx, cancel := context.WithTimeout(ctx, lookupTimeout)
 	defer cancel()
 	db, closeDB, err := open(ctx)
@@ -148,7 +157,8 @@ func run(ctx context.Context, args []string, stdout, flagErrOutput io.Writer, op
 	if *principal == principalAdminProof {
 		mint = edgetokenmint.MintForAdminProve
 	}
-	token, err := mint(ctx, db, signingKey, *org, edgetokenmint.Options{TTL: *ttl})
+	token, err := mint(ctx, db, signingKey, *org, edgetokenmint.Options{TTL: *ttl,
+		PlatformRolesOwned: platformRolesOwned, AuthSchema: strings.TrimSpace(authSchema)})
 	if err != nil {
 		return err
 	}

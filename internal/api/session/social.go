@@ -125,7 +125,7 @@ func (h handlers) socialLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
-	user, err := userByProvider(ctx, tx, providerUserID, provider)
+	user, err := h.userByProvider(ctx, tx, providerUserID, provider)
 	if err != nil {
 		h.fail(w, r, "load user by provider", err)
 		return
@@ -141,7 +141,7 @@ func (h handlers) socialLogin(w http.ResponseWriter, r *http.Request) {
 			h.fail(w, r, "provider email", errProviderValueType)
 			return
 		}
-		if user, err = userByEmail(ctx, tx, pythonparity.Lower(email)); err != nil {
+		if user, err = h.userByEmail(ctx, tx, pythonparity.Lower(email)); err != nil {
 			h.fail(w, r, "load user by email", err)
 			return
 		}

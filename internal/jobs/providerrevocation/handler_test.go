@@ -579,3 +579,11 @@ func TestARefusedRepeatRevokeEndsVisiblyAsAnExhaustedRow(t *testing.T) {
 		t.Fatalf("the refused repeat was not named: %s", logs.String())
 	}
 }
+
+// The claim reads the key version: a row sealed from a stored credential (oauth-v1) holds the OAuthTokens JSON, not
+// the token.
+func TestClaimSQLReadsTheTokenKeyVersion(t *testing.T) {
+	if !strings.HasPrefix(claimSQL, "SELECT id, token_encrypted, token_key_version FROM provider_oauth_revocations") {
+		t.Fatalf("claim SQL does not read token_key_version:\n%s", claimSQL)
+	}
+}

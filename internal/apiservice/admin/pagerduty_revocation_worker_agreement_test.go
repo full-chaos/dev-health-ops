@@ -38,3 +38,13 @@ func TestOrgDeletionClaimsOneRevocationWithSkipLocked(t *testing.T) {
 		t.Fatalf("org deletion claim is not the shared one-row SKIP LOCKED claim: %s", query)
 	}
 }
+
+// Every route claim reads the key version with the sealed token: a row the restore fence queued from a stored
+// credential (oauth-v1) holds the OAuthTokens JSON, which is decoded before the send, never sent as is.
+func TestRouteClaimsReadTheTokenKeyVersion(t *testing.T) {
+	for _, query := range []string{pagerDutyRevocationClaimSQL("true"), pagerDutyRevocationClaimOneSQL("true")} {
+		if !strings.HasPrefix(query, "SELECT id, token_encrypted, token_key_version FROM provider_oauth_revocations") {
+			t.Fatalf("route claim does not read token_key_version: %s", query)
+		}
+	}
+}

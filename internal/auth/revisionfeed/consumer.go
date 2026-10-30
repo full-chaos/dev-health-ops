@@ -63,7 +63,7 @@ func NewConsumer(cfg Config) (*Consumer, error) {
 	}
 	var err error
 	if c.events, err = meter.Int64Counter("devhealth_auth_revision_feed_events_total",
-		metric.WithDescription("Outbox events the revision feed consumer classified, by disposition (apply, ignore, gap).")); err != nil {
+		metric.WithDescription("Outbox events the revision feed consumer classified, by disposition (apply, ignore, gap, dropped).")); err != nil {
 		return nil, fmt.Errorf("revisionfeed: events counter: %w", err)
 	}
 	if c.resyncs, err = meter.Int64Counter("devhealth_auth_revision_feed_resync_total",
@@ -130,7 +130,8 @@ func (c *Consumer) Resubscribed(ctx context.Context) {
 func (c *Consumer) CatchUp(ctx context.Context, floors map[string]int64) {
 	for field, revision := range floors {
 		typ, id, ok := splitAggregateKey(field)
-		if !ok || revision < 1 {
+		if !ok || !validRevision(revision) {
+			c.Dropped(ctx)
 			continue
 		}
 		c.Handle(ctx, contracts.ProvisioningEvent{
@@ -138,6 +139,12 @@ func (c *Consumer) CatchUp(ctx context.Context, floors map[string]int64) {
 			Payload: contracts.ProvisioningPayload{Revision: contracts.Revision(revision)},
 		})
 	}
+}
+
+// Dropped counts one message or floor that was refused before it reached the cursor (malformed, or a revision outside
+// 1..MaxRevision): events_total{disposition=dropped}. The cursor never moves on it.
+func (c *Consumer) Dropped(ctx context.Context) {
+	c.events.Add(ctx, 1, metric.WithAttributes(attribute.String("disposition", "dropped")))
 }
 
 // logDisposition logs the aggregate type, the revision and the disposition only: never the aggregate id or the payload.

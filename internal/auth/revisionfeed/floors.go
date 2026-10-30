@@ -11,6 +11,13 @@ import (
 // them as an ADVISORY second input, never a sole source: floor = max(WAL manifest, these floors), and only while
 // ReadStatus says Usable. A change to a name, a return shape, the key layout or the usable rule is a contract change.
 
+// MaxRevision is the largest valid revision, 2^53-1: the largest integer every consumer (a JSON number, a float64) holds
+// exactly. A valid revision is 1..MaxRevision; one check serves every ingress point (the floors, the live messages, the
+// catch-up).
+const MaxRevision int64 = 1<<53 - 1
+
+func validRevision(revision int64) bool { return revision >= 1 && revision <= MaxRevision }
+
 // splitAggregateKey is the inverse of contracts.AggregateKey: the type ends at the first colon (aggregate types have none),
 // the id is the rest (it may hold colons). Both must be non-empty.
 func splitAggregateKey(field string) (typ, id string, ok bool) {
@@ -21,7 +28,7 @@ func splitAggregateKey(field string) (typ, id string, ok bool) {
 	return typ, id, true
 }
 
-// ErrCorruptFloors: a field of the hash is not "<type>:<id>", or a value is not a positive decimal integer. The text never quotes the field (it holds an
+// ErrCorruptFloors: a field of the hash is not "<type>:<id>", or a value is not a decimal integer in 1..MaxRevision. The text never quotes the field (it holds an
 // aggregate id) or the value.
 var ErrCorruptFloors = errors.New("revisionfeed: the published floors are corrupt")
 
@@ -38,7 +45,7 @@ func PublishedFloors(ctx context.Context, client Client) (map[string]int64, erro
 			return nil, ErrCorruptFloors
 		}
 		revision, err := strconv.ParseInt(value, 10, 64)
-		if err != nil || revision < 1 {
+		if err != nil || !validRevision(revision) {
 			return nil, ErrCorruptFloors
 		}
 		floors[field] = revision

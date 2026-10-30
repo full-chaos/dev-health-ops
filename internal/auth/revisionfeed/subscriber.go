@@ -147,7 +147,8 @@ func (s *Subscriber) catchUp(ctx context.Context) {
 func (s *Subscriber) onMessage(ctx context.Context, message string) {
 	typ, id, revision, ok := parseMessage(message)
 	if !ok {
-		s.log.DebugContext(ctx, "revision feed message dropped: not <type>:<id>:<revision>")
+		s.consumer.Dropped(ctx)
+		s.log.DebugContext(ctx, "revision feed message dropped: not <type>:<id>:<revision> with a revision in 1..2^53-1")
 		return
 	}
 	s.consumer.Handle(ctx, contracts.ProvisioningEvent{
@@ -157,7 +158,7 @@ func (s *Subscriber) onMessage(ctx context.Context, message string) {
 }
 
 // parseMessage splits "<type>:<id>:<revision>": the type ends at the first colon (aggregate types have none), the
-// revision starts after the last (an id may hold colons).
+// revision starts after the last (an id may hold colons). A revision outside 1..MaxRevision is not a message.
 func parseMessage(message string) (typ, id string, revision int64, ok bool) {
 	first := strings.IndexByte(message, ':')
 	last := strings.LastIndexByte(message, ':')
@@ -165,7 +166,7 @@ func parseMessage(message string) (typ, id string, revision int64, ok bool) {
 		return "", "", 0, false
 	}
 	revision, err := strconv.ParseInt(message[last+1:], 10, 64)
-	if err != nil || revision < 1 {
+	if err != nil || !validRevision(revision) {
 		return "", "", 0, false
 	}
 	return message[:first], message[first+1 : last], revision, true

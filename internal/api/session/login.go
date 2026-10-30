@@ -160,7 +160,7 @@ func (h handlers) login(w http.ResponseWriter, r *http.Request) {
 func (h handlers) loginInTx(w http.ResponseWriter, r *http.Request, tx pgx.Tx, email, password string, payloadOrgID *string) {
 	ctx := r.Context()
 	normalized := pythonparity.Strip(pythonparity.Lower(email))
-	user, err := userByEmail(ctx, tx, normalized)
+	user, err := h.userByEmail(ctx, tx, normalized)
 	if err != nil {
 		h.fail(w, r, "load user", err)
 		return

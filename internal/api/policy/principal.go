@@ -62,6 +62,9 @@ type Store interface {
 	// ActiveImpersonation returns the admin's unexpired, unended session, or
 	// nil.
 	ActiveImpersonation(ctx context.Context, adminID uuid.UUID) (*Impersonation, error)
+	// ReadsPlatformRoles is AUTH_PLATFORM_ROLES_OWNED: UserState's
+	// IsSuperuser is the platform role rule, not users.is_superuser.
+	ReadsPlatformRoles() bool
 }
 
 // ErrUnavailable marks a store failure that get_current_user answers with

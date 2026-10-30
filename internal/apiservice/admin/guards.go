@@ -99,6 +99,16 @@ func (h *handlers) refuseSuperuserWrite(ctx context.Context, w http.ResponseWrit
 	return true
 }
 
+// targetsSuperuserSQL locks the targets' users rows in id order and reads
+// is_superuser of each, by the platform roles switch.
+func (s pgStore) targetsSuperuserSQL() (string, error) {
+	superuser, err := s.platformRoles().Superuser("is_superuser", "users.id")
+	if err != nil {
+		return "", err
+	}
+	return `SELECT ` + superuser + ` FROM users WHERE id = ANY($1) ORDER BY id FOR UPDATE`, nil
+}
+
 // superuserTx is the one transaction of an admin write that targets a user.
 // The superuser check and the write run in it, so a grant cannot commit
 // between them.
@@ -122,7 +132,11 @@ func (g *superuserTx) refuse(targetIDs ...uuid.UUID) bool {
 	var target func() (bool, error)
 	if len(targetIDs) > 0 {
 		target = func() (bool, error) {
-			rows, err := g.tx.Query(g.ctx, `SELECT is_superuser FROM users WHERE id = ANY($1) ORDER BY id FOR UPDATE`, targetIDs)
+			query, err := g.store.targetsSuperuserSQL()
+			if err != nil {
+				return false, err
+			}
+			rows, err := g.tx.Query(g.ctx, query, targetIDs)
 			if err != nil {
 				return false, err
 			}
@@ -166,8 +180,9 @@ func (h *handlers) superuserGuardedWrite(ctx context.Context, w http.ResponseWri
 		return
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	respond := write(&superuserTx{h: h, ctx: ctx, w: w, user: user, requested: requested, route: route,
-		tx: tx, store: pgStore{Pool: tx, Now: h.store.Now, UsersOwned: h.store.UsersOwned}})
+	store := h.store
+	store.Pool = tx
+	respond := write(&superuserTx{h: h, ctx: ctx, w: w, user: user, requested: requested, route: route, tx: tx, store: store})
 	if respond == nil {
 		return
 	}

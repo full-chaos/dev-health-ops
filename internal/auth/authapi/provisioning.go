@@ -55,7 +55,7 @@ const (
 )
 
 var provisioningOperations = []string{opMembershipAdd, opMembershipRole, opMembershipRemove, opMembershipTransfer,
-	opInviteCreate, opInviteAccept, opOrgDeprovision, opOrgReactivate}
+	opInviteCreate, opInviteAccept, opOrgDeprovision, opOrgReactivate, opOrgSuspend}
 
 // Provisioning refusal codes beyond the shared ones.
 const (
@@ -137,7 +137,7 @@ type ProvisioningDeps struct {
 	Memberships   Memberships
 	Invites       Invites
 	Deprovision   Deprovisioner
-	Orgs          OrganizationReactivator
+	Orgs          OrganizationLifecycle
 	Logger        *slog.Logger
 	Meter         metric.Meter
 	// ProfileRows is the endpoint-profile document the routes are checked
@@ -159,7 +159,7 @@ type provisioningHandlers struct {
 func ProvisioningRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 	if deps.Credentials == nil || deps.Users == nil || deps.Reader == nil || deps.Organizations == nil ||
 		deps.Memberships == nil || deps.Invites == nil || deps.Deprovision == nil || deps.Orgs == nil {
-		return nil, errors.New("authapi: provisioning routes need credentials, users, a reader, organizations, memberships, invites, a deprovisioner and the organization reactivate verb")
+		return nil, errors.New("authapi: provisioning routes need credentials, users, a reader, organizations, memberships, invites, a deprovisioner and the organization reactivate and suspend verbs")
 	}
 	rows := deps.ProfileRows
 	if rows == nil {
@@ -188,7 +188,7 @@ func ProvisioningRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 		uses.Add(context.Background(), 0, metric.WithAttributes(attribute.String("operation", op)))
 	}
 	h := provisioningHandlers{ProvisioningDeps: deps, rec: rec, provisioningUses: uses}
-	return []httpapi.Route{
+	routes := []httpapi.Route{
 		{Method: http.MethodPost, Pattern: PatternMembershipAdd, Handler: http.HandlerFunc(h.membershipAdd)},
 		{Method: http.MethodPost, Pattern: PatternMembershipRole, Handler: http.HandlerFunc(h.membershipRole)},
 		{Method: http.MethodPost, Pattern: PatternMembershipRemove, Handler: http.HandlerFunc(h.membershipRemove)},
@@ -197,7 +197,15 @@ func ProvisioningRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 		{Method: http.MethodPost, Pattern: PatternInviteAccept, Handler: http.HandlerFunc(h.inviteAccept)},
 		{Method: http.MethodPost, Pattern: PatternOrgDeprovision, Handler: http.HandlerFunc(h.orgDeprovision)},
 		{Method: http.MethodPost, Pattern: PatternOrgReactivate, Handler: http.HandlerFunc(h.orgReactivate)},
-	}, nil
+	}
+	// The suspend route is mounted only when the profile document holds its row: without it the route answers 404, the
+	// routes above are unaffected and the service starts. One line names the route and nothing else.
+	if rowsPresentFor(rows, darkPatterns) == nil {
+		routes = append(routes, httpapi.Route{Method: http.MethodPost, Pattern: PatternOrgSuspend, Handler: http.HandlerFunc(h.orgSuspend)})
+	} else {
+		deps.Logger.Info("auth provisioning route not mounted: no endpoint-profile row", "route", PatternOrgSuspend)
+	}
+	return routes, nil
 }
 
 // admit checks the bearer (the session issuer credential holding

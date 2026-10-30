@@ -113,7 +113,9 @@ func (h handlers) acceptInvite(ctx context.Context, tx pgx.Tx, invite *pendingIn
 	if err != nil {
 		return uuid.UUID{}, err
 	}
-	if status != "pending" || expiresAt.Before(now) {
+	// The expiry is judged now, with the row held: the request may have
+	// waited for the row past the time it started at.
+	if status != "pending" || expiresAt.Before(h.Now()) {
 		return uuid.UUID{}, errInviteRefused{"Invalid or expired invite"}
 	}
 	var member bool

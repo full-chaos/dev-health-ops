@@ -209,12 +209,18 @@ type fakeProjector struct {
 	gone      map[uuid.UUID]bool
 	orgCalls  []uuid.UUID
 	userCalls []uuid.UUID
+	// orgErr and userErr, when set, are what every organization or principal
+	// projection returns (a store fault).
+	orgErr, userErr error
 }
 
 func (f *fakeProjector) Project(_ context.Context, id uuid.UUID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.userCalls = append(f.userCalls, id)
+	if f.userErr != nil {
+		return f.userErr
+	}
 	if f.gone[id] {
 		return identity.ErrUserNotFound
 	}
@@ -225,6 +231,9 @@ func (f *fakeProjector) ProjectOrganization(_ context.Context, id uuid.UUID) err
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.orgCalls = append(f.orgCalls, id)
+	if f.orgErr != nil {
+		return f.orgErr
+	}
 	if !f.orgs[id] {
 		return identity.ErrOrganizationNotFound
 	}
@@ -1155,12 +1164,18 @@ func TestARefusedSignInNeverProjectsARequestedOrganizationOfANonMember(t *testin
 		"locked":          {compatEmail, compatPassword, true, true},
 		"not a member":    {compatEmail, compatPassword, false, true},
 	}
+	unknown := newCompatFixture(t)
+	unknownAnswer := unknown.do(http.MethodPost, PatternCompatLogin, loginBody("nobody@example.com", "x", unknown.orgD.String()), nil)
 	for name, c := range cases {
 		f := newCompatFixture(t)
 		f.attempts.locked, f.attempts.remaining = c.locked, time.Minute
 		response := f.do(http.MethodPost, PatternCompatLogin, loginBody(c.email, c.password, f.orgD.String()), nil)
 		if response.Code < 400 || len(f.appended) != 1 {
 			t.Fatalf("%s: status %d with %d audit rows", name, response.Code, len(f.appended))
+		}
+		if name == "wrong password" && (response.Code != unknownAnswer.Code || response.Body.String() != unknownAnswer.Body.String()) {
+			t.Errorf("wrong password answers %d %s, the unknown address %d %s: they must be equal",
+				response.Code, response.Body, unknownAnswer.Code, unknownAnswer.Body)
 		}
 		if f.projected(f.orgD) {
 			t.Errorf("%s: the requested organization of a non-member was projected", name)
@@ -1303,5 +1318,74 @@ func TestCompatRefreshOfAMissingPinMintsNoSuccessorAndRevokesNothing(t *testing.
 	response := f.do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+credential()+`"}`, nil)
 	if response.Code != http.StatusUnauthorized || f.sessions.minted != 0 || len(f.sessions.revoked) != 0 {
 		t.Fatalf("status %d minted %d revoked %v, want 401, 0 and none", response.Code, f.sessions.minted, f.sessions.revoked)
+	}
+}
+
+// faultUsers is the go-api user store with a failing membership read.
+type faultUsers struct {
+	fakeUsers
+	err error
+}
+
+func (f faultUsers) Memberships(context.Context, uuid.UUID) ([]Membership, error) { return nil, f.err }
+
+// A refused sign-in answers the same whether the address is known or not, also
+// when a step only a known account takes fails (its memberships, its
+// organization's or its own projection): the same status and byte-equal body,
+// and an audit row in both cases (the known one then without the organization,
+// or without the subject). A failing audit write fails both the same way.
+func TestARefusedSignInAnswersTheSameForAnUnknownAndAKnownAddressUnderAStoreFault(t *testing.T) {
+	faults := map[string]func(f *compatFixture){
+		"membership read": func(f *compatFixture) {
+			f.usersWrap = faultUsers{fakeUsers: f.users, err: context.DeadlineExceeded}
+			f.buildCompat()
+		},
+		"organization projection": func(f *compatFixture) { f.projector.orgErr = errors.New("projection store down") },
+		"principal projection":    func(f *compatFixture) { f.projector.userErr = errors.New("projection store down") },
+		"audit write":             func(f *compatFixture) { f.appendErr = errors.New("audit store down") },
+	}
+	for name, fault := range faults {
+		for _, requested := range []bool{false, true} {
+			answer := func(email, password string) (*httptest.ResponseRecorder, *compatFixture) {
+				f := newCompatFixture(t)
+				fault(f)
+				org := ""
+				if requested {
+					org = f.orgD.String()
+				}
+				return f.do(http.MethodPost, PatternCompatLogin, loginBody(email, password, org), nil), f
+			}
+			unknown, uf := answer("nobody@example.com", "x")
+			known, kf := answer(compatEmail, "wrong")
+			label := fmt.Sprintf("%s, requested org %v", name, requested)
+			if known.Code != unknown.Code || known.Body.String() != unknown.Body.String() {
+				t.Errorf("%s: known address %d %s, unknown %d %s: they must be equal", label, known.Code, known.Body, unknown.Code, unknown.Body)
+			}
+			if len(uf.appended) != 1 || len(kf.appended) != 1 {
+				t.Errorf("%s: audit rows unknown %d, known %d, want one each", label, len(uf.appended), len(kf.appended))
+				continue
+			}
+			if name == "audit write" {
+				continue
+			}
+			if unknown.Code != http.StatusUnauthorized {
+				t.Errorf("%s: status %d, want 401", label, unknown.Code)
+			}
+			row := kf.appended[0]
+			switch name {
+			case "membership read", "organization projection":
+				if row.OrganizationID != nil {
+					t.Errorf("%s: the known row names organization %s, want none", label, *row.OrganizationID)
+				}
+			case "principal projection":
+				if row.SubjectPrincipalID != nil {
+					t.Errorf("%s: the known row names subject %s, want none", label, *row.SubjectPrincipalID)
+				}
+			}
+			logs := kf.logs.String()
+			if !strings.Contains(logs, `"level":"ERROR"`) || strings.Contains(logs, compatEmail) || strings.Contains(logs, kf.orgD.String()) {
+				t.Errorf("%s: want an error line without the email or the organization id, logs:\n%s", label, logs)
+			}
+		}
 	}
 }

@@ -1,6 +1,9 @@
 package bigboy_test
 
 import (
+	"fmt"
+	"path"
+	"sort"
 	"strings"
 	"testing"
 
@@ -10,7 +13,185 @@ import (
 // composeBugsinkLeaks returns a finding for every way the compose file can hand one of the three bugsink credentials to a
 // service other than bugsink, in both forms.
 func composeBugsinkLeaks(f doc) []string {
-	return nil
+	var out []string
+	add := func(format string, a ...any) { out = append(out, fmt.Sprintf(format, a...)) }
+	services := mp(f["services"])
+	if f["include"] != nil {
+		add("the file has a top-level include: a bugsink credential in an included file cannot be checked")
+	}
+	for _, top := range []string{"secrets", "configs"} {
+		for _, name := range composeSortedKeys(mp(f[top])) {
+			e := f[top].(map[string]any)[name]
+			if k := str(mp(e)["environment"]); composeBugsinkIsCredential(k) {
+				add("%s %s takes the bugsink credential %s from the environment", top, name, k)
+			}
+			if composeBugsinkInterpolates(e) {
+				add("%s %s interpolates a bugsink credential", top, name)
+			}
+		}
+	}
+	bugsinkOwn := false
+	for _, p := range composeEnvFilePaths(mp(services["bugsink"])["env_file"]) {
+		if composeBugsinkIsEnvFile(p) {
+			bugsinkOwn = true
+		}
+	}
+	for _, name := range composeSortedKeys(services) {
+		chain, errs := composeExtendsChain(services, name)
+		if name == "bugsink" {
+			if bugsinkOwn {
+				for _, k := range composeEnvKeys(mp(services[name])["environment"]) {
+					if composeBugsinkIsCredential(k) {
+						add("service bugsink loads its own env file and also gets the bugsink credential %s by name from the compose environment", k)
+					}
+				}
+			}
+			continue
+		}
+		for _, e := range errs {
+			add("service %s %s", name, e)
+		}
+		for _, svc := range chain {
+			for _, p := range composeEnvFilePaths(svc["env_file"]) {
+				if strings.Contains(p, "$") {
+					add("service %s has an interpolated env_file path %s, which may name bugsink's env file", name, p)
+				} else if composeBugsinkIsEnvFile(p) {
+					add("service %s loads bugsink's env file through %s", name, p)
+				}
+			}
+			keys := composeEnvKeys(svc["environment"])
+			if b := mp(svc["build"]); b != nil {
+				keys = append(keys, composeEnvKeys(b["args"])...)
+			}
+			for _, k := range keys {
+				if composeBugsinkIsCredential(k) {
+					add("service %s gets the bugsink credential %s by name from the compose environment", name, k)
+				}
+			}
+			if composeBugsinkInterpolates(svc) {
+				add("service %s interpolates a bugsink credential", name)
+			}
+		}
+	}
+	return out
+}
+
+func composeBugsinkIsCredential(name string) bool {
+	for _, v := range composeBugsinkVars {
+		if name == v {
+			return true
+		}
+	}
+	return false
+}
+
+// composeBugsinkIsEnvFile reports whether an env_file path can be bugsink's env file under any project directory: the same
+// cleaned relative path, the file name bugsink.env, or a .bugsink-dev directory anywhere in the path (absolute or relative).
+func composeBugsinkIsEnvFile(p string) bool {
+	c := path.Clean(p)
+	if c == path.Clean(composeBugsinkEnvFile) || path.Base(c) == path.Base(composeBugsinkEnvFile) {
+		return true
+	}
+	for _, part := range strings.Split(c, "/") {
+		if part == path.Base(path.Dir(composeBugsinkEnvFile)) {
+			return true
+		}
+	}
+	return false
+}
+
+func composeBugsinkInterpolates(v any) bool {
+	for _, s := range composeScalars(v) {
+		for _, n := range composeInterpolatedNames(s) {
+			if composeBugsinkIsCredential(n) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// composeEnvFilePaths returns the paths of an env_file value in its string, list-of-strings and list-of-{path} forms.
+func composeEnvFilePaths(v any) []string {
+	if s, ok := v.(string); ok {
+		return []string{s}
+	}
+	var out []string
+	for _, e := range list(v) {
+		if m := mp(e); m != nil {
+			out = append(out, str(m["path"]))
+		} else {
+			out = append(out, str(e))
+		}
+	}
+	return out
+}
+
+// composeEnvKeys returns the variable names of an environment or build-args value in its mapping and list (NAME, NAME=x) forms.
+func composeEnvKeys(v any) []string {
+	var out []string
+	switch e := v.(type) {
+	case map[string]any:
+		out = composeSortedKeys(e)
+	case []any:
+		for _, x := range e {
+			k, _, _ := strings.Cut(str(x), "=")
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// composeExtendsChain returns the service and every service it extends in this file (a YAML merge key counts as a parent
+// too), and an error for an extends that names bugsink, another file, an unknown service, or loops.
+func composeExtendsChain(services doc, name string) ([]doc, []string) {
+	var chain []doc
+	var errs []string
+	seen := map[string]bool{}
+	for cur := name; cur != ""; {
+		if seen[cur] {
+			errs = append(errs, "has an extends loop through "+cur)
+			break
+		}
+		seen[cur] = true
+		svc := mp(services[cur])
+		if svc == nil {
+			errs = append(errs, "extends an unknown service "+cur+", so its bugsink credentials cannot be checked")
+			break
+		}
+		chain = append(chain, svc)
+		for _, m := range append([]any{svc["<<"]}, list(svc["<<"])...) {
+			if md := mp(m); md != nil {
+				chain = append(chain, md)
+			}
+		}
+		next := ""
+		switch e := svc["extends"].(type) {
+		case string:
+			next = e
+		case map[string]any:
+			if e["file"] != nil {
+				errs = append(errs, "extends a service in another file, so its bugsink credentials cannot be checked")
+				break
+			}
+			next = str(e["service"])
+		}
+		if next == "bugsink" {
+			errs = append(errs, "extends bugsink")
+			break
+		}
+		cur = next
+	}
+	return chain, errs
+}
+
+func composeSortedKeys(m map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func TestComposeBugsinkLeaksCells(t *testing.T) {

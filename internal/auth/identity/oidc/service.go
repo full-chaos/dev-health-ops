@@ -20,6 +20,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity/ssoaudit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
@@ -159,9 +160,13 @@ type Config struct {
 	// DenialAudit writes go-api's audit_logs row of an OAuth domain refusal
 	// (stage domain_check) before the refusal answers; nil writes none.
 	DenialAudit DenialAudit
-	Now         func() time.Time
-	Logger      *slog.Logger
-	Meter       metric.Meter
+	// ProviderFailure records an OAuth provider error (the token exchange or
+	// the profile fetch failing: go-api's recordSSOFailure) before the
+	// refusal answers; nil records none.
+	ProviderFailure ssoaudit.ProviderFailure
+	Now             func() time.Time
+	Logger          *slog.Logger
+	Meter           metric.Meter
 }
 
 // Service runs the OIDC flow.

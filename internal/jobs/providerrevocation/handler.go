@@ -32,8 +32,8 @@ const (
 	// BatchLimit bounds the rows one run sends: each is one provider call of
 	// at most 10 s, inside the kind's 300 s timeout.
 	BatchLimit = 25
-	// MaxAttempts is where the worker stops claiming a row (backoff 1, 2, 4 ...
-	// 256 min, capped at 6 h: about 14.5 h of retries).
+	// MaxAttempts is where the worker stops claiming a row (after the first
+	// refusal the backoff is 1, 2, 4 ... 256 min, capped at 6 h: about 8.5 h).
 	MaxAttempts = 10
 	// SetupStaleAfter is the callback's own cutoff
 	// (admin.setupRevocationStaleAfter): a setup row that never failed a

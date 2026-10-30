@@ -339,7 +339,7 @@ func reconciliationTables() []domainTable {
 			exercise: []string{
 				`SELECT id, token_encrypted FROM public.provider_oauth_revocations
 WHERE provider = 'pagerduty' AND status = 'pending' AND attempts < 10
-  AND updated_at <= now() - LEAST(interval '1 minute' * power(2, attempts), interval '6 hours')
+  AND (attempts = 0 OR updated_at <= now() - LEAST(interval '1 minute' * power(2, attempts - 1), interval '6 hours'))
   AND NOT (purpose = 'setup' AND attempts = 0 AND created_at > now() - interval '900 seconds')
 ORDER BY updated_at, id LIMIT 1 FOR UPDATE SKIP LOCKED`,
 				"UPDATE public.provider_oauth_revocations SET attempts = attempts + 1, last_error = 'remote_revoke_failed', updated_at = now() WHERE id = gen_random_uuid() RETURNING attempts",

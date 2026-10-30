@@ -16,12 +16,14 @@ type Beginner interface {
 
 // claimSQL selects one due row and holds it: the claim rule every sender
 // shares (admin.retryPagerDutyRevocationRows uses the same FOR UPDATE SKIP
-// LOCKED). Due means: below MaxAttempts, past its backoff (1 min * 2^attempts,
-// capped at 6 h, from its last attempt), and not the setup row of a callback
-// still in flight.
+// LOCKED). Due means: below MaxAttempts; never refused, or past its backoff
+// (1 min * 2^(attempts-1), capped at 6 h, from its last attempt); and not the
+// setup row of a callback still in flight. The setup gate is keyed on
+// created_at, which a restore-fence requeue keeps (attempts 0, updated_at now):
+// a requeued row is due at once unless it is a setup row younger than 15 min.
 var claimSQL = fmt.Sprintf(`SELECT id, token_encrypted FROM provider_oauth_revocations
 WHERE provider = 'pagerduty' AND status = 'pending' AND attempts < %d
-  AND updated_at <= now() - LEAST(interval '1 minute' * power(2, attempts), interval '6 hours')
+  AND (attempts = 0 OR updated_at <= now() - LEAST(interval '1 minute' * power(2, attempts - 1), interval '6 hours'))
   AND NOT (purpose = 'setup' AND attempts = 0 AND created_at > now() - interval '%d seconds')
 ORDER BY updated_at, id
 LIMIT 1

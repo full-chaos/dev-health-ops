@@ -431,8 +431,14 @@ func routeCases() []routeCase {
 		{opOrgReactivate, PatternOrgReactivate, func(f *provFixture, a uuid.UUID) map[string]any {
 			return map[string]any{"organization_id": f.org.String(), "actor_principal_id": a.String()}
 		}, []string{"organization_id", "actor_principal_id"}},
+		{opInviteRevoke, PatternInviteRevoke, func(f *provFixture, a uuid.UUID) map[string]any {
+			return map[string]any{"organization_id": f.org.String(), "invite_id": fakeInviteID.String(), "actor_principal_id": a.String()}
+		}, []string{"organization_id", "invite_id", "actor_principal_id"}},
 	}
 }
+
+// fakeInviteID is the invite the revoke route case names.
+var fakeInviteID = uuid.MustParse("6f1b8f1e-7c43-4a7e-9b62-1d2a3c4e5f60")
 
 // Every route serves only the session issuer credential holding
 // memberships:write: any other bearer is a 401 with no read and no write, and

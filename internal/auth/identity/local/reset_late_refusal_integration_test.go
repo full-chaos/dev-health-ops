@@ -20,6 +20,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -65,9 +66,7 @@ func TestResetLateRefusalRollsBackEveryWriteAndTakesOneStatementShape(t *testing
 			}
 		},
 		"expired": func(t *testing.T, ctx context.Context, rig *endRig, id uuid.UUID, _ string) {
-			if _, err := rig.env.admin.Exec(ctx, `UPDATE auth.link_credentials SET expires_at = now() - interval '1 second' WHERE principal_id = $1 AND consumed_at IS NULL`, id); err != nil {
-				t.Fatal(err)
-			}
+			expireLinks(t, ctx, rig, id)
 		},
 		"reissued": func(t *testing.T, ctx context.Context, rig *endRig, id uuid.UUID, link string) {
 			if err := rig.links.IssueBound(ctx, IssueRequest{PrincipalID: id, Purpose: PurposePasswordReset, TokenHash: linkHash(link + "-again"), TTL: ResetTTL}); err != nil {
@@ -238,9 +237,7 @@ func TestVerifyLateRefusalLogsOneWarnAndCountsLinkUnusable(t *testing.T) {
 			}
 		},
 		"expired": func(t *testing.T, ctx context.Context, rig *endRig, id uuid.UUID, _ string) {
-			if _, err := rig.env.admin.Exec(ctx, `UPDATE auth.link_credentials SET expires_at = now() - interval '1 second' WHERE principal_id = $1 AND consumed_at IS NULL`, id); err != nil {
-				t.Fatal(err)
-			}
+			expireLinks(t, ctx, rig, id)
 		},
 	}
 	schema, err := authschema.NewValidatedIdentifier("auth")
@@ -287,5 +284,26 @@ func TestVerifyLateRefusalLogsOneWarnAndCountsLinkUnusable(t *testing.T) {
 		}
 		lateLog(t, name, buf.String(), link)
 		lateCount(t, ctx, name, reader, "verify_email/link_unusable")
+	}
+}
+
+// expireLinks moves the principal's unconsumed links past their expiry. The
+// security guard admits a link_credentials update only through audit.Commit.
+func expireLinks(t *testing.T, ctx context.Context, rig *endRig, id uuid.UUID) {
+	t.Helper()
+	schema, err := authschema.NewValidatedIdentifier("auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	subject := id.String()
+	if err := audit.Commit(ctx, rig.env.runtime, schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			_, err := tx.Exec(ctx, `UPDATE auth.link_credentials SET expires_at = now() - interval '1 second' WHERE principal_id = $1::uuid AND consumed_at IS NULL`, subject)
+			return err
+		},
+		Audit:     audit.AuditEvent{EventType: "auth.password.reset", Outcome: audit.OutcomeAllowed, SubjectPrincipalID: &subject},
+		OffStream: audit.OffStreamLinkCredentialLifecycle,
+	}); err != nil {
+		t.Fatalf("expire the links: %v", err)
 	}
 }

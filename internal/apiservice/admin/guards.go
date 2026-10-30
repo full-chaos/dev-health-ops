@@ -184,9 +184,10 @@ func (h *handlers) superuserGuardedWrite(ctx context.Context, w http.ResponseWri
 	if h.store.PlatformRolesOwned {
 		// The target read is the platform role assignments: take their write
 		// lock shared first, so a grant in flight is waited for and then seen,
-		// and a grant waits for this write. Every writer of the assignments
-		// takes it exclusively before any other lock, and this transaction
-		// takes it before any users row lock: no cycle.
+		// and a grant waits for this write. While owned, every writer of the
+		// assignments (platformrole's store; the users backfill's role leg
+		// skips) takes it exclusively before any other lock, and this
+		// transaction takes it before any users row lock: no cycle.
 		if _, err := tx.Exec(ctx, rule.SharedWriteLockSQL, rule.WriteLock); err != nil {
 			h.logger.ErrorContext(ctx, "admin: superuser-guarded write platform role lock failed", "route", route, "error", err)
 			policy.WriteInternal(w)

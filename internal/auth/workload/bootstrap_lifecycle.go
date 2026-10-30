@@ -75,7 +75,7 @@ type BootstrapCredential struct {
 // failure becomes a storeFault.
 var bootstrapRefusals = []error{
 	ErrNotFound, ErrAudienceInvalid, ErrBootstrapLive, ErrBootstrapRotating, ErrBootstrapNone, ErrBootstrapNotFound,
-	ErrBootstrapWorkloadDisabled,
+	ErrBootstrapWorkloadDisabled, ErrBootstrapPrincipalDisabled,
 }
 
 // storeFault is a store failure reduced to its SQLSTATE: a pgx error's
@@ -138,8 +138,11 @@ func (s *Store) lockIssuingWorkload(ctx context.Context, tx audit.TxOps, id uuid
 }
 
 func disabledRefusal(rowDisabled, principalDisabled bool) error {
-	if rowDisabled || principalDisabled {
+	switch {
+	case rowDisabled:
 		return ErrBootstrapWorkloadDisabled
+	case principalDisabled:
+		return ErrBootstrapPrincipalDisabled
 	}
 	return nil
 }

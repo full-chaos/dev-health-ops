@@ -46,7 +46,7 @@ func TestPagerDutyDisconnectPendingRevocations(t *testing.T) {
 	fakeServer := httptest.NewServer(http.HandlerFunc(fake.handler))
 	t.Cleanup(fakeServer.Close)
 
-	slugs := []string{"missing-ok", "missing-fails", "missing-empty", "missing-noclient", "held"}
+	slugs := []string{"missing-ok", "missing-fails", "missing-empty", "missing-noclient", "held", "owed-no-token", "owed-bad-cipher"}
 	orgs := map[string]uuid.UUID{}
 	for _, slug := range slugs {
 		orgs[slug] = uuid.MustParse(venueoracle.StableUUID("pd-pending-org-" + slug))
@@ -85,6 +85,15 @@ VALUES ($1, $2, 'pagerduty', $3, 'disconnect', $4, 'v1', 'pending', 0, now() - i
 			exec(`INSERT INTO integration_credentials (id, org_id, provider, name, is_active, credentials_encrypted, config, created_at, updated_at)
 VALUES ($1, $2, 'pagerduty', 'default', true, NULL, '{"auth_mode":"oauth","region":"us","subdomain":"acme"}'::json, now(), now())`, uuid.New(), orgs["held"].String())
 			revocation(heldRow, orgs["held"], "default", "pd-pending-held-token")
+			// A credential row with an older revocation still owed, and no usable current token: none stored, or
+			// one that does not decrypt.
+			for _, slug := range []string{"owed-no-token", "owed-bad-cipher"} {
+				exec(`INSERT INTO integration_credentials (id, org_id, provider, name, is_active, credentials_encrypted, config, created_at, updated_at)
+VALUES ($1, $2, 'pagerduty', 'default', true, NULL, '{"auth_mode":"oauth","region":"us","subdomain":"acme"}'::json, now(), now())`, uuid.New(), orgs[slug].String())
+				revocation(uuid.New(), orgs[slug], "default", "pd-pending-"+slug+"-token")
+			}
+			exec(`INSERT INTO provider_oauth_credentials (org_id, provider, credential_name, token_encrypted, version, created_at, updated_at, has_refresh_token)
+VALUES ($1, 'pagerduty', 'default', 'garbage-not-fernet', 1, now(), now(), false)`, orgs["owed-bad-cipher"].String())
 			tokens := map[string]map[string]any{}
 			for slug, id := range orgs {
 				tokens[slug] = map[string]any{"user_id": adminID.String(), "email": "pd-pending-admin@example.com", "org_id": id.String(), "role": "admin"}
@@ -187,6 +196,20 @@ VALUES ($1, $2, 'pagerduty', 'default', true, NULL, '{"auth_mode":"oauth","regio
 			t.Fatalf("rows %d attempts %d calls %d, want the row untouched", rows, attempts, calls("pd-pending-noclient-token"))
 		}
 	})
+
+	// D6501 P2a: without a client id, a disconnect of a credential whose current token is missing or undecryptable
+	// still answers the owed state while an older revocation of the name is pending.
+	for _, slug := range []string{"owed-no-token", "owed-bad-cipher"} {
+		t.Run("no client id and no usable token with a row owed answers pending retry: "+slug, func(t *testing.T) {
+			status, body := disconnect(noClientBase, slug)
+			if status != http.StatusServiceUnavailable || !strings.Contains(body, "pending retry") {
+				t.Fatalf("status %d body %s, want 503 pending retry while a revocation is owed", status, body)
+			}
+			if rows, attempts := pending(slug, "default"); rows != 1 || attempts != 0 || calls("pd-pending-"+slug+"-token") != 0 {
+				t.Fatalf("rows %d attempts %d calls %d, want the owed row untouched", rows, attempts, calls("pd-pending-"+slug+"-token"))
+			}
+		})
+	}
 
 	t.Run("a row another sender holds is skipped and sent once", func(t *testing.T) {
 		holder, err := pool.Begin(ctx)

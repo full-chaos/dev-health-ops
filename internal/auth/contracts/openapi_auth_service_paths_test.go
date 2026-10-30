@@ -130,25 +130,49 @@ func closedSchemaProblems(schema map[string]any, path string) []string {
 	if isObjectSchema(schema) && schema["additionalProperties"] != false {
 		problems = append(problems, fmt.Sprintf("%s is open (additionalProperties is not false)", path))
 	}
-	properties, _ := schema["properties"].(map[string]any)
-	names := make([]string, 0, len(properties))
-	for name := range properties {
-		names = append(names, name)
+	unreadable := func(at string) {
+		problems = append(problems, fmt.Sprintf("%s is not an object schema the gate can read", at))
 	}
-	sort.Strings(names)
-	for _, name := range names {
-		if child, ok := properties[name].(map[string]any); ok {
-			problems = append(problems, closedSchemaProblems(child, path+"/properties/"+name)...)
+	if raw, present := schema["properties"]; present {
+		properties, ok := raw.(map[string]any)
+		if !ok {
+			unreadable(path + "/properties")
+		}
+		names := make([]string, 0, len(properties))
+		for name := range properties {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			if child, ok := properties[name].(map[string]any); ok {
+				problems = append(problems, closedSchemaProblems(child, path+"/properties/"+name)...)
+			} else {
+				unreadable(path + "/properties/" + name)
+			}
 		}
 	}
-	if items, ok := schema["items"].(map[string]any); ok {
-		problems = append(problems, closedSchemaProblems(items, path+"/items")...)
+	if raw, present := schema["items"]; present {
+		if items, ok := raw.(map[string]any); ok {
+			problems = append(problems, closedSchemaProblems(items, path+"/items")...)
+		} else {
+			unreadable(path + "/items")
+		}
 	}
 	for _, keyword := range []string{"oneOf", "anyOf", "allOf"} {
-		members, _ := schema[keyword].([]any)
-		for index, raw := range members {
-			if child, ok := raw.(map[string]any); ok {
+		raw, present := schema[keyword]
+		if !present {
+			continue
+		}
+		members, ok := raw.([]any)
+		if !ok {
+			unreadable(path + "/" + keyword)
+			continue
+		}
+		for index, member := range members {
+			if child, ok := member.(map[string]any); ok {
 				problems = append(problems, closedSchemaProblems(child, fmt.Sprintf("%s/%s/%d", path, keyword, index))...)
+			} else {
+				unreadable(fmt.Sprintf("%s/%s/%d", path, keyword, index))
 			}
 		}
 	}

@@ -351,6 +351,46 @@ func TestP5TransferAndOrganizationDelete(t *testing.T) {
 	}
 }
 
+// P6: go-api's session invite accept and go-api's organization delete. The
+// accept is held before it marks the invite row accepted, after its membership
+// INSERT (whose foreign key check holds the organization row); the delete
+// takes the invite rows before the membership rows and deletes the
+// organization row last.
+func TestP6GoAPIInviteAcceptAndOrganizationDelete(t *testing.T) {
+	const cell = "P6"
+	e, ctx := getEnv(t), cellContext(t)
+	e.cleanup(t)
+	org := e.seedOrg(t, ctx)
+	owner, acceptor := e.seedPair(t, ctx)
+	e.add(t, ctx, org, owner, "owner", nil)
+	_, token := e.goInvite(t, ctx, org, owner, email(acceptor))
+
+	reached := e.goBarrier.Arm("UPDATE org_invites SET status = 'accepted'")
+	g := goAPI("go-api accept-invite", func() response { return e.acceptInvite(ctx, acceptor, token) })
+	awaitReached(t, cell, "accept-invite's update of the invite row", reached, g)
+	d := goAPI("go-api delete organization", func() response { return e.deleteOrg(ctx, org) })
+	e.awaitWaiters(t, ctx, cell, 1, g, d)
+	// In order, the delete waits for the accept; the delete is then held before
+	// it deletes the organization row until the accept has answered, so the
+	// accept's token write (it names the organization) never races the delete.
+	e.goBarrier.Release()
+	e.goBarrier.Arm("DELETE FROM organizations WHERE")
+	select {
+	case <-g.done:
+	case <-time.After(2 * choreographyBound):
+		t.Fatalf("%s: %s did not end within %s", cell, g.name, 2*choreographyBound)
+	}
+	e.goBarrier.Release()
+	e.finish(t, cell, g, d)
+
+	wantStatus(t, cell, g, http.StatusOK)
+	wantStatus(t, cell, d, http.StatusOK)
+	if got := e.scalar(t, ctx, `SELECT (SELECT count(*) FROM public.memberships WHERE org_id = $1)
+  + (SELECT count(*) FROM public.org_invites WHERE org_id = $1) + (SELECT count(*) FROM public.organizations WHERE id = $1)`, org); got != "0" {
+		t.Fatalf("%s: %s rows of the organization left after the delete", cell, got)
+	}
+}
+
 // heldAuthorize is an Authorize that signals once and holds the verb, with
 // its locks, until release.
 type heldAuthorize struct {

@@ -89,6 +89,10 @@ var sqlOperandExemptions = []sqlOperandExemption{
 		reason: "columns holds only quoteIdentifier results of the validated PublicAuditWriteColumns names",
 	},
 	{
+		file: "ssoproviderfailure_grant.go", fn: "ssoProviderFailureStatements", operand: `strings.Join(columns, ", ")`,
+		reason: "columns holds only quoteIdentifier results of the validated SSOProviderFailureColumns names",
+	},
+	{
 		file: "session_readers.go", fn: "sessionReaderStatements", operand: `strings.Join(columns, ", ")`,
 		reason: "columns holds only quoteIdentifier results of the validated SessionReaderReads names",
 	},

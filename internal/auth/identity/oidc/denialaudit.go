@@ -7,7 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity/ssoaudit"
 )
 
 // DenialRow is go-api's audit_logs row of an authenticated caller a sign-in
@@ -32,9 +32,8 @@ type DenialExecer interface {
 	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
 }
 
-// PGDenialAudit inserts the row into go-api's public.audit_logs with
-// internal/api/audit.PGWriter's columns and value types, so both services
-// write the same row for the same refusal.
+// PGDenialAudit inserts the row into go-api's public.audit_logs
+// (ssoaudit.Insert: internal/api/audit.PGWriter's columns and value types).
 type PGDenialAudit struct {
 	Exec DenialExecer
 	// Now is injectable for tests; nil means time.Now.
@@ -43,28 +42,9 @@ type PGDenialAudit struct {
 
 // Denied implements DenialAudit.
 func (a PGDenialAudit) Denied(ctx context.Context, row DenialRow) error {
-	meta := pyjson.NewObject()
-	meta.Set("protocol", row.Protocol)
-	if row.Stage != "" {
-		meta.Set("stage", row.Stage)
-	}
-	metaJSON, err := pyjson.Dumps(meta)
-	if err != nil {
-		return err
-	}
 	now := time.Now
 	if a.Now != nil {
 		now = a.Now
 	}
-	message := row.ErrorMessage
-	var user *uuid.UUID
-	var description *string
-	_, err = a.Exec.Exec(ctx, `INSERT INTO public.audit_logs
-	(id, org_id, user_id, action, resource_type, resource_id, description,
-	 changes, request_metadata, status, error_message, created_at)
-VALUES
-	($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-		uuid.New(), row.OrgID, user, "sso_login", "sso_provider", row.ProviderID.String(), description,
-		[]byte("{}"), []byte(metaJSON), "failure", &message, now().UTC())
-	return err
+	return ssoaudit.Insert(ctx, a.Exec, ssoaudit.Row(row), now())
 }

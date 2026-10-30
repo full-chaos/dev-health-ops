@@ -132,9 +132,14 @@ id), `email_verification` (no verified email), `provisioning` (an unusable email
 or subject, auto-provisioning off, an identity conflict or an email another
 account holds, or no membership) and
 `domain_check` (the domain is off the list; the message names it). When that
-row cannot be written, the sign-in answers 500. A provider error (the token
-exchange or the profile fetch failing) writes no row yet, and no OIDC or SAML
-refusal writes one. The reason codes are:
+row cannot be written, the sign-in answers 500. A provider error (the OAuth token
+exchange or profile fetch failing, or a SAML assertion without an email) is
+recorded as go-api records it: the provider row's `last_error`, `last_error_at`
+and `updated_at` (its status is left as it was) and an `sso_login` failure row
+with no stage, in one transaction, before the sign-in answers; the SAML answer
+is 400 `SAML authentication failed`. When the record cannot be written, the
+sign-in answers 500. No other OIDC or SAML refusal writes a row. The reason
+codes are:
 
 | Reason | Meaning |
 | --- | --- |

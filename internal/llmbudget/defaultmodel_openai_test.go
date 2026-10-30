@@ -31,3 +31,21 @@ func TestGPT6LunaCostUsesItsOwnRow(t *testing.T) {
 		t.Fatalf("gpt-6-luna cost = %v (err %v), want 600000", cost, err)
 	}
 }
+
+func TestOpenAIDefaultChainOrder(t *testing.T) {
+	want := []string{"gpt-6-luna", "gpt-5-mini"}
+	got := OpenAIDefaultChain()
+	if len(got) != len(want) {
+		t.Fatalf("chain %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("chain %v, want %v", got, want)
+		}
+	}
+	for _, model := range got {
+		if ok, _ := ReliablePrice("openai", model, ""); !ok {
+			t.Errorf("chain model %s is unpriced", model)
+		}
+	}
+}

@@ -102,7 +102,7 @@ func TestReliablePrice(t *testing.T) {
 func TestDefaultModelWithNothingConfigured(t *testing.T) {
 	none := func(string) (string, bool) { return "", false }
 	want := map[string]string{
-		"openai":        "gpt-5-mini",
+		"openai":        "gpt-6-luna",
 		"anthropic":     "claude-haiku-5-5",
 		"gemini":        "gemini-3.8-flash",
 		"qwen":          "qwen-plus",
@@ -146,7 +146,7 @@ func TestDefaultModelReadsThePlatformSetting(t *testing.T) {
 		{"provider name case-insensitive", " OpenAI ", map[string]string{"LLM_PROVIDER": "OPENAI", "LLM_MODEL": " gpt-5-nano "}, "gpt-5-nano"},
 		{"provider-specific beats generic", "openai", map[string]string{"LLM_PROVIDER": "openai", "LLM_MODEL": "gpt-5-nano", "LLM_MODEL_OPENAI": "gpt-5-mini"}, "gpt-5-mini"},
 		{"generic is another provider's", "anthropic", map[string]string{"LLM_PROVIDER": "openai", "LLM_MODEL": "gpt-5-nano"}, "claude-haiku-5-5"},
-		{"generic with no platform provider", "openai", map[string]string{"LLM_MODEL": "gpt-5-nano"}, "gpt-5-mini"},
+		{"generic with no platform provider", "openai", map[string]string{"LLM_MODEL": "gpt-5-nano"}, "gpt-6-luna"},
 		{"gemini alias", "gemini", map[string]string{"GEMINI_MODEL": "gemini-3.5-flash-lite"}, "gemini-3.5-flash-lite"},
 		{"qwen alias", "qwen", map[string]string{"QWEN_MODEL": "@cf/qwen/qwen3-30b-a3b-fp8"}, "@cf/qwen/qwen3-30b-a3b-fp8"},
 		{"blank setting is unset", "anthropic", map[string]string{"LLM_MODEL_ANTHROPIC": "  "}, "claude-haiku-5-5"},

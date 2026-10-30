@@ -24,6 +24,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/authmail"
+	"github.com/full-chaos/dev-health-ops/internal/api/billing"
+	"github.com/full-chaos/dev-health-ops/internal/api/billing/stripeclient"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/session"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
@@ -35,6 +37,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/invite"
 	"github.com/full-chaos/dev-health-ops/internal/auth/membership"
 	"github.com/full-chaos/dev-health-ops/internal/auth/signedtoken"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
@@ -70,7 +73,9 @@ type env struct {
 	linkSecret    string
 	inviteKey     string
 	root          string
-	goLog         *syncBuffer
+	// webhookKey signs the Stripe deliveries of the billing cells.
+	webhookKey string
+	goLog      *syncBuffer
 }
 
 var (
@@ -205,6 +210,13 @@ func newEnv(t *testing.T) (*env, error) {
 		Mail: authmail.Config{LinkSecret: e.linkSecret}, Limits: httpapi.NewMemoryCounters(nil), Logger: logger}) {
 		switch route.Pattern {
 		case "/api/v1/auth/accept-invite", "/api/v1/auth/onboard", "/api/v1/auth/refresh":
+			mux.Handle(route.Method+" "+route.Pattern, route.Handler)
+		}
+	}
+	e.webhookKey = "lockorder-webhook-" + uuid.NewString()
+	for _, route := range billing.Routes(billing.Deps{Pool: goPool, Guard: guard, Logger: logger,
+		Stripe: stripeclient.New(stripeclient.Options{Key: "sk_test_lockorder"}), WebhookSecret: secrets.NewValue(e.webhookKey)}) {
+		if route.Pattern == stripeWebhookPath {
 			mux.Handle(route.Method+" "+route.Pattern, route.Handler)
 		}
 	}

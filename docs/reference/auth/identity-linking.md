@@ -129,7 +129,8 @@ the `sso_login` failure row go-api writes, with go-api's stage and message,
 before it answers: `state_auth` (the state expired or does not match, or the
 login cookie is missing or wrong), `provider_profile` (the profile has no user
 id), `email_verification` (no verified email), `provisioning` (an unusable email
-or subject, auto-provisioning off, an identity conflict, or no membership) and
+or subject, auto-provisioning off, an identity conflict or an email another
+account holds, or no membership) and
 `domain_check` (the domain is off the list; the message names it). When that
 row cannot be written, the sign-in answers 500. A provider error (the token
 exchange or the profile fetch failing) writes no row yet, and no OIDC or SAML

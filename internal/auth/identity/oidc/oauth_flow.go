@@ -425,6 +425,8 @@ var provisioningMessages = map[Reason]string{
 	ReasonProvisioningDisabled: "user not found and auto-provisioning is disabled",
 	ReasonIdentityConflict:     "identity conflict",
 	ReasonMembershipRequired:   "membership required",
+	// go-api's provisioning answers an email another account holds with its identity conflict (provision.go).
+	ReasonEmailCollision: "identity conflict",
 }
 
 // auditedOAuthRefusal writes go-api's audit row of an OAuth refusal before failure answers; a write error is the

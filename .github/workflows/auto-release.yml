@@ -1,8 +1,6 @@
 name: Auto Release Tag
 permissions:
-  id-token: write
-  contents: write
-  attestations: write
+  contents: read
 on:
   pull_request:
     types: [ closed ]

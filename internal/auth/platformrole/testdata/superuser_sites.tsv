@@ -27,6 +27,8 @@ internal/api/policy/scope.go	Scope.mayUseOrg	1	4
 internal/api/session/changepassword.go	handlers.changePassword	1	-
 internal/api/session/login.go	handlers.loginInTx	1	-
 internal/api/session/onboarding.go	handlers.buildOnboardingState	2	-
+internal/api/session/refresh.go	handlers.refreshRole	1	4
+internal/api/session/refresh.go	handlers.refuseRevokedOfAGoneMember	1	4
 internal/api/session/refresh.go	refreshUserInfo	1	-
 internal/api/session/routes.go	handlers.me	2	2
 internal/api/session/routes.go	handlers.switchOrg	1	-
@@ -56,13 +58,16 @@ internal/apiservice/admin/users.go	userResponseObject	1	-
 internal/apiservice/admin/userstore.go	pgStore.insertUser	3	-
 internal/apiservice/admin/userstore.go	pgStore.updateUser	4	-
 internal/apiservice/admin/userstore.go	scanFullUser	1	-
+internal/auth/authapi/compat.go	compatHandlers.compatRefresh	1	4
 internal/auth/authapi/compat.go	refreshUserInfo	1	-
+internal/auth/authapi/compat_guard.go	guardRefresh	1	4
 internal/auth/authapi/credentials.go	credentialHandlers.changed	1	-
 internal/auth/authapi/issuer.go	Issuer.hs256Access	1	-
 internal/auth/authapi/login.go	compatHandlers.loginSucceeded	1	-
 internal/auth/authapi/login.go	userInfo	1	-
 internal/auth/authapi/provisioning.go	provisioningHandlers.actorRule	1	9
 internal/auth/authapi/provisioning.go	provisioningHandlers.targetsRule	2	9
+internal/auth/authapi/refresh.go	handlers.refresh	1	4
 internal/auth/authapi/social.go	compatHandlers.socialSignedIn	1	-
 internal/auth/authapi/users.go	PGUsers.StateOn	1	-
 internal/auth/edgetoken/signer.go	Signer.Access	1	-

@@ -17,6 +17,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/authmail"
+	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
 	"github.com/full-chaos/dev-health-ops/internal/api/oauthprovider"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/session"
@@ -131,6 +132,14 @@ func startStackWith(t *testing.T, ctx context.Context, issuer sessionissue.Issue
 func startStackWithMailAndIssuer(t *testing.T, ctx context.Context, mail authmail.Config, issuer sessionissue.Issuer,
 	routePool func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, uri string) *pgxpool.Pool) stack {
 	t.Helper()
+	return startStackProvisioned(t, ctx, mail, issuer, routePool, nil)
+}
+
+// startStackProvisioned is startStackWithMailAndIssuer with provision as
+// session.Deps.Provision (non-nil: AUTH_PROXY_ORG_PROVISIONING on).
+func startStackProvisioned(t *testing.T, ctx context.Context, mail authmail.Config, issuer sessionissue.Issuer,
+	routePool func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, uri string) *pgxpool.Pool, provision authprovision.Provisioner) stack {
+	t.Helper()
 	pg, err := containers.StartPostgres(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -202,7 +211,7 @@ func startStackWithMailAndIssuer(t *testing.T, ctx context.Context, mail authmai
 	oauth.Endpoints = sessionscenario.ProviderEndpoints(fake.URL)
 	routes := session.Routes(session.Deps{Pool: routesPool, Guard: policy.NewGuard(auth, logger), Auth: auth, Verifier: verifier,
 		Signer: signer, Mail: mail, ClickHouse: chConn, Limits: httpapi.NewMemoryCounters(limiterNow), Write: apiservice.WriteError, OAuth: oauth, Logger: logger,
-		Issuer: issuer})
+		Issuer: issuer, Provision: provision})
 	mux := http.NewServeMux()
 	for _, route := range routes {
 		mux.Handle(route.Method+" "+route.Pattern, route.Handler)

@@ -740,7 +740,7 @@ leaf), and renders the phase. Every ladder read goes through dev-health.authOn, 
 */}}
 {{- define "dev-health.authPhase" -}}
 {{- $v := .Values -}}
-{{- /* goApi.authProxy keeps one key, orgProvisioning (CHAOS-11858): the go-api switch AUTH_PROXY_ORG_PROVISIONING. Every other key is a routing flag authService.phase owns. */ -}}
+{{- /* goApi.authProxy keeps one key, orgProvisioning (CHAOS-11858, CHAOS-10988): the go-api switch AUTH_PROXY_ORG_PROVISIONING. Every other key is a routing flag authService.phase owns. */ -}}
 {{- if hasKey $v.goApi "authProxy" }}
 {{- if or (not (kindIs "map" $v.goApi.authProxy)) (eq (len $v.goApi.authProxy) 0) }}{{- fail "goApi.authProxy is replaced by authService.phase (0 go-api only, 1 auth-service dark, 2 sessions, 3 login and social sign-in, 4 users owned, 5 orgs owned): remove goApi.authProxy and set authService.phase" }}{{- end }}
 {{- range $key, $_ := $v.goApi.authProxy }}{{- if ne $key "orgProvisioning" }}{{- fail "goApi.authProxy is replaced by authService.phase (0 go-api only, 1 auth-service dark, 2 sessions, 3 login and social sign-in, 4 users owned, 5 orgs owned): remove goApi.authProxy and set authService.phase" }}{{- end }}{{- end }}
@@ -751,10 +751,10 @@ leaf), and renders the phase. Every ladder read goes through dev-health.authOn, 
 {{- if hasKey $v.authService "orgsOwned" }}{{- fail "authService.orgsOwned is replaced by authService.phase: orgs owned is phase 5; remove authService.orgsOwned" }}{{- end -}}
 {{- $p := $v.authService.phase -}}
 {{- if not (and (has (kindOf $p) (list "int" "int64" "float64")) (eq (float64 $p) (floor (float64 $p))) (ge (float64 $p) 0.0) (le (float64 $p) 5.0)) }}{{- fail (printf "authService.phase must be a whole number from 0 to 5, got %s %v" (kindOf $p) $p) }}{{- end -}}
-{{- if and (eq (default false (default dict $v.goApi.authProxy).orgProvisioning) true) (lt (int $p) 2) }}{{- fail "goApi.authProxy.orgProvisioning needs authService.phase 2 or higher: go-api calls auth-service through AUTH_PROXY_URL, which renders from phase 2" }}{{- end -}}
+{{- if and (eq (default false (default dict $v.goApi.authProxy).orgProvisioning) true) (lt (int $p) 4) }}{{- fail "goApi.authProxy.orgProvisioning needs authService.phase 4: the switch sends member, invite and organization delete changes to auth-service, whose provisioning routes refuse until it owns users (phase 4)" }}{{- end -}}
 {{- if eq (default false (default dict $v.goApi.authProxy).orgProvisioning) true }}
 {{- $routes := false }}{{- range ($v.authService.extraEnv | default list) }}{{- if eq (toString .name) "AUTH_MEMBERSHIP_ROUTES" }}{{- $routes = eq (toString .value) "true" }}{{- end }}{{- end }}
-{{- if not $routes }}{{- fail "goApi.authProxy.orgProvisioning needs authService.extraEnv AUTH_MEMBERSHIP_ROUTES=true (the exact name; the last entry with that name must be \"true\"): go-api calls auth-service's organization reactivate route, which auth-service mounts only with that setting" }}{{- end }}
+{{- if not $routes }}{{- fail "goApi.authProxy.orgProvisioning needs authService.extraEnv AUTH_MEMBERSHIP_ROUTES=true (the exact name; the last entry with that name must be \"true\"): go-api calls auth-service's provisioning routes, which auth-service mounts only with that setting" }}{{- end }}
 {{- end -}}
 {{- if ge (int $p) 5 }}{{- fail (printf "authService.phase %d: phase 5 (orgs owned) needs its own public-table writer leaf (D6358): auth-service does not yet write the existing public organizations and memberships tables, so phase 4 is the highest phase this chart renders" (int $p)) }}{{- end -}}
 {{- $stage := toString (default "" $v.authService.usersOwnedStage) -}}

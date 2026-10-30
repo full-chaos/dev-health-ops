@@ -84,6 +84,33 @@ func TestOrgReactivatorFollowsTheSwitchAndNeedsTheCredential(t *testing.T) {
 	}
 }
 
+// The same switch builds the provisioning client the member, invite and
+// delete routes call: none when off, one from the same credential when on.
+func TestOrgProvisionerFollowsTheSwitchAndNeedsTheCredential(t *testing.T) {
+	token := testIssueToken(t)
+	on := mustProxyConfig(t, map[string]string{EnvAuthProxyURL: "http://auth-service:8095", EnvAuthProxyOrgProvisioning: "true"})
+	off := mustProxyConfig(t, map[string]string{EnvAuthProxyURL: "http://auth-service:8095"})
+	if p, err := orgProvisioner(off, issueEnv(map[string]string{sessionissue.EnvToken: token})); p != nil || err != nil {
+		t.Fatalf("switch off with a token: %v %v, want no client", p, err)
+	}
+	if p, err := orgProvisioner(on, issueEnv(map[string]string{sessionissue.EnvToken: " " + token + "\n"})); p == nil || err != nil {
+		t.Fatalf("switch on with a credential: %v %v, want a client", p, err)
+	}
+	for name, env := range map[string]map[string]string{
+		"no credential":  {},
+		"acr credential": {sessionissue.EnvToken: "svc_acr_" + token[len("svc_authsess_"):]},
+	} {
+		p, err := orgProvisioner(on, issueEnv(env))
+		if err == nil || p != nil {
+			t.Errorf("switch on, %s: %v %v, want a start-up error", name, p, err)
+			continue
+		}
+		if !strings.Contains(err.Error(), EnvAuthProxyOrgProvisioning) || strings.Contains(err.Error(), token[len("svc_authsess_"):]) {
+			t.Errorf("switch on, %s: error %q must name the switch and never the credential", name, err)
+		}
+	}
+}
+
 // The suspend client follows the same switch and needs the same credential as the reactivate client.
 func TestOrgSuspenderFollowsTheSwitchAndNeedsTheCredential(t *testing.T) {
 	token := testIssueToken(t)

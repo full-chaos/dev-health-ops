@@ -31,6 +31,7 @@ internal/auth/contracts	test	docs
 internal/auth/contracts/tokencorpus	code	contracts
 internal/auth/identity/oidc	test	ci
 internal/auth/identity/saml	test	ci
+internal/auth/identity/social	test	ci
 internal/auth/ratelimitvalkey	test	deploy
 internal/auth/ratelimitvalkey	test	docs
 internal/auth/revisionfeed	test	contracts

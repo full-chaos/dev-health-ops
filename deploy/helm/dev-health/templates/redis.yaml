@@ -3,6 +3,8 @@
 {{- if and .Values.valkey.acl.enabled (not .Values.networkPolicy.enabled) }}{{- fail "valkey.acl.enabled needs networkPolicy.enabled=true: the ACL file keeps the default user open to every key, so the network policy is what bounds who can reach the auth rate-limit counters" }}{{- end }}
 {{- $policies := list "noeviction" "allkeys-lru" "allkeys-lfu" "allkeys-random" "volatile-lru" "volatile-lfu" "volatile-random" "volatile-ttl" }}
 {{- if not (has (toString .Values.valkey.maxmemoryPolicy) $policies) }}{{- fail (printf "valkey.maxmemoryPolicy must be one of %s; got %q" (join ", " $policies) (toString .Values.valkey.maxmemoryPolicy)) }}{{- end }}
+{{- $fsyncs := list "everysec" "always" }}
+{{- if not (has (toString .Values.valkey.appendfsync) $fsyncs) }}{{- fail (printf "valkey.appendfsync must be one of %s; got %q" (join ", " $fsyncs) (toString .Values.valkey.appendfsync)) }}{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -30,6 +32,8 @@ spec:
           args:
             - --appendonly
             - "yes"
+            - --appendfsync
+            - {{ .Values.valkey.appendfsync }}
             - --maxmemory
             - {{ .Values.valkey.maxmemory | quote }}
             - --maxmemory-policy

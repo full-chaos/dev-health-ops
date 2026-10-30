@@ -1717,6 +1717,10 @@ valkey:
   #    streams); volatile-* evict only keys with a TTL (rate-limit counters, idempotency markers) and refuse writes
   #    once none is left. A change restarts Valkey.
   maxmemoryPolicy: allkeys-lru
+  # -- AOF fsync policy, pinned in the args because INFO does not show it and the
+  #    revision-feed floor rule needs a durable AOF. Only everysec or always; the
+  #    render refuses no. A change restarts Valkey.
+  appendfsync: everysec
   # -- An ACL file for the in-chart Valkey, read from a Secret the chart does not
   #    create. Off unless enabled=true: Valkey then starts as before, with only its
   #    open default user, and nothing refers to the Secret. When enabled, Valkey

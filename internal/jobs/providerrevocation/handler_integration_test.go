@@ -261,10 +261,21 @@ func TestWorkerSendsARequeuedRowOfAMissingCredential(t *testing.T) {
 	if err := c.admin.QueryRow(context.Background(), `SELECT count(*) FROM integration_credentials WHERE org_id = $1`, c.org).Scan(&credentials); err != nil || credentials != 0 {
 		t.Fatalf("credentials = %d, %v", credentials, err)
 	}
+	// The requeue keeps created_at and writes attempts 0, updated_at now: both
+	// rows are due in the first run, the setup one too (it is older than the
+	// callback cutoff). A setup row created a minute ago still waits.
 	requeued := c.seed(t, "disconnect", "connected-after-restore", "tok-requeued", 0, 10*24*time.Hour, 0)
+	requeuedSetup := c.seed(t, "setup", "", "tok-requeued-setup", 0, 10*24*time.Hour, 0)
+	fresh := c.seed(t, "setup", "", "tok-fresh-setup", 0, time.Minute, 0)
 	c.run(t, c.handler(t, true, io.Discard))
 	if c.state(t, requeued).present || c.fake.count("tok-requeued") != 1 {
 		t.Fatalf("requeued row not sent: %+v calls %d", c.state(t, requeued), c.fake.count("tok-requeued"))
+	}
+	if c.state(t, requeuedSetup).present || c.fake.count("tok-requeued-setup") != 1 {
+		t.Fatalf("requeued setup row not sent: %+v calls %d", c.state(t, requeuedSetup), c.fake.count("tok-requeued-setup"))
+	}
+	if !c.state(t, fresh).present || c.fake.count("tok-fresh-setup") != 0 {
+		t.Fatal("a setup row younger than the callback cutoff was sent")
 	}
 }
 

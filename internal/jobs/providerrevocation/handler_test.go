@@ -350,7 +350,7 @@ func TestClaimSQLIsTheSharedClaimRule(t *testing.T) {
 		"FOR UPDATE SKIP LOCKED",
 		"LIMIT 1",
 		fmt.Sprintf("attempts < %d", MaxAttempts),
-		"LEAST(interval '1 minute' * power(2, attempts), interval '6 hours')",
+		"(attempts = 0 OR updated_at <= now() - LEAST(interval '1 minute' * power(2, attempts - 1), interval '6 hours'))",
 		"NOT (purpose = 'setup' AND attempts = 0 AND created_at > now() - interval '900 seconds')",
 		"provider = 'pagerduty' AND status = 'pending'",
 	} {

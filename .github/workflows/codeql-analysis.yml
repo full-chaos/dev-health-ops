@@ -124,3 +124,31 @@ jobs:
         uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
         with:
           category: "/language:${{matrix.language}}"
+
+  # CHAOS-11733: a merge queue entry can fail first in any workflow, not only go.yml. When any job of this workflow fails on a
+  # merge_group run, cancel the runs stacked on this red entry (same job and script as go.yml). Not a required context
+  # (no job needs it), continue-on-error, and the checkout is the target branch's tip, never the merge group.
+  cancel-stacked-queue-children:
+    name: cancel-stacked-queue-children
+    needs: [changes, analyze-docs-only, analyze]
+    if: failure() && github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.merge_group.base_ref }}
+          sparse-checkout: ci/cancel_stacked_queue_runs.sh
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+      - name: Cancel the runs stacked on this red entry
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+        run: bash ci/cancel_stacked_queue_runs.sh

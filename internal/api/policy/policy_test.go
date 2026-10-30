@@ -44,6 +44,8 @@ type fakeStore struct {
 	userCalls      int
 	sessionCalls   int
 	membershipSeen [][2]uuid.UUID
+	// absentOrgs are orgs with no organizations row; every other org exists.
+	absentOrgs map[uuid.UUID]bool
 	// platformRolesOwned is the AUTH_PLATFORM_ROLES_OWNED the double reads under.
 	platformRolesOwned bool
 }

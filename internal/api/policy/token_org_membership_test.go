@@ -2,6 +2,7 @@ package policy
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -255,5 +256,124 @@ func TestHeaderOrgMembershipReadErrorOnAnOrgScopedRoute(t *testing.T) {
 				t.Fatalf("%d %q, want %d %q", got.status, got.body, tc.status, tc.body)
 			}
 		})
+	}
+}
+
+const (
+	absentOrg   = "77777777-7777-4777-8777-777777777777"
+	notAUUIDOrg = "not-a-uuid"
+)
+
+// absentOrgStore is the caller with no membership row in absentOrg, an org
+// with no organizations row.
+func absentOrgStore() *fakeStore {
+	store := newStore()
+	store.absentOrgs = map[uuid.UUID]bool{uuid.MustParse(absentOrg): true}
+	return store
+}
+
+// A token whose org claim names an org that does not exist, or is not a UUID,
+// is answered as on main: the org scope lets the request on in the claimed org
+// (the route answers), with no header and with an X-Org-Id naming the claim,
+// and refuses nothing. Only an existing org without the caller's row is the
+// X-Org-Id refusal.
+func TestTokenOrgMissingOrNotAUUIDAnswersAsMainInTheOrgScope(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		org   string
+		reads int
+	}{
+		{name: "org missing", org: absentOrg, reads: 1},
+		{name: "org not a uuid", org: notAUUIDOrg, reads: 0},
+	} {
+		for _, header := range []string{"", tc.org} {
+			t.Run(tc.name+"/header="+header, func(t *testing.T) {
+				store := absentOrgStore()
+				headers := map[string]string{"Authorization": "Bearer " + sign(t, claims(func(c jwt.MapClaims) { c["org_id"] = tc.org }))}
+				if header != "" {
+					headers["X-Org-Id"] = header
+				}
+				got := serve(orgScoped(goAPIScope(t, store)), http.MethodGet, "/x", headers)
+				if got.status != 200 || !strings.HasPrefix(got.body, "org="+tc.org+" ") {
+					t.Fatalf("%d %q, want main's 200 in the claimed org", got.status, got.body)
+				}
+				if len(store.membershipSeen) != tc.reads {
+					t.Fatalf("membership reads %v, want %d", store.membershipSeen, tc.reads)
+				}
+			})
+		}
+	}
+}
+
+// At the admin levels the guard answers a token whose org is missing or not a
+// UUID as on main: the role claim decides, and nothing is refused for the
+// missing row.
+func TestTokenOrgMissingOrNotAUUIDAnswersAsMainInTheGuard(t *testing.T) {
+	for _, org := range []string{absentOrg, notAUUIDOrg} {
+		for _, tc := range []struct {
+			level  Authz
+			claim  string
+			status int
+			body   string
+		}{
+			{level: Admin, claim: "admin", status: 200},
+			{level: AdminOrg, claim: "owner", status: 200},
+			{level: Admin, claim: "member", status: 403, body: `{"detail":"Admin access required"}`},
+			{level: AdminOrg, claim: "member", status: 403, body: `{"detail":"Admin access required"}`},
+		} {
+			t.Run(fmt.Sprintf("%s/%v/%s", org, tc.level, tc.claim), func(t *testing.T) {
+				token := sign(t, claims(func(c jwt.MapClaims) { c["org_id"], c["role"] = org, tc.claim }))
+				got := serve(NewGuard(authenticator(t, absentOrgStore()), quiet()).Wrap(tc.level, echo), http.MethodGet, "/x", map[string]string{"Authorization": "Bearer " + token})
+				if got.status != tc.status || tc.body != "" && !strings.HasPrefix(got.body, tc.body) {
+					t.Fatalf("%d %q, want %d %q", got.status, got.body, tc.status, tc.body)
+				}
+			})
+		}
+	}
+}
+
+// On the full chain behind ReadOnce a missing org is read once and answered
+// as main at an admin level; an org claim that is not a UUID reads nothing.
+func TestTokenOrgMissingOrNotAUUIDOnTheFullChain(t *testing.T) {
+	for _, tc := range []struct {
+		org   string
+		reads int
+	}{{absentOrg, 1}, {notAUUIDOrg, 0}} {
+		t.Run(tc.org, func(t *testing.T) {
+			store := absentOrgStore()
+			scope := goAPIScope(t, store)
+			auth := scope.auth
+			handler := auth.ReadOnce(scope.Principal(scope.OrgScope(scope.Impersonation(NewGuard(auth, quiet()).Wrap(AdminOrg, echo)))))
+			got := serve(handler, http.MethodGet, "/x", map[string]string{"Authorization": "Bearer " + sign(t, claims(func(c jwt.MapClaims) { c["org_id"], c["role"] = tc.org, "admin" }))})
+			if got.status != 200 || !strings.HasPrefix(got.body, "org="+tc.org+" ") || len(store.membershipSeen) != tc.reads {
+				t.Fatalf("%d %q, reads %v; want 200 in the claimed org after %d reads", got.status, got.body, store.membershipSeen, tc.reads)
+			}
+		})
+	}
+}
+
+// The guard's failed read of the token org's membership is never a pass and
+// never the refusal of a member: 503 when the database is temporarily
+// unavailable, else 500.
+func TestGuardTokenOrgMembershipReadErrorIsNeverAPassOrA403(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err    error
+		status int
+		body   string
+	}{
+		"unavailable": {err: errors.Join(ErrUnavailable, errors.New("timeout")), status: 503, body: `{"detail":{"message":"Database temporarily unavailable"}}`},
+		"other":       {err: errors.New("x"), status: 500, body: `{"detail":"Internal Server Error"}`},
+	} {
+		for _, level := range []Authz{Admin, AdminOrg} {
+			t.Run(fmt.Sprintf("%s/%v", name, level), func(t *testing.T) {
+				store := tokenOrgStore(true, "admin")
+				store.errMember = tc.err
+				token := sign(t, claims(func(c jwt.MapClaims) { c["role"] = "admin" }))
+				got := serve(NewGuard(authenticator(t, store), quiet()).Wrap(level, echo), http.MethodGet, "/x", map[string]string{"Authorization": "Bearer " + token})
+				if got.status != tc.status || !strings.HasPrefix(got.body, tc.body) {
+					t.Fatalf("%d %q, want %d %q", got.status, got.body, tc.status, tc.body)
+				}
+			})
+		}
 	}
 }

@@ -236,7 +236,10 @@ Order (nothing serves traffic until the last step):
    another timeline than the export, or lacks a revocation that the manifest names and the restored copy also lacks (a
    revocation the restored copy already holds is left as it is). Environment only, never a flag. Without it
    the revocations are only named (`requeue_provider_revocation`), and a second apply of the same manifest changes
-   nothing: set it before the `-apply` run (the dry run already names what it will queue again).
+   nothing: set it before the `-apply` run (the dry run already names what it will queue again). With it the apply also
+   carries the shadow copy's live login lockouts (auth and legacy `login_attempts`; a lock holds 15 minutes), raising
+   only: a restored lock is never shortened. Without it no lockout moves; a lock set after the target has usually
+   expired by the time a restore finishes anyway.
 6. Act on the `operator-action` lines the apply prints (ids only): users whose password may have changed after the
    target (their older password is live again: force a reset, ticket 11834); `provider_revocation_requeued`: with the
    PagerDuty client id configured on the API, disconnect or reconnect the credential of each named revocation once
@@ -264,6 +267,9 @@ What the apply puts back, so that nothing removed after the target time stays al
 credential registry, signing keys, resource grants, memberships, service accounts, workloads, workload bindings,
 principals and organizations disabled, consumed link credentials and consumed refresh credentials, replaced link
 credentials, a pending invite the source no longer holds pending (it ends revoked, never accepted), SAML replay evidence, every SSO flow state (users start the flow again),
+external identities unlinked after the target (deleted again and named in `identity_unlinked`, ids only; a link made or
+re-made after the target is not carried, the user links again; a blind margin deletes none and lists every link for
+review),
 and the legacy public tables: refresh tokens, service and ingest credentials, webhook bindings, invites, users (disabled,
 token version, and a user the source deleted is disabled, never deleted), membership mirror rows, single-use reset and
 verification tokens, and SAML replays. Revision floors are raised past everything the source reached, so no

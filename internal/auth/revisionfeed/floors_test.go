@@ -145,3 +145,12 @@ func TestStatusMapsAnyClientFailureToErrUnavailable(t *testing.T) {
 		})
 	}
 }
+
+func TestAHashAboutToExpireIsNotUsableUnderAnyPolicy(t *testing.T) {
+	for _, policy := range []string{"noeviction", "volatile-lru"} {
+		got, err := ReadStatus(context.Background(), &fakeClient{info: infoFields(policy), ttlZero: true})
+		if err != nil || got.Usable || got.Reason != "hash_has_ttl" || !got.HashHasTTL {
+			t.Fatalf("%s: status %+v, %v, want not usable with hash_has_ttl for a TTL of 0 s", policy, got, err)
+		}
+	}
+}

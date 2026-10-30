@@ -32,8 +32,9 @@ type fakeClient struct {
 	config    map[string]string
 	configErr error
 
-	ttl    int64
-	ttlErr error
+	ttl     int64
+	ttlZero bool // a TTL of exactly 0 s (the key is about to expire); ttl 0 alone means no expiry
+	ttlErr  error
 
 	subscribe func(ctx context.Context, channel string, hooks SubscribeHooks) error
 }
@@ -121,7 +122,7 @@ func (f *fakeClient) ConfigGet(_ context.Context, name string) (string, error) {
 func (f *fakeClient) TTL(context.Context, string) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.ttl == 0 {
+	if f.ttl == 0 && !f.ttlZero {
 		return -1, f.ttlErr
 	}
 	return f.ttl, f.ttlErr

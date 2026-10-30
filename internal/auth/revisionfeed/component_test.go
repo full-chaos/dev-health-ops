@@ -47,6 +47,12 @@ func TestShutdownTwiceAndShutdownWithoutStartAreSafe(t *testing.T) {
 	if err := component.Shutdown(ctx); err != nil {
 		t.Fatal(err)
 	}
+	if err := component.Start(ctx); err != nil {
+		t.Fatalf("a Start after a completed Shutdown: %v", err)
+	}
+	if err := component.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestShutdownWaitsForTheSubscriberToStop(t *testing.T) {
@@ -107,6 +113,14 @@ func TestAShutdownThatTimesOutCanBeRetriedAndClosesTheClientOnce(t *testing.T) {
 	}
 	if closed.Load() != 0 {
 		t.Fatal("the client was closed before the subscriber stopped")
+	}
+	again, cancelAgain := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancelAgain()
+	if err := component.Shutdown(again); err == nil {
+		t.Fatal("a second Shutdown reported success while the subscriber was still running")
+	}
+	if closed.Load() != 0 {
+		t.Fatal("the client was closed by a Shutdown that did not wait for the subscriber")
 	}
 	close(release)
 	if err := component.Shutdown(context.Background()); err != nil {

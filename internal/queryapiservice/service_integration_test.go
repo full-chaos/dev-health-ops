@@ -64,17 +64,15 @@ func TestConfiguredServiceReportsItsDependenciesOnTheOperatorListener(t *testing
 		t.Fatal(err)
 	}
 
-	r, addrs := startOnFreeAddrs(t, 2, 1, func(addrs []string) ([]string, map[string]string) {
-		return []string{"--query-addr", addrs[0], "--http-addr", addrs[1]}, map[string]string{
-			"CLICKHOUSE_URI":               ch.URI,
-			"GO_API_REGISTRY_POSTGRES_URI": pg.URI,
-			"GO_API_ENVELOPE_JWKS_PATH":    jwksPath,
-			"GO_API_ENVELOPE_ISSUER":       "dev-health-ops-edge",
-			"GO_API_ENVELOPE_AUDIENCE":     "query-api",
-			"GO_API_META_ENABLED":          "true",
-		}
-	})
-	query, operator := addrs[0], addrs[1]
+	r, addrs := startBound(t, []string{"--query-addr", anyPort, "--http-addr", anyPort}, map[string]string{
+		"CLICKHOUSE_URI":               ch.URI,
+		"GO_API_REGISTRY_POSTGRES_URI": pg.URI,
+		"GO_API_ENVELOPE_JWKS_PATH":    jwksPath,
+		"GO_API_ENVELOPE_ISSUER":       "dev-health-ops-edge",
+		"GO_API_ENVELOPE_AUDIENCE":     "query-api",
+		"GO_API_META_ENABLED":          "true",
+	}, queryComponent, operatorComponent)
+	query, operator := addrs[queryComponent], addrs[operatorComponent]
 	waitFor(t, r, "http://"+operator+"/readyz", http.StatusOK)
 	if got := waitFor(t, r, "http://"+query+"/readyz", http.StatusOK); got != "ready" {
 		t.Fatalf("compat /readyz on the query listener = %q, want the old ready", got)

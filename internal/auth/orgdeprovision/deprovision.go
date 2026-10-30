@@ -51,6 +51,8 @@ type Config struct {
 type Actor struct {
 	PrincipalID *uuid.UUID
 	RequestID   *string
+	// Caller is the credential the request came with; the audit row names it.
+	Caller audit.Caller
 }
 
 // Authorize decides, inside the commit and after the organization row lock,
@@ -253,6 +255,7 @@ func auditFor(in Input, wasActive bool) audit.AuditEvent {
 		actor := in.Actor.PrincipalID.String()
 		ev.ActorPrincipalID = &actor
 	}
+	in.Actor.Caller.Annotate(ev.Attributes)
 	if wasActive {
 		ev.Attributes["changed_fields"] = []string{"status", "disabled_at"}
 		ev.Attributes["previous_status"] = string(org.StatusActive)

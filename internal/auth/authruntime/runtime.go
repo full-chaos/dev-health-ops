@@ -219,7 +219,7 @@ func compatRoutes(
 	if err != nil {
 		return nil, err
 	}
-	provisioning, err := provisioningRoutes(cfg, logger, pool, schema, identities)
+	provisioning, err := provisioningRoutes(cfg, logger, pool, schema, identities, issueWorkload)
 	if err != nil {
 		return nil, err
 	}

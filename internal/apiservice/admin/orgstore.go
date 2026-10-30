@@ -402,6 +402,13 @@ func (s pgStore) removeMembership(ctx context.Context, orgID, userID uuid.UUID) 
 	if err != nil {
 		return false, err
 	}
+	// The removed member's refresh tokens for this org end with the
+	// membership (D6507); their tokens for other orgs stay.
+	_, err = s.Pool.Exec(ctx, `UPDATE refresh_tokens SET revoked_at = $3 WHERE user_id = $1 AND org_id = $2 AND revoked_at IS NULL`,
+		userID, orgID, s.now().UTC())
+	if err != nil {
+		return false, err
+	}
 	return true, nil
 }
 

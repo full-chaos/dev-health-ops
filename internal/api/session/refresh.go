@@ -160,7 +160,7 @@ func (h handlers) refresh(w http.ResponseWriter, r *http.Request) {
 	if !h.allowActive(w, r, tx, user, record, userIDText, orgIDText) {
 		return
 	}
-	role, ok := h.refreshRole(w, r, tx, user, orgIDText)
+	role, ok := h.refreshRole(w, r, tx, user, record, userIDText, orgIDText)
 	if !ok {
 		return
 	}
@@ -276,9 +276,13 @@ func (h handlers) allowActive(w http.ResponseWriter, r *http.Request, tx pgx.Tx,
 }
 
 // refreshRole is the role refresh.py puts in the new access token: the
-// membership's role in the token's org, else "member". A non-empty org
+// membership's role in the token's org, else "member" (no org claim, or a
+// superuser without a membership). A non-empty org
 // claim that is not a UUID raises ValueError in Python (the bare 500).
-func (h handlers) refreshRole(w http.ResponseWriter, r *http.Request, tx pgx.Tx, user *userRow, orgIDText string) (string, bool) {
+// A non-superuser whose membership in the token's org is gone (removed or
+// left, D6507) is refused as allowActive refuses a deactivated user: the
+// family revoked, a login_failed audit row, then the generic 401.
+func (h handlers) refreshRole(w http.ResponseWriter, r *http.Request, tx pgx.Tx, user *userRow, record *refreshRecord, userIDText, orgIDText string) (string, bool) {
 	if orgIDText == "" {
 		return "member", true
 	}
@@ -290,6 +294,26 @@ func (h handlers) refreshRole(w http.ResponseWriter, r *http.Request, tx pgx.Tx,
 	role, found, err := membershipRole(r.Context(), tx, user.ID, orgID)
 	if err != nil {
 		h.fail(w, r, "membership role", err)
+		return "", false
+	}
+	if !found && !user.IsSuperuser {
+		ctx := r.Context()
+		if err := revokeFamily(ctx, tx, record.FamilyID, h.Now()); err != nil {
+			h.fail(w, r, "revoke family", err)
+			return "", false
+		}
+		if err := h.emitAudit(ctx, tx, r, auditEntry{orgID: orgID, action: audit.ActionLoginFailed, resourceID: userIDText,
+			userID: &user.ID, description: "Token refresh failed: not a member", failure: true,
+			errorMessage: "Not a member of the organization"}); err != nil {
+			h.fail(w, r, "audit not a member", err)
+			return "", false
+		}
+		if err := tx.Commit(ctx); err != nil {
+			h.fail(w, r, "commit not a member", err)
+			return "", false
+		}
+		h.Logger.WarnContext(ctx, "refresh rejected: no membership in the token's organization", "user_id", user.ID.String())
+		refuse(w, http.StatusUnauthorized, "Invalid or expired refresh token")
 		return "", false
 	}
 	if !found {
@@ -328,7 +352,7 @@ func (h handlers) replaySuccessor(w http.ResponseWriter, r *http.Request, tx pgx
 	if !h.allowActive(w, r, tx, user, record, userIDText, orgIDText) {
 		return true
 	}
-	role, ok := h.refreshRole(w, r, tx, user, orgIDText)
+	role, ok := h.refreshRole(w, r, tx, user, record, userIDText, orgIDText)
 	if !ok {
 		return true
 	}

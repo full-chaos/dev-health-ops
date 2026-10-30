@@ -20,8 +20,9 @@ type userStateOn interface {
 	StateOn(ctx context.Context, q session.Queryer, userID uuid.UUID) (UserState, bool, error)
 }
 
-// refreshGuard refuses a refresh whose user is missing or inactive, or whose
-// session pin is missing or stale, before the credential is rotated. The
+// refreshGuard refuses a refresh whose user is missing or inactive, whose
+// session pin is missing or stale, or whose organization membership is gone
+// (a non-superuser), before the credential is rotated. The
 // handler then answers and revokes exactly as it does after an exchange.
 func (h compatHandlers) refreshGuard(ctx context.Context, q session.Queryer, record session.Record) error {
 	var (
@@ -39,6 +40,17 @@ func (h compatHandlers) refreshGuard(ctx context.Context, q session.Queryer, rec
 	}
 	if !found || !user.IsActive || checkPin(ctx, h.rec.logger, record, user) != pinCurrent {
 		return session.ErrGuardRefused
+	}
+	if record.OrganizationID != nil && !user.IsSuperuser {
+		// A session whose organization membership is gone (D6507) is not
+		// rotated; the handler refuses and revokes it.
+		_, member, err := h.Users.Role(ctx, record.PrincipalID, *record.OrganizationID)
+		if err != nil {
+			return err
+		}
+		if !member {
+			return session.ErrGuardRefused
+		}
 	}
 	return nil
 }

@@ -273,6 +273,7 @@ func TestComposeBugsinkLeaksCells(t *testing.T) {
 	add(both("web extends a service with a credential key", "  mid:\n    environment:\n    - BUGSINK_SECRET_KEY\n  web:\n    extends:\n      service: mid\n", false)...)
 	add(both("web extends a service in another file", "  web:\n    extends:\n      file: other.yml\n      service: x\n", false)...)
 	add(both("web extends in the string form", "  web:\n    extends: bugsink\n", false)...)
+	add(cell{"web extends a bugsink service that holds nothing yet", "services:\n  bugsink:\n    image: x\n  web:\n    extends:\n      service: bugsink\n", false})
 	add(both("web extends an unknown service", "  web:\n    extends:\n      service: ghost\n", false)...)
 	add(both("two services extend each other", "  a:\n    extends: b\n  b:\n    extends: a\n", false)...)
 	add(both("a top-level include", "include:\n- other.yml\n", false)...)

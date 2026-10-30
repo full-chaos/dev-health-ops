@@ -30,3 +30,11 @@ func TestRouteSendersClaimWithSkipLocked(t *testing.T) {
 		}
 	}
 }
+
+// Org deletion claims one row per transaction with the same skip-locked claim.
+func TestOrgDeletionClaimsOneRevocationWithSkipLocked(t *testing.T) {
+	query := pagerDutyRevocationClaimOneSQL(orgDeletionRevocationOrgPredicate)
+	if !strings.HasSuffix(query, "LIMIT 1 FOR UPDATE SKIP LOCKED") || !strings.Contains(query, "WHERE "+orgDeletionRevocationOrgPredicate+" ") {
+		t.Fatalf("org deletion claim is not the shared one-row SKIP LOCKED claim: %s", query)
+	}
+}

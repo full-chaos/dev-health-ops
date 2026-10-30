@@ -267,3 +267,33 @@ func TestTwoVerbsHoldThePlatformRoleWriteLockTogether(t *testing.T) {
 		}
 	}
 }
+
+// A removal that finds a session of the member locked rolls back and plans again; every attempt is its own transaction
+// and takes the shared platform role lock again, and a rolled-back attempt leaves none held: after the removal has given
+// up (all attempts replanned, nothing written) no shared advisory lock is held and a grant of the platform role to the
+// member completes at once.
+func TestARemovalThatGivesUpOnABusySessionReleasesThePlatformRoleLock(t *testing.T) {
+	s := newSessionEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	roles, grantor := s.platformStore(t, ctx)
+	org, user, owner := s.seedOrg(t, ctx), s.seedUser(t, ctx), s.seedUser(t, ctx)
+	s.add(t, ctx, org, owner, "owner")
+	s.add(t, ctx, org, user, "member")
+	sess := s.open(t, ctx, user, &org)
+	release := s.holdSession(t, ctx, sess)
+	defer func() { _ = release(false) }()
+	_, err := s.members.Remove(ctx, Change{OrgID: org, PrincipalID: user, Authorize: allowAll})
+	if !errors.Is(err, ErrStore) || !errors.Is(err, errSessionsBusy) {
+		t.Fatalf("Remove with the session held: got %v, want ErrStore after the busy attempts", err)
+	}
+	if got := s.replanned(t); got != planAttempts {
+		t.Fatalf("replanned attempts: got %d, want %d", got, planAttempts)
+	}
+	if granted, waiting, exclusive := s.advisoryWaits(t, ctx); granted != 0 || waiting != 0 || exclusive != 0 {
+		t.Fatalf("advisory requests after the removal gave up: got granted=%d shared_waiting=%d exclusive_waiting=%d, want 0, 0, 0", granted, waiting, exclusive)
+	}
+	if _, err := roles.Grant(ctx, platformrole.GrantInput{Actor: grantor, Principal: user, Role: platformrole.PlatformAdmin}); err != nil {
+		t.Fatalf("grant after the removal gave up: got error %v, want nil", err)
+	}
+}

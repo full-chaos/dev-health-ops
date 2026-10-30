@@ -3,6 +3,7 @@ package authapi
 import (
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -25,6 +26,26 @@ func newProvWorkloadFixture(t *testing.T) *provWorkloadFixture {
 	return &provWorkloadFixture{provFixture: newProvFixtureFor(t, docWithRow(t, PatternOrgSuspend), w.workload), w: w}
 }
 
+// workloadRouteOps are the routes that take the go-api workload token; every
+// other provisioning route refuses it.
+var workloadRouteOps = []string{opMembershipAdd, opMembershipRole, opMembershipRemove, opMembershipTransfer,
+	opInviteCreate, opInviteAccept, opOrgDeprovision, opOrgReactivate, opOrgState}
+
+// workloadRouteCases and offWorkloadRouteCases split routeCases by workloadRouteOps.
+func workloadRouteCases() []routeCase { return routeCasesWhere(true) }
+
+func offWorkloadRouteCases() []routeCase { return routeCasesWhere(false) }
+
+func routeCasesWhere(listed bool) []routeCase {
+	var out []routeCase
+	for _, c := range routeCases() {
+		if slices.Contains(workloadRouteOps, c.op) == listed {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // callerOf is the caller the route handed to its verb.
 func callerOf(f *provFixture, op string) audit.Caller {
 	switch op {
@@ -36,6 +57,8 @@ func callerOf(f *provFixture, op string) audit.Caller {
 		return f.invites.create.Actor.Caller
 	case opInviteAccept:
 		return f.invites.accept.Actor.Caller
+	case opInviteRevoke:
+		return f.invites.revoke.Actor.Caller
 	case opOrgDeprovision:
 		return f.deprovision.in.Actor.Caller
 	case opOrgReactivate:
@@ -47,14 +70,14 @@ func callerOf(f *provFixture, op string) audit.Caller {
 	return audit.Caller{}
 }
 
-// Every provisioning route accepts the go-api workload token (audience
+// Every route of workloadRouteOps accepts the go-api workload token (audience
 // auth-service, subject the configured go-api principal), with no service
 // credential check and no compat count, and hands the verb the workload
 // principal and the token's jti as the caller.
 func TestProvisioningRoutesAcceptTheGoAPIWorkloadToken(t *testing.T) {
 	f := newProvWorkloadFixture(t)
 	want := uuidOfWire(t, f.w.subject)
-	for _, c := range routeCases() {
+	for _, c := range workloadRouteCases() {
 		header, jti := f.w.mint("workload+jwt", nil)
 		response := f.post(c.path, encode(c.body(f.provFixture, f.super)), header)
 		if response.Code != http.StatusOK {
@@ -62,6 +85,9 @@ func TestProvisioningRoutesAcceptTheGoAPIWorkloadToken(t *testing.T) {
 		}
 		if got, _ := f.uses(c.op); got != 0 {
 			t.Fatalf("%s: compat uses = %d after a workload call, want 0", c.op, got)
+		}
+		if c.op == opOrgState {
+			continue // a read-only route: no actor, no verb caller, no audit row
 		}
 		caller := callerOf(f.provFixture, c.op)
 		if caller.Workload == nil || *caller.Workload != want || caller.JTI != jti || caller.CredentialID != "" {
@@ -80,6 +106,12 @@ func TestProvisioningServiceCredentialCallerIsTheCredentialRow(t *testing.T) {
 	for _, c := range routeCases() {
 		if response := f.post(c.path, encode(c.body(f.provFixture, f.super)), nil); response.Code != http.StatusOK {
 			t.Fatalf("%s with the service credential: %d %s", c.op, response.Code, response.Body)
+		}
+		if got, _ := f.uses(c.op); got != 1 {
+			t.Fatalf("%s: compat uses = %d, want 1", c.op, got)
+		}
+		if c.op == opOrgState {
+			continue // a read-only route: no actor, no verb caller, no audit row
 		}
 		caller := callerOf(f.provFixture, c.op)
 		if caller.CredentialID != "cred-1" || caller.Workload != nil || caller.JTI != "" {
@@ -158,12 +190,88 @@ func TestProvisioningRefusesTheWorkloadTokenWhenThePathIsOff(t *testing.T) {
 func TestProvisioningWorkloadKeySetOutageIs503(t *testing.T) {
 	f := newProvWorkloadFixture(t)
 	f.w.keys.err = errors.New("custody down")
-	for _, c := range routeCases() {
+	for _, c := range workloadRouteCases() {
 		header, _ := f.w.mint("workload+jwt", nil)
 		expectRefusal(t, f.post(c.path, encode(c.body(f.provFixture, f.super)), header), http.StatusServiceUnavailable, reasonDependency)
 	}
 	if f.storeCalls() != 0 || f.users.reads != 0 || len(f.creds.scopes) != 0 {
 		t.Fatal("a key-set outage reached a store")
+	}
+}
+
+// The production list is exactly workloadRouteOps, and every route case is
+// either on it and takes a workload token, or is off it and refuses one: a new
+// route takes no workload token until it is listed.
+func TestEveryProvisioningRouteIsOnTheWorkloadListOrRefusesTheToken(t *testing.T) {
+	var listed []string
+	for op := range workloadOperations {
+		listed = append(listed, op)
+	}
+	slices.Sort(listed)
+	want := slices.Clone(workloadRouteOps)
+	slices.Sort(want)
+	if !slices.Equal(listed, want) {
+		t.Fatalf("workloadOperations = %v, want %v", listed, want)
+	}
+	cased := map[string]bool{}
+	for _, c := range routeCases() {
+		cased[c.op] = true
+		f := newProvWorkloadFixture(t)
+		header, _ := f.w.mint("workload+jwt", nil)
+		response := f.post(c.path, encode(c.body(f.provFixture, f.super)), header)
+		if workloadOperations[c.op] {
+			if response.Code != http.StatusOK {
+				t.Fatalf("%s is on the list: %d %s", c.op, response.Code, response.Body)
+			}
+			continue
+		}
+		expectRefusal(t, response, http.StatusUnauthorized, reasonInvalidCredentials)
+	}
+	for _, op := range provisioningOperations {
+		if !cased[op] {
+			t.Fatalf("%s has no route case", op)
+		}
+	}
+}
+
+// The invite revoke and organization suspend routes are not in
+// workloadRouteOps: a valid go-api workload token is the same 401 body as a
+// refused session issuer credential, before the key set, the credential check,
+// the users seam or the verb (so no audit row), and it is not counted. The
+// session issuer credential still works on them.
+func TestProvisioningRoutesOffTheWorkloadListRefuseTheWorkloadToken(t *testing.T) {
+	off := offWorkloadRouteCases()
+	var ops []string
+	for _, c := range off {
+		ops = append(ops, c.op)
+	}
+	slices.Sort(ops)
+	if want := []string{opInviteRevoke, opOrgSuspend}; !slices.Equal(ops, want) {
+		t.Fatalf("routes off the workload list = %v, want %v", ops, want)
+	}
+	for _, c := range off {
+		golden := func() string {
+			f := newProvWorkloadFixture(t)
+			f.creds.refusal = servicecred.RefusedRevoked
+			return refusalWithoutPerRequestFields(t, f.post(c.path, encode(c.body(f.provFixture, f.super)), nil).Body.Bytes())
+		}()
+		f := newProvWorkloadFixture(t)
+		header, _ := f.w.mint("workload+jwt", nil)
+		response := f.post(c.path, encode(c.body(f.provFixture, f.super)), header)
+		expectRefusal(t, response, http.StatusUnauthorized, reasonInvalidCredentials)
+		if got := refusalWithoutPerRequestFields(t, response.Body.Bytes()); got != golden {
+			t.Fatalf("%s: refusal body %s differs from %s", c.op, got, golden)
+		}
+		if f.w.keys.reads != 0 || len(f.creds.scopes) != 0 || f.users.reads != 0 || f.storeCalls() != 0 {
+			t.Fatalf("%s: a workload token read before the refusal (key set %d, checks %d, users %d, verbs %d)", c.op,
+				f.w.keys.reads, len(f.creds.scopes), f.users.reads, f.storeCalls())
+		}
+		if got, _ := f.uses(c.op); got != 0 {
+			t.Fatalf("%s: compat uses = %d after a refused workload call, want 0", c.op, got)
+		}
+		if response := f.post(c.path, encode(c.body(f.provFixture, f.super)), nil); response.Code != http.StatusOK {
+			t.Fatalf("%s with the service credential: %d %s", c.op, response.Code, response.Body)
+		}
 	}
 }
 

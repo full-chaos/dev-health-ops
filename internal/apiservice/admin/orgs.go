@@ -362,10 +362,17 @@ func (h *handlers) updateOrganization(w http.ResponseWriter, r *http.Request) {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 		return
 	}
-	if patch.IsActive != nil && !h.orgStatusInAuth(w, r, orgID, *patch.IsActive) {
-		return
+	var authActive orgAuthStateFunc
+	if patch.IsActive != nil {
+		accepted, ok := h.orgStatusInAuth(w, r, orgID, *patch.IsActive)
+		if !ok {
+			return
+		}
+		if accepted != nil {
+			authActive = h.authStateHook(orgID, *accepted)
+		}
 	}
-	updated, err := h.store.updateOrganization(ctx, orgID, patch)
+	updated, err := h.store.updateOrganization(ctx, orgID, patch, authActive)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "admin: update organization failed", "error", err)
 		policy.WriteInternal(w)
@@ -374,6 +381,9 @@ func (h *handlers) updateOrganization(w http.ResponseWriter, r *http.Request) {
 	if updated == nil {
 		policy.WriteDetail(w, http.StatusNotFound, "Organization not found", nil)
 		return
+	}
+	if authActive != nil && updated.IsActive != *patch.IsActive {
+		h.logger.InfoContext(ctx, "admin: auth state moved after the call")
 	}
 	obj, err := organizationResponseObject(updated)
 	if err != nil {

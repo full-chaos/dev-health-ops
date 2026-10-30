@@ -82,8 +82,8 @@ func (h *handlers) disconnectPagerDuty(w http.ResponseWriter, r *http.Request) {
 // against whatever `provider_oauth_revocations` rows are pending (this
 // disconnect's own enqueued row, and any earlier org's still-unretried
 // ones for this same credential). Returns nil for "no credential row
-// existed" (Python's None, itself never a failure), else whether the
-// revocation queue finished draining.
+// existed and nothing is owed for its name" (Python's None, itself never a
+// failure), else whether the revocation queue finished draining.
 func (h *handlers) disconnectPagerDutyCredential(ctx context.Context, orgID, credentialName string) (*bool, error) {
 	// A revoke PagerDuty refused for an earlier OAuth setup is retried too;
 	// it never changes this disconnect's answer.
@@ -169,11 +169,29 @@ VALUES ($1, $2, 'pagerduty', $3, 'disconnect', $4, 'v1', 'pending', 0, now(), no
 	}
 
 	if credentialID == nil {
+		// CHAOS-12011: rows still owed for this name (a credential connected after a
+		// restore point, or one removed) are sent like a found credential's; only
+		// "nothing owed" keeps Python's None. Go-only rows, so a named divergence.
+		owed, err := pagerDutyRevocationsOwed(ctx, tx, orgID, credentialName)
+		if err != nil {
+			return nil, err
+		}
 		if err := tx.Commit(ctx); err != nil {
 			return nil, err
 		}
 		committed = true
-		return nil, nil
+		if !owed {
+			return nil, nil
+		}
+		if !configPresent {
+			result := false
+			return &result, nil
+		}
+		complete, err := h.retryPagerDutyRevocations(ctx, orgID, credentialName)
+		if err != nil {
+			return nil, err
+		}
+		return &complete, nil
 	}
 
 	if _, err := tx.Exec(ctx, `UPDATE integration_credentials SET is_active = false, credentials_encrypted = NULL WHERE id = $1`, *credentialID); err != nil {
@@ -185,7 +203,15 @@ VALUES ($1, $2, 'pagerduty', $3, 'disconnect', $4, 'v1', 'pending', 0, now(), no
 	committed = true
 
 	if !configPresent {
-		result := revokeCandidate == nil
+		// D6501 P2a: without a client id nothing is sent now, so the answer is
+		// "pending retry" while any revocation of the name is owed: this
+		// disconnect's own row, or an older one (its current token missing or
+		// undecryptable). Python answers success then (a named divergence).
+		owed, err := pagerDutyRevocationsOwed(ctx, h.store.Pool, orgID, credentialName)
+		if err != nil {
+			return nil, err
+		}
+		result := !owed
 		return &result, nil
 	}
 	complete, err := h.retryPagerDutyRevocations(ctx, orgID, credentialName)
@@ -201,13 +227,43 @@ VALUES ($1, $2, 'pagerduty', $3, 'disconnect', $4, 'v1', 'pending', 0, now(), no
 // call is retained (attempts incremented, is_complete=false) rather than
 // raised, matching Python's `except (ValueError, httpx.HTTPError)`.
 func (h *handlers) retryPagerDutyRevocations(ctx context.Context, orgID, credentialName string) (bool, error) {
-	return h.retryPagerDutyRevocationRows(ctx, orgID, `SELECT id, token_encrypted FROM provider_oauth_revocations WHERE org_id = $1 AND provider = 'pagerduty' AND credential_name = $2 AND status = 'pending' ORDER BY created_at FOR UPDATE`, credentialName)
+	return h.retryPagerDutyRevocationRows(ctx, orgID, `org_id = $1 AND provider = 'pagerduty' AND credential_name = $2 AND status = 'pending'`, credentialName)
+}
+
+// pagerDutyRevocationsOwed reports whether a revocation of the credential name
+// is still pending.
+func pagerDutyRevocationsOwed(ctx context.Context, q interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}, orgID, credentialName string) (bool, error) {
+	var owed bool
+	err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM provider_oauth_revocations WHERE org_id = $1 AND provider = 'pagerduty' AND credential_name = $2 AND status = 'pending')`,
+		orgID, credentialName).Scan(&owed)
+	return owed, err
+}
+
+// pagerDutyRevocationClaimSQL is the claim every route sender (disconnect,
+// callback, setup drain) runs: the rows a predicate selects, oldest first, held
+// FOR UPDATE SKIP LOCKED.
+func pagerDutyRevocationClaimSQL(predicate string) string {
+	return `SELECT id, token_encrypted FROM provider_oauth_revocations WHERE ` + predicate + ` ORDER BY created_at FOR UPDATE SKIP LOCKED`
+}
+
+// pagerDutyRevocationClaimOneSQL is the same claim for one row (org deletion
+// sends each row in its own transaction).
+func pagerDutyRevocationClaimOneSQL(predicate string) string {
+	return `SELECT id, token_encrypted FROM provider_oauth_revocations WHERE ` + predicate + ` ORDER BY created_at, id LIMIT 1 FOR UPDATE SKIP LOCKED`
 }
 
 // retryPagerDutyRevocationRows is retryPagerDutyRevocations over the rows a
-// query selects (id, token_encrypted; $1 is the organisation, further
-// arguments follow).
-func (h *handlers) retryPagerDutyRevocationRows(ctx context.Context, orgID, query string, args ...any) (bool, error) {
+// predicate selects ($1 is the organisation, further arguments follow). Every
+// sender, the revocation worker included (internal/jobs/providerrevocation),
+// claims with FOR UPDATE SKIP LOCKED: a row another sender holds is mid-call,
+// so it is skipped, never waited on, and the answer is incomplete while it is
+// still owed. A row is deleted only after PagerDuty accepted the revoke; a lost
+// delete may send the same revoke again (at least once).
+func (h *handlers) retryPagerDutyRevocationRows(ctx context.Context, orgID, predicate string, args ...any) (bool, error) {
+	query := pagerDutyRevocationClaimSQL(predicate)
+	args = append([]any{orgID}, args...)
 	tx, err := h.store.Pool.Begin(ctx)
 	if err != nil {
 		return false, err
@@ -223,7 +279,7 @@ func (h *handlers) retryPagerDutyRevocationRows(ctx context.Context, orgID, quer
 		id        uuid.UUID
 		encrypted string
 	}
-	rows, err := tx.Query(ctx, query, append([]any{orgID}, args...)...)
+	rows, err := tx.Query(ctx, query, args...)
 	if err != nil {
 		return false, err
 	}
@@ -258,6 +314,15 @@ func (h *handlers) retryPagerDutyRevocationRows(ctx context.Context, orgID, quer
 		if _, err := tx.Exec(ctx, `DELETE FROM provider_oauth_revocations WHERE id = $1`, row.id); err != nil {
 			return false, err
 		}
+	}
+	if complete {
+		// A row still matching after this pass is one another sender holds (or
+		// one queued meanwhile): it is still owed.
+		var owed bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM provider_oauth_revocations WHERE `+predicate+`)`, args...).Scan(&owed); err != nil {
+			return false, err
+		}
+		complete = !owed
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return false, err

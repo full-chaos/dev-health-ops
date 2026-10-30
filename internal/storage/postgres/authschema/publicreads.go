@@ -760,6 +760,9 @@ func publicReadViolations(ctx context.Context, conn *pgx.Conn, options Options) 
 		if schema == publicSchema && (kind == "r" || kind == "p") && isPublicAuditWriteColumn(table, privilege, column) {
 			continue
 		}
+		if schema == publicSchema && (kind == "r" || kind == "p") && isSSOProviderFailureColumn(table, privilege, column) {
+			continue
+		}
 		violations = append(violations, Violation{
 			Kind: "column", Schema: schema, Object: table + "." + column, Privilege: privilege,
 			Detail: "not declared in PublicReadColumns",
@@ -780,5 +783,9 @@ func publicReadViolations(ctx context.Context, conn *pgx.Conn, options Options) 
 	if err != nil {
 		return nil, err
 	}
-	return append(append(append(violations, missing...), inviteMissing...), auditMissing...), nil
+	failureMissing, err := ssoProviderFailureMissing(ctx, conn, options)
+	if err != nil {
+		return nil, err
+	}
+	return append(append(append(append(violations, missing...), inviteMissing...), auditMissing...), failureMissing...), nil
 }

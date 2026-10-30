@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/saml"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity/ssoaudit"
 )
 
 const emailMarker = "leakmarker"
@@ -47,6 +48,7 @@ type acsAnswer struct {
 	logs     string
 	calls    int
 	sessions int
+	provider saml.Provider
 }
 
 // postACSEmail posts one signed IdP-initiated response asserting email through the real ACS handler.
@@ -57,6 +59,12 @@ func postACSEmail(t *testing.T, email string, linked bool) acsAnswer {
 
 // postACSEmailWithList is postACSEmail for a provider with allowed_domains list.
 func postACSEmailWithList(t *testing.T, email string, linked bool, list []string) acsAnswer {
+	t.Helper()
+	return postACSEmailRecorded(t, email, linked, list, nil)
+}
+
+// postACSEmailRecorded is postACSEmailWithList with the provider failure seam.
+func postACSEmailRecorded(t *testing.T, email string, linked bool, list []string, failures ssoaudit.ProviderFailure) acsAnswer {
 	t.Helper()
 	idp := newTestIdP(t)
 	p := saml.Provider{
@@ -75,7 +83,7 @@ func postACSEmailWithList(t *testing.T, email string, linked bool, list []string
 	svc := &saml.Service{
 		Providers: staticProvider{p}, Entitlements: ssoAllowed{}, Flows: openFlows{}, Uses: freshAssertions{},
 		Store: store, Memberships: members, JIT: &joinSeam{members: members}, BaseURL: func() string { return refusalBase },
-		Logger: slog.New(slog.NewJSONHandler(&logs, nil)),
+		Logger: slog.New(slog.NewJSONHandler(&logs, nil)), ProviderFailure: failures,
 	}
 	h := saml.Handlers{Service: svc, Sessions: sessions, Logger: svc.Logger}
 	mux := http.NewServeMux()
@@ -89,7 +97,8 @@ func postACSEmailWithList(t *testing.T, email string, linked bool, list []string
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
-	return acsAnswer{status: rec.Code, body: rec.Body.String(), logs: logs.String(), calls: store.calls, sessions: len(sessions.got)}
+	return acsAnswer{status: rec.Code, body: rec.Body.String(), logs: logs.String(), calls: store.calls, sessions: len(sessions.got),
+		provider: p}
 }
 
 // The provider email rule runs before the identity lookup of a SAML sign-in: a linked NameID with a refused address

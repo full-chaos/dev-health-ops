@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -16,6 +17,26 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/oauthprovider"
 )
+
+// parityTableCount counts the table's data rows from the raw file, apart from readParityRows, and how many of them carry
+// an "id=" shape, so a driver that skips a row is caught: each plane must answer every row.
+func parityTableCount(t *testing.T) (rows, idRows int) {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "ci", "social_provider_email_parity.tsv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		rows++
+		if f := strings.Split(line, "\t"); len(f) == 7 && strings.HasPrefix(f[6], "id=") {
+			idRows++
+		}
+	}
+	return rows, idRows
+}
 
 // parityRow is one row of ci/social_provider_email_parity.tsv: a provider email form and the answer both planes give.
 type parityRow struct {
@@ -114,6 +135,7 @@ func detailMessage(body string) string {
 // go-api's social login answers every row of the shared parity table as the table says; "pass" means the email guard
 // let the profile through (the handler went on to the database, which the zero pool turns into a panic).
 func TestSocialLoginAnswersTheProviderEmailParityTable(t *testing.T) {
+	answered := 0
 	for _, row := range readParityRows(t, filepath.Join("..", "..", "..", "ci", "social_provider_email_parity.tsv")) {
 		t.Run(row.id, func(t *testing.T) {
 			provider := httptest.NewServer(goAPIProviderProfile(row))
@@ -155,13 +177,31 @@ func TestSocialLoginAnswersTheProviderEmailParityTable(t *testing.T) {
 			if strings.Contains(logs.String(), "MARK") {
 				t.Fatal("the email value is in a log line (any level, Debug included)")
 			}
+			answered++
 		})
+	}
+	if rows, _ := parityTableCount(t); answered != rows {
+		t.Fatalf("go-api answered %d rows, the table holds %d", answered, rows)
 	}
 }
 
-// shapeBody applies a row's shape to a served profile body: "key=<K>" renames the email member to K, "utf16le" sends the
+// noEmailMember is an "email" member with its value and the separator after it.
+var noEmailMember = regexp.MustCompile(`"email": (?:"(?:[^"\\]|\\.)*"|[^,}\]]*)(?:, )?`)
+
+// shapeBody applies a row's shape to a served profile body: "a+b" applies a then b, "noid" drops the profile's "id"
+// member, "noemail" drops every "email" member, "key=<K>" renames the email member to K, "utf16le" sends the
 // body as UTF-16LE with a byte order mark (a body Python's response.json() reads), "-" leaves it as it is.
 func shapeBody(shape string, body []byte) []byte {
+	if strings.Contains(shape, "+") {
+		for _, one := range strings.Split(shape, "+") {
+			body = shapeBody(one, body)
+		}
+		return body
+	}
+	if shape == "noid" {
+		body = bytes.Replace(body, []byte(`{"id": 7, `), []byte(`{`), 1)
+		body = bytes.Replace(body, []byte(`{"id": "g7", `), []byte(`{`), 1)
+	}
 	if key, ok := strings.CutPrefix(shape, "key="); ok {
 		body = bytes.ReplaceAll(body, []byte(`"email": `), []byte(`"`+key+`": `))
 	}
@@ -171,6 +211,9 @@ func shapeBody(shape string, body []byte) []byte {
 			panic(err)
 		}
 		body = bytes.Replace(body, []byte(`"email": `), append(append([]byte(`"email": `), value...), []byte(`, "email": `)...), 1)
+	}
+	if shape == "noemail" {
+		body = bytes.ReplaceAll(noEmailMember.ReplaceAll(body, nil), []byte(", }"), []byte("}"))
 	}
 	if shape == "utf16le" {
 		units := utf16.Encode([]rune("\ufeff" + string(body)))

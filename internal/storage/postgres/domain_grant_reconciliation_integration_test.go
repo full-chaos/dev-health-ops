@@ -326,6 +326,29 @@ func reconciliationTables() []domainTable {
 			},
 		},
 		{
+			// CHAOS-12010: the revocation worker's statements, verbatim shapes
+			// (internal/jobs/providerrevocation/store.go): the SKIP LOCKED claim,
+			// the attempt update, the delete of a sent row and the counts. No INSERT.
+			name: "provider_oauth_revocations",
+			ddl: `CREATE TABLE public.provider_oauth_revocations (
+				id uuid PRIMARY KEY, org_id text NOT NULL, provider text NOT NULL,
+				credential_name text NOT NULL, purpose text NOT NULL, token_encrypted text NOT NULL,
+				token_key_version text NOT NULL, status text DEFAULT 'pending' NOT NULL,
+				attempts integer DEFAULT 0 NOT NULL, last_error text,
+				created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL)`,
+			exercise: []string{
+				`SELECT id, token_encrypted FROM public.provider_oauth_revocations
+WHERE provider = 'pagerduty' AND status = 'pending' AND attempts < 10
+  AND (attempts = 0 OR updated_at <= now() - LEAST(interval '1 minute' * power(2, attempts - 1), interval '6 hours'))
+  AND NOT (purpose = 'setup' AND attempts = 0 AND created_at > now() - interval '900 seconds')
+ORDER BY updated_at, id LIMIT 1 FOR UPDATE SKIP LOCKED`,
+				"UPDATE public.provider_oauth_revocations SET attempts = attempts + 1, last_error = 'remote_revoke_failed', updated_at = now() WHERE id = gen_random_uuid() RETURNING attempts",
+				"DELETE FROM public.provider_oauth_revocations WHERE id = gen_random_uuid()",
+				"SELECT count(*), count(*) FILTER (WHERE attempts >= 10) FROM public.provider_oauth_revocations WHERE provider = 'pagerduty' AND status = 'pending'",
+				"SELECT id, COALESCE(last_error, '') FROM public.provider_oauth_revocations WHERE provider = 'pagerduty' AND status = 'pending' AND attempts >= 10 ORDER BY id LIMIT 25",
+			},
+		},
+		{
 			name: "provider_rate_limit_observations",
 			ddl: `CREATE TABLE public.provider_rate_limit_observations (
 				id uuid PRIMARY KEY, provider text NOT NULL, observed_at timestamptz NOT NULL)`,

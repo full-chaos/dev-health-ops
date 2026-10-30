@@ -247,8 +247,8 @@ Order (nothing serves traffic until the last step):
    revoke (a setup revoke is sent by a disconnect or callback of its org once the row is 15 minutes old: the apply
    keeps its created_at and sets attempts to 0, and the route skips a younger one, so it stays pending until then);
    `provider_revocation_requeued_blocked`:
-   the credential was connected after the target, so the restored copy has no credential row and a disconnect does not
-   send the revoke (it answers `disconnected: true` anyway); these wait for the revocation worker (the ticket the line
+   the credential was connected after the target, so the restored copy has no credential row; a disconnect of the name
+   still sends them (ticket 12011), and the revocation worker sends them (the ticket the line
    names); `requeue_provider_revocation`: tokens the apply could only name: revocations of an apply with no source set
    (revoke those tokens at the provider by hand), and provider credentials it deleted (`source=public.provider_oauth_credentials`):
    their restored token was rotated, reconnected or disconnected after the target, the delete writes no revocation row,
@@ -259,6 +259,14 @@ Order (nothing serves traffic until the last step):
    `auth-migrate restore-fence status`, or read-only:
    `SELECT jsonb_array_elements_text(a->'ids') FROM auth.restore_fence_state s, jsonb_array_elements(s.operator_actions) a WHERE a->>'kind' = 'requeue_provider_revocation' AND a->>'source' = 'public.provider_oauth_credentials';`
    (the schema is `AUTH_DATABASE_SCHEMA`, `auth` by default).
+   A re-queued revocation row needs no route afterwards: the revocation worker (`sync.provider_oauth_revocations`, on
+   the sync worker, every 5 to 10 minutes) sends every pending row once `PAGER_DUTY_CLIENT_ID` is set, also for a
+   credential the restored database never had. A re-queued row is due at its first run (only a setup row created less
+   than 15 minutes ago waits, as its callback may still be running); after a refusal it waits 1, 2, 4 ... minutes. A row PagerDuty refuses 10 times stays pending and is named by id in a
+   `provider_oauth_revocations.exhausted` WARN line (the `provider_oauth_revocations_exhausted` gauge counts them), and
+   every run lists such rows, also the ones a disconnect pushed there, in one `provider_oauth_revocations.exhausted_rows`
+   WARN line (the total and up to 25 ids with the class of the last refusal): disconnect that credential again, or
+   revoke the token at PagerDuty by hand.
 7. Reset the read-only default: `ALTER SYSTEM RESET default_transaction_read_only;` then `SELECT pg_reload_conf();`.
 8. Start auth-service. Its readiness check `restore_fence` must be true (`/readyz`).
 9. `auth-migrate restore-fence status` prints `fenced=true` and the timeline (and the stored operator actions).

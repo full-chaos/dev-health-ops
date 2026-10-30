@@ -141,7 +141,12 @@ func fakeGitLab(t *testing.T, email string, confirmed bool) *httptest.Server {
 
 func oauthCallbackRun(t *testing.T, email string, confirmed, linked bool) (refusal, *orderIdentities) {
 	t.Helper()
-	server := fakeGitLab(t, email, confirmed)
+	return oauthCallbackRunOn(t, fakeGitLab(t, email, confirmed), linked)
+}
+
+// oauthCallbackRunOn runs one OAuth callback against server as a self-hosted GitLab.
+func oauthCallbackRunOn(t *testing.T, server *httptest.Server, linked bool) (refusal, *orderIdentities) {
+	t.Helper()
 	var secret contracts.SecretString
 	raw, _ := json.Marshal(uuid.NewString())
 	if err := json.Unmarshal(raw, &secret); err != nil {

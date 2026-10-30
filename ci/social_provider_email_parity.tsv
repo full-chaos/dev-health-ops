@@ -1,0 +1,38 @@
+# Provider email forms in a social sign-in profile: the answer go-api and auth-service give (the same on both planes).
+# Driven by internal/api/session (go-api socialLogin) and internal/auth/identity/social (auth-service Exchange), each through its real provider client.
+# email_hex / name_hex: the raw JSON value of the profile's email / name member, hex ("-" = a plain name). want: "pass" (the email guard lets it through) or "<status> <detail message>".
+# id	provider	email_hex	verified	name_hex	want
+github_user_literal_fffd_verified	github_user	224d41524befbfbd406578616d706c652e7465737422	true	-	400 The provider returned an unusable email address
+github_user_lone_surrogate_verified	github_user	224d41524b5c7564383030406578616d706c652e7465737422	true	-	403 The provider has not verified this email address
+github_user_nul_verified	github_user	224d41524b5c7530303030406578616d706c652e7465737422	true	-	400 The provider returned an unusable email address
+github_user_c1_verified	github_user	224d41524b5c753030383578406578616d706c652e7465737422	true	-	400 The provider returned an unusable email address
+github_user_not_utf8_verified	github_user	224d41524bff406578616d706c652e7465737422	true	-	500 Internal Server Error
+github_user_usable_verified	github_user	2275736572406578616d706c652e7465737422	true	-	pass
+github_user_name_lone_surrogate	github_user	2275736572406578616d706c652e7465737422	true	22416e6e5c756438303022	pass
+github_emails_literal_fffd_verified	github_emails	224d41524befbfbd406578616d706c652e7465737422	true	-	400 The provider returned an unusable email address
+github_emails_lone_surrogate_verified	github_emails	224d41524b5c7564383030406578616d706c652e7465737422	true	-	403 The provider has not verified this email address
+github_emails_nul_verified	github_emails	224d41524b5c7530303030406578616d706c652e7465737422	true	-	400 The provider returned an unusable email address
+github_emails_c1_verified	github_emails	224d41524b5c753030383578406578616d706c652e7465737422	true	-	400 The provider returned an unusable email address
+github_emails_not_utf8_verified	github_emails	224d41524bff406578616d706c652e7465737422	true	-	500 Internal Server Error
+github_emails_usable_verified	github_emails	2275736572406578616d706c652e7465737422	true	-	pass
+github_emails_name_lone_surrogate	github_emails	2275736572406578616d706c652e7465737422	true	22416e6e5c756438303022	pass
+gitlab_literal_fffd_verified	gitlab	224d41524befbfbd406578616d706c652e7465737422	true	-	400 The provider returned an unusable email address
+gitlab_lone_surrogate_verified	gitlab	224d41524b5c7564383030406578616d706c652e7465737422	true	-	403 The provider has not verified this email address
+gitlab_nul_verified	gitlab	224d41524b5c7530303030406578616d706c652e7465737422	true	-	400 The provider returned an unusable email address
+gitlab_c1_verified	gitlab	224d41524b5c753030383578406578616d706c652e7465737422	true	-	400 The provider returned an unusable email address
+gitlab_not_utf8_verified	gitlab	224d41524bff406578616d706c652e7465737422	true	-	500 Internal Server Error
+gitlab_usable_verified	gitlab	2275736572406578616d706c652e7465737422	true	-	pass
+gitlab_name_lone_surrogate	gitlab	2275736572406578616d706c652e7465737422	true	22416e6e5c756438303022	pass
+gitlab_literal_fffd_unverified	gitlab	224d41524befbfbd406578616d706c652e7465737422	false	-	403 The provider has not verified this email address
+gitlab_lone_surrogate_unverified	gitlab	224d41524b5c7564383030406578616d706c652e7465737422	false	-	403 The provider has not verified this email address
+gitlab_nul_unverified	gitlab	224d41524b5c7530303030406578616d706c652e7465737422	false	-	403 The provider has not verified this email address
+google_literal_fffd_verified	google	224d41524befbfbd406578616d706c652e7465737422	true	-	400 The provider returned an unusable email address
+google_lone_surrogate_verified	google	224d41524b5c7564383030406578616d706c652e7465737422	true	-	403 The provider has not verified this email address
+google_nul_verified	google	224d41524b5c7530303030406578616d706c652e7465737422	true	-	400 The provider returned an unusable email address
+google_c1_verified	google	224d41524b5c753030383578406578616d706c652e7465737422	true	-	400 The provider returned an unusable email address
+google_not_utf8_verified	google	224d41524bff406578616d706c652e7465737422	true	-	500 Internal Server Error
+google_usable_verified	google	2275736572406578616d706c652e7465737422	true	-	pass
+google_name_lone_surrogate	google	2275736572406578616d706c652e7465737422	true	22416e6e5c756438303022	pass
+google_literal_fffd_unverified	google	224d41524befbfbd406578616d706c652e7465737422	false	-	403 The provider has not verified this email address
+google_lone_surrogate_unverified	google	224d41524b5c7564383030406578616d706c652e7465737422	false	-	403 The provider has not verified this email address
+google_nul_unverified	google	224d41524b5c7530303030406578616d706c652e7465737422	false	-	403 The provider has not verified this email address

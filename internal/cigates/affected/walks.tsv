@@ -72,6 +72,7 @@ internal/auth/platformrole	owned_parse_census_test.go	unexpressed	-	-
 internal/auth/platformrole	superuser_fills_census_test.go	unexpressed	-	-
 internal/auth/platformrole	superuser_literals_census_test.go	unexpressed	-	-
 internal/auth/platformrole	superuser_sites_census_test.go	unexpressed	-	-
+internal/auth/platformrole	superuser_writes_census_test.go	unexpressed	-	-
 internal/auth/restorefence	consumers_test.go	unexpressed	-	*.go
 internal/auth/restorefence	inventory_completeness_test.go	.	tree	*.go
 internal/auth/restorefence	specs_test.go	internal/pgmigrate/sql	dir	*

@@ -50,7 +50,7 @@ func revisionFeedWith(
 	if err != nil {
 		return nil, nil, err
 	}
-	consumer, err := revisionfeed.NewConsumer(revisionfeed.Config{Invalidator: revisionfeed.NopInvalidator{}, Logger: logger})
+	consumer, err := revisionfeed.NewConsumer(revisionfeed.Config{Invalidator: nopInvalidator{}, Logger: logger})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -60,3 +60,8 @@ func revisionFeedWith(
 	}
 	return publisher, []lifecycle.Component{revisionfeed.NewComponent(subscriber, client.Close)}, nil
 }
+
+type nopInvalidator struct{}
+
+func (nopInvalidator) Invalidate(context.Context, string, string, int64) {}
+func (nopInvalidator) InvalidateAll(context.Context)                     {}

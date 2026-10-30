@@ -9,6 +9,7 @@ internal/api/session/store.go	scanUsers	1	switched read (userColumnsFor, every c
 internal/api/sso/oauth.go	handlers.oauthProvisionUser	1	switched read (signInUser)
 internal/api/sso/provision.go	handlers.provisionOrGetUser	1	switched read (signInUser)
 internal/apiservice/admin/guards.go	superuserTx.refuse	1	switched read (targetsSuperuserSQL)
+internal/apiservice/admin/orgs_provision.go	pgStore.isSuperuser	1	switched read (isSuperuserSQL)
 internal/apiservice/admin/store.go	pgStore.userByID	1	switched read (targetUserSQL)
 internal/apiservice/admin/users.go	handlers.createUser	1	request value (the body is_superuser of a create; refused while owned)
 internal/apiservice/admin/userstore.go	scanFullUser	1	switched read (userColumns, every caller)

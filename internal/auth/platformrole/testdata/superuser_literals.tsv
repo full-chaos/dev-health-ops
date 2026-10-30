@@ -19,6 +19,7 @@ internal/api/sso/provision.go	handlers.createAccountAndMembership	1	write (INSER
 internal/api/sso/sso.go	handlers.userReadSQL	1	read: the off column of PlatformRoleRead
 internal/apiservice/admin/guards.go	handlers.refuseSuperuserWrite	1	log key
 internal/apiservice/admin/guards.go	pgStore.targetsSuperuserSQL	1	read: the off column of PlatformRoleRead
+internal/apiservice/admin/orgs_provision.go	pgStore.isSuperuserSQL	1	read: the off column of PlatformRoleRead
 internal/apiservice/admin/platformstats.go	pgStore.superuserCountSQL	1	read: the off column of PlatformRoleRead
 internal/apiservice/admin/store.go	pgStore.targetUserSQL	1	read: the off column of PlatformRoleRead
 internal/apiservice/admin/users.go	handlers.createUser	1	request key (refused while owned)

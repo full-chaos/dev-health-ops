@@ -36,9 +36,12 @@ func TestAdminTargetAndStatsReadsFollowTheSwitch(t *testing.T) {
 	if got, err := off.targetsSuperuserSQL(); got != `SELECT is_superuser FROM users WHERE id = ANY($1) ORDER BY id FOR UPDATE` || err != nil {
 		t.Errorf("off targets: %q %v", got, err)
 	}
+	if got, err := off.isSuperuserSQL(); got != `SELECT is_superuser FROM users WHERE id = $1` || err != nil {
+		t.Errorf("off transfer target: %q %v", got, err)
+	}
 	on := pgStore{PlatformRolesOwned: true}
 	holds := rule.HoldsSQL(`"auth"`, "users.id", "'platform_admin'")
-	for name, build := range map[string]func() (string, error){"target": on.targetUserSQL, "count": on.superuserCountSQL, "targets": on.targetsSuperuserSQL} {
+	for name, build := range map[string]func() (string, error){"target": on.targetUserSQL, "count": on.superuserCountSQL, "targets": on.targetsSuperuserSQL, "transfer target": on.isSuperuserSQL} {
 		if got, err := build(); err != nil || !strings.Contains(got, holds) || strings.Contains(got, "is_superuser") {
 			t.Errorf("on %s: %q %v", name, got, err)
 		}

@@ -181,6 +181,33 @@ func TestOversizedInviteMetadataIsLeftOut(t *testing.T) {
 	}
 }
 
+// An empty description is left out, not sent as "": the routes refuse an
+// empty text member as malformed (authapi optionalText), so an invite create
+// with no description would answer 400 malformed and go-api 503.
+func TestAnEmptyDescriptionIsLeftOut(t *testing.T) {
+	org, actor, principal, invite := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	client, got := newClient(t, func(w http.ResponseWriter, got seen) {
+		switch got.path {
+		case PathInviteCreate:
+			writeJSON(w, http.StatusOK, `{"invite_id":"`+invite.String()+`","token":"tok.en","expires_at":"2026-11-01T09:00:00Z"}`)
+		case PathInviteAccept:
+			writeJSON(w, http.StatusOK, `{"invite_id":"`+invite.String()+`","organization_id":"`+org.String()+`","membership_id":"`+uuid.NewString()+`","role":"member"}`)
+		}
+	})
+	if _, err := client.CreateInvite(context.Background(), InviteRequest{OrgID: org, Email: "a@example.com", Role: "member", TTL: time.Hour, Actor: actor}); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := got.body["description"]; present {
+		t.Fatalf("invite create sent an empty description: %v", got.body)
+	}
+	if _, err := client.AcceptInvite(context.Background(), AcceptRequest{Token: "tok.en", PrincipalID: principal}); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := got.body["description"]; present {
+		t.Fatalf("invite accept sent an empty description: %v", got.body)
+	}
+}
+
 func TestSuccessAnswersAreReadBack(t *testing.T) {
 	org, principal, actor, invite, membership := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	client, _ := newClient(t, func(w http.ResponseWriter, got seen) {

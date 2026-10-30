@@ -5,7 +5,9 @@ package session_test
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -73,6 +75,33 @@ func writeCounts(t *testing.T, ctx context.Context, st stack) [4]int {
 	return out
 }
 
+// joinTimeout bounds one join request: a go-api lock or transaction held
+// across the auth call can block go-api's own session issue for good.
+const joinTimeout = 20 * time.Second
+
+// joinRequest is changeRequest with joinTimeout. A request with no answer in
+// time fails at once, naming the likely cause and what the lock probe saw.
+func joinRequest(t *testing.T, ctx context.Context, st stack, path, token, body string, lockable func() []string) (int, string) {
+	t.Helper()
+	bounded, cancel := context.WithTimeout(ctx, joinTimeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(bounded, http.MethodPost, st.server.URL+path, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Forwarded-For", "203.0.113.9")
+	request.Header.Set("Authorization", "Bearer "+token)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("%s: no answer within %s (%v): go-api holds a row lock or a transaction across the auth call that blocks its own join; lock probe: %v",
+			path, joinTimeout, err, lockable())
+	}
+	defer response.Body.Close()
+	raw, _ := io.ReadAll(response.Body)
+	return response.StatusCode, string(raw)
+}
+
 // With the switch on, accept-invite and onboard join_org ask auth-service:
 // go-api holds no transaction and no row lock during the call, writes no
 // membership, invite or audit row of its own, then issues the session for the
@@ -114,7 +143,7 @@ WHERE datname = current_database() AND state LIKE 'idle in transaction%' AND pid
 		{"accept-invite", "/api/v1/auth/accept-invite", alice, `{"token": "a.b"}`, "Invite accepted"},
 		{"onboard", "/api/v1/auth/onboard", fresh, `{"action": "join_org", "invite_code": "a.b"}`, "Invite accepted during onboarding"},
 	} {
-		status, body := changeRequest(t, ctx, st, http.MethodPost, step.path, step.token, step.body)
+		status, body := joinRequest(t, ctx, st, step.path, step.token, step.body, func() []string { return lockable })
 		if status != http.StatusOK || sessionscenario.Field(body, "org_id") != ownedOrgD || sessionscenario.Field(body, "role") != "member" ||
 			sessionscenario.Field(body, "access_token") == "" {
 			t.Fatalf("%s: %d %s", step.name, status, body)

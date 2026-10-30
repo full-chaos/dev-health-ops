@@ -40,6 +40,7 @@ deploy/helm/dev-health	query_api_subcommand_test.go	unexpressed
 deploy/helm/dev-health	reconciler_subcommand_test.go	unexpressed
 deploy/helm/dev-health	scheduler_subcommand_test.go	unexpressed
 deploy/helm/dev-health	stream_subcommand_test.go	unexpressed
+deploy/helm/dev-health	valkey_feed_acl_test.go	unexpressed
 deploy/helm/dev-health	worker_group_extra_env_test.go	unexpressed
 deploy/helm/dev-health	worker_subcommand_test.go	unexpressed
 internal/api/billing/stripeclient	environment_proxy_test.go	unexpressed

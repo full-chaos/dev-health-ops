@@ -51,10 +51,12 @@ type orderStore struct {
 	Store
 	linked                          *identity.Principal
 	lookups, byEmail, writes, lists int
+	subject                         string
 }
 
-func (s *orderStore) IdentityBySubject(context.Context, string, identity.Provider, string, *identity.LegacyMatch) (identity.Principal, bool, error) {
+func (s *orderStore) IdentityBySubject(_ context.Context, _ string, _ identity.Provider, subject string, _ *identity.LegacyMatch) (identity.Principal, bool, error) {
 	s.lookups++
+	s.subject = subject
 	if s.linked != nil {
 		return *s.linked, true, nil
 	}

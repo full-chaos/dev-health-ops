@@ -66,9 +66,7 @@ func rawProviders(row parityRow) http.Handler {
 	}
 	write := func(w http.ResponseWriter, parts ...[]byte) {
 		w.Header().Set("Content-Type", "application/json")
-		for _, p := range parts {
-			_, _ = w.Write(p)
-		}
+		_, _ = w.Write(shapeID(row.shape, bytes.Join(parts, nil)))
 	}
 	writeProfile := func(w http.ResponseWriter, parts ...[]byte) {
 		write(w, shapeBody(row.shape, bytes.Join(parts, nil)))
@@ -150,6 +148,9 @@ func TestExchangeAnswersTheProviderEmailParityTable(t *testing.T) {
 			if got != row.want {
 				t.Fatalf("auth-service answered %q, the table wants %q (body %s)", got, row.want, rec.Body.String())
 			}
+			if digits, ok := strings.CutPrefix(row.shape, "id="); ok && store.subject != digits {
+				t.Fatalf("looked up subject %q, want the provider's integer id %s exactly", store.subject, digits)
+			}
 			if strings.Contains(logs.String(), "MARK") {
 				t.Fatal("the email value is in a log line (any level, Debug included)")
 			}
@@ -190,6 +191,13 @@ func TestFetchUnverifiesOnlyALoneSurrogateEmail(t *testing.T) {
 func shapeBody(shape string, body []byte) []byte {
 	if key, ok := strings.CutPrefix(shape, "key="); ok {
 		body = bytes.ReplaceAll(body, []byte(`"email": `), []byte(`"`+key+`": `))
+	}
+	if first, ok := strings.CutPrefix(shape, "dupfirst="); ok {
+		value, err := hex.DecodeString(first)
+		if err != nil {
+			panic(err)
+		}
+		body = bytes.Replace(body, []byte(`"email": `), append(append([]byte(`"email": `), value...), []byte(`, "email": `)...), 1)
 	}
 	if shape == "utf16le" {
 		units := utf16.Encode([]rune("\ufeff" + string(body)))
@@ -237,4 +245,17 @@ func TestFetchReadsTheLastCaseFoldedEmailMember(t *testing.T) {
 			}
 		})
 	}
+}
+
+// shapeID applies an "id=<digits>" shape: every numeric account id the provider serves (the profile id, GitHub's
+// token-check user id, GitLab's token owner) becomes that integer, written as JSON digits.
+func shapeID(shape string, body []byte) []byte {
+	digits, ok := strings.CutPrefix(shape, "id=")
+	if !ok {
+		return body
+	}
+	for _, field := range []string{`"id": `, `"resource_owner_id": `} {
+		body = bytes.ReplaceAll(body, []byte(field+"7"), []byte(field+digits))
+	}
+	return body
 }

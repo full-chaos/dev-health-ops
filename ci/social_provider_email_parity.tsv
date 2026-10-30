@@ -1,6 +1,6 @@
 # Provider email forms in a social sign-in profile: the answer go-api and auth-service give (the same on both planes).
 # Driven by internal/api/session (go-api socialLogin) and internal/auth/identity/social (auth-service Exchange), each through its real provider client.
-# email_hex / name_hex: the raw JSON value of the profile's email / name member, hex ("-" = a plain name). want: "pass" (the email guard lets it through) or "<status> <detail message>". shape: "-" as written, "utf16le" (the profile body as UTF-16LE with a byte order mark), "key=<K>" (the email member named K).
+# email_hex / name_hex: the raw JSON value of the profile's email / name member, hex ("-" = a plain name). want: "pass" (the email guard lets it through) or "<status> <detail message>". shape: "-" as written, "utf16le" (the profile body as UTF-16LE with a byte order mark), "key=<K>" (the email member named K). "dupfirst=<hex>" (an earlier "email" member with that value, so the object has the key twice; the last one counts on both planes), "id=<digits>" (every numeric account id served is that integer).
 # id	provider	email_hex	verified	name_hex	want	shape
 github_user_literal_fffd_verified	github_user	224d41524befbfbd406578616d706c652e7465737422	true	-	400 The provider returned an unusable email address	-
 github_user_lone_surrogate_verified	github_user	224d41524b5c7564383030406578616d706c652e7465737422	true	-	403 The provider has not verified this email address	-
@@ -49,3 +49,14 @@ gitlab_utf16le_usable_verified	gitlab	2275736572406578616d706c652e7465737422	tru
 google_utf16le_literal_fffd_verified	google	224d41524befbfbd406578616d706c652e7465737422	true	-	400 The provider returned an unusable email address	utf16le
 google_utf16le_lone_surrogate_verified	google	224d41524b5c7564383030406578616d706c652e7465737422	true	-	403 The provider has not verified this email address	utf16le
 google_utf16le_usable_verified	google	2275736572406578616d706c652e7465737422	true	-	pass	utf16le
+github_user_dup_email_surrogate_first	github_user	2275736572406578616d706c652e7465737422	true	-	pass	dupfirst=224d41524b5c7564383030406578616d706c652e7465737422
+github_user_dup_email_surrogate_last	github_user	224d41524b5c7564383030406578616d706c652e7465737422	true	-	403 The provider has not verified this email address	dupfirst=2275736572406578616d706c652e7465737422
+github_emails_dup_email_surrogate_first	github_emails	2275736572406578616d706c652e7465737422	true	-	pass	dupfirst=224d41524b5c7564383030406578616d706c652e7465737422
+github_emails_dup_email_surrogate_last	github_emails	224d41524b5c7564383030406578616d706c652e7465737422	true	-	403 The provider has not verified this email address	dupfirst=2275736572406578616d706c652e7465737422
+gitlab_dup_email_surrogate_first	gitlab	2275736572406578616d706c652e7465737422	true	-	pass	dupfirst=224d41524b5c7564383030406578616d706c652e7465737422
+gitlab_dup_email_surrogate_last	gitlab	224d41524b5c7564383030406578616d706c652e7465737422	true	-	403 The provider has not verified this email address	dupfirst=2275736572406578616d706c652e7465737422
+google_dup_email_surrogate_first	google	2275736572406578616d706c652e7465737422	true	-	pass	dupfirst=224d41524b5c7564383030406578616d706c652e7465737422
+google_dup_email_surrogate_last	google	224d41524b5c7564383030406578616d706c652e7465737422	true	-	403 The provider has not verified this email address	dupfirst=2275736572406578616d706c652e7465737422
+github_user_big_integer_id	github_user	2275736572406578616d706c652e7465737422	true	-	pass	id=123456789012345678901234567890
+github_emails_big_integer_id	github_emails	2275736572406578616d706c652e7465737422	true	-	pass	id=123456789012345678901234567890
+gitlab_big_integer_id	gitlab	2275736572406578616d706c652e7465737422	true	-	pass	id=123456789012345678901234567890

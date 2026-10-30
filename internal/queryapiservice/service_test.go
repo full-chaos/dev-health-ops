@@ -36,6 +36,19 @@ func freeAddr(t *testing.T) string {
 // configured listeners on one address make the service exit "must differ" before it ever serves.
 func freeAddrs(t *testing.T, n int) []string {
 	t.Helper()
+	addrs := reserve(t, n)
+	if afterFreed != nil {
+		afterFreed(t, addrs)
+	}
+	return addrs
+}
+
+// afterFreed runs once the addresses are released and before the caller can use them: a test sets it to play the other
+// process on a busy runner that takes a released port.
+var afterFreed func(t *testing.T, addrs []string)
+
+func reserve(t *testing.T, n int) []string {
+	t.Helper()
 	held := make([]net.Listener, 0, n)
 	addrs := make([]string, 0, n)
 	for range n {
@@ -529,4 +542,28 @@ func TestTheStartGuardNamesTheDefaultPortsAStartWouldBind(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A busy runner hands a released port to another process before the service binds it (CHAOS-11839). The test plays that
+// process: it takes the first address of the first draw the moment it is freed.
+func TestAStartSurvivesAnAddressTakenAfterItWasFreed(t *testing.T) {
+	taken := false
+	afterFreed = func(t *testing.T, addrs []string) {
+		if taken {
+			return
+		}
+		taken = true
+		thief, err := net.Listen("tcp", addrs[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = thief.Close() })
+	}
+	t.Cleanup(func() { afterFreed = nil })
+
+	addrs := freeAddrs(t, 2)
+	query, operator := addrs[0], addrs[1]
+	r := start(t, []string{"--query-addr", query, "--http-addr", operator}, nil)
+	waitFor(t, r, "http://"+operator+"/readyz", http.StatusOK)
+	stop(t, r)
 }

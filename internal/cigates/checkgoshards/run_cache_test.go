@@ -1,6 +1,6 @@
 //go:build !race
 
-package checkgo_test
+package checkgoshards_test
 
 import (
 	"sync"

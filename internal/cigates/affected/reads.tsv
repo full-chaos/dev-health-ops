@@ -74,6 +74,7 @@ internal/cigates/chartgates	test	deploy
 internal/cigates/chartgates	test	docker
 internal/cigates/chartgates	test	docs
 internal/cigates/checkgo	test	ci
+internal/cigates/checkgoshards	test	ci
 internal/cigates/docmaketargets	test	.github
 internal/cigates/docmaketargets	test	Makefile
 internal/cigates/docs	test	.github

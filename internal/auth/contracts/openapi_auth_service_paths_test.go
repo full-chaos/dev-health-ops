@@ -767,6 +767,23 @@ func TestTheOpenAPIPathGateChecksEveryKeywordShape(t *testing.T) {
 			}
 		}
 	}
+	for name, plant := range map[string]func(document map[string]any){
+		"an operation that is not an object": func(document map[string]any) {
+			document["paths"].(map[string]any)["/v1/sessions/current"].(map[string]any)["get"] = "x"
+		},
+		"an operation whose responses is a list": func(document map[string]any) {
+			document["paths"].(map[string]any)["/v1/sessions/current"].(map[string]any)["get"].(map[string]any)["responses"] = []any{}
+		},
+		"an operation without responses": func(document map[string]any) {
+			delete(document["paths"].(map[string]any)["/v1/token/refresh"].(map[string]any)["post"].(map[string]any), "responses")
+		},
+	} {
+		document := loadOpenAPIRaw(t)
+		plant(document)
+		if len(openAPIPathProblems(document, rows)) == 0 {
+			t.Errorf("%s: the gate reported nothing", name)
+		}
+	}
 	for _, status := range []string{"400", "413", "429"} {
 		document := loadOpenAPIRaw(t)
 		route, method := "/v1/token/refresh", "post"

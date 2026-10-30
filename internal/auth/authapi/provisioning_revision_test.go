@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/auth/org"
 	"github.com/full-chaos/dev-health-ops/internal/auth/servicecred"
 )
@@ -217,7 +218,8 @@ func TestOrgStateTakesTheIssuerServiceCredentialOnly(t *testing.T) {
 // Dark: with no endpoint-profile row for the route it answers 404 and one startup line names it; the suspend route's
 // row does not mount it and its row does not mount the suspend route.
 func TestOrgStateIsDarkWithoutItsProfileRow(t *testing.T) {
-	for name, doc := range map[string][]byte{"embedded document": nil, "suspend row only": docWithRow(t, PatternOrgSuspend)} {
+	for name, doc := range map[string][]byte{"document without the row": docWithoutRow(t, nil, stateRoute),
+		"suspend row only": docWithoutRow(t, docWithRow(t, PatternOrgSuspend), stateRoute)} {
 		f := newProvFixtureWith(t, doc)
 		if got := f.post(stateRoute, f.stateBody(), nil); got.Code != http.StatusNotFound {
 			t.Fatalf("%s: state without its row: %d %s, want 404", name, got.Code, got.Body)
@@ -271,5 +273,42 @@ func TestOrgStateNeedsAnAuthServicePostRowAcceptingTheIssuerCredential(t *testin
 		if got := f.post(stateRoute, f.stateBody(), nil); got.Code != http.StatusNotFound {
 			t.Fatalf("%s: state %d, want 404", name, got.Code)
 		}
+	}
+}
+
+// docWithoutRow is doc (nil is the embedded document) with every row of route removed.
+func docWithoutRow(t *testing.T, doc []byte, route string) []byte {
+	t.Helper()
+	if doc == nil {
+		doc = authv1.AuthServiceEndpointProfiles
+	}
+	var document map[string]any
+	if err := json.Unmarshal(doc, &document); err != nil {
+		t.Fatal(err)
+	}
+	kept := []any{}
+	for _, item := range document["rows"].([]any) {
+		if item.(map[string]any)["route"] != route {
+			kept = append(kept, item)
+		}
+	}
+	document["rows"] = kept
+	raw, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+// The embedded endpoint-profile document holds the state route's row: the route is served with it, no startup line says
+// it is not mounted, and its answer is the one the route gives with a planted row.
+func TestOrgStateIsServedWithTheEmbeddedDocument(t *testing.T) {
+	f := newProvFixtureWith(t, nil)
+	f.reactivate.status, f.reactivate.revision = org.StatusActive, 3
+	if got := f.post(stateRoute, f.stateBody(), nil); got.Code != http.StatusOK {
+		t.Fatalf("state on the embedded document: %d %s, want 200", got.Code, got.Body)
+	}
+	if strings.Contains(f.logs.String(), stateRoute) {
+		t.Fatalf("a startup line names the state route: %s", f.logs.String())
 	}
 }

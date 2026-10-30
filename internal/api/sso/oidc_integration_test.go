@@ -227,7 +227,7 @@ func startStackWith(t *testing.T, ctx context.Context, issuer sessionissue.Issue
 		t.Fatal(err)
 	}
 	logs := &syncBuffer{}
-	logger := slog.New(slog.NewTextHandler(logs, nil))
+	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool}, logger)
 	if err != nil {
 		t.Fatal(err)

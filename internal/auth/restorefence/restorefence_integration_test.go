@@ -667,8 +667,9 @@ func TestTheFenceCoversTheAuthorizationAndReplayFamiliesAndNamesTheOperatorActio
 	if err := Check(ctx, restored.runtime, restored.schema); err != nil {
 		t.Errorf("readiness after the fence: %v", err)
 	}
-	if n := restored.count(t, ctx, `SELECT count(*) FROM auth.users WHERE password_hash = 'h1'`); n != 1 {
-		t.Errorf("the fence must not touch a password hash (found %d with the older one)", n)
+	// The password changed after T (h1 -> h2): the fence clears the restored (older) hash; the user resets by mail.
+	if n := restored.count(t, ctx, `SELECT count(*) FROM auth.users WHERE password_hash IS NULL AND password_algorithm IS NULL`); n != 1 {
+		t.Errorf("the older password hash is still usable after the fence (%d users cleared, want 1)", n)
 	}
 }
 

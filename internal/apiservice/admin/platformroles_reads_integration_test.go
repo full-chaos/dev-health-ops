@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -141,8 +142,17 @@ func TestGuardedWriteWaitsForAnInFlightPlatformRoleGrant(t *testing.T) {
 	caller := &policy.User{UserID: uuid.NewString(), ID: uuid.New()}
 	for _, owned := range []bool{true, false} {
 		target := env.User(ctx, t, false, false)
-		locked, release, granted := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+		locked, release, finished, granted := make(chan struct{}), make(chan struct{}), make(chan struct{}), make(chan error, 1)
+		// A failing check must still end the grant (release it, then wait for
+		// it), or its open transaction holds the cleanup and the test ends in
+		// a timeout panic instead of a FAIL line.
+		var releaseOnce, waitOnce sync.Once
+		var grantErr error
+		releaseGrant := func() { releaseOnce.Do(func() { close(release) }) }
+		waitGrant := func() error { waitOnce.Do(func() { grantErr = <-granted }); return grantErr }
+		t.Cleanup(func() { releaseGrant(); _ = waitGrant() })
 		go func() {
+			defer close(finished)
 			assignment, principal := uuid.New(), target.String()
 			granted <- audit.Commit(ctx, env.Admin, env.Schema, audit.Mutation{
 				Apply: func(ctx context.Context, tx audit.TxOps) error {
@@ -164,8 +174,8 @@ func TestGuardedWriteWaitsForAnInFlightPlatformRoleGrant(t *testing.T) {
 		}()
 		select {
 		case <-locked:
-		case err := <-granted:
-			t.Fatalf("owned %v: the grant ended before it held the lock: %v", owned, err)
+		case <-finished:
+			t.Fatalf("owned %v: the grant ended before it held the lock: %v", owned, waitGrant())
 		}
 		h := &handlers{store: pgStore{Pool: env.Admin, PlatformRolesOwned: owned, AuthSchema: "auth"}, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 		answered := make(chan int, 1)
@@ -180,11 +190,16 @@ func TestGuardedWriteWaitsForAnInFlightPlatformRoleGrant(t *testing.T) {
 			answered <- recorder.Code
 		}()
 		if !owned {
-			if code := <-answered; code != http.StatusOK {
-				t.Errorf("off: the guarded write answered %d while the grant was in flight, want 200", code)
+			select {
+			case code := <-answered:
+				if code != http.StatusOK {
+					t.Errorf("off: the guarded write answered %d while the grant was in flight, want 200", code)
+				}
+			case <-ctx.Done():
+				t.Fatalf("off: the guarded write waited for the grant: %v", ctx.Err())
 			}
-			close(release)
-			if err := <-granted; err != nil {
+			releaseGrant()
+			if err := waitGrant(); err != nil {
 				t.Fatal(err)
 			}
 			continue
@@ -201,8 +216,8 @@ func TestGuardedWriteWaitsForAnInFlightPlatformRoleGrant(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		close(release)
-		if err := <-granted; err != nil {
+		releaseGrant()
+		if err := waitGrant(); err != nil {
 			t.Fatal(err)
 		}
 		if code := <-answered; code != http.StatusForbidden {

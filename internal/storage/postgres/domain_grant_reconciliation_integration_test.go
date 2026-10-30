@@ -345,6 +345,7 @@ ORDER BY updated_at, id LIMIT 1 FOR UPDATE SKIP LOCKED`,
 				"UPDATE public.provider_oauth_revocations SET attempts = attempts + 1, last_error = 'remote_revoke_failed', updated_at = now() WHERE id = gen_random_uuid() RETURNING attempts",
 				"DELETE FROM public.provider_oauth_revocations WHERE id = gen_random_uuid()",
 				"SELECT count(*), count(*) FILTER (WHERE attempts >= 10) FROM public.provider_oauth_revocations WHERE provider = 'pagerduty' AND status = 'pending'",
+				"SELECT id, COALESCE(last_error, '') FROM public.provider_oauth_revocations WHERE provider = 'pagerduty' AND status = 'pending' AND attempts >= 10 ORDER BY id LIMIT 25",
 			},
 		},
 		{

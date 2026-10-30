@@ -371,7 +371,7 @@ func TestWorkerLogsCountsOnly(t *testing.T) {
 				t.Errorf("a token or ciphertext reached a log record: %s", record)
 			}
 		}
-		if strings.Contains(record, "provider_oauth_revocations.exhausted") && strings.Contains(record, id.String()) {
+		if strings.Contains(record, `"msg":"provider_oauth_revocations.exhausted"`) && strings.Contains(record, id.String()) {
 			named = true
 		}
 	}

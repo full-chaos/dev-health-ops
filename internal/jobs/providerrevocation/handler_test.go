@@ -265,7 +265,7 @@ func TestWorkStopsAtMaxAttemptsLoudly(t *testing.T) {
 	}
 	warn := ""
 	for _, line := range strings.Split(strings.TrimSpace(h.logs.String()), "\n") {
-		if strings.Contains(line, "provider_oauth_revocations.exhausted") {
+		if strings.Contains(line, `"msg":"provider_oauth_revocations.exhausted"`) {
 			warn = line
 		}
 	}

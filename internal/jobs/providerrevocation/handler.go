@@ -143,7 +143,7 @@ func (handler *Handler) Work(
 			slog.String("outcome", "unconfigured"),
 			slog.Int64("skipped_unconfigured", pending),
 			slog.Int64("exhausted_total", exhausted))
-		return nil
+		return handler.nameExhausted(ctx, exhausted)
 	}
 	var counts tally
 	for counts.claimed < BatchLimit {
@@ -168,6 +168,31 @@ func (handler *Handler) Work(
 	}
 	handler.metrics.exhausted.Record(ctx, exhausted)
 	handler.logRun(ctx, "sent", counts, exhausted)
+	return handler.nameExhausted(ctx, exhausted)
+}
+
+// nameExhausted writes the run's one WARN line naming the pending rows at
+// MaxAttempts: the total and up to ExhaustedNameLimit "id:reason class"
+// entries in id order, whoever pushed the rows there (the worker, or a
+// disconnect or callback sender, which the worker never claims). No line when
+// there is none.
+func (handler *Handler) nameExhausted(ctx context.Context, total int64) error {
+	if total <= 0 {
+		return nil
+	}
+	rows, err := handler.store.Exhausted(ctx, ExhaustedNameLimit)
+	if err != nil {
+		handler.logger.ErrorContext(ctx, "provider_oauth_revocations.run", slog.String("outcome", "name_failed"))
+		return jobruntime.Retryable(fmt.Errorf("list exhausted provider revocations: %w", err))
+	}
+	named := make([]string, 0, len(rows))
+	for _, row := range rows {
+		named = append(named, row.ID.String()+":"+row.Reason)
+	}
+	handler.logger.WarnContext(ctx, "provider_oauth_revocations.exhausted_rows",
+		slog.Int64("exhausted_total", total),
+		slog.Int("listed", len(named)),
+		slog.Any("rows", named))
 	return nil
 }
 

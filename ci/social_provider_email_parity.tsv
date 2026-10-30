@@ -1,6 +1,6 @@
 # Provider email forms in a social sign-in profile: the answer go-api and auth-service give (the same on both planes).
 # Driven by internal/api/session (go-api socialLogin) and internal/auth/identity/social (auth-service Exchange), each through its real provider client.
-# email_hex / name_hex: the raw JSON value of the profile's email / name member, hex ("-" = a plain name). want: "pass" (the email guard lets it through) or "<status> <detail message>". shape: "-" as written, "utf16le" (the profile body as UTF-16LE with a byte order mark), "key=<K>" (the email member named K). "dupfirst=<hex>" (an earlier "email" member with that value, so the object has the key twice; the last one counts on both planes), "id=<digits>" (every numeric account id served is that integer), "noemail" (the profile has no "email" member: GitHub /user and each /user/emails entry; email_hex is not served). The email member is the exact key "email" on both planes ("Email" is no email member). verified "false" on github_emails serves the entry unverified.
+# email_hex / name_hex: the raw JSON value of the profile's email / name member, hex ("-" = a plain name). want: "pass" (the email guard lets it through) or "<status> <detail message>". shape: "-" as written, "utf16le" (the profile body as UTF-16LE with a byte order mark), "key=<K>" (the email member named K). "dupfirst=<hex>" (an earlier "email" member with that value, so the object has the key twice; the last one counts on both planes), "id=<digits>" (every numeric account id served is that integer), "noemail" (the profile has no "email" member: GitHub /user and each /user/emails entry; email_hex is not served), "noid" (the profile has no "id" member; the token owner stays), shapes joined by "+" all apply. The email member is the exact key "email" on both planes ("Email" is no email member). verified "false" on github_emails serves the entry unverified.
 # id	provider	email_hex	verified	name_hex	want	shape
 github_user_literal_fffd_verified	github_user	224d41524befbfbd406578616d706c652e7465737422	true	-	400 The provider returned an unusable email address	-
 github_user_lone_surrogate_verified	github_user	224d41524b5c7564383030406578616d706c652e7465737422	true	-	403 The provider has not verified this email address	-
@@ -77,3 +77,10 @@ google_usable_unverified	google	2275736572406578616d706c652e7465737422	false	-	p
 gitlab_null_email_verified	gitlab	6e756c6c	true	-	pass	-
 google_null_email_verified	google	6e756c6c	true	-	pass	-
 gitlab_number_email_verified	gitlab	37	true	-	pass	-
+github_user_noid_null_email	github_user	6e756c6c	true	-	403 The provider has not verified this email address	noid
+github_emails_noid_unverified	github_emails	2275736572406578616d706c652e7465737422	false	-	403 The provider has not verified this email address	noid
+github_emails_noid_entry_without_email	github_emails	2275736572406578616d706c652e7465737422	true	-	500 Internal Server Error	noid+noemail
+github_emails_noid_verified	github_emails	2275736572406578616d706c652e7465737422	true	-	400 The provider returned an invalid user id	noid
+github_user_noid_usable_verified	github_user	2275736572406578616d706c652e7465737422	true	-	400 The provider returned an invalid user id	noid
+gitlab_noid_usable_verified	gitlab	2275736572406578616d706c652e7465737422	true	-	400 The provider returned an invalid user id	noid
+google_noid_usable_verified	google	2275736572406578616d706c652e7465737422	true	-	400 The provider returned an invalid user id	noid

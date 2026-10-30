@@ -190,9 +190,20 @@ func TestFetchUnverifiesOnlyALoneSurrogateEmail(t *testing.T) {
 // noEmailMember is an "email" member with its value and the separator after it.
 var noEmailMember = regexp.MustCompile(`"email": (?:"(?:[^"\\]|\\.)*"|[^,}\]]*)(?:, )?`)
 
-// shapeBody applies a row's shape to a served profile body: "noemail" drops every "email" member, "key=<K>" renames the email member to K, "utf16le" sends the
+// shapeBody applies a row's shape to a served profile body: "a+b" applies a then b, "noid" drops the profile's "id"
+// member, "noemail" drops every "email" member, "key=<K>" renames the email member to K, "utf16le" sends the
 // body as UTF-16LE with a byte order mark (a body Python's response.json() reads), "-" leaves it as it is.
 func shapeBody(shape string, body []byte) []byte {
+	if strings.Contains(shape, "+") {
+		for _, one := range strings.Split(shape, "+") {
+			body = shapeBody(one, body)
+		}
+		return body
+	}
+	if shape == "noid" {
+		body = bytes.Replace(body, []byte(`{"id": 7, `), []byte(`{`), 1)
+		body = bytes.Replace(body, []byte(`{"id": "g7", `), []byte(`{`), 1)
+	}
 	if key, ok := strings.CutPrefix(shape, "key="); ok {
 		body = bytes.ReplaceAll(body, []byte(`"email": `), []byte(`"`+key+`": `))
 	}

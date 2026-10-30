@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -482,7 +483,7 @@ func (p *openAICompatibleReadinessProber) doCompletionOnce(
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		failure := classifyHTTPFailure(resp.StatusCode, respBody)
-		failure.detail = parseProviderErrorDetail(resp.StatusCode, respBody)
+		failure.detail = parseProviderErrorDetail(resp.StatusCode, respBody, providerSecrets(baseURL, apiKey))
 		return nil, failure
 	}
 	var parsed chatCompletionResponse
@@ -508,7 +509,7 @@ const providerMessageMaxLogRunes = 200
 
 var (
 	providerTokenRe       = regexp.MustCompile(`^[A-Za-z0-9_.\[\]-]{1,64}$`)
-	unsupportedParamMsgRe = regexp.MustCompile(`(?i)unsupported (?:parameter|value):\s*['"]?([A-Za-z_][A-Za-z0-9_.\[\]]*)`)
+	unsupportedParamMsgRe = regexp.MustCompile(`(?i)unsupported (?:parameter|value):\s*['"]?([A-Za-z_][A-Za-z0-9_.\[\]-]*)`)
 )
 
 // vetProviderToken returns s when it is a plain identifier-like token, else "";
@@ -532,7 +533,7 @@ func jsonScalarString(raw any) string {
 
 // parseProviderErrorDetail reads the OpenAI error envelope
 // {"error":{"message","type","param","code"}} from a non-2xx body.
-func parseProviderErrorDetail(status int, body []byte) providerErrorDetail {
+func parseProviderErrorDetail(status int, body []byte, secrets []string) providerErrorDetail {
 	detail := providerErrorDetail{status: status}
 	var envelope struct {
 		Error struct {
@@ -545,11 +546,53 @@ func parseProviderErrorDetail(status int, body []byte) providerErrorDetail {
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		return detail
 	}
-	detail.message = jsonScalarString(envelope.Error.Message)
-	detail.errType = jsonScalarString(envelope.Error.Type)
-	detail.param = jsonScalarString(envelope.Error.Param)
-	detail.code = jsonScalarString(envelope.Error.Code)
+	detail.message, _ = redactSecrets(jsonScalarString(envelope.Error.Message), secrets)
+	detail.errType = dropIfSecret(jsonScalarString(envelope.Error.Type), secrets)
+	detail.param = dropIfSecret(jsonScalarString(envelope.Error.Param), secrets)
+	detail.code = dropIfSecret(jsonScalarString(envelope.Error.Code), secrets)
 	return detail
+}
+
+// providerSecrets are the values a provider error text must never carry onward:
+// the saved API key, the base URL and any credential inside that URL.
+func providerSecrets(baseURL, apiKey string) []string {
+	var secrets []string
+	add := func(v string) {
+		if v = strings.TrimSpace(v); v != "" {
+			secrets = append(secrets, v)
+		}
+	}
+	add(apiKey)
+	add(baseURL)
+	add(strings.TrimRight(strings.TrimSpace(baseURL), "/"))
+	if u, err := url.Parse(strings.TrimSpace(baseURL)); err == nil && u.User != nil {
+		add(u.User.Username())
+		if password, ok := u.User.Password(); ok {
+			add(password)
+		}
+	}
+	return secrets
+}
+
+// redactSecrets replaces every secret in s and reports whether one was found.
+func redactSecrets(s string, secrets []string) (string, bool) {
+	hit := false
+	for _, secret := range secrets {
+		if strings.Contains(s, secret) {
+			hit = true
+			s = strings.ReplaceAll(s, secret, "[redacted]")
+		}
+	}
+	return s, hit
+}
+
+// dropIfSecret empties a short identifier field that carried a secret, so a
+// redaction marker is never mistaken for a parameter or code name.
+func dropIfSecret(s string, secrets []string) string {
+	if _, hit := redactSecrets(s, secrets); hit {
+		return ""
+	}
+	return s
 }
 
 // refusedParam is the parameter a 400/422 names: error.param when present,
@@ -559,7 +602,7 @@ func (d providerErrorDetail) refusedParam() string {
 		return strings.ToLower(strings.TrimSpace(d.param))
 	}
 	if m := unsupportedParamMsgRe.FindStringSubmatch(d.message); m != nil {
-		return strings.ToLower(m[1])
+		return strings.ToLower(strings.TrimRight(m[1], "."))
 	}
 	return ""
 }
@@ -611,11 +654,8 @@ func refusedBoundedParam(failure *providerFailure, req chatCompletionRequest) st
 // logFailedRound writes one Info line for a failed round: status and the
 // provider's code/param/type, the first 200 characters of its message with the
 // saved key removed, and the round. The base URL is never logged.
-func (p *openAICompatibleReadinessProber) logFailedRound(ctx context.Context, round, attempt int, apiKey string, failure *providerFailure) {
+func (p *openAICompatibleReadinessProber) logFailedRound(ctx context.Context, round, attempt int, failure *providerFailure) {
 	message := failure.detail.message
-	if apiKey != "" {
-		message = strings.ReplaceAll(message, apiKey, "[redacted]")
-	}
 	if runes := []rune(message); len(runes) > providerMessageMaxLogRunes {
 		message = string(runes[:providerMessageMaxLogRunes])
 	}
@@ -649,7 +689,7 @@ func (p *openAICompatibleReadinessProber) runRound(
 	if failure == nil {
 		return resp, nil
 	}
-	p.logFailedRound(ctx, round, 1, apiKey, failure)
+	p.logFailedRound(ctx, round, 1, failure)
 	name := refusedBoundedParam(failure, req)
 	if name == "" {
 		return nil, failure
@@ -658,7 +698,7 @@ func (p *openAICompatibleReadinessProber) runRound(
 	state.dropped = append(state.dropped, name)
 	resp, failure = p.doCompletion(ctx, baseURL, apiKey, req)
 	if failure != nil {
-		p.logFailedRound(ctx, round, 2, apiKey, failure)
+		p.logFailedRound(ctx, round, 2, failure)
 		return nil, failure
 	}
 	return resp, nil
@@ -727,12 +767,12 @@ func (p *openAICompatibleReadinessProber) probeDetail(
 	choice1 := resp1.Choices[0]
 	if choice1.FinishReason == "length" {
 		failure := newProviderFailure(errCodeOutputExhausted)
-		p.logFailedRound(ctx, 1, 1, apiKey, failure)
+		p.logFailedRound(ctx, 1, 1, failure)
 		return result(failure)
 	}
 	callID, callFailure := normalizeRound1Decision(choice1)
 	if callFailure != nil {
-		p.logFailedRound(ctx, 1, 1, apiKey, callFailure)
+		p.logFailedRound(ctx, 1, 1, callFailure)
 		return result(callFailure)
 	}
 
@@ -779,11 +819,11 @@ func (p *openAICompatibleReadinessProber) probeDetail(
 	choice2 := resp2.Choices[0]
 	if choice2.FinishReason == "length" {
 		failure := newProviderFailure(errCodeOutputExhausted)
-		p.logFailedRound(ctx, 2, 1, apiKey, failure)
+		p.logFailedRound(ctx, 2, 1, failure)
 		return result(failure)
 	}
 	if finalFailure := normalizeRound2Decision(choice2); finalFailure != nil {
-		p.logFailedRound(ctx, 2, 1, apiKey, finalFailure)
+		p.logFailedRound(ctx, 2, 1, finalFailure)
 		return result(finalFailure)
 	}
 	return result(nil)

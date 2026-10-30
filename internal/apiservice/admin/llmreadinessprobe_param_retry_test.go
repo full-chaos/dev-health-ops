@@ -354,3 +354,68 @@ func TestReadinessProbeAnthropicProberKeepsPlainProbeSeam(t *testing.T) {
 		t.Fatal("the anthropic prober must stay on the plain probe seam")
 	}
 }
+
+func TestReadinessProbeMessageParamMustMatchWholeToken(t *testing.T) {
+	modelSending := map[string]string{
+		"temperature":           "future-model-x",
+		"reasoning_effort":      "gpt-5-mini",
+		"parallel_tool_calls":   "future-model-x",
+		"max_completion_tokens": "future-model-x",
+	}
+	for bounded, model := range modelSending {
+		for _, suffix := range []string{"-extra", "_extra", ".extra", "[0]"} {
+			msg := fmt.Sprintf(`{"error":{"message":"Unsupported parameter: '%s%s' is not supported.","type":"invalid_request_error"}}`, bounded, suffix)
+			f := newParamFakeOpenAI(t, map[string]string{bounded: msg})
+			outcome, code := readinessProbeOver(f, model)
+			wantInvalidRequest(t, outcome, code)
+			if got := f.countKey(bounded, false); got != 1 {
+				t.Fatalf("%s%s: requests carrying %s = %d, want 1 (not retried)", bounded, suffix, bounded, got)
+			}
+		}
+	}
+}
+
+func TestReadinessProbeMessageParamWithTrailingPunctuationIsStillDropped(t *testing.T) {
+	msg := `{"error":{"message":"Unsupported parameter: temperature.","type":"invalid_request_error"}}`
+	f := newParamFakeOpenAI(t, map[string]string{"temperature": msg})
+	outcome, code := readinessProbeOver(f, "future-model-x")
+	wantReady(t, outcome, code)
+}
+
+func TestReadinessProbeRedactsKeyAndBaseURLFromEveryProviderField(t *testing.T) {
+	const key = "canary-key-for-redaction-test"
+	for _, field := range []string{"message", "type", "param", "code"} {
+		fields := map[string]string{"message": "bad request", "type": "invalid_request_error", "param": "tools", "code": "unsupported_parameter"}
+		f := newParamFakeOpenAI(t, nil)
+		leak := key + " " + f.server.URL + "/v1"
+		if field == "param" || field == "code" {
+			leak = key
+		}
+		fields[field] = leak
+		body, _ := json.Marshal(map[string]any{"error": fields})
+		f = newParamFakeOpenAI(t, map[string]string{"tools": string(body)})
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+		res := detailProberOver(logger).probeDetail(context.Background(), "openai", "future-model-x", f.server.URL+"/v1", key)
+		wantInvalidRequest(t, res.Outcome, res.SafeErrorCode)
+		for _, secret := range []string{key, f.server.URL} {
+			if strings.Contains(buf.String(), secret) {
+				t.Fatalf("%s carries %q: the log line leaks it: %s", field, secret, buf.String())
+			}
+			if strings.Contains(res.ErrorParam, secret) || strings.Contains(res.ErrorCode, secret) {
+				t.Fatalf("%s carries %q: the record leaks it: %+v", field, secret, res)
+			}
+		}
+		if (field == "param" && res.ErrorParam != "") || (field == "code" && res.ErrorCode != "") {
+			t.Fatalf("%s held a secret but the record kept %q/%q, want it dropped", field, res.ErrorParam, res.ErrorCode)
+		}
+	}
+}
+
+func TestReadinessProbeRedactsBaseURLCredentials(t *testing.T) {
+	secrets := providerSecrets("https://user:hunter2pass@example.test/v1/", "k-1234")
+	got, hit := redactSecrets("saw hunter2pass and https://user:hunter2pass@example.test/v1 and k-1234", secrets)
+	if !hit || strings.Contains(got, "hunter2pass") || strings.Contains(got, "k-1234") || strings.Contains(got, "example.test") {
+		t.Fatalf("redacted = %q", got)
+	}
+}

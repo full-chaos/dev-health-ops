@@ -46,7 +46,7 @@ func TestPagerDutyDisconnectPendingRevocations(t *testing.T) {
 	fakeServer := httptest.NewServer(http.HandlerFunc(fake.handler))
 	t.Cleanup(fakeServer.Close)
 
-	slugs := []string{"missing-ok", "missing-fails", "missing-empty", "missing-noclient", "held", "owed-no-token", "owed-bad-cipher"}
+	slugs := []string{"missing-ok", "missing-fails", "missing-empty", "missing-noclient", "held", "owed-no-token", "owed-bad-cipher", "nothing-owed"}
 	orgs := map[string]uuid.UUID{}
 	for _, slug := range slugs {
 		orgs[slug] = uuid.MustParse(venueoracle.StableUUID("pd-pending-org-" + slug))
@@ -94,6 +94,9 @@ VALUES ($1, $2, 'pagerduty', 'default', true, NULL, '{"auth_mode":"oauth","regio
 			}
 			exec(`INSERT INTO provider_oauth_credentials (org_id, provider, credential_name, token_encrypted, version, created_at, updated_at, has_refresh_token)
 VALUES ($1, 'pagerduty', 'default', 'garbage-not-fernet', 1, now(), now(), false)`, orgs["owed-bad-cipher"].String())
+			// A credential row with nothing stored and nothing owed.
+			exec(`INSERT INTO integration_credentials (id, org_id, provider, name, is_active, credentials_encrypted, config, created_at, updated_at)
+VALUES ($1, $2, 'pagerduty', 'default', true, NULL, '{"auth_mode":"oauth","region":"us","subdomain":"acme"}'::json, now(), now())`, uuid.New(), orgs["nothing-owed"].String())
 			tokens := map[string]map[string]any{}
 			for slug, id := range orgs {
 				tokens[slug] = map[string]any{"user_id": adminID.String(), "email": "pd-pending-admin@example.com", "org_id": id.String(), "role": "admin"}
@@ -210,6 +213,18 @@ VALUES ($1, 'pagerduty', 'default', 'garbage-not-fernet', 1, now(), now(), false
 			}
 		})
 	}
+
+	// No over-refusal: without a client id, a credential with nothing stored and nothing owed still disconnects (200).
+	t.Run("no client id with nothing stored and nothing owed answers 200", func(t *testing.T) {
+		before := fake.count()
+		status, body := disconnect(noClientBase, "nothing-owed")
+		if status != http.StatusOK || !strings.Contains(body, `"disconnected":true`) {
+			t.Fatalf("status %d body %s, want 200 disconnected", status, body)
+		}
+		if rows, _ := pending("nothing-owed", "default"); rows != 0 || fake.count() != before {
+			t.Fatalf("rows %d calls %d, want no row and no provider call", rows, fake.count()-before)
+		}
+	})
 
 	t.Run("a row another sender holds is skipped and sent once", func(t *testing.T) {
 		holder, err := pool.Begin(ctx)

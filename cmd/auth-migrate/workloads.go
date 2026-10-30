@@ -40,6 +40,9 @@ type workloadsArgs struct {
 	overlap      time.Duration
 	credentialID uuid.UUID
 	reason       string
+
+	operator        uuid.UUID
+	enablePrincipal bool
 }
 
 // audienceList is a repeatable -audience flag.

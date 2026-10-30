@@ -124,7 +124,11 @@ writes an `SSO_LOGIN` audit row, with status success or failure.
 
 **auth-service.** Social exchange, link and unlink outcomes are counted by
 `auth.social.outcomes` and logged with a reason code; OIDC outcomes are counted
-by `auth.oidc.outcomes`. The reason codes are:
+by `auth.oidc.outcomes`. An OAuth sign-in refused for its email domain also
+writes the `sso_login` failure row go-api writes (stage `domain_check`; the error
+message names the domain) before it answers; when that row cannot be written,
+the sign-in answers 500. No other auth-service sign-in refusal writes an audit
+row. The reason codes are:
 
 | Reason | Meaning |
 | --- | --- |

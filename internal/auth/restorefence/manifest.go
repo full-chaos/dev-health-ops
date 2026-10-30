@@ -13,7 +13,7 @@ import (
 )
 
 // ManifestVersion is the manifest's format version.
-const ManifestVersion = 4
+const ManifestVersion = 5
 
 // maxRevision is the largest revision the wire allows (2^53-1, migration 0013).
 const maxRevision int64 = 9007199254740991

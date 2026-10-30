@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/restorefence"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
 const sourceTestPassword = "shadow-pw-do-not-print"
@@ -19,7 +20,9 @@ const sourceTestDSN = "host=shadow port=5432 user=postgres password='" + sourceT
 
 type stubSource struct{}
 
-func (stubSource) Revocations(context.Context, []string) (int64, string, error) { return 0, "[]", nil }
+func (stubSource) Revocations(context.Context, authschema.ValidatedIdentifier, []string) (restorefence.SourceRead, error) {
+	return restorefence.SourceRead{Revocations: "[]", AuthLocks: "[]", LegacyLocks: "[]"}, nil
+}
 
 type sourceOpen struct {
 	uris   []string

@@ -114,6 +114,10 @@ var Allowlist = []Entry{
 	{File: "internal/auth/restorefence/apply.go", Func: "Apply", Table: "auth.restore_fence_state", Verb: "INSERT"},
 	{File: "internal/auth/restorefence/apply.go", Func: "Apply", Table: "auth.sso_flow_states", Verb: "UPDATE"},
 	{File: "internal/auth/restorefence/init.go", Func: "initInTx", Table: "auth.restore_fence_state", Verb: "INSERT"},
+	// 11848 (acp GO on PLAN-11848 v1, Q3): the fence raises the live login lockouts it reads from the source, raise-only, in the apply transaction.
+	{File: "internal/auth/restorefence/lockouts.go", Func: "authLocksRaiseSQL", Table: "auth.login_attempts", Verb: "UPSERT"},
+	{File: "internal/auth/restorefence/lockouts.go", Func: "raiseLockouts", Table: "auth.login_attempts", Verb: "UPSERT"},
+	{File: "internal/auth/restorefence/lockouts.go", Func: "raiseLockouts", Table: "public.login_attempts", Verb: "UPSERT"},
 	{File: "internal/auth/restorefence/init.go", Func: "initInsertSQL", Table: "auth.restore_fence_state", Verb: "INSERT"},
 	{File: "internal/auth/restorefence/specs.go", Func: "flowStatesSQL", Table: "auth.sso_flow_states", Verb: "UPDATE"},
 	{File: "internal/auth/session/end_all.go", Func: "Store.EndAllInTx", Table: "public.refresh_tokens", Verb: "UPDATE"},

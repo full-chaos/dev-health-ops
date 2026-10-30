@@ -44,6 +44,9 @@ const (
 	// ActionReviewMembershipRole: a restored or source role of these memberships is outside the known ranks; the fence
 	// left the row as restored.
 	ActionReviewMembershipRole ActionKind = "review_membership_role"
+	// ActionIdentityUnlinked: the source unlinked these external identities after the target; the fence deleted the
+	// restored links. Nothing is required of the operator; a user who re-linked after the target links again.
+	ActionIdentityUnlinked ActionKind = "identity_unlinked"
 )
 
 // requeueRunbookStep is the follow-up of revocations an apply only named: the runbook step that sets the source. A
@@ -67,6 +70,7 @@ var followUp = map[ActionKind]string{
 	ActionReviewScopeEmptied:                "none",
 	ActionReviewMembershipOwner:             "none",
 	ActionReviewMembershipRole:              "none",
+	ActionIdentityUnlinked:                  "none",
 }
 
 // OperatorAction is the ids a section names for one action. Ids only: never a

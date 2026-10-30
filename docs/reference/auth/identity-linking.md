@@ -139,8 +139,12 @@ records it: the provider row's `last_error`, `last_error_at`
 and `updated_at` (its status is left as it was) and an `sso_login` failure row
 with no stage, in one transaction, before the sign-in answers; the SAML answer
 is 400 `SAML authentication failed`. When the record cannot be written, the
-sign-in answers 500. No other OIDC or SAML refusal writes a row. The reason
-codes are:
+sign-in answers 500. No other OIDC or SAML refusal writes a row. A completed
+OIDC, OAuth or SAML sign-in is recorded as go-api records it: the provider
+row's `last_login_at` and `updated_at` and an `sso_login` success row on
+resource `session`, in one transaction, after the session is issued and before
+the tokens answer. When that record cannot be written, the sign-in answers 500
+and the tokens are withheld. The reason codes are:
 
 | Reason | Meaning |
 | --- | --- |

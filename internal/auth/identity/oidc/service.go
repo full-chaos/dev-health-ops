@@ -164,9 +164,12 @@ type Config struct {
 	// the profile fetch failing: go-api's recordSSOFailure) before the
 	// refusal answers; nil records none.
 	ProviderFailure ssoaudit.ProviderFailure
-	Now             func() time.Time
-	Logger          *slog.Logger
-	Meter           metric.Meter
+	// SignInRecord writes go-api's success record (finishSSOLogin) of an OIDC or
+	// OAuth sign-in once its session exists, before any token leaves.
+	SignInRecord ssoaudit.SignInRecord
+	Now          func() time.Time
+	Logger       *slog.Logger
+	Meter        metric.Meter
 }
 
 // Service runs the OIDC flow.
@@ -179,7 +182,7 @@ type Service struct {
 func New(cfg Config) (*Service, error) {
 	switch {
 	case cfg.Providers == nil, cfg.Flows == nil, cfg.Identities == nil, cfg.Memberships == nil,
-		cfg.Entitlements == nil, cfg.Sessions == nil:
+		cfg.Entitlements == nil, cfg.Sessions == nil, cfg.SignInRecord == nil:
 		return nil, errors.New("oidc: a required dependency is missing")
 	case cfg.StateSecret.Reveal() == "":
 		return nil, errors.New("oidc: no state secret")
@@ -492,6 +495,17 @@ func (s *Service) callback(ctx context.Context, admitted StoredProvider, in Call
 		return Login{}, clear, failure
 	}
 	return login, clear, nil
+}
+
+// recordSignIn writes the success record of a sign-in whose session exists. A write error is the 500: the tokens are
+// withheld and the session stays undelivered, as on go-api's path.
+//nolint:unused // red commit: the call comes with the fix
+func (s *Service) recordSignIn(ctx context.Context, row Provider, login Login) *Error {
+	if err := s.cfg.SignInRecord.Succeeded(ctx, ssoaudit.Success{OrgID: row.OrgID, ProviderID: row.ID,
+		PrincipalID: login.PrincipalID, Protocol: row.Protocol}); err != nil {
+		return internal(ReasonStoreUnavailable, err)
+	}
+	return nil
 }
 
 type validated struct {

@@ -5,12 +5,12 @@ import (
 	"testing"
 )
 
-// The runtime role records a provider failure as go-api's recordSSOFailure does: last_error, last_error_at and
-// updated_at of public.sso_providers. Never the status, nothing else there, no INSERT or DELETE.
-func TestSSOProviderFailureColumnsAreTheRecordColumns(t *testing.T) {
-	want := []string{"last_error", "last_error_at", "updated_at"}
-	if got := SSOProviderFailureColumns(); !slices.Equal(got, want) {
-		t.Fatalf("SSOProviderFailureColumns = %v, want %v", got, want)
+// The runtime role records a sign-in as go-api does: last_error, last_error_at (recordSSOFailure), last_login_at
+// (finishSSOLogin) and updated_at of public.sso_providers. Never the status, nothing else there, no INSERT or DELETE.
+func TestSSOProviderWriteColumnsAreTheRecordColumns(t *testing.T) {
+	want := []string{"last_error", "last_error_at", "last_login_at", "updated_at"}
+	if got := SSOProviderWriteColumns(); !slices.Equal(got, want) {
+		t.Fatalf("SSOProviderWriteColumns = %v, want %v", got, want)
 	}
 	for _, name := range append([]string{ssoProvidersTable}, want...) {
 		if err := ValidateIdentifier(name); err != nil {
@@ -18,22 +18,22 @@ func TestSSOProviderFailureColumnsAreTheRecordColumns(t *testing.T) {
 		}
 	}
 	for _, column := range want {
-		if !isSSOProviderFailureColumn(ssoProvidersTable, "UPDATE", column) {
+		if !isSSOProviderWriteColumn(ssoProvidersTable, "UPDATE", column) {
 			t.Errorf("UPDATE %s is not declared", column)
 		}
 		for _, privilege := range []string{"SELECT", "INSERT", "DELETE", "REFERENCES"} {
-			if isSSOProviderFailureColumn(ssoProvidersTable, privilege, column) {
+			if isSSOProviderWriteColumn(ssoProvidersTable, privilege, column) {
 				t.Errorf("%s %s is declared", privilege, column)
 			}
 		}
 	}
 	for _, column := range []string{"status", "id", "org_id", "config", "encrypted_secrets", "allowed_domains"} {
-		if isSSOProviderFailureColumn(ssoProvidersTable, "UPDATE", column) {
+		if isSSOProviderWriteColumn(ssoProvidersTable, "UPDATE", column) {
 			t.Errorf("UPDATE %s is declared", column)
 		}
 	}
-	if isSSOProviderFailureColumn("users", "UPDATE", "updated_at") {
-		t.Fatal("isSSOProviderFailureColumn does not follow the table")
+	if isSSOProviderWriteColumn("users", "UPDATE", "updated_at") {
+		t.Fatal("isSSOProviderWriteColumn does not follow the table")
 	}
 }
 

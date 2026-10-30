@@ -351,6 +351,7 @@ func newHarness(t *testing.T, opts harnessOpts) *harness {
 		OAuthEndpoints:  idp.oauth.endpoints(idp.server.URL),
 		DenialAudit:     PGDenialAudit{Exec: env.runtime, Now: func() time.Time { return h.now }},
 		ProviderFailure: ssoaudit.PGProviderFailure{DB: env.runtime, Now: func() time.Time { return h.now }},
+		SignInRecord:    noSignInRecord{},
 		Now:             func() time.Time { return h.now },
 	})
 	if err != nil {

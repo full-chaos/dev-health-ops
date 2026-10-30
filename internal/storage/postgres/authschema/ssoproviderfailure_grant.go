@@ -14,8 +14,8 @@ import (
 const ssoProvidersTable = "sso_providers"
 
 // SSOProviderFailureColumns are the columns of go-api's sso_providers row the auth runtime role updates to record a
-// provider failure of a sign-in (internal/api/sso recordSSOFailure): the failure text, its time and updated_at. Never
-// the status. UPDATE only, whatever the users-owned switch says, since the sign-in routes are served without it; the
+// provider failure of a sign-in (internal/api/sso recordSSOFailure; acp ruling D6515): the failure text, its time and
+// updated_at. Never the status. UPDATE only, whatever the users-owned switch says, since the sign-in routes are served without it; the
 // row is found by id, which the public read pass grants.
 func SSOProviderFailureColumns() []string {
 	return []string{"last_error", "last_error_at", "updated_at"}

@@ -86,7 +86,47 @@ type orgStateRead struct {
 
 // pass compares every organization with auth once. A row auth refuses is skipped and counted; a read or store failure
 // ends the pass, and the next one starts over. It logs one WARN at most, counts only.
-func (r *OrgStateReconciler) pass(context.Context) {}
+func (r *OrgStateReconciler) pass(ctx context.Context) {
+	refused := 0
+	stopped := false
+	var after uuid.UUID
+walk:
+	for {
+		rows, err := r.page(ctx, after)
+		if err != nil {
+			stopped = true
+			break
+		}
+		for _, row := range rows {
+			read := r.read(ctx, row.id)
+			switch {
+			case read.stop:
+				stopped = true
+				break walk
+			case read.refused:
+				refused++
+				continue
+			case read.active == row.active:
+				continue
+			}
+			again, err := r.fix(ctx, row.id)
+			switch {
+			case err != nil || again.stop:
+				stopped = true
+				break walk
+			case again.refused:
+				refused++
+			}
+		}
+		if len(rows) < orgStateReconcilePage {
+			break
+		}
+		after = rows[len(rows)-1].id
+	}
+	if ctx.Err() == nil && (refused > 0 || stopped) {
+		r.logger.WarnContext(ctx, "admin: organization state reconcile did not cover every row", "refused", refused, "stopped", stopped)
+	}
+}
 
 func (r *OrgStateReconciler) page(ctx context.Context, after uuid.UUID) ([]orgStateRow, error) {
 	rows, err := r.pool.Query(ctx, `SELECT id, is_active FROM organizations WHERE id > $1 ORDER BY id LIMIT $2`, after, orgStateReconcilePage)

@@ -3,6 +3,7 @@
 package lockorder
 
 import (
+	"context"
 	"net/http"
 	"testing"
 	"time"
@@ -110,5 +111,47 @@ func TestAcceptRefusesAnInviteRevokedWhileItWaited(t *testing.T) {
 	}
 	if got := e.scalar(t, ctx, `SELECT count(*)::text FROM public.memberships WHERE org_id = $1 AND user_id = $2`, org, acceptor); got != "0" {
 		t.Fatalf("%s: race answer: %s membership rows for a revoked invite", cell, got)
+	}
+}
+
+// The invite expires while the accept waits on its invite row: the accept must
+// judge the expiry when it holds the row, not when the request started.
+func TestAcceptRefusesAnInviteThatExpiredWhileItWaited(t *testing.T) {
+	const cell = "accept/invite-expired-at-lock"
+	e, ctx := getEnv(t), cellContext(t)
+	e.cleanup(t)
+	org := e.seedOrg(t, ctx)
+	owner, acceptor := e.seedPair(t, ctx)
+	e.add(t, ctx, org, owner, "owner", nil)
+	inviteID, token := e.goInvite(t, ctx, org, owner, email(acceptor))
+	var expiresAt time.Time
+	if err := e.admin.QueryRow(ctx, `UPDATE public.org_invites SET expires_at = clock_timestamp() + interval '6 seconds' WHERE id = $1
+RETURNING expires_at`, inviteID).Scan(&expiresAt); err != nil {
+		t.Fatal(err)
+	}
+
+	blocker, err := e.admin.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = blocker.Rollback(context.Background()) }()
+	if _, err := blocker.Exec(ctx, `SELECT 1 FROM public.org_invites WHERE id = $1 FOR UPDATE`, inviteID); err != nil {
+		t.Fatal(err)
+	}
+	g := goAPI("go-api accept-invite", func() response { return e.acceptInvite(ctx, acceptor, token) })
+	// An accept that validated after the expiry ends at once with its refusal
+	// and never waits: awaitWaiters then fails the cell by name.
+	e.awaitWaiters(t, ctx, cell, 1, g)
+	// Hold the row until the invite has expired (a wait, not a timing assert).
+	time.Sleep(time.Until(expiresAt) + 500*time.Millisecond)
+	if err := blocker.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	e.finish(t, cell, g)
+
+	wantRefusal(t, cell, g, http.StatusBadRequest, "Invalid or expired invite")
+	if got := e.scalar(t, ctx, `SELECT status || ':' || (SELECT count(*) FROM public.memberships WHERE org_id = $1 AND user_id = $2)::text
+FROM public.org_invites WHERE id = $3`, org, acceptor, inviteID); got != "pending:0" {
+		t.Fatalf("%s: race answer: invite status:memberships = %q, want pending:0", cell, got)
 	}
 }

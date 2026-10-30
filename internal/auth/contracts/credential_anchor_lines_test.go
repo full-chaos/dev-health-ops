@@ -28,9 +28,13 @@ import (
 //
 // The anchors on the deleted Python tree (src/dev_health_ops/*.py) are gone:
 // credentialanchors/credential-anchor-retired-evidence.tsv says, for each one,
-// the line it cited (path@commit^:line at the last commit that held the file),
-// and whether it was re-pointed to the one Go declaration whose doc says it is
-// that Python symbol, or replaced by null with a gaps entry of its class.
+// the line it cited (path@commit^:line, commit = the one that deleted the file)
+// and that line's text, and whether it was re-pointed to the one Go declaration
+// whose doc says it is that Python symbol, or replaced by null with a gaps entry
+// of its class that quotes the text. The history test (build tag authhistory,
+// run by `ci/check_go.sh auth history` with full history) checks the rows
+// against git: the row set equals the base registry's Python anchors, each
+// commit deleted its file, each range fits and each text matches.
 //
 // Anchors in the web and acr repositories are counted, not checked: those
 // files are not in this tree.
@@ -395,19 +399,25 @@ func TestTheRetiredPathListIsGone(t *testing.T) {
 
 // retiredEvidence is one row of credentialanchors/credential-anchor-retired-evidence.tsv.
 type retiredEvidence struct {
-	classID, where, old, oldSymbol, action, successor, doc string
+	classID, where, old, oldText, action, successor, doc string
 }
 
-func loadRetiredEvidence(t *testing.T) []retiredEvidence {
+// loadRetiredEvidence returns the rows and the base registry commit the header names ("# base-registry <sha>").
+func loadRetiredEvidence(t *testing.T) ([]retiredEvidence, string) {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("credentialanchors", "credential-anchor-retired-evidence.tsv"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var rows []retiredEvidence
+	base := ""
 	scanner := bufio.NewScanner(bytes.NewReader(raw))
 	for scanner.Scan() {
 		line := scanner.Text()
+		if rest, ok := strings.CutPrefix(line, "# base-registry "); ok {
+			base = rest
+			continue
+		}
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
@@ -417,12 +427,15 @@ func loadRetiredEvidence(t *testing.T) []retiredEvidence {
 		}
 		rows = append(rows, retiredEvidence{f[0], f[1], f[2], f[3], f[4], f[5], f[6]})
 	}
-	return rows
+	if !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(base) {
+		t.Fatalf("the evidence header names base registry commit %q, want a 40-hex main commit", base)
+	}
+	return rows, base
 }
 
-// retiredGap is the gaps entry a null row adds to its class.
+// retiredGap is the gaps entry a null row adds to its class: it quotes the cited line.
 func retiredGap(r retiredEvidence) string {
-	return fmt.Sprintf("retired anchor %s: %s (%s) was deleted with the Python api; no single documented Go successor", r.where, r.old, r.oldSymbol)
+	return fmt.Sprintf("retired anchor %s: %s (%s) was deleted with the Python api; no single documented Go successor", r.where, r.old, r.oldText)
 }
 
 var (
@@ -431,6 +444,7 @@ var (
 	oldShape     = regexp.MustCompile(`^(src/dev_health_ops/[\w/]+\.py)@[0-9a-f]{12}\^:(\d+)(?:-(\d+))?$`)
 	successorFmt = regexp.MustCompile(`^([\w./-]+\.go):(\d+)-(\d+)$`)
 	identityDoc  = regexp.MustCompile(`^//\s*(?:Package\s+\w+|\w+)\s+is\s`)
+	pythonDecl   = regexp.MustCompile(`^(?:async\s+)?(?:def|class)\s+(\w+)`)
 )
 
 // registryNode resolves an anchor slot ("issuer/anchors[0]", "consumers[1]/anchor") of one class.
@@ -514,8 +528,9 @@ func checkRetiredEvidence(document []byte, rows []retiredEvidence, root string) 
 				failures = append(failures, fmt.Sprintf("%s: the registry anchor is %s, the evidence says %s", label, got, want))
 				continue
 			}
-			if r.doc != filepath.Base(m[1])+"'s "+r.oldSymbol {
-				failures = append(failures, fmt.Sprintf("%s: successor doc %q does not name %s's %s", label, r.doc, filepath.Base(m[1]), r.oldSymbol))
+			decl := pythonDecl.FindStringSubmatch(r.oldText)
+			if decl == nil || r.doc != filepath.Base(m[1])+"'s "+decl[1] {
+				failures = append(failures, fmt.Sprintf("%s: successor doc %q does not name the def/class the cited line %q declares", label, r.doc, r.oldText))
 				continue
 			}
 			lines, err := readAnchorFile(root, s[1], cache)
@@ -556,7 +571,7 @@ func TestEveryRetiredPythonAnchorIsRePointedOrNulledAsItsEvidenceSays(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows := loadRetiredEvidence(t)
+	rows, _ := loadRetiredEvidence(t)
 	if len(rows) == 0 {
 		t.Fatal("the retired-anchor evidence is empty")
 	}
@@ -583,8 +598,8 @@ func TestTheRetiredEvidenceCheckRefusesAWrongSuccessorAndAMissingGap(t *testing.
 	if err := os.WriteFile(filepath.Join(root, "internal", "x", "a.go"), []byte(source), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	repoint := retiredEvidence{"demo", "validators[0]/anchor", "src/dev_health_ops/check.py@0123456789ab^:10-20", "verify_token", "repoint", "internal/x/a.go:1-2", "check.py's verify_token"}
-	null := retiredEvidence{"demo", "issuer/anchors[0]", "src/dev_health_ops/check.py@0123456789ab^:5", "issue", "null", "-", "-"}
+	repoint := retiredEvidence{"demo", "validators[0]/anchor", "src/dev_health_ops/check.py@0123456789ab^:10-20", "def verify_token(token):", "repoint", "internal/x/a.go:1-2", "check.py's verify_token"}
+	null := retiredEvidence{"demo", "issuer/anchors[0]", "src/dev_health_ops/check.py@0123456789ab^:5", "TOKEN_TTL = 300", "null", "-", "-"}
 	doc := func(anchor string, gaps string) []byte {
 		return []byte(fmt.Sprintf(`{"classes":[{"class_id":"demo","issuer":{"anchors":[null]},"validators":[{"anchor":%s}],"gaps":[%s]}]}`, anchor, gaps))
 	}
@@ -604,6 +619,16 @@ func TestTheRetiredEvidenceCheckRefusesAWrongSuccessorAndAMissingGap(t *testing.
 	}
 	if f := checkRetiredEvidence(doc(good, `"other gap"`), []retiredEvidence{repoint, null}, root); len(f) == 0 {
 		t.Error("a null anchor without its gaps entry must fail")
+	}
+	otherText := null
+	otherText.oldText = "TOKEN_TTL = 600"
+	if f := checkRetiredEvidence(doc(good, string(gap)), []retiredEvidence{repoint, otherText}, root); len(f) == 0 {
+		t.Error("a gap that quotes other text than the row's old_text must fail")
+	}
+	wrongDecl := repoint
+	wrongDecl.oldText = "def other(token):"
+	if f := checkRetiredEvidence(doc(good, string(gap)), []retiredEvidence{wrongDecl, null}, root); len(f) == 0 {
+		t.Error("a re-point whose cited line declares another symbol must fail")
 	}
 }
 

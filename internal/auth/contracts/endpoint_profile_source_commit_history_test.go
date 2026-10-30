@@ -34,4 +34,6 @@ func TestEveryEndpointProfileInventoryDeclaresAVerifiableSourceCommit(t *testing
 		}
 		t.Logf("AUTH_SOURCE_COMMIT_VERIFIED %s", filepath.Base(file))
 	}
+	// The one history run (`ci/check_go.sh auth history` runs this test by name) also checks the retired-anchor evidence.
+	t.Run("retired-anchor-evidence", checkRetiredEvidenceAgainstHistory)
 }

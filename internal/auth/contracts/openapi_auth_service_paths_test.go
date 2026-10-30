@@ -112,6 +112,84 @@ func isObjectSchema(schema map[string]any) bool {
 	return false
 }
 
+// jsonStringList reads a JSON list of strings; ok is false for any other shape.
+func jsonStringList(raw any) (values []string, ok bool) {
+	list, isList := raw.([]any)
+	if !isList {
+		return nil, false
+	}
+	for _, item := range list {
+		text, isText := item.(string)
+		if !isText {
+			return nil, false
+		}
+		values = append(values, text)
+	}
+	return values, true
+}
+
+// keywordShapeProblems holds the one accepted value shape of each keyword, at every walked level; any other shape
+// fails closed with the keyword and its path: type is a string or a non-empty list of strings; required is a list of
+// unique strings; properties is a map; items is a map; oneOf, anyOf and allOf are non-empty lists; additionalProperties
+// is the literal false; $ref, description and format are strings; enum is a non-empty list; const is any value.
+func keywordShapeProblems(schema map[string]any, path string) []string {
+	var problems []string
+	bad := func(keyword, want string) {
+		problems = append(problems, fmt.Sprintf("%s/%s must be %s", path, keyword, want))
+	}
+	for keyword, value := range schema {
+		switch keyword {
+		case "type":
+			if _, isText := value.(string); isText {
+				continue
+			}
+			if names, ok := jsonStringList(value); !ok || len(names) == 0 {
+				bad(keyword, "a string or a non-empty list of strings")
+			}
+		case "required":
+			names, ok := jsonStringList(value)
+			if !ok {
+				bad(keyword, "a list of strings")
+				continue
+			}
+			seen := map[string]bool{}
+			for _, name := range names {
+				if seen[name] {
+					bad(keyword, "a list of unique strings")
+					break
+				}
+				seen[name] = true
+			}
+		case "properties":
+			if _, ok := value.(map[string]any); !ok {
+				bad(keyword, "a map of schemas")
+			}
+		case "items":
+			if _, ok := value.(map[string]any); !ok {
+				bad(keyword, "a schema object")
+			}
+		case "oneOf", "anyOf", "allOf":
+			if list, ok := value.([]any); !ok || len(list) == 0 {
+				bad(keyword, "a non-empty list of schemas")
+			}
+		case "additionalProperties":
+			if value != false {
+				bad(keyword, "the boolean false")
+			}
+		case "$ref", "description", "format":
+			if _, ok := value.(string); !ok {
+				bad(keyword, "a string")
+			}
+		case "enum":
+			if list, ok := value.([]any); !ok || len(list) == 0 {
+				bad(keyword, "a non-empty list")
+			}
+		}
+	}
+	sort.Strings(problems)
+	return problems
+}
+
 // closedSchemaProblems walks an inline schema: a keyword outside checkedKeywords and walkedKeywords fails closed
 // (with its path), every object schema must set additionalProperties to false, and properties, items and the
 // members of oneOf, anyOf and allOf are walked the same way.
@@ -127,6 +205,7 @@ func closedSchemaProblems(schema map[string]any, path string) []string {
 			problems = append(problems, fmt.Sprintf("%s uses %q, which the gate does not check", path, keyword))
 		}
 	}
+	problems = append(problems, keywordShapeProblems(schema, path)...)
 	if isObjectSchema(schema) && schema["additionalProperties"] != false {
 		problems = append(problems, fmt.Sprintf("%s is open (additionalProperties is not false)", path))
 	}
@@ -196,8 +275,8 @@ func oneOfExtraMemberProblems(key, status string, schema map[string]any) []strin
 			continue
 		}
 		problems = append(problems, closedSchemaProblems(member, path)...)
-		properties, _ := member["properties"].(map[string]any)
-		required, _ := member["required"].([]any)
+		properties, _ := member["properties"].(map[string]any) // a non-map properties is reported by closedSchemaProblems
+		required, _ := jsonStringList(member["required"])      // a malformed or absent required is reported by keywordShapeProblems or has no name
 		_, namesError := properties["error"]
 		for _, name := range required {
 			if name == "error" {
@@ -286,8 +365,13 @@ func openAPIPathProblems(document map[string]any, rows []map[string]any) []strin
 				}
 			}
 			for _, status := range transportStatuses {
-				response, declared := responses[status].(map[string]any)
-				if !declared || method == "head" {
+				raw, present := responses[status]
+				if !present || method == "head" {
+					continue
+				}
+				response, isObject := raw.(map[string]any)
+				if !isObject {
+					problems = append(problems, fmt.Sprintf("OpenAPI operation %s: its %s must be a response object", key, status))
 					continue
 				}
 				content, _ := response["content"].(map[string]any)

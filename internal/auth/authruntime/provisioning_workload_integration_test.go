@@ -173,8 +173,9 @@ func TestProvisioningServiceCredentialStillWorksBesideTheWorkloadPath(t *testing
 	}
 }
 
-// I4: an invite is created and accepted on the workload token; the invite
-// rows and the membership the accept adds each name the caller of their call.
+// I4: an invite is created and accepted on the workload token; each invite
+// audit row names the caller of its call. The accept commits one audit row
+// (auth.invite.accepted); the membership it adds writes none of its own.
 func TestProvisioningWorkloadTokenInviteCreateAndAccept(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -199,7 +200,6 @@ func TestProvisioningWorkloadTokenInviteCreateAndAccept(t *testing.T) {
 	}
 	w.wantWorkloadCaller(t, ctx, "auth.invite.created", org, nil, createJTI)
 	w.wantWorkloadCaller(t, ctx, "auth.invite.accepted", org, &invitee, acceptJTI)
-	w.wantWorkloadCaller(t, ctx, "auth.membership.added", org, &invitee, acceptJTI)
 }
 
 // I5: a superuser deprovisions on the workload token; the audit row names the

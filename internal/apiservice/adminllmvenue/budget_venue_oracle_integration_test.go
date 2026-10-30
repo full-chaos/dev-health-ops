@@ -85,7 +85,15 @@ func scenarios() []scenario {
 		// investmentexplain.TestOrgWithNoStoredModelRunsTheSharedDefault.
 		{name: "unpriced provider, limit set", tier: "team", provider: text("anthropic"), model: text("claude-3-haiku-20240307"), limit: text("1000")},
 		{name: "unpriced provider, no limit", tier: "team", provider: text("anthropic"), model: text("claude-3-haiku-20240307")},
-		{name: "empty model falls back to the provider default", tier: "team", provider: text("openai"), model: text(""), limit: text("1000")},
+		// Divergence from base.py, ruling D6043 with ticket 12113: Python's
+		// OpenAI default was gpt-5-mini; Go's is gpt-6-luna (priced on the
+		// provider list, version provider-list-2026-10-30.v1). This case stores
+		// base.py's default explicitly, which Python answered identically, so
+		// it still pins the book-priced answer; the Go default is pinned by
+		// llmbudget.TestOpenAIPlatformDefaultIsGPT6Luna and
+		// llmbudget.TestDefaultModelWithNothingConfigured. The name is the
+		// frozen Python key.
+		{name: "empty model falls back to the provider default", tier: "team", provider: text("openai"), model: text("gpt-5-mini"), limit: text("1000")},
 		{name: "unknown provider has no default model", tier: "team", provider: text("nope"), limit: text("1000")},
 		// priced, no reservations
 		{name: "priced, no limit", tier: "team", provider: text("openai"), model: text("gpt-5-mini")},
@@ -115,7 +123,9 @@ func scenarios() []scenario {
 		priced("model gpt-5-nano dated", text("gpt-5-nano-2026-01-01"), nil),
 		priced("model gpt-5-nano upper case is unpriced", text("GPT-5-NANO"), nil),
 		priced("model gpt-5-nano padded", text(" gpt-5-nano "), nil),
-		priced("model gpt-5 is unpriced", text("gpt-5"), nil),
+		// Ticket 12113: the name is the frozen Python key. Python priced no
+		// gpt-5; Go prices it now. gpt-4o stays unpriced in both.
+		priced("model gpt-5 is unpriced", text("gpt-4o"), nil),
 		priced("model scripted without its transport", text("ask-dev-scripted-v1"), nil),
 		priced("model scripted look-alike", text("ask-dev-scripted-v1-v2"), text("http://ask-dev-scripted-openai:8001")),
 		// price book: endpoints

@@ -147,6 +147,18 @@ func oauthCallbackRun(t *testing.T, email string, confirmed, linked bool) (refus
 // oauthCallbackRunOn runs one OAuth callback against server as a self-hosted GitLab.
 func oauthCallbackRunOn(t *testing.T, server *httptest.Server, linked bool) (refusal, *orderIdentities) {
 	t.Helper()
+	return oauthCallbackRunOnWithList(t, server, linked, nil)
+}
+
+// oauthCallbackRunWithList is oauthCallbackRun for a provider row whose allowed_domains is the JSON text list (nil: none).
+func oauthCallbackRunWithList(t *testing.T, email string, confirmed, linked bool, list *string) (refusal, *orderIdentities) {
+	t.Helper()
+	return oauthCallbackRunOnWithList(t, fakeGitLab(t, email, confirmed), linked, list)
+}
+
+// oauthCallbackRunOnWithList is oauthCallbackRunOn for a provider row whose allowed_domains is the JSON text list.
+func oauthCallbackRunOnWithList(t *testing.T, server *httptest.Server, linked bool, list *string) (refusal, *orderIdentities) {
+	t.Helper()
 	var secret contracts.SecretString
 	raw, _ := json.Marshal(uuid.NewString())
 	if err := json.Unmarshal(raw, &secret); err != nil {
@@ -165,7 +177,7 @@ func oauthCallbackRunOn(t *testing.T, server *httptest.Server, linked bool) (ref
 		t.Fatal(err)
 	}
 	row := StoredProvider{ID: uuid.New(), OrgID: uuid.New(), Protocol: "oauth_gitlab", Status: "active", AutoProvision: true,
-		Config: `{"client_id":"client-1"}`}
+		Config: `{"client_id":"client-1"}`, AllowedDomains: list}
 	secrets := `{"client_secret":"gitlab-test-only"}`
 	row.EncryptedSecrets = &secrets
 	token, state, err := sealOAuthState(secret.Reveal(), oauthFlowState{ProviderID: row.ID.String(), OrgID: row.OrgID.String(),

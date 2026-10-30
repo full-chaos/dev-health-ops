@@ -27,7 +27,7 @@ CHAOS-3301) that consume these contracts.
 > **Note:** The Go api does not serve the Ask Dev (`/api/v1/dev`) surface. This page is a record of the Python surface that was removed.
 
 v1 (`dev_answer.v1` / `DevMessageRequest`) was left untouched when v2 was
-written, and its `contracts/ask-dev/v1` tree has since been deleted. v2 lived
+written, and its `contracts/ask-dev/v1` tree (removed with the Python api) has since been deleted. v2 lived
 alongside it in a new `contracts_v2` package and a new `contracts/ask-dev/v2`
 generated-artifact tree, using the same producer pattern
 [Stable contracts](contracts.md) documented for v1: canonical

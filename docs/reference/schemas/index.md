@@ -16,7 +16,7 @@ Public schemas must be generated from the same models that validate requests. Ex
 ## Ask Dev v1 contracts (removed)
 
 The Ask Dev v1 schemas, fixture manifest and goldens that lived in
-`contracts/ask-dev/v1/` were generated from the Python Dev API, which was
-removed with the Python api. The Go api does not serve that surface, and
+`contracts/ask-dev/v1/` (removed with the Python api) were generated from the
+Python Dev API. The Go api does not serve that surface, and
 nothing in this repository reads those files, so they were deleted. The v2
 record is in [Ask Dev v2 contracts](../../contribute/architecture/ask-dev-contracts-v2.md).

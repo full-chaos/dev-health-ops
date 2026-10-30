@@ -251,6 +251,95 @@ func TestTheOpenAPIPathGateRefusesPlantedMismatches(t *testing.T) {
 	}
 }
 
+// closedGoAPIMember is a go-api refusal member as the document declares it for POST /v1/identities/social: closed
+// at both levels and without a property of the transport envelope.
+func closedGoAPIMember() map[string]any {
+	return map[string]any{
+		"type": "object", "required": []any{"detail"}, "additionalProperties": false,
+		"properties": map[string]any{"detail": map[string]any{
+			"type": "object", "required": []any{"message"}, "additionalProperties": false,
+			"properties": map[string]any{"message": map[string]any{"const": "x"}},
+		}},
+	}
+}
+
+// plantOneOf declares the status of an operation as a oneOf of the transport envelope and members.
+func plantOneOf(document map[string]any, route, method, status string, members ...any) {
+	op := document["paths"].(map[string]any)[route].(map[string]any)[method].(map[string]any)
+	response := op["responses"].(map[string]any)[status].(map[string]any)
+	response["content"] = map[string]any{"application/json": map[string]any{"schema": map[string]any{
+		"oneOf": append([]any{map[string]any{"$ref": transportErrorRef}}, members...),
+	}}}
+}
+
+// The extra members of a transport status oneOf are checked: each is an inline object, closed at every level,
+// and disjoint from the envelope. A closed disjoint member passes.
+func TestTheOpenAPIPathGateChecksTheOneOfExtraMembers(t *testing.T) {
+	rows := authServiceRows(t)
+	cases := map[string]struct {
+		plant     func(document map[string]any)
+		wantProbs bool
+	}{
+		"an extra member open at the top": {func(d map[string]any) {
+			m := closedGoAPIMember()
+			delete(m, "additionalProperties")
+			plantOneOf(d, "/v1/identities/social", "post", "400", m)
+		}, true},
+		"an extra member open at a nested level": {func(d map[string]any) {
+			m := closedGoAPIMember()
+			delete(m["properties"].(map[string]any)["detail"].(map[string]any), "additionalProperties")
+			plantOneOf(d, "/v1/identities/social", "post", "400", m)
+		}, true},
+		"an extra member that is open to true": {func(d map[string]any) {
+			m := closedGoAPIMember()
+			m["additionalProperties"] = true
+			plantOneOf(d, "/v1/identities/social", "post", "400", m)
+		}, true},
+		"an extra member that names the envelope's error": {func(d map[string]any) {
+			m := closedGoAPIMember()
+			m["properties"].(map[string]any)["error"] = map[string]any{"type": "object", "additionalProperties": false}
+			plantOneOf(d, "/v1/identities/social", "post", "400", m)
+		}, true},
+		"an extra member that is a ref": {func(d map[string]any) {
+			plantOneOf(d, "/v1/identities/social", "post", "400", map[string]any{"$ref": "#/components/schemas/Error"})
+		}, true},
+		"an extra member that nests a oneOf the gate cannot read": {func(d map[string]any) {
+			m := closedGoAPIMember()
+			m["properties"].(map[string]any)["detail"].(map[string]any)["oneOf"] = []any{map[string]any{"type": "string"}}
+			plantOneOf(d, "/v1/identities/social", "post", "400", m)
+		}, true},
+		"an open extra member on a transport 413": {func(d map[string]any) {
+			m := closedGoAPIMember()
+			delete(m, "additionalProperties")
+			plantOneOf(d, "/v1/sessions/revoke", "post", "413", m)
+		}, true},
+		"an open extra member on a transport 429": {func(d map[string]any) {
+			m := closedGoAPIMember()
+			delete(m, "additionalProperties")
+			plantOneOf(d, "/v1/token/refresh", "post", "429", m)
+		}, true},
+		"a second closed disjoint member passes": {func(d map[string]any) {
+			second := closedGoAPIMember()
+			second["properties"].(map[string]any)["other"] = map[string]any{"type": "string"}
+			plantOneOf(d, "/v1/identities/social", "post", "400", closedGoAPIMember(), second)
+		}, false},
+		"a closed disjoint member on a transport 413 passes": {func(d map[string]any) {
+			plantOneOf(d, "/v1/sessions/revoke", "post", "413", closedGoAPIMember())
+		}, false},
+	}
+	for name, c := range cases {
+		document := loadOpenAPIRaw(t)
+		c.plant(document)
+		problems := openAPIPathProblems(document, rows)
+		if c.wantProbs && len(problems) == 0 {
+			t.Errorf("%s: the gate reported nothing", name)
+		}
+		if !c.wantProbs && len(problems) != 0 {
+			t.Errorf("%s: the gate reported %v", name, problems)
+		}
+	}
+}
+
 // Only go-api's own path space is exempt: an API row anywhere else, one that
 // merely starts like it included, still needs its operation.
 func TestTheOpenAPIPathGateExemptsOnlyGoAPIsPathSpace(t *testing.T) {

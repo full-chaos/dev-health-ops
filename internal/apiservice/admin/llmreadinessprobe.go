@@ -7,8 +7,11 @@ import (
 	"errors"
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -120,6 +123,35 @@ type readinessProber interface {
 // for exactly this probe's fixed inputs.
 type openAICompatibleReadinessProber struct {
 	client providerfoundation.HTTPDoer
+	logger *slog.Logger
+}
+
+// readinessProbeResult is the detailed outcome of one probe: the safe outcome
+// plus what the provider said (a vetted error.param/error.code) and which
+// request parameters the probe dropped to get past a refusal.
+type readinessProbeResult struct {
+	Outcome       string
+	SafeErrorCode *string
+	ErrorParam    string
+	ErrorCode     string
+	DroppedParams []string
+}
+
+// readinessDetailProber is the optional richer seam: a prober that keeps the
+// provider's refusal details. The route falls back to readinessProber.probe.
+type readinessDetailProber interface {
+	probeDetail(ctx context.Context, provider, model, baseURL, apiKey string) readinessProbeResult
+}
+
+type readinessLoggerSetter interface{ setLogger(*slog.Logger) }
+
+func (p *openAICompatibleReadinessProber) setLogger(logger *slog.Logger) { p.logger = logger }
+
+func (p *openAICompatibleReadinessProber) log() *slog.Logger {
+	if p.logger != nil {
+		return p.logger
+	}
+	return slog.Default()
 }
 
 // newOpenAICompatibleReadinessProber follows the SAME doer-or-default shape
@@ -237,7 +269,8 @@ type chatCompletionRequest struct {
 	Messages            []chatMessage   `json:"messages"`
 	Tools               []chatTool      `json:"tools,omitempty"`
 	ToolChoice          string          `json:"tool_choice,omitempty"`
-	MaxCompletionTokens int             `json:"max_completion_tokens"`
+	MaxCompletionTokens int             `json:"max_completion_tokens,omitempty"`
+	MaxTokens           int             `json:"max_tokens,omitempty"`
 	ParallelToolCalls   *bool           `json:"parallel_tool_calls,omitempty"`
 	Temperature         *float64        `json:"temperature,omitempty"`
 	ReasoningEffort     string          `json:"reasoning_effort,omitempty"`
@@ -261,13 +294,15 @@ type chatCompletionResponse struct {
 // supportsTemperature mirrors openai_capabilities.py's supports_temperature.
 func supportsTemperature(model string) bool {
 	m := strings.ToLower(strings.TrimSpace(model))
-	return !(strings.HasPrefix(m, "gpt-5") || strings.HasPrefix(m, "o1") || strings.HasPrefix(m, "o3"))
+	return !(strings.HasPrefix(m, "gpt-5") || strings.HasPrefix(m, "gpt-6") || strings.HasPrefix(m, "o1") || strings.HasPrefix(m, "o3"))
 }
 
 // reasoningEffort mirrors chat_completion_reasoning_effort: "minimal" for
-// every gpt-5* model, else no field at all.
+// every gpt-5* and gpt-6* model, else no field at all. The prefix tables are
+// only the first guess; a provider refusal of a bounded parameter overrides them.
 func reasoningEffort(model string) string {
-	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "gpt-5") {
+	m := strings.ToLower(strings.TrimSpace(model))
+	if strings.HasPrefix(m, "gpt-5") || strings.HasPrefix(m, "gpt-6") {
 		return "minimal"
 	}
 	return ""
@@ -296,7 +331,18 @@ func chatCompletionsEndpoint(baseURL string) string {
 // returned to the client -- the taxonomy in llmsettingsstatus.go is what
 // the admin surface shows).
 type providerFailure struct {
-	code string
+	code   string
+	detail providerErrorDetail
+}
+
+// providerErrorDetail is what an HTTP error body said (zero for a transport
+// failure or a body that is not an OpenAI error envelope).
+type providerErrorDetail struct {
+	status  int
+	errType string
+	code    string
+	param   string
+	message string
 }
 
 func (f *providerFailure) Error() string { return f.code }
@@ -435,7 +481,9 @@ func (p *openAICompatibleReadinessProber) doCompletionOnce(
 		return nil, classifyTransportFailure(err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, classifyHTTPFailure(resp.StatusCode, respBody)
+		failure := classifyHTTPFailure(resp.StatusCode, respBody)
+		failure.detail = parseProviderErrorDetail(resp.StatusCode, respBody)
+		return nil, failure
 	}
 	var parsed chatCompletionResponse
 	if err := json.Unmarshal(respBody, &parsed); err != nil {
@@ -447,11 +495,199 @@ func (p *openAICompatibleReadinessProber) doCompletionOnce(
 	return &parsed, nil
 }
 
+// boundedRefusableParams are the only request parameters the probe drops (or
+// swaps) when the provider refuses one by name.
+var boundedRefusableParams = map[string]struct{}{
+	"temperature":           {},
+	"reasoning_effort":      {},
+	"parallel_tool_calls":   {},
+	"max_completion_tokens": {},
+}
+
+const providerMessageMaxLogRunes = 200
+
+var (
+	providerTokenRe       = regexp.MustCompile(`^[A-Za-z0-9_.\[\]-]{1,64}$`)
+	unsupportedParamMsgRe = regexp.MustCompile(`(?i)unsupported (?:parameter|value):\s*['"]?([A-Za-z_][A-Za-z0-9_.\[\]]*)`)
+)
+
+// vetProviderToken returns s when it is a plain identifier-like token, else "";
+// provider text is untrusted and reaches the persisted record and the UI.
+func vetProviderToken(s string) string {
+	if providerTokenRe.MatchString(s) {
+		return s
+	}
+	return ""
+}
+
+func jsonScalarString(raw any) string {
+	switch v := raw.(type) {
+	case string:
+		return v
+	case float64:
+		return strconv.FormatFloat(v, 'f', -1, 64)
+	}
+	return ""
+}
+
+// parseProviderErrorDetail reads the OpenAI error envelope
+// {"error":{"message","type","param","code"}} from a non-2xx body.
+func parseProviderErrorDetail(status int, body []byte) providerErrorDetail {
+	detail := providerErrorDetail{status: status}
+	var envelope struct {
+		Error struct {
+			Message any `json:"message"`
+			Type    any `json:"type"`
+			Param   any `json:"param"`
+			Code    any `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return detail
+	}
+	detail.message = jsonScalarString(envelope.Error.Message)
+	detail.errType = jsonScalarString(envelope.Error.Type)
+	detail.param = jsonScalarString(envelope.Error.Param)
+	detail.code = jsonScalarString(envelope.Error.Code)
+	return detail
+}
+
+// refusedParam is the parameter a 400/422 names: error.param when present,
+// else the name in an "Unsupported parameter/value: X" message.
+func (d providerErrorDetail) refusedParam() string {
+	if d.param != "" {
+		return strings.ToLower(strings.TrimSpace(d.param))
+	}
+	if m := unsupportedParamMsgRe.FindStringSubmatch(d.message); m != nil {
+		return strings.ToLower(m[1])
+	}
+	return ""
+}
+
+// dropRequestParam removes a bounded parameter from req (max_completion_tokens
+// becomes max_tokens) and reports whether the request carried it.
+func dropRequestParam(req *chatCompletionRequest, name string) bool {
+	switch name {
+	case "temperature":
+		had := req.Temperature != nil
+		req.Temperature = nil
+		return had
+	case "reasoning_effort":
+		had := req.ReasoningEffort != ""
+		req.ReasoningEffort = ""
+		return had
+	case "parallel_tool_calls":
+		had := req.ParallelToolCalls != nil
+		req.ParallelToolCalls = nil
+		return had
+	case "max_completion_tokens":
+		had := req.MaxCompletionTokens != 0
+		if had {
+			req.MaxTokens = req.MaxCompletionTokens
+			req.MaxCompletionTokens = 0
+		}
+		return had
+	}
+	return false
+}
+
+// refusedBoundedParam names the bounded parameter a 400/422 refused that req
+// still carries, or "".
+func refusedBoundedParam(failure *providerFailure, req chatCompletionRequest) string {
+	if failure.code != errCodeInvalidRequest || (failure.detail.status != 400 && failure.detail.status != 422) {
+		return ""
+	}
+	name := failure.detail.refusedParam()
+	if _, ok := boundedRefusableParams[name]; !ok {
+		return ""
+	}
+	scratch := req
+	if !dropRequestParam(&scratch, name) {
+		return ""
+	}
+	return name
+}
+
+// logFailedRound writes one Info line for a failed round: status and the
+// provider's code/param/type, the first 200 characters of its message with the
+// saved key removed, and the round. The base URL is never logged.
+func (p *openAICompatibleReadinessProber) logFailedRound(ctx context.Context, round, attempt int, apiKey string, failure *providerFailure) {
+	message := failure.detail.message
+	if apiKey != "" {
+		message = strings.ReplaceAll(message, apiKey, "[redacted]")
+	}
+	if runes := []rune(message); len(runes) > providerMessageMaxLogRunes {
+		message = string(runes[:providerMessageMaxLogRunes])
+	}
+	p.log().InfoContext(ctx, "admin: llm readiness probe round failed",
+		"round", round,
+		"attempt", attempt,
+		"status", failure.detail.status,
+		"safe_error_code", failure.code,
+		"error_code", failure.detail.code,
+		"error_param", failure.detail.param,
+		"error_type", failure.detail.errType,
+		"error_message", message,
+	)
+}
+
+// probeState carries what the probe learned about the model across rounds.
+type probeState struct {
+	dropped []string
+}
+
+// runRound posts one probe round. A 400/422 that names a bounded parameter the
+// request carries drops it, and the round is retried once; the drop carries into
+// later rounds. Any other failure, or a second 400, is returned as classified.
+func (p *openAICompatibleReadinessProber) runRound(
+	ctx context.Context, baseURL, apiKey string, req chatCompletionRequest, round int, state *probeState,
+) (*chatCompletionResponse, *providerFailure) {
+	for _, name := range state.dropped {
+		dropRequestParam(&req, name)
+	}
+	resp, failure := p.doCompletion(ctx, baseURL, apiKey, req)
+	if failure == nil {
+		return resp, nil
+	}
+	p.logFailedRound(ctx, round, 1, apiKey, failure)
+	name := refusedBoundedParam(failure, req)
+	if name == "" {
+		return nil, failure
+	}
+	dropRequestParam(&req, name)
+	state.dropped = append(state.dropped, name)
+	resp, failure = p.doCompletion(ctx, baseURL, apiKey, req)
+	if failure != nil {
+		p.logFailedRound(ctx, round, 2, apiKey, failure)
+		return nil, failure
+	}
+	return resp, nil
+}
+
 // probe runs the fixed two-round readiness exchange and returns
 // ("ready", nil) or ("failed", &safeErrorCode).
 func (p *openAICompatibleReadinessProber) probe(
 	ctx context.Context, provider, model, baseURL, apiKey string,
 ) (string, *string) {
+	result := p.probeDetail(ctx, provider, model, baseURL, apiKey)
+	return result.Outcome, result.SafeErrorCode
+}
+
+// probeDetail is probe plus the provider's refusal details and the parameters it dropped.
+func (p *openAICompatibleReadinessProber) probeDetail(
+	ctx context.Context, provider, model, baseURL, apiKey string,
+) readinessProbeResult {
+	state := &probeState{}
+	result := func(failure *providerFailure) readinessProbeResult {
+		out := readinessProbeResult{Outcome: readinessOutcomeReady, DroppedParams: state.dropped}
+		if failure != nil {
+			out.Outcome = readinessOutcomeFailed
+			out.SafeErrorCode = ptrString(failure.code)
+			out.ErrorParam = vetProviderToken(failure.detail.refusedParam())
+			out.ErrorCode = vetProviderToken(failure.detail.code)
+		}
+		return out
+	}
 	toolChoice := "required"
 	var parallelToolCalls *bool
 	if supportsParallelToolCalls(model) {
@@ -484,17 +720,20 @@ func (p *openAICompatibleReadinessProber) probe(
 		ReasoningEffort:     reasoningEffort(model),
 	}
 
-	resp1, failure := p.doCompletion(ctx, baseURL, apiKey, round1)
+	resp1, failure := p.runRound(ctx, baseURL, apiKey, round1, 1, state)
 	if failure != nil {
-		return readinessOutcomeFailed, ptrString(failure.code)
+		return result(failure)
 	}
 	choice1 := resp1.Choices[0]
 	if choice1.FinishReason == "length" {
-		return readinessOutcomeFailed, ptrString(errCodeOutputExhausted)
+		failure := newProviderFailure(errCodeOutputExhausted)
+		p.logFailedRound(ctx, 1, 1, apiKey, failure)
+		return result(failure)
 	}
 	callID, callFailure := normalizeRound1Decision(choice1)
 	if callFailure != nil {
-		return readinessOutcomeFailed, ptrString(callFailure.code)
+		p.logFailedRound(ctx, 1, 1, apiKey, callFailure)
+		return result(callFailure)
 	}
 
 	round2 := chatCompletionRequest{
@@ -533,18 +772,21 @@ func (p *openAICompatibleReadinessProber) probe(
 		},
 	}
 
-	resp2, failure := p.doCompletion(ctx, baseURL, apiKey, round2)
+	resp2, failure := p.runRound(ctx, baseURL, apiKey, round2, 2, state)
 	if failure != nil {
-		return readinessOutcomeFailed, ptrString(failure.code)
+		return result(failure)
 	}
 	choice2 := resp2.Choices[0]
 	if choice2.FinishReason == "length" {
-		return readinessOutcomeFailed, ptrString(errCodeOutputExhausted)
+		failure := newProviderFailure(errCodeOutputExhausted)
+		p.logFailedRound(ctx, 2, 1, apiKey, failure)
+		return result(failure)
 	}
 	if finalFailure := normalizeRound2Decision(choice2); finalFailure != nil {
-		return readinessOutcomeFailed, ptrString(finalFailure.code)
+		p.logFailedRound(ctx, 2, 1, apiKey, finalFailure)
+		return result(finalFailure)
 	}
-	return readinessOutcomeReady, nil
+	return result(nil)
 }
 
 // normalizeRound1Decision mirrors _normalize_response for round 1: a

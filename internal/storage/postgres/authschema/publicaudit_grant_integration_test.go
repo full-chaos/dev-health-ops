@@ -15,7 +15,8 @@ import (
 // switch off and on, the runtime role holds INSERT on exactly the
 // PublicAuditWriteColumns of public.audit_logs and nothing else there (no
 // SELECT, UPDATE, DELETE, TRUNCATE, no table-level privilege), the posture is
-// clean, and an UPDATE, DELETE or SELECT by the runtime role is refused.
+// clean, and an UPDATE, DELETE or SELECT by the runtime role is refused, and so
+// is an INSERT into another public table (D6509).
 func TestPublicAuditWriteGrantIsColumnInsertWhateverTheSwitch(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -54,9 +55,11 @@ func TestPublicAuditWriteGrantIsColumnInsertWhateverTheSwitch(t *testing.T) {
 			}
 		}
 		for name, statement := range map[string]string{
-			"update": `UPDATE public.audit_logs SET status = 'success' WHERE false`,
-			"delete": `DELETE FROM public.audit_logs WHERE false`,
-			"select": `SELECT count(*) FROM public.audit_logs`,
+			"update":                           `UPDATE public.audit_logs SET status = 'success' WHERE false`,
+			"delete":                           `DELETE FROM public.audit_logs WHERE false`,
+			"select":                           `SELECT count(*) FROM public.audit_logs`,
+			"insert into public.sso_providers": `INSERT INTO public.sso_providers DEFAULT VALUES`,
+			"insert into public.org_licenses":  `INSERT INTO public.org_licenses DEFAULT VALUES`,
 		} {
 			if err := env.runtimeStatement(ctx, statement); err == nil || !strings.Contains(err.Error(), "permission denied") {
 				t.Errorf("users owned %v: %s by the runtime role: err = %v, want permission denied", owned, name, err)

@@ -170,3 +170,19 @@ func TestPGDenialAuditIsGoAPIsAuditRow(t *testing.T) {
 		}
 	}
 }
+
+// Through the real OAuth callback, the row names the provider and the organization the callback admitted from its
+// sealed flow state (D6509: never a value of the client's body), and no user.
+func TestOAuthDenialRowNamesTheAdmittedProviderAndOrganization(t *testing.T) {
+	list := `["example.test"]`
+	for _, linked := range []bool{true, false} {
+		denials := &recordedDenials{}
+		got, _, row := oauthCallbackRunAudited(t, fakeGitLab(t, "u@other.test", true), linked, &list, denials)
+		if got.status != http.StatusForbidden || len(denials.rows) != 1 {
+			t.Fatalf("linked=%v: %+v with %d rows", linked, got, len(denials.rows))
+		}
+		if d := denials.rows[0]; d.OrgID != row.OrgID || d.ProviderID != row.ID || d.Protocol != "oauth" || d.Stage != "domain_check" {
+			t.Fatalf("linked=%v: row %+v, want org %s provider %s", linked, d, row.OrgID, row.ID)
+		}
+	}
+}

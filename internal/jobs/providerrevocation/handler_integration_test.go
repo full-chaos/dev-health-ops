@@ -348,20 +348,32 @@ func TestWorkerWithoutAClientIDChangesNothing(t *testing.T) {
 	}
 }
 
-// No token or ciphertext reaches the run's log lines.
+// No token or ciphertext reaches any log record of a run that refuses a row,
+// exhausts it and names it. The ciphertext checked is the one stored in the
+// row (Fernet ciphertexts differ per encryption), read before the run.
 func TestWorkerLogsCountsOnly(t *testing.T) {
 	c := newCell(t)
 	c.fake.fail[sentinelToken] = true
-	sealed, err := c.cipher.Encrypt([]byte(sentinelToken))
-	if err != nil {
+	id := c.seed(t, "disconnect", "default", sentinelToken, MaxAttempts-1, time.Hour, 7*time.Hour)
+	var stored string
+	if err := c.admin.QueryRow(context.Background(), `SELECT token_encrypted FROM provider_oauth_revocations WHERE id = $1`, id).Scan(&stored); err != nil {
 		t.Fatal(err)
 	}
-	c.seed(t, "disconnect", "default", sentinelToken, MaxAttempts-1, time.Hour, 7*time.Hour)
 	logs := &bytes.Buffer{}
 	c.run(t, c.handler(t, true, logs))
-	for _, secret := range []string{sentinelToken, sealed.Reveal()} {
-		if strings.Contains(logs.String(), secret) {
-			t.Fatalf("a token or ciphertext reached the log: %s", logs.String())
+	records := strings.Split(strings.TrimSpace(logs.String()), "\n")
+	named := false
+	for _, record := range records {
+		for _, secret := range []string{sentinelToken, stored} {
+			if strings.Contains(record, secret) {
+				t.Errorf("a token or ciphertext reached a log record: %s", record)
+			}
 		}
+		if strings.Contains(record, "provider_oauth_revocations.exhausted") && strings.Contains(record, id.String()) {
+			named = true
+		}
+	}
+	if !named || len(records) < 2 {
+		t.Fatalf("the run did not log the exhausted row by id (%d records): %s", len(records), logs.String())
 	}
 }

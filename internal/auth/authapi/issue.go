@@ -48,14 +48,27 @@ type ServiceCredentials interface {
 	Check(ctx context.Context, token contracts.SecretString) (servicecred.Credential, servicecred.Refusal, error)
 }
 
+// IssueSessions is the session domain the issue route drives
+// (*session.Store): a new session, or one that supersedes the caller's own
+// session (an organization switch, CHAOS-12085).
+type IssueSessions interface {
+	CreateAudited(ctx context.Context, principalID uuid.UUID, organizationID *uuid.UUID, amr []string, event audit.AuditEvent) (session.Issued, error)
+	CreateSupersedingAudited(ctx context.Context, principalID uuid.UUID, organizationID *uuid.UUID, amr []string,
+		predecessor uuid.UUID, event audit.AuditEvent) (session.Issued, error)
+}
+
 var errIssueRequest = errors.New("authapi: not a session issue request")
 
 // issueRequest is the issue route's body: exactly principal_id,
-// organization_id (a UUID or null) and amr.
+// organization_id (a UUID or null) and amr, and optionally
+// predecessor_session_id (a UUID): the caller's own session, which an
+// organization switch supersedes (CHAOS-12085). A body that names a
+// predecessor revokes it in the transaction that creates the successor.
 type issueRequest struct {
 	principal    uuid.UUID
 	organization *uuid.UUID
 	amr          []string
+	predecessor  *uuid.UUID
 }
 
 func parseIssueRequest(body io.Reader) (issueRequest, error) {
@@ -88,7 +101,12 @@ func parseIssueRequest(body io.Reader) (issueRequest, error) {
 	principalRaw, okPrincipal := members["principal_id"]
 	orgRaw, okOrg := members["organization_id"]
 	amrRaw, okAMR := members["amr"]
-	if len(members) != 3 || !okPrincipal || !okOrg || !okAMR {
+	predecessorRaw, okPredecessor := members["predecessor_session_id"]
+	want := 3
+	if okPredecessor {
+		want = 4
+	}
+	if len(members) != want || !okPrincipal || !okOrg || !okAMR {
 		return issueRequest{}, errIssueRequest
 	}
 	var out issueRequest
@@ -114,6 +132,17 @@ func parseIssueRequest(body io.Reader) (issueRequest, error) {
 	}
 	if err := json.Unmarshal(amrRaw, &out.amr); err != nil || !session.ValidAMR(out.amr) {
 		return issueRequest{}, errIssueRequest
+	}
+	if okPredecessor {
+		var predecessor string
+		if err := json.Unmarshal(predecessorRaw, &predecessor); err != nil {
+			return issueRequest{}, errIssueRequest
+		}
+		id, err := uuid.Parse(predecessor)
+		if err != nil || predecessor != id.String() {
+			return issueRequest{}, errIssueRequest
+		}
+		out.predecessor = &id
 	}
 	return out, nil
 }
@@ -195,9 +224,23 @@ func (h compatHandlers) issueSession(w http.ResponseWriter, r *http.Request) {
 		h.rec.refuse(w, r, opSessionIssue, unavailable(reasonDependency), err)
 		return
 	}
-	issued, err := h.Sessions.CreateAudited(ctx, req.principal, req.organization, req.amr,
-		issuedEvent(ctx, req, caller))
+	var issued session.Issued
+	if req.predecessor != nil {
+		issued, err = h.Sessions.CreateSupersedingAudited(ctx, req.principal, req.organization, req.amr,
+			*req.predecessor, issuedEvent(ctx, req, caller))
+	} else {
+		issued, err = h.Sessions.CreateAudited(ctx, req.principal, req.organization, req.amr,
+			issuedEvent(ctx, req, caller))
+	}
 	switch {
+	case errors.Is(err, session.ErrPredecessorNotLive):
+		// The caller's own session ended first (a concurrent switch from it
+		// superseded it, or a sign-out): no successor.
+		h.rec.refuse(w, r, opSessionIssue, unauthorized(reasonSessionRevoked), nil)
+		return
+	case errors.Is(err, session.ErrPredecessorOtherPrincipal):
+		h.rec.refuse(w, r, opSessionIssue, refusal{http.StatusForbidden, reasonNotEntitled}, nil)
+		return
 	case errors.Is(err, session.ErrInvalidAMR):
 		h.rec.refuse(w, r, opSessionIssue, unauthorized(reasonMalformed), nil)
 		return

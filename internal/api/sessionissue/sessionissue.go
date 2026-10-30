@@ -55,11 +55,22 @@ const UnavailableText = "Authentication service unavailable"
 // 503 and mints nothing.
 var ErrUnavailable = errors.New("sessionissue: session issue route unavailable")
 
+// ErrSessionEnded is a superseding issue auth-service refused because the
+// predecessor session is no longer live (401 session_revoked): the caller's
+// own session ended first, for example under a concurrent organization
+// switch from it. A route answers it with 401 and mints nothing.
+var ErrSessionEnded = errors.New("sessionissue: the predecessor session has ended")
+
 // Request names the session to issue.
 type Request struct {
 	PrincipalID    uuid.UUID
 	OrganizationID *uuid.UUID
 	AMR            []string
+	// PredecessorSessionID is the caller's own session, which this issue
+	// supersedes: auth-service revokes it in the transaction that creates
+	// the new session (an organization switch, CHAOS-12085). Nil issues
+	// without touching any other session.
+	PredecessorSessionID *uuid.UUID
 }
 
 // Pair is an issued access token and its opaque refresh credential.
@@ -114,9 +125,15 @@ func New(base *url.URL, token string, timeout time.Duration) (*Client, error) {
 }
 
 type issueBody struct {
-	PrincipalID    string   `json:"principal_id"`
-	OrganizationID *string  `json:"organization_id"`
-	AMR            []string `json:"amr"`
+	PrincipalID          string   `json:"principal_id"`
+	OrganizationID       *string  `json:"organization_id"`
+	AMR                  []string `json:"amr"`
+	PredecessorSessionID *string  `json:"predecessor_session_id,omitempty"`
+}
+
+// refusalBody is the reason of an error.v1 refusal.
+type refusalBody struct {
+	ReasonCode string `json:"reason_code"`
 }
 
 type issueAnswer struct {
@@ -133,6 +150,10 @@ func (c *Client) Issue(ctx context.Context, r *http.Request, req Request) (Pair,
 	if req.OrganizationID != nil {
 		org := req.OrganizationID.String()
 		body.OrganizationID = &org
+	}
+	if req.PredecessorSessionID != nil {
+		predecessor := req.PredecessorSessionID.String()
+		body.PredecessorSessionID = &predecessor
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {
@@ -157,6 +178,12 @@ func (c *Client) Issue(ctx context.Context, r *http.Request, req Request) (Pair,
 	answer, err := io.ReadAll(io.LimitReader(response.Body, maxAnswerBytes+1))
 	if err != nil {
 		return Pair{}, fmt.Errorf("%w: reading the answer: %w", ErrUnavailable, err)
+	}
+	if response.StatusCode == http.StatusUnauthorized && req.PredecessorSessionID != nil {
+		var refusal refusalBody
+		if json.Unmarshal(answer, &refusal) == nil && refusal.ReasonCode == "session_revoked" {
+			return Pair{}, ErrSessionEnded
+		}
 	}
 	if response.StatusCode != http.StatusOK {
 		return Pair{}, fmt.Errorf("%w: status %d", ErrUnavailable, response.StatusCode)

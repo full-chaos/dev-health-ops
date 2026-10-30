@@ -22,16 +22,23 @@ func resolveWithList(t *testing.T, protocol string, linked bool, list []string, 
 }
 
 // The provider's allowed_domains decide every sign-in, linked or new (go-api oidc.go/oauth.go parity): a linked key
-// whose asserted domain is off the list is refused before the lookup, with the answer an unknown key gets.
+// whose asserted domain is off the list is refused before the lookup, with the answer an unknown key gets. An address
+// with no "@" is go-api's 400 on an OIDC row and its domain 403 on an OAuth row (oauth.go has no malformed branch).
 func TestResolveRefusesALinkedIdentityOffTheDomainList(t *testing.T) {
-	for _, protocol := range []string{"oidc", "oauth"} {
+	denied := refusal{status: http.StatusForbidden, reason: ReasonDomainNotAllowed, detail: domainDeniedDetail}
+	malformed := refusal{status: http.StatusBadRequest, reason: ReasonMalformed, detail: `{"detail":"Email address from OIDC claims is malformed"}`}
+	for _, protocol := range []string{"oidc", "oauth_gitlab", "oauth_github", "oauth_google"} {
+		noAt := malformed
+		if protocol != "oidc" {
+			noAt = denied
+		}
 		for name, tc := range map[string]struct {
 			email string
 			want  refusal
 		}{
-			"off the list": {"u@other.test", refusal{status: http.StatusForbidden, reason: ReasonDomainNotAllowed, detail: domainDeniedDetail}},
-			"empty domain": {"u@", refusal{status: http.StatusForbidden, reason: ReasonDomainNotAllowed, detail: domainDeniedDetail}},
-			"no at":        {"u.example.test", refusal{status: http.StatusBadRequest, reason: ReasonMalformed, detail: `{"detail":"Email address from OIDC claims is malformed"}`}},
+			"off the list": {"u@other.test", denied},
+			"empty domain": {"u@", denied},
+			"no at":        {"u.example.test", noAt},
 		} {
 			t.Run(protocol+"/"+name, func(t *testing.T) {
 				p := profile{Email: tc.email, EmailVerified: true}
@@ -93,5 +100,20 @@ func TestOAuthCallbackRefusesALinkedUnverifiedEmail(t *testing.T) {
 	got, ids := oauthCallbackRun(t, "a@example.test", false, true)
 	if got.status != http.StatusForbidden || got.reason != ReasonEmailUnverified || ids.calls != 0 {
 		t.Fatalf("%+v with %d identity store calls", got, ids.calls)
+	}
+}
+
+// Through the real OAuth callback (stored protocol oauth_gitlab): with a list, an address with no "@" is the domain
+// 403 for a linked and an unknown key alike, before any lookup (go-api oauth.go has no malformed branch).
+func TestOAuthCallbackAnswersNoAtWithTheDomainRefusal(t *testing.T) {
+	list := `["example.test"]`
+	want := refusal{status: http.StatusForbidden, reason: ReasonDomainNotAllowed, detail: domainDeniedDetail}
+	linked, linkedIDs := oauthCallbackRunWithList(t, "u.example.test", true, true, &list)
+	unknown, unknownIDs := oauthCallbackRunWithList(t, "u.example.test", true, false, &list)
+	if linked != want || unknown != want || linkedIDs.calls+unknownIDs.calls != 0 {
+		t.Fatalf("linked %+v, unknown %+v, %d store calls; want both %+v and none", linked, unknown, linkedIDs.calls+unknownIDs.calls, want)
+	}
+	if got, ids := oauthCallbackRunWithList(t, "u@example.test", true, true, &list); got != (refusal{}) || ids.calls == 0 {
+		t.Fatalf("control, domain on the list: %+v with %d store calls", got, ids.calls)
 	}
 }

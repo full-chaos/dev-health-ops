@@ -141,6 +141,12 @@ func fakeGitLab(t *testing.T, email string, confirmed bool) *httptest.Server {
 
 func oauthCallbackRun(t *testing.T, email string, confirmed, linked bool) (refusal, *orderIdentities) {
 	t.Helper()
+	return oauthCallbackRunWithList(t, email, confirmed, linked, nil)
+}
+
+// oauthCallbackRunWithList is oauthCallbackRun for a provider row whose allowed_domains is the JSON text list (nil: none).
+func oauthCallbackRunWithList(t *testing.T, email string, confirmed, linked bool, list *string) (refusal, *orderIdentities) {
+	t.Helper()
 	server := fakeGitLab(t, email, confirmed)
 	var secret contracts.SecretString
 	raw, _ := json.Marshal(uuid.NewString())
@@ -160,7 +166,7 @@ func oauthCallbackRun(t *testing.T, email string, confirmed, linked bool) (refus
 		t.Fatal(err)
 	}
 	row := StoredProvider{ID: uuid.New(), OrgID: uuid.New(), Protocol: "oauth_gitlab", Status: "active", AutoProvision: true,
-		Config: `{"client_id":"client-1"}`}
+		Config: `{"client_id":"client-1"}`, AllowedDomains: list}
 	secrets := `{"client_secret":"gitlab-test-only"}`
 	row.EncryptedSecrets = &secrets
 	token, state, err := sealOAuthState(secret.Reveal(), oauthFlowState{ProviderID: row.ID.String(), OrgID: row.OrgID.String(),

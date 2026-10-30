@@ -33,11 +33,14 @@ import (
 const pinnedNonTextRow = "gitlab_number_email_verified"
 
 // subjectRewrite serves inner with every account id 7 (and Google's "g7") rewritten to n, in UTF-8 and UTF-16LE
-// bodies, so each row and scenario has its own provider identity.
+// bodies, so each row and scenario has its own provider identity; the usable address and the login / username are made
+// per row too, so new accounts never collide (users.username is unique), and the address is at example.com: the
+// account email check refuses the special-use .test domain.
 func subjectRewrite(inner http.Handler, n int) http.Handler {
 	digits := strconv.Itoa(n)
 	pairs := [][2]string{{`"id": 7`, `"id": ` + digits}, {`"resource_owner_id": 7`, `"resource_owner_id": ` + digits}, {`"g7"`, `"g` + digits + `"`},
-		{`user@example.test`, `user-` + digits + `@example.test`}}
+		{`user@example.test`, `user-` + digits + `@example.com`}, {`"login": "u"`, `"login": "u-` + digits + `"`},
+		{`"username": "u"`, `"username": "u-` + digits + `"`}}
 	utf16le := func(s string) []byte {
 		var out []byte
 		for _, u := range utf16.Encode([]rune(s)) {

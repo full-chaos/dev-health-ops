@@ -175,8 +175,7 @@ func composeEnvKeys(v any) []string {
 	return out
 }
 
-// composeExtendsChain returns the service and every service it extends in this file (a YAML merge key counts as a parent
-// too), and an error for an extends that names bugsink, another file, an unknown service, or loops.
+// composeExtendsChain returns the service and every service it extends in this file, and an error for an extends that names bugsink, another file, an unknown service, or loops.
 func composeExtendsChain(services doc, name string) ([]doc, []string) {
 	var chain []doc
 	var errs []string
@@ -192,12 +191,7 @@ func composeExtendsChain(services doc, name string) ([]doc, []string) {
 			errs = append(errs, "extends an unknown service "+cur+", so its bugsink credentials cannot be checked")
 			break
 		}
-		chain = append(chain, svc)
-		for _, m := range append([]any{svc["<<"]}, list(svc["<<"])...) {
-			if md := mp(m); md != nil {
-				chain = append(chain, md)
-			}
-		}
+		chain = append(chain, svc) // a YAML merge key (<<) is already resolved by the YAML decoder (cells: merge key copies bugsink)
 		next := ""
 		switch e := svc["extends"].(type) {
 		case string:

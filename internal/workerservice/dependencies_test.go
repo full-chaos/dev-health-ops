@@ -351,6 +351,11 @@ func TestLaunchDarklyReadinessRequiresConcreteProviderHandlerRegistration(
 	if !ok {
 		t.Fatal("sync.team_repo_ownership_derivation descriptor missing")
 	}
+	// sync.provider_oauth_revocations (CHAOS-12010) is on queue "sync" too.
+	providerRevocationsSpec, ok := runtimeRegistry.Descriptor(jobcontract.KindProviderOAuthRevocations)
+	if !ok {
+		t.Fatal("sync.provider_oauth_revocations descriptor missing")
+	}
 	database := &fakeWorkerDatabase{}
 	sources := productionWorkerDependencySources
 	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) {
@@ -363,7 +368,7 @@ func TestLaunchDarklyReadinessRequiresConcreteProviderHandlerRegistration(
 		jobruntime.Observer, *slog.Logger, *river.Workers,
 	) (workerFamily, error) {
 		return workerFamily{
-			handlers: []jobruntime.HandlerSpec{autoimportSpec, teamRepoOwnershipSpec},
+			handlers: []jobruntime.HandlerSpec{autoimportSpec, teamRepoOwnershipSpec, providerRevocationsSpec},
 			queues:   []jobruntime.QueueBudget{{Queue: syncCoordinatorQueue, MaxWorkers: 4}},
 		}, nil
 	}
@@ -2801,6 +2806,11 @@ func TestSelectedQueueCapabilityIsValidatedAcrossBuilderFamilies(t *testing.T) {
 	if !ok {
 		t.Fatal("sync.team_repo_ownership_derivation descriptor missing")
 	}
+	// sync.provider_oauth_revocations (CHAOS-12010) is on queue "sync" too.
+	providerRevocationsSpec, ok := runtimeRegistry.Descriptor(jobcontract.KindProviderOAuthRevocations)
+	if !ok {
+		t.Fatal("sync.provider_oauth_revocations descriptor missing")
+	}
 
 	syncConfig := config.Config{
 		Queues:                 []string{"sync", "sync_provider"},
@@ -2851,7 +2861,7 @@ func TestSelectedQueueCapabilityIsValidatedAcrossBuilderFamilies(t *testing.T) {
 			) (workerFamily, error) {
 				family := workerFamily{}
 				if test.reported {
-					family.handlers = []jobruntime.HandlerSpec{autoimportSpec, teamRepoOwnershipSpec}
+					family.handlers = []jobruntime.HandlerSpec{autoimportSpec, teamRepoOwnershipSpec, providerRevocationsSpec}
 					family.queues = []jobruntime.QueueBudget{
 						{Queue: "sync", MaxWorkers: 4},
 					}

@@ -48,11 +48,24 @@ func (s *requeuedRevokeServer) got(token string) bool {
 	return false
 }
 
+func (s *requeuedRevokeServer) count(token string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, t := range s.tokens {
+		if t == token {
+			n++
+		}
+	}
+	return n
+}
+
 // A revocation row in the shape the restore fence re-queues from the shadow restore (same ciphertext, status pending,
 // attempts 0, last_error NULL, created_at of the source) is sent by the real disconnect of its credential when the
-// credential row exists, and is NOT sent when the credential was connected after the restore target (no credential
-// row): the disconnect then returns before any retry and the row stays pending.
-func TestTheDisconnectSendsARequeuedRevocationOnlyWhenItsCredentialRowExists(t *testing.T) {
+// credential row exists, and also when the credential was connected after the restore target (no credential row,
+// the fence report's blocked split): ticket 12011 makes that disconnect send the name's pending rows, and the
+// revocation worker sends them too.
+func TestTheDisconnectSendsARequeuedRevocationAlsoWithoutItsCredentialRow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	instance, err := containers.StartPostgres(ctx)
@@ -135,13 +148,13 @@ VALUES ($1, $2, 'pagerduty', 'kept', false, now(), now())`, uuid.New(), org); er
 	}
 
 	done, err = h.disconnectPagerDutyCredential(ctx, org, "late")
-	if err != nil || done != nil {
-		t.Fatalf("disconnect of a credential with no row = %v, %v; want nil (no credential), no error", done, err)
+	if err != nil || done == nil || !*done {
+		t.Fatalf("disconnect of a credential with no row = %v, %v; want a completed drain (ticket 12011)", done, err)
 	}
-	if fake.got(lateToken) {
-		t.Error("the requeued revocation of a credential with no row was sent; the blocked split would be wrong")
+	if n := fake.count(lateToken); n != 1 {
+		t.Errorf("the requeued revocation of a credential with no row was sent %d time(s), want exactly 1", n)
 	}
-	if !pending(lateID) {
-		t.Error("the requeued revocation of a credential with no row is no longer pending")
+	if pending(lateID) {
+		t.Error("the requeued revocation of a credential with no row is still pending")
 	}
 }

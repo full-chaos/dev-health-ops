@@ -296,6 +296,24 @@
       ]
     },
     {
+      "kind": "sync.provider_oauth_revocations",
+      "state": "celery_removed",
+      "producer_version": 1,
+      "consumer_versions": [
+        1
+      ],
+      "required_queues": [
+        "sync"
+      ],
+      "route": "river",
+      "rollback_route": "none",
+      "evidence": [
+        "contract_schema",
+        "handler_wiring",
+        "real_postgres_listing"
+      ]
+    },
+    {
       "kind": "sync.provider_unit",
       "state": "celery_removed",
       "producer_version": 1,

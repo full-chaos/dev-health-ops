@@ -201,3 +201,40 @@ func shapeBody(shape string, body []byte) []byte {
 	}
 	return body
 }
+
+// When a profile carries the email under two keys that differ only in case, encoding/json fills Email from the last
+// one, so the lone-surrogate check reads that same member: the profile is unverified only when that member holds the
+// lone surrogate.
+func TestFetchReadsTheLastCaseFoldedEmailMember(t *testing.T) {
+	for name, tc := range map[string]struct {
+		body         string
+		wantVerified bool
+	}{
+		"surrogate first, usable last": {`{"id": 7, "login": "u", "email": "MARK\ud800@example.test", "Email": "user@example.test"}`, true},
+		"usable first, surrogate last": {`{"id": 7, "login": "u", "email": "user@example.test", "Email": "MARK\ud800@example.test"}`, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case "/github/applications/" + testClientID + "/token":
+					_, _ = w.Write([]byte(`{"app": {"client_id": "` + testClientID + `"}, "user": {"id": 7}}`))
+				case "/github/user":
+					_, _ = w.Write([]byte(tc.body))
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			t.Cleanup(server.Close)
+			client := &ProviderClient{HTTP: server.Client(), Endpoints: Endpoints{GitHubAPI: server.URL + "/github"},
+				Clients: map[Provider]ClientCredentials{GitHub: NewClientCredentials(testClientID, testClientSecret)}}
+			profile, err := client.Fetch(context.Background(), GitHub, secretOf("tok"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if profile.EmailVerified != tc.wantVerified {
+				t.Fatalf("EmailVerified = %v, want %v (Email %q)", profile.EmailVerified, tc.wantVerified, profile.Email)
+			}
+		})
+	}
+}

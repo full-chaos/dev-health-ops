@@ -212,8 +212,9 @@ WHERE principal_id = $1`, principal, hash, passwordAlgorithm); err != nil {
 			}
 			return nil
 		},
-		Audit:  passwordAudit(cause, subject, actor, org),
-		Events: []audit.OutboxEvent{userEvent(subject, "user.credentials_changed")},
+		Audit:    passwordAudit(cause, subject, actor, org),
+		Events:   []audit.OutboxEvent{userEvent(subject, "user.credentials_changed")},
+		Refusals: []error{ErrLinkUnusable},
 	})
 	return version, s.localErr(ctx, "set password hash", err)
 }

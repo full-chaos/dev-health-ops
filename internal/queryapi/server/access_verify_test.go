@@ -470,3 +470,5 @@ func TestQueryAPIAccessUserReadsOnlyGrantedColumns(t *testing.T) {
 	}
 	var _ policy.AccessUserStore = store
 }
+
+func (accessStore) ReadsPlatformRoles() bool { return false }

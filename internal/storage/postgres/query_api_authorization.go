@@ -144,22 +144,46 @@ func QueryAPIPosture() RolePosture {
 	return queryAPIPosture()
 }
 
-// QueryAPISessionRead is the one read query-api holds in the auth schema while
+// QueryAPISessionRead is what query-api reads in the auth schema while
 // auth-service owns sessions (AUTH_PROXY_SESSIONS): USAGE on the schema and
-// column SELECT on its sessions table, the columns the session check reads
-// (internal/api/policy/session.go). It must equal the list auth-migrate grants a
-// session reader role (authschema.SessionReaderColumns; this package cannot import
-// authschema, whose tests import this package, so
-// TestQueryAPISessionReadEqualsTheAuthSessionReaderColumns in rivermigrate pins it).
+// column SELECT on a list of its tables (Tables). The first is the sessions
+// table, the columns the session check reads (internal/api/policy/session.go);
+// while auth-service owns the platform roles (AUTH_PLATFORM_ROLES_OWNED) the
+// platform role read follows (Also). It must equal the list auth-migrate grants
+// a session reader role (authschema.SessionReaderReads; this package cannot
+// import authschema, whose tests import this package, so
+// TestQueryAPIAuthReadsEqualTheReaderColumnsInBothStates in rivermigrate pins it).
 type QueryAPISessionRead struct {
 	Schema  string
 	Table   string
 	Columns []string
+	// Also are the auth tables read after the sessions table.
+	Also []QueryAPIAuthTable
 }
 
-// QueryAPISessionReadFor is the session read in the named auth schema.
-func QueryAPISessionReadFor(schema string) QueryAPISessionRead {
-	return QueryAPISessionRead{Schema: schema, Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at", "legacy_token_version"}}
+// QueryAPIAuthTable is one auth table query-api reads, column by column.
+type QueryAPIAuthTable struct {
+	Table   string
+	Columns []string
+}
+
+// Tables is the whole read: the sessions table, then Also.
+func (r QueryAPISessionRead) Tables() []QueryAPIAuthTable {
+	return append([]QueryAPIAuthTable{{Table: r.Table, Columns: r.Columns}}, r.Also...)
+}
+
+// QueryAPISessionReadFor is the read in the named auth schema: the sessions
+// table, and the platform role read while platformRolesOwned (the columns of
+// platformrole.HoldsSQL).
+func QueryAPISessionReadFor(schema string, platformRolesOwned bool) QueryAPISessionRead {
+	read := QueryAPISessionRead{Schema: schema, Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at", "legacy_token_version"}}
+	if platformRolesOwned {
+		read.Also = []QueryAPIAuthTable{
+			{Table: "platform_role_assignments", Columns: []string{"principal_id", "role_key", "expires_at"}},
+			{Table: "principals", Columns: []string{"id", "kind", "disabled_at"}},
+		}
+	}
+	return read
 }
 
 // CheckQueryAPIAuthorization is query-api's readiness check when the deployment
@@ -307,10 +331,12 @@ func diffQueryAPIGrantsWithSessions(database string, posture RolePosture, sessio
 	if sessions != nil {
 		allowed[key("schema", sessions.Schema, "USAGE")] = struct{}{}
 		required[key("schema", sessions.Schema, "USAGE")] = "USAGE on schema " + sessions.Schema
-		for _, column := range sessions.Columns {
-			object := sessions.Schema + "." + sessions.Table + "." + column
-			allowed[key("column", object, "SELECT")] = struct{}{}
-			required[key("column", object, "SELECT")] = "SELECT on column " + object
+		for _, table := range sessions.Tables() {
+			for _, column := range table.Columns {
+				object := sessions.Schema + "." + table.Table + "." + column
+				allowed[key("column", object, "SELECT")] = struct{}{}
+				required[key("column", object, "SELECT")] = "SELECT on column " + object
+			}
 		}
 	}
 	held := map[string]struct{}{}

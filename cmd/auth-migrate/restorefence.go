@@ -117,6 +117,24 @@ func (s pgRestoreFenceStore) PendingActions(ctx context.Context, schema authsche
 }
 func (s pgRestoreFenceStore) Close() { s.pool.Close() }
 
+// envRevocationSource is the DSN (or _FILE) of the shadow restore that exported the manifest. apply reads the provider
+// revocations to queue again from it. Env only: it is never a flag.
+const envRevocationSource = "RESTORE_FENCE_SOURCE_URI"
+
+// openRevocationSource is replaced only by tests (TestTheDefaultRevocationSourceOpenerIsTheRealOne pins the default).
+var openRevocationSource = openPGRevocationSource
+
+// openPGRevocationSource connects to the shadow restore. The returned func closes it.
+func openPGRevocationSource(ctx context.Context, uri string, stderr io.Writer) (restorefence.RevocationSource, func(), error) {
+	poolConfig := postgresstore.DefaultConfig(uri)
+	poolConfig.MaxConns = 1
+	pool, err := newDatabaseWait(poolConfig, stderr).run(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	return restorefence.PGRevocationSource{Pool: pool}, pool.Close, nil
+}
+
 // openRestoreFenceStore is replaced only by tests (TestTheDefaultStoreOpenerIsTheRealOne pins the default).
 var openRestoreFenceStore = openPGRestoreFenceStore
 
@@ -158,6 +176,19 @@ func executeRestoreFence(parent context.Context, args []string, lookup secrets.L
 	if !present || authschema.ValidateIdentifier(runtimeRole) != nil {
 		fmt.Fprintf(stderr, "configuration error: %s is required\n", envRuntimeRole)
 		return 1
+	}
+	var sourceURI secrets.Value
+	sourceSet := false
+	if parsed.verb == "apply" {
+		sourceURI, sourceSet, err = secrets.ResolveDSNSetting(envRevocationSource, lookup)
+		if err != nil {
+			fmt.Fprintf(stderr, "configuration error: could not resolve %s\n", envRevocationSource)
+			return 1
+		}
+		if sourceSet && parsed.manifest == "" {
+			fmt.Fprintf(stderr, "configuration error: %s needs -manifest (a blind margin names no revocation to queue again); unset it\n", envRevocationSource)
+			return 1
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(parent, runBudget)
@@ -249,7 +280,17 @@ func executeRestoreFence(parent context.Context, args []string, lookup secrets.L
 		}
 		manifest = &parsedManifest
 	}
-	report, err := store.Apply(ctx, schema, manifest, restorefence.Options{Apply: parsed.apply, BlindMargin: parsed.blindMargin})
+	opts := restorefence.Options{Apply: parsed.apply, BlindMargin: parsed.blindMargin}
+	if sourceSet {
+		source, closeSource, err := openRevocationSource(ctx, sourceURI.Reveal(), stderr)
+		if err != nil {
+			fmt.Fprintln(stderr, "restore-fence error: the revocation source endpoint unavailable")
+			return 1
+		}
+		defer closeSource()
+		opts.Source = source
+	}
+	report, err := store.Apply(ctx, schema, manifest, opts)
 	if err != nil {
 		fmt.Fprintf(stderr, "restore-fence error: %v\n", err)
 		return 1

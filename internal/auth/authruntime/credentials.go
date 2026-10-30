@@ -186,7 +186,7 @@ func credentialRoutes(
 		return nil, nil, err
 	}
 	routes, err := authapi.CredentialRoutes(authapi.CredentialDeps{
-		Flows: flows, Sessions: sessions, Users: authapi.PGUsers{Pool: pool}, Issuer: issuer, Logger: logger, Limits: limits,
+		Flows: flows, Sessions: sessions, Users: pgUsers(cfg, pool, schema), Issuer: issuer, Logger: logger, Limits: limits,
 	})
 	if err != nil {
 		_ = sender.Close(context.Background())

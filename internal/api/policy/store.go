@@ -3,6 +3,7 @@ package policy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"strings"
 	"time"
@@ -11,6 +12,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 )
 
 // Impersonation is an active impersonation_sessions row
@@ -33,6 +36,73 @@ type PGStore struct {
 	// AuthSchema is the auth-service schema the sessions live in
 	// (AUTH_DATABASE_SCHEMA); empty means "auth".
 	AuthSchema string
+	// PlatformRolesOwned is AUTH_PLATFORM_ROLES_OWNED: is_superuser is read
+	// from the auth platform role assignments (rule.HoldsSQL), not from
+	// public users.is_superuser.
+	PlatformRolesOwned bool
+}
+
+// PlatformRoleRead is how a go-api read of public.users decides is_superuser:
+// the public column while not Owned (AUTH_PLATFORM_ROLES_OWNED off), else the
+// auth platform role rule (rule.HoldsSQL) over AuthSchema (empty: "auth") in
+// the same statement, so a failed auth read fails the read.
+type PlatformRoleRead struct {
+	Owned      bool
+	AuthSchema string
+}
+
+// Superuser is the is_superuser expression of a users read: offExpr (the
+// caller's own public column expression, byte-equal to the read before the
+// switch) while not Owned, else whether the users row idExpr holds
+// platform_admin now.
+func (p PlatformRoleRead) Superuser(offExpr, idExpr string) (string, error) {
+	if !p.Owned {
+		return offExpr, nil
+	}
+	name := p.AuthSchema
+	if name == "" {
+		name = defaultAuthSchema
+	}
+	if err := checkSchemaName(name); err != nil {
+		return "", fmt.Errorf("policy: auth schema: %w", err)
+	}
+	return rule.HoldsSQL(pgx.Identifier{name}.Sanitize(), idExpr, "'"+rule.PlatformAdmin+"'"), nil
+}
+
+// superuserColumn is the is_superuser column of the users reads: public
+// users.is_superuser, or while PlatformRolesOwned the platform role rule over
+// the auth schema in the same statement (a failure of it fails the read).
+func (s PGStore) superuserColumn() (string, error) {
+	return PlatformRoleRead{Owned: s.PlatformRolesOwned, AuthSchema: s.AuthSchema}.Superuser("is_superuser", "users.id")
+}
+
+// ReadsPlatformRoles implements Store.
+func (s PGStore) ReadsPlatformRoles() bool { return s.PlatformRolesOwned }
+
+// superuserGrant names, in a grant error, what the superuser read needs.
+func (s PGStore) superuserGrant() string {
+	if s.PlatformRolesOwned {
+		return ", and SELECT on <auth schema>.platform_role_assignments (principal_id, role_key, expires_at) and <auth schema>.principals (id, kind, disabled_at)"
+	}
+	return ""
+}
+
+// userStateSQL is UserState's statement.
+func (s PGStore) userStateSQL() (string, error) {
+	superuser, err := s.superuserColumn()
+	if err != nil {
+		return "", err
+	}
+	return `SELECT is_active, ` + superuser + `, token_version FROM users WHERE id = $1`, nil
+}
+
+// accessUserSQL is AccessUser's statement.
+func (s PGStore) accessUserSQL() (string, error) {
+	superuser, err := s.superuserColumn()
+	if err != nil {
+		return "", err
+	}
+	return `SELECT is_active, ` + superuser + `, token_version, email, username, full_name FROM users WHERE id = $1`, nil
 }
 
 func (s PGStore) now() time.Time {
@@ -48,14 +118,16 @@ func (s PGStore) now() time.Time {
 func (s PGStore) UserState(ctx context.Context, id uuid.UUID) (UserState, bool, error) {
 	var active, superuser *bool
 	var version *int64
-	err := s.Pool.QueryRow(ctx,
-		`SELECT is_active, is_superuser, token_version FROM users WHERE id = $1`, id,
-	).Scan(&active, &superuser, &version)
+	query, err := s.userStateSQL()
+	if err != nil {
+		return UserState{}, false, err
+	}
+	err = s.Pool.QueryRow(ctx, query, id).Scan(&active, &superuser, &version)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return UserState{}, false, nil
 	}
 	if err != nil {
-		return UserState{}, false, storeError(err, "SELECT on users (id, is_active, is_superuser, token_version)")
+		return UserState{}, false, storeError(err, "SELECT on users (id, is_active, is_superuser, token_version)"+s.superuserGrant())
 	}
 	state := UserState{IsActive: active != nil && *active, IsSuperuser: superuser != nil && *superuser}
 	if version != nil {

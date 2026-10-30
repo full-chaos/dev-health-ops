@@ -139,6 +139,9 @@ func TestReconcileEachGatedClassIsReported(t *testing.T) {
 		{DiffPasswordHash, func(r *Row, _ *AuthRow, _ *fakeTarget) { r.PasswordHash = nil }},
 		{DiffPlatformRole, func(r *Row, _ *AuthRow, _ *fakeTarget) { r.Superuser = true }},
 		{DiffPlatformRole, func(_ *Row, a *AuthRow, _ *fakeTarget) { a.RoleHeld, a.RoleBackfilled = true, true }},
+		{DiffPlatformRoleDisabled, func(r *Row, a *AuthRow, _ *fakeTarget) {
+			r.Active, r.Superuser, a.Active, a.RoleHeld, a.RoleBackfilled = false, true, false, false, true
+		}},
 		{DiffTokenVersion, func(_ *Row, a *AuthRow, _ *fakeTarget) { a.TokenVersion = 4 }},
 		{DiffIdentityMissing, func(r *Row, _ *AuthRow, tgt *fakeTarget) {
 			r.AuthProvider, r.AuthProviderID = str("github"), str("subject-1")

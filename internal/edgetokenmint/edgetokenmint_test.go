@@ -305,14 +305,14 @@ func TestLookupPrincipalRefusesEveryRowItMustNotMintFor(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			q := &fakeQuerier{row: tc.row}
-			if _, err := LookupPrincipal(context.Background(), q, testOrg); !errors.Is(err, tc.want) {
+			if _, err := LookupPrincipal(context.Background(), q, testOrg, Options{}); !errors.Is(err, tc.want) {
 				t.Fatalf("err = %v, want %v", err, tc.want)
 			}
 		})
 	}
 
 	readErr := errors.New("connection reset")
-	if _, err := LookupPrincipal(context.Background(), &fakeQuerier{row: fakeRow{err: readErr}}, testOrg); !errors.Is(err, readErr) || errors.Is(err, ErrPrincipalNotFound) {
+	if _, err := LookupPrincipal(context.Background(), &fakeQuerier{row: fakeRow{err: readErr}}, testOrg, Options{}); !errors.Is(err, readErr) || errors.Is(err, ErrPrincipalNotFound) {
 		t.Fatalf("a read failure must surface as itself, not as a missing row: %v", err)
 	}
 }
@@ -320,7 +320,7 @@ func TestLookupPrincipalRefusesEveryRowItMustNotMintFor(t *testing.T) {
 func TestLookupPrincipalReadsTheFixedPrincipalInTheRequestedOrg(t *testing.T) {
 	for _, role := range []string{"viewer", "member"} {
 		q := &fakeQuerier{row: principalRow(func(v []any) { v[7] = strPtr(role) })}
-		principal, err := LookupPrincipal(context.Background(), q, testOrg)
+		principal, err := LookupPrincipal(context.Background(), q, testOrg, Options{})
 		if err != nil {
 			t.Fatalf("role %s: %v", role, err)
 		}
@@ -341,7 +341,7 @@ func TestLookupPrincipalReadsTheFixedPrincipalInTheRequestedOrg(t *testing.T) {
 
 func TestLookupPrincipalRefusesANonUUIDOrgWithoutQuerying(t *testing.T) {
 	q := &fakeQuerier{row: principalRow(nil)}
-	if _, err := LookupPrincipal(context.Background(), q, "70d529e0"); err == nil {
+	if _, err := LookupPrincipal(context.Background(), q, "70d529e0", Options{}); err == nil {
 		t.Fatal("a non-UUID org was accepted")
 	}
 	if q.calls != 0 {
@@ -438,7 +438,7 @@ func adminRow(mutate func(values []any)) fakeRow {
 
 func TestLookupAdminPrincipalReadsItsOwnRowAndRefusesEveryOtherShape(t *testing.T) {
 	q := &fakeQuerier{row: adminRow(nil)}
-	principal, err := LookupAdminPrincipal(context.Background(), q, testOrg)
+	principal, err := LookupAdminPrincipal(context.Background(), q, testOrg, Options{})
 	if err != nil {
 		t.Fatalf("LookupAdminPrincipal: %v", err)
 	}
@@ -464,7 +464,7 @@ func TestLookupAdminPrincipalReadsItsOwnRowAndRefusesEveryOtherShape(t *testing.
 		"owner in org":            {row: adminRow(func(v []any) { v[7] = strPtr("owner") }), want: ErrRoleNotAllowed},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := LookupAdminPrincipal(context.Background(), &fakeQuerier{row: tc.row}, testOrg); !errors.Is(err, tc.want) {
+			if _, err := LookupAdminPrincipal(context.Background(), &fakeQuerier{row: tc.row}, testOrg, Options{}); !errors.Is(err, tc.want) {
 				t.Fatalf("err = %v, want %v", err, tc.want)
 			}
 		})
@@ -472,12 +472,12 @@ func TestLookupAdminPrincipalReadsItsOwnRowAndRefusesEveryOtherShape(t *testing.
 
 	// The read-level principal's lookup is unchanged: an admin row for it is
 	// still refused, so the two principals cannot swap roles.
-	if _, err := LookupPrincipal(context.Background(), &fakeQuerier{row: principalRow(func(v []any) { v[7] = strPtr("admin") })}, testOrg); !errors.Is(err, ErrRoleNotAllowed) {
+	if _, err := LookupPrincipal(context.Background(), &fakeQuerier{row: principalRow(func(v []any) { v[7] = strPtr("admin") })}, testOrg, Options{}); !errors.Is(err, ErrRoleNotAllowed) {
 		t.Fatalf("the proof principal holding admin: err = %v, want ErrRoleNotAllowed", err)
 	}
 	// ...and the proof lookup binds the proof principal's id, never the admin's.
 	proofQ := &fakeQuerier{row: principalRow(nil)}
-	if _, err := LookupPrincipal(context.Background(), proofQ, testOrg); err != nil || proofQ.args[0] != ProvePrincipalID {
+	if _, err := LookupPrincipal(context.Background(), proofQ, testOrg, Options{}); err != nil || proofQ.args[0] != ProvePrincipalID {
 		t.Fatalf("proof lookup bound %v (err %v), want %s", proofQ.args, err, ProvePrincipalID)
 	}
 }

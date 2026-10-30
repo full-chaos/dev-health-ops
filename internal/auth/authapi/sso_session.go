@@ -68,7 +68,7 @@ func (s SSOSessions) issue(ctx context.Context, principalID uuid.UUID, org *uuid
 	if err := s.h.Issuer.Preflight(ctx); err != nil {
 		return ssoIssued{}, fmt.Errorf("%w: %w", errSignerUnavailable, err)
 	}
-	issued, err := s.h.startSession(ctx, principalID, membership, nil, amr, provider)
+	issued, err := s.h.startSession(ctx, principalID, membership, amr, provider)
 	if err != nil {
 		return ssoIssued{}, err
 	}

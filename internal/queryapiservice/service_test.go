@@ -67,6 +67,41 @@ func reserve(t *testing.T, n int) []string {
 	return addrs
 }
 
+// startOnFreeAddrs starts the service on n fresh loopback addresses and returns them. Releasing a port and binding it
+// later is a race with every other process on the runner (CHAOS-11839): when the service exits because a freed port was
+// taken, the start is repeated on new addresses. It returns once the operator listener (addrs[operator]) answers
+// /readyz, or the service has exited for any other reason; that exit stays readable on r.done.
+func startOnFreeAddrs(t *testing.T, n, operator int, build func(addrs []string) (args []string, env map[string]string)) (running, []string) {
+	t.Helper()
+	for attempt := 1; ; attempt++ {
+		addrs := freeAddrs(t, n)
+		args, env := build(addrs)
+		r := start(t, args, env)
+		deadline := time.Now().Add(15 * time.Second)
+		for time.Now().Before(deadline) {
+			select {
+			case code := <-r.done:
+				if code != 0 && strings.Contains(r.stderr.String(), "address already in use") && attempt < 5 {
+					t.Logf("attempt %d: a freed address was taken before the service bound it; retrying on new addresses", attempt)
+					r.cancel()
+					goto again
+				}
+				exited := make(chan int, 1)
+				exited <- code
+				r.done = exited
+				return r, addrs
+			default:
+			}
+			if code, _ := get(t, "http://"+addrs[operator]+"/readyz"); code == http.StatusOK {
+				return r, addrs
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		return r, addrs
+	again:
+	}
+}
+
 type running struct {
 	done           <-chan int
 	stdout, stderr *bytes.Buffer
@@ -178,9 +213,10 @@ func stop(t *testing.T, r running) {
 // (health.NewServer's route, independent of this split) is the real, always-on scrape
 // target throughout, unaffected -- see TestOperatorMetricsCarryTheReadinessOutcomeCounter.
 func TestServesTheQueryRoutesAndTheOperatorSurfaceOnBothListenersForOneRelease(t *testing.T) {
-	addrs := freeAddrs(t, 2)
+	r, addrs := startOnFreeAddrs(t, 2, 1, func(addrs []string) ([]string, map[string]string) {
+		return []string{"--query-addr", addrs[0], "--http-addr", addrs[1]}, nil
+	})
 	query, operator := addrs[0], addrs[1]
-	r := start(t, []string{"--query-addr", query, "--http-addr", operator}, nil)
 	waitFor(t, r, "http://"+operator+"/healthz", http.StatusOK)
 	body := waitFor(t, r, "http://"+operator+"/readyz", http.StatusOK)
 	if strings.TrimSpace(body) != `{"status":"ok"}` {
@@ -226,9 +262,10 @@ func TestServesTheQueryRoutesAndTheOperatorSurfaceOnBothListenersForOneRelease(t
 // The operator /metrics carries what the query code records: the readiness outcome
 // counter, with the "no /query configured" mode countable apart from a healthy one.
 func TestOperatorMetricsCarryTheReadinessOutcomeCounter(t *testing.T) {
-	addrs := freeAddrs(t, 2)
-	query, operator := addrs[0], addrs[1]
-	r := start(t, []string{"--query-addr", query, "--http-addr", operator}, nil)
+	r, addrs := startOnFreeAddrs(t, 2, 1, func(addrs []string) ([]string, map[string]string) {
+		return []string{"--query-addr", addrs[0], "--http-addr", addrs[1]}, nil
+	})
+	operator := addrs[1]
 	waitFor(t, r, "http://"+operator+"/readyz", http.StatusOK)
 	body := waitFor(t, r, "http://"+operator+"/metrics", http.StatusOK)
 	if !strings.Contains(body, "devhealth_query_api_readyz_total") || !strings.Contains(body, `outcome="not_configured"`) {
@@ -303,17 +340,23 @@ func TestATakenQueryAddressFailsTheStart(t *testing.T) {
 // The environment names the same settings as the flags (the chart's declared-only
 // contract): QUERY_API_ADDR alone moves the query listener; a flag beats it.
 func TestSettingsComeFromTheFlagsThenTheEnvironment(t *testing.T) {
-	addrs := freeAddrs(t, 3)
-	envQuery, flagQuery, operator := addrs[0], addrs[1], addrs[2]
-	r := start(t, []string{"--http-addr", operator}, map[string]string{"QUERY_API_ADDR": envQuery})
+	r, addrs := startOnFreeAddrs(t, 2, 1, func(addrs []string) ([]string, map[string]string) {
+		return []string{"--http-addr", addrs[1]}, map[string]string{"QUERY_API_ADDR": addrs[0]}
+	})
+	envQuery, operator := addrs[0], addrs[1]
 	waitFor(t, r, "http://"+operator+"/readyz", http.StatusOK)
 	waitFor(t, r, "http://"+envQuery+"/registry", http.StatusNotFound)
 	stop(t, r)
 
-	r = start(t, []string{"--http-addr", operator, "--query-addr", flagQuery}, map[string]string{"QUERY_API_ADDR": envQuery})
+	var envLoser string
+	r, addrs = startOnFreeAddrs(t, 3, 1, func(addrs []string) ([]string, map[string]string) {
+		envLoser = addrs[2]
+		return []string{"--http-addr", addrs[1], "--query-addr", addrs[0]}, map[string]string{"QUERY_API_ADDR": addrs[2]}
+	})
+	flagQuery, operator := addrs[0], addrs[1]
 	waitFor(t, r, "http://"+operator+"/readyz", http.StatusOK)
 	waitFor(t, r, "http://"+flagQuery+"/registry", http.StatusNotFound)
-	if connection, err := net.DialTimeout("tcp", envQuery, time.Second); err == nil {
+	if connection, err := net.DialTimeout("tcp", envLoser, time.Second); err == nil {
 		_ = connection.Close()
 		t.Fatal("the environment address is served although a flag names another: the flag must win")
 	}
@@ -327,9 +370,10 @@ func TestSettingsComeFromTheFlagsThenTheEnvironment(t *testing.T) {
 // -- reachable on the internal address, absent on the public query address, the exact
 // pairing CHAOS-7097's route-set split exists to make structural.
 func TestOpensTheInternalListenerWhenItsAddressIsSet(t *testing.T) {
-	addrs := freeAddrs(t, 3)
+	r, addrs := startOnFreeAddrs(t, 3, 2, func(addrs []string) ([]string, map[string]string) {
+		return []string{"--query-addr", addrs[0], "--internal-addr", addrs[1], "--http-addr", addrs[2]}, nil
+	})
 	query, internal, operator := addrs[0], addrs[1], addrs[2]
-	r := start(t, []string{"--query-addr", query, "--internal-addr", internal, "--http-addr", operator}, nil)
 	waitFor(t, r, "http://"+operator+"/readyz", http.StatusOK)
 	waitFor(t, r, "http://"+query+"/registry", http.StatusNotFound)
 	waitFor(t, r, "http://"+internal+"/registry", http.StatusNotFound)
@@ -353,9 +397,10 @@ func TestOpensTheInternalListenerWhenItsAddressIsSet(t *testing.T) {
 // no /registry, /buildinfo or /metrics fallthrough (here /query itself is not
 // configured, so every path answers 404), and it closes on shutdown.
 func TestOpensTheMCPListenerWhenItsAddressIsSet(t *testing.T) {
-	addrs := freeAddrs(t, 4)
-	query, internal, mcp, operator := addrs[0], addrs[1], addrs[2], addrs[3]
-	r := start(t, []string{"--query-addr", query, "--internal-addr", internal, "--mcp-addr", mcp, "--mcp-boundary", "networkpolicy", "--http-addr", operator}, nil)
+	r, addrs := startOnFreeAddrs(t, 4, 3, func(addrs []string) ([]string, map[string]string) {
+		return []string{"--query-addr", addrs[0], "--internal-addr", addrs[1], "--mcp-addr", addrs[2], "--mcp-boundary", "networkpolicy", "--http-addr", addrs[3]}, nil
+	})
+	internal, mcp, operator := addrs[1], addrs[2], addrs[3]
 	waitFor(t, r, "http://"+operator+"/readyz", http.StatusOK)
 	waitFor(t, r, "http://"+internal+"/metrics", http.StatusOK)
 	for _, path := range []string{"/metrics", "/healthz", "/readyz", "/registry", "/buildinfo", "/query"} {
@@ -390,9 +435,10 @@ func TestTheMCPListenerStartsOnlyWithItsBoundaryMarker(t *testing.T) {
 		"neither":                           {func(string) []string { return nil }, false, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
-			addrs := freeAddrs(t, 3)
-			mcp, operator, query := addrs[0], addrs[1], addrs[2]
-			r := start(t, append([]string{"--http-addr", operator, "--query-addr", query}, tc.extra(mcp)...), nil)
+			r, addrs := startOnFreeAddrs(t, 3, 1, func(addrs []string) ([]string, map[string]string) {
+				return append([]string{"--http-addr", addrs[1], "--query-addr", addrs[2]}, tc.extra(addrs[0])...), nil
+			})
+			mcp, operator := addrs[0], addrs[1]
 			if tc.refuse {
 				select {
 				case code := <-r.done:
@@ -561,9 +607,9 @@ func TestAStartSurvivesAnAddressTakenAfterItWasFreed(t *testing.T) {
 	}
 	t.Cleanup(func() { afterFreed = nil })
 
-	addrs := freeAddrs(t, 2)
-	query, operator := addrs[0], addrs[1]
-	r := start(t, []string{"--query-addr", query, "--http-addr", operator}, nil)
-	waitFor(t, r, "http://"+operator+"/readyz", http.StatusOK)
+	r, addrs := startOnFreeAddrs(t, 2, 1, func(addrs []string) ([]string, map[string]string) {
+		return []string{"--query-addr", addrs[0], "--http-addr", addrs[1]}, nil
+	})
+	waitFor(t, r, "http://"+addrs[1]+"/readyz", http.StatusOK)
 	stop(t, r)
 }

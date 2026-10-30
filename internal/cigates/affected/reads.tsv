@@ -33,6 +33,7 @@ internal/auth/identity/oidc	test	ci
 internal/auth/identity/saml	test	ci
 internal/auth/ratelimitvalkey	test	deploy
 internal/auth/ratelimitvalkey	test	docs
+internal/auth/revisionfeed	test	contracts
 internal/bigboycompose	test	.env.example
 internal/bigboycompose	test	ci
 internal/bigboycompose	test	compose.yml
@@ -214,6 +215,7 @@ internal/storage/river	test	contracts
 internal/syncdispatchcontract	test	contracts
 internal/syncroute	test	contracts
 internal/testsupport/authrows	test	ci
+internal/testsupport/bigboydir	code	ci
 internal/testsupport/providerstub	test	ci
 internal/testsupport/ratchet	code	ci
 internal/testsupport/ratchet/cmd/ratchets	test	ci

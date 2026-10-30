@@ -3,12 +3,15 @@ package sso
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/auth/emaildomain"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
@@ -69,6 +72,9 @@ func (h handlers) provisionOrGetUser(ctx context.Context, row *providerRow, emai
 		return nil, nil, err
 	}
 	if err := refuseUnusableEmail(email); err != nil {
+		return nil, nil, err
+	}
+	if err := checkAllowedDomain(row, email); err != nil {
 		return nil, nil, err
 	}
 	userID, found, err := h.resolveProviderIdentity(ctx, authProviderValue, providerID, externalID, email)
@@ -141,12 +147,46 @@ func refuseUnusableSubject(authProvider, externalID string) error {
 // no value.
 var errInvalidProviderEmail = errors.New("sso: the identity provider returned an unusable email address")
 
-// refuseUnusableEmail is the one email text rule of the sign-in callbacks (OIDC, SAML, OAuth): the shared pyjson rule
-// for an address (lone surrogate, invalid UTF-8, NUL, control characters, U+FFFD after the edge trim), applied before
-// any database statement, so the answer never depends on which accounts exist.
+// refuseUnusableEmail is the one email text rule of the sign-in callbacks (OIDC, SAML, OAuth): identity.RefuseProviderEmail,
+// the rule auth-service applies too (lone surrogate, invalid UTF-8, NUL, control characters, U+FFFD after the edge
+// trim), applied before any database statement, so the answer never depends on which accounts exist.
 func refuseUnusableEmail(email string) error {
-	if pyjson.BadTextForm(pyjson.ClassEmail, email) != pyjson.TextFormNone {
+	if identity.RefuseProviderEmail(email) != nil {
 		return errInvalidProviderEmail
+	}
+	return nil
+}
+
+// errProviderEmailMalformed: a provider with an allowlist returned an address without "@".
+var errProviderEmailMalformed = errors.New("sso: the identity provider returned an address without a domain")
+
+// domainNotAllowedError: the address's domain is not on the provider's allowlist. Its text names no value; the domain
+// goes to the server log only, never to the answer or the audit row.
+type domainNotAllowedError struct{ domain string }
+
+func (*domainNotAllowedError) Error() string {
+	return "sso: email domain is not allowed for this provider"
+}
+
+// domainNotAllowedText is the 403 detail of a refused domain, the text auth-service answers; it names no domain.
+const domainNotAllowedText = "Email domain is not allowed for this provider"
+
+// checkAllowedDomain is the allowlist check of the OIDC and SAML callbacks. It runs after the subject and email rules
+// and before any database statement; an empty or absent allowlist allows every domain.
+func checkAllowedDomain(row *providerRow, email string) error {
+	allowedDomains, err := decodeAllowedDomains(row.AllowedDomains)
+	if err != nil {
+		return fmt.Errorf("decode allowed domains: %w", err)
+	}
+	if len(allowedDomains) == 0 {
+		return nil
+	}
+	at := strings.LastIndex(email, "@")
+	if at < 0 {
+		return errProviderEmailMalformed
+	}
+	if domain := email[at+1:]; !emaildomain.Allowed(allowedDomains, domain) {
+		return &domainNotAllowedError{domain: domain}
 	}
 	return nil
 }

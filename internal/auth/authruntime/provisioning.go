@@ -18,7 +18,7 @@ import (
 )
 
 // provisioningProfileRows is the endpoint-profile document the provisioning routes are checked against; nil is the
-// document the binary embeds. A test plants another one (the reactivate route is mounted only with its row).
+// document the binary embeds. A test plants another one (the suspend route is mounted only with its row).
 var provisioningProfileRows []byte
 
 // provisioningRoutes builds the internal membership, invite and organization

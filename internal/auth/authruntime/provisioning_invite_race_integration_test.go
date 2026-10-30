@@ -61,14 +61,16 @@ func (e *routesEnv) inviteRowsFor(t *testing.T, ctx context.Context, org uuid.UU
 	return n
 }
 
-// waitForALockWait returns once a backend waits for a row lock, or fails the
-// test if answered closes first or no wait shows within the bound.
-func (e *routesEnv) waitForALockWait(t *testing.T, ctx context.Context, answered <-chan answer) {
+// waitForALockWait returns once a backend waits for a lock that the backend
+// blocker holds, or fails the test if answered closes first or no wait shows
+// within the bound.
+func (e *routesEnv) waitForALockWait(t *testing.T, ctx context.Context, blocker int32, answered <-chan answer) {
 	t.Helper()
 	bound := time.After(10 * time.Second)
 	for {
 		var waiting int
-		if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM pg_locks WHERE NOT granted`).Scan(&waiting); err != nil {
+		if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE $1::int = ANY(pg_blocking_pids(pid))`, blocker).
+			Scan(&waiting); err != nil {
 			t.Fatal(err)
 		}
 		if waiting > 0 {
@@ -164,6 +166,7 @@ func TestInviteCreateWaitsForTheActorsDemotion(t *testing.T) {
 		t.Fatal(err)
 	}
 	held, release := make(chan struct{}), make(chan struct{})
+	var demotionPID int32
 	var once sync.Once
 	free := func() { once.Do(func() { close(release) }) }
 	defer free()
@@ -171,10 +174,11 @@ func TestInviteCreateWaitsForTheActorsDemotion(t *testing.T) {
 	go func() {
 		_, err := members.ChangeRole(ctx, membership.Change{OrgID: org, PrincipalID: admin, Role: "viewer",
 			Actor: membership.Actor{PrincipalID: &owner},
-			Authorize: func(context.Context, audit.TxOps, membership.Locked) error {
+			Authorize: func(ctx context.Context, tx audit.TxOps, _ membership.Locked) error {
+				err := tx.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&demotionPID)
 				close(held)
 				<-release
-				return nil
+				return err
 			}})
 		demoted <- err
 	}()
@@ -184,7 +188,7 @@ func TestInviteCreateWaitsForTheActorsDemotion(t *testing.T) {
 		t.Fatalf("the demotion ended before its Authorize: %v", err)
 	}
 	created := e.createInviteAsync(t, header, org, admin, acctMail())
-	e.waitForALockWait(t, ctx, created)
+	e.waitForALockWait(t, ctx, demotionPID, created)
 	free()
 	if err := <-demoted; err != nil {
 		t.Fatalf("demotion: %v", err)
@@ -224,8 +228,12 @@ func TestInviteCreateWaitsForGoAPIsWriteOfTheActor(t *testing.T) {
 			if _, err := tx.Exec(ctx, c.sql, org, admin); err != nil {
 				t.Fatal(err)
 			}
+			var writerPID int32
+			if err := tx.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&writerPID); err != nil {
+				t.Fatal(err)
+			}
 			created := e.createInviteAsync(t, header, org, admin, acctMail())
-			e.waitForALockWait(t, ctx, created)
+			e.waitForALockWait(t, ctx, writerPID, created)
 			if err := tx.Commit(ctx); err != nil {
 				t.Fatal(err)
 			}

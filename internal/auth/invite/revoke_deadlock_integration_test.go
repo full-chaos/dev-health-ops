@@ -50,12 +50,14 @@ VALUES ($1, $2, $3, 'member', $4, $5, 'pending', $6, now(), now())`, id, org, ad
 	free := func() { once.Do(func() { close(release) }) }
 	defer free()
 	revoked := make(chan error, 1)
+	var revokePID int32
 	go func() {
 		revoked <- e.store.Revoke(ctx, RevokeInput{OrgID: org, InviteID: id, Actor: Actor{PrincipalID: &a},
-			Authorize: func(context.Context, audit.TxOps, uuid.UUID) error {
+			Authorize: func(ctx context.Context, tx audit.TxOps, _ uuid.UUID) error {
+				err := tx.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&revokePID)
 				close(inAuthorize)
 				<-release
-				return nil
+				return err
 			}})
 	}()
 	select {
@@ -63,20 +65,33 @@ VALUES ($1, $2, $3, 'member', $4, $5, 'pending', $6, now(), now())`, id, org, ad
 	case err := <-revoked:
 		t.Fatalf("the revoke ended before its Authorize: %v", err)
 	}
+	// An unrelated lock wait in the same cluster, held for the whole test: a
+	// wait that counted every ungranted lock would end at once, before the
+	// demotion even starts.
+	plantUnrelatedLockWait(t, ctx, e)
 	demoted := make(chan error, 1)
-	go func() {
-		_, err := e.members.ChangeRole(ctx, membership.Change{OrgID: org, PrincipalID: b, Role: "viewer",
-			Actor: membership.Actor{PrincipalID: &a}, Authorize: allowAll})
-		demoted <- err
-	}()
+	var startDemotion sync.Once
+	started := false
+	demote := func() {
+		started = true
+		go func() {
+			_, err := e.members.ChangeRole(ctx, membership.Change{OrgID: org, PrincipalID: b, Role: "viewer",
+				Actor: membership.Actor{PrincipalID: &a}, Authorize: allowAll})
+			demoted <- err
+		}()
+	}
 	bound := time.After(10 * time.Second)
+	// Only a backend that the revoke blocks counts: the demotion. The first
+	// check runs before the demotion starts, so it must find none.
 	for waiting := 0; waiting == 0; {
-		if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM pg_locks WHERE NOT granted`).Scan(&waiting); err != nil {
+		if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE $1::int = ANY(pg_blocking_pids(pid))`, revokePID).
+			Scan(&waiting); err != nil {
 			t.Fatal(err)
 		}
 		if waiting > 0 {
 			break
 		}
+		startDemotion.Do(demote)
 		select {
 		case err := <-demoted:
 			t.Fatalf("the demotion of the inviter ended while the revoke held its rows: %v", err)
@@ -84,6 +99,9 @@ VALUES ($1, $2, $3, 'member', $4, $5, 'pending', $6, now(), now())`, id, org, ad
 			t.Fatal("the demotion of the inviter never waited for the revoke")
 		case <-time.After(20 * time.Millisecond):
 		}
+	}
+	if !started {
+		t.Fatal("the wait for the demotion ended before the demotion started")
 	}
 	free()
 	if err := <-revoked; err != nil {
@@ -101,5 +119,46 @@ VALUES ($1, $2, $3, 'member', $4, $5, 'pending', $6, now(), now())`, id, org, ad
 	}
 	if invitedBy == nil || *invitedBy != b {
 		t.Fatalf("auth.invites.invited_by = %v, want the inviter %s", invitedBy, b)
+	}
+}
+
+// plantUnrelatedLockWait makes one backend wait for a row lock another holds,
+// on a scratch table, until the test ends.
+func plantUnrelatedLockWait(t *testing.T, ctx context.Context, e *env) {
+	t.Helper()
+	if _, err := e.admin.Exec(ctx, `CREATE TABLE IF NOT EXISTS public.lock_wait_probe (id int PRIMARY KEY);
+INSERT INTO public.lock_wait_probe (id) VALUES (1) ON CONFLICT DO NOTHING`); err != nil {
+		t.Fatal(err)
+	}
+	holder, err := e.admin.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := holder.Exec(ctx, `SELECT id FROM public.lock_wait_probe WHERE id = 1 FOR UPDATE`); err != nil {
+		t.Fatal(err)
+	}
+	waited := make(chan struct{})
+	go func() {
+		defer close(waited)
+		_, _ = e.admin.Exec(context.Background(), `UPDATE public.lock_wait_probe SET id = 1 WHERE id = 1`)
+	}()
+	t.Cleanup(func() {
+		_ = holder.Rollback(context.Background())
+		<-waited
+	})
+	bound := time.After(10 * time.Second)
+	for {
+		var waiting int
+		if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM pg_locks WHERE NOT granted`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			return
+		}
+		select {
+		case <-bound:
+			t.Fatal("the unrelated lock wait never started")
+		case <-time.After(20 * time.Millisecond):
+		}
 	}
 }

@@ -2,7 +2,6 @@ package routing_test
 
 import (
 	"os"
-	"path/filepath"
 	"reflect"
 	"regexp"
 	"sort"
@@ -10,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/cigates/routing"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/bigboydir"
 )
 
 // CHAOS-6987 (D2735): bigboy's plane-split router rules match Host(`traefik`) ONLY. Traefik on bigboy has one
@@ -75,7 +75,7 @@ func TestLabelRulesAreInternalOnly(t *testing.T) {
 }
 
 func TestCheckedInExampleIsInternalOnly(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join(routingRepoRoot(t), "ci", "bigboy", "traefik-dynamic-planes.yml.example"))
+	raw, err := os.ReadFile(bigboydir.Path(t, routingRepoRoot(t), "traefik-dynamic-planes.yml.example"))
 	if err != nil {
 		t.Fatal(err)
 	}

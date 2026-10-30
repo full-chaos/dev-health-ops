@@ -33,7 +33,7 @@ func TestEverySectionNamesItsTableAndKeepsAuthAndLegacySeparate(t *testing.T) {
 			prefix = "public."
 		}
 		idsSuffix := s.suffix == ".ids" && (s.kind == kindTombstone || s.kind == kindPresence || s.kind == kindRetire)
-		revokeSuffix := (s.suffix == ".expiry" || s.suffix == ".secret" || s.suffix == ".scope" || s.suffix == ".role" || s.suffix == ".superuser") && s.kind == kindRevoke
+		revokeSuffix := (s.suffix == ".expiry" || s.suffix == ".secret" || s.suffix == ".scope" || s.suffix == ".role" || s.suffix == ".superuser" || s.suffix == ".password") && s.kind == kindRevoke
 		if s.suffix != "" && !idsSuffix && !revokeSuffix {
 			t.Errorf("section %q: a name suffix is the .ids suffix of a tombstone, presence or retire section, or the .expiry/.secret suffix of a second revoke section", s.name)
 		}

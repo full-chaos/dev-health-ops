@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
@@ -27,6 +28,8 @@ var (
 	ErrDomainNotAllowed      = errors.New("saml: email domain is not allowed for this provider")
 	ErrAutoProvisionDisabled = errors.New("saml: user not found and auto-provisioning disabled")
 	ErrAccountDisabled       = errors.New("saml: account is disabled")
+	// ErrUnusableEmail: the asserted email fails the shared provider email text rule.
+	ErrUnusableEmail = identity.ErrUnusableProviderEmail
 	// ErrSessionUnavailable: tokens cannot be minted now; ACS answers 503.
 	ErrSessionUnavailable = errors.New("saml: the session cannot be issued now")
 )
@@ -242,6 +245,10 @@ func (s *Service) ConsumeFor(ctx context.Context, p Provider, posted string, coo
 		return SignIn{}, s.refuse(ctx, p, refused(ReasonNameID, "NameID cannot key an identity"))
 	}
 	id := Identity{Issuer: v.Issuer, Provider: p.ID.String(), Subject: subject}
+	email := s.email(p, v)
+	if identity.RefuseProviderEmail(email) != nil {
+		return SignIn{}, s.refuse(ctx, p, ErrUnusableEmail)
+	}
 	legacy := &LegacyMatch{AuthProvider: "saml", Subject: v.NameID.Value, MembershipOrg: p.OrgID}
 	principal, found, err := s.Store.IdentityBySubject(ctx, id, legacy)
 	if errors.Is(err, ErrNotOrgMember) || errors.Is(err, ErrIdentityAmbiguous) {
@@ -251,7 +258,6 @@ func (s *Service) ConsumeFor(ctx context.Context, p Provider, posted string, coo
 		return SignIn{}, err
 	}
 	if !found {
-		email := s.email(p, v)
 		if email == "" {
 			return SignIn{}, s.refuse(ctx, p, ErrEmailMissing)
 		}
@@ -419,7 +425,8 @@ func OutcomeReason(err error) string {
 		return "membership_required"
 	case errors.Is(err, ErrIdentityAmbiguous):
 		return "identity_conflict"
-	case errors.Is(err, ErrEmailMissing), errors.Is(err, ErrEmailMalformed), errors.Is(err, ErrInvalidEmailAddress):
+	case errors.Is(err, ErrEmailMissing), errors.Is(err, ErrEmailMalformed), errors.Is(err, ErrInvalidEmailAddress),
+		errors.Is(err, ErrUnusableEmail):
 		return "malformed"
 	}
 	var r *RefusedError

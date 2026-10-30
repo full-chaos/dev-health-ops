@@ -155,6 +155,18 @@ func (g *superuserTx) refuse(targetIDs ...uuid.UUID) bool {
 	return g.h.refuseSuperuserWrite(g.ctx, g.w, g.user, g.requested, target, g.route)
 }
 
+// keyShare locks a users row the write only references (its foreign key
+// check's lock) FOR KEY SHARE, in this transaction. A missing row is no error
+// here. On a failure it writes the error response and returns false.
+func (g *superuserTx) keyShare(id uuid.UUID) bool {
+	if _, err := g.tx.Exec(g.ctx, `SELECT 1 FROM users WHERE id = $1 FOR KEY SHARE`, id); err != nil {
+		g.h.logger.ErrorContext(g.ctx, "admin: key-share lock failed", "route", g.route, "error", err)
+		policy.WriteInternal(g.w)
+		return false
+	}
+	return true
+}
+
 // superuserGuardedWrite is the seam for every admin write that targets a
 // user. write runs in one transaction and calls g.refuse before its first
 // write there. It returns the success response, or nil after it wrote an

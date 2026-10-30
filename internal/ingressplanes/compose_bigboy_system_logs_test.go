@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/bigboydir"
 )
 
 const (
@@ -57,7 +59,7 @@ func bigboySystemLogsFindings(text []byte) ([]string, error) {
 }
 
 func TestBigboyComposeMountsSystemLogs(t *testing.T) {
-	text, err := os.ReadFile(repoFile(t, bigboyComposePath))
+	text, err := os.ReadFile(bigboydir.Path(t, repoFile(t, "."), "compose.bigboy.yml"))
 	if err != nil {
 		t.Fatalf("read %s: %v", bigboyComposePath, err)
 	}

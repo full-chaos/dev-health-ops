@@ -107,14 +107,16 @@ func lifetime(requested *time.Duration) (time.Duration, error) {
 	return *requested, nil
 }
 
-// decideRevoke: pending -> revoked; a repeat is a no-op; an accepted invite
-// stays accepted (revocation is monotonic, never a way back).
-func decideRevoke(s Status) (noop bool, err error) {
-	switch s {
-	case StatusPending:
-		return false, nil
-	case StatusRevoked:
+// decideRevoke: pending and unexpired -> revoked; a repeat is a no-op; an
+// accepted invite stays accepted (revocation is monotonic, never a way back),
+// and an expired one is no longer pending either. An invite is still valid at
+// its expires_at instant.
+func decideRevoke(s Status, expiresAt, now time.Time) (noop bool, err error) {
+	switch {
+	case s == StatusRevoked:
 		return true, nil
+	case s == StatusPending && !expiresAt.Before(now):
+		return false, nil
 	}
 	return false, ErrNotPending
 }

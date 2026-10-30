@@ -11,8 +11,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 )
 
@@ -85,7 +88,7 @@ func TestOrgsBackfillInsertsThenRerunChangesNothing(t *testing.T) {
 
 	rep := e.runOrgs(t, ctx, false)
 	if rep.OrgsInserted < 2 || rep.MembershipsInserted != 3 || rep.SkippedTotal() != 0 || rep.AuthOnlyMemberships != 0 {
-		t.Fatalf("first run: %+v", rep)
+		t.Fatalf("first run counts: got %+v, want 3 inserted, 1 inviter set, 1 unresolved, 0 skipped", rep)
 	}
 	if e.count(t, ctx, `SELECT count(*) FROM auth.memberships WHERE organization_id = $1 AND status = 'active' AND role IN ('owner','viewer')`, active) != 2 {
 		t.Fatal("memberships not as mapped")
@@ -311,5 +314,270 @@ func TestOrgsVerbAuthOnlyOrganizationStopsTheCutoverButExitsZero(t *testing.T) {
 	}
 	if e.count(t, ctx, `SELECT count(*) FROM auth.organizations WHERE id = $1`, orphan) != 1 {
 		t.Fatal("the auth-only organization was removed")
+	}
+}
+
+func (e *reconEnv) seedMemberInvitedBy(t *testing.T, ctx context.Context, org, user uuid.UUID, role string, inviter *uuid.UUID) {
+	t.Helper()
+	if _, err := e.admin.Exec(ctx, `INSERT INTO public.memberships (id, user_id, org_id, role, invited_by_id, joined_at, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, now(), now(), now())`, uuid.New(), user, org, role, inviter); err != nil {
+		t.Fatalf("seed public.memberships: %v", err)
+	}
+}
+
+func (e *reconEnv) authInviter(t *testing.T, ctx context.Context, org, user uuid.UUID) *uuid.UUID {
+	t.Helper()
+	var v *uuid.UUID
+	if err := e.admin.QueryRow(ctx, `SELECT invited_by FROM auth.memberships WHERE organization_id = $1 AND principal_id = $2`, org, user).Scan(&v); err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+// nullAuthJoin clears an auth membership's joined_at through audit.Commit (the runtime role has no raw path).
+func (e *reconEnv) nullAuthJoin(t *testing.T, ctx context.Context, org, user uuid.UUID) {
+	t.Helper()
+	var id uuid.UUID
+	if err := e.admin.QueryRow(ctx, `SELECT id FROM auth.memberships WHERE organization_id = $1 AND principal_id = $2`, org, user).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	orgText, subject, target := org.String(), user.String(), id.String()
+	if err := audit.Commit(ctx, e.runtime, e.schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			_, err := tx.Exec(ctx, `UPDATE auth.memberships SET joined_at = NULL, updated_at = clock_timestamp() WHERE id = $1`, id)
+			return err
+		},
+		Audit: audit.AuditEvent{
+			EventType: "auth.membership.status_changed", Outcome: audit.OutcomeAllowed, OrganizationID: &orgText, SubjectPrincipalID: &subject,
+			Attributes: map[string]any{"reason_code": "membership_status_changed", "target_kind": "membership", "target_id": target},
+		},
+		Events: []audit.OutboxEvent{{AggregateType: "membership", AggregateID: provisioning.WireID("membership", target),
+			EventType: "membership.activated", Change: map[string]any{"status": "active"}}},
+	}); err != nil {
+		t.Fatalf("clear joined_at: %v", err)
+	}
+}
+
+func TestOrgsBackfillFillsInviterAndJoinAndKeepsWhatAuthHolds(t *testing.T) {
+	e := getReconEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	org, _ := e.seedOrg(t, ctx, true)
+	inv1 := e.seed(t, ctx, uniq("iv"), true, true)
+	inv2 := e.seed(t, ctx, uniq("iv"), true, true)
+	m1 := e.seed(t, ctx, uniq("iv"), true, true)
+	m2 := e.seed(t, ctx, uniq("iv"), true, true)
+	m3 := e.seed(t, ctx, uniq("iv"), true, true)
+	e.backfill(t, ctx)
+	// The organization is in the auth schema before the memberships: a dry run over a not-yet-inserted organization cannot resolve an inviter.
+	e.runOrgs(t, ctx, false)
+	// An inviter go-api has but the auth schema has no principal for.
+	ghost := e.seed(t, ctx, uniq("iv"), true, true)
+	e.seedMemberInvitedBy(t, ctx, org, m1, "member", &inv1)
+	e.seedMemberInvitedBy(t, ctx, org, m2, "member", nil)
+	e.seedMemberInvitedBy(t, ctx, org, m3, "member", &ghost)
+
+	before := e.writes(t, ctx)
+	dry := e.runOrgs(t, ctx, true)
+	if dry.MembershipsInserted != 3 || dry.InvitersSet != 1 || dry.InviterUnresolved != 1 || dry.SkippedTotal() != 0 {
+		t.Fatalf("dry run counts: got %+v, want 3 inserted, 1 inviter set, 1 unresolved, 0 skipped", dry)
+	}
+	if got := e.writes(t, ctx); got != before {
+		t.Fatalf("dry run wrote: got audit/outbox/revision %v, want %v", got, before)
+	}
+	if got := e.count(t, ctx, `SELECT count(*) FROM auth.memberships WHERE organization_id = $1 AND principal_id = $2`, org, m1); got != 0 {
+		t.Fatalf("auth membership rows of m1 after a dry run: got %d, want 0", got)
+	}
+
+	rep := e.runOrgs(t, ctx, false)
+	if rep.MembershipsInserted != 3 || rep.InvitersSet != 1 || rep.InviterUnresolved != 1 || rep.SkippedTotal() != 0 {
+		t.Fatalf("first run: %+v", rep)
+	}
+	if got := e.authInviter(t, ctx, org, m1); got == nil || *got != inv1 {
+		t.Fatalf("m1 inviter = %v, want %v", got, inv1)
+	}
+	for name, u := range map[string]uuid.UUID{"m2 (no public inviter)": m2, "m3 (unresolved inviter)": m3} {
+		if got := e.authInviter(t, ctx, org, u); got != nil {
+			t.Fatalf("%s: auth inviter got %v, want nil", name, got)
+		}
+	}
+
+	// A value auth holds is never overwritten by public.
+	if _, err := e.admin.Exec(ctx, `UPDATE public.memberships SET invited_by_id = $3 WHERE org_id = $1 AND user_id = $2`, org, m1, inv2); err != nil {
+		t.Fatal(err)
+	}
+	// A missing inviter is filled once the principal exists and public has one.
+	if _, err := e.admin.Exec(ctx, `UPDATE public.memberships SET invited_by_id = $3 WHERE org_id = $1 AND user_id = $2`, org, m2, inv2); err != nil {
+		t.Fatal(err)
+	}
+	rep = e.runOrgs(t, ctx, false)
+	if rep.InvitersSet != 1 || rep.MembershipsInserted != 0 {
+		t.Fatalf("fill run counts: got %+v, want 1 inviter set, 0 inserted", rep)
+	}
+	if got := e.authInviter(t, ctx, org, m1); got == nil || *got != inv1 {
+		t.Fatalf("auth inviter of m1 overwritten: got %v, want %v", got, inv1)
+	}
+	if got := e.authInviter(t, ctx, org, m2); got == nil || *got != inv2 {
+		t.Fatalf("m2 inviter = %v, want %v", got, inv2)
+	}
+	if got := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.membership.projected'
+AND attributes->'changed_fields' = '["invited_by"]'::jsonb AND attributes->>'reason_code' = 'membership_added'`); got != 1 {
+		t.Fatalf("projected-membership audit rows naming invited_by: got %d, want 1", got)
+	}
+
+	// A cleared auth join time is filled from public, once.
+	e.nullAuthJoin(t, ctx, org, m1)
+	rep = e.runOrgs(t, ctx, false)
+	if rep.JoinedSet != 1 || rep.InvitersSet != 0 {
+		t.Fatalf("join fill run counts: got %+v, want 1 joined set, 0 inviter set", rep)
+	}
+	if got := e.count(t, ctx, `SELECT count(*) FROM auth.memberships a JOIN public.memberships p ON p.org_id = a.organization_id AND p.user_id = a.principal_id
+WHERE a.organization_id = $1 AND a.principal_id = $2 AND a.joined_at = p.joined_at`, org, m1); got != 1 {
+		t.Fatalf("auth rows whose joined_at equals the public one: got %d, want 1", got)
+	}
+
+	// A second run writes nothing: no audit row, no outbox row, no revision.
+	after := e.writes(t, ctx)
+	again := e.runOrgs(t, ctx, false)
+	if again.InvitersSet+again.JoinedSet+again.MembershipsInserted+again.MembershipsRoleSet != 0 || again.SkippedTotal() != 0 {
+		t.Fatalf("rerun counts: got %+v, want 0 set/inserted/role-set, 0 skipped", again)
+	}
+	if got := e.writes(t, ctx); got != after {
+		t.Fatalf("rerun wrote: got audit/outbox/revision %v, want %v", got, after)
+	}
+	if again.InviterUnresolved != 1 {
+		t.Fatalf("unresolved inviter count on rerun: got %d, want 1", again.InviterUnresolved)
+	}
+	// Leave the shared database matched: the inviter's user projected, every membership active in both schemas.
+	e.backfill(t, ctx)
+	e.runOrgs(t, ctx, false)
+}
+
+func TestOrgsBackfillLeavesAnInactiveMembershipAlone(t *testing.T) {
+	e := getReconEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	org, _ := e.seedOrg(t, ctx, true)
+	inv := e.seed(t, ctx, uniq("ia"), true, true)
+	m := e.seed(t, ctx, uniq("ia"), true, true)
+	e.backfill(t, ctx)
+	e.seedMemberInvitedBy(t, ctx, org, m, "member", nil)
+	e.runOrgs(t, ctx, false)
+	e.setAuthMembershipStatus(t, ctx, org, m, "removed")
+	if _, err := e.admin.Exec(ctx, `UPDATE public.memberships SET invited_by_id = $3 WHERE org_id = $1 AND user_id = $2`, org, m, inv); err != nil {
+		t.Fatal(err)
+	}
+	type rowState struct {
+		ID      uuid.UUID
+		Status  string
+		Inviter *uuid.UUID
+		Joined  *time.Time
+		Updated time.Time
+	}
+	readRow := func() rowState {
+		var r rowState
+		if err := e.admin.QueryRow(ctx, `SELECT id, status, invited_by, joined_at, updated_at FROM auth.memberships WHERE organization_id = $1 AND principal_id = $2`, org, m).
+			Scan(&r.ID, &r.Status, &r.Inviter, &r.Joined, &r.Updated); err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	auditRows := func(id uuid.UUID) int {
+		return e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE attributes->>'target_id' = $1`, id.String())
+	}
+	rowBefore := readRow()
+	auditBefore := auditRows(rowBefore.ID)
+	before := e.writes(t, ctx)
+	rep := e.runOrgs(t, ctx, false)
+	if rep.InvitersSet != 0 || rep.JoinedSet != 0 || rep.AuthDiverged != 1 {
+		t.Fatalf("inactive run counts: got %+v, want 0 inviter set, 0 joined set, 1 diverged", rep)
+	}
+	if got := e.writes(t, ctx); got != before {
+		t.Fatalf("inactive run wrote: got audit/outbox/revision %v, want %v", got, before)
+	}
+	rowAfter := readRow()
+	if rowAfter.Status != "removed" || rowAfter.Inviter != nil || !rowAfter.Updated.Equal(rowBefore.Updated) ||
+		(rowAfter.Joined == nil) != (rowBefore.Joined == nil) || (rowAfter.Joined != nil && !rowAfter.Joined.Equal(*rowBefore.Joined)) {
+		t.Fatalf("inactive row: got %+v, want status removed, inviter nil and the other columns as before %+v", rowAfter, rowBefore)
+	}
+	if got := auditRows(rowBefore.ID); got != auditBefore {
+		t.Fatalf("audit rows naming the inactive membership: got %d, want %d", got, auditBefore)
+	}
+	e.setAuthMembershipStatus(t, ctx, org, m, "active")
+}
+
+// The grant lands before the backfill: without SELECT on invited_by_id the source read fails and nothing is written.
+func TestOrgsBackfillWithoutTheInviterGrantFailsAndWritesNothing(t *testing.T) {
+	e := getReconEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	org, _ := e.seedOrg(t, ctx, true)
+	inv := e.seed(t, ctx, uniq("ig"), true, true)
+	m := e.seed(t, ctx, uniq("ig"), true, true)
+	e.backfill(t, ctx)
+	e.runOrgs(t, ctx, false)
+	e.seedMemberInvitedBy(t, ctx, org, m, "member", &inv)
+	var role string
+	if err := e.runtime.QueryRow(ctx, `SELECT current_user`).Scan(&role); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.admin.Exec(ctx, `REVOKE SELECT (invited_by_id) ON public.memberships FROM `+pgx.Identifier{role}.Sanitize()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if _, err := e.admin.Exec(context.Background(), `GRANT SELECT (invited_by_id) ON public.memberships TO `+pgx.Identifier{role}.Sanitize()); err != nil {
+			t.Errorf("restore the invited_by_id grant: %v", err)
+		}
+		e.runOrgs(t, context.Background(), false)
+	})
+	before := e.writes(t, ctx)
+	if _, err := RunOrgs(ctx, PGOrgSource{Pool: e.runtime}, e.store, PGAuthOnly{Pool: e.runtime, Schema: e.schema}, Options{BatchSize: 2}); err == nil {
+		t.Fatal("the run succeeded without SELECT on invited_by_id: got nil error, want a refused read")
+	}
+	if got := e.writes(t, ctx); got != before {
+		t.Fatalf("a refused read wrote: got audit/outbox/revision %v, want %v", got, before)
+	}
+	if got := e.count(t, ctx, `SELECT count(*) FROM auth.memberships WHERE organization_id = $1 AND principal_id = $2`, org, m); got != 0 {
+		t.Fatalf("auth rows for the member after a refused read: got %d, want 0", got)
+	}
+}
+
+// A missing source grant fails before any write, even on a fresh organization nothing has projected yet.
+func TestOrgsBackfillWithoutTheInviterGrantOnAFreshOrganizationWritesNothing(t *testing.T) {
+	e := getReconEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	inv := e.seed(t, ctx, uniq("if"), true, true)
+	m := e.seed(t, ctx, uniq("if"), true, true)
+	e.backfill(t, ctx)
+	e.runOrgs(t, ctx, false)
+	org, _ := e.seedOrg(t, ctx, true)
+	e.seedMemberInvitedBy(t, ctx, org, m, "member", &inv)
+	var role string
+	if err := e.runtime.QueryRow(ctx, `SELECT current_user`).Scan(&role); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.admin.Exec(ctx, `REVOKE SELECT (invited_by_id) ON public.memberships FROM `+pgx.Identifier{role}.Sanitize()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if _, err := e.admin.Exec(context.Background(), `GRANT SELECT (invited_by_id) ON public.memberships TO `+pgx.Identifier{role}.Sanitize()); err != nil {
+			t.Errorf("restore the invited_by_id grant: %v", err)
+		}
+		e.runOrgs(t, context.Background(), false)
+	})
+	before := e.writes(t, ctx)
+	_, err := RunOrgs(ctx, PGOrgSource{Pool: e.runtime}, e.store, PGAuthOnly{Pool: e.runtime, Schema: e.schema}, Options{BatchSize: 2})
+	if err == nil || err.Error() != "usersbackfill: reading public.memberships failed" {
+		t.Fatalf("error: got %v, want usersbackfill: reading public.memberships failed", err)
+	}
+	if got := e.writes(t, ctx); got != before {
+		t.Fatalf("a refused read wrote: got audit/outbox/revision %v, want %v", got, before)
+	}
+	if got := e.count(t, ctx, `SELECT count(*) FROM auth.organizations WHERE id = $1`, org); got != 0 {
+		t.Fatalf("auth organization rows of the fresh organization: got %d, want 0", got)
+	}
+	if got := e.count(t, ctx, `SELECT count(*) FROM auth.memberships WHERE organization_id = $1`, org); got != 0 {
+		t.Fatalf("auth membership rows of the fresh organization: got %d, want 0", got)
 	}
 }

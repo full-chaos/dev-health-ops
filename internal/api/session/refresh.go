@@ -350,7 +350,7 @@ func (h handlers) refuseRevokedOfAGoneMember(w http.ResponseWriter, r *http.Requ
 	if !okUser || !okOrg {
 		return false
 	}
-	user, err := userByID(ctx, tx, userID)
+	user, err := h.userByID(ctx, tx, userID)
 	if err != nil {
 		h.fail(w, r, "load user", err)
 		return true

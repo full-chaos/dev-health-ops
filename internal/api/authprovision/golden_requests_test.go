@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-go/workloadtoken"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
@@ -82,6 +83,19 @@ type goldenServer struct {
 	mu   sync.Mutex
 	last goldenRequest
 	URL  *url.URL
+	// exchange answers the workload token exchange; nil answers 404.
+	exchange func() (int, string)
+	// exchanges counts the exchange requests; provisioning is every other one.
+	exchanges    int
+	provisioning []rawRequest
+}
+
+// rawRequest is a provisioning request as received: its Authorization values
+// and the whole of its header block and body as one string.
+type rawRequest struct {
+	Path string
+	Auth []string
+	Dump string
 }
 
 func newGoldenServer(t *testing.T) *goldenServer {
@@ -89,6 +103,21 @@ func newGoldenServer(t *testing.T) *goldenServer {
 	g := &goldenServer{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
+		if r.URL.Path == workloadtoken.ExchangePath {
+			g.mu.Lock()
+			g.exchanges++
+			answer := g.exchange
+			g.mu.Unlock()
+			if answer == nil {
+				http.NotFound(w, r)
+				return
+			}
+			status, body := answer()
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(status)
+			_, _ = io.WriteString(w, body)
+			return
+		}
 		headers := map[string][]string{}
 		for name, values := range r.Header {
 			headers[name] = append([]string(nil), values...)
@@ -98,6 +127,12 @@ func newGoldenServer(t *testing.T) *goldenServer {
 		}
 		g.mu.Lock()
 		g.last = goldenRequest{Method: r.Method, Path: r.URL.Path, Headers: headers, Body: string(raw)}
+		var dump strings.Builder
+		for name, values := range r.Header {
+			dump.WriteString(name + ": " + strings.Join(values, ",") + "\n")
+		}
+		dump.WriteString(string(raw))
+		g.provisioning = append(g.provisioning, rawRequest{Path: r.URL.Path, Auth: append([]string(nil), r.Header.Values("Authorization")...), Dump: dump.String()})
 		g.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, goldenAnswer(r.URL.Path))
@@ -111,19 +146,22 @@ func newGoldenServer(t *testing.T) *goldenServer {
 	return g
 }
 
-// goldenVerbs drives the 9 outgoing verbs with fixed inputs, in a fixed order.
-func goldenVerbs(t *testing.T, g *goldenServer, prov authprovision.Provisioner, life interface {
+type goldenCall struct {
+	verb string
+	do   func() error
+}
+
+type lifecycle interface {
 	orgreactivate.Reactivator
 	orgreactivate.Suspender
-}) []goldenRequest {
-	t.Helper()
+}
+
+// goldenCalls are the 9 outgoing verbs with fixed inputs, in a fixed order.
+func goldenCalls(prov authprovision.Provisioner, life lifecycle) []goldenCall {
 	ctx := context.Background()
 	invitedBy := goldenInvitedBy
 	metadata := json.RawMessage(`{"source":"golden"}`)
-	calls := []struct {
-		verb string
-		do   func() error
-	}{
+	return []goldenCall{
 		{"memberships_add", func() error {
 			_, err := prov.AddMember(ctx, goldenOrg, goldenPrincipal, goldenActor, "member", &invitedBy)
 			return err
@@ -148,6 +186,12 @@ func goldenVerbs(t *testing.T, g *goldenServer, prov authprovision.Provisioner, 
 		{"organizations_reactivate", func() error { return life.Reactivate(ctx, goldenOrg, goldenActor) }},
 		{"organizations_suspend", func() error { return life.Suspend(ctx, goldenOrg, goldenActor) }},
 	}
+}
+
+// goldenVerbs drives the 9 verbs and returns the request each one sent.
+func goldenVerbs(t *testing.T, g *goldenServer, prov authprovision.Provisioner, life lifecycle) []goldenRequest {
+	t.Helper()
+	calls := goldenCalls(prov, life)
 	out := make([]goldenRequest, 0, len(calls))
 	for _, call := range calls {
 		if err := call.do(); err != nil {

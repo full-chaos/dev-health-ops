@@ -33,8 +33,9 @@ func HoldsSQL(schema, principalExpr, roleExpr string) string {
 }
 
 // writeLock is the advisory transaction lock every grant and revoke takes
-// first, so the store's writes run one at a time.
-const writeLock = "auth.platform_role_assignments:write"
+// first, so the store's writes run one at a time; go-api's guarded admin write
+// takes it shared (rule.SharedWriteLockSQL).
+const writeLock = rule.WriteLock
 
 // Config builds a Store.
 type Config struct {

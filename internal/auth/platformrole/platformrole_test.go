@@ -234,7 +234,7 @@ func TestStoreLocksNoAssignmentRow(t *testing.T) {
 			}
 		}
 	}
-	if writeLock != "auth.platform_role_assignments:write" {
+	if writeLock != "auth.platform_role_assignments:write" || rule.WriteLock != writeLock {
 		t.Errorf("write lock name = %q: every writer of the table must take the same lock", writeLock)
 	}
 }

@@ -23,7 +23,7 @@ type provWorkloadFixture struct {
 func newProvWorkloadFixture(t *testing.T) *provWorkloadFixture {
 	t.Helper()
 	w := newWorkloadIssueFixture(t)
-	return &provWorkloadFixture{provFixture: newProvFixtureFor(t, provDoc(t), w.workload), w: w}
+	return &provWorkloadFixture{provFixture: newProvFixtureFor(t, docWithRow(t, PatternOrgSuspend), w.workload), w: w}
 }
 
 // workloadRouteOps are the routes that take the go-api workload token; every

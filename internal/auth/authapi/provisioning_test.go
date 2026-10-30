@@ -299,14 +299,7 @@ type provFixture struct {
 
 func newProvFixture(t *testing.T) *provFixture {
 	t.Helper()
-	return newProvFixtureWith(t, provDoc(t))
-}
-
-// provDoc is the embedded endpoint-profile document with rows for the dark suspend and state routes, so every route
-// case is mounted.
-func provDoc(t *testing.T) []byte {
-	t.Helper()
-	return docWithExtraRow(t, docWithRow(t, PatternOrgSuspend), PatternOrgState)
+	return newProvFixtureWith(t, docWithRow(t, PatternOrgSuspend))
 }
 
 // docWithRow is the embedded endpoint-profile document with its row for route (if any) replaced by a copy of the

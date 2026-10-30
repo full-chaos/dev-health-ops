@@ -98,7 +98,7 @@ func TestProvisioningRoutesRefuseUserTokens(t *testing.T) {
 	pool, connects := usertokens.CountingPool(t)
 	f := newProvFixture(t)
 	routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: servicecred.PG{Pool: pool}, Users: f.users, Reader: noRows{},
-		Organizations: f.orgs, Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ProfileRows: provDoc(t),
+		Organizations: f.orgs, Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ProfileRows: docWithRow(t, PatternOrgSuspend),
 		Logger: slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))})
 	if err != nil {
 		t.Fatal(err)

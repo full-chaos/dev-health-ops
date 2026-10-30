@@ -60,6 +60,10 @@ type Options struct {
 	// users-owned switch gives (the 4->3 flip-back release, whose old owned
 	// pods still serve); the rest narrows. See defer_narrowing.go.
 	DeferNarrowing bool
+	// PlatformRolesOwned is the platform roles switch (AUTH_PLATFORM_ROLES_OWNED):
+	// each session reader role also holds PlatformRoleReaderColumns. Off, it
+	// holds the session read alone; turning it off is a narrowing.
+	PlatformRolesOwned bool
 }
 
 // Result reports what a run did.

@@ -24,9 +24,12 @@ const workloadsUsage = "usage: auth-migrate workloads seed [-apply] | bind -work
 	" | bootstrap-rotate -workload N -out PATH -overlap DUR [-expires-in DUR] [-apply]" +
 	" | bootstrap-revoke -credential ID -reason compromised|owner_request [-apply]" +
 	" | bootstrap-disable -workload N [-apply]" +
+	" | enable -workload N -operator ID [-enable-principal] [-apply]" +
 	"\nA bootstrap value is written once, to a new 0600 -out file, and never to argv, stdout or a log." +
 	"\nPut -out in a directory writable only by the operator: a failed verb's file is removed by path." +
-	"\nbootstrap-disable revokes every live bootstrap value of N at once; workload tokens issued before it live at most 300 s."
+	"\nbootstrap-disable revokes every live bootstrap value of N at once; workload tokens issued before it live at most 300 s." +
+	"\nenable clears the workload row's disabled mark (and, with -enable-principal, its workload principal's); ID is the enabled" +
+	" principal who enables it, named in the audit row. enable mints no credential: run bootstrap-rotate or bootstrap-create after it."
 
 type workloadsArgs struct {
 	verb    string
@@ -78,6 +81,8 @@ func parseWorkloadsArgs(args []string, stderr io.Writer) (workloadsArgs, error) 
 	flags.DurationVar(&parsed.overlap, "overlap", 0, "bootstrap-rotate: how long the old value stays live (0 to 1h)")
 	credential := flags.String("credential", "", "bootstrap-revoke: the credential id")
 	flags.StringVar(&parsed.reason, "reason", "", "bootstrap-revoke: compromised or owner_request")
+	operator := flags.String("operator", "", "enable: the id of the enabled principal who enables (the audit row's actor)")
+	flags.BoolVar(&parsed.enablePrincipal, "enable-principal", false, "enable: also enable the workload's principal row (workload kind only)")
 	if err := flags.Parse(args[1:]); err != nil {
 		return workloadsArgs{}, err
 	}
@@ -159,6 +164,18 @@ func parseWorkloadsArgs(args []string, stderr io.Writer) (workloadsArgs, error) 
 		if workload.ValidateName(parsed.name) != nil {
 			return workloadsArgs{}, errors.New("bootstrap-disable needs a valid -workload")
 		}
+	case "enable":
+		if err := only(parsed.verb, "workload", "operator", "enable-principal"); err != nil {
+			return workloadsArgs{}, err
+		}
+		if workload.ValidateName(parsed.name) != nil {
+			return workloadsArgs{}, errors.New("enable needs a valid -workload")
+		}
+		id, err := uuid.Parse(*operator)
+		if err != nil || id == uuid.Nil || id.String() != *operator {
+			return workloadsArgs{}, errors.New("enable needs -operator, a principal id")
+		}
+		parsed.operator = id
 	default:
 		return workloadsArgs{}, errors.New("unknown verb")
 	}
@@ -253,6 +270,8 @@ func executeWorkloads(parent context.Context, args []string, lookup secrets.Look
 			return 1
 		}
 		fmt.Fprintf(stdout, "workloads bind applied: workload=%s environment=%s binding=%s\n", parsed.name, parsed.binding.Environment, id)
+	case "enable":
+		return runEnable(ctx, store, parsed, stdout, stderr)
 	default:
 		return runBootstrap(ctx, store, parsed, stdout, stderr)
 	}
@@ -276,9 +295,19 @@ func failureClass(err error) string {
 	case errors.Is(err, workload.ErrBootstrapNotFound):
 		return "bootstrap credential not found"
 	case errors.Is(err, workload.ErrBootstrapWorkloadDisabled):
-		return "the workload row is disabled; no auth-migrate verb enables it today: re-enabling needs a reviewed change"
+		return "the workload row is disabled; run auth-migrate workloads enable -workload NAME -operator ID, then rotate its credential"
 	case errors.Is(err, workload.ErrBootstrapPrincipalDisabled):
-		return "the workload's principal is disabled, its row is not; no auth-migrate verb enables it today: re-enabling needs a reviewed change"
+		return "the workload's principal is disabled, its row is not; run auth-migrate workloads enable -workload NAME -operator ID -enable-principal, then rotate its credential"
+	case errors.Is(err, workload.ErrOperatorNotFound):
+		return "the operator principal does not exist"
+	case errors.Is(err, workload.ErrOperatorDisabled):
+		return "the operator principal is disabled"
+	case errors.Is(err, workload.ErrOperatorIsSubject):
+		return "the operator cannot be the workload's own principal"
+	case errors.Is(err, workload.ErrPrincipalNotWorkload):
+		return "the workload's principal is not of kind workload; -enable-principal refuses it"
+	case errors.Is(err, workload.ErrEnableStateChanged):
+		return "the workload changed during the run; run again"
 	case errors.Is(err, workload.ErrAudienceInvalid):
 		return "audience refused"
 	case errors.Is(err, workload.ErrStore):

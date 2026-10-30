@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity/ssoaudit"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
@@ -58,6 +59,10 @@ type Service struct {
 	BaseURL      func() string
 	Now          func() time.Time
 	Logger       *slog.Logger
+	// ProviderFailure records a provider failure (an assertion without an
+	// email: go-api's recordSSOFailure) before the refusal answers; nil
+	// records none.
+	ProviderFailure ssoaudit.ProviderFailure
 }
 
 func (s *Service) now() time.Time {
@@ -253,6 +258,9 @@ func (s *Service) ConsumeFor(ctx context.Context, p Provider, posted string, coo
 	// The address and the provider's domain list decide every sign-in, linked
 	// or not, before the lookup (go-api saml.go).
 	if email == "" {
+		if err := s.recordProviderFailure(ctx, p, msgEmailMissing); err != nil {
+			return SignIn{}, err
+		}
 		return SignIn{}, s.refuse(ctx, p, ErrEmailMissing)
 	}
 	if len(p.AllowedDomains) > 0 && !strings.Contains(email, "@") {
@@ -391,6 +399,18 @@ func (s *Service) email(p Provider, v Verified) string {
 // refuse logs a refusal with its auth-outcome reason code and the failed
 // check, and returns err unchanged. No NameID, email or assertion content is
 // logged.
+// msgEmailMissing is go-api's error text of an assertion without an email (saml.go), the record's error_message.
+const msgEmailMissing = "SAML assertion missing email attribute"
+
+// recordProviderFailure records a provider failure as go-api's recordSSOFailure does (protocol saml, no stage). A
+// write error is returned as is: the 500 go-api answers.
+func (s *Service) recordProviderFailure(ctx context.Context, p Provider, message string) error {
+	if s.ProviderFailure == nil {
+		return nil
+	}
+	return s.ProviderFailure.Failed(ctx, ssoaudit.Row{OrgID: p.OrgID, ProviderID: p.ID, Protocol: "saml", ErrorMessage: message})
+}
+
 func (s *Service) refuse(ctx context.Context, p Provider, err error) error {
 	check, detail := "", ""
 	var r *RefusedError

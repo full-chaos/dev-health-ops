@@ -25,6 +25,7 @@ internal/auth/identity/local
 internal/auth/identity/oidc
 internal/auth/identity/saml
 internal/auth/identity/social
+internal/auth/identity/ssoaudit
 internal/auth/invite
 internal/auth/keystore
 internal/auth/membership

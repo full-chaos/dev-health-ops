@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"net/http"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -484,6 +485,48 @@ func TestModeTwoVerbsByOneActorRunTogether(t *testing.T) {
 	held.free()
 	e.finish(t, cell, first, second)
 	wantNoErr(t, cell, first)
+}
+
+// Mode: two go-api admin adds naming one inviter, of different targets, run
+// together (go-api takes the inviter's users row FOR KEY SHARE). The first is
+// held at its INSERT, after its locks. Two id layouts: the inviter below the
+// targets (locked before the target's guard lock) and above them (after it).
+func TestGoAPIModeTwoAddMembersNamingOneInviterRunTogether(t *testing.T) {
+	for _, layout := range []string{"inviter-below", "inviter-above"} {
+		t.Run(layout, func(t *testing.T) {
+			cell := "go-api mode/inviter/" + layout
+			e, ctx := getEnv(t), cellContext(t)
+			e.cleanup(t)
+			ids := []uuid.UUID{e.seedUser(t, ctx), e.seedUser(t, ctx), e.seedUser(t, ctx)}
+			sort.Slice(ids, func(i, j int) bool { return bytes.Compare(ids[i][:], ids[j][:]) < 0 })
+			inviter, x1, x2 := ids[0], ids[1], ids[2]
+			if layout == "inviter-above" {
+				x1, x2, inviter = ids[0], ids[1], ids[2]
+			}
+			below := inviter.String() < x1.String() && inviter.String() < x2.String()
+			if below != (layout == "inviter-below") {
+				t.Fatalf("%s: choreography: the inviter %s is not %s the targets %s, %s", cell, inviter, layout, x1, x2)
+			}
+			o1, o2 := e.seedOrg(t, ctx), e.seedOrg(t, ctx)
+
+			reached := e.goBarrier.Arm("INSERT INTO memberships")
+			first := goAPI("first go-api add_member", func() response { return e.addMember(ctx, o1, x1, &inviter) })
+			awaitReached(t, cell, "the first add_member's INSERT", reached, first)
+			second := goAPI("second go-api add_member", func() response { return e.addMember(ctx, o2, x2, &inviter) })
+			e.runsAlongside(t, ctx, cell, "the inviter is locked stronger than FOR KEY SHARE", first, second)
+			e.goBarrier.Release()
+			e.finish(t, cell, first, second)
+
+			wantStatus(t, cell, first, http.StatusCreated)
+			wantStatus(t, cell, second, http.StatusCreated)
+			for _, m := range []struct{ org, user uuid.UUID }{{o1, x1}, {o2, x2}} {
+				if got := e.scalar(t, ctx, `SELECT coalesce(invited_by_id::text, '-') FROM public.memberships WHERE org_id = $1 AND user_id = $2`,
+					m.org, m.user); got != inviter.String() {
+					t.Fatalf("%s: go-api row of %s names inviter %q, want %s", cell, m.user, got, inviter)
+				}
+			}
+		})
+	}
 }
 
 // Order: go-api's admin add of X invited by Y (Y < X) is held after it locked

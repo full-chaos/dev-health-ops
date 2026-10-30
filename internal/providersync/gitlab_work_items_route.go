@@ -648,11 +648,14 @@ func gitLabNestedOwnerAndField(path string) (owner, field string) {
 	return owner, field
 }
 
+// CHAOS-12145: only include_ancestors is sent. GitLab declares it and its
+// deprecated alias include_parent_milestones mutually exclusive and answers a
+// request carrying both with HTTP 400.
 func collectGitLabMilestones(
 	ctx context.Context, client *providerfoundation.HTTPClient, route, path string,
 	perPage, maxPages int,
 ) ([]gitlabIssueMilestonePayload, int, error) {
-	items, pages, err := collectGitLabNestedPayloads(ctx, client, route, path, url.Values{"state": {"all"}, "include_ancestors": {"true"}, "include_parent_milestones": {"true"}}, perPage, maxPages)
+	items, pages, err := collectGitLabNestedPayloads(ctx, client, route, path, url.Values{"state": {"all"}, "include_ancestors": {"true"}}, perPage, maxPages)
 	if err != nil {
 		return nil, pages, err
 	}

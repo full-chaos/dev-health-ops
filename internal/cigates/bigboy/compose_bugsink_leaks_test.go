@@ -3,6 +3,7 @@ package bigboy_test
 import (
 	"fmt"
 	"path"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -27,6 +28,9 @@ func composeBugsinkLeaks(f doc) []string {
 			}
 			if composeBugsinkInterpolates(e) {
 				add("%s %s interpolates a bugsink credential", top, name)
+			}
+			if f := mp(e)["file"]; f != nil && composeBugsinkExposes(str(f)) {
+				add("%s %s reads bugsink's env file or a directory holding it: %s", top, name, str(f))
 			}
 		}
 	}
@@ -71,6 +75,15 @@ func composeBugsinkLeaks(f doc) []string {
 			if composeBugsinkInterpolates(svc) {
 				add("service %s interpolates a bugsink credential", name)
 			}
+			for _, v := range list(svc["volumes"]) {
+				src := str(mp(v)["source"])
+				if sv, ok := v.(string); ok {
+					src, _, _ = strings.Cut(sv, ":")
+				}
+				if composeBugsinkExposes(src) {
+					add("service %s mounts bugsink's env file or a directory holding it: %s", name, src)
+				}
+			}
 		}
 	}
 	return out
@@ -98,6 +111,26 @@ func composeBugsinkIsEnvFile(p string) bool {
 		}
 	}
 	return false
+}
+
+var composeDefaultRe = regexp.MustCompile(`\$\{[A-Za-z_][A-Za-z0-9_]*(:?-([^}]*))?[^}]*\}|\$[A-Za-z_][A-Za-z0-9_]*`)
+
+// composeBugsinkExposes reports whether a host path (with every variable at its default, or empty) is bugsink's env file, a
+// directory holding it, the project directory, or an absolute ancestor of the documented one (/home/ubuntu/devhealth).
+func composeBugsinkExposes(src string) bool {
+	if src == "" {
+		return false
+	}
+	p := composeDefaultRe.ReplaceAllString(src, "$2")
+	if p == "" {
+		return false // a source that is only an empty-default variable is set at run time; it cannot be judged here
+	}
+	c := path.Clean(p)
+	if composeBugsinkIsEnvFile(c) || c == "." {
+		return true
+	}
+	own := "/home/ubuntu/devhealth/" + path.Clean(composeBugsinkEnvFile)
+	return path.IsAbs(c) && (c == "/" || strings.HasPrefix(own, c+"/"))
 }
 
 func composeBugsinkInterpolates(v any) bool {
@@ -253,6 +286,7 @@ func TestComposeBugsinkLeaksCells(t *testing.T) {
 	add(cell{"new form: bugsink with a credential key", "services:\n" + newBugsink + "      BUGSINK_SECRET_KEY: null\n", false})
 	// bugsink's env file reached as a mounted file
 	add(both("web binds an unrelated host file", "  web:\n    volumes:\n    - ./_records:/records\n    - type: bind\n      source: ${OPS:-/home/ubuntu/devhealth/ops-bigboy}/x.xml\n      target: /x.xml\n", true)...)
+	add(both("web binds a source that is only an empty-default variable", "  web:\n    volumes:\n    - type: bind\n      source: ${SMOKE_DIR:-}\n      target: /smoke\n", true)...)
 	add(both("web binds a secret file that is not bugsink's", "  web:\n    secrets:\n    - s\nsecrets:\n  s:\n    file: ${S_FILE:-/var/lib/x/secret}\n", true)...)
 	for _, v := range []struct{ name, yaml string }{
 		{"the env file, short form", "    volumes:\n    - ./.bugsink-dev/bugsink.env:/run/b.env:ro\n"},

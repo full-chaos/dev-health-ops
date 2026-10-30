@@ -373,10 +373,60 @@ func TestTheOpenAPIPathGateChecksTheOneOfExtraMembers(t *testing.T) {
 		"an extra member that is a string schema": {func(d map[string]any) {
 			plantOneOf(d, "/v1/identities/social", "post", "400", map[string]any{"type": "string"})
 		}, true},
-		"an extra member that nests a oneOf the gate cannot read": {func(d map[string]any) {
+		"an extra member that nests a oneOf with an open object": {func(d map[string]any) {
 			m := closedGoAPIMember()
-			m["properties"].(map[string]any)["detail"].(map[string]any)["oneOf"] = []any{map[string]any{"type": "string"}}
+			m["properties"].(map[string]any)["detail"].(map[string]any)["oneOf"] = []any{map[string]any{"type": "object"}}
 			plantOneOf(d, "/v1/identities/social", "post", "400", m)
+		}, true},
+		"an extra member that nests a oneOf of closed members": {func(d map[string]any) {
+			m := closedGoAPIMember()
+			m["properties"].(map[string]any)["detail"] = map[string]any{"oneOf": []any{closedGoAPIMember(), map[string]any{"type": "string"}}}
+			plantOneOf(d, "/v1/identities/social", "post", "400", m)
+		}, false},
+		"an open object hidden under contains": {func(d map[string]any) {
+			m := closedGoAPIMember()
+			m["properties"].(map[string]any)["detail"].(map[string]any)["contains"] = map[string]any{"type": "object", "properties": map[string]any{}}
+			plantOneOf(d, "/v1/identities/social", "post", "400", m)
+		}, true},
+		"a keyword outside the checked set": {func(d map[string]any) {
+			m := closedGoAPIMember()
+			m["properties"].(map[string]any)["detail"].(map[string]any)["properties"].(map[string]any)["message"] = map[string]any{"type": "string", "pattern": "^x$"}
+			plantOneOf(d, "/v1/identities/social", "post", "400", m)
+		}, true},
+		"an untyped object constraint": {func(d map[string]any) {
+			m := closedGoAPIMember()
+			m["properties"].(map[string]any)["detail"].(map[string]any)["properties"].(map[string]any)["message"] = map[string]any{"required": []any{"x"}}
+			plantOneOf(d, "/v1/identities/social", "post", "400", m)
+		}, true},
+		"an open object typed by a type list": {func(d map[string]any) {
+			m := closedGoAPIMember()
+			m["properties"].(map[string]any)["detail"].(map[string]any)["properties"].(map[string]any)["message"] = map[string]any{"type": []any{"object", "null"}}
+			plantOneOf(d, "/v1/identities/social", "post", "400", m)
+		}, true},
+		"a closed object typed by a type list": {func(d map[string]any) {
+			m := closedGoAPIMember()
+			m["properties"].(map[string]any)["detail"].(map[string]any)["properties"].(map[string]any)["message"] = map[string]any{"type": []any{"object", "null"}, "additionalProperties": false}
+			plantOneOf(d, "/v1/identities/social", "post", "400", m)
+		}, false},
+		"an open object under items": {func(d map[string]any) {
+			m := closedGoAPIMember()
+			m["properties"].(map[string]any)["detail"].(map[string]any)["properties"].(map[string]any)["message"] = map[string]any{"type": "array", "items": map[string]any{"type": "object"}}
+			plantOneOf(d, "/v1/identities/social", "post", "400", m)
+		}, true},
+		"a closed object under items": {func(d map[string]any) {
+			m := closedGoAPIMember()
+			m["properties"].(map[string]any)["detail"].(map[string]any)["properties"].(map[string]any)["message"] = map[string]any{"type": "array", "items": map[string]any{"type": "object", "additionalProperties": false}}
+			plantOneOf(d, "/v1/identities/social", "post", "400", m)
+		}, false},
+		"an envelope member with a $ref sibling": {func(d map[string]any) {
+			op := d["paths"].(map[string]any)["/v1/identities/social"].(map[string]any)["post"].(map[string]any)
+			schema := op["responses"].(map[string]any)["400"].(map[string]any)["content"].(map[string]any)["application/json"].(map[string]any)["schema"].(map[string]any)
+			schema["oneOf"].([]any)[0].(map[string]any)["not"] = map[string]any{}
+		}, true},
+		"a plain transport schema with a $ref sibling": {func(d map[string]any) {
+			op := d["paths"].(map[string]any)["/v1/sessions/revoke"].(map[string]any)["post"].(map[string]any)
+			schema := op["responses"].(map[string]any)["413"].(map[string]any)["content"].(map[string]any)["application/json"].(map[string]any)["schema"].(map[string]any)
+			schema["not"] = map[string]any{}
 		}, true},
 		"an open extra member on a transport 413": {func(d map[string]any) {
 			m := closedGoAPIMember()

@@ -145,6 +145,10 @@ PATHSUM=$'The wrapper counts runs.\ninternal/foo/a.go\ninternal/foo/b.go\nintern
 SUMMARY=$PATHSUM fill 1 "$WORK/pathsummary.md"
 cell red-path-list-in-intent-bracket 1 "bracket fill holds a path list at line" "$WORK/pathsummary.md" 1
 
+PROSE=$'The wrapper accepts and/or refuses a form.\nIt reads input/output pairs.\nIt may read/write the log.'
+SUMMARY=$PROSE fill 1 "$WORK/prose.md"
+cell green-slash-prose-in-intent-bracket 0 "review-kit-check OK" "$WORK/prose.md" 1
+
 fill 1 "$WORK/emptyF.md" "F="
 cell red-empty-count-fill 1 "prompt differs at line" "$WORK/emptyF.md" 1
 

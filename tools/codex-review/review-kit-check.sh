@@ -53,6 +53,11 @@ STRICT = {"N": r"[0-9]+", "1|2": r"[12]", "F": r"[0-9]+", "A": r"[0-9]+", "D": r
 SUMMARY = r"\S(?:(?!\n\n)[\s\S])*?"
 VERDICT = r"\S[\s\S]*?"
 
+STRIP = "`\"\x27(),"
+def is_path(w):
+    w = w.strip(STRIP).rstrip(".").strip(STRIP)
+    return "/" in w and (w.count("/") >= 2 or w.startswith("./") or "." in w.rsplit("/", 1)[1])
+
 toks = []
 pos = 0
 for m in re.finditer(r"\[([^\]]*)\]", text):
@@ -106,7 +111,7 @@ for t in toks:
         hits = 0
         off = prompt.count("\n", 0, m.start(gi))
         for k, ln in enumerate(m.group(gi).split("\n")):
-            if re.search(r"(?:^|\s)[^\s/]*[A-Za-z0-9_.-]/[^\s]*", ln):
+            if any(is_path(w) for w in ln.split()):
                 hits += 1
                 if hits == 3:
                     sys.stderr.write("bracket fill holds a path list at line %d\n" % (off + k + 1))

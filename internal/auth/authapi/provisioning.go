@@ -169,7 +169,7 @@ func ProvisioningRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 	if rows == nil {
 		rows = authv1.AuthServiceEndpointProfiles
 	}
-	if err := provisioningRowsPresent(rows); err != nil {
+	if err := provisioningRowsPresent(rows, deps.Workload != nil); err != nil {
 		return nil, err
 	}
 	if deps.Logger == nil {

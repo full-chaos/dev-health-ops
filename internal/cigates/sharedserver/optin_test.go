@@ -249,8 +249,20 @@ func TestOptInNeedsATestMainThatRunsTheTestsInsideTheSharedCall(t *testing.T) {
 			"func run(m *testing.M) int { return venueoracle.RunTests(m) }\n\nfunc TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int { return run(m) }))\n}\n"), true},
 		{"mutual recursion with no run", mainFile(stdImports,
 			"func ping(m *testing.M) int { return pong(m) }\n\nfunc pong(m *testing.M) int { return ping(m) }\n\nfunc TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int { return ping(m) }))\n}\n"), false},
-		{"mutual recursion that reaches a run", mainFile(stdImports,
-			"func ping(m *testing.M) int { return pong(m) }\n\nfunc pong(m *testing.M) int {\n\tif false {\n\t\treturn ping(m)\n\t}\n\treturn m.Run()\n}\n\nfunc TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int { return ping(m) }))\n}\n"), true},
+		{"a helper chain that reaches a run", mainFile(stdImports,
+			"func ping(m *testing.M) int { return pong(m) }\n\nfunc pong(m *testing.M) int {\n\tif cond() {\n\t\treturn m.Run()\n\t}\n\treturn m.Run()\n}\n\nfunc cond() bool { return true }\n\nfunc TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int { return ping(m) }))\n}\n"), true},
+		{"a helper whose run is in an uncalled closure", mainFile(stdImports,
+			"func run(m *testing.M) int {\n\t_ = func() int { return m.Run() }\n\treturn 0\n}\n\nfunc TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int { return run(m) }))\n}\n"), false},
+		{"a helper whose run is in a dead branch", mainFile(stdImports,
+			"func run(m *testing.M) int {\n\tif false {\n\t\tm.Run()\n\t}\n\treturn 0\n}\n\nfunc TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int { return run(m) }))\n}\n"), false},
+		{"a helper that returns a run on one path only", mainFile(stdImports,
+			"func run(m *testing.M, c bool) int {\n\tif c {\n\t\treturn m.Run()\n\t}\n\treturn 0\n}\n\nfunc TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int { return run(m, true) }))\n}\n"), false},
+		{"a callback with a run in a dead branch", mainFile(stdImports,
+			"func TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int {\n\t\tif false {\n\t\t\tm.Run()\n\t\t}\n\t\treturn 0\n\t}))\n}\n"), false},
+		{"a callback with a run in an uncalled closure", mainFile(stdImports,
+			"func TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int {\n\t\t_ = func() int { return m.Run() }\n\t\treturn 0\n\t}))\n}\n"), false},
+		{"a helper called through parentheses", mainFile(stdImports,
+			"func run(m *testing.M) int { return (m.Run)() }\n\nfunc TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int { return (run)(m) }))\n}\n"), true},
 		{"no TestMain", "package opted\n\nfunc helper() {}\n", false},
 	}
 	for _, tc := range cases {
@@ -276,10 +288,12 @@ func TestABatchRowFailsWhenItsTestMainOnlyMentionsTheCall(t *testing.T) {
 	write("internal/outside/main_test.go", mainFile(stdImports, "func TestMain(m *testing.M) {\n\t_ = containers.RunWithSharedServers(m.Run)\n\tos.Exit(m.Run())\n}\n"))
 	write("internal/dropsm/main_test.go", mainFile(stdImports+venueImport,
 		"func runTests(m *testing.M) int { return 0 }\n\nfunc TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int {\n\t\tcode := runTests(m)\n\t\treturn code\n\t}))\n}\n"))
+	write("internal/deadbranch/main_test.go", mainFile(stdImports,
+		"func run(m *testing.M) int {\n\tif false {\n\t\tm.Run()\n\t}\n\treturn 0\n}\n\nfunc TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int { return run(m) }))\n}\n"))
 	optedIn, _ := scan(t, filepath.Join(root, "internal"))
-	batch := []string{"internal/real", "internal/commented", "internal/unused", "internal/outside", "internal/dropsm"}
+	batch := []string{"internal/real", "internal/commented", "internal/unused", "internal/outside", "internal/dropsm", "internal/deadbranch"}
 	got := strings.Join(missingFromBatch(optedIn, batch), ",")
-	if want := "internal/commented,internal/unused,internal/outside,internal/dropsm"; got != want {
+	if want := "internal/commented,internal/unused,internal/outside,internal/dropsm,internal/deadbranch"; got != want {
 		t.Errorf("batch rows missing from the opted-in packages = %q, want %q (opted in: %v)", got, want, optedIn)
 	}
 }

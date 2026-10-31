@@ -431,3 +431,25 @@ func TestRepositoryIsAResourceKindAndNeverAScope(t *testing.T) {
 		t.Error("a repository role scope was accepted")
 	}
 }
+
+// acr.context.read reads a context at a revision, like git.read: the organization roles that hold git.read hold it, and
+// no platform role does. The real catalog allows those roles by default.
+func TestAcrContextReadIsHeldByExactlyTheRolesThatHoldGitRead(t *testing.T) {
+	c := Default()
+	var holders []string
+	for _, r := range c.Roles() {
+		if got, want := c.Allows(r.ID, "acr.context.read"), c.Allows(r.ID, "git.read"); got != want {
+			t.Errorf("role %s: acr.context.read %v, git.read %v", r.ID, got, want)
+		}
+		if c.Allows(r.ID, "acr.context.read") {
+			holders = append(holders, r.ID)
+		}
+	}
+	sort.Strings(holders)
+	if got := strings.Join(holders, ","); got != "admin,member,owner,viewer" {
+		t.Errorf("acr.context.read is held by %q, want admin,member,owner,viewer", got)
+	}
+	if c.Allows("platform_admin", "acr.context.read") {
+		t.Error("platform_admin holds acr.context.read")
+	}
+}

@@ -123,6 +123,13 @@
       "cache_class": "none"
     },
     {
+      "action": "members.update",
+      "scope": "organization",
+      "resource_kind": "organization",
+      "risk_class": "high",
+      "cache_class": "none"
+    },
+    {
       "action": "org.read",
       "scope": "organization",
       "resource_kind": "organization",
@@ -173,6 +180,13 @@
     },
     {
       "action": "admin.orgs",
+      "scope": "platform",
+      "resource_kind": "platform",
+      "risk_class": "high",
+      "cache_class": "none"
+    },
+    {
+      "action": "authz.decide",
       "scope": "platform",
       "resource_kind": "platform",
       "risk_class": "high",

@@ -119,20 +119,29 @@ func TestOwnerGuardLeavesAdminRowsAndPrincipalDeletesAlone(t *testing.T) {
 	if err := e.store.Revoke(ctx, RevokeInput{Actor: granter, Principal: target, Role: PlatformAdmin}); err != nil {
 		t.Fatalf("API revoke of platform_admin: %v", err)
 	}
-	bare := uuid.New()
-	if _, err := e.admin.Exec(ctx, `INSERT INTO auth.principals (id, kind, display_name) VALUES ($1, 'user', 'bare')`, bare); err != nil {
+	holder := uuid.New()
+	if _, err := e.admin.Exec(ctx, `INSERT INTO auth.principals (id, kind, display_name) VALUES ($1, 'user', 'holder')`, holder); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.bootstrapStore(t).GrantOwner(ctx, bare); err != nil {
+	if _, err := e.bootstrapStore(t).GrantOwner(ctx, holder); err != nil {
 		t.Fatalf("GrantOwner on a bare principal: %v", err)
 	}
-	if _, err := e.admin.Exec(ctx, `DELETE FROM auth.principals WHERE id = $1`, bare); err == nil || !strings.Contains(err.Error(), "foreign key") {
-		t.Errorf("deleting a principal that holds an owner row: %v, want the foreign key refusal (RESTRICT), not the guard", err)
+	// A principal's delete touches guarded audit rows, so it runs inside audit.Commit; the refusal must be the
+	// foreign key's RESTRICT, not the owner guard and not the audit guard.
+	err := e.runtimeExec(t, ctx, e.admin, `DELETE FROM auth.principals WHERE id = $1`, holder)
+	if err == nil || !strings.Contains(err.Error(), "foreign key") || strings.Contains(err.Error(), ownerGuardText) ||
+		strings.Contains(err.Error(), "only through audit.Commit") {
+		t.Errorf("deleting a principal that holds an owner row: %v, want the foreign key RESTRICT refusal", err)
 	}
-	if err := e.bootstrapStore(t).RevokeOwner(ctx, bare); err != nil {
+	if n := e.ownerRows(t, holder); n != 1 {
+		t.Errorf("owner rows after the refused principal delete = %d, want 1", n)
+	}
+	// A principal that never held a role has no audit rows and deletes with the guard in place.
+	plain := uuid.New()
+	if _, err := e.admin.Exec(ctx, `INSERT INTO auth.principals (id, kind, display_name) VALUES ($1, 'user', 'plain')`, plain); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.admin.Exec(ctx, `DELETE FROM auth.principals WHERE id = $1`, bare); err != nil {
-		t.Errorf("deleting a principal with no assignment: %v", err)
+	if _, err := e.admin.Exec(ctx, `DELETE FROM auth.principals WHERE id = $1`, plain); err != nil {
+		t.Errorf("deleting a principal with no assignment and no audit rows: %v", err)
 	}
 }

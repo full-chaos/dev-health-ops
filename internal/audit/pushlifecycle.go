@@ -37,18 +37,23 @@ type PushLifecycleEvent struct {
 	Snapshot *externalpush.Change
 }
 
-// AppendPushLifecycle writes external push lifecycle events to the auth outbox
-// inside the caller's transaction tx, so the credential row change and its
-// events commit or roll back together. The outbox and revision tables are
-// guarded by migration 0006; the guard is armed for the writes below and
-// disarmed before this function returns, on every path, so a caller cannot use
-// it to write any other guarded table. It accepts only this one contract.
+// AppendPushLifecycle appends external push lifecycle events to the auth
+// outbox inside the caller's transaction tx, so the credential row change and
+// its events commit or roll back together. It accepts only this one contract.
 //
-// Events are written in aggregate-id order (one lock order for every writer);
+// It writes through the auth schema's append_external_push_lifecycle_event
+// function (migration 0038), not through the tables: the caller's login holds
+// EXECUTE on that function and no table privilege. The function fixes the
+// aggregate type, the event list and the payload members, assigns the revision
+// and the idempotency key, and arms and disarms the commit guard itself, so
+// this package holds no INSERT for this path. Go validates every event against
+// the contract first, so a refusal here writes nothing.
+//
+// Events are sent in aggregate-id order (one lock order for every writer);
 // events of one aggregate keep the caller's order. A created or rotated event
 // must be the aggregate's first (revision 1). The caller must hold the
 // credential's row lock, so two writers cannot both find the aggregate new.
-func AppendPushLifecycle(ctx context.Context, tx pgx.Tx, schema authschema.ValidatedIdentifier, events []PushLifecycleEvent) (err error) {
+func AppendPushLifecycle(ctx context.Context, tx pgx.Tx, schema authschema.ValidatedIdentifier, events []PushLifecycleEvent) error {
 	if tx == nil || len(events) == 0 {
 		return fmt.Errorf("%w: a transaction and at least one event are required", ErrPushLifecycle)
 	}
@@ -60,29 +65,40 @@ func AppendPushLifecycle(ctx context.Context, tx pgx.Tx, schema authschema.Valid
 	ordered := append([]PushLifecycleEvent(nil), events...)
 	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].AggregateID < ordered[j].AggregateID })
 
-	var armed bool
-	if err := tx.QueryRow(ctx, `SELECT current_setting('`+commitGuardSetting+`', true) IS NOT DISTINCT FROM pg_current_xact_id()::text`).Scan(&armed); err != nil {
-		return fmt.Errorf("%w: reading the commit guard: %w", ErrPushLifecycle, err)
-	}
-	if armed {
-		return fmt.Errorf("%w: the transaction is already armed for a guarded write", ErrPushLifecycle)
-	}
-	if err := armTx(ctx, tx); err != nil {
-		return err
-	}
-	defer func() {
-		if _, disarmErr := tx.Exec(ctx, `SELECT set_config('`+commitGuardSetting+`', '', true)`); disarmErr != nil && err == nil {
-			err = fmt.Errorf("%w: disarming the commit guard: %w", ErrPushLifecycle, disarmErr)
-		}
-	}()
-
-	q := authschema.Quote(schema)
+	call := `SELECT ` + authschema.Quote(schema) + `.append_external_push_lifecycle_event($1, $2, $3::jsonb, $4::jsonb)`
 	for _, e := range ordered {
-		if err := appendPushLifecycleEvent(ctx, tx, q, e); err != nil {
+		payload, snapshot, err := pushLifecycleArguments(e)
+		if err != nil {
 			return err
 		}
+		var revision int64
+		if err := tx.QueryRow(ctx, call, e.EventType, e.AggregateID, payload, snapshot).Scan(&revision); err != nil {
+			return fmt.Errorf("%w: appending %s: %w", ErrPushLifecycle, e.EventType, err)
+		}
+		slog.DebugContext(ctx, "audit: external push lifecycle event written", "event_type", e.EventType, "revision", revision)
 	}
 	return nil
+}
+
+// pushLifecycleArguments are the function's payload and snapshot arguments:
+// the payload members the caller chooses, and the snapshot (nil when absent).
+func pushLifecycleArguments(e PushLifecycleEvent) (payload string, snapshot any, err error) {
+	encoded, err := json.Marshal(struct {
+		OrganizationID string              `json:"organization_id"`
+		SourceID       string              `json:"source_id"`
+		Change         externalpush.Change `json:"change"`
+	}{e.OrganizationID, e.SourceID, e.Change})
+	if err != nil {
+		return "", nil, fmt.Errorf("%w: encoding the payload", ErrPushLifecycle)
+	}
+	if e.Snapshot == nil {
+		return string(encoded), nil, nil
+	}
+	raw, err := json.Marshal(e.Snapshot)
+	if err != nil {
+		return "", nil, fmt.Errorf("%w: encoding the snapshot", ErrPushLifecycle)
+	}
+	return string(encoded), string(raw), nil
 }
 
 func checkPushLifecycle(e PushLifecycleEvent) error {
@@ -101,41 +117,4 @@ func checkPushLifecycle(e PushLifecycleEvent) error {
 		}
 	}
 	return nil
-}
-
-func appendPushLifecycleEvent(ctx context.Context, tx pgx.Tx, q string, e PushLifecycleEvent) error {
-	revision, err := bumpRevision(ctx, tx, q, externalpush.Aggregate, e.AggregateID)
-	if err != nil {
-		return err
-	}
-	first := e.EventType == externalpush.Created || e.EventType == externalpush.Rotated
-	switch {
-	case first && revision != 1:
-		return fmt.Errorf("%w: a %s event needs a credential with no earlier event, found revision %d", ErrPushLifecycle, e.EventType, revision)
-	case !first && revision == 1:
-		if err := insertPushLifecycleRow(ctx, tx, q, externalpush.Created, e, *e.Snapshot, 1); err != nil {
-			return err
-		}
-		if revision, err = bumpRevision(ctx, tx, q, externalpush.Aggregate, e.AggregateID); err != nil {
-			return err
-		}
-	}
-	if err := insertPushLifecycleRow(ctx, tx, q, e.EventType, e, e.Change, revision); err != nil {
-		return err
-	}
-	slog.DebugContext(ctx, "audit: external push lifecycle event written", "event_type", e.EventType, "revision", revision)
-	return nil
-}
-
-func insertPushLifecycleRow(ctx context.Context, tx pgx.Tx, q, eventType string, e PushLifecycleEvent, change externalpush.Change, revision int64) error {
-	payload, err := json.Marshal(struct {
-		Revision       int64               `json:"revision"`
-		OrganizationID string              `json:"organization_id"`
-		SourceID       string              `json:"source_id"`
-		Change         externalpush.Change `json:"change"`
-	}{revision, e.OrganizationID, e.SourceID, change})
-	if err != nil {
-		return fmt.Errorf("%w: encoding the outbox payload", ErrPushLifecycle)
-	}
-	return insertOutboxRow(ctx, tx, q, externalpush.Aggregate, e.AggregateID, eventType, revision, payload)
 }

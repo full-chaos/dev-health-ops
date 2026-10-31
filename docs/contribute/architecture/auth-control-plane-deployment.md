@@ -106,6 +106,37 @@ old pods keep serving (fail closed). The Helm chart deliberately has no hook tha
 database would mark it fenced without applying any revocation. A restored database is fenced with
 `restore-fence apply`, never with `init` ([procedure](../../operate/maintain/backup-and-restore.md#restoring-the-auth-schema-to-a-point-in-time-the-restore-fence)).
 
+### External Push lifecycle events: the writer role and the roll order (CHAOS-10895)
+
+go-api writes External Push credential lifecycle events to the auth outbox in the
+same transaction as the token change, behind `AUTH_PUSH_LIFECYCLE_EVENTS` (go-api,
+default off). Its login holds no table privilege in the auth schema: it holds
+`EXECUTE` on one function, `append_external_push_lifecycle_event`, which runs as a
+dedicated `NOLOGIN` owner holding exactly `INSERT` on `auth_outbox_events`,
+`SELECT`/`INSERT`/`UPDATE` on `aggregate_revisions` and `USAGE` on the outbox
+sequence. A posture check in every `auth-migrate` run pins that set.
+
+Roll order, each step before the next:
+
+1. **Privileged, by whoever creates the logins** (compose: `auth-provision` does it
+   when `AUTH_PUSH_LIFECYCLE_WRITER_ROLE` is set; bigboy and production: the database
+   administrator, the same step that provisions `devhealth_auth`):
+   `CREATE ROLE <writer> NOLOGIN;` and `GRANT <writer> TO <migration login>;`. The
+   migration login (not a superuser) cannot do this itself, and it needs the
+   membership for `ALTER FUNCTION ... OWNER TO`. A missing role, a role that can log in,
+   or a missing membership stops `auth-migrate` with a message naming this step.
+2. `auth-migrate` with `AUTH_PUSH_LIFECYCLE_WRITER_ROLE=<writer>` and
+   `AUTH_PUSH_LIFECYCLE_CALLER_ROLES=<go-api login>` (Helm:
+   `authService.migrate.pushLifecycle`; both the migrate and the grants Job). Migration
+   0038 creates the function and widens the revision table's two CHECKs; the grant
+   pass hands the function to the writer, with `CREATE` on the schema granted and
+   revoked inside one transaction, and gives `EXECUTE` to the callers only.
+3. Only then roll go-api with `AUTH_PUSH_LIFECYCLE_EVENTS=true`. With the flag on and
+   the grants missing, token writes fail as 500 and roll back.
+
+Organization-wide tokens (no source) emit no event: the contract requires a
+`source_id`.
+
 ## Kubernetes (Helm)
 
 The chart section is `authService`, default **off**. One value turns it on and

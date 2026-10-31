@@ -27,17 +27,34 @@ func restoreFenceMigration(t *testing.T) string {
 	return ""
 }
 
-// The auth schema has no SECURITY DEFINER function: the runtime role reads the
-// timeline itself (readiness calls the WAL built-ins), so no function lends the
-// owner's authority to another role.
+// The auth schema has no SECURITY DEFINER function, with ONE named exception:
+// append_external_push_lifecycle_event (migration 0038, CHAOS-10895, ruled by
+// the Auth Control Plane design authority). go-api's login may not write the
+// guarded outbox tables, and the commit guard is a setting any role can set, so
+// the only safe door is a function that runs as a dedicated NOLOGIN owner with
+// exactly the outbox and revision privileges. The exception is pinned: the one
+// migration, the one function, EXECUTE revoked from PUBLIC in the same
+// migration, and the owner's closed-world posture row (pushWriterViolations).
+// The runtime role reads the timeline itself, so no function lends the owner's
+// authority to another role.
 func TestTheLineageHasNoSecurityDefinerFunction(t *testing.T) {
 	migrations, err := Migrations()
 	if err != nil {
 		t.Fatal(err)
 	}
+	const allowedMigration = "aggregate_revisions_external_push_credential"
 	for _, m := range migrations {
-		if strings.Contains(strings.ToUpper(code(m.SQL)), "SECURITY DEFINER") {
+		sql := strings.ToUpper(code(m.SQL))
+		count := strings.Count(sql, "SECURITY DEFINER")
+		switch {
+		case count == 0:
+		case m.Name != allowedMigration:
 			t.Errorf("migration %04d_%s declares a SECURITY DEFINER function", m.Version, m.Name)
+		case count != 1 || strings.Count(sql, "CREATE FUNCTION") != 1 ||
+			!strings.Contains(sql, strings.ToUpper(PushLifecycleFunction)) ||
+			!strings.Contains(sql, "REVOKE ALL ON FUNCTION") || !strings.Contains(sql, "FROM PUBLIC"):
+			t.Errorf("migration %04d_%s must declare exactly the one %s function and revoke EXECUTE from PUBLIC",
+				m.Version, m.Name, PushLifecycleFunction)
 		}
 	}
 }

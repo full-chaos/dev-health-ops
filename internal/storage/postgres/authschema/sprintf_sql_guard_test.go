@@ -37,6 +37,14 @@ type sqlOperandExemption struct {
 // fails the test, so a fixed or deleted call site cannot leave a silent hole.
 var sqlOperandExemptions = []sqlOperandExemption{
 	{
+		file: "push_lifecycle_writer.go", fn: "applyPushLifecycleWriter", operand: `strings.Join(pushWriterTables[table], ", ")`,
+		reason: "privilege keywords from the closed pushWriterTables map, not an identifier",
+	},
+	{
+		file: "push_lifecycle_writer.go", fn: "applyPushLifecycleWriter", operand: `strings.Join(pushWriterSequences[sequence], ", ")`,
+		reason: "privilege keywords from the closed pushWriterSequences map, not an identifier",
+	},
+	{
 		file: "catalog_integration_test.go", fn: "TestPredefinedRoleReachableThroughAnIntermediaryIsDetected", operand: "testCase.grantOptions",
 		reason: "GRANT option keywords (WITH ADMIN OPTION and the like) from the test's own table, not an identifier",
 	},

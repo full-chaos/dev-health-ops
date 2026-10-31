@@ -9,6 +9,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/externalpush"
@@ -103,5 +106,48 @@ func TestAnOffSwitchWritesNothingAndTouchesNoTransaction(t *testing.T) {
 	on := newLifecycle(true, "Not-A-Schema")
 	if on.err == nil {
 		t.Fatal("an invalid auth schema name was accepted")
+	}
+}
+
+func TestASourcelessTokenIsCountedOnAFixedLabelCounter(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)))
+	on := newLifecycle(true, "auth")
+	ctx := context.Background()
+	orgWide := newToken{ID: uuid.New(), OrgID: "9f1c2b3a-0000-4000-8000-000000000001", Scopes: []string{"ingest:status"}}
+	row := tokenRow{ID: uuid.New(), OrgID: orgWide.OrgID, Scopes: []byte(`["ingest:status"]`)}
+	if err := on.created(ctx, nil, orgWide); err != nil {
+		t.Fatal(err)
+	}
+	if err := on.rotated(ctx, nil, row, orgWide); err != nil {
+		t.Fatal(err)
+	}
+	if err := on.revoked(ctx, nil, row); err != nil {
+		t.Fatal(err)
+	}
+	var collected metricdata.ResourceMetrics
+	if err := reader.Collect(ctx, &collected); err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]int64{}
+	for _, scope := range collected.ScopeMetrics {
+		for _, m := range scope.Metrics {
+			if m.Name != "devhealth_customerpush_lifecycle_events_skipped_total" {
+				continue
+			}
+			for _, point := range m.Data.(metricdata.Sum[int64]).DataPoints {
+				operation, _ := point.Attributes.Value("operation")
+				reason, _ := point.Attributes.Value("reason")
+				if point.Attributes.Len() != 2 || reason.AsString() != "no_source" {
+					t.Fatalf("labels = %v, want operation and reason=no_source only", point.Attributes)
+				}
+				seen[operation.AsString()] += point.Value
+			}
+		}
+	}
+	for _, operation := range []string{"create", "rotate", "revoke"} {
+		if seen[operation] != 1 {
+			t.Errorf("skipped %s = %d, want 1 (seen %v)", operation, seen[operation], seen)
+		}
 	}
 }

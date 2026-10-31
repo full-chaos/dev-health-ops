@@ -7,21 +7,103 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/externalpush"
 	"github.com/full-chaos/dev-health-ops/internal/auth/pushlifecycle"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
 const (
 	pushOrg    = "org_EXAMPLE0000000000000001"
 	pushSource = "src_EXAMPLE0000000000000001"
 )
+
+// pushFixture is the auth schema with the push lifecycle writer role and a
+// go-api-like caller login: the caller holds EXECUTE on the append function and
+// no table privilege, and every write below goes through its pool.
+type pushFixture struct {
+	*auditFixture
+	caller     *pgxpool.Pool
+	callerRole string
+	writerRole string
+}
+
+func newPushFixture(t *testing.T, ctx context.Context) *pushFixture {
+	t.Helper()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	})
+	admin, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	t.Cleanup(admin.Close)
+	runtimeRole, err := containers.RoleName("audit_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callerRole, err := containers.RoleName("push_caller", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writerRole, err := containers.RoleName("push_writer", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const password = "push-test-not-a-real-credential"
+	for _, statement := range []string{
+		fmt.Sprintf("CREATE ROLE %q", runtimeRole),
+		fmt.Sprintf("CREATE ROLE %q LOGIN PASSWORD '%s'", callerRole, password),
+		fmt.Sprintf("CREATE ROLE %q NOLOGIN", writerRole),
+	} {
+		if _, err := admin.Exec(ctx, statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+	t.Cleanup(func() {
+		containers.DropRole(admin, writerRole, t.Logf)
+		containers.DropRole(admin, callerRole, t.Logf)
+		containers.DropRole(admin, runtimeRole, t.Logf)
+	})
+	if _, err := authschema.Apply(ctx, admin, authschema.Options{
+		Schema: "auth", RuntimeRole: runtimeRole, SessionReaderRoles: []string{callerRole},
+		PushLifecycleWriterRole: writerRole, PushLifecycleCallerRoles: []string{callerRole},
+	}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	parsed, err := url.Parse(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed.User = url.UserPassword(callerRole, password)
+	caller, err := pgxpool.New(ctx, parsed.String())
+	if err != nil {
+		t.Fatalf("caller pool: %v", err)
+	}
+	t.Cleanup(caller.Close)
+	schema, err := authschema.NewValidatedIdentifier("auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &pushFixture{auditFixture: &auditFixture{pool: admin, schema: schema}, caller: caller, callerRole: callerRole, writerRole: writerRole}
+}
 
 func pushCreated(id string, scopes ...string) PushLifecycleEvent {
 	return PushLifecycleEvent{EventType: externalpush.Created, AggregateID: id, OrganizationID: pushOrg, SourceID: pushSource,
@@ -41,7 +123,7 @@ type pushRow struct {
 	createdAt      time.Time
 }
 
-func pushRows(t *testing.T, ctx context.Context, env *auditFixture, aggregateID string) []pushRow {
+func pushRows(t *testing.T, ctx context.Context, env *pushFixture, aggregateID string) []pushRow {
 	t.Helper()
 	rows, err := env.pool.Query(ctx, `SELECT event_type, idempotency_key, (payload->>'revision')::bigint, payload, created_at
 		FROM auth.auth_outbox_events WHERE aggregate_type = 'external_push_credential' AND aggregate_id = $1 ORDER BY id`, aggregateID)
@@ -71,9 +153,9 @@ func (r pushRow) envelope(aggregateID string) []byte {
 	return raw
 }
 
-func withPushTx(t *testing.T, ctx context.Context, env *auditFixture, commit bool, fn func(pgx.Tx) error) error {
+func withPushTx(t *testing.T, ctx context.Context, env *pushFixture, commit bool, fn func(pgx.Tx) error) error {
 	t.Helper()
-	tx, err := env.pool.Begin(ctx)
+	tx, err := env.caller.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +172,7 @@ func withPushTx(t *testing.T, ctx context.Context, env *auditFixture, commit boo
 func TestAppendPushLifecycleWritesParseableEventsInTheCallersTransaction(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	env := newAuditFixture(t, ctx)
+	env := newPushFixture(t, ctx)
 	root := repoRoot(t)
 
 	if err := withPushTx(t, ctx, env, true, func(tx pgx.Tx) error {
@@ -175,7 +257,7 @@ func TestAppendPushLifecycleWritesParseableEventsInTheCallersTransaction(t *test
 func TestAppendPushLifecycleLegacyCredentialGetsCreatedThenTheEvent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	env := newAuditFixture(t, ctx)
+	env := newPushFixture(t, ctx)
 	root := repoRoot(t)
 
 	if err := withPushTx(t, ctx, env, true, func(tx pgx.Tx) error {
@@ -239,7 +321,7 @@ func TestAppendPushLifecycleLegacyCredentialGetsCreatedThenTheEvent(t *testing.T
 func TestAppendPushLifecycleRotationWritesBothAggregatesAtOnceOrNone(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	env := newAuditFixture(t, ctx)
+	env := newPushFixture(t, ctx)
 
 	rotated := PushLifecycleEvent{EventType: externalpush.Rotated, AggregateID: "00000000-0000-4000-8000-0000000000b2", OrganizationID: pushOrg, SourceID: pushSource,
 		Change: externalpush.Change{Status: "active", Fingerprint: "fedcba9876543210", Scopes: []string{"ingest:write"}, RotationParentID: "00000000-0000-4000-8000-0000000000c3"}}

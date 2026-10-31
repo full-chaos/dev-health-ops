@@ -10,6 +10,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/noop"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
@@ -26,6 +30,24 @@ type lifecycle struct {
 	on     bool
 	schema authschema.ValidatedIdentifier
 	err    error
+}
+
+// skipped counts the token writes that emit no event because the token has no
+// source (the contract binds a credential to a source). The label set is fixed:
+// reason is "no_source", operation is create, rotate or revoke. No token or
+// organization id is a label.
+var skipped = func() metric.Int64Counter {
+	counter, err := otel.Meter("github.com/full-chaos/dev-health-ops/internal/apiservice/customerpush").Int64Counter(
+		"devhealth_customerpush_lifecycle_events_skipped_total",
+		metric.WithDescription("Customer-push token writes that emitted no External Push lifecycle event, by operation and reason."))
+	if err != nil {
+		return noop.Int64Counter{}
+	}
+	return counter
+}()
+
+func countSkipped(ctx context.Context, operation string) {
+	skipped.Add(ctx, 1, metric.WithAttributes(attribute.String("operation", operation), attribute.String("reason", "no_source")))
 }
 
 func newLifecycle(on bool, schema string) lifecycle {
@@ -51,6 +73,9 @@ func (l lifecycle) created(ctx context.Context, tx pgx.Tx, token newToken) error
 	if err != nil {
 		return err
 	}
+	if len(events) == 0 {
+		countSkipped(ctx, "create")
+	}
 	return l.append(ctx, tx, events)
 }
 
@@ -62,6 +87,9 @@ func (l lifecycle) rotated(ctx context.Context, tx pgx.Tx, old tokenRow, next ne
 	if err != nil {
 		return err
 	}
+	if len(events) == 0 {
+		countSkipped(ctx, "rotate")
+	}
 	return l.append(ctx, tx, events)
 }
 
@@ -70,8 +98,12 @@ func (l lifecycle) revoked(ctx context.Context, tx pgx.Tx, token tokenRow) error
 		return nil
 	}
 	event, ok, err := revokedEvent(token)
-	if err != nil || !ok {
+	if err != nil {
 		return err
+	}
+	if !ok {
+		countSkipped(ctx, "revoke")
+		return nil
 	}
 	return l.append(ctx, tx, []audit.PushLifecycleEvent{event})
 }

@@ -155,3 +155,25 @@ func TestStateFailsClosedOnATimeoutAndARedirect(t *testing.T) {
 		t.Fatalf("a redirect: %v, want ErrUnavailable (never followed)", err)
 	}
 }
+
+// An error document that names a member twice is not the error.v1 document:
+// the last value must never decide. A 404 whose reason_code is repeated is
+// unavailable, not "no such session", whichever value comes last.
+func TestStateRefusesAnErrorDocumentWithARepeatedMember(t *testing.T) {
+	for name, body := range map[string]string{
+		"reason last":  `{"schema_version":"error.v1","status":404,"reason_code":"organization_not_found","reason_code":"session_not_found"}`,
+		"reason first": `{"schema_version":"error.v1","status":404,"reason_code":"session_not_found","reason_code":"organization_not_found"}`,
+		"status twice": `{"schema_version":"error.v1","status":500,"status":404,"reason_code":"session_not_found"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			client, _ := stateClient(t, func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = io.WriteString(w, body)
+			}, time.Second)
+			_, err := client.State(context.Background(), uuid.New())
+			if errors.Is(err, ErrSessionNotFound) || !errors.Is(err, ErrUnavailable) {
+				t.Fatalf("err = %v, want ErrUnavailable and not ErrSessionNotFound", err)
+			}
+		})
+	}
+}

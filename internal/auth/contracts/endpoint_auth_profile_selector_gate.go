@@ -23,7 +23,7 @@ type ClassMarker struct {
 // endpoint-profile.schema.json (a test holds the two equal).
 var selectorKinds = []string{
 	"authorization_scheme", "credential_prefix", "dedicated_header", "jwt_header_alg", "jwt_header_typ",
-	"signature_header", "content_type", "subject_token_type",
+	"signature_header", "content_type", "subject_token_type", "grant_type",
 }
 
 // RegistryClass is the part of a credential-classes.json entry the profile
@@ -102,7 +102,7 @@ func mediaType(value string) string {
 }
 
 // Header and scheme names are case-insensitive on the wire; a credential
-// prefix, a JWT header alg or typ and an RFC 8693 token-type URI are compared
+// prefix, a JWT header alg or typ and an RFC 8693 token-type URI or an OAuth grant type are compared
 // exactly (byte for byte, no trimming) against the one spelling the contract
 // files carry.
 func markerMatches(marker ClassMarker, kind, name string) bool {
@@ -112,7 +112,7 @@ func markerMatches(marker ClassMarker, kind, name string) bool {
 	if kind == "content_type" {
 		return mediaType(marker.Name) == mediaType(name)
 	}
-	if kind == "credential_prefix" || kind == "jwt_header_alg" || kind == "jwt_header_typ" || kind == "subject_token_type" {
+	if kind == "credential_prefix" || kind == "jwt_header_alg" || kind == "jwt_header_typ" || kind == "subject_token_type" || kind == "grant_type" {
 		return marker.Name == name
 	}
 	return strings.EqualFold(marker.Name, name)

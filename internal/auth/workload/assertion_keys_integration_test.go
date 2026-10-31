@@ -317,7 +317,7 @@ func TestAssertionKeyRefusesKeyShapedValuesAndLeaksNone(t *testing.T) {
 	n := keyWorkload(t, e)
 	before := keyState(t, e, n)
 	for label, spec := range map[string]AssertionKeySpec{
-		"pem header":     activeKey("-----BEGIN", keyBase),
+		"jwt-shaped kid": activeKey(credentialProbe(t), keyBase),
 		"provider token": activeKey("ghp_"+strings.Repeat("A1b2", 9), keyBase),
 		"credential url": {Issuer: "https://u:" + strings.Repeat("pw", 8) + "@issuer.test", KID: "k", Status: AssertionKeyActive, RotatedAt: keyBase},
 	} {

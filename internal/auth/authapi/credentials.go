@@ -414,12 +414,12 @@ func (h credentialHandlers) changed(w http.ResponseWriter, r *http.Request, call
 		}
 	}
 	issued := outcome.Issued
-	access, err := h.Issuer.Access(Grant{PrincipalID: principal, OrganizationID: org, Role: role, SessionID: issued.Session.ID, User: user})
+	tokens, err := h.Issuer.Tokens(ctx, Grant{PrincipalID: principal, OrganizationID: org, Role: role, SessionID: issued.Session.ID, User: user})
 	if err != nil {
 		h.compat.failMint(w, r, opChangePassword, err)
 		return
 	}
 	h.compat.rec.record(ctx, opChangePassword, "success", reasonAccepted, nil)
-	writeCompatModel(w, loginResponse(access, issued.Credential, membership == nil && !user.IsSuperuser,
+	writeCompatModel(w, loginResponse(tokens, h.Issuer.ExpiresIn(), issued.Credential, membership == nil && !user.IsSuperuser,
 		userInfo(principal, user, membership), nil))
 }

@@ -147,10 +147,13 @@ type Request struct {
 	PredecessorSessionID *uuid.UUID
 }
 
-// Pair is an issued access token and its opaque refresh credential.
+// Pair is an issued access token and its opaque refresh credential. Under
+// auth-service's eddsa access token class SessionAccess is the token of
+// audience auth-service its session routes accept; it is empty otherwise.
 type Pair struct {
-	Access  string
-	Refresh string
+	Access        string
+	Refresh       string
+	SessionAccess string
 }
 
 // Issuer issues sessions.
@@ -255,9 +258,10 @@ type issueBody struct {
 }
 
 type issueAnswer struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	TokenType    string `json:"token_type"`
+	AccessToken        string `json:"access_token"`
+	RefreshToken       string `json:"refresh_token"`
+	TokenType          string `json:"token_type"`
+	SessionAccessToken string `json:"session_access_token"`
 }
 
 // Issue asks auth-service for a session of req. The end user's User-Agent
@@ -322,5 +326,5 @@ func (c *Client) Issue(ctx context.Context, r *http.Request, req Request) (Pair,
 	if pair.AccessToken == "" || pair.RefreshToken == "" || !strings.EqualFold(pair.TokenType, "bearer") {
 		return Pair{}, fmt.Errorf("%w: answer is not a token pair", ErrUnavailable)
 	}
-	return Pair{Access: pair.AccessToken, Refresh: pair.RefreshToken}, nil
+	return Pair{Access: pair.AccessToken, Refresh: pair.RefreshToken, SessionAccess: pair.SessionAccessToken}, nil
 }

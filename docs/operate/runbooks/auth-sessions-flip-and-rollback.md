@@ -136,3 +136,9 @@ Fallback: if the target revision is older than that chart, or the grant hook ref
 The roll that carries the CHAOS-10719 chart must land before the baseline revision of roll B.
 
 Name the baseline revision from `helm history <release> --namespace <namespace>` (output lists revisions only): the revision before the B4 upgrade. 
+
+## Access token class eddsa (W3 D1)
+
+Gate (acp): web's `session_access_token` reader must be deployed before `authService.accessToken.class=eddsa` is set in any environment. Under eddsa, change-password and the social link routes accept only that token, so a web without the reader fails them for every user.
+
+The chart refuses `authService.accessToken.class` below `authService.phase=2`. From phase 2 go-api asks auth-service's issue route for every session, so no HS256 token is minted next to the EdDSA ones. Do not hand-set go-api's `AUTH_PROXY_SESSIONS=false` under eddsa: go-api would mint HS256 tokens itself again. Every go-api row still accepts HS256 (`legacy_hs256` until W3 D2), so nothing breaks, but the HS256 acceptance counter (`devhealth_auth_access_token_accepted_total{class="legacy"}`) does not fall to 0. Rollback sets `authService.accessToken.class` back to `hs256_compat`. Revoked sessions stay revoked and the Ed25519 kids stay as they are. The flip itself needs the owner's go.

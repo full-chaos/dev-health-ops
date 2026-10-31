@@ -6,8 +6,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -395,27 +393,31 @@ var verbEvents = map[string][]string{
 var (
 	verbPattern  = regexp.MustCompile(`auth-migrate workloads (seed|bind|bootstrap-create|bootstrap-rotate|bootstrap-revoke|bootstrap-disable|enable)\b`)
 	eventPattern = regexp.MustCompile(`auth\.workload\.[a-z_]+`)
+
+	auditStringPattern = regexp.MustCompile(`"(auth\.workload\.[a-z_]+)"`)
 )
 
 // workloadSourceStrings lists every "auth.workload.*" string literal in the non-test Go files of the workload, workloadexchange and audit packages.
 func workloadSourceStrings(d docTree) (map[string]bool, error) {
 	set := map[string]bool{}
 	for _, dir := range []string{"internal/auth/workload", "internal/auth/workloadexchange", "internal/audit"} {
-		entries, err := os.ReadDir(filepath.Join(d.root, filepath.FromSlash(dir)))
-		if err != nil {
-			return nil, err
-		}
-		for _, e := range entries {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+		found := false
+		for _, rel := range d.tracked {
+			name := strings.TrimPrefix(rel, dir+"/")
+			if name == rel || strings.Contains(name, "/") || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
 				continue
 			}
-			text, err := d.read(dir + "/" + e.Name())
+			found = true
+			text, err := d.read(rel)
 			if err != nil {
 				return nil, err
 			}
-			for _, m := range regexp.MustCompile(`"(auth\.workload\.[a-z_]+)"`).FindAllStringSubmatch(text, -1) {
+			for _, m := range auditStringPattern.FindAllStringSubmatch(text, -1) {
 				set[m[1]] = true
 			}
+		}
+		if !found {
+			return nil, fmt.Errorf("no tracked Go file under %s", dir)
 		}
 	}
 	return set, nil

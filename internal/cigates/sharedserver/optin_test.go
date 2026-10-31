@@ -263,6 +263,14 @@ func TestOptInNeedsATestMainThatRunsTheTestsInsideTheSharedCall(t *testing.T) {
 			"func TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int {\n\t\t_ = func() int { return m.Run() }\n\t\treturn 0\n\t}))\n}\n"), false},
 		{"a helper called through parentheses", mainFile(stdImports,
 			"func run(m *testing.M) int { return (m.Run)() }\n\nfunc TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int { return (run)(m) }))\n}\n"), true},
+		{"a callback that returns a local set from m.Run", mainFile(stdImports,
+			"func TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int {\n\t\tcode := m.Run()\n\t\treturn code\n\t}))\n}\n"), true},
+		{"a callback whose local gets m.Run only in a dead branch", mainFile(stdImports,
+			"func TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int {\n\t\tcode := 0\n\t\tif false {\n\t\t\tcode = m.Run()\n\t\t}\n\t\treturn code\n\t}))\n}\n"), false},
+		{"a callback whose local is overwritten after m.Run", mainFile(stdImports,
+			"func TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int {\n\t\tcode := m.Run()\n\t\tcode = 0\n\t\treturn code\n\t}))\n}\n"), false},
+		{"a callback whose local is set in a nested block", mainFile(stdImports,
+			"func TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int {\n\t\tif cond() {\n\t\t\tcode := m.Run()\n\t\t\treturn code\n\t\t}\n\t\treturn 0\n\t}))\n}\n"), false},
 		{"no TestMain", "package opted\n\nfunc helper() {}\n", false},
 	}
 	for _, tc := range cases {

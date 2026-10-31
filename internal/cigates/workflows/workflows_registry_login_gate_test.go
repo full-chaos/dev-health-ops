@@ -152,3 +152,87 @@ func TestRegistryLoginGateAcceptsTheHarmlessForms(t *testing.T) {
 		expectNoViolations(t, registryLoginDefects(t, tmp, jobLoginCensus))
 	})
 }
+
+var commandPositionLogins = []string{
+	"if docker login ghcr.io -u x; then echo ok; fi",
+	"if true; then docker login ghcr.io -u x; fi",
+	"if false; then echo no; else docker login ghcr.io -u x; fi",
+	"if false; then echo no; elif docker login ghcr.io -u x; then echo ok; fi",
+	"until docker login ghcr.io -u x; do break; done",
+	"while docker login ghcr.io -u x; do break; done",
+	"! docker login ghcr.io -u x",
+	"(docker login ghcr.io -u x)",
+	"{ docker login ghcr.io -u x; }",
+	"echo \"$(docker login ghcr.io -u x)\"",
+	"echo `docker login ghcr.io -u x`",
+	"echo $(echo $(docker login ghcr.io -u x))",
+	"echo $(docker login ghcr.io -u x",
+	"time docker login ghcr.io -u x",
+	"env -i docker login ghcr.io -u x",
+	"env -u HOME docker login ghcr.io -u x",
+	"sudo -u runner docker login ghcr.io -u x",
+	"command -p docker login ghcr.io -u x",
+	"exec -a argv0 docker login ghcr.io -u x",
+	"nice -n 5 docker login ghcr.io -u x",
+	"nohup docker login ghcr.io -u x",
+	"bash -c 'docker login x'",
+	"eval \"docker login x\"",
+}
+
+var commandPositionCalls = []string{
+	"bash ci/lib/ghcr_login.sh",
+	"sh ci/lib/ghcr_login.sh",
+	"bash -x ci/lib/ghcr_login.sh",
+	"./ci/lib/ghcr_login.sh",
+	"ci/lib/ghcr_login.sh",
+	"if true; then bash ci/lib/ghcr_login.sh; fi",
+	"sudo -u runner bash ci/lib/ghcr_login.sh",
+	"echo $(bash ci/lib/ghcr_login.sh)",
+	"bash \"ci/lib/ghcr_login.sh\"",
+	"source ci/lib/ghcr_login.sh",
+	"eval \"bash ci/lib/ghcr_login.sh\"",
+}
+
+var harmlessLines = []string{
+	"echo 'text; docker login ghcr.io'",
+	"echo \"text && docker login ghcr.io\"",
+	"echo ci/lib/ghcr_login.sh",
+	"echo \"ci/lib/ghcr_login.sh\"",
+	"echo docker login",
+	"echo \"${HOME} { not a group }\"",
+}
+
+func TestRegistryLoginGateRefusesLoginsAtCommandPosition(t *testing.T) {
+	root := rootOf(t)
+	for _, line := range commandPositionLogins {
+		t.Run("workflow "+line, func(t *testing.T) {
+			tmp := registryLoginTree(t, root, nil, plantJob(true, runStep(line)))
+			expectViolation(t, registryLoginDefects(t, tmp, jobLoginCensus), "run holds a")
+		})
+		t.Run("script "+line, func(t *testing.T) {
+			tmp := registryLoginTree(t, root, map[string]string{"ci/extra_login.sh": line + "\n"})
+			expectViolation(t, registryLoginDefects(t, tmp, jobLoginCensus), "ci scripts with a registry login are")
+		})
+	}
+	for _, line := range commandPositionCalls {
+		t.Run("workflow call "+line, func(t *testing.T) {
+			tmp := registryLoginTree(t, root, nil, plantJob(true, runStep(line)))
+			d := registryLoginDefects(t, tmp, jobLoginCensus)
+			expectViolation(t, d, "planted job planted step 1: run ")
+		})
+	}
+}
+
+func TestRegistryLoginGateAcceptsQuotedAndEchoedForms(t *testing.T) {
+	root := rootOf(t)
+	for _, line := range harmlessLines {
+		t.Run("workflow "+line, func(t *testing.T) {
+			tmp := registryLoginTree(t, root, nil, plantJob(false, runStep(line)))
+			expectNoViolations(t, registryLoginDefects(t, tmp, jobLoginCensus))
+		})
+		t.Run("script "+line, func(t *testing.T) {
+			tmp := registryLoginTree(t, root, map[string]string{"ci/extra.sh": line + "\n"})
+			expectNoViolations(t, registryLoginDefects(t, tmp, jobLoginCensus))
+		})
+	}
+}

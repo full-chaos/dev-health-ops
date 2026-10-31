@@ -100,7 +100,7 @@ go-api and query-api take a bearer access token. Four access-token shapes exist.
 | Shape | Class | Header | Used by |
 | --- | --- | --- | --- |
 | Legacy edge token | `ops_access_token_hs256` | `alg` HS256 | go-api, query-api, auth-service session routes |
-| User access token | `user_access_token` | `alg` EdDSA, `typ` `at+jwt`, audience `dev-health-api` | go-api (196 rows), query-api only when `AUTH_ACCESS_TOKEN_ISSUER` is set |
+| User access token | `user_access_token` | `alg` EdDSA, `typ` `at+jwt`, audience `dev-health-api` | go-api (196 rows), query-api only when `AUTH_ACCESS_TOKEN_ISSUER` is set, auth-service lists the class on 6 session, identity and change-password rows, but the validator text of those rows describes an HS256 token only |
 | Workload token | `workload_token` | `typ` `workload+jwt` | go-api (4 rows), auth-service internal routes |
 | Effective principal envelope | `effective_principal_envelope` | `alg` EdDSA | query-api |
 
@@ -136,7 +136,7 @@ A route in `signatureOnlyRoutes` (`internal/apiservice/scopeexempt.go`) skips st
 | `Public` | No credential check. | not counted (public rows: 33) |
 | `Authenticated` | A valid access token. | 45 |
 | `Admin` | A valid token, and the role is `owner` or `admin`, or the user is a superuser. The role is read from the membership row of the token's organization, not from the role claim. | 81 |
-| `AdminOrg` | `Admin`, and the caller's own organization is not empty. | 50 |
+| `AdminOrg` | `Admin`, and the effective organization is not empty. The effective organization is the caller's own, or the target organization while an impersonation session is active. | 50 |
 | `Superuser` | The user is a superuser. | 16 |
 | `Optional` | The caller is authenticated when a usable bearer token is sent. A refused token does not refuse the request. | 2 |
 

@@ -15,11 +15,15 @@ import (
 
 const databaseName = "default"
 
-// renderCHUsers: `render-ch-users <authorization.go> <out-file>`; the password is in API_CH_PASSWORD only.
-// The file is built from a fixed element table: no text of the input but the grant rows reaches it, and the
-// SHA-256 of the password is the only derived secret.
+// renderCHUsers: `render-ch-users [--project-scope] <authorization.go> <out-file>`; the password is in
+// API_CH_PASSWORD only. The file is built from a fixed element table: no text of the input but the grant rows reaches
+// it, and the SHA-256 of the password is the only derived secret. --project-scope renders the flag-on posture of a
+// go-api with ACR_ACCESS_PROJECT_SCOPE=true (APIPostureFor(db, true), CHAOS-12268): the grants of func APIPosture,
+// then the one row of func ProjectScopeGrant; a manifest without exactly one such row is refused.
 func renderCHUsers(args []string, stdout, stderr io.Writer) int {
+	args, projectScope := takeProjectScopeOption(args)
 	if len(args) != 2 {
+		// The usage line is the recorded Python one (parity_test); the --project-scope option is documented above.
 		fmt.Fprintln(stderr, "usage: cigate bigboy render-ch-users <authorization.go> <out-file>")
 		return 2
 	}
@@ -46,6 +50,14 @@ func renderCHUsers(args []string, stdout, stderr io.Writer) int {
 		return utf8Refusal(stderr, manifest)
 	}
 	statements := rowStatements(string(raw))
+	if projectScope {
+		extra := funcRowStatements(string(raw), projectScopeMarker)
+		if len(extra) != 1 {
+			fmt.Fprintf(stderr, "the posture manifest has %d granting rows in func ProjectScopeGrant, want 1 for --project-scope, nothing written\n", len(extra))
+			return 1
+		}
+		statements = append(statements, extra...)
+	}
 	xml, err := renderUsersXML(statements, password)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -61,9 +73,13 @@ func renderCHUsers(args []string, stdout, stderr io.Writer) int {
 }
 
 // rowStatements is the GRANT statements of func APIPosture, one per row that grants anything.
-func rowStatements(source string) []string {
+func rowStatements(source string) []string { return funcRowStatements(source, "func APIPosture(") }
+
+// funcRowStatements is the GRANT statements of the manifest function that marker opens, one per row that grants
+// anything, read up to the function's closing "\n}\n".
+func funcRowStatements(source, marker string) []string {
 	source = universalNewlines(source)
-	rest, ok := afterFirst(source, "func APIPosture(")
+	rest, ok := afterFirst(source, marker)
 	if !ok {
 		return nil
 	}

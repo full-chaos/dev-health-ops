@@ -10,7 +10,9 @@ import (
 // grantsCompare: `grants-compare <actual-grants-tsv> <authorization.go source>` -- both are the TEXT, not paths.
 // Prints the bigboy_grants_check summary and GRANTS_CHECK_OK or GRANTS_CHECK_FAIL; exit 0 on a match, else 1.
 func grantsCompare(args []string, stdout, stderr io.Writer) int {
+	args, projectScope := takeProjectScopeOption(args)
 	if len(args) < 2 {
+		// The recorded Python usage line (parity_test); --project-scope is an optional first argument.
 		fmt.Fprintln(stderr, "usage: cigate bigboy grants-compare <actual-grants-tsv> <authorization.go source>")
 		return 1
 	}
@@ -19,6 +21,16 @@ func grantsCompare(args []string, stdout, stderr io.Writer) int {
 		// Python stopped here on an IndexError (no func APIPosture): nothing on stdout, the error on stderr, exit 1.
 		fmt.Fprintln(stderr, "GRANTS_CHECK_FAIL manifest not parsed: no func APIPosture")
 		return 1
+	}
+	if projectScope {
+		// The flag-on posture (APIPostureFor(db, true), CHAOS-12268): APIPosture plus the one ProjectScopeGrant row.
+		rows := funcRowStatements(args[1], projectScopeMarker)
+		extra, _ := chFuncGrants(args[1], projectScopeMarker)
+		if len(rows) != 1 {
+			fmt.Fprintf(stdout, "GRANTS_CHECK_FAIL manifest not parsed: %d granting rows in func ProjectScopeGrant, want 1 for --project-scope\n", len(rows))
+			return 1
+		}
+		pairs = append(pairs, extra...)
 	}
 	expected := map[string][]string{}
 	for _, g := range pairs {

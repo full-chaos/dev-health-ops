@@ -10,6 +10,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/org"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 )
 
@@ -134,6 +135,7 @@ func (h provisioningHandlers) orgCreate(w http.ResponseWriter, r *http.Request) 
 	denied := reasonSuperuserRequired
 	born, err := h.Organizations.CreateOrganization(ctx, identity.CreateOrganizationRequest{Actor: actor, RequestID: requestid.Audit(ctx), Caller: caller,
 		Slug: slug, Name: name, Description: description, Settings: settings, Tier: tier, ManagedBy: managedBy, Owner: owner,
+		LockRoles: platformrole.LockWritesShared,
 		Authorize: func(ctx context.Context, tx audit.TxOps) error {
 			_, err := h.actorRule(ctx, tx, actor, uuid.Nil, true)
 			var refused errActorRefused

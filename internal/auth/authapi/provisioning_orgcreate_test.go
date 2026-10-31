@@ -102,6 +102,9 @@ func TestOrgCreateRoutesAnswer(t *testing.T) {
 		t.Fatalf("create: %d %s", got.Code, got.Body.String())
 	}
 	in := f.orgs.create
+	if in.LockRoles == nil {
+		t.Fatal("the create takes no role write lock")
+	}
 	if in.Actor != f.super || in.Slug != "acme" || in.Name != "Acme" || in.Tier != "team" || in.ManagedBy != "manual" ||
 		in.Owner == nil || *in.Owner != owner || in.Description == nil || *in.Description != "d" || string(in.Settings) != `{"a":1}` {
 		t.Fatalf("create request %+v", in)

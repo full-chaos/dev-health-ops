@@ -16,7 +16,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/registerorg"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
-	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole"
 )
 
 var (
@@ -40,7 +39,8 @@ type OnboardOrganizationRequest struct {
 }
 
 // CreateOrganizationRequest creates an organization for a platform actor.
-// Owner nil creates it with no member. Authorize decides under the locks.
+// Owner nil creates it with no member. LockRoles takes platformrole's write lock
+// shared (identity cannot link that package); Authorize decides under the locks.
 type CreateOrganizationRequest struct {
 	Actor       uuid.UUID
 	RequestID   *string
@@ -51,6 +51,7 @@ type CreateOrganizationRequest struct {
 	Tier        string
 	ManagedBy   string
 	Owner       *uuid.UUID
+	LockRoles   func(ctx context.Context, tx audit.TxOps) error
 	Authorize   func(ctx context.Context, tx audit.TxOps) error
 }
 
@@ -262,7 +263,7 @@ func (s *Store) CreateOrganization(ctx context.Context, req CreateOrganizationRe
 	if !s.ownsUsers {
 		return nil, ErrSignupNotAvailable
 	}
-	if req.Authorize == nil {
+	if req.Authorize == nil || req.LockRoles == nil {
 		return nil, ErrOrganizationDenied
 	}
 	slug, err := s.freeOrganizationSlug(ctx, req.Slug)
@@ -278,7 +279,7 @@ func (s *Store) CreateOrganization(ctx context.Context, req CreateOrganizationRe
 	records, events := s.birthRecords(ctx, b, &actor, req.RequestID, req.Caller)
 	err = audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
-			if err := platformrole.LockWritesShared(ctx, tx); err != nil {
+			if err := req.LockRoles(ctx, tx); err != nil {
 				return err
 			}
 			if err := s.lockCreator(ctx, tx, req.Actor, req.Owner); err != nil {

@@ -17,6 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/registerorg"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
@@ -168,7 +169,7 @@ func TestNewOrgSignsInWithOrgsOwned(t *testing.T) {
 	}
 	owner := e.orgless(t, ctx)
 	created, err := e.owned.CreateOrganization(ctx, CreateOrganizationRequest{Actor: e.orgless(t, ctx), Slug: "signs-in-" + owner.String()[:8], Name: "Admin Org",
-		Settings: []byte(`{}`), Tier: "community", ManagedBy: "stripe", Owner: &owner, Authorize: allowCreate})
+		Settings: []byte(`{}`), Tier: "community", ManagedBy: "stripe", Owner: &owner, LockRoles: platformrole.LockWritesShared, Authorize: allowCreate})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -388,7 +389,7 @@ func TestCreateOrgWithOwnerOneCommit(t *testing.T) {
 	actor, owner := e.orgless(t, ctx), e.orgless(t, ctx)
 	slug := "made-" + owner.String()[:8]
 	born, err := e.owned.CreateOrganization(ctx, CreateOrganizationRequest{Actor: actor, Slug: slug, Name: "Made", Settings: []byte(`{}`),
-		Tier: "community", ManagedBy: "stripe", Owner: &owner, Authorize: allowCreate})
+		Tier: "community", ManagedBy: "stripe", Owner: &owner, LockRoles: platformrole.LockWritesShared, Authorize: allowCreate})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -407,7 +408,7 @@ func TestCreateOrgNoOwnerWritesBothOrgRows(t *testing.T) {
 	actor := e.orgless(t, ctx)
 	slug := "empty-" + actor.String()[:8]
 	born, err := e.owned.CreateOrganization(ctx, CreateOrganizationRequest{Actor: actor, Slug: slug, Name: "Empty", Settings: []byte(`{}`),
-		Tier: "community", ManagedBy: "stripe", Authorize: allowCreate})
+		Tier: "community", ManagedBy: "stripe", LockRoles: platformrole.LockWritesShared, Authorize: allowCreate})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -425,7 +426,7 @@ func TestCreateOrgKeepsDescriptionSettingsTier(t *testing.T) {
 	actor := e.orgless(t, ctx)
 	description := "kept"
 	born, err := e.owned.CreateOrganization(ctx, CreateOrganizationRequest{Actor: actor, Slug: "kept-" + actor.String()[:8], Name: "Kept", Description: &description,
-		Settings: []byte(`{"a":1}`), Tier: "team", ManagedBy: "manual", Authorize: allowCreate})
+		Settings: []byte(`{"a":1}`), Tier: "team", ManagedBy: "manual", LockRoles: platformrole.LockWritesShared, Authorize: allowCreate})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -440,7 +441,7 @@ func TestCreateOrgRefusesANonSuperuserOnTheTx(t *testing.T) {
 	sawTx := false
 	before := e.orgWrites(t, ctx)
 	_, err := e.owned.CreateOrganization(ctx, CreateOrganizationRequest{Actor: actor, Slug: "refused-" + actor.String()[:8], Name: "Refused", Settings: []byte(`{}`),
-		Tier: "community", ManagedBy: "stripe", Authorize: func(context.Context, audit.TxOps) error {
+		Tier: "community", ManagedBy: "stripe", LockRoles: platformrole.LockWritesShared, Authorize: func(context.Context, audit.TxOps) error {
 			sawTx = true
 			return ErrOrganizationDenied
 		}})
@@ -468,7 +469,7 @@ func TestCreateOrgRaceWithRoleRevoke(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		_, err := e.owned.CreateOrganization(ctx, CreateOrganizationRequest{Actor: actor, Slug: "held-" + actor.String()[:8], Name: "Held", Settings: []byte(`{}`),
-			Tier: "community", ManagedBy: "stripe", Authorize: allowCreate})
+			Tier: "community", ManagedBy: "stripe", LockRoles: platformrole.LockWritesShared, Authorize: allowCreate})
 		done <- err
 	}()
 	for e.count(t, ctx, `SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`) == 0 {

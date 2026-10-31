@@ -248,6 +248,21 @@ func segmentLogin(words []string) string {
 			return "indirect"
 		}
 	}
+	if base == "echo" || base == "printf" {
+		return ""
+	}
+	for j, w := range words {
+		if isLoginScriptPath(w) {
+			return "call"
+		}
+		if loginTools[filepath.Base(w)] {
+			for _, l := range words[j+1:] {
+				if l == "login" {
+					return "login"
+				}
+			}
+		}
+	}
 	return ""
 }
 

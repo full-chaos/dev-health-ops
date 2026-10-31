@@ -255,9 +255,14 @@ func TestWorkloadExchangeLeavesTheAPIOriginToAuthService(t *testing.T) {
 	}
 }
 
+// helm parses a plain --set number as an integer and --set-json or a values file as a float: both forms render.
 func TestWorkloadExchangeAcceptsAFullPeerAndAnotherPort(t *testing.T) {
-	docs := renderPhase(t, 2, exchangeSets("--set-json", `authService.networkPolicy.egress.kubeAPI.port=6443`)...)
-	if !hasPortRule(npRules(t, npDoc(docs), "egress"), 6443) {
-		t.Error("kubeAPI.port 6443 renders no egress rule on 6443")
+	for flag, set := range map[string]string{"--set": "--set", "--set-json": "--set-json"} {
+		t.Run(flag, func(t *testing.T) {
+			docs := renderPhase(t, 2, exchangeSets(set, `authService.networkPolicy.egress.kubeAPI.port=6443`)...)
+			if !hasPortRule(npRules(t, npDoc(docs), "egress"), 6443) {
+				t.Error("kubeAPI.port 6443 renders no egress rule on 6443")
+			}
+		})
 	}
 }

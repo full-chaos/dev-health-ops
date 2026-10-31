@@ -186,15 +186,23 @@ func TestWorkloadExchangeRefusals(t *testing.T) {
 		args []string
 		want string
 	}{
-		"no issuer":         {phaseArgs(2, "--set", "authService.workloadExchange.enabled=true", "--set", "authService.workloadExchange.trustDomain=c", "--set", "authService.workloadExchange.clusterIssuer=https://k.example"), "authService.accessToken.issuerURL"},
-		"no trust domain":   {phaseArgs(2, withoutSet(exchangeSets(), "authService.workloadExchange.trustDomain=cluster.example")...), "authService.workloadExchange.trustDomain"},
-		"no cluster issuer": {phaseArgs(2, withoutSet(exchangeSets(), "authService.workloadExchange.clusterIssuer=https://kubernetes.default.svc")...), "authService.workloadExchange.clusterIssuer"},
-		"no kube api peer":  {phaseArgs(2, withoutKubeAPI(exchangeSets())...), "authService.networkPolicy.egress.kubeAPI.to"},
-		"kube api path":     {phaseArgs(2, exchangeSets("--set", "authService.workloadExchange.kubeAPIURL=https://k.example/api")...), "kubeAPIURL"},
-		"kube api http":     {phaseArgs(2, exchangeSets("--set", "authService.workloadExchange.kubeAPIURL=http://k.example")...), "kubeAPIURL"},
-		"enabled string":    {phaseArgs(2, exchangeSets("--set-string", "authService.workloadExchange.enabled=true")...), "authService.workloadExchange.enabled"},
-		"extraEnv exchange": {phaseArgs(2, exchangeSets("--set-json", `authService.extraEnv=[{"name":"AUTH_WORKLOAD_EXCHANGE","value":"true"}]`)...), "authService.extraEnv must not set AUTH_WORKLOAD_EXCHANGE"},
-		"phase 0":           {append(append([]string{}, authBase...), "--set", "authService.phase=0", "--set", "authService.workloadExchange.enabled=true"), "authService.workloadExchange"},
+		"no issuer":            {phaseArgs(2, "--set", "authService.workloadExchange.enabled=true", "--set", "authService.workloadExchange.trustDomain=c", "--set", "authService.workloadExchange.clusterIssuer=https://k.example"), "authService.accessToken.issuerURL"},
+		"no trust domain":      {phaseArgs(2, withoutSet(exchangeSets(), "authService.workloadExchange.trustDomain=cluster.example")...), "authService.workloadExchange.trustDomain"},
+		"no cluster issuer":    {phaseArgs(2, withoutSet(exchangeSets(), "authService.workloadExchange.clusterIssuer=https://kubernetes.default.svc")...), "authService.workloadExchange.clusterIssuer"},
+		"no kube api peer":     {phaseArgs(2, withoutKubeAPI(exchangeSets())...), "authService.networkPolicy.egress.kubeAPI.to"},
+		"enabled string":       {phaseArgs(2, exchangeSets("--set-string", "authService.workloadExchange.enabled=true")...), "authService.workloadExchange.enabled"},
+		"extraEnv exchange":    {phaseArgs(2, exchangeSets("--set-json", `authService.extraEnv=[{"name":"AUTH_WORKLOAD_EXCHANGE","value":"true"}]`)...), "authService.extraEnv must not set AUTH_WORKLOAD_EXCHANGE"},
+		"enabled empty string": {phaseArgs(2, append(withoutSet(exchangeSets(), "authService.workloadExchange.enabled=true"), "--set-string", "authService.workloadExchange.enabled=")...), "authService.workloadExchange.enabled"},
+		"enabled zero":         {phaseArgs(2, append(withoutSet(exchangeSets(), "authService.workloadExchange.enabled=true"), "--set-json", "authService.workloadExchange.enabled=0")...), "authService.workloadExchange.enabled"},
+		"no api url":           {phaseArgs(2, exchangeSets("--set-string", "authService.workloadExchange.kubeAPIURL=")...), "authService.workloadExchange.kubeAPIURL"},
+		"empty peer":           {phaseArgs(2, exchangeSets("--set-json", `authService.networkPolicy.egress.kubeAPI.to=[{}]`)...), "authService.networkPolicy.egress.kubeAPI.to"},
+		"scalar peer":          {phaseArgs(2, exchangeSets("--set-json", `authService.networkPolicy.egress.kubeAPI.to=["10.0.0.1"]`)...), "authService.networkPolicy.egress.kubeAPI.to"},
+		"one empty peer among": {phaseArgs(2, exchangeSets("--set-json", `authService.networkPolicy.egress.kubeAPI.to=[{"ipBlock":{"cidr":"10.43.0.1/32"}},{}]`)...), "authService.networkPolicy.egress.kubeAPI.to"},
+		"port zero":            {phaseArgs(2, exchangeSets("--set-json", "authService.networkPolicy.egress.kubeAPI.port=0")...), "authService.networkPolicy.egress.kubeAPI.port"},
+		"port too big":         {phaseArgs(2, exchangeSets("--set-json", "authService.networkPolicy.egress.kubeAPI.port=65536")...), "authService.networkPolicy.egress.kubeAPI.port"},
+		"port string":          {phaseArgs(2, exchangeSets("--set-string", "authService.networkPolicy.egress.kubeAPI.port=443")...), "authService.networkPolicy.egress.kubeAPI.port"},
+		"port fraction":        {phaseArgs(2, exchangeSets("--set-json", "authService.networkPolicy.egress.kubeAPI.port=443.5")...), "authService.networkPolicy.egress.kubeAPI.port"},
+		"phase 0":              {append(append([]string{}, authBase...), "--set", "authService.phase=0", "--set", "authService.workloadExchange.enabled=true"), "authService.workloadExchange"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -228,4 +236,28 @@ func withoutKubeAPI(args []string) []string {
 		out = append(out, args[i])
 	}
 	return out
+}
+
+// The chart keeps only the missing-input gate for the API origin: a malformed origin is refused by auth-service at
+// start (D6465), so a form auth-service accepts must not be refused here.
+func TestWorkloadExchangeLeavesTheAPIOriginToAuthService(t *testing.T) {
+	for _, url := range []string{"https://kubernetes.default.svc/", "https://[fd00::1]:6443", "https://10.43.0.1:6443"} {
+		t.Run(url, func(t *testing.T) {
+			docs, out, err := renderAuth(t, phaseArgs(2, exchangeSets("--set-string", "authService.workloadExchange.kubeAPIURL="+url)...)...)
+			if err != nil {
+				t.Fatalf("the chart refuses %q: %v\n%.300s", url, err, out)
+			}
+			svc := authDoc(docs, "Deployment", "a-dev-health-auth-service")
+			if got, _ := containerEnvValue(t, svc, "AUTH_WORKLOAD_EXCHANGE_KUBE_API_URL"); got != url {
+				t.Errorf("AUTH_WORKLOAD_EXCHANGE_KUBE_API_URL = %q, want %q unchanged", got, url)
+			}
+		})
+	}
+}
+
+func TestWorkloadExchangeAcceptsAFullPeerAndAnotherPort(t *testing.T) {
+	docs := renderPhase(t, 2, exchangeSets("--set-json", `authService.networkPolicy.egress.kubeAPI.port=6443`)...)
+	if !hasPortRule(npRules(t, npDoc(docs), "egress"), 6443) {
+		t.Error("kubeAPI.port 6443 renders no egress rule on 6443")
+	}
 }

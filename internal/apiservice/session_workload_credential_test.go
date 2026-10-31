@@ -473,54 +473,86 @@ func TestSessionWorkloadExchangeNeverFollowsARedirectToAnotherOrigin(t *testing.
 	probe.Assert(t)
 }
 
-// Both selectors take the exact value: unset, empty, session_compat and workload only. A padded or whitespace-only
-// value is a start-up error naming the selector, never read as another value.
-func TestSelectorsRefusePaddedAndWhitespaceOnlyValues(t *testing.T) {
-	cfg := sessionAndProvisioningOn(t, "http://auth-service:8095")
+// The session selector takes the exact value: unset, empty, session_compat and workload only. A padded or
+// whitespace-only value is a start-up error naming the selector, never read as another value.
+func TestSessionSelectorRefusesPaddedAndWhitespaceOnlyValues(t *testing.T) {
+	cfg := sessionsOn(t, "http://auth-service:8095")
 	good := workloadEnv(t, nil)
-	for _, selector := range []string{EnvAuthSessionIssueCredential, EnvAuthProvisioningCredential} {
-		for name, value := range map[string]string{
-			"space only":                 " ",
-			"tab only":                   "\t",
-			"newline only":               "\n",
-			"workload leading space":     " workload",
-			"workload trailing space":    "workload ",
-			"workload surrounded":        " workload ",
-			"workload trailing newline":  "workload\n",
-			"session_compat leading":     " session_compat",
-			"session_compat trailing":    "session_compat ",
-			"session_compat surrounded":  " session_compat ",
-			"session_compat newline end": "session_compat\n",
-		} {
-			env := map[string]string{selector: value}
-			for k, v := range good {
-				env[k] = v
-			}
-			_, _, err := newCredentials(cfg, issueEnv(env))
-			if err == nil || !strings.Contains(err.Error(), selector) {
-				t.Errorf("%s %s (%q): err %v, want a start-up error naming the selector", selector, name, value, err)
-			}
+	for name, value := range map[string]string{
+		"space only":                 " ",
+		"tab only":                   "\t",
+		"newline only":               "\n",
+		"workload leading space":     " workload",
+		"workload trailing space":    "workload ",
+		"workload surrounded":        " workload ",
+		"workload trailing newline":  "workload\n",
+		"session_compat leading":     " session_compat",
+		"session_compat trailing":    "session_compat ",
+		"session_compat surrounded":  " session_compat ",
+		"session_compat newline end": "session_compat\n",
+	} {
+		env := map[string]string{EnvAuthSessionIssueCredential: value}
+		for k, v := range good {
+			env[k] = v
 		}
-		for name, value := range map[string]string{"unset": "", "session_compat": "session_compat", "workload": "workload"} {
-			env := map[string]string{}
-			if name != "unset" {
-				env[selector] = value
-			}
-			for k, v := range good {
-				env[k] = v
-			}
-			provisioning, session, err := newCredentials(cfg, issueEnv(env))
-			if err != nil {
-				t.Errorf("%s %s: unexpected error %v", selector, name, err)
-				continue
-			}
-			got := provisioning.workload != nil
-			if selector == EnvAuthSessionIssueCredential {
-				got = session.workload != nil
-			}
-			if got != (name == "workload") {
-				t.Errorf("%s %s: workload client built = %v", selector, name, got)
-			}
+		_, _, err := newCredentials(cfg, issueEnv(env))
+		if err == nil || !strings.Contains(err.Error(), EnvAuthSessionIssueCredential) {
+			t.Errorf("%s (%q): err %v, want a start-up error naming the selector", name, value, err)
+		}
+	}
+	for name, value := range map[string]string{"unset": "", "session_compat": "session_compat", "workload": "workload"} {
+		env := map[string]string{}
+		if name != "unset" {
+			env[EnvAuthSessionIssueCredential] = value
+		}
+		for k, v := range good {
+			env[k] = v
+		}
+		_, session, err := newCredentials(cfg, issueEnv(env))
+		if err != nil || (session.workload != nil) != (name == "workload") {
+			t.Errorf("%s: err %v, workload client built = %v", name, err, session.workload != nil)
+		}
+	}
+}
+
+// The provisioning selector keeps main's trimmed reading (the value was trimmed since the provisioning change): the
+// 13 values of the matrix are accepted or refused exactly as on main.
+func TestProvisioningSelectorKeepsMainsTrimmedReading(t *testing.T) {
+	cfg := provisioningOn(t, "http://auth-service:8095")
+	good := workloadEnv(t, nil)
+	for name, tc := range map[string]struct {
+		value    string
+		workload bool
+		refused  bool
+	}{
+		"unset":                {"", false, false},
+		"space only":           {" ", false, false},
+		"tab only":             {"\t", false, false},
+		"newline only":         {"\n", false, false},
+		"workload":             {"workload", true, false},
+		"workload leading":     {" workload", true, false},
+		"workload trailing":    {"workload ", true, false},
+		"workload surrounding": {" workload ", true, false},
+		"compat":               {"session_compat", false, false},
+		"compat leading":       {" session_compat", false, false},
+		"compat trailing":      {"session_compat ", false, false},
+		"compat surrounding":   {" session_compat ", false, false},
+		"wrong case":           {"Workload", false, true},
+		"boolean":              {"true", false, true},
+		"combined":             {"workload session_compat", false, true},
+	} {
+		env := map[string]string{EnvAuthProvisioningCredential: tc.value}
+		for k, v := range good {
+			env[k] = v
+		}
+		provisioning, _, err := newCredentials(cfg, issueEnv(env))
+		switch {
+		case tc.refused && (err == nil || !strings.Contains(err.Error(), EnvAuthProvisioningCredential)):
+			t.Errorf("%s (%q): err %v, want a start-up error naming the selector", name, tc.value, err)
+		case !tc.refused && err != nil:
+			t.Errorf("%s (%q): unexpected error %v", name, tc.value, err)
+		case !tc.refused && (provisioning.workload != nil) != tc.workload:
+			t.Errorf("%s (%q): workload client built = %v, want %v", name, tc.value, provisioning.workload != nil, tc.workload)
 		}
 	}
 }

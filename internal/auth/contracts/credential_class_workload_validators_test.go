@@ -16,10 +16,15 @@ func TestWorkloadTokenClassPinsItsValidators(t *testing.T) {
 		"internal/auth/authapi/issue_workload.go": "func (s *SessionIssueWorkload) authorize(",
 	}
 	var validators []any
+	classes := 0
 	for _, class := range registryDocument(t) {
 		if class["class_id"] == "workload_token" {
+			classes++
 			validators, _ = class["validators"].([]any)
 		}
+	}
+	if classes != 1 {
+		t.Fatalf("the registry lists %d workload_token classes, want 1", classes)
 	}
 	if len(validators) != len(want) {
 		t.Fatalf("workload_token lists %d validators, want %d", len(validators), len(want))
@@ -39,8 +44,11 @@ func TestWorkloadTokenClassPinsItsValidators(t *testing.T) {
 		if validator["is_intended_validator"] != true {
 			t.Errorf("%s: is_intended_validator = %v, want true: it verifies the workload token on its routes", path, validator["is_intended_validator"])
 		}
-		if _, flagged := validator["reachable_but_not_owner"]; flagged {
-			t.Errorf("%s: reachable_but_not_owner is set on an owning validator", path)
+		if validator["reachable_but_not_owner"] == true {
+			t.Errorf("%s: reachable_but_not_owner is true on an owning validator", path)
+		}
+		if anchor["repo"] != "ops" {
+			t.Errorf("%s: anchor repo = %v, want ops", path, anchor["repo"])
 		}
 		source, err := os.ReadFile(filepath.Join(root, path))
 		if err != nil {

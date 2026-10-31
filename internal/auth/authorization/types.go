@@ -55,6 +55,9 @@ type Request struct {
 	Action         string
 	ResourceKind   string
 	OrganizationID string
+	// ResourceKey is the canonical repository key ("owner/repo", or "*" for
+	// the whole organization); empty for every other resource kind.
+	ResourceKey string
 }
 
 // Reason is a closed, internal token for a decision.
@@ -74,6 +77,17 @@ const (
 	ReasonRoleUnknown          Reason = "role_unknown"
 	ReasonRoleScopeMismatch    Reason = "role_scope_mismatch"
 	ReasonRoleLacksAction      Reason = "role_lacks_action"
+
+	ReasonAllowedByRepositoryGrant Reason = "allowed_by_repository_grant"
+	ReasonGrantAbsent              Reason = "grant_absent"
+	ReasonRepositoryNotGranted     Reason = "repository_not_granted"
+	ReasonGrantExpired             Reason = "grant_expired"
+	ReasonGrantRevoked             Reason = "grant_revoked"
+	ReasonResourceOrgMismatch      Reason = "resource_org_mismatch"
+	ReasonWorkloadAudienceDenied   Reason = "workload_audience_denied"
+	ReasonWorkloadActionDenied     Reason = "workload_action_denied"
+	ReasonClockUnavailable         Reason = "clock_unavailable"
+	ReasonServiceAccountInactive   Reason = "service_account_inactive"
 )
 
 // AllReasons lists every Reason the package can return.
@@ -82,7 +96,9 @@ func AllReasons() []Reason {
 		ReasonAllowedByRole, ReasonInvalidRequest, ReasonUnknownAction, ReasonResourceMismatch,
 		ReasonPrincipalInactive, ReasonOrganizationInactive, ReasonNoMembership, ReasonOrgMismatch,
 		ReasonMembershipInactive, ReasonPlatformRoleAbsent, ReasonRoleUnknown, ReasonRoleScopeMismatch,
-		ReasonRoleLacksAction,
+		ReasonRoleLacksAction, ReasonAllowedByRepositoryGrant, ReasonGrantAbsent, ReasonRepositoryNotGranted,
+		ReasonGrantExpired, ReasonGrantRevoked, ReasonResourceOrgMismatch, ReasonWorkloadAudienceDenied,
+		ReasonWorkloadActionDenied, ReasonClockUnavailable, ReasonServiceAccountInactive,
 	}
 }
 

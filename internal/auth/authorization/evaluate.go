@@ -9,12 +9,17 @@ import (
 const (
 	resourceOrganization = "organization"
 	resourcePlatform     = "platform"
+	resourceRepository   = "repository"
+	wildcardKey          = "*"
 	maxFieldLen          = 128
 )
 
 var (
 	actionShape = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`)
 	orgIDShape  = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
+	// repoKeyShape is the repository key of authorization_request.v1 and of
+	// resource_grants (migration 0020): one "owner/repo" pair or "*".
+	repoKeyShape = regexp.MustCompile(`^([a-z0-9][a-z0-9._-]{0,99}/[a-z0-9][a-z0-9._-]{0,99}|\*)$`)
 )
 
 // NormalizeRequest accepts only a canonical request and returns it
@@ -26,11 +31,15 @@ func NormalizeRequest(r Request) (Request, bool) {
 	}
 	switch r.ResourceKind {
 	case resourceOrganization:
-		if len(r.OrganizationID) > maxFieldLen || !orgIDShape.MatchString(r.OrganizationID) {
+		if r.ResourceKey != "" || len(r.OrganizationID) > maxFieldLen || !orgIDShape.MatchString(r.OrganizationID) {
+			return Request{}, false
+		}
+	case resourceRepository:
+		if !repoKeyShape.MatchString(r.ResourceKey) || len(r.OrganizationID) > maxFieldLen || !orgIDShape.MatchString(r.OrganizationID) {
 			return Request{}, false
 		}
 	case resourcePlatform:
-		if r.OrganizationID != "" {
+		if r.OrganizationID != "" || r.ResourceKey != "" {
 			return Request{}, false
 		}
 	default:
@@ -41,18 +50,27 @@ func NormalizeRequest(r Request) (Request, bool) {
 
 // Evaluator decides requests under one catalog.
 type Evaluator struct {
-	cat *policycatalog.Catalog
+	cat catalogView
+}
+
+// catalogView is the read side of a catalog the evaluator needs; the
+// embedded *policycatalog.Catalog is the only one outside tests.
+type catalogView interface {
+	Version() int
+	Action(id string) (policycatalog.Action, error)
+	Role(id string) (policycatalog.Role, error)
+	Allows(role, action string) bool
 }
 
 // NewEvaluator decides under the embedded catalog only; a caller cannot supply one.
 func NewEvaluator() *Evaluator { return newEvaluator(policycatalog.Default()) }
 
-func newEvaluator(c *policycatalog.Catalog) *Evaluator { return &Evaluator{cat: c} }
+func newEvaluator(c catalogView) *Evaluator { return &Evaluator{cat: c} }
 
 // Evaluate returns the decision for r over s. A nil evaluator, catalog or
 // snapshot denies.
 func (e *Evaluator) Evaluate(r Request, s Snapshot) Decision {
-	if e == nil || e.cat == nil || s == nil {
+	if e == nil || e.cat == nil || s == nil || isNilCatalog(e.cat) {
 		return Decision{Reason: ReasonInvalidRequest}
 	}
 	rev := e.cat.Version()
@@ -71,6 +89,14 @@ func (e *Evaluator) Evaluate(r Request, s Snapshot) Decision {
 	}
 	if s.PrincipalStatus() != StatusActive {
 		return deny(ReasonPrincipalInactive)
+	}
+	if gs, ok := s.(GrantSnapshot); ok {
+		if why := workloadDenial(gs, r.Action); why != "" {
+			return deny(why)
+		}
+	}
+	if act.ResourceKind == resourceRepository {
+		return e.evaluateRepository(r, act, s, rev)
 	}
 
 	var roleID string

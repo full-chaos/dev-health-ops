@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/ed25519"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -40,6 +41,8 @@ type behaviourStack struct {
 	edge     string
 	user     string
 	reader   *accessReader
+	priv     ed25519.PrivateKey
+	seen     *[]authctx.Claims
 }
 
 // newBehaviourStack is the stack with the access-token issuer set: the edge
@@ -81,8 +84,10 @@ func newAccessStackOn(t *testing.T, store queryAPIUserStore, setup *accessSetup,
 		}
 	}
 	mux := routeswitch.NewMux(routeswitch.StaticSwitch{"probe": true})
+	seen := &[]authctx.Claims{}
 	mux.Register("probe", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = authctx.FromContext(r.Context())
+		claims, _ := authctx.FromContext(r.Context())
+		*seen = append(*seen, claims)
 		w.WriteHeader(http.StatusOK)
 	}))
 	query := newDocumentDispatchHandler(getenv, mux, map[string]string{digestHex(iaDocument): "probe"}, verifier, auth, store, "", nil)
@@ -120,6 +125,8 @@ func newAccessStackOn(t *testing.T, store queryAPIUserStore, setup *accessSetup,
 		envelope: iaEnvelope(t, priv, principal.Claims{OrgID: ecOrg.String(), Role: "admin"}),
 		edge:     ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", tokenVersion: 5}),
 		reader:   reader,
+		priv:     priv,
+		seen:     seen,
 	}
 }
 

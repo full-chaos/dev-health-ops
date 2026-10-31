@@ -5,7 +5,6 @@ package entitlement_test
 import (
 	"context"
 	"fmt"
-	"os"
 	"testing"
 	"time"
 
@@ -18,33 +17,17 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
 
-var (
-	itAdmin, itRuntime *pgxpool.Pool
-	itCleanup          []func()
-)
-
-func TestMain(m *testing.M) {
-	code := m.Run()
-	for i := len(itCleanup) - 1; i >= 0; i-- {
-		itCleanup[i]()
-	}
-	os.Exit(code)
-}
-
 // runtimePool is a pool logged in as the auth runtime role. The role gets its public read grants only from authschema.Apply
 // (PublicReadColumns); the test adds none, so a grant PGSource needs and the manifest lacks fails the read.
 func runtimePool(t *testing.T) (admin, runtime *pgxpool.Pool) {
 	t.Helper()
-	if itRuntime != nil {
-		return itAdmin, itRuntime
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	instance, err := containers.StartPostgres(ctx)
 	if err != nil {
 		t.Fatalf("test database: %v", err)
 	}
-	itCleanup = append(itCleanup, func() {
+	t.Cleanup(func() {
 		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer closeCancel()
 		_ = instance.Close(closeCtx)
@@ -53,7 +36,7 @@ func runtimePool(t *testing.T) (admin, runtime *pgxpool.Pool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	itCleanup = append(itCleanup, adminPool.Close)
+	t.Cleanup(adminPool.Close)
 	pgschema.Apply(ctx, t, adminPool)
 	role, err := containers.RoleName("entitlement_runtime", instance)
 	if err != nil {
@@ -67,7 +50,7 @@ func runtimePool(t *testing.T) (admin, runtime *pgxpool.Pool) {
 	if _, err := adminPool.Exec(ctx, fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD '%s'", authschema.Quote(ident), password)); err != nil {
 		t.Fatal(err)
 	}
-	itCleanup = append(itCleanup, func() { containers.DropRole(adminPool, role, func(string, ...any) {}) })
+	t.Cleanup(func() { containers.DropRole(adminPool, role, func(string, ...any) {}) })
 	if _, err := authschema.Apply(ctx, adminPool, authschema.Options{Schema: "auth", RuntimeRole: role}); err != nil {
 		t.Fatalf("authschema.Apply: %v", err)
 	}
@@ -78,9 +61,8 @@ func runtimePool(t *testing.T) (admin, runtime *pgxpool.Pool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	itCleanup = append(itCleanup, rt.Close)
-	itAdmin, itRuntime = adminPool, rt
-	return itAdmin, itRuntime
+	t.Cleanup(rt.Close)
+	return adminPool, rt
 }
 
 func TestPGSource_AsAuthRuntimeRole_ReadsLicenseAndOrganizationTier(t *testing.T) {

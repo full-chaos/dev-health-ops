@@ -132,6 +132,7 @@ internal/pythonparity
 internal/pythonparity/emailvalidator
 internal/pythonparity/pyidna
 internal/pythonparity/pyunicodedata
+internal/repoinventory
 internal/scheduler/sync
 internal/storage/clickhouse
 internal/storage/clickhouse/engineclause
@@ -155,6 +156,7 @@ internal/teamcreated
 internal/teamid
 internal/teamkeytables
 internal/teamprovider
+internal/testsupport/chschema
 internal/testsupport/containers
 internal/testsupport/egressallow
 internal/testsupport/moduleroot
@@ -162,6 +164,7 @@ internal/testsupport/pgschema
 internal/testsupport/pgseed
 internal/testsupport/proxycapture
 internal/testsupport/pydanticecho
+internal/testsupport/redirectprobe
 internal/testsupport/usertokens
 internal/testsupport/venueoracle
 internal/token
@@ -178,3 +181,4 @@ internal/workitemcontract
 ~internal/pgmigrate/sql
 ~internal/pgmigrate/sql/down
 ~internal/storage/postgres/authschema/migrations
+~internal/testsupport/chschema/testdata

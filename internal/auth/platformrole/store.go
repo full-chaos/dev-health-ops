@@ -33,8 +33,9 @@ func HoldsSQL(schema, principalExpr, roleExpr string) string {
 }
 
 // writeLock is the advisory transaction lock every grant and revoke takes
-// first, so the store's writes run one at a time.
-const writeLock = "auth.platform_role_assignments:write"
+// first, so the store's writes run one at a time; go-api's guarded admin write
+// takes it shared (rule.SharedWriteLockSQL).
+const writeLock = rule.WriteLock
 
 // Config builds a Store.
 type Config struct {
@@ -271,11 +272,26 @@ ORDER BY r.id`)
 	return nil
 }
 
-// lockWrites takes the store's advisory write lock for the rest of the
-// transaction. The runtime role holds no UPDATE on the assignments, so it
+const (
+	lockWritesSQL       = `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`
+	lockWritesSharedSQL = `SELECT pg_advisory_xact_lock_shared(hashtextextended($1, 0))`
+)
+
+// lockWrites takes the store's advisory write lock, exclusive, for the rest of the transaction: every grant and
+// revoke takes it first, before any principal row. The runtime role holds no UPDATE on the assignments, so it
 // cannot row-lock them; this lock serializes the store's writers instead.
 func lockWrites(ctx context.Context, tx audit.TxOps) error {
-	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, writeLock)
+	_, err := tx.Exec(ctx, lockWritesSQL, writeLock)
+	return err
+}
+
+// LockWritesShared takes the same advisory lock shared for the rest of the transaction. A transaction that decides
+// on the platform roles (a membership verb checking its targets) holds it from before its other locks to its commit, so
+// a grant or revoke waits for it and the roles it read are the roles it writes under; shared holders do not wait for
+// each other. It is step -1 of the auth lock order: a writer that holds this lock exclusively then wants principal rows,
+// so no transaction may hold a principal row and then ask for it.
+func LockWritesShared(ctx context.Context, tx audit.TxOps) error {
+	_, err := tx.Exec(ctx, lockWritesSharedSQL, writeLock)
 	return err
 }
 

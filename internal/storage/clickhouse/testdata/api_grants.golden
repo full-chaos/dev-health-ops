@@ -17,3 +17,4 @@ GRANT INSERT ON default.telemetry_signal_bucket
 GRANT SELECT ON default.llm_token_usage
 GRANT SELECT ON default.work_unit_investments
 GRANT SELECT ON default.work_items
+GRANT SELECT ON default.repos

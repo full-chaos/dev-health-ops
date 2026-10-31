@@ -56,3 +56,49 @@ Code: `internal/apiservice/acr/llmconfig.go`; read and decryption in `llmorgsett
 `base_url`: no provider requires one (`llmorgsettings/resolve.go` `credentialsComplete` checks only the api key), so an empty `base_url` is valid and the consumer uses the provider's public endpoint. The writer validates a non-empty `base_url` with `ValidateBaseURLChecked` (`llmorgsettings/ssrf.go:61`): no whitespace, no userinfo, `https` only, and a literal or resolved host must be public. This route serves what was stored and adds no validation, except one refusal: a `base_url` that carries an api key is never served (the marked 404 with `byo_base_url_carries_key`; the log line and the metric outcome carry the reason only, never the url or the key).
 
 Rotation: a `svc_acr_` credential minted before `llm_config:read` existed gets 403 here. Rotate with `dho service-credentials rotate <id> --scope entitlements:read --scope llm_config:read`.
+
+## Principal access read (CHAOS-12084)
+
+**Mounted** (CHAOS-12128): `acr.Routes` serves it from `Deps.Access`, which go-api's `InternalRoutes` builds over its pool, the policy store and its ClickHouse connection. Its endpoint-profile row is `GET /api/v1/internal/acr/orgs/{org_id}/principals/{user_id}/access [dev-health-ops-api @internal]` (`contracts/auth/v1/endpoint-profiles.go-api.json`). The registration line landed first (CHAOS-12127) so that the row's anchor holds at a commit on `main`. Deploy order: prod `dho_api_ch` gains `GRANT SELECT ON default.repos` in the same step as the go-api image that carries the mount, or go-api's readiness check refuses the login (CHAOS-12121).
+
+`GET /api/v1/internal/acr/orgs/{org_id}/principals/{user_id}/access[?sid=<session id>]` is served on the internal listener, beside the entitlement route. acr-api calls it on **every** protected call by a user-class credential (browser, OAuth user and native device credentials: the investigation POST, replay, status and evidence, and each call acr-mcp forwards) to re-check, live, what it may do for that user (North Star check 18: authorization is re-checked every turn, never carried as memory). Design: Linear "Ask Dev: browser calls ACR directly with an ACR OAuth credential" §3.1. The acr consumer is a separate acr item (CHAOS-12092).
+
+Bearer: a `svc_acr_` credential with the scope `principal_access:read` (`dho service-credentials create --service acr --scope entitlements:read --scope llm_config:read --scope principal_access:read`), or the acr-api workload token. A credential minted before this scope existed gets 403 until it is rotated with it. Order: 429 (more than 6000 attempts per minute from one client address, its own bucket `internal_acr_access_attempt`, not the entitlement route's 100/minute one), 401, 403, then the answers below. The route writes no audit row and no `last_used_at` (one per acr call would put a write on the read path); every answer is logged with the org id, user id and credential id, and counted in `devhealth_acr_internal_requests_total{route="principal_access",outcome}`.
+
+`sid` is optional. With it, the answer carries `session`; without it (a row-only credential class), `session` is absent. Any other query parameter, a second `sid`, a query string that does not decode (`sid=%zz`, a `;` separator), or a `sid` that is not a session id in its wire form (`ses_` + unpadded base64url of 16 bytes) is a 400: an undecodable pair is never read as "no sid".
+
+| Answer | Meaning |
+| --- | --- |
+| 200 `acr_principal_access.v1` body | See below. |
+| 400 `{"detail":"Invalid request","code":"acr_access_invalid_sid"}` | `sid` is not a session id in its wire form. |
+| 400 `{"detail":"Invalid request","code":"acr_access_invalid_query"}` | A query parameter other than one `sid`, or a query string that does not decode. |
+| 404 `{"detail":"Not found","code":"acr_organization_unknown"}` | `org_id` is a well-formed UUID and no `organizations` row exists. |
+| 404 `{"detail":"Not found"}` (no `code`) | `org_id` or `user_id` is not a UUID. |
+| 503 `{"detail":"Service unavailable"}` | Any read failed (Postgres, the auth session read, ClickHouse), the inventory is above its limit, or the route has no store (go-api started without `API_DATABASE_URI`; without a ClickHouse connection the inventory read fails). Never a partial or stale answer; never 401. |
+
+Body, in this key order:
+
+```json
+{
+  "schema_version": "acr_principal_access.v1",
+  "org_id": "<path value>",
+  "user_id": "<path value>",
+  "member": true,
+  "impersonating": false,
+  "session": {"live": true, "impersonating": false},
+  "entitlements": {"ask_dev": true, "agent_context_runtime": true},
+  "repository_scope": {"kind": "repos", "repos": ["acme/api", "acme/web"]}
+}
+```
+
+- `member`: the `users` row is active and a `memberships` row joins the user to the org. No superuser bypass. An unknown well-formed `user_id` is `member: false` (200), not 404.
+- `session.live`: the session `sid` names exists, belongs to `user_id`, is not revoked, carries a `token_version` pin, and that pin equals the user's current `users.token_version` (so a password change ends it). It is go-api's own session check (`internal/api/policy/session.go`) on the session reader grant, `auth.sessions(id, principal_id, revoked_at, legacy_token_version)`; no new auth grant. **Not read:** the session's organization binding and its expiry, because that grant does not reach `sessions.organization_id`, `expires_at` or the refresh credentials. In the current deployment both hold by construction (sessions have no absolute lifetime and a 7-day idle life, longer than an acr browser family; the consent assertion signs the org and the `sid` from one web session; an org switch revokes its predecessor, CHAOS-12085). A deployment that caps session life needs the follow-up.
+- `impersonating`: the user holds an active `impersonation_sessions` row as the admin. The table is keyed by the user, not by session, so it is read and served on **every** call, with or without `sid`: acr denies every user-class call while it is true (design §3.1 step 3; chris decision 6 denies all Ask Dev calls while impersonating). `session.impersonating` carries the same value inside `session`.
+- `entitlements`: the `ask_dev` and `agent_context_runtime` decisions (`internal/api/licensing`), the same engine as the entitlement route.
+- `repository_scope`: the org's repository inventory, `internal/repoinventory` (the canonical `owner/name` slugs of ClickHouse `repos FINAL` for the org), the same list query-api's `catalog(orgId, dimension: REPO)` serves and web reads as the Ask Dev repository scope. Both run one implementation. A non-empty inventory is `{"kind": "repos", "repos": [...]}` (sorted). An empty inventory is `{"kind": "none"}` with **no** `repos` key: an empty array never stands for any scope (acr reads an empty `RepositoryScopes` slice as unrestricted). An inventory above 100 repositories is refused (503), never truncated. go-api's ClickHouse login holds `SELECT ON default.repos` for it (`chclickhouse.APIPosture`; `docker/clickhouse-users.d/dho_api_ch.xml` is generated from it). A login without that grant answers 503, never an empty scope.
+
+There is no cache on either side: every call reads every source. acr must not cache the answer across calls.
+
+The answers are written with the JSONResponse writer (`policy.WriteJSON`): the route is Go-only, with no FastAPI ancestor and so no response-model entry.
+
+Code: `internal/apiservice/acr/access.go` (handler, body, registration), `access_store.go` (reads), `handlers.go` (`Routes` mounts it), `internal/apiservice/service.go` (`InternalRoutes` wiring), `internal/repoinventory`. Tests: `access_test.go` (each field, each refusal, each read failure, no cache), `access_integration_test.go` (real Postgres and auth schema with the session reader role; ClickHouse inventory equal to the catalog; p50/p95 receipt), `user_tokens_refused_test.go` (every user-token class 401 before any read), `workloadauth_test.go` (the workload token on every route), `internal/apiservice/internal_listener_test.go` (no writer violation on any answer through the server wrapper), `internal/apiservice/internal_access_integration_test.go` (the mounted read over real Postgres and a ClickHouse login granted exactly `APIPosture`; 503 on a login without the repos grant).

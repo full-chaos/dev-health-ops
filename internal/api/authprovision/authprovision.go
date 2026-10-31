@@ -1,7 +1,8 @@
 // Package authprovision is go-api's client of auth-service's provisioning
 // routes (memberships, invites, organization deprovision), used behind
-// AUTH_PROXY_ORG_PROVISIONING. It presents the go-api service credential
-// (AUTH_SESSION_ISSUE_TOKEN) holding memberships:write. Core is the one
+// AUTH_PROXY_ORG_PROVISIONING. It presents one of two credentials:
+// the go-api service credential (AUTH_SESSION_ISSUE_TOKEN) holding
+// memberships:write, or the go-api workload token. Core is the one
 // transport; orgreactivate's client is built on it too.
 package authprovision
 
@@ -12,15 +13,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"regexp"
 	"time"
 
+	"github.com/full-chaos/dev-health-go/workloadtoken"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 )
 
 // The provisioning routes on auth-service's API listener.
@@ -33,6 +35,10 @@ const (
 	PathInviteAccept       = "/internal/v1/invites/accept"
 	PathOrgDeprovision     = "/internal/v1/organizations/deprovision"
 )
+
+// WorkloadAudience is the audience of the workload token auth-service accepts
+// on its provisioning routes.
+const WorkloadAudience = "auth-service"
 
 const (
 	maxAnswerBytes = 64 << 10
@@ -74,9 +80,11 @@ func ReasonOf(err error) string {
 
 var reasonPattern = regexp.MustCompile(`^[a-z][a-z_]{0,63}$`)
 
-// Core posts JSON to one auth-service with the service credential: no
-// environment proxy, no redirect followed, a bounded answer, and no
-// credential or answer text in any error.
+// Core posts JSON to one auth-service with one credential: no environment
+// proxy, no redirect followed, a bounded answer, and no credential or answer
+// text in any error. The credential is either the session credential, which
+// Post sets as the Bearer, or the workload token, which the workload client's
+// transport sets (token is then empty and Post sets no Authorization).
 type Core struct {
 	base  url.URL
 	token string
@@ -96,21 +104,32 @@ func NewCore(base *url.URL, token string, timeout time.Duration) (*Core, error) 
 	if timeout <= 0 {
 		timeout = defaultTimeout
 	}
-	transport := &http.Transport{
-		Proxy:                 nil,
-		DialContext:           (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
-		MaxIdleConns:          4,
-		MaxIdleConnsPerHost:   4,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   5 * time.Second,
-		ExpectContinueTimeout: time.Second,
-		ForceAttemptHTTP2:     true,
+	client := httpguard.NoRedirects(&http.Client{Transport: httpguard.SharedTransport(), Timeout: timeout})
+	return &Core{base: url.URL{Scheme: base.Scheme, Host: base.Host}, token: token, http: client}, nil
+}
+
+// NewWorkloadCore builds a Core that presents the workload token of workload
+// (audience WorkloadAudience) to base. The token is never held here: the
+// workload client sets it, and a call with no usable token fails as
+// ErrUnavailable with nothing sent. There is no session credential to fall
+// back to.
+func NewWorkloadCore(base *url.URL, workload *workloadtoken.Client, timeout time.Duration) (*Core, error) {
+	if base == nil {
+		return nil, errors.New("authprovision: no auth-service URL")
 	}
-	return &Core{base: url.URL{Scheme: base.Scheme, Host: base.Host}, token: token, http: &http.Client{
-		Transport:     transport,
-		Timeout:       timeout,
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}}, nil
+	if workload == nil {
+		return nil, errors.New("authprovision: no workload token client")
+	}
+	if timeout <= 0 {
+		timeout = defaultTimeout
+	}
+	origin := url.URL{Scheme: base.Scheme, Host: base.Host}
+	client, err := workload.HTTPClient(httpguard.SharedTransport(), origin.String(), WorkloadAudience)
+	if err != nil {
+		return nil, fmt.Errorf("authprovision: workload token transport: %w", err)
+	}
+	client.Timeout = timeout
+	return &Core{base: origin, http: httpguard.NoRedirects(client)}, nil
 }
 
 // HTTP is the Core's client (its redirect policy is checked by tests).
@@ -130,7 +149,9 @@ func (c *Core) Post(ctx context.Context, path string, request, answer any) error
 	if err != nil {
 		return fmt.Errorf("%w: building the request", ErrUnavailable)
 	}
-	out.Header.Set("Authorization", "Bearer "+c.token)
+	if c.token != "" {
+		out.Header.Set("Authorization", "Bearer "+c.token)
+	}
 	out.Header.Set("Content-Type", "application/json")
 	out.Header.Set("Accept", "application/json")
 	response, err := c.http.Do(out)
@@ -221,6 +242,16 @@ var _ Provisioner = (*Client)(nil)
 // New builds a Client (see NewCore).
 func New(base *url.URL, token string, timeout time.Duration) (*Client, error) {
 	core, err := NewCore(base, token, timeout)
+	if err != nil {
+		return nil, err
+	}
+	return &Client{core: core}, nil
+}
+
+// NewWorkload builds a Client that presents the workload token of workload
+// (see NewWorkloadCore).
+func NewWorkload(base *url.URL, workload *workloadtoken.Client, timeout time.Duration) (*Client, error) {
+	core, err := NewWorkloadCore(base, workload, timeout)
 	if err != nil {
 		return nil, err
 	}

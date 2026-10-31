@@ -407,7 +407,12 @@ func configureWith(
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_session_issue", "api_session_issue_config_invalid", err)
 	}
-	orgClient, err := orgLifecycleClient(authProxy, envsecrets.ProcessLookup)
+	provisioningCred, err := newProvisioningCredential(authProxy, envsecrets.ProcessLookup)
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_org_provisioning", "api_org_provisioning_config_invalid", err)
+	}
+	orgClient, err := orgLifecycleClient(authProxy, envsecrets.ProcessLookup, provisioningCred)
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_org_provisioning", "api_org_provisioning_config_invalid", err)
@@ -415,7 +420,7 @@ func configureWith(
 	if orgClient != nil {
 		deps.OrgReactivator, deps.OrgSuspender, deps.OrgState = orgClient, orgClient, orgClient
 	}
-	deps.OrgProvisioner, err = orgProvisioner(authProxy, envsecrets.ProcessLookup)
+	deps.OrgProvisioner, err = orgProvisioner(authProxy, envsecrets.ProcessLookup, provisioningCred)
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_org_provisioning", "api_org_provisioning_config_invalid", err)
@@ -561,11 +566,19 @@ func InternalRoutes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	var llmConfig acr.LLMConfigSource
 	var credentials acr.CredentialVerifier
 	var auth acr.CredentialStore
+	var access acr.PrincipalAccessStore
 	if deps.Pool != nil {
 		store = acr.PostgresEntitlementStore{Pool: deps.Pool}
 		llmConfig = llmorgsettings.Store{Pool: deps.Pool, Decryptor: deps.Decryptor}.ForPurpose(llmorgsettings.PurposeInvestigate)
 		credentials = acr.PostgresCredentialVerifier{Pool: deps.Pool}
 		auth = acr.PostgresCredentialStore{Pool: deps.Pool, Now: deps.Now}
+		// The session read runs on go-api's session-reader grant (policy.PGStore
+		// with the auth schema, as the authenticator reads it). Without a
+		// ClickHouse connection the inventory read fails, so the access read
+		// answers 503, never a partial answer.
+		access = acr.NewPostgresAccessStore(deps.Pool,
+			policy.PGStore{Pool: deps.Pool, AuthSchema: deps.AuthSchema, PlatformRolesOwned: deps.PlatformRolesOwned},
+			acr.ClickHouseRepositoryInventory{Conn: deps.ClickHouse})
 	}
 	counters, err := limitStore(deps)
 	if err != nil {
@@ -576,6 +589,7 @@ func InternalRoutes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		Store: store, Logger: logger, LLMConfig: llmConfig, Credentials: credentials,
 		Auth: auth, Limiter: httpapi.NewKeyedLimiter(counters, acr.AuthAttemptLimit),
 		Workload: deps.ACRWorkload,
+		Access:   access, AccessLimiter: httpapi.NewKeyedLimiter(counters, acr.AccessAttemptLimit),
 	})
 }
 

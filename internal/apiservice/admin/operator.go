@@ -731,6 +731,9 @@ func (o Operator) DeleteOrg(ctx context.Context, orgID string, dryRun bool, conf
 		if errors.As(err, &incomplete) {
 			return nil, refuse("%s", orgDeletionIncompleteDetail)
 		}
+		if errors.Is(err, errOrgDeletionRevocationInFlight) {
+			return nil, refuse("%s", orgDeletionRevocationInFlightDetail)
+		}
 		return nil, err
 	}
 	plain, _ := plainJSON(result.json()).(map[string]any)

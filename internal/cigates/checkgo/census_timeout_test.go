@@ -25,7 +25,7 @@ func TestTheCensusCallOfAShardTakes20mOnlyWhenItHoldsCheckgo(t *testing.T) {
 			}
 			res, lines := runShardWithFakeGo(t, shard, "", extra...)
 			if res.code != 0 {
-				t.Fatalf("test shard %d/3 (%q) exited %d: %s", shard, ambient, res.code, tail(res.stderr+res.stdout, 2000))
+				t.Fatalf("test shard %d/3 (%q) exited %d: %s", shard, ambient, res.code, failureTail(res))
 			}
 			withCheckgo := 0
 			for _, l := range lines {

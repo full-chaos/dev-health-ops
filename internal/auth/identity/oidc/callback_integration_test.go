@@ -432,7 +432,7 @@ func TestAutoProvisionDisabledRefusesNewAccount(t *testing.T) {
 	before := h.snapshot(t)
 	s := h.start(t)
 	_, failure := h.finish(t, s, h.sign(t, h.claims(s.nonce, "sub-noauto", uniqueEmail("noauto"))))
-	wantDenied(t, failure, http.StatusForbidden, ReasonProvisioningDisabled)
+	wantDenied(t, failure, http.StatusBadRequest, ReasonProvisioningDisabled)
 	wantUnchanged(t, h, before)
 }
 

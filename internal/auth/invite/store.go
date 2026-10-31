@@ -18,6 +18,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/membership"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole"
 	"github.com/full-chaos/dev-health-ops/internal/auth/signedtoken"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -265,6 +266,10 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (*Created, error) {
 	expires := now.Add(ttl)
 	err = s.run(ctx, verbCreate, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			// The auth lock order (membership.Store readPairs), step -1: Authorize decides under this lock.
+			if err := platformrole.LockWritesShared(ctx, tx); err != nil {
+				return err
+			}
 			if err := s.lockActor(ctx, tx, in.Actor.PrincipalID, &in.InvitedBy); err != nil {
 				return err
 			}
@@ -546,6 +551,10 @@ func (s *Store) Revoke(ctx context.Context, in RevokeInput) error {
 	}
 	return s.run(ctx, verbRevoke, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			// The auth lock order (membership.Store readPairs), step -1: Authorize decides under this lock.
+			if err := platformrole.LockWritesShared(ctx, tx); err != nil {
+				return err
+			}
 			// The inviter, read before any lock (every invite has its public row),
 			// is locked with the actor: a take-over below names it in auth.invites.
 			var inviter *uuid.UUID
@@ -559,7 +568,6 @@ func (s *Store) Revoke(ctx context.Context, in RevokeInput) error {
 			if err := s.lockOrg(ctx, tx, in.OrgID, in.Authorize); err != nil {
 				return err
 			}
-			now := s.now().UTC()
 			var status string
 			var expiresAt time.Time
 			inAuth := true
@@ -576,6 +584,9 @@ func (s *Store) Revoke(ctx context.Context, in RevokeInput) error {
 			if err != nil {
 				return err
 			}
+			// The clock is read after the invite row lock: a revoke that waited for
+			// the row past the expiry sees the invite expired.
+			now := s.now().UTC()
 			noop, err := decideRevoke(Status(status), expiresAt, now)
 			if err != nil || noop {
 				return err

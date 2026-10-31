@@ -32,6 +32,9 @@ type User struct {
 	FullName       *string
 	ImpersonatedBy *string
 	TokenVersion   int
+	// SessionID is the auth-service session the token's sid claim names,
+	// checked live; nil for a token without sid (a go-api token).
+	SessionID *uuid.UUID
 	// superuserClaim is the verified legacy token's is_superuser claim, by
 	// Python truthiness; accessToken marks a user access token.
 	superuserClaim bool
@@ -194,9 +197,11 @@ func (a *Authenticator) CheckClaims(ctx context.Context, claims jwt.MapClaims) (
 		a.logger.WarnContext(ctx, "api access denied: stale session", slog.String("user_id", user.UserID))
 		return nil, errRejected
 	}
-	if err := a.checkSession(ctx, claims, id, state.TokenVersion); err != nil {
+	sessionID, err := a.checkSession(ctx, claims, id, state.TokenVersion)
+	if err != nil {
 		return nil, err
 	}
+	user.SessionID = sessionID
 	user.IsSuperuser = state.IsSuperuser
 	user.TokenVersion = int(version)
 	return user, nil

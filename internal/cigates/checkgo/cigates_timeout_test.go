@@ -77,7 +77,7 @@ func TestEveryGoTestCallOfAShardTakes20mOnlyWhenItHoldsACigatesPackage(t *testin
 		for shard := 1; shard <= 3; shard++ {
 			res, lines := runShardWithFakeGo(t, shard, "", ambient...)
 			if res.code != 0 {
-				t.Fatalf("test shard %d/3 (%v) exited %d: %s", shard, ambient, res.code, tail(res.stderr+res.stdout, 2000))
+				t.Fatalf("test shard %d/3 (%v) exited %d: %s", shard, ambient, res.code, failureTail(res))
 			}
 			for _, l := range lines {
 				if strings.Contains(l, "-tags=integration") || !strings.Contains(l, " -timeout ") {

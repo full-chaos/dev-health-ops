@@ -177,6 +177,10 @@ var commandPositionLogins = []string{
 	"nohup docker login ghcr.io -u x",
 	"bash -c 'docker login x'",
 	"eval \"docker login x\"",
+	"timeout 60 docker login ghcr.io -u x",
+	"xargs docker login ghcr.io -u x",
+	"stdbuf -oL docker login ghcr.io -u x",
+	"setsid docker login ghcr.io -u x",
 }
 
 var commandPositionCalls = []string{
@@ -190,6 +194,10 @@ var commandPositionCalls = []string{
 	"bash \"ci/lib/ghcr_login.sh\"",
 	"source ci/lib/ghcr_login.sh",
 	"eval \"bash ci/lib/ghcr_login.sh\"",
+	"timeout 60 bash ci/lib/ghcr_login.sh",
+	"xargs bash ci/lib/ghcr_login.sh",
+	"stdbuf -oL bash ci/lib/ghcr_login.sh",
+	"setsid bash ci/lib/ghcr_login.sh",
 }
 
 var harmlessLines = []string{
@@ -198,6 +206,7 @@ var harmlessLines = []string{
 	"echo ci/lib/ghcr_login.sh",
 	"echo \"ci/lib/ghcr_login.sh\"",
 	"echo docker login",
+	"echo \"docker login\"",
 	"echo \"${HOME} { not a group }\"",
 }
 

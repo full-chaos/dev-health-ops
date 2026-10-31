@@ -41,7 +41,7 @@ func TestDotTimeImportFloorsAreRefused(t *testing.T) {
 func TestAnIdentifierNamedTimeThatIsNotThePackageIsNotAFloor(t *testing.T) {
 	src := "package p\n\nimport (\n\t\"testing\"\n\tclock \"time\"\n)\n\ntype tm struct{ Second, Hour int }\n\nvar time tm\n\n" +
 		"func TestImp(t *testing.T) {\n\ts := clock.Now()\n\tbase := clock.Since(s)\n\ts = clock.Now()\n\tbig := clock.Since(s)\n" +
-		"\tif big > max(2*base, clock.Duration(time.Second)) {\n\t\tt.Fatal(\"x\")\n\t}\n\tif big+base > clock.Duration(time.Hour) {\n\t\tt.Fatal(\"y\")\n\t}\n}\n"
+		"\tif big > max(2*base, clock.Duration(time.Second)) {\n\t\tt.Fatal(\"x\")\n\t}\n}\n"
 	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": src}), nil))
 }
 

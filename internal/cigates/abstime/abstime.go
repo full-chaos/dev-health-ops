@@ -208,7 +208,9 @@ var comparisons = map[token.Token]bool{token.GTR: true, token.GEQ: true, token.L
 // A quotient of two measured values is a ratio and is not measured, whether compared directly or through a variable.
 // A comparison of two measured values is still refused when a side carries a fixed duration floor: a time.<Unit> constant
 // that is a direct operand of + or -, or an argument of max, min, math.Max or math.Min, at any depth (max(25*b,
-// time.Second), 2*b+50*time.Millisecond). A product (2*b) is no floor.
+// time.Second), 2*b+50*time.Millisecond). A product (2*b) is no floor. The unit is read through the file's own import of
+// "time": a renamed import (clock "time") and a dot import (. "time", bare Second; bare Since and Until are measured too)
+// count, and a local identifier named time that is not that package does not.
 // Stated limits, each pinned by a test:
 //   - A ratio of two carried values is legal, like a ratio of two time.Since values
 //     (TestRatioOfTwoCarriedValuesIsNotAnAbsoluteBudget).
@@ -232,6 +234,7 @@ var comparisons = map[token.Token]bool{token.GTR: true, token.GEQ: true, token.L
 func findAssertions(fset *token.FileSet, file *ast.File, rel string) []finding {
 	var out []finding
 	c := carriedKeys(file)
+	c.timeName, c.timeDot = timeBinding(file)
 	for _, decl := range file.Decls {
 		name := packageScope
 		if fd, ok := decl.(*ast.FuncDecl); ok {
@@ -246,7 +249,7 @@ func findAssertions(fset *token.FileSet, file *ast.File, rel string) []finding {
 				return true
 			}
 			left, right := isMeasured(be.X), isMeasured(be.Y)
-			if left == right && !(left && (carriesFloor(be.X, isMeasured) || carriesFloor(be.Y, isMeasured))) {
+			if left == right && !(left && (carriesFloor(be.X, isMeasured, cd) || carriesFloor(be.Y, isMeasured, cd))) {
 				return true
 			}
 			if signCheck(be.X, left) || signCheck(be.Y, right) {
@@ -546,6 +549,9 @@ type carried struct {
 	keys    map[string]bool
 	readers map[string]bool
 	lits    map[string]bool // identifiers of the declaration in scope that only ever hold a literal
+	// timeName is the file's local name for the "time" package ("" when it is not imported or imported as _); timeDot is a dot import.
+	timeName string
+	timeDot  bool
 }
 
 // scoped returns c with the literal-only identifiers of decl; a read of a fixed literal is not a child's report.
@@ -772,6 +778,10 @@ func measured(n ast.Node, tracked map[string]bool, c *carried) bool {
 					found = true
 				}
 			case *ast.Ident:
+				if c != nil && c.timeDot && (fun.Name == "Since" || fun.Name == "Until") {
+					found = true
+					break
+				}
 				if c == nil || !c.readers[fun.Name] {
 					break
 				}
@@ -805,14 +815,19 @@ func isFloorCall(c *ast.CallExpr) bool {
 	return false
 }
 
-func constDuration(e ast.Expr, isMeasured func(ast.Node) bool) bool {
+func constDuration(e ast.Expr, isMeasured func(ast.Node) bool, c *carried) bool {
 	if isMeasured(e) {
 		return false
 	}
 	found := false
 	ast.Inspect(e, func(n ast.Node) bool {
-		if sel, ok := n.(*ast.SelectorExpr); ok && durationUnits[sel.Sel.Name] {
-			if id, ok := sel.X.(*ast.Ident); ok && id.Name == "time" {
+		switch x := n.(type) {
+		case *ast.SelectorExpr:
+			if id, ok := x.X.(*ast.Ident); ok && durationUnits[x.Sel.Name] && c.timeName != "" && id.Name == c.timeName {
+				found = true
+			}
+		case *ast.Ident:
+			if c.timeDot && durationUnits[x.Name] {
 				found = true
 			}
 		}
@@ -821,7 +836,7 @@ func constDuration(e ast.Expr, isMeasured func(ast.Node) bool) bool {
 	return found
 }
 
-func carriesFloor(e ast.Expr, isMeasured func(ast.Node) bool) bool {
+func carriesFloor(e ast.Expr, isMeasured func(ast.Node) bool, c *carried) bool {
 	found := false
 	ast.Inspect(e, func(n ast.Node) bool {
 		if found {
@@ -839,11 +854,31 @@ func carriesFloor(e ast.Expr, isMeasured func(ast.Node) bool) bool {
 			}
 		}
 		for _, o := range ops {
-			if constDuration(o, isMeasured) {
+			if constDuration(o, isMeasured, c) {
 				found = true
 			}
 		}
 		return !found
 	})
 	return found
+}
+
+// timeBinding returns the file's local name for the "time" package and whether it is a dot import.
+func timeBinding(file *ast.File) (string, bool) {
+	for _, imp := range file.Imports {
+		if path, err := strconv.Unquote(imp.Path.Value); err != nil || path != "time" {
+			continue
+		}
+		switch {
+		case imp.Name == nil:
+			return "time", false
+		case imp.Name.Name == ".":
+			return "", true
+		case imp.Name.Name == "_":
+			return "", false
+		default:
+			return imp.Name.Name, false
+		}
+	}
+	return "", false
 }

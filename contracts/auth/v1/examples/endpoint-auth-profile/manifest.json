@@ -389,7 +389,7 @@
       "file": "invalid-grant-type-name-not-a-grant-type.json",
       "expect_instance_location": "/class_disambiguator/name",
       "expect_keyword": "pattern",
-      "why": "A grant_type selector names the exact grant type value (an RFC 6749 name in lowercase with underscores, or an absolute urn:); refresh-token is neither."
+      "why": "A grant_type selector names the exact grant type value (RFC 6749 Appendix A.10 grant-name, lowercase only, or an absolute urn:); Refresh_Token is uppercase."
     },
     {
       "file": "invalid-header-name-on-a-grant-type-selector.json",

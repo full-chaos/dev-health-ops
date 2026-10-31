@@ -235,8 +235,7 @@
             },
             "name": {
               "type": "string",
-              "pattern": "^[A-Za-z0-9][A-Za-z0-9._+/:-]{0,63}$",
-              "description": "The scheme, prefix, header name, JWT header alg, JWT header typ, Content-Type media type, token-type URI or grant type the selector reads. A name, never a credential value. `+` is allowed for a media-type typ such as at+jwt; `/` is allowed only for a content_type, which must be a lowercase type/subtype, and `:` only for a subject_token_type (a lowercase urn: URI) or a grant_type (a lowercase RFC 6749 name or urn: URI) (see the if/then entries of class_disambiguator). Owned here; endpoint-auth-profile.v1 and the credential-class markers reference it."
+              "description": "The scheme, prefix, header name, JWT header alg, JWT header typ, Content-Type media type, token-type URI or grant type the selector reads. A name, never a credential value. `+` is allowed for a media-type typ such as at+jwt; `/` is allowed only for a content_type, which must be a lowercase type/subtype, and `:` only for a subject_token_type (a lowercase urn: URI) or a grant_type (a lowercase RFC 6749 name or urn: URI) (see the if/then entries of class_disambiguator). Owned here; endpoint-auth-profile.v1 and the credential-class markers reference it. Every kind but grant_type is held to ^[A-Za-z0-9][A-Za-z0-9._+/:-]{0,63}$ by the last allOf entry; a grant_type is 1 to 64 lowercase characters of [a-z0-9._-] (RFC 6749 Appendix A.10 grant-name, lowercase only) or a lowercase urn:."
             }
           },
           "allOf": [
@@ -305,7 +304,8 @@
                 "properties": {
                   "name": {
                     "type": "string",
-                    "pattern": "^([a-z][a-z0-9_]*|urn:[a-z0-9][a-z0-9-]*(:[a-z0-9][a-z0-9._-]*)+)$"
+                    "maxLength": 64,
+                    "pattern": "^([a-z0-9._-]+|urn:[a-z0-9][a-z0-9-]*(:[a-z0-9][a-z0-9._-]*)+)$"
                   }
                 }
               }
@@ -332,6 +332,27 @@
                     "not": {
                       "pattern": ":"
                     }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "kind": {
+                    "const": "grant_type"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "then": {},
+              "else": {
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._+/:-]{0,63}$"
                   }
                 }
               }

@@ -7,7 +7,7 @@
   "cache_class": "decision_bound",
   "class_disambiguator": {
     "kind": "grant_type",
-    "name": "refresh-token"
+    "name": "Refresh_Token"
   },
   "classification": "protected",
   "current_state_required": false,

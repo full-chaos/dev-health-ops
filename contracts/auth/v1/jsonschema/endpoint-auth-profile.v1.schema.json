@@ -70,7 +70,7 @@
         },
         "name": {
           "$ref": "../endpoint-profile.schema.json#/$defs/endpointProfile/properties/class_disambiguator/properties/name",
-          "description": "The scheme, prefix, header name, JWT header alg, JWT header typ, Content-Type media type or token-type URI the selector reads. A name, never a credential value."
+          "description": "The scheme, prefix, header name, JWT header alg, JWT header typ, Content-Type media type, token-type URI or grant type the selector reads. A name, never a credential value. At most 64 characters."
         }
       },
       "allOf": [
@@ -122,7 +122,44 @@
                 "pattern": "^urn:[a-z0-9][a-z0-9-]*(:[a-z0-9][a-z0-9._-]*)+$"
               }
             }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "grant_type"
+              }
+            },
+            "required": [
+              "kind"
+            ]
           },
+          "then": {
+            "properties": {
+              "name": {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^([a-z0-9._-]+|urn:[a-z0-9][a-z0-9-]*(:[a-z0-9][a-z0-9._-]*)+)$"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "subject_token_type",
+                  "grant_type"
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {},
           "else": {
             "properties": {
               "name": {
@@ -130,6 +167,27 @@
                 "not": {
                   "pattern": ":"
                 }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "grant_type"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {},
+          "else": {
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._+/:-]{0,63}$"
               }
             }
           }

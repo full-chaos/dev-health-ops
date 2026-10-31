@@ -12,6 +12,14 @@ var provisioningPatterns = []string{PatternMembershipAdd, PatternMembershipRole,
 	PatternMembershipTransfer, PatternInviteCreate, PatternInviteAccept, PatternOrgDeprovision, PatternOrgReactivate, PatternInviteRevoke,
 	PatternOrgSuspend}
 
+// provisioningRouteOps maps each provisioning operation to its route.
+var provisioningRouteOps = map[string]string{
+	opMembershipAdd: PatternMembershipAdd, opMembershipRole: PatternMembershipRole, opMembershipRemove: PatternMembershipRemove,
+	opMembershipTransfer: PatternMembershipTransfer, opInviteCreate: PatternInviteCreate, opInviteAccept: PatternInviteAccept,
+	opOrgDeprovision: PatternOrgDeprovision, opOrgReactivate: PatternOrgReactivate, opInviteRevoke: PatternInviteRevoke,
+	opOrgSuspend: PatternOrgSuspend, opOrgState: PatternOrgState,
+}
+
 // serviceSessionIssuerClass is the endpoint-profile credential class of the
 // session issuer credential (svc_authsess_) the routes take.
 const serviceSessionIssuerClass = "internal_svc_authsess_token"
@@ -20,16 +28,30 @@ var errProvisioningRows = errors.New("authapi: the provisioning routes need thei
 
 // provisioningRowsPresent refuses the provisioning routes unless the
 // endpoint-profile document (the one this binary embeds) holds, for each
-// route, an auth-service row accepting the session issuer credential: the
-// switch may turn the routes on only in a build that profiles them. The error
-// names the route only.
-func provisioningRowsPresent(raw []byte) error {
-	return rowsPresentFor(raw, provisioningPatterns)
+// route, an auth-service row accepting every credential class the route
+// admits (admittedClasses): the switch may turn the routes on only in a build
+// that profiles them. The error names the route only.
+func provisioningRowsPresent(raw []byte, workload bool) error {
+	for _, pattern := range provisioningPatterns {
+		if err := rowsAcceptFor(raw, []string{pattern}, admittedClasses(pattern, workload)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-// rowsPresentFor is provisioningRowsPresent over patterns.
-func rowsPresentFor(raw []byte, patterns []string) error {
-	return rowsAcceptFor(raw, patterns, []string{serviceSessionIssuerClass})
+// admittedClasses are the endpoint-profile credential classes the route on
+// pattern admits: the session issuer credential, and the go-api workload
+// token when the route's operation is a workload operation and the workload
+// path is configured.
+func admittedClasses(pattern string, workload bool) []string {
+	classes := []string{serviceSessionIssuerClass}
+	for op, route := range provisioningRouteOps {
+		if route == pattern && workload && workloadOperations[op] {
+			classes = append(classes, workloadTokenClass)
+		}
+	}
+	return classes
 }
 
 // workloadTokenClass is the endpoint-profile credential class of the go-api

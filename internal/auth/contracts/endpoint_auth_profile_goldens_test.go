@@ -190,6 +190,7 @@ var endpointAuthProfileGateRefusals = map[string]string{
 	"invalid-high-risk-action-cacheable.json":                            `action cache policy: action "members.invite" is high risk and its profile cache_class must be none`,
 	"invalid-content-type-selector-no-accepted-class-owns-it.json":       `selector content_type/application/x-www-form-urlencoded is declared by none of the accepted classes`,
 	"invalid-subject-token-type-selector-no-accepted-class-owns-it.json": `selector subject_token_type/urn:dev-health:params:oauth:token-type:workload-bootstrap-v2 is declared by none of the accepted classes`,
+	"invalid-grant-type-selector-no-accepted-class-owns-it.json":         `selector grant_type/client_credentials is declared by none of the accepted classes`,
 }
 
 func TestEndpointAuthProfileGateRefusalTableEqualsTheManifest(t *testing.T) {

@@ -384,7 +384,8 @@ func (h credentialHandlers) changePassword(w http.ResponseWriter, r *http.Reques
 }
 
 // changed answers go-api's LoginResponse for the caller's new session, in the
-// organization it signed in with while that membership stands.
+// organization the issued row carries: the password write bound it only to a
+// live membership.
 func (h credentialHandlers) changed(w http.ResponseWriter, r *http.Request, caller changeCaller, outcome local.FlowOutcome) {
 	ctx := r.Context()
 	principal := caller.bearer.PrincipalID
@@ -401,14 +402,14 @@ func (h credentialHandlers) changed(w http.ResponseWriter, r *http.Request, call
 		org        *uuid.UUID
 	)
 	role := roleText(nil, false)
-	if caller.record.OrganizationID != nil {
-		value, member, err := h.Users.Role(ctx, principal, *caller.record.OrganizationID)
+	if issuedOrg := outcome.Issued.Session.OrganizationID; issuedOrg != nil {
+		value, member, err := h.Users.Role(ctx, principal, *issuedOrg)
 		if err != nil {
 			h.compat.fail(w, r, opChangePassword, err)
 			return
 		}
 		if member {
-			membership = &Membership{OrgID: *caller.record.OrganizationID, Role: value}
+			membership = &Membership{OrgID: *issuedOrg, Role: value}
 			org, role = &membership.OrgID, roleText(value, true)
 		}
 	}

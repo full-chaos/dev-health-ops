@@ -225,6 +225,7 @@ var approvedAuditReasonCodes = []string{
 	"membership_removed",
 	"membership_status_changed",
 	"grant_created",
+	"grant_updated",
 	"grant_revoked",
 	"credential_issued",
 	"credential_rotated",

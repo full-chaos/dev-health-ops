@@ -313,6 +313,10 @@ func TestUpdateChangesRoleAndExpiryOnly(t *testing.T) {
 	if err != nil || u.ExpiresAt == nil || u.Revision != 3 {
 		t.Fatalf("Update expiry = %+v, %v", u, err)
 	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.resource_grant.updated'
+AND attributes->>'target_id' = $1 AND attributes->>'reason_code' = 'grant_updated'`, g.ID.String()); n != 2 {
+		t.Fatalf("update audit rows with reason grant_updated = %d, want 2", n)
+	}
 	same, err := e.store.Update(ctx, UpdateInput{OrgID: s.org, GrantID: g.ID, Role: &role, Actor: Actor{PrincipalID: &actor}, Authorize: allowAll})
 	if err != nil || same.Revision != 3 {
 		t.Fatalf("no-op Update = %+v, %v; want unchanged revision 3", same, err)

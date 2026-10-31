@@ -425,7 +425,7 @@ func (s *Store) Update(ctx context.Context, in UpdateInput) (*Grant, error) {
 					in.GrantID, role, exp, now)
 				return err
 			},
-			Audit: auditRow("auth.resource_grant.updated", "grant_created", in.OrgID, principalOrPlaceholder(planned), in.GrantID, in.Actor, fields, nil),
+			Audit: auditRow("auth.resource_grant.updated", "grant_updated", in.OrgID, principalOrPlaceholder(planned), in.GrantID, in.Actor, fields, nil),
 			Events: []audit.OutboxEvent{{AggregateType: "resource_grant", AggregateID: provisioning.WireID("resource_grant", in.GrantID.String()),
 				EventType: "resource_grant.updated", Change: change}},
 			Refusals: []error{ErrNotFound, ErrRevoked, ErrExpiryPast, errStateMoved},

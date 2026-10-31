@@ -74,6 +74,7 @@
         "class": {
           "description": "Credential class, from the closed vocabulary. 38 values are the classes in contracts/auth/v1/credential-classes.json (the 30 Wave 0 classes, `effective_principal_envelope`, added by the query-api inventory, `refresh_credential`, added with the auth-service session routes, `user_access_token`, added with the access-token.v1 contract, `internal_svc_authsess_token`, added with the session issue route, `link_credential`, added with the auth-service one-time link token, `pagerduty_webhook_signature`, added with the inbound PagerDuty webhook signature, `kubernetes_sa_token_exchange`, added with the auth-service workload-token exchange, and `workload_bootstrap_credential`, added with the exchange's Compose bootstrap subject); the remaining one is a platform credential TRD section 11 defines that is not minted yet (`workload_token`). Unknown denies (ACP-ADR-05 decision 1 / G-26). This enum is a DECLARATION, not a second source of truth: a guard test asserts it equals the ids in credential-classes.json plus exactly that documented addition list, so the two cannot drift and a new class cannot be smuggled in here alone.",
           "enum": [
+            "acr_browser_refresh_token",
             "acr_client_credential",
             "acr_device_flow_code",
             "acr_web_assertion",

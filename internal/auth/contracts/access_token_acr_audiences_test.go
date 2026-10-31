@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/acraudience"
 )
 
 // accessTokenSchemaBinding is the aud/scope part of the access-token.v1
@@ -110,6 +112,29 @@ func TestNoSessionTokenAudienceLookupKnowsAnACRAudience(t *testing.T) {
 		if got, ok := ACRAccessTokenScope(aud); ok {
 			t.Errorf("ACRAccessTokenScope(%q) = %q", aud, got)
 		}
+	}
+}
+
+// TestTheACRAudienceNamesAreTheLeafPackageNames: the platform token packages
+// refuse by acraudience (a leaf, so no import cycle), the contract names them
+// here; the two must be the same two strings, and the ACR scope map must hold
+// exactly the audiences acraudience refuses.
+func TestTheACRAudienceNamesAreTheLeafPackageNames(t *testing.T) {
+	if ACRAPIAudience != acraudience.API || ACRMCPAudience != acraudience.MCP {
+		t.Fatalf("contracts %q %q, acraudience %q %q", ACRAPIAudience, ACRMCPAudience, acraudience.API, acraudience.MCP)
+	}
+	for audience := range acrAccessTokenScopes {
+		if !acraudience.Is(audience) {
+			t.Errorf("ACR scope map audience %q is not refused by acraudience", audience)
+		}
+	}
+	for audience := range accessTokenScopes {
+		if acraudience.Is(audience) {
+			t.Errorf("session audience %q is refused by acraudience", audience)
+		}
+	}
+	if len(acrAccessTokenScopes) != 2 {
+		t.Fatalf("ACR scope map %v", acrAccessTokenScopes)
 	}
 }
 

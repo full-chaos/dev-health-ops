@@ -24,7 +24,8 @@ const SessionRouteAudience = "auth-service"
 // ACRAPIAudience and ACRMCPAudience are the user access token audiences that
 // ACR accepts: acr-api accepts ACRAPIAudience only and acr-mcp ACRMCPAudience
 // only. go-api, query-api and auth-service refuse both (ACP-ADR-13 decision 2,
-// CHAOS-12248).
+// CHAOS-12248). They equal acraudience.API and acraudience.MCP, the leaf names
+// the platform token packages refuse by.
 const (
 	ACRAPIAudience = "acr-api"
 	ACRMCPAudience = "acr-mcp"

@@ -176,9 +176,12 @@ lifetime is at most the 60 min HS256-compat ceiling. The class is
 `unconsumed`: nothing mints or verifies it yet.
 The audiences `acr-api` and `acr-mcp` (scopes `acr:api` and `acr:mcp`,
 CHAOS-12248) are ACR's: acr-api accepts `acr-api` only and acr-mcp `acr-mcp`
-only. go-api, query-api and auth-service refuse both, and the session token
-minter and its `AUTH_JWT_AUDIENCE` check never take one. A separate mint issues
-them (ACP-ADR-13).
+only. go-api, query-api and auth-service refuse both. No ops platform token
+carries one: the session token settings (`AUTH_JWT_AUDIENCE`,
+`AUTH_LEGACY_JWT_AUDIENCE`, go-api's `JWT_AUDIENCE`), the HS256 edge-token
+verifier and signer, the envelope verifier and both minters refuse them. The
+mint that will issue them is a separate one (ACP-ADR-13), not built yet
+(CHAOS-12082 step O2).
 
 **`workload_token` (CHAOS-10782).** The EdDSA workload token of TRD section 11
 for one internal service caller. Its wire contract is `workload-token.v1`:

@@ -90,6 +90,19 @@
           "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
           "description": "The organization the session acts in, as a lowercase UUID. Absent means no organization; there is no null form. A relying party re-checks membership; this claim is context, not proof."
         },
+        "act": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sub"
+          ],
+          "properties": {
+            "sub": {
+              "$ref": "principal.v1.schema.json#/properties/principal_id"
+            }
+          },
+          "description": "Present only on a delegated (impersonation) token: the real actor. sub stays the effective subject (G-49). One hop: the object is closed, so a nested act is refused."
+        },
         "scope": {
           "type": "string",
           "enum": [

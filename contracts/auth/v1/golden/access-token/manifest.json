@@ -13,7 +13,7 @@
       "alg": "EdDSA",
       "use": "sig",
       "kid": "auth-example-2026-04",
-      "x": "H72MJ_45gFmj771_aLTZ9F8D6IlfY1yH8IUEZG83t14"
+      "x": "hQhyNmeyoo1Rz0_e6VFw7xhJRieIr-XfDUtn0PL3OPs"
     }
   ],
   "decision_order": [
@@ -26,6 +26,51 @@
     "expired"
   ],
   "vectors": [
+    {
+      "file": "invalid-act-extra-member.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "act is closed: the reason stays on the session row."
+    },
+    {
+      "file": "invalid-act-nested.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "One hop only: a nested act is an extra member."
+    },
+    {
+      "file": "invalid-act-null.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "act null: absent and null are not the same."
+    },
+    {
+      "file": "invalid-act-string.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "act is an object, not a bare subject."
+    },
+    {
+      "file": "invalid-act-sub-usr-prefix.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "contract",
+      "contract_stage": "schema",
+      "why": "act.sub is a principal id."
+    },
     {
       "file": "invalid-alg-hs256-public-key-as-secret.json",
       "now": 1760000300,
@@ -366,6 +411,20 @@
       "reason": "contract",
       "contract_stage": "schema",
       "why": "typ is case-sensitive."
+    },
+    {
+      "file": "valid-act-api.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "accept",
+      "why": "A delegated token: sub is the effective subject, act.sub the real actor."
+    },
+    {
+      "file": "valid-act-auth-service.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "accept",
+      "why": "A delegated token at auth-service's own session routes."
     },
     {
       "file": "valid-api-no-organization.json",

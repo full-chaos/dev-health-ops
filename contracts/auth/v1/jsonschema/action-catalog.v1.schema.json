@@ -32,7 +32,8 @@
           "scope",
           "resource_kind",
           "risk_class",
-          "cache_class"
+          "cache_class",
+          "impersonation"
         ],
         "properties": {
           "action": {
@@ -63,6 +64,13 @@
               "decision_bound",
               "resource_revision_bound"
             ]
+          },
+          "impersonation": {
+            "enum": [
+              "denied",
+              "allowed"
+            ],
+            "description": "Whether a delegated session may exercise this action (G-51, ACP-ADR-10). denied is the safe value."
           }
         },
         "allOf": [

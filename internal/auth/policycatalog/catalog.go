@@ -30,16 +30,19 @@ const (
 	CacheDecisionBound         = "decision_bound"
 	CacheResourceRevisionBound = "resource_revision_bound"
 
+	// ImpersonationDenied is the safe value: a delegated session may not
+	// exercise the action (G-51, ACP-ADR-10).
 	ImpersonationDenied  = "denied"
 	ImpersonationAllowed = "allowed"
 )
 
 type Action struct {
-	ID            string
-	Scope         string
-	ResourceKind  string
-	RiskClass     string
-	CacheClass    string
+	ID           string
+	Scope        string
+	ResourceKind string
+	RiskClass    string
+	CacheClass   string
+	// Impersonation is ImpersonationDenied or ImpersonationAllowed.
 	Impersonation string
 }
 
@@ -65,11 +68,12 @@ type actionsFile struct {
 	CatalogVersion int    `json:"catalog_version"`
 	Description    string `json:"description"`
 	Actions        []struct {
-		Action       string `json:"action"`
-		Scope        string `json:"scope"`
-		ResourceKind string `json:"resource_kind"`
-		RiskClass    string `json:"risk_class"`
-		CacheClass   string `json:"cache_class"`
+		Action        string `json:"action"`
+		Scope         string `json:"scope"`
+		ResourceKind  string `json:"resource_kind"`
+		RiskClass     string `json:"risk_class"`
+		CacheClass    string `json:"cache_class"`
+		Impersonation string `json:"impersonation"`
 	} `json:"actions"`
 }
 
@@ -189,7 +193,11 @@ func Load(actionsJSON, rolesJSON []byte) (*Catalog, error) {
 		if a.RiskClass == RiskHigh && a.CacheClass != CacheNone {
 			return nil, invalid("action %q is high risk and must not be cached", a.Action)
 		}
-		act := Action{ID: a.Action, Scope: a.Scope, ResourceKind: a.ResourceKind, RiskClass: a.RiskClass, CacheClass: a.CacheClass}
+		if a.Impersonation != ImpersonationDenied && a.Impersonation != ImpersonationAllowed {
+			return nil, invalid("action %q has a missing or unknown impersonation", a.Action)
+		}
+		act := Action{ID: a.Action, Scope: a.Scope, ResourceKind: a.ResourceKind, RiskClass: a.RiskClass, CacheClass: a.CacheClass,
+			Impersonation: a.Impersonation}
 		c.byAct[a.Action] = act
 		c.actions = append(c.actions, act)
 	}
@@ -272,11 +280,33 @@ func (c *Catalog) Role(id string) (Role, error) {
 // Allows is true only for a known role that lists a known action.
 func (c *Catalog) Allows(role, action string) bool { return c.grants[role][action] }
 
-// RolesHolding is a stub of the cells' commit.
-func (c *Catalog) RolesHolding(action, scope string) []string { return nil }
+// RolesHolding lists the roles of scope that hold action, in catalog order.
+func (c *Catalog) RolesHolding(action, scope string) []string {
+	var out []string
+	for _, r := range c.roles {
+		if r.Scope == scope && c.grants[r.ID][action] {
+			out = append(out, r.ID)
+		}
+	}
+	return out
+}
 
-// DelegatedActions is a stub of the cells' commit.
-func (c *Catalog) DelegatedActions(role string) ([]string, error) { return nil, nil }
+// DelegatedActions lists the actions of an organization role that a delegated
+// session may exercise, sorted. A role outside the catalog, or one of another
+// scope, is ErrUnknownRole.
+func (c *Catalog) DelegatedActions(role string) ([]string, error) {
+	r, ok := c.byRole[role]
+	if !ok || r.Scope != ScopeOrganization {
+		return nil, ErrUnknownRole
+	}
+	var out []string
+	for _, id := range r.Actions {
+		if c.byAct[id].Impersonation == ImpersonationAllowed {
+			out = append(out, id)
+		}
+	}
+	return out, nil
+}
 
 func (c *Catalog) Actions() []Action { return append([]Action(nil), c.actions...) }
 

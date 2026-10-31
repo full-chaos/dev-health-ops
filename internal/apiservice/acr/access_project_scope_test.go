@@ -148,15 +148,17 @@ func TestPrincipalAccessIsByteIdenticalWithTheProjectScopeOff(t *testing.T) {
 	}
 }
 
-// An over-limit project inventory answers 503 with its own code
-// (ProjectScopeOverLimitCode), so acr can type the refusal as an access
-// limitation and not a retryable outage (CHAOS-12228). The status stays 503,
-// so acr's existing 503 handling does not change. A failed read, and the
-// repository inventory over its limit (a live body; its code is a follow-up),
-// stay the code-less 503. Every cell runs the real store, so the cell also
-// pins that the store keeps projectinventory.ErrOverLimit in its error chain.
-func TestPrincipalAccessProjectScopeOverLimitHasItsOwnCode(t *testing.T) {
+// An inventory over its limit answers 503 with its own code, so acr can type
+// the refusal as an access limitation and not a retryable outage
+// (CHAOS-12228): ProjectScopeOverLimitCode for the project inventory
+// (CHAOS-12224), RepositoryScopeOverLimitCode for the repository inventory
+// (CHAOS-12267). The status stays 503, so acr's existing 503 handling does
+// not change (acr reads no 503 body today). A failed read stays the code-less
+// 503. Every cell runs the real store, so the cell also pins that the store
+// keeps each ErrOverLimit in its error chain.
+func TestPrincipalAccessOverLimitHasItsOwnCode(t *testing.T) {
 	const codeless = `{"detail":"Service unavailable"}`
+	const reposOverLimit = `{"detail":"Service unavailable","code":"acr_access_repository_scope_over_limit"}`
 	cases := []struct {
 		name     string
 		repoErr  error
@@ -168,8 +170,9 @@ func TestPrincipalAccessProjectScopeOverLimitHasItsOwnCode(t *testing.T) {
 		{"project inventory over the limit, wrapped", nil, &fakeProjects{err: fmt.Errorf("canonical: %w", projectinventory.ErrOverLimit)},
 			`{"detail":"Service unavailable","code":"acr_access_project_scope_over_limit"}`},
 		{"project inventory read fails", nil, &fakeProjects{err: errors.New("clickhouse down")}, codeless},
-		{"repository inventory over the limit", repoinventory.ErrOverLimit, &fakeProjects{}, codeless},
-		{"repository inventory over the limit, project scope off", repoinventory.ErrOverLimit, nil, codeless},
+		{"repository inventory over the limit", repoinventory.ErrOverLimit, &fakeProjects{}, reposOverLimit},
+		{"repository inventory over the limit, project scope off", repoinventory.ErrOverLimit, nil, reposOverLimit},
+		{"repository inventory over the limit, wrapped", fmt.Errorf("canonical: %w", repoinventory.ErrOverLimit), nil, reposOverLimit},
 		{"repository inventory read fails", errors.New("clickhouse down"), &fakeProjects{}, codeless},
 	}
 	for _, tc := range cases {

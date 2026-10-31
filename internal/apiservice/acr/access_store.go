@@ -22,6 +22,27 @@ import (
 // askDevFeatureKey is the second entitlement the principal access read serves.
 const askDevFeatureKey = "ask_dev"
 
+// inventoryOverLimit names an access read refused because an inventory is
+// above its limit: the 503's code, the counter's outcome, the inventory and
+// its limit (names and counts only).
+type inventoryOverLimit struct {
+	code, outcome, inventory string
+	limit                    int
+}
+
+// inventoryOverLimitOf reports whether err is an inventory over its limit
+// (repoinventory or projectinventory ErrOverLimit anywhere in its chain). Any
+// other error, nil included, is false and stays the code-less 503.
+func inventoryOverLimitOf(err error) (inventoryOverLimit, bool) {
+	switch {
+	case errors.Is(err, repoinventory.ErrOverLimit):
+		return inventoryOverLimit{RepositoryScopeOverLimitCode, outcomeReposOverLimit, "repository", repoinventory.Limit}, true
+	case errors.Is(err, projectinventory.ErrOverLimit):
+		return inventoryOverLimit{ProjectScopeOverLimitCode, outcomeProjectsOverLimit, "project", projectinventory.Limit}, true
+	}
+	return inventoryOverLimit{}, false
+}
+
 // AccessReads is what the principal access read needs from go-api's policy
 // store: the users row, the membership and the admin-keyed impersonation.
 // policy.PGStore implements it with go-api's existing grants. The session the

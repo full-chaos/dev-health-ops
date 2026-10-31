@@ -637,6 +637,16 @@ func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 		}
 		out.LegacyAudience = raw
 	}
+	// No auth-service token carries an ACR audience, under either class: acr-api
+	// and acr-mcp have a separate mint (ACP-ADR-13 decision 3, CHAOS-12248).
+	for _, setting := range []struct{ name, audience string }{
+		{EnvAccessTokenAudience, out.AccessAudience},
+		{EnvLegacyJWTAudience, out.LegacyAudience},
+	} {
+		if _, acr := contracts.ACRAccessTokenScope(setting.audience); acr {
+			return SessionTokens{}, fmt.Errorf("%s names an ACR audience; no auth-service token carries one (ACP-ADR-13)", setting.name)
+		}
+	}
 	access, hasAccess, err := secrets.ResolveSecret(EnvAccessTokenSecret, lookup)
 	if err != nil {
 		return SessionTokens{}, err

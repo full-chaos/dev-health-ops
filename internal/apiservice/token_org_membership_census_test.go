@@ -18,6 +18,7 @@ import (
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 )
 
 // removedMemberStore is a live, active user with no membership anywhere: a
@@ -60,6 +61,109 @@ var tokenOrgRouteParameter = regexp.MustCompile(`\{[^}]+\}`)
 // membership read of the token's own org. A route declared none or
 // cross_org_superuser_only is not part of this census.
 func TestEveryOrgScopedRouteReadsTheTokenOrgMembership(t *testing.T) {
+	census := newTokenOrgCensus(t)
+	store, server, rows, mounted := census.store, census.server, census.rows, census.mounted
+	user, org, access := census.user, census.org, census.access
+
+	var document struct {
+		Rows []struct {
+			Service           string `json:"service"`
+			Method            string `json:"method"`
+			Route             string `json:"route"`
+			TenantRequirement string `json:"tenant_requirement"`
+		} `json:"rows"`
+	}
+	if err := json.Unmarshal(authv1.GoAPIEndpointProfiles, &document); err != nil {
+		t.Fatal(err)
+	}
+	checked := 0
+	for _, row := range document.Rows {
+		profile := row.Method + " " + row.Route
+		if row.Service != goAPIAccessService || row.TenantRequirement != "org_scoped" || !mounted[profile] {
+			continue
+		}
+		if declared, _ := rows(profile); !declared.AccessToken {
+			continue
+		}
+		// The org-less routes serve the caller, not an org: the scope reads
+		// no token-org membership there (TestOrglessRoutesReadNoTokenOrgMembership).
+		if policy.OrglessMayReach(row.Method, row.Route) {
+			continue
+		}
+		checked++
+		t.Run(profile, func(t *testing.T) {
+			store.mu.Lock()
+			store.reads = map[[2]uuid.UUID]int{}
+			store.mu.Unlock()
+			path := tokenOrgRouteParameter.ReplaceAllStringFunc(row.Route, func(string) string { return uuid.NewString() })
+			request := httptest.NewRequest(row.Method, path, strings.NewReader("{}"))
+			request.Header.Set("Authorization", "Bearer "+access)
+			request.Header.Set("Content-Type", "application/json")
+			recorder := httptest.NewRecorder()
+			server.Handler().ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusForbidden || recorder.Body.String() != `{"detail": "X-Org-Id not permitted for this user"}` {
+				t.Errorf("a removed member's token was answered %d %q, want the X-Org-Id refusal", recorder.Code, recorder.Body.String())
+			}
+			store.mu.Lock()
+			defer store.mu.Unlock()
+			if got := store.reads[[2]uuid.UUID{user, org}]; got != 1 {
+				t.Errorf("membership reads of the token's own org: %d, want 1", got)
+			}
+		})
+	}
+	t.Logf("the census checked %d org-scoped routes", checked)
+	if checked < 150 {
+		t.Fatalf("the census checked %d org-scoped routes; the profile rows or the mounted routes no longer reach it", checked)
+	}
+}
+
+// A removed member's still-valid legacy HS256 access token (the org exists, the row is
+// gone) on every org-less route (policy.OrglessRouteKeys) is never the
+// X-Org-Id refusal, and the request reads no membership of the token's org:
+// those routes serve the caller, as the Python api does.
+func TestOrglessRoutesReadNoTokenOrgMembership(t *testing.T) {
+	census := newTokenOrgCensus(t)
+	keys := policy.OrglessRouteKeys()
+	if len(keys) == 0 {
+		t.Fatal("no org-less routes")
+	}
+	for _, key := range keys {
+		method, path, _ := strings.Cut(key, " ")
+		t.Run(key, func(t *testing.T) {
+			census.store.mu.Lock()
+			census.store.reads = map[[2]uuid.UUID]int{}
+			census.store.mu.Unlock()
+			request := httptest.NewRequest(method, path, strings.NewReader("{}"))
+			request.Header.Set("Authorization", "Bearer "+census.access)
+			request.Header.Set("Content-Type", "application/json")
+			recorder := httptest.NewRecorder()
+			census.server.Handler().ServeHTTP(recorder, request)
+			if strings.Contains(recorder.Body.String(), "X-Org-Id not permitted for this user") {
+				t.Errorf("a removed member's token on an org-less route was answered %d %q, the X-Org-Id refusal", recorder.Code, recorder.Body.String())
+			}
+			census.store.mu.Lock()
+			defer census.store.mu.Unlock()
+			if got := census.store.reads[[2]uuid.UUID{census.user, census.org}]; got != 0 {
+				t.Errorf("membership reads of the token's own org: %d, want 0", got)
+			}
+		})
+	}
+}
+
+// tokenOrgCensus is the real go-api listener chain (ReadOnce, Principal,
+// OrgScope, Impersonation, with the declared rows) over removedMemberStore,
+// and a removed member's still-valid access token for an existing org.
+type tokenOrgCensus struct {
+	store     *removedMemberStore
+	server    *httpapi.Server
+	rows      func(profile string) (policy.BearerRow, bool)
+	mounted   map[string]bool
+	user, org uuid.UUID
+	access    string
+}
+
+func newTokenOrgCensus(t *testing.T) tokenOrgCensus {
+	t.Helper()
 	key := strings.Repeat("fixture-key-", 3)
 	verifier, err := edgetoken.New(key, "dev-health-ops", "dev-health-api")
 	if err != nil {
@@ -99,54 +203,10 @@ func TestEveryOrgScopedRouteReadsTheTokenOrgMembership(t *testing.T) {
 	for _, route := range Routes(deps, quietLogger()) {
 		mounted[route.Method+" "+route.Pattern] = true
 	}
-
-	var document struct {
-		Rows []struct {
-			Service           string `json:"service"`
-			Method            string `json:"method"`
-			Route             string `json:"route"`
-			TenantRequirement string `json:"tenant_requirement"`
-		} `json:"rows"`
-	}
-	if err := json.Unmarshal(authv1.GoAPIEndpointProfiles, &document); err != nil {
-		t.Fatal(err)
-	}
 	user, org := uuid.New(), uuid.New()
 	access, err := signer.Access(edgetoken.AccessClaims{UserID: user.String(), Email: "removed@example.com", OrgID: org.String(), Role: "admin", TokenVersion: 1}, time.Now().UTC(), uuid.NewString())
 	if err != nil {
 		t.Fatal(err)
 	}
-	checked := 0
-	for _, row := range document.Rows {
-		profile := row.Method + " " + row.Route
-		if row.Service != goAPIAccessService || row.TenantRequirement != "org_scoped" || !mounted[profile] {
-			continue
-		}
-		if declared, _ := rows(profile); !declared.AccessToken {
-			continue
-		}
-		checked++
-		t.Run(profile, func(t *testing.T) {
-			store.mu.Lock()
-			store.reads = map[[2]uuid.UUID]int{}
-			store.mu.Unlock()
-			path := tokenOrgRouteParameter.ReplaceAllStringFunc(row.Route, func(string) string { return uuid.NewString() })
-			request := httptest.NewRequest(row.Method, path, strings.NewReader("{}"))
-			request.Header.Set("Authorization", "Bearer "+access)
-			request.Header.Set("Content-Type", "application/json")
-			recorder := httptest.NewRecorder()
-			server.Handler().ServeHTTP(recorder, request)
-			if recorder.Code != http.StatusForbidden || recorder.Body.String() != `{"detail": "X-Org-Id not permitted for this user"}` {
-				t.Errorf("a removed member's token was answered %d %q, want the X-Org-Id refusal", recorder.Code, recorder.Body.String())
-			}
-			store.mu.Lock()
-			defer store.mu.Unlock()
-			if got := store.reads[[2]uuid.UUID{user, org}]; got != 1 {
-				t.Errorf("membership reads of the token's own org: %d, want 1", got)
-			}
-		})
-	}
-	if checked < 150 {
-		t.Fatalf("the census checked %d org-scoped routes; the profile rows or the mounted routes no longer reach it", checked)
-	}
+	return tokenOrgCensus{store: store, server: server, rows: rows, mounted: mounted, user: user, org: org, access: access}
 }

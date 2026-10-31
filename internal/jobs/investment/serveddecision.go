@@ -298,6 +298,15 @@ func (served *ServedDecision) Identity() (provider, model string) {
 	return served.identity.Provider, served.identity.Model
 }
 
+// CredentialSource is the credential_source of the run's llm_token_usage row:
+// org for the backend of an org's own model, platform for jev.
+func (served *ServedDecision) CredentialSource() string {
+	if served.byo {
+		return chwrite.CredentialSourceOrg
+	}
+	return chwrite.CredentialSourcePlatform
+}
+
 // Close releases the client of the backend.
 func (served *ServedDecision) Close() error {
 	if served == nil || served.closer == nil {
@@ -674,6 +683,14 @@ func (m *Materializer) modelVersion(cfg Config) string {
 		return backend.Stamp()
 	}
 	return categorize.EffectiveModelVersion(cfg.ProviderName, resolvedModelName(cfg))
+}
+
+// usageCredentialSource is the credential_source of the run's llm_token_usage row.
+func (m *Materializer) usageCredentialSource() string {
+	if backend := m.backend(); backend != nil {
+		return backend.CredentialSource()
+	}
+	return chwrite.CredentialSourcePlatform
 }
 
 // usageIdentity is the provider and model of the run's llm_token_usage row.

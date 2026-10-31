@@ -19,6 +19,7 @@ func (f *fakeSystemOne) categorize(context.Context, Config, preprocessed) (categ
 }
 func (f *fakeSystemOne) Stamp() string                                   { return "fake-stamp" }
 func (f *fakeSystemOne) Identity() (string, string)                      { return "fake-provider", "fake-model" }
+func (f *fakeSystemOne) CredentialSource() string                        { return chwrite.CredentialSourcePlatform }
 func (f *fakeSystemOne) keepsLastRow(i int) bool                         { return f.keeps[i] }
 func (f *fakeSystemOne) isLowQuality(i int) bool                         { return f.low[i] }
 func (f *fakeSystemOne) noteSkippedTerminal(n int)                       { f.skipped = n }

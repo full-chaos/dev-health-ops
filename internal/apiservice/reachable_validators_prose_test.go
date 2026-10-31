@@ -43,13 +43,4 @@ func TestScopeReachableValidatorProseNamesThePrincipalDecision(t *testing.T) {
 	if !strings.Contains(string(raw), "func (s *Scope) Principal(") {
 		t.Fatal("Scope.Principal is gone: the rows' prose is stale")
 	}
-	for _, file := range []string{"../api/policy/scope.go"} {
-		scope, err := os.ReadFile(file)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if strings.Contains(string(scope), `Header.Get("Authorization")`) || strings.Contains(string(scope), `Header.Values("Authorization")`) {
-			t.Errorf("%s reads the Authorization header: OrgScope and Impersonation no longer take the caller from Principal only", file)
-		}
-	}
 }

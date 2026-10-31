@@ -1439,7 +1439,7 @@ func (c *fileCtx) preGate(st ast.Stmt, dir bool, errName, entry string, locals m
 		}
 		return true
 	case *ast.IfStmt:
-		if s.Init != nil || !c.allPure([]ast.Expr{s.Cond}, entry) {
+		if !c.allPure([]ast.Expr{s.Cond}, entry) || s.Init != nil && !c.preGate(s.Init, dir, errName, entry, locals) {
 			return false
 		}
 		inDir := dir

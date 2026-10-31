@@ -94,17 +94,17 @@ func TestAppendPushLifecycleWritesParseableEventsInTheCallersTransaction(t *test
 	root := repoRoot(t)
 
 	if err := withPushTx(t, ctx, env, true, func(tx pgx.Tx) error {
-		return AppendPushLifecycle(ctx, tx, env.schema, []PushLifecycleEvent{pushCreated("cred-1", "ingest:write")})
+		return AppendPushLifecycle(ctx, tx, env.schema, []PushLifecycleEvent{pushCreated("00000000-0000-4000-8000-000000000001", "ingest:write")})
 	}); err != nil {
 		t.Fatal(err)
 	}
-	rows := pushRows(t, ctx, env, "cred-1")
-	if len(rows) != 1 || rows[0].key != "external_push_credential:cred-1:1" || rows[0].revision != 1 {
+	rows := pushRows(t, ctx, env, "00000000-0000-4000-8000-000000000001")
+	if len(rows) != 1 || rows[0].key != "external_push_credential:00000000-0000-4000-8000-000000000001:1" || rows[0].revision != 1 {
 		t.Fatalf("rows = %+v", rows)
 	}
-	event, err := contracts.ParseExternalPushLifecycleEvent(root, rows[0].envelope("cred-1"))
+	event, err := contracts.ParseExternalPushLifecycleEvent(root, rows[0].envelope("00000000-0000-4000-8000-000000000001"))
 	if err != nil {
-		t.Fatalf("the outbox row is not a valid wire event: %v\n%s", err, rows[0].envelope("cred-1"))
+		t.Fatalf("the outbox row is not a valid wire event: %v\n%s", err, rows[0].envelope("00000000-0000-4000-8000-000000000001"))
 	}
 	if event.Payload.Change.Fingerprint != "0123456789abcdef" {
 		t.Fatalf("event = %+v", event)
@@ -115,22 +115,22 @@ func TestAppendPushLifecycleWritesParseableEventsInTheCallersTransaction(t *test
 
 	t.Run("a rollback drops the event and the revision", func(t *testing.T) {
 		if err := withPushTx(t, ctx, env, false, func(tx pgx.Tx) error {
-			return AppendPushLifecycle(ctx, tx, env.schema, []PushLifecycleEvent{pushCreated("cred-rolled-back", "ingest:write")})
+			return AppendPushLifecycle(ctx, tx, env.schema, []PushLifecycleEvent{pushCreated("00000000-0000-4000-8000-000000000002", "ingest:write")})
 		}); err != nil {
 			t.Fatal(err)
 		}
 		var revisions int
-		if err := env.pool.QueryRow(ctx, `SELECT count(*) FROM auth.aggregate_revisions WHERE aggregate_id = 'cred-rolled-back'`).Scan(&revisions); err != nil {
+		if err := env.pool.QueryRow(ctx, `SELECT count(*) FROM auth.aggregate_revisions WHERE aggregate_id = '00000000-0000-4000-8000-000000000002'`).Scan(&revisions); err != nil {
 			t.Fatal(err)
 		}
-		if got := len(pushRows(t, ctx, env, "cred-rolled-back")); got != 0 || revisions != 0 {
+		if got := len(pushRows(t, ctx, env, "00000000-0000-4000-8000-000000000002")); got != 0 || revisions != 0 {
 			t.Fatalf("after rollback: %d outbox rows, %d revision rows, want 0 and 0", got, revisions)
 		}
 	})
 
 	t.Run("the guard is disarmed on return", func(t *testing.T) {
 		err := withPushTx(t, ctx, env, true, func(tx pgx.Tx) error {
-			if err := AppendPushLifecycle(ctx, tx, env.schema, []PushLifecycleEvent{pushCreated("cred-disarm", "ingest:write")}); err != nil {
+			if err := AppendPushLifecycle(ctx, tx, env.schema, []PushLifecycleEvent{pushCreated("00000000-0000-4000-8000-000000000003", "ingest:write")}); err != nil {
 				return err
 			}
 			_, err := tx.Exec(ctx, `INSERT INTO auth.auth_outbox_events (aggregate_type, aggregate_id, event_type, payload, idempotency_key)
@@ -140,33 +140,33 @@ func TestAppendPushLifecycleWritesParseableEventsInTheCallersTransaction(t *test
 		if err == nil {
 			t.Fatal("a guarded write after AppendPushLifecycle was accepted")
 		}
-		if got := len(pushRows(t, ctx, env, "cred-disarm")); got != 0 {
+		if got := len(pushRows(t, ctx, env, "00000000-0000-4000-8000-000000000003")); got != 0 {
 			t.Fatalf("the refused transaction left %d rows", got)
 		}
 	})
 
 	t.Run("a refused event writes nothing", func(t *testing.T) {
-		bad := pushCreated("cred-bad", "ingest:write")
+		bad := pushCreated("00000000-0000-4000-8000-000000000004", "ingest:write")
 		bad.Change.Fingerprint = "NOT-A-FINGERPRINT"
 		err := withPushTx(t, ctx, env, true, func(tx pgx.Tx) error {
-			return AppendPushLifecycle(ctx, tx, env.schema, []PushLifecycleEvent{pushCreated("cred-good", "ingest:write"), bad})
+			return AppendPushLifecycle(ctx, tx, env.schema, []PushLifecycleEvent{pushCreated("00000000-0000-4000-8000-000000000005", "ingest:write"), bad})
 		})
 		if !errors.Is(err, ErrPushLifecycle) {
 			t.Fatalf("err = %v, want ErrPushLifecycle", err)
 		}
-		if got := len(pushRows(t, ctx, env, "cred-good")); got != 0 {
+		if got := len(pushRows(t, ctx, env, "00000000-0000-4000-8000-000000000005")); got != 0 {
 			t.Fatalf("the good event of a refused call was written (%d rows)", got)
 		}
 	})
 
 	t.Run("a created event needs a credential with no earlier event", func(t *testing.T) {
 		err := withPushTx(t, ctx, env, true, func(tx pgx.Tx) error {
-			return AppendPushLifecycle(ctx, tx, env.schema, []PushLifecycleEvent{pushCreated("cred-1", "ingest:write")})
+			return AppendPushLifecycle(ctx, tx, env.schema, []PushLifecycleEvent{pushCreated("00000000-0000-4000-8000-000000000001", "ingest:write")})
 		})
 		if !errors.Is(err, ErrPushLifecycle) {
 			t.Fatalf("a second created for cred-1: err = %v", err)
 		}
-		if got := len(pushRows(t, ctx, env, "cred-1")); got != 1 {
+		if got := len(pushRows(t, ctx, env, "00000000-0000-4000-8000-000000000001")); got != 1 {
 			t.Fatalf("cred-1 has %d rows, want 1", got)
 		}
 	})
@@ -179,18 +179,18 @@ func TestAppendPushLifecycleLegacyCredentialGetsCreatedThenTheEvent(t *testing.T
 	root := repoRoot(t)
 
 	if err := withPushTx(t, ctx, env, true, func(tx pgx.Tx) error {
-		return AppendPushLifecycle(ctx, tx, env.schema, []PushLifecycleEvent{pushRevoked("legacy-1")})
+		return AppendPushLifecycle(ctx, tx, env.schema, []PushLifecycleEvent{pushRevoked("00000000-0000-4000-8000-000000000006")})
 	}); err != nil {
 		t.Fatal(err)
 	}
-	rows := pushRows(t, ctx, env, "legacy-1")
+	rows := pushRows(t, ctx, env, "00000000-0000-4000-8000-000000000006")
 	if len(rows) != 2 || rows[0].eventType != externalpush.Created || rows[1].eventType != externalpush.Revoked ||
 		rows[0].revision != 1 || rows[1].revision != 2 {
 		t.Fatalf("rows = %+v", rows)
 	}
 	state := pushlifecycle.State{}
 	for _, r := range rows {
-		event, err := contracts.ParseExternalPushLifecycleEvent(root, r.envelope("legacy-1"))
+		event, err := contracts.ParseExternalPushLifecycleEvent(root, r.envelope("00000000-0000-4000-8000-000000000006"))
 		if err != nil {
 			t.Fatalf("%s: %v", r.eventType, err)
 		}
@@ -214,7 +214,7 @@ func TestAppendPushLifecycleLegacyCredentialGetsCreatedThenTheEvent(t *testing.T
 			go func() {
 				defer wg.Done()
 				errs[i] = withPushTx(t, ctx, env, true, func(tx pgx.Tx) error {
-					return AppendPushLifecycle(ctx, tx, env.schema, []PushLifecycleEvent{pushRevoked("legacy-race")})
+					return AppendPushLifecycle(ctx, tx, env.schema, []PushLifecycleEvent{pushRevoked("00000000-0000-4000-8000-000000000007")})
 				})
 			}()
 		}
@@ -224,12 +224,12 @@ func TestAppendPushLifecycleLegacyCredentialGetsCreatedThenTheEvent(t *testing.T
 				t.Fatal(err)
 			}
 		}
-		got := pushRows(t, ctx, env, "legacy-race")
+		got := pushRows(t, ctx, env, "00000000-0000-4000-8000-000000000007")
 		if len(got) != 3 || got[0].eventType != externalpush.Created {
 			t.Fatalf("rows = %+v, want created then two revoked", got)
 		}
 		for i, r := range got {
-			if r.revision != int64(i+1) || r.key != fmt.Sprintf("external_push_credential:legacy-race:%d", i+1) {
+			if r.revision != int64(i+1) || r.key != fmt.Sprintf("external_push_credential:00000000-0000-4000-8000-000000000007:%d", i+1) {
 				t.Fatalf("row %d = %+v, revisions must be contiguous", i, r)
 			}
 		}
@@ -241,14 +241,14 @@ func TestAppendPushLifecycleRotationWritesBothAggregatesAtOnceOrNone(t *testing.
 	defer cancel()
 	env := newAuditFixture(t, ctx)
 
-	rotated := PushLifecycleEvent{EventType: externalpush.Rotated, AggregateID: "cred-new", OrganizationID: pushOrg, SourceID: pushSource,
-		Change: externalpush.Change{Status: "active", Fingerprint: "fedcba9876543210", Scopes: []string{"ingest:write"}, RotationParentID: "cred-old"}}
+	rotated := PushLifecycleEvent{EventType: externalpush.Rotated, AggregateID: "00000000-0000-4000-8000-0000000000b2", OrganizationID: pushOrg, SourceID: pushSource,
+		Change: externalpush.Change{Status: "active", Fingerprint: "fedcba9876543210", Scopes: []string{"ingest:write"}, RotationParentID: "00000000-0000-4000-8000-0000000000c3"}}
 	if err := withPushTx(t, ctx, env, true, func(tx pgx.Tx) error {
-		return AppendPushLifecycle(ctx, tx, env.schema, []PushLifecycleEvent{rotated, pushRevoked("cred-old")})
+		return AppendPushLifecycle(ctx, tx, env.schema, []PushLifecycleEvent{rotated, pushRevoked("00000000-0000-4000-8000-0000000000c3")})
 	}); err != nil {
 		t.Fatal(err)
 	}
-	oldRows, newRows := pushRows(t, ctx, env, "cred-old"), pushRows(t, ctx, env, "cred-new")
+	oldRows, newRows := pushRows(t, ctx, env, "00000000-0000-4000-8000-0000000000c3"), pushRows(t, ctx, env, "00000000-0000-4000-8000-0000000000b2")
 	if len(oldRows) != 2 || len(newRows) != 1 || newRows[0].eventType != externalpush.Rotated {
 		t.Fatalf("old = %+v new = %+v", oldRows, newRows)
 	}
@@ -260,17 +260,17 @@ func TestAppendPushLifecycleRotationWritesBothAggregatesAtOnceOrNone(t *testing.
 		// cred-old is already revoked at revision 2; a rotated event for a credential
 		// that already has events is refused after the parent's event is written.
 		again := rotated
-		again.AggregateID = "cred-new"
+		again.AggregateID = "00000000-0000-4000-8000-0000000000b2"
 		err := withPushTx(t, ctx, env, true, func(tx pgx.Tx) error {
-			return AppendPushLifecycle(ctx, tx, env.schema, []PushLifecycleEvent{again, pushRevoked("cred-a-parent")})
+			return AppendPushLifecycle(ctx, tx, env.schema, []PushLifecycleEvent{again, pushRevoked("00000000-0000-4000-8000-0000000000a0")})
 		})
 		if !errors.Is(err, ErrPushLifecycle) {
 			t.Fatalf("err = %v", err)
 		}
-		if got := len(pushRows(t, ctx, env, "cred-a-parent")); got != 0 {
+		if got := len(pushRows(t, ctx, env, "00000000-0000-4000-8000-0000000000a0")); got != 0 {
 			t.Fatalf("the parent's revoked event survived the refusal (%d rows)", got)
 		}
-		if got := len(pushRows(t, ctx, env, "cred-new")); got != 1 {
+		if got := len(pushRows(t, ctx, env, "00000000-0000-4000-8000-0000000000b2")); got != 1 {
 			t.Fatalf("cred-new has %d rows, want the original 1", got)
 		}
 	})

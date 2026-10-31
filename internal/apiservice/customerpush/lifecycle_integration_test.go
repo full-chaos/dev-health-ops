@@ -77,6 +77,9 @@ func newLifecycleEnv(t *testing.T, ctx context.Context, events bool) *lifecycleE
 	}
 	env.user = &policy.User{UserID: uuid.NewString(), OrgID: env.org.String(), Role: "admin"}
 	env.user.ID = uuid.MustParse(env.user.UserID)
+	if _, err := pool.Exec(ctx, `INSERT INTO users (id, email, is_superuser, is_active, token_version) VALUES ($1, 'cp-life@x', false, true, 0)`, env.user.ID); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
 	env.h = &handlers{pool: pool, logger: slog.Default(), now: time.Now, lifecycle: newLifecycle(events, "auth")}
 	return env
 }
@@ -120,7 +123,7 @@ func (e *lifecycleEnv) legacyToken(t *testing.T, ctx context.Context) uuid.UUID 
 	id := uuid.New()
 	e.legacyCounter++
 	if _, err := e.pool.Exec(ctx, `INSERT INTO external_ingest_tokens (id, org_id, source_id, name, token_hash, token_prefix, scopes, created_at)
-		VALUES ($1, $2, $3, 'legacy', md5($1::text), 'fcpush_xxxxx', '["ingest:write"]', now())`, id, e.org.String(), e.source); err != nil {
+		VALUES ($1, $2, $3, 'legacy', md5(gen_random_uuid()::text), 'fcpush_xxxxx', '["ingest:write"]', now())`, id, e.org.String(), e.source); err != nil {
 		t.Fatal(err)
 	}
 	return id

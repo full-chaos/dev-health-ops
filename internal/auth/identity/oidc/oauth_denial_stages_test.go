@@ -103,7 +103,7 @@ func runStage(t *testing.T, c stageCase, denials DenialAudit) (refusal, StoredPr
 		Sessions: &resolveSessions{}, StateSecret: secret, AppBaseURL: "https://app.example",
 		HTTPClient: server.Client(), OAuthEndpoints: &OAuthEndpoints{GoogleToken: server.URL + "/google/token",
 			Social: social.Endpoints{GitLabBase: server.URL, GoogleTokenInfo: server.URL + "/google/tokeninfo", GoogleUserInfo: server.URL + "/google/userinfo"}},
-		DenialAudit: denials, Now: func() time.Time { return now },
+		DenialAudit: denials, SignInRecord: noSignInRecord{}, Now: func() time.Time { return now },
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -195,6 +195,11 @@ authService:
   #             barrier (up-owned) first. Rollback runs the other way: goApi, barrier down-auth, then phase 3.
   #    Runbook: docs/operate/runbooks/auth-users-owned-flip-and-rollback.md.
   usersOwnedStage: ""
+  # -- Platform roles owned: renders AUTH_PLATFORM_ROLES_OWNED=true on auth-service, go-api, query-api and the
+  #    auth-migrate, auth-grants and auth-backfill Jobs, so platform authority moves from public.users.is_superuser
+  #    to auth.platform_role_assignments. Refused unless users are owned (phase 4, usersOwnedStage owned).
+  #    Runbook: docs/operate/runbooks/auth-platform-roles-flip-and-rollback.md.
+  platformRolesOwned: false
   # -- Two replicas keep the service up through one pod loss or node drain
   #    (N+1, docs/operate/plan/auth-service-capacity.md); a PodDisruptionBudget
   #    (minAvailable 1) renders only while this is 2 or more.

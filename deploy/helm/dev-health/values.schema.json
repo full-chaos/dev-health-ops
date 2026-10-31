@@ -123,6 +123,10 @@
           "description": "CHAOS-11606: the roll order of phase 4, goApi then owned. Required at phase 4, refused elsewhere (the templates check both).",
           "type": "string",
           "enum": ["", "goApi", "owned"]
+        },
+        "platformRolesOwned": {
+          "description": "CHAOS-12191: render AUTH_PLATFORM_ROLES_OWNED=true on every reader. Refused unless users are owned (the templates check it).",
+          "type": "boolean"
         }
       }
     },

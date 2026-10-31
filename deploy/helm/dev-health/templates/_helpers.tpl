@@ -771,7 +771,7 @@ rendered one, a Secret reference included, and put a literal in the manifest. au
 names and proves each is refused.
 */}}
 {{- define "dev-health.authServiceEnvNames" -}}
-{{- $names := list "AUTH_DATABASE_URI" "AUTH_JWT_SECRET_KEY" "AUTH_SESSION_SUCCESSOR_KEY" "AUTH_LOGIN_LOCKOUT_KEY" "AUTH_SOCIAL_LINK_ROUTES" "AUTH_ACCESS_TOKEN_CLASS" "AUTH_TOKEN_ISSUER_URL" "AUTH_JWT_AUDIENCE" "AUTH_USERS_OWNED" "AUTH_ORGS_OWNED" "AUTH_VALKEY_URI" "AUTH_SERVICE_TRUSTED_PROXIES" "OTEL_ENABLED" "OTEL_EXPORTER_OTLP_ENDPOINT" "OTEL_SAMPLE_RATE" "OTEL_SERVICE_NAME" "EMAIL_PROVIDER" "EMAIL_FROM_ADDRESS" "APP_BASE_URL" "AUTH_MAIL_ALLOW_CONSOLE" -}}
+{{- $names := list "AUTH_DATABASE_URI" "AUTH_JWT_SECRET_KEY" "AUTH_SESSION_SUCCESSOR_KEY" "AUTH_LOGIN_LOCKOUT_KEY" "AUTH_SOCIAL_LINK_ROUTES" "AUTH_ACCESS_TOKEN_CLASS" "AUTH_TOKEN_ISSUER_URL" "AUTH_JWT_AUDIENCE" "AUTH_USERS_OWNED" "AUTH_ORGS_OWNED" "AUTH_PLATFORM_ROLES_OWNED" "AUTH_VALKEY_URI" "AUTH_SERVICE_TRUSTED_PROXIES" "OTEL_ENABLED" "OTEL_EXPORTER_OTLP_ENDPOINT" "OTEL_SAMPLE_RATE" "OTEL_SERVICE_NAME" "EMAIL_PROVIDER" "EMAIL_FROM_ADDRESS" "APP_BASE_URL" "AUTH_MAIL_ALLOW_CONSOLE" -}}
 {{- /* EMAIL_API_KEY is appended, not listed, so the worker allow-list keeps the only listed spelling (a chartgates planted defect edits it). */ -}}
 {{- $names = (append (append $names "EMAIL_API_KEY") "RESEND_API_KEY") -}}
 {{- range $provider := list "GITHUB" "GITLAB" "GOOGLE" }}{{- range $suffix := list "CLIENT_ID" "CLIENT_SECRET" }}{{- $names = append $names (printf "SOCIAL_%s_%s" $provider $suffix) }}{{- end }}{{- end -}}
@@ -783,7 +783,7 @@ Every env name the chart renders for the go-api container, as a JSON list. goApi
 any case, for the same reason as dev-health.authServiceEnvNames. auth_phase_test.go walks the rendered names. The DSN name is appended, not listed, so the worker DSN list keeps the only listed spelling (a chartgates planted defect edits it).
 */}}
 {{- define "dev-health.goApiEnvNames" -}}
-{{- $names := list "JWT_SECRET_KEY" "AUTH_DATABASE_SCHEMA" "HIDE_MIGRATED_CHILD_CONFIGS" "SYNC_WATERMARK_OVERLAP" "SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS" "AUTH_PROXY_URL" "AUTH_PROXY_SESSIONS" "AUTH_PROXY_LOCAL_LOGIN" "AUTH_PROXY_CREDENTIALS" "AUTH_PROXY_SOCIAL" "AUTH_PROXY_OIDC" "AUTH_PROXY_SAML" "AUTH_PROXY_ORG_PROVISIONING" "AUTH_SESSION_ISSUE_TOKEN" "AUTH_USERS_OWNED" "AUTH_ACCESS_TOKEN_ISSUER" "TRUSTED_PROXIES_NETWORK_FENCED" -}}
+{{- $names := list "JWT_SECRET_KEY" "AUTH_DATABASE_SCHEMA" "HIDE_MIGRATED_CHILD_CONFIGS" "SYNC_WATERMARK_OVERLAP" "SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS" "AUTH_PLATFORM_ROLES_OWNED" "AUTH_PROXY_URL" "AUTH_PROXY_SESSIONS" "AUTH_PROXY_LOCAL_LOGIN" "AUTH_PROXY_CREDENTIALS" "AUTH_PROXY_SOCIAL" "AUTH_PROXY_OIDC" "AUTH_PROXY_SAML" "AUTH_PROXY_ORG_PROVISIONING" "AUTH_SESSION_ISSUE_TOKEN" "AUTH_USERS_OWNED" "AUTH_ACCESS_TOKEN_ISSUER" "TRUSTED_PROXIES_NETWORK_FENCED" -}}
 {{- $names = (append $names "API_DATABASE_URI") }}{{- toJson $names -}}
 {{- end -}}
 
@@ -869,6 +869,21 @@ the auth Jobs, the grants) is on only at stage owned, so go-api rolls first and 
 {{- $phase := int (include "dev-health.authPhase" .context) -}}
 {{- if ge $phase (int (get $ladder .flag)) -}}
 {{- if or (ne .flag "usersOwned") (ge $phase 5) (eq (toString .context.Values.authService.usersOwnedStage) "owned") -}}true{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+"true" when authService.platformRolesOwned is on, else "". The one read of the switch: auth-service, go-api, query-api and the
+auth Jobs render AUTH_PLATFORM_ROLES_OWNED from it. true is refused unless users are owned (authOn usersOwned): platform authority
+moves from public.users.is_superuser to auth.platform_role_assignments only after users do.
+*/}}
+{{- define "dev-health.platformRolesOwned" -}}
+{{- $v := .Values.authService.platformRolesOwned -}}
+{{- if not (kindIs "bool" $v) }}{{- fail "authService.platformRolesOwned must be true or false" }}{{- end -}}
+{{- if $v -}}
+{{- /* The phase 5 leaf (orgs owned) tightens this guard to authOn orgsOwned. */ -}}
+{{- if ne (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true" }}{{- fail "authService.platformRolesOwned needs users owned: authService.phase 4 with authService.usersOwnedStage=owned (docs/operate/runbooks/auth-platform-roles-flip-and-rollback.md)" }}{{- end -}}
+true
 {{- end -}}
 {{- end -}}
 

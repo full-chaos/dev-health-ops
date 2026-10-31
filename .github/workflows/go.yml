@@ -912,11 +912,11 @@ jobs:
                 echo "- ${name}: JOB TIMEOUT (ran to the time limit: a slow runner or a hung test; no test assertion failed; deadline panic): ${url}"
                 echo "${name}" >> "${timed_file}"
                 # The running tests: block = the indented lines after the panic line, up to the first line that is not
-                # indented (a log timestamp is not part of the line); at most 100 lines, then "... N more".
+                # indented (a log timestamp is not part of the line); at most 100 test lines after the running tests: header, then "... N more".
                 awk -v max=100 '
                   function strip(s) { sub(/^[0-9TZ:.-]+ /, "", s); return s }
                   state == 0 { if (index(strip($0), "panic: test timed out after") > 0) { print "    " $0; state = 1 } ; next }
-                  { if (strip($0) ~ /^[ \t]/) { n++; if (n <= max) print "    " $0 } else { exit } }
+                  { l = strip($0); if (l !~ /^[ \t]/) { exit } if (l ~ /^[ \t]*running tests:/) { print "    " $0; next } n++; if (n <= max) print "    " $0 }
                   END { if (n > max) printf "    ... %d more\n", n - max }
                 ' "${textfile}" || true
                 got_log=0

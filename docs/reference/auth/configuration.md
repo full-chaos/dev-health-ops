@@ -79,6 +79,8 @@ Durations take Go syntax (`30s`, `5m`).
 
 The session, social link and change-password routes read their bearer through the route's endpoint-profile row. With `AUTH_TOKEN_ISSUER_URL` set, they accept the EdDSA user access token of audience `auth-service` (access-token.v1), checked against the keys the JWKS publishes: it needs a valid `sid`, its session must be live, and the session's `token_version` pin must equal the user's current `token_version`. The HS256 compatibility access token stays accepted on the same rows. Without `AUTH_TOKEN_ISSUER_URL` the routes verify the HS256 compatibility access token only.
 
+A password change issues the caller's new session in the organization of the session it replaces only while the caller is still a member of that organization; if the membership is gone, the new session has no organization, as in go-api.
+
 The session routes accept the EdDSA token with audience `auth-service` only. While the session routes are mounted, the service therefore refuses to start with the eddsa access token class unless `AUTH_JWT_AUDIENCE` is `auth-service`; the chart renders `dev-health-api` for that class, so the class stays off until the issuer switch mints the session route audience. Under that class the HS256 compatibility access token is checked with `AUTH_LEGACY_JWT_AUDIENCE` (go-api's `JWT_AUDIENCE`, `dev-health-api` when unset), not with `AUTH_JWT_AUDIENCE`.
 
 ### Rate limits

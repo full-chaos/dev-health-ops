@@ -290,17 +290,20 @@ func TestParseStatus(t *testing.T) {
 }
 
 func TestStatusNamesMatchStoredStatuses(t *testing.T) {
-	pairs := map[string]Status{
-		string(membership.StatusInvited):   StatusInvited,
-		string(membership.StatusActive):    StatusActive,
-		string(membership.StatusSuspended): StatusSuspended,
-		string(membership.StatusRemoved):   StatusRemoved,
-		string(org.StatusActive):           StatusActive,
-		string(org.StatusSuspended):        StatusSuspended,
+	pairs := []struct {
+		name string
+		want Status
+	}{
+		{string(membership.StatusInvited), StatusInvited},
+		{string(membership.StatusActive), StatusActive},
+		{string(membership.StatusSuspended), StatusSuspended},
+		{string(membership.StatusRemoved), StatusRemoved},
+		{string(org.StatusActive), StatusActive},
+		{string(org.StatusSuspended), StatusSuspended},
 	}
-	for name, st := range pairs {
-		if got := ParseStatus(name); got != st {
-			t.Errorf("stored status %q parses to %d want %d", name, got, st)
+	for _, p := range pairs {
+		if got := ParseStatus(p.name); got != p.want {
+			t.Errorf("stored status %q parses to %d want %d", p.name, got, p.want)
 		}
 	}
 }

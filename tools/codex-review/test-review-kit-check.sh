@@ -21,7 +21,10 @@ REPO=$WORK/repo
 git init -q -b main "$REPO"
 g() { git -C "$REPO" -c user.email=t@example.invalid -c user.name=t -c commit.gpgsign=false "$@"; }
 printf 'one\ntwo\n' > "$REPO/a.txt"
-g add a.txt; g commit -q -m base
+mkdir -p "$REPO/internal" "$REPO/ci"
+printf 'x\n' > "$REPO/internal/foo.go"
+printf 'x\n' > "$REPO/ci/bar.sh"
+g add a.txt internal ci; g commit -q -m base
 BASE=$(g rev-parse HEAD)
 g checkout -q -b topic
 printf 'one\nTWO\nthree\n' > "$REPO/a.txt"
@@ -33,6 +36,8 @@ printf '\000\001\002' > "$REPO/c.bin"
 g add b.txt c.bin; g commit -q -m tip
 TIP=$(g rev-parse HEAD)
 g update-ref refs/remotes/origin/main "$BASE"
+UNREL=$(g commit-tree "$TIP^{tree}" -m unrelated)
+MISSING=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 
 numstat() { g diff --numstat "$1...$2" | awk '{f++; if ($1 != "-") a += $1; if ($2 != "-") d += $2} END {printf "%d %d %d", f, a, d}'; }
 read -r F A D <<<"$(numstat "$BASE" "$TIP")"
@@ -148,6 +153,27 @@ cell red-path-list-in-intent-bracket 1 "bracket fill holds a path list at line" 
 PROSE=$'The wrapper accepts and/or refuses a form.\nIt reads input/output pairs.\nIt may read/write the log.'
 SUMMARY=$PROSE fill 1 "$WORK/prose.md"
 cell green-slash-prose-in-intent-bracket 0 "review-kit-check OK" "$WORK/prose.md" 1
+
+for rd in 1 2; do
+  sfx=; [ "$rd" = 2 ] && sfx=-r2
+  SUMMARY=$'The wrapper counts runs.\ninternal/alpha\ninternal/beta\ninternal/gamma' fill "$rd" "$WORK/internal$rd.md"
+  cell "red-path-list-internal-names$sfx" 1 "bracket fill holds a path list at line" "$WORK/internal$rd.md" "$rd"
+  SUMMARY=$'The wrapper counts runs.\nci/alpha\nci/beta\nci/gamma' fill "$rd" "$WORK/ci$rd.md"
+  cell "red-path-list-ci-names$sfx" 1 "bracket fill holds a path list at line" "$WORK/ci$rd.md" "$rd"
+  SUMMARY=$'The wrapper counts runs.\ninternal/foo/a.go\ninternal/foo/b.go\ninternal/bar/c.go' fill "$rd" "$WORK/deep$rd.md"
+  cell "red-path-list-deep-paths$sfx" 1 "bracket fill holds a path list at line" "$WORK/deep$rd.md" "$rd"
+  SUMMARY=$PROSE fill "$rd" "$WORK/prose$rd.md"
+  cell "green-slash-prose-real-tree$sfx" 0 "review-kit-check OK" "$WORK/prose$rd.md" "$rd"
+  fill "$rd" "$WORK/blank$rd.md"
+  printf '\n' >> "$WORK/blank$rd.md"
+  cell "red-extra-blank-line-at-eof$sfx" 1 "prompt differs at line" "$WORK/blank$rd.md" "$rd"
+done
+
+fill 2 "$WORK/unrel.md" "r1 tip=$UNREL" "F2=0" "A2=0" "D2=0"
+cell red-r2-unrelated-r1-tip 1 "not an ancestor" "$WORK/unrel.md" 2
+
+fill 1 "$WORK/missingtip.md" "full tip sha=$MISSING" "tip sha=$MISSING"
+cell red-tip-missing-locally 1 "not in the local repository: fetch the PR head first" "$WORK/missingtip.md" 1 FAKE_TIP="$MISSING"
 
 fill 1 "$WORK/emptyF.md" "F="
 cell red-empty-count-fill 1 "prompt differs at line" "$WORK/emptyF.md" 1

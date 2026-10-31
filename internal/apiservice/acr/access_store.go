@@ -14,6 +14,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/licensing"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/repoinventory"
 )
 
@@ -21,15 +22,22 @@ import (
 const askDevFeatureKey = "ask_dev"
 
 // AccessReads is what the principal access read needs from go-api's policy
-// store: the users row, the membership, the admin-keyed impersonation and the
-// auth-service session the sid names. policy.PGStore implements it with
-// go-api's existing grants (the session read is the session reader's
-// sessions(id, principal_id, revoked_at, legacy_token_version)).
+// store: the users row, the membership and the admin-keyed impersonation.
+// policy.PGStore implements it with go-api's existing grants. The session the
+// sid names is never read here: auth-service answers it (SessionStates).
 type AccessReads interface {
 	UserState(ctx context.Context, id uuid.UUID) (policy.UserState, bool, error)
 	Membership(ctx context.Context, userID, orgID uuid.UUID) (string, bool, error)
 	ActiveImpersonation(ctx context.Context, adminID uuid.UUID) (*policy.Impersonation, error)
-	SessionState(ctx context.Context, id uuid.UUID) (policy.SessionRow, bool, error)
+}
+
+// SessionStates reads one session's state from auth-service's session state
+// route (sessionissue.Client, on go-api's session issuer credential): owner,
+// organization, effective revoke and effective expiry, as auth-service decides
+// them (acp ruling D6559 on CHAOS-12122). sessionissue.ErrSessionNotFound is a
+// session it does not hold; every other error is a failed read.
+type SessionStates interface {
+	State(ctx context.Context, sessionID uuid.UUID) (sessionissue.State, error)
 }
 
 // FeatureDecider decides one org feature; licensing.PostgresStore implements it.
@@ -57,18 +65,24 @@ type AccessStore struct {
 	Reads         AccessReads
 	Features      FeatureDecider
 	Inventory     RepositoryInventory
+	// Sessions answers the session a sid names. Nil: a read with a sid is
+	// unavailable (503); a read without one never needs it.
+	Sessions SessionStates
 }
 
 var _ PrincipalAccessStore = AccessStore{}
 
 // NewPostgresAccessStore is AccessStore over go-api's pool and policy store,
-// with inventory as the repository read (nil answers 503 on every call).
-func NewPostgresAccessStore(pool *pgxpool.Pool, reads policy.PGStore, inventory RepositoryInventory) AccessStore {
+// with inventory as the repository read (nil answers 503 on every call) and
+// sessions as auth-service's session state read (nil answers 503 on every read
+// with a sid).
+func NewPostgresAccessStore(pool *pgxpool.Pool, reads policy.PGStore, inventory RepositoryInventory, sessions SessionStates) AccessStore {
 	return AccessStore{
 		Organizations: postgresOrganizations{pool: pool},
 		Reads:         reads,
 		Features:      licensing.PostgresStore{Pool: pool},
 		Inventory:     inventory,
+		Sessions:      sessions,
 	}
 }
 
@@ -93,53 +107,70 @@ func (s AccessStore) Access(ctx context.Context, query AccessQuery) (PrincipalAc
 		repositories = repos
 		return nil
 	})
+	var state sessionissue.State
+	stateFound := false
+	if query.SessionID != nil {
+		group.Go(func() error {
+			if s.Sessions == nil {
+				return errors.New("session state read: no auth-service session state reader configured")
+			}
+			read, err := s.Sessions.State(groupCtx, *query.SessionID)
+			switch {
+			case errors.Is(err, sessionissue.ErrSessionNotFound):
+				return nil
+			case err != nil:
+				return fmt.Errorf("session state read: %w", err)
+			}
+			state, stateFound = read, true
+			return nil
+		})
+	}
 	var access PrincipalAccess
+	var user policy.UserState
+	var userFound bool
 	group.Go(func() error {
 		var err error
-		access, err = s.postgresFacts(groupCtx, query)
+		access, user, userFound, err = s.postgresFacts(groupCtx, query)
 		return err
 	})
 	if err := group.Wait(); err != nil {
 		return PrincipalAccess{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
+	if query.SessionID != nil {
+		live, reason := sessionLive(query, state, stateFound, user, userFound)
+		access.Session = &SessionAccess{Live: live, Reason: reason, Impersonating: access.Impersonating}
+	}
 	access.Repositories = repositories
 	return access, nil
 }
 
-// postgresFacts reads membership, session, impersonation and both entitlements.
-func (s AccessStore) postgresFacts(ctx context.Context, query AccessQuery) (PrincipalAccess, error) {
+// postgresFacts reads membership, impersonation and both entitlements, and
+// returns the users row the session check compares the session's pin with.
+func (s AccessStore) postgresFacts(ctx context.Context, query AccessQuery) (PrincipalAccess, policy.UserState, bool, error) {
 	user, userFound, err := s.Reads.UserState(ctx, query.UserID)
 	if err != nil {
-		return PrincipalAccess{}, fmt.Errorf("users read: %w", err)
+		return PrincipalAccess{}, policy.UserState{}, false, fmt.Errorf("users read: %w", err)
 	}
 	_, membership, err := s.Reads.Membership(ctx, query.UserID, query.OrgID)
 	if err != nil {
-		return PrincipalAccess{}, fmt.Errorf("memberships read: %w", err)
+		return PrincipalAccess{}, policy.UserState{}, false, fmt.Errorf("memberships read: %w", err)
 	}
 	impersonation, err := s.Reads.ActiveImpersonation(ctx, query.UserID)
 	if err != nil {
-		return PrincipalAccess{}, fmt.Errorf("impersonation read: %w", err)
+		return PrincipalAccess{}, policy.UserState{}, false, fmt.Errorf("impersonation read: %w", err)
 	}
 	access := PrincipalAccess{Member: userFound && user.IsActive && membership, Impersonating: impersonation != nil}
-	if query.SessionID != nil {
-		row, sessionFound, err := s.Reads.SessionState(ctx, *query.SessionID)
-		if err != nil {
-			return PrincipalAccess{}, fmt.Errorf("session read: %w", err)
-		}
-		live, reason := sessionLive(query.UserID, row, sessionFound, user, userFound)
-		access.Session = &SessionAccess{Live: live, Reason: reason, Impersonating: access.Impersonating}
-	}
 	orgID := query.OrgID.String()
 	askDev, err := s.Features.Decide(ctx, orgID, askDevFeatureKey)
 	if err != nil {
-		return PrincipalAccess{}, fmt.Errorf("%s decision: %w", askDevFeatureKey, err)
+		return PrincipalAccess{}, policy.UserState{}, false, fmt.Errorf("%s decision: %w", askDevFeatureKey, err)
 	}
 	runtime, err := s.Features.Decide(ctx, orgID, agentContextRuntimeFeatureKey)
 	if err != nil {
-		return PrincipalAccess{}, fmt.Errorf("%s decision: %w", agentContextRuntimeFeatureKey, err)
+		return PrincipalAccess{}, policy.UserState{}, false, fmt.Errorf("%s decision: %w", agentContextRuntimeFeatureKey, err)
 	}
 	access.AskDev, access.AgentContextRuntime = askDev.Allowed, runtime.Allowed
-	return access, nil
+	return access, user, userFound, nil
 }
 
 // Session reasons, logged with the answer (never served).
@@ -147,30 +178,37 @@ const (
 	sessionReasonLive         = "live"
 	sessionReasonNotFound     = "session_not_found"
 	sessionReasonOtherUser    = "session_of_another_user"
+	sessionReasonOrgMismatch  = "session_org_mismatch"
 	sessionReasonRevoked      = "session_revoked"
+	sessionReasonExpired      = "session_expired"
 	sessionReasonPinMissing   = "session_pin_missing"
 	sessionReasonUserUnknown  = "user_unknown"
 	sessionReasonVersionStale = "token_version_stale"
 )
 
-// sessionLive is policy's session check (internal/api/policy/session.go) for a
-// named user rather than a token subject: the session exists, belongs to the
-// user, is not revoked, and its token_version pin equals the user's current
-// users.token_version. A password change (which adds 1 to token_version) or
-// any other token_version bump therefore ends it.
-func sessionLive(user uuid.UUID, row policy.SessionRow, found bool, state policy.UserState, userFound bool) (bool, string) {
+// sessionLive decides session.live from auth-service's answer for the sid: the
+// session exists, belongs to the user, is bound to the requested organization
+// (a session bound to no organization is not, D6559), is not revoked (the
+// effective revoke, a password change included) and not expired (the effective
+// expiry, absolute or idle), and its token_version pin equals the user's
+// current users.token_version.
+func sessionLive(query AccessQuery, state sessionissue.State, found bool, user policy.UserState, userFound bool) (bool, string) {
 	switch {
 	case !found:
 		return false, sessionReasonNotFound
-	case row.PrincipalID != user:
+	case state.PrincipalID != query.UserID:
 		return false, sessionReasonOtherUser
-	case row.Revoked:
+	case state.OrganizationID == nil || *state.OrganizationID != query.OrgID:
+		return false, sessionReasonOrgMismatch
+	case state.Revoked:
 		return false, sessionReasonRevoked
-	case row.LegacyTokenVersion == nil:
+	case state.Expired:
+		return false, sessionReasonExpired
+	case state.LegacyTokenVersion == nil:
 		return false, sessionReasonPinMissing
 	case !userFound:
 		return false, sessionReasonUserUnknown
-	case *row.LegacyTokenVersion != state.TokenVersion:
+	case *state.LegacyTokenVersion != user.TokenVersion:
 		return false, sessionReasonVersionStale
 	}
 	return true, sessionReasonLive

@@ -91,15 +91,15 @@ func doState(t *testing.T, server http.Handler, body string, header map[string]s
 }
 
 // The route mounts only when the embedded endpoint-profile document holds its
-// row. This build's document has no row yet, so CompatRoutes does not serve it
-// and says so.
-func TestSessionStateRouteIsNotMountedWithoutItsProfileRow(t *testing.T) {
+// row. This build's document holds it, so CompatRoutes serves the route and
+// logs no "not mounted" line; a document without the row mounts nothing.
+func TestSessionStateRouteIsMountedOnlyWithItsProfileRow(t *testing.T) {
 	f := newCompatFixture(t)
-	if response := f.do(http.MethodPost, PatternSessionState, stateBody(f.record.ID.String()), issuerBearer); response.Code != http.StatusNotFound {
-		t.Fatalf("POST %s = %d, want 404 (no endpoint-profile row in this build)", PatternSessionState, response.Code)
+	if response := f.do(http.MethodPost, PatternSessionState, stateBody(f.record.ID.String()), issuerBearer); response.Code != http.StatusOK {
+		t.Fatalf("POST %s = %d %s, want 200 (the embedded document holds the row)", PatternSessionState, response.Code, response.Body)
 	}
-	if !strings.Contains(f.logs.String(), "auth session route not mounted: no endpoint-profile row") {
-		t.Fatalf("no line names the unmounted route: %s", f.logs)
+	if strings.Contains(f.logs.String(), "auth session route not mounted") {
+		t.Fatalf("the route is mounted but a line says it is not: %s", f.logs)
 	}
 	if code, _ := doState(t, stateServer(t, f, []byte(`{"rows":[]}`)), stateBody(f.record.ID.String()), issuerBearer); code != http.StatusNotFound {
 		t.Fatalf("with a document without the row the route answers %d, want 404", code)
@@ -217,5 +217,47 @@ func TestSessionStateAcceptsTheGoAPIWorkloadToken(t *testing.T) {
 	wrongAudience, _ := w.mint("workload+jwt", func(c *contracts.WorkloadTokenClaims) { c.Aud = "dev-health-api" })
 	if code, _ := doState(t, server, stateBody(w.record.ID.String()), wrongAudience); code != http.StatusUnauthorized {
 		t.Fatalf("a workload token for another audience: %d, want 401", code)
+	}
+}
+
+// The route mounts only when its row lists every credential class the handler
+// is configured to admit: a row that leaves out the go-api workload token while
+// the workload binding is configured, or the session issuer class while service
+// credentials are, mounts nothing (a row may not under-describe the route).
+func TestSessionStateRouteMountsOnlyWhenItsRowListsEveryAdmittedClass(t *testing.T) {
+	row := func(classes string) []byte {
+		return []byte(`{"rows":[{"service":"` + AccessService + `","method":"POST","route":"` + PatternSessionState +
+			`","accepted_credential_classes":[` + classes + `]}]}`)
+	}
+	const issuer, workload = `"internal_svc_authsess_token"`, `"workload_token"`
+	for name, tc := range map[string]struct {
+		creds, workload bool
+		classes         string
+		mounted         bool
+	}{
+		"both admitted, both listed":         {true, true, issuer + "," + workload, true},
+		"both admitted, issuer only listed":  {true, true, issuer, false},
+		"both admitted, workload only":       {true, true, workload, false},
+		"issuer admitted, issuer listed":     {true, false, issuer, true},
+		"workload admitted, workload listed": {false, true, workload, true},
+		"workload admitted, issuer listed":   {false, true, issuer, false},
+		"no class listed":                    {true, true, ``, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec, err := newRecorder(slog.New(slog.DiscardHandler), otel.Meter("session-state-test"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			h := compatHandlers{rec: rec}
+			if tc.creds {
+				h.ServiceCredentials = &fakeServiceCredentials{id: "issuer"}
+			}
+			if tc.workload {
+				h.IssueWorkload = &SessionIssueWorkload{}
+			}
+			if got := len(h.withSessionStateRouteRows(nil, row(tc.classes))) == 1; got != tc.mounted {
+				t.Fatalf("mounted = %v, want %v", got, tc.mounted)
+			}
+		})
 	}
 }

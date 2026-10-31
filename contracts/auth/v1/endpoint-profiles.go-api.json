@@ -6977,14 +6977,13 @@
         "name": "workload+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "none: per-request read (internal/apiservice/acr/internalauth.go:165): svc_acr_ credential: store read every request, no cache; workload token: signature verify only, no store read; the answer (organization, membership, session, impersonation, both entitlements, repository inventory) is read on every call, no cache (internal/apiservice/acr/access_store.go:75)",
+      "current_state_cache_behavior": "none: per-request read (internal/apiservice/acr/internalauth.go:165): svc_acr_ credential: store read every request, no cache; workload token: signature verify only, no store read; the answer (organization, membership, session, impersonation, both entitlements, repository inventory) is read on every call, no cache (internal/apiservice/acr/access_store.go:89); with a sid, the session (owner, organization, effective revoke, effective expiry, token_version pin) is auth-service's answer from POST /internal/v1/sessions/state, read on every call, no cache; go-api reads no auth table on this route",
       "disclosure_behavior": null,
       "gaps": [
         "action: no catalog action covers the internal service entitlement and configuration reads (this leaf does not extend the vocabulary)",
         "impersonation_policy: the route has an organization context from the request path; the internal listener runs no organization-scope or impersonation middleware (internal/apiservice/service.go:432 names them on the main listener only); the read reports the user's active impersonation in its answer (impersonating) and applies no override; enum values seen in the schema: subject_to_impersonation_override, exempt_no_org_context, not_applicable_non_main_app, unknown; not_applicable_non_main_app recorded pending a ruling",
         "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record",
-        "credential_binding: the service credential is not bound to an organization; any holder may name any organization and user; it closes with the organization-bound workload claim and the acr-to-ops workload-token work (W8/W9), not in this leaf",
-        "session_binding: with sid, the read checks that the session exists, belongs to the user, is not revoked and pins the user's token_version; on go-api's session-reader grant it does not read the session's organization_id or expires_at (acp Ruling B, no new auth grant); in prod an organization switch revokes its predecessor session (CHAOS-12085) and no absolute session lifetime is configured; follow-up CHAOS-12122"
+        "credential_binding: the service credential is not bound to an organization; any holder may name any organization and user; it closes with the organization-bound workload claim and the acr-to-ops workload-token work (W8/W9), not in this leaf"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/internal/acr/orgs/{org_id}/principals/{user_id}/access [dev-health-ops-api @internal]",

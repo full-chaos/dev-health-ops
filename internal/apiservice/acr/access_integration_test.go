@@ -4,10 +4,20 @@ package acr
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,9 +26,16 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
+	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
+	"github.com/full-chaos/dev-health-ops/internal/auth/servicecred"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
@@ -26,16 +43,77 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pinrig"
 )
 
-// accessReadsSplit is go-api's read set as production holds it: the public
-// schema through the api role (here the admin pool), the auth sessions through
-// the session reader role with only the columns auth-migrate grants a reader.
-type accessReadsSplit struct {
-	policy.PGStore
-	sessions policy.PGStore
-}
-
-func (s accessReadsSplit) SessionState(ctx context.Context, id uuid.UUID) (policy.SessionRow, bool, error) {
-	return s.sessions.SessionState(ctx, id)
+// authServiceStates is auth-service's session state route as auth-service
+// serves it: authapi.CompatRoutes, which mounts the route from the embedded
+// endpoint-profile document, with the real service credential check, over the
+// rig's session store (the runtime role). It returns go-api's real
+// sessionissue client, presenting a seeded session issuer credential, so the
+// access read decides on auth-service's own answer, read over HTTP.
+func authServiceStates(t *testing.T, ctx context.Context, admin *pgxpool.Pool, rig *pinrig.PinRig) *sessionissue.Client {
+	t.Helper()
+	random := func() string {
+		raw := make([]byte, 32)
+		if _, err := rand.Read(raw); err != nil {
+			t.Fatal(err)
+		}
+		return base64.RawURLEncoding.EncodeToString(raw)
+	}
+	schema, err := authschema.NewValidatedIdentifier("auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	issuer, err := authapi.NewIssuer(random(), "dev-health-ops", "dev-health-api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits, err := authapi.NewLimits(httpapi.NewMemoryCounters(nil), random())
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector, err := identity.New(identity.Config{Pool: admin, Schema: schema, Logger: logger})
+	if err != nil {
+		t.Fatal(err)
+	}
+	routes, err := authapi.CompatRoutes(authapi.CompatDeps{
+		Sessions: rig.Sessions(), Users: authapi.PGUsers{Pool: admin}, Issuer: issuer, Logger: logger,
+		Projector: projector, ServiceCredentials: servicecred.PG{Pool: admin},
+		AppendAudit: func(ctx context.Context, event audit.AuditEvent) error {
+			return audit.Append(ctx, admin, schema, event)
+		},
+		Limits: limits,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	mounted := false
+	for _, route := range routes {
+		mux.Handle(route.Method+" "+route.Pattern, route.Handler)
+		mounted = mounted || route.Pattern == sessionissue.PathState
+	}
+	if !mounted {
+		t.Fatalf("auth-service did not mount %s: the embedded endpoint-profile document has no row for it", sessionissue.PathState)
+	}
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	token := "svc_authsess_" + random()
+	sum := sha256.Sum256([]byte(token))
+	if _, err := admin.Exec(ctx, `INSERT INTO public.internal_service_credentials
+	(id, service_name, token_hash, token_prefix, scopes, created_at)
+VALUES ($1, $2, $3, $4, $5::json, now())`, uuid.New(), servicecred.ServiceSessionIssuer, hex.EncodeToString(sum[:]),
+		token[:len("svc_authsess_")+4], `["`+servicecred.ScopeSessionsIssue+`"]`); err != nil {
+		t.Fatalf("seed the session issuer credential: %v", err)
+	}
+	base, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := sessionissue.New(base, token, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client
 }
 
 type staticInventory []string
@@ -94,8 +172,8 @@ func setFeature(t *testing.T, ctx context.Context, pool *pgxpool.Pool, org uuid.
 
 // TestPrincipalAccessReadsLiveStateEndToEnd drives the production store over a
 // migrated public schema and a real auth schema whose sessions auth-service's
-// own session store writes. The session read runs as the session reader role:
-// the existing grant is enough for the read (no new auth grant).
+// own session store writes. The session is read from auth-service's session
+// state route over HTTP (authServiceStates); go-api reads no auth table.
 func TestPrincipalAccessReadsLiveStateEndToEnd(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -115,9 +193,10 @@ func TestPrincipalAccessReadsLiveStateEndToEnd(t *testing.T) {
 
 	store := AccessStore{
 		Organizations: postgresOrganizations{pool: pool},
-		Reads:         accessReadsSplit{PGStore: policy.PGStore{Pool: pool}, sessions: rig.Reader()},
-		Features:      NewPostgresAccessStore(pool, policy.PGStore{Pool: pool}, nil).Features,
+		Reads:         policy.PGStore{Pool: pool},
+		Features:      NewPostgresAccessStore(pool, policy.PGStore{Pool: pool}, nil, nil).Features,
 		Inventory:     staticInventory{"acme/api"},
+		Sessions:      authServiceStates(t, ctx, pool, rig),
 	}
 	read := func(t *testing.T, orgID, user uuid.UUID, sid *uuid.UUID) PrincipalAccess {
 		t.Helper()
@@ -127,8 +206,8 @@ func TestPrincipalAccessReadsLiveStateEndToEnd(t *testing.T) {
 		}
 		return access
 	}
-	aliceSession := rig.SignIn(t, ctx, alice)
-	bobSession := rig.SignIn(t, ctx, bob)
+	aliceSession := rig.SignIn(t, ctx, alice, pinrig.BoundTo(org))
+	bobSession := rig.SignIn(t, ctx, bob, pinrig.BoundTo(org))
 
 	t.Run("live session, member, both flags, inventory", func(t *testing.T) {
 		got := read(t, org, alice, &aliceSession)
@@ -184,7 +263,7 @@ VALUES ($1, $2, $3, $4, 'member', now() + interval '1 hour', now())`, impersonat
 		setFeature(t, ctx, pool, org, "ask_dev", true)
 	})
 	t.Run("stale token_version", func(t *testing.T) {
-		session := rig.SignIn(t, ctx, bob)
+		session := rig.SignIn(t, ctx, bob, pinrig.BoundTo(org))
 		if _, err := pool.Exec(ctx, `UPDATE users SET token_version = token_version + 1 WHERE id = $1`, bob); err != nil {
 			t.Fatal(err)
 		}
@@ -193,7 +272,7 @@ VALUES ($1, $2, $3, $4, 'member', now() + interval '1 hour', now())`, impersonat
 		}
 	})
 	t.Run("revoked session", func(t *testing.T) {
-		session := rig.SignIn(t, ctx, alice)
+		session := rig.SignIn(t, ctx, alice, pinrig.BoundTo(org))
 		if got := read(t, org, alice, &session); !got.Session.Live {
 			t.Fatalf("new session not live: %+v", got.Session)
 		}
@@ -259,13 +338,16 @@ VALUES ($1, $2, $3, $4, 'member', now() + interval '1 hour', now())`, impersonat
 		durations[samples/2], durations[samples*95/100], durations[samples-1])
 }
 
-// TestPrincipalAccessSessionIsBoundToTheOrgAndItsExpiry holds the two
-// session.live clauses of the contract (design §2.4: "bound to the org, is not
-// expired") that the read does not check yet (CHAOS-12122). Every session is
-// made by auth-service's own session store: one bound to another organization
-// the user is also a member of, one past its absolute lifetime, one past its
-// refresh (idle) lifetime. Each must read session.live false; a session bound
-// to the requested organization and within both lifetimes stays live.
+// TestPrincipalAccessSessionIsBoundToTheOrgAndItsExpiry holds the session.live
+// clauses of the contract (design §2.4: "bound to the org, is not expired")
+// on auth-service's own answer (acp ruling D6559). Every session is made by
+// auth-service's own session store: one bound to another organization the user
+// is also a member of, one bound to no organization, one older than a password
+// change, one past its absolute lifetime, one past its refresh (idle)
+// lifetime. Each reads session.live false with its reason; a session bound to
+// the requested organization and within both lifetimes stays live. An
+// auth-service without the state route is a 503, never a session that is not
+// live.
 func TestPrincipalAccessSessionIsBoundToTheOrgAndItsExpiry(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -275,22 +357,25 @@ func TestPrincipalAccessSessionIsBoundToTheOrgAndItsExpiry(t *testing.T) {
 	org, otherOrg := uuid.New(), uuid.New()
 	pgseed.Org(ctx, t, pool, org.String(), "community")
 	pgseed.Org(ctx, t, pool, otherOrg.String(), "community")
-	alice := uuid.New()
+	alice, carol := uuid.New(), uuid.New()
 	seedAccessUser(t, ctx, pool, alice, "alice")
+	seedAccessUser(t, ctx, pool, carol, "carol")
 	seedMembership(t, ctx, pool, alice, org)
 	seedMembership(t, ctx, pool, alice, otherOrg)
+	seedMembership(t, ctx, pool, carol, org)
 	setFeature(t, ctx, pool, org, "ask_dev", true)
 	setFeature(t, ctx, pool, org, "agent_context_runtime", true)
 
 	store := AccessStore{
 		Organizations: postgresOrganizations{pool: pool},
-		Reads:         accessReadsSplit{PGStore: policy.PGStore{Pool: pool}, sessions: rig.Reader()},
-		Features:      NewPostgresAccessStore(pool, policy.PGStore{Pool: pool}, nil).Features,
+		Reads:         policy.PGStore{Pool: pool},
+		Features:      NewPostgresAccessStore(pool, policy.PGStore{Pool: pool}, nil, nil).Features,
 		Inventory:     staticInventory{"acme/api"},
+		Sessions:      authServiceStates(t, ctx, pool, rig),
 	}
-	read := func(t *testing.T, sid uuid.UUID) *SessionAccess {
+	read := func(t *testing.T, user, sid uuid.UUID) *SessionAccess {
 		t.Helper()
-		access, err := store.Access(ctx, AccessQuery{OrgID: org, UserID: alice, SessionID: &sid})
+		access, err := store.Access(ctx, AccessQuery{OrgID: org, UserID: user, SessionID: &sid})
 		if err != nil {
 			t.Fatalf("access: %v", err)
 		}
@@ -299,37 +384,69 @@ func TestPrincipalAccessSessionIsBoundToTheOrgAndItsExpiry(t *testing.T) {
 		}
 		return access.Session
 	}
-
-	const life = 2 * time.Second
-	bound := rig.SignInWith(t, ctx, alice, &org, 0, 0)
-	otherOrgSession := rig.SignInWith(t, ctx, alice, &otherOrg, 0, 0)
-	absolute := rig.SignInWith(t, ctx, alice, &org, life, 0)
-	idle := rig.SignInWith(t, ctx, alice, &org, 0, life)
-	for name, sid := range map[string]uuid.UUID{"bound": bound, "absolute": absolute, "idle": idle} {
-		if got := read(t, sid); !got.Live {
-			t.Fatalf("%s session not live while within its lifetime: %+v", name, got)
+	want := func(t *testing.T, user, sid uuid.UUID, live bool, reason string) {
+		t.Helper()
+		if got := read(t, user, sid); got.Live != live || got.Reason != reason {
+			t.Fatalf("session = %+v, want live=%v reason=%s", got, live, reason)
 		}
 	}
 
-	t.Run("a session bound to another organization", func(t *testing.T) {
-		if got := read(t, otherOrgSession); got.Live {
-			t.Fatalf("session = %+v: a session bound to another organization reads live", got)
+	const life = 2 * time.Second
+	bound := rig.SignIn(t, ctx, alice, pinrig.BoundTo(org))
+	otherOrgSession := rig.SignIn(t, ctx, alice, pinrig.BoundTo(otherOrg))
+	unbound := rig.SignIn(t, ctx, alice)
+	stamped := rig.SignIn(t, ctx, carol, pinrig.BoundTo(org))
+	absolute := rig.SignIn(t, ctx, alice, pinrig.BoundTo(org), pinrig.Lifetimes(life, 0))
+	idle := rig.SignIn(t, ctx, alice, pinrig.BoundTo(org), pinrig.Lifetimes(0, life))
+	for name, sid := range map[string]uuid.UUID{"bound": bound, "absolute": absolute, "idle": idle} {
+		if got := read(t, alice, sid); !got.Live {
+			t.Fatalf("%s session not live while within its lifetime: %+v", name, got)
 		}
+	}
+	want(t, carol, stamped, true, sessionReasonLive)
+	// A password change after the session was created: auth-service's
+	// effective revoke (Store.Current) ends it.
+	if _, err := pool.Exec(ctx, `INSERT INTO auth.users (principal_id, email, email_lower, password_updated_at)
+		VALUES ($1, $2, $2, clock_timestamp())
+		ON CONFLICT (principal_id) DO UPDATE SET password_updated_at = EXCLUDED.password_updated_at`,
+		carol.String(), carol.String()+"@example.com"); err != nil {
+		t.Fatalf("password stamp: %v", err)
+	}
+
+	t.Run("a session bound to another organization", func(t *testing.T) {
+		want(t, alice, otherOrgSession, false, sessionReasonOrgMismatch)
+	})
+	t.Run("a session bound to no organization", func(t *testing.T) {
+		want(t, alice, unbound, false, sessionReasonOrgMismatch)
+	})
+	t.Run("a session older than a password change", func(t *testing.T) {
+		want(t, carol, stamped, false, sessionReasonRevoked)
 	})
 	time.Sleep(life + 500*time.Millisecond)
 	t.Run("past its absolute lifetime", func(t *testing.T) {
-		if got := read(t, absolute); got.Live {
-			t.Fatalf("session = %+v: a session past its absolute lifetime reads live", got)
-		}
+		want(t, alice, absolute, false, sessionReasonExpired)
 	})
 	t.Run("past its refresh lifetime", func(t *testing.T) {
-		if got := read(t, idle); got.Live {
-			t.Fatalf("session = %+v: a session past its refresh lifetime reads live", got)
-		}
+		want(t, alice, idle, false, sessionReasonExpired)
 	})
 	t.Run("bound and within both lifetimes", func(t *testing.T) {
-		if got := read(t, bound); !got.Live {
-			t.Fatalf("session = %+v: a bound session within its lifetimes does not read live", got)
+		want(t, alice, bound, true, sessionReasonLive)
+	})
+	t.Run("an auth-service without the state route is unavailable", func(t *testing.T) {
+		older := httptest.NewServer(http.NotFoundHandler())
+		t.Cleanup(older.Close)
+		base, err := url.Parse(older.URL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		client, err := sessionissue.New(base, "svc_authsess_"+strings.Repeat("A", 43), time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		down := store
+		down.Sessions = client
+		if _, err := down.Access(ctx, AccessQuery{OrgID: org, UserID: alice, SessionID: &bound}); !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("err = %v, want ErrUnavailable", err)
 		}
 	})
 }

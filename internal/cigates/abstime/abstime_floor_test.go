@@ -29,7 +29,7 @@ func TestMathMaxFloorIsRefused(t *testing.T) {
 }
 
 func TestRatiosWithoutAFloorStillPass(t *testing.T) {
-	for _, cond := range []string{"big > 2*base", "big > 3*base", "big+base > 4*base", "max(big, base) > 2*base", "big > max(2*base, 3*base)", "float64(big)/float64(base) > 2"} {
+	for _, cond := range []string{"big > 2*base", "big > 3*base", "big+base > 4*base", "max(big, base) > 2*base", "big > max(2*base, 3*base)", "float64(big)/float64(base) > 2", "big > base+base*time.Nanosecond"} {
 		wantClean(t, check(t, floorTree(t, "", cond), nil))
 	}
 }

@@ -135,6 +135,15 @@ func liveStack(t *testing.T, shape func(*accessStore)) *behaviourStack {
 	return stack
 }
 
+// liveStackKeyDown is the stack whose token key source (the JWKS) cannot be read.
+func liveStackKeyDown(t *testing.T) *behaviourStack {
+	t.Helper()
+	minter := newAccessMinter(t)
+	stack := newAccessStack(t, newAccessStore(), testAccess(downKeys{}, nil, accessTestNow), true)
+	stack.user = minter.mint(ecUser, nil, nil)
+	return stack
+}
+
 func asSuperuser(s *accessStore) {
 	s.states[ecUser] = policy.UserState{IsActive: true, IsSuperuser: true, TokenVersion: 5}
 }
@@ -582,6 +591,10 @@ func driveGraphQL(t *testing.T, row liveRow) *liveObs {
 			o.fail("unregistered document: body %q lacks UNREGISTERED_DOCUMENT", trim(a.body))
 		}
 		edgeSession(t, o, request(iaDocument, nil, ""), true, http.StatusInternalServerError)
+		down := liveStackKeyDown(t)
+		cell := listener + ": user token, token key source unreadable"
+		o.wantStatus(cell, down.live(request(iaDocument, nil, down.user)), http.StatusServiceUnavailable)
+		o.wantNoRun(cell, down)
 	}
 	o.textHas("resource_resolver", "organization_from_header_or_credential", "X-Org-Id")
 	o.impersonationPolicy(true)

@@ -40,6 +40,9 @@ type eddsaMinter struct {
 	check    signerCheck
 }
 
+// sessionRouteScope is the scope of the token the session routes accept.
+var sessionRouteScope, _ = contracts.AccessTokenScope(contracts.SessionRouteAudience)
+
 // EdDSAOption adjusts NewEdDSAIssuer.
 type EdDSAOption func(*eddsaSettings)
 
@@ -56,9 +59,11 @@ func WithLegacyAudience(audience string) EdDSAOption {
 }
 
 // NewEdDSAIssuer builds an Issuer whose access tokens are access-token.v1
-// EdDSA tokens. secret and legacyIssuer only verify HS256 compatibility
-// tokens (the session routes, legacy refresh); this Issuer never signs with
-// them. issuerURL is the iss claim, byte for byte.
+// EdDSA tokens. audience is the access token's; Tokens also mints the token
+// of audience auth-service the session routes accept. secret and
+// legacyIssuer only verify HS256 compatibility tokens (the session routes,
+// legacy refresh); this Issuer never signs with them. issuerURL is the iss
+// claim, byte for byte.
 func NewEdDSAIssuer(secret, legacyIssuer, audience string, signer AccessSigner, issuerURL string, options ...EdDSAOption) (*Issuer, error) {
 	settings := eddsaSettings{legacyAudience: contracts.PlatformAPIAudience}
 	for _, option := range options {
@@ -87,9 +92,20 @@ func NewEdDSAIssuer(secret, legacyIssuer, audience string, signer AccessSigner, 
 }
 
 func (m *eddsaMinter) mint(ctx context.Context, grant Grant, now time.Time) (string, string, error) {
+	return m.mintFor(ctx, grant, now, m.audience, m.scope)
+}
+
+// mintSession mints the token of audience auth-service (scope auth:session)
+// for the session routes: the same claims as the access token but the
+// audience, the scope and the jti.
+func (m *eddsaMinter) mintSession(ctx context.Context, grant Grant, now time.Time) (string, string, error) {
+	return m.mintFor(ctx, grant, now, contracts.SessionRouteAudience, sessionRouteScope)
+}
+
+func (m *eddsaMinter) mintFor(ctx context.Context, grant Grant, now time.Time, audience, scope string) (string, string, error) {
 	claims := contracts.AccessTokenClaims{
 		Iss:           m.issuer,
-		Aud:           m.audience,
+		Aud:           audience,
 		Sub:           session.WirePrincipalID(grant.PrincipalID),
 		PrincipalType: "human",
 		Sid:           session.WireSessionID(grant.SessionID),
@@ -97,7 +113,7 @@ func (m *eddsaMinter) mint(ctx context.Context, grant Grant, now time.Time) (str
 		Iat:           now.Unix(),
 		Nbf:           now.Unix(),
 		Exp:           now.Add(EdDSAAccessLifetime).Unix(),
-		Scope:         m.scope,
+		Scope:         scope,
 	}
 	if grant.OrganizationID != nil {
 		org := grant.OrganizationID.String()

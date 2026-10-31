@@ -10,8 +10,8 @@
 // last_used_at plus one internal_service_credential_audits row per outcome.
 // CHAOS-7181: apiservice mounts these routes on the internal listener only
 // (apiservice.InternalRoutes); the public api listener has none. The
-// agent_context_runtime entitlement decision itself is ported in full via
-// internal/api/licensing, this package's only dependency for it.
+// agent_context_runtime entitlement decision (ask_dev OR the legacy grant since
+// CHAOS-3695, store.go Lookup) is ported in full via internal/api/licensing.
 //
 // Entitlement route answers (acr's client depends on these):
 //   - 200 grants body: the org exists.
@@ -155,14 +155,14 @@ func entitlementHandler(store EntitlementStore, auth routeAuth, logger *slog.Log
 		// finish writes the audit row for outcome before the answer, as
 		// Python commits it before returning; an audit that cannot be
 		// written is 503, never an unaudited answer.
-		finish := func(outcome string, write func()) {
+		finish := func(outcome string, write func(), extra ...slog.Attr) {
 			if !auth.audit(ctx, cred.ID, cred.PrincipalID, orgID, outcome) {
 				auth.unavailable(w, r, "audit_failed")
 				return
 			}
 			countInternal(ctx, routeEntitlement, outcome)
-			logger.InfoContext(ctx, "acr entitlement lookup: answered",
-				slog.String("org_id", orgID), slog.String("credential_id", cred.ID), slog.String("outcome", outcome))
+			logger.LogAttrs(ctx, slog.LevelInfo, "acr entitlement lookup: answered", append([]slog.Attr{
+				slog.String("org_id", orgID), slog.String("credential_id", cred.ID), slog.String("outcome", outcome)}, extra...)...)
 			write()
 		}
 		if store == nil {
@@ -182,7 +182,7 @@ func entitlementHandler(store EntitlementStore, auth routeAuth, logger *slog.Log
 				body.Set("acr_service_model", entitlement.ACRServiceModel)
 				body.Set("platform_model_fallback", entitlement.PlatformModelFallback)
 				writeModel(w, http.StatusOK, body)
-			})
+			}, slog.String("acr_entitlement_basis", entitlement.ACRBasis))
 		case errors.Is(err, ErrOrgUnknown):
 			finish(outcomeOrgNotFound, func() {
 				body := pyjson.NewObject()

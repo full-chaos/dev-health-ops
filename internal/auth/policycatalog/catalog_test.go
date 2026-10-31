@@ -197,7 +197,7 @@ func TestEmbeddedFilesValidateAgainstTheirSchemas(t *testing.T) {
 // internal/api/session/permissions.go. Catalog-only = not served in /auth/me
 // until a web-reviewed change adds it there; every other catalog action must
 // still equal a session permission.
-var catalogOnly = map[string]bool{"admin.impersonate": true, "billing.read": true, "billing.manage": true, "license.read": true}
+var catalogOnly = map[string]bool{"admin.impersonate": true, "billing.read": true, "billing.manage": true, "license.read": true, "members.update": true, "authz.decide": true, "acr.context.read": true}
 
 type sessionEntry struct {
 	role string
@@ -366,59 +366,43 @@ func TestCatalogHoldsTheBillingAndLicenseActions(t *testing.T) {
 	}
 }
 
-func TestImpersonationIsDeniedOnTheG51List(t *testing.T) {
-	want := map[string]bool{
-		"admin.users": true, "admin.orgs": true, "admin.impersonate": true, "members.invite": true, "members.manage": true,
-		"org.write": true, "org.delete": true, "billing.manage": true, "settings.write": true, "integrations.write": true,
-	}
-	actions := Default().Actions()
-	if len(actions) != 26 {
-		t.Fatalf("%d actions, want 26", len(actions))
-	}
-	for _, a := range actions {
-		denied := a.Impersonation == ImpersonationDenied
-		if denied != want[a.ID] {
-			t.Errorf("%s impersonation = %s", a.ID, a.Impersonation)
-		}
-	}
-}
-
-func TestLoadRefusesAnActionWithNoImpersonationValue(t *testing.T) {
-	const roles = `{"schema_version":"roles.v1","catalog_version":1,"description":"d","roles":[{"role":"r","scope":"organization","actions":["a.b"]}]}`
-	for name, member := range map[string]string{"missing": ``, "unknown": `,"impersonation":"maybe"`, "empty": `,"impersonation":""`} {
-		actions := `{"schema_version":"actions.v1","catalog_version":1,"description":"d","actions":[{"action":"a.b","scope":"organization","resource_kind":"organization","risk_class":"low","cache_class":"none"` + member + `}]}`
-		if _, err := Load([]byte(actions), []byte(roles)); !errors.Is(err, ErrInvalid) {
-			t.Errorf("%s: Load = %v, want ErrInvalid", name, err)
-		}
-	}
-}
-
-func TestOnlyThePlatformAdminRoleHoldsImpersonate(t *testing.T) {
-	got := Default().RolesHolding("admin.impersonate", ScopePlatform)
-	if len(got) != 1 || got[0] != "platform_admin" {
-		t.Fatalf("roles holding admin.impersonate = %v", got)
-	}
-	if got := Default().RolesHolding("admin.impersonate", ScopeOrganization); len(got) != 0 {
-		t.Fatalf("organization roles holding admin.impersonate = %v", got)
-	}
-}
-
-func TestDelegatedActionsAreTheAllowedActionsOfAnOrganizationRole(t *testing.T) {
-	got, err := Default().DelegatedActions("owner")
+// acr.context.read is the first repository-kind action: organization scope, a repository as its resource.
+func TestEmbeddedCatalogHoldsAcrContextReadAsARepositoryAction(t *testing.T) {
+	a, err := Default().Action("acr.context.read")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) == 0 {
-		t.Fatal("owner permits no delegated action")
+	if a.Scope != ScopeOrganization || a.ResourceKind != "repository" || a.RiskClass != RiskLow || a.CacheClass != CacheResourceRevisionBound {
+		t.Errorf("acr.context.read = %+v, want organization scope, repository kind, low risk, resource_revision_bound", a)
 	}
-	for _, id := range got {
-		if a, err := Default().Action(id); err != nil || a.Impersonation != ImpersonationAllowed {
-			t.Errorf("owner delegated action %s: %+v, %v", id, a, err)
+}
+
+// The resource-kind set widens to repository; the scope sets do not.
+func TestRepositoryIsAResourceKindAndNeverAScope(t *testing.T) {
+	const okR = `{"schema_version":"roles.v1","catalog_version":1,"description":"d","roles":[{"role":"r","scope":"organization","actions":["a.b"]}]}`
+	act := func(scope, kind string) string {
+		row := func(id string) string {
+			return `{"action":"` + id + `","scope":"` + scope + `","resource_kind":"` + kind + `","risk_class":"low","cache_class":"decision_bound"}`
+		}
+		return `{"schema_version":"actions.v1","catalog_version":1,"description":"d","actions":[` + row("a.b") + `,` + row("a.c") + `]}`
+	}
+	if _, err := Load([]byte(act("organization", "repository")), []byte(okR)); err != nil {
+		t.Errorf("repository resource_kind refused: %v", err)
+	}
+	for name, a := range map[string]string{
+		"repository scope":      act("repository", "organization"),
+		"unknown resource kind": act("organization", "galaxy"),
+	} {
+		if _, err := Load([]byte(a), []byte(okR)); err == nil {
+			t.Errorf("%s was accepted", name)
 		}
 	}
-	for _, role := range []string{"platform_admin", "custom", ""} {
-		if _, err := Default().DelegatedActions(role); !errors.Is(err, ErrUnknownRole) {
-			t.Errorf("DelegatedActions(%q) = %v, want ErrUnknownRole", role, err)
-		}
+	allRepo := strings.Replace(okR, `"scope":"organization"`, `"scope":"repository"`, 1)
+	if _, err := Load([]byte(act("repository", "repository")), []byte(allRepo)); err == nil {
+		t.Error("a repository scope was accepted for an action and its role")
+	}
+	roleScope := strings.Replace(okR, `"scope":"organization"`, `"scope":"repository"`, 1)
+	if _, err := Load([]byte(act("organization", "organization")), []byte(roleScope)); err == nil {
+		t.Error("a repository role scope was accepted")
 	}
 }

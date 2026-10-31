@@ -178,7 +178,7 @@ func Load(actionsJSON, rolesJSON []byte) (*Catalog, error) {
 		if !actionPattern.MatchString(a.Action) {
 			return nil, invalid("action %q is not a dotted namespaced name", a.Action)
 		}
-		if !validScope(a.Scope) || !validScope(a.ResourceKind) {
+		if !validScope(a.Scope) || !validResourceKind(a.ResourceKind) {
 			return nil, invalid("action %q has an unknown scope or resource_kind", a.Action)
 		}
 		if _, dup := c.byAct[a.Action]; dup {
@@ -244,6 +244,9 @@ func Load(actionsJSON, rolesJSON []byte) (*Catalog, error) {
 }
 
 func validScope(s string) bool { return s == ScopePlatform || s == ScopeOrganization }
+
+// validResourceKind is the scope set plus repository: the resource an action acts on, not who holds it.
+func validResourceKind(s string) bool { return validScope(s) || s == "repository" }
 
 var defaultCatalog = mustLoad()
 

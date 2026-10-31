@@ -140,6 +140,14 @@
       "impersonation": "denied"
     },
     {
+      "action": "members.update",
+      "scope": "organization",
+      "resource_kind": "organization",
+      "risk_class": "high",
+      "cache_class": "none",
+      "impersonation": "denied"
+    },
+    {
       "action": "org.read",
       "scope": "organization",
       "resource_kind": "organization",
@@ -188,6 +196,14 @@
       "impersonation": "allowed"
     },
     {
+      "action": "acr.context.read",
+      "scope": "organization",
+      "resource_kind": "repository",
+      "risk_class": "low",
+      "cache_class": "resource_revision_bound",
+      "impersonation": "denied"
+    },
+    {
       "action": "admin.users",
       "scope": "platform",
       "resource_kind": "platform",
@@ -205,6 +221,14 @@
     },
     {
       "action": "admin.impersonate",
+      "scope": "platform",
+      "resource_kind": "platform",
+      "risk_class": "high",
+      "cache_class": "none",
+      "impersonation": "denied"
+    },
+    {
+      "action": "authz.decide",
       "scope": "platform",
       "resource_kind": "platform",
       "risk_class": "high",

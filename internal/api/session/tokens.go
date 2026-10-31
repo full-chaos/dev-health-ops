@@ -20,7 +20,9 @@ import (
 // expires_in: JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60.
 const accessExpiresIn = int64(edgetoken.AccessLifetime / time.Second)
 
-type tokenPair struct{ access, refresh string }
+// tokenPair is a sign-in's tokens; session is auth-service's session-route
+// token under its eddsa class, empty otherwise.
+type tokenPair struct{ access, refresh, session string }
 
 // roleText is str(membership.role): a NULL role is the text "None".
 func roleText(role *string) string {
@@ -106,7 +108,7 @@ func (h handlers) issueSession(ctx context.Context, r *http.Request, userID uuid
 	if err != nil {
 		return tokenPair{}, err
 	}
-	return tokenPair{access: pair.Access, refresh: pair.Refresh}, nil
+	return tokenPair{access: pair.Access, refresh: pair.Refresh, session: pair.SessionAccess}, nil
 }
 
 // issuerRefusedTheOrg reports whether the issue route refused the session as
@@ -197,5 +199,14 @@ func loginResponse(pair tokenPair, needsOnboarding bool, user *pyjson.Object, is
 	if isNewUser != nil {
 		out.Set("is_new_user", *isNewUser)
 	}
+	setSessionAccessToken(out, pair)
 	return out
+}
+
+// setSessionAccessToken adds auth-service's session-route token as the last
+// member when the pair has one, so a pair without it keeps the exact wire.
+func setSessionAccessToken(out *pyjson.Object, pair tokenPair) {
+	if pair.session != "" {
+		out.Set("session_access_token", pair.session)
+	}
 }

@@ -214,7 +214,7 @@ func TestPrincipalAccessReadsLiveStateEndToEnd(t *testing.T) {
 	t.Run("live session, member, both flags, inventory", func(t *testing.T) {
 		got := read(t, org, alice, &aliceSession)
 		want := PrincipalAccess{Member: true, Session: &SessionAccess{Live: true, Reason: sessionReasonLive},
-			AskDev: true, AgentContextRuntime: true, Repositories: []string{"acme/api"}}
+			AskDev: true, AgentContextRuntime: true, ACRBasis: "both", Repositories: []string{"acme/api"}}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("access = %+v session %+v", got, got.Session)
 		}

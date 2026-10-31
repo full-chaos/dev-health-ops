@@ -157,6 +157,7 @@ func auditFor(eventType, reason string, id, org uuid.UUID, owner *uuid.UUID, a A
 		actor := a.PrincipalID.String()
 		ev.ActorPrincipalID = &actor
 	}
+	a.Caller.Annotate(ev.Attributes)
 	return ev
 }
 
@@ -269,6 +270,9 @@ func (s *Store) Create(ctx context.Context, in CreateInput, a Actor) (uuid.UUID,
 			if err := s.lockSet(ctx, tx, nil, in.Owner, a.PrincipalID); err != nil {
 				return err
 			}
+			if err := a.authorize(ctx, tx, Locked{OrgID: in.OrgID}); err != nil {
+				return err
+			}
 			orgActive, err := s.lockOrg(ctx, tx, in.OrgID)
 			if err != nil {
 				return err
@@ -306,8 +310,20 @@ VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING RETURNING principal_id`, id, 
 // Disable sets the account's row and its principal disabled in one
 // transaction. It takes the principal row alone, never public.users: a
 // service account has no users row, so the kill switch works whether or not
-// auth-service owns users.
+// auth-service owns users. Its Authorize is a plain read in the same
+// transaction: a demotion that commits during the transaction counts as after it.
+// The audit row names the owner read before the transaction; an owner or an
+// organization that moved by the time the account row is locked is
+// ErrStateChanged, and Disable reads again and runs once more.
 func (s *Store) Disable(ctx context.Context, id uuid.UUID, a Actor) error {
+	err := s.disableOnce(ctx, id, a)
+	if errors.Is(err, ErrStateChanged) {
+		err = s.disableOnce(ctx, id, a)
+	}
+	return err
+}
+
+func (s *Store) disableOnce(ctx context.Context, id uuid.UUID, a Actor) error {
 	info, err := s.read(ctx, id)
 	if err != nil {
 		s.record(ctx, verbDisable, err)
@@ -332,6 +348,12 @@ func (s *Store) Disable(ctx context.Context, id uuid.UUID, a Actor) error {
 			}
 			row, err := s.lockAccount(ctx, tx, id)
 			if err != nil {
+				return err
+			}
+			if row.org != info.OrgID || row.owner != info.Owner {
+				return ErrStateChanged
+			}
+			if err := a.authorize(ctx, tx, Locked{OrgID: row.org, Owner: row.owner}); err != nil {
 				return err
 			}
 			if err := decideDisable(row.active); err != nil {
@@ -384,6 +406,9 @@ func (s *Store) Enable(ctx context.Context, id uuid.UUID, a Actor) error {
 			if row.org != info.OrgID || row.owner != info.Owner {
 				return ErrStateChanged
 			}
+			if err := a.authorize(ctx, tx, Locked{OrgID: row.org, Owner: row.owner}); err != nil {
+				return err
+			}
 			if err := decideEnable(row.active, orgActive, st); err != nil {
 				return err
 			}
@@ -433,6 +458,9 @@ func (s *Store) SetOwner(ctx context.Context, id, newOwner uuid.UUID, a Actor) e
 			}
 			if row.org != info.OrgID || row.owner != info.Owner {
 				return ErrStateChanged
+			}
+			if err := a.authorize(ctx, tx, Locked{OrgID: row.org, Owner: row.owner}); err != nil {
+				return err
 			}
 			if err := decideSetOwner(row.owner, newOwner, orgActive, st); err != nil {
 				return err

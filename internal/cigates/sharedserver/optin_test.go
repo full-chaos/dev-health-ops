@@ -28,9 +28,10 @@ const (
 // on shared servers: the body of func TestMain(m *testing.M) passes the
 // result of the harness's RunWithSharedServers (through the file's real
 // import of it) to os.Exit, and every use of m lies inside the argument of
-// that call, where at least one use runs the tests (m.Run, m handed to
-// venueoracle.RunTests, or m handed to a func of the file that does one of
-// these with it). Comments and string literals are not code and never count.
+// that call, where the callback is m.Run or a func literal that returns
+// only run expressions (m.Run(), venueoracle.RunTests(m), a same-file func
+// whose every return is one of these for its *testing.M parameter, or a local
+// set once from one of these before any return). Comments and string literals are not code and never count.
 func optsIn(src string) (bool, error) {
 	file, err := parser.ParseFile(token.NewFileSet(), "main_test.go", src, 0)
 	if err != nil {
@@ -60,55 +61,149 @@ func optsIn(src string) (bool, error) {
 		fn  *ast.FuncDecl
 		arg int
 	}
-	visited := map[visit]bool{}
-	var handsOn func(call *ast.CallExpr, arg int) bool
-	handsOn = func(call *ast.CallExpr, arg int) bool {
-		if isCall(call, venueoracleImportPath, "RunTests") {
-			return arg == 0
+	memo := map[visit]bool{}
+	unparen := func(e ast.Expr) ast.Expr {
+		for {
+			paren, ok := e.(*ast.ParenExpr)
+			if !ok {
+				return e
+			}
+			e = paren.X
 		}
-		id, ok := call.Fun.(*ast.Ident)
+	}
+	isM := func(e ast.Expr, p *ast.Object) bool {
+		id, ok := unparen(e).(*ast.Ident)
+		return ok && id.Obj == p
+	}
+	var runExpr func(e ast.Expr, p *ast.Object) bool
+	var runnerBody func(body *ast.BlockStmt, p *ast.Object) bool
+	runExpr = func(e ast.Expr, p *ast.Object) bool {
+		call, ok := unparen(e).(*ast.CallExpr)
+		if !ok {
+			return false
+		}
+		plain := *call
+		plain.Fun = unparen(call.Fun)
+		if selector, ok := plain.Fun.(*ast.SelectorExpr); ok && selector.Sel.Name == "Run" && len(plain.Args) == 0 && isM(selector.X, p) {
+			return true
+		}
+		if isCall(&plain, venueoracleImportPath, "RunTests") {
+			return len(plain.Args) == 1 && isM(plain.Args[0], p)
+		}
+		id, ok := plain.Fun.(*ast.Ident)
 		if !ok || id.Obj == nil {
 			return false
 		}
 		fn, ok := id.Obj.Decl.(*ast.FuncDecl)
-		if !ok || fn.Recv != nil || fn.Body == nil || visited[visit{fn, arg}] {
+		if !ok || fn.Recv != nil || fn.Body == nil {
 			return false
 		}
-		visited[visit{fn, arg}] = true
-		var param *ast.Object
-		index := 0
-		for _, field := range fn.Type.Params.List {
-			for _, name := range field.Names {
-				if star, ok := field.Type.(*ast.StarExpr); ok && index == arg {
-					if sel, ok := star.X.(*ast.SelectorExpr); ok && sel.Sel.Name == "M" {
-						param = name.Obj
+		for arg, a := range plain.Args {
+			if !isM(a, p) {
+				continue
+			}
+			key := visit{fn, arg}
+			if done, seen := memo[key]; seen {
+				if done {
+					return true
+				}
+				continue
+			}
+			memo[key] = false
+			var param *ast.Object
+			index := 0
+			for _, field := range fn.Type.Params.List {
+				for _, name := range field.Names {
+					if star, ok := field.Type.(*ast.StarExpr); ok && index == arg {
+						if sel, ok := star.X.(*ast.SelectorExpr); ok && sel.Sel.Name == "M" {
+							param = name.Obj
+						}
+					}
+					index++
+				}
+			}
+			if param != nil && runnerBody(fn.Body, param) {
+				memo[key] = true
+				return true
+			}
+		}
+		return false
+	}
+	runnerBody = func(body *ast.BlockStmt, p *ast.Object) bool {
+		var firstReturn token.Pos = token.NoPos
+		ast.Inspect(body, func(node ast.Node) bool {
+			switch node := node.(type) {
+			case *ast.FuncLit:
+				return false
+			case *ast.ReturnStmt:
+				if firstReturn == token.NoPos || node.Pos() < firstReturn {
+					firstReturn = node.Pos()
+				}
+			}
+			return true
+		})
+		assigned := map[*ast.Object]int{}
+		ast.Inspect(body, func(node ast.Node) bool {
+			note := func(e ast.Expr) {
+				if id, ok := unparen(e).(*ast.Ident); ok && id.Obj != nil {
+					assigned[id.Obj]++
+				}
+			}
+			switch node := node.(type) {
+			case *ast.AssignStmt:
+				for _, lhs := range node.Lhs {
+					note(lhs)
+				}
+			case *ast.IncDecStmt:
+				note(node.X)
+			case *ast.UnaryExpr:
+				if node.Op == token.AND {
+					note(node.X)
+					note(node.X)
+				}
+			case *ast.RangeStmt:
+				if node.Tok == token.ASSIGN {
+					if node.Key != nil {
+						note(node.Key)
+					}
+					if node.Value != nil {
+						note(node.Value)
 					}
 				}
-				index++
 			}
-		}
-		if param == nil {
-			return false
-		}
-		reaches := false
-		ast.Inspect(fn.Body, func(node ast.Node) bool {
-			inner, ok := node.(*ast.CallExpr)
-			if !ok || reaches {
-				return !reaches
-			}
-			if selector, ok := inner.Fun.(*ast.SelectorExpr); ok {
-				if id, ok := selector.X.(*ast.Ident); ok && id.Obj == param && selector.Sel.Name == "Run" {
-					reaches = true
-				}
-			}
-			for i, a := range inner.Args {
-				if id, ok := a.(*ast.Ident); ok && id.Obj == param && handsOn(inner, i) {
-					reaches = true
-				}
-			}
-			return !reaches
+			return true
 		})
-		return reaches
+		locals := map[*ast.Object]bool{}
+		for _, stmt := range body.List {
+			def, ok := stmt.(*ast.AssignStmt)
+			if !ok || def.Tok != token.DEFINE || len(def.Lhs) != 1 || len(def.Rhs) != 1 || stmt.End() > firstReturn {
+				continue
+			}
+			if id, ok := def.Lhs[0].(*ast.Ident); ok && id.Obj != nil && assigned[id.Obj] == 1 && runExpr(def.Rhs[0], p) {
+				locals[id.Obj] = true
+			}
+		}
+		returns, allRun := 0, true
+		ast.Inspect(body, func(node ast.Node) bool {
+			switch node := node.(type) {
+			case *ast.FuncLit:
+				return false
+			case *ast.ReturnStmt:
+				returns++
+				if len(node.Results) != 1 {
+					allRun = false
+					break
+				}
+				if id, ok := unparen(node.Results[0]).(*ast.Ident); ok && id.Obj != nil && locals[id.Obj] {
+					break
+				}
+				if !runExpr(node.Results[0], p) {
+					allRun = false
+				}
+			}
+			return true
+		})
+		return returns > 0 && allRun
 	}
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
@@ -145,31 +240,19 @@ func optsIn(src string) (bool, error) {
 		}
 		runs, outside := false, false
 		ast.Inspect(fn.Body, func(node ast.Node) bool {
-			switch node := node.(type) {
-			case *ast.Ident:
-				if node.Obj == m && !inside(node.Pos()) {
-					outside = true
-				}
-			case *ast.CallExpr:
-				if !inside(node.Pos()) {
-					return true
-				}
-				if selector, ok := node.Fun.(*ast.SelectorExpr); ok {
-					if id, ok := selector.X.(*ast.Ident); ok && id.Obj == m && selector.Sel.Name == "Run" {
-						runs = true
-					}
-				}
-				for i, arg := range node.Args {
-					if id, ok := arg.(*ast.Ident); ok && id.Obj == m && handsOn(node, i) {
-						runs = true
-					}
-				}
+			if id, ok := node.(*ast.Ident); ok && id.Obj == m && !inside(id.Pos()) {
+				outside = true
 			}
 			return true
 		})
 		for _, call := range shared {
-			if selector, ok := call.Args[0].(*ast.SelectorExpr); ok {
-				if id, ok := selector.X.(*ast.Ident); ok && id.Obj == m && selector.Sel.Name == "Run" {
+			switch callback := unparen(call.Args[0]).(type) {
+			case *ast.SelectorExpr:
+				if isM(callback.X, m) && callback.Sel.Name == "Run" {
+					runs = true
+				}
+			case *ast.FuncLit:
+				if runnerBody(callback.Body, m) {
 					runs = true
 				}
 			}

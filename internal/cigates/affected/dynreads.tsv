@@ -500,6 +500,7 @@ internal/queryapi/server	drilldown_issues_422_test.go
 internal/queryapi/server	drilldown_prs_422_test.go
 internal/queryapi/server	edge_users_test.go
 internal/queryapi/server	endpoint_profile_action_fields_test.go
+internal/queryapi/server	endpoint_profile_live_graphql_test.go
 internal/queryapi/server	endpoint_profile_rows_test.go
 internal/queryapi/server	endpoint_profile_same_line_test.go
 internal/queryapi/server	explain_422_test.go

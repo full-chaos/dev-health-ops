@@ -274,17 +274,17 @@ func loadOAuthRow(ctx context.Context, q interface {
 
 // storedTokens is _versioned_tokens: the binding must be the expected one and
 // the payload a valid OAuthTokens; either failure is the reconnect 409.
-func (h *handlers) storedTokens(row *oauthRow, expectedBinding string) (pagerDutyStoredTokens, bool) {
+func (h *handlers) storedTokens(row *oauthRow, expectedBinding string) (providerfoundation.PagerDutyStoredTokens, bool) {
 	if row.bindingID == nil || *row.bindingID != expectedBinding {
-		return pagerDutyStoredTokens{}, false
+		return providerfoundation.PagerDutyStoredTokens{}, false
 	}
 	plaintext, err := h.decryptor.Decrypt(secrets.NewValue(row.encrypted))
 	if err != nil {
-		return pagerDutyStoredTokens{}, false
+		return providerfoundation.PagerDutyStoredTokens{}, false
 	}
-	tokens, err := parsePagerDutyOAuthTokens(plaintext)
+	tokens, err := providerfoundation.ParsePagerDutyStoredTokens(plaintext)
 	if err != nil {
-		return pagerDutyStoredTokens{}, false
+		return providerfoundation.PagerDutyStoredTokens{}, false
 	}
 	return tokens, true
 }
@@ -301,7 +301,7 @@ func (h *handlers) validPagerDutyAccessToken(ctx context.Context, orgID, credent
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 
 	now := h.store.now().UTC()
-	due := func(tokens pagerDutyStoredTokens) (bool, *servicesFailure) {
+	due := func(tokens providerfoundation.PagerDutyStoredTokens) (bool, *servicesFailure) {
 		if tokens.ExpiresNaive {
 			// A naive expires_at cannot be compared with an aware clock.
 			return false, servicesInternal("pagerduty oauth expiry has no offset", errors.New("naive expires_at"))

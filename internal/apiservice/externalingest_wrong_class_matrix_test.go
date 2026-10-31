@@ -4,19 +4,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
-	"net"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"regexp"
-	"strconv"
+	"reflect"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/jackc/pgx/v5/pgxpool"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"log/slog"
@@ -28,6 +25,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/ingestpg"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/usertokens"
 )
 
@@ -87,159 +85,6 @@ func (s *pushLimiterStore) counts() (increments map[string]int, peeks map[string
 		peeks[id] = n
 	}
 	return increments, peeks
-}
-
-// pushTokenPG is a PostgreSQL wire server for the controls: it answers the
-// external_ingest_tokens SELECT with no row, or with one row whose scope list
-// is empty, and records every statement it is asked to run (bound).
-type pushTokenPG struct {
-	mu       sync.Mutex
-	sqls     []string
-	connects atomic.Int64
-	withRow  atomic.Bool
-}
-
-func (p *pushTokenPG) tokenSelects() int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	n := 0
-	for _, sql := range p.sqls {
-		if strings.Contains(sql, "external_ingest_tokens") && strings.Contains(strings.ToUpper(sql), "SELECT") {
-			n++
-		}
-	}
-	return n
-}
-
-var pushSQLParam = regexp.MustCompile(`\$(\d+)`)
-
-func startPushTokenPG(t *testing.T) (*pushTokenPG, *pgxpool.Pool) {
-	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = listener.Close() })
-	server := &pushTokenPG{}
-	go func() {
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				return
-			}
-			server.connects.Add(1)
-			go server.serve(conn)
-		}
-	}()
-	config, err := pgxpool.ParseConfig("postgres://fake:fake@" + listener.Addr().String() + "/fake?sslmode=disable&connect_timeout=2")
-	if err != nil {
-		t.Fatal(err)
-	}
-	config.MinConns = 0
-	pool, err := pgxpool.NewWithConfig(context.Background(), config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(pool.Close)
-	return server, pool
-}
-
-func (p *pushTokenPG) rowDescription() *pgproto3.RowDescription {
-	var fields []pgproto3.FieldDescription
-	for _, name := range []string{"id", "org_id", "source_id", "scopes", "expires_at", "revoked_at"} {
-		fields = append(fields, pgproto3.FieldDescription{Name: []byte(name), DataTypeOID: 25, DataTypeSize: -1, TypeModifier: -1})
-	}
-	return &pgproto3.RowDescription{Fields: fields}
-}
-
-func (p *pushTokenPG) serve(conn net.Conn) {
-	defer conn.Close()
-	backend := pgproto3.NewBackend(conn, conn)
-	for {
-		message, err := backend.ReceiveStartupMessage()
-		if err != nil {
-			return
-		}
-		if _, ok := message.(*pgproto3.SSLRequest); ok {
-			if _, err := conn.Write([]byte{'N'}); err != nil {
-				return
-			}
-			continue
-		}
-		break
-	}
-	backend.Send(&pgproto3.AuthenticationOk{})
-	backend.Send(&pgproto3.ParameterStatus{Name: "server_version", Value: "17.0"})
-	backend.Send(&pgproto3.ParameterStatus{Name: "client_encoding", Value: "UTF8"})
-	backend.Send(&pgproto3.BackendKeyData{ProcessID: 1, SecretKey: []byte{0, 0, 0, 1}})
-	backend.Send(&pgproto3.ReadyForQuery{TxStatus: 'I'})
-	if backend.Flush() != nil {
-		return
-	}
-	statements, portals := map[string]string{}, map[string]string{}
-	isToken := func(sql string) bool { return strings.Contains(sql, "external_ingest_tokens") }
-	for {
-		message, err := backend.Receive()
-		if err != nil {
-			return
-		}
-		switch m := message.(type) {
-		case *pgproto3.Parse:
-			statements[m.Name] = m.Query
-			backend.Send(&pgproto3.ParseComplete{})
-		case *pgproto3.Describe:
-			sql := statements[m.Name]
-			if m.ObjectType == 'S' {
-				params := 0
-				for _, match := range pushSQLParam.FindAllStringSubmatch(sql, -1) {
-					if n, _ := strconv.Atoi(match[1]); n > params {
-						params = n
-					}
-				}
-				oids := make([]uint32, params)
-				for i := range oids {
-					oids[i] = 25
-				}
-				backend.Send(&pgproto3.ParameterDescription{ParameterOIDs: oids})
-			} else {
-				sql = portals[m.Name]
-			}
-			if isToken(sql) {
-				backend.Send(p.rowDescription())
-			} else {
-				backend.Send(&pgproto3.NoData{})
-			}
-		case *pgproto3.Bind:
-			portals[m.DestinationPortal] = statements[m.PreparedStatement]
-			p.mu.Lock()
-			p.sqls = append(p.sqls, statements[m.PreparedStatement])
-			p.mu.Unlock()
-			backend.Send(&pgproto3.BindComplete{})
-		case *pgproto3.Execute:
-			sql := portals[m.Portal]
-			if isToken(sql) && p.withRow.Load() {
-				backend.Send(&pgproto3.DataRow{Values: [][]byte{[]byte("tok-1"), []byte(probeOrg.String()), nil, []byte("[]"), nil, nil}})
-				backend.Send(&pgproto3.CommandComplete{CommandTag: []byte("SELECT 1")})
-			} else if isToken(sql) {
-				backend.Send(&pgproto3.CommandComplete{CommandTag: []byte("SELECT 0")})
-			} else {
-				backend.Send(&pgproto3.CommandComplete{CommandTag: []byte("UPDATE 0")})
-			}
-		case *pgproto3.Sync:
-			backend.Send(&pgproto3.ReadyForQuery{TxStatus: 'I'})
-			if backend.Flush() != nil {
-				return
-			}
-		case *pgproto3.Flush:
-			if backend.Flush() != nil {
-				return
-			}
-		case *pgproto3.Terminate:
-			return
-		default:
-			return
-		}
-	}
 }
 
 type pushLogBuffer struct {
@@ -341,6 +186,14 @@ var pushProtectedRoutes = []pushRoute{
 	{"POST", pushRoutePrefix + "/batches"},
 	{"GET", pushRoutePrefix + "/batches"},
 	{"GET", pushRoutePrefix + "/batches/{ingestion_id}"},
+}
+
+var pushRouteScopes = map[string]string{
+	"GET " + pushRoutePrefix + "/availability":           "schema:read",
+	"POST " + pushRoutePrefix + "/validate":              "schema:read",
+	"POST " + pushRoutePrefix + "/batches":               "ingest:write",
+	"GET " + pushRoutePrefix + "/batches":                "ingest:status",
+	"GET " + pushRoutePrefix + "/batches/{ingestion_id}": "ingest:status",
 }
 
 var pushPublicRoutes = []pushRoute{
@@ -458,7 +311,8 @@ func pushMustHeaderNotEcho(t *testing.T, where string, header http.Header, token
 // and no other class's validator, count exactly one attempt-limiter hit and
 // one failure-limiter hit, and echo nothing.
 func TestExternalIngestWrongClassMatrix(t *testing.T) {
-	pool, connects := usertokens.CountingPool(t)
+	pg, pool := ingestpg.Start(t)
+	connects := pg.Connects
 	rig := newPushRig(t, pool)
 	cells := pushWrongClassCells(t, rig)
 	tokens := pushTokens(cells)
@@ -466,7 +320,7 @@ func TestExternalIngestWrongClassMatrix(t *testing.T) {
 		for _, cell := range cells {
 			t.Run(route.method+" "+route.pattern+"/"+cell.name, func(t *testing.T) {
 				rig.limiter.reset()
-				before := connects.Count()
+				before := connects()
 				got := rig.serve(route, cell.headers)
 				if got.status != http.StatusUnauthorized {
 					t.Fatalf("status %d, want 401; body %s", got.status, got.body)
@@ -474,7 +328,7 @@ func TestExternalIngestWrongClassMatrix(t *testing.T) {
 				if got.body != pushInvalidTokenBody {
 					t.Errorf("body %q, want the canonical %q", got.body, pushInvalidTokenBody)
 				}
-				if d := connects.Count() - before; d != 0 {
+				if d := connects() - before; d != 0 {
 					t.Errorf("%d database connect(s), want 0", d)
 				}
 				if n := rig.counts.total(); n != 0 {
@@ -487,21 +341,27 @@ func TestExternalIngestWrongClassMatrix(t *testing.T) {
 				if increments[pushAttemptLimitID] != 1 || increments[pushFailureLimitID] != 1 || len(increments) != 2 {
 					t.Errorf("limiter hits %v, want exactly one attempt and one failure hit", increments)
 				}
+				if rows := pg.AuditRows(); len(rows) != 0 {
+					t.Errorf("%d audit row(s) for a wrong class, want 0", len(rows))
+				}
 				usertokens.NoLeak(t, "body", got.body, tokens)
 				pushMustHeaderNotEcho(t, "response", got.header, tokens)
 			})
 		}
 	}
 	usertokens.NoLeak(t, "the logs", rig.logs.String(), tokens)
-	if n := connects.Count(); n != 0 {
+	if n := connects(); n != 0 {
 		t.Errorf("a wrong class reached the database: %d connect(s)", n)
+	}
+	if n := pg.TokenSelects(); n != 0 {
+		t.Errorf("a wrong class ran %d token lookup(s)", n)
 	}
 }
 
 // The failure limit is per address: the 31st failure from one address is the
 // 429, still without a database connect.
 func TestExternalIngestWrongClassMatrixThrottlesThe31stFailure(t *testing.T) {
-	pool, connects := usertokens.CountingPool(t)
+	pg, pool := ingestpg.Start(t)
 	rig := newPushRig(t, pool)
 	rig.limiter.reset()
 	route := pushProtectedRoutes[0]
@@ -514,8 +374,8 @@ func TestExternalIngestWrongClassMatrixThrottlesThe31stFailure(t *testing.T) {
 	if got.status != http.StatusTooManyRequests || !strings.Contains(got.body, `"rate_limited"`) {
 		t.Errorf("failure 31: %d %s, want 429 rate_limited", got.status, got.body)
 	}
-	if connects.Count() != 0 {
-		t.Errorf("%d database connect(s), want 0", connects.Count())
+	if pg.Connects() != 0 || len(pg.AuditRows()) != 0 {
+		t.Errorf("%d database connect(s) and %d audit row(s), want 0 and 0", pg.Connects(), len(pg.AuditRows()))
 	}
 }
 
@@ -524,20 +384,23 @@ func TestExternalIngestWrongClassMatrixThrottlesThe31stFailure(t *testing.T) {
 // 401 as every wrong class; a known one without the route's scope gets the
 // 403 insufficient_scope.
 func TestExternalIngestWrongClassMatrixControls(t *testing.T) {
-	pg, pool := startPushTokenPG(t)
+	pg, pool := ingestpg.Start(t)
 	rig := newPushRig(t, pool)
 	pushToken := "fcpush_" + strings.Repeat("P", 40)
 	for _, route := range pushProtectedRoutes {
 		t.Run(route.method+" "+route.pattern+"/unknown_fcpush", func(t *testing.T) {
-			pg.withRow.Store(false)
+			pg.SetToken(nil)
 			rig.limiter.reset()
-			selects := pg.tokenSelects()
+			selects, auditsBefore := pg.TokenSelects(), len(pg.AuditRows())
 			got := rig.serve(route, bearer(pushToken))
 			if got.status != http.StatusUnauthorized || got.body != pushInvalidTokenBody {
 				t.Fatalf("%d %s, want the canonical 401", got.status, got.body)
 			}
-			if d := pg.tokenSelects() - selects; d != 1 {
+			if d := pg.TokenSelects() - selects; d != 1 {
 				t.Errorf("%d external_ingest_tokens SELECT(s), want 1", d)
+			}
+			if rows := pg.AuditRows(); len(rows) != auditsBefore {
+				t.Errorf("%d new audit row(s) for an unknown token, want 0", len(rows)-auditsBefore)
 			}
 			increments, peeks := rig.limiter.counts()
 			if increments[pushAttemptLimitID] != 1 || increments[pushFailureLimitID] != 1 || peeks[pushFailureLimitID] != 1 {
@@ -546,15 +409,29 @@ func TestExternalIngestWrongClassMatrixControls(t *testing.T) {
 			usertokens.NoLeak(t, "body", got.body, []usertokens.Token{{Kind: "fcpush", Value: pushToken}})
 		})
 		t.Run(route.method+" "+route.pattern+"/missing_scope", func(t *testing.T) {
-			pg.withRow.Store(true)
-			defer pg.withRow.Store(false)
+			pg.SetToken(&ingestpg.Token{ID: "tok-1", OrgID: probeOrg.String(), Scopes: "[]"})
+			defer pg.SetToken(nil)
+			audits := len(pg.AuditRows())
 			rig.limiter.reset()
-			selects := pg.tokenSelects()
+			selects := pg.TokenSelects()
 			got := rig.serve(route, bearer(pushToken))
 			if got.status != http.StatusForbidden || !strings.Contains(got.body, `"insufficient_scope"`) {
 				t.Fatalf("%d %s, want 403 insufficient_scope", got.status, got.body)
 			}
-			if d := pg.tokenSelects() - selects; d != 1 {
+			rows := pg.AuditRows()
+			if len(rows) != audits+1 {
+				t.Fatalf("%d audit row(s), want one more than %d", len(rows), audits)
+			}
+			row := rows[len(rows)-1]
+			var metadata map[string]any
+			_ = json.Unmarshal([]byte(row.RequestMetadata), &metadata)
+			wantMetadata := map[string]any{"method": route.method, "route": route.pattern, "required_scope": pushRouteScopes[route.method+" "+route.pattern]}
+			if row.OrgID != probeOrg.String() || row.UserID != nil || row.Action != "ingest_auth_failed" || row.ResourceType != "external_ingest_token" ||
+				row.ResourceID != "tok-1" || row.Status != "failure" || row.ErrorMessage == nil || *row.ErrorMessage != "insufficient_scope" ||
+				!reflect.DeepEqual(metadata, wantMetadata) {
+				t.Errorf("audit row %+v (metadata %v), want the insufficient_scope row with %v", row, metadata, wantMetadata)
+			}
+			if d := pg.TokenSelects() - selects; d != 1 {
 				t.Errorf("%d external_ingest_tokens SELECT(s), want 1", d)
 			}
 			usertokens.NoLeak(t, "body", got.body, []usertokens.Token{{Kind: "fcpush", Value: pushToken}})
@@ -566,7 +443,7 @@ func TestExternalIngestWrongClassMatrixControls(t *testing.T) {
 // The two schema routes are public: any wrong credential answers what an
 // anonymous caller gets, reads nothing, and counts no auth-limiter hit.
 func TestExternalIngestWrongClassMatrixPublicSchemaRows(t *testing.T) {
-	pool, connects := usertokens.CountingPool(t)
+	pg, pool := ingestpg.Start(t)
 	rig := newPushRig(t, pool)
 	cells := pushWrongClassCells(t, rig)
 	tokens := pushTokens(cells)
@@ -594,8 +471,8 @@ func TestExternalIngestWrongClassMatrixPublicSchemaRows(t *testing.T) {
 			})
 		}
 	}
-	if connects.Count() != 0 {
-		t.Errorf("schema discovery touched the database: %d connect(s)", connects.Count())
+	if pg.Connects() != 0 || len(pg.AuditRows()) != 0 {
+		t.Errorf("schema discovery touched the database: %d connect(s), %d audit row(s)", pg.Connects(), len(pg.AuditRows()))
 	}
 	usertokens.NoLeak(t, "the logs", rig.logs.String(), tokens)
 }

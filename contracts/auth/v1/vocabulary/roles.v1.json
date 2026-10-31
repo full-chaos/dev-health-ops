@@ -7,6 +7,7 @@
       "role": "viewer",
       "scope": "organization",
       "actions": [
+        "acr.context.read",
         "analytics.read",
         "billing.read",
         "git.read",
@@ -23,6 +24,7 @@
       "role": "member",
       "scope": "organization",
       "actions": [
+        "acr.context.read",
         "analytics.export",
         "analytics.read",
         "billing.read",
@@ -40,6 +42,7 @@
       "role": "admin",
       "scope": "organization",
       "actions": [
+        "acr.context.read",
         "analytics.export",
         "analytics.read",
         "billing.manage",
@@ -68,6 +71,7 @@
       "role": "owner",
       "scope": "organization",
       "actions": [
+        "acr.context.read",
         "analytics.export",
         "analytics.read",
         "billing.manage",

@@ -159,6 +159,9 @@ var unguardedColumns = map[string]map[string]string{
 		// Written once at insert; its own trigger (0016) refuses any change,
 		// inside audit.Commit or not, so it has no UPDATE OF guard.
 		"legacy_token_version": "lifecycle",
+		// The same: written at insert, and 0038's trigger refuses any change.
+		"actor_principal_id": "lifecycle", "delegated_from_session_id": "lifecycle",
+		"delegation_reason": "lifecycle", "delegation_permitted_actions": "lifecycle",
 		// Appended at every mint, outside audit.Commit: a key set, not a
 		// session decision.
 		"signing_kids": "lifecycle",

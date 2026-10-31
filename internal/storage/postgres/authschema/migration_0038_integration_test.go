@@ -51,7 +51,7 @@ func m38Row(n string, replace map[string]string) string {
 	cols := []string{"principal_id", "organization_id", "token_hash", "issued_at", "created_at", "expires_at", "amr", "legacy_token_version",
 		"actor_principal_id", "delegated_from_session_id", "delegation_reason", "delegation_permitted_actions"}
 	values := map[string]string{
-		"principal_id": `'` + m38Target + `'`, "organization_id": `'` + m38Org + `'`, "token_hash": `'\x0` + n + `'`,
+		"principal_id": `'` + m38Target + `'`, "organization_id": `'` + m38Org + `'`, "token_hash": `'\xa` + n + `'`,
 		"issued_at": `now()`, "created_at": `now()`, "expires_at": `now() + interval '15 minutes'`, "amr": `'{pwd}'`, "legacy_token_version": `0`,
 		"actor_principal_id": `'` + m38Actor + `'`, "delegated_from_session_id": `'` + m38Base + `'`,
 		"delegation_reason": `'support'`, "delegation_permitted_actions": `'{analytics.read}'`,

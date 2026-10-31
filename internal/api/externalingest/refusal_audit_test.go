@@ -28,6 +28,7 @@ const (
 	auditCounter   = "dev_health_api_ingest_auth_audit_failures_total"
 	auditOrgID     = "4d0a1b2c-3e4f-4a5b-8c6d-7e8f9a0b1c2d"
 	auditTokenID   = "tok-audit-1"
+	clientOrgID    = "99999999-8888-4777-8666-555555555555"
 	auditSourceID  = "5e1b2c3d-4f50-4b6c-9d7e-8f90a1b2c3d4"
 	auditToken     = "fcpush_" + "audit-unit-token-0123456789"
 	canonicalError = `{"error":{"code":"invalid_token","message":"Missing or invalid ingest token"}}`
@@ -101,12 +102,15 @@ func (rig *auditRig) do(t *testing.T, ctx context.Context, rt auditRoute, author
 	if handler == nil {
 		t.Fatalf("no route %s %s", rt.method, rt.pattern)
 	}
-	target := strings.ReplaceAll(rt.pattern, "{ingestion_id}", "11111111-1111-4111-8111-111111111111")
+	target := strings.ReplaceAll(rt.pattern, "{ingestion_id}", "11111111-1111-4111-8111-111111111111") + "?org_id=" + clientOrgID
 	request := httptest.NewRequest(rt.method, target, strings.NewReader(`{}`)).WithContext(ctx)
 	request.SetPathValue("ingestion_id", "11111111-1111-4111-8111-111111111111")
 	request.Pattern = rt.method + " " + rt.pattern
 	request.RemoteAddr = "192.0.2.7:4242"
 	request.Header.Set("Content-Type", "application/json")
+	// The caller names another organisation in every way a request can; the row must keep the token's own.
+	request.Header.Set("X-Org-Id", clientOrgID)
+	request.Header.Set("X-Organization-Id", clientOrgID)
 	if authorization != "" {
 		request.Header.Set("Authorization", authorization)
 	}
@@ -197,7 +201,7 @@ func TestKnownTokenRefusalsWriteOneAuditRow(t *testing.T) {
 				if want := wantMetadata(rt, site, token.SourceID != nil); !reflect.DeepEqual(got, want) {
 					t.Errorf("request_metadata %v, want %v", got, want)
 				}
-				for _, secret := range []string{auditToken, "192.0.2.7", "fcpush_"} {
+				for _, secret := range []string{auditToken, "192.0.2.7", "fcpush_", clientOrgID} {
 					if strings.Contains(row.RequestMetadata+row.Changes, secret) || (row.Description != nil && strings.Contains(*row.Description, secret)) {
 						t.Errorf("the row carries %q", secret)
 					}

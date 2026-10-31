@@ -131,4 +131,4 @@ func Init(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedId
 	return report, nil
 }
 
-func initRefusals() []error { return nil }
+func initRefusals() []error { return []error{errInitExists} }

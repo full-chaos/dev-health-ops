@@ -50,7 +50,7 @@ type StateReader interface {
 var _ StateReader = (*Client)(nil)
 
 // State asks auth-service for the state of sessionID, presenting the client's
-// session issuer credential. A 404 with reason session_not_found is
+// session issuer credential, or its workload token (see NewWorkload). A 404 with reason session_not_found is
 // ErrSessionNotFound; every other failure (the route unreachable or slow, any
 // other status, a 404 without that reason, or an answer that is not exactly
 // the state document) wraps ErrUnavailable.
@@ -63,7 +63,11 @@ func (c *Client) State(ctx context.Context, sessionID uuid.UUID) (State, error) 
 	if err != nil {
 		return State{}, fmt.Errorf("%w: building the state request: %w", ErrUnavailable, err)
 	}
-	out.Header.Set("Authorization", "Bearer "+c.token)
+	bearer, err := c.bearer(ctx)
+	if err != nil {
+		return State{}, err
+	}
+	out.Header.Set("Authorization", "Bearer "+bearer)
 	out.Header.Set("Content-Type", "application/json")
 	out.Header.Set("Accept", "application/json")
 	response, err := c.http.Do(out)

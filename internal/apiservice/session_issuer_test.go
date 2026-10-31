@@ -37,10 +37,10 @@ func TestSessionIssuerFollowsTheSessionsFlag(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if issuer, err := sessionIssuer(off, issueEnv(map[string]string{sessionissue.EnvToken: token})); issuer != nil || err != nil {
+	if issuer, err := sessionIssuer(off, issueEnv(map[string]string{sessionissue.EnvToken: token}), sessionCredential{}); issuer != nil || err != nil {
 		t.Fatalf("flag off: %v %v, want go-api to mint", issuer, err)
 	}
-	issuer, err := sessionIssuer(on, issueEnv(map[string]string{sessionissue.EnvToken: " " + token + "\n"}))
+	issuer, err := sessionIssuer(on, issueEnv(map[string]string{sessionissue.EnvToken: " " + token + "\n"}), sessionCredential{})
 	if err != nil || issuer == nil {
 		t.Fatalf("flag on with a credential: %v %v", issuer, err)
 	}
@@ -49,7 +49,7 @@ func TestSessionIssuerFollowsTheSessionsFlag(t *testing.T) {
 		"empty":          {sessionissue.EnvToken: ""},
 		"acr credential": {sessionissue.EnvToken: "svc_acr_" + token[len("svc_authsess_"):]},
 	} {
-		issuer, err := sessionIssuer(on, issueEnv(env))
+		issuer, err := sessionIssuer(on, issueEnv(env), sessionCredential{})
 		if err == nil || issuer != nil {
 			t.Errorf("flag on, %s: %v %v, want a start-up error", name, issuer, err)
 			continue

@@ -2,6 +2,7 @@ package docs_test
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -82,6 +83,22 @@ func uvLockFindings(d docTree) []string {
 	return out
 }
 
+var (
+	uvSubcommands = map[string]bool{"pip": true, "venv": true, "tool": true, "add": true, "sync": true, "run": true}
+	uvPipWord     = regexp.MustCompile(`^pip[0-9.]*$`)
+	uvShellSplit  = strings.NewReplacer(";", " ", "&", " ", "|", " ", "(", " ", ")", " ", "`", " ", "<", " ", ">", " ")
+)
+
+// uvWords splits a run line into words at whitespace and shell separators and strips quotes, so a hidden command (after
+// `&&`, `;`, `|`) is still a word. The scan is fail closed: an echo of a forbidden command is refused too.
+func uvWords(line string) []string {
+	var out []string
+	for _, w := range strings.Fields(uvShellSplit.Replace(line)) {
+		out = append(out, strings.Trim(w, "\"'"))
+	}
+	return out
+}
+
 type uvLine struct {
 	step int
 	text string
@@ -94,6 +111,9 @@ func uvDocsGuard(d docTree) []string {
 		if err != nil {
 			out = append(out, fmt.Sprintf("%s: %v", rel, err))
 			continue
+		}
+		if raw, err := d.read(rel); err == nil && (strings.Contains(raw, "--no-verify-hashes") || strings.Contains(raw, "UV_NO_VERIFY_HASHES")) {
+			out = append(out, rel+" must not carry --no-verify-hashes or UV_NO_VERIFY_HASHES anywhere (run, env, with, comment)")
 		}
 		mkdocsJobs := 0
 		for jobID := range asMap(wf["jobs"]) {
@@ -119,35 +139,37 @@ func uvDocsGuard(d docTree) []string {
 			venvAt, instAt, buildAt := []int{}, []int{}, []int{}
 			builds := false
 			for n, l := range lines {
-				f := strings.Fields(l.text)
-				for i, w := range f {
-					if (w == "pip" || w == "pip3") && i+1 < len(f) && f[i+1] == "install" && (i == 0 || f[i-1] != "uv") {
-						out = append(out, fmt.Sprintf("%s:%s runs a bare pip install: %q", rel, jobID, l.text))
+				w := uvWords(l.text)
+				uvSub, mkdocs := false, false
+				for i, x := range w {
+					next := ""
+					if i+1 < len(w) {
+						next = w[i+1]
+					}
+					if x == "uv" && uvSubcommands[next] {
+						uvSub = true
+					}
+					if (uvPipWord.MatchString(filepath.Base(x)) && next == "install" && (i == 0 || w[i-1] != "uv")) || (x == "-m" && next == "pip") || x == "ensurepip" || x == "uvx" {
+						out = append(out, fmt.Sprintf("%s:%s runs pip or uvx outside the chain (bare pip install, -m pip, ensurepip, uvx): %q", rel, jobID, l.text))
+					}
+					if x == "mkdocs" || (x == "-m" && next == "mkdocs") {
+						mkdocs = true
 					}
 				}
+				builds = builds || mkdocs
 				switch {
-				case len(f) > 1 && f[0] == "uv" && f[1] == "venv":
-					if m := uvVenvLine.FindStringSubmatch(l.text); m != nil && uvExactVer.MatchString(m[1]) {
-						venvAt = append(venvAt, n)
-					} else {
-						out = append(out, fmt.Sprintf("%s:%s uv venv line is not part of the chain (exact X.Y.Z python, venv at $RUNNER_TEMP/docs-venv): %q", rel, jobID, l.text))
+				case uvVenvLine.MatchString(l.text) && uvExactVer.MatchString(uvVenvLine.FindStringSubmatch(l.text)[1]):
+					venvAt = append(venvAt, n)
+				case l.text == uvInstLine:
+					instAt = append(instAt, n)
+				case uvBuildLine.MatchString(l.text):
+					buildAt = append(buildAt, n)
+				default:
+					if mkdocs {
+						out = append(out, fmt.Sprintf("%s:%s must build with `%s --config-file mkdocs.yml` and only the tee tail: %q", rel, jobID, uvMkdocsPref, l.text))
 					}
-				case len(f) > 1 && f[0] == "uv" && f[1] == "pip":
-					if l.text == uvInstLine {
-						instAt = append(instAt, n)
-					} else {
-						out = append(out, fmt.Sprintf("%s:%s uv pip line is not part of the chain: %q", rel, jobID, l.text))
-					}
-				}
-				for i, w := range f {
-					if w == "mkdocs" || (w == "-m" && i+1 < len(f) && f[i+1] == "mkdocs") {
-						builds = true
-						if uvBuildLine.MatchString(l.text) {
-							buildAt = append(buildAt, n)
-						} else {
-							out = append(out, fmt.Sprintf("%s:%s must build with `%s --config-file mkdocs.yml` and only the tee tail: %q", rel, jobID, uvMkdocsPref, l.text))
-						}
-						break
+					if uvSub {
+						out = append(out, fmt.Sprintf("%s:%s uv line is not part of the chain (only the three chain lines may use uv pip, venv, tool, add, sync or run; venv needs an exact X.Y.Z python): %q", rel, jobID, l.text))
 					}
 				}
 			}

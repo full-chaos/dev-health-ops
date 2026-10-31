@@ -64,7 +64,7 @@ func TestPagerDutyDisconnectWithoutClientIDVenueOracle(t *testing.T) {
 			"PAGER_DUTY_CLIENT_ID=",
 			"SETTINGS_ENCRYPTION_KEY=" + pagerDutyDisconnectVenueEncryptionKey,
 		},
-		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
+		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {
 				t.Helper()
@@ -111,7 +111,7 @@ VALUES ($1, 'pagerduty', 'default', 'garbage-not-fernet', 1, now(), now(), false
 				"admin_bad_cipher": adminClaims(orgs["bad-cipher"]),
 				"admin_racer":      adminClaims(orgs["racer"]),
 			}
-		},
+		}),
 	})
 
 	const path = "/api/v1/admin/integrations/pagerduty/disconnect"

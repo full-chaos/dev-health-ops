@@ -33,7 +33,7 @@ func TestOwnModelToggle(t *testing.T) {
 		GoOnly: true,
 		Root:   root,
 		JWTKey: jwtKey,
-		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
+		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {
 				t.Helper()
@@ -58,7 +58,7 @@ VALUES (gen_random_uuid(), $1, 'llm', $2, $3, $4, now() - interval '1 day', now(
 				"empty":  {"user_id": adminID.String(), "email": "ownmodel-admin@example.com", "org_id": orgEmpty.String(), "role": "admin"},
 				"member": {"user_id": memberID.String(), "email": "ownmodel-member@example.com", "org_id": orgSaved.String(), "role": "member"},
 			}
-		},
+		}),
 	})
 	base, pool := startGoServer(t, ctx, venue, jwtKey)
 	auth := func(name string) map[string]string {

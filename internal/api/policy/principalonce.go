@@ -19,6 +19,10 @@ type BearerRow struct {
 	Domain bool
 	// Webhook: the row accepts a provider webhook signature.
 	Webhook bool
+	// NotOrgScoped: the route does not act in the caller's org (tenant
+	// requirement none or cross_org_superuser_only), so the org scope reads
+	// no membership for the token's own org.
+	NotOrgScoped bool
 }
 
 // EarlyRefusal is one row of the refusal table: a Bearer value that starts

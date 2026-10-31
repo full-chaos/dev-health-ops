@@ -19,11 +19,13 @@ internal/api/orgs/orgs.go	handlers.entitlements	1	7
 internal/api/policy/accessroute.go	Scope.mayImpersonate	1	-
 internal/api/policy/accessroute_user.go	Authenticator.accessTokenUser	1	-
 internal/api/policy/guard.go	Guard.Wrap	2	-
+internal/api/policy/guard.go	Guard.currentUser	1	4
 internal/api/policy/principal.go	Authenticator.CheckClaims	1	-
 internal/api/policy/principal.go	User.IsAdmin	1	1
 internal/api/policy/scope.go	EffectiveOrgID	1	4
 internal/api/policy/scope.go	Scope.Impersonation	1	-
 internal/api/policy/scope.go	Scope.mayUseOrg	1	4
+internal/api/policy/scope.go	Scope.useTokenOrg	1	4
 internal/api/session/changepassword.go	handlers.changePassword	1	-
 internal/api/session/login.go	handlers.loginInTx	1	-
 internal/api/session/onboarding.go	handlers.buildOnboardingState	2	-

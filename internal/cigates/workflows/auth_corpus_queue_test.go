@@ -210,11 +210,19 @@ func authCorpusGateViolations(t *testing.T, root string) []string {
 	for _, tc := range cases {
 		cmd := exec.Command("bash", "-c", run)
 		cmd.Env = []string{"PATH=/usr/bin:/bin", "CHANGES=" + tc.changes, "RELEVANT=" + tc.rel, "CORPUS_RELEVANT=" + tc.corpusRel,
-			"QUALITY=" + tc.quality, "TEST=" + tc.test, "FUZZ=" + tc.fuzz, "CORPUS=" + tc.corpus}
+			"QUALITY=" + tc.quality, "TEST=" + tc.test, "RACE=" + tc.test, "FUZZ=" + tc.fuzz, "CORPUS=" + tc.corpus}
 		raw, err := cmd.CombinedOutput()
 		failed := err != nil
 		if failed != tc.wantFail {
 			out = append(out, fmt.Sprintf("auth-gate case %q: failed=%v want %v (a skipped corpus leg with relevant=true must fail): %s", tc.name, failed, tc.wantFail, strings.TrimSpace(string(raw))))
+		}
+	}
+	for _, race := range []string{"failure", "skipped", "cancelled"} {
+		cmd := exec.Command("bash", "-c", run)
+		cmd.Env = []string{"PATH=/usr/bin:/bin", "CHANGES=success", "RELEVANT=true", "CORPUS_RELEVANT=true",
+			"QUALITY=success", "TEST=success", "RACE=" + race, "FUZZ=success", "CORPUS=success"}
+		if _, err := cmd.CombinedOutput(); err == nil {
+			out = append(out, fmt.Sprintf("auth-gate passed a relevant change whose auth-race job was %s", race))
 		}
 	}
 	return out
@@ -358,7 +366,7 @@ func TestAuthCorpusQueuePlantedDefects(t *testing.T) {
             echo "ERROR: leg acp passed with social forwarded and users not owned"`}}, []string{"inverted exit check in both negative legs"}},
 		{"the plain run step also runs the forced-social leg", []mutation{{wf, "if: matrix.leg != 'acp-nokeys' && matrix.leg != 'acp-social-unowned'", "if: matrix.leg != 'acp-nokeys'"}}, []string{"forced-social leg lacks"}},
 		{"forced-social leg loses the force switch", []mutation{{wf, "AUTH_CORPUS_USERS_UNOWNED=1 AUTH_CORPUS_FORCE_SOCIAL=1 bash", "AUTH_CORPUS_USERS_UNOWNED=1 bash"}}, []string{"forced-social leg lacks"}},
-		{"gate stops waiting for the corpus job", []mutation{{wf, "needs: [auth-changes, auth-go-quality, auth-test, auth-fuzz, auth-corpus-queue]", "needs: [auth-changes, auth-go-quality, auth-test, auth-fuzz]"}}, []string{"auth-gate.needs must include auth-corpus-queue"}},
+		{"gate stops waiting for the corpus job", []mutation{{wf, "needs: [auth-changes, auth-go-quality, auth-test, auth-race, auth-fuzz, auth-corpus-queue]", "needs: [auth-changes, auth-go-quality, auth-test, auth-race, auth-fuzz]"}}, []string{"auth-gate.needs must include auth-corpus-queue"}},
 	}
 	for _, c := range shape {
 		t.Run(c.name, func(t *testing.T) {

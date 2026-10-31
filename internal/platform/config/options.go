@@ -405,6 +405,10 @@ var coreOptions = []Option{
 		Default: "default", Group: GroupDatabase, Usage: "ClickHouse database name (component form)",
 	},
 	{
+		Flag: "clickhouse-secure", Env: "DEV_HEALTH_CH_SECURE", Kind: KindString, Group: GroupDatabase,
+		Usage: "ClickHouse TLS for the component form: true adds secure=true to the assembled DSN; false or unset adds nothing",
+	},
+	{
 		Flag: "api-clickhouse-host", Env: "DEV_HEALTH_CH_API_HOST", Kind: KindString, Group: GroupDatabase,
 		Usage: "api Service ClickHouse host; set to assemble API_CLICKHOUSE_URI from components",
 	},

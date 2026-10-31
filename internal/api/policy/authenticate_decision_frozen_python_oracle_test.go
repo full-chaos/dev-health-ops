@@ -91,6 +91,11 @@ func (authenticateStore) Membership(context.Context, uuid.UUID, uuid.UUID) (stri
 	return "", false, nil
 }
 
+func (s authenticateStore) OrgMembership(ctx context.Context, user, org uuid.UUID) (string, bool, bool, error) {
+	role, member, err := s.Membership(ctx, user, org)
+	return role, member, true, err
+}
+
 func (authenticateStore) ActiveImpersonation(context.Context, uuid.UUID) (*policy.Impersonation, error) {
 	return nil, nil
 }

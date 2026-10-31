@@ -35,7 +35,7 @@ var (
 )
 
 func testSteps0(jobs map[string]any) []map[string]any {
-	return stepsOf(jobs["auth-test"])
+	return append(append([]map[string]any{}, stepsOf(jobs["auth-test"])...), stepsOf(jobs["auth-race"])...)
 }
 
 func authViolations(t *testing.T, root string) []string {
@@ -152,7 +152,7 @@ func authViolations(t *testing.T, root string) []string {
 		}
 	}
 
-	for _, key := range []string{"auth-go-quality", "auth-test", "auth-fuzz"} {
+	for _, key := range []string{"auth-go-quality", "auth-test", "auth-race", "auth-fuzz"} {
 		j := asMap(jobs[key])
 		if !reflect.DeepEqual(asList(j["needs"]), []any{"auth-changes"}) {
 			out = append(out, fmt.Sprintf("%s.needs must be [auth-changes], got %v", key, j["needs"]))
@@ -170,12 +170,32 @@ func authViolations(t *testing.T, root string) []string {
 		needs = append(needs, asString(n))
 	}
 	sort.Strings(needs)
-	if !reflect.DeepEqual(needs, []string{"auth-changes", "auth-corpus-queue", "auth-fuzz", "auth-go-quality", "auth-test"}) {
-		out = append(out, fmt.Sprintf("auth-gate.needs must fan in auth-changes, auth-go-quality, auth-test, auth-fuzz, auth-corpus-queue, got %v", needs))
+	if !reflect.DeepEqual(needs, []string{"auth-changes", "auth-corpus-queue", "auth-fuzz", "auth-go-quality", "auth-race", "auth-test"}) {
+		out = append(out, fmt.Sprintf("auth-gate.needs must fan in auth-changes, auth-go-quality, auth-test, auth-race, auth-fuzz, auth-corpus-queue, got %v", needs))
 	}
 	gateSteps := stepsOf(gate)
 	if len(gateSteps) == 0 || !gatePairRe.MatchString(shellCode(asString(gateSteps[0]["run"]))) {
 		out = append(out, "auth-gate must fail a relevant change whose gate job did not succeed (failed, cancelled OR skipped)")
+	}
+
+	if !strings.Contains(shellCode(asString(gateSteps[0]["run"])), `"auth-race=${RACE}"`) || asString(asMap(gate["env"])["RACE"]) != "${{ needs.auth-race.result }}" {
+		out = append(out, "auth-gate must check the auth-race result in its pair loop: a failed or skipped auth-race must fail a relevant change")
+	}
+	raceJob := asMap(jobs["auth-race"])
+	if fmt.Sprint(raceJob["timeout-minutes"]) != "30" || fmt.Sprint(asMap(raceJob["env"])["CHECK_GO_JOB_CAP_MIN"]) != "30" {
+		out = append(out, "auth-race must keep timeout-minutes 30 and CHECK_GO_JOB_CAP_MIN 30: the race-integration package timeouts are cut from that cap")
+	}
+	raceRuns := map[string]bool{}
+	for _, s := range stepsOf(jobs["auth-race"]) {
+		raceRuns[asString(s["run"])] = true
+	}
+	if !raceRuns["bash ci/check_go.sh auth race"] || !raceRuns["bash ci/check_go.sh auth race-integration"] {
+		out = append(out, "auth-race must run `auth race` and `auth race-integration`")
+	}
+	for _, s := range stepsOf(jobs["auth-test"]) {
+		if r := asString(s["run"]); r == "bash ci/check_go.sh auth race" || r == "bash ci/check_go.sh auth race-integration" {
+			out = append(out, fmt.Sprintf("auth-test must not run `%s`: the race legs have their own job and cap", r))
+		}
 	}
 
 	testSteps := stepsOf(jobs["auth-test"])

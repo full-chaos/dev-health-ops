@@ -98,6 +98,21 @@ out="$(run_summary guard_summary_no_secrets)" && rc=0 || rc=$?
 [[ "$rc" -ne 0 && "$out" == *drill-password-secrets.json* && "$out" != *"$canary"* ]] && r=ok || r=bad
 check "the guard refuses a planted line of a pretty-printed secrets file, naming the file and no value" "$r"
 
+# the stderr of a refusal, read alone, holds no secret value in either case
+cp "$root/summary.clean" "$ev/summary.txt"
+jq -c . "$ev/attempt-secrets.json" >>"$ev/summary.txt"
+printf '    "old": "%s-pretty"\n' "$canary" >>"$ev/summary.txt"
+(
+  set +e
+  eval "$guard_fn"
+  # shellcheck disable=SC2034 # read by the evaluated helpers
+  evidence="$ev"
+  guard_summary_no_secrets 2>"$root/guard.err" >"$root/guard.out"
+  echo "$?" >"$root/guard.rc"
+)
+if [[ "$(cat "$root/guard.rc")" -ne 0 ]] && grep -q 'secrets.json' "$root/guard.err" && ! grep -qF "$canary" "$root/guard.err" && ! grep -qF "$canary" "$root/guard.out"; then r=ok; else r=bad; fi
+check "the guard stderr in a refusal holds no secret value" "$r"
+
 # no unguarded bare `export "$@"` anywhere in the script
 if grep -nE '^[[:space:]]*export "\$@"' "$script" | grep -v 'if ((\$#))' >/dev/null; then
   grep -nE 'export "\$@"' "$script" | grep -vE 'if \(\(\$#\)\)' >/dev/null && r=bad || r=ok

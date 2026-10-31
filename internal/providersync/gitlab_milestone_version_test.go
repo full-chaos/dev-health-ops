@@ -158,3 +158,70 @@ func TestGitLabTeamCatalogMilestonesParamFollowsTheGitLabVersion(t *testing.T) {
 		})
 	}
 }
+
+func TestGitLabWorkItemsMakesNoVersionProbeWhenMilestonesAreOff(t *testing.T) {
+	responses := gitLabWorkItemResponses()
+	responses["/api/v4/version"] = []string{`{"version":"16.6.9"}`}
+	doer := &gitLabWorkItemsDoer{responses: responses}
+	claim := nativeTestClaim("gitlab", "work-items")
+	off := false
+	if _, err := (GitLabWorkItemsRouteHandler{StatusMapping: loadRealStatusMapping(t), FetchMilestones: &off, PerPage: 3, MaxPages: 10, NestedMaxPages: 10}).Collect(
+		context.Background(), claim, providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID}, gitLabWorkItemsClient(t, fakehttp.Client(doer)),
+		time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
+	); err != nil {
+		t.Fatal(err)
+	}
+	for _, request := range doer.requests {
+		if request.URL.Path == "/api/v4/version" || strings.HasSuffix(request.URL.Path, "/milestones") {
+			t.Fatalf("a unit that reads no milestones made the request %s", request.URL.String())
+		}
+	}
+}
+
+func TestGitLabTeamCatalogMakesNoVersionProbeWithoutAMilestoneRead(t *testing.T) {
+	var probes atomic.Int32
+	frontURL, requests := versionedMilestoneFront(t, `{"version":"16.6.9"}`, &probes, map[string]string{}, map[string]string{})
+	if _, err := (GitLabTeamCatalogRouteHandler{}).CollectTeamCatalog(context.Background(),
+		TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1"},
+		providerfoundation.Credential{Provider: "gitlab", Config: map[string]string{"group_path": "org"}},
+		gitlabTeamCatalogTestClient(t, frontURL), TeamCatalogSelections{Projects: true}, targetFetchedAt); err != nil {
+		t.Fatal(err)
+	}
+	for _, request := range *requests {
+		if strings.Contains(request, "/milestones") {
+			t.Fatalf("a run with no project made the milestone read %s", request)
+		}
+	}
+	if probes.Load() != 0 {
+		t.Fatalf("version probes = %d, want 0 for a run that reads no milestones", probes.Load())
+	}
+}
+
+func TestGitLabTeamCatalogVersionProbeFailureNamesTheRun(t *testing.T) {
+	for _, tc := range []struct{ name, body string }{{"refused", ""}, {"unparseable", `{"version":"nightly"}`}} {
+		t.Run(tc.name, func(t *testing.T) {
+			var logged lockedLogBuffer
+			previous := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo})))
+			t.Cleanup(func() { slog.SetDefault(previous) })
+			var probes atomic.Int32
+			frontURL, _ := versionedMilestoneFront(t, tc.body, &probes, map[string]string{"100": "org/a"},
+				map[string]string{"100": `[{"id":9,"title":"A","state":"active","due_date":"2026-09-30"}]`})
+			if _, err := (GitLabTeamCatalogRouteHandler{}).CollectTeamCatalog(context.Background(),
+				TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-77"},
+				providerfoundation.Credential{Provider: "gitlab", Config: map[string]string{"group_path": "org"}},
+				gitlabTeamCatalogTestClient(t, frontURL), TeamCatalogSelections{Projects: true}, targetFetchedAt); err != nil {
+				t.Fatal(err)
+			}
+			line := ""
+			for _, candidate := range strings.Split(logged.String(), "\n") {
+				if strings.Contains(candidate, "gitlab_version_probe_failed") {
+					line = candidate
+				}
+			}
+			if !strings.Contains(line, "level=ERROR") || !strings.Contains(line, "org_id=org-1") || !strings.Contains(line, "sync_run_id=run-77") {
+				t.Fatalf("the catalog probe failure logged %q, want an ERROR line naming org_id and sync_run_id", line)
+			}
+		})
+	}
+}

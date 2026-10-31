@@ -147,13 +147,30 @@ func TestTheSelectorNameRulesAreTheSameInEverySchema(t *testing.T) {
 		"registry":  dig(registry, "$defs", "credentialClass", "properties", "markers", "items", "allOf"),
 	}
 	want, _ := json.Marshal(rules["inventory"])
-	if list, _ := rules["inventory"].([]any); len(list) != 2 {
-		t.Fatalf("inventory selector rules %s, want the content_type and subject_token_type rules", want)
+	if list, _ := rules["inventory"].([]any); len(list) != 5 {
+		t.Fatalf("inventory selector rules %s, want the content_type, subject_token_type, grant_type, colon and base-name rules", want)
 	}
 	for name, rule := range rules {
 		got, _ := json.Marshal(rule)
 		if string(got) != string(want) {
 			t.Errorf("%s selector rules differ from the inventory's:\n%s\n%s", name, got, want)
+		}
+	}
+}
+
+// acr's POST /token serves the device-flow code and the browser refresh token;
+// the grant_type form field picks the class, compared byte for byte.
+func TestSelectorGateSeparatesTheAcrTokenClassesByGrantType(t *testing.T) {
+	registry := realRegistry(t)
+	classes := []any{"acr_device_flow_code", "acr_browser_refresh_token"}
+	for _, name := range []string{"refresh_token", "authorization_code", "urn:ietf:params:oauth:grant-type:device_code"} {
+		if err := CheckClassSelector(multiClassProfile(t, classes, "grant_type", name), registry); err != nil {
+			t.Errorf("gate refused grant_type %q: %v", name, err)
+		}
+	}
+	for _, name := range []string{"Refresh_Token", "refresh_token ", "client_credentials", "urn:ietf:params:oauth:grant-type:device_code-v2"} {
+		if err := CheckClassSelector(multiClassProfile(t, classes, "grant_type", name), registry); err == nil {
+			t.Errorf("gate matched grant_type %q, which no class declares byte for byte", name)
 		}
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/full-chaos/dev-health-ops/contracts/auth/v1/vocabulary"
 )
@@ -19,11 +20,14 @@ type ClassMarker struct {
 	Name string `json:"name"`
 }
 
+// selectorNameMax is the schemas' maxLength for a selector name (code points).
+const selectorNameMax = 64
+
 // selectorKinds is the closed class_disambiguator kind vocabulary of
 // endpoint-profile.schema.json (a test holds the two equal).
 var selectorKinds = []string{
 	"authorization_scheme", "credential_prefix", "dedicated_header", "jwt_header_alg", "jwt_header_typ",
-	"signature_header", "content_type", "subject_token_type",
+	"signature_header", "content_type", "subject_token_type", "grant_type",
 }
 
 // RegistryClass is the part of a credential-classes.json entry the profile
@@ -71,6 +75,9 @@ func CheckClassSelector(profile map[string]any, registry map[string]RegistryClas
 	if !slices.Contains(selectorKinds, kind) {
 		return fmt.Errorf("unknown selector kind %q", kind)
 	}
+	if n := utf8.RuneCountInString(name); n > selectorNameMax {
+		return fmt.Errorf("selector %s name is %d characters, longer than %d", kind, n, selectorNameMax)
+	}
 	var owners []string
 	for _, entry := range accepted {
 		id, _ := entry.(string)
@@ -102,7 +109,7 @@ func mediaType(value string) string {
 }
 
 // Header and scheme names are case-insensitive on the wire; a credential
-// prefix, a JWT header alg or typ and an RFC 8693 token-type URI are compared
+// prefix, a JWT header alg or typ and an RFC 8693 token-type URI or an OAuth grant type are compared
 // exactly (byte for byte, no trimming) against the one spelling the contract
 // files carry.
 func markerMatches(marker ClassMarker, kind, name string) bool {
@@ -112,7 +119,7 @@ func markerMatches(marker ClassMarker, kind, name string) bool {
 	if kind == "content_type" {
 		return mediaType(marker.Name) == mediaType(name)
 	}
-	if kind == "credential_prefix" || kind == "jwt_header_alg" || kind == "jwt_header_typ" || kind == "subject_token_type" {
+	if kind == "credential_prefix" || kind == "jwt_header_alg" || kind == "jwt_header_typ" || kind == "subject_token_type" || kind == "grant_type" {
 		return marker.Name == name
 	}
 	return strings.EqualFold(marker.Name, name)

@@ -70,7 +70,20 @@ auth-migrate --version
 Required: `AUTH_MIGRATION_DATABASE_URI` (or `_FILE`) and, to apply,
 `AUTH_RUNTIME_DATABASE_ROLE`; optional `AUTH_DATABASE_SCHEMA`. A run takes a
 PostgreSQL advisory lock for its whole duration, so two migrators cannot race,
-and is bounded by a five-minute budget. `--check` prints
+and is bounded by a five-minute budget. Each migration's transaction sets
+`lock_timeout` to 5 s for that transaction only. A migration that needs a strong
+table lock (0037's `ALTER TABLE credential_registry` takes ACCESS EXCLUSIVE)
+waits behind every open transaction on the table, and every new reader of the
+table queues behind that wait. So the attempt gives up after 5 s, which lets the
+queued readers through, and the migration is tried again after a 5 s pause, 3
+attempts in all. Each timed-out attempt logs a warning
+(`auth migration lock wait timed out`, with `version`, `attempt`, `attempts`,
+`lock_timeout` and `outcome` `retrying` or `giving_up`). The last one fails the
+run with `could not take its locks in time`, and the version table stays at the
+last migration that committed: run `auth-migrate` again when the open
+transaction ends. The timeout is not set on the session, so a second
+`auth-migrate` still waits for the first one's advisory lock (CHAOS-12200).
+`--check` prints
 `auth schema current at version N` and exits 0, or reports the current and head
 versions and exits 1; it never creates the schema or the version table. Run the
 check as a deployment gate. In Compose and Helm the migration runs as a

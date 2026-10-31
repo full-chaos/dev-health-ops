@@ -596,7 +596,7 @@ avoid breaking ACR while giving the control plane visibility into it".
    drop-in replacement**, and this ADR states that so a later wave cannot
    "simplify" it away.
 3. **`acr-mcp` never receives platform session, workload, or administration
-   credentials** (G-43). It remains a local STDIO client of hosted ACR.
+   credentials** (G-43). It is a hosted Streamable HTTP service in front of hosted ACR.
 4. **Repository-grant enforcement stays per-operation in ACR** (G-42). Evidence
    and packet identifiers never bypass authorization, and unknown, malformed,
    foreign, deleted, and unauthorized handles remain non-disclosing.

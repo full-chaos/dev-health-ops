@@ -206,9 +206,14 @@ var comparisons = map[token.Token]bool{token.GTR: true, token.GEQ: true, token.L
 // (the function must scan or parse: Sscan*, strconv.Parse*/Atoi, time.ParseDuration, json Unmarshal/Decode, or it calls
 // such a function of the file: one level of call depth; a helper that only logs the key reads nothing).
 // A quotient of two measured values is a ratio and is not measured, whether compared directly or through a variable.
+// A comparison of two measured values is still refused when a side carries a fixed duration floor: a time.<Unit> constant
+// that is a direct operand of + or -, or an argument of max, min, math.Max or math.Min, at any depth (max(25*b,
+// time.Second), 2*b+50*time.Millisecond). A product (2*b) is no floor.
 // Stated limits, each pinned by a test:
 //   - A ratio of two carried values is legal, like a ratio of two time.Since values
 //     (TestRatioOfTwoCarriedValuesIsNotAnAbsoluteBudget).
+//   - A floor held in a named constant or variable, or written as a bare integer, is not seen
+//     (TestAFloorHeldInANamedValueIsOutOfScope).
 //   - A key that no measured value fills (PORT=, CODE=) is not an emitter; its readers are not measured
 //     (TestAKeyThatCarriesNoMeasurementIsNotTracked).
 //   - A read of a fixed literal, or of an identifier that only holds literals, is not a child's report, so a diagnostic
@@ -241,7 +246,10 @@ func findAssertions(fset *token.FileSet, file *ast.File, rel string) []finding {
 				return true
 			}
 			left, right := isMeasured(be.X), isMeasured(be.Y)
-			if left == right || signCheck(be.X, left) || signCheck(be.Y, right) {
+			if left == right && !(left && (carriesFloor(be.X, isMeasured) || carriesFloor(be.Y, isMeasured))) {
+				return true
+			}
+			if signCheck(be.X, left) || signCheck(be.Y, right) {
 				return true
 			}
 			var buf bytes.Buffer
@@ -778,6 +786,61 @@ func measured(n ast.Node, tracked map[string]bool, c *carried) bool {
 				if keyed && source {
 					found = true
 				}
+			}
+		}
+		return !found
+	})
+	return found
+}
+
+var durationUnits = map[string]bool{"Nanosecond": true, "Microsecond": true, "Millisecond": true, "Second": true, "Minute": true, "Hour": true}
+
+func isFloorCall(c *ast.CallExpr) bool {
+	switch f := c.Fun.(type) {
+	case *ast.Ident:
+		return f.Name == "max" || f.Name == "min"
+	case *ast.SelectorExpr:
+		return f.Sel.Name == "Max" || f.Sel.Name == "Min"
+	}
+	return false
+}
+
+func constDuration(e ast.Expr, isMeasured func(ast.Node) bool) bool {
+	if isMeasured(e) {
+		return false
+	}
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		if sel, ok := n.(*ast.SelectorExpr); ok && durationUnits[sel.Sel.Name] {
+			if id, ok := sel.X.(*ast.Ident); ok && id.Name == "time" {
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
+}
+
+func carriesFloor(e ast.Expr, isMeasured func(ast.Node) bool) bool {
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		var ops []ast.Expr
+		switch x := n.(type) {
+		case *ast.BinaryExpr:
+			if x.Op == token.ADD || x.Op == token.SUB {
+				ops = []ast.Expr{x.X, x.Y}
+			}
+		case *ast.CallExpr:
+			if isFloorCall(x) {
+				ops = x.Args
+			}
+		}
+		for _, o := range ops {
+			if constDuration(o, isMeasured) {
+				found = true
 			}
 		}
 		return !found

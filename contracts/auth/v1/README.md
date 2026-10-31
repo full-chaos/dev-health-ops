@@ -37,6 +37,10 @@ here; the operations arrive with the routes that serve them. Rules:
 
 - A role field is a role key of the organization roles of `roles.v1`
   (viewer, member, admin, owner). A platform role is not a membership role.
+  The platform roles are `platform_admin` and `platform_owner`. `platform_owner`
+  is a marker role: it holds exactly the `platform_admin` actions and nothing
+  more, and only `auth-migrate platform-owner-grant` and `platform-owner-revoke`
+  write it (CHAOS-12294); no API route grants or revokes it.
 - `membership.v1` status is the memberships status of the auth schema:
   `invited`, `active`, `suspended`, `removed`. The provisioning event spells the
   same states differently: `invited` (event `pending`); the other three are

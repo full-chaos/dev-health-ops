@@ -276,7 +276,6 @@ Source for this section: the `disclosure_behavior` and `gaps` members of `contra
 | --- | --- |
 | Check each query-api route and GraphQL field against live behaviour. | CHAOS-11042 |
 | Explicit platform actions for the superuser-only handlers. Not in the catalog on `main`. | CHAOS-11847 |
-| Catalog the `acr.*` actions and delete the cached-action exemption. | CHAOS-10774 |
 | Replace the route levels with decisions from the policy decision point. | CHAOS-10841 |
 
 The rows in this page are as on `main`. A pending catalog change will change the action and gap text of the affected rows.

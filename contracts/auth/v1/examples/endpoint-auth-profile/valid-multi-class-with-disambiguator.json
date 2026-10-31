@@ -4,7 +4,7 @@
     "org_context_header"
   ],
   "action": "acr.context.read",
-  "cache_class": "decision_bound",
+  "cache_class": "resource_revision_bound",
   "class_disambiguator": {
     "kind": "dedicated_header",
     "name": "X-Org-Id"

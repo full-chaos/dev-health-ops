@@ -424,6 +424,28 @@ func (r *flowRun) method(c *ast.CallExpr, sel *ast.SelectorExpr, i int, field st
 		}
 	}
 	if len(decls) == 0 {
+		if r.isBuilder(c, sel.X) {
+			switch sel.Sel.Name {
+			case "WriteString", "WriteRune", "WriteByte", "Write":
+				if i < 0 {
+					return false // writing into a builder that holds the value reads nothing
+				}
+				if id, ok := sel.X.(*ast.Ident); ok {
+					return r.variable(id.Name, c, "", false, ret, depth)
+				}
+				return true
+			case "String", "Bytes":
+				if i < 0 {
+					r.composed = true
+					return r.expr(c, "", false, ret, depth)
+				}
+			case "Len", "Cap", "Reset", "Grow", "Truncate":
+				if i < 0 {
+					return false
+				}
+			}
+			return true
+		}
 		recv := ""
 		switch x := sel.X.(type) {
 		case *ast.Ident:
@@ -437,6 +459,25 @@ func (r *flowRun) method(c *ast.CallExpr, sel *ast.SelectorExpr, i int, field st
 		return true
 	}
 	return r.into(decls, c, i, field, mapKey, ret, depth)
+}
+
+// isBuilder reports whether e is a variable of type strings.Builder or bytes.Buffer.
+func (r *flowRun) isBuilder(c *ast.CallExpr, e ast.Expr) bool {
+	id, ok := ast.Unparen(e).(*ast.Ident)
+	if !ok {
+		return false
+	}
+	t, ok := r.typeOf(id, 0).(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	pkg, ok := t.X.(*ast.Ident)
+	s := r.file(c)
+	if !ok || s == nil {
+		return false
+	}
+	imp := s.imports[pkg.Name]
+	return imp == "strings" && t.Sel.Name == "Builder" || imp == "bytes" && t.Sel.Name == "Buffer"
 }
 
 // into follows the value into the parameter for argument i (the receiver for i < 0) of each declaration.

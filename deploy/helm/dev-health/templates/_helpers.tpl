@@ -1054,7 +1054,7 @@ the trust domain and cluster issuer named, the API server an https origin, and a
 {{- if not $k.to }}{{- fail "authService.networkPolicy.egress.kubeAPI.to is required while authService.workloadExchange.enabled: without it the policy cuts auth-service off from the API server and every exchange fails" }}{{- end -}}
 {{- range $i, $peer := $k.to }}{{- if not (and (kindIs "map" $peer) (gt (len $peer) 0)) }}{{- fail (printf "authService.networkPolicy.egress.kubeAPI.to[%d] must be a non-empty NetworkPolicy peer (podSelector, namespaceSelector or ipBlock): an empty peer admits every destination" $i) }}{{- end }}{{- end -}}
 {{- $port := $k.port -}}
-{{- if or (not (or (kindIs "float64" $port) (kindIs "int64" $port) (kindIs "int" $port))) (ne (floor $port) $port) (lt (int $port) 1) (gt (int $port) 65535) }}{{- fail "authService.networkPolicy.egress.kubeAPI.port must be a whole number from 1 to 65535" }}{{- end -}}
+{{- if or (not (or (kindIs "float64" $port) (kindIs "int64" $port) (kindIs "int" $port))) (ne (floor $port) (float64 $port)) (lt (int $port) 1) (gt (int $port) 65535) }}{{- fail "authService.networkPolicy.egress.kubeAPI.port must be a whole number from 1 to 65535" }}{{- end -}}
 {{- end -}}
 true
 {{- end -}}

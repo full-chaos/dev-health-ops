@@ -249,8 +249,7 @@ Source: `contracts/auth/v1/endpoint-profiles.auth-service.json`. The OpenAPI doc
 | Actor chain, delegation limits and obligations in the decision point. | CHAOS-10839 |
 | Delegated (impersonation) session with an actor chain. | CHAOS-10987 |
 | Explicit platform actions for the superuser-inherited sites (`admin.billing`, `admin.flags`, `admin.audit`, `admin.impersonate`, `admin.telemetry`, `admin.stats`). Not in the catalog on `main`. | CHAOS-11847 |
-| Catalog entries for the `acr.*` actions, and removal of the cached-action exemption. | CHAOS-10774 |
 | Server actions and route handlers in web use single decisions. | CHAOS-10883 |
 | Check of the query-api rows and the GraphQL map against live behaviour. | CHAOS-11042 |
 
-The catalog described here is version 3. Changes from the tickets above will change the version. Check `contracts/auth/v1/vocabulary/actions.v1.json` for the current one.
+The catalog described here is version 4. Changes from the tickets above will change the version. Check `contracts/auth/v1/vocabulary/actions.v1.json` for the current one.

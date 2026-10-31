@@ -95,14 +95,31 @@ drill_attempt() { # port, phase, optional NAME=value...
   local port="$1" phase="$2"
   shift 2
   (
-    # shellcheck disable=SC2031 # each subshell sets its own copy on purpose
+    # shellcheck disable=SC2030,SC2031 # each subshell sets its own copy on purpose
     export DRILL_ATTEMPT_PHASE="$phase" DRILL_EVIDENCE_DIR="$evidence"
-    # shellcheck disable=SC2031
+    # shellcheck disable=SC2030,SC2031
     export DRILL_DSN="postgres://postgres:${POSTGRES_PASSWORD}@127.0.0.1:${port}/postgres?sslmode=disable"
     # shellcheck disable=SC2163 # each argument is a NAME=value assignment; a bare export would print the environment
     if (($#)); then export "$@"; fi
     "$capped" -t 600 -- "$DRILL_DIR/drill.test" -test.run '^TestDrillAuthAttempt$' -test.count=1 -test.v \
       >>"$evidence/driver-attempt-$phase.log" 2>&1
+  )
+}
+
+# drill_password runs the password driver (TestDrillAuthPassword, CHAOS-11834): after a restore, the password a user had
+# before T, and the one it set after T, must not log in on a fenced copy. Same environment rules as drill().
+drill_password() { # port, phase, optional NAME=value...
+  local port="$1" phase="$2"
+  shift 2
+  (
+    # shellcheck disable=SC2031 # each subshell sets its own copy on purpose
+    export DRILL_PASSWORD_PHASE="$phase" DRILL_EVIDENCE_DIR="$evidence"
+    # shellcheck disable=SC2031
+    export DRILL_DSN="postgres://postgres:${POSTGRES_PASSWORD}@127.0.0.1:${port}/postgres?sslmode=disable"
+    # shellcheck disable=SC2163 # each argument is a NAME=value assignment; a bare export would print the environment
+    if (($#)); then export "$@"; fi
+    "$capped" -t 600 -- "$DRILL_DIR/drill.test" -test.run '^TestDrillAuthPassword$' -test.count=1 -test.v \
+      >>"$evidence/driver-password-$phase.log" 2>&1
   )
 }
 
@@ -242,10 +259,12 @@ dc exec -T src pg_basebackup -U postgres -D /backup/base -Fp -X stream -c fast
 log "S3 writes B, snapshot T, writes C after T, snapshot F"
 drill "$port_src" write DRILL_LABEL=B
 drill_attempt "$port_src" seed # a workload with a live bootstrap credential per case, before T
+drill_password "$port_src" seed # an auth-service user and a go-api user, each with a password, before T
 drill "$port_src" snapshot DRILL_LABEL=T
 sleep 3
 drill "$port_src" write DRILL_LABEL=C
 drill_attempt "$port_src" revoke # after T: revoke one credential, disable one principal
+drill_password "$port_src" change # after T: both users change the password
 drill "$port_src" snapshot DRILL_LABEL=F
 last_lsn="$(psql_in src 'select pg_current_wal_lsn()')"
 psql_in src 'select pg_switch_wal()' >/dev/null
@@ -277,6 +296,7 @@ if [[ "$fence_mode" -eq 1 ]]; then
   # the manifest is exported BEFORE any new write on the shadow copy
   fence "$port_latest" export -out "$evidence/fence-manifest.json" >"$evidence/fence-export.txt" || result=1
   drill_attempt "$port_latest" attempt DRILL_EXPECT=F DRILL_LABEL=shadow || result=1
+  drill_password "$port_latest" attempt DRILL_EXPECT=F DRILL_LABEL=shadow || result=1
   drill "$port_latest" post DRILL_EXPECT=F DRILL_FINAL=F || result=1
   dc --profile latest stop latest
 
@@ -308,6 +328,8 @@ if [[ "$fence_mode" -eq 1 ]]; then
   [[ "$(psql_in pitr 'show default_transaction_read_only')" == "off" ]] || { echo "drill-auth-pitr.sh: the read-only default was not reset" >&2; result=1; }
   # the revoked credential and the disabled principal must be refused by the real verifier on the fenced copy
   drill_attempt "$port_pitr" attempt DRILL_EXPECT=T DRILL_LABEL=pitr DRILL_FENCE=1 || result=1
+  # the password changed after T: the old and the new password are both refused (the restored hash is cleared)
+  drill_password "$port_pitr" attempt DRILL_EXPECT=T DRILL_LABEL=pitr DRILL_FENCE=1 || result=1
   drill "$port_pitr" post DRILL_EXPECT=T DRILL_FINAL=F DRILL_FENCE=1 || result=1
   # the apply must have re-applied at least one revocation (a credential and a principal created before T and removed
   # after it), and the rows the PITR copy lacks must be exactly the ones apply reported as absent (it cannot
@@ -318,6 +340,17 @@ if [[ "$fence_mode" -eq 1 ]]; then
   post_absent="$(jq -r '.absent_after_restore' "$evidence/post-T.json" 2>/dev/null || echo n/a)"
   { [[ "$reapplied" =~ ^[0-9]+$ ]] && [[ "$reapplied" -ge 1 ]]; } || { echo "drill-auth-pitr.sh: apply re-applied $reapplied revocation(s), want at least 1" >&2; result=1; }
   [[ "$apply_absent" == "$post_absent" ]] || { echo "drill-auth-pitr.sh: absent rows: apply reported $apply_absent, the driver counted $post_absent" >&2; result=1; }
+  # the users the apply names for a forced reset (auth.users.password and public.users.password) must be exactly the two
+  # users whose password the drill changed after T
+  reset_ids="$(jq -r '[.actions[]? | select(.kind == "force_password_reset" and (.source == "auth.users.password" or .source == "public.users.password")) | .ids[]] | unique | .[]' <<<"$apply_json" 2>/dev/null || echo n/a)"
+  want_ids="$(jq -r 'sort | .[]' "$evidence/drill-password-ids.json" 2>/dev/null || echo n/a)"
+  if [[ -n "$want_ids" && "$reset_ids" == "$want_ids" ]]; then
+    reset_required="$(grep -c . <<<"$reset_ids")"
+  else
+    reset_required=0
+    echo "drill-auth-pitr.sh: force_password_reset names [$(tr '\n' ' ' <<<"$reset_ids")], want exactly the two users whose password changed after T" >&2
+    result=1
+  fi
   dc --profile pitr stop pitr
 else
 log "S4 PITR to $t_target"
@@ -328,6 +361,7 @@ wait_promoted pitr
 drill "$port_pitr" verify DRILL_EXPECT=T DRILL_MODE=exact || result=1
 drill "$port_pitr" verify DRILL_EXPECT=A DRILL_MODE=atleast || result=1
 drill_attempt "$port_pitr" attempt DRILL_EXPECT=T DRILL_LABEL=pitr || result=1 # the unfenced copy must accept both secrets (the gap); a drill that does not reproduce it fails
+drill_password "$port_pitr" attempt DRILL_EXPECT=T DRILL_LABEL=pitr || result=1 # the old passwords log in again (the gap); a drill that does not reproduce it fails
 drill "$port_pitr" post DRILL_EXPECT=T DRILL_FINAL=F || result=1
 dc --profile pitr stop pitr
 
@@ -338,6 +372,7 @@ dc --profile latest up -d --wait latest
 wait_promoted latest
 drill "$port_latest" verify DRILL_EXPECT=F DRILL_MODE=exact || result=1
 drill_attempt "$port_latest" attempt DRILL_EXPECT=F DRILL_LABEL=shadow || result=1
+drill_password "$port_latest" attempt DRILL_EXPECT=F DRILL_LABEL=shadow || result=1
 drill "$port_latest" post DRILL_EXPECT=F DRILL_FINAL=F || result=1
 dc --profile latest stop latest
 
@@ -350,14 +385,25 @@ guard_summary_no_secrets
 # (b) revokes after T that came back and (c) keys re-issued with different content = GAP.
 pitr_b="$(jq -r '.revokes_after_target_that_came_back' "$evidence/post-T.json" 2>/dev/null || echo n/a)"
 pitr_c="$(jq -r '.keys_reissued_with_different_content' "$evidence/post-T.json" 2>/dev/null || echo n/a)"
+# (p) users whose password from before T still logs in on the T copy: GAP unfenced, 0 required fenced. (r) users the apply
+# named for a forced reset, with their restored hash cleared: 2 required fenced, 0 unfenced.
+pitr_p="$(jq -r '.old_password_accepted' "$evidence/attempt-password-T-pitr.json" 2>/dev/null || echo n/a)"
+if [[ "$fence_mode" -eq 1 ]]; then
+  { [[ "$pitr_p" == 0 ]] && [[ "${reset_required:-0}" == 2 ]]; } || { echo "drill-auth-pitr.sh: fenced: passwords-after-T-back=$pitr_p reset-required=${reset_required:-0}, want 0 and 2" >&2; result=1; }
+else
+  reset_required=0
+fi
 verdict=PASS
 if [[ "$result" -ne 0 ]]; then
   verdict=FAIL
-elif [[ "$pitr_b" -ne 0 || "$pitr_c" -ne 0 ]]; then
+elif [[ "$pitr_b" -ne 0 || "$pitr_c" -ne 0 || "$pitr_p" -ne 0 ]]; then
   verdict=GAP
 fi
 attempt_pitr="$(jq -r '.revoked_access_accepted' "$evidence/attempt-T-pitr.json" 2>/dev/null || echo n/a)"
 printf 'AUTH ATTEMPT on the restored copy: revoked or disabled secrets accepted=%s of 2 (fenced must be 0; the unfenced baseline shows the gap)\n' "$attempt_pitr" | tee -a "$evidence/summary.txt"
-printf 'DRILL RESULT: %s (b revokes-after-T-back=%s, c reissued-different=%s)\n' "$verdict" "$pitr_b" "$pitr_c" | tee -a "$evidence/summary.txt"
+pw_old="$pitr_p"
+pw_new="$(jq -r '.new_password_accepted' "$evidence/attempt-password-T-pitr.json" 2>/dev/null || echo n/a)"
+printf 'AUTH PASSWORD on the restored copy: old password accepted=%s of 2, new password accepted=%s of 2 (fenced must be 0 and 0; the unfenced baseline shows the gap)\n' "$pw_old" "$pw_new" | tee -a "$evidence/summary.txt"
+printf 'DRILL RESULT: %s (b revokes-after-T-back=%s, c reissued-different=%s, p passwords-after-T-back=%s, r reset-required=%s)\n' "$verdict" "$pitr_b" "$pitr_c" "$pitr_p" "$reset_required" | tee -a "$evidence/summary.txt"
 guard_summary_no_secrets
 [[ "$verdict" != FAIL ]]

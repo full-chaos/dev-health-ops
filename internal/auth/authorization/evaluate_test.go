@@ -114,6 +114,8 @@ func TestEvaluate_EveryCatalogActionByEveryRole(t *testing.T) {
 				req = orgRequest(a.Action)
 			case "platform":
 				req = platformRequest(a.Action)
+			case "repository":
+				req = Request{Action: a.Action, ResourceKind: "repository", OrganizationID: testOrg}
 			default:
 				t.Fatalf("action %s has resource kind %q", a.Action, a.ResourceKind)
 			}
@@ -159,7 +161,7 @@ func TestEvaluate_PlatformRoleNeverSatisfiesOrgAction(t *testing.T) {
 			continue
 		}
 		for _, a := range actions {
-			if a.Scope != "organization" {
+			if a.Scope != "organization" || a.ResourceKind != "organization" {
 				continue
 			}
 			s := orgSnapshot("")
@@ -208,7 +210,7 @@ func TestEvaluate_UnknownActionDenies(t *testing.T) {
 		known[a.Action] = true
 	}
 	e := NewEvaluator()
-	for _, a := range []string{"", "admin", "*", "org.*", "ORG.READ", "org.read ", "org.read\n", "org.fly", "billing.fly", "acr.context.read", "superuser.all"} {
+	for _, a := range []string{"", "admin", "*", "org.*", "ORG.READ", "org.read ", "org.read\n", "org.fly", "billing.fly", "acr.context.write", "superuser.all"} {
 		if known[a] {
 			t.Fatalf("%q is in the catalog; pick another unknown", a)
 		}
@@ -584,5 +586,31 @@ func TestEvaluate_EveryDenyPathCarriesTheCatalogVersion(t *testing.T) {
 		if got.Allowed || got.PolicyRevision != 0 {
 			t.Errorf("%s: %+v", name, got)
 		}
+	}
+}
+
+// The evaluator serves organization and platform requests only; a repository-kind action is in the catalog but no role holds it, so every request for it denies.
+func TestEvaluate_RepositoryKindActionDeniesForEveryRole(t *testing.T) {
+	actions, roles, _ := vocab(t)
+	e := NewEvaluator()
+	seen := 0
+	for _, a := range actions {
+		if a.ResourceKind != "repository" {
+			continue
+		}
+		seen++
+		req := Request{Action: a.Action, ResourceKind: "repository", OrganizationID: testOrg}
+		for _, r := range roles {
+			snap := orgSnapshot(r.Role)
+			if r.Scope == "platform" {
+				snap = platformSnapshot(r.Role)
+			}
+			if got := e.Evaluate(req, snap); got.Allowed || got.Reason != ReasonInvalidRequest {
+				t.Errorf("role %s on %s: %+v", r.Role, a.Action, got)
+			}
+		}
+	}
+	if seen == 0 {
+		t.Error("the catalog holds no repository-kind action")
 	}
 }

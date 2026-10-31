@@ -9,12 +9,17 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"go.opentelemetry.io/otel"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/tracing"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
 // stopBoundBudget is the shutdown budget the helper runs under: one second under
@@ -173,4 +178,56 @@ func stopDriven(t *testing.T, command *exec.Cmd, ceiling time.Duration) string {
 		t.Fatalf("the process did not exit within the %v ceiling after the stop request; output:\n%s", ceiling, output.String())
 	}
 	return output.String()
+}
+
+// containerStopGrace is the grace the container smoke gives a stopping container (docker stop --time 5). A literal on
+// purpose: the script cell below proves the script still says it.
+const containerStopGrace = 5 * time.Second
+
+// stopBoundSumContract is the sum of the final-flush bounds the shell stop runs: the tracing bound plus
+// metricsFlushTimeout. A literal on purpose: raising either bound, even inside the budget, turns the cell red until this
+// number and stopBoundBudget are changed on purpose together.
+const stopBoundSumContract = 3 * time.Second
+
+func TestTheSummedFlushBoundsStayInsideTheStopBudgetAndTheContainerGrace(t *testing.T) {
+	sum := tracing.ShutdownFlushTimeout + metricsFlushTimeout
+	if sum != stopBoundSumContract {
+		t.Errorf("tracing %v + metrics %v = %v, want the contract %v: change both on purpose, with the stop budget", tracing.ShutdownFlushTimeout, metricsFlushTimeout, sum, stopBoundSumContract)
+	}
+	if sum >= stopBoundBudget {
+		t.Errorf("the flush bounds sum to %v, want less than the stop budget %v", sum, stopBoundBudget)
+	}
+	if stopBoundBudget >= containerStopGrace {
+		t.Errorf("the stop budget %v is not under the container grace %v", stopBoundBudget, containerStopGrace)
+	}
+}
+
+func TestEveryContainerSmokeStopGivesTheContractedGrace(t *testing.T) {
+	root, err := moduleroot.Root()
+	if err != nil {
+		t.Fatal(err)
+	}
+	script, err := os.ReadFile(filepath.Join(root, "ci", "check_go_containers.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := regexp.MustCompile(`docker stop --time ([0-9]+) `)
+	found := 0
+	for _, line := range strings.Split(string(script), "\n") {
+		if !strings.Contains(line, "docker stop") {
+			continue
+		}
+		match := stop.FindStringSubmatch(line)
+		if match == nil {
+			t.Errorf("a docker stop line without --time N: %q", line)
+			continue
+		}
+		found++
+		if seconds, _ := strconv.Atoi(match[1]); time.Duration(seconds)*time.Second != containerStopGrace {
+			t.Errorf("docker stop grace is %ss, want %v: %q", match[1], containerStopGrace, line)
+		}
+	}
+	if found == 0 {
+		t.Error("no docker stop line found in ci/check_go_containers.sh")
+	}
 }

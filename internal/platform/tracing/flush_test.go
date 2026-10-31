@@ -191,3 +191,13 @@ func TestACancelledCallerOnAFreshComponentIsNotReportedAsAnOutage(t *testing.T) 
 		t.Errorf("a cancelled caller was reported as an unreachable collector:\n%s", logs.String())
 	}
 }
+
+// flushBoundContract is the tracing final-flush bound the shell stop budget is built on (shell stop_bound_test.go). A
+// literal on purpose: raising the bound alone turns this red.
+const flushBoundContract = 2 * time.Second
+
+func TestFlushBoundContract(t *testing.T) {
+	if ShutdownFlushTimeout != flushBoundContract {
+		t.Fatalf("ShutdownFlushTimeout = %v, want the contract %v: change both on purpose, with the stop budget", ShutdownFlushTimeout, flushBoundContract)
+	}
+}

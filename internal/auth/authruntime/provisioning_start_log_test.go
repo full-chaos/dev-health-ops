@@ -79,6 +79,11 @@ func TestAMissingProvisioningRowNamesTheRouteInTheStartLog(t *testing.T) {
 		authconfig.EnvLogLevel:       "warn",
 	}))
 	entry, logs := startLogEntry(t, env)
+	for _, value := range []string{"probe-invite-signing-key", "probe-invite-previous-key", "127.0.0.1:1", "/nonexistent", "start-log-test"} {
+		if strings.Contains(logs, value) {
+			t.Fatalf("the start log carries a configured value %q; log:\n%s", value, logs)
+		}
+	}
 	if entry["level"] != "ERROR" {
 		t.Fatalf("start log level=%v, want ERROR; log:\n%s", entry["level"], logs)
 	}
@@ -93,9 +98,13 @@ func TestAMissingProvisioningRowNamesTheRouteInTheStartLog(t *testing.T) {
 	if len(classes) != 1 || classes[0] != "internal_svc_authsess_token" {
 		t.Fatalf("start log required_classes=%v, want [internal_svc_authsess_token]; log:\n%s", entry["required_classes"], logs)
 	}
-	for _, secret := range []string{"probe-invite-signing-key", "probe-invite-previous-key"} {
-		if strings.Contains(logs, secret) {
-			t.Fatalf("the start log carries a secret value; log:\n%s", logs)
+	// The line holds exactly these fields: names only, so no future detail can
+	// add a value to it unnoticed.
+	allowed := map[string]bool{"time": true, "level": true, "msg": true, "error_category": true, "reason": true,
+		"route": true, "required_classes": true}
+	for key := range entry {
+		if !allowed[key] {
+			t.Fatalf("start log carries an unexpected field %q; log:\n%s", key, logs)
 		}
 	}
 }

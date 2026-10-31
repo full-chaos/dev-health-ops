@@ -64,6 +64,7 @@ internal/auth/contracts	credential_goldens_test.go
 internal/auth/contracts	credential_refusal_test.go
 internal/auth/contracts	discovery_goldens_test.go
 internal/auth/contracts	endpoint_auth_profile_goldens_test.go
+internal/auth/contracts	endpoint_auth_profile_grant_type_name_test.go
 internal/auth/contracts	endpoint_auth_profile_selector_gate.go
 internal/auth/contracts	endpoint_auth_profile_selector_gate_test.go
 internal/auth/contracts	endpoint_auth_profile_vocabulary_test.go

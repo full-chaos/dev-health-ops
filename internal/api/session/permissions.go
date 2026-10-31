@@ -1,5 +1,7 @@
 package session
 
+import "github.com/full-chaos/dev-health-ops/internal/api/policy"
+
 // standardPermissions is models/users.py STANDARD_PERMISSIONS' names, in
 // declaration order.
 var standardPermissions = []string{
@@ -56,7 +58,8 @@ func inOrder(held map[string]bool) []string {
 // target role, else every permission for a superuser, else the role's.
 // Python returns list(set), whose order depends on the process's string
 // hash seed; this returns standardPermissions order.
-func userPermissions(targetRole *string, isSuperuser bool, role string) []string {
+func userPermissions(targetRole *string, user *policy.User) []string {
+	role, isSuperuser := user.Role, user.IsSuperuser
 	if targetRole != nil {
 		return rolePermissions(*targetRole)
 	}

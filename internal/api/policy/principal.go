@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 )
 
 // User is api/services/auth.py AuthenticatedUser after
@@ -26,8 +27,11 @@ type User struct {
 	// OrgID is the "org_id" claim, "" when absent or null.
 	OrgID string
 	// Role is the "role" claim ("member" when absent, "" when null).
-	Role           string
-	IsSuperuser    bool
+	Role        string
+	IsSuperuser bool
+	// Platform is the platform action set the caller holds when it is not
+	// the one IsSuperuser means; nil is a caller that carries only the flag.
+	Platform       *rule.Platform
 	Username       *string
 	FullName       *string
 	ImpersonatedBy *string
@@ -39,6 +43,11 @@ type User struct {
 	// Python truthiness; accessToken marks a user access token.
 	superuserClaim bool
 	accessToken    bool
+}
+
+// Holds reports whether the caller holds the platform action now.
+func (u *User) Holds(action string) bool {
+	return rule.Holds(u.Platform, u.IsSuperuser, action)
 }
 
 // IsAdmin is AuthenticatedUser.is_admin.

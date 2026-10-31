@@ -37,15 +37,21 @@ var AuthOutcomeReasonCodes = []string{
 
 // Session is one session.v1 document, validated and parsed.
 type Session struct {
-	SchemaVersion string     `json:"schema_version"`
-	SessionID     string     `json:"session_id"`
-	PrincipalID   string     `json:"principal_id"`
-	Revision      Revision   `json:"revision"`
-	AuthTime      Timestamp  `json:"auth_time"`
-	AMR           []string   `json:"amr"`
-	CreatedAt     Timestamp  `json:"created_at"`
-	ExpiresAt     Timestamp  `json:"expires_at"`
-	RevokedAt     *Timestamp `json:"revoked_at"`
+	SchemaVersion string             `json:"schema_version"`
+	SessionID     string             `json:"session_id"`
+	PrincipalID   string             `json:"principal_id"`
+	Revision      Revision           `json:"revision"`
+	AuthTime      Timestamp          `json:"auth_time"`
+	AMR           []string           `json:"amr"`
+	CreatedAt     Timestamp          `json:"created_at"`
+	ExpiresAt     Timestamp          `json:"expires_at"`
+	RevokedAt     *Timestamp         `json:"revoked_at"`
+	Delegation    *SessionDelegation `json:"-"`
+}
+
+// SessionDelegation is a stub of the cells' commit.
+type SessionDelegation struct {
+	ActorPrincipalID string
 }
 
 // SecretString holds a credential. It is a struct, not a named string: a

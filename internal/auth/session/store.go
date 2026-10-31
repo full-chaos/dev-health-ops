@@ -77,9 +77,10 @@ type Config struct {
 	RefreshTTL time.Duration
 	// SessionLifetime is an optional absolute session lifetime; 0 means no cap
 	// (go-api parity). With a cap, a credential never outlives its session.
-	SessionLifetime time.Duration
-	Logger          *slog.Logger
-	UsersOwned      bool // AUTH_USERS_OWNED: a sign-in stamps public.users.last_login_at
+	SessionLifetime    time.Duration
+	Logger             *slog.Logger
+	UsersOwned         bool // AUTH_USERS_OWNED: a sign-in stamps public.users.last_login_at
+	PlatformRolesOwned bool
 	// Meter registers the exchange and revocation counters; nil uses the
 	// process meter.
 	Meter metric.Meter
@@ -159,6 +160,7 @@ type Record struct {
 	// LegacyTokenVersion is public.users.token_version when the session was
 	// created; nil on a session row older than migration 0016.
 	LegacyTokenVersion *int64
+	Delegation         *Delegation
 }
 
 // Wire is the session.v1 document of the record.

@@ -242,7 +242,18 @@ var offStreamReasons = map[string]bool{
 // the parameterised case at the server, and it was wrongly credited here as the
 // control until that claim was measured.
 
-type TxOps struct{ tx pgx.Tx }
+type TxOps struct {
+	tx    pgx.Tx
+	queue *auditQueue
+}
+
+type auditQueue struct {
+	events []AuditEvent
+	closed bool
+}
+
+// AddAudit is a stub of the cells' commit.
+func (t TxOps) AddAudit(...AuditEvent) error { return nil }
 
 // EVERY forward carries pgx.QueryExecModeExec, and that is a second control
 // rather than a performance choice.

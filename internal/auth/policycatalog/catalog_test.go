@@ -113,7 +113,7 @@ func TestScopesDoNotMix(t *testing.T) {
 }
 
 func TestLoadRefusesMalformedCatalogs(t *testing.T) {
-	const okA = `{"schema_version":"actions.v1","catalog_version":1,"description":"d","actions":[{"action":"a.b","scope":"organization","resource_kind":"organization","risk_class":"low","cache_class":"decision_bound"},{"action":"a.c","scope":"organization","resource_kind":"organization","risk_class":"low","cache_class":"decision_bound"}]}`
+	const okA = `{"schema_version":"actions.v1","catalog_version":1,"description":"d","actions":[{"action":"a.b","scope":"organization","resource_kind":"organization","risk_class":"low","cache_class":"decision_bound","impersonation":"denied"},{"action":"a.c","scope":"organization","resource_kind":"organization","risk_class":"low","cache_class":"decision_bound","impersonation":"denied"}]}`
 	const okR = `{"schema_version":"roles.v1","catalog_version":1,"description":"d","roles":[{"role":"r","scope":"organization","actions":["a.b"]}]}`
 	if _, err := Load([]byte(okA), []byte(okR)); err != nil {
 		t.Fatalf("well-formed catalog refused: %v", err)
@@ -165,7 +165,7 @@ func TestEveryEmbeddedActionHasARiskAndCacheClassAndHighRiskIsNeverCached(t *tes
 }
 
 func TestLoadRefusesARoleHoldingEveryAction(t *testing.T) {
-	a := `{"schema_version":"actions.v1","catalog_version":1,"description":"d","actions":[{"action":"a.b","scope":"organization","resource_kind":"organization","risk_class":"low","cache_class":"decision_bound"},{"action":"a.c","scope":"organization","resource_kind":"organization","risk_class":"low","cache_class":"decision_bound"}]}`
+	a := `{"schema_version":"actions.v1","catalog_version":1,"description":"d","actions":[{"action":"a.b","scope":"organization","resource_kind":"organization","risk_class":"low","cache_class":"decision_bound","impersonation":"denied"},{"action":"a.c","scope":"organization","resource_kind":"organization","risk_class":"low","cache_class":"decision_bound","impersonation":"denied"}]}`
 	r := `{"schema_version":"roles.v1","catalog_version":1,"description":"d","roles":[{"role":"r","scope":"organization","actions":["a.b","a.c"]}]}`
 	if _, err := Load([]byte(a), []byte(r)); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("err = %v, want ErrInvalid", err)
@@ -362,6 +362,63 @@ func TestCatalogHoldsTheBillingAndLicenseActions(t *testing.T) {
 		sort.Strings(got)
 		if strings.Join(got, ",") != strings.Join(holders[id], ",") {
 			t.Errorf("action %s is held by %v, want %v", id, got, holders[id])
+		}
+	}
+}
+
+func TestImpersonationIsDeniedOnTheG51List(t *testing.T) {
+	want := map[string]bool{
+		"admin.users": true, "admin.orgs": true, "admin.impersonate": true, "members.invite": true, "members.manage": true,
+		"org.write": true, "org.delete": true, "billing.manage": true, "settings.write": true, "integrations.write": true,
+	}
+	actions := Default().Actions()
+	if len(actions) != 26 {
+		t.Fatalf("%d actions, want 26", len(actions))
+	}
+	for _, a := range actions {
+		denied := a.Impersonation == ImpersonationDenied
+		if denied != want[a.ID] {
+			t.Errorf("%s impersonation = %s", a.ID, a.Impersonation)
+		}
+	}
+}
+
+func TestLoadRefusesAnActionWithNoImpersonationValue(t *testing.T) {
+	const roles = `{"schema_version":"roles.v1","catalog_version":1,"description":"d","roles":[{"role":"r","scope":"organization","actions":["a.b"]}]}`
+	for name, member := range map[string]string{"missing": ``, "unknown": `,"impersonation":"maybe"`, "empty": `,"impersonation":""`} {
+		actions := `{"schema_version":"actions.v1","catalog_version":1,"description":"d","actions":[{"action":"a.b","scope":"organization","resource_kind":"organization","risk_class":"low","cache_class":"none"` + member + `}]}`
+		if _, err := Load([]byte(actions), []byte(roles)); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: Load = %v, want ErrInvalid", name, err)
+		}
+	}
+}
+
+func TestOnlyThePlatformAdminRoleHoldsImpersonate(t *testing.T) {
+	got := Default().RolesHolding("admin.impersonate", ScopePlatform)
+	if len(got) != 1 || got[0] != "platform_admin" {
+		t.Fatalf("roles holding admin.impersonate = %v", got)
+	}
+	if got := Default().RolesHolding("admin.impersonate", ScopeOrganization); len(got) != 0 {
+		t.Fatalf("organization roles holding admin.impersonate = %v", got)
+	}
+}
+
+func TestDelegatedActionsAreTheAllowedActionsOfAnOrganizationRole(t *testing.T) {
+	got, err := Default().DelegatedActions("owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) == 0 {
+		t.Fatal("owner permits no delegated action")
+	}
+	for _, id := range got {
+		if a, err := Default().Action(id); err != nil || a.Impersonation != ImpersonationAllowed {
+			t.Errorf("owner delegated action %s: %+v, %v", id, a, err)
+		}
+	}
+	for _, role := range []string{"platform_admin", "custom", ""} {
+		if _, err := Default().DelegatedActions(role); !errors.Is(err, ErrUnknownRole) {
+			t.Errorf("DelegatedActions(%q) = %v, want ErrUnknownRole", role, err)
 		}
 	}
 }

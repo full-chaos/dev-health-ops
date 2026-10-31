@@ -29,14 +29,18 @@ const (
 	CacheNone                  = "none"
 	CacheDecisionBound         = "decision_bound"
 	CacheResourceRevisionBound = "resource_revision_bound"
+
+	ImpersonationDenied  = "denied"
+	ImpersonationAllowed = "allowed"
 )
 
 type Action struct {
-	ID           string
-	Scope        string
-	ResourceKind string
-	RiskClass    string
-	CacheClass   string
+	ID            string
+	Scope         string
+	ResourceKind  string
+	RiskClass     string
+	CacheClass    string
+	Impersonation string
 }
 
 type Role struct {
@@ -267,6 +271,12 @@ func (c *Catalog) Role(id string) (Role, error) {
 
 // Allows is true only for a known role that lists a known action.
 func (c *Catalog) Allows(role, action string) bool { return c.grants[role][action] }
+
+// RolesHolding is a stub of the cells' commit.
+func (c *Catalog) RolesHolding(action, scope string) []string { return nil }
+
+// DelegatedActions is a stub of the cells' commit.
+func (c *Catalog) DelegatedActions(role string) ([]string, error) { return nil, nil }
 
 func (c *Catalog) Actions() []Action { return append([]Action(nil), c.actions...) }
 

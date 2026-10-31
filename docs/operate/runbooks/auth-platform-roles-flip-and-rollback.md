@@ -14,7 +14,7 @@ With `authService.platformRolesOwned: true` the chart renders `AUTH_PLATFORM_ROL
 ## Rules
 
 - Each step is one `helm upgrade`, one `dho` run or one read. Any non-zero exit means STOP and report. Do not retry in a loop.
-- Roll per service. Do not mix an image roll and a config change in one release.
+- Do not mix an image roll with this config change in one release.
 - `dho auth` verbs print counts and ids only, never an address.
 
 ## Before the flip
@@ -30,7 +30,7 @@ All of these hold:
 1. Set `authService.platformRolesOwned: true` in the deploy values. This is the only change. Upgrade.
 2. The auth-migrate hook runs first and grants the readers what they need for the switch. Wait for it to finish. Check its log.
 3. auth-service and auth-migrate must run the same ops build. Check the two image digests before the roll.
-4. Roll per service: auth-service, then go-api, then query-api. Wait for each rollout before the next.
+4. The one release rolls auth-service, go-api and query-api together. While they roll, each reader decides alone from live reads. The two authorities agree because the reconcile diff is 0, so the order of the pods does not matter for authority. Wait for all three rollouts to finish.
 5. Run `dho auth users-reconcile -platform-roles-gate` again. It must print `gated_diffs=0`.
 
 ## Token window

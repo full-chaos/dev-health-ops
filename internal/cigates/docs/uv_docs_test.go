@@ -20,6 +20,7 @@ var (
 	uvSetupPin   = regexp.MustCompile(`^astral-sh/setup-uv@[0-9a-f]{40}( #.*)?$`)
 	uvExactVer   = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
 	uvLockHash1  = "--hash=sha256:b80b99a14bd085fcacfa15c9165f651fbb3406e66cc603abf11c5750937c992d"
+	uvInstTail   = "--no-deps -r requirements-docs.txt\n"
 	uvMkdocsPref = `uv run --no-project --python "$RUNNER_TEMP/docs-venv/bin/python" mkdocs build --strict`
 	// The one build line: this prefix, `--config-file mkdocs.yml`, then only the existing tee tail.
 	uvBuildLine = regexp.MustCompile(`^uv run --no-project --python "\$RUNNER_TEMP/docs-venv/bin/python" mkdocs build --strict --config-file mkdocs\.yml( 2>&1 \| tee( -a)? \.build/[A-Za-z0-9._-]+\.log)?$`)
@@ -302,6 +303,46 @@ func TestDocsWorkflowsBuildThroughUv(t *testing.T) {
 		{"enable-cache is the string true", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, cf, "enable-cache: false", `enable-cache: "true"`)
 		}, "enable-cache"},
+		// CHAOS-10466 r2 tightening: a word scan over every run line, fail closed.
+		{"an and-list hides a uv pip install", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, cf, uvInstTail, uvInstTail+"          true && uv pip install x\n")
+		}, "not part of the chain"},
+		{"an and-list hides a uv venv", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, gd, uvInstTail, uvInstTail+"          cd . && uv venv y\n")
+		}, "not part of the chain"},
+		{"the venv pip runs by path", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, hr, uvInstTail, uvInstTail+"          \"$RUNNER_TEMP/docs-venv/bin/pip\" install x\n")
+		}, "bare pip install"},
+		{"python -m pip runs", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, cf, uvInstTail, uvInstTail+"          python -m pip install x\n")
+		}, "bare pip install"},
+		{"ensurepip runs", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, gd, uvInstTail, uvInstTail+"          python -m ensurepip\n")
+		}, "ensurepip"},
+		{"uvx runs", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, hr, uvInstTail, uvInstTail+"          uvx foo\n")
+		}, "uvx"},
+		{"uv tool install runs", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, cf, uvInstTail, uvInstTail+"          uv tool install foo\n")
+		}, "not part of the chain"},
+		{"uv add runs", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, gd, uvInstTail, uvInstTail+"          uv add foo\n")
+		}, "not part of the chain"},
+		{"uv sync runs", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, hr, uvInstTail, uvInstTail+"          uv sync\n")
+		}, "not part of the chain"},
+		{"uv run --with runs python", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, cf, uvInstTail, uvInstTail+"          uv run --with x python -c 1\n")
+		}, "not part of the chain"},
+		{"an echo of a uv pip install is refused (fail closed)", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, gd, uvInstTail, uvInstTail+"          echo uv pip install x\n")
+		}, "not part of the chain"},
+		{"UV_NO_VERIFY_HASHES is set", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, cf, "      - name: Set up uv\n", "      - name: Set up uv\n        env:\n          UV_NO_VERIFY_HASHES: '1'\n")
+		}, "NO_VERIFY_HASHES"},
+		{"--no-verify-hashes appears in a comment", func(t *testing.T, d docTree) docTree {
+			return d.appended(t, hr, "# uv pip install --no-verify-hashes\n")
+		}, "no-verify-hashes"},
 		{"enable-cache is False", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, cf, "enable-cache: false", `enable-cache: "False"`)
 		}, "enable-cache"},

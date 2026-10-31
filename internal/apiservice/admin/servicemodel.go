@@ -21,8 +21,9 @@ import (
 )
 
 // The self-service acr_service_model toggle (CHAOS-10243): an org admin on a
-// team or enterprise plan with agent_context_runtime turns ACR AI features on
-// or off for their own org. It writes the org's org_feature_overrides row,
+// team or enterprise plan with ACR (ask_dev, or the legacy
+// agent_context_runtime grant until CHAOS-12292; CHAOS-3695) turns ACR AI
+// features on or off for their own org. It writes the org's org_feature_overrides row,
 // which the acr entitlement route (internal/apiservice/acr) already serves.
 const (
 	serviceModelFeature        = "acr_service_model"

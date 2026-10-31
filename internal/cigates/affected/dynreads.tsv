@@ -621,6 +621,7 @@ internal/testsupport/authrows	golden_test.go
 internal/testsupport/authrows	responses_test.go
 internal/testsupport/bigboydir	bigboydir.go
 internal/testsupport/chschema	contract_test.go
+internal/testsupport/gitmaintcensus	census_test.go
 internal/testsupport/goldenscan	tree.go
 internal/testsupport/goldenscan	vectors_test.go
 internal/testsupport/moduleroot	moduleroot_test.go

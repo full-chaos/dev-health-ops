@@ -921,33 +921,69 @@ auth reaches it through go-api's `/api/v1/auth/*` proxy.
    tokens for this.
 4. **One key set.** The ACR-audience tokens are signed with the auth-service
    key set and issuer that the workload path uses (ACP-ADR-02 custody; CHAOS-12061
-   sets the prod issuer). No second key set and no second issuer.
+   sets the prod issuer). No second key set and no second issuer. The issuer is
+   configured independently of the web token class: the web login token stays
+   `hs256_compat` while the shared issuer is set.
 5. **Each MCP client gets its own ACP session at authorize.** It never shares
-   the web session's `sid`, so a web logout, an idle expiry or an organization
-   switch does not end it; its own revoke, the user's revoke-all, or a password
-   change does. The browser client's session follows the web session.
-6. **A valid signature is not a live session.** ACR keeps the per-call access
-   read (session, membership, flags, scope) on every call (ACP-ADR-08; the Ask
-   Dev access read).
-7. **The CLI device flow stays on ACR in the first cut.** It moves to ACP later
+   the web session's `sid`. Its lifecycle:
+   - A web logout or an organization switch ends the browser client's
+     authority only. It does not end an MCP client's session, and neither does
+     the web session's idle expiry.
+   - Revoking an OAuth client ends that client's refresh family and session.
+   - The user's revoke-all, a password change and an account-security event
+     end every session of the user, MCP clients included.
+   - An MCP client session has its own explicit idle and absolute lifetime (a
+     new `sid` alone is still under the session store's idle rule); the values
+     are set with the token endpoint, not here.
+   - The browser client's binding to the web session is checked server-side,
+     not left to the browser sending a revoke.
+   - Every client session keeps the organization and token-version pin that
+     the live access read checks.
+6. **OAuth refresh credentials are their own credential purpose.** They are
+   bound to the client, the resource and the session. The platform refresh
+   routes refuse them, and the OAuth token endpoint refuses platform refresh
+   credentials. An authorization code is single use, consumed atomically, and
+   bound to the client, the redirect URI, the PKCE challenge and the resource.
+7. **The client class is a server-side fact that reaches ACR** (decision 5(b)
+   of the direct-to-ACR design). It is recorded at authorize from the trusted
+   client registry, never from client-supplied metadata, and it travels to
+   ACR with the authenticated call, so an MCP client can never act with
+   browser authority: it cannot ask for the browser resource, read the user's
+   browser history, or reach a non-MCP operation. The first-party browser
+   client's no-consent status (decision 2) also comes from that registry.
+8. **A valid signature is not a live session.** ACR keeps the per-call access
+   read (session, membership, flags, scope, impersonation) on every call
+   (ACP-ADR-08; the Ask Dev access read), and enforces its answer: a token
+   minted before an impersonation began is refused once it has begun.
+9. **The CLI device flow stays on ACR in the first cut.** It moves to ACP later
    (an RFC 8628 device grant), as its own ticket.
-8. **acr-mcp never passes a client token to acr-api.** It calls acr-api on its
-   authenticated hop with the verified principal.
-9. **The public surface is designed before it is built** (CHAOS-12247): the
-   route (a go-api proxy aggregate, or a dedicated host), the issuer URL,
-   rate limits, CORS, and the SSRF guards of client-ID metadata fetches.
+10. **acr-mcp never passes a client token to acr-api.** It calls acr-api on
+    its authenticated hop with the verified principal: subject, organization,
+    `sid` and the MCP client class, bound against replay and to its one
+    destination. An exchange of the `acr-mcp` token at ACP is excluded, because
+    every platform verifier, auth-service included, refuses that audience
+    (ACP-ADR-08 amendment, condition 1). acr-mcp gets no platform workload
+    credential either (G-43).
+11. **The public surface is designed before it is built** (CHAOS-12247): the
+    route (a go-api proxy aggregate, or a dedicated host), the issuer URL,
+    rate limits, CORS, and the SSRF guards of client-ID metadata fetches.
 
 ### Supersedes
 
-D6524 and D6525 (CHAOS-12069) for the browser and MCP clients. ACR's own
+D6524 and D6525 (CHAOS-12069) for the browser and MCP clients. For MCP OAuth
+clients, decision 5(a) of the direct-to-ACR design ("row-only" MCP
+credentials) is superseded too: the client's own ACP session and grant replace
+the `fcacr_` row as the credential authority, and the live per-call check
+stays. The device credentials stay row-only on ACR. ACR's own
 authorization server keeps the device flow, and its browser and MCP user paths
 retire only after a dual-accept window.
 
 ### Leaves open
 
 - The public route and the issuer URL (CHAOS-12247).
-- How acr-mcp carries the verified principal on its hop to acr-api: hop-signed,
-  or an RFC 8693 exchange at ACP for an `acr-api` token.
+- The hop contract's mechanism (decision 10): existing hop material (the
+  acr-mcp hop of CHAOS-12094) is evaluated first, in the public-surface design.
+- The MCP client session's idle and absolute lifetimes (decision 5).
 - The length of the dual-accept window (at least the longest remaining
   `fcacr_` row life).
 - The CLI device grant on ACP (later).

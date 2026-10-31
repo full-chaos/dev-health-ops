@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	actionsSHA = "65ef0a1f6573e3d3b8d08b2ca6024fcf1b3db87214b787e6c8f2b95386789f33"
-	rolesSHA   = "024192e8eb32a5b07b0e7ce8e41acc72ce1c26db6000dbdbb66524a3e86b8132"
+	actionsSHA = "ec72c219588f51a832a6483e2e7ee80358e1379c7b46ed2659c84c6bdbadd3b8"
+	rolesSHA   = "94e252911cedad98bc5ff9de1930ff9b271f7b147f003b5c8df178968f6335d4"
 )
 
 func repoRoot(t *testing.T) string {
@@ -197,7 +197,7 @@ func TestEmbeddedFilesValidateAgainstTheirSchemas(t *testing.T) {
 // internal/api/session/permissions.go. Catalog-only = not served in /auth/me
 // until a web-reviewed change adds it there; every other catalog action must
 // still equal a session permission.
-var catalogOnly = map[string]bool{"billing.read": true, "billing.manage": true, "license.read": true}
+var catalogOnly = map[string]bool{"admin.impersonate": true, "billing.read": true, "billing.manage": true, "license.read": true}
 
 type sessionEntry struct {
 	role string

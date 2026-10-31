@@ -120,6 +120,8 @@ type Reconciliation struct {
 	// before the users flip.
 	NoActivePlatformAdmin int
 	PlatformRolesGate     bool
+	// platformAdminRead is set only after a good read: a failed read prints no line.
+	platformAdminRead bool
 }
 
 // GatedTotal is the number of gated diffs: zero is the gate.
@@ -146,7 +148,7 @@ func (r Reconciliation) Lines() []string {
 	for _, class := range GatedClasses {
 		lines = append(lines, fmt.Sprintf("diff.%s=%d", class, r.Diffs[class]))
 	}
-	if r.PlatformRolesGate {
+	if r.PlatformRolesGate && r.platformAdminRead {
 		lines = append(lines, fmt.Sprintf("diff.%s=%d", DiffNoActivePlatformAdmin, r.NoActivePlatformAdmin))
 	}
 	lines = append(lines,
@@ -160,7 +162,7 @@ func (r Reconciliation) Lines() []string {
 		fmt.Sprintf("info.membership_auth_missing=%d", r.MembershipAuthMissing),
 		fmt.Sprintf("info.membership_role_diff=%d", r.MembershipRoleDiff),
 	)
-	if !r.PlatformRolesGate {
+	if !r.PlatformRolesGate && r.platformAdminRead {
 		lines = append(lines, fmt.Sprintf("info.%s=%d", DiffNoActivePlatformAdmin, r.NoActivePlatformAdmin))
 	}
 	return lines

@@ -23,6 +23,7 @@ func ReconcilePlatformAdmin(ctx context.Context, tgt PlatformAdminTarget, gate b
 		return errors.New("usersbackfill: reading the platform admins failed")
 	}
 	rep.PlatformRolesGate = gate
+	rep.platformAdminRead = true
 	rep.NoActivePlatformAdmin = 0
 	if none {
 		rep.NoActivePlatformAdmin = 1

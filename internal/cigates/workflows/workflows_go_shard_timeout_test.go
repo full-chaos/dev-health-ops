@@ -42,7 +42,7 @@ func runNamingTimeouts(t *testing.T, script string, capMin int, legs []namingLeg
 	stub := fmt.Sprintf(`#!/usr/bin/env bash
 D=%q
 case "$*" in
-  *"/jobs/"*"/logs"*) id="${*##*/jobs/}"; id="${id%%%%/*}"; cat "$D/log-${id}.txt"; exit 0 ;;
+  *"/jobs/"*"/logs"*) all="$*"; id="${all##*/jobs/}"; id="${id%%%%/*}"; cat "$D/log-${id}.txt"; exit 0 ;;
   *"/jobs?"*) cat "$D/listing.tsv"; exit 0 ;;
 esac
 exit 1

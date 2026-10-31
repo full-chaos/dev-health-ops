@@ -676,14 +676,18 @@ jobs:
     needs: go-storage-integration-plan
     if: needs.go-storage-integration-plan.result == 'success' && needs.go-storage-integration-plan.outputs.legs != '0'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # CHAOS-11331: 35 min = the longest measured packages-shard job wall x2 (1056 s x2 = 2112 s, floored to whole minutes), the
+    # rule of the other caps in this file. Runs 41193580536 and 41195412958 (merge_group, after the #5369 weights): shard 6
+    # 1056 s and 963 s, shard 8 978 s and 983 s, shard 9 880 s and 893 s; shard 10 728 s and 810 s. 25 min left 1.4x. A shard
+    # that still reaches this limit is named a JOB TIMEOUT by go-storage-integration and go-queue-gate, not a test failure.
+    timeout-minutes: 35
     strategy:
       # Merge queue only: the first red shard cancels the rest, the entry is ejected anyway. Every other event keeps
       # the full failure list.
       fail-fast: ${{ github.event_name == 'merge_group' }}
       matrix: ${{ fromJSON(needs.go-storage-integration-plan.outputs.matrix) }}
     env:
-      CHECK_GO_JOB_CAP_MIN: 25
+      CHECK_GO_JOB_CAP_MIN: 35
       # Redirect every registry-less Docker Hub pull -- the harness images AND
       # testcontainers-go's own hardcoded reaper -- at the ghcr mirror. Job-level
       # on purpose: the pre-pull warms the ref, and testcontainers resolves it
@@ -828,6 +832,10 @@ jobs:
       PLAN_RESULT: ${{ needs.go-storage-integration-plan.result }}
       SHARD_RESULT: ${{ needs.go-storage-integration-shard.result }}
       PLAN_LEGS: ${{ needs.go-storage-integration-plan.outputs.legs }}
+    # The names of the shards that ended at their time limit ("" when none). Written by the naming step, which runs on
+    # every red verdict (its `if: failure()` holds whenever the verdict step above exits 1), so go-queue-gate can read it.
+    outputs:
+      timed_out: ${{ steps.name_red.outputs.timed_out }}
     steps:
       - name: Require the plan and every shard to have passed
         run: |
@@ -848,37 +856,64 @@ jobs:
           fi
           echo "all deterministic Go integration shards passed"
 
-      # Diagnostics only. It runs after the verdict step, only on failure, and cannot change a result.
+      # Diagnostics only. It runs after the verdict step, only on failure, and cannot change a result. A shard that ran to its
+      # time limit (cancelled with a wall of at least the cap minus 30 s, or a go test deadline panic in its log) is named a
+      # JOB TIMEOUT and listed in the `timed_out` output; any other cancelled shard is a fail-fast cancel.
       - name: Name the red shard
+        id: name_red
         if: failure()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
+          SHARD_TIMEOUT_MIN: 35
         run: |
           set -uo pipefail
           summary="${GITHUB_STEP_SUMMARY:-/dev/null}"
+          output="${GITHUB_OUTPUT:-/dev/null}"
+          cap_s=$((${SHARD_TIMEOUT_MIN:-0} * 60))
           listing="$(gh api --paginate "repos/${REPO}/actions/runs/${RUN_ID}/jobs?per_page=100&filter=latest" \
-            --jq '.jobs[] | select((.name | startswith("go-storage-integration-shard-")) and (.conclusion == "failure" or .conclusion == "cancelled")) | "\(.conclusion)\t\(.id)\t\(.name)\t\(.html_url)"')" || listing=""
+            --jq '.jobs[] | select((.name | startswith("go-storage-integration-shard-")) and (.conclusion == "failure" or .conclusion == "cancelled")) | "\(.conclusion)\t\(.id)\t\(.name)\t\(.html_url)\t\(.started_at)\t\(.completed_at)"')" || listing=""
+          timed_file="$(mktemp)"
           cancelled=0
           {
             echo "### Red integration shard(s)"
-            while IFS=$'\t' read -r conclusion id name url; do
+            while IFS=$'\t' read -r conclusion id name url started completed; do
               [ -n "${id}" ] || continue
+              wall=0
+              if s_epoch="$(date -u -d "${started}" +%s 2>/dev/null)" && e_epoch="$(date -u -d "${completed}" +%s 2>/dev/null)"; then
+                wall=$((e_epoch - s_epoch))
+              fi
               if [ "${conclusion}" = "cancelled" ]; then
-                cancelled=$((cancelled + 1))
+                if [ "${cap_s}" -gt 0 ] && [ "${wall}" -ge $((cap_s - 30)) ]; then
+                  echo "- ${name}: JOB TIMEOUT (ran ${wall}s of ${cap_s}s; not a test failure): ${url}"
+                  echo "${name}" >> "${timed_file}"
+                else
+                  cancelled=$((cancelled + 1))
+                fi
                 continue
               fi
-              echo "- ${name}: ${url}"
               logfile="$(mktemp)"
+              got_log=0
               if gh api "repos/${REPO}/actions/jobs/${id}/logs" > "${logfile}" 2>/dev/null; then
+                got_log=1
+              fi
+              if [ "${got_log}" -eq 1 ] && grep -q -- 'panic: test timed out after' "${logfile}"; then
+                echo "- ${name}: JOB TIMEOUT (go test deadline; not a test failure): ${url}"
+                echo "${name}" >> "${timed_file}"
+              else
+                echo "- ${name}: ${url}"
+              fi
+              if [ "${got_log}" -eq 1 ]; then
                 grep -m 20 -E -- '--- FAIL|^FAIL|panic:' "${logfile}" | sed 's/^/    /' || true
               fi
               rm -f -- "${logfile}"
             done <<< "${listing}"
             echo "${cancelled} cancelled by fail-fast; a cancelled shard is not a pass."
           } | tee -a "${summary}" || true
+          printf 'timed_out=%s\n' "$(paste -sd, "${timed_file}")" >> "${output}" || true
+          rm -f -- "${timed_file}"
           exit 0
 
   # Merge queue only. GitHub rebuilds the entries stacked on a red entry but leaves their old runs running; this job
@@ -1653,6 +1688,8 @@ jobs:
           HEAVY_ON_PR: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') && 'true' || 'false' }}
           # always(): judges the plan's legs=0 itself, so a skip of it is never legitimate.
           GATED_JOB_1: go-storage-integration|unconditional|${{ needs.go-storage-integration.result }}
+          # CHAOS-11331: the shards that ran to their time limit; the gate says JOB TIMEOUT for them, not a test failure.
+          GATE_TIMEOUT_NOTE_1: go-storage-integration|${{ needs.go-storage-integration.outputs.timed_out }}
           GATED_JOB_2: go-container-smoke|queue-heavy|${{ needs.go-container-smoke.result }}
           GATED_JOB_3: go-container-security|queue-heavy|${{ needs.go-container-security.result }}
           # The hosted and self-hosted twins: exactly one is routed per event, so the pair is one result (the

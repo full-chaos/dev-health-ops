@@ -201,3 +201,62 @@ func TestInternalRoutesSucceedWithoutWriterViolations(t *testing.T) {
 		}
 	}
 }
+
+type accessCreds struct{}
+
+func (accessCreds) Find(context.Context, string) (acr.Credential, bool, error) {
+	return acr.Credential{ID: "cred", ServiceName: "acr", Scopes: []string{acr.PrincipalAccessScope}}, true, nil
+}
+func (accessCreds) MarkUsed(context.Context, string, time.Time) error           { return nil }
+func (accessCreds) Audit(context.Context, string, string, string, string) error { return nil }
+
+type accessAnswer struct {
+	access acr.PrincipalAccess
+	err    error
+}
+
+func (a accessAnswer) Access(context.Context, acr.AccessQuery) (acr.PrincipalAccess, error) {
+	return a.access, a.err
+}
+
+// TestInternalAccessReadAnswersWithoutWriterViolations: the principal access
+// read is a Go-only route (no FastAPI ancestor, so no response-model entry).
+// Every answer it writes through the real server wrapper on the internal
+// listener, the 200 and each refusal, leaves policy.WriterViolations where it was.
+func TestInternalAccessReadAnswersWithoutWriterViolations(t *testing.T) {
+	const access = "/api/v1/internal/acr/orgs/0b1b2c3d-0000-4000-8000-000000000000/principals/1c2d3e4f-0000-4000-8000-000000000000/access"
+	cases := []struct {
+		name   string
+		store  accessAnswer
+		path   string
+		status int
+	}{
+		{"answer", accessAnswer{access: acr.PrincipalAccess{Member: true, Repositories: []string{"acme/api"}}}, access, http.StatusOK},
+		{"unknown organization", accessAnswer{err: acr.ErrOrgUnknown}, access, http.StatusNotFound},
+		{"malformed user", accessAnswer{}, strings.Replace(access, "1c2d3e4f-0000-4000-8000-000000000000", "not-a-uuid", 1), http.StatusNotFound},
+		{"bad query", accessAnswer{}, access + "?sid=%zz", http.StatusBadRequest},
+		{"store unavailable", accessAnswer{err: acr.ErrUnavailable}, access, http.StatusServiceUnavailable},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.Config{APIAddress: "127.0.0.1:0", APIInternalAddress: "127.0.0.1:0"}
+			internal, err := NewInternalServer(cfg, quietLog(), internalRoutesWith(acr.Deps{
+				Store: okStore{}, Auth: accessCreds{}, Access: tc.store, Logger: quietLog(),
+			}))
+			if err != nil {
+				t.Fatalf("NewInternalServer: %v", err)
+			}
+			before := policy.WriterViolations()
+			rec := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodGet, tc.path, nil)
+			request.Header.Set("Authorization", "Bearer svc_acr_listener-test-token")
+			internal.Handler().ServeHTTP(rec, request)
+			if rec.Code != tc.status {
+				t.Fatalf("GET %s = %d %s, want %d", tc.path, rec.Code, rec.Body.String(), tc.status)
+			}
+			if got := policy.WriterViolations() - before; got != 0 {
+				t.Errorf("GET %s (%d) moved WriterViolations by %d", tc.path, rec.Code, got)
+			}
+		})
+	}
+}

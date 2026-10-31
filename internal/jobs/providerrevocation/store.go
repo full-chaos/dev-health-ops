@@ -22,7 +22,7 @@ type Beginner interface {
 // setup row of a callback still in flight. The setup gate is keyed on
 // created_at, which a restore-fence requeue keeps (attempts 0, updated_at now):
 // a requeued row is due at once unless it is a setup row younger than 15 min.
-var claimSQL = fmt.Sprintf(`SELECT id, token_encrypted FROM provider_oauth_revocations
+var claimSQL = fmt.Sprintf(`SELECT id, token_encrypted, token_key_version FROM provider_oauth_revocations
 WHERE provider = 'pagerduty' AND status = 'pending' AND attempts < %d
   AND (attempts = 0 OR updated_at <= now() - LEAST(interval '1 minute' * power(2, attempts - 1), interval '6 hours'))
   AND NOT (purpose = 'setup' AND attempts = 0 AND created_at > now() - interval '%d seconds')
@@ -56,7 +56,7 @@ func (store PgStore) Next(ctx context.Context) (Claim, bool, error) {
 		return nil, false, err
 	}
 	var row Row
-	if err := tx.QueryRow(ctx, claimSQL).Scan(&row.ID, &row.Ciphertext); err != nil {
+	if err := tx.QueryRow(ctx, claimSQL).Scan(&row.ID, &row.Ciphertext, &row.KeyVersion); err != nil {
 		_ = tx.Rollback(context.WithoutCancel(ctx))
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, false, nil

@@ -1,6 +1,6 @@
 //go:build !race
 
-package checkgo_test
+package checkgoshards_test
 
 import (
 	"encoding/json"
@@ -209,7 +209,21 @@ done
 exit 0
 `
 
+var shardRuns runCache
+
+// runShardWithFakeGo runs one test-leg shard on the stand-in go. Tests that ask for the same shard, slow package and
+// environment share one run: each reads the answer and never changes it.
 func runShardWithFakeGo(t *testing.T, shard int, slowPackage string, extraEnv ...string) (cmdResult, []string) {
+	t.Helper()
+	key := fmt.Sprint(shard, "|", slowPackage, "|", strings.Join(extraEnv, "\x00"))
+	run := shardRuns.get(t, key, func() shardRun {
+		res, lines := runShardWithFakeGoOnce(t, shard, slowPackage, extraEnv...)
+		return shardRun{res: res, lines: lines}
+	})
+	return run.res, run.lines
+}
+
+func runShardWithFakeGoOnce(t *testing.T, shard int, slowPackage string, extraEnv ...string) (cmdResult, []string) {
 	t.Helper()
 	script := scriptPath(t, "ci/check_go.sh")
 	repo := filepath.Dir(filepath.Dir(script))
@@ -263,7 +277,7 @@ func TestAShardRunsEachCensusPackageOnceFreshAndKeepsItsOkLines(t *testing.T) {
 	for shard := 1; shard <= 3; shard++ {
 		res, lines := runShardWithFakeGo(t, shard, "")
 		if res.code != 0 {
-			t.Fatalf("test shard %d/3 exited %d: %s", shard, res.code, tail(res.stderr+res.stdout, 2000))
+			t.Fatalf("test shard %d/3 exited %d: %s", shard, res.code, failureTail(res))
 		}
 		for _, l := range strings.Split(res.stdout, "\n") {
 			var n int
@@ -384,7 +398,7 @@ func censusRowThatGoListOmitsSubtests(t *testing.T) {
 	t.Run("clean control", func(t *testing.T) {
 		res, _ := runShardWithFakeGo(t, 2, "", "GO_QUALITY_SELECTION_FILE="+selection)
 		if res.code != 0 {
-			t.Fatalf("the real census under the same selection exited %d: %s", res.code, tail(res.stderr+res.stdout, 1500))
+			t.Fatalf("the real census under the same selection exited %d: %s", res.code, failureTail(res))
 		}
 	})
 }

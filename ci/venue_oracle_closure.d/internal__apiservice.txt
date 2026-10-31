@@ -156,6 +156,7 @@ internal/teamcreated
 internal/teamid
 internal/teamkeytables
 internal/teamprovider
+internal/testsupport/chschema
 internal/testsupport/containers
 internal/testsupport/egressallow
 internal/testsupport/moduleroot
@@ -180,3 +181,4 @@ internal/workitemcontract
 ~internal/pgmigrate/sql
 ~internal/pgmigrate/sql/down
 ~internal/storage/postgres/authschema/migrations
+~internal/testsupport/chschema/testdata

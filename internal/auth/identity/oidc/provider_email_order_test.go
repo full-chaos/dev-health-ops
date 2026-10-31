@@ -179,7 +179,7 @@ func oauthCallbackRunAudited(t *testing.T, server *httptest.Server, linked bool,
 		Memberships: resolveMembers{found: true, role: "member"}, Entitlements: &countingEntitlements{allowed: true},
 		Sessions: &resolveSessions{}, MembershipJIT: &resolveJIT{}, StateSecret: secret, AppBaseURL: "https://app.example",
 		HTTPClient: server.Client(), OAuthEndpoints: &OAuthEndpoints{Social: social.Endpoints{GitLabBase: server.URL}},
-		DenialAudit: denials, Now: func() time.Time { return now },
+		DenialAudit: denials, SignInRecord: noSignInRecord{}, Now: func() time.Time { return now },
 	})
 	if err != nil {
 		t.Fatal(err)

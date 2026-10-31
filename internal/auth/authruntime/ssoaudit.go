@@ -10,3 +10,8 @@ import (
 func providerFailure(pool *pgxpool.Pool) ssoaudit.ProviderFailure {
 	return ssoaudit.PGProviderFailure{DB: pool}
 }
+
+// signInRecord is go-api's success record (finishSSOLogin) for the OIDC, OAuth and SAML sign-ins.
+func signInRecord(pool *pgxpool.Pool) ssoaudit.SignInRecord {
+	return ssoaudit.PGSignIn{DB: pool}
+}

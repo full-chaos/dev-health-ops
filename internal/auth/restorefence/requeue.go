@@ -14,8 +14,10 @@ import (
 )
 
 const (
-	revocationSection  = "public.provider_oauth_revocations"
-	requeuedSection    = revocationSection + ".requeued"
+	revocationSection = "public.provider_oauth_revocations"
+	requeuedSection   = revocationSection + ".requeued"
+	// queuedSuffix names the report line of the revocations a presence section queued.
+	queuedSuffix       = ".queued"
 	revocationIDColumn = "id"
 )
 

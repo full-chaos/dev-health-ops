@@ -49,6 +49,8 @@ var Allowlist = []Entry{
 	{File: "internal/api/sso/provision.go", Func: "handlers.membershipOrJoin", Table: "public.memberships", Verb: "INSERT"},
 	{File: "internal/api/sso/provision.go", Func: "handlers.provisionOrGetUser", Table: "public.users", Verb: "UPDATE"},
 	{File: "internal/apiservice/admin/invites.go", Func: "handlers.createInvite", Table: "public.org_invites", Verb: "INSERT"},
+	// D6528: the reconcile pass writes is_active to auth's state.
+	{File: "internal/apiservice/admin/orgstate_reconcile.go", Func: "OrgStateReconciler.fix", Table: "public.organizations", Verb: "UPDATE"},
 	{File: "internal/apiservice/admin/orgstore.go", Func: "pgStore.deleteOrganizationWithoutMembers", Table: "public.organizations", Verb: "DELETE"},
 	{File: "internal/apiservice/admin/orgstore.go", Func: "pgStore.insertMembershipTx", Table: "public.memberships", Verb: "INSERT"},
 	{File: "internal/apiservice/admin/orgstore.go", Func: "pgStore.insertOrganizationTx", Table: "public.organizations", Verb: "INSERT"},
@@ -134,6 +136,8 @@ var Allowlist = []Entry{
 	{File: "internal/auth/identity/organization.go", Func: "Store.updateOrganization", Table: "auth.organizations", Verb: "UPDATE"},
 	// acp ruling, CHAOS-12032 (D6515): go-api's provider failure record (recordSSOFailure) by the OAuth and SAML sign-ins: last_error, last_error_at and updated_at, never the status, one transaction with the audit row.
 	{File: "internal/auth/identity/ssoaudit/ssoaudit.go", Func: "PGProviderFailure.Failed", Table: "public.sso_providers", Verb: "UPDATE"},
+	// D6534 (ticket 12118): go-api's success record (finishSSOLogin) by the OIDC, OAuth and SAML sign-ins: last_login_at and updated_at, one transaction with the audit row.
+	{File: "internal/auth/identity/ssoaudit/ssoaudit.go", Func: "PGSignIn.Succeeded", Table: "public.sso_providers", Verb: "UPDATE"},
 	// The users-owned projection (CHAOS-10630): written only inside the audit.Commit that writes the auth rows; the runtime role holds the matching column grants only while AUTH_USERS_OWNED is on.
 	{File: "internal/auth/identity/publicusers.go", Func: "insertPublicOwnedOrganization", Table: "public.memberships", Verb: "INSERT"},
 	{File: "internal/auth/identity/publicusers.go", Func: "insertPublicOwnedOrganization", Table: "public.organizations", Verb: "INSERT"},

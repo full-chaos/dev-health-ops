@@ -107,20 +107,8 @@ func preflight(ctx context.Context, pool *pgxpool.Pool, schema authschema.Valida
 		return nil, err
 	}
 	for _, s := range sections {
-		privilege := "UPDATE"
-		switch s.kind {
-		case kindPresence:
-			privilege = "DELETE"
-		case kindInsert:
-			privilege = "INSERT"
-		case kindReport:
-			privilege = "SELECT"
-		}
-		if err := check(s.name, s.qualified(schema), privilege); err != nil {
-			return nil, err
-		}
-		if requeue && s.name == revocationSection {
-			if err := check(s.name, s.qualified(schema), "INSERT"); err != nil {
+		for _, p := range s.privileges(schema, requeue) {
+			if err := check(p.name, p.qualified, p.privilege); err != nil {
 				return nil, err
 			}
 		}
@@ -135,6 +123,30 @@ func preflight(ctx context.Context, pool *pgxpool.Pool, schema authschema.Valida
 		}
 	}
 	return missing, nil
+}
+
+type tablePrivilege struct{ name, qualified, privilege string }
+
+// privileges are what the apply of a section needs: its own write, INSERT on the revocation table for a section that
+// queues revocations, and for a re-queue from the source INSERT on the revocation table itself.
+func (s section) privileges(schema authschema.ValidatedIdentifier, requeue bool) []tablePrivilege {
+	privilege := "UPDATE"
+	switch s.kind {
+	case kindPresence:
+		privilege = "DELETE"
+	case kindInsert:
+		privilege = "INSERT"
+	case kindReport:
+		privilege = "SELECT"
+	}
+	out := []tablePrivilege{{s.name, s.qualified(schema), privilege}}
+	if s.queues {
+		out = append(out, tablePrivilege{revocationSection, "public.provider_oauth_revocations", "INSERT"})
+	}
+	if requeue && s.name == revocationSection {
+		out = append(out, tablePrivilege{s.name, s.qualified(schema), "INSERT"})
+	}
+	return out
 }
 
 func complete(m Manifest) error {
@@ -282,6 +294,15 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedI
 						report.Actions = append(report.Actions, OperatorAction{Kind: s.action, Source: s.name, IDs: ids})
 					}
 				}
+				if q := s.queuedIDsSQL(schema); q != "" {
+					ids, err := collectIDs(ctx, tx, q, string(raw))
+					if err != nil {
+						return fmt.Errorf("naming the queued revocations of section %s (sqlstate %s)", s.name, sqlState(err))
+					}
+					if len(ids) > 0 {
+						report.Actions = append(report.Actions, OperatorAction{Kind: ActionProviderRevocationQueuedFromCredential, Source: s.name, IDs: ids})
+					}
+				}
 				if q := s.unknownRoleSQL(schema); q != "" {
 					ids, err := collectIDs(ctx, tx, q, string(raw))
 					if err != nil {
@@ -295,7 +316,12 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedI
 				if err := tx.QueryRow(ctx, s.applySQL(schema), string(raw)).Scan(&changed, &absent); err != nil {
 					return fmt.Errorf("applying section %s (sqlstate %s)", s.name, sqlState(err))
 				}
-				report.Sections = append(report.Sections, SectionReport{Name: s.name, Changed: changed, Absent: absent})
+				if s.queues {
+					report.Sections = append(report.Sections, SectionReport{Name: s.name, Changed: changed},
+						SectionReport{Name: s.name + queuedSuffix, Changed: absent})
+				} else {
+					report.Sections = append(report.Sections, SectionReport{Name: s.name, Changed: changed, Absent: absent})
+				}
 				switch s.kind {
 				case kindPresence:
 					report.RowsRemoved += changed

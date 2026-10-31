@@ -164,7 +164,7 @@ func integrationTimeoutRows() []integrationTimeoutRow {
 		{"multi-replica", "check_go.sh", regexp.MustCompile(`TestExplicitQueueMultiReplicaClaimDrainRestart`), []integrationTimeoutJob{
 			{"go-quality.yml", "go-quality-leg", "check_go.sh ci-leg"}}},
 		{"auth-race-integration", "check_go.sh", regexp.MustCompile(`-race -tags=integration -v`), []integrationTimeoutJob{
-			{"go-auth-service.yml", "auth-test", "check_go.sh auth race-integration"}}},
+			{"go-auth-service.yml", "auth-race", "check_go.sh auth race-integration"}}},
 	}
 }
 

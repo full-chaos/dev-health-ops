@@ -243,6 +243,8 @@ func newWiringServer(t *testing.T) *wiringServer {
 			authprovision.PathInviteCreate:       `{"invite_id":"` + row + `","token":"invite-token","expires_at":"2026-11-01T00:00:00Z"}`,
 			authprovision.PathInviteAccept:       `{"invite_id":"` + row + `","organization_id":"` + org + `","membership_id":"` + row + `","role":"member"}`,
 			authprovision.PathOrgDeprovision:     `{"organization_id":"` + org + `"}`,
+			authprovision.PathOrgOnboard:         `{"organization_id":"` + org + `","membership_id":"` + row + `"}`,
+			authprovision.PathOrgCreate:          `{"organization_id":"` + org + `","membership_id":"` + row + `"}`,
 			orgreactivate.Path:                   `{"organization_id":"` + org + `","status":"active"}`,
 			orgreactivate.SuspendPath:            `{"organization_id":"` + org + `","status":"suspended"}`,
 			orgreactivate.StatePath:              `{"organization_id":"` + org + `","status":"active","revision":4}`,
@@ -291,6 +293,16 @@ func wiringCalls(prov authprovision.Provisioner, life wiringLifecycle) []wiringC
 		{"organizations_reactivate", func() error { return life.Reactivate(ctx, org, actor, &reactivateRevision) }},
 		{"organizations_suspend", func() error { return life.Suspend(ctx, org, actor, &suspendRevision) }},
 		{"organizations_state", func() error { _, err := life.State(ctx, org); return err }},
+		{"organizations_onboard", func() error {
+			_, err := prov.OnboardOrganization(ctx, authprovision.OnboardRequest{PrincipalID: principal, Name: "Acme", Description: "golden onboard", RequestMetadata: metadata})
+			return err
+		}},
+		{"organizations_create", func() error {
+			description := "golden create"
+			_, err := prov.CreateOrganization(ctx, authprovision.CreateOrganizationRequest{Actor: actor, Slug: "acme", Name: "Acme", Description: &description,
+				Settings: json.RawMessage(`{"a":1}`), Tier: "team", ManagedBy: "manual", Owner: &to})
+			return err
+		}},
 	}
 }
 
@@ -342,8 +354,8 @@ func TestUnsetAndSessionCompatSendTheGoldenRequests(t *testing.T) {
 		}
 		got := w.runAll(t, provisioningOn(t, w.URL), env)
 		w.mu.Lock()
-		if len(w.auths) != 10 {
-			t.Errorf("%s: %d provisioning requests, want 10", name, len(w.auths))
+		if len(w.auths) != 12 {
+			t.Errorf("%s: %d provisioning requests, want 12", name, len(w.auths))
 		}
 		for i, auth := range w.auths {
 			if len(auth) != 1 || auth[0] != "Bearer "+token {

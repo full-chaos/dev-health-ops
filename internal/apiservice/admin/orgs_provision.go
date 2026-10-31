@@ -286,73 +286,32 @@ FROM org_invites WHERE id = $1`, id).Scan(&invite.ID, &invite.OrgID, &invite.Ema
 	return &invite, nil
 }
 
-// createOrganizationInAuth: go-api writes the organization row on its own,
-// then auth-service adds the first owner (it projects the row; the calling
-// superuser is the actor and needs no membership of the new org). When the
-// add did not land, auth-service denies the org and go-api deletes the row,
-// unless a membership of it exists by now.
-func (h *handlers) createOrganizationInAuth(ctx context.Context, w http.ResponseWriter, org *organization, ownerID uuid.UUID) {
-	owner, err := h.store.userByID(ctx, ownerID)
-	if err != nil || owner == nil {
-		// Today the owner insert fails its foreign key: the same 500, and
-		// nothing is written.
-		h.logger.ErrorContext(ctx, "admin: create organization owner membership failed", "error", err, "owner_found", owner != nil)
-		policy.WriteInternal(w)
-		return
-	}
-	if err := h.store.insertOrganizationTx(ctx, h.store.Pool, org); err != nil {
-		h.logger.ErrorContext(ctx, "admin: create organization failed", "error", err)
-		policy.WriteInternal(w)
-		return
-	}
-	user := policy.UserFrom(ctx)
-	_, addErr := h.orgProvision.AddMember(ctx, org.ID, ownerID, user.ID, "owner", nil)
-	if addErr == nil {
-		h.writeCreatedOrganization(ctx, w, org)
-		return
-	}
-	if present, err := h.store.hasOwnerMembership(ctx, org.ID, ownerID); err != nil {
-		h.ownerlessOrganization(ctx, w, org.ID, "the owner read-back failed")
-		return
-	} else if present {
-		h.writeCreatedOrganization(ctx, w, org)
-		return
-	}
-	if err := h.deprovisionInAuth(ctx, org.ID); err != nil {
-		h.ownerlessOrganization(ctx, w, org.ID, "auth-service did not deprovision it")
-		return
-	}
-	deleted, err := h.store.deleteOrganizationWithoutMembers(ctx, org.ID)
-	if err != nil {
-		h.ownerlessOrganization(ctx, w, org.ID, "the delete failed")
-		return
-	}
-	if !deleted {
-		if present, err := h.store.hasOwnerMembership(ctx, org.ID, ownerID); err == nil && present {
-			h.writeCreatedOrganization(ctx, w, org)
+// createOrganizationInAuth: auth-service writes the organization and the first
+// owner in one commit, in both schemas; go-api reads the row back and answers it.
+func (h *handlers) createOrganizationInAuth(ctx context.Context, w http.ResponseWriter, org *organization, ownerID *uuid.UUID) {
+	if ownerID != nil {
+		owner, err := h.store.userByID(ctx, *ownerID)
+		if err != nil || owner == nil {
+			// Today the owner insert fails its foreign key: the same 500, and
+			// nothing is written.
+			h.logger.ErrorContext(ctx, "admin: create organization owner membership failed", "error", err, "owner_found", owner != nil)
+			policy.WriteInternal(w)
 			return
 		}
-		h.ownerlessOrganization(ctx, w, org.ID, "a membership of it exists")
+	}
+	born, err := h.orgProvision.CreateOrganization(ctx, authprovision.CreateOrganizationRequest{Actor: policy.UserFrom(ctx).ID, Slug: org.Slug, Name: org.Name,
+		Description: org.Description, Settings: org.Settings, Tier: org.Tier, ManagedBy: org.ManagedBy, Owner: ownerID})
+	if err != nil {
+		h.writeProvisionRefusal(ctx, w, "create_organization", err, nil)
 		return
 	}
-	h.logger.WarnContext(ctx, "admin: auth-service did not add the organization owner; the organization was removed",
-		"org_id", org.ID.String(), "refused", errors.Is(addErr, authprovision.ErrRefused), "reason", authprovision.ReasonOf(addErr))
-	// With the switch off this owner is added (201), which cannot be answered
-	// without an owner: a refusal is the 503 of the other proxied routes, an
-	// actor refusal its 403.
-	if answer, ok := actorAnswers[authprovision.ReasonOf(addErr)]; ok && errors.Is(addErr, authprovision.ErrRefused) {
-		policy.WriteDetail(w, answer.status, answer.detail, nil)
+	created, err := h.store.orgByID(ctx, born.OrgID)
+	if err != nil || created == nil {
+		h.logger.ErrorContext(ctx, "admin: read organization after auth create failed", "error", err, "org_id", born.OrgID.String())
+		h.writeProvisionUnavailable(w)
 		return
 	}
-	h.writeProvisionUnavailable(w)
-}
-
-// ownerlessOrganization answers a created organization that may have no
-// owner: a 500, not a 503, so no retry meets the half-written state; the ERROR
-// names the org only (the runbook query finds it).
-func (h *handlers) ownerlessOrganization(ctx context.Context, w http.ResponseWriter, orgID uuid.UUID, why string) {
-	h.logger.ErrorContext(ctx, "admin: organization created without its owner", "org_id", orgID.String(), "cause", why)
-	policy.WriteInternal(w)
+	h.writeCreatedOrganization(ctx, w, created)
 }
 
 func (h *handlers) writeCreatedOrganization(ctx context.Context, w http.ResponseWriter, org *organization) {
@@ -363,13 +322,4 @@ func (h *handlers) writeCreatedOrganization(ctx context.Context, w http.Response
 		return
 	}
 	policy.WriteModel(w, http.StatusCreated, obj, nil)
-}
-
-// hasOwnerMembership reads public.memberships for the owner row of the org.
-func (s pgStore) hasOwnerMembership(ctx context.Context, orgID, userID uuid.UUID) (bool, error) {
-	m, err := s.membershipByOrgUser(ctx, orgID, userID)
-	if err != nil {
-		return false, err
-	}
-	return m != nil && m.Role == "owner", nil
 }

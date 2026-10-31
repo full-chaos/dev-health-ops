@@ -279,8 +279,12 @@ func (h *handlers) createOrganization(w http.ResponseWriter, r *http.Request) {
 		org.Description = &description
 	}
 
-	if h.orgProvision != nil && ownerUserID != "" {
-		h.createOrganizationInAuth(ctx, w, org, ownerID)
+	if h.orgProvision != nil {
+		var owner *uuid.UUID
+		if ownerUserID != "" {
+			owner = &ownerID
+		}
+		h.createOrganizationInAuth(ctx, w, org, owner)
 		return
 	}
 

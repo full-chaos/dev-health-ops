@@ -474,6 +474,12 @@ type routeCase struct {
 
 func routeCases() []routeCase {
 	return []routeCase{
+		{opOrgOnboard, PatternOrgOnboard, func(f *provFixture, _ uuid.UUID) map[string]any {
+			return map[string]any{"principal_id": f.target.String(), "organization_name": "Acme"}
+		}, []string{"principal_id", "organization_name"}},
+		{opOrgCreate, PatternOrgCreate, func(f *provFixture, a uuid.UUID) map[string]any {
+			return map[string]any{"actor_principal_id": a.String(), "organization_name": "Acme", "slug": "acme", "tier": "community", "managed_by": "stripe"}
+		}, []string{"actor_principal_id", "organization_name", "slug", "tier", "managed_by"}},
 		{opMembershipAdd, PatternMembershipAdd, func(f *provFixture, a uuid.UUID) map[string]any {
 			return map[string]any{"organization_id": f.org.String(), "principal_id": f.target.String(), "actor_principal_id": a.String(),
 				"role": "member", "invited_by_principal_id": nil}

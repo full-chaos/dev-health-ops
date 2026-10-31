@@ -69,10 +69,10 @@ type OperatorError struct{ Message string }
 
 func (err *OperatorError) Error() string { return err.Message }
 
-// ErrOrgProvisioningOn refuses a membership change or a real organization
-// delete while AUTH_PROXY_ORG_PROVISIONING is on: done here, it would write
+// ErrOrgProvisioningOn refuses an organization create, a membership change or a
+// real organization delete while AUTH_PROXY_ORG_PROVISIONING is on: done here, it would write
 // go-api's rows only and leave auth-service's apart.
-var ErrOrgProvisioningOn = &OperatorError{Message: "AUTH_PROXY_ORG_PROVISIONING is on: membership changes and organization deletes go through the admin API, which sends them to the authentication service; this command would change go-api's rows only."}
+var ErrOrgProvisioningOn = &OperatorError{Message: "AUTH_PROXY_ORG_PROVISIONING is on: organization creates, membership changes and organization deletes go through the admin API, which sends them to the authentication service; this command would change go-api's rows only."}
 
 func refuse(format string, args ...any) error {
 	return &OperatorError{Message: fmt.Sprintf(format, args...)}
@@ -608,7 +608,7 @@ func validateOrganizationName(name string) (string, error) {
 // slug is the name's slug unless given, and an existing slug gets a random
 // eight-hex-digit suffix; a paid tier is managed "manual", community "stripe".
 func (o Operator) CreateOrg(ctx context.Context, in CreateOrgInput) (*CreateOrgResult, error) {
-	if o.OrgProvisioning && in.OwnerEmail != nil && *in.OwnerEmail != "" {
+	if o.OrgProvisioning {
 		return nil, ErrOrgProvisioningOn
 	}
 	var result *CreateOrgResult

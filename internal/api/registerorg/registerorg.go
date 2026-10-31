@@ -47,5 +47,40 @@ func Slug(name string, userID uuid.UUID) string {
 	return pyjson.FromRunes(runes) + "-" + userID.String()[:8]
 }
 
-// OnboardSlug is not built.
-func OnboardSlug(string, uuid.UUID) string { return "" }
+// OnboardSlug is the slug of an organization its creator names at onboarding:
+// slugifyName, then "-" and the first 8 characters of the user id.
+func OnboardSlug(name string, userID uuid.UUID) string {
+	return slugifyName(name) + "-" + userID.String()[:8]
+}
+
+// slugifyName is common._slugify_org_name: lower(name), each run of characters
+// outside a-z0-9 one "-", no "-" at either end, cut to 50 runes, and
+// my-organization when nothing is left.
+func slugifyName(name string) string {
+	var slug []rune
+	inRun := false
+	for _, r := range pyjson.Runes(pythonparity.Lower(name)) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			slug = append(slug, r)
+			inRun = false
+			continue
+		}
+		if !inRun {
+			slug = append(slug, '-')
+			inRun = true
+		}
+	}
+	for len(slug) > 0 && slug[0] == '-' {
+		slug = slug[1:]
+	}
+	for len(slug) > 0 && slug[len(slug)-1] == '-' {
+		slug = slug[:len(slug)-1]
+	}
+	if len(slug) > 50 {
+		slug = slug[:50]
+	}
+	if len(slug) == 0 {
+		return "my-organization"
+	}
+	return string(slug)
+}

@@ -11,7 +11,7 @@ func TestRegisterOrganizationGrantIsTheReviewedColumns(t *testing.T) {
 		got[grant.Table] = grant.Columns
 	}
 	want := map[string][]string{
-		"organizations": {"id", "slug", "name", "settings", "tier", "managed_by", "is_active", "created_at", "updated_at"},
+		"organizations": {"id", "slug", "name", "description", "settings", "tier", "managed_by", "is_active", "created_at", "updated_at"},
 		"memberships":   {"id", "user_id", "org_id", "role", "joined_at", "created_at", "updated_at"},
 	}
 	if !reflect.DeepEqual(got, want) {

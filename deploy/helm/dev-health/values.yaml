@@ -35,8 +35,8 @@ goApi:
     secretKey: AUTH_SESSION_ISSUE_TOKEN
   # -- CHAOS-11858, CHAOS-10988: the one goApi.authProxy key. orgProvisioning=true renders AUTH_PROXY_ORG_PROVISIONING=true:
   #    go-api's PATCH /api/v1/admin/orgs/{org_id} with is_active=true, its member add, role change, removal and
-  #    ownership transfer, its invite create, invite accept (accept-invite, onboard join_org) and its organization
-  #    delete go to auth-service first; go-api writes none of those rows itself (503 and no write when auth-service
+  #    ownership transfer, its invite create, invite accept (accept-invite, onboard join_org), its organization
+  #    create (admin, onboard create_org) and its organization delete go to auth-service first; go-api writes none of those rows itself (503 and no write when auth-service
   #    refuses for a reason go-api has no answer for, or is down). Needs authService.phase 4 (the routes refuse until
   #    auth-service owns users), auth-service's AUTH_MEMBERSHIP_ROUTES on (authService.extraEnv, name AUTH_MEMBERSHIP_ROUTES, value "true": the render refuses the switch without it),
   #    and a go-api credential (goApi.sessionIssue) minted with the memberships:write scope. Off renders nothing.

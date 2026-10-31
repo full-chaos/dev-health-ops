@@ -34,6 +34,8 @@ const (
 	PathInviteCreate       = "/internal/v1/invites/create"
 	PathInviteAccept       = "/internal/v1/invites/accept"
 	PathOrgDeprovision     = "/internal/v1/organizations/deprovision"
+	PathOrgOnboard         = "/internal/v1/organizations/onboard"
+	PathOrgCreate          = "/internal/v1/organizations/create"
 )
 
 // WorkloadAudience is the audience of the workload token auth-service accepts
@@ -432,12 +434,59 @@ func (c *Client) Deprovision(ctx context.Context, org, actor uuid.UUID) error {
 	return nil
 }
 
-// OnboardOrganization is not built.
-func (c *Client) OnboardOrganization(context.Context, OnboardRequest) (Born, error) {
-	return Born{}, ErrUnavailable
+type routeBorn struct {
+	OrganizationID string  `json:"organization_id"`
+	MembershipID   *string `json:"membership_id"`
 }
 
-// CreateOrganization is not built.
-func (c *Client) CreateOrganization(context.Context, CreateOrganizationRequest) (Born, error) {
-	return Born{}, ErrUnavailable
+func (a routeBorn) born() (Born, error) {
+	org, err := uuid.Parse(a.OrganizationID)
+	if err != nil {
+		return Born{}, fmt.Errorf("%w: answer is not a created organization", ErrUnavailable)
+	}
+	out := Born{OrgID: org}
+	if a.MembershipID != nil {
+		id, err := uuid.Parse(*a.MembershipID)
+		if err != nil {
+			return Born{}, fmt.Errorf("%w: answer is not a created organization", ErrUnavailable)
+		}
+		out.MembershipID = &id
+	}
+	return out, nil
+}
+
+// OnboardOrganization creates PrincipalID's first organization, owned by it.
+func (c *Client) OnboardOrganization(ctx context.Context, in OnboardRequest) (Born, error) {
+	request := map[string]any{"principal_id": in.PrincipalID.String(), "organization_name": in.Name}
+	if in.Description != "" {
+		request["description"] = in.Description
+	}
+	if len(in.RequestMetadata) > 0 && len(in.RequestMetadata) <= maxRequestMetadataBytes {
+		request["request_metadata"] = in.RequestMetadata
+	}
+	var answer routeBorn
+	if err := c.core.Post(ctx, PathOrgOnboard, request, &answer); err != nil {
+		return Born{}, err
+	}
+	return answer.born()
+}
+
+// CreateOrganization creates an organization, acting as the superuser Actor.
+func (c *Client) CreateOrganization(ctx context.Context, in CreateOrganizationRequest) (Born, error) {
+	request := map[string]any{"actor_principal_id": in.Actor.String(), "organization_name": in.Name, "slug": in.Slug,
+		"tier": in.Tier, "managed_by": in.ManagedBy}
+	if in.Description != nil {
+		request["organization_description"] = *in.Description
+	}
+	if len(in.Settings) > 0 {
+		request["settings"] = in.Settings
+	}
+	if in.Owner != nil {
+		request["owner_principal_id"] = in.Owner.String()
+	}
+	var answer routeBorn
+	if err := c.core.Post(ctx, PathOrgCreate, request, &answer); err != nil {
+		return Born{}, err
+	}
+	return answer.born()
 }

@@ -1,5 +1,6 @@
 instrument	labels	reason
 auth.api.session_route_outcomes	operation,reason_code,result	code: internal/auth/authapi/wire.go
+auth.entitlement.outcomes	outcome	code: internal/auth/entitlement/entitlement.go
 auth.identity.external_links	action,outcome	code: internal/auth/identity/store.go
 auth.identity.projections	kind,outcome	code: internal/auth/identity/store.go
 auth.identity.wire_slug_omitted		code: internal/auth/identity/store.go
@@ -33,6 +34,7 @@ devhealth_auth_access_token_accepted_total	class,profile,service	code: internal/
 devhealth_auth_access_token_refused_total	profile,reason,service	code: internal/auth/accessverify/accessverify.go
 dev_health_api_http_request_duration_seconds	listener,method,route,status_class	code: internal/auth/httpapi/accesslog.go
 dev_health_api_http_requests_total	listener,method,route,status_class	code: internal/auth/httpapi/tracehandler.go
+dev_health_api_legacy_path_total	kind,surface	code: internal/api/policy/legacycounters.go
 dev_health_api_stripe_refund_event_decisions_total	reason	code: internal/api/billing/refundowner.go
 dev_health_api_stripe_webhook_signature_failures_total	class	code: internal/api/billing/webhook.go
 dev_health_api_stripe_webhook_unhandled_events_total	event_type	code: internal/api/billing/webhook.go

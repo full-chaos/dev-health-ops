@@ -213,6 +213,19 @@ func (doer *replayDoer) Do(request *http.Request) (*http.Response, error) {
 	}, nil
 }
 
+// versionProbes is the number of GitLab version probes the producers sent so far.
+func (doer *replayDoer) versionProbes() int {
+	doer.mu.Lock()
+	defer doer.mu.Unlock()
+	count := 0
+	for _, line := range doer.seen {
+		if strings.HasPrefix(line, "GET "+gitlabHost+"/api/v4/version?") {
+			count++
+		}
+	}
+	return count
+}
+
 func (doer *replayDoer) lastSeen(n int) []string {
 	doer.mu.Lock()
 	defer doer.mu.Unlock()
@@ -339,9 +352,13 @@ func runWorldStep(ctx context.Context, t *testing.T, conn driver.Conn, world pro
 			reference.SourceExternalIDs = append(reference.SourceExternalIDs, source[0])
 		}
 		selections := providersync.TeamCatalogSelections{Teams: true, Projects: true, Members: true}
+		probesBefore := doer.versionProbes()
 		result, err := collectTeamCatalog(ctx, t, conn, step, credential, reference, selections, doer, world.FrozenAt.Add(-step.Before))
 		if err != nil {
 			t.Fatalf("%s team catalog: %v (unmatched requests: %v; last requests: %v)", step.Provider, err, doer.unmatched, doer.lastSeen(6))
+		}
+		if probes := doer.versionProbes() - probesBefore; step.Provider == "gitlab" && probes != 1 {
+			t.Fatalf("gitlab team catalog: %d GitLab version probe(s), want exactly 1 (answered once, never a second)", probes)
 		}
 		t.Logf("%s team catalog: %+v", step.Provider, result)
 	case "work_graph":
@@ -409,11 +426,15 @@ func runWorldSync(ctx context.Context, t *testing.T, conn driver.Conn, world pro
 					Conn: conn, Lease: session, Metrics: providerfoundation.NewMetrics(), StatusMapping: mapping,
 				})
 			}
+			probesBefore := doer.versionProbes()
 			result, err := providersync.RunRouteInProcess(ctx, run, selector)
 			if err != nil {
 				t.Fatalf("%s/%s %s: %v (unmatched requests: %v; last requests: %v)", unit.Provider, unit.Dataset, external, err, doer.unmatched, doer.lastSeen(6))
 			}
 			t.Logf("%s/%s %s: %+v", unit.Provider, unit.Dataset, external, result)
+			if probes := doer.versionProbes() - probesBefore; probes > 1 {
+				t.Fatalf("%s/%s %s: %d GitLab version probes in one unit, want at most 1", unit.Provider, unit.Dataset, external, probes)
+			}
 			if len(doer.unmatched) > 0 {
 				t.Fatalf("%s/%s %s: requests no answer names:\n  %s", unit.Provider, unit.Dataset, external, strings.Join(doer.unmatched, "\n  "))
 			}

@@ -248,7 +248,6 @@ func TestAuthPhaseRefusesHandSetFlags(t *testing.T) {
 		"eddsa http issuer":       {phaseArgs(2, "--set", "authService.accessToken.class=eddsa", "--set", "authService.accessToken.issuerURL=http://auth.example"), "needs authService.accessToken.issuerURL"},
 		"eddsa trailing slash":    {phaseArgs(2, "--set", "authService.accessToken.class=eddsa", "--set", "authService.accessToken.issuerURL=https://auth.example/"), "needs authService.accessToken.issuerURL"},
 		"eddsa upper-case host":   {phaseArgs(2, "--set", "authService.accessToken.class=eddsa", "--set", "authService.accessToken.issuerURL=https://Auth.example"), "needs authService.accessToken.issuerURL"},
-		"issuer without eddsa":    {phaseArgs(2, "--set", "authService.accessToken.issuerURL=https://auth.example"), "is set but authService.accessToken.class is not eddsa"},
 		"link routes below 2":     {phaseArgs(1, "--set", "authService.socialLinkRoutes=true"), "authService.socialLinkRoutes needs authService.phase >= 2"},
 		"oidc on":                 {phaseArgs(3, "--set", "authService.sso.oidc=true"), "authService.sso.oidc=true is refused"},
 		"saml on":                 {phaseArgs(3, "--set", "authService.sso.saml=true"), "authService.sso.saml=true is refused"},

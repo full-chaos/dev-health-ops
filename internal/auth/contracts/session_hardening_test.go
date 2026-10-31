@@ -15,11 +15,7 @@ import (
 func firstAccepted(t *testing.T, s sessionSurface) []byte {
 	t.Helper()
 	dir, m := loadSessionCorpus(t, s)
-	raw, err := os.ReadFile(filepath.Join(dir, m.Accept[0].File))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return raw
+	return s.fixtureBytes(t, filepath.Join(dir, m.Accept[0].File))
 }
 
 func utf16WithBOM(raw []byte) []byte {

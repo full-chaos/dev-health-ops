@@ -88,7 +88,8 @@ type section struct {
 	action ActionKind
 	// queues marks the provider credential section: a deleted row oauthQueued holds has its stored token queued for the
 	// revocation worker in the delete statement (ActionProviderRevocationQueuedFromCredential); action names the rest.
-	queues bool
+	queues       bool
+	countsAbsent bool
 }
 
 func (s section) runsWithoutManifest() bool { return !s.manifestOnly }
@@ -214,6 +215,14 @@ var sections = []section{
 	{name: "auth.external_identities", table: "external_identities", kind: kindPresence, key: colUUID("id"),
 		cols: []column{colUUID("principal_id")}, manifestOnly: true, action: ActionIdentityUnlinked,
 		blindReview: "true", blindIDExpr: identityReviewExpr},
+	// A platform role revoked after T (a DELETE) comes back with the restore, and so would a revoked platform_admin. A
+	// restored assignment survives only if the source holds the same id: a revoke, or a revoke + re-grant (a new id), deletes
+	// the restored row. The fence NEVER inserts a grant: an assignment the source holds that the restored table lacks is
+	// named by id (regrant_platform_role) and a platform administrator grants it again. Only the id travels, never the
+	// principal, the role, the granter or the expiry. With no manifest nothing is deleted and every assignment is listed for
+	// review (ids only).
+	{name: "auth.platform_role_assignments", table: "platform_role_assignments", kind: kindPresence, key: colUUID("id"),
+		manifestOnly: true, action: ActionRegrantPlatformRole, countsAbsent: true, blindReview: "true"},
 	// Replay evidence: the identifier hash of a used SAML assertion is a hash of a
 	// public assertion id, not a credential; it travels as hex.
 	{name: "auth.saml_assertion_uses", table: "saml_assertion_uses", kind: kindInsert, key: colText("issuer"),
@@ -487,14 +496,18 @@ SELECT (SELECT count(*) FROM d), (SELECT count(*) FROM q)`,
 			s.recordset(), tbl, s.matchSQL(), oauthQueuedPurpose("d"), oauthQueued("d"))
 	}
 	// kindPresence
+	absent := "0::bigint"
+	if s.countsAbsent {
+		absent = fmt.Sprintf("(SELECT count(*) FROM m x WHERE NOT EXISTS (SELECT 1 FROM %s t WHERE %s))", tbl, s.matchSQL())
+	}
 	guard := ""
 	if s.deleteGuard != "" {
 		guard = " AND " + s.deleteGuard
 	}
 	return fmt.Sprintf(`WITH m AS (SELECT * FROM %s),
 d AS (DELETE FROM %s t WHERE NOT EXISTS (SELECT 1 FROM m x WHERE %s)%s RETURNING 1)
-SELECT (SELECT count(*) FROM d), 0::bigint`,
-		s.recordset(), tbl, s.matchSQL(), guard)
+SELECT (SELECT count(*) FROM d), %s`,
+		s.recordset(), tbl, s.matchSQL(), guard, absent)
 }
 
 // queuedIDsSQL names the deleted rows whose stored token the apply queues (rows as $1), or "" for a section that queues
@@ -523,6 +536,9 @@ func (s section) idsSQL(schema authschema.ValidatedIdentifier) string {
 	case s.kind == kindRevoke && s.action == ActionForcePasswordReset:
 		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s)
 SELECT t.%s::text FROM %s t JOIN m x ON x.%s = t.%s WHERE (%s) ORDER BY 1`, s.recordset(), s.key.name, tbl, s.key.name, s.key.name, s.sub(s.active, schema))
+	case s.kind == kindPresence && s.action == ActionRegrantPlatformRole:
+		return fmt.Sprintf(`WITH m AS (SELECT * FROM %s)
+SELECT x.%s::text FROM m x WHERE NOT EXISTS (SELECT 1 FROM %s t WHERE %s) ORDER BY 1`, s.recordset(), s.key.name, tbl, s.matchSQL())
 	case s.kind == kindPresence && (s.action == ActionRequeueProviderRevocation || s.action == ActionIdentityUnlinked):
 		queued := ""
 		if s.queues {

@@ -53,6 +53,63 @@ const REQUIRED_GROUPS = {
 };
 const DEFAULT_REQUIRED_GROUPS = ["accept", "reject", "reject_by_client"];
 
+// Exact fixture inventories by name (CHAOS-10680). A manifest edit alone cannot
+// drop a reject case: the names here are the second, deliberate edit. The Go
+// twin is refreshResponseV2Inventory in refresh_response_v2_test.go.
+const PINNED_INVENTORY = {
+  "refresh-response.v2": {
+    accept: [
+      "valid-full-lifetime.json",
+      "valid-short-lifetime.json"
+    ],
+    reject: [
+      "invalid-missing-access-token.json",
+      "invalid-schema-version-v1.json",
+      "invalid-expires-in-zero.json",
+      "invalid-expires-in-past-60-minutes.json",
+      "invalid-expires-in-string.json",
+      "invalid-access-token-not-jws.json",
+      "invalid-access-token-empty-segment.json",
+      "invalid-extra-field-user.json",
+      "invalid-refresh-credential-jwt-shaped.json",
+      "invalid-token-type-capitalised.json",
+      "invalid-session-id-wrong-prefix.json",
+      "invalid-access-token-header-length-1-mod-4.json",
+      "invalid-access-token-signature-length-1-mod-4.json",
+      "invalid-access-token-padded-signature.json",
+      "invalid-access-token-standard-alphabet-signature.json",
+      "invalid-access-token-newline-in-signature.json",
+      "invalid-missing-session-access-token.json",
+      "invalid-session-access-token-not-jws.json"
+    ],
+    reject_by_client: [
+      "client-rejected-header-alg-hs256.json",
+      "client-rejected-header-alg-none.json",
+      "client-rejected-header-typ-jwt.json",
+      "client-rejected-header-missing-kid.json",
+      "client-rejected-header-jku-member.json",
+      "client-rejected-header-duplicate-member.json",
+      "client-rejected-claims-lifetime-over-ceiling.json",
+      "client-rejected-claims-nbf-before-iat.json",
+      "client-rejected-expires-in-not-token-lifetime.json",
+      "client-rejected-session-id-not-token-sid.json",
+      "client-rejected-segment-not-object.json",
+      "client-rejected-expires-in-decimal.json",
+      "client-rejected-duplicate-access-token.json",
+      "client-rejected-header-trailing-bits.json",
+      "client-rejected-payload-trailing-bits.json",
+      "client-rejected-signature-trailing-bits.json",
+      "client-rejected-access-token-session-audience.json",
+      "client-rejected-session-token-api-audience.json",
+      "client-rejected-session-token-sid.json",
+      "client-rejected-session-token-lifetime.json",
+      "client-rejected-session-token-header-alg-hs256.json",
+      "client-rejected-session-token-payload-trailing-bits.json"
+    ],
+  },
+};
+
+
 // Closed vocabularies (CHAOS-10194): contracts/auth/v1/vocabulary/reason-codes.json
 // is the single source for these four fields. Each entry builds a document
 // from a fixture that carries the field, then sets the field to a value.
@@ -305,12 +362,71 @@ function readJSON(p) {
   assertNoDuplicateMembers(text, p);
   return JSON.parse(text);
 }
+// The refresh-response.v2 corpus stores no compact JWS (as the signed access-token golden corpus does not): each
+// token member is an object {header_json | header_segment, payload_json | payload_segment, signature
+// [, trailing_bits]}, and the wire document is the stored text with each object replaced by the string
+// base64url(header_json) "." base64url(payload_json) "." signature (a *_segment is the segment itself;
+// trailing_bits sets the lowest bit of the last character of the segment it names). Everything outside the
+// objects is kept as text, so a repeated member stays repeated. The Go twin is assembleV2Fixture
+// (internal/auth/contracts/refresh_response_v2_fixture_test.go).
+const SPLIT_TOKEN_SURFACES = new Set(["refresh-response.v2"]);
+const B64URL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+const TOKEN_KEYS = new Set(["header_json", "header_segment", "payload_json", "payload_segment", "signature", "trailing_bits"]);
+function splitSegment(object, name, label) {
+  const hasText = Object.hasOwn(object, `${name}_json`);
+  const hasSegment = Object.hasOwn(object, `${name}_segment`);
+  if (hasText === hasSegment) throw new Error(`${label}: a token object needs exactly one of ${name}_json and ${name}_segment`);
+  return hasText ? Buffer.from(object[`${name}_json`], "utf8").toString("base64url") : object[`${name}_segment`];
+}
+function assembleToken(object, label) {
+  for (const key of Object.keys(object)) {
+    if (!TOKEN_KEYS.has(key)) throw new Error(`${label}: unknown token object member ${key}`);
+  }
+  if (typeof object.signature !== "string") throw new Error(`${label}: a token object needs a signature`);
+  const parts = [splitSegment(object, "header", label), splitSegment(object, "payload", label), object.signature];
+  if (object.trailing_bits !== undefined) {
+    const at = ["header", "payload", "signature"].indexOf(object.trailing_bits);
+    const part = at < 0 ? "" : parts[at];
+    const position = part === "" ? -1 : B64URL.indexOf(part[part.length - 1]);
+    if (position < 0 || (position & 1) === 1) throw new Error(`${label}: trailing_bits ${object.trailing_bits} names no zero-bit segment end`);
+    parts[at] = part.slice(0, -1) + B64URL[position | 1];
+  }
+  return parts.join(".");
+}
+function assembleSplitTokens(text, label) {
+  const member = /"(access_token|session_access_token)"\s*:\s*\{/g;
+  let out = "";
+  let pos = 0;
+  for (let m = member.exec(text); m !== null; m = member.exec(text)) {
+    const open = member.lastIndex - 1;
+    let depth = 0;
+    let end = -1;
+    for (let i = open, inString = false; i < text.length; i += 1) {
+      const c = text[i];
+      if (inString) {
+        if (c === "\\") i += 1;
+        else if (c === '"') inString = false;
+      } else if (c === '"') inString = true;
+      else if (c === "{") depth += 1;
+      else if (c === "}" && --depth === 0) {
+        end = i + 1;
+        break;
+      }
+    }
+    if (end < 0) throw new Error(`${label}: an unterminated token object`);
+    out += text.slice(pos, open) + JSON.stringify(assembleToken(JSON.parse(text.slice(open, end)), label));
+    pos = end;
+    member.lastIndex = end;
+  }
+  return out + text.slice(pos);
+}
 // A fixture may carry a duplicate member only when the manifest files it under
 // reject_by_client: the schema legitimately sees the survivor, and the clients
 // are the ones that must refuse the bytes. Anywhere else a duplicate is a
 // corpus defect (the verdict would be about a value the bytes do not show).
-function readFixture(p) {
-  const text = readFileSync(p, "utf8");
+function readFixture(p, surface) {
+  const stored = readFileSync(p, "utf8");
+  const text = SPLIT_TOKEN_SURFACES.has(surface) ? assembleSplitTokens(stored, p) : stored;
   let duplicate = null;
   try {
     assertNoDuplicateMembers(text, p);
@@ -356,16 +472,20 @@ if (surfaces.length === 0) {
 
 // A schema with no corpus would be invisible to this runner.
 const schemaDir = path.join(v1, "jsonschema");
+// A surface directory is "<name>" for the v1 schema and "<name>.v<N>" for a
+// later version of it (refresh-response.v2).
+const schemaFileOf = (surface) => (/\.v[2-9]\d*$/.test(surface) ? `${surface}.schema.json` : `${surface}.v1.schema.json`);
 for (const file of readdirSync(schemaDir)) {
-  const surface = file.replace(/\.v1\.schema\.json$/, "");
-  if (file.endsWith(".v1.schema.json") && !surfaces.includes(surface)) {
+  const later = file.match(/^(.*\.v[2-9]\d*)\.schema\.json$/);
+  const surface = later ? later[1] : file.replace(/\.v1\.schema\.json$/, "");
+  if ((later || file.endsWith(".v1.schema.json")) && !surfaces.includes(surface)) {
     fail(`schema ${file} has no examples/${surface}/ corpus`);
   }
 }
 
 for (const surface of surfaces) {
   const dir = path.join(v1, "examples", surface);
-  const schemaPath = path.join(schemaDir, `${surface}.v1.schema.json`);
+  const schemaPath = path.join(schemaDir, schemaFileOf(surface));
   if (!existsSync(schemaPath)) {
     fail(`examples/${surface}/ has no ${path.basename(schemaPath)}`);
     continue;
@@ -383,11 +503,21 @@ for (const surface of surfaces) {
     for (const sibling of siblings) ajv.addSchema(readJSON(sibling));
     validate = ajv.compile(readJSON(schemaPath));
   } catch (error) {
-    console.error(`SCHEMA FAILED TO COMPILE: ${surface}.v1: ${error.message}`);
+    console.error(`SCHEMA FAILED TO COMPILE: ${path.basename(schemaPath)}: ${error.message}`);
     process.exit(2);
   }
 
   const manifest = readJSON(path.join(dir, "manifest.json"));
+  const pinned = PINNED_INVENTORY[surface];
+  if (pinned) {
+    for (const group of new Set([...Object.keys(pinned), ...Object.keys(manifest).filter((k) => Array.isArray(manifest[k]))])) {
+      const listed = (manifest[group] ?? []).map((e) => (typeof e === "string" ? e : e.file)).sort();
+      const want = [...(pinned[group] ?? [])].sort();
+      if (JSON.stringify(listed) !== JSON.stringify(want)) {
+        fail(`${surface}: manifest group "${group}" lists [${listed}], the pinned inventory is [${want}]`);
+      }
+    }
+  }
   const claimed = new Set();
   const counts = {};
   // An emptied category would make every loop below vacuous and exit 0.
@@ -420,7 +550,13 @@ for (const surface of surfaces) {
       }
       claimed.add(name);
       checked += 1;
-      const fixture = readFixture(path.join(dir, name));
+      let fixture;
+      try {
+        fixture = readFixture(path.join(dir, name), surface);
+      } catch (error) {
+        fail(`${surface}/${name}: ${error.message}`);
+        continue;
+      }
       // A duplicate member is legitimate only in a reject_by_client fixture that
       // DECLARES it (`"duplicate_member": true`), and a declaration must be true.
       // Undeclared, a clients-refuse fixture could be refused for an accidental
@@ -646,7 +782,7 @@ for (const surface of surfaces) {
       }
     }
   }
-  console.log(`${surface}.v1: ${JSON.stringify(counts)}`);
+  console.log(`${path.basename(schemaPath, ".schema.json")}: ${JSON.stringify(counts)}`);
 }
 
 console.log(`\najv 2020-12 strict (v${JSON.parse(readFileSync(path.join(here, "node_modules", "ajv", "package.json"), "utf8")).version}): ${checked} fixtures, ${failures} failures`);

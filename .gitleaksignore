@@ -34,3 +34,6 @@ internal/auth/restorefence/legacy_flags_integration_test.go:generic-api-key:20
 # CHAOS-10983 (lead): revision feed log-capture test, a fabricated sentinel payload value under a constant named secret (never a
 # credential). Commit-less file:rule:line form so the row still matches after a squash.
 internal/auth/revisionfeed/consumer_test.go:generic-api-key:316
+# CHAOS-10894 (lead): external push lifecycle event corpus, an invalid fixture whose point is a forbidden secret_hash member; the value is a fabricated
+# sample, never a credential. Commit-less file:rule:line form so the row still matches after a squash.
+contracts/auth/v1/examples/external-push-lifecycle-event/invalid-change-secret-hash.json:generic-api-key:18

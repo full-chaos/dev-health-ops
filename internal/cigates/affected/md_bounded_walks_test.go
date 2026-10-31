@@ -89,6 +89,10 @@ func TestPlanReadsWalkRootExpressions(t *testing.T) {
 			[]string{"a/b/c\tc_test.go\tdocs\ttree\t*.md\n"}, []string{"unexpressed"}},
 		"range_over_a_package_variable": {walkImports + repo + "var scanRoots = []string{\"cmd\", \"docs\"}\n\nfunc hits(root string) {\n\tfor _, top := range scanRoots {\n\t\t_ = filepath.Walk(filepath.Join(root, top), " + mdWalkCallback + ")\n\t}\n}\n\nfunc TestB(t *testing.T) { hits(guardsRoot()) }\n",
 			[]string{"a/b/c\tc_test.go\tcmd\ttree\t*.md\n", "a/b/c\tc_test.go\tdocs\ttree\t*.md\n"}, []string{"unexpressed"}},
+		"chdir_to_a_symlink_free_temp_dir": {walkImports + "func TestA(t *testing.T) {\n\troot, err := filepath.Abs(filepath.Join(\"..\", \"..\", \"..\"))\n\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n\twork, err := filepath.EvalSymlinks(t.TempDir())\n\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n\tt.Chdir(work)\n\t_ = filepath.Walk(filepath.Join(root, \"docs\"), " + mdWalkCallback + ")\n}\n",
+			[]string{"a/b/c\tc_test.go\tdocs\ttree\t*.md\n"}, []string{"unexpressed"}},
+		"chdir_to_an_unknown_dir": {walkImports + "func TestA(t *testing.T) {\n\troot, err := filepath.Abs(filepath.Join(\"..\", \"..\", \"..\"))\n\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n\twork, err := filepath.EvalSymlinks(os.Getenv(\"D\"))\n\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n\tt.Chdir(work)\n\t_ = filepath.Walk(filepath.Join(root, \"docs\"), " + mdWalkCallback + ")\n}\n",
+			[]string{"a/b/c\tc_test.go\tunexpressed\t-\t*.md\n"}, nil},
 		"range_over_a_written_variable": {walkImports + repo + "var scanRoots = []string{\"cmd\", \"docs\"}\n\nfunc init() { scanRoots = append(scanRoots, os.Getenv(\"X\")) }\n\nfunc hits(root string) {\n\tfor _, top := range scanRoots {\n\t\t_ = filepath.Walk(filepath.Join(root, top), " + mdWalkCallback + ")\n\t}\n}\n\nfunc TestB(t *testing.T) { hits(guardsRoot()) }\n",
 			[]string{"a/b/c\tc_test.go\tunexpressed\t-\t*.md\n"}, nil},
 	} {
@@ -152,6 +156,7 @@ func TestPlanReadsWalkGatePreludes(t *testing.T) {
 		"stat_of_a_directory_name":         {"", stat("docs"), open},
 		"pure_helper":                      {"func skipDir(p, n string) bool { return strings.HasPrefix(n, \".\") || filepath.Base(p) == \"vendor\" }\n\n", call, gated},
 		"pure_helper_of_a_pure_helper":     {"func hidden(n string) bool { return strings.HasPrefix(n, \".\") }\n\nfunc skipDir(p, n string) bool { return hidden(n) }\n\n", call, gated},
+		"helper_that_stats_a_module_file":  {"func skipDir(p, n string) bool {\n\t_, err := os.Stat(filepath.Join(p, \"go.mod\"))\n\treturn err == nil\n}\n\n", call, gated},
 		"helper_that_stats":                {"func skipDir(p, n string) bool { _, err := os.Stat(p + \"/x\"); return err == nil }\n\n", call, open},
 		"helper_that_calls_another_module": {"func skipDir(p, n string) bool { return othermod.Skip(p) }\n\n", call, open},
 		"helper_that_calls_a_method":       {"type skipper struct{}\n\nfunc (skipper) Skip(string) bool { return true }\n\nfunc skipDir(p, n string) bool { return skipper{}.Skip(p) }\n\n", call, open},

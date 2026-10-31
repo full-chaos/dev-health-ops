@@ -38,6 +38,7 @@ numstat() { g diff --numstat "$1...$2" | awk '{f++; if ($1 != "-") a += $1; if (
 read -r F A D <<<"$(numstat "$BASE" "$TIP")"
 read -r F2 A2 D2 <<<"$(numstat "$R1TIP" "$TIP")"
 
+# shellcheck disable=SC2016
 printf '#!/bin/sh\necho "${FAKE_TIP:?}"\n' > "$WORK/fakegh"
 chmod +x "$WORK/fakegh"
 printf 'PR body\n' > "$WORK/ctx.md"
@@ -66,20 +67,22 @@ keep = []
 for l in block:
     if l.startswith("[r2 only] "):
         if rnd == "2": keep.append(l[len("[r2 only] "):])
+    elif l == "[r2 round 1 verdict]":
+        if rnd == "2": keep.append(l)
     else:
         keep.append(l)
 text = "\n".join(keep)
 vals = {"N": "7", "1|2": rnd, "full tip sha": env["FILL_TIP"], "full main sha": env["FILL_BASE"],
         "main sha": env["FILL_BASE"], "tip sha": env["FILL_TIP"], "F": env["FILL_F"], "A": env["FILL_A"],
         "D": env["FILL_D"], "r1 tip": env["FILL_R1TIP"], "F2": env["FILL_F2"], "A2": env["FILL_A2"],
-        "D2": env["FILL_D2"], "r2 round 1 verdict": env["FILL_VERDICT"]}
+        "D2": env["FILL_D2"], "summary": env["FILL_SUMMARY"], "r2 round 1 verdict": env["FILL_VERDICT"]}
 for kv in env["FILL_OVERRIDES"].split("\n"):
     if "=" in kv:
         k, v = kv.split("=", 1)
         vals[k] = v
 def sub(m):
     k = m.group(1)
-    return env["FILL_SUMMARY"] if k.startswith("2-6 sentences") else vals[k]
+    return vals["summary"] if k.startswith("2-6 sentences") else vals[k]
 print(re.sub(r"\[([^\]]*)\]", sub, text))
 ' > "$out"
 }
@@ -135,7 +138,7 @@ cell red-r2-missing-verdict 1 "prompt differs at line" "$WORK/noverdict.md" 2
 fill 2 "$WORK/emptyverdict.md" "r2 round 1 verdict="
 cell red-r2-empty-verdict 1 "prompt differs at line" "$WORK/emptyverdict.md" 2
 
-FILL_SUMMARY='' fill 1 "$WORK/emptysummary.md"
+fill 1 "$WORK/emptysummary.md" "summary="
 cell red-empty-summary-fill 1 "prompt differs at line" "$WORK/emptysummary.md" 1
 
 fill 1 "$WORK/emptyF.md" "F="
@@ -144,7 +147,9 @@ cell red-empty-count-fill 1 "prompt differs at line" "$WORK/emptyF.md" 1
 fill 2 "$WORK/wrongdelta.md" "F2=$((F2 + 1))"
 cell red-r2-wrong-delta-count 1 "delta" "$WORK/wrongdelta.md" 2
 
-cell red-round-arg-mismatch 1 "round" "$WORK/r1.md" 2
+cell red-round-arg-mismatch 1 "prompt differs at line" "$WORK/r1.md" 2
+fill 2 "$WORK/round1in2.md" "1|2=1"
+cell red-round-field-mismatch 1 "round" "$WORK/round1in2.md" 2
 
 cp "$TEMPLATE" "$WORK/tpl-bad.md"
 printf 'x\n' >> "$WORK/tpl-bad.md"

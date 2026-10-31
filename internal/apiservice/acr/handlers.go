@@ -10,10 +10,8 @@
 // last_used_at plus one internal_service_credential_audits row per outcome.
 // CHAOS-7181: apiservice mounts these routes on the internal listener only
 // (apiservice.InternalRoutes); the public api listener has none. The
-// agent_context_runtime entitlement decision itself is ported in full via
-// internal/api/licensing, this package's only dependency for it. Since
-// CHAOS-3695 it is the ask_dev decision OR the legacy agent_context_runtime
-// grant (store.go Lookup).
+// agent_context_runtime entitlement decision (ask_dev OR the legacy grant since
+// CHAOS-3695, store.go Lookup) is ported in full via internal/api/licensing.
 //
 // Entitlement route answers (acr's client depends on these):
 //   - 200 grants body: the org exists.

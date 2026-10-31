@@ -21,14 +21,12 @@ import (
 )
 
 // The self-service acr_service_model toggle (CHAOS-10243): an org admin on a
-// team or enterprise plan with ACR (ask_dev, or the legacy
-// agent_context_runtime grant until CHAOS-12292; CHAOS-3695) turns ACR AI
-// features on or off for their own org. It writes the org's org_feature_overrides row,
+// team or enterprise plan with ACR (ask_dev or agent_context_runtime, CHAOS-3695)
+// turns ACR AI features on or off for their own org. It writes the org's org_feature_overrides row,
 // which the acr entitlement route (internal/apiservice/acr) already serves.
 const (
 	serviceModelFeature        = "acr_service_model"
 	serviceModelACRFeature     = "agent_context_runtime"
-	serviceModelAskDevFeature  = "ask_dev"
 	serviceModelMinTier        = "team"
 	serviceModelSource         = "self_service"
 	serviceModelMarkerSource   = "self_service_toggle"
@@ -128,6 +126,10 @@ func (s serviceModelState) ineligibleReason() string {
 	}
 	return ""
 }
+
+// serviceModelAskDevFeature is the Ask Dev feature: with the legacy
+// agent_context_runtime grant, it is the toggle's ACR precondition (CHAOS-3695).
+const serviceModelAskDevFeature = "ask_dev"
 
 func (h *handlers) loadServiceModelState(ctx context.Context, q serviceModelQueryer, org uuid.UUID, override *serviceModelOverride) (serviceModelState, error) {
 	now := h.store.now().UTC()

@@ -102,6 +102,7 @@
             "const": "external_push_credential.created"
           },
           "payload": {
+            "type": "object",
             "properties": {
               "change": {
                 "type": "object",
@@ -164,6 +165,7 @@
             "const": "external_push_credential.rotated"
           },
           "payload": {
+            "type": "object",
             "properties": {
               "change": {
                 "type": "object",
@@ -231,6 +233,7 @@
             "const": "external_push_credential.scoped"
           },
           "payload": {
+            "type": "object",
             "properties": {
               "change": {
                 "type": "object",
@@ -254,6 +257,7 @@
                 }
               },
               "revision": {
+                "type": "integer",
                 "minimum": 2
               }
             }
@@ -278,6 +282,7 @@
             "const": "external_push_credential.revoked"
           },
           "payload": {
+            "type": "object",
             "properties": {
               "change": {
                 "type": "object",
@@ -292,6 +297,7 @@
                 }
               },
               "revision": {
+                "type": "integer",
                 "minimum": 2
               }
             }
@@ -316,6 +322,7 @@
             "const": "external_push_credential.expired"
           },
           "payload": {
+            "type": "object",
             "properties": {
               "change": {
                 "type": "object",
@@ -336,6 +343,7 @@
                 }
               },
               "revision": {
+                "type": "integer",
                 "minimum": 2
               }
             }

@@ -155,3 +155,25 @@ func Write(ctx context.Context, tx interface {
 	row.RequestMetadata, row.CreatedAt = metadata, at
 	return InsertInAuditTx(ctx, tx, row)
 }
+
+const firstMembershipUserRowSQL = `INSERT INTO public.audit_logs
+	(id, org_id, user_id, action, resource_type, resource_id, description,
+	 changes, request_metadata, status, error_message, created_at)
+SELECT $1, m.org_id, $2, $3, 'user', $2::text, $4, '{}'::json, $5::json, 'success', NULL, now()
+FROM (SELECT org_id FROM public.memberships WHERE user_id = $2
+      ORDER BY COALESCE(joined_at, created_at), joined_at NULLS LAST, created_at NULLS LAST, org_id LIMIT 1) m
+WHERE $6::boolean`
+
+// FirstMembershipUserRow writes go-api's auditUserEvent row (resource user/<user>, changes {}, status success) in the
+// user's first membership's organization (FirstOrganization's order) at the transaction's time, as ONE statement
+// whose text is the same whether it writes or not: no membership writes nothing, and real false (a decoy for an
+// unknown address) writes nothing either. A flow whose statements must not tell a known address from an unknown one
+// (the reset request) runs it for every request.
+func FirstMembershipUserRow(ctx context.Context, exec Execer, real bool, user uuid.UUID, action, description string) error {
+	metadata, err := RequestMetadata(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = exec.Exec(ctx, firstMembershipUserRowSQL, uuid.New(), user, action, description, string(orEmptyObject(metadata)), real)
+	return err
+}

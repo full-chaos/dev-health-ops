@@ -50,10 +50,7 @@ func (l *PGLinks) issueResetRequest(ctx context.Context, req IssueRequest, princ
 		if err := l.writeBoundLink(ctx, tx, req, principal, real); err != nil {
 			return err
 		}
-		if !real {
-			return nil
-		}
-		return resetRequestedPublicRow(ctx, tx, principal)
+		return resetRequestedPublicRow(ctx, tx, principal, real)
 	})
 	if errors.Is(err, errResetRequestPublicRow) {
 		// The request answers as every other address's does (no enumeration);
@@ -91,13 +88,11 @@ var resetRequestSkipped = func() metric.Int64Counter {
 
 // resetRequestedPublicRow is go-api's row of a reset request (internal/api/session verify.go:231 auditUserEvent):
 // password_reset_requested "Password reset requested", resource user/<user>, changes {}, in the user's first public
-// membership's organization in the login order; none for a user with no membership (CHAOS-11400).
-func resetRequestedPublicRow(ctx context.Context, tx audit.TxOps, principal uuid.UUID) error {
-	org, err := publicaudit.FirstOrganization(ctx, tx, principal)
-	if err != nil || org == nil {
-		return err
-	}
-	if err := publicaudit.UserRow(ctx, tx, *org, principal, "password_reset_requested", "Password reset requested", nil); err != nil {
+// membership's organization in the login order; none for a user with no membership (CHAOS-11400). It is one
+// statement of the same text for a known address, an unknown one (real false: the decoy writes nothing) and a user
+// with no membership, so the request's statements stay the same for every address.
+func resetRequestedPublicRow(ctx context.Context, tx audit.TxOps, principal uuid.UUID, real bool) error {
+	if err := publicaudit.FirstMembershipUserRow(ctx, tx, real, principal, "password_reset_requested", "Password reset requested"); err != nil {
 		return fmt.Errorf("%w: %w", errResetRequestPublicRow, err)
 	}
 	return nil

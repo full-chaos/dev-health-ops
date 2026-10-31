@@ -107,6 +107,7 @@ internal/auth/contracts	contracts.go	internal/apiservice/admin
 internal/auth/contracts	contracts.go	internal/audit
 internal/auth/contracts	contracts.go	internal/auth/authapi
 internal/auth/contracts	contracts.go	internal/auth/authconfig
+internal/auth/contracts	contracts.go	internal/auth/authorization
 internal/auth/contracts	contracts.go	internal/auth/authruntime
 internal/auth/contracts	contracts.go	internal/auth/contracts
 internal/auth/contracts	contracts.go	internal/auth/contracts/provisioning
@@ -202,6 +203,8 @@ internal/cigates/bigboyrender	chusers.go	cmd/cigate
 internal/cigates/bigboyrender	chusers.go	internal/cigates/bigboyrender
 internal/cigates/bigboyrender	posture.go	cmd/cigate
 internal/cigates/bigboyrender	posture.go	internal/cigates/bigboyrender
+internal/cigates/bigboyrender	projectscope.go	cmd/cigate
+internal/cigates/bigboyrender	projectscope.go	internal/cigates/bigboyrender
 internal/cigates/bigboyrender	values.go	cmd/cigate
 internal/cigates/bigboyrender	values.go	internal/cigates/bigboyrender
 internal/cigates/docsbuild	docsbuild.go	cmd/cigate

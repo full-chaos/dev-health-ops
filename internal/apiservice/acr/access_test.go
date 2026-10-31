@@ -55,7 +55,9 @@ func accessCreds() *fakeCredentials {
 func accessServer(t *testing.T, store PrincipalAccessStore, creds CredentialStore, deps Deps, limiter ...*httpapi.KeyedLimiter) http.Handler {
 	t.Helper()
 	deps.Auth = creds
-	deps.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	if deps.Logger == nil {
+		deps.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
 	if deps.Store == nil {
 		deps.Store = &fakeStore{}
 	}

@@ -1,9 +1,12 @@
 package acr
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"reflect"
 	"strings"
@@ -148,15 +151,17 @@ func TestPrincipalAccessIsByteIdenticalWithTheProjectScopeOff(t *testing.T) {
 	}
 }
 
-// An over-limit project inventory answers 503 with its own code
-// (ProjectScopeOverLimitCode), so acr can type the refusal as an access
-// limitation and not a retryable outage (CHAOS-12228). The status stays 503,
-// so acr's existing 503 handling does not change. A failed read, and the
-// repository inventory over its limit (a live body; its code is a follow-up),
-// stay the code-less 503. Every cell runs the real store, so the cell also
-// pins that the store keeps projectinventory.ErrOverLimit in its error chain.
-func TestPrincipalAccessProjectScopeOverLimitHasItsOwnCode(t *testing.T) {
+// An inventory over its limit answers 503 with its own code, so acr can type
+// the refusal as an access limitation and not a retryable outage
+// (CHAOS-12228): ProjectScopeOverLimitCode for the project inventory
+// (CHAOS-12224), RepositoryScopeOverLimitCode for the repository inventory
+// (CHAOS-12267). The status stays 503, so acr's existing 503 handling does
+// not change (acr reads no 503 body today). A failed read stays the code-less
+// 503. Every cell runs the real store, so the cell also pins that the store
+// keeps each ErrOverLimit in its error chain.
+func TestPrincipalAccessOverLimitHasItsOwnCode(t *testing.T) {
 	const codeless = `{"detail":"Service unavailable"}`
+	const reposOverLimit = `{"detail":"Service unavailable","code":"acr_access_repository_scope_over_limit"}`
 	cases := []struct {
 		name     string
 		repoErr  error
@@ -168,8 +173,9 @@ func TestPrincipalAccessProjectScopeOverLimitHasItsOwnCode(t *testing.T) {
 		{"project inventory over the limit, wrapped", nil, &fakeProjects{err: fmt.Errorf("canonical: %w", projectinventory.ErrOverLimit)},
 			`{"detail":"Service unavailable","code":"acr_access_project_scope_over_limit"}`},
 		{"project inventory read fails", nil, &fakeProjects{err: errors.New("clickhouse down")}, codeless},
-		{"repository inventory over the limit", repoinventory.ErrOverLimit, &fakeProjects{}, codeless},
-		{"repository inventory over the limit, project scope off", repoinventory.ErrOverLimit, nil, codeless},
+		{"repository inventory over the limit", repoinventory.ErrOverLimit, &fakeProjects{}, reposOverLimit},
+		{"repository inventory over the limit, project scope off", repoinventory.ErrOverLimit, nil, reposOverLimit},
+		{"repository inventory over the limit, wrapped", fmt.Errorf("canonical: %w", repoinventory.ErrOverLimit), nil, reposOverLimit},
 		{"repository inventory read fails", errors.New("clickhouse down"), &fakeProjects{}, codeless},
 	}
 	for _, tc := range cases {
@@ -187,6 +193,80 @@ func TestPrincipalAccessProjectScopeOverLimitHasItsOwnCode(t *testing.T) {
 			}
 			if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
 				t.Fatalf("X-Content-Type-Options = %q, want nosniff", got)
+			}
+		})
+	}
+}
+
+// The over-limit refusal is observable at Warn and on the internal-request
+// counter (CHAOS-12285, the residual of CHAOS-12267): one Warn line naming the
+// inventory, its limit and the code, and one count of the inventory's own
+// outcome. A plain failed read is counted as access_read_failed and logs no
+// over-limit line, so the two refusals stay apart in telemetry as in the body.
+func TestPrincipalAccessOverLimitIsCountedAndLoggedAtWarn(t *testing.T) {
+	const overLimitMsg = "acr principal access: inventory over its limit; answering 503"
+	cases := []struct {
+		name      string
+		repoErr   error
+		projects  *fakeProjects
+		outcome   string
+		inventory string
+		code      string
+	}{
+		{"repository inventory over the limit", repoinventory.ErrOverLimit, nil, outcomeReposOverLimit, "repository", RepositoryScopeOverLimitCode},
+		{"project inventory over the limit", nil, &fakeProjects{err: projectinventory.ErrOverLimit}, outcomeProjectsOverLimit, "project", ProjectScopeOverLimitCode},
+		{"a failed read", errors.New("clickhouse down"), nil, outcomeAccessUnavailable, "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newAccessFixture()
+			f.inventory.repos = nil
+			f.inventory.err = tc.repoErr
+			store := f.store()
+			if tc.projects != nil {
+				store.Projects = tc.projects
+			}
+			var logs bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			before := internalRequestCounts(t)
+			rec := do(accessServer(t, store, accessCreds(), Deps{Logger: logger}), accessPath(accessOrg.String(), accessUser.String(), ""), "Bearer "+accessToken)
+			after := internalRequestCounts(t)
+			if rec.Code != http.StatusServiceUnavailable {
+				t.Fatalf("status %d %s, want 503", rec.Code, rec.Body.String())
+			}
+			for _, outcome := range []string{outcomeReposOverLimit, outcomeProjectsOverLimit, outcomeAccessUnavailable} {
+				key := routePrincipalAccess + "/" + outcome
+				want := int64(0)
+				if outcome == tc.outcome {
+					want = 1
+				}
+				if got := after[key] - before[key]; got != want {
+					t.Errorf("counter %s moved by %d, want %d", key, got, want)
+				}
+			}
+			var overLimit []map[string]any
+			for _, line := range bytes.Split(bytes.TrimSpace(logs.Bytes()), []byte("\n")) {
+				var record map[string]any
+				if err := json.Unmarshal(line, &record); err != nil {
+					t.Fatalf("log line %q: %v", line, err)
+				}
+				if record["msg"] == overLimitMsg {
+					overLimit = append(overLimit, record)
+				}
+			}
+			if tc.inventory == "" {
+				if len(overLimit) != 0 {
+					t.Fatalf("a failed read logged the over-limit line: %v", overLimit)
+				}
+				return
+			}
+			if len(overLimit) != 1 {
+				t.Fatalf("%d over-limit lines, want 1:\n%s", len(overLimit), logs.String())
+			}
+			record := overLimit[0]
+			if record["level"] != "WARN" || record["inventory"] != tc.inventory || record["limit"] != float64(100) || record["code"] != tc.code ||
+				record["org_id"] != accessOrg.String() || record["user_id"] != accessUser.String() {
+				t.Fatalf("over-limit line %v, want WARN inventory=%s limit=100 code=%s and the org and user", record, tc.inventory, tc.code)
 			}
 		})
 	}

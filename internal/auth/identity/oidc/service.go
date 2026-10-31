@@ -127,6 +127,9 @@ type Tokens struct {
 	AccessToken  string
 	RefreshToken string
 	ExpiresIn    int64
+	// SessionAccessToken is auth-service's session-route token under the eddsa
+	// access token class, empty under hs256_compat.
+	SessionAccessToken string
 }
 
 // SessionIssuer creates the session and mints its tokens. Preflight reports

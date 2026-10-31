@@ -496,6 +496,8 @@ func newDroppedGitLabGroups(t *testing.T) *droppedGitLabGroups {
 		path := r.URL.EscapedPath()
 		w.Header()["X-Next-Page"] = []string{""}
 		switch {
+		case path == "/api/v4/version":
+			writeGitLabTeamCatalogJSON(t, w, map[string]any{"version": "17.0.0", "revision": "0000000"})
 		case path == "/api/v4/groups/org":
 			writeGitLabTeamCatalogJSON(t, w, group(1, "org"))
 		case path == "/api/v4/groups/org/subgroups":

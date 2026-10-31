@@ -4,7 +4,7 @@
     "acr_browser_refresh_token"
   ],
   "action": "acr.context.read",
-  "cache_class": "decision_bound",
+  "cache_class": "resource_revision_bound",
   "class_disambiguator": {
     "kind": "grant_type",
     "name": "refresh_token"

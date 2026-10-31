@@ -181,7 +181,7 @@ copy starts read-only, `restore-fence status` says not fenced, `apply` runs as a
 read-only default is reset, and the post phase must show no revocation after T alive, no key re-issued with different
 content, every aggregate continuing at `max(restored revision, floor) + 1` and exactly one `restore_fence_state` row
 for the live timeline. Run it with `DRILL_FENCE=1 DRILL_DIR=<new dir> scripts/drill-auth-pitr.sh`; the result line
-is `DRILL RESULT: PASS (b revokes-after-T-back=0, c reissued-different=0)`.
+is `DRILL RESULT: PASS (b revokes-after-T-back=0, c reissued-different=0, p passwords-after-T-back=0, r reset-required=2)`.
 
 How `b` is counted: in the unfenced drill it is every credential revoked (or principal disabled) after T that is not revoked on
 the PITR copy, absent rows included (a credential created and revoked after T does not exist on the copy). In the fenced drill
@@ -201,8 +201,36 @@ unfenced (`legacy_revokes_after_target_that_came_back` is 3, and they count in `
 So the unfenced baseline `b` is larger than in the 2026-10-29 run below. The attempt secrets live in
 `attempt-secrets.json` of the evidence directory (mode 0600, values made for the drill; nothing prints or passes them as an argument).
 
+From CHAOS-11834 the drill also proves the password reset. Before T it creates two users with a password: one through the
+auth-service identity store (`ProvisionLocal`: `auth.users` and the `public.users` mirror) and one go-api-only user
+(`public.users` only). After T both change the password: the first through `SetPasswordHashFor` (the real write:
+`password_updated_at`, `legacy_token_version` and the mirror's `token_version`), the second with the statement of go-api's
+change-password route (`internal/api/session/changepassword.go`; a unit cell pins the statement, so a change of the handler
+turns it red). On each restored copy the drill runs the login decision of auth-service (`local.Service.Login`) as the
+unprivileged runtime role, four tries: the old and the new password of each user. The end-of-WAL copy must accept the new
+and refuse the old password. The unfenced PITR copy must accept the old password and refuse the new one: that is the gap
+(`attempt-password-T-pitr.json`, `old_password_accepted` = 2). The fenced PITR copy must refuse all four as
+`password_unavailable` (the restored hash is NULL, so the new password is refused too: a reset is required; go-api answers
+the same state with "Password login not available for this account"), the three restored hash rows
+(`auth.users` hash and algorithm, and the two `public.users` hashes) must be NULL (`hash_null_rows` = 3), and the users
+that `force_password_reset` names for the sections `auth.users.password` and `public.users.password` must be exactly the
+two users. In the result line `p` is the number of users whose old password still logs in on the PITR copy (GAP unfenced,
+must be 0 fenced) and `r` is the number of users named for a reset (2 fenced). The passwords live in
+`drill-password-secrets.json` of the evidence directory (mode 0600, made at run time; nothing prints or passes them as an
+argument). Results of the 2026-10-29 runs below were made before this check: their result line has two counts.
+
+Result of the password drill (CHAOS-11834), 2026-10-31 on bigboy at 319214a4: fenced `DRILL RESULT: PASS (b
+revokes-after-T-back=0, c reissued-different=0, p passwords-after-T-back=0, r reset-required=2)`; the fenced PITR copy
+refused all four password tries as `password_unavailable` (`old_password_accepted` = 0, `new_password_accepted` = 0,
+`hash_null_rows` = 3), refused both revoked or disabled workload secrets, and post-T.json had absent_after_restore=2 and
+fence_rows_for_live_timeline=1. The unfenced baseline of the same tip: `DRILL RESULT: GAP (b revokes-after-T-back=9,
+c reissued-different=6, p passwords-after-T-back=2, r reset-required=0)`, with the old password accepted 2 of 2, the new one
+0 of 2 and both revoked or disabled workload secrets accepted. On both runs the end-of-WAL copy accepted the new and refused
+the old password. Evidence: /var/lib/oci-cache/lane-scratch/fcsup/11834/drill-11834-fenced-2/evidence (fenced) and
+drill-11834-base-2/evidence (baseline).
+
 Result of the fenced drill (CHAOS-11271), 2026-10-29 on bigboy at e86f591c: `DRILL RESULT: PASS (b revokes-after-T-back=0,
-c reissued-different=0)`; post-T.json keys_reissued_with_different_content=0, revokes_after_target_that_came_back=0,
+c reissued-different=0)` (the two-count form of that date); post-T.json keys_reissued_with_different_content=0, revokes_after_target_that_came_back=0,
 absent_after_restore=2 (equal to the apply's absent count), fence_rows_for_live_timeline=1; the apply raised 6 floors and
 re-applied 2 revocations. The unfenced baseline of the same tip: `DRILL RESULT: GAP (b revokes-after-T-back=4,
 c reissued-different=6)`. Evidence: /var/lib/oci-cache/lane-scratch/fcdev/drill-11271b-d/evidence (fenced) and
@@ -250,7 +278,9 @@ Order (nothing serves traffic until the last step):
    `SELECT count(*) FROM public.provider_oauth_revocations WHERE token_key_version = 'oauth-v1';` and roll back only at 0.
    Nothing in the code enforces this gate.
 6. Act on the `operator-action` lines the apply prints (ids only): users whose password may have changed after the
-   target (their older password is live again: force a reset, ticket 11834); `provider_revocation_requeued`: with the
+   target (`force_password_reset`: the apply already cleared the restored password hash of each named user, in `auth.users` and
+   `public.users`, so both logins refuse the account until the user sets a new password through the forgot-password mail; nothing
+   else is needed but to tell them); `provider_revocation_requeued`: with the
    PagerDuty client id configured on the API, disconnect or reconnect the credential of each named revocation once
    (`SELECT org_id, credential_name FROM public.provider_oauth_revocations WHERE id = ...`), which sends the queued
    revoke (a setup revoke is sent by a disconnect or callback of its org once the row is 15 minutes old: the apply
@@ -293,6 +323,7 @@ credentials, a pending invite the source no longer holds pending (it ends revoke
 external identities unlinked after the target (deleted again and named in `identity_unlinked`, ids only; a link made or
 re-made after the target is not carried, the user links again; a blind margin deletes none and lists every link for
 review),
+platform role assignments revoked after the target (deleted again, matched by id; a grant made after the target is never inserted and is named in `regrant_platform_role`, ids only, for a platform administrator to grant again; `no_active_platform_admin` names that no platform administrator is active after the fence, and the break-glass verb is `auth-migrate platform-role-bootstrap`; a blind margin deletes none and lists every assignment for review),
 and the legacy public tables: refresh tokens, service and ingest credentials, webhook bindings, invites, users (disabled,
 token version, and a user the source deleted is disabled, never deleted), membership mirror rows, single-use reset and
 verification tokens, and SAML replays. Revision floors are raised past everything the source reached, so no

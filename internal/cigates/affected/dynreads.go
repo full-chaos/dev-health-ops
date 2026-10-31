@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -207,6 +208,7 @@ type dirGroup struct {
 	bindOK    map[*ast.FuncDecl]bool
 	varKind   map[string]map[string]pathInfo
 	immut     map[immutKey]bool // immutableTable/immutableValue, which every bind pass asks again
+	inlining  map[*ast.FuncDecl]bool
 }
 
 type funcDecl struct {
@@ -669,6 +671,23 @@ func (c *fileCtx) pathKind(e ast.Expr, sc *scope) pathInfo {
 			if last, ok := c.foldString(x.Args[len(x.Args)-1], sc); ok && len(x.Args) > 1 && goModFiles[path.Base(last)] {
 				return pathInfo{kind: kGoMod} // a module file: any change to one plans FULL
 			}
+			if len(x.Args) == 2 && (root.kind == kRepo || root.kind == kConst) {
+				base := root
+				if base.kind == kConst {
+					base = c.resolve(base.value)
+				}
+				if n := c.pathKind(x.Args[1], sc); n.kind == kSet && base.kind == kRepo {
+					var out []string
+					for _, m := range members(n) {
+						el, ok := setElems(c.under(base, m.value))
+						if m.kind != kConst || !ok {
+							return dynInfo
+						}
+						out = append(out, el...)
+					}
+					return mkSet(out)
+				}
+			}
 			var rest []string
 			for _, a := range x.Args[1:] {
 				v, ok := c.foldString(a, sc)
@@ -699,13 +718,100 @@ func (c *fileCtx) pathKind(e ast.Expr, sc *scope) pathInfo {
 				}
 			}
 			return dynInfo
-		case "path/filepath.Clean", "path.Clean", "path/filepath.Abs", "path/filepath.FromSlash", "path/filepath.ToSlash":
+		case "path/filepath.Abs":
+			// a relative path is made absolute against the directory the call runs in
+			if len(x.Args) == 1 {
+				in := c.pathKind(x.Args[0], sc)
+				if in.kind == kConst {
+					return c.resolve(in.value)
+				}
+				return in
+			}
+		case "path/filepath.Clean", "path.Clean", "path/filepath.FromSlash", "path/filepath.ToSlash":
 			if len(x.Args) == 1 {
 				return c.pathKind(x.Args[0], sc)
 			}
 		}
+		if id, ok := x.Fun.(*ast.Ident); ok {
+			if k, ok := c.inlineCall(id, x, sc); ok {
+				return k
+			}
+		}
 	}
 	return dynInfo
+}
+
+// inlineLimit is the most statements a helper may have to be evaluated at a call site.
+const inlineLimit = 16
+
+// inlineCall is the kind of the result of calling a function of the directory: its body bound with the parameters at
+// the kinds of this call's arguments, the kinds of its return statements joined. Only a function of one unnamed
+// result, no variadic parameter, a small body and no recursion; anything else is left to the caller (dyn).
+func (c *fileCtx) inlineCall(id *ast.Ident, call *ast.CallExpr, sc *scope) (pathInfo, bool) {
+	if _, local := sc.lookup(id.Name); local || call.Ellipsis.IsValid() {
+		return pathInfo{}, false
+	}
+	decls := c.g.funcs[id.Name]
+	if len(decls) != 1 || decls[0].decl.Recv != nil || decls[0].decl.Body == nil || c.g.inlining[decls[0].decl] || isVariadic(decls[0].decl) {
+		return pathInfo{}, false
+	}
+	fd := decls[0]
+	if r := fd.decl.Type.Results; r == nil || len(r.List) != 1 || len(r.List[0].Names) > 0 {
+		return pathInfo{}, false
+	}
+	var names []string
+	for _, f := range fd.decl.Type.Params.List {
+		if len(f.Names) == 0 {
+			names = append(names, "_")
+		}
+		for _, n := range f.Names {
+			names = append(names, n.Name)
+		}
+	}
+	if len(names) != len(call.Args) {
+		return pathInfo{}, false
+	}
+	stmts := 0
+	ast.Inspect(fd.decl.Body, func(n ast.Node) bool {
+		if _, ok := n.(ast.Stmt); ok {
+			stmts++
+		}
+		return true
+	})
+	if stmts > inlineLimit {
+		return pathInfo{}, false
+	}
+	if c.g.inlining == nil {
+		c.g.inlining = map[*ast.FuncDecl]bool{}
+	}
+	c.g.inlining[fd.decl] = true
+	defer delete(c.g.inlining, fd.decl)
+	in := newScope(nil)
+	for i, n := range names {
+		in.vals[n] = c.pathKind(call.Args[i], sc)
+	}
+	callee := &fileCtx{g: c.g, s: fd.file, pkg: c.g.pkgOf[fd.file]}
+	callee.bind(fd.decl.Body, in)
+	result := pathInfo{}
+	returns := 0
+	ast.Inspect(fd.decl.Body, func(n ast.Node) bool {
+		switch r := n.(type) {
+		case *ast.FuncLit:
+			return false
+		case *ast.ReturnStmt:
+			returns++
+			if len(r.Results) != 1 {
+				result = dynInfo
+				return true
+			}
+			result = join(result, callee.pathKind(r.Results[0], in))
+		}
+		return true
+	})
+	if returns == 0 {
+		return pathInfo{}, false
+	}
+	return result, true
 }
 
 // under is base joined with the constant relative part rest; dyn when rest leaves base.
@@ -818,6 +924,8 @@ func (c *fileCtx) bind(body ast.Node, sc *scope) {
 							v = pathInfo{kind: kTemp}
 						case isLocator(name) && i == 0:
 							v = pathInfo{kind: kRepo, value: "."}
+						case name == "path/filepath.Abs" && i == 0 && len(call.Args) == 1:
+							v = c.pathKind(call, sc)
 						case name == "path/filepath.Glob" && i == 0 && len(call.Args) == 1:
 							if r := c.walkRoot(call.Args[0], sc, true); r.kind == kRepo {
 								v = pathInfo{kind: kGlob, value: r.value, depth: r.depth}
@@ -1235,12 +1343,134 @@ func (c *fileCtx) record(body ast.Node, sc *scope, at func(ast.Node) int, add fu
 						return false
 					}
 				}
+				if name == "os.DirFS" && len(x.Args) == 1 {
+					if filter, ok := c.fsFilter(x); ok {
+						c.call(x, name, sc, at, func(r Read) {
+							if r.Kind == ReadWalk {
+								r.Filter = filter
+							}
+							add(r)
+						})
+						visit(x.Args[0], sc)
+						return false
+					}
+				}
 				c.call(x, name, sc, at, add)
 			}
 			return true
 		})
 	}
 	visit(body, sc)
+}
+
+// fsFilter is the walk filter of an os.DirFS value passed directly to a function of the directory whose FS parameter is
+// used only as the tree of fs.WalkDir calls with a gated callback and as the FS of fs.ReadFile calls of the callback's
+// own gated name: the files those walks act on are the ones the gates pass.
+func (c *fileCtx) fsFilter(dirFS *ast.CallExpr) (string, bool) {
+	body := c.enclosingBody(dirFS)
+	if body == nil {
+		return "", false
+	}
+	var call *ast.CallExpr
+	arg := -1
+	ast.Inspect(body, func(n ast.Node) bool {
+		if p, ok := n.(*ast.CallExpr); ok {
+			for i, a := range p.Args {
+				if a == dirFS {
+					call, arg = p, i
+				}
+			}
+		}
+		return true
+	})
+	if call == nil || call.Ellipsis.IsValid() {
+		return "", false
+	}
+	id, ok := call.Fun.(*ast.Ident)
+	if !ok {
+		return "", false
+	}
+	decls := c.g.funcs[id.Name]
+	if len(decls) != 1 || decls[0].decl.Recv != nil || decls[0].decl.Body == nil || isVariadic(decls[0].decl) {
+		return "", false
+	}
+	var param string
+	i := 0
+	for _, f := range decls[0].decl.Type.Params.List {
+		for _, n := range f.Names {
+			if i == arg {
+				param = n.Name
+			}
+			i++
+		}
+	}
+	if param == "" || param == "_" || i != len(call.Args) {
+		return "", false
+	}
+	callee := &fileCtx{g: c.g, s: decls[0].file, pkg: c.g.pkgOf[decls[0].file]}
+	return callee.fsParamFilter(decls[0].decl.Body, param)
+}
+
+func (c *fileCtx) fsParamFilter(body *ast.BlockStmt, param string) (string, bool) {
+	allowed := map[*ast.Ident]bool{}
+	var filters []string
+	ok := countAssigns(body, param) == 0 // the parameter is never assigned
+	ast.Inspect(body, func(n ast.Node) bool {
+		call, isCall := n.(*ast.CallExpr)
+		if !isCall || len(call.Args) != 3 || c.pkgCallName(call.Fun) != "io/fs.WalkDir" {
+			return true
+		}
+		fsys, isID := call.Args[0].(*ast.Ident)
+		lit, isLit := call.Args[2].(*ast.FuncLit)
+		if !isID || fsys.Name != param || !isLit {
+			return true
+		}
+		filter, gate := c.walkFilter(lit)
+		if filter == "" {
+			ok = false
+			return true
+		}
+		filters = append(filters, filter)
+		allowed[fsys] = true
+		var name string
+		if ps := lit.Type.Params.List; len(ps) > 0 && len(ps[0].Names) > 0 {
+			name = ps[0].Names[0].Name
+		}
+		for i, st := range lit.Body.List {
+			ast.Inspect(st, func(m ast.Node) bool {
+				rf, isCall := m.(*ast.CallExpr)
+				if !isCall || len(rf.Args) != 2 || c.pkgCallName(rf.Fun) != "io/fs.ReadFile" {
+					return true
+				}
+				a0, ok0 := rf.Args[0].(*ast.Ident)
+				a1, ok1 := rf.Args[1].(*ast.Ident)
+				if ok0 && ok1 && a0.Name == param && i >= gate && name != "" && a1.Name == name && countAssigns(lit.Body, name) == 0 {
+					allowed[a0] = true
+				}
+				return true
+			})
+		}
+		return true
+	})
+	ast.Inspect(body, func(n ast.Node) bool {
+		if id, isID := n.(*ast.Ident); isID && id.Name == param && !allowed[id] {
+			ok = false
+		}
+		return ok
+	})
+	if !ok || len(filters) == 0 {
+		return "", false
+	}
+	sort.Strings(filters)
+	var out []string
+	for _, f := range filters {
+		for _, part := range strings.Split(f, "|") {
+			if !slices.Contains(out, part) {
+				out = append(out, part)
+			}
+		}
+	}
+	return strings.Join(out, "|"), true
 }
 
 // walkFilter finds the gate of a filepath.Walk/WalkDir callback: a statement that returns nil for every file whose
@@ -1637,6 +1867,16 @@ func (c *fileCtx) call(x *ast.CallExpr, name string, sc *scope, at func(ast.Node
 		case kWalk:
 			add(Read{Kind: ReadWalk, Line: line, Root: r.value, Depth: depthTree, Literal: what})
 		case kTemp:
+		case kSet:
+			for _, m := range members(r) {
+				switch m.kind {
+				case kRepo:
+					add(Read{Kind: ReadWalk, Line: line, Root: m.value, Depth: depth, Literal: what})
+				case kTemp:
+				default:
+					add(Read{Kind: ReadWalk, Line: line, Root: unexpressed, Depth: "-", Literal: what})
+				}
+			}
 		default:
 			add(Read{Kind: ReadWalk, Line: line, Root: unexpressed, Depth: "-", Literal: what})
 		}

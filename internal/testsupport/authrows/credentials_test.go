@@ -33,19 +33,17 @@ func TestQueryCredentialsLeavesUsersAndRefreshOnTheirExistingProjections(t *test
 	}
 }
 
-func TestQueryCredentialsAuditArmOnlyWhenCredentialsIsForwarded(t *testing.T) {
-	for _, text := range []string{"sessions", "sessions,local_login", "sessions,local_login,social"} {
+func TestTheAuditQueryIsThePublicTableForEveryForwarding(t *testing.T) {
+	for _, text := range []string{"sessions", "sessions,local_login", "sessions,local_login,social", "sessions,local_login,credentials", "credentials"} {
 		got, projected, err := Query(TableAuditLogs, publicAudit, forwarded(t, text))
 		if err != nil || !projected || got != auditLogsACP {
-			t.Errorf("forwarded %s: the audit query is not byte-identical to the sessions projection (err %v)", text, err)
+			t.Errorf("forwarded %s: the audit query is not the public-table query (err %v)", text, err)
 		}
 	}
-	got, _, err := Query(TableAuditLogs, publicAudit, forwarded(t, "sessions,local_login,credentials"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got == auditLogsACP || !strings.Contains(got, "auth.principal.provisioned") {
-		t.Errorf("the credentials audit query holds no credentials arm:\n%s", got)
+	// auth-service writes go-api's rows itself (CHAOS-11400): an auth.* event projected into the comparison would
+	// double them.
+	if strings.Contains(auditLogsACP, "security_audit_events") || !strings.Contains(auditLogsACP, "- 'request_id'") {
+		t.Errorf("the audit query reads auth events or keeps request_id:\n%s", auditLogsACP)
 	}
 }
 
@@ -80,20 +78,6 @@ func TestCredentialAuditEventMapping(t *testing.T) {
 	}
 }
 
-func TestCredentialAuditArmNamesAnUnmappedEventByErroring(t *testing.T) {
-	got, _, err := Query(TableAuditLogs, publicAudit, forwarded(t, "credentials"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range range3(`e.event_type ~ '^auth\.(user|password|email)\.'`, `ELSE e.event_type::int::text`, `'auth.principal.projected'`) {
-		if !strings.Contains(got, want) {
-			t.Errorf("the credentials arm lacks %q:\n%s", want, got)
-		}
-	}
-}
-
-func range3(s ...string) []string { return s }
-
 // go-api deletes every link token of a user once it redeems one (verify.go, reset); it never marks a row
 // consumed, so the auth arm's consumed_at IS NULL filter matches the golden's rows.
 func TestGoAPIRedeemDeletesLinkTokensAndNeverMarksThemConsumed(t *testing.T) {
@@ -118,116 +102,46 @@ func TestGoAPIRedeemDeletesLinkTokensAndNeverMarksThemConsumed(t *testing.T) {
 	}
 }
 
-func TestCredentialQuirksAreWellFormedAndNeedCredentials(t *testing.T) {
+func TestTheSyntheticAuditQuirksAreClosed(t *testing.T) {
 	ids := map[string]bool{}
 	for _, q := range Quirks {
 		ids[q.ID] = true
 	}
 	for _, id := range []string{
-		"audit-register-organization-and-changes-not-recorded",
-		"audit-register-without-organization-recorded",
-		"audit-password-reset-recorded-without-membership",
-		"audit-password-reset-requested-without-membership",
-		"audit-password-reset-requested-unknown-address",
-		"audit-password-reset-organization-not-projected",
-		"audit-password-reset-requested-organization-not-projected",
-	} {
-		if !ids[id] {
-			t.Errorf("no quirk %s", id)
-		}
-	}
-	for _, id := range []string{
-		"audit-password-reset-organization-not-recorded",
-		"audit-password-reset-requested-not-recorded",
+		"audit-login-failed-attempted-email-not-recorded", "audit-login-without-organization-recorded",
+		"audit-register-organization-and-changes-not-recorded", "audit-register-without-organization-recorded",
+		"audit-password-reset-recorded-without-membership", "audit-password-reset-requested-without-membership",
+		"audit-password-reset-requested-unknown-address", "audit-password-reset-organization-not-projected",
+		"audit-password-reset-requested-organization-not-projected", "audit-password-reset-organization-not-recorded",
+		"audit-password-reset-requested-not-recorded", "audit-email-verified-recorded",
 	} {
 		if ids[id] {
-			t.Errorf("quirk %s is closed and must be gone", id)
+			t.Errorf("quirk %s excused a projected auth event; auth-service writes the real row now, so it must be gone", id)
 		}
 	}
-	for _, q := range Quirks {
-		if strings.HasPrefix(q.ID, "audit-register") || strings.HasPrefix(q.ID, "audit-email-verified") || strings.HasPrefix(q.ID, "audit-password") {
-			if len(q.Needs) != 1 || q.Needs[0] != Credentials {
-				t.Errorf("%s: needs %v, want credentials only", q.ID, q.Needs)
-			}
-		}
+	if !ids["audit-login-organization-chosen-without-activity"] {
+		t.Error("the organization choice difference still holds for the real login rows")
 	}
 }
 
-// the golden's audit lines of the scenario's credential steps, and the lines auth-service's events project to
-const (
-	nl         = `{"ip_address": "203.0.113.7", "user_agent": "venue-oracle/1"}`
-	goldenN    = `Nina's Team  Ünïnina.new@example.comcreateuseruser:nina.new@example.comUser registered{"email": "nina.new@example.com", "organization_id": "<uuid>"}` + nl + `success<null>`
-	acpN       = `<nil>nina.new@example.comcreateuseruser:nina.new@example.comUser registered{}` + nl + `success<null>`
-	acpSolo    = `<nil>solo@example.comcreateuseruser:solo@example.comUser registered{}` + nl + `success<null>`
-	goldenR    = `Org Aalice@example.compassword_resetuseruser:alice@example.comUser reset password{}` + nl + `success<null>`
-	acpAliceR  = `<nil>alice@example.compassword_resetuseruser:alice@example.comUser reset password{}` + nl + `success<null>`
-	acpAliceRQ = `<nil>alice@example.compassword_reset_requesteduseruser:alice@example.comPassword reset requested{}` + nl + `success<null>`
-	acpPiaR    = `<nil>pia@example.compassword_resetuseruser:pia@example.comUser reset password{}` + nl + `success<null>`
-	goldenRQ   = `Org Aalice@example.compassword_reset_requesteduseruser:alice@example.comPassword reset requested{}` + nl + `success<null>`
-	acpPiaRQ   = `<nil>pia@example.compassword_reset_requesteduseruser:pia@example.comPassword reset requested{}` + nl + `success<null>`
-	acpNoRQ    = `<nil><null>password_reset_requesteduser<nil>Password reset requested{}` + nl + `success<null>`
-)
+const nl = `{"ip_address": "203.0.113.7", "user_agent": "venue-oracle/1"}`
 
-func TestCredentialQuirksCoverTheScenarioRowsExactly(t *testing.T) {
+// The credential steps' rows auth-service writes are go-api's: the golden's lines compare equal with no quirk.
+func TestCredentialRowsCompareEqualWithNoQuirk(t *testing.T) {
 	l, err := NewLedger(forwarded(t, "credentials"), false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	goldenRows := []string{goldenN, goldenR, goldenRQ}
-	acpRows := []string{acpN, acpAliceR, acpAliceRQ, acpSolo, acpPiaR, acpPiaRQ, acpNoRQ}
-	for _, name := range []string{"emma", "ned", "maya"} {
-		goldenRows = append(goldenRows, strings.Replace(strings.Replace(goldenN, "nina.new", name, 2), "Nina's Team  Ünï", "My Organization", 1))
-		acpRows = append(acpRows, strings.Replace(acpN, "nina.new", name, 2))
+	rows := []string{
+		`Nina's Team  Ünïnina.new@example.comcreateuseruser:nina.new@example.comUser registered{"email": "nina.new@example.com", "organization_id": "<uuid>"}` + nl + `success<null>`,
+		`Org Aalice@example.compassword_resetuseruser:alice@example.comUser reset password{}` + nl + `success<null>`,
+		`Org Aalice@example.compassword_reset_requesteduseruser:alice@example.comPassword reset requested{}` + nl + `success<null>`,
 	}
-	golden, acp := strings.Join(goldenRows, rowSeparator), strings.Join(acpRows, rowSeparator)
-	if problems := l.Compare(TableAuditLogs, golden, acp); len(problems) != 0 {
-		t.Fatalf("unclassified: %v", problems)
+	golden := strings.Join(rows, rowSeparator)
+	if problems := l.Compare(TableAuditLogs, golden, golden); len(problems) != 0 {
+		t.Fatalf("problems: %v", problems)
 	}
-	for _, p := range l.Dead() {
-		if !strings.Contains(p, "covered no row") {
-			t.Errorf("unexpected: %s", p)
-		}
-	}
-	covered := l.Covered()
-	for _, want := range []string{"audit-register-organization-and-changes-not-recorded=4",
-		"audit-password-reset-requested-without-membership=1", "audit-password-reset-requested-unknown-address=1",
-		"audit-password-reset-organization-not-projected=1", "audit-password-reset-requested-organization-not-projected=1"} {
-		if !strings.Contains(covered, want) {
-			t.Errorf("covered lacks %s: %s", want, covered)
-		}
-	}
-	for _, closed := range []string{"audit-password-reset-requested-not-recorded", "audit-password-reset-organization-not-recorded", "audit-email-verified-recorded"} {
-		if strings.Contains(covered, closed) {
-			t.Errorf("closed quirk %s still covers a row: %s", closed, covered)
-		}
-	}
-}
-
-func TestCredentialQuirkMaxIsExactBelowAndAbove(t *testing.T) {
-	for _, n := range []int{2, 3} {
-		l, err := NewLedger(forwarded(t, "credentials"), false)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var rows []string
-		for i := 0; i < n; i++ {
-			rows = append(rows, acpPiaR)
-		}
-		problems := strings.Join(append(l.Compare(TableAuditLogs, "x", strings.Join(rows, rowSeparator)), l.Dead()...), "\n")
-		if !strings.Contains(problems, "audit-password-reset-recorded-without-membership") && !strings.Contains(problems, "target only: <nil>pia") {
-			t.Errorf("%d reset rows of pia were accepted; the scenario holds exactly 1:\n%s", n, problems)
-		}
-	}
-}
-
-// go-api's verify writes no audit row, so the oracle projects none for a verification event (CHAOS-11400).
-func TestTheCredentialArmProjectsNoEmailVerifiedRow(t *testing.T) {
-	for _, eventType := range []string{"auth.email.verified", "auth.user.email_verified"} {
-		if _, ok := CredentialAuditEvents()[eventType]; ok {
-			t.Errorf("%s maps to a public row", eventType)
-		}
-		if !strings.Contains(credentialAuditArm(), "'"+eventType+"'") || !strings.Contains(credentialAuditArm(), "NOT IN ("+noPublicRowEvents+")") {
-			t.Errorf("the arm does not exclude %s", eventType)
-		}
+	if covered := l.Covered(); strings.Contains(covered, "audit-") {
+		t.Errorf("an audit quirk covered an equal row: %s", covered)
 	}
 }

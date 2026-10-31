@@ -185,7 +185,9 @@ INSERT INTO auth.link_credentials (principal_id, purpose, token_hash, expires_at
 	}
 }
 
-func TestAuthRowsCredentialsAuditProjectionMapsEveryEventIntegration(t *testing.T) {
+// CHAOS-11400: auth-service writes go-api's public.audit_logs rows itself, so no auth.* event reaches the audit
+// comparison: a credentials event (mapped or not) projects no row, and the query never fails on one.
+func TestAuthRowsCredentialsAuditComparisonProjectsNoEventIntegration(t *testing.T) {
 	var events []string
 	i := 0
 	for eventType := range CredentialAuditEvents() {
@@ -193,37 +195,10 @@ func TestAuthRowsCredentialsAuditProjectionMapsEveryEventIntegration(t *testing.
 		events = append(events, fmt.Sprintf(`('00000000-0000-4000-8000-00000000ff%02d', '%s', NULL, '00000000-0000-4000-8000-0000000000b1', NULL, '192.0.2.1', 'agent', '{}', '2026-01-01T00:00:%02dZ')`, i, eventType, i))
 	}
 	conn := fixture(t, `INSERT INTO auth.security_audit_events VALUES `+strings.Join(events, ",")+`,
- ('00000000-0000-4000-8000-00000000fe01', 'auth.principal.projected', NULL, '00000000-0000-4000-8000-0000000000b1', NULL, NULL, NULL, '{}', '2026-01-02T00:00:00Z'),
- ('00000000-0000-4000-8000-00000000fe02', 'auth.session.revoked', NULL, '00000000-0000-4000-8000-0000000000b1', NULL, NULL, NULL, '{}', '2026-01-02T00:00:01Z'),
- ('00000000-0000-4000-8000-00000000fe03', 'auth.user.email_verified', NULL, '00000000-0000-4000-8000-0000000000b1', NULL, NULL, NULL, '{}', '2026-01-02T00:00:02Z'),
- ('00000000-0000-4000-8000-00000000fe04', 'auth.email.verified', NULL, '00000000-0000-4000-8000-0000000000b1', NULL, NULL, NULL, '{}', '2026-01-02T00:00:03Z');`)
-	got := runWith(t, conn, TableAuditLogs, "", credentialsForwarded(t))
-	if len(got) != len(CredentialAuditEvents()) {
-		t.Fatalf("want one row per mapped event and none for ignored events, got %d: %v", len(got), got)
-	}
-	for _, row := range got {
-		if !strings.HasPrefix(row, "<nil>|a@example.com|") || !strings.Contains(row, "|user:a@example.com|") || !strings.Contains(row, `{"ip_address": "192.0.2.1", "user_agent": "agent"}`) {
-			t.Errorf("row %s", row)
-		}
-	}
-}
-
-func TestAuthRowsCredentialsAuditProjectionFailsNamingAnUnmappedEventIntegration(t *testing.T) {
-	conn := fixture(t, `INSERT INTO auth.security_audit_events VALUES
- ('00000000-0000-4000-8000-00000000fd01', 'auth.user.unheard_of', NULL, '00000000-0000-4000-8000-0000000000b1', NULL, NULL, NULL, '{}', '2026-01-01T00:00:00Z');`)
-	query, _, err := Query(TableAuditLogs, "", credentialsForwarded(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	rows, err := conn.Query(context.Background(), query)
-	if err == nil {
-		for rows.Next() {
-		}
-		err = rows.Err()
-		rows.Close()
-	}
-	if err == nil || !strings.Contains(err.Error(), "auth.user.unheard_of") {
-		t.Fatalf("an unmapped credentials event must fail the query naming it, got %v", err)
+ ('00000000-0000-4000-8000-00000000fd01', 'auth.user.unheard_of', NULL, '00000000-0000-4000-8000-0000000000b1', NULL, NULL, NULL, '{}', '2026-01-02T00:00:00Z'),
+ ('00000000-0000-4000-8000-00000000fe03', 'auth.user.email_verified', NULL, '00000000-0000-4000-8000-0000000000b1', NULL, NULL, NULL, '{}', '2026-01-02T00:00:02Z');`)
+	if got := runWith(t, conn, TableAuditLogs, "", credentialsForwarded(t)); len(got) != 0 {
+		t.Fatalf("audit rows projected from auth events: %v", got)
 	}
 }
 

@@ -23,8 +23,17 @@ tpl_sha=$(sha256sum "$TEMPLATE" 2>/dev/null | cut -d' ' -f1)
 
 [ -s "$prompt" ] || die 1 "prompt missing or empty: $prompt"
 
+if [ $# -eq 5 ]; then
+  base=$(git -C "$REPO" rev-parse --verify "$5^{commit}" 2>/dev/null) || die 1 "base: stack base $5 is not a commit"
+else
+  base=$(git -C "$REPO" rev-parse --verify origin/main 2>/dev/null) || die 1 "base: origin/main not found"
+fi
+
+REVIEW_KIT_TOP=$(git -C "$REPO" ls-tree --name-only "$base" 2>/dev/null) || die 1 "base: cannot list the tree of $base"
+export REVIEW_KIT_TOP
+
 fields=$(python3 -I -c '
-import re, sys
+import os, re, sys
 tpl_path, prompt_path, rnd = sys.argv[1:4]
 tpl = open(tpl_path, encoding="utf-8").read().split("\n")
 block = tpl[tpl.index("---- PROMPT (copy verbatim, fill brackets) ----") + 1:tpl.index("---- END ----")]
@@ -43,7 +52,9 @@ for l in block:
     else:
         lines.append(l)
 text = "\n".join(lines)
-prompt = open(prompt_path, encoding="utf-8").read().rstrip("\n")
+prompt = open(prompt_path, encoding="utf-8").read()
+if prompt.endswith("\n"):
+    prompt = prompt[:-1]
 
 INLINE = r"[^\s\n](?:[^\n]*[^\s\n])?"
 STRICT = {"N": r"[0-9]+", "1|2": r"[12]", "F": r"[0-9]+", "A": r"[0-9]+", "D": r"[0-9]+",
@@ -53,10 +64,14 @@ STRICT = {"N": r"[0-9]+", "1|2": r"[12]", "F": r"[0-9]+", "A": r"[0-9]+", "D": r
 SUMMARY = r"\S(?:(?!\n\n)[\s\S])*?"
 VERDICT = r"\S[\s\S]*?"
 
+TOP = set(os.environ.get("REVIEW_KIT_TOP", "").split("\n")) - {""}
 STRIP = "`\"\x27(),"
 def is_path(w):
     w = w.strip(STRIP).rstrip(".").strip(STRIP)
-    return "/" in w and (w.count("/") >= 2 or w.startswith("./") or "." in w.rsplit("/", 1)[1])
+    if "/" not in w:
+        return False
+    return (w.startswith(("./", "../", "/")) or w.count("/") >= 2 or "." in w.rsplit("/", 1)[1]
+            or w.split("/", 1)[0] in TOP)
 
 toks = []
 pos = 0
@@ -144,21 +159,19 @@ ctx_sha=$(sha256sum "$ctx" | cut -d' ' -f1)
 
 tip=$("$GH" pr view "$pr" --json headRefOid --jq .headRefOid 2>/dev/null)
 [[ $tip =~ ^[0-9a-f]{40}$ ]] || die 1 "tip: gh pr view $pr gave no head sha"
-if [ $# -eq 5 ]; then
-  base=$(git -C "$REPO" rev-parse --verify "$5^{commit}" 2>/dev/null) || die 1 "base: stack base $5 is not a commit"
-else
-  base=$(git -C "$REPO" rev-parse --verify origin/main 2>/dev/null) || die 1 "base: origin/main not found"
-fi
-
 [ "$(field 'full tip sha')" = "$tip" ] || die 1 "tip: prompt $(field 'full tip sha') != PR head $tip"
 [ "$(field 'full main sha')" = "$base" ] || die 1 "main: prompt $(field 'full main sha') != base $base"
 
 numstat() {
-  git -C "$REPO" diff --numstat "$1...$2" 2>/dev/null | awk '
-    {f++; if ($1 != "-") a += $1; if ($2 != "-") d += $2}
+  local out
+  out=$(git -C "$REPO" diff --numstat "$1...$2" 2>/dev/null) || return 1
+  printf '%s\n' "$out" | awk '
+    NF {f++; if ($1 != "-") a += $1; if ($2 != "-") d += $2}
     END {printf "%d %d %d", f, a, d}'
 }
-read -r nf na nd <<<"$(numstat "$base" "$tip")"
+git -C "$REPO" cat-file -e "$tip^{commit}" 2>/dev/null || die 1 "tip $tip not in the local repository: fetch the PR head first"
+ns=$(numstat "$base" "$tip") || die 1 "numstat failed: $base...$tip"
+read -r nf na nd <<<"$ns"
 [ "$(field F)" = "$nf" ] || die 1 "files: prompt $(field F) != numstat $nf"
 [ "$(field A)" = "$na" ] || die 1 "added: prompt $(field A) != numstat $na"
 [ "$(field D)" = "$nd" ] || die 1 "deleted: prompt $(field D) != numstat $nd"
@@ -167,7 +180,9 @@ delta=
 if [ "$round" = 2 ]; then
   r1=$(field 'r1 tip')
   git -C "$REPO" cat-file -e "$r1^{commit}" 2>/dev/null || die 1 "delta: r1 tip $r1 is not a commit"
-  read -r df da dd <<<"$(numstat "$r1" "$tip")"
+  git -C "$REPO" merge-base --is-ancestor "$r1" "$tip" 2>/dev/null || die 1 "delta: r1 tip $r1 is not an ancestor of tip $tip"
+  dns=$(numstat "$r1" "$tip") || die 1 "delta numstat failed: $r1...$tip"
+  read -r df da dd <<<"$dns"
   [ "$(field F2)" = "$df" ] || die 1 "delta files: prompt $(field F2) != numstat $df"
   [ "$(field A2)" = "$da" ] || die 1 "delta added: prompt $(field A2) != numstat $da"
   [ "$(field D2)" = "$dd" ] || die 1 "delta deleted: prompt $(field D2) != numstat $dd"

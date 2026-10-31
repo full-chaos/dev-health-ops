@@ -29,7 +29,7 @@ var (
 	uvVenvLine  = regexp.MustCompile(`^uv venv --python ([0-9]+\.[0-9]+\.[0-9]+) "\$RUNNER_TEMP/docs-venv"$`)
 	uvInstLine  = `uv pip install --python "$RUNNER_TEMP/docs-venv/bin/python" --require-hashes --no-deps -r ` + glue("requirements-docs", ".", "txt")
 	// The lock grammar: `name==version` then one or more sha256 hashes, nothing else (uv emits no markers here).
-	uvLockVer   = `[0-9]+(?:\.[0-9]+)*(?:[a-z]+[0-9]+)?(?:\.post[0-9]+)?`
+	uvLockVer   = `(?:[0-9]+!)?[0-9]+(?:\.[0-9]+)*(?:(?:a|b|rc)[0-9]+)?(?:\.post[0-9]+)?(?:\.dev[0-9]+)?`
 	uvLockEntry = regexp.MustCompile(`^([A-Za-z0-9][A-Za-z0-9._-]*)==(` + uvLockVer + `)((?: --hash=sha256:[0-9a-f]{64})+)$`)
 	uvLockName  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*==` + uvLockVer + `$`)
 	uvHashTok   = regexp.MustCompile(`^--hash=sha256:[0-9a-f]{64}$`)
@@ -147,10 +147,10 @@ func uvDocsGuard(d docTree) []string {
 					if i+1 < len(w) {
 						next = w[i+1]
 					}
-					if x == "uv" && uvSubcommands[next] {
+					if filepath.Base(x) == "uv" && uvSubcommands[next] {
 						uvSub = true
 					}
-					if (uvPipWord.MatchString(filepath.Base(x)) && next == "install" && (i == 0 || w[i-1] != "uv")) || (x == "-m" && next == "pip") || x == "ensurepip" || x == "uvx" {
+					if (uvPipWord.MatchString(filepath.Base(x)) && next == "install" && (i == 0 || filepath.Base(w[i-1]) != "uv")) || (x == "-m" && next == "pip") || x == "ensurepip" || filepath.Base(x) == "uvx" {
 						out = append(out, fmt.Sprintf("%s:%s runs pip or uvx outside the chain (bare pip install, -m pip, ensurepip, uvx): %q", rel, jobID, l.text))
 					}
 					if x == "mkdocs" || (x == "-m" && next == "mkdocs") {

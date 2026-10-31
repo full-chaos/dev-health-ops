@@ -83,7 +83,10 @@ type State struct {
 // unknown status, or a terminal parent without a TerminalAt, is RefusedParent.
 // Apply trusts the producer's created_at: a rotation stamped before its
 // parent's retirement applies, so the producer must stamp from one clock. A
-// parent that has not been seen yet is the caller's nil: retry later. The
+// The producer writes a rotated event and its parent's retirement in one
+// transaction, each on its own aggregate; between the two events a consumer may
+// see both credentials live, and that window is accepted.
+// A parent that has not been seen yet is the caller's nil: retry later. The
 // returned state is state itself unless the outcome is Applied. Apply never panics and never returns Applied for a
 // terminal credential.
 func Apply(state State, event contracts.ExternalPushLifecycleEvent, parent *State) (State, Outcome) {
@@ -179,6 +182,12 @@ func Live(state State, now time.Time) bool {
 		return false
 	}
 	return now.Before(expires)
+}
+
+// Permits reports whether the credential is live at now and holds scope. A
+// credential with no scopes permits nothing: empty means no scope, never all.
+func Permits(state State, scope string, now time.Time) bool {
+	return scope != "" && Live(state, now) && slices.Contains(state.Scopes, scope)
 }
 
 func sameIdentity(state State, event contracts.ExternalPushLifecycleEvent) bool {

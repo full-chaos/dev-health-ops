@@ -479,3 +479,33 @@ func TestProjectionScopesOnlyNarrowWhateverTheDeliveryOrder(t *testing.T) {
 		t.Fatalf("widening from none: outcome %s, want refused_widen", outcome)
 	}
 }
+
+func TestProjectionEmptyScopesStayEmptyAndPermitNothing(t *testing.T) {
+	none := mustApply(t, mustApply(t, State{}, created(credA, "ingest:write"), nil), scoped(credA, 2), nil)
+	if len(none.Scopes) != 0 || none.Status != StatusActive {
+		t.Fatalf("after scoping to none: %+v", none)
+	}
+	next, outcome := Apply(none, scoped(credA, 3), nil)
+	if outcome != Applied || len(next.Scopes) != 0 {
+		t.Fatalf("empty scoped again: outcome %s scopes %v, want applied and still empty", outcome, next.Scopes)
+	}
+	if _, outcome := Apply(none, scoped(credA, 3, "ingest:write"), nil); outcome != RefusedWiden {
+		t.Fatalf("scoping an empty credential up: outcome %s, want refused_widen", outcome)
+	}
+	for _, scope := range []string{"ingest:write", "schema:read", "*", ""} {
+		if Permits(none, scope, t0) {
+			t.Errorf("a credential with no scopes permits %q, want nothing", scope)
+		}
+		if Permits(State{}, scope, t0) {
+			t.Errorf("a credential never seen permits %q, want nothing", scope)
+		}
+	}
+	full := mustApply(t, State{}, created(credA, "ingest:write"), nil)
+	if !Permits(full, "ingest:write", t0) || Permits(full, "schema:read", t0) || Permits(full, "", t0) {
+		t.Errorf("a credential with one scope must permit exactly that scope")
+	}
+	revoked := mustApply(t, full, revoked(credA, 2), nil)
+	if Permits(revoked, "ingest:write", t0) {
+		t.Errorf("a revoked credential permits a scope")
+	}
+}

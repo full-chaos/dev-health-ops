@@ -71,8 +71,10 @@ func allowedHeaderKey(arg ast.Expr) bool {
 // that is not r.Header.Get("<allowed>"), r.Header.Values("<allowed>") or
 // r.Header["<allowed>"], with an allowed key given as a string literal. A
 // request is a parameter of type *http.Request, or a name assigned from a
-// call on one (r = r.WithContext(ctx)). Response-writer headers (w.Header())
-// are not request reads.
+// call on one (r = r.WithContext(ctx)). The credential methods (BasicAuth,
+// Cookie, Cookies) and BearerToken are refused wherever they are named, as a
+// call or as a value. Response-writer headers (w.Header()) are not request
+// reads.
 func checkRequestHeaderReads(fset *token.FileSet, file *ast.File) []string {
 	var problems []string
 	report := func(pos token.Pos, format string, args ...any) {
@@ -113,19 +115,12 @@ func checkRequestHeaderReads(fset *token.FileSet, file *ast.File) []string {
 			case *ast.CallExpr:
 				switch fun := typed.Fun.(type) {
 				case *ast.SelectorExpr:
-					if requestVar(fun.X, requests) && (fun.Sel.Name == "BasicAuth" || fun.Sel.Name == "Cookie" || fun.Sel.Name == "Cookies") {
-						report(typed.Pos(), "%s reads a request credential", fun.Sel.Name)
-					}
 					if header, ok := fun.X.(*ast.SelectorExpr); ok && requestVar(header.X, requests) && header.Sel.Name == "Header" {
 						if (fun.Sel.Name == "Get" || fun.Sel.Name == "Values") && len(typed.Args) == 1 && allowedHeaderKey(typed.Args[0]) {
 							return false
 						}
 						report(typed.Pos(), "request header read %s is not Get or Values of an allowed literal key", fun.Sel.Name)
 						return false
-					}
-				case *ast.Ident:
-					if fun.Name == "BearerToken" {
-						report(typed.Pos(), "BearerToken is called")
 					}
 				}
 			case *ast.IndexExpr:
@@ -135,7 +130,14 @@ func checkRequestHeaderReads(fset *token.FileSet, file *ast.File) []string {
 					}
 					return false
 				}
+			case *ast.Ident:
+				if typed.Name == "BearerToken" {
+					report(typed.Pos(), "BearerToken is used")
+				}
 			case *ast.SelectorExpr:
+				if requestVar(typed.X, requests) && (typed.Sel.Name == "BasicAuth" || typed.Sel.Name == "Cookie" || typed.Sel.Name == "Cookies") {
+					report(typed.Pos(), "%s is selected: a call or a method value reads a request credential", typed.Sel.Name)
+				}
 				if requestVar(typed.X, requests) && typed.Sel.Name == "Header" {
 					report(typed.Pos(), "request headers are used other than by Get, Values or index with an allowed literal key")
 				}

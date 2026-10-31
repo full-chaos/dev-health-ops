@@ -64,8 +64,6 @@ func TestQueryOIDCAndSAMLStayRefusedByNameWithCredentials(t *testing.T) {
 func TestCredentialAuditEventMapping(t *testing.T) {
 	want := map[string][3]string{
 		"auth.principal.provisioned":    {"create", "user", "User registered"},
-		"auth.email.verified":           {"email_verified", "user", "Email verified"},
-		"auth.user.email_verified":      {"email_verified", "user", "Email verified"},
 		"auth.password.reset":           {"password_reset", "user", "User reset password"},
 		"auth.user.password_changed":    {"password_changed", "user", "User changed own password"},
 		"auth.password.reset_requested": {"password_reset_requested", "user", "Password reset requested"},
@@ -128,7 +126,6 @@ func TestCredentialQuirksAreWellFormedAndNeedCredentials(t *testing.T) {
 	for _, id := range []string{
 		"audit-register-organization-and-changes-not-recorded",
 		"audit-register-without-organization-recorded",
-		"audit-email-verified-recorded",
 		"audit-password-reset-recorded-without-membership",
 		"audit-password-reset-requested-without-membership",
 		"audit-password-reset-requested-unknown-address",
@@ -169,8 +166,6 @@ const (
 	goldenRQ   = `Org Aalice@example.compassword_reset_requesteduseruser:alice@example.comPassword reset requested{}` + nl + `success<null>`
 	acpPiaRQ   = `<nil>pia@example.compassword_reset_requesteduseruser:pia@example.comPassword reset requested{}` + nl + `success<null>`
 	acpNoRQ    = `<nil><null>password_reset_requesteduser<nil>Password reset requested{}` + nl + `success<null>`
-	acpNinaV   = `Nina's Team  Ünïnina.new@example.comemail_verifieduseruser:nina.new@example.comEmail verified{}` + nl + `success<null>`
-	acpUmaV    = `<nil>uma@example.comemail_verifieduseruser:uma@example.comEmail verified{}` + nl + `success<null>`
 )
 
 func TestCredentialQuirksCoverTheScenarioRowsExactly(t *testing.T) {
@@ -179,7 +174,7 @@ func TestCredentialQuirksCoverTheScenarioRowsExactly(t *testing.T) {
 		t.Fatal(err)
 	}
 	goldenRows := []string{goldenN, goldenR, goldenRQ}
-	acpRows := []string{acpN, acpAliceR, acpAliceRQ, acpSolo, acpPiaR, acpPiaRQ, acpNoRQ, acpNinaV, acpUmaV}
+	acpRows := []string{acpN, acpAliceR, acpAliceRQ, acpSolo, acpPiaR, acpPiaRQ, acpNoRQ}
 	for _, name := range []string{"emma", "ned", "maya"} {
 		goldenRows = append(goldenRows, strings.Replace(strings.Replace(goldenN, "nina.new", name, 2), "Nina's Team  Ünï", "My Organization", 1))
 		acpRows = append(acpRows, strings.Replace(acpN, "nina.new", name, 2))
@@ -194,14 +189,14 @@ func TestCredentialQuirksCoverTheScenarioRowsExactly(t *testing.T) {
 		}
 	}
 	covered := l.Covered()
-	for _, want := range []string{"audit-register-organization-and-changes-not-recorded=4", "audit-email-verified-recorded=2",
+	for _, want := range []string{"audit-register-organization-and-changes-not-recorded=4",
 		"audit-password-reset-requested-without-membership=1", "audit-password-reset-requested-unknown-address=1",
 		"audit-password-reset-organization-not-projected=1", "audit-password-reset-requested-organization-not-projected=1"} {
 		if !strings.Contains(covered, want) {
 			t.Errorf("covered lacks %s: %s", want, covered)
 		}
 	}
-	for _, closed := range []string{"audit-password-reset-requested-not-recorded", "audit-password-reset-organization-not-recorded"} {
+	for _, closed := range []string{"audit-password-reset-requested-not-recorded", "audit-password-reset-organization-not-recorded", "audit-email-verified-recorded"} {
 		if strings.Contains(covered, closed) {
 			t.Errorf("closed quirk %s still covers a row: %s", closed, covered)
 		}
@@ -209,19 +204,30 @@ func TestCredentialQuirksCoverTheScenarioRowsExactly(t *testing.T) {
 }
 
 func TestCredentialQuirkMaxIsExactBelowAndAbove(t *testing.T) {
-	verified := acpNinaV
-	for _, n := range []int{1, 3} {
+	for _, n := range []int{2, 3} {
 		l, err := NewLedger(forwarded(t, "credentials"), false)
 		if err != nil {
 			t.Fatal(err)
 		}
 		var rows []string
 		for i := 0; i < n; i++ {
-			rows = append(rows, verified)
+			rows = append(rows, acpPiaR)
 		}
 		problems := strings.Join(append(l.Compare(TableAuditLogs, "x", strings.Join(rows, rowSeparator)), l.Dead()...), "\n")
-		if !strings.Contains(problems, "audit-email-verified-recorded") && !strings.Contains(problems, "target only: Nina's Team") {
-			t.Errorf("%d email-verified rows were accepted; the scenario holds exactly 2:\n%s", n, problems)
+		if !strings.Contains(problems, "audit-password-reset-recorded-without-membership") && !strings.Contains(problems, "target only: <nil>pia") {
+			t.Errorf("%d reset rows of pia were accepted; the scenario holds exactly 1:\n%s", n, problems)
+		}
+	}
+}
+
+// go-api's verify writes no audit row, so the oracle projects none for a verification event (CHAOS-11400).
+func TestTheCredentialArmProjectsNoEmailVerifiedRow(t *testing.T) {
+	for _, eventType := range []string{"auth.email.verified", "auth.user.email_verified"} {
+		if _, ok := CredentialAuditEvents()[eventType]; ok {
+			t.Errorf("%s maps to a public row", eventType)
+		}
+		if !strings.Contains(credentialAuditArm(), "'"+eventType+"'") || !strings.Contains(credentialAuditArm(), "NOT IN ("+noPublicRowEvents+")") {
+			t.Errorf("the arm does not exclude %s", eventType)
 		}
 	}
 }

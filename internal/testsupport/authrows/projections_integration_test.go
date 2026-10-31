@@ -194,7 +194,9 @@ func TestAuthRowsCredentialsAuditProjectionMapsEveryEventIntegration(t *testing.
 	}
 	conn := fixture(t, `INSERT INTO auth.security_audit_events VALUES `+strings.Join(events, ",")+`,
  ('00000000-0000-4000-8000-00000000fe01', 'auth.principal.projected', NULL, '00000000-0000-4000-8000-0000000000b1', NULL, NULL, NULL, '{}', '2026-01-02T00:00:00Z'),
- ('00000000-0000-4000-8000-00000000fe02', 'auth.session.revoked', NULL, '00000000-0000-4000-8000-0000000000b1', NULL, NULL, NULL, '{}', '2026-01-02T00:00:01Z');`)
+ ('00000000-0000-4000-8000-00000000fe02', 'auth.session.revoked', NULL, '00000000-0000-4000-8000-0000000000b1', NULL, NULL, NULL, '{}', '2026-01-02T00:00:01Z'),
+ ('00000000-0000-4000-8000-00000000fe03', 'auth.user.email_verified', NULL, '00000000-0000-4000-8000-0000000000b1', NULL, NULL, NULL, '{}', '2026-01-02T00:00:02Z'),
+ ('00000000-0000-4000-8000-00000000fe04', 'auth.email.verified', NULL, '00000000-0000-4000-8000-0000000000b1', NULL, NULL, NULL, '{}', '2026-01-02T00:00:03Z');`)
 	got := runWith(t, conn, TableAuditLogs, "", credentialsForwarded(t))
 	if len(got) != len(CredentialAuditEvents()) {
 		t.Fatalf("want one row per mapped event and none for ignored events, got %d: %v", len(got), got)

@@ -16,8 +16,6 @@ type credentialAuditEvent struct {
 // credentialAuditEvents are the security events the credentials aggregate writes, in the golden's audit columns.
 var credentialAuditEvents = []credentialAuditEvent{
 	{"auth.principal.provisioned", AuditMapping{"create", "user", "User registered"}},
-	{"auth.email.verified", AuditMapping{"email_verified", "user", "Email verified"}},
-	{"auth.user.email_verified", AuditMapping{"email_verified", "user", "Email verified"}},
 	{"auth.password.reset", AuditMapping{"password_reset", "user", "User reset password"}},
 	{"auth.user.password_changed", AuditMapping{"password_changed", "user", "User changed own password"}},
 	{"auth.password.reset_requested", AuditMapping{"password_reset_requested", "user", "Password reset requested"}},
@@ -44,6 +42,10 @@ func credentialAuditCase(column func(AuditMapping) string) string {
 	return b.String()
 }
 
+// noPublicRowEvents are credentials events go-api has no audit row for: its verify route (internal/api/session
+// verify.go) writes none, so the arm projects none (CHAOS-11400).
+const noPublicRowEvents = `'auth.email.verified', 'auth.user.email_verified'`
+
 // ignoredPrincipalEvents are the principal events other aggregates write; the golden's audit holds no row for them.
 const ignoredPrincipalEvents = `'auth.principal.projected', 'auth.principal.projection_updated'`
 
@@ -62,9 +64,10 @@ func credentialAuditArm() string {
 		'success', '<null>', e.occurred_at::timestamptz
 		FROM auth.security_audit_events e LEFT JOIN organizations o ON o.id = e.organization_id
 		LEFT JOIN users u ON u.id = coalesce(e.subject_principal_id, e.actor_principal_id)
-		WHERE e.event_type IN (` + strings.Join(types, ", ") + `)
+		WHERE (e.event_type IN (` + strings.Join(types, ", ") + `)
 		   OR e.event_type ~ '^auth\.(user|password|email)\.'
-		   OR (e.event_type LIKE 'auth.principal.%' AND e.event_type NOT IN (` + ignoredPrincipalEvents + `))`
+		   OR (e.event_type LIKE 'auth.principal.%' AND e.event_type NOT IN (` + ignoredPrincipalEvents + `)))
+		  AND e.event_type NOT IN (` + noPublicRowEvents + `)`
 }
 
 const auditLogsTail = "\n) t ORDER BY ts, action"

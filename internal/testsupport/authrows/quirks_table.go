@@ -26,7 +26,6 @@ var (
 	registeredWithChanges = regexp.MustCompile(`^.*?createuseruser:([^{]*?)User registered\{"email": "[^"]*", "organization_id": "<uuid>"\}(\{.*)$`)
 	// A registration or password reset audit row with no organization: the organization column is NULL.
 	registeredNoOrg = regexp.MustCompile(`^<nil>.*createuseruser:.*User registered\{\}.*success<null>$`)
-	verifiedAudit   = regexp.MustCompile(`^.*email_verifieduseruser:.*Email verified\{\}.*success<null>$`)
 	resetNoOrg      = regexp.MustCompile(`^<nil>pia@example\.compassword_resetuseruser:pia@example\.comUser reset password\{\}.*success<null>$`)
 	// A password reset request of a user with no membership: the organization column is NULL.
 	resetAskedNoOrg = regexp.MustCompile(`^<nil>pia@example\.compassword_reset_requesteduseruser:pia@example\.comPassword reset requested\{\}.*success<null>$`)
@@ -116,12 +115,6 @@ var Quirks = []Quirk{
 		Extra: func(line string) bool { return registeredNoOrg.MatchString(line) },
 	},
 	{
-		ID: "audit-email-verified-recorded", Kind: Deliberate, Table: TableAuditLogs, Needs: []Aggregate{Credentials},
-		Reason: "auth-service audits a verification with one row (the address marked verified, in the user's earliest membership organization, or none); go-api writes no audit row for it. The scenario verifies two links (nina, uma)",
-		Max:    verifiedAuditRows, Exact: true,
-		Extra: func(line string) bool { return verifiedAudit.MatchString(line) },
-	},
-	{
 		ID: "audit-password-reset-recorded-without-membership", Kind: Deliberate, Table: TableAuditLogs, Needs: []Aggregate{Credentials},
 		Reason: "auth-service audits every password reset; go-api audits one only for a user with a membership (pia has none)",
 		Max:    1, Exact: true,
@@ -164,7 +157,3 @@ var Quirks = []Quirk{
 		},
 	},
 }
-
-// verifiedAuditRows is the email-verified audit rows of the scenario: two verification links followed with a live
-// token (nina's, uma's; nina's second visit is refused), each audited by one event.
-const verifiedAuditRows = 2

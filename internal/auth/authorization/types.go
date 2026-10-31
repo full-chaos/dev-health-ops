@@ -90,7 +90,6 @@ const (
 
 	ReasonAllowedByMembershipDefault Reason = "allowed_by_membership_default"
 	ReasonGrantReadFailed            Reason = "grant_read_failed"
-	ReasonDecisionBoundUnavailable   Reason = "decision_bound_unavailable"
 )
 
 // AllReasons lists every Reason the package can return.
@@ -102,7 +101,7 @@ func AllReasons() []Reason {
 		ReasonRoleLacksAction, ReasonAllowedByRepositoryGrant, ReasonGrantAbsent, ReasonRepositoryNotGranted,
 		ReasonGrantExpired, ReasonGrantRevoked, ReasonWorkloadAudienceDenied,
 		ReasonWorkloadActionDenied, ReasonClockUnavailable, ReasonServiceAccountInactive,
-		ReasonAllowedByMembershipDefault, ReasonGrantReadFailed, ReasonDecisionBoundUnavailable,
+		ReasonAllowedByMembershipDefault, ReasonGrantReadFailed,
 	}
 }
 
@@ -120,7 +119,7 @@ type Decision struct {
 	// platform actions leave it empty: the catalog class applies.
 	CacheClass CacheClass
 	// ExpiresAtUnixNano is the instant a CacheDecisionBound allow stops being
-	// usable (clock plus the snapshot's bound); 0 for every other decision.
+	// usable (clock plus MembershipDefaultBoundNanos); 0 for every other decision.
 	ExpiresAtUnixNano int64
 }
 

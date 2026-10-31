@@ -57,10 +57,6 @@ type GrantSnapshot interface {
 	// NowUnixNano is the decision time in Unix nanoseconds; 0 or less means
 	// no clock.
 	NowUnixNano() int64
-	// DecisionBoundNanos is how long a membership-default allow stays usable,
-	// in nanoseconds. It is an input, never a constant of this package: 0 or
-	// less means no bound is known and a default allow is refused.
-	DecisionBoundNanos() int64
 }
 
 func isNilCatalog(c catalogView) bool {
@@ -92,6 +88,12 @@ func workloadDenial(s GrantSnapshot, action string) Reason {
 	}
 	return ""
 }
+
+// MembershipDefaultBoundNanos is how long a membership-default allow stays
+// usable: 30 seconds, the TRD section 14 ceiling of the decision-bound
+// allow-cache class. It is owned here; no environment, config or snapshot
+// value changes it.
+const MembershipDefaultBoundNanos int64 = 30_000_000_000
 
 // membershipDefaultRole is the role an organization membership holds for
 // repository actions when it has no grant row: owner reads as admin.
@@ -198,12 +200,12 @@ func (e *Evaluator) evaluateRepository(r Request, act policycatalog.Action, s Sn
 		if act.CacheClass == policycatalog.CacheNone {
 			return Decision{Allowed: true, Reason: ReasonAllowedByMembershipDefault, PolicyRevision: rev, CacheClass: CacheNone}
 		}
-		bound := gs.DecisionBoundNanos()
-		if bound <= 0 || bound > math.MaxInt64-now {
-			return deny(ReasonDecisionBoundUnavailable)
+		expires := now + MembershipDefaultBoundNanos
+		if now > math.MaxInt64-MembershipDefaultBoundNanos {
+			expires = math.MaxInt64
 		}
 		return Decision{Allowed: true, Reason: ReasonAllowedByMembershipDefault, PolicyRevision: rev,
-			CacheClass: CacheDecisionBound, ExpiresAtUnixNano: now + bound}
+			CacheClass: CacheDecisionBound, ExpiresAtUnixNano: expires}
 	}
 
 	var sawRevoked, sawExpired bool

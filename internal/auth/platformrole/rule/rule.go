@@ -17,8 +17,8 @@ import (
 // PlatformAdmin is the catalog's platform administrator role key.
 const PlatformAdmin = "platform_admin"
 
-// PlatformOwner is the catalog's platform owner role: a marker that holds
-// exactly the platform_admin actions, granted only by auth-migrate.
+// PlatformOwner is the catalog's platform owner role: a marker that holds no
+// action, granted only by auth-migrate.
 const PlatformOwner = "platform_owner"
 
 // WriteLock is the advisory transaction lock key every writer of

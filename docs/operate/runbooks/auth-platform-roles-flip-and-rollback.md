@@ -45,7 +45,7 @@ The flip does not bump `token_version`, because the reconcile diff is 0. A token
 
 ## Platform owner
 
-`platform_owner` is a marker role (CHAOS-12294). It holds exactly the `platform_admin` actions and no more. Only the operator grants or revokes it, with the migration role:
+`platform_owner` is a marker role (CHAOS-12294). It holds no action: an owner acts only through a `platform_admin` row it also holds. Only the operator grants or revokes it, with the migration role:
 
 - `auth-migrate platform-owner-grant -principal <uuid> -confirm` grants it. It is permanent, audited with `source` `operator-cli` and no actor, and it emits one outbox event. The first grant makes the first owner.
 - `auth-migrate platform-owner-revoke -principal <uuid> -confirm` revokes it. There is no last-owner guard, so a compromised owner is removed at once. With no active owner the owner exemption is off, which is a safe state.

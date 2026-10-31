@@ -9,24 +9,23 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 )
 
-// runtimeExec runs one statement as the runtime role in a transaction that
-// satisfies the commit guard's audit marker, so a refusal is the owner guard's.
+// runtimeExec runs one statement as the runtime role inside audit.Commit, which
+// arms the commit guard, so a refusal is the owner guard's and not the commit
+// guard's. The Apply error is what the test reads.
 func (e *env) runtimeExec(t *testing.T, ctx context.Context, pool *pgxpool.Pool, sql string, args ...any) error {
 	t.Helper()
-	tx, err := pool.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, `SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true)`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tx.Exec(ctx, sql, args...); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
+	return audit.Commit(ctx, pool, e.schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			_, err := tx.Exec(ctx, sql, args...)
+			return err
+		},
+		Audit:  operatorAudit("auth.platform_role.granted", "role_granted", uuid.NewString()),
+		Events: []audit.OutboxEvent{roleEvent(uuid.New(), "platform_role_assignment.granted", "active")},
+	})
 }
 
 func mustRefuseOwner(t *testing.T, what string, err error) {
@@ -56,10 +55,6 @@ func TestRuntimeRoleCannotWriteAnOwnerRow(t *testing.T) {
 	if err := e.runtimeExec(t, ctx, e.runtime,
 		`UPDATE auth.platform_role_assignments SET role_key = 'platform_admin' WHERE principal_id = $1 AND role_key = 'platform_owner'`, other); err == nil {
 		t.Error("UPDATE of an owner row as the runtime role was accepted")
-	}
-	if err := e.runtimeExec(t, ctx, e.runtime,
-		`UPDATE auth.platform_role_assignments SET role_key = 'platform_owner' WHERE principal_id = $1 AND role_key = 'platform_admin'`, uuid.New()); err == nil {
-		t.Log("a no-row UPDATE ran without a refusal (it changes nothing)")
 	}
 	if n := e.ownerRows(t, other); n != 1 {
 		t.Fatalf("owner rows of the held owner after the refused writes = %d, want 1", n)

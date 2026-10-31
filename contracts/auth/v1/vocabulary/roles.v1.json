@@ -104,10 +104,7 @@
     {
       "role": "platform_owner",
       "scope": "platform",
-      "actions": [
-        "admin.orgs",
-        "admin.users"
-      ]
+      "actions": []
     }
   ]
 }

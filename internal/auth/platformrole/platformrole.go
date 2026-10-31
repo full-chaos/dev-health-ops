@@ -16,9 +16,10 @@ import (
 // PlatformAdmin is the catalog's platform administrator role.
 const PlatformAdmin = rule.PlatformAdmin
 
-// PlatformOwner is the catalog's platform owner role. It holds exactly the
-// platform_admin actions; it is a marker the owner exemption reads, granted and
-// revoked only by auth-migrate (GrantOwner, RevokeOwner), never by Grant or Revoke.
+// PlatformOwner is the catalog's platform owner role. It holds no action; it is
+// a marker the owner exemption reads, granted and revoked only by auth-migrate
+// (GrantOwner, RevokeOwner), never by Grant or Revoke. An owner acts through a
+// platform_admin row it also holds.
 const PlatformOwner = rule.PlatformOwner
 
 // GrantAction is the platform action a granter or revoker must hold now.

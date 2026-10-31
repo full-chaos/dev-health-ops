@@ -118,6 +118,7 @@ type srcFile struct {
 	imports  map[string]string // local name -> import path
 	allPaths []string          // every import path, blank and dot imports included
 	dotIO    bool              // dot-imports a package whose calls read paths
+	declared map[string]bool   // declaresName answers
 }
 
 func newSrcFile(rel string, fset *token.FileSet, f *ast.File) *srcFile {
@@ -189,9 +190,14 @@ type dirGroup struct {
 	module string
 	files  []*srcFile
 	consts map[string]map[string]ast.Expr // package name -> constant -> value
-	vars   map[string]map[string]ast.Expr // package name -> package variable assigned once at its declaration
-	funcs  map[string][]*funcDecl         // name -> declarations of that name (functions and methods, both packages)
-	chdir  bool
+	// constFile: the file that declares each constant; strTypes: the package-level `type T string` names
+	constFile map[string]map[string]*srcFile
+	strTypes  map[string]map[string]bool
+	// world: every directory group of the scan by directory, to fold a constant of another package of the module
+	world map[string]*dirGroup
+	vars  map[string]map[string]ast.Expr // package name -> package variable assigned once at its declaration
+	funcs map[string][]*funcDecl         // name -> declarations of that name (functions and methods, both packages)
+	chdir bool
 	// underProgram: the package is a package main or in the import closure of one (execProgramDirs)
 	underProgram bool
 	// chdirOpen: the package changes directory to somewhere that is not a temp dir (or not provably one)
@@ -259,6 +265,7 @@ func execProgramDirs(byDir map[string][]*srcFile, module string) map[string]bool
 
 func newDirGroup(dir, module string, files []*srcFile) *dirGroup {
 	g := &dirGroup{dir: dir, module: module, files: files, consts: map[string]map[string]ast.Expr{}, vars: map[string]map[string]ast.Expr{},
+		constFile: map[string]map[string]*srcFile{}, strTypes: map[string]map[string]bool{},
 		funcs: map[string][]*funcDecl{}, pkgOf: map[*srcFile]string{}, params: map[*ast.FuncDecl][]pathInfo{}, bindOK: map[*ast.FuncDecl]bool{},
 		varKind: map[string]map[string]pathInfo{}}
 	assigned := map[string]bool{} // names assigned or address-taken anywhere in the directory
@@ -268,23 +275,40 @@ func newDirGroup(dir, module string, files []*srcFile) *dirGroup {
 		g.pkgOf[s] = pkg
 		if g.consts[pkg] == nil {
 			g.consts[pkg], g.vars[pkg] = map[string]ast.Expr{}, map[string]ast.Expr{}
+			g.constFile[pkg], g.strTypes[pkg] = map[string]*srcFile{}, map[string]bool{}
 		}
 		for _, d := range s.file.Decls {
 			switch d := d.(type) {
 			case *ast.GenDecl:
+				var prev []ast.Expr // a const spec with no value repeats the expressions of the previous spec
 				for _, spec := range d.Specs {
+					if ts, ok := spec.(*ast.TypeSpec); ok {
+						if id, isID := ts.Type.(*ast.Ident); isID && id.Name == "string" && !ts.Assign.IsValid() {
+							g.strTypes[pkg][ts.Name.Name] = true
+						}
+						continue
+					}
 					vs, ok := spec.(*ast.ValueSpec)
 					if !ok {
 						continue
 					}
+					values := vs.Values
+					if d.Tok == token.CONST {
+						if len(values) == 0 && vs.Type == nil {
+							values = prev
+						} else {
+							prev = values
+						}
+					}
 					for i, n := range vs.Names {
 						var v ast.Expr
-						if i < len(vs.Values) && len(vs.Values) == len(vs.Names) {
-							v = vs.Values[i]
+						if i < len(values) && len(values) == len(vs.Names) {
+							v = values[i]
 						}
 						switch {
 						case d.Tok == token.CONST && v != nil:
 							g.consts[pkg][n.Name] = v
+							g.constFile[pkg][n.Name] = s
 						case d.Tok == token.VAR && v != nil:
 							g.vars[pkg][n.Name] = v
 						}
@@ -451,6 +475,16 @@ func (c *fileCtx) fold(e ast.Expr, sc *scope, depth int) (constant.Value, bool) 
 		return nil, false
 	case *ast.ParenExpr:
 		return c.fold(x.X, sc, depth+1)
+	case *ast.SelectorExpr:
+		og, pkg, ok := c.modulePackage(x, sc)
+		if !ok {
+			return nil, false
+		}
+		ce, ok := og.consts[pkg][x.Sel.Name]
+		if !ok || og.constFile[pkg][x.Sel.Name].test {
+			return nil, false
+		}
+		return (&fileCtx{g: og, s: og.constFile[pkg][x.Sel.Name], pkg: pkg}).fold(ce, nil, depth+1)
 	case *ast.BinaryExpr:
 		a, ok1 := c.fold(x.X, sc, depth+1)
 		b, ok2 := c.fold(x.Y, sc, depth+1)
@@ -468,11 +502,19 @@ func (c *fileCtx) fold(e ast.Expr, sc *scope, depth int) (constant.Value, bool) 
 		return nil, false
 	case *ast.CallExpr:
 		name := c.s.callName(x.Fun)
-		args := make([]constant.Value, 0, len(x.Args))
+		callArgs := x.Args
 		if x.Ellipsis.IsValid() {
-			return nil, false
+			el, ok := c.spreadArgs(x)
+			if !ok {
+				return nil, false
+			}
+			callArgs = el
 		}
-		for _, a := range x.Args {
+		if c.stringType(x.Fun, sc) && len(callArgs) == 1 && !x.Ellipsis.IsValid() {
+			name = "string"
+		}
+		args := make([]constant.Value, 0, len(callArgs))
+		for _, a := range callArgs {
 			v, ok := c.fold(a, sc, depth+1)
 			if !ok {
 				return nil, false
@@ -1712,7 +1754,16 @@ func (c *fileCtx) execEdges(x *ast.CallExpr, name string, sc *scope, line int, a
 	}
 	// A constant argument that names Markdown files (`*.md`, `README.md`; a named constant, a + chain or fmt.Sprintf of
 	// constants) is a read of them whatever the program.
-	for _, a := range args {
+	scanArgs := args
+	if x.Ellipsis.IsValid() {
+		if el, ok := c.spreadArgs(x); ok {
+			scanArgs = el
+			if name == "os/exec.CommandContext" && len(scanArgs) > 0 {
+				scanArgs = scanArgs[1:]
+			}
+		}
+	}
+	for _, a := range scanArgs {
 		ast.Inspect(a, func(n ast.Node) bool {
 			switch n.(type) {
 			case *ast.BasicLit, *ast.Ident, *ast.SelectorExpr, *ast.BinaryExpr, *ast.ParenExpr, *ast.CallExpr:
@@ -2426,9 +2477,16 @@ func (c *fileCtx) tailPattern(arg ast.Expr, sc *scope, line int, what string, ad
 	var tail []string
 	switch x := ast.Unparen(arg).(type) {
 	case *ast.CallExpr:
-		if n := c.s.callName(x.Fun); (n == "path/filepath.Join" || n == "path.Join") && !x.Ellipsis.IsValid() {
-			for i := len(x.Args) - 1; i >= 1; i-- {
-				v, ok := c.foldString(x.Args[i], sc)
+		if n := c.s.callName(x.Fun); n == "path/filepath.Join" || n == "path.Join" {
+			args := x.Args
+			if x.Ellipsis.IsValid() {
+				var ok bool
+				if args, ok = c.spreadArgs(x); !ok {
+					args = nil
+				}
+			}
+			for i := len(args) - 1; i >= 1; i-- {
+				v, ok := c.foldString(args[i], sc)
 				if !ok {
 					break
 				}
@@ -2561,6 +2619,18 @@ func (c *fileCtx) pkgCallName(fun ast.Expr) string {
 
 // declaresName reports whether the file declares name anywhere, at any depth.
 func (c *fileCtx) declaresName(name string) bool {
+	if v, ok := c.s.declared[name]; ok {
+		return v
+	}
+	found := c.scanDeclares(name)
+	if c.s.declared == nil {
+		c.s.declared = map[string]bool{}
+	}
+	c.s.declared[name] = found
+	return found
+}
+
+func (c *fileCtx) scanDeclares(name string) bool {
 	found := false
 	ast.Inspect(c.s.file, func(n ast.Node) bool {
 		switch x := n.(type) {
@@ -2594,4 +2664,191 @@ func (c *fileCtx) declaresName(name string) bool {
 		return !found
 	})
 	return found
+}
+
+// modulePackage resolves pkg.Name, pkg an import of a package of the module that the scan holds: its directory group and
+// the name of its non-test package. The qualifier must not be declared again in the file or the scope.
+func (c *fileCtx) modulePackage(x *ast.SelectorExpr, sc *scope) (*dirGroup, string, bool) {
+	id, ok := x.X.(*ast.Ident)
+	if !ok || c.g.module == "" {
+		return nil, "", false
+	}
+	if sc != nil {
+		if _, local := sc.lookup(id.Name); local {
+			return nil, "", false
+		}
+	}
+	imp, ok := c.s.imports[id.Name]
+	if !ok || c.declaresName(id.Name) {
+		return nil, "", false
+	}
+	rest, ok := strings.CutPrefix(imp, c.g.module+"/")
+	if !ok {
+		return nil, "", false
+	}
+	og := c.g.world[rest]
+	if og == nil {
+		return nil, "", false
+	}
+	for _, f := range og.files {
+		if !f.test {
+			return og, og.pkgOf[f], true
+		}
+	}
+	return nil, "", false
+}
+
+// stringType reports whether fun names a type declared as `type T string`, in this package or in a package of the module:
+// T(v) then converts a string.
+func (c *fileCtx) stringType(fun ast.Expr, sc *scope) bool {
+	switch f := ast.Unparen(fun).(type) {
+	case *ast.Ident:
+		if sc != nil {
+			if _, local := sc.lookup(f.Name); local {
+				return false
+			}
+		}
+		return c.g.strTypes[c.pkg][f.Name]
+	case *ast.SelectorExpr:
+		if og, pkg, ok := c.modulePackage(f, sc); ok {
+			return og.strTypes[pkg][f.Sel.Name]
+		}
+	}
+	return false
+}
+
+// spreadArgs are the arguments a call's `s...` stands for, when s is a slice literal, an append of values to one, or a
+// local or package variable defined once as one and only spread, ranged over or measured: the arguments before the
+// spread, then the elements.
+func (c *fileCtx) spreadArgs(call *ast.CallExpr) ([]ast.Expr, bool) {
+	if len(call.Args) == 0 {
+		return nil, false
+	}
+	last := call.Args[len(call.Args)-1]
+	el, ok := c.sliceElems(last, call, 0)
+	if !ok {
+		return nil, false
+	}
+	return append(append([]ast.Expr{}, call.Args[:len(call.Args)-1]...), el...), true
+}
+
+func (c *fileCtx) sliceElems(e ast.Expr, at ast.Node, depth int) ([]ast.Expr, bool) {
+	if depth > 8 {
+		return nil, false
+	}
+	switch x := ast.Unparen(e).(type) {
+	case *ast.CompositeLit:
+		if _, ok := x.Type.(*ast.ArrayType); !ok {
+			return nil, false
+		}
+		for _, el := range x.Elts {
+			if _, kv := el.(*ast.KeyValueExpr); kv {
+				return nil, false
+			}
+		}
+		return x.Elts, true
+	case *ast.CallExpr:
+		if id, ok := x.Fun.(*ast.Ident); !ok || id.Name != "append" || c.declaresName("append") || len(x.Args) == 0 || x.Ellipsis.IsValid() {
+			return nil, false
+		}
+		base, ok := c.sliceElems(x.Args[0], at, depth+1)
+		if !ok {
+			return nil, false
+		}
+		return append(append([]ast.Expr{}, base...), x.Args[1:]...), true
+	case *ast.Ident:
+		if def := c.packageSlice(x.Name); def != nil {
+			return c.sliceElems(def, at, depth+1)
+		}
+		body := c.enclosingBody(at)
+		if body == nil || countAssigns(body, x.Name) != 1 {
+			return nil, false
+		}
+		var def ast.Expr
+		ast.Inspect(body, func(n ast.Node) bool {
+			switch d := n.(type) {
+			case *ast.AssignStmt:
+				if len(d.Lhs) == len(d.Rhs) {
+					for i, l := range d.Lhs {
+						if id, ok := l.(*ast.Ident); ok && id.Name == x.Name {
+							def = d.Rhs[i]
+						}
+					}
+				}
+			case *ast.ValueSpec:
+				if len(d.Names) == len(d.Values) {
+					for i, id := range d.Names {
+						if id.Name == x.Name {
+							def = d.Values[i]
+						}
+					}
+				}
+			}
+			return true
+		})
+		if def == nil || !onlySpreadUses(body, x.Name) {
+			return nil, false
+		}
+		return c.sliceElems(def, at, depth+1)
+	}
+	return nil, false
+}
+
+// packageSlice is the initializer of a package variable the directory assigns only at its declaration.
+func (c *fileCtx) packageSlice(name string) ast.Expr {
+	return c.g.vars[c.pkg][name]
+}
+
+// enclosingBody is the body of the top-level function declaration that holds n.
+func (c *fileCtx) enclosingBody(n ast.Node) ast.Node {
+	for _, d := range c.s.file.Decls {
+		if fd, ok := d.(*ast.FuncDecl); ok && fd.Body != nil && fd.Pos() <= n.Pos() && n.End() <= fd.End() {
+			return fd.Body
+		}
+	}
+	return nil
+}
+
+// onlySpreadUses reports whether every use of the variable name in body is its definition, a spread argument, a range
+// operand or the argument of len: nothing can then change its elements.
+func onlySpreadUses(body ast.Node, name string) bool {
+	ok := true
+	allowed := map[*ast.Ident]bool{}
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.AssignStmt:
+			for _, l := range x.Lhs {
+				if id, isID := l.(*ast.Ident); isID {
+					allowed[id] = true
+				}
+			}
+		case *ast.ValueSpec:
+			for _, id := range x.Names {
+				allowed[id] = true
+			}
+		case *ast.CallExpr:
+			if x.Ellipsis.IsValid() && len(x.Args) > 0 {
+				if id, isID := x.Args[len(x.Args)-1].(*ast.Ident); isID {
+					allowed[id] = true
+				}
+			}
+			if f, isID := x.Fun.(*ast.Ident); isID && f.Name == "len" && len(x.Args) == 1 {
+				if id, isID := x.Args[0].(*ast.Ident); isID {
+					allowed[id] = true
+				}
+			}
+		case *ast.RangeStmt:
+			if id, isID := x.X.(*ast.Ident); isID {
+				allowed[id] = true
+			}
+		}
+		return true
+	})
+	ast.Inspect(body, func(n ast.Node) bool {
+		if id, isID := n.(*ast.Ident); isID && id.Name == name && !allowed[id] {
+			ok = false
+		}
+		return ok
+	})
+	return ok
 }

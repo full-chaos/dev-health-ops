@@ -232,8 +232,13 @@ func ScanReads(root string) ([]Read, error) {
 	}
 	module := modulePath(root)
 	programs := execProgramDirs(byDir, module)
+	world := map[string]*dirGroup{}
 	for _, d := range dirs {
-		g := newDirGroup(d, module, byDir[d])
+		world[d] = newDirGroup(d, module, byDir[d])
+		world[d].world = world
+	}
+	for _, d := range dirs {
+		g := world[d]
 		flow := newFlowGroup(byDir[d])
 		for _, s := range byDir[d] {
 			reads = append(reads, scanFile(s.fset, s.file, s.rel, top, g.chdir, flow)...)

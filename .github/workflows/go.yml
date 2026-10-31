@@ -858,7 +858,7 @@ jobs:
 
       # Diagnostics only. It runs after the verdict step, only on failure, and cannot change a result. A shard that ran to its
       # time limit (cancelled with a wall of at least the cap minus 30 s, or a go test deadline panic in its log) is named a
-      # JOB TIMEOUT and listed in the `timed_out` output; any other cancelled shard is a fail-fast cancel.
+      # JOB TIMEOUT and listed in the `timed_out` output (a deadline panic also prints the running tests: block, a hang names its test); any other cancelled shard is a fail-fast cancel.
       - name: Name the red shard
         id: name_red
         if: failure()
@@ -887,7 +887,7 @@ jobs:
               fi
               if [ "${conclusion}" = "cancelled" ]; then
                 if [ "${cap_s}" -gt 0 ] && [ "${wall}" -ge $((cap_s - 30)) ]; then
-                  echo "- ${name}: JOB TIMEOUT (ran ${wall}s of ${cap_s}s; not a test failure): ${url}"
+                  echo "- ${name}: JOB TIMEOUT (ran to the time limit: a slow runner or a hung test; no test assertion failed; ran ${wall}s of ${cap_s}s): ${url}"
                   echo "${name}" >> "${timed_file}"
                 else
                   cancelled=$((cancelled + 1))
@@ -900,8 +900,10 @@ jobs:
                 got_log=1
               fi
               if [ "${got_log}" -eq 1 ] && grep -q -- 'panic: test timed out after' "${logfile}"; then
-                echo "- ${name}: JOB TIMEOUT (go test deadline; not a test failure): ${url}"
+                echo "- ${name}: JOB TIMEOUT (ran to the time limit: a slow runner or a hung test; no test assertion failed; go test deadline): ${url}"
                 echo "${name}" >> "${timed_file}"
+                grep -m 1 -A 10 -- 'panic: test timed out after' "${logfile}" | sed 's/^/    /' || true
+                got_log=0
               else
                 echo "- ${name}: ${url}"
               fi

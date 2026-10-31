@@ -82,7 +82,7 @@ func TestNamingStepLabelsAShardCancelledAtItsTimeLimitAsATimeout(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("the naming step must exit 0, got %d", code)
 	}
-	re := regexp.MustCompile(`(?m)^- go-storage-integration-shard-packages-8: JOB TIMEOUT .*not a test failure.*https://example.test/job/778`)
+	re := regexp.MustCompile(`(?m)^- go-storage-integration-shard-packages-8: JOB TIMEOUT \(ran to the time limit: a slow runner or a hung test; no test assertion failed.*https://example.test/job/778`)
 	if !re.MatchString(out) {
 		t.Errorf("want a JOB TIMEOUT line for packages-8; out=%q", out)
 	}
@@ -120,7 +120,7 @@ func TestNamingStepLabelsAGoTestDeadlinePanicAsATimeout(t *testing.T) {
 		{"failure", "778", "go-storage-integration-shard-packages-8", "2026-10-25T03:30:00Z", "2026-10-25T03:40:00Z", failLog},
 	}
 	_, out, _ := runNamingTimeouts(t, script, 25, legs)
-	if !regexp.MustCompile(`(?m)^- go-storage-integration-shard-packages-7: JOB TIMEOUT`).MatchString(out) {
+	if !regexp.MustCompile(`(?m)^- go-storage-integration-shard-packages-7: JOB TIMEOUT \(ran to the time limit: a slow runner or a hung test; no test assertion failed`).MatchString(out) {
 		t.Errorf("a go test deadline panic must read as a JOB TIMEOUT; out=%q", out)
 	}
 	if strings.Contains(out, "packages-8: JOB TIMEOUT") {
@@ -128,6 +128,27 @@ func TestNamingStepLabelsAGoTestDeadlinePanicAsATimeout(t *testing.T) {
 	}
 	if !strings.Contains(out, "\ntimed_out=go-storage-integration-shard-packages-7\n") {
 		t.Errorf("GITHUB_OUTPUT must carry timed_out=<name>; out=%q", out)
+	}
+}
+
+func TestNamingStepPrintsTheRunningTestsOfADeadlinePanic(t *testing.T) {
+	script := timeoutNamingStep(t)
+	var long strings.Builder
+	long.WriteString("2026-10-25T10:21:30Z panic: test timed out after 21m30s\n2026-10-25T10:21:30Z \trunning tests:\n")
+	for i := 1; i <= 15; i++ {
+		fmt.Fprintf(&long, "2026-10-25T10:21:30Z \t\tTestHang%02d (21m0s)\n", i)
+	}
+	legs := []namingLeg{{"failure", "777", "go-storage-integration-shard-packages-7", "2026-10-25T03:30:00Z", "2026-10-25T03:52:00Z", long.String()}}
+	_, out, _ := runNamingTimeouts(t, script, 35, legs)
+	if !strings.Contains(out, "    2026-10-25T10:21:30Z \t\tTestHang01 (21m0s)") {
+		t.Errorf("the running tests block must be printed, indented; out=%q", out)
+	}
+	if !strings.Contains(out, "TestHang09") || strings.Contains(out, "TestHang12") {
+		t.Errorf("at most 10 lines after the panic line are printed; out=%q", out)
+	}
+	_, out, _ = runNamingTimeouts(t, script, 35, []namingLeg{{"failure", "778", "go-storage-integration-shard-packages-8", "2026-10-25T03:30:00Z", "2026-10-25T03:40:00Z", failLog}})
+	if strings.Contains(out, "running tests") {
+		t.Errorf("a plain failure prints no running tests block; out=%q", out)
 	}
 }
 
@@ -148,7 +169,7 @@ func TestQueueGateNamesAShardTimeoutAndStaysRed(t *testing.T) {
 	for _, res := range []string{"failure", "cancelled"} {
 		v := runGate(t, gateEnv(res, note))
 		assertVerdict(t, "go-queue-gate", v, false, "a timed out shard with result "+res)
-		if !strings.Contains(v.stderr, "JOB TIMEOUT, not a test failure") || !strings.Contains(v.stderr, "go-storage-integration-shard-packages-8") {
+		if !strings.Contains(v.stderr, "JOB TIMEOUT (time limit reached: slow runner or hung test), not a test assertion failure") || !strings.Contains(v.stderr, "go-storage-integration-shard-packages-8") {
 			t.Errorf("result %s: stderr must name the timeout and the shard; stderr=%q", res, v.stderr)
 		}
 	}

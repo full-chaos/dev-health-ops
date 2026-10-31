@@ -1,4 +1,4 @@
--- 0038 workload assertion keys: the public key metadata of a workload that
+-- 0039 workload assertion keys: the public key metadata of a workload that
 -- signs request-bound assertions (the web issuer of the ACR web assertion).
 -- ADDITIVE ONLY. See 0001's header.
 --

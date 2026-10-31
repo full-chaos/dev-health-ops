@@ -403,6 +403,15 @@ func TestFixtureCells(t *testing.T) {
 		{"helper_with_flag.go", 0},
 		{"nonliteral_subcommand.go", 1},
 		{"provider_name_not_exec.go", 0},
+		{"shadow_cmd_var.go", 1},
+		{"shadow_cmd_const.go", 1},
+		{"shadow_ctx_var.go", 1},
+		{"shadow_ctx_const.go", 1},
+		{"shadow_run_var.go", 1},
+		{"shadow_run_const.go", 1},
+		{"shadow_control_var.go", 0},
+		{"shadow_control_const.go", 0},
+		{"param_named_like_flag_var.go", 1},
 	}
 	for _, c := range cells {
 		t.Run(c.file, func(t *testing.T) {
@@ -427,5 +436,14 @@ func TestAllowlistEntryThatMatchesNoSiteIsStale(t *testing.T) {
 	stale := staleEntries(allow, used)
 	if len(stale) != 1 || !strings.HasSuffix(stale[0], "testdata/raw_commit.go|gone") {
 		t.Fatalf("stale = %v: only the entry that matches no site is stale", stale)
+	}
+}
+
+func TestFlagVarDeclaredInAnotherFileOfThePackageCounts(t *testing.T) {
+	u := &unit{fset: token.NewFileSet(), files: map[string]*ast.File{}}
+	parseFile(t, u, filepath.Join("testdata", "other_file", "flag_decl.go"))
+	parseFile(t, u, filepath.Join("testdata", "other_file", "use.go"))
+	if got := failures(u, ".", nil, map[string]bool{}); len(got) != 0 {
+		t.Fatalf("flag var of another file of the package must count: %+v", got)
 	}
 }

@@ -236,7 +236,7 @@
             "name": {
               "type": "string",
               "pattern": "^[A-Za-z0-9][A-Za-z0-9._+/:-]{0,63}$",
-              "description": "The scheme, prefix, header name, JWT header alg, JWT header typ, Content-Type media type, token-type URI or grant type the selector reads. A name, never a credential value. `+` is allowed for a media-type typ such as at+jwt; `/` is allowed only for a content_type, which must be a lowercase type/subtype, and `:` only for a subject_token_type, which must be a lowercase urn: URI, and for a grant_type, which is a lowercase grant name such as refresh_token or a lowercase urn: URI (see the if/then entries of class_disambiguator). Owned here; endpoint-auth-profile.v1 and the credential-class markers reference it."
+              "description": "The scheme, prefix, header name, JWT header alg, JWT header typ, Content-Type media type, token-type URI or grant type the selector reads. A name, never a credential value. `+` is allowed for a media-type typ such as at+jwt; `/` is allowed only for a content_type, which must be a lowercase type/subtype, and `:` only for a subject_token_type, which must be a lowercase urn: URI, and for a grant_type, which is a lowercase RFC 6749 grant name (letters, digits, '-', '.', '_'; e.g. refresh_token) or a lowercase urn: URI (see the if/then entries of class_disambiguator). Owned here; endpoint-auth-profile.v1 and the credential-class markers reference it."
             }
           },
           "allOf": [
@@ -305,7 +305,7 @@
                 "properties": {
                   "name": {
                     "type": "string",
-                    "pattern": "^(?:[a-z][a-z0-9_]*|urn:[a-z0-9][a-z0-9-]*(?::[a-z0-9][a-z0-9._-]*)+)$"
+                    "pattern": "^(?:[a-z0-9][a-z0-9._-]*|urn:[a-z0-9][a-z0-9-]*(?::[a-z0-9][a-z0-9._-]*)+)$"
                   }
                 }
               }

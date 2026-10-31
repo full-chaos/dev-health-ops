@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -300,7 +301,8 @@ func markerMatchesTransport(kind, name, head, shape string) bool {
 	case "subject_token_type":
 		return strings.Contains(head, "subject_token_type "+name)
 	case "grant_type":
-		return strings.Contains(head, "grant_type="+name)
+		// The whole grant name: "refresh" must not match grant_type=refresh_token.
+		return regexp.MustCompile(`grant_type=` + regexp.QuoteMeta(name) + `(?:[^a-z0-9._:-]|$)`).MatchString(head)
 	}
 	return false
 }

@@ -51,7 +51,7 @@
     },
     {
       "file": "valid-multi-class-grant-type-selector.json",
-      "why": "acr-api's token endpoint accepts two classes in one form: the authorization or device code and the browser refresh token. The OAuth grant_type form field picks the class; only the refresh token class declares the refresh_token grant (compared exactly)."
+      "why": "acr-api's token endpoint accepts two classes in one form: the authorization or device code (grant_type authorization_code or the RFC 8628 device_code URN) and the browser refresh token (grant_type refresh_token). The grant_type form field picks the class; only the refresh token class declares refresh_token (compared exactly)."
     }
   ],
   "reject": [
@@ -423,7 +423,7 @@
     },
     {
       "file": "invalid-grant-type-selector-no-accepted-class-owns-it.json",
-      "why": "Schema-valid, refused by the profile gate: the token endpoint accepts the code and the refresh token classes and selects by a grant type neither declares."
+      "why": "Schema-valid, refused by the profile gate: the token endpoint accepts the code and the refresh token classes and selects by a grant type neither declares (client_credentials)."
     }
   ]
 }

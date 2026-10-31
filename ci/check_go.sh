@@ -2697,15 +2697,21 @@ run_integration_packages() {
   done
   [ "${mode}" != "--dry-run" ] || return 0
   # Every go test goes through run_integration_go_test (one reaped testcontainers session per call); -run rides in run_pkgs.
-  # Its stdout also goes to a file (tee) for warn_integration_weight_drift. Under pipefail the status of the pipeline is the
-  # last failing member: go test's, since tee does not fail; PIPESTATUS reads it in the || branch (CHAOS-11658).
-  local ok_log
+  # Its stdout also goes to a file (tee) for warn_integration_weight_drift. run_integration_go_test stays in this shell:
+  # its INT/TERM trap (CHAOS-10036) must be this shell's, so a TERM to this script still reaps the session. The tee is one
+  # process substitution on its own descriptor; closing the descriptor ends it, and wait makes the file complete before it
+  # is read. The status of go test comes straight from the function (CHAOS-11658).
+  local ok_log tee_fd tee_pid
   ok_log="$(mktemp "${TMPDIR:-/tmp}/dev-health-ok.XXXXXX")"
+  exec {tee_fd}> >(tee -a "${ok_log}")
+  tee_pid=$!
   for ((group = 0; group < groups; group++)); do
     mapfile -t run_pkgs <<<"${group_pkgs[${group}]%$'\n'}"
     run_pkgs=(-run "${group_regex[${group}]}" "${run_pkgs[@]}")
-    run_integration_go_test "${module_dir}" "${run_pkgs[@]}" | tee -a "${ok_log}" || { status="${PIPESTATUS[0]}"; [ "${result}" -ne 0 ] || result="${status}"; }
+    run_integration_go_test "${module_dir}" "${run_pkgs[@]}" >&"${tee_fd}" || { status=$?; [ "${result}" -ne 0 ] || result="${status}"; }
   done
+  exec {tee_fd}>&-
+  wait "${tee_pid}" 2>/dev/null || true
   warn_integration_weight_drift "${module_dir}" "${ok_log}" "${pkgs[@]}"
   rm -f -- "${ok_log}"
   return "${result}"

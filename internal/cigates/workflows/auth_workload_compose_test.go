@@ -2,6 +2,7 @@ package workflows_test
 
 import (
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"reflect"
@@ -75,6 +76,8 @@ func volumeMount(entry any) (source, target string, readOnly bool) {
 	return
 }
 
+const workloadVolumeCommand = `[ "$(stat -c %u:%a /run/workload)" = 65532:700 ] || { chmod 0700 /run/workload && chown 65532:65532 /run/workload; }`
+
 func TestComposeWorkloadBootstrapOneShots(t *testing.T) {
 	c := readComposeFile(t, "compose.yml")
 	want := map[string][]string{
@@ -107,8 +110,8 @@ func TestComposeWorkloadBootstrapOneShots(t *testing.T) {
 	if vol.NetworkMode != "none" || vol.User != "0:0" || !reflect.DeepEqual(vol.CapAdd, []string{"CHOWN"}) {
 		t.Errorf("auth-workload-volume: network_mode %q user %q cap_add %v, want none, 0:0, [CHOWN]", vol.NetworkMode, vol.User, vol.CapAdd)
 	}
-	if got := strings.Join(vol.Command, " "); got != "chmod 0700 /run/workload && chown 65532:65532 /run/workload" {
-		t.Errorf("auth-workload-volume command = %q: the directory must be 0700 and owned by uid 65532", got)
+	if got := strings.Join(vol.Command, " "); got != workloadVolumeCommand {
+		t.Errorf("auth-workload-volume command = %q, want %q: the directory must be 0700 and owned by uid 65532, and a second run must change nothing", got, workloadVolumeCommand)
 	}
 	for _, name := range []string{"auth-workload-seed", "auth-workload-bootstrap"} {
 		if user := c.Services[name].User; user != "65532:65532" {
@@ -268,5 +271,53 @@ func TestWorkloadOverrideKeepsOnlyTheProof(t *testing.T) {
 	}
 	if v, ok := envString(t, o.Services["auth-service"], "AUTH_WORKLOAD_BOOTSTRAP"); !ok || v != "true" {
 		t.Errorf("the override must switch the bootstrap on (got %q): it is the proof", v)
+	}
+}
+
+// Compose starts auth-workload-volume again as a dependency of auth-workload-bootstrap, after the directory is owned
+// by uid 65532 with mode 0700. The container has CAP_CHOWN and no CAP_FOWNER, so a chmod then fails with EPERM: the
+// second run must see the state and change nothing.
+func TestComposeWorkloadVolumeOneShotIsIdempotent(t *testing.T) {
+	c := readComposeFile(t, "compose.yml")
+	script := strings.Join(c.Services["auth-workload-volume"].Command, " ")
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "bin")
+	if err := os.Mkdir(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	state, calls := filepath.Join(dir, "state"), filepath.Join(dir, "calls")
+	fakes := map[string]string{
+		"stat":  "#!/bin/sh\ncat " + state + "\n",
+		"chmod": "#!/bin/sh\necho chmod >> " + calls + "\n",
+		"chown": "#!/bin/sh\necho chown >> " + calls + "\necho 65532:700 > " + state + "\n",
+	}
+	for name, body := range fakes {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(state, []byte("0:755\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(calls, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run := func() string {
+		cmd := exec.Command("/bin/sh", "-eu", "-c", script)
+		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin"}
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("the one-shot failed: %v\n%s", err, out)
+		}
+		raw, err := os.ReadFile(calls)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	if got := run(); got != "chmod\nchown\n" {
+		t.Fatalf("first run made %q, want chmod then chown", got)
+	}
+	if got := run(); got != "chmod\nchown\n" {
+		t.Errorf("the second run changed the directory again: calls %q", got)
 	}
 }

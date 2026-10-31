@@ -213,6 +213,7 @@ type dirGroup struct {
 	execScopes map[*ast.FuncDecl]*scope
 	bound      bool
 	pure       map[*ast.FuncDecl]bool // pureFunc answers
+	touched    map[string]bool        // sliceTouched answers
 	// structFields: the unexported fields of each struct type of the directory; badStruct: a type the scan cannot see
 	// every value of (new(T), var x T, elided element literals); fieldKind: the join of the kinds assigned to each field
 	// name by the literals and the assignments of the directory
@@ -3338,9 +3339,77 @@ func (c *fileCtx) sliceElems(e ast.Expr, at ast.Node, depth int) ([]ast.Expr, bo
 	return nil, false
 }
 
-// packageSlice is the initializer of a package variable the directory assigns only at its declaration.
+// packageSlice is the initializer of a package variable the directory assigns only at its declaration and never writes
+// into, aliases or passes out: its elements are then the initializer's, whatever else runs.
 func (c *fileCtx) packageSlice(name string) ast.Expr {
-	return c.g.vars[c.pkg][name]
+	def := c.g.vars[c.pkg][name]
+	if def == nil || ast.IsExported(name) || c.g.sliceTouched(name) {
+		return nil
+	}
+	return def
+}
+
+// sliceTouched reports whether any file of the directory uses the identifier name other than as a declared name, a
+// range operand, the argument of len or cap, or the last argument of a spread into a standard library function or
+// append. Name based and package wide: a shadowing local or a same-named field only makes it more cautious.
+func (g *dirGroup) sliceTouched(name string) bool {
+	if v, ok := g.touched[name]; ok {
+		return v
+	}
+	touched := false
+	for _, s := range g.files {
+		allowed := map[*ast.Ident]bool{}
+		ast.Inspect(s.file, func(n ast.Node) bool {
+			switch x := n.(type) {
+			case *ast.ValueSpec:
+				for _, id := range x.Names {
+					allowed[id] = true
+				}
+			case *ast.RangeStmt:
+				if id, ok := x.X.(*ast.Ident); ok {
+					allowed[id] = true
+				}
+			case *ast.CallExpr:
+				if len(x.Args) == 0 {
+					break
+				}
+				last, isID := x.Args[len(x.Args)-1].(*ast.Ident)
+				if !isID {
+					break
+				}
+				switch f := ast.Unparen(x.Fun).(type) {
+				case *ast.Ident:
+					if (f.Name == "len" || f.Name == "cap") && len(x.Args) == 1 && len(g.funcs[f.Name]) == 0 {
+						allowed[last] = true
+					}
+					if f.Name == "append" && x.Ellipsis.IsValid() && len(g.funcs[f.Name]) == 0 {
+						allowed[last] = true
+					}
+				case *ast.SelectorExpr:
+					if q, ok := f.X.(*ast.Ident); ok && x.Ellipsis.IsValid() {
+						if path, imp := s.imports[q.Name]; imp && !strings.Contains(strings.SplitN(path, "/", 2)[0], ".") {
+							allowed[last] = true
+						}
+					}
+				}
+			}
+			return true
+		})
+		ast.Inspect(s.file, func(n ast.Node) bool {
+			if id, ok := n.(*ast.Ident); ok && id.Name == name && !allowed[id] {
+				touched = true
+			}
+			return !touched
+		})
+		if touched {
+			break
+		}
+	}
+	if g.touched == nil {
+		g.touched = map[string]bool{}
+	}
+	g.touched[name] = touched
+	return touched
 }
 
 // enclosingBody is the body of the top-level function declaration that holds n.

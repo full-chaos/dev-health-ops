@@ -99,7 +99,7 @@ func (r *reads) diff(filter string, paths []string) ([]string, error) {
 		r.record(atHead, "tree", rel)
 	}
 	args := append([]string{"-C", r.root, "diff", "--name-only", "--diff-filter=" + filter, r.base + "...HEAD", "--"}, paths...)
-	out, err := exec.Command("git", args...).Output()
+	out, err := exec.Command("git", append([]string{"-c", "maintenance.auto=false", "-c", "gc.auto=0"}, args...)...).Output()
 	if err != nil {
 		return nil, fmt.Errorf("git diff %s...HEAD: %w", r.base, err)
 	}
@@ -128,7 +128,7 @@ func (r *reads) lsTree(rev string, recursive bool, specs []string) ([]string, er
 	if recursive {
 		args = append(args, "-r")
 	}
-	out, err := exec.Command("git", append(append(args, r.commit(rev), "--"), specs...)...).Output()
+	out, err := exec.Command("git", append([]string{"-c", "maintenance.auto=false", "-c", "gc.auto=0"}, append(append(args, r.commit(rev), "--"), specs...)...)...).Output()
 	if err != nil {
 		return nil, fmt.Errorf("git ls-tree %s: %w", rev, err)
 	}

@@ -738,7 +738,7 @@ func gitIsAncestor(root, ancestor, descendant string) (bool, error) {
 }
 
 func gitOutput(root string, args ...string) (string, error) {
-	full := append([]string{"-C", root}, args...)
+	full := append([]string{"-C", root, "-c", "maintenance.auto=false", "-c", "gc.auto=0"}, args...)
 	out, err := exec.Command("git", full...).Output()
 	if err != nil {
 		return "", fmt.Errorf("git %s: %w%s", strings.Join(args, " "), err, gitStderr(err))

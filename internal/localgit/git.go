@@ -54,7 +54,7 @@ func (r Repo) Name() string { return filepath.Base(r.Root) }
 // (LANGUAGE=C, LC_ALL=C: git's own messages are not read, but a decimal
 // separator or quoting locale must not change the output shape).
 func (r Repo) run(ctx context.Context, args ...string) ([]byte, error) {
-	command := exec.CommandContext(ctx, "git", args...)
+	command := exec.CommandContext(ctx, "git", append([]string{"-c", "maintenance.auto=false", "-c", "gc.auto=0"}, args...)...)
 	command.Dir = r.Root
 	command.Env = r.env()
 	var stdout, stderr bytes.Buffer

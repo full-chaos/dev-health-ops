@@ -896,10 +896,10 @@ func (handler GitLabTeamCatalogRouteHandler) collectProjectTargets(
 			Path:    providerRelativePath(client, "api", "v4", "projects", nativeID, "milestones"),
 			Route:   gitlabMilestonesRoute,
 			PerPage: gitlabTeamCatalogListPerPage, MaxPages: gitlabTeamCatalogMilestonesMaxPages,
-			// include_ancestors is GitLab's documented name; include_parent_milestones
-			// (deprecated) is sent too because the API docs give no minimum version for
-			// the new one, and an instance that ignores it would drop group milestones.
-			Query: url.Values{"state": {"active"}, "include_ancestors": {"true"}, "include_parent_milestones": {"true"}},
+			// CHAOS-12145: include_ancestors only. GitLab declares it and its deprecated
+			// alias include_parent_milestones mutually exclusive and answers a request
+			// carrying both with HTTP 400, which skips the project's target here.
+			Query: url.Values{"state": {"active"}, "include_ancestors": {"true"}},
 		})
 		if err != nil {
 			if ctx.Err() != nil {

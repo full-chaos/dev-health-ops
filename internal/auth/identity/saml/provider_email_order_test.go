@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/saml"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity/ssoaudit"
 )
 
 const emailMarker = "leakmarker"
@@ -47,6 +48,7 @@ type acsAnswer struct {
 	logs     string
 	calls    int
 	sessions int
+	provider saml.Provider
 }
 
 // postACSEmail posts one signed IdP-initiated response asserting email through the real ACS handler.
@@ -58,10 +60,36 @@ func postACSEmail(t *testing.T, email string, linked bool) acsAnswer {
 // postACSEmailWithList is postACSEmail for a provider with allowed_domains list.
 func postACSEmailWithList(t *testing.T, email string, linked bool, list []string) acsAnswer {
 	t.Helper()
+	return postACSEmailRecorded(t, email, linked, list, nil)
+}
+
+// postACSEmailRecorded is postACSEmailWithList with the provider failure seam.
+func postACSEmailRecorded(t *testing.T, email string, linked bool, list []string, failures ssoaudit.ProviderFailure) acsAnswer {
+	t.Helper()
+	return postACSCase(t, acsCase{email: email, linked: linked, list: list, failures: failures})
+}
+
+// acsCase is one post to the ACS handler: the assertion, the account, the provider row and the failure seam.
+type acsCase struct {
+	email    string
+	linked   bool
+	list     []string
+	failures ssoaudit.ProviderFailure
+	provider func(*saml.Provider)
+	response func(*resp)
+	raw      string
+}
+
+func postACSCase(t *testing.T, c acsCase) acsAnswer {
+	t.Helper()
+	email, linked, list, failures := c.email, c.linked, c.list, c.failures
 	idp := newTestIdP(t)
 	p := saml.Provider{
 		ID: uuid.New(), OrgID: uuid.New(), Protocol: "saml", Status: "active", AllowIdPInitiated: true, AutoProvision: true,
 		Config: saml.Config{EntityID: idp.entityID, Certificate: encodeCert(idp)}, AllowedDomains: list,
+	}
+	if c.provider != nil {
+		c.provider(&p)
 	}
 	store := &orderStore{}
 	members := &memberSet{ids: map[uuid.UUID]bool{}}
@@ -75,21 +103,29 @@ func postACSEmailWithList(t *testing.T, email string, linked bool, list []string
 	svc := &saml.Service{
 		Providers: staticProvider{p}, Entitlements: ssoAllowed{}, Flows: openFlows{}, Uses: freshAssertions{},
 		Store: store, Memberships: members, JIT: &joinSeam{members: members}, BaseURL: func() string { return refusalBase },
-		Logger: slog.New(slog.NewJSONHandler(&logs, nil)),
+		Logger: slog.New(slog.NewJSONHandler(&logs, nil)), ProviderFailure: failures,
 	}
 	h := saml.Handlers{Service: svc, Sessions: sessions, Logger: svc.Logger}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /saml/{provider_id}/acs", h.ACS)
 	acs := p.ACSURL(refusalBase)
-	posted := b64(idp.response(t, resp{
+	o := resp{
 		nameID: saml.NameID{Value: "user-" + uuid.NewString()}, email: email,
 		destination: strp(acs), recipient: strp(acs), audiences: [][]string{{p.SPEntityID(refusalBase)}},
-	}))
+	}
+	if c.response != nil {
+		c.response(&o)
+	}
+	posted := b64(idp.response(t, o))
+	if c.raw != "" {
+		posted = c.raw
+	}
 	req := httptest.NewRequest(http.MethodPost, "/saml/"+p.ID.String()+"/acs", strings.NewReader(url.Values{"SAMLResponse": {posted}}.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
-	return acsAnswer{status: rec.Code, body: rec.Body.String(), logs: logs.String(), calls: store.calls, sessions: len(sessions.got)}
+	return acsAnswer{status: rec.Code, body: rec.Body.String(), logs: logs.String(), calls: store.calls, sessions: len(sessions.got),
+		provider: p}
 }
 
 // The provider email rule runs before the identity lookup of a SAML sign-in: a linked NameID with a refused address

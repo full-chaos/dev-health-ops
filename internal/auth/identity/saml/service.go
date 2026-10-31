@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity/ssoaudit"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
@@ -58,6 +59,10 @@ type Service struct {
 	BaseURL      func() string
 	Now          func() time.Time
 	Logger       *slog.Logger
+	// ProviderFailure records a provider failure (an assertion without an
+	// email: go-api's recordSSOFailure) before the refusal answers; nil
+	// records none.
+	ProviderFailure ssoaudit.ProviderFailure
 }
 
 func (s *Service) now() time.Time {
@@ -221,16 +226,28 @@ func (s *Service) ConsumeFor(ctx context.Context, p Provider, posted string, coo
 		return SignIn{}, s.refuse(ctx, p, err)
 	}
 	if p.Config.Certificate == "" {
+		if err := s.recordProviderFailure(ctx, p, "", msgNoCertificate); err != nil {
+			return SignIn{}, err
+		}
 		return SignIn{}, s.refuse(ctx, p, refused(ReasonSignatureInvalid, "provider has no certificate"))
 	}
 	cert, err := ParseCertificate(p.Config.Certificate)
 	if err != nil {
+		if err := s.recordProviderFailure(ctx, p, "", msgCertificateParse); err != nil {
+			return SignIn{}, err
+		}
 		return SignIn{}, s.refuse(ctx, p, refused(ReasonSignatureInvalid, "provider certificate does not parse"))
 	}
 	base := s.BaseURL()
 	now := s.now()
 	v, err := Verify(raw, SP{EntityID: p.SPEntityID(base), ACSURL: p.ACSURL(base), IdPEntityID: p.Config.EntityID, IdPCert: cert}, now)
 	if err != nil {
+		var r *RefusedError
+		if errors.As(err, &r) && r.NoConfirmation {
+			if err := s.recordProviderFailure(ctx, p, "", msgNoConfirmation); err != nil {
+				return SignIn{}, err
+			}
+		}
 		return SignIn{}, s.refuse(ctx, p, err)
 	}
 
@@ -253,6 +270,9 @@ func (s *Service) ConsumeFor(ctx context.Context, p Provider, posted string, coo
 	// The address and the provider's domain list decide every sign-in, linked
 	// or not, before the lookup (go-api saml.go).
 	if email == "" {
+		if err := s.recordProviderFailure(ctx, p, "", msgEmailMissing); err != nil {
+			return SignIn{}, err
+		}
 		return SignIn{}, s.refuse(ctx, p, ErrEmailMissing)
 	}
 	if len(p.AllowedDomains) > 0 && !strings.Contains(email, "@") {
@@ -353,6 +373,9 @@ func (s *Service) provisionNew(ctx context.Context, p Provider, id Identity, ema
 		return uuid.Nil, s.refuse(ctx, p, &EmailConflictError{Method: owner.Method})
 	}
 	if !p.AutoProvision {
+		if err := s.recordProviderFailure(ctx, p, stageProvisioning, msgAutoProvisionOff); err != nil {
+			return uuid.Nil, err
+		}
 		return uuid.Nil, s.refuse(ctx, p, ErrAutoProvisionDisabled)
 	}
 	if s.JIT == nil {
@@ -391,6 +414,27 @@ func (s *Service) email(p Provider, v Verified) string {
 // refuse logs a refusal with its auth-outcome reason code and the failed
 // check, and returns err unchanged. No NameID, email or assertion content is
 // logged.
+// go-api's SAML provider failure texts (internal/api/sso saml.go, provision.go), the record's error_message. A record
+// carries one of these fixed texts, never an error's text or a value of the assertion.
+const (
+	msgEmailMissing     = "SAML assertion missing email attribute"
+	msgNoCertificate    = "SAML certificate is required for validation"
+	msgCertificateParse = "SAML signature validation failed"
+	msgNoConfirmation   = "SAML subject confirmation missing"
+	msgAutoProvisionOff = "User not found and auto-provisioning disabled"
+
+	stageProvisioning = "provisioning"
+)
+
+// recordProviderFailure records a provider failure as go-api's recordSSOFailure does (protocol saml, the stage if
+// any). A write error is returned as is: the 500 go-api answers.
+func (s *Service) recordProviderFailure(ctx context.Context, p Provider, stage, message string) error {
+	if s.ProviderFailure == nil {
+		return nil
+	}
+	return s.ProviderFailure.Failed(ctx, ssoaudit.Row{OrgID: p.OrgID, ProviderID: p.ID, Protocol: "saml", Stage: stage, ErrorMessage: message})
+}
+
 func (s *Service) refuse(ctx context.Context, p Provider, err error) error {
 	check, detail := "", ""
 	var r *RefusedError

@@ -9,7 +9,7 @@ import (
 
 // provisioningPatterns are the routes AUTH_MEMBERSHIP_ROUTES mounts.
 var provisioningPatterns = []string{PatternMembershipAdd, PatternMembershipRole, PatternMembershipRemove,
-	PatternMembershipTransfer, PatternInviteCreate, PatternInviteAccept, PatternOrgDeprovision, PatternOrgReactivate}
+	PatternMembershipTransfer, PatternInviteCreate, PatternInviteAccept, PatternOrgDeprovision, PatternOrgReactivate, PatternInviteRevoke}
 
 // serviceSessionIssuerClass is the endpoint-profile credential class of the
 // session issuer credential (svc_authsess_) the routes take.

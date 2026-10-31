@@ -74,6 +74,7 @@ type resp struct {
 	issueInstant            time.Time
 	notBefore, notOnOrAfter time.Time
 	noConfirmation          bool
+	senderVouches           bool
 	signResponse            bool
 	unsignedAssertion       bool
 	sigMethod               string
@@ -160,7 +161,11 @@ func (idp *testIdP) build(t testing.TB, o resp) (*etree.Document, *etree.Element
 	}
 	if !o.noConfirmation {
 		sc := subject.CreateElement("saml:SubjectConfirmation")
-		sc.CreateAttr("Method", "urn:oasis:names:tc:SAML:2.0:cm:bearer")
+		method := "urn:oasis:names:tc:SAML:2.0:cm:bearer"
+		if o.senderVouches {
+			method = "urn:oasis:names:tc:SAML:2.0:cm:sender-vouches"
+		}
+		sc.CreateAttr("Method", method)
 		data := sc.CreateElement("saml:SubjectConfirmationData")
 		if o.inResponseTo != "" {
 			data.CreateAttr("InResponseTo", o.inResponseTo)

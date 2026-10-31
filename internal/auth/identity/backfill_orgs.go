@@ -208,7 +208,7 @@ FROM (SELECT 1) x LEFT JOIN `+s.q+`.memberships m ON m.organization_id = $1 AND 
 		res = applyInsert(res, inserted)
 	case memberSetRole:
 		var changed bool
-		changed, err = s.updateMembershipRole(ctx, *id, t)
+		changed, err = s.updateMembershipRole(ctx, *id, t, role)
 		res = applyRole(res, changed)
 	}
 	if err == nil && action != memberInsert && (fill.Inviter || fill.Joined || fill.Unresolved) {
@@ -361,15 +361,17 @@ func roleChangeAudit(t MembershipBackfillTarget, id uuid.UUID) audit.AuditEvent 
 	return ev
 }
 
-// updateMembershipRole reports whether the update changed a row: another writer that set the role first leaves none.
-func (s *Store) updateMembershipRole(ctx context.Context, id uuid.UUID, t MembershipBackfillTarget) (bool, error) {
+// updateMembershipRole is a compare-and-set on the role the backfill read: it writes the public role only while the
+// stored role is still expected, so a role any other writer set after that read (an ownership transfer, a role change)
+// is kept and the update changes no row. It reports whether a row changed.
+func (s *Store) updateMembershipRole(ctx context.Context, id uuid.UUID, t MembershipBackfillTarget, expected *string) (bool, error) {
 	if afterRoleRead != nil {
 		afterRoleRead(ctx)
 	}
 	err := audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			_, err := tx.Exec(ctx, `UPDATE `+s.q+`.memberships SET role = $2, updated_at = clock_timestamp()
-WHERE id = $1 AND status = 'active' AND role IS DISTINCT FROM $2`, id, t.Role)
+WHERE id = $1 AND status = 'active' AND role IS DISTINCT FROM $2 AND role IS NOT DISTINCT FROM $3::text`, id, t.Role, expected)
 			return err
 		},
 		Audit:  roleChangeAudit(t, id),

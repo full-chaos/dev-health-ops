@@ -191,14 +191,25 @@ func (h *handlers) postLLMSettingsReadiness(w http.ResponseWriter, r *http.Reque
 
 	// h.upstreamDoer is Deps.HTTPDoer AS GIVEN (nil in production; a route success-path test sets it via
 	// adminDepsExtra), handed to the prober of the resolved provider above.
-	outcome, safeErrorCode := prober.probe(ctx, resolvedProvider, cfg.model, cfg.baseURL, cfg.apiKey.Reveal())
+	if setter, ok := prober.(readinessLoggerSetter); ok {
+		setter.setLogger(h.logger)
+	}
+	var result readinessProbeResult
+	if detailed, ok := prober.(readinessDetailProber); ok {
+		result = detailed.probeDetail(ctx, resolvedProvider, cfg.model, cfg.baseURL, cfg.apiKey.Reveal())
+	} else {
+		result.Outcome, result.SafeErrorCode = prober.probe(ctx, resolvedProvider, cfg.model, cfg.baseURL, cfg.apiKey.Reveal())
+	}
 
 	record := agentReadinessRecord{
 		Fingerprint:      readinessFingerprint(resolvedProvider, cfg.model, cfg.baseURL, cfg.apiKey.Reveal()),
 		ReadinessVersion: askDevReadinessVersion,
 		CheckedAt:        h.store.now().UTC().Format(time.RFC3339Nano),
-		Outcome:          outcome,
-		SafeErrorCode:    safeErrorCode,
+		Outcome:          result.Outcome,
+		SafeErrorCode:    result.SafeErrorCode,
+		ErrorParam:       result.ErrorParam,
+		ErrorCode:        result.ErrorCode,
+		DroppedParams:    result.DroppedParams,
 	}
 	payload, err := json.Marshal(record)
 	if err != nil {

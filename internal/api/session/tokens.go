@@ -98,9 +98,11 @@ var (
 	amrFederated = []string{"fed"}
 )
 
-// issueSession takes the pair from auth-service's issue route.
-func (h handlers) issueSession(ctx context.Context, r *http.Request, userID uuid.UUID, orgID *uuid.UUID, amr []string) (tokenPair, error) {
-	pair, err := h.Issuer.Issue(ctx, r, sessionissue.Request{PrincipalID: userID, OrganizationID: orgID, AMR: amr})
+// issueSession takes the pair from auth-service's issue route. predecessor,
+// when set, is the caller's own session the new one supersedes (switch-org):
+// auth-service revokes it in the transaction that creates the new session.
+func (h handlers) issueSession(ctx context.Context, r *http.Request, userID uuid.UUID, orgID *uuid.UUID, amr []string, predecessor *uuid.UUID) (tokenPair, error) {
+	pair, err := h.Issuer.Issue(ctx, r, sessionissue.Request{PrincipalID: userID, OrganizationID: orgID, AMR: amr, PredecessorSessionID: predecessor})
 	if err != nil {
 		return tokenPair{}, err
 	}
@@ -127,6 +129,15 @@ func orgGone(ctx context.Context, tx pgx.Tx, orgID uuid.UUID) bool {
 
 // issueMembershipTokens is _issue_membership_tokens.
 func (h handlers) issueMembershipTokens(ctx context.Context, tx pgx.Tx, r *http.Request, user *userRow, membership *membershipRow) (tokenPair, error) {
+	return h.issueMembershipTokensSuperseding(ctx, tx, r, user, membership, nil)
+}
+
+// issueMembershipTokensSuperseding is issueMembershipTokens for a caller whose
+// own auth-service session (predecessor) the new pair replaces: switch-org
+// (CHAOS-12085). Without auth-service sessions there is no predecessor to
+// revoke and it is issueMembershipTokens.
+func (h handlers) issueMembershipTokensSuperseding(ctx context.Context, tx pgx.Tx, r *http.Request, user *userRow, membership *membershipRow,
+	predecessor *uuid.UUID) (tokenPair, error) {
 	orgID, role := "", "member"
 	var orgUUID *uuid.UUID
 	if membership != nil {
@@ -135,7 +146,7 @@ func (h handlers) issueMembershipTokens(ctx context.Context, tx pgx.Tx, r *http.
 		orgUUID = &id
 	}
 	if h.Issuer != nil {
-		return h.issueSession(ctx, r, user.ID, orgUUID, amrPassword)
+		return h.issueSession(ctx, r, user.ID, orgUUID, amrPassword, predecessor)
 	}
 	now := h.Now()
 	pair, jti, family, err := h.mintPair(user, orgID, role, now)

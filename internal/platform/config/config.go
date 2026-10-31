@@ -129,7 +129,6 @@ const (
 	defaultOTelEndpoint       = "localhost:4317"
 	defaultOTelSampleRate     = 0.1
 	localStatusMappingPath    = "/app/config/status_mapping.yaml"
-	localInvestmentAreasPath  = "/app/config/investment_areas.yaml"
 	localComplexityConfigPath = "/app/config/complexity.yaml"
 )
 
@@ -505,7 +504,7 @@ func Load(spec Spec) (Config, error) {
 	cfg.WorkerGithubWorkItemsInvestmentConfigPath = envOrDefault(
 		lookup,
 		"WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH",
-		localInvestmentAreasPath,
+		"",
 	)
 	// CHAOS-4291: same reasoning as the two work-items paths above -- the
 	// native complexity executor needs this artifact wherever the worker

@@ -25,6 +25,7 @@ internal/auth/identity/local
 internal/auth/identity/oidc
 internal/auth/identity/saml
 internal/auth/identity/social
+internal/auth/identity/ssoaudit
 internal/auth/invite
 internal/auth/keystore
 internal/auth/membership
@@ -32,6 +33,7 @@ internal/auth/org
 internal/auth/orgdeprovision
 internal/auth/passwordhash
 internal/auth/passwordpolicy
+internal/auth/platformrole
 internal/auth/platformrole/rule
 internal/auth/policycatalog
 internal/auth/requestid
@@ -178,6 +180,7 @@ internal/queryapi/throughputforecast
 internal/queryapi/timewindow
 internal/queryapi/workgraph
 internal/queryapi/workunitexplain
+internal/repoinventory
 internal/scheduler/sync
 internal/storage/clickhouse
 internal/storage/clickhouse/engineclause

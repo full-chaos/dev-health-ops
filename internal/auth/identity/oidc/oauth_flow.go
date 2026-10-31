@@ -353,7 +353,8 @@ func (s *Service) callbackOAuth(ctx context.Context, admitted StoredProvider, in
 		Endpoint: oauth2.Endpoint{AuthURL: target.authorize, TokenURL: target.token, AuthStyle: oauth2.AuthStyleInParams},
 	}, in.Code, state.CodeVerifier)
 	if err != nil || token.AccessToken == "" {
-		return Login{}, clear, oauthFailure(ReasonDependency, "oauth_token_exchange_failed", err)
+		return Login{}, clear, s.recordedProviderFailure(ctx, row, protocolOAuthRecord, stageNone, msgTokenExchangeFailed,
+			oauthFailure(ReasonDependency, "oauth_token_exchange_failed", err))
 	}
 	client := &social.ProviderClient{HTTP: s.cfg.HTTPClient, Endpoints: target.endpoints,
 		Clients: map[social.Provider]social.ClientCredentials{target.provider: social.NewClientCredentials(row.OAuth.ClientID, secret)}}
@@ -365,8 +366,11 @@ func (s *Service) callbackOAuth(ctx context.Context, admitted StoredProvider, in
 			reason = contractReason(string(perr.Reason))
 		}
 		failure := oauthFailure(reason, "oauth_userinfo_fetch_failed", err)
-		if perr != nil && perr.InvalidID {
+		switch {
+		case perr != nil && perr.InvalidID:
 			failure = s.auditedOAuthRefusal(ctx, row, stageProviderProfile, msgMissingProviderID, failure)
+		case perr != nil && perr.ProfileRequest:
+			failure = s.recordedProviderFailure(ctx, row, protocolOAuthRecord, stageNone, msgUserinfoFailed, failure)
 		}
 		return Login{}, clear, failure
 	}
@@ -410,7 +414,7 @@ func (s *Service) callbackOAuth(ctx context.Context, admitted StoredProvider, in
 
 // go-api's OAuth callback audit stages and messages (internal/api/sso oauth.go, recordSSOUnauthenticated and
 // recordSSOAuthenticatedDenial): the row's stage and its error_message before sanitizing. domain_check is written in
-// resolve; the stage without a name (recordSSOFailure, a provider error) is not written here.
+// resolve. A provider error (recordSSOFailure) has no stage and a fixed text per reason.
 const (
 	stageStateAuth         = "state_auth"
 	stageProviderProfile   = "provider_profile"
@@ -423,6 +427,9 @@ const (
 	msgInvalidProviderEmail = "sso: the identity provider returned an unusable email address"
 	msgNoVerifiedEmail      = "no verified email address is available from this OAuth provider"
 	msgInvalidProviderID    = "identity: a non-local provider user needs a valid provider id"
+
+	msgTokenExchangeFailed = "OAuth token exchange failed"
+	msgUserinfoFailed      = "OAuth userinfo request failed"
 )
 
 // provisioningMessages are the account refusals of resolve that go-api's OAuth provisioning step audits, by reason.

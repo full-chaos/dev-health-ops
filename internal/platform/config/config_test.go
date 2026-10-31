@@ -610,8 +610,8 @@ func TestQueueControlAndRetentionDefaults(t *testing.T) {
 	// because a process that serves the provider-unit queue must be able to
 	// serve the work-item family and no switch can say otherwise any more.
 	if cfg.WorkerGithubWorkItemsStatusMappingPath != "/app/config/status_mapping.yaml" ||
-		cfg.WorkerGithubWorkItemsInvestmentConfigPath != "/app/config/investment_areas.yaml" {
-		t.Fatalf("work-item runtime artifact paths = %q, %q; want the packaged image defaults",
+		cfg.WorkerGithubWorkItemsInvestmentConfigPath != "" {
+		t.Fatalf("work-item runtime artifact paths = %q, %q; want the status mapping image default and no investment path",
 			cfg.WorkerGithubWorkItemsStatusMappingPath,
 			cfg.WorkerGithubWorkItemsInvestmentConfigPath)
 	}

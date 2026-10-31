@@ -2271,9 +2271,10 @@ REMAINING_INTEGRATION_PACKAGE_KEY="internal/jobs/metrics/remaining"
 # (CHAOS-11411: the arguments are now sorted longest weight first; an isolated package needs no order).
 # internal/jobs/metrics/remaining (CHAOS-9631) runs 1,053-1,164 s on its own and
 # sat in a shard with 20 other packages whose job took 22-25 of the 25 minutes.
-# internal/fixturescli (CHAOS-11411) runs 1,145-1,168 s of the 1,263 s test phase of its shard, next to three other
-# packages that run at the same time: it sets the Go workflow wall, so it gets a shard of its own as well.
-INTEGRATION_ISOLATED_PACKAGE_KEYS=" ${DEV_HEALTH_GO_INTEGRATION_ISOLATED_KEYS:-internal/workerservice internal/queryapi/server internal/jobs/metrics/remaining internal/fixturescli} "
+# internal/fixturescli (CHAOS-11411) was isolated while it ran 1,145-1,168 s; the shared servers (#5197) cut it to about
+# 493 s, so CHAOS-11658 took it out of this list. An isolated package needs an empty shard when its turn comes in the
+# longest-weight-first order: at its true weight it would find none and the plan would fail.
+INTEGRATION_ISOLATED_PACKAGE_KEYS=" ${DEV_HEALTH_GO_INTEGRATION_ISOLATED_KEYS:-internal/workerservice internal/queryapi/server internal/jobs/metrics/remaining} "
 DAILY_TEST_SHARD_COUNT=0
 DAILY_INTEGRATION_TEST_WEIGHT=0
 DAILY_ORDINARY_TEST_WEIGHT=0

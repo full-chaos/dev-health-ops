@@ -148,7 +148,7 @@ func archivedEmbeds(t *testing.T, dir string) []string {
 	}
 	cmd := exec.Command(tool, "list", "-json", ".")
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GOFLAGS=")
+	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local", "GOFLAGS=")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()

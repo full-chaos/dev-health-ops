@@ -89,7 +89,12 @@ func TestGitLabWorkItemsVersionProbeFailureNamesTheUnit(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	line := logged.String()
+	line := ""
+	for _, candidate := range strings.Split(logged.String(), "\n") {
+		if strings.Contains(candidate, "gitlab_version_probe_failed") {
+			line = candidate
+		}
+	}
 	if !strings.Contains(line, "level=ERROR") || !strings.Contains(line, "org_id="+claim.OrgID) || !strings.Contains(line, "unit_id="+claim.ID) {
 		t.Fatalf("a failed version probe logged %q, want an ERROR line naming org_id and unit_id", line)
 	}

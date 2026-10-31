@@ -1,0 +1,5 @@
+{{- /*
+Runs the authService.platformRolesOwned checks on every render, so a values file that sets the value fails even when no
+reader renders (phase 0, go-api and query-api off, no backfill Job). Renders nothing.
+*/ -}}
+{{- $_ := include "dev-health.platformRolesOwned" . }}

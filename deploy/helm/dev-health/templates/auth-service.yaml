@@ -127,6 +127,7 @@ binary): the native sleep action, a Kubernetes >= 1.30 feature. Same shape as go
 {{- if eq (upper (trim .name)) "AUTH_USERS_OWNED" }}{{- fail "authService.extraEnv must not set AUTH_USERS_OWNED: authService.phase renders it, for the auth-migrate, grants and backfill Jobs too, so the write grant on public.users follows the switch" }}{{- end }}
 {{- if eq (upper (trim .name)) "AUTH_SERVICE_SHUTDOWN_TIMEOUT" }}{{- fail "authService.extraEnv must not set AUTH_SERVICE_SHUTDOWN_TIMEOUT: authService.shutdownTimeout owns it, and the grace-period guard reads that value" }}{{- end }}
 {{- if eq (upper (trim .name)) "AUTH_DATABASE_MAX_CONNS" }}{{- fail "authService.extraEnv must not set AUTH_DATABASE_MAX_CONNS: use authService.database.maxConns, which the render checks" }}{{- end }}
+{{- if eq (upper (trim .name)) "AUTH_PLATFORM_ROLES_OWNED" }}{{- fail "authService.extraEnv must not set AUTH_PLATFORM_ROLES_OWNED: authService.platformRolesOwned renders it, for go-api, query-api and the auth Jobs too" }}{{- end }}
 {{- if eq (upper (trim .name)) "AUTH_ORGS_OWNED" }}{{- fail "authService.extraEnv must not set AUTH_ORGS_OWNED: authService.phase renders it, for the backfill Job too" }}{{- end }}
 {{- if has (upper (trim .name)) (list "AUTH_ACCESS_TOKEN_CLASS" "AUTH_TOKEN_ISSUER_URL" "AUTH_JWT_AUDIENCE") }}{{- fail (printf "authService.extraEnv must not set %s: use authService.accessToken, which go-api reads too" .name) }}{{- end }}
 {{- if eq (upper (trim .name)) "AUTH_LOGIN_LOCKOUT_KEY" }}{{- fail "authService.extraEnv must not set AUTH_LOGIN_LOCKOUT_KEY: use authService.sessionKeys.loginLockout, which reaches the container by secretKeyRef" }}{{- end }}
@@ -264,6 +265,10 @@ spec:
           {{- end }}
           {{- if eq (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true" }}
             - name: AUTH_USERS_OWNED
+              value: "true"
+          {{- end }}
+          {{- if eq (include "dev-health.platformRolesOwned" .) "true" }}
+            - name: AUTH_PLATFORM_ROLES_OWNED
               value: "true"
           {{- end }}
           {{- if eq (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true" }}

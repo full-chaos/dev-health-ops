@@ -46,6 +46,10 @@ spec:
         - name: AUTH_USERS_OWNED
           value: "true"
         {{- end }}
+        {{- if eq (include "dev-health.platformRolesOwned" .) "true" }}
+        - name: AUTH_PLATFORM_ROLES_OWNED
+          value: "true"
+        {{- end }}
         {{- if eq (include "dev-health.authOn" (dict "flag" "orgsOwned" "context" .)) "true" }}
         - name: AUTH_ORGS_OWNED
           value: "true"
@@ -71,7 +75,7 @@ spec:
 {{- if or (not (kindIs "string" $b.runId)) (empty $b.runId) }}{{- fail "authService.backfill.runId is required when authService.backfill.enabled: it names this run, and a new value makes a new Job" }}{{- end }}
 {{- if not (and (has (kindOf $b.batch) (list "int" "int64" "float64")) (eq (float64 $b.batch) (floor (float64 $b.batch))) (ge (int $b.batch) 1) (le (int $b.batch) 10000)) }}{{- fail "authService.backfill.batch must be a whole number from 1 to 10000" }}{{- end }}
 {{- range $b.extraEnv }}
-{{- if has (upper (trim .name)) (list "AUTH_USERS_OWNED" "AUTH_ORGS_OWNED" "AUTH_DATABASE_URI" "AUTH_DATABASE_SCHEMA") }}{{- fail (printf "authService.backfill.extraEnv must not set %s: the chart renders it from authService (phase, database)" .name) }}{{- end }}
+{{- if has (upper (trim .name)) (list "AUTH_USERS_OWNED" "AUTH_ORGS_OWNED" "AUTH_PLATFORM_ROLES_OWNED" "AUTH_DATABASE_URI" "AUTH_DATABASE_SCHEMA") }}{{- fail (printf "authService.backfill.extraEnv must not set %s: the chart renders it from authService (phase, database)" .name) }}{{- end }}
 {{- end }}
 {{- if not $a.networkPolicy.egress.database.to }}{{- fail "authService.networkPolicy.egress.database.to is required with authService.backfill.enabled: the Job has its own NetworkPolicy and an empty list would cut it off from the database" }}{{- end }}
 {{- $podTemplate := include "dev-health.authBackfillPodTemplate" . }}

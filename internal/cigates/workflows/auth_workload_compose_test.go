@@ -76,7 +76,7 @@ func volumeMount(entry any) (source, target string, readOnly bool) {
 	return
 }
 
-const workloadVolumeCommand = `[ "$(stat -c %u:%a /run/workload)" = 65532:700 ] || { chmod 0700 /run/workload && chown 65532:65532 /run/workload; }`
+const workloadVolumeCommand = `[ "$$(stat -c %u:%a /run/workload)" = 65532:700 ] || { chmod 0700 /run/workload && chown 65532:65532 /run/workload; }`
 
 func TestComposeWorkloadBootstrapOneShots(t *testing.T) {
 	c := readComposeFile(t, "compose.yml")
@@ -279,7 +279,8 @@ func TestWorkloadOverrideKeepsOnlyTheProof(t *testing.T) {
 // second run must see the state and change nothing.
 func TestComposeWorkloadVolumeOneShotIsIdempotent(t *testing.T) {
 	c := readComposeFile(t, "compose.yml")
-	script := strings.Join(c.Services["auth-workload-volume"].Command, " ")
+	// compose turns $$ into $ before the container sees the command; so does this cell.
+	script := strings.ReplaceAll(strings.Join(c.Services["auth-workload-volume"].Command, " "), "$$", "$")
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "bin")
 	if err := os.Mkdir(bin, 0o755); err != nil {

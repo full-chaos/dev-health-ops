@@ -4,6 +4,7 @@ package orgdeprovision
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -16,10 +17,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/invite"
 	"github.com/full-chaos/dev-health-ops/internal/auth/membership"
 	"github.com/full-chaos/dev-health-ops/internal/auth/org"
+	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/auth/signedtoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/usersbackfill"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -34,6 +37,7 @@ type env struct {
 	members  *membership.Store
 	invites  *invite.Store
 	identity *identity.Store
+	sessions *session.Store
 	service  *Service
 	notOwned *Service
 	secret   string
@@ -106,7 +110,11 @@ func newEnv(t *testing.T) (*env, error) {
 		return nil, err
 	}
 	e := &env{admin: admin, runtime: runtime, secret: "deprovision-secret-" + uuid.NewString()}
-	if e.orgs, err = org.New(org.Config{Pool: runtime, Schema: schema}); err != nil {
+	if e.sessions, err = session.New(session.Config{Pool: runtime, Schema: schema,
+		SuccessorKey: contracts.NewSecretString(base64.RawURLEncoding.EncodeToString([]byte("org-sessions-successor-key-00032")))}); err != nil {
+		return nil, err
+	}
+	if e.orgs, err = org.New(org.Config{Pool: runtime, Schema: schema, Sessions: e.sessions}); err != nil {
 		return nil, err
 	}
 	if e.members, err = membership.New(membership.Config{Pool: runtime, Schema: schema, OwnsUsers: true}); err != nil {
@@ -119,7 +127,7 @@ func newEnv(t *testing.T) (*env, error) {
 	if e.identity, err = identity.New(identity.Config{Pool: runtime, Schema: schema, UsersOwnedByAuth: true}); err != nil {
 		return nil, err
 	}
-	if e.service, err = New(Config{Pool: runtime, Schema: schema, Orgs: e.orgs, Memberships: e.members, Invites: e.invites}); err != nil {
+	if e.service, err = New(Config{Pool: runtime, Schema: schema, Orgs: e.orgs, Memberships: e.members, Invites: e.invites, Sessions: e.sessions}); err != nil {
 		return nil, err
 	}
 	notOwnedMembers, err := membership.New(membership.Config{Pool: runtime, Schema: schema})

@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -138,8 +139,12 @@ func cutCheckContentsFailsOnHelperFailure(g *guard) {
 	}
 }
 
-func cutGrantsRoot(g *guard, sha string) (root, rec string) {
+func cutGrantsRoot(g *guard, sha string) (root, rec string) { return cutGrantsRootWith(g, sha, "") }
+
+// cutGrantsRootWith is cutGrantsRoot with go-api's env file ($R/.go-api-dev/go-api.env) holding goAPIEnv.
+func cutGrantsRootWith(g *guard, sha, goAPIEnv string) (root, rec string) {
 	root = cutTemp(g, "root")
+	cutWrite(g, filepath.Join(root, ".go-api-dev", "go-api.env"), goAPIEnv, 0o600)
 	rec = filepath.Join(root, "_records", "bigboy-test")
 	cutWrite(g, filepath.Join(rec, "sha.txt"), sha+"\n", 0o644)
 	cutWrite(g, filepath.Join(root, "ops", ".env"), "", 0o644)
@@ -155,6 +160,35 @@ func cutCheckGrantsReadsGivenClone(g *guard) {
 	r := cutExec(g, g.tmp, append(e.env, "BIGBOY_ROOT="+root), "bash", g.path(cutGrants), rec)
 	g.expect(!strings.Contains(r.stdout+r.stderr, "no authorization.go"), "the manifest was not read from the given clone: %s", r.stdout)
 	cutGitOnlyIn(g, e, repo)
+}
+
+// The grants check compares against the posture of the project-scope flag go-api runs with (CHAOS-12268): it reads
+// the flag from $R/.go-api-dev/go-api.env through cigate, runs grants-compare --project-scope only when it is on, and
+// fails (never compares as off) when the flag cannot be read.
+func cutCheckGrantsFollowsTheGoAPIProjectScope(g *guard) {
+	repo, _, new := cutOpsClone(g, "opsclone")
+	readFlag := regexp.MustCompile("cigate\x1ebigboy go-api-project-scope [^\x1e]*/\\.go-api-dev/go-api\\.env\x1e")
+	for _, tc := range []struct {
+		env  string
+		flag bool
+	}{{"ACR_ACCESS_PROJECT_SCOPE=true\n", true}, {"ACR_ACCESS_PROJECT_SCOPE=false\n", false}, {"", false}} {
+		e := cutOpsTools(g, repo)
+		root, rec := cutGrantsRootWith(g, new, tc.env)
+		cutStub(g, e.bin, "docker", "exit 0\n")
+		r := cutExec(g, g.tmp, append(e.env, "BIGBOY_ROOT="+root), "bash", g.path(cutGrants), rec)
+		calls := cutFileText(e.log)
+		g.expect(readFlag.MatchString(calls), "env %q: the grants check did not read go-api's flag from $R/.go-api-dev/go-api.env: %s %s", tc.env, r.stdout, calls)
+		with := strings.Contains(calls, "cigate\x1ebigboy grants-compare --project-scope ")
+		without := strings.Contains(calls, "cigate\x1ebigboy grants-compare ") && !with
+		g.expect(with == tc.flag && (tc.flag || without), "env %q: grants-compare --project-scope ran %v, want %v: %s", tc.env, with, tc.flag, r.stdout)
+	}
+	e := cutOpsTools(g, repo)
+	root, rec := cutGrantsRootWith(g, new, "ACR_ACCESS_PROJECT_SCOPE=maybe\n")
+	cutStub(g, e.bin, "docker", "exit 0\n")
+	r := cutExec(g, g.tmp, append(e.env, "BIGBOY_ROOT="+root), "bash", g.path(cutGrants), rec)
+	g.expect(r.code != 0 && strings.Contains(r.stdout, "GRANTS_CHECK_FAIL") && strings.Contains(r.stdout, "ACR_ACCESS_PROJECT_SCOPE"),
+		"an unreadable flag: rc=%d, want a GRANTS_CHECK_FAIL naming ACR_ACCESS_PROJECT_SCOPE: %s", r.code, r.stdout)
+	g.expect(!strings.Contains(cutFileText(e.log), "cigate\x1ebigboy grants-compare"), "an unreadable flag still ran grants-compare")
 }
 
 func cutCheckContentsDefaultsToToolsCheckout(g *guard) {
@@ -197,6 +231,7 @@ func TestCutOpsRepoParam(t *testing.T) {
 		check{"cut_contents_reads_git_from_the_given_clone", cutCheckContentsReadsGivenClone},
 		check{"cut_contents_fails_when_a_posture_manifest_is_unparsable", cutCheckContentsFailsOnHelperFailure},
 		check{"grants_check_reads_the_manifest_from_the_given_clone", cutCheckGrantsReadsGivenClone},
+		check{"grants_check_follows_the_go_api_project_scope_flag", cutCheckGrantsFollowsTheGoAPIProjectScope},
 		check{"without_the_variable_the_default_is_the_tools_own_checkout", cutCheckContentsDefaultsToToolsCheckout},
 		check{"cut_contents_reads_a_clone_path_with_spaces", cutCheckContentsSpacedClone},
 		check{"grants_check_refuses_a_non_git_ops_path_before_it_queries_clickhouse", cutCheckGrantsRefusesNonGit},
@@ -236,6 +271,11 @@ func TestCutOpsRepoParamPlanted(t *testing.T) {
 			name: "clone path unquoted", copy: cc, check: cutCheckContentsSpacedClone,
 			mutate: mut(cutContents, `LOG=$(git -C "$O" log`, `LOG=$(git -C $O log`),
 			want:   "spaced clone's commits were not read",
+		},
+		{
+			name: "grants check ignores the project scope flag", copy: gc, check: cutCheckGrantsFollowsTheGoAPIProjectScope,
+			mutate: mut(cutGrants, `true) "$CGBIN" bigboy grants-compare --project-scope "$ACT" "$SRC" ;;`, `true) "$CGBIN" bigboy grants-compare "$ACT" "$SRC" ;;`),
+			want:   "grants-compare --project-scope ran false, want true",
 		},
 		{
 			name: "non-git ops path not refused", copy: gc, check: cutCheckGrantsRefusesNonGit,

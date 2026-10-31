@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/keyrotation"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/auth/restorefence"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
@@ -179,7 +180,13 @@ func executeRestoreFence(parent context.Context, args []string, lookup secrets.L
 	}
 	var sourceURI secrets.Value
 	sourceSet := false
+	platformRolesOwned := false
 	if parsed.verb == "apply" {
+		platformRolesOwned, err = rule.OwnedFromLookup(lookup)
+		if err != nil {
+			fmt.Fprintf(stderr, "configuration error: %v\n", err)
+			return 1
+		}
 		sourceURI, sourceSet, err = secrets.ResolveDSNSetting(envRevocationSource, lookup)
 		if err != nil {
 			fmt.Fprintf(stderr, "configuration error: could not resolve %s\n", envRevocationSource)
@@ -280,7 +287,7 @@ func executeRestoreFence(parent context.Context, args []string, lookup secrets.L
 		}
 		manifest = &parsedManifest
 	}
-	opts := restorefence.Options{Apply: parsed.apply, BlindMargin: parsed.blindMargin}
+	opts := restorefence.Options{Apply: parsed.apply, BlindMargin: parsed.blindMargin, PlatformRolesOwned: platformRolesOwned}
 	if sourceSet {
 		source, closeSource, err := openRevocationSource(ctx, sourceURI.Reveal(), stderr)
 		if err != nil {

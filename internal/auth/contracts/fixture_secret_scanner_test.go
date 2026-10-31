@@ -1,6 +1,10 @@
 package contracts
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -135,15 +139,190 @@ func hasAllCharacterClasses(value string) bool {
 	return upper && lower && digit
 }
 
-// syntheticJWS matches a compact JWS whose payload and signature segments both
-// begin with EXAMPLE: unmistakably synthetic, and the only shape the
-// refresh-response access_token pattern lets a fixture take (it pins the HS256
-// header segment, which starts with the JWS marker eyJ).
-var syntheticJWS = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{6,}\.(?:EXAMPLE[A-Za-z0-9_-]*)?\.EXAMPLE[A-Za-z0-9_-]*\b`)
+// jwsShape matches anything shaped like a compact JWS: a header segment that
+// begins with the JWS marker eyJ, a payload segment (possibly empty) and a
+// signature segment.
+var jwsShape = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+`)
 
+// syntheticSignatures is the closed list of signature placeholders a fixture
+// may use; no real signature is any of them. A signature that is anything else
+// (EXAMPLE followed by more text included) makes the token an ordinary
+// string, scanned raw.
+var syntheticSignatures = map[string]bool{
+	"EXAMPLE": true, "EXAMPLEOTHER": true, "EXAMPLESIGNATURE": true,
+	"EXAMPLESIGNATURE0": true, "EXAMPLESIGNATUREAB": true,
+}
+
+// syntheticPayloadPlaceholders are the payloads of the HS256-shaped fixtures,
+// which carry no JSON: nothing is hidden in a placeholder.
+var syntheticPayloadPlaceholders = map[string]bool{"": true, "EXAMPLE": true, "EXAMPLEOTHER": true}
+
+// strictDecodeWaivers is the closed, reviewed list of fixtures whose token may
+// have a header or payload that is not strict base64url JSON, keyed by exact
+// path and the sha256 of the file content: they are client-reject vectors that
+// the other language verifiers read from this corpus, and the not-strict
+// segment is the very thing they pin. The waiver covers only the strict-decode
+// requirement: the signature must still be a closed placeholder, the raw
+// segments still get the prefix and pattern rules, every lenient reading of a
+// segment is still decoded and scanned, and the fixture must still produce no
+// finding. A different path, or a file with one byte changed, has no waiver.
+var strictDecodeWaivers = map[string]string{}
+
+func hasStrictDecodeWaiver(path string, content []byte) bool {
+	sum := sha256.Sum256(content)
+	want, listed := strictDecodeWaivers[path]
+	return listed && want == hex.EncodeToString(sum[:])
+}
+
+// maxDecodeDepth bounds the base64 inside a decoded segment that the scanner
+// follows (a payload that carries a base64 string that carries a base64 string).
+const maxDecodeDepth = 4
+
+var base64Decoders = []*base64.Encoding{base64.RawURLEncoding, base64.URLEncoding, base64.RawStdEncoding, base64.StdEncoding}
+
+// base64Run is a candidate base64 or base64url run inside text.
+var base64Run = regexp.MustCompile(`[A-Za-z0-9_+/=-]{8,}`)
+
+// strictJSONObject decodes a JWS segment as strict base64url and returns the
+// text when it is exactly one JSON object made only of printable ASCII.
+func strictJSONObject(segment string) (string, bool) {
+	raw, err := base64.RawURLEncoding.Strict().DecodeString(segment)
+	if err != nil {
+		return "", false
+	}
+	for _, b := range raw {
+		if b < 0x20 || b > 0x7e {
+			return "", false // noise, not text: a secret can hide in JSON-safe noise
+		}
+	}
+	var object map[string]any
+	if json.Unmarshal(raw, &object) != nil {
+		return "", false
+	}
+	return string(raw), true
+}
+
+// decodeCandidates returns every base64 reading of run: all four alphabets,
+// every start offset of 0 to 3 characters (a prefix such as EXAMPLE shifts the
+// alignment) and every trailing trim of 0 to 3 characters.
+func decodeCandidates(run string) []string {
+	var out []string
+	for start := 0; start < 4 && start < len(run); start++ {
+		for trim := 0; trim < 4 && start+trim < len(run); trim++ {
+			piece := run[start : len(run)-trim]
+			for _, encoding := range base64Decoders {
+				if raw, err := encoding.DecodeString(piece); err == nil && len(raw) >= 6 {
+					out = append(out, string(raw))
+				}
+			}
+		}
+	}
+	return out
+}
+
+// scanDecoded scans text decoded from a JWS segment with the plain rules, then
+// follows what hides inside it: every string value and member name of a JSON
+// document (unescaped, so \u0041KIA is AKIA) and every base64-looking run in
+// the text and in those strings, under every alignment, to maxDecodeDepth.
+func scanDecoded(name, text string, depth int) []string {
+	findings := scanPlain(name, text)
+	sources := []string{text}
+	var document any
+	if json.Unmarshal([]byte(text), &document) == nil {
+		for _, value := range jsonStrings(document, nil) {
+			findings = append(findings, scanPlain(name+" (JSON string)", value)...)
+			sources = append(sources, value)
+		}
+	}
+	if depth >= maxDecodeDepth {
+		return findings
+	}
+	for _, source := range sources {
+		for _, run := range base64Run.FindAllString(source, -1) {
+			for _, decoded := range decodeCandidates(run) {
+				findings = append(findings, scanDecoded(name+" (base64)", decoded, depth+1)...)
+			}
+		}
+	}
+	return findings
+}
+
+func jsonStrings(node any, out []string) []string {
+	switch value := node.(type) {
+	case string:
+		out = append(out, value)
+	case []any:
+		for _, item := range value {
+			out = jsonStrings(item, out)
+		}
+	case map[string]any:
+		for key, item := range value {
+			out = append(out, key)
+			out = jsonStrings(item, out)
+		}
+	}
+	return out
+}
+
+// scanFixtureContent fails closed. A token is erased as a synthetic JWS only
+// when its header and payload strict-decode to JSON objects (or the payload is
+// a fixed placeholder) AND its signature is one of syntheticSignatures; before
+// it is erased, every raw segment and the signature get the prefix and pattern
+// rules, and the decoded header and payload get every rule plus the base64 and
+// JSON-string following of scanDecoded. Any other token-shaped text is scanned
+// raw, with every rule, and its segments are also searched for hidden base64.
 func scanFixtureContent(name, content string) []string {
+	return scanFixtureContentWaiving(name, content, false)
+}
+
+// scanFixtureContentWaiving is scanFixtureContent with the strict-decode
+// requirement waived for a listed fixture (hasStrictDecodeWaiver).
+func scanFixtureContentWaiving(name, content string, waiveStrictDecode bool) []string {
 	var findings []string
-	content = syntheticJWS.ReplaceAllString(content, "SYNTHETIC-JWS")
+	erased := jwsShape.ReplaceAllStringFunc(content, func(token string) string {
+		segments := strings.Split(token, ".")
+		header, payload, signature := segments[0], segments[1], segments[2]
+		headerText, headerOK := strictJSONObject(header)
+		payloadText, payloadOK := strictJSONObject(payload)
+		payloadOK = payloadOK || syntheticPayloadPlaceholders[payload]
+		strict := headerOK && payloadOK
+		if !syntheticSignatures[signature] || (!strict && !waiveStrictDecode) {
+			for _, segment := range segments {
+				for _, decoded := range decodeCandidates(segment) {
+					findings = append(findings, scanDecoded(name+" (token segment)", decoded, 1)...)
+				}
+			}
+			return token
+		}
+		for _, segment := range segments {
+			findings = append(findings, scanPrefixesAndPatterns(name+" (token segment)", segment)...)
+			if !strict {
+				for _, decoded := range decodeCandidates(segment) {
+					findings = append(findings, scanDecoded(name+" (token segment)", decoded, 1)...)
+				}
+			}
+		}
+		if headerText != "" {
+			findings = append(findings, scanDecoded(name+" (token header)", headerText, 0)...)
+		}
+		if payloadText != "" {
+			findings = append(findings, scanDecoded(name+" (token payload)", payloadText, 0)...)
+		}
+		return "SYNTHETIC-JWS"
+	})
+	findings = append(findings, scanPlain(name, erased)...)
+	sort.Strings(findings)
+	return findings
+}
+
+// scanPlain applies the prefix, pattern and entropy rules to text as it is.
+func scanPlain(name, content string) []string {
+	return append(scanPrefixesAndPatterns(name, content), scanEntropy(name, content)...)
+}
+
+// scanPrefixesAndPatterns applies the named-prefix and structured-pattern rules.
+func scanPrefixesAndPatterns(name, content string) []string {
+	var findings []string
 	for _, prefix := range forbiddenFixturePrefixes {
 		if strings.Contains(content, prefix) {
 			findings = append(findings, fmt.Sprintf(
@@ -157,6 +336,12 @@ func scanFixtureContent(name, content string) []string {
 				"%s contains a %s (%.24s...)", name, label, match))
 		}
 	}
+	return findings
+}
+
+// scanEntropy applies the high-entropy rule.
+func scanEntropy(name, content string) []string {
+	var findings []string
 	for _, run := range tokenLikeRun.FindAllString(content, -1) {
 		bits := shannonEntropyBitsPerChar(run)
 		if bits <= maxFixtureEntropyBits || !hasAllCharacterClasses(run) {
@@ -168,7 +353,6 @@ func scanFixtureContent(name, content string) []string {
 				"repeated EXAMPLE bodies and zero-padded counters, not plausible randomness",
 			name, len(run), bits, maxFixtureEntropyBits, run))
 	}
-	sort.Strings(findings)
 	return findings
 }
 
@@ -188,7 +372,7 @@ func TestNoFixtureCarriesARealLookingSecret(t *testing.T) {
 		}
 		scanned++
 		relative, _ := filepath.Rel(root, path)
-		for _, finding := range scanFixtureContent(relative, string(raw)) {
+		for _, finding := range scanFixtureContentWaiving(relative, string(raw), hasStrictDecodeWaiver(relative, raw)) {
 			t.Error(finding)
 		}
 		return nil
@@ -306,12 +490,33 @@ func TestTheFixtureScannerDoesNotFireOnSyntheticValues(t *testing.T) {
 
 func TestTheFixtureScannerAllowsOnlyTheSyntheticHS256Token(t *testing.T) {
 	seg := func(parts ...string) string { return strings.Join(parts, "") }
-	synthetic := `{"t": "` + seg("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9", ".", "EXAMPLEPAYLOAD", ".", "EXAMPLESIGNATURE") + `"}`
+	synthetic := `{"t": "` + seg("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9", ".", "EXAMPLE", ".", "EXAMPLESIGNATURE") + `"}`
 	if findings := scanFixtureContent("synthetic.json", synthetic); len(findings) != 0 {
 		t.Fatalf("a synthetic EXAMPLE token was flagged: %v", findings)
 	}
-	halfSynthetic := `{"t": "` + seg("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9", ".", "EXAMPLEPAYLOAD", ".", "dBjftJeZ4CVPmB92K27uhbUJU1p1r") + `"}`
+	halfSynthetic := `{"t": "` + seg("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9", ".", "EXAMPLE", ".", "dBjftJeZ4CVPmB92K27uhbUJU1p1r") + `"}`
 	if findings := scanFixtureContent("half.json", halfSynthetic); len(findings) == 0 {
 		t.Fatal("a token with a real-looking signature segment passed the scanner")
+	}
+}
+
+// TestFixtureScannerReadsInsideASyntheticJWS: the EXAMPLE-signature allowance
+// hides nothing, because the header and payload segments are decoded and
+// scanned as text; a secret-shaped value in a payload is still a finding, and
+// a token whose signature does not begin EXAMPLE is not admitted at all.
+func TestFixtureScannerReadsInsideASyntheticJWS(t *testing.T) {
+	segment := func(text string) string { return base64.RawURLEncoding.EncodeToString([]byte(text)) }
+	header := segment(`{"alg":"EdDSA","typ":"at+jwt","kid":"auth-example-2026-10"}`)
+	clean := header + "." + segment(`{"sub":"prn_AAAAAAAAAAAAAAAAAAAAAA"}`) + ".EXAMPLESIGNATURE"
+	if findings := scanFixtureContent("clean", clean); len(findings) != 0 {
+		t.Fatalf("a synthetic token was refused: %v", findings)
+	}
+	hidden := header + "." + segment(`{"key":"AKIA`+`ABCDEFGHIJKLMNOP"}`) + ".EXAMPLESIGNATURE"
+	if findings := scanFixtureContent("hidden", hidden); len(findings) == 0 {
+		t.Error("a secret-shaped value inside a synthetic token's payload was not reported")
+	}
+	real := header + "." + segment(`{"sub":"prn_AAAAAAAAAAAAAAAAAAAAAA"}`) + ".Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6QUJDREVGR0g"
+	if findings := scanFixtureContent("real", real); len(findings) == 0 {
+		t.Error("a token with a non-EXAMPLE signature was admitted")
 	}
 }

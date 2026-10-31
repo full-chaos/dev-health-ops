@@ -31,6 +31,7 @@ internal/atlassianteams	vendored_patch_chain_test.go	third_party/vendor/atlassia
 internal/atlassianteams	vendored_patch_chain_test.go	unexpressed	-	-
 internal/audit	writer_guard_test.go	.	tree	*.go
 internal/auth/authapi	register_test.go	unexpressed	-	-
+internal/auth/authorization	evaluate_test.go	internal/auth/authorization	dir	*
 internal/auth/authruntime	audit_request_id_scan_test.go	unexpressed	-	-
 internal/auth/authruntime	fixed_credential_scan_test.go	internal/auth/authruntime	dir	*
 internal/auth/authruntime	keystate_source_test.go	internal/auth/authruntime	dir	*
@@ -47,10 +48,12 @@ internal/auth/contracts	endpoint_profiles_query_api_test.go	unexpressed	-	-
 internal/auth/contracts	error_envelope_goldens_test.go	unexpressed	-	-
 internal/auth/contracts	fixture_secret_scanner_test.go	unexpressed	-	-
 internal/auth/contracts	jwks_document_goldens_test.go	unexpressed	-	-
+internal/auth/contracts	openapi_refresh_versions_test.go	unexpressed	-	-
 internal/auth/contracts	principal_contract_goldens_test.go	unexpressed	-	-
 internal/auth/contracts	provisioning_event_goldens_test.go	unexpressed	-	-
 internal/auth/contracts	provisioning_resources_test.go	unexpressed	-	-
 internal/auth/contracts	reason_code_vocabulary_test.go	unexpressed	-	-
+internal/auth/contracts	refresh_response_v2_test.go	unexpressed	-	-
 internal/auth/contracts	reject_location_test.go	unexpressed	-	-
 internal/auth/contracts	retired_credential_class_test.go	unexpressed	-	-
 internal/auth/contracts	schema_dialect_test.go	unexpressed	-	-
@@ -75,6 +78,7 @@ internal/auth/platformrole	superuser_sites_census_test.go	unexpressed	-	-
 internal/auth/platformrole	superuser_writes_census_test.go	unexpressed	-	-
 internal/auth/restorefence	consumers_test.go	unexpressed	-	*.go
 internal/auth/restorefence	inventory_completeness_test.go	.	tree	*.go
+internal/auth/restorefence	platform_roles_test.go	internal/auth/restorefence	dir	*
 internal/auth/restorefence	specs_test.go	internal/pgmigrate/sql	dir	*
 internal/auth/writerinventory	scan_test.go	unexpressed	-	-
 internal/auth/writerinventory	session_revoke_census_test.go	internal	tree	*.go

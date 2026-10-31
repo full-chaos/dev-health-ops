@@ -21,6 +21,7 @@ stage-signing-key init container exists.
 {{- /* Every auth check that must hold whatever the phase and whatever goApi.enabled, queryApi.enabled and the other enable flags say: one helper, included here once. This file always renders (only its documents are gated), so the include always runs. */}}
 {{- include "dev-health.authValidate" . }}
 {{- $eddsaIssuer := include "dev-health.authEdDSAIssuer" . }}
+{{- $tokenIssuer := include "dev-health.authTokenIssuer" . }}
 {{- $linkRoutes := eq (include "dev-health.authBool" (dict "value" .Values.authService.socialLinkRoutes "key" "authService.socialLinkRoutes")) "true" }}
 {{- if eq (include "dev-health.authOn" (dict "flag" "service" "context" .)) "true" }}
 {{- $a := .Values.authService }}
@@ -170,7 +171,7 @@ spec:
         {{- end }}
     spec:
       {{- include "dev-health.imagePullSecrets" . | nindent 6 }}
-      {{- include "dev-health.workloadServiceAccount" (dict "ctx" . "component" "auth-service" "cfg" .Values.authService.serviceAccount) | nindent 6 }}
+      {{- include "dev-health.workloadServiceAccount" (dict "ctx" . "component" "auth-service" "cfg" .Values.authService.serviceAccount "automount" (include "dev-health.authServiceAutomount" .)) | nindent 6 }}
       terminationGracePeriodSeconds: {{ $graceRaw }}
       securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, fsGroup: 65532, fsGroupChangePolicy: OnRootMismatch, seccompProfile: {type: RuntimeDefault}}
       initContainers:
@@ -257,11 +258,28 @@ spec:
             - name: AUTH_ACCESS_TOKEN_CLASS
               value: {{ . | quote }}
           {{- end }}
-          {{- with $eddsaIssuer }}
+          {{- with $tokenIssuer }}
             - name: AUTH_TOKEN_ISSUER_URL
               value: {{ . | quote }}
+          {{- end }}
+          {{- if $eddsaIssuer }}
             - name: AUTH_JWT_AUDIENCE
               value: "dev-health-api"
+          {{- end }}
+          {{- if eq (include "dev-health.authWorkloadExchange" .) "true" }}
+          {{- $w := .Values.authService.workloadExchange }}
+            - name: AUTH_WORKLOAD_EXCHANGE
+              value: "true"
+            - name: AUTH_WORKLOAD_TRUST_DOMAIN
+              value: {{ $w.trustDomain | quote }}
+            - name: AUTH_WORKLOAD_EXCHANGE_CLUSTER_ISSUER
+              value: {{ $w.clusterIssuer | quote }}
+            - name: AUTH_WORKLOAD_EXCHANGE_KUBE_API_URL
+              value: {{ $w.kubeAPIURL | quote }}
+            - name: AUTH_WORKLOAD_EXCHANGE_KUBE_CA_FILE
+              value: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+            - name: AUTH_WORKLOAD_EXCHANGE_REVIEWER_TOKEN_FILE
+              value: /var/run/secrets/kubernetes.io/serviceaccount/token
           {{- end }}
           {{- if eq (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true" }}
             - name: AUTH_USERS_OWNED
@@ -437,7 +455,7 @@ spec:
     - Egress
   {{- /* CHAOS-10231: go-api's pods reach the API port only while go-api forwards to it (authService.phase >= 2). */}}
   {{- $apiFrom := $a.networkPolicy.allowedFrom }}
-  {{- if eq (include "dev-health.authProxyOn" $) "true" }}
+  {{- if or (eq (include "dev-health.authProxyOn" $) "true") (and $.Values.goApi.enabled (eq (include "dev-health.authWorkloadExchange" $) "true")) }}
   {{- $apiFrom = append $apiFrom (dict "matchLabels" (include "dev-health.componentSelectorLabels" (dict "component" "go-api" "context" $) | fromYaml)) }}
   {{- end }}
   {{- if or $apiFrom $a.networkPolicy.metricsFrom }}
@@ -494,6 +512,14 @@ spec:
         {{- toYaml $a.networkPolicy.egress.mail.to | nindent 8 }}
       ports:
         {{- toYaml $a.networkPolicy.egress.mail.ports | nindent 8 }}
+    {{- end }}
+    {{- if eq (include "dev-health.authWorkloadExchange" $) "true" }}
+    # The Kubernetes API server (TokenReview of the workload tokens), and nothing else
+    - to:
+        {{- toYaml $a.networkPolicy.egress.kubeAPI.to | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: {{ $a.networkPolicy.egress.kubeAPI.port }}
     {{- end }}
     {{- with $a.networkPolicy.egress.keyCustody.to }}
     # Key custody service (KMS)

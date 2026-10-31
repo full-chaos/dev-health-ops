@@ -18,4 +18,13 @@ CG=$(mktemp -d) || { echo "GRANTS_CHECK_FAIL no scratch directory for cigate"; e
 trap 'rm -rf "$CG"' EXIT
 CGBIN=$CG/cigate
 if [ -x "${BIGBOY_CIGATE:-}" ]; then CGBIN=$BIGBOY_CIGATE; else go build -C "${BIGBOY_CIGATE_SRC:-$HERE/../..}" -buildvcs=false -trimpath -mod=readonly -o "$CGBIN" ./cmd/cigate 2>"$CG/build.err" || { echo "GRANTS_CHECK_FAIL cigate build: $(head -c 300 "$CG/build.err")"; exit 1; }; fi
-"$CGBIN" bigboy grants-compare "$ACT" "$SRC"
+# CHAOS-12268: the expected posture follows the project-scope flag go-api runs with (ACR_ACCESS_PROJECT_SCOPE, read by
+# cigate from go-api's one env file in compose.bigboy.yml). On, it is APIPostureFor(db, true): the projects grant too.
+# A flag that cannot be read fails the check; it is never taken as off.
+GOAPI_ENV="$R/.go-api-dev/go-api.env"
+PS=$("$CGBIN" bigboy go-api-project-scope "$GOAPI_ENV" 2>"$CG/ps.err") || PS=""
+case "$PS" in
+  true) "$CGBIN" bigboy grants-compare --project-scope "$ACT" "$SRC" ;;
+  false) "$CGBIN" bigboy grants-compare "$ACT" "$SRC" ;;
+  *) echo "GRANTS_CHECK_FAIL go-api's project-scope flag (ACR_ACCESS_PROJECT_SCOPE) cannot be read from $GOAPI_ENV: $(head -c 300 "$CG/ps.err")"; exit 1 ;;
+esac

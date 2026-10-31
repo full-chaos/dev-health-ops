@@ -219,6 +219,7 @@ type dirGroup struct {
 	structFields map[string][]string
 	badStruct    map[string]bool
 	fieldKind    map[string]pathInfo
+	flowG        *flowGroup      // typeNameOf: the type resolution of the value flow
 	typeNames    map[string]bool // the package-level types of the directory
 }
 
@@ -656,7 +657,7 @@ func (c *fileCtx) pathKind(e ast.Expr, sc *scope) pathInfo {
 				return c.fieldKind(v, x.Sel.Name, sc)
 			}
 			if _, imp := c.s.imports[id.Name]; !imp {
-				if k, ok := c.g.fieldKind[x.Sel.Name]; ok {
+				if k, ok := c.g.fieldKind[c.g.typeNameOf(x.X)+"."+x.Sel.Name]; ok {
 					return k
 				}
 			}
@@ -1243,9 +1244,9 @@ func (g *dirGroup) bindParams() {
 		}
 	}
 	g.fieldKind = map[string]pathInfo{}
-	for _, fields := range g.structFields {
+	for t, fields := range g.structFields {
 		for _, f := range fields {
-			g.fieldKind[f] = pathInfo{}
+			g.fieldKind[t+"."+f] = pathInfo{}
 		}
 	}
 	state := map[*ast.FuncDecl][]pathInfo{}
@@ -1385,17 +1386,38 @@ func (g *dirGroup) bindParams() {
 	}
 }
 
-// collectFields joins into out, per unexported field name of the directory's structs, the kind of every value the
+// typeNameOf is the struct type of the directory an expression has, "" when the scan cannot tell.
+func (g *dirGroup) typeNameOf(e ast.Expr) string {
+	if g.flowG == nil {
+		g.flowG = newFlowGroup(g.files)
+	}
+	r := &flowRun{g: g.flowG}
+	return r.typeName(r.typeOf(e, 0))
+}
+
+// collectFields joins into out, per field of the directory's structs ("T.field"), the kind of every value the
 // directory stores in it: a keyed literal of the struct (a field the literal leaves out holds the empty string), an
-// unkeyed literal or a type the scan cannot see every value of (dyn), and an assignment to a selector of that name.
+// unkeyed literal or a type the scan cannot see every value of (dyn), and an assignment to a selector of that name
+// (dyn for every struct with such a field when the receiver's type is not known).
 func (g *dirGroup) collectFields(c *fileCtx, body ast.Node, sc *scope, out map[string]pathInfo) {
-	named := map[string]bool{}
-	for _, fields := range g.structFields {
-		for _, f := range fields {
-			named[f] = true
+	zero := pathInfo{kind: kConst, value: ""}
+	anyType := func(field string, k pathInfo) {
+		for t, fields := range g.structFields {
+			for _, f := range fields {
+				if f == field {
+					out[t+"."+f] = join(out[t+"."+f], k)
+				}
+			}
 		}
 	}
-	zero := pathInfo{kind: kConst, value: ""}
+	store := func(sel *ast.SelectorExpr, k pathInfo) {
+		t := g.typeNameOf(sel.X)
+		if _, ok := g.structFields[t]; ok {
+			out[t+"."+sel.Sel.Name] = join(out[t+"."+sel.Sel.Name], k)
+			return
+		}
+		anyType(sel.Sel.Name, dynInfo)
+	}
 	ast.Inspect(body, func(n ast.Node) bool {
 		switch x := n.(type) {
 		case *ast.CompositeLit:
@@ -1414,52 +1436,50 @@ func (g *dirGroup) collectFields(c *fileCtx, body ast.Node, sc *scope, out map[s
 			set := map[string]bool{}
 			for _, el := range x.Elts {
 				kv, keyed := el.(*ast.KeyValueExpr)
-				key, isID := ast.Expr(nil), false
+				var key *ast.Ident
 				if keyed {
-					key = kv.Key
-					_, isID = key.(*ast.Ident)
+					key, _ = kv.Key.(*ast.Ident)
 				}
-				if !keyed || !isID {
+				if key == nil {
 					for _, f := range fields {
-						out[f] = dynInfo
+						out[id.Name+"."+f] = dynInfo
 					}
 					return true
 				}
-				name := key.(*ast.Ident).Name
-				if named[name] {
-					out[name] = join(out[name], c.pathKind(kv.Value, sc))
-					set[name] = true
+				if slices.Contains(fields, key.Name) {
+					out[id.Name+"."+key.Name] = join(out[id.Name+"."+key.Name], c.pathKind(kv.Value, sc))
+					set[key.Name] = true
 				}
 			}
 			for _, f := range fields {
 				if !set[f] {
-					out[f] = join(out[f], zero)
+					out[id.Name+"."+f] = join(out[id.Name+"."+f], zero)
 				}
 			}
 		case *ast.AssignStmt:
 			for i, l := range x.Lhs {
-				if sel, ok := l.(*ast.SelectorExpr); ok && named[sel.Sel.Name] {
+				if sel, ok := l.(*ast.SelectorExpr); ok {
 					k := dynInfo
 					if len(x.Lhs) == len(x.Rhs) && x.Tok == token.ASSIGN {
 						k = c.pathKind(x.Rhs[i], sc)
 					}
-					out[sel.Sel.Name] = join(out[sel.Sel.Name], k)
+					store(sel, k)
 				}
 			}
 		case *ast.UnaryExpr:
-			if sel, ok := x.X.(*ast.SelectorExpr); ok && x.Op == token.AND && named[sel.Sel.Name] {
-				out[sel.Sel.Name] = dynInfo
+			if sel, ok := x.X.(*ast.SelectorExpr); ok && x.Op == token.AND {
+				store(sel, dynInfo)
 			}
 		case *ast.IncDecStmt:
-			if sel, ok := x.X.(*ast.SelectorExpr); ok && named[sel.Sel.Name] {
-				out[sel.Sel.Name] = dynInfo
+			if sel, ok := x.X.(*ast.SelectorExpr); ok {
+				store(sel, dynInfo)
 			}
 		}
 		return true
 	})
 	for name := range g.badStruct {
 		for _, f := range g.structFields[name] {
-			out[f] = dynInfo
+			out[name+"."+f] = dynInfo
 		}
 	}
 }

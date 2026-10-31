@@ -135,6 +135,8 @@ func TestPlanReadsBareNameExecInAStructFieldDir(t *testing.T) {
 		{"temp_literal", "func TestX(t *testing.T) {\n\tr := &gitRepo{t: t, dir: t.TempDir()}\n\tr.git(\"add\", \"README.md\")\n}\n", false},
 		{"copy_of_a_temp_dir", "func TestX(t *testing.T) {\n\tr := &gitRepo{t: t, dir: t.TempDir()}\n\trr := &gitRepo{t: t, dir: r.dir}\n\trr.git(\"add\", \"README.md\")\n}\n", false},
 		{"temp_assignment", "func TestX(t *testing.T) {\n\tvar r *gitRepo = &gitRepo{t: t, dir: t.TempDir()}\n\tr.dir = t.TempDir()\n\tr.git(\"add\", \"README.md\")\n}\n", false},
+		{"another_struct_with_the_same_field_name", "type spec struct{ dir string }\n\nvar _ = spec{dir: repoRoot()}\n\nfunc TestX(t *testing.T) {\n\tr := &gitRepo{t: t, dir: t.TempDir()}\n\tr.git(\"add\", \"README.md\")\n}\n", false},
+		{"assignment_through_an_unknown_receiver", "func set(x any) {}\n\nfunc TestX(t *testing.T) {\n\tr := &gitRepo{t: t, dir: t.TempDir()}\n\tm := map[string]*gitRepo{\"a\": r}\n\tm[\"a\"].dir = repoRoot()\n\tr.git(\"add\", \"README.md\")\n}\n", true},
 		{"repository_literal", "func TestX(t *testing.T) {\n\tr := &gitRepo{t: t, dir: repoRoot()}\n\tr.git(\"add\", \"README.md\")\n}\n", true},
 		{"temp_and_repository_literals", "func TestX(t *testing.T) {\n\tr := &gitRepo{t: t, dir: t.TempDir()}\n\tq := &gitRepo{t: t, dir: repoRoot()}\n\tr.git(\"add\", \"README.md\")\n\tq.git(\"x\")\n}\n", true},
 		{"literal_without_the_dir", "func TestX(t *testing.T) {\n\tr := &gitRepo{t: t, dir: t.TempDir()}\n\tq := &gitRepo{t: t}\n\tr.git(\"add\", \"README.md\")\n\tq.git(\"x\")\n}\n", true},

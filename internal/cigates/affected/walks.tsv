@@ -183,6 +183,7 @@ internal/cigates/workflows	workflows_go_resolver_test.go	unexpressed	-	-
 internal/cigates/workflows	workflows_image_publishing_test.go	deploy	tree	*
 internal/cigates/workflows	workflows_image_publishing_test.go	unexpressed	-	-
 internal/cigates/workflows	workflows_path_filters_test.go	unexpressed	-	-
+internal/cigates/workflows	workflows_registry_login_gate_check_test.go	unexpressed	-	*.sh
 internal/cigates/workflows	workflows_venue_always_runs_test.go	unexpressed	-	-
 internal/cigates/workflows	workflows_venue_shards_test.go	ci/venue_oracle_weights.d	dir	*
 internal/cigates/workflows	workflows_venue_shards_test.go	unexpressed	-	-

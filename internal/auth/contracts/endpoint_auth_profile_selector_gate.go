@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/full-chaos/dev-health-ops/contracts/auth/v1/vocabulary"
 )
@@ -18,6 +19,9 @@ type ClassMarker struct {
 	Kind string `json:"kind"`
 	Name string `json:"name"`
 }
+
+// selectorNameMax is the schemas' maxLength for a selector name (code points).
+const selectorNameMax = 64
 
 // selectorKinds is the closed class_disambiguator kind vocabulary of
 // endpoint-profile.schema.json (a test holds the two equal).
@@ -70,6 +74,9 @@ func CheckClassSelector(profile map[string]any, registry map[string]RegistryClas
 	name, _ := selector["name"].(string)
 	if !slices.Contains(selectorKinds, kind) {
 		return fmt.Errorf("unknown selector kind %q", kind)
+	}
+	if n := utf8.RuneCountInString(name); n > selectorNameMax {
+		return fmt.Errorf("selector %s name is %d characters, longer than %d", kind, n, selectorNameMax)
 	}
 	var owners []string
 	for _, entry := range accepted {

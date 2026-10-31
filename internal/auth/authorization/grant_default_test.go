@@ -124,7 +124,7 @@ func TestMembershipDefault_ClockAndTheThirtySecondBound(t *testing.T) {
 func TestDecisionCacheClass(t *testing.T) {
 	e := plantedEvaluator()
 	g := e.Evaluate(repoRequest("acme/api"), repoSnapshot("member", liveGrant("acme/api")))
-	if !g.Allowed || g.CacheClass != CacheResourceRevisionBound || g.ExpiresAtUnixNano != 0 {
+	if !g.Allowed || g.CacheClass != CacheResourceRevisionBound || g.ExpiresAtUnixNano != nowNano+30_000_000_000 {
 		t.Errorf("grant allow: %+v", g)
 	}
 	d := e.Evaluate(repoRequest("acme/api"), repoSnapshot("member"))
@@ -176,5 +176,27 @@ func TestHoldsByMembershipDefault(t *testing.T) {
 		if got := tc.e.HoldsByMembershipDefault(tc.role, tc.act, tc.rows); got != tc.want {
 			t.Errorf("%s: got %v want %v", tc.name, got, tc.want)
 		}
+	}
+}
+
+func TestRepositoryGrantAllow_ExpiresThirtySecondsAfterClock(t *testing.T) {
+	e := plantedEvaluator()
+	for _, key := range []string{"acme/api", "*"} {
+		d := e.Evaluate(repoRequest("acme/api"), repoSnapshot("member", liveGrant(key)))
+		if !d.Allowed || d.Reason != ReasonAllowedByRepositoryGrant || d.CacheClass != CacheResourceRevisionBound || d.ExpiresAtUnixNano != nowNano+30_000_000_000 {
+			t.Errorf("grant %q: want resource_revision_bound until clock + 30 s: %+v", key, d)
+		}
+	}
+	// A grant that expires sooner than the bound does not shorten the decision:
+	// the grant is live now, and the decision stays valid for its own 30 s.
+	soon := liveGrant("acme/api")
+	soon.ExpiresAtUnixNano = nowNano + 1
+	if d := e.Evaluate(repoRequest("acme/api"), repoSnapshot("member", soon)); !d.Allowed || d.ExpiresAtUnixNano != nowNano+30_000_000_000 {
+		t.Errorf("grant ending in 1 ns: %+v", d)
+	}
+	s := repoSnapshot("member", liveGrant("acme/api"))
+	s.now = 1<<63 - 1 - 5
+	if d := e.Evaluate(repoRequest("acme/api"), s); !d.Allowed || d.ExpiresAtUnixNano != 1<<63-1 {
+		t.Errorf("saturating grant expiry: %+v", d)
 	}
 }

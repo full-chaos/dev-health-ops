@@ -48,8 +48,8 @@ func FuzzEvaluateRepositoryGrant(f *testing.F) {
 			t.Fatalf("grant %q allowed key %q", grantKey, reqKey)
 		case !plantedHolders[role]:
 			t.Fatalf("grant role %q does not hold the action", role)
-		case d.CacheClass != CacheResourceRevisionBound:
-			t.Fatalf("grant allow cache class %q", d.CacheClass)
+		case d.CacheClass != CacheResourceRevisionBound || d.ExpiresAtUnixNano != wantExpiry(now):
+			t.Fatalf("grant allow cache class %q expiry %d for clock %d", d.CacheClass, d.ExpiresAtUnixNano, now)
 		}
 	})
 }

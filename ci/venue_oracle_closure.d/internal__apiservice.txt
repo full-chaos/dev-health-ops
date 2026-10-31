@@ -161,6 +161,7 @@ internal/teamprovider
 internal/testsupport/chschema
 internal/testsupport/containers
 internal/testsupport/egressallow
+internal/testsupport/ingestpg
 internal/testsupport/moduleroot
 internal/testsupport/pgschema
 internal/testsupport/pgseed

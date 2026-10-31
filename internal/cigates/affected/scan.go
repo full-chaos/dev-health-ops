@@ -243,6 +243,7 @@ func ScanReads(root string) ([]Read, error) {
 		g.prebind()
 		flow := newFlowGroup(byDir[d])
 		flow.execInTemp = g.execInTemp
+		flow.modulePure = g.modulePure
 		for _, s := range byDir[d] {
 			reads = append(reads, scanFile(s.fset, s.file, s.rel, top, g.chdir, flow)...)
 		}

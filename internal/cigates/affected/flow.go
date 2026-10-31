@@ -23,6 +23,8 @@ type flowFrame struct {
 type flowGroup struct {
 	// execInTemp reports whether an exec.Command call of a file runs in a temp directory (set by the scan)
 	execInTemp func(*srcFile, *ast.CallExpr) bool
+	// modulePure reports whether a function of a package of the module only computes (pureleaf.go)
+	modulePure func(imp, name string) bool
 	files      []*srcFile
 	parent     map[ast.Node]ast.Node
 	fileOf     map[*ast.File]*srcFile
@@ -347,6 +349,10 @@ func (r *flowRun) call(c *ast.CallExpr, i int, field string, mapKey bool, ret []
 func (r *flowRun) pkgCall(imp, name string, c *ast.CallExpr, i int, field string, mapKey bool, ret []flowFrame, depth int) bool {
 	full := imp + "." + name
 	if strings.Contains(strings.SplitN(imp, "/", 2)[0], ".") {
+		if r.g.modulePure != nil && r.g.modulePure(imp, name) {
+			r.composed = true
+			return r.expr(c, "", false, ret, depth) // the value lives on only in its results
+		}
 		return true // another package of the module, or a third party: not followed
 	}
 	// A writer call carries the value into its first argument, the writer: follow the writer variable too.

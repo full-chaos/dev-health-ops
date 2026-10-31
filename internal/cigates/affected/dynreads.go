@@ -212,6 +212,8 @@ type dirGroup struct {
 	// execScopes: the bound scope of each function execInTemp asked about; bound: bindParams and boundChdirs ran
 	execScopes map[*ast.FuncDecl]*scope
 	bound      bool
+	pure       map[*ast.FuncDecl]bool // pureFunc answers
+	typeNames  map[string]bool        // the package-level types of the directory
 }
 
 type funcDecl struct {
@@ -270,7 +272,7 @@ func execProgramDirs(byDir map[string][]*srcFile, module string) map[string]bool
 
 func newDirGroup(dir, module string, files []*srcFile) *dirGroup {
 	g := &dirGroup{dir: dir, module: module, files: files, consts: map[string]map[string]ast.Expr{}, vars: map[string]map[string]ast.Expr{},
-		constFile: map[string]map[string]*srcFile{}, strTypes: map[string]map[string]bool{},
+		constFile: map[string]map[string]*srcFile{}, strTypes: map[string]map[string]bool{}, typeNames: map[string]bool{},
 		funcs: map[string][]*funcDecl{}, pkgOf: map[*srcFile]string{}, params: map[*ast.FuncDecl][]pathInfo{}, bindOK: map[*ast.FuncDecl]bool{},
 		varKind: map[string]map[string]pathInfo{}}
 	assigned := map[string]bool{} // names assigned or address-taken anywhere in the directory
@@ -288,6 +290,7 @@ func newDirGroup(dir, module string, files []*srcFile) *dirGroup {
 				var prev []ast.Expr // a const spec with no value repeats the expressions of the previous spec
 				for _, spec := range d.Specs {
 					if ts, ok := spec.(*ast.TypeSpec); ok {
+						g.typeNames[ts.Name.Name] = true
 						if id, isID := ts.Type.(*ast.Ident); isID && id.Name == "string" && !ts.Assign.IsValid() {
 							g.strTypes[pkg][ts.Name.Name] = true
 						}
@@ -1729,6 +1732,21 @@ func (c *fileCtx) preGate(st ast.Stmt, dir bool, errName, entry string, locals m
 			return false
 		}
 		return s.Else == nil || c.preGate(s.Else, dir, errName, entry, locals)
+	case *ast.RangeStmt:
+		// a loop over a pure value, its variables new locals of the loop
+		if s.Tok != token.DEFINE || !c.allPure([]ast.Expr{s.X}, entry) {
+			return false
+		}
+		inner := map[string]bool{}
+		for k := range locals {
+			inner[k] = true
+		}
+		for _, e := range []ast.Expr{s.Key, s.Value} {
+			if id, ok := e.(*ast.Ident); ok {
+				inner[id.Name] = true
+			}
+		}
+		return c.preGate(s.Body, dir, errName, entry, inner)
 	case *ast.SwitchStmt:
 		if s.Init != nil || (s.Tag != nil && !c.allPure([]ast.Expr{s.Tag}, entry)) {
 			return false
@@ -1779,6 +1797,7 @@ func (c *fileCtx) allPure(es []ast.Expr, entry string) bool {
 				case name == "path/filepath.Rel" || name == "path/filepath.ToSlash" || name == "path/filepath.FromSlash" ||
 					name == "path/filepath.Base" || name == "path/filepath.Ext" || name == "path/filepath.Clean" ||
 					name == "path/filepath.Dir" || name == "path/filepath.Join":
+				case c.statsModuleFile(x) || c.pureCall(x):
 				default:
 					if !entryMethod(x, entry) {
 						pure = false
@@ -3136,4 +3155,21 @@ func onlySpreadUses(body ast.Node, name string) bool {
 		return ok
 	})
 	return ok
+}
+
+// statsModuleFile reports whether a call asks whether a go.mod, go.sum or go.work file exists below a directory
+// (os.Stat(filepath.Join(dir, "go.mod"))): no Markdown change creates or removes one.
+func (c *fileCtx) statsModuleFile(x *ast.CallExpr) bool {
+	if n := c.pkgCallName(x.Fun); (n != "os.Stat" && n != "os.Lstat") || len(x.Args) != 1 {
+		return false
+	}
+	j, ok := x.Args[0].(*ast.CallExpr)
+	if !ok || j.Ellipsis.IsValid() || len(j.Args) < 2 {
+		return false
+	}
+	if n := c.pkgCallName(j.Fun); n != "path/filepath.Join" && n != "path.Join" {
+		return false
+	}
+	v, ok := c.foldString(j.Args[len(j.Args)-1], nil)
+	return ok && goModFiles[path.Base(v)]
 }

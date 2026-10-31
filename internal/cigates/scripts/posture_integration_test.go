@@ -130,7 +130,7 @@ func TestPostureIntegrationDefaultModePrintsTheBaseSha(t *testing.T) {
 	repo := t.TempDir()
 	git := func(args ...string) cmdResult {
 		a := append([]string{"-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false"}, args...)
-		res := cmdSpec{dir: repo, env: []string{shimBasePath()}}.run("git", a...)
+		res := cmdSpec{dir: repo, env: []string{shimBasePath()}}.run("git", append([]string{"-c", "maintenance.auto=false", "-c", "gc.auto=0"}, a...)...)
 		if res.code != 0 {
 			t.Fatalf("git %v: %q", args, res.stderr)
 		}
@@ -234,7 +234,7 @@ func TestPostureIntegrationRunRefusesADirtyTree(t *testing.T) {
 	repo := t.TempDir()
 	git := func(args ...string) string {
 		a := append([]string{"-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false"}, args...)
-		res := cmdSpec{dir: repo, env: []string{shimBasePath()}}.run("git", a...)
+		res := cmdSpec{dir: repo, env: []string{shimBasePath()}}.run("git", append([]string{"-c", "maintenance.auto=false", "-c", "gc.auto=0"}, a...)...)
 		if res.code != 0 {
 			t.Fatalf("git %v: %q", args, res.stderr)
 		}
@@ -303,7 +303,7 @@ func postureRepo(t *testing.T) (repo string, git func(args ...string) string) {
 	repo = t.TempDir()
 	git = func(args ...string) string {
 		a := append([]string{"-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false"}, args...)
-		res := cmdSpec{dir: repo, env: []string{shimBasePath()}}.run("git", a...)
+		res := cmdSpec{dir: repo, env: []string{shimBasePath()}}.run("git", append([]string{"-c", "maintenance.auto=false", "-c", "gc.auto=0"}, a...)...)
 		if res.code != 0 {
 			t.Fatalf("git %v: %q", args, res.stderr)
 		}
@@ -384,7 +384,7 @@ func postureDemo(t *testing.T) postureFixture {
 	}
 	git := func(args ...string) string {
 		a := append([]string{"-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false"}, args...)
-		res := cmdSpec{dir: dir, env: []string{shimBasePath()}}.run("git", a...)
+		res := cmdSpec{dir: dir, env: []string{shimBasePath()}}.run("git", append([]string{"-c", "maintenance.auto=false", "-c", "gc.auto=0"}, a...)...)
 		if res.code != 0 {
 			t.Fatalf("git %v: %q", args, res.stderr)
 		}
@@ -586,7 +586,7 @@ func TestPostureIntegrationRealRunHeadNamesTheToolchain(t *testing.T) {
 			t.Fatalf("RECEIPT-HEAD %q lacks %q (exit %d stdout=%q stderr=%q)", head, want, res.code, res.stdout, res.stderr)
 		}
 	}
-	out, err := exec.Command("git", "-C", f.dir, "worktree", "list", "--porcelain").Output()
+	out, err := exec.Command("git", "-c", "maintenance.auto=false", "-c", "gc.auto=0", "-C", f.dir, "worktree", "list", "--porcelain").Output()
 	if err != nil || strings.Count(string(out), "worktree ") != 1 {
 		t.Fatalf("a run must leave no worktree behind: %q err=%v", out, err)
 	}
@@ -689,7 +689,7 @@ func TestPostureIntegrationExcludedCwdModuleCannotForgeAPass(t *testing.T) {
 func TestPostureIntegrationLeavesNoWorktreeBehind(t *testing.T) {
 	f := postureDemo(t)
 	postureDemoRun(t, f, f.dir)
-	out, err := exec.Command("git", "-C", f.dir, "worktree", "list", "--porcelain").Output()
+	out, err := exec.Command("git", "-c", "maintenance.auto=false", "-c", "gc.auto=0", "-C", f.dir, "worktree", "list", "--porcelain").Output()
 	if err != nil || strings.Count(string(out), "worktree ") != 1 {
 		t.Fatalf("worktrees after a run: %q err=%v", out, err)
 	}

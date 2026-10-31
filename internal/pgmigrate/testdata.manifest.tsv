@@ -1,6 +1,24 @@
 # Every file under internal/pgmigrate/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 # header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+4a45092ccf992ea92250053a80b931b787924ba61648f420555511b84f10ab6c	hand-written	embedarchive/allprefix/archive/sql/a.sql
+ac4396cdee0295db27f816dc31134189999d0071663e618f4957bc23edb584d7	hand-written	embedarchive/allprefix/archive/sql/b.sql
+9faa68b9521e31b5a9c7ed49506c7049067370d1bf0fb54354e02a753621567a	hand-written	embedarchive/allprefix/fixture.go
+4a45092ccf992ea92250053a80b931b787924ba61648f420555511b84f10ab6c	hand-written	embedarchive/bare/archive/sql/a.sql
+ac4396cdee0295db27f816dc31134189999d0071663e618f4957bc23edb584d7	hand-written	embedarchive/bare/archive/sql/b.sql
+4a9e7c85de771292e2e6cfa283c6e9aa77591406c6b585b66d8c157711608bdd	hand-written	embedarchive/bare/fixture.go
+02ace2168c55904a04a66ddba9a82b070665b6e8a86e272167e2e8d7aeef669b	hand-written	embedarchive/clean/archive/chain_manifest.tsv
+6667b2d1aab6a00caa5aee5af8ad9f1465e567abf1c209d15727d57b3e8f6e5f	hand-written	embedarchive/clean/data.txt
+fd439bacbcd000a7bdf4bb3e831c1ddbf8d341fe1066b766651a7d610d110986	hand-written	embedarchive/clean/fixture.go
+4a45092ccf992ea92250053a80b931b787924ba61648f420555511b84f10ab6c	hand-written	embedarchive/glob/archive/sql/a.sql
+ac4396cdee0295db27f816dc31134189999d0071663e618f4957bc23edb584d7	hand-written	embedarchive/glob/archive/sql/b.sql
+15659b8c45658f816d0b0a0c6952a3b7f0296e0031d1c3a8eea3cb2b2b6613ed	hand-written	embedarchive/glob/fixture.go
+4a45092ccf992ea92250053a80b931b787924ba61648f420555511b84f10ab6c	hand-written	embedarchive/quoted/archive/sql/a.sql
+ac4396cdee0295db27f816dc31134189999d0071663e618f4957bc23edb584d7	hand-written	embedarchive/quoted/archive/sql/b.sql
+cd1b8322dab391baf3ed7b9400f9f8b58add6bc8ba0217dd4e22a07e6fb27e52	hand-written	embedarchive/quoted/fixture.go
+4a45092ccf992ea92250053a80b931b787924ba61648f420555511b84f10ab6c	hand-written	embedarchive/star/archive/sql/a.sql
+ac4396cdee0295db27f816dc31134189999d0071663e618f4957bc23edb584d7	hand-written	embedarchive/star/archive/sql/b.sql
+ffab2bc0c7b67b66bc802f24448bc8018c01b3a24d4af6d0ce49955917d9bbc0	hand-written	embedarchive/star/fixture.go
 -	header	golden/alias.json
 -	header	golden/baseline_states.json
 -	header	golden/downgrade.json

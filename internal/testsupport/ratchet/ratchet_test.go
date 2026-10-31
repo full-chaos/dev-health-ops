@@ -10,7 +10,7 @@ import (
 
 func run(t *testing.T, repo string, args ...string) string {
 	t.Helper()
-	command := exec.Command("git", append([]string{"-C", repo}, args...)...)
+	command := exec.Command("git", append([]string{"-c", "maintenance.auto=false", "-c", "gc.auto=0", "-C", repo}, args...)...)
 	command.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.test", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.test", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
 	out, err := command.CombinedOutput()
 	if err != nil {
@@ -207,7 +207,7 @@ func TestTwoPullRequestsThatLowerTheSameListMergeWithoutAConflict(t *testing.T) 
 	// The control: the same two pull requests with their constant edit conflict on the second merge.
 	run(t, repo, "checkout", "-q", "-B", "main3", base)
 	run(t, repo, "merge", "-q", "--no-edit", "pr-a")
-	command := exec.Command("git", "-C", repo, "merge", "--no-edit", "pr-b")
+	command := exec.Command("git", "-c", "maintenance.auto=false", "-c", "gc.auto=0", "-C", repo, "merge", "--no-edit", "pr-b")
 	command.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.test", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.test", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
 	if out, err := command.CombinedOutput(); err == nil {
 		t.Fatalf("the control merge did not conflict, so the test does not show what it claims:\n%s", out)

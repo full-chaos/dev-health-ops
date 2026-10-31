@@ -58,6 +58,18 @@ var allowlist = map[string]string{
 	"internal/localgit/git.go|Repo.run":                    "read-only helper; callers: blame, diff, diff-tree, cat-file, rev-list, config --list, remote get-url",
 }
 
+// staleEntries lists the allowlist entries that matched no failing git exec site.
+func staleEntries(allow map[string]string, used map[string]bool) []string {
+	var out []string
+	for key := range allow {
+		if !used[key] {
+			out = append(out, "stale allowlist entry matches no failing git exec site: "+key)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 type site struct {
 	file   string
 	line   int
@@ -365,11 +377,7 @@ func TestEveryGitExecSiteThatCanStartMaintenanceTurnsItOff(t *testing.T) {
 			bad = append(bad, fmt.Sprintf("%s:%d: %s", rel, s.line, s.reason))
 		}
 	}
-	for key := range allowlist {
-		if !used[key] {
-			bad = append(bad, "stale allowlist entry matches no failing git exec site: "+key)
-		}
-	}
+	bad = append(bad, staleEntries(allowlist, used)...)
 	sort.Strings(bad)
 	for _, b := range bad {
 		t.Error(b)
@@ -416,7 +424,8 @@ func TestAllowlistEntryThatMatchesNoSiteIsStale(t *testing.T) {
 	if got := failures(u, ".", allow, used); len(got) != 0 {
 		t.Fatalf("allowlisted site still fails: %+v", got)
 	}
-	if !used["testdata/raw_commit.go|rawCommit"] || used["testdata/raw_commit.go|gone"] {
-		t.Fatalf("used = %v: the matching entry must be used and the stale one not", used)
+	stale := staleEntries(allow, used)
+	if len(stale) != 1 || !strings.HasSuffix(stale[0], "testdata/raw_commit.go|gone") {
+		t.Fatalf("stale = %v: only the entry that matches no site is stale", stale)
 	}
 }

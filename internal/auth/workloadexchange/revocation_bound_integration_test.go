@@ -233,10 +233,24 @@ func TestRollbackOldReleaseReadsEveryRevokedOrDisabledValueAsRefused(t *testing.
 	if oldReleaseLive(t, r.e, digest, r.t0) {
 		t.Fatal("the old release reads a revoked value of a disabled workload as live")
 	}
+}
+
+// A workload that is disabled, has its value revoked by bootstrap-disable and
+// is then enabled again does not get the value back, on the current read and
+// on the older release's read.
+func TestRollbackEnableOfTheWorkloadKeepsTheRevokedValueRefused(t *testing.T) {
+	r := newRevEnv(t, time.Hour)
+	ctx := context.Background()
+	if err := r.e.writer.Disable(ctx, r.name, workload.Actor{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.e.writer.DisableBootstrap(ctx, r.name, workload.Actor{}); err != nil {
+		t.Fatal(err)
+	}
 	if err := r.e.writer.Enable(ctx, r.name, workload.Actor{}); err != nil {
 		t.Fatal(err)
 	}
-	if oldReleaseLive(t, r.e, digest, r.t0) {
+	if oldReleaseLive(t, r.e, workload.BootstrapDigest(r.value), r.t0) {
 		t.Fatal("the old release reads a revoked value as live after the workload is enabled")
 	}
 	r.mustRefuse(t, r.value, "current release, revoked value after enable")

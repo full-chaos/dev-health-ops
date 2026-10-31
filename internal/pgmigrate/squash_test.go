@@ -1,14 +1,16 @@
 package pgmigrate
 
 import (
-	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
-	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -112,47 +114,39 @@ func TestDowngradeTextNamesTheBuildsRange(t *testing.T) {
 	}
 }
 
-var embedDirective = regexp.MustCompile(`^//go:embed (.+)$`)
-
-func literalArchiveEmbeds(t *testing.T, dir string) []string {
+// archivedEmbeds returns every archived file the package in dir embeds, as the go tool resolves its //go:embed
+// patterns (quotes, globs and all: included), except the archive manifest.
+func archivedEmbeds(t *testing.T, dir string) []string {
 	t.Helper()
-	sources, err := filepath.Glob(filepath.Join(dir, "*.go"))
+	cmd := exec.Command(filepath.Join(runtime.GOROOT(), "bin", "go"), "list", "-json", ".")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local", "GOFLAGS=")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("go list %s: %v: %s", dir, err, stderr.String())
+	}
+	var pkg struct{ EmbedFiles []string }
+	if err := json.Unmarshal(out, &pkg); err != nil {
+		t.Fatalf("decode go list %s: %v", dir, err)
 	}
 	var found []string
-	for _, source := range sources {
-		if strings.HasSuffix(source, "_test.go") {
-			continue
+	for _, file := range pkg.EmbedFiles {
+		if strings.HasPrefix(file, "archive/") && file != "archive/chain_manifest.tsv" {
+			found = append(found, file)
 		}
-		file, err := os.Open(source)
-		if err != nil {
-			t.Fatal(err)
-		}
-		scanner := bufio.NewScanner(file)
-		for scanner.Scan() {
-			match := embedDirective.FindStringSubmatch(strings.TrimSpace(scanner.Text()))
-			if match == nil {
-				continue
-			}
-			for _, pattern := range strings.Fields(match[1]) {
-				if strings.HasPrefix(pattern, "archive") && pattern != "archive/chain_manifest.tsv" {
-					found = append(found, pattern)
-				}
-			}
-		}
-		_ = file.Close()
 	}
 	return found
 }
 
 func TestEmbedArchiveFixtures(t *testing.T) {
 	for _, name := range []string{"quoted", "glob", "allprefix", "star"} {
-		if got := literalArchiveEmbeds(t, filepath.Join("testdata", "embedarchive", name)); len(got) == 0 {
+		if got := archivedEmbeds(t, filepath.Join("testdata", "embedarchive", name)); len(got) == 0 {
 			t.Errorf("fixture %s embeds archived SQL and the check found none", name)
 		}
 	}
-	if got := literalArchiveEmbeds(t, filepath.Join("testdata", "embedarchive", "clean")); len(got) != 0 {
+	if got := archivedEmbeds(t, filepath.Join("testdata", "embedarchive", "clean")); len(got) != 0 {
 		t.Errorf("fixture clean embeds no archived SQL and the check found %v", got)
 	}
 }
@@ -160,7 +154,7 @@ func TestEmbedArchiveFixtures(t *testing.T) {
 // The archive is history: nothing the binary embeds may be archived SQL, and the archive manifest names every archived
 // file with its released sha256.
 func TestNoEmbeddedSQLUnderArchive(t *testing.T) {
-	for _, pattern := range literalArchiveEmbeds(t, ".") {
+	for _, pattern := range archivedEmbeds(t, ".") {
 		t.Errorf("embeds %s: the binary may embed only archive/chain_manifest.tsv", pattern)
 	}
 	data, err := os.ReadFile("archive/chain_manifest.tsv")

@@ -91,8 +91,9 @@ func TestMigration0038DelegatedRowShape(t *testing.T) {
 		"plain_with_a_reason": {"actor_principal_id": `NULL`, "delegated_from_session_id": `NULL`, "delegation_permitted_actions": `NULL`},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if err := domainOwnedExec(t, ctx, env, m38Row("2", replace)); err == nil {
-				t.Fatal("the row was accepted")
+			err := domainOwnedExec(t, ctx, env, m38Row("2", replace))
+			if err == nil || !strings.Contains(err.Error(), "sessions_delegation_shape") {
+				t.Fatalf("insert = %v, want the refusal of sessions_delegation_shape", err)
 			}
 		})
 	}
@@ -104,8 +105,8 @@ func TestMigration0038DelegatedRowShape(t *testing.T) {
 	} {
 		t.Run("update_"+name, func(t *testing.T) {
 			err := domainOwnedExec(t, ctx, env, `UPDATE auth.sessions SET `+set+` WHERE actor_principal_id IS NOT NULL`)
-			if err == nil {
-				t.Fatal("the update was accepted")
+			if err == nil || !strings.Contains(err.Error(), "cannot change") {
+				t.Fatalf("update = %v, want the refusal of sessions_delegation_immutable", err)
 			}
 		})
 	}
@@ -122,8 +123,9 @@ func TestMigration0038OneUnrevokedRowPerActor(t *testing.T) {
 	if err := domainOwnedExec(t, ctx, env, m38Row("1", map[string]string{"expires_at": `now() - interval '1 minute'`})); err != nil {
 		t.Fatalf("first row: %v", err)
 	}
-	if err := domainOwnedExec(t, ctx, env, m38Row("2", nil)); err == nil {
-		t.Fatal("a second unrevoked row of one actor was accepted")
+	err := domainOwnedExec(t, ctx, env, m38Row("2", nil))
+	if err == nil || !strings.Contains(err.Error(), "sessions_one_live_delegation") {
+		t.Fatalf("a second unrevoked row of one actor = %v, want the refusal of sessions_one_live_delegation", err)
 	}
 }
 

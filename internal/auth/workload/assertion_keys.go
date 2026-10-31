@@ -326,7 +326,6 @@ WHERE id = $1`, activeID, plan.DemotePreviousUntil.UTC().Truncate(time.Microseco
 		Audit: s.assertionKeyAudit(info.PrincipalID, id, spec.Status, a),
 		Events: []audit.OutboxEvent{{AggregateType: "workload", AggregateID: wire(info.PrincipalID), EventType: "workload.assertion_key_changed",
 			Change: map[string]any{"key_status": string(spec.Status)}}},
-		OffStream: audit.OffStreamWorkloadRegistry,
 	})
 	if err != nil {
 		return uuid.Nil, err

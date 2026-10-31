@@ -211,6 +211,7 @@ func principalAccessHandler(store PrincipalAccessStore, auth routeAuth, logger *
 		started := time.Now()
 		access, err := store.Access(ctx, query)
 		elapsed := time.Since(started)
+		over, isOverLimit := inventoryOverLimitOf(err)
 		switch {
 		case err == nil:
 		case errors.Is(err, ErrOrgUnknown):
@@ -222,14 +223,15 @@ func principalAccessHandler(store PrincipalAccessStore, auth routeAuth, logger *
 			body.Set("code", UnknownOrganizationCode)
 			writeAccess(w, http.StatusNotFound, body)
 			return
-		case errors.Is(err, projectinventory.ErrOverLimit):
-			countInternal(ctx, routePrincipalAccess, outcomeProjectsOverLimit)
-			logger.WarnContext(ctx, "acr principal access: project inventory over its limit; answering 503",
+		case isOverLimit:
+			countInternal(ctx, routePrincipalAccess, over.outcome)
+			logger.WarnContext(ctx, "acr principal access: inventory over its limit; answering 503",
 				slog.String("org_id", orgRaw), slog.String("user_id", userRaw), slog.String("credential_id", cred.ID),
-				slog.Int("limit", projectinventory.Limit), slog.String("code", ProjectScopeOverLimitCode), slog.Duration("elapsed", elapsed))
+				slog.String("inventory", over.inventory), slog.Int("limit", over.limit), slog.String("code", over.code),
+				slog.Duration("elapsed", elapsed))
 			body := pyjson.NewObject()
 			body.Set("detail", "Service unavailable")
-			body.Set("code", ProjectScopeOverLimitCode)
+			body.Set("code", over.code)
 			writeAccess(w, http.StatusServiceUnavailable, body)
 			return
 		default:
@@ -310,16 +312,23 @@ func principalAccessBody(orgID, userID string, access PrincipalAccess) *pyjson.O
 // Go-only route (no FastAPI ancestor, so no response-model entry): it writes
 // with the JSONResponse writer, as the llm-config route does, never WriteModel,
 // which records a writer violation on a route the table does not name.
-// ProjectScopeOverLimitCode is the machine code of the 503 for a project
-// inventory above projectinventory.Limit (CHAOS-12224; acr types it as an
-// access limitation, not a retryable outage, CHAOS-12228). The status stays
-// 503 (fail closed). Every other failed read is the code-less 503, and so,
-// for now, is the repository inventory over its limit: that 503 body is live,
-// and its code waits for an acr that accepts it.
-const ProjectScopeOverLimitCode = "acr_access_project_scope_over_limit"
+// ProjectScopeOverLimitCode and RepositoryScopeOverLimitCode are the machine
+// codes of the 503 for an inventory above its limit: the project inventory
+// above projectinventory.Limit (CHAOS-12224) and the repository inventory
+// above repoinventory.Limit (CHAOS-12267). acr types them as an access
+// limitation, not a retryable outage (CHAOS-12228). The status stays 503
+// (fail closed), so an acr that reads no 503 body (acr main 968bdcb0) handles
+// it exactly as before. Every other failed read is the code-less 503.
+const (
+	ProjectScopeOverLimitCode    = "acr_access_project_scope_over_limit"
+	RepositoryScopeOverLimitCode = "acr_access_repository_scope_over_limit"
+)
 
-// outcomeProjectsOverLimit is the internal-request counter's outcome for it.
-const outcomeProjectsOverLimit = "project_scope_over_limit"
+// The internal-request counter's outcomes for them.
+const (
+	outcomeProjectsOverLimit = "project_scope_over_limit"
+	outcomeReposOverLimit    = "repository_scope_over_limit"
+)
 
 func writeAccess(w http.ResponseWriter, status int, body *pyjson.Object) {
 	policy.WriteJSON(w, status, body, http.Header{"X-Content-Type-Options": {"nosniff"}})

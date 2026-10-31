@@ -114,13 +114,13 @@ func TestDowngradeTextNamesTheBuildsRange(t *testing.T) {
 
 var embedDirective = regexp.MustCompile(`^//go:embed (.+)$`)
 
-// The archive is history: nothing the binary embeds may be archived SQL, and the archive manifest names every archived
-// file with its released sha256.
-func TestNoEmbeddedSQLUnderArchive(t *testing.T) {
-	sources, err := filepath.Glob("*.go")
+func literalArchiveEmbeds(t *testing.T, dir string) []string {
+	t.Helper()
+	sources, err := filepath.Glob(filepath.Join(dir, "*.go"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	var found []string
 	for _, source := range sources {
 		if strings.HasSuffix(source, "_test.go") {
 			continue
@@ -137,11 +137,31 @@ func TestNoEmbeddedSQLUnderArchive(t *testing.T) {
 			}
 			for _, pattern := range strings.Fields(match[1]) {
 				if strings.HasPrefix(pattern, "archive") && pattern != "archive/chain_manifest.tsv" {
-					t.Errorf("%s embeds %s: the binary may embed only archive/chain_manifest.tsv", source, pattern)
+					found = append(found, pattern)
 				}
 			}
 		}
 		_ = file.Close()
+	}
+	return found
+}
+
+func TestEmbedArchiveFixtures(t *testing.T) {
+	for _, name := range []string{"quoted", "glob", "allprefix", "star"} {
+		if got := literalArchiveEmbeds(t, filepath.Join("testdata", "embedarchive", name)); len(got) == 0 {
+			t.Errorf("fixture %s embeds archived SQL and the check found none", name)
+		}
+	}
+	if got := literalArchiveEmbeds(t, filepath.Join("testdata", "embedarchive", "clean")); len(got) != 0 {
+		t.Errorf("fixture clean embeds no archived SQL and the check found %v", got)
+	}
+}
+
+// The archive is history: nothing the binary embeds may be archived SQL, and the archive manifest names every archived
+// file with its released sha256.
+func TestNoEmbeddedSQLUnderArchive(t *testing.T) {
+	for _, pattern := range literalArchiveEmbeds(t, ".") {
+		t.Errorf("embeds %s: the binary may embed only archive/chain_manifest.tsv", pattern)
 	}
 	data, err := os.ReadFile("archive/chain_manifest.tsv")
 	if err != nil {

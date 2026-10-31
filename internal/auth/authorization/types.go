@@ -83,11 +83,14 @@ const (
 	ReasonRepositoryNotGranted     Reason = "repository_not_granted"
 	ReasonGrantExpired             Reason = "grant_expired"
 	ReasonGrantRevoked             Reason = "grant_revoked"
-	ReasonResourceOrgMismatch      Reason = "resource_org_mismatch"
 	ReasonWorkloadAudienceDenied   Reason = "workload_audience_denied"
 	ReasonWorkloadActionDenied     Reason = "workload_action_denied"
 	ReasonClockUnavailable         Reason = "clock_unavailable"
 	ReasonServiceAccountInactive   Reason = "service_account_inactive"
+
+	ReasonAllowedByMembershipDefault Reason = "allowed_by_membership_default"
+	ReasonGrantReadFailed            Reason = "grant_read_failed"
+	ReasonDecisionBoundUnavailable   Reason = "decision_bound_unavailable"
 )
 
 // AllReasons lists every Reason the package can return.
@@ -97,8 +100,9 @@ func AllReasons() []Reason {
 		ReasonPrincipalInactive, ReasonOrganizationInactive, ReasonNoMembership, ReasonOrgMismatch,
 		ReasonMembershipInactive, ReasonPlatformRoleAbsent, ReasonRoleUnknown, ReasonRoleScopeMismatch,
 		ReasonRoleLacksAction, ReasonAllowedByRepositoryGrant, ReasonGrantAbsent, ReasonRepositoryNotGranted,
-		ReasonGrantExpired, ReasonGrantRevoked, ReasonResourceOrgMismatch, ReasonWorkloadAudienceDenied,
+		ReasonGrantExpired, ReasonGrantRevoked, ReasonWorkloadAudienceDenied,
 		ReasonWorkloadActionDenied, ReasonClockUnavailable, ReasonServiceAccountInactive,
+		ReasonAllowedByMembershipDefault, ReasonGrantReadFailed, ReasonDecisionBoundUnavailable,
 	}
 }
 
@@ -109,4 +113,22 @@ type Decision struct {
 	// PolicyRevision is the catalog version the decision was made under; 0
 	// when no catalog was available.
 	PolicyRevision int
+	// CacheClass says how long a consumer may reuse the decision. A deny is
+	// CacheNone. A repository allow is CacheResourceRevisionBound when a live
+	// grant allowed it and CacheDecisionBound when the membership default did,
+	// unless the action's catalog class is none. Allows of organization and
+	// platform actions leave it empty: the catalog class applies.
+	CacheClass CacheClass
+	// ExpiresAtUnixNano is the instant a CacheDecisionBound allow stops being
+	// usable (clock plus the snapshot's bound); 0 for every other decision.
+	ExpiresAtUnixNano int64
 }
+
+// CacheClass is the closed allow-cache class of a decision (TRD section 14).
+type CacheClass string
+
+const (
+	CacheNone                  CacheClass = "none"
+	CacheDecisionBound         CacheClass = "decision_bound"
+	CacheResourceRevisionBound CacheClass = "resource_revision_bound"
+)

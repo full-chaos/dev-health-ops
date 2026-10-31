@@ -71,10 +71,10 @@ func newEvaluator(c catalogView) *Evaluator { return &Evaluator{cat: c} }
 // snapshot denies.
 func (e *Evaluator) Evaluate(r Request, s Snapshot) Decision {
 	if e == nil || e.cat == nil || s == nil || isNilCatalog(e.cat) {
-		return Decision{Reason: ReasonInvalidRequest}
+		return Decision{Reason: ReasonInvalidRequest, CacheClass: CacheNone}
 	}
 	rev := e.cat.Version()
-	deny := func(why Reason) Decision { return Decision{Reason: why, PolicyRevision: rev} }
+	deny := func(why Reason) Decision { return Decision{Reason: why, PolicyRevision: rev, CacheClass: CacheNone} }
 
 	r, ok := NormalizeRequest(r)
 	if !ok {

@@ -1,6 +1,10 @@
 package authorization
 
-import "github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
+import (
+	"math"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
+)
 
 // Grant is one resource_grants row as read from state. Grants are
 // allow-only: the table has no deny effect. A revoked row stays as history.
@@ -38,9 +42,12 @@ type WorkloadLimits struct {
 // snapshot's: this package never reads the wall clock.
 type GrantSnapshot interface {
 	Snapshot
-	// Grants returns the principal's grant rows; rows of another
-	// organization are ignored by the evaluator whatever is asked for.
-	Grants(orgID string) []Grant
+	// Grants returns EVERY grant row of the (organization, principal) pair, in
+	// any state (live, revoked, expired, ended), or an error. A read failure
+	// must be an error: an implementation that reports zero rows on failure
+	// would grant the membership default. Rows of another organization are
+	// ignored by the evaluator whatever is asked for.
+	Grants(orgID string) ([]Grant, error)
 	// Workload reports the limits of a workload principal; false for any
 	// other principal.
 	Workload() (WorkloadLimits, bool)
@@ -50,6 +57,10 @@ type GrantSnapshot interface {
 	// NowUnixNano is the decision time in Unix nanoseconds; 0 or less means
 	// no clock.
 	NowUnixNano() int64
+	// DecisionBoundNanos is how long a membership-default allow stays usable,
+	// in nanoseconds. It is an input, never a constant of this package: 0 or
+	// less means no bound is known and a default allow is refused.
+	DecisionBoundNanos() int64
 }
 
 func isNilCatalog(c catalogView) bool {
@@ -82,12 +93,56 @@ func workloadDenial(s GrantSnapshot, action string) Reason {
 	return ""
 }
 
+// membershipDefaultRole is the role an organization membership holds for
+// repository actions when it has no grant row: owner reads as admin.
+func membershipDefaultRole(role string) string {
+	if role == "owner" {
+		return "admin"
+	}
+	return role
+}
+
+// membershipDefaultDenial is "" when the membership role holds the action by
+// default, else the reason it does not.
+func (e *Evaluator) membershipDefaultDenial(role string, act policycatalog.Action) Reason {
+	roleID := membershipDefaultRole(role)
+	r, err := e.cat.Role(roleID)
+	switch {
+	case err != nil:
+		return ReasonRoleUnknown
+	case r.Scope != act.Scope:
+		return ReasonRoleScopeMismatch
+	case !e.cat.Allows(roleID, act.ID):
+		return ReasonRoleLacksAction
+	}
+	return ""
+}
+
+// HoldsByMembershipDefault is the one statement of the membership default
+// (CHAOS-10838, D6606): an active membership whose (organization, principal)
+// pair has NO grant row of any state holds a repository action when its
+// membership role holds it; owner reads as admin. rows are every row of the
+// pair, so one row of any state, for any repository, ends the default. It
+// answers false for an action that is not repository-scoped, an unknown
+// action or role, and a nil evaluator. Service accounts never use it.
+func (e *Evaluator) HoldsByMembershipDefault(membershipRole, action string, rows []Grant) bool {
+	if e == nil || e.cat == nil || isNilCatalog(e.cat) || len(rows) != 0 {
+		return false
+	}
+	act, err := e.cat.Action(action)
+	if err != nil || act.ResourceKind != resourceRepository {
+		return false
+	}
+	return e.membershipDefaultDenial(membershipRole, act) == ""
+}
+
 // evaluateRepository allows a repository action only for a principal with
-// standing in the organization (membership, or the service-account row)
-// AND a live grant of that organization whose role holds the action. The
-// organization role alone never allows it.
+// standing in the organization (membership, or the service-account row) and
+// either a live grant of that organization whose role holds the action, or
+// (a membership with no grant row at all) the membership default. A pair
+// with any row follows its live grants only.
 func (e *Evaluator) evaluateRepository(r Request, act policycatalog.Action, s Snapshot, rev int) Decision {
-	deny := func(why Reason) Decision { return Decision{Reason: why, PolicyRevision: rev} }
+	deny := func(why Reason) Decision { return Decision{Reason: why, PolicyRevision: rev, CacheClass: CacheNone} }
 	gs, ok := s.(GrantSnapshot)
 	if !ok {
 		return deny(ReasonGrantAbsent)
@@ -95,7 +150,10 @@ func (e *Evaluator) evaluateRepository(r Request, act policycatalog.Action, s Sn
 	if gs.OrganizationStatus(r.OrganizationID) != StatusActive {
 		return deny(ReasonOrganizationInactive)
 	}
-	if sa, isSA := gs.ServiceAccount(r.OrganizationID); isSA {
+	var memberRole string
+	isSA := false
+	if sa, found := gs.ServiceAccount(r.OrganizationID); found {
+		isSA = true
 		if sa.OrgID != r.OrganizationID {
 			return deny(ReasonOrgMismatch)
 		}
@@ -113,24 +171,47 @@ func (e *Evaluator) evaluateRepository(r Request, act policycatalog.Action, s Sn
 		if m.Status != StatusActive {
 			return deny(ReasonMembershipInactive)
 		}
+		memberRole = m.Role
 	}
 	now := gs.NowUnixNano()
 	if now <= 0 {
 		return deny(ReasonClockUnavailable)
 	}
+	all, err := gs.Grants(r.OrganizationID)
+	if err != nil {
+		return deny(ReasonGrantReadFailed)
+	}
+	rows := make([]Grant, 0, len(all))
+	for _, g := range all {
+		if g.OrgID == r.OrganizationID {
+			rows = append(rows, g)
+		}
+	}
 
-	var sawGrant, sawForeign, sawRevoked, sawExpired bool
-	for _, g := range gs.Grants(r.OrganizationID) {
+	if len(rows) == 0 {
+		if isSA {
+			return deny(ReasonGrantAbsent)
+		}
+		if why := e.membershipDefaultDenial(memberRole, act); why != "" {
+			return deny(why)
+		}
+		if act.CacheClass == policycatalog.CacheNone {
+			return Decision{Allowed: true, Reason: ReasonAllowedByMembershipDefault, PolicyRevision: rev, CacheClass: CacheNone}
+		}
+		bound := gs.DecisionBoundNanos()
+		if bound <= 0 || bound > math.MaxInt64-now {
+			return deny(ReasonDecisionBoundUnavailable)
+		}
+		return Decision{Allowed: true, Reason: ReasonAllowedByMembershipDefault, PolicyRevision: rev,
+			CacheClass: CacheDecisionBound, ExpiresAtUnixNano: now + bound}
+	}
+
+	var sawRevoked, sawExpired bool
+	for _, g := range rows {
 		if g.ResourceKind != resourceRepository {
 			continue
 		}
-		keyMatches := g.ResourceKey == r.ResourceKey || g.ResourceKey == wildcardKey
-		if g.OrgID != r.OrganizationID {
-			sawForeign = sawForeign || keyMatches
-			continue
-		}
-		sawGrant = true
-		if !keyMatches {
+		if g.ResourceKey != r.ResourceKey && g.ResourceKey != wildcardKey {
 			continue
 		}
 		if !e.roleHolds(g.Role, act) {
@@ -144,19 +225,19 @@ func (e *Evaluator) evaluateRepository(r Request, act policycatalog.Action, s Sn
 			sawExpired = true
 			continue
 		}
-		return Decision{Allowed: true, Reason: ReasonAllowedByRepositoryGrant, PolicyRevision: rev}
+		class := CacheResourceRevisionBound
+		if act.CacheClass == policycatalog.CacheNone {
+			class = CacheNone
+		}
+		return Decision{Allowed: true, Reason: ReasonAllowedByRepositoryGrant, PolicyRevision: rev, CacheClass: class}
 	}
 	switch {
 	case sawExpired:
 		return deny(ReasonGrantExpired)
 	case sawRevoked:
 		return deny(ReasonGrantRevoked)
-	case sawGrant:
-		return deny(ReasonRepositoryNotGranted)
-	case sawForeign:
-		return deny(ReasonResourceOrgMismatch)
 	}
-	return deny(ReasonGrantAbsent)
+	return deny(ReasonRepositoryNotGranted)
 }
 
 func (e *Evaluator) roleHolds(roleID string, act policycatalog.Action) bool {

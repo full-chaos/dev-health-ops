@@ -94,3 +94,21 @@ func platformRolesBackfillArgs(sets ...string) []string {
 		"authService.phase=4", "authService.usersOwnedStage=owned", "goApi.enabled=true"}, sets...)...)
 	return append(append(append(args, sessionReaders...), sessionSuccessor...), authTrusted...)
 }
+
+// The check runs on every render, so it holds when no consumer renders: phase 0, go-api, query-api and the backfill Job off.
+func TestPlatformRolesOwnedIsCheckedWithNoConsumerRendered(t *testing.T) {
+	base := []string{"--set", "web.enabled=false", "--set", "authService.phase=0", "--set", "goApi.enabled=false", "--set", "queryApi.enabled=false"}
+	for name, set := range map[string][]string{
+		"true":     {"--set", "authService.platformRolesOwned=true"},
+		"null":     {"--set-json", "authService.platformRolesOwned=null"},
+		"a string": {"--set", "authService.platformRolesOwned=yes"},
+	} {
+		_, out, err := renderAuth(t, append(append([]string{}, base...), set...)...)
+		if err == nil || !strings.Contains(out, "platformRolesOwned") {
+			t.Errorf("%s: rendered with no consumer: err=%v out=%.300s", name, err, out)
+		}
+	}
+	if _, out, err := renderAuth(t, base...); err != nil {
+		t.Fatalf("the default render with no consumer failed: %v\n%.300s", err, out)
+	}
+}

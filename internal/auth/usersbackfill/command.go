@@ -42,7 +42,7 @@ func Command() cli.Command {
 		}, {
 			Name:    "users-reconcile",
 			Kind:    cli.Verb,
-			Summary: "compare public.users with the auth schema in one read-only snapshot (counts only; exit 1 on any gated diff)",
+			Summary: "compare public.users with the auth schema in one read-only snapshot (counts only; exit 1 on any gated diff; -platform-roles-gate also gates no_active_platform_admin, run it before the platform roles flip)",
 			Run:     runReconcile,
 		}, {
 			Name:    "oauth-sso-count",
@@ -195,6 +195,7 @@ func runReconcile(ctx context.Context, env cli.Env) int {
 	flags := flag.NewFlagSet("dho auth users-reconcile", flag.ContinueOnError)
 	flags.SetOutput(env.Stderr)
 	batch := flags.Int("batch", 500, "rows read per page")
+	platformGate := flags.Bool("platform-roles-gate", false, "gate no_active_platform_admin (exit 1 when no principal holds platform_admin)")
 	if err := flags.Parse(env.Args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return cli.ExitOK
@@ -220,6 +221,9 @@ func runReconcile(ctx context.Context, env cli.Env) int {
 	rep, err := Reconcile(ctx, TxSource{Tx: tx}, target, *batch)
 	if err == nil {
 		err = ReconcileMemberships(ctx, target, &rep)
+	}
+	if err == nil {
+		err = ReconcilePlatformAdmin(ctx, target, *platformGate, &rep)
 	}
 	for _, line := range rep.Lines() {
 		fmt.Fprintln(env.Stdout, line)

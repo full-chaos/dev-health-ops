@@ -914,8 +914,10 @@ auth reaches it through go-api's `/api/v1/auth/*` proxy.
    indicators (RFC 8707) that map to the token's `aud`, rotating refresh
    tokens, and revocation (RFC 7009). D6524 and D6525 are reversed for these
    clients.
-2. **Two new audiences, `acr-api` and `acr-mcp`,** one scope each. Every
-   platform verifier refuses them (ACP-ADR-08 amendment, condition 1).
+2. **Two new audiences, `acr-api` and `acr-mcp`,** one scope each. Only ACR
+   accepts them, each service its own one: acr-api accepts `acr-api` only, and
+   acr-mcp accepts `acr-mcp` only. The platform verifiers (go-api, query-api
+   and auth-service) refuse both (ACP-ADR-08 amendment, condition 1).
 3. **A separate mint for the ACR audiences,** beside the session token class.
    The web login token class does not change: there is no `eddsa` switch of web
    tokens for this.
@@ -961,7 +963,7 @@ auth reaches it through go-api's `/api/v1/auth/*` proxy.
     its authenticated hop with the verified principal: subject, organization,
     `sid` and the MCP client class, bound against replay and to its one
     destination. An exchange of the `acr-mcp` token at ACP is excluded, because
-    every platform verifier, auth-service included, refuses that audience
+    the platform verifiers (go-api, query-api and auth-service) refuse that audience
     (ACP-ADR-08 amendment, condition 1). acr-mcp gets no platform workload
     credential either (G-43).
 11. **The public surface is designed before it is built** (CHAOS-12247): the

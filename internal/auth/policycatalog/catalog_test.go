@@ -492,3 +492,38 @@ func TestDelegatedActionsAreTheAllowedActionsOfAnOrganizationRole(t *testing.T) 
 		}
 	}
 }
+
+// Catalog v5: the platform actions are exactly the eight the platform_admin
+// role lists, every one high risk, never cached and denied to a delegated
+// session, and no organization role holds one.
+func TestPlatformActionsAreHeldOnlyByPlatformAdmin(t *testing.T) {
+	c := Default()
+	want := []string{"admin.audit", "admin.billing", "admin.flags", "admin.impersonate", "admin.orgs", "admin.stats", "admin.telemetry", "admin.users"}
+	var platform []string
+	for _, a := range c.Actions() {
+		if a.Scope != ScopePlatform {
+			continue
+		}
+		platform = append(platform, a.ID)
+		if a.RiskClass != RiskHigh || a.CacheClass != CacheNone || a.ResourceKind != "platform" || a.Impersonation != ImpersonationDenied {
+			t.Errorf("platform action %s: risk %s cache %s kind %s impersonation %s", a.ID, a.RiskClass, a.CacheClass, a.ResourceKind, a.Impersonation)
+		}
+		for _, r := range c.Roles() {
+			if r.ID != "platform_admin" && c.Allows(r.ID, a.ID) {
+				t.Errorf("role %s holds platform action %s", r.ID, a.ID)
+			}
+		}
+	}
+	sort.Strings(platform)
+	if strings.Join(platform, ",") != strings.Join(want, ",") {
+		t.Fatalf("platform actions %v, want %v", platform, want)
+	}
+	for _, a := range want {
+		if !c.Allows("platform_admin", a) {
+			t.Errorf("platform_admin does not hold %s", a)
+		}
+	}
+	if c.Version() != 5 {
+		t.Errorf("catalog version %d, want 5", c.Version())
+	}
+}

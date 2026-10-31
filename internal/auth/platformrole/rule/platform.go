@@ -2,22 +2,22 @@ package rule
 
 // The platform actions of the closed catalog (contracts/auth/v1/vocabulary).
 // platformrole's catalog test pins this list to the catalog's platform_admin
-// role, so the two cannot drift. admin.impersonate joins with the catalog
-// change that defines it (CHAOS-10987).
+// role, so the two cannot drift.
 const (
-	ActionAdminUsers     = "admin.users"
-	ActionAdminOrgs      = "admin.orgs"
-	ActionAdminBilling   = "admin.billing"
-	ActionAdminFlags     = "admin.flags"
-	ActionAdminAudit     = "admin.audit"
-	ActionAdminTelemetry = "admin.telemetry"
-	ActionAdminStats     = "admin.stats"
+	ActionAdminUsers       = "admin.users"
+	ActionAdminOrgs        = "admin.orgs"
+	ActionAdminImpersonate = "admin.impersonate"
+	ActionAdminBilling     = "admin.billing"
+	ActionAdminFlags       = "admin.flags"
+	ActionAdminAudit       = "admin.audit"
+	ActionAdminTelemetry   = "admin.telemetry"
+	ActionAdminStats       = "admin.stats"
 )
 
 // PlatformActions are the platform actions of the catalog, in catalog order.
 var PlatformActions = []string{
 	ActionAdminUsers, ActionAdminOrgs, ActionAdminBilling, ActionAdminFlags,
-	ActionAdminAudit, ActionAdminTelemetry, ActionAdminStats,
+	ActionAdminAudit, ActionAdminImpersonate, ActionAdminTelemetry, ActionAdminStats,
 }
 
 // Platform is the set of platform actions a principal holds now. The zero

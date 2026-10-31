@@ -159,3 +159,33 @@ func TestPlanReadsBareNameExecInAStructFieldDir(t *testing.T) {
 		})
 	}
 }
+
+// A path joined to a directory that is a temp dir names a file of that temp dir: it is no read of the repository path
+// its parts spell. A directory the scan cannot place keeps the parts a read.
+func TestPlanReadsJoinUnderATempDirIsNoRead(t *testing.T) {
+	classes := "docs\tdocs/**\nREADME.md\tREADME.md\n"
+	head := "package p\n\nimport (\n\t\"os\"\n\t\"path/filepath\"\n\t\"testing\"\n)\n\nvar _ = os.Getenv\nvar _ = testing.Short\nvar _ = filepath.Join\n\n" +
+		"func repoRoot() string { return \"..\" }\n\nfunc repoDir(t *testing.T) string {\n\troot := t.TempDir()\n\treturn root\n}\n\n"
+	cases := []struct {
+		name, body string
+		keep       bool
+	}{
+		{"temp_helper", "func TestX(t *testing.T) {\n\troot := repoDir(t)\n\t_ = os.MkdirAll(filepath.Join(root, \"docs\", \"deep\"), 0o755)\n}\n", false},
+		{"temp_directly", "func TestX(t *testing.T) {\n\troot := t.TempDir()\n\t_ = os.MkdirAll(filepath.Join(root, \"docs\"), 0o755)\n}\n", false},
+		{"repository_root", "func TestX(t *testing.T) {\n\troot := repoRoot()\n\t_ = os.MkdirAll(filepath.Join(root, \"docs\"), 0o755)\n}\n", true},
+		{"unknown_root", "func TestX(t *testing.T) {\n\troot := os.Getenv(\"R\")\n\t_ = os.MkdirAll(filepath.Join(root, \"docs\"), 0o755)\n}\n", true},
+		{"temp_and_repository_roots", "func mk(root string) { _ = os.MkdirAll(filepath.Join(root, \"docs\"), 0o755) }\n\nfunc TestX(t *testing.T) {\n\tmk(repoDir(t))\n\tmk(repoRoot())\n}\n", true},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			res := planReads(t, readsFixture(t, map[string]string{"p/p_test.go": head + c.body, "README.md": "r\n",
+				"internal/cigates/affected/classes.tsv": classes}))
+			out := res.stdout + res.stderr
+			if got := strings.Contains(out, "p\ttest\tdocs\n"); got != c.keep {
+				t.Fatalf("a docs reader row is %v, want %v:\n%s", got, c.keep, out)
+			}
+		})
+	}
+}

@@ -157,14 +157,14 @@ func entitlementHandler(store EntitlementStore, auth routeAuth, logger *slog.Log
 		// finish writes the audit row for outcome before the answer, as
 		// Python commits it before returning; an audit that cannot be
 		// written is 503, never an unaudited answer.
-		finish := func(outcome string, write func()) {
+		finish := func(outcome string, write func(), extra ...slog.Attr) {
 			if !auth.audit(ctx, cred.ID, cred.PrincipalID, orgID, outcome) {
 				auth.unavailable(w, r, "audit_failed")
 				return
 			}
 			countInternal(ctx, routeEntitlement, outcome)
-			logger.InfoContext(ctx, "acr entitlement lookup: answered",
-				slog.String("org_id", orgID), slog.String("credential_id", cred.ID), slog.String("outcome", outcome))
+			logger.LogAttrs(ctx, slog.LevelInfo, "acr entitlement lookup: answered", append([]slog.Attr{
+				slog.String("org_id", orgID), slog.String("credential_id", cred.ID), slog.String("outcome", outcome)}, extra...)...)
 			write()
 		}
 		if store == nil {
@@ -184,7 +184,7 @@ func entitlementHandler(store EntitlementStore, auth routeAuth, logger *slog.Log
 				body.Set("acr_service_model", entitlement.ACRServiceModel)
 				body.Set("platform_model_fallback", entitlement.PlatformModelFallback)
 				writeModel(w, http.StatusOK, body)
-			})
+			}, slog.String("acr_entitlement_basis", entitlement.ACRBasis))
 		case errors.Is(err, ErrOrgUnknown):
 			finish(outcomeOrgNotFound, func() {
 				body := pyjson.NewObject()

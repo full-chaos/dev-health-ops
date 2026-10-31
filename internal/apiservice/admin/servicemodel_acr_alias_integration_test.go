@@ -64,6 +64,10 @@ func TestServiceModelACRPreconditionIsAskDevOrTheLegacyGrant(t *testing.T) {
 			if state.acrAllowed != want {
 				t.Fatalf("acrAllowed = %v, want %v", state.acrAllowed, want)
 			}
+			wantBasis := map[[2]bool]string{{false, false}: "none", {true, false}: "ask_dev", {false, true}: "agent_context_runtime", {true, true}: "both"}[[2]bool{tc.askDev, tc.legacy}]
+			if state.acrBasis != wantBasis {
+				t.Fatalf("acrBasis = %q, want %q", state.acrBasis, wantBasis)
+			}
 			if wantReason := map[bool]string{true: "", false: "agent_context_runtime_required"}[want]; state.ineligibleReason() != wantReason {
 				t.Fatalf("ineligibleReason = %q, want %q", state.ineligibleReason(), wantReason)
 			}

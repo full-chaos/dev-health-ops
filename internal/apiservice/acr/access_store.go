@@ -221,6 +221,7 @@ func (s AccessStore) postgresFacts(ctx context.Context, query AccessQuery) (Prin
 	// ask_dev OR the legacy agent_context_runtime grant. No org loses ACR while
 	// the legacy grants retire (CHAOS-12292); an org with ask_dev alone gains it.
 	access.AskDev, access.AgentContextRuntime = askDev.Allowed, askDev.Allowed || runtime.Allowed
+	access.ACRBasis = licensing.ACREntitlementBasis(askDev.Allowed, runtime.Allowed)
 	return access, user, userFound, nil
 }
 

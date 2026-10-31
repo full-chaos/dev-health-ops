@@ -61,6 +61,10 @@ func TestPostgresEntitlementStoreLookupFollowsAskDevOrTheLegacyGrant(t *testing.
 			if want := tc.askDev || tc.legacy; got.AgentContextRuntime != want {
 				t.Fatalf("AgentContextRuntime = %v, want %v", got.AgentContextRuntime, want)
 			}
+			wantBasis := map[[2]bool]string{{false, false}: "none", {true, false}: "ask_dev", {false, true}: "agent_context_runtime", {true, true}: "both"}[[2]bool{tc.askDev, tc.legacy}]
+			if got.ACRBasis != wantBasis {
+				t.Fatalf("ACRBasis = %q, want %q", got.ACRBasis, wantBasis)
+			}
 		})
 	}
 }

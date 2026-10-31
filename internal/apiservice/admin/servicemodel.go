@@ -112,6 +112,7 @@ type serviceModelState struct {
 	tier        string
 	tierAllowed bool
 	acrAllowed  bool
+	acrBasis    string
 	control     string
 	override    *bool
 }
@@ -170,6 +171,8 @@ func (h *handlers) loadServiceModelState(ctx context.Context, q serviceModelQuer
 		// legacy agent_context_runtime grant (CHAOS-12292 retires the latter).
 		acrAllowed: licensing.Decide(serviceModelAskDevFeature, askDev).Allowed ||
 			licensing.Decide(serviceModelACRFeature, acr).Allowed,
+		acrBasis: licensing.ACREntitlementBasis(licensing.Decide(serviceModelAskDevFeature, askDev).Allowed,
+			licensing.Decide(serviceModelACRFeature, acr).Allowed),
 		control:  control,
 		override: overrideEnabled,
 	}, nil
@@ -297,7 +300,8 @@ func (h *handlers) putServiceModel(w http.ResponseWriter, r *http.Request) {
 	logOutcome := func(outcome string, after bool) {
 		h.logger.InfoContext(ctx, "admin: acr_service_model self-service toggle",
 			"org_id", org.String(), "actor_user_id", actor.String(), "requested_enabled", enabled,
-			"old_enabled", before.enabled, "new_enabled", after, "control", before.control, "outcome", outcome)
+			"old_enabled", before.enabled, "new_enabled", after, "control", before.control, "outcome", outcome,
+			"acr_entitlement_basis", before.acrBasis)
 	}
 	if override != nil && before.control != serviceModelControlSelfService {
 		logOutcome("refused_managed", before.enabled)

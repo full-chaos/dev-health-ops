@@ -1,6 +1,7 @@
 package acr
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -55,7 +56,9 @@ func accessCreds() *fakeCredentials {
 func accessServer(t *testing.T, store PrincipalAccessStore, creds CredentialStore, deps Deps, limiter ...*httpapi.KeyedLimiter) http.Handler {
 	t.Helper()
 	deps.Auth = creds
-	deps.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	if deps.Logger == nil {
+		deps.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
 	if deps.Store == nil {
 		deps.Store = &fakeStore{}
 	}
@@ -440,7 +443,7 @@ func TestAccessStoreServesEveryFieldLive(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := PrincipalAccess{Member: true, Session: &SessionAccess{Live: true, Reason: sessionReasonLive},
-		AskDev: true, AgentContextRuntime: true, Repositories: []string{"acme/api", "acme/web"}}
+		AskDev: true, AgentContextRuntime: true, ACRBasis: "both", Repositories: []string{"acme/api", "acme/web"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("access = %+v (session %+v), want %+v", got, got.Session, want)
 	}
@@ -744,6 +747,21 @@ func TestPrincipalAccessAgentContextRuntimeIsAskDevOrTheLegacyGrant(t *testing.T
 			}
 			if got.AskDev != tc.askDev || got.AgentContextRuntime != (tc.askDev || tc.legacy) {
 				t.Fatalf("ask_dev=%v agent_context_runtime=%v, want %v and %v", got.AskDev, got.AgentContextRuntime, tc.askDev, tc.askDev || tc.legacy)
+			}
+			// The basis (CHAOS-12292 counts the orgs on the legacy grant alone)
+			// is on the Info answer line, and only there: never in the body.
+			wantBasis := map[[2]bool]string{{false, false}: "none", {true, false}: "ask_dev", {false, true}: "agent_context_runtime", {true, true}: "both"}[[2]bool{tc.askDev, tc.legacy}]
+			if got.ACRBasis != wantBasis {
+				t.Fatalf("ACRBasis = %q, want %q", got.ACRBasis, wantBasis)
+			}
+			var logs bytes.Buffer
+			rec := do(accessServer(t, f.store(), accessCreds(), Deps{Logger: slog.New(slog.NewJSONHandler(&logs, nil))}),
+				accessPath(accessOrg.String(), accessUser.String(), ""), "Bearer "+accessToken)
+			if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "acr_entitlement_basis") {
+				t.Fatalf("status %d body %s, want 200 without the basis", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(logs.String(), `"acr_entitlement_basis":"`+wantBasis+`"`) {
+				t.Fatalf("the Info answer line lacks acr_entitlement_basis=%s:\n%s", wantBasis, logs.String())
 			}
 		})
 	}

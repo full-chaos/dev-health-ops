@@ -400,12 +400,13 @@ func TestRefreshAndIssueUnderHS256AreUnchanged(t *testing.T) {
 	}
 }
 
-// eddsa with a readable key: one check, then the write, then one sign.
+// eddsa with a readable key: one check, then the write, then two signs (the
+// access token and the session-route token).
 func TestRefreshAndIssueUnderEdDSACheckThenWriteThenSign(t *testing.T) {
 	signer := readableKeySigner(t)
 	f, counter := newEdDSARefreshFixture(t, signer)
 	response := f.do(http.MethodPost, PatternRefresh, refreshBody(credential()), nil)
-	if response.Code != http.StatusOK || counter.exchanges.Load() != 1 || signer.checks.Load() != 1 || signer.signs.Load() != 1 {
+	if response.Code != http.StatusOK || counter.exchanges.Load() != 1 || signer.checks.Load() != 1 || signer.signs.Load() != 2 {
 		t.Fatalf("refresh status %d, exchanges %d, checks %d, signs %d: %s",
 			response.Code, counter.exchanges.Load(), signer.checks.Load(), signer.signs.Load(), response.Body)
 	}
@@ -414,7 +415,7 @@ func TestRefreshAndIssueUnderEdDSACheckThenWriteThenSign(t *testing.T) {
 	c.issuer = newEdDSAIssuer(t, issueSigner, testAudience)
 	c.buildCompat()
 	issued := c.do(http.MethodPost, PatternIssueSession, issueBody(c.principal, c.org.String(), "pwd"), issuerBearer)
-	if issued.Code != http.StatusOK || len(c.sessions.created) != 1 || issueSigner.checks.Load() != 1 || issueSigner.signs.Load() != 1 {
+	if issued.Code != http.StatusOK || len(c.sessions.created) != 1 || issueSigner.checks.Load() != 1 || issueSigner.signs.Load() != 2 {
 		t.Fatalf("issue status %d, created %d, checks %d, signs %d: %s",
 			issued.Code, len(c.sessions.created), issueSigner.checks.Load(), issueSigner.signs.Load(), issued.Body)
 	}

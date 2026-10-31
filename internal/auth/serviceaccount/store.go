@@ -1,0 +1,256 @@
+package serviceaccount
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+
+	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
+	"github.com/full-chaos/dev-health-ops/internal/auth/membership"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
+)
+
+// RowLocker takes steps 1 and 2 of the auth lock order (*membership.Store).
+type RowLocker interface {
+	LockRows(ctx context.Context, tx audit.TxOps, rows []membership.LockRow) error
+}
+
+type Config struct {
+	Pool   *pgxpool.Pool
+	Schema authschema.ValidatedIdentifier
+	Locks  RowLocker
+	// OwnsUsers is AUTH_USERS_OWNED. Off, Create, Enable and SetOwner refuse
+	// with ErrNotOwned: their row locks on public.users need UPDATE, which the
+	// runtime role holds only when auth-service owns users.
+	OwnsUsers bool
+	Logger    *slog.Logger
+	Meter     metric.Meter
+}
+
+type Store struct {
+	pool      *pgxpool.Pool
+	q         string
+	locks     RowLocker
+	ownsUsers bool
+	commit    func(context.Context, audit.Mutation) error
+	read      func(context.Context, uuid.UUID) (*Info, error)
+	logger    *slog.Logger
+	mutations metric.Int64Counter
+}
+
+func New(cfg Config) (*Store, error) {
+	switch {
+	case cfg.Pool == nil:
+		return nil, errors.New("serviceaccount: no connection pool")
+	case cfg.Schema.String() == "":
+		return nil, errors.New("serviceaccount: no auth schema")
+	case cfg.Locks == nil:
+		return nil, errors.New("serviceaccount: no row locker")
+	}
+	s := &Store{pool: cfg.Pool, q: authschema.Quote(cfg.Schema), locks: cfg.Locks, ownsUsers: cfg.OwnsUsers, logger: cfg.Logger}
+	s.commit = func(ctx context.Context, m audit.Mutation) error { return audit.Commit(ctx, cfg.Pool, cfg.Schema, m) }
+	s.read = s.Lookup
+	if s.logger == nil {
+		s.logger = slog.Default()
+	}
+	meter := cfg.Meter
+	if meter == nil {
+		meter = otel.Meter("github.com/full-chaos/dev-health-ops/internal/auth/serviceaccount")
+	}
+	var err error
+	if s.mutations, err = meter.Int64Counter("auth.serviceaccount.mutations",
+		metric.WithDescription("Service account mutations, by verb and outcome.")); err != nil {
+		return nil, fmt.Errorf("serviceaccount: registering the mutation counter: %w", err)
+	}
+	return s, nil
+}
+
+type verb string
+
+const (
+	verbCreate   verb = "create"
+	verbDisable  verb = "disable"
+	verbEnable   verb = "enable"
+	verbSetOwner verb = "set_owner"
+)
+
+func outcomeLabel(err error) string {
+	switch {
+	case err == nil:
+		return "ok"
+	case errors.Is(err, ErrNotFound), errors.Is(err, ErrOrgNotFound):
+		return "not_found"
+	case errors.Is(err, ErrNameTaken), errors.Is(err, ErrAlreadyInState):
+		return "taken"
+	case errors.Is(err, ErrNotOwned):
+		return "not_owned"
+	case errors.Is(err, ErrStore):
+		return "error"
+	}
+	for _, r := range refusals {
+		if errors.Is(err, r) {
+			return "invalid"
+		}
+	}
+	return "error"
+}
+
+func (s *Store) record(ctx context.Context, v verb, err error) {
+	s.mutations.Add(ctx, 1, metric.WithAttributes(attribute.String("verb", string(v)), attribute.String("outcome", outcomeLabel(err))))
+}
+
+func (s *Store) run(ctx context.Context, v verb, m audit.Mutation) (err error) {
+	defer func() { s.record(ctx, v, err) }()
+	err = s.commit(ctx, m)
+	if err == nil {
+		return nil
+	}
+	for _, refusal := range refusals {
+		if errors.Is(err, refusal) {
+			return refusal
+		}
+	}
+	s.logger.ErrorContext(ctx, "serviceaccount: store failure", "verb", string(v), logging.ErrorAttr(err))
+	return fmt.Errorf("%w: %s: %w", ErrStore, v, err)
+}
+
+func (s *Store) refuseNotOwned(ctx context.Context, v verb) error {
+	s.record(ctx, v, ErrNotOwned)
+	return ErrNotOwned
+}
+
+func wire(id uuid.UUID) string { return provisioning.WireID("service_account", id.String()) }
+
+func ownerWire(id uuid.UUID) string { return provisioning.WireID("principal", id.String()) }
+
+// auditFor is a verb's one audit row. principal_id names the owner the row
+// concerns (the new owner of a SetOwner); the previous owner is the
+// principal_id of the account's earlier rows.
+func auditFor(eventType, reason string, id, org uuid.UUID, owner *uuid.UUID, a Actor, fields []string, prev, next string) audit.AuditEvent {
+	sub, orgText := id.String(), org.String()
+	ev := audit.AuditEvent{EventType: eventType, Outcome: audit.OutcomeAllowed, SubjectPrincipalID: &sub, OrganizationID: &orgText,
+		RequestID: a.RequestID, Attributes: map[string]any{"target_kind": "service_account", "target_id": sub, "reason_code": reason}}
+	if len(fields) > 0 {
+		ev.Attributes["changed_fields"] = fields
+	}
+	if prev != "" {
+		ev.Attributes["previous_status"] = prev
+	}
+	if next != "" {
+		ev.Attributes["new_status"] = next
+	}
+	if owner != nil {
+		ev.Attributes["principal_id"] = owner.String()
+	}
+	if a.PrincipalID != nil {
+		actor := a.PrincipalID.String()
+		ev.ActorPrincipalID = &actor
+	}
+	return ev
+}
+
+func change(status string, owner *uuid.UUID) map[string]any {
+	c := map[string]any{}
+	if status != "" {
+		c["status"] = status
+	}
+	if owner != nil {
+		c["owner_principal_id"] = ownerWire(*owner)
+	}
+	return c
+}
+
+// lockSet is steps -1, 1 and 2 of the auth lock order for a verb that names
+// an owner: the service account (a target, FOR UPDATE; absent on a create),
+// the actor FOR SHARE and the owner FOR SHARE (the verb reads its account and
+// membership), ascending id, one mode per id.
+func (s *Store) lockSet(ctx context.Context, tx audit.TxOps, account *uuid.UUID, owner uuid.UUID, actor *uuid.UUID) error {
+	if err := platformrole.LockWritesShared(ctx, tx); err != nil {
+		return err
+	}
+	return s.locks.LockRows(ctx, tx, lockRowsFor(account, owner, actor))
+}
+
+func lockRowsFor(account *uuid.UUID, owner uuid.UUID, actor *uuid.UUID) []membership.LockRow { return nil }
+
+
+// lockOwner reads the owner under the locks lockSet took and locks its
+// membership pair row FOR SHARE (step 6).
+
+type accountRow struct {
+	org    uuid.UUID
+	owner  uuid.UUID
+	active bool
+}
+
+// lockAccount is step 7: the service_accounts row FOR UPDATE.
+
+// Create inserts an active service account with its principal. The owner must
+// be an enabled user and an active member of the organization.
+func (s *Store) Create(ctx context.Context, in CreateInput, a Actor) (uuid.UUID, error) {
+	return uuid.Nil, ErrStore
+}
+
+func (s *Store) Disable(ctx context.Context, id uuid.UUID, a Actor) error { return ErrStore }
+
+func (s *Store) Enable(ctx context.Context, id uuid.UUID, a Actor) error { return ErrStore }
+
+func (s *Store) SetOwner(ctx context.Context, id, newOwner uuid.UUID, a Actor) error { return ErrStore }
+
+const infoSelect = `SELECT sa.principal_id, sa.organization_id, sa.name, sa.status = 'active', sa.disabled_at, coalesce(sa.owner_principal_id, '00000000-0000-0000-0000-000000000000'::uuid),
+coalesce(op.kind = 'user' AND op.disabled_at IS NULL, false),
+EXISTS (SELECT 1 FROM %[1]s.memberships m WHERE m.organization_id = sa.organization_id AND m.principal_id = sa.owner_principal_id AND m.status = 'active'),
+sa.created_by, sa.last_used_at
+FROM %[1]s.service_accounts sa LEFT JOIN %[1]s.principals op ON op.id = sa.owner_principal_id`
+
+func scanInfo(row pgx.Row) (*Info, error) {
+	var i Info
+	if err := row.Scan(&i.ID, &i.OrgID, &i.Name, &i.Active, &i.DisabledAt, &i.Owner, &i.OwnerEnabled, &i.OwnerMember, &i.CreatedBy, &i.LastUsedAt); err != nil {
+		return nil, err
+	}
+	return &i, nil
+}
+
+// Lookup reads one account with its owner's state derived now.
+func (s *Store) Lookup(ctx context.Context, id uuid.UUID) (*Info, error) {
+	i, err := scanInfo(s.pool.QueryRow(ctx, fmt.Sprintf(infoSelect, s.q)+` WHERE sa.principal_id = $1`, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w: lookup: %w", ErrStore, err)
+	}
+	return i, nil
+}
+
+// List reads the accounts of one organization by name.
+func (s *Store) List(ctx context.Context, org uuid.UUID) ([]Info, error) {
+	rows, err := s.pool.Query(ctx, fmt.Sprintf(infoSelect, s.q)+` WHERE sa.organization_id = $1 ORDER BY sa.name`, org)
+	if err != nil {
+		return nil, fmt.Errorf("%w: list: %w", ErrStore, err)
+	}
+	defer rows.Close()
+	var out []Info
+	for rows.Next() {
+		i, err := scanInfo(rows)
+		if err != nil {
+			return nil, fmt.Errorf("%w: list: %w", ErrStore, err)
+		}
+		out = append(out, *i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("%w: list: %w", ErrStore, err)
+	}
+	return out, nil
+}

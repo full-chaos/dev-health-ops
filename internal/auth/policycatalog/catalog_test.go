@@ -381,7 +381,10 @@ func TestEmbeddedCatalogHoldsAcrContextReadAsARepositoryAction(t *testing.T) {
 func TestRepositoryIsAResourceKindAndNeverAScope(t *testing.T) {
 	const okR = `{"schema_version":"roles.v1","catalog_version":1,"description":"d","roles":[{"role":"r","scope":"organization","actions":["a.b"]}]}`
 	act := func(scope, kind string) string {
-		return `{"schema_version":"actions.v1","catalog_version":1,"description":"d","actions":[{"action":"a.b","scope":"` + scope + `","resource_kind":"` + kind + `","risk_class":"low","cache_class":"decision_bound"}]}`
+		row := func(id string) string {
+			return `{"action":"` + id + `","scope":"` + scope + `","resource_kind":"` + kind + `","risk_class":"low","cache_class":"decision_bound"}`
+		}
+		return `{"schema_version":"actions.v1","catalog_version":1,"description":"d","actions":[` + row("a.b") + `,` + row("a.c") + `]}`
 	}
 	if _, err := Load([]byte(act("organization", "repository")), []byte(okR)); err != nil {
 		t.Errorf("repository resource_kind refused: %v", err)

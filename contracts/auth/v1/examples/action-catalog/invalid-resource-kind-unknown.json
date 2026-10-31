@@ -6,7 +6,7 @@
     {
       "action": "members.read",
       "scope": "organization",
-      "resource_kind": "repository",
+      "resource_kind": "galaxy",
       "risk_class": "low",
       "cache_class": "decision_bound"
     }

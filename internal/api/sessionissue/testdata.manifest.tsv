@@ -2,3 +2,4 @@
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 # header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 9656730383553bc020113c8c0d7af75d007f193f698b161a581a42d076a4436e	go-generated	outgoing_issue.golden.json
+20af0b2a23fed78a941c14416569ff39c799b7a8167d01bf8cf655d382000679	go-generated	outgoing_state.golden.json

@@ -53,6 +53,8 @@ type issueServer struct {
 	URL       *url.URL
 	last      goldenRequest
 	requests  []rawRequest
+	stateLast goldenRequest
+	states    []rawRequest
 	exchanges int
 	exchange  func() (int, string)
 }
@@ -70,7 +72,7 @@ func newIssueServer(t *testing.T) *issueServer {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Path != sessionissue.Path {
+		if r.URL.Path != sessionissue.Path && r.URL.Path != sessionissue.PathState {
 			s.exchanges++
 			if s.exchange == nil {
 				http.NotFound(w, r)
@@ -94,8 +96,15 @@ func newIssueServer(t *testing.T) *issueServer {
 			}
 		}
 		dump.WriteString(string(raw))
+		record := rawRequest{Auth: append([]string(nil), r.Header.Values("Authorization")...), Dump: dump.String()}
+		if r.URL.Path == sessionissue.PathState {
+			s.stateLast = goldenRequest{Method: r.Method, Path: r.URL.Path, Headers: headers, Body: string(raw)}
+			s.states = append(s.states, record)
+			_, _ = io.WriteString(w, `{"principal_id":"22222222-2222-4222-8222-222222222222","organization_id":null,"revoked":false,"expired":false,"legacy_token_version":null}`)
+			return
+		}
 		s.last = goldenRequest{Method: r.Method, Path: r.URL.Path, Headers: headers, Body: string(raw)}
-		s.requests = append(s.requests, rawRequest{Auth: append([]string(nil), r.Header.Values("Authorization")...), Dump: dump.String()})
+		s.requests = append(s.requests, record)
 		_, _ = io.WriteString(w, `{"access_token":"a.b.c","refresh_token":"dhr1_x","token_type":"bearer","expires_in":3600}`)
 	}))
 	t.Cleanup(server.Close)

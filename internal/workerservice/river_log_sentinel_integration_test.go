@@ -9,14 +9,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"log/slog"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/joboperator"
-	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/credshape"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
@@ -28,6 +25,8 @@ import (
 	"github.com/riverqueue/river/rivermigrate"
 )
 
+// The default-logger River clients are proven in internal/joboperator (river_log_sentinel_integration_test.go).
+//
 // River's own logger lines reach the operator through the process log chain. This proof drives real River clients
 // against PostgreSQL, makes River log a value it was handed (a job's error text, a job's panic value, a queue name),
 // and requires that no sentinel survives the shared redactor. Every run is paired with a control on a raw slog handler:
@@ -262,77 +261,4 @@ func missingFrom(output string, sentinels []riverSentinel) []string {
 		}
 	}
 	return classes
-}
-
-// NewDirectPostgresBackend builds its River client on slog.Default(). A queue pause makes River log the queue name at
-// debug level, so a queue named like a credential is a value River hands to the default logger.
-// The other slog.Default River clients (joboutbox NewRiverInserter, NewStrandRepair, NewTerminalDeliveryRepair)
-// have no River log line on any path they call, so they have no emission to capture; internal/cigates/emitscan R5
-// holds their Logger field.
-func TestDefaultLoggerRiverClientLogsCarryNoSentinelThroughTheProcessLogChain(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
-	t.Cleanup(cancel)
-	pool := riverSentinelDatabase(t, ctx)
-	registry, err := jobruntime.Load(filepath.Join("..", "..", "contracts", "jobs", "v1"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	all := riverSentinels(t)
-	var queueSentinels []riverSentinel
-	for _, sentinel := range all {
-		if sentinel.class == "provider" || sentinel.class == "credshape-probe" {
-			queueSentinels = append(queueSentinels, sentinel)
-		}
-	}
-	if len(queueSentinels) != 2 {
-		t.Fatalf("queue-name sentinels = %d, want 2", len(queueSentinels))
-	}
-	queueName := func(sentinel riverSentinel) string {
-		if sentinel.class == "provider" {
-			return "ghp_" + sentinel.needle + "AB"
-		}
-		return sentinel.shaped
-	}
-	for _, sentinel := range queueSentinels {
-		if _, err := pool.Exec(ctx,
-			"INSERT INTO river.river_queue (name, updated_at) VALUES ($1, now())", queueName(sentinel)); err != nil {
-			t.Fatalf("seed queue for class %s: %v", sentinel.class, err)
-		}
-	}
-
-	run := func(install func(*sentinelBuffer) func()) string {
-		out := &sentinelBuffer{}
-		restore := install(out)
-		defer restore()
-		backend, err := joboperator.NewDirectPostgresBackend(pool, "river", registry)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, sentinel := range queueSentinels {
-			if err := backend.PauseQueue(ctx, queueName(sentinel), joboperator.Mutation{}); err != nil {
-				t.Fatalf("pause queue for class %s: %v", sentinel.class, err)
-			}
-		}
-		return out.String()
-	}
-
-	control := run(func(out *sentinelBuffer) func() {
-		return logging.InstallDefault(slog.New(slog.NewTextHandler(out, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	})
-	if !strings.Contains(control, "Notifying about queue state change") {
-		t.Fatal("control: River did not log the queue pause line; the proof would be vacuous")
-	}
-	if missing := missingFrom(control, queueSentinels); len(missing) != 0 {
-		t.Fatalf("control: the raw handler hid sentinel classes %v; the harness cannot see a leak", missing)
-	}
-
-	chain := run(func(out *sentinelBuffer) func() {
-		return logging.InstallDefault(logging.NewJSON(out, slog.LevelDebug))
-	})
-	if !strings.Contains(chain, "Notifying about queue state change") {
-		t.Fatal("chain: River did not log the queue pause line; the proof would be vacuous")
-	}
-	if classes := leaked(chain, queueSentinels); len(classes) != 0 {
-		t.Errorf("sentinel classes %v reached the default-logger River client output", classes)
-	}
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/membership"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole"
+	"github.com/full-chaos/dev-health-ops/internal/auth/publicaudit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/signedtoken"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -219,7 +220,8 @@ func (s *Store) lockOrg(ctx context.Context, tx audit.TxOps, orgID uuid.UUID, au
 	return lookup
 }
 
-// publicAuditRow is go-api's audit_logs row (internal/api/audit.PGWriter shape).
+// publicAuditRow is go-api's audit_logs row, written by the shared writer (publicaudit.Insert: internal/api/audit.PGWriter's
+// columns and value types).
 func (s *Store) publicAuditRow(ctx context.Context, tx audit.TxOps, orgID uuid.UUID, userID *uuid.UUID, action, resourceID string,
 	description string, changes *pyjson.Object, pa *PublicAudit, at time.Time) error {
 	encoded, err := pyjson.Marshal(changes)
@@ -233,11 +235,10 @@ func (s *Store) publicAuditRow(ctx context.Context, tx audit.TxOps, orgID uuid.U
 	if pa != nil && pa.Description != nil {
 		description = *pa.Description
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO public.audit_logs
-	(id, org_id, user_id, action, resource_type, resource_id, description, changes, request_metadata, status, created_at)
-VALUES ($1, $2, $3, $4, 'membership', $5, $6, $7::json, $8::json, 'success', $9)`,
-		uuid.New(), orgID, userID, action, resourceID, description, string(encoded), string(metadata), at)
-	return err
+	return publicaudit.Insert(ctx, tx, publicaudit.Row{
+		OrgID: orgID, UserID: userID, Action: action, ResourceType: "membership", ResourceID: resourceID,
+		Description: &description, Changes: encoded, RequestMetadata: metadata, Status: "success", CreatedAt: at,
+	})
 }
 
 // Create mints an invite: both invite rows (the token's SHA-256 digest only),

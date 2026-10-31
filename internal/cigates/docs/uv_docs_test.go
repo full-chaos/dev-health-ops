@@ -22,6 +22,7 @@ var (
 	uvExactVer   = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
 	uvLockHash1  = "--hash=sha256:b80b99a14bd085fcacfa15c9165f651fbb3406e66cc603abf11c5750937c992d"
 	uvInstTail   = "--no-deps -r requirements-docs.txt\n"
+	uvZeroHash   = "--hash=sha256:" + "0000000000000000000000000000000000000000000000000000000000000000"
 	uvMkdocsPref = `uv run --no-project --python "$RUNNER_TEMP/docs-venv/bin/python" mkdocs build --strict`
 	// The one build line: this prefix, `--config-file mkdocs.yml`, then only the existing tee tail.
 	uvBuildLine = regexp.MustCompile(`^uv run --no-project --python "\$RUNNER_TEMP/docs-venv/bin/python" mkdocs build --strict --config-file mkdocs\.yml( 2>&1 \| tee( -a)? \.build/[A-Za-z0-9._-]+\.log)?$`)
@@ -365,10 +366,39 @@ func TestDocsWorkflowsBuildThroughUv(t *testing.T) {
 		{"--no-verify-hashes appears in a comment", func(t *testing.T, d docTree) docTree {
 			return d.appended(t, hr, "# uv pip install --no-verify-hashes\n")
 		}, "no-verify-hashes"},
+		// CHAOS-10466 r2 verdict: PEP 440 public versions (no local, no range) and uv matched by basename.
+		{"a lock pin has a local version", func(t *testing.T, d docTree) docTree {
+			return d.appended(t, uvDocsReqs, "\ntiny==1.0+local "+uvZeroHash+"\n")
+		}, "exact name==version"},
+		{"a lock pin is a range", func(t *testing.T, d docTree) docTree {
+			return d.appended(t, uvDocsReqs, "\ntiny>=1.0 "+uvZeroHash+"\n")
+		}, "exact name==version"},
+		{"a lock pin is a trailing wildcard", func(t *testing.T, d docTree) docTree {
+			return d.appended(t, uvDocsReqs, "\ntiny==1.* "+uvZeroHash+"\n")
+		}, "exact name==version"},
+		{"uv runs by path", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, cf, uvInstTail, uvInstTail+"          /x/bin/uv pip list\n")
+		}, "not part of the chain"},
+		{"uv runs by a quoted variable path", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, gd, uvInstTail, uvInstTail+"          \"$HOME/.local/bin/uv\" tool install foo\n")
+		}, "not part of the chain"},
+		{"uvx runs by path", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, hr, uvInstTail, uvInstTail+"          /usr/bin/uvx foo\n")
+		}, "uvx"},
 		{"enable-cache is False", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, cf, "enable-cache: false", `enable-cache: "False"`)
 		}, "enable-cache"},
 	})
+}
+
+// Every PEP 440 public version form uv accepts is a valid exact pin.
+func TestDocsWorkflowsUvAcceptsPep440Versions(t *testing.T) {
+	for _, v := range []string{"1.0.dev1", "1!2.0", "1.0rc1", "1.0.post1", "1.0a2", "1.0b3", "1!1.0rc1.post2.dev3", "2026.6"} {
+		d := realTree(t).appended(t, uvDocsReqs, "\ntiny=="+v+" "+uvZeroHash+"\n")
+		if got := uvDocsGuard(d); len(got) > 0 {
+			t.Fatalf("tiny==%s is refused:\n%s", v, strings.Join(got, "\n"))
+		}
+	}
 }
 
 // A disabled cache has two valid YAML spellings; the guard accepts both.

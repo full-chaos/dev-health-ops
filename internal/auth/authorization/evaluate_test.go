@@ -439,7 +439,9 @@ func TestReasonSetIsClosed(t *testing.T) {
 		"allowed_by_role", "invalid_request", "unknown_action", "resource_mismatch",
 		"principal_inactive", "organization_inactive", "no_membership", "org_mismatch",
 		"membership_inactive", "platform_role_absent", "role_unknown", "role_scope_mismatch",
-		"role_lacks_action",
+		"role_lacks_action", "allowed_by_repository_grant", "grant_absent", "repository_not_granted",
+		"grant_expired", "grant_revoked", "resource_org_mismatch", "workload_audience_denied",
+		"workload_action_denied", "clock_unavailable", "service_account_inactive",
 	}
 	got := AllReasons()
 	sort.Slice(got, func(i, j int) bool { return got[i] < got[j] })

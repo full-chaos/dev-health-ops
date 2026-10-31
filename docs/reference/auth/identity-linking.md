@@ -145,7 +145,11 @@ off. The OIDC answers are `OIDC authentication failed` and, for
 auto-provisioning off, 400 `OIDC user provisioning failed`; the SAML answers are
 `SAML authentication failed` and `SAML user provisioning failed`. Checks only
 auth-service makes record nothing. When the record cannot be written, the
-sign-in answers 500. The reason codes are:
+sign-in answers 500. A completed OIDC, OAuth or SAML sign-in is recorded as go-api
+records it: the provider row's `last_login_at` and `updated_at` and an `sso_login`
+success row on resource `session`, in one transaction, after the session is issued
+and before the tokens answer. When that record cannot be written, the sign-in
+answers 500 and the tokens are withheld. The reason codes are:
 
 | Reason | Meaning |
 | --- | --- |

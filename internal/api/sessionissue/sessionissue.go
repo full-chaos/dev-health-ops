@@ -79,21 +79,58 @@ func (e *RefusedError) Unwrap() error { return ErrUnavailable }
 var reasonCodePattern = regexp.MustCompile(`^[a-z][a-z_]{0,63}$`)
 
 // refusalIn is the refusal of a non-200 answer when its body is the error.v1
-// document for that status, else nil.
+// document for that status, else nil. A body that names a member twice is not
+// that document: the decision never rests on whichever value came last.
 func refusalIn(status int, answer []byte) *RefusedError {
 	if len(answer) > maxAnswerBytes {
 		return nil
 	}
-	var doc struct {
-		SchemaVersion string `json:"schema_version"`
-		Status        int    `json:"status"`
-		ReasonCode    string `json:"reason_code"`
-	}
-	if json.Unmarshal(answer, &doc) != nil || doc.SchemaVersion != "error.v1" || doc.Status != status ||
-		!reasonCodePattern.MatchString(doc.ReasonCode) {
+	members, ok := objectMembers(answer)
+	if !ok {
 		return nil
 	}
-	return &RefusedError{Status: status, Reason: doc.ReasonCode}
+	var schemaVersion, reasonCode string
+	var docStatus int
+	if json.Unmarshal(members["schema_version"], &schemaVersion) != nil || json.Unmarshal(members["status"], &docStatus) != nil ||
+		json.Unmarshal(members["reason_code"], &reasonCode) != nil {
+		return nil
+	}
+	if schemaVersion != "error.v1" || docStatus != status || !reasonCodePattern.MatchString(reasonCode) {
+		return nil
+	}
+	return &RefusedError{Status: status, Reason: reasonCode}
+}
+
+// objectMembers reads raw as exactly one JSON object and returns its members.
+// It refuses anything else: a repeated member, trailing data, or not an object.
+func objectMembers(raw []byte) (map[string]json.RawMessage, bool) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return nil, false
+	}
+	members := map[string]json.RawMessage{}
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return nil, false
+		}
+		name, _ := tok.(string)
+		if _, seen := members[name]; seen {
+			return nil, false
+		}
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			return nil, false
+		}
+		members[name] = value
+	}
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('}') {
+		return nil, false
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, false
+	}
+	return members, true
 }
 
 // Request names the session to issue.
@@ -119,11 +156,13 @@ type Issuer interface {
 	Issue(ctx context.Context, r *http.Request, req Request) (Pair, error)
 }
 
-// Client calls the issue route of one auth-service.
+// Client calls the issue route of one auth-service, and its session state
+// route (State).
 type Client struct {
-	endpoint string
-	token    string
-	http     *http.Client
+	endpoint      string
+	stateEndpoint string
+	token         string
+	http          *http.Client
 }
 
 // New builds a Client for base (AUTH_PROXY_URL's origin) and token. It
@@ -139,6 +178,7 @@ func New(base *url.URL, token string, timeout time.Duration) (*Client, error) {
 		timeout = defaultTimeout
 	}
 	endpoint := url.URL{Scheme: base.Scheme, Host: base.Host, Path: Path}
+	stateEndpoint := url.URL{Scheme: base.Scheme, Host: base.Host, Path: PathState}
 	// The bearer is a service credential: no proxy from the environment, a
 	// connection pool of its own, and no redirect following, as the auth
 	// proxy dials auth-service.
@@ -152,7 +192,7 @@ func New(base *url.URL, token string, timeout time.Duration) (*Client, error) {
 		ExpectContinueTimeout: time.Second,
 		ForceAttemptHTTP2:     true,
 	}
-	return &Client{endpoint: endpoint.String(), token: token, http: &http.Client{
+	return &Client{endpoint: endpoint.String(), stateEndpoint: stateEndpoint.String(), token: token, http: &http.Client{
 		Transport:     transport,
 		Timeout:       timeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },

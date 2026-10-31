@@ -32,7 +32,7 @@ func ssoRoutes(
 		logger.Info("federated sign-in routes are not mounted: their settings are incomplete")
 		return nil, nil
 	}
-	sessions, err := authapi.NewSSOSessions(deps)
+	sessions, err := authapi.NewSSOSessions(deps, signInRecord(pool))
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +92,7 @@ func oidcService(
 		Sessions:     sessions.OIDC(),
 		Secrets:      providerSecrets{cipher},
 		StateSecret:  contracts.NewSecretString(cfg.SSO.StateKey.Reveal()),
-		AppBaseURL:   cfg.SSO.AppBaseURL, DenialAudit: oidc.PGDenialAudit{Exec: pool}, ProviderFailure: providerFailure(pool),
+		AppBaseURL:   cfg.SSO.AppBaseURL, DenialAudit: oidc.PGDenialAudit{Exec: pool}, ProviderFailure: providerFailure(pool), SignInRecord: signInRecord(pool),
 		Logger: logger,
 	})
 }

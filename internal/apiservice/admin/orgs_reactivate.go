@@ -127,6 +127,18 @@ func (h *handlers) authStateHook(orgID uuid.UUID, accepted bool) orgAuthStateFun
 			h.logger.WarnContext(ctx, "admin: auth state re-read failed after an accepted change", "verb", verb, "reason", reason)
 			return accepted, nil
 		}
-		return state.Status == "active", nil
+		active, _ := authStatusActive(state.Status)
+		return active, nil
 	}
+}
+
+// authStatusActive is the one reading of an auth status as is_active; known is false for any other status.
+func authStatusActive(status string) (active, known bool) {
+	switch status {
+	case "active":
+		return true, true
+	case "suspended":
+		return false, true
+	}
+	return false, false
 }

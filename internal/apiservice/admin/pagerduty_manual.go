@@ -166,7 +166,7 @@ func (h *handlers) storePagerDutyManualCredential(ctx context.Context, orgID, au
 	}
 	if encrypted != nil {
 		if plaintext, decErr := h.decryptor.Decrypt(secrets.NewValue(*encrypted)); decErr == nil {
-			if token, tokErr := pagerDutyRevokeToken(plaintext); tokErr == nil && h.pagerDuty.ClientID != "" {
+			if token, tokErr := providerfoundation.PagerDutyStoredRevokeToken(plaintext); tokErr == nil && h.pagerDuty.ClientID != "" {
 				tokenToRevoke = token
 			}
 		}

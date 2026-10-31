@@ -377,7 +377,7 @@ func (h *handlers) getLLMSettingsStatus(w http.ResponseWriter, r *http.Request) 
 	}
 	out, err := h.llmSettingsStatusResponse(ctx, orgID)
 	if err != nil {
-		h.internalError(ctx, w, "read llm settings status", err)
+		h.byoReadFailed(ctx, w, "read llm settings status", err)
 		return
 	}
 	policy.WriteModel(w, http.StatusOK, out, nil)

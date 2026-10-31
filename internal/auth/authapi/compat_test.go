@@ -257,6 +257,7 @@ var testLockoutKey = base64.RawURLEncoding.EncodeToString([]byte("authapi-compat
 
 // compatFixture is the fixture with login mounted.
 type compatFixture struct {
+	signIns signInSpy
 	*fixture
 	loginUsers *fakeLoginUsers
 	attempts   *fakeAttempts

@@ -326,6 +326,15 @@ func configure(
 	return configureWith(ctx, cfg, registry, logger, nil)
 }
 
+// orgStateReconciler is the is_active reconcile loop: only with the organization client, so only with
+// AUTH_PROXY_ORG_PROVISIONING on, and only with a database.
+func orgStateReconciler(deps Deps, logger *slog.Logger) []lifecycle.Component {
+	if deps.OrgState == nil || deps.Pool == nil {
+		return nil
+	}
+	return []lifecycle.Component{admin.NewOrgStateReconciler(deps.Pool, deps.OrgState, logger)}
+}
+
 // orgDeletionPreflightTimeout bounds the start-time ClickHouse preflight (Open
 // dials and pings; the grant read and discovery are two small queries).
 const orgDeletionPreflightTimeout = 15 * time.Second
@@ -420,6 +429,7 @@ func configureWith(
 	if orgClient != nil {
 		deps.OrgReactivator, deps.OrgSuspender, deps.OrgState = orgClient, orgClient, orgClient
 	}
+	depComponents = append(depComponents, orgStateReconciler(deps, logger)...)
 	deps.OrgProvisioner, err = orgProvisioner(authProxy, envsecrets.ProcessLookup, provisioningCred)
 	if err != nil {
 		closeComponents(depComponents)

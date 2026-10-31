@@ -168,3 +168,71 @@ func TestInsertWritesTheStage(t *testing.T) {
 		t.Fatalf("request_metadata %s", meta)
 	}
 }
+
+// goAPISuccessRow is the audit_logs row finishSSOLogin (internal/api/sso/login.go) hands its writer.
+func goAPISuccessRow(t *testing.T, org, provider, user uuid.UUID, protocol string, at time.Time) *recordedExec {
+	t.Helper()
+	meta := pyjson.NewObject()
+	meta.Set("provider_id", provider.String())
+	meta.Set("protocol", protocol)
+	metaJSON, err := pyjson.Dumps(meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	goAPI := &recordedExec{}
+	if _, err := (audit.PGWriter{Now: func() time.Time { return at }}).Write(context.Background(), goAPI, audit.Entry{
+		OrgID: org, UserID: &user, Action: audit.ActionSSOLogin, ResourceType: audit.ResourceSession,
+		ResourceID: user.String(), RequestMetadata: []byte(metaJSON),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return goAPI
+}
+
+// One transaction: the provider's last_login_at and updated_at at one time, then go-api's audit_logs row with the same
+// argument values and Go types go-api's writer gets, the id aside; then the commit.
+func TestASignInRecordsLastLoginAndGoAPIsAuditRow(t *testing.T) {
+	at := time.Date(2026, 10, 30, 8, 0, 0, 123, time.FixedZone("x", 3600))
+	org, provider, user := uuid.New(), uuid.New(), uuid.New()
+	for _, protocol := range []string{"oidc", "saml", "oauth_gitlab", "oauth_github"} {
+		tx := &recordingTx{failAt: -1}
+		err := PGSignIn{DB: beginner{tx: tx}, Now: func() time.Time { return at }}.Succeeded(context.Background(),
+			Success{OrgID: org, ProviderID: provider, PrincipalID: user, Protocol: protocol})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(tx.execs) != 2 || !tx.committed {
+			t.Fatalf("%s: execs %d, committed %v", protocol, len(tx.execs), tx.committed)
+		}
+		update := tx.execs[0]
+		if !strings.Contains(update.sql, "last_login_at = $2, updated_at = $2") || !strings.HasSuffix(update.sql, "WHERE id = $1") ||
+			!reflect.DeepEqual(update.args, []any{provider, at.UTC()}) {
+			t.Fatalf("%s: update %q %v", protocol, update.sql, update.args)
+		}
+		goAPI := goAPISuccessRow(t, org, provider, user, protocol, at)
+		row := tx.execs[1]
+		if len(row.args) != len(goAPI.args) {
+			t.Fatalf("%s: %d args, go-api %d", protocol, len(row.args), len(goAPI.args))
+		}
+		for i := 1; i < len(row.args); i++ {
+			if !reflect.DeepEqual(row.args[i], goAPI.args[i]) {
+				t.Errorf("%s: arg %d = %#v, go-api %#v", protocol, i, row.args[i], goAPI.args[i])
+			}
+		}
+	}
+}
+
+func TestAFailedSignInRecordStatementCommitsNothing(t *testing.T) {
+	for failAt := range 2 {
+		tx := &recordingTx{failAt: failAt}
+		if err := (PGSignIn{DB: beginner{tx: tx}}).Succeeded(context.Background(), Success{}); err == nil {
+			t.Fatalf("statement %d failed and the record reported success", failAt)
+		}
+		if tx.committed || !tx.rolledBack {
+			t.Fatalf("statement %d: committed %v, rolled back %v", failAt, tx.committed, tx.rolledBack)
+		}
+	}
+	if err := (PGSignIn{DB: beginner{err: errors.New("pool closed")}}).Succeeded(context.Background(), Success{}); err == nil {
+		t.Fatal("a failed begin reported success")
+	}
+}

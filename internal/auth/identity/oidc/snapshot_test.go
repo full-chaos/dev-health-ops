@@ -107,7 +107,7 @@ func newUnitEnv(t *testing.T, providers *fakeProviders) *unitEnv {
 	}
 	svc, err := New(Config{
 		Providers: providers, Flows: env.flows, Identities: stubIdentities{}, Memberships: stubMemberships{},
-		Entitlements: env.entitlements, Sessions: stubSessions{}, StateSecret: secret,
+		Entitlements: env.entitlements, Sessions: stubSessions{}, SignInRecord: noSignInRecord{}, StateSecret: secret,
 		AppBaseURL: "https://app.example", Now: func() time.Time { return env.now },
 		Logger: slog.New(slog.NewTextHandler(env.logged, nil)),
 		Meter:  sdkmetric.NewMeterProvider(sdkmetric.WithReader(env.reader)).Meter("test"),

@@ -13,18 +13,18 @@ import (
 )
 
 // The auth runtime role's one write on go-api's provider table: UPDATE on exactly these columns of
-// public.sso_providers, the provider failure record. Never the status. A widened, narrowed or reordered list fails
+// public.sso_providers, the provider failure record and the sign-in record. Never the status. A widened, narrowed or reordered list fails
 // here first.
-func TestTheSSOProviderFailureGrantIsPinnedToTheRecordColumns(t *testing.T) {
-	want := []string{"last_error", "last_error_at", "updated_at"}
-	if got := authschema.SSOProviderFailureColumns(); !slices.Equal(got, want) {
-		t.Fatalf("SSOProviderFailureColumns = %v, want %v", got, want)
+func TestTheSSOProviderWriteGrantIsPinnedToTheRecordColumns(t *testing.T) {
+	want := []string{"last_error", "last_error_at", "last_login_at", "updated_at"}
+	if got := authschema.SSOProviderWriteColumns(); !slices.Equal(got, want) {
+		t.Fatalf("SSOProviderWriteColumns = %v, want %v", got, want)
 	}
 }
 
-// Among the auth schema grant passes only the public read pass and the provider failure pass name sso_providers;
-// the read pass grants only SELECT and the failure pass only UPDATE, and the failure pass revokes nothing.
-func TestOnlyTheProviderFailurePassWritesSSOProviders(t *testing.T) {
+// Among the auth schema grant passes only the public read pass and the provider write pass name sso_providers;
+// the read pass grants only SELECT and the write pass only UPDATE, and the write pass revokes nothing.
+func TestOnlyTheProviderWritePassWritesSSOProviders(t *testing.T) {
 	root, err := moduleroot.Root()
 	if err != nil {
 		t.Fatal(err)
@@ -48,18 +48,18 @@ func TestOnlyTheProviderFailurePassWritesSSOProviders(t *testing.T) {
 			continue
 		}
 		naming = append(naming, filepath.Base(f))
-		if filepath.Base(f) == "ssoproviderfailure_grant.go" {
+		if filepath.Base(f) == "ssoproviderwrite_grant.go" {
 			for _, m := range grant.FindAllStringSubmatch(string(raw), -1) {
 				if strings.ToUpper(m[1]) != "UPDATE" {
-					t.Errorf("ssoproviderfailure_grant.go grants %s", m[1])
+					t.Errorf("ssoproviderwrite_grant.go grants %s", m[1])
 				}
 			}
 			if regexp.MustCompile(`\bREVOKE\b`).Match(raw) {
-				t.Error("ssoproviderfailure_grant.go revokes: the read pass owns the table's REVOKE ALL")
+				t.Error("ssoproviderwrite_grant.go revokes: the read pass owns the table's REVOKE ALL")
 			}
 		}
 	}
-	if !slices.Equal(naming, []string{"publicreads.go", "ssoproviderfailure_grant.go"}) {
-		t.Fatalf("authschema sources naming sso_providers: %v, want publicreads.go and ssoproviderfailure_grant.go", naming)
+	if !slices.Equal(naming, []string{"publicreads.go", "ssoproviderwrite_grant.go"}) {
+		t.Fatalf("authschema sources naming sso_providers: %v, want publicreads.go and ssoproviderwrite_grant.go", naming)
 	}
 }

@@ -40,6 +40,22 @@ const llmVenueOperatorMax = "10000000"
 // (TestLLMSettingsRefusesABYOProviderWithoutAModel) own the contract.
 const llmModelRuling = "CHAOS-10538 D6107: BYO provider without a model is refused (400 model_required)"
 
+// llmUndecryptableRuling retires the Python reference of a read over a stored
+// BYO key the configured SETTINGS_ENCRYPTION_KEY cannot open (CHAOS-12172): the
+// Python plane answered the generic 500; the Go route answers 409
+// llm_settings_undecryptable naming the settings. Go's answers are pinned, and
+// TestLLMSettingsUndecryptableAfterKeyRotation owns the contract. Only the
+// keyed mode: with no key at all both planes still answer 500.
+const llmUndecryptableRuling = "CHAOS-12172: a stored BYO key the configured key cannot decrypt answers 409 llm_settings_undecryptable"
+
+// llmUndecryptableRetired names the keyed requests that read the "bad" org's
+// undecryptable api_key row (a PUT reaches it on its response read and rolls
+// back, as Python's 500 did, so later rows and requests are unchanged).
+var llmUndecryptableRetired = map[string]bool{
+	"get bad rows is a server error": true,
+	"W put over bad rows rolls back": true,
+}
+
 // llmModelRetired names the requests whose Python answer the rule retires: each
 // model-less BYO PUT that reaches the write path, and every later request that
 // reads or writes the rows of an org where Python applied such a PUT (Go kept
@@ -116,7 +132,7 @@ const (
 )
 
 func TestLLMSettingsRoutesVenueOracle(t *testing.T) {
-	runLLMSettingsOracle(t, true, "keyed", llmSettingsRoutesEncryptedGoldenDigest, "192204b949f4c0d12747eca19862807ea78653712f715fb6c16467625ad7b6f0")
+	runLLMSettingsOracle(t, true, "keyed", llmSettingsRoutesEncryptedGoldenDigest, "d71afb4e7c813bb3c27febd89ee65ed1aa6bc9fbf15ad5aa10ce8651e2a5e309")
 }
 
 // TestLLMSettingsRoutesWithoutEncryptionKeyVenueOracle runs the same routes on
@@ -129,7 +145,11 @@ func TestLLMSettingsRoutesWithoutEncryptionKeyVenueOracle(t *testing.T) {
 func runLLMSettingsOracle(t *testing.T, withKey bool, mode, digest, pinDigest string) {
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, governanceGolden("llmsettings_"+mode, t.Name(), digest))
-	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/governance/llmsettings_" + mode + ".go-pin.json", SHA256: pinDigest, Ruling: llmModelRuling})
+	ruling := llmModelRuling
+	if withKey {
+		ruling = llmModelRuling + "; " + llmUndecryptableRuling
+	}
+	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/governance/llmsettings_" + mode + ".go-pin.json", SHA256: pinDigest, Ruling: ruling})
 	root := repoRoot(t)
 	nextID := goldenIDs("llm")
 	const jwtKey = "venue-oracle-test-secret-key-for-llm-settings-32-bytes!"
@@ -442,8 +462,10 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, '2026-02-01T00:00:00+00:00', '2026-02-01T00:
 	})
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
 		Golden: golden,
-		Retire: func(request venueoracle.Request) bool { return llmModelRetired[request.Name] },
-		Pin:    pin,
+		Retire: func(request venueoracle.Request) bool {
+			return llmModelRetired[request.Name] || (withKey && llmUndecryptableRetired[request.Name])
+		},
+		Pin: pin,
 	})
 	t.Log(receipt)
 

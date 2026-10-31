@@ -594,7 +594,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/provisioning.go",
-        "line": 196
+        "line": 199
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped"
@@ -628,7 +628,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/provisioning.go",
-        "line": 197
+        "line": 200
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped"
@@ -662,7 +662,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/provisioning.go",
-        "line": 198
+        "line": 201
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped"
@@ -696,7 +696,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/provisioning.go",
-        "line": 199
+        "line": 202
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped"
@@ -745,7 +745,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/provisioning.go",
-        "line": 200
+        "line": 203
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped"
@@ -779,7 +779,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/provisioning.go",
-        "line": 201
+        "line": 204
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -844,7 +844,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/provisioning.go",
-        "line": 202
+        "line": 205
       },
       "surface_kind": "rest",
       "tenant_requirement": "cross_org_superuser_only"
@@ -878,7 +878,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/provisioning.go",
-        "line": 203
+        "line": 206
       },
       "surface_kind": "rest",
       "tenant_requirement": "cross_org_superuser_only"

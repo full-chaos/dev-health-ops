@@ -938,6 +938,11 @@ func (c *fileCtx) bind(body ast.Node, sc *scope) {
 							v = pathInfo{kind: kRepo, value: "."}
 						case name == "path/filepath.Abs" && i == 0 && len(call.Args) == 1:
 							v = c.pathKind(call, sc)
+						case name == "path/filepath.EvalSymlinks" && i == 0 && len(call.Args) == 1:
+							// the real path of a temp dir is a temp dir; of any other path, unknown
+							if k := c.pathKind(call.Args[0], sc); k.kind == kTemp {
+								v = k
+							}
 						case name == "path/filepath.Glob" && i == 0 && len(call.Args) == 1:
 							if r := c.walkRoot(call.Args[0], sc, true); r.kind == kRepo {
 								v = pathInfo{kind: kGlob, value: r.value, depth: r.depth}

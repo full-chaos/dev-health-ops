@@ -136,6 +136,9 @@ func (g *dirGroup) pkgVarKindless(name string) bool {
 }
 
 func (c *fileCtx) pureCallIn(x *ast.CallExpr, visiting map[*ast.FuncDecl]bool) bool {
+	if c.statsModuleFile(x) {
+		return true
+	}
 	switch f := ast.Unparen(x.Fun).(type) {
 	case *ast.Ident:
 		switch {

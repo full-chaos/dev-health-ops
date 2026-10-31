@@ -68,7 +68,7 @@ func newFixtureIn(t *testing.T, root, name string) *fixture {
 
 func (f *fixture) run(env []string, stdin string, args ...string) string {
 	f.t.Helper()
-	command := exec.Command("git", args...)
+	command := exec.Command("git", append([]string{"-c", "maintenance.auto=false", "-c", "gc.auto=0"}, args...)...)
 	command.Dir = f.dir
 	command.Env = append(os.Environ(), env...)
 	if stdin != "" {

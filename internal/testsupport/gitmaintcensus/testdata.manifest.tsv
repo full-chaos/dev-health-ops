@@ -1,0 +1,10 @@
+# Every file under internal/testsupport/gitmaintcensus/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
+# python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+# header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+4e7c0f0bb0df94bb2a749b56444b0bd6a3bc1133c427f00cc4dc8791ac7eb3ee	hand-written	commit_with_flag.go
+ab7d785d2c04567244cb4633415a72ea9915d878c47610b6a548ac70fa4fcab2	hand-written	helper_with_flag.go
+bf956b5ad1afe9d1a1c8ef24bc830edbdedb2fdf2ef79059379a7989646ea5bb	hand-written	nonliteral_subcommand.go
+b922e70c5c206d4d94562a485325859e02dd3717f5fac4e45a5b666c764532c1	hand-written	provider_name_not_exec.go
+b66f63715cad319b0406abe3ed223d10f5e920b9b37eb2e92ba6d7799dcb429d	hand-written	raw_commit.go
+307a9016caf3e48c517cc21e18b643f90c6ad465881617152f19db5cfc705a8c	hand-written	read_only_log.go
+fa92af02a50f0e918ce0ae0c5849f3dc795c9c77738a458ec6170c7d30e1d37a	hand-written	var_held_flag.go

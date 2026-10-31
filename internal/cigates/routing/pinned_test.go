@@ -28,7 +28,7 @@ var gitEnv = []string{
 
 func git(t *testing.T, repo string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", append([]string{"-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "-C", repo}, args...)...)
+	cmd := exec.Command("git", append([]string{"-c", "maintenance.auto=false", "-c", "gc.auto=0", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "-C", repo}, args...)...)
 	cmd.Env = append(os.Environ(), gitEnv...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

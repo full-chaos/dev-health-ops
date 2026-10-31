@@ -143,7 +143,7 @@ func TestMergeTreeVetScript(t *testing.T) {
 		t.Parallel()
 		e := newMTV(t)
 		e.makeMainAndPRs()
-		textual := freeSpec{dir: e.repo.dir, env: gitEnv}.run("git", "merge-tree", "--write-tree", "main1", "pr-stub")
+		textual := freeSpec{dir: e.repo.dir, env: gitEnv}.run("git", "-c", "maintenance.auto=false", "-c", "gc.auto=0", "merge-tree", "--write-tree", "main1", "pr-stub")
 		if textual.code != 0 {
 			t.Fatalf("the incident shape must merge textually clean: %s", outAll(textual))
 		}

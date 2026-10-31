@@ -89,7 +89,7 @@ func gitEnv(ceiling string, extra ...string) []string {
 func git(t *testing.T, dir string, env []string, args ...string) {
 	t.Helper()
 	full := append([]string{"-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"}, args...)
-	cmd := exec.Command("git", full...)
+	cmd := exec.Command("git", append([]string{"-c", "maintenance.auto=false", "-c", "gc.auto=0"}, full...)...)
 	cmd.Dir = dir
 	cmd.Env = env
 	if out, err := cmd.CombinedOutput(); err != nil {

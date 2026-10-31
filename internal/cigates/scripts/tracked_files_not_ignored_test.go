@@ -22,7 +22,7 @@ func repoIgnoredTrackedFiles(dir string) ([]string, error) {
 		return nil, fmt.Errorf("git ls-files: %s", listed.stderr)
 	}
 	// check-ignore exits 1 when nothing matches: that is a valid empty answer, anything above 1 is a failure
-	explained := cmdSpec{dir: dir, env: env, stdin: []byte(listed.stdout)}.run("git", "check-ignore", "-v", "--no-index", "-z", "--stdin")
+	explained := cmdSpec{dir: dir, env: env, stdin: []byte(listed.stdout)}.run("git", "-c", "maintenance.auto=false", "-c", "gc.auto=0", "check-ignore", "-v", "--no-index", "-z", "--stdin")
 	if explained.code > 1 || explained.code < 0 {
 		return nil, fmt.Errorf("git check-ignore exited %d: %s", explained.code, explained.stderr)
 	}

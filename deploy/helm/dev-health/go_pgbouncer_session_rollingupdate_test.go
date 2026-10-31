@@ -54,7 +54,7 @@ func TestSessionRollingUpdateUnsetRendersByteEqual(t *testing.T) {
 		t.Fatal(err)
 	}
 	baseDir := t.TempDir()
-	tarball, err := exec.Command("git", "-C", "../../..", "archive", goldenBaseSha, "deploy/helm/dev-health").Output()
+	tarball, err := exec.Command("git", "-c", "maintenance.auto=false", "-c", "gc.auto=0", "-C", "../../..", "archive", goldenBaseSha, "deploy/helm/dev-health").Output()
 	if err != nil {
 		t.Fatalf("git archive %s: %v", goldenBaseSha, err)
 	}
@@ -327,7 +327,7 @@ func TestGoldenBaseCheckFailsOnAbsentShaAndNonAncestorAndSkipsOnlyWithoutGit(t *
 	repo := t.TempDir()
 	git := func(args ...string) string {
 		t.Helper()
-		out, err := exec.Command("git", append([]string{"-C", repo, "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"}, args...)...).CombinedOutput()
+		out, err := exec.Command("git", append([]string{"-c", "maintenance.auto=false", "-c", "gc.auto=0", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"}, args...)...).CombinedOutput()
 		if err != nil {
 			t.Fatalf("git %v: %v %s", args, err, out)
 		}

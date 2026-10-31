@@ -159,10 +159,13 @@ SELECT gen_random_uuid(), u.id, $1::uuid, 'member', now() FROM u`, big); err != 
 	if err := pool.QueryRow(ctx, `SELECT user_id FROM memberships WHERE org_id = $1 LIMIT 1`, big).Scan(&bigMember); err != nil {
 		t.Fatal(err)
 	}
+	// The small org's member cell asserts an index read only: on that org the planner costs
+	// ix_memberships_org_id and ix_memberships_user_id the same (0.29..6.81), so either index may win.
 	for _, read := range []struct {
 		name      string
 		user, org uuid.UUID
-	}{{"the token's member", user, org}, {"a member of the 50000-member org", bigMember, big}} {
+		strict    bool
+	}{{"the token's member", user, org, false}, {"a member of the 50000-member org", bigMember, big, true}} {
 		for _, query := range []string{membershipSQL, orgMembershipSQL} {
 			rows, err := pool.Query(ctx, "EXPLAIN "+query, read.user, read.org)
 			if err != nil {
@@ -182,17 +185,26 @@ SELECT gen_random_uuid(), u.id, $1::uuid, 'member', now() FROM u`, big); err != 
 			}
 			text := strings.Join(plan, "\n")
 			t.Logf("membership read plan, %s:\n%s", read.name, text)
-			userIndexed := false
+			indexed, userIndexed := false, false
 			for _, line := range plan {
 				line = strings.TrimSpace(line)
-				if strings.HasPrefix(line, "Index Cond:") && strings.Contains(line, "user_id") {
-					userIndexed = true
+				if strings.Contains(line, "Seq Scan") {
+					t.Fatalf("%s: the membership read scans the table:\n%s", read.name, text)
 				}
-				if strings.HasPrefix(line, "Filter:") && strings.Contains(line, "user_id") {
+				if strings.HasPrefix(line, "Index Cond:") {
+					indexed = true
+					if strings.Contains(line, "user_id") {
+						userIndexed = true
+					}
+				}
+				if read.strict && strings.HasPrefix(line, "Filter:") && strings.Contains(line, "user_id") {
 					t.Fatalf("%s: the membership read filters user_id out of a wider scan:\n%s", read.name, text)
 				}
 			}
-			if !userIndexed {
+			if !indexed {
+				t.Fatalf("%s: the membership read has no index condition:\n%s", read.name, text)
+			}
+			if read.strict && !userIndexed {
 				t.Fatalf("%s: the membership read has no index condition on user_id:\n%s", read.name, text)
 			}
 		}

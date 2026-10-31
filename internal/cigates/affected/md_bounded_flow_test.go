@@ -42,3 +42,41 @@ func TestPlanReadsBareNameFlowShapes(t *testing.T) {
 		})
 	}
 }
+
+// A name handed to a function of another package of the module is no read when that function only computes: its body
+// resolves, it reads, runs and opens nothing, and every call in it is a builtin, a string or path function or another
+// such function of the module. Its result is still followed. A callee that reads, calls an interface method or a
+// function value, or calls another package keeps the name a read.
+func TestPlanReadsBareNameIntoAPureModuleFunction(t *testing.T) {
+	classes := "docs\tdocs/**\nREADME.md\tREADME.md\n"
+	head := "package p\n\nimport (\n\t\"os\"\n\t\"path/filepath\"\n\t\"testing\"\n\n\t\"example.com/m/y\"\n)\n\nvar _ = os.Getenv\nvar _ = filepath.Join\nvar _ = testing.Short\n\n" +
+		"func repoRoot() string { return \"..\" }\n\n"
+	yhead := "package y\n\nimport (\n\t\"os\"\n\t\"strings\"\n\n\t\"example.com/othermod\"\n)\n\nvar _ = os.Getenv\nvar _ = strings.ToUpper\nvar _ = othermod.Skip\n\n"
+	cases := []struct {
+		name, lib, use string
+		keep           bool
+	}{
+		{"pure_result_compared", "func Has(s string) bool { return strings.HasSuffix(s, \".md\") }\n", "var _ = y.Has(\"README.md\")\n", false},
+		{"pure_result_read", "func Clean(s string) string { return strings.TrimSpace(s) }\n", "var _, _ = os.ReadFile(filepath.Join(repoRoot(), y.Clean(\"README.md\")))\n", true},
+		{"pure_through_a_pure_helper", "func inner(s string) bool { return len(s) > 3 }\n\nfunc Has(s string) bool { return inner(strings.ToUpper(s)) }\n", "var _ = y.Has(\"README.md\")\n", false},
+		{"reads", "func Has(s string) bool { _, err := os.Stat(s); return err == nil }\n", "var _ = y.Has(\"README.md\")\n", true},
+		{"reads_through_a_helper", "func look(s string) bool { _, err := os.ReadFile(s); return err == nil }\n\nfunc Has(s string) bool { return look(s) }\n", "var _ = y.Has(\"README.md\")\n", true},
+		{"calls_another_package", "func Has(s string) bool { return othermod.Skip(s) }\n", "var _ = y.Has(\"README.md\")\n", true},
+		{"calls_an_interface_method", "type R interface{ Has(string) bool }\n\nfunc Has(r R, s string) bool { return r.Has(s) }\n", "var _ = y.Has(nil, \"README.md\")\n", true},
+		{"calls_a_function_value", "var probe = func(string) bool { return true }\n\nfunc Has(s string) bool { return probe(s) }\n", "var _ = y.Has(\"README.md\")\n", true},
+		{"starts_a_goroutine", "func Has(s string) bool {\n\tgo func() { _, _ = os.ReadFile(s) }()\n\treturn true\n}\n", "var _ = y.Has(\"README.md\")\n", true},
+		{"no_body_in_the_module", "", "var _ = y.Missing(\"README.md\")\n", true},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			res := planReads(t, readsFixture(t, map[string]string{"p/p_test.go": head + c.use, "y/y.go": yhead + c.lib, "go.mod": "module example.com/m\n", "README.md": "r\n",
+				"internal/cigates/affected/classes.tsv": classes}))
+			out := res.stdout + res.stderr
+			if got := strings.Contains(out, "p\ttest\tREADME.md"); got != c.keep {
+				t.Fatalf("a README.md reader row is %v, want %v:\n%s", got, c.keep, out)
+			}
+		})
+	}
+}

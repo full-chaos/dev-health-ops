@@ -124,3 +124,46 @@ func TestPlanReadsInlinesHelperResults(t *testing.T) {
 		wantRows(t, name, planFixture(t, file, c.src), c.want, c.notWanted)
 	}
 }
+
+// The statements before a walk's gate may loop over a table, ask whether a module file exists and call a function that
+// only computes: none of them reads a Markdown file, so the gate behind them is still the walk's filter. A statement
+// that reads something else, or calls what the scan cannot see, hides it.
+func TestPlanReadsWalkGatePreludes(t *testing.T) {
+	walk := func(decls, prelude string) string {
+		return "package w\n\nimport (\n\t\"io/fs\"\n\t\"os\"\n\t\"path/filepath\"\n\t\"strings\"\n\n\t\"example.com/othermod\"\n)\n\nvar _ = othermod.Skip\n\n" +
+			"func repoRoot() string { return \"..\" }\n\n" + decls +
+			"func walk() error {\n\troot := repoRoot()\n\treturn filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {\n" +
+			"\t\tif err != nil {\n\t\t\treturn err\n\t\t}\n\t\tif d.IsDir() {\n" + prelude + "\t\t\treturn nil\n\t\t}\n" +
+			"\t\tif !strings.HasSuffix(path, \".go\") {\n\t\t\treturn nil\n\t\t}\n\t\t_, rerr := os.ReadFile(path)\n\t\treturn rerr\n\t})\n}\n"
+	}
+	const gated, open = "w\tw_walk_test.go\t.\ttree\t*.go\n", "w\tw_walk_test.go\t.\ttree\t*\n"
+	skipRange := "\t\t\tfor _, skip := range skipped {\n\t\t\t\tif path == skip {\n\t\t\t\t\treturn filepath.SkipDir\n\t\t\t\t}\n\t\t\t}\n"
+	stat := func(name string) string {
+		return "\t\t\tif _, serr := os.Stat(filepath.Join(path, \"" + name + "\")); serr == nil {\n\t\t\t\treturn filepath.SkipDir\n\t\t\t}\n"
+	}
+	call := "\t\t\tif skipDir(path, d.Name()) {\n\t\t\t\treturn filepath.SkipDir\n\t\t\t}\n"
+	for name, c := range map[string]struct {
+		decls, prelude, want string
+	}{
+		"range_over_a_package_table":       {"var skipped = []string{\"a\", \"b\"}\n\n", skipRange, gated},
+		"range_over_a_call":                {"func skipped() []string { return nil }\n\n", "\t\t\tfor _, skip := range os.Args {\n\t\t\t\t_, _ = os.ReadFile(skip)\n\t\t\t}\n", open},
+		"stat_of_a_module_file":            {"", stat("go.mod"), gated},
+		"stat_of_a_markdown_file":          {"", stat("README.md"), open},
+		"stat_of_a_directory_name":         {"", stat("docs"), open},
+		"pure_helper":                      {"func skipDir(p, n string) bool { return strings.HasPrefix(n, \".\") || filepath.Base(p) == \"vendor\" }\n\n", call, gated},
+		"pure_helper_of_a_pure_helper":     {"func hidden(n string) bool { return strings.HasPrefix(n, \".\") }\n\nfunc skipDir(p, n string) bool { return hidden(n) }\n\n", call, gated},
+		"helper_that_stats":                {"func skipDir(p, n string) bool { _, err := os.Stat(p + \"/x\"); return err == nil }\n\n", call, open},
+		"helper_that_calls_another_module": {"func skipDir(p, n string) bool { return othermod.Skip(p) }\n\n", call, open},
+		"helper_that_calls_a_method":       {"type skipper struct{}\n\nfunc (skipper) Skip(string) bool { return true }\n\nfunc skipDir(p, n string) bool { return skipper{}.Skip(p) }\n\n", call, open},
+		"helper_that_calls_a_reader":       {"func readIt(p string) bool { _, err := os.ReadFile(p); return err == nil }\n\nfunc skipDir(p, n string) bool { return readIt(p) }\n\n", call, open},
+		"helper_calling_a_func_value":      {"var probe = func(string) bool { return true }\n\nfunc skipDir(p, n string) bool { return probe(p) }\n\n", call, open},
+		"recursive_helper":                 {"func skipDir(p, n string) bool { return skipDir(p, n) }\n\n", call, gated},
+	} {
+		got := planFixture(t, "w/w_walk_test.go", walk(c.decls, c.prelude))
+		other := open
+		if c.want == open {
+			other = gated
+		}
+		wantRows(t, name, got, []string{c.want}, []string{other})
+	}
+}

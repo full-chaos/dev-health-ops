@@ -119,11 +119,13 @@ type Issuer interface {
 	Issue(ctx context.Context, r *http.Request, req Request) (Pair, error)
 }
 
-// Client calls the issue route of one auth-service.
+// Client calls the issue route of one auth-service, and its session state
+// route (State).
 type Client struct {
-	endpoint string
-	token    string
-	http     *http.Client
+	endpoint      string
+	stateEndpoint string
+	token         string
+	http          *http.Client
 }
 
 // New builds a Client for base (AUTH_PROXY_URL's origin) and token. It
@@ -139,6 +141,7 @@ func New(base *url.URL, token string, timeout time.Duration) (*Client, error) {
 		timeout = defaultTimeout
 	}
 	endpoint := url.URL{Scheme: base.Scheme, Host: base.Host, Path: Path}
+	stateEndpoint := url.URL{Scheme: base.Scheme, Host: base.Host, Path: PathState}
 	// The bearer is a service credential: no proxy from the environment, a
 	// connection pool of its own, and no redirect following, as the auth
 	// proxy dials auth-service.
@@ -152,7 +155,7 @@ func New(base *url.URL, token string, timeout time.Duration) (*Client, error) {
 		ExpectContinueTimeout: time.Second,
 		ForceAttemptHTTP2:     true,
 	}
-	return &Client{endpoint: endpoint.String(), token: token, http: &http.Client{
+	return &Client{endpoint: endpoint.String(), stateEndpoint: stateEndpoint.String(), token: token, http: &http.Client{
 		Transport:     transport,
 		Timeout:       timeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },

@@ -171,6 +171,33 @@ func TestWriteUndecryptableAnswersTheDistinct409(t *testing.T) {
 	}
 }
 
+func TestWriteUndecryptableLogsSettingKeysOnly(t *testing.T) {
+	var logs strings.Builder
+	h := &handlers{logger: slog.New(slog.NewJSONHandler(&logs, nil))}
+	value := sealed(t, unitKeyBefore, "placeholder-secret-value")
+	other := sealedRow(t, "purpose:explain:api_key", "placeholder-explain-value", unitKeyBefore)
+	db := settingsDB{rows: map[string]setting{
+		"provider":                 plainRow("provider", "openai"),
+		"api_key":                  {ID: uuid.New(), Key: "api_key", Value: &value, IsEncrypted: true},
+		"purpose:explain:provider": plainRow("purpose:explain:provider", "openai"),
+		"purpose:explain:api_key":  other,
+	}}
+	h.decryptor = unitDecryptor(t, unitKeyAfter)
+	_, err := h.llmSettingsResponse(context.Background(), db, uuid.NewString())
+	h.byoReadFailed(context.Background(), httptest.NewRecorder(), "read llm settings", err)
+	line := logs.String()
+	for _, want := range []string{`"level":"WARN"`, `"settings":["api_key","purpose:explain:api_key"]`} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("log %q lacks %s", line, want)
+		}
+	}
+	for _, secret := range []string{value, *other.Value, "placeholder-secret-value", "placeholder-explain-value"} {
+		if strings.Contains(line, secret) {
+			t.Fatalf("the log line holds key material: %q", line)
+		}
+	}
+}
+
 func TestReadableStoredKeyLeavesOnlyAnUnreadableKeyOut(t *testing.T) {
 	if got, err := readableStoredKey("old", &undecryptableSettingsError{keys: []string{"api_key"}}); got != "" || err != nil {
 		t.Fatalf("unreadable: got=%q err=%v, want \"\" and nil", got, err)

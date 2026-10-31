@@ -54,11 +54,13 @@
   "W put model null clears": "400 {\"detail\":{\"error\":\"model_required\",\"feature\":\"byo_llm\",\"message\":\"model is required when a BYO LLM provider is saved\"}}",
   "W put model unicode": "200 {\"provider\":\"openai\",\"model\":\"模型-é\",\"api_key\":\"sk-a…mnop\",\"concurrency\":4}",
   "W put null key keeps": "400 {\"detail\":{\"error\":\"model_required\",\"feature\":\"byo_llm\",\"message\":\"model is required when a BYO LLM provider is saved\"}}",
+  "W put over bad rows rolls back": "409 {\"detail\":{\"error\":\"llm_settings_undecryptable\",\"feature\":\"byo_llm\",\"message\":\"The saved key can no longer be read. Replace or remove it.\",\"settings\":[\"api_key\"],\"purposes\":[]}}",
   "W put over empty-string rows": "200 {\"provider\":\"openai\",\"model\":\"m\",\"api_key\":\"sk-e…lled\"}",
   "W put provider only": "400 {\"detail\":{\"error\":\"model_required\",\"feature\":\"byo_llm\",\"message\":\"model is required when a BYO LLM provider is saved\"}}",
   "W put short key": "400 {\"detail\":{\"error\":\"model_required\",\"feature\":\"byo_llm\",\"message\":\"model is required when a BYO LLM provider is saved\"}}",
   "W put tab provider": "400 {\"detail\":{\"error\":\"model_required\",\"feature\":\"byo_llm\",\"message\":\"model is required when a BYO LLM provider is saved\"}}",
   "W put unicode key": "400 {\"detail\":{\"error\":\"model_required\",\"feature\":\"byo_llm\",\"message\":\"model is required when a BYO LLM provider is saved\"}}",
   "W put whitespace provider": "200 {\"provider\":\"\",\"api_key\":\"sk-a…mnop\",\"concurrency\":4}",
+  "get bad rows is a server error": "409 {\"detail\":{\"error\":\"llm_settings_undecryptable\",\"feature\":\"byo_llm\",\"message\":\"The saved key can no longer be read. Replace or remove it.\",\"settings\":[\"api_key\"],\"purposes\":[]}}",
   "settings rows rows": "537ac8b4-37a4-5964-977f-92046fdef32bllmapi_keytruev1:<token>Encrypted BYO LLM API key for this organizationtrue | 537ac8b4-37a4-5964-977f-92046fdef32bllmbase_urlfalse <nil>BYO LLM base URL for this organizationtrue | 537ac8b4-37a4-5964-977f-92046fdef32bllmconcurrencyfalse<nil>false | 537ac8b4-37a4-5964-977f-92046fdef32bllmmodelfalsemBYO LLM model for this organizationtrue | 537ac8b4-37a4-5964-977f-92046fdef32bllmproviderfalseopenaiBYO LLM provider for this organizationtrue | d9ce9770-4fe2-5e08-8d09-6ef3b9ba676cgeneralunrelatedfalsekept<nil>false | d9ce9770-4fe2-5e08-8d09-6ef3b9ba676cllm_budgetlimit_micro_usdfalse250000seed budgetfalse | e5748d0e-f69f-5fc0-b37f-36ef1828f8abgeneralunrelatedfalsekept<nil>false"
 }

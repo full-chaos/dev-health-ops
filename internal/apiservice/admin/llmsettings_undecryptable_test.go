@@ -167,6 +167,25 @@ VALUES ($1, 'llmrotation-admin@example.com', true, true, false, 0, now(), now())
 		assertUndecryptable(t, call(after, "replace", "GET", route+"?purpose=explain", ""), []string{"purpose:explain:api_key"}, []string{"explain"})
 	})
 
+	t.Run("every other BYO route that reads the key answers the same 409", func(t *testing.T) {
+		for _, route := range []struct{ method, path string }{
+			{"GET", route + "/models"},
+			{"GET", route + "/status"},
+			{"POST", route + "/readiness"},
+			{"GET", route + "/spend"},
+		} {
+			got := call(after, "replace", route.method, route.path, "")
+			if got.status != http.StatusConflict || got.detail["error"] != "llm_settings_undecryptable" {
+				t.Errorf("%s %s: status=%d body=%s, want 409 llm_settings_undecryptable", route.method, route.path, got.status, got.raw)
+			}
+			for _, secret := range []string{oldDefault, oldExplain, oldCipher} {
+				if strings.Contains(got.raw, secret) {
+					t.Errorf("%s %s: the body holds key material", route.method, route.path)
+				}
+			}
+		}
+	})
+
 	t.Run("a server with no key at all is still the generic 500", func(t *testing.T) {
 		if got := call(keyless, "replace", "GET", route, ""); got.status != http.StatusInternalServerError {
 			t.Fatalf("status=%d body=%s, want 500", got.status, got.raw)

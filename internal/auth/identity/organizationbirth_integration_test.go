@@ -285,14 +285,30 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), user, e.seedOrg
 
 func TestOnboardOrgRefusesAnInactiveAccount(t *testing.T) {
 	e, ctx := getEnv(t), birthContext(t)
-	user := e.seedUser(t, ctx, uniqueEmail("inactive"), false, true)
-	e.project(t, ctx, user)
-	if _, err := e.owned.OnboardOrganization(ctx, OnboardOrganizationRequest{Principal: user, Name: "Nope"}); !errors.Is(err, ErrAccountInactive) {
-		t.Fatalf("err = %v, want ErrAccountInactive", err)
+	refused := func(t *testing.T, user uuid.UUID) {
+		t.Helper()
+		if _, err := e.owned.OnboardOrganization(ctx, OnboardOrganizationRequest{Principal: user, Name: "Nope"}); !errors.Is(err, ErrAccountInactive) {
+			t.Fatalf("err = %v, want ErrAccountInactive", err)
+		}
+		if n := e.count(t, ctx, `SELECT count(*) FROM public.memberships WHERE user_id = $1`, user); n != 0 {
+			t.Fatalf("memberships = %d, want 0", n)
+		}
 	}
-	if n := e.count(t, ctx, `SELECT count(*) FROM public.memberships WHERE user_id = $1`, user); n != 0 {
-		t.Fatalf("memberships = %d, want 0", n)
-	}
+	t.Run("public row inactive", func(t *testing.T) {
+		user := e.orgless(t, ctx)
+		if _, err := e.admin.Exec(ctx, `UPDATE public.users SET is_active = false WHERE id = $1`, user); err != nil {
+			t.Fatal(err)
+		}
+		refused(t, user)
+	})
+	t.Run("principal disabled", func(t *testing.T) {
+		user := e.seedUser(t, ctx, uniqueEmail("inactive"), false, true)
+		e.project(t, ctx, user)
+		if _, err := e.admin.Exec(ctx, `UPDATE public.users SET is_active = true WHERE id = $1`, user); err != nil {
+			t.Fatal(err)
+		}
+		refused(t, user)
+	})
 }
 
 func TestOnboardOrgRaceOneOrg(t *testing.T) {

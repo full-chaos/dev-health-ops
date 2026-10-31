@@ -13,7 +13,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
 // CHAOS-11400 (acp answers-11400-impl-1, G1 and G2): a refused compat refresh writes go-api's login_failed row
@@ -239,24 +241,23 @@ func TestCompatRefreshOfALegacyTokenOfARemovedMemberIsGuardedBeforeTheExchange(t
 	}
 }
 
-// disablePrincipal disables the user's auth principal as an audited write does: the commit guard is armed for the
-// transaction (a guarded column is written only inside audit.Commit).
+// disablePrincipal disables the user's auth principal through audit.Commit, as the identity store does (a guarded
+// column is written only there).
 func (e *routesEnv) disablePrincipal(t *testing.T, ctx context.Context, user uuid.UUID) {
 	t.Helper()
-	tx, err := e.admin.Begin(ctx)
+	schema, err := authschema.NewValidatedIdentifier("auth")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, `SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true),
-		set_config('dev_health.audit_changed', pg_current_xact_id()::text || ':0', true)`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tx.Exec(ctx, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1`, user); err != nil {
-		t.Fatal(err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		t.Fatal(err)
+	if err := audit.Commit(ctx, e.admin, schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			_, err := tx.Exec(ctx, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1`, user)
+			return err
+		},
+		Audit:     audit.AuditEvent{EventType: "test.principal_disabled", Outcome: audit.OutcomeAllowed},
+		OffStream: audit.OffStreamSessionLifecycle,
+	}); err != nil {
+		t.Fatalf("disable the principal: %v", err)
 	}
 }
 

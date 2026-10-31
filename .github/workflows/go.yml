@@ -895,22 +895,41 @@ jobs:
                 continue
               fi
               logfile="$(mktemp)"
+              textfile="$(mktemp)"
               got_log=0
+              # The log body is a ZIP (PK\x03\x04) or plain text; anything else is no log.
               if gh api "repos/${REPO}/actions/jobs/${id}/logs" > "${logfile}" 2>/dev/null; then
-                got_log=1
+                if [ "$(head -c 4 "${logfile}" | od -An -tx1 | tr -d ' \n')" = "504b0304" ]; then
+                  if unzip -p "${logfile}" > "${textfile}" 2>/dev/null; then
+                    got_log=1
+                  fi
+                elif grep -Iq . "${logfile}"; then
+                  cp "${logfile}" "${textfile}"
+                  got_log=1
+                fi
               fi
-              if [ "${got_log}" -eq 1 ] && grep -q -- 'panic: test timed out after' "${logfile}"; then
+              if [ "${got_log}" -eq 1 ] && grep -q -- 'panic: test timed out after' "${textfile}"; then
                 echo "- ${name}: JOB TIMEOUT (ran to the time limit: a slow runner or a hung test; no test assertion failed; deadline panic): ${url}"
                 echo "${name}" >> "${timed_file}"
-                grep -m 1 -A 10 -- 'panic: test timed out after' "${logfile}" | sed 's/^/    /' || true
+                # The running tests: block = the indented lines after the panic line, up to the first line that is not
+                # indented (a log timestamp is not part of the line); at most 100 lines, then "... N more".
+                awk -v max=100 '
+                  function strip(s) { sub(/^[0-9TZ:.-]+ /, "", s); return s }
+                  state == 0 { if (index(strip($0), "panic: test timed out after") > 0) { print "    " $0; state = 1 } ; next }
+                  { if (strip($0) ~ /^[ \t]/) { n++; if (n <= max) print "    " $0 } else { exit } }
+                  END { if (n > max) printf "    ... %d more\n", n - max }
+                ' "${textfile}" || true
                 got_log=0
               else
                 echo "- ${name}: ${url}"
+                if [ "${got_log}" -eq 0 ]; then
+                  echo "    log unreadable"
+                fi
               fi
               if [ "${got_log}" -eq 1 ]; then
-                grep -m 20 -E -- '--- FAIL|^FAIL|panic:' "${logfile}" | sed 's/^/    /' || true
+                grep -m 20 -E -- '--- FAIL|^FAIL|panic:' "${textfile}" | sed 's/^/    /' || true
               fi
-              rm -f -- "${logfile}"
+              rm -f -- "${logfile}" "${textfile}"
             done <<< "${listing}"
             echo "${cancelled} cancelled by fail-fast; a cancelled shard is not a pass."
           } | tee -a "${summary}" || true

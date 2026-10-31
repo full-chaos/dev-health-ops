@@ -523,3 +523,66 @@ func TestExportedAPIAcceptsNoCatalog(t *testing.T) {
 		}
 	}
 }
+
+func TestEvaluate_EveryDenyPathCarriesTheCatalogVersion(t *testing.T) {
+	_, _, ver := vocab(t)
+	if ver < 1 {
+		t.Fatal("catalog version")
+	}
+	inactive := func(mut func(*fakeSnapshot)) Snapshot {
+		s := orgSnapshot("owner")
+		mut(&s)
+		return s
+	}
+	cases := []struct {
+		name   string
+		req    Request
+		snap   Snapshot
+		reason Reason
+	}{
+		{"nil snapshot", orgRequest("org.read"), nil, ReasonInvalidRequest},
+		{"invalid request", orgRequest("ORG.READ"), orgSnapshot("owner"), ReasonInvalidRequest},
+		{"unknown action", orgRequest("org.fly"), orgSnapshot("owner"), ReasonUnknownAction},
+		{"resource mismatch", Request{Action: "org.read", ResourceKind: "platform"}, orgSnapshot("owner"), ReasonResourceMismatch},
+		{"principal inactive", orgRequest("org.read"), inactive(func(s *fakeSnapshot) { s.principal = StatusSuspended }), ReasonPrincipalInactive},
+		{"organization inactive", orgRequest("org.read"), inactive(func(s *fakeSnapshot) { s.orgStatus[testOrg] = StatusSuspended }), ReasonOrganizationInactive},
+		{"membership inactive", orgRequest("org.read"), inactive(func(s *fakeSnapshot) {
+			s.memberships[testOrg] = Membership{OrgID: testOrg, Role: "owner", Status: StatusRemoved}
+		}), ReasonMembershipInactive},
+		{"no membership", orgRequest("org.read"), inactive(func(s *fakeSnapshot) { s.memberships = map[string]Membership{} }), ReasonNoMembership},
+		{"org mismatch", orgRequest("org.read"), inactive(func(s *fakeSnapshot) {
+			s.memberships[testOrg] = Membership{OrgID: "org-2", Role: "owner", Status: StatusActive}
+		}), ReasonOrgMismatch},
+		{"platform role absent", platformRequest("admin.users"), orgSnapshot("owner"), ReasonPlatformRoleAbsent},
+		{"role unknown", orgRequest("org.read"), orgSnapshot("guest"), ReasonRoleUnknown},
+		{"role scope mismatch", orgRequest("org.read"), orgSnapshot("platform_admin"), ReasonRoleScopeMismatch},
+		{"role lacks action", orgRequest("org.delete"), orgSnapshot("viewer"), ReasonRoleLacksAction},
+	}
+	seen := map[Reason]bool{}
+	e := NewEvaluator()
+	for _, c := range cases {
+		got := e.Evaluate(c.req, c.snap)
+		if got.Allowed || got.Reason != c.reason {
+			t.Errorf("%s: %+v want deny %s", c.name, got, c.reason)
+		}
+		if got.PolicyRevision != ver {
+			t.Errorf("%s: revision %d want %d", c.name, got.PolicyRevision, ver)
+		}
+		seen[c.reason] = true
+	}
+	for _, r := range AllReasons() {
+		if r != ReasonAllowedByRole && !seen[r] {
+			t.Errorf("deny reason %s has no revision case", r)
+		}
+	}
+	var nilEval *Evaluator
+	for name, got := range map[string]Decision{
+		"nil evaluator": nilEval.Evaluate(orgRequest("org.read"), orgSnapshot("owner")),
+		"nil catalog":   newEvaluator(nil).Evaluate(orgRequest("org.read"), orgSnapshot("owner")),
+		"nil both":      newEvaluator(nil).Evaluate(orgRequest("org.read"), nil),
+	} {
+		if got.Allowed || got.PolicyRevision != 0 {
+			t.Errorf("%s: %+v", name, got)
+		}
+	}
+}

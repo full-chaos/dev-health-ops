@@ -373,3 +373,25 @@ func TestOrgsReconcileIsZeroAfterTheAuthSuspend(t *testing.T) {
 		t.Fatalf("after go-api's row is inactive too: classes %v, want none (a zero diff, no refresh needed)", classes)
 	}
 }
+
+// A birth leaves no diff: not at the default gate and not at -exact.
+func TestBirthReconcilesExact(t *testing.T) {
+	e := getReconEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	user := e.seed(t, ctx, "birth-"+uuid.NewString()[:8]+"@example.com", true, true)
+	if err := e.store.Project(ctx, user); err != nil {
+		t.Fatal(err)
+	}
+	owned, err := identity.New(identity.Config{Pool: e.runtime, Schema: e.schema, UsersOwnedByAuth: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	born, err := owned.OnboardOrganization(ctx, identity.OnboardOrganizationRequest{Principal: user, Name: "Exact"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if classes, ok := classesOf(e.orgsSnapshot(t, ctx), born.ID); ok {
+		t.Fatalf("an organization birth is a mismatch: classes %v", classes)
+	}
+}

@@ -474,3 +474,80 @@ func TestOperatorCreateOrgSwitchOffRunsTodaysSQL(t *testing.T) {
 		t.Fatalf("switch-off SQL:\n got %q\nwant %q", db.log, operatorCreateOrgSQL)
 	}
 }
+
+const orgCreateIDRead = "FROM organizations WHERE id = $1"
+
+func orgBornRow() []any {
+	description := "made here"
+	return []any{provOrg, "acme", "Acme", &description, []byte(`{"a":1}`), "team", "manual", true, provStamp, provStamp}
+}
+
+// The switch on: every create goes to auth-service, with or without an owner;
+// go-api writes neither row, reads the created row back and answers it.
+func TestAdminCreateGoesToAuthWithTheSwitchOn(t *testing.T) {
+	for name, body := range map[string]string{
+		"owner":    `{"name": "Acme", "slug": "acme", "description": "made here", "tier": "team", "settings": {"a": 1}, "owner_user_id": "` + provOwner.String() + `"}`,
+		"no owner": `{"name": "Acme", "slug": "acme", "description": "made here", "tier": "team", "settings": {"a": 1}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			db := newOrgCreateDB()
+			db.rows[orgCreateIDRead] = orgBornRow()
+			auth := &orgCreateProvisioner{fakeProvisioner: fakeProvisioner{db: db.provisionDB}}
+			code, answer, _ := callCreateOrg(db, auth, body)
+			if code != http.StatusCreated || !strings.Contains(answer, `"slug":"acme"`) && !strings.Contains(answer, `"slug": "acme"`) {
+				t.Fatalf("answer %d %s", code, answer)
+			}
+			if len(auth.calls) != 1 || auth.calls[0] != "create" {
+				t.Fatalf("auth calls %v, want one create", auth.calls)
+			}
+			in := auth.args[0][0].(authprovision.CreateOrganizationRequest)
+			if in.Actor != provActor || in.Slug != "acme" || in.Name != "Acme" || in.Tier != "team" || in.ManagedBy != "manual" ||
+				in.Description == nil || *in.Description != "made here" || string(in.Settings) != `{"a":1}` {
+				t.Fatalf("request %+v", in)
+			}
+			if (name == "owner") != (in.Owner != nil && *in.Owner == provOwner) {
+				t.Fatalf("owner %v", in.Owner)
+			}
+			for _, step := range db.log {
+				if strings.Contains(step, "INSERT") || step == "BEGIN" {
+					t.Fatalf("go-api wrote: %q", db.log)
+				}
+			}
+		})
+	}
+}
+
+func TestAdminCreateRefusalAnswers(t *testing.T) {
+	for reason, want := range map[string]int{"superuser_required": http.StatusForbidden, "deactivated": http.StatusForbidden} {
+		db := newOrgCreateDB()
+		auth := &orgCreateProvisioner{fakeProvisioner: fakeProvisioner{db: db.provisionDB, err: &authprovision.Refused{Status: want, Reason: reason}}}
+		if code, body, _ := callCreateOrg(db, auth, orgCreateWithOwner); code != want {
+			t.Fatalf("%s: %d %s", reason, code, body)
+		}
+	}
+	db := newOrgCreateDB()
+	auth := &orgCreateProvisioner{fakeProvisioner: fakeProvisioner{db: db.provisionDB, err: authprovision.ErrUnavailable}}
+	if code, body, _ := callCreateOrg(db, auth, orgCreateWithOwner); code != http.StatusServiceUnavailable || body != unavailableBody() {
+		t.Fatalf("auth down: %d %s", code, body)
+	}
+	assertNoAudit(t, db.log)
+}
+
+func TestAdminCreateUnchangedSwitchOff(t *testing.T) {
+	db := newOrgCreateDB()
+	if code, body, _ := callCreateOrg(db, nil, `{"name": "Acme"}`); code != http.StatusCreated {
+		t.Fatalf("answer %d %s", code, body)
+	}
+	want := []string{orgCreateSlugRead, "BEGIN", "tx:" + orgCreateOrgInsert, "COMMIT", "ROLLBACK"}
+	if !reflect.DeepEqual(db.log, want) {
+		t.Fatalf("steps:\n got %q\nwant %q", db.log, want)
+	}
+}
+
+func TestOperatorCreateOrgRefusedWithTheSwitchOn(t *testing.T) {
+	db := &provisionDB{}
+	_, err := Operator{db: db, OrgProvisioning: true}.CreateOrg(context.Background(), CreateOrgInput{Name: "Acme", Tier: "community"})
+	if !errors.Is(err, ErrOrgProvisioningOn) || len(db.log) != 0 {
+		t.Fatalf("err %v, database calls %v; want ErrOrgProvisioningOn and none", err, db.log)
+	}
+}

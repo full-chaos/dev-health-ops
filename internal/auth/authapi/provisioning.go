@@ -127,6 +127,8 @@ type OrganizationReactivator interface {
 // has none yet, never changing an existing row (*identity.Store).
 type OrganizationEnsurer interface {
 	EnsureOrganization(ctx context.Context, orgID uuid.UUID) error
+	OnboardOrganization(ctx context.Context, in identity.OnboardOrganizationRequest) (*identity.BornOrganization, error)
+	CreateOrganization(ctx context.Context, in identity.CreateOrganizationRequest) (*identity.BornOrganization, error)
 }
 
 // ProvisioningDeps are the provisioning routes' collaborators.

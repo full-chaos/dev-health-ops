@@ -46,3 +46,6 @@ func Slug(name string, userID uuid.UUID) string {
 	}
 	return pyjson.FromRunes(runes) + "-" + userID.String()[:8]
 }
+
+// OnboardSlug is not built.
+func OnboardSlug(string, uuid.UUID) string { return "" }

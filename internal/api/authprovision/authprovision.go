@@ -223,6 +223,31 @@ type Accepted struct {
 	Role                          string
 }
 
+// OnboardRequest is the first organization of PrincipalID.
+type OnboardRequest struct {
+	PrincipalID     uuid.UUID
+	Name            string
+	Description     string
+	RequestMetadata json.RawMessage
+}
+
+// CreateOrganizationRequest is an organization a superuser creates. Owner nil
+// creates it with no member.
+type CreateOrganizationRequest struct {
+	Actor           uuid.UUID
+	Slug, Name      string
+	Description     *string
+	Settings        json.RawMessage
+	Tier, ManagedBy string
+	Owner           *uuid.UUID
+}
+
+// Born is a created organization.
+type Born struct {
+	OrgID        uuid.UUID
+	MembershipID *uuid.UUID
+}
+
 // Provisioner is the provisioning routes as go-api calls them.
 type Provisioner interface {
 	AddMember(ctx context.Context, org, principal, actor uuid.UUID, role string, invitedBy *uuid.UUID) (Membership, error)
@@ -232,6 +257,8 @@ type Provisioner interface {
 	CreateInvite(ctx context.Context, in InviteRequest) (Invite, error)
 	AcceptInvite(ctx context.Context, in AcceptRequest) (Accepted, error)
 	Deprovision(ctx context.Context, org, actor uuid.UUID) error
+	OnboardOrganization(ctx context.Context, in OnboardRequest) (Born, error)
+	CreateOrganization(ctx context.Context, in CreateOrganizationRequest) (Born, error)
 }
 
 // Client calls the provisioning routes of one auth-service.
@@ -403,4 +430,14 @@ func (c *Client) Deprovision(ctx context.Context, org, actor uuid.UUID) error {
 		return fmt.Errorf("%w: answer is not the organization", ErrUnavailable)
 	}
 	return nil
+}
+
+// OnboardOrganization is not built.
+func (c *Client) OnboardOrganization(context.Context, OnboardRequest) (Born, error) {
+	return Born{}, ErrUnavailable
+}
+
+// CreateOrganization is not built.
+func (c *Client) CreateOrganization(context.Context, CreateOrganizationRequest) (Born, error) {
+	return Born{}, ErrUnavailable
 }

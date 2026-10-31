@@ -22,3 +22,18 @@ func TestRegisterOrganizationGrantIsTheReviewedColumns(t *testing.T) {
 		t.Fatalf("the public.users write grant changed: %v / %v", insert, update)
 	}
 }
+
+// Every organization birth goes through auth-service, the admin create with
+// its description too.
+func TestRegisterOrganizationGrantHoldsDescription(t *testing.T) {
+	for _, grant := range RegisterOrganizationGrants() {
+		if grant.Table == "organizations" {
+			for _, column := range grant.Columns {
+				if column == "description" {
+					return
+				}
+			}
+		}
+	}
+	t.Fatal("no INSERT grant on public.organizations.description")
+}

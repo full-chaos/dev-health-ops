@@ -47,30 +47,35 @@ const (
 	// ActionIdentityUnlinked: the source unlinked these external identities after the target; the fence deleted the
 	// restored links. Nothing is required of the operator; a user who re-linked after the target links again.
 	ActionIdentityUnlinked ActionKind = "identity_unlinked"
+	// ActionProviderRevocationQueuedFromCredential: the fence deleted these bound PagerDuty credentials (disconnected, or
+	// connected again under another binding, after the target) and queued each stored token for the revocation worker in
+	// the same statement. Nothing is required of the operator.
+	ActionProviderRevocationQueuedFromCredential ActionKind = "provider_revocation_queued_from_credential"
 )
 
 // requeueRunbookStep is the follow-up of revocations an apply only named: the runbook step that sets the source. A
 // second apply of the same manifest changes nothing, so the source must be set before the -apply run.
 const requeueRunbookStep = "docs/operate/maintain/backup-and-restore.md#step-5:set-RESTORE_FENCE_SOURCE_URI-before-the-apply-run"
 
-// credentialRevokeStep is the follow-up of provider credentials the fence deleted: the delete writes no revocation row,
-// and a token rotated by a refresh after the target has none anywhere, so nothing sends the old token's revoke.
+// credentialRevokeStep is the follow-up of provider credentials the fence deleted without queuing a revocation row (not
+// oauthQueued): a token rotated by a refresh after the target has none anywhere, so nothing sends the old token's revoke.
 const credentialRevokeStep = "docs/operate/maintain/backup-and-restore.md#step-6:revoke-the-old-token-at-the-provider-by-hand-then-reconnect-the-credential"
 
 // followUp names the follow-up leaf that automates each action; the operator
 // action line prints it.
 var followUp = map[ActionKind]string{
-	ActionForcePasswordReset:                "none",
-	ActionRequeueProviderRevocation:         requeueRunbookStep,
-	ActionProviderRevocationRequeued:        "none",
-	ActionProviderRevocationRequeuedBlocked: "CHAOS-12010",
-	ActionUserTombstoned:                    "none",
-	ActionReviewIPAllowlist:                 "none",
-	ActionReviewAfterBlindMargin:            "none",
-	ActionReviewScopeEmptied:                "none",
-	ActionReviewMembershipOwner:             "none",
-	ActionReviewMembershipRole:              "none",
-	ActionIdentityUnlinked:                  "none",
+	ActionForcePasswordReset:                     "none",
+	ActionRequeueProviderRevocation:              requeueRunbookStep,
+	ActionProviderRevocationRequeued:             "none",
+	ActionProviderRevocationRequeuedBlocked:      "CHAOS-12010",
+	ActionUserTombstoned:                         "none",
+	ActionReviewIPAllowlist:                      "none",
+	ActionReviewAfterBlindMargin:                 "none",
+	ActionReviewScopeEmptied:                     "none",
+	ActionReviewMembershipOwner:                  "none",
+	ActionReviewMembershipRole:                   "none",
+	ActionIdentityUnlinked:                       "none",
+	ActionProviderRevocationQueuedFromCredential: "none",
 }
 
 // OperatorAction is the ids a section names for one action. Ids only: never a

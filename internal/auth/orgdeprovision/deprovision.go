@@ -1,8 +1,8 @@
 // Package orgdeprovision ends an organization in the auth schema in one
 // audit.Commit: every pending invite revoked, every live membership removed
-// (both tables each), and the organization suspended. go-api runs it before
-// it purges the organization's data, so the purge never leaves an auth
-// membership or invite live.
+// (both tables each), every session of the organization ended, and the
+// organization suspended. go-api runs it before it purges the organization's
+// data, so the purge never leaves an auth membership, invite or session live.
 package orgdeprovision
 
 import (
@@ -22,6 +22,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/membership"
 	"github.com/full-chaos/dev-health-ops/internal/auth/org"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole"
+	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
@@ -36,6 +37,11 @@ var (
 	ErrStore      = errors.New("orgdeprovision: store unavailable")
 )
 
+// errSessionsBusy reports that a session or go-api refresh token row of the
+// organization is locked by another writer (session.ErrBusy): the commit is
+// rolled back, which releases the rows that writer may wait for, and planned again.
+var errSessionsBusy = errors.New("orgdeprovision: a session of the organization is locked by another writer")
+
 // EventDeprovisioned is the audit event of a deprovision.
 const EventDeprovisioned = "auth.organization.deprovisioned"
 
@@ -45,8 +51,10 @@ type Config struct {
 	Orgs        *org.Store
 	Memberships *membership.Store
 	Invites     *invite.Store
-	Logger      *slog.Logger
-	Meter       metric.Meter
+	// Sessions ends the organization's credentials in the commit; nil ends none.
+	Sessions org.SessionEnder
+	Logger   *slog.Logger
+	Meter    metric.Meter
 }
 
 type Actor struct {
@@ -78,6 +86,7 @@ type Service struct {
 	orgs     *org.Store
 	members  *membership.Store
 	invites  *invite.Store
+	sessions org.SessionEnder
 	commit   func(context.Context, audit.Mutation) error
 	logger   *slog.Logger
 	outcomes metric.Int64Counter
@@ -92,7 +101,7 @@ func New(cfg Config) (*Service, error) {
 	case cfg.Orgs == nil || cfg.Memberships == nil || cfg.Invites == nil:
 		return nil, errors.New("orgdeprovision: needs the organization, membership and invite stores")
 	}
-	s := &Service{orgs: cfg.Orgs, members: cfg.Memberships, invites: cfg.Invites, logger: cfg.Logger}
+	s := &Service{orgs: cfg.Orgs, members: cfg.Memberships, invites: cfg.Invites, sessions: cfg.Sessions, logger: cfg.Logger}
 	s.commit = func(ctx context.Context, m audit.Mutation) error { return audit.Commit(ctx, cfg.Pool, cfg.Schema, m) }
 	if s.logger == nil {
 		s.logger = slog.Default()
@@ -126,21 +135,39 @@ type plan struct {
 // its rows name FOR KEY SHARE (step 1: members go-api wrote with no auth row,
 // inviters of go-api-only invites, the actor of its audit row), the organization row FOR UPDATE
 // (step 3, exclusive), Authorize, the pending invites (step 4), every
-// membership row (steps 5 and 6), the suspension, then the revisions inside
-// audit.Commit. It takes no public.users row. Every membership and invite
-// writer reaches the organization row before any membership or invite row,
-// and takes principal rows only before it, so none waits in a cycle with it.
+// membership row (steps 5 and 6), the organization's sessions and go-api
+// refresh tokens NOWAIT (step 6a, session.Store.EndOrganizationInTx), the
+// suspension, then the revisions inside audit.Commit. It takes no public.users
+// row. Every membership and invite writer reaches the organization row before
+// any membership or invite row, and takes principal rows only before it, so
+// none waits in a cycle with it. A row step 6a finds locked rolls the commit
+// back, and after session.BusyAttempts attempts the deprovision is ErrStore
+// with nothing written; go-api stops before its purge and a repeat is safe.
 func (s *Service) Deprovision(ctx context.Context, in Input) (res *Result, err error) {
 	defer func() { s.record(ctx, err) }()
+	busy := 0
 	for range planAttempts {
 		var p plan
 		if p, err = s.plan(ctx, in.OrgID); err != nil {
 			return nil, err
 		}
 		res, err = s.once(ctx, in, p)
+		if errors.Is(err, errSessionsBusy) {
+			if busy++; busy == session.BusyAttempts {
+				break
+			}
+			if werr := session.WaitBusy(ctx, busy); werr != nil {
+				return nil, fmt.Errorf("%w: %w", ErrStore, werr)
+			}
+			continue
+		}
 		if !errors.Is(err, membership.ErrStateMoved) {
 			return res, err
 		}
+	}
+	if errors.Is(err, errSessionsBusy) {
+		s.logger.WarnContext(ctx, "orgdeprovision: gave up: a session of the organization stayed locked", "organization_id", in.OrgID.String())
+		return nil, fmt.Errorf("%w: %w", ErrStore, err)
 	}
 	return nil, ErrStateMoved
 }
@@ -170,6 +197,7 @@ func (s *Service) once(ctx context.Context, in Input, p plan) (*Result, error) {
 	if p.active || len(events) == 0 {
 		events = append(events, org.SuspendedEvent(in.OrgID))
 	}
+	var ended session.Ended
 	err := s.commit(ctx, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			// The auth lock order (membership.Store readPairs), step -1: authorize decides under this lock.
@@ -206,21 +234,35 @@ func (s *Service) once(ctx context.Context, in Input, p plan) (*Result, error) {
 			if err := s.members.ApplyRemoveAll(ctx, tx, p.members); err != nil {
 				return err
 			}
+			if s.sessions != nil {
+				if ended, err = s.sessions.EndOrganizationInTx(ctx, tx, in.OrgID); err != nil {
+					if errors.Is(err, session.ErrBusy) {
+						return errSessionsBusy
+					}
+					return err
+				}
+			}
 			if !active {
 				return nil
 			}
 			return s.orgs.ApplySuspend(ctx, tx, in.OrgID)
 		},
-		Audit:  auditFor(in, p.active),
-		Events: events,
+		Audit:    auditFor(in, p.active),
+		Events:   events,
+		Refusals: []error{errSessionsBusy},
 	})
 	switch {
 	case err == nil:
+		if ended != (session.Ended{}) {
+			s.sessions.RecordEnded(ctx, ended)
+			s.logger.InfoContext(ctx, "organization deprovisioned; its sessions ended", "organization_id", in.OrgID.String(),
+				"sessions", ended.Sessions, "refresh_tokens", ended.RefreshTokens)
+		}
 		return &Result{RemovedMemberships: p.members.Len(), RevokedInvites: p.invites.Len(), Suspended: p.active}, nil
 	case errors.Is(err, audit.ErrNoStateChange):
 		return &Result{}, nil
 	}
-	for _, refusal := range []error{ErrNotFound, ErrDenied, membership.ErrStateMoved} {
+	for _, refusal := range []error{ErrNotFound, ErrDenied, membership.ErrStateMoved, errSessionsBusy} {
 		if errors.Is(err, refusal) {
 			return nil, refusal
 		}

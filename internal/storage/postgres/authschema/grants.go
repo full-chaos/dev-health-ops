@@ -277,11 +277,11 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 		return err
 	}
 	publicStatements = append(publicStatements, auditWrite...)
-	providerFailure, err := ssoProviderFailureStatements(ctx, conn, options, logger)
+	providerWrite, err := ssoProviderWriteStatements(ctx, conn, options, logger)
 	if err != nil {
 		return err
 	}
-	publicStatements = append(publicStatements, providerFailure...)
+	publicStatements = append(publicStatements, providerWrite...)
 
 	tx, err := conn.Begin(ctx)
 	if err != nil {

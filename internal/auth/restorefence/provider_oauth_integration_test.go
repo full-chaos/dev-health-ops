@@ -72,8 +72,9 @@ func assertNoOAuthToken(t *testing.T, ctx context.Context, d *fenceDB, m *Manife
 
 // Q1: a provider credential rotated after T (refresh: version + 1), reconnected (new binding), disconnected (deleted),
 // or deleted and connected again (version 1 again, new binding) comes back with the old token. The fence deletes the
-// restored row and names it (requeue_provider_revocation, encoded ids); an unchanged credential is kept; one created after
-// T stays absent.
+// restored row. A refresh (same binding) is named for the manual revoke (requeue_provider_revocation); a disconnect or a
+// new binding is queued for the revocation worker and named provider_revocation_queued_from_credential (encoded ids). An
+// unchanged credential is kept; one created after T stays absent.
 func TestTheFenceDeletesAProviderTokenRotatedOrRemovedAfterT(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
@@ -107,7 +108,8 @@ func TestTheFenceDeletesAProviderTokenRotatedOrRemovedAfterT(t *testing.T) {
 			t.Errorf("the provider credential section deleted %d rows, want 5", s.Changed)
 		}
 	}
-	sameSet(t, "requeue_provider_revocation (credentials)", reviewIDs(report, "requeue_provider_revocation", "public.provider_oauth_credentials"), oauthIDs(rot, rec, dis, again, odd))
+	sameSet(t, "requeue_provider_revocation (credentials)", reviewIDs(report, "requeue_provider_revocation", "public.provider_oauth_credentials"), oauthIDs(rot, odd))
+	sameSet(t, "provider_revocation_queued_from_credential", reviewIDs(report, "provider_revocation_queued_from_credential", "public.provider_oauth_credentials"), oauthIDs(rec, dis, again))
 	assertNoOAuthToken(t, ctx, restored, manifest, report)
 }
 

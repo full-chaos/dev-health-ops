@@ -137,7 +137,7 @@ func (h *handlers) disconnectPagerDutyCredential(ctx context.Context, orgID, cre
 	}
 	if tokenEncrypted != nil {
 		if plaintext, decErr := h.decryptor.Decrypt(secrets.NewValue(*tokenEncrypted)); decErr == nil {
-			if token, tokErr := pagerDutyRevokeToken(plaintext); tokErr == nil {
+			if token, tokErr := providerfoundation.PagerDutyStoredRevokeToken(plaintext); tokErr == nil {
 				revokeCandidate = &token
 			}
 		}
@@ -245,13 +245,25 @@ func pagerDutyRevocationsOwed(ctx context.Context, q interface {
 // callback, setup drain) runs: the rows a predicate selects, oldest first, held
 // FOR UPDATE SKIP LOCKED.
 func pagerDutyRevocationClaimSQL(predicate string) string {
-	return `SELECT id, token_encrypted FROM provider_oauth_revocations WHERE ` + predicate + ` ORDER BY created_at FOR UPDATE SKIP LOCKED`
+	return `SELECT id, token_encrypted, token_key_version FROM provider_oauth_revocations WHERE ` + predicate + ` ORDER BY created_at FOR UPDATE SKIP LOCKED`
+}
+
+// pagerDutyRevocationTokenOf opens a claimed row and decodes it by its key version: the token every route sender
+// revokes (an oauth-v1 row holds a stored credential's OAuthTokens JSON).
+func pagerDutyRevocationTokenOf(decryptor interface {
+	Decrypt(secrets.Value) ([]byte, error)
+}, encrypted, keyVersion string) (string, error) {
+	plaintext, err := decryptor.Decrypt(secrets.NewValue(encrypted))
+	if err != nil {
+		return "", err
+	}
+	return providerfoundation.PagerDutyRevocationToken(keyVersion, plaintext)
 }
 
 // pagerDutyRevocationClaimOneSQL is the same claim for one row (org deletion
 // sends each row in its own transaction).
 func pagerDutyRevocationClaimOneSQL(predicate string) string {
-	return `SELECT id, token_encrypted FROM provider_oauth_revocations WHERE ` + predicate + ` ORDER BY created_at, id LIMIT 1 FOR UPDATE SKIP LOCKED`
+	return `SELECT id, token_encrypted, token_key_version FROM provider_oauth_revocations WHERE ` + predicate + ` ORDER BY created_at, id LIMIT 1 FOR UPDATE SKIP LOCKED`
 }
 
 // retryPagerDutyRevocationRows is retryPagerDutyRevocations over the rows a
@@ -276,8 +288,8 @@ func (h *handlers) retryPagerDutyRevocationRows(ctx context.Context, orgID, pred
 	}()
 
 	type pendingRevocation struct {
-		id        uuid.UUID
-		encrypted string
+		id                    uuid.UUID
+		encrypted, keyVersion string
 	}
 	rows, err := tx.Query(ctx, query, args...)
 	if err != nil {
@@ -286,7 +298,7 @@ func (h *handlers) retryPagerDutyRevocationRows(ctx context.Context, orgID, pred
 	var pending []pendingRevocation
 	for rows.Next() {
 		var row pendingRevocation
-		if err := rows.Scan(&row.id, &row.encrypted); err != nil {
+		if err := rows.Scan(&row.id, &row.encrypted, &row.keyVersion); err != nil {
 			rows.Close()
 			return false, err
 		}
@@ -299,10 +311,10 @@ func (h *handlers) retryPagerDutyRevocationRows(ctx context.Context, orgID, pred
 
 	complete := true
 	for _, row := range pending {
-		plaintext, decErr := h.decryptor.Decrypt(secrets.NewValue(row.encrypted))
+		token, decErr := pagerDutyRevocationTokenOf(h.decryptor, row.encrypted, row.keyVersion)
 		revokeErr := decErr
 		if decErr == nil {
-			revokeErr = providerfoundation.RevokePagerDutyOAuthToken(ctx, h.httpDoer, h.pagerDuty, string(plaintext))
+			revokeErr = providerfoundation.RevokePagerDutyOAuthToken(ctx, h.httpDoer, h.pagerDuty, token)
 		}
 		if revokeErr != nil {
 			if _, err := tx.Exec(ctx, `UPDATE provider_oauth_revocations SET attempts = attempts + 1, last_error = 'remote_revoke_failed', updated_at = now() WHERE id = $1`, row.id); err != nil {

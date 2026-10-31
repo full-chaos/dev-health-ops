@@ -202,13 +202,7 @@ func ProvisioningRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 		{Method: http.MethodPost, Pattern: PatternOrgDeprovision, Handler: http.HandlerFunc(h.orgDeprovision)},
 		{Method: http.MethodPost, Pattern: PatternOrgReactivate, Handler: http.HandlerFunc(h.orgReactivate)},
 		h.revokeRoute(h.Invites),
-	}
-	// The suspend route is mounted only when the profile document holds its row: without it the route answers 404, the
-	// routes above are unaffected and the service starts. One line names the route and nothing else.
-	if rowsPresentFor(rows, darkPatterns) == nil {
-		routes = append(routes, httpapi.Route{Method: http.MethodPost, Pattern: PatternOrgSuspend, Handler: http.HandlerFunc(h.orgSuspend)})
-	} else {
-		deps.Logger.Info("auth provisioning route not mounted: no endpoint-profile row", "route", PatternOrgSuspend)
+		{Method: http.MethodPost, Pattern: PatternOrgSuspend, Handler: http.HandlerFunc(h.orgSuspend)},
 	}
 	routes = h.withStateRoute(routes, rows)
 	return routes, nil

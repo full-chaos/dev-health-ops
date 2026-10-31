@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1146,67 +1147,32 @@ func TestOrgSuspendRefusalsAreNamedReasonCodes(t *testing.T) {
 	}
 }
 
-// The suspend route is mounted only when the endpoint-profile document holds its row. Without it the route is not
-// mounted (404), the other nine routes are served, the service starts and one startup line names the route; the other
-// routes' switch (provisioningPatterns) is unaffected.
-func TestOrgSuspendIsDarkWithoutItsProfileRow(t *testing.T) {
-	f := newProvFixtureWith(t, embeddedDocWithoutRow(t, PatternOrgSuspend))
-	if got := f.post(PatternOrgSuspend, encode(routeCases()[8].body(f, f.super)), nil); got.Code != http.StatusNotFound {
-		t.Fatalf("suspend without its row: %d %s, want 404", got.Code, got.Body)
+// The suspend route is on the startup gate: a document without its row builds no route at all, and the refusal names it.
+func TestOrgSuspendIsOnTheStartupGate(t *testing.T) {
+	if !slices.Contains(provisioningPatterns, PatternOrgSuspend) {
+		t.Fatalf("provisioningPatterns = %v, want the suspend route", provisioningPatterns)
 	}
-	if f.reactivate.suspends != 0 {
-		t.Fatal("the verb ran for a route that is not mounted")
-	}
-	for _, c := range append(routeCases()[:8], routeCases()[9]) {
-		if got := f.post(c.path, encode(c.body(f, f.super)), nil); got.Code != http.StatusOK {
-			t.Fatalf("%s with the suspend row absent: %d %s, want 200", c.op, got.Code, got.Body)
-		}
-	}
-	lines := 0
-	for _, line := range strings.Split(strings.TrimSpace(f.logs.String()), "\n") {
-		if strings.Contains(line, PatternOrgSuspend) {
-			lines++
-			if !strings.Contains(line, "not mounted") {
-				t.Fatalf("the startup line does not say the route is not mounted: %s", line)
-			}
-		}
-	}
-	if lines != 1 {
-		t.Fatalf("%d startup lines name the suspend route, want 1: %s", lines, f.logs.String())
+	f := newProvFixture(t)
+	routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
+		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate,
+		ProfileRows: embeddedDocWithoutRow(t, PatternOrgSuspend)})
+	if !errors.Is(err, errProvisioningRows) || routes != nil || !strings.Contains(err.Error(), "POST "+PatternOrgSuspend+" ") {
+		t.Fatalf("a document without the suspend row: %d routes, %v; want none and a refusal naming the route", len(routes), err)
 	}
 }
 
-func TestOrgSuspendIsServedWithItsProfileRow(t *testing.T) {
-	f := newProvFixtureWith(t, docWithRow(t, PatternOrgSuspend))
+// The embedded document serves the suspend route with the others, and no startup line calls it unmounted.
+func TestOrgSuspendIsServedWithTheEmbeddedDocument(t *testing.T) {
+	f := newProvFixtureWith(t, authv1.AuthServiceEndpointProfiles)
 	if got := f.post(PatternOrgSuspend, encode(routeCases()[8].body(f, f.super)), nil); got.Code != http.StatusOK {
-		t.Fatalf("suspend with its row: %d %s, want 200", got.Code, got.Body)
+		t.Fatalf("suspend with the embedded document: %d %s, want 200", got.Code, got.Body)
+	}
+	if f.reactivate.suspends != 1 {
+		t.Fatalf("%d suspends, want 1", f.reactivate.suspends)
 	}
 	for _, line := range strings.Split(f.logs.String(), "\n") {
 		if strings.Contains(line, "not mounted") && strings.Contains(line, PatternOrgSuspend) {
-			t.Fatalf("a not-mounted line for the suspend route was logged with its row present: %s", line)
-		}
-	}
-}
-
-func TestOrgSuspendNeedsAnAuthServicePostRowAcceptingTheIssuerCredential(t *testing.T) {
-	for name, edit := range map[string]func(row map[string]any){
-		"another service": func(row map[string]any) { row["service"] = "dev-health-ops-api" },
-		"another method":  func(row map[string]any) { row["method"] = "GET" },
-		"another class":   func(row map[string]any) { row["accepted_credential_classes"] = []any{"workload_token"} },
-	} {
-		var document map[string]any
-		if err := json.Unmarshal(docWithRow(t, PatternOrgSuspend), &document); err != nil {
-			t.Fatal(err)
-		}
-		rows := document["rows"].([]any)
-		edit(rows[len(rows)-1].(map[string]any))
-		raw, err := json.Marshal(document)
-		if err != nil {
-			t.Fatal(err)
-		}
-		f := newProvFixtureWith(t, raw)
-		if got := f.post(PatternOrgSuspend, encode(routeCases()[8].body(f, f.super)), nil); got.Code != http.StatusNotFound {
-			t.Fatalf("%s: suspend %d, want 404", name, got.Code)
+			t.Fatalf("a not-mounted line for the suspend route: %s", line)
 		}
 	}
 }

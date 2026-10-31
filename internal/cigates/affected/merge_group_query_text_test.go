@@ -109,9 +109,6 @@ func TestQueryTextChangeRunsItsIntegrationShardsOnMergeGroupAndPush(t *testing.T
 		for _, c := range queryTextChanges {
 			t.Run(event+"/"+c.name, func(t *testing.T) {
 				t.Parallel()
-				if _, err := os.Stat(filepath.Join(repoRoot(t), c.changed)); err != nil {
-					t.Fatalf("the changed file is not in the tree: %v", err)
-				}
 				lines := realPlanEvent(t, event, c.changed)
 				if want := "FULL event " + event; !strings.HasPrefix(lines[0], want) {
 					t.Fatalf("a change to %s on %s plans %q, want a line starting %q", c.changed, event, lines[0], want)

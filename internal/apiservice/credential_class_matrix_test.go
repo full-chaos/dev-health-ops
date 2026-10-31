@@ -173,7 +173,7 @@ func matrixPath(route string) string { return matrixParam.ReplaceAllString(route
 // tables, the real access validator over them (routed mode), the three scope
 // layers, one route per api row. Only the key source, the HS256 path and the
 // store are counting doubles.
-func newMatrixRig(t *testing.T, guarded bool) *matrixRig {
+func newMatrixRig(t *testing.T, guarded, routed bool) *matrixRig {
 	t.Helper()
 	counts := &lookupCounts{}
 	minter := newEdDSAMinter(t)
@@ -205,8 +205,10 @@ func newMatrixRig(t *testing.T, guarded bool) *matrixRig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := auth.RouteAccess(matrixValidator{inner: routedAccessVerify{validator}, counts: counts}, goAPIAccessService); err != nil {
-		t.Fatal(err)
+	if routed {
+		if err := auth.RouteAccess(matrixValidator{inner: routedAccessVerify{validator}, counts: counts}, goAPIAccessService); err != nil {
+			t.Fatal(err)
+		}
 	}
 	scopeRows, err := goAPIScopeRows()
 	if err != nil {
@@ -229,6 +231,11 @@ func newMatrixRig(t *testing.T, guarded bool) *matrixRig {
 		t.Fatal(err)
 	}
 	return &matrixRig{handler: server.Handler(), counts: counts, minter: minter, rows: rows}
+}
+
+func matrixLegacyOptIn(row map[string]any) bool {
+	validation, _ := row["access_token_validation"].(map[string]any)
+	return validation != nil && validation["legacy_hs256"] == true
 }
 
 func matrixAcceptsAccessToken(row map[string]any) bool {
@@ -283,7 +290,7 @@ func matrixAccepted(row map[string]any, class string) bool {
 // no key read, no HS256 verification and no store read; a class it accepts
 // must resolve.
 func TestCredentialClassMatrix(t *testing.T) {
-	scopeRig, guardRig := newMatrixRig(t, false), newMatrixRig(t, true)
+	scopeRig, guardRig, legacyRig := newMatrixRig(t, false, true), newMatrixRig(t, true, true), newMatrixRig(t, false, false)
 	rig := scopeRig
 	classes := loadMatrixClasses(t)
 	if len(classes) == 0 || len(rig.rows) == 0 {
@@ -301,12 +308,23 @@ func TestCredentialClassMatrix(t *testing.T) {
 		}
 		isJWT := class.has("authorization_scheme", "Bearer") && len(class.markers["jwt_header_alg"]) > 0
 		t.Run(class.id, func(t *testing.T) {
-			for _, cellRig := range []*matrixRig{scopeRig, guardRig} {
+			for _, cellRig := range []*matrixRig{scopeRig, guardRig, legacyRig} {
 				cells, accepts := 0, 0
 				carrier, _ := cellRig.matrixCarrier(t, class)
 				for _, row := range cellRig.rows {
 					cells++
 					status, lookups, validate := cellRig.serve(row, carrier)
+					if cellRig == legacyRig {
+						// Without the routed validator a JWT of any alg is read
+						// by the legacy path unless the row's declaration rules
+						// the caller out first: a webhook row, or a domain row.
+						scopeRow := policy.BearerRowFor(rowClasses(row), matrixLegacyOptIn(row))
+						mayRead := isJWT && !scopeRow.Webhook && !(scopeRow.Domain && !scopeRow.AccessToken)
+						if lookups != 0 && !mayRead {
+							t.Errorf("%s: legacy mode: class %s reached %d lookups", row["id"], class.id, lookups)
+						}
+						continue
+					}
 					if matrixAccepted(row, class.id) {
 						accepts++
 						if status != http.StatusOK || lookups == 0 {

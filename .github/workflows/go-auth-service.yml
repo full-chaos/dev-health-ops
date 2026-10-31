@@ -202,7 +202,7 @@ jobs:
       matrix:
         include:
           - package: internal/auth/authapi
-            targets: FuzzParseRefreshRequest
+            targets: FuzzParseRefreshRequest FuzzDecodeAuthorizationRequest
           - package: internal/auth/contracts
             targets: FuzzParseErrorEnvelope FuzzRevisionUnmarshal FuzzTimestampUnmarshal FuzzParseAccessToken FuzzParseWorkloadToken
           - package: internal/auth/edgetoken

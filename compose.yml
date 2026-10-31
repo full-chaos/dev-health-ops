@@ -218,6 +218,10 @@ volumes:
   # written once by auth-keys-init. Separate from envelope_keys on purpose.
   auth_signing_keys:
     driver: local
+  # The workload bootstrap credential file (profile `auth`), written once by
+  # auth-workload-bootstrap and mounted read-only into go-api only.
+  workload_bootstrap:
+    driver: local
 
 networks:
   # CHAOS-4886: the Auth Control Plane's network (profile `auth`). auth-service and
@@ -1179,6 +1183,14 @@ services:
       GO_API_ENVELOPE_KEY_ID: ${GO_API_ENVELOPE_KEY_ID:-go-api-envelope-2026-08}
       GO_API_ENVELOPE_ISSUER: ${GO_API_ENVELOPE_ISSUER:-dev-health-ops-edge}
       GO_API_ENVELOPE_AUDIENCE: ${GO_API_ENVELOPE_AUDIENCE:-query-api}
+      # The workload bootstrap credential, as a read-only file (written by
+      # auth-workload-bootstrap, profile `auth`). go-api reads it only when
+      # AUTH_SESSION_ISSUE_CREDENTIAL or AUTH_PROVISIONING_CREDENTIAL selects
+      # `workload`; both are unset by default. The issuer must equal
+      # auth-service's AUTH_TOKEN_ISSUER_URL: a token carries the issuer it was
+      # signed under. A path, never the credential.
+      AUTH_WORKLOAD_BOOTSTRAP_FILE: /run/workload/api.bootstrap
+      AUTH_WORKLOAD_ISSUER: ${AUTH_TOKEN_ISSUER_URL:-}
     volumes:
       # Only the private/ subpath: go-api never sees anything else, and
       # nothing but go-api mounts this one.
@@ -1188,6 +1200,10 @@ services:
         read_only: true
         volume:
           subpath: private
+      - type: volume
+        source: workload_bootstrap
+        target: /run/workload
+        read_only: true
     networks:
       - default
       - planes
@@ -1441,6 +1457,71 @@ services:
       auth-grants:
         condition: service_completed_successfully
 
+  # The workload bootstrap credential (profile `auth`), in three one-shots, run by hand in this order and never a
+  # dependency of a running service: a later `up` would run bootstrap-create again, and it refuses a workload with a
+  # live credential. 1 auth-workload-volume: a new named volume is root-owned, the writer runs as uid 65532.
+  # 2 auth-workload-seed: seeds the workload registry. 3 auth-workload-bootstrap: writes the credential of the `api`
+  # workload to /run/workload/api.bootstrap (0600) and keeps only its hash. go-api reads the file from a read-only
+  # mount; auth-service never mounts it. `down -v` deletes the volume.
+  auth-workload-volume:
+    image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+    profiles: [auth]
+    network_mode: none
+    restart: "no"
+    read_only: true
+    user: "0:0"
+    cap_drop: [ALL]
+    cap_add: [CHOWN]
+    security_opt: [no-new-privileges:true]
+    entrypoint: ["/bin/sh", "-eu", "-c"]
+    command: ["chmod 0700 /run/workload && chown 65532:65532 /run/workload"]
+    volumes:
+      - workload_bootstrap:/run/workload
+
+  auth-workload-seed:
+    image: ${DEV_HEALTH_GO_AUTH_MIGRATE_IMAGE:-ghcr.io/full-chaos/dev-health-go-auth-migrate:local}
+    command: ["workloads", "seed", "-apply"]
+    profiles: [auth]
+    networks: [auth_plane]
+    restart: "no"
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    environment:
+      AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${POSTGRES_USER:-postgres} password='${POSTGRES_PASSWORD:-postgres}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
+      AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
+      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
+      AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}
+    depends_on:
+      auth-grants:
+        condition: service_completed_successfully
+
+  auth-workload-bootstrap:
+    image: ${DEV_HEALTH_GO_AUTH_MIGRATE_IMAGE:-ghcr.io/full-chaos/dev-health-go-auth-migrate:local}
+    command: ["workloads", "bootstrap-create", "-workload", "api", "-out", "/run/workload/api.bootstrap", "-apply"]
+    profiles: [auth]
+    networks: [auth_plane]
+    restart: "no"
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    environment:
+      AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${POSTGRES_USER:-postgres} password='${POSTGRES_PASSWORD:-postgres}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
+      AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
+      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
+      AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}
+    volumes:
+      - workload_bootstrap:/run/workload
+    depends_on:
+      auth-workload-volume:
+        condition: service_completed_successfully
+      auth-workload-seed:
+        condition: service_completed_successfully
+
   # The Auth Control Plane HTTP service. DORMANT: its API listener mounts no
   # route, no production token is issued, and nothing calls it. The operator
   # listener (/healthz, /readyz, /metrics) is the one probed, and is published
@@ -1477,6 +1558,12 @@ services:
       AUTH_SIGNING_KEY_FILE: /run/auth/signing/envelope-private-key.pem
       AUTH_SIGNING_KEY_ID: ${AUTH_SIGNING_KEY_ID:-auth-signing-local}
       OTEL_ENABLED: ${OTEL_ENABLED:-false}
+      # The workload-token exchange for a Compose bootstrap credential. Off by
+      # default; on, it needs the issuer (a signed claim, https, nothing dials
+      # it) and the go-api principal. A blank value is unset.
+      AUTH_WORKLOAD_BOOTSTRAP: ${AUTH_WORKLOAD_BOOTSTRAP:-false}
+      AUTH_TOKEN_ISSUER_URL: ${AUTH_TOKEN_ISSUER_URL:-}
+      AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT: ${AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT:-}
     volumes:
       - type: volume
         source: auth_signing_keys

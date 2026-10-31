@@ -194,6 +194,7 @@ internal/migrationmatrix	code	contracts
 internal/migrationmatrix	test	ci
 internal/platform/credshape	test	contracts
 internal/platform/secrets	test	ci
+internal/platform/shell	test	ci
 internal/providersync	test	README.md
 internal/providersync	test	contracts
 internal/providersync	test	docs

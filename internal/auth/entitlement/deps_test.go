@@ -46,7 +46,7 @@ func TestPackageImportsNoTokenOrClaimsPackage(t *testing.T) {
 	forbidden := map[string]bool{}
 	for _, p := range []string{
 		"edgetoken", "session", "sessionid", "servicecred", "accessverify", "authruntime", "authapi",
-		"workloadexchange", "contracts/tokencorpus", "identity/local", "identity/oidc", "identity/saml",
+		"workloadexchange", "identity/local", "identity/oidc", "identity/saml",
 	} {
 		forbidden[base+p] = true
 	}

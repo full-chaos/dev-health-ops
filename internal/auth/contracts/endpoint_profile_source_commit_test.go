@@ -37,7 +37,7 @@ import (
 var fullSHA = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 func gitOut(dir string, args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
+	cmd := exec.Command("git", append([]string{"-c", "maintenance.auto=false", "-c", "gc.auto=0"}, args...)...)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	return strings.TrimRight(string(out), "\n"), err

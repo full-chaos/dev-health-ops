@@ -103,8 +103,8 @@ func hasQuiet(n ast.Node) bool {
 
 // declsOf returns the package-level var/const names of the files whose initializer holds the flag, and
 // the names of the package-level consts that equal "git".
-func declsOf(files []*ast.File) (quiet map[string]bool, gitConst map[string]bool) {
-	quiet, gitConst = map[string]bool{}, map[string]bool{}
+func declsOf(files []*ast.File) (quiet map[string]*ast.ValueSpec, gitConst map[string]bool) {
+	quiet, gitConst = map[string]*ast.ValueSpec{}, map[string]bool{}
 	for _, f := range files {
 		for _, d := range f.Decls {
 			g, ok := d.(*ast.GenDecl)
@@ -116,7 +116,7 @@ func declsOf(files []*ast.File) (quiet map[string]bool, gitConst map[string]bool
 				for i, name := range vs.Names {
 					if i < len(vs.Values) {
 						if hasQuiet(vs.Values[i]) {
-							quiet[name.Name] = true
+							quiet[name.Name] = vs
 						}
 						if l, ok := vs.Values[i].(*ast.BasicLit); ok && g.Tok == token.CONST && l.Value == `"git"` {
 							gitConst[name.Name] = true
@@ -264,10 +264,26 @@ func outermostFunc(f *ast.File, pos token.Pos) ast.Node {
 	return nil
 }
 
-func mentions(n ast.Node, names map[string]bool) bool {
+// mentions reports whether n uses a flagged package-level declaration. An identifier counts only when it
+// resolves to that declaration: the parser leaves Obj nil for a name declared in another file of the
+// package, and sets Obj.Decl to the declaring node otherwise, so a local, a parameter or a range variable
+// of the same name (Obj.Decl is not the package-level spec) does not count. A selector's field name is not
+// an identifier use.
+func mentions(n ast.Node, specs map[string]*ast.ValueSpec) bool {
 	found := false
 	ast.Inspect(n, func(x ast.Node) bool {
-		if id, ok := x.(*ast.Ident); ok && names[id.Name] {
+		if sel, ok := x.(*ast.SelectorExpr); ok {
+			if mentions(sel.X, specs) {
+				found = true
+			}
+			return false
+		}
+		id, ok := x.(*ast.Ident)
+		if !ok {
+			return !found
+		}
+		spec, flagged := specs[id.Name]
+		if flagged && (id.Obj == nil || id.Obj.Decl == spec) {
 			found = true
 		}
 		return !found

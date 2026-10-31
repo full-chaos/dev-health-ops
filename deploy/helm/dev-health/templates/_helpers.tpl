@@ -62,7 +62,7 @@ Call with (dict "ctx" $ "component" "web" "cfg" .Values.web.serviceAccount).
 */}}
 {{- define "dev-health.workloadServiceAccount" -}}
 serviceAccountName: {{ include "dev-health.workloadServiceAccountName" . }}
-automountServiceAccountToken: {{ .cfg.automountToken | default false }}
+automountServiceAccountToken: {{ if hasKey . "automount" }}{{ .automount }}{{ else }}{{ .cfg.automountToken | default false }}{{ end }}
 {{- end }}
 
 {{/*
@@ -771,7 +771,7 @@ rendered one, a Secret reference included, and put a literal in the manifest. au
 names and proves each is refused.
 */}}
 {{- define "dev-health.authServiceEnvNames" -}}
-{{- $names := list "AUTH_DATABASE_URI" "AUTH_JWT_SECRET_KEY" "AUTH_SESSION_SUCCESSOR_KEY" "AUTH_LOGIN_LOCKOUT_KEY" "AUTH_SOCIAL_LINK_ROUTES" "AUTH_ACCESS_TOKEN_CLASS" "AUTH_TOKEN_ISSUER_URL" "AUTH_JWT_AUDIENCE" "AUTH_USERS_OWNED" "AUTH_ORGS_OWNED" "AUTH_PLATFORM_ROLES_OWNED" "AUTH_VALKEY_URI" "AUTH_SERVICE_TRUSTED_PROXIES" "OTEL_ENABLED" "OTEL_EXPORTER_OTLP_ENDPOINT" "OTEL_SAMPLE_RATE" "OTEL_SERVICE_NAME" "EMAIL_PROVIDER" "EMAIL_FROM_ADDRESS" "APP_BASE_URL" "AUTH_MAIL_ALLOW_CONSOLE" -}}
+{{- $names := list "AUTH_DATABASE_URI" "AUTH_JWT_SECRET_KEY" "AUTH_SESSION_SUCCESSOR_KEY" "AUTH_LOGIN_LOCKOUT_KEY" "AUTH_SOCIAL_LINK_ROUTES" "AUTH_ACCESS_TOKEN_CLASS" "AUTH_TOKEN_ISSUER_URL" "AUTH_JWT_AUDIENCE" "AUTH_WORKLOAD_EXCHANGE" "AUTH_WORKLOAD_TRUST_DOMAIN" "AUTH_WORKLOAD_EXCHANGE_CLUSTER_ISSUER" "AUTH_WORKLOAD_EXCHANGE_KUBE_API_URL" "AUTH_WORKLOAD_EXCHANGE_KUBE_CA_FILE" "AUTH_WORKLOAD_EXCHANGE_REVIEWER_TOKEN_FILE" "AUTH_USERS_OWNED" "AUTH_ORGS_OWNED" "AUTH_PLATFORM_ROLES_OWNED" "AUTH_VALKEY_URI" "AUTH_SERVICE_TRUSTED_PROXIES" "OTEL_ENABLED" "OTEL_EXPORTER_OTLP_ENDPOINT" "OTEL_SAMPLE_RATE" "OTEL_SERVICE_NAME" "EMAIL_PROVIDER" "EMAIL_FROM_ADDRESS" "APP_BASE_URL" "AUTH_MAIL_ALLOW_CONSOLE" -}}
 {{- /* EMAIL_API_KEY is appended, not listed, so the worker allow-list keeps the only listed spelling (a chartgates planted defect edits it). */ -}}
 {{- $names = (append (append $names "EMAIL_API_KEY") "RESEND_API_KEY") -}}
 {{- range $provider := list "GITHUB" "GITLAB" "GOOGLE" }}{{- range $suffix := list "CLIENT_ID" "CLIENT_SECRET" }}{{- $names = append $names (printf "SOCIAL_%s_%s" $provider $suffix) }}{{- end }}{{- end -}}
@@ -1031,6 +1031,34 @@ An issuer set under hs256_compat reaches auth-service alone (authTokenIssuer), s
 {{- define "dev-health.authEdDSAIssuer" -}}
 {{- $issuer := include "dev-health.authTokenIssuer" . -}}
 {{- if eq ((default dict .Values.authService.accessToken).class | default "") "eddsa" -}}{{- $issuer -}}{{- end -}}
+{{- end -}}
+
+{{/*
+"true" when authService.workloadExchange.enabled, else "". Checks every input the exchange needs, so a render that
+would start auth-service with a half-set exchange fails here: the service must be on, an issuer URL set (any class),
+the trust domain and cluster issuer named, the API server an https origin, and a peer listed for the API server egress.
+*/}}
+{{- define "dev-health.authWorkloadExchange" -}}
+{{- $w := default dict .Values.authService.workloadExchange -}}
+{{- if eq (include "dev-health.authBool" (dict "value" (default false $w.enabled) "key" "authService.workloadExchange.enabled")) "true" -}}
+{{- if not (eq (include "dev-health.authOn" (dict "flag" "service" "context" .)) "true") }}{{- fail "authService.workloadExchange.enabled needs authService.phase >= 1: there is no auth-service to run the exchange" }}{{- end -}}
+{{- if not (include "dev-health.authTokenIssuer" .) }}{{- fail "authService.workloadExchange.enabled needs authService.accessToken.issuerURL: the exchange signs workload tokens under that issuer" }}{{- end -}}
+{{- range $k := list "trustDomain" "clusterIssuer" }}
+{{- $v := get $w $k -}}
+{{- if or (not (kindIs "string" $v)) (eq (trim $v) "") (ne (trim $v) $v) }}{{- fail (printf "authService.workloadExchange.%s must be a non-empty string without surrounding whitespace" $k) }}{{- end -}}
+{{- end -}}
+{{- if not (and (kindIs "string" $w.kubeAPIURL) (regexMatch "^https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?$" $w.kubeAPIURL)) }}{{- fail "authService.workloadExchange.kubeAPIURL must be an https origin: a host and an optional port, no path, query or credentials" }}{{- end -}}
+{{- if not (and .Values.authService.networkPolicy.enabled (default dict .Values.authService.networkPolicy.egress.kubeAPI).to) }}{{- if .Values.authService.networkPolicy.enabled }}{{- fail "authService.networkPolicy.egress.kubeAPI.to is required while authService.workloadExchange.enabled: without it the policy cuts auth-service off from the API server and every exchange fails" }}{{- end }}{{- end -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/*
+The auth-service ServiceAccount token mount: the configured value, or on while the exchange runs (the pod's own token is
+the TokenReview reviewer token).
+*/}}
+{{- define "dev-health.authServiceAutomount" -}}
+{{- if or (include "dev-health.authWorkloadExchange" .) ((default dict .Values.authService.serviceAccount).automountToken) }}true{{ else }}false{{ end }}
 {{- end -}}
 
 {{/*

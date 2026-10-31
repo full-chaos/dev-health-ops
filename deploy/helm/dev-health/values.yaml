@@ -218,6 +218,21 @@ authService:
     #    and query-api verify web tokens as before. It mounts auth-service's
     #    discovery and JWKS routes and is required by the workload-token exchange.
     issuerURL: ""
+  # -- The Kubernetes workload-token exchange (POST /internal/v1/token/exchange): a workload presents its
+  #    projected ServiceAccount token and auth-service has the cluster API server review it (TokenReview).
+  #    Off by default. On, the chart renders AUTH_WORKLOAD_EXCHANGE and its settings, the ClusterRole
+  #    and ClusterRoleBinding that let auth-service's own ServiceAccount create tokenreviews (and nothing
+  #    else), mounts that ServiceAccount's token as the reviewer token, opens egress to the API server
+  #    (networkPolicy.egress.kubeAPI) and admits go-api's pods on the API port. Needs
+  #    accessToken.issuerURL (any class) and authService.phase >= 1.
+  workloadExchange:
+    enabled: false
+    # -- AUTH_WORKLOAD_TRUST_DOMAIN: names this cluster in the workload bindings. Required when enabled.
+    trustDomain: ""
+    # -- AUTH_WORKLOAD_EXCHANGE_CLUSTER_ISSUER: the ServiceAccount token issuer (iss) of this cluster. Required when enabled.
+    clusterIssuer: ""
+    # -- AUTH_WORKLOAD_EXCHANGE_KUBE_API_URL: the API server's https origin (no path).
+    kubeAPIURL: "https://kubernetes.default.svc"
   # -- AUTH_SOCIAL_LINK_ROUTES: mounts the bearer-only social link and unlink
   #    routes. Needs phase >= 2 (the session secrets).
   socialLinkRoutes: false
@@ -515,6 +530,12 @@ authService:
       valkey:
         to: []
         port: 6379
+      # -- Peers of the Kubernetes API server, `to` entries plus port. REQUIRED while
+      #    authService.workloadExchange.enabled (the chart cannot see the API server address; for
+      #    `kubernetes.default.svc` list its ClusterIP or the control plane addresses).
+      kubeAPI:
+        to: []
+        port: 443
       # -- Peers of the key custody service (KMS), `to` entries plus port. File
       #    custody (Wave 1) needs none, so the default grants no egress for it.
       keyCustody:

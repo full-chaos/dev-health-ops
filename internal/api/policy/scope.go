@@ -43,7 +43,7 @@ func EffectiveOrgID(ctx context.Context, user *User) string {
 	if user == nil {
 		return ""
 	}
-	if user.IsSuperuser {
+	if user.Holds(ActionAdminImpersonate) {
 		if session := ImpersonationFrom(ctx); session != nil {
 			return session.TargetOrgID.String()
 		}

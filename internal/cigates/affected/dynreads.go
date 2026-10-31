@@ -219,7 +219,9 @@ type dirGroup struct {
 	structFields map[string][]string
 	badStruct    map[string]bool
 	fieldKind    map[string]pathInfo
-	flowG        *flowGroup      // typeNameOf: the type resolution of the value flow
+	flowG        *flowGroup // typeNameOf: the type resolution of the value flow
+	typeMemo     map[ast.Expr]string
+	needFields   bool            // some code of the directory assigns a Dir field: the only reader of the field kinds
 	typeNames    map[string]bool // the package-level types of the directory
 }
 
@@ -380,6 +382,15 @@ func newDirGroup(dir, module string, files []*srcFile) *dirGroup {
 				for _, l := range x.Lhs {
 					if id, ok := l.(*ast.Ident); ok {
 						assigned[id.Name] = true
+					}
+					if sel, ok := l.(*ast.SelectorExpr); ok && sel.Sel.Name == "Dir" && len(x.Lhs) == len(x.Rhs) {
+						for _, r := range x.Rhs {
+							if rs, ok := ast.Unparen(r).(*ast.SelectorExpr); ok {
+								if _, qualified := rs.X.(*ast.Ident); qualified {
+									g.needFields = true // cmd.Dir = r.dir
+								}
+							}
+						}
 					}
 				}
 			case *ast.UnaryExpr:
@@ -656,7 +667,7 @@ func (c *fileCtx) pathKind(e ast.Expr, sc *scope) pathInfo {
 			if v, ok := sc.view(id.Name); ok {
 				return c.fieldKind(v, x.Sel.Name, sc)
 			}
-			if _, imp := c.s.imports[id.Name]; !imp {
+			if _, imp := c.s.imports[id.Name]; !imp && c.g.needFields {
 				if k, ok := c.g.fieldKind[c.g.typeNameOf(x.X)+"."+x.Sel.Name]; ok {
 					return k
 				}
@@ -1244,9 +1255,11 @@ func (g *dirGroup) bindParams() {
 		}
 	}
 	g.fieldKind = map[string]pathInfo{}
-	for t, fields := range g.structFields {
-		for _, f := range fields {
-			g.fieldKind[t+"."+f] = pathInfo{}
+	if g.needFields {
+		for t, fields := range g.structFields {
+			for _, f := range fields {
+				g.fieldKind[t+"."+f] = pathInfo{}
+			}
 		}
 	}
 	state := map[*ast.FuncDecl][]pathInfo{}
@@ -1303,7 +1316,9 @@ func (g *dirGroup) bindParams() {
 				nextVars[c.pkg][name] = c.pathKind(e, newScope(nil))
 			}
 			c.eachBody(state, func(body ast.Node, sc *scope) {
-				g.collectFields(c, body, sc, nextFields)
+				if g.needFields {
+					g.collectFields(c, body, sc, nextFields)
+				}
 				ast.Inspect(body, func(n ast.Node) bool {
 					call, ok := n.(*ast.CallExpr)
 					if !ok {
@@ -1388,11 +1403,17 @@ func (g *dirGroup) bindParams() {
 
 // typeNameOf is the struct type of the directory an expression has, "" when the scan cannot tell.
 func (g *dirGroup) typeNameOf(e ast.Expr) string {
+	if v, ok := g.typeMemo[e]; ok {
+		return v
+	}
 	if g.flowG == nil {
 		g.flowG = newFlowGroup(g.files)
+		g.typeMemo = map[ast.Expr]string{}
 	}
 	r := &flowRun{g: g.flowG}
-	return r.typeName(r.typeOf(e, 0))
+	v := r.typeName(r.typeOf(e, 0))
+	g.typeMemo[e] = v
+	return v
 }
 
 // collectFields joins into out, per field of the directory's structs ("T.field"), the kind of every value the

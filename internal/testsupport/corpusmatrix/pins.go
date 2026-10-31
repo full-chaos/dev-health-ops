@@ -5,8 +5,8 @@ import (
 	"sort"
 )
 
-// Pin names the golden row that proves a not-applicable Denied cell: the route answers 200 to a credential or address
-// it would refuse elsewhere, so the cell has no refusal to record.
+// Pin names the golden row that proves a not-applicable Denied cell: the route answers 200 (or 400, which the malformed
+// class records) to a credential or address another route would refuse with 401 or 403, so the cell has no refusal to record.
 type Pin struct {
 	Corpus string
 	Name   string
@@ -14,7 +14,13 @@ type Pin struct {
 }
 
 // PinnedDenied proves, per journey, why Classified accepts the Denied cell as not applicable.
-var PinnedDenied = map[Cell]Pin{}
+var PinnedDenied = map[Cell]Pin{
+	{"validate", Denied}: {"session", "validate: garbage", 200},
+	{"logout", Denied}:   {"session", "logout: anonymous garbage", 200},
+	{"recovery", Denied}: {"venue", "forgot: unknown address", 200},
+	{"resend", Denied}:   {"venue", "resend: unknown address", 200},
+	{"verify", Denied}:   {"venue", "verify: signed, no such token", 400},
+}
 
 // CheckPins returns every way the pins fail to prove their cells: a pin on a cell that is not classified not-applicable,
 // a not-applicable Denied cell with no pin, or a pinned row missing from the goldens or recorded with another status.

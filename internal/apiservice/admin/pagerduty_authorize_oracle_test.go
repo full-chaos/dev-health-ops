@@ -87,7 +87,7 @@ func runPagerDutyAuthorizeOracle(t *testing.T, mode, digest string) {
 		Root:      root,
 		JWTKey:    jwtKey,
 		PythonEnv: pythonEnv,
-		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
+		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {
 				t.Helper()
@@ -128,7 +128,7 @@ VALUES ($1, $2, 'v1:not-decryptable-here', now() - interval '2 hours', now() - i
 				"admin_upper":   {"user_id": adminID.String(), "email": "pd-auth-admin@example.com", "org_id": strings.ToUpper(orgs["a"].String()), "role": "admin"},
 				"member":        {"user_id": memberID.String(), "email": "pd-auth-member@example.com", "org_id": orgs["a"].String(), "role": "member"},
 			}
-		},
+		}),
 	})
 
 	jsonAuth := func(name string) map[string]string {

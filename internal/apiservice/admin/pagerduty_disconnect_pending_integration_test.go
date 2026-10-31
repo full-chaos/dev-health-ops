@@ -58,7 +58,7 @@ func TestPagerDutyDisconnectPendingRevocations(t *testing.T) {
 		GoOnly: true,
 		Root:   root,
 		JWTKey: jwtKey,
-		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
+		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {
 				t.Helper()
@@ -102,7 +102,7 @@ VALUES ($1, $2, 'pagerduty', 'default', true, NULL, '{"auth_mode":"oauth","regio
 				tokens[slug] = map[string]any{"user_id": adminID.String(), "email": "pd-pending-admin@example.com", "org_id": id.String(), "role": "admin"}
 			}
 			return tokens
-		},
+		}),
 	})
 
 	configured := func(deps *apiservice.Deps) {

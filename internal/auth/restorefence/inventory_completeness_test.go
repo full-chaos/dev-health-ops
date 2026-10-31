@@ -18,9 +18,8 @@ import (
 // auth schema, or a legacy public table that carries an access state, must be a section or be listed here.
 var excluded = map[string]string{
 	// Ruled out with a ticket (D6453 am.2, D6454, D6459).
-	"auth.login_attempts":            "covered by apply from the source only (RESTORE_FENCE_SOURCE_URI; live locks, raise-only), not a manifest section: the key is an identifier hash",
-	"public.login_attempts":          "covered by apply from the source only (RESTORE_FENCE_SOURCE_URI; live locks, raise-only), not a manifest section: the key is an email",
-	"auth.platform_role_assignments": "ticket 11846 (ACP 4.15a/4.15b): a revoke is a DELETE the fence cannot see",
+	"auth.login_attempts":   "covered by apply from the source only (RESTORE_FENCE_SOURCE_URI; live locks, raise-only), not a manifest section: the key is an identifier hash",
+	"public.login_attempts": "covered by apply from the source only (RESTORE_FENCE_SOURCE_URI; live locks, raise-only), not a manifest section: the key is an email",
 	// Not access-bearing state.
 	"auth.actions":                  "not access-bearing: closed vocabulary written by the migration role",
 	"auth.roles":                    "not access-bearing: closed vocabulary written by the migration role",

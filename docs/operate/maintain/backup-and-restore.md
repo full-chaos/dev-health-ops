@@ -293,6 +293,7 @@ credentials, a pending invite the source no longer holds pending (it ends revoke
 external identities unlinked after the target (deleted again and named in `identity_unlinked`, ids only; a link made or
 re-made after the target is not carried, the user links again; a blind margin deletes none and lists every link for
 review),
+platform role assignments revoked after the target (deleted again, matched by id; a grant made after the target is never inserted and is named in `regrant_platform_role`, ids only, for a platform administrator to grant again; `no_active_platform_admin` names that no platform administrator is active after the fence, and the break-glass verb is `auth-migrate platform-role-bootstrap`; a blind margin deletes none and lists every assignment for review),
 and the legacy public tables: refresh tokens, service and ingest credentials, webhook bindings, invites, users (disabled,
 token version, and a user the source deleted is disabled, never deleted), membership mirror rows, single-use reset and
 verification tokens, and SAML replays. Revision floors are raised past everything the source reached, so no

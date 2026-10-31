@@ -76,6 +76,7 @@ internal/auth/platformrole	superuser_sites_census_test.go	unexpressed	-	-
 internal/auth/platformrole	superuser_writes_census_test.go	unexpressed	-	-
 internal/auth/restorefence	consumers_test.go	unexpressed	-	*.go
 internal/auth/restorefence	inventory_completeness_test.go	.	tree	*.go
+internal/auth/restorefence	platform_roles_test.go	internal/auth/restorefence	dir	*
 internal/auth/restorefence	specs_test.go	internal/pgmigrate/sql	dir	*
 internal/auth/writerinventory	scan_test.go	unexpressed	-	-
 internal/bigboycompose	billing_edge_override_test.go	unexpressed	-	-

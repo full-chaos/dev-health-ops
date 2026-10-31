@@ -98,6 +98,9 @@ type PrincipalAccess struct {
 	Session             *SessionAccess
 	AskDev              bool
 	AgentContextRuntime bool
+	// ACRBasis names the grant behind AgentContextRuntime (licensing.ACRBasis*);
+	// logged, never served (CHAOS-3695).
+	ACRBasis string
 	// Repositories is the org's repository inventory (repoinventory), sorted.
 	// Empty means none.
 	Repositories []string
@@ -246,7 +249,7 @@ func principalAccessHandler(store PrincipalAccessStore, auth routeAuth, logger *
 		attrs := []slog.Attr{
 			slog.String("org_id", orgRaw), slog.String("user_id", userRaw), slog.String("credential_id", cred.ID),
 			slog.Bool("member", access.Member), slog.Bool("impersonating", access.Impersonating), slog.Bool("ask_dev", access.AskDev),
-			slog.Bool("agent_context_runtime", access.AgentContextRuntime),
+			slog.Bool("agent_context_runtime", access.AgentContextRuntime), slog.String("acr_entitlement_basis", access.ACRBasis),
 			slog.Int("repositories", len(access.Repositories)), slog.Duration("elapsed", elapsed),
 		}
 		if access.Session != nil {

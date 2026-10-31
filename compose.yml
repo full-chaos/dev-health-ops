@@ -1476,7 +1476,7 @@ services:
     cap_add: [CHOWN]
     security_opt: [no-new-privileges:true]
     entrypoint: ["/bin/sh", "-eu", "-c"]
-    command: ['[ "$(stat -c %u:%a /run/workload)" = 65532:700 ] || { chmod 0700 /run/workload && chown 65532:65532 /run/workload; }']
+    command: ['[ "$$(stat -c %u:%a /run/workload)" = 65532:700 ] || { chmod 0700 /run/workload && chown 65532:65532 /run/workload; }']
     volumes:
       - workload_bootstrap:/run/workload
 

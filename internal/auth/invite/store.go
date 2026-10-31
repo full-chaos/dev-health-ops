@@ -220,8 +220,8 @@ func (s *Store) lockOrg(ctx context.Context, tx audit.TxOps, orgID uuid.UUID, au
 	return lookup
 }
 
-// publicAuditRow is go-api's audit_logs row, written by the shared writer (publicaudit.Insert: internal/api/audit.PGWriter's
-// columns and value types).
+// publicAuditRow is go-api's audit_logs row, written by the shared writer in the invite's audited transaction
+// (publicaudit.InsertInAuditTx: internal/api/audit.PGWriter's columns, the JSON columns as text cast to json).
 func (s *Store) publicAuditRow(ctx context.Context, tx audit.TxOps, orgID uuid.UUID, userID *uuid.UUID, action, resourceID string,
 	description string, changes *pyjson.Object, pa *PublicAudit, at time.Time) error {
 	encoded, err := pyjson.Marshal(changes)
@@ -235,7 +235,7 @@ func (s *Store) publicAuditRow(ctx context.Context, tx audit.TxOps, orgID uuid.U
 	if pa != nil && pa.Description != nil {
 		description = *pa.Description
 	}
-	return publicaudit.Insert(ctx, tx, publicaudit.Row{
+	return publicaudit.InsertInAuditTx(ctx, tx, publicaudit.Row{
 		OrgID: orgID, UserID: userID, Action: action, ResourceType: "membership", ResourceID: resourceID,
 		Description: &description, Changes: encoded, RequestMetadata: metadata, Status: "success", CreatedAt: at,
 	})

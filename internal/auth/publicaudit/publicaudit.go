@@ -52,6 +52,26 @@ func Insert(ctx context.Context, exec Execer, row Row) error {
 	return err
 }
 
+const insertTextJSONSQL = `INSERT INTO public.audit_logs
+	(id, org_id, user_id, action, resource_type, resource_id, description,
+	 changes, request_metadata, status, error_message, created_at)
+VALUES
+	($1, $2, $3, $4, $5, $6, $7, $8::json, $9::json, $10, $11, $12)`
+
+// InsertInAuditTx is Insert through an audited transaction (audit.TxOps). Its statements run in pgx's exec mode,
+// which sends each argument with the type of its Go value, so a []byte would arrive as bytea: the two JSON columns
+// go as text with an explicit ::json cast instead. The stored row is the same: json keeps the text verbatim.
+func InsertInAuditTx(ctx context.Context, exec Execer, row Row) error {
+	status := row.Status
+	if status == "" {
+		status = "success"
+	}
+	_, err := exec.Exec(ctx, insertTextJSONSQL,
+		uuid.New(), row.OrgID, row.UserID, row.Action, row.ResourceType, row.ResourceID, row.Description,
+		string(orEmptyObject(row.Changes)), string(orEmptyObject(row.RequestMetadata)), status, row.ErrorMessage, row.CreatedAt.UTC())
+	return err
+}
+
 func orEmptyObject(raw []byte) []byte {
 	if len(raw) == 0 {
 		return []byte("{}")

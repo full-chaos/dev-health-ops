@@ -63,6 +63,36 @@ func TestInsertWritesGoAPIsArguments(t *testing.T) {
 	}
 }
 
+// InsertInAuditTx hands the same values, the two JSON columns as their text, and casts them to json in the SQL.
+func TestInsertInAuditTxWritesGoAPIsValuesWithTextJSON(t *testing.T) {
+	at := time.Date(2026, 10, 31, 9, 30, 0, 0, time.FixedZone("x", 3600))
+	org, user := uuid.New(), uuid.New()
+	description := "User registered"
+	entry := audit.Entry{OrgID: org, UserID: &user, Action: "create", ResourceType: "user", ResourceID: user.String(),
+		Description: &description, Changes: []byte(`{"email": "a@example.com"}`)}
+	goAPI := &recordedExec{}
+	if _, err := (audit.PGWriter{Now: func() time.Time { return at }}).Write(context.Background(), goAPI, entry); err != nil {
+		t.Fatal(err)
+	}
+	got := &recordedExec{}
+	if err := InsertInAuditTx(context.Background(), got, Row{OrgID: org, UserID: &user, Action: "create", ResourceType: "user",
+		ResourceID: user.String(), Description: &description, Changes: entry.Changes, CreatedAt: at}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got.sql, "$8::json, $9::json") || len(got.args) != len(goAPI.args) {
+		t.Fatalf("%q with %d args, go-api %d", got.sql, len(got.args), len(goAPI.args))
+	}
+	for i := 1; i < len(goAPI.args); i++ {
+		want := goAPI.args[i]
+		if raw, ok := want.([]byte); ok {
+			want = string(raw)
+		}
+		if !reflect.DeepEqual(got.args[i], want) {
+			t.Errorf("argument %d = %#v, go-api %#v", i+1, got.args[i], want)
+		}
+	}
+}
+
 func TestInsertReturnsTheExecError(t *testing.T) {
 	boom := errors.New("permission denied")
 	if err := Insert(context.Background(), &recordedExec{err: boom}, Row{}); !errors.Is(err, boom) {

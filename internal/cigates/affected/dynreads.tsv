@@ -52,7 +52,6 @@ internal/auth/authruntime	audit_request_id_scan_test.go
 internal/auth/authruntime	endpoint_profile_rows_test.go
 internal/auth/authruntime	fixed_credential_scan_test.go
 internal/auth/authruntime	kidwiring_callers_test.go
-internal/auth/contracts	access_token_acr_audiences_test.go
 internal/auth/contracts	access_token_goldens_test.go
 internal/auth/contracts	authorization_goldens_test.go
 internal/auth/contracts	authorization_schema_test.go

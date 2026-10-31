@@ -25,6 +25,12 @@ const workloadsUsage = "usage: auth-migrate workloads seed [-apply] | bind -work
 	" | bootstrap-revoke -credential ID -reason compromised|owner_request [-apply]" +
 	" | bootstrap-disable -workload N [-apply]" +
 	" | enable -workload N -operator ID [-enable-principal] [-apply]" +
+	" | disable -workload N [-apply]" +
+	" | rebind -trust-domain T -issuer I -namespace NS -service-account SA -uid U [-apply]" +
+	" | binding-disable|binding-enable -trust-domain T -issuer I -namespace NS -service-account SA [-apply]" +
+	"\ndisable sets the workload row's and its principal's disabled mark at once: the exchange refuses every binding of N. enable undoes it." +
+	"\nrebind sets the ServiceAccount uid pin of a binding. Read U from the cluster (kubectl get sa NAME -n NS -o jsonpath='{.metadata.uid}'), never from a failing caller:" +
+	" a recreated ServiceAccount of the same name is a new identity. It never enables a disabled binding; binding-enable does that." +
 	"\nA bootstrap value is written once, to a new 0600 -out file, and never to argv, stdout or a log." +
 	"\nPut -out in a directory writable only by the operator: a failed verb's file is removed by path." +
 	"\nbootstrap-disable revokes every live bootstrap value of N at once; workload tokens issued before it live at most 300 s." +
@@ -43,6 +49,8 @@ type workloadsArgs struct {
 	overlap      time.Duration
 	credentialID uuid.UUID
 	reason       string
+
+	tuple workload.BindingTuple
 
 	operator        uuid.UUID
 	enablePrincipal bool
@@ -176,6 +184,31 @@ func parseWorkloadsArgs(args []string, stderr io.Writer) (workloadsArgs, error) 
 			return workloadsArgs{}, errors.New("enable needs -operator, a principal id")
 		}
 		parsed.operator = id
+	case "disable":
+		if err := only(parsed.verb, "workload"); err != nil {
+			return workloadsArgs{}, err
+		}
+		if workload.ValidateName(parsed.name) != nil {
+			return workloadsArgs{}, errors.New("disable needs a valid -workload")
+		}
+	case "rebind", "binding-disable", "binding-enable":
+		allowed := []string{"trust-domain", "issuer", "namespace", "service-account"}
+		if parsed.verb == "rebind" {
+			allowed = append(allowed, "uid")
+		}
+		if err := only(parsed.verb, allowed...); err != nil {
+			return workloadsArgs{}, err
+		}
+		parsed.tuple = workload.BindingTuple{TrustDomain: parsed.binding.TrustDomain, Issuer: parsed.binding.Issuer,
+			Namespace: parsed.binding.Namespace, ServiceAccountName: parsed.binding.ServiceAccountName}
+		if workload.ValidateTuple(parsed.tuple) != nil {
+			return workloadsArgs{}, fmt.Errorf("%s needs a valid -trust-domain, -issuer, -namespace and -service-account", parsed.verb)
+		}
+		withEnv := parsed.binding
+		withEnv.Environment = "x"
+		if parsed.verb == "rebind" && (!set["uid"] || workload.ValidateBinding(withEnv) != nil) {
+			return workloadsArgs{}, errors.New("rebind needs -uid, a service account uid (lowercase 8-4-4-4-12 hex)")
+		}
 	default:
 		return workloadsArgs{}, errors.New("unknown verb")
 	}
@@ -272,6 +305,10 @@ func executeWorkloads(parent context.Context, args []string, lookup secrets.Look
 		fmt.Fprintf(stdout, "workloads bind applied: workload=%s environment=%s binding=%s\n", parsed.name, parsed.binding.Environment, id)
 	case "enable":
 		return runEnable(ctx, store, parsed, stdout, stderr)
+	case "disable":
+		return runDisable(ctx, store, parsed, stdout, stderr)
+	case "rebind", "binding-disable", "binding-enable":
+		return runBinding(ctx, store, parsed, stdout, stderr)
 	default:
 		return runBootstrap(ctx, store, parsed, stdout, stderr)
 	}
@@ -284,6 +321,10 @@ func failureClass(err error) string {
 		return "workload not registered"
 	case errors.Is(err, workload.ErrBindingTaken):
 		return "federation tuple already bound"
+	case errors.Is(err, workload.ErrBindingNotFound):
+		return "binding not found"
+	case errors.Is(err, workload.ErrRebindStateChanged):
+		return "the binding changed during the run; read it again"
 	case errors.Is(err, workload.ErrBindingInvalid):
 		return "binding field refused"
 	case errors.Is(err, workload.ErrBootstrapLive):

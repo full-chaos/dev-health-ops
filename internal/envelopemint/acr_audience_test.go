@@ -4,7 +4,7 @@ import (
 	"crypto/ed25519"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/acraudience"
 )
 
 // TestMintRefusesAnACRAudience: an effective-principal envelope never carries
@@ -19,7 +19,7 @@ func TestMintRefusesAnACRAudience(t *testing.T) {
 	if _, err := Mint(key, principal, Options{}); err != nil {
 		t.Fatalf("control: %v", err)
 	}
-	for _, audience := range []string{contracts.ACRAPIAudience, contracts.ACRMCPAudience} {
+	for _, audience := range []string{acraudience.API, acraudience.MCP} {
 		if _, err := Mint(key, principal, Options{Audience: audience}); err == nil {
 			t.Errorf("minted with the option audience %s", audience)
 		}

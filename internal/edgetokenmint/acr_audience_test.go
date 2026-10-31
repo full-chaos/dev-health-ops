@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/acraudience"
 )
 
 // TestMintRefusesAnACRAudience: the proof edge token never carries an ACR
@@ -15,7 +15,7 @@ func TestMintRefusesAnACRAudience(t *testing.T) {
 	if _, err := Mint([]byte(testKey), testPrincipal(), Options{Now: now}); err != nil {
 		t.Fatalf("control: %v", err)
 	}
-	for _, audience := range []string{contracts.ACRAPIAudience, contracts.ACRMCPAudience} {
+	for _, audience := range []string{acraudience.API, acraudience.MCP} {
 		if _, err := Mint([]byte(testKey), testPrincipal(), Options{Audience: audience, Now: now}); err == nil {
 			t.Errorf("minted with the option audience %s", audience)
 		}

@@ -3,7 +3,7 @@ package principal
 import (
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/acraudience"
 )
 
 // TestNoEnvelopeVerifierTakesAnACRAudience: GO_API_ENVELOPE_AUDIENCE reaches
@@ -13,7 +13,7 @@ func TestNoEnvelopeVerifierTakesAnACRAudience(t *testing.T) {
 	if _, err := NewVerifier("jwks.json", "https://issuer.example.test", "query-api"); err != nil {
 		t.Fatalf("control: %v", err)
 	}
-	for _, audience := range []string{contracts.ACRAPIAudience, contracts.ACRMCPAudience} {
+	for _, audience := range []string{acraudience.API, acraudience.MCP} {
 		if _, err := NewVerifier("jwks.json", "https://issuer.example.test", audience); err == nil {
 			t.Errorf("an envelope verifier was built for %s", audience)
 		}

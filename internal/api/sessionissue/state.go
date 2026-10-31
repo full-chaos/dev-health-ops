@@ -102,33 +102,8 @@ var errStateAnswer = errors.New("the state answer is not exactly the session sta
 // expired (booleans) and legacy_token_version (an integer or null). A missing,
 // repeated or unknown member is refused.
 func parseState(answer []byte) (State, error) {
-	dec := json.NewDecoder(bytes.NewReader(answer))
-	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
-		return State{}, errStateAnswer
-	}
-	members := map[string]json.RawMessage{}
-	for dec.More() {
-		tok, err := dec.Token()
-		if err != nil {
-			return State{}, errStateAnswer
-		}
-		name, _ := tok.(string)
-		if _, seen := members[name]; seen {
-			return State{}, errStateAnswer
-		}
-		var value json.RawMessage
-		if err := dec.Decode(&value); err != nil {
-			return State{}, errStateAnswer
-		}
-		members[name] = value
-	}
-	if tok, err := dec.Token(); err != nil || tok != json.Delim('}') {
-		return State{}, errStateAnswer
-	}
-	if _, err := dec.Token(); err != io.EOF {
-		return State{}, errStateAnswer
-	}
-	if len(members) != 5 {
+	members, ok := objectMembers(answer)
+	if !ok || len(members) != 5 {
 		return State{}, errStateAnswer
 	}
 	var out State

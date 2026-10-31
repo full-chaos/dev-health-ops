@@ -2565,6 +2565,31 @@ discover_integration_tagged_tests() {
 # <key> <name> per selected name, and per group SHARD-GROUP <module> <n> <key>... then SHARD-REGEX <module> <regex>; a
 # group after the first also gets, per earlier group <g>, SHARD-SPLIT <module> <n> <key> <g> collision <name> <member>
 # or SHARD-SPLIT <module> <n> <key> <g> budget <bytes>: why its first package <key> did not join group <g>.
+# warn_integration_weight_drift MODULE_DIR LOGFILE PKG...: reads the `ok <import path> <N>s` lines go test printed into
+# LOGFILE and prints one `::warning title=INTEGRATION WEIGHT DRIFT::` line for each package whose measured time is more than
+# 50% away from its weight in ci/go_integration_shards.d and at least 60 s on either side (CHAOS-11658). A weight is a
+# placement value and a measured time includes the packages that ran beside it, so this only tells a reader a row is stale:
+# it never fails, whatever the lines hold.
+warn_integration_weight_drift() {
+  local module_dir="$1" log="$2" pkg key weight line import_path seconds
+  shift 2
+  for pkg in "$@"; do
+    key="${module_dir}/${pkg#./}"
+    key="${key#./}"
+    weight="${INTEGRATION_SHARD_WEIGHTS[${key}]:-}"
+    [ -n "${weight}" ] || continue
+    while IFS=$'\t' read -r import_path seconds; do
+      [[ "${import_path}" == */"${pkg#./}" ]] || continue
+      awk -v key="${key}" -v n="${seconds%s}" -v w="${weight}" 'BEGIN {
+        d = n - w; if (d < 0) d = -d
+        m = (n > w) ? n : w
+        if (m >= 60 && d * 100 > 50 * w) printf "::warning title=INTEGRATION WEIGHT DRIFT::%s measured %.0fs, weight %ds (%+.0f%%)\n", key, n, w, (n - w) * 100 / w
+      }'
+    done < <(sed -n -E 's/^ok[[:space:]]+([^[:space:]]+)[[:space:]]+([0-9.]+s).*$/\1\t\2/p' "${log}")
+  done
+  return 0
+}
+
 run_integration_packages() {
   local mode="$1" module_dir="$2" label="$3" pkg key name tests=0 result=0 status groups=0 group fits why split_why size names_len regex_max=60000
   local -a unfiltered=() run_pkgs=() group_pkgs=() group_keys=() group_regex=() group_size=() group_split=()
@@ -2672,11 +2697,20 @@ run_integration_packages() {
   done
   [ "${mode}" != "--dry-run" ] || return 0
   # Every go test goes through run_integration_go_test (one reaped testcontainers session per call); -run rides in run_pkgs.
+  # Its stdout also goes to a file (tee) for warn_integration_weight_drift; the status of go test itself is carried in a
+  # file, because the status of the pipeline is tee's (CHAOS-11658).
+  local ok_log rc_file
+  ok_log="$(mktemp "${TMPDIR:-/tmp}/dev-health-ok.XXXXXX")"
+  rc_file="$(mktemp "${TMPDIR:-/tmp}/dev-health-rc.XXXXXX")"
   for ((group = 0; group < groups; group++)); do
     mapfile -t run_pkgs <<<"${group_pkgs[${group}]%$'\n'}"
     run_pkgs=(-run "${group_regex[${group}]}" "${run_pkgs[@]}")
-    run_integration_go_test "${module_dir}" "${run_pkgs[@]}" || { status=$?; [ "${result}" -ne 0 ] || result="${status}"; }
+    { run_integration_go_test "${module_dir}" "${run_pkgs[@]}" && status=0 || status=$?; printf '%s\n' "${status}" > "${rc_file}"; } | tee -a "${ok_log}"
+    status="$(cat "${rc_file}")"
+    [ "${status}" -eq 0 ] || { [ "${result}" -ne 0 ] || result="${status}"; }
   done
+  warn_integration_weight_drift "${module_dir}" "${ok_log}" "${pkgs[@]}"
+  rm -f -- "${ok_log}" "${rc_file}"
   return "${result}"
 }
 

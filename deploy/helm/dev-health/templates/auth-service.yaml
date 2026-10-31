@@ -21,6 +21,7 @@ stage-signing-key init container exists.
 {{- /* Every auth check that must hold whatever the phase and whatever goApi.enabled, queryApi.enabled and the other enable flags say: one helper, included here once. This file always renders (only its documents are gated), so the include always runs. */}}
 {{- include "dev-health.authValidate" . }}
 {{- $eddsaIssuer := include "dev-health.authEdDSAIssuer" . }}
+{{- $tokenIssuer := include "dev-health.authTokenIssuer" . }}
 {{- $linkRoutes := eq (include "dev-health.authBool" (dict "value" .Values.authService.socialLinkRoutes "key" "authService.socialLinkRoutes")) "true" }}
 {{- if eq (include "dev-health.authOn" (dict "flag" "service" "context" .)) "true" }}
 {{- $a := .Values.authService }}
@@ -257,9 +258,11 @@ spec:
             - name: AUTH_ACCESS_TOKEN_CLASS
               value: {{ . | quote }}
           {{- end }}
-          {{- with $eddsaIssuer }}
+          {{- with $tokenIssuer }}
             - name: AUTH_TOKEN_ISSUER_URL
               value: {{ . | quote }}
+          {{- end }}
+          {{- if $eddsaIssuer }}
             - name: AUTH_JWT_AUDIENCE
               value: "dev-health-api"
           {{- end }}

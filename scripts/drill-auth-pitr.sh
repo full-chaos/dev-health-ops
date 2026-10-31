@@ -111,7 +111,7 @@ drill_attempt() { # port, phase, optional NAME=value...
 summary_files() {
   local f
   for f in "$evidence"/verify-*.json "$evidence"/post-*.json "$evidence"/attempt-*.json; do
-    case "$f" in
+    case "${f##*/}" in
     *secrets*) ;;
     *) printf '%s\n' "$f" ;;
     esac

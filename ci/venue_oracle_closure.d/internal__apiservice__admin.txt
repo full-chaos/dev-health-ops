@@ -58,6 +58,7 @@ internal/auth/passwordpolicy
 internal/auth/platformrole
 internal/auth/platformrole/rule
 internal/auth/policycatalog
+internal/auth/publicaudit
 internal/auth/ratelimitvalkey
 internal/auth/requestid
 internal/auth/session

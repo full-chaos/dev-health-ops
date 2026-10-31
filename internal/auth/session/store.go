@@ -365,89 +365,108 @@ func (s *Store) lockSession(ctx context.Context, db queryRower, sessionID string
 // is set only when the store failed or the grace successor could not be
 // recomputed; Result.Reason then says which.
 func (s *Store) Exchange(ctx context.Context, credential contracts.SecretString) (result Result, err error) {
-	return s.exchange(ctx, credential, nil)
+	return s.exchange(ctx, credential, nil, nil)
 }
 
-func (s *Store) exchange(ctx context.Context, credential contracts.SecretString, guard Guard) (result Result, err error) {
+func (s *Store) exchange(ctx context.Context, credential contracts.SecretString, guard Guard, public PublicRow) (result Result, err error) {
 	defer func() { s.recordExchange(ctx, result, err) }()
 	if !wellFormed(credential) {
 		return Result{Reason: ReasonMalformed}, nil
 	}
 	hash := hashCredential(credential)
 
+	// The audit row is fixed before the transaction: the session and principal
+	// of the presented credential, read by its hash (as RevokeByCredential does).
+	var sessionID, principal string
+	if err := s.pool.QueryRow(ctx, `SELECT session_id::text, principal_id::text FROM `+s.q+`.refresh_credentials WHERE token_hash = $1`, hash).
+		Scan(&sessionID, &principal); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Result{Reason: ReasonRefreshUnknown}, nil
+		}
+		return Result{Reason: ReasonStoreUnavailable}, fmt.Errorf("%w: refresh exchange: %w", ErrStore, err)
+	}
+
 	var reuse *lockedSession
 	var reusedFamily string
-	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		var sessionID string
-		if err := tx.QueryRow(ctx, `SELECT session_id::text FROM `+s.q+`.refresh_credentials WHERE token_hash = $1`, hash).Scan(&sessionID); err != nil {
+	// Only the rotate branch changes state (the successor credential, counted
+	// by migration 0038), so only it commits, with its auth.session.refreshed
+	// row and the caller's public row. Every other branch writes nothing and
+	// ends in ErrNoStateChange with its result set: a refusal, a grace replay
+	// (it rotates nothing: no event, no row) or a reuse, revoked below.
+	err = audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			locked, err := s.lockSession(ctx, tx, sessionID)
 			if errors.Is(err, pgx.ErrNoRows) {
 				result.Reason = ReasonRefreshUnknown
 				return nil
 			}
-			return err
-		}
-		locked, err := s.lockSession(ctx, tx, sessionID)
-		if errors.Is(err, pgx.ErrNoRows) {
-			result.Reason = ReasonRefreshUnknown
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		p, err := s.readPresented(ctx, tx, hash, sessionID)
-		if errors.Is(err, pgx.ErrNoRows) {
-			result.Reason = ReasonRefreshUnknown
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		switch {
-		case locked.RevokedAt != nil || p.revoked:
-			result.Reason = ReasonSessionRevoked
-		case locked.capExpired:
-			result.Reason = ReasonSessionExpired
-		case locked.principalDisabled:
-			result.Reason = ReasonPrincipalDeactivated
-		case locked.LegacyTokenVersion == nil:
-			s.logger.WarnContext(ctx, "refresh refused: session has no token_version pin",
-				"session_id", sessionID, "reason_code", string(ReasonRevisionStale))
-			result.Reason = ReasonRevisionStale
-		case !p.consumed && p.expired:
-			result.Reason = ReasonRefreshExpired
-		case !p.consumed:
-			if err := runGuard(ctx, tx, locked.Record, guard); err != nil {
-				return err
-			}
-			issued, err := s.rotate(ctx, tx, locked.Record, p, credential)
 			if err != nil {
 				return err
 			}
-			result = Result{Reason: ReasonAccepted, Issued: issued}
-		case p.inGrace && p.successorLive:
-			childID, err := uuid.Parse(*p.successor)
+			p, err := s.readPresented(ctx, tx, hash, sessionID)
+			if errors.Is(err, pgx.ErrNoRows) {
+				result.Reason = ReasonRefreshUnknown
+				return nil
+			}
 			if err != nil {
 				return err
 			}
-			successor := deriveSuccessor(s.key, childID, credential)
-			if !equalHash(hashCredential(successor), p.successorHash) {
-				result.Reason = ReasonDependency
-				return ErrGraceUnavailable
+			switch {
+			case locked.RevokedAt != nil || p.revoked:
+				result.Reason = ReasonSessionRevoked
+			case locked.capExpired:
+				result.Reason = ReasonSessionExpired
+			case locked.principalDisabled:
+				result.Reason = ReasonPrincipalDeactivated
+			case locked.LegacyTokenVersion == nil:
+				s.logger.WarnContext(ctx, "refresh refused: session has no token_version pin",
+					"session_id", sessionID, "reason_code", string(ReasonRevisionStale))
+				result.Reason = ReasonRevisionStale
+			case !p.consumed && p.expired:
+				result.Reason = ReasonRefreshExpired
+			case !p.consumed:
+				if err := runGuard(ctx, tx, locked.Record, guard); err != nil {
+					return err
+				}
+				issued, err := s.rotate(ctx, tx, locked.Record, p, credential)
+				if err != nil {
+					return err
+				}
+				if public != nil {
+					if err := public(ctx, tx, issued.Session.PrincipalID, issued.Session.OrganizationID); err != nil {
+						return err
+					}
+				}
+				result = Result{Reason: ReasonAccepted, Issued: issued}
+			case p.inGrace && p.successorLive:
+				childID, err := uuid.Parse(*p.successor)
+				if err != nil {
+					return err
+				}
+				successor := deriveSuccessor(s.key, childID, credential)
+				if !equalHash(hashCredential(successor), p.successorHash) {
+					result.Reason = ReasonDependency
+					return ErrGraceUnavailable
+				}
+				var expires time.Time
+				if err := tx.QueryRow(ctx, `SELECT expires_at FROM `+s.q+`.refresh_credentials WHERE id = $1`, childID.String()).Scan(&expires); err != nil {
+					return err
+				}
+				result = Result{Reason: ReasonGraceReplay, Issued: Issued{Session: locked.Record, Credential: successor, ExpiresAt: expires}}
+			default:
+				reuse, reusedFamily = &locked, p.familyID
 			}
-			var expires time.Time
-			if err := tx.QueryRow(ctx, `SELECT expires_at FROM `+s.q+`.refresh_credentials WHERE id = $1`, childID.String()).Scan(&expires); err != nil {
-				return err
-			}
-			result = Result{Reason: ReasonGraceReplay, Issued: Issued{Session: locked.Record, Credential: successor, ExpiresAt: expires}}
-		default:
-			reuse, reusedFamily = &locked, p.familyID
-		}
-		return nil
+			return nil
+		},
+		Audit:     refreshedEvent(ctx, principal, sessionID),
+		OffStream: audit.OffStreamSessionLifecycle,
+		Refusals:  []error{ErrGuardRefused, ErrGraceUnavailable},
 	})
-	if err != nil {
-		if errors.Is(err, ErrGraceUnavailable) || errors.Is(err, ErrGuardRefused) {
-			return Result{Reason: ReasonDependency}, err
-		}
+	switch {
+	case err == nil, errors.Is(err, audit.ErrNoStateChange):
+	case errors.Is(err, ErrGraceUnavailable) || errors.Is(err, ErrGuardRefused):
+		return Result{Reason: ReasonDependency}, err
+	default:
 		return Result{Reason: ReasonStoreUnavailable}, fmt.Errorf("%w: refresh exchange: %w", ErrStore, err)
 	}
 	if reuse == nil {
@@ -465,7 +484,7 @@ type Issued struct {
 
 // rotate inserts the successor and consumes the parent. The caller holds the
 // session lock.
-func (s *Store) rotate(ctx context.Context, tx pgx.Tx, session Record, p presented, parent contracts.SecretString) (Issued, error) {
+func (s *Store) rotate(ctx context.Context, tx txWriter, session Record, p presented, parent contracts.SecretString) (Issued, error) {
 	childID, err := uuid.NewRandom()
 	if err != nil {
 		return Issued{}, err

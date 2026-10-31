@@ -61,21 +61,23 @@ VALUES ($1, $2, NULLIF($3, ''), $4, $5, $6, $7, true, $8, false, 0, now(), now()
 }
 
 // insertPublicOwnedOrganization writes the organization and the owner
-// membership go-api's register route writes: new rows only, with the columns
+// membership go-api's register route writes and returns the organization id: new rows only, with the columns
 // authschema.RegisterOrganizationGrants lists and the model defaults go-api's
 // insert gives the others.
-func insertPublicOwnedOrganization(ctx context.Context, tx audit.TxOps, userID uuid.UUID, name string) error {
+func insertPublicOwnedOrganization(ctx context.Context, tx audit.TxOps, userID uuid.UUID, name string) (uuid.UUID, error) {
 	orgID := uuid.New()
 	if _, err := tx.Exec(ctx, `INSERT INTO public.organizations
 	(id, slug, name, settings, tier, managed_by, is_active, created_at, updated_at)
 VALUES ($1, $2, $3, '{}', 'community', 'stripe', true, now(), now())`,
 		orgID, registerorg.Slug(name, userID), name); err != nil {
-		return err
+		return uuid.Nil, err
 	}
-	_, err := tx.Exec(ctx, `INSERT INTO public.memberships
+	if _, err := tx.Exec(ctx, `INSERT INTO public.memberships
 	(id, user_id, org_id, role, joined_at, created_at, updated_at)
-VALUES ($1, $2, $3, 'owner', now(), now(), now())`, uuid.New(), userID, orgID)
-	return err
+VALUES ($1, $2, $3, 'owner', now(), now(), now())`, uuid.New(), userID, orgID); err != nil {
+		return uuid.Nil, err
+	}
+	return orgID, nil
 }
 
 // updatePublicPassword copies a new password verifier to public.users and adds

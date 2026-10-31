@@ -11,7 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
-	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/auth/publicaudit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 )
 
@@ -40,7 +40,7 @@ func parityContext() context.Context {
 	ctx := clientaddr.With(context.Background(), netip.MustParseAddr(parityClientIP))
 	ctx = clientaddr.WithUserAgent(ctx, parityUserAgent)
 	ctx = requestid.With(ctx, uuid.MustParse(parityOwnRequestID))
-	return httpapi.WithRequestID(ctx, parityForwardedID)
+	return publicaudit.WithForwardedRequestID(ctx, parityForwardedID)
 }
 
 // goAPIAuditRow is one public.audit_logs row, every column go-api writes.

@@ -80,6 +80,10 @@ type CompatDeps struct {
 	Projector Projector
 	// AppendAudit writes an append-only audit row (audit.Append).
 	AppendAudit func(ctx context.Context, event audit.AuditEvent) error
+	// AppendAuditWith writes an append-only audit row with apply's writes in the
+	// same transaction (audit.AppendWith): a refused password sign-in's
+	// go-api public.audit_logs row. nil writes the audit row alone.
+	AppendAuditWith func(ctx context.Context, event audit.AuditEvent, apply func(ctx context.Context, tx audit.TxOps) error) error
 	// Login mounts POST /api/v1/auth/login; nil leaves it unmounted.
 	Login *LoginConfig
 	// Social mounts POST /api/v1/auth/social-login; nil leaves it unmounted.
@@ -333,6 +337,8 @@ func compatRefreshMessage(reason session.Reason) string {
 // for a new session (session.Store.ExchangeLegacy); the answer then carries
 // the session's opaque credential.
 func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
+	// go-api's refresh row commits with the rotation and its auth.session.refreshed row.
+	r = r.WithContext(session.WithPublicRow(r.Context(), compatRefreshRow))
 	ctx := r.Context()
 	token, ok := h.readRefreshToken(w, r, opCompatRefresh)
 	if !ok {
@@ -499,6 +505,10 @@ func refreshUserInfo(id uuid.UUID, user UserState, orgID, role string) *pyjson.O
 // refresh rows of its family and the sessions exchanged from it), which is
 // stricter than go-api's logout, so a refresh after sign-out is refused.
 func (h compatHandlers) compatLogout(w http.ResponseWriter, r *http.Request) {
+	// go-api's logout row commits with the revocation and its auth.session.revoked
+	// row, with the user and organization of the revoked session; a credential that
+	// revokes nothing writes neither.
+	r = r.WithContext(session.WithPublicRow(r.Context(), compatLogoutRow))
 	ctx := r.Context()
 	token, ok := h.readRefreshToken(w, r, opCompatLogout)
 	if !ok {

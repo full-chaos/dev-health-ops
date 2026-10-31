@@ -30,7 +30,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 468,
+            "line": 487,
             "note": "func (s *Store) rotate",
             "path": "internal/auth/session/store.go"
           },
@@ -318,7 +318,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/compat.go",
-        "line": 142
+        "line": 146
       },
       "surface_kind": "rest"
     },
@@ -352,7 +352,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 468,
+            "line": 487,
             "note": "func (s *Store) rotate",
             "path": "internal/auth/session/store.go"
           },
@@ -377,7 +377,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/compat.go",
-        "line": 129
+        "line": 133
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -395,7 +395,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 116,
+          "line": 138,
           "note": "func (s *Store) RevokeByCredential",
           "path": "internal/auth/session/signin.go"
         },
@@ -405,7 +405,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/compat.go",
-        "line": 130
+        "line": 134
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -463,7 +463,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/compat.go",
-        "line": 149
+        "line": 153
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -526,7 +526,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/compat.go",
-        "line": 146
+        "line": 150
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"

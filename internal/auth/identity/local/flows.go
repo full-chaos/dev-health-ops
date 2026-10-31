@@ -140,10 +140,14 @@ func (f *Flows) issueAndSend(ctx context.Context, principal uuid.UUID, purpose P
 	if err != nil {
 		return err
 	}
-	if err := f.links.IssueBound(ctx, IssueRequest{PrincipalID: principal, Purpose: purpose, TokenHash: hash, TTL: ttl}); err != nil {
+	deliver := principal != uuid.Nil
+	if err := f.links.IssueBound(ctx, IssueRequest{PrincipalID: principal, Purpose: purpose, TokenHash: hash, TTL: ttl}); errors.Is(err, ErrResetRequestNotRecorded) {
+		// Nothing was stored: the same mail work as a decoy, and the same answer.
+		deliver = false
+	} else if err != nil {
 		return fmt.Errorf("local: issuing a link credential: %w", err)
 	}
-	msg := Message{Purpose: purpose, To: to, FullName: name, Secret: secret, Deliver: principal != uuid.Nil}
+	msg := Message{Purpose: purpose, To: to, FullName: name, Secret: secret, Deliver: deliver}
 	if err := f.mail.Send(ctx, msg); err != nil {
 		slog.WarnContext(ctx, "local: link mail not sent", "purpose", string(purpose), logging.ErrorAttr(err))
 	}

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
@@ -16,6 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -31,6 +33,10 @@ type PinRig struct {
 	sessions *session.Store
 	auth     *policy.Authenticator
 	reader   policy.PGStore
+	// base is the session store's configuration, for Lifetimes.
+	base session.Config
+	// orgs projects a public organization onto auth.organizations, for BoundTo.
+	orgs *identity.Store
 }
 
 // NewPinRig applies the auth schema on admin's database.
@@ -74,8 +80,9 @@ func NewPinRig(t *testing.T, ctx context.Context, admin *pgxpool.Pool, instance 
 	if err != nil {
 		t.Fatal(err)
 	}
-	sessions, err := session.New(session.Config{Pool: login(roles["pin_runtime"]), Schema: schema,
-		SuccessorKey: contracts.NewSecretString(base64.RawURLEncoding.EncodeToString(key))})
+	base := session.Config{Pool: login(roles["pin_runtime"]), Schema: schema,
+		SuccessorKey: contracts.NewSecretString(base64.RawURLEncoding.EncodeToString(key))}
+	sessions, err := session.New(base)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +96,11 @@ func NewPinRig(t *testing.T, ctx context.Context, admin *pgxpool.Pool, instance 
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &PinRig{admin: admin, sessions: sessions, auth: auth, reader: reader}
+	orgs, err := identity.New(identity.Config{Pool: admin, Schema: schema, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &PinRig{admin: admin, sessions: sessions, auth: auth, reader: reader, base: base, orgs: orgs}
 }
 
 // Reader is go-api's session read as the session reader role holds it: its
@@ -104,18 +115,63 @@ func (r *PinRig) Revoke(t *testing.T, ctx context.Context, sid uuid.UUID) {
 	}
 }
 
+// SignInOption changes the session SignIn creates.
+type SignInOption func(*signInOptions)
+
+type signInOptions struct {
+	organization                *uuid.UUID
+	sessionLifetime, refreshTTL time.Duration
+}
+
+// BoundTo binds the session to organization, as auth-service binds a session
+// it issues for an organization. The organization must exist in
+// public.organizations: the rig projects it onto auth.organizations through
+// auth-service's own projection (identity.Store.ProjectOrganization).
+func BoundTo(organization uuid.UUID) SignInOption {
+	return func(o *signInOptions) { o.organization = &organization }
+}
+
+// Lifetimes creates the session as a session store configured with this
+// absolute session lifetime and refresh (idle) lifetime would; a zero lifetime
+// keeps the store's default (no absolute cap; a 7-day refresh life).
+func Lifetimes(sessionLifetime, refreshTTL time.Duration) SignInOption {
+	return func(o *signInOptions) { o.sessionLifetime, o.refreshTTL = sessionLifetime, refreshTTL }
+}
+
 // SignIn creates a session of user, pinned to the user's token_version now.
-func (r *PinRig) SignIn(t *testing.T, ctx context.Context, user uuid.UUID) uuid.UUID {
+func (r *PinRig) SignIn(t *testing.T, ctx context.Context, user uuid.UUID, opts ...SignInOption) uuid.UUID {
 	t.Helper()
 	if _, err := r.admin.Exec(ctx, `INSERT INTO auth.principals (id, kind, display_name) VALUES ($1, 'user', 'pin-rig') ON CONFLICT (id) DO NOTHING`, user); err != nil {
 		t.Fatalf("principal: %v", err)
 	}
-	issued, err := r.sessions.Create(ctx, user, nil, []string{"pwd"})
+	var o signInOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	if o.organization != nil {
+		if err := r.orgs.ProjectOrganization(ctx, *o.organization); err != nil {
+			t.Fatalf("project organization %s: %v", *o.organization, err)
+		}
+	}
+	store := r.sessions
+	if o.sessionLifetime != 0 || o.refreshTTL != 0 {
+		cfg := r.base
+		cfg.SessionLifetime, cfg.RefreshTTL = o.sessionLifetime, o.refreshTTL
+		var err error
+		if store, err = session.New(cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	issued, err := store.Create(ctx, user, o.organization, []string{"pwd"})
 	if err != nil {
 		t.Fatalf("sign in: %v", err)
 	}
 	return issued.Session.ID
 }
+
+// Sessions is the session store the rig signs in with, as auth-service runs it
+// (the runtime role).
+func (r *PinRig) Sessions() *session.Store { return r.sessions }
 
 // ClearPin removes the session's token_version pin, as a session from before
 // the pin existed has none.

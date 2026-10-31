@@ -42,9 +42,19 @@ func (h compatHandlers) withSessionStateRoute(routes []httpapi.Route) []httpapi.
 }
 
 // withSessionStateRouteRows is withSessionStateRoute over a given document;
-// without the route's row it logs one line naming the route and mounts nothing.
+// without a row that lists every class the handler admits (the session issuer
+// credential when service credentials are configured, the go-api workload
+// token when its binding is) it logs one line naming the route and mounts
+// nothing.
 func (h compatHandlers) withSessionStateRouteRows(routes []httpapi.Route, rows []byte) []httpapi.Route {
-	if rowsPresentFor(rows, []string{PatternSessionState}) != nil {
+	var admitted []string
+	if h.ServiceCredentials != nil {
+		admitted = append(admitted, serviceSessionIssuerClass)
+	}
+	if h.IssueWorkload != nil {
+		admitted = append(admitted, workloadTokenClass)
+	}
+	if rowsAcceptFor(rows, []string{PatternSessionState}, admitted) != nil {
 		h.rec.logger.Info("auth session route not mounted: no endpoint-profile row", "route", PatternSessionState)
 		return routes
 	}

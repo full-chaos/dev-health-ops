@@ -541,6 +541,40 @@
         "name": "workload+jwt"
       },
       "classification": "protected",
+      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the session is read live on every call (session.Store.Current: the effective expiry, absolute cap or idle expiry, and the effective revoke, a password change included, in one statement).",
+      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials; a body that is not exactly one canonical session_id is 400 malformed; a session auth-service does not hold is 404 session_not_found, named to any holder of the service credential or of the go-api workload token; a store failure is 503 store_unavailable; a key set that cannot be read is a 503. The answer is the session's principal_id, organization_id (or null), revoked, expired and legacy_token_version (or null). The route writes nothing: no audit row and no last_seen_at stamp, so a read never extends a session's idle expiry.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/sessions/state [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 60,
+          "note": "func (p PG) Check",
+          "path": "internal/auth/servicecred/servicecred.go"
+        },
+        "description": "servicecred.PG.Check (the session issue route's check, internal/auth/authapi/issue_workload.go issueCallerFor): the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding sessions:issue. A workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read by SessionIssueWorkload.authorize: audience auth-service and the configured go-api workload principal as sub, then authverify.WorkloadVerifier. Any other credential class is refused before any read and before the body is read. The route answers one session's state for go-api's Ask Dev principal access read (acp ruling D6559)."
+      },
+      "route": "/internal/v1/sessions/state",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/session_state.go",
+        "line": 16
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "none"
+    },
+    {
+      "accepted_credential_classes": [
+        "internal_svc_authsess_token",
+        "workload_token"
+      ],
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "workload+jwt"
+      },
+      "classification": "protected",
       "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the actor's public.users and public.memberships rows are read live before the write and again under the write's locks.",
       "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed with no read; a refused actor gets 403 (principal_deactivated, admin_required or superuser_required) before any row of the request is read, so a missing organization, principal or inviter is named only to an actor the rule allows; a store failure is 503; a key set that cannot be read is a 503.",
       "gaps": [],
@@ -1529,5 +1563,5 @@
     }
   ],
   "schema_version": "endpoint-profile.v1",
-  "source_commit": "e9e38b7ba2be61c31c4c48c16922fc2b63de7d3a"
+  "source_commit": "d7882d92403017d2881cd5880ebd8f5352dbce38"
 }

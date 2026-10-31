@@ -56,6 +56,48 @@ check "a phase with arguments prints no environment" "$r"
 grep -q 'label=A phase=snapshot' "$root/seen" && r=ok || r=bad
 check "the extra argument reaches the driver" "$r"
 
+# the evidence summary never holds a drill secret (CHAOS-12281): every *secrets*.json stays out of the summary input, and a
+# guard refuses a summary that holds a line of one (file names only, never the value)
+sum_fn="$(awk '/^summary_files\(\) \{/{p=1} p{print} p&&/^\}/{exit}' "$script")"
+write_fn="$(awk '/^write_summary\(\) \{/{p=1} p{print} p&&/^\}/{exit}' "$script")"
+guard_fn="$(awk '/^guard_summary_no_secrets\(\) \{/{p=1} p{print} p&&/^\}/{exit}' "$script")"
+[[ -n "$sum_fn" && -n "$write_fn" && -n "$guard_fn" ]] || { echo "drill-auth-pitr_test: the summary helpers were not found" >&2; exit 1; }
+canary="canary-secret-value-0123456789abcdef"
+ev="$root/ev"
+mkdir -p "$ev"
+printf '{"expect":"T","pass":true}\n' >"$ev/verify-T-exact.json"
+printf '{"expect":"T","verdict":"PASS"}\n' >"$ev/post-T.json"
+printf '{"expect":"T","revoked_access_accepted":0}\n' >"$ev/attempt-T-pitr.json"
+printf '[{"name":"wl-revoked","value":"%s"}]\n' "$canary" >"$ev/attempt-secrets.json"
+printf '{\n  "auth": {\n    "old": "%s-pretty"\n  }\n}\n' "$canary" >"$ev/drill-password-secrets.json"
+run_summary() { # runs the evaluated helpers on the fixture; prints what the helper prints
+  (
+    set +e
+    eval "$sum_fn"
+    eval "$write_fn"
+    eval "$guard_fn"
+    # shellcheck disable=SC2034 # read by the evaluated helpers
+    evidence="$ev"
+    "$@" 2>&1
+  )
+}
+out="$(run_summary write_summary)"
+if [[ "$out" != *"$canary"* ]] && ! grep -qF "$canary" "$ev/summary.txt" && grep -q 'revoked_access_accepted' "$ev/summary.txt"; then r=ok; else r=bad; fi
+check "the summary and its stdout hold no secret and still hold the attempt results" "$r"
+out="$(run_summary guard_summary_no_secrets)" && rc=0 || rc=$?
+[[ "$rc" -eq 0 && "$out" != *"$canary"* ]] && r=ok || r=bad
+check "the guard passes a clean summary" "$r"
+cp "$ev/summary.txt" "$root/summary.clean"
+jq -c . "$ev/attempt-secrets.json" >>"$ev/summary.txt"
+out="$(run_summary guard_summary_no_secrets)" && rc=0 || rc=$?
+[[ "$rc" -ne 0 && "$out" == *attempt-secrets.json* && "$out" != *"$canary"* ]] && r=ok || r=bad
+check "the guard refuses a planted compact copy of a secrets file, naming the file and no value" "$r"
+cp "$root/summary.clean" "$ev/summary.txt"
+printf '    "old": "%s-pretty"\n' "$canary" >>"$ev/summary.txt"
+out="$(run_summary guard_summary_no_secrets)" && rc=0 || rc=$?
+[[ "$rc" -ne 0 && "$out" == *drill-password-secrets.json* && "$out" != *"$canary"* ]] && r=ok || r=bad
+check "the guard refuses a planted line of a pretty-printed secrets file, naming the file and no value" "$r"
+
 # no unguarded bare `export "$@"` anywhere in the script
 if grep -nE '^[[:space:]]*export "\$@"' "$script" | grep -v 'if ((\$#))' >/dev/null; then
   grep -nE 'export "\$@"' "$script" | grep -vE 'if \(\(\$#\)\)' >/dev/null && r=bad || r=ok

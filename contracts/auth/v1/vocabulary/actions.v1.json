@@ -1,6 +1,6 @@
 {
   "schema_version": "actions.v1",
-  "catalog_version": 3,
+  "catalog_version": 4,
   "description": "The closed action vocabulary. An action absent from this list is refused everywhere (ACP-ADR-05 decision 1). Names are dotted and namespaced; a bare single segment is not an action. No action means 'all actions'. Each action carries a risk_class (low or high) and a cache_class (none, decision_bound, resource_revision_bound; the TRD section 14 allow-cache classes). A high-risk action is never cached: its cache_class is none.",
   "actions": [
     {

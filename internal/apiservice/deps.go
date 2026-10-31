@@ -197,6 +197,12 @@ type Deps struct {
 	// AuthProxy routes /api/v1/auth/* aggregates to auth-service
 	// (AUTH_PROXY_*); the zero value serves every route in go-api.
 	AuthProxy AuthProxyConfig
+	// ACRAccessProjectScope is EnvACRAccessProjectScope (default off): the ACR
+	// principal access read also answers project_scope for an org with no
+	// repository inventory, and the ClickHouse readiness check also requires
+	// SELECT on projects. See EnvACRAccessProjectScope for the acr
+	// DisallowUnknownFields dependency and the roll order.
+	ACRAccessProjectScope bool
 	// SessionIssuer issues the session and sso routes' token pairs at
 	// auth-service when it owns sessions (AUTH_PROXY_SESSIONS); nil mints
 	// them in go-api.
@@ -335,8 +341,9 @@ func buildDeps(
 	registry *health.Registry,
 	logger *slog.Logger,
 	authProxy AuthProxyConfig,
+	acrProjectScope bool,
 ) (Deps, []lifecycle.Component, error) {
-	deps := Deps{AuthProxy: authProxy}
+	deps := Deps{AuthProxy: authProxy, ACRAccessProjectScope: acrProjectScope}
 	var components []lifecycle.Component
 
 	// LicenseManager.initialize() (CHAOS-6663): the process-wide install
@@ -425,7 +432,7 @@ func buildDeps(
 		deps.ClickHouse = conn
 		components = append(components, &clickHouseComponent{conn: conn})
 		if err := registry.RegisterRequired(apiClickHouseCheck, func(checkCtx context.Context) error {
-			return chclickhouse.CheckAPIClickHouseAuthorization(checkCtx, conn)
+			return chclickhouse.CheckAPIClickHouseAuthorizationFor(checkCtx, conn, acrProjectScope)
 		}); err != nil {
 			return Deps{}, nil, dependencyFailure(ctx, logger, "api_clickhouse", "api_clickhouse_check_register_failed", err)
 		}

@@ -15,6 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/licensing"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
+	"github.com/full-chaos/dev-health-ops/internal/projectinventory"
 	"github.com/full-chaos/dev-health-ops/internal/repoinventory"
 )
 
@@ -50,6 +51,13 @@ type OrganizationLookup interface {
 	OrganizationExists(ctx context.Context, orgID uuid.UUID) (bool, error)
 }
 
+// ProjectInventory reads an org's project inventory (projectinventory): the
+// (provider, id) pairs of its projects rows, sorted. An error is a failed or
+// over-limit read, never an empty inventory.
+type ProjectInventory interface {
+	Projects(ctx context.Context, orgID uuid.UUID) ([]projectinventory.Item, error)
+}
+
 // RepositoryInventory reads an org's repository inventory (repoinventory).
 // An error is a failed read, never an empty inventory.
 type RepositoryInventory interface {
@@ -68,6 +76,12 @@ type AccessStore struct {
 	// Sessions answers the session a sid names. Nil: a read with a sid is
 	// unavailable (503); a read without one never needs it.
 	Sessions SessionStates
+	// Projects is the project inventory read behind the project scope flag
+	// (ACR_ACCESS_PROJECT_SCOPE, ProjectScopeFlagEnv). Nil, the default, is the
+	// flag off: no project read and no project_scope in the answer, so the read
+	// is byte-identical to the one before project_scope existed. Set, an org
+	// with no repository inventory also gets its project inventory.
+	Projects ProjectInventory
 }
 
 var _ PrincipalAccessStore = AccessStore{}
@@ -141,6 +155,19 @@ func (s AccessStore) Access(ctx context.Context, query AccessQuery) (PrincipalAc
 		access.Session = &SessionAccess{Live: live, Reason: reason, Impersonating: access.Impersonating}
 	}
 	access.Repositories = repositories
+	if s.Projects != nil && len(repositories) == 0 {
+		// Only an org with no repository inventory gets a project scope
+		// (CHAOS-12224; acr turns it into project_only for a "*" consent grant
+		// only, design CHAOS-12107 D2). One more live read, after the others.
+		projects, err := s.Projects.Projects(ctx, query.OrgID)
+		if err != nil {
+			return PrincipalAccess{}, fmt.Errorf("%w: project inventory read: %w", ErrUnavailable, err)
+		}
+		if projects == nil {
+			projects = []projectinventory.Item{}
+		}
+		access.ProjectScope = &ProjectScope{Projects: projects}
+	}
 	return access, nil
 }
 
@@ -263,4 +290,37 @@ func (c ClickHouseRepositoryInventory) Repositories(ctx context.Context, orgID u
 		slugs = append(slugs, item.Slug)
 	}
 	return slugs, nil
+}
+
+// ClickHouseProjectInventory runs projectinventory's read on go-api's
+// ClickHouse login. The login holds SELECT on projects only with the project
+// scope flag on (chclickhouse.APIPostureFor), so this reader is built only
+// then.
+type ClickHouseProjectInventory struct {
+	Conn driver.Conn
+}
+
+func (c ClickHouseProjectInventory) Projects(ctx context.Context, orgID uuid.UUID) ([]projectinventory.Item, error) {
+	if c.Conn == nil {
+		return nil, errors.New("no ClickHouse connection configured")
+	}
+	statement := projectinventory.Statement(fmt.Sprintf("SETTINGS max_execution_time = %d", int(inventoryTimeout.Seconds())))
+	rows, err := c.Conn.Query(ctx, statement,
+		clickhouse.Named("org_id", orgID.String()), clickhouse.Named("limit_n", uint32(projectinventory.QueryLimit)))
+	if err != nil {
+		return nil, fmt.Errorf("query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var read []projectinventory.Item
+	for rows.Next() {
+		var row projectinventory.Item
+		if err := rows.Scan(&row.Provider, &row.ID); err != nil {
+			return nil, fmt.Errorf("scan: %w", err)
+		}
+		read = append(read, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows: %w", err)
+	}
+	return projectinventory.Canonical(read)
 }

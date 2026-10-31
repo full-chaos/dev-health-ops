@@ -6991,7 +6991,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 122,
+          "line": 138,
           "note": "Pattern:",
           "path": "internal/apiservice/acr/access.go"
         },
@@ -7003,7 +7003,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/acr/access.go",
-        "line": 122
+        "line": 138
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",

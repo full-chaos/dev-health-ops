@@ -439,7 +439,7 @@ func TestReasonSetIsClosed(t *testing.T) {
 		"allowed_by_role", "invalid_request", "unknown_action", "resource_mismatch",
 		"principal_inactive", "organization_inactive", "no_membership", "org_mismatch",
 		"membership_inactive", "platform_role_absent", "role_unknown", "role_scope_mismatch",
-		"role_lacks_action",
+		"role_lacks_action", "impersonation_denied", "delegation_invalid",
 	}
 	got := AllReasons()
 	sort.Slice(got, func(i, j int) bool { return got[i] < got[j] })
@@ -557,6 +557,8 @@ func TestEvaluate_EveryDenyPathCarriesTheCatalogVersion(t *testing.T) {
 		{"role unknown", orgRequest("org.read"), orgSnapshot("guest"), ReasonRoleUnknown},
 		{"role scope mismatch", orgRequest("org.read"), orgSnapshot("platform_admin"), ReasonRoleScopeMismatch},
 		{"role lacks action", orgRequest("org.delete"), orgSnapshot("viewer"), ReasonRoleLacksAction},
+		{"impersonation denied", orgRequest("org.delete"), delegated("owner", []string{"org.delete"}, ""), ReasonImpersonationDenied},
+		{"delegation invalid", orgRequest("org.read"), delegated("owner", nil, "").withChain(nil), ReasonDelegationInvalid},
 	}
 	seen := map[Reason]bool{}
 	e := NewEvaluator()

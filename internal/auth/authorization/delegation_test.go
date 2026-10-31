@@ -45,6 +45,11 @@ func delegated(role string, permitted []string, actorRole string) delegatedSnaps
 	}
 }
 
+func (f delegatedSnapshot) withChain(c []Hop) delegatedSnapshot {
+	f.d.Chain = c
+	return f
+}
+
 func allOrgActions(t *testing.T) []string {
 	t.Helper()
 	actions, _, _ := vocab(t)

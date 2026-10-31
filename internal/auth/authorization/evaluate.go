@@ -49,9 +49,7 @@ func NewEvaluator() *Evaluator { return newEvaluator(policycatalog.Default()) }
 
 func newEvaluator(c *policycatalog.Catalog) *Evaluator { return &Evaluator{cat: c} }
 
-// Evaluate returns the decision for r over s. A nil evaluator, catalog or
-// snapshot denies; a denial made under a catalog carries its version.
-func (e *Evaluator) Evaluate(r Request, s Snapshot) Decision {
+func (e *Evaluator) evaluateBase(r Request, s Snapshot) Decision {
 	if e == nil || e.cat == nil {
 		return Decision{Reason: ReasonInvalidRequest}
 	}

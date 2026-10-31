@@ -74,6 +74,9 @@ const (
 	ReasonRoleUnknown          Reason = "role_unknown"
 	ReasonRoleScopeMismatch    Reason = "role_scope_mismatch"
 	ReasonRoleLacksAction      Reason = "role_lacks_action"
+
+	ReasonImpersonationDenied Reason = "impersonation_denied"
+	ReasonDelegationInvalid   Reason = "delegation_invalid"
 )
 
 // AllReasons lists every Reason the package can return.
@@ -82,7 +85,7 @@ func AllReasons() []Reason {
 		ReasonAllowedByRole, ReasonInvalidRequest, ReasonUnknownAction, ReasonResourceMismatch,
 		ReasonPrincipalInactive, ReasonOrganizationInactive, ReasonNoMembership, ReasonOrgMismatch,
 		ReasonMembershipInactive, ReasonPlatformRoleAbsent, ReasonRoleUnknown, ReasonRoleScopeMismatch,
-		ReasonRoleLacksAction,
+		ReasonRoleLacksAction, ReasonImpersonationDenied, ReasonDelegationInvalid,
 	}
 }
 
@@ -93,4 +96,8 @@ type Decision struct {
 	// PolicyRevision is the catalog version the decision was made under; 0
 	// when no catalog was available.
 	PolicyRevision int
+	// Obligations is set only on an allow of a delegated session.
+	Obligations *Obligations
+	// Audit is set only on an allow that the owner exemption made possible.
+	Audit *DelegationAudit
 }

@@ -11,8 +11,8 @@ import (
 
 func defaultAllowed(t *testing.T, name string, d Decision, now int64) {
 	t.Helper()
-	if !d.Allowed || d.Reason != ReasonAllowedByMembershipDefault || d.CacheClass != CacheDecisionBound || d.ExpiresAtUnixNano != now+testBound {
-		t.Errorf("%s: want membership default allow, decision_bound until now+bound: %+v", name, d)
+	if !d.Allowed || d.Reason != ReasonAllowedByMembershipDefault || d.CacheClass != CacheResourceRevisionBound || d.ExpiresAtUnixNano != now+testBound {
+		t.Errorf("%s: want membership default allow, resource_revision_bound until now+bound: %+v", name, d)
 	}
 }
 
@@ -128,7 +128,7 @@ func TestDecisionCacheClass(t *testing.T) {
 		t.Errorf("grant allow: %+v", g)
 	}
 	d := e.Evaluate(repoRequest("acme/api"), repoSnapshot("member"))
-	if !d.Allowed || d.CacheClass != CacheDecisionBound {
+	if !d.Allowed || d.CacheClass != CacheResourceRevisionBound {
 		t.Errorf("default allow: %+v", d)
 	}
 	for name, dec := range map[string]Decision{

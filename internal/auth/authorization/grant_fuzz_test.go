@@ -30,7 +30,7 @@ func FuzzEvaluateRepositoryGrant(f *testing.F) {
 			if grantOrg == reqOrg {
 				t.Fatal("default allow with a row of the pair")
 			}
-			if now <= 0 || d.CacheClass != CacheDecisionBound || d.ExpiresAtUnixNano != wantExpiry(now) {
+			if now <= 0 || d.CacheClass != CacheResourceRevisionBound || d.ExpiresAtUnixNano != wantExpiry(now) {
 				t.Fatalf("default allow without clock or 30 s bound: %+v now %d", d, now)
 			}
 			return

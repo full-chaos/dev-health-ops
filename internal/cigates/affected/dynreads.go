@@ -787,16 +787,7 @@ func (c *fileCtx) pathKind(e ast.Expr, sc *scope) pathInfo {
 				}
 			}
 			return dynInfo
-		case "path/filepath.Abs":
-			// a relative path is made absolute against the directory the call runs in
-			if len(x.Args) == 1 {
-				in := c.pathKind(x.Args[0], sc)
-				if in.kind == kConst {
-					return c.resolve(in.value)
-				}
-				return in
-			}
-		case "path/filepath.Clean", "path.Clean", "path/filepath.FromSlash", "path/filepath.ToSlash":
+		case "path/filepath.Clean", "path.Clean", "path/filepath.Abs", "path/filepath.FromSlash", "path/filepath.ToSlash":
 			if len(x.Args) == 1 {
 				return c.pathKind(x.Args[0], sc)
 			}

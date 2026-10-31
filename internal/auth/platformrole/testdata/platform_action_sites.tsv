@@ -4,8 +4,10 @@
 # routes, #5236). TestEveryPlatformActionSiteIsListed holds this list; a mix row must not read the superuser flag.
 # file	function	action	origin
 internal/api/orgs/orgs.go	handlers.entitlements	admin.billing	7
+internal/api/policy/guard.go	Guard.currentUser	admin.orgs	4
 internal/api/policy/principal.go	User.IsAdmin	admin.orgs	1
 internal/api/policy/scope.go	Scope.mayUseOrg	admin.orgs	4
+internal/api/policy/scope.go	Scope.useTokenOrg	admin.orgs	4
 internal/api/session/permissions.go	userPermissions	admin.orgs	2
 internal/api/session/permissions.go	userPermissions	admin.users	2
 internal/api/session/refresh.go	handlers.refreshRole	admin.orgs	4

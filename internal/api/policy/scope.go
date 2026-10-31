@@ -310,7 +310,7 @@ func (s *Scope) ReadsPlatformRoles() bool { return s.auth != nil && s.auth.store
 // unavailable) or 500, never a pass and never the refusal of a member. Behind
 // ReadOnce the route's guard gets the same read's answer.
 func (s *Scope) useTokenOrg(w http.ResponseWriter, r *http.Request, user *User) bool {
-	if user.IsSuperuser {
+	if user.Holds(ActionAdminOrgs) {
 		return true
 	}
 	_, standing, err := s.auth.tokenOrgMembership(r.Context(), user.UserID, user.OrgID)

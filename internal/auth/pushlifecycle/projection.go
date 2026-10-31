@@ -162,6 +162,25 @@ func Apply(state State, event contracts.ExternalPushLifecycleEvent, parent *Stat
 	return next, Applied
 }
 
+// Live reports whether the projected credential may be treated as live at now.
+// A past expires_at ends liveness without waiting for the expired event, so a
+// late event can never extend a credential. It fails closed: a credential never
+// seen, a terminal or unknown status, or an unparseable ExpiresAt is not live.
+// The caller supplies now; the core holds no clock.
+func Live(state State, now time.Time) bool {
+	if state.Revision < 1 || state.Status != StatusActive {
+		return false
+	}
+	if state.ExpiresAt == "" {
+		return true
+	}
+	expires, err := time.Parse(time.RFC3339Nano, state.ExpiresAt)
+	if err != nil {
+		return false
+	}
+	return now.Before(expires)
+}
+
 func sameIdentity(state State, event contracts.ExternalPushLifecycleEvent) bool {
 	return state.OrganizationID == event.Payload.OrganizationID && state.SourceID == event.Payload.SourceID
 }

@@ -402,3 +402,80 @@ func TestProjectionExpiredKeepsTheEarlierExpiry(t *testing.T) {
 		}
 	}
 }
+
+func TestProjectionLiveTreatsAPastExpiryAsNotLiveBeforeTheEventArrives(t *testing.T) {
+	expiresAt := contracts.Timestamp{Time: t0.Add(time.Hour)}
+	c := created(credA, "ingest:write")
+	c.Payload.Change.ExpiresAt = &expiresAt
+	active := mustApply(t, State{}, c, nil)
+	noExpiry := mustApply(t, State{}, created(credB, "ingest:write"), nil)
+	for name, tc := range map[string]struct {
+		state State
+		now   time.Time
+		want  bool
+	}{
+		"never seen":                  {State{}, t0, false},
+		"no expiry":                   {noExpiry, t0.Add(1000 * time.Hour), true},
+		"before expiry":               {active, t0.Add(time.Hour - time.Nanosecond), true},
+		"at expiry":                   {active, t0.Add(time.Hour), false},
+		"past expiry, no event yet":   {active, t0.Add(2 * time.Hour), false},
+		"revoked":                     {mustApply(t, noExpiry, revoked(credB, 2), nil), t0, false},
+		"expired status":              {mustApply(t, noExpiry, expired(credB, 2), nil), t0, false},
+		"unparseable expiry":          {State{AggregateID: credA, Revision: 1, Status: StatusActive, ExpiresAt: "soon"}, t0, false},
+		"unknown status with history": {State{AggregateID: credA, Revision: 1, Status: "paused"}, t0, false},
+	} {
+		if got := Live(tc.state, tc.now); got != tc.want {
+			t.Errorf("%s: Live = %v, want %v", name, got, tc.want)
+		}
+	}
+}
+
+func TestProjectionLateExpiredEventNeverExtendsACredential(t *testing.T) {
+	early := contracts.Timestamp{Time: t0.Add(time.Hour)}
+	late := contracts.Timestamp{Time: t0.Add(48 * time.Hour)}
+	c := created(credA, "ingest:write")
+	c.Payload.Change.ExpiresAt = &early
+	state := mustApply(t, State{}, c, nil)
+	now := t0.Add(2 * time.Hour)
+	if Live(state, now) {
+		t.Fatalf("before the expired event: Live = true past expires_at")
+	}
+	e := expired(credA, 2)
+	e.Payload.Change.ExpiresAt = &late
+	e.CreatedAt = contracts.Timestamp{Time: now}
+	state = mustApply(t, state, e, nil)
+	if Live(state, now) || Live(state, t0.Add(24*time.Hour)) {
+		t.Fatalf("after a late expired event carrying a later expires_at: Live = true, want false")
+	}
+}
+
+func TestProjectionScopesOnlyNarrowWhateverTheDeliveryOrder(t *testing.T) {
+	base := mustApply(t, State{}, created(credA, "ingest:write", "schema:read"), nil)
+	narrow, widen := scoped(credA, 2, "ingest:write"), scoped(credA, 3, "ingest:write", "schema:read")
+
+	in := mustApply(t, base, narrow, nil)
+	next, outcome := Apply(in, widen, nil)
+	if outcome != RefusedWiden || !sameState(next, in) {
+		t.Fatalf("in order: later widen outcome %s, want refused_widen with state unchanged", outcome)
+	}
+	if _, outcome := Apply(next, widen, nil); outcome != RefusedWiden {
+		t.Fatalf("a redelivered refused widen is %s, want refused_widen again", outcome)
+	}
+
+	state := base
+	if _, outcome := Apply(state, widen, nil); outcome != Gap {
+		t.Fatalf("widen delivered before the narrowing: outcome %s, want gap", outcome)
+	}
+	state = mustApply(t, state, narrow, nil)
+	if _, outcome := Apply(state, widen, nil); outcome != RefusedWiden {
+		t.Fatalf("widen after the late narrowing: outcome %s, want refused_widen", outcome)
+	}
+	if !slices.Equal(state.Scopes, []string{"ingest:write"}) {
+		t.Fatalf("scopes = %v, want [ingest:write]", state.Scopes)
+	}
+
+	none := mustApply(t, base, scoped(credA, 2), nil)
+	if _, outcome := Apply(none, scoped(credA, 3, "ingest:write"), nil); outcome != RefusedWiden {
+		t.Fatalf("widening from none: outcome %s, want refused_widen", outcome)
+	}
+}

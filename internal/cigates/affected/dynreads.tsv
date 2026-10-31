@@ -299,7 +299,6 @@ internal/cigates/workflows	auth_corpus_external_behaviour_test.go
 internal/cigates/workflows	auth_corpus_external_retry_test.go
 internal/cigates/workflows	auth_corpus_external_test.go
 internal/cigates/workflows	auth_corpus_queue_test.go
-internal/cigates/workflows	auth_workload_compose_test.go
 internal/cigates/workflows	chart_started_filter_test.go
 internal/cigates/workflows	chart_started_selector_test.go
 internal/cigates/workflows	ci_script_helpers_test.go

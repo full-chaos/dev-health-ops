@@ -206,11 +206,8 @@ func TestShardTimeoutIsTwiceTheMeasuredWorstWall(t *testing.T) {
 	if got := fmt.Sprint(asMap(job["env"])["CHECK_GO_JOB_CAP_MIN"]); got != fmt.Sprint(want) {
 		t.Errorf("%s CHECK_GO_JOB_CAP_MIN is %s, want %d", shardJobName, got, want)
 	}
-	script, err := os.ReadFile(filepath.Join(root, "ci", "check_go.sh"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := regexp.MustCompile(`(?s)\nrun_integration_go_test\(\) \{.*?\n\}\n`).FindString(string(script))
+	script := readFile(t, filepath.Join(root, "ci", "check_go.sh"))
+	body := regexp.MustCompile(`(?s)\nrun_integration_go_test\(\) \{.*?\n\}\n`).FindString(script)
 	if !strings.Contains(body, `tmo="$(job_go_test_timeout 32)"`) {
 		t.Errorf("run_integration_go_test must take its go test limit from job_go_test_timeout 32 (cap %d - 3 min)", want)
 	}

@@ -66,6 +66,9 @@ const (
 	// is disabled: the backfill's assignment of such a principal gives no
 	// platform authority, so the platform roles switch would take it away.
 	DiffPlatformRoleDisabled = "platform_role_disabled_superuser"
+	// DiffNoActivePlatformAdmin is 1 when no principal holds platform_admin now.
+	// It is gated only with PlatformRolesGate (-platform-roles-gate).
+	DiffNoActivePlatformAdmin = "no_active_platform_admin"
 )
 
 // GatedClasses lists every class the gate counts, in report order: the diff
@@ -110,6 +113,13 @@ type Reconciliation struct {
 	MembershipPublicMissing int
 	MembershipAuthMissing   int
 	MembershipRoleDiff      int
+
+	// NoActivePlatformAdmin is 1 when no principal holds platform_admin by the
+	// store's rule, else 0. PlatformRolesGate says whether it is gated: without
+	// it the class prints as an info line, because the reconcile also runs
+	// before the users flip.
+	NoActivePlatformAdmin int
+	PlatformRolesGate     bool
 }
 
 // GatedTotal is the number of gated diffs: zero is the gate.
@@ -117,6 +127,9 @@ func (r Reconciliation) GatedTotal() int {
 	n := 0
 	for _, c := range r.Diffs {
 		n += c
+	}
+	if r.PlatformRolesGate {
+		n += r.NoActivePlatformAdmin
 	}
 	return n
 }
@@ -133,6 +146,9 @@ func (r Reconciliation) Lines() []string {
 	for _, class := range GatedClasses {
 		lines = append(lines, fmt.Sprintf("diff.%s=%d", class, r.Diffs[class]))
 	}
+	if r.PlatformRolesGate {
+		lines = append(lines, fmt.Sprintf("diff.%s=%d", DiffNoActivePlatformAdmin, r.NoActivePlatformAdmin))
+	}
 	lines = append(lines,
 		fmt.Sprintf("info.last_login_drift=%d", r.LastLoginDrift),
 		fmt.Sprintf("info.display_name_drift=%d", r.DisplayNameDrift),
@@ -144,6 +160,9 @@ func (r Reconciliation) Lines() []string {
 		fmt.Sprintf("info.membership_auth_missing=%d", r.MembershipAuthMissing),
 		fmt.Sprintf("info.membership_role_diff=%d", r.MembershipRoleDiff),
 	)
+	if !r.PlatformRolesGate {
+		lines = append(lines, fmt.Sprintf("info.%s=%d", DiffNoActivePlatformAdmin, r.NoActivePlatformAdmin))
+	}
 	return lines
 }
 

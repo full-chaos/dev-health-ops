@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
+	"github.com/full-chaos/dev-health-ops/internal/projectinventory"
 )
 
 // PrincipalAccessPattern is the principal access read (CHAOS-12084): acr-api
@@ -54,6 +55,11 @@ const (
 	// never stands for any scope.
 	RepositoryScopeRepos = "repos"
 	RepositoryScopeNone  = "none"
+
+	// ProjectScopeProjects and ProjectScopeNone are project_scope.kind. "none"
+	// is an empty project inventory and carries no projects array.
+	ProjectScopeProjects = "projects"
+	ProjectScopeNone     = "none"
 )
 
 // AccessQuery is one principal access read: the organization and the user from
@@ -95,6 +101,16 @@ type PrincipalAccess struct {
 	// Repositories is the org's repository inventory (repoinventory), sorted.
 	// Empty means none.
 	Repositories []string
+	// ProjectScope is the org's project inventory, served as project_scope. It
+	// is nil, and the answer carries no project_scope, unless the project scope
+	// flag is on and the org has no repository inventory.
+	ProjectScope *ProjectScope
+}
+
+// ProjectScope is project_scope: the org's projects (projectinventory),
+// sorted. An empty list is kind "none".
+type ProjectScope struct {
+	Projects []projectinventory.Item
 }
 
 // PrincipalAccessStore reads one principal's access. Errors are ErrOrgUnknown
@@ -195,6 +211,7 @@ func principalAccessHandler(store PrincipalAccessStore, auth routeAuth, logger *
 		started := time.Now()
 		access, err := store.Access(ctx, query)
 		elapsed := time.Since(started)
+		over, isOverLimit := inventoryOverLimitOf(err)
 		switch {
 		case err == nil:
 		case errors.Is(err, ErrOrgUnknown):
@@ -205,6 +222,17 @@ func principalAccessHandler(store PrincipalAccessStore, auth routeAuth, logger *
 			body.Set("detail", "Not found")
 			body.Set("code", UnknownOrganizationCode)
 			writeAccess(w, http.StatusNotFound, body)
+			return
+		case isOverLimit:
+			countInternal(ctx, routePrincipalAccess, over.outcome)
+			logger.WarnContext(ctx, "acr principal access: inventory over its limit; answering 503",
+				slog.String("org_id", orgRaw), slog.String("user_id", userRaw), slog.String("credential_id", cred.ID),
+				slog.String("inventory", over.inventory), slog.Int("limit", over.limit), slog.String("code", over.code),
+				slog.Duration("elapsed", elapsed))
+			body := pyjson.NewObject()
+			body.Set("detail", "Service unavailable")
+			body.Set("code", over.code)
+			writeAccess(w, http.StatusServiceUnavailable, body)
 			return
 		default:
 			countInternal(ctx, routePrincipalAccess, outcomeAccessUnavailable)
@@ -224,6 +252,9 @@ func principalAccessHandler(store PrincipalAccessStore, auth routeAuth, logger *
 		if access.Session != nil {
 			attrs = append(attrs, slog.Bool("session_live", access.Session.Live),
 				slog.String("session_reason", access.Session.Reason))
+		}
+		if access.ProjectScope != nil {
+			attrs = append(attrs, slog.Int("projects", len(access.ProjectScope.Projects)))
 		}
 		countInternal(ctx, routePrincipalAccess, outcomeSuccess)
 		logger.LogAttrs(ctx, slog.LevelInfo, "acr principal access: answered", attrs...)
@@ -257,6 +288,23 @@ func principalAccessBody(orgID, userID string, access PrincipalAccess) *pyjson.O
 		scope.Set("repos", append([]string(nil), access.Repositories...))
 	}
 	body.Set("repository_scope", scope)
+	if access.ProjectScope != nil {
+		projects := pyjson.NewObject()
+		if len(access.ProjectScope.Projects) == 0 {
+			projects.Set("kind", ProjectScopeNone)
+		} else {
+			projects.Set("kind", ProjectScopeProjects)
+			list := make([]pyjson.Value, 0, len(access.ProjectScope.Projects))
+			for _, project := range access.ProjectScope.Projects {
+				item := pyjson.NewObject()
+				item.Set("provider", project.Provider)
+				item.Set("id", project.ID)
+				list = append(list, item)
+			}
+			projects.Set("projects", list)
+		}
+		body.Set("project_scope", projects)
+	}
 	return body
 }
 
@@ -264,6 +312,24 @@ func principalAccessBody(orgID, userID string, access PrincipalAccess) *pyjson.O
 // Go-only route (no FastAPI ancestor, so no response-model entry): it writes
 // with the JSONResponse writer, as the llm-config route does, never WriteModel,
 // which records a writer violation on a route the table does not name.
+// ProjectScopeOverLimitCode and RepositoryScopeOverLimitCode are the machine
+// codes of the 503 for an inventory above its limit: the project inventory
+// above projectinventory.Limit (CHAOS-12224) and the repository inventory
+// above repoinventory.Limit (CHAOS-12267). acr types them as an access
+// limitation, not a retryable outage (CHAOS-12228). The status stays 503
+// (fail closed), so an acr that reads no 503 body (acr main 968bdcb0) handles
+// it exactly as before. Every other failed read is the code-less 503.
+const (
+	ProjectScopeOverLimitCode    = "acr_access_project_scope_over_limit"
+	RepositoryScopeOverLimitCode = "acr_access_repository_scope_over_limit"
+)
+
+// The internal-request counter's outcomes for them.
+const (
+	outcomeProjectsOverLimit = "project_scope_over_limit"
+	outcomeReposOverLimit    = "repository_scope_over_limit"
+)
+
 func writeAccess(w http.ResponseWriter, status int, body *pyjson.Object) {
 	policy.WriteJSON(w, status, body, http.Header{"X-Content-Type-Options": {"nosniff"}})
 }

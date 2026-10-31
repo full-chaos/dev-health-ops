@@ -273,3 +273,43 @@ func TestResponseBodyHasNoTrailingBytesAfterTheJSONValue(t *testing.T) {
 		t.Fatalf("body %q ends after the JSON value", raw)
 	}
 }
+
+// The entitlement route's Info answer line carries the ACR basis on success
+// (CHAOS-3695; CHAOS-12292 counts the orgs on the legacy grant alone), and the
+// body never does.
+func TestEntitlementLookupLogsTheACRBasisAtInfo(t *testing.T) {
+	for _, basis := range []string{"none", "ask_dev", "agent_context_runtime", "both"} {
+		t.Run(basis, func(t *testing.T) {
+			var logs bytes.Buffer
+			mux := http.NewServeMux()
+			for _, route := range Routes(Deps{
+				Store:  &fakeStore{entitlement: Entitlement{OrgID: "the-org-id", AgentContextRuntime: basis != "none", ACRBasis: basis}},
+				Auth:   newFakeCredentials(),
+				Logger: slog.New(slog.NewJSONHandler(&logs, nil)),
+			}) {
+				mux.Handle(route.Method+" "+route.Pattern, route.Handler)
+			}
+			server := httptest.NewServer(mux)
+			defer server.Close()
+			response, err := getAuthed(server.URL + "/api/v1/internal/acr/entitlements/the-org-id")
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, _ := io.ReadAll(response.Body)
+			response.Body.Close()
+			if response.StatusCode != http.StatusOK || bytes.Contains(raw, []byte("acr_entitlement_basis")) {
+				t.Fatalf("status %d body %s, want 200 without the basis", response.StatusCode, raw)
+			}
+			var line map[string]any
+			for _, l := range bytes.Split(bytes.TrimSpace(logs.Bytes()), []byte("\n")) {
+				var record map[string]any
+				if json.Unmarshal(l, &record) == nil && record["msg"] == "acr entitlement lookup: answered" {
+					line = record
+				}
+			}
+			if line == nil || line["level"] != "INFO" || line["acr_entitlement_basis"] != basis {
+				t.Fatalf("answer line %v, want INFO with acr_entitlement_basis=%s:\n%s", line, basis, logs.String())
+			}
+		})
+	}
+}

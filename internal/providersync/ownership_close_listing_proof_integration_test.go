@@ -130,6 +130,8 @@ func TestOwnershipCloseNeverReadsANullOrObjectPageAsAnEmptyListing(t *testing.T)
 				w.Header().Set("Content-Type", "application/json")
 				w.Header()["X-Next-Page"] = []string{""}
 				switch path := r.URL.EscapedPath(); {
+				case path == "/api/v4/version":
+					_, _ = io.WriteString(w, `{"version":"17.0.0","revision":"0000000"}`)
 				case path == "/api/v4/groups/org":
 					_, _ = io.WriteString(w, `{"id":1,"full_path":"org","name":"org","description":null}`)
 				case strings.HasSuffix(path, "/projects") && second:
@@ -166,6 +168,8 @@ func TestGitLabOwnershipCloseNeedsNoLinkNextBesideAnEmptyXNextPage(t *testing.T)
 		w.Header().Set("Content-Type", "application/json")
 		w.Header()["X-Next-Page"] = []string{""}
 		switch path := r.URL.EscapedPath(); {
+		case path == "/api/v4/version":
+			_, _ = io.WriteString(w, `{"version":"17.0.0","revision":"0000000"}`)
 		case path == "/api/v4/groups/org":
 			_, _ = io.WriteString(w, `{"id":1,"full_path":"org","name":"org","description":null}`)
 		case strings.HasSuffix(path, "/projects") && second:
@@ -246,6 +250,8 @@ func TestOwnershipCloseNeverReadsALinkEntryWithoutARelationAsTheEnd(t *testing.T
 				w.Header().Set("Content-Type", "application/json")
 				w.Header()["X-Next-Page"] = []string{""}
 				switch path := r.URL.EscapedPath(); {
+				case path == "/api/v4/version":
+					_, _ = io.WriteString(w, `{"version":"17.0.0","revision":"0000000"}`)
 				case path == "/api/v4/groups/org":
 					_, _ = io.WriteString(w, `{"id":1,"full_path":"org","name":"org","description":null}`)
 				case strings.HasSuffix(path, "/projects") && second:

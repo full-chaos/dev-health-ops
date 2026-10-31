@@ -5,6 +5,7 @@ package apiservice
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -24,6 +25,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/repoinventory"
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -241,6 +243,48 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), user, org); err
 			if rec := readWith(t, deps, ""); rec.Code != http.StatusOK {
 				t.Fatalf("%s: a row-only read answered %d %s, want 200", name, rec.Code, rec.Body.String())
 			}
+		}
+	})
+	// CHAOS-12285: an org whose repository inventory is above its limit gets the
+	// coded 503 through the mounted route, on a real migrated repos table and the
+	// APIPosture login: the read binds LIMIT 101, sees the 101st repository and
+	// refuses, never a 200 with a cut list.
+	t.Run("an org above the repository limit answers the coded 503", func(t *testing.T) {
+		big := uuid.New()
+		pgseed.Org(ctx, t, pool, big.String(), "community")
+		if _, err := pool.Exec(ctx, `INSERT INTO memberships (id, user_id, org_id, role, joined_at, created_at, updated_at)
+VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), user, big); err != nil {
+			t.Fatal(err)
+		}
+		for _, key := range []string{"ask_dev", "agent_context_runtime"} {
+			var featureID string
+			if err := pool.QueryRow(ctx, `SELECT id::text FROM feature_flags WHERE key = $1`, key).Scan(&featureID); err != nil {
+				t.Fatal(err)
+			}
+			pgseed.OrgOverride(ctx, t, pool, big.String(), featureID, true)
+		}
+		for i := 0; i <= repoinventory.Limit; i++ {
+			if err := chAdmin.Exec(ctx, `INSERT INTO repos (id, repo, org_id, provider, last_synced) VALUES (?, ?, ?, ?, ?)`,
+				uuid.New(), fmt.Sprintf("acme/r%03d", i), big.String(), "github", time.Now().UTC()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		server, err := NewInternalServer(config.Config{APIInternalAddress: "127.0.0.1:0"}, quietLog(),
+			InternalRoutes(Deps{Pool: pool, ClickHouse: granted}, quietLog()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/internal/acr/orgs/"+big.String()+"/principals/"+user.String()+"/access", nil)
+		request.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, request)
+		const want = `{"detail":"Service unavailable","code":"acr_access_repository_scope_over_limit"}`
+		if rec.Code != http.StatusServiceUnavailable || rec.Body.String() != want {
+			t.Fatalf("status %d body %s, want 503 %s", rec.Code, rec.Body.String(), want)
+		}
+		// The org with two repositories still reads: the refusal is the big org's only.
+		if rec := read(t, granted); rec.Code != http.StatusOK {
+			t.Fatalf("the two-repository org answered %d %s after the big org was seeded", rec.Code, rec.Body.String())
 		}
 	})
 }

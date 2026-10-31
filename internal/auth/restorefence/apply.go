@@ -42,7 +42,8 @@ type Options struct {
 	Inputs []FloorInput
 	// Source, when set, is the shadow restore that exported the manifest: the provider revocations the manifest names
 	// and the restored database lacks are copied from it and queued again. It needs a manifest.
-	Source RevocationSource
+	Source             RevocationSource
+	PlatformRolesOwned bool
 }
 
 // SectionReport is the count of one table.

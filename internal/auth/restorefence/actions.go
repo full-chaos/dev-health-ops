@@ -51,6 +51,8 @@ const (
 	// connected again under another binding, after the target) and queued each stored token for the revocation worker in
 	// the same statement. Nothing is required of the operator.
 	ActionProviderRevocationQueuedFromCredential ActionKind = "provider_revocation_queued_from_credential"
+	ActionRegrantPlatformRole                    ActionKind = "regrant_platform_role"
+	ActionNoActivePlatformAdmin                  ActionKind = "no_active_platform_admin"
 )
 
 // requeueRunbookStep is the follow-up of revocations an apply only named: the runbook step that sets the source. A

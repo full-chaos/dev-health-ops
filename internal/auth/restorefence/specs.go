@@ -88,7 +88,8 @@ type section struct {
 	action ActionKind
 	// queues marks the provider credential section: a deleted row oauthQueued holds has its stored token queued for the
 	// revocation worker in the delete statement (ActionProviderRevocationQueuedFromCredential); action names the rest.
-	queues bool
+	queues       bool
+	countsAbsent bool
 }
 
 func (s section) runsWithoutManifest() bool { return !s.manifestOnly }

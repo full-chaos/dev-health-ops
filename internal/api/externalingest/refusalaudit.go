@@ -25,6 +25,7 @@ const (
 	refusalTokenExpired       = "token_expired"
 	refusalInsufficientScope  = "insufficient_scope"
 	refusalFeatureNotEnabled  = "feature_not_enabled"
+	refusalOverFailureLimit   = "over_failure_limit"
 	refusalAuditWriteDeadline = 5 * time.Second
 	refusalAuditDescription   = "Ingest authentication refused"
 )
@@ -39,6 +40,26 @@ var auditFailures = func() metric.Int64Counter {
 	}
 	return counter
 }()
+
+// recordKnownRefusal takes the failure-limiter hit of a refusal decided from a token row, then audits it. The hit
+// comes first and decides: a hit the limiter does not admit is a refusal beyond the address's failure limit, so no
+// row is written (the rows per address are bounded by that limit, also under concurrency) and the drop is counted
+// under over_failure_limit; the answer is the same either way. A limiter store that cannot answer is the unhandled
+// 500 and writes no row. It returns that 500, or nil when the caller answers its refusal.
+func (d Deps) recordKnownRefusal(
+	ctx context.Context, r *http.Request, ip, reason, tokenID, orgID string, sourceID *string, requiredScope string,
+) *ingestError {
+	admitted, err := d.limiters.failure.AllowCounted(ctx, ip, "")
+	if err != nil {
+		return unhandledError()
+	}
+	if !admitted {
+		auditFailures.Add(ctx, 1, metric.WithAttributes(attribute.String("reason", refusalOverFailureLimit)))
+		return nil
+	}
+	d.auditRefusal(ctx, r, reason, tokenID, orgID, sourceID, requiredScope)
+	return nil
+}
 
 // auditRefusal records the refusal of a token whose row was read: the organisation and the token come from
 // that row, never from the request. It runs before the answer is written and never changes it: a write that

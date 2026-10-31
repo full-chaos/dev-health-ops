@@ -163,6 +163,11 @@ func (d Deps) requireIngestScope(
 
 	now := time.Now().UTC()
 	if revokedAt != nil || (expiresAt != nil && now.After(*expiresAt)) {
+		reason := refusalTokenExpired
+		if revokedAt != nil {
+			reason = refusalTokenRevoked
+		}
+		d.auditRefusal(ctx, r, reason, tokenID, orgID, sourceID, "")
 		return nil, fail()
 	}
 
@@ -185,6 +190,7 @@ func (d Deps) requireIngestScope(
 		scopes[s] = true
 	}
 	if !scopes[scope] {
+		d.auditRefusal(ctx, r, refusalInsufficientScope, tokenID, orgID, sourceID, scope)
 		if _, err := d.limiters.failure.AllowCounted(ctx, ip, ""); err != nil {
 			return nil, unhandledError()
 		}
@@ -197,6 +203,7 @@ func (d Deps) requireIngestScope(
 			return nil, newIngestError(http.StatusInternalServerError, "internal_error", "failed to resolve feature state")
 		}
 		if !decision.Allowed {
+			d.auditRefusal(ctx, r, refusalFeatureNotEnabled, tokenID, orgID, sourceID, "")
 			if _, err := d.limiters.failure.AllowCounted(ctx, ip, ""); err != nil {
 				return nil, unhandledError()
 			}

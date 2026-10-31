@@ -70,6 +70,7 @@ internal/auth/signedtoken
 internal/auth/workload
 internal/auth/workloadexchange
 internal/chmigrate
+internal/cigates/bigboyrender
 internal/cli
 internal/edgetokenmint
 internal/egressguard

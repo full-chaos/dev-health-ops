@@ -2,3 +2,4 @@
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 # header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 52cf476d7503c4131f15a77b238b73f8c539b531edff21d5e686066cba0b496f	go-generated	api_grants.golden
+e0134c628ecc6b2aa478ff640d6d50d18b0bd6f0a07a19b72f2aded7b6c5c427	go-generated	api_grants_project_scope.golden

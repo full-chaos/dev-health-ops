@@ -449,7 +449,9 @@ func configureWith(
 		}
 		deps.Auth, deps.Guard, deps.AuthSchema = protected.auth, protected.guard, protected.authSchema
 		deps.Verifier, deps.Signer = protected.verifier, protected.signer
-		scope = []func(http.Handler) http.Handler{protected.scope.Principal, protected.scope.OrgScope, protected.scope.Impersonation}
+		// ReadOnce first: the org scope and the route's guard read the token
+		// org's membership once per request.
+		scope = []func(http.Handler) http.Handler{protected.auth.ReadOnce, protected.scope.Principal, protected.scope.OrgScope, protected.scope.Impersonation}
 	}
 	var accessKeys authverify.KeySource
 	deps.AccessVerify, accessKeys, err = buildAccessVerify(envsecrets.ProcessLookup, deps.Auth, logger)

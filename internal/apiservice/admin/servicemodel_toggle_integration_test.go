@@ -77,7 +77,7 @@ func TestServiceModelSelfServiceToggle(t *testing.T) {
 		GoOnly: true,
 		Root:   root,
 		JWTKey: jwtKey,
-		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
+		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {
 				t.Helper()
@@ -129,7 +129,7 @@ VALUES (gen_random_uuid(), $1, 'llm', 'provider', 'anthropic', false, now(), now
 				tokens[slug] = map[string]any{"user_id": adminID.String(), "email": "svcmodel-admin@example.com", "org_id": org.String(), "role": "admin"}
 			}
 			return tokens
-		},
+		}),
 	})
 	base, pool := startGoServer(t, ctx, venue, jwtKey)
 	auth := func(name string) map[string]string {

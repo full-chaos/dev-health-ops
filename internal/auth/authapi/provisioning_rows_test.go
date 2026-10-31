@@ -333,3 +333,38 @@ func TestProvisioningRouteOpsCoverTheRoutes(t *testing.T) {
 		t.Fatalf("provisioningRouteOps patterns %v ops %v; want patterns %v ops %v", mapped, ops, patterns, want)
 	}
 }
+
+// The rows gate's refusal names, for the start log, the route and every class
+// its row must list, as a typed error with a stable reason: the workload class
+// too when the binding is configured.
+func TestTheRowsGateRefusalNamesTheRouteAndClasses(t *testing.T) {
+	workload := newWorkloadIssueFixture(t).workload
+	for name, tc := range map[string]struct {
+		workload *SessionIssueWorkload
+		classes  []string
+	}{
+		"without the workload path": {nil, []string{serviceSessionIssuerClass}},
+		"with the workload path":    {workload, []string{serviceSessionIssuerClass, workloadTokenClass}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rows := plantClasses(t, PatternMembershipAdd, "no_such_class")
+			_, err := provisioningRoutesOver(t, rows, tc.workload)
+			var refusal *ProvisioningRowError
+			if !errors.As(err, &refusal) || !errors.Is(err, errProvisioningRows) {
+				t.Fatalf("err = %v, want a ProvisioningRowError that is errProvisioningRows", err)
+			}
+			if refusal.Route != "POST "+PatternMembershipAdd || !slices.Equal(refusal.Classes, tc.classes) {
+				t.Fatalf("refusal route=%q classes=%v, want POST %s and %v", refusal.Route, refusal.Classes, PatternMembershipAdd, tc.classes)
+			}
+			if refusal.DependencyReason() != ProvisioningRowReason {
+				t.Fatalf("reason = %q", refusal.DependencyReason())
+			}
+			attrs := refusal.DependencyAttrs()
+			want := []any{"route", "POST " + PatternMembershipAdd, "required_classes", tc.classes}
+			if len(attrs) != len(want) || attrs[0] != want[0] || attrs[1] != want[1] || attrs[2] != want[2] ||
+				!slices.Equal(attrs[3].([]string), tc.classes) {
+				t.Fatalf("attrs = %v, want %v", attrs, want)
+			}
+		})
+	}
+}

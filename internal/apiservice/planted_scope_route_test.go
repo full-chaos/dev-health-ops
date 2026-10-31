@@ -42,6 +42,11 @@ func (s *plantedStore) Membership(context.Context, uuid.UUID, uuid.UUID) (string
 	return "", false, nil
 }
 
+func (s *plantedStore) OrgMembership(ctx context.Context, user, org uuid.UUID) (string, bool, bool, error) {
+	role, member, err := s.Membership(ctx, user, org)
+	return role, member, true, err
+}
+
 func (s *plantedStore) ActiveImpersonation(_ context.Context, admin uuid.UUID) (*policy.Impersonation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -238,7 +238,10 @@ func TestCreateOrgInviteVenueOracle(t *testing.T) {
 			"SMTP_HOST=" + smtpHost, "SMTP_PORT=" + strconv.Itoa(smtpPort),
 			"APP_BASE_URL=" + appBaseURL,
 		},
-		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
+		// withTokenMemberships adds the outsider's row in its token org with an id
+		// of its own: a row taking nextID() would shift the ids the requests
+		// below are recorded with.
+		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {
 				t.Helper()
@@ -295,7 +298,7 @@ VALUES ($1, $2, $3, $4, now(), now(), now())`, nextID(), row.org, row.user, row.
 				"plainowner": token(plainOwnerID, "venue-invite-plainowner@example.com", plainOrgID, "owner"),
 				"super":      {"user_id": superID.String(), "email": "venue-invite-super@example.com", "is_superuser": true},
 			}
-		},
+		}),
 	})
 
 	jsonHeaders := func(name string) map[string]string {

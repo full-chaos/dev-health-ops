@@ -77,6 +77,7 @@ internal/auth/restorefence	consumers_test.go	unexpressed	-	*.go
 internal/auth/restorefence	inventory_completeness_test.go	.	tree	*.go
 internal/auth/restorefence	specs_test.go	internal/pgmigrate/sql	dir	*
 internal/auth/writerinventory	scan_test.go	unexpressed	-	-
+internal/auth/writerinventory	session_revoke_census_test.go	internal	tree	*.go
 internal/bigboycompose	billing_edge_override_test.go	unexpressed	-	-
 internal/chmigrate	archive_test.go	internal/chmigrate	dir	*
 internal/chmigrate	archive_test.go	internal/chmigrate/archive/sql	dir	*

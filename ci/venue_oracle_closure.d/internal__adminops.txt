@@ -26,12 +26,14 @@ internal/apiservice/admin
 internal/audit
 internal/auth/clientaddr
 internal/auth/contracts/provisioning
+internal/auth/delegationend
 internal/auth/edgetoken
 internal/auth/httpapi
 internal/auth/identity
 internal/auth/passwordhash
 internal/auth/passwordpolicy
 internal/auth/platformrole/rule
+internal/auth/requestid
 internal/auth/sessionid
 internal/auth/signedtoken
 internal/chmigrate

@@ -48,10 +48,12 @@ internal/auth/contracts	endpoint_profiles_query_api_test.go	unexpressed	-	-
 internal/auth/contracts	error_envelope_goldens_test.go	unexpressed	-	-
 internal/auth/contracts	fixture_secret_scanner_test.go	unexpressed	-	-
 internal/auth/contracts	jwks_document_goldens_test.go	unexpressed	-	-
+internal/auth/contracts	openapi_refresh_versions_test.go	unexpressed	-	-
 internal/auth/contracts	principal_contract_goldens_test.go	unexpressed	-	-
 internal/auth/contracts	provisioning_event_goldens_test.go	unexpressed	-	-
 internal/auth/contracts	provisioning_resources_test.go	unexpressed	-	-
 internal/auth/contracts	reason_code_vocabulary_test.go	unexpressed	-	-
+internal/auth/contracts	refresh_response_v2_test.go	unexpressed	-	-
 internal/auth/contracts	reject_location_test.go	unexpressed	-	-
 internal/auth/contracts	retired_credential_class_test.go	unexpressed	-	-
 internal/auth/contracts	schema_dialect_test.go	unexpressed	-	-

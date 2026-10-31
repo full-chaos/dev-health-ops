@@ -118,8 +118,10 @@ type Decision struct {
 	// unless the action's catalog class is none. Allows of organization and
 	// platform actions leave it empty: the catalog class applies.
 	CacheClass CacheClass
-	// ExpiresAtUnixNano is the instant a CacheDecisionBound allow stops being
-	// usable (clock plus MembershipDefaultBoundNanos); 0 for every other decision.
+	// ExpiresAtUnixNano is the instant a repository allow stops being usable:
+	// clock plus RepositoryAllowBoundNanos (30 s), for a live-grant allow and a
+	// membership-default allow alike. 0 for every other decision, and for a
+	// repository action whose catalog cache class is none.
 	ExpiresAtUnixNano int64
 }
 

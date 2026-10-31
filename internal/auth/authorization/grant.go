@@ -89,11 +89,20 @@ func workloadDenial(s GrantSnapshot, action string) Reason {
 	return ""
 }
 
-// MembershipDefaultBoundNanos is how long a membership-default allow stays
-// usable: 30 seconds, the TRD section 14 ceiling of the decision-bound
-// allow-cache class. It is owned here; no environment, config or snapshot
-// value changes it.
-const MembershipDefaultBoundNanos int64 = 30_000_000_000
+// RepositoryAllowBoundNanos is how long a repository allow stays usable, by
+// either path (live grant or membership default): 30 seconds, the TRD
+// section 14 ceiling for a repository read. It is owned here; no
+// environment, config or snapshot value changes it.
+const RepositoryAllowBoundNanos int64 = 30_000_000_000
+
+// repositoryAllowExpiry is the instant a repository allow made at now stops
+// being usable; it saturates and never wraps.
+func repositoryAllowExpiry(now int64) int64 {
+	if now > math.MaxInt64-RepositoryAllowBoundNanos {
+		return math.MaxInt64
+	}
+	return now + RepositoryAllowBoundNanos
+}
 
 // membershipDefaultRole is the role an organization membership holds for
 // repository actions when it has no grant row: owner reads as admin.
@@ -200,12 +209,8 @@ func (e *Evaluator) evaluateRepository(r Request, act policycatalog.Action, s Sn
 		if act.CacheClass == policycatalog.CacheNone {
 			return Decision{Allowed: true, Reason: ReasonAllowedByMembershipDefault, PolicyRevision: rev, CacheClass: CacheNone}
 		}
-		expires := now + MembershipDefaultBoundNanos
-		if now > math.MaxInt64-MembershipDefaultBoundNanos {
-			expires = math.MaxInt64
-		}
 		return Decision{Allowed: true, Reason: ReasonAllowedByMembershipDefault, PolicyRevision: rev,
-			CacheClass: CacheDecisionBound, ExpiresAtUnixNano: expires}
+			CacheClass: CacheDecisionBound, ExpiresAtUnixNano: repositoryAllowExpiry(now)}
 	}
 
 	var sawRevoked, sawExpired bool
@@ -227,11 +232,11 @@ func (e *Evaluator) evaluateRepository(r Request, act policycatalog.Action, s Sn
 			sawExpired = true
 			continue
 		}
-		class := CacheResourceRevisionBound
 		if act.CacheClass == policycatalog.CacheNone {
-			class = CacheNone
+			return Decision{Allowed: true, Reason: ReasonAllowedByRepositoryGrant, PolicyRevision: rev, CacheClass: CacheNone}
 		}
-		return Decision{Allowed: true, Reason: ReasonAllowedByRepositoryGrant, PolicyRevision: rev, CacheClass: class}
+		return Decision{Allowed: true, Reason: ReasonAllowedByRepositoryGrant, PolicyRevision: rev,
+			CacheClass: CacheResourceRevisionBound, ExpiresAtUnixNano: repositoryAllowExpiry(now)}
 	}
 	switch {
 	case sawExpired:

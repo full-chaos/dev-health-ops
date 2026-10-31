@@ -274,3 +274,95 @@ func TestNew_RequiresSource(t *testing.T) {
 		t.Fatal("a missing source must fail")
 	}
 }
+
+func TestDecision_RevisionChangesWhenSourceContentChanges(t *testing.T) {
+	clk := &clock{now: time.Unix(1_000, 0)}
+	src := &fakeSource{content: team()}
+	a := newAdapter(t, src, clk, 8)
+	org := uuid.New()
+	first := a.Check(context.Background(), org, "sso_saml")
+	upgraded := team()
+	upgraded.Features["sso_saml"] = true
+	src.set(upgraded, nil)
+	clk.advance(entitlement.MaxTTL)
+	second := a.Check(context.Background(), org, "sso_saml")
+	if first.Revision == "" || second.Revision == "" || first.Revision == second.Revision {
+		t.Fatalf("revision must change with the source content: %q -> %q", first.Revision, second.Revision)
+	}
+	if !second.Allowed || first.Allowed {
+		t.Fatalf("decisions: %+v -> %+v", first, second)
+	}
+}
+
+func TestDecision_RevisionStableWhileContentUnchanged(t *testing.T) {
+	clk := &clock{now: time.Unix(1_000, 0)}
+	a := newAdapter(t, &fakeSource{content: team()}, clk, 8)
+	org := uuid.New()
+	first := a.Check(context.Background(), org, "webhooks")
+	clk.advance(entitlement.MaxTTL)
+	if second := a.Check(context.Background(), org, "webhooks"); second.Revision != first.Revision {
+		t.Fatalf("an unchanged source must keep the revision: %q -> %q", first.Revision, second.Revision)
+	}
+}
+
+func TestCheck_ExpiredSnapshotRefreshesAtTheBound(t *testing.T) {
+	clk := &clock{now: time.Unix(1_000, 0)}
+	src := &fakeSource{content: team()}
+	a := newAdapter(t, src, clk, 8)
+	org := uuid.New()
+	a.Check(context.Background(), org, "webhooks")
+	clk.advance(entitlement.MaxTTL)
+	a.Check(context.Background(), org, "webhooks")
+	if n := src.calls.Load(); n != 2 {
+		t.Fatalf("a snapshot at its expiry must be read again; source calls %d", n)
+	}
+}
+
+func TestCheck_SourceErrorOnFirstReadIsUnavailableNotNotGranted(t *testing.T) {
+	src := &fakeSource{err: errors.New("db down")}
+	a := newAdapter(t, src, &clock{now: time.Unix(1_000, 0)}, 8)
+	got := a.Check(context.Background(), uuid.New(), "webhooks")
+	if got.Allowed || got.Reason != entitlement.ReasonUnavailable {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestAdapter_EvictionIsLeastRecentlyUsed(t *testing.T) {
+	src := &fakeSource{content: team()}
+	a := newAdapter(t, src, &clock{now: time.Unix(1_000, 0)}, 2)
+	o1, o2, o3 := uuid.New(), uuid.New(), uuid.New()
+	a.Check(context.Background(), o1, "webhooks")
+	a.Check(context.Background(), o2, "webhooks")
+	a.Check(context.Background(), o1, "webhooks")
+	a.Check(context.Background(), o3, "webhooks")
+	before := src.calls.Load()
+	a.Check(context.Background(), o1, "webhooks")
+	a.Check(context.Background(), o3, "webhooks")
+	if src.calls.Load() != before {
+		t.Fatal("the recently used org and the newest org must stay held")
+	}
+	a.Check(context.Background(), o2, "webhooks")
+	if src.calls.Load() != before+1 {
+		t.Fatal("the least recently used org must be the one evicted")
+	}
+}
+
+func TestAdapter_RefreshOfHeldOrgDoesNotGrowOrEvict(t *testing.T) {
+	clk := &clock{now: time.Unix(1_000, 0)}
+	src := &fakeSource{content: team()}
+	a := newAdapter(t, src, clk, 2)
+	o1, o2 := uuid.New(), uuid.New()
+	a.Check(context.Background(), o1, "webhooks")
+	a.Check(context.Background(), o2, "webhooks")
+	for i := 0; i < 3; i++ {
+		if err := a.Refresh(context.Background(), o1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := src.calls.Load()
+	a.Check(context.Background(), o1, "webhooks")
+	a.Check(context.Background(), o2, "webhooks")
+	if src.calls.Load() != before {
+		t.Fatal("refreshing a held org must not evict another")
+	}
+}

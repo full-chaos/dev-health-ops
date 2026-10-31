@@ -114,3 +114,31 @@ func TestPGSource_DatabaseErrorIsReturned(t *testing.T) {
 		t.Fatal("a database error must not read as no entitlement")
 	}
 }
+
+func TestPGSource_OrganizationQueryErrorIsReturned(t *testing.T) {
+	if _, err := load(t, row{err: pgx.ErrNoRows}, row{err: errors.New("boom")}); err == nil {
+		t.Fatal("an organizations read error must not read as no entitlement")
+	}
+}
+
+func TestPGSource_LicenseQueryErrorDoesNotFallBack(t *testing.T) {
+	q := &fakeQ{rows: []row{{err: errors.New("boom")}, {vals: []any{"enterprise"}}}}
+	if _, err := (entitlement.PGSource{Q: q}).Load(context.Background(), uuid.New()); err == nil {
+		t.Fatal("a license read error must be returned, not answered from the organization tier")
+	}
+	if len(q.rows) != 1 {
+		t.Fatal("the organizations tier must not be read after a license read error")
+	}
+}
+
+func TestCheck_PGSourceErrorIsUnavailable(t *testing.T) {
+	src := entitlement.PGSource{Q: &fakeQ{rows: []row{{err: errors.New("boom")}}}}
+	a, err := entitlement.New(entitlement.Config{Source: src})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := a.Check(context.Background(), uuid.New(), "webhooks")
+	if got.Allowed || got.Reason != entitlement.ReasonUnavailable {
+		t.Fatalf("got %+v", got)
+	}
+}

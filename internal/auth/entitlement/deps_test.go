@@ -40,3 +40,37 @@ func TestAuthorizationDoesNotImportPackage(t *testing.T) {
 		}
 	}
 }
+
+func TestPackageImportsNoTokenOrClaimsPackage(t *testing.T) {
+	const base = "github.com/full-chaos/dev-health-ops/internal/auth/"
+	forbidden := map[string]bool{}
+	for _, p := range []string{
+		"edgetoken", "session", "sessionid", "servicecred", "accessverify", "authruntime", "authapi",
+		"workloadexchange", "contracts/tokencorpus", "identity/local", "identity/oidc", "identity/saml",
+	} {
+		forbidden[base+p] = true
+	}
+	for _, dep := range deps(t, entitlementPkg) {
+		if forbidden[dep] {
+			t.Fatalf("entitlement must not import the token/claims package %s", dep)
+		}
+	}
+}
+
+func TestNoAuthPackageImportsEntitlement(t *testing.T) {
+	out, err := exec.Command("go", "list", "-f", "{{.ImportPath}} {{join .Imports \" \"}}", "github.com/full-chaos/dev-health-ops/internal/auth/...").CombinedOutput()
+	if err != nil {
+		t.Fatalf("go list: %v\n%s", err, out)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 || fields[0] == entitlementPkg {
+			continue
+		}
+		for _, imp := range fields[1:] {
+			if imp == entitlementPkg {
+				t.Fatalf("%s imports internal/auth/entitlement; the PDP reaches it through its own interface", fields[0])
+			}
+		}
+	}
+}

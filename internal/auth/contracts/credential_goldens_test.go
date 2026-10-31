@@ -447,6 +447,10 @@ func TestCredentialClassEnumEqualsPrincipalV1sEnum(t *testing.T) {
 		var node map[string]any
 		_ = json.Unmarshal(raw, &node)
 		for _, step := range path {
+			if step == "[]" {
+				node = node["items"].(map[string]any)
+				continue
+			}
 			node = node["properties"].(map[string]any)[step].(map[string]any)
 		}
 		var out []string
@@ -466,6 +470,7 @@ func TestCredentialClassEnumEqualsPrincipalV1sEnum(t *testing.T) {
 	}{
 		{CredentialEntrySurface, enumOf(CredentialEntrySurface, "credential_class")},
 		{CredentialReceiptSurface, enumOf(CredentialReceiptSurface, "credential", "credential_class")},
+		{CredentialListSurface, enumOf(CredentialListSurface, "items", "[]", "credential_class")},
 	} {
 		if strings.Join(surface.got, ",") != strings.Join(principal, ",") {
 			t.Errorf("%s credential_class enum differs from principal.v1's", surface.name)

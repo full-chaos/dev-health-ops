@@ -114,6 +114,7 @@ func Init(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedId
 		},
 		Audit:     audit.AuditEvent{EventType: "auth.restore_fence.initialized", Outcome: audit.OutcomeAllowed},
 		OffStream: audit.OffStreamRestoreFence,
+		Refusals:  initRefusals(),
 	})
 	switch {
 	case errors.Is(err, errInitExists) && ifAbsent:
@@ -129,3 +130,5 @@ func Init(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedId
 	}
 	return report, nil
 }
+
+func initRefusals() []error { return nil }

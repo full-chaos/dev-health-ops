@@ -279,3 +279,38 @@ func TestC5RemovalBehindTheChangeEndsTheNewSession(t *testing.T) {
 		t.Error("the removal left the new session live")
 	}
 }
+
+// C7: a membership writer holds the principals row; the change waits for it holding no public.users row, then commits.
+func TestC7ChangeBehindThePrincipalsRowHoldsNoUserRow(t *testing.T) {
+	ctx := context.Background()
+	rig := newMemberRig(t, ctx)
+	org, user, _ := rig.setup(t, ctx)
+	holder, pid := rig.hold(t, ctx, "auth.principals", "id", user)
+	type outcome struct {
+		res PasswordEndResult
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		res, err := rig.change(ctx, user, &org)
+		done <- outcome{res, err}
+	}()
+	rig.blockedBy(t, ctx, pid, nil)
+	probe, err := rig.env.admin.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var id uuid.UUID
+	err = probe.QueryRow(ctx, `SELECT id FROM public.users WHERE id = $1 FOR UPDATE NOWAIT`, user).Scan(&id)
+	_ = probe.Rollback(ctx)
+	if err != nil {
+		t.Errorf("the waiting change holds the public.users row: %v", err)
+	}
+	if err := holder.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	out := <-done
+	if out.err != nil || out.res.Issued == nil {
+		t.Fatalf("change = %+v, %v", out.res, out.err)
+	}
+}

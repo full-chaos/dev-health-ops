@@ -2717,6 +2717,7 @@ run_integration_packages() {
   # so go test and its children inherit it next to their stdout: the same pipe, no new writer.
   local tee_wait="${DEV_HEALTH_GO_TEE_WAIT_SECS:-30}" tee_tick
   case "${tee_wait}" in ""|*[!0-9]*) tee_wait=30 ;; esac
+  tee_wait=$((10#${tee_wait}))
   for ((tee_tick = 0; tee_tick < tee_wait * 5; tee_tick++)); do
     kill -0 "${tee_pid}" 2>/dev/null || break
     sleep 0.2

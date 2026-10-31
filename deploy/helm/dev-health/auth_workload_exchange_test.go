@@ -116,8 +116,12 @@ func TestWorkloadExchangeEnvStartsAuthService(t *testing.T) {
 	if err != nil {
 		t.Fatalf("auth-service refuses the rendered exchange settings: %v", err)
 	}
-	if !cfg.WorkloadExchange.Enabled {
-		t.Error("the rendered settings do not turn the exchange on")
+	want := authconfig.WorkloadExchange{
+		Enabled: true, TrustDomain: "cluster.example", ClusterIssuer: "https://kubernetes.default.svc",
+		KubeAPIURL: "https://kubernetes.default.svc", KubeCAFile: exchangeCA, ReviewerTokenFile: exchangeToken,
+	}
+	if cfg.WorkloadExchange != want {
+		t.Errorf("the config the rendered env loads = %+v, want %+v", cfg.WorkloadExchange, want)
 	}
 }
 

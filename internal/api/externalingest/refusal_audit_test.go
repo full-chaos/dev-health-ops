@@ -169,7 +169,7 @@ func TestKnownTokenRefusalsWriteOneAuditRow(t *testing.T) {
 				if answer.Code != site.status {
 					t.Fatalf("status %d, want %d; body %s", answer.Code, site.status, answer.Body.String())
 				}
-				if site.code == "" && strings.TrimSpace(answer.Body.String()) != canonicalError {
+				if site.code == "" && answer.Body.String() != canonicalError {
 					t.Errorf("body %q, want the canonical invalid_token body", answer.Body.String())
 				}
 				if site.code != "" && !strings.Contains(answer.Body.String(), `"`+site.code+`"`) {
@@ -221,7 +221,7 @@ func TestRefusalsWithoutATokenRowWriteNoAudit(t *testing.T) {
 				rig := newAuditRig(t, nil)
 				rig.server.SetToken(nil)
 				answer := rig.do(t, context.Background(), rt, authorization)
-				if answer.Code != http.StatusUnauthorized || strings.TrimSpace(answer.Body.String()) != canonicalError {
+				if answer.Code != http.StatusUnauthorized || answer.Body.String() != canonicalError {
 					t.Fatalf("answer %d %s, want the canonical 401", answer.Code, answer.Body.String())
 				}
 				if rows := rig.server.AuditRows(); len(rows) != 0 {

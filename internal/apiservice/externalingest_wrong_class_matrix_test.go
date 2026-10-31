@@ -471,7 +471,7 @@ func TestExternalIngestWrongClassMatrix(t *testing.T) {
 				if got.status != http.StatusUnauthorized {
 					t.Fatalf("status %d, want 401; body %s", got.status, got.body)
 				}
-				if got.body != pushInvalidTokenBody+"\n" && got.body != pushInvalidTokenBody {
+				if got.body != pushInvalidTokenBody {
 					t.Errorf("body %q, want the canonical %q", got.body, pushInvalidTokenBody)
 				}
 				if d := connects.Count() - before; d != 0 {
@@ -506,7 +506,7 @@ func TestExternalIngestWrongClassMatrixThrottlesThe31stFailure(t *testing.T) {
 	rig.limiter.reset()
 	route := pushProtectedRoutes[0]
 	for i := 1; i <= pushFailureLimitPerMin; i++ {
-		if got := rig.serve(route, nil); got.status != http.StatusUnauthorized || got.body != pushInvalidTokenBody+"\n" && got.body != pushInvalidTokenBody {
+		if got := rig.serve(route, nil); got.status != http.StatusUnauthorized || got.body != pushInvalidTokenBody {
 			t.Fatalf("failure %d: %d %s, want the canonical 401", i, got.status, got.body)
 		}
 	}
@@ -533,7 +533,7 @@ func TestExternalIngestWrongClassMatrixControls(t *testing.T) {
 			rig.limiter.reset()
 			selects := pg.tokenSelects()
 			got := rig.serve(route, bearer(pushToken))
-			if got.status != http.StatusUnauthorized || got.body != pushInvalidTokenBody+"\n" && got.body != pushInvalidTokenBody {
+			if got.status != http.StatusUnauthorized || got.body != pushInvalidTokenBody {
 				t.Fatalf("%d %s, want the canonical 401", got.status, got.body)
 			}
 			if d := pg.tokenSelects() - selects; d != 1 {

@@ -747,6 +747,16 @@ func TestLiveRowGuardFiresOnPlantedRows(t *testing.T) {
 		row.raw["disclosure_behavior"] = row.str("disclosure_behavior") + "; 409 for a conflict"
 		mustDefect(t, "extra", driveRow(t, row), row.id, "states 409")
 	})
+	t.Run("R5 a /graphql row that drops the 500 clause", func(t *testing.T) {
+		row := liveRowByID(t, "POST /graphql [dev-health-query-api @query,internal]")
+		text := row.str("disclosure_behavior")
+		cut := strings.Index(text, "; 500 when")
+		if cut < 0 {
+			t.Fatal("the row states no 500 clause")
+		}
+		row.raw["disclosure_behavior"] = text[:cut]
+		mustDefect(t, "drop 500", driveRow(t, row), row.id, "answers 500")
+	})
 	t.Run("R4 an exempt policy on a route whose edge carrier rebinds", func(t *testing.T) {
 		row := liveRowByID(t, query)
 		row.raw["impersonation_policy"] = "exempt_no_org_context"

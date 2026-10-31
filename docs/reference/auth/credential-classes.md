@@ -235,6 +235,10 @@ HMAC of the presented token over a stored random seed, so no token is stored);
 any other reuse revokes the whole family. The family ends 12 h after login and
 no refresh extends it; an ended family is purged after a grace. acr-api serves
 it only with a browser client configured, so the class is `optional_feature`.
+Its class marker is the `grant_type` form field value `refresh_token`
+(CHAOS-12187). acr-api's `POST /token` serves this class and the
+authorization code, and the `grant_type` field, compared exactly, picks the
+class before any validator runs.
 
 ## The CHAOS-3271 class: credentials that reach a validator that is not their own
 

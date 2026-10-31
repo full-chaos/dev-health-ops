@@ -48,6 +48,10 @@
     {
       "file": "valid-multi-class-subject-token-type-selector.json",
       "why": "The workload-token exchange accepts two classes in the same form field: the Kubernetes ServiceAccount token and the Compose bootstrap credential. The RFC 8693 subject_token_type picks the class; only the bootstrap class declares the selector's token-type URI, so subject_token_type picks exactly one."
+    },
+    {
+      "file": "valid-multi-class-grant-type-selector.json",
+      "why": "acr-api's token endpoint accepts two classes in one form: the authorization or device code and the browser refresh token. The OAuth grant_type form field picks the class; only the refresh token class declares the refresh_token grant (compared exactly)."
     }
   ],
   "reject": [
@@ -376,6 +380,12 @@
       "why": "A subject_token_type selector names a full token-type URI (urn:...); a bare word is not one."
     },
     {
+      "file": "invalid-grant-type-name-not-a-grant-type.json",
+      "expect_instance_location": "/class_disambiguator/name",
+      "expect_keyword": "pattern",
+      "why": "A grant_type selector names an OAuth grant type exactly as sent: a lowercase name such as refresh_token, or a lowercase urn: URI. A mixed-case word is not one."
+    },
+    {
       "file": "invalid-urn-name-on-a-header-selector.json",
       "expect_instance_location": "/class_disambiguator/name",
       "expect_keyword": "not",
@@ -410,6 +420,10 @@
     {
       "file": "invalid-subject-token-type-selector-no-accepted-class-owns-it.json",
       "why": "Schema-valid, refused by the profile gate: the route accepts the two exchange classes and selects by a token-type URI neither declares (compared exactly, so a longer URI is not a match)."
+    },
+    {
+      "file": "invalid-grant-type-selector-no-accepted-class-owns-it.json",
+      "why": "Schema-valid, refused by the profile gate: the token endpoint accepts the code and the refresh token classes and selects by a grant type neither declares."
     }
   ]
 }

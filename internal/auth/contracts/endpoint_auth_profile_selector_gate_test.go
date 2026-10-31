@@ -299,6 +299,8 @@ func markerMatchesTransport(kind, name, head, shape string) bool {
 		return strings.Contains(head, "content-type "+name)
 	case "subject_token_type":
 		return strings.Contains(head, "subject_token_type "+name)
+	case "grant_type":
+		return strings.Contains(head, "grant_type="+name)
 	}
 	return false
 }

@@ -1,0 +1,21 @@
+{
+  "accepted_credential_classes": [
+    "acr_browser_refresh_token",
+    "acr_device_flow_code"
+  ],
+  "action": "acr.context.read",
+  "cache_class": "decision_bound",
+  "class_disambiguator": {
+    "kind": "grant_type",
+    "name": "authorization_code"
+  },
+  "classification": "protected",
+  "current_state_required": false,
+  "denial_disclosure": "forbidden",
+  "impersonation": "denied",
+  "method": "POST",
+  "resource_resolver": "credential_claim",
+  "route": "/token",
+  "schema_version": "endpoint-auth-profile.v1",
+  "tenant_requirement": "active_membership"
+}

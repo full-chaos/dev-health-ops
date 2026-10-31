@@ -147,8 +147,8 @@ func TestTheSelectorNameRulesAreTheSameInEverySchema(t *testing.T) {
 		"registry":  dig(registry, "$defs", "credentialClass", "properties", "markers", "items", "allOf"),
 	}
 	want, _ := json.Marshal(rules["inventory"])
-	if list, _ := rules["inventory"].([]any); len(list) != 2 {
-		t.Fatalf("inventory selector rules %s, want the content_type and subject_token_type rules", want)
+	if list, _ := rules["inventory"].([]any); len(list) != 4 {
+		t.Fatalf("inventory selector rules %s, want the content_type, subject_token_type and grant_type rules and the no-colon rule for every other kind", want)
 	}
 	for name, rule := range rules {
 		got, _ := json.Marshal(rule)

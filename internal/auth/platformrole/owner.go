@@ -20,11 +20,7 @@ func operatorAudit(eventType, reason, subject string) audit.AuditEvent {
 // refuseOwner records an API grant or revoke of platform_owner that Grant or
 // Revoke refused. The refusal stands if the audit row cannot be written.
 func (s *Store) refuseOwner(ctx context.Context, eventType string, actor, principal uuid.UUID) {
-	actorID, subject := actor.String(), principal.String()
-	err := audit.Append(ctx, s.pool, s.schema, audit.AuditEvent{
-		EventType: eventType, Outcome: audit.OutcomeDenied, ActorPrincipalID: &actorID, SubjectPrincipalID: &subject,
-		Attributes: map[string]any{"reason_code": "denied_policy", "target_kind": "principal", "target_id": subject},
-	})
+	err := audit.Append(ctx, s.pool, s.schema, ownerRefusalAudit(eventType, actor, principal))
 	if err != nil {
 		s.logger.ErrorContext(ctx, "platformrole: the platform_owner refusal could not be audited", "event_type", eventType)
 	}
@@ -124,4 +120,12 @@ WHERE r.role_key = $1 AND `+activeSQL, PlatformOwner).Scan(&n)
 		return 0, s.storeErr(ctx, "count owners", err)
 	}
 	return n, nil
+}
+
+func ownerRefusalAudit(eventType string, actor, principal uuid.UUID) audit.AuditEvent {
+	actorID, subject := actor.String(), principal.String()
+	return audit.AuditEvent{
+		EventType: eventType, Outcome: audit.OutcomeDenied, ActorPrincipalID: &actorID, SubjectPrincipalID: &subject,
+		Attributes: map[string]any{"reason_code": "denied_policy", "target_kind": "principal", "target_id": subject},
+	}
 }

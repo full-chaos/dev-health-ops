@@ -101,7 +101,7 @@ func TestDelegation_PlantedCredentialActionIsDeniedUnderImpersonation(t *testing
 	if err := json.Unmarshal(vocabulary.RolesV1, &rf); err != nil {
 		t.Fatal(err)
 	}
-	ids := []string{"credentials.issue", "credentials.rotate", "credentials.revoke", "tokens.create"}
+	ids := []string{"credentials.issue", "credentials.rotate", "credentials.revoke", "tokens.create", "admin.impersonate"}
 	for _, id := range ids {
 		af["actions"] = append(af["actions"].([]any), map[string]any{
 			"action": id, "scope": "organization", "resource_kind": "organization", "risk_class": "high", "cache_class": "none",
@@ -127,6 +127,13 @@ func TestDelegation_PlantedCredentialActionIsDeniedUnderImpersonation(t *testing
 		if got.Allowed || got.Reason != ReasonImpersonationDenied {
 			t.Errorf("%s: %+v want impersonation_denied", id, got)
 		}
+	}
+	got := e.Evaluate(orgRequest("admin.impersonate"), delegated("owner", ids, ownerActorRol))
+	if got.Allowed || got.Reason != ReasonImpersonationDenied {
+		t.Errorf("a nested impersonation is denied for platform_owner too: %+v", got)
+	}
+	if got := e.Evaluate(orgRequest("credentials.rotate"), delegated("owner", ids, ownerActorRol)); !got.Allowed || got.Audit == nil {
+		t.Errorf("platform_owner exemption covers a planted credential action: %+v", got)
 	}
 }
 

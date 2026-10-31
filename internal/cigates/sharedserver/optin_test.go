@@ -180,6 +180,20 @@ func TestOptInNeedsATestMainThatRunsTheTestsInsideTheSharedCall(t *testing.T) {
 			"func TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int { return 0 }))\n}\n"), false},
 		{"a package that is not the harness", mainFile("\t\"os\"\n\t\"testing\"\n\n\t\"example.com/other/containers\"\n",
 			"func TestMain(m *testing.M) { os.Exit(containers.RunWithSharedServers(m.Run)) }\n"), false},
+		{"a no-op helper given m", mainFile(stdImports,
+			"func noop(m *testing.M) int { return 0 }\n\nfunc TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int { return noop(m) }))\n}\n"), false},
+		{"a helper from another package given m", mainFile(stdImports+"\t\"example.com/other/runner\"\n",
+			"func TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int { return runner.RunTests(m) }))\n}\n"), false},
+		{"a same-file helper that drops m", mainFile(stdImports,
+			"func drop(m *testing.M) int {\n\t_ = m\n\treturn 0\n}\n\nfunc TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int { return drop(m) }))\n}\n"), false},
+		{"a same-file helper that runs m", mainFile(stdImports,
+			"func run(m *testing.M) int { return m.Run() }\n\nfunc TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int { return run(m) }))\n}\n"), true},
+		{"a same-file helper that hands m to venueoracle.RunTests", mainFile(stdImports+venueImport,
+			"func run(m *testing.M) int { return venueoracle.RunTests(m) }\n\nfunc TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int { return run(m) }))\n}\n"), true},
+		{"mutual recursion with no run", mainFile(stdImports,
+			"func ping(m *testing.M) int { return pong(m) }\n\nfunc pong(m *testing.M) int { return ping(m) }\n\nfunc TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int { return ping(m) }))\n}\n"), false},
+		{"mutual recursion that reaches a run", mainFile(stdImports,
+			"func ping(m *testing.M) int { return pong(m) }\n\nfunc pong(m *testing.M) int {\n\tif false {\n\t\treturn ping(m)\n\t}\n\treturn m.Run()\n}\n\nfunc TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int { return ping(m) }))\n}\n"), true},
 		{"no TestMain", "package opted\n\nfunc helper() {}\n", false},
 	}
 	for _, tc := range cases {
@@ -203,10 +217,12 @@ func TestABatchRowFailsWhenItsTestMainOnlyMentionsTheCall(t *testing.T) {
 	write("internal/commented/main_test.go", "package commented\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\n// containers.RunWithSharedServers(m.Run)\nfunc TestMain(m *testing.M) { os.Exit(m.Run()) }\n")
 	write("internal/unused/main_test.go", mainFile(stdImports, "func TestMain(m *testing.M) {\n\t_ = containers.RunWithSharedServers\n\tos.Exit(m.Run())\n}\n"))
 	write("internal/outside/main_test.go", mainFile(stdImports, "func TestMain(m *testing.M) {\n\t_ = containers.RunWithSharedServers(m.Run)\n\tos.Exit(m.Run())\n}\n"))
+	write("internal/dropsm/main_test.go", mainFile(stdImports+venueImport,
+		"func runTests(m *testing.M) int { return 0 }\n\nfunc TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int {\n\t\tcode := runTests(m)\n\t\treturn code\n\t}))\n}\n"))
 	optedIn, _ := scan(t, filepath.Join(root, "internal"))
-	batch := []string{"internal/real", "internal/commented", "internal/unused", "internal/outside"}
+	batch := []string{"internal/real", "internal/commented", "internal/unused", "internal/outside", "internal/dropsm"}
 	got := strings.Join(missingFromBatch(optedIn, batch), ",")
-	if want := "internal/commented,internal/unused,internal/outside"; got != want {
+	if want := "internal/commented,internal/unused,internal/outside,internal/dropsm"; got != want {
 		t.Errorf("batch rows missing from the opted-in packages = %q, want %q (opted in: %v)", got, want, optedIn)
 	}
 }

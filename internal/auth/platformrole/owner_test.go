@@ -7,6 +7,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/audit"
+
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
 )
@@ -68,5 +70,29 @@ func TestPlatformOwnerRefusalIsKept(t *testing.T) {
 	}
 	if !found {
 		t.Error("ErrPlatformOwnerCLIOnly is not in the refusals writeErr keeps")
+	}
+}
+
+// The operator verbs audit with no actor principal and the operator CLI as the
+// source; the API refusal audits the actor, the target and a denied outcome.
+func TestOwnerAuditEventsNameWhoAndHow(t *testing.T) {
+	subject := uuid.New()
+	ev := operatorAudit("auth.platform_role.granted", "role_granted", subject.String())
+	if ev.ActorPrincipalID != nil || ev.SubjectPrincipalID == nil || *ev.SubjectPrincipalID != subject.String() ||
+		ev.Outcome != audit.OutcomeAllowed || ev.Attributes["source"] != audit.SourceOperatorCLI ||
+		ev.Attributes["target_id"] != subject.String() || ev.Attributes["reason_code"] != "role_granted" {
+		t.Errorf("operator audit event = %+v", ev)
+	}
+	if err := audit.ValidateAttributes(ev.Attributes); err != nil {
+		t.Errorf("operator audit attributes refused: %v", err)
+	}
+	actor := uuid.New()
+	ref := ownerRefusalAudit(audit.EventPlatformOwnerGrantRefused, actor, subject)
+	if ref.Outcome != audit.OutcomeDenied || ref.ActorPrincipalID == nil || *ref.ActorPrincipalID != actor.String() ||
+		ref.SubjectPrincipalID == nil || *ref.SubjectPrincipalID != subject.String() || ref.EventType != audit.EventPlatformOwnerGrantRefused {
+		t.Errorf("refusal audit event = %+v", ref)
+	}
+	if err := audit.ValidateAttributes(ref.Attributes); err != nil {
+		t.Errorf("refusal audit attributes refused: %v", err)
 	}
 }

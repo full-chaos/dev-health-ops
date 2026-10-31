@@ -27,7 +27,8 @@ func gitlabMilestoneAncestorParam(ctx context.Context, client *providerfoundatio
 		Version string `json:"version"`
 	}
 	if err := fetchObjectRoute(ctx, client, gitlabVersionRoute, "/api/v4/version", &payload); err != nil {
-		slog.Default().ErrorContext(ctx, "gitlab_version_probe_failed", append(ids, "error_class", logging.ErrorClass(err), "error_type", logging.ErrorType(err))...)
+		errorClass, errorType := logging.ErrorClass(err), logging.ErrorType(err) // never the error text (CHAOS-7933)
+		slog.Default().ErrorContext(ctx, "gitlab_version_probe_failed", append(ids, "error_class", errorClass, "error_type", errorType)...)
 		return "include_ancestors"
 	}
 	match := gitlabVersionPrefix.FindStringSubmatch(payload.Version)

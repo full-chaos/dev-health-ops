@@ -1005,11 +1005,11 @@ refuses a mapped ipBlock.except entry, so one is refused at render.
 {{- end -}}
 
 {{/*
-The access-token class (authService.accessToken). Checks it and renders the eddsa issuer URL, or "" for any other
-class: one value for auth-service (AUTH_TOKEN_ISSUER_URL) and go-api (AUTH_ACCESS_TOKEN_ISSUER). The pattern is
+The access-token class (authService.accessToken). Checks it and renders the issuer URL when one is set (or the class is
+eddsa, which needs one): auth-service's AUTH_TOKEN_ISSUER_URL under any class. go-api's AUTH_ACCESS_TOKEN_ISSUER is the eddsa case alone (authEdDSAIssuer). The pattern is
 auth-service's issuerURLPattern (internal/auth/authconfig), so a value the service would refuse fails the render.
 */}}
-{{- define "dev-health.authEdDSAIssuer" -}}
+{{- define "dev-health.authTokenIssuer" -}}
 {{- $t := default dict .Values.authService.accessToken -}}
 {{- if not (and (or (kindIs "invalid" $t.class) (kindIs "string" $t.class)) (or (kindIs "invalid" $t.issuerURL) (kindIs "string" $t.issuerURL))) }}{{- fail "authService.accessToken.class and authService.accessToken.issuerURL must be strings" }}{{- end -}}
 {{- $class := $t.class | default "" -}}
@@ -1018,12 +1018,19 @@ auth-service's issuerURLPattern (internal/auth/authconfig), so a value the servi
 {{- if not (has $class (list "hs256_compat" "eddsa")) }}{{- fail "authService.accessToken.class must be empty, hs256_compat or eddsa" }}{{- end -}}
 {{- if not (include "dev-health.authOn" (dict "flag" "sessions" "context" .)) }}{{- fail "authService.accessToken.class needs authService.phase >= 2: auth-service mints access tokens only on its session routes" }}{{- end -}}
 {{- end -}}
-{{- if eq $class "eddsa" -}}
+{{- if or (eq $class "eddsa") $issuer -}}
 {{- if not (regexMatch "^https://[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,63}){0,8}$" $issuer) }}{{- fail "authService.accessToken.class=eddsa needs authService.accessToken.issuerURL: an https URL with a lowercase host, no trailing slash, userinfo, query or fragment" }}{{- end -}}
 {{- $issuer -}}
-{{- else if $issuer -}}
-{{- fail "authService.accessToken.issuerURL is set but authService.accessToken.class is not eddsa: the issuer is rendered only for eddsa tokens" }}
 {{- end -}}
+{{- end -}}
+
+{{/*
+The issuer go-api and query-api verify web access tokens against (AUTH_ACCESS_TOKEN_ISSUER): "" unless the class is eddsa.
+An issuer set under hs256_compat reaches auth-service alone (authTokenIssuer), so web-token validation does not change.
+*/}}
+{{- define "dev-health.authEdDSAIssuer" -}}
+{{- $issuer := include "dev-health.authTokenIssuer" . -}}
+{{- if eq ((default dict .Values.authService.accessToken).class | default "") "eddsa" -}}{{- $issuer -}}{{- end -}}
 {{- end -}}
 
 {{/*

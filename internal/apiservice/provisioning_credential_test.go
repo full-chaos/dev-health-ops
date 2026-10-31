@@ -404,7 +404,7 @@ func TestWorkloadSelectorSendsOnlyTheWorkloadToken(t *testing.T) {
 	w.runAll(t, cfg, env)
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if want := 2 * 10; w.provisioning != want {
+	if want := 2 * 12; w.provisioning != want {
 		t.Fatalf("%d provisioning requests, want %d", w.provisioning, want)
 	}
 	for i, auth := range w.auths {

@@ -498,8 +498,8 @@ func Load(spec Spec) (Config, error) {
 			return Config{}, fmt.Errorf("%s=%s needs %s", EnvAccessTokenClass, AccessClassEdDSA, EnvTokenIssuerURL)
 		}
 		if _, ok := contracts.AccessTokenScope(cfg.Session.AccessAudience); !ok {
-			return Config{}, fmt.Errorf("%s=%s needs %s to name a user access token audience",
-				EnvAccessTokenClass, AccessClassEdDSA, EnvAccessTokenAudience)
+			return Config{}, fmt.Errorf("%s=%s needs %s to name a session token audience (%s or %s)",
+				EnvAccessTokenClass, AccessClassEdDSA, EnvAccessTokenAudience, contracts.PlatformAPIAudience, contracts.SessionRouteAudience)
 		}
 	}
 	if cfg.Session.Enabled && cfg.Session.AccessClass == AccessClassEdDSA && cfg.Session.AccessAudience != contracts.SessionRouteAudience {

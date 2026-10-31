@@ -21,17 +21,43 @@ const PlatformAPIAudience = "dev-health-api"
 // accepted at auth-service's own session routes.
 const SessionRouteAudience = "auth-service"
 
-// accessTokenScopes binds each user-token audience to its one scope
+// ACRAPIAudience and ACRMCPAudience are the user access token audiences that
+// ACR accepts: acr-api accepts ACRAPIAudience only and acr-mcp ACRMCPAudience
+// only. go-api, query-api and auth-service refuse both (ACP-ADR-13 decision 2,
+// CHAOS-12248).
+const (
+	ACRAPIAudience = "acr-api"
+	ACRMCPAudience = "acr-mcp"
+)
+
+// accessTokenScopes binds each session-token audience to its one scope
 // (vocabulary/audiences.json, access-token.v1 schema).
 var accessTokenScopes = map[string]string{
 	"dev-health-api": "api:access",
 	"auth-service":   "auth:session",
 }
 
-// AccessTokenScope is the scope of a user access token for audience; ok is
-// false for an audience no user access token carries.
+// acrAccessTokenScopes binds each ACR audience to its one scope. It is apart
+// from accessTokenScopes on purpose: the session minter and its configuration
+// accept only what AccessTokenScope knows, and an ACR audience has a separate
+// mint (ACP-ADR-13 decision 3). Together the two maps are the user_access_token
+// rows of vocabulary/audiences.json and the access-token.v1 aud/scope binding.
+var acrAccessTokenScopes = map[string]string{
+	ACRAPIAudience: "acr:api",
+	ACRMCPAudience: "acr:mcp",
+}
+
+// AccessTokenScope is the scope of a session-minted user access token for
+// audience; ok is false for any other audience, an ACR audience included.
 func AccessTokenScope(audience string) (scope string, ok bool) {
 	scope, ok = accessTokenScopes[audience]
+	return scope, ok
+}
+
+// ACRAccessTokenScope is the scope of a user access token for an ACR audience;
+// ok is false for any other audience.
+func ACRAccessTokenScope(audience string) (scope string, ok bool) {
+	scope, ok = acrAccessTokenScopes[audience]
 	return scope, ok
 }
 

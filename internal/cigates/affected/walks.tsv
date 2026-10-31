@@ -96,7 +96,6 @@ internal/auth/restorefence	platform_roles_test.go	internal/auth/restorefence	dir
 internal/auth/restorefence	specs_test.go	internal/pgmigrate/sql	dir	*
 internal/auth/writerinventory	scan_test.go	.	tree	*.go
 internal/auth/writerinventory	scan_test.go	internal/storage/postgres/authschema/migrations	dir	*
-internal/auth/writerinventory	scan_test.go	unexpressed	-	-
 internal/auth/writerinventory	session_revoke_census_test.go	internal	tree	*.go
 internal/bigboycompose	billing_edge_override_test.go	unexpressed	-	-
 internal/chmigrate	archive_test.go	internal/chmigrate	dir	*

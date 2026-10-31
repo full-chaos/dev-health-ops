@@ -57,7 +57,8 @@ func riverSentinels(t *testing.T) []riverSentinel {
 	}
 	probes, err := scanner.Probes()
 	if err != nil {
-		t.Fatal(err)
+		// The error text embeds the probe it rejected: report that it failed, never what it held.
+		t.Fatal("credshape probes unavailable")
 	}
 	return []riverSentinel{
 		{"bearer", bearer, "Authorization: Bearer " + bearer},

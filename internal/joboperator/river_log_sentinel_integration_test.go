@@ -71,7 +71,8 @@ func queueSentinels(t *testing.T) []queueSentinel {
 	}
 	probes, err := scanner.Probes()
 	if err != nil {
-		t.Fatal(err)
+		// The error text embeds the probe it rejected: report that it failed, never what it held.
+		t.Fatal("credshape probes unavailable")
 	}
 	return []queueSentinel{
 		{"provider", "ghp_" + provider + "AB", provider},
@@ -135,11 +136,19 @@ func TestDefaultLoggerRiverClientLogsCarryNoSentinelThroughTheProcessLogChain(t 
 		return out.String()
 	}
 	const marker = "Notifying about queue state change"
-	classes := func(output string, wantPresent bool) []string {
+	hiddenFrom := func(output string) []string {
 		var named []string
 		for _, sentinel := range sentinels {
-			present := strings.Contains(output, sentinel.piece) || strings.Contains(output, sentinel.piece[len(sentinel.piece)/2:])
-			if present == wantPresent {
+			if !strings.Contains(output, sentinel.piece) {
+				named = append(named, sentinel.class)
+			}
+		}
+		return named
+	}
+	leakedInto := func(output string) []string {
+		var named []string
+		for _, sentinel := range sentinels {
+			if strings.Contains(output, sentinel.piece) || strings.Contains(output, sentinel.piece[len(sentinel.piece)/2:]) {
 				named = append(named, sentinel.class)
 			}
 		}
@@ -151,7 +160,7 @@ func TestDefaultLoggerRiverClientLogsCarryNoSentinelThroughTheProcessLogChain(t 
 	if !strings.Contains(control, marker) {
 		t.Fatal("control: River did not log the queue pause line; the proof would be vacuous")
 	}
-	if hidden := classes(control, false); len(hidden) != 0 {
+	if hidden := hiddenFrom(control); len(hidden) != 0 {
 		t.Fatalf("control: the raw handler hid sentinel classes %v; the harness cannot see a leak", hidden)
 	}
 
@@ -160,7 +169,7 @@ func TestDefaultLoggerRiverClientLogsCarryNoSentinelThroughTheProcessLogChain(t 
 	if !strings.Contains(chain, marker) {
 		t.Fatal("chain: River did not log the queue pause line; the proof would be vacuous")
 	}
-	if leaked := classes(chain, true); len(leaked) != 0 {
+	if leaked := leakedInto(chain); len(leaked) != 0 {
 		t.Errorf("sentinel classes %v reached the default-logger River client output", leaked)
 	}
 }

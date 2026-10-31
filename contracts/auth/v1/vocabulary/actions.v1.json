@@ -174,7 +174,7 @@
     {
       "action": "acr.context.read",
       "scope": "organization",
-      "resource_kind": "organization",
+      "resource_kind": "repository",
       "risk_class": "low",
       "cache_class": "resource_revision_bound"
     },

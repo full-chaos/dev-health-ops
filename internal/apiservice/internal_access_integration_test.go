@@ -5,6 +5,7 @@ package apiservice
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -22,6 +23,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/platform/health"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/repoinventory"
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -33,6 +37,13 @@ import (
 // connection as it. The login name carries a per-run suffix and is dropped at
 // cleanup: a remote test server (DEV_HEALTH_TEST_CLICKHOUSE_DSN) is shared.
 func accessLogin(t *testing.T, ctx context.Context, admin driver.Conn, dsn, name string, posture chclickhouse.Posture) driver.Conn {
+	t.Helper()
+	conn, _ := accessLoginDSN(t, ctx, admin, dsn, name, posture)
+	return conn
+}
+
+// accessLoginDSN is accessLogin, also returning the login's DSN.
+func accessLoginDSN(t *testing.T, ctx context.Context, admin driver.Conn, dsn, name string, posture chclickhouse.Posture) (driver.Conn, string) {
 	t.Helper()
 	const password = "access-mount-test-words"
 	login := name + "_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
@@ -55,7 +66,7 @@ func accessLogin(t *testing.T, ctx context.Context, admin driver.Conn, dsn, name
 		t.Fatalf("open login %s: %v", login, err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	return conn
+	return conn, parsed.String()
 }
 
 // TestInternalRoutesServeThePrincipalAccessReadOnTheAPIPosture drives the
@@ -234,6 +245,48 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), user, org); err
 			}
 		}
 	})
+	// CHAOS-12285: an org whose repository inventory is above its limit gets the
+	// coded 503 through the mounted route, on a real migrated repos table and the
+	// APIPosture login: the read binds LIMIT 101, sees the 101st repository and
+	// refuses, never a 200 with a cut list.
+	t.Run("an org above the repository limit answers the coded 503", func(t *testing.T) {
+		big := uuid.New()
+		pgseed.Org(ctx, t, pool, big.String(), "community")
+		if _, err := pool.Exec(ctx, `INSERT INTO memberships (id, user_id, org_id, role, joined_at, created_at, updated_at)
+VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), user, big); err != nil {
+			t.Fatal(err)
+		}
+		for _, key := range []string{"ask_dev", "agent_context_runtime"} {
+			var featureID string
+			if err := pool.QueryRow(ctx, `SELECT id::text FROM feature_flags WHERE key = $1`, key).Scan(&featureID); err != nil {
+				t.Fatal(err)
+			}
+			pgseed.OrgOverride(ctx, t, pool, big.String(), featureID, true)
+		}
+		for i := 0; i <= repoinventory.Limit; i++ {
+			if err := chAdmin.Exec(ctx, `INSERT INTO repos (id, repo, org_id, provider, last_synced) VALUES (?, ?, ?, ?, ?)`,
+				uuid.New(), fmt.Sprintf("acme/r%03d", i), big.String(), "github", time.Now().UTC()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		server, err := NewInternalServer(config.Config{APIInternalAddress: "127.0.0.1:0"}, quietLog(),
+			InternalRoutes(Deps{Pool: pool, ClickHouse: granted}, quietLog()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/internal/acr/orgs/"+big.String()+"/principals/"+user.String()+"/access", nil)
+		request.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, request)
+		const want = `{"detail":"Service unavailable","code":"acr_access_repository_scope_over_limit"}`
+		if rec.Code != http.StatusServiceUnavailable || rec.Body.String() != want {
+			t.Fatalf("status %d body %s, want 503 %s", rec.Code, rec.Body.String(), want)
+		}
+		// The org with two repositories still reads: the refusal is the big org's only.
+		if rec := read(t, granted); rec.Code != http.StatusOK {
+			t.Fatalf("the two-repository org answered %d %s after the big org was seeded", rec.Code, rec.Body.String())
+		}
+	})
 }
 
 // stateIssuer is go-api's session issue client as the access read sees it:
@@ -258,4 +311,158 @@ type issueOnly struct{}
 
 func (issueOnly) Issue(context.Context, *http.Request, sessionissue.Request) (sessionissue.Pair, error) {
 	return sessionissue.Pair{}, sessionissue.ErrUnavailable
+}
+
+// TestInternalRoutesServeProjectScopeOnlyWithTheFlagAndItsGrant drives the
+// mounted read for an org with projects and no repositories (CHAOS-12224):
+//   - readiness is exact both ways: a login granted APIPostureFor(db, true)
+//     passes only with the project scope on, the APIPosture login only with it
+//     off (a grant that rolled before the flag is refused);
+//   - with the flag and the grant, the answer carries project_scope with the
+//     org's (provider, id) pairs;
+//   - with the flag off, the answer is byte-identical to the read before
+//     project_scope existed, and no project read happens on a login that may
+//     not read projects;
+//   - with the flag on and no grant, the read fails closed (503).
+func TestInternalRoutesServeProjectScopeOnlyWithTheFlagAndItsGrant(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	pg, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pg.Close(context.Background()) })
+	pool, err := pgxpool.New(ctx, pg.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	pgschema.Apply(ctx, t, pool)
+	ch, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ch.Close(context.Background()) })
+	chschema.Apply(ctx, t, ch)
+	chAdmin, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(ch.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = chAdmin.Close() })
+
+	org, user := uuid.New(), uuid.New()
+	pgseed.Org(ctx, t, pool, org.String(), "community")
+	if _, err := pool.Exec(ctx, `INSERT INTO users (id, email, password_hash, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
+VALUES ($1, $2, 'not-a-hash', true, true, false, 0, now(), now())`, user, "access-projects-"+user.String()+"@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO memberships (id, user_id, org_id, role, joined_at, created_at, updated_at)
+VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), user, org); err != nil {
+		t.Fatal(err)
+	}
+	const token = "svc_acr_access-projects-0123456789"
+	if _, err := pool.Exec(ctx, `INSERT INTO internal_service_credentials
+		(id, service_name, token_hash, token_prefix, scopes, created_at)
+		VALUES (gen_random_uuid(), 'acr', $1, $2, '["principal_access:read"]'::json, now())`,
+		admin.HashServiceToken(token), token[:16]); err != nil {
+		t.Fatal(err)
+	}
+	for _, project := range [][2]string{{"linear", "P-1"}, {"jira", "10001"}} {
+		if err := chAdmin.Exec(ctx, `INSERT INTO projects (id, org_id, provider, name, updated_at) VALUES (?, ?, ?, ?, ?)`,
+			project[1], org.String(), project[0], "Project "+project[1], time.Now().UTC()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var database string
+	if err := chAdmin.QueryRow(ctx, "SELECT currentDatabase()").Scan(&database); err != nil {
+		t.Fatal(err)
+	}
+	withProjects, withProjectsDSN := accessLoginDSN(t, ctx, chAdmin, ch.URI, "access_projscope_on", chclickhouse.APIPostureFor(database, true))
+	plain, plainDSN := accessLoginDSN(t, ctx, chAdmin, ch.URI, "access_projscope_off", chclickhouse.APIPosture(database))
+
+	// buildDeps hands the flag to the api_clickhouse readiness check it
+	// registers: the check go-api's /ready runs is exact for the flag in force.
+	t.Run("buildDeps registers the readiness check with the flag", func(t *testing.T) {
+		for name, tc := range map[string]struct {
+			dsn    string
+			scope  bool
+			failed bool
+		}{
+			"projects login, scope on":  {withProjectsDSN, true, false},
+			"projects login, scope off": {withProjectsDSN, false, true},
+			"plain login, scope on":     {plainDSN, true, true},
+			"plain login, scope off":    {plainDSN, false, false},
+		} {
+			registry := health.NewRegistry(5 * time.Second)
+			_, components, err := buildDeps(ctx, config.Config{APIAddress: "127.0.0.1:0", APIClickHouseURI: secrets.NewValue(tc.dsn)},
+				registry, quietLog(), AuthProxyConfig{}, tc.scope)
+			if err != nil {
+				t.Fatalf("%s: buildDeps: %v", name, err)
+			}
+			readiness := registry.CheckRequired(ctx)
+			closeComponents(components)
+			found := false
+			for _, check := range readiness.Checks {
+				if check.Name == apiClickHouseCheck {
+					found = true
+					if check.Failed != tc.failed {
+						t.Errorf("%s: %s failed=%v, want %v", name, apiClickHouseCheck, check.Failed, tc.failed)
+					}
+				}
+			}
+			if !found {
+				t.Fatalf("%s: no %s check registered: %+v", name, apiClickHouseCheck, readiness)
+			}
+		}
+	})
+
+	t.Run("readiness is exact both ways", func(t *testing.T) {
+		for name, tc := range map[string]struct {
+			conn  driver.Conn
+			scope bool
+			ok    bool
+		}{
+			"projects login, scope on":  {withProjects, true, true},
+			"projects login, scope off": {withProjects, false, false},
+			"plain login, scope on":     {plain, true, false},
+			"plain login, scope off":    {plain, false, true},
+		} {
+			err := chclickhouse.CheckAPIClickHouseAuthorizationFor(ctx, tc.conn, tc.scope)
+			if (err == nil) != tc.ok {
+				t.Errorf("%s: readiness err = %v, want ok=%v", name, err, tc.ok)
+			}
+		}
+	})
+	read := func(t *testing.T, deps Deps) *httptest.ResponseRecorder {
+		t.Helper()
+		server, err := NewInternalServer(config.Config{APIInternalAddress: "127.0.0.1:0"}, quietLog(), InternalRoutes(deps, quietLog()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/internal/acr/orgs/"+org.String()+"/principals/"+user.String()+"/access", nil)
+		request.Header.Set("Authorization", "Bearer "+token)
+		recorder := httptest.NewRecorder()
+		server.Handler().ServeHTTP(recorder, request)
+		return recorder
+	}
+	prefix := `{"schema_version":"acr_principal_access.v1","org_id":"` + org.String() + `","user_id":"` + user.String() +
+		`","member":true,"impersonating":false,"entitlements":{"ask_dev":false,"agent_context_runtime":false},"repository_scope":{"kind":"none"}`
+	t.Run("flag and grant: project_scope", func(t *testing.T) {
+		rec := read(t, Deps{Pool: pool, ClickHouse: withProjects, ACRAccessProjectScope: true})
+		want := prefix + `,"project_scope":{"kind":"projects","projects":[{"provider":"jira","id":"10001"},{"provider":"linear","id":"P-1"}]}}`
+		if rec.Code != http.StatusOK || rec.Body.String() != want {
+			t.Fatalf("status %d body\n%s\nwant\n%s", rec.Code, rec.Body.String(), want)
+		}
+	})
+	t.Run("flag off: byte-identical, no project read", func(t *testing.T) {
+		rec := read(t, Deps{Pool: pool, ClickHouse: plain})
+		if rec.Code != http.StatusOK || rec.Body.String() != prefix+`}` {
+			t.Fatalf("status %d body\n%s\nwant\n%s}", rec.Code, rec.Body.String(), prefix)
+		}
+	})
+	t.Run("flag on, no grant: fails closed", func(t *testing.T) {
+		if rec := read(t, Deps{Pool: pool, ClickHouse: plain, ACRAccessProjectScope: true}); rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("status %d body %s, want 503", rec.Code, rec.Body.String())
+		}
+	})
 }

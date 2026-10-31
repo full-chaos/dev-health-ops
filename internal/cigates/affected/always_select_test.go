@@ -70,6 +70,12 @@ func removeRealPlanDir() {
 // realPlan runs the integration plan verdict over the real module, as go.yml's plan step does.
 func realPlan(t *testing.T, changed string) []string {
 	t.Helper()
+	return realPlanEvent(t, "pull_request", changed)
+}
+
+// realPlanEvent is realPlan for any GitHub event name.
+func realPlanEvent(t *testing.T, event, changed string) []string {
+	t.Helper()
 	root := repoRoot(t)
 	in := &realPlanInputs
 	in.once.Do(func() {
@@ -110,7 +116,7 @@ func realPlan(t *testing.T, changed string) []string {
 	if err := os.WriteFile(list, []byte(changed+"\x00"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	res := runRealPlanVerdict(root, inheritedEnv([]string{"GOFLAGS"}, "GOFLAGS="), cigate(t), "plan-verdict", "--event", "pull_request",
+	res := runRealPlanVerdict(root, inheritedEnv([]string{"GOFLAGS"}, "GOFLAGS="), cigate(t), "plan-verdict", "--event", event,
 		"--changed", list, "--golist", in.golist, "--keys", in.keys, "--root", root)
 	if res.code != 0 {
 		t.Fatalf("plan-verdict exited %d: %s", res.code, res.stderr)

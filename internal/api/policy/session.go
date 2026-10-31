@@ -104,6 +104,7 @@ const sessionStateQuery = `SELECT principal_id, revoked_at IS NOT NULL, legacy_t
 // SessionState reads the session id names, in the auth schema AuthSchema
 // names: its principal, whether it is revoked and its token_version pin.
 func (s PGStore) SessionState(ctx context.Context, id uuid.UUID) (SessionRow, bool, error) {
+	countDirectRead(ctx, kindReadAuthSessions)
 	name := s.AuthSchema
 	if name == "" {
 		name = defaultAuthSchema

@@ -416,3 +416,43 @@ func TestRepoGrant_ReasonsAreClosed(t *testing.T) {
 		t.Errorf("reason count %d", len(AllReasons()))
 	}
 }
+
+func expiredGrant(key string) Grant {
+	g := liveGrant(key)
+	g.ExpiresAtUnixNano = nowNano - 1
+	return g
+}
+
+func revokedGrant(key string) Grant {
+	g := liveGrant(key)
+	g.Revoked = true
+	return g
+}
+
+func withWorkload(s grantFake, aud string, auds, acts []string) grantFake {
+	s.workload = &WorkloadLimits{Audience: aud, Audiences: auds, AllowedActions: acts}
+	return s
+}
+
+func noClock(s grantFake) grantFake {
+	s.now = 0
+	return s
+}
+
+func readFails(s grantFake) grantFake {
+	s.grantErr = errors.New("read failed")
+	return s
+}
+
+func saWithNoRows() grantFake {
+	s := repoSnapshot("member")
+	s.memberships = map[string]Membership{}
+	s.sa = map[string]ServiceAccount{testOrg: {OrgID: testOrg, Status: StatusActive}}
+	return s
+}
+
+func inactiveSA() grantFake {
+	s := saWithNoRows()
+	s.sa = map[string]ServiceAccount{testOrg: {OrgID: testOrg, Status: StatusSuspended}}
+	return s
+}

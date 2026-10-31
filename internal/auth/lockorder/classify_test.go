@@ -44,7 +44,7 @@ func classifyAfterDelete(err error) afterDelete {
 		return afterDeleteOK
 	}
 	for _, refusal := range []error{membership.ErrOrgNotFound, membership.ErrNotMember, membership.ErrStateMoved,
-		invite.ErrInviteInvalid, invite.ErrOrgNotFound} {
+		membership.ErrNotOwner, membership.ErrTargetNotMember, invite.ErrInviteInvalid, invite.ErrOrgNotFound} {
 		if errors.Is(err, refusal) {
 			return afterDeleteRefused
 		}

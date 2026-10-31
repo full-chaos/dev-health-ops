@@ -59,6 +59,7 @@ func (u *User) IsAdmin() bool {
 type UserState struct {
 	IsActive     bool
 	IsSuperuser  bool
+	Platform     *rule.Platform
 	TokenVersion int64
 }
 
@@ -211,7 +212,7 @@ func (a *Authenticator) CheckClaims(ctx context.Context, claims jwt.MapClaims) (
 		return nil, err
 	}
 	user.SessionID = sessionID
-	user.IsSuperuser = state.IsSuperuser
+	user.IsSuperuser, user.Platform = state.IsSuperuser, state.Platform
 	user.TokenVersion = int(version)
 	return user, nil
 }

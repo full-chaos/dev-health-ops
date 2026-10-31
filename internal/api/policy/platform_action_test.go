@@ -2,6 +2,8 @@ package policy
 
 import (
 	"context"
+	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
@@ -100,5 +102,39 @@ func TestPlatformAction_FlagOnlyDecidesAsPlatformAdminDid(t *testing.T) {
 		if (&User{IsSuperuser: true}).Holds(unknown) {
 			t.Errorf("the flag holds %q", unknown)
 		}
+	}
+}
+
+// Mix 4: the token org's membership (Guard.currentUser at an admin level,
+// Scope.useTokenOrg on an org-scoped route). A caller reaches the token's own
+// org with no membership row, and with no membership read, only by admin.orgs;
+// any other caller is read and refused as a removed member is.
+func TestPlatformAction_TokenOrgWithoutMembershipNeedsAdminOrgs(t *testing.T) {
+	const refusal = `{"detail": "X-Org-Id not permitted for this user"}`
+	for _, c := range platformCases(rule.ActionAdminOrgs) {
+		t.Run(c.name, func(t *testing.T) {
+			state := UserState{IsActive: true, IsSuperuser: c.superuser, Platform: c.platform}
+			headers := func() map[string]string { return map[string]string{"Authorization": "Bearer " + sign(t, claims(nil))} }
+
+			guardStore := tokenOrgStore(false, "")
+			guardStore.users[userID] = state
+			guarded := serve(NewGuard(authenticator(t, guardStore), quiet()).Wrap(Admin, echo), http.MethodGet, "/x", headers())
+			if c.want && (guarded.status != 200 || len(guardStore.membershipSeen) != 0) {
+				t.Errorf("guard: %d %q, reads %v; want 200 and no membership read", guarded.status, guarded.body, guardStore.membershipSeen)
+			}
+			if !c.want && (guarded.status != 403 || !strings.HasPrefix(guarded.body, refusal)) {
+				t.Errorf("guard: %d %q; want the X-Org-Id refusal", guarded.status, guarded.body)
+			}
+
+			scopeStore := tokenOrgStore(false, "")
+			scopeStore.users[userID] = state
+			scoped := serve(orgScoped(goAPIScope(t, scopeStore)), http.MethodGet, "/x", headers())
+			if c.want && (scoped.status != 200 || len(scopeStore.membershipSeen) != 0) {
+				t.Errorf("scope: %d %q, reads %v; want 200 and no membership read", scoped.status, scoped.body, scopeStore.membershipSeen)
+			}
+			if !c.want && (scoped.status != 403 || !strings.HasPrefix(scoped.body, refusal)) {
+				t.Errorf("scope: %d %q; want the X-Org-Id refusal", scoped.status, scoped.body)
+			}
+		})
 	}
 }

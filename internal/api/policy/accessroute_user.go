@@ -75,7 +75,7 @@ func (a *Authenticator) accessTokenUser(ctx context.Context, claims *AccessToken
 		return nil, err
 	}
 	user := &User{UserID: id.String(), ID: id, Email: row.Email, Username: row.Username, FullName: row.FullName,
-		IsSuperuser: row.State.IsSuperuser, TokenVersion: int(row.State.TokenVersion), accessToken: true, SessionID: sessionID}
+		IsSuperuser: row.State.IsSuperuser, Platform: row.State.Platform, TokenVersion: int(row.State.TokenVersion), accessToken: true, SessionID: sessionID}
 	if claims.OrgID != nil && *claims.OrgID != "" {
 		role, member, err := a.Membership(ctx, user.UserID, *claims.OrgID)
 		if err != nil {

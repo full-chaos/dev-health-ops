@@ -45,6 +45,8 @@ type credFakes struct {
 	provisioned []local.ProvisionLocalRequest
 	principal   uuid.UUID
 	org         *uuid.UUID
+	// rowNoOrg makes the new session row carry no organization whatever the request names.
+	rowNoOrg bool
 }
 
 func (c *credFakes) ByEmail(_ context.Context, email string) (*local.User, error) {
@@ -111,7 +113,11 @@ func (c *credFakes) SetPasswordEndingSessions(_ context.Context, req local.Passw
 	var res local.PasswordEndResult
 	if req.NewSession != nil {
 		c.created++
-		res.Issued = &session.Issued{Session: session.Record{ID: uuid.New(), PrincipalID: req.ID, OrganizationID: req.NewSession.OrganizationID}}
+		org := req.NewSession.OrganizationID
+		if c.rowNoOrg {
+			org = nil
+		}
+		res.Issued = &session.Issued{Session: session.Record{ID: uuid.New(), PrincipalID: req.ID, OrganizationID: org}}
 	}
 	return res, nil
 }

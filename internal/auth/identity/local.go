@@ -221,8 +221,17 @@ WHERE principal_id = $1`, principal, hash, passwordAlgorithm); err != nil {
 }
 
 func (s *Store) lockUser(ctx context.Context, tx audit.TxOps, principal uuid.UUID) error {
+	// Lock order step 1 (principals) before any public.users row: a membership writer holds principals and then waits for public.users.
+	var key uuid.UUID
+	err := tx.QueryRow(ctx, `SELECT id FROM `+s.q+`.principals WHERE id = $1 FOR KEY SHARE`, principal).Scan(&key)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrUserNotFound
+	}
+	if err != nil {
+		return err
+	}
 	var locked uuid.UUID
-	err := tx.QueryRow(ctx, `SELECT principal_id FROM `+s.q+`.users WHERE principal_id = $1 FOR UPDATE`, principal).Scan(&locked)
+	err = tx.QueryRow(ctx, `SELECT principal_id FROM `+s.q+`.users WHERE principal_id = $1 FOR UPDATE`, principal).Scan(&locked)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrUserNotFound
 	}

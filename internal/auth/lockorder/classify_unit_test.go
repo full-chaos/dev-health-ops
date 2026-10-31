@@ -21,6 +21,8 @@ func TestClassifyAfterDeleteAcceptsOnlyNamedOutcomes(t *testing.T) {
 		{"membership organization gone", fmt.Errorf("store: %w", membership.ErrOrgNotFound), afterDeleteRefused},
 		{"not a member", membership.ErrNotMember, afterDeleteRefused},
 		{"plan moved", fmt.Errorf("transfer: %w", membership.ErrStateMoved), afterDeleteRefused},
+		{"source is no longer an owner", fmt.Errorf("transfer: %w", membership.ErrNotOwner), afterDeleteRefused},
+		{"target is no longer a member", fmt.Errorf("transfer: %w", membership.ErrTargetNotMember), afterDeleteRefused},
 		{"invite gone", invite.ErrInviteInvalid, afterDeleteRefused},
 		{"invite organization gone", invite.ErrOrgNotFound, afterDeleteRefused},
 		{"go-api membership names the deleted organization",

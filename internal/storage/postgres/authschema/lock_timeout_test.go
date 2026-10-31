@@ -159,6 +159,7 @@ func TestAMigrationWhoseLockWaitTimesOutOnEveryAttemptFailsLoudly(t *testing.T) 
 	}
 	// One pause of the lock timeout between attempts lets the queued readers
 	// through before the next attempt queues again.
+	//abstime:allow lower bound: the two pauses can only lengthen the run, so load never fails this; it fails only a run with no pause between attempts
 	if elapsed := time.Since(started); elapsed < 2*options.LockTimeout {
 		t.Fatalf("3 attempts took %s, want at least the 2 pauses between them (%s)", elapsed, 2*options.LockTimeout)
 	}

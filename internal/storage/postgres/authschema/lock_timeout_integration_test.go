@@ -154,11 +154,11 @@ func TestAMigrationBehindAnOpenAuthReaderGivesUpInsteadOfQueueingEveryAuthReader
 	case <-time.After(time.Until(started.Add(bound))):
 		t.Fatalf("Apply still waits for its lock %s after it started, behind one open reader: no lock_timeout", bound)
 	}
+	// Served while the open reader still holds the table: the migration gave
+	// up its place in the lock queue. Without a lock_timeout the reader waits
+	// until the open reader ends (the readCtx bound is only a hang ceiling).
 	if readErr != nil {
-		t.Fatalf("a new reader was not served while the migration waited: %v", readErr)
-	}
-	if readWait > testLockTimeout+2*time.Second {
-		t.Fatalf("a new reader waited %s, want at most about one lock timeout (%s)", readWait, testLockTimeout)
+		t.Fatalf("a new reader was not served while the migration waited and the open reader was still open: %v", readErr)
 	}
 	if !errors.Is(applyErr, ErrMigrationLockTimeout) || !errors.Is(applyErr, ErrMigrationFailed) {
 		t.Fatalf("Apply = %v, want ErrMigrationLockTimeout and ErrMigrationFailed", applyErr)

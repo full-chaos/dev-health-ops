@@ -100,7 +100,7 @@ func (h handlers) finishSSOLogin(ctx context.Context, w http.ResponseWriter, r *
 		orgUUID = &id
 	}
 	now := h.Now()
-	var access, refresh, refreshJTI string
+	var access, refresh, refreshJTI, sessionAccess string
 	var family uuid.UUID
 	var refreshExpiresAt time.Time
 	if h.Issuer != nil {
@@ -109,7 +109,7 @@ func (h handlers) finishSSOLogin(ctx context.Context, w http.ResponseWriter, r *
 			h.fail(w, r, "issue session", err)
 			return
 		}
-		access, refresh = pair.Access, pair.Refresh
+		access, refresh, sessionAccess = pair.Access, pair.Refresh, pair.SessionAccess
 	} else {
 		jti, err := newJTI()
 		if err != nil {
@@ -207,6 +207,9 @@ VALUES ($1, $2, $3, $4, $5, $6, NULL, NULL, NULL, $7, $8, $9)`,
 	out.Set("email", user.email)
 	out.Set("org_id", loginOrgID)
 	out.Set("role", role)
+	if sessionAccess != "" {
+		out.Set("session_access_token", sessionAccess)
+	}
 	policy.WriteModel(w, http.StatusOK, out, nil)
 }
 

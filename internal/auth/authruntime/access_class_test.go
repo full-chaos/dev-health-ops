@@ -28,12 +28,18 @@ func classConfig(t *testing.T, class string) authconfig.Config {
 
 func classConfigWith(t *testing.T, class string, extra map[string]string) authconfig.Config {
 	t.Helper()
+	// Under eddsa AUTH_JWT_AUDIENCE is the API token's audience (the session-route token is minted beside it); the
+	// hs256_compat tests keep a non-default audience to prove that class reads it.
+	audience := "auth-service"
+	if class == authconfig.AccessClassEdDSA {
+		audience = "dev-health-api"
+	}
 	env := map[string]string{
 		authconfig.EnvDatabaseURI:         "postgres://auth@127.0.0.1:1/devhealth",
 		authconfig.EnvSigningKeyFile:      "/nonexistent",
 		authconfig.EnvSigningKeyID:        "class-test",
 		authconfig.EnvAccessTokenClass:    class,
-		authconfig.EnvAccessTokenAudience: "auth-service",
+		authconfig.EnvAccessTokenAudience: audience,
 		authconfig.EnvTokenIssuerURL:      "https://auth.example.test",
 		authconfig.EnvValkeyURI:           testValkeyURI,
 		authconfig.EnvAccessTokenSecret:   "class-test-access-secret-0123456789abcdef",

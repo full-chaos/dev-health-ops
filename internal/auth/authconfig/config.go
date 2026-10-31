@@ -502,11 +502,13 @@ func Load(spec Spec) (Config, error) {
 				EnvAccessTokenClass, AccessClassEdDSA, EnvAccessTokenAudience, contracts.PlatformAPIAudience, contracts.SessionRouteAudience)
 		}
 	}
-	if cfg.Session.Enabled && cfg.Session.AccessClass == AccessClassEdDSA && cfg.Session.AccessAudience != contracts.SessionRouteAudience {
-		// The session routes accept an EdDSA token of audience auth-service only: started like this every
-		// signed-in user's token would be refused at every one of them.
-		return Config{}, fmt.Errorf("%s=%s with %s=%s: the session routes accept the EdDSA access token only with audience %s; the issuer switch (CHAOS-10456) must mint that audience before this class can start",
-			EnvAccessTokenClass, AccessClassEdDSA, EnvAccessTokenAudience, cfg.Session.AccessAudience, contracts.SessionRouteAudience)
+	if cfg.Session.Enabled && cfg.Session.AccessClass == AccessClassEdDSA && cfg.Session.AccessAudience == contracts.SessionRouteAudience {
+		// Under eddsa the configured audience is the API token's, and the session routes' token of audience
+		// auth-service is minted beside it. An API token of audience auth-service would be refused at every go-api
+		// and query-api row.
+		return Config{}, fmt.Errorf("%s=%s with %s=%s: %s names the API token's audience (%s); the session-route token of audience %s is minted beside it",
+			EnvAccessTokenClass, AccessClassEdDSA, EnvAccessTokenAudience, cfg.Session.AccessAudience, EnvAccessTokenAudience,
+			contracts.PlatformAPIAudience, contracts.SessionRouteAudience)
 	}
 	if cfg.TrustedProxies, err = clientaddr.ParseTrust(valueOf(lookup, EnvTrustedProxies)); err != nil {
 		return Config{}, err

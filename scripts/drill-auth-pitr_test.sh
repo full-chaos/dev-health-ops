@@ -32,6 +32,7 @@ run_phase() { # args to drill() after the port and the phase
     evidence="$root"
     # shellcheck disable=SC2034
     POSTGRES_PASSWORD=not-a-real-password
+    # shellcheck disable=SC2030,SC2031 # each subshell sets its own copy on purpose
     export FAKE_SEEN="$root/seen" SECRET_CANARY="canary-value-do-not-print-0123456789"
     drill 55432 "$@" 2>&1
   )
@@ -55,6 +56,35 @@ out="$(run_phase snapshot DRILL_LABEL=A)"
 check "a phase with arguments prints no environment" "$r"
 grep -q 'label=A phase=snapshot' "$root/seen" && r=ok || r=bad
 check "the extra argument reaches the driver" "$r"
+
+# the password driver helper: no environment printed, its phase and extra argument reach the driver
+pw_fn="$(awk '/^drill_password\(\) \{/{p=1} p{print} p&&/^\}/{exit}' "$script")"
+[[ -n "$pw_fn" ]] || { echo "drill-auth-pitr_test: the drill_password() helper was not found" >&2; exit 1; }
+cat >"$root/capped.sh" <<'FAKE'
+#!/usr/bin/env bash
+printf 'phase=%s expect=%s\n' "${DRILL_PASSWORD_PHASE:-}" "${DRILL_EXPECT:-}" >>"$FAKE_SEEN"
+FAKE
+chmod 755 "$root/capped.sh"
+: >"$root/seen"
+out="$(
+  set +e
+  eval "$pw_fn"
+  # shellcheck disable=SC2034 # read by the evaluated drill_password() helper
+  capped="$root/capped.sh"
+  # shellcheck disable=SC2034
+  DRILL_DIR="$root"
+  # shellcheck disable=SC2034
+  evidence="$root"
+  # shellcheck disable=SC2034
+  POSTGRES_PASSWORD=not-a-real-password
+  # shellcheck disable=SC2030,SC2031 # each subshell sets its own copy on purpose
+  export FAKE_SEEN="$root/seen" SECRET_CANARY="canary-value-do-not-print-0123456789"
+  drill_password 55432 attempt DRILL_EXPECT=T 2>&1
+)"
+[[ "$out" != *canary-value-do-not-print* && "$out" != *"declare -x"* ]] && r=ok || r=bad
+check "the password phase prints no environment" "$r"
+grep -q 'phase=attempt expect=T' "$root/seen" && r=ok || r=bad
+check "the password phase and its argument reach the driver" "$r"
 
 # the evidence summary never holds a drill secret (CHAOS-12281): every *secrets*.json stays out of the summary input, and a
 # guard refuses a summary that holds a line of one (file names only, never the value)

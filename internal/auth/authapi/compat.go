@@ -427,7 +427,7 @@ func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
 		}
 		role, orgText = roleText(value, member), record.OrganizationID.String()
 	}
-	access, err := h.Issuer.AccessContext(ctx, Grant{
+	tokens, err := h.Issuer.Tokens(ctx, Grant{
 		PrincipalID: record.PrincipalID, OrganizationID: record.OrganizationID, Role: role,
 		SessionID: record.ID, User: user,
 	})
@@ -437,11 +437,12 @@ func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
 	}
 	h.rec.record(ctx, opCompatRefresh, "success", string(result.Reason), nil)
 	out := pyjson.NewObject()
-	out.Set("access_token", access)
+	out.Set("access_token", tokens.Access)
 	out.Set("refresh_token", result.Credential.Reveal())
 	out.Set("token_type", "bearer")
-	out.Set("expires_in", pyjson.IntOf(int64(AccessExpiresIn)))
+	out.Set("expires_in", pyjson.IntOf(int64(h.Issuer.ExpiresIn())))
 	out.Set("user", refreshUserInfo(record.PrincipalID, user, orgText, role))
+	setSessionAccessToken(out, tokens)
 	writeCompatModel(w, out)
 }
 

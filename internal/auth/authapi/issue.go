@@ -152,6 +152,9 @@ type issueAnswer struct {
 	RefreshToken string `json:"refresh_token"`
 	TokenType    string `json:"token_type"`
 	ExpiresIn    int    `json:"expires_in"`
+	// SessionAccessToken is the session routes' token under the eddsa class;
+	// absent under hs256_compat.
+	SessionAccessToken string `json:"session_access_token,omitempty"`
 }
 
 // issueSession is POST /internal/v1/sessions. It refuses anything but a live
@@ -251,7 +254,7 @@ func (h compatHandlers) issueSession(w http.ResponseWriter, r *http.Request) {
 		h.rec.refuse(w, r, opSessionIssue, unavailable(reasonStoreUnavailable), err)
 		return
 	}
-	access, err := h.Issuer.AccessContext(ctx, Grant{
+	tokens, err := h.Issuer.Tokens(ctx, Grant{
 		PrincipalID: req.principal, OrganizationID: req.organization, Role: role, SessionID: issued.Session.ID, User: user,
 	})
 	if err != nil {
@@ -260,7 +263,8 @@ func (h compatHandlers) issueSession(w http.ResponseWriter, r *http.Request) {
 	}
 	h.rec.record(ctx, opSessionIssue, "success", reasonAccepted, nil)
 	writeJSON(w, http.StatusOK, issueAnswer{
-		AccessToken: access, RefreshToken: issued.Credential.Reveal(), TokenType: "bearer", ExpiresIn: AccessExpiresIn,
+		AccessToken: tokens.Access, RefreshToken: issued.Credential.Reveal(), TokenType: "bearer", ExpiresIn: h.Issuer.ExpiresIn(),
+		SessionAccessToken: tokens.Session,
 	})
 }
 

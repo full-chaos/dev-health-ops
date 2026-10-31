@@ -257,6 +257,7 @@ func (h handlers) commitThenIssue(w http.ResponseWriter, r *http.Request, tx pgx
 	out.Set("org_id", membership.OrgID.String())
 	out.Set("org_name", orgName)
 	out.Set("role", roleText(membership.Role))
+	setSessionAccessToken(out, pair)
 	policy.WriteModel(w, http.StatusOK, out, nil)
 }
 

@@ -67,28 +67,75 @@ func (i *Issuer) Access(grant Grant) (string, error) {
 // AccessContext mints the access token of grant in the Issuer's one class. A
 // failure of that class is final: there is no fallback to the other class.
 func (i *Issuer) AccessContext(ctx context.Context, grant Grant) (string, error) {
+	tokens, err := i.mint(ctx, grant, false)
+	return tokens.Access, err
+}
+
+// Tokens is what one grant is answered with: the access token, and under the
+// eddsa class the token of audience auth-service that the session routes
+// accept (they accept an EdDSA token of that audience only). Under
+// hs256_compat Session is empty: the session routes accept the HS256 token.
+type Tokens struct {
+	Access  string
+	Session string
+}
+
+// Tokens mints the answer to grant: the access token and, under eddsa, the
+// session-route token of the same session, iat and exp. Both are minted
+// or neither.
+func (i *Issuer) Tokens(ctx context.Context, grant Grant) (Tokens, error) {
+	return i.mint(ctx, grant, true)
+}
+
+// ExpiresIn is the expires_in of an answer: the access token's lifetime in
+// whole seconds.
+func (i *Issuer) ExpiresIn() int {
+	if i.eddsa != nil {
+		return int(EdDSAAccessLifetime / time.Second)
+	}
+	return AccessExpiresIn
+}
+
+func (i *Issuer) mint(ctx context.Context, grant Grant, withSession bool) (Tokens, error) {
 	// go-api and query-api end a token when its session is revoked (the sid
 	// check in policy.Authenticator), so no token is minted without one.
 	if grant.SessionID == uuid.Nil || grant.PrincipalID == uuid.Nil {
-		return "", fmt.Errorf("%w: a grant needs its principal and its session", errIssue)
+		return Tokens{}, fmt.Errorf("%w: a grant needs its principal and its session", errIssue)
 	}
 	switch {
 	case i.signer != nil && i.eddsa != nil:
-		return "", fmt.Errorf("%w: both access token classes are configured", errIssue)
+		return Tokens{}, fmt.Errorf("%w: both access token classes are configured", errIssue)
 	case i.eddsa != nil:
-		compact, kid, err := i.eddsa.mint(ctx, grant, i.now())
+		now := i.now()
+		compact, kid, err := i.eddsa.mint(ctx, grant, now)
 		if err != nil {
-			return "", err
+			return Tokens{}, err
 		}
-		return i.recordKid(ctx, grant, compact, kid)
+		if compact, err = i.recordKid(ctx, grant, compact, kid); err != nil {
+			return Tokens{}, err
+		}
+		if !withSession {
+			return Tokens{Access: compact}, nil
+		}
+		sessionToken, sessionKid, err := i.eddsa.mintSession(ctx, grant, now)
+		if err != nil {
+			return Tokens{}, err
+		}
+		if sessionKid != kid {
+			if sessionToken, err = i.recordKid(ctx, grant, sessionToken, sessionKid); err != nil {
+				return Tokens{}, err
+			}
+		}
+		return Tokens{Access: compact, Session: sessionToken}, nil
 	case i.signer == nil:
-		return "", fmt.Errorf("%w: no access token class is configured", errIssue)
+		return Tokens{}, fmt.Errorf("%w: no access token class is configured", errIssue)
 	}
 	compact, err := i.hs256Access(grant)
 	if err != nil {
-		return "", err
+		return Tokens{}, err
 	}
-	return i.recordKid(ctx, grant, compact, "")
+	compact, err = i.recordKid(ctx, grant, compact, "")
+	return Tokens{Access: compact}, err
 }
 
 // hs256Access mints go-api's claims (create_access_token,

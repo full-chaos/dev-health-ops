@@ -37,7 +37,6 @@ internal/auth/revisionfeed/consumer_test.go:generic-api-key:316
 # CHAOS-10894 (lead): external push lifecycle event corpus, an invalid fixture whose point is a forbidden secret_hash member; the value is a fabricated
 # sample, never a credential. Commit-less file:rule:line form so the row still matches after a squash.
 contracts/auth/v1/examples/external-push-lifecycle-event/invalid-change-secret-hash.json:generic-api-key:18
-# CHAOS-12248: the enum value "hs256_compat" of AUTH_ACCESS_TOKEN_CLASS in the class row of configuration.md matches generic-api-key by name
-# shape; it is a class name, not a credential (checked: the matched value is exactly that string). A branch commit (e7fb52bd) edited the line, and
-# the tip restores main's text. Commit-less file:rule:line form so the row still matches after a squash; suppressed on this one line only.
+# CHAOS-10456: the enum value "hs256_compat" of AUTH_ACCESS_TOKEN_CLASS on the rewritten class row matches generic-api-key by name
+# shape; it is a class name, not a credential. Commit-less file:rule:line form so the row still matches after a squash.
 docs/reference/auth/configuration.md:generic-api-key:72

@@ -12,7 +12,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/orgdeprovision"
@@ -49,7 +48,7 @@ func newWorkloadProvisioningEnv(t *testing.T, ctx context.Context) *workloadProv
 		authconfig.EnvSigningKeyFile:              filepath.Join(dir, "k1.pem"),
 		authconfig.EnvSigningKeyID:                "k1",
 		authconfig.EnvAccessTokenClass:            authconfig.AccessClassEdDSA,
-		authconfig.EnvAccessTokenAudience:         authapi.AccessTokenAudience,
+		authconfig.EnvAccessTokenAudience:         "dev-health-api",
 		authconfig.EnvTokenIssuerURL:              workloadProvisioningIssuer,
 		authconfig.EnvSessionIssueWorkloadSubject: subject,
 	})

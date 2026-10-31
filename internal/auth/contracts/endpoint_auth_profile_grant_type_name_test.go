@@ -106,3 +106,39 @@ func TestSelectorGateAcceptsEveryGrantNameTheSchemasAccept(t *testing.T) {
 		}
 	}
 }
+
+// The schemas cap a selector name at 64 characters; the gate holds the same bound.
+func TestSelectorGateRefusesANameLongerThanTheSchemaCap(t *testing.T) {
+	classes := []any{"acr_device_flow_code", "acr_browser_refresh_token"}
+	cases := []struct{ kind, name string }{
+		{"grant_type", strings.Repeat("a", 65)},
+		{"grant_type", "urn:example:oauth:grant-type:" + strings.Repeat("x", 40)},
+		{"credential_prefix", "a" + strings.Repeat("b", 64)},
+		{"dedicated_header", "X" + strings.Repeat("a", 64)},
+	}
+	for _, c := range cases {
+		registry := syntheticRegistry(
+			RegistryClass{ClassID: "acr_device_flow_code", Markers: []ClassMarker{{Kind: c.kind, Name: c.name}}},
+			RegistryClass{ClassID: "acr_browser_refresh_token", Markers: []ClassMarker{{Kind: c.kind, Name: "other"}}},
+		)
+		err := CheckClassSelector(multiClassProfile(t, classes, c.kind, c.name), registry)
+		if err == nil || !strings.Contains(err.Error(), "longer than 64") {
+			t.Errorf("gate = %v for %s name of %d chars, want the length refusal", err, c.kind, len([]rune(c.name)))
+		}
+	}
+	for _, v := range selectorValidators(t) {
+		for _, name := range []string{strings.Repeat("a", 65), "urn:example:oauth:grant-type:" + strings.Repeat("x", 40)} {
+			if err := v.validate(t, "grant_type", name); err == nil {
+				t.Errorf("%s schema accepted a %d-char grant_type name", v.name, len(name))
+			}
+		}
+	}
+	ok := strings.Repeat("a", 64)
+	registry := syntheticRegistry(
+		RegistryClass{ClassID: "acr_device_flow_code", Markers: []ClassMarker{{Kind: "grant_type", Name: ok}}},
+		RegistryClass{ClassID: "acr_browser_refresh_token", Markers: []ClassMarker{{Kind: "grant_type", Name: "other"}}},
+	)
+	if err := CheckClassSelector(multiClassProfile(t, classes, "grant_type", ok), registry); err != nil {
+		t.Errorf("gate refused a 64-char grant_type name: %v", err)
+	}
+}

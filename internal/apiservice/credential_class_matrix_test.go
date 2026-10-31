@@ -30,10 +30,11 @@ import (
 // lookupCounts counts every read a credential can cause past the class
 // decision: a signing-key read, an HS256 verification, a store read.
 type lookupCounts struct {
-	mu     sync.Mutex
-	keys   int
-	legacy int
-	store  int
+	mu       sync.Mutex
+	keys     int
+	legacy   int
+	store    int
+	validate int
 }
 
 func (c *lookupCounts) add(field *int) {
@@ -50,8 +51,20 @@ func (c *lookupCounts) total() int {
 
 func (c *lookupCounts) reset() {
 	c.mu.Lock()
-	c.keys, c.legacy, c.store = 0, 0, 0
+	c.keys, c.legacy, c.store, c.validate = 0, 0, 0, 0
 	c.mu.Unlock()
+}
+
+// matrixValidator counts the calls the routed access validator receives:
+// the scope may hand it a JWT of an access row, never anything else.
+type matrixValidator struct {
+	inner  policy.RoutedValidator
+	counts *lookupCounts
+}
+
+func (v matrixValidator) Validate(ctx context.Context, service, profile, bearer string) (*policy.RoutedResult, error) {
+	v.counts.add(&v.counts.validate)
+	return v.inner.Validate(ctx, service, profile, bearer)
 }
 
 type matrixStore struct {
@@ -154,11 +167,13 @@ var matrixParam = regexp.MustCompile(`\{[^}]*\}`)
 
 func matrixPath(route string) string { return matrixParam.ReplaceAllString(route, "x") }
 
-// newMatrixRig is the api listener as configureWith builds it: the real row
+// newMatrixRig is the api listener (guarded: with each protected access row's
+// own route guard, which authenticates once more per route; unguarded: the
+// scope layers alone) as configureWith builds it: the real row
 // tables, the real access validator over them (routed mode), the three scope
 // layers, one route per api row. Only the key source, the HS256 path and the
 // store are counting doubles.
-func newMatrixRig(t *testing.T) *matrixRig {
+func newMatrixRig(t *testing.T, guarded bool) *matrixRig {
 	t.Helper()
 	counts := &lookupCounts{}
 	minter := newEdDSAMinter(t)
@@ -190,7 +205,7 @@ func newMatrixRig(t *testing.T) *matrixRig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := auth.RouteAccess(routedAccessVerify{validator}, goAPIAccessService); err != nil {
+	if err := auth.RouteAccess(matrixValidator{inner: routedAccessVerify{validator}, counts: counts}, goAPIAccessService); err != nil {
 		t.Fatal(err)
 	}
 	scopeRows, err := goAPIScopeRows()
@@ -204,7 +219,7 @@ func newMatrixRig(t *testing.T) *matrixRig {
 	var routes []httpapi.Route
 	for _, row := range rows {
 		var handler http.Handler = http.HandlerFunc(probeEcho)
-		if row["classification"] == "protected" && matrixAcceptsAccessToken(row) {
+		if guarded && row["classification"] == "protected" && matrixAcceptsAccessToken(row) {
 			handler = guard.Wrap(policy.Authenticated, handler)
 		}
 		routes = append(routes, httpapi.Route{Method: row["method"].(string), Pattern: row["route"].(string), Handler: handler})
@@ -242,7 +257,7 @@ func (rig *matrixRig) matrixCarrier(t *testing.T, class matrixClass) (map[string
 	return nil, false
 }
 
-func (rig *matrixRig) serve(row map[string]any, headers map[string]string) (int, int) {
+func (rig *matrixRig) serve(row map[string]any, headers map[string]string) (int, int, int) {
 	rig.counts.reset()
 	request := httptest.NewRequest(row["method"].(string), matrixPath(row["route"].(string)), nil)
 	for name, value := range headers {
@@ -250,7 +265,10 @@ func (rig *matrixRig) serve(row map[string]any, headers map[string]string) (int,
 	}
 	recorder := httptest.NewRecorder()
 	rig.handler.ServeHTTP(recorder, request)
-	return recorder.Code, rig.counts.total()
+	rig.counts.mu.Lock()
+	validate := rig.counts.validate
+	rig.counts.mu.Unlock()
+	return recorder.Code, rig.counts.total(), validate
 }
 
 // matrixAccepted reports whether the row accepts the class AND the class is
@@ -265,7 +283,8 @@ func matrixAccepted(row map[string]any, class string) bool {
 // no key read, no HS256 verification and no store read; a class it accepts
 // must resolve.
 func TestCredentialClassMatrix(t *testing.T) {
-	rig := newMatrixRig(t)
+	scopeRig, guardRig := newMatrixRig(t, false), newMatrixRig(t, true)
+	rig := scopeRig
 	classes := loadMatrixClasses(t)
 	if len(classes) == 0 || len(rig.rows) == 0 {
 		t.Fatal("empty matrix axis")
@@ -275,31 +294,38 @@ func TestCredentialClassMatrix(t *testing.T) {
 	}
 	var notDriven []string
 	for _, class := range classes {
-		carrier, driven := rig.matrixCarrier(t, class)
+		_, driven := rig.matrixCarrier(t, class)
 		if !driven {
 			notDriven = append(notDriven, class.id)
 			continue
 		}
+		isJWT := class.has("authorization_scheme", "Bearer") && len(class.markers["jwt_header_alg"]) > 0
 		t.Run(class.id, func(t *testing.T) {
-			cells, accepts := 0, 0
-			for _, row := range rig.rows {
-				cells++
-				status, lookups := rig.serve(row, carrier)
-				if matrixAccepted(row, class.id) {
-					accepts++
-					if status != http.StatusOK || lookups == 0 {
-						t.Errorf("%s: accepted class %s answered %d with %d lookups", row["id"], class.id, status, lookups)
+			for _, cellRig := range []*matrixRig{scopeRig, guardRig} {
+				cells, accepts := 0, 0
+				carrier, _ := cellRig.matrixCarrier(t, class)
+				for _, row := range cellRig.rows {
+					cells++
+					status, lookups, validate := cellRig.serve(row, carrier)
+					if matrixAccepted(row, class.id) {
+						accepts++
+						if status != http.StatusOK || lookups == 0 {
+							t.Errorf("%s: accepted class %s answered %d with %d lookups", row["id"], class.id, status, lookups)
+						}
+						continue
 					}
-					continue
+					if cellRig == scopeRig && validate != 0 && !(isJWT && matrixAcceptsAccessToken(row)) {
+						t.Errorf("%s: class %s reached the access validator %d times", row["id"], class.id, validate)
+					}
+					if lookups != 0 {
+						t.Errorf("%s: class %s reached %d lookups (keys %d, legacy %d, store %d)", row["id"], class.id, lookups, cellRig.counts.keys, cellRig.counts.legacy, cellRig.counts.store)
+					}
+					if cellRig == guardRig && row["classification"] == "protected" && matrixAcceptsAccessToken(row) && status != http.StatusUnauthorized {
+						t.Errorf("%s: wrong class %s answered %d, want 401", row["id"], class.id, status)
+					}
 				}
-				if lookups != 0 {
-					t.Errorf("%s: class %s reached %d lookups (keys %d, legacy %d, store %d)", row["id"], class.id, lookups, rig.counts.keys, rig.counts.legacy, rig.counts.store)
-				}
-				if row["classification"] == "protected" && matrixAcceptsAccessToken(row) && status != http.StatusUnauthorized {
-					t.Errorf("%s: wrong class %s answered %d, want 401", row["id"], class.id, status)
-				}
+				t.Logf("class %s: %d cells, %d accept cells (guarded %v)", class.id, cells, accepts, cellRig == guardRig)
 			}
-			t.Logf("class %s: %d cells, %d accept cells", class.id, cells, accepts)
 		})
 	}
 	slices.Sort(notDriven)

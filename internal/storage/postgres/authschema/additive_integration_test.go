@@ -257,9 +257,16 @@ func diffIsAdditive(before, after schemaShape) []string {
 // cause, keyed by version and the exact regression text. An exemption that
 // matches nothing fails the test, so a fixed or removed one cannot linger.
 type additiveExemption struct {
-	version    int
+	version int
+	// name keys an exemption of a migration whose number is not final yet:
+	// it matches by migration name, so a renumber is a file rename only.
+	name       string
 	regression string
 	reason     string
+}
+
+func (e additiveExemption) covers(m Migration) bool {
+	return (e.version != 0 && e.version == m.Version) || (e.name != "" && e.name == m.Name)
 }
 
 var additiveExemptions = []additiveExemption{
@@ -429,6 +436,12 @@ var additiveExemptions = []additiveExemption{
 		reason: "credential_class admits acr_browser_refresh_token; the redefined list is the 0036 list plus " +
 			"that one value, so it only widens (CHAOS-12141)",
 	},
+	{
+		name:       "platform_owner_role",
+		regression: `constraint platform_role_assignments.platform_role_assignments_role_closed redefined "CHECK ((role_key = 'platform_admin'::text))" -> "CHECK ((role_key = ANY (ARRAY['platform_admin'::text, 'platform_owner'::text])))"`,
+		reason: "platform_role_assignments.role_key admits platform_owner; the redefined list is the old list plus " +
+			"that one value, so it only widens (CHAOS-12294)",
+	},
 }
 
 // TestEveryMigrationStepIsAdditive applies the lineage ONE MIGRATION AT A TIME
@@ -466,7 +479,7 @@ func TestEveryMigrationStepIsAdditive(t *testing.T) {
 		before.constraints = acceptValidation(migration.Version, before.constraints)
 		regressions := diffIsAdditive(before, after)
 		for _, exemption := range additiveExemptions {
-			if exemption.version != migration.Version {
+			if !exemption.covers(migration) {
 				continue
 			}
 			var kept []string
@@ -489,8 +502,8 @@ func TestEveryMigrationStepIsAdditive(t *testing.T) {
 	}
 	for _, exemption := range additiveExemptions {
 		if !exemptionUsed[exemption.regression] {
-			t.Errorf("stale additive exemption, remove it: migration %04d %q (%s)",
-				exemption.version, exemption.regression, exemption.reason)
+			t.Errorf("stale additive exemption, remove it: migration %04d %q %q (%s)",
+				exemption.version, exemption.name, exemption.regression, exemption.reason)
 		}
 	}
 	if steps != len(migrations) {

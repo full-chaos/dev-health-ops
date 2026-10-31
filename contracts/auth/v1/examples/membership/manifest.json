@@ -22,6 +22,12 @@
       "why": "A platform role is not a membership role."
     },
     {
+      "file": "invalid-role-platform-owner.json",
+      "expect_instance_location": "/role",
+      "expect_keyword": "enum",
+      "why": "platform_owner is a platform role, not a membership role."
+    },
+    {
       "file": "invalid-role-superuser.json",
       "expect_instance_location": "/role",
       "expect_keyword": "enum",

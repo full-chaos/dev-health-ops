@@ -119,3 +119,41 @@ func TestPlanReadsBareNameThroughABuilder(t *testing.T) {
 		})
 	}
 }
+
+// A program run in a directory kept in a field of a helper struct runs in a temp dir when every value the package
+// stores in that field is under a temp dir: its literals, its assignments, and the literal that leaves it out.
+func TestPlanReadsBareNameExecInAStructFieldDir(t *testing.T) {
+	classes := "docs\tdocs/**\nREADME.md\tREADME.md\n"
+	head := "package p\n\nimport (\n\t\"os\"\n\t\"os/exec\"\n\t\"testing\"\n)\n\nvar _ = os.Getenv\nvar _ = testing.Short\n\n" +
+		"func repoRoot() string { return \"..\" }\n\n" +
+		"type gitRepo struct {\n\tt   *testing.T\n\tdir string\n}\n\n" +
+		"func (r *gitRepo) git(args ...string) {\n\tcmd := exec.Command(\"git\", args...)\n\tcmd.Dir = r.dir\n\t_ = cmd.Run()\n}\n\n"
+	cases := []struct {
+		name, body string
+		keep       bool
+	}{
+		{"temp_literal", "func TestX(t *testing.T) {\n\tr := &gitRepo{t: t, dir: t.TempDir()}\n\tr.git(\"add\", \"README.md\")\n}\n", false},
+		{"copy_of_a_temp_dir", "func TestX(t *testing.T) {\n\tr := &gitRepo{t: t, dir: t.TempDir()}\n\trr := &gitRepo{t: t, dir: r.dir}\n\trr.git(\"add\", \"README.md\")\n}\n", false},
+		{"temp_assignment", "func TestX(t *testing.T) {\n\tvar r *gitRepo = &gitRepo{t: t, dir: t.TempDir()}\n\tr.dir = t.TempDir()\n\tr.git(\"add\", \"README.md\")\n}\n", false},
+		{"repository_literal", "func TestX(t *testing.T) {\n\tr := &gitRepo{t: t, dir: repoRoot()}\n\tr.git(\"add\", \"README.md\")\n}\n", true},
+		{"temp_and_repository_literals", "func TestX(t *testing.T) {\n\tr := &gitRepo{t: t, dir: t.TempDir()}\n\tq := &gitRepo{t: t, dir: repoRoot()}\n\tr.git(\"add\", \"README.md\")\n\tq.git(\"x\")\n}\n", true},
+		{"literal_without_the_dir", "func TestX(t *testing.T) {\n\tr := &gitRepo{t: t, dir: t.TempDir()}\n\tq := &gitRepo{t: t}\n\tr.git(\"add\", \"README.md\")\n\tq.git(\"x\")\n}\n", true},
+		{"unkeyed_literal", "func TestX(t *testing.T) {\n\tr := &gitRepo{t, t.TempDir()}\n\tr.git(\"add\", \"README.md\")\n}\n", true},
+		{"assignment_of_the_repository", "func TestX(t *testing.T) {\n\tr := &gitRepo{t: t, dir: t.TempDir()}\n\tr.dir = repoRoot()\n\tr.git(\"add\", \"README.md\")\n}\n", true},
+		{"zero_value_struct", "func TestX(t *testing.T) {\n\tvar r gitRepo\n\tr.dir = t.TempDir()\n\tr.git(\"add\", \"README.md\")\n}\n", true},
+		{"address_of_the_field", "func TestX(t *testing.T) {\n\tr := &gitRepo{t: t, dir: t.TempDir()}\n\tp := &r.dir\n\t*p = repoRoot()\n\tr.git(\"add\", \"README.md\")\n}\n", true},
+		{"slice_of_structs", "func TestX(t *testing.T) {\n\trs := []gitRepo{{t: t, dir: repoRoot()}, {t: t, dir: t.TempDir()}}\n\trs[0].git(\"add\", \"README.md\")\n}\n", true},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			res := planReads(t, readsFixture(t, map[string]string{"p/p_test.go": head + c.body, "README.md": "r\n",
+				"internal/cigates/affected/classes.tsv": classes}))
+			out := res.stdout + res.stderr
+			if got := strings.Contains(out, "p\ttest\tREADME.md"); got != c.keep {
+				t.Fatalf("a README.md reader row is %v, want %v:\n%s", got, c.keep, out)
+			}
+		})
+	}
+}

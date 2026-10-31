@@ -22,7 +22,7 @@ transport writes when it answers before a route (400, 404, 405, 413, 429, 500).
 
 The closed action and role catalogs `actions.v1` and `roles.v1` (CHAOS-10637) live in
 `vocabulary/` with `action-catalog.v1` and `role-catalog.v1` schemas; the Go package
-`internal/auth/policycatalog` embeds and validates them. Catalog version 3 adds
+`internal/auth/policycatalog` embeds and validates them. Catalog version 5 adds the marker role `platform_owner`, which holds no action (CHAOS-12294). Catalog version 3 adds
 `billing.read`, `billing.manage` and `license.read` (CHAOS-11272), held as the billing and
 licensing routes allow today; they are catalog-only, so `/auth/me` does not serve them until a
 web-reviewed change does. Catalog version 2 gives every
@@ -38,6 +38,10 @@ here; the operations arrive with the routes that serve them. Rules:
 
 - A role field is a role key of the organization roles of `roles.v1`
   (viewer, member, admin, owner). A platform role is not a membership role.
+  The platform roles are `platform_admin` and `platform_owner`. `platform_owner`
+  is a marker role: it holds no action (an owner acts through a
+  `platform_admin` row it also holds), and only `auth-migrate platform-owner-grant` and `platform-owner-revoke`
+  write it (CHAOS-12294); no API route grants or revokes it.
 - `membership.v1` status is the memberships status of the auth schema:
   `invited`, `active`, `suspended`, `removed`. The provisioning event spells the
   same states differently: `invited` (event `pending`); the other three are

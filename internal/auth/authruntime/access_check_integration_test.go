@@ -30,23 +30,24 @@ func TestEdDSASessionTokenEndsWithItsSessionAndItsTokenVersion(t *testing.T) {
 		authconfig.EnvSigningKeyFile:      filepath.Join(dir, "k1.pem"),
 		authconfig.EnvSigningKeyID:        "k1",
 		authconfig.EnvAccessTokenClass:    authconfig.AccessClassEdDSA,
-		authconfig.EnvAccessTokenAudience: authapi.AccessTokenAudience,
+		authconfig.EnvAccessTokenAudience: "dev-health-api",
 		authconfig.EnvTokenIssuerURL:      "https://auth.example.test",
 	})
 	user, org := e.seed(t, ctx)
 
 	signer := token.NewFileSigner(token.FileConfig{KeyPath: filepath.Join(dir, "k1.pem"), KeyID: "k1"})
-	minter, err := authapi.NewEdDSAIssuer(testAccessSecret, "dev-health-ops", authapi.AccessTokenAudience, signer, "https://auth.example.test")
+	minter, err := authapi.NewEdDSAIssuer(testAccessSecret, "dev-health-ops", "dev-health-api", signer, "https://auth.example.test")
 	if err != nil {
 		t.Fatal(err)
 	}
 	mint := func() (string, string) {
 		issued := e.start(t, ctx, user, &org)
-		compact, err := minter.AccessContext(ctx, authapi.Grant{PrincipalID: user, OrganizationID: &org, SessionID: issued.Session.ID})
+		// The session routes take the session-route token the issuer mints beside the access token.
+		tokens, err := minter.Tokens(ctx, authapi.Grant{PrincipalID: user, OrganizationID: &org, SessionID: issued.Session.ID})
 		if err != nil {
 			t.Fatal(err)
 		}
-		return compact, session.WireSessionID(issued.Session.ID)
+		return tokens.Session, session.WireSessionID(issued.Session.ID)
 	}
 
 	bearer, _ := mint()

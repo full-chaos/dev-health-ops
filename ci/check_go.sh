@@ -4689,6 +4689,7 @@ AUTH_PACKAGES=(
 # exists in the tree without a row here, or a row names a function that does not.
 AUTH_FUZZ_TARGETS=(
   "./internal/auth/authapi FuzzParseRefreshRequest"
+  "./internal/auth/authapi FuzzDecodeAuthorizationRequest"
   "./internal/auth/contracts FuzzParseErrorEnvelope"
   "./internal/auth/contracts FuzzRevisionUnmarshal"
   "./internal/auth/contracts FuzzTimestampUnmarshal"

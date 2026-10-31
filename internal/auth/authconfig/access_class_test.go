@@ -24,12 +24,12 @@ func eddsaEnv() map[string]string {
 	env := sessionEnv(testAccessSecret, testSuccessorKey)
 	env[EnvAccessTokenClass] = "eddsa"
 	env[EnvTokenIssuerURL] = "https://auth.example.test"
-	env[EnvAccessTokenAudience] = "auth-service"
+	env[EnvAccessTokenAudience] = "dev-health-api"
 	return env
 }
 
-func TestAccessTokenClassEdDSALoadsWithItsIssuerURLAndTheSessionRouteAudience(t *testing.T) {
-	for _, audience := range []string{"auth-service"} {
+func TestAccessTokenClassEdDSALoadsWithItsIssuerURLAndTheAPIAudience(t *testing.T) {
+	for _, audience := range []string{"dev-health-api"} {
 		env := eddsaEnv()
 		env[EnvAccessTokenAudience] = audience
 		cfg, err := Load(Spec{LookupEnv: lookupFrom(env)})
@@ -84,7 +84,7 @@ func TestAccessTokenClassEdDSARefusesWhatCannotIssue(t *testing.T) {
 
 func TestAccessTokenClassEdDSARefusesWhitespaceAroundIssAndAud(t *testing.T) {
 	for _, name := range []string{EnvTokenIssuerURL, EnvAccessTokenAudience} {
-		base := map[string]string{EnvTokenIssuerURL: "https://auth.example.test", EnvAccessTokenAudience: "auth-service"}
+		base := map[string]string{EnvTokenIssuerURL: "https://auth.example.test", EnvAccessTokenAudience: "dev-health-api"}
 		for _, pad := range []string{" %s", "%s ", "\t%s", "%s\t", "\n%s", "%s\n", " %s\n", "\r\n%s"} {
 			env := eddsaEnv()
 			env[name] = strings.ReplaceAll(pad, "%s", base[name])

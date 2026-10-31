@@ -55,47 +55,11 @@ func executePlatformRoleBootstrap(parent context.Context, args []string, lookup 
 		fmt.Fprintf(stderr, "argument error: %v\n%s\n", err, platformRoleBootstrapUsage)
 		return 2
 	}
-	migrationURI, configured, err := secrets.ResolveDSNSetting(envMigrationURI, lookup)
-	if err != nil || !configured {
-		fmt.Fprintf(stderr, "configuration error: %s or %s_FILE is required\n", envMigrationURI, envMigrationURI)
-		return 1
+	ctx, store, cleanup, code := openPlatformRoleStoreAsMigrationRole(parent, lookup, stderr, "platform-role-bootstrap", "the bootstrap")
+	if code != 0 {
+		return code
 	}
-	schema, err := authschema.NewValidatedIdentifier(valueOr(lookup, envSchema, defaultSchema))
-	if err != nil {
-		fmt.Fprintf(stderr, "configuration error: %s is not a usable schema name\n", envSchema)
-		return 1
-	}
-	runtimeRole, present := lookup(envRuntimeRole)
-	runtimeRole = strings.TrimSpace(runtimeRole)
-	if !present || authschema.ValidateIdentifier(runtimeRole) != nil {
-		fmt.Fprintf(stderr, "configuration error: %s is required\n", envRuntimeRole)
-		return 1
-	}
-
-	ctx, cancel := context.WithTimeout(parent, runBudget)
-	defer cancel()
-	poolConfig := postgresstore.DefaultConfig(migrationURI.Reveal())
-	poolConfig.MaxConns = 2
-	pool, err := newDatabaseWait(poolConfig, stderr).run(ctx)
-	if err != nil {
-		fmt.Fprintln(stderr, "platform-role-bootstrap error: PostgreSQL migration endpoint unavailable")
-		return 1
-	}
-	defer pool.Close()
-	if err := keyrotation.CheckNotRuntimeRole(ctx, pool, runtimeRole); err != nil {
-		if errors.Is(err, keyrotation.ErrRuntimeRole) {
-			fmt.Fprintf(stderr, "configuration error: %s connects as the runtime role %q; the bootstrap runs as the migration role only\n",
-				envMigrationURI, runtimeRole)
-		} else {
-			fmt.Fprintln(stderr, "platform-role-bootstrap error: could not read the connected role")
-		}
-		return 1
-	}
-	store, err := platformrole.New(platformrole.Config{Pool: pool, Schema: schema})
-	if err != nil {
-		fmt.Fprintln(stderr, "platform-role-bootstrap error: could not open the platform role store")
-		return 1
-	}
+	defer cleanup()
 	id, err := store.Bootstrap(ctx, principal)
 	if err != nil {
 		if errors.Is(err, platformrole.ErrStore) {
@@ -107,4 +71,59 @@ func executePlatformRoleBootstrap(parent context.Context, args []string, lookup 
 	}
 	fmt.Fprintf(stdout, "platform_role_bootstrap assignment=%s principal=%s\n", id, principal)
 	return 0
+}
+
+// openPlatformRoleStoreAsMigrationRole resolves the migration endpoint, refuses
+// to run as the runtime role and opens the platform role store on it, under one
+// runBudget context. verb names the verb in error lines and what names it in the
+// runtime-role refusal. A nonzero code is the exit code, after its message;
+// otherwise the caller defers cleanup.
+func openPlatformRoleStoreAsMigrationRole(parent context.Context, lookup secrets.LookupEnv, stderr io.Writer, verb, what string) (context.Context, *platformrole.Store, func(), int) {
+	migrationURI, configured, err := secrets.ResolveDSNSetting(envMigrationURI, lookup)
+	if err != nil || !configured {
+		fmt.Fprintf(stderr, "configuration error: %s or %s_FILE is required\n", envMigrationURI, envMigrationURI)
+		return nil, nil, nil, 1
+	}
+	schema, err := authschema.NewValidatedIdentifier(valueOr(lookup, envSchema, defaultSchema))
+	if err != nil {
+		fmt.Fprintf(stderr, "configuration error: %s is not a usable schema name\n", envSchema)
+		return nil, nil, nil, 1
+	}
+	runtimeRole, present := lookup(envRuntimeRole)
+	runtimeRole = strings.TrimSpace(runtimeRole)
+	if !present || authschema.ValidateIdentifier(runtimeRole) != nil {
+		fmt.Fprintf(stderr, "configuration error: %s is required\n", envRuntimeRole)
+		return nil, nil, nil, 1
+	}
+
+	ctx, cancel := context.WithTimeout(parent, runBudget)
+	poolConfig := postgresstore.DefaultConfig(migrationURI.Reveal())
+	poolConfig.MaxConns = 2
+	pool, err := newDatabaseWait(poolConfig, stderr).run(ctx)
+	if err != nil {
+		cancel()
+		fmt.Fprintf(stderr, "%s error: PostgreSQL migration endpoint unavailable\n", verb)
+		return nil, nil, nil, 1
+	}
+	cleanup := func() {
+		pool.Close()
+		cancel()
+	}
+	if err := keyrotation.CheckNotRuntimeRole(ctx, pool, runtimeRole); err != nil {
+		if errors.Is(err, keyrotation.ErrRuntimeRole) {
+			fmt.Fprintf(stderr, "configuration error: %s connects as the runtime role %q; %s runs as the migration role only\n",
+				envMigrationURI, runtimeRole, what)
+		} else {
+			fmt.Fprintf(stderr, "%s error: could not read the connected role\n", verb)
+		}
+		cleanup()
+		return nil, nil, nil, 1
+	}
+	store, err := platformrole.New(platformrole.Config{Pool: pool, Schema: schema})
+	if err != nil {
+		fmt.Fprintf(stderr, "%s error: could not open the platform role store\n", verb)
+		cleanup()
+		return nil, nil, nil, 1
+	}
+	return ctx, store, cleanup, 0
 }

@@ -116,7 +116,7 @@ func (h compatHandlers) socialSignedIn(w http.ResponseWriter, r *http.Request, r
 	if membership != nil {
 		org, role = &membership.OrgID, roleText(membership.Role, true)
 	}
-	access, err := h.Issuer.AccessContext(ctx, Grant{PrincipalID: principalID, OrganizationID: org, Role: role, SessionID: issued.Session.ID, User: user})
+	tokens, err := h.Issuer.Tokens(ctx, Grant{PrincipalID: principalID, OrganizationID: org, Role: role, SessionID: issued.Session.ID, User: user})
 	if err != nil {
 		h.failMint(w, r, opSocialLogin, err)
 		return
@@ -132,6 +132,6 @@ func (h compatHandlers) socialSignedIn(w http.ResponseWriter, r *http.Request, r
 		}
 	}
 	h.rec.record(ctx, opSocialLogin, "success", reasonAccepted, nil)
-	writeCompatModel(w, loginResponse(access, refresh, needsOnboarding,
+	writeCompatModel(w, loginResponse(tokens, h.Issuer.ExpiresIn(), refresh, needsOnboarding,
 		userInfo(principalID, user, membership), &created))
 }

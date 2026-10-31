@@ -16,6 +16,12 @@ import (
 // PlatformAdmin is the catalog's platform administrator role.
 const PlatformAdmin = rule.PlatformAdmin
 
+// PlatformOwner is the catalog's platform owner role. It holds no action; it is
+// a marker the owner exemption reads, granted and revoked only by auth-migrate
+// (GrantOwner, RevokeOwner), never by Grant or Revoke. An owner acts through a
+// platform_admin row it also holds.
+const PlatformOwner = rule.PlatformOwner
+
 // GrantAction is the platform action a granter or revoker must hold now.
 const GrantAction = "admin.users"
 
@@ -34,6 +40,8 @@ var (
 	ErrNotHeld           = errors.New("platformrole: the principal does not hold the role")
 	ErrLastPlatformAdmin = errors.New("platformrole: the revoke would leave no active platform administrator")
 	ErrStore             = errors.New("platformrole: store failure")
+
+	ErrPlatformOwnerCLIOnly = errors.New("platformrole: platform_owner is granted and revoked only by auth-migrate")
 
 	ErrBootstrapAdminActive = errors.New("platformrole: an active platform administrator exists; the bootstrap is refused")
 	ErrBootstrapRowChanged  = errors.New("platformrole: the principal's assignment changed during the bootstrap; nothing was written")
@@ -60,6 +68,16 @@ func (a Authority) Roles() []string { return append([]string(nil), a.roles...) }
 
 // Any reports whether any platform role is held.
 func (a Authority) Any() bool { return len(a.roles) > 0 }
+
+// IsOwner reports whether the platform_owner role is held now.
+func (a Authority) IsOwner() bool {
+	for _, role := range a.roles {
+		if role == PlatformOwner {
+			return true
+		}
+	}
+	return false
+}
 
 // Allows reports whether a held role allows action and action is a platform
 // action of the catalog. An organization action is never allowed.

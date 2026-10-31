@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
@@ -383,7 +384,13 @@ func TestBirthReconcilesExact(t *testing.T) {
 	if err := e.store.Project(ctx, user); err != nil {
 		t.Fatal(err)
 	}
-	owned, err := identity.New(identity.Config{Pool: e.ownedRuntime(t), Schema: e.schema, UsersOwnedByAuth: true})
+	// The owned role in a pool of this cell's own: TestLegacyLinkPurgeVerbEndToEnd closes the shared one (the verb's defer pool.Close()).
+	pool, err := pgxpool.NewWithConfig(ctx, e.ownedRuntime(t).Config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	owned, err := identity.New(identity.Config{Pool: pool, Schema: e.schema, UsersOwnedByAuth: true})
 	if err != nil {
 		t.Fatal(err)
 	}

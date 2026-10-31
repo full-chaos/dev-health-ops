@@ -103,7 +103,7 @@ func TestBirthRegisterWritesAuthOrgAndOwner(t *testing.T) {
 	if n := e.outboxRows(t, ctx, "organization.created", org.String()); n != 1 {
 		t.Fatalf("organization.created events = %d, want 1", n)
 	}
-	if n := e.count(t, ctx, `SELECT count(*) FROM auth.auth_outbox_events WHERE event_type = 'membership.activated' AND aggregate_id = 'mem_' || $1`, membership.String()); n != 1 {
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.auth_outbox_events WHERE event_type = 'membership.activated' AND aggregate_id = 'mbr_' || $1`, membership.String()); n != 1 {
 		t.Fatalf("membership.activated events = %d, want 1", n)
 	}
 	if n := e.auditRows(t, ctx, "auth.membership.added", user.String()); n != 1 {

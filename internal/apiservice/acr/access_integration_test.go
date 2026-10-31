@@ -259,6 +259,81 @@ VALUES ($1, $2, $3, $4, 'member', now() + interval '1 hour', now())`, impersonat
 		durations[samples/2], durations[samples*95/100], durations[samples-1])
 }
 
+// TestPrincipalAccessSessionIsBoundToTheOrgAndItsExpiry holds the two
+// session.live clauses of the contract (design §2.4: "bound to the org, is not
+// expired") that the read does not check yet (CHAOS-12122). Every session is
+// made by auth-service's own session store: one bound to another organization
+// the user is also a member of, one past its absolute lifetime, one past its
+// refresh (idle) lifetime. Each must read session.live false; a session bound
+// to the requested organization and within both lifetimes stays live.
+func TestPrincipalAccessSessionIsBoundToTheOrgAndItsExpiry(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	pool, instance := startAccessPostgres(t, ctx)
+	rig := pinrig.NewPinRig(t, ctx, pool, instance)
+
+	org, otherOrg := uuid.New(), uuid.New()
+	pgseed.Org(ctx, t, pool, org.String(), "community")
+	pgseed.Org(ctx, t, pool, otherOrg.String(), "community")
+	alice := uuid.New()
+	seedAccessUser(t, ctx, pool, alice, "alice")
+	seedMembership(t, ctx, pool, alice, org)
+	seedMembership(t, ctx, pool, alice, otherOrg)
+	setFeature(t, ctx, pool, org, "ask_dev", true)
+	setFeature(t, ctx, pool, org, "agent_context_runtime", true)
+
+	store := AccessStore{
+		Organizations: postgresOrganizations{pool: pool},
+		Reads:         accessReadsSplit{PGStore: policy.PGStore{Pool: pool}, sessions: rig.Reader()},
+		Features:      NewPostgresAccessStore(pool, policy.PGStore{Pool: pool}, nil).Features,
+		Inventory:     staticInventory{"acme/api"},
+	}
+	read := func(t *testing.T, sid uuid.UUID) *SessionAccess {
+		t.Helper()
+		access, err := store.Access(ctx, AccessQuery{OrgID: org, UserID: alice, SessionID: &sid})
+		if err != nil {
+			t.Fatalf("access: %v", err)
+		}
+		if access.Session == nil {
+			t.Fatal("a read with a sid answered no session")
+		}
+		return access.Session
+	}
+
+	const life = 2 * time.Second
+	bound := rig.SignInWith(t, ctx, alice, &org, 0, 0)
+	otherOrgSession := rig.SignInWith(t, ctx, alice, &otherOrg, 0, 0)
+	absolute := rig.SignInWith(t, ctx, alice, &org, life, 0)
+	idle := rig.SignInWith(t, ctx, alice, &org, 0, life)
+	for name, sid := range map[string]uuid.UUID{"bound": bound, "absolute": absolute, "idle": idle} {
+		if got := read(t, sid); !got.Live {
+			t.Fatalf("%s session not live while within its lifetime: %+v", name, got)
+		}
+	}
+
+	t.Run("a session bound to another organization", func(t *testing.T) {
+		if got := read(t, otherOrgSession); got.Live {
+			t.Fatalf("session = %+v: a session bound to another organization reads live", got)
+		}
+	})
+	time.Sleep(life + 500*time.Millisecond)
+	t.Run("past its absolute lifetime", func(t *testing.T) {
+		if got := read(t, absolute); got.Live {
+			t.Fatalf("session = %+v: a session past its absolute lifetime reads live", got)
+		}
+	})
+	t.Run("past its refresh lifetime", func(t *testing.T) {
+		if got := read(t, idle); got.Live {
+			t.Fatalf("session = %+v: a session past its refresh lifetime reads live", got)
+		}
+	})
+	t.Run("bound and within both lifetimes", func(t *testing.T) {
+		if got := read(t, bound); !got.Live {
+			t.Fatalf("session = %+v: a bound session within its lifetimes does not read live", got)
+		}
+	})
+}
+
 // TestClickHouseRepositoryInventoryEqualsTheCatalog is the differential check
 // between the two readers of the inventory: go-api's ClickHouseRepositoryInventory
 // on a native connection, and query-api's catalog REPO dimension (the list web

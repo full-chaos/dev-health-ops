@@ -8,12 +8,14 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
@@ -31,6 +33,8 @@ type PinRig struct {
 	sessions *session.Store
 	auth     *policy.Authenticator
 	reader   policy.PGStore
+	// base is the session store's configuration, for SignInWith.
+	base session.Config
 }
 
 // NewPinRig applies the auth schema on admin's database.
@@ -74,8 +78,9 @@ func NewPinRig(t *testing.T, ctx context.Context, admin *pgxpool.Pool, instance 
 	if err != nil {
 		t.Fatal(err)
 	}
-	sessions, err := session.New(session.Config{Pool: login(roles["pin_runtime"]), Schema: schema,
-		SuccessorKey: contracts.NewSecretString(base64.RawURLEncoding.EncodeToString(key))})
+	base := session.Config{Pool: login(roles["pin_runtime"]), Schema: schema,
+		SuccessorKey: contracts.NewSecretString(base64.RawURLEncoding.EncodeToString(key))}
+	sessions, err := session.New(base)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +94,7 @@ func NewPinRig(t *testing.T, ctx context.Context, admin *pgxpool.Pool, instance 
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &PinRig{admin: admin, sessions: sessions, auth: auth, reader: reader}
+	return &PinRig{admin: admin, sessions: sessions, auth: auth, reader: reader, base: base}
 }
 
 // Reader is go-api's session read as the session reader role holds it: its
@@ -111,6 +116,46 @@ func (r *PinRig) SignIn(t *testing.T, ctx context.Context, user uuid.UUID) uuid.
 		t.Fatalf("principal: %v", err)
 	}
 	issued, err := r.sessions.Create(ctx, user, nil, []string{"pwd"})
+	if err != nil {
+		t.Fatalf("sign in: %v", err)
+	}
+	return issued.Session.ID
+}
+
+// SignInWith creates a session of user as auth-service does with a session
+// store configured with the given organization binding, absolute session
+// lifetime and refresh (idle) lifetime; a zero lifetime keeps the store's
+// default (no absolute cap; a 7-day refresh life).
+func (r *PinRig) SignInWith(t *testing.T, ctx context.Context, user uuid.UUID, organization *uuid.UUID, sessionLifetime, refreshTTL time.Duration) uuid.UUID {
+	t.Helper()
+	if _, err := r.admin.Exec(ctx, `INSERT INTO auth.principals (id, kind, display_name) VALUES ($1, 'user', 'pin-rig') ON CONFLICT (id) DO NOTHING`, user); err != nil {
+		t.Fatalf("principal: %v", err)
+	}
+	if organization != nil {
+		// auth.sessions.organization_id references auth.organizations; the
+		// rig's organization carries the public organization's id.
+		// Security tables are written only through audit.Commit.
+		id := *organization
+		if err := audit.Commit(ctx, r.admin, r.base.Schema, audit.Mutation{
+			Apply: func(ctx context.Context, tx audit.TxOps) error {
+				_, err := tx.Exec(ctx, `INSERT INTO auth.organizations (id, name, slug) VALUES ($1, $2, $2) ON CONFLICT (id) DO NOTHING`,
+					id, "pin-rig-"+id.String())
+				return err
+			},
+			Audit: audit.AuditEvent{EventType: "organization.created", Outcome: audit.OutcomeAllowed},
+			Events: []audit.OutboxEvent{{AggregateType: "organization", AggregateID: "org_" + id.String(),
+				EventType: "organization.created"}},
+		}); err != nil {
+			t.Fatalf("auth organization: %v", err)
+		}
+	}
+	cfg := r.base
+	cfg.SessionLifetime, cfg.RefreshTTL = sessionLifetime, refreshTTL
+	store, err := session.New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issued, err := store.Create(ctx, user, organization, []string{"pwd"})
 	if err != nil {
 		t.Fatalf("sign in: %v", err)
 	}

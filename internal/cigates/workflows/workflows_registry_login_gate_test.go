@@ -181,6 +181,12 @@ var commandPositionLogins = []string{
 	"xargs docker login ghcr.io -u x",
 	"stdbuf -oL docker login ghcr.io -u x",
 	"setsid docker login ghcr.io -u x",
+	"timeout 60 bash -c 'docker login ghcr.io'",
+	"xargs sh -c 'docker login ghcr.io'",
+	"nohup bash -c 'bash ci/lib/ghcr_login.sh'",
+	"env -S 'docker login ghcr.io'",
+	"env -S'docker login ghcr.io'",
+	"env --split-string='docker login ghcr.io'",
 }
 
 var commandPositionCalls = []string{
@@ -207,6 +213,7 @@ var harmlessLines = []string{
 	"echo \"ci/lib/ghcr_login.sh\"",
 	"echo docker login",
 	"echo \"docker login\"",
+	"env -S 'echo docker login'",
 	"echo \"${HOME} { not a group }\"",
 }
 
@@ -241,6 +248,22 @@ func TestRegistryLoginGateAcceptsQuotedAndEchoedForms(t *testing.T) {
 		t.Run("script "+line, func(t *testing.T) {
 			tmp := registryLoginTree(t, root, map[string]string{"ci/extra.sh": line + "\n"})
 			expectNoViolations(t, registryLoginDefects(t, tmp, jobLoginCensus))
+		})
+	}
+}
+
+func TestRegistryLoginGateRefusesOtherCiScriptsThatCallTheLoginScript(t *testing.T) {
+	root := rootOf(t)
+	for _, line := range []string{
+		"bash ci/lib/ghcr_login.sh",
+		"source ci/lib/ghcr_login.sh",
+		"./ci/lib/ghcr_login.sh",
+		"timeout 60 bash ci/lib/ghcr_login.sh",
+		"if true; then sh ci/lib/ghcr_login.sh; fi",
+	} {
+		t.Run(line, func(t *testing.T) {
+			tmp := registryLoginTree(t, root, map[string]string{"ci/extra_login.sh": line + "\n"})
+			expectViolation(t, registryLoginDefects(t, tmp, jobLoginCensus), "ci/extra_login.sh")
 		})
 	}
 }

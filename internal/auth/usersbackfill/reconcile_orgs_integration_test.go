@@ -383,7 +383,7 @@ func TestBirthReconcilesExact(t *testing.T) {
 	if err := e.store.Project(ctx, user); err != nil {
 		t.Fatal(err)
 	}
-	owned, err := identity.New(identity.Config{Pool: e.runtime, Schema: e.schema, UsersOwnedByAuth: true})
+	owned, err := identity.New(identity.Config{Pool: e.ownedRuntime(t), Schema: e.schema, UsersOwnedByAuth: true})
 	if err != nil {
 		t.Fatal(err)
 	}

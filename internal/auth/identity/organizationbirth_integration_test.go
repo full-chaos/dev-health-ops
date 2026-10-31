@@ -36,6 +36,9 @@ func (e *env) orgless(t *testing.T, ctx context.Context) uuid.UUID {
 	return user
 }
 
+// registerEmail is an address the sign-up rule takes: it refuses .test.
+func registerEmail(prefix string) string { return prefix + "-" + uuid.NewString()[:8] + "@example.com" }
+
 func allowCreate(context.Context, audit.TxOps) error { return nil }
 
 // wantBothOrgRows proves one organization in both schemas with one slug and name.
@@ -85,7 +88,7 @@ BEGIN IF `+condition+` THEN RAISE EXCEPTION 'planted failure'; END IF; RETURN NE
 
 func TestBirthRegisterWritesAuthOrgAndOwner(t *testing.T) {
 	e, ctx := getEnv(t), birthContext(t)
-	email := uniqueEmail("register")
+	email := registerEmail("register")
 	hash := testBcrypt
 	user, err := e.owned.ProvisionLocal(ctx, LocalProvisionRequest{Email: email, PasswordHash: &hash, Organization: &NewOrganization{Name: "Acme Corp"}})
 	if err != nil {
@@ -111,7 +114,7 @@ func TestBirthRegisterWritesAuthOrgAndOwner(t *testing.T) {
 func TestBirthRegisterAuditNamesTheOrganization(t *testing.T) {
 	e, ctx := getEnv(t), birthContext(t)
 	hash := testBcrypt
-	user, err := e.owned.ProvisionLocal(ctx, LocalProvisionRequest{Email: uniqueEmail("audit"), PasswordHash: &hash, Organization: &NewOrganization{Name: "Named"}})
+	user, err := e.owned.ProvisionLocal(ctx, LocalProvisionRequest{Email: registerEmail("audit"), PasswordHash: &hash, Organization: &NewOrganization{Name: "Named"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +158,7 @@ func TestNewOrgSignsInWithOrgsOwned(t *testing.T) {
 		t.Fatalf("control, a public-only org: err = %v, want ErrOrganizationNotFound", err)
 	}
 	hash := testBcrypt
-	registered, err := e.owned.ProvisionLocal(ctx, LocalProvisionRequest{Email: uniqueEmail("signin"), PasswordHash: &hash, Organization: &NewOrganization{Name: "Signs In"}})
+	registered, err := e.owned.ProvisionLocal(ctx, LocalProvisionRequest{Email: registerEmail("signin"), PasswordHash: &hash, Organization: &NewOrganization{Name: "Signs In"}})
 	if err != nil {
 		t.Fatal(err)
 	}

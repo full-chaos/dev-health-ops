@@ -109,6 +109,26 @@ func goAPIProjectScope(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// projectScopeSource is the manifest's ProjectScopeGrant function with its comments removed, as a source the row
+// parsers (funcRowStatements, chFuncGrants) read: a `//` comment is cut from its line, and a block comment anywhere in
+// the function is refused, so a commented-out row is never read as the flag-on grant (codex r1 on #5387). ok is false
+// when the manifest has no ProjectScopeGrant.
+func projectScopeSource(source string) (clean string, ok bool, err error) {
+	rest, ok := afterFirst(universalNewlines(source), projectScopeMarker)
+	if !ok {
+		return "", false, nil
+	}
+	body := beforeFirst(rest, "\n}\n")
+	if strings.Contains(body, "/*") {
+		return "", true, fmt.Errorf("func ProjectScopeGrant holds a block comment; refused for --project-scope")
+	}
+	lines := strings.Split(body, "\n")
+	for i, line := range lines {
+		lines[i], _, _ = strings.Cut(line, "//")
+	}
+	return projectScopeMarker + strings.Join(lines, "\n") + "\n}\n", true, nil
+}
+
 // takeProjectScopeOption removes a leading --project-scope from args and reports whether it was there.
 func takeProjectScopeOption(args []string) ([]string, bool) {
 	if len(args) > 0 && args[0] == projectScopeOption {

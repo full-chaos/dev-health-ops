@@ -101,6 +101,36 @@ func TestRenderWithTheProjectScopeRefusesAManifestWithoutOneProjectScopeRow(t *t
 	}
 }
 
+// Codex r1 on #5387 (executed): a comment inside ProjectScopeGrant was read as its row, so the render and the
+// comparison accepted a projects grant the function does not return. Comments are not rows: a `//` comment is
+// ignored, a block comment is refused, and a trailing comment on the real row is fine.
+func TestTheProjectScopeRowIsNeverReadFromAComment(t *testing.T) {
+	commented := syntheticManifest + "\nfunc ProjectScopeGrant(database string) TableGrant {\n" +
+		"\t// {Database: database, Table: \"projects\", AllowSelect: true}\n" +
+		"\treturn TableGrant{Database: database, Table: \"teams\"}\n}\n"
+	block := syntheticManifest + "\nfunc ProjectScopeGrant(database string) TableGrant {\n" +
+		"\t/*\n\t{Database: database, Table: \"projects\", AllowSelect: true}\n\t*/\n" +
+		"\treturn TableGrant{Database: database, Table: \"teams\"}\n}\n"
+	for name, manifest := range map[string]string{"line comment": commented, "block comment": block} {
+		t.Run(name, func(t *testing.T) {
+			code, out, stderr, _ := renderWith(t, manifest, "pw-1", "--project-scope")
+			if code == 0 || out != "" || !strings.Contains(stderr, "ProjectScopeGrant") {
+				t.Fatalf("render: exit %d, out %q, stderr %q", code, out, stderr)
+			}
+			code, cmp, _ := run("grants-compare", "--project-scope", "SELECT\tteams\nSELECT\tprojects\n", manifest)
+			if code != 1 || !strings.Contains(cmp, "GRANTS_CHECK_FAIL") || !strings.Contains(cmp, "ProjectScopeGrant") {
+				t.Fatalf("compare: exit %d, stdout %q", code, cmp)
+			}
+		})
+	}
+	trailing := syntheticManifest + "\nfunc ProjectScopeGrant(database string) TableGrant {\n" +
+		"\treturn TableGrant{Database: database, Table: \"projects\", AllowSelect: true} // the flag-on row\n}\n"
+	code, out, stderr, _ := renderWith(t, trailing, "pw-1", "--project-scope")
+	if code != 0 || !strings.Contains(out, "<query>GRANT SELECT ON default.projects</query>") {
+		t.Fatalf("a trailing comment on the real row: exit %d, out %q, stderr %q", code, out, stderr)
+	}
+}
+
 func TestGrantsCompareWithTheProjectScope(t *testing.T) {
 	source := realManifest(t)
 	off := realExpectation(t)

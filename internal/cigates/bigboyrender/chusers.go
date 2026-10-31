@@ -51,7 +51,12 @@ func renderCHUsers(args []string, stdout, stderr io.Writer) int {
 	}
 	statements := rowStatements(string(raw))
 	if projectScope {
-		extra := funcRowStatements(string(raw), projectScopeMarker)
+		clean, _, err := projectScopeSource(string(raw))
+		if err != nil {
+			fmt.Fprintf(stderr, "the posture manifest is refused, nothing written: %v\n", err)
+			return 1
+		}
+		extra := funcRowStatements(clean, projectScopeMarker)
 		if len(extra) != 1 {
 			fmt.Fprintf(stderr, "the posture manifest has %d granting rows in func ProjectScopeGrant, want 1 for --project-scope, nothing written\n", len(extra))
 			return 1

@@ -78,6 +78,8 @@ var followUp = map[ActionKind]string{
 	ActionReviewMembershipRole:                   "none",
 	ActionIdentityUnlinked:                       "none",
 	ActionProviderRevocationQueuedFromCredential: "none",
+	ActionRegrantPlatformRole:                    "a platform_admin grants each role again (admin route); with no active platform_admin run the break-glass verb first",
+	ActionNoActivePlatformAdmin:                  "auth-migrate platform-role-bootstrap -principal <uuid> -confirm",
 }
 
 // OperatorAction is the ids a section names for one action. Ids only: never a
@@ -136,7 +138,7 @@ func followUpOf(a OperatorAction) string {
 func ActionLines(actions []OperatorAction) []string {
 	var lines []string
 	for _, a := range mergeActions(actions) {
-		if len(a.IDs) == 0 {
+		if len(a.IDs) == 0 && a.Kind != ActionNoActivePlatformAdmin {
 			continue
 		}
 		lines = append(lines, fmt.Sprintf("operator-action %s source=%s count=%d ids=%s follow-up=%s", a.Kind, a.Source, len(a.IDs), strings.Join(a.IDs, ","), followUpOf(a)))

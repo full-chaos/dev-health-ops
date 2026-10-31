@@ -24,6 +24,7 @@ All of these hold:
 1. Users are owned and live (CHAOS-10231, the users-owned runbook), the organizations are owned and live (CHAOS-10998, which comes before platform roles), and CHAOS-10993 is live.
 2. The users backfill ran, so every public superuser has an assignment. Run `dho auth users-reconcile -platform-roles-gate`. It must print `gated_diffs=0`, including `diff.no_active_platform_admin=0`. Without the flag the class prints as `info.no_active_platform_admin` and cannot fail the run, so always pass the flag here.
 3. Run `dho auth platform-role-list`. It must show at least one `platform_admin` assignment that is active now.
+4. The restore fence carries the section `auth.platform_role_assignments` (a revoke after the restore target is deleted again; a grant after it is named in `regrant_platform_role` and never inserted; `no_active_platform_admin` names a fence that leaves no active platform administrator). The fence apply is the only writer. Read these lines in `auth-migrate restore-fence status` after a restore drill before the flip.
 
 ## Flip
 

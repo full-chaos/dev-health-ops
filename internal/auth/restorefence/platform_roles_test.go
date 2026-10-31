@@ -50,7 +50,7 @@ func TestThePlatformRoleApplyStatementDeletesAndNeverInsertsOrUpdates(t *testing
 	if strings.Contains(up, "INSERT") || strings.Contains(up, "UPDATE ") || strings.Contains(sql, ";") {
 		t.Errorf("the apply must be one statement that never inserts or updates:\n%s", sql)
 	}
-	if !strings.Contains(sql, `(SELECT count(*) FROM m x WHERE NOT EXISTS (SELECT 1 FROM "auth".platform_role_assignments t WHERE t.id = x.id))`) {
+	if !strings.Contains(sql, `(SELECT count(*) FROM m x WHERE NOT EXISTS (SELECT 1 FROM "auth".platform_role_assignments t WHERE x.id = t.id))`) {
 		t.Errorf("the apply must count the manifest rows with no restored row:\n%s", sql)
 	}
 }
@@ -58,7 +58,7 @@ func TestThePlatformRoleApplyStatementDeletesAndNeverInsertsOrUpdates(t *testing
 func TestRegrantPlatformRoleNamesTheManifestIDsWithNoRestoredRowAndNothingElse(t *testing.T) {
 	def, _ := sectionByName(platformRoleSection)
 	ids := def.idsSQL(testSchema(t))
-	want := `SELECT x.id::text FROM m x WHERE NOT EXISTS (SELECT 1 FROM "auth".platform_role_assignments t WHERE t.id = x.id) ORDER BY 1`
+	want := `SELECT x.id::text FROM m x WHERE NOT EXISTS (SELECT 1 FROM "auth".platform_role_assignments t WHERE x.id = t.id) ORDER BY 1`
 	if !strings.Contains(ids, want) {
 		t.Errorf("regrant_platform_role must name the manifest ids the restored table lacks, ids only:\n%s", ids)
 	}

@@ -261,6 +261,11 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedI
 					return err
 				}
 			}
+			var rolesBefore int64
+			if err := tx.QueryRow(ctx, platformRolesCountSQL(schema)).Scan(&rolesBefore); err != nil {
+				return fmt.Errorf("counting the platform role assignments (sqlstate %s)", sqlState(err))
+			}
+			rolesInUse := rolesBefore > 0 || manifestRowCount(m, platformRolesSection) > 0
 			for _, s := range sections {
 				if m == nil {
 					if q := blindReviewSQL(s, schema); q != "" {
@@ -332,6 +337,11 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedI
 				default:
 					report.Revocations += changed
 				}
+			}
+			if lockout, fired, err := platformAdminLockout(ctx, tx, schema, opts.PlatformRolesOwned, rolesInUse); err != nil {
+				return fmt.Errorf("reading the active platform administrators (sqlstate %s)", sqlState(err))
+			} else if fired {
+				report.Actions = append(report.Actions, lockout)
 			}
 			flows, err := tx.Exec(ctx, flowStatesSQL(schema))
 			if err != nil {

@@ -127,19 +127,31 @@ func TestRefresh_SourceErrorKeepsOriginalExpiry(t *testing.T) {
 	}
 }
 
-func TestSnapshot_TTLNeverExceedsBound(t *testing.T) {
+func TestNew_RefusesTTLAboveBound(t *testing.T) {
+	for _, ttl := range []time.Duration{entitlement.MaxTTL + time.Nanosecond, time.Hour, -time.Second} {
+		if _, err := entitlement.New(entitlement.Config{Source: &fakeSource{}, TTL: ttl}); err == nil {
+			t.Fatalf("a TTL of %v must be refused", ttl)
+		}
+	}
+}
+
+func TestSnapshot_TTLAtBoundExpiresAtBound(t *testing.T) {
 	clk := &clock{now: time.Unix(1_000, 0)}
 	src := &fakeSource{content: team()}
-	a, err := entitlement.New(entitlement.Config{Source: src, Now: clk.Now, TTL: time.Hour})
+	a, err := entitlement.New(entitlement.Config{Source: src, Now: clk.Now, TTL: entitlement.MaxTTL})
 	if err != nil {
 		t.Fatal(err)
 	}
 	org := uuid.New()
 	a.Check(context.Background(), org, "webhooks")
 	src.set(entitlement.Content{Tier: "community", Features: map[string]bool{}}, nil)
-	clk.advance(entitlement.MaxTTL + time.Second)
+	clk.advance(entitlement.MaxTTL - time.Second)
+	if !a.Check(context.Background(), org, "webhooks").Allowed {
+		t.Fatal("snapshot must serve inside the bound")
+	}
+	clk.advance(time.Second)
 	if got := a.Check(context.Background(), org, "webhooks"); got.Allowed {
-		t.Fatalf("a configured TTL above the bound must be capped: %+v", got)
+		t.Fatalf("snapshot must expire at the bound: %+v", got)
 	}
 }
 

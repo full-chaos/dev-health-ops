@@ -121,7 +121,7 @@ func (e *Evaluator) evaluateRepository(r Request, act policycatalog.Action, s Sn
 
 	var sawGrant, sawForeign, sawRevoked, sawExpired bool
 	for _, g := range gs.Grants(r.OrganizationID) {
-		if g.ResourceKind != resourceRepository || !repoKeyShape.MatchString(g.ResourceKey) {
+		if g.ResourceKind != resourceRepository {
 			continue
 		}
 		keyMatches := g.ResourceKey == r.ResourceKey || g.ResourceKey == wildcardKey

@@ -129,7 +129,7 @@ With `AUTH_MEMBERSHIP_ROUTES=true`, auth-service serves the membership, invite a
 
   | Environment | Rule |
   | --- | --- |
-  | `AUTH_PROVISIONING_CREDENTIAL` | `workload` or `session_compat`; unset or empty is `session_compat`. The value is compared as it is: a padded or whitespace-only value is a start-up error. |
+  | `AUTH_PROVISIONING_CREDENTIAL` | `workload` or `session_compat`; unset is `session_compat`. |
   | `AUTH_WORKLOAD_SUBJECT_FILE` | `workload` only: path of the projected ServiceAccount token file (Kubernetes). Set exactly one of this and `AUTH_WORKLOAD_BOOTSTRAP_FILE`. |
   | `AUTH_WORKLOAD_BOOTSTRAP_FILE` | `workload` only: path of the workload bootstrap credential file (Compose). |
   | `AUTH_WORKLOAD_ISSUER` | `workload` only, required: auth-service's token issuer URL (`AUTH_TOKEN_ISSUER_URL`, https); every workload token must carry it. |

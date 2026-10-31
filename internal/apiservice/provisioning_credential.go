@@ -53,10 +53,14 @@ type sessionCredential struct {
 type workloadAsk struct{ flag, selector string }
 
 // selectsWorkload reads selector when flag is on: false for unset, empty and session_compat, true for workload, and a
-// start-up error naming the selector for any other value. The value is compared as it is, never trimmed: a padded or
-// whitespace-only value is not one of the three.
-func selectsWorkload(lookup func(string) (string, bool), flag, selector string) (bool, error) {
+// start-up error naming the selector for any other value. The value is compared as it is, except that trimSpace
+// (the provisioning selector only, as on main) trims it first: for any other selector a padded or whitespace-only
+// value is not one of the three.
+func selectsWorkload(lookup func(string) (string, bool), flag, selector string, trimSpace bool) (bool, error) {
 	value, _ := lookup(selector)
+	if trimSpace {
+		value = strings.TrimSpace(value)
+	}
 	switch value {
 	case "", credentialSessionCompat:
 		return false, nil
@@ -74,7 +78,7 @@ func newCredentials(cfg AuthProxyConfig, lookup func(string) (string, bool)) (pr
 	var asks []workloadAsk
 	provisioningAsks, sessionAsks := false, false
 	if cfg.OrgProvisioningOn() {
-		ok, err := selectsWorkload(lookup, EnvAuthProxyOrgProvisioning, EnvAuthProvisioningCredential)
+		ok, err := selectsWorkload(lookup, EnvAuthProxyOrgProvisioning, EnvAuthProvisioningCredential, true)
 		if err != nil {
 			return provisioningCredential{}, sessionCredential{}, err
 		}
@@ -85,7 +89,7 @@ func newCredentials(cfg AuthProxyConfig, lookup func(string) (string, bool)) (pr
 	}
 	if cfg.Enabled(AuthSessions) {
 		sessionsFlag := AuthProxyFlagEnv(AuthSessions)
-		ok, err := selectsWorkload(lookup, sessionsFlag, EnvAuthSessionIssueCredential)
+		ok, err := selectsWorkload(lookup, sessionsFlag, EnvAuthSessionIssueCredential, false)
 		if err != nil {
 			return provisioningCredential{}, sessionCredential{}, err
 		}

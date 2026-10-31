@@ -63,10 +63,12 @@ const (
 
 const (
 	defaultSchema = "auth"
-	// runBudget bounds the whole run. A migration that cannot finish inside
-	// it is a migration that is waiting on a lock it will not get, and a
-	// one-shot job that hangs forever in a deployment pipeline is worse than
-	// one that fails.
+	// runBudget bounds the whole run: a one-shot job that hangs forever in a
+	// deployment pipeline is worse than one that fails. A lock wait does not
+	// reach it: each migration's transaction gives up a lock wait after
+	// authschema.DefaultMigrationLockTimeout and the run fails after
+	// authschema.DefaultMigrationLockAttempts attempts (CHAOS-12200), so auth
+	// readers do not queue behind a waiting migration for the whole budget.
 	runBudget = 5 * time.Minute
 )
 

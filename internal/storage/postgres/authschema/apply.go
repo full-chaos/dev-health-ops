@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -494,9 +495,10 @@ func applyOnce(ctx context.Context, conn querier, options Options, migration Mig
 	if _, err := tx.Exec(ctx, `SELECT set_config('search_path', $1, true)`, options.Schema); err != nil {
 		return false, fmt.Errorf("%w: setting search_path for version %d", ErrMigrationFailed, migration.Version)
 	}
-	// lock_timeout for this transaction only (the lock policy).
+	// lock_timeout for this transaction only (the lock policy). The value is
+	// a bound parameter, never SQL text.
 	if _, err := tx.Exec(
-		ctx, `SELECT set_config('lock_timeout', $1, true)`, fmt.Sprintf("%dms", lockTimeout.Milliseconds()),
+		ctx, `SELECT set_config('lock_timeout', $1, true)`, strconv.FormatInt(lockTimeout.Milliseconds(), 10)+"ms",
 	); err != nil {
 		return false, fmt.Errorf("%w: setting lock_timeout for version %d", ErrMigrationFailed, migration.Version)
 	}

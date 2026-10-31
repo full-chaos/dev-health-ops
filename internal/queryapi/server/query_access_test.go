@@ -216,6 +216,7 @@ var corpusAtAuthService = map[string]string{
 	"invalid-order-audience-over-expiry.json":        "reject",
 	"invalid-order-audience-over-not-yet-valid.json": "reject",
 	"invalid-order-issuer-over-audience.json":        "reject",
+	"valid-act-auth-service.json":                    "reject",
 	"valid-auth-service.json":                        "reject",
 }
 

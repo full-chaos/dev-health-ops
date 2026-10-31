@@ -206,11 +206,7 @@ func (e *Evaluator) evaluateRepository(r Request, act policycatalog.Action, s Sn
 		if why := e.membershipDefaultDenial(memberRole, act); why != "" {
 			return deny(why)
 		}
-		if act.CacheClass == policycatalog.CacheNone {
-			return Decision{Allowed: true, Reason: ReasonAllowedByMembershipDefault, PolicyRevision: rev, CacheClass: CacheNone}
-		}
-		return Decision{Allowed: true, Reason: ReasonAllowedByMembershipDefault, PolicyRevision: rev,
-			CacheClass: CacheDecisionBound, ExpiresAtUnixNano: repositoryAllowExpiry(now)}
+		return repositoryAllow(ReasonAllowedByMembershipDefault, act, rev, now)
 	}
 
 	var sawRevoked, sawExpired bool
@@ -232,11 +228,7 @@ func (e *Evaluator) evaluateRepository(r Request, act policycatalog.Action, s Sn
 			sawExpired = true
 			continue
 		}
-		if act.CacheClass == policycatalog.CacheNone {
-			return Decision{Allowed: true, Reason: ReasonAllowedByRepositoryGrant, PolicyRevision: rev, CacheClass: CacheNone}
-		}
-		return Decision{Allowed: true, Reason: ReasonAllowedByRepositoryGrant, PolicyRevision: rev,
-			CacheClass: CacheResourceRevisionBound, ExpiresAtUnixNano: repositoryAllowExpiry(now)}
+		return repositoryAllow(ReasonAllowedByRepositoryGrant, act, rev, now)
 	}
 	switch {
 	case sawExpired:
@@ -245,6 +237,17 @@ func (e *Evaluator) evaluateRepository(r Request, act policycatalog.Action, s Sn
 		return deny(ReasonGrantRevoked)
 	}
 	return deny(ReasonRepositoryNotGranted)
+}
+
+// repositoryAllow is the one allow decision of both repository paths: a
+// repository read is resource_revision_bound and ends 30 s after the clock
+// (TRD section 14); an action whose catalog class is none is never cached.
+func repositoryAllow(why Reason, act policycatalog.Action, rev int, now int64) Decision {
+	if act.CacheClass == policycatalog.CacheNone {
+		return Decision{Allowed: true, Reason: why, PolicyRevision: rev, CacheClass: CacheNone}
+	}
+	return Decision{Allowed: true, Reason: why, PolicyRevision: rev,
+		CacheClass: CacheResourceRevisionBound, ExpiresAtUnixNano: repositoryAllowExpiry(now)}
 }
 
 func (e *Evaluator) roleHolds(roleID string, act policycatalog.Action) bool {

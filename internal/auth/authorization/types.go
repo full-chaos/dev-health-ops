@@ -114,8 +114,8 @@ type Decision struct {
 	PolicyRevision int
 	// CacheClass says how long a consumer may reuse the decision. A deny is
 	// CacheNone. A repository allow is CacheResourceRevisionBound when a live
-	// grant allowed it and CacheDecisionBound when the membership default did,
-	// unless the action's catalog class is none. Allows of organization and
+	// grant or the membership default allowed it, unless the action's catalog
+	// class is none. Allows of organization and
 	// platform actions leave it empty: the catalog class applies.
 	CacheClass CacheClass
 	// ExpiresAtUnixNano is the instant a repository allow stops being usable:

@@ -219,7 +219,15 @@ must be 0 fenced) and `r` is the number of users named for a reset (2 fenced). T
 `drill-password-secrets.json` of the evidence directory (mode 0600, made at run time; nothing prints or passes them as an
 argument). Results of the 2026-10-29 runs below were made before this check: their result line has two counts.
 
-TODO(CHAOS-11834): result paragraph of the password drill (date, tip, fenced and unfenced result lines, evidence directories), to be filled from the bigboy run.
+Result of the password drill (CHAOS-11834), 2026-10-31 on bigboy at 319214a4: fenced `DRILL RESULT: PASS (b
+revokes-after-T-back=0, c reissued-different=0, p passwords-after-T-back=0, r reset-required=2)`; the fenced PITR copy
+refused all four password tries as `password_unavailable` (`old_password_accepted` = 0, `new_password_accepted` = 0,
+`hash_null_rows` = 3), refused both revoked or disabled workload secrets, and post-T.json had absent_after_restore=2 and
+fence_rows_for_live_timeline=1. The unfenced baseline of the same tip: `DRILL RESULT: GAP (b revokes-after-T-back=9,
+c reissued-different=6, p passwords-after-T-back=2, r reset-required=0)`, with the old password accepted 2 of 2, the new one
+0 of 2 and both revoked or disabled workload secrets accepted. On both runs the end-of-WAL copy accepted the new and refused
+the old password. Evidence: /var/lib/oci-cache/lane-scratch/fcsup/11834/drill-11834-fenced-2/evidence (fenced) and
+drill-11834-base-2/evidence (baseline).
 
 Result of the fenced drill (CHAOS-11271), 2026-10-29 on bigboy at e86f591c: `DRILL RESULT: PASS (b revokes-after-T-back=0,
 c reissued-different=0)` (the two-count form of that date); post-T.json keys_reissued_with_different_content=0, revokes_after_target_that_came_back=0,

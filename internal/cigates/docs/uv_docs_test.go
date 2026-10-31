@@ -18,12 +18,76 @@ var (
 	}
 	uvDocsReqs   = glue("requirements-docs", ".", "txt")
 	uvSetupPin   = regexp.MustCompile(`^astral-sh/setup-uv@[0-9a-f]{40}( #.*)?$`)
+	uvExactVer   = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
 	uvLockHash1  = "--hash=sha256:b80b99a14bd085fcacfa15c9165f651fbb3406e66cc603abf11c5750937c992d"
 	uvMkdocsPref = `uv run --no-project --python "$RUNNER_TEMP/docs-venv/bin/python" mkdocs build --strict`
+	// The one build line: this prefix, `--config-file mkdocs.yml`, then only the existing tee tail.
+	uvBuildLine = regexp.MustCompile(`^uv run --no-project --python "\$RUNNER_TEMP/docs-venv/bin/python" mkdocs build --strict --config-file mkdocs\.yml( 2>&1 \| tee( -a)? \.build/[A-Za-z0-9._-]+\.log)?$`)
+	uvVenvLine  = regexp.MustCompile(`^uv venv --python ([0-9]+\.[0-9]+\.[0-9]+) "\$RUNNER_TEMP/docs-venv"$`)
+	uvInstLine  = `uv pip install --python "$RUNNER_TEMP/docs-venv/bin/python" --require-hashes --no-deps -r ` + glue("requirements-docs", ".", "txt")
+	// The lock grammar: `name==version` then one or more sha256 hashes, nothing else (uv emits no markers here).
+	uvLockVer   = `[0-9]+(?:\.[0-9]+)*(?:[a-z]+[0-9]+)?(?:\.post[0-9]+)?`
+	uvLockEntry = regexp.MustCompile(`^([A-Za-z0-9][A-Za-z0-9._-]*)==(` + uvLockVer + `)((?: --hash=sha256:[0-9a-f]{64})+)$`)
+	uvLockName  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*==` + uvLockVer + `$`)
+	uvHashTok   = regexp.MustCompile(`^--hash=sha256:[0-9a-f]{64}$`)
 )
 
-func uvDocsGuard(d docTree) []string {
+func uvLockFindings(d docTree) []string {
+	reqs, err := d.read(uvDocsReqs)
+	if err != nil {
+		return []string{err.Error()}
+	}
 	var out []string
+	entries, material := 0, false
+	for _, e := range strings.Split(strings.ReplaceAll(reqs, "\\\n", " "), "\n") {
+		e = strings.Join(strings.Fields(e), " ")
+		if e == "" || strings.HasPrefix(e, "#") {
+			continue
+		}
+		entries++
+		tok := strings.Fields(e)
+		if strings.HasPrefix(e, "-") {
+			out = append(out, fmt.Sprintf("%s: entry %q carries something other than only name==version and --hash (exact name==version required)", uvDocsReqs, e))
+			continue
+		}
+		if !uvLockName.MatchString(tok[0]) {
+			out = append(out, fmt.Sprintf("%s: entry %q is not an exact name==version pin", uvDocsReqs, tok[0]))
+			continue
+		}
+		hashes := 0
+		for _, h := range tok[1:] {
+			switch {
+			case uvHashTok.MatchString(h):
+				hashes++
+			case strings.HasPrefix(strings.ToLower(h), "--hash="):
+				out = append(out, fmt.Sprintf("%s: %s hash %q must be --hash=sha256:<64 lowercase hex>", uvDocsReqs, tok[0], h))
+			default:
+				out = append(out, fmt.Sprintf("%s: %s carries %q: only name==version and --hash lines are allowed", uvDocsReqs, tok[0], h))
+			}
+		}
+		if hashes == 0 {
+			out = append(out, fmt.Sprintf("%s: %s must carry --hash=sha256:<64 lowercase hex>", uvDocsReqs, tok[0]))
+		}
+		if uvLockEntry.MatchString(e) && tok[0] == "mkdocs-material==9.7.7" {
+			material = true
+		}
+	}
+	if entries < 2 {
+		out = append(out, uvDocsReqs+" must pin the full transitive set, found "+fmt.Sprint(entries)+" entries")
+	}
+	if !material {
+		out = append(out, uvDocsReqs+" must pin mkdocs-material==9.7.7")
+	}
+	return out
+}
+
+type uvLine struct {
+	step int
+	text string
+}
+
+func uvDocsGuard(d docTree) []string {
+	out := uvLockFindings(d)
 	for _, rel := range uvDocsWorkflows {
 		wf, err := parseYAML(d, rel)
 		if err != nil {
@@ -33,37 +97,56 @@ func uvDocsGuard(d docTree) []string {
 		mkdocsJobs := 0
 		for jobID := range asMap(wf["jobs"]) {
 			steps := workflowSteps(wf, jobID)
+			uvStepIdx := -1
 			var uvStep map[string]any
-			installed, builds := false, false
-			for _, s := range steps {
+			var lines []uvLine
+			for i, s := range steps {
 				uses := asString(s["uses"])
 				if strings.HasPrefix(uses, "actions/setup-python@") {
 					out = append(out, fmt.Sprintf("%s:%s sets up Python with setup-python: %s", rel, jobID, uses))
 				}
 				if strings.HasPrefix(uses, "astral-sh/setup-uv@") {
-					uvStep = s
+					uvStepIdx, uvStep = i, s
 					if !uvSetupPin.MatchString(uses) {
 						out = append(out, fmt.Sprintf("%s:%s setup-uv must be pinned to a 40-hex commit: %s", rel, jobID, uses))
 					}
 				}
-				for _, line := range commandLines(asString(s["run"])) {
-					f := strings.Fields(line)
-					mkSeen := false
-					for i, w := range f {
-						if (w == "pip" || w == "pip3") && i+1 < len(f) && f[i+1] == "install" && (i == 0 || f[i-1] != "uv") {
-							out = append(out, fmt.Sprintf("%s:%s runs a bare pip install: %q", rel, jobID, line))
-						}
-						if !mkSeen && (w == "mkdocs" || (w == "-m" && i+1 < len(f) && f[i+1] == "mkdocs")) {
-							mkSeen = true
-							builds = true
-							if !strings.HasPrefix(line, uvMkdocsPref) || !strings.Contains(line, "--config-file mkdocs.yml") {
-								out = append(out, fmt.Sprintf("%s:%s must build with `%s ...`: %q", rel, jobID, uvMkdocsPref, line))
-							}
-						}
+				for _, l := range commandLines(asString(s["run"])) {
+					lines = append(lines, uvLine{i, l})
+				}
+			}
+			venvAt, instAt, buildAt := []int{}, []int{}, []int{}
+			builds := false
+			for n, l := range lines {
+				f := strings.Fields(l.text)
+				for i, w := range f {
+					if (w == "pip" || w == "pip3") && i+1 < len(f) && f[i+1] == "install" && (i == 0 || f[i-1] != "uv") {
+						out = append(out, fmt.Sprintf("%s:%s runs a bare pip install: %q", rel, jobID, l.text))
 					}
-					if strings.HasPrefix(line, "uv pip install") && strings.Contains(line, "--require-hashes") &&
-						strings.Contains(line, "--no-deps") && strings.Contains(line, "-r "+uvDocsReqs) {
-						installed = true
+				}
+				switch {
+				case len(f) > 1 && f[0] == "uv" && f[1] == "venv":
+					if m := uvVenvLine.FindStringSubmatch(l.text); m != nil && uvExactVer.MatchString(m[1]) {
+						venvAt = append(venvAt, n)
+					} else {
+						out = append(out, fmt.Sprintf("%s:%s uv venv line is not part of the chain (exact X.Y.Z python, venv at $RUNNER_TEMP/docs-venv): %q", rel, jobID, l.text))
+					}
+				case len(f) > 1 && f[0] == "uv" && f[1] == "pip":
+					if l.text == uvInstLine {
+						instAt = append(instAt, n)
+					} else {
+						out = append(out, fmt.Sprintf("%s:%s uv pip line is not part of the chain: %q", rel, jobID, l.text))
+					}
+				}
+				for i, w := range f {
+					if w == "mkdocs" || (w == "-m" && i+1 < len(f) && f[i+1] == "mkdocs") {
+						builds = true
+						if uvBuildLine.MatchString(l.text) {
+							buildAt = append(buildAt, n)
+						} else {
+							out = append(out, fmt.Sprintf("%s:%s must build with `%s --config-file mkdocs.yml` and only the tee tail: %q", rel, jobID, uvMkdocsPref, l.text))
+						}
+						break
 					}
 				}
 			}
@@ -71,42 +154,45 @@ func uvDocsGuard(d docTree) []string {
 				continue
 			}
 			mkdocsJobs++
-			if uvStep == nil {
-				out = append(out, fmt.Sprintf("%s:%s runs mkdocs without a setup-uv step", rel, jobID))
-			} else {
-				with := asMap(uvStep["with"])
-				if asString(with["version"]) == "" {
-					out = append(out, fmt.Sprintf("%s:%s setup-uv must pin a uv version", rel, jobID))
-				}
-				if v, ok := with["enable-cache"].(bool); !ok || v {
-					out = append(out, fmt.Sprintf("%s:%s setup-uv must set enable-cache: false", rel, jobID))
+			for _, c := range []struct {
+				name string
+				at   []int
+				want string
+			}{{"venv", venvAt, `uv venv --python <X.Y.Z> "$RUNNER_TEMP/docs-venv"`}, {"install", instAt, uvInstLine}, {"build", buildAt, uvMkdocsPref + " --config-file mkdocs.yml"}} {
+				if len(c.at) != 1 {
+					out = append(out, fmt.Sprintf("%s:%s needs exactly one %s chain line, found %d: %s", rel, jobID, c.name, len(c.at), c.want))
 				}
 			}
-			if !installed {
-				out = append(out, fmt.Sprintf("%s:%s must run `uv pip install --require-hashes --no-deps -r %s`", rel, jobID, uvDocsReqs))
+			if len(venvAt) == 1 && len(instAt) == 1 && len(buildAt) == 1 && !(venvAt[0] < instAt[0] && instAt[0] < buildAt[0]) {
+				out = append(out, fmt.Sprintf("%s:%s chain lines are out of order: want venv, then install, then build", rel, jobID))
+			}
+			if uvStep == nil {
+				out = append(out, fmt.Sprintf("%s:%s runs mkdocs without a setup-uv step", rel, jobID))
+				continue
+			}
+			if len(venvAt) == 1 && uvStepIdx > lines[venvAt[0]].step {
+				out = append(out, fmt.Sprintf("%s:%s setup-uv must come before the uv venv step", rel, jobID))
+			}
+			with := asMap(uvStep["with"])
+			if !uvExactVer.MatchString(asString(with["version"])) {
+				out = append(out, fmt.Sprintf("%s:%s setup-uv version must be an exact X.Y.Z release, got %v", rel, jobID, with["version"]))
+			}
+			switch v := with["enable-cache"].(type) {
+			case bool:
+				if v {
+					out = append(out, fmt.Sprintf("%s:%s setup-uv must set enable-cache: false", rel, jobID))
+				}
+			case string:
+				if v != "false" {
+					out = append(out, fmt.Sprintf("%s:%s setup-uv must set enable-cache: false (got %q)", rel, jobID, v))
+				}
+			default:
+				out = append(out, fmt.Sprintf("%s:%s setup-uv must set enable-cache: false", rel, jobID))
 			}
 		}
 		if mkdocsJobs == 0 {
 			out = append(out, rel+" runs no mkdocs build job")
 		}
-	}
-	reqs, err := d.read(uvDocsReqs)
-	if err != nil {
-		return append(out, err.Error())
-	}
-	entries := 0
-	for _, e := range strings.Split(strings.ReplaceAll(reqs, "\\\n", " "), "\n") {
-		e = strings.TrimSpace(e)
-		if e == "" || strings.HasPrefix(e, "#") {
-			continue
-		}
-		entries++
-		if !strings.Contains(e, "==") || !strings.Contains(e, "--hash=sha256:") {
-			out = append(out, uvDocsReqs+": every requirement must be pinned with == and carry --hash=sha256: (got "+strings.Fields(e)[0]+")")
-		}
-	}
-	if entries < 2 {
-		out = append(out, uvDocsReqs+" must pin the full transitive set, found "+fmt.Sprint(entries)+" entries")
 	}
 	return out
 }
@@ -122,10 +208,10 @@ func TestDocsWorkflowsBuildThroughUv(t *testing.T) {
 		}, "bare pip install"},
 		{"the install loses --require-hashes", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, gd, "--require-hashes ", "")
-		}, "--require-hashes"},
+		}, "chain line"},
 		{"the install loses --no-deps", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, hr, "--no-deps ", "")
-		}, "--no-deps"},
+		}, "chain line"},
 		{"mkdocs runs without uv", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, gd, uvMkdocsPref, "python -m mkdocs build --strict")
 		}, "must build with"},
@@ -137,7 +223,7 @@ func TestDocsWorkflowsBuildThroughUv(t *testing.T) {
 		}, "40-hex"},
 		{"setup-uv pins no uv version", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, gd, "          version: 0.12.9\n", "")
-		}, "pin a uv version"},
+		}, "exact X.Y.Z"},
 		{"setup-uv caches", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, cf, "          enable-cache: false\n", "")
 		}, "enable-cache: false"},

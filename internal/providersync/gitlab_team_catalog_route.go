@@ -498,7 +498,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 			nativeIDByProject[row.ID.String()] = nativeID
 		}
 		rows.Projects = dedupeGitLabProjectCatalogRows(rows.Projects)
-		if err := handler.collectProjectTargets(ctx, client, ref.OrgID, rows.Projects, nativeIDByProject, normalizedAt); err != nil {
+		if err := handler.collectProjectTargets(ctx, client, ref.OrgID, ref.SyncRunID, rows.Projects, nativeIDByProject, normalizedAt); err != nil {
 			return GitLabTeamCatalogBatch{}, err
 		}
 		// codex round 5, P2: a selected source id discovery never returned
@@ -862,7 +862,7 @@ func gitlabGroupMilestoneOwner(milestone gitlabIssueMilestonePayload) string {
 func (handler GitLabTeamCatalogRouteHandler) collectProjectTargets(
 	ctx context.Context,
 	client *providerfoundation.HTTPClient,
-	orgID string,
+	orgID, syncRunID string,
 	projects []gitlabTeamCatalogProjectRow,
 	nativeIDByProject map[string]string,
 	normalizedAt time.Time,
@@ -894,7 +894,7 @@ func (handler GitLabTeamCatalogRouteHandler) collectProjectTargets(
 			continue
 		}
 		if ancestorParam == "" {
-			ancestorParam = gitlabMilestoneAncestorParam(ctx, client, "org_id", orgID)
+			ancestorParam = gitlabMilestoneAncestorParam(ctx, client, "org_id", orgID, "sync_run_id", syncRunID)
 		}
 		pages, err := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
 			Path:    providerRelativePath(client, "api", "v4", "projects", nativeID, "milestones"),

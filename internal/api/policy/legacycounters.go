@@ -2,6 +2,7 @@ package policy
 
 import (
 	"context"
+	"net/http"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -84,4 +85,15 @@ func guardLevelKind(level Authz) string {
 		return kindGuardOptional
 	}
 	return kindGuardUnknown
+}
+
+// Wrap returns next behind level, counting each request that enters the
+// route, refused callers included.
+func (g *Guard) Wrap(level Authz, next http.Handler) http.Handler {
+	kind := guardLevelKind(level)
+	guarded := g.wrap(level, next)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		countLegacy(r.Context(), surfaceGuardLevel, kind)
+		guarded.ServeHTTP(w, r)
+	})
 }

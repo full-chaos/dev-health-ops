@@ -89,8 +89,8 @@ func NewGuard(auth *Authenticator, logger *slog.Logger) *Guard {
 	return &Guard{auth: auth, logger: logger}
 }
 
-// Wrap returns next behind level. A refused caller never reaches next.
-func (g *Guard) Wrap(level Authz, next http.Handler) http.Handler {
+// wrap returns next behind level. A refused caller never reaches next.
+func (g *Guard) wrap(level Authz, next http.Handler) http.Handler {
 	if level == Public {
 		return next
 	}
@@ -165,6 +165,17 @@ func (g *Guard) currentUser(w http.ResponseWriter, r *http.Request, level Authz)
 		authFailure(w, "Invalid or expired token", err)
 		return nil, false
 	}
+	switch {
+	case level == Superuser:
+		countRoleSource(r.Context(), kindRolePlatformGate)
+	case level == Admin || level == AdminOrg:
+		switch {
+		case user.IsSuperuser:
+			countRoleSource(r.Context(), kindRolePlatformBypass)
+		case user.OrgID == "":
+			countRoleSource(r.Context(), kindRoleClaimFallback)
+		}
+	}
 	if (level != Admin && level != AdminOrg) || user.IsSuperuser || user.OrgID == "" {
 		return user, true
 	}
@@ -186,8 +197,10 @@ func (g *Guard) currentUser(w http.ResponseWriter, r *http.Request, level Authz)
 		writeOrgDenied(w)
 		return nil, false
 	case tokenOrgAsMain:
+		countRoleSource(r.Context(), kindRoleClaimFallback)
 		return user, true
 	}
+	countRoleSource(r.Context(), kindRoleMembershipRow)
 	if role != user.Role {
 		acting := *user
 		acting.Role = role

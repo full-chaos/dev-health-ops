@@ -119,21 +119,16 @@ INSERT INTO auth.refresh_credentials VALUES ('00000000-0000-4000-8000-0000000000
 	}
 }
 
-func TestAuthRowsAuditProjectionCoversLoginFailedAndSucceededIntegration(t *testing.T) {
+// CHAOS-11400: auth-service writes go-api's sign-in rows into public.audit_logs itself, so its sign-in events are not
+// projected into the audit comparison as well (that doubled every row).
+func TestAuthRowsAuditComparisonProjectsNoSignInEventIntegration(t *testing.T) {
 	conn := fixture(t, `
 INSERT INTO auth.security_audit_events VALUES
  ('00000000-0000-4000-8000-0000000000f1', 'auth.login.succeeded', '00000000-0000-4000-8000-0000000000a1', '00000000-0000-4000-8000-0000000000b1', NULL, '192.0.2.1', 'agent', '{}', '2026-01-01T00:00:00Z'),
  ('00000000-0000-4000-8000-0000000000f2', 'auth.login.failed', NULL, '00000000-0000-4000-8000-0000000000b2', NULL, NULL, NULL, '{"reason_code":"invalid_credentials"}', '2026-01-01T00:00:01Z'),
  ('00000000-0000-4000-8000-0000000000f3', 'auth.session.revoked', NULL, '00000000-0000-4000-8000-0000000000b2', NULL, NULL, NULL, '{}', '2026-01-01T00:00:02Z');`)
-	got := run(t, conn, TableAuditLogs, "")
-	if len(got) != 2 {
-		t.Fatalf("want the 2 sign-in events, got %d: %v", len(got), got)
-	}
-	if !strings.Contains(got[0], "login") || !strings.Contains(got[0], "User logged in") || !strings.Contains(got[0], "success") {
-		t.Errorf("succeeded row: %s", got[0])
-	}
-	if !strings.Contains(got[1], "login_failed") || !strings.Contains(got[1], "Login failed: invalid credentials") || !strings.Contains(got[1], "Invalid credentials") {
-		t.Errorf("failed row: %s", got[1])
+	if got := run(t, conn, TableAuditLogs, ""); len(got) != 0 {
+		t.Fatalf("audit rows projected from sign-in events: %v", got)
 	}
 }
 

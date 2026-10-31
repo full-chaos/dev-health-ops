@@ -918,7 +918,7 @@ func demoGitLabCommit(commit demoCommit) map[string]any {
 }
 
 func demoGitLabAnswers(build *demoBuild) []providerAnswer {
-	var answers []providerAnswer
+	answers := []providerAnswer{gitlabVersionAnswer()}
 	answers = append(answers, gitlabTeamCatalogAnswers(demoGitLabGroups, "")...)
 	epicGroups := map[string]bool{}
 	for _, path := range demoGitLabProjectPaths {

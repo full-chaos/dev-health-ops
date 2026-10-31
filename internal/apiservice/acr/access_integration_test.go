@@ -35,6 +35,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/projectinventory"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/repoinventory"
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
@@ -213,7 +214,7 @@ func TestPrincipalAccessReadsLiveStateEndToEnd(t *testing.T) {
 	t.Run("live session, member, both flags, inventory", func(t *testing.T) {
 		got := read(t, org, alice, &aliceSession)
 		want := PrincipalAccess{Member: true, Session: &SessionAccess{Live: true, Reason: sessionReasonLive},
-			AskDev: true, AgentContextRuntime: true, Repositories: []string{"acme/api"}}
+			AskDev: true, AgentContextRuntime: true, ACRBasis: "both", Repositories: []string{"acme/api"}}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("access = %+v session %+v", got, got.Session)
 		}
@@ -483,7 +484,7 @@ func TestClickHouseRepositoryInventoryEqualsTheCatalog(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = client.Close() })
 
-	org, other, empty := uuid.New(), uuid.New(), uuid.New()
+	org, other, empty, big := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	insert := func(orgID uuid.UUID, repo string) {
 		t.Helper()
 		if err := conn.Exec(ctx, `INSERT INTO repos (id, repo, org_id, provider, last_synced) VALUES (?, ?, ?, ?, ?)`,
@@ -495,8 +496,16 @@ func TestClickHouseRepositoryInventoryEqualsTheCatalog(t *testing.T) {
 		insert(org, repo)
 	}
 	insert(other, "elsewhere/repo")
+	// An org above the limit (CHAOS-12285): LIMIT 101 sees the 101st repository,
+	// and the read is refused, never cut to 100.
+	for i := 0; i <= repoinventory.Limit; i++ {
+		insert(big, fmt.Sprintf("acme/r%03d", i))
+	}
 
 	inventory := ClickHouseRepositoryInventory{Conn: conn}
+	if got, err := inventory.Repositories(ctx, big); !errors.Is(err, repoinventory.ErrOverLimit) || got != nil {
+		t.Fatalf("an org above the repository limit: %d repositories, %v; want ErrOverLimit and no list", len(got), err)
+	}
 	catalog := func(orgID uuid.UUID) []string {
 		t.Helper()
 		result, degraded, err := analytics.ResolveCatalog(ctx, client, orgID.String(), dimensionRef(model.DimensionInputRepo), nil)

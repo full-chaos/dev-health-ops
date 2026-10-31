@@ -13,7 +13,8 @@ Seven surfaces are planned (CHAOS-3270). Shipped so far: `principal.v1`
 `authorization_decision.v1` and the two batch forms (CHAOS-4932). All seven
 planned surfaces have shipped, and the Wave 2 session surfaces `session.v1`,
 `refresh-request.v1`, `refresh-response.v1` and `auth-outcome.v1` (CHAOS-10155)
-follow them, then the Wave 3 user access token `access-token.v1` (CHAOS-10442), the Wave 8
+follow them, then the Wave 3 user access token `access-token.v1` (CHAOS-10442),
+`refresh-response.v2` (the refresh answer for the EdDSA access token; v1 stays the answer for the HS256 token and both are read until the HS256 issuer is removed), the Wave 8
 workload token `workload-token.v1` (CHAOS-10648: typ `workload+jwt`, one audience, no
 `org_id`/`sid`/`scope`, at most 300 s; its signed corpus is `golden/workload-token`),
 and `transport-error.v1` (CHAOS-10392), the body auth-service's shared
@@ -27,7 +28,7 @@ licensing routes allow today; they are catalog-only, so `/auth/me` does not serv
 web-reviewed change does. Catalog version 2 gives every
 action a `risk_class` and a `cache_class` (a high-risk action is never cached), and
 `authorization_decision.v1` `reason_code` is a closed enum, `decision_reason_code` in
-`vocabulary/reason-codes.json` (CHAOS-10641); `error.v1` stays shape-only. The profile gate (`ValidateEndpointAuthProfile`) also refuses a cached profile that names no catalog action (one pinned exemption, acr.context.read, until it is catalogued) and a profile that caches a high-risk catalog action; that join of two files runs in Go only, the ajv runner cannot see it.
+`vocabulary/reason-codes.json` (CHAOS-10641); `error.v1` stays shape-only. The profile gate (`ValidateEndpointAuthProfile`) also refuses a cached profile that names no catalog action and a profile that caches a high-risk catalog action; that join of two files runs in Go only, the ajv runner cannot see it.
 
 The provisioning resources and request bodies `organization.v1`,
 `organization-create-request.v1`, `membership.v1`, `membership-update-request.v1`,

@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	actionsSHA = "65ef0a1f6573e3d3b8d08b2ca6024fcf1b3db87214b787e6c8f2b95386789f33"
-	rolesSHA   = "c98ac300c672961041a23a9edaf20e03f36edad878b3321d99585dd7429bbb81"
+	actionsSHA = "4eba455c88d9af116140fc9f7c5305cb813234571ddab809d7ca96de4b040e3d"
+	rolesSHA   = "a32079feb5263b57abab0449bf169215b61ed02b20da372461d3374b1807d37d"
 )
 
 func repoRoot(t *testing.T) string {
@@ -222,7 +222,7 @@ func TestEmbeddedFilesValidateAgainstTheirSchemas(t *testing.T) {
 // internal/api/session/permissions.go. Catalog-only = not served in /auth/me
 // until a web-reviewed change adds it there; every other catalog action must
 // still equal a session permission.
-var catalogOnly = map[string]bool{"billing.read": true, "billing.manage": true, "license.read": true}
+var catalogOnly = map[string]bool{"billing.read": true, "billing.manage": true, "license.read": true, "members.update": true, "authz.decide": true, "acr.context.read": true}
 
 type sessionEntry struct {
 	role string
@@ -388,5 +388,46 @@ func TestCatalogHoldsTheBillingAndLicenseActions(t *testing.T) {
 		if strings.Join(got, ",") != strings.Join(holders[id], ",") {
 			t.Errorf("action %s is held by %v, want %v", id, got, holders[id])
 		}
+	}
+}
+
+// acr.context.read is the first repository-kind action: organization scope, a repository as its resource.
+func TestEmbeddedCatalogHoldsAcrContextReadAsARepositoryAction(t *testing.T) {
+	a, err := Default().Action("acr.context.read")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Scope != ScopeOrganization || a.ResourceKind != "repository" || a.RiskClass != RiskLow || a.CacheClass != CacheResourceRevisionBound {
+		t.Errorf("acr.context.read = %+v, want organization scope, repository kind, low risk, resource_revision_bound", a)
+	}
+}
+
+// The resource-kind set widens to repository; the scope sets do not.
+func TestRepositoryIsAResourceKindAndNeverAScope(t *testing.T) {
+	const okR = `{"schema_version":"roles.v1","catalog_version":1,"description":"d","roles":[{"role":"r","scope":"organization","actions":["a.b"]}]}`
+	act := func(scope, kind string) string {
+		row := func(id string) string {
+			return `{"action":"` + id + `","scope":"` + scope + `","resource_kind":"` + kind + `","risk_class":"low","cache_class":"decision_bound"}`
+		}
+		return `{"schema_version":"actions.v1","catalog_version":1,"description":"d","actions":[` + row("a.b") + `,` + row("a.c") + `]}`
+	}
+	if _, err := Load([]byte(act("organization", "repository")), []byte(okR)); err != nil {
+		t.Errorf("repository resource_kind refused: %v", err)
+	}
+	for name, a := range map[string]string{
+		"repository scope":      act("repository", "organization"),
+		"unknown resource kind": act("organization", "galaxy"),
+	} {
+		if _, err := Load([]byte(a), []byte(okR)); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+	allRepo := strings.Replace(okR, `"scope":"organization"`, `"scope":"repository"`, 1)
+	if _, err := Load([]byte(act("repository", "repository")), []byte(allRepo)); err == nil {
+		t.Error("a repository scope was accepted for an action and its role")
+	}
+	roleScope := strings.Replace(okR, `"scope":"organization"`, `"scope":"repository"`, 1)
+	if _, err := Load([]byte(act("organization", "organization")), []byte(roleScope)); err == nil {
+		t.Error("a repository role scope was accepted")
 	}
 }

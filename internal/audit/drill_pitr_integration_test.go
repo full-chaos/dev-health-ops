@@ -102,12 +102,13 @@ func drillMigrate(t *testing.T, ctx context.Context, admin *pgxpool.Pool, role s
 	}
 	// The restore fence carries the legacy public tables as well (refresh tokens, service credentials, ingest tokens,
 	// ...), and the drill revokes one row of each after T: both modes run on the full migrated schema, as production
-	// does, or apply refuses on the missing tables.
+	// does, or apply refuses on the missing tables. UsersOwned gives the runtime role the public.users write grant the
+	// users-owned deployment has: the password drill writes both user tables through the real identity store.
 	pgschema.ApplyURI(ctx, t, admin.Config().ConnString())
 	if _, err := admin.Exec(ctx, fmt.Sprintf(`CREATE ROLE %q LOGIN PASSWORD '%s'`, role, password)); err != nil {
 		t.Fatalf("create runtime role: %v", err)
 	}
-	if _, err := authschema.Apply(ctx, admin, authschema.Options{Schema: "auth", RuntimeRole: role}); err != nil {
+	if _, err := authschema.Apply(ctx, admin, authschema.Options{Schema: "auth", RuntimeRole: role, UsersOwned: true}); err != nil {
 		t.Fatalf("authschema.Apply: %v", err)
 	}
 }

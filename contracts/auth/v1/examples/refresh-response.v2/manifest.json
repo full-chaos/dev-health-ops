@@ -1,0 +1,214 @@
+{
+  "description": "The golden corpus for the refresh-response.v2 wire contract: a successful refresh whose access token is the EdDSA access-token.v1 JWS. This manifest is the SINGLE inventory: every runner reads THIS file over THESE fixtures (G-70). `reject_by_client` documents are valid against the schema and refused by ParseRefreshResponse: the header and claims rules of access-token.v1 (the same ParseAccessToken), each token's audience (access_token dev-health-api, session_access_token auth-service), its sid against session_id, and expires_in against its exp - iat. Tokens are synthetic, and no fixture stores a compact JWS (as the signed access-token golden corpus does not): each token member is stored as an object {header_json | header_segment, payload_json | payload_segment, signature [, trailing_bits]} and every runner assembles the wire string base64url(header_json) \".\" base64url(payload_json) \".\" signature before it validates (a *_segment is used as the segment itself; trailing_bits sets the lowest bit of the last character of the segment it names). Signatures begin EXAMPLE. Go: assembleV2Fixture; ajv: assembleSplitTokens in ci/auth-contracts-ajv/run.mjs.",
+  "accept": [
+    {
+      "file": "valid-full-lifetime.json",
+      "why": "An EdDSA access-token.v1 JWS, 60 minutes, and the 7 day refresh credential."
+    },
+    {
+      "file": "valid-short-lifetime.json",
+      "why": "expires_in is exp - iat of the token, not a constant: ten minutes."
+    }
+  ],
+  "reject": [
+    {
+      "file": "invalid-missing-access-token.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "`access_token` is required."
+    },
+    {
+      "file": "invalid-schema-version-v1.json",
+      "expect_instance_location": "/schema_version",
+      "expect_keyword": "const",
+      "why": "The v2 schema accepts only refresh-response.v2; a v1 version string is parsed by the v1 schema."
+    },
+    {
+      "file": "invalid-expires-in-zero.json",
+      "expect_instance_location": "/expires_in",
+      "expect_keyword": "minimum",
+      "why": "A lifetime of zero is not a token anyone can use."
+    },
+    {
+      "file": "invalid-expires-in-past-60-minutes.json",
+      "expect_instance_location": "/expires_in",
+      "expect_keyword": "maximum",
+      "why": "Above the access-token.v1 ceiling (3600)."
+    },
+    {
+      "file": "invalid-expires-in-string.json",
+      "expect_instance_location": "/expires_in",
+      "expect_keyword": "type",
+      "why": "expires_in is an integer."
+    },
+    {
+      "file": "invalid-access-token-not-jws.json",
+      "expect_instance_location": "/access_token",
+      "expect_keyword": "pattern",
+      "why": "Two segments: not a compact JWS."
+    },
+    {
+      "file": "invalid-access-token-empty-segment.json",
+      "expect_instance_location": "/access_token",
+      "expect_keyword": "pattern",
+      "why": "An empty payload segment: not a compact JWS."
+    },
+    {
+      "file": "invalid-extra-field-user.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "The user object is not part of this contract."
+    },
+    {
+      "file": "invalid-refresh-credential-jwt-shaped.json",
+      "expect_instance_location": "/refresh_credential",
+      "expect_keyword": "pattern",
+      "why": "A dot is not in the credential alphabet: a refresh JWT cannot be presented here."
+    },
+    {
+      "file": "invalid-token-type-capitalised.json",
+      "expect_instance_location": "/token_type",
+      "expect_keyword": "const",
+      "why": "`bearer`, lowercase."
+    },
+    {
+      "file": "invalid-session-id-wrong-prefix.json",
+      "expect_instance_location": "/session_id",
+      "expect_keyword": "pattern",
+      "why": "Session ids are ses_-prefixed."
+    },
+    {
+      "file": "invalid-access-token-header-length-1-mod-4.json",
+      "expect_instance_location": "/access_token",
+      "expect_keyword": "pattern",
+      "why": "A header segment of nine characters: 4k+1 characters is no base64url."
+    },
+    {
+      "file": "invalid-access-token-signature-length-1-mod-4.json",
+      "expect_instance_location": "/access_token",
+      "expect_keyword": "pattern",
+      "why": "A signature segment of 17 characters."
+    },
+    {
+      "file": "invalid-access-token-padded-signature.json",
+      "expect_instance_location": "/access_token",
+      "expect_keyword": "pattern",
+      "why": "A padded signature segment: base64url here is unpadded."
+    },
+    {
+      "file": "invalid-access-token-standard-alphabet-signature.json",
+      "expect_instance_location": "/access_token",
+      "expect_keyword": "pattern",
+      "why": "The standard-alphabet character + is not in the URL alphabet."
+    },
+    {
+      "file": "invalid-access-token-newline-in-signature.json",
+      "expect_instance_location": "/access_token",
+      "expect_keyword": "pattern",
+      "why": "A line break inside a segment; a lenient decoder skips it."
+    },
+    {
+      "file": "invalid-missing-session-access-token.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "`session_access_token` is required: the session routes accept no other EdDSA token."
+    },
+    {
+      "file": "invalid-session-access-token-not-jws.json",
+      "expect_instance_location": "/session_access_token",
+      "expect_keyword": "pattern",
+      "why": "Two segments: not a compact JWS."
+    }
+  ],
+  "reject_by_client": [
+    {
+      "file": "client-rejected-header-alg-hs256.json",
+      "why": "Header alg HS256: a symmetric algorithm is never this token's (access-token.v1 header)."
+    },
+    {
+      "file": "client-rejected-header-alg-none.json",
+      "why": "Header alg none."
+    },
+    {
+      "file": "client-rejected-header-typ-jwt.json",
+      "why": "Header typ JWT: the HS256 token's type, not at+jwt."
+    },
+    {
+      "file": "client-rejected-header-missing-kid.json",
+      "why": "No kid: a verifier could not pick a key."
+    },
+    {
+      "file": "client-rejected-header-jku-member.json",
+      "why": "A jku member moves key selection out of the verifier's hands."
+    },
+    {
+      "file": "client-rejected-header-duplicate-member.json",
+      "why": "A duplicate member inside the decoded header is refused before any other check."
+    },
+    {
+      "file": "client-rejected-claims-lifetime-over-ceiling.json",
+      "why": "The token lives 3601 s: over the ceiling although expires_in is in range."
+    },
+    {
+      "file": "client-rejected-claims-nbf-before-iat.json",
+      "why": "nbf before iat."
+    },
+    {
+      "file": "client-rejected-expires-in-not-token-lifetime.json",
+      "why": "expires_in 600 for a token that lives 3600 s."
+    },
+    {
+      "file": "client-rejected-session-id-not-token-sid.json",
+      "why": "The token's sid names another session than session_id."
+    },
+    {
+      "file": "client-rejected-segment-not-object.json",
+      "why": "The header decodes to bytes that are not exactly one JSON object."
+    },
+    {
+      "file": "client-rejected-expires-in-decimal.json",
+      "why": "Schema `integer` admits 3600.0; clients refuse decimal-form tokens."
+    },
+    {
+      "file": "client-rejected-duplicate-access-token.json",
+      "why": "Duplicate member.",
+      "duplicate_member": true
+    },
+    {
+      "file": "client-rejected-header-trailing-bits.json",
+      "why": "The header segment's last character carries non-zero trailing bits: the same bytes under a second spelling."
+    },
+    {
+      "file": "client-rejected-payload-trailing-bits.json",
+      "why": "The payload segment's last character carries non-zero trailing bits."
+    },
+    {
+      "file": "client-rejected-signature-trailing-bits.json",
+      "why": "The signature segment's last character carries non-zero trailing bits."
+    },
+    {
+      "file": "client-rejected-access-token-session-audience.json",
+      "why": "access_token carries audience auth-service: the API token is go-api's and query-api's, audience dev-health-api only."
+    },
+    {
+      "file": "client-rejected-session-token-api-audience.json",
+      "why": "session_access_token carries audience dev-health-api: the session routes accept audience auth-service only."
+    },
+    {
+      "file": "client-rejected-session-token-sid.json",
+      "why": "The session token's sid is not session_id: both tokens are of the one session."
+    },
+    {
+      "file": "client-rejected-session-token-lifetime.json",
+      "why": "The session token lives 10 minutes while expires_in says 60: both tokens live expires_in."
+    },
+    {
+      "file": "client-rejected-session-token-header-alg-hs256.json",
+      "why": "The session token's header alg is HS256: ParseAccessToken's header rules apply to both tokens."
+    },
+    {
+      "file": "client-rejected-session-token-payload-trailing-bits.json",
+      "why": "The session token's payload segment ends in non-zero trailing bits: both tokens are decoded strictly."
+    }
+  ]
+}

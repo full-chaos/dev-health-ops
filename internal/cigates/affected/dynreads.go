@@ -213,7 +213,13 @@ type dirGroup struct {
 	execScopes map[*ast.FuncDecl]*scope
 	bound      bool
 	pure       map[*ast.FuncDecl]bool // pureFunc answers
-	typeNames  map[string]bool        // the package-level types of the directory
+	// structFields: the unexported fields of each struct type of the directory; badStruct: a type the scan cannot see
+	// every value of (new(T), var x T, elided element literals); fieldKind: the join of the kinds assigned to each field
+	// name by the literals and the assignments of the directory
+	structFields map[string][]string
+	badStruct    map[string]bool
+	fieldKind    map[string]pathInfo
+	typeNames    map[string]bool // the package-level types of the directory
 }
 
 type funcDecl struct {
@@ -272,7 +278,7 @@ func execProgramDirs(byDir map[string][]*srcFile, module string) map[string]bool
 
 func newDirGroup(dir, module string, files []*srcFile) *dirGroup {
 	g := &dirGroup{dir: dir, module: module, files: files, consts: map[string]map[string]ast.Expr{}, vars: map[string]map[string]ast.Expr{},
-		constFile: map[string]map[string]*srcFile{}, strTypes: map[string]map[string]bool{}, typeNames: map[string]bool{},
+		constFile: map[string]map[string]*srcFile{}, strTypes: map[string]map[string]bool{}, typeNames: map[string]bool{}, structFields: map[string][]string{}, badStruct: map[string]bool{}, fieldKind: map[string]pathInfo{},
 		funcs: map[string][]*funcDecl{}, pkgOf: map[*srcFile]string{}, params: map[*ast.FuncDecl][]pathInfo{}, bindOK: map[*ast.FuncDecl]bool{},
 		varKind: map[string]map[string]pathInfo{}}
 	assigned := map[string]bool{} // names assigned or address-taken anywhere in the directory
@@ -291,6 +297,17 @@ func newDirGroup(dir, module string, files []*srcFile) *dirGroup {
 				for _, spec := range d.Specs {
 					if ts, ok := spec.(*ast.TypeSpec); ok {
 						g.typeNames[ts.Name.Name] = true
+						if st, isStruct := ts.Type.(*ast.StructType); isStruct && !ts.Assign.IsValid() {
+							fields := []string{}
+							for _, f := range st.Fields.List {
+								for _, n := range f.Names {
+									if !ast.IsExported(n.Name) && n.Name != "_" {
+										fields = append(fields, n.Name)
+									}
+								}
+							}
+							g.structFields[ts.Name.Name] = append(g.structFields[ts.Name.Name], fields...)
+						}
 						if id, isID := ts.Type.(*ast.Ident); isID && id.Name == "string" && !ts.Assign.IsValid() {
 							g.strTypes[pkg][ts.Name.Name] = true
 						}
@@ -329,7 +346,30 @@ func newDirGroup(dir, module string, files []*srcFile) *dirGroup {
 		calls := map[ast.Expr]bool{}
 		ast.Inspect(s.file, func(n ast.Node) bool {
 			switch x := n.(type) {
+			case *ast.ValueSpec:
+				if id, ok := x.Type.(*ast.Ident); ok && len(x.Values) == 0 {
+					g.badStruct[id.Name] = true
+				}
+			case *ast.CompositeLit:
+				var elem ast.Expr
+				switch t := x.Type.(type) {
+				case *ast.ArrayType:
+					elem = t.Elt
+				case *ast.MapType:
+					elem = t.Value
+				}
+				if st, ok := elem.(*ast.StarExpr); ok {
+					elem = st.X
+				}
+				if id, ok := elem.(*ast.Ident); ok {
+					g.badStruct[id.Name] = true
+				}
 			case *ast.CallExpr:
+				if f, ok := x.Fun.(*ast.Ident); ok && (f.Name == "new" || f.Name == "make") && len(x.Args) > 0 {
+					if id, ok := x.Args[0].(*ast.Ident); ok {
+						g.badStruct[id.Name] = true
+					}
+				}
 				calls[x.Fun] = true
 				name := s.callName(x.Fun)
 				if isChdir(name) {
@@ -614,6 +654,11 @@ func (c *fileCtx) pathKind(e ast.Expr, sc *scope) pathInfo {
 		if id, ok := x.X.(*ast.Ident); ok {
 			if v, ok := sc.view(id.Name); ok {
 				return c.fieldKind(v, x.Sel.Name, sc)
+			}
+			if _, imp := c.s.imports[id.Name]; !imp {
+				if k, ok := c.g.fieldKind[x.Sel.Name]; ok {
+					return k
+				}
 			}
 		}
 		return dynInfo
@@ -1197,6 +1242,12 @@ func (g *dirGroup) bindParams() {
 			g.varKind[pkg][name] = pathInfo{}
 		}
 	}
+	g.fieldKind = map[string]pathInfo{}
+	for _, fields := range g.structFields {
+		for _, f := range fields {
+			g.fieldKind[f] = pathInfo{}
+		}
+	}
 	state := map[*ast.FuncDecl][]pathInfo{}
 	for _, decls := range g.funcs {
 		for _, fd := range decls {
@@ -1224,7 +1275,14 @@ func (g *dirGroup) bindParams() {
 				}
 				state[d] = ps
 			}
+			for f := range g.fieldKind {
+				g.fieldKind[f] = dynInfo
+			}
 			break
+		}
+		nextFields := map[string]pathInfo{}
+		for f := range g.fieldKind {
+			nextFields[f] = pathInfo{}
 		}
 		next := map[*ast.FuncDecl][]pathInfo{}
 		for d, ps := range state {
@@ -1244,6 +1302,7 @@ func (g *dirGroup) bindParams() {
 				nextVars[c.pkg][name] = c.pathKind(e, newScope(nil))
 			}
 			c.eachBody(state, func(body ast.Node, sc *scope) {
+				g.collectFields(c, body, sc, nextFields)
 				ast.Inspect(body, func(n ast.Node) bool {
 					call, ok := n.(*ast.CallExpr)
 					if !ok {
@@ -1292,8 +1351,14 @@ func (g *dirGroup) bindParams() {
 				}
 			}
 		}
+		for f, v := range nextFields {
+			if g.fieldKind[f] != v {
+				same = false
+			}
+		}
 		state = next
 		g.varKind = nextVars
+		g.fieldKind = nextFields
 		if same {
 			break
 		}
@@ -1311,6 +1376,90 @@ func (g *dirGroup) bindParams() {
 			if v.kind == kBottom {
 				g.varKind[pkg][name] = dynInfo
 			}
+		}
+	}
+	for f, v := range g.fieldKind {
+		if v.kind == kBottom {
+			g.fieldKind[f] = dynInfo
+		}
+	}
+}
+
+// collectFields joins into out, per unexported field name of the directory's structs, the kind of every value the
+// directory stores in it: a keyed literal of the struct (a field the literal leaves out holds the empty string), an
+// unkeyed literal or a type the scan cannot see every value of (dyn), and an assignment to a selector of that name.
+func (g *dirGroup) collectFields(c *fileCtx, body ast.Node, sc *scope, out map[string]pathInfo) {
+	named := map[string]bool{}
+	for _, fields := range g.structFields {
+		for _, f := range fields {
+			named[f] = true
+		}
+	}
+	zero := pathInfo{kind: kConst, value: ""}
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.CompositeLit:
+			t := x.Type
+			if star, ok := t.(*ast.StarExpr); ok {
+				t = star.X
+			}
+			id, ok := t.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			fields, isStruct := g.structFields[id.Name]
+			if !isStruct {
+				return true
+			}
+			set := map[string]bool{}
+			for _, el := range x.Elts {
+				kv, keyed := el.(*ast.KeyValueExpr)
+				key, isID := ast.Expr(nil), false
+				if keyed {
+					key = kv.Key
+					_, isID = key.(*ast.Ident)
+				}
+				if !keyed || !isID {
+					for _, f := range fields {
+						out[f] = dynInfo
+					}
+					return true
+				}
+				name := key.(*ast.Ident).Name
+				if named[name] {
+					out[name] = join(out[name], c.pathKind(kv.Value, sc))
+					set[name] = true
+				}
+			}
+			for _, f := range fields {
+				if !set[f] {
+					out[f] = join(out[f], zero)
+				}
+			}
+		case *ast.AssignStmt:
+			for i, l := range x.Lhs {
+				if sel, ok := l.(*ast.SelectorExpr); ok && named[sel.Sel.Name] {
+					k := dynInfo
+					if len(x.Lhs) == len(x.Rhs) && x.Tok == token.ASSIGN {
+						k = c.pathKind(x.Rhs[i], sc)
+					}
+					out[sel.Sel.Name] = join(out[sel.Sel.Name], k)
+				}
+			}
+		case *ast.UnaryExpr:
+			if sel, ok := x.X.(*ast.SelectorExpr); ok && x.Op == token.AND && named[sel.Sel.Name] {
+				out[sel.Sel.Name] = dynInfo
+			}
+		case *ast.IncDecStmt:
+			if sel, ok := x.X.(*ast.SelectorExpr); ok && named[sel.Sel.Name] {
+				out[sel.Sel.Name] = dynInfo
+			}
+		}
+		return true
+	})
+	for name := range g.badStruct {
+		for _, f := range g.structFields[name] {
+			out[f] = dynInfo
 		}
 	}
 }

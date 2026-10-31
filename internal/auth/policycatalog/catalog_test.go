@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	actionsSHA = "b10f9fb7bf6811b3bd75fb9277407eedde084a2f5529555b39b7a6f7d5a08fb8"
+	actionsSHA = "065aaac695a23beb9b9b18c5855e4f2de59d280338d72d0244ce044ae770bd00"
 	rolesSHA   = "9075e5211a30d5038761f6e410e243e7822aa79de738765c00e0bafd81b7fa65"
 )
 
@@ -382,7 +382,7 @@ func TestRepositoryIsAResourceKindAndNeverAScope(t *testing.T) {
 	const okR = `{"schema_version":"roles.v1","catalog_version":1,"description":"d","roles":[{"role":"r","scope":"organization","actions":["a.b"]}]}`
 	act := func(scope, kind string) string {
 		row := func(id string) string {
-			return `{"action":"` + id + `","scope":"` + scope + `","resource_kind":"` + kind + `","risk_class":"low","cache_class":"decision_bound"}`
+			return `{"action":"` + id + `","scope":"` + scope + `","resource_kind":"` + kind + `","risk_class":"low","cache_class":"decision_bound","impersonation":"denied"}`
 		}
 		return `{"schema_version":"actions.v1","catalog_version":1,"description":"d","actions":[` + row("a.b") + `,` + row("a.c") + `]}`
 	}
@@ -404,5 +404,63 @@ func TestRepositoryIsAResourceKindAndNeverAScope(t *testing.T) {
 	roleScope := strings.Replace(okR, `"scope":"organization"`, `"scope":"repository"`, 1)
 	if _, err := Load([]byte(act("organization", "organization")), []byte(roleScope)); err == nil {
 		t.Error("a repository role scope was accepted")
+	}
+}
+
+func TestImpersonationIsDeniedOnTheG51List(t *testing.T) {
+	want := map[string]bool{
+		"admin.users": true, "admin.orgs": true, "admin.impersonate": true, "members.invite": true, "members.manage": true,
+		"org.write": true, "org.delete": true, "billing.manage": true, "settings.write": true, "integrations.write": true,
+		"members.update": true, "acr.context.read": true, "authz.decide": true,
+	}
+	actions := Default().Actions()
+	if len(actions) != 29 {
+		t.Fatalf("%d actions, want 29", len(actions))
+	}
+	for _, a := range actions {
+		denied := a.Impersonation == ImpersonationDenied
+		if denied != want[a.ID] {
+			t.Errorf("%s impersonation = %s", a.ID, a.Impersonation)
+		}
+	}
+}
+
+func TestLoadRefusesAnActionWithNoImpersonationValue(t *testing.T) {
+	const roles = `{"schema_version":"roles.v1","catalog_version":1,"description":"d","roles":[{"role":"r","scope":"organization","actions":["a.b"]}]}`
+	for name, member := range map[string]string{"missing": ``, "unknown": `,"impersonation":"maybe"`, "empty": `,"impersonation":""`} {
+		actions := `{"schema_version":"actions.v1","catalog_version":1,"description":"d","actions":[{"action":"a.b","scope":"organization","resource_kind":"organization","risk_class":"low","cache_class":"none"` + member + `}]}`
+		if _, err := Load([]byte(actions), []byte(roles)); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: Load = %v, want ErrInvalid", name, err)
+		}
+	}
+}
+
+func TestOnlyThePlatformAdminRoleHoldsImpersonate(t *testing.T) {
+	got := Default().RolesHolding("admin.impersonate", ScopePlatform)
+	if len(got) != 1 || got[0] != "platform_admin" {
+		t.Fatalf("roles holding admin.impersonate = %v", got)
+	}
+	if got := Default().RolesHolding("admin.impersonate", ScopeOrganization); len(got) != 0 {
+		t.Fatalf("organization roles holding admin.impersonate = %v", got)
+	}
+}
+
+func TestDelegatedActionsAreTheAllowedActionsOfAnOrganizationRole(t *testing.T) {
+	got, err := Default().DelegatedActions("owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) == 0 {
+		t.Fatal("owner permits no delegated action")
+	}
+	for _, id := range got {
+		if a, err := Default().Action(id); err != nil || a.Impersonation != ImpersonationAllowed {
+			t.Errorf("owner delegated action %s: %+v, %v", id, a, err)
+		}
+	}
+	for _, role := range []string{"platform_admin", "custom", ""} {
+		if _, err := Default().DelegatedActions(role); !errors.Is(err, ErrUnknownRole) {
+			t.Errorf("DelegatedActions(%q) = %v, want ErrUnknownRole", role, err)
+		}
 	}
 }

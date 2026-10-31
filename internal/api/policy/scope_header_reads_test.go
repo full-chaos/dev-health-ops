@@ -73,11 +73,118 @@ func allowedHeaderKey(arg ast.Expr) bool {
 // request is a parameter of type *http.Request, or a name assigned from a
 // call on one (r = r.WithContext(ctx)). Response-writer headers (w.Header())
 // are not request reads.
-func checkRequestHeaderReads(fset *token.FileSet, file *ast.File) []string { return nil }
+func checkRequestHeaderReads(fset *token.FileSet, file *ast.File) []string {
+	var problems []string
+	report := func(pos token.Pos, format string, args ...any) {
+		problems = append(problems, fmt.Sprintf("%s: %s", fset.Position(pos), fmt.Sprintf(format, args...)))
+	}
+	var walk func(node ast.Node, requests map[string]bool)
+	walk = func(root ast.Node, requests map[string]bool) {
+		ast.Inspect(root, func(node ast.Node) bool {
+			switch typed := node.(type) {
+			case *ast.FuncLit:
+				inner := cloneNames(requests)
+				requestNames(typed.Type.Params, inner)
+				walk(typed.Body, inner)
+				return false
+			case *ast.AssignStmt:
+				for index, right := range typed.Rhs {
+					if requestVar(right, requests) {
+						report(right.Pos(), "a request is copied to another name")
+					}
+					call, ok := right.(*ast.CallExpr)
+					if !ok || index >= len(typed.Lhs) {
+						continue
+					}
+					sel, ok := call.Fun.(*ast.SelectorExpr)
+					if !ok || !requestVar(sel.X, requests) {
+						continue
+					}
+					if left, ok := typed.Lhs[index].(*ast.Ident); ok {
+						requests[left.Name] = true
+					}
+				}
+			case *ast.ValueSpec:
+				for _, value := range typed.Values {
+					if requestVar(value, requests) {
+						report(value.Pos(), "a request is copied to another name")
+					}
+				}
+			case *ast.CallExpr:
+				switch fun := typed.Fun.(type) {
+				case *ast.SelectorExpr:
+					if requestVar(fun.X, requests) && (fun.Sel.Name == "BasicAuth" || fun.Sel.Name == "Cookie" || fun.Sel.Name == "Cookies") {
+						report(typed.Pos(), "%s reads a request credential", fun.Sel.Name)
+					}
+					if header, ok := fun.X.(*ast.SelectorExpr); ok && requestVar(header.X, requests) && header.Sel.Name == "Header" {
+						if (fun.Sel.Name == "Get" || fun.Sel.Name == "Values") && len(typed.Args) == 1 && allowedHeaderKey(typed.Args[0]) {
+							return false
+						}
+						report(typed.Pos(), "request header read %s is not Get or Values of an allowed literal key", fun.Sel.Name)
+						return false
+					}
+				case *ast.Ident:
+					if fun.Name == "BearerToken" {
+						report(typed.Pos(), "BearerToken is called")
+					}
+				}
+			case *ast.IndexExpr:
+				if header, ok := typed.X.(*ast.SelectorExpr); ok && requestVar(header.X, requests) && header.Sel.Name == "Header" {
+					if !allowedHeaderKey(typed.Index) {
+						report(typed.Pos(), "request header index with a key that is not an allowed literal")
+					}
+					return false
+				}
+			case *ast.SelectorExpr:
+				if requestVar(typed.X, requests) && typed.Sel.Name == "Header" {
+					report(typed.Pos(), "request headers are used other than by Get, Values or index with an allowed literal key")
+				}
+			}
+			return true
+		})
+	}
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		requests := map[string]bool{}
+		requestNames(fn.Type.Params, requests)
+		walk(fn.Body, requests)
+	}
+	return problems
+}
 
 // checkTakesCallerFromPrincipal returns a line for each of OrgScope and
 // Impersonation that does not call principalFrom.
-func checkTakesCallerFromPrincipal(file *ast.File) []string { return nil }
+func checkTakesCallerFromPrincipal(file *ast.File) []string {
+	var problems []string
+	for _, name := range []string{"OrgScope", "Impersonation"} {
+		found, calls := false, false
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Recv == nil || fn.Name.Name != name || fn.Body == nil {
+				continue
+			}
+			found = true
+			ast.Inspect(fn.Body, func(node ast.Node) bool {
+				if call, ok := node.(*ast.CallExpr); ok {
+					if ident, ok := call.Fun.(*ast.Ident); ok && ident.Name == "principalFrom" {
+						calls = true
+					}
+				}
+				return true
+			})
+		}
+		switch {
+		case !found:
+			problems = append(problems, name+" is not declared in the file")
+		case !calls:
+			problems = append(problems, name+" does not call principalFrom")
+		}
+	}
+	return problems
+}
 
 func parseSource(t *testing.T, source string) (*token.FileSet, *ast.File) {
 	t.Helper()
@@ -162,5 +269,3 @@ func (s *Scope) Impersonation() { principalFrom(nil) }`
 		})
 	}
 }
-
-var _ = fmt.Sprintf

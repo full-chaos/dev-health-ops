@@ -46,7 +46,8 @@ type accessTokenSchemaBinding struct {
 
 // TestTheSchemaBindsEachUserTokenAudienceToTheScopeOfItsScopeMap: the schema's
 // allOf binding is exactly the session-token map plus the ACR map, the scope
-// enum is their scopes, and the two maps share no audience.
+// enum is their scopes, the aud enum is the bound audiences, and the two maps
+// share no audience.
 func TestTheSchemaBindsEachUserTokenAudienceToTheScopeOfItsScopeMap(t *testing.T) {
 	raw, err := os.ReadFile(SchemaPath(testRoot(t), AccessTokenSurface))
 	if err != nil {
@@ -92,6 +93,18 @@ func TestTheSchemaBindsEachUserTokenAudienceToTheScopeOfItsScopeMap(t *testing.T
 	sort.Strings(scopes)
 	if strings.Join(enum, ",") != strings.Join(scopes, ",") {
 		t.Errorf("schema scope enum %v, scope maps %v", enum, scopes)
+	}
+	// Every audience the enum admits has its binding: an enum member without
+	// one could carry any scope of the enum.
+	audiences := append([]string{}, schema.Properties.Claims.Properties.Aud.Enum...)
+	var boundAudiences []string
+	for aud := range bound {
+		boundAudiences = append(boundAudiences, aud)
+	}
+	sort.Strings(audiences)
+	sort.Strings(boundAudiences)
+	if strings.Join(audiences, ",") != strings.Join(boundAudiences, ",") {
+		t.Errorf("schema aud enum %v, bound audiences %v", audiences, boundAudiences)
 	}
 }
 

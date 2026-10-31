@@ -136,4 +136,9 @@ func TestAssertionKeyLineIsMetadataOnly(t *testing.T) {
 	if got := assertionKeyLine(workload.AssertionKey{Status: workload.AssertionKeyActive}); !strings.HasSuffix(got, "retire_after=-") {
 		t.Fatalf("an active key's line = %q", got)
 	}
+	fraction := time.Date(2026, 10, 31, 12, 0, 0, 123456000, time.UTC)
+	if got := assertionKeyLine(workload.AssertionKey{RotatedAt: fraction, RetireAfter: &fraction}); !strings.Contains(got, "rotated_at=2026-10-31T12:00:00.123456Z") ||
+		!strings.HasSuffix(got, "retire_after=2026-10-31T12:00:00.123456Z") {
+		t.Fatalf("a fractional time lost its fraction: %q", got)
+	}
 }

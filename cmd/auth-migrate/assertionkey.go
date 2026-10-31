@@ -240,8 +240,8 @@ func executeAssertionKeyList(parent context.Context, args []string, lookup secre
 func assertionKeyLine(key workload.AssertionKey) string {
 	retire := "-"
 	if key.RetireAfter != nil {
-		retire = key.RetireAfter.UTC().Format(time.RFC3339)
+		retire = key.RetireAfter.UTC().Format(time.RFC3339Nano)
 	}
 	return fmt.Sprintf("workload=%s key=%s issuer=%s kid=%s status=%s rotated_at=%s retire_after=%s",
-		key.Workload, key.ID, key.Issuer, key.KID, key.Status, key.RotatedAt.UTC().Format(time.RFC3339), retire)
+		key.Workload, key.ID, key.Issuer, key.KID, key.Status, key.RotatedAt.UTC().Format(time.RFC3339Nano), retire)
 }

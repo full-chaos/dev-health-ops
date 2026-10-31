@@ -27,6 +27,8 @@ var errDryRun = errors.New("restorefence: dry run")
 // errAlready ends the transaction when this timeline and manifest were applied.
 var errAlready = errors.New("restorefence: already applied")
 
+func applyRefusals() []error { return []error{errAlready, errDryRun} }
+
 // Options set one apply.
 type Options struct {
 	// Apply writes the change. Without it the run reads the counts inside a
@@ -355,6 +357,7 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedI
 			EventType: "auth.restore_fence.applied", Outcome: audit.OutcomeAllowed,
 		},
 		OffStream: audit.OffStreamRestoreFence,
+		Refusals:  applyRefusals(),
 	})
 	switch {
 	case errors.Is(commitErr, errDryRun):

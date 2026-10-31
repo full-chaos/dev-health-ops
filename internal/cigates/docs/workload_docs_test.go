@@ -397,10 +397,10 @@ var (
 	eventPattern = regexp.MustCompile(`auth\.workload\.[a-z_]+`)
 )
 
-// workloadSourceStrings lists every "auth.workload.*" string literal in the non-test Go files of the two workload packages.
+// workloadSourceStrings lists every "auth.workload.*" string literal in the non-test Go files of the workload, workloadexchange and audit packages.
 func workloadSourceStrings(d docTree) (map[string]bool, error) {
 	set := map[string]bool{}
-	for _, dir := range []string{"internal/auth/workload", "internal/auth/workloadexchange"} {
+	for _, dir := range []string{"internal/auth/workload", "internal/auth/workloadexchange", "internal/audit"} {
 		entries, err := os.ReadDir(filepath.Join(d.root, filepath.FromSlash(dir)))
 		if err != nil {
 			return nil, err
@@ -555,9 +555,8 @@ func TestWorkloadRegistryPageMatchesTheRegistryJSON(t *testing.T) {
 func TestWorkloadTroubleshootingTableMatchesTheReasonSets(t *testing.T) {
 	assertGuard(t, workloadReasonGuard, []plantCase{
 		{"new-resolve-reason", func(t *testing.T, d docTree) docTree {
-			return d.edit(t, workloadReasonsGo, `"no_audience", "store_error"}
-`, `"no_audience", "store_error", "frozen"}
-`)
+			return d.edit(t, workloadReasonsGo, `{"unknown", "disabled", "uid_mismatch", "no_audience", "store_error"}`,
+				`{"unknown", "disabled", "uid_mismatch", "no_audience", "store_error", "frozen"}`)
 		}, `"kubernetes|refused|frozen"`},
 		{"new-selfcheck-reason", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, workloadReasonsGo, `authverify.ReasonAudience, authverify.ReasonNotYetValid, authverify.ReasonExpired,`,
@@ -573,7 +572,7 @@ func TestWorkloadTroubleshootingTableMatchesTheReasonSets(t *testing.T) {
 func TestWorkloadRunbookVerbsNameAnExistingAuditEvent(t *testing.T) {
 	assertGuard(t, workloadVerbEventGuard, []plantCase{
 		{"verb-without-event", func(t *testing.T, d docTree) docTree {
-			return d.edit(t, workloadBootstrapPage, "`auth.workload.bootstrap_created` (reason `credential_issued`)", "an audit row")
+			return d.edit(t, workloadBootstrapPage, "Audit event: `auth.workload.bootstrap_created` (reason `credential_issued`).", "Audit event: an audit row.")
 		}, "bootstrap-create verb"},
 		{"event-not-in-source", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, workloadBootstrapPage, "`auth.workload.bootstrap_rotated` (reason `credential_rotated`)", "`auth.workload.bootstrap_rotatd` (reason `credential_rotated`)")

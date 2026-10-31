@@ -51,9 +51,13 @@ type Deps struct {
 	// rate limit.
 	Auth    CredentialStore
 	Limiter *httpapi.KeyedLimiter
-	// Workload, when set, lets all three routes also accept the acr-api
-	// workload token. Nil refuses every workload token as not_configured.
+	// Workload, when set, lets every route also accept the acr-api workload
+	// token. Nil refuses every workload token as not_configured.
 	Workload *WorkloadAuth
+	// Access and AccessLimiter serve the principal access read: a nil Access
+	// answers 503, a nil AccessLimiter does not rate limit.
+	Access        PrincipalAccessStore
+	AccessLimiter *httpapi.KeyedLimiter
 }
 
 // Routes is the acr area's route set. Every path is internal and checks its
@@ -81,6 +85,7 @@ func Routes(deps Deps) []httpapi.Route {
 			Method: http.MethodGet, Pattern: "/api/v1/internal/acr/orgs/{org_id}/llm-config",
 			Handler: llmConfigHandler(deps.Credentials, deps.LLMConfig, logger, deps.Workload),
 		},
+		principalAccessRoute(deps, deps.Access, deps.AccessLimiter, logger),
 	}
 }
 

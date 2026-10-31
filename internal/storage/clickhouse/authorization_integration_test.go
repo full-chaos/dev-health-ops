@@ -142,6 +142,8 @@ const (
 	grantWorkUnitInvestExact = "GRANT SELECT ON default.work_unit_investments"
 	// The sync configuration trigger's work items count (CHAOS-6871).
 	grantWorkItemsExact = "GRANT SELECT ON default.work_items"
+	// The internal principal access read's repository inventory (CHAOS-12128).
+	grantReposExact = "GRANT SELECT ON default.repos"
 )
 
 // grantMetricsExact are the read-only metric-table grants of the manifest
@@ -160,7 +162,7 @@ var grantMetricsExact = []string{
 // the whole manifest is met.
 func importGrants() []string {
 	return append([]string{grantSyncPoliciesExact, grantObservationsExact, grantDriftChangesExact, grantMembershipsExact, grantProjectOwnershipExact, grantRepoOwnershipExact, grantFallbacksExact,
-		grantRepoComplexityExact, grantCompoundingExact, grantTelemetryExact, grantLLMUsageExact, grantWorkUnitInvestExact, grantWorkItemsExact}, grantMetricsExact...)
+		grantRepoComplexityExact, grantCompoundingExact, grantTelemetryExact, grantLLMUsageExact, grantWorkUnitInvestExact, grantWorkItemsExact, grantReposExact}, grantMetricsExact...)
 }
 
 // TestCheckPostureAcceptsExactMatch proves the happy path: a user granted
@@ -201,6 +203,24 @@ func TestCheckPostureRejectsAWithheldWorkItemsGrant(t *testing.T) {
 	err := CheckAPIClickHouseAuthorization(h.ctx, h.newUser(t, grants...))
 	if !errors.Is(err, ErrPostureMismatch) || !strings.Contains(err.Error(), "work_items") {
 		t.Fatalf("a login without SELECT on work_items must fail the posture check naming the table, got: %v", err)
+	}
+}
+
+// TestCheckPostureRejectsAWithheldReposGrant withholds the grant CHAOS-12128
+// added: without SELECT on repos the principal access read could not read the
+// org's repository inventory, so the api must refuse to start rather than
+// answer every access read with 503.
+func TestCheckPostureRejectsAWithheldReposGrant(t *testing.T) {
+	h := startPostureHarness(t)
+	var grants []string
+	for _, grant := range append([]string{grantTeamsExact, grantIdentitiesExact}, importGrants()...) {
+		if grant != grantReposExact {
+			grants = append(grants, grant)
+		}
+	}
+	err := CheckAPIClickHouseAuthorization(h.ctx, h.newUser(t, grants...))
+	if !errors.Is(err, ErrPostureMismatch) || !strings.Contains(err.Error(), "default.repos") {
+		t.Fatalf("a login without SELECT on repos must fail the posture check naming the table, got: %v", err)
 	}
 }
 

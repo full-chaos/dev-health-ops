@@ -150,3 +150,66 @@ func TestEveryProvidersyncRaceTestIsInExactlyOneRaceLegAtTheLegCount(t *testing.
 		}
 	}
 }
+
+// The prose that counts the legs (the suite catalog trigger cell, the go-quality.yml pool comment) must say what
+// ci/go_quality_legs.json holds, so a change of the leg list cannot leave the docs behind.
+
+func poolLegNames(t *testing.T) []string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), "ci", "go_quality_legs.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var legs []struct {
+		Name string
+		Pool bool
+	}
+	if err := json.Unmarshal(data, &legs); err != nil {
+		t.Fatalf("ci/go_quality_legs.json: %v", err)
+	}
+	var pool []string
+	for _, l := range legs {
+		if l.Pool {
+			pool = append(pool, l.Name)
+		}
+	}
+	return pool
+}
+
+func TestTheSuiteCatalogLegRowStatesTheLegCounts(t *testing.T) {
+	tests, races, _ := legCounts(t)
+	raw, err := os.ReadFile(filepath.Join(repoRoot(t), "ci", "suites.tsv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if !strings.HasPrefix(line, "go-quality-ci-leg\t") {
+			continue
+		}
+		want := fmt.Sprintf("static, test x%d, race x%d legs", tests, races)
+		if !strings.Contains(line, want) {
+			t.Errorf("ci/suites.tsv go-quality-ci-leg trigger cell must say %q (the leg list has %d test and %d race legs)", want, tests, races)
+		}
+		return
+	}
+	t.Fatal("ci/suites.tsv has no go-quality-ci-leg row")
+}
+
+func TestTheWorkflowPoolCommentNamesEveryPoolLeg(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(repoRoot(t), ".github", "workflows", "go-quality.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := poolLegNames(t)
+	if len(pool) == 0 {
+		t.Fatal("ci/go_quality_legs.json flags no pool leg")
+	}
+	var short []string
+	for _, n := range pool {
+		short = append(short, strings.TrimSuffix(n, fmt.Sprintf("-of-%d", wantRaceLegs)))
+	}
+	want := fmt.Sprintf("the race legs flagged `pool` (%s)", strings.Join(short, ", "))
+	if !strings.Contains(string(raw), want) {
+		t.Errorf(".github/workflows/go-quality.yml pool comment must say %q (the legs flagged pool in ci/go_quality_legs.json)", want)
+	}
+}

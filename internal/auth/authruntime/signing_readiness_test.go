@@ -53,16 +53,15 @@ func TestReadinessProvesTheKeySetThroughTheSigner(t *testing.T) {
 	if err := os.Chmod(manifest, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	ports := reservePorts(t, 2)
-	env := brokenEnvironment(t, ports[0], ports[1])
+	env := brokenEnvironment(t, anyAPIAddress, anyOperatorAddress)
 	delete(env, authconfig.EnvSigningKeyFile)
 	delete(env, authconfig.EnvSigningKeyID)
 	env[authconfig.EnvSigningKeySetFile] = manifest
 
-	logs, stop := runService(t, env)
+	logs, stop, _, operatorAddress := startOnAnyPort(t, env)
 	client := serviceClient(10 * time.Second)
 	defer client.CloseIdleConnections()
-	response := awaitSettledReadiness(t, client, "http://"+ports[1]+"/readyz")
+	response := awaitSettledReadiness(t, client, "http://"+operatorAddress+"/readyz")
 	raw, err := io.ReadAll(response.Body)
 	_ = response.Body.Close()
 	if err != nil {

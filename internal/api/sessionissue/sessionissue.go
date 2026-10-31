@@ -81,21 +81,58 @@ func (e *RefusedError) Unwrap() error { return ErrUnavailable }
 var reasonCodePattern = regexp.MustCompile(`^[a-z][a-z_]{0,63}$`)
 
 // refusalIn is the refusal of a non-200 answer when its body is the error.v1
-// document for that status, else nil.
+// document for that status, else nil. A body that names a member twice is not
+// that document: the decision never rests on whichever value came last.
 func refusalIn(status int, answer []byte) *RefusedError {
 	if len(answer) > maxAnswerBytes {
 		return nil
 	}
-	var doc struct {
-		SchemaVersion string `json:"schema_version"`
-		Status        int    `json:"status"`
-		ReasonCode    string `json:"reason_code"`
-	}
-	if json.Unmarshal(answer, &doc) != nil || doc.SchemaVersion != "error.v1" || doc.Status != status ||
-		!reasonCodePattern.MatchString(doc.ReasonCode) {
+	members, ok := objectMembers(answer)
+	if !ok {
 		return nil
 	}
-	return &RefusedError{Status: status, Reason: doc.ReasonCode}
+	var schemaVersion, reasonCode string
+	var docStatus int
+	if json.Unmarshal(members["schema_version"], &schemaVersion) != nil || json.Unmarshal(members["status"], &docStatus) != nil ||
+		json.Unmarshal(members["reason_code"], &reasonCode) != nil {
+		return nil
+	}
+	if schemaVersion != "error.v1" || docStatus != status || !reasonCodePattern.MatchString(reasonCode) {
+		return nil
+	}
+	return &RefusedError{Status: status, Reason: reasonCode}
+}
+
+// objectMembers reads raw as exactly one JSON object and returns its members.
+// It refuses anything else: a repeated member, trailing data, or not an object.
+func objectMembers(raw []byte) (map[string]json.RawMessage, bool) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return nil, false
+	}
+	members := map[string]json.RawMessage{}
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return nil, false
+		}
+		name, _ := tok.(string)
+		if _, seen := members[name]; seen {
+			return nil, false
+		}
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			return nil, false
+		}
+		members[name] = value
+	}
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('}') {
+		return nil, false
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, false
+	}
+	return members, true
 }
 
 // Request names the session to issue.
@@ -121,17 +158,19 @@ type Issuer interface {
 	Issue(ctx context.Context, r *http.Request, req Request) (Pair, error)
 }
 
-// WorkloadAudience is the audience of the workload token auth-service accepts on its session issue route.
+// WorkloadAudience is the audience of the workload token auth-service accepts on its session issue and session state routes.
 const WorkloadAudience = "auth-service"
 
-// Client calls the issue route of one auth-service. It presents either the
-// session credential (token, set by New) or the go-api workload token (workload
-// set, see NewWorkload).
+// Client calls the issue route of one auth-service, and its session state
+// route (State). It presents either the session credential (token, set by New)
+// or the go-api workload token (workload set, see NewWorkload); bearer is the
+// one place that chooses.
 type Client struct {
-	endpoint string
-	token    string
-	workload *workloadtoken.Client
-	http     *http.Client
+	endpoint      string
+	stateEndpoint string
+	token         string
+	workload      *workloadtoken.Client
+	http          *http.Client
 }
 
 // New builds a Client for base (AUTH_PROXY_URL's origin) and token. It
@@ -147,6 +186,7 @@ func New(base *url.URL, token string, timeout time.Duration) (*Client, error) {
 		timeout = defaultTimeout
 	}
 	endpoint := url.URL{Scheme: base.Scheme, Host: base.Host, Path: Path}
+	stateEndpoint := url.URL{Scheme: base.Scheme, Host: base.Host, Path: PathState}
 	// The bearer is a service credential: no proxy from the environment, a
 	// connection pool of its own, and no redirect following, as the auth
 	// proxy dials auth-service.
@@ -160,7 +200,7 @@ func New(base *url.URL, token string, timeout time.Duration) (*Client, error) {
 		ExpectContinueTimeout: time.Second,
 		ForceAttemptHTTP2:     true,
 	}
-	return &Client{endpoint: endpoint.String(), token: token, http: &http.Client{
+	return &Client{endpoint: endpoint.String(), stateEndpoint: stateEndpoint.String(), token: token, http: &http.Client{
 		Transport:     transport,
 		Timeout:       timeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
@@ -169,8 +209,8 @@ func New(base *url.URL, token string, timeout time.Duration) (*Client, error) {
 
 // NewWorkload builds a Client for base (AUTH_PROXY_URL's origin) that presents
 // the workload token of workload (audience WorkloadAudience). No token is held:
-// Issue asks the workload client for one on every call (it is cached, and one
-// exchange serves every call of its lifetime), so a call with no usable token
+// Issue and State ask the workload client for one on every call (it is cached,
+// and one exchange serves every call of its lifetime), so a call with no usable token
 // fails as ErrUnavailable with nothing sent. There is no session credential to
 // fall back to. The token is set here, not by the workload client's own
 // transport, because that transport drops every header but a fixed few and
@@ -188,8 +228,23 @@ func NewWorkload(base *url.URL, workload *workloadtoken.Client, timeout time.Dur
 		timeout = defaultTimeout
 	}
 	endpoint := url.URL{Scheme: base.Scheme, Host: base.Host, Path: Path}
+	stateEndpoint := url.URL{Scheme: base.Scheme, Host: base.Host, Path: PathState}
 	client := httpguard.NoRedirects(&http.Client{Transport: httpguard.SharedTransport(), Timeout: timeout})
-	return &Client{endpoint: endpoint.String(), workload: workload, http: client}, nil
+	return &Client{endpoint: endpoint.String(), stateEndpoint: stateEndpoint.String(), workload: workload, http: client}, nil
+}
+
+// bearer is the credential of one call: the session credential, or the workload token asked of the workload client
+// (cached there; one exchange serves every call of its lifetime). A workload token that cannot be had fails the call as
+// ErrUnavailable before anything is sent; there is no fallback to a session credential.
+func (c *Client) bearer(ctx context.Context) (string, error) {
+	if c.workload == nil {
+		return c.token, nil
+	}
+	token, err := c.workload.Token(ctx, WorkloadAudience)
+	if err != nil {
+		return "", fmt.Errorf("%w: workload token: %w", ErrUnavailable, err)
+	}
+	return token, nil
 }
 
 type issueBody struct {
@@ -226,13 +281,9 @@ func (c *Client) Issue(ctx context.Context, r *http.Request, req Request) (Pair,
 	if err != nil {
 		return Pair{}, fmt.Errorf("%w: building the request: %w", ErrUnavailable, err)
 	}
-	bearer := c.token
-	if c.workload != nil {
-		token, err := c.workload.Token(ctx, WorkloadAudience)
-		if err != nil {
-			return Pair{}, fmt.Errorf("%w: workload token: %w", ErrUnavailable, err)
-		}
-		bearer = token
+	bearer, err := c.bearer(ctx)
+	if err != nil {
+		return Pair{}, err
 	}
 	out.Header.Set("Authorization", "Bearer "+bearer)
 	out.Header.Set("Content-Type", "application/json")

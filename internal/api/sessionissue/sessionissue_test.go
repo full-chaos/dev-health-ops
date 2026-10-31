@@ -288,3 +288,24 @@ func TestIssueRefusalCarriesTheErrorDocument(t *testing.T) {
 		}
 	}
 }
+
+// The issue client reads the refusal document the same strict way: a 401
+// whose reason_code is repeated is no session_revoked, so a superseding issue
+// never reads it as the predecessor having ended.
+func TestIssueRefusesAnErrorDocumentWithARepeatedMember(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = io.WriteString(w, `{"schema_version":"error.v1","status":401,"reason_code":"invalid_credentials","reason_code":"session_revoked"}`)
+	}))
+	defer server.Close()
+	client, err := New(baseOf(t, server.URL), testToken(t), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	predecessor := uuid.New()
+	_, err = client.Issue(context.Background(), endUserRequest(), Request{PrincipalID: uuid.New(), AMR: []string{"pwd"}, PredecessorSessionID: &predecessor})
+	var refused *RefusedError
+	if errors.Is(err, ErrSessionEnded) || errors.As(err, &refused) || !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("err = %v, want a plain ErrUnavailable (not ErrSessionEnded, not a refusal document)", err)
+	}
+}

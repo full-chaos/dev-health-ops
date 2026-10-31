@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -26,44 +27,29 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// reservePort binds an ephemeral port, records it, and releases it. The
-// alternative -- letting the service bind :0 -- would leave the test with no
-// way to address the listener, since Execute deliberately exposes no handle to
-// its components. The reserve-and-release window is the standard trade and is
-// re-attempted by the readiness poll below if anything grabs the port first.
-func reservePort(t *testing.T) string {
-	t.Helper()
-	return reservePorts(t, 1)[0]
-}
+// The two spellings differ because the configuration rejects two identically-spelled listener addresses; both bind an
+// ephemeral loopback port. The kernel picks the port at bind time and the service reports it in its "listener bound"
+// log line, so no port is reserved, released and bound again later (a neighbouring process can take a released one).
+const (
+	anyAPIAddress      = "localhost:0"
+	anyOperatorAddress = "127.0.0.1:0"
+)
 
-// reservePorts binds n ephemeral ports simultaneously, records their
-// addresses, and only then releases all of them. Holding every listener open
-// until all are bound is what makes the addresses pairwise distinct: while
-// each socket is open the kernel cannot hand its port to another Listen
-// call, but reserving ports one at a time -- open, close, open, close --
-// lets a later call be handed back the very port an earlier one just
-// released. That collision made a configuration-fault case (which supplies
-// two addresses only to satisfy the environment shape, never binding them)
-// occasionally fail the same-address validation instead of exercising the
-// fault under test.
-func reservePorts(t *testing.T, n int) []string {
+// startOnAnyPort runs the service on env, whose listener addresses are anyAPIAddress and anyOperatorAddress, and waits
+// for both "listener bound" lines. It returns the addresses the listeners really bound.
+func startOnAnyPort(t *testing.T, env map[string]string) (logs *safeBuffer, stop func() int, apiAddress, operatorAddress string) {
 	t.Helper()
-	listeners := make([]net.Listener, n)
-	for i := range listeners {
-		listener, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatalf("reserve port: %v", err)
-		}
-		listeners[i] = listener
+	if env[authconfig.EnvAPIAddress] != anyAPIAddress || env[authconfig.EnvOperatorAddress] != anyOperatorAddress {
+		t.Fatalf("startOnAnyPort needs the %s and %s addresses, got %q and %q",
+			anyAPIAddress, anyOperatorAddress, env[authconfig.EnvAPIAddress], env[authconfig.EnvOperatorAddress])
 	}
-	addresses := make([]string, n)
-	for i, listener := range listeners {
-		addresses[i] = listener.Addr().String()
-		if err := listener.Close(); err != nil {
-			t.Fatalf("release reserved port: %v", err)
-		}
+	if env[authconfig.EnvLogLevel] == "error" {
+		env[authconfig.EnvLogLevel] = "info"
 	}
-	return addresses
+	logs, stop = runService(t, env)
+	operatorAddress = awaitBoundAddress(t, logs, "operator-http")
+	apiAddress = awaitBoundAddress(t, logs, "auth-api-http")
+	return logs, stop, apiAddress, operatorAddress
 }
 
 // brokenEnvironment is the deliberately-broken deployment CHAOS-4881's
@@ -277,11 +263,9 @@ func awaitSettledReadiness(t *testing.T, client *http.Client, url string) *http.
 // alive. Liveness and readiness collapsing into one signal is the defect
 // CHAOS-4512 recorded; this is the control against it.
 func TestReadinessFailsClosedOnBrokenDatabaseAndSigningKey(t *testing.T) {
-	ports := reservePorts(t, 2)
-	apiAddress, operatorAddress := ports[0], ports[1]
-	env := brokenEnvironment(t, apiAddress, operatorAddress)
+	env := brokenEnvironment(t, anyAPIAddress, anyOperatorAddress)
 
-	logs, stop := runService(t, env)
+	logs, stop, apiAddress, operatorAddress := startOnAnyPort(t, env)
 	client := serviceClient(10 * time.Second)
 	defer client.CloseIdleConnections()
 
@@ -363,9 +347,7 @@ func TestGracefulShutdownLeavesNoGoroutineBehind(t *testing.T) {
 	client := serviceClient(10 * time.Second)
 
 	start := func() (string, func() int) {
-		ports := reservePorts(t, 2)
-		apiAddress, operatorAddress := ports[0], ports[1]
-		_, stop := runService(t, brokenEnvironment(t, apiAddress, operatorAddress))
+		_, stop, _, operatorAddress := startOnAnyPort(t, brokenEnvironment(t, anyAPIAddress, anyOperatorAddress))
 		response := awaitResponse(t, client, "http://"+operatorAddress+"/readyz")
 		_, _ = io.Copy(io.Discard, response.Body)
 		_ = response.Body.Close()
@@ -578,8 +560,7 @@ func TestExecuteRejectsAConfigurationFaultBeforeStarting(t *testing.T) {
 
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			portPair := reservePorts(t, 2)
-			env := brokenEnvironment(t, portPair[0], portPair[1])
+			env := brokenEnvironment(t, anyAPIAddress, anyOperatorAddress)
 			testCase.mutate(env)
 			var stderr bytes.Buffer
 			code := Execute(context.Background(), nil, lookupFrom(env), IO{Stderr: &stderr})
@@ -597,8 +578,7 @@ func TestExecuteRejectsAConfigurationFaultBeforeStarting(t *testing.T) {
 // writes to a stream that a deployment captures into logs, so a value quoted
 // back from the operator's own environment goes through the redactor first.
 func TestConfigurationErrorsAreRedacted(t *testing.T) {
-	portPair := reservePorts(t, 2)
-	env := brokenEnvironment(t, portPair[0], portPair[1])
+	env := brokenEnvironment(t, anyAPIAddress, anyOperatorAddress)
 	env[authconfig.EnvDatabaseURI] = "postgres://auth:hunter2@db.internal:5432/devhealth"
 	env[authconfig.EnvDatabaseURI+"_FILE"] = "/run/secrets/dsn"
 
@@ -626,8 +606,7 @@ func TestArgumentHandling(t *testing.T) {
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			portPair := reservePorts(t, 2)
-			env := brokenEnvironment(t, portPair[0], portPair[1])
+			env := brokenEnvironment(t, anyAPIAddress, anyOperatorAddress)
 			code := Execute(
 				context.Background(), testCase.args, lookupFrom(env),
 				IO{Stdout: &stdout, Stderr: &stderr},
@@ -644,8 +623,7 @@ func TestArgumentHandling(t *testing.T) {
 
 func TestVersionFlagPrintsBuildMetadata(t *testing.T) {
 	var stdout bytes.Buffer
-	portPair := reservePorts(t, 2)
-	env := brokenEnvironment(t, portPair[0], portPair[1])
+	env := brokenEnvironment(t, anyAPIAddress, anyOperatorAddress)
 	code := Execute(
 		context.Background(), []string{"--version"}, lookupFrom(env),
 		IO{Stdout: &stdout},
@@ -768,12 +746,12 @@ func TestRoutesAreEmptyWithoutTheSessionSecrets(t *testing.T) {
 		return strings.Join(got, ",")
 	}
 	sessionRoutesText := "POST /v1/token/refresh,GET /v1/sessions/current,POST /v1/sessions/revoke,POST /v1/sessions/revoke-all"
-	withLoginStub := sessionRoutesText + ",POST /api/v1/auth/refresh,POST /api/v1/auth/logout,POST /internal/v1/sessions,POST /api/v1/auth/social-login,POST /api/v1/auth/login"
+	withLoginStub := sessionRoutesText + ",POST /api/v1/auth/refresh,POST /api/v1/auth/logout,POST /internal/v1/sessions,POST /api/v1/auth/social-login,POST /internal/v1/sessions/state,POST /api/v1/auth/login"
 	if got := mountedBy(load(sessionEnvironment)); got != withLoginStub {
 		t.Fatalf("with the session secrets: mounted %s, want %s", got, withLoginStub)
 	}
 	withLogin := load(compatEnvironment)
-	if got, want := mountedBy(withLogin), sessionRoutesText+",POST /api/v1/auth/refresh,POST /api/v1/auth/logout,POST /api/v1/auth/login,POST /internal/v1/sessions,POST /api/v1/auth/social-login"; got != want {
+	if got, want := mountedBy(withLogin), sessionRoutesText+",POST /api/v1/auth/refresh,POST /api/v1/auth/logout,POST /api/v1/auth/login,POST /internal/v1/sessions,POST /api/v1/auth/social-login,POST /internal/v1/sessions/state"; got != want {
 		t.Fatalf("with the lockout key: mounted %s, want %s", got, want)
 	}
 	withLink := load(func(env map[string]string) map[string]string {
@@ -791,11 +769,9 @@ func TestRoutesAreEmptyWithoutTheSessionSecrets(t *testing.T) {
 // /metrics. The shared httpapi server counts the request through OTel, so the
 // series reaches the scrape only if Execute registers the OTel source.
 func TestTheAuthServiceScrapeCarriesItsPerRouteRequestSeries(t *testing.T) {
-	ports := reservePorts(t, 2)
-	apiAddress, operatorAddress := ports[0], ports[1]
-	env := brokenEnvironment(t, apiAddress, operatorAddress)
+	env := brokenEnvironment(t, anyAPIAddress, anyOperatorAddress)
 	env[authconfig.EnvLogLevel] = "info"
-	logs, stop := runService(t, env)
+	logs, stop, apiAddress, operatorAddress := startOnAnyPort(t, env)
 	client := serviceClient(10 * time.Second)
 	defer client.CloseIdleConnections()
 
@@ -830,32 +806,30 @@ func TestTheAuthServiceScrapeCarriesItsPerRouteRequestSeries(t *testing.T) {
 // the service answers 503, so the probe must exit 1; with no service listening
 // it must also exit 1; it must never exit 0 against a not-ready service.
 func TestHealthcheckMirrorsReadiness(t *testing.T) {
-	ports := reservePorts(t, 2)
-	apiAddress, operatorAddress := ports[0], ports[1]
-	env := brokenEnvironment(t, apiAddress, operatorAddress)
+	env := brokenEnvironment(t, anyAPIAddress, anyOperatorAddress)
 	env[authconfig.EnvLogLevel] = "info"
 
-	probe := func() (int, string) {
+	probe := func(env map[string]string) (int, string) {
 		var stderr bytes.Buffer
 		code := Execute(context.Background(), []string{"--healthcheck"}, lookupFrom(env), IO{Stderr: &stderr})
 		return code, stderr.String()
 	}
 
-	if code, stderr := probe(); code != 1 || !strings.Contains(stderr, "unreachable") {
+	// Nothing can listen on port 0, so the operator address of env is an address with no listener.
+	if code, stderr := probe(env); code != 1 || !strings.Contains(stderr, "unreachable") {
 		t.Fatalf("healthcheck with no listener = %d %q, want 1 and an unreachable diagnostic", code, stderr)
 	}
 
-	logs, stop := runService(t, env)
+	// startOnAnyPort returns after both listeners are bound: a cancel that lands between the operator and the API
+	// bind makes Execute return the start error (exit 1), which is not the shutdown this test measures.
+	logs, stop, _, operatorAddress := startOnAnyPort(t, maps.Clone(env))
 	client := serviceClient(10 * time.Second)
 	defer client.CloseIdleConnections()
-	// Both listeners must be bound before the shutdown below: a cancel that lands
-	// between the operator and the API bind makes Execute return the start error
-	// (exit 1), which is not the shutdown this test measures.
-	awaitBoundAddress(t, logs, "operator-http")
-	awaitBoundAddress(t, logs, "auth-api-http")
 	_ = awaitResponse(t, client, "http://"+operatorAddress+"/readyz").Body.Close()
 
-	if code, stderr := probe(); code != 1 || !strings.Contains(stderr, "503") {
+	bound := maps.Clone(env)
+	bound[authconfig.EnvOperatorAddress] = operatorAddress
+	if code, stderr := probe(bound); code != 1 || !strings.Contains(stderr, "503") {
 		t.Fatalf("healthcheck against a not-ready service = %d %q, want 1 and a 503 diagnostic", code, stderr)
 	}
 	if code := stop(); code != 0 {
@@ -867,10 +841,8 @@ func TestHealthcheckMirrorsReadiness(t *testing.T) {
 // carries both rate-limit families, so a limiter wired later has a series to
 // move and an alert never reads a name nobody emits.
 func TestTheAuthServiceScrapeRegistersTheRateLimitCounters(t *testing.T) {
-	ports := reservePorts(t, 2)
-	apiAddress, operatorAddress := ports[0], ports[1]
-	env := brokenEnvironment(t, apiAddress, operatorAddress)
-	_, stop := runService(t, env)
+	env := brokenEnvironment(t, anyAPIAddress, anyOperatorAddress)
+	_, stop, _, operatorAddress := startOnAnyPort(t, env)
 	client := serviceClient(10 * time.Second)
 	defer client.CloseIdleConnections()
 
@@ -899,10 +871,8 @@ func TestTheAuthServiceScrapeRegistersTheRateLimitCounters(t *testing.T) {
 // the auth_service_rate_limit alerts read. The store is unreachable on purpose:
 // the check series exists either way.
 func TestOneOperatorScrapeCarriesTheRateLimitAlertSeries(t *testing.T) {
-	ports := reservePorts(t, 2)
-	apiAddress, operatorAddress := ports[0], ports[1]
-	env := sessionEnvironment(brokenEnvironment(t, apiAddress, operatorAddress))
-	_, stop := runService(t, env)
+	env := sessionEnvironment(brokenEnvironment(t, anyAPIAddress, anyOperatorAddress))
+	_, stop, _, operatorAddress := startOnAnyPort(t, env)
 	client := serviceClient(10 * time.Second)
 	defer client.CloseIdleConnections()
 

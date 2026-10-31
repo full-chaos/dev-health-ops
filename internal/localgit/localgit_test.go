@@ -150,7 +150,7 @@ func TestPythonJSONString(t *testing.T) {
 // git in a temporary repository: numstat pairing, binary files, root commits.
 func gitIn(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	command := exec.Command("git", args...)
+	command := exec.Command("git", append([]string{"-c", "maintenance.auto=false", "-c", "gc.auto=0"}, args...)...)
 	command.Dir = dir
 	command.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1",
 		"GIT_AUTHOR_NAME=T", "GIT_AUTHOR_EMAIL=t@example.com", "GIT_COMMITTER_NAME=T", "GIT_COMMITTER_EMAIL=t@example.com",
@@ -227,7 +227,7 @@ func TestIterCommitsSinceStopsAtTheFirstOldCommit(t *testing.T) {
 			t.Fatal(err)
 		}
 		gitIn(t, dir, "add", "-A")
-		command := exec.Command("git", "commit", "-q", "-m", name)
+		command := exec.Command("git", "-c", "maintenance.auto=false", "-c", "gc.auto=0", "commit", "-q", "-m", name)
 		command.Dir = dir
 		command.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_AUTHOR_NAME=T", "GIT_AUTHOR_EMAIL=t@e", "GIT_COMMITTER_NAME=T", "GIT_COMMITTER_EMAIL=t@e", "GIT_AUTHOR_DATE="+date, "GIT_COMMITTER_DATE="+date)
 		if out, err := command.CombinedOutput(); err != nil {
@@ -376,7 +376,7 @@ func TestOpenPullRequestRefsResolveLikeGitPython(t *testing.T) {
 	tree := gitIn(t, repo.Root, "rev-parse", "HEAD^{tree}")
 	blob := gitIn(t, repo.Root, "rev-parse", "HEAD:a.txt")
 	tag := func(target, kind, name string) string {
-		command := exec.Command("git", "hash-object", "-t", "tag", "-w", "--literally", "--stdin")
+		command := exec.Command("git", "-c", "maintenance.auto=false", "-c", "gc.auto=0", "hash-object", "-t", "tag", "-w", "--literally", "--stdin")
 		command.Dir = repo.Root
 		command.Stdin = strings.NewReader("object " + target + "\ntype " + kind + "\ntag " + name + "\ntagger T <t@e> 1700000000 +0000\n\nm\n")
 		out, err := command.CombinedOutput()

@@ -167,8 +167,8 @@ func TestOIDCProviderFailureRecordWriteFailureIsThe500(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if _, err := h.env.admin.Exec(context.Background(), `GRANT UPDATE (`+strings.Join(authschema.SSOProviderFailureColumns(), ", ")+`) ON public.sso_providers TO `+quoted); err != nil {
-			t.Errorf("restore the provider failure grant: %v", err)
+		if _, err := h.env.admin.Exec(context.Background(), `GRANT UPDATE (`+strings.Join(authschema.SSOProviderWriteColumns(), ", ")+`) ON public.sso_providers TO `+quoted); err != nil {
+			t.Errorf("restore the provider write grant: %v", err)
 		}
 	})
 	failure := h.callbackWithCode(h.start(t), "code-"+uuid.NewString())

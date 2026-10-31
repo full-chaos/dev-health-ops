@@ -2,6 +2,7 @@ package authapi
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/oidc"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/saml"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity/ssoaudit"
 )
 
 func (f *compatFixture) ssoSessions(t *testing.T) SSOSessions {
@@ -26,17 +28,102 @@ func (f *compatFixture) ssoSessions(t *testing.T) SSOSessions {
 			f.appended = append(f.appended, event)
 			return nil
 		},
-	})
+	}, &f.signIns)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return sessions
 }
 
+// signInSpy records each call and how many sessions existed when it ran.
+type signInSpy struct {
+	got      []ssoaudit.Success
+	err      error
+	sessions func() int
+	seen     int
+}
+
+func (s *signInSpy) Succeeded(_ context.Context, success ssoaudit.Success) error {
+	s.got = append(s.got, success)
+	if s.sessions != nil {
+		s.seen = s.sessions()
+	}
+	return s.err
+}
+
 func TestSSOSessionsRequireTheirDependencies(t *testing.T) {
-	if _, err := NewSSOSessions(CompatDeps{}); err == nil {
+	if _, err := NewSSOSessions(CompatDeps{}, &signInSpy{}); err == nil {
 		t.Fatal("sso sessions were built without dependencies")
 	}
+	f := newCompatFixture(t)
+	if _, err := NewSSOSessions(CompatDeps{Sessions: f.sessions, Users: f.users, Issuer: f.issuer, Projector: f.projector,
+		AppendAudit: func(context.Context, audit.AuditEvent) error { return nil }}, nil); err == nil {
+		t.Fatal("sso sessions were built without a sign-in record")
+	}
+}
+
+// A completed SAML sign-in writes one record, with its session already there, naming the provider, its organization
+// and the saml protocol; the answer carries the tokens.
+func TestSAMLSessionRecordsTheSuccessBeforeItAnswers(t *testing.T) {
+	f := newCompatFixture(t)
+	f.signIns.sessions = func() int { return len(f.sessions.created) }
+	provider := uuid.New()
+	w, r := samlRequest()
+	f.ssoSessions(t).SAML().IssueFederatedSession(w, r, saml.SignIn{PrincipalID: f.principal, OrganizationID: &f.org, ProviderID: provider, AMR: []string{"fed"}})
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "access_token") {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+	want := []ssoaudit.Success{{OrgID: f.org, ProviderID: provider, PrincipalID: f.principal, Protocol: "saml"}}
+	if !reflect.DeepEqual(f.signIns.got, want) {
+		t.Fatalf("records %+v, want %+v", f.signIns.got, want)
+	}
+	if f.signIns.seen != 1 {
+		t.Fatalf("%d sessions when the record ran, want 1", f.signIns.seen)
+	}
+}
+
+// A record that cannot be written is the 500: no token reaches the answer.
+func TestSAMLSessionRecordFailureWithholdsTheTokens(t *testing.T) {
+	f := newCompatFixture(t)
+	f.signIns.err = errors.New("permission denied")
+	w, r := samlRequest()
+	f.ssoSessions(t).SAML().IssueFederatedSession(w, r, saml.SignIn{PrincipalID: f.principal, OrganizationID: &f.org, AMR: []string{"fed"}})
+	if w.Code != http.StatusInternalServerError || strings.Contains(w.Body.String(), "token") {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+}
+
+func TestSAMLSessionWithoutAnOrganizationWithholdsTheTokens(t *testing.T) {
+	f := newCompatFixture(t)
+	w, r := samlRequest()
+	f.ssoSessions(t).SAML().IssueFederatedSession(w, r, saml.SignIn{PrincipalID: f.principal, AMR: []string{"fed"}})
+	if w.Code != http.StatusInternalServerError || strings.Contains(w.Body.String(), "token") || len(f.signIns.got) != 0 {
+		t.Fatalf("status %d, records %d: %s", w.Code, len(f.signIns.got), w.Body)
+	}
+}
+
+// A sign-in that started no session writes no record.
+func TestSAMLSessionThatStartedNothingRecordsNothing(t *testing.T) {
+	t.Run("no public.users row", func(t *testing.T) {
+		f := newCompatFixture(t)
+		ghost := uuid.New()
+		member := "member"
+		f.users.roles[[2]uuid.UUID{ghost, f.org}] = &member
+		w, r := samlRequest()
+		f.ssoSessions(t).SAML().IssueFederatedSession(w, r, saml.SignIn{PrincipalID: ghost, OrganizationID: &f.org})
+		if w.Code != http.StatusInternalServerError || len(f.sessions.created) != 0 || len(f.signIns.got) != 0 {
+			t.Fatalf("status %d, sessions %d, records %d", w.Code, len(f.sessions.created), len(f.signIns.got))
+		}
+	})
+	t.Run("membership gone", func(t *testing.T) {
+		f := newCompatFixture(t)
+		other := uuid.New()
+		w, r := samlRequest()
+		f.ssoSessions(t).SAML().IssueFederatedSession(w, r, saml.SignIn{PrincipalID: f.principal, OrganizationID: &other})
+		if w.Code != http.StatusInternalServerError || len(f.signIns.got) != 0 {
+			t.Fatalf("status %d, records %d", w.Code, len(f.signIns.got))
+		}
+	})
 }
 
 func TestOIDCSessionStartsAFederatedSessionInTheSignInOrganization(t *testing.T) {

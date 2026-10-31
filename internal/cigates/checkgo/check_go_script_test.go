@@ -481,7 +481,7 @@ func recordedGoTest(work, script string, env []string, verb ...string) ([]string
 		return nil, err
 	}
 	if res.code != 0 {
-		return nil, fmt.Errorf("check_go.sh %v exited %d: %s", verb, res.code, tail(res.stderr+res.stdout, 2000))
+		return nil, fmt.Errorf("check_go.sh %v exited %d: %s", verb, res.code, failureTail(res))
 	}
 	return lines, nil
 }
@@ -502,6 +502,10 @@ func recordedGoTestRaw(work, script string, env []string, verb ...string) ([]str
 		"printf '%s|%s\\n' \"${TESTCONTAINERS_RYUK_DISABLED-<unset>}\" \"$*\" >> \"${FAKE_GO_LOG}\"\n" +
 		"if [ -n \"${FAKE_PROOF-}\" ] && [ -n \"${DEV_HEALTH_MULTI_REPLICA_PROOF-}\" ]; then printf '%s' \"${FAKE_PROOF}\" > \"${DEV_HEALTH_MULTI_REPLICA_PROOF}\"; fi\nexit 0\n"
 	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(fake), 0o755); err != nil {
+		return nil, cmdResult{}, err
+	}
+	// A stand-in docker answers the reap step's `docker ps` with no containers, so a run never reaches a docker of the host.
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte("#!/bin/sh\n[ \"$1\" = ps ] && exit 0\nexit 127\n"), 0o755); err != nil {
 		return nil, cmdResult{}, err
 	}
 	logPath := filepath.Join(work, "go_test.log")
@@ -547,7 +551,7 @@ func multiPackageShard(script string) (string, error) {
 		real := filepath.Join(repoRootNoT(), "ci", "check_go.sh")
 		res := cmdSpec{dir: filepath.Dir(filepath.Dir(real)), env: inheritedEnv(nil)}.run("bash", real, "integration-shard-plan")
 		if res.code != 0 {
-			multiShardErr = fmt.Errorf("integration-shard-plan exited %d: %s", res.code, tail(res.stderr+res.stdout, 2000))
+			multiShardErr = fmt.Errorf("integration-shard-plan exited %d: %s", res.code, failureTail(res))
 			return
 		}
 		re := regexp.MustCompile(`(?m)^integration shard (\d+): estimated \d+s, (\d+) package\(s\)$`)
@@ -896,7 +900,7 @@ func discoveryScenarios() []scenario {
 			return withDiscoveryTree(script, "zzsentinel_discovery_test.go", func(tree string) error {
 				res := cmdSpec{dir: tree, env: inheritedEnv(nil)}.run("bash", filepath.Join(tree, "ci", "check_go.sh"), "integration-shard-plan")
 				if res.code != 0 {
-					return fmt.Errorf("integration-shard-plan exited %d: %s", res.code, tail(res.stderr+res.stdout, 1500))
+					return fmt.Errorf("integration-shard-plan exited %d: %s", res.code, failureTail(res))
 				}
 				rows := 0
 				for _, l := range strings.Split(res.stdout, "\n") {

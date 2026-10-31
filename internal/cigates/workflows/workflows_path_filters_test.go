@@ -103,7 +103,7 @@ var (
 // runGitStripped runs git without any GIT_* variable: an inherited GIT_DIR once made the oracle read a sibling
 // worktree's index and shrink 401 fixtures to 309 with every test green.
 func runGitStripped(dir string, args ...string) (stdout []byte, err error) {
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd := exec.Command("git", append([]string{"-c", "maintenance.auto=false", "-c", "gc.auto=0", "-C", dir}, args...)...)
 	for _, kv := range os.Environ() {
 		if !strings.HasPrefix(kv, "GIT_") {
 			cmd.Env = append(cmd.Env, kv)

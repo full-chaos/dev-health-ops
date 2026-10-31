@@ -17,6 +17,8 @@ import (
 const (
 	containersImportPath = "github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 
+	venueoracleImportPath = "github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
+
 	// sharedTestMain is the TestMain of a package that runs on shared servers.
 	sharedTestMain = "package opted\n\nimport (\n\t\"os\"\n\t\"testing\"\n\n\t\"" + containersImportPath + "\"\n)\n\n" +
 		"func TestMain(m *testing.M) { os.Exit(containers.RunWithSharedServers(m.Run)) }\n"
@@ -26,8 +28,10 @@ const (
 // on shared servers: the body of func TestMain(m *testing.M) passes the
 // result of the harness's RunWithSharedServers (through the file's real
 // import of it) to os.Exit, and every use of m lies inside the argument of
-// that call, where at least one use runs the tests (m.Run, or m handed to a
-// runner). Comments and string literals are not code and never count.
+// that call, where the callback is m.Run or a func literal that returns
+// only run expressions (m.Run(), venueoracle.RunTests(m), a same-file func
+// whose every return is one of these for its *testing.M parameter, or a local
+// set once from one of these before any return). Comments and string literals are not code and never count.
 func optsIn(src string) (bool, error) {
 	file, err := parser.ParseFile(token.NewFileSet(), "main_test.go", src, 0)
 	if err != nil {
@@ -52,6 +56,171 @@ func optsIn(src string) (bool, error) {
 		}
 		pkg, ok := selector.X.(*ast.Ident)
 		return ok && pkg.Obj == nil && imports[pkg.Name] == path
+	}
+	type visit struct {
+		fn  *ast.FuncDecl
+		arg int
+	}
+	memo := map[visit]bool{}
+	unparen := func(e ast.Expr) ast.Expr {
+		for {
+			paren, ok := e.(*ast.ParenExpr)
+			if !ok {
+				return e
+			}
+			e = paren.X
+		}
+	}
+	isM := func(e ast.Expr, p *ast.Object) bool {
+		id, ok := unparen(e).(*ast.Ident)
+		return ok && id.Obj == p
+	}
+	var runExpr func(e ast.Expr, p *ast.Object) bool
+	var runnerBody func(body *ast.BlockStmt, p *ast.Object) bool
+	runExpr = func(e ast.Expr, p *ast.Object) bool {
+		call, ok := unparen(e).(*ast.CallExpr)
+		if !ok {
+			return false
+		}
+		plain := *call
+		plain.Fun = unparen(call.Fun)
+		if selector, ok := plain.Fun.(*ast.SelectorExpr); ok && selector.Sel.Name == "Run" && len(plain.Args) == 0 && isM(selector.X, p) {
+			return true
+		}
+		if isCall(&plain, venueoracleImportPath, "RunTests") {
+			return len(plain.Args) == 1 && isM(plain.Args[0], p)
+		}
+		id, ok := plain.Fun.(*ast.Ident)
+		if !ok || id.Obj == nil {
+			return false
+		}
+		fn, ok := id.Obj.Decl.(*ast.FuncDecl)
+		if !ok || fn.Recv != nil || fn.Body == nil {
+			return false
+		}
+		for arg, a := range plain.Args {
+			if !isM(a, p) {
+				continue
+			}
+			key := visit{fn, arg}
+			if done, seen := memo[key]; seen {
+				if done {
+					return true
+				}
+				continue
+			}
+			memo[key] = false
+			var param *ast.Object
+			index := 0
+			for _, field := range fn.Type.Params.List {
+				for _, name := range field.Names {
+					if star, ok := field.Type.(*ast.StarExpr); ok && index == arg {
+						if sel, ok := star.X.(*ast.SelectorExpr); ok && sel.Sel.Name == "M" {
+							param = name.Obj
+						}
+					}
+					index++
+				}
+			}
+			if param != nil && runnerBody(fn.Body, param) {
+				memo[key] = true
+				return true
+			}
+		}
+		return false
+	}
+	runnerBody = func(body *ast.BlockStmt, p *ast.Object) bool {
+		var firstReturn token.Pos = token.NoPos
+		ast.Inspect(body, func(node ast.Node) bool {
+			switch node := node.(type) {
+			case *ast.FuncLit:
+				return false
+			case *ast.ReturnStmt:
+				if firstReturn == token.NoPos || node.Pos() < firstReturn {
+					firstReturn = node.Pos()
+				}
+			}
+			return true
+		})
+		assigned := map[*ast.Object]int{}
+		ast.Inspect(body, func(node ast.Node) bool {
+			note := func(e ast.Expr) {
+				if id, ok := unparen(e).(*ast.Ident); ok && id.Obj != nil {
+					assigned[id.Obj]++
+				}
+			}
+			switch node := node.(type) {
+			case *ast.AssignStmt:
+				for _, lhs := range node.Lhs {
+					note(lhs)
+				}
+			case *ast.IncDecStmt:
+				note(node.X)
+			case *ast.UnaryExpr:
+				if node.Op == token.AND {
+					note(node.X)
+					note(node.X)
+				}
+			case *ast.RangeStmt:
+				if node.Tok == token.ASSIGN {
+					if node.Key != nil {
+						note(node.Key)
+					}
+					if node.Value != nil {
+						note(node.Value)
+					}
+				}
+			}
+			return true
+		})
+		locals := map[*ast.Object]bool{}
+		for _, stmt := range body.List {
+			if stmt.End() > firstReturn {
+				continue
+			}
+			switch def := stmt.(type) {
+			case *ast.AssignStmt:
+				if def.Tok != token.DEFINE || len(def.Lhs) != 1 || len(def.Rhs) != 1 {
+					continue
+				}
+				if id, ok := def.Lhs[0].(*ast.Ident); ok && id.Obj != nil && assigned[id.Obj] == 1 && runExpr(def.Rhs[0], p) {
+					locals[id.Obj] = true
+				}
+			case *ast.DeclStmt:
+				decl, ok := def.Decl.(*ast.GenDecl)
+				if !ok || decl.Tok != token.VAR || len(decl.Specs) != 1 {
+					continue
+				}
+				spec, ok := decl.Specs[0].(*ast.ValueSpec)
+				if !ok || len(spec.Names) != 1 || len(spec.Values) != 1 {
+					continue
+				}
+				if id := spec.Names[0]; id.Obj != nil && assigned[id.Obj] == 0 && runExpr(spec.Values[0], p) {
+					locals[id.Obj] = true
+				}
+			}
+		}
+		returns, allRun := 0, true
+		ast.Inspect(body, func(node ast.Node) bool {
+			switch node := node.(type) {
+			case *ast.FuncLit:
+				return false
+			case *ast.ReturnStmt:
+				returns++
+				if len(node.Results) != 1 {
+					allRun = false
+					break
+				}
+				if id, ok := unparen(node.Results[0]).(*ast.Ident); ok && id.Obj != nil && locals[id.Obj] {
+					break
+				}
+				if !runExpr(node.Results[0], p) {
+					allRun = false
+				}
+			}
+			return true
+		})
+		return returns > 0 && allRun
 	}
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
@@ -88,31 +257,19 @@ func optsIn(src string) (bool, error) {
 		}
 		runs, outside := false, false
 		ast.Inspect(fn.Body, func(node ast.Node) bool {
-			switch node := node.(type) {
-			case *ast.Ident:
-				if node.Obj == m && !inside(node.Pos()) {
-					outside = true
-				}
-			case *ast.CallExpr:
-				if !inside(node.Pos()) {
-					return true
-				}
-				if selector, ok := node.Fun.(*ast.SelectorExpr); ok {
-					if id, ok := selector.X.(*ast.Ident); ok && id.Obj == m && selector.Sel.Name == "Run" {
-						runs = true
-					}
-				}
-				for _, arg := range node.Args {
-					if id, ok := arg.(*ast.Ident); ok && id.Obj == m {
-						runs = true
-					}
-				}
+			if id, ok := node.(*ast.Ident); ok && id.Obj == m && !inside(id.Pos()) {
+				outside = true
 			}
 			return true
 		})
 		for _, call := range shared {
-			if selector, ok := call.Args[0].(*ast.SelectorExpr); ok {
-				if id, ok := selector.X.(*ast.Ident); ok && id.Obj == m && selector.Sel.Name == "Run" {
+			switch callback := unparen(call.Args[0]).(type) {
+			case *ast.SelectorExpr:
+				if isM(callback.X, m) && callback.Sel.Name == "Run" {
+					runs = true
+				}
+			case *ast.FuncLit:
+				if runnerBody(callback.Body, m) {
 					runs = true
 				}
 			}
@@ -180,6 +337,54 @@ func TestOptInNeedsATestMainThatRunsTheTestsInsideTheSharedCall(t *testing.T) {
 			"func TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int { return 0 }))\n}\n"), false},
 		{"a package that is not the harness", mainFile("\t\"os\"\n\t\"testing\"\n\n\t\"example.com/other/containers\"\n",
 			"func TestMain(m *testing.M) { os.Exit(containers.RunWithSharedServers(m.Run)) }\n"), false},
+		{"a no-op helper given m", mainFile(stdImports,
+			"func noop(m *testing.M) int { return 0 }\n\nfunc TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int { return noop(m) }))\n}\n"), false},
+		{"a helper from another package given m", mainFile(stdImports+"\t\"example.com/other/runner\"\n",
+			"func TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int { return runner.RunTests(m) }))\n}\n"), false},
+		{"a same-file helper that drops m", mainFile(stdImports,
+			"func drop(m *testing.M) int {\n\t_ = m\n\treturn 0\n}\n\nfunc TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int { return drop(m) }))\n}\n"), false},
+		{"a same-file helper that runs m", mainFile(stdImports,
+			"func run(m *testing.M) int { return m.Run() }\n\nfunc TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int { return run(m) }))\n}\n"), true},
+		{"a same-file helper that hands m to venueoracle.RunTests", mainFile(stdImports+venueImport,
+			"func run(m *testing.M) int { return venueoracle.RunTests(m) }\n\nfunc TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int { return run(m) }))\n}\n"), true},
+		{"mutual recursion with no run", mainFile(stdImports,
+			"func ping(m *testing.M) int { return pong(m) }\n\nfunc pong(m *testing.M) int { return ping(m) }\n\nfunc TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int { return ping(m) }))\n}\n"), false},
+		{"a helper chain that reaches a run", mainFile(stdImports,
+			"func ping(m *testing.M) int { return pong(m) }\n\nfunc pong(m *testing.M) int {\n\tif cond() {\n\t\treturn m.Run()\n\t}\n\treturn m.Run()\n}\n\nfunc cond() bool { return true }\n\nfunc TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int { return ping(m) }))\n}\n"), true},
+		{"a helper whose run is in an uncalled closure", mainFile(stdImports,
+			"func run(m *testing.M) int {\n\t_ = func() int { return m.Run() }\n\treturn 0\n}\n\nfunc TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int { return run(m) }))\n}\n"), false},
+		{"a helper whose run is in a dead branch", mainFile(stdImports,
+			"func run(m *testing.M) int {\n\tif false {\n\t\tm.Run()\n\t}\n\treturn 0\n}\n\nfunc TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int { return run(m) }))\n}\n"), false},
+		{"a helper that returns a run on one path only", mainFile(stdImports,
+			"func run(m *testing.M, c bool) int {\n\tif c {\n\t\treturn m.Run()\n\t}\n\treturn 0\n}\n\nfunc TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int { return run(m, true) }))\n}\n"), false},
+		{"a callback with a run in a dead branch", mainFile(stdImports,
+			"func TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int {\n\t\tif false {\n\t\t\tm.Run()\n\t\t}\n\t\treturn 0\n\t}))\n}\n"), false},
+		{"a callback with a run in an uncalled closure", mainFile(stdImports,
+			"func TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int {\n\t\t_ = func() int { return m.Run() }\n\t\treturn 0\n\t}))\n}\n"), false},
+		{"a helper called through parentheses", mainFile(stdImports,
+			"func run(m *testing.M) int { return (m.Run)() }\n\nfunc TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int { return (run)(m) }))\n}\n"), true},
+		{"a callback that returns a local set from m.Run", mainFile(stdImports,
+			"func TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int {\n\t\tcode := m.Run()\n\t\treturn code\n\t}))\n}\n"), true},
+		{"a callback whose local gets m.Run only in a dead branch", mainFile(stdImports,
+			"func TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int {\n\t\tcode := 0\n\t\tif false {\n\t\t\tcode = m.Run()\n\t\t}\n\t\treturn code\n\t}))\n}\n"), false},
+		{"a callback whose local is overwritten after m.Run", mainFile(stdImports,
+			"func TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int {\n\t\tcode := m.Run()\n\t\tcode = 0\n\t\treturn code\n\t}))\n}\n"), false},
+		{"a callback whose local is set in a nested block", mainFile(stdImports,
+			"func TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int {\n\t\tif cond() {\n\t\t\tcode := m.Run()\n\t\t\treturn code\n\t\t}\n\t\treturn 0\n\t}))\n}\n"), false},
+		{"a callback with a closure whose own return is no run", mainFile(stdImports,
+			"func TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int {\n\t\t_ = func() int { return 0 }\n\t\treturn m.Run()\n\t}))\n}\n"), true},
+		{"a helper with a closure whose own return is no run", mainFile(stdImports,
+			"func run(m *testing.M) int {\n\t_ = func() int { return 0 }\n\treturn m.Run()\n}\n\nfunc TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int { return run(m) }))\n}\n"), true},
+		{"a callback that returns a var set from venueoracle.RunTests", mainFile(stdImports+venueImport,
+			"func TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int {\n\t\tvar code = venueoracle.RunTests(m)\n\t\treturn code\n\t}))\n}\n"), true},
+		{"a callback that returns a var set from m.Run", mainFile(stdImports+venueImport,
+			"func TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int {\n\t\tvar code = m.Run()\n\t\treturn code\n\t}))\n}\n"), true},
+		{"a callback whose declared var is assigned later", mainFile(stdImports+venueImport,
+			"func TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int {\n\t\tvar code int\n\t\tcode = m.Run()\n\t\treturn code\n\t}))\n}\n"), false},
+		{"a callback whose var is overwritten after m.Run", mainFile(stdImports+venueImport,
+			"func TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int {\n\t\tvar code = m.Run()\n\t\tcode = 0\n\t\treturn code\n\t}))\n}\n"), false},
+		{"a helper that returns a var set from venueoracle.RunTests", mainFile(stdImports+venueImport,
+			"func run(m *testing.M) int {\n\tvar code = venueoracle.RunTests(m)\n\treturn code\n}\n\nfunc TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int { return run(m) }))\n}\n"), true},
 		{"no TestMain", "package opted\n\nfunc helper() {}\n", false},
 	}
 	for _, tc := range cases {
@@ -203,10 +408,14 @@ func TestABatchRowFailsWhenItsTestMainOnlyMentionsTheCall(t *testing.T) {
 	write("internal/commented/main_test.go", "package commented\n\nimport (\n\t\"os\"\n\t\"testing\"\n)\n\n// containers.RunWithSharedServers(m.Run)\nfunc TestMain(m *testing.M) { os.Exit(m.Run()) }\n")
 	write("internal/unused/main_test.go", mainFile(stdImports, "func TestMain(m *testing.M) {\n\t_ = containers.RunWithSharedServers\n\tos.Exit(m.Run())\n}\n"))
 	write("internal/outside/main_test.go", mainFile(stdImports, "func TestMain(m *testing.M) {\n\t_ = containers.RunWithSharedServers(m.Run)\n\tos.Exit(m.Run())\n}\n"))
+	write("internal/dropsm/main_test.go", mainFile(stdImports+venueImport,
+		"func runTests(m *testing.M) int { return 0 }\n\nfunc TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int {\n\t\tcode := runTests(m)\n\t\treturn code\n\t}))\n}\n"))
+	write("internal/deadbranch/main_test.go", mainFile(stdImports,
+		"func run(m *testing.M) int {\n\tif false {\n\t\tm.Run()\n\t}\n\treturn 0\n}\n\nfunc TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int { return run(m) }))\n}\n"))
 	optedIn, _ := scan(t, filepath.Join(root, "internal"))
-	batch := []string{"internal/real", "internal/commented", "internal/unused", "internal/outside"}
+	batch := []string{"internal/real", "internal/commented", "internal/unused", "internal/outside", "internal/dropsm", "internal/deadbranch"}
 	got := strings.Join(missingFromBatch(optedIn, batch), ",")
-	if want := "internal/commented,internal/unused,internal/outside"; got != want {
+	if want := "internal/commented,internal/unused,internal/outside,internal/dropsm,internal/deadbranch"; got != want {
 		t.Errorf("batch rows missing from the opted-in packages = %q, want %q (opted in: %v)", got, want, optedIn)
 	}
 }

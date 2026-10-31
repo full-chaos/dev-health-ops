@@ -29,6 +29,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
 const (
@@ -62,6 +63,8 @@ type ExhaustedRow struct {
 type Row struct {
 	ID         uuid.UUID
 	Ciphertext string
+	// KeyVersion names what the sealed value holds (providerfoundation.PagerDutyRevocationToken).
+	KeyVersion string
 }
 
 // Claim is one row held by its own transaction until Sent, Failed or Release.
@@ -200,9 +203,13 @@ func (handler *Handler) send(ctx context.Context, claim Claim, counts *tally) er
 	row := claim.Row()
 	reason := ""
 	plaintext, err := handler.decryptor.Decrypt(secrets.NewValue(row.Ciphertext))
+	var token string
+	if err == nil {
+		token, err = providerfoundation.PagerDutyRevocationToken(row.KeyVersion, plaintext)
+	}
 	if err != nil {
 		reason = ReasonTokenDecryptFailed
-	} else if err := handler.revoke(ctx, string(plaintext)); err != nil {
+	} else if err := handler.revoke(ctx, token); err != nil {
 		reason = ReasonRemoteRevokeFailed
 	}
 	if reason == "" {

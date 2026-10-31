@@ -359,24 +359,11 @@ func startRouterInContainers(t *testing.T) router {
 	return router{base: base, port: RouterPort}
 }
 
-// freeAddress is a loopback address nothing listens on now.
-func freeAddress(t *testing.T) string {
-	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("find a free port: %v", err)
-	}
-	address := listener.Addr().String()
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return address
-}
-
-// startStubAt starts a stub plane of this process on address.
+// startStubAt starts a stub plane of this process on address, which heldPort returned: until then the address refuses
+// connections, and it is never free for another process in between.
 func startStubAt(t *testing.T, address, plane string) {
 	t.Helper()
-	listener, err := net.Listen("tcp", address)
+	listener, err := listenOnHeldPort(address)
 	if err != nil {
 		t.Fatalf("listen on %s for the %s stub: %v", address, plane, err)
 	}
@@ -396,10 +383,10 @@ func startRouterAsProcess(t *testing.T, binary string, contract Contract) router
 	if _, err := os.Stat(binary); err != nil {
 		t.Fatalf("%s names %q, which is not there: %v", nginxBinaryEnv, binary, err)
 	}
-	goAPI, queryAPI, address := freeAddress(t), freeAddress(t), freeAddress(t)
+	goAPI, queryAPI, address := heldPort(t), heldPort(t), heldPort(t)
 	directory := t.TempDir()
 	config, err := Render(contract, Options{
-		Listen:    address,
+		Listen:    address + " reuseport",
 		Upstreams: map[string]string{PlaneGoAPI: goAPI, PlaneQueryAPI: queryAPI},
 		RunDir:    directory,
 	})
@@ -612,4 +599,27 @@ func TestRealNginxRoutesEveryPathToItsPlane(t *testing.T) {
 			}
 		}
 	})
+}
+
+// A stub plane's address refuses connections until the plane starts and is never free in between: a process that
+// binds ports meanwhile cannot take it, and the plane then listens on that very address.
+func TestAStubPlaneKeepsItsAddressFromTheHoldToTheStart(t *testing.T) {
+	address := heldPort(t)
+	if taken, err := net.Listen("tcp", address); err == nil {
+		_ = taken.Close()
+		t.Fatalf("%s is held, yet an ordinary listen on it succeeded", address)
+	}
+	if connection, err := net.DialTimeout("tcp", address, time.Second); err == nil {
+		_ = connection.Close()
+		t.Fatalf("%s accepted a connection before the plane started", address)
+	}
+	startStubAt(t, address, PlaneGoAPI)
+	response, err := http.Get("http://" + address + "/")
+	if err != nil {
+		t.Fatalf("the started stub plane: %v", err)
+	}
+	_ = response.Body.Close()
+	if got := response.Header.Get(stubPlane); got != PlaneGoAPI {
+		t.Fatalf("%s = %q, want %q", stubPlane, got, PlaneGoAPI)
+	}
 }

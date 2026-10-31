@@ -49,6 +49,8 @@ var Allowlist = []Entry{
 	{File: "internal/api/sso/provision.go", Func: "handlers.membershipOrJoin", Table: "public.memberships", Verb: "INSERT"},
 	{File: "internal/api/sso/provision.go", Func: "handlers.provisionOrGetUser", Table: "public.users", Verb: "UPDATE"},
 	{File: "internal/apiservice/admin/invites.go", Func: "handlers.createInvite", Table: "public.org_invites", Verb: "INSERT"},
+	// D6528: the reconcile pass writes is_active to auth's state.
+	{File: "internal/apiservice/admin/orgstate_reconcile.go", Func: "OrgStateReconciler.fix", Table: "public.organizations", Verb: "UPDATE"},
 	{File: "internal/apiservice/admin/orgstore.go", Func: "pgStore.deleteOrganizationWithoutMembers", Table: "public.organizations", Verb: "DELETE"},
 	{File: "internal/apiservice/admin/orgstore.go", Func: "pgStore.insertMembershipTx", Table: "public.memberships", Verb: "INSERT"},
 	{File: "internal/apiservice/admin/orgstore.go", Func: "pgStore.insertOrganizationTx", Table: "public.organizations", Verb: "INSERT"},
@@ -125,12 +127,17 @@ var Allowlist = []Entry{
 	// (revoked_at only, rows locked NOWAIT) inside the removal's audit.Commit; its auth sessions and credentials end
 	// through Store.revokeSessions (the rows below).
 	{File: "internal/auth/session/end_org.go", Func: "Store.EndOrgInTx", Table: "public.refresh_tokens", Verb: "UPDATE"},
+	// D6529 (ticket 12051), under the grant scope of D6512: an organization suspend or deprovision revokes the organization's
+	// go-api refresh tokens (revoked_at only, rows locked NOWAIT) inside the verb's audit.Commit.
+	{File: "internal/auth/session/end_org.go", Func: "Store.EndOrganizationInTx", Table: "public.refresh_tokens", Verb: "UPDATE"},
 	{File: "internal/auth/identity/oidc/flowstore.go", Func: "PGFlowStore.Begin", Table: "auth.sso_flow_states", Verb: "INSERT"},
 	{File: "internal/auth/identity/oidc/flowstore.go", Func: "PGFlowStore.Consume", Table: "auth.sso_flow_states", Verb: "UPDATE"},
 	{File: "internal/auth/identity/organization.go", Func: "Store.insertOrganization", Table: "auth.organizations", Verb: "INSERT"},
 	{File: "internal/auth/identity/organization.go", Func: "Store.updateOrganization", Table: "auth.organizations", Verb: "UPDATE"},
 	// acp ruling, CHAOS-12032 (D6515): go-api's provider failure record (recordSSOFailure) by the OAuth and SAML sign-ins: last_error, last_error_at and updated_at, never the status, one transaction with the audit row.
 	{File: "internal/auth/identity/ssoaudit/ssoaudit.go", Func: "PGProviderFailure.Failed", Table: "public.sso_providers", Verb: "UPDATE"},
+	// D6534 (ticket 12118): go-api's success record (finishSSOLogin) by the OIDC, OAuth and SAML sign-ins: last_login_at and updated_at, one transaction with the audit row.
+	{File: "internal/auth/identity/ssoaudit/ssoaudit.go", Func: "PGSignIn.Succeeded", Table: "public.sso_providers", Verb: "UPDATE"},
 	// The users-owned projection (CHAOS-10630): written only inside the audit.Commit that writes the auth rows; the runtime role holds the matching column grants only while AUTH_USERS_OWNED is on.
 	{File: "internal/auth/identity/publicusers.go", Func: "insertPublicOwnedOrganization", Table: "public.memberships", Verb: "INSERT"},
 	{File: "internal/auth/identity/publicusers.go", Func: "insertPublicOwnedOrganization", Table: "public.organizations", Verb: "INSERT"},
@@ -194,7 +201,7 @@ var Allowlist = []Entry{
 	{File: "internal/auth/workload/bootstrap_lifecycle.go", Func: "Store.RotateBootstrap", Table: "auth.credential_registry", Verb: "INSERT"},
 	{File: "internal/auth/workload/bootstrap_lifecycle.go", Func: "Store.RotateBootstrap", Table: "auth.credential_registry", Verb: "UPDATE"},
 	{File: "internal/auth/org/store.go", Func: "Store.Create", Table: "auth.organizations", Verb: "INSERT"},
-	{File: "internal/auth/org/store.go", Func: "Store.mutate", Table: "auth.organizations", Verb: "UPDATE"},
+	{File: "internal/auth/org/store.go", Func: "Store.mutateOnce", Table: "auth.organizations", Verb: "UPDATE"},
 	// TEMPORARY: the one-time legacy refresh exchange revokes go-api's refresh tokens (authschema.LegacyRefreshTokenGrant). CHAOS-10408 removes both rows with the grant.
 	// acp ruling 2026-10-26 (CHAOS-11506): the legacy link-token purge, run only where users are owned; DELETE of go-api's public link-token rows, counted and audited.
 	{File: "internal/auth/usersbackfill/linkpurge.go", Func: "PurgeLegacyLinks", Table: "public.email_verification_tokens", Verb: "DELETE"},

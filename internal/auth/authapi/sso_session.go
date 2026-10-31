@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/oidc"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/saml"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity/ssoaudit"
 )
 
 const (
@@ -24,12 +25,16 @@ const (
 
 // SSOSessions starts the session of a completed federated sign-in: the same
 // session row, audit row and access claims as a social sign-in.
-type SSOSessions struct{ h compatHandlers }
+type SSOSessions struct {
+	h compatHandlers
+	// record writes go-api's success record of a SAML sign-in.
+	record ssoaudit.SignInRecord
+}
 
 // NewSSOSessions binds the session domain of deps.
-func NewSSOSessions(deps CompatDeps) (SSOSessions, error) {
-	if deps.Sessions == nil || deps.Users == nil || deps.Issuer == nil || deps.Projector == nil || deps.AppendAudit == nil {
-		return SSOSessions{}, errors.New("authapi: sso sessions need sessions, users, an issuer, a projector and an audit appender")
+func NewSSOSessions(deps CompatDeps, record ssoaudit.SignInRecord) (SSOSessions, error) {
+	if deps.Sessions == nil || deps.Users == nil || deps.Issuer == nil || deps.Projector == nil || deps.AppendAudit == nil || record == nil {
+		return SSOSessions{}, errors.New("authapi: sso sessions need sessions, users, an issuer, a projector, an audit appender and a sign-in record")
 	}
 	if deps.Logger == nil {
 		deps.Logger = slog.Default()
@@ -42,7 +47,7 @@ func NewSSOSessions(deps CompatDeps) (SSOSessions, error) {
 	if err != nil {
 		return SSOSessions{}, err
 	}
-	return SSOSessions{h: compatHandlers{CompatDeps: deps, rec: rec}}, nil
+	return SSOSessions{h: compatHandlers{CompatDeps: deps, rec: rec}, record: record}, nil
 }
 
 type ssoIssued struct {
@@ -133,6 +138,11 @@ func (s samlSessions) IssueFederatedSession(w http.ResponseWriter, r *http.Reque
 		s.h.fail(w, r, opSSOSession, err)
 		return
 	}
+	// Before the body: a record that cannot be written withholds the tokens.
+	if err := s.recordSignIn(ctx, signIn); err != nil {
+		s.h.fail(w, r, opSSOSession, err)
+		return
+	}
 	body := pyjson.NewObject()
 	body.Set("access_token", out.access)
 	body.Set("refresh_token", out.refresh)
@@ -148,6 +158,14 @@ func (s samlSessions) IssueFederatedSession(w http.ResponseWriter, r *http.Reque
 	body.Set("role", out.role)
 	s.h.rec.record(ctx, opSSOSession, "success", reasonAccepted, nil)
 	writeCompatModel(w, body)
+}
+
+func (s samlSessions) recordSignIn(ctx context.Context, signIn saml.SignIn) error {
+	if signIn.OrganizationID == nil {
+		return errors.New("authapi: a SAML sign-in has no provider organization to record")
+	}
+	return s.record.Succeeded(ctx, ssoaudit.Success{OrgID: *signIn.OrganizationID, ProviderID: signIn.ProviderID,
+		PrincipalID: signIn.PrincipalID, Protocol: samlProvider})
 }
 
 func (s samlSessions) Preflight(ctx context.Context) error { return s.h.Issuer.Preflight(ctx) }

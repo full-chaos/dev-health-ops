@@ -83,10 +83,11 @@ internal/cigates/bigboyrender	posture.go	unexpressed
 internal/cigates/chartgates	helpers_test.go	unexpressed
 internal/cigates/chartgates	overlay_test.go	unexpressed
 internal/cigates/checkgo	ci_script_helpers_test.go	unexpressed
-internal/cigates/checkgo	cigates_timeout_test.go	unexpressed
 internal/cigates/checkgo	go_test_leg_json_test.go	unexpressed
 internal/cigates/checkgo	race_solo_test.go	unexpressed
 internal/cigates/checkgo	testcontainers_session_reap_test.go	unexpressed
+internal/cigates/checkgoshards	ci_script_helpers_test.go	unexpressed
+internal/cigates/checkgoshards	cigates_timeout_test.go	unexpressed
 internal/cigates/chparams	chparams_test.go	unexpressed
 internal/cigates/docmaketargets	docmaketargets_test.go	unexpressed
 internal/cigates/docs	docs_helpers_test.go	unexpressed
@@ -198,6 +199,7 @@ internal/localgit	git.go	unexpressed
 internal/localgit	localgit_test.go	unexpressed
 internal/mail	environment_proxy_test.go	unexpressed
 internal/migrationmatrix	live.go	unexpressed
+internal/pgmigrate	squash_test.go	unexpressed
 internal/platform/logging	binaries_enumeration_test.go	cmd/...
 internal/platform/logging	provider_origin_sources_test.go	unexpressed
 internal/platform/logging	value_redaction_test.go	unexpressed

@@ -193,7 +193,9 @@ func maskAPIKey(value string) *string {
 }
 
 // settingValue is SettingsService.get for a loaded row: an encrypted, non-empty
-// value is decrypted; a value that cannot be is an unhandled error.
+// value is decrypted. A value the configured key cannot open is an
+// *undecryptableSettingsError naming the row (CHAOS-12172); any other failure
+// is an unhandled error.
 func (h *handlers) settingValue(row *setting) (*string, error) {
 	if row == nil {
 		return nil, nil
@@ -206,7 +208,7 @@ func (h *handlers) settingValue(row *setting) (*string, error) {
 	}
 	plain, err := h.decryptor.Decrypt(secrets.NewValue(*row.Value))
 	if err != nil {
-		return nil, err
+		return nil, undecryptable(row.Key, err)
 	}
 	text := string(plain)
 	return &text, nil
@@ -216,16 +218,28 @@ func (h *handlers) settingValue(row *setting) (*string, error) {
 // response_model_exclude_none: a value that is None is omitted.
 func (h *handlers) llmSettingsResponse(ctx context.Context, db pgExecer, orgID string) (*pyjson.Object, error) {
 	values := make(map[string]*string, len(llmSettingKeys))
+	var unreadable []string
 	for _, key := range llmSettingKeys {
 		row, err := settingByKeyOn(ctx, db, orgID, llmCategory, key)
 		if err != nil {
 			return nil, err
 		}
 		value, err := h.settingValue(row)
+		if collectUndecryptable(err, &unreadable) {
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
 		values[key] = value
+	}
+	// Every unreadable setting is named, the overrides' too (CHAOS-12172).
+	purposes, err := h.llmPurposesObject(ctx, db, orgID)
+	if !collectUndecryptable(err, &unreadable) && err != nil {
+		return nil, err
+	}
+	if err := undecryptableOrNil(unreadable); err != nil {
+		return nil, err
 	}
 	out := pyjson.NewObject()
 	if values["provider"] != nil {
@@ -248,10 +262,6 @@ func (h *handlers) llmSettingsResponse(ctx context.Context, db pgExecer, orgID s
 			return nil, err
 		}
 		out.Set("concurrency", pyjson.Int{Int: parsed})
-	}
-	purposes, err := h.llmPurposesObject(ctx, db, orgID)
-	if err != nil {
-		return nil, err
 	}
 	if purposes != nil {
 		out.Set("purposes", purposes)
@@ -285,7 +295,7 @@ func (h *handlers) getLLMSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := h.llmSettingsResponse(ctx, h.store.Pool, orgID)
 	if err != nil {
-		h.internalError(ctx, w, "read llm settings", err)
+		h.byoReadFailed(ctx, w, "read llm settings", err)
 		return
 	}
 	policy.WriteModel(w, http.StatusOK, out, nil)
@@ -392,6 +402,9 @@ func (h *handlers) putLLMSettings(w http.ResponseWriter, r *http.Request) {
 			inTx: h.categorizeOptInStep(r, orgID, categorizeBYO),
 		})
 		if err != nil {
+			if h.writeUndecryptable(ctx, w, "write llm purpose override", err) {
+				return
+			}
 			var step *llmStepError
 			if errors.As(err, &step) {
 				h.internalError(ctx, w, step.step, step.err)
@@ -419,6 +432,9 @@ func (h *handlers) putLLMSettings(w http.ResponseWriter, r *http.Request) {
 		inTx: h.categorizeOptInStep(r, orgID, categorizeBYO),
 	})
 	if err != nil {
+		if h.writeUndecryptable(ctx, w, "write llm settings", err) {
+			return
+		}
 		var step *llmStepError
 		if errors.As(err, &step) {
 			h.internalError(ctx, w, step.step, step.err)
@@ -474,7 +490,7 @@ func (h *handlers) applyLLMSettings(ctx context.Context, orgID string, in llmUps
 		keys = append(keys, *in.apiKey)
 	}
 	if baseURLText != "" {
-		stored, err := h.storedLLMKey(ctx, orgID)
+		stored, err := readableStoredKey(h.storedLLMKey(ctx, orgID))
 		if err != nil {
 			return nil, nil, &llmStepError{"read stored llm key", err}
 		}

@@ -28,7 +28,7 @@ type revisionEnv struct {
 
 func newRevisionEnv(t *testing.T, ctx context.Context) *revisionEnv {
 	t.Helper()
-	withProfileRow(t, authapi.PatternOrgSuspend, orgStateRoute)
+	withProfileRow(t, orgStateRoute)
 	e, header := newProvisioningEnv(t, ctx)
 	_, org := e.seed(t, ctx)
 	return &revisionEnv{routesEnv: e, t: t, ctx: ctx, header: header, super: e.account(t, ctx, acctMail(), true, true), org: org}

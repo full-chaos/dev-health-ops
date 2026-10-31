@@ -35,6 +35,8 @@ type providerCase struct {
 	tokenOwner  string // "" = the client
 	infoStatus  int    // the token info endpoint (no go-api twin); 0 = 200
 	userBody    string // a raw profile body; "" = the JSON profile
+	signIn      ssoaudit.SignInRecord
+	sessions    SessionIssuer
 }
 
 func runProviderCase(t *testing.T, c providerCase, failures ssoaudit.ProviderFailure, denials DenialAudit) (refusal, StoredProvider, *Error) {
@@ -82,10 +84,18 @@ func runProviderCase(t *testing.T, c providerCase, failures ssoaudit.ProviderFai
 		t.Fatal(err)
 	}
 	now := time.Unix(1_800_000_000, 0)
+	var record ssoaudit.SignInRecord = noSignInRecord{}
+	if c.signIn != nil {
+		record = c.signIn
+	}
+	var sessions SessionIssuer = &resolveSessions{}
+	if c.sessions != nil {
+		sessions = c.sessions
+	}
 	svc, err := New(Config{
 		Providers: &fakeProviders{}, Flows: &scriptedFlows{}, Identities: &orderIdentities{linked: true},
 		Memberships: resolveMembers{found: true, role: "member"}, Entitlements: &countingEntitlements{allowed: true},
-		Sessions: &resolveSessions{}, StateSecret: secret, AppBaseURL: "https://app.example",
+		Sessions: sessions, SignInRecord: record, StateSecret: secret, AppBaseURL: "https://app.example",
 		HTTPClient: server.Client(), OAuthEndpoints: &OAuthEndpoints{Social: social.Endpoints{GitLabBase: server.URL}},
 		DenialAudit: denials, ProviderFailure: failures, Now: func() time.Time { return now },
 	})

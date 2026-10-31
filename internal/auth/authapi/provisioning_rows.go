@@ -9,7 +9,8 @@ import (
 
 // provisioningPatterns are the routes AUTH_MEMBERSHIP_ROUTES mounts.
 var provisioningPatterns = []string{PatternMembershipAdd, PatternMembershipRole, PatternMembershipRemove,
-	PatternMembershipTransfer, PatternInviteCreate, PatternInviteAccept, PatternOrgDeprovision, PatternOrgReactivate, PatternInviteRevoke}
+	PatternMembershipTransfer, PatternInviteCreate, PatternInviteAccept, PatternOrgDeprovision, PatternOrgReactivate, PatternInviteRevoke,
+	PatternOrgSuspend}
 
 // serviceSessionIssuerClass is the endpoint-profile credential class of the
 // session issuer credential (svc_authsess_) the routes take.
@@ -28,6 +29,21 @@ func provisioningRowsPresent(raw []byte) error {
 
 // rowsPresentFor is provisioningRowsPresent over patterns.
 func rowsPresentFor(raw []byte, patterns []string) error {
+	return rowsAcceptFor(raw, patterns, []string{serviceSessionIssuerClass})
+}
+
+// workloadTokenClass is the endpoint-profile credential class of the go-api
+// workload token (JOSE typ workload+jwt).
+const workloadTokenClass = "workload_token"
+
+// rowsAcceptFor refuses unless the document holds, for each pattern, an
+// auth-service POST row whose accepted classes include every class in classes,
+// and classes is not empty: a route mounts only on a row that names every
+// credential class its handler admits.
+func rowsAcceptFor(raw []byte, patterns, classes []string) error {
+	if len(classes) == 0 {
+		return fmt.Errorf("%w: no credential class to admit", errProvisioningRows)
+	}
 	var document struct {
 		Rows []struct {
 			Service         string   `json:"service"`
@@ -43,14 +59,23 @@ func rowsPresentFor(raw []byte, patterns []string) error {
 		found := false
 		for _, row := range document.Rows {
 			if row.Service == AccessService && row.Method == "POST" && row.Route == pattern &&
-				slices.Contains(row.AcceptedClasses, serviceSessionIssuerClass) {
+				containsAll(row.AcceptedClasses, classes) {
 				found = true
 				break
 			}
 		}
 		if !found {
-			return fmt.Errorf("%w: POST %s has no row accepting %s", errProvisioningRows, pattern, serviceSessionIssuerClass)
+			return fmt.Errorf("%w: POST %s has no row accepting %v", errProvisioningRows, pattern, classes)
 		}
 	}
 	return nil
+}
+
+func containsAll(have, want []string) bool {
+	for _, class := range want {
+		if !slices.Contains(have, class) {
+			return false
+		}
+	}
+	return true
 }

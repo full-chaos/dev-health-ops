@@ -24,7 +24,7 @@ func TestRetiredAnchorEvidenceMatchesGitHistory(t *testing.T) {
 func checkRetiredEvidenceAgainstHistory(t *testing.T) {
 	root := testRoot(t)
 	git := func(args ...string) (string, error) {
-		out, err := exec.Command("git", append([]string{"-C", root}, args...)...).Output()
+		out, err := exec.Command("git", append([]string{"-c", "maintenance.auto=false", "-c", "gc.auto=0", "-C", root}, args...)...).Output()
 		return string(out), err
 	}
 	if out, err := git("rev-parse", "--is-shallow-repository"); err != nil || strings.TrimSpace(out) != "false" {

@@ -185,24 +185,24 @@ func (s *SessionIssueWorkload) authorize(bearer string) (issueCaller, string, er
 	return issueCaller{workload: &principal, jti: claims.TokenID}, "", nil
 }
 
-// issueCaller authorizes the issue route's bearer. On a refusal it has already
-// answered, and ok is false.
-func (h compatHandlers) issueCaller(w http.ResponseWriter, r *http.Request, bearer string) (issueCaller, bool) {
+// issueCallerFor authorizes the bearer of op's route (session issue or state).
+// On a refusal it has already answered, and ok is false.
+func (h compatHandlers) issueCallerFor(w http.ResponseWriter, r *http.Request, bearer, op string) (issueCaller, bool) {
 	ctx := r.Context()
 	class, reason := classifyIssueBearer(bearer)
 	switch class {
 	case issueClassCompat:
 		if h.ServiceCredentials == nil {
-			h.rec.logger.WarnContext(ctx, "session issue refused: service credentials are off")
+			h.rec.logger.WarnContext(ctx, "session issue refused: service credentials are off", "operation", op)
 			break
 		}
 		credential, refused, err := h.ServiceCredentials.Check(ctx, contracts.NewSecretString(bearer))
 		if err != nil {
-			h.rec.refuse(w, r, opSessionIssue, unavailable(reasonStoreUnavailable), err)
+			h.rec.refuse(w, r, op, unavailable(reasonStoreUnavailable), err)
 			return issueCaller{}, false
 		}
 		if refused != "" {
-			h.rec.logger.WarnContext(ctx, "session issue refused: service credential", "refusal", string(refused))
+			h.rec.logger.WarnContext(ctx, "session issue refused: service credential", "refusal", string(refused), "operation", op)
 			break
 		}
 		h.rec.compatUses.Add(ctx, 1, metric.WithAttributes(attribute.String("class", compatClass)))
@@ -210,18 +210,18 @@ func (h compatHandlers) issueCaller(w http.ResponseWriter, r *http.Request, bear
 	case issueClassWorkload:
 		caller, why, err := h.IssueWorkload.authorize(bearer)
 		if err != nil {
-			h.rec.refuse(w, r, opSessionIssue, unavailable(reasonDependency), err)
+			h.rec.refuse(w, r, op, unavailable(reasonDependency), err)
 			return issueCaller{}, false
 		}
 		if why != "" {
-			h.rec.logger.WarnContext(ctx, "session issue refused: workload token", "refusal", why)
+			h.rec.logger.WarnContext(ctx, "session issue refused: workload token", "refusal", why, "operation", op)
 			break
 		}
 		return caller, true
 	default:
-		h.rec.logger.WarnContext(ctx, "session issue refused: bearer", "refusal", reason)
+		h.rec.logger.WarnContext(ctx, "session issue refused: bearer", "refusal", reason, "operation", op)
 	}
-	h.rec.refuse(w, r, opSessionIssue, unauthorized(reasonInvalidCredentials), nil)
+	h.rec.refuse(w, r, op, unauthorized(reasonInvalidCredentials), nil)
 	return issueCaller{}, false
 }
 
@@ -266,4 +266,9 @@ func peekAudienceAndSubject(payload []byte) (aud, sub string, ok bool) {
 		return "", "", false
 	}
 	return aud, sub, seen["aud"] && seen["sub"]
+}
+
+// issueCaller is issueCallerFor on the session issue route's operation.
+func (h compatHandlers) issueCaller(w http.ResponseWriter, r *http.Request, bearer string) (issueCaller, bool) {
+	return h.issueCallerFor(w, r, bearer, opSessionIssue)
 }

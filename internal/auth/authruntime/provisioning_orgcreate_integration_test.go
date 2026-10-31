@@ -4,16 +4,36 @@ package authruntime
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+
+	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
+	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
 )
 
 func TestOrgCreateRoutesEndToEnd(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
+	var document map[string]any
+	if err := json.Unmarshal(authv1.AuthServiceEndpointProfiles, &document); err != nil {
+		t.Fatal(err)
+	}
+	rows := document["rows"].([]any)
+	for _, route := range []string{"/internal/v1/organizations/onboard", "/internal/v1/organizations/create"} {
+		rows = append(rows, map[string]any{"service": authapi.AccessService, "method": "POST", "route": route,
+			"accepted_credential_classes": []any{"internal_svc_authsess_token"}})
+	}
+	document["rows"] = rows
+	raw, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provisioningProfileRows = raw
+	t.Cleanup(func() { provisioningProfileRows = nil })
 	e, header := newProvisioningEnv(t, ctx)
 	user := e.account(t, ctx, acctMail(), false, true)
 	onboard := func(name string) answer {

@@ -374,12 +374,19 @@ func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !guardRefused && !result.Reason.Success() {
-		if result.Reason == session.ReasonPrincipalDeactivated && legacy != nil && legacy.OrganizationID != nil {
-			// The store refused a go-api refresh token of a deactivated principal and revoked its family in its
-			// own transaction: go-api's deactivated row (refresh.go:265) follows in a transaction of its own.
-			row := refreshRefusal{description: "Token refresh failed: user deactivated", message: textDisabled, withUser: true}
-			if !h.writeRefusalAlone(w, r, legacy.PrincipalID, *legacy.OrganizationID, row) {
-				return
+		if result.Reason == session.ReasonPrincipalDeactivated {
+			// go-api's deactivated row (refresh.go:265), in a transaction of its own: for a go-api refresh token the
+			// store revoked its family in its own transaction; for an auth-service credential the store refused
+			// under the session lock and changed nothing, naming the locked session's user and organization.
+			principal, org := result.Session.PrincipalID, result.Session.OrganizationID
+			if legacy != nil {
+				principal, org = legacy.PrincipalID, legacy.OrganizationID
+			}
+			if org != nil {
+				row := refreshRefusal{description: "Token refresh failed: user deactivated", message: textDisabled, withUser: true}
+				if !h.writeRefusalAlone(w, r, principal, *org, row) {
+					return
+				}
 			}
 		}
 		h.refuseCompat(w, r, opCompatRefresh, http.StatusUnauthorized, string(result.Reason), compatRefreshMessage(result.Reason))

@@ -417,7 +417,10 @@ func (s *Store) exchange(ctx context.Context, credential contracts.SecretString,
 			case locked.capExpired:
 				result.Reason = ReasonSessionExpired
 			case locked.principalDisabled:
-				result.Reason = ReasonPrincipalDeactivated
+				// The locked session names the principal and organization of the
+				// refusal, for go-api's deactivated row (compat refresh); nothing is
+				// written here and no credential is returned.
+				result = Result{Reason: ReasonPrincipalDeactivated, Issued: Issued{Session: locked.Record}}
 			case locked.LegacyTokenVersion == nil:
 				s.logger.WarnContext(ctx, "refresh refused: session has no token_version pin",
 					"session_id", sessionID, "reason_code", string(ReasonRevisionStale))

@@ -398,7 +398,11 @@ func configureWith(
 	if err != nil {
 		return nil, dependencyFailure(ctx, logger, "api_auth_proxy", "api_auth_proxy_config_invalid", err)
 	}
-	deps, depComponents, err := buildDeps(ctx, cfg, registry, logger, authProxy)
+	acrProjectScope, err := ParseACRAccessProjectScope(envsecrets.ProcessLookup)
+	if err != nil {
+		return nil, dependencyFailure(ctx, logger, "api_acr_project_scope", "api_acr_project_scope_config_invalid", err)
+	}
+	deps, depComponents, err := buildDeps(ctx, cfg, registry, logger, authProxy, acrProjectScope)
 	if err != nil {
 		return nil, err
 	}
@@ -412,15 +416,15 @@ func configureWith(
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_platform_roles_owned", "api_platform_roles_owned_config_invalid", err)
 	}
-	deps.SessionIssuer, err = sessionIssuer(authProxy, envsecrets.ProcessLookup)
+	provisioningCred, sessionCred, err := newCredentials(authProxy, envsecrets.ProcessLookup)
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_workload_credential", "api_workload_credential_config_invalid", err)
+	}
+	deps.SessionIssuer, err = sessionIssuer(authProxy, envsecrets.ProcessLookup, sessionCred)
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_session_issue", "api_session_issue_config_invalid", err)
-	}
-	provisioningCred, err := newProvisioningCredential(authProxy, envsecrets.ProcessLookup)
-	if err != nil {
-		closeComponents(depComponents)
-		return nil, dependencyFailure(ctx, logger, "api_org_provisioning", "api_org_provisioning_config_invalid", err)
 	}
 	orgClient, err := orgLifecycleClient(authProxy, envsecrets.ProcessLookup, provisioningCred)
 	if err != nil {
@@ -445,7 +449,9 @@ func configureWith(
 		}
 		deps.Auth, deps.Guard, deps.AuthSchema = protected.auth, protected.guard, protected.authSchema
 		deps.Verifier, deps.Signer = protected.verifier, protected.signer
-		scope = []func(http.Handler) http.Handler{protected.scope.Principal, protected.scope.OrgScope, protected.scope.Impersonation}
+		// ReadOnce first: the org scope and the route's guard read the token
+		// org's membership once per request.
+		scope = []func(http.Handler) http.Handler{protected.auth.ReadOnce, protected.scope.Principal, protected.scope.OrgScope, protected.scope.Impersonation}
 	}
 	var accessKeys authverify.KeySource
 	deps.AccessVerify, accessKeys, err = buildAccessVerify(envsecrets.ProcessLookup, deps.Auth, logger)
@@ -593,9 +599,16 @@ func InternalRoutes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		if states, ok := deps.SessionIssuer.(sessionissue.StateReader); ok {
 			sessions = states
 		}
-		access = acr.NewPostgresAccessStore(deps.Pool,
+		store := acr.NewPostgresAccessStore(deps.Pool,
 			policy.PGStore{Pool: deps.Pool, AuthSchema: deps.AuthSchema, PlatformRolesOwned: deps.PlatformRolesOwned},
 			acr.ClickHouseRepositoryInventory{Conn: deps.ClickHouse}, sessions)
+		// project_scope (CHAOS-12224) only with ACR_ACCESS_PROJECT_SCOPE on: an
+		// acr that does not know the field refuses every answer that carries it.
+		if deps.ACRAccessProjectScope {
+			store.Projects = acr.ClickHouseProjectInventory{Conn: deps.ClickHouse}
+			logger.Info("acr principal access: project_scope on", "env", EnvACRAccessProjectScope)
+		}
+		access = store
 	}
 	counters, err := limitStore(deps)
 	if err != nil {

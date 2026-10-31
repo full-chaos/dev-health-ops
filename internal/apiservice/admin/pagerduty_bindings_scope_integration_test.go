@@ -34,7 +34,7 @@ func TestPagerDutyBindingOrganizationScope(t *testing.T) {
 		GoOnly: true,
 		Root:   root,
 		JWTKey: jwtKey,
-		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
+		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {
 				t.Helper()
@@ -68,7 +68,7 @@ VALUES ($1, $2, $3, 'pagerduty', 'service', 'src-no-credential', 'src-no-credent
 			return map[string]map[string]any{
 				"admin": {"user_id": adminID.String(), "email": "pd-scope-admin@example.com", "org_id": orgMain.String(), "role": "admin"},
 			}
-		},
+		}),
 	})
 	base, pool := startGoServer(t, ctx, venue, jwtKey)
 	headers := map[string]string{"Authorization": "Bearer " + venue.Tokens["admin"]}

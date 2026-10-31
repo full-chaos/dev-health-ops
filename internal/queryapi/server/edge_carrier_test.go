@@ -70,6 +70,11 @@ func (f *fakeEdgeStore) Membership(_ context.Context, userID, orgID uuid.UUID) (
 	return "admin", true, nil
 }
 
+func (f *fakeEdgeStore) OrgMembership(ctx context.Context, user, org uuid.UUID) (string, bool, bool, error) {
+	role, member, err := f.Membership(ctx, user, org)
+	return role, member, true, err
+}
+
 func (f *fakeEdgeStore) ActiveImpersonation(_ context.Context, adminID uuid.UUID) (*policy.Impersonation, error) {
 	if f.errSession != nil {
 		return nil, f.errSession

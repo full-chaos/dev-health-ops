@@ -19,6 +19,7 @@ lifecycle: active
 - [Disaster recovery](disaster-recovery.md)
 - [Auth sessions flip and rollback](auth-sessions-flip-and-rollback.md)
 - [Auth users-owned flip and rollback](auth-users-owned-flip-and-rollback.md)
+- [Auth platform roles flip and rollback](auth-platform-roles-flip-and-rollback.md)
 - [Auth-service scrape check and alert import](auth-service-scrape-and-alerts.md)
 - [Auth users flip-back grants](auth-users-flip-back-grants.md)
 - [Workload bootstrap credential](auth-workload-bootstrap-credential.md)

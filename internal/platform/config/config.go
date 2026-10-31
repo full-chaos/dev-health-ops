@@ -1566,6 +1566,12 @@ type ComponentSpec struct {
 	// or migrate's own), has no such ambiguity and stays in the sweep.
 	DBKeyShared bool
 	Scheme      string
+	// SecureKey, when the spec names one, is the optional TLS switch of the
+	// component form: "true" adds secure=true to the assembled DSN, "false"
+	// or unset leaves the DSN exactly as without the key, any other value is
+	// refused. ClickHouse Cloud's native port needs TLS, and the component
+	// form is the one that carries a password with reserved characters.
+	SecureKey string
 }
 
 // componentKeys returns every env var name this spec's component form can
@@ -1706,6 +1712,7 @@ var (
 		HostKey: "DEV_HEALTH_CH_HOST", PortKey: "DEV_HEALTH_CH_PORT", DefaultPort: "9000",
 		UserKey: "DEV_HEALTH_CH_USER", PasswordKey: "DEV_HEALTH_CH_PASSWORD",
 		DBKey: "DEV_HEALTH_CH_DB", DefaultDB: "default", Scheme: "clickhouse",
+		SecureKey: "DEV_HEALTH_CH_SECURE",
 	}
 	// APIClickHouseSpec is the dho api Service's own ClickHouse component
 	// form (CHAOS-6310), the ClickHouse analog of APIDatabaseSpec: a
@@ -1769,10 +1776,17 @@ func ResolveDSNFromComponents(lookup secrets.LookupEnv, spec ComponentSpec) (bui
 	if password.Configured() && !user.Configured() {
 		return secrets.Value{}, true, fmt.Errorf("%s is set without %s", spec.PasswordKey, spec.UserKey)
 	}
+	secure, secureErr := componentSecure(lookup, spec)
+	if secureErr != nil {
+		return secrets.Value{}, true, secureErr
+	}
 	target := &url.URL{
 		Scheme: spec.Scheme,
 		Host:   net.JoinHostPort(host, port),
 		Path:   "/" + db,
+	}
+	if secure {
+		target.RawQuery = "secure=true"
 	}
 	if user.Configured() {
 		if password.Configured() {
@@ -1783,7 +1797,7 @@ func ResolveDSNFromComponents(lookup secrets.LookupEnv, spec ComponentSpec) (bui
 	}
 	assembled := target.String()
 	if driverErr := acceptedByDriver(spec, assembled, componentValues{
-		host: host, port: port, database: db, user: user, password: password,
+		host: host, port: port, database: db, user: user, password: password, secure: secure,
 	}); driverErr != nil {
 		return secrets.Value{}, true, driverErr
 	}
@@ -1795,6 +1809,28 @@ func ResolveDSNFromComponents(lookup secrets.LookupEnv, spec ComponentSpec) (bui
 type componentValues struct {
 	host, port, database string
 	user, password       secrets.Value
+	secure               bool
+}
+
+// componentSecure reads spec's optional TLS switch. Only the exact words
+// "true" and "false" are taken: the value decides whether the login goes
+// over TLS, so a typo must not quietly mean plaintext.
+func componentSecure(lookup secrets.LookupEnv, spec ComponentSpec) (bool, error) {
+	if spec.SecureKey == "" {
+		return false, nil
+	}
+	value, present := lookup(spec.SecureKey)
+	if !present || value == "" {
+		return false, nil
+	}
+	switch value {
+	case "true":
+		return true, nil
+	case "false":
+		return false, nil
+	}
+	// The value is not quoted: a misplaced credential must not reach the error.
+	return false, fmt.Errorf("%s must be true or false; the value set is neither (not printed)", spec.SecureKey)
 }
 
 // parsedDSN is what a driver made of an assembled DSN: the identity it
@@ -1802,6 +1838,7 @@ type componentValues struct {
 type parsedDSN struct {
 	host, port, user, password, database string
 	endpoints                            int
+	secure                               bool
 }
 
 // acceptedByDriver is the component form's only validation: hand the
@@ -1874,6 +1911,7 @@ func identicalAfterRoundTrip(spec ComponentSpec, configured componentValues, par
 		{key: spec.DBKey, want: configured.database, got: parsed.database, compare: true, quote: true},
 		{key: spec.UserKey, want: configured.user.Reveal(), got: parsed.user, compare: configured.user.Configured(), quote: true},
 		{key: spec.PasswordKey, want: configured.password.Reveal(), got: parsed.password, compare: configured.password.Configured(), quote: false},
+		{key: spec.SecureKey, want: strconv.FormatBool(configured.secure), got: strconv.FormatBool(parsed.secure), compare: spec.SecureKey != "", quote: true},
 	} {
 		if !field.compare || field.want == field.got {
 			continue
@@ -1940,6 +1978,7 @@ func parseWithDriver(scheme, dsn string) (parsedDSN, error) {
 			password:  options.Auth.Password,
 			database:  options.Auth.Database,
 			endpoints: len(options.Addr),
+			secure:    options.TLS != nil,
 		}
 		if parsed.endpoints == 1 {
 			// SplitHostPort also unwraps the brackets net.JoinHostPort

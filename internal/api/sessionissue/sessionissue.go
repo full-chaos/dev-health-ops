@@ -21,9 +21,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-go/workloadtoken"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/clientip"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 )
 
 // EnvToken is the go-api service credential auth-service checks on the route.
@@ -156,12 +158,18 @@ type Issuer interface {
 	Issue(ctx context.Context, r *http.Request, req Request) (Pair, error)
 }
 
+// WorkloadAudience is the audience of the workload token auth-service accepts on its session issue and session state routes.
+const WorkloadAudience = "auth-service"
+
 // Client calls the issue route of one auth-service, and its session state
-// route (State).
+// route (State). It presents either the session credential (token, set by New)
+// or the go-api workload token (workload set, see NewWorkload); bearer is the
+// one place that chooses.
 type Client struct {
 	endpoint      string
 	stateEndpoint string
 	token         string
+	workload      *workloadtoken.Client
 	http          *http.Client
 }
 
@@ -199,6 +207,46 @@ func New(base *url.URL, token string, timeout time.Duration) (*Client, error) {
 	}}, nil
 }
 
+// NewWorkload builds a Client for base (AUTH_PROXY_URL's origin) that presents
+// the workload token of workload (audience WorkloadAudience). No token is held:
+// Issue and State ask the workload client for one on every call (it is cached,
+// and one exchange serves every call of its lifetime), so a call with no usable token
+// fails as ErrUnavailable with nothing sent. There is no session credential to
+// fall back to. The token is set here, not by the workload client's own
+// transport, because that transport drops every header but a fixed few and
+// the end user's X-Forwarded-For must reach auth-service. The client uses the
+// shared outbound transport (no proxy from the environment) and follows no
+// redirect.
+func NewWorkload(base *url.URL, workload *workloadtoken.Client, timeout time.Duration) (*Client, error) {
+	if base == nil {
+		return nil, errors.New("sessionissue: no auth-service URL")
+	}
+	if workload == nil {
+		return nil, errors.New("sessionissue: no workload token client")
+	}
+	if timeout <= 0 {
+		timeout = defaultTimeout
+	}
+	endpoint := url.URL{Scheme: base.Scheme, Host: base.Host, Path: Path}
+	stateEndpoint := url.URL{Scheme: base.Scheme, Host: base.Host, Path: PathState}
+	client := httpguard.NoRedirects(&http.Client{Transport: httpguard.SharedTransport(), Timeout: timeout})
+	return &Client{endpoint: endpoint.String(), stateEndpoint: stateEndpoint.String(), workload: workload, http: client}, nil
+}
+
+// bearer is the credential of one call: the session credential, or the workload token asked of the workload client
+// (cached there; one exchange serves every call of its lifetime). A workload token that cannot be had fails the call as
+// ErrUnavailable before anything is sent; there is no fallback to a session credential.
+func (c *Client) bearer(ctx context.Context) (string, error) {
+	if c.workload == nil {
+		return c.token, nil
+	}
+	token, err := c.workload.Token(ctx, WorkloadAudience)
+	if err != nil {
+		return "", fmt.Errorf("%w: workload token: %w", ErrUnavailable, err)
+	}
+	return token, nil
+}
+
 type issueBody struct {
 	PrincipalID          string   `json:"principal_id"`
 	OrganizationID       *string  `json:"organization_id"`
@@ -233,7 +281,11 @@ func (c *Client) Issue(ctx context.Context, r *http.Request, req Request) (Pair,
 	if err != nil {
 		return Pair{}, fmt.Errorf("%w: building the request: %w", ErrUnavailable, err)
 	}
-	out.Header.Set("Authorization", "Bearer "+c.token)
+	bearer, err := c.bearer(ctx)
+	if err != nil {
+		return Pair{}, err
+	}
+	out.Header.Set("Authorization", "Bearer "+bearer)
 	out.Header.Set("Content-Type", "application/json")
 	out.Header.Set("Accept", "application/json")
 	out.Header.Set("User-Agent", r.UserAgent())

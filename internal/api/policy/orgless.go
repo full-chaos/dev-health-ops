@@ -1,6 +1,9 @@
 package policy
 
-import "path"
+import (
+	"path"
+	"slices"
+)
 
 // orglessRoutes are the only method and path pairs a signed-in caller with no
 // organization may reach on a guarded route (D6145): onboarding, invite
@@ -25,4 +28,14 @@ var orglessRoutes = map[string]bool{
 // resolves to.
 func OrglessMayReach(method, requestPath string) bool {
 	return orglessRoutes[method+" "+path.Clean(requestPath)]
+}
+
+// OrglessRouteKeys are the org-less "METHOD /path" pairs, sorted.
+func OrglessRouteKeys() []string {
+	keys := make([]string, 0, len(orglessRoutes))
+	for key := range orglessRoutes {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	return keys
 }

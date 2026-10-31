@@ -87,10 +87,38 @@ func rowsAcceptFor(raw []byte, patterns, classes []string) error {
 			}
 		}
 		if !found {
-			return fmt.Errorf("%w: POST %s has no row accepting %v", errProvisioningRows, pattern, classes)
+			return &ProvisioningRowError{Route: "POST " + pattern, Classes: slices.Clone(classes)}
 		}
 	}
 	return nil
+}
+
+// ProvisioningRowError is the rows gate's refusal for one route: the route (method
+// and pattern) and the credential classes its endpoint-profile row must list.
+// It names no value. auth-service's start log reads DependencyReason and
+// DependencyAttrs, so a short document is diagnosed from the log alone.
+type ProvisioningRowError struct {
+	Route   string
+	Classes []string
+}
+
+// ProvisioningRowReason is the start-log reason of a ProvisioningRowError.
+const ProvisioningRowReason = "auth_provisioning_profile_row_missing"
+
+func (e *ProvisioningRowError) Error() string {
+	return fmt.Sprintf("%v: %s has no row accepting %v", errProvisioningRows, e.Route, e.Classes)
+}
+
+func (e *ProvisioningRowError) Unwrap() error { return errProvisioningRows }
+
+// DependencyReason is the bounded start-log reason.
+func (e *ProvisioningRowError) DependencyReason() string { return ProvisioningRowReason }
+
+// DependencyAttrs names the route and the classes for the start log.
+func (e *ProvisioningRowError) DependencyAttrs() []any {
+	// required_classes, not credential_classes: the log redacts every key with a
+	// protected word (credential, token, ...), and these are class names only.
+	return []any{"route", e.Route, "required_classes", slices.Clone(e.Classes)}
 }
 
 func containsAll(have, want []string) bool {

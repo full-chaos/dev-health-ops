@@ -45,7 +45,7 @@ func TestLLMSettingsUndecryptableAfterKeyRotation(t *testing.T) {
 		GoOnly: true,
 		Root:   root,
 		JWTKey: jwtKey,
-		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
+		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {
 				t.Helper()
@@ -64,7 +64,7 @@ VALUES ($1, 'llmrotation-admin@example.com', true, true, false, 0, now(), now())
 				tokens[slug] = map[string]any{"user_id": adminUserID.String(), "email": "llmrotation-admin@example.com", "org_id": org.String(), "role": "admin"}
 			}
 			return tokens
-		},
+		}),
 	})
 	withKey := func(key string) adminDepsExtra {
 		return func(deps *apiservice.Deps) {

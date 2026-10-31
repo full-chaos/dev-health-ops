@@ -43,7 +43,7 @@ func TestRetentionRoutesVenueOracle(t *testing.T) {
 		Golden: golden,
 		Root:   root,
 		JWTKey: jwtKey,
-		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
+		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {
 				t.Helper()
@@ -125,7 +125,7 @@ VALUES ($1, $2, $3, 'team', 'r', '{}'::json, '{}'::json, 'success', now() - ($4 
 				"member": {"user_id": memberEnt.String(), "email": "ret-memberent@example.com", "org_id": orgEnterprise.String(), "role": "member"},
 				"fail":   admin2(adminFail, orgFail, "ret-adminfail@example.com"),
 			}
-		},
+		}),
 	})
 
 	auth := func(name string) map[string]string {

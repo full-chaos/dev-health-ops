@@ -377,7 +377,7 @@ func runPagerDutyServicesOracle(t *testing.T, mode, digest string) {
 		Root:      root,
 		JWTKey:    jwtKey,
 		PythonEnv: pythonEnv,
-		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
+		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {
 				t.Helper()
@@ -452,7 +452,7 @@ VALUES ($1, 'pagerduty', 'oa-corrupt', 'garbage-not-fernet', 1, now(), now(), 'b
 				"member": {"user_id": memberID.String(), "email": "pd-svc-member@example.com", "org_id": orgs["main"].String(), "role": "member"},
 				"super":  {"user_id": superID.String(), "email": "pd-svc-super@example.com", "is_superuser": true},
 			}
-		},
+		}),
 	})
 
 	auth := func(name string) map[string]string {

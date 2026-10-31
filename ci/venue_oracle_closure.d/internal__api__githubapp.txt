@@ -106,6 +106,7 @@ internal/platform/timeoutclass
 internal/platform/tracing
 internal/platform/version
 internal/platform/workersignals
+internal/projectinventory
 internal/projectmembership
 internal/providerfamilycontract
 internal/providerfoundation

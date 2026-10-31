@@ -75,7 +75,7 @@ func TestPagerDutyWebhookBindingsVenueOracle(t *testing.T) {
 		Root:      root,
 		JWTKey:    jwtKey,
 		PythonEnv: []string{"SETTINGS_ENCRYPTION_KEY=" + pagerDutyBindingsVenueEncryptionKey},
-		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
+		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {
 				t.Helper()
@@ -184,7 +184,7 @@ VALUES ($1, $2, $3, $4, $5, 'v1:seed-not-decrypted', 'v1', $6, now(), now(), $7:
 				"member":       {"user_id": memberID.String(), "email": "pd-bind-member@example.com", "org_id": orgs["main"].String(), "role": "member"},
 				"super":        {"user_id": superID.String(), "email": "pd-bind-super@example.com", "is_superuser": true},
 			}
-		},
+		}),
 	})
 
 	jsonAuth := func(name string) map[string]string {

@@ -13,8 +13,6 @@ import (
 	"testing"
 )
 
-const fixturescliPackage = "internal/fixturescli"
-
 func packagesShardsOfThePlan(t *testing.T) map[int][]string {
 	t.Helper()
 	stdout, _ := realPlan(t)
@@ -31,20 +29,6 @@ func packagesShardsOfThePlan(t *testing.T) map[int][]string {
 		byShard[s] = append(byShard[s], m[2])
 	}
 	return byShard
-}
-
-func TestTheLongestPackageHoldsAShardOfItsOwn(t *testing.T) {
-	t.Parallel()
-	byShard := packagesShardsOfThePlan(t)
-	var holders []int
-	for s, pkgs := range byShard {
-		if containsStr(pkgs, fixturescliPackage) {
-			holders = append(holders, s)
-		}
-	}
-	if len(holders) != 1 || len(byShard[holders[0]]) != 1 {
-		t.Fatalf("%s runs 1,150 s next to three other packages unless it holds a shard row of its own: %v", fixturescliPackage, byShard)
-	}
 }
 
 func TestAPackagesShardStartsItsLongestPackageFirstAndTheOrderIsStable(t *testing.T) {

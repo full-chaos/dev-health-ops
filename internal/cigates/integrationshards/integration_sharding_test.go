@@ -752,7 +752,7 @@ func sameSet(a, b map[string]bool) bool {
 var discoveryFunctions = []string{
 	"die", "check_listed_test_file", "scan_listed_go_tests", "scan_go_test_paths", "gotestfuncs_bin", "go_run_name_ok", "go_test_name_ok",
 	"integration_test_files", "split_plain_test_files", "split_package_hook", "discover_integration_tagged_tests",
-	"run_integration_packages", "discover_daily_tests",
+	"run_integration_packages", "warn_integration_weight_drift", "discover_daily_tests",
 }
 
 // discoveryHarness runs body in bash with the discovery functions of ci/check_go.sh. With files, ROOT is a temporary
@@ -787,7 +787,7 @@ func discoveryHarness(t *testing.T, files map[string]string, tool, body string) 
 		}
 	}
 	var b strings.Builder
-	b.WriteString("set -euo pipefail\nROOT=" + strconv.Quote(dir) + "\nGO_ENV_OFF=(env -u GOFLAGS -u GOEXPERIMENT)\nINTEGRATION_TEST_ENV=()\n")
+	b.WriteString("set -euo pipefail\nROOT=" + strconv.Quote(dir) + "\nGO_ENV_OFF=(env -u GOFLAGS -u GOEXPERIMENT)\nINTEGRATION_TEST_ENV=()\ndeclare -A INTEGRATION_SHARD_WEIGHTS=()\n")
 	b.WriteString("declare -A DAILY_INTEGRATION_TEST_NAMES=() DAILY_TEST_CLASS=()\ndeclare -a DAILY_TEST_NAMES=()\n")
 	for _, name := range discoveryFunctions {
 		if m := regexp.MustCompile(`(?ms)^` + name + `\(\) \{\n.*?^\}\n`).FindString(src); m != "" {

@@ -107,6 +107,11 @@ func (s *probeStore) Membership(_ context.Context, userID, orgID uuid.UUID) (str
 	return role, ok, nil
 }
 
+func (s *probeStore) OrgMembership(ctx context.Context, user, org uuid.UUID) (string, bool, bool, error) {
+	role, member, err := s.Membership(ctx, user, org)
+	return role, member, true, err
+}
+
 func (s *probeStore) ActiveImpersonation(_ context.Context, adminID uuid.UUID) (*policy.Impersonation, error) {
 	return s.imperson[adminID], nil
 }

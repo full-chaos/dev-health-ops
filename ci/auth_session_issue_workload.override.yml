@@ -1,0 +1,122 @@
+# Proof-only override: go-api presents its workload token to auth-service on Compose. It overlays
+# ci/auth_compose_proof.override.yml and ci/auth_webproof_compose.override.yml (the proxy flags are ON only in proofs).
+# compose.yml and the chart stay as they are.
+#
+# Compose has no Kubernetes: auth-service mounts the exchange with AUTH_WORKLOAD_BOOTSTRAP alone. AUTH_WORKLOAD_EXCHANGE
+# stays unset, because it requires the TokenReview settings. The issuer is a signed claim: it must be https, and nothing dials it.
+#
+# Order, run by the caller with --profile auth (auth-workload-bootstrap is not a depends_on of go-api: a later `up` would
+# run it again, and bootstrap-create refuses a workload with a live credential):
+#   1. run --rm auth-workload-bootstrap            seeds the registry, writes the credential to the volume (0600, uid 65532)
+#   2. read auth.workloads.principal_id of api, export AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT=prn_<base64url of the 16 bytes>
+#   3. up go-api auth-service
+# Profile auth-probe adds a probe of the exchange and of the routes that take the token (ci/auth_workload_probe, a fixed
+# relative bind: no variable stands in the way of any other compose command).
+x-auth-migrate-job: &auth-migrate-job
+  image: ${DEV_HEALTH_GO_AUTH_MIGRATE_IMAGE:-ghcr.io/full-chaos/dev-health-go-auth-migrate:local}
+  profiles: [auth]
+  networks: [auth_plane]
+  restart: "no"
+  read_only: true
+  user: "65532:65532"
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  tmpfs: [/tmp]
+  environment:
+    AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${POSTGRES_USER:-postgres} password='${POSTGRES_PASSWORD:-postgres}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
+    AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
+    AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
+    AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}
+
+services:
+  # A new named volume is root-owned; the writer runs as uid 65532.
+  auth-workload-volume:
+    image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+    profiles: [auth]
+    network_mode: none
+    restart: "no"
+    read_only: true
+    user: "0:0"
+    cap_drop: [ALL]
+    cap_add: [CHOWN]
+    security_opt: [no-new-privileges:true]
+    entrypoint: ["/bin/sh", "-eu", "-c"]
+    command: ["chmod 0700 /run/workload && chown 65532:65532 /run/workload"]
+    volumes:
+      - workload_bootstrap:/run/workload
+
+  auth-workload-seed:
+    <<: *auth-migrate-job
+    command: ["workloads", "seed", "-apply"]
+    depends_on:
+      auth-grants:
+        condition: service_completed_successfully
+
+  auth-workload-bootstrap:
+    <<: *auth-migrate-job
+    command: ["workloads", "bootstrap-create", "-workload", "api", "-out", "/run/workload/api.bootstrap", "-apply"]
+    volumes:
+      - workload_bootstrap:/run/workload
+    depends_on:
+      auth-workload-volume:
+        condition: service_completed_successfully
+      auth-workload-seed:
+        condition: service_completed_successfully
+
+  auth-service:
+    environment:
+      AUTH_TOKEN_ISSUER_URL: ${AUTH_WORKLOAD_ISSUER:-https://auth.workload-proof.example}
+      AUTH_WORKLOAD_BOOTSTRAP: "true"
+      AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT: ${AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT:-}
+      AUTH_MEMBERSHIP_ROUTES: "true"
+      AUTH_INVITE_TOKEN_SECRET: ${AUTH_INVITE_TOKEN_SECRET:?AUTH_INVITE_TOKEN_SECRET must be set}
+      AUTH_INVITE_TOKEN_SECRET_PREVIOUS: ${AUTH_INVITE_TOKEN_SECRET_PREVIOUS:?AUTH_INVITE_TOKEN_SECRET_PREVIOUS must be set}
+      # AUTH_USERS_OWNED: auth-service serves the credential routes, and they need these mail settings. The console provider
+      # delivers no mail: this overlay proves the token path, not sign-up.
+      EMAIL_FROM_ADDRESS: proof@example.test
+      EMAIL_PROVIDER: console
+      AUTH_MAIL_ALLOW_CONSOLE: "true"
+      APP_BASE_URL: https://app.example.test
+
+  go-api:
+    environment:
+      EMAIL_PROVIDER: console
+      # AUTH_USERS_OWNED on needs it: go-api refuses to start otherwise.
+      AUTH_PROXY_CREDENTIALS: "true"
+      AUTH_PROXY_ORG_PROVISIONING: "true"
+      # workload, or empty for go-api's session credential on the provisioning routes (an empty value is the unset default).
+      AUTH_PROVISIONING_CREDENTIAL: ${AUTH_PROVISIONING_CREDENTIAL:-}
+      # workload, or empty for go-api's session credential on the session issue route (an empty value is the unset default).
+      AUTH_SESSION_ISSUE_CREDENTIAL: ${AUTH_SESSION_ISSUE_CREDENTIAL:-}
+      AUTH_WORKLOAD_BOOTSTRAP_FILE: /run/workload/api.bootstrap
+      AUTH_WORKLOAD_ISSUER: ${AUTH_WORKLOAD_ISSUER:-https://auth.workload-proof.example}
+    volumes:
+      - type: volume
+        source: workload_bootstrap
+        target: /run/workload
+        read_only: true
+
+  # Presents the credential through stdin and files, never argv: it prints status lines only.
+  auth-workload-probe:
+    image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+    profiles: [auth-probe]
+    networks: [auth_plane]
+    restart: "no"
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    entrypoint: ["/bin/sh", "-eu", "/probe/auth-workload-probe.sh"]
+    volumes:
+      - type: volume
+        source: workload_bootstrap
+        target: /run/workload
+        read_only: true
+      - type: bind
+        source: ./ci/auth_workload_probe
+        target: /probe
+        read_only: true
+
+volumes:
+  workload_bootstrap:

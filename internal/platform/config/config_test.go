@@ -1054,6 +1054,9 @@ func TestComponentKeysMatchesSpecFieldsMinusTheSharedDBException(t *testing.T) {
 			if !spec.DBKeyShared {
 				want = append(want, spec.DBKey)
 			}
+			if spec.SecureKey != "" {
+				want = append(want, spec.SecureKey)
+			}
 			got := spec.componentKeys()
 			gotSet := make(map[string]bool, len(got))
 			for _, k := range got {

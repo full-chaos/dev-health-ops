@@ -57,6 +57,9 @@ the release-wide policy admits every pod in the namespace).
 {{- if eq .name "QUERY_API_MCP_BOUNDARY" }}
 {{- fail "queryApi.extraEnv must not set QUERY_API_MCP_BOUNDARY: the chart sets the MCP boundary marker only beside the MCP NetworkPolicy (queryApi.mcp.enabled); a marker from extraEnv would defeat the process's refusal to start an MCP address that arrived without the boundary" }}
 {{- end }}
+{{- if eq (upper (trim (toString .name))) "AUTH_PLATFORM_ROLES_OWNED" }}
+{{- fail "queryApi.extraEnv must not set AUTH_PLATFORM_ROLES_OWNED: authService.platformRolesOwned renders it, for auth-service, go-api and the auth Jobs too" }}
+{{- end }}
 {{- if eq (upper (trim (toString .name))) "AUTH_ACCESS_TOKEN_ISSUER" }}
 {{- fail "queryApi.extraEnv must not set AUTH_ACCESS_TOKEN_ISSUER: authService.accessToken.issuerURL renders it, for auth-service and go-api too" }}
 {{- end }}
@@ -176,6 +179,10 @@ spec:
             {{- if (eq (include "dev-health.authOn" (dict "flag" "sessions" "context" .)) "true") }}
             {{- /* go-api's AUTH_PROXY_SESSIONS: the query-api role's posture requires the auth session read while it is on. */}}
             - name: AUTH_PROXY_SESSIONS
+              value: "true"
+            {{- end }}
+            {{- if eq (include "dev-health.platformRolesOwned" .) "true" }}
+            - name: AUTH_PLATFORM_ROLES_OWNED
               value: "true"
             {{- end }}
             {{- if .Values.queryApi.internal.enabled }}

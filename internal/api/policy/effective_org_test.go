@@ -95,6 +95,7 @@ func TestNonImpersonatingOrgResolution(t *testing.T) {
 
 	memberStore := newStore()
 	memberStore.users[userID] = UserState{IsActive: true}
+	memberStore.roles[ownOrgKey] = "admin"
 	adminToken := sign(t, claims(func(c jwt.MapClaims) { c["role"] = "admin" }))
 	got := serve(effectiveOrgStack(t, memberStore, Admin), http.MethodGet, "/x", map[string]string{"Authorization": "Bearer " + adminToken, "X-Org-Id": memberOrg})
 	if got.status != 200 || got.body != "acting="+ownOrg {
@@ -129,6 +130,7 @@ func TestIdentityRoutesKeepTheOwnOrg(t *testing.T) {
 func TestNonSuperuserCannotImpersonate(t *testing.T) {
 	store := newStore()
 	store.users[userID] = UserState{IsActive: true}
+	store.roles[ownOrgKey] = "admin"
 	store.sessions[userID] = &Impersonation{AdminUserID: userID, TargetUserID: targetUserID, TargetOrgID: targetOrgID}
 	forged := sign(t, claims(func(c jwt.MapClaims) { superClaims(c); c["role"] = "admin" }))
 	headers := map[string]string{"Authorization": "Bearer " + forged}

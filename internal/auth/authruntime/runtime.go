@@ -286,8 +286,8 @@ func Execute(parent context.Context, args []string, lookup secrets.LookupEnv, st
 	if err != nil {
 		logger.ErrorContext(
 			ctx, "configure runtime dependencies",
-			"error_category", "dependency_configuration_failed",
-			"reason", reasonOf(err),
+			append([]any{"error_category", "dependency_configuration_failed",
+				"reason", reasonOf(err)}, detailsOf(err)...)...,
 		)
 		return 1
 	}
@@ -642,6 +642,18 @@ func reasonOf(err error) string {
 		return coded.DependencyReason()
 	}
 	return "dependency_configuration_failed"
+}
+
+// detailsOf is the start log's detail for a dependency-construction failure
+// whose error names it: DependencyAttrs is slog key/value pairs of names and
+// counts only (a route pattern, credential class names), never a value, a DSN or
+// a secret. Any other failure adds nothing.
+func detailsOf(err error) []any {
+	var detailed interface{ DependencyAttrs() []any }
+	if errors.As(err, &detailed) {
+		return detailed.DependencyAttrs()
+	}
+	return nil
 }
 
 // optionValue backs every declared flag. It stores the RAW string rather than

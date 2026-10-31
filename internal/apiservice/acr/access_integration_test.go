@@ -32,6 +32,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/servicecred"
+	"github.com/full-chaos/dev-health-ops/internal/projectinventory"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
@@ -539,3 +540,67 @@ func TestClickHouseRepositoryInventoryEqualsTheCatalog(t *testing.T) {
 }
 
 func dimensionRef(d model.DimensionInput) *model.DimensionInput { return &d }
+
+// TestClickHouseProjectInventoryReadsTheOrgsProjects runs the project
+// inventory read (projectinventory over go-api's native connection) on a
+// migrated projects table: the org's (provider, id) pairs as stored, one per
+// project however many row versions the ReplacingMergeTree holds, sorted; no
+// row with an empty provider or id, no other org's project; an org with none
+// is an empty list; an inventory above the limit is refused, never truncated.
+func TestClickHouseProjectInventoryReadsTheOrgsProjects(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeCtx); err != nil {
+			t.Errorf("terminate ClickHouse: %v", err)
+		}
+	})
+	chschema.Apply(ctx, t, instance)
+	conn, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(instance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	org, other, empty, big := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	insert := func(orgID uuid.UUID, provider, id, name string, at time.Time) {
+		t.Helper()
+		if err := conn.Exec(ctx, `INSERT INTO projects (id, org_id, provider, name, updated_at) VALUES (?, ?, ?, ?, ?)`,
+			id, orgID.String(), provider, name, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Now().UTC()
+	insert(org, "linear", "P-2", "Payments", now.Add(-time.Hour))
+	insert(org, "linear", "P-2", "Payments (renamed)", now)
+	insert(org, "jira", "10001", "Platform", now)
+	insert(org, "Linear", "p-1", "Case kept", now)
+	insert(org, "", "orphan", "No provider", now)
+	insert(org, "jira", "", "No id", now)
+	insert(other, "linear", "P-9", "Another org", now)
+	for i := 0; i <= projectinventory.Limit; i++ {
+		insert(big, "jira", fmt.Sprintf("%04d", i), "Many", now)
+	}
+	inventory := ClickHouseProjectInventory{Conn: conn}
+
+	got, err := inventory.Projects(ctx, org)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []projectinventory.Item{{Provider: "Linear", ID: "p-1"}, {Provider: "jira", ID: "10001"}, {Provider: "linear", ID: "P-2"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("projects = %+v, want %+v", got, want)
+	}
+	if got, err := inventory.Projects(ctx, empty); err != nil || got == nil || len(got) != 0 {
+		t.Fatalf("an org with no projects: %#v, %v; want a non-nil empty list", got, err)
+	}
+	if got, err := inventory.Projects(ctx, big); !errors.Is(err, projectinventory.ErrOverLimit) || got != nil {
+		t.Fatalf("an org above the limit: %d projects, %v; want ErrOverLimit", len(got), err)
+	}
+}

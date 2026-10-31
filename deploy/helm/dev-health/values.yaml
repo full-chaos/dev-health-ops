@@ -195,6 +195,11 @@ authService:
   #             barrier (up-owned) first. Rollback runs the other way: goApi, barrier down-auth, then phase 3.
   #    Runbook: docs/operate/runbooks/auth-users-owned-flip-and-rollback.md.
   usersOwnedStage: ""
+  # -- Platform roles owned: renders AUTH_PLATFORM_ROLES_OWNED=true on auth-service, go-api, query-api and the
+  #    auth-migrate, auth-grants and auth-backfill Jobs, so platform authority moves from public.users.is_superuser
+  #    to auth.platform_role_assignments. Refused unless users are owned (phase 4, usersOwnedStage owned).
+  #    Runbook: docs/operate/runbooks/auth-platform-roles-flip-and-rollback.md.
+  platformRolesOwned: false
   # -- Two replicas keep the service up through one pod loss or node drain
   #    (N+1, docs/operate/plan/auth-service-capacity.md); a PodDisruptionBudget
   #    (minAvailable 1) renders only while this is 2 or more.
@@ -1238,19 +1243,19 @@ migrations:
     # -- CHAOS-10754: run the migrate Job's ClickHouse step as the Cloud
     #    `default` login from its own Secret, not as the runtime login in the
     #    shared Secret's CLICKHOUSE_NATIVE_URI (which cannot run migration
-    #    DDL on ClickHouse Cloud). OFF = today's render, unchanged. ON adds
-    #    three secretKeyRef env entries and sets CLICKHOUSE_URI to
-    #    clickhouse://$(user):$(password)@$(host):<port>/<database>?secure=true,
-    #    expanded by Kubernetes in the Pod; the Secret is operator-created and
-    #    this chart never creates it. Requires migrations.hook.extraEnv and
-    #    migrations.hook.secretData to leave CLICKHOUSE_URI and
-    #    CLICKHOUSE_URI_FILE unset. An external migrate Secret
+    #    DDL on ClickHouse Cloud). OFF = today's render, unchanged. ON sets
+    #    dho's component form (CHAOS-11995): DEV_HEALTH_CH_HOST, _USER and
+    #    _PASSWORD from secretKeyRefs, DEV_HEALTH_CH_PORT and _DB from the
+    #    values below, DEV_HEALTH_CH_SECURE=true (TLS), and CLICKHOUSE_URI
+    #    blank. dho assembles and percent-encodes the DSN, so the password may
+    #    hold any character. The Secret is operator-created and this chart
+    #    never creates it. Requires migrations.hook.extraEnv and
+    #    migrations.hook.secretData to leave CLICKHOUSE_URI, its _FILE form
+    #    and every DEV_HEALTH_CH_* key unset. An external migrate Secret
     #    (migrations.hook.externalSecretName) may keep a CLICKHOUSE_URI key
-    #    (the env entry wins) but must NOT carry CLICKHOUSE_URI_FILE: dho
-    #    refuses both forms together and the chart cannot see inside it.
-    #    CHARSET REQUIREMENT: the expansion does no percent-encoding, so the
-    #    password and user must not contain any of  @ : / ? # %  (URL-safe
-    #    characters only; a hex password is safe). Check before enabling.
+    #    (the blank env entry wins) but must NOT carry CLICKHOUSE_URI_FILE or
+    #    a DEV_HEALTH_CH_USER_FILE / _PASSWORD_FILE key: dho refuses both
+    #    forms together and the chart cannot see inside it.
     clickhouseCloud:
       enabled: false
       secretName: ""

@@ -52,11 +52,12 @@ type sessionCredential struct {
 // workloadAsk is one switch that is on and one selector that chose the workload credential.
 type workloadAsk struct{ flag, selector string }
 
-// selectsWorkload reads selector when flag is on: false for unset and session_compat, true for workload, and a
-// start-up error naming the selector for any other value.
+// selectsWorkload reads selector when flag is on: false for unset, empty and session_compat, true for workload, and a
+// start-up error naming the selector for any other value. The value is compared as it is, never trimmed: a padded or
+// whitespace-only value is not one of the three.
 func selectsWorkload(lookup func(string) (string, bool), flag, selector string) (bool, error) {
 	value, _ := lookup(selector)
-	switch strings.TrimSpace(value) {
+	switch value {
 	case "", credentialSessionCompat:
 		return false, nil
 	case credentialWorkload:

@@ -80,3 +80,42 @@ func TestPlanReadsBareNameIntoAPureModuleFunction(t *testing.T) {
 		})
 	}
 }
+
+// A name written into a strings.Builder or bytes.Buffer lives on in the builder: only its String or Bytes result carries
+// it on. Any other method of the builder, or a builder handed on, keeps the name a read.
+func TestPlanReadsBareNameThroughABuilder(t *testing.T) {
+	classes := "docs\tdocs/**\nREADME.md\tREADME.md\n"
+	head := "package p\n\nimport (\n\t\"bytes\"\n\t\"os\"\n\t\"path/filepath\"\n\t\"strings\"\n\t\"testing\"\n)\n\n" +
+		"var _ = bytes.NewBuffer\nvar _ = os.Getenv\nvar _ = filepath.Join\nvar _ = strings.ToLower\nvar _ = testing.Short\n\n" +
+		"func repoRoot() string { return \"..\" }\n\n"
+	cases := []struct {
+		name, body string
+		keep       bool
+	}{
+		{"builder_string_compared", "func ident(name string) string {\n\tvar out strings.Builder\n\tfor _, r := range strings.ToLower(name) {\n\t\tout.WriteRune(r)\n\t}\n\tif out.Len() == 0 {\n\t\treturn \"x\"\n\t}\n\treturn out.String()\n}\n\nvar _ = ident(\"README.md\") == \"\"\n", false},
+		{"builder_string_read", "func ident(name string) string {\n\tvar out strings.Builder\n\tout.WriteString(name)\n\treturn out.String()\n}\n\nvar _, _ = os.ReadFile(filepath.Join(repoRoot(), ident(\"README.md\")))\n", true},
+		{"buffer_bytes_read", "func ident(name string) []byte {\n\tvar out bytes.Buffer\n\tout.WriteString(name)\n\treturn out.Bytes()\n}\n\nvar _, _ = os.ReadFile(filepath.Join(repoRoot(), string(ident(\"README.md\"))))\n", true},
+		{"builder_read_from", "func ident(name string) string {\n\tvar out strings.Builder\n\tout.WriteString(name)\n\t_, _ = out.WriteTo(nil)\n\treturn \"\"\n}\n\nvar _ = ident(\"README.md\")\n", true},
+		{"builder_handed_on", "func fill(b *strings.Builder) { _, _ = os.ReadFile(b.String()) }\n\nfunc ident(name string) {\n\tvar out strings.Builder\n\tout.WriteString(name)\n\tfill(&out)\n}\n\nvar _ = ident\n\nfunc use() { ident(\"README.md\") }\n", true},
+		{"unknown_type_with_the_same_methods", "type w struct{}\n\nfunc (w) WriteString(string) {}\n\nfunc ident(out othermod2) {\n\tout.WriteString(\"README.md\")\n}\n", true},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			body := c.body
+			if strings.Contains(body, "othermod2") {
+				body = strings.ReplaceAll(body, "othermod2", "othermod.W")
+				body = strings.Replace(head, "\t\"testing\"\n)", "\t\"testing\"\n\n\t\"example.com/othermod\"\n)", 1) + body
+			} else {
+				body = head + body
+			}
+			res := planReads(t, readsFixture(t, map[string]string{"p/p_test.go": body, "README.md": "r\n",
+				"internal/cigates/affected/classes.tsv": classes}))
+			out := res.stdout + res.stderr
+			if got := strings.Contains(out, "p\ttest\tREADME.md"); got != c.keep {
+				t.Fatalf("a README.md reader row is %v, want %v:\n%s", got, c.keep, out)
+			}
+		})
+	}
+}

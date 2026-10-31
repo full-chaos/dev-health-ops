@@ -149,7 +149,10 @@ With `AUTH_MEMBERSHIP_ROUTES=true`, auth-service serves the membership, invite a
 | `--check` | | Report the lineage position without issuing DDL. |
 | `--version` | | Print build metadata. |
 
-The run is bounded to five minutes. See
+The run is bounded to five minutes. Each migration's lock wait is bounded to 5 s
+(`lock_timeout`, set on that migration's transaction only), with 3 attempts and
+a 5 s pause between them; when every attempt times out, the run fails and logs a
+warning per attempt. See
 [database, roles and migrations](../../contribute/architecture/auth-control-plane-database.md).
 
 ## Secret handling

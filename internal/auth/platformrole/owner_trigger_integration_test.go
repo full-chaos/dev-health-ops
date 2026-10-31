@@ -4,6 +4,7 @@ package platformrole
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -28,11 +29,47 @@ func (e *env) runtimeExec(t *testing.T, ctx context.Context, pool *pgxpool.Pool,
 	})
 }
 
+// ownerGuardText is the owner trigger's own message. A privilege denial is also
+// SQLSTATE 42501, so only this text proves the trigger refused the write.
+const ownerGuardText = "platform_owner rows are written only by auth-migrate"
+
 func mustRefuseOwner(t *testing.T, what string, err error) {
 	t.Helper()
-	if err == nil || !strings.Contains(err.Error(), "platform_owner") {
-		t.Errorf("%s as the runtime role: %v, want the platform_owner guard's refusal", what, err)
+	if err == nil || !strings.Contains(err.Error(), ownerGuardText) {
+		t.Errorf("%s: %v, want the owner trigger's refusal (%q)", what, err, ownerGuardText)
 	}
+}
+
+// updaterPool is a pool for a scratch role that holds SELECT and UPDATE on the
+// assignments (not the owner), so an UPDATE it makes is refused by the trigger
+// or not at all, never by a missing grant.
+func (e *env) updaterPool(t *testing.T, ctx context.Context) *pgxpool.Pool {
+	t.Helper()
+	role := "pr_updater_" + strings.ReplaceAll(uuid.NewString()[:12], "-", "")
+	const password = "owner-trigger-test-only-not-a-credential"
+	for _, stmt := range []string{
+		fmt.Sprintf(`CREATE ROLE %q LOGIN PASSWORD '%s'`, role, password),
+		fmt.Sprintf(`GRANT USAGE ON SCHEMA auth TO %q`, role),
+		fmt.Sprintf(`GRANT SELECT, UPDATE ON auth.platform_role_assignments TO %q`, role),
+	} {
+		if _, err := e.admin.Exec(ctx, stmt); err != nil {
+			t.Fatalf("scratch role: %v", err)
+		}
+	}
+	cfg := e.admin.Config().Copy()
+	cfg.ConnConfig.User = role
+	cfg.ConnConfig.Password = password
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		pool.Close()
+		cleanup := context.Background()
+		_, _ = e.admin.Exec(cleanup, fmt.Sprintf(`DROP OWNED BY %q`, role))
+		_, _ = e.admin.Exec(cleanup, fmt.Sprintf(`DROP ROLE %q`, role))
+	})
+	return pool
 }
 
 // The runtime role cannot insert, update or delete a platform_owner row, even
@@ -42,6 +79,7 @@ func TestRuntimeRoleCannotWriteAnOwnerRow(t *testing.T) {
 	ctx := ctxT(t)
 	target := e.user(t, ctx, true, false)
 	other := e.user(t, ctx, true, false)
+	granter := e.user(t, ctx, true, true)
 	mustRefuseOwner(t, "INSERT", e.runtimeExec(t, ctx, e.runtime,
 		`INSERT INTO auth.platform_role_assignments (principal_id, role_key) VALUES ($1, 'platform_owner')`, target))
 	if n := e.ownerRows(t, target); n != 0 {
@@ -52,10 +90,13 @@ func TestRuntimeRoleCannotWriteAnOwnerRow(t *testing.T) {
 	}
 	mustRefuseOwner(t, "DELETE", e.runtimeExec(t, ctx, e.runtime,
 		`DELETE FROM auth.platform_role_assignments WHERE principal_id = $1 AND role_key = 'platform_owner'`, other))
-	if err := e.runtimeExec(t, ctx, e.runtime,
-		`UPDATE auth.platform_role_assignments SET role_key = 'platform_admin' WHERE principal_id = $1 AND role_key = 'platform_owner'`, other); err == nil {
-		t.Error("UPDATE of an owner row as the runtime role was accepted")
-	}
+	updater := e.updaterPool(t, ctx)
+	mustRefuseOwner(t, "UPDATE of an owner row as a role with UPDATE", e.runtimeExec(t, ctx, updater,
+		`UPDATE auth.platform_role_assignments SET expires_at = now() + interval '1 day' WHERE principal_id = $1 AND role_key = 'platform_owner'`, other))
+	mustRefuseOwner(t, "UPDATE that renames an owner row away", e.runtimeExec(t, ctx, updater,
+		`UPDATE auth.platform_role_assignments SET role_key = 'platform_admin' WHERE principal_id = $1 AND role_key = 'platform_owner'`, other))
+	mustRefuseOwner(t, "UPDATE that renames a row to owner", e.runtimeExec(t, ctx, updater,
+		`UPDATE auth.platform_role_assignments SET role_key = 'platform_owner' WHERE principal_id = $1 AND role_key = 'platform_admin'`, granter))
 	if n := e.ownerRows(t, other); n != 1 {
 		t.Fatalf("owner rows of the held owner after the refused writes = %d, want 1", n)
 	}

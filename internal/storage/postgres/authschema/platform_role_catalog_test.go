@@ -84,6 +84,7 @@ func TestPlatformOwnerMigrationWidensTheRoleCheck(t *testing.T) {
 			"FOR EACH ROW EXECUTE FUNCTION platform_role_assignments_owner_guard()",
 			"current_user",
 			"relowner",
+			"platform_owner rows are written only by auth-migrate",
 			"'platform_owner'",
 		} {
 			if !strings.Contains(m.SQL, want) {

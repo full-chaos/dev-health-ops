@@ -692,6 +692,12 @@ func (c *fileCtx) pathKind(e ast.Expr, sc *scope) pathInfo {
 			for _, a := range x.Args[1:] {
 				v, ok := c.foldString(a, sc)
 				if !ok {
+					// a package variable assigned once, to a constant
+					if k := c.pathKind(a, sc); k.kind == kConst {
+						v, ok = k.value, true
+					}
+				}
+				if !ok {
 					if root.kind == kBottom {
 						return root
 					}

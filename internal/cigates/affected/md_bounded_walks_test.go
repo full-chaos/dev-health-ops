@@ -104,6 +104,9 @@ func TestPlanReadsInlinesHelperResults(t *testing.T) {
 		"single_return_helper_names_the_exact_file": {"package contracts\n\nimport (\n\t\"os\"\n\t\"path/filepath\"\n)\n\nconst subpath = \"contracts\"\n\nfunc repoRoot() string { return \"..\" }\n\n" +
 			"func Dir(root string) string { return filepath.Join(root, subpath) }\n\nfunc read() ([]byte, error) {\n\treturn os.ReadFile(filepath.Join(Dir(repoRoot()), \"README.md\"))\n}\n",
 			[]string{"contracts\ttest\tcontracts\n"}, []string{"**/README.md"}},
+		"package_variable_holding_a_constant_part": {"package contracts\n\nimport (\n\t\"os\"\n\t\"path/filepath\"\n)\n\nvar sub = filepath.Join(\"contracts\", \"v1\")\n\nfunc repoRoot() string { return \"..\" }\n\n" +
+			"func read() ([]byte, error) {\n\treturn os.ReadFile(filepath.Join(repoRoot(), sub, \"README.md\"))\n}\n",
+			[]string{"contracts\ttest\tcontracts\n"}, []string{"**/README.md"}},
 		"single_return_helper_of_an_unbound_root": {"package contracts\n\nimport (\n\t\"os\"\n\t\"path/filepath\"\n)\n\nfunc Dir(root string) string { return filepath.Join(root, \"contracts\") }\n\n" +
 			"func read() ([]byte, error) {\n\treturn os.ReadFile(filepath.Join(Dir(os.Getenv(\"R\")), \"README.md\"))\n}\n",
 			[]string{"contracts\tcontracts_test.go\t**/README.md\n"}, nil},

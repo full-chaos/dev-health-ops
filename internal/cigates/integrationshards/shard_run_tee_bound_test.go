@@ -26,8 +26,18 @@ func TestAShardRunDoesNotWaitForAProcessHoldingGoTestStdout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, rc := range []int{0, 1} {
-		t.Run("go test exits "+strconv.Itoa(rc), func(t *testing.T) {
+	for _, c := range []struct {
+		rc          int
+		wait        string
+		secs        int
+		wantWarning bool
+	}{
+		{0, "2", 2, true}, {1, "2", 2, true},
+		// Zero-padded values are decimal, not octal: 08 and 09 are no arithmetic error, 010 is ten seconds, not eight.
+		{0, "08", 8, true}, {0, "09", 9, true}, {0, "010", 10, true}, {0, "0", 0, false}, {0, "00", 0, false},
+	} {
+		rc := c.rc
+		t.Run("go test exits "+strconv.Itoa(rc)+", wait "+c.wait, func(t *testing.T) {
 			t.Parallel()
 			bin, state := t.TempDir(), t.TempDir()
 			holderPID := filepath.Join(state, "holder.pid")
@@ -62,7 +72,7 @@ func TestAShardRunDoesNotWaitForAProcessHoldingGoTestStdout(t *testing.T) {
 			cmd.Dir = root
 			cmd.Env = inheritedEnv(deadlineEnvNames,
 				"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "FAKE_HOLDER_PID="+holderPID, "FAKE_RC="+strconv.Itoa(rc),
-				"DEV_HEALTH_GO_TEE_WAIT_SECS=2", "TMPDIR="+t.TempDir(),
+				"DEV_HEALTH_GO_TEE_WAIT_SECS="+c.wait, "TMPDIR="+t.TempDir(),
 				"DEV_HEALTH_GO_INTEGRATION_SHARD_MANIFEST="+shardManifestDir(root),
 				"DEV_HEALTH_GO_PROVIDER_TEST_SHARD_MANIFEST="+filepath.Join(root, "ci", "go_providersync_test_shards.tsv"))
 			cmd.Stdout, cmd.Stderr = out, out
@@ -84,11 +94,17 @@ func TestAShardRunDoesNotWaitForAProcessHoldingGoTestStdout(t *testing.T) {
 				t.Errorf("exit %d, want go test's %d", code, rc)
 			}
 			want := fmt.Sprintf("%s%s measured %ds, weight %ds (+100%%)", driftWarning, heavy, weights[heavy]*2, weights[heavy])
-			if strings.Count(string(text), driftWarning) != 1 || !strings.Contains(string(text), want+"\n") {
+			if c.wantWarning && (strings.Count(string(text), driftWarning) != 1 || !strings.Contains(string(text), want+"\n")) {
 				t.Errorf("want exactly the warning %q from the lines already read", want)
 			}
-			if !strings.Contains(string(text), "partial log") {
-				t.Errorf("no line says the drift check read a partial log")
+			if n := strings.Count(string(text), "partial log"); n != 1 {
+				t.Errorf("%d partial-log line(s), want exactly one", n)
+			}
+			if !strings.Contains(string(text), fmt.Sprintf("stdout %ds after go test ended", c.secs)) {
+				t.Errorf("the partial-log line does not name %d decimal seconds", c.secs)
+			}
+			if strings.Contains(string(text), "too great") || strings.Contains(string(text), "syntax error") {
+				t.Errorf("an arithmetic error reached the output for wait %s", c.wait)
 			}
 		})
 	}

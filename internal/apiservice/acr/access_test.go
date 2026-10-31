@@ -595,8 +595,11 @@ func TestAccessStoreEntitlements(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got.AskDev == (key == "ask_dev") || got.AgentContextRuntime == (key == "agent_context_runtime") {
-				t.Fatalf("ask_dev=%v agent_context_runtime=%v with %s off", got.AskDev, got.AgentContextRuntime, key)
+			// ask_dev is its own decision; agent_context_runtime is ask_dev OR the
+			// legacy grant (CHAOS-3695), so with either one key off it stays on.
+			if got.AskDev == (key == "ask_dev") || !got.AgentContextRuntime {
+				t.Fatalf("ask_dev=%v agent_context_runtime=%v with %s off, want ask_dev=%v agent_context_runtime=true",
+					got.AskDev, got.AgentContextRuntime, key, key != "ask_dev")
 			}
 		})
 	}
@@ -723,5 +726,25 @@ func TestAccessStoreFailsClosedOnASessionStateFault(t *testing.T) {
 	f.reads.err["sessions"] = fmt.Errorf("%w: state route status 404", sessionissue.ErrUnavailable)
 	if _, err := f.read(t, accessUser, sessionRef(accessSession)); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("err = %v, want ErrUnavailable", err)
+	}
+}
+
+// CHAOS-3695 (chris 2026-08-10, "ACR = Ask Dev"): the access read's
+// agent_context_runtime is ask_dev OR the legacy agent_context_runtime grant,
+// so no org loses ACR while the legacy grants retire (CHAOS-12292), and an
+// org with ask_dev alone gains it. ask_dev itself is unchanged.
+func TestPrincipalAccessAgentContextRuntimeIsAskDevOrTheLegacyGrant(t *testing.T) {
+	for _, tc := range []struct{ askDev, legacy bool }{{false, false}, {true, false}, {false, true}, {true, true}} {
+		t.Run(fmt.Sprintf("ask_dev=%v agent_context_runtime=%v", tc.askDev, tc.legacy), func(t *testing.T) {
+			f := newAccessFixture()
+			f.features.allowed = map[string]bool{"ask_dev": tc.askDev, "agent_context_runtime": tc.legacy}
+			got, err := f.store().Access(context.Background(), AccessQuery{OrgID: accessOrg, UserID: accessUser})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.AskDev != tc.askDev || got.AgentContextRuntime != (tc.askDev || tc.legacy) {
+				t.Fatalf("ask_dev=%v agent_context_runtime=%v, want %v and %v", got.AskDev, got.AgentContextRuntime, tc.askDev, tc.askDev || tc.legacy)
+			}
+		})
 	}
 }

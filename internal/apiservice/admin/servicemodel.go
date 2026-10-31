@@ -27,6 +27,7 @@ import (
 const (
 	serviceModelFeature        = "acr_service_model"
 	serviceModelACRFeature     = "agent_context_runtime"
+	serviceModelAskDevFeature  = "ask_dev"
 	serviceModelMinTier        = "team"
 	serviceModelSource         = "self_service"
 	serviceModelMarkerSource   = "self_service_toggle"
@@ -142,6 +143,10 @@ func (h *handlers) loadServiceModelState(ctx context.Context, q serviceModelQuer
 	if err != nil {
 		return serviceModelState{}, &llmStepError{"load agent_context_runtime state", err}
 	}
+	askDev, err := licensing.LoadState(ctx, q, org.String(), serviceModelAskDevFeature, now)
+	if err != nil {
+		return serviceModelState{}, &llmStepError{"load ask_dev state", err}
+	}
 	enabled, err := llmorgsettings.EffectiveServiceModel(ctx, q, org.String(), licensing.Decide(serviceModelFeature, service))
 	if err != nil {
 		return serviceModelState{}, &llmStepError{"resolve effective acr_service_model", err}
@@ -160,9 +165,12 @@ func (h *handlers) loadServiceModelState(ctx context.Context, q serviceModelQuer
 		registered:  service.Registered,
 		tier:        tier,
 		tierAllowed: have >= want,
-		acrAllowed:  licensing.Decide(serviceModelACRFeature, acr).Allowed,
-		control:     control,
-		override:    overrideEnabled,
+		// CHAOS-3695 ("ACR = Ask Dev"): the ACR precondition is ask_dev OR the
+		// legacy agent_context_runtime grant (CHAOS-12292 retires the latter).
+		acrAllowed: licensing.Decide(serviceModelAskDevFeature, askDev).Allowed ||
+			licensing.Decide(serviceModelACRFeature, acr).Allowed,
+		control:  control,
+		override: overrideEnabled,
 	}, nil
 }
 

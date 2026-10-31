@@ -110,6 +110,13 @@ func (store PostgresEntitlementStore) Lookup(ctx context.Context, orgID string) 
 	if err != nil {
 		return Entitlement{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
+	// CHAOS-3695 (chris 2026-08-10, "ACR = Ask Dev"): the entitlement is ask_dev
+	// OR the legacy agent_context_runtime grant, so no org loses ACR while the
+	// legacy grants retire (CHAOS-12292). The wire field keeps its name.
+	askDev, err := decisionStore.Decide(ctx, parsedOrgID.String(), askDevFeatureKey)
+	if err != nil {
+		return Entitlement{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
 	serviceModel, err := decisionStore.Decide(ctx, parsedOrgID.String(), acrServiceModelFeatureKey)
 	if err != nil {
 		return Entitlement{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
@@ -122,7 +129,7 @@ func (store PostgresEntitlementStore) Lookup(ctx context.Context, orgID string) 
 	if err != nil {
 		return Entitlement{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
-	return Entitlement{OrgID: orgID, AgentContextRuntime: decision.Allowed, ACRServiceModel: serviceModelOn, PlatformModelFallback: fallback.Allowed}, nil
+	return Entitlement{OrgID: orgID, AgentContextRuntime: askDev.Allowed || decision.Allowed, ACRServiceModel: serviceModelOn, PlatformModelFallback: fallback.Allowed}, nil
 }
 
 // readyTimeout bounds the health route's ping, so an unreachable store is a

@@ -397,6 +397,10 @@ func TestRepositoryIsAResourceKindAndNeverAScope(t *testing.T) {
 			t.Errorf("%s was accepted", name)
 		}
 	}
+	allRepo := strings.Replace(okR, `"scope":"organization"`, `"scope":"repository"`, 1)
+	if _, err := Load([]byte(act("repository", "repository")), []byte(allRepo)); err == nil {
+		t.Error("a repository scope was accepted for an action and its role")
+	}
 	roleScope := strings.Replace(okR, `"scope":"organization"`, `"scope":"repository"`, 1)
 	if _, err := Load([]byte(act("organization", "organization")), []byte(roleScope)); err == nil {
 		t.Error("a repository role scope was accepted")

@@ -65,7 +65,9 @@ func startLogEntry(t *testing.T, env map[string]string) (map[string]any, string)
 // A missing provisioning row stops auth-service at start. The start failure
 // line must say which route and which credential classes the row lacks, so a
 // deploy that ships a short document is diagnosed from the log alone. It names
-// a route pattern and class names, never a value.
+// a route pattern and class names, never a value. The run is at
+// AUTH_SERVICE_LOG_LEVEL=warn: the line is an Error line and must survive any
+// level an operator sets.
 func TestAMissingProvisioningRowNamesTheRouteInTheStartLog(t *testing.T) {
 	mailEnv(t, smtpMail())
 	withoutProfileRow(t, authapi.PatternMembershipAdd)
@@ -74,8 +76,12 @@ func TestAMissingProvisioningRowNamesTheRouteInTheStartLog(t *testing.T) {
 		authconfig.EnvSigningKeyFile: "/nonexistent",
 		authconfig.EnvSigningKeyID:   "start-log-test",
 		authconfig.EnvUsersOwned:     "true",
+		authconfig.EnvLogLevel:       "warn",
 	}))
 	entry, logs := startLogEntry(t, env)
+	if entry["level"] != "ERROR" {
+		t.Fatalf("start log level=%v, want ERROR; log:\n%s", entry["level"], logs)
+	}
 	if entry["error_category"] != "dependency_configuration_failed" || entry["reason"] != "auth_provisioning_profile_row_missing" {
 		t.Fatalf("start log category=%v reason=%v, want dependency_configuration_failed and auth_provisioning_profile_row_missing; log:\n%s",
 			entry["error_category"], entry["reason"], logs)

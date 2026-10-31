@@ -123,3 +123,17 @@ func TestAssertionKeyVerbsNeedTheMigrationEndpoint(t *testing.T) {
 		}
 	}
 }
+
+func TestAssertionKeyLineIsMetadataOnly(t *testing.T) {
+	retire := time.Date(2026, 11, 1, 12, 0, 0, 0, time.FixedZone("x", 3600))
+	line := assertionKeyLine(workload.AssertionKey{Workload: "web", Issuer: "https://issuer.example", KID: "key-1",
+		Status: workload.AssertionKeyRetiring, RotatedAt: time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC), RetireAfter: &retire})
+	want := "workload=web key=00000000-0000-0000-0000-000000000000 issuer=https://issuer.example kid=key-1 status=retiring" +
+		" rotated_at=2026-10-31T12:00:00Z retire_after=2026-11-01T11:00:00Z"
+	if line != want {
+		t.Fatalf("line = %q, want %q", line, want)
+	}
+	if got := assertionKeyLine(workload.AssertionKey{Status: workload.AssertionKeyActive}); !strings.HasSuffix(got, "retire_after=-") {
+		t.Fatalf("an active key's line = %q", got)
+	}
+}

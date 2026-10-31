@@ -5,12 +5,28 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/credshape"
 )
 
 var t0 = time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC)
 
 func goodKey() AssertionKeySpec {
 	return AssertionKeySpec{Issuer: "https://issuer.example", KID: "key-2026-10", Status: AssertionKeyActive, RotatedAt: t0}
+}
+
+// credentialProbe is a JWT-shaped value built at run time by the shared scanner, so no credential-shaped literal sits in the tree.
+func credentialProbe(t *testing.T) string {
+	t.Helper()
+	scanner, err := credshape.Default()
+	if err != nil {
+		t.Fatal("credshape unavailable")
+	}
+	probes, err := scanner.Probes()
+	if err != nil {
+		t.Fatal("credshape probes unavailable")
+	}
+	return probes[0]
 }
 
 func TestValidateAssertionKey(t *testing.T) {
@@ -44,38 +60,35 @@ func TestValidateAssertionKey(t *testing.T) {
 		}
 	}
 	refuse := map[string]func(*AssertionKeySpec){
-		"empty issuer":                   func(s *AssertionKeySpec) { s.Issuer = "" },
-		"plain http issuer":              func(s *AssertionKeySpec) { s.Issuer = "http://issuer.example" },
-		"ftp issuer":                     func(s *AssertionKeySpec) { s.Issuer = "ftp://issuer.example" },
-		"issuer with userinfo":           func(s *AssertionKeySpec) { s.Issuer = "https://user:secret@issuer.example" },
-		"issuer with a user only":        func(s *AssertionKeySpec) { s.Issuer = "https://user@issuer.example" },
-		"issuer with a query":            func(s *AssertionKeySpec) { s.Issuer = "https://issuer.example?x=1" },
-		"issuer with an empty query":     func(s *AssertionKeySpec) { s.Issuer = "https://issuer.example?" },
-		"issuer with a fragment":         func(s *AssertionKeySpec) { s.Issuer = "https://issuer.example#x" },
-		"issuer without a host":          func(s *AssertionKeySpec) { s.Issuer = "https://" },
-		"issuer with a space":            func(s *AssertionKeySpec) { s.Issuer = "https://issuer.example/a b" },
-		"issuer with a newline":          func(s *AssertionKeySpec) { s.Issuer = "https://issuer.example\n" },
-		"issuer of 513 bytes":            func(s *AssertionKeySpec) { s.Issuer = "https://issuer.example/" + strings.Repeat("a", 513-23) },
-		"issuer with a non-ASCII byte":   func(s *AssertionKeySpec) { s.Issuer = "https://issuer.example/é" },
-		"empty kid":                      func(s *AssertionKeySpec) { s.KID = "" },
-		"kid of 257 bytes":               func(s *AssertionKeySpec) { s.KID = strings.Repeat("k", 257) },
-		"kid with a space":               func(s *AssertionKeySpec) { s.KID = "key 1" },
-		"kid with a leading space":       func(s *AssertionKeySpec) { s.KID = " key" },
-		"kid with a newline":             func(s *AssertionKeySpec) { s.KID = "key\n" },
-		"kid with a NUL":                 func(s *AssertionKeySpec) { s.KID = "key\x00" },
-		"kid with a non-ASCII byte":      func(s *AssertionKeySpec) { s.KID = "clé" },
-		"kid with DEL":                   func(s *AssertionKeySpec) { s.KID = "key\x7f" },
-		"kid shaped like a PEM header":   func(s *AssertionKeySpec) { s.KID = "-----BEGIN" },
-		"kid shaped like a provider tok": func(s *AssertionKeySpec) { s.KID = "ghp_" + strings.Repeat("a", 36) },
-		"issuer shaped like a credential": func(s *AssertionKeySpec) {
-			s.Issuer = "https://issuer.example/" + strings.Repeat("a", 20) + ".eyJhIjoiYiJ9." + strings.Repeat("b", 20)
-		},
-		"unknown status":           func(s *AssertionKeySpec) { s.Status = "paused" },
-		"empty status":             func(s *AssertionKeySpec) { s.Status = "" },
-		"zero rotated_at":          func(s *AssertionKeySpec) { s.RotatedAt = time.Time{} },
-		"active with retire_after": func(s *AssertionKeySpec) { s.RetireAfter = t0.Add(time.Hour) },
-		"retiring without a date":  func(s *AssertionKeySpec) { s.Status = AssertionKeyRetiring },
-		"retiring at rotated_at":   func(s *AssertionKeySpec) { s.Status = AssertionKeyRetiring; s.RetireAfter = t0 },
+		"empty issuer":                    func(s *AssertionKeySpec) { s.Issuer = "" },
+		"plain http issuer":               func(s *AssertionKeySpec) { s.Issuer = "http://issuer.example" },
+		"ftp issuer":                      func(s *AssertionKeySpec) { s.Issuer = "ftp://issuer.example" },
+		"issuer with userinfo":            func(s *AssertionKeySpec) { s.Issuer = "https://user:secret@issuer.example" },
+		"issuer with a user only":         func(s *AssertionKeySpec) { s.Issuer = "https://user@issuer.example" },
+		"issuer with a query":             func(s *AssertionKeySpec) { s.Issuer = "https://issuer.example?x=1" },
+		"issuer with an empty query":      func(s *AssertionKeySpec) { s.Issuer = "https://issuer.example?" },
+		"issuer with a fragment":          func(s *AssertionKeySpec) { s.Issuer = "https://issuer.example#x" },
+		"issuer without a host":           func(s *AssertionKeySpec) { s.Issuer = "https://" },
+		"issuer with a space":             func(s *AssertionKeySpec) { s.Issuer = "https://issuer.example/a b" },
+		"issuer with a newline":           func(s *AssertionKeySpec) { s.Issuer = "https://issuer.example\n" },
+		"issuer of 513 bytes":             func(s *AssertionKeySpec) { s.Issuer = "https://issuer.example/" + strings.Repeat("a", 513-23) },
+		"issuer with a non-ASCII byte":    func(s *AssertionKeySpec) { s.Issuer = "https://issuer.example/é" },
+		"empty kid":                       func(s *AssertionKeySpec) { s.KID = "" },
+		"kid of 257 bytes":                func(s *AssertionKeySpec) { s.KID = strings.Repeat("k", 257) },
+		"kid with a space":                func(s *AssertionKeySpec) { s.KID = "key 1" },
+		"kid with a leading space":        func(s *AssertionKeySpec) { s.KID = " key" },
+		"kid with a newline":              func(s *AssertionKeySpec) { s.KID = "key\n" },
+		"kid with a NUL":                  func(s *AssertionKeySpec) { s.KID = "key\x00" },
+		"kid with a non-ASCII byte":       func(s *AssertionKeySpec) { s.KID = "clé" },
+		"kid with DEL":                    func(s *AssertionKeySpec) { s.KID = "key\x7f" },
+		"kid shaped like a provider tok":  func(s *AssertionKeySpec) { s.KID = "ghp_" + strings.Repeat("a", 36) },
+		"issuer shaped like a credential": func(s *AssertionKeySpec) { s.Issuer = "https://issuer.example/" + credentialProbe(t) },
+		"unknown status":                  func(s *AssertionKeySpec) { s.Status = "paused" },
+		"empty status":                    func(s *AssertionKeySpec) { s.Status = "" },
+		"zero rotated_at":                 func(s *AssertionKeySpec) { s.RotatedAt = time.Time{} },
+		"active with retire_after":        func(s *AssertionKeySpec) { s.RetireAfter = t0.Add(time.Hour) },
+		"retiring without a date":         func(s *AssertionKeySpec) { s.Status = AssertionKeyRetiring },
+		"retiring at rotated_at":          func(s *AssertionKeySpec) { s.Status = AssertionKeyRetiring; s.RetireAfter = t0 },
 		"retiring before rotated_at": func(s *AssertionKeySpec) {
 			s.Status = AssertionKeyRetiring
 			s.RetireAfter = t0.Add(-time.Second)

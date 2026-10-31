@@ -21,8 +21,10 @@
 --   * retire_after is present exactly while the key is retiring and is after
 --     rotated_at.
 --   * A retired key never changes again (trigger): a rotation or rollback
---     cannot reactivate a retired kid, even from a writer inside audit.Commit
---     and even after a restore (restorefence treats retired as revoked).
+--     cannot reactivate a retired kid, even from a writer inside audit.Commit.
+--     Nothing reads the table at runtime today, so the restore fence lists it
+--     as not access-bearing; the tripwire there demands a section once a
+--     reader exists.
 --   * Identity columns (workload, issuer, kid, rotated_at) are immutable.
 -- The 24 h bound on an overlap is the verb's rule (it reads the active key's
 -- rotated_at), not a constraint: a constraint cannot see another row.

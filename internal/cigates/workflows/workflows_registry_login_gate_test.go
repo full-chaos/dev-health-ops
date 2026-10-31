@@ -180,7 +180,6 @@ var commandPositionLogins = []string{
 }
 
 var commandPositionCalls = []string{
-	"bash ci/lib/ghcr_login.sh",
 	"sh ci/lib/ghcr_login.sh",
 	"bash -x ci/lib/ghcr_login.sh",
 	"./ci/lib/ghcr_login.sh",
@@ -211,14 +210,14 @@ func TestRegistryLoginGateRefusesLoginsAtCommandPosition(t *testing.T) {
 		})
 		t.Run("script "+line, func(t *testing.T) {
 			tmp := registryLoginTree(t, root, map[string]string{"ci/extra_login.sh": line + "\n"})
-			expectViolation(t, registryLoginDefects(t, tmp, jobLoginCensus), "ci scripts with a registry login are")
+			expectViolation(t, registryLoginDefects(t, tmp, jobLoginCensus), "ci/extra_login.sh")
 		})
 	}
 	for _, line := range commandPositionCalls {
 		t.Run("workflow call "+line, func(t *testing.T) {
 			tmp := registryLoginTree(t, root, nil, plantJob(true, runStep(line)))
 			d := registryLoginDefects(t, tmp, jobLoginCensus)
-			expectViolation(t, d, "planted job planted step 1: run ")
+			expectViolation(t, d, "test.yml job planted step 1: run ")
 		})
 	}
 }

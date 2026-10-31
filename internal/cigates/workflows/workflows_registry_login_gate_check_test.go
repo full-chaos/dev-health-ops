@@ -45,74 +45,208 @@ var jobLoginCensus = map[jobKey]loginCount{
 }
 
 var (
-	loginTools   = setOf("docker", "podman", "buildah", "helm", "oras", "crane", "skopeo")
-	loginWrapper = setOf("sudo", "env", "command", "exec")
-	loginEnvWord = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
-	loginSplit   = regexp.MustCompile(`\|\||&&|\||;`)
-	loginNamed   = regexp.MustCompile(`ghcr_login\.sh`)
-	loginPinned  = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	loginTools    = setOf("docker", "podman", "buildah", "helm", "oras", "crane", "skopeo")
+	loginWrappers = setOf("sudo", "env", "command", "exec", "time", "nice", "nohup")
+	loginOptValue = map[string]map[string]bool{"sudo": setOf("-u", "-g"), "env": setOf("-u"), "exec": setOf("-a"), "nice": setOf("-n")}
+	loginReserved = setOf("if", "then", "else", "elif", "fi", "while", "until", "do", "done", "!")
+	loginShells   = setOf("bash", "sh", "dash", "zsh")
+	loginEnvWord  = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
+	loginPinned   = regexp.MustCompile(`^[0-9a-f]{40}$`)
 )
 
-func unquoteWord(w string) string { return strings.Trim(w, `"'`) }
+func isLoginScriptPath(w string) bool { return strings.HasSuffix(w, "ghcr_login.sh") }
 
-func shellSegments(text string) [][]string {
-	text = strings.ReplaceAll(shellCode(text), "\\\n", " ")
-	var out [][]string
-	for _, line := range strings.Split(text, "\n") {
-		for _, seg := range loginSplit.Split(line, -1) {
-			var words []string
-			for _, w := range strings.Fields(seg) {
-				words = append(words, unquoteWord(w))
+// matchClose returns the index just past the close that matches an open at s[i-1]: a ")" for "$(" (nested "$(" and quotes
+// counted) or the next backtick. An unclosed substitution returns len(s).
+func matchClose(s string, i int, backtick bool) (inner string, next int) {
+	depth := 1
+	for j := i; j < len(s); j++ {
+		switch c := s[j]; {
+		case backtick && c == '`':
+			return s[i:j], j + 1
+		case backtick && c == '\\':
+			j++
+		case backtick:
+		case c == '\'':
+			if k := strings.IndexByte(s[j+1:], '\''); k >= 0 {
+				j += k + 1
 			}
-			if len(words) > 0 {
-				out = append(out, words)
+		case c == '(':
+			depth++
+		case c == ')':
+			if depth--; depth == 0 {
+				return s[i:j], j + 1
 			}
 		}
 	}
+	return s[i:], len(s)
+}
+
+// shellSegments splits shell text into the word lists of its commands. Separators inside quotes do not split; $(...) and
+// backtick bodies become segments of their own; leading reserved words are stripped from each segment.
+func shellSegments(text string) [][]string {
+	s := strings.ReplaceAll(shellCode(text), "\\\n", " ")
+	var out [][]string
+	var words []string
+	var cur strings.Builder
+	haveWord := false
+	flushWord := func() {
+		if haveWord {
+			words = append(words, cur.String())
+		}
+		cur.Reset()
+		haveWord = false
+	}
+	flushSeg := func() {
+		flushWord()
+		for len(words) > 0 && loginReserved[words[0]] {
+			words = words[1:]
+		}
+		if len(words) > 0 {
+			out = append(out, words)
+		}
+		words = nil
+	}
+	sub := func(i int, backtick bool) int {
+		inner, next := matchClose(s, i, backtick)
+		out = append(out, shellSegments(inner)...)
+		return next
+	}
+	ownWord := func(i int) bool {
+		return cur.Len() == 0 && !haveWord && (i+1 >= len(s) || strings.ContainsRune(" \t\n;", rune(s[i+1])))
+	}
+	for i := 0; i < len(s); {
+		c := s[i]
+		switch {
+		case c == '\\' && i+1 < len(s):
+			cur.WriteByte(s[i+1])
+			haveWord = true
+			i += 2
+		case c == '\'':
+			haveWord = true
+			if k := strings.IndexByte(s[i+1:], '\''); k >= 0 {
+				cur.WriteString(s[i+1 : i+1+k])
+				i += k + 2
+			} else {
+				cur.WriteString(s[i+1:])
+				i = len(s)
+			}
+		case c == '"':
+			haveWord = true
+			i++
+			for i < len(s) && s[i] != '"' {
+				switch {
+				case s[i] == '\\' && i+1 < len(s):
+					cur.WriteByte(s[i+1])
+					i += 2
+				case s[i] == '$' && i+1 < len(s) && s[i+1] == '(':
+					i = sub(i+2, false)
+				case s[i] == '`':
+					i = sub(i+1, true)
+				default:
+					cur.WriteByte(s[i])
+					i++
+				}
+			}
+			i++
+		case c == '$' && i+1 < len(s) && s[i+1] == '(':
+			haveWord = true
+			i = sub(i+2, false)
+		case c == '`':
+			haveWord = true
+			i = sub(i+1, true)
+		case c == ' ' || c == '\t':
+			flushWord()
+			i++
+		case c == '\n' || c == ';' || c == '(' || c == ')':
+			flushSeg()
+			i++
+		case c == '&' || c == '|':
+			flushSeg()
+			i++
+			if i < len(s) && s[i] == c {
+				i++
+			}
+		case (c == '{' || c == '}') && ownWord(i):
+			flushSeg()
+			i++
+		default:
+			cur.WriteByte(c)
+			haveWord = true
+			i++
+		}
+	}
+	flushSeg()
 	return out
 }
 
-func hasLoginWord(words []string) bool {
-	tool := false
-	for _, w := range words {
-		if loginTools[w] {
-			tool = true
-		}
-		if tool && w == "login" {
-			return true
+// commandWord returns the index of the command word of a segment after env assignments, wrapper words and their options.
+func commandWord(words []string) int {
+	i := 0
+	for i < len(words) {
+		w := words[i]
+		switch {
+		case loginEnvWord.MatchString(w):
+			i++
+		case loginWrappers[w]:
+			i++
+			for i < len(words) && strings.HasPrefix(words[i], "-") {
+				opt := words[i]
+				i++
+				if loginOptValue[w][opt] && i < len(words) {
+					i++
+				}
+			}
+		default:
+			return i
 		}
 	}
-	return false
+	return i
 }
 
-// segmentLogin classifies one segment: "login" (a direct login), "indirect" (eval/source/. /sh -c holding a login or the
-// login script), or "".
+// segmentLogin classifies one segment: "login" (a direct login), "call" (a direct call of the login script), "indirect"
+// (eval, source, . or sh -c holding a login or a call of the script), or "".
 func segmentLogin(words []string) string {
-	i := 0
-	for i < len(words) && (loginEnvWord.MatchString(words[i]) || loginWrapper[words[i]]) {
-		i++
-	}
+	i := commandWord(words)
 	if i >= len(words) {
 		return ""
 	}
-	first := filepath.Base(words[i])
+	cmd := words[i]
+	base := filepath.Base(cmd)
 	rest := words[i+1:]
-	if loginTools[first] {
+	switch {
+	case loginTools[base]:
 		for _, w := range rest {
 			if w == "login" {
 				return "login"
 			}
 		}
-		return ""
-	}
-	indirect := first == "eval" || first == "source" || words[i] == "."
-	if first == "bash" || first == "sh" {
-		for _, w := range rest {
-			indirect = indirect || w == "-c" || (strings.HasPrefix(w, "-") && !strings.HasPrefix(w, "--") && strings.Contains(w, "c"))
+	case isLoginScriptPath(cmd):
+		return "call"
+	case loginShells[base]:
+		for j := 0; j < len(rest); j++ {
+			w := rest[j]
+			if !strings.HasPrefix(w, "-") {
+				if isLoginScriptPath(w) {
+					return "call"
+				}
+				break
+			}
+			if !strings.HasPrefix(w, "--") && strings.Contains(w, "c") && j+1 < len(rest) {
+				if len(shellLoginKinds(rest[j+1])) > 0 {
+					return "indirect"
+				}
+				break
+			}
 		}
-	}
-	if indirect && (hasLoginWord(words) || loginNamed.MatchString(strings.Join(words, " "))) {
-		return "indirect"
+	case cmd == "eval":
+		if len(shellLoginKinds(strings.Join(rest, " "))) > 0 {
+			return "indirect"
+		}
+	case cmd == "source" || cmd == ".":
+		if len(rest) > 0 && isLoginScriptPath(rest[0]) {
+			return "indirect"
+		}
 	}
 	return ""
 }
@@ -165,6 +299,9 @@ func registryLoginDefects(t *testing.T, root string, census map[jobKey]loginCoun
 	var withLogin []string
 	for _, s := range scripts {
 		for _, k := range shellLoginKinds(readFile(t, filepath.Join(root, s))) {
+			if k == "call" {
+				continue
+			}
 			if k == "indirect" {
 				out = append(out, fmt.Sprintf("%s: an indirect registry login (eval, source, . or sh -c holding a login or %s)", s, loginScript))
 			} else if len(withLogin) == 0 || withLogin[len(withLogin)-1] != s {
@@ -203,13 +340,15 @@ func registryLoginDefects(t *testing.T, root string, census map[jobKey]loginCoun
 				if run == "" {
 					continue
 				}
-				switch {
-				case strings.TrimSpace(run) == loginScriptRun:
+				if strings.TrimSpace(run) == loginScriptRun {
 					got.script++
-				case loginNamed.MatchString(shellCode(run)):
-					out = append(out, where+": run names "+loginScript+" in a form other than exactly `"+loginScriptRun+"`")
+					continue
 				}
 				for _, k := range shellLoginKinds(run) {
+					if k == "call" {
+						out = append(out, where+": run calls "+loginScript+" in a form other than exactly `"+loginScriptRun+"`")
+						continue
+					}
 					out = append(out, fmt.Sprintf("%s: run holds a %s registry login; logins go through docker/login-action or `%s` only", where, k, loginScriptRun))
 				}
 			}

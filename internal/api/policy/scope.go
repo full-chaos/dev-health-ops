@@ -174,7 +174,7 @@ func (s *Scope) OrgScope(next http.Handler) http.Handler {
 
 // mayUseOrg is OrgIdMiddleware's acceptance rule for a requested org.
 func (s *Scope) mayUseOrg(ctx context.Context, user *User, orgID string) (bool, error) {
-	if user.IsSuperuser || orgID == user.OrgID {
+	if user.Holds(ActionAdminOrgs) || orgID == user.OrgID {
 		return true, nil
 	}
 	return s.auth.IsMember(ctx, user.UserID, orgID)

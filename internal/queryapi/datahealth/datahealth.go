@@ -82,7 +82,7 @@ func RequireOperator(p Principal) error {
 	if !p.Present {
 		return &AccessError{Message: "Authentication required"}
 	}
-	if p.IsSuperuser {
+	if p.Holds(rule.ActionAdminStats) {
 		return nil
 	}
 	switch strings.ToLower(p.Role) {

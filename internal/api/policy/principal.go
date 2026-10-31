@@ -52,7 +52,7 @@ func (u *User) Holds(action string) bool {
 
 // IsAdmin is AuthenticatedUser.is_admin.
 func (u *User) IsAdmin() bool {
-	return u.Role == "owner" || u.Role == "admin" || u.IsSuperuser
+	return u.Role == "owner" || u.Role == "admin" || u.Holds(rule.ActionAdminOrgs)
 }
 
 // UserState is the users row authenticate_access_token reads.

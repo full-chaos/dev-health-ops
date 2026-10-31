@@ -154,7 +154,7 @@ func (h handlers) refresh(w http.ResponseWriter, r *http.Request) {
 			h.rec.refuse(w, r, opRefresh, unavailable(reasonStoreUnavailable), roleErr)
 			return
 		}
-		if !member && !user.IsSuperuser {
+		if !member && !user.Holds(actionAdminOrgs) {
 			// The membership the session was minted for is gone (D6507).
 			if _, revokeErr := h.Sessions.Revoke(ctx, record.ID, session.Actor{RequestID: requestid.Audit(ctx)}); revokeErr != nil {
 				h.rec.refuse(w, r, opRefresh, unavailable(reasonStoreUnavailable), revokeErr)

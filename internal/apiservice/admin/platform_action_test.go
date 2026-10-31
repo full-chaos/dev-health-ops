@@ -53,7 +53,10 @@ func actionCases(action string) []actionCase {
 // platformDB answers no membership and fails every other read, so a request
 // that reaches a list read answers 500 and one the guard refuses answers its
 // own status.
-type platformDB struct{ pgDB }
+type platformDB struct {
+	pgDB
+	reads *int
+}
 
 type noRow struct{}
 
@@ -70,15 +73,23 @@ func (noRow) Scan(dest ...any) error {
 }
 
 func (platformDB) QueryRow(context.Context, string, ...any) pgx.Row { return noRow{} }
-func (platformDB) Query(context.Context, string, ...any) (pgx.Rows, error) {
+func (d platformDB) Query(context.Context, string, ...any) (pgx.Rows, error) {
+	*d.reads++
 	return nil, errors.New("reached the store")
 }
 func (platformDB) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
 	return pgconn.CommandTag{}, errors.New("reached the store")
 }
 
-func newPlatformHandlers() *handlers {
-	return &handlers{store: pgStore{Pool: platformDB{}}, logger: slog.New(slog.DiscardHandler)}
+func newPlatformHandlers() (*handlers, *int) {
+	reads := new(int)
+	return &handlers{store: pgStore{Pool: platformDB{reads: reads}}, logger: slog.New(slog.DiscardHandler)}, reads
+}
+
+func newHandlers(t *testing.T) *handlers {
+	t.Helper()
+	h, _ := newPlatformHandlers()
+	return h
 }
 
 // Mix 3: ensureUserInScope. A user outside the caller's org is in scope only
@@ -87,7 +98,7 @@ func TestPlatformAction_UserInScopeNeedsAdminUsers(t *testing.T) {
 	for _, c := range actionCases(rule.ActionAdminUsers) {
 		w := httptest.NewRecorder()
 		user := &policy.User{ID: uuid.New(), IsSuperuser: c.superuser, Platform: c.platform}
-		if got := newPlatformHandlers().ensureUserInScope(context.Background(), w, user, uuid.New(), uuid.New()); got != c.want {
+		if got := newHandlers(t).ensureUserInScope(context.Background(), w, user, uuid.New(), uuid.New()); got != c.want {
 			t.Errorf("%s: in scope = %v (status %d), want %v", c.name, got, w.Code, c.want)
 		}
 	}
@@ -99,7 +110,7 @@ func TestPlatformAction_OrgAdminAccessNeedsAdminOrgs(t *testing.T) {
 	for _, c := range actionCases(rule.ActionAdminOrgs) {
 		w := httptest.NewRecorder()
 		user := &policy.User{ID: uuid.New(), IsSuperuser: c.superuser, Platform: c.platform}
-		if got := newPlatformHandlers().ensureOrgAdminAccess(context.Background(), w, user, uuid.New()); got != c.want {
+		if got := newHandlers(t).ensureOrgAdminAccess(context.Background(), w, user, uuid.New()); got != c.want {
 			t.Errorf("%s: access = %v (status %d), want %v", c.name, got, w.Code, c.want)
 		}
 	}
@@ -124,28 +135,24 @@ func TestPlatformAction_PlatformCreateNeedsAdminUsers(t *testing.T) {
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest(http.MethodPost, "/users", nil)
 		user := &policy.User{ID: uuid.New(), IsSuperuser: c.superuser, Platform: c.platform}
-		org, got := newPlatformHandlers().createUserOrg(context.Background(), w, r, user)
+		org, got := newHandlers(t).createUserOrg(context.Background(), w, r, user)
 		if got != c.want || (got && org != uuid.Nil) {
 			t.Errorf("%s: org %s ok %v (status %d), want ok %v", c.name, org, got, w.Code, c.want)
 		}
 	}
 }
 
-// Mix 8: listUsers. The all-users list is served only to a caller holding
-// admin.users (the fake store answers it 500); any other caller with no org
-// claim is refused 403 before the store.
+// Mix 8: listUsers. The all-users list reaches the store only for a caller
+// holding admin.users; a caller without it is never served that list.
 func TestPlatformAction_ListAllUsersNeedsAdminUsers(t *testing.T) {
 	for _, c := range actionCases(rule.ActionAdminUsers) {
+		h, reads := newPlatformHandlers()
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest(http.MethodGet, "/users", nil)
 		user := &policy.User{ID: uuid.New(), IsSuperuser: c.superuser, Platform: c.platform}
-		newPlatformHandlers().listUsers(w, r.WithContext(policy.WithUser(r.Context(), user)))
-		want := http.StatusForbidden
-		if c.want {
-			want = http.StatusInternalServerError
-		}
-		if w.Code != want {
-			t.Errorf("%s: status %d, want %d", c.name, w.Code, want)
+		h.listUsers(w, r.WithContext(policy.WithUser(r.Context(), user)))
+		if got := *reads > 0; got != c.want {
+			t.Errorf("%s: store reached = %v (status %d), want %v", c.name, got, w.Code, c.want)
 		}
 	}
 }

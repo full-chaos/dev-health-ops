@@ -166,7 +166,7 @@ func (h *handlers) listUsers(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		users, err = h.store.listUsersByOrg(ctx, orgID, filter)
-	case user.IsSuperuser:
+	case user.Holds(policy.ActionAdminUsers):
 		users, err = h.store.listAllUsers(ctx, filter)
 	default:
 		orgIDRaw, ok := orgIDForNonSuperuser(w, user)
@@ -371,7 +371,7 @@ func (h *handlers) createUser(w http.ResponseWriter, r *http.Request) {
 func (h *handlers) createUserOrg(ctx context.Context, w http.ResponseWriter, r *http.Request, caller *policy.User) (uuid.UUID, bool) {
 	raw := requestedOrgHeader(r)
 	if raw == "" {
-		if caller.IsSuperuser {
+		if caller.Holds(policy.ActionAdminUsers) {
 			return uuid.Nil, true
 		}
 		claim, ok := orgIDForNonSuperuser(w, caller)

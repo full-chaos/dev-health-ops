@@ -78,3 +78,27 @@ func TestPlatformAction_MayUseOrgNeedsAdminOrgs(t *testing.T) {
 		}
 	}
 }
+
+// Switch off (and on, for platform_admin): a caller that carries only the flag
+// decides exactly as one that carries platform_admin's full action set, at
+// every platform action, and a caller without the flag holds none. Every site
+// of the nine mix rows reads Holds, so this pins the unchanged outcome.
+func TestPlatformAction_FlagOnlyDecidesAsPlatformAdminDid(t *testing.T) {
+	full := rule.PlatformOfSuperuser(true)
+	for _, action := range rule.PlatformActions {
+		flagOnly := &User{IsSuperuser: true}
+		explicit := &User{IsSuperuser: true, Platform: &full}
+		none := &User{}
+		if !flagOnly.Holds(action) || !explicit.Holds(action) || none.Holds(action) {
+			t.Errorf("%s: flag only %v, full set %v, no flag %v; want true true false", action, flagOnly.Holds(action), explicit.Holds(action), none.Holds(action))
+		}
+	}
+	if !(&User{Role: "member", IsSuperuser: true}).IsAdmin() || (&User{Role: "member"}).IsAdmin() {
+		t.Error("the flag no longer passes an org Admin guard, or a plain member does")
+	}
+	for _, unknown := range []string{"", "org.delete", "admin.unknown"} {
+		if (&User{IsSuperuser: true}).Holds(unknown) {
+			t.Errorf("the flag holds %q", unknown)
+		}
+	}
+}

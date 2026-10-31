@@ -139,11 +139,6 @@ func TestWorkloadIssueRequestsDifferFromTheGoldenOnlyInTheBearer(t *testing.T) {
 	got := runIssueCases(t, s, client)
 	for i := range got {
 		got[i].Headers["Authorization"] = want[i].Headers["Authorization"]
-		for _, h := range []string{"Accept-Encoding", "Content-Length"} {
-			if _, ok := want[i].Headers[h]; ok {
-				got[i].Headers[h] = want[i].Headers[h]
-			}
-		}
 	}
 	gotJSON, _ := json.Marshal(got)
 	wantJSON, _ := json.Marshal(want)

@@ -58,7 +58,7 @@ func TestSessionCredentialDefaultsToTheSessionCredential(t *testing.T) {
 	cfg := sessionsOn(t, "http://auth-service:8095")
 	for name, env := range map[string]map[string]string{
 		"unset":                {},
-		"empty":                {EnvAuthSessionIssueCredential: " "},
+		"empty":                {EnvAuthSessionIssueCredential: ""},
 		"session_compat":       {EnvAuthSessionIssueCredential: "session_compat"},
 		"session_compat+files": {EnvAuthSessionIssueCredential: "session_compat", EnvAuthWorkloadSubjectFile: "/nonexistent", EnvAuthWorkloadIssuer: "x"},
 	} {
@@ -471,4 +471,56 @@ func TestSessionWorkloadExchangeNeverFollowsARedirectToAnotherOrigin(t *testing.
 		t.Fatal("a redirect answer was taken for a token")
 	}
 	probe.Assert(t)
+}
+
+// Both selectors take the exact value: unset, empty, session_compat and workload only. A padded or whitespace-only
+// value is a start-up error naming the selector, never read as another value.
+func TestSelectorsRefusePaddedAndWhitespaceOnlyValues(t *testing.T) {
+	cfg := sessionAndProvisioningOn(t, "http://auth-service:8095")
+	good := workloadEnv(t, nil)
+	for _, selector := range []string{EnvAuthSessionIssueCredential, EnvAuthProvisioningCredential} {
+		for name, value := range map[string]string{
+			"space only":                 " ",
+			"tab only":                   "\t",
+			"newline only":               "\n",
+			"workload leading space":     " workload",
+			"workload trailing space":    "workload ",
+			"workload surrounded":        " workload ",
+			"workload trailing newline":  "workload\n",
+			"session_compat leading":     " session_compat",
+			"session_compat trailing":    "session_compat ",
+			"session_compat surrounded":  " session_compat ",
+			"session_compat newline end": "session_compat\n",
+		} {
+			env := map[string]string{selector: value}
+			for k, v := range good {
+				env[k] = v
+			}
+			_, _, err := newCredentials(cfg, issueEnv(env))
+			if err == nil || !strings.Contains(err.Error(), selector) {
+				t.Errorf("%s %s (%q): err %v, want a start-up error naming the selector", selector, name, value, err)
+			}
+		}
+		for name, value := range map[string]string{"unset": "", "session_compat": "session_compat", "workload": "workload"} {
+			env := map[string]string{}
+			if name != "unset" {
+				env[selector] = value
+			}
+			for k, v := range good {
+				env[k] = v
+			}
+			provisioning, session, err := newCredentials(cfg, issueEnv(env))
+			if err != nil {
+				t.Errorf("%s %s: unexpected error %v", selector, name, err)
+				continue
+			}
+			got := provisioning.workload != nil
+			if selector == EnvAuthSessionIssueCredential {
+				got = session.workload != nil
+			}
+			if got != (name == "workload") {
+				t.Errorf("%s %s: workload client built = %v", selector, name, got)
+			}
+		}
+	}
 }

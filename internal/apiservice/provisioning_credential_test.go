@@ -78,7 +78,7 @@ func TestProvisioningCredentialDefaultsToTheSessionCredential(t *testing.T) {
 	cfg := provisioningOn(t, "http://auth-service:8095")
 	for name, env := range map[string]map[string]string{
 		"unset":                {},
-		"empty":                {EnvAuthProvisioningCredential: " "},
+		"empty":                {EnvAuthProvisioningCredential: ""},
 		"session_compat":       {EnvAuthProvisioningCredential: "session_compat"},
 		"session_compat+files": {EnvAuthProvisioningCredential: "session_compat", EnvAuthWorkloadSubjectFile: "/nonexistent", EnvAuthWorkloadIssuer: "x"},
 	} {

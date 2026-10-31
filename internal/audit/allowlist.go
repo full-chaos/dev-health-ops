@@ -50,6 +50,9 @@ var allowedAttributeKeys = map[string]struct{}{
 	// The auth.workload.enabled row of an enable that also enabled the
 	// workload's principal (principal_id names it).
 	"principal_enabled": {},
+	// The auth.workload.binding_rebound row: whether the binding was disabled
+	// when its UID pin changed (the rebind never changes that state).
+	"binding_disabled": {},
 
 	"purged_email_verification_tokens": {},
 	"purged_password_reset_tokens":     {},
@@ -195,9 +198,10 @@ var attributeVocabulary = map[string][]string{
 	"amr": {"pwd", "otp", "mfa", "hwk", "swk", "fed"},
 	// principal_enabled is present only when the principal row was enabled.
 	"principal_enabled": {"true"},
+	"binding_disabled":  {"true", "false"},
 	"changed_fields": {
 		"role_key", "status", "display_name", "disabled_at", "expires_at", "revoked_at", "email", "email_verified_at",
-		"scopes", "audiences", "organization_id", "allowed_actions", "binding", "invited_by", "joined_at", "owner_principal_id",
+		"scopes", "audiences", "organization_id", "allowed_actions", "binding", "service_account_uid", "invited_by", "joined_at", "owner_principal_id",
 	},
 }
 

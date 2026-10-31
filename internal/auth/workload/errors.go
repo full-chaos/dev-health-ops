@@ -12,6 +12,8 @@ var (
 	ErrBindingTaken    = errors.New("workload: the federation tuple is bound to a workload already")
 	ErrBindingNotFound = errors.New("workload: binding not found")
 	ErrStore           = errors.New("workload: store unavailable")
+	// ErrRebindStateChanged: the binding changed between the read and the lock.
+	ErrRebindStateChanged = errors.New("workload: the binding changed between the read and the lock")
 
 	// The bootstrap lifecycle verbs' refusals. None carries an input value.
 	ErrBootstrapValue    = errors.New("workload: the bootstrap value is not a canonical minted value")

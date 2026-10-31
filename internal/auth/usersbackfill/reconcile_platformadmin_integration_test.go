@@ -62,10 +62,11 @@ func TestVerbNoActivePlatformAdminGate(t *testing.T) {
 	const gated, info = "diff.no_active_platform_admin=", "info.no_active_platform_admin="
 	t.Run("none held", func(t *testing.T) {
 		e, ctx := privateEnv(t)
+		e.backfill(t, ctx)
 		code, out := e.verbOut(ctx, "-platform-roles-gate")
-		wantPlatformAdmin(t, "empty, flag", code, out, cli.ExitFailure, gated+"1")
+		wantPlatformAdmin(t, "no admin, flag", code, out, cli.ExitFailure, gated+"1")
 		code, out = e.verbOut(ctx)
-		wantPlatformAdmin(t, "empty, no flag", code, out, cli.ExitOK, info+"1")
+		wantPlatformAdmin(t, "no admin, no flag", code, out, cli.ExitOK, info+"1")
 		if strings.Contains(out, gated) {
 			t.Fatalf("no flag printed the gated line\n%s", out)
 		}

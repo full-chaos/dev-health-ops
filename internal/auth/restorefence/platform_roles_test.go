@@ -149,3 +149,23 @@ func TestEveryOtherSectionExportsWhatVersionFiveHeld(t *testing.T) {
 		t.Errorf("a section other than %s changed its export (digest %s, version 5 pinned %s)", platformRoleSection, got, pinnedSectionSet[5])
 	}
 }
+
+// The lockout read must see the effect of every section (principals disabled, the platform role deletions), and the
+// count of assignments that decides "in use" must be read before any section deletes one.
+func TestTheLockoutReadRunsAfterEverySectionAndTheInUseCountBeforeThem(t *testing.T) {
+	raw, err := os.ReadFile("apply.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(raw)
+	count := strings.Index(src, "platformRolesCountSQL(schema)")
+	loop := strings.Index(src, "for _, s := range sections {\n\t\t\t\tif m == nil {")
+	lock := strings.Index(src, "platformAdminLockout(ctx, tx, schema")
+	flows := strings.Index(src, "flowStatesSQL(schema))")
+	if count < 0 || loop < 0 || lock < 0 || flows < 0 {
+		t.Fatalf("anchors missing: count %d loop %d lockout %d flows %d", count, loop, lock, flows)
+	}
+	if !(count < loop && loop < lock && lock < flows) {
+		t.Errorf("order wrong: in-use count %d, section loop %d, lockout read %d, flow states %d", count, loop, lock, flows)
+	}
+}

@@ -57,12 +57,24 @@ func TestOwnerOnlyAuthorityAllowsNoAction(t *testing.T) {
 func TestAPIPathRefusesPlatformOwnerBeforeAnyRead(t *testing.T) {
 	s := &Store{logger: slog.New(slog.DiscardHandler)}
 	ctx := t.Context()
-	if _, err := s.Grant(ctx, GrantInput{Actor: uuid.New(), Principal: uuid.New(), Role: PlatformOwner}); !errors.Is(err, ErrPlatformOwnerCLIOnly) {
-		t.Errorf("Grant of platform_owner: %v, want ErrPlatformOwnerCLIOnly", err)
+	// A path that reaches the pool panics on this store; a panic is reported as a failed assert.
+	call := func(what string, f func() error) {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("%s of platform_owner went on to read the store: %v", what, r)
+			}
+		}()
+		if err := f(); !errors.Is(err, ErrPlatformOwnerCLIOnly) {
+			t.Errorf("%s of platform_owner: %v, want ErrPlatformOwnerCLIOnly", what, err)
+		}
 	}
-	if err := s.Revoke(ctx, RevokeInput{Actor: uuid.New(), Principal: uuid.New(), Role: PlatformOwner}); !errors.Is(err, ErrPlatformOwnerCLIOnly) {
-		t.Errorf("Revoke of platform_owner: %v, want ErrPlatformOwnerCLIOnly", err)
-	}
+	call("Grant", func() error {
+		_, err := s.Grant(ctx, GrantInput{Actor: uuid.New(), Principal: uuid.New(), Role: PlatformOwner})
+		return err
+	})
+	call("Revoke", func() error {
+		return s.Revoke(ctx, RevokeInput{Actor: uuid.New(), Principal: uuid.New(), Role: PlatformOwner})
+	})
 }
 
 func TestPlatformOwnerRefusalIsKept(t *testing.T) {

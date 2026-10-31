@@ -243,6 +243,7 @@ func ScanReads(root string) ([]Read, error) {
 		g.prebind()
 		flow := newFlowGroup(byDir[d])
 		flow.execInTemp = g.execInTemp
+		flow.exprInTemp = g.exprInTemp
 		flow.modulePure = g.modulePure
 		for _, s := range byDir[d] {
 			reads = append(reads, scanFile(s.fset, s.file, s.rel, top, g.chdir, flow)...)
@@ -348,7 +349,10 @@ func scanFile(fset *token.FileSet, f *ast.File, rel string, top map[string]bool,
 		name := callName(call.Fun)
 		join := name == "filepath.Join" || name == "path.Join"
 		if join {
-			joinLiterals(call, top, consumed, add)
+			joinLiterals(call, top, consumed, add, func(e ast.Expr) bool {
+				sf := flow.fileOf[f]
+				return flow.exprInTemp != nil && sf != nil && flow.exprInTemp(sf, e)
+			})
 		}
 		for _, a := range call.Args {
 			lit := strLit(a)
@@ -791,12 +795,17 @@ func sortedKeys[V any](m map[string]V) []string {
 
 // joinLiterals reads a Join whose string-literal arguments, from one naming a first-level entry on, spell one path:
 // filepath.Join(root, "docs", "a.md") reads docs/a.md.
-func joinLiterals(call *ast.CallExpr, top map[string]bool, consumed map[*ast.BasicLit]bool, add func(token.Pos, string, string)) {
+func joinLiterals(call *ast.CallExpr, top map[string]bool, consumed map[*ast.BasicLit]bool, add func(token.Pos, string, string), inTemp func(ast.Expr) bool) {
 	var parts []string
 	var lits []*ast.BasicLit
 	var base ast.Expr // the argument before the literals, nil when they lead
 	flush := func() {
-		if len(parts) > 0 {
+		if len(parts) > 0 && base != nil && inTemp(base) {
+			// the parts name files of a temp directory
+			for _, l := range lits {
+				consumed[l] = true
+			}
+		} else if len(parts) > 0 {
 			p := normalizeRepoPath(path.Join(parts...))
 			// One bare name joined to a base that names no root (filepath.Join(ContractsDir(root), "README.md")) is a
 			// file of that base, not of the repository root: dynreads.go places it, or records it unbounded.

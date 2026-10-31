@@ -23,6 +23,8 @@ type flowFrame struct {
 type flowGroup struct {
 	// execInTemp reports whether an exec.Command call of a file runs in a temp directory (set by the scan)
 	execInTemp func(*srcFile, *ast.CallExpr) bool
+	// exprInTemp reports whether a path expression of a file is under a temp directory (set by the scan)
+	exprInTemp func(*srcFile, ast.Expr) bool
 	// modulePure reports whether a function of a package of the module only computes (pureleaf.go)
 	modulePure func(imp, name string) bool
 	files      []*srcFile

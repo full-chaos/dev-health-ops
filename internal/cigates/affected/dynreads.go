@@ -1226,6 +1226,25 @@ func (g *dirGroup) execInTemp(s *srcFile, call *ast.CallExpr) bool {
 	return c.cmdDir(call, sc).kind == kTemp
 }
 
+// exprInTemp reports whether a path expression is under a temp dir at every call of its function.
+func (g *dirGroup) exprInTemp(s *srcFile, e ast.Expr) bool {
+	c := &fileCtx{g: g, s: s, pkg: g.pkgOf[s]}
+	fd, ok := c.holder(e).(*ast.FuncDecl)
+	if !ok || fd.Body == nil {
+		return false
+	}
+	sc := g.execScopes[fd]
+	if sc == nil {
+		sc = declScope(fd, g.params)
+		c.bind(fd.Body, sc)
+		if g.execScopes == nil {
+			g.execScopes = map[*ast.FuncDecl]*scope{}
+		}
+		g.execScopes[fd] = sc
+	}
+	return c.pathKind(e, sc).kind == kTemp
+}
+
 // prebind computes the parameter kinds and the directory changes of the group once.
 func (g *dirGroup) prebind() {
 	if g.bound {

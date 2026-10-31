@@ -134,7 +134,7 @@ func TestHostSmokeIdleDeadlineIsPerOperation(t *testing.T) {
 		time.Sleep(600 * time.Millisecond)
 		server.Close()
 	}()
-	conn := hsIdleConn{client}
+	conn := hsIdleConn{client, hsTimeout}
 	buf := make([]byte, 1)
 	for i := 0; i < 8; i++ {
 		if _, err := conn.Read(buf); err != nil {

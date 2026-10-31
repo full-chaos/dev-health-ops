@@ -68,6 +68,22 @@ func TestPlatformAction_IsAdminNeedsAdminOrgs(t *testing.T) {
 	}
 }
 
+// Mix 4: EffectiveOrgID. The impersonation session moves a caller into the
+// target's org only when the caller holds admin.impersonate.
+func TestPlatformAction_EffectiveOrgNeedsAdminImpersonate(t *testing.T) {
+	ctx := WithImpersonation(context.Background(), &Impersonation{TargetOrgID: targetOrgID})
+	for _, c := range platformCases(rule.ActionAdminImpersonate) {
+		user := &User{OrgID: ownOrg, IsSuperuser: c.superuser, Platform: c.platform}
+		want := ownOrg
+		if c.want {
+			want = targetOrgID.String()
+		}
+		if got := EffectiveOrgID(ctx, user); got != want {
+			t.Errorf("%s: acting org %s, want %s", c.name, got, want)
+		}
+	}
+}
+
 // Mix 4: mayUseOrg. A caller names an org they hold no membership of only by
 // admin.orgs.
 func TestPlatformAction_MayUseOrgNeedsAdminOrgs(t *testing.T) {

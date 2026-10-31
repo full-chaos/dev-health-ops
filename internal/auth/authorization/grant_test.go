@@ -2,6 +2,7 @@ package authorization
 
 import (
 	"bytes"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -10,6 +11,7 @@ import (
 )
 
 const (
+	testBound  = int64(7_000_000_000)
 	repoAction = "acr.context.read"
 	orgA       = "org-a"
 	orgB       = "org-b"
@@ -19,7 +21,11 @@ const (
 // plantedCatalog adds one repository-scoped action to the embedded catalog
 // until the real catalog carries one (CHAOS-10774). viewer, member and admin
 // hold it; owner does not, so a grant naming owner lacks the action.
-type plantedCatalog struct{ base *policycatalog.Catalog }
+type plantedCatalog struct {
+	base       *policycatalog.Catalog
+	holders    map[string]bool // nil: plantedHolders
+	cacheClass string          // "": resource_revision_bound
+}
 
 var plantedHolders = map[string]bool{"viewer": true, "member": true, "admin": true}
 
@@ -27,13 +33,22 @@ func (p plantedCatalog) Version() int { return p.base.Version() }
 func (p plantedCatalog) Action(id string) (policycatalog.Action, error) {
 	if id == repoAction {
 		return policycatalog.Action{ID: id, Scope: policycatalog.ScopeOrganization, ResourceKind: "repository",
-			RiskClass: policycatalog.RiskLow, CacheClass: policycatalog.CacheResourceRevisionBound}, nil
+			RiskClass: policycatalog.RiskLow, CacheClass: p.class()}, nil
 	}
 	return p.base.Action(id)
 }
 func (p plantedCatalog) Role(id string) (policycatalog.Role, error) { return p.base.Role(id) }
+func (p plantedCatalog) class() string {
+	if p.cacheClass == "" {
+		return policycatalog.CacheResourceRevisionBound
+	}
+	return p.cacheClass
+}
 func (p plantedCatalog) Allows(role, action string) bool {
 	if action == repoAction {
+		if p.holders != nil {
+			return p.holders[role]
+		}
 		return plantedHolders[role]
 	}
 	return p.base.Allows(role, action)
@@ -49,11 +64,14 @@ type grantFake struct {
 	fakeSnapshot
 	grants   []Grant
 	workload *WorkloadLimits
+	grantErr error
 	sa       map[string]ServiceAccount
 	now      int64
+	bound    int64
 }
 
-func (g grantFake) Grants(string) []Grant { return g.grants }
+func (g grantFake) Grants(string) ([]Grant, error) { return g.grants, g.grantErr }
+func (g grantFake) DecisionBoundNanos() int64      { return g.bound }
 func (g grantFake) Workload() (WorkloadLimits, bool) {
 	if g.workload == nil {
 		return WorkloadLimits{}, false
@@ -67,7 +85,7 @@ func (g grantFake) ServiceAccount(id string) (ServiceAccount, bool) {
 func (g grantFake) NowUnixNano() int64 { return g.now }
 
 func repoSnapshot(role string, grants ...Grant) grantFake {
-	return grantFake{fakeSnapshot: orgSnapshot(role), grants: grants, now: nowNano}
+	return grantFake{fakeSnapshot: orgSnapshot(role), grants: grants, now: nowNano, bound: testBound}
 }
 
 func liveGrant(key string) Grant {
@@ -104,10 +122,9 @@ func TestRepoGrant_AllowsLiveGrant(t *testing.T) {
 	}
 }
 
-func TestRepoGrant_OrgRoleAloneNeverAllows(t *testing.T) {
+func TestRepoGrant_AnyRowEndsTheMembershipDefault(t *testing.T) {
 	e := plantedEvaluator()
 	for _, role := range []string{"viewer", "member", "admin", "owner"} {
-		wantDeny(t, role+" no grants", e.Evaluate(repoRequest("acme/api"), repoSnapshot(role)), ReasonGrantAbsent)
 		wantDeny(t, role+" other repo", e.Evaluate(repoRequest("acme/api"), repoSnapshot(role, liveGrant("acme/web"))), ReasonRepositoryNotGranted)
 	}
 	wantDeny(t, "repo grant for org wide request", e.Evaluate(repoRequest("*"), repoSnapshot("member", liveGrant("acme/api"))), ReasonRepositoryNotGranted)
@@ -138,28 +155,33 @@ func TestRepoGrant_GrantNeedsStanding(t *testing.T) {
 func TestRepoGrant_CrossOrgAlwaysDenies(t *testing.T) {
 	e := plantedEvaluator()
 	foreign := Grant{OrgID: orgB, Role: "admin", ResourceKind: "repository", ResourceKey: "*"}
+	// Member of org a only; the snapshot hands back a grant row of org b.
 	s := repoSnapshot("member", foreign)
 	s.orgStatus = map[string]Status{orgA: StatusActive, orgB: StatusActive}
-	s.memberships = map[string]Membership{
-		orgA: {OrgID: orgA, Role: "member", Status: StatusActive},
-		orgB: {OrgID: orgB, Role: "member", Status: StatusActive},
-	}
-	req := Request{Action: repoAction, ResourceKind: "repository", OrganizationID: orgA, ResourceKey: "acme/api"}
-	wantDeny(t, "grant of org b used in org a", e.Evaluate(req, s), ReasonResourceOrgMismatch)
+	s.memberships = map[string]Membership{orgA: {OrgID: orgA, Role: "member", Status: StatusActive}}
+	req := Request{Action: repoAction, ResourceKind: "repository", OrganizationID: orgB, ResourceKey: "acme/api"}
+	wantDeny(t, "resource in org b, member of org a only", e.Evaluate(req, s), ReasonNoMembership)
+	// Member of both orgs: the org b row is org b's pair, never org a's.
+	s.memberships[orgB] = Membership{OrgID: orgB, Role: "member", Status: StatusActive}
 	req.OrganizationID = orgB
-	if d := e.Evaluate(req, s); !d.Allowed {
-		t.Errorf("same grant in its own org: %+v", d)
+	if d := e.Evaluate(req, s); !d.Allowed || d.Reason != ReasonAllowedByRepositoryGrant {
+		t.Errorf("org b row in org b: %+v", d)
 	}
-	// Two orgs with the same slug but different ids: ids are the only line.
+	req.OrganizationID = orgA
+	own := liveGrant("acme/web")
+	own.OrgID = orgA
+	s.grants = []Grant{foreign, own}
+	wantDeny(t, "foreign wildcard beside own row", e.Evaluate(req, s), ReasonRepositoryNotGranted)
+	// Membership that names another org is refused whatever the key.
+	m := repoSnapshot("member", liveGrant("*"))
+	m.memberships = map[string]Membership{testOrg: {OrgID: orgB, Role: "member", Status: StatusActive}}
+	wantDeny(t, "membership row of another org", e.Evaluate(repoRequest("acme/api"), m), ReasonOrgMismatch)
+	// Org ids are the only line: case and space variants never reach a lookup.
 	for _, id := range []string{"Org-A", "org-a ", "ORG-A", "org-a\x00"} {
 		bad := req
 		bad.OrganizationID = id
 		wantDeny(t, "org id variant "+id, e.Evaluate(bad, s), ReasonInvalidRequest)
 	}
-	// A foreign row never satisfies an own-org request next to a live own row of another key.
-	own := liveGrant("acme/web")
-	s2 := repoSnapshot("member", foreign, own)
-	wantDeny(t, "foreign wildcard beside own row", e.Evaluate(repoRequest("acme/api"), s2), ReasonRepositoryNotGranted)
 }
 
 func TestRepoGrant_ExpiryAndRevocation(t *testing.T) {
@@ -280,7 +302,7 @@ func TestRepoGrant_ServiceAccountReplacesMembership(t *testing.T) {
 	// An active service account without a grant is still denied.
 	s = sa(testOrg, StatusActive)
 	s.grants = nil
-	wantDeny(t, "sa without grant", e.Evaluate(repoRequest("acme/api"), s), ReasonGrantAbsent)
+	wantDeny(t, "sa with no rows gets no default", e.Evaluate(repoRequest("acme/api"), s), ReasonGrantAbsent)
 }
 
 func TestRepoGrant_WorkloadLimits(t *testing.T) {
@@ -303,8 +325,8 @@ func TestRepoGrant_WorkloadLimits(t *testing.T) {
 	wantDeny(t, "wildcard action", e.Evaluate(repoRequest("acme/api"), lim("svc-a", []string{"svc-a"}, []string{"*"})), ReasonWorkloadActionDenied)
 	// The limits only narrow: a workload without a grant is denied.
 	s := lim("svc-a", []string{"svc-a"}, []string{repoAction})
-	s.grants = nil
-	wantDeny(t, "workload without grant", e.Evaluate(repoRequest("acme/api"), s), ReasonGrantAbsent)
+	s.grants = []Grant{liveGrant("acme/web")}
+	wantDeny(t, "workload without a grant for the repository", e.Evaluate(repoRequest("acme/api"), s), ReasonRepositoryNotGranted)
 	// The limits narrow organization actions too.
 	o := repoSnapshot("owner")
 	o.workload = &WorkloadLimits{Audience: "svc-a", Audiences: []string{"svc-a"}, AllowedActions: []string{"org.read"}}
@@ -352,7 +374,12 @@ func TestRepoGrant_RealCatalogRepositoryActions(t *testing.T) {
 			if want := cat.Allows(role.ID, a.ID); d.Allowed != want {
 				t.Errorf("%s via grant role %s: allowed=%v want %v (%s)", a.ID, role.ID, d.Allowed, want, d.Reason)
 			}
-			wantDeny(t, a.ID+" org role "+role.ID+" alone", e.Evaluate(req, repoSnapshot(role.ID)), ReasonGrantAbsent)
+			other := Grant{OrgID: testOrg, Role: "viewer", ResourceKind: "repository", ResourceKey: "acme/web"}
+			wantDeny(t, a.ID+" org role "+role.ID+" beside another repo's row", e.Evaluate(req, repoSnapshot(role.ID, other)), ReasonRepositoryNotGranted)
+			wantsDefault := cat.Allows(role.ID, a.ID) || (role.ID == "owner" && cat.Allows("admin", a.ID))
+			if d := e.Evaluate(req, repoSnapshot(role.ID)); d.Allowed != wantsDefault {
+				t.Errorf("%s default for membership role %s: allowed=%v want %v (%s)", a.ID, role.ID, d.Allowed, wantsDefault, d.Reason)
+			}
 		}
 	}
 }
@@ -364,8 +391,9 @@ func TestRepoGrant_ReasonsAreClosed(t *testing.T) {
 	}
 	for _, r := range []Reason{
 		ReasonAllowedByRepositoryGrant, ReasonGrantAbsent, ReasonRepositoryNotGranted, ReasonGrantExpired,
-		ReasonGrantRevoked, ReasonResourceOrgMismatch, ReasonWorkloadAudienceDenied, ReasonWorkloadActionDenied,
+		ReasonGrantRevoked, ReasonWorkloadAudienceDenied, ReasonWorkloadActionDenied,
 		ReasonClockUnavailable, ReasonServiceAccountInactive,
+		ReasonAllowedByMembershipDefault, ReasonGrantReadFailed, ReasonDecisionBoundUnavailable,
 	} {
 		if !allowed[r] {
 			t.Errorf("reason %q missing from AllReasons", r)
@@ -377,6 +405,9 @@ func TestRepoGrant_ReasonsAreClosed(t *testing.T) {
 		repoSnapshot("member"), repoSnapshot("member", liveGrant("*")), repoSnapshot("member", Grant{}),
 		{fakeSnapshot: orgSnapshot("member"), grants: []Grant{liveGrant("*")}},
 		{fakeSnapshot: orgSnapshot("member"), grants: []Grant{liveGrant("*")}, workload: wl, now: nowNano},
+		{fakeSnapshot: orgSnapshot("member"), now: nowNano, bound: testBound},
+		{fakeSnapshot: orgSnapshot("member"), now: nowNano},
+		{fakeSnapshot: orgSnapshot("member"), now: nowNano, bound: testBound, grantErr: errors.New("read")},
 	} {
 		for _, key := range []string{"acme/api", "*", "", "A/b"} {
 			if r := e.Evaluate(repoRequest(key), s).Reason; !allowed[r] {
@@ -384,7 +415,7 @@ func TestRepoGrant_ReasonsAreClosed(t *testing.T) {
 			}
 		}
 	}
-	if len(AllReasons()) != 23 {
+	if len(AllReasons()) != 25 {
 		t.Errorf("reason count %d", len(AllReasons()))
 	}
 }

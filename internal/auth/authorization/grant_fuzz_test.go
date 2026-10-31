@@ -17,6 +17,7 @@ func FuzzEvaluateRepositoryGrant(f *testing.F) {
 			},
 			grants: []Grant{g},
 			now:    now,
+			bound:  testBound,
 		}
 		r := Request{Action: repoAction, ResourceKind: "repository", OrganizationID: reqOrg, ResourceKey: reqKey}
 		d := plantedEvaluator().Evaluate(r, s)
@@ -25,6 +26,15 @@ func FuzzEvaluateRepositoryGrant(f *testing.F) {
 		}
 		if _, ok := NormalizeRequest(r); !ok {
 			t.Fatalf("allowed a non-canonical request %+v", r)
+		}
+		if d.Reason == ReasonAllowedByMembershipDefault {
+			if grantOrg == reqOrg {
+				t.Fatal("default allow with a row of the pair")
+			}
+			if now <= 0 || d.CacheClass != CacheDecisionBound || d.ExpiresAtUnixNano != now+testBound {
+				t.Fatalf("default allow without clock or bound: %+v now %d", d, now)
+			}
+			return
 		}
 		switch {
 		case grantOrg != reqOrg:
@@ -39,6 +49,8 @@ func FuzzEvaluateRepositoryGrant(f *testing.F) {
 			t.Fatalf("grant %q allowed key %q", grantKey, reqKey)
 		case !plantedHolders[role]:
 			t.Fatalf("grant role %q does not hold the action", role)
+		case d.CacheClass != CacheResourceRevisionBound:
+			t.Fatalf("grant allow cache class %q", d.CacheClass)
 		}
 	})
 }

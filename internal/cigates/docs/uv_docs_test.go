@@ -18,6 +18,7 @@ var (
 	}
 	uvDocsReqs   = glue("requirements-docs", ".", "txt")
 	uvSetupPin   = regexp.MustCompile(`^astral-sh/setup-uv@[0-9a-f]{40}( #.*)?$`)
+	uvLockHash1  = "--hash=sha256:b80b99a14bd085fcacfa15c9165f651fbb3406e66cc603abf11c5750937c992d"
 	uvMkdocsPref = `uv run --no-project --python "$RUNNER_TEMP/docs-venv/bin/python" mkdocs build --strict`
 )
 
@@ -146,5 +147,85 @@ func TestDocsWorkflowsBuildThroughUv(t *testing.T) {
 		{"the lock shrinks to one pin", func(t *testing.T, d docTree) docTree {
 			return d.added(uvDocsReqs, "mkdocs-material==9.7.7 --hash=sha256:00\n")
 		}, "full transitive set"},
+		// CHAOS-10466 r1 classes: lock grammar, exact versions, one linked command chain, enable-cache spellings.
+		{"every lock pin becomes a wildcard", func(t *testing.T, d docTree) docTree {
+			return d.editAll(t, uvDocsReqs, "==", "==9.*")
+		}, "exact name==version"},
+		{"a lock pin becomes a range", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, uvDocsReqs, "\nbabel==2.18.0 \\\n", "\nbabel>=2.18.0 \\\n")
+		}, "exact name==version"},
+		{"the lock loses mkdocs-material 9.7.7", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, uvDocsReqs, "\nmkdocs-material==9.7.7 \\\n", "\nmkdocs-material==9.7.6 \\\n")
+		}, "mkdocs-material==9.7.7"},
+		{"a lock hash is bogus", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, uvDocsReqs, uvLockHash1, "--hash=sha256:bogus")
+		}, "64 lowercase hex"},
+		{"a lock hash has 63 hex digits", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, uvDocsReqs, uvLockHash1, uvLockHash1[:len(uvLockHash1)-1])
+		}, "64 lowercase hex"},
+		{"a lock hash is uppercase", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, uvDocsReqs, uvLockHash1, strings.ToUpper(uvLockHash1[:len("--hash=sha256:")])+strings.ToUpper(uvLockHash1[len("--hash=sha256:"):]))
+		}, "64 lowercase hex"},
+		{"the lock gains an index url", func(t *testing.T, d docTree) docTree {
+			return d.appended(t, uvDocsReqs, "--index-url https://example.invalid/simple\n")
+		}, "only name==version and --hash"},
+		{"the lock gains a url requirement", func(t *testing.T, d docTree) docTree {
+			return d.appended(t, uvDocsReqs, "evil @ https://example.invalid/evil.whl --hash=sha256:"+strings.Repeat("0", 64)+"\n")
+		}, "exact name==version"},
+		{"the lock gains an include", func(t *testing.T, d docTree) docTree {
+			return d.appended(t, uvDocsReqs, "-r other.txt\n")
+		}, "exact name==version"},
+		{"setup-uv version is latest", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, hr, "          version: 0.12.9\n", "          version: latest\n")
+		}, "exact X.Y.Z"},
+		{"setup-uv version is a range", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, gd, "          version: 0.12.9\n", "          version: '>=0.12.9'\n")
+		}, "exact X.Y.Z"},
+		{"setup-uv version is 0.12", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, cf, "          version: 0.12.9\n", "          version: '0.12'\n")
+		}, "exact X.Y.Z"},
+		{"the venv python is 3.14", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, cf, "uv venv --python 3.14.7 ", "uv venv --python 3.14 ")
+		}, "exact X.Y.Z"},
+		{"the install loses --python", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, gd, `uv pip install --python "$RUNNER_TEMP/docs-venv/bin/python" --require-hashes`, "uv pip install --require-hashes")
+		}, "chain line"},
+		{"the venv step is missing", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, cf, "          uv venv --python 3.14.7 \"$RUNNER_TEMP/docs-venv\"\n", "")
+		}, "chain line"},
+		{"the install reads a .bak file", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, gd, "-r requirements-docs.txt", "-r requirements-docs.txt.bak")
+		}, "chain line"},
+		{"the chain is reordered", func(t *testing.T, d docTree) docTree {
+			venv := "          uv venv --python 3.14.7 \"$RUNNER_TEMP/docs-venv\"\n"
+			inst := "          uv pip install --python \"$RUNNER_TEMP/docs-venv/bin/python\" --require-hashes --no-deps -r requirements-docs.txt\n"
+			return d.edit(t, hr, venv+inst, inst+venv)
+		}, "order"},
+		{"a second uv pip install is added", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, cf, "--no-deps -r requirements-docs.txt\n", "--no-deps -r requirements-docs.txt\n          uv pip install --python \"$RUNNER_TEMP/docs-venv/bin/python\" requests\n")
+		}, "not part of the chain"},
+		{"a second uv venv is added", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, gd, "--no-deps -r requirements-docs.txt\n", "--no-deps -r requirements-docs.txt\n          uv venv --python 3.14.7 other\n")
+		}, "not part of the chain"},
+		{"the build line carries an extra flag", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, hr, "mkdocs build --strict --config-file mkdocs.yml", "mkdocs build --strict --config-file mkdocs.yml --no-directory-urls")
+		}, "chain line"},
+		{"enable-cache is true", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, cf, "enable-cache: false", "enable-cache: true")
+		}, "enable-cache"},
+		{"enable-cache is the string true", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, cf, "enable-cache: false", `enable-cache: "true"`)
+		}, "enable-cache"},
+		{"enable-cache is False", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, cf, "enable-cache: false", `enable-cache: "False"`)
+		}, "enable-cache"},
 	})
+}
+
+// A disabled cache has two valid YAML spellings; the guard accepts both.
+func TestDocsWorkflowsUvAcceptsQuotedFalse(t *testing.T) {
+	d := realTree(t).edit(t, ".github/workflows/docs-cloudflare.yml", "enable-cache: false", `enable-cache: "false"`)
+	if got := uvDocsGuard(d); len(got) > 0 {
+		t.Fatalf("enable-cache: \"false\" is refused:\n%s", strings.Join(got, "\n"))
+	}
 }

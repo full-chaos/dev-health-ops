@@ -23,6 +23,9 @@ const (
 
 type loginCount struct{ action, script int }
 
+// ciScriptNamesData: ci scripts that hold the login script's path as data (a list for shellcheck), not as a call.
+var ciScriptNamesData = map[string]bool{"ci/shellcheck_pinned.sh": true}
+
 var jobLoginCensus = map[jobKey]loginCount{
 	{"arc-runner-image.yml", "build"}:                            {1, 0},
 	{"docker-images.yml", "resolve"}:                             {1, 0},
@@ -209,7 +212,7 @@ func commandWord(words []string) int {
 func segmentLogin(words []string) string {
 	i := commandWord(words)
 	if i >= len(words) {
-		return ""
+		return scanWords(words)
 	}
 	cmd := words[i]
 	base := filepath.Base(cmd)
@@ -224,20 +227,8 @@ func segmentLogin(words []string) string {
 	case isLoginScriptPath(cmd):
 		return "call"
 	case loginShells[base]:
-		for j := 0; j < len(rest); j++ {
-			w := rest[j]
-			if !strings.HasPrefix(w, "-") {
-				if isLoginScriptPath(w) {
-					return "call"
-				}
-				break
-			}
-			if !strings.HasPrefix(w, "--") && strings.Contains(w, "c") && j+1 < len(rest) {
-				if len(shellLoginKinds(rest[j+1])) > 0 {
-					return "indirect"
-				}
-				break
-			}
+		if k := shellInvocation(rest); k != "" {
+			return k
 		}
 	case cmd == "eval":
 		if len(shellLoginKinds(strings.Join(rest, " "))) > 0 {
@@ -251,9 +242,26 @@ func segmentLogin(words []string) string {
 	if base == "echo" || base == "printf" {
 		return ""
 	}
+	return scanWords(words)
+}
+
+// scanWords is the fail-closed pass over every word of a segment.
+func scanWords(words []string) string {
 	for j, w := range words {
 		if isLoginScriptPath(w) {
 			return "call"
+		}
+		if loginShells[filepath.Base(w)] {
+			if k := shellInvocation(words[j+1:]); k != "" {
+				return k
+			}
+		}
+		if filepath.Base(w) == "env" {
+			for k := j + 1; k < len(words); k++ {
+				if str, ok := envSplitString(words, k); ok && len(shellLoginKinds(str)) > 0 {
+					return "indirect"
+				}
+			}
 		}
 		if loginTools[filepath.Base(w)] {
 			for _, l := range words[j+1:] {
@@ -264,6 +272,41 @@ func segmentLogin(words []string) string {
 		}
 	}
 	return ""
+}
+
+// shellInvocation classifies the arguments of a shell: "call" (the login script is its first non-option word), "indirect"
+// (-c with a payload that holds a login or a call of the script), or "".
+func shellInvocation(rest []string) string {
+	for j := 0; j < len(rest); j++ {
+		w := rest[j]
+		if !strings.HasPrefix(w, "-") {
+			if isLoginScriptPath(w) {
+				return "call"
+			}
+			return ""
+		}
+		if !strings.HasPrefix(w, "--") && strings.Contains(w, "c") && j+1 < len(rest) {
+			if len(shellLoginKinds(rest[j+1])) > 0 {
+				return "indirect"
+			}
+			return ""
+		}
+	}
+	return ""
+}
+
+// envSplitString returns the command string of an env -S, -S<string> or --split-string=<string> word, if any.
+func envSplitString(words []string, j int) (string, bool) {
+	w := words[j]
+	switch {
+	case w == "-S" && j+1 < len(words):
+		return words[j+1], true
+	case strings.HasPrefix(w, "--split-string="):
+		return strings.TrimPrefix(w, "--split-string="), true
+	case strings.HasPrefix(w, "-S") && len(w) > 2:
+		return w[2:], true
+	}
+	return "", false
 }
 
 func shellLoginKinds(text string) (kinds []string) {
@@ -314,7 +357,11 @@ func registryLoginDefects(t *testing.T, root string, census map[jobKey]loginCoun
 	var withLogin []string
 	for _, s := range scripts {
 		for _, k := range shellLoginKinds(readFile(t, filepath.Join(root, s))) {
+			if k == "call" && (s == loginScript || ciScriptNamesData[s]) {
+				continue
+			}
 			if k == "call" {
+				out = append(out, fmt.Sprintf("%s: calls %s; only the workflow step `%s` may", s, loginScript, loginScriptRun))
 				continue
 			}
 			if k == "indirect" {

@@ -9,9 +9,10 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
 )
 
-// The role CHECK on platform_role_assignments lists exactly the platform roles
-// of the closed catalog (roles.v1), and the pre-flight refuses the same list:
-// a role added to or removed from one and not the others fails here.
+// The role CHECK on platform_role_assignments, as the newest migration that
+// defines it leaves it, lists exactly the platform roles of the closed catalog
+// (roles.v1): a role added to or removed from one and not the other fails here.
+// Widening needs no pre-flight (no stored row can violate a wider list).
 func TestPlatformRoleCheckListsTheCatalogPlatformRoles(t *testing.T) {
 	migrations, err := Migrations()
 	if err != nil {
@@ -39,7 +40,6 @@ func TestPlatformRoleCheckListsTheCatalogPlatformRoles(t *testing.T) {
 		return got
 	}
 	check := list(`(?s)platform_role_assignments_role_closed\s+CHECK\s*\(\s*role_key IN \(([^)]*)\)\s*\)`)
-	preflight := list(`(?s)WHERE role_key NOT IN \(([^)]*)\)`)
 
 	var want []string
 	for _, role := range policycatalog.Default().Roles() {
@@ -51,9 +51,6 @@ func TestPlatformRoleCheckListsTheCatalogPlatformRoles(t *testing.T) {
 	if strings.Join(check, ",") != strings.Join(want, ",") {
 		t.Fatalf("platform role CHECK = %v, catalog platform roles = %v", check, want)
 	}
-	if strings.Join(preflight, ",") != strings.Join(want, ",") {
-		t.Fatalf("platform role pre-flight = %v, catalog platform roles = %v", preflight, want)
-	}
 	for _, role := range policycatalog.Default().Roles() {
 		if role.Scope != policycatalog.ScopePlatform {
 			for _, held := range check {
@@ -63,4 +60,31 @@ func TestPlatformRoleCheckListsTheCatalogPlatformRoles(t *testing.T) {
 			}
 		}
 	}
+}
+
+// The migration that adds platform_owner to the role CHECK is named, not
+// numbered, so a renumber at merge is a file rename only. It widens with NOT
+// VALID and a separate VALIDATE, and it is not a pre-flight migration.
+func TestPlatformOwnerMigrationWidensTheRoleCheck(t *testing.T) {
+	migrations, err := Migrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range migrations {
+		if m.Name != "platform_owner_role" {
+			continue
+		}
+		for _, want := range []string{
+			"DROP CONSTRAINT platform_role_assignments_role_closed",
+			"CHECK (role_key IN ('platform_admin', 'platform_owner'))",
+			"NOT VALID",
+			"VALIDATE CONSTRAINT platform_role_assignments_role_closed",
+		} {
+			if !strings.Contains(m.SQL, want) {
+				t.Errorf("migration %04d_%s lacks %q", m.Version, m.Name, want)
+			}
+		}
+		return
+	}
+	t.Fatal("no migration named platform_owner_role")
 }

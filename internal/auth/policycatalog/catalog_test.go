@@ -20,7 +20,7 @@ import (
 
 const (
 	actionsSHA = "65ef0a1f6573e3d3b8d08b2ca6024fcf1b3db87214b787e6c8f2b95386789f33"
-	rolesSHA   = "024192e8eb32a5b07b0e7ce8e41acc72ce1c26db6000dbdbb66524a3e86b8132"
+	rolesSHA   = "5527105caf1010672b709b1915a2c69d421cc9dc607caf04243816e6e93d95d8"
 )
 
 func repoRoot(t *testing.T) string {
@@ -109,6 +109,31 @@ func TestScopesDoNotMix(t *testing.T) {
 	}
 	if c.Allows("owner", "admin.users") || c.Allows("platform_admin", "org.delete") {
 		t.Error("platform and organization authority must stay separate")
+	}
+}
+
+// platform_owner is a marker role (CHAOS-12294): it holds exactly the actions of
+// platform_admin and no other, so holding it never adds authority.
+func TestPlatformOwnerHoldsExactlyThePlatformAdminActions(t *testing.T) {
+	c := Default()
+	owner, err := c.Role("platform_owner")
+	if err != nil {
+		t.Fatalf("platform_owner is not in the catalog: %v", err)
+	}
+	admin, err := c.Role("platform_admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if owner.Scope != ScopePlatform {
+		t.Errorf("platform_owner scope = %s, want platform", owner.Scope)
+	}
+	if strings.Join(owner.Actions, ",") != strings.Join(admin.Actions, ",") || len(owner.Actions) == 0 {
+		t.Errorf("platform_owner actions = %v, platform_admin actions = %v", owner.Actions, admin.Actions)
+	}
+	for _, a := range c.Actions() {
+		if c.Allows("platform_owner", a.ID) && !c.Allows("platform_admin", a.ID) {
+			t.Errorf("platform_owner allows %s, which platform_admin does not", a.ID)
+		}
 	}
 }
 

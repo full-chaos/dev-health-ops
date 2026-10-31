@@ -68,6 +68,7 @@ Design docs (read the guardrails at minimum):
 | `internal_svc_worker_token` | **unconsumed** | service_account | mint retired (CHAOS-10044); stored rows list/revoke only |
 | `acr_client_credential` | active | client_credential | |
 | `acr_device_flow_code` | active | human | |
+| `acr_browser_refresh_token` | optional_feature | human | |
 | `acr_web_assertion` | active | workload | |
 | `acr_workload_identity_exchange` | active | workload | |
 | `external_push_ingest_token` | active | external_source | |
@@ -218,6 +219,22 @@ class is `optional_feature`. The operator creates, rotates, revokes and
 disables a credential with `auth-migrate workloads bootstrap-create`,
 `bootstrap-rotate`, `bootstrap-revoke` and `bootstrap-disable` (migration role;
 see the [bootstrap credential runbook](../../operate/runbooks/auth-workload-bootstrap-credential.md)).
+
+**`acr_browser_refresh_token` (CHAOS-12141).** The refresh token of the ACR
+first-party browser client (acr CHAOS-12124): `acrrt_` and 32 random bytes as
+unpadded base64url. The Ask Dev web browser gets it from the authorization code
+exchange of acr-api's OAuth server and presents it only as a form body field:
+`refresh_token` on `POST /token` (`grant_type=refresh_token`), `token` on
+`POST /revoke` (RFC 7009). It is never a bearer and opens no route by itself.
+acr keeps its SHA-256 only (`acr.browser_refresh_tokens`), in a token family
+bound to the user's organization, the browser client and the approving web
+session. It is single use: each refresh issues a successor and a new 10-minute
+`acr_client_credential` of class browser. The same consumed token presented
+again within 30 s, while its successor is unused, gets that same successor (an
+HMAC of the presented token over a stored random seed, so no token is stored);
+any other reuse revokes the whole family. The family ends 12 h after login and
+no refresh extends it; an ended family is purged after a grace. acr-api serves
+it only with a browser client configured, so the class is `optional_feature`.
 
 ## The CHAOS-3271 class: credentials that reach a validator that is not their own
 

@@ -46,44 +46,50 @@ func wantPlatformAdmin(t *testing.T, step string, code int, out string, wantCode
 	}
 }
 
-// A private database per test: no other test's superuser or assignment is in it.
-func TestVerbNoActivePlatformAdminGate(t *testing.T) {
+func privateEnv(t *testing.T) (*reconEnv, context.Context) {
+	t.Helper()
 	e, err := newReconEnv(t)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
+	t.Cleanup(cancel)
+	return e, ctx
+}
+
+// Each gate cell has a private database: no other test's superuser or assignment is in it.
+func TestVerbNoActivePlatformAdminGate(t *testing.T) {
 	const gated, info = "diff.no_active_platform_admin=", "info.no_active_platform_admin="
-
-	code, out := e.verbOut(ctx, "-platform-roles-gate")
-	wantPlatformAdmin(t, "empty, flag", code, out, cli.ExitFailure, gated+"1")
-	code, out = e.verbOut(ctx)
-	wantPlatformAdmin(t, "empty, no flag", code, out, cli.ExitOK, info+"1")
-	if strings.Contains(out, gated) {
-		t.Fatalf("no flag printed the gated line\n%s", out)
-	}
-
-	e.seedSuperuser(t, ctx, "disabledonly", false)
-	e.backfill(t, ctx)
-	code, out = e.verbOut(ctx, "-platform-roles-gate")
-	wantPlatformAdmin(t, "disabled only, flag", code, out, cli.ExitFailure, gated+"1")
-
-	e.seedSuperuser(t, ctx, "held", true)
-	e.backfill(t, ctx)
-	code, out = e.verbOut(ctx, "-platform-roles-gate")
-	wantPlatformAdmin(t, "one held, flag", code, out, cli.ExitOK, gated+"0")
-	code, out = e.verbOut(ctx)
-	wantPlatformAdmin(t, "one held, no flag", code, out, cli.ExitOK, info+"0")
+	t.Run("none held", func(t *testing.T) {
+		e, ctx := privateEnv(t)
+		code, out := e.verbOut(ctx, "-platform-roles-gate")
+		wantPlatformAdmin(t, "empty, flag", code, out, cli.ExitFailure, gated+"1")
+		code, out = e.verbOut(ctx)
+		wantPlatformAdmin(t, "empty, no flag", code, out, cli.ExitOK, info+"1")
+		if strings.Contains(out, gated) {
+			t.Fatalf("no flag printed the gated line\n%s", out)
+		}
+	})
+	t.Run("disabled only", func(t *testing.T) {
+		e, ctx := privateEnv(t)
+		e.seedSuperuser(t, ctx, "disabledonly", false)
+		e.backfill(t, ctx)
+		code, out := e.verbOut(ctx, "-platform-roles-gate")
+		wantPlatformAdmin(t, "disabled only, flag", code, out, cli.ExitFailure, gated+"1")
+	})
+	t.Run("one held", func(t *testing.T) {
+		e, ctx := privateEnv(t)
+		e.seedSuperuser(t, ctx, "held", true)
+		e.backfill(t, ctx)
+		code, out := e.verbOut(ctx, "-platform-roles-gate")
+		wantPlatformAdmin(t, "one held, flag", code, out, cli.ExitOK, gated+"0")
+		code, out = e.verbOut(ctx)
+		wantPlatformAdmin(t, "one held, no flag", code, out, cli.ExitOK, info+"0")
+	})
 }
 
 func TestVerbNoActivePlatformAdminCountsOnlyExpiredAsNone(t *testing.T) {
-	e, err := newReconEnv(t)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
+	e, ctx := privateEnv(t)
 	id := e.seedSuperuser(t, ctx, "expiredonly", true)
 	e.backfill(t, ctx)
 	code, out := e.verbOut(ctx, "-platform-roles-gate")
@@ -95,7 +101,7 @@ func TestVerbNoActivePlatformAdminCountsOnlyExpiredAsNone(t *testing.T) {
 	}
 	expired := uuid.New()
 	subject := id.String()
-	err = audit.Commit(ctx, e.runtime, e.schema, audit.Mutation{
+	err := audit.Commit(ctx, e.runtime, e.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			if _, err := tx.Exec(ctx, `DELETE FROM auth.platform_role_assignments WHERE id = $1`, assignment); err != nil {
 				return err

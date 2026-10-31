@@ -13,7 +13,8 @@ Seven surfaces are planned (CHAOS-3270). Shipped so far: `principal.v1`
 `authorization_decision.v1` and the two batch forms (CHAOS-4932). All seven
 planned surfaces have shipped, and the Wave 2 session surfaces `session.v1`,
 `refresh-request.v1`, `refresh-response.v1` and `auth-outcome.v1` (CHAOS-10155)
-follow them, then the Wave 3 user access token `access-token.v1` (CHAOS-10442), the Wave 8
+follow them, then the Wave 3 user access token `access-token.v1` (CHAOS-10442),
+`refresh-response.v2` (the refresh answer for the EdDSA access token; v1 stays the answer for the HS256 token and both are read until the HS256 issuer is removed), the Wave 8
 workload token `workload-token.v1` (CHAOS-10648: typ `workload+jwt`, one audience, no
 `org_id`/`sid`/`scope`, at most 300 s; its signed corpus is `golden/workload-token`),
 and `transport-error.v1` (CHAOS-10392), the body auth-service's shared

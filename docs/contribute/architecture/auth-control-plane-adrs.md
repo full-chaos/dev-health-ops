@@ -65,6 +65,7 @@ the recommendation, the alternatives considered, and the risk for each.
 | ACP-ADR-10 | MFA and step-up requirements | Accepted | Wave 2 |
 | ACP-ADR-11 | SCIM and enterprise deprovisioning scope | Accepted | Wave 4 |
 | ACP-ADR-12 | A single authentication seam for `query-api` | Accepted | Wave 6 |
+| ACP-ADR-13 | ACP as the OAuth 2.1 authorization server for the browser and MCP clients | Accepted | Ask Dev (CHAOS-12082) |
 
 ACP-ADR-12 is **not** one of TRD §26's eleven. It is proposed by the Wave 0
 threat model (§2.9) because the migration removes a control that exists today
@@ -568,7 +569,7 @@ trade-off that Wave 5 should measure rather than assume.
 
 ## ACP-ADR-08 — ACR lifecycle projection boundary
 
-**Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02) · **Decides:** TRD §26.8 · **Guardrails:** G-40, G-41, G-42, G-43, G-44, G-9
+**Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02); **amended 2026-10-31 by ACP-ADR-13** (points 1 and 3, see "Amendment" below) · **Decides:** TRD §26.8 · **Guardrails:** G-40, G-41, G-42, G-43, G-44, G-9
 
 ### Context
 
@@ -605,10 +606,43 @@ avoid breaking ACR while giving the control plane visibility into it".
    validator observes the credential first; ACR has zero, on a harder protocol.
    The fix is not novel design work — it is porting a working implementation.
 
+### Amendment (2026-10-31, ACP-ADR-13)
+
+chris ruled Option A on CHAOS-12082: ACP becomes the OAuth 2.1 authorization
+server for the Ask Dev browser client and for MCP clients, and ACR validates
+ACP-issued access tokens. The decisions above change in two places only.
+
+- **Point 1 is narrowed, not reversed.** ACR stays the authoritative validator
+  for `fcacr_*`, device state, and the request-bound web assertion. It ALSO
+  verifies ACP-issued access tokens whose `aud` is `acr-api` (acr-api) or
+  `acr-mcp` (acr-mcp), with the shared verifier (dev-health-go `authverify`:
+  EdDSA only, the pinned ACP issuer, its published key set, a key-set outage is
+  a 503). The two validators are chosen by single dispatch on the bearer's
+  shape (point 5); a request is never tried against both. The control plane
+  still never validates or writes an ACR credential.
+- **Point 3: an ACP access token with `aud` `acr-mcp` is not a platform session
+  credential under G-43**, if, and only if, all four hold:
+  1. `aud` is the one string `acr-mcp`, and every platform verifier (go-api,
+     query-api, auth-service) refuses it. This is proven by executed negative
+     cells, not by reading the code.
+  2. It is an access token only. acr-mcp never holds a refresh token or an ACP
+     session credential.
+  3. Its life is inside the access-token lifetime ceiling (60 minutes,
+     `AccessTokenLifetimeCeiling` in `internal/auth/contracts/access_token.go`;
+     ACP-ADR-03 targets 10 minutes after migration).
+  4. acr-mcp never passes it to acr-api (no token passthrough). The `sid` claim
+     is an identifier there, not a credential.
+
+  If any one fails, the token IS a platform session credential and G-43
+  refuses it.
+- Point 2 (the web assertion), point 4 (repository grants per operation) and
+  point 5 (single dispatch) do not change.
+
 ### Supersedes
 
 Any reading of "integrate ACR into the control plane" that implies moving ACR's
-validators. It moves metadata, not authority.
+validators. It moves metadata, not authority. (ACP-ADR-13 adds a verifier to
+ACR; it moves no validator out of it.)
 
 ### Leaves open
 
@@ -852,6 +886,109 @@ action name for ADR-05's decision call, which would make G-1's profile
 requirement and G-27's explicit-action requirement satisfiable in one place
 rather than two. That is attractive and unproven; it is recorded as a
 possibility, not a decision.
+
+---
+
+## ACP-ADR-13 — ACP as the OAuth 2.1 authorization server for the browser and MCP clients
+
+**Status:** Accepted, 2026-10-31 (chris ruling on CHAOS-12082: Option A; the CLI device flow stays on ACR in the first cut) · **Decides:** who issues the Ask Dev browser and MCP user credentials · **Amends:** ACP-ADR-08 points 1 and 3 · **Guardrails:** G-9, G-43
+
+### Context
+
+Until this ruling, the Ask Dev browser client and third-party MCP clients got
+user credentials from ACR's own OAuth 2.1 server: opaque `fcacr_` rows
+(rulings D6524 and D6525 on CHAOS-12069: "no new token, no new audience"). That
+left two user-credential authorities, ACP for the web session and ACR for Ask
+Dev clients, with two revocation paths. chris's condition on the direct-to-ACR
+design ("MCP will need to go through that too") asked for one.
+
+At the time of this ADR, auth-service mints one access-token class per
+configuration (`AUTH_ACCESS_TOKEN_CLASS`; prod `hs256_compat`), serves no
+OAuth authorization server for other clients, and has no public ingress: public
+auth reaches it through go-api's `/api/v1/auth/*` proxy.
+
+### Decision
+
+1. **ACP is the OAuth 2.1 authorization server for the Ask Dev browser client
+   and for MCP clients.** Authorization code with PKCE S256, resource
+   indicators (RFC 8707) that map to the token's `aud`, rotating refresh
+   tokens, and revocation (RFC 7009). D6524 and D6525 are reversed for these
+   clients.
+2. **Two new audiences, `acr-api` and `acr-mcp`,** one scope each. Only ACR
+   accepts them, each service its own one: acr-api accepts `acr-api` only, and
+   acr-mcp accepts `acr-mcp` only. The platform verifiers (go-api, query-api
+   and auth-service) refuse both (ACP-ADR-08 amendment, condition 1).
+3. **A separate mint for the ACR audiences,** beside the session token class.
+   The web login token class does not change: there is no `eddsa` switch of web
+   tokens for this.
+4. **One key set.** The ACR-audience tokens are signed with the auth-service
+   key set and issuer that the workload path uses (ACP-ADR-02 custody; CHAOS-12061
+   sets the prod issuer). No second key set and no second issuer. The issuer is
+   configured independently of the web token class: the web login token stays
+   `hs256_compat` while the shared issuer is set.
+5. **Each MCP client gets its own ACP session at authorize.** It never shares
+   the web session's `sid`. Its lifecycle:
+   - A web logout or an organization switch ends the browser client's
+     authority only. It does not end an MCP client's session, and neither does
+     the web session's idle expiry.
+   - Revoking an OAuth client ends that client's refresh family and session.
+   - The user's revoke-all, a password change and an account-security event
+     end every session of the user, MCP clients included.
+   - An MCP client session has its own explicit idle and absolute lifetime (a
+     new `sid` alone is still under the session store's idle rule); the values
+     are set with the token endpoint, not here.
+   - The browser client's binding to the web session is checked server-side,
+     not left to the browser sending a revoke.
+   - Every client session keeps the organization and token-version pin that
+     the live access read checks.
+6. **OAuth refresh credentials are their own credential purpose.** They are
+   bound to the client, the resource and the session. The platform refresh
+   routes refuse them, and the OAuth token endpoint refuses platform refresh
+   credentials. An authorization code is single use, consumed atomically, and
+   bound to the client, the redirect URI, the PKCE challenge and the resource.
+7. **The client class is a server-side fact that reaches ACR** (decision 5(b)
+   of the direct-to-ACR design). It is recorded at authorize from the trusted
+   client registry, never from client-supplied metadata, and it travels to
+   ACR with the authenticated call, so an MCP client can never act with
+   browser authority: it cannot ask for the browser resource, read the user's
+   browser history, or reach a non-MCP operation. The first-party browser
+   client's no-consent status (decision 2) also comes from that registry.
+8. **A valid signature is not a live session.** ACR keeps the per-call access
+   read (session, membership, flags, scope, impersonation) on every call
+   (ACP-ADR-08; the Ask Dev access read), and enforces its answer: a token
+   minted before an impersonation began is refused once it has begun.
+9. **The CLI device flow stays on ACR in the first cut.** It moves to ACP later
+   (an RFC 8628 device grant), as its own ticket.
+10. **acr-mcp never passes a client token to acr-api.** It calls acr-api on
+    its authenticated hop with the verified principal: subject, organization,
+    `sid` and the MCP client class, bound against replay and to its one
+    destination. An exchange of the `acr-mcp` token at ACP is excluded, because
+    the platform verifiers (go-api, query-api and auth-service) refuse that audience
+    (ACP-ADR-08 amendment, condition 1). acr-mcp gets no platform workload
+    credential either (G-43).
+11. **The public surface is designed before it is built** (CHAOS-12247): the
+    route (a go-api proxy aggregate, or a dedicated host), the issuer URL,
+    rate limits, CORS, and the SSRF guards of client-ID metadata fetches.
+
+### Supersedes
+
+D6524 and D6525 (CHAOS-12069) for the browser and MCP clients. For MCP OAuth
+clients, decision 5(a) of the direct-to-ACR design ("row-only" MCP
+credentials) is superseded too: the client's own ACP session and grant replace
+the `fcacr_` row as the credential authority, and the live per-call check
+stays. The device credentials stay row-only on ACR. ACR's own
+authorization server keeps the device flow, and its browser and MCP user paths
+retire only after a dual-accept window.
+
+### Leaves open
+
+- The public route and the issuer URL (CHAOS-12247).
+- The hop contract's mechanism (decision 10): existing hop material (the
+  acr-mcp hop of CHAOS-12094) is evaluated first, in the public-surface design.
+- The MCP client session's idle and absolute lifetimes (decision 5).
+- The length of the dual-accept window (at least the longest remaining
+  `fcacr_` row life).
+- The CLI device grant on ACP (later).
 
 ---
 

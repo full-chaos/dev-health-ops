@@ -2271,9 +2271,10 @@ REMAINING_INTEGRATION_PACKAGE_KEY="internal/jobs/metrics/remaining"
 # (CHAOS-11411: the arguments are now sorted longest weight first; an isolated package needs no order).
 # internal/jobs/metrics/remaining (CHAOS-9631) runs 1,053-1,164 s on its own and
 # sat in a shard with 20 other packages whose job took 22-25 of the 25 minutes.
-# internal/fixturescli (CHAOS-11411) runs 1,145-1,168 s of the 1,263 s test phase of its shard, next to three other
-# packages that run at the same time: it sets the Go workflow wall, so it gets a shard of its own as well.
-INTEGRATION_ISOLATED_PACKAGE_KEYS=" ${DEV_HEALTH_GO_INTEGRATION_ISOLATED_KEYS:-internal/workerservice internal/queryapi/server internal/jobs/metrics/remaining internal/fixturescli} "
+# internal/fixturescli (CHAOS-11411) was isolated while it ran 1,145-1,168 s; the shared servers (#5197) cut it to about
+# 493 s, so CHAOS-11658 took it out of this list. An isolated package needs an empty shard when its turn comes in the
+# longest-weight-first order: at its true weight it would find none and the plan would fail.
+INTEGRATION_ISOLATED_PACKAGE_KEYS=" ${DEV_HEALTH_GO_INTEGRATION_ISOLATED_KEYS:-internal/workerservice internal/queryapi/server internal/jobs/metrics/remaining} "
 DAILY_TEST_SHARD_COUNT=0
 DAILY_INTEGRATION_TEST_WEIGHT=0
 DAILY_ORDINARY_TEST_WEIGHT=0
@@ -2564,6 +2565,31 @@ discover_integration_tagged_tests() {
 # <key> <name> per selected name, and per group SHARD-GROUP <module> <n> <key>... then SHARD-REGEX <module> <regex>; a
 # group after the first also gets, per earlier group <g>, SHARD-SPLIT <module> <n> <key> <g> collision <name> <member>
 # or SHARD-SPLIT <module> <n> <key> <g> budget <bytes>: why its first package <key> did not join group <g>.
+# warn_integration_weight_drift MODULE_DIR LOGFILE PKG...: reads the `ok <import path> <N>s` lines go test printed into
+# LOGFILE and prints one `::warning title=INTEGRATION WEIGHT DRIFT::` line for each package whose measured time is more than
+# 50% away from its weight in ci/go_integration_shards.d and at least 60 s on either side (CHAOS-11658). A weight is a
+# placement value and a measured time includes the packages that ran beside it, so this only tells a reader a row is stale:
+# it never fails, whatever the lines hold.
+warn_integration_weight_drift() {
+  local module_dir="$1" log="$2" pkg key weight line import_path seconds
+  shift 2
+  for pkg in "$@"; do
+    key="${module_dir}/${pkg#./}"
+    key="${key#./}"
+    weight="${INTEGRATION_SHARD_WEIGHTS[${key}]:-}"
+    [ -n "${weight}" ] || continue
+    while IFS=$'\t' read -r import_path seconds; do
+      [[ "${import_path}" == */"${pkg#./}" ]] || continue
+      awk -v key="${key}" -v n="${seconds%s}" -v w="${weight}" 'BEGIN {
+        d = n - w; if (d < 0) d = -d
+        m = (n > w) ? n : w
+        if (m >= 60 && d * 100 > 50 * w) printf "::warning title=INTEGRATION WEIGHT DRIFT::%s measured %.0fs, weight %ds (%+.0f%%)\n", key, n, w, (n - w) * 100 / w
+      }'
+    done < <(sed -n -E 's/^ok[[:space:]]+([^[:space:]]+)[[:space:]]+([0-9.]+s).*$/\1\t\2/p' "${log}")
+  done
+  return 0
+}
+
 run_integration_packages() {
   local mode="$1" module_dir="$2" label="$3" pkg key name tests=0 result=0 status groups=0 group fits why split_why size names_len regex_max=60000
   local -a unfiltered=() run_pkgs=() group_pkgs=() group_keys=() group_regex=() group_size=() group_split=()
@@ -2671,11 +2697,38 @@ run_integration_packages() {
   done
   [ "${mode}" != "--dry-run" ] || return 0
   # Every go test goes through run_integration_go_test (one reaped testcontainers session per call); -run rides in run_pkgs.
+  # Its stdout also goes to a file (tee) for warn_integration_weight_drift. run_integration_go_test stays in this shell:
+  # its INT/TERM trap (CHAOS-10036) must be this shell's, so a TERM to this script still reaps the session. The tee is one
+  # process substitution on its own descriptor; closing the descriptor ends it, and wait makes the file complete before it
+  # is read. The status of go test comes straight from the function (CHAOS-11658).
+  local ok_log tee_fd tee_pid
+  ok_log="$(mktemp "${TMPDIR:-/tmp}/dev-health-ok.XXXXXX")"
+  exec {tee_fd}> >(tee -a "${ok_log}")
+  tee_pid=$!
   for ((group = 0; group < groups; group++)); do
     mapfile -t run_pkgs <<<"${group_pkgs[${group}]%$'\n'}"
     run_pkgs=(-run "${group_regex[${group}]}" "${run_pkgs[@]}")
-    run_integration_go_test "${module_dir}" "${run_pkgs[@]}" || { status=$?; [ "${result}" -ne 0 ] || result="${status}"; }
+    run_integration_go_test "${module_dir}" "${run_pkgs[@]}" >&"${tee_fd}" || { status=$?; [ "${result}" -ne 0 ] || result="${status}"; }
   done
+  exec {tee_fd}>&-
+  # tee ends when every writer has closed the pipe; a process go test left behind that still holds it would stall this
+  # wait to the job cap (the CHAOS-11794 class). Bounded: past the bound only the tee is stopped (never the leftover
+  # writer, which is not ours to name) and the drift check reads the partial log. bash cannot mark tee_fd close-on-exec,
+  # so go test and its children inherit it next to their stdout: the same pipe, no new writer.
+  local tee_wait="${DEV_HEALTH_GO_TEE_WAIT_SECS:-30}" tee_tick
+  case "${tee_wait}" in ""|*[!0-9]*) tee_wait=30 ;; esac
+  tee_wait=$((10#${tee_wait}))
+  for ((tee_tick = 0; tee_tick < tee_wait * 5; tee_tick++)); do
+    kill -0 "${tee_pid}" 2>/dev/null || break
+    sleep 0.2
+  done
+  if kill -0 "${tee_pid}" 2>/dev/null; then
+    kill -TERM "${tee_pid}" 2>/dev/null || true
+    echo "check_go.sh: the drift check read a partial log: a process still holds go test's stdout ${tee_wait}s after go test ended" >&2
+  fi
+  wait "${tee_pid}" 2>/dev/null || true
+  warn_integration_weight_drift "${module_dir}" "${ok_log}" "${pkgs[@]}"
+  rm -f -- "${ok_log}"
   return "${result}"
 }
 

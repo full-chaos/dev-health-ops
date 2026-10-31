@@ -182,11 +182,54 @@ func (s *Store) lockSet(ctx context.Context, tx audit.TxOps, account *uuid.UUID,
 	return s.locks.LockRows(ctx, tx, lockRowsFor(account, owner, actor))
 }
 
-func lockRowsFor(account *uuid.UUID, owner uuid.UUID, actor *uuid.UUID) []membership.LockRow { return nil }
+func lockRowsFor(account *uuid.UUID, owner uuid.UUID, actor *uuid.UUID) []membership.LockRow {
+	var targets []uuid.UUID
+	if account != nil {
+		targets = append(targets, *account)
+	}
+	rows := membership.LockOrder(targets, nil, actor, owner)
+	for i := range rows {
+		if rows[i].ID == owner && rows[i].Mode < membership.LockShare {
+			rows[i].Mode = membership.LockShare
+		}
+	}
+	return rows
+}
 
+func (s *Store) lockOrg(ctx context.Context, tx audit.TxOps, org uuid.UUID) (bool, error) {
+	var active bool
+	err := tx.QueryRow(ctx, `SELECT disabled_at IS NULL FROM `+s.q+`.organizations WHERE id = $1 FOR SHARE`, org).Scan(&active)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, ErrOrgNotFound
+	}
+	return active, err
+}
 
 // lockOwner reads the owner under the locks lockSet took and locks its
 // membership pair row FOR SHARE (step 6).
+func (s *Store) lockOwner(ctx context.Context, tx audit.TxOps, org, owner uuid.UUID) (ownerState, error) {
+	var st ownerState
+	var kind string
+	err := tx.QueryRow(ctx, `SELECT p.kind, p.disabled_at IS NOT NULL, EXISTS (SELECT 1 FROM public.users u WHERE u.id = p.id)
+FROM `+s.q+`.principals p WHERE p.id = $1`, owner).Scan(&kind, &st.disabled, &st.isUser)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return ownerState{}, nil
+	case err != nil:
+		return ownerState{}, err
+	}
+	st.isUser = st.isUser && kind == "user"
+	var status string
+	err = tx.QueryRow(ctx, `SELECT status FROM `+s.q+`.memberships WHERE organization_id = $1 AND principal_id = $2 FOR SHARE`, org, owner).Scan(&status)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+	case err != nil:
+		return ownerState{}, err
+	default:
+		st.member = status == "active"
+	}
+	return st, nil
+}
 
 type accountRow struct {
 	org    uuid.UUID
@@ -195,18 +238,216 @@ type accountRow struct {
 }
 
 // lockAccount is step 7: the service_accounts row FOR UPDATE.
+func (s *Store) lockAccount(ctx context.Context, tx audit.TxOps, id uuid.UUID) (accountRow, error) {
+	var r accountRow
+	var owner *uuid.UUID
+	err := tx.QueryRow(ctx, `SELECT organization_id, owner_principal_id, status = 'active' FROM `+s.q+`.service_accounts
+WHERE principal_id = $1 FOR UPDATE`, id).Scan(&r.org, &owner, &r.active)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return r, ErrNotFound
+	}
+	if owner != nil {
+		r.owner = *owner
+	}
+	return r, err
+}
 
 // Create inserts an active service account with its principal. The owner must
 // be an enabled user and an active member of the organization.
 func (s *Store) Create(ctx context.Context, in CreateInput, a Actor) (uuid.UUID, error) {
-	return uuid.Nil, ErrStore
+	if !s.ownsUsers {
+		return uuid.Nil, s.refuseNotOwned(ctx, verbCreate)
+	}
+	if err := ValidateName(in.Name); err != nil {
+		s.record(ctx, verbCreate, err)
+		return uuid.Nil, err
+	}
+	id := uuid.New()
+	owner := in.Owner
+	err := s.run(ctx, verbCreate, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			if err := s.lockSet(ctx, tx, nil, in.Owner, a.PrincipalID); err != nil {
+				return err
+			}
+			orgActive, err := s.lockOrg(ctx, tx, in.OrgID)
+			if err != nil {
+				return err
+			}
+			st, err := s.lockOwner(ctx, tx, in.OrgID, in.Owner)
+			if err != nil {
+				return err
+			}
+			if err := decideCreate(orgActive, st); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO `+s.q+`.principals (id, kind, display_name) VALUES ($1, 'service_account', $2)`, id, in.Name); err != nil {
+				return err
+			}
+			var inserted uuid.UUID
+			err = tx.QueryRow(ctx, `INSERT INTO `+s.q+`.service_accounts (principal_id, organization_id, name, owner_principal_id, created_by)
+VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING RETURNING principal_id`, id, in.OrgID, in.Name, in.Owner, a.PrincipalID).Scan(&inserted)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNameTaken
+			}
+			return err
+		},
+		Audit: auditFor("auth.service_account.created", "principal_provisioned", id, in.OrgID, &owner, a,
+			[]string{"status", "owner_principal_id"}, "", "active"),
+		Events: []audit.OutboxEvent{{AggregateType: "service_account", AggregateID: wire(id), EventType: "service_account.created",
+			Change: change("active", &owner)}},
+		Refusals: refusals,
+	})
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return id, nil
 }
 
-func (s *Store) Disable(ctx context.Context, id uuid.UUID, a Actor) error { return ErrStore }
+// Disable sets the account's row and its principal disabled in one
+// transaction. It takes the principal row alone, never public.users: a
+// service account has no users row, so the kill switch works whether or not
+// auth-service owns users.
+func (s *Store) Disable(ctx context.Context, id uuid.UUID, a Actor) error {
+	info, err := s.read(ctx, id)
+	if err != nil {
+		s.record(ctx, verbDisable, err)
+		return err
+	}
+	owner := info.Owner
+	return s.run(ctx, verbDisable, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			if err := platformrole.LockWritesShared(ctx, tx); err != nil {
+				return err
+			}
+			var kind string
+			err := tx.QueryRow(ctx, `SELECT kind FROM `+s.q+`.principals WHERE id = $1 FOR UPDATE`, id).Scan(&kind)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			if err != nil {
+				return err
+			}
+			if kind != "service_account" {
+				return ErrNotAccount
+			}
+			row, err := s.lockAccount(ctx, tx, id)
+			if err != nil {
+				return err
+			}
+			if err := decideDisable(row.active); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `UPDATE `+s.q+`.service_accounts SET status = 'disabled', disabled_at = clock_timestamp(),
+updated_at = clock_timestamp() WHERE principal_id = $1`, id); err != nil {
+				return err
+			}
+			_, err = tx.Exec(ctx, `UPDATE `+s.q+`.principals SET disabled_at = clock_timestamp() WHERE id = $1`, id)
+			return err
+		},
+		Audit: auditFor("auth.service_account.disabled", "principal_disabled", id, info.OrgID, &owner, a,
+			[]string{"status", "disabled_at"}, "active", "disabled"),
+		Events: []audit.OutboxEvent{{AggregateType: "service_account", AggregateID: wire(id), EventType: "service_account.disabled",
+			Change: change("disabled", nil)}},
+		Refusals: refusals,
+	})
+}
 
-func (s *Store) Enable(ctx context.Context, id uuid.UUID, a Actor) error { return ErrStore }
+// Enable clears the disabled state of the row and the principal. It refuses
+// while the owner is disabled, is not a user or is no active member.
+func (s *Store) Enable(ctx context.Context, id uuid.UUID, a Actor) error {
+	if !s.ownsUsers {
+		return s.refuseNotOwned(ctx, verbEnable)
+	}
+	info, err := s.read(ctx, id)
+	if err != nil {
+		s.record(ctx, verbEnable, err)
+		return err
+	}
+	owner := info.Owner
+	return s.run(ctx, verbEnable, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			if err := s.lockSet(ctx, tx, &id, info.Owner, a.PrincipalID); err != nil {
+				return err
+			}
+			orgActive, err := s.lockOrg(ctx, tx, info.OrgID)
+			if err != nil {
+				return err
+			}
+			st, err := s.lockOwner(ctx, tx, info.OrgID, info.Owner)
+			if err != nil {
+				return err
+			}
+			row, err := s.lockAccount(ctx, tx, id)
+			if err != nil {
+				return err
+			}
+			if row.org != info.OrgID || row.owner != info.Owner {
+				return ErrStateChanged
+			}
+			if err := decideEnable(row.active, orgActive, st); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `UPDATE `+s.q+`.service_accounts SET status = 'active', disabled_at = NULL,
+updated_at = clock_timestamp() WHERE principal_id = $1`, id); err != nil {
+				return err
+			}
+			_, err = tx.Exec(ctx, `UPDATE `+s.q+`.principals SET disabled_at = NULL WHERE id = $1`, id)
+			return err
+		},
+		Audit: auditFor("auth.service_account.enabled", "principal_enabled", id, info.OrgID, &owner, a,
+			[]string{"status", "disabled_at"}, "disabled", "active"),
+		Events: []audit.OutboxEvent{{AggregateType: "service_account", AggregateID: wire(id), EventType: "service_account.enabled",
+			Change: change("active", nil)}},
+		Refusals: refusals,
+	})
+}
 
-func (s *Store) SetOwner(ctx context.Context, id, newOwner uuid.UUID, a Actor) error { return ErrStore }
+// SetOwner names a new owner, who must pass the checks of Create. A disabled
+// account may change owner; Enable then checks the new one.
+func (s *Store) SetOwner(ctx context.Context, id, newOwner uuid.UUID, a Actor) error {
+	if !s.ownsUsers {
+		return s.refuseNotOwned(ctx, verbSetOwner)
+	}
+	info, err := s.read(ctx, id)
+	if err != nil {
+		s.record(ctx, verbSetOwner, err)
+		return err
+	}
+	owner := newOwner
+	return s.run(ctx, verbSetOwner, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			if err := s.lockSet(ctx, tx, &id, newOwner, a.PrincipalID); err != nil {
+				return err
+			}
+			orgActive, err := s.lockOrg(ctx, tx, info.OrgID)
+			if err != nil {
+				return err
+			}
+			st, err := s.lockOwner(ctx, tx, info.OrgID, newOwner)
+			if err != nil {
+				return err
+			}
+			row, err := s.lockAccount(ctx, tx, id)
+			if err != nil {
+				return err
+			}
+			if row.org != info.OrgID || row.owner != info.Owner {
+				return ErrStateChanged
+			}
+			if err := decideSetOwner(row.owner, newOwner, orgActive, st); err != nil {
+				return err
+			}
+			_, err = tx.Exec(ctx, `UPDATE `+s.q+`.service_accounts SET owner_principal_id = $2, updated_at = clock_timestamp()
+WHERE principal_id = $1`, id, newOwner)
+			return err
+		},
+		Audit: auditFor("auth.service_account.owner_changed", "service_account_owner_changed", id, info.OrgID, &owner, a,
+			[]string{"owner_principal_id"}, "", ""),
+		Events: []audit.OutboxEvent{{AggregateType: "service_account", AggregateID: wire(id), EventType: "service_account.owner_changed",
+			Change: change("", &owner)}},
+		Refusals: refusals,
+	})
+}
 
 const infoSelect = `SELECT sa.principal_id, sa.organization_id, sa.name, sa.status = 'active', sa.disabled_at, coalesce(sa.owner_principal_id, '00000000-0000-0000-0000-000000000000'::uuid),
 coalesce(op.kind = 'user' AND op.disabled_at IS NULL, false),

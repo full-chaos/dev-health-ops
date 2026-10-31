@@ -15,6 +15,9 @@ var namePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
 
 // ValidateName refuses a name outside the service account name pattern.
 func ValidateName(name string) error {
+	if !namePattern.MatchString(name) {
+		return ErrNameInvalid
+	}
 	return nil
 }
 
@@ -52,12 +55,48 @@ type ownerState struct {
 	member   bool
 }
 
-func (o ownerState) refusal() error { return nil }
+func (o ownerState) refusal() error {
+	switch {
+	case !o.isUser:
+		return ErrOwnerNotUser
+	case o.disabled:
+		return ErrOwnerDisabled
+	case !o.member:
+		return ErrOwnerNotMember
+	}
+	return nil
+}
 
-func decideCreate(orgActive bool, owner ownerState) error { return nil }
+func decideCreate(orgActive bool, owner ownerState) error {
+	if !orgActive {
+		return ErrOrgNotActive
+	}
+	return owner.refusal()
+}
 
-func decideEnable(active, orgActive bool, owner ownerState) error { return nil }
+func decideEnable(active, orgActive bool, owner ownerState) error {
+	switch {
+	case active:
+		return ErrAlreadyInState
+	case !orgActive:
+		return ErrOrgNotActive
+	}
+	return owner.refusal()
+}
 
-func decideDisable(active bool) error { return nil }
+func decideDisable(active bool) error {
+	if !active {
+		return ErrAlreadyInState
+	}
+	return nil
+}
 
-func decideSetOwner(current, next uuid.UUID, orgActive bool, owner ownerState) error { return nil }
+func decideSetOwner(current, next uuid.UUID, orgActive bool, owner ownerState) error {
+	switch {
+	case !orgActive:
+		return ErrOrgNotActive
+	case current == next:
+		return ErrAlreadyInState
+	}
+	return owner.refusal()
+}

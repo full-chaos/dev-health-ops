@@ -239,11 +239,13 @@ func ScanReads(root string) ([]Read, error) {
 	}
 	for _, d := range dirs {
 		g := world[d]
+		g.underProgram = programs[d]
+		g.prebind()
 		flow := newFlowGroup(byDir[d])
+		flow.execInTemp = g.execInTemp
 		for _, s := range byDir[d] {
 			reads = append(reads, scanFile(s.fset, s.file, s.rel, top, g.chdir, flow)...)
 		}
-		g.underProgram = programs[d]
 		reads = append(reads, g.analyze()...)
 	}
 	out := reads

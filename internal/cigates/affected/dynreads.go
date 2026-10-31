@@ -209,6 +209,9 @@ type dirGroup struct {
 	varKind   map[string]map[string]pathInfo
 	immut     map[immutKey]bool // immutableTable/immutableValue, which every bind pass asks again
 	inlining  map[*ast.FuncDecl]bool
+	// execScopes: the bound scope of each function execInTemp asked about; bound: bindParams and boundChdirs ran
+	execScopes map[*ast.FuncDecl]*scope
+	bound      bool
 }
 
 type funcDecl struct {
@@ -1068,8 +1071,7 @@ func (c *fileCtx) walkRoot(arg ast.Expr, sc *scope, glob bool) pathInfo {
 
 // analyze returns every dynamic read, walk, run and load of the files of one directory.
 func (g *dirGroup) analyze() []Read {
-	g.bindParams()
-	g.boundChdirs()
+	g.prebind()
 	var out []Read
 	for _, s := range g.files {
 		c := &fileCtx{g: g, s: s, pkg: g.pkgOf[s]}
@@ -1100,37 +1102,7 @@ func (c *fileCtx) eachBody(params map[*ast.FuncDecl][]pathInfo, fn func(ast.Node
 			if d.Body == nil {
 				continue
 			}
-			sc := newScope(nil)
-			i := 0
-			for _, f := range d.Type.Params.List {
-				names := f.Names
-				if len(names) == 0 {
-					i++
-					continue
-				}
-				for _, n := range names {
-					v := dynInfo
-					if ps, ok := params[d]; ok && i < len(ps) {
-						v = ps[i]
-					}
-					sc.vals[n.Name] = v
-					i++
-				}
-			}
-			if d.Recv != nil {
-				for _, f := range d.Recv.List {
-					for _, n := range f.Names {
-						sc.vals[n.Name] = dynInfo
-					}
-				}
-			}
-			if d.Type.Results != nil {
-				for _, f := range d.Type.Results.List {
-					for _, n := range f.Names {
-						sc.vals[n.Name] = dynInfo
-					}
-				}
-			}
+			sc := declScope(d, params)
 			c.bind(d.Body, sc)
 			fn(d.Body, sc)
 		case *ast.GenDecl:
@@ -1139,6 +1111,73 @@ func (c *fileCtx) eachBody(params map[*ast.FuncDecl][]pathInfo, fn func(ast.Node
 			}
 		}
 	}
+}
+
+// declScope is the scope of a function body before it is bound: the parameters at their kinds (dyn when unknown), the
+// receiver and the named results unbounded.
+func declScope(d *ast.FuncDecl, params map[*ast.FuncDecl][]pathInfo) *scope {
+	sc := newScope(nil)
+	i := 0
+	for _, f := range d.Type.Params.List {
+		names := f.Names
+		if len(names) == 0 {
+			i++
+			continue
+		}
+		for _, n := range names {
+			v := dynInfo
+			if ps, ok := params[d]; ok && i < len(ps) {
+				v = ps[i]
+			}
+			sc.vals[n.Name] = v
+			i++
+		}
+	}
+	if d.Recv != nil {
+		for _, f := range d.Recv.List {
+			for _, n := range f.Names {
+				sc.vals[n.Name] = dynInfo
+			}
+		}
+	}
+	if d.Type.Results != nil {
+		for _, f := range d.Type.Results.List {
+			for _, n := range f.Names {
+				sc.vals[n.Name] = dynInfo
+			}
+		}
+	}
+	return sc
+}
+
+// execInTemp reports whether an exec.Command call runs in a temp directory: the directory it is given is under a temp
+// dir at every call of its function.
+func (g *dirGroup) execInTemp(s *srcFile, call *ast.CallExpr) bool {
+	c := &fileCtx{g: g, s: s, pkg: g.pkgOf[s]}
+	fd, ok := c.holder(call).(*ast.FuncDecl)
+	if !ok || fd.Body == nil {
+		return false
+	}
+	sc := g.execScopes[fd]
+	if sc == nil {
+		sc = declScope(fd, g.params)
+		c.bind(fd.Body, sc)
+		if g.execScopes == nil {
+			g.execScopes = map[*ast.FuncDecl]*scope{}
+		}
+		g.execScopes[fd] = sc
+	}
+	return c.cmdDir(call, sc).kind == kTemp
+}
+
+// prebind computes the parameter kinds and the directory changes of the group once.
+func (g *dirGroup) prebind() {
+	if g.bound {
+		return
+	}
+	g.bound = true
+	g.bindParams()
+	g.boundChdirs()
 }
 
 // bindParams computes the parameter kinds of the functions only this directory can call, as the least fixed point of

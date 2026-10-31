@@ -21,12 +21,14 @@ type flowFrame struct {
 }
 
 type flowGroup struct {
-	files   []*srcFile
-	parent  map[ast.Node]ast.Node
-	fileOf  map[*ast.File]*srcFile
-	funcs   map[string][]*ast.FuncDecl // name -> functions and methods of that name
-	callers map[string][]*ast.CallExpr // function or method name -> the calls that name it
-	types   map[string]*ast.TypeSpec   // the types the directory declares once, at package level, not as an alias
+	// execInTemp reports whether an exec.Command call of a file runs in a temp directory (set by the scan)
+	execInTemp func(*srcFile, *ast.CallExpr) bool
+	files      []*srcFile
+	parent     map[ast.Node]ast.Node
+	fileOf     map[*ast.File]*srcFile
+	funcs      map[string][]*ast.FuncDecl // name -> functions and methods of that name
+	callers    map[string][]*ast.CallExpr // function or method name -> the calls that name it
+	types      map[string]*ast.TypeSpec   // the types the directory declares once, at package level, not as an alias
 }
 
 func newFlowGroup(files []*srcFile) *flowGroup {
@@ -99,15 +101,20 @@ var flowReaderPrefixes = []string{"io/fs.", "io/ioutil.", "go/build.", "go/impor
 var testingQuiet = map[string]bool{"Errorf": true, "Fatalf": true, "Logf": true, "Log": true, "Error": true, "Fatal": true,
 	"Skip": true, "Skipf": true, "Run": true, "Helper": true}
 
+var numericTypes = map[string]bool{"int": true, "int8": true, "int16": true, "int32": true, "int64": true, "uint": true, "uint8": true,
+	"uint16": true, "uint32": true, "uint64": true, "uintptr": true, "float32": true, "float64": true, "bool": true}
+
 var quietBuiltins = map[string]bool{"len": true, "cap": true, "delete": true, "print": true, "println": true, "panic": true,
 	"new": true, "make": true, "clear": true, "complex": true, "real": true, "imag": true, "close": true}
 
 const flowBudget = 20000
 
 type flowRun struct {
-	g     *flowGroup
-	steps int
-	seen  map[flowKey]bool
+	g *flowGroup
+	// composed: the value went through string composition (+, Join, a library function), so it may name another directory
+	composed bool
+	steps    int
+	seen     map[flowKey]bool
 }
 
 // flowKey is one visit: a node (or a variable's scope and name) with the field, map-key flag and calling frame it was
@@ -225,6 +232,7 @@ func (r *flowRun) expr(e ast.Node, field string, mapKey bool, ret []flowFrame, d
 		return r.expr(p, "", mapKey, ret, depth)
 	case *ast.BinaryExpr:
 		if p.Op == token.ADD {
+			r.composed = true
 			return r.expr(p, "", false, ret, depth)
 		}
 		return false
@@ -300,7 +308,7 @@ func (r *flowRun) call(c *ast.CallExpr, i int, field string, mapKey bool, ret []
 		switch {
 		case f.Name == "append":
 			return r.expr(c, field, mapKey, ret, depth)
-		case f.Name == "string" || f.Name == "byte" || f.Name == "rune":
+		case f.Name == "string" || f.Name == "byte" || f.Name == "rune" || numericTypes[f.Name]:
 			return r.expr(c, field, mapKey, ret, depth)
 		case f.Name == "min" || f.Name == "max":
 			return r.expr(c, field, mapKey, ret, depth) // the result is one of the arguments
@@ -371,6 +379,11 @@ func (r *flowRun) pkgCall(imp, name string, c *ast.CallExpr, i int, field string
 	}
 	_, read := readArg[full]
 	_, walk := walkArg[full]
+	if (full == "os/exec.Command" || full == "os/exec.CommandContext") && !r.composed && r.g.execInTemp != nil {
+		if s := r.file(c); s != nil && r.g.execInTemp(s, c) {
+			return false // the arguments name files of a temp directory
+		}
+	}
 	if read || walk || flowReaders[full] || strings.HasSuffix(name, "ParseFiles") || strings.HasSuffix(name, "ParseGlob") {
 		return true
 	}
@@ -381,12 +394,14 @@ func (r *flowRun) pkgCall(imp, name string, c *ast.CallExpr, i int, field string
 	}
 	switch full {
 	case "path/filepath.Join", "path.Join":
+		r.composed = true
 		return r.expr(c, "", false, ret, depth)
 	}
 	if nameTests[full] || flowSinks[full] {
 		return false
 	}
 	// any other standard-library function: the value lives on only in its results
+	r.composed = true
 	return r.expr(c, "", false, ret, depth)
 }
 

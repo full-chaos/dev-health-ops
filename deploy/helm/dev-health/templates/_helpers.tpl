@@ -1040,15 +1040,22 @@ the trust domain and cluster issuer named, the API server an https origin, and a
 */}}
 {{- define "dev-health.authWorkloadExchange" -}}
 {{- $w := default dict .Values.authService.workloadExchange -}}
-{{- if eq (include "dev-health.authBool" (dict "value" (default false $w.enabled) "key" "authService.workloadExchange.enabled")) "true" -}}
+{{- if eq (include "dev-health.authBool" (dict "value" (ternary $w.enabled false (hasKey $w "enabled")) "key" "authService.workloadExchange.enabled")) "true" -}}
 {{- if not (eq (include "dev-health.authOn" (dict "flag" "service" "context" .)) "true") }}{{- fail "authService.workloadExchange.enabled needs authService.phase >= 1: there is no auth-service to run the exchange" }}{{- end -}}
 {{- if not (include "dev-health.authTokenIssuer" .) }}{{- fail "authService.workloadExchange.enabled needs authService.accessToken.issuerURL: the exchange signs workload tokens under that issuer" }}{{- end -}}
 {{- range $k := list "trustDomain" "clusterIssuer" }}
 {{- $v := get $w $k -}}
 {{- if or (not (kindIs "string" $v)) (eq (trim $v) "") (ne (trim $v) $v) }}{{- fail (printf "authService.workloadExchange.%s must be a non-empty string without surrounding whitespace" $k) }}{{- end -}}
 {{- end -}}
-{{- if not (and (kindIs "string" $w.kubeAPIURL) (regexMatch "^https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?$" $w.kubeAPIURL)) }}{{- fail "authService.workloadExchange.kubeAPIURL must be an https origin: a host and an optional port, no path, query or credentials" }}{{- end -}}
-{{- if not (and .Values.authService.networkPolicy.enabled (default dict .Values.authService.networkPolicy.egress.kubeAPI).to) }}{{- if .Values.authService.networkPolicy.enabled }}{{- fail "authService.networkPolicy.egress.kubeAPI.to is required while authService.workloadExchange.enabled: without it the policy cuts auth-service off from the API server and every exchange fails" }}{{- end }}{{- end -}}
+{{- if or (not (kindIs "string" $w.kubeAPIURL)) (eq (trim $w.kubeAPIURL) "") }}{{- fail "authService.workloadExchange.kubeAPIURL must be set: auth-service checks that it is an https origin at start" }}{{- end -}}
+{{- if .Values.authService.networkPolicy.enabled }}
+{{- $k := default dict .Values.authService.networkPolicy.egress.kubeAPI -}}
+{{- if not (kindIs "slice" $k.to) }}{{- fail "authService.networkPolicy.egress.kubeAPI.to is required while authService.workloadExchange.enabled: a list of peers; without it the policy cuts auth-service off from the API server and every exchange fails" }}{{- end -}}
+{{- if not $k.to }}{{- fail "authService.networkPolicy.egress.kubeAPI.to is required while authService.workloadExchange.enabled: without it the policy cuts auth-service off from the API server and every exchange fails" }}{{- end -}}
+{{- range $i, $peer := $k.to }}{{- if not (and (kindIs "map" $peer) (gt (len $peer) 0)) }}{{- fail (printf "authService.networkPolicy.egress.kubeAPI.to[%d] must be a non-empty NetworkPolicy peer (podSelector, namespaceSelector or ipBlock): an empty peer admits every destination" $i) }}{{- end }}{{- end -}}
+{{- $port := $k.port -}}
+{{- if or (not (or (kindIs "float64" $port) (kindIs "int64" $port) (kindIs "int" $port))) (ne (floor $port) $port) (lt (int $port) 1) (gt (int $port) 65535) }}{{- fail "authService.networkPolicy.egress.kubeAPI.port must be a whole number from 1 to 65535" }}{{- end -}}
+{{- end -}}
 true
 {{- end -}}
 {{- end -}}

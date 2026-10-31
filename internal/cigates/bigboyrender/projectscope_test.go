@@ -273,7 +273,8 @@ func TestTheComposeFileGivesGoAPITheProjectScopeFlagOnlyThroughItsEnvFile(t *tes
 	}
 	var api struct {
 		EnvFile []struct {
-			Path string `yaml:"path"`
+			Path   string `yaml:"path"`
+			Format string `yaml:"format"`
 		} `yaml:"env_file"`
 		Environment []string `yaml:"environment"`
 	}
@@ -282,6 +283,11 @@ func TestTheComposeFileGivesGoAPITheProjectScopeFlagOnlyThroughItsEnvFile(t *tes
 	}
 	if len(api.EnvFile) != 1 || api.EnvFile[0].Path != "./.go-api-dev/go-api.env" {
 		t.Fatalf("go-api's env_file is %+v, want the one ./.go-api-dev/go-api.env the checks read", api.EnvFile)
+	}
+	// The reader follows Compose's default env-file format (quotes stripped). Another format (`format: raw` keeps
+	// the quotes, so go-api would refuse a quoted value the reader accepts) is a different contract (codex r3 P3).
+	if api.EnvFile[0].Format != "" {
+		t.Fatalf("go-api's env_file sets format %q: the checks' reader follows the default format only", api.EnvFile[0].Format)
 	}
 	if len(api.Environment) == 0 {
 		t.Fatal("go-api has no environment entries: the compose file was not read")

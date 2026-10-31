@@ -173,7 +173,7 @@ func (h compatHandlers) loginSucceeded(w http.ResponseWriter, r *http.Request, a
 	if attempt.membership != nil {
 		org, role = &attempt.membership.OrgID, roleText(attempt.membership.Role, true)
 	}
-	access, err := h.Issuer.AccessContext(r.Context(), Grant{
+	tokens, err := h.Issuer.Tokens(r.Context(), Grant{
 		PrincipalID: outcome.PrincipalID, OrganizationID: org, Role: role, SessionID: issued.Session.ID, User: attempt.user,
 	})
 	if err != nil {
@@ -181,7 +181,7 @@ func (h compatHandlers) loginSucceeded(w http.ResponseWriter, r *http.Request, a
 		return
 	}
 	h.rec.record(r.Context(), opCompatLogin, "success", string(outcome.Reason), nil)
-	writeCompatModel(w, loginResponse(access, issued.Credential, attempt.membership == nil && !attempt.user.IsSuperuser,
+	writeCompatModel(w, loginResponse(tokens, h.Issuer.ExpiresIn(), issued.Credential, attempt.membership == nil && !attempt.user.IsSuperuser,
 		userInfo(outcome.PrincipalID, attempt.user, attempt.membership), nil))
 }
 
@@ -419,16 +419,26 @@ func optionalText(value *string) pyjson.Value {
 
 // loginResponse is go-api's LoginResponse; isNewUser appends
 // SocialLoginResponse's is_new_user when non-nil.
-func loginResponse(access string, refresh contracts.SecretString, needsOnboarding bool, user *pyjson.Object, isNewUser *bool) *pyjson.Object {
+func loginResponse(tokens Tokens, expiresIn int, refresh contracts.SecretString, needsOnboarding bool, user *pyjson.Object, isNewUser *bool) *pyjson.Object {
 	out := pyjson.NewObject()
-	out.Set("access_token", access)
+	out.Set("access_token", tokens.Access)
 	out.Set("refresh_token", refresh.Reveal())
 	out.Set("token_type", "bearer")
-	out.Set("expires_in", pyjson.IntOf(int64(AccessExpiresIn)))
+	out.Set("expires_in", pyjson.IntOf(int64(expiresIn)))
 	out.Set("needs_onboarding", needsOnboarding)
 	out.Set("user", user)
 	if isNewUser != nil {
 		out.Set("is_new_user", *isNewUser)
 	}
+	setSessionAccessToken(out, tokens)
 	return out
+}
+
+// setSessionAccessToken adds session_access_token to a go-api-wire answer
+// under the eddsa class, as the last member; an hs256_compat answer keeps
+// go-api's exact member list.
+func setSessionAccessToken(out *pyjson.Object, tokens Tokens) {
+	if tokens.Session != "" {
+		out.Set("session_access_token", tokens.Session)
+	}
 }

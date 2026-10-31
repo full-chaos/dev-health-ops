@@ -238,6 +238,7 @@ func TestAuthPhaseRefusesHandSetFlags(t *testing.T) {
 		"phase 3 without lockout": {phaseArgs(3, "--set", "authService.sessionKeys.loginLockout.secretName="), "needs authService.sessionKeys.loginLockout.secretName"},
 		"phase 3 without social":  {phaseArgs(3, "--set", "authService.social.secretName="), "needs authService.social.secretName"},
 		"token class below 2":     {phaseArgs(1, "--set", "authService.accessToken.class=hs256_compat"), "authService.accessToken.class needs authService.phase >= 2"},
+		"eddsa class below 2":     {phaseArgs(1, "--set", "authService.accessToken.class=eddsa", "--set", "authService.accessToken.issuerURL=https://auth.example"), "authService.accessToken.class needs authService.phase >= 2"},
 		"token class unknown":     {phaseArgs(2, "--set", "authService.accessToken.class=rs256"), "must be empty, hs256_compat or eddsa"},
 		"token class not string":  {phaseArgs(2, "--set-json", "authService.accessToken.class=true"), "must be strings"},
 		"token class false":       {phaseArgs(2, "--set-json", "authService.accessToken.class=false"), "must be strings"},
@@ -428,14 +429,6 @@ func TestAuthPhaseStartupAgrees(t *testing.T) {
 			}
 			serviceLookup := containerLookup(t, service, "auth-service")
 			cfg, err := authconfig.Load(authconfig.Spec{Overrides: authServiceOverrides(t, service), LookupEnv: serviceLookup})
-			if name == "phase 2 eddsa" {
-				// The eddsa class renders the audience dev-health-api, which the session routes refuse: the
-				// service refuses to start until the issuer switch mints their audience.
-				if err == nil || !strings.Contains(err.Error(), "CHAOS-10456") {
-					t.Fatalf("auth-service starts on the rendered eddsa settings: %v", err)
-				}
-				return
-			}
 			if err != nil {
 				t.Fatalf("auth-service refuses the rendered settings: %v", err)
 			}

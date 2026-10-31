@@ -79,6 +79,12 @@ func TestPlatformOwnerMigrationWidensTheRoleCheck(t *testing.T) {
 			"CHECK (role_key IN ('platform_admin', 'platform_owner'))",
 			"NOT VALID",
 			"VALIDATE CONSTRAINT platform_role_assignments_role_closed",
+			"CREATE TRIGGER platform_role_assignments_owner_guard",
+			"BEFORE INSERT OR UPDATE OR DELETE ON platform_role_assignments",
+			"FOR EACH ROW EXECUTE FUNCTION platform_role_assignments_owner_guard()",
+			"current_user",
+			"relowner",
+			"'platform_owner'",
 		} {
 			if !strings.Contains(m.SQL, want) {
 				t.Errorf("migration %04d_%s lacks %q", m.Version, m.Name, want)

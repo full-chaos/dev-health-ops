@@ -24,9 +24,9 @@ func TestPlatformOwnerIsAPlatformRoleOfTheCatalog(t *testing.T) {
 	}
 }
 
-// Q1: the owner role is a marker. Whatever platform_admin allows, platform_owner
-// allows, and nothing more; an organization action is never allowed by either.
-func TestOwnerAuthorityAllowsNoActionAdminDoesNot(t *testing.T) {
+// Q1 (amended): the owner role is a marker with no action. An owner-only
+// principal is allowed nothing; to act an owner also holds platform_admin.
+func TestOwnerOnlyAuthorityAllowsNoAction(t *testing.T) {
 	owner, _ := authorityOf([]string{PlatformOwner})
 	admin, _ := authorityOf([]string{PlatformAdmin})
 	if !owner.IsOwner() || !owner.Any() {
@@ -39,12 +39,12 @@ func TestOwnerAuthorityAllowsNoActionAdminDoesNot(t *testing.T) {
 		t.Error("the zero Authority reads as owner")
 	}
 	for _, a := range policycatalog.Default().Actions() {
-		if owner.Allows(a.ID) && !admin.Allows(a.ID) {
-			t.Errorf("the owner role allows %s, which platform_admin does not", a.ID)
+		if owner.Allows(a.ID) {
+			t.Errorf("an owner-only principal is allowed %s", a.ID)
 		}
-		if admin.Allows(a.ID) != owner.Allows(a.ID) {
-			t.Errorf("%s: admin %v, owner %v; the owner role must equal the admin actions", a.ID, admin.Allows(a.ID), owner.Allows(a.ID))
-		}
+	}
+	if !admin.Allows(GrantAction) {
+		t.Error("platform_admin lost its actions")
 	}
 	both, _ := authorityOf([]string{PlatformAdmin, PlatformOwner})
 	if !both.IsOwner() || !both.Allows(GrantAction) || len(both.Roles()) != 2 {

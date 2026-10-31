@@ -21,8 +21,8 @@ import (
 )
 
 // The self-service acr_service_model toggle (CHAOS-10243): an org admin on a
-// team or enterprise plan with agent_context_runtime turns ACR AI features on
-// or off for their own org. It writes the org's org_feature_overrides row,
+// team or enterprise plan with ACR (ask_dev or agent_context_runtime, CHAOS-3695)
+// turns ACR AI features on or off for their own org. It writes the org's org_feature_overrides row,
 // which the acr entitlement route (internal/apiservice/acr) already serves.
 const (
 	serviceModelFeature        = "acr_service_model"
@@ -110,6 +110,7 @@ type serviceModelState struct {
 	tier        string
 	tierAllowed bool
 	acrAllowed  bool
+	acrBasis    string
 	control     string
 	override    *bool
 }
@@ -126,6 +127,10 @@ func (s serviceModelState) ineligibleReason() string {
 	return ""
 }
 
+// serviceModelAskDevFeature is the Ask Dev feature: with the legacy
+// agent_context_runtime grant, it is the toggle's ACR precondition (CHAOS-3695).
+const serviceModelAskDevFeature = "ask_dev"
+
 func (h *handlers) loadServiceModelState(ctx context.Context, q serviceModelQueryer, org uuid.UUID, override *serviceModelOverride) (serviceModelState, error) {
 	now := h.store.now().UTC()
 	tier, err := licensing.ResolveOrgTier(ctx, q, org)
@@ -141,6 +146,10 @@ func (h *handlers) loadServiceModelState(ctx context.Context, q serviceModelQuer
 	acr, err := licensing.LoadState(ctx, q, org.String(), serviceModelACRFeature, now)
 	if err != nil {
 		return serviceModelState{}, &llmStepError{"load agent_context_runtime state", err}
+	}
+	askDev, err := licensing.LoadState(ctx, q, org.String(), serviceModelAskDevFeature, now)
+	if err != nil {
+		return serviceModelState{}, &llmStepError{"load ask_dev state", err}
 	}
 	enabled, err := llmorgsettings.EffectiveServiceModel(ctx, q, org.String(), licensing.Decide(serviceModelFeature, service))
 	if err != nil {
@@ -160,9 +169,14 @@ func (h *handlers) loadServiceModelState(ctx context.Context, q serviceModelQuer
 		registered:  service.Registered,
 		tier:        tier,
 		tierAllowed: have >= want,
-		acrAllowed:  licensing.Decide(serviceModelACRFeature, acr).Allowed,
-		control:     control,
-		override:    overrideEnabled,
+		// CHAOS-3695 ("ACR = Ask Dev"): the ACR precondition is ask_dev OR the
+		// legacy agent_context_runtime grant (CHAOS-12292 retires the latter).
+		acrAllowed: licensing.Decide(serviceModelAskDevFeature, askDev).Allowed ||
+			licensing.Decide(serviceModelACRFeature, acr).Allowed,
+		acrBasis: licensing.ACREntitlementBasis(licensing.Decide(serviceModelAskDevFeature, askDev).Allowed,
+			licensing.Decide(serviceModelACRFeature, acr).Allowed),
+		control:  control,
+		override: overrideEnabled,
 	}, nil
 }
 
@@ -288,7 +302,8 @@ func (h *handlers) putServiceModel(w http.ResponseWriter, r *http.Request) {
 	logOutcome := func(outcome string, after bool) {
 		h.logger.InfoContext(ctx, "admin: acr_service_model self-service toggle",
 			"org_id", org.String(), "actor_user_id", actor.String(), "requested_enabled", enabled,
-			"old_enabled", before.enabled, "new_enabled", after, "control", before.control, "outcome", outcome)
+			"old_enabled", before.enabled, "new_enabled", after, "control", before.control, "outcome", outcome,
+			"acr_entitlement_basis", before.acrBasis)
 	}
 	if override != nil && before.control != serviceModelControlSelfService {
 		logOutcome("refused_managed", before.enabled)

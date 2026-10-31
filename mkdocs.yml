@@ -220,6 +220,10 @@ nav:
           - Authentication and authorization: reference/api/authentication.md
           - Errors, pagination, and limits: reference/api/errors-pagination-rate-limits.md
       - Auth: reference/auth/credential-classes.md
+      - Auth authentication and authorization: reference/auth/authn-authz.md
+      - Auth policy catalog: reference/auth/policy-catalog.md
+      - Auth action map: reference/auth/action-map.md
+      - Auth decisions and obligations: reference/auth/obligations.md
       - Auth endpoint profiles: reference/auth/endpoint-profiles.md
       - Auth service configuration: reference/auth/configuration.md
       - Auth identity linking: reference/auth/identity-linking.md

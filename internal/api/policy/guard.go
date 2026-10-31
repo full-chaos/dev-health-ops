@@ -92,10 +92,10 @@ func NewGuard(auth *Authenticator, logger *slog.Logger) *Guard {
 // Wrap returns next behind level. A refused caller never reaches next.
 func (g *Guard) Wrap(level Authz, next http.Handler) http.Handler {
 	if level == Public {
-		return next
+		return countGuardLevel(level, next)
 	}
 	if level == Optional {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		return countGuardLevel(level, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			user, ok := g.optionalUser(w, r)
 			if !ok {
 				return
@@ -104,9 +104,9 @@ func (g *Guard) Wrap(level Authz, next http.Handler) http.Handler {
 				r = r.WithContext(WithUser(r.Context(), user))
 			}
 			next.ServeHTTP(w, r)
-		})
+		}))
 	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return countGuardLevel(level, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, ok := g.currentUser(w, r, level)
 		if !ok {
 			return
@@ -140,7 +140,7 @@ func (g *Guard) Wrap(level Authz, next http.Handler) http.Handler {
 			}
 		}
 		next.ServeHTTP(w, r.WithContext(WithUser(r.Context(), user)))
-	})
+	}))
 }
 
 // currentUser is get_current_user. It writes the refusal itself. At the admin
@@ -165,6 +165,17 @@ func (g *Guard) currentUser(w http.ResponseWriter, r *http.Request, level Authz)
 		authFailure(w, "Invalid or expired token", err)
 		return nil, false
 	}
+	switch {
+	case level == Superuser:
+		countRoleSource(r.Context(), kindRolePlatformGate)
+	case level == Admin || level == AdminOrg:
+		switch {
+		case user.IsSuperuser:
+			countRoleSource(r.Context(), kindRolePlatformBypass)
+		case user.OrgID == "":
+			countRoleSource(r.Context(), kindRoleClaimFallback)
+		}
+	}
 	if (level != Admin && level != AdminOrg) || user.IsSuperuser || user.OrgID == "" {
 		return user, true
 	}
@@ -186,8 +197,10 @@ func (g *Guard) currentUser(w http.ResponseWriter, r *http.Request, level Authz)
 		writeOrgDenied(w)
 		return nil, false
 	case tokenOrgAsMain:
+		countRoleSource(r.Context(), kindRoleClaimFallback)
 		return user, true
 	}
+	countRoleSource(r.Context(), kindRoleMembershipRow)
 	if role != user.Role {
 		acting := *user
 		acting.Role = role

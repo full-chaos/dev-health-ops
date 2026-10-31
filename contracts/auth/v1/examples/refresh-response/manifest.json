@@ -177,6 +177,12 @@
       "expect_keyword": "additionalProperties",
       "file": "invalid-extra-field-provider-access-token.json",
       "why": "`provider_access_token` has no field; the legacy user object moves to session.v1, and no provider token ever reaches a browser."
+    },
+    {
+      "file": "invalid-access-token-eddsa-header.json",
+      "expect_instance_location": "/access_token",
+      "expect_keyword": "pattern",
+      "why": "An EdDSA header under refresh-response.v1: v1 pins the HS256 header segment; the asymmetric token is refresh-response.v2."
     }
   ],
   "reject_by_client": [

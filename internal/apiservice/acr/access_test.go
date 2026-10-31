@@ -1,6 +1,7 @@
 package acr
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -55,7 +56,9 @@ func accessCreds() *fakeCredentials {
 func accessServer(t *testing.T, store PrincipalAccessStore, creds CredentialStore, deps Deps, limiter ...*httpapi.KeyedLimiter) http.Handler {
 	t.Helper()
 	deps.Auth = creds
-	deps.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	if deps.Logger == nil {
+		deps.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
 	if deps.Store == nil {
 		deps.Store = &fakeStore{}
 	}
@@ -440,7 +443,7 @@ func TestAccessStoreServesEveryFieldLive(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := PrincipalAccess{Member: true, Session: &SessionAccess{Live: true, Reason: sessionReasonLive},
-		AskDev: true, AgentContextRuntime: true, Repositories: []string{"acme/api", "acme/web"}}
+		AskDev: true, AgentContextRuntime: true, ACRBasis: "both", Repositories: []string{"acme/api", "acme/web"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("access = %+v (session %+v), want %+v", got, got.Session, want)
 	}
@@ -595,8 +598,11 @@ func TestAccessStoreEntitlements(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got.AskDev == (key == "ask_dev") || got.AgentContextRuntime == (key == "agent_context_runtime") {
-				t.Fatalf("ask_dev=%v agent_context_runtime=%v with %s off", got.AskDev, got.AgentContextRuntime, key)
+			// ask_dev is its own decision; agent_context_runtime is ask_dev OR the
+			// legacy grant (CHAOS-3695), so with either one key off it stays on.
+			if got.AskDev == (key == "ask_dev") || !got.AgentContextRuntime {
+				t.Fatalf("ask_dev=%v agent_context_runtime=%v with %s off, want ask_dev=%v agent_context_runtime=true",
+					got.AskDev, got.AgentContextRuntime, key, key != "ask_dev")
 			}
 		})
 	}
@@ -723,5 +729,40 @@ func TestAccessStoreFailsClosedOnASessionStateFault(t *testing.T) {
 	f.reads.err["sessions"] = fmt.Errorf("%w: state route status 404", sessionissue.ErrUnavailable)
 	if _, err := f.read(t, accessUser, sessionRef(accessSession)); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("err = %v, want ErrUnavailable", err)
+	}
+}
+
+// CHAOS-3695 (chris 2026-08-10, "ACR = Ask Dev"): the access read's
+// agent_context_runtime is ask_dev OR the legacy agent_context_runtime grant,
+// so no org loses ACR while the legacy grants retire (CHAOS-12292), and an
+// org with ask_dev alone gains it. ask_dev itself is unchanged.
+func TestPrincipalAccessAgentContextRuntimeIsAskDevOrTheLegacyGrant(t *testing.T) {
+	for _, tc := range []struct{ askDev, legacy bool }{{false, false}, {true, false}, {false, true}, {true, true}} {
+		t.Run(fmt.Sprintf("ask_dev=%v agent_context_runtime=%v", tc.askDev, tc.legacy), func(t *testing.T) {
+			f := newAccessFixture()
+			f.features.allowed = map[string]bool{"ask_dev": tc.askDev, "agent_context_runtime": tc.legacy}
+			got, err := f.store().Access(context.Background(), AccessQuery{OrgID: accessOrg, UserID: accessUser})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.AskDev != tc.askDev || got.AgentContextRuntime != (tc.askDev || tc.legacy) {
+				t.Fatalf("ask_dev=%v agent_context_runtime=%v, want %v and %v", got.AskDev, got.AgentContextRuntime, tc.askDev, tc.askDev || tc.legacy)
+			}
+			// The basis (CHAOS-12292 counts the orgs on the legacy grant alone)
+			// is on the Info answer line, and only there: never in the body.
+			wantBasis := map[[2]bool]string{{false, false}: "none", {true, false}: "ask_dev", {false, true}: "agent_context_runtime", {true, true}: "both"}[[2]bool{tc.askDev, tc.legacy}]
+			if got.ACRBasis != wantBasis {
+				t.Fatalf("ACRBasis = %q, want %q", got.ACRBasis, wantBasis)
+			}
+			var logs bytes.Buffer
+			rec := do(accessServer(t, f.store(), accessCreds(), Deps{Logger: slog.New(slog.NewJSONHandler(&logs, nil))}),
+				accessPath(accessOrg.String(), accessUser.String(), ""), "Bearer "+accessToken)
+			if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "acr_entitlement_basis") {
+				t.Fatalf("status %d body %s, want 200 without the basis", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(logs.String(), `"acr_entitlement_basis":"`+wantBasis+`"`) {
+				t.Fatalf("the Info answer line lacks acr_entitlement_basis=%s:\n%s", wantBasis, logs.String())
+			}
+		})
 	}
 }

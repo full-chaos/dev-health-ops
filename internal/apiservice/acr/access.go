@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
+	"github.com/full-chaos/dev-health-ops/internal/projectinventory"
 )
 
 // PrincipalAccessPattern is the principal access read (CHAOS-12084): acr-api
@@ -54,6 +55,11 @@ const (
 	// never stands for any scope.
 	RepositoryScopeRepos = "repos"
 	RepositoryScopeNone  = "none"
+
+	// ProjectScopeProjects and ProjectScopeNone are project_scope.kind. "none"
+	// is an empty project inventory and carries no projects array.
+	ProjectScopeProjects = "projects"
+	ProjectScopeNone     = "none"
 )
 
 // AccessQuery is one principal access read: the organization and the user from
@@ -95,6 +101,16 @@ type PrincipalAccess struct {
 	// Repositories is the org's repository inventory (repoinventory), sorted.
 	// Empty means none.
 	Repositories []string
+	// ProjectScope is the org's project inventory, served as project_scope. It
+	// is nil, and the answer carries no project_scope, unless the project scope
+	// flag is on and the org has no repository inventory.
+	ProjectScope *ProjectScope
+}
+
+// ProjectScope is project_scope: the org's projects (projectinventory),
+// sorted. An empty list is kind "none".
+type ProjectScope struct {
+	Projects []projectinventory.Item
 }
 
 // PrincipalAccessStore reads one principal's access. Errors are ErrOrgUnknown
@@ -225,6 +241,9 @@ func principalAccessHandler(store PrincipalAccessStore, auth routeAuth, logger *
 			attrs = append(attrs, slog.Bool("session_live", access.Session.Live),
 				slog.String("session_reason", access.Session.Reason))
 		}
+		if access.ProjectScope != nil {
+			attrs = append(attrs, slog.Int("projects", len(access.ProjectScope.Projects)))
+		}
 		countInternal(ctx, routePrincipalAccess, outcomeSuccess)
 		logger.LogAttrs(ctx, slog.LevelInfo, "acr principal access: answered", attrs...)
 		writeAccess(w, http.StatusOK, principalAccessBody(orgRaw, userRaw, access))
@@ -257,6 +276,23 @@ func principalAccessBody(orgID, userID string, access PrincipalAccess) *pyjson.O
 		scope.Set("repos", append([]string(nil), access.Repositories...))
 	}
 	body.Set("repository_scope", scope)
+	if access.ProjectScope != nil {
+		projects := pyjson.NewObject()
+		if len(access.ProjectScope.Projects) == 0 {
+			projects.Set("kind", ProjectScopeNone)
+		} else {
+			projects.Set("kind", ProjectScopeProjects)
+			list := make([]pyjson.Value, 0, len(access.ProjectScope.Projects))
+			for _, project := range access.ProjectScope.Projects {
+				item := pyjson.NewObject()
+				item.Set("provider", project.Provider)
+				item.Set("id", project.ID)
+				list = append(list, item)
+			}
+			projects.Set("projects", list)
+		}
+		body.Set("project_scope", projects)
+	}
 	return body
 }
 

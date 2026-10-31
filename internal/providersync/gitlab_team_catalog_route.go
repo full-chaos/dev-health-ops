@@ -873,6 +873,7 @@ func (handler GitLabTeamCatalogRouteHandler) collectProjectTargets(
 	if err != nil {
 		return err
 	}
+	ancestorParam := ""
 	for index := range projects {
 		row := &projects[index]
 		nativeID := nativeIDByProject[row.ID.String()]
@@ -892,14 +893,18 @@ func (handler GitLabTeamCatalogRouteHandler) collectProjectTargets(
 			ambiguous++
 			continue
 		}
+		if ancestorParam == "" {
+			ancestorParam = gitlabMilestoneAncestorParam(ctx, client, "org_id", orgID)
+		}
 		pages, err := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
 			Path:    providerRelativePath(client, "api", "v4", "projects", nativeID, "milestones"),
 			Route:   gitlabMilestonesRoute,
 			PerPage: gitlabTeamCatalogListPerPage, MaxPages: gitlabTeamCatalogMilestonesMaxPages,
-			// CHAOS-12145: include_ancestors only. GitLab declares it and its deprecated
-			// alias include_parent_milestones mutually exclusive and answers a request
-			// carrying both with HTTP 400, which skips the project's target here.
-			Query: url.Values{"state": {"active"}, "include_ancestors": {"true"}},
+			// CHAOS-12145: one ancestors parameter only, chosen by the GitLab version
+			// (gitlabMilestoneAncestorParam). GitLab declares include_ancestors and its
+			// deprecated alias include_parent_milestones mutually exclusive and answers a
+			// request carrying both with HTTP 400, which skips the project's target here.
+			Query: url.Values{"state": {"active"}, ancestorParam: {"true"}},
 		})
 		if err != nil {
 			if ctx.Err() != nil {

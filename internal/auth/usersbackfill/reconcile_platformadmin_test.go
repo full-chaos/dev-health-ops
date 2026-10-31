@@ -65,3 +65,31 @@ func TestReconcileVerbAcceptsThePlatformRolesGateFlag(t *testing.T) {
 		t.Fatalf("exit %d, stderr %q", code, stderr.String())
 	}
 }
+
+func TestNoActivePlatformAdminLineIsAbsentWhenTheReadFailed(t *testing.T) {
+	for _, gate := range []bool{true, false} {
+		rep := Reconciliation{Diffs: map[string]int{}}
+		if err := ReconcilePlatformAdmin(context.Background(), fakeAdminTarget{err: errors.New("down")}, gate, &rep); err == nil {
+			t.Fatalf("gate %v: no error", gate)
+		}
+		if out := strings.Join(rep.Lines(), "\n"); strings.Contains(out, DiffNoActivePlatformAdmin) {
+			t.Fatalf("gate %v: a failed read printed the class\n%s", gate, out)
+		}
+		if rep.GatedTotal() != 0 {
+			t.Fatalf("gate %v: gated total %d", gate, rep.GatedTotal())
+		}
+	}
+	rep := Reconciliation{Diffs: map[string]int{}}
+	if err := ReconcilePlatformAdmin(context.Background(), fakeAdminTarget{none: true}, true, &rep); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(rep.Lines(), "\n"), "diff.no_active_platform_admin=1") {
+		t.Fatal("a good read did not print the class")
+	}
+}
+
+func TestNoActivePlatformAdminLineIsAbsentBeforeAnyRead(t *testing.T) {
+	if out := strings.Join((Reconciliation{Diffs: map[string]int{}}).Lines(), "\n"); strings.Contains(out, DiffNoActivePlatformAdmin) {
+		t.Fatalf("an unread report printed the class\n%s", out)
+	}
+}

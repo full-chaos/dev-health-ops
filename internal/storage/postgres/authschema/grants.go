@@ -107,7 +107,7 @@ func RuntimePosture() []TablePrivilege {
 		{Table: "actions", Select: true},
 		{Table: "roles", Select: true},
 		{Table: "role_actions", Select: true},
-		{Table: "resource_grants", Select: true, Insert: true, Update: true, Delete: true},
+		{Table: "resource_grants", Select: true, Insert: true, Update: true, Delete: false},
 		{Table: "policy_revisions", Select: true, Insert: true},
 		{Table: "entitlement_snapshots", Select: true, Insert: true},
 

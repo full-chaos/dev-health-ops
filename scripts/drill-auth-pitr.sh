@@ -106,6 +106,48 @@ drill_attempt() { # port, phase, optional NAME=value...
   )
 }
 
+# summary_files names the evidence files that go into summary.txt: results only. Every *secrets*.json (attempt-secrets.json
+# and any later one) stays out by an explicit filter, whatever its prefix.
+summary_files() {
+  local f
+  for f in "$evidence"/verify-*.json "$evidence"/post-*.json "$evidence"/attempt-*.json; do
+    case "${f##*/}" in
+    *secrets*) ;;
+    *) printf '%s\n' "$f" ;;
+    esac
+  done
+}
+
+write_summary() {
+  local files
+  mapfile -t files < <(summary_files)
+  jq -c . "${files[@]}" | tee "$evidence/summary.txt"
+}
+
+# guard_summary_no_secrets fails closed: a line (12 characters or more) of any *secrets*.json in the evidence directory, or
+# its compact form, found in summary.txt stops the drill. It prints the file names only, never a line or a value.
+guard_summary_no_secrets() {
+  local f line compact leaked=0
+  for f in "$evidence"/*secrets*.json; do
+    [[ -e "$f" ]] || continue
+    compact="$(jq -c . "$f" 2>/dev/null || true)"
+    if [[ -n "$compact" ]] && grep -qF -- "$compact" "$evidence/summary.txt"; then
+      echo "drill-auth-pitr.sh: summary.txt holds the content of ${f##*/}" >&2
+      leaked=1
+      continue
+    fi
+    while IFS= read -r line; do
+      [[ "${#line}" -ge 12 ]] || continue
+      if grep -qF -- "$line" "$evidence/summary.txt"; then
+        echo "drill-auth-pitr.sh: summary.txt holds a line of ${f##*/}" >&2
+        leaked=1
+        break
+      fi
+    done <"$f"
+  done
+  [[ "$leaked" -eq 0 ]]
+}
+
 load_gate() {
   local load1 i
   for i in $(seq 0 20); do
@@ -302,7 +344,8 @@ dc --profile latest stop latest
 fi
 
 log "evidence in $evidence"
-jq -c . "$evidence"/verify-*.json "$evidence"/post-*.json "$evidence"/attempt-*.json | tee "$evidence/summary.txt"
+write_summary
+guard_summary_no_secrets
 # (a) revoked before T stays revoked, (d) no revision below T, (e) no duplicate: any failure above = FAIL.
 # (b) revokes after T that came back and (c) keys re-issued with different content = GAP.
 pitr_b="$(jq -r '.revokes_after_target_that_came_back' "$evidence/post-T.json" 2>/dev/null || echo n/a)"
@@ -316,4 +359,5 @@ fi
 attempt_pitr="$(jq -r '.revoked_access_accepted' "$evidence/attempt-T-pitr.json" 2>/dev/null || echo n/a)"
 printf 'AUTH ATTEMPT on the restored copy: revoked or disabled secrets accepted=%s of 2 (fenced must be 0; the unfenced baseline shows the gap)\n' "$attempt_pitr" | tee -a "$evidence/summary.txt"
 printf 'DRILL RESULT: %s (b revokes-after-T-back=%s, c reissued-different=%s)\n' "$verdict" "$pitr_b" "$pitr_c" | tee -a "$evidence/summary.txt"
+guard_summary_no_secrets
 [[ "$verdict" != FAIL ]]

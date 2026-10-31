@@ -212,8 +212,11 @@ authService:
     # -- The https issuer of eddsa access tokens: auth-service signs it
     #    (AUTH_TOKEN_ISSUER_URL, with AUTH_JWT_AUDIENCE=dev-health-api) and go-api
     #    and query-api verify it (AUTH_ACCESS_TOKEN_ISSUER) against its JWKS.
-    #    Rendered only with class eddsa; go-api and query-api must reach the
-    #    issuer's JWKS document.
+    #    Under class eddsa go-api and query-api must reach the issuer's JWKS
+    #    document. Under hs256_compat (or an empty class) the issuer renders for
+    #    auth-service alone (AUTH_TOKEN_ISSUER_URL, no AUTH_JWT_AUDIENCE) and go-api
+    #    and query-api verify web tokens as before. It mounts auth-service's
+    #    discovery and JWKS routes and is required by the workload-token exchange.
     issuerURL: ""
   # -- AUTH_SOCIAL_LINK_ROUTES: mounts the bearer-only social link and unlink
   #    routes. Needs phase >= 2 (the session secrets).
@@ -1243,19 +1246,19 @@ migrations:
     # -- CHAOS-10754: run the migrate Job's ClickHouse step as the Cloud
     #    `default` login from its own Secret, not as the runtime login in the
     #    shared Secret's CLICKHOUSE_NATIVE_URI (which cannot run migration
-    #    DDL on ClickHouse Cloud). OFF = today's render, unchanged. ON adds
-    #    three secretKeyRef env entries and sets CLICKHOUSE_URI to
-    #    clickhouse://$(user):$(password)@$(host):<port>/<database>?secure=true,
-    #    expanded by Kubernetes in the Pod; the Secret is operator-created and
-    #    this chart never creates it. Requires migrations.hook.extraEnv and
-    #    migrations.hook.secretData to leave CLICKHOUSE_URI and
-    #    CLICKHOUSE_URI_FILE unset. An external migrate Secret
+    #    DDL on ClickHouse Cloud). OFF = today's render, unchanged. ON sets
+    #    dho's component form (CHAOS-11995): DEV_HEALTH_CH_HOST, _USER and
+    #    _PASSWORD from secretKeyRefs, DEV_HEALTH_CH_PORT and _DB from the
+    #    values below, DEV_HEALTH_CH_SECURE=true (TLS), and CLICKHOUSE_URI
+    #    blank. dho assembles and percent-encodes the DSN, so the password may
+    #    hold any character. The Secret is operator-created and this chart
+    #    never creates it. Requires migrations.hook.extraEnv and
+    #    migrations.hook.secretData to leave CLICKHOUSE_URI, its _FILE form
+    #    and every DEV_HEALTH_CH_* key unset. An external migrate Secret
     #    (migrations.hook.externalSecretName) may keep a CLICKHOUSE_URI key
-    #    (the env entry wins) but must NOT carry CLICKHOUSE_URI_FILE: dho
-    #    refuses both forms together and the chart cannot see inside it.
-    #    CHARSET REQUIREMENT: the expansion does no percent-encoding, so the
-    #    password and user must not contain any of  @ : / ? # %  (URL-safe
-    #    characters only; a hex password is safe). Check before enabling.
+    #    (the blank env entry wins) but must NOT carry CLICKHOUSE_URI_FILE or
+    #    a DEV_HEALTH_CH_USER_FILE / _PASSWORD_FILE key: dho refuses both
+    #    forms together and the chart cannot see inside it.
     clickhouseCloud:
       enabled: false
       secretName: ""

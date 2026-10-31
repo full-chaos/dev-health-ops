@@ -116,6 +116,7 @@ func (s PGStore) now() time.Time {
 // is_active and is_superuser read as false and NULL token_version as 0, as
 // authenticate_access_token's truthiness does.
 func (s PGStore) UserState(ctx context.Context, id uuid.UUID) (UserState, bool, error) {
+	countDirectRead(ctx, kindReadUsers)
 	var active, superuser *bool
 	var version *int64
 	query, err := s.userStateSQL()
@@ -136,14 +137,15 @@ func (s PGStore) UserState(ctx context.Context, id uuid.UUID) (UserState, bool, 
 	return state, true, nil
 }
 
+const membershipSQL = `SELECT role FROM memberships WHERE user_id = $1 AND org_id = $2 LIMIT 1`
+
 // Membership is user_is_member_of_org's query, reading the row's role too:
 // the existence answers the membership check, the role is the user's role in
 // that org. A NULL role reads as "".
 func (s PGStore) Membership(ctx context.Context, userID, orgID uuid.UUID) (string, bool, error) {
+	countDirectRead(ctx, kindReadMemberships)
 	var role *string
-	err := s.Pool.QueryRow(ctx,
-		`SELECT role FROM memberships WHERE user_id = $1 AND org_id = $2 LIMIT 1`, userID, orgID,
-	).Scan(&role)
+	err := s.Pool.QueryRow(ctx, membershipSQL, userID, orgID).Scan(&role)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", false, nil
 	}
@@ -156,10 +158,32 @@ func (s PGStore) Membership(ctx context.Context, userID, orgID uuid.UUID) (strin
 	return *role, true, nil
 }
 
+// orgMembershipSQL is membershipSQL with the org's existence: one row
+// whatever is stored, the membership columns NULL when there is no row.
+const orgMembershipSQL = `SELECT EXISTS (SELECT 1 FROM organizations WHERE id = $2), m.user_id IS NOT NULL, m.role
+FROM (SELECT 1) AS one
+LEFT JOIN (SELECT user_id, role FROM memberships WHERE user_id = $1 AND org_id = $2 LIMIT 1) AS m ON true`
+
+// OrgMembership is Membership with whether the org exists. A NULL role
+// reads as "".
+func (s PGStore) OrgMembership(ctx context.Context, userID, orgID uuid.UUID) (string, bool, bool, error) {
+	countDirectRead(ctx, kindReadOrgMemberships)
+	var orgFound, member bool
+	var role *string
+	if err := s.Pool.QueryRow(ctx, orgMembershipSQL, userID, orgID).Scan(&orgFound, &member, &role); err != nil {
+		return "", false, false, storeError(err, "SELECT on memberships (user_id, org_id, role) and organizations (id)")
+	}
+	if role == nil {
+		return "", member, orgFound, nil
+	}
+	return *role, member, orgFound, nil
+}
+
 // ActiveImpersonation is impersonation_cache._load_from_db: the admin's
 // session that has not ended and expires in the future, joined to the
 // target's users row.
 func (s PGStore) ActiveImpersonation(ctx context.Context, adminID uuid.UUID) (*Impersonation, error) {
+	countDirectRead(ctx, kindReadImpersonation)
 	var session Impersonation
 	err := s.Pool.QueryRow(ctx, `
 SELECT s.id, s.admin_user_id, s.target_user_id, s.target_org_id, s.target_role, u.email, s.expires_at

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,14 +19,29 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 )
 
-// activeUsers is a policy.Store where every user exists and is active.
+// activeUsers is a policy.Store where every user exists and is active, and
+// holds the membership row each token sign mints claims (signedRoles).
 type activeUsers struct{}
+
+// signedRoles is activeUsers' memberships table: sign adds the (user, org)
+// row with the role its token claims, as login mints a token only for an
+// existing membership.
+var signedRoles sync.Map
 
 func (activeUsers) UserState(context.Context, uuid.UUID) (policy.UserState, bool, error) {
 	return policy.UserState{IsActive: true}, true, nil
 }
-func (activeUsers) Membership(context.Context, uuid.UUID, uuid.UUID) (string, bool, error) {
-	return "member", true, nil
+func (activeUsers) Membership(_ context.Context, user, org uuid.UUID) (string, bool, error) {
+	role, found := signedRoles.Load([2]uuid.UUID{user, org})
+	if !found {
+		return "", false, nil
+	}
+	return role.(string), true, nil
+}
+
+func (s activeUsers) OrgMembership(ctx context.Context, user, org uuid.UUID) (string, bool, bool, error) {
+	role, member, err := s.Membership(ctx, user, org)
+	return role, member, true, err
 }
 func (activeUsers) ActiveImpersonation(context.Context, uuid.UUID) (*policy.Impersonation, error) {
 	return nil, nil
@@ -50,8 +66,12 @@ func testGuard(t *testing.T) *policy.Guard {
 
 func sign(t *testing.T, role, org string) string {
 	t.Helper()
+	user := uuid.New()
+	if orgID, err := uuid.Parse(org); err == nil {
+		signedRoles.Store([2]uuid.UUID{user, orgID}, role)
+	}
 	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub": uuid.NewString(), "type": "access", "org_id": org, "role": role, "is_superuser": false,
+		"sub": user.String(), "type": "access", "org_id": org, "role": role, "is_superuser": false,
 		"iss": "dev-health-ops", "aud": "dev-health-api", "exp": time.Now().Add(time.Hour).Unix(), "tv": 0,
 	}).SignedString([]byte(unitKey))
 	if err != nil {

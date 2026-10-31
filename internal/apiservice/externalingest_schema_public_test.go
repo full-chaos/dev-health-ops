@@ -33,6 +33,11 @@ func (s *orgScopeStore) Membership(_ context.Context, _, org uuid.UUID) (string,
 	s.calls.Add(1)
 	return "member", org == s.member, nil
 }
+
+func (s *orgScopeStore) OrgMembership(ctx context.Context, user, org uuid.UUID) (string, bool, bool, error) {
+	role, member, err := s.Membership(ctx, user, org)
+	return role, member, true, err
+}
 func (s *orgScopeStore) ActiveImpersonation(context.Context, uuid.UUID) (*policy.Impersonation, error) {
 	s.calls.Add(1)
 	return nil, nil

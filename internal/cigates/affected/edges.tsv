@@ -106,6 +106,7 @@ internal/cigates/frozengoldens	reads.go	unexpressed
 internal/cigates/integrationshards	ci_script_helpers_test.go	unexpressed
 internal/cigates/integrationshards	free_run_test.go	unexpressed
 internal/cigates/integrationshards	shard_run_term_test.go	unexpressed
+internal/cigates/integrationshards	shard_run_tee_bound_test.go	unexpressed
 internal/cigates/nopython	trackedfiles_test.go	unexpressed
 internal/cigates/outboundtransport	outboundtransport_test.go	unexpressed
 internal/cigates/proofteardown	harness_test.go	unexpressed

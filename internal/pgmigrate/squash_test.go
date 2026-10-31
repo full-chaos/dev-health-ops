@@ -5,12 +5,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -114,11 +116,37 @@ func TestDowngradeTextNamesTheBuildsRange(t *testing.T) {
 	}
 }
 
+// goTool finds the go binary: $GOROOT/bin/go, then the GOROOT the test binary was built with (empty under -trimpath),
+// then PATH. It never returns a relative path.
+func goTool(getenv func(string) string, goroot string, lookPath func(string) (string, error)) (string, error) {
+	for _, root := range []string{getenv("GOROOT"), goroot} {
+		if root == "" {
+			continue
+		}
+		candidate := filepath.Join(root, "bin", "go")
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate, nil
+		}
+	}
+	path, err := lookPath("go")
+	if err != nil {
+		return "", fmt.Errorf("no go binary: GOROOT=%q, built-in GOROOT=%q, and go is not on PATH: %w", getenv("GOROOT"), goroot, err)
+	}
+	if !filepath.IsAbs(path) {
+		return "", fmt.Errorf("go found on PATH as the relative path %q", path)
+	}
+	return path, nil
+}
+
 // archivedEmbeds returns every archived file the package in dir embeds, as the go tool resolves its //go:embed
 // patterns (quotes, globs and all: included), except the archive manifest.
 func archivedEmbeds(t *testing.T, dir string) []string {
 	t.Helper()
-	cmd := exec.Command(filepath.Join(runtime.GOROOT(), "bin", "go"), "list", "-json", ".")
+	tool, err := goTool(os.Getenv, runtime.GOROOT(), exec.LookPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(tool, "list", "-json", ".")
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local", "GOFLAGS=")
 	var stderr bytes.Buffer
@@ -137,17 +165,70 @@ func archivedEmbeds(t *testing.T, dir string) []string {
 			found = append(found, file)
 		}
 	}
+	sort.Strings(found)
 	return found
 }
 
 func TestEmbedArchiveFixtures(t *testing.T) {
-	for _, name := range []string{"quoted", "glob", "allprefix", "star"} {
-		if got := archivedEmbeds(t, filepath.Join("testdata", "embedarchive", name)); len(got) == 0 {
-			t.Errorf("fixture %s embeds archived SQL and the check found none", name)
+	both := []string{"archive/sql/a.sql", "archive/sql/b.sql"}
+	for _, name := range []string{"quoted", "glob", "allprefix", "star", "bare"} {
+		if got := archivedEmbeds(t, filepath.Join("testdata", "embedarchive", name)); !reflect.DeepEqual(got, both) {
+			t.Errorf("fixture %s: archived embeds = %v, want %v", name, got, both)
 		}
 	}
 	if got := archivedEmbeds(t, filepath.Join("testdata", "embedarchive", "clean")); len(got) != 0 {
 		t.Errorf("fixture clean embeds no archived SQL and the check found %v", got)
+	}
+}
+
+func TestGoToolResolution(t *testing.T) {
+	root := func(dir string) string {
+		bin := filepath.Join(dir, "bin")
+		if err := os.MkdirAll(bin, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(bin, "go"), []byte("x"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	envRoot, builtRoot, emptyRoot := root(t.TempDir()), root(t.TempDir()), t.TempDir()
+	noPath := func(string) (string, error) { return "", errors.New("not found") }
+	onPath := func(string) (string, error) { return "/usr/bin/go", nil }
+	relPath := func(string) (string, error) { return "bin/go", nil }
+	env := func(v string) func(string) string {
+		return func(k string) string {
+			if k == "GOROOT" {
+				return v
+			}
+			return ""
+		}
+	}
+	cases := []struct {
+		name, goroot string
+		getenv       func(string) string
+		lookPath     func(string) (string, error)
+		want         string
+		fails        bool
+	}{
+		{"GOROOT env wins", builtRoot, env(envRoot), onPath, filepath.Join(envRoot, "bin", "go"), false},
+		{"env GOROOT without a binary falls to built-in", builtRoot, env(emptyRoot), onPath, filepath.Join(builtRoot, "bin", "go"), false},
+		{"built-in GOROOT", builtRoot, env(""), onPath, filepath.Join(builtRoot, "bin", "go"), false},
+		{"trimpath: GOROOT empty and unset uses PATH", "", env(""), onPath, "/usr/bin/go", false},
+		{"nothing resolves", "", env(""), noPath, "", true},
+		{"relative PATH result is refused", "", env(""), relPath, "", true},
+	}
+	for _, c := range cases {
+		got, err := goTool(c.getenv, c.goroot, c.lookPath)
+		if c.fails {
+			if err == nil {
+				t.Errorf("%s: got %q, want an error", c.name, got)
+			}
+			continue
+		}
+		if err != nil || got != c.want {
+			t.Errorf("%s: got %q, %v, want %q", c.name, got, err, c.want)
+		}
 	}
 }
 

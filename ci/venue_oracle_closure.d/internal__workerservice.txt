@@ -9,6 +9,7 @@ internal/api/pyjson
 internal/api/pytime
 internal/api/recordvalidation
 internal/atlassianteams
+internal/auth/acraudience
 internal/auth/edgetoken
 internal/auth/httpapi
 internal/auth/passwordhash

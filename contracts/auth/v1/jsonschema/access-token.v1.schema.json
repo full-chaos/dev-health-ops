@@ -57,9 +57,11 @@
           "type": "string",
           "enum": [
             "dev-health-api",
-            "auth-service"
+            "auth-service",
+            "acr-api",
+            "acr-mcp"
           ],
-          "description": "Exactly one audience. dev-health-api is go-api and query-api (REST and /query); auth-service is its own session routes. contracts/auth/v1/vocabulary/audiences.json lists every audience and the class that may carry it."
+          "description": "Exactly one audience. dev-health-api is go-api and query-api (REST and /query); auth-service is its own session routes; acr-api and acr-mcp are ACR's two services, each accepting its own audience only, and go-api, query-api and auth-service refuse both. contracts/auth/v1/vocabulary/audiences.json lists every audience and the class that may carry it."
         },
         "sub": {
           "$ref": "principal.v1.schema.json#/properties/principal_id"
@@ -94,9 +96,11 @@
           "type": "string",
           "enum": [
             "api:access",
-            "auth:session"
+            "auth:session",
+            "acr:api",
+            "acr:mcp"
           ],
-          "description": "Coarse scope, bound to the audience: api:access with dev-health-api, auth:session with auth-service. Closed: an unknown scope is refused."
+          "description": "Coarse scope, bound to the audience: api:access with dev-health-api, auth:session with auth-service, acr:api with acr-api, acr:mcp with acr-mcp. Closed: an unknown scope is refused."
         }
       },
       "allOf": [
@@ -134,6 +138,44 @@
             "properties": {
               "scope": {
                 "const": "auth:session"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "aud": {
+                "const": "acr-api"
+              }
+            },
+            "required": [
+              "aud"
+            ]
+          },
+          "then": {
+            "properties": {
+              "scope": {
+                "const": "acr:api"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "aud": {
+                "const": "acr-mcp"
+              }
+            },
+            "required": [
+              "aud"
+            ]
+          },
+          "then": {
+            "properties": {
+              "scope": {
+                "const": "acr:mcp"
               }
             }
           }

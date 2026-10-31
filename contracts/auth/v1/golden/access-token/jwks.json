@@ -6,7 +6,7 @@
       "alg": "EdDSA",
       "use": "sig",
       "kid": "auth-example-2026-10",
-      "x": "zhxlwy6dkidx9D7aZ6tNwxPCvpXpn6scqYU4OzAoVvY"
+      "x": "I9jccRlfW8TKnSdUwiEnVVn95EMNFEvnJkb8x-B17aY"
     },
     {
       "kty": "OKP",
@@ -14,7 +14,7 @@
       "alg": "EdDSA",
       "use": "sig",
       "kid": "auth-example-2026-11",
-      "x": "sF7fVeKFvo-XNG_8QbV21qwJ_yUmmFKJMCzt_v-gLtE"
+      "x": "kWnilSmiXiz3kWryivVlsEoA8fIrhyXSVNFtVxf_PTk"
     }
   ]
 }

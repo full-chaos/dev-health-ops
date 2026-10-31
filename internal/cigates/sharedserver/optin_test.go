@@ -354,6 +354,10 @@ func TestOptInNeedsATestMainThatRunsTheTestsInsideTheSharedCall(t *testing.T) {
 			"func TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int {\n\t\tcode := m.Run()\n\t\tcode = 0\n\t\treturn code\n\t}))\n}\n"), false},
 		{"a callback whose local is set in a nested block", mainFile(stdImports,
 			"func TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int {\n\t\tif cond() {\n\t\t\tcode := m.Run()\n\t\t\treturn code\n\t\t}\n\t\treturn 0\n\t}))\n}\n"), false},
+		{"a callback with a closure whose own return is no run", mainFile(stdImports,
+			"func TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int {\n\t\t_ = func() int { return 0 }\n\t\treturn m.Run()\n\t}))\n}\n"), true},
+		{"a helper with a closure whose own return is no run", mainFile(stdImports,
+			"func run(m *testing.M) int {\n\t_ = func() int { return 0 }\n\treturn m.Run()\n}\n\nfunc TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int { return run(m) }))\n}\n"), true},
 		{"no TestMain", "package opted\n\nfunc helper() {}\n", false},
 	}
 	for _, tc := range cases {

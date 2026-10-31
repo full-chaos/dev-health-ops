@@ -265,7 +265,7 @@ AND actor_principal_id = $2 AND attributes->>'reason_code' = 'principal_provisio
 	if n := e.count(t, `SELECT count(*) FROM auth.auth_outbox_events WHERE aggregate_type = 'service_account' AND aggregate_id = $1 AND event_type = 'service_account.created'`, wire(id)); n != 1 {
 		t.Fatalf("%d created outbox events, want 1", n)
 	}
-	if n := e.count(t, `SELECT count(*) FROM auth.aggregate_revisions WHERE aggregate_type = 'service_account' AND aggregate_id = $1 AND revision = 1`, id.String()); n != 1 {
+	if n := e.count(t, `SELECT count(*) FROM auth.aggregate_revisions WHERE aggregate_type = 'service_account' AND aggregate_id = $1 AND revision = 1`, wire(id)); n != 1 {
 		t.Fatalf("%d revision rows, want 1", n)
 	}
 }

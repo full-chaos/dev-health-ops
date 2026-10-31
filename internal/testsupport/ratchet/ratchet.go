@@ -73,7 +73,7 @@ func Count(data []byte) int {
 }
 
 func git(repo string, args ...string) ([]byte, error) {
-	command := exec.Command("git", append([]string{"-c", "maintenance.auto=false", "-c", "gc.auto=0", "-C", repo}, args...)...)
+	command := exec.Command("git", append([]string{"-C", repo}, args...)...)
 	var stdout, stderr bytes.Buffer
 	command.Stdout, command.Stderr = &stdout, &stderr
 	if err := command.Run(); err != nil {

@@ -56,7 +56,7 @@ func OSDeps() Deps {
 type ExecGit struct{}
 
 func (ExecGit) Run(repo string, args ...string) (string, error) {
-	cmd := exec.Command("git", append([]string{"-c", "maintenance.auto=false", "-c", "gc.auto=0", "-C", repo}, args...)...)
+	cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {

@@ -148,8 +148,11 @@ func CheckAPIClickHouseAuthorizationFor(ctx context.Context, conn driver.Conn, p
 // in APIPosture: the project scope is behind a flag that stays off until acr
 // accepts project_scope everywhere, and the readiness check is exact, so a
 // grant that rolled before the flag would be an extra grant and refuse go-api.
-// The users.d line (and the ClickHouse Cloud GRANT) and the flag move together
-// in one ordered step.
+// The users.d line (and the ClickHouse Cloud GRANT) and the flag must move
+// together, but no canonical path does that yet: the bigboy users.d renderer
+// and grants-compare (internal/cigates/bigboyrender) parse APIPosture only, so
+// a flag-on bigboy fails closed (go-api unready, or the users.d preflight
+// refuses the file). CHAOS-12268 adds that path and blocks the flip.
 func ProjectScopeGrant(database string) TableGrant {
 	return TableGrant{Database: database, Table: "projects", AllowSelect: true}
 }

@@ -24,7 +24,10 @@ import (
 // The flag also changes go-api's ClickHouse posture: with it on, the login
 // must hold SELECT on projects (chclickhouse.ProjectScopeGrant), and the
 // readiness check is exact both ways. So the users.d line (and, on ClickHouse
-// Cloud, the GRANT) and this flag move together in one ordered step.
+// Cloud, the GRANT) must move with this flag, and no canonical path does that
+// yet: the bigboy users.d renderer and grants-compare know APIPosture only, so
+// a flag-on go-api fails closed (unready, or the users.d preflight refuses the
+// file). CHAOS-12268 adds that path and the prod GRANT step; it blocks the flip.
 const EnvACRAccessProjectScope = "ACR_ACCESS_PROJECT_SCOPE"
 
 // ParseACRAccessProjectScope reads EnvACRAccessProjectScope: unset or empty

@@ -236,6 +236,10 @@ func TestRequestHeaderReadCheckerFixtures(t *testing.T) {
 		{"read in a function literal", `func f(next http.Handler) http.Handler { return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _ = r.Header.Get("Authorization") }) }`, 1},
 		{"request copied", `func f(w http.ResponseWriter, r *http.Request) { q := r; _ = q }`, 1},
 		{"bearer parse", `func f(w http.ResponseWriter, r *http.Request) { _, _ = BearerToken("x") }`, 1},
+		{"basic auth method value", `func f(w http.ResponseWriter, r *http.Request) { f := r.BasicAuth; _, _, _ = f() }`, 1},
+		{"cookie method value", `func f(w http.ResponseWriter, r *http.Request) { f := r.Cookie; _, _ = f("a") }`, 1},
+		{"cookies method value", `func f(w http.ResponseWriter, r *http.Request) { f := r.Cookies; _ = f() }`, 1},
+		{"bearer parse function value", `func f(w http.ResponseWriter, r *http.Request) { f := BearerToken; _, _ = f("x") }`, 1},
 		{"derived request read", `func f(w http.ResponseWriter, r *http.Request) { r2 := r.WithContext(r.Context()); _ = r2.Header.Get("Authorization") }`, 1},
 	}
 	for _, tc := range cases {

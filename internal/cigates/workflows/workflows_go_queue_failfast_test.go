@@ -273,8 +273,8 @@ func TestQueueGateNeverGreenWhenAShardWasCancelledFailedOrSkipped(t *testing.T) 
 	// Negative control: a gate script that accepts `cancelled` must be caught.
 	gateFile := "ci/aggregate_gate_results.sh"
 	tmp := plantTree(t, root, []string{gateFile}, mutation{gateFile,
-		"    *)\n      add_failure \"${job_name} reported '${result:-<empty>}'\"\n      ;;",
-		"    cancelled) ;;\n    *)\n      add_failure \"${job_name} reported '${result:-<empty>}'\"\n      ;;"})
+		"    *)\n      timeout_note=\"\"\n",
+		"    cancelled) ;;\n    *)\n      timeout_note=\"\"\n"})
 	if d := queueGateDefects(t, agg, filepath.Join(tmp, gateFile)); len(d) == 0 {
 		t.Error("a gate script that accepts a cancelled result was not caught")
 	}
@@ -395,7 +395,7 @@ func TestRedShardNamingIsBestEffortAndNeverGatesTheVerdict(t *testing.T) {
 
 	for _, m := range []mutation{
 		{failFastGoYml, "        continue-on-error: true\n        env:\n          GH_TOKEN", "        env:\n          GH_TOKEN"},
-		{failFastGoYml, "      - name: " + namingStepName + "\n        if: failure()", "      - name: " + namingStepName + "\n        if: always()"},
+		{failFastGoYml, "        id: name_red\n        if: failure()", "        id: name_red\n        if: always()"},
 		{failFastGoYml, "      actions: read\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    env:\n      PLAN_RESULT", "      actions: write\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    env:\n      PLAN_RESULT"},
 		{failFastGoYml, "      actions: read\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    env:\n      PLAN_RESULT", "      actions: read\n      contents: read\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    env:\n      PLAN_RESULT"},
 	} {

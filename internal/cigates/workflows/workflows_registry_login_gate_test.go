@@ -100,7 +100,7 @@ func TestRegistryLoginGateRefusesEachDefectClass(t *testing.T) {
 		})
 	}
 	t.Run("the login script loses its login", func(t *testing.T) {
-		tmp := registryLoginTree(t, root, nil, mutation{loginScript, "docker login", "docker  logout"})
+		tmp := registryLoginTree(t, root, nil, mutation{loginScript, "| docker login ghcr.io", "| docker logout ghcr.io"})
 		expectViolation(t, registryLoginDefects(t, tmp, jobLoginCensus), "ci scripts with a registry login are []")
 	})
 	t.Run("a census row for a job that is gone", func(t *testing.T) {

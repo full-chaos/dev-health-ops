@@ -3,7 +3,8 @@
 // in the auth schema ends only by this route (D6456), so go-api's PATCH
 // is_active=true calls it before it writes its own row, behind
 // AUTH_PROXY_ORG_PROVISIONING. It presents the go-api service credential
-// (AUTH_SESSION_ISSUE_TOKEN) holding memberships:write.
+// (AUTH_SESSION_ISSUE_TOKEN) holding memberships:write, or the go-api
+// workload token.
 package orgreactivate
 
 import (
@@ -16,6 +17,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/full-chaos/dev-health-go/workloadtoken"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
@@ -82,6 +84,16 @@ func New(base *url.URL, token string, timeout time.Duration) (*Client, error) {
 		return nil, fmt.Errorf("%s must be an auth-session-issuer service credential (svc_authsess_...)", sessionissue.EnvToken)
 	}
 	core, err := authprovision.NewCore(base, token, timeout)
+	if err != nil {
+		return nil, err
+	}
+	return &Client{core: core, http: core.HTTP()}, nil
+}
+
+// NewWorkload builds a Client for base that presents the workload token of
+// workload (see authprovision.NewWorkloadCore).
+func NewWorkload(base *url.URL, workload *workloadtoken.Client, timeout time.Duration) (*Client, error) {
+	core, err := authprovision.NewWorkloadCore(base, workload, timeout)
 	if err != nil {
 		return nil, err
 	}

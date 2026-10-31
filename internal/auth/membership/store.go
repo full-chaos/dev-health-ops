@@ -19,6 +19,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -220,24 +221,27 @@ func (q poolQuerier) queryRow(ctx context.Context, sql string, args ...any) pgx.
 // (membership, invite, organization verbs, the JIT join) and in go-api (admin
 // member routes, the session invite accept, the organization delete). They
 // cite it by this name.
-//  0. auth.workloads rows (workload verbs, before their principals);
-//  1. auth.principals rows, one row per statement, in ascending id order;
-//  2. public.users rows of the same ids, the same way;
-//  3. the auth.organizations row FOR SHARE (organization verbs take it FOR UPDATE);
-//  4. invite rows: auth.invites, then public.org_invites, FOR UPDATE;
-//  5. public.memberships: the organization's owner rows and the pairs, FOR UPDATE, ORDER BY id;
-//  6. auth.memberships pair rows FOR UPDATE, ORDER BY id;
-//     6a. a removal: the pair's auth.sessions FOR UPDATE NOWAIT, ORDER
-//     BY id, then their refresh credentials, then the pair's
-//     public.refresh_tokens FOR UPDATE NOWAIT (session.Store.EndOrgInTx). An
-//     Exchange holds its session row and then needs a key-share lock on the
-//     principal (the new credential's foreign key), so waiting here would
-//     close a cycle with step 1: a locked row rolls the removal back and it
-//     is planned again. An organization deprovision (6a) and a suspend (after
-//     step 3) do the same for the whole organization through
-//     EndOrganizationInTx; a later verb that ends a membership in place,
-//     such as a route for Suspend, must end its sessions the same way;
-//  7. aggregate_revisions, inside audit.Commit.
+//
+//	-1. advisory auth.platform_role_assignments:write, shared (exclusive in platformrole Grant/Revoke/Bootstrap, first);
+//	    platformrole.LockWritesShared, taken at the top of this function when lock is true;
+//	0. auth.workloads rows (workload verbs, before their principals);
+//	1. auth.principals rows, one row per statement, in ascending id order;
+//	2. public.users rows of the same ids, the same way;
+//	3. the auth.organizations row FOR SHARE (organization verbs take it FOR UPDATE);
+//	4. invite rows: auth.invites, then public.org_invites, FOR UPDATE;
+//	5. public.memberships: the organization's owner rows and the pairs, FOR UPDATE, ORDER BY id;
+//	6. auth.memberships pair rows FOR UPDATE, ORDER BY id;
+//	   6a. a removal: the pair's auth.sessions FOR UPDATE NOWAIT, ORDER
+//	   BY id, then their refresh credentials, then the pair's
+//	   public.refresh_tokens FOR UPDATE NOWAIT (session.Store.EndOrgInTx). An
+//	   Exchange holds its session row and then needs a key-share lock on the
+//	   principal (the new credential's foreign key), so waiting here would
+//	   close a cycle with step 1: a locked row rolls the removal back and it
+//	   is planned again. An organization deprovision (6a) and a suspend (after
+//	   step 3) do the same for the whole organization through
+//	   EndOrganizationInTx; a later verb that ends a membership in place,
+//	   such as a route for Suspend, must end its sessions the same way;
+//	7. aggregate_revisions, inside audit.Commit.
 //
 // Steps 1 and 2 take every id any later statement of the verb references,
 // each once in the strongest mode its roles need (LockOrder): a target FOR
@@ -256,6 +260,14 @@ func (s *Store) readPairs(ctx context.Context, q querier, orgID uuid.UUID, princ
 	forUpdate, forShare := "", ""
 	if lock {
 		forUpdate, forShare = " FOR UPDATE", " FOR SHARE"
+		tq, ok := q.(txQuerier)
+		if !ok {
+			return nil, errors.New("membership: a locking read needs a transaction")
+		}
+		// The auth lock order (membership.Store readPairs), step -1.
+		if err := platformrole.LockWritesShared(ctx, tq.tx); err != nil {
+			return nil, err
+		}
 	}
 	ids := sortedUnique(principals)
 	order := LockOrder(ids, inviter, actor, referenced...)

@@ -70,11 +70,12 @@ func (a *Authenticator) accessTokenUser(ctx context.Context, claims *AccessToken
 		a.logger.WarnContext(ctx, "api user access token without a session", slog.String("user_id", id.String()))
 		return nil, errRejected
 	}
-	if err := a.checkSession(ctx, map[string]any{"sid": claims.SessionID}, id, row.State.TokenVersion); err != nil {
+	sessionID, err := a.checkSession(ctx, map[string]any{"sid": claims.SessionID}, id, row.State.TokenVersion)
+	if err != nil {
 		return nil, err
 	}
 	user := &User{UserID: id.String(), ID: id, Email: row.Email, Username: row.Username, FullName: row.FullName,
-		IsSuperuser: row.State.IsSuperuser, TokenVersion: int(row.State.TokenVersion), accessToken: true}
+		IsSuperuser: row.State.IsSuperuser, TokenVersion: int(row.State.TokenVersion), accessToken: true, SessionID: sessionID}
 	if claims.OrgID != nil && *claims.OrgID != "" {
 		role, member, err := a.Membership(ctx, user.UserID, *claims.OrgID)
 		if err != nil {

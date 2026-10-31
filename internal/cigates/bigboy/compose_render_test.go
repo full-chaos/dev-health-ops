@@ -400,7 +400,7 @@ func composePort(p any) doc {
 	return doc{"mode": "ingress", "host_ip": parts[1], "published": parts[2], "target": t, "protocol": proto}
 }
 
-var composeRequiredRe = regexp.MustCompile(`\$\{([A-Za-z_]+):\?`)
+var composeRequiredRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*):?\?`)
 
 func composeRequired(g *guard) []string {
 	seen := map[string]bool{}
@@ -416,8 +416,14 @@ func composeRequired(g *guard) []string {
 				walk(e)
 			}
 		case string:
-			for _, m := range composeRequiredRe.FindAllStringSubmatch(x, -1) {
-				seen[m[1]] = true
+			for _, m := range composeRequiredRe.FindAllStringSubmatchIndex(x, -1) {
+				dollars := 0
+				for i := m[0] - 1; i >= 0 && x[i] == '$'; i-- {
+					dollars++
+				}
+				if dollars%2 == 0 {
+					seen[x[m[2]:m[3]]] = true
+				}
 			}
 		}
 	}

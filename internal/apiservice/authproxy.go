@@ -154,15 +154,22 @@ func sessionIssuer(cfg AuthProxyConfig, lookup func(string) (string, bool)) (ses
 
 // orgLifecycleClient is the client of auth-service's organization reactivate and
 // suspend routes when AUTH_PROXY_ORG_PROVISIONING is on, built from
-// AUTH_SESSION_ISSUE_TOKEN; nil when off, so go-api's PATCH never calls
-// auth-service. On without a usable token is a start-up error: every change would
-// answer 503.
-func orgLifecycleClient(cfg AuthProxyConfig, lookup func(string) (string, bool)) (*orgreactivate.Client, error) {
+// AUTH_SESSION_ISSUE_TOKEN, or from the workload token of cred when
+// AUTH_PROVISIONING_CREDENTIAL selects it; nil when off, so go-api's PATCH
+// never calls auth-service. On without a usable credential is a start-up
+// error: every change would answer 503.
+func orgLifecycleClient(cfg AuthProxyConfig, lookup func(string) (string, bool), cred provisioningCredential) (*orgreactivate.Client, error) {
 	if !cfg.OrgProvisioningOn() {
 		return nil, nil
 	}
-	token, _ := lookup(sessionissue.EnvToken)
-	client, err := orgreactivate.New(cfg.Upstream, strings.TrimSpace(token), cfg.Timeout)
+	var client *orgreactivate.Client
+	var err error
+	if cred.workload != nil {
+		client, err = orgreactivate.NewWorkload(cfg.Upstream, cred.workload, cfg.Timeout)
+	} else {
+		token, _ := lookup(sessionissue.EnvToken)
+		client, err = orgreactivate.New(cfg.Upstream, strings.TrimSpace(token), cfg.Timeout)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%s is on: %w", EnvAuthProxyOrgProvisioning, err)
 	}
@@ -170,8 +177,8 @@ func orgLifecycleClient(cfg AuthProxyConfig, lookup func(string) (string, bool))
 }
 
 // orgReactivator is the reactivate side of orgLifecycleClient (nil when off).
-func orgReactivator(cfg AuthProxyConfig, lookup func(string) (string, bool)) (orgreactivate.Reactivator, error) {
-	client, err := orgLifecycleClient(cfg, lookup)
+func orgReactivator(cfg AuthProxyConfig, lookup func(string) (string, bool), cred provisioningCredential) (orgreactivate.Reactivator, error) {
+	client, err := orgLifecycleClient(cfg, lookup, cred)
 	if client == nil {
 		return nil, err
 	}
@@ -179,8 +186,8 @@ func orgReactivator(cfg AuthProxyConfig, lookup func(string) (string, bool)) (or
 }
 
 // orgSuspender is the suspend side of orgLifecycleClient (nil when off).
-func orgSuspender(cfg AuthProxyConfig, lookup func(string) (string, bool)) (orgreactivate.Suspender, error) {
-	client, err := orgLifecycleClient(cfg, lookup)
+func orgSuspender(cfg AuthProxyConfig, lookup func(string) (string, bool), cred provisioningCredential) (orgreactivate.Suspender, error) {
+	client, err := orgLifecycleClient(cfg, lookup, cred)
 	if client == nil {
 		return nil, err
 	}
@@ -635,15 +642,23 @@ func dropHop(header http.Header) {
 }
 
 // orgProvisioner is the client of auth-service's provisioning routes when
-// AUTH_PROXY_ORG_PROVISIONING is on, built from AUTH_SESSION_ISSUE_TOKEN; nil
-// when off, so the member, invite and delete routes never call auth-service.
-// On without a usable token is a start-up error, as for orgReactivator.
-func orgProvisioner(cfg AuthProxyConfig, lookup func(string) (string, bool)) (authprovision.Provisioner, error) {
+// AUTH_PROXY_ORG_PROVISIONING is on, built from AUTH_SESSION_ISSUE_TOKEN, or
+// from the workload token of cred when AUTH_PROVISIONING_CREDENTIAL selects
+// it; nil when off, so the member, invite and delete routes never call
+// auth-service. On without a usable credential is a start-up error, as for
+// orgReactivator.
+func orgProvisioner(cfg AuthProxyConfig, lookup func(string) (string, bool), cred provisioningCredential) (authprovision.Provisioner, error) {
 	if !cfg.OrgProvisioningOn() {
 		return nil, nil
 	}
-	token, _ := lookup(sessionissue.EnvToken)
-	client, err := authprovision.New(cfg.Upstream, strings.TrimSpace(token), cfg.Timeout)
+	var client *authprovision.Client
+	var err error
+	if cred.workload != nil {
+		client, err = authprovision.NewWorkload(cfg.Upstream, cred.workload, cfg.Timeout)
+	} else {
+		token, _ := lookup(sessionissue.EnvToken)
+		client, err = authprovision.New(cfg.Upstream, strings.TrimSpace(token), cfg.Timeout)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%s is on: %w", EnvAuthProxyOrgProvisioning, err)
 	}

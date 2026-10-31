@@ -441,6 +441,7 @@ func (s *Store) acceptOnce(ctx context.Context, in AcceptInput, digest string) (
 		return nil, err
 	}
 	subject := in.PrincipalID
+	var lockedAt time.Time
 	err = s.run(ctx, verbAccept, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			step4 := func() error {
@@ -448,7 +449,9 @@ func (s *Store) acceptOnce(ctx context.Context, in AcceptInput, digest string) (
 				if err != nil {
 					return err
 				}
-				if err := checkConsumable(locked.row, now); err != nil {
+				// The clock is read after the invite row lock: an accept may have waited for it.
+				lockedAt = s.now().UTC()
+				if err := checkConsumable(locked.row, lockedAt); err != nil {
 					return err
 				}
 				if locked.id != planned.id || locked.orgID != planned.orgID || locked.role != planned.role {
@@ -477,18 +480,18 @@ func (s *Store) acceptOnce(ctx context.Context, in AcceptInput, digest string) (
 				_, err = tx.Exec(ctx, `INSERT INTO `+s.q+`.invites
 	(id, organization_id, email_normalized, role, token_hash, invited_by, status, expires_at, created_at, updated_at)
 VALUES ($1, $2, $3, $4, $5, (SELECT p.id FROM `+s.q+`.principals p WHERE p.id = $6), 'pending', $7, $8, $9)`,
-					locked.id, locked.orgID, locked.email, locked.role, digest, change.InvitedBy, locked.expiresAt, locked.createdAt, now)
+					locked.id, locked.orgID, locked.email, locked.role, digest, change.InvitedBy, locked.expiresAt, locked.createdAt, lockedAt)
 				return err
 			}
 			if err := s.members.ApplyAdd(ctx, tx, plan, step4); err != nil {
 				return acceptRefusal(err)
 			}
 			if _, err := tx.Exec(ctx, `UPDATE `+s.q+`.invites SET status = 'accepted', accepted_at = $2, accepted_principal_id = $3, updated_at = $2
-WHERE id = $1`, planned.id, now, in.PrincipalID); err != nil {
+WHERE id = $1`, planned.id, lockedAt, in.PrincipalID); err != nil {
 				return err
 			}
 			if _, err := tx.Exec(ctx, `UPDATE public.org_invites SET status = 'accepted', accepted_at = $2, updated_at = $2 WHERE id = $1`,
-				planned.id, now); err != nil {
+				planned.id, lockedAt); err != nil {
 				return err
 			}
 			changes := pyjson.NewObject()
@@ -496,7 +499,7 @@ WHERE id = $1`, planned.id, now, in.PrincipalID); err != nil {
 			changes.Set("user_id", in.PrincipalID.String())
 			changes.Set("role", planned.role)
 			return s.publicAuditRow(ctx, tx, planned.orgID, &subject, "member_joined", plan.MembershipID().String(), "Invite accepted",
-				changes, in.PublicAudit, now)
+				changes, in.PublicAudit, lockedAt)
 		},
 		Audit:  auditFor(verbAccept, planned.orgID, planned.id, &subject, in.Actor),
 		Events: []audit.OutboxEvent{eventFor(verbAccept, planned.id), plan.Event()},

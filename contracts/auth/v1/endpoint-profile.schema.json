@@ -236,7 +236,7 @@
             "name": {
               "type": "string",
               "pattern": "^[A-Za-z0-9][A-Za-z0-9._+/:-]{0,63}$",
-              "description": "The scheme, prefix, header name, JWT header alg, JWT header typ, Content-Type media type, token-type URI or grant type the selector reads. A name, never a credential value. `+` is allowed for a media-type typ such as at+jwt; `/` is allowed only for a content_type, which must be a lowercase type/subtype, and `:` only for a subject_token_type, which must be a lowercase urn: URI, and for a grant_type, which is a lowercase RFC 6749 grant name (letters, digits, '-', '.', '_'; e.g. refresh_token) or a lowercase urn: URI (see the if/then entries of class_disambiguator). Owned here; endpoint-auth-profile.v1 and the credential-class markers reference it."
+              "description": "The scheme, prefix, header name, JWT header alg, JWT header typ, Content-Type media type, token-type URI or grant type the selector reads. A name, never a credential value. `+` is allowed for a media-type typ such as at+jwt; `/` is allowed only for a content_type, which must be a lowercase type/subtype, and `:` only for a subject_token_type, which must be a lowercase urn: URI, and for a grant_type, which is a lowercase RFC 6749 grant name (letters, digits, '-', '.', '_'; e.g. refresh_token) or a lowercase urn: URI (see the if/then entries of class_disambiguator). A grant_type name is a deliberate subset of RFC 6749 grant types: lowercase, starting with a letter or digit, a urn: URI as the only URI form, at most 64 characters. No registered grant type falls outside it. Owned here; endpoint-auth-profile.v1 and the credential-class markers reference it."
             }
           },
           "allOf": [

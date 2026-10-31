@@ -42,16 +42,23 @@ func purposeParam(w http.ResponseWriter, raw string, present bool) (purpose llmo
 // nil when the purpose has no override.
 func (h *handlers) llmPurposeObject(ctx context.Context, db pgExecer, orgID string, purpose llmorgsettings.Purpose) (*pyjson.Object, error) {
 	values := map[string]*string{}
+	var unreadable []string
 	for _, field := range llmorgsettings.Fields {
 		row, err := settingByKeyOn(ctx, db, orgID, llmCategory, llmorgsettings.PurposeKey(purpose, field))
 		if err != nil {
 			return nil, err
 		}
 		value, err := h.settingValue(row)
+		if collectUndecryptable(err, &unreadable) {
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
 		values[field] = value
+	}
+	if err := undecryptableOrNil(unreadable); err != nil {
+		return nil, err
 	}
 	if values["provider"] == nil || *values["provider"] == "" {
 		return nil, nil
@@ -76,8 +83,12 @@ func (h *handlers) llmPurposeObject(ctx context.Context, db pgExecer, orgID stri
 // llmPurposesObject maps each purpose with an override to it; nil when none.
 func (h *handlers) llmPurposesObject(ctx context.Context, db pgExecer, orgID string) (*pyjson.Object, error) {
 	var out *pyjson.Object
+	var unreadable []string
 	for _, purpose := range llmorgsettings.Purposes {
 		item, err := h.llmPurposeObject(ctx, db, orgID, purpose)
+		if collectUndecryptable(err, &unreadable) {
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -89,6 +100,9 @@ func (h *handlers) llmPurposesObject(ctx context.Context, db pgExecer, orgID str
 		}
 		out.Set(string(purpose), item)
 	}
+	if err := undecryptableOrNil(unreadable); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 
@@ -99,7 +113,7 @@ func (h *handlers) getLLMPurpose(w http.ResponseWriter, r *http.Request, orgID s
 	}
 	out, err := h.llmPurposeObject(ctx, h.store.Pool, orgID, purpose)
 	if err != nil {
-		h.internalError(ctx, w, "read llm purpose override", err)
+		h.byoReadFailed(ctx, w, "read llm purpose override", err)
 		return
 	}
 	if out == nil {
@@ -132,11 +146,11 @@ func (h *handlers) applyLLMPurpose(ctx context.Context, orgID string, in llmPurp
 		keys = append(keys, *in.apiKey)
 	}
 	if baseURLText != "" {
-		stored, err := h.storedLLMKey(ctx, orgID)
+		stored, err := readableStoredKey(h.storedLLMKey(ctx, orgID))
 		if err != nil {
 			return nil, nil, &llmStepError{"read stored llm key", err}
 		}
-		storedPurpose, err := h.storedPurposeAPIKey(ctx, orgID, in.purpose)
+		storedPurpose, err := readableStoredKey(h.storedPurposeAPIKey(ctx, orgID, in.purpose))
 		if err != nil {
 			return nil, nil, &llmStepError{"read stored llm purpose key", err}
 		}

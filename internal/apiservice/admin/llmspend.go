@@ -121,7 +121,7 @@ func (h *handlers) getLLMSpend(w http.ResponseWriter, r *http.Request) {
 	}
 	active, err := h.orgLLMActive(ctx, orgID)
 	if err != nil {
-		h.internalError(ctx, w, "evaluate org llm status", err)
+		h.byoReadFailed(ctx, w, "evaluate org llm status", err)
 		return
 	}
 	if !active {

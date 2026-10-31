@@ -2711,6 +2711,20 @@ run_integration_packages() {
     run_integration_go_test "${module_dir}" "${run_pkgs[@]}" >&"${tee_fd}" || { status=$?; [ "${result}" -ne 0 ] || result="${status}"; }
   done
   exec {tee_fd}>&-
+  # tee ends when every writer has closed the pipe; a process go test left behind that still holds it would stall this
+  # wait to the job cap (the CHAOS-11794 class). Bounded: past the bound only the tee is stopped (never the leftover
+  # writer, which is not ours to name) and the drift check reads the partial log. bash cannot mark tee_fd close-on-exec,
+  # so go test and its children inherit it next to their stdout: the same pipe, no new writer.
+  local tee_wait="${DEV_HEALTH_GO_TEE_WAIT_SECS:-30}" tee_tick
+  case "${tee_wait}" in ""|*[!0-9]*) tee_wait=30 ;; esac
+  for ((tee_tick = 0; tee_tick < tee_wait * 5; tee_tick++)); do
+    kill -0 "${tee_pid}" 2>/dev/null || break
+    sleep 0.2
+  done
+  if kill -0 "${tee_pid}" 2>/dev/null; then
+    kill -TERM "${tee_pid}" 2>/dev/null || true
+    echo "check_go.sh: the drift check read a partial log: a process still holds go test's stdout ${tee_wait}s after go test ended" >&2
+  fi
   wait "${tee_pid}" 2>/dev/null || true
   warn_integration_weight_drift "${module_dir}" "${ok_log}" "${pkgs[@]}"
   rm -f -- "${ok_log}"

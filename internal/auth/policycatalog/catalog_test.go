@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	actionsSHA = "e0b874af85a735aed1617d88bd08a7eeb19cafad54bc8a02c1dd9511469ba3a5"
+	actionsSHA = "2ed61c436aa31d2798bc68c74eb0d22cd570ca6aca5298b88e9c950a1a2408ff"
 	rolesSHA   = "024192e8eb32a5b07b0e7ce8e41acc72ce1c26db6000dbdbb66524a3e86b8132"
 )
 
@@ -197,7 +197,7 @@ func TestEmbeddedFilesValidateAgainstTheirSchemas(t *testing.T) {
 // internal/api/session/permissions.go. Catalog-only = not served in /auth/me
 // until a web-reviewed change adds it there; every other catalog action must
 // still equal a session permission.
-var catalogOnly = map[string]bool{"billing.read": true, "billing.manage": true, "license.read": true, "members.update": true, "authz.decide": true}
+var catalogOnly = map[string]bool{"billing.read": true, "billing.manage": true, "license.read": true, "members.update": true, "authz.decide": true, "acr.context.read": true}
 
 type sessionEntry struct {
 	role string

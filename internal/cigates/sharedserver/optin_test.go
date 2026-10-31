@@ -358,6 +358,16 @@ func TestOptInNeedsATestMainThatRunsTheTestsInsideTheSharedCall(t *testing.T) {
 			"func TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int {\n\t\t_ = func() int { return 0 }\n\t\treturn m.Run()\n\t}))\n}\n"), true},
 		{"a helper with a closure whose own return is no run", mainFile(stdImports,
 			"func run(m *testing.M) int {\n\t_ = func() int { return 0 }\n\treturn m.Run()\n}\n\nfunc TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int { return run(m) }))\n}\n"), true},
+		{"a callback that returns a var set from venueoracle.RunTests", mainFile(stdImports+venueImport,
+			"func TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int {\n\t\tvar code = venueoracle.RunTests(m)\n\t\treturn code\n\t}))\n}\n"), true},
+		{"a callback that returns a var set from m.Run", mainFile(stdImports+venueImport,
+			"func TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int {\n\t\tvar code = m.Run()\n\t\treturn code\n\t}))\n}\n"), true},
+		{"a callback whose declared var is assigned later", mainFile(stdImports+venueImport,
+			"func TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int {\n\t\tvar code int\n\t\tcode = m.Run()\n\t\treturn code\n\t}))\n}\n"), false},
+		{"a callback whose var is overwritten after m.Run", mainFile(stdImports+venueImport,
+			"func TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int {\n\t\tvar code = m.Run()\n\t\tcode = 0\n\t\treturn code\n\t}))\n}\n"), false},
+		{"a helper that returns a var set from venueoracle.RunTests", mainFile(stdImports+venueImport,
+			"func run(m *testing.M) int {\n\tvar code = venueoracle.RunTests(m)\n\treturn code\n}\n\nfunc TestMain(m *testing.M) {\n\tos.Exit(containers.RunWithSharedServers(func() int { return run(m) }))\n}\n"), true},
 		{"no TestMain", "package opted\n\nfunc helper() {}\n", false},
 	}
 	for _, tc := range cases {

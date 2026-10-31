@@ -221,3 +221,38 @@ func TestHostSmokeFollowBoundsEveryRequestChain(t *testing.T) {
 		t.Errorf("re-quote: err %v requests %v", err, requote.requests)
 	}
 }
+
+// The transport closes a conn from its own goroutine (tls closeNotify writes), which can run after the caller restored
+// hsTimeout. A dialled conn keeps the timeout it was dialled with, so that write never reads the package variable.
+// The race detector reports the unsynchronised read when the conn reads hsTimeout per call.
+func TestHostSmokeDialledConnDoesNotReadTheTimeoutVariable(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		c, err := ln.Accept()
+		if err == nil {
+			defer c.Close()
+			_, _ = io.Copy(io.Discard, c)
+		}
+	}()
+	old := hsTimeout
+	hsTimeout = 300 * time.Millisecond
+	conn, err := hsDialPlain(context.Background(), "tcp", ln.Addr().String())
+	if err != nil {
+		hsTimeout = old
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	written := make(chan error, 1)
+	go func() {
+		_, err := conn.Write([]byte("x"))
+		written <- err
+	}()
+	hsTimeout = old
+	if err := <-written; err != nil {
+		t.Errorf("write: %v", err)
+	}
+}

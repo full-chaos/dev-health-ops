@@ -89,13 +89,13 @@ func NewGuard(auth *Authenticator, logger *slog.Logger) *Guard {
 	return &Guard{auth: auth, logger: logger}
 }
 
-// wrap returns next behind level. A refused caller never reaches next.
-func (g *Guard) wrap(level Authz, next http.Handler) http.Handler {
+// Wrap returns next behind level. A refused caller never reaches next.
+func (g *Guard) Wrap(level Authz, next http.Handler) http.Handler {
 	if level == Public {
-		return next
+		return countGuardLevel(level, next)
 	}
 	if level == Optional {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		return countGuardLevel(level, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			user, ok := g.optionalUser(w, r)
 			if !ok {
 				return
@@ -104,9 +104,9 @@ func (g *Guard) wrap(level Authz, next http.Handler) http.Handler {
 				r = r.WithContext(WithUser(r.Context(), user))
 			}
 			next.ServeHTTP(w, r)
-		})
+		}))
 	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return countGuardLevel(level, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, ok := g.currentUser(w, r, level)
 		if !ok {
 			return
@@ -140,7 +140,7 @@ func (g *Guard) wrap(level Authz, next http.Handler) http.Handler {
 			}
 		}
 		next.ServeHTTP(w, r.WithContext(WithUser(r.Context(), user)))
-	})
+	}))
 }
 
 // currentUser is get_current_user. It writes the refusal itself. At the admin

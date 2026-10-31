@@ -301,8 +301,9 @@ func markerMatchesTransport(kind, name, head, shape string) bool {
 	case "subject_token_type":
 		return strings.Contains(head, "subject_token_type "+name)
 	case "grant_type":
-		// The whole grant name: "refresh" must not match grant_type=refresh_token.
-		return regexp.MustCompile(`grant_type=` + regexp.QuoteMeta(name) + `(?:[^a-z0-9._:-]|$)`).MatchString(head)
+		// The whole grant value, ended by prose punctuation or the text's end: "refresh" must not
+		// match grant_type=refresh_token, nor refresh_token match grant_type=refresh_token/x.
+		return regexp.MustCompile(`grant_type=` + regexp.QuoteMeta(name) + `(?:[\s),;]|$)`).MatchString(head)
 	}
 	return false
 }

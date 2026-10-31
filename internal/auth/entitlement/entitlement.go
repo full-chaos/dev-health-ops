@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sort"
 	"strings"
@@ -97,7 +98,7 @@ type Adapter struct {
 	lru    *list.List
 }
 
-// New validates the configuration. A TTL of zero or above MaxTTL is MaxTTL.
+// New validates the configuration. A TTL of zero is MaxTTL; a negative TTL or one above MaxTTL is refused.
 func New(cfg Config) (*Adapter, error) {
 	if cfg.Source == nil {
 		return nil, errors.New("entitlement: no source")
@@ -105,8 +106,11 @@ func New(cfg Config) (*Adapter, error) {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	if cfg.TTL <= 0 || cfg.TTL > MaxTTL {
+	if cfg.TTL == 0 {
 		cfg.TTL = MaxTTL
+	}
+	if cfg.TTL < 0 || cfg.TTL > MaxTTL {
+		return nil, fmt.Errorf("entitlement: TTL %v is outside (0, %v]", cfg.TTL, MaxTTL)
 	}
 	if cfg.MaxOrgs <= 0 {
 		cfg.MaxOrgs = defaultMaxOrgs

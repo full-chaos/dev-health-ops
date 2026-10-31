@@ -22,14 +22,48 @@ var errProvisioningRows = errors.New("authapi: the provisioning routes need thei
 // endpoint-profile document (the one this binary embeds) holds, for each
 // route, an auth-service row accepting the session issuer credential: the
 // switch may turn the routes on only in a build that profiles them. The error
-// names the route only.
+// names the route only. It is provisioningRowsAccept without the go-api
+// workload binding.
 func provisioningRowsPresent(raw []byte) error {
-	return rowsPresentFor(raw, provisioningPatterns)
+	return provisioningRowsAccept(raw, false)
 }
 
-// rowsPresentFor is provisioningRowsPresent over patterns.
-func rowsPresentFor(raw []byte, patterns []string) error {
-	return rowsAcceptFor(raw, patterns, []string{serviceSessionIssuerClass})
+// provisioningRowsAccept is the startup gate of the provisioning routes: for
+// each route, the document must hold an auth-service row that lists every
+// credential class the route's handler admits (provisioningClasses). With the
+// workload binding configured, a route whose operation takes the go-api
+// workload token needs workload_token in its row too: a row may not
+// under-describe the route it mounts.
+func provisioningRowsAccept(raw []byte, workload bool) error {
+	for _, pattern := range provisioningPatterns {
+		op, ok := provisioningPatternOps[pattern]
+		if !ok {
+			return fmt.Errorf("%w: POST %s names no operation", errProvisioningRows, pattern)
+		}
+		if err := rowsAcceptFor(raw, []string{pattern}, provisioningClasses(op, workload)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// provisioningPatternOps names each provisioning route's operation.
+var provisioningPatternOps = map[string]string{
+	PatternMembershipAdd: opMembershipAdd, PatternMembershipRole: opMembershipRole, PatternMembershipRemove: opMembershipRemove,
+	PatternMembershipTransfer: opMembershipTransfer, PatternInviteCreate: opInviteCreate, PatternInviteAccept: opInviteAccept,
+	PatternOrgDeprovision: opOrgDeprovision, PatternOrgReactivate: opOrgReactivate, PatternInviteRevoke: opInviteRevoke,
+	PatternOrgSuspend: opOrgSuspend,
+}
+
+// provisioningClasses are the credential classes the handler of op admits
+// (caller): the session issuer credential always, and the go-api workload
+// token when the binding is configured and op is a workload operation.
+func provisioningClasses(op string, workload bool) []string {
+	classes := []string{serviceSessionIssuerClass}
+	if workload && workloadOperations[op] {
+		classes = append(classes, workloadTokenClass)
+	}
+	return classes
 }
 
 // workloadTokenClass is the endpoint-profile credential class of the go-api

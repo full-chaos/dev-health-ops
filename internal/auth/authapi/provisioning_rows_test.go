@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/servicecred"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/usertokens"
@@ -217,5 +218,109 @@ func TestTheRowsGateNeedsTheInviteRevokeRow(t *testing.T) {
 	}
 	if err := provisioningRowsPresent(raw); !errors.Is(err, errProvisioningRows) || !strings.Contains(err.Error(), "POST "+route+" ") {
 		t.Fatalf("without the revoke row: %v, want a refusal naming the route", err)
+	}
+}
+
+// A route mounts only on a row that lists every credential class its handler
+// admits. With the go-api workload binding configured, the nine workload
+// operations admit the workload token, so a row that lists only the session
+// issuer class under-describes the route: ProvisioningRoutes refuses the whole
+// set (the gated routes), and the state route is not mounted. Invite revoke and
+// organization suspend never take a workload token, so a row without it is
+// enough for them; without the binding no route admits it, and a row without it
+// is enough for every route.
+func TestProvisioningRoutesNeedRowsListingEveryAdmittedClass(t *testing.T) {
+	issuerOnly := func(t *testing.T, route string) []byte {
+		t.Helper()
+		var document map[string]any
+		if err := json.Unmarshal(docWithRow(t, PatternOrgSuspend), &document); err != nil {
+			t.Fatal(err)
+		}
+		for _, item := range document["rows"].([]any) {
+			row := item.(map[string]any)
+			if row["route"] == route && row["service"] == AccessService {
+				row["accepted_credential_classes"] = []any{serviceSessionIssuerClass}
+			}
+		}
+		raw, err := json.Marshal(document)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	build := func(rows []byte, workload *SessionIssueWorkload) ([]httpapi.Route, error) {
+		f := newProvFixture(t)
+		return ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
+			Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ProfileRows: rows,
+			Workload: workload, Logger: slog.New(slog.DiscardHandler)})
+	}
+	mounted := func(routes []httpapi.Route, pattern string) bool {
+		return slices.ContainsFunc(routes, func(r httpapi.Route) bool { return r.Pattern == pattern })
+	}
+	workloadPatterns := map[string]bool{PatternMembershipAdd: true, PatternMembershipRole: true, PatternMembershipRemove: true,
+		PatternMembershipTransfer: true, PatternInviteCreate: true, PatternInviteAccept: true, PatternOrgDeprovision: true,
+		PatternOrgReactivate: true, PatternOrgState: true}
+	for _, pattern := range append(slices.Clone(provisioningPatterns), PatternOrgState) {
+		rows := issuerOnly(t, pattern)
+		t.Run(pattern+" with the workload binding", func(t *testing.T) {
+			routes, err := build(rows, &SessionIssueWorkload{})
+			switch {
+			case !workloadPatterns[pattern]:
+				if err != nil || !mounted(routes, pattern) {
+					t.Fatalf("a route that takes no workload token: %v, mounted %v; want mounted", err, mounted(routes, pattern))
+				}
+			case pattern == PatternOrgState:
+				if err != nil || mounted(routes, pattern) {
+					t.Fatalf("the state route on a row without workload_token: %v, mounted %v; want not mounted", err, mounted(routes, pattern))
+				}
+			default:
+				if !errors.Is(err, errProvisioningRows) || routes != nil || !strings.Contains(err.Error(), "POST "+pattern+" ") {
+					t.Fatalf("a row without workload_token: %d routes, %v; want none and a refusal naming the route", len(routes), err)
+				}
+			}
+		})
+		t.Run(pattern+" without the workload binding", func(t *testing.T) {
+			if routes, err := build(rows, nil); err != nil || !mounted(routes, pattern) {
+				t.Fatalf("no route admits a workload token: %v, mounted %v; want mounted", err, mounted(routes, pattern))
+			}
+		})
+	}
+}
+
+// provisioningPatternOps decides which classes the startup gate requires, so
+// each entry must be the operation the mounted handler really runs: a bearer
+// that is no credential is refused on every route, and the refusal line names
+// the handler's operation.
+func TestProvisioningPatternOpsNameEachHandlersOperation(t *testing.T) {
+	if len(provisioningPatternOps) != len(provisioningPatterns) {
+		t.Fatalf("%d operations for %d routes", len(provisioningPatternOps), len(provisioningPatterns))
+	}
+	f := newProvFixture(t)
+	for _, pattern := range provisioningPatterns {
+		f.logs.Reset()
+		if code := f.post(pattern, `{}`, map[string]string{"Authorization": "Bearer not-a-credential"}).Code; code != http.StatusUnauthorized {
+			t.Fatalf("POST %s with a bearer that is no credential: %d, want 401", pattern, code)
+		}
+		want := `"operation":"` + provisioningPatternOps[pattern] + `"`
+		if !strings.Contains(f.logs.String(), want) {
+			t.Fatalf("POST %s: the refusal names no %s: %s", pattern, want, f.logs)
+		}
+	}
+}
+
+// A route with no entry in provisioningPatternOps fails the gate closed: the
+// gate cannot know which classes the route admits.
+func TestTheRowsGateRefusesARouteWithNoOperation(t *testing.T) {
+	saved := provisioningPatternOps
+	t.Cleanup(func() { provisioningPatternOps = saved })
+	provisioningPatternOps = map[string]string{}
+	for pattern, op := range saved {
+		if pattern != PatternInviteAccept {
+			provisioningPatternOps[pattern] = op
+		}
+	}
+	err := provisioningRowsAccept(authv1.AuthServiceEndpointProfiles, false)
+	if !errors.Is(err, errProvisioningRows) || !strings.Contains(err.Error(), "POST "+PatternInviteAccept+" names no operation") {
+		t.Fatalf("a route with no operation: %v, want a refusal naming it", err)
 	}
 }

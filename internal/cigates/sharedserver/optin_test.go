@@ -17,6 +17,8 @@ import (
 const (
 	containersImportPath = "github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 
+	venueoracleImportPath = "github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
+
 	// sharedTestMain is the TestMain of a package that runs on shared servers.
 	sharedTestMain = "package opted\n\nimport (\n\t\"os\"\n\t\"testing\"\n\n\t\"" + containersImportPath + "\"\n)\n\n" +
 		"func TestMain(m *testing.M) { os.Exit(containers.RunWithSharedServers(m.Run)) }\n"
@@ -26,8 +28,9 @@ const (
 // on shared servers: the body of func TestMain(m *testing.M) passes the
 // result of the harness's RunWithSharedServers (through the file's real
 // import of it) to os.Exit, and every use of m lies inside the argument of
-// that call, where at least one use runs the tests (m.Run, or m handed to a
-// runner). Comments and string literals are not code and never count.
+// that call, where at least one use runs the tests (m.Run, m handed to
+// venueoracle.RunTests, or m handed to a func of the file that does one of
+// these with it). Comments and string literals are not code and never count.
 func optsIn(src string) (bool, error) {
 	file, err := parser.ParseFile(token.NewFileSet(), "main_test.go", src, 0)
 	if err != nil {
@@ -52,6 +55,60 @@ func optsIn(src string) (bool, error) {
 		}
 		pkg, ok := selector.X.(*ast.Ident)
 		return ok && pkg.Obj == nil && imports[pkg.Name] == path
+	}
+	type visit struct {
+		fn  *ast.FuncDecl
+		arg int
+	}
+	visited := map[visit]bool{}
+	var handsOn func(call *ast.CallExpr, arg int) bool
+	handsOn = func(call *ast.CallExpr, arg int) bool {
+		if isCall(call, venueoracleImportPath, "RunTests") {
+			return arg == 0
+		}
+		id, ok := call.Fun.(*ast.Ident)
+		if !ok || id.Obj == nil {
+			return false
+		}
+		fn, ok := id.Obj.Decl.(*ast.FuncDecl)
+		if !ok || fn.Recv != nil || fn.Body == nil || visited[visit{fn, arg}] {
+			return false
+		}
+		visited[visit{fn, arg}] = true
+		var param *ast.Object
+		index := 0
+		for _, field := range fn.Type.Params.List {
+			for _, name := range field.Names {
+				if star, ok := field.Type.(*ast.StarExpr); ok && index == arg {
+					if sel, ok := star.X.(*ast.SelectorExpr); ok && sel.Sel.Name == "M" {
+						param = name.Obj
+					}
+				}
+				index++
+			}
+		}
+		if param == nil {
+			return false
+		}
+		reaches := false
+		ast.Inspect(fn.Body, func(node ast.Node) bool {
+			inner, ok := node.(*ast.CallExpr)
+			if !ok || reaches {
+				return !reaches
+			}
+			if selector, ok := inner.Fun.(*ast.SelectorExpr); ok {
+				if id, ok := selector.X.(*ast.Ident); ok && id.Obj == param && selector.Sel.Name == "Run" {
+					reaches = true
+				}
+			}
+			for i, a := range inner.Args {
+				if id, ok := a.(*ast.Ident); ok && id.Obj == param && handsOn(inner, i) {
+					reaches = true
+				}
+			}
+			return !reaches
+		})
+		return reaches
 	}
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
@@ -102,8 +159,8 @@ func optsIn(src string) (bool, error) {
 						runs = true
 					}
 				}
-				for _, arg := range node.Args {
-					if id, ok := arg.(*ast.Ident); ok && id.Obj == m {
+				for i, arg := range node.Args {
+					if id, ok := arg.(*ast.Ident); ok && id.Obj == m && handsOn(node, i) {
 						runs = true
 					}
 				}

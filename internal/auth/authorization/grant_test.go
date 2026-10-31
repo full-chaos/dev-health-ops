@@ -358,7 +358,7 @@ func TestRepoGrant_RealCatalogRepositoryActions(t *testing.T) {
 		}
 	}
 	if len(repoActs) == 0 {
-		t.Skip("pending CHAOS-10774: the embedded catalog has no repository-scoped action yet")
+		t.Fatal("the embedded catalog holds no repository-scoped action (CHAOS-10774 put acr.context.read there)")
 	}
 	e := NewEvaluator()
 	for _, a := range repoActs {

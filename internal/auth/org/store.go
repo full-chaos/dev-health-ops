@@ -15,6 +15,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
+	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
@@ -24,9 +25,24 @@ const organizationsSlugKey = "organizations_slug_key"
 type Config struct {
 	Pool   *pgxpool.Pool
 	Schema authschema.ValidatedIdentifier
-	Logger *slog.Logger
-	Meter  metric.Meter
+	// Sessions ends the organization's credentials in a suspend's transaction;
+	// nil ends none.
+	Sessions SessionEnder
+	Logger   *slog.Logger
+	Meter    metric.Meter
 }
+
+// SessionEnder ends an organization's credentials inside a verb's transaction.
+type SessionEnder interface {
+	EndOrganizationInTx(ctx context.Context, tx audit.TxOps, organizationID uuid.UUID) (session.Ended, error)
+	RecordEnded(ctx context.Context, ended session.Ended)
+}
+
+// errSessionsBusy reports that a suspend found a session or go-api refresh
+// token row of the organization locked by another writer (session.ErrBusy). The
+// whole transaction is rolled back, which releases the organization row the
+// other writer may be waiting for, and the suspend tries again.
+var errSessionsBusy = errors.New("org: a session of the organization is locked by another writer")
 
 type CreateInput struct {
 	Name string
@@ -37,6 +53,7 @@ type Store struct {
 	pool      *pgxpool.Pool
 	q         string
 	commit    func(context.Context, audit.Mutation) error
+	sessions  SessionEnder
 	logger    *slog.Logger
 	mutations metric.Int64Counter
 }
@@ -48,7 +65,7 @@ func New(cfg Config) (*Store, error) {
 	if cfg.Schema.String() == "" {
 		return nil, errors.New("org: no auth schema")
 	}
-	s := &Store{pool: cfg.Pool, q: authschema.Quote(cfg.Schema), logger: cfg.Logger}
+	s := &Store{pool: cfg.Pool, q: authschema.Quote(cfg.Schema), sessions: cfg.Sessions, logger: cfg.Logger}
 	s.commit = func(ctx context.Context, m audit.Mutation) error { return audit.Commit(ctx, cfg.Pool, cfg.Schema, m) }
 	if s.logger == nil {
 		s.logger = slog.Default()
@@ -85,7 +102,7 @@ func (s *Store) runChanged(ctx context.Context, v verb, m audit.Mutation) (bool,
 	case errors.Is(err, audit.ErrNoStateChange):
 		return false, nil
 	case errors.Is(err, ErrNotFound), errors.Is(err, ErrSlugTaken), errors.Is(err, ErrRevisionConflict), errors.Is(err, ErrSuspended),
-		errors.Is(err, ErrDenied):
+		errors.Is(err, ErrDenied), errors.Is(err, errSessionsBusy):
 		return false, err
 	}
 	s.logger.ErrorContext(ctx, "org: store failure", "verb", string(v), logging.ErrorAttr(err))
@@ -175,7 +192,41 @@ func (s *Store) SuspendAuthorized(ctx context.Context, id uuid.UUID, ifRevision 
 	return s.mutate(ctx, verbSuspend, id, "", ifRevision, a, authz)
 }
 
+// mutate runs one verb. Only a suspend can find its sessions busy: it rolls back
+// and tries again, and after its last attempt it is ErrStore with nothing
+// written.
 func (s *Store) mutate(ctx context.Context, v verb, id uuid.UUID, newName string, ifRevision *int64, a Actor, authz Authorize) (bool, error) {
+	var ended session.Ended
+	var changed bool
+	var err error
+	for attempt := range session.BusyAttempts {
+		if attempt > 0 {
+			if werr := session.WaitBusy(ctx, attempt); werr != nil {
+				return false, fmt.Errorf("%w: %s: %w", ErrStore, v, werr)
+			}
+		}
+		ended = session.Ended{}
+		changed, err = s.mutateOnce(ctx, v, id, newName, ifRevision, a, authz, &ended)
+		if !errors.Is(err, errSessionsBusy) {
+			break
+		}
+	}
+	if errors.Is(err, errSessionsBusy) {
+		s.logger.WarnContext(ctx, "org: suspend gave up: a session of the organization stayed locked", "organization_id", id.String())
+		return false, fmt.Errorf("%w: %s: %w", ErrStore, v, err)
+	}
+	if err != nil {
+		return false, err
+	}
+	if ended != (session.Ended{}) {
+		s.sessions.RecordEnded(ctx, ended)
+		s.logger.InfoContext(ctx, "organization suspended; its sessions ended", "organization_id", id.String(),
+			"sessions", ended.Sessions, "refresh_tokens", ended.RefreshTokens)
+	}
+	return changed, nil
+}
+
+func (s *Store) mutateOnce(ctx context.Context, v verb, id uuid.UUID, newName string, ifRevision *int64, a Actor, authz Authorize, ended *session.Ended) (bool, error) {
 	prev, next := StatusActive, StatusActive
 	switch v {
 	case verbSuspend:
@@ -219,10 +270,18 @@ func (s *Store) mutate(ctx context.Context, v verb, id uuid.UUID, newName string
 			_, err = tx.Exec(ctx, `UPDATE `+s.q+`.organizations SET name = $2,
 disabled_at = CASE WHEN $3::boolean THEN NULL ELSE COALESCE(disabled_at, clock_timestamp()) END,
 updated_at = clock_timestamp() WHERE id = $1`, id, d.next.name, d.next.active)
+			if err != nil || v != verbSuspend || s.sessions == nil {
+				return err
+			}
+			*ended, err = s.sessions.EndOrganizationInTx(ctx, tx, id)
+			if errors.Is(err, session.ErrBusy) {
+				return errSessionsBusy
+			}
 			return err
 		},
-		Audit:  auditFor(v, id, a, prev, next),
-		Events: []audit.OutboxEvent{eventFor(v, id, "")},
+		Audit:    auditFor(v, id, a, prev, next),
+		Events:   []audit.OutboxEvent{eventFor(v, id, "")},
+		Refusals: []error{errSessionsBusy},
 	})
 }
 

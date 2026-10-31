@@ -192,6 +192,8 @@ func outcomeLabel(err error) string {
 		return "suspended"
 	case errors.Is(err, ErrDenied):
 		return "denied"
+	case errors.Is(err, errSessionsBusy):
+		return "busy"
 	}
 	return "error"
 }

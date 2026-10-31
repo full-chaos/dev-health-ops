@@ -127,6 +127,9 @@ var Allowlist = []Entry{
 	// (revoked_at only, rows locked NOWAIT) inside the removal's audit.Commit; its auth sessions and credentials end
 	// through Store.revokeSessions (the rows below).
 	{File: "internal/auth/session/end_org.go", Func: "Store.EndOrgInTx", Table: "public.refresh_tokens", Verb: "UPDATE"},
+	// D6529 (ticket 12051), under the grant scope of D6512: an organization suspend or deprovision revokes the organization's
+	// go-api refresh tokens (revoked_at only, rows locked NOWAIT) inside the verb's audit.Commit.
+	{File: "internal/auth/session/end_org.go", Func: "Store.EndOrganizationInTx", Table: "public.refresh_tokens", Verb: "UPDATE"},
 	{File: "internal/auth/identity/oidc/flowstore.go", Func: "PGFlowStore.Begin", Table: "auth.sso_flow_states", Verb: "INSERT"},
 	{File: "internal/auth/identity/oidc/flowstore.go", Func: "PGFlowStore.Consume", Table: "auth.sso_flow_states", Verb: "UPDATE"},
 	{File: "internal/auth/identity/organization.go", Func: "Store.insertOrganization", Table: "auth.organizations", Verb: "INSERT"},
@@ -198,7 +201,7 @@ var Allowlist = []Entry{
 	{File: "internal/auth/workload/bootstrap_lifecycle.go", Func: "Store.RotateBootstrap", Table: "auth.credential_registry", Verb: "INSERT"},
 	{File: "internal/auth/workload/bootstrap_lifecycle.go", Func: "Store.RotateBootstrap", Table: "auth.credential_registry", Verb: "UPDATE"},
 	{File: "internal/auth/org/store.go", Func: "Store.Create", Table: "auth.organizations", Verb: "INSERT"},
-	{File: "internal/auth/org/store.go", Func: "Store.mutate", Table: "auth.organizations", Verb: "UPDATE"},
+	{File: "internal/auth/org/store.go", Func: "Store.mutateOnce", Table: "auth.organizations", Verb: "UPDATE"},
 	// TEMPORARY: the one-time legacy refresh exchange revokes go-api's refresh tokens (authschema.LegacyRefreshTokenGrant). CHAOS-10408 removes both rows with the grant.
 	// acp ruling 2026-10-26 (CHAOS-11506): the legacy link-token purge, run only where users are owned; DELETE of go-api's public link-token rows, counted and audited.
 	{File: "internal/auth/usersbackfill/linkpurge.go", Func: "PurgeLegacyLinks", Table: "public.email_verification_tokens", Verb: "DELETE"},

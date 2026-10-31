@@ -231,13 +231,16 @@ func (q poolQuerier) queryRow(ctx context.Context, sql string, args ...any) pgx.
 //	4. invite rows: auth.invites, then public.org_invites, FOR UPDATE;
 //	5. public.memberships: the organization's owner rows and the pairs, FOR UPDATE, ORDER BY id;
 //	6. auth.memberships pair rows FOR UPDATE, ORDER BY id;
-//	   6a. a removal only: the pair's auth.sessions FOR UPDATE NOWAIT, ORDER
+//	   6a. a removal: the pair's auth.sessions FOR UPDATE NOWAIT, ORDER
 //	   BY id, then their refresh credentials, then the pair's
 //	   public.refresh_tokens FOR UPDATE NOWAIT (session.Store.EndOrgInTx). An
 //	   Exchange holds its session row and then needs a key-share lock on the
 //	   principal (the new credential's foreign key), so waiting here would
 //	   close a cycle with step 1: a locked row rolls the removal back and it
-//	   is planned again;
+//	   is planned again. An organization deprovision (6a) and a suspend (after
+//	   step 3) do the same for the whole organization through
+//	   EndOrganizationInTx; a later verb that ends a membership in place,
+//	   such as a route for Suspend, must end its sessions the same way;
 //	7. aggregate_revisions, inside audit.Commit.
 //
 // Steps 1 and 2 take every id any later statement of the verb references,

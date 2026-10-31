@@ -176,6 +176,8 @@ exchange reads is in the [workload registry](workload-registry.md). The reasons 
 | | `AUTH_RUNTIME_DATABASE_ROLE` | Required to apply (not for `--check`). The login to grant the runtime privileges to. |
 | | `AUTH_DATABASE_SCHEMA` | Default `auth`. |
 | | `AUTH_SESSION_READER_ROLES` | Optional, comma-separated. The logins of go-api and query-api: each is granted exactly `SELECT (id, principal_id, revoked_at, legacy_token_version)` on the auth schema's `sessions` and `USAGE` on the schema, nothing else. With none, go-api and query-api cannot read the session, so every request with an access token auth-service issued fails (an error naming the missing grant, never a pass). Each role must exist. |
+| | `AUTH_PUSH_LIFECYCLE_WRITER_ROLE` | Optional. The `NOLOGIN` role that owns `append_external_push_lifecycle_event` (CHAOS-10895). It must exist, and the migration login must be a member of it, before `auth-migrate` runs: a privileged step (see the deployment page, "External Push lifecycle events"). Set, `auth-migrate` hands the function to it with exactly the outbox and revision privileges and verifies that set on every run. Empty leaves the function unexecutable. |
+| | `AUTH_PUSH_LIFECYCLE_CALLER_ROLES` | Required when the writer role is set. Comma-separated: the logins that may execute the function (go-api's only). They hold `EXECUTE` and no table privilege in the auth schema. |
 | `--check` | | Report the lineage position without issuing DDL. |
 | `--version` | | Print build metadata. |
 

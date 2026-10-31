@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	testBound  = int64(7_000_000_000)
+	testBound  = int64(30_000_000_000) // the 30 s of TRD section 14, written out independently of the package constant
 	repoAction = "acr.context.read"
 	orgA       = "org-a"
 	orgB       = "org-b"
@@ -67,11 +67,9 @@ type grantFake struct {
 	grantErr error
 	sa       map[string]ServiceAccount
 	now      int64
-	bound    int64
 }
 
 func (g grantFake) Grants(string) ([]Grant, error) { return g.grants, g.grantErr }
-func (g grantFake) DecisionBoundNanos() int64      { return g.bound }
 func (g grantFake) Workload() (WorkloadLimits, bool) {
 	if g.workload == nil {
 		return WorkloadLimits{}, false
@@ -85,7 +83,7 @@ func (g grantFake) ServiceAccount(id string) (ServiceAccount, bool) {
 func (g grantFake) NowUnixNano() int64 { return g.now }
 
 func repoSnapshot(role string, grants ...Grant) grantFake {
-	return grantFake{fakeSnapshot: orgSnapshot(role), grants: grants, now: nowNano, bound: testBound}
+	return grantFake{fakeSnapshot: orgSnapshot(role), grants: grants, now: nowNano}
 }
 
 func liveGrant(key string) Grant {
@@ -393,7 +391,7 @@ func TestRepoGrant_ReasonsAreClosed(t *testing.T) {
 		ReasonAllowedByRepositoryGrant, ReasonGrantAbsent, ReasonRepositoryNotGranted, ReasonGrantExpired,
 		ReasonGrantRevoked, ReasonWorkloadAudienceDenied, ReasonWorkloadActionDenied,
 		ReasonClockUnavailable, ReasonServiceAccountInactive,
-		ReasonAllowedByMembershipDefault, ReasonGrantReadFailed, ReasonDecisionBoundUnavailable,
+		ReasonAllowedByMembershipDefault, ReasonGrantReadFailed,
 	} {
 		if !allowed[r] {
 			t.Errorf("reason %q missing from AllReasons", r)
@@ -405,9 +403,8 @@ func TestRepoGrant_ReasonsAreClosed(t *testing.T) {
 		repoSnapshot("member"), repoSnapshot("member", liveGrant("*")), repoSnapshot("member", Grant{}),
 		{fakeSnapshot: orgSnapshot("member"), grants: []Grant{liveGrant("*")}},
 		{fakeSnapshot: orgSnapshot("member"), grants: []Grant{liveGrant("*")}, workload: wl, now: nowNano},
-		{fakeSnapshot: orgSnapshot("member"), now: nowNano, bound: testBound},
 		{fakeSnapshot: orgSnapshot("member"), now: nowNano},
-		{fakeSnapshot: orgSnapshot("member"), now: nowNano, bound: testBound, grantErr: errors.New("read")},
+		{fakeSnapshot: orgSnapshot("member"), now: nowNano, grantErr: errors.New("read")},
 	} {
 		for _, key := range []string{"acme/api", "*", "", "A/b"} {
 			if r := e.Evaluate(repoRequest(key), s).Reason; !allowed[r] {
@@ -415,7 +412,7 @@ func TestRepoGrant_ReasonsAreClosed(t *testing.T) {
 			}
 		}
 	}
-	if len(AllReasons()) != 25 {
+	if len(AllReasons()) != 24 {
 		t.Errorf("reason count %d", len(AllReasons()))
 	}
 }

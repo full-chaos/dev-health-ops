@@ -17,7 +17,6 @@ func FuzzEvaluateRepositoryGrant(f *testing.F) {
 			},
 			grants: []Grant{g},
 			now:    now,
-			bound:  testBound,
 		}
 		r := Request{Action: repoAction, ResourceKind: "repository", OrganizationID: reqOrg, ResourceKey: reqKey}
 		d := plantedEvaluator().Evaluate(r, s)
@@ -31,8 +30,8 @@ func FuzzEvaluateRepositoryGrant(f *testing.F) {
 			if grantOrg == reqOrg {
 				t.Fatal("default allow with a row of the pair")
 			}
-			if now <= 0 || d.CacheClass != CacheDecisionBound || d.ExpiresAtUnixNano != now+testBound {
-				t.Fatalf("default allow without clock or bound: %+v now %d", d, now)
+			if now <= 0 || d.CacheClass != CacheDecisionBound || d.ExpiresAtUnixNano != wantExpiry(now) {
+				t.Fatalf("default allow without clock or 30 s bound: %+v now %d", d, now)
 			}
 			return
 		}
@@ -53,4 +52,11 @@ func FuzzEvaluateRepositoryGrant(f *testing.F) {
 			t.Fatalf("grant allow cache class %q", d.CacheClass)
 		}
 	})
+}
+
+func wantExpiry(now int64) int64 {
+	if now > 1<<63-1-testBound {
+		return 1<<63 - 1
+	}
+	return now + testBound
 }

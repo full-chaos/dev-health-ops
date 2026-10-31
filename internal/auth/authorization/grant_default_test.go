@@ -2,6 +2,8 @@ package authorization
 
 import (
 	"errors"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
@@ -96,31 +98,26 @@ func TestMembershipDefault_CrossOrgNoRowsDenies(t *testing.T) {
 	wantDeny(t, "membership row names X for Y", e.Evaluate(req, s), ReasonOrgMismatch)
 }
 
-func TestMembershipDefault_NeedsClockAndBound(t *testing.T) {
+func TestMembershipDefault_ClockAndTheThirtySecondBound(t *testing.T) {
 	e := plantedEvaluator()
 	s := repoSnapshot("member")
 	s.now = 0
 	wantDeny(t, "no clock", e.Evaluate(repoRequest("acme/api"), s), ReasonClockUnavailable)
-	for _, b := range []int64{0, -1} {
-		s := repoSnapshot("member")
-		s.bound = b
-		wantDeny(t, "no bound", e.Evaluate(repoRequest("acme/api"), s), ReasonDecisionBoundUnavailable)
+	if d := e.Evaluate(repoRequest("acme/api"), repoSnapshot("member")); d.ExpiresAtUnixNano != nowNano+30_000_000_000 {
+		t.Errorf("expiry %d, want clock + 30 s", d.ExpiresAtUnixNano-nowNano)
 	}
+	// Near the largest instant the expiry saturates: it never wraps negative.
 	s = repoSnapshot("member")
-	s.now = 1<<63 - 1
-	s.bound = 1
-	wantDeny(t, "bound overflows the clock", e.Evaluate(repoRequest("acme/api"), s), ReasonDecisionBoundUnavailable)
-	s = repoSnapshot("member")
-	s.now = 1 << 62
-	s.bound = 1<<63 - 1 - s.now
+	s.now = 1<<63 - 1 - 5
 	if d := e.Evaluate(repoRequest("acme/api"), s); !d.Allowed || d.ExpiresAtUnixNano != 1<<63-1 {
-		t.Errorf("a bound that ends exactly at the largest instant: %+v", d)
+		t.Errorf("saturating expiry: %+v", d)
 	}
-	// A bound is never invented: the grant path needs none.
-	g := repoSnapshot("member", liveGrant("acme/api"))
-	g.bound = 0
-	if d := e.Evaluate(repoRequest("acme/api"), g); !d.Allowed {
-		t.Errorf("grant allow needs no bound: %+v", d)
+	// No snapshot or evaluator input carries a bound: it is a package constant.
+	it := reflect.TypeOf((*GrantSnapshot)(nil)).Elem()
+	for i := 0; i < it.NumMethod(); i++ {
+		if strings.Contains(strings.ToLower(it.Method(i).Name), "bound") {
+			t.Errorf("GrantSnapshot method %s carries a bound", it.Method(i).Name)
+		}
 	}
 }
 
@@ -137,7 +134,7 @@ func TestDecisionCacheClass(t *testing.T) {
 	for name, dec := range map[string]Decision{
 		"deny no grant": e.Evaluate(repoRequest("acme/api"), repoSnapshot("member", liveGrant("acme/web"))),
 		"deny invalid":  e.Evaluate(Request{}, repoSnapshot("member")),
-		"deny no clock": e.Evaluate(repoRequest("acme/api"), grantFake{fakeSnapshot: orgSnapshot("member"), bound: testBound}),
+		"deny no clock": e.Evaluate(repoRequest("acme/api"), grantFake{fakeSnapshot: orgSnapshot("member")}),
 	} {
 		if dec.Allowed || dec.CacheClass != CacheNone || dec.ExpiresAtUnixNano != 0 {
 			t.Errorf("%s: %+v", name, dec)
@@ -146,7 +143,6 @@ func TestDecisionCacheClass(t *testing.T) {
 	// An action whose catalog class is none is never cached, by either path.
 	none := newEvaluator(plantedCatalog{base: policycatalog.Default(), cacheClass: policycatalog.CacheNone})
 	for name, s := range map[string]grantFake{"default": repoSnapshot("member"), "grant": repoSnapshot("member", liveGrant("acme/api"))} {
-		s.bound = 0
 		if dec := none.Evaluate(repoRequest("acme/api"), s); !dec.Allowed || dec.CacheClass != CacheNone || dec.ExpiresAtUnixNano != 0 {
 			t.Errorf("class none, %s: %+v", name, dec)
 		}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/licensing"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
 )
@@ -30,6 +32,9 @@ var (
 	otherUser     = uuid.MustParse("1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f")
 	accessSession = uuid.MustParse("2d3e4f5a-6b7c-4d8e-9f0a-1b2c3d4e5f6a")
 )
+
+// accessOrgID is accessOrg as an addressable value (a session's organization).
+var accessOrgID = accessOrg
 
 func accessPath(org, user, query string) string {
 	path := "/api/v1/internal/acr/orgs/" + org + "/principals/" + user + "/access"
@@ -296,7 +301,7 @@ type fakeReads struct {
 	mu            sync.Mutex
 	users         map[uuid.UUID]policy.UserState
 	members       map[[2]uuid.UUID]bool
-	sessions      map[uuid.UUID]policy.SessionRow
+	sessions      map[uuid.UUID]sessionissue.State
 	impersonating map[uuid.UUID]bool
 	err           map[string]error
 	calls         map[string]int
@@ -307,7 +312,7 @@ func newFakeReads() *fakeReads {
 	return &fakeReads{
 		users:         map[uuid.UUID]policy.UserState{accessUser: {IsActive: true, TokenVersion: 3}, otherUser: {IsActive: true}},
 		members:       map[[2]uuid.UUID]bool{{accessUser, accessOrg}: true},
-		sessions:      map[uuid.UUID]policy.SessionRow{accessSession: {PrincipalID: accessUser, LegacyTokenVersion: &pin}},
+		sessions:      map[uuid.UUID]sessionissue.State{accessSession: {PrincipalID: accessUser, OrganizationID: &accessOrgID, LegacyTokenVersion: &pin}},
 		impersonating: map[uuid.UUID]bool{},
 		err:           map[string]error{},
 		calls:         map[string]int{},
@@ -346,12 +351,16 @@ func (f *fakeReads) ActiveImpersonation(_ context.Context, admin uuid.UUID) (*po
 	return nil, nil
 }
 
-func (f *fakeReads) SessionState(_ context.Context, id uuid.UUID) (policy.SessionRow, bool, error) {
+// State is auth-service's session state route (SessionStates).
+func (f *fakeReads) State(_ context.Context, id uuid.UUID) (sessionissue.State, error) {
 	if err := f.note("sessions"); err != nil {
-		return policy.SessionRow{}, false, err
+		return sessionissue.State{}, err
 	}
-	row, ok := f.sessions[id]
-	return row, ok, nil
+	state, ok := f.sessions[id]
+	if !ok {
+		return sessionissue.State{}, sessionissue.ErrSessionNotFound
+	}
+	return state, nil
 }
 
 type fakeFeatures struct {
@@ -414,7 +423,7 @@ func newAccessFixture() *accessFixture {
 }
 
 func (f *accessFixture) store() AccessStore {
-	return AccessStore{Organizations: f.orgs, Reads: f.reads, Features: f.features, Inventory: f.inventory}
+	return AccessStore{Organizations: f.orgs, Reads: f.reads, Features: f.features, Inventory: f.inventory, Sessions: f.reads}
 }
 
 func (f *accessFixture) read(t *testing.T, user uuid.UUID, session *uuid.UUID) (PrincipalAccess, error) {
@@ -502,6 +511,22 @@ func TestAccessStoreSessionLiveness(t *testing.T) {
 			f.reads.users[accessUser] = policy.UserState{IsActive: true, TokenVersion: 4}
 		}, accessUser, accessSession, false, sessionReasonVersionStale},
 		{"users row gone", func(f *accessFixture) { delete(f.reads.users, accessUser) }, accessUser, accessSession, false, sessionReasonUserUnknown},
+		{"bound to another organization", func(f *accessFixture) {
+			row := f.reads.sessions[accessSession]
+			another := uuid.MustParse("4f5a6b7c-8d9e-4f0a-9b1c-2d3e4f5a6b7c")
+			row.OrganizationID = &another
+			f.reads.sessions[accessSession] = row
+		}, accessUser, accessSession, false, sessionReasonOrgMismatch},
+		{"bound to no organization", func(f *accessFixture) {
+			row := f.reads.sessions[accessSession]
+			row.OrganizationID = nil
+			f.reads.sessions[accessSession] = row
+		}, accessUser, accessSession, false, sessionReasonOrgMismatch},
+		{"expired", func(f *accessFixture) {
+			row := f.reads.sessions[accessSession]
+			row.Expired = true
+			f.reads.sessions[accessSession] = row
+		}, accessUser, accessSession, false, sessionReasonExpired},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -671,5 +696,32 @@ func TestAccessStoreReadsLiveOnEveryCall(t *testing.T) {
 	}
 	if f.reads.calls["sessions"] != 2 || f.inventory.calls != 2 || f.features.calls != 4 {
 		t.Fatalf("calls %v inventory %d features %d", f.reads.calls, f.inventory.calls, f.features.calls)
+	}
+}
+
+// Without auth-service's session state reader a read that names a sid is
+// unavailable (never live, never not live), and a read without one does not
+// need it (D6559: no start-up failure, a 503 per sid read).
+func TestAccessStoreWithoutASessionStateReader(t *testing.T) {
+	f := newAccessFixture()
+	store := f.store()
+	store.Sessions = nil
+	if _, err := store.Access(context.Background(), AccessQuery{OrgID: accessOrg, UserID: accessUser, SessionID: sessionRef(accessSession)}); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("a sid read without a state reader: err = %v, want ErrUnavailable", err)
+	}
+	got, err := store.Access(context.Background(), AccessQuery{OrgID: accessOrg, UserID: accessUser})
+	if err != nil || got.Session != nil || !got.Member {
+		t.Fatalf("a row-only read without a state reader: %+v %v", got, err)
+	}
+}
+
+// A fault of the state route (unreachable, any refusal, an auth-service with no
+// state route: sessionissue answers ErrUnavailable for all of them) fails the
+// whole read; it never reads as a session that is not live.
+func TestAccessStoreFailsClosedOnASessionStateFault(t *testing.T) {
+	f := newAccessFixture()
+	f.reads.err["sessions"] = fmt.Errorf("%w: state route status 404", sessionissue.ErrUnavailable)
+	if _, err := f.read(t, accessUser, sessionRef(accessSession)); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("err = %v, want ErrUnavailable", err)
 	}
 }

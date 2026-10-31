@@ -149,6 +149,9 @@ func CompatRoutes(deps CompatDeps) ([]httpapi.Route, error) {
 		routes = append(routes, httpapi.Route{Method: http.MethodPost, Pattern: PatternCompatSocialLogin, Handler: http.HandlerFunc(h.compatSocialLogin),
 			ErrorWriter: h.signInTransportRefusal("")})
 	}
+	if deps.ServiceCredentials != nil || deps.IssueWorkload != nil {
+		routes = h.withSessionStateRoute(routes)
+	}
 	return routes, nil
 }
 

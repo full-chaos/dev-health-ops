@@ -89,9 +89,7 @@ var wildcardJobs = map[string][]string{
 	"venue-oracles.yml":            {"venue-oracles", "auth-corpus-external"},
 }
 
-var persistAllowlist = map[jobKey]string{
-	{"auto-release.yml", "tag-and-release"}: "git push origin $TAG at auto-release.yml:59 pushes the release tag with the persisted checkout token",
-}
+var persistAllowlist = map[jobKey]string{}
 
 // permsOf reports the mapping of a permissions value, whether the key is present and whether it is a mapping.
 func permsOf(holder yamlMap) (m map[string]string, present, isMap bool) {
@@ -334,6 +332,7 @@ func TestWorkflowPermissionsGateRefusesEachDefectClass(t *testing.T) {
 			jobs []string
 		}{
 			{"arc-runner-image.yml", []string{"build"}},
+			{"auto-release.yml", []string{"tag-and-release"}},
 			{"codeql-analysis.yml", []string{"analyze"}},
 			{"docker-images.yml", []string{"resolve", "go-build", "go-build-dho-arm64", "go-api-tools-build", "fan-in-latest"}},
 			{"security-scan.yml", []string{"semgrep", "gitleaks"}},
@@ -430,4 +429,54 @@ func TestWorkflowPermissionsGateRefusesEachDefectClass(t *testing.T) {
 			t.Errorf("stale persist row not caught:\n%s", d)
 		}
 	})
+}
+
+// CHAOS-11825: the release job pushes its tag with the token, so the checkout persists no credentials and the push step
+// passes the token explicitly.
+func TestAutoReleaseTagPushPassesTheTokenExplicitly(t *testing.T) {
+	root := rootOf(t)
+	const wf = ".github/workflows/auto-release.yml"
+	defects := func(root string) []string {
+		var out []string
+		job := asMap(asMap(loadWf(t, root, "auto-release.yml")["jobs"])["tag-and-release"])
+		var checkout, tag yamlMap
+		for _, s := range stepsOf(job) {
+			if strings.HasPrefix(strings.ToLower(asString(s["uses"])), "actions/checkout@") {
+				checkout = s
+			}
+			if strings.Contains(asString(s["run"]), "git push") {
+				tag = s
+			}
+		}
+		if checkout == nil || tag == nil {
+			return []string{"auto-release.yml tag-and-release: no checkout step or no git push step"}
+		}
+		if pc, ok := asMap(checkout["with"])["persist-credentials"].(bool); !ok || pc {
+			out = append(out, "checkout must set persist-credentials: false")
+		}
+		if asString(asMap(tag["env"])["GH_TOKEN"]) != "${{ github.token }}" {
+			out = append(out, "the git push step must set env GH_TOKEN from github.token")
+		}
+		if !strings.Contains(asString(tag["run"]), "${GH_TOKEN}") {
+			out = append(out, "the git push step must push with ${GH_TOKEN}")
+		}
+		return out
+	}
+	if d := defects(root); len(d) > 0 {
+		t.Fatalf("%s", strings.Join(d, "\n"))
+	}
+	files := allWorkflowFiles(t, root)
+	for name, c := range map[string]struct {
+		m    mutation
+		want string
+	}{
+		"the checkout persists credentials": {mutation{wf, "          persist-credentials: false\n", ""}, "checkout must set persist-credentials: false"},
+		"the push step loses its token env": {mutation{wf, "          GH_TOKEN: ${{ github.token }}\n", "          GH_TOKEN: x\n"}, "must set env GH_TOKEN from github.token"},
+		"the push step uses no token":       {mutation{wf, "${GH_TOKEN}@", ""}, "must push with ${GH_TOKEN}"},
+	} {
+		tmp := plantTree(t, root, files, c.m)
+		if d := strings.Join(defects(tmp), "\n"); !strings.Contains(d, c.want) {
+			t.Errorf("%s not caught (want %q):\n%s", name, c.want, d)
+		}
+	}
 }

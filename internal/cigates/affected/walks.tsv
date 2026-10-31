@@ -270,7 +270,6 @@ internal/pgmigrate	concurrent_integration_test.go	internal/pgmigrate/testdata/po
 internal/pgmigrate	downgrade_integration_test.go	internal/pgmigrate/testdata/postfreeze/walk	tree	*
 internal/pgmigrate	handddl_guard_integration_test.go	.	tree	*_test.go
 internal/pgmigrate	preflight_integration_test.go	internal/pgmigrate/testdata/postfreeze/two	tree	*
-internal/pgmigrate	squash_test.go	internal/pgmigrate	dir	*
 internal/platform/config	route_switch_absence_test.go	unexpressed	-	-
 internal/platform/credshape	census_test.go	unexpressed	-	*.go
 internal/platform/credshape	census_test.go	unexpressed	-	-
@@ -384,6 +383,7 @@ internal/teamprovider	census_test.go	unexpressed	-	-
 internal/testsupport/chschema	contract1_squash_integration_test.go	internal/chmigrate/archive/sql	dir	*
 internal/testsupport/chschema	contract_test.go	unexpressed	-	-
 internal/testsupport/containers	close_remote_test.go	.	tree	*_test.go
+internal/testsupport/gitmaintcensus	census_test.go	.	tree	*.go
 internal/testsupport/moduleroot	moduleroot_test.go	unexpressed	-	*.go
 internal/testsupport/providerstub	stub.go	unexpressed	-	-
 internal/testsupport/recordedfiles	recordedfiles.go	unexpressed	-	-

@@ -16,6 +16,7 @@ import (
 // reads it through OwnedFromLookup or the leaf parse it is (rule.OwnedFromLookup).
 var ownedParseCallers = []string{
 	"cmd/auth-migrate/main.go",
+	"cmd/auth-migrate/restorefence.go",
 	"internal/adminops/users.go",
 	"internal/apiservice/service.go",
 	"internal/auth/authconfig/config.go",

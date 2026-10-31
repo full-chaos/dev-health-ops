@@ -12,18 +12,13 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 )
 
-// PatternOrgSuspend is the organization suspend route. It is mounted only when
-// the embedded endpoint-profile document holds its row (darkPatterns): without
-// the row it answers 404, the other provisioning routes are unaffected, and the
-// service starts.
+// PatternOrgSuspend is the organization suspend route. It is served with the
+// other provisioning routes: its endpoint-profile row is on the same startup
+// gate (provisioningPatterns), so a document without the row builds none of
+// them.
 const PatternOrgSuspend = "/internal/v1/organizations/suspend"
 
 const opOrgSuspend = "organization_suspend"
-
-// darkPatterns are the routes mounted only when the endpoint-profile document
-// holds their row. A missing row of provisioningPatterns refuses the whole
-// switch; a missing row here leaves only that route unmounted.
-var darkPatterns = []string{PatternOrgSuspend}
 
 // OrganizationLifecycle ends and begins an organization's suspension, authorizing the actor under the row lock
 // (*org.Store).

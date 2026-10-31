@@ -517,7 +517,6 @@ func withProfileRow(t *testing.T, routes ...string) {
 func TestProvisioningSuspendThroughConfigure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	withProfileRow(t, authapi.PatternOrgSuspend)
 	e, header := newProvisioningEnv(t, ctx)
 	owner, org := e.seed(t, ctx)
 	super := e.account(t, ctx, acctMail(), true, true)

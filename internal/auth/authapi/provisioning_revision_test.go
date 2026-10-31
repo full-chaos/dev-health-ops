@@ -204,7 +204,7 @@ func TestOrgStateRefusesABadServiceCredential(t *testing.T) {
 }
 
 // Dark: with no endpoint-profile row for the route it answers 404 and one startup line names it; the suspend route's
-// row does not mount it and its row does not mount the suspend route.
+// row does not mount it.
 func TestOrgStateIsDarkWithoutItsProfileRow(t *testing.T) {
 	for name, doc := range map[string][]byte{"document without the row": docWithoutRow(t, nil, stateRoute),
 		"suspend row only": docWithoutRow(t, docWithRow(t, PatternOrgSuspend), stateRoute)} {
@@ -227,10 +227,6 @@ func TestOrgStateIsDarkWithoutItsProfileRow(t *testing.T) {
 		if lines != 1 {
 			t.Fatalf("%s: %d startup lines name the state route, want 1: %s", name, lines, f.logs.String())
 		}
-	}
-	f := newProvFixtureWith(t, docWithExtraRow(t, embeddedDocWithoutRow(t, PatternOrgSuspend), stateRoute))
-	if got := f.post(PatternOrgSuspend, f.bodyWith(""), nil); got.Code != http.StatusNotFound {
-		t.Fatalf("suspend with only the state row: %d, want 404", got.Code)
 	}
 	both := newProvFixtureWith(t, docWithExtraRow(t, docWithRow(t, PatternOrgSuspend), stateRoute))
 	if got := both.post(stateRoute, both.stateBody(), nil); got.Code != http.StatusOK {

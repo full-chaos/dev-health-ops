@@ -900,7 +900,7 @@ jobs:
                 got_log=1
               fi
               if [ "${got_log}" -eq 1 ] && grep -q -- 'panic: test timed out after' "${logfile}"; then
-                echo "- ${name}: JOB TIMEOUT (ran to the time limit: a slow runner or a hung test; no test assertion failed; go test deadline): ${url}"
+                echo "- ${name}: JOB TIMEOUT (ran to the time limit: a slow runner or a hung test; no test assertion failed; deadline panic): ${url}"
                 echo "${name}" >> "${timed_file}"
                 grep -m 1 -A 10 -- 'panic: test timed out after' "${logfile}" | sed 's/^/    /' || true
                 got_log=0

@@ -96,6 +96,7 @@ func (a *Authenticator) accessTokenUser(ctx context.Context, claims *AccessToken
 // is_active and is_superuser read as false, NULL token_version as 0, NULL
 // email as "".
 func (s PGStore) AccessUser(ctx context.Context, id uuid.UUID) (AccessUserRow, bool, error) {
+	countDirectRead(ctx, kindReadUsers)
 	var active, superuser *bool
 	var version *int64
 	var email *string

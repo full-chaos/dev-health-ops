@@ -165,7 +165,7 @@ var attributeVocabulary = map[string][]string{
 		"email_collision", "signup_unavailable", "identity_conflict",
 		"provider_already_linked", "expired", "principal_not_found", "malformed", "compromised",
 		"invite_created", "invite_accepted", "invite_revoked", "restore_fence_bootstrap",
-		"workload_enabled",
+		"workload_enabled", "service_account_owner_changed",
 	},
 	"target_kind": {
 		"principal", "organization", "membership", "role_assignment", "resource_grant", "credential",
@@ -197,7 +197,7 @@ var attributeVocabulary = map[string][]string{
 	"principal_enabled": {"true"},
 	"changed_fields": {
 		"role_key", "status", "display_name", "disabled_at", "expires_at", "revoked_at", "email", "email_verified_at",
-		"scopes", "audiences", "organization_id", "allowed_actions", "binding", "invited_by", "joined_at",
+		"scopes", "audiences", "organization_id", "allowed_actions", "binding", "invited_by", "joined_at", "owner_principal_id",
 	},
 }
 

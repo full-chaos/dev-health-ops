@@ -117,6 +117,7 @@ var unresolvedWriters = map[string]string{
 	"internal/auth/restorefence/apply.go":                    "PostgreSQL auth-schema restore-fence state, revocation and replay-mark inserts of the post-restore fence apply (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/keyrotation/store.go":                     "PostgreSQL auth-schema signing_keys inserts of the key rotation operator (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/org/store.go":                             "PostgreSQL auth-schema organizations insert of the organization aggregate (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/serviceaccount/store.go":                  "PostgreSQL auth-schema principals and service_accounts inserts of the organization service account lifecycle (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/workload/bootstrap_lifecycle.go":          "PostgreSQL auth-schema credential_registry inserts of the workload bootstrap lifecycle verbs (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/workload/store.go":                        "PostgreSQL auth-schema principals, workloads and workload_bindings inserts of the workload registry (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/session/delegation.go":                    "PostgreSQL auth-schema sessions insert of a delegated session (schema name interpolated); no in-scope ClickHouse table",

@@ -181,6 +181,7 @@ const APPROVED_AUDIT = [
   "invite_revoked",
   "restore_fence_bootstrap",
   "workload_enabled",
+  "service_account_owner_changed",
 ];
 const APPROVED_DECISION = [
   "allowed_by_repository_grant",

@@ -68,10 +68,11 @@ func (e *env) auditRows(t *testing.T, ctx context.Context, event string, orgID u
 	return e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = $1 AND organization_id = $2`, event, orgID.String())
 }
 
-// hold locks one row FOR UPDATE in an open runtime transaction and returns its release.
+// hold locks one row FOR UPDATE in an open transaction of the admin role and returns its release. The runtime role
+// reads no id column of public.refresh_tokens, and the writer this models, go-api, is not the runtime role.
 func (e *env) hold(t *testing.T, ctx context.Context, lock string, id uuid.UUID) func() {
 	t.Helper()
-	tx, err := e.runtime.Begin(ctx)
+	tx, err := e.admin.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

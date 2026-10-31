@@ -1715,15 +1715,21 @@ func (c *fileCtx) preGate(st ast.Stmt, dir bool, errName, entry string, locals m
 		}
 		return c.allPure(s.Rhs, entry)
 	case *ast.BlockStmt:
+		// a name the block defines is a local of the block for the statements after it
+		scope := locals
 		for _, x := range s.List {
-			if !c.preGate(x, dir, errName, entry, locals) {
+			if !c.preGate(x, dir, errName, entry, scope) {
 				return false
 			}
+			scope = withDefined(scope, x)
 		}
 		return true
 	case *ast.IfStmt:
 		if !c.allPure([]ast.Expr{s.Cond}, entry) || s.Init != nil && !c.preGate(s.Init, dir, errName, entry, locals) {
 			return false
+		}
+		if s.Init != nil {
+			locals = withDefined(locals, s.Init)
 		}
 		inDir := dir
 		for _, cj := range chain(s.Cond, token.LAND) {
@@ -1784,6 +1790,24 @@ func (c *fileCtx) preGate(st ast.Stmt, dir bool, errName, entry string, locals m
 		}
 	}
 	return false
+}
+
+// withDefined is locals plus the names a `:=` statement defines; locals itself when it defines none.
+func withDefined(locals map[string]bool, st ast.Stmt) map[string]bool {
+	a, ok := st.(*ast.AssignStmt)
+	if !ok || a.Tok != token.DEFINE {
+		return locals
+	}
+	out := make(map[string]bool, len(locals)+len(a.Lhs))
+	for k := range locals {
+		out[k] = true
+	}
+	for _, l := range a.Lhs {
+		if id, ok := l.(*ast.Ident); ok {
+			out[id.Name] = true
+		}
+	}
+	return out
 }
 
 // allPure reports whether the expressions call nothing but string and path functions and the Name/IsDir/Type/Mode

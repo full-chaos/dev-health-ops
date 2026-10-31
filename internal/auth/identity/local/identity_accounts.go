@@ -134,7 +134,17 @@ func (a IdentityAccounts) SetPasswordEndingSessions(ctx context.Context, req Pas
 				return err
 			}
 			if req.NewSession != nil {
-				issued, err := a.Sessions.CreateInTx(ctx, tx, req.ID, req.NewSession.OrganizationID, req.NewSession.AMR)
+				org := req.NewSession.OrganizationID
+				if org != nil {
+					var member bool
+					if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM public.memberships WHERE user_id = $1 AND org_id = $2)`, req.ID, *org).Scan(&member); err != nil {
+						return err
+					}
+					if !member {
+						org = nil
+					}
+				}
+				issued, err := a.Sessions.CreateInTx(ctx, tx, req.ID, org, req.NewSession.AMR)
 				if err != nil {
 					return err
 				}

@@ -403,9 +403,12 @@ func (a *Authenticator) orgMembershipRead(ctx context.Context, user, org uuid.UU
 // has them) unless its row says it does not act in an org (tenant requirement
 // none or cross_org_superuser_only); a route without a row reads it. A scope
 // without rows (query-api's /graphql, whose edge reads the membership itself)
-// reads nothing here.
+// reads nothing here. An org-less route (OrglessMayReach) serves the caller, not an org, and reads nothing.
 func (s *Scope) readsTokenOrg(r *http.Request) bool {
 	if s.rows == nil {
+		return false
+	}
+	if OrglessMayReach(r.Method, r.URL.Path) {
 		return false
 	}
 	row, found := s.rows(RouteProfileFrom(r.Context()))

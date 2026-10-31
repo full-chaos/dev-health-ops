@@ -110,6 +110,12 @@ func TestMembershipDefault_NeedsClockAndBound(t *testing.T) {
 	s.now = 1<<63 - 1
 	s.bound = 1
 	wantDeny(t, "bound overflows the clock", e.Evaluate(repoRequest("acme/api"), s), ReasonDecisionBoundUnavailable)
+	s = repoSnapshot("member")
+	s.now = 1 << 62
+	s.bound = 1<<63 - 1 - s.now
+	if d := e.Evaluate(repoRequest("acme/api"), s); !d.Allowed || d.ExpiresAtUnixNano != 1<<63-1 {
+		t.Errorf("a bound that ends exactly at the largest instant: %+v", d)
+	}
 	// A bound is never invented: the grant path needs none.
 	g := repoSnapshot("member", liveGrant("acme/api"))
 	g.bound = 0

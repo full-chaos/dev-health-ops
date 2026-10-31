@@ -33,13 +33,16 @@
 {{- if not (regexMatch "^[-_a-zA-Z0-9]+$" (toString $chCloud.database)) }}
 {{- fail "migrations.hook.clickhouseCloud.database must be a database name (letters, digits, '-', '_')" }}
 {{- end }}
+{{- $chCloudKeys := list "CLICKHOUSE_URI" "CLICKHOUSE_URI_FILE" "DEV_HEALTH_CH_HOST" "DEV_HEALTH_CH_PORT" "DEV_HEALTH_CH_USER" "DEV_HEALTH_CH_USER_FILE" "DEV_HEALTH_CH_PASSWORD" "DEV_HEALTH_CH_PASSWORD_FILE" "DEV_HEALTH_CH_DB" "DEV_HEALTH_CH_SECURE" }}
 {{- range $entry := .Values.migrations.hook.extraEnv }}
-{{- if or (eq $entry.name "CLICKHOUSE_URI") (eq $entry.name "CLICKHOUSE_URI_FILE") (hasPrefix "DHO_CH_CLOUD_" $entry.name) }}
-{{- fail (printf "migrations.hook.clickhouseCloud.enabled=true composes CLICKHOUSE_URI and DHO_CH_CLOUD_*; migrations.hook.extraEnv must not also set %s (CLICKHOUSE_URI_FILE is refused too: dho rejects both forms together)" $entry.name) }}
+{{- if has $entry.name $chCloudKeys }}
+{{- fail (printf "migrations.hook.clickhouseCloud.enabled=true sets the ClickHouse login in the component form (DEV_HEALTH_CH_*) and blanks CLICKHOUSE_URI; migrations.hook.extraEnv must not also set %s" $entry.name) }}
 {{- end }}
 {{- end }}
-{{- if or (index .Values.migrations.hook.secretData "CLICKHOUSE_URI") (index .Values.migrations.hook.secretData "CLICKHOUSE_URI_FILE") }}
-{{- fail "migrations.hook.clickhouseCloud.enabled=true composes CLICKHOUSE_URI from the Secret it names; migrations.hook.secretData.CLICKHOUSE_URI and CLICKHOUSE_URI_FILE must be empty" }}
+{{- range $key := $chCloudKeys }}
+{{- if index $.Values.migrations.hook.secretData $key }}
+{{- fail (printf "migrations.hook.clickhouseCloud.enabled=true sets the ClickHouse login in the component form from the Secret it names; migrations.hook.secretData.%s must be empty" $key) }}
+{{- end }}
 {{- end }}
 {{- end }}
 {{- /*
@@ -237,24 +240,32 @@ spec:
             {{- end }}
             {{- if $chCloud.enabled }}
             {{- /*
-            CHAOS-10754: the Cloud login for the DDL this Job runs. An env entry
-            beats the envFrom key of the same name, and Kubernetes expands $(NAME)
-            from entries listed ABOVE it, so the DSN is composed in the Pod spec
-            with no shell and no copy of the password. The spec holds only the
-            $(...) text. No percent-encoding happens: the password must be
-            URL-safe.
+            CHAOS-10754 / CHAOS-11995: the Cloud login for the DDL this Job
+            runs, in dho's component form (config.ClickHouseSpec): host, user
+            and password from the operator's Secret, port, database and TLS
+            from values. dho builds the DSN itself and percent-encodes every
+            part, so the password may hold any character. An env entry beats
+            the envFrom key of the same name: CLICKHOUSE_URI is set blank so
+            the runtime DSN of the shared Secret does not reach dho (dho
+            refuses a non-empty CLICKHOUSE_URI next to the components).
             */}}
-            - name: DHO_CH_CLOUD_HOST
+            - name: DEV_HEALTH_CH_HOST
               valueFrom:
                 secretKeyRef: {name: {{ $chCloud.secretName | quote }}, key: {{ $chCloud.hostKey | quote }}}
-            - name: DHO_CH_CLOUD_USER
+            - name: DEV_HEALTH_CH_PORT
+              value: {{ printf "%d" (int $chCloud.port) | quote }}
+            - name: DEV_HEALTH_CH_USER
               valueFrom:
                 secretKeyRef: {name: {{ $chCloud.secretName | quote }}, key: {{ $chCloud.userKey | quote }}}
-            - name: DHO_CH_CLOUD_PASSWORD
+            - name: DEV_HEALTH_CH_PASSWORD
               valueFrom:
                 secretKeyRef: {name: {{ $chCloud.secretName | quote }}, key: {{ $chCloud.passwordKey | quote }}}
+            - name: DEV_HEALTH_CH_DB
+              value: {{ $chCloud.database | quote }}
+            - name: DEV_HEALTH_CH_SECURE
+              value: "true"
             - name: CLICKHOUSE_URI
-              value: {{ printf "clickhouse://$(DHO_CH_CLOUD_USER):$(DHO_CH_CLOUD_PASSWORD)@$(DHO_CH_CLOUD_HOST):%d/%s?secure=true" (int $chCloud.port) $chCloud.database | quote }}
+              value: ""
             {{- end }}
             {{- with .Values.migrations.hook.extraEnv }}
             {{- toYaml . | nindent 12 }}

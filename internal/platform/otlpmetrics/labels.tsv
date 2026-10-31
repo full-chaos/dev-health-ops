@@ -11,6 +11,7 @@ auth.invite.mutations	outcome,verb	code: internal/auth/invite/store.go
 auth.membership.mutations	outcome,verb	code: internal/auth/membership/store.go
 auth.session.issue_compat_uses	class	code: internal/auth/authapi/wire.go
 auth.session.refresh_exchanges	reason_code	code: internal/auth/session/store.go
+auth.serviceaccount.mutations	outcome,verb	code: internal/auth/serviceaccount/store.go
 auth.session.revocations	reason	code: internal/auth/session/store.go
 auth.social.outcomes	operation,provider,reason_code	code: internal/auth/identity/social/service.go
 auth.workload.exchanges	audience,outcome,reason,subject	code: internal/auth/workloadexchange/reasons.go

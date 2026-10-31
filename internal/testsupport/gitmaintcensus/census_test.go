@@ -45,6 +45,19 @@ var configReadForms = map[string]bool{
 	"-l": true, "--show-origin": true, "--show-scope": true,
 }
 
+// allowlist names non-test helpers that build the git argv from their callers' arguments, so the census
+// cannot see the subcommand. Key: slash path from the module root, then "|", then the function
+// (Type.Method for a method). The census does not follow helper callers: a new triggering caller of an
+// allowlisted helper is not caught. Production argv stays unchanged on purpose (CHAOS-11771 plan).
+var allowlist = map[string]string{
+	"internal/testsupport/ratchet/ratchet.go|git":          "read-only helper; callers: rev-parse, merge-base, show",
+	"internal/cigates/frozengoldens/reads.go|reads.diff":   "read-only helper; the only git call is diff --name-only",
+	"internal/cigates/frozengoldens/reads.go|reads.lsTree": "read-only helper; the only git call is ls-tree",
+	"cmd/dev-health-migration-matrix/main.go|gitOutput":    "read-only helper; callers: rev-parse, merge-base, cat-file",
+	"internal/cigates/routing/deps.go|ExecGit.Run":         "read-only helper; caller planes.go runs read-only plane queries",
+	"internal/localgit/git.go|Repo.run":                    "read-only helper; callers: blame, diff, diff-tree, cat-file, rev-list, config --list, remote get-url",
+}
+
 type site struct {
 	file   string
 	line   int
@@ -250,8 +263,27 @@ func mentions(n ast.Node, names map[string]bool) bool {
 	return found
 }
 
+// funcName is "Type.Method" or "func" of the FuncDecl that holds the node, "" at package level.
+func funcName(fn ast.Node) string {
+	d, ok := fn.(*ast.FuncDecl)
+	if !ok {
+		return ""
+	}
+	if d.Recv != nil && len(d.Recv.List) > 0 {
+		t := d.Recv.List[0].Type
+		if st, ok := t.(*ast.StarExpr); ok {
+			t = st.X
+		}
+		if id, ok := t.(*ast.Ident); ok {
+			return id.Name + "." + d.Name.Name
+		}
+	}
+	return d.Name.Name
+}
+
 // failures returns every git exec site of the unit that can start maintenance and is not quieted.
-func failures(u *unit) []site {
+// A failing site whose root-relative path and function are in allow is skipped and recorded in used.
+func failures(u *unit, root string, allow map[string]string, used map[string]bool) []site {
 	var all []*ast.File
 	for _, f := range u.files {
 		all = append(all, f)
@@ -275,6 +307,12 @@ func failures(u *unit) []site {
 				return true
 			}
 			if pass, reason := classify(c, args); !pass {
+				rel, _ := filepath.Rel(root, path)
+				key := filepath.ToSlash(rel) + "|" + funcName(outermostFunc(f, c.Pos()))
+				if _, ok := allow[key]; ok {
+					used[key] = true
+					return true
+				}
 				out = append(out, site{file: path, line: u.fset.Position(c.Pos()).Line, reason: reason})
 			}
 			return true
@@ -320,10 +358,16 @@ func TestEveryGitExecSiteThatCanStartMaintenanceTurnsItOff(t *testing.T) {
 		t.Fatal(err)
 	}
 	var bad []string
+	used := map[string]bool{}
 	for _, u := range byDir {
-		for _, s := range failures(u) {
+		for _, s := range failures(u, root, allowlist, used) {
 			rel, _ := filepath.Rel(root, s.file)
 			bad = append(bad, fmt.Sprintf("%s:%d: %s", rel, s.line, s.reason))
+		}
+	}
+	for key := range allowlist {
+		if !used[key] {
+			bad = append(bad, "stale allowlist entry matches no failing git exec site: "+key)
 		}
 	}
 	sort.Strings(bad)
@@ -336,7 +380,7 @@ func fixture(t *testing.T, name string) []site {
 	t.Helper()
 	u := &unit{fset: token.NewFileSet(), files: map[string]*ast.File{}}
 	parseFile(t, u, filepath.Join("testdata", name))
-	return failures(u)
+	return failures(u, ".", nil, map[string]bool{})
 }
 
 func TestFixtureCells(t *testing.T) {
@@ -358,5 +402,21 @@ func TestFixtureCells(t *testing.T) {
 				t.Fatalf("%s: want %d failing sites, got %d: %+v", c.file, c.fail, len(got), got)
 			}
 		})
+	}
+}
+
+func TestAllowlistEntryThatMatchesNoSiteIsStale(t *testing.T) {
+	u := &unit{fset: token.NewFileSet(), files: map[string]*ast.File{}}
+	parseFile(t, u, filepath.Join("testdata", "raw_commit.go"))
+	allow := map[string]string{
+		"testdata/raw_commit.go|rawCommit": "used",
+		"testdata/raw_commit.go|gone":      "stale",
+	}
+	used := map[string]bool{}
+	if got := failures(u, ".", allow, used); len(got) != 0 {
+		t.Fatalf("allowlisted site still fails: %+v", got)
+	}
+	if !used["testdata/raw_commit.go|rawCommit"] || used["testdata/raw_commit.go|gone"] {
+		t.Fatalf("used = %v: the matching entry must be used and the stale one not", used)
 	}
 }

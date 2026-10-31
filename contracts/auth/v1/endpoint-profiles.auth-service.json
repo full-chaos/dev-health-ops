@@ -30,7 +30,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 487,
+            "line": 490,
             "note": "func (s *Store) rotate",
             "path": "internal/auth/session/store.go"
           },
@@ -352,7 +352,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 487,
+            "line": 490,
             "note": "func (s *Store) rotate",
             "path": "internal/auth/session/store.go"
           },

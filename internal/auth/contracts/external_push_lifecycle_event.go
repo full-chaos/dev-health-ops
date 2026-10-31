@@ -33,6 +33,23 @@ type ExternalPushLifecycleChange struct {
 	ExpiresAt        *Timestamp `json:"expires_at,omitempty"`
 }
 
+// MarshalJSON keeps an empty, non-nil Scopes as "scopes": [] (a scoped event
+// that narrows a credential to nothing requires the member) and omits a nil
+// Scopes (a revoked event carries none). Parsing already distinguishes the two.
+func (c ExternalPushLifecycleChange) MarshalJSON() ([]byte, error) {
+	wire := struct {
+		Status           string     `json:"status,omitempty"`
+		Fingerprint      string     `json:"fingerprint,omitempty"`
+		Scopes           *[]string  `json:"scopes,omitempty"`
+		RotationParentID string     `json:"rotation_parent_id,omitempty"`
+		ExpiresAt        *Timestamp `json:"expires_at,omitempty"`
+	}{c.Status, c.Fingerprint, nil, c.RotationParentID, c.ExpiresAt}
+	if c.Scopes != nil {
+		wire.Scopes = &c.Scopes
+	}
+	return json.Marshal(wire)
+}
+
 // ExternalPushLifecyclePayload is the event-specific half of the envelope.
 type ExternalPushLifecyclePayload struct {
 	Revision         Revision                    `json:"revision"`

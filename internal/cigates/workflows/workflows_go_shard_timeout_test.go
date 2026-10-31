@@ -1,6 +1,8 @@
 package workflows_test
 
 import (
+	"archive/zip"
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -131,24 +133,88 @@ func TestNamingStepLabelsAGoTestDeadlinePanicAsATimeout(t *testing.T) {
 	}
 }
 
-func TestNamingStepPrintsTheRunningTestsOfADeadlinePanic(t *testing.T) {
-	script := timeoutNamingStep(t)
-	var long strings.Builder
-	long.WriteString("2026-10-25T10:21:30Z panic: test timed out after 21m30s\n2026-10-25T10:21:30Z \trunning tests:\n")
-	for i := 1; i <= 15; i++ {
-		fmt.Fprintf(&long, "2026-10-25T10:21:30Z \t\tTestHang%02d (21m0s)\n", i)
+// panicLog is a go test deadline panic with n running tests; dump adds the goroutine dump go prints after the block.
+func panicLog(n int, dump bool) string {
+	var b strings.Builder
+	b.WriteString("2026-10-25T10:21:30Z panic: test timed out after 21m30s\n2026-10-25T10:21:30Z \trunning tests:\n")
+	for i := 1; i <= n; i++ {
+		fmt.Fprintf(&b, "2026-10-25T10:21:30Z \t\tTestHang%03d (21m0s)\n", i)
 	}
-	legs := []namingLeg{{"failure", "777", "go-storage-integration-shard-packages-7", "2026-10-25T03:30:00Z", "2026-10-25T03:52:00Z", long.String()}}
-	_, out, _ := runNamingTimeouts(t, script, 35, legs)
-	if !strings.Contains(out, "    2026-10-25T10:21:30Z \t\tTestHang01 (21m0s)") {
-		t.Errorf("the running tests block must be printed, indented; out=%q", out)
+	if dump {
+		b.WriteString("2026-10-25T10:21:30Z \n2026-10-25T10:21:30Z goroutine 1 [running]:\n2026-10-25T10:21:30Z \ttesting.(*M).startAlarm\n")
 	}
-	if !strings.Contains(out, "TestHang09") || strings.Contains(out, "TestHang12") {
-		t.Errorf("at most 10 lines after the panic line are printed; out=%q", out)
+	return b.String()
+}
+
+func zipOf(t *testing.T, member, body string) string {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, err := zw.Create(member)
+	if err != nil {
+		t.Fatal(err)
 	}
-	_, out, _ = runNamingTimeouts(t, script, 35, []namingLeg{{"failure", "778", "go-storage-integration-shard-packages-8", "2026-10-25T03:30:00Z", "2026-10-25T03:40:00Z", failLog}})
-	if strings.Contains(out, "running tests") {
+	if _, err := w.Write([]byte(body)); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.String()
+}
+
+func nameOneFailedLeg(t *testing.T, log string) string {
+	t.Helper()
+	_, out, _ := runNamingTimeouts(t, timeoutNamingStep(t), 35, []namingLeg{
+		{"failure", "777", "go-storage-integration-shard-packages-7", "2026-10-25T03:30:00Z", "2026-10-25T03:52:00Z", log}})
+	return out
+}
+
+func TestNamingStepPrintsTheWholeRunningTestsBlock(t *testing.T) {
+	out := nameOneFailedLeg(t, panicLog(1, false))
+	if !strings.Contains(out, "    2026-10-25T10:21:30Z \t\tTestHang001 (21m0s)") {
+		t.Errorf("one running test must be printed, indented; out=%q", out)
+	}
+	out = nameOneFailedLeg(t, panicLog(15, false))
+	for _, want := range []string{"TestHang001", "TestHang010", "TestHang015"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("15 running tests must all be printed, missing %s; out=%q", want, out)
+		}
+	}
+	if strings.Contains(out, " more\n") {
+		t.Errorf("15 running tests need no more-line; out=%q", out)
+	}
+	out = nameOneFailedLeg(t, panicLog(120, false))
+	if !strings.Contains(out, "TestHang100 (21m0s)") || strings.Contains(out, "TestHang101") || !strings.Contains(out, "\n    ... 20 more\n") {
+		t.Errorf("120 running tests: want 100 printed and a final '... 20 more'; out=%q", out)
+	}
+	out = nameOneFailedLeg(t, panicLog(3, true))
+	if !strings.Contains(out, "TestHang003") || strings.Contains(out, "goroutine 1") || strings.Contains(out, "startAlarm") {
+		t.Errorf("the block ends at the first line that is not indented; the goroutine dump is not printed; out=%q", out)
+	}
+	if out := nameOneFailedLeg(t, failLog); strings.Contains(out, "running tests") {
 		t.Errorf("a plain failure prints no running tests block; out=%q", out)
+	}
+}
+
+func TestNamingStepReadsTheJobLogWhateverFormItComesIn(t *testing.T) {
+	out := nameOneFailedLeg(t, zipOf(t, "1_Run.txt", panicLog(2, true)))
+	if !strings.Contains(out, "\n- go-storage-integration-shard-packages-7: JOB TIMEOUT") || !strings.Contains(out, "\ntimed_out=go-storage-integration-shard-packages-7\n") || !strings.Contains(out, "TestHang002") {
+		t.Errorf("a ZIP log with a deadline panic must read as a JOB TIMEOUT with its running tests; out=%q", out)
+	}
+	out = nameOneFailedLeg(t, zipOf(t, "1_Run.txt", failLog))
+	if strings.Contains(out, "JOB TIMEOUT") || !strings.Contains(out, "TestRole") || !strings.Contains(out, "\ntimed_out=\n") || strings.Contains(out, "log unreadable") {
+		t.Errorf("a ZIP log with an assertion failure keeps the plain label and its failing test; out=%q", out)
+	}
+	out = nameOneFailedLeg(t, panicLog(1, false))
+	if !strings.Contains(out, "JOB TIMEOUT") {
+		t.Errorf("a plain text log with a deadline panic must still read as a JOB TIMEOUT; out=%q", out)
+	}
+	for name, body := range map[string]string{"binary": "\x00\x01\x02\xff\xfe", "truncated zip": "PK\x03\x04garbage"} {
+		out := nameOneFailedLeg(t, body)
+		if strings.Contains(out, "JOB TIMEOUT") || !strings.Contains(out, "log unreadable") || !strings.Contains(out, "- go-storage-integration-shard-packages-7: https://example.test/job/777") || !strings.Contains(out, "\ntimed_out=\n") {
+			t.Errorf("%s body: want the plain label and 'log unreadable'; out=%q", name, out)
+		}
 	}
 }
 

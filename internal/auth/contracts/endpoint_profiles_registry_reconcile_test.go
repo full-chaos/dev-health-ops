@@ -232,7 +232,7 @@ func TestTheReconcileGateRefusesPlantedMismatches(t *testing.T) {
 			}
 		},
 		"the registry loses the issue route's service credential consumer": func(_ []map[string]any, registry registryAnchors) {
-			delete(registry.consumers["internal_svc_authsess_token"], anchorKey(authHTTPLayer+"compat.go", 150))
+			delete(registry.consumers["internal_svc_authsess_token"], anchorKey(authHTTPLayer+"compat.go", 155))
 		},
 		"the registry names a workload exchange consumer no row accepts": func(_ []map[string]any, registry registryAnchors) {
 			registry.consumers["workload_token"][anchorKey("internal/auth/workloadexchange/exchange.go", 143)] = true

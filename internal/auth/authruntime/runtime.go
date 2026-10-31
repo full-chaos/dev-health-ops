@@ -54,6 +54,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/token"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -192,6 +193,9 @@ func compatRoutes(
 		},
 		AppendAuditWith: func(ctx context.Context, event audit.AuditEvent, apply func(ctx context.Context, tx audit.TxOps) error) error {
 			return audit.AppendWith(ctx, pool, schema, event, apply)
+		},
+		PublicAuditTx: func(ctx context.Context, fn func(ctx context.Context, tx publicaudit.Tx) error) error {
+			return pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error { return fn(ctx, tx) })
 		},
 		Limits: limits,
 	}

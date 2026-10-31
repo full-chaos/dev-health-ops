@@ -116,7 +116,25 @@ func (s *Store) ExchangeLegacy(ctx context.Context, legacy LegacyRefresh) (Resul
 // public.audit_logs row of a compatibility refresh. The first exchange commits
 // with its auth.session.refreshed row (the new session is its counted state
 // change); a replay, a refusal or a reuse writes neither.
-func (s *Store) ExchangeLegacyWith(ctx context.Context, legacy LegacyRefresh, public PublicRow) (result Result, err error) {
+func (s *Store) ExchangeLegacyWith(ctx context.Context, legacy LegacyRefresh, public PublicRow) (Result, error) {
+	return s.exchangeLegacy(ctx, legacy, nil, public)
+}
+
+// ExchangeLegacyGuarded is ExchangeLegacy with a Guard run on the new session
+// inside the exchange's transaction, before it commits: a refusal rolls the
+// first exchange back (no session, no event, the go-api token unchanged) and
+// returns ErrGuardRefused with the uncommitted session in Result.Session, as
+// ExchangeGuarded does for a native credential. A replay is unguarded.
+func (s *Store) ExchangeLegacyGuarded(ctx context.Context, legacy LegacyRefresh, guard Guard) (Result, error) {
+	result, err := s.exchangeLegacy(ctx, legacy, guard, publicRowOf(ctx))
+	var refusal guardRefusal
+	if errors.As(err, &refusal) {
+		return Result{Issued: Issued{Session: refusal.record}}, ErrGuardRefused
+	}
+	return result, err
+}
+
+func (s *Store) exchangeLegacy(ctx context.Context, legacy LegacyRefresh, guard Guard, public PublicRow) (result Result, err error) {
 	defer func() { s.recordExchange(ctx, result, err) }()
 	digest := legacyJTIDigest(legacy.JTI)
 	hexDigest := hex.EncodeToString(digest)
@@ -172,6 +190,9 @@ func (s *Store) ExchangeLegacyWith(ctx context.Context, legacy LegacyRefresh, pu
 			if err != nil {
 				return err
 			}
+			if err := runGuard(ctx, tx, issued.Session, guard); err != nil {
+				return err
+			}
 			if public != nil {
 				if err := public(ctx, tx, issued.Session.PrincipalID, issued.Session.OrganizationID); err != nil {
 					return err
@@ -180,11 +201,11 @@ func (s *Store) ExchangeLegacyWith(ctx context.Context, legacy LegacyRefresh, pu
 			result = Result{Reason: ReasonAccepted, Issued: issued}
 		}
 		return nil
-	}, Audit: event, OffStream: audit.OffStreamSessionLifecycle, Refusals: []error{ErrGraceUnavailable, errDeactivatedFirstExchange}})
+	}, Audit: event, OffStream: audit.OffStreamSessionLifecycle, Refusals: []error{ErrGraceUnavailable, errDeactivatedFirstExchange, ErrGuardRefused}})
 	switch {
 	case err == nil, errors.Is(err, audit.ErrNoStateChange):
 		err = nil
-	case errors.Is(err, ErrGraceUnavailable):
+	case errors.Is(err, ErrGraceUnavailable), errors.Is(err, ErrGuardRefused):
 		return Result{Reason: ReasonDependency}, err
 	case errors.Is(err, errDeactivatedFirstExchange):
 		err = nil

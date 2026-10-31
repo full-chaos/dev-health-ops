@@ -206,7 +206,7 @@ var Allowlist = []Entry{
 	// acp ruling 2026-10-26 (CHAOS-11506): the legacy link-token purge, run only where users are owned; DELETE of go-api's public link-token rows, counted and audited.
 	{File: "internal/auth/usersbackfill/linkpurge.go", Func: "PurgeLegacyLinks", Table: "public.email_verification_tokens", Verb: "DELETE"},
 	{File: "internal/auth/usersbackfill/linkpurge.go", Func: "PurgeLegacyLinks", Table: "public.password_reset_tokens", Verb: "DELETE"},
-	{File: "internal/auth/session/legacy.go", Func: "Store.ExchangeLegacyWith", Table: "public.refresh_tokens", Verb: "UPDATE"},
+	{File: "internal/auth/session/legacy.go", Func: "Store.exchangeLegacy", Table: "public.refresh_tokens", Verb: "UPDATE"},
 	{File: "internal/auth/session/legacy.go", Func: "Store.revokeFamilyTx", Table: "public.refresh_tokens", Verb: "UPDATE"},
 	{File: "internal/auth/session/legacy.go", Func: "Store.revokeLegacyFamily", Table: "public.refresh_tokens", Verb: "UPDATE"},
 	{File: "internal/auth/session/legacy_revoke.go", Func: "Store.RevokeLegacyWith", Table: "public.refresh_tokens", Verb: "UPDATE"},

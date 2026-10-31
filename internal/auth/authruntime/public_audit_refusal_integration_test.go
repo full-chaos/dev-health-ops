@@ -190,3 +190,51 @@ func TestCompatRefreshOfALegacyTokenIsGuardedBeforeTheExchange(t *testing.T) {
 		t.Errorf("deactivated rows = %+v, want go-api's one row for the user in the token's organization", got)
 	}
 }
+
+// legacyRefreshToken mints a go-api refresh JWT for the user in org and seeds its public.refresh_tokens row.
+func (e *routesEnv) legacyRefreshToken(t *testing.T, ctx context.Context, user, org uuid.UUID) string {
+	t.Helper()
+	signer, err := edgetoken.NewSigner(testAccessSecret, "dev-health-ops", "dev-health-api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	jti, family := uuid.NewString(), uuid.New()
+	token, err := signer.Refresh(edgetoken.RefreshClaims{UserID: user.String(), OrgID: org.String(), FamilyID: family.String()}, time.Now(), jti)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256([]byte(jti))
+	if _, err := e.admin.Exec(ctx, `INSERT INTO public.refresh_tokens (id, user_id, org_id, token_hash, family_id, expires_at, created_at)
+		VALUES (gen_random_uuid(), $1, $2, $3, $4, now() + interval '1 day', now())`, user, org, hex.EncodeToString(digest[:]), family); err != nil {
+		t.Fatal(err)
+	}
+	return token
+}
+
+// G1, the guard's own refusal: a go-api refresh token of a user no longer a member of the token's organization is
+// refused by the refresh guard inside the exchange, before the exchange commits a session (the store itself would
+// exchange it); go-api's not-a-member row once.
+func TestCompatRefreshOfALegacyTokenOfARemovedMemberIsGuardedBeforeTheExchange(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	e := newRoutesEnv(t, ctx)
+	user, org, _ := e.parityUser(t, ctx)
+	token := e.legacyRefreshToken(t, ctx, user, org)
+	if _, err := e.admin.Exec(ctx, `DELETE FROM public.memberships WHERE user_id = $1 AND org_id = $2`, user, org); err != nil {
+		t.Fatal(err)
+	}
+	sessions := e.countRows(t, ctx, `SELECT count(*) FROM auth.sessions WHERE principal_id = $1`, user)
+	if got := e.refreshAs(t, token); got.status != http.StatusUnauthorized {
+		t.Fatalf("refresh of a removed member's go-api token = %d %s", got.status, got.body)
+	}
+	if n := e.countRows(t, ctx, `SELECT count(*) FROM auth.sessions WHERE principal_id = $1`, user); n != sessions {
+		t.Errorf("sessions %d -> %d: the refused go-api token was exchanged before the guard", sessions, n)
+	}
+	if n := e.refreshedCount(t, ctx, user); n != 0 {
+		t.Errorf("%s events = %d, want 0", compatRefreshedEvent, n)
+	}
+	want := refusalRow(org, user, true, "Token refresh failed: not a member", "Not a member of the organization")
+	if got := e.compatPublicRows(t, ctx, want.action, *want.description); len(got) != 1 || text(got[0].org) != org.String() || text(got[0].user) != user.String() {
+		t.Errorf("not-a-member rows = %+v, want go-api's one row for the user in the token's organization", got)
+	}
+}

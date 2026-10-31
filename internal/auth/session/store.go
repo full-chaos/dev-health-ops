@@ -596,6 +596,14 @@ func (s *Store) revokeSessions(ctx context.Context, tx audit.TxOps, ids []string
 // Revoke ends one live session and every credential of it. It reports false
 // when the session was already revoked or its effective expiry has passed.
 func (s *Store) Revoke(ctx context.Context, sessionID uuid.UUID, actor Actor) (bool, error) {
+	return s.RevokeWith(ctx, sessionID, actor, publicRowOf(ctx))
+}
+
+// RevokeWith is Revoke with public, when not nil, run in the revocation's
+// transaction after the session is revoked, with its principal and
+// organization: go-api's refusal row of a compatibility refresh. It commits
+// only with a revocation; an error from public rolls the revocation back.
+func (s *Store) RevokeWith(ctx context.Context, sessionID uuid.UUID, actor Actor, public PublicRow) (bool, error) {
 	id := sessionID.String()
 	var principal string
 	if err := s.pool.QueryRow(ctx, `SELECT principal_id::text FROM `+s.q+`.sessions WHERE id = $1`, id).Scan(&principal); err != nil {
@@ -614,7 +622,13 @@ func (s *Store) Revoke(ctx context.Context, sessionID uuid.UUID, actor Actor) (b
 				// Already dead: nothing to revoke, so no audit row (ErrNoStateChange).
 				return nil
 			}
-			return s.revokeSessions(ctx, tx, []string{id}, revokedByCaller)
+			if err := s.revokeSessions(ctx, tx, []string{id}, revokedByCaller); err != nil {
+				return err
+			}
+			if public != nil {
+				return public(ctx, tx, locked.PrincipalID, locked.OrganizationID)
+			}
+			return nil
 		},
 		Audit: audit.AuditEvent{
 			EventType: "auth.session.revoked", Outcome: audit.OutcomeAllowed,

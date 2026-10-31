@@ -14,6 +14,12 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 )
 
+// Tx is a transaction a row is written in: an audit.TxOps or a pgx.Tx.
+type Tx interface {
+	Execer
+	Querier
+}
+
 // Querier is the one read the organization and time helpers make.
 type Querier interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
@@ -131,19 +137,13 @@ func OrganizationOr(ctx context.Context, q Querier, preferred *uuid.UUID, userID
 
 // UserRow writes the row of a user event in org at the transaction's time with the request's metadata: resource
 // user/<user>, changes as given, status success. It is the row of go-api's auditUserEvent and register.
-func UserRow(ctx context.Context, tx interface {
-	Execer
-	Querier
-}, org, user uuid.UUID, action, description string, changes []byte) error {
+func UserRow(ctx context.Context, tx Tx, org, user uuid.UUID, action, description string, changes []byte) error {
 	return Write(ctx, tx, Row{OrgID: org, UserID: &user, Action: action, ResourceType: "user", ResourceID: user.String(),
 		Description: &description, Changes: changes})
 }
 
 // Write fills the request metadata and the transaction time of row and inserts it.
-func Write(ctx context.Context, tx interface {
-	Execer
-	Querier
-}, row Row) error {
+func Write(ctx context.Context, tx Tx, row Row) error {
 	metadata, err := RequestMetadata(ctx)
 	if err != nil {
 		return err

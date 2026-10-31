@@ -4,6 +4,237 @@
   "rows": [
     {
       "accepted_credential_classes": [
+        "refresh_credential"
+      ],
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: the credential, its session and the users row are read live; rotation is single use under the session row lock.",
+      "disclosure_behavior": "Every refusal of a presented credential is a 401 error.v1 with an auth-outcome reason code; a store or key failure is a 503 with retry_after_seconds. The body never echoes the credential.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /v1/token/refresh [dev-health-auth-service @api]",
+      "issued_credential": [
+        {
+          "algorithm": "HS256",
+          "anchor": {
+            "line": 63,
+            "note": "func (i *Issuer) Access",
+            "path": "internal/auth/authapi/issuer.go"
+          },
+          "audience": "AUTH_JWT_AUDIENCE (default dev-health-api)",
+          "class_id": "ops_access_token_hs256",
+          "direction": "returned_to_caller",
+          "issuer": "AUTH_JWT_ISSUER (default dev-health-ops)",
+          "lifetime_seconds": 3600,
+          "note": "go-api's access claims from the live users and membership rows, plus sid."
+        },
+        {
+          "algorithm": null,
+          "anchor": {
+            "line": 468,
+            "note": "func (s *Store) rotate",
+            "path": "internal/auth/session/store.go"
+          },
+          "audience": null,
+          "class_id": "refresh_credential",
+          "direction": "returned_to_caller",
+          "issuer": null,
+          "lifetime_seconds": 604800,
+          "note": "The rotated opaque credential (dhr1_ + 32 random bytes); a grace replay inside 30 s returns the same successor."
+        }
+      ],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 367,
+          "note": "func (s *Store) Exchange",
+          "path": "internal/auth/session/store.go"
+        },
+        "description": "session.Store.Exchange: the presented credential's SHA-256 is looked up under the session row lock; consumed, expired, revoked and reused credentials are refused, reuse revokes the session."
+      },
+      "public_rationale": null,
+      "route": "/v1/token/refresh",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/routes.go",
+        "line": 69
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "none"
+    },
+    {
+      "accepted_credential_classes": [
+        "ops_access_token_hs256",
+        "user_access_token"
+      ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: the session row and the users row are read live on every request.",
+      "disclosure_behavior": "Every refusal is the same 401 error.v1 shape with an auth-outcome reason code; no detail text, no credential, no client request id.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "GET /v1/sessions/current [dev-health-auth-service @api]",
+      "method": "GET",
+      "primary_validator": {
+        "anchor": {
+          "line": 96,
+          "note": "func (h handlers) authenticate",
+          "path": "internal/auth/authapi/routes.go"
+        },
+        "description": "authenticate: bearer HS256 access token (edgetoken, go-api's validate_token rules) with a sid claim; the session must be live and belong to sub, the users row active, and tv equal to users.token_version. Every refusal is a 401 error.v1 with an auth-outcome reason code. An EdDSA user_access_token (JWT header alg EdDSA) is checked by the profile-routed validator with audience auth-service (scope auth:session): sid is required, and the session's token_version pin must equal users.token_version; the HS256 access token stays accepted (legacy_hs256 true)."
+      },
+      "public_rationale": null,
+      "route": "/v1/sessions/current",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/routes.go",
+        "line": 70
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "none",
+      "token_shape": {
+        "algorithm": "HS256 (legacy_hs256) or EdDSA (user_access_token)",
+        "audience": "HS256: AUTH_JWT_AUDIENCE (default dev-health-api, go-api's JWT_AUDIENCE); EdDSA: auth-service",
+        "issuer": "HS256: AUTH_JWT_ISSUER (default dev-health-ops, go-api's JWT_ISSUER); EdDSA: AUTH_TOKEN_ISSUER_URL",
+        "token_type": "HS256 JWT, type=access, with sid; or the access-token.v1 JWS with sid"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "ops_access_token_hs256",
+        "user_access_token"
+      ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: the session row and the users row are read live on every request.",
+      "disclosure_behavior": "Every refusal is the same 401 error.v1 shape with an auth-outcome reason code; no detail text, no credential, no client request id.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /v1/sessions/revoke [dev-health-auth-service @api]",
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 96,
+          "note": "func (h handlers) authenticate",
+          "path": "internal/auth/authapi/routes.go"
+        },
+        "description": "authenticate: bearer HS256 access token (edgetoken, go-api's validate_token rules) with a sid claim; the session must be live and belong to sub, the users row active, and tv equal to users.token_version. Every refusal is a 401 error.v1 with an auth-outcome reason code. An EdDSA user_access_token (JWT header alg EdDSA) is checked by the profile-routed validator with audience auth-service (scope auth:session): sid is required, and the session's token_version pin must equal users.token_version; the HS256 access token stays accepted (legacy_hs256 true)."
+      },
+      "public_rationale": null,
+      "route": "/v1/sessions/revoke",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/routes.go",
+        "line": 71
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "none",
+      "token_shape": {
+        "algorithm": "HS256 (legacy_hs256) or EdDSA (user_access_token)",
+        "audience": "HS256: AUTH_JWT_AUDIENCE (default dev-health-api, go-api's JWT_AUDIENCE); EdDSA: auth-service",
+        "issuer": "HS256: AUTH_JWT_ISSUER (default dev-health-ops, go-api's JWT_ISSUER); EdDSA: AUTH_TOKEN_ISSUER_URL",
+        "token_type": "HS256 JWT, type=access, with sid; or the access-token.v1 JWS with sid"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "ops_access_token_hs256",
+        "user_access_token"
+      ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: the session row and the users row are read live on every request.",
+      "disclosure_behavior": "Every refusal is the same 401 error.v1 shape with an auth-outcome reason code; no detail text, no credential, no client request id.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /v1/sessions/revoke-all [dev-health-auth-service @api]",
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 96,
+          "note": "func (h handlers) authenticate",
+          "path": "internal/auth/authapi/routes.go"
+        },
+        "description": "authenticate: bearer HS256 access token (edgetoken, go-api's validate_token rules) with a sid claim; the session must be live and belong to sub, the users row active, and tv equal to users.token_version. Every refusal is a 401 error.v1 with an auth-outcome reason code. An EdDSA user_access_token (JWT header alg EdDSA) is checked by the profile-routed validator with audience auth-service (scope auth:session): sid is required, and the session's token_version pin must equal users.token_version; the HS256 access token stays accepted (legacy_hs256 true)."
+      },
+      "public_rationale": null,
+      "route": "/v1/sessions/revoke-all",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/routes.go",
+        "line": 72
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "none",
+      "token_shape": {
+        "algorithm": "HS256 (legacy_hs256) or EdDSA (user_access_token)",
+        "audience": "HS256: AUTH_JWT_AUDIENCE (default dev-health-api, go-api's JWT_AUDIENCE); EdDSA: auth-service",
+        "issuer": "HS256: AUTH_JWT_ISSUER (default dev-health-ops, go-api's JWT_ISSUER); EdDSA: AUTH_TOKEN_ISSUER_URL",
+        "token_type": "HS256 JWT, type=access, with sid; or the access-token.v1 JWS with sid"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "ops_access_token_hs256",
+        "user_access_token"
+      ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: the session row and the users row are read live on every request.",
+      "disclosure_behavior": "A bearer refusal is the 401 error.v1 shape with an auth-outcome reason code. A refusal of the link itself is go-api's {\"detail\": ...} shape with no credential; the reason code goes to the audit row and the log only.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /v1/identities/social [dev-health-auth-service @api]",
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 96,
+          "note": "func (h handlers) authenticate",
+          "path": "internal/auth/authapi/routes.go"
+        },
+        "description": "authenticate: bearer HS256 access token (edgetoken, go-api's validate_token rules) with a sid claim; the session must be live and belong to sub, the users row active, and tv equal to users.token_version. Every refusal is a 401 error.v1 with an auth-outcome reason code. The provider access token in the body is then verified with the provider (social.Service.Link) and the link is bound to the bearer's principal; a stale sign-in is refused. An EdDSA user_access_token (JWT header alg EdDSA) is checked by the profile-routed validator with audience auth-service (scope auth:session): sid is required, and the session's token_version pin must equal users.token_version; the HS256 access token stays accepted (legacy_hs256 true)."
+      },
+      "public_rationale": null,
+      "route": "/v1/identities/social",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/social_link.go",
+        "line": 67
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "none",
+      "token_shape": {
+        "algorithm": "HS256 (legacy_hs256) or EdDSA (user_access_token)",
+        "audience": "HS256: AUTH_JWT_AUDIENCE (default dev-health-api, go-api's JWT_AUDIENCE); EdDSA: auth-service",
+        "issuer": "HS256: AUTH_JWT_ISSUER (default dev-health-ops, go-api's JWT_ISSUER); EdDSA: AUTH_TOKEN_ISSUER_URL",
+        "token_type": "HS256 JWT, type=access, with sid; or the access-token.v1 JWS with sid"
+      }
+    },
+    {
+      "accepted_credential_classes": [
         "ops_access_token_hs256",
         "user_access_token"
       ],
@@ -50,366 +281,6 @@
       "classification": "public",
       "gaps": [],
       "graphql_field_name": null,
-      "id": "GET /.well-known/jwks.json [dev-health-auth-service @api]",
-      "method": "GET",
-      "public_rationale": "The published token verification keys (public keys only), fetched anonymously by relying parties; returns no tenant data.",
-      "route": "/.well-known/jwks.json",
-      "service": "dev-health-auth-service",
-      "source": {
-        "file": "internal/auth/authapi/wellknown.go",
-        "line": 79
-      },
-      "surface_kind": "rest"
-    },
-    {
-      "accepted_credential_classes": [],
-      "classification": "public",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "GET /.well-known/openid-configuration [dev-health-auth-service @api]",
-      "method": "GET",
-      "public_rationale": "The issuer's discovery document (issuer, jwks_uri, signing algorithms), fetched anonymously by relying parties; returns no tenant data.",
-      "route": "/.well-known/openid-configuration",
-      "service": "dev-health-auth-service",
-      "source": {
-        "file": "internal/auth/authapi/wellknown.go",
-        "line": 86
-      },
-      "surface_kind": "rest"
-    },
-    {
-      "accepted_credential_classes": [],
-      "classification": "public",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "GET /api/v1/auth/oauth/{provider_id}/authorize [dev-health-auth-service @api]",
-      "issued_credential": [],
-      "method": "GET",
-      "public_rationale": "OAuth authorize by provider type (the path segment is the provider type); pre-session by design: the browser starts a sign-in and the route accepts no credential.",
-      "route": "/api/v1/auth/oauth/{provider_id}/authorize",
-      "service": "dev-health-auth-service",
-      "source": {
-        "file": "internal/auth/authruntime/sso.go",
-        "line": 106
-      },
-      "surface_kind": "rest"
-    },
-    {
-      "accepted_credential_classes": [],
-      "classification": "public",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "GET /api/v1/auth/saml/{provider_id}/metadata [dev-health-auth-service @api]",
-      "issued_credential": [],
-      "method": "GET",
-      "public_rationale": "SAML service-provider metadata; the IdP, not a browser session, is the caller, and the answer carries only public configuration.",
-      "route": "/api/v1/auth/saml/{provider_id}/metadata",
-      "service": "dev-health-auth-service",
-      "source": {
-        "file": "internal/auth/authruntime/sso.go",
-        "line": 146
-      },
-      "surface_kind": "rest"
-    },
-    {
-      "accepted_credential_classes": [],
-      "classification": "public",
-      "disclosure_behavior": "An unknown, expired, used or wrong-purpose secret is the same 400; no detail names which.",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "GET /api/v1/auth/verify [dev-health-auth-service @api]",
-      "method": "GET",
-      "public_rationale": "E-mail verification link secret in the token query parameter; single use, 24 hours, bound to the verification purpose, consumed on the database clock. Rate limited 10 per hour per client address and per e-mail query parameter value (normalized, unknown when absent); each distinct value has its own counter.",
-      "route": "/api/v1/auth/verify",
-      "service": "dev-health-auth-service",
-      "source": {
-        "file": "internal/auth/authapi/credentials.go",
-        "line": 140
-      },
-      "surface_kind": "rest",
-      "tenant_requirement": "none"
-    },
-    {
-      "accepted_credential_classes": [],
-      "classification": "public",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "GET /healthz [dev-health-auth-service @operator]",
-      "method": "GET",
-      "public_rationale": "Probe reached by the orchestrator on the operator listener; returns no tenant data.",
-      "route": "/healthz",
-      "service": "dev-health-auth-service",
-      "source": {
-        "file": "internal/platform/health/server.go",
-        "line": 131
-      },
-      "surface_kind": "rest"
-    },
-    {
-      "accepted_credential_classes": [],
-      "classification": "public",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "GET /metrics [dev-health-auth-service @operator]",
-      "method": "GET",
-      "public_rationale": "Scrape endpoint on the operator listener only (never the API one); process metrics, no tenant data.",
-      "route": "/metrics",
-      "service": "dev-health-auth-service",
-      "source": {
-        "file": "internal/platform/health/server.go",
-        "line": 133
-      },
-      "surface_kind": "rest"
-    },
-    {
-      "accepted_credential_classes": [],
-      "classification": "public",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "GET /readyz [dev-health-auth-service @operator]",
-      "method": "GET",
-      "public_rationale": "Probe reached by the orchestrator on the operator listener; returns no tenant data.",
-      "route": "/readyz",
-      "service": "dev-health-auth-service",
-      "source": {
-        "file": "internal/platform/health/server.go",
-        "line": 132
-      },
-      "surface_kind": "rest"
-    },
-    {
-      "accepted_credential_classes": [
-        "ops_access_token_hs256",
-        "user_access_token"
-      ],
-      "access_token_validation": {
-        "legacy_hs256": true
-      },
-      "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "EdDSA"
-      },
-      "classification": "protected",
-      "current_state_cache_behavior": "No cache: the session row and the users row are read live on every request.",
-      "disclosure_behavior": "Every refusal is the same 401 error.v1 shape with an auth-outcome reason code; no detail text, no credential, no client request id.",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "GET /v1/sessions/current [dev-health-auth-service @api]",
-      "method": "GET",
-      "primary_validator": {
-        "anchor": {
-          "line": 96,
-          "note": "func (h handlers) authenticate",
-          "path": "internal/auth/authapi/routes.go"
-        },
-        "description": "authenticate: bearer HS256 access token (edgetoken, go-api's validate_token rules) with a sid claim; the session must be live and belong to sub, the users row active, and tv equal to users.token_version. Every refusal is a 401 error.v1 with an auth-outcome reason code. An EdDSA user_access_token (JWT header alg EdDSA) is checked by the profile-routed validator with audience auth-service (scope auth:session): sid is required, and the session's token_version pin must equal users.token_version; the HS256 access token stays accepted (legacy_hs256 true)."
-      },
-      "public_rationale": null,
-      "route": "/v1/sessions/current",
-      "service": "dev-health-auth-service",
-      "source": {
-        "file": "internal/auth/authapi/routes.go",
-        "line": 70
-      },
-      "surface_kind": "rest",
-      "tenant_requirement": "none",
-      "token_shape": {
-        "algorithm": "HS256 (legacy_hs256) or EdDSA (user_access_token)",
-        "audience": "HS256: AUTH_JWT_AUDIENCE (default dev-health-api, go-api's JWT_AUDIENCE); EdDSA: auth-service",
-        "issuer": "HS256: AUTH_JWT_ISSUER (default dev-health-ops, go-api's JWT_ISSUER); EdDSA: AUTH_TOKEN_ISSUER_URL",
-        "token_type": "HS256 JWT, type=access, with sid; or the access-token.v1 JWS with sid"
-      }
-    },
-    {
-      "accepted_credential_classes": [],
-      "classification": "public",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "HEAD /.well-known/jwks.json [dev-health-auth-service @api]",
-      "method": "HEAD",
-      "public_rationale": "The published token verification keys (public keys only), fetched anonymously by relying parties; returns no tenant data.",
-      "route": "/.well-known/jwks.json",
-      "service": "dev-health-auth-service",
-      "source": {
-        "file": "internal/auth/authapi/wellknown.go",
-        "line": 80
-      },
-      "surface_kind": "rest"
-    },
-    {
-      "accepted_credential_classes": [],
-      "classification": "public",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "HEAD /.well-known/openid-configuration [dev-health-auth-service @api]",
-      "method": "HEAD",
-      "public_rationale": "The issuer's discovery document (issuer, jwks_uri, signing algorithms), fetched anonymously by relying parties; returns no tenant data.",
-      "route": "/.well-known/openid-configuration",
-      "service": "dev-health-auth-service",
-      "source": {
-        "file": "internal/auth/authapi/wellknown.go",
-        "line": 87
-      },
-      "surface_kind": "rest"
-    },
-    {
-      "accepted_credential_classes": [],
-      "classification": "public",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "HEAD /healthz [dev-health-auth-service @operator]",
-      "method": "HEAD",
-      "public_rationale": "Probe reached by the orchestrator on the operator listener; returns no tenant data.",
-      "route": "/healthz",
-      "service": "dev-health-auth-service",
-      "source": {
-        "file": "internal/platform/health/server.go",
-        "line": 131
-      },
-      "surface_kind": "rest"
-    },
-    {
-      "accepted_credential_classes": [],
-      "classification": "public",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "HEAD /metrics [dev-health-auth-service @operator]",
-      "method": "HEAD",
-      "public_rationale": "Scrape endpoint on the operator listener only (never the API one); process metrics, no tenant data.",
-      "route": "/metrics",
-      "service": "dev-health-auth-service",
-      "source": {
-        "file": "internal/platform/health/server.go",
-        "line": 133
-      },
-      "surface_kind": "rest"
-    },
-    {
-      "accepted_credential_classes": [],
-      "classification": "public",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "HEAD /readyz [dev-health-auth-service @operator]",
-      "method": "HEAD",
-      "public_rationale": "Probe reached by the orchestrator on the operator listener; returns no tenant data.",
-      "route": "/readyz",
-      "service": "dev-health-auth-service",
-      "source": {
-        "file": "internal/platform/health/server.go",
-        "line": 132
-      },
-      "surface_kind": "rest"
-    },
-    {
-      "accepted_credential_classes": [
-        "ops_access_token_hs256",
-        "user_access_token"
-      ],
-      "access_token_validation": {
-        "legacy_hs256": true
-      },
-      "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "EdDSA"
-      },
-      "classification": "protected",
-      "current_state_cache_behavior": "No cache: the session row and the users row are read live on every request.",
-      "disclosure_behavior": "A wrong current password is a 403 with a fixed text; no field of the body is echoed, logged or audited.",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "POST /api/v1/auth/change-password [dev-health-auth-service @api]",
-      "issued_credential": [
-        {
-          "algorithm": "HS256",
-          "anchor": {
-            "line": 63,
-            "note": "func (i *Issuer) Access",
-            "path": "internal/auth/authapi/issuer.go"
-          },
-          "audience": "AUTH_JWT_AUDIENCE (default dev-health-api)",
-          "class_id": "ops_access_token_hs256",
-          "direction": "returned_to_caller",
-          "issuer": "AUTH_JWT_ISSUER (default dev-health-ops)",
-          "lifetime_seconds": 3600,
-          "note": "go-api's access claims for the caller's new session, plus sid (hs256_compat class)."
-        },
-        {
-          "algorithm": "EdDSA",
-          "anchor": {
-            "line": 63,
-            "note": "func (i *Issuer) Access",
-            "path": "internal/auth/authapi/issuer.go"
-          },
-          "audience": "AUTH_JWT_AUDIENCE (dev-health-api or auth-service, eddsa class)",
-          "class_id": "user_access_token",
-          "direction": "returned_to_caller",
-          "issuer": "AUTH_TOKEN_ISSUER_URL",
-          "lifetime_seconds": 3600,
-          "note": "Under the eddsa access token class the access token of the caller's new session is the access-token.v1 JWS, signed by the active key of the key set; its signing kid is recorded on the new session."
-        },
-        {
-          "algorithm": null,
-          "anchor": {
-            "line": 276,
-            "note": "func (s *Store) Create",
-            "path": "internal/auth/session/store.go"
-          },
-          "audience": null,
-          "class_id": "refresh_credential",
-          "direction": "returned_to_caller",
-          "issuer": null,
-          "lifetime_seconds": 604800,
-          "note": "The first opaque credential of the caller's new session, which starts a new family; every older session of the account is revoked."
-        }
-      ],
-      "method": "POST",
-      "primary_validator": {
-        "anchor": {
-          "line": 96,
-          "note": "func (h handlers) authenticate",
-          "path": "internal/auth/authapi/routes.go"
-        },
-        "description": "authenticate: bearer HS256 access token with a sid claim; the session must be live and belong to sub, the users row active, and tv equal to users.token_version. The flow then requires the current password. An EdDSA user_access_token (JWT header alg EdDSA) is checked by the profile-routed validator with audience auth-service (scope auth:session): sid is required, and the session's token_version pin must equal users.token_version; the HS256 access token stays accepted (legacy_hs256 true)."
-      },
-      "public_rationale": null,
-      "route": "/api/v1/auth/change-password",
-      "service": "dev-health-auth-service",
-      "source": {
-        "file": "internal/auth/authapi/credentials.go",
-        "line": 144
-      },
-      "surface_kind": "rest",
-      "tenant_requirement": "none",
-      "token_shape": {
-        "algorithm": "HS256 (hs256_compat class) or EdDSA (eddsa class)",
-        "audience": "AUTH_JWT_AUDIENCE (default dev-health-api, go-api's JWT_AUDIENCE); under the eddsa class dev-health-api or auth-service",
-        "issuer": "AUTH_JWT_ISSUER (default dev-health-ops, go-api's JWT_ISSUER); under the eddsa class AUTH_TOKEN_ISSUER_URL",
-        "token_type": "HS256 JWT, type=access, with sid; under the eddsa class the access-token.v1 JWS"
-      }
-    },
-    {
-      "accepted_credential_classes": [],
-      "classification": "public",
-      "disclosure_behavior": "The same 200 body for a known or unknown address; an unknown address runs a decoy that stores and sends nothing.",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "POST /api/v1/auth/forgot-password [dev-health-auth-service @api]",
-      "method": "POST",
-      "public_rationale": "Sends a reset link to the address in the body; the answer and the call sequence are the same for every address. Rate limited 3 per hour per client address and address.",
-      "route": "/api/v1/auth/forgot-password",
-      "service": "dev-health-auth-service",
-      "source": {
-        "file": "internal/auth/authapi/credentials.go",
-        "line": 142
-      },
-      "surface_kind": "rest",
-      "tenant_requirement": "none"
-    },
-    {
-      "accepted_credential_classes": [],
-      "classification": "public",
-      "gaps": [],
-      "graphql_field_name": null,
       "id": "POST /api/v1/auth/login [dev-health-auth-service @api]",
       "issued_credential": [
         {
@@ -448,164 +319,6 @@
       "source": {
         "file": "internal/auth/authapi/compat.go",
         "line": 142
-      },
-      "surface_kind": "rest"
-    },
-    {
-      "accepted_credential_classes": [
-        "refresh_credential"
-      ],
-      "classification": "protected",
-      "current_state_cache_behavior": "No cache: the credential and its session are read live.",
-      "disclosure_behavior": "The answer is the same 200 whether or not the credential revoked a session, so it says nothing about the credential; a store failure is a 5xx.",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "POST /api/v1/auth/logout [dev-health-auth-service @api]",
-      "method": "POST",
-      "primary_validator": {
-        "anchor": {
-          "line": 116,
-          "note": "func (s *Store) RevokeByCredential",
-          "path": "internal/auth/session/signin.go"
-        },
-        "description": "session.Store.RevokeByCredential: the presented credential's SHA-256 is looked up; a live session it names is revoked with its audit row, and anything else changes nothing."
-      },
-      "route": "/api/v1/auth/logout",
-      "service": "dev-health-auth-service",
-      "source": {
-        "file": "internal/auth/authapi/compat.go",
-        "line": 130
-      },
-      "surface_kind": "rest",
-      "tenant_requirement": "none"
-    },
-    {
-      "accepted_credential_classes": [],
-      "classification": "public",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "POST /api/v1/auth/oauth/{provider_id}/authorize [dev-health-auth-service @api]",
-      "issued_credential": [],
-      "method": "POST",
-      "public_rationale": "OAuth authorize; pre-session by design: the browser starts a sign-in and the route accepts no credential.",
-      "route": "/api/v1/auth/oauth/{provider_id}/authorize",
-      "service": "dev-health-auth-service",
-      "source": {
-        "file": "internal/auth/authruntime/sso.go",
-        "line": 105
-      },
-      "surface_kind": "rest"
-    },
-    {
-      "accepted_credential_classes": [
-        "sso_oidc_exchange"
-      ],
-      "classification": "public",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "POST /api/v1/auth/oauth/{provider_id}/callback [dev-health-auth-service @api]",
-      "issued_credential": [
-        {
-          "algorithm": "HS256",
-          "anchor": {
-            "line": 63,
-            "note": "func (i *Issuer) Access",
-            "path": "internal/auth/authapi/issuer.go"
-          },
-          "audience": "AUTH_JWT_AUDIENCE (default dev-health-api)",
-          "class_id": "ops_access_token_hs256",
-          "direction": "returned_to_caller",
-          "issuer": "AUTH_JWT_ISSUER (default dev-health-ops)",
-          "lifetime_seconds": 3600,
-          "note": "go-api's access claims from the live users and membership rows, plus sid."
-        },
-        {
-          "algorithm": null,
-          "anchor": {
-            "line": 23,
-            "note": "func (s *Store) CreateAudited",
-            "path": "internal/auth/session/signin.go"
-          },
-          "audience": null,
-          "class_id": "refresh_credential",
-          "direction": "returned_to_caller",
-          "issuer": null,
-          "lifetime_seconds": 604800,
-          "note": "The first opaque credential of the session (dhr1_ + 32 random bytes), which starts a new family."
-        }
-      ],
-      "method": "POST",
-      "public_rationale": "OAuth callback; pre-session by design: the authorization code is exchanged at the provider and the state and browser binding are checked before an account is resolved. The body shape is the OIDC callback's (code and state). An unknown subject is refused; no account is created.",
-      "route": "/api/v1/auth/oauth/{provider_id}/callback",
-      "service": "dev-health-auth-service",
-      "source": {
-        "file": "internal/auth/authruntime/sso.go",
-        "line": 107
-      },
-      "surface_kind": "rest"
-    },
-    {
-      "accepted_credential_classes": [],
-      "classification": "public",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "POST /api/v1/auth/oidc/{provider_id}/authorize [dev-health-auth-service @api]",
-      "issued_credential": [],
-      "method": "POST",
-      "public_rationale": "OIDC authorize; pre-session by design: the browser starts a sign-in and the route accepts no credential. The state, nonce and PKCE verifier it mints are checked at the callback.",
-      "route": "/api/v1/auth/oidc/{provider_id}/authorize",
-      "service": "dev-health-auth-service",
-      "source": {
-        "file": "internal/auth/authruntime/sso.go",
-        "line": 103
-      },
-      "surface_kind": "rest"
-    },
-    {
-      "accepted_credential_classes": [
-        "sso_oidc_exchange"
-      ],
-      "classification": "public",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "POST /api/v1/auth/oidc/{provider_id}/callback [dev-health-auth-service @api]",
-      "issued_credential": [
-        {
-          "algorithm": "HS256",
-          "anchor": {
-            "line": 63,
-            "note": "func (i *Issuer) Access",
-            "path": "internal/auth/authapi/issuer.go"
-          },
-          "audience": "AUTH_JWT_AUDIENCE (default dev-health-api)",
-          "class_id": "ops_access_token_hs256",
-          "direction": "returned_to_caller",
-          "issuer": "AUTH_JWT_ISSUER (default dev-health-ops)",
-          "lifetime_seconds": 3600,
-          "note": "go-api's access claims from the live users and membership rows, plus sid."
-        },
-        {
-          "algorithm": null,
-          "anchor": {
-            "line": 23,
-            "note": "func (s *Store) CreateAudited",
-            "path": "internal/auth/session/signin.go"
-          },
-          "audience": null,
-          "class_id": "refresh_credential",
-          "direction": "returned_to_caller",
-          "issuer": null,
-          "lifetime_seconds": 604800,
-          "note": "The first opaque credential of the session (dhr1_ + 32 random bytes), which starts a new family."
-        }
-      ],
-      "method": "POST",
-      "public_rationale": "OIDC callback; pre-session by design: the authorization code is exchanged at the provider, and the state, nonce, PKCE verifier and browser binding are checked before an account is resolved. An unknown subject is refused; no account is created.",
-      "route": "/api/v1/auth/oidc/{provider_id}/callback",
-      "service": "dev-health-auth-service",
-      "source": {
-        "file": "internal/auth/authruntime/sso.go",
-        "line": 104
       },
       "surface_kind": "rest"
     },
@@ -670,123 +383,32 @@
       "tenant_requirement": "none"
     },
     {
-      "accepted_credential_classes": [],
-      "classification": "public",
-      "disclosure_behavior": "The same 202 body for a new address and a taken one; a taken address is told by mail and nothing about the requester is named.",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "POST /api/v1/auth/register [dev-health-auth-service @api]",
-      "method": "POST",
-      "public_rationale": "Creates an unverified local user from the body, and the organization with its owner membership unless the sign-up setting turns that off, then sends a verification link. Rate limited 3 per hour per client address.",
-      "route": "/api/v1/auth/register",
-      "service": "dev-health-auth-service",
-      "source": {
-        "file": "internal/auth/authapi/register.go",
-        "line": 55
-      },
-      "surface_kind": "rest",
-      "tenant_requirement": "none"
-    },
-    {
-      "accepted_credential_classes": [],
-      "classification": "public",
-      "disclosure_behavior": "The same 200 body for a known, unknown or already verified address; an unknown address runs a decoy that stores and sends nothing.",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "POST /api/v1/auth/resend-verification [dev-health-auth-service @api]",
-      "method": "POST",
-      "public_rationale": "Sends a verification link to the address in the body; the answer and the call sequence are the same for every address. Rate limited 3 per hour per client address and address.",
-      "route": "/api/v1/auth/resend-verification",
-      "service": "dev-health-auth-service",
-      "source": {
-        "file": "internal/auth/authapi/credentials.go",
-        "line": 141
-      },
-      "surface_kind": "rest",
-      "tenant_requirement": "none"
-    },
-    {
-      "accepted_credential_classes": [],
-      "classification": "public",
-      "disclosure_behavior": "An unknown, expired, used or wrong-purpose secret is the same 400; no detail names which.",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "POST /api/v1/auth/reset-password [dev-health-auth-service @api]",
-      "method": "POST",
-      "public_rationale": "Password reset by link secret in the body; single use, 1 hour, bound to the reset purpose. The password is checked against the length bounds before the secret is consumed. Ends every session of the account.",
-      "route": "/api/v1/auth/reset-password",
-      "service": "dev-health-auth-service",
-      "source": {
-        "file": "internal/auth/authapi/credentials.go",
-        "line": 143
-      },
-      "surface_kind": "rest",
-      "tenant_requirement": "none"
-    },
-    {
       "accepted_credential_classes": [
-        "sso_saml_exchange"
+        "refresh_credential"
       ],
-      "classification": "public",
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: the credential and its session are read live.",
+      "disclosure_behavior": "The answer is the same 200 whether or not the credential revoked a session, so it says nothing about the credential; a store failure is a 5xx.",
       "gaps": [],
       "graphql_field_name": null,
-      "id": "POST /api/v1/auth/saml/{provider_id}/acs [dev-health-auth-service @api]",
-      "issued_credential": [
-        {
-          "algorithm": "HS256",
-          "anchor": {
-            "line": 63,
-            "note": "func (i *Issuer) Access",
-            "path": "internal/auth/authapi/issuer.go"
-          },
-          "audience": "AUTH_JWT_AUDIENCE (default dev-health-api)",
-          "class_id": "ops_access_token_hs256",
-          "direction": "returned_to_caller",
-          "issuer": "AUTH_JWT_ISSUER (default dev-health-ops)",
-          "lifetime_seconds": 3600,
-          "note": "go-api's access claims from the live users and membership rows, plus sid."
+      "id": "POST /api/v1/auth/logout [dev-health-auth-service @api]",
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 116,
+          "note": "func (s *Store) RevokeByCredential",
+          "path": "internal/auth/session/signin.go"
         },
-        {
-          "algorithm": null,
-          "anchor": {
-            "line": 23,
-            "note": "func (s *Store) CreateAudited",
-            "path": "internal/auth/session/signin.go"
-          },
-          "audience": null,
-          "class_id": "refresh_credential",
-          "direction": "returned_to_caller",
-          "issuer": null,
-          "lifetime_seconds": 604800,
-          "note": "The first opaque credential of the session (dhr1_ + 32 random bytes), which starts a new family."
-        }
-      ],
-      "method": "POST",
-      "public_rationale": "SAML assertion consumer; pre-session by design: the assertion signature, audience, destination, request binding and one-time use are checked before an account is resolved. An unknown subject is refused; no account is created.",
-      "route": "/api/v1/auth/saml/{provider_id}/acs",
+        "description": "session.Store.RevokeByCredential: the presented credential's SHA-256 is looked up; a live session it names is revoked with its audit row, and anything else changes nothing."
+      },
+      "route": "/api/v1/auth/logout",
       "service": "dev-health-auth-service",
       "source": {
-        "file": "internal/auth/authruntime/sso.go",
-        "line": 148
+        "file": "internal/auth/authapi/compat.go",
+        "line": 130
       },
-      "surface_kind": "rest"
-    },
-    {
-      "accepted_credential_classes": [],
-      "classification": "public",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "POST /api/v1/auth/saml/{provider_id}/initiate [dev-health-auth-service @api]",
-      "issued_credential": [],
-      "method": "POST",
-      "public_rationale": "SAML sign-in start; pre-session by design: the route mints a request id bound to the browser and accepts no credential.",
-      "route": "/api/v1/auth/saml/{provider_id}/initiate",
-      "service": "dev-health-auth-service",
-      "source": {
-        "file": "internal/auth/authruntime/sso.go",
-        "line": 147
-      },
-      "surface_kind": "rest"
+      "surface_kind": "rest",
+      "tenant_requirement": "none"
     },
     {
       "accepted_credential_classes": [
@@ -845,387 +467,6 @@
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
-    },
-    {
-      "accepted_credential_classes": [
-        "internal_svc_authsess_token",
-        "workload_token"
-      ],
-      "class_disambiguator": {
-        "kind": "jwt_header_typ",
-        "name": "workload+jwt"
-      },
-      "classification": "protected",
-      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the account's public.users row is read live before the write and again under the write's locks.",
-      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials; an inactive account is 403 principal_deactivated before the invite store is called and again under the account's users-row lock; an unknown, badly signed, expired, used or revoked invite token is the same 400 invite_invalid; a store failure is 503; a key set that cannot be read is a 503.",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "POST /internal/v1/invites/accept [dev-health-auth-service @api]",
-      "issued_credential": [],
-      "method": "POST",
-      "primary_validator": {
-        "anchor": {
-          "line": 26,
-          "note": "func (p PG) CheckScope",
-          "path": "internal/auth/servicecred/scope.go"
-        },
-        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). A workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read by internal/auth/authapi/issue_workload.go SessionIssueWorkload.authorize, the session issue route's path: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. Any other bearer is refused before any read and before the body is read; then the account named in the body must be active, checked before the invite store is called and again under the account's users-row lock; there is no actor rule: the invite token and the account's verified address, equal to the invite's, authorize the join (internal/auth/invite)."
-      },
-      "route": "/internal/v1/invites/accept",
-      "service": "dev-health-auth-service",
-      "source": {
-        "file": "internal/auth/authapi/provisioning.go",
-        "line": 201
-      },
-      "surface_kind": "rest",
-      "tenant_requirement": "none"
-    },
-    {
-      "accepted_credential_classes": [
-        "internal_svc_authsess_token",
-        "workload_token"
-      ],
-      "class_disambiguator": {
-        "kind": "jwt_header_typ",
-        "name": "workload+jwt"
-      },
-      "classification": "protected",
-      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the actor's public.users and public.memberships rows are read live before the write and again under the write's locks.",
-      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed with no read; a refused actor gets 403 (principal_deactivated, admin_required or superuser_required) before any row of the request is read, so a missing organization, principal or inviter is named only to an actor the rule allows; a store failure is 503; a key set that cannot be read is a 503.",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "POST /internal/v1/invites/create [dev-health-auth-service @api]",
-      "issued_credential": [
-        {
-          "algorithm": null,
-          "anchor": {
-            "line": 264,
-            "note": "signedtoken.Build(id, s.secret)",
-            "path": "internal/auth/invite/store.go"
-          },
-          "audience": null,
-          "class_id": "org_invite_token",
-          "direction": "returned_to_caller",
-          "issuer": null,
-          "lifetime_seconds": 259200,
-          "note": "The invite token (go-api's signed form over the invite id), answered once; stored only as its SHA-256 digest in auth.invites and public.org_invites. Lifetime 1 hour to 30 days, default 72 hours."
-        }
-      ],
-      "method": "POST",
-      "primary_validator": {
-        "anchor": {
-          "line": 26,
-          "note": "func (p PG) CheckScope",
-          "path": "internal/auth/servicecred/scope.go"
-        },
-        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). A workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read by internal/auth/authapi/issue_workload.go SessionIssueWorkload.authorize, the session issue route's path: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. Any other bearer is refused before any read and before the body is read; then the actor rule (go-api's ensureOrgAdminAccess): the actor is an active superuser, or an active owner or admin member of the organization (an invite names an address, so there is no target rule). It runs on the live users and membership rows before anything is read for the request, and again inside the write's transaction after the organization row lock."
-      },
-      "route": "/internal/v1/invites/create",
-      "service": "dev-health-auth-service",
-      "source": {
-        "file": "internal/auth/authapi/provisioning.go",
-        "line": 200
-      },
-      "surface_kind": "rest",
-      "tenant_requirement": "org_scoped"
-    },
-    {
-      "accepted_credential_classes": [
-        "internal_svc_authsess_token"
-      ],
-      "classification": "protected",
-      "current_state_cache_behavior": "No cache: the credential row is read live by token hash on every call; the actor's public.users and public.memberships rows are read live before the invite is read and again inside the revoke after its locks (the actor's and the inviter's auth.principals and public.users rows, then the organization row); the invite row is read FOR UPDATE and its expiry is checked against the clock read after that lock.",
-      "disclosure_behavior": "Every bearer refusal is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed with no read; a refused actor gets 403 (principal_deactivated or admin_required) before the invite is read, the same for an existing and an unknown invite id; an unknown invite is 404 invite_not_found and an accepted or expired one 409 invite_not_pending, named only to an actor the rule allows; a repeat revoke is 200 with no second audit row; a store failure is 503.",
-      "gaps": [
-        "no go-api audit_logs row: a revoke writes the auth audit row and the invite.revoked event only"
-      ],
-      "graphql_field_name": null,
-      "id": "POST /internal/v1/invites/revoke [dev-health-auth-service @api]",
-      "issued_credential": [],
-      "method": "POST",
-      "primary_validator": {
-        "anchor": {
-          "line": 26,
-          "note": "func (p PG) CheckScope",
-          "path": "internal/auth/servicecred/scope.go"
-        },
-        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). Any other bearer is refused before the body is read; then the actor rule (go-api's ensureOrgAdminAccess): the actor is an active superuser, or an active owner or admin member of the organization. It runs on the live users and membership rows before the invite is read, and again inside the revoke after its locks (the actor's and the inviter's rows, then the organization row)."
-      },
-      "route": "/internal/v1/invites/revoke",
-      "service": "dev-health-auth-service",
-      "source": {
-        "file": "internal/auth/authapi/provisioning_revoke.go",
-        "line": 31
-      },
-      "surface_kind": "rest",
-      "tenant_requirement": "org_scoped"
-    },
-    {
-      "accepted_credential_classes": [
-        "internal_svc_authsess_token",
-        "workload_token"
-      ],
-      "class_disambiguator": {
-        "kind": "jwt_header_typ",
-        "name": "workload+jwt"
-      },
-      "classification": "protected",
-      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the actor's public.users and public.memberships rows are read live before the write and again under the write's locks.",
-      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed with no read; a refused actor gets 403 (principal_deactivated, admin_required or superuser_required) before any row of the request is read, so a missing organization, principal or inviter is named only to an actor the rule allows; a store failure is 503; a key set that cannot be read is a 503.",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "POST /internal/v1/memberships/add [dev-health-auth-service @api]",
-      "issued_credential": [],
-      "method": "POST",
-      "primary_validator": {
-        "anchor": {
-          "line": 26,
-          "note": "func (p PG) CheckScope",
-          "path": "internal/auth/servicecred/scope.go"
-        },
-        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). A workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read by internal/auth/authapi/issue_workload.go SessionIssueWorkload.authorize, the session issue route's path: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. Any other bearer is refused before any read and before the body is read; then the actor rule (go-api's ensureOrgAdminAccess and refuseSuperuserWrite): the actor is an active superuser, or an active owner or admin member of the organization, and a non-superuser actor may not change a superuser member. It runs on the live users and membership rows before anything is read for the request, and again inside the write's transaction after its locks."
-      },
-      "route": "/internal/v1/memberships/add",
-      "service": "dev-health-auth-service",
-      "source": {
-        "file": "internal/auth/authapi/provisioning.go",
-        "line": 196
-      },
-      "surface_kind": "rest",
-      "tenant_requirement": "org_scoped"
-    },
-    {
-      "accepted_credential_classes": [
-        "internal_svc_authsess_token",
-        "workload_token"
-      ],
-      "class_disambiguator": {
-        "kind": "jwt_header_typ",
-        "name": "workload+jwt"
-      },
-      "classification": "protected",
-      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the actor's public.users and public.memberships rows are read live before the write and again under the write's locks.",
-      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed with no read; a refused actor gets 403 (principal_deactivated, admin_required or superuser_required) before any row of the request is read, so a missing organization, principal or inviter is named only to an actor the rule allows; a store failure is 503; a key set that cannot be read is a 503.",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "POST /internal/v1/memberships/remove [dev-health-auth-service @api]",
-      "issued_credential": [],
-      "method": "POST",
-      "primary_validator": {
-        "anchor": {
-          "line": 26,
-          "note": "func (p PG) CheckScope",
-          "path": "internal/auth/servicecred/scope.go"
-        },
-        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). A workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read by internal/auth/authapi/issue_workload.go SessionIssueWorkload.authorize, the session issue route's path: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. Any other bearer is refused before any read and before the body is read; then the actor rule (go-api's ensureOrgAdminAccess and refuseSuperuserWrite): the actor is an active superuser, or an active owner or admin member of the organization, and a non-superuser actor may not change a superuser member. It runs on the live users and membership rows before anything is read for the request, and again inside the write's transaction after its locks."
-      },
-      "route": "/internal/v1/memberships/remove",
-      "service": "dev-health-auth-service",
-      "source": {
-        "file": "internal/auth/authapi/provisioning.go",
-        "line": 198
-      },
-      "surface_kind": "rest",
-      "tenant_requirement": "org_scoped"
-    },
-    {
-      "accepted_credential_classes": [
-        "internal_svc_authsess_token",
-        "workload_token"
-      ],
-      "class_disambiguator": {
-        "kind": "jwt_header_typ",
-        "name": "workload+jwt"
-      },
-      "classification": "protected",
-      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the actor's public.users and public.memberships rows are read live before the write and again under the write's locks.",
-      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed with no read; a refused actor gets 403 (principal_deactivated, admin_required or superuser_required) before any row of the request is read, so a missing organization, principal or inviter is named only to an actor the rule allows; a store failure is 503; a key set that cannot be read is a 503.",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "POST /internal/v1/memberships/role [dev-health-auth-service @api]",
-      "issued_credential": [],
-      "method": "POST",
-      "primary_validator": {
-        "anchor": {
-          "line": 26,
-          "note": "func (p PG) CheckScope",
-          "path": "internal/auth/servicecred/scope.go"
-        },
-        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). A workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read by internal/auth/authapi/issue_workload.go SessionIssueWorkload.authorize, the session issue route's path: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. Any other bearer is refused before any read and before the body is read; then the actor rule (go-api's ensureOrgAdminAccess and refuseSuperuserWrite): the actor is an active superuser, or an active owner or admin member of the organization, and a non-superuser actor may not change a superuser member. It runs on the live users and membership rows before anything is read for the request, and again inside the write's transaction after its locks."
-      },
-      "route": "/internal/v1/memberships/role",
-      "service": "dev-health-auth-service",
-      "source": {
-        "file": "internal/auth/authapi/provisioning.go",
-        "line": 197
-      },
-      "surface_kind": "rest",
-      "tenant_requirement": "org_scoped"
-    },
-    {
-      "accepted_credential_classes": [
-        "internal_svc_authsess_token",
-        "workload_token"
-      ],
-      "class_disambiguator": {
-        "kind": "jwt_header_typ",
-        "name": "workload+jwt"
-      },
-      "classification": "protected",
-      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the actor's public.users and public.memberships rows are read live before the write and again under the write's locks.",
-      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed with no read; a refused actor gets 403 (principal_deactivated, admin_required or superuser_required) before any row of the request is read, so a missing organization, principal or inviter is named only to an actor the rule allows; a store failure is 503; a key set that cannot be read is a 503.",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "POST /internal/v1/memberships/transfer [dev-health-auth-service @api]",
-      "issued_credential": [],
-      "method": "POST",
-      "primary_validator": {
-        "anchor": {
-          "line": 26,
-          "note": "func (p PG) CheckScope",
-          "path": "internal/auth/servicecred/scope.go"
-        },
-        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). A workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read by internal/auth/authapi/issue_workload.go SessionIssueWorkload.authorize, the session issue route's path: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. Any other bearer is refused before any read and before the body is read; then the actor rule (go-api's ensureOrgAdminAccess and refuseSuperuserWrite): the actor is an active superuser, or an active owner or admin member of the organization, and a non-superuser actor may not change a superuser member. It runs on the live users and membership rows before anything is read for the request, and again inside the write's transaction after its locks."
-      },
-      "route": "/internal/v1/memberships/transfer",
-      "service": "dev-health-auth-service",
-      "source": {
-        "file": "internal/auth/authapi/provisioning.go",
-        "line": 199
-      },
-      "surface_kind": "rest",
-      "tenant_requirement": "org_scoped"
-    },
-    {
-      "accepted_credential_classes": [
-        "internal_svc_authsess_token",
-        "workload_token"
-      ],
-      "class_disambiguator": {
-        "kind": "jwt_header_typ",
-        "name": "workload+jwt"
-      },
-      "classification": "protected",
-      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the actor's public.users row is read live before the write and again under the write's locks.",
-      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials; an actor that is not an active superuser gets 403 (principal_deactivated or superuser_required) before any row of the request is read, and the same rule runs again after the organization row lock, so a missing organization is named only to a superuser; a store failure is 503; a key set that cannot be read is a 503.",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "POST /internal/v1/organizations/deprovision [dev-health-auth-service @api]",
-      "issued_credential": [],
-      "method": "POST",
-      "primary_validator": {
-        "anchor": {
-          "line": 26,
-          "note": "func (p PG) CheckScope",
-          "path": "internal/auth/servicecred/scope.go"
-        },
-        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). A workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read by internal/auth/authapi/issue_workload.go SessionIssueWorkload.authorize, the session issue route's path: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. Any other bearer is refused before any read and before the body is read; then the actor must be an active superuser (go-api's DELETE /api/v1/admin/orgs/{org_id} is superuser only), checked on the live users row before anything is read for the request, and again inside the commit after the organization row lock."
-      },
-      "route": "/internal/v1/organizations/deprovision",
-      "service": "dev-health-auth-service",
-      "source": {
-        "file": "internal/auth/authapi/provisioning.go",
-        "line": 202
-      },
-      "surface_kind": "rest",
-      "tenant_requirement": "cross_org_superuser_only"
-    },
-    {
-      "accepted_credential_classes": [
-        "internal_svc_authsess_token",
-        "workload_token"
-      ],
-      "class_disambiguator": {
-        "kind": "jwt_header_typ",
-        "name": "workload+jwt"
-      },
-      "classification": "protected",
-      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the actor's public.users row is read live before the write and again under the write's locks.",
-      "disclosure_behavior": "The body is organization_id, actor_principal_id and an optional if_revision. Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials; an actor that is not an active superuser gets 403 (principal_deactivated or superuser_required) before any row of the request is read, and the same rule runs again after the organization row lock, so a missing organization is named only to a superuser; an organization that is not suspended answers 200 with reactivated false and writes nothing; an if_revision that is not the organization's current revision is 409 state_changed and writes nothing; a store failure is 503; a key set that cannot be read is a 503.",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "POST /internal/v1/organizations/reactivate [dev-health-auth-service @api]",
-      "issued_credential": [],
-      "method": "POST",
-      "primary_validator": {
-        "anchor": {
-          "line": 26,
-          "note": "func (p PG) CheckScope",
-          "path": "internal/auth/servicecred/scope.go"
-        },
-        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). A workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read by internal/auth/authapi/issue_workload.go SessionIssueWorkload.authorize, the session issue route's path: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. Any other bearer is refused before any read and before the body is read; then the actor must be an active superuser (go-api's PATCH /api/v1/admin/orgs/{org_id} is superuser only), checked on the live users row before anything is read for the request, and again inside the commit after the organization row lock."
-      },
-      "route": "/internal/v1/organizations/reactivate",
-      "service": "dev-health-auth-service",
-      "source": {
-        "file": "internal/auth/authapi/provisioning.go",
-        "line": 203
-      },
-      "surface_kind": "rest",
-      "tenant_requirement": "cross_org_superuser_only"
-    },
-    {
-      "accepted_credential_classes": [
-        "internal_svc_authsess_token",
-        "workload_token"
-      ],
-      "class_disambiguator": {
-        "kind": "jwt_header_typ",
-        "name": "workload+jwt"
-      },
-      "classification": "protected",
-      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the organization's status and aggregate revision are read live, in one statement, on every call.",
-      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials; a body that is not exactly one canonical organization_id is 400 malformed; an organization that does not exist is 404 organization_not_found, named to any holder of the service credential or of the go-api workload token; a store failure is 503 store_unavailable; a key set that cannot be read is a 503. The answer is the organization_id, its status and its revision read in one statement. The route writes nothing and no audit row.",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "POST /internal/v1/organizations/state [dev-health-auth-service @api]",
-      "issued_credential": [],
-      "method": "POST",
-      "primary_validator": {
-        "anchor": {
-          "line": 26,
-          "note": "func (p PG) CheckScope",
-          "path": "internal/auth/servicecred/scope.go"
-        },
-        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). A workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read by internal/auth/authapi/issue_workload.go SessionIssueWorkload.authorize, the session issue route's path: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. Any other bearer is refused before any read and before the body is read. The route reads no actor: it answers the status and revision of the organization named, for go-api's superuser PATCH of an organization's is_active."
-      },
-      "route": "/internal/v1/organizations/state",
-      "service": "dev-health-auth-service",
-      "source": {
-        "file": "internal/auth/authapi/provisioning_state.go",
-        "line": 13
-      },
-      "surface_kind": "rest",
-      "tenant_requirement": "cross_org_superuser_only"
-    },
-    {
-      "accepted_credential_classes": [
-        "internal_svc_authsess_token"
-      ],
-      "classification": "protected",
-      "current_state_cache_behavior": "No cache: the credential row is read live by token hash on every call; the actor's public.users row is read live before the write and again under the write's locks.",
-      "disclosure_behavior": "The body is organization_id, actor_principal_id and an optional if_revision. Every bearer refusal is the same 401 error.v1 invalid_credentials; an actor that is not an active superuser gets 403 (principal_deactivated or superuser_required) before any row of the request is read, and the same rule runs again after the organization row lock, so a missing organization is named only to a superuser; an organization that is already suspended answers 200 with suspended false and writes nothing; an if_revision that is not the organization's current revision is 409 state_changed and writes nothing; an actor with no auth.principals row, or any store fault, is the fail-closed 503 store_unavailable.",
-      "gaps": [],
-      "graphql_field_name": null,
-      "id": "POST /internal/v1/organizations/suspend [dev-health-auth-service @api]",
-      "issued_credential": [],
-      "method": "POST",
-      "primary_validator": {
-        "anchor": {
-          "line": 26,
-          "note": "func (p PG) CheckScope",
-          "path": "internal/auth/servicecred/scope.go"
-        },
-        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). Any other bearer is refused before the body is read; then the actor must be an active superuser (go-api's PATCH /api/v1/admin/orgs/{org_id} is superuser only), checked on the live users row before anything is read for the request, and again inside the commit after the organization row lock."
-      },
-      "route": "/internal/v1/organizations/suspend",
-      "service": "dev-health-auth-service",
-      "source": {
-        "file": "internal/auth/authapi/provisioning_suspend.go",
-        "line": 19
-      },
-      "surface_kind": "rest",
-      "tenant_requirement": "cross_org_superuser_only"
     },
     {
       "accepted_credential_classes": [
@@ -1326,6 +567,387 @@
     },
     {
       "accepted_credential_classes": [
+        "internal_svc_authsess_token",
+        "workload_token"
+      ],
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "workload+jwt"
+      },
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the actor's public.users and public.memberships rows are read live before the write and again under the write's locks.",
+      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed with no read; a refused actor gets 403 (principal_deactivated, admin_required or superuser_required) before any row of the request is read, so a missing organization, principal or inviter is named only to an actor the rule allows; a store failure is 503; a key set that cannot be read is a 503.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/memberships/add [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 26,
+          "note": "func (p PG) CheckScope",
+          "path": "internal/auth/servicecred/scope.go"
+        },
+        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). A workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read by internal/auth/authapi/issue_workload.go SessionIssueWorkload.authorize, the session issue route's path: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. Any other bearer is refused before any read and before the body is read; then the actor rule (go-api's ensureOrgAdminAccess and refuseSuperuserWrite): the actor is an active superuser, or an active owner or admin member of the organization, and a non-superuser actor may not change a superuser member. It runs on the live users and membership rows before anything is read for the request, and again inside the write's transaction after its locks."
+      },
+      "route": "/internal/v1/memberships/add",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/provisioning.go",
+        "line": 196
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped"
+    },
+    {
+      "accepted_credential_classes": [
+        "internal_svc_authsess_token",
+        "workload_token"
+      ],
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "workload+jwt"
+      },
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the actor's public.users and public.memberships rows are read live before the write and again under the write's locks.",
+      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed with no read; a refused actor gets 403 (principal_deactivated, admin_required or superuser_required) before any row of the request is read, so a missing organization, principal or inviter is named only to an actor the rule allows; a store failure is 503; a key set that cannot be read is a 503.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/memberships/role [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 26,
+          "note": "func (p PG) CheckScope",
+          "path": "internal/auth/servicecred/scope.go"
+        },
+        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). A workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read by internal/auth/authapi/issue_workload.go SessionIssueWorkload.authorize, the session issue route's path: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. Any other bearer is refused before any read and before the body is read; then the actor rule (go-api's ensureOrgAdminAccess and refuseSuperuserWrite): the actor is an active superuser, or an active owner or admin member of the organization, and a non-superuser actor may not change a superuser member. It runs on the live users and membership rows before anything is read for the request, and again inside the write's transaction after its locks."
+      },
+      "route": "/internal/v1/memberships/role",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/provisioning.go",
+        "line": 197
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped"
+    },
+    {
+      "accepted_credential_classes": [
+        "internal_svc_authsess_token",
+        "workload_token"
+      ],
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "workload+jwt"
+      },
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the actor's public.users and public.memberships rows are read live before the write and again under the write's locks.",
+      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed with no read; a refused actor gets 403 (principal_deactivated, admin_required or superuser_required) before any row of the request is read, so a missing organization, principal or inviter is named only to an actor the rule allows; a store failure is 503; a key set that cannot be read is a 503.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/memberships/remove [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 26,
+          "note": "func (p PG) CheckScope",
+          "path": "internal/auth/servicecred/scope.go"
+        },
+        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). A workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read by internal/auth/authapi/issue_workload.go SessionIssueWorkload.authorize, the session issue route's path: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. Any other bearer is refused before any read and before the body is read; then the actor rule (go-api's ensureOrgAdminAccess and refuseSuperuserWrite): the actor is an active superuser, or an active owner or admin member of the organization, and a non-superuser actor may not change a superuser member. It runs on the live users and membership rows before anything is read for the request, and again inside the write's transaction after its locks."
+      },
+      "route": "/internal/v1/memberships/remove",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/provisioning.go",
+        "line": 198
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped"
+    },
+    {
+      "accepted_credential_classes": [
+        "internal_svc_authsess_token",
+        "workload_token"
+      ],
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "workload+jwt"
+      },
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the actor's public.users and public.memberships rows are read live before the write and again under the write's locks.",
+      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed with no read; a refused actor gets 403 (principal_deactivated, admin_required or superuser_required) before any row of the request is read, so a missing organization, principal or inviter is named only to an actor the rule allows; a store failure is 503; a key set that cannot be read is a 503.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/memberships/transfer [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 26,
+          "note": "func (p PG) CheckScope",
+          "path": "internal/auth/servicecred/scope.go"
+        },
+        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). A workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read by internal/auth/authapi/issue_workload.go SessionIssueWorkload.authorize, the session issue route's path: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. Any other bearer is refused before any read and before the body is read; then the actor rule (go-api's ensureOrgAdminAccess and refuseSuperuserWrite): the actor is an active superuser, or an active owner or admin member of the organization, and a non-superuser actor may not change a superuser member. It runs on the live users and membership rows before anything is read for the request, and again inside the write's transaction after its locks."
+      },
+      "route": "/internal/v1/memberships/transfer",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/provisioning.go",
+        "line": 199
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped"
+    },
+    {
+      "accepted_credential_classes": [
+        "internal_svc_authsess_token",
+        "workload_token"
+      ],
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "workload+jwt"
+      },
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the actor's public.users and public.memberships rows are read live before the write and again under the write's locks.",
+      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed with no read; a refused actor gets 403 (principal_deactivated, admin_required or superuser_required) before any row of the request is read, so a missing organization, principal or inviter is named only to an actor the rule allows; a store failure is 503; a key set that cannot be read is a 503.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/invites/create [dev-health-auth-service @api]",
+      "issued_credential": [
+        {
+          "algorithm": null,
+          "anchor": {
+            "line": 264,
+            "note": "signedtoken.Build(id, s.secret)",
+            "path": "internal/auth/invite/store.go"
+          },
+          "audience": null,
+          "class_id": "org_invite_token",
+          "direction": "returned_to_caller",
+          "issuer": null,
+          "lifetime_seconds": 259200,
+          "note": "The invite token (go-api's signed form over the invite id), answered once; stored only as its SHA-256 digest in auth.invites and public.org_invites. Lifetime 1 hour to 30 days, default 72 hours."
+        }
+      ],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 26,
+          "note": "func (p PG) CheckScope",
+          "path": "internal/auth/servicecred/scope.go"
+        },
+        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). A workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read by internal/auth/authapi/issue_workload.go SessionIssueWorkload.authorize, the session issue route's path: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. Any other bearer is refused before any read and before the body is read; then the actor rule (go-api's ensureOrgAdminAccess): the actor is an active superuser, or an active owner or admin member of the organization (an invite names an address, so there is no target rule). It runs on the live users and membership rows before anything is read for the request, and again inside the write's transaction after the organization row lock."
+      },
+      "route": "/internal/v1/invites/create",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/provisioning.go",
+        "line": 200
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped"
+    },
+    {
+      "accepted_credential_classes": [
+        "internal_svc_authsess_token",
+        "workload_token"
+      ],
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "workload+jwt"
+      },
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the account's public.users row is read live before the write and again under the write's locks.",
+      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials; an inactive account is 403 principal_deactivated before the invite store is called and again under the account's users-row lock; an unknown, badly signed, expired, used or revoked invite token is the same 400 invite_invalid; a store failure is 503; a key set that cannot be read is a 503.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/invites/accept [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 26,
+          "note": "func (p PG) CheckScope",
+          "path": "internal/auth/servicecred/scope.go"
+        },
+        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). A workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read by internal/auth/authapi/issue_workload.go SessionIssueWorkload.authorize, the session issue route's path: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. Any other bearer is refused before any read and before the body is read; then the account named in the body must be active, checked before the invite store is called and again under the account's users-row lock; there is no actor rule: the invite token and the account's verified address, equal to the invite's, authorize the join (internal/auth/invite)."
+      },
+      "route": "/internal/v1/invites/accept",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/provisioning.go",
+        "line": 201
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "none"
+    },
+    {
+      "accepted_credential_classes": [
+        "internal_svc_authsess_token"
+      ],
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: the credential row is read live by token hash on every call; the actor's public.users and public.memberships rows are read live before the invite is read and again inside the revoke after its locks (the actor's and the inviter's auth.principals and public.users rows, then the organization row); the invite row is read FOR UPDATE and its expiry is checked against the clock read after that lock.",
+      "disclosure_behavior": "Every bearer refusal is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed with no read; a refused actor gets 403 (principal_deactivated or admin_required) before the invite is read, the same for an existing and an unknown invite id; an unknown invite is 404 invite_not_found and an accepted or expired one 409 invite_not_pending, named only to an actor the rule allows; a repeat revoke is 200 with no second audit row; a store failure is 503.",
+      "gaps": [
+        "no go-api audit_logs row: a revoke writes the auth audit row and the invite.revoked event only"
+      ],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/invites/revoke [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 26,
+          "note": "func (p PG) CheckScope",
+          "path": "internal/auth/servicecred/scope.go"
+        },
+        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). Any other bearer is refused before the body is read; then the actor rule (go-api's ensureOrgAdminAccess): the actor is an active superuser, or an active owner or admin member of the organization. It runs on the live users and membership rows before the invite is read, and again inside the revoke after its locks (the actor's and the inviter's rows, then the organization row)."
+      },
+      "route": "/internal/v1/invites/revoke",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/provisioning_revoke.go",
+        "line": 31
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped"
+    },
+    {
+      "accepted_credential_classes": [
+        "internal_svc_authsess_token",
+        "workload_token"
+      ],
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "workload+jwt"
+      },
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the actor's public.users row is read live before the write and again under the write's locks.",
+      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials; an actor that is not an active superuser gets 403 (principal_deactivated or superuser_required) before any row of the request is read, and the same rule runs again after the organization row lock, so a missing organization is named only to a superuser; a store failure is 503; a key set that cannot be read is a 503.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/organizations/deprovision [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 26,
+          "note": "func (p PG) CheckScope",
+          "path": "internal/auth/servicecred/scope.go"
+        },
+        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). A workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read by internal/auth/authapi/issue_workload.go SessionIssueWorkload.authorize, the session issue route's path: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. Any other bearer is refused before any read and before the body is read; then the actor must be an active superuser (go-api's DELETE /api/v1/admin/orgs/{org_id} is superuser only), checked on the live users row before anything is read for the request, and again inside the commit after the organization row lock."
+      },
+      "route": "/internal/v1/organizations/deprovision",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/provisioning.go",
+        "line": 202
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "cross_org_superuser_only"
+    },
+    {
+      "accepted_credential_classes": [
+        "internal_svc_authsess_token",
+        "workload_token"
+      ],
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "workload+jwt"
+      },
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the actor's public.users row is read live before the write and again under the write's locks.",
+      "disclosure_behavior": "The body is organization_id, actor_principal_id and an optional if_revision. Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials; an actor that is not an active superuser gets 403 (principal_deactivated or superuser_required) before any row of the request is read, and the same rule runs again after the organization row lock, so a missing organization is named only to a superuser; an organization that is not suspended answers 200 with reactivated false and writes nothing; an if_revision that is not the organization's current revision is 409 state_changed and writes nothing; a store failure is 503; a key set that cannot be read is a 503.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/organizations/reactivate [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 26,
+          "note": "func (p PG) CheckScope",
+          "path": "internal/auth/servicecred/scope.go"
+        },
+        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). A workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read by internal/auth/authapi/issue_workload.go SessionIssueWorkload.authorize, the session issue route's path: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. Any other bearer is refused before any read and before the body is read; then the actor must be an active superuser (go-api's PATCH /api/v1/admin/orgs/{org_id} is superuser only), checked on the live users row before anything is read for the request, and again inside the commit after the organization row lock."
+      },
+      "route": "/internal/v1/organizations/reactivate",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/provisioning.go",
+        "line": 203
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "cross_org_superuser_only"
+    },
+    {
+      "accepted_credential_classes": [
+        "internal_svc_authsess_token"
+      ],
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: the credential row is read live by token hash on every call; the actor's public.users row is read live before the write and again under the write's locks.",
+      "disclosure_behavior": "The body is organization_id, actor_principal_id and an optional if_revision. Every bearer refusal is the same 401 error.v1 invalid_credentials; an actor that is not an active superuser gets 403 (principal_deactivated or superuser_required) before any row of the request is read, and the same rule runs again after the organization row lock, so a missing organization is named only to a superuser; an organization that is already suspended answers 200 with suspended false and writes nothing; an if_revision that is not the organization's current revision is 409 state_changed and writes nothing; an actor with no auth.principals row, or any store fault, is the fail-closed 503 store_unavailable.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/organizations/suspend [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 26,
+          "note": "func (p PG) CheckScope",
+          "path": "internal/auth/servicecred/scope.go"
+        },
+        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). Any other bearer is refused before the body is read; then the actor must be an active superuser (go-api's PATCH /api/v1/admin/orgs/{org_id} is superuser only), checked on the live users row before anything is read for the request, and again inside the commit after the organization row lock."
+      },
+      "route": "/internal/v1/organizations/suspend",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/provisioning_suspend.go",
+        "line": 19
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "cross_org_superuser_only"
+    },
+    {
+      "accepted_credential_classes": [
+        "internal_svc_authsess_token",
+        "workload_token"
+      ],
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "workload+jwt"
+      },
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the organization's status and aggregate revision are read live, in one statement, on every call.",
+      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials; a body that is not exactly one canonical organization_id is 400 malformed; an organization that does not exist is 404 organization_not_found, named to any holder of the service credential or of the go-api workload token; a store failure is 503 store_unavailable; a key set that cannot be read is a 503. The answer is the organization_id, its status and its revision read in one statement. The route writes nothing and no audit row.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/organizations/state [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 26,
+          "note": "func (p PG) CheckScope",
+          "path": "internal/auth/servicecred/scope.go"
+        },
+        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). A workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read by internal/auth/authapi/issue_workload.go SessionIssueWorkload.authorize, the session issue route's path: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. Any other bearer is refused before any read and before the body is read. The route reads no actor: it answers the status and revision of the organization named, for go-api's superuser PATCH of an organization's is_active."
+      },
+      "route": "/internal/v1/organizations/state",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/provisioning_state.go",
+        "line": 13
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "cross_org_superuser_only"
+    },
+    {
+      "accepted_credential_classes": [
         "kubernetes_sa_token_exchange",
         "workload_bootstrap_credential"
       ],
@@ -1374,47 +996,94 @@
       "tenant_requirement": "none"
     },
     {
-      "accepted_credential_classes": [
-        "ops_access_token_hs256",
-        "user_access_token"
-      ],
-      "access_token_validation": {
-        "legacy_hs256": true
-      },
-      "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "EdDSA"
-      },
-      "classification": "protected",
-      "current_state_cache_behavior": "No cache: the session row and the users row are read live on every request.",
-      "disclosure_behavior": "A bearer refusal is the 401 error.v1 shape with an auth-outcome reason code. A refusal of the link itself is go-api's {\"detail\": ...} shape with no credential; the reason code goes to the audit row and the log only.",
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "disclosure_behavior": "An unknown, expired, used or wrong-purpose secret is the same 400; no detail names which.",
       "gaps": [],
       "graphql_field_name": null,
-      "id": "POST /v1/identities/social [dev-health-auth-service @api]",
-      "method": "POST",
-      "primary_validator": {
-        "anchor": {
-          "line": 96,
-          "note": "func (h handlers) authenticate",
-          "path": "internal/auth/authapi/routes.go"
-        },
-        "description": "authenticate: bearer HS256 access token (edgetoken, go-api's validate_token rules) with a sid claim; the session must be live and belong to sub, the users row active, and tv equal to users.token_version. Every refusal is a 401 error.v1 with an auth-outcome reason code. The provider access token in the body is then verified with the provider (social.Service.Link) and the link is bound to the bearer's principal; a stale sign-in is refused. An EdDSA user_access_token (JWT header alg EdDSA) is checked by the profile-routed validator with audience auth-service (scope auth:session): sid is required, and the session's token_version pin must equal users.token_version; the HS256 access token stays accepted (legacy_hs256 true)."
-      },
-      "public_rationale": null,
-      "route": "/v1/identities/social",
+      "id": "GET /api/v1/auth/verify [dev-health-auth-service @api]",
+      "method": "GET",
+      "public_rationale": "E-mail verification link secret in the token query parameter; single use, 24 hours, bound to the verification purpose, consumed on the database clock. Rate limited 10 per hour per client address and per e-mail query parameter value (normalized, unknown when absent); each distinct value has its own counter.",
+      "route": "/api/v1/auth/verify",
       "service": "dev-health-auth-service",
       "source": {
-        "file": "internal/auth/authapi/social_link.go",
-        "line": 67
+        "file": "internal/auth/authapi/credentials.go",
+        "line": 140
       },
       "surface_kind": "rest",
-      "tenant_requirement": "none",
-      "token_shape": {
-        "algorithm": "HS256 (legacy_hs256) or EdDSA (user_access_token)",
-        "audience": "HS256: AUTH_JWT_AUDIENCE (default dev-health-api, go-api's JWT_AUDIENCE); EdDSA: auth-service",
-        "issuer": "HS256: AUTH_JWT_ISSUER (default dev-health-ops, go-api's JWT_ISSUER); EdDSA: AUTH_TOKEN_ISSUER_URL",
-        "token_type": "HS256 JWT, type=access, with sid; or the access-token.v1 JWS with sid"
-      }
+      "tenant_requirement": "none"
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "disclosure_behavior": "The same 202 body for a new address and a taken one; a taken address is told by mail and nothing about the requester is named.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/auth/register [dev-health-auth-service @api]",
+      "method": "POST",
+      "public_rationale": "Creates an unverified local user from the body, and the organization with its owner membership unless the sign-up setting turns that off, then sends a verification link. Rate limited 3 per hour per client address.",
+      "route": "/api/v1/auth/register",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/register.go",
+        "line": 55
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "none"
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "disclosure_behavior": "The same 200 body for a known, unknown or already verified address; an unknown address runs a decoy that stores and sends nothing.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/auth/resend-verification [dev-health-auth-service @api]",
+      "method": "POST",
+      "public_rationale": "Sends a verification link to the address in the body; the answer and the call sequence are the same for every address. Rate limited 3 per hour per client address and address.",
+      "route": "/api/v1/auth/resend-verification",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/credentials.go",
+        "line": 141
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "none"
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "disclosure_behavior": "The same 200 body for a known or unknown address; an unknown address runs a decoy that stores and sends nothing.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/auth/forgot-password [dev-health-auth-service @api]",
+      "method": "POST",
+      "public_rationale": "Sends a reset link to the address in the body; the answer and the call sequence are the same for every address. Rate limited 3 per hour per client address and address.",
+      "route": "/api/v1/auth/forgot-password",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/credentials.go",
+        "line": 142
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "none"
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "disclosure_behavior": "An unknown, expired, used or wrong-purpose secret is the same 400; no detail names which.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/auth/reset-password [dev-health-auth-service @api]",
+      "method": "POST",
+      "public_rationale": "Password reset by link secret in the body; single use, 1 hour, bound to the reset purpose. The password is checked against the length bounds before the secret is consumed. Ends every session of the account.",
+      "route": "/api/v1/auth/reset-password",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/credentials.go",
+        "line": 143
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "none"
     },
     {
       "accepted_credential_classes": [
@@ -1430,10 +1099,54 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "No cache: the session row and the users row are read live on every request.",
-      "disclosure_behavior": "Every refusal is the same 401 error.v1 shape with an auth-outcome reason code; no detail text, no credential, no client request id.",
+      "disclosure_behavior": "A wrong current password is a 403 with a fixed text; no field of the body is echoed, logged or audited.",
       "gaps": [],
       "graphql_field_name": null,
-      "id": "POST /v1/sessions/revoke [dev-health-auth-service @api]",
+      "id": "POST /api/v1/auth/change-password [dev-health-auth-service @api]",
+      "issued_credential": [
+        {
+          "algorithm": "HS256",
+          "anchor": {
+            "line": 63,
+            "note": "func (i *Issuer) Access",
+            "path": "internal/auth/authapi/issuer.go"
+          },
+          "audience": "AUTH_JWT_AUDIENCE (default dev-health-api)",
+          "class_id": "ops_access_token_hs256",
+          "direction": "returned_to_caller",
+          "issuer": "AUTH_JWT_ISSUER (default dev-health-ops)",
+          "lifetime_seconds": 3600,
+          "note": "go-api's access claims for the caller's new session, plus sid (hs256_compat class)."
+        },
+        {
+          "algorithm": "EdDSA",
+          "anchor": {
+            "line": 63,
+            "note": "func (i *Issuer) Access",
+            "path": "internal/auth/authapi/issuer.go"
+          },
+          "audience": "AUTH_JWT_AUDIENCE (dev-health-api or auth-service, eddsa class)",
+          "class_id": "user_access_token",
+          "direction": "returned_to_caller",
+          "issuer": "AUTH_TOKEN_ISSUER_URL",
+          "lifetime_seconds": 3600,
+          "note": "Under the eddsa access token class the access token of the caller's new session is the access-token.v1 JWS, signed by the active key of the key set; its signing kid is recorded on the new session."
+        },
+        {
+          "algorithm": null,
+          "anchor": {
+            "line": 276,
+            "note": "func (s *Store) Create",
+            "path": "internal/auth/session/store.go"
+          },
+          "audience": null,
+          "class_id": "refresh_credential",
+          "direction": "returned_to_caller",
+          "issuer": null,
+          "lifetime_seconds": 604800,
+          "note": "The first opaque credential of the caller's new session, which starts a new family; every older session of the account is revoked."
+        }
+      ],
       "method": "POST",
       "primary_validator": {
         "anchor": {
@@ -1441,77 +1154,145 @@
           "note": "func (h handlers) authenticate",
           "path": "internal/auth/authapi/routes.go"
         },
-        "description": "authenticate: bearer HS256 access token (edgetoken, go-api's validate_token rules) with a sid claim; the session must be live and belong to sub, the users row active, and tv equal to users.token_version. Every refusal is a 401 error.v1 with an auth-outcome reason code. An EdDSA user_access_token (JWT header alg EdDSA) is checked by the profile-routed validator with audience auth-service (scope auth:session): sid is required, and the session's token_version pin must equal users.token_version; the HS256 access token stays accepted (legacy_hs256 true)."
+        "description": "authenticate: bearer HS256 access token with a sid claim; the session must be live and belong to sub, the users row active, and tv equal to users.token_version. The flow then requires the current password. An EdDSA user_access_token (JWT header alg EdDSA) is checked by the profile-routed validator with audience auth-service (scope auth:session): sid is required, and the session's token_version pin must equal users.token_version; the HS256 access token stays accepted (legacy_hs256 true)."
       },
       "public_rationale": null,
-      "route": "/v1/sessions/revoke",
+      "route": "/api/v1/auth/change-password",
       "service": "dev-health-auth-service",
       "source": {
-        "file": "internal/auth/authapi/routes.go",
-        "line": 71
+        "file": "internal/auth/authapi/credentials.go",
+        "line": 144
       },
       "surface_kind": "rest",
       "tenant_requirement": "none",
       "token_shape": {
-        "algorithm": "HS256 (legacy_hs256) or EdDSA (user_access_token)",
-        "audience": "HS256: AUTH_JWT_AUDIENCE (default dev-health-api, go-api's JWT_AUDIENCE); EdDSA: auth-service",
-        "issuer": "HS256: AUTH_JWT_ISSUER (default dev-health-ops, go-api's JWT_ISSUER); EdDSA: AUTH_TOKEN_ISSUER_URL",
-        "token_type": "HS256 JWT, type=access, with sid; or the access-token.v1 JWS with sid"
+        "algorithm": "HS256 (hs256_compat class) or EdDSA (eddsa class)",
+        "audience": "AUTH_JWT_AUDIENCE (default dev-health-api, go-api's JWT_AUDIENCE); under the eddsa class dev-health-api or auth-service",
+        "issuer": "AUTH_JWT_ISSUER (default dev-health-ops, go-api's JWT_ISSUER); under the eddsa class AUTH_TOKEN_ISSUER_URL",
+        "token_type": "HS256 JWT, type=access, with sid; under the eddsa class the access-token.v1 JWS"
       }
     },
     {
-      "accepted_credential_classes": [
-        "ops_access_token_hs256",
-        "user_access_token"
-      ],
-      "access_token_validation": {
-        "legacy_hs256": true
-      },
-      "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "EdDSA"
-      },
-      "classification": "protected",
-      "current_state_cache_behavior": "No cache: the session row and the users row are read live on every request.",
-      "disclosure_behavior": "Every refusal is the same 401 error.v1 shape with an auth-outcome reason code; no detail text, no credential, no client request id.",
+      "accepted_credential_classes": [],
+      "classification": "public",
       "gaps": [],
       "graphql_field_name": null,
-      "id": "POST /v1/sessions/revoke-all [dev-health-auth-service @api]",
+      "id": "GET /healthz [dev-health-auth-service @operator]",
+      "method": "GET",
+      "public_rationale": "Probe reached by the orchestrator on the operator listener; returns no tenant data.",
+      "route": "/healthz",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/platform/health/server.go",
+        "line": 131
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "GET /readyz [dev-health-auth-service @operator]",
+      "method": "GET",
+      "public_rationale": "Probe reached by the orchestrator on the operator listener; returns no tenant data.",
+      "route": "/readyz",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/platform/health/server.go",
+        "line": 132
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "GET /metrics [dev-health-auth-service @operator]",
+      "method": "GET",
+      "public_rationale": "Scrape endpoint on the operator listener only (never the API one); process metrics, no tenant data.",
+      "route": "/metrics",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/platform/health/server.go",
+        "line": 133
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "HEAD /healthz [dev-health-auth-service @operator]",
+      "method": "HEAD",
+      "public_rationale": "Probe reached by the orchestrator on the operator listener; returns no tenant data.",
+      "route": "/healthz",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/platform/health/server.go",
+        "line": 131
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "HEAD /readyz [dev-health-auth-service @operator]",
+      "method": "HEAD",
+      "public_rationale": "Probe reached by the orchestrator on the operator listener; returns no tenant data.",
+      "route": "/readyz",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/platform/health/server.go",
+        "line": 132
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "HEAD /metrics [dev-health-auth-service @operator]",
+      "method": "HEAD",
+      "public_rationale": "Scrape endpoint on the operator listener only (never the API one); process metrics, no tenant data.",
+      "route": "/metrics",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/platform/health/server.go",
+        "line": 133
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/auth/oidc/{provider_id}/authorize [dev-health-auth-service @api]",
+      "issued_credential": [],
       "method": "POST",
-      "primary_validator": {
-        "anchor": {
-          "line": 96,
-          "note": "func (h handlers) authenticate",
-          "path": "internal/auth/authapi/routes.go"
-        },
-        "description": "authenticate: bearer HS256 access token (edgetoken, go-api's validate_token rules) with a sid claim; the session must be live and belong to sub, the users row active, and tv equal to users.token_version. Every refusal is a 401 error.v1 with an auth-outcome reason code. An EdDSA user_access_token (JWT header alg EdDSA) is checked by the profile-routed validator with audience auth-service (scope auth:session): sid is required, and the session's token_version pin must equal users.token_version; the HS256 access token stays accepted (legacy_hs256 true)."
-      },
-      "public_rationale": null,
-      "route": "/v1/sessions/revoke-all",
+      "public_rationale": "OIDC authorize; pre-session by design: the browser starts a sign-in and the route accepts no credential. The state, nonce and PKCE verifier it mints are checked at the callback.",
+      "route": "/api/v1/auth/oidc/{provider_id}/authorize",
       "service": "dev-health-auth-service",
       "source": {
-        "file": "internal/auth/authapi/routes.go",
-        "line": 72
+        "file": "internal/auth/authruntime/sso.go",
+        "line": 103
       },
-      "surface_kind": "rest",
-      "tenant_requirement": "none",
-      "token_shape": {
-        "algorithm": "HS256 (legacy_hs256) or EdDSA (user_access_token)",
-        "audience": "HS256: AUTH_JWT_AUDIENCE (default dev-health-api, go-api's JWT_AUDIENCE); EdDSA: auth-service",
-        "issuer": "HS256: AUTH_JWT_ISSUER (default dev-health-ops, go-api's JWT_ISSUER); EdDSA: AUTH_TOKEN_ISSUER_URL",
-        "token_type": "HS256 JWT, type=access, with sid; or the access-token.v1 JWS with sid"
-      }
+      "surface_kind": "rest"
     },
     {
       "accepted_credential_classes": [
-        "refresh_credential"
+        "sso_oidc_exchange"
       ],
-      "classification": "protected",
-      "current_state_cache_behavior": "No cache: the credential, its session and the users row are read live; rotation is single use under the session row lock.",
-      "disclosure_behavior": "Every refusal of a presented credential is a 401 error.v1 with an auth-outcome reason code; a store or key failure is a 503 with retry_after_seconds. The body never echoes the credential.",
+      "classification": "public",
       "gaps": [],
       "graphql_field_name": null,
-      "id": "POST /v1/token/refresh [dev-health-auth-service @api]",
+      "id": "POST /api/v1/auth/oidc/{provider_id}/callback [dev-health-auth-service @api]",
       "issued_credential": [
         {
           "algorithm": "HS256",
@@ -1530,36 +1311,255 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 468,
-            "note": "func (s *Store) rotate",
-            "path": "internal/auth/session/store.go"
+            "line": 23,
+            "note": "func (s *Store) CreateAudited",
+            "path": "internal/auth/session/signin.go"
           },
           "audience": null,
           "class_id": "refresh_credential",
           "direction": "returned_to_caller",
           "issuer": null,
           "lifetime_seconds": 604800,
-          "note": "The rotated opaque credential (dhr1_ + 32 random bytes); a grace replay inside 30 s returns the same successor."
+          "note": "The first opaque credential of the session (dhr1_ + 32 random bytes), which starts a new family."
         }
       ],
       "method": "POST",
-      "primary_validator": {
-        "anchor": {
-          "line": 367,
-          "note": "func (s *Store) Exchange",
-          "path": "internal/auth/session/store.go"
-        },
-        "description": "session.Store.Exchange: the presented credential's SHA-256 is looked up under the session row lock; consumed, expired, revoked and reused credentials are refused, reuse revokes the session."
-      },
-      "public_rationale": null,
-      "route": "/v1/token/refresh",
+      "public_rationale": "OIDC callback; pre-session by design: the authorization code is exchanged at the provider, and the state, nonce, PKCE verifier and browser binding are checked before an account is resolved. An unknown subject is refused; no account is created.",
+      "route": "/api/v1/auth/oidc/{provider_id}/callback",
       "service": "dev-health-auth-service",
       "source": {
-        "file": "internal/auth/authapi/routes.go",
-        "line": 69
+        "file": "internal/auth/authruntime/sso.go",
+        "line": 104
       },
-      "surface_kind": "rest",
-      "tenant_requirement": "none"
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/auth/oauth/{provider_id}/authorize [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "public_rationale": "OAuth authorize; pre-session by design: the browser starts a sign-in and the route accepts no credential.",
+      "route": "/api/v1/auth/oauth/{provider_id}/authorize",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authruntime/sso.go",
+        "line": 105
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "GET /api/v1/auth/oauth/{provider_id}/authorize [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "GET",
+      "public_rationale": "OAuth authorize by provider type (the path segment is the provider type); pre-session by design: the browser starts a sign-in and the route accepts no credential.",
+      "route": "/api/v1/auth/oauth/{provider_id}/authorize",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authruntime/sso.go",
+        "line": 106
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [
+        "sso_oidc_exchange"
+      ],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/auth/oauth/{provider_id}/callback [dev-health-auth-service @api]",
+      "issued_credential": [
+        {
+          "algorithm": "HS256",
+          "anchor": {
+            "line": 63,
+            "note": "func (i *Issuer) Access",
+            "path": "internal/auth/authapi/issuer.go"
+          },
+          "audience": "AUTH_JWT_AUDIENCE (default dev-health-api)",
+          "class_id": "ops_access_token_hs256",
+          "direction": "returned_to_caller",
+          "issuer": "AUTH_JWT_ISSUER (default dev-health-ops)",
+          "lifetime_seconds": 3600,
+          "note": "go-api's access claims from the live users and membership rows, plus sid."
+        },
+        {
+          "algorithm": null,
+          "anchor": {
+            "line": 23,
+            "note": "func (s *Store) CreateAudited",
+            "path": "internal/auth/session/signin.go"
+          },
+          "audience": null,
+          "class_id": "refresh_credential",
+          "direction": "returned_to_caller",
+          "issuer": null,
+          "lifetime_seconds": 604800,
+          "note": "The first opaque credential of the session (dhr1_ + 32 random bytes), which starts a new family."
+        }
+      ],
+      "method": "POST",
+      "public_rationale": "OAuth callback; pre-session by design: the authorization code is exchanged at the provider and the state and browser binding are checked before an account is resolved. The body shape is the OIDC callback's (code and state). An unknown subject is refused; no account is created.",
+      "route": "/api/v1/auth/oauth/{provider_id}/callback",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authruntime/sso.go",
+        "line": 107
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "GET /api/v1/auth/saml/{provider_id}/metadata [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "GET",
+      "public_rationale": "SAML service-provider metadata; the IdP, not a browser session, is the caller, and the answer carries only public configuration.",
+      "route": "/api/v1/auth/saml/{provider_id}/metadata",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authruntime/sso.go",
+        "line": 146
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/auth/saml/{provider_id}/initiate [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "public_rationale": "SAML sign-in start; pre-session by design: the route mints a request id bound to the browser and accepts no credential.",
+      "route": "/api/v1/auth/saml/{provider_id}/initiate",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authruntime/sso.go",
+        "line": 147
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [
+        "sso_saml_exchange"
+      ],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/auth/saml/{provider_id}/acs [dev-health-auth-service @api]",
+      "issued_credential": [
+        {
+          "algorithm": "HS256",
+          "anchor": {
+            "line": 63,
+            "note": "func (i *Issuer) Access",
+            "path": "internal/auth/authapi/issuer.go"
+          },
+          "audience": "AUTH_JWT_AUDIENCE (default dev-health-api)",
+          "class_id": "ops_access_token_hs256",
+          "direction": "returned_to_caller",
+          "issuer": "AUTH_JWT_ISSUER (default dev-health-ops)",
+          "lifetime_seconds": 3600,
+          "note": "go-api's access claims from the live users and membership rows, plus sid."
+        },
+        {
+          "algorithm": null,
+          "anchor": {
+            "line": 23,
+            "note": "func (s *Store) CreateAudited",
+            "path": "internal/auth/session/signin.go"
+          },
+          "audience": null,
+          "class_id": "refresh_credential",
+          "direction": "returned_to_caller",
+          "issuer": null,
+          "lifetime_seconds": 604800,
+          "note": "The first opaque credential of the session (dhr1_ + 32 random bytes), which starts a new family."
+        }
+      ],
+      "method": "POST",
+      "public_rationale": "SAML assertion consumer; pre-session by design: the assertion signature, audience, destination, request binding and one-time use are checked before an account is resolved. An unknown subject is refused; no account is created.",
+      "route": "/api/v1/auth/saml/{provider_id}/acs",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authruntime/sso.go",
+        "line": 148
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "GET /.well-known/jwks.json [dev-health-auth-service @api]",
+      "method": "GET",
+      "public_rationale": "The published token verification keys (public keys only), fetched anonymously by relying parties; returns no tenant data.",
+      "route": "/.well-known/jwks.json",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/wellknown.go",
+        "line": 79
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "HEAD /.well-known/jwks.json [dev-health-auth-service @api]",
+      "method": "HEAD",
+      "public_rationale": "The published token verification keys (public keys only), fetched anonymously by relying parties; returns no tenant data.",
+      "route": "/.well-known/jwks.json",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/wellknown.go",
+        "line": 80
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "GET /.well-known/openid-configuration [dev-health-auth-service @api]",
+      "method": "GET",
+      "public_rationale": "The issuer's discovery document (issuer, jwks_uri, signing algorithms), fetched anonymously by relying parties; returns no tenant data.",
+      "route": "/.well-known/openid-configuration",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/wellknown.go",
+        "line": 86
+      },
+      "surface_kind": "rest"
+    },
+    {
+      "accepted_credential_classes": [],
+      "classification": "public",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "HEAD /.well-known/openid-configuration [dev-health-auth-service @api]",
+      "method": "HEAD",
+      "public_rationale": "The issuer's discovery document (issuer, jwks_uri, signing algorithms), fetched anonymously by relying parties; returns no tenant data.",
+      "route": "/.well-known/openid-configuration",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/wellknown.go",
+        "line": 87
+      },
+      "surface_kind": "rest"
     }
   ],
   "schema_version": "endpoint-profile.v1",

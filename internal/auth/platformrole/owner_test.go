@@ -6,11 +6,13 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
 func TestPlatformOwnerIsAPlatformRoleOfTheCatalog(t *testing.T) {
@@ -94,5 +96,34 @@ func TestOwnerAuditEventsNameWhoAndHow(t *testing.T) {
 	}
 	if err := audit.ValidateAttributes(ref.Attributes); err != nil {
 		t.Errorf("refusal audit attributes refused: %v", err)
+	}
+}
+
+// A store whose pool cannot connect: a path that passes the owner refusal fails
+// with ErrStore, so the refusal is asserted, not inferred from a panic.
+func TestOwnerRefusalIsReturnedBeforeAnyStoreRead(t *testing.T) {
+	cfg, err := pgxpool.ParseConfig("postgres://nobody@127.0.0.1:1/none?connect_timeout=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.NewWithConfig(t.Context(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	schema, err := authschema.NewValidatedIdentifier("auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(Config{Pool: pool, Schema: schema, Logger: slog.New(slog.DiscardHandler)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, gerr := s.Grant(t.Context(), GrantInput{Actor: uuid.New(), Principal: uuid.New(), Role: PlatformOwner})
+	rerr := s.Revoke(t.Context(), RevokeInput{Actor: uuid.New(), Principal: uuid.New(), Role: PlatformOwner})
+	for name, err := range map[string]error{"grant": gerr, "revoke": rerr} {
+		if !errors.Is(err, ErrPlatformOwnerCLIOnly) || errors.Is(err, ErrStore) {
+			t.Errorf("%s of platform_owner: %v, want exactly ErrPlatformOwnerCLIOnly and no store failure", name, err)
+		}
 	}
 }

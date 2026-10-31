@@ -278,8 +278,9 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 	closingTransient, closingTerminal := 0, 0
 
 	if fetchMilestones {
+		ancestorParam := gitlabMilestoneAncestorParam(budgetAccount(ctx, "milestones"), &counted, "org_id", claim.OrgID, "unit_id", claim.ID)
 		milestones, milestonePages, milestoneErr := collectGitLabMilestones(
-			budgetAccount(ctx, "milestones"), &counted, gitlabMilestonesRoute, root+"/milestones", perPage, nestedMaxPages,
+			budgetAccount(ctx, "milestones"), &counted, gitlabMilestonesRoute, root+"/milestones", ancestorParam, perPage, nestedMaxPages,
 		)
 		if milestoneErr != nil {
 			return CompleteRouteBatch{}, milestoneErr
@@ -648,14 +649,15 @@ func gitLabNestedOwnerAndField(path string) (owner, field string) {
 	return owner, field
 }
 
-// CHAOS-12145: only include_ancestors is sent. GitLab declares it and its
-// deprecated alias include_parent_milestones mutually exclusive and answers a
-// request carrying both with HTTP 400.
+// CHAOS-12145: one ancestors parameter is sent (ancestorParam, chosen by the
+// GitLab version). GitLab declares include_ancestors and its deprecated alias
+// include_parent_milestones mutually exclusive and answers a request carrying
+// both with HTTP 400.
 func collectGitLabMilestones(
 	ctx context.Context, client *providerfoundation.HTTPClient, route, path string,
-	perPage, maxPages int,
+	ancestorParam string, perPage, maxPages int,
 ) ([]gitlabIssueMilestonePayload, int, error) {
-	items, pages, err := collectGitLabNestedPayloads(ctx, client, route, path, url.Values{"state": {"all"}, "include_ancestors": {"true"}}, perPage, maxPages)
+	items, pages, err := collectGitLabNestedPayloads(ctx, client, route, path, url.Values{"state": {"all"}, ancestorParam: {"true"}}, perPage, maxPages)
 	if err != nil {
 		return nil, pages, err
 	}

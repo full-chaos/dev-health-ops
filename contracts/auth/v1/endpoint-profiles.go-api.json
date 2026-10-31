@@ -12485,7 +12485,7 @@
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
-        "description": "policy.Authenticated: a valid access token for an active user."
+        "description": "policy.Authenticated: a valid access token for an active user, while AUTH_PROXY_CREDENTIALS is off. With AUTH_PROXY_CREDENTIALS on, go-api forwards the request unread (no guard, body validator or rate limiter; the scope layers skip the exact route) and auth-service authenticates, validates and limits it on its own change-password row; go-api validates no token it forwards."
       },
       "public_rationale": null,
       "reachable_validators": [
@@ -12495,7 +12495,7 @@
             "note": "func (s *Scope) OrgScope",
             "path": "internal/api/policy/scope.go"
           },
-          "description": "OrgScope (OrgIdMiddleware, installed around every api-listener route in service.go configureWith): reads the caller from the Scope.Principal decision only, never the Authorization header, and checks X-Org-Id against that caller; a caller the route's row or the refusal table rules out is anonymous to it.",
+          "description": "OrgScope (OrgIdMiddleware, installed around every api-listener route in service.go configureWith): reads the caller from the Scope.Principal decision only, never the Authorization header, and checks X-Org-Id against that caller; a caller the route's row or the refusal table rules out is anonymous to it. With AUTH_PROXY_CREDENTIALS on, this route is scope-exempt: forwarded unread, it never reaches this layer.",
           "is_intended_validator": false,
           "reachable_but_not_owner": true
         },
@@ -12505,7 +12505,7 @@
             "note": "func (s *Scope) Impersonation",
             "path": "internal/api/policy/scope.go"
           },
-          "description": "Impersonation (ImpersonationMiddleware, installed with OrgScope): reads the caller from the Scope.Principal decision only, never the Authorization header; for a superuser caller it may replace the effective organization on any api-listener route.",
+          "description": "Impersonation (ImpersonationMiddleware, installed with OrgScope): reads the caller from the Scope.Principal decision only, never the Authorization header; for a superuser caller it may replace the effective organization on any api-listener route. With AUTH_PROXY_CREDENTIALS on, this route is scope-exempt: forwarded unread, it never reaches this layer.",
           "is_intended_validator": false,
           "reachable_but_not_owner": true
         }

@@ -365,3 +365,37 @@ func TestCatalogHoldsTheBillingAndLicenseActions(t *testing.T) {
 		}
 	}
 }
+
+// acr.context.read is the first repository-kind action: organization scope, a repository as its resource.
+func TestEmbeddedCatalogHoldsAcrContextReadAsARepositoryAction(t *testing.T) {
+	a, err := Default().Action("acr.context.read")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Scope != ScopeOrganization || a.ResourceKind != "repository" || a.RiskClass != RiskLow || a.CacheClass != CacheResourceRevisionBound {
+		t.Errorf("acr.context.read = %+v, want organization scope, repository kind, low risk, resource_revision_bound", a)
+	}
+}
+
+// The resource-kind set widens to repository; the scope sets do not.
+func TestRepositoryIsAResourceKindAndNeverAScope(t *testing.T) {
+	const okR = `{"schema_version":"roles.v1","catalog_version":1,"description":"d","roles":[{"role":"r","scope":"organization","actions":["a.b"]}]}`
+	act := func(scope, kind string) string {
+		return `{"schema_version":"actions.v1","catalog_version":1,"description":"d","actions":[{"action":"a.b","scope":"` + scope + `","resource_kind":"` + kind + `","risk_class":"low","cache_class":"decision_bound"}]}`
+	}
+	if _, err := Load([]byte(act("organization", "repository")), []byte(okR)); err != nil {
+		t.Errorf("repository resource_kind refused: %v", err)
+	}
+	for name, a := range map[string]string{
+		"repository scope":      act("repository", "organization"),
+		"unknown resource kind": act("organization", "galaxy"),
+	} {
+		if _, err := Load([]byte(a), []byte(okR)); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+	roleScope := strings.Replace(okR, `"scope":"organization"`, `"scope":"repository"`, 1)
+	if _, err := Load([]byte(act("organization", "organization")), []byte(roleScope)); err == nil {
+		t.Error("a repository role scope was accepted")
+	}
+}

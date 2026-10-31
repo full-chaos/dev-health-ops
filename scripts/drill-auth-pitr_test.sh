@@ -113,6 +113,20 @@ printf '    "old": "%s-pretty"\n' "$canary" >>"$ev/summary.txt"
 if [[ "$(cat "$root/guard.rc")" -ne 0 ]] && grep -q 'secrets.json' "$root/guard.err" && ! grep -qF "$canary" "$root/guard.err" && ! grep -qF "$canary" "$root/guard.out"; then r=ok; else r=bad; fi
 check "the guard stderr in a refusal holds no secret value" "$r"
 
+# the filter reads the file name only: a parent directory named like a secrets file keeps the result files
+evs="$root/auth-secrets/evidence"
+mkdir -p "$evs"
+cp "$ev/verify-T-exact.json" "$ev/post-T.json" "$ev/attempt-T-pitr.json" "$ev/attempt-secrets.json" "$evs/"
+picked="$(
+  set +e
+  eval "$sum_fn"
+  # shellcheck disable=SC2034 # read by the evaluated helpers
+  evidence="$evs"
+  summary_files | sed 's|.*/||' | sort | tr '\n' ' '
+)"
+if [[ "$picked" == "attempt-T-pitr.json post-T.json verify-T-exact.json " ]]; then r=ok; else r=bad; fi
+check "a secrets-named parent directory keeps the 3 result files and drops the secrets file" "$r"
+
 # no unguarded bare `export "$@"` anywhere in the script
 if grep -nE '^[[:space:]]*export "\$@"' "$script" | grep -v 'if ((\$#))' >/dev/null; then
   grep -nE 'export "\$@"' "$script" | grep -vE 'if \(\(\$#\)\)' >/dev/null && r=bad || r=ok

@@ -93,6 +93,7 @@ Design docs (read the guardrails at minimum):
 | `pagerduty_webhook_signature` | active | external_source | |
 | `workload_token` | optional_feature | workload | |
 | `workload_bootstrap_credential` | optional_feature | workload | |
+| `service_account_key` | **unconsumed** | service_account | no verb and no route yet |
 
 **30 classes at the Wave 0 freeze** (31 with `effective_principal_envelope`, added by CHAOS-4737 below). 5 were not in CHAOS-3273's minimum list and were discovered
 during this inventory (`new_vs_ticket: true` in the JSON):
@@ -219,6 +220,16 @@ class is `optional_feature`. The operator creates, rotates, revokes and
 disables a credential with `auth-migrate workloads bootstrap-create`,
 `bootstrap-rotate`, `bootstrap-revoke` and `bootstrap-disable` (migration role;
 see the [bootstrap credential runbook](../../operate/runbooks/auth-workload-bootstrap-credential.md)).
+
+**`service_account_key` (CHAOS-12273).** The key of an organization's service
+account: `fcsak_` and 32 random bytes as unpadded base64url. The class exists
+in the contract and the registry CHECK; no verb mints it yet and no route
+accepts it. A key authenticates nowhere until the use leaf CHAOS-12362 lands,
+so the class is `unconsumed`. It is no bearer: go-api and the auth-service
+session issue route refuse its prefix before any validator. The registry
+(`auth.credential_registry`) keeps the SHA-256 digest of the whole value, never
+the value. Each key change is one `service_account.key_changed` provisioning
+event that names the credential row id.
 
 **`acr_browser_refresh_token` (CHAOS-12141).** The refresh token of the ACR
 first-party browser client (acr CHAOS-12124): `acrrt_` and 32 random bytes as

@@ -234,12 +234,6 @@
       "why": "credential_id is a member of the workload and service_account aggregates only."
     },
     {
-      "file": "invalid-change-credential-id-on-service-account.json",
-      "expect_instance_location": "/payload/change",
-      "expect_keyword": "enum",
-      "why": "credential_id is a workload member only."
-    },
-    {
       "file": "invalid-change-action-set-empty.json",
       "expect_instance_location": "/payload/change/action_set",
       "expect_keyword": "minItems",

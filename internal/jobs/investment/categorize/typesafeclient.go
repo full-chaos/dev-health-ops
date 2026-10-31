@@ -885,7 +885,11 @@ func fillOutputTokens(usage *SystemOneUsage, payload []byte) []byte {
 		return payload
 	}
 	var fields map[string]json.RawMessage
-	if json.Unmarshal(payload, &fields) != nil || len(fields["answers"]) == 0 {
+	if json.Unmarshal(payload, &fields) != nil {
+		return payload
+	}
+	var answers map[string]json.RawMessage
+	if json.Unmarshal(fields["answers"], &answers) != nil || answers == nil {
 		return payload
 	}
 	var counts map[string]json.RawMessage

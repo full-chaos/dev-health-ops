@@ -1457,10 +1457,12 @@ services:
       auth-grants:
         condition: service_completed_successfully
 
-  # The workload bootstrap credential (profile `auth`), in three one-shots, run by hand in this order and never a
-  # dependency of a running service: a later `up` would run bootstrap-create again, and it refuses a workload with a
-  # live credential. 1 auth-workload-volume: a new named volume is root-owned, the writer runs as uid 65532.
-  # 2 auth-workload-seed: seeds the workload registry. 3 auth-workload-bootstrap: writes the credential of the `api`
+  # The workload bootstrap credential (profile `auth`), in three one-shots, never a dependency of a running service:
+  # a later `up` would run bootstrap-create again, and it refuses a workload with a live credential. Run
+  # `run --rm auth-workload-bootstrap`: compose starts the other two before it, and each is safe to run again.
+  # auth-workload-volume: a new named volume is root-owned, the writer runs as uid 65532; it changes the directory
+  # only when it is not already 65532:700 (the container has no CAP_FOWNER, so a second chmod would fail).
+  # auth-workload-seed: seeds the workload registry. auth-workload-bootstrap: writes the credential of the `api`
   # workload to /run/workload/api.bootstrap (0600) and keeps only its hash. go-api reads the file from a read-only
   # mount; auth-service never mounts it. `down -v` deletes the volume.
   auth-workload-volume:
@@ -1474,7 +1476,7 @@ services:
     cap_add: [CHOWN]
     security_opt: [no-new-privileges:true]
     entrypoint: ["/bin/sh", "-eu", "-c"]
-    command: ["chmod 0700 /run/workload && chown 65532:65532 /run/workload"]
+    command: ['[ "$(stat -c %u:%a /run/workload)" = 65532:700 ] || { chmod 0700 /run/workload && chown 65532:65532 /run/workload; }']
     volumes:
       - workload_bootstrap:/run/workload
 

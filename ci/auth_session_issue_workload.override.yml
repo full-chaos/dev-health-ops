@@ -11,8 +11,8 @@
 # Order, run by the caller with --profile auth (auth-workload-bootstrap is not a depends_on of go-api: a later `up` would
 # run it again, and bootstrap-create refuses a workload with a live credential):
 #   0. export AUTH_TOKEN_ISSUER_URL=https://auth.workload-proof.example
-#   1. run --rm auth-workload-volume auth-workload-bootstrap   (compose.yml) seeds the registry, writes the credential
-#                                                              to the volume (0600, uid 65532)
+#   1. run --rm auth-workload-bootstrap   (compose.yml) first runs the volume and seed one-shots, seeds the registry and
+#                                         writes the credential to the volume (0600, uid 65532)
 #   2. read auth.workloads.principal_id of api, export AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT=prn_<base64url of the 16 bytes>
 #   3. up go-api auth-service
 # Profile auth-probe adds a probe of the exchange and of the routes that take the token (ci/auth_workload_probe, a fixed

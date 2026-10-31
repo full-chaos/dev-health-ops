@@ -1,6 +1,6 @@
 //go:build !race
 
-package checkgo_test
+package checkgoshards_test
 
 import (
 	"encoding/json"
@@ -209,7 +209,21 @@ done
 exit 0
 `
 
+var shardRuns runCache
+
+// runShardWithFakeGo runs one test-leg shard on the stand-in go. Tests that ask for the same shard, slow package and
+// environment share one run: each reads the answer and never changes it.
 func runShardWithFakeGo(t *testing.T, shard int, slowPackage string, extraEnv ...string) (cmdResult, []string) {
+	t.Helper()
+	key := fmt.Sprint(shard, "|", slowPackage, "|", strings.Join(extraEnv, "\x00"))
+	run := shardRuns.get(t, key, func() shardRun {
+		res, lines := runShardWithFakeGoOnce(t, shard, slowPackage, extraEnv...)
+		return shardRun{res: res, lines: lines}
+	})
+	return run.res, run.lines
+}
+
+func runShardWithFakeGoOnce(t *testing.T, shard int, slowPackage string, extraEnv ...string) (cmdResult, []string) {
 	t.Helper()
 	script := scriptPath(t, "ci/check_go.sh")
 	repo := filepath.Dir(filepath.Dir(script))

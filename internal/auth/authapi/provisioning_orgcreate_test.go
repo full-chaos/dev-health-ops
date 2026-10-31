@@ -90,7 +90,7 @@ func TestOrgCreateRoutesAnswer(t *testing.T) {
 	f := newProvFixture(t)
 	f.orgs.bornID = uuid.New()
 	got := f.post(PatternOrgOnboard, onboardBody(f.target), nil)
-	if got.Code != http.StatusCreated || !strings.Contains(got.Body.String(), f.orgs.bornID.String()) {
+	if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), f.orgs.bornID.String()) {
 		t.Fatalf("onboard: %d %s", got.Code, got.Body.String())
 	}
 	if in := f.orgs.onboard; in.Principal != f.target || in.Name != "Acme" || in.Description == nil || !strings.Contains(string(in.RequestMetadata), "192.0.2.1") {
@@ -98,7 +98,7 @@ func TestOrgCreateRoutesAnswer(t *testing.T) {
 	}
 	owner := uuid.New()
 	got = f.post(PatternOrgCreate, createBody(f.super, `,"organization_description":"d","settings":{"a":1},"owner_principal_id":"`+owner.String()+`"`), nil)
-	if got.Code != http.StatusCreated {
+	if got.Code != http.StatusOK {
 		t.Fatalf("create: %d %s", got.Code, got.Body.String())
 	}
 	in := f.orgs.create

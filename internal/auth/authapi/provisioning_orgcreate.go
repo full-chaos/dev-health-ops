@@ -42,7 +42,7 @@ func answerBorn(w http.ResponseWriter, born *identity.BornOrganization) {
 		id := born.MembershipID.String()
 		out.MembershipID = &id
 	}
-	writeJSON(w, http.StatusCreated, out)
+	writeJSON(w, http.StatusOK, out)
 }
 
 // birthRefusal maps a birth's store error to its answer; notFound is the

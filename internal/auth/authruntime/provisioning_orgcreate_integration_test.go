@@ -20,7 +20,7 @@ func TestOrgCreateRoutesEndToEnd(t *testing.T) {
 		return e.doWith(t, "/internal/v1/organizations/onboard", jsonBody(t, map[string]any{"principal_id": user.String(), "organization_name": name}), header)
 	}
 	first := onboard("First Org")
-	if first.status != http.StatusCreated {
+	if first.status != http.StatusOK {
 		t.Fatalf("onboard: %d %s", first.status, first.body)
 	}
 	org, _ := object(t, first)["organization_id"].(string)
@@ -42,13 +42,13 @@ JOIN memberships m ON m.org_id = p.id JOIN auth.memberships am ON am.id = m.id W
 		"actor_principal_id": super.String()}), header); removed.status != http.StatusOK {
 		t.Fatalf("remove: %d %s", removed.status, removed.body)
 	}
-	if next := onboard("Second Org"); next.status != http.StatusCreated {
+	if next := onboard("Second Org"); next.status != http.StatusOK {
 		t.Fatalf("a removed member's onboarding: %d %s", next.status, next.body)
 	}
 	slug := "e2e-" + uuid.NewString()[:8]
 	created := e.doWith(t, "/internal/v1/organizations/create", jsonBody(t, map[string]any{"actor_principal_id": super.String(), "organization_name": "Admin Org", "slug": slug,
 		"organization_description": "made here", "settings": map[string]any{"a": 1}, "tier": "team", "managed_by": "manual"}), header)
-	if created.status != http.StatusCreated {
+	if created.status != http.StatusOK {
 		t.Fatalf("create: %d %s", created.status, created.body)
 	}
 	var kept int

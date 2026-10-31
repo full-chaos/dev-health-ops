@@ -1829,7 +1829,8 @@ func componentSecure(lookup secrets.LookupEnv, spec ComponentSpec) (bool, error)
 	case "false":
 		return false, nil
 	}
-	return false, fmt.Errorf("%s is %q: it must be true or false", spec.SecureKey, value)
+	// The value is not quoted: a misplaced credential must not reach the error.
+	return false, fmt.Errorf("%s must be true or false; the value set is neither (not printed)", spec.SecureKey)
 }
 
 // parsedDSN is what a driver made of an assembled DSN: the identity it

@@ -91,7 +91,7 @@ func ptr(s string) *string { return &s }
 func TestClickHouseSecureTakesOnlyTrueOrFalse(t *testing.T) {
 	t.Parallel()
 	const canary = "v3rCanary#Pw-11995"
-	for _, value := range []string{"1", "TRUE", "True", "yes", "on", " true", "true ", "secure"} {
+	for _, value := range []string{"1", "TRUE", "True", "yes", "on", " true", "true ", "secure", canary, "default", "pw#frag", `#@/?:%&+= all`} {
 		env := cloudComponents(canary)
 		env["DEV_HEALTH_CH_SECURE"] = value
 		_, _, err := ResolveDSN(lookup(env), "CLICKHOUSE_URI", ClickHouseSpec)
@@ -103,6 +103,10 @@ func TestClickHouseSecureTakesOnlyTrueOrFalse(t *testing.T) {
 		}
 		if strings.Contains(err.Error(), canary) {
 			t.Fatalf("DEV_HEALTH_CH_SECURE=%q: the refusal holds the password", value)
+		}
+		// The refusal is one fixed text, so no refused value (a misplaced credential) can reach it.
+		if want := "DEV_HEALTH_CH_SECURE must be true or false; the value set is neither (not printed)"; err.Error() != want {
+			t.Fatalf("DEV_HEALTH_CH_SECURE=%q: refusal %q, want the fixed text %q", value, err.Error(), want)
 		}
 	}
 }

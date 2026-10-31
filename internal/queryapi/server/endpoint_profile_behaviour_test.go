@@ -56,6 +56,12 @@ func newBehaviourStack(t *testing.T) *behaviourStack {
 // /query and /graphql authenticator routed by row when keys is set.
 func newAccessStack(t *testing.T, base *accessStore, setup *accessSetup, legacyOn bool) *behaviourStack {
 	t.Helper()
+	return newAccessStackOn(t, newQueryAPIUserStoreFrom(base), setup, legacyOn)
+}
+
+// newAccessStackOn is newAccessStack over a users store the caller wraps.
+func newAccessStackOn(t *testing.T, store queryAPIUserStore, setup *accessSetup, legacyOn bool) *behaviourStack {
+	t.Helper()
 	getenv := getenvFunc(func(name string) string {
 		switch name {
 		case deploymentEnvEnv:
@@ -66,7 +72,6 @@ func newAccessStack(t *testing.T, base *accessStore, setup *accessSetup, legacyO
 		return ""
 	})
 	verifier, priv := iaVerifier(t)
-	store := newQueryAPIUserStoreFrom(base)
 	auth := ecEdgeAuth(t, store)
 	var reader *accessReader
 	if setup != nil {
@@ -127,6 +132,11 @@ func (s *behaviourStack) do(listener, method, path, carrier string) int {
 // send is do with the answer's body; bearer, when set, is the Authorization
 // bearer instead of the carrier's.
 func (s *behaviourStack) send(listener, method, path, carrier, bearer string) answer {
+	return s.sendWith(listener, method, path, carrier, bearer, nil)
+}
+
+// sendWith is send with extra request headers.
+func (s *behaviourStack) sendWith(listener, method, path, carrier, bearer string, headers map[string]string) answer {
 	var request *http.Request
 	switch {
 	case path == "/graphql" && (method == http.MethodGet || method == http.MethodHead):
@@ -152,6 +162,9 @@ func (s *behaviourStack) send(listener, method, path, carrier, bearer string) an
 	}
 	if bearer != "" {
 		request.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	for name, value := range headers {
+		request.Header.Set(name, value)
 	}
 	recorder := httptest.NewRecorder()
 	s.handlers[listener].ServeHTTP(recorder, request)

@@ -238,3 +238,82 @@ func TestCompatRefreshOfALegacyTokenOfARemovedMemberIsGuardedBeforeTheExchange(t
 		t.Errorf("not-a-member rows = %+v, want go-api's one row for the user in the token's organization", got)
 	}
 }
+
+// disablePrincipal disables the user's auth principal as an audited write does: the commit guard is armed for the
+// transaction (a guarded column is written only inside audit.Commit).
+func (e *routesEnv) disablePrincipal(t *testing.T, ctx context.Context, user uuid.UUID) {
+	t.Helper()
+	tx, err := e.admin.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true),
+		set_config('dev_health.audit_changed', pg_current_xact_id()::text || ':0', true)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1`, user); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// acp answers-11400-impl-2 Q2: an auth-service credential whose principal is disabled is refused by the store under
+// the session lock; go-api's deactivated row (refresh.go:265) names the locked session's user and organization, in a
+// transaction of its own (no auth state changes, so no auth event).
+func TestCompatRefreshOfADisabledPrincipalsCredentialWritesGoAPIsRefusalRow(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	e := newRoutesEnv(t, ctx)
+	user, org, email := e.parityUser(t, ctx)
+	credential := e.loginCredential(t, email)
+	e.disablePrincipal(t, ctx, user)
+	events := e.countRows(t, ctx, `SELECT count(*) FROM auth.security_audit_events`)
+	before := time.Now()
+	if got := e.refreshAs(t, credential); got.status != http.StatusUnauthorized {
+		t.Fatalf("refresh of a disabled principal's credential = %d %s", got.status, got.body)
+	}
+	if n := e.countRows(t, ctx, `SELECT count(*) FROM auth.security_audit_events`); n != events {
+		t.Errorf("auth events %d -> %d: the refusal changes no auth state", events, n)
+	}
+	want := refusalRow(org, user, true, "Token refresh failed: user deactivated", "Account is disabled")
+	got := e.compatPublicRows(t, ctx, want.action, *want.description)
+	if len(got) != 1 {
+		t.Fatalf("public.audit_logs rows of %q = %d, want go-api's 1", *want.description, len(got))
+	}
+	row := got[0]
+	if text(row.org) != text(want.org) || text(row.user) != text(want.user) || row.resourceType != want.resourceType ||
+		row.resourceID != want.resourceID || text(row.changes) != text(want.changes) || text(row.metadata) != text(want.metadata) ||
+		row.status != want.status || text(row.errorMessage) != text(want.errorMessage) {
+		t.Errorf("row %+v, want %+v", row, want)
+	}
+	if row.createdAt.Before(before.Add(-5*time.Second)) || row.createdAt.After(time.Now().Add(5*time.Second)) {
+		t.Errorf("created_at = %s, want the request's time", row.createdAt)
+	}
+}
+
+// acp answers-11400-impl-2 Q1: a deactivated principal's first go-api exchange revokes the token's family in the
+// store's own transaction and writes go-api's row in a transaction after it. When that row write fails the answer is
+// 500 and the family stays revoked.
+func TestCompatRefreshOfADeactivatedLegacyTokenWithAFailedRowAnswers500AndKeepsTheRevoke(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	e := newRoutesEnv(t, ctx)
+	user, org, _ := e.parityUser(t, ctx)
+	token := e.legacyRefreshToken(t, ctx, user, org)
+	if _, err := e.admin.Exec(ctx, `UPDATE public.users SET is_active = false WHERE id = $1`, user); err != nil {
+		t.Fatal(err)
+	}
+	e.refusePublicAuditInserts(t, ctx, true)
+	if got := e.refreshAs(t, token); got.status != http.StatusInternalServerError {
+		t.Fatalf("refresh with a failing row write = %d %s, want go-api's 500", got.status, got.body)
+	}
+	if n := e.countRows(t, ctx, `SELECT count(*) FROM public.refresh_tokens WHERE user_id = $1 AND revoked_at IS NULL`, user); n != 0 {
+		t.Errorf("live go-api refresh tokens of the user = %d, want 0: the family revoke stands", n)
+	}
+	if n := e.countRows(t, ctx, `SELECT count(*) FROM public.audit_logs`); n != 0 {
+		t.Errorf("public.audit_logs rows = %d, want 0", n)
+	}
+}

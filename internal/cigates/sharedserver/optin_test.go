@@ -175,12 +175,29 @@ func optsIn(src string) (bool, error) {
 		})
 		locals := map[*ast.Object]bool{}
 		for _, stmt := range body.List {
-			def, ok := stmt.(*ast.AssignStmt)
-			if !ok || def.Tok != token.DEFINE || len(def.Lhs) != 1 || len(def.Rhs) != 1 || stmt.End() > firstReturn {
+			if stmt.End() > firstReturn {
 				continue
 			}
-			if id, ok := def.Lhs[0].(*ast.Ident); ok && id.Obj != nil && assigned[id.Obj] == 1 && runExpr(def.Rhs[0], p) {
-				locals[id.Obj] = true
+			switch def := stmt.(type) {
+			case *ast.AssignStmt:
+				if def.Tok != token.DEFINE || len(def.Lhs) != 1 || len(def.Rhs) != 1 {
+					continue
+				}
+				if id, ok := def.Lhs[0].(*ast.Ident); ok && id.Obj != nil && assigned[id.Obj] == 1 && runExpr(def.Rhs[0], p) {
+					locals[id.Obj] = true
+				}
+			case *ast.DeclStmt:
+				decl, ok := def.Decl.(*ast.GenDecl)
+				if !ok || decl.Tok != token.VAR || len(decl.Specs) != 1 {
+					continue
+				}
+				spec, ok := decl.Specs[0].(*ast.ValueSpec)
+				if !ok || len(spec.Names) != 1 || len(spec.Values) != 1 {
+					continue
+				}
+				if id := spec.Names[0]; id.Obj != nil && assigned[id.Obj] == 0 && runExpr(spec.Values[0], p) {
+					locals[id.Obj] = true
+				}
 			}
 		}
 		returns, allRun := 0, true

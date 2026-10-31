@@ -199,6 +199,7 @@ internal/localgit	git.go	unexpressed
 internal/localgit	localgit_test.go	unexpressed
 internal/mail	environment_proxy_test.go	unexpressed
 internal/migrationmatrix	live.go	unexpressed
+internal/pgmigrate	squash_test.go	unexpressed
 internal/platform/logging	binaries_enumeration_test.go	cmd/...
 internal/platform/logging	provider_origin_sources_test.go	unexpressed
 internal/platform/logging	value_redaction_test.go	unexpressed

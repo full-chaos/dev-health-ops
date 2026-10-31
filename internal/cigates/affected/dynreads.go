@@ -2271,6 +2271,10 @@ var goFlagBool = map[string]bool{
 	"-linkshared": true, "-modcacherw": true, "-reuse": true, "-u": true, "-retracted": true, "-versions": true,
 }
 
+// unresolvedSpreadLiteral ends the literal of the edge of an exec whose spread arguments the scan cannot resolve: it
+// carries no Markdown evidence (pm D6610), and plan-reads --list-unresolved-spreads names every such site.
+const unresolvedSpreadLiteral = " with unresolved spread arguments"
+
 // execEdges records what an exec.Command call runs: for `go run|build|install|test|vet|list` with constant arguments
 // the packages it builds (an edge to each), for any other program or argument an unbounded run.
 func (c *fileCtx) execEdges(x *ast.CallExpr, name string, sc *scope, line int, add func(Read)) {
@@ -2288,8 +2292,11 @@ func (c *fileCtx) execEdges(x *ast.CallExpr, name string, sc *scope, line int, a
 	// A constant argument that names Markdown files (`*.md`, `README.md`; a named constant, a + chain or fmt.Sprintf of
 	// constants) is a read of them whatever the program.
 	scanArgs := args
+	unresolvedSpread := false
 	if x.Ellipsis.IsValid() {
-		if el, ok := c.spreadArgs(x); ok {
+		el, ok := c.spreadArgs(x)
+		unresolvedSpread = !ok
+		if ok {
 			scanArgs = el
 			if name == "os/exec.CommandContext" && len(scanArgs) > 0 {
 				scanArgs = scanArgs[1:]
@@ -2315,7 +2322,11 @@ func (c *fileCtx) execEdges(x *ast.CallExpr, name string, sc *scope, line int, a
 		})
 	}
 	if x.Ellipsis.IsValid() || len(args) == 0 {
-		edge(unexpressed, name+" with spread arguments")
+		if unresolvedSpread {
+			edge(unexpressed, name+unresolvedSpreadLiteral)
+		} else {
+			edge(unexpressed, name+" with spread arguments")
+		}
 		return
 	}
 	var vals []string

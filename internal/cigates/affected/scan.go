@@ -623,6 +623,7 @@ func PlanReads(args []string, stdout, stderr io.Writer) int {
 	checkCallGraph := fs.Bool("reach", false, "also recompute reach.tsv from the call graph (go/packages, SSA, RTA) and fail on any difference")
 	reachCache := fs.String("reach-cache", "", "with --reach: directory of a reach store; reuse the rows stored for an identical input hash, store them after a green computed run")
 	reachFresh := fs.Bool("reach-cache-fresh", false, "with --reach-cache: never read the store; compute, and store a green result (merge queue and main pushes)")
+	listSpreads := fs.Bool("list-unresolved-spreads", false, "print file:line of every exec whose spread arguments the scan cannot resolve, and exit")
 	printKey := fs.Bool("print-reach-key", false, "print the input hash of the call graph and exit")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -654,6 +655,19 @@ func PlanReads(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
+	}
+	if *listSpreads {
+		var sites []string
+		for _, r := range reads {
+			if r.Kind == ReadEdge && strings.HasSuffix(r.Literal, unresolvedSpreadLiteral) {
+				sites = append(sites, fmt.Sprintf("%s:%d", r.File, r.Line))
+			}
+		}
+		sort.Strings(sites)
+		for _, s := range sites {
+			fmt.Fprintln(stdout, s)
+		}
+		return 0
 	}
 	if *write {
 		if err := writeGenerated(dir, reads); err != nil {

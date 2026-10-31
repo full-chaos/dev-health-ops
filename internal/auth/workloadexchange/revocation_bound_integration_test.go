@@ -142,6 +142,9 @@ func TestRevocationBoundTokenStopsAtTheCredentialExpiry(t *testing.T) {
 	r.requireDiesAt(t, issued, 120*time.Second)
 	r.h.now = r.cred.ExpiresAt
 	r.mustRefuse(t, r.value, "at the credential expiry")
+	if got := r.h.bootstrapPoints()["refused/expired/auth-service"]; got != 1 {
+		t.Fatalf("counter refused/expired = %d; points %v", got, nonZero(r.h.bootstrapPoints()))
+	}
 }
 
 func TestRevocationBoundRotationParentRevokedRefusesAtOnce(t *testing.T) {
@@ -277,7 +280,7 @@ func TestRollbackNoWriteOfAnOlderReleaseReactivatesARevokedValue(t *testing.T) {
 		"clear revoked_at":     {`UPDATE auth.credential_registry SET revoked_at = NULL, revoked_reason = NULL WHERE id = $1`, nil},
 		"move revoked_at":      {`UPDATE auth.credential_registry SET revoked_at = revoked_at + interval '1 day' WHERE id = $1`, nil},
 		"change the reason":    {`UPDATE auth.credential_registry SET revoked_reason = 'compromised' WHERE id = $1`, nil},
-		"re-point the parent":  {`UPDATE auth.credential_registry SET rotation_parent_id = NULL WHERE id = $1`, nil},
+		"re-point the parent":  {`UPDATE auth.credential_registry SET rotation_parent_id = id WHERE id = $1`, nil},
 		"swap the secret hash": {`UPDATE auth.credential_registry SET secret_hash = $2 WHERE id = $1`, []any{make([]byte, sha256.Size)}},
 	}
 	for label, w := range refused {

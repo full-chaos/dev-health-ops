@@ -169,3 +169,19 @@ func TestTheLockoutReadRunsAfterEverySectionAndTheInUseCountBeforeThem(t *testin
 		t.Errorf("order wrong: in-use count %d, section loop %d, lockout read %d, flow states %d", count, loop, lock, flows)
 	}
 }
+
+// Only the lockout line is exempt from the zero-id skip, by its action name: every other action with no ids prints nothing.
+func TestEveryOtherActionWithNoIDsStillSkipsItsLine(t *testing.T) {
+	for kind := range followUp {
+		lines := ActionLines([]OperatorAction{{Kind: kind, Source: "x", IDs: []string{}}})
+		if kind == ActionNoActivePlatformAdmin {
+			if len(lines) != 1 {
+				t.Errorf("the lockout action must print with no ids: %v", lines)
+			}
+			continue
+		}
+		if len(lines) != 0 {
+			t.Errorf("%s with no ids printed %v: only no_active_platform_admin is exempt", kind, lines)
+		}
+	}
+}

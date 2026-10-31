@@ -185,7 +185,7 @@ func TestNoActivePlatformAdminLineFiresWhenTheFenceLeavesZero(t *testing.T) {
 		wantIDs []string
 	}
 	cells := []cell{
-		{name: "the only admin is revoked after T", atT: map[string]string{"gb": "bob"}, want: true,
+		{name: "switch off, table in use: the only admin is revoked after T", atT: map[string]string{"gb": "bob"}, want: true,
 			prepare: func(t *testing.T, ctx context.Context, _, end *fenceDB) { end.platRevoke(t, ctx, "gb") }},
 		{name: "the only admin expired", atT: map[string]string{}, expired: "ge", want: true, wantIDs: []string{"ge"}},
 		{name: "the only admin principal is disabled after T", atT: map[string]string{"ga": "alice"}, want: true, wantIDs: []string{"ga"},
@@ -194,8 +194,8 @@ func TestNoActivePlatformAdminLineFiresWhenTheFenceLeavesZero(t *testing.T) {
 			prepare: func(t *testing.T, ctx context.Context, _, end *fenceDB) { end.platRevoke(t, ctx, "gb") }},
 		{name: "one admin revoked and the other expired", atT: map[string]string{"gb": "bob"}, expired: "ge", want: true, wantIDs: []string{"ge"},
 			prepare: func(t *testing.T, ctx context.Context, _, end *fenceDB) { end.platRevoke(t, ctx, "gb") }},
-		{name: "empty table, switch off", atT: map[string]string{}, want: false},
-		{name: "empty table, switch on", atT: map[string]string{}, owned: true, want: true},
+		{name: "switch off, empty table: silent", atT: map[string]string{}, want: false},
+		{name: "switch on, empty table: fires", atT: map[string]string{}, owned: true, want: true},
 	}
 	for _, c := range cells {
 		t.Run(c.name, func(t *testing.T) {

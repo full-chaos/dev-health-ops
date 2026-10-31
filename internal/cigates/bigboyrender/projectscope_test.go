@@ -88,6 +88,10 @@ func TestRenderWithTheProjectScopeRefusesAManifestWithoutOneProjectScopeRow(t *t
 		"no ProjectScopeGrant": syntheticManifest,
 		"a row with no privilege": syntheticManifest + "\nfunc ProjectScopeGrant(database string) TableGrant {\n" +
 			"\treturn TableGrant{Database: database, Table: \"projects\"}\n}\n",
+		"two top-level functions": projectScopeManifest + "\nfunc ProjectScopeGrant(database string) TableGrant {\n" +
+			"\treturn TableGrant{Database: database, Table: \"projects\", AllowSelect: true}\n}\n",
+		"another database": syntheticManifest + "\nfunc ProjectScopeGrant(database string) TableGrant {\n" +
+			"\treturn TableGrant{Database: \"other\", Table: \"projects\", AllowSelect: true}\n}\n",
 		"two rows": syntheticManifest + "\nfunc ProjectScopeGrant(database string) TableGrant {\n" +
 			"\t_ = TableGrant{Database: database, Table: \"teams\", AllowSelect: true}\n" +
 			"\treturn TableGrant{Database: database, Table: \"projects\", AllowSelect: true}\n}\n",
@@ -111,7 +115,15 @@ func TestTheProjectScopeRowIsNeverReadFromAComment(t *testing.T) {
 	block := syntheticManifest + "\nfunc ProjectScopeGrant(database string) TableGrant {\n" +
 		"\t/*\n\t{Database: database, Table: \"projects\", AllowSelect: true}\n\t*/\n" +
 		"\treturn TableGrant{Database: database, Table: \"teams\"}\n}\n"
-	for name, manifest := range map[string]string{"line comment": commented, "block comment": block} {
+	// Codex r2 on #5387 (executed): a block comment that opens before a fake ProjectScopeGrant was read first.
+	decoy := syntheticManifest + "\n/*\nfunc ProjectScopeGrant(database string) TableGrant {\n" +
+		"\treturn TableGrant{Database: database, Table: \"projects\", AllowSelect: true}\n}\n*/\n" +
+		"func ProjectScopeGrant(database string) TableGrant {\n\treturn TableGrant{Database: database, Table: \"teams\"}\n}\n"
+	stringDecoy := syntheticManifest + "\nvar decoy = `\nfunc ProjectScopeGrant(database string) TableGrant {\n" +
+		"\treturn TableGrant{Database: database, Table: \"projects\", AllowSelect: true}\n}\n`\n" +
+		"func ProjectScopeGrant(database string) TableGrant {\n\treturn TableGrant{Database: database, Table: \"teams\"}\n}\n"
+	for name, manifest := range map[string]string{"line comment": commented, "block comment": block,
+		"a block-commented decoy function first": decoy, "a decoy function in a string first": stringDecoy} {
 		t.Run(name, func(t *testing.T) {
 			code, out, stderr, _ := renderWith(t, manifest, "pw-1", "--project-scope")
 			if code == 0 || out != "" || !strings.Contains(stderr, "ProjectScopeGrant") {
@@ -122,6 +134,13 @@ func TestTheProjectScopeRowIsNeverReadFromAComment(t *testing.T) {
 				t.Fatalf("compare: exit %d, stdout %q", code, cmp)
 			}
 		})
+	}
+	// A method or a nested literal named like the row is not the row: only the top-level func's own TableGrant
+	// literals count.
+	method := syntheticManifest + "\nfunc (x T) ProjectScopeGrant(database string) TableGrant {\n" +
+		"\treturn TableGrant{Database: database, Table: \"projects\", AllowSelect: true}\n}\n"
+	if code, out, stderr, _ := renderWith(t, method, "pw-1", "--project-scope"); code == 0 || out != "" {
+		t.Fatalf("a method named ProjectScopeGrant was read as the row: exit %d, out %q, stderr %q", code, out, stderr)
 	}
 	trailing := syntheticManifest + "\nfunc ProjectScopeGrant(database string) TableGrant {\n" +
 		"\treturn TableGrant{Database: database, Table: \"projects\", AllowSelect: true} // the flag-on row\n}\n"

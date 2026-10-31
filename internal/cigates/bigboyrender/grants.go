@@ -24,15 +24,9 @@ func grantsCompare(args []string, stdout, stderr io.Writer) int {
 	}
 	if projectScope {
 		// The flag-on posture (APIPostureFor(db, true), CHAOS-12268): APIPosture plus the one ProjectScopeGrant row.
-		clean, _, err := projectScopeSource(args[1])
+		_, extra, err := projectScopeRow(args[1])
 		if err != nil {
-			fmt.Fprintf(stdout, "GRANTS_CHECK_FAIL manifest not parsed: %v\n", err)
-			return 1
-		}
-		rows := funcRowStatements(clean, projectScopeMarker)
-		extra, _ := chFuncGrants(clean, projectScopeMarker)
-		if len(rows) != 1 {
-			fmt.Fprintf(stdout, "GRANTS_CHECK_FAIL manifest not parsed: %d granting rows in func ProjectScopeGrant, want 1 for --project-scope\n", len(rows))
+			fmt.Fprintf(stdout, "GRANTS_CHECK_FAIL manifest not parsed for --project-scope: %v\n", err)
 			return 1
 		}
 		pairs = append(pairs, extra...)

@@ -51,17 +51,12 @@ func renderCHUsers(args []string, stdout, stderr io.Writer) int {
 	}
 	statements := rowStatements(string(raw))
 	if projectScope {
-		clean, _, err := projectScopeSource(string(raw))
+		extra, _, err := projectScopeRow(string(raw))
 		if err != nil {
-			fmt.Fprintf(stderr, "the posture manifest is refused, nothing written: %v\n", err)
+			fmt.Fprintf(stderr, "the posture manifest is refused for --project-scope, nothing written: %v\n", err)
 			return 1
 		}
-		extra := funcRowStatements(clean, projectScopeMarker)
-		if len(extra) != 1 {
-			fmt.Fprintf(stderr, "the posture manifest has %d granting rows in func ProjectScopeGrant, want 1 for --project-scope, nothing written\n", len(extra))
-			return 1
-		}
-		statements = append(statements, extra...)
+		statements = append(statements, extra)
 	}
 	xml, err := renderUsersXML(statements, password)
 	if err != nil {

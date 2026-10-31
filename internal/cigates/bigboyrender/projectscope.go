@@ -2,8 +2,12 @@ package bigboyrender
 
 import (
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -16,9 +20,6 @@ const ProjectScopeEnv = "ACR_ACCESS_PROJECT_SCOPE"
 
 // projectScopeOption is the render-ch-users and grants-compare option for the flag-on posture.
 const projectScopeOption = "--project-scope"
-
-// projectScopeMarker opens the manifest function whose one row is the flag-on grant.
-const projectScopeMarker = "func ProjectScopeGrant("
 
 // ProjectScopeValue is go-api's reading of the flag value (apiservice.ParseACRAccessProjectScope): empty after
 // TrimSpace is off, a strconv.ParseBool value is that value, anything else is refused. An apiservice test is the
@@ -109,25 +110,93 @@ func goAPIProjectScope(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// projectScopeSource is the manifest's ProjectScopeGrant function with its comments removed, as a source the row
-// parsers (funcRowStatements, chFuncGrants) read: a `//` comment is cut from its line, and a block comment anywhere in
-// the function is refused, so a commented-out row is never read as the flag-on grant (codex r1 on #5387). ok is false
-// when the manifest has no ProjectScopeGrant.
-func projectScopeSource(source string) (clean string, ok bool, err error) {
-	rest, ok := afterFirst(universalNewlines(source), projectScopeMarker)
+// projectScopeRow reads the flag-on grant from the manifest with the Go parser, never as text, so a comment, a
+// string or a decoy can never stand in for it (codex r1 and r2 on #5387: a commented row, and a block-commented decoy
+// function before the real one, were each read as the grant). The manifest must have exactly one top-level
+// func ProjectScopeGrant, and its body must be exactly `return TableGrant{Database: database, Table: "<name>",
+// Allow...: true}` with at least one privilege; anything else is refused. It returns the GRANT statement and the
+// privilege/table pairs, in chPrivileges order.
+func projectScopeRow(source string) (statement string, grants []chGrant, err error) {
+	file, err := parser.ParseFile(token.NewFileSet(), "authorization.go", source, parser.SkipObjectResolution)
+	if err != nil {
+		return "", nil, fmt.Errorf("the posture manifest does not parse as Go, so func ProjectScopeGrant cannot be read")
+	}
+	var fn *ast.FuncDecl
+	count := 0
+	for _, decl := range file.Decls {
+		if f, ok := decl.(*ast.FuncDecl); ok && f.Recv == nil && f.Name.Name == "ProjectScopeGrant" {
+			fn, count = f, count+1
+		}
+	}
+	if count != 1 || fn.Body == nil {
+		return "", nil, fmt.Errorf("the posture manifest has %d top-level func ProjectScopeGrant, want 1", count)
+	}
+	shape := fmt.Errorf("func ProjectScopeGrant is not exactly `return TableGrant{Database: database, Table: \"<name>\", Allow...: true}`")
+	if len(fn.Body.List) != 1 {
+		return "", nil, shape
+	}
+	ret, ok := fn.Body.List[0].(*ast.ReturnStmt)
+	if !ok || len(ret.Results) != 1 {
+		return "", nil, shape
+	}
+	lit, ok := ret.Results[0].(*ast.CompositeLit)
 	if !ok {
-		return "", false, nil
+		return "", nil, shape
 	}
-	body := beforeFirst(rest, "\n}\n")
-	if strings.Contains(body, "/*") {
-		return "", true, fmt.Errorf("func ProjectScopeGrant holds a block comment; refused for --project-scope")
+	if typ, ok := lit.Type.(*ast.Ident); !ok || typ.Name != "TableGrant" {
+		return "", nil, shape
 	}
-	lines := strings.Split(body, "\n")
-	for i, line := range lines {
-		lines[i], _, _ = strings.Cut(line, "//")
+	table, database := "", false
+	allowed := map[string]bool{}
+	for _, elt := range lit.Elts {
+		kv, ok := elt.(*ast.KeyValueExpr)
+		if !ok {
+			return "", nil, shape
+		}
+		key, ok := kv.Key.(*ast.Ident)
+		if !ok {
+			return "", nil, shape
+		}
+		switch key.Name {
+		case "Database":
+			v, ok := kv.Value.(*ast.Ident)
+			database = ok && v.Name == "database"
+		case "Table":
+			v, ok := kv.Value.(*ast.BasicLit)
+			if !ok || v.Kind != token.STRING {
+				return "", nil, shape
+			}
+			name, err := strconv.Unquote(v.Value)
+			if err != nil || !tableName.MatchString(name) {
+				return "", nil, shape
+			}
+			table = name
+		default:
+			v, ok := kv.Value.(*ast.Ident)
+			if !ok || (v.Name != "true" && v.Name != "false") {
+				return "", nil, shape
+			}
+			allowed[key.Name] = v.Name == "true"
+		}
 	}
-	return projectScopeMarker + strings.Join(lines, "\n") + "\n}\n", true, nil
+	if !database || table == "" {
+		return "", nil, shape
+	}
+	var privileges []string
+	for _, p := range chPrivileges {
+		if allowed[p[0]] {
+			privileges = append(privileges, p[1])
+			grants = append(grants, chGrant{p[1], table})
+		}
+	}
+	if len(privileges) == 0 {
+		return "", nil, fmt.Errorf("func ProjectScopeGrant grants no privilege")
+	}
+	return fmt.Sprintf("GRANT %s ON %s.%s", strings.Join(privileges, ", "), databaseName, table), grants, nil
 }
+
+// tableName is a ClickHouse table name as the manifest rows write it: no markup can reach the users.d file.
+var tableName = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
 
 // takeProjectScopeOption removes a leading --project-scope from args and reports whether it was there.
 func takeProjectScopeOption(args []string) ([]string, bool) {

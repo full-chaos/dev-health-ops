@@ -54,6 +54,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/producttelemetry"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyheaders"
 	"github.com/full-chaos/dev-health-ops/internal/api/session"
+	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/api/sso"
 	"github.com/full-chaos/dev-health-ops/internal/api/syncadmin"
 	"github.com/full-chaos/dev-health-ops/internal/api/teamsidentity"
@@ -580,13 +581,21 @@ func InternalRoutes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		llmConfig = llmorgsettings.Store{Pool: deps.Pool, Decryptor: deps.Decryptor}.ForPurpose(llmorgsettings.PurposeInvestigate)
 		credentials = acr.PostgresCredentialVerifier{Pool: deps.Pool}
 		auth = acr.PostgresCredentialStore{Pool: deps.Pool, Now: deps.Now}
-		// The session read runs on go-api's session-reader grant (policy.PGStore
-		// with the auth schema, as the authenticator reads it). Without a
-		// ClickHouse connection the inventory read fails, so the access read
-		// answers 503, never a partial answer.
+		// The users, membership and impersonation reads run on go-api's pool
+		// (policy.PGStore with the auth schema, as the authenticator reads it).
+		// Without a ClickHouse connection the inventory read fails, so the
+		// access read answers 503, never a partial answer.
+		// The session a sid names is auth-service's to answer, read on the
+		// client and credential of go-api's session issue route. Without that
+		// client (go-api owns sessions, or no auth-service URL or credential) a
+		// read with a sid answers 503; start-up does not fail (D6465).
+		var sessions acr.SessionStates
+		if states, ok := deps.SessionIssuer.(sessionissue.StateReader); ok {
+			sessions = states
+		}
 		access = acr.NewPostgresAccessStore(deps.Pool,
 			policy.PGStore{Pool: deps.Pool, AuthSchema: deps.AuthSchema, PlatformRolesOwned: deps.PlatformRolesOwned},
-			acr.ClickHouseRepositoryInventory{Conn: deps.ClickHouse})
+			acr.ClickHouseRepositoryInventory{Conn: deps.ClickHouse}, sessions)
 	}
 	counters, err := limitStore(deps)
 	if err != nil {

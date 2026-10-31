@@ -70,7 +70,7 @@ func repoRoot(t *testing.T) string {
 func trackedFiles(t *testing.T, root string, pathspecs ...string) []string {
 	t.Helper()
 	args := append([]string{"-C", root, "ls-files", "-z", "--"}, pathspecs...)
-	cmd := exec.Command("git", args...)
+	cmd := exec.Command("git", append([]string{"-c", "maintenance.auto=false", "-c", "gc.auto=0"}, args...)...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()

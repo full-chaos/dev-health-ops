@@ -17,8 +17,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/acr"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
+	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
@@ -143,18 +145,22 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), user, org); err
 	}
 	ungranted := accessLogin(t, ctx, chAdmin, ch.URI, "access_mount_norepos", withoutRepos)
 
-	read := func(t *testing.T, conn driver.Conn) *httptest.ResponseRecorder {
+	readWith := func(t *testing.T, deps Deps, query string) *httptest.ResponseRecorder {
 		t.Helper()
 		server, err := NewInternalServer(config.Config{APIInternalAddress: "127.0.0.1:0"}, quietLog(),
-			InternalRoutes(Deps{Pool: pool, ClickHouse: conn}, quietLog()))
+			InternalRoutes(deps, quietLog()))
 		if err != nil {
 			t.Fatal(err)
 		}
-		request := httptest.NewRequest(http.MethodGet, "/api/v1/internal/acr/orgs/"+org.String()+"/principals/"+user.String()+"/access", nil)
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/internal/acr/orgs/"+org.String()+"/principals/"+user.String()+"/access"+query, nil)
 		request.Header.Set("Authorization", "Bearer "+token)
 		recorder := httptest.NewRecorder()
 		server.Handler().ServeHTTP(recorder, request)
 		return recorder
+	}
+	read := func(t *testing.T, conn driver.Conn) *httptest.ResponseRecorder {
+		t.Helper()
+		return readWith(t, Deps{Pool: pool, ClickHouse: conn}, "")
 	}
 
 	t.Run("posture login", func(t *testing.T) {
@@ -187,4 +193,69 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), user, org); err
 			t.Fatalf("status %d %s, want 503", rec.Code, rec.Body.String())
 		}
 	})
+	// InternalRoutes hands the access read go-api's session issue client
+	// (Deps.SessionIssuer) as its session state reader (D6559): a sid read is
+	// decided on that client's answer. Without the client, or with an issuer
+	// that cannot read state, a sid read is a 503 and a row-only read is not.
+	sid := uuid.New()
+	pin := int64(0)
+	t.Run("a sid read is decided on the session issue client's state answer", func(t *testing.T) {
+		for name, tc := range map[string]struct {
+			state sessionissue.State
+			live  bool
+		}{
+			"bound to the org": {sessionissue.State{PrincipalID: user, OrganizationID: &org, LegacyTokenVersion: &pin}, true},
+			"bound to no org":  {sessionissue.State{PrincipalID: user, LegacyTokenVersion: &pin}, false},
+			"expired":          {sessionissue.State{PrincipalID: user, OrganizationID: &org, Expired: true, LegacyTokenVersion: &pin}, false},
+		} {
+			states := &stateIssuer{states: map[uuid.UUID]sessionissue.State{sid: tc.state}}
+			rec := readWith(t, Deps{Pool: pool, ClickHouse: granted, SessionIssuer: states}, "?sid="+sessionid.Wire(sid))
+			var body struct {
+				Session *struct {
+					Live bool `json:"live"`
+				} `json:"session"`
+			}
+			if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &body) != nil || body.Session == nil || body.Session.Live != tc.live {
+				t.Fatalf("%s: %d %s, want 200 with session.live %v", name, rec.Code, rec.Body.String(), tc.live)
+			}
+			if states.calls != 1 {
+				t.Fatalf("%s: %d state reads, want 1", name, states.calls)
+			}
+		}
+	})
+	t.Run("without a session state reader a sid read is unavailable", func(t *testing.T) {
+		for name, issuer := range map[string]sessionissue.Issuer{"no issuer": nil, "an issuer that reads no state": issueOnly{}} {
+			deps := Deps{Pool: pool, ClickHouse: granted, SessionIssuer: issuer}
+			if rec := readWith(t, deps, "?sid="+sessionid.Wire(sid)); rec.Code != http.StatusServiceUnavailable {
+				t.Fatalf("%s: a sid read answered %d %s, want 503", name, rec.Code, rec.Body.String())
+			}
+			if rec := readWith(t, deps, ""); rec.Code != http.StatusOK {
+				t.Fatalf("%s: a row-only read answered %d %s, want 200", name, rec.Code, rec.Body.String())
+			}
+		}
+	})
+}
+
+// stateIssuer is go-api's session issue client as the access read sees it:
+// an Issuer that also reads session state.
+type stateIssuer struct {
+	issueOnly
+	states map[uuid.UUID]sessionissue.State
+	calls  int
+}
+
+func (s *stateIssuer) State(_ context.Context, id uuid.UUID) (sessionissue.State, error) {
+	s.calls++
+	state, ok := s.states[id]
+	if !ok {
+		return sessionissue.State{}, sessionissue.ErrSessionNotFound
+	}
+	return state, nil
+}
+
+// issueOnly is an Issuer that reads no session state.
+type issueOnly struct{}
+
+func (issueOnly) Issue(context.Context, *http.Request, sessionissue.Request) (sessionissue.Pair, error) {
+	return sessionissue.Pair{}, sessionissue.ErrUnavailable
 }

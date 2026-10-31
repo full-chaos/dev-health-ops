@@ -224,7 +224,7 @@ func newGitRepo(t *testing.T) *gitRepo {
 
 func (r *gitRepo) git(args ...string) string {
 	r.t.Helper()
-	cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"}, args...)...)
+	cmd := exec.Command("git", append([]string{"-c", "maintenance.auto=false", "-c", "gc.auto=0", "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"}, args...)...)
 	cmd.Dir = r.dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {

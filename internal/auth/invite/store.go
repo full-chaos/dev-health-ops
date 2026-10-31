@@ -79,8 +79,10 @@ type AcceptInput struct {
 	PublicAudit *PublicAudit
 	// EnsureOrganization projects the invite's organization into the auth
 	// schema when it is missing there (identity.Store.EnsureOrganization). It
-	// runs only for a token that names a pending, unexpired invite, before the
-	// membership is planned. Nil projects nothing.
+	// runs only for a token that names a pending, unexpired invite at the
+	// first read, before the membership is planned. The projection commits on
+	// its own: a later refusal (expiry at the invite lock included) keeps it.
+	// Nil projects nothing.
 	EnsureOrganization func(ctx context.Context, orgID uuid.UUID) error
 }
 

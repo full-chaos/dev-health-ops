@@ -141,6 +141,10 @@ cell red-r2-empty-verdict 1 "prompt differs at line" "$WORK/emptyverdict.md" 2
 fill 1 "$WORK/emptysummary.md" "summary="
 cell red-empty-summary-fill 1 "prompt differs at line" "$WORK/emptysummary.md" 1
 
+PATHSUM=$'The wrapper counts runs.\ninternal/foo/a.go\ninternal/foo/b.go\ninternal/bar/c.go'
+SUMMARY=$PATHSUM fill 1 "$WORK/pathsummary.md"
+cell red-path-list-in-intent-bracket 1 "bracket fill holds a path list at line" "$WORK/pathsummary.md" 1
+
 fill 1 "$WORK/emptyF.md" "F="
 cell red-empty-count-fill 1 "prompt differs at line" "$WORK/emptyF.md" 1
 

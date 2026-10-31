@@ -100,7 +100,17 @@ for t in toks:
     if t[0] != "fld":
         continue
     gi += 1
-    if t[1] in ("summary", "verdict"):
+    if t[1] == "verdict":
+        continue
+    if t[1] == "summary":
+        hits = 0
+        off = prompt.count("\n", 0, m.start(gi))
+        for k, ln in enumerate(m.group(gi).split("\n")):
+            if re.search(r"(?:^|\s)[^\s/]*[A-Za-z0-9_.-]/[^\s]*", ln):
+                hits += 1
+                if hits == 3:
+                    sys.stderr.write("bracket fill holds a path list at line %d\n" % (off + k + 1))
+                    sys.exit(1)
         continue
     v = m.group(gi)
     if t[1] in seen and seen[t[1]] != v:

@@ -3,6 +3,8 @@ package contracts
 import (
 	"encoding/base64"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -149,4 +151,63 @@ func TestScannerJoinsHeaderAndPayloadText(t *testing.T) {
 func plainPunctuated() string {
 	_, _, _, punctuated := plainCells()
 	return punctuated
+}
+
+func TestScannerDecodeBudget(t *testing.T) {
+	std := func(text string) string { return base64.StdEncoding.EncodeToString([]byte(text)) }
+	benign := stringDoc(t, std(strings.Repeat("note  ", 2000)))
+	findings, budget := scanFixtureBudgeted("benign", benign, false)
+	if budget.exhausted || len(findings) != 0 {
+		t.Errorf("a 16 KiB benign base64 value: exhausted=%v findings=%v", budget.exhausted, findings)
+	}
+	huge := stringDoc(t, std(strings.Repeat("note  ", 200000)))
+	findings, budget = scanFixtureBudgeted("huge", huge, false)
+	if !budget.exhausted || !strings.Contains(strings.Join(findings, "\n"), "exceeds the decode budget") {
+		t.Errorf("a 1.6 MiB base64 value must fail closed: exhausted=%v findings=%d", budget.exhausted, len(findings))
+	}
+	if budget.bytes > maxScanBytes+decodeReadingsPerRun*len(huge) {
+		t.Errorf("work after the budget ran out: %d bytes", budget.bytes)
+	}
+}
+
+func TestScannerCorpusStaysFarUnderTheDecodeBudget(t *testing.T) {
+	root := filepath.Join(ContractsDir(testRoot(t)), "examples")
+	var maxCalls, maxBytes int
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return err
+		}
+		raw, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		_, budget := scanFixtureBudgeted(path, string(raw), false)
+		maxCalls, maxBytes = max(maxCalls, budget.calls), max(maxBytes, budget.bytes)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("corpus maximum per file: %d scans (budget %d), %d bytes (budget %d)", maxCalls, maxScanCalls, maxBytes, maxScanBytes)
+	if maxCalls*4 > maxScanCalls || maxBytes*4 > maxScanBytes {
+		t.Errorf("a corpus file uses over a quarter of the decode budget: %d scans, %d bytes", maxCalls, maxBytes)
+	}
+}
+
+func TestScannerReadsStringsInsideEmbeddedJSON(t *testing.T) {
+	key, _, _, punctuated := plainCells()
+	std := func(text string) string { return base64.StdEncoding.EncodeToString([]byte(text)) }
+	embedded := func(inner string) string { return stringDoc(t, `{"alg":"EdDSA","k":`+inner+`}`) }
+	for name, content := range map[string]string{
+		"punctuated secret in an embedded JSON string": embedded(`"` + punctuated + `"`),
+		"base64 key in an embedded JSON string":        embedded(`"` + std(key) + `"`),
+	} {
+		if findings := scanFixtureContent(name, content); len(findings) == 0 {
+			t.Errorf("%s: no finding", name)
+		}
+	}
+	clean := stringDoc(t, `{"alg":"EdDSA","typ":"at+jwt","kid":"auth-example-2026-10"}`)
+	if findings := scanFixtureContent("clean", clean); len(findings) != 0 {
+		t.Errorf("an embedded header was refused: %v", findings)
+	}
 }

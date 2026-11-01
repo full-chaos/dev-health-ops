@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -220,31 +221,202 @@ func decodeCandidates(run string) []string {
 	return out
 }
 
-// scanDecoded scans text decoded from a JWS segment with the plain rules, then
-// follows what hides inside it: every string value and member name of a JSON
-// document (unescaped, so \u0041KIA is AKIA) and every base64-looking run in
-// the text and in those strings, under every alignment, to maxDecodeDepth.
-func scanDecoded(name, text string, depth int) []string {
+// maxScanCalls and maxScanBytes bound the decoding work for one fixture file. Running out FAILS the fixture:
+// a scan that stops quietly is a scan that passes while checking nothing.
+const (
+	maxScanCalls = 200000
+	maxScanBytes = 64 << 20
+	// decodeReadingsPerRun is the most decodes decodeCandidates makes for one run (4 starts x 4 trims x 4 alphabets).
+	decodeReadingsPerRun = 64
+)
+
+type scanBudget struct {
+	calls, bytes int
+	exhausted    bool
+}
+
+func (b *scanBudget) charge(bytes int) bool {
+	if b.exhausted {
+		return false
+	}
+	b.calls++
+	b.bytes += bytes
+	if b.calls > maxScanCalls || b.bytes > maxScanBytes {
+		b.exhausted = true
+		return false
+	}
+	return true
+}
+
+// decodeCharged is decodeCandidates under the budget; it returns nothing once the budget is spent.
+func decodeCharged(budget *scanBudget, run string) []string {
+	if !budget.charge(decodeReadingsPerRun * len(run)) {
+		return nil
+	}
+	return decodeCandidates(run)
+}
+
+// lineBreakJoin is a line break plus the indent after it: how a wrapped base64 block is laid out inside one string.
+// A bare space or tab is not removed: that would join the words of prose.
+var lineBreakJoin = regexp.MustCompile(`[\r\n]+[ \t]*`)
+
+// scanWholeValue applies the entropy rule to one whole value with punctuation allowed. tokenLikeRun stops at the first
+// punctuation mark, so a printable secret such as a service password is never one run. A value qualifies only when it
+// is printable ASCII with no whitespace, which keeps prose and decoded binary out.
+func scanWholeValue(name, value string) []string {
+	if len(value) < entropyScanThreshold || embeddedJSON(value) {
+		return nil
+	}
+	for i := 0; i < len(value); i++ {
+		if value[i] < 0x21 || value[i] > 0x7e {
+			return nil
+		}
+	}
+	bits := shannonEntropyBitsPerChar(value)
+	if bits <= maxFixtureEntropyBits || !hasAllCharacterClasses(value) {
+		return nil
+	}
+	return []string{fmt.Sprintf(
+		"%s contains a high-entropy %d-character value (%.2f bits/char, ceiling %.2f, mixed case and digits, "+
+			"punctuation allowed): %.16s... Fixture values must be unmistakably synthetic",
+		name, len(value), bits, maxFixtureEntropyBits, value)}
+}
+
+// embeddedJSON reports a string value that is itself a JSON object or array (a token header stored as text); its own
+// string values are read in turn, so the whole text is not judged as one secret.
+func embeddedJSON(value string) bool {
+	return len(value) > 1 && (value[0] == '{' || value[0] == '[') && json.Valid([]byte(value))
+}
+
+// scanFollowing applies the plain rules to a string value as it is and joined across line breaks, then decodes every
+// base64 run of the joined text (under every alignment) and scans what that gives, to maxDecodeDepth.
+func scanFollowing(budget *scanBudget, name, value string, depth int) []string {
+	findings := append(scanPlain(name, value), scanWholeValue(name, value)...)
+	joined := lineBreakJoin.ReplaceAllString(value, "")
+	if joined != value {
+		findings = append(findings, scanPlain(name+" (lines joined)", joined)...)
+		findings = append(findings, scanWholeValue(name+" (lines joined)", joined)...)
+	}
+	if depth >= maxDecodeDepth {
+		return findings
+	}
+	if embeddedJSON(value) {
+		var document any
+		if json.Unmarshal([]byte(value), &document) == nil {
+			for _, inner := range jsonStrings(document, nil) {
+				findings = append(findings, scanFollowing(budget, name+" (embedded JSON)", inner, depth+1)...)
+			}
+		}
+	}
+	for _, run := range base64Run.FindAllString(joined, -1) {
+		for _, decoded := range decodeCharged(budget, run) {
+			findings = append(findings, scanDecoded(budget, name+" (base64)", decoded, depth+1)...)
+		}
+	}
+	return findings
+}
+
+// scanDecoded scans text decoded from a JWS segment or a JSON string with the plain rules, then follows what hides
+// inside it: every string value and member name of a JSON document (unescaped, so \u0041KIA is AKIA) and every
+// base64-looking run in the text and in those strings, under every alignment, to maxDecodeDepth. Decoded text that
+// is not JSON is also read field by field for a punctuated secret.
+func scanDecoded(budget *scanBudget, name, text string, depth int) []string {
+	if !budget.charge(len(text)) {
+		return nil
+	}
 	findings := scanPlain(name, text)
 	sources := []string{text}
 	var document any
 	if json.Unmarshal([]byte(text), &document) == nil {
 		for _, value := range jsonStrings(document, nil) {
 			findings = append(findings, scanPlain(name+" (JSON string)", value)...)
+			findings = append(findings, scanWholeValue(name+" (JSON string)", value)...)
 			sources = append(sources, value)
+			if depth < maxDecodeDepth && embeddedJSON(value) {
+				findings = append(findings, scanDecoded(budget, name+" (embedded JSON)", value, depth+1)...)
+			}
+		}
+	} else {
+		for _, field := range strings.Fields(text) {
+			findings = append(findings, scanWholeValue(name+" (field)", field)...)
 		}
 	}
 	if depth >= maxDecodeDepth {
 		return findings
 	}
 	for _, source := range sources {
-		for _, run := range base64Run.FindAllString(source, -1) {
-			for _, decoded := range decodeCandidates(run) {
-				findings = append(findings, scanDecoded(name+" (base64)", decoded, depth+1)...)
+		joined := lineBreakJoin.ReplaceAllString(source, "")
+		if joined != source {
+			findings = append(findings, scanPlain(name+" (lines joined)", joined)...)
+			findings = append(findings, scanWholeValue(name+" (lines joined)", joined)...)
+		}
+		for _, run := range base64Run.FindAllString(joined, -1) {
+			for _, decoded := range decodeCharged(budget, run) {
+				findings = append(findings, scanDecoded(budget, name+" (base64)", decoded, depth+1)...)
 			}
 		}
 	}
 	return findings
+}
+
+// scanJoinedSegments reads every string value of the decoded header followed by every string value of the decoded
+// payload (a key with half in each segment), under the budget. Pairs, not the concatenation of all values: merging
+// unrelated values of one segment would invent runs that no secret has.
+func scanJoinedSegments(budget *scanBudget, name, headerText, payloadText string) []string {
+	var findings []string
+	tails := orderedStringValues(payloadText)
+	for _, head := range orderedStringValues(headerText) {
+		for _, tail := range tails {
+			if !budget.charge(len(head) + len(tail)) {
+				return findings
+			}
+			joined := head + tail
+			findings = append(findings, scanPlain(name+" (token header|payload joined)", joined)...)
+			findings = append(findings, scanWholeValue(name+" (token header|payload joined)", joined)...)
+		}
+	}
+	return findings
+}
+
+// orderedStringValues is every string value (not member name) of a JSON document in
+// document order. Text that is not JSON gives nothing.
+func orderedStringValues(text string) []string {
+	type frame struct{ object, key bool }
+	decoder := json.NewDecoder(strings.NewReader(text))
+	var out []string
+	var stack []frame
+	valueDone := func() {
+		if n := len(stack); n > 0 && stack[n-1].object {
+			stack[n-1].key = true
+		}
+	}
+	for {
+		token, err := decoder.Token()
+		if err != nil {
+			return out
+		}
+		switch value := token.(type) {
+		case json.Delim:
+			switch value {
+			case '{':
+				stack = append(stack, frame{object: true, key: true})
+			case '[':
+				stack = append(stack, frame{})
+			default:
+				stack = stack[:len(stack)-1]
+				valueDone()
+			}
+		case string:
+			if n := len(stack); n > 0 && stack[n-1].object && stack[n-1].key {
+				stack[n-1].key = false
+				continue
+			}
+			out = append(out, value)
+			valueDone()
+		default:
+			valueDone()
+		}
+	}
 }
 
 func jsonStrings(node any, out []string) []string {
@@ -278,7 +450,14 @@ func scanFixtureContent(name, content string) []string {
 // scanFixtureContentWaiving is scanFixtureContent with the strict-decode
 // requirement waived for a listed fixture (hasStrictDecodeWaiver).
 func scanFixtureContentWaiving(name, content string, waiveStrictDecode bool) []string {
+	findings, _ := scanFixtureBudgeted(name, content, waiveStrictDecode)
+	return findings
+}
+
+// scanFixtureBudgeted is scanFixtureContentWaiving that also returns the decode budget it spent.
+func scanFixtureBudgeted(name, content string, waiveStrictDecode bool) ([]string, *scanBudget) {
 	var findings []string
+	budget := &scanBudget{}
 	erased := jwsShape.ReplaceAllStringFunc(content, func(token string) string {
 		segments := strings.Split(token, ".")
 		header, payload, signature := segments[0], segments[1], segments[2]
@@ -288,8 +467,8 @@ func scanFixtureContentWaiving(name, content string, waiveStrictDecode bool) []s
 		strict := headerOK && payloadOK
 		if !syntheticSignatures[signature] || (!strict && !waiveStrictDecode) {
 			for _, segment := range segments {
-				for _, decoded := range decodeCandidates(segment) {
-					findings = append(findings, scanDecoded(name+" (token segment)", decoded, 1)...)
+				for _, decoded := range decodeCharged(budget, segment) {
+					findings = append(findings, scanDecoded(budget, name+" (token segment)", decoded, 1)...)
 				}
 			}
 			return token
@@ -297,21 +476,45 @@ func scanFixtureContentWaiving(name, content string, waiveStrictDecode bool) []s
 		for _, segment := range segments {
 			findings = append(findings, scanPrefixesAndPatterns(name+" (token segment)", segment)...)
 			if !strict {
-				for _, decoded := range decodeCandidates(segment) {
-					findings = append(findings, scanDecoded(name+" (token segment)", decoded, 1)...)
+				for _, decoded := range decodeCharged(budget, segment) {
+					findings = append(findings, scanDecoded(budget, name+" (token segment)", decoded, 1)...)
 				}
 			}
 		}
 		if headerText != "" {
-			findings = append(findings, scanDecoded(name+" (token header)", headerText, 0)...)
+			findings = append(findings, scanDecoded(budget, name+" (token header)", headerText, 0)...)
 		}
 		if payloadText != "" {
-			findings = append(findings, scanDecoded(name+" (token payload)", payloadText, 0)...)
+			findings = append(findings, scanDecoded(budget, name+" (token payload)", payloadText, 0)...)
 		}
+		// A key split across the two decoded segments reads as one value only when a header value and a payload
+		// value are joined.
+		findings = append(findings, scanJoinedSegments(budget, name, headerText, payloadText)...)
 		return "SYNTHETIC-JWS"
 	})
 	findings = append(findings, scanPlain(name, erased)...)
+	findings = append(findings, scanStringValues(budget, name, erased)...)
+	if budget.exhausted {
+		findings = append(findings, fmt.Sprintf(
+			"%s exceeds the decode budget (%d scans, %d bytes): a fixture string this large cannot be read in bounded "+
+				"time and is refused rather than skipped", name, maxScanCalls, maxScanBytes))
+	}
 	sort.Strings(findings)
+	return slices.Compact(findings), budget
+}
+
+// scanStringValues reads every string value and member name of a JSON fixture as the plain rules, unescaped, joined
+// across line breaks and with its base64 decoded. A fixture that is not JSON is read as one string.
+func scanStringValues(budget *scanBudget, name, content string) []string {
+	values := []string{content}
+	var document any
+	if json.Unmarshal([]byte(content), &document) == nil {
+		values = jsonStrings(document, nil)
+	}
+	var findings []string
+	for _, value := range values {
+		findings = append(findings, scanFollowing(budget, name+" (JSON string)", value, 0)...)
+	}
 	return findings
 }
 

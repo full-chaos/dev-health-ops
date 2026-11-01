@@ -46,7 +46,7 @@ func readPage(r *http.Request, errs *pybody.Errors) pageQuery {
 // superuser without org_id).
 func (h handlers) resolveOrg(ctx context.Context, q querier, user *policy.User, param *uuid.UUID) (*uuid.UUID, *reply, error) {
 	if param != nil {
-		if !user.IsSuperuser {
+		if !user.Holds(policy.ActionAdminBilling) {
 			var member bool
 			if err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM memberships WHERE user_id = $1 AND org_id = $2)`,
 				user.ID, *param).Scan(&member); err != nil {
@@ -61,7 +61,7 @@ func (h handlers) resolveOrg(ctx context.Context, q querier, user *policy.User, 
 		}
 		return param, nil, nil
 	}
-	if user.IsSuperuser {
+	if user.Holds(policy.ActionAdminBilling) {
 		return nil, nil, nil
 	}
 	if user.OrgID != "" {

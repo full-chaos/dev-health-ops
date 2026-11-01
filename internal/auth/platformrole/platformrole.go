@@ -79,16 +79,17 @@ func (a Authority) IsOwner() bool {
 	return false
 }
 
-// Allows reports whether a held role allows action and action is a platform
-// action of the catalog. An organization action is never allowed.
+// Allows reports whether a held role allows action. rule.Platform is the one
+// resolver of what a platform role holds; the catalog must also know the
+// action as a platform action, so an action the catalog lacks, or an
+// organization action, is never allowed.
 func (a Authority) Allows(action string) bool {
-	catalog := policycatalog.Default()
-	act, err := catalog.Action(action)
+	act, err := policycatalog.Default().Action(action)
 	if err != nil || act.Scope != policycatalog.ScopePlatform {
 		return false
 	}
 	for _, role := range a.roles {
-		if catalog.Allows(role, action) {
+		if rule.PlatformOfRole(role).Has(action) {
 			return true
 		}
 	}

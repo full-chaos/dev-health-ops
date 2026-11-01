@@ -46,8 +46,9 @@ func TestScannerDecodesBase64InPlainJSONStringValues(t *testing.T) {
 		}
 		return text
 	}
-	urlOnly := rawURL(key + "~~~?>>")
-	if !strings.ContainsAny(urlOnly, "-_") {
+	urlOnly := rawURL(key + "~~~?>>" + key)
+	// The URL-only characters sit in the middle: no start or trim offset removes them, so only a URL decoding reads it.
+	if mid := urlOnly[4 : len(urlOnly)-4]; !strings.ContainsAny(mid, "-_") {
 		t.Fatal("the URL-alphabet control no longer uses the URL alphabet")
 	}
 	hidden := map[string]string{
@@ -129,6 +130,10 @@ func TestScannerJoinsHeaderAndPayloadText(t *testing.T) {
 	hidden := map[string]string{
 		"random key split across header and payload": token(
 			`{"alg":"HS256","k":"`+random[:half]+`"}`, `{"v":"`+random[half:]+`"}`),
+		"random key split across a later header value and a later payload value": token(
+			`{"alg":"HS256","typ":"JWT","k":"`+random[:half]+`"}`, `{"iss":"https://auth.example.test","v":"`+random[half:]+`"}`),
+		"random secret inside prose in the payload": token(
+			`{"alg":"HS256"}`, `{"note":"the secret is `+random+` ok"}`),
 		"prefix split across header and payload": token(
 			`{"alg":"HS256","k":"`+key[:3]+`"}`, `{"v":"`+key[3:]+`"}`),
 		"punctuated secret in the payload": `{"access_token":"` +
@@ -209,5 +214,21 @@ func TestScannerReadsStringsInsideEmbeddedJSON(t *testing.T) {
 	clean := stringDoc(t, `{"alg":"EdDSA","typ":"at+jwt","kid":"auth-example-2026-10"}`)
 	if findings := scanFixtureContent("clean", clean); len(findings) != 0 {
 		t.Errorf("an embedded header was refused: %v", findings)
+	}
+}
+
+func TestScannerEmbeddedJSONDepthBoundIsExact(t *testing.T) {
+	_, _, _, punctuated := plainCells()
+	text := punctuated
+	for layers := 1; layers <= 5; layers++ {
+		inner, err := json.Marshal(map[string]string{"k": text})
+		if err != nil {
+			t.Fatal(err)
+		}
+		text = string(inner)
+		found := len(scanFixtureContent("nested", stringDoc(t, text))) > 0
+		if want := layers <= maxDecodeDepth; found != want {
+			t.Errorf("%d embedded JSON layers: found=%v, want %v", layers, found, want)
+		}
 	}
 }

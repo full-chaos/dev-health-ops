@@ -113,6 +113,26 @@ func TestPushLifecycleWriterProvisioningWithANonSuperuserMigrator(t *testing.T) 
 			t.Fatalf("the schema ACL shows CREATE for the writer: %s", acl)
 		}
 	})
+	t.Run("a function owned by another role is a posture violation", func(t *testing.T) {
+		const fn = "auth.append_external_push_lifecycle_event(text, text, jsonb, jsonb)"
+		mustExec(t, ctx, admin, fmt.Sprintf("ALTER FUNCTION %s OWNER TO %s", fn, Quote(mustValidatedIdentifier(runtimeRole))))
+		defer mustExec(t, ctx, admin, fmt.Sprintf("ALTER FUNCTION %s OWNER TO %s", fn, Quote(mustValidatedIdentifier(writerRole))))
+		conn, err := poolAdapter{mig}.Acquire(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Release()
+		violations, err := pushWriterViolations(ctx, conn, options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, v := range violations {
+			if v.Kind == "function" && v.Privilege == "OWNER" && strings.Contains(v.Detail, "does not own the append function") {
+				return
+			}
+		}
+		t.Fatalf("no owner violation for a function the writer does not own: %+v", violations)
+	})
 }
 
 func mustExec(t *testing.T, ctx context.Context, pool *pgxpool.Pool, sql string) {

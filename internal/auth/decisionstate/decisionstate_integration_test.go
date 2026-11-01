@@ -375,3 +375,36 @@ func TestReadFailureIsAStoreError(t *testing.T) {
 		t.Fatalf("Read on a cancelled context: %v, want ErrStore", err)
 	}
 }
+
+func TestSessionReadsTheDelegationColumns(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	target, actor, org := e.user(t, ctx, true, false), e.user(t, ctx, true, false), e.org(t, ctx)
+	var base, delegated uuid.UUID
+	if err := e.admin.QueryRow(ctx, `INSERT INTO auth.sessions (principal_id, token_hash, expires_at, legacy_token_version)
+VALUES ($1, $2, now() + interval '1 hour', 0) RETURNING id`, actor, []byte(uuid.NewString())).Scan(&base); err != nil {
+		t.Fatalf("seed base session: %v", err)
+	}
+	if err := e.admin.QueryRow(ctx, `INSERT INTO auth.sessions (principal_id, token_hash, expires_at, legacy_token_version,
+organization_id, actor_principal_id, delegated_from_session_id, delegation_reason, delegation_permitted_actions)
+VALUES ($1, $2, now() + interval '10 minutes', 0, $3, $4, $5, 'support', ARRAY['analytics.read']) RETURNING id`,
+		target, []byte(uuid.NewString()), org, actor, base).Scan(&delegated); err != nil {
+		t.Fatalf("seed delegated session: %v", err)
+	}
+	for name, c := range map[string]struct {
+		id        uuid.UUID
+		delegated bool
+	}{"plain": {base, false}, "delegated": {delegated, true}} {
+		var s authapi.DecisionSession
+		if err := e.reader.Read(ctx, func(tx authapi.DecisionTx) error {
+			var err error
+			s, err = tx.Session(ctx, c.id)
+			return err
+		}); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if !s.Found || !s.Live || s.HasActor != c.delegated || s.HasDelegatedFrom != c.delegated {
+			t.Errorf("%s: %+v, want delegated %v", name, s, c.delegated)
+		}
+	}
+}

@@ -62,9 +62,17 @@ func ensureSchemaAndVersionTable(ctx context.Context, conn querier, options Opti
 	// the zero is real by removing one annotation and watching exactly one finding
 	// return -- otherwise a rule that stopped matching reads identically to a
 	// suppression that works.
-	// nosemgrep: go.lang.security.audit.sqli.pgx-sqli.pgx-sqli
-	if _, err := conn.Exec(ctx, `CREATE SCHEMA IF NOT EXISTS `+schema); err != nil {
-		return fmt.Errorf("%w: creating schema", ErrMigrationFailed)
+	// A schema that exists is not created again: CREATE SCHEMA IF NOT EXISTS asks for CREATE on the database first, and
+	// the migrator that owns a schema made for it by a privileged step holds no such privilege.
+	var schemaExists bool
+	if err := conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1)`, options.Schema).Scan(&schemaExists); err != nil {
+		return fmt.Errorf("%w: looking for the schema", ErrMigrationFailed)
+	}
+	if !schemaExists {
+		// nosemgrep: go.lang.security.audit.sqli.pgx-sqli.pgx-sqli
+		if _, err := conn.Exec(ctx, `CREATE SCHEMA IF NOT EXISTS `+schema); err != nil {
+			return fmt.Errorf("%w: creating schema", ErrMigrationFailed)
+		}
 	}
 	// PostgreSQL cannot bind an IDENTIFIER, so a schema/table name must reach the
 	// statement as text. What makes that safe is no longer an ordering a reader

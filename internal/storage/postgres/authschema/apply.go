@@ -93,6 +93,10 @@ type Options struct {
 	// each session reader role also holds PlatformRoleReaderColumns. Off, it
 	// holds the session read alone; turning it off is a narrowing.
 	PlatformRolesOwned bool
+	// SchemaOwnerRole pins the owner of the auth schema and of every object in it (AUTH_SCHEMA_OWNER_ROLE). Set, each
+	// apply and grants run refuses a schema with an object owned by any other role, and a pinned role that is a
+	// superuser or can create roles. Empty means the pin is off (a dev stack whose migrator is a superuser).
+	SchemaOwnerRole string
 	// LockTimeout bounds how long one migration's transaction waits for a
 	// lock. Zero means DefaultMigrationLockTimeout; see the lock policy.
 	LockTimeout time.Duration

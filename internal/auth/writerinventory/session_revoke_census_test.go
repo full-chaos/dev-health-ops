@@ -20,11 +20,13 @@ var sessionRevokeSites = map[string]string{
 }
 
 // principalDisableSites write auth.principals.disabled_at. A disabled user's
-// delegated sessions end there; a workload never holds a platform role.
+// delegated sessions end there; a workload or a service account is never the
+// actor or the target of a delegation.
 var principalDisableSites = map[string]string{
-	"internal/auth/identity/store.go":  "the projection ends the actor's delegated sessions",
-	"internal/auth/workload/store.go":  "exempt: rule.ActiveRule admits user principals only",
-	"internal/auth/workload/enable.go": "exempt: sets disabled_at NULL only",
+	"internal/auth/identity/store.go":       "the projection ends the actor's delegated sessions",
+	"internal/auth/serviceaccount/store.go": "exempt: kind service_account only (store.go:330); Start refuses a non-user actor and target",
+	"internal/auth/workload/store.go":       "exempt: rule.ActiveRule admits user principals only",
+	"internal/auth/workload/enable.go":      "exempt: sets disabled_at NULL only",
 }
 
 var sessionRevokeWrite = regexp.MustCompile(`(?s)\.sessions\s+SET\s+revoked_at`)

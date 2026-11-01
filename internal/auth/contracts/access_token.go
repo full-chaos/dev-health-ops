@@ -81,7 +81,14 @@ type AccessTokenClaims struct {
 	Nbf           int64   `json:"nbf"`
 	Exp           int64   `json:"exp"`
 	OrgID         *string `json:"org_id,omitempty"`
-	Scope         string  `json:"scope"`
+	// Act is present only on a delegated token: the real actor (G-49).
+	Act   *AccessTokenActor `json:"act,omitempty"`
+	Scope string            `json:"scope"`
+}
+
+// AccessTokenActor is the act claim of a delegated access-token.v1 token.
+type AccessTokenActor struct {
+	Sub string `json:"sub"`
 }
 
 // AccessToken is one access-token.v1 document.

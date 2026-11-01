@@ -28,6 +28,7 @@ type fakeServiceAccounts struct {
 	actor     serviceaccount.Actor
 	newOwner  uuid.UUID
 	locked    serviceaccount.Locked
+	fakeKeys
 }
 
 func (f *fakeServiceAccounts) run(verb string, a serviceaccount.Actor, l serviceaccount.Locked) error {
@@ -77,6 +78,7 @@ func (f *fakeServiceAccounts) Lookup(_ context.Context, id uuid.UUID) (*servicea
 
 func (f *provFixture) account() { // the account the disable, enable and owner routes name
 	f.sa.info = serviceaccount.Info{ID: uuid.New(), OrgID: f.org, Name: "ci-bot", Active: true, Owner: f.owner, OwnerEnabled: true, OwnerMember: true}
+	seedKey(f)
 }
 
 func serviceAccountCases() []routeCase {

@@ -92,12 +92,6 @@ func expectMalformed(t *testing.T, r *httptest.ResponseRecorder) {
 func TestDelegatedRoutesAreDarkWithoutTheirRows(t *testing.T) {
 	f, record := startFixture(t)
 	body := delegatedBody(f, f.record.ID)
-	if r := f.do(http.MethodPost, PatternDelegatedSession, body, issuerBearer); r.Code != http.StatusNotFound {
-		t.Fatalf("embedded document: %d, want 404", r.Code)
-	}
-	if !strings.Contains(f.logs.String(), "auth delegated routes not mounted") || !strings.Contains(f.logs.String(), PatternDelegatedSession) {
-		t.Fatalf("no line names the unmounted route: %s", f.logs)
-	}
 	for name, rows := range map[string][]byte{
 		"no rows":     []byte(`{"rows":[]}`),
 		"start only":  []byte(`{"rows":[` + delegatedRow(PatternDelegatedSession) + `]}`),
@@ -111,6 +105,22 @@ func TestDelegatedRoutesAreDarkWithoutTheirRows(t *testing.T) {
 		if r := postDelegated(server, PatternDelegatedSessionEnd, `{"session_id":"`+record.ID.String()+`"}`, issuerBearer); r.Code != http.StatusNotFound {
 			t.Errorf("%s: end %d, want 404", name, r.Code)
 		}
+	}
+	if !strings.Contains(f.logs.String(), "auth delegated routes not mounted") || !strings.Contains(f.logs.String(), PatternDelegatedSession) {
+		t.Fatalf("no line names the unmounted route: %s", f.logs)
+	}
+}
+
+func TestDelegatedRoutesMountFromTheEmbeddedRows(t *testing.T) {
+	f, record := startFixture(t)
+	if r := f.do(http.MethodPost, PatternDelegatedSession, delegatedBody(f, f.record.ID), issuerBearer); r.Code != http.StatusCreated {
+		t.Fatalf("start %d: %s", r.Code, r.Body)
+	}
+	if r := f.do(http.MethodPost, PatternDelegatedSessionEnd, `{"session_id":"`+record.ID.String()+`"}`, issuerBearer); r.Code != http.StatusNoContent {
+		t.Fatalf("end %d: %s", r.Code, r.Body)
+	}
+	if strings.Contains(f.logs.String(), "auth delegated routes not mounted") {
+		t.Fatalf("the routes are mounted but a line says they are not: %s", f.logs)
 	}
 }
 

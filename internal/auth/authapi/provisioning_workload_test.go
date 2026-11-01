@@ -30,7 +30,8 @@ func newProvWorkloadFixture(t *testing.T) *provWorkloadFixture {
 // other provisioning route refuses it.
 var workloadRouteOps = []string{opMembershipAdd, opMembershipRole, opMembershipRemove, opMembershipTransfer,
 	opInviteCreate, opInviteAccept, opOrgDeprovision, opOrgReactivate, opOrgState, opOrgOnboard, opOrgCreate,
-	opServiceAccountCreate, opServiceAccountDisable, opServiceAccountEnable, opServiceAccountOwner}
+	opServiceAccountCreate, opServiceAccountDisable, opServiceAccountEnable, opServiceAccountOwner,
+	opServiceAccountKeyIssue, opServiceAccountKeyRotate, opServiceAccountKeyRevoke, opServiceAccountKeyList}
 
 // workloadRouteCases and offWorkloadRouteCases split routeCases by workloadRouteOps.
 func workloadRouteCases() []routeCase { return routeCasesWhere(true) }
@@ -66,7 +67,8 @@ func callerOf(f *provFixture, op string) audit.Caller {
 		return f.reactivate.actor.Caller
 	case opOrgSuspend:
 		return f.reactivate.sactor.Caller
-	case opServiceAccountCreate, opServiceAccountDisable, opServiceAccountEnable, opServiceAccountOwner:
+	case opServiceAccountCreate, opServiceAccountDisable, opServiceAccountEnable, opServiceAccountOwner,
+		opServiceAccountKeyIssue, opServiceAccountKeyRotate, opServiceAccountKeyRevoke:
 		return f.sa.actor.Caller
 	case opOrgOnboard:
 		return f.orgs.onboard.Caller
@@ -93,7 +95,7 @@ func TestProvisioningRoutesAcceptTheGoAPIWorkloadToken(t *testing.T) {
 		if got, _ := f.uses(c.op); got != 0 {
 			t.Fatalf("%s: compat uses = %d after a workload call, want 0", c.op, got)
 		}
-		if c.op == opOrgState {
+		if c.op == opOrgState || c.op == opServiceAccountKeyList {
 			continue // a read-only route: no actor, no verb caller, no audit row
 		}
 		caller := callerOf(f.provFixture, c.op)
@@ -117,7 +119,7 @@ func TestProvisioningServiceCredentialCallerIsTheCredentialRow(t *testing.T) {
 		if got, _ := f.uses(c.op); got != 1 {
 			t.Fatalf("%s: compat uses = %d, want 1", c.op, got)
 		}
-		if c.op == opOrgState {
+		if c.op == opOrgState || c.op == opServiceAccountKeyList {
 			continue // a read-only route: no actor, no verb caller, no audit row
 		}
 		caller := callerOf(f.provFixture, c.op)

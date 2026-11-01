@@ -56,7 +56,7 @@ const (
 
 var provisioningOperations = []string{opMembershipAdd, opMembershipRole, opMembershipRemove, opMembershipTransfer,
 	opInviteCreate, opInviteAccept, opOrgDeprovision, opOrgReactivate, opOrgSuspend, opInviteRevoke, opOrgState, opOrgOnboard, opOrgCreate,
-	opServiceAccountCreate, opServiceAccountDisable, opServiceAccountEnable, opServiceAccountOwner}
+	opServiceAccountCreate, opServiceAccountDisable, opServiceAccountEnable, opServiceAccountOwner, opServiceAccountKeyIssue, opServiceAccountKeyRotate, opServiceAccountKeyRevoke, opServiceAccountKeyList}
 
 // Provisioning refusal codes beyond the shared ones.
 const (
@@ -217,6 +217,7 @@ func ProvisioningRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 	}
 	routes = h.withStateRoute(routes, rows)
 	routes = h.withGrantRoutes(routes, rows)
+	routes = h.withServiceAccountKeyRoutes(routes, rows)
 	return routes, nil
 }
 
@@ -250,7 +251,8 @@ func (h provisioningHandlers) admitUpTo(w http.ResponseWriter, r *http.Request, 
 // suspend among them) refuses a workload token before the key set is read.
 var workloadOperations = map[string]bool{opMembershipAdd: true, opMembershipRole: true, opMembershipRemove: true,
 	opMembershipTransfer: true, opInviteCreate: true, opInviteAccept: true, opOrgDeprovision: true, opOrgReactivate: true, opOrgOnboard: true, opOrgCreate: true, opOrgState: true,
-	opServiceAccountCreate: true, opServiceAccountDisable: true, opServiceAccountEnable: true, opServiceAccountOwner: true}
+	opServiceAccountCreate: true, opServiceAccountDisable: true, opServiceAccountEnable: true, opServiceAccountOwner: true,
+	opServiceAccountKeyIssue: true, opServiceAccountKeyRotate: true, opServiceAccountKeyRevoke: true, opServiceAccountKeyList: true}
 
 // caller authorizes the bearer, its class read from the text before any store
 // or key-set read: the session issuer credential holding memberships:write

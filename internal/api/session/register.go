@@ -97,7 +97,7 @@ func (h handlers) register(w http.ResponseWriter, r *http.Request) {
 	input, _ := r.Context().Value(registerInputKey{}).(registerInput)
 	ctx := r.Context()
 	email := pythonparity.Strip(pythonparity.Lower(input.email))
-	if violations := passwordpolicy.Validate(input.password); len(violations) > 0 {
+	if violations := passwordpolicy.ValidateForHash(input.password); len(violations) > 0 {
 		refuseViolations(w, http.StatusUnprocessableEntity, "Password validation failed", violations)
 		return
 	}

@@ -81,11 +81,12 @@ type txReader struct {
 func (t *txReader) table(name string) string { return authschema.Quote(t.r.schema) + "." + name }
 
 // Session reads the session row: live when not revoked and not expired at the
-// transaction's clock.
+// transaction's clock, and whether it names an actor or a delegating session.
 func (t *txReader) Session(ctx context.Context, sessionID uuid.UUID) (authapi.DecisionSession, error) {
 	var s authapi.DecisionSession
-	err := t.tx.QueryRow(ctx, `SELECT principal_id, revoked_at IS NULL AND expires_at > now() FROM `+t.table("sessions")+` WHERE id = $1`,
-		sessionID).Scan(&s.PrincipalID, &s.Live)
+	err := t.tx.QueryRow(ctx, `SELECT principal_id, revoked_at IS NULL AND expires_at > now(),
+actor_principal_id IS NOT NULL, delegated_from_session_id IS NOT NULL FROM `+t.table("sessions")+` WHERE id = $1`,
+		sessionID).Scan(&s.PrincipalID, &s.Live, &s.HasActor, &s.HasDelegatedFrom)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		return authapi.DecisionSession{}, nil

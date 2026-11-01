@@ -46,6 +46,23 @@ type DecisionSession struct {
 	// Live is true when the session is neither revoked nor expired at the
 	// transaction's clock.
 	Live bool
+	// HasActor and HasDelegatedFrom are true when the row names a real actor
+	// or a delegating session: an impersonation session.
+	HasActor         bool
+	HasDelegatedFrom bool
+}
+
+// delegated reports an impersonation session. The decision core's delegation
+// rules are not wired to this route yet, so such a reference is denied with
+// delegation_invalid instead of being decided as the plain target user.
+func (s DecisionSession) delegated() bool { return s.HasActor || s.HasDelegatedFrom }
+
+// delegatedSnapshot makes the decision core deny every request with
+// delegation_invalid: a delegation with an empty actor chain.
+type delegatedSnapshot struct{ authorization.GrantSnapshot }
+
+func (delegatedSnapshot) Delegation() (authorization.Delegation, bool) {
+	return authorization.Delegation{}, true
 }
 
 // DecisionTx reads decision state inside one read-only transaction. Every
@@ -242,7 +259,8 @@ func (h authorizeHandlers) decide(w http.ResponseWriter, r *http.Request, op str
 // evaluate checks each referenced session once, then decides each item over
 // its (principal, organization) snapshot, read once per pair.
 func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved map[string]ReferencedPrincipal, items []authorizeItem) error {
-	for _, p := range resolved {
+	delegatedRefs := map[string]bool{}
+	for ref, p := range resolved {
 		sid, err := session.ParseWireSessionID(p.SessionID)
 		if err != nil {
 			return errAuthorizeReferenceRefused
@@ -254,20 +272,25 @@ func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved
 		if !s.Found || !s.Live || s.PrincipalID != p.ID {
 			return errAuthorizeReferenceRefused
 		}
+		delegatedRefs[ref] = s.delegated()
 	}
 	type pair struct {
 		principal uuid.UUID
 		org       string
+		delegated bool
 	}
 	snapshots := map[pair]authorization.GrantSnapshot{}
 	for i := range items {
 		q := items[i].question
-		key := pair{items[i].principal.ID, q.OrganizationID}
+		key := pair{items[i].principal.ID, q.OrganizationID, delegatedRefs[q.PrincipalReference]}
 		snap, ok := snapshots[key]
 		if !ok {
 			var err error
 			if snap, err = tx.Snapshot(ctx, key.principal, key.org); err != nil {
 				return err
+			}
+			if key.delegated {
+				snap = delegatedSnapshot{snap}
 			}
 			snapshots[key] = snap
 		}

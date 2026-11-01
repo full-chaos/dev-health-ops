@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"runtime/debug"
 	"slices"
 	"sort"
 	"strings"
@@ -99,9 +100,18 @@ type reachStats struct {
 	peakRSSMiB      int64
 }
 
+// reachHeapLimit is the soft memory limit of a reach computation. Its live heap peaks near 6.5 GiB (the SSA program of
+// the module and its dependencies, which keeps their syntax and type information); without a limit the GC lets the
+// heap grow to twice that, up to the caller's GOMEMLIMIT. A lower GOMEMLIMIT of the caller stays.
+const reachHeapLimit = 8 << 30
+
 // reachRows computes the reach.tsv rows of the code-scope sites of reads under root.
 func reachRows(root string, reads []Read) (map[string]bool, reachStats, error) {
 	start := time.Now()
+	if limit := debug.SetMemoryLimit(-1); limit > reachHeapLimit {
+		debug.SetMemoryLimit(reachHeapLimit)
+		defer debug.SetMemoryLimit(limit)
+	}
 	sites := codeSites(reads)
 	rows := map[string]bool{}
 	st := reachStats{sites: len(sites)}

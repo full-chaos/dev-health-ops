@@ -78,14 +78,14 @@ type Signer interface {
 	Sign(ctx context.Context, typ string, payload []byte) (token, kid string, err error)
 }
 
-// Impersonation reads one side of an impersonation: whether principal is the
-// impersonating ACTOR (the admin) of an active impersonation session, an
-// impersonation_sessions row with admin_user_id = principal that has not
-// ended and has not expired. The target of an impersonation is not that side,
-// and this check does not refuse it (acp's ruling on the O2 plan, condition 2).
-// A read error is returned as an error, never as false.
+// Impersonation is the one actor check, for authorize (the web session) and the
+// mint (the grant's session): whether principal is on the ACTOR side of an
+// impersonation, or session is delegated (PGImpersonation has the three reads).
+// The target of an impersonation is not that side, and this check does not
+// refuse it (acp's rulings on the O2 and O3 plans). A read error is returned as
+// an error, never as false.
 type Impersonation interface {
-	ImpersonatingActor(ctx context.Context, principal uuid.UUID) (bool, error)
+	ImpersonatingActor(ctx context.Context, principal, session uuid.UUID) (bool, error)
 }
 
 // Config builds a Minter. Signer, IssuerURL and Impersonation are required.
@@ -180,7 +180,7 @@ func (m *Minter) Mint(ctx context.Context, r Request) (string, string, error) {
 	if lifetime < time.Second || lifetime > contracts.AccessTokenLifetimeCeiling || lifetime%time.Second != 0 {
 		return m.refuse(ctx, label, r, OutcomeRefusedLifetime, ErrLifetime)
 	}
-	impersonating, err := m.impersonation.ImpersonatingActor(ctx, r.PrincipalID)
+	impersonating, err := m.impersonation.ImpersonatingActor(ctx, r.PrincipalID, r.SessionID)
 	if err != nil {
 		return m.refuse(ctx, label, r, OutcomeImpersonationUnavailable, ErrImpersonationUnavailable)
 	}

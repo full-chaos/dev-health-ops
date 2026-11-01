@@ -625,6 +625,7 @@ func PlanReads(args []string, stdout, stderr io.Writer) int {
 	reachFresh := fs.Bool("reach-cache-fresh", false, "with --reach-cache: never read the store; compute, and store a green result (merge queue and main pushes)")
 	listSpreads := fs.Bool("list-unresolved-spreads", false, "print file:line of every exec whose spread arguments the scan cannot resolve, and exit")
 	printKey := fs.Bool("print-reach-key", false, "print the input hash of the call graph and exit")
+	budget := fs.Int64("reach-budget-mib", reachBudgetMiB, "fail when a reach computation's peak RSS is over this many MiB")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -684,6 +685,10 @@ func PlanReads(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		printReachStats(stdout, st)
+		if err := checkReachBudget(st, *budget); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
 	}
 	t, err := loadTables(dir)
 	if err != nil {
@@ -692,7 +697,7 @@ func PlanReads(args []string, stdout, stderr io.Writer) int {
 	}
 	g := checkReads(*root, t, reads)
 	if *checkCallGraph && !*write {
-		defects, err := checkReachStored(*root, *reachCache, *reachFresh, t, reads, len(g.defects) == 0, stdout)
+		defects, err := checkReachStored(*root, *reachCache, *reachFresh, *budget, t, reads, len(g.defects) == 0, stdout)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -726,7 +731,7 @@ func PlanReads(args []string, stdout, stderr io.Writer) int {
 
 // checkReachStored is checkReach with the reach store of --reach-cache: a store of the same input hash stands in for the
 // computation and is compared with reach.tsv like it; a green computed run stores its rows. Any doubt recomputes.
-func checkReachStored(root, cacheDir string, fresh bool, t *tables, reads []Read, readsGreen bool, stdout io.Writer) ([]string, error) {
+func checkReachStored(root, cacheDir string, fresh bool, budgetMiB int64, t *tables, reads []Read, readsGreen bool, stdout io.Writer) ([]string, error) {
 	key := ""
 	if cacheDir != "" {
 		k, err := reachKey(root)
@@ -751,6 +756,9 @@ func checkReachStored(root, cacheDir string, fresh bool, t *tables, reads []Read
 		return nil, err
 	}
 	printReachStats(stdout, st)
+	if err := checkReachBudget(st, budgetMiB); err != nil {
+		return nil, err
+	}
 	defects := reachDefects(t, want)
 	if key != "" {
 		fmt.Fprintf(stdout, "plan-reads: reach: computed for input hash %s\n", key)
@@ -761,6 +769,19 @@ func checkReachStored(root, cacheDir string, fresh bool, t *tables, reads []Read
 		}
 	}
 	return defects, nil
+}
+
+// reachBudgetMiB is the peak RSS a reach computation may use (--reach-budget-mib). The static leg runs it in 16 GiB: a
+// hosted runner, or on bigboy the host's capped.sh scope (MemoryMax 16G, GOMEMLIMIT 85% of it); a 10 GiB peak keeps
+// >= 30% of that free for GC lag under host load. A run over it fails: cut the heap before raising the budget.
+const reachBudgetMiB = 10 << 10
+
+// checkReachBudget fails a reach computation whose own peak RSS is over budgetMiB.
+func checkReachBudget(st reachStats, budgetMiB int64) error {
+	if st.peakRSSMiB > budgetMiB {
+		return fmt.Errorf("plan-reads: reach: peak RSS %d MiB is over the reach memory budget of %d MiB (reachBudgetMiB, internal/cigates/affected/scan.go): cut the reach heap before raising the budget", st.peakRSSMiB, budgetMiB)
+	}
+	return nil
 }
 
 func printReachStats(w io.Writer, st reachStats) {

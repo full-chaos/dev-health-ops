@@ -22,7 +22,9 @@ import (
 // usersOwnedPublicGrant reports whether g, a direct grant of the runtime role
 // on a public table (g.Object is the bare table name), is one the users-owned
 // switch gives: UsersWriteGrant, RegisterOrganizationGrants or
-// LegacyLinkPurgeGrants. A grant held WITH GRANT OPTION never is.
+// LegacyLinkPurgeGrants, or the OrganizationWriteGrants of the orgs-owned
+// switch (the 5->4 flip-back keeps them the same way). A grant held WITH GRANT
+// OPTION never is.
 func usersOwnedPublicGrant(g GrantRecord) bool {
 	if g.Grantable {
 		return false
@@ -31,7 +33,8 @@ func usersOwnedPublicGrant(g GrantRecord) bool {
 	case "relation":
 		return g.Privilege == "DELETE" && (isLegacyLinkPurgeTable(g.Object) || isMembershipWriteDelete(g.Object))
 	case "column":
-		if isMembershipWriteColumn(g.Object, g.Privilege, g.Column) || isInviteWriteColumn(g.Object, g.Privilege, g.Column) {
+		if isMembershipWriteColumn(g.Object, g.Privilege, g.Column) || isInviteWriteColumn(g.Object, g.Privilege, g.Column) ||
+			isOrganizationWriteColumn(g.Object, g.Privilege, g.Column) {
 			return true
 		}
 		if g.Object == "users" {

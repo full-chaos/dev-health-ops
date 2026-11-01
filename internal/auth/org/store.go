@@ -30,6 +30,9 @@ type Config struct {
 	Sessions SessionEnder
 	Logger   *slog.Logger
 	Meter    metric.Meter
+	// OwnsOrgs is AUTH_ORGS_OWNED: each verb also writes go-api's
+	// public.organizations name and is_active in its commit.
+	OwnsOrgs bool
 }
 
 // SessionEnder ends an organization's credentials inside a verb's transaction.
@@ -54,6 +57,7 @@ type Store struct {
 	q         string
 	commit    func(context.Context, audit.Mutation) error
 	sessions  SessionEnder
+	ownsOrgs  bool
 	logger    *slog.Logger
 	mutations metric.Int64Counter
 }
@@ -65,7 +69,7 @@ func New(cfg Config) (*Store, error) {
 	if cfg.Schema.String() == "" {
 		return nil, errors.New("org: no auth schema")
 	}
-	s := &Store{pool: cfg.Pool, q: authschema.Quote(cfg.Schema), sessions: cfg.Sessions, logger: cfg.Logger}
+	s := &Store{pool: cfg.Pool, q: authschema.Quote(cfg.Schema), sessions: cfg.Sessions, ownsOrgs: cfg.OwnsOrgs, logger: cfg.Logger}
 	s.commit = func(ctx context.Context, m audit.Mutation) error { return audit.Commit(ctx, cfg.Pool, cfg.Schema, m) }
 	if s.logger == nil {
 		s.logger = slog.Default()
@@ -149,6 +153,21 @@ func (s *Store) Rename(ctx context.Context, id uuid.UUID, name string, ifRevisio
 	}
 	_, err = s.mutate(ctx, verbRename, id, n, ifRevision, a, nil)
 	return err
+}
+
+// RenameAuthorized is Rename for a caller that must authorize the actor under
+// the row lock, as ReactivateAuthorized. changed is false when the name is
+// already the current one.
+func (s *Store) RenameAuthorized(ctx context.Context, id uuid.UUID, name string, ifRevision *int64, a Actor, authz Authorize) (changed bool, err error) {
+	n, err := NormalizeName(name)
+	if err == nil && authz == nil {
+		err = ErrDenied
+	}
+	if err != nil {
+		s.record(ctx, verbRename, err)
+		return false, err
+	}
+	return s.mutate(ctx, verbRename, id, n, ifRevision, a, authz)
 }
 
 // Suspend sets disabled_at. A repeat is a no-op.

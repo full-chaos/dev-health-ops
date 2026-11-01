@@ -272,7 +272,7 @@ func provisioningRoutesOver(t *testing.T, rows []byte, workload *SessionIssueWor
 func TestProvisioningRoutesMountOnlyOnRowsAcceptingEveryAdmittedClass(t *testing.T) {
 	workload := newWorkloadIssueFixture(t).workload
 	// Dark routes (the org state read and the key routes) are not on the startup gate: they mount only on a row.
-	dark := append([]string{PatternOrgState}, keyPatterns...)
+	dark := append([]string{PatternOrgState, PatternOrgRename}, keyPatterns...)
 	for op, pattern := range provisioningRouteOps {
 		issuerOnly := plantClasses(t, pattern, serviceSessionIssuerClass)
 		both := plantClasses(t, pattern, serviceSessionIssuerClass, workloadTokenClass)
@@ -323,6 +323,7 @@ func TestProvisioningRouteOpsCoverTheRoutes(t *testing.T) {
 	}
 	patterns = append(patterns, PatternOrgState)
 	patterns = append(patterns, keyPatterns...)
+	patterns = append(patterns, PatternOrgRename)
 	var mapped []string
 	var ops []string
 	for op, pattern := range provisioningRouteOps {

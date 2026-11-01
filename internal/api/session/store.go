@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/usersowned"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 )
 
 // errMultipleRows is SQLAlchemy's MultipleResultsFound from
@@ -30,7 +31,15 @@ type userRow struct {
 	IsActive       bool
 	IsVerified     bool
 	IsSuperuser    bool
-	TokenVersion   int64
+	// Platform is the platform action set held when it is not the one
+	// IsSuperuser means; nil carries only the flag.
+	Platform     *rule.Platform
+	TokenVersion int64
+}
+
+// Holds reports whether the user holds the platform action now.
+func (u *userRow) Holds(action string) bool {
+	return rule.Holds(u.Platform, u.IsSuperuser, action)
 }
 
 const userColumns = `id, email, username, full_name, password_hash, auth_provider, auth_provider_id,

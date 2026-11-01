@@ -43,7 +43,7 @@ func EffectiveOrgID(ctx context.Context, user *User) string {
 	if user == nil {
 		return ""
 	}
-	if user.IsSuperuser {
+	if user.Holds(ActionAdminImpersonate) {
 		if session := ImpersonationFrom(ctx); session != nil {
 			return session.TargetOrgID.String()
 		}
@@ -174,7 +174,7 @@ func (s *Scope) OrgScope(next http.Handler) http.Handler {
 
 // mayUseOrg is OrgIdMiddleware's acceptance rule for a requested org.
 func (s *Scope) mayUseOrg(ctx context.Context, user *User, orgID string) (bool, error) {
-	if user.IsSuperuser || orgID == user.OrgID {
+	if user.Holds(ActionAdminOrgs) || orgID == user.OrgID {
 		return true, nil
 	}
 	return s.auth.IsMember(ctx, user.UserID, orgID)
@@ -310,7 +310,7 @@ func (s *Scope) ReadsPlatformRoles() bool { return s.auth != nil && s.auth.store
 // unavailable) or 500, never a pass and never the refusal of a member. Behind
 // ReadOnce the route's guard gets the same read's answer.
 func (s *Scope) useTokenOrg(w http.ResponseWriter, r *http.Request, user *User) bool {
-	if user.IsSuperuser {
+	if user.Holds(ActionAdminOrgs) {
 		return true
 	}
 	_, standing, err := s.auth.tokenOrgMembership(r.Context(), user.UserID, user.OrgID)

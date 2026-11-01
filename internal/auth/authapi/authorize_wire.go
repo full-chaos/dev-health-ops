@@ -25,11 +25,6 @@ var authorizeStateFailures = []authorization.Reason{
 	authorization.ReasonClockUnavailable,
 }
 
-// authorizeReservedWireCodes are decision reason codes the wire carries before
-// any Reason maps to them: the actor-chain denials of the impersonation and
-// delegation leaf.
-var authorizeReservedWireCodes = []string{"impersonation_denied", "delegation_invalid"}
-
 // wireReasonCode is the decision reason_code of a Reason that reaches the
 // wire: the Reason's own token. ok is false for a state failure and for a
 // value outside authorization.AllReasons.
@@ -41,7 +36,7 @@ func wireReasonCode(reason authorization.Reason) (string, bool) {
 }
 
 // AuthorizeWireReasonCodes is the closed decision reason_code set the
-// authorize routes emit or reserve, sorted.
+// authorize routes emit, sorted.
 func AuthorizeWireReasonCodes() []string {
 	var codes []string
 	for _, reason := range authorization.AllReasons() {
@@ -49,7 +44,6 @@ func AuthorizeWireReasonCodes() []string {
 			codes = append(codes, code)
 		}
 	}
-	codes = append(codes, authorizeReservedWireCodes...)
 	slices.Sort(codes)
 	return codes
 }

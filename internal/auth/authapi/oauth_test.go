@@ -476,11 +476,21 @@ func TestDecideRefusesAMalformedSubmit(t *testing.T) {
 			}
 		})
 	}
-	t.Run("json", func(t *testing.T) {
+	for _, media := range []string{"application/json", "text/plain", "multipart/form-data; boundary=x", "not a media type"} {
+		t.Run("a valid form as "+media, func(t *testing.T) {
+			o := newPlainOAuthFixture(t)
+			headers := o.bearer(o.grant())
+			headers["Content-Type"] = media
+			if r := o.post("action=describe&request_id="+id, headers); r.Code != http.StatusBadRequest {
+				t.Fatalf("status %d", r.Code)
+			}
+		})
+	}
+	t.Run("a form with a charset", func(t *testing.T) {
 		o := newPlainOAuthFixture(t)
 		headers := o.bearer(o.grant())
-		headers["Content-Type"] = "application/json"
-		if r := o.post(`{"action":"describe"}`, headers); r.Code != http.StatusBadRequest {
+		headers["Content-Type"] = "application/x-www-form-urlencoded; charset=utf-8"
+		if r := o.post("action=describe&request_id="+id, headers); r.Code != http.StatusOK {
 			t.Fatalf("status %d", r.Code)
 		}
 	})

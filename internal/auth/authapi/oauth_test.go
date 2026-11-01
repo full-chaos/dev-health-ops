@@ -25,12 +25,12 @@ import (
 )
 
 const (
-	oauthIssuer    = "https://api.example.test/oauth"
-	oauthWeb       = "https://web.example.test"
-	oauthAPI       = "https://acr.example.test"
-	oauthMCP       = "https://mcp.example.test/mcp"
-	oauthChallenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
-	oauthState     = "a-client-state-value"
+	oauthIssuer = "https://api.example.test/oauth"
+	oauthWeb    = "https://web.example.test"
+	oauthAPI    = "https://acr.example.test"
+	oauthMCP    = "https://mcp.example.test/mcp"
+	pkceExample = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+	oauthState  = "a-client-state-value"
 )
 
 type oauthStoreFake struct {
@@ -136,12 +136,12 @@ func (o *oauthFixture) post(body string, header map[string]string) *httptest.Res
 
 func browserQuery() url.Values {
 	return url.Values{"client_id": {"dev-health-web"}, "redirect_uri": {oauthWeb + "/ask-dev/oauth/callback"}, "response_type": {"code"},
-		"code_challenge": {oauthChallenge}, "code_challenge_method": {"S256"}, "resource": {oauthAPI}, "scope": {"acr:api"}, "state": {oauthState}}
+		"code_challenge": {pkceExample}, "code_challenge_method": {"S256"}, "resource": {oauthAPI}, "scope": {"acr:api"}, "state": {oauthState}}
 }
 
 func mcpQuery() url.Values {
 	return url.Values{"client_id": {"desktop"}, "redirect_uri": {"https://client.example.test/cb"}, "response_type": {"code"},
-		"code_challenge": {oauthChallenge}, "code_challenge_method": {"S256"}, "resource": {oauthMCP}, "state": {oauthState}}
+		"code_challenge": {pkceExample}, "code_challenge_method": {"S256"}, "resource": {oauthMCP}, "state": {oauthState}}
 }
 
 func newPlainOAuthFixture(t *testing.T) *oauthFixture {
@@ -181,7 +181,7 @@ func TestAuthorizeWritesOneRowAndSendsTheBrowserToConsent(t *testing.T) {
 				t.Fatalf("%d rows", len(o.store.requests))
 			}
 			got := o.store.requests[0]
-			if got.ClientClass != tc.class || got.Audience != tc.audience || got.Scope != tc.scope || got.State != oauthState || got.CodeChallenge != oauthChallenge {
+			if got.ClientClass != tc.class || got.Audience != tc.audience || got.Scope != tc.scope || got.State != oauthState || got.CodeChallenge != pkceExample {
 				t.Fatalf("row %+v", got)
 			}
 			if r.Header().Get("Cache-Control") != "no-store" {
@@ -368,7 +368,7 @@ func TestOAuthLogsHoldNoSecretAndOnlyAClientsHost(t *testing.T) {
 	if !strings.Contains(logs, `"client":"client.example.test"`) || !strings.Contains(logs, `"client":"dev-health-web"`) {
 		t.Fatalf("the positive control is missing: %s", logs)
 	}
-	for _, secret := range []string{oauthState, oauthChallenge, "fcoac_code", "fcocs_token", "some/path", "free-text-from-a-client", "free-host-from-a-client"} {
+	for _, secret := range []string{oauthState, pkceExample, "fcoac_code", "fcocs_token", "some/path", "free-text-from-a-client", "free-host-from-a-client"} {
 		if strings.Contains(logs, secret) {
 			t.Errorf("the log holds %q", secret)
 		}

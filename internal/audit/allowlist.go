@@ -163,7 +163,7 @@ func validateRequestID(v string) error {
 var attributeVocabulary = map[string][]string{
 	"reason_code": {
 		"role_granted", "role_revoked", "membership_added", "membership_removed", "membership_status_changed",
-		"grant_created", "grant_revoked", "credential_issued", "credential_rotated", "credential_revoked",
+		"grant_created", "grant_updated", "grant_revoked", "credential_issued", "credential_rotated", "credential_revoked",
 		"session_revoked", "organization_created", "organization_updated", "principal_disabled",
 		"principal_enabled", "principal_projected", "principal_provisioned", "email_verified", "password_changed", "password_reset", "password_reset_requested",
 		"identity_linked", "identity_unlinked", "identity_projected", "identity_relinked", "policy_revision_activated",

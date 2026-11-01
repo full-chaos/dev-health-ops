@@ -76,6 +76,9 @@ var Allowlist = []Entry{
 	{File: "internal/audit/audit.go", Func: "insertOutboxEvents", Table: "auth.auth_outbox_events", Verb: "INSERT"},
 	{File: "internal/audit/publisher.go", Func: "Publisher.deliverOne", Table: "auth.auth_outbox_events", Verb: "UPDATE"},
 	{File: "internal/audit/reaper.go", Func: "Reap", Table: "auth.auth_outbox_events", Verb: "DELETE"},
+	{File: "internal/auth/grant/store.go", Func: "Store.Create", Table: "auth.resource_grants", Verb: "INSERT"},
+	{File: "internal/auth/grant/store.go", Func: "Store.Update", Table: "auth.resource_grants", Verb: "UPDATE"},
+	{File: "internal/auth/grantend/grantend.go", Func: "Plan.Apply", Table: "auth.resource_grants", Verb: "UPDATE"},
 	{File: "internal/auth/identity/backfill.go", Func: "Store.applyBackfillCredentials", Table: "auth.principals", Verb: "UPDATE"},
 	{File: "internal/auth/identity/backfill.go", Func: "Store.applyBackfillCredentials", Table: "auth.users", Verb: "UPDATE"},
 	{File: "internal/auth/identity/backfill.go", Func: "Store.applyBackfillTokenVersion", Table: "auth.users", Verb: "UPDATE"},
@@ -198,6 +201,10 @@ var Allowlist = []Entry{
 	{File: "internal/auth/session/unpinned.go", Func: "RevokeUnpinned", Table: "auth.sessions", Verb: "UPDATE"},
 	// The workload registry (CHAOS-10980; new auth-table writers ruled by acp 10-26 00:4xZ): written by the auth-migrate operator role, inside audit.Commit.
 	// Org service accounts (CHAOS-10989 4.19): written by auth-service, inside audit.Commit.
+	{File: "internal/auth/serviceaccount/keys.go", Func: "Store.IssueKey", Table: "auth.credential_registry", Verb: "INSERT"},
+	{File: "internal/auth/serviceaccount/keys.go", Func: "Store.RotateKey", Table: "auth.credential_registry", Verb: "INSERT"},
+	{File: "internal/auth/serviceaccount/keys.go", Func: "Store.RotateKey", Table: "auth.credential_registry", Verb: "UPDATE"},
+	{File: "internal/auth/serviceaccount/keys.go", Func: "Store.revokeKeyOnce", Table: "auth.credential_registry", Verb: "UPDATE"},
 	{File: "internal/auth/serviceaccount/store.go", Func: "Store.Create", Table: "auth.principals", Verb: "INSERT"},
 	{File: "internal/auth/serviceaccount/store.go", Func: "Store.Create", Table: "auth.service_accounts", Verb: "INSERT"},
 	{File: "internal/auth/serviceaccount/store.go", Func: "Store.disableOnce", Table: "auth.principals", Verb: "UPDATE"},

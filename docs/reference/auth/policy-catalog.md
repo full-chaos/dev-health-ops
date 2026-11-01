@@ -18,7 +18,7 @@ lifecycle: active
 
 # Policy catalog reference
 
-The catalog is the closed list of actions and roles of the Auth Control Plane. It is catalog version 5: 28 actions and 6 roles. An action or role that is not in the catalog is refused everywhere.
+The catalog is the closed list of actions and roles of the Auth Control Plane. The version, the actions and the roles are in `contracts/auth/v1/vocabulary/actions.v1.json` and `roles.v1.json`. An action or role that is not in the catalog is refused everywhere.
 {: .fc-page-lede }
 
 The JSON files are the single source. `internal/auth/policycatalog` embeds them, parses them and validates them at start. A defect panics the process, so a bad catalog never serves. See also [authentication and authorization](authn-authz.md), [action map](action-map.md) and [obligations](obligations.md).
@@ -119,6 +119,8 @@ Each role lists its actions explicitly. There is no inheritance, no wildcard and
 | `authz.decide` |  |  |  |  |  |
 
 No role holds `members.update`, `acr.context.read` or `authz.decide` yet, so the decision core denies them to every role until a roles change grants them.
+
+Every action names `impersonation` (`denied` or `allowed`): whether a delegated session may exercise it. `acr.context.read` is `allowed` (a read, low risk). `members.update` and `authz.decide` are `denied`. Until a role holds `acr.context.read`, no delegated session can use it.
 
 Source: `contracts/auth/v1/vocabulary/roles.v1.json`. The role keys `viewer`, `member`, `admin` and `owner` are the organization roles that `membership.v1` uses. `platform_admin` and `platform_owner` are platform roles and are not membership roles. `platform_owner` holds no action: it is a marker that only the operator grants (`auth-migrate platform-owner-grant`), and an owner acts through a `platform_admin` row it also holds.
 

@@ -201,7 +201,7 @@
       "resource_kind": "repository",
       "risk_class": "low",
       "cache_class": "resource_revision_bound",
-      "impersonation": "denied"
+      "impersonation": "allowed"
     },
     {
       "action": "admin.users",

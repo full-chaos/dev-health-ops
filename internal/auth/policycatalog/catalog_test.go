@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	actionsSHA = "10c314f05bd38a35dc5491b2baffe9a6ef69be348bf1c5dc17dc534db2d568c8"
+	actionsSHA = "054bcf5d50465548a367670b5a2659434bab78fd5cababb567dd558bb8b09ea2"
 	rolesSHA   = "e49d2c4e17db8e38baacb26dc7c36b917cfc46582d51c2abf44b8b670d702e1b"
 )
 

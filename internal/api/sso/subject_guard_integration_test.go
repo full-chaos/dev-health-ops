@@ -132,24 +132,29 @@ func TestSubjectGuardOAuthCallbackRefusesAnUnusableSubject(t *testing.T) {
 	}
 }
 
-// A sub the provider leaves out, sets to null, or sends as a number or a bool is no subject: the callback refuses it
-// like an empty one. "sub" is read with a blank ok, so the refusal is the edge rule's, not the claim reader's.
+// A sub the provider leaves out or sets to null reaches the claim reader as "" and the edge rule refuses it like an
+// empty one. A sub that is a number or a bool never gets that far: the id_token check refuses the token. Either way the
+// callback answers 400 with no session and writes no account row. "sub" is read with a blank ok, so the first refusal
+// is the edge rule's, not the claim reader's.
 func TestSubjectGuardOIDCCallbackRefusesASubThatIsNotAString(t *testing.T) {
-	shapes := map[string]func(claims map[string]any){
-		"absent":  func(claims map[string]any) { delete(claims, "sub") },
-		"null":    func(claims map[string]any) { claims["sub"] = nil },
-		"number":  func(claims map[string]any) { claims["sub"] = 12 },
-		"zero":    func(claims map[string]any) { claims["sub"] = 0 },
-		"boolean": func(claims map[string]any) { claims["sub"] = true },
+	shapes := map[string]struct {
+		override func(claims map[string]any)
+		edgeRule bool
+	}{
+		"absent":  {func(claims map[string]any) { delete(claims, "sub") }, true},
+		"null":    {func(claims map[string]any) { claims["sub"] = nil }, true},
+		"number":  {func(claims map[string]any) { claims["sub"] = 12 }, false},
+		"zero":    {func(claims map[string]any) { claims["sub"] = 0 }, false},
+		"boolean": {func(claims map[string]any) { claims["sub"] = true }, false},
 	}
-	for name, override := range shapes {
+	for name, shape := range shapes {
 		for _, held := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/held=%v", name, held), func(t *testing.T) {
 				ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 				defer cancel()
 				st := startStack(t, ctx)
 				idp := startFakeIdP(t)
-				idp.subOverride = override
+				idp.subOverride = shape.override
 				orgID := seedOrg(t, ctx, st.pool, "enterprise")
 				config := fmt.Sprintf(`{"client_id":"test-client","issuer":%q,"token_endpoint":%q,"jwks_uri":%q,"userinfo_endpoint":%q,"scopes":["openid","email"]}`,
 					idp.server.URL, idp.server.URL+"/token", idp.server.URL+"/jwks", idp.server.URL+"/userinfo")
@@ -162,7 +167,14 @@ func TestSubjectGuardOIDCCallbackRefusesASubThatIsNotAString(t *testing.T) {
 				}
 				before := snapshotRows(t, ctx, st)
 				status, body := oidcSubjectCallback(t, st, idp, providerID, email, "unused")
-				assertSubjectRefused(t, ctx, st, providerID, before, status, body)
+				if shape.edgeRule {
+					assertSubjectRefused(t, ctx, st, providerID, before, status, body)
+					return
+				}
+				if status != http.StatusBadRequest || body["access_token"] != nil {
+					t.Fatalf("status=%d body=%v, want 400 and no token", status, body)
+				}
+				assertNoRowsWritten(t, ctx, st, before)
 			})
 		}
 	}

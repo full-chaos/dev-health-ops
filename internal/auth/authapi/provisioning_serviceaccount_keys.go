@@ -112,14 +112,17 @@ func keyReceipt(kind string, issued serviceaccount.IssuedKey) contracts.Credenti
 		Credential: keyBody(issued.Key, time.Now()), Secret: issued.Secret.Reveal()}
 }
 
-// keyExpiry is the expires_in_seconds member: at most the store's ceiling, the default when absent.
+// keyExpiry is the expires_in_seconds member: at most the store's ceiling, the default when absent, malformed when null.
 func keyExpiry(body strictObject) (time.Duration, error) {
+	if _, present := body["expires_in_seconds"]; !present {
+		return serviceaccount.KeyExpiryDefault, nil
+	}
 	seconds, err := body.optionalInt("expires_in_seconds", 1, maxKeyExpirySeconds)
 	if err != nil {
 		return 0, err
 	}
 	if seconds == nil {
-		return serviceaccount.KeyExpiryDefault, nil
+		return 0, errProvisioningBody
 	}
 	return time.Duration(*seconds) * time.Second, nil
 }

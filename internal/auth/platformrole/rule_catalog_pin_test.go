@@ -10,13 +10,15 @@ import (
 )
 
 // rule lists the platform actions as constants so it needs no catalog import;
-// this pins that list to the catalog's platform_admin role and platform scope.
+// this pins that list to the catalog's platform_admin role, each a platform
+// action of the catalog (a platform action no role holds, such as authz.decide,
+// is not listed).
 func TestRulePlatformActionsAreTheCatalogs(t *testing.T) {
 	catalog := policycatalog.Default()
-	var scoped []string
-	for _, action := range catalog.Actions() {
-		if action.Scope == policycatalog.ScopePlatform {
-			scoped = append(scoped, action.ID)
+	for _, action := range rule.PlatformActions {
+		act, err := catalog.Action(action)
+		if err != nil || act.Scope != policycatalog.ScopePlatform {
+			t.Fatalf("rule lists %s, which is not a platform action of the catalog: %v", action, err)
 		}
 	}
 	role, err := catalog.Role(rule.PlatformAdmin)
@@ -25,11 +27,11 @@ func TestRulePlatformActionsAreTheCatalogs(t *testing.T) {
 	}
 	held := append([]string(nil), role.Actions...)
 	listed := append([]string(nil), rule.PlatformActions...)
-	for _, list := range [][]string{scoped, held, listed} {
+	for _, list := range [][]string{held, listed} {
 		sort.Strings(list)
 	}
-	if strings.Join(listed, ",") != strings.Join(scoped, ",") || strings.Join(listed, ",") != strings.Join(held, ",") {
-		t.Fatalf("rule.PlatformActions %v, catalog platform actions %v, platform_admin holds %v", listed, scoped, held)
+	if strings.Join(listed, ",") != strings.Join(held, ",") {
+		t.Fatalf("rule.PlatformActions %v, platform_admin holds %v", listed, held)
 	}
 }
 

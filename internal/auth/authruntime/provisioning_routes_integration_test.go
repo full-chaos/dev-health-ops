@@ -823,8 +823,11 @@ func TestProvisioningGrantsThroughConfigure(t *testing.T) {
 	}
 	out := object(t, first)
 	firstID, _ := out["grant_id"].(string)
-	if firstID == "" || out["status"] != "active" || out["role"] != "viewer" || out["resource_key"] != "acme/api" || out["principal_id"] != member.String() {
+	if firstID == "" || out["status"] != "active" || out["role"] != "viewer" || out["principal_id"] != member.String() {
 		t.Fatalf("create answer = %v", out)
+	}
+	if strings.Contains(string(first.body), "acme/api") || strings.Contains(string(first.body), "resource_key") {
+		t.Fatalf("the create answer carries the repository key: %s", first.body)
 	}
 	if got := post(authapi.PatternGrantCreate, create); got.status != http.StatusConflict || object(t, got)["reason_code"] != "already_granted" {
 		t.Fatalf("a second live grant: %d %s", got.status, got.body)
@@ -872,6 +875,9 @@ func TestProvisioningGrantsThroughConfigure(t *testing.T) {
 	if upd.status != http.StatusOK || object(t, upd)["revision"] != float64(2) {
 		t.Fatalf("update: %d %s", upd.status, upd.body)
 	}
+	if strings.Contains(string(upd.body), "acme/api") || strings.Contains(string(upd.body), "resource_key") {
+		t.Fatalf("the update answer carries the repository key: %s", upd.body)
+	}
 	if n := count(`SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.resource_grant.updated' AND attributes->>'target_id' = $1
 AND attributes->'changed_fields' = '["expires_at"]'::jsonb AND attributes ? 'credential_id' AND actor_principal_id = $2`, secondID, boss); n != 1 {
 		t.Fatalf("%d expiry-only update audit rows naming only expires_at, the actor and the caller credential, want 1", n)
@@ -883,6 +889,9 @@ AND attributes->'changed_fields' = '["expires_at"]'::jsonb AND attributes ? 'cre
 	rev := post(authapi.PatternGrantRevoke, map[string]any{"organization_id": org.String(), "actor_principal_id": boss.String(), "grant_id": secondID})
 	if rev.status != http.StatusOK || object(t, rev)["status"] != "revoked" {
 		t.Fatalf("revoke: %d %s", rev.status, rev.body)
+	}
+	if strings.Contains(string(rev.body), "acme/api") || strings.Contains(string(rev.body), "resource_key") {
+		t.Fatalf("the revoke answer carries the repository key: %s", rev.body)
 	}
 	if n := count(`SELECT count(*) FROM auth.resource_grants WHERE id = $1 AND revoked_by = $2`, secondID, boss); n != 1 {
 		t.Fatal("the revoked grant does not name its revoker")

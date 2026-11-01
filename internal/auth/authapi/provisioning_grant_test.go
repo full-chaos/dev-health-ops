@@ -178,7 +178,7 @@ func TestGrantRoutesPassTheRequestAndAnswerTheGrant(t *testing.T) {
 	f.grants.out.ExpiresAt = &expires
 	out := post(cases[0], func(b map[string]any) { b["expires_at"] = expires.Format(time.RFC3339) })
 	want := map[string]any{"grant_id": f.grants.out.ID.String(), "organization_id": f.org.String(), "principal_id": f.target.String(),
-		"role": "viewer", "resource_key": "acme/api", "expires_at": "2031-05-06T07:08:09Z", "status": "active", "revision": float64(1)}
+		"role": "viewer", "expires_at": "2031-05-06T07:08:09Z", "status": "active", "revision": float64(1)}
 	if !sameJSON(out, want) {
 		t.Fatalf("create answer %v, want %v", out, want)
 	}
@@ -299,5 +299,52 @@ func TestGrantRoutesTakeNoWorkloadToken(t *testing.T) {
 	}
 	if f.grants.calls != 0 {
 		t.Fatal("a workload token reached the grant store")
+	}
+}
+
+// No answer of the three routes carries the repository key: not as a member, not anywhere in the body.
+func TestGrantRoutesAnswersNeverCarryTheKey(t *testing.T) {
+	f := newGrantFixture(t)
+	for _, c := range grantCases() {
+		response := f.post(c.path, encode(c.body(f, f.admin)), nil)
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s: %d %s", c.path, response.Code, response.Body)
+		}
+		body := response.Body.String()
+		if strings.Contains(body, "acme/api") || strings.Contains(body, "resource_key") {
+			t.Fatalf("%s answer carries the repository key: %s", c.path, body)
+		}
+	}
+}
+
+// The status of an answer is revoked first, then expired, else active: a role-only update of an expired grant answers expired,
+// a revoke of an expired grant answers revoked, a grant without an expiry or with one in the future is active.
+func TestGrantAnswerStatusIsRevokedThenExpiredThenActive(t *testing.T) {
+	f := newGrantFixture(t)
+	past, future := time.Now().Add(-time.Hour), time.Now().Add(time.Hour)
+	cases := grantCases()
+	for _, c := range []struct {
+		name    string
+		route   grantCase
+		expires *time.Time
+		revoked *time.Time
+		want    string
+	}{
+		{"create, no expiry", cases[0], nil, nil, "active"},
+		{"create, future expiry", cases[0], &future, nil, "active"},
+		{"update, role only, expired grant", cases[1], &past, nil, "expired"},
+		{"update, expired grant, live again", cases[1], &future, nil, "active"},
+		{"revoke, expired grant", cases[2], &past, &past, "revoked"},
+		{"revoke, live grant", cases[2], nil, &past, "revoked"},
+	} {
+		f.grants.out.ExpiresAt, f.grants.out.RevokedAt = c.expires, c.revoked
+		response := f.post(c.route.path, encode(c.route.body(f, f.admin)), nil)
+		var out map[string]any
+		if err := json.Unmarshal(response.Body.Bytes(), &out); err != nil || response.Code != http.StatusOK {
+			t.Fatalf("%s: %d %s", c.name, response.Code, response.Body)
+		}
+		if out["status"] != c.want {
+			t.Errorf("%s: status %v, want %s", c.name, out["status"], c.want)
+		}
 	}
 }

@@ -98,6 +98,10 @@ func RuntimePosture() []TablePrivilege {
 		{Table: "login_attempts", Select: true, Insert: true, Update: true, Delete: true},
 		{Table: "sso_flow_states", Select: true, Insert: true, Update: true, Delete: true},
 		{Table: "saml_assertion_uses", Select: true, Insert: true, Delete: true},
+		// OAuth authorization server (0042): a request row is swept once it and its
+		// code have expired; a revoked grant keeps its row, so no DELETE.
+		{Table: "oauth_authorization_requests", Select: true, Insert: true, Update: true, Delete: true},
+		{Table: "oauth_grants", Select: true, Insert: true, Update: true},
 
 		// Credential material: metadata only, and keys are read-only.
 		{Table: "signing_keys", Select: true},

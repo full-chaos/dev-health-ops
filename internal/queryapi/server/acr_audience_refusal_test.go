@@ -9,8 +9,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/full-chaos/dev-health-go/authverify"
-
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
@@ -44,33 +42,10 @@ func (s *acrQueryReads) OrgMembership(ctx context.Context, user, org uuid.UUID) 
 }
 
 // acrRefusalReason is the refused-counter reason of an ACR-audience token at a
-// platform verifier, for the authverify this module pins. While authverify
-// knows no ACR audience (v0.33.0) the token fails its claims contract
-// (ReasonContract, counted malformed). Once it knows them (the release of
-// CHAOS-12249) the token fails the verifier's audience pin (ReasonAudience,
-// counted claims). Either way the cells below refuse it; the reason tells the
-// two stages apart, so a pin bump runs them against the stage it ships.
-func acrRefusalReason(t *testing.T) string {
-	t.Helper()
-	if acrAudienceKnownToAuthverify(t) {
-		return accessverify.ReasonClaims
-	}
-	return accessverify.ReasonMalformed
-}
-
-// acrAudienceKnownToAuthverify reports whether the pinned authverify builds a
-// verifier for acr-api. A verifier for dev-health-api under the same config
-// must build, so only the audience decides.
-func acrAudienceKnownToAuthverify(t *testing.T) bool {
-	t.Helper()
-	config := authverify.VerifierConfig{Issuer: "https://auth.example.test", Audience: "dev-health-api", Keys: authverify.StaticKeys{}}
-	if _, err := authverify.NewVerifier(config); err != nil {
-		t.Fatalf("a dev-health-api verifier did not build: %v", err)
-	}
-	config.Audience = contracts.ACRAPIAudience
-	_, err := authverify.NewVerifier(config)
-	return err == nil
-}
+// platform verifier: since dev-health-go v0.36.0 authverify knows the audiences,
+// so the token fails the verifier's audience pin (ReasonAudience, counted
+// claims), not its claims contract.
+const acrRefusalReason = accessverify.ReasonClaims
 
 // TestAnACRAudienceTokenIsRefusedAtQueryAPIBeforeAnyRead is G-43 condition 1
 // at query-api (ACP-ADR-08 amendment): an access token with aud acr-api or
@@ -117,7 +92,7 @@ func TestAnACRAudienceTokenIsRefusedAtQueryAPIBeforeAnyRead(t *testing.T) {
 					t.Fatalf("%s %s with aud %s: %d %q with %d reads; want the route's 401 and no read", target.method, target.path, acr.aud, got.Status, got.Body, store.reads)
 				}
 			}
-			reason := acrRefusalReason(t)
+			reason := acrRefusalReason
 			refused := 0
 			for series := range stack.reader.counts(t) {
 				if strings.HasPrefix(series, accessverify.RefusedMetric+"|") && strings.Contains(series, ",reason="+reason+",") {

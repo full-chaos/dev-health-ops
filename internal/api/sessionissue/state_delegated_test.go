@@ -7,13 +7,13 @@ import (
 	"github.com/google/uuid"
 )
 
-func stateDocument(extra string) string {
+func delegatedStateDocument(extra string) string {
 	return `{"principal_id":"` + uuid.New().String() + `","organization_id":null,"revoked":false,"expired":false,"legacy_token_version":7` + extra + `}`
 }
 
 func TestParseStateReadsTheActorOfADelegatedSession(t *testing.T) {
 	actor := uuid.New()
-	state, err := parseState([]byte(stateDocument(`,"actor_principal_id":"` + actor.String() + `"`)))
+	state, err := parseState([]byte(delegatedStateDocument(`,"actor_principal_id":"` + actor.String() + `"`)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,7 +23,7 @@ func TestParseStateReadsTheActorOfADelegatedSession(t *testing.T) {
 }
 
 func TestParseStateKeepsTheFiveMemberAnswer(t *testing.T) {
-	state, err := parseState([]byte(stateDocument("")))
+	state, err := parseState([]byte(delegatedStateDocument("")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +34,7 @@ func TestParseStateKeepsTheFiveMemberAnswer(t *testing.T) {
 
 func TestParseStateRefusesAnUnknownSixthMember(t *testing.T) {
 	for _, member := range []string{`,"client_class":"web"`, `,"actor":"x"`, `,"actor_principal_id2":null`} {
-		if _, err := parseState([]byte(stateDocument(member))); err == nil {
+		if _, err := parseState([]byte(delegatedStateDocument(member))); err == nil {
 			t.Fatalf("member %s was accepted", member)
 		}
 	}
@@ -43,14 +43,14 @@ func TestParseStateRefusesAnUnknownSixthMember(t *testing.T) {
 func TestParseStateRefusesABadActor(t *testing.T) {
 	upper := strings.ToUpper(uuid.New().String())
 	for _, value := range []string{`null`, `7`, `""`, `"not-a-uuid"`, `"` + upper + `"`, `"prn_abc"`} {
-		if _, err := parseState([]byte(stateDocument(`,"actor_principal_id":` + value))); err == nil {
+		if _, err := parseState([]byte(delegatedStateDocument(`,"actor_principal_id":` + value))); err == nil {
 			t.Fatalf("actor %s was accepted", value)
 		}
 	}
 }
 
 func TestParseStateRefusesTheActorInPlaceOfARequiredMember(t *testing.T) {
-	doc := strings.Replace(stateDocument(`,"actor_principal_id":"`+uuid.New().String()+`"`), `"expired":false,`, ``, 1)
+	doc := strings.Replace(delegatedStateDocument(`,"actor_principal_id":"`+uuid.New().String()+`"`), `"expired":false,`, ``, 1)
 	if _, err := parseState([]byte(doc)); err == nil {
 		t.Fatal("an answer without expired was accepted")
 	}

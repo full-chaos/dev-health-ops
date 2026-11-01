@@ -850,7 +850,19 @@ func TestTheSchemaHoldsTheRequestAndGrantShapes(t *testing.T) {
 	refused("a changed principal", `UPDATE auth.oauth_authorization_requests SET principal_id = $2 WHERE id = $1`, g.request, h.principal)
 	refused("a changed organization", `UPDATE auth.oauth_authorization_requests SET organization_id = $2 WHERE id = $1`, g.request, h.organization)
 	refused("a changed token hash", `UPDATE auth.oauth_authorization_requests SET csrf_hash = $2 WHERE id = $1`, g.request, make([]byte, 32))
-	refused("a changed grant", `UPDATE auth.oauth_authorization_requests SET grant_id = NULL WHERE id = $1`, f.request)
+	other := e.flow(t, ctx, ClassBrowser)
+	otherApproved, err := e.store.Approve(ctx, other.decision())
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused("a changed grant", `UPDATE auth.oauth_authorization_requests SET grant_id = $2 WHERE id = $1`, f.request, otherApproved.GrantID)
+	denied := e.flow(t, ctx, ClassBrowser)
+	if _, err := e.store.Deny(ctx, denied.decision()); err != nil {
+		t.Fatal(err)
+	}
+	refused("a denial turned into an approval", `UPDATE auth.oauth_authorization_requests
+		SET decision = 'approved', grant_id = $2, code_hash = $3, code_expires_at = clock_timestamp() + interval '1 minute' WHERE id = $1`,
+		denied.request, otherApproved.GrantID, make([]byte, 32))
 	refused("a code with no decision", `UPDATE auth.oauth_authorization_requests SET code_hash = $2 WHERE id = $1`, g.request, make([]byte, 32))
 	refused("an approval with no code", `UPDATE auth.oauth_authorization_requests SET decision = 'approved' WHERE id = $1`, g.request)
 	refused("a decision with no binding", `INSERT INTO auth.oauth_authorization_requests

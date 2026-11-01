@@ -99,6 +99,13 @@ func (a *Authenticator) checkSession(ctx context.Context, claims map[string]any,
 
 // sessionStateQuery reads one auth-service session in PostgreSQL by its
 // primary key; {auth_schema} is the validated, quoted AUTH_DATABASE_SCHEMA.
+//
+// It reads the row's own revoked_at, not the effective revoke, which also reads a
+// browser client session's web session (session.Store.effectiveRevokedAt). That
+// holds because a client session's sid only ever appears in an ACR-audience token,
+// which go-api and query-api refuse before any read (acp, CHAOS-12251), and no
+// platform minter writes one. If a platform minter ever writes a client session's
+// sid, this query changes first.
 const sessionStateQuery = `SELECT principal_id, revoked_at IS NOT NULL, legacy_token_version FROM {auth_schema}.sessions WHERE id = $1`
 
 // SessionState reads the session id names, in the auth schema AuthSchema

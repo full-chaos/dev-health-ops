@@ -35,6 +35,8 @@ var allowedAttributeKeys = map[string]struct{}{
 	"related_key_id":      {},
 	"rotation_verb":       {},
 	"rotation_refusal":    {},
+	// The oauth.consent.* and oauth.client_session.created rows.
+	"client_class": {},
 	// The auth.workload.token_issued row: the token's jti and the registry
 	// rows it came from.
 	"jti":          {},
@@ -52,6 +54,9 @@ var allowedAttributeKeys = map[string]struct{}{
 	// The auth.workload.enabled row of an enable that also enabled the
 	// workload's principal (principal_id names it).
 	"principal_enabled": {},
+	// The auth.workload.binding_rebound row: whether the binding was disabled
+	// when its UID pin changed (the rebind never changes that state).
+	"binding_disabled": {},
 
 	"purged_email_verification_tokens": {},
 	"purged_password_reset_tokens":     {},
@@ -188,7 +193,10 @@ var attributeVocabulary = map[string][]string{
 	"provider":       {"local", "github", "gitlab", "jira", "linear", "google", "microsoft", "saml", "oidc"},
 	"client_service": {"auth-service", "api", "web", "billing-edge", "worker", "acr-api", "acr-mcp"},
 	// audience is a workload token's aud: a workload audience only.
-	"audience":         {"auth-service", "dev-health-api"},
+	// oauth.* rows carry the audience of the grant, an ACR audience.
+	"audience": {"auth-service", "dev-health-api", "acr-api", "acr-mcp"},
+	// client_class is an OAuth client's class, from the trusted client registry.
+	"client_class":     {"browser", "mcp"},
 	"credential_class": {"user_access_token", "refresh_credential", "workload_token", "acr_client", "external_push", "service_account_key", "workload_bootstrap_credential"},
 	// source names who started an auth-service record: go-api-delegated is a
 	// session go-api signed the user in for and asked auth-service to issue.
@@ -197,9 +205,10 @@ var attributeVocabulary = map[string][]string{
 	"amr": {"pwd", "otp", "mfa", "hwk", "swk", "fed"},
 	// principal_enabled is present only when the principal row was enabled.
 	"principal_enabled": {"true"},
+	"binding_disabled":  {"true", "false"},
 	"changed_fields": {
 		"role_key", "status", "display_name", "disabled_at", "expires_at", "revoked_at", "email", "email_verified_at",
-		"scopes", "audiences", "organization_id", "allowed_actions", "binding", "assertion_key", "invited_by", "joined_at", "owner_principal_id",
+		"scopes", "audiences", "organization_id", "allowed_actions", "binding", "service_account_uid", "assertion_key", "invited_by", "joined_at", "owner_principal_id",
 	},
 }
 

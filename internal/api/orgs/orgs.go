@@ -209,7 +209,7 @@ func (h handlers) updateOwnOrg(w http.ResponseWriter, r *http.Request) {
 func (h handlers) entitlements(w http.ResponseWriter, r *http.Request) {
 	user := policy.UserFrom(r.Context())
 	orgIDText := r.PathValue("org_id")
-	if !user.IsSuperuser && user.OrgID != orgIDText {
+	if !user.Holds(policy.ActionAdminBilling) && user.OrgID != orgIDText {
 		policy.WriteDetail(w, http.StatusForbidden, "Access forbidden", nil)
 		return
 	}

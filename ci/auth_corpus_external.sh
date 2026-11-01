@@ -48,6 +48,8 @@ fi
 # CHAOS-11670: the tested package comes from the set the relevance script lists the closure of (ci/auth_corpus_set.sh).
 # shellcheck source=ci/auth_corpus_set.sh
 source "${SCRIPT_DIR}/auth_corpus_set.sh"
+# shellcheck source=ci/lib/registry_retry.sh
+source "${SCRIPT_DIR}/lib/registry_retry.sh"
 # From /dev/urandom: compose adopts a resource that already carries the project name, so it must not be guessable.
 PROJECT="authcorpus$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
 # The override tags the images this run builds with the project, so the trap removes exactly its own two.
@@ -177,14 +179,15 @@ trap cleanup EXIT
 # CHAOS-11670: `compose up --build` fails now and then for a reason outside the product. up_service retries it ONCE, and only
 # when its output has a whole line of one of these classes (the texts are from venue-oracles runs on main) and no product line:
 #   1 port already allocated      (run 40283712992, job 121442426149)
-#   2 image mirror layer fetch    (run 40273038441, job 121409808895)
+#   2 image mirror blob fetch     (runs 40273038441, 41254379233, 41216797885): the classes of ci/lib/registry_retry.sh
+#                                 (registry_transient), retried up to 3 tries in all, 10 s then 30 s apart (CHAOS-12372)
 #   3 Go module proxy read error  (run 40431223738, job 121949107695)
 # A product line is a container that is unhealthy or exited non-zero, or a service that did not complete. Any other failure is
 # never retried. The retry runs `down` for this project only, without --volumes. Each attempt has its own log file; the whole
 # first attempt stays in the job log (up_once copies the output to the console).
 INFRA_CLASSES=(
   '^Error response from daemon: failed to set up container networking: driver failed programming external connectivity on endpoint [A-Za-z0-9_.-]+ \([0-9a-f]+\): Bind for 127\.0\.0\.1:[0-9]+ failed: port is already allocated$'
-  '^#[0-9]+ ERROR: failed to copy: httpReadSeeker: failed open: could not fetch content descriptor sha256:[0-9a-f]{64} \(application/vnd\.oci\.image\.layer\.v1\.tar\+gzip\) from remote: not found$'
+  registry
   '^#[0-9]+ [0-9.]+ go: [^ ]+@[^ ]+: read "https://proxy\.golang\.org/[^"]*": stream error: stream ID [0-9]+; INTERNAL_ERROR; received from peer$'
 )
 PRODUCT_LINE='^dependency failed to start: |is unhealthy|exited \([1-9][0-9]*\)|didn.t complete successfully'
@@ -196,6 +199,13 @@ infra_class() {
   fi
   local n
   for n in "${!INFRA_CLASSES[@]}"; do
+    if [ "${INFRA_CLASSES[n]}" = registry ]; then
+      if registry_transient "$1" >/dev/null; then
+        echo $((n + 1))
+        return 0
+      fi
+      continue
+    fi
     if LC_ALL=C grep -aEq "${INFRA_CLASSES[n]}" <<<"${text}"; then
       echo $((n + 1))
       return 0
@@ -215,18 +225,26 @@ up_once() {
 
 # up_service go-api|auth-service
 up_service() {
-  local service="$1" log="${WORK}/up-$1.1.log" status=0 class
-  up_once "${service}" "${log}" || status=$?
-  [ "${status}" -ne 0 ] || return 0
-  class="$(infra_class "${log}")"
-  [ -n "${class}" ] || return "${status}"
-  printf 'AUTH-CORPUS-INFRA-RETRY class=%s step=%s\n' "${class}" "${service}"
-  timeout --kill-after=10 "${AUTH_CORPUS_DOWN_SECONDS:-180}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth down --remove-orphans || true
-  # down removed go-api too: the auth-service step starts it again before it tries auth-service again.
-  if [ "${service}" = "auth-service" ]; then
-    up_once go-api "${WORK}/up-go-api-retry.log" || return $?
-  fi
-  up_once "${service}" "${WORK}/up-${service}.2.log"
+  local service="$1" status=0 class n=1 limit
+  local -a gaps=(10 30)
+  while :; do
+    status=0
+    up_once "${service}" "${WORK}/up-${service}.${n}.log" || status=$?
+    [ "${status}" -ne 0 ] || return 0
+    class="$(infra_class "${WORK}/up-${service}.${n}.log")"
+    [ -n "${class}" ] || return "${status}"
+    limit=2
+    [ "${class}" != 2 ] || limit=3
+    [ "${n}" -lt "${limit}" ] || return "${status}"
+    printf 'AUTH-CORPUS-INFRA-RETRY class=%s step=%s\n' "${class}" "${service}"
+    timeout --kill-after=10 "${AUTH_CORPUS_DOWN_SECONDS:-180}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth down --remove-orphans || true
+    # down removed go-api too: the auth-service step starts it again before it tries auth-service again.
+    if [ "${service}" = "auth-service" ]; then
+      up_once go-api "${WORK}/up-go-api-retry.${n}.log" || return $?
+    fi
+    [ "${class}" != 2 ] || sleep "${gaps[n - 1]}"
+    n=$((n + 1))
+  done
 }
 
 # compose.yml's migrate service refuses a database that already holds objects but no alembic_version table, and

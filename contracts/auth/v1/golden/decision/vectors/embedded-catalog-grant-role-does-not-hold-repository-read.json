@@ -3,7 +3,7 @@
     "allowed": false,
     "cache_class": "none",
     "expires_in_seconds": null,
-    "policy_revision": 5,
+    "policy_revision": 7,
     "reason": "repository_not_granted"
   },
   "id": "embedded-catalog-grant-role-does-not-hold-repository-read",

@@ -51,7 +51,7 @@ func acrFileSigner(t *testing.T) *token.Signer {
 
 type noImpersonation struct{}
 
-func (noImpersonation) ImpersonatingActor(context.Context, uuid.UUID) (bool, error) {
+func (noImpersonation) ImpersonatingActor(context.Context, uuid.UUID, uuid.UUID) (bool, error) {
 	return false, nil
 }
 
@@ -61,6 +61,11 @@ func (noImpersonation) ImpersonatingActor(context.Context, uuid.UUID) (bool, err
 // listeners and reads nothing. Positive controls: a platform token over the
 // same key set is served after reads; the minted token is a valid
 // access-token.v1 document.
+//
+// The sid of a minted ACR token is an OAuth client session's, and this cell is what
+// lets internal/api/policy's sessionStateQuery read a row's own revoked_at: a client
+// session's sid is refused here with zero reads, and no platform minter writes one.
+// If a platform minter ever writes a client session's sid, that query changes first.
 func TestAnACRMintedTokenIsRefusedAtQueryAPIBeforeAnyRead(t *testing.T) {
 	quietStdLog(t)
 	ctx := context.Background()
@@ -109,7 +114,7 @@ func TestAnACRMintedTokenIsRefusedAtQueryAPIBeforeAnyRead(t *testing.T) {
 					t.Fatalf("%s %s with the minted %s token: %d %q with %d reads; want the route's 401 and no read", target.method, target.path, audience, got.Status, got.Body, store.reads)
 				}
 			}
-			reason, refused := acrRefusalReason(t), 0
+			reason, refused := acrRefusalReason, 0
 			for series := range stack.reader.counts(t) {
 				if strings.HasPrefix(series, accessverify.RefusedMetric+"|") && strings.Contains(series, ",reason="+reason+",") {
 					refused++

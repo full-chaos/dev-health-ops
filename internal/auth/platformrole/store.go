@@ -13,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
+	"github.com/full-chaos/dev-health-ops/internal/auth/delegationend"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -268,7 +269,10 @@ ORDER BY r.id`)
 			if admins == 0 {
 				return ErrLastPlatformAdmin
 			}
-			_, err = tx.Exec(ctx, `DELETE FROM `+s.q+`.platform_role_assignments WHERE id = $1`, target)
+			if _, err = tx.Exec(ctx, `DELETE FROM `+s.q+`.platform_role_assignments WHERE id = $1`, target); err != nil {
+				return err
+			}
+			_, err = delegationend.EndOfActor(ctx, tx, s.q, in.Principal)
 			return err
 		},
 		Audit:  roleAudit("auth.platform_role.revoked", "role_revoked", actor, subject),

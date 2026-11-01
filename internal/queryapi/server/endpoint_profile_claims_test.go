@@ -39,7 +39,7 @@ var rowClaims = map[string]map[string]rowClaim{
 	"gql": {
 		"resource_resolver": {value: "organization_from_header_or_credential: the X-Org-Id header when the caller may use it (a superuser, the caller's own organization, or a member of that organization), else the credential's organization (scope.OrgScope)", proofs: []claimProof{
 			{file: "../../api/policy/scope.go", decl: "Scope.OrgScope", needles: []string{"headerOrgID", "s.mayUseOrg(r.Context(), user, headerOrgID)", "resolved = headerOrgID", "case user != nil && user.OrgID != \"\":"}, anyOf: []string{}},
-			{file: "../../api/policy/scope.go", decl: "Scope.mayUseOrg", needles: []string{"user.IsSuperuser || orgID == user.OrgID", "s.auth.IsMember(ctx, user.UserID, orgID)"}, anyOf: []string{}},
+			{file: "../../api/policy/scope.go", decl: "Scope.mayUseOrg", needles: []string{"user.Holds(ActionAdminOrgs) || orgID == user.OrgID", "s.auth.IsMember(ctx, user.UserID, orgID)"}, anyOf: []string{}},
 		}},
 		"impersonation_policy": {value: "subject_to_impersonation_override", proofs: []claimProof{
 			{file: "graphql_edge_route.go", decl: "graphQLEdgeChain", needles: []string{"scope.Impersonation(handler)"}, anyOf: []string{}},

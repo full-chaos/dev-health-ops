@@ -8,7 +8,8 @@
       "scope": "organization",
       "resource_kind": "repository",
       "risk_class": "low",
-      "cache_class": "resource_revision_bound"
+      "cache_class": "resource_revision_bound",
+      "impersonation": "denied"
     }
   ]
 }

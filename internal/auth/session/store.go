@@ -35,6 +35,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/delegationend"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -80,6 +81,9 @@ type Config struct {
 	SessionLifetime time.Duration
 	Logger          *slog.Logger
 	UsersOwned      bool // AUTH_USERS_OWNED: a sign-in stamps public.users.last_login_at
+	// PlatformRolesOwned is AUTH_PLATFORM_ROLES_OWNED. Off, or with UsersOwned
+	// off, StartDelegation refuses (ErrNotOwned).
+	PlatformRolesOwned bool
 	// Meter registers the exchange and revocation counters; nil uses the
 	// process meter.
 	Meter metric.Meter
@@ -94,6 +98,7 @@ type Store struct {
 	refreshTTL      time.Duration
 	sessionLifetime time.Duration
 	usersOwned      bool
+	platformOwned   bool
 	logger          *slog.Logger
 	exchanges       metric.Int64Counter
 	revocations     metric.Int64Counter
@@ -119,7 +124,7 @@ func New(cfg Config) (*Store, error) {
 	}
 	s := &Store{
 		pool: cfg.Pool, schema: cfg.Schema, q: authschema.Quote(cfg.Schema), key: key,
-		refreshTTL: cfg.RefreshTTL, sessionLifetime: cfg.SessionLifetime, usersOwned: cfg.UsersOwned, logger: cfg.Logger,
+		refreshTTL: cfg.RefreshTTL, sessionLifetime: cfg.SessionLifetime, usersOwned: cfg.UsersOwned, platformOwned: cfg.PlatformRolesOwned, logger: cfg.Logger,
 	}
 	if s.refreshTTL <= 0 {
 		s.refreshTTL = defaultRefreshTTL
@@ -159,6 +164,17 @@ type Record struct {
 	// LegacyTokenVersion is public.users.token_version when the session was
 	// created; nil on a session row older than migration 0016.
 	LegacyTokenVersion *int64
+	// Delegation is set on a delegated session: PrincipalID is the effective
+	// subject, Delegation.Actor the real actor (G-49).
+	Delegation *Delegation
+}
+
+// Delegation is what a delegated session row adds. ID, start and end are the
+// session's own id, CreatedAt and ExpiresAt.
+type Delegation struct {
+	Actor            uuid.UUID
+	Reason           string
+	PermittedActions []string
 }
 
 // Wire is the session.v1 document of the record.
@@ -175,6 +191,13 @@ func (r Record) Wire() contracts.Session {
 	}
 	if r.RevokedAt != nil {
 		out.RevokedAt = &contracts.Timestamp{Time: r.RevokedAt.UTC()}
+	}
+	if r.Delegation != nil {
+		out.Delegation = &contracts.SessionDelegation{
+			ActorPrincipalID: WirePrincipalID(r.Delegation.Actor),
+			Reason:           r.Delegation.Reason,
+			PermittedActions: append([]string{}, r.Delegation.PermittedActions...),
+		}
 	}
 	return out
 }
@@ -210,36 +233,77 @@ func validAMR(amr []string) bool {
 // refresh lifetime, which is when its last credential expired.
 func (s *Store) sessionColumns() string {
 	return `s.id::text, s.principal_id::text, s.organization_id::text, s.revision,
-	s.auth_time, s.amr, s.created_at, ` + s.effectiveExpiry() + `, ` + s.effectiveRevokedAt() + `, s.legacy_token_version`
+	s.auth_time, s.amr, s.created_at, ` + s.effectiveExpiry() + `, ` + s.effectiveRevokedAt() + `, s.legacy_token_version,
+	s.actor_principal_id::text, s.delegation_reason, s.delegation_permitted_actions`
 }
 
 // effectiveRevokedAt is the expression for alias s's revoked_at as the record
-// reports it: the explicit revoke, else the principal's password stamp
-// (users.password_updated_at) when that is strictly after the session was
-// created. A password change thus ends every older session in the same
-// transaction that wrote the new hash, whether or not RevokeAll ran. Both
-// times are database-clock values; a principal with no stamp voids nothing.
+// reports it: the session's own revoke (ownRevokedAt), else, for a browser
+// client's session, the whole effective revoke of its web session, evaluated
+// over the web session's row. A client session is created after its web session,
+// so a password change between the two creations voids the parent and not the
+// child's own stamp: the parent's stamp must be read against the parent's
+// created_at. Liveness is read, not written (CHAOS-12398): a web logout, an
+// organization switch, revoke-all and a password change end the child with no
+// code on those paths.
 func (s *Store) effectiveRevokedAt() string {
-	return fmt.Sprintf(`COALESCE(s.revoked_at,
-		(SELECT u.password_updated_at FROM %s.users u
-		 WHERE u.principal_id = s.principal_id AND u.password_updated_at > s.created_at))`, s.q)
+	return `COALESCE(` + s.ownRevokedAt("s") + `, ` + s.ofWebParent(s.ownRevokedAt("wp")) + `)`
 }
 
-// effectiveExpiry is the expression for alias s's effective expiry.
+// ownRevokedAt is one session row's revoke, for alias: the explicit revoke, else
+// the principal's password stamp (users.password_updated_at) when that is
+// strictly after the session was created. A password change thus ends every
+// older session in the same transaction that wrote the new hash, whether or not
+// RevokeAll ran. Both times are database-clock values; a principal with no stamp
+// voids nothing.
+func (s *Store) ownRevokedAt(alias string) string {
+	return fmt.Sprintf(`COALESCE(%[2]s.revoked_at,
+		(SELECT u.password_updated_at FROM %[1]s.users u
+		 WHERE u.principal_id = %[2]s.principal_id AND u.password_updated_at > %[2]s.created_at))`, s.q, alias)
+}
+
+// effectiveExpiry is the expression for alias s's effective expiry: its own, or
+// for a browser client's session its web session's when that is first. LEAST
+// ignores the NULL of an unlinked session.
 func (s *Store) effectiveExpiry() string {
-	return fmt.Sprintf(`LEAST(s.expires_at, COALESCE(
-		(SELECT r.expires_at FROM %s.refresh_credentials r WHERE r.session_id = s.id
+	return `LEAST(` + s.ownExpiry("s") + `, ` + s.ofWebParent(s.ownExpiry("wp")) + `)`
+}
+
+// effectiveCap is alias s's absolute cap: sessions.expires_at, or for a browser
+// client's session its web session's effective expiry when that is first. A
+// refresh exchange and a new credential's expiry both read it, so a client
+// session cannot be exchanged, or hold a credential, past its web session.
+func (s *Store) effectiveCap() string {
+	return `LEAST(s.expires_at, ` + s.ofWebParent(s.ownExpiry("wp")) + `)`
+}
+
+// ownExpiry is one session row's expiry, for alias: the absolute cap or its
+// newest credential's expiry, whichever is first. A session with no credential
+// uses its last rotation plus the refresh lifetime.
+func (s *Store) ownExpiry(alias string) string {
+	return fmt.Sprintf(`LEAST(%[2]s.expires_at, COALESCE(
+		(SELECT r.expires_at FROM %[1]s.refresh_credentials r WHERE r.session_id = %[2]s.id
 		 ORDER BY r.issued_at DESC, r.created_at DESC LIMIT 1),
-		COALESCE(s.last_seen_at, s.created_at) + %d * interval '1 microsecond'))`, s.q, s.refreshTTL.Microseconds())
+		COALESCE(%[2]s.last_seen_at, %[2]s.created_at) + %[3]d * interval '1 microsecond'))`, s.q, alias, s.refreshTTL.Microseconds())
+}
+
+// ofWebParent reads expr over alias wp, the web session of alias s. It is NULL
+// for an unlinked session. Depth one: a linked session's parent has no link
+// (0042's trigger), so one subquery is the whole chain.
+func (s *Store) ofWebParent(expr string) string {
+	return `(SELECT ` + expr + ` FROM ` + s.q + `.sessions wp WHERE wp.id = s.web_session_id)`
 }
 
 func scanRecord(row pgx.Row, extra ...any) (Record, error) {
 	var (
-		r                 Record
-		id, principal     string
-		organization      *string
-		authTime          *time.Time
-		dest              = []any{&id, &principal, &organization, &r.Revision, &authTime, &r.AMR, &r.CreatedAt, &r.ExpiresAt, &r.RevokedAt, &r.LegacyTokenVersion}
+		r             Record
+		id, principal string
+		organization  *string
+		authTime      *time.Time
+		actor, reason *string
+		permitted     []string
+		dest          = []any{&id, &principal, &organization, &r.Revision, &authTime, &r.AMR, &r.CreatedAt, &r.ExpiresAt, &r.RevokedAt, &r.LegacyTokenVersion,
+			&actor, &reason, &permitted}
 		parseErr, scanErr error
 	)
 	if scanErr = row.Scan(append(dest, extra...)...); scanErr != nil {
@@ -262,6 +326,16 @@ func scanRecord(row pgx.Row, extra ...any) (Record, error) {
 		r.AuthTime = *authTime
 	} else {
 		r.AuthTime = r.CreatedAt
+	}
+	if actor != nil {
+		id, err := uuid.Parse(*actor)
+		if err != nil {
+			return Record{}, err
+		}
+		r.Delegation = &Delegation{Actor: id, PermittedActions: permitted}
+		if reason != nil {
+			r.Delegation.Reason = *reason
+		}
 	}
 	return r, nil
 }
@@ -329,8 +403,8 @@ type queryRower interface {
 // lockedSession is the session row read FOR UPDATE, with what an exchange
 // decides on. expired is the EFFECTIVE expiry (Record.ExpiresAt) against the
 // database clock, the same liveness Current reports; capExpired is the
-// absolute cap alone, which an exchange checks before the credential's own
-// expiry so an expired credential reports refresh_expired.
+// absolute cap alone (effectiveCap), which an exchange checks before the
+// credential's own expiry so an expired credential reports refresh_expired.
 type lockedSession struct {
 	Record
 	expired, capExpired, principalDisabled bool
@@ -341,7 +415,7 @@ func (s *Store) lockSession(ctx context.Context, db queryRower, sessionID string
 	var now time.Time
 	var err error
 	l.Record, err = scanRecord(db.QueryRow(ctx, `
-		SELECT `+s.sessionColumns()+`, clock_timestamp(), s.expires_at <= clock_timestamp(), p.disabled_at IS NOT NULL
+		SELECT `+s.sessionColumns()+`, clock_timestamp(), `+s.effectiveCap()+` <= clock_timestamp(), p.disabled_at IS NOT NULL
 		FROM `+s.q+`.sessions s JOIN `+s.q+`.principals p ON p.id = s.principal_id
 		WHERE s.id = $1
 		FOR UPDATE OF s`, sessionID), &now, &l.capExpired, &l.principalDisabled)
@@ -475,7 +549,7 @@ func (s *Store) rotate(ctx context.Context, tx pgx.Tx, session Record, p present
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO `+s.q+`.refresh_credentials (id, session_id, principal_id, token_hash, family_id, parent_id, expires_at)
 		VALUES ($1, $2, $3, $4, $5, $6, LEAST(clock_timestamp() + make_interval(secs => $7::double precision),
-			(SELECT expires_at FROM `+s.q+`.sessions WHERE id = $2)))
+			(SELECT `+s.effectiveCap()+` FROM `+s.q+`.sessions s WHERE s.id = $2)))
 		RETURNING expires_at`,
 		childID.String(), session.ID.String(), session.PrincipalID.String(), hashCredential(successor),
 		p.familyID, p.id, s.refreshTTL.Seconds()).Scan(&expires); err != nil {
@@ -561,17 +635,33 @@ func (s *Store) revokeForReuse(ctx context.Context, session Record, familyID str
 // revokeSessions revokes the given sessions and every credential of them. The
 // caller holds their locks inside an audit.Commit transaction.
 func (s *Store) revokeSessions(ctx context.Context, tx audit.TxOps, ids []string, reason string) error {
+	return s.endSessions(ctx, tx, ids, reason, false)
+}
+
+// endSessions is revokeSessions; a delegated row among ids and every delegated
+// child of ids end with them, each with a delegation_ended audit row. nowait
+// is the mode of a caller under the auth lock order's step 6a.
+func (s *Store) endSessions(ctx context.Context, tx audit.TxOps, ids []string, reason string, nowait bool) error {
+	delegated, err := delegationend.Lock(ctx, tx, s.q, ids, nowait)
+	if err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE `+s.q+`.refresh_credentials
 		SET revoked_at = clock_timestamp(), revoked_reason = $2, updated_at = clock_timestamp()
 		WHERE session_id = ANY($1::uuid[]) AND revoked_at IS NULL`, ids, reason); err != nil {
 		return err
 	}
-	_, err := tx.Exec(ctx, `
+	if _, err := tx.Exec(ctx, `
 		UPDATE `+s.q+`.sessions
 		SET revoked_at = clock_timestamp(), revoked_reason = $2, updated_at = clock_timestamp()
-		WHERE id = ANY($1::uuid[]) AND revoked_at IS NULL`, ids, reason)
-	return err
+		WHERE id = ANY($1::uuid[]) AND revoked_at IS NULL`, ids, reason); err != nil {
+		return err
+	}
+	if err := delegationend.End(ctx, tx, s.q, delegationend.Children(delegated, ids), delegationend.ReasonBaseEnded); err != nil {
+		return err
+	}
+	return delegationend.Record(ctx, tx, delegated)
 }
 
 // Revoke ends one live session and every credential of it. It reports false

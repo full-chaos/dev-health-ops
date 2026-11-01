@@ -242,7 +242,36 @@ var offStreamReasons = map[string]bool{
 // the parameterised case at the server, and it was wrongly credited here as the
 // control until that claim was measured.
 
-type TxOps struct{ tx pgx.Tx }
+type TxOps struct {
+	tx    pgx.Tx
+	queue *auditQueue
+}
+
+// auditQueue holds the rows AddAudit queued. It belongs to one Commit call, so
+// a Commit a caller tries again starts empty. closed is set once Commit has
+// read it: a retained TxOps cannot add a row nothing would write.
+type auditQueue struct {
+	events []AuditEvent
+	closed bool
+}
+
+// AddAudit queues audit rows of this mutation from inside Apply, for a row only
+// the code that reached a state change can name (a delegated session a cascade
+// ended). Commit writes them after Audit and Also, in the same transaction: a
+// failure writing one rolls the mutation back. A TxOps of any other transaction
+// has no queue and refuses.
+func (t TxOps) AddAudit(events ...AuditEvent) error {
+	if t.queue == nil || t.queue.closed {
+		return fmt.Errorf("%w: no audit queue on this transaction", ErrMutationFailed)
+	}
+	for _, event := range events {
+		if err := validateMutationAudit(event); err != nil {
+			return err
+		}
+	}
+	t.queue.events = append(t.queue.events, events...)
+	return nil
+}
 
 // EVERY forward carries pgx.QueryExecModeExec, and that is a second control
 // rather than a performance choice.
@@ -389,16 +418,24 @@ type Mutation struct {
 	Refusals []error
 }
 
+// validateMutationAudit is the check of one audit row of a mutation.
+func validateMutationAudit(event AuditEvent) error {
+	if err := event.validate(); err != nil {
+		return err
+	}
+	if appendOnlyEventTypes[event.EventType] || publicPurgeEventTypes[event.EventType] {
+		return fmt.Errorf("%w: audit event_type %q is append-only and has no state mutation", ErrMutationFailed, event.EventType)
+	}
+	return nil
+}
+
 func (m Mutation) validate() error {
 	if m.Apply == nil {
 		return fmt.Errorf("%w: no state mutation", ErrMutationFailed)
 	}
 	for _, event := range append([]AuditEvent{m.Audit}, m.Also...) {
-		if err := event.validate(); err != nil {
+		if err := validateMutationAudit(event); err != nil {
 			return err
-		}
-		if appendOnlyEventTypes[event.EventType] || publicPurgeEventTypes[event.EventType] {
-			return fmt.Errorf("%w: audit event_type %q is append-only and has no state mutation", ErrMutationFailed, event.EventType)
 		}
 	}
 	switch {
@@ -460,7 +497,8 @@ func Commit(ctx context.Context, pool *pgxpool.Pool, schema authschema.Validated
 		return fmt.Errorf("%w: arming the commit guard: %w", ErrMutationFailed, err)
 	}
 
-	if applyErr := m.Apply(ctx, TxOps{tx: tx}); applyErr != nil {
+	queue := &auditQueue{}
+	if applyErr := m.Apply(ctx, TxOps{tx: tx, queue: queue}); applyErr != nil {
 		return fmt.Errorf("%w: applying the state mutation: %w", ErrMutationFailed, applyErr)
 	}
 	var changed int64
@@ -493,7 +531,8 @@ func Commit(ctx context.Context, pool *pgxpool.Pool, schema authschema.Validated
 	if err := insertOutboxEvents(ctx, tx, schema, m); err != nil {
 		return err
 	}
-	for _, event := range append([]AuditEvent{m.Audit}, m.Also...) {
+	queue.closed = true
+	for _, event := range append(append([]AuditEvent{m.Audit}, m.Also...), queue.events...) {
 		if err := insertAuditEvent(ctx, tx, schema, event); err != nil {
 			return err
 		}

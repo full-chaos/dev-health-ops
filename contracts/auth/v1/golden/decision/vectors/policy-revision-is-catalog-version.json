@@ -3,7 +3,7 @@
     "allowed": true,
     "cache_class": "",
     "expires_in_seconds": null,
-    "policy_revision": 6,
+    "policy_revision": 7,
     "reason": "allowed_by_role"
   },
   "id": "policy-revision-is-catalog-version",
@@ -35,5 +35,5 @@
     "snapshot": "grant",
     "workload": null
   },
-  "why": "policy_revision of a decision is the embedded catalog version (5), allow and deny alike."
+  "why": "policy_revision of a decision is the embedded catalog version, allow and deny alike."
 }

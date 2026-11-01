@@ -11,6 +11,8 @@ import (
 
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 )
 
 func TestRolePermissionsMatchTheRoleHierarchy(t *testing.T) {
@@ -33,11 +35,11 @@ func TestRolePermissionsMatchTheRoleHierarchy(t *testing.T) {
 			t.Fatalf("%q: %v", unknown, got)
 		}
 	}
-	if got := userPermissions(nil, true, "viewer"); len(got) != 22 {
+	if got := userPermissions(nil, &policy.User{IsSuperuser: true, Role: "viewer"}); len(got) != 22 {
 		t.Fatalf("superuser: %d", len(got))
 	}
 	target := "viewer"
-	if got := userPermissions(&target, true, "owner"); len(got) != 8 {
+	if got := userPermissions(&target, &policy.User{IsSuperuser: true, Role: "owner"}); len(got) != 8 {
 		t.Fatalf("impersonation uses the target role, got %d", len(got))
 	}
 }

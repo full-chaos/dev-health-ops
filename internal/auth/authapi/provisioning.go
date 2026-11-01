@@ -55,7 +55,8 @@ const (
 )
 
 var provisioningOperations = []string{opMembershipAdd, opMembershipRole, opMembershipRemove, opMembershipTransfer,
-	opInviteCreate, opInviteAccept, opOrgDeprovision, opOrgReactivate, opOrgSuspend, opInviteRevoke, opOrgState}
+	opInviteCreate, opInviteAccept, opOrgDeprovision, opOrgReactivate, opOrgSuspend, opInviteRevoke, opOrgState, opOrgOnboard, opOrgCreate,
+	opServiceAccountCreate, opServiceAccountDisable, opServiceAccountEnable, opServiceAccountOwner}
 
 // Provisioning refusal codes beyond the shared ones.
 const (
@@ -141,6 +142,8 @@ type ProvisioningDeps struct {
 	Invites       Invites
 	Deprovision   Deprovisioner
 	Orgs          OrganizationLifecycle
+	// ServiceAccounts is the organization service account aggregate.
+	ServiceAccounts ServiceAccounts
 	// Workload is the go-api workload token path the session issue route
 	// takes too (one subject); nil refuses every workload token.
 	Workload *SessionIssueWorkload
@@ -164,8 +167,8 @@ type provisioningHandlers struct {
 // deprovision routes. Each registration is on a line of its own.
 func ProvisioningRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 	if deps.Credentials == nil || deps.Users == nil || deps.Reader == nil || deps.Organizations == nil ||
-		deps.Memberships == nil || deps.Invites == nil || deps.Deprovision == nil || deps.Orgs == nil {
-		return nil, errors.New("authapi: provisioning routes need credentials, users, a reader, organizations, memberships, invites, a deprovisioner and the organization reactivate and suspend verbs")
+		deps.Memberships == nil || deps.Invites == nil || deps.Deprovision == nil || deps.Orgs == nil || deps.ServiceAccounts == nil {
+		return nil, errors.New("authapi: provisioning routes need credentials, users, a reader, organizations, memberships, invites, a deprovisioner, the organization reactivate and suspend verbs and the service account verbs")
 	}
 	rows := deps.ProfileRows
 	if rows == nil {
@@ -205,9 +208,11 @@ func ProvisioningRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 		{Method: http.MethodPost, Pattern: PatternOrgReactivate, Handler: http.HandlerFunc(h.orgReactivate)},
 		h.revokeRoute(h.Invites),
 		{Method: http.MethodPost, Pattern: PatternOrgSuspend, Handler: http.HandlerFunc(h.orgSuspend)},
+		{Method: http.MethodPost, Pattern: PatternOrgOnboard, Handler: http.HandlerFunc(h.orgOnboard)},
+		{Method: http.MethodPost, Pattern: PatternOrgCreate, Handler: http.HandlerFunc(h.orgCreate)},
 	}
 	routes = h.withStateRoute(routes, rows)
-	routes = h.withOrgCreateRoutes(routes, rows)
+	routes = h.withServiceAccountRoutes(routes, rows)
 	return routes, nil
 }
 
@@ -240,7 +245,8 @@ func (h provisioningHandlers) admitUpTo(w http.ResponseWriter, r *http.Request, 
 // list is default-deny: any other operation (the invite revoke and organization
 // suspend among them) refuses a workload token before the key set is read.
 var workloadOperations = map[string]bool{opMembershipAdd: true, opMembershipRole: true, opMembershipRemove: true,
-	opMembershipTransfer: true, opInviteCreate: true, opInviteAccept: true, opOrgDeprovision: true, opOrgReactivate: true, opOrgState: true}
+	opMembershipTransfer: true, opInviteCreate: true, opInviteAccept: true, opOrgDeprovision: true, opOrgReactivate: true, opOrgOnboard: true, opOrgCreate: true, opOrgState: true,
+	opServiceAccountCreate: true, opServiceAccountDisable: true, opServiceAccountEnable: true, opServiceAccountOwner: true}
 
 // caller authorizes the bearer, its class read from the text before any store
 // or key-set read: the session issuer credential holding memberships:write
@@ -301,7 +307,7 @@ func (h provisioningHandlers) actorRule(ctx context.Context, q session.Queryer, 
 	if !found || !state.IsActive {
 		return UserState{}, errActorRefused{reasonDeactivated}
 	}
-	if state.IsSuperuser {
+	if state.Holds(actionAdminOrgs) {
 		return state, nil
 	}
 	if superuserOnly {
@@ -321,7 +327,7 @@ func (h provisioningHandlers) actorRule(ctx context.Context, q session.Queryer, 
 // superuser: no target may be a superuser. It reads the targets' users rows,
 // which the membership verb holds FOR UPDATE (step 2).
 func (h provisioningHandlers) targetsRule(ctx context.Context, q session.Queryer, actor UserState, targets []uuid.UUID) error {
-	if actor.IsSuperuser {
+	if actor.Holds(actionAdminUsers) {
 		return nil
 	}
 	for _, target := range targets {

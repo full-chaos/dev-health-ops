@@ -51,6 +51,24 @@ type goldenWorkload struct {
 	AllowedActions []string `json:"allowed_actions"`
 }
 
+type goldenDelegation struct {
+	Chain []struct {
+		Actor            string   `json:"actor"`
+		PermittedActions []string `json:"permitted_actions"`
+	} `json:"chain"`
+	ActorPlatformRole    string `json:"actor_platform_role"`
+	TargetOrganizationID string `json:"target_organization_id"`
+	Assurance            string `json:"assurance"`
+}
+
+func (g goldenDelegation) delegation() Delegation {
+	d := Delegation{ActorPlatformRole: g.ActorPlatformRole, TargetOrganizationID: g.TargetOrganizationID, Assurance: g.Assurance}
+	for _, h := range g.Chain {
+		d.Chain = append(d.Chain, Hop{ActorPrincipalID: h.Actor, PermittedActions: h.PermittedActions})
+	}
+	return d
+}
+
 type goldenState struct {
 	Catalog         string                          `json:"catalog"`
 	Snapshot        string                          `json:"snapshot"`
@@ -63,6 +81,8 @@ type goldenState struct {
 	Grants          []goldenGrant                   `json:"grants"`
 	GrantsError     bool                            `json:"grants_error"`
 	Workload        *goldenWorkload                 `json:"workload"`
+	// Delegation absent means no actor chain.
+	Delegation *goldenDelegation `json:"delegation"`
 }
 
 type goldenRequest struct {
@@ -166,6 +186,20 @@ func (g goldenGrantSnap) ServiceAccount(org string) (ServiceAccount, bool) {
 }
 func (g goldenGrantSnap) NowUnixNano() int64 { return g.now }
 
+type goldenDelegSnap struct {
+	goldenSnap
+	d Delegation
+}
+
+func (g goldenDelegSnap) Delegation() (Delegation, bool) { return g.d, true }
+
+type goldenDelegGrantSnap struct {
+	goldenGrantSnap
+	d Delegation
+}
+
+func (g goldenDelegGrantSnap) Delegation() (Delegation, bool) { return g.d, true }
+
 func goldenEvaluator(t *testing.T, name string) *Evaluator {
 	t.Helper()
 	if name != "embedded" {
@@ -191,10 +225,19 @@ func goldenSnapshot(t *testing.T, st goldenState) Snapshot {
 	if st.Workload != nil {
 		base.workload = &WorkloadLimits{Audience: st.Workload.Audience, Audiences: st.Workload.Audiences, AllowedActions: st.Workload.AllowedActions}
 	}
+	if st.Delegation != nil && st.Snapshot == "nil" {
+		t.Fatal("a row with state.delegation cannot use snapshot nil: the chain would be dropped")
+	}
 	switch st.Snapshot {
 	case "grant":
+		if st.Delegation != nil {
+			return goldenDelegGrantSnap{goldenGrantSnap{base}, st.Delegation.delegation()}
+		}
 		return goldenGrantSnap{base}
 	case "plain":
+		if st.Delegation != nil {
+			return goldenDelegSnap{base, st.Delegation.delegation()}
+		}
 		return base
 	case "nil":
 		return nil

@@ -20,11 +20,11 @@ const orgsPrefix = "/api/v1/admin"
 
 func (h *handlers) orgRoutes() []httpapi.Route {
 	return []httpapi.Route{
-		{Method: http.MethodGet, Pattern: orgsPrefix + "/orgs", Handler: h.guard.Wrap(policy.Superuser, http.HandlerFunc(h.listOrganizations))},
-		{Method: http.MethodGet, Pattern: orgsPrefix + "/orgs/{org_id}", Handler: h.guard.Wrap(policy.Superuser, http.HandlerFunc(h.getOrganization))},
-		{Method: http.MethodPost, Pattern: orgsPrefix + "/orgs", Handler: h.bodyFirst(policy.Superuser, http.HandlerFunc(h.createOrganization))},
-		{Method: http.MethodPatch, Pattern: orgsPrefix + "/orgs/{org_id}", Handler: h.bodyFirst(policy.Superuser, http.HandlerFunc(h.updateOrganization))},
-		{Method: http.MethodDelete, Pattern: orgsPrefix + "/orgs/{org_id}", Handler: h.guard.Wrap(policy.Superuser, http.HandlerFunc(h.deleteOrganization))},
+		{Method: http.MethodGet, Pattern: orgsPrefix + "/orgs", Handler: h.guard.WrapPlatform(policy.ActionAdminOrgs, http.HandlerFunc(h.listOrganizations))},
+		{Method: http.MethodGet, Pattern: orgsPrefix + "/orgs/{org_id}", Handler: h.guard.WrapPlatform(policy.ActionAdminOrgs, http.HandlerFunc(h.getOrganization))},
+		{Method: http.MethodPost, Pattern: orgsPrefix + "/orgs", Handler: h.bodyFirstPlatform(policy.ActionAdminOrgs, http.HandlerFunc(h.createOrganization))},
+		{Method: http.MethodPatch, Pattern: orgsPrefix + "/orgs/{org_id}", Handler: h.bodyFirstPlatform(policy.ActionAdminOrgs, http.HandlerFunc(h.updateOrganization))},
+		{Method: http.MethodDelete, Pattern: orgsPrefix + "/orgs/{org_id}", Handler: h.guard.WrapPlatform(policy.ActionAdminOrgs, http.HandlerFunc(h.deleteOrganization))},
 		{Method: http.MethodGet, Pattern: orgsPrefix + "/orgs/{org_id}/members", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.listMembers))},
 		{Method: http.MethodPost, Pattern: orgsPrefix + "/orgs/{org_id}/members", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.addMember))},
 		// create_org_invite: authentication, then body validation, then the

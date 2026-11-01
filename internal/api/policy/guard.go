@@ -89,8 +89,40 @@ func NewGuard(auth *Authenticator, logger *slog.Logger) *Guard {
 	return &Guard{auth: auth, logger: logger}
 }
 
-// Wrap returns next behind level. A refused caller never reaches next.
+// gate names the action a platform wrap decides by; the zero gate is the
+// generic wrap, whose org-less rule is admin.orgs.
+type gate struct {
+	action string
+	kind   gateKind
+}
+
+type gateKind int
+
+const (
+	gateNone gateKind = iota
+	// gatePlatform admits only a holder of the action.
+	gatePlatform
+	// gateAdminOr admits Admin, or a holder of the action.
+	gateAdminOr
+)
+
+// orglessAction is the action that lets a caller with no organization reach a
+// route: the route's own, else admin.orgs.
+func (gt gate) orglessAction() string {
+	if gt.action != "" {
+		return gt.action
+	}
+	return ActionAdminOrgs
+}
+
+// Wrap returns next behind level. A refused caller never reaches next. The
+// bare Superuser level admits nobody: a platform route is wrapped with
+// WrapPlatform and its action.
 func (g *Guard) Wrap(level Authz, next http.Handler) http.Handler {
+	return g.wrap(level, gate{}, next)
+}
+
+func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 	if level == Public {
 		return countGuardLevel(level, next)
 	}
@@ -107,11 +139,11 @@ func (g *Guard) Wrap(level Authz, next http.Handler) http.Handler {
 		}))
 	}
 	return countGuardLevel(level, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		user, ok := g.currentUser(w, r, level)
+		user, ok := g.currentUser(w, r, level, gt)
 		if !ok {
 			return
 		}
-		if user.OrgID == "" && !user.IsSuperuser && !OrglessMayReach(r.Method, r.URL.Path) {
+		if user.OrgID == "" && !user.Holds(gt.orglessAction()) && !OrglessMayReach(r.Method, r.URL.Path) {
 			WriteDetail(w, http.StatusForbidden, "Organization context required", nil)
 			return
 		}
@@ -125,7 +157,7 @@ func (g *Guard) Wrap(level Authz, next http.Handler) http.Handler {
 				acting.OrgID = org
 				user = &acting
 			}
-			if !user.IsAdmin() {
+			if !user.IsAdmin() && !(gt.kind == gateAdminOr && user.Holds(gt.action)) {
 				WriteDetail(w, http.StatusForbidden, "Admin access required", nil)
 				return
 			}
@@ -134,7 +166,7 @@ func (g *Guard) Wrap(level Authz, next http.Handler) http.Handler {
 				return
 			}
 		case Superuser:
-			if !user.IsSuperuser {
+			if gt.kind != gatePlatform || !user.Holds(gt.action) {
 				WriteDetail(w, http.StatusForbidden, "Superuser access required", nil)
 				return
 			}
@@ -146,18 +178,18 @@ func (g *Guard) Wrap(level Authz, next http.Handler) http.Handler {
 // WrapPlatform returns next behind the platform gate of action: only a caller
 // that holds action passes.
 func (g *Guard) WrapPlatform(action string, next http.Handler) http.Handler {
-	return g.Wrap(Superuser, next)
+	return g.wrap(Superuser, gate{action, gatePlatform}, next)
 }
 
 // WrapAdminOr returns next behind Admin, which a caller that holds action also
 // passes.
 func (g *Guard) WrapAdminOr(action string, next http.Handler) http.Handler {
-	return g.Wrap(Admin, next)
+	return g.wrap(Admin, gate{action, gateAdminOr}, next)
 }
 
 // currentUser is get_current_user. It writes the refusal itself. At the admin
 // levels the role is the token org's membership row's (adminRole).
-func (g *Guard) currentUser(w http.ResponseWriter, r *http.Request, level Authz) (*User, bool) {
+func (g *Guard) currentUser(w http.ResponseWriter, r *http.Request, level Authz, gt gate) (*User, bool) {
 	authorization := r.Header.Get("Authorization")
 	if authorization == "" {
 		authFailure(w, "Not authenticated", nil)
@@ -188,7 +220,7 @@ func (g *Guard) currentUser(w http.ResponseWriter, r *http.Request, level Authz)
 			countRoleSource(r.Context(), kindRoleClaimFallback)
 		}
 	}
-	if (level != Admin && level != AdminOrg) || user.Holds(ActionAdminOrgs) || user.OrgID == "" {
+	if (level != Admin && level != AdminOrg) || user.Holds(ActionAdminOrgs) || (gt.kind == gateAdminOr && user.Holds(gt.action)) || user.OrgID == "" {
 		return user, true
 	}
 	// At an admin level the caller's role in the token's own org is the

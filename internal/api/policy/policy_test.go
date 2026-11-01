@@ -376,7 +376,7 @@ func TestGuardDecisionTable(t *testing.T) {
 			default:
 				headers["Authorization"] = test.auth
 			}
-			got := serve(NewGuard(auth, quiet()).Wrap(test.level, echo), http.MethodGet, "/x", headers)
+			got := serve(wrapLevel(NewGuard(auth, quiet()), test.level, echo), http.MethodGet, "/x", headers)
 			if got.status != test.status {
 				t.Fatalf("status %d %s, want %d", got.status, got.body, test.status)
 			}

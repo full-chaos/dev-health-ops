@@ -65,7 +65,7 @@ func validAuth(t *testing.T, mutate func(jwt.MapClaims)) map[string]string {
 
 func guardServe(t *testing.T, level Authz, store *fakeStore, headers map[string]string) response {
 	t.Helper()
-	return serve(NewGuard(authenticator(t, store), quiet()).Wrap(level, echo), http.MethodGet, "/x", headers)
+	return serve(wrapLevel(NewGuard(authenticator(t, store), quiet()), level, echo), http.MethodGet, "/x", headers)
 }
 
 func TestLegacyGuardLevelCountsEveryLevelAtEntry(t *testing.T) {
@@ -335,7 +335,7 @@ func TestLegacyNoLabelFromTheRequest(t *testing.T) {
 	for _, level := range []Authz{Public, Authenticated, Admin, Superuser, AdminOrg, Optional} {
 		store := newStore()
 		withClaimRole(store, claims(func(c jwt.MapClaims) { c["role"] = "admin" }))
-		serve(NewGuard(authenticator(t, store), quiet()).Wrap(level, echo), http.MethodGet, "/orgs/"+strangerOrg+"/secret?token=abc", hostile)
+		serve(wrapLevel(NewGuard(authenticator(t, store), quiet()), level, echo), http.MethodGet, "/orgs/"+strangerOrg+"/secret?token=abc", hostile)
 	}
 	allowed := legacyPinnedKinds()
 	for _, key := range rec.keys() {

@@ -67,14 +67,14 @@ func parseSetPasswordBody(body pybody.Body) (setPasswordInput, pybody.Errors) {
 
 func (h *handlers) userRoutes() []httpapi.Route {
 	return []httpapi.Route{
-		{Method: http.MethodGet, Pattern: usersPrefix + "/users", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.listUsers))},
-		{Method: http.MethodGet, Pattern: usersPrefix + "/users/{user_id}", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.getUser))},
-		{Method: http.MethodPost, Pattern: usersPrefix + "/users", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.createUser))},
-		{Method: http.MethodPatch, Pattern: usersPrefix + "/users/{user_id}", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.updateUser))},
+		{Method: http.MethodGet, Pattern: usersPrefix + "/users", Handler: h.guard.WrapAdminOr(policy.ActionAdminUsers, http.HandlerFunc(h.listUsers))},
+		{Method: http.MethodGet, Pattern: usersPrefix + "/users/{user_id}", Handler: h.guard.WrapAdminOr(policy.ActionAdminUsers, http.HandlerFunc(h.getUser))},
+		{Method: http.MethodPost, Pattern: usersPrefix + "/users", Handler: h.bodyFirstAdminOr(policy.ActionAdminUsers, http.HandlerFunc(h.createUser))},
+		{Method: http.MethodPatch, Pattern: usersPrefix + "/users/{user_id}", Handler: h.bodyFirstAdminOr(policy.ActionAdminUsers, http.HandlerFunc(h.updateUser))},
 		{Method: http.MethodPost, Pattern: usersPrefix + "/users/{user_id}/password",
-			Handler: h.bodyFirst(policy.Admin,
+			Handler: h.bodyFirstAdminOr(policy.ActionAdminUsers,
 				httpapi.ValidateThenLimit(validateSetPasswordBody, h.passwordLimiter, adminUserKey, h.write)(http.HandlerFunc(h.setUserPassword)))},
-		{Method: http.MethodDelete, Pattern: usersPrefix + "/users/{user_id}", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.deleteUser))},
+		{Method: http.MethodDelete, Pattern: usersPrefix + "/users/{user_id}", Handler: h.guard.WrapAdminOr(policy.ActionAdminUsers, http.HandlerFunc(h.deleteUser))},
 	}
 }
 

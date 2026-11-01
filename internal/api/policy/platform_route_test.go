@@ -159,3 +159,12 @@ func TestPlatformRoute_ImpersonationStopByAHolderOfAdminImpersonateOnly(t *testi
 		}
 	}
 }
+
+// wrapLevel is Wrap, except that the platform level goes through WrapPlatform
+// with admin.orgs: the bare Superuser level admits nobody.
+func wrapLevel(g *Guard, level Authz, next http.Handler) http.Handler {
+	if level == Superuser {
+		return g.WrapPlatform(ActionAdminOrgs, next)
+	}
+	return g.Wrap(level, next)
+}

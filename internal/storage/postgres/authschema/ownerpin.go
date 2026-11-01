@@ -37,7 +37,7 @@ func (o Options) validateSchemaOwnerRole() error {
 // every catalog an owner can differ on: relations, routines, types, collations, statistics, text search objects,
 // operators, operator classes and families, conversions and the schema itself. An index, a TOAST table, an array
 // type and a table's row type follow their table, so they are not read.
-const schemaObjectsNotOwnedSQL = `
+const schemaObjectsUnion = `
 SELECT kind, count(*) FROM (
   SELECT CASE c.relkind WHEN 'r' THEN 'table' WHEN 'p' THEN 'table' WHEN 'v' THEN 'view' WHEN 'm' THEN 'materialized view'
                         WHEN 'S' THEN 'sequence' WHEN 'f' THEN 'foreign table' ELSE 'type' END AS kind, c.relowner AS o
@@ -60,8 +60,13 @@ SELECT kind, count(*) FROM (
   UNION ALL SELECT 'operator family', x.opfowner FROM pg_opfamily x JOIN pg_namespace n ON n.oid = x.opfnamespace WHERE n.nspname = $1
   UNION ALL SELECT 'conversion', x.conowner FROM pg_conversion x JOIN pg_namespace n ON n.oid = x.connamespace WHERE n.nspname = $1
   UNION ALL SELECT 'schema', n.nspowner FROM pg_namespace n WHERE n.nspname = $1
-) objs WHERE o <> (SELECT oid FROM pg_roles WHERE rolname = $2)
-GROUP BY kind ORDER BY kind`
+) objs `
+
+// schemaObjectsNotOwnedSQL counts the objects of the schema owned by a role other than $2; schemaObjectsOwnedSQL counts
+// those $2 owns. Both take the same four arguments (schema, role, writer, append function name).
+const schemaObjectsNotOwnedSQL = schemaObjectsUnion + `WHERE o <> (SELECT oid FROM pg_roles WHERE rolname = $2) GROUP BY kind ORDER BY kind`
+
+const schemaObjectsOwnedSQL = schemaObjectsUnion + `WHERE o = (SELECT oid FROM pg_roles WHERE rolname = $2) GROUP BY kind ORDER BY kind`
 
 // verifySchemaOwnerPin checks the pin of Options.SchemaOwnerRole. It checks the OWNER role, not the connected login,
 // so a rollback to the old login still passes while the objects stay with the pinned owner.

@@ -40,7 +40,9 @@ type State struct {
 	// LegacyTokenVersion is the session's token_version pin; nil on a session
 	// that has none.
 	LegacyTokenVersion *int64
-	ActorPrincipalID   *uuid.UUID
+	// ActorPrincipalID is the real actor of a delegated session; nil on any
+	// other session.
+	ActorPrincipalID *uuid.UUID
 }
 
 // StateReader reads one session's state.
@@ -102,13 +104,27 @@ func (c *Client) State(ctx context.Context, sessionID uuid.UUID) (State, error) 
 
 var errStateAnswer = errors.New("the state answer is not exactly the session state document")
 
-// parseState reads exactly the five members of the state document: principal_id
+// stateOptionalMembers is the closed list of members the state document may
+// add to its five required ones.
+var stateOptionalMembers = []string{"actor_principal_id"}
+
+// parseState reads the five required members of the state document: principal_id
 // (a canonical UUID), organization_id (a canonical UUID or null), revoked and
-// expired (booleans) and legacy_token_version (an integer or null). A missing,
-// repeated or unknown member is refused.
+// expired (booleans) and legacy_token_version (an integer or null), and the
+// optional actor_principal_id (a canonical UUID). A missing, repeated or unknown
+// member is refused.
 func parseState(answer []byte) (State, error) {
 	members, ok := objectMembers(answer)
-	if !ok || len(members) != 5 {
+	if !ok {
+		return State{}, errStateAnswer
+	}
+	want := 5
+	for _, name := range stateOptionalMembers {
+		if _, present := members[name]; present {
+			want++
+		}
+	}
+	if len(members) != want {
 		return State{}, errStateAnswer
 	}
 	var out State
@@ -151,6 +167,13 @@ func parseState(answer []byte) (State, error) {
 			return State{}, errStateAnswer
 		}
 		out.LegacyTokenVersion = &version
+	}
+	if raw, present := members["actor_principal_id"]; present {
+		actor, err := canonicalUUID(raw)
+		if err != nil {
+			return State{}, err
+		}
+		out.ActorPrincipalID = &actor
 	}
 	return out, nil
 }

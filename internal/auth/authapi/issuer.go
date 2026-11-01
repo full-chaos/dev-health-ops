@@ -53,8 +53,10 @@ type Grant struct {
 	Role           string
 	SessionID      uuid.UUID
 	User           UserState
-	ExpiresAt      *time.Time
-	Actor          *uuid.UUID
+	// ExpiresAt, when set, caps the token's exp: the end of a delegated session.
+	ExpiresAt *time.Time
+	// Actor, when set, is the real actor of a delegated session.
+	Actor *uuid.UUID
 }
 
 // errIssue wraps a failure to mint an access token.
@@ -77,6 +79,7 @@ func (i *Issuer) AccessContext(ctx context.Context, grant Grant) (string, error)
 // eddsa class the token of audience auth-service that the session routes
 // accept (they accept an EdDSA token of that audience only). Under
 // hs256_compat Session is empty: the session routes accept the HS256 token.
+// ExpiresIn is exp - iat of the tokens, in seconds.
 type Tokens struct {
 	Access    string
 	Session   string
@@ -105,22 +108,27 @@ func (i *Issuer) mint(ctx context.Context, grant Grant, withSession bool) (Token
 	if grant.SessionID == uuid.Nil || grant.PrincipalID == uuid.Nil {
 		return Tokens{}, fmt.Errorf("%w: a grant needs its principal and its session", errIssue)
 	}
+	now := i.now()
 	switch {
 	case i.signer != nil && i.eddsa != nil:
 		return Tokens{}, fmt.Errorf("%w: both access token classes are configured", errIssue)
 	case i.eddsa != nil:
-		now := i.now()
-		compact, kid, err := i.eddsa.mint(ctx, grant, now)
+		expires, err := grantExpiry(grant, now, EdDSAAccessLifetime)
+		if err != nil {
+			return Tokens{}, err
+		}
+		compact, kid, err := i.eddsa.mint(ctx, grant, now, expires)
 		if err != nil {
 			return Tokens{}, err
 		}
 		if compact, err = i.recordKid(ctx, grant, compact, kid); err != nil {
 			return Tokens{}, err
 		}
+		expiresIn := int(expires.Unix() - now.Unix())
 		if !withSession {
-			return Tokens{Access: compact}, nil
+			return Tokens{Access: compact, ExpiresIn: expiresIn}, nil
 		}
-		sessionToken, sessionKid, err := i.eddsa.mintSession(ctx, grant, now)
+		sessionToken, sessionKid, err := i.eddsa.mintSession(ctx, grant, now, expires)
 		if err != nil {
 			return Tokens{}, err
 		}
@@ -129,37 +137,61 @@ func (i *Issuer) mint(ctx context.Context, grant Grant, withSession bool) (Token
 				return Tokens{}, err
 			}
 		}
-		return Tokens{Access: compact, Session: sessionToken}, nil
+		return Tokens{Access: compact, Session: sessionToken, ExpiresIn: expiresIn}, nil
 	case i.signer == nil:
 		return Tokens{}, fmt.Errorf("%w: no access token class is configured", errIssue)
 	}
-	compact, err := i.hs256Access(grant)
+	expires, err := grantExpiry(grant, now, edgetoken.AccessLifetime)
+	if err != nil {
+		return Tokens{}, err
+	}
+	compact, err := i.hs256Access(grant, now, expires)
 	if err != nil {
 		return Tokens{}, err
 	}
 	compact, err = i.recordKid(ctx, grant, compact, "")
-	return Tokens{Access: compact}, err
+	return Tokens{Access: compact, ExpiresIn: int(expires.Unix() - now.Unix())}, err
+}
+
+// grantExpiry is the earlier of now + lifetime and the grant's ExpiresAt. exp
+// is whole seconds, so a cap that leaves no whole second mints no token.
+func grantExpiry(grant Grant, now time.Time, lifetime time.Duration) (time.Time, error) {
+	expires := now.Add(lifetime)
+	if grant.ExpiresAt != nil && grant.ExpiresAt.Before(expires) {
+		expires = *grant.ExpiresAt
+	}
+	if expires.Unix() <= now.Unix() {
+		return time.Time{}, fmt.Errorf("%w: the grant has ended", errIssue)
+	}
+	return expires, nil
 }
 
 // hs256Access mints go-api's claims (create_access_token,
-// internal/api/session/tokens.go accessClaims) plus sid.
-func (i *Issuer) hs256Access(grant Grant) (string, error) {
+// internal/api/session/tokens.go accessClaims) plus sid, and on a delegated
+// grant the impersonating_user_id go-api's readers already take.
+func (i *Issuer) hs256Access(grant Grant, now, expires time.Time) (string, error) {
 	org := ""
 	if grant.OrganizationID != nil {
 		org = grant.OrganizationID.String()
 	}
 	sid := session.WireSessionID(grant.SessionID)
-	token, err := i.signer.Access(edgetoken.AccessClaims{
-		UserID:       grant.PrincipalID.String(),
-		Email:        grant.User.Email,
-		OrgID:        org,
-		Role:         grant.Role,
-		IsSuperuser:  grant.User.IsSuperuser,
-		Username:     grant.User.Username,
-		FullName:     grant.User.FullName,
-		TokenVersion: grant.User.TokenVersion,
-		SessionID:    &sid,
-	}, i.now(), uuid.NewString())
+	var actor *string
+	if grant.Actor != nil {
+		text := grant.Actor.String()
+		actor = &text
+	}
+	token, err := i.signer.AccessUntil(edgetoken.AccessClaims{
+		UserID:              grant.PrincipalID.String(),
+		Email:               grant.User.Email,
+		OrgID:               org,
+		Role:                grant.Role,
+		IsSuperuser:         grant.User.IsSuperuser,
+		Username:            grant.User.Username,
+		FullName:            grant.User.FullName,
+		TokenVersion:        grant.User.TokenVersion,
+		ImpersonatingUserID: actor,
+		SessionID:           &sid,
+	}, now, expires, uuid.NewString())
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", errIssue, err)
 	}
@@ -171,7 +203,9 @@ type Bearer struct {
 	PrincipalID  uuid.UUID
 	SessionID    uuid.UUID
 	TokenVersion int64
-	// Impersonated is set when the token carries impersonating_user_id.
+	// Impersonated is set when the token carries impersonating_user_id, and by
+	// authenticateWith when the session row is delegated: an EdDSA token's act
+	// is not read here, the row decides.
 	Impersonated bool
 	// sessionPinned is set for an EdDSA token, which has no tv: the session's
 	// legacy_token_version pin takes its place.

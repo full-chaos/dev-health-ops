@@ -151,6 +151,7 @@ func CompatRoutes(deps CompatDeps) ([]httpapi.Route, error) {
 	}
 	if deps.ServiceCredentials != nil || deps.IssueWorkload != nil {
 		routes = h.withSessionStateRoute(routes)
+		routes = h.withDelegatedRoutes(routes)
 	}
 	return routes, nil
 }

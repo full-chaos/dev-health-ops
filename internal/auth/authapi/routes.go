@@ -101,6 +101,10 @@ func (h handlers) authenticate(w http.ResponseWriter, r *http.Request, operation
 // go-api compatibility route that go-api forwards unread (goAPIBearerRefusal).
 type refuser func(w http.ResponseWriter, r *http.Request, operation string, answer refusal, err error)
 
+// delegatedBearerOperations are the operations a delegated session's bearer may
+// reach (G-51). Any other caller of authenticateWith is denied by default.
+var delegatedBearerOperations = map[string]bool{opSessionCurrent: true, opSessionRevoke: true}
+
 // authenticateWith is authenticate with the refusal written by refuse.
 func (h handlers) authenticateWith(w http.ResponseWriter, r *http.Request, operation string, refuse refuser) (Bearer, session.Record, bool) {
 	token, ok := bearerToken(r)
@@ -146,6 +150,13 @@ func (h handlers) authenticateWith(w http.ResponseWriter, r *http.Request, opera
 	case bearer.revisionStale(record, user):
 		refuse(w, r, operation, unauthorized(reasonRevisionStale), nil)
 		return Bearer{}, session.Record{}, false
+	}
+	if record.Delegation != nil {
+		bearer.Impersonated = true
+		if !delegatedBearerOperations[operation] {
+			refuse(w, r, operation, refusal{http.StatusForbidden, reasonNotEntitled}, nil)
+			return Bearer{}, session.Record{}, false
+		}
 	}
 	return bearer, record, true
 }

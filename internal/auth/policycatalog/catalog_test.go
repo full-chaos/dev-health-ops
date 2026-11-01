@@ -454,6 +454,13 @@ func TestAcrContextReadIsHeldByExactlyTheRolesThatHoldGitRead(t *testing.T) {
 	if c.Allows("platform_admin", "acr.context.read") {
 		t.Error("platform_admin holds acr.context.read")
 	}
+	for _, role := range []string{"platform_admin", "platform_owner"} {
+		for _, action := range []string{"acr.context.read", "git.read"} {
+			if c.Allows(role, action) {
+				t.Errorf("%s holds %s", role, action)
+			}
+		}
+	}
 }
 
 func TestImpersonationIsDeniedOnTheG51List(t *testing.T) {

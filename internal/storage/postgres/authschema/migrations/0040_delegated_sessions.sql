@@ -1,4 +1,4 @@
--- 0039 delegated (impersonation) sessions. ADDITIVE ONLY. See 0001's header.
+-- 0040 delegated (impersonation) sessions. ADDITIVE ONLY. See 0001's header.
 --
 -- A delegated session is a row of auth.sessions: principal_id is the target
 -- (the effective subject), organization_id the target organization, id the

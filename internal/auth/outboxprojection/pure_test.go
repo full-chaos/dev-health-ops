@@ -80,6 +80,9 @@ func TestVerdictComparesTheStoredDigest(t *testing.T) {
 	if Compare(nil, d) != VerdictNew || Compare(d[:], d) != VerdictSame || Compare(other[:], d) != VerdictDifferent {
 		t.Fatal("Compare does not tell new, same and different apart")
 	}
+	if Compare(d[:16], d) != VerdictDifferent {
+		t.Fatal("a stored prefix of the digest must read as different, never as same")
+	}
 	if Compare([]byte{1, 2}, d) != VerdictDifferent {
 		t.Fatal("a stored digest of the wrong length must read as different, never as same")
 	}
@@ -131,16 +134,17 @@ func TestInputCheckRefusesWhatCannotBeKeyed(t *testing.T) {
 		t.Fatalf("a valid acr input: %v", err)
 	}
 	cases := map[string]func(*Input){
-		"no source id":           func(i *Input) { i.Event.Payload.SourceID = "" },
-		"no organization":        func(i *Input) { i.Event.Payload.OrganizationID = "" },
-		"organization not org_":  func(i *Input) { i.Event.Payload.OrganizationID = "org_not-a-uuid" },
-		"no aggregate id":        func(i *Input) { i.Event.AggregateID = "" },
-		"id with a slash":        func(i *Input) { i.Event.AggregateID = "a/b" },
-		"revision zero":          func(i *Input) { i.Event.Payload.Revision = 0 },
-		"unknown domain":         func(i *Input) { i.Domain = "stripe" },
-		"acr with no class":      func(i *Input) { i.Domain, i.AcrClass = DomainAcr, "" },
-		"acr with a wrong class": func(i *Input) { i.Domain, i.AcrClass = DomainAcr, "workload_token" },
-		"push with an acr class": func(i *Input) { i.AcrClass = "acr_client_credential" },
+		"no source id":                func(i *Input) { i.Event.Payload.SourceID = "" },
+		"no organization":             func(i *Input) { i.Event.Payload.OrganizationID = "" },
+		"organization not org_":       func(i *Input) { i.Event.Payload.OrganizationID = "org_not-a-uuid" },
+		"organization with no prefix": func(i *Input) { i.Event.Payload.OrganizationID = sampleOrg },
+		"no aggregate id":             func(i *Input) { i.Event.AggregateID = "" },
+		"id with a slash":             func(i *Input) { i.Event.AggregateID = "a/b" },
+		"revision zero":               func(i *Input) { i.Event.Payload.Revision = 0 },
+		"unknown domain":              func(i *Input) { i.Domain = "stripe" },
+		"acr with no class":           func(i *Input) { i.Domain, i.AcrClass = DomainAcr, "" },
+		"acr with a wrong class":      func(i *Input) { i.Domain, i.AcrClass = DomainAcr, "workload_token" },
+		"push with an acr class":      func(i *Input) { i.AcrClass = "acr_client_credential" },
 	}
 	for name, edit := range cases {
 		in := ok

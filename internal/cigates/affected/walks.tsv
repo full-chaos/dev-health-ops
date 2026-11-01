@@ -48,6 +48,7 @@ internal/auth/contracts	endpoint_auth_profile_goldens_test.go	contracts/auth/v1/
 internal/auth/contracts	endpoint_profile_source_commit_history_test.go	contracts/auth/v1	dir	*
 internal/auth/contracts	endpoint_profiles_query_api_test.go	contracts/auth/v1	dir	*
 internal/auth/contracts	error_envelope_goldens_test.go	contracts/auth/v1/examples/error	dir	*
+internal/auth/contracts	fixture_scanner_plain_base64_test.go	contracts/auth/v1/examples	tree	*
 internal/auth/contracts	fixture_secret_scanner_test.go	contracts/auth/v1/examples	tree	*
 internal/auth/contracts	jwks_document_goldens_test.go	contracts/auth/v1/examples/jwks	dir	*
 internal/auth/contracts	openapi_refresh_versions_test.go	contracts/auth/v1/jsonschema	dir	*

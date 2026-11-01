@@ -152,7 +152,7 @@ func TestTheQueueHelperTakesTheExpectedLegNamesNotACount(t *testing.T) {
 		return qualityJobsJSON(legs)
 	}
 	padded := []string{"static"}
-	for i := 1; i <= 9; i++ {
+	for i := 1; i <= 10; i++ {
 		padded = append(padded, fmt.Sprintf("padding-%d", i))
 	}
 	for _, c := range []struct {
@@ -161,10 +161,10 @@ func TestTheQueueHelperTakesTheExpectedLegNamesNotACount(t *testing.T) {
 		want bool
 	}{
 		{"every expected leg ran green", ok(qualityLegNames), true},
-		{"the padded matrix of the review (ten distinct successful names, wrong ones)", ok(padded), false},
-		{"one expected leg is missing", ok(qualityLegNames[:9]), false},
+		{"the padded matrix of the review (eleven distinct successful names, wrong ones)", ok(padded), false},
+		{"one expected leg is missing", ok(qualityLegNames[:10]), false},
 		{"an extra prefixed job beside every expected leg", ok(append(append([]string{}, qualityLegNames...), "padding-1")), false},
-		{"one expected leg is a duplicate of another (ten jobs, nine names)", ok(append(append([]string{}, qualityLegNames[:9]...), "static")), false},
+		{"one expected leg is a duplicate of another (eleven jobs, ten names)", ok(append(append([]string{}, qualityLegNames[:10]...), "static")), false},
 		{"one expected leg failed", qualityJobsJSON(qualityLegs(func(i int, l *qualityLeg) {
 			if i == 3 {
 				l.job = "failure"

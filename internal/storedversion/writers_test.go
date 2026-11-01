@@ -119,6 +119,7 @@ var unresolvedWriters = map[string]string{
 	"internal/auth/keyrotation/store.go":                     "PostgreSQL auth-schema signing_keys inserts of the key rotation operator (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/org/store.go":                             "PostgreSQL auth-schema organizations insert of the organization aggregate (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/serviceaccount/store.go":                  "PostgreSQL auth-schema principals and service_accounts inserts of the organization service account lifecycle (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/workload/assertion_keys.go":               "PostgreSQL auth-schema workload_assertion_keys insert of the assertion key verb (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/workload/bootstrap_lifecycle.go":          "PostgreSQL auth-schema credential_registry inserts of the workload bootstrap lifecycle verbs (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/workload/store.go":                        "PostgreSQL auth-schema principals, workloads and workload_bindings inserts of the workload registry (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/session/signin.go":                        "PostgreSQL auth-schema sessions and refresh_credentials inserts of a sign-in (schema name interpolated); no in-scope ClickHouse table; a second writer path of store.go's rows until CHAOS-10411 moves Create onto it",

@@ -44,8 +44,12 @@ var rowClaims = map[string]map[string]rowClaim{
 		"impersonation_policy": {value: "subject_to_impersonation_override", proofs: []claimProof{
 			{file: "graphql_edge_route.go", decl: "graphQLEdgeChain", needles: []string{"scope.Impersonation(handler)"}, anyOf: []string{}},
 		}},
-		"disclosure_behavior": {value: "401 Authentication required (authenticateGraphQLEdge); 403 for an X-Org-Id the caller may not use (scope.OrgScope); 404 for a browser GET; 404 UNREGISTERED_DOCUMENT for an authenticated unregistered document", proofs: []claimProof{
+		"disclosure_behavior": {value: "401 Authentication required (authenticateGraphQLEdge); 403 for an X-Org-Id the caller may not use (scope.OrgScope); 404 for a browser GET; 404 UNREGISTERED_DOCUMENT for an authenticated unregistered document; 500 when an identity read (the users row, the membership or the impersonation session) fails: the request fails closed and is not served (policy.Scope middleware -> WriteInternal; authenticateGraphQLEdge answers the same 500 on edgeUnavailable); 503 when the token key source is unreadable on the user access token path (writeCallerLookupFailure -> policy.WriteAuthFailure)", proofs: []claimProof{
 			{file: "graphql_edge_route.go", decl: "authenticateGraphQLEdge", needles: []string{"policy.WriteDetail(w, http.StatusUnauthorized, \"Authentication required\", nil)"}, anyOf: []string{}},
+			{file: "graphql_edge_route.go", decl: "authenticateGraphQLEdge", needles: []string{"case edgeUnavailable:", "policy.WriteInternal(w)"}, anyOf: []string{}},
+			{file: "../../api/policy/scope.go", decl: "Scope.Impersonation", needles: []string{"session lookup failed; refusing the request", "WriteInternal(w)"}, anyOf: []string{}},
+			{file: "../../api/policy/callerlookup.go", decl: "writeCallerLookupFailure", needles: []string{"WriteInternal(w)"}, anyOf: []string{}},
+			{file: "../../api/policy/callerlookup.go", decl: "writeCallerLookupFailure", needles: []string{"errors.Is(err, ErrKeySourceUnavailable)", "WriteAuthFailure(w, \"\", ErrUnavailable)"}, anyOf: []string{}},
 			{file: "../../api/policy/scope.go", decl: "Scope.OrgScope", needles: []string{"writeOrgDenied(w)"}, anyOf: []string{}},
 			{file: "../../api/policy/scope.go", decl: "writeOrgDenied", needles: []string{"http.StatusForbidden"}, anyOf: []string{}},
 			{file: "graphql_edge_route.go", decl: "refuseIDE", needles: []string{"plainRefusal(http.StatusNotFound, \"Not Found\")"}, anyOf: []string{}},

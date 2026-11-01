@@ -136,6 +136,7 @@ internal/auth/contracts	contracts.go	internal/auth/session
 internal/auth/contracts	contracts.go	internal/auth/usersbackfill
 internal/auth/contracts	contracts.go	internal/auth/workloadexchange
 internal/auth/contracts	contracts.go	internal/cigates/chartgates
+internal/auth/contracts	contracts.go	internal/cigates/workflows
 internal/auth/contracts	contracts.go	internal/platform/logging
 internal/auth/contracts	contracts.go	internal/queryapi/server
 internal/auth/contracts	contracts.go	internal/testsupport/usertokens
@@ -493,6 +494,7 @@ internal/platform/secrets	source.go	internal/auth/usersbackfill
 internal/platform/secrets	source.go	internal/backfillrun
 internal/platform/secrets	source.go	internal/billingcli
 internal/platform/secrets	source.go	internal/chmigrate
+internal/platform/secrets	source.go	internal/cigates/workflows
 internal/platform/secrets	source.go	internal/clicredentials
 internal/platform/secrets	source.go	internal/fixturescli
 internal/platform/secrets	source.go	internal/maintenancecli

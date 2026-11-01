@@ -102,6 +102,9 @@
             ]
           },
           "then": {
+            "properties": {
+              "source_id": true
+            },
             "required": [
               "source_id"
             ]
@@ -120,6 +123,9 @@
           },
           "then": {
             "not": {
+              "properties": {
+                "source_id": true
+              },
               "required": [
                 "source_id"
               ]

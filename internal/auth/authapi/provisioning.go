@@ -210,9 +210,12 @@ func ProvisioningRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 		{Method: http.MethodPost, Pattern: PatternOrgSuspend, Handler: http.HandlerFunc(h.orgSuspend)},
 		{Method: http.MethodPost, Pattern: PatternOrgOnboard, Handler: http.HandlerFunc(h.orgOnboard)},
 		{Method: http.MethodPost, Pattern: PatternOrgCreate, Handler: http.HandlerFunc(h.orgCreate)},
+		{Method: http.MethodPost, Pattern: PatternServiceAccountCreate, Handler: http.HandlerFunc(h.serviceAccountCreate)},
+		{Method: http.MethodPost, Pattern: PatternServiceAccountDisable, Handler: h.serviceAccountSwitch(opServiceAccountDisable, false)},
+		{Method: http.MethodPost, Pattern: PatternServiceAccountEnable, Handler: h.serviceAccountSwitch(opServiceAccountEnable, true)},
+		{Method: http.MethodPost, Pattern: PatternServiceAccountOwner, Handler: http.HandlerFunc(h.serviceAccountOwner)},
 	}
 	routes = h.withStateRoute(routes, rows)
-	routes = h.withServiceAccountRoutes(routes, rows)
 	return routes, nil
 }
 

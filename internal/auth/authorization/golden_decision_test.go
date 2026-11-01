@@ -15,30 +15,14 @@ import (
 const goldenDecisionDir = "contracts/auth/v1/golden/decision"
 
 type goldenManifest struct {
-	Description string `json:"description"`
-	Surface     string `json:"surface"`
-	Catalogs    []struct {
-		File string `json:"file"`
-		ID   string `json:"id"`
-	} `json:"catalogs"`
-	Vectors []struct {
+	Description string     `json:"description"`
+	Surface     string     `json:"surface"`
+	Catalogs    []struct{} `json:"catalogs"`
+	Vectors     []struct {
 		File  string `json:"file"`
 		ID    string `json:"id"`
 		Layer string `json:"layer"`
 	} `json:"vectors"`
-}
-
-type goldenCatalogFile struct {
-	ID          string `json:"id"`
-	Description string `json:"description"`
-	Action      struct {
-		Action       string `json:"action"`
-		Scope        string `json:"scope"`
-		ResourceKind string `json:"resource_kind"`
-		RiskClass    string `json:"risk_class"`
-		CacheClass   string `json:"cache_class"`
-	} `json:"action"`
-	Holders []string `json:"holders"`
 }
 
 type goldenGrant struct {
@@ -165,29 +149,6 @@ func goldenParseTime(t *testing.T, s string) int64 {
 	return ts.UnixNano()
 }
 
-// goldenCatalog is the embedded catalog plus the one repository action a
-// catalog data file plants, held by the roles that file names.
-type goldenCatalog struct {
-	base    *policycatalog.Catalog
-	action  policycatalog.Action
-	holders map[string]bool
-}
-
-func (c goldenCatalog) Version() int { return c.base.Version() }
-func (c goldenCatalog) Action(id string) (policycatalog.Action, error) {
-	if id == c.action.ID {
-		return c.action, nil
-	}
-	return c.base.Action(id)
-}
-func (c goldenCatalog) Role(id string) (policycatalog.Role, error) { return c.base.Role(id) }
-func (c goldenCatalog) Allows(role, action string) bool {
-	if action == c.action.ID {
-		return c.holders[role]
-	}
-	return c.base.Allows(role, action)
-}
-
 type goldenSnap struct {
 	st       goldenState
 	now      int64
@@ -239,27 +200,12 @@ type goldenDelegGrantSnap struct {
 
 func (g goldenDelegGrantSnap) Delegation() (Delegation, bool) { return g.d, true }
 
-func goldenEvaluator(t *testing.T, root string, catalogs map[string]goldenCatalogFile, name string) *Evaluator {
+func goldenEvaluator(t *testing.T, name string) *Evaluator {
 	t.Helper()
-	switch name {
-	case "embedded":
-		return NewEvaluator()
-	case "planted-repo-reader":
-		f, ok := catalogs[name]
-		if !ok {
-			t.Fatalf("catalog %q is not in the manifest", name)
-		}
-		holders := map[string]bool{}
-		for _, h := range f.Holders {
-			holders[h] = true
-		}
-		return newEvaluator(goldenCatalog{base: policycatalog.Default(), holders: holders, action: policycatalog.Action{
-			ID: f.Action.Action, Scope: f.Action.Scope, ResourceKind: f.Action.ResourceKind,
-			RiskClass: f.Action.RiskClass, CacheClass: f.Action.CacheClass,
-		}})
+	if name != "embedded" {
+		t.Fatalf("catalog %q is outside the closed set", name)
 	}
-	t.Fatalf("catalog %q is outside the closed set", name)
-	return nil
+	return NewEvaluator()
 }
 
 func goldenSnapshot(t *testing.T, st goldenState) Snapshot {
@@ -305,15 +251,6 @@ func TestGoldenDecisionPDPRowsReachTheirVerdict(t *testing.T) {
 	dir := filepath.Join(root, "contracts/auth/v1/golden/decision")
 	var m goldenManifest
 	goldenStrict(t, filepath.Join(dir, "manifest.json"), &m)
-	catalogs := map[string]goldenCatalogFile{}
-	for _, c := range m.Catalogs {
-		var f goldenCatalogFile
-		goldenStrict(t, filepath.Join(dir, c.File), &f)
-		if f.ID != c.ID {
-			t.Errorf("catalog %s: id %q, manifest %q", c.File, f.ID, c.ID)
-		}
-		catalogs[c.ID] = f
-	}
 	want := 0
 	for _, r := range m.Vectors {
 		switch r.Layer {
@@ -340,7 +277,7 @@ func TestGoldenDecisionPDPRowsReachTheirVerdict(t *testing.T) {
 			continue
 		}
 		ran++
-		e := goldenEvaluator(t, root, catalogs, v.State.Catalog)
+		e := goldenEvaluator(t, v.State.Catalog)
 		d := e.Evaluate(Request{Action: v.Request.Action, ResourceKind: v.Request.ResourceKind,
 			OrganizationID: v.Request.OrganizationID, ResourceKey: v.Request.ResourceKey}, goldenSnapshot(t, v.State))
 		reasons[d.Reason]++

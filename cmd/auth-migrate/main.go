@@ -59,6 +59,11 @@ const (
 	// envSessionReaders names the roles (comma-separated) of the services that
 	// end an access token when its session is revoked: go-api and query-api.
 	envSessionReaders = "AUTH_SESSION_READER_ROLES"
+	// envPushWriter is the NOLOGIN role that owns the External Push lifecycle
+	// append function, and envPushCallers the logins that may execute it
+	// (go-api's). Both empty leaves the function unexecutable.
+	envPushWriter  = "AUTH_PUSH_LIFECYCLE_WRITER_ROLE"
+	envPushCallers = "AUTH_PUSH_LIFECYCLE_CALLER_ROLES"
 )
 
 const (
@@ -220,17 +225,32 @@ func execute(
 		return 1
 	}
 
+	pushWriter := valueOr(lookup, envPushWriter, "")
+	pushCallers, err := roleList(lookup, envPushCallers)
+	if err != nil {
+		fmt.Fprintf(stderr, "configuration error: %v\n", err)
+		return 1
+	}
+	if pushWriter != "" {
+		if err := authschema.ValidateIdentifier(pushWriter); err != nil {
+			fmt.Fprintf(stderr, "configuration error: %s is not a usable role name\n", envPushWriter)
+			return 1
+		}
+	}
+
 	logger := logging.NewJSON(stderr, slog.LevelInfo)
 	if grantsOnly {
 		result, err := authschema.Grants(ctx, pool, authschema.Options{
-			Schema:               schema,
-			RuntimeRole:          runtimeRole,
-			SessionReaderRoles:   readers,
-			Logger:               logger,
-			UsersOwned:           usersOwned,
-			PlatformRolesOwned:   platformRolesOwned,
-			AcknowledgeNarrowing: strings.TrimSpace(*ackNarrowing),
-			DeferNarrowing:       *deferNarrowing,
+			Schema:                   schema,
+			RuntimeRole:              runtimeRole,
+			SessionReaderRoles:       readers,
+			Logger:                   logger,
+			PushLifecycleWriterRole:  pushWriter,
+			PushLifecycleCallerRoles: pushCallers,
+			UsersOwned:               usersOwned,
+			PlatformRolesOwned:       platformRolesOwned,
+			AcknowledgeNarrowing:     strings.TrimSpace(*ackNarrowing),
+			DeferNarrowing:           *deferNarrowing,
 		})
 		if err != nil {
 			fmt.Fprintf(stderr, "grants failed: %v\n", err)
@@ -241,12 +261,14 @@ func execute(
 		return 0
 	}
 	result, err := authschema.Apply(ctx, pool, authschema.Options{
-		Schema:             schema,
-		RuntimeRole:        runtimeRole,
-		SessionReaderRoles: readers,
-		Logger:             logger,
-		UsersOwned:         usersOwned,
-		PlatformRolesOwned: platformRolesOwned,
+		Schema:                   schema,
+		RuntimeRole:              runtimeRole,
+		SessionReaderRoles:       readers,
+		Logger:                   logger,
+		PushLifecycleWriterRole:  pushWriter,
+		PushLifecycleCallerRoles: pushCallers,
+		UsersOwned:               usersOwned,
+		PlatformRolesOwned:       platformRolesOwned,
 
 		AcknowledgeNarrowing: strings.TrimSpace(*ackNarrowing),
 		DeferNarrowing:       *deferNarrowing,
@@ -269,7 +291,12 @@ func execute(
 // sessionReaderRoles reads AUTH_SESSION_READER_ROLES: role names separated by
 // commas, blanks ignored. Unset or empty means none.
 func sessionReaderRoles(lookup secrets.LookupEnv) ([]string, error) {
-	raw, _ := lookup(envSessionReaders)
+	return roleList(lookup, envSessionReaders)
+}
+
+// roleList reads a comma-separated list of role names from the environment.
+func roleList(lookup secrets.LookupEnv, name string) ([]string, error) {
+	raw, _ := lookup(name)
 	var roles []string
 	for _, entry := range strings.Split(raw, ",") {
 		entry = strings.TrimSpace(entry)
@@ -277,7 +304,7 @@ func sessionReaderRoles(lookup secrets.LookupEnv) ([]string, error) {
 			continue
 		}
 		if err := authschema.ValidateIdentifier(entry); err != nil {
-			return nil, fmt.Errorf("%s holds an unusable role name", envSessionReaders)
+			return nil, fmt.Errorf("%s holds an unusable role name", name)
 		}
 		roles = append(roles, entry)
 	}

@@ -391,7 +391,8 @@ func TestReaderDoesNothingOnAnUnfencedTimeline(t *testing.T) {
 	if !errors.Is(err, ErrUnfenced) || rep.Applied != 0 {
 		t.Fatalf("step: %+v, %v; want ErrUnfenced and nothing applied", rep, err)
 	}
-	if e.count(t, `SELECT count(*) FROM auth.credential_projection`) != 0 || e.count(t, `SELECT count(*) FROM auth.projection_retry`) != 0 {
+	if e.count(t, `SELECT count(*) FROM auth.credential_projection`) != 0 || e.count(t, `SELECT count(*) FROM auth.projection_retry`) != 0 ||
+		e.count(t, `SELECT count(*) FROM auth.projection_cursor`) != 0 {
 		t.Fatal("an unfenced step wrote state")
 	}
 }

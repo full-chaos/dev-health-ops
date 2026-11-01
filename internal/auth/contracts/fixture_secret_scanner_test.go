@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -264,7 +265,10 @@ var lineBreakJoin = regexp.MustCompile(`[\r\n]+[ \t]*`)
 // punctuation mark, so a printable secret such as a service password is never one run. A value qualifies only when it
 // is printable ASCII with no whitespace, which keeps prose and decoded binary out.
 func scanWholeValue(name, value string) []string {
-	if len(value) < entropyScanThreshold || embeddedJSON(value) {
+	if len(value) < entropyScanThreshold {
+		return nil
+	}
+	if _, embedded, _ := embeddedDocuments(value); embedded {
 		return nil
 	}
 	for i := 0; i < len(value); i++ {
@@ -282,10 +286,36 @@ func scanWholeValue(name, value string) []string {
 		name, len(value), bits, maxFixtureEntropyBits, value)}
 }
 
-// embeddedJSON reports a string value that is itself a JSON object or array (a token header stored as text); its own
-// string values are read in turn, so the whole text is not judged as one secret.
-func embeddedJSON(value string) bool {
-	return len(value) > 1 && (value[0] == '{' || value[0] == '[') && json.Valid([]byte(value))
+// maxEmbeddedDocuments bounds the documents read from one string value; more is a finding, not a long read.
+const maxEmbeddedDocuments = 1000
+
+// embeddedDocuments reads a string value that is JSON text: one or more JSON documents with only whitespace between
+// them (a token header stored as text, a request body followed by a second object). A value that is not wholly such
+// text, or a malformed one, is not read this way and is judged as one value. tooMany reports a value with more than
+// maxEmbeddedDocuments documents.
+func embeddedDocuments(value string) (documents []any, ok, tooMany bool) {
+	if len(value) < 2 || (value[0] != '{' && value[0] != '[') {
+		return nil, false, false
+	}
+	decoder := json.NewDecoder(strings.NewReader(value))
+	for {
+		var document any
+		err := decoder.Decode(&document)
+		if err == io.EOF {
+			return documents, len(documents) > 0, false
+		}
+		if err != nil {
+			return nil, false, false
+		}
+		if len(documents) == maxEmbeddedDocuments {
+			return nil, false, true
+		}
+		documents = append(documents, document)
+	}
+}
+
+func tooManyDocumentsFinding(name string) string {
+	return fmt.Sprintf("%s holds more than %d JSON documents in one string value: refused rather than read", name, maxEmbeddedDocuments)
 }
 
 // scanFollowing applies the plain rules to a string value as it is and joined across line breaks, then decodes every
@@ -300,9 +330,12 @@ func scanFollowing(budget *scanBudget, name, value string, depth int) []string {
 	if depth >= maxDecodeDepth {
 		return findings
 	}
-	if embeddedJSON(value) {
-		var document any
-		if json.Unmarshal([]byte(value), &document) == nil {
+	documents, embedded, tooMany := embeddedDocuments(value)
+	if tooMany {
+		findings = append(findings, tooManyDocumentsFinding(name))
+	}
+	if embedded {
+		for _, document := range documents {
 			for _, inner := range jsonStrings(document, nil) {
 				findings = append(findings, scanFollowing(budget, name+" (embedded JSON)", inner, depth+1)...)
 			}
@@ -332,8 +365,16 @@ func scanDecoded(budget *scanBudget, name, text string, depth int) []string {
 			findings = append(findings, scanPlain(name+" (JSON string)", value)...)
 			findings = append(findings, scanWholeValue(name+" (JSON string)", value)...)
 			sources = append(sources, value)
-			if depth < maxDecodeDepth && embeddedJSON(value) {
-				findings = append(findings, scanDecoded(budget, name+" (embedded JSON)", value, depth+1)...)
+			if depth < maxDecodeDepth {
+				if documents, embedded, tooMany := embeddedDocuments(value); embedded {
+					for _, document := range documents {
+						if text, err := json.Marshal(document); err == nil {
+							findings = append(findings, scanDecoded(budget, name+" (embedded JSON)", string(text), depth+1)...)
+						}
+					}
+				} else if tooMany {
+					findings = append(findings, tooManyDocumentsFinding(name))
+				}
 			}
 		}
 	} else {

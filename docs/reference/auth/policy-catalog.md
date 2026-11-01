@@ -118,9 +118,9 @@ Each role lists its actions explicitly. There is no inheritance, no wildcard and
 | `admin.orgs` |  |  |  |  | yes |
 | `authz.decide` |  |  |  |  |  |
 
-No role holds `members.update` or `authz.decide` yet, so the decision core denies them to every role until a roles change grants them. `acr.context.read` is held by the roles that hold `git.read` (catalog version 6); the decision core serves a repository request by the membership default or a repository grant, so a role that holds the action is allowed by default.
+No role holds `members.update` or `authz.decide` yet, so the decision core denies them to every role until a roles change grants them. `acr.context.read` is held by the roles that hold `git.read` (catalog version 9); the decision core serves a repository request by the membership default or a repository grant, so a role that holds the action is allowed by default.
 
-Every action names `impersonation` (`denied` or `allowed`): whether a delegated session may exercise it. `acr.context.read` is `allowed` (a read, low risk). `members.update` and `authz.decide` are `denied`. Until a role holds `acr.context.read`, no delegated session can use it.
+Every action names `impersonation` (`denied` or `allowed`): whether a delegated session may exercise it. `acr.context.read` is `allowed` (a read, low risk). `members.update` and `authz.decide` are `denied`. A delegated session gets it only when the actor role holds it: `viewer`, `member`, `admin` and `owner` do.
 
 Source: `contracts/auth/v1/vocabulary/roles.v1.json`. The role keys `viewer`, `member`, `admin` and `owner` are the organization roles that `membership.v1` uses. `platform_admin` and `platform_owner` are platform roles and are not membership roles. `platform_owner` holds no action: it is a marker that only the operator grants (`auth-migrate platform-owner-grant`), and an owner acts through a `platform_admin` row it also holds.
 
@@ -192,7 +192,7 @@ From `contracts/auth/v1/README.md`:
 - Version 5: the role `platform_owner` (platform scope, no action) (CHAOS-12294). No action changed, so no decision changes.
 - Version 6: every action gets a required `impersonation` member (`denied` or `allowed`), and the action `admin.impersonate` (CHAOS-10987).
 - Version 8: `acr.context.read` is `allowed` under a delegated session (CHAOS-12401). No role changed, so no decision changes.
-- Version 6: `viewer`, `member`, `admin` and `owner` hold `acr.context.read`, as they hold `git.read` (CHAOS-12347). `platform_admin` and `platform_owner` do not. No action row changed.
+- Version 9: `viewer`, `member`, `admin` and `owner` hold `acr.context.read`, as they hold `git.read` (CHAOS-12347). `platform_admin` and `platform_owner` do not. No action row changed.
 
 ## Planned, not built
 

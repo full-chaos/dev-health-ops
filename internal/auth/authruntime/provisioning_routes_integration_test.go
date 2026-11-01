@@ -675,14 +675,12 @@ token_version, created_at, updated_at) VALUES ($1, $2, NULL, 'local', true, true
 	}
 }
 
-// The key routes through the real stack, with a row document: issue, list, rotate and revoke on real rows, the issued
+// The key routes through the real stack, on the embedded document: issue, list, rotate and revoke on real rows, the issued
 // value resolves, the audit rows name the calling credential, the value is in the two receipts only, and the id of a
 // credential of another class answers key_not_found with nothing of that row on the wire.
 func TestProvisioningServiceAccountKeysThroughConfigure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	withProfileRow(t, authapi.PatternServiceAccountCreate, authapi.PatternServiceAccountKeyIssue, authapi.PatternServiceAccountKeyRotate,
-		authapi.PatternServiceAccountKeyRevoke, authapi.PatternServiceAccountKeyList)
 	e, header := newProvisioningEnv(t, ctx)
 	boss, org := e.seed(t, ctx)
 	owner, viewer, super := e.account(t, ctx, acctMail(), false, true), e.account(t, ctx, acctMail(), false, true), e.account(t, ctx, acctMail(), true, true)

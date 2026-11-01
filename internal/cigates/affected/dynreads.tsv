@@ -73,6 +73,7 @@ internal/auth/contracts	endpoint_auth_profile_selector_gate.go
 internal/auth/contracts	endpoint_profile_source_commit_test.go
 internal/auth/contracts	endpoint_profiles_go_api_admin_fields_test.go
 internal/auth/contracts	error_envelope_goldens_test.go
+internal/auth/contracts	external_push_lifecycle_event_test.go
 internal/auth/contracts	fuzz_test.go
 internal/auth/contracts	jwks_document_differential_test.go
 internal/auth/contracts	jwks_document_goldens_test.go

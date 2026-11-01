@@ -99,7 +99,12 @@
       "actions": [
         "admin.orgs",
         "admin.users",
-        "admin.impersonate"
+        "admin.impersonate",
+        "admin.billing",
+        "admin.flags",
+        "admin.audit",
+        "admin.telemetry",
+        "admin.stats"
       ]
     },
     {

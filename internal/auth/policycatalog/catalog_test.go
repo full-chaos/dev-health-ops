@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	actionsSHA = "0de566488c40c07c42e1be24a93bc5dc7b3776cebd03ea36b74751d184b76f4e"
-	rolesSHA   = "b3ec58b65722581c8555b6ce39384b41ac42cf7c30bb4cfbb15429e9ef208f11"
+	actionsSHA = "cee5744873ddebc1f2f58e4ccbcabca082fb917222496c47c7616114dda9921c"
+	rolesSHA   = "96d576c4e8b3ce89a6d075502ef1dce23a34f582bcbd55934c66edd8e9dc86af"
 )
 
 func repoRoot(t *testing.T) string {
@@ -222,7 +222,9 @@ func TestEmbeddedFilesValidateAgainstTheirSchemas(t *testing.T) {
 // internal/api/session/permissions.go. Catalog-only = not served in /auth/me
 // until a web-reviewed change adds it there; every other catalog action must
 // still equal a session permission.
-var catalogOnly = map[string]bool{"admin.impersonate": true, "billing.read": true, "billing.manage": true, "license.read": true, "members.update": true, "authz.decide": true, "acr.context.read": true}
+var catalogOnly = map[string]bool{"admin.impersonate": true, "billing.read": true, "billing.manage": true, "license.read": true, "members.update": true, "authz.decide": true, "acr.context.read": true,
+	"admin.billing": true, "admin.flags": true, "admin.audit": true, "admin.telemetry": true, "admin.stats": true,
+}
 
 type sessionEntry struct {
 	role string
@@ -434,13 +436,14 @@ func TestRepositoryIsAResourceKindAndNeverAScope(t *testing.T) {
 
 func TestImpersonationIsDeniedOnTheG51List(t *testing.T) {
 	want := map[string]bool{
-		"admin.users": true, "admin.orgs": true, "admin.impersonate": true, "members.invite": true, "members.manage": true,
+		"admin.users": true, "admin.orgs": true, "admin.impersonate": true,
+		"admin.billing": true, "admin.flags": true, "admin.audit": true, "admin.telemetry": true, "admin.stats": true, "members.invite": true, "members.manage": true,
 		"org.write": true, "org.delete": true, "billing.manage": true, "settings.write": true, "integrations.write": true,
 		"members.update": true, "authz.decide": true,
 	}
 	actions := Default().Actions()
-	if len(actions) != 29 {
-		t.Fatalf("%d actions, want 29", len(actions))
+	if len(actions) != 34 {
+		t.Fatalf("%d actions, want 34", len(actions))
 	}
 	for _, a := range actions {
 		denied := a.Impersonation == ImpersonationDenied
@@ -531,5 +534,37 @@ func TestDelegatedActionsReturnTheRepositoryReadForARoleThatHoldsIt(t *testing.T
 	got, err := c.DelegatedActions("r")
 	if err != nil || len(got) != 1 || got[0] != "acr.context.read" {
 		t.Fatalf("DelegatedActions = %v, %v; want [acr.context.read]", got, err)
+	}
+}
+
+// The admin platform actions are exactly the eight the platform_admin
+// role lists, every one high risk, never cached and denied to a delegated
+// session, and no organization role holds one.
+func TestPlatformActionsAreHeldOnlyByPlatformAdmin(t *testing.T) {
+	c := Default()
+	want := []string{"admin.audit", "admin.billing", "admin.flags", "admin.impersonate", "admin.orgs", "admin.stats", "admin.telemetry", "admin.users"}
+	var platform []string
+	for _, a := range c.Actions() {
+		if a.Scope != ScopePlatform || !strings.HasPrefix(a.ID, "admin.") {
+			continue
+		}
+		platform = append(platform, a.ID)
+		if a.RiskClass != RiskHigh || a.CacheClass != CacheNone || a.ResourceKind != "platform" || a.Impersonation != ImpersonationDenied {
+			t.Errorf("platform action %s: risk %s cache %s kind %s impersonation %s", a.ID, a.RiskClass, a.CacheClass, a.ResourceKind, a.Impersonation)
+		}
+		for _, r := range c.Roles() {
+			if r.ID != "platform_admin" && c.Allows(r.ID, a.ID) {
+				t.Errorf("role %s holds platform action %s", r.ID, a.ID)
+			}
+		}
+	}
+	sort.Strings(platform)
+	if strings.Join(platform, ",") != strings.Join(want, ",") {
+		t.Fatalf("platform actions %v, want %v", platform, want)
+	}
+	for _, a := range want {
+		if !c.Allows("platform_admin", a) {
+			t.Errorf("platform_admin does not hold %s", a)
+		}
 	}
 }

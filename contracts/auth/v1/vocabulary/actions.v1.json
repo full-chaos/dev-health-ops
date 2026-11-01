@@ -234,6 +234,46 @@
       "risk_class": "high",
       "cache_class": "none",
       "impersonation": "denied"
+    },
+    {
+      "action": "admin.billing",
+      "scope": "platform",
+      "resource_kind": "platform",
+      "risk_class": "high",
+      "cache_class": "none",
+      "impersonation": "denied"
+    },
+    {
+      "action": "admin.flags",
+      "scope": "platform",
+      "resource_kind": "platform",
+      "risk_class": "high",
+      "cache_class": "none",
+      "impersonation": "denied"
+    },
+    {
+      "action": "admin.audit",
+      "scope": "platform",
+      "resource_kind": "platform",
+      "risk_class": "high",
+      "cache_class": "none",
+      "impersonation": "denied"
+    },
+    {
+      "action": "admin.telemetry",
+      "scope": "platform",
+      "resource_kind": "platform",
+      "risk_class": "high",
+      "cache_class": "none",
+      "impersonation": "denied"
+    },
+    {
+      "action": "admin.stats",
+      "scope": "platform",
+      "resource_kind": "platform",
+      "risk_class": "high",
+      "cache_class": "none",
+      "impersonation": "denied"
     }
   ]
 }

@@ -171,6 +171,9 @@ var Allowlist = []Entry{
 	{File: "internal/auth/platformrole/store.go", Func: "Store.bootstrapApply", Table: "auth.platform_role_assignments", Verb: "INSERT"},
 	{File: "internal/auth/platformrole/store.go", Func: "Store.Grant", Table: "auth.platform_role_assignments", Verb: "INSERT"},
 	{File: "internal/auth/platformrole/store.go", Func: "Store.Revoke", Table: "auth.platform_role_assignments", Verb: "DELETE"},
+	// The platform_owner verbs of auth-migrate (the migration role); the API store refuses the role.
+	{File: "internal/auth/platformrole/owner.go", Func: "Store.GrantOwner", Table: "auth.platform_role_assignments", Verb: "INSERT"},
+	{File: "internal/auth/platformrole/owner.go", Func: "Store.RevokeOwner", Table: "auth.platform_role_assignments", Verb: "DELETE"},
 	{File: "internal/auth/identity/store.go", Func: "Store.applyProjectionChange", Table: "auth.principals", Verb: "UPDATE"},
 	{File: "internal/auth/identity/store.go", Func: "Store.applyProjectionChange", Table: "auth.users", Verb: "UPDATE"},
 	{File: "internal/auth/identity/store.go", Func: "Store.insertProjection", Table: "auth.principals", Verb: "INSERT"},
@@ -184,6 +187,14 @@ var Allowlist = []Entry{
 	{File: "internal/auth/session/unpinned.go", Func: "RevokeUnpinned", Table: "auth.refresh_credentials", Verb: "UPDATE"},
 	{File: "internal/auth/session/unpinned.go", Func: "RevokeUnpinned", Table: "auth.sessions", Verb: "UPDATE"},
 	// The workload registry (CHAOS-10980; new auth-table writers ruled by acp 10-26 00:4xZ): written by the auth-migrate operator role, inside audit.Commit.
+	// Org service accounts (CHAOS-10989 4.19): written by auth-service, inside audit.Commit.
+	{File: "internal/auth/serviceaccount/store.go", Func: "Store.Create", Table: "auth.principals", Verb: "INSERT"},
+	{File: "internal/auth/serviceaccount/store.go", Func: "Store.Create", Table: "auth.service_accounts", Verb: "INSERT"},
+	{File: "internal/auth/serviceaccount/store.go", Func: "Store.Disable", Table: "auth.principals", Verb: "UPDATE"},
+	{File: "internal/auth/serviceaccount/store.go", Func: "Store.Disable", Table: "auth.service_accounts", Verb: "UPDATE"},
+	{File: "internal/auth/serviceaccount/store.go", Func: "Store.Enable", Table: "auth.principals", Verb: "UPDATE"},
+	{File: "internal/auth/serviceaccount/store.go", Func: "Store.Enable", Table: "auth.service_accounts", Verb: "UPDATE"},
+	{File: "internal/auth/serviceaccount/store.go", Func: "Store.SetOwner", Table: "auth.service_accounts", Verb: "UPDATE"},
 	{File: "internal/auth/workload/enable.go", Func: "Store.EnableWorkload", Table: "auth.principals", Verb: "UPDATE"},
 	{File: "internal/auth/workload/enable.go", Func: "Store.EnableWorkload", Table: "auth.workloads", Verb: "UPDATE"},
 	{File: "internal/auth/workload/store.go", Func: "Store.AddBinding", Table: "auth.workload_bindings", Verb: "INSERT"},

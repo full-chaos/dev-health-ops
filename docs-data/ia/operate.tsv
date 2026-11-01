@@ -60,3 +60,4 @@ op-rb-auth-users-flip-back-grants	op-runbooks	/operate/runbooks/auth-users-flip-
 op-rb-auth-workload-bootstrap-credential	op-runbooks	/operate/runbooks/auth-workload-bootstrap-credential/	Workload bootstrap credential	runbook	true	public	active	false
 op-rb-auth-workload-kubernetes-federation	op-runbooks	/operate/runbooks/auth-workload-kubernetes-federation/	Kubernetes workload federation	runbook	true	public	active	false
 op-prod-cutover-lessons	operate	/operate/prod-cutover-2026-09-11-lessons/	Prod cutover 2026-09-11 lessons	landing	true	public	active	false	
+op-rb-legacy-ingest-retired	op-runbooks	/operate/runbooks/legacy-ingest-retirement/	Legacy ingest retirement	runbook	true	public	active	false

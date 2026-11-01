@@ -24,5 +24,6 @@ lifecycle: active
 - [Auth users flip-back grants](auth-users-flip-back-grants.md)
 - [Workload bootstrap credential](auth-workload-bootstrap-credential.md)
 - [Kubernetes workload federation](auth-workload-kubernetes-federation.md)
+- [Legacy ingest retirement](legacy-ingest-retirement.md)
 
 Retain the affected organization or workspace identifier, source, scope, time, job or request identifiers, sanitized logs, last known good checkpoint, and changes made during recovery.

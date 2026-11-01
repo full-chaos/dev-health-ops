@@ -114,6 +114,8 @@ Token audiences and the classes that may carry them are in `contracts/auth/v1/vo
 | --- | --- | --- |
 | `dev-health-api` | `user_access_token`, `workload_token` | `dev-health-ops-api`, `dev-health-query-api` |
 | `auth-service` | `user_access_token`, `workload_token` | `dev-health-auth-service` |
+| `acr-api` | `user_access_token` | `dev-health-acr-api` |
+| `acr-mcp` | `user_access_token` | `dev-health-acr-mcp` |
 | `query-api` | `effective_principal_envelope` | `dev-health-query-api` |
 
 ## Request order in go-api

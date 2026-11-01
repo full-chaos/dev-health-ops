@@ -165,7 +165,7 @@ var attributeVocabulary = map[string][]string{
 		"email_collision", "signup_unavailable", "identity_conflict",
 		"provider_already_linked", "expired", "principal_not_found", "malformed", "compromised",
 		"invite_created", "invite_accepted", "invite_revoked", "restore_fence_bootstrap",
-		"workload_enabled",
+		"workload_enabled", "service_account_owner_changed",
 	},
 	"target_kind": {
 		"principal", "organization", "membership", "role_assignment", "resource_grant", "credential",
@@ -190,14 +190,14 @@ var attributeVocabulary = map[string][]string{
 	"credential_class": {"user_access_token", "refresh_credential", "workload_token", "acr_client", "external_push", "service_account_key", "workload_bootstrap_credential"},
 	// source names who started an auth-service record: go-api-delegated is a
 	// session go-api signed the user in for and asked auth-service to issue.
-	"source": {"go-api-delegated"},
+	"source": {"go-api-delegated", "operator-cli"},
 	// amr is session.v1's closed authentication-method set.
 	"amr": {"pwd", "otp", "mfa", "hwk", "swk", "fed"},
 	// principal_enabled is present only when the principal row was enabled.
 	"principal_enabled": {"true"},
 	"changed_fields": {
 		"role_key", "status", "display_name", "disabled_at", "expires_at", "revoked_at", "email", "email_verified_at",
-		"scopes", "audiences", "organization_id", "allowed_actions", "binding", "invited_by", "joined_at",
+		"scopes", "audiences", "organization_id", "allowed_actions", "binding", "invited_by", "joined_at", "owner_principal_id",
 	},
 }
 

@@ -78,6 +78,7 @@ var openers = map[string]struct {
 	"internal/testsupport/containers/shared.go":                 {kindTest, "test containers: the shared server's capacity check and leak snapshot"},
 	"internal/testsupport/containers/template.go":               {kindTest, "test containers: the shared server's template build, fingerprint and finish check"},
 	"internal/testsupport/domainroledb/domainroledb.go":         {kindTest, "domain-role venue: the migrated schema and grants, a pool as the domain role"},
+	"internal/testsupport/ingestpg/ingestpg.go":                 {kindTest, "external-ingest proof: a pool to a fake PostgreSQL wire server that serves the token and audit statements"},
 	"internal/testsupport/pgschema/pgschema.go":                 {kindTest, "test schema helper"},
 	"internal/testsupport/pinrig/pinrig.go":                     {kindTest, "pin proof: pools as the runtime and session reader roles"},
 	"internal/testsupport/platformroleseam/platformroleseam.go": {kindTest, "platform role seam: the migrated schemas, a pool as the session reader role"},

@@ -110,10 +110,9 @@ func (e *Engine) Project(ctx context.Context, in Input) (Result, error) {
 		actor = &text
 	}
 	// The audit row's outcome is fixed before Apply decides. A refused decision is denied, anything else allowed: Apply
-	// refuses to write under the wrong outcome and the call runs again under the right one.
-	denied := false
+	// refuses to write under the wrong outcome and the call runs again under the right one, once.
 	var res Result
-	for attempt := 0; attempt < 3; attempt++ {
+	final, err := runTries(func(denied bool) (Result, error) {
 		attrs := map[string]any{"target_kind": "credential", "credential_class": auditClass(in.Domain), "revision": int64(in.Event.Payload.Revision)}
 		outcome := audit.OutcomeAllowed
 		if denied {
@@ -129,19 +128,36 @@ func (e *Engine) Project(ctx context.Context, in Input) (Result, error) {
 			Audit:     audit.AuditEvent{EventType: "auth.credential_projection.decided", Outcome: outcome, ActorPrincipalID: actor, OrganizationID: &orgText, Attributes: attrs},
 			OffStream: audit.OffStreamCredentialProjection,
 		})
-		if errors.Is(err, errOutcomeMismatch) {
-			denied = !denied
-			continue
-		}
-		if err != nil && !errors.Is(err, audit.ErrNoStateChange) {
+		if err != nil && !errors.Is(err, errOutcomeMismatch) && !errors.Is(err, audit.ErrNoStateChange) {
 			return Result{}, err
+		}
+		if errors.Is(err, errOutcomeMismatch) {
+			return Result{}, errOutcomeMismatch
 		}
 		if res.Outcome == "" {
 			return Result{}, fmt.Errorf("outboxprojection: the mutation decided nothing")
 		}
-		return e.result(ctx, in, res.Outcome, res.State), nil
+		return res, nil
+	})
+	if err != nil {
+		return Result{}, err
 	}
-	return Result{}, fmt.Errorf("outboxprojection: the audit outcome never matched the decision")
+	return e.result(ctx, in, final.Outcome, final.State), nil
+}
+
+// runTries runs try under an allowed audit row, and, when it reports that the decision was a refusal
+// (errOutcomeMismatch), once more under a denied row. If that second try decides something other than a refusal the
+// state moved: there is no third try, nothing was written, and the answer is a retry.
+func runTries(try func(denied bool) (Result, error)) (Result, error) {
+	res, err := try(false)
+	if !errors.Is(err, errOutcomeMismatch) {
+		return res, err
+	}
+	res, err = try(true)
+	if errors.Is(err, errOutcomeMismatch) {
+		return Result{Outcome: OutcomeStateChanged, Class: ClassRetry}, nil
+	}
+	return res, err
 }
 
 func auditClass(d Domain) string {

@@ -45,10 +45,13 @@ const (
 	OutcomeOrganizationUnknown Outcome = "organization_unknown"
 	// OutcomeUnfenced: the database is on a timeline with no restore-fence record.
 	OutcomeUnfenced Outcome = "unfenced"
+	// OutcomeStateChanged: the state moved between the two tries that write a denied audit row; nothing was
+	// written, and the caller retries.
+	OutcomeStateChanged Outcome = "state_changed"
 )
 
 // Outcomes is every Outcome the engine can return, for label sets and tests.
-var Outcomes = append(append([]Outcome(nil), pushlifecycle.Outcomes...), OutcomeConflict, OutcomeMalformed, OutcomeOrganizationUnknown, OutcomeUnfenced)
+var Outcomes = append(append([]Outcome(nil), pushlifecycle.Outcomes...), OutcomeConflict, OutcomeMalformed, OutcomeOrganizationUnknown, OutcomeUnfenced, OutcomeStateChanged)
 
 // Class is what a caller does with an outcome.
 type Class string
@@ -71,7 +74,7 @@ func ClassOf(o Outcome) Class {
 	switch o {
 	case pushlifecycle.Applied, pushlifecycle.Duplicate, pushlifecycle.Stale:
 		return ClassDone
-	case pushlifecycle.Gap, pushlifecycle.ParentPending:
+	case pushlifecycle.Gap, pushlifecycle.ParentPending, OutcomeStateChanged:
 		return ClassRetry
 	case OutcomeConflict:
 		return ClassConflict

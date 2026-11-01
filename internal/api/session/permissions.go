@@ -1,5 +1,10 @@
 package session
 
+import (
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
+)
+
 // standardPermissions is models/users.py STANDARD_PERMISSIONS' names, in
 // declaration order.
 var standardPermissions = []string{
@@ -53,15 +58,26 @@ func inOrder(held map[string]bool) []string {
 }
 
 // userPermissions is get_user_permissions: an impersonation session's
-// target role, else every permission for a superuser, else the role's.
+// target role, else the role's permissions plus those a held platform action
+// grants (admin.orgs: every organization permission and admin:orgs;
+// admin.users: admin:users), so platform_admin holds the whole list.
 // Python returns list(set), whose order depends on the process's string
 // hash seed; this returns standardPermissions order.
-func userPermissions(targetRole *string, isSuperuser bool, role string) []string {
+func userPermissions(targetRole *string, user *policy.User) []string {
 	if targetRole != nil {
 		return rolePermissions(*targetRole)
 	}
-	if isSuperuser {
-		return append([]string{}, standardPermissions...)
+	held := map[string]bool{}
+	for _, permission := range rolePermissions(user.Role) {
+		held[permission] = true
 	}
-	return rolePermissions(role)
+	for _, permission := range standardPermissions {
+		switch {
+		case permission == "admin:users":
+			held[permission] = held[permission] || user.Holds(rule.ActionAdminUsers)
+		default:
+			held[permission] = held[permission] || user.Holds(rule.ActionAdminOrgs)
+		}
+	}
+	return inOrder(held)
 }

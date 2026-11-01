@@ -4,22 +4,24 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/externalpush"
 )
 
 // ExternalPushLifecycleEventSurface names the external-push-lifecycle-event.v1
 // wire contract.
-const ExternalPushLifecycleEventSurface = "external-push-lifecycle-event.v1"
+const ExternalPushLifecycleEventSurface = externalpush.Surface
 
 // ExternalPushCredentialAggregate is the one aggregate type of the surface.
-const ExternalPushCredentialAggregate = "external_push_credential"
+const ExternalPushCredentialAggregate = externalpush.Aggregate
 
 // External Push lifecycle event types, in the schema's closed order.
 const (
-	ExternalPushCreated = ExternalPushCredentialAggregate + ".created"
-	ExternalPushScoped  = ExternalPushCredentialAggregate + ".scoped"
-	ExternalPushRotated = ExternalPushCredentialAggregate + ".rotated"
-	ExternalPushRevoked = ExternalPushCredentialAggregate + ".revoked"
-	ExternalPushExpired = ExternalPushCredentialAggregate + ".expired"
+	ExternalPushCreated = externalpush.Created
+	ExternalPushScoped  = externalpush.Scoped
+	ExternalPushRotated = externalpush.Rotated
+	ExternalPushRevoked = externalpush.Revoked
+	ExternalPushExpired = externalpush.Expired
 )
 
 // ExternalPushLifecycleChange is the allowlisted description of what changed.
@@ -32,6 +34,20 @@ type ExternalPushLifecycleChange struct {
 	RotationParentID string     `json:"rotation_parent_id,omitempty"`
 	ExpiresAt        *Timestamp `json:"expires_at,omitempty"`
 }
+
+// Wire is the change as the producer-side vocabulary carries it.
+func (c ExternalPushLifecycleChange) Wire() externalpush.Change {
+	wire := externalpush.Change{Status: c.Status, Fingerprint: c.Fingerprint, Scopes: c.Scopes, RotationParentID: c.RotationParentID}
+	if c.ExpiresAt != nil {
+		at := c.ExpiresAt.Time
+		wire.ExpiresAt = &at
+	}
+	return wire
+}
+
+// MarshalJSON is the producer-side marshal: a non-nil empty Scopes stays
+// "scopes": [] and a nil Scopes is omitted.
+func (c ExternalPushLifecycleChange) MarshalJSON() ([]byte, error) { return c.Wire().MarshalJSON() }
 
 // ExternalPushLifecyclePayload is the event-specific half of the envelope.
 type ExternalPushLifecyclePayload struct {

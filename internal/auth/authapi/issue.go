@@ -50,8 +50,9 @@ type ServiceCredentials interface {
 
 // IssueSessions is the session domain the issue route drives
 // (*session.Store): a new session, or one that supersedes the caller's own
-// session (an organization switch, CHAOS-12085).
+// session (an organization switch, CHAOS-12085), and the delegated routes.
 type IssueSessions interface {
+	DelegatedSessions
 	CreateAudited(ctx context.Context, principalID uuid.UUID, organizationID *uuid.UUID, amr []string, event audit.AuditEvent) (session.Issued, error)
 	CreateSupersedingAudited(ctx context.Context, principalID uuid.UUID, organizationID *uuid.UUID, amr []string,
 		predecessor uuid.UUID, event audit.AuditEvent) (session.Issued, error)
@@ -241,7 +242,7 @@ func (h compatHandlers) issueSession(w http.ResponseWriter, r *http.Request) {
 		// superseded it, or a sign-out): no successor.
 		h.rec.refuse(w, r, opSessionIssue, unauthorized(reasonSessionRevoked), nil)
 		return
-	case errors.Is(err, session.ErrPredecessorOtherPrincipal):
+	case errors.Is(err, session.ErrPredecessorOtherPrincipal), errors.Is(err, session.ErrPredecessorDelegated):
 		h.rec.refuse(w, r, opSessionIssue, refusal{http.StatusForbidden, reasonNotEntitled}, nil)
 		return
 	case errors.Is(err, session.ErrInvalidAMR):

@@ -210,9 +210,12 @@ func ProvisioningRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 		{Method: http.MethodPost, Pattern: PatternOrgSuspend, Handler: http.HandlerFunc(h.orgSuspend)},
 		{Method: http.MethodPost, Pattern: PatternOrgOnboard, Handler: http.HandlerFunc(h.orgOnboard)},
 		{Method: http.MethodPost, Pattern: PatternOrgCreate, Handler: http.HandlerFunc(h.orgCreate)},
+		{Method: http.MethodPost, Pattern: PatternServiceAccountCreate, Handler: http.HandlerFunc(h.serviceAccountCreate)},
+		{Method: http.MethodPost, Pattern: PatternServiceAccountDisable, Handler: h.serviceAccountSwitch(opServiceAccountDisable, false)},
+		{Method: http.MethodPost, Pattern: PatternServiceAccountEnable, Handler: h.serviceAccountSwitch(opServiceAccountEnable, true)},
+		{Method: http.MethodPost, Pattern: PatternServiceAccountOwner, Handler: http.HandlerFunc(h.serviceAccountOwner)},
 	}
 	routes = h.withStateRoute(routes, rows)
-	routes = h.withServiceAccountRoutes(routes, rows)
 	return routes, nil
 }
 
@@ -307,7 +310,7 @@ func (h provisioningHandlers) actorRule(ctx context.Context, q session.Queryer, 
 	if !found || !state.IsActive {
 		return UserState{}, errActorRefused{reasonDeactivated}
 	}
-	if state.IsSuperuser {
+	if state.Holds(actionAdminOrgs) {
 		return state, nil
 	}
 	if superuserOnly {
@@ -327,7 +330,7 @@ func (h provisioningHandlers) actorRule(ctx context.Context, q session.Queryer, 
 // superuser: no target may be a superuser. It reads the targets' users rows,
 // which the membership verb holds FOR UPDATE (step 2).
 func (h provisioningHandlers) targetsRule(ctx context.Context, q session.Queryer, actor UserState, targets []uuid.UUID) error {
-	if actor.IsSuperuser {
+	if actor.Holds(actionAdminUsers) {
 		return nil
 	}
 	for _, target := range targets {

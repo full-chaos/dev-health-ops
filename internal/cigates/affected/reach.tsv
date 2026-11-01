@@ -114,6 +114,7 @@ internal/auth/contracts	contracts.go	internal/auth/contracts
 internal/auth/contracts	contracts.go	internal/auth/contracts/provisioning
 internal/auth/contracts	contracts.go	internal/auth/contracts/tokencorpus
 internal/auth/contracts	contracts.go	internal/auth/contracts/tokencorpus/gen
+internal/auth/contracts	contracts.go	internal/auth/grant
 internal/auth/contracts	contracts.go	internal/auth/httpapi
 internal/auth/contracts	contracts.go	internal/auth/identity
 internal/auth/contracts	contracts.go	internal/auth/identity/local
@@ -144,6 +145,7 @@ internal/auth/contracts	contracts.go	internal/queryapi/server
 internal/auth/contracts	contracts.go	internal/testsupport/usertokens
 internal/auth/contracts	endpoint_auth_profile_selector_gate.go	internal/apiservice
 internal/auth/contracts	endpoint_auth_profile_selector_gate.go	internal/auth/contracts
+internal/auth/contracts	endpoint_auth_profile_selector_gate.go	internal/auth/workloadexchange
 internal/auth/contracts/tokencorpus	corpus.go	internal/api/billing
 internal/auth/contracts/tokencorpus	corpus.go	internal/api/externalingest
 internal/auth/contracts/tokencorpus	corpus.go	internal/api/webhookintake

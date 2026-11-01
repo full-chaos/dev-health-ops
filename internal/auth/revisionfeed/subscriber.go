@@ -38,6 +38,25 @@ type Subscriber struct {
 	attempt  atomic.Int64
 }
 
+// cycle is the state of one subscription. It is new for every subscribe, so a request raised on an ended subscription
+// never starts a catch-up on the next one before that one is confirmed.
+type cycle struct {
+	// wake asks the catch-up loop to run: after the confirmed subscribe, and after a live event whose invalidation failed
+	// (its revision is above the mark, so the catch-up reaches it).
+	wake chan struct{}
+	// resubPending is set while the InvalidateAll of the subscribe has not succeeded; the catch-up retries it before it
+	// reads the floors.
+	resubPending atomic.Bool
+}
+
+// signal asks for a catch-up without blocking: one pending request is enough, the catch-up reads everything.
+func (cy *cycle) signal() {
+	select {
+	case cy.wake <- struct{}{}:
+	default:
+	}
+}
+
 // NewSubscriber validates its inputs and registers devhealth_auth_revision_feed_subscription_up (1 while subscribed).
 func NewSubscriber(cfg SubscriberConfig) (*Subscriber, error) {
 	if cfg.Client == nil || cfg.Consumer == nil {
@@ -80,19 +99,20 @@ func (s *Subscriber) Run(ctx context.Context) {
 	for ctx.Err() == nil {
 		s.up.Store(0)
 		cycleCtx, endCycle := context.WithCancel(ctx)
-		subscribed := make(chan struct{}, 1)
+		cy := &cycle{wake: make(chan struct{}, 1)}
 		catchUpDone := make(chan struct{})
-		go func() { defer close(catchUpDone); s.catchUpOnSignal(cycleCtx, subscribed) }()
+		go func() { defer close(catchUpDone); s.catchUpOnSignal(cycleCtx, cy) }()
 		_ = s.client.Subscribe(ctx, Channel, SubscribeHooks{
 			OnSubscribed: func() {
 				s.attempt.Store(0)
-				s.consumer.Resubscribed(ctx)
-				select {
-				case subscribed <- struct{}{}:
-				default:
+				cy.resubPending.Store(s.consumer.Resubscribed(ctx) != nil)
+				cy.signal()
+			},
+			OnMessage: func(message string) {
+				if !s.onMessage(ctx, message) {
+					cy.signal()
 				}
 			},
-			OnMessage: func(message string) { s.onMessage(ctx, message) },
 		})
 		endCycle()
 		<-catchUpDone
@@ -110,15 +130,15 @@ func (s *Subscriber) Run(ctx context.Context) {
 	}
 }
 
-// catchUpOnSignal runs the catch-up each time the subscription is confirmed, off the connection's read loop (a read on the
-// same client from inside the hook could block it).
-func (s *Subscriber) catchUpOnSignal(ctx context.Context, subscribed <-chan struct{}) {
+// catchUpOnSignal runs the catch-up each time the cycle asks for it, off the connection's read loop (a read on the same
+// client from inside the hook could block it).
+func (s *Subscriber) catchUpOnSignal(ctx context.Context, cy *cycle) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-subscribed:
-			s.catchUp(ctx)
+		case <-cy.wake:
+			s.catchUp(ctx, cy)
 		}
 	}
 }
@@ -126,14 +146,24 @@ func (s *Subscriber) catchUpOnSignal(ctx context.Context, subscribed <-chan stru
 // catchUp reads the high-water hash and gives it to the consumer, retrying with the backoff until it works or ctx ends. It
 // runs only after the subscribe was confirmed: an event published before the read is in the hash, one published after it
 // arrives on the channel, and a live event is revision-idempotent with the read. Nothing but the failure is logged, never
-// its cause.
-func (s *Subscriber) catchUp(ctx context.Context) {
+// its cause. A failed InvalidateAll of the subscribe, or a floor whose invalidation failed, is a failed attempt: the gauge
+// stays where it was and the attempt is retried.
+func (s *Subscriber) catchUp(ctx context.Context, cy *cycle) {
 	for attempt := 1; ctx.Err() == nil; attempt++ {
-		floors, err := PublishedFloors(ctx, s.client)
-		if err == nil {
-			s.consumer.CatchUp(ctx, floors)
-			s.up.Store(1)
-			return
+		if cy.resubPending.Load() {
+			if err := s.consumer.Resubscribed(ctx); err == nil {
+				cy.resubPending.Store(false)
+			}
+		}
+		if !cy.resubPending.Load() {
+			floors, err := PublishedFloors(ctx, s.client)
+			if err == nil {
+				err = s.consumer.CatchUp(ctx, floors)
+			}
+			if err == nil {
+				s.up.Store(1)
+				return
+			}
 		}
 		s.log.WarnContext(ctx, "revision feed catch-up failed; retrying")
 		select {
@@ -144,17 +174,23 @@ func (s *Subscriber) catchUp(ctx context.Context) {
 	}
 }
 
-func (s *Subscriber) onMessage(ctx context.Context, message string) {
+// onMessage handles one live message. It returns false only when the invalidation failed: the cursor did not move, and the
+// caller asks for a catch-up, which reads the floor and applies the revision again.
+func (s *Subscriber) onMessage(ctx context.Context, message string) bool {
 	typ, id, revision, ok := parseMessage(message)
 	if !ok {
 		s.consumer.Dropped(ctx)
 		s.log.DebugContext(ctx, "revision feed message dropped: not <type>:<id>:<revision> with a revision in 1..2^53-1")
-		return
+		return true
 	}
-	s.consumer.Handle(ctx, contracts.ProvisioningEvent{
+	if _, err := s.consumer.Handle(ctx, contracts.ProvisioningEvent{
 		AggregateType: typ, AggregateID: id,
 		Payload: contracts.ProvisioningPayload{Revision: contracts.Revision(revision)},
-	})
+	}); err != nil {
+		s.log.WarnContext(ctx, "revision feed event not applied; catch-up requested")
+		return false
+	}
+	return true
 }
 
 // parseMessage splits "<type>:<id>:<revision>": the type ends at the first colon (aggregate types have none), the

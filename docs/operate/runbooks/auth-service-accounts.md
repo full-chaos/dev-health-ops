@@ -28,11 +28,9 @@ covers no credential: a service account holds none yet, so it cannot sign in or 
 
 ## Routes
 
-The routes are internal to auth-service. Each is served only when the endpoint-profile document holds its row; until
-the rows ship (the next change) they answer 404 and the service starts as before. Once served, they sit behind
-`AUTH_MEMBERSHIP_ROUTES` with the other provisioning routes, take the session issuer service credential
-(`svc_authsess_` with `memberships:write`) or the go-api workload token, admitted as the other provisioning routes
-admit it, and have no go-api caller yet.
+The routes are internal to auth-service. They sit behind `AUTH_MEMBERSHIP_ROUTES` with the other provisioning routes,
+take the session issuer service credential (`svc_authsess_` with `memberships:write`) or the go-api workload token,
+admitted as the other provisioning routes admit it, and have no go-api caller yet.
 
 | Route | Body | Answer |
 | --- | --- | --- |
@@ -44,7 +42,8 @@ admit it, and have no go-api caller yet.
 The actor is an active superuser, or an owner or admin member of the account's organization. The rule is read on the
 live users and membership rows before the verb and again inside it, after its locks. A non-superuser actor may not
 name a superuser as an owner, nor move an account off a superuser owner. An account that does not exist is named
-(404) only to an active superuser; any other actor gets the actor refusal.
+(404) only to an active superuser; any other actor gets the refusal it would get for an account of another organization
+(`admin_required`), so the reason never shows whether the account exists.
 
 ## Refusals
 

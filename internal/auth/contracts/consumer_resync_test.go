@@ -53,3 +53,21 @@ func TestResyncToTouchesOnlyItsAggregate(t *testing.T) {
 		t.Fatalf("the same id in another type: %q, want apply", got)
 	}
 }
+
+func TestPeekClassifiesAndMovesNothing(t *testing.T) {
+	c := NewConsumerCursor()
+	for range 2 {
+		if got := c.Peek(resyncEvent("principal", "p1", 1)); got != Apply {
+			t.Fatalf("peek 1: %q, want apply", got)
+		}
+		if got := c.Peek(resyncEvent("principal", "p1", 3)); got != Gap {
+			t.Fatalf("peek 3: %q, want gap", got)
+		}
+	}
+	if got := c.Observe(resyncEvent("principal", "p1", 1)); got != Apply {
+		t.Fatalf("1 after two peeks: %q, want apply (a peek moved the cursor)", got)
+	}
+	if got := c.Peek(resyncEvent("principal", "p1", 1)); got != Ignore {
+		t.Fatalf("peek 1 after the apply: %q, want ignore", got)
+	}
+}

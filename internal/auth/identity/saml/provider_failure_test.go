@@ -108,7 +108,7 @@ func TestSAMLRefusalsGoAPIDoesNotRecordWriteNoRecord(t *testing.T) {
 		"unsigned":                  {email: "u@example.test", response: func(o *resp) { o.unsignedAssertion = true }},
 		"sender-vouches only":       {email: "u@example.test", response: func(o *resp) { o.senderVouches = true }},
 		"not base64":                {raw: "!!!"},
-		"success":                   {email: "u@example.test"},
+		"success":                   {email: "u@example.test", provider: func(p *saml.Provider) { p.AllowedDomains = []string{"example.test"} }},
 	} {
 		t.Run(name, func(t *testing.T) {
 			failures := &recordedFailures{}

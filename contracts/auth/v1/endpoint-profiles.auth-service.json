@@ -30,7 +30,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 468,
+            "line": 505,
             "note": "func (s *Store) rotate",
             "path": "internal/auth/session/store.go"
           },
@@ -45,7 +45,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 367,
+          "line": 404,
           "note": "func (s *Store) Exchange",
           "path": "internal/auth/session/store.go"
         },
@@ -352,7 +352,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 468,
+            "line": 505,
             "note": "func (s *Store) rotate",
             "path": "internal/auth/session/store.go"
           },
@@ -367,7 +367,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 367,
+          "line": 404,
           "note": "func (s *Store) Exchange",
           "path": "internal/auth/session/store.go"
         },
@@ -594,7 +594,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/provisioning.go",
-        "line": 199
+        "line": 198
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped"
@@ -628,7 +628,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/provisioning.go",
-        "line": 200
+        "line": 199
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped"
@@ -662,7 +662,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/provisioning.go",
-        "line": 201
+        "line": 200
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped"
@@ -696,7 +696,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/provisioning.go",
-        "line": 202
+        "line": 201
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped"
@@ -745,7 +745,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/provisioning.go",
-        "line": 203
+        "line": 202
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped"
@@ -779,7 +779,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/provisioning.go",
-        "line": 204
+        "line": 203
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -844,7 +844,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/provisioning.go",
-        "line": 205
+        "line": 204
       },
       "surface_kind": "rest",
       "tenant_requirement": "cross_org_superuser_only"
@@ -878,7 +878,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/provisioning.go",
-        "line": 206
+        "line": 205
       },
       "surface_kind": "rest",
       "tenant_requirement": "cross_org_superuser_only"
@@ -1135,7 +1135,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 276,
+            "line": 313,
             "note": "func (s *Store) Create",
             "path": "internal/auth/session/store.go"
           },

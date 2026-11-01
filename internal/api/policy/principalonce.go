@@ -44,6 +44,8 @@ var earlyRefusals = []EarlyRefusal{
 	// The Compose bootstrap credential is accepted only at auth-service's
 	// workload-token exchange, never as a Bearer.
 	{Prefix: "fcwlb_", Classes: nil},
+	// No route accepts a service-account key, as a Bearer or otherwise.
+	{Prefix: "fcsak_", Classes: nil},
 }
 
 const (

@@ -64,6 +64,9 @@ type fakeIdP struct {
 	email    string
 	fullName string
 	sub      string
+	// subOverride, when set, rewrites the claims of both the id_token and the userinfo answer, so a test can drop
+	// "sub" or make it a non-string.
+	subOverride func(claims map[string]any)
 	// receivedVerifier is the code_verifier the token endpoint actually
 	// received on the last exchange, for the PKCE round-trip assertion.
 	receivedVerifier string
@@ -125,6 +128,7 @@ func (idp *fakeIdP) serveToken(w http.ResponseWriter, r *http.Request) {
 	idp.receivedVerifier = r.Form.Get("code_verifier")
 	idp.receivedSecret = r.Form.Get("client_secret")
 	nonce, email, fullName, sub := idp.nonce, idp.email, idp.fullName, idp.sub
+	override := idp.subOverride
 	idp.mu.Unlock()
 
 	now := time.Now()
@@ -132,6 +136,9 @@ func (idp *fakeIdP) serveToken(w http.ResponseWriter, r *http.Request) {
 		"iss": idp.server.URL, "aud": r.Form.Get("client_id"), "sub": sub,
 		"exp": now.Add(5 * time.Minute).Unix(), "iat": now.Unix(), "nonce": nonce,
 		"email": email, "name": fullName,
+	}
+	if override != nil {
+		override(claims)
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	token.Header["kid"] = "test-key-1"
@@ -153,9 +160,14 @@ func (idp *fakeIdP) serveUserinfo(w http.ResponseWriter, r *http.Request) {
 	}
 	idp.mu.Lock()
 	email, fullName, sub := idp.email, idp.fullName, idp.sub
+	override := idp.subOverride
 	idp.mu.Unlock()
+	answer := map[string]any{"email": email, "name": fullName, "sub": sub}
+	if override != nil {
+		override(answer)
+	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"email": email, "name": fullName, "sub": sub})
+	_ = json.NewEncoder(w).Encode(answer)
 }
 
 // testClock is a settable clock: real time until a test freezes/advances

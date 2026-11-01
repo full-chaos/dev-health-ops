@@ -47,11 +47,13 @@ internal/apiservice/customerpush
 internal/audit
 internal/auth/accessverify
 internal/auth/acraudience
+internal/auth/acrmint
 internal/auth/authconfig
 internal/auth/clientaddr
 internal/auth/contracts
 internal/auth/contracts/provisioning
 internal/auth/contracts/tokencorpus
+internal/auth/delegationend
 internal/auth/edgetoken
 internal/auth/emaildomain
 internal/auth/httpapi
@@ -162,6 +164,7 @@ internal/teamprovider
 internal/testsupport/chschema
 internal/testsupport/containers
 internal/testsupport/egressallow
+internal/testsupport/ingestpg
 internal/testsupport/moduleroot
 internal/testsupport/pgschema
 internal/testsupport/pgseed

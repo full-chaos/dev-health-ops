@@ -38,7 +38,7 @@ const (
 
 // issueRefusedPrefixes are the credential classes the issue route never takes:
 // a value that starts with one is refused before anything is decoded or read.
-var issueRefusedPrefixes = []string{"svc_", "fcpush_", "fcacr_", "fcwlb_", "whsec_", "dhr1_"}
+var issueRefusedPrefixes = []string{"svc_", "fcpush_", "fcacr_", "fcwlb_", "fcsak_", "whsec_", "dhr1_"}
 
 const compatPrefix = "svc_authsess_"
 

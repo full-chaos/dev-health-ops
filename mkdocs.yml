@@ -181,6 +181,7 @@ nav:
           - Auth users flip-back grants: operate/runbooks/auth-users-flip-back-grants.md
           - Workload bootstrap credential: operate/runbooks/auth-workload-bootstrap-credential.md
           - Service accounts: operate/runbooks/auth-service-accounts.md
+          - Kubernetes workload federation: operate/runbooks/auth-workload-kubernetes-federation.md
           - Legacy ingest retirement: operate/runbooks/legacy-ingest-retirement.md
       - Prod cutover 2026-09-11:
           - operate/prod-cutover-2026-09-11-lessons/index.md
@@ -228,6 +229,7 @@ nav:
       - Auth decisions and obligations: reference/auth/obligations.md
       - Auth endpoint profiles: reference/auth/endpoint-profiles.md
       - Auth service configuration: reference/auth/configuration.md
+      - Auth workload registry: reference/auth/workload-registry.md
       - Auth identity linking: reference/auth/identity-linking.md
       - Auth service readiness and SLO: reference/auth/readiness-and-slo.md
       - GraphQL:

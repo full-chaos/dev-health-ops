@@ -32,7 +32,6 @@ const (
 const (
 	reasonServiceAccountNotFound = "service_account_not_found"
 	reasonNameTaken              = "name_taken"
-	reasonNameInvalid            = "name_invalid"
 	reasonOwnerInvalid           = "owner_invalid"
 	reasonOwnerNotMember         = "owner_not_member"
 	reasonAlreadyInState         = "already_in_state"

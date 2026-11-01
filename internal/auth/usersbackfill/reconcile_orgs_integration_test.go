@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
@@ -371,5 +372,33 @@ func TestOrgsReconcileIsZeroAfterTheAuthSuspend(t *testing.T) {
 	}
 	if classes, ok := classesOf(e.orgsSnapshot(t, ctx), id); ok {
 		t.Fatalf("after go-api's row is inactive too: classes %v, want none (a zero diff, no refresh needed)", classes)
+	}
+}
+
+// A birth leaves no diff: not at the default gate and not at -exact.
+func TestBirthReconcilesExact(t *testing.T) {
+	e := getReconEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	user := e.seed(t, ctx, "birth-"+uuid.NewString()[:8]+"@example.com", true, true)
+	if err := e.store.Project(ctx, user); err != nil {
+		t.Fatal(err)
+	}
+	// The owned role in a pool of this cell's own: TestLegacyLinkPurgeVerbEndToEnd closes the shared one (the verb's defer pool.Close()).
+	pool, err := pgxpool.NewWithConfig(ctx, e.ownedRuntime(t).Config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	owned, err := identity.New(identity.Config{Pool: pool, Schema: e.schema, UsersOwnedByAuth: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	born, err := owned.OnboardOrganization(ctx, identity.OnboardOrganizationRequest{Principal: user, Name: "Exact"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if classes, ok := classesOf(e.orgsSnapshot(t, ctx), born.ID); ok {
+		t.Fatalf("an organization birth is a mismatch: classes %v", classes)
 	}
 }

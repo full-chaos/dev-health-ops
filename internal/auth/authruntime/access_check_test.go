@@ -120,7 +120,12 @@ func TestProductionRoutesConstructTheAccessCheck(t *testing.T) {
 			},
 		} {
 			status, reason := call()
-			if status != wantStatus || (wantReason != "" && reason != wantReason) {
+			want := wantReason
+			if route == "change password" {
+				// change-password answers in go-api's guard wire (no error.v1 reason): its 503 is go-api's.
+				want = ""
+			}
+			if status != wantStatus || (want != "" && reason != want) {
 				t.Errorf("%s, %s: %d %q; want %d %q", name, route, status, reason, wantStatus, wantReason)
 			}
 		}

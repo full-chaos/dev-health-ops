@@ -46,6 +46,15 @@ type Session struct {
 	CreatedAt     Timestamp  `json:"created_at"`
 	ExpiresAt     Timestamp  `json:"expires_at"`
 	RevokedAt     *Timestamp `json:"revoked_at"`
+	// Delegation is present only on a delegated session.
+	Delegation *SessionDelegation `json:"delegation,omitempty"`
+}
+
+// SessionDelegation is the delegation member of session.v1.
+type SessionDelegation struct {
+	ActorPrincipalID string   `json:"actor_principal_id"`
+	Reason           string   `json:"reason"`
+	PermittedActions []string `json:"permitted_actions"`
 }
 
 // SecretString holds a credential. It is a struct, not a named string: a

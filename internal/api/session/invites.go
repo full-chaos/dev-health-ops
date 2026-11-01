@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/registerorg"
 	"github.com/full-chaos/dev-health-ops/internal/auth/signedtoken"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
@@ -338,6 +339,10 @@ func (h handlers) onboard(w http.ResponseWriter, r *http.Request) {
 		h.joinInAuth(w, r, code, "Invite accepted during onboarding", true)
 		return
 	}
+	if h.Provision != nil && action == "create_org" {
+		h.onboardInAuth(w, r, orgName)
+		return
+	}
 	tx, err := h.Pool.Begin(ctx)
 	if err != nil {
 		h.fail(w, r, "begin", err)
@@ -380,7 +385,7 @@ func (h handlers) onboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	orgID := h.NewUUID()
-	if err := insertOrganization(ctx, tx, orgID, slugifyOrgName(name)+"-"+user.ID.String()[:8], name, now); err != nil {
+	if err := insertOrganization(ctx, tx, orgID, registerorg.OnboardSlug(name, user.ID), name, now); err != nil {
 		h.fail(w, r, "insert organization", err)
 		return
 	}
@@ -398,37 +403,4 @@ func (h handlers) onboard(w http.ResponseWriter, r *http.Request) {
 	}
 	role := "owner"
 	h.commitThenIssue(w, r, tx, user, &membershipRow{OrgID: orgID, Role: &role, JoinedAt: &now, CreatedAt: now}, name)
-}
-
-// slugifyOrgName is common._slugify_org_name:
-// re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:50], or
-// "my-organization" when that is empty. The class is ASCII, so every run of
-// any other code point, "-" included, becomes one "-".
-func slugifyOrgName(name string) string {
-	var slug []rune
-	inRun := false
-	for _, r := range pyjson.Runes(pythonparity.Lower(name)) {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			slug = append(slug, r)
-			inRun = false
-			continue
-		}
-		if !inRun {
-			slug = append(slug, '-')
-			inRun = true
-		}
-	}
-	for len(slug) > 0 && slug[0] == '-' {
-		slug = slug[1:]
-	}
-	for len(slug) > 0 && slug[len(slug)-1] == '-' {
-		slug = slug[:len(slug)-1]
-	}
-	if len(slug) > 50 {
-		slug = slug[:50]
-	}
-	if len(slug) == 0 {
-		return "my-organization"
-	}
-	return string(slug)
 }

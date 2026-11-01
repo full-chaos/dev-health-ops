@@ -1,6 +1,122 @@
 {
   "credential_class_source": "contracts/auth/v1/credential-classes.json",
   "generated_at": "2026-10-21T00:00:00Z",
+  "rewritten_anchors": [
+    {
+      "file": "internal/api/billing/routes.go",
+      "line": 92,
+      "now": "\t\t{Method: http.MethodPost, Pattern: prefix + \"/plans/pull-stripe\", Allow: http.MethodPost, Handler: g.WrapPlatform(policy.ActionAdminBilling, http.HandlerFunc(h.pullStripe))},",
+      "was": "\t\t{Method: http.MethodPost, Pattern: prefix + \"/plans/pull-stripe\", Allow: http.MethodPost, Handler: g.Wrap(policy.Superuser, http.HandlerFunc(h.pullStripe))},"
+    },
+    {
+      "file": "internal/apiservice/admin/auditlogs.go",
+      "line": 26,
+      "now": "\t\t{Method: http.MethodGet, Pattern: governancePrefix + \"/platform/audit-logs\", Handler: h.guard.WrapPlatform(policy.ActionAdminAudit, http.HandlerFunc(h.listPlatformAuditLogs))},",
+      "was": "\t\t{Method: http.MethodGet, Pattern: governancePrefix + \"/platform/audit-logs\", Handler: h.guard.Wrap(policy.Superuser, http.HandlerFunc(h.listPlatformAuditLogs))},"
+    },
+    {
+      "file": "internal/apiservice/admin/featureflags.go",
+      "line": 22,
+      "now": "\t\t{Method: http.MethodGet, Pattern: governancePrefix + \"/feature-flags\", Handler: h.guard.WrapPlatform(policy.ActionAdminFlags, http.HandlerFunc(h.listFeatureFlags))},",
+      "was": "\t\t{Method: http.MethodGet, Pattern: governancePrefix + \"/feature-flags\", Handler: h.guard.Wrap(policy.Superuser, http.HandlerFunc(h.listFeatureFlags))},"
+    },
+    {
+      "file": "internal/apiservice/admin/featureflags.go",
+      "line": 23,
+      "now": "\t\t{Method: http.MethodGet, Pattern: governancePrefix + \"/orgs/{org_id}/feature-overrides\", Handler: h.guard.WrapPlatform(policy.ActionAdminFlags, http.HandlerFunc(h.listFeatureOverrides))},",
+      "was": "\t\t{Method: http.MethodGet, Pattern: governancePrefix + \"/orgs/{org_id}/feature-overrides\", Handler: h.guard.Wrap(policy.Superuser, http.HandlerFunc(h.listFeatureOverrides))},"
+    },
+    {
+      "file": "internal/apiservice/admin/featureflags.go",
+      "line": 24,
+      "now": "\t\t{Method: http.MethodPost, Pattern: governancePrefix + \"/orgs/{org_id}/feature-overrides\", Handler: h.bodyFirstPlatform(policy.ActionAdminFlags, http.HandlerFunc(h.createFeatureOverride))},",
+      "was": "\t\t{Method: http.MethodPost, Pattern: governancePrefix + \"/orgs/{org_id}/feature-overrides\", Handler: h.bodyFirst(policy.Superuser, http.HandlerFunc(h.createFeatureOverride))},"
+    },
+    {
+      "file": "internal/apiservice/admin/featureflags.go",
+      "line": 25,
+      "now": "\t\t{Method: http.MethodPatch, Pattern: governancePrefix + \"/orgs/{org_id}/feature-overrides/{override_id}\", Handler: h.bodyFirstPlatform(policy.ActionAdminFlags, http.HandlerFunc(h.updateFeatureOverride))},",
+      "was": "\t\t{Method: http.MethodPatch, Pattern: governancePrefix + \"/orgs/{org_id}/feature-overrides/{override_id}\", Handler: h.bodyFirst(policy.Superuser, http.HandlerFunc(h.updateFeatureOverride))},"
+    },
+    {
+      "file": "internal/apiservice/admin/featureflags.go",
+      "line": 26,
+      "now": "\t\t{Method: http.MethodDelete, Pattern: governancePrefix + \"/orgs/{org_id}/feature-overrides/{override_id}\", Handler: h.guard.WrapPlatform(policy.ActionAdminFlags, http.HandlerFunc(h.deleteFeatureOverride))},",
+      "was": "\t\t{Method: http.MethodDelete, Pattern: governancePrefix + \"/orgs/{org_id}/feature-overrides/{override_id}\", Handler: h.guard.Wrap(policy.Superuser, http.HandlerFunc(h.deleteFeatureOverride))},"
+    },
+    {
+      "file": "internal/apiservice/admin/featureflags.go",
+      "line": 27,
+      "now": "\t\t{Method: http.MethodPatch, Pattern: governancePrefix + \"/feature-flags/{flag_id}\", Handler: h.bodyFirstPlatform(policy.ActionAdminFlags, http.HandlerFunc(h.updateFeatureFlag))},",
+      "was": "\t\t{Method: http.MethodPatch, Pattern: governancePrefix + \"/feature-flags/{flag_id}\", Handler: h.bodyFirst(policy.Superuser, http.HandlerFunc(h.updateFeatureFlag))},"
+    },
+    {
+      "file": "internal/apiservice/admin/orgs.go",
+      "line": 23,
+      "now": "\t\t{Method: http.MethodGet, Pattern: orgsPrefix + \"/orgs\", Handler: h.guard.WrapPlatform(policy.ActionAdminOrgs, http.HandlerFunc(h.listOrganizations))},",
+      "was": "\t\t{Method: http.MethodGet, Pattern: orgsPrefix + \"/orgs\", Handler: h.guard.Wrap(policy.Superuser, http.HandlerFunc(h.listOrganizations))},"
+    },
+    {
+      "file": "internal/apiservice/admin/orgs.go",
+      "line": 24,
+      "now": "\t\t{Method: http.MethodGet, Pattern: orgsPrefix + \"/orgs/{org_id}\", Handler: h.guard.WrapPlatform(policy.ActionAdminOrgs, http.HandlerFunc(h.getOrganization))},",
+      "was": "\t\t{Method: http.MethodGet, Pattern: orgsPrefix + \"/orgs/{org_id}\", Handler: h.guard.Wrap(policy.Superuser, http.HandlerFunc(h.getOrganization))},"
+    },
+    {
+      "file": "internal/apiservice/admin/orgs.go",
+      "line": 25,
+      "now": "\t\t{Method: http.MethodPost, Pattern: orgsPrefix + \"/orgs\", Handler: h.bodyFirstPlatform(policy.ActionAdminOrgs, http.HandlerFunc(h.createOrganization))},",
+      "was": "\t\t{Method: http.MethodPost, Pattern: orgsPrefix + \"/orgs\", Handler: h.bodyFirst(policy.Superuser, http.HandlerFunc(h.createOrganization))},"
+    },
+    {
+      "file": "internal/apiservice/admin/orgs.go",
+      "line": 26,
+      "now": "\t\t{Method: http.MethodPatch, Pattern: orgsPrefix + \"/orgs/{org_id}\", Handler: h.bodyFirstPlatform(policy.ActionAdminOrgs, http.HandlerFunc(h.updateOrganization))},",
+      "was": "\t\t{Method: http.MethodPatch, Pattern: orgsPrefix + \"/orgs/{org_id}\", Handler: h.bodyFirst(policy.Superuser, http.HandlerFunc(h.updateOrganization))},"
+    },
+    {
+      "file": "internal/apiservice/admin/orgs.go",
+      "line": 27,
+      "now": "\t\t{Method: http.MethodDelete, Pattern: orgsPrefix + \"/orgs/{org_id}\", Handler: h.guard.WrapPlatform(policy.ActionAdminOrgs, http.HandlerFunc(h.deleteOrganization))},",
+      "was": "\t\t{Method: http.MethodDelete, Pattern: orgsPrefix + \"/orgs/{org_id}\", Handler: h.guard.Wrap(policy.Superuser, http.HandlerFunc(h.deleteOrganization))},"
+    },
+    {
+      "file": "internal/apiservice/admin/platformstats.go",
+      "line": 15,
+      "now": "\t\t{Method: http.MethodGet, Pattern: governancePrefix + \"/platform/stats\", Handler: h.guard.WrapPlatform(policy.ActionAdminStats, http.HandlerFunc(h.platformStats))},",
+      "was": "\t\t{Method: http.MethodGet, Pattern: governancePrefix + \"/platform/stats\", Handler: h.guard.Wrap(policy.Superuser, http.HandlerFunc(h.platformStats))},"
+    },
+    {
+      "file": "internal/apiservice/admin/users.go",
+      "line": 70,
+      "now": "\t\t{Method: http.MethodGet, Pattern: usersPrefix + \"/users\", Handler: h.guard.WrapAdminOr(policy.ActionAdminUsers, http.HandlerFunc(h.listUsers))},",
+      "was": "\t\t{Method: http.MethodGet, Pattern: usersPrefix + \"/users\", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.listUsers))},"
+    },
+    {
+      "file": "internal/apiservice/admin/users.go",
+      "line": 71,
+      "now": "\t\t{Method: http.MethodGet, Pattern: usersPrefix + \"/users/{user_id}\", Handler: h.guard.WrapAdminOr(policy.ActionAdminUsers, http.HandlerFunc(h.getUser))},",
+      "was": "\t\t{Method: http.MethodGet, Pattern: usersPrefix + \"/users/{user_id}\", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.getUser))},"
+    },
+    {
+      "file": "internal/apiservice/admin/users.go",
+      "line": 72,
+      "now": "\t\t{Method: http.MethodPost, Pattern: usersPrefix + \"/users\", Handler: h.bodyFirstAdminOr(policy.ActionAdminUsers, http.HandlerFunc(h.createUser))},",
+      "was": "\t\t{Method: http.MethodPost, Pattern: usersPrefix + \"/users\", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.createUser))},"
+    },
+    {
+      "file": "internal/apiservice/admin/users.go",
+      "line": 73,
+      "now": "\t\t{Method: http.MethodPatch, Pattern: usersPrefix + \"/users/{user_id}\", Handler: h.bodyFirstAdminOr(policy.ActionAdminUsers, http.HandlerFunc(h.updateUser))},",
+      "was": "\t\t{Method: http.MethodPatch, Pattern: usersPrefix + \"/users/{user_id}\", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.updateUser))},"
+    },
+    {
+      "file": "internal/apiservice/admin/users.go",
+      "line": 77,
+      "now": "\t\t{Method: http.MethodDelete, Pattern: usersPrefix + \"/users/{user_id}\", Handler: h.guard.WrapAdminOr(policy.ActionAdminUsers, http.HandlerFunc(h.deleteUser))},",
+      "was": "\t\t{Method: http.MethodDelete, Pattern: usersPrefix + \"/users/{user_id}\", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.deleteUser))},"
+    }
+  ],
   "rows": [
     {
       "accepted_credential_classes": [
@@ -15534,5 +15650,5 @@
     }
   ],
   "schema_version": "endpoint-profile.v1",
-  "source_commit": "42d8df699559f3f58efb04424688f7b8f4a9e9bb"
+  "source_commit": "0b2e9b456ca3ffe357a4dbbb19049a48ac7d8276"
 }

@@ -888,6 +888,18 @@ true
 {{- end -}}
 
 {{/*
+"true" when authService.ssoJit is on, else "". The one read of the switch.
+*/}}
+{{- define "dev-health.ssoJit" -}}
+{{- $v := .Values.authService.ssoJit -}}
+{{- if not (kindIs "bool" $v) }}{{- fail "authService.ssoJit must be true or false" }}{{- end -}}
+{{- if $v -}}
+{{- if ne (include "dev-health.authOn" (dict "flag" "orgsOwned" "context" .)) "true" }}{{- fail "authService.ssoJit needs orgs owned (authService.phase 5): below it go-api's own sign-in join still writes, and two writers would race" }}{{- end -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/*
 OIDC and SAML through auth-service (authService.sso.oidc / .saml): "true" or "". true is refused: the chart does not
 render auth-service's SSO settings, so go-api would forward to routes auth-service does not mount.
 Call with (dict "flag" "oidc"|"saml" "context" $).

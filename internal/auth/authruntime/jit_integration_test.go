@@ -56,8 +56,8 @@ func newSAMLJITEnv(t *testing.T, ctx context.Context, jit bool) *samlJITEnv {
 	if _, err := e.admin.Exec(ctx, `UPDATE public.organizations SET tier = 'enterprise' WHERE id = $1`, org); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.admin.Exec(ctx, `INSERT INTO public.sso_providers (id, org_id, name, protocol, status, allow_idp_initiated, config)
-VALUES ($1, $2, $3, 'saml', 'active', true, $4::json)`, row, org, "idp-"+row.String(), config); err != nil {
+	if _, err := e.admin.Exec(ctx, `INSERT INTO public.sso_providers (id, org_id, name, protocol, status, allow_idp_initiated, config, allowed_domains)
+VALUES ($1, $2, $3, 'saml', 'active', true, $4::json, '["example.com"]'::json)`, row, org, "idp-"+row.String(), config); err != nil {
 		t.Fatal(err)
 	}
 	store, err := saml.NewPGStore(e.runtime, authschemaIdent(t))
@@ -704,4 +704,60 @@ func TestJITReachableFromRuntime(t *testing.T) {
 	nameID := "jit-reach-" + uuid.NewString()
 	e.wantStatus(t, e.acs(t, nameID), http.StatusOK)
 	e.wantOneMembership(t, ctx, e.principalOf(t, ctx, nameID), "member")
+}
+
+func (e *samlJITEnv) setAllowedDomains(t *testing.T, ctx context.Context, list any) {
+	t.Helper()
+	if _, err := e.admin.Exec(ctx, `UPDATE public.sso_providers SET allowed_domains = $2::json WHERE id = $1`, e.provider.ID, list); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestJITNewAccountNeedsAListedDomain(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	e := newSAMLJITEnv(t, ctx, true)
+	for name, list := range map[string]any{"empty": "[]", "null": nil} {
+		t.Run("saml/"+name, func(t *testing.T) {
+			e.setAllowedDomains(t, ctx, list)
+			before := e.tableCounts(t, ctx)
+			e.wantStatus(t, e.acs(t, "jit-list-"+uuid.NewString()), http.StatusBadRequest)
+			wantSameJITCounts(t, before, e.tableCounts(t, ctx))
+			if n := e.count(t, ctx, `SELECT count(*) FROM public.sso_providers WHERE id = $1 AND last_error = $2`, e.provider.ID,
+				"User not found and auto-provisioning disabled"); n != 1 {
+				t.Fatalf("%d provider rows with the auto-provision failure, want 1", n)
+			}
+		})
+	}
+	t.Run("saml/listed", func(t *testing.T) {
+		e.setAllowedDomains(t, ctx, `["example.com"]`)
+		nameID := "jit-list-" + uuid.NewString()
+		e.wantStatus(t, e.acs(t, nameID), http.StatusOK)
+		e.wantOneMembership(t, ctx, e.principalOf(t, ctx, nameID), "member")
+	})
+	t.Run("saml/unlisted", func(t *testing.T) {
+		e.setAllowedDomains(t, ctx, `["other.example"]`)
+		before := e.tableCounts(t, ctx)
+		e.wantStatus(t, e.acs(t, "jit-list-"+uuid.NewString()), http.StatusForbidden)
+		wantSameJITCounts(t, before, e.tableCounts(t, ctx))
+	})
+	t.Run("saml/switch_off", func(t *testing.T) {
+		off := newSAMLJITEnv(t, ctx, false)
+		off.setAllowedDomains(t, ctx, "[]")
+		off.wantStatus(t, off.acs(t, "jit-list-"+uuid.NewString()), http.StatusForbidden)
+	})
+}
+
+// A key the row holds decides the account: the email and the empty list do not.
+func TestJITKnownKeyIgnoresAnEmptyList(t *testing.T) {
+	t.Run("saml", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		e := newSAMLJITEnv(t, ctx, true)
+		nameID := "jit-known-" + uuid.NewString()
+		user := e.account(t, ctx, nameID)
+		e.setAllowedDomains(t, ctx, "[]")
+		e.wantStatus(t, e.acs(t, nameID), http.StatusOK)
+		e.wantOneMembership(t, ctx, user, "member")
+	})
 }

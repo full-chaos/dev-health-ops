@@ -156,7 +156,7 @@ func (f *fakeSessions) CreateSupersedingAudited(ctx context.Context, principal u
 	return issued, nil
 }
 
-func (f *fakeSessions) ExchangeLegacy(_ context.Context, legacy session.LegacyRefresh) (session.Result, error) {
+func (f *fakeSessions) ExchangeLegacyGuarded(_ context.Context, legacy session.LegacyRefresh, _ session.Guard) (session.Result, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.legacy = append(f.legacy, legacy)

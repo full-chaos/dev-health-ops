@@ -150,7 +150,10 @@ func (c *Consumer) acquire(ctx context.Context, key string) (chan struct{}, erro
 		select {
 		case <-busy:
 		case <-ctx.Done():
-			return nil, ctx.Err()
+		}
+		// Both may be ready at once and select picks either: a waiter whose ctx ended never takes the slot.
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 	}
 }

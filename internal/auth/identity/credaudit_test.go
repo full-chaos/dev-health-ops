@@ -83,9 +83,12 @@ func TestCredentialAuditEventsAreValidAndHoldNoAddress(t *testing.T) {
 func TestEveryCredentialAuditEventIsMappedByTheCorpus(t *testing.T) {
 	mapped := authrows.CredentialAuditEvents()
 	subject := uuid.NewString()
+	// go-api writes no audit row for a verification, so the corpus maps none (CHAOS-11400).
+	if e := verifiedAudit(subject, SelfSignUp(nil), nil); mapped[e.EventType] != (authrows.AuditMapping{}) {
+		t.Errorf("%s maps to a golden audit row; go-api writes none", e.EventType)
+	}
 	for _, e := range []audit.AuditEvent{
 		provisionAudit(subject, SelfSignUp(nil), false),
-		verifiedAudit(subject, SelfSignUp(nil), nil),
 		passwordAudit(PasswordReset, subject, SelfSignUp(nil), nil),
 		passwordAudit(PasswordChanged, subject, SelfSignUp(nil), nil),
 	} {

@@ -10,10 +10,10 @@ import (
 	"testing"
 )
 
-// The go-quality legs on ubuntu-26.04 (CAL-2604): 4 test shards and 5 race legs. The pins hold the COUNTS and the row
+// The go-quality legs on ubuntu-26.04 (CAL-2604): 4 test shards and 6 race legs. The pins hold the COUNTS and the row
 // partition of those counts; they assert no seconds (D6418).
 
-const wantTestShards, wantRaceLegs = 4, 5
+const wantTestShards, wantRaceLegs = 4, 6
 
 func legCounts(t *testing.T) (tests, races int, names []string) {
 	t.Helper()
@@ -44,7 +44,7 @@ func legCounts(t *testing.T) (tests, races int, names []string) {
 	return tests, races, names
 }
 
-func TestTheLegListHasFourTestShardsAndFiveRaceLegs(t *testing.T) {
+func TestTheLegListHasFourTestShardsAndSixRaceLegs(t *testing.T) {
 	tests, races, names := legCounts(t)
 	if tests != wantTestShards || races != wantRaceLegs {
 		t.Errorf("legs %v: %d test shard(s) and %d race leg(s), want %d and %d", names, tests, races, wantTestShards, wantRaceLegs)

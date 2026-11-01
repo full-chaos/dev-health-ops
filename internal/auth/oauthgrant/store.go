@@ -243,14 +243,16 @@ type Decision struct {
 
 // Approved is the answer of an approval. Code is returned once.
 type Approved struct {
-	Code               contracts.SecretString
-	RedirectURI, State string
-	GrantID, SessionID uuid.UUID
+	Code                            contracts.SecretString
+	RedirectURI, State              string
+	GrantID, SessionID              uuid.UUID
+	ClientID, ClientClass, Audience string
 }
 
 // Denied is the answer of a denial, for the redirect.
 type Denied struct {
-	RedirectURI, State string
+	RedirectURI, State              string
+	ClientID, ClientClass, Audience string
 }
 
 // row is one request as a decision reads it.
@@ -366,7 +368,8 @@ func (s *Store) Approve(ctx context.Context, in Decision) (Approved, error) {
 				in.RequestID, decisionApproved, grantID, hashSecret(code), CodeLifetime.Seconds()); err != nil {
 				return err
 			}
-			out = Approved{Code: code, RedirectURI: r.redirectURI, State: r.state, GrantID: grantID, SessionID: sessionID}
+			out = Approved{Code: code, RedirectURI: r.redirectURI, State: r.state, GrantID: grantID, SessionID: sessionID,
+				ClientID: r.clientID, ClientClass: r.class, Audience: r.audience}
 			return nil
 		},
 		Audit:     withType(event, EventConsentApproved),
@@ -406,7 +409,7 @@ func (s *Store) Deny(ctx context.Context, in Decision) (Denied, error) {
 				in.RequestID, decisionDenied); err != nil {
 				return err
 			}
-			out = Denied{RedirectURI: r.redirectURI, State: r.state}
+			out = Denied{RedirectURI: r.redirectURI, State: r.state, ClientID: r.clientID, ClientClass: r.class, Audience: r.audience}
 			return nil
 		},
 		Audit:     event,

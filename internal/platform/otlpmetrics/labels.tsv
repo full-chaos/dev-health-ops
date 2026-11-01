@@ -4,6 +4,7 @@ auth.api.session_route_outcomes	operation,reason_code,result	code: internal/auth
 auth.entitlement.outcomes	outcome	code: internal/auth/entitlement/entitlement.go
 auth.identity.external_links	action,outcome	code: internal/auth/identity/store.go
 auth.identity.projections	kind,outcome	code: internal/auth/identity/store.go
+auth.oauth.requests	audience,client_class,operation,outcome	code: internal/auth/authapi/oauth.go
 auth.identity.wire_slug_omitted		code: internal/auth/identity/store.go
 auth.oidc.outcomes	outcome,reason,route	code: internal/auth/identity/oidc/service.go
 auth.org.mutations	outcome,verb	code: internal/auth/org/store.go

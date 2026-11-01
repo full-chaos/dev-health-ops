@@ -1,0 +1,39 @@
+{
+  "expect": {
+    "allowed": true,
+    "cache_class": "",
+    "expires_in_seconds": null,
+    "policy_revision": 5,
+    "reason": "allowed_by_role"
+  },
+  "id": "allow-owner-deletes-org",
+  "layer": "pdp",
+  "request": {
+    "action": "org.delete",
+    "organization_id": "org-a",
+    "resource_key": "",
+    "resource_kind": "organization"
+  },
+  "state": {
+    "catalog": "embedded",
+    "clock": "2027-01-15T08:00:00Z",
+    "grants": [],
+    "grants_error": false,
+    "memberships": {
+      "org-a": {
+        "org_id": "org-a",
+        "role": "owner",
+        "status": "active"
+      }
+    },
+    "organizations": {
+      "org-a": "active"
+    },
+    "platform_role": "",
+    "principal_status": "active",
+    "service_accounts": {},
+    "snapshot": "grant",
+    "workload": null
+  },
+  "why": "owner holds org.delete."
+}

@@ -10,7 +10,10 @@ import (
 )
 
 type authorizeGoldenManifest struct {
-	Vectors []struct {
+	Description string          `json:"description"`
+	Surface     string          `json:"surface"`
+	Catalogs    json.RawMessage `json:"catalogs"`
+	Vectors     []struct {
 		File  string `json:"file"`
 		ID    string `json:"id"`
 		Layer string `json:"layer"`

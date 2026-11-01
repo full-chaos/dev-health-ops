@@ -1,6 +1,447 @@
 {
-  "catalogs": [],
-  "description": "The golden authorization decision corpus: each row is one decision question and its internal verdict.",
+  "catalogs": [
+    {
+      "file": "catalogs/planted-repo-reader.json",
+      "id": "planted-repo-reader"
+    }
+  ],
+  "description": "The golden authorization decision corpus: each row is one decision question and its internal verdict. Rows of layer pdp run through the policy decision core; rows of layer pep run through the authorize request decoder.",
   "surface": "authorization-golden.v1",
-  "vectors": []
+  "vectors": [
+    {
+      "file": "allow-member-reads-org.json",
+      "id": "allow-member-reads-org",
+      "layer": "pdp"
+    },
+    {
+      "file": "allow-owner-deletes-org.json",
+      "id": "allow-owner-deletes-org",
+      "layer": "pdp"
+    },
+    {
+      "file": "allow-platform-admin-admin-users.json",
+      "id": "allow-platform-admin-admin-users",
+      "layer": "pdp"
+    },
+    {
+      "file": "cross-org-grant-in-a-leaves-b-on-the-default.json",
+      "id": "cross-org-grant-in-a-leaves-b-on-the-default",
+      "layer": "pdp"
+    },
+    {
+      "file": "cross-org-member-of-a-asks-b.json",
+      "id": "cross-org-member-of-a-asks-b",
+      "layer": "pdp"
+    },
+    {
+      "file": "cross-org-membership-row-for-other-org.json",
+      "id": "cross-org-membership-row-for-other-org",
+      "layer": "pdp"
+    },
+    {
+      "file": "cross-org-repo-key-collision.json",
+      "id": "cross-org-repo-key-collision",
+      "layer": "pdp"
+    },
+    {
+      "file": "cross-org-same-role-name-allowed-in-a.json",
+      "id": "cross-org-same-role-name-allowed-in-a",
+      "layer": "pdp"
+    },
+    {
+      "file": "cross-org-same-role-name-denied-in-b.json",
+      "id": "cross-org-same-role-name-denied-in-b",
+      "layer": "pdp"
+    },
+    {
+      "file": "cross-org-wildcard-grant-in-a-does-not-reach-b.json",
+      "id": "cross-org-wildcard-grant-in-a-does-not-reach-b",
+      "layer": "pdp"
+    },
+    {
+      "file": "embedded-catalog-grant-role-does-not-hold-repository-read.json",
+      "id": "embedded-catalog-grant-role-does-not-hold-repository-read",
+      "layer": "pdp"
+    },
+    {
+      "file": "embedded-catalog-no-role-holds-repository-read.json",
+      "id": "embedded-catalog-no-role-holds-repository-read",
+      "layer": "pdp"
+    },
+    {
+      "file": "membership-active-uppercase.json",
+      "id": "membership-active-uppercase",
+      "layer": "pdp"
+    },
+    {
+      "file": "membership-invited.json",
+      "id": "membership-invited",
+      "layer": "pdp"
+    },
+    {
+      "file": "membership-removed.json",
+      "id": "membership-removed",
+      "layer": "pdp"
+    },
+    {
+      "file": "membership-suspended.json",
+      "id": "membership-suspended",
+      "layer": "pdp"
+    },
+    {
+      "file": "nil-snapshot.json",
+      "id": "nil-snapshot",
+      "layer": "pdp"
+    },
+    {
+      "file": "non-canonical-org-id-uppercase.json",
+      "id": "non-canonical-org-id-uppercase",
+      "layer": "pdp"
+    },
+    {
+      "file": "non-canonical-org-id-with-space.json",
+      "id": "non-canonical-org-id-with-space",
+      "layer": "pdp"
+    },
+    {
+      "file": "non-canonical-platform-with-org.json",
+      "id": "non-canonical-platform-with-org",
+      "layer": "pdp"
+    },
+    {
+      "file": "non-canonical-trailing-newline-action.json",
+      "id": "non-canonical-trailing-newline-action",
+      "layer": "pdp"
+    },
+    {
+      "file": "non-canonical-uppercase-action.json",
+      "id": "non-canonical-uppercase-action",
+      "layer": "pdp"
+    },
+    {
+      "file": "non-canonical-uppercase-repo-key.json",
+      "id": "non-canonical-uppercase-repo-key",
+      "layer": "pdp"
+    },
+    {
+      "file": "non-canonical-wildcard-on-organization.json",
+      "id": "non-canonical-wildcard-on-organization",
+      "layer": "pdp"
+    },
+    {
+      "file": "organization-absent.json",
+      "id": "organization-absent",
+      "layer": "pdp"
+    },
+    {
+      "file": "organization-suspended.json",
+      "id": "organization-suspended",
+      "layer": "pdp"
+    },
+    {
+      "file": "owner-asks-platform-action.json",
+      "id": "owner-asks-platform-action",
+      "layer": "pdp"
+    },
+    {
+      "file": "pep-accepted-control.json",
+      "id": "pep-accepted-control",
+      "layer": "pep"
+    },
+    {
+      "file": "pep-accepted-organization-hint-absent.json",
+      "id": "pep-accepted-organization-hint-absent",
+      "layer": "pep"
+    },
+    {
+      "file": "pep-accepted-wildcard-repository-key.json",
+      "id": "pep-accepted-wildcard-repository-key",
+      "layer": "pep"
+    },
+    {
+      "file": "pep-refused-actor-chain-top.json",
+      "id": "pep-refused-actor-chain-top",
+      "layer": "pep"
+    },
+    {
+      "file": "pep-refused-actor-in-context.json",
+      "id": "pep-refused-actor-in-context",
+      "layer": "pep"
+    },
+    {
+      "file": "pep-refused-actor-in-resource.json",
+      "id": "pep-refused-actor-in-resource",
+      "layer": "pep"
+    },
+    {
+      "file": "pep-refused-actor-top.json",
+      "id": "pep-refused-actor-top",
+      "layer": "pep"
+    },
+    {
+      "file": "pep-refused-array-body.json",
+      "id": "pep-refused-array-body",
+      "layer": "pep"
+    },
+    {
+      "file": "pep-refused-case-variant-action.json",
+      "id": "pep-refused-case-variant-action",
+      "layer": "pep"
+    },
+    {
+      "file": "pep-refused-empty-organization.json",
+      "id": "pep-refused-empty-organization",
+      "layer": "pep"
+    },
+    {
+      "file": "pep-refused-is-superuser.json",
+      "id": "pep-refused-is-superuser",
+      "layer": "pep"
+    },
+    {
+      "file": "pep-refused-null-organization.json",
+      "id": "pep-refused-null-organization",
+      "layer": "pep"
+    },
+    {
+      "file": "pep-refused-principal-id.json",
+      "id": "pep-refused-principal-id",
+      "layer": "pep"
+    },
+    {
+      "file": "pep-refused-repeated-action.json",
+      "id": "pep-refused-repeated-action",
+      "layer": "pep"
+    },
+    {
+      "file": "pep-refused-roles.json",
+      "id": "pep-refused-roles",
+      "layer": "pep"
+    },
+    {
+      "file": "pep-refused-scopes.json",
+      "id": "pep-refused-scopes",
+      "layer": "pep"
+    },
+    {
+      "file": "pep-refused-top-organization-id.json",
+      "id": "pep-refused-top-organization-id",
+      "layer": "pep"
+    },
+    {
+      "file": "pep-refused-trailing-object.json",
+      "id": "pep-refused-trailing-object",
+      "layer": "pep"
+    },
+    {
+      "file": "pep-refused-unknown-client-service.json",
+      "id": "pep-refused-unknown-client-service",
+      "layer": "pep"
+    },
+    {
+      "file": "pep-refused-uppercase-repository-key.json",
+      "id": "pep-refused-uppercase-repository-key",
+      "layer": "pep"
+    },
+    {
+      "file": "pep-refused-wrong-schema-version.json",
+      "id": "pep-refused-wrong-schema-version",
+      "layer": "pep"
+    },
+    {
+      "file": "platform-admin-asks-org-action-without-membership.json",
+      "id": "platform-admin-asks-org-action-without-membership",
+      "layer": "pdp"
+    },
+    {
+      "file": "platform-role-as-membership-role.json",
+      "id": "platform-role-as-membership-role",
+      "layer": "pdp"
+    },
+    {
+      "file": "policy-revision-is-catalog-version.json",
+      "id": "policy-revision-is-catalog-version",
+      "layer": "pdp"
+    },
+    {
+      "file": "principal-disabled-platform-admin.json",
+      "id": "principal-disabled-platform-admin",
+      "layer": "pdp"
+    },
+    {
+      "file": "principal-status-uppercase-active.json",
+      "id": "principal-status-uppercase-active",
+      "layer": "pdp"
+    },
+    {
+      "file": "principal-suspended.json",
+      "id": "principal-suspended",
+      "layer": "pdp"
+    },
+    {
+      "file": "repo-any-row-ends-the-default.json",
+      "id": "repo-any-row-ends-the-default",
+      "layer": "pdp"
+    },
+    {
+      "file": "repo-clock-unavailable.json",
+      "id": "repo-clock-unavailable",
+      "layer": "pdp"
+    },
+    {
+      "file": "repo-grant-exactly-at-expiry.json",
+      "id": "repo-grant-exactly-at-expiry",
+      "layer": "pdp"
+    },
+    {
+      "file": "repo-grant-expired.json",
+      "id": "repo-grant-expired",
+      "layer": "pdp"
+    },
+    {
+      "file": "repo-grant-one-second-before-expiry.json",
+      "id": "repo-grant-one-second-before-expiry",
+      "layer": "pdp"
+    },
+    {
+      "file": "repo-grant-read-failed.json",
+      "id": "repo-grant-read-failed",
+      "layer": "pdp"
+    },
+    {
+      "file": "repo-grant-revoked.json",
+      "id": "repo-grant-revoked",
+      "layer": "pdp"
+    },
+    {
+      "file": "repo-grant-role-lacks-action.json",
+      "id": "repo-grant-role-lacks-action",
+      "layer": "pdp"
+    },
+    {
+      "file": "repo-live-grant-exact-key.json",
+      "id": "repo-live-grant-exact-key",
+      "layer": "pdp"
+    },
+    {
+      "file": "repo-live-grant-wildcard-key.json",
+      "id": "repo-live-grant-wildcard-key",
+      "layer": "pdp"
+    },
+    {
+      "file": "repo-membership-default-allows.json",
+      "id": "repo-membership-default-allows",
+      "layer": "pdp"
+    },
+    {
+      "file": "repo-membership-default-owner-reads-as-admin.json",
+      "id": "repo-membership-default-owner-reads-as-admin",
+      "layer": "pdp"
+    },
+    {
+      "file": "repo-membership-inactive.json",
+      "id": "repo-membership-inactive",
+      "layer": "pdp"
+    },
+    {
+      "file": "repo-membership-org-mismatch.json",
+      "id": "repo-membership-org-mismatch",
+      "layer": "pdp"
+    },
+    {
+      "file": "repo-no-membership.json",
+      "id": "repo-no-membership",
+      "layer": "pdp"
+    },
+    {
+      "file": "repo-organization-suspended.json",
+      "id": "repo-organization-suspended",
+      "layer": "pdp"
+    },
+    {
+      "file": "repo-plain-snapshot-has-no-grants.json",
+      "id": "repo-plain-snapshot-has-no-grants",
+      "layer": "pdp"
+    },
+    {
+      "file": "repo-service-account-inactive.json",
+      "id": "repo-service-account-inactive",
+      "layer": "pdp"
+    },
+    {
+      "file": "repo-service-account-live-grant.json",
+      "id": "repo-service-account-live-grant",
+      "layer": "pdp"
+    },
+    {
+      "file": "repo-service-account-org-mismatch.json",
+      "id": "repo-service-account-org-mismatch",
+      "layer": "pdp"
+    },
+    {
+      "file": "repo-service-account-without-grants.json",
+      "id": "repo-service-account-without-grants",
+      "layer": "pdp"
+    },
+    {
+      "file": "resource-mismatch-org-action-on-platform.json",
+      "id": "resource-mismatch-org-action-on-platform",
+      "layer": "pdp"
+    },
+    {
+      "file": "resource-mismatch-platform-action-on-org.json",
+      "id": "resource-mismatch-platform-action-on-org",
+      "layer": "pdp"
+    },
+    {
+      "file": "role-lacks-action-viewer-writes-org.json",
+      "id": "role-lacks-action-viewer-writes-org",
+      "layer": "pdp"
+    },
+    {
+      "file": "unknown-action-valid-syntax.json",
+      "id": "unknown-action-valid-syntax",
+      "layer": "pdp"
+    },
+    {
+      "file": "unknown-resource-type-team.json",
+      "id": "unknown-resource-type-team",
+      "layer": "pdp"
+    },
+    {
+      "file": "unknown-role-guest.json",
+      "id": "unknown-role-guest",
+      "layer": "pdp"
+    },
+    {
+      "file": "workload-action-outside-limits.json",
+      "id": "workload-action-outside-limits",
+      "layer": "pdp"
+    },
+    {
+      "file": "workload-audience-empty.json",
+      "id": "workload-audience-empty",
+      "layer": "pdp"
+    },
+    {
+      "file": "workload-audience-not-registered.json",
+      "id": "workload-audience-not-registered",
+      "layer": "pdp"
+    },
+    {
+      "file": "workload-in-limits-allowed.json",
+      "id": "workload-in-limits-allowed",
+      "layer": "pdp"
+    },
+    {
+      "file": "workload-inactive-principal.json",
+      "id": "workload-inactive-principal",
+      "layer": "pdp"
+    },
+    {
+      "file": "workload-no-allowed-actions.json",
+      "id": "workload-no-allowed-actions",
+      "layer": "pdp"
+    }
+  ]
 }

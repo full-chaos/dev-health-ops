@@ -18,6 +18,12 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 )
 
+// goAPIWireBearerRoutes answer a bearer refusal in go-api's guard wire, which tells "no Authorization header" ("Not
+// authenticated") from "a bearer that is not valid" ("Invalid or expired token") as go-api does, because go-api
+// forwards them unread under AUTH_PROXY_CREDENTIALS. There the bootstrap credential must get exactly the answer of any
+// invalid bearer: it is no credential, and it is told apart from nothing else.
+var goAPIWireBearerRoutes = map[string]bool{"POST /api/v1/auth/change-password@api": true}
+
 // perRequestFields are the error envelope members two requests never share
 // (the request id and the time); the census compares answers without them.
 var perRequestFields = regexp.MustCompile(`"(request_id|occurred_at)":"[^"]*"`)
@@ -27,7 +33,8 @@ var perRequestFields = regexp.MustCompile(`"(request_id|occurred_at)":"[^"]*"`)
 // Authorization bearer it is not a credential anywhere: every route
 // auth-service serves (the endpoint-profile probe's set, both exchange
 // subjects on, on the API and the operator listener) answers a request
-// carrying it exactly as the same request with no credential, so a route that
+// carrying it exactly as the same request with no credential (on a route that
+// speaks go-api's guard wire, exactly as an invalid bearer), so a route that
 // needs a bearer answers it with its 401. /metrics changes between two
 // scrapes, so there only the status is compared.
 func TestABootstrapCredentialOpensNoAuthRoute(t *testing.T) {
@@ -73,6 +80,9 @@ func TestABootstrapCredentialOpensNoAuthRoute(t *testing.T) {
 			t.Fatalf("%s: no handler for listener %q", key, listener)
 		}
 		baseCode, baseBody, _ := answer(listener, method, path, "")
+		if goAPIWireBearerRoutes[key] {
+			baseCode, baseBody, _ = answer(listener, method, path, "Bearer census-not-a-credential")
+		}
 		for _, authorization := range []string{"Bearer " + value, "bearer " + value} {
 			code, body, raw := answer(listener, method, path, authorization)
 			if strings.Contains(raw, value) {

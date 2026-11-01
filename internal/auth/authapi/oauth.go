@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
@@ -41,6 +43,8 @@ const (
 	oauthConsentPath = "/oauth/consent"
 	// maxOAuthBody is the POST body cap (D0 section 4).
 	maxOAuthBody = 16 << 10
+	// maxOAuthState is the state column's limit, in characters.
+	maxOAuthState = 1024
 
 	oauthAuthorizeScope = "GET " + PatternOAuthAuthorize
 	oauthDecideScope    = "POST " + PatternOAuthAuthorize
@@ -221,7 +225,7 @@ func (h oauthHandlers) authorize(w http.ResponseWriter, r *http.Request) {
 		h.record(r.Context(), oauthEvent{operation: oauthOpAuthorize, outcome: oauthOutcomeRefused, reason: code, audience: audience, class: client.Class, client: client.ID})
 		h.redirect(w, r, redirectURI, url.Values{"error": {code}}, state, stateOK)
 	}
-	if !stateOK || state == "" || len(state) > 1024 {
+	if !stateOK || !validOAuthState(state) {
 		fail("invalid_request")
 		return
 	}
@@ -257,6 +261,13 @@ func (h oauthHandlers) authorize(w http.ResponseWriter, r *http.Request) {
 	h.record(r.Context(), oauthEvent{operation: oauthOpAuthorize, outcome: oauthOutcomeAccepted, reason: reasonAccepted, audience: audience, class: client.Class, client: client.ID})
 	w.Header().Set("Cache-Control", "no-store")
 	http.Redirect(w, r, h.WebOrigin+oauthConsentPath+"?request_id="+id.String(), http.StatusFound)
+}
+
+// validOAuthState is what the state column holds: 1 to 1024 characters of valid
+// UTF-8 with no NUL. Anything else would reach PostgreSQL as an error, not a refusal.
+func validOAuthState(state string) bool {
+	return utf8.ValidString(state) && !strings.ContainsRune(state, 0) &&
+		state != "" && utf8.RuneCountInString(state) <= maxOAuthState
 }
 
 // redirectsOf is the client's exact redirects: a first-party row's path against the

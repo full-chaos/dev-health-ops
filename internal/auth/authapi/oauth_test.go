@@ -320,6 +320,36 @@ func TestAuthorizeErrorsGoToAProvenRedirect(t *testing.T) {
 	})
 }
 
+// The state limit is the column's: characters, not bytes. Text the column cannot
+// hold is a refusal on the redirect, not a store error.
+func TestAuthorizeStateIsWhatTheColumnHolds(t *testing.T) {
+	for name, tc := range map[string]struct {
+		state string
+		want  bool
+	}{
+		"1024 ascii":    {strings.Repeat("a", 1024), true},
+		"1025 ascii":    {strings.Repeat("a", 1025), false},
+		"1024 two-byte": {strings.Repeat("é", 1024), true},
+		"1025 two-byte": {strings.Repeat("é", 1025), false},
+		"invalid utf-8": {"a\xffb", false},
+		"a nul":         {"a\x00b", false},
+		"empty":         {"", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			o := newPlainOAuthFixture(t)
+			query := browserQuery()
+			query.Set("state", tc.state)
+			r := o.get(query)
+			if r.Code != http.StatusFound || (len(o.store.requests) == 1) != tc.want {
+				t.Fatalf("status %d, %d rows, want accepted = %v", r.Code, len(o.store.requests), tc.want)
+			}
+			if !tc.want && !strings.Contains(r.Header().Get("Location"), "error=invalid_request") {
+				t.Fatalf("location %s", r.Header().Get("Location"))
+			}
+		})
+	}
+}
+
 func TestAuthorizeChargesThePerClientBudget(t *testing.T) {
 	o := newPlainOAuthFixture(t)
 	for i := range oauthClientLimit.Count {

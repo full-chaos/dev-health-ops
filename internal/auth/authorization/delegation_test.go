@@ -567,3 +567,45 @@ func TestDelegation_PermittedActionsOfARealSessionRecord(t *testing.T) {
 		}
 	}
 }
+
+// Every deny the delegation wrapper returns is cache class "none" (a deny is never cached). The literal, not the constant.
+func TestDelegation_EveryDelegatedDenyIsCacheNone(t *testing.T) {
+	e := NewEvaluator()
+	all := allOrgActions(t)
+	with := func(mut func(*delegatedSnapshot)) Snapshot {
+		s := delegated("owner", all, "")
+		mut(&s)
+		return s
+	}
+	cases := []struct {
+		name   string
+		req    Request
+		snap   Snapshot
+		reason Reason
+	}{
+		{"empty chain", orgRequest("org.read"), with(func(s *delegatedSnapshot) { s.d.Chain = nil }), ReasonDelegationInvalid},
+		{"nested chain", orgRequest("org.read"), with(func(s *delegatedSnapshot) { s.d.Chain = append(s.d.Chain, Hop{ActorPrincipalID: "prn_b"}) }), ReasonImpersonationDenied},
+		{"empty actor", orgRequest("org.read"), with(func(s *delegatedSnapshot) { s.d.Chain[0].ActorPrincipalID = "" }), ReasonDelegationInvalid},
+		{"empty target", orgRequest("org.read"), with(func(s *delegatedSnapshot) { s.d.TargetOrganizationID = "" }), ReasonDelegationInvalid},
+		{"bad assurance", orgRequest("org.read"), with(func(s *delegatedSnapshot) { s.d.Assurance = "aal9" }), ReasonDelegationInvalid},
+		{"other org", Request{Action: "org.read", ResourceKind: "organization", OrganizationID: "org-2"}, with(func(s *delegatedSnapshot) {}), ReasonDelegationInvalid},
+		{"action not permitted", orgRequest("org.read"), delegated("owner", []string{"analytics.read"}, ""), ReasonImpersonationDenied},
+		{"platform scope action", platformRequest("admin.users"), func() Snapshot {
+			s := delegated("owner", []string{"admin.users"}, "")
+			s.fakeSnapshot.platformRole = "platform_admin"
+			return s
+		}(), ReasonImpersonationDenied},
+		{"unknown action", orgRequest("org.fly"), delegated("owner", all, ""), ReasonUnknownAction},
+		{"floor under a non-owner", orgRequest("members.manage"), delegated("owner", all, ""), ReasonImpersonationDenied},
+		{"flag not allowed under a non-owner", orgRequest("settings.write"), delegated("owner", all, ""), ReasonImpersonationDenied},
+	}
+	for _, c := range cases {
+		got := e.Evaluate(c.req, c.snap)
+		if got.Allowed || got.Reason != c.reason {
+			t.Errorf("%s: %+v want deny %s", c.name, got, c.reason)
+		}
+		if string(got.CacheClass) != "none" {
+			t.Errorf("%s: cache class %q want %q", c.name, got.CacheClass, "none")
+		}
+	}
+}

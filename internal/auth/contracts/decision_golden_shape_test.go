@@ -259,7 +259,21 @@ func TestDecisionGoldenFilesAreCanonicalAndClosed(t *testing.T) {
 			switch layers[f.rel] {
 			case "pdp":
 				v = decisionKeys(t, f.rel, doc, "id", "layer", "why", "state", "request", "expect")
-				decisionKeys(t, f.rel+" state", v["state"], decisionStateKeys...)
+				stateKeys := decisionStateKeys
+				if st, ok := v["state"].(map[string]any); ok {
+					if d, has := st["delegation"]; has {
+						stateKeys = append(append([]string(nil), decisionStateKeys...), "delegation")
+						dm := decisionKeys(t, f.rel+" delegation", d, "chain", "actor_platform_role", "target_organization_id", "assurance")
+						if chain, ok := dm["chain"].([]any); ok {
+							for _, hop := range chain {
+								decisionKeys(t, f.rel+" delegation hop", hop, "actor", "permitted_actions")
+							}
+						} else {
+							t.Errorf("%s: delegation chain is not an array", f.rel)
+						}
+					}
+				}
+				decisionKeys(t, f.rel+" state", v["state"], stateKeys...)
 				decisionKeys(t, f.rel+" request", v["request"], decisionRequestKeys...)
 				decisionKeys(t, f.rel+" expect", v["expect"], decisionExpectKeys...)
 				if st, ok := v["state"].(map[string]any); ok {

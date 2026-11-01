@@ -548,6 +548,35 @@ func TestEveryDisplayPrefixTheEntryAllowsCanBeginAValidReceiptSecret(t *testing.
 	}
 }
 
+// A receipt of the service-account key class parses for both verbs, and a
+// secret that does not begin with the prefix is refused. The values are built
+// at run time: no fixture holds a value of the key's shape.
+func TestAServiceAccountKeyReceiptParses(t *testing.T) {
+	r := credentialSurfaces[2]
+	root := testRoot(t)
+	now := clockOf(t, r.corpus(t))
+	value := "fcsak_" + strings.Repeat("Kq", 21) + "Z"
+	for _, file := range []string{"valid-issue.json", "valid-rotate.json"} {
+		var document map[string]any
+		if err := json.Unmarshal(r.read(t, file), &document); err != nil {
+			t.Fatal(err)
+		}
+		credential := document["credential"].(map[string]any)
+		credential["credential_class"] = "service_account_key"
+		credential["display_prefix"] = "fcsak_"
+		document["secret"] = value
+		encoded, _ := json.Marshal(document)
+		if _, err := ParseCredentialReceipt(root, encoded, now); err != nil {
+			t.Errorf("%s: a service-account key receipt is refused: %v", file, err)
+		}
+		document["secret"] = "fcwlb_" + strings.Repeat("Kq", 21) + "Z"
+		encoded, _ = json.Marshal(document)
+		if _, err := ParseCredentialReceipt(root, encoded, now); err == nil {
+			t.Errorf("%s: a secret outside the display_prefix was accepted", file)
+		}
+	}
+}
+
 func TestARegistryLargerThanAPageIsRepresentedByPagesWithATruncationSignal(t *testing.T) {
 	s := credentialSurfaces[1]
 	var base struct {

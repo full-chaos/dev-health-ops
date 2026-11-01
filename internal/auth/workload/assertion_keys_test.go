@@ -195,7 +195,7 @@ func TestPlanAssertionKey(t *testing.T) {
 		{"changed rotated_at", func() AssertionKeySpec { s := goodKey(); s.RotatedAt = later; return s }(),
 			row(AssertionKeyActive, t0, time.Time{}), nil, want{err: ErrAssertionKeyTransition}},
 		{"active to retired", func() AssertionKeySpec { s := goodKey(); s.Status = AssertionKeyRetired; return s }(),
-			row(AssertionKeyActive, t0, time.Time{}), nil, want{action: planUpdate}},
+			row(AssertionKeyActive, t0, time.Time{}), nil, want{err: ErrAssertionKeyLastActive}},
 		{"active to retiring alone", func() AssertionKeySpec {
 			s := goodKey()
 			s.Status = AssertionKeyRetiring

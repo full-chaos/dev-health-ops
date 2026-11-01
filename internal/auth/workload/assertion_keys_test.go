@@ -9,6 +9,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/credshape"
 )
 
+// pemHeader is built in two parts so no private-key-shaped literal sits in the tree.
+var pemHeader = "-----BEGIN " + "PRIVATE " + "KEY-----"
+
 var t0 = time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC)
 
 func goodKey() AssertionKeySpec {
@@ -42,6 +45,8 @@ func TestValidateAssertionKey(t *testing.T) {
 		"kid of one byte":         func(s *AssertionKeySpec) { s.KID = "k" },
 		"kid with punctuation":    func(s *AssertionKeySpec) { s.KID = "web.2026-10_a:b/c" },
 		"43 character thumbprint": func(s *AssertionKeySpec) { s.KID = "NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs" },
+		// A kid is a label. The bare dashes-and-word text is not a key and is accepted; a full PEM header holds spaces and is refused below.
+		"bare PEM marker as a label": func(s *AssertionKeySpec) { s.KID = "-----BEGIN" },
 		"retiring with a date": func(s *AssertionKeySpec) {
 			s.Status = AssertionKeyRetiring
 			s.RetireAfter = t0.Add(time.Hour)
@@ -60,22 +65,26 @@ func TestValidateAssertionKey(t *testing.T) {
 		}
 	}
 	refuse := map[string]func(*AssertionKeySpec){
-		"empty issuer":                    func(s *AssertionKeySpec) { s.Issuer = "" },
-		"plain http issuer":               func(s *AssertionKeySpec) { s.Issuer = "http://issuer.example" },
-		"ftp issuer":                      func(s *AssertionKeySpec) { s.Issuer = "ftp://issuer.example" },
-		"issuer with userinfo":            func(s *AssertionKeySpec) { s.Issuer = "https://user:secret@issuer.example" },
-		"issuer with a user only":         func(s *AssertionKeySpec) { s.Issuer = "https://user@issuer.example" },
-		"issuer with a query":             func(s *AssertionKeySpec) { s.Issuer = "https://issuer.example?x=1" },
-		"issuer with an empty query":      func(s *AssertionKeySpec) { s.Issuer = "https://issuer.example?" },
-		"issuer with a fragment":          func(s *AssertionKeySpec) { s.Issuer = "https://issuer.example#x" },
-		"issuer without a host":           func(s *AssertionKeySpec) { s.Issuer = "https://" },
-		"issuer with a space":             func(s *AssertionKeySpec) { s.Issuer = "https://issuer.example/a b" },
-		"issuer with a newline":           func(s *AssertionKeySpec) { s.Issuer = "https://issuer.example\n" },
-		"issuer of 513 bytes":             func(s *AssertionKeySpec) { s.Issuer = "https://issuer.example/" + strings.Repeat("a", 513-23) },
-		"issuer with a non-ASCII byte":    func(s *AssertionKeySpec) { s.Issuer = "https://issuer.example/é" },
-		"empty kid":                       func(s *AssertionKeySpec) { s.KID = "" },
-		"kid of 257 bytes":                func(s *AssertionKeySpec) { s.KID = strings.Repeat("k", 257) },
-		"kid with a space":                func(s *AssertionKeySpec) { s.KID = "key 1" },
+		"empty issuer":                      func(s *AssertionKeySpec) { s.Issuer = "" },
+		"plain http issuer":                 func(s *AssertionKeySpec) { s.Issuer = "http://issuer.example" },
+		"ftp issuer":                        func(s *AssertionKeySpec) { s.Issuer = "ftp://issuer.example" },
+		"issuer with userinfo":              func(s *AssertionKeySpec) { s.Issuer = "https://user:secret@issuer.example" },
+		"issuer with a user only":           func(s *AssertionKeySpec) { s.Issuer = "https://user@issuer.example" },
+		"issuer with a query":               func(s *AssertionKeySpec) { s.Issuer = "https://issuer.example?x=1" },
+		"issuer with an empty query":        func(s *AssertionKeySpec) { s.Issuer = "https://issuer.example?" },
+		"issuer with a fragment":            func(s *AssertionKeySpec) { s.Issuer = "https://issuer.example#x" },
+		"issuer without a host":             func(s *AssertionKeySpec) { s.Issuer = "https://" },
+		"issuer with a space":               func(s *AssertionKeySpec) { s.Issuer = "https://issuer.example/a b" },
+		"issuer with a newline":             func(s *AssertionKeySpec) { s.Issuer = "https://issuer.example\n" },
+		"issuer of 513 bytes":               func(s *AssertionKeySpec) { s.Issuer = "https://issuer.example/" + strings.Repeat("a", 513-23) },
+		"issuer with a non-ASCII byte":      func(s *AssertionKeySpec) { s.Issuer = "https://issuer.example/é" },
+		"empty kid":                         func(s *AssertionKeySpec) { s.KID = "" },
+		"kid of 257 bytes":                  func(s *AssertionKeySpec) { s.KID = strings.Repeat("k", 257) },
+		"kid with a space":                  func(s *AssertionKeySpec) { s.KID = "key 1" },
+		"kid shaped like a full PEM header": func(s *AssertionKeySpec) { s.KID = pemHeader },
+		"issuer path with a full PEM header": func(s *AssertionKeySpec) {
+			s.Issuer = "https://issuer.example/" + pemHeader
+		},
 		"kid with a leading space":        func(s *AssertionKeySpec) { s.KID = " key" },
 		"kid with a newline":              func(s *AssertionKeySpec) { s.KID = "key\n" },
 		"kid with a NUL":                  func(s *AssertionKeySpec) { s.KID = "key\x00" },

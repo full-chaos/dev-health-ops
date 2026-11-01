@@ -29,7 +29,7 @@ func newProvWorkloadFixture(t *testing.T) *provWorkloadFixture {
 // workloadRouteOps are the routes that take the go-api workload token; every
 // other provisioning route refuses it.
 var workloadRouteOps = []string{opMembershipAdd, opMembershipRole, opMembershipRemove, opMembershipTransfer,
-	opInviteCreate, opInviteAccept, opOrgDeprovision, opOrgReactivate, opOrgState,
+	opInviteCreate, opInviteAccept, opOrgDeprovision, opOrgReactivate, opOrgState, opOrgOnboard, opOrgCreate,
 	opServiceAccountCreate, opServiceAccountDisable, opServiceAccountEnable, opServiceAccountOwner}
 
 // workloadRouteCases and offWorkloadRouteCases split routeCases by workloadRouteOps.
@@ -68,6 +68,10 @@ func callerOf(f *provFixture, op string) audit.Caller {
 		return f.reactivate.sactor.Caller
 	case opServiceAccountCreate, opServiceAccountDisable, opServiceAccountEnable, opServiceAccountOwner:
 		return f.sa.actor.Caller
+	case opOrgOnboard:
+		return f.orgs.onboard.Caller
+	case opOrgCreate:
+		return f.orgs.create.Caller
 	}
 	f.t.Fatalf("no caller for %s", op)
 	return audit.Caller{}

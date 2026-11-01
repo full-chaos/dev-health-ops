@@ -55,7 +55,7 @@ const (
 )
 
 var provisioningOperations = []string{opMembershipAdd, opMembershipRole, opMembershipRemove, opMembershipTransfer,
-	opInviteCreate, opInviteAccept, opOrgDeprovision, opOrgReactivate, opOrgSuspend, opInviteRevoke, opOrgState,
+	opInviteCreate, opInviteAccept, opOrgDeprovision, opOrgReactivate, opOrgSuspend, opInviteRevoke, opOrgState, opOrgOnboard, opOrgCreate,
 	opServiceAccountCreate, opServiceAccountDisable, opServiceAccountEnable, opServiceAccountOwner}
 
 // Provisioning refusal codes beyond the shared ones.
@@ -208,9 +208,10 @@ func ProvisioningRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 		{Method: http.MethodPost, Pattern: PatternOrgReactivate, Handler: http.HandlerFunc(h.orgReactivate)},
 		h.revokeRoute(h.Invites),
 		{Method: http.MethodPost, Pattern: PatternOrgSuspend, Handler: http.HandlerFunc(h.orgSuspend)},
+		{Method: http.MethodPost, Pattern: PatternOrgOnboard, Handler: http.HandlerFunc(h.orgOnboard)},
+		{Method: http.MethodPost, Pattern: PatternOrgCreate, Handler: http.HandlerFunc(h.orgCreate)},
 	}
 	routes = h.withStateRoute(routes, rows)
-	routes = h.withOrgCreateRoutes(routes, rows)
 	routes = h.withServiceAccountRoutes(routes, rows)
 	return routes, nil
 }
@@ -244,7 +245,7 @@ func (h provisioningHandlers) admitUpTo(w http.ResponseWriter, r *http.Request, 
 // list is default-deny: any other operation (the invite revoke and organization
 // suspend among them) refuses a workload token before the key set is read.
 var workloadOperations = map[string]bool{opMembershipAdd: true, opMembershipRole: true, opMembershipRemove: true,
-	opMembershipTransfer: true, opInviteCreate: true, opInviteAccept: true, opOrgDeprovision: true, opOrgReactivate: true, opOrgState: true,
+	opMembershipTransfer: true, opInviteCreate: true, opInviteAccept: true, opOrgDeprovision: true, opOrgReactivate: true, opOrgOnboard: true, opOrgCreate: true, opOrgState: true,
 	opServiceAccountCreate: true, opServiceAccountDisable: true, opServiceAccountEnable: true, opServiceAccountOwner: true}
 
 // caller authorizes the bearer, its class read from the text before any store

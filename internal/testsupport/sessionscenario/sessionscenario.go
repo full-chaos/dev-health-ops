@@ -998,6 +998,8 @@ var socialLinkRefusals = map[string]socialRefusal{
 var validateLimitAdmitted = map[string]socialRefusal{
 	"rate limit: validate 31": {http.StatusOK, `{"valid":false,"user_id":null,"email":null,"org_id":null,"role":null,"expires_at":null}`,
 		"Python refused the 31st check of one token with 429; the Go budget is 100 per 15 minutes"},
+	"burst: validate valid 31": {http.StatusOK, `{"valid":false,"user_id":null,"email":null,"org_id":null,"role":null,"expires_at":null}`,
+		"the same 31st check in the burst cells, after 32 refused bodies that cost nothing; the Go budget is 100 per 15 minutes"},
 }
 
 // socialAccountExistsBody is the 409 Go answers for an e-mail another account holds: Python named the existing

@@ -50,6 +50,8 @@ type Store struct {
 	commit    func(context.Context, audit.Mutation) error
 	logger    *slog.Logger
 	mutations metric.Int64Counter
+	// afterPlan is a test seam: called once per Create attempt between the lock-free plan and the transaction.
+	afterPlan func()
 }
 
 // New builds a Store.
@@ -237,6 +239,9 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (*Grant, error) {
 		expired, perr := grantend.PlanExpiredTuple(ctx, grantend.ReaderFunc(s.poolRows), s.q, in.OrgID, in.PrincipalID, in.Role, in.Key)
 		if perr != nil {
 			return nil, s.refuse(ctx, "create", fmt.Errorf("%w: create: %w", ErrStore, perr))
+		}
+		if s.afterPlan != nil {
+			s.afterPlan()
 		}
 		err = s.run(ctx, "create", audit.Mutation{
 			Apply: func(ctx context.Context, tx audit.TxOps) error {

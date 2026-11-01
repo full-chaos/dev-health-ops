@@ -212,6 +212,33 @@ func TestCompatRoutesWriteGoAPIsPublicAuditRows(t *testing.T) {
 	}, "auth.session.revoked", user)
 }
 
+// TestCompatLoginWithNoPasswordWritesGoAPIsUnavailableRow: a member with no password hash who signs in with a
+// password gets go-api's own row for that branch (internal/api/session/login.go:233), not the invalid-credentials
+// row: login_failed/session "Login failed: password login unavailable", user = resource = the user, org = the
+// user's first membership, changes {"email": <normalized>}, status failure, error "Password login not available
+// for this account".
+func TestCompatLoginWithNoPasswordWritesGoAPIsUnavailableRow(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	e := newRoutesEnv(t, ctx)
+	user, org, email := e.parityUser(t, ctx)
+	if _, err := e.admin.Exec(ctx, `UPDATE users SET password_hash = NULL WHERE id = $1`, user); err != nil {
+		t.Fatal(err)
+	}
+	userID, orgID := user.String(), org.String()
+
+	got := e.doWith(t, "/api/v1/auth/login", `{"email":"`+email+`","password":"`+compatParitySignIn+`"}`, compatClient())
+	if got.status != http.StatusUnauthorized {
+		t.Fatalf("password login with no password = %d %s", got.status, got.body)
+	}
+	e.requireCompatRow(t, ctx, "no password", compatPublicRow{
+		org: &orgID, user: &userID, action: "login_failed", resourceType: "session", resourceID: userID,
+		description: compatStr("Login failed: password login unavailable"), changes: compatStr(`{"email": "` + email + `"}`),
+		metadata: compatStr(compatParityMetadata), status: "failure",
+		errorMessage: compatStr("Password login not available for this account"),
+	}, "auth.login.failed", user)
+}
+
 // A logout or refresh of a dead or unknown credential changes nothing: no auth event and no public row (acp ruling
 // 5; go-api's refusal rows of an unknown credential name no existing organization).
 func TestCompatRoutesWriteNoRowsForADeadCredential(t *testing.T) {

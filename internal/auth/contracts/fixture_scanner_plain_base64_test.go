@@ -136,7 +136,7 @@ func TestScannerJoinsHeaderAndPayloadText(t *testing.T) {
 		"random key split across header and payload": token(
 			`{"alg":"HS256","k":"`+random[:half]+`"}`, `{"v":"`+random[half:]+`"}`),
 		"random key split across a later header value and a later payload value": token(
-			`{"alg":"HS256","typ":"JWT","k":"`+random[:half]+`"}`, `{"iss":"https://auth.example.test","v":"`+random[half:]+`"}`),
+			`{"alg":"HS256","typ":"JWT","k":"`+random[:half]+`"}`, `{"iss":"x","v":"`+random[half:]+`"}`),
 		"random secret inside prose in the payload": token(
 			`{"n":1}`, `{"note":"the secret is `+random+` ok"}`),
 		"prefix split across header and payload": token(

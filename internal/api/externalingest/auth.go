@@ -163,7 +163,14 @@ func (d Deps) requireIngestScope(
 
 	now := time.Now().UTC()
 	if revokedAt != nil || (expiresAt != nil && now.After(*expiresAt)) {
-		return nil, fail()
+		reason := refusalTokenExpired
+		if revokedAt != nil {
+			reason = refusalTokenRevoked
+		}
+		if failure := d.recordKnownRefusal(ctx, r, ip, reason, tokenID, orgID, sourceID, ""); failure != nil {
+			return nil, failure
+		}
+		return nil, newIngestError(http.StatusUnauthorized, "invalid_token", "Missing or invalid ingest token")
 	}
 
 	var source *IngestSource
@@ -185,8 +192,8 @@ func (d Deps) requireIngestScope(
 		scopes[s] = true
 	}
 	if !scopes[scope] {
-		if _, err := d.limiters.failure.AllowCounted(ctx, ip, ""); err != nil {
-			return nil, unhandledError()
+		if failure := d.recordKnownRefusal(ctx, r, ip, refusalInsufficientScope, tokenID, orgID, sourceID, scope); failure != nil {
+			return nil, failure
 		}
 		return nil, newIngestError(http.StatusForbidden, "insufficient_scope", "Token is missing required scope: "+scope)
 	}
@@ -197,8 +204,8 @@ func (d Deps) requireIngestScope(
 			return nil, newIngestError(http.StatusInternalServerError, "internal_error", "failed to resolve feature state")
 		}
 		if !decision.Allowed {
-			if _, err := d.limiters.failure.AllowCounted(ctx, ip, ""); err != nil {
-				return nil, unhandledError()
+			if failure := d.recordKnownRefusal(ctx, r, ip, refusalFeatureNotEnabled, tokenID, orgID, sourceID, ""); failure != nil {
+				return nil, failure
 			}
 			return nil, newIngestError(http.StatusForbidden, "feature_not_enabled", "Customer push ingest is not enabled for this organization")
 		}

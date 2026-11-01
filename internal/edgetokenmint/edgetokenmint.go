@@ -46,6 +46,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/auth/acraudience"
 	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"os"
 	"strings"
@@ -252,6 +253,9 @@ func Mint(signingKey []byte, principal Principal, opts Options) (string, error) 
 		return "", ErrRoleNotAllowed
 	}
 	opts = opts.withDefaults()
+	if err := acraudience.Refuse("edgetokenmint", opts.Audience); err != nil {
+		return "", err
+	}
 	if opts.TTL < 0 || opts.TTL > MaxTTL {
 		return "", fmt.Errorf("edgetokenmint: TTL must be between 0 and %s", MaxTTL)
 	}

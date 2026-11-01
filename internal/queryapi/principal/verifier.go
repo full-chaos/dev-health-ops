@@ -15,6 +15,8 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/full-chaos/dev-health-go/authverify"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/acraudience"
 )
 
 // ErrUnsupportedSchemaVersion is returned when an otherwise
@@ -103,6 +105,9 @@ func NewVerifier(jwksPath, issuer, audience string) (*Verifier, error) {
 	}
 	if audience == "" {
 		return nil, errors.New("principal: audience must not be empty")
+	}
+	if err := acraudience.Refuse("principal", audience); err != nil {
+		return nil, err
 	}
 	return &Verifier{
 		jwks:     authverify.NewEd25519JWKSVerifier(jwksPath),

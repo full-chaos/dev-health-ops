@@ -498,8 +498,8 @@ func Load(spec Spec) (Config, error) {
 			return Config{}, fmt.Errorf("%s=%s needs %s", EnvAccessTokenClass, AccessClassEdDSA, EnvTokenIssuerURL)
 		}
 		if _, ok := contracts.AccessTokenScope(cfg.Session.AccessAudience); !ok {
-			return Config{}, fmt.Errorf("%s=%s needs %s to name a user access token audience",
-				EnvAccessTokenClass, AccessClassEdDSA, EnvAccessTokenAudience)
+			return Config{}, fmt.Errorf("%s=%s needs %s to name a session token audience (%s or %s)",
+				EnvAccessTokenClass, AccessClassEdDSA, EnvAccessTokenAudience, contracts.PlatformAPIAudience, contracts.SessionRouteAudience)
 		}
 	}
 	if cfg.Session.Enabled && cfg.Session.AccessClass == AccessClassEdDSA && cfg.Session.AccessAudience == contracts.SessionRouteAudience {
@@ -638,6 +638,16 @@ func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 			return SessionTokens{}, fmt.Errorf("%s is set but empty or has surrounding whitespace: unset it for go-api's default audience", EnvLegacyJWTAudience)
 		}
 		out.LegacyAudience = raw
+	}
+	// No auth-service token carries an ACR audience, under either class: acr-api
+	// and acr-mcp have a separate mint (ACP-ADR-13 decision 3, CHAOS-12248).
+	for _, setting := range []struct{ name, audience string }{
+		{EnvAccessTokenAudience, out.AccessAudience},
+		{EnvLegacyJWTAudience, out.LegacyAudience},
+	} {
+		if _, acr := contracts.ACRAccessTokenScope(setting.audience); acr {
+			return SessionTokens{}, fmt.Errorf("%s names an ACR audience; no auth-service token carries one (ACP-ADR-13)", setting.name)
+		}
 	}
 	access, hasAccess, err := secrets.ResolveSecret(EnvAccessTokenSecret, lookup)
 	if err != nil {

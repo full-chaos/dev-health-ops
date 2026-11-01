@@ -51,7 +51,7 @@
       "required": [
         "revision",
         "organization_id",
-        "source_id",
+        "binding",
         "change"
       ],
       "properties": {
@@ -65,10 +65,17 @@
           "pattern": "^org_[A-Za-z0-9_-]{1,64}$",
           "description": "The tenant the credential belongs to."
         },
+        "binding": {
+          "enum": [
+            "source",
+            "organization"
+          ],
+          "description": "What the credential is bound to. `source`: one External Push source, and source_id is required. `organization`: every source of the organization (an organization-wide credential), and source_id is forbidden: there is no placeholder source. A document with neither form is malformed."
+        },
         "source_id": {
           "type": "string",
           "pattern": "^[A-Za-z0-9_-]{1,64}$",
-          "description": "The External Push source the credential is bound to."
+          "description": "The External Push source the credential is bound to. Present exactly when binding is `source`."
         },
         "actor_principal_id": {
           "type": "string",
@@ -81,7 +88,45 @@
         "change": {
           "type": "object"
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "binding": {
+                "const": "source"
+              }
+            },
+            "required": [
+              "binding"
+            ]
+          },
+          "then": {
+            "required": [
+              "source_id"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "binding": {
+                "const": "organization"
+              }
+            },
+            "required": [
+              "binding"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "source_id"
+              ]
+            }
+          }
+        }
+      ]
     }
   },
   "allOf": [

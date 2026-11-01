@@ -59,6 +59,7 @@ var Outcomes = []Outcome{Applied, Duplicate, Stale, Gap, RefusedTerminal, Refuse
 type State struct {
 	AggregateID      string
 	OrganizationID   string
+	Binding          string
 	SourceID         string
 	Revision         int64
 	Status           Status
@@ -74,7 +75,7 @@ type State struct {
 // Apply folds event into state. For a rotated event, parent is the projected
 // State of the credential named by rotation_parent_id; the caller loads it from
 // storage keyed by that id inside the event's organization, and Apply trusts
-// only what it can check: the parent's id, organization and source must equal
+// only what it can check: the parent's id, organization, binding and source must equal
 // the event's, or the outcome is RefusedParent (so does a nil parent). A parent
 // that was already retired before the rotation's created_at is RefusedParent,
 // where retired means the earliest of its terminal event's created_at and its
@@ -120,7 +121,8 @@ func Apply(state State, event contracts.ExternalPushLifecycleEvent, parent *Stat
 				return state, RefusedTransition
 			}
 			if parent == nil || parent.AggregateID == "" || parent.AggregateID != change.RotationParentID ||
-				parent.OrganizationID != event.Payload.OrganizationID || parent.SourceID != event.Payload.SourceID ||
+				parent.OrganizationID != event.Payload.OrganizationID || parent.Binding != event.Payload.Binding ||
+				parent.SourceID != event.Payload.SourceID ||
 				parent.Revision < 1 {
 				return state, RefusedParent
 			}
@@ -133,6 +135,7 @@ func Apply(state State, event contracts.ExternalPushLifecycleEvent, parent *Stat
 			next.RotationParentID = change.RotationParentID
 		}
 		next.OrganizationID = event.Payload.OrganizationID
+		next.Binding = event.Payload.Binding
 		next.SourceID = event.Payload.SourceID
 		next.Status = StatusActive
 		next.Fingerprint = change.Fingerprint
@@ -191,7 +194,8 @@ func Permits(state State, scope string, now time.Time) bool {
 }
 
 func sameIdentity(state State, event contracts.ExternalPushLifecycleEvent) bool {
-	return state.OrganizationID == event.Payload.OrganizationID && state.SourceID == event.Payload.SourceID
+	return state.OrganizationID == event.Payload.OrganizationID && state.Binding == event.Payload.Binding &&
+		state.SourceID == event.Payload.SourceID
 }
 
 func expiry(change contracts.ExternalPushLifecycleChange) string {

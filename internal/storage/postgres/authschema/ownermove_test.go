@@ -61,6 +61,7 @@ func emittedPublicGrants(t *testing.T) map[string]bool {
 		"invite":        func() ([]string, error) { return inviteWriteStatements(ctx, presentQuerier{}, options, logger) },
 		"audit":         func() ([]string, error) { return publicAuditWriteStatements(ctx, presentQuerier{}, options, logger) },
 		"ssoProviderUp": func() ([]string, error) { return ssoProviderWriteStatements(ctx, presentQuerier{}, options, logger) },
+		"impersonation": func() ([]string, error) { return impersonationWriteStatements(ctx, presentQuerier{}, options, logger) },
 	}
 	emitted := map[string]bool{}
 	for name, build := range builders {

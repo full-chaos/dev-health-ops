@@ -1071,8 +1071,8 @@
         "name": "workload+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the actor's public.users and public.memberships rows are read live before the verb and again inside it after its locks; a store read of the live keys runs under the same locks",
-      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed with no read; the account is read first (to find its organization), then a refused actor gets 403 (principal_deactivated or admin_required), the same answer for an account that does not exist and one of another organization; an account that does not exist is 404 service_account_not_found, named only to an active superuser; a non-superuser may not act on a superuser-owned account, and the rule runs again after the verb's locks; 409 service_account_disabled, key_live, organization_suspended, owner_invalid, owner_not_member; 400 expiry_invalid. The value is in the 200 receipt once and in no log line.",
+      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the actor's public.users and public.memberships rows are read live before the verb and again inside it after its locks; the live key rows are read FOR UPDATE under the same locks",
+      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed with no read; the account is read first (to find its organization), then a refused actor gets 403 (principal_deactivated or admin_required), the same answer for an account that does not exist and one of another organization; an account that does not exist is 404 service_account_not_found, named only to an active superuser; a non-superuser on a superuser-owned account is 403 superuser_required, and the rule runs again after the verb's locks; 409 service_account_disabled, key_live, organization_suspended, owner_invalid, owner_not_member, users_not_owned, state_changed; 400 expiry_invalid. The value is in the 200 receipt once and in no log line.",
       "gaps": [
         "no go-api audit_logs row: the verb writes the auth audit row and the service_account event only",
         "a key this route issues authenticates nowhere yet"
@@ -1123,8 +1123,8 @@
         "name": "workload+jwt"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the actor's public.users and public.memberships rows are read live before the verb and again inside it after its locks; a store read of the live keys runs under the same locks",
-      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed with no read; the account is read first (to find its organization), then a refused actor gets 403 (principal_deactivated or admin_required), the same answer for an account that does not exist and one of another organization; an account that does not exist is 404 service_account_not_found, named only to an active superuser; a non-superuser may not act on a superuser-owned account, and the rule runs again after the verb's locks; 409 service_account_disabled, key_none, key_rotating, organization_suspended, owner_invalid, owner_not_member; 400 expiry_invalid or overlap_invalid. The value is in the 200 receipt once and in no log line.",
+      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the actor's public.users and public.memberships rows are read live before the verb and again inside it after its locks; the live key rows are read FOR UPDATE under the same locks",
+      "disclosure_behavior": "Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials with no credential or reason text (the reason is only in the log line); a malformed body is 400 malformed with no read; the account is read first (to find its organization), then a refused actor gets 403 (principal_deactivated or admin_required), the same answer for an account that does not exist and one of another organization; an account that does not exist is 404 service_account_not_found, named only to an active superuser; a non-superuser on a superuser-owned account is 403 superuser_required, and the rule runs again after the verb's locks; 409 service_account_disabled, key_none, key_rotating, organization_suspended, owner_invalid, owner_not_member, users_not_owned, state_changed; 400 expiry_invalid or overlap_invalid. The value is in the 200 receipt once and in no log line.",
       "gaps": [
         "no go-api audit_logs row: the verb writes the auth audit row and the service_account event only",
         "a key this route issues authenticates nowhere yet"
@@ -2054,5 +2054,5 @@
     }
   ],
   "schema_version": "endpoint-profile.v1",
-  "source_commit": "c8b265085c940da1fd3ad96eef2c9af7beab5ee4"
+  "source_commit": "f7c0e6d7ee15342b826f3a982334201578589257"
 }

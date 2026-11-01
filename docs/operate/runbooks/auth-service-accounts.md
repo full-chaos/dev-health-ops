@@ -51,6 +51,8 @@ A key is `fcsak_` and 32 random bytes. The registry keeps its SHA-256 digest, ne
 
 A key authenticates nowhere until CHAOS-12362 lands: no route accepts one yet.
 
+Issue and rotate need auth-service to own users (`AUTH_USERS_OWNED`). Revoke works either way.
+
 | Route | Body | Answer |
 | --- | --- | --- |
 | `POST /internal/v1/service-accounts/keys/issue` | `service_account_id`, `actor_principal_id`, optional `expires_in_seconds` | `credential-receipt.v1` kind `issue`, with the value once |

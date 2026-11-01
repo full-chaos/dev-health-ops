@@ -206,7 +206,7 @@ func parseWorkloadsArgs(args []string, stderr io.Writer) (workloadsArgs, error) 
 		}
 		withEnv := parsed.binding
 		withEnv.Environment = "x"
-		if parsed.verb == "rebind" && (!set["uid"] || workload.ValidateBinding(withEnv) != nil) {
+		if parsed.verb == "rebind" && (!set["uid"] || parsed.binding.ServiceAccountUID == "" || workload.ValidateBinding(withEnv) != nil) {
 			return workloadsArgs{}, errors.New("rebind needs -uid, a service account uid (lowercase 8-4-4-4-12 hex)")
 		}
 	default:

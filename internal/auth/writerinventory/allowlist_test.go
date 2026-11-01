@@ -51,7 +51,6 @@ var Allowlist = []Entry{
 	{File: "internal/apiservice/admin/invites.go", Func: "handlers.createInvite", Table: "public.org_invites", Verb: "INSERT"},
 	// D6528: the reconcile pass writes is_active to auth's state.
 	{File: "internal/apiservice/admin/orgstate_reconcile.go", Func: "OrgStateReconciler.fix", Table: "public.organizations", Verb: "UPDATE"},
-	{File: "internal/apiservice/admin/orgstore.go", Func: "pgStore.deleteOrganizationWithoutMembers", Table: "public.organizations", Verb: "DELETE"},
 	{File: "internal/apiservice/admin/orgstore.go", Func: "pgStore.insertMembershipTx", Table: "public.memberships", Verb: "INSERT"},
 	{File: "internal/apiservice/admin/orgstore.go", Func: "pgStore.insertOrganizationTx", Table: "public.organizations", Verb: "INSERT"},
 	{File: "internal/apiservice/admin/orgstore.go", Func: "pgStore.removeMembership", Table: "public.memberships", Verb: "DELETE"},
@@ -139,11 +138,12 @@ var Allowlist = []Entry{
 	// D6534 (ticket 12118): go-api's success record (finishSSOLogin) by the OIDC, OAuth and SAML sign-ins: last_login_at and updated_at, one transaction with the audit row.
 	{File: "internal/auth/identity/ssoaudit/ssoaudit.go", Func: "PGSignIn.Succeeded", Table: "public.sso_providers", Verb: "UPDATE"},
 	// The users-owned projection (CHAOS-10630): written only inside the audit.Commit that writes the auth rows; the runtime role holds the matching column grants only while AUTH_USERS_OWNED is on.
-	{File: "internal/auth/identity/publicusers.go", Func: "insertPublicOwnedOrganization", Table: "public.memberships", Verb: "INSERT"},
-	{File: "internal/auth/identity/publicusers.go", Func: "insertPublicOwnedOrganization", Table: "public.organizations", Verb: "INSERT"},
 	{File: "internal/auth/identity/publicusers.go", Func: "insertPublicUser", Table: "public.users", Verb: "INSERT"},
 	{File: "internal/auth/identity/publicusers.go", Func: "updatePublicPassword", Table: "public.users", Verb: "UPDATE"},
 	{File: "internal/auth/identity/publicusers.go", Func: "updatePublicVerified", Table: "public.users", Verb: "UPDATE"},
+	// An organization birth: both organization rows in one audit.Commit with the owner's join, only while AUTH_USERS_OWNED is on.
+	{File: "internal/auth/identity/organizationbirth.go", Func: "Store.insertOrganizationBirth", Table: "auth.organizations", Verb: "INSERT"},
+	{File: "internal/auth/identity/organizationbirth.go", Func: "Store.insertOrganizationBirth", Table: "public.organizations", Verb: "INSERT"},
 	// A join's membership: the public row and the auth row in one audit.Commit, only while AUTH_USERS_OWNED is on.
 	{File: "internal/auth/identity/joinmembership.go", Func: "Store.insertJoinMembership", Table: "auth.memberships", Verb: "INSERT"},
 	{File: "internal/auth/identity/joinmembership.go", Func: "Store.insertJoinMembership", Table: "public.memberships", Verb: "INSERT"},

@@ -118,16 +118,7 @@
             "credential_id": {
               "type": "string",
               "pattern": "^crd_[A-Za-z0-9_-]{1,64}$",
-              "description": "A workload bootstrap credential's server-minted id. The value and its digest are never carried."
-            },
-            "key_status": {
-              "type": "string",
-              "enum": [
-                "active",
-                "retiring",
-                "retired"
-              ],
-              "description": "Where a workload assertion signing key is in its life after the change. The kid, the issuer and any key are never carried."
+              "description": "A workload bootstrap credential's or a service-account key's server-minted id. The value and its digest are never carried."
             },
             "provider": {
               "type": "string",
@@ -456,7 +447,8 @@
               "service_account.created",
               "service_account.disabled",
               "service_account.enabled",
-              "service_account.owner_changed"
+              "service_account.owner_changed",
+              "service_account.key_changed"
             ]
           },
           "payload": {
@@ -467,7 +459,8 @@
                 "propertyNames": {
                   "enum": [
                     "status",
-                    "owner_principal_id"
+                    "owner_principal_id",
+                    "credential_id"
                   ]
                 }
               }
@@ -499,8 +492,7 @@
               "workload.disabled",
               "workload.enabled",
               "workload.audiences_changed",
-              "workload.bootstrap_changed",
-              "workload.assertion_key_changed"
+              "workload.bootstrap_changed"
             ]
           },
           "payload": {
@@ -512,8 +504,7 @@
                   "enum": [
                     "status",
                     "audiences",
-                    "credential_id",
-                    "key_status"
+                    "credential_id"
                   ]
                 }
               }

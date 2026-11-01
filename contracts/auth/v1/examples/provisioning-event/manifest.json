@@ -42,12 +42,12 @@
       "why": "Workload audiences are exact strings, bounded in count."
     },
     {
-      "file": "valid-workload-bootstrap-changed.json",
-      "why": "A workload bootstrap credential change carries its status and the credential's id only, never the value or its digest."
+      "file": "valid-service-account-key-changed.json",
+      "why": "A service-account key change carries its status and the credential's id only, never the value or its digest."
     },
     {
-      "file": "valid-workload-assertion-key-changed.json",
-      "why": "A workload assertion key change carries the key's status only: no kid, no issuer, no key."
+      "file": "valid-workload-bootstrap-changed.json",
+      "why": "A workload bootstrap credential change carries its status and the credential's id only, never the value or its digest."
     },
     {
       "file": "valid-resource-grant-with-expiry.json",
@@ -222,22 +222,16 @@
       "why": "A workload bootstrap event names its credential by the server-minted crd_ id; a value-shaped string has no slot."
     },
     {
-      "file": "invalid-change-credential-id-on-service-account.json",
-      "expect_instance_location": "/payload/change",
-      "expect_keyword": "enum",
-      "why": "credential_id is a workload member only."
+      "file": "invalid-service-account-key-value-as-credential-id.json",
+      "expect_instance_location": "/payload/change/credential_id",
+      "expect_keyword": "pattern",
+      "why": "A service-account key event names its credential by the server-minted crd_ id; a value-shaped string has no slot."
     },
     {
-      "file": "invalid-change-key-status-not-a-status.json",
-      "expect_instance_location": "/payload/change/key_status",
-      "expect_keyword": "enum",
-      "why": "A key status is active, retiring or retired; a value outside that has no slot."
-    },
-    {
-      "file": "invalid-change-key-status-on-service-account.json",
+      "file": "invalid-change-credential-id-on-organization.json",
       "expect_instance_location": "/payload/change",
       "expect_keyword": "enum",
-      "why": "key_status is a workload member only."
+      "why": "credential_id is a member of the workload and service_account aggregates only."
     },
     {
       "file": "invalid-change-action-set-empty.json",

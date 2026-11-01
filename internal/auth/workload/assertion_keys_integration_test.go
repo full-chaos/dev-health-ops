@@ -32,6 +32,7 @@ func activeKey(kid string, rotated time.Time) AssertionKeySpec {
 	return AssertionKeySpec{Issuer: "https://issuer.test", KID: kid, Status: AssertionKeyActive, RotatedAt: rotated}
 }
 
+// outbox counts workload.assertion_key_changed rows: the verb writes an audit row only, so it must stay 0.
 type keyCounts struct{ audit, outbox int }
 
 func keyState(t *testing.T, e *env, n string) keyCounts {
@@ -56,7 +57,7 @@ JOIN auth.workloads w ON w.principal_id = k.workload_principal_id WHERE w.name =
 	return status, retire
 }
 
-// C1: a first key is one row, one audit row, one event; the list shows its metadata; the table has no column that could hold a key.
+// C1: a first key is one row and one audit row, and no provisioning event; the list shows its metadata; the table has no column that could hold a key.
 func TestAssertionKeyFirstKeyWritesOneRowOneAuditRowOneEvent(t *testing.T) {
 	e := getEnv(t)
 	ctx := ctxT(t)
@@ -65,26 +66,22 @@ func TestAssertionKeyFirstKeyWritesOneRowOneAuditRowOneEvent(t *testing.T) {
 	if err != nil || id == uuid.Nil {
 		t.Fatalf("SetAssertionKey = %v, %v", id, err)
 	}
-	if got := keyState(t, e, n); got != (keyCounts{1, 1}) {
-		t.Fatalf("audit/outbox rows = %+v, want 1/1", got)
+	if got := keyState(t, e, n); got != (keyCounts{1, 0}) {
+		t.Fatalf("audit/outbox rows = %+v, want 1/0", got)
 	}
-	var attrs, change string
+	var attrs string
 	info, _ := e.writer.Lookup(ctx, n)
 	if err := e.admin.QueryRow(ctx, `SELECT attributes::text FROM auth.security_audit_events WHERE event_type = 'auth.workload.assertion_key_set' AND subject_principal_id = $1`, info.PrincipalID).Scan(&attrs); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.admin.QueryRow(ctx, `SELECT payload::text FROM auth.auth_outbox_events WHERE event_type = 'workload.assertion_key_changed' AND aggregate_id = $1`, wire(info.PrincipalID)).Scan(&change); err != nil {
-		t.Fatal(err)
+	if strings.Contains(attrs, "key-1") || strings.Contains(attrs, "https://issuer.test") {
+		t.Errorf("the audit attributes carry the kid or the issuer")
 	}
-	for kind, text := range map[string]string{"audit attributes": attrs, "outbox payload": change} {
-		for _, secret := range []string{"key-1", "https://issuer.test"} {
-			if strings.Contains(text, secret) {
-				t.Errorf("the %s carry the kid or the issuer", kind)
-			}
-		}
+	if !strings.Contains(attrs, id.String()) {
+		t.Errorf("the audit attributes lack the key row id")
 	}
-	if !strings.Contains(attrs, id.String()) || !strings.Contains(change, `"key_status"`) {
-		t.Errorf("audit attributes / outbox payload lack the key id or the status")
+	if c := e.count(t, ctx, `SELECT count(*) FROM auth.auth_outbox_events WHERE aggregate_id = $1 AND event_type LIKE 'workload.assertion_key%'`, wire(info.PrincipalID)); c != 0 {
+		t.Errorf("the verb wrote %d outbox events, want 0", c)
 	}
 	keys, err := e.writer.ListAssertionKeys(ctx, n)
 	if err != nil || len(keys) != 1 || keys[0].KID != "key-1" || keys[0].Issuer != "https://issuer.test" ||
@@ -133,8 +130,8 @@ func TestAssertionKeyRotationDemotesTheActiveKeyInOneTransaction(t *testing.T) {
 	if _, err := e.writer.SetAssertionKey(ctx, n, next, Actor{}); err != nil {
 		t.Fatal(err)
 	}
-	if got := keyState(t, e, n); got != (keyCounts{before.audit + 1, before.outbox + 1}) {
-		t.Fatalf("a rotation wrote %+v from %+v, want one audit row and one event", got, before)
+	if got := keyState(t, e, n); got != (keyCounts{before.audit + 1, 0}) {
+		t.Fatalf("a rotation wrote %+v from %+v, want one audit row and no event", got, before)
 	}
 	status, retire := keyRow(t, e, n, "old")
 	if status != "retiring" || retire == nil || !retire.Equal(next.RotatedAt.Add(AssertionOverlapCeiling)) {
@@ -213,8 +210,22 @@ func TestAssertionKeyRetiredIsTerminalAndOneActivePerWorkload(t *testing.T) {
 	}
 	retired := activeKey("k1", keyBase)
 	retired.Status = AssertionKeyRetired
-	if _, err := e.writer.SetAssertionKey(ctx, n, retired, Actor{}); err != nil {
+	if _, err := e.writer.SetAssertionKey(ctx, n, retired, Actor{}); !errors.Is(err, ErrAssertionKeyLastActive) {
+		t.Fatalf("active -> retired without a successor = %v, want ErrAssertionKeyLastActive", err)
+	}
+	if status, _ := keyRow(t, e, n, "k1"); status != "active" {
+		t.Fatalf("k1 = %s after the refused retire", status)
+	}
+	next := activeKey("k1b", keyBase.Add(time.Hour))
+	next.RetirePreviousAfter = time.Hour
+	if _, err := e.writer.SetAssertionKey(ctx, n, next, Actor{}); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := e.writer.SetAssertionKey(ctx, n, retired, Actor{}); err != nil {
+		t.Fatalf("retiring -> retired: %v", err)
+	}
+	if status, retire := keyRow(t, e, n, "k1"); status != "retired" || retire != nil {
+		t.Fatalf("k1 = %s %v after retiring -> retired", status, retire)
 	}
 	if _, err := e.writer.SetAssertionKey(ctx, n, activeKey("k1", keyBase), Actor{}); !errors.Is(err, ErrAssertionKeyTerminal) {
 		t.Fatalf("retired -> active = %v, want ErrAssertionKeyTerminal", err)
@@ -227,9 +238,6 @@ func TestAssertionKeyRetiredIsTerminalAndOneActivePerWorkload(t *testing.T) {
 	}
 	if status, _ := keyRow(t, e, n, "k1"); status != "retired" {
 		t.Fatalf("k1 = %s after the refused writes", status)
-	}
-	if _, err := e.writer.SetAssertionKey(ctx, n, activeKey("k2", keyBase.Add(time.Hour)), Actor{}); err != nil {
-		t.Fatal(err)
 	}
 	if err := commitRaw(ctx, e, `INSERT INTO auth.workload_assertion_keys (id, workload_principal_id, issuer, kid, status, rotated_at)
 SELECT gen_random_uuid(), principal_id, 'https://issuer.test', 'k3', 'active', now() FROM auth.workloads WHERE name = $1`, n); sqlState(err) != "23505" {

@@ -28,6 +28,9 @@ import (
 //	  anchors and source{file,line}); an anchor naming another repo is not
 //	  checkable here.
 //
+// A declared rewrite (the inventory's rewritten_anchors) lets a change rewrite the text of an anchored line on purpose;
+// see the cells below. source_commit is still a commit that is an ancestor of HEAD, always.
+//
 // NOT enforced: that the anchor's line is the RIGHT symbol (the rows gate in
 // internal/queryapi/server owns that), and anchors in other repos' inventories.
 // The fixtures below run on every build; the check over the real inventories
@@ -121,6 +124,9 @@ func problemsForSourceCommit(repo, name string, document map[string]any) []strin
 		return ordered[i].line < ordered[j].line
 	})
 	var problems []string
+	rewrites, shapeProblems := rewrittenAnchors(name, document["rewritten_anchors"])
+	problems = append(problems, shapeProblems...)
+	matched := map[lineAnchor]bool{}
 	for _, a := range ordered {
 		then, err := gitOut(repo, "show", commit+":"+a.file)
 		if err != nil {
@@ -132,12 +138,91 @@ func problemsForSourceCommit(repo, name string, document map[string]any) []strin
 			problems = append(problems, fmt.Sprintf("%s: anchor file %s: %v", name, a.file, err))
 			continue
 		}
+		if entry, declared := rewrites[a]; declared {
+			matched[a] = true
+			problems = append(problems, problemsForRewrite(name, commit, entry, then, string(raw))...)
+			continue
+		}
 		oldLine, okThen := lineOfText(then, a.line)
 		newLine, okNow := lineOfText(string(raw), a.line)
 		shifted := okNow && countLine(then, newLine) == 1 && countLine(string(raw), newLine) == 1
 		if !shifted && (!okThen || !okNow || oldLine != newLine) {
 			problems = append(problems, fmt.Sprintf("%s: %s:%d reads %q at source_commit %s but %q in the tree: the anchors were not derived against source_commit (stale base)", name, a.file, a.line, strings.TrimSpace(oldLine), commit, strings.TrimSpace(newLine)))
 		}
+	}
+	for _, a := range sortedAnchors(rewrites) {
+		if !matched[a] {
+			problems = append(problems, fmt.Sprintf("%s: rewritten anchor %s:%d matches no anchor of the rows", name, a.file, a.line))
+		}
+	}
+	return problems
+}
+
+// rewrittenEntry is one declared rewrite: the line at file:line was text was at source_commit and reads now in the tree.
+type rewrittenEntry struct {
+	file, was, now string
+	line           int
+}
+
+func sortedAnchors(entries map[lineAnchor]rewrittenEntry) []lineAnchor {
+	out := make([]lineAnchor, 0, len(entries))
+	for a := range entries {
+		out = append(out, a)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].file != out[j].file {
+			return out[i].file < out[j].file
+		}
+		return out[i].line < out[j].line
+	})
+	return out
+}
+
+// rewrittenAnchors reads the top-level rewritten_anchors: absent is none; a present value is a list whose entries are
+// exactly {file, line, was, now}, each anchor at most once.
+func rewrittenAnchors(name string, value any) (map[lineAnchor]rewrittenEntry, []string) {
+	entries := map[lineAnchor]rewrittenEntry{}
+	if value == nil {
+		return entries, nil
+	}
+	list, ok := value.([]any)
+	if !ok {
+		return entries, []string{fmt.Sprintf("%s: rewritten_anchors is not a list", name)}
+	}
+	var problems []string
+	for i, item := range list {
+		object, ok := item.(map[string]any)
+		file, okFile := object["file"].(string)
+		was, okWas := object["was"].(string)
+		now, okNow := object["now"].(string)
+		number, okLine := object["line"].(float64)
+		if !ok || len(object) != 4 || !okFile || !okWas || !okNow || !okLine || number != float64(int(number)) || number < 1 || file == "" || was == "" || now == "" {
+			problems = append(problems, fmt.Sprintf("%s: rewritten_anchors[%d] is not exactly {file, line, was, now} with a file, a whole line number from 1 and a non-empty was and now", name, i))
+			continue
+		}
+		key := lineAnchor{file, int(number)}
+		if _, dup := entries[key]; dup {
+			problems = append(problems, fmt.Sprintf("%s: rewritten_anchors lists %s:%d twice", name, file, key.line))
+			continue
+		}
+		entries[key] = rewrittenEntry{file: file, line: key.line, was: was, now: now}
+	}
+	return entries, problems
+}
+
+// problemsForRewrite judges one declared rewrite against the file at source_commit (then) and in the tree (now).
+func problemsForRewrite(name, commit string, entry rewrittenEntry, then, now string) []string {
+	var problems []string
+	where := fmt.Sprintf("%s: rewritten anchor %s:%d", name, entry.file, entry.line)
+	treeLine, ok := lineOfText(now, entry.line)
+	if !ok || treeLine != entry.now {
+		problems = append(problems, fmt.Sprintf("%s: now %q is not the tree text %q", where, entry.now, strings.TrimSpace(treeLine)))
+	}
+	if n := countLine(then, entry.was); n != 1 {
+		problems = append(problems, fmt.Sprintf("%s: was %q occurs %d times in the file at source_commit %s, want exactly 1", where, entry.was, n, commit))
+	}
+	if ok && countLine(then, treeLine) > 0 {
+		problems = append(problems, fmt.Sprintf("%s rewrites nothing: the tree line %q also occurs at source_commit %s", where, strings.TrimSpace(treeLine), commit))
 	}
 	return problems
 }

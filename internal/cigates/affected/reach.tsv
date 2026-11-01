@@ -113,6 +113,7 @@ internal/auth/contracts	contracts.go	internal/auth/contracts
 internal/auth/contracts	contracts.go	internal/auth/contracts/provisioning
 internal/auth/contracts	contracts.go	internal/auth/contracts/tokencorpus
 internal/auth/contracts	contracts.go	internal/auth/contracts/tokencorpus/gen
+internal/auth/contracts	contracts.go	internal/auth/decisionstate
 internal/auth/contracts	contracts.go	internal/auth/httpapi
 internal/auth/contracts	contracts.go	internal/auth/identity
 internal/auth/contracts	contracts.go	internal/auth/identity/local
@@ -163,6 +164,7 @@ internal/auth/keystore	open_unix.go	internal/apiservice
 internal/auth/keystore	open_unix.go	internal/apiservice/acr
 internal/auth/keystore	open_unix.go	internal/auth/authapi
 internal/auth/keystore	open_unix.go	internal/auth/authruntime
+internal/auth/keystore	open_unix.go	internal/auth/decisionstate
 internal/auth/keystore	open_unix.go	internal/auth/keyrotation
 internal/auth/keystore	open_unix.go	internal/auth/keystore
 internal/auth/keystore	open_unix.go	internal/auth/lockorder

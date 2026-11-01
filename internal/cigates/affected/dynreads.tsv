@@ -47,6 +47,7 @@ internal/audit	drill_password_integration_test.go
 internal/audit	drill_pitr_integration_test.go
 internal/auth/authapi	authorize_auth_test.go
 internal/auth/authapi	authorize_request_test.go
+internal/auth/authapi	authorize_test.go
 internal/auth/authapi	hung_read_test.go
 internal/auth/authapi	issuer_eddsa_test.go
 internal/auth/authconfig	config_test.go

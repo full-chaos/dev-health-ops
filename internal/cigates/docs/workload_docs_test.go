@@ -531,6 +531,72 @@ func workloadSecretGuard(d docTree) []string {
 	return out
 }
 
+// ---- (e) the Compose one-shots ------------------------------------------------------------------------------------------
+
+const composeFile = "compose.yml"
+
+var composeOneShots = []string{"auth-workload-volume", "auth-workload-seed", "auth-workload-bootstrap"}
+
+// workloadComposeGuard pins the Compose one-shot text of the bootstrap runbook to compose.yml: the three service names,
+// the profile, the seed and create commands, the volume and its mount path, and the read-only mount of go-api.
+func workloadComposeGuard(d docTree) []string {
+	var out []string
+	page, ok := readOrNote(&out, d, workloadBootstrapPage)
+	cfg, err := parseYAML(d, composeFile)
+	if err != nil {
+		return append(out, err.Error())
+	}
+	if !ok {
+		return out
+	}
+	section, found := sectionOf(page, "## Compose one-shots")
+	if !found {
+		return append(out, workloadBootstrapPage+": no ## Compose one-shots section")
+	}
+	services := asMap(cfg["services"])
+	for _, name := range composeOneShots {
+		svc := asMap(services[name])
+		if svc == nil {
+			out = append(out, composeFile+": no service "+name)
+			continue
+		}
+		mustContain(&out, "Compose one-shots", section, "`"+name+"`")
+		profiles := asList(svc["profiles"])
+		if len(profiles) != 1 || asString(profiles[0]) != "auth" {
+			out = append(out, composeFile+": "+name+" is not in the profile auth alone")
+		}
+	}
+	for _, name := range []string{"auth-workload-seed", "auth-workload-bootstrap"} {
+		var words []string
+		for _, w := range asList(asMap(services[name])["command"]) {
+			words = append(words, asString(w))
+		}
+		if len(words) > 0 {
+			mustContain(&out, "Compose one-shots", section, strings.Join(words, " "))
+		}
+	}
+	mustContain(&out, "Compose one-shots", section, "docker compose --profile auth run --rm auth-workload-bootstrap")
+	mustContain(&out, "Compose one-shots", section, "workload_bootstrap")
+	var api map[string]any
+	if svc := asMap(services["go-api"]); svc != nil {
+		for _, v := range asList(svc["volumes"]) {
+			if m := asMap(v); asString(m["source"]) == "workload_bootstrap" {
+				api = m
+			}
+		}
+	}
+	if api == nil {
+		out = append(out, composeFile+": go-api does not mount workload_bootstrap")
+	} else {
+		mustContain(&out, "Compose one-shots", section, asString(api["target"]))
+		if api["read_only"] != true {
+			out = append(out, composeFile+": the go-api mount of workload_bootstrap is not read-only")
+		}
+	}
+	mustContain(&out, "Compose one-shots", section, "read-only")
+	return out
+}
+
 // ---- tests -------------------------------------------------------------------------------------------------------------
 
 func TestWorkloadRegistryPageMatchesTheRegistryJSON(t *testing.T) {
@@ -594,5 +660,23 @@ func TestWorkloadPagesPutNoCredentialOnArgvOrOutput(t *testing.T) {
 		{"env-secret", plant(glue("AUTH_DATABASE_", "URI") + "=postgres://u:p@h/d dho api"), "secret environment value"},
 		{"prints-token", plant("kubectl create token SA"), "prints a token"},
 		{"cat-credential", plant("cat /secure/dir/NAME.bootstrap"), "prints a credential"},
+	})
+}
+
+func TestWorkloadComposeOneShotsMatchComposeYML(t *testing.T) {
+	assertGuard(t, workloadComposeGuard, []plantCase{
+		{"renamed-service", func(t *testing.T, d docTree) docTree {
+			return d.editAll(t, composeFile, "auth-workload-seed", "auth-workload-seeded")
+		}, "auth-workload-seeded"},
+		{"changed-command", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, composeFile, `command: ["workloads", "seed", "-apply"]`, `command: ["workloads", "seed", "-apply", "-x"]`)
+		}, "workloads seed -apply -x"},
+		{"writable-mount", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, composeFile, `        source: workload_bootstrap
+        target: /run/workload
+        read_only: true`, `        source: workload_bootstrap
+        target: /run/workload
+        read_only: false`)
+		}, "not read-only"},
 	})
 }

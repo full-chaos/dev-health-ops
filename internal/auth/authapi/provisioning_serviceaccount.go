@@ -154,7 +154,7 @@ func (h provisioningHandlers) accountOf(w http.ResponseWriter, r *http.Request, 
 // the refusal it would get for a row of another organization, and only an active superuser is told the row is unknown
 // (404 with reason). It writes the answer.
 func (h provisioningHandlers) refuseUnknown(w http.ResponseWriter, r *http.Request, op string, actor uuid.UUID, reason string) {
-	_, rule := h.actorRule(r.Context(), h.Reader, actor, uuid.Nil, true)
+	_, rule := h.actorRule(r.Context(), h.Reader, actor, uuid.Nil, false)
 	var refused errActorRefused
 	switch {
 	case errors.As(rule, &refused):

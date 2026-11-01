@@ -218,6 +218,15 @@ func validKeyOverlap(d time.Duration) bool { return d >= 0 && d <= KeyOverlapCei
 
 const liveKey = `credential_class = '` + KeyClass + `' AND revoked_at IS NULL AND expires_at > clock_timestamp()`
 
+// keyColumns are the columns of a Key, in scanKey's order.
+const keyColumns = `id, principal_id, expires_at, created_at, updated_at, rotation_parent_id, fingerprint, revoked_at, revoked_reason, created_by`
+
+func scanKey(row pgx.Row) (Key, error) {
+	var k Key
+	err := row.Scan(&k.ID, &k.Principal, &k.ExpiresAt, &k.CreatedAt, &k.UpdatedAt, &k.ParentID, &k.Fingerprint, &k.RevokedAt, &k.RevokedReason, &k.CreatedBy)
+	return k, err
+}
+
 func keyWire(id uuid.UUID) string { return "crd_" + id.String() }
 
 func keyAudit(eventType, reason string, id, org uuid.UUID, owner *uuid.UUID, credential uuid.UUID, a Actor, field, next string) audit.AuditEvent {
@@ -365,11 +374,12 @@ func (s *Store) IssueKey(ctx context.Context, id uuid.UUID, expiresIn time.Durat
 			if err := decideIssue(st); err != nil {
 				return err
 			}
-			return tx.QueryRow(ctx, `INSERT INTO `+s.q+`.credential_registry
+			res.Key, err = scanKey(tx.QueryRow(ctx, `INSERT INTO `+s.q+`.credential_registry
 (id, principal_id, credential_class, display_prefix, secret_hash, hash_algorithm, expires_at, fingerprint, created_by)
 VALUES ($1, $2, $3, $4, $5, $6, clock_timestamp() + make_interval(secs => $7), $8, $9)
-RETURNING expires_at, created_at, updated_at`, res.Key.ID, id, KeyClass, KeyPrefix, digest[:], KeyHashAlgorithm,
-				expiresIn.Seconds(), hex.EncodeToString(digest[:8]), a.PrincipalID).Scan(&res.Key.ExpiresAt, &res.Key.CreatedAt, &res.Key.UpdatedAt)
+RETURNING `+keyColumns, res.Key.ID, id, KeyClass, KeyPrefix, digest[:], KeyHashAlgorithm,
+				expiresIn.Seconds(), hex.EncodeToString(digest[:8]), a.PrincipalID))
+			return err
 		}),
 		Audit:  keyAudit("auth.service_account.key_issued", "credential_issued", id, info.OrgID, &owner, res.Key.ID, a, "expires_at", "active"),
 		Events: keyEvents(id, res.Key.ID, "active"),
@@ -406,13 +416,12 @@ func (s *Store) RotateKey(ctx context.Context, id uuid.UUID, overlap, expiresIn 
 				return err
 			}
 			parent := live[0]
-			res.Key.ParentID = &parent
-			if err := tx.QueryRow(ctx, `INSERT INTO `+s.q+`.credential_registry
+			res.Key, err = scanKey(tx.QueryRow(ctx, `INSERT INTO `+s.q+`.credential_registry
 (id, principal_id, credential_class, display_prefix, secret_hash, hash_algorithm, expires_at, audiences, scopes, fingerprint, rotation_parent_id, created_by)
 SELECT $1, principal_id, credential_class, $2, $3, $4, clock_timestamp() + make_interval(secs => $5), audiences, scopes, $6, id, $7
-FROM `+s.q+`.credential_registry WHERE id = $8 RETURNING expires_at, created_at, updated_at`,
-				res.Key.ID, KeyPrefix, digest[:], KeyHashAlgorithm, expiresIn.Seconds(), hex.EncodeToString(digest[:8]), a.PrincipalID, parent).
-				Scan(&res.Key.ExpiresAt, &res.Key.CreatedAt, &res.Key.UpdatedAt); err != nil {
+FROM `+s.q+`.credential_registry WHERE id = $8 RETURNING `+keyColumns,
+				res.Key.ID, KeyPrefix, digest[:], KeyHashAlgorithm, expiresIn.Seconds(), hex.EncodeToString(digest[:8]), a.PrincipalID, parent))
+			if err != nil {
 				return err
 			}
 			return tx.QueryRow(ctx, `UPDATE `+s.q+`.credential_registry
@@ -520,7 +529,7 @@ func (s *Store) ListKeys(ctx context.Context, id uuid.UUID) ([]Key, error) {
 	if _, err := s.read(ctx, id); err != nil {
 		return nil, err
 	}
-	rows, err := s.pool.Query(ctx, `SELECT id, principal_id, expires_at, created_at, updated_at, rotation_parent_id
+	rows, err := s.pool.Query(ctx, `SELECT `+keyColumns+`
 FROM `+s.q+`.credential_registry WHERE principal_id = $1 AND `+liveKey+` ORDER BY created_at, id`, id)
 	if err != nil {
 		return nil, faultOf(err)
@@ -528,8 +537,8 @@ FROM `+s.q+`.credential_registry WHERE principal_id = $1 AND `+liveKey+` ORDER B
 	defer rows.Close()
 	var out []Key
 	for rows.Next() {
-		var k Key
-		if err := rows.Scan(&k.ID, &k.Principal, &k.ExpiresAt, &k.CreatedAt, &k.UpdatedAt, &k.ParentID); err != nil {
+		k, err := scanKey(rows)
+		if err != nil {
 			return nil, faultOf(err)
 		}
 		out = append(out, k)
@@ -540,7 +549,19 @@ FROM `+s.q+`.credential_registry WHERE principal_id = $1 AND `+liveKey+` ORDER B
 	return out, nil
 }
 
-func (s *Store) KeyByID(context.Context, uuid.UUID) (*Key, error) { return nil, ErrStore }
+// KeyByID reads one key in any state. The id is the caller's, so the class is
+// part of the read: a credential of another class is not found.
+func (s *Store) KeyByID(ctx context.Context, id uuid.UUID) (*Key, error) {
+	k, err := scanKey(s.pool.QueryRow(ctx, `SELECT `+keyColumns+`
+FROM `+s.q+`.credential_registry WHERE id = $1 AND credential_class = $2`, id, KeyClass))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrKeyNotFound
+	}
+	if err != nil {
+		return nil, faultOf(err)
+	}
+	return &k, nil
+}
 
 // keyRow is the one row ResolveKey reads.
 type keyRow struct {

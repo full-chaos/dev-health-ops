@@ -109,7 +109,7 @@ func TestAnACRMintedTokenIsRefusedAtQueryAPIBeforeAnyRead(t *testing.T) {
 					t.Fatalf("%s %s with the minted %s token: %d %q with %d reads; want the route's 401 and no read", target.method, target.path, audience, got.Status, got.Body, store.reads)
 				}
 			}
-			reason, refused := acrRefusalReason(t), 0
+			reason, refused := acrRefusalReason, 0
 			for series := range stack.reader.counts(t) {
 				if strings.HasPrefix(series, accessverify.RefusedMetric+"|") && strings.Contains(series, ",reason="+reason+",") {
 					refused++

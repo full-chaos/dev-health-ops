@@ -94,8 +94,9 @@ type StartInput struct {
 // session's effective expiry and the actor's role assignment.
 //
 // Locks follow the auth lock order (membership.Store readPairs). Prior rows of
-// the actor end first, expired ones too, so an actor runs one delegation. A
-// base or prior row another writer holds is ErrBusy, retried BusyAttempts times.
+// the actor end first, expired ones too, go-api's among them, so an actor runs
+// one delegation. A base or prior row another writer holds is ErrBusy, retried
+// BusyAttempts times.
 func (s *Store) StartDelegation(ctx context.Context, in StartInput) (Record, error) {
 	record, err := s.startDelegation(ctx, in)
 	switch {
@@ -168,15 +169,18 @@ func (s *Store) startOnce(ctx context.Context, in StartInput, actor uuid.UUID, r
 	var out Record
 	err := audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
-			permitted, err := s.lockDelegation(ctx, tx, in, actor)
+			permitted, role, err := s.lockDelegation(ctx, tx, in, actor)
 			if err != nil {
 				return err
 			}
 			if err := s.lockBaseAndPriors(ctx, tx, in.BaseSessionID, actor); err != nil {
 				return err
 			}
+			if err := delegationend.EndLegacy(ctx, tx, actorText); err != nil {
+				return err
+			}
 			return s.insertDelegation(ctx, tx, delegationRow{id: idText, target: target, org: org, base: in.BaseSessionID.String(),
-				actor: actorText, reason: reason, permitted: permitted}, &out)
+				actor: actorText, reason: reason, role: role, permitted: permitted}, &out)
 		},
 		Audit: audit.AuditEvent{
 			EventType: delegationend.EventStarted, Outcome: audit.OutcomeAllowed,
@@ -209,10 +213,11 @@ func (s *Store) startOnce(ctx context.Context, in StartInput, actor uuid.UUID, r
 // the actor's authority under the shared platform role lock. It returns the
 // actions the delegation permits: the delegable actions of the target's role,
 // or the role's full set for an actor who holds platform_owner now. The target
-// role is an organization role, so no platform action enters the set.
-func (s *Store) lockDelegation(ctx context.Context, tx audit.TxOps, in StartInput, actor uuid.UUID) ([]string, error) {
+// role is an organization role, so no platform action enters the set. It also
+// returns that role.
+func (s *Store) lockDelegation(ctx context.Context, tx audit.TxOps, in StartInput, actor uuid.UUID) ([]string, string, error) {
 	if _, err := tx.Exec(ctx, rule.SharedWriteLockSQL, rule.WriteLock); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	first, second := actor, in.TargetPrincipalID
 	if strings.Compare(first.String(), second.String()) > 0 {
@@ -221,48 +226,49 @@ func (s *Store) lockDelegation(ctx context.Context, tx audit.TxOps, in StartInpu
 	for _, id := range []uuid.UUID{first, second} {
 		usable, err := s.lockPerson(ctx, tx, id)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		switch {
 		case usable:
 		case id == actor:
-			return nil, ErrActorUnavailable
+			return nil, "", ErrActorUnavailable
 		default:
-			return nil, ErrTargetUnavailable
+			return nil, "", ErrTargetUnavailable
 		}
 	}
 	var orgActive bool
 	err := tx.QueryRow(ctx, `SELECT disabled_at IS NULL FROM `+s.q+`.organizations WHERE id = $1 FOR SHARE`, in.OrganizationID).Scan(&orgActive)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrOrganizationUnavailable
+		return nil, "", ErrOrganizationUnavailable
 	}
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if !orgActive {
-		return nil, ErrOrganizationUnavailable
+		return nil, "", ErrOrganizationUnavailable
 	}
 	var role *string
 	err = tx.QueryRow(ctx, `SELECT role FROM public.memberships WHERE user_id = $1 AND org_id = $2 ORDER BY id FOR SHARE`,
 		in.TargetPrincipalID, in.OrganizationID).Scan(&role)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrTargetNotMember
+		return nil, "", ErrTargetNotMember
 	}
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if _, err := tx.Exec(ctx, `SELECT 1 FROM `+s.q+`.memberships WHERE organization_id = $1 AND principal_id = $2 ORDER BY id FOR SHARE`,
 		in.OrganizationID, in.TargetPrincipalID); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	owner, err := s.checkAuthority(ctx, tx, actor, in.TargetPrincipalID)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if role == nil {
-		return nil, ErrTargetRoleUnknown
+		return nil, "", ErrTargetRoleUnknown
 	}
-	return permittedActions(*role, owner)
+	permitted, err := permittedActions(*role, owner)
+	return permitted, *role, err
 }
 
 func permittedActions(role string, owner bool) ([]string, error) {
@@ -388,14 +394,15 @@ func (s *Store) lockBaseAndPriors(ctx context.Context, tx audit.TxOps, base, act
 }
 
 type delegationRow struct {
-	id, target, org, base, actor, reason string
-	permitted                            []string
+	id, target, org, base, actor, reason, role string
+	permitted                                  []string
 }
 
 // insertDelegation writes the row: not insertSession, so no refresh credential
 // exists and Exchange has nothing to accept. The token_hash is a digest of a
 // value never returned, as for every session. The effective expiry of the base
-// and the assignment are read here, on the statement's own clock.
+// and the assignment are read here, on the statement's own clock. go-api's record
+// of the delegation follows it in the transaction.
 func (s *Store) insertDelegation(ctx context.Context, tx audit.TxOps, row delegationRow, out *Record) error {
 	handle, err := newCredential()
 	if err != nil {
@@ -427,7 +434,10 @@ func (s *Store) insertDelegation(ctx context.Context, tx audit.TxOps, row delega
 		return err
 	}
 	*out, err = scanRecord(tx.QueryRow(ctx, `SELECT `+s.sessionColumns()+` FROM `+s.q+`.sessions s WHERE s.id = $1`, id))
-	return err
+	if err != nil {
+		return err
+	}
+	return delegationend.Begin(ctx, tx, s.q, delegationend.Row{ID: id, Target: row.target, Actor: row.actor, Organization: row.org}, row.role)
 }
 
 // EndDelegation ends a delegated session, and its base session stays live. It

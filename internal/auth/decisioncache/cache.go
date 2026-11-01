@@ -13,8 +13,8 @@
 // Never stored: a deny, an allow of a high-risk action or of cache class none, and an allow that carries an Audit
 // obligation (the owner exemption of a delegated session), so the decision point never skips its audit emission.
 //
-// Named limit: the key carries EntitlementRevision, and it is 0 today. No entitlement aggregate exists
-// (entitlement_snapshots is dormant), so no feed event moves it; when one exists it becomes a dependency like the others.
+// Named limit: the key carries EntitlementRevision, and it is 0 today. No entitlement aggregate exists (the entitlement
+// snapshot table is dormant), so no feed event moves it; when one exists it becomes a dependency like the others.
 package decisioncache
 
 import (

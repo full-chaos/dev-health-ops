@@ -72,7 +72,7 @@ func RequirePlatformAdmin(p Principal) error {
 	if !p.Present {
 		return &AccessError{Message: "Authentication required"}
 	}
-	if p.ImpersonationActive || !p.IsSuperuser {
+	if p.ImpersonationActive || !p.Holds(rule.ActionAdminTelemetry) {
 		return &AccessError{Message: "Platform admin access required"}
 	}
 	return nil

@@ -373,7 +373,7 @@ func TestMapGuardGoesRedOnTheVerifierPlants(t *testing.T) {
 			return text
 		}
 	}
-	branch := "claims.IsSuperuser && !claims.ImpersonationActive"
+	branch := "claims.Holds(rule.ActionAdminOrgs) && !claims.ImpersonationActive"
 	deleted := swapped("operation_org_guard.go", "if "+branch+" {", "if false {")
 	if joined := strings.Join(checkFieldActionMap(served, orgArg, doc, cat, mapClaims, deleted), "\n"); !strings.Contains(joined, "does not contain") {
 		t.Errorf("the superuser branch deleted from operationOrgDecision stayed green")

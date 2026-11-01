@@ -253,7 +253,7 @@ func (s *Service) once(ctx context.Context, in Input, p plan) (*Result, error) {
 					return err
 				}
 			}
-			// Step 6b of the auth lock order: the organization's grant rows, after the memberships and sessions.
+			// Step 6d of the auth lock order: the organization's grant rows, after the memberships and sessions.
 			if err := p.grants.Apply(ctx, tx, in.Actor.PrincipalID); err != nil {
 				if errors.Is(err, grantend.ErrStateMoved) {
 					return membership.ErrStateMoved

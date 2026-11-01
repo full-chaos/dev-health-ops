@@ -242,7 +242,9 @@ func (q poolQuerier) queryRow(ctx context.Context, sql string, args ...any) pgx.
 //	   step 3) do the same for the whole organization through
 //	   EndOrganizationInTx; a later verb that ends a membership in place,
 //	   such as a route for Suspend, must end its sessions the same way;
-//	   6b. a removal: the pair's live auth.resource_grants rows FOR UPDATE,
+//	   6b. a service account verb: the auth.service_accounts row FOR UPDATE;
+//	   6c. a service account key verb: its auth.credential_registry rows FOR UPDATE;
+//	   6d. a removal: the pair's live auth.resource_grants rows FOR UPDATE,
 //	   ORDER BY id (grantend.Plan.Apply), after the sessions; a grant verb
 //	   (internal/auth/grant) takes the same rows last, after the pair (ReadPair);
 //	7. aggregate_revisions, inside audit.Commit.
@@ -681,7 +683,7 @@ func (s *Store) mutate(ctx context.Context, v verb, c Change) (*Membership, erro
 						return err
 					}
 				}
-				// Step 6b of the auth lock order: the pair's grant rows, after the membership rows and the sessions.
+				// Step 6d of the auth lock order: the pair's grant rows, after the membership rows and the sessions.
 				if err := grants.Apply(ctx, tx, c.Actor.PrincipalID); err != nil {
 					if errors.Is(err, grantend.ErrStateMoved) {
 						return errStateMoved
@@ -906,7 +908,7 @@ func (p PairState) Active() bool { return p.Status == StatusActive }
 // transaction (steps -1 to 6: principals and users, the organization row FOR
 // SHARE, the pair's membership rows FOR UPDATE) and returns its effective
 // state. actor, when set, is locked FOR SHARE. The caller takes its own rows
-// (grants, step 6b) after it. ErrPrincipalNotFound, ErrOrgNotFound and
+// (grants, step 6d) after it. ErrPrincipalNotFound, ErrOrgNotFound and
 // ErrOrgSuspended are the lookup refusals; ErrStateMoved: plan again.
 func (s *Store) ReadPair(ctx context.Context, tx audit.TxOps, orgID, principalID uuid.UUID, actor *uuid.UUID) (PairState, error) {
 	if !s.ownsUsers {

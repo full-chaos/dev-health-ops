@@ -15,6 +15,7 @@ auth.grant.mutations	outcome,verb	code: internal/auth/grant/store.go
 auth.session.delegations	outcome	code: internal/auth/session/delegation.go
 auth.session.issue_compat_uses	class	code: internal/auth/authapi/wire.go
 auth.session.refresh_exchanges	reason_code	code: internal/auth/session/store.go
+auth.serviceaccount.key_resolves	outcome	code: internal/auth/serviceaccount/keys.go
 auth.serviceaccount.mutations	outcome,verb	code: internal/auth/serviceaccount/store.go
 auth.session.revocations	reason	code: internal/auth/session/store.go
 auth.social.outcomes	operation,provider,reason_code	code: internal/auth/identity/social/service.go

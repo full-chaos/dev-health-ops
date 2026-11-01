@@ -6,7 +6,7 @@
 // A plan reads the grant ids lock-free; Apply locks the rows FOR UPDATE in id
 // order, refuses with ErrStateMoved when the live set differs from the plan,
 // and marks them revoked. The caller holds the principal, user, organization
-// and membership rows first (step 6b of the auth lock order).
+// and membership rows first (step 6d of the auth lock order).
 package grantend
 
 import (

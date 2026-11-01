@@ -865,6 +865,9 @@
       "CredentialReceipt": {
         "$ref": "../jsonschema/credential-receipt.v1.schema.json"
       },
+      "AcrCredentialLifecycleEvent": {
+        "$ref": "../jsonschema/acr-credential-lifecycle-event.v1.schema.json"
+      },
       "Discovery": {
         "$ref": "../jsonschema/discovery.v1.schema.json"
       },

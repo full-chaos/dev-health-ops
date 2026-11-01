@@ -115,6 +115,30 @@ func (o strictObject) optionalText(name string, max int) (*string, error) {
 	return &text, nil
 }
 
+// anyText reads a required string of 0 to max bytes.
+func (o strictObject) anyText(name string, max int) (string, error) {
+	if o.isNull(name) {
+		return "", errProvisioningBody
+	}
+	var text string
+	if err := json.Unmarshal(o[name], &text); err != nil || len(text) > max {
+		return "", errProvisioningBody
+	}
+	return text, nil
+}
+
+// optionalAnyText reads an absent or null member as nil, else anyText.
+func (o strictObject) optionalAnyText(name string, max int) (*string, error) {
+	if o.isNull(name) {
+		return nil, nil
+	}
+	text, err := o.anyText(name, max)
+	if err != nil {
+		return nil, err
+	}
+	return &text, nil
+}
+
 // optionalInt reads an absent or null member as nil, else an integer token
 // (digits only: no fraction, no exponent) in [min, max].
 func (o strictObject) optionalInt(name string, min, max int64) (*int64, error) {

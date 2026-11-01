@@ -1,0 +1,48 @@
+{
+  "expect": {
+    "allowed": false,
+    "cache_class": "none",
+    "expires_in_seconds": null,
+    "policy_revision": 5,
+    "reason": "repository_not_granted"
+  },
+  "id": "embedded-catalog-grant-role-does-not-hold-repository-read",
+  "layer": "pdp",
+  "request": {
+    "action": "acr.context.read",
+    "organization_id": "org-a",
+    "resource_key": "acme/api",
+    "resource_kind": "repository"
+  },
+  "state": {
+    "catalog": "embedded",
+    "clock": "2027-01-15T08:00:00Z",
+    "grants": [
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "acme/api",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "admin"
+      }
+    ],
+    "grants_error": false,
+    "memberships": {
+      "org-a": {
+        "org_id": "org-a",
+        "role": "member",
+        "status": "active"
+      }
+    },
+    "organizations": {
+      "org-a": "active"
+    },
+    "platform_role": "",
+    "principal_status": "active",
+    "service_accounts": {},
+    "snapshot": "grant",
+    "workload": null
+  },
+  "why": "in the shipped catalog a live admin grant does not allow acr.context.read."
+}

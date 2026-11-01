@@ -8,7 +8,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/full-chaos/dev-health-ops/internal/api/registerorg"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 )
 
@@ -57,24 +56,6 @@ func insertPublicUser(ctx context.Context, tx audit.TxOps, u publicUser) error {
 	 is_active, is_verified, is_superuser, token_version, created_at, updated_at, sso_provider_id)
 VALUES ($1, $2, NULLIF($3, ''), $4, $5, $6, $7, true, $8, false, 0, now(), now(), $9)`,
 		u.ID, u.Email, u.Username, u.PasswordHash, u.FullName, u.AuthProvider, u.AuthProviderID, u.Verified, u.SSOProviderID)
-	return err
-}
-
-// insertPublicOwnedOrganization writes the organization and the owner
-// membership go-api's register route writes: new rows only, with the columns
-// authschema.RegisterOrganizationGrants lists and the model defaults go-api's
-// insert gives the others.
-func insertPublicOwnedOrganization(ctx context.Context, tx audit.TxOps, userID uuid.UUID, name string) error {
-	orgID := uuid.New()
-	if _, err := tx.Exec(ctx, `INSERT INTO public.organizations
-	(id, slug, name, settings, tier, managed_by, is_active, created_at, updated_at)
-VALUES ($1, $2, $3, '{}', 'community', 'stripe', true, now(), now())`,
-		orgID, registerorg.Slug(name, userID), name); err != nil {
-		return err
-	}
-	_, err := tx.Exec(ctx, `INSERT INTO public.memberships
-	(id, user_id, org_id, role, joined_at, created_at, updated_at)
-VALUES ($1, $2, $3, 'owner', now(), now(), now())`, uuid.New(), userID, orgID)
 	return err
 }
 

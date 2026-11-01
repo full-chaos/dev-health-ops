@@ -107,3 +107,22 @@ func TestAUsableSubjectReachesTheDatabase(t *testing.T) {
 		t.Fatal("a valid subject ran no statement; the counter proves nothing")
 	}
 }
+
+// The create and lookup paths take the subject as given, because every auth provider value they receive refuses an
+// empty subject first. RefuseInvalidProviderID waves "", "local" and the service provider through, so a provider value
+// outside this list would need the empty-subject branches back.
+func TestEveryAuthProviderTheSignInPathsUseRefusesAnEmptySubject(t *testing.T) {
+	providers := []string{"oidc", "saml"}
+	for _, protocol := range []string{"oauth_github", "oauth_gitlab", "oauth_google"} {
+		providerType, ok := oauthTypeForProtocol(protocol)
+		if !ok {
+			t.Fatalf("no OAuth type for %s", protocol)
+		}
+		providers = append(providers, oauthAuthProviderValue(providerType))
+	}
+	for _, provider := range providers {
+		if err := refuseUnusableSubject(provider, ""); !errors.Is(err, identity.ErrInvalidProviderID) {
+			t.Errorf("%s accepts an empty subject: %v", provider, err)
+		}
+	}
+}

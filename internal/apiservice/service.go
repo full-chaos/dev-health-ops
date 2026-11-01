@@ -510,7 +510,7 @@ func configureWith(
 	}
 	logOrgDeletionPreflight(ctx, logger, deps.ClickHouseDSN)
 	gate := NewIntakeGate(&deps, logger)
-	server, err := NewServerWithGate(cfg, logger, Routes(deps, logger), gate, scope...)
+	server, err := newServer(cfg, logger, Routes(deps, logger), gate, deps.AuthProxy.ScopeExemptRoutes(), scope...)
 	if err != nil {
 		return nil, dependencyFailure(ctx, logger, "api_server", "api_server_config_failed", err)
 	}
@@ -736,8 +736,21 @@ func NewServerWithGate(
 	gate *webhookintake.Gate,
 	scope ...func(http.Handler) http.Handler,
 ) (*httpapi.Server, error) {
+	return newServer(cfg, logger, routes, gate, nil, scope...)
+}
+
+// newServer is NewServerWithGate whose scope layers also skip the exact routes of scopeExempt
+// (AuthProxyConfig.ScopeExemptRoutes): the proxied routes auth-service authenticates.
+func newServer(
+	cfg config.Config,
+	logger *slog.Logger,
+	routes []httpapi.Route,
+	gate *webhookintake.Gate,
+	scopeExempt map[string]bool,
+	scope ...func(http.Handler) http.Handler,
+) (*httpapi.Server, error) {
 	noStore := httpapi.NewNoStoreRoutes(httpapi.AdminRoutes)
-	middleware := []func(http.Handler) http.Handler{buildinfo.Stamp(version.Current("api")), pyheaders.UnhandledErrorShape, CloseHTTP10, MarkSignatureOnly, DecodedPathRouting, noStore.Middleware}
+	middleware := []func(http.Handler) http.Handler{buildinfo.Stamp(version.Current("api")), pyheaders.UnhandledErrorShape, CloseHTTP10, markScopeExempt(scopeExempt), DecodedPathRouting, noStore.Middleware}
 	if gate != nil {
 		middleware = append(middleware, intakeGate(gate, cfg.CORSAllowedOrigins))
 	}

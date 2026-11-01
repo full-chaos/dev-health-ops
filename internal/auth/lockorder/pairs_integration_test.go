@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/invite"
 	"github.com/full-chaos/dev-health-ops/internal/auth/membership"
 )
@@ -554,4 +555,67 @@ func TestOrderAuthVerbLocksInAscendingIDOrder(t *testing.T) {
 
 	wantNoErr(t, cell, s)
 	wantStatus(t, cell, g, http.StatusCreated)
+}
+
+// Onboarding holds its principal, then public.users. A removal by that
+// principal waits for it at step 1 and takes no row onboarding wants, so both
+// end, in the auth lock order.
+func TestOnboardOrgAndMembershipRemove(t *testing.T) {
+	const cell = "onboard/remove"
+	e, ctx := getEnv(t), cellContext(t)
+	e.cleanup(t)
+	user, target := e.seedPair(t, ctx)
+	org := e.seedOrg(t, ctx)
+	e.add(t, ctx, org, target, "member", nil)
+	reached := e.authBarrier.Arm("INSERT INTO public.organizations")
+	onboard := goAuth("OnboardOrganization", func() error {
+		_, err := e.identity.OnboardOrganization(ctx, identity.OnboardOrganizationRequest{Principal: user, Name: "Held"})
+		return err
+	})
+	awaitReached(t, cell, "the onboarding insert", reached, onboard)
+	remove := goAuth("membership Remove", func() error {
+		_, err := e.members.Remove(ctx, membership.Change{OrgID: org, PrincipalID: target, Actor: membership.Actor{PrincipalID: &user}, Authorize: allowAll})
+		return err
+	})
+	e.awaitWaiters(t, ctx, cell, 1, onboard, remove)
+	e.authBarrier.Release()
+	e.finish(t, cell, onboard, remove)
+	wantNoErr(t, cell, onboard)
+	wantNoErr(t, cell, remove)
+}
+
+// An invite accept waits for an onboarding of the same account; each
+// organization ends with one membership of it.
+func TestOnboardOrgRaceWithInviteAcceptOneMembership(t *testing.T) {
+	const cell = "onboard/accept"
+	e, ctx := getEnv(t), cellContext(t)
+	e.cleanup(t)
+	user, inviter := e.seedPair(t, ctx)
+	org := e.seedOrg(t, ctx)
+	e.add(t, ctx, org, inviter, "owner", nil)
+	ttl := time.Hour
+	created, err := e.invites.Create(ctx, invite.CreateInput{OrgID: org, Email: email(user), Role: "member", TTL: &ttl, InvitedBy: inviter,
+		Actor: invite.Actor{PrincipalID: &inviter}, Authorize: allowInvite})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reached := e.authBarrier.Arm("INSERT INTO public.organizations")
+	onboard := goAuth("OnboardOrganization", func() error {
+		_, err := e.identity.OnboardOrganization(ctx, identity.OnboardOrganizationRequest{Principal: user, Name: "Held Too"})
+		return err
+	})
+	awaitReached(t, cell, "the onboarding insert", reached, onboard)
+	accept := goAuth("invite Accept", func() error {
+		_, err := e.invites.Accept(ctx, invite.AcceptInput{Token: created.Token, PrincipalID: user, Actor: invite.Actor{PrincipalID: &user},
+			EnsureOrganization: e.identity.EnsureOrganization})
+		return err
+	})
+	e.awaitWaiters(t, ctx, cell, 1, onboard, accept)
+	e.authBarrier.Release()
+	e.finish(t, cell, onboard, accept)
+	wantNoErr(t, cell, onboard)
+	wantNoErr(t, cell, accept)
+	if got := e.scalar(t, ctx, `SELECT count(DISTINCT org_id)::text || '/' || count(*)::text FROM public.memberships WHERE user_id = $1`, user); got != "2/2" {
+		t.Fatalf("%s: memberships = %s, want one in each of 2 organizations", cell, got)
+	}
 }

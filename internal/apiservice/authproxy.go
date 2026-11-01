@@ -243,6 +243,26 @@ var routeProxyRoutes = map[string]AuthAggregate{
 	"POST /api/v1/auth/saml/{provider_id}/acs":       AuthSAML,
 }
 
+// ownerAuthenticatedRoutes are the proxied routes that auth-service alone authenticates, validates and limits once
+// their aggregate is on: go-api forwards them unread, with no guard, body validator or rate limiter of its own, and
+// its scope layers skip them (ScopeExemptRoutes), so a token addressed to auth-service never reaches go-api's verifier
+// or stores (D6440). With the aggregate off the route keeps go-api's whole local chain.
+var ownerAuthenticatedRoutes = map[string]AuthAggregate{
+	"POST /api/v1/auth/change-password": AuthCredentials,
+}
+
+// ScopeExemptRoutes is the set of "METHOD path" routes the scope layers skip because auth-service authenticates
+// them: the owner-authenticated routes whose aggregate is on. Empty when every such aggregate is off.
+func (c AuthProxyConfig) ScopeExemptRoutes() map[string]bool {
+	out := map[string]bool{}
+	for route, aggregate := range ownerAuthenticatedRoutes {
+		if c.Enabled(aggregate) {
+			out[route] = true
+		}
+	}
+	return out
+}
+
 // patternAggregate is both maps by pattern alone: every mapped pattern has
 // one method.
 var patternAggregate = func() map[string]AuthAggregate {
@@ -423,9 +443,15 @@ func (p *authProxy) wrap(routes []httpapi.Route) []httpapi.Route {
 		if !ok {
 			aggregate, ok = routeProxyRoutes[key]
 		}
-		if ok {
-			routes[index].Handler = p.sessionRoute(aggregate, routes[index].Handler)
+		if !ok {
+			continue
 		}
+		if owner, owned := ownerAuthenticatedRoutes[key]; owned && p.cfg.Enabled(owner) {
+			// go-api's guard, validator and limiter are dropped: the forward is the whole route.
+			routes[index].Handler = p.sessionRoute(aggregate, p.inner(routes[index].Pattern, nil))
+			continue
+		}
+		routes[index].Handler = p.sessionRoute(aggregate, routes[index].Handler)
 	}
 	return routes
 }

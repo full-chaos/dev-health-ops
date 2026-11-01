@@ -719,3 +719,15 @@ func TestOrgDeletionAuthErrorIsTheUnavailableAnswer(t *testing.T) {
 		t.Fatalf("%d %s", r.Code, r.Body.String())
 	}
 }
+
+func (f *fakeProvisioner) OnboardOrganization(context.Context, authprovision.OnboardRequest) (authprovision.Born, error) {
+	return authprovision.Born{}, errors.New("not this route")
+}
+
+func (f *fakeProvisioner) CreateOrganization(_ context.Context, in authprovision.CreateOrganizationRequest) (authprovision.Born, error) {
+	f.record("create", in)
+	if f.err != nil {
+		return authprovision.Born{}, f.err
+	}
+	return authprovision.Born{OrgID: provOrg}, nil
+}

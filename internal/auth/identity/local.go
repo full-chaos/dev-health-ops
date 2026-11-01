@@ -10,6 +10,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/registerorg"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/publicaudit"
 )
@@ -29,9 +30,8 @@ type LocalProvisionRequest struct {
 	FullName     *string
 	PasswordHash *string
 	Actor        Actor
-	// Organization, when set, adds a new public organization named so and the
-	// user's owner membership in the same transaction (go-api's register does
-	// the same). Only new rows are written.
+	// Organization, when set, adds a new organization named so and the user's
+	// owner membership, in both schemas, in the same transaction.
 	Organization *NewOrganization
 }
 
@@ -43,9 +43,9 @@ type NewOrganization struct{ Name string }
 // and is available only after the users cutover (ErrSignupNotAvailable
 // before). An email another principal holds is ErrEmailTaken. The email is
 // stored as its login key (NormalizeEmail), as the go-api register route
-// stores it. With req.Organization the public organization and the owner
-// membership are written in the same transaction, so an email collision leaves
-// neither.
+// stores it. With req.Organization the organization and the owner membership
+// of both schemas are written in the same transaction, so an email collision
+// leaves neither. A slug collision is ErrOrganizationSlugCollision.
 func (s *Store) ProvisionLocal(ctx context.Context, req LocalProvisionRequest) (_ uuid.UUID, err error) {
 	defer func() { s.countLink(ctx, "provision", err) }()
 	if !s.ownsUsers {
@@ -65,6 +65,23 @@ func (s *Store) ProvisionLocal(ctx context.Context, req LocalProvisionRequest) (
 	}
 	principal := uuid.New()
 	subject := principal.String()
+	events := []audit.OutboxEvent{principalEvent(subject, "principal.created", true), userEvent(subject, "user.created")}
+	var birth *organizationBirth
+	var birthAudits []audit.AuditEvent
+	if req.Organization != nil {
+		slug, err := s.freeOrganizationSlug(ctx, registerorg.Slug(req.Organization.Name, principal))
+		if errors.Is(err, ErrOrganizationSlugCollision) {
+			return uuid.Nil, err
+		}
+		if err != nil {
+			return uuid.Nil, s.storeErr(ctx, "read the organization slug", err)
+		}
+		b := newOrganizationBirth(slug, req.Organization.Name, &principal)
+		birth = &b
+		var birthEvents []audit.OutboxEvent
+		birthAudits, birthEvents = s.birthRecords(ctx, b, provisionAudit(subject, req.Actor, true).ActorPrincipalID, req.Actor.RequestID, audit.Caller{})
+		events = append(events, birthEvents...)
+	}
 	err = audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			// The 0013 create guard counts these two rows as the state change.
@@ -82,31 +99,33 @@ VALUES ($1, $2, $2, $3, $4, CASE WHEN $3::text IS NULL THEN NULL ELSE clock_time
 			if err := insertPublicUser(ctx, tx, publicUser{ID: principal, Email: email, PasswordHash: req.PasswordHash, FullName: req.FullName, AuthProvider: provider}); err != nil {
 				return err
 			}
-			if req.Organization == nil {
+			if birth == nil {
 				return nil
 			}
-			org, err := insertPublicOwnedOrganization(ctx, tx, principal, req.Organization.Name)
-			if err != nil {
+			if err := s.insertOrganizationBirth(ctx, tx, *birth); err != nil {
 				return err
 			}
-			// go-api's register row (internal/api/session register.go:167), after the organization it
-			// references (audit_logs_org_id_fkey is not deferrable), in the same transaction (CHAOS-11400).
+			// go-api's register row (internal/api/session register.go:167) names the organization this same commit
+			// gives birth to, after its row (audit_logs_org_id_fkey is not deferrable) (CHAOS-11400).
 			changes := pyjson.NewObject()
 			changes.Set("email", email)
-			changes.Set("organization_id", org.String())
+			changes.Set("organization_id", birth.ID.String())
 			encoded, err := publicaudit.Changes(changes)
 			if err != nil {
 				return err
 			}
-			return publicaudit.UserRow(ctx, tx, org, principal, "create", "User registered", encoded)
+			return publicaudit.UserRow(ctx, tx, birth.ID, principal, "create", "User registered", encoded)
 		},
 		Audit:  provisionAudit(subject, req.Actor, req.Organization != nil),
-		Events: []audit.OutboxEvent{principalEvent(subject, "principal.created", true), userEvent(subject, "user.created")},
+		Also:   birthAudits,
+		Events: events,
 	})
 	switch {
 	case err == nil:
 	case isEmailCollision(err), isPublicEmailCollision(err):
 		return uuid.Nil, ErrEmailTaken
+	case errors.Is(err, ErrOrganizationSlugCollision):
+		return uuid.Nil, ErrOrganizationSlugCollision
 	default:
 		return uuid.Nil, s.storeErr(ctx, "provision local user", err)
 	}

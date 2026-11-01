@@ -127,6 +127,8 @@ type OrganizationReactivator interface {
 // has none yet, never changing an existing row (*identity.Store).
 type OrganizationEnsurer interface {
 	EnsureOrganization(ctx context.Context, orgID uuid.UUID) error
+	OnboardOrganization(ctx context.Context, in identity.OnboardOrganizationRequest) (*identity.BornOrganization, error)
+	CreateOrganization(ctx context.Context, in identity.CreateOrganizationRequest) (*identity.BornOrganization, error)
 }
 
 // ProvisioningDeps are the provisioning routes' collaborators.
@@ -205,12 +207,18 @@ func ProvisioningRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 		{Method: http.MethodPost, Pattern: PatternOrgSuspend, Handler: http.HandlerFunc(h.orgSuspend)},
 	}
 	routes = h.withStateRoute(routes, rows)
+	routes = h.withOrgCreateRoutes(routes, rows)
 	return routes, nil
 }
 
 // admit checks the bearer and reads the body as one strict object of the
 // allowed members. It writes the refusal and returns false when either fails.
 func (h provisioningHandlers) admit(w http.ResponseWriter, r *http.Request, op string, allowed ...string) (strictObject, audit.Caller, bool) {
+	return h.admitUpTo(w, r, op, maxProvisioningBody, allowed...)
+}
+
+// admitUpTo is admit with its own body limit.
+func (h provisioningHandlers) admitUpTo(w http.ResponseWriter, r *http.Request, op string, limit int64, allowed ...string) (strictObject, audit.Caller, bool) {
 	token, ok := bearerToken(r)
 	if !ok {
 		h.rec.refuse(w, r, op, unauthorized(reasonInvalidCredentials), nil)
@@ -220,7 +228,7 @@ func (h provisioningHandlers) admit(w http.ResponseWriter, r *http.Request, op s
 	if !ok {
 		return nil, audit.Caller{}, false
 	}
-	body, err := readStrictObject(http.MaxBytesReader(w, r.Body, maxProvisioningBody), allowed...)
+	body, err := readStrictObject(http.MaxBytesReader(w, r.Body, limit), allowed...)
 	if err != nil {
 		h.rec.refuse(w, r, op, refusal{http.StatusBadRequest, reasonMalformed}, nil)
 		return nil, audit.Caller{}, false

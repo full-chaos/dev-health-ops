@@ -100,6 +100,7 @@ var unresolvedWriters = map[string]string{
 	"internal/auth/identity/backfill.go":                     "PostgreSQL auth-schema principal and user inserts of the users backfill (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/identity/backfill_orgs.go":                "PostgreSQL auth-schema membership insert and role update of the organizations and memberships backfill (schema name interpolated); no in-scope ClickHouse table",
 	"internal/auth/identity/identities.go":                   "PostgreSQL auth-schema identity inserts (schema name interpolated); no in-scope ClickHouse table",
+	"internal/auth/identity/organizationbirth.go":            "PostgreSQL auth-schema organization insert of an organization birth (schema name interpolated) and its public organization and audit_logs rows; no in-scope ClickHouse table",
 	"internal/auth/identity/joinmembership.go":               "PostgreSQL auth-schema membership insert of a join (schema name interpolated) and its public.memberships row; no in-scope ClickHouse table",
 	"internal/auth/membership/store.go":                      "PostgreSQL auth-schema memberships writes of the membership aggregate (schema name interpolated) and their public.memberships rows; no in-scope ClickHouse table",
 	"internal/auth/invite/store.go":                          "PostgreSQL auth-schema invites writes of the invite aggregate (schema name interpolated), their public.org_invites rows and go-api audit_logs rows; no in-scope ClickHouse table",

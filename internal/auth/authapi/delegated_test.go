@@ -190,12 +190,12 @@ func TestDelegatedStartUnderEdDSAAddsTheSessionToken(t *testing.T) {
 	if r.Code != http.StatusCreated {
 		t.Fatalf("status %d: %s", r.Code, r.Body)
 	}
-	want := []string{"access_token", "expires_in", "session", "session_token", "token_type"}
+	want := []string{"access_token", "expires_in", "session", "session_access_token", "token_type"}
 	if got := memberNames(t, r.Body.Bytes()); !slices.Equal(got, want) {
 		t.Fatalf("members %v, want %v", got, want)
 	}
 	answer := jsonBody(t, r)
-	act, _ := payloadOf(t, answer["session_token"].(string))["act"].(map[string]any)
+	act, _ := payloadOf(t, answer["session_access_token"].(string))["act"].(map[string]any)
 	if act["sub"] != session.WirePrincipalID(record.Delegation.Actor) {
 		t.Fatalf("session token act = %v", act)
 	}

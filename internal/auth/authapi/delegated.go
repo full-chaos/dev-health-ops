@@ -40,11 +40,11 @@ type DelegatedSessions interface {
 type delegatedAnswer struct {
 	Session     contracts.Session `json:"session"`
 	AccessToken string            `json:"access_token"`
-	// SessionToken is the session routes' token under the eddsa class; absent
-	// under hs256_compat.
-	SessionToken string `json:"session_token,omitempty"`
-	TokenType    string `json:"token_type"`
-	ExpiresIn    int    `json:"expires_in"`
+	// SessionAccessToken is the session routes' token under the eddsa class;
+	// absent under hs256_compat.
+	SessionAccessToken string `json:"session_access_token,omitempty"`
+	TokenType          string `json:"token_type"`
+	ExpiresIn          int    `json:"expires_in"`
 }
 
 // withDelegatedRoutes mounts the delegated routes when the embedded
@@ -157,7 +157,7 @@ func (h compatHandlers) startDelegated(w http.ResponseWriter, r *http.Request) {
 	}
 	h.rec.record(ctx, opDelegatedStart, "success", reasonAccepted, nil)
 	writeJSON(w, http.StatusCreated, delegatedAnswer{
-		Session: record.Wire(), AccessToken: tokens.Access, SessionToken: tokens.Session, TokenType: "bearer", ExpiresIn: tokens.ExpiresIn,
+		Session: record.Wire(), AccessToken: tokens.Access, SessionAccessToken: tokens.Session, TokenType: "bearer", ExpiresIn: tokens.ExpiresIn,
 	})
 }
 

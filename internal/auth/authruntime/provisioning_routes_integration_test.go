@@ -589,13 +589,12 @@ token_version, created_at, updated_at) VALUES ($1, $2, NULL, 'local', true, true
 	}
 }
 
-// The service account routes through configure with their profile rows planted (they ship dark: the embedded document has none yet), as the runtime role: an organization owner creates an account with a member as its owner, disables,
+// The service account routes through configure with the embedded endpoint-profile document (the startup gate passes with the routes on), as the runtime role: an organization owner creates an account with a member as its owner, disables,
 // enables and moves it; each write has its audit row naming the actor, the owner and the caller credential; a viewer,
 // an unknown account and an unprojected actor are refused as named; a repeat disable is 409.
 func TestProvisioningServiceAccountsThroughConfigure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	withProfileRow(t, authapi.PatternServiceAccountCreate, authapi.PatternServiceAccountDisable, authapi.PatternServiceAccountEnable, authapi.PatternServiceAccountOwner)
 	e, header := newProvisioningEnv(t, ctx)
 	boss, org := e.seed(t, ctx)
 	first, second, viewer := e.account(t, ctx, acctMail(), false, true), e.account(t, ctx, acctMail(), false, true), e.account(t, ctx, acctMail(), false, true)
@@ -678,7 +677,6 @@ token_version, created_at, updated_at) VALUES ($1, $2, NULL, 'local', true, true
 func TestProvisioningServiceAccountsWhileUsersAreNotOwned(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	withProfileRow(t, authapi.PatternServiceAccountCreate, authapi.PatternServiceAccountDisable, authapi.PatternServiceAccountEnable, authapi.PatternServiceAccountOwner)
 	e := newRoutesEnvWith(t, ctx, map[string]string{authconfig.EnvMembershipRoutes: "true", authconfig.EnvInviteTokenSecret: provisioningInviteSecret,
 		authconfig.EnvInviteTokenSecretPrevious: provisioningInvitePrevious})
 	token, _ := e.issuerCredential(t, ctx, "auth-session-issuer", `["memberships:write", "sessions:issue"]`, false, false)

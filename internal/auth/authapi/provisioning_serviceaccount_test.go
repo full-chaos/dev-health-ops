@@ -374,61 +374,36 @@ func TestServiceAccountRoutesTakeTheGoAPIWorkloadTokenAndNoOtherSubject(t *testi
 	}
 }
 
-// The routes are dark until their rows ship: not on the startup gate, mounted only with a row listing every class they
-// admit, each left out with one log line naming it, and the service starts either way.
-func TestServiceAccountRoutesMountOnlyWithTheirRow(t *testing.T) {
+// serviceAccountPatterns are the service account routes.
+var serviceAccountPatterns = []string{PatternServiceAccountCreate, PatternServiceAccountDisable, PatternServiceAccountEnable, PatternServiceAccountOwner}
+
+func TestServiceAccountRoutesAreOnTheStartupGate(t *testing.T) {
+	f := newProvFixture(t)
 	for _, c := range serviceAccountCases() {
-		if slices.Contains(provisioningPatterns, c.path) {
-			t.Fatalf("%s is on the startup gate before its row ships", c.path)
+		if !slices.Contains(provisioningPatterns, c.path) || provisioningRouteOps[c.op] != c.path {
+			t.Fatalf("%s is not in the provisioning patterns or route operations", c.path)
 		}
-		if provisioningRouteOps[c.op] != c.path {
-			t.Fatalf("%s is not in the route operations", c.op)
+		routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
+			Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa,
+			ProfileRows: embeddedDocWithoutRow(t, c.path)})
+		if !errors.Is(err, errProvisioningRows) || routes != nil || !strings.Contains(err.Error(), "POST "+c.path+" ") {
+			t.Fatalf("a document without the %s row built %d routes, err %v; want none and a refusal naming it", c.path, len(routes), err)
 		}
 	}
-	// No row: every route answers 404, one line names each, and the other routes still serve.
-	f := newProvFixtureWith(t, docWithRows(t, PatternOrgSuspend))
+}
+
+func TestServiceAccountRoutesAreServedWithTheEmbeddedDocument(t *testing.T) {
+	f := newProvFixtureWith(t, nil)
 	for _, c := range serviceAccountCases() {
-		before := f.sa.calls
-		if response := f.post(c.path, encode(c.body(f, f.super)), nil); response.Code != http.StatusNotFound {
-			t.Fatalf("%s with no row: %d, want 404", c.path, response.Code)
-		}
-		if f.sa.calls != before || !strings.Contains(f.logs.String(), `"route":"`+c.path+`"`) {
-			t.Fatalf("%s with no row reached the verb or logged no not-mounted line", c.path)
+		if response := f.post(c.path, encode(c.body(f, f.super)), nil); response.Code != http.StatusOK {
+			t.Fatalf("%s over the embedded document: %d %s", c.path, response.Code, response.Body)
 		}
 	}
-	if response := f.post(PatternOrgSuspend, encode(routeCases()[8].body(f, f.super)), nil); response.Code != http.StatusOK {
-		t.Fatalf("another provisioning route with the service account rows missing: %d", response.Code)
-	}
-	// One row: only that route is served.
-	one := newProvFixtureWith(t, docWithRows(t, PatternOrgSuspend, PatternServiceAccountEnable))
-	for _, c := range serviceAccountCases() {
-		want := http.StatusNotFound
-		if c.path == PatternServiceAccountEnable {
-			want = http.StatusOK
-		}
-		if response := one.post(c.path, encode(c.body(one, one.super)), nil); response.Code != want {
-			t.Fatalf("%s with only the enable row: %d, want %d", c.path, response.Code, want)
-		}
-	}
-	// With the go-api workload path on, a row that lists only the session issuer class leaves the route out.
-	var document map[string]any
-	if err := json.Unmarshal(docWithRow(t, PatternOrgSuspend), &document); err != nil {
-		t.Fatal(err)
-	}
-	for _, item := range document["rows"].([]any) {
-		if row := item.(map[string]any); slices.Contains(serviceAccountPatterns, row["route"].(string)) {
-			row["accepted_credential_classes"] = []any{serviceSessionIssuerClass}
-		}
-	}
-	issuerOnly, err := json.Marshal(document)
-	if err != nil {
-		t.Fatal(err)
-	}
-	w := newWorkloadIssueFixture(t)
-	g := newProvFixtureFor(t, issuerOnly, w.workload)
-	for _, c := range serviceAccountCases() {
-		if response := g.post(c.path, encode(c.body(g, g.super)), nil); response.Code != http.StatusNotFound {
-			t.Fatalf("%s with a row for the issuer class only and the workload path on: %d, want 404", c.path, response.Code)
+	for _, line := range strings.Split(f.logs.String(), "\n") {
+		for _, pattern := range serviceAccountPatterns {
+			if strings.Contains(line, "not mounted") && strings.Contains(line, pattern) {
+				t.Fatalf("a not-mounted line for %s over the embedded document: %s", pattern, line)
+			}
 		}
 	}
 }

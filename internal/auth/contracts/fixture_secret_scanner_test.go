@@ -489,6 +489,7 @@ func scanFixtureBudgeted(name, content string, waiveStrictDecode bool) ([]string
 		}
 		// A key split across the two decoded segments reads as one value only when a header value and a payload
 		// value are joined.
+		// Only a token that is erased as strict synthetic JWS reaches this join: a waived (non-strict) token gets no header|payload join.
 		findings = append(findings, scanJoinedSegments(budget, name, headerText, payloadText)...)
 		return "SYNTHETIC-JWS"
 	})

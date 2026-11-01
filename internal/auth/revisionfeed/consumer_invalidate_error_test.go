@@ -3,6 +3,9 @@ package revisionfeed
 import (
 	"errors"
 	"testing"
+	"time"
+
+	"go.opentelemetry.io/otel/sdk/metric"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 )
@@ -134,4 +137,58 @@ func TestTheSubscriberRetriesAFailedResubscribeInvalidateAll(t *testing.T) {
 	s.hooks.OnSubscribed()
 	waitFor(t, "a second InvalidateAll", func() bool { return countCalls(rig, true) >= 2 })
 	waitFor(t, "the subscription gauge", func() bool { return gaugeValue(t, rig.reader) == 1 })
+}
+
+func TestAFailedInvalidationIsCountedAsInvalidateFailedAndNotAsApplied(t *testing.T) {
+	reader := metric.NewManualReader()
+	provider := metric.NewMeterProvider(metric.WithReader(reader))
+	rec := &recorder{}
+	c, err := NewConsumer(Config{Invalidator: rec, Meter: provider.Meter("test")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := t.Context()
+	rec.failNext(2)
+	c.Handle(ctx, ev("principal", "p1", 1))
+	c.Handle(ctx, ev("organization", "o1", 4))
+	for _, tc := range []struct {
+		name, key, value string
+		want             int64
+	}{
+		{"devhealth_auth_revision_feed_events_total", "disposition", "invalidate_failed", 2},
+		{"devhealth_auth_revision_feed_events_total", "disposition", "apply", 0},
+		{"devhealth_auth_revision_feed_events_total", "disposition", "gap", 0},
+		{"devhealth_auth_revision_feed_resync_total", "cause", "gap", 0},
+	} {
+		if got := counterValue(t, reader, tc.name, tc.key, tc.value); got != tc.want {
+			t.Errorf("after two failures %s{%s=%s} = %d, want %d", tc.name, tc.key, tc.value, got, tc.want)
+		}
+	}
+	c.Handle(ctx, ev("principal", "p1", 1))
+	if got := counterValue(t, reader, "devhealth_auth_revision_feed_events_total", "disposition", "apply"); got != 1 {
+		t.Errorf("apply after the retry = %d, want 1", got)
+	}
+}
+
+// A retry request raised on a subscription that already ended must not start a catch-up on the next one before that one
+// is confirmed: the read would come before the subscribe, and the gauge would read 1 with no subscription.
+func TestARetryRequestFromAnEndedSubscriptionWaitsForTheNextConfirmedSubscribe(t *testing.T) {
+	rig := startSubscriber(t)
+	first := rig.client.next(t)
+	first.hooks.OnSubscribed()
+	waitFor(t, "gauge 1", func() bool { return gaugeValue(t, rig.reader) == 1 })
+	first.done <- errors.New("connection reset")
+	second := rig.client.next(t)
+	reads := rig.client.hgetalls()
+	rig.rec.failNext(1)
+	first.hooks.OnMessage("user:u1:1") // a late delivery on the ended subscription; its invalidation fails
+	time.Sleep(50 * time.Millisecond)
+	if n := rig.client.hgetalls(); n != reads {
+		t.Fatalf("%d HGETALL before the second subscribe was confirmed", n-reads)
+	}
+	if got := gaugeValue(t, rig.reader); got != 0 {
+		t.Fatalf("gauge %d before the second subscribe was confirmed, want 0", got)
+	}
+	second.hooks.OnSubscribed()
+	waitFor(t, "gauge 1 after the second subscribe", func() bool { return gaugeValue(t, rig.reader) == 1 })
 }

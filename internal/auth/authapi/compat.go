@@ -11,6 +11,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
 
+	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
@@ -93,6 +94,9 @@ type CompatDeps struct {
 	// Limits holds the login limits' windows and the digest key. Required
 	// while Login is set.
 	Limits *Limits
+	// Validate mounts POST /api/v1/auth/validate when the embedded
+	// endpoint-profile document holds its row; nil leaves it unmounted.
+	Validate *ValidateConfig
 }
 
 type compatHandlers struct {
@@ -107,6 +111,12 @@ type compatHandlers struct {
 // social-login when they are configured. Each registration is on a line of
 // its own.
 func CompatRoutes(deps CompatDeps) ([]httpapi.Route, error) {
+	return compatRoutes(deps, authv1.AuthServiceEndpointProfiles)
+}
+
+// compatRoutes is CompatRoutes over a given endpoint-profile document: the
+// validate route mounts only on its row there.
+func compatRoutes(deps CompatDeps, rows []byte) ([]httpapi.Route, error) {
 	if deps.Sessions == nil || deps.Users == nil || deps.Issuer == nil || deps.Projector == nil || deps.AppendAudit == nil {
 		return nil, errors.New("authapi: compatibility routes need sessions, users, an issuer, a projector and an audit appender")
 	}

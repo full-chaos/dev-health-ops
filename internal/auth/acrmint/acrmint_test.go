@@ -156,7 +156,7 @@ func decode(t *testing.T, compact string) (map[string]any, []byte, []byte) {
 
 // TestMintedTokenIsAnAccessTokenV1OfItsACRAudience: each ACR audience gets
 // exactly the access-token.v1 claim set with its own scope, the 10 minute
-// default life, org_id, the wire sub and sid, and a signature that verifies
+// (600 s, pinned as a literal) default life, org_id, the wire sub and sid, and a signature that verifies
 // under the signer's published active key.
 func TestMintedTokenIsAnAccessTokenV1OfItsACRAudience(t *testing.T) {
 	root, err := contracts.RepoRoot(".")
@@ -182,7 +182,7 @@ func TestMintedTokenIsAnAccessTokenV1OfItsACRAudience(t *testing.T) {
 			if c.Iss != testIssuer || c.Aud != audience || c.Scope != scope || c.PrincipalType != "human" ||
 				c.Sub != session.WirePrincipalID(testPrincipal) || c.Sid != session.WireSessionID(testSession) ||
 				c.OrgID == nil || *c.OrgID != testOrg.String() || c.Iat != testNow.Unix() || c.Nbf != c.Iat ||
-				c.Exp-c.Iat != int64(DefaultLifetime/time.Second) || c.Jti == "" {
+				c.Exp-c.Iat != 600 || c.Jti == "" {
 				t.Fatalf("claims %+v", c)
 			}
 			set, err := f.signer.KeySet(context.Background())

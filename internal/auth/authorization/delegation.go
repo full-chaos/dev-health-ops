@@ -96,6 +96,8 @@ func (e *Evaluator) Evaluate(r Request, s Snapshot) Decision {
 		return deny(ReasonDelegationInvalid)
 	case r.ResourceKind != resourcePlatform && r.OrganizationID != del.TargetOrganizationID:
 		return deny(ReasonDelegationInvalid)
+	case r.ResourceKind == resourceRepository && r.ResourceKey == wildcardKey:
+		return deny(ReasonImpersonationDenied)
 	}
 
 	d := e.evaluateBase(r, s)

@@ -32,8 +32,19 @@ func TestParseStateKeepsTheFiveMemberAnswer(t *testing.T) {
 	}
 }
 
+func TestParseStateReadsBothOptionalMembers(t *testing.T) {
+	actor := uuid.New()
+	state, err := parseState([]byte(delegatedStateDocument(`,"client_class":"browser","actor_principal_id":"` + actor.String() + `"`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.ClientClass != "browser" || state.ActorPrincipalID == nil || *state.ActorPrincipalID != actor {
+		t.Fatalf("state = %+v, want browser and %s", state, actor)
+	}
+}
+
 func TestParseStateRefusesAnUnknownSixthMember(t *testing.T) {
-	for _, member := range []string{`,"client_class":"web"`, `,"actor":"x"`, `,"actor_principal_id2":null`} {
+	for _, member := range []string{`,"client_id":"web"`, `,"actor":"x"`, `,"actor_principal_id2":null`} {
 		if _, err := parseState([]byte(delegatedStateDocument(member))); err == nil {
 			t.Fatalf("member %s was accepted", member)
 		}

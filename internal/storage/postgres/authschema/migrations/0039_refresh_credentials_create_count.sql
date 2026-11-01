@@ -1,4 +1,4 @@
--- 0038 the create guard counts a new refresh credential. ADDITIVE ONLY. See 0001's header.
+-- 0039 the create guard counts a new refresh credential. ADDITIVE ONLY. See 0001's header.
 --
 -- A refresh exchange commits its rotation with its auth.session.refreshed
 -- audit row through audit.Commit (CHAOS-11400), and the successor credential

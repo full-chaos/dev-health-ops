@@ -380,6 +380,11 @@ func TestDelegationRefusals(t *testing.T) {
 				t.Fatal(err)
 			}
 		}},
+		{"target_is_an_external_source", ErrTargetUnavailable, func(t *testing.T, c *delegationCase, in *StartInput) {
+			if _, err := d.admin.Exec(ctx, `UPDATE auth.principals SET kind = 'external_source' WHERE id = $1`, c.target); err != nil {
+				t.Fatal(err)
+			}
+		}},
 		{"target_not_a_member", ErrTargetNotMember, func(t *testing.T, c *delegationCase, in *StartInput) {
 			in.OrganizationID = d.org(t, ctx)
 		}},

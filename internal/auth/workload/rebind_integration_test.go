@@ -153,3 +153,27 @@ func TestWorkloadDisableStopsEveryBindingAndAuditsOnce(t *testing.T) {
 		t.Fatalf("disable audit rows = %d, want 1", c)
 	}
 }
+
+func TestRebindTouchesOnlyTheNamedBinding(t *testing.T) {
+	e := getEnv(t)
+	ctx := ctxT(t)
+	n, first := pinnedBinding(t, e)
+	second := first
+	second.ServiceAccountName = "sa-probe-9z"
+	second.ServiceAccountUID = uuid.NewString()
+	if _, err := e.writer.AddBinding(ctx, n, second, Actor{}); err != nil {
+		t.Fatal(err)
+	}
+	newUID := uuid.NewString()
+	if _, changed, err := e.writer.RebindBinding(ctx, tupleOf(second), newUID, Actor{}); err != nil || !changed {
+		t.Fatalf("RebindBinding = %v changed=%t", err, changed)
+	}
+	if _, err := e.reader.Resolve(ctx, first.input()); err != nil {
+		t.Fatalf("rebound the wrong binding: the other binding now refuses its own uid: %v", err)
+	}
+	moved := second
+	moved.ServiceAccountUID = newUID
+	if _, err := e.reader.Resolve(ctx, moved.input()); err != nil {
+		t.Fatalf("the named binding refuses its new uid: %v", err)
+	}
+}

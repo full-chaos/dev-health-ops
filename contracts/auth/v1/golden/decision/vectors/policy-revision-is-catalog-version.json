@@ -35,5 +35,5 @@
     "snapshot": "grant",
     "workload": null
   },
-  "why": "policy_revision of a decision is the embedded catalog version (5), allow and deny alike."
+  "why": "policy_revision of a decision is the embedded catalog version, allow and deny alike."
 }

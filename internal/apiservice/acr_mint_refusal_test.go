@@ -51,7 +51,7 @@ func acrFileSigner(t *testing.T) *token.Signer {
 
 type noImpersonation struct{}
 
-func (noImpersonation) ImpersonatingActor(context.Context, uuid.UUID) (bool, error) {
+func (noImpersonation) ImpersonatingActor(context.Context, uuid.UUID, uuid.UUID) (bool, error) {
 	return false, nil
 }
 
@@ -61,6 +61,11 @@ func (noImpersonation) ImpersonatingActor(context.Context, uuid.UUID) (bool, err
 // api listener and reads nothing. Positive controls: a platform token over the
 // same key set is served after reads, and the minted token is a valid
 // access-token.v1 document.
+//
+// The sid of a minted ACR token is an OAuth client session's, and this cell is what
+// lets internal/api/policy's sessionStateQuery read a row's own revoked_at: a client
+// session's sid is refused here with zero reads, and no platform minter writes one.
+// If a platform minter ever writes a client session's sid, that query changes first.
 func TestAnACRMintedTokenIsRefusedAtGoAPIBeforeAnyRead(t *testing.T) {
 	ctx := context.Background()
 	root, err := contracts.RepoRoot(".")

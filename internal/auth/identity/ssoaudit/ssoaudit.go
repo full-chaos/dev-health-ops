@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/auth/publicaudit"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -30,14 +31,8 @@ type Execer interface {
 	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
 }
 
-const auditInsertSQL = `INSERT INTO public.audit_logs
-	(id, org_id, user_id, action, resource_type, resource_id, description,
-	 changes, request_metadata, status, error_message, created_at)
-VALUES
-	($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`
-
-// Insert writes row into go-api's public.audit_logs with internal/api/audit.PGWriter's columns and value types, so
-// both services write the same row for the same refusal. ErrorMessage is written as given.
+// Insert writes row into go-api's public.audit_logs through publicaudit.Insert (internal/api/audit.PGWriter's columns
+// and value types), so both services write the same row for the same refusal. ErrorMessage is written as given.
 func Insert(ctx context.Context, exec Execer, row Row, at time.Time) error {
 	meta := pyjson.NewObject()
 	meta.Set("protocol", row.Protocol)
@@ -49,12 +44,10 @@ func Insert(ctx context.Context, exec Execer, row Row, at time.Time) error {
 		return err
 	}
 	message := row.ErrorMessage
-	var user *uuid.UUID
-	var description *string
-	_, err = exec.Exec(ctx, auditInsertSQL,
-		uuid.New(), row.OrgID, user, "sso_login", "sso_provider", row.ProviderID.String(), description,
-		[]byte("{}"), []byte(metaJSON), "failure", &message, at.UTC())
-	return err
+	return publicaudit.Insert(ctx, exec, publicaudit.Row{
+		OrgID: row.OrgID, Action: "sso_login", ResourceType: "sso_provider", ResourceID: row.ProviderID.String(),
+		Changes: []byte("{}"), RequestMetadata: []byte(metaJSON), Status: "failure", ErrorMessage: &message, CreatedAt: at,
+	})
 }
 
 // ProviderFailure records a provider failure of a sign-in. The sign-in answers only after the record is written; a
@@ -157,9 +150,9 @@ func insertSuccess(ctx context.Context, exec Execer, success Success, at time.Ti
 	if err != nil {
 		return err
 	}
-	var description, message *string
-	_, err = exec.Exec(ctx, auditInsertSQL,
-		uuid.New(), success.OrgID, &success.PrincipalID, "sso_login", "session", success.PrincipalID.String(), description,
-		[]byte("{}"), []byte(metaJSON), "success", message, at.UTC())
-	return err
+	return publicaudit.Insert(ctx, exec, publicaudit.Row{
+		OrgID: success.OrgID, UserID: &success.PrincipalID, Action: "sso_login", ResourceType: "session",
+		ResourceID: success.PrincipalID.String(), Changes: []byte("{}"), RequestMetadata: []byte(metaJSON), Status: "success",
+		CreatedAt: at,
+	})
 }

@@ -72,6 +72,39 @@ type fakeSessions struct {
 	legacyErr error
 	// exchanges counts every Exchange, accepted or refused: each one writes.
 	exchanges int
+	// StartDelegation and EndDelegation.
+	delegated session.Record
+	startErr  error
+	started   []session.StartInput
+	ended     []uuid.UUID
+	endErr    error
+}
+
+func (f *fakeSessions) StartDelegation(_ context.Context, in session.StartInput) (session.Record, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.started = append(f.started, in)
+	if f.startErr != nil {
+		return session.Record{}, f.startErr
+	}
+	return f.delegated, nil
+}
+
+func (f *fakeSessions) EndDelegation(_ context.Context, id uuid.UUID, _ session.Actor) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.endErr != nil {
+		return false, f.endErr
+	}
+	record, ok := f.records[id]
+	switch {
+	case !ok:
+		return false, session.ErrSessionNotFound
+	case record.Delegation == nil:
+		return false, session.ErrNotDelegated
+	}
+	f.ended = append(f.ended, id)
+	return true, nil
 }
 
 // createdSession is one CreateAudited or CreateSupersedingAudited call;
@@ -123,7 +156,7 @@ func (f *fakeSessions) CreateSupersedingAudited(ctx context.Context, principal u
 	return issued, nil
 }
 
-func (f *fakeSessions) ExchangeLegacy(_ context.Context, legacy session.LegacyRefresh) (session.Result, error) {
+func (f *fakeSessions) ExchangeLegacyGuarded(_ context.Context, legacy session.LegacyRefresh, _ session.Guard) (session.Result, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.legacy = append(f.legacy, legacy)

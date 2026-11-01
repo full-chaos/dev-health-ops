@@ -35,6 +35,8 @@ var allowedAttributeKeys = map[string]struct{}{
 	"related_key_id":      {},
 	"rotation_verb":       {},
 	"rotation_refusal":    {},
+	// The oauth.consent.* and oauth.client_session.created rows.
+	"client_class": {},
 	// The auth.workload.token_issued row: the token's jti and the registry
 	// rows it came from.
 	"jti":          {},
@@ -161,7 +163,7 @@ func validateRequestID(v string) error {
 var attributeVocabulary = map[string][]string{
 	"reason_code": {
 		"role_granted", "role_revoked", "membership_added", "membership_removed", "membership_status_changed",
-		"grant_created", "grant_revoked", "credential_issued", "credential_rotated", "credential_revoked",
+		"grant_created", "grant_updated", "grant_revoked", "credential_issued", "credential_rotated", "credential_revoked",
 		"session_revoked", "organization_created", "organization_updated", "principal_disabled",
 		"principal_enabled", "principal_projected", "principal_provisioned", "email_verified", "password_changed", "password_reset", "password_reset_requested",
 		"identity_linked", "identity_unlinked", "identity_projected", "identity_relinked", "policy_revision_activated",
@@ -191,7 +193,10 @@ var attributeVocabulary = map[string][]string{
 	"provider":       {"local", "github", "gitlab", "jira", "linear", "google", "microsoft", "saml", "oidc"},
 	"client_service": {"auth-service", "api", "web", "billing-edge", "worker", "acr-api", "acr-mcp"},
 	// audience is a workload token's aud: a workload audience only.
-	"audience":         {"auth-service", "dev-health-api"},
+	// oauth.* rows carry the audience of the grant, an ACR audience.
+	"audience": {"auth-service", "dev-health-api", "acr-api", "acr-mcp"},
+	// client_class is an OAuth client's class, from the trusted client registry.
+	"client_class":     {"browser", "mcp"},
 	"credential_class": {"user_access_token", "refresh_credential", "workload_token", "acr_client", "external_push", "service_account_key", "workload_bootstrap_credential"},
 	// source names who started an auth-service record: go-api-delegated is a
 	// session go-api signed the user in for and asked auth-service to issue.

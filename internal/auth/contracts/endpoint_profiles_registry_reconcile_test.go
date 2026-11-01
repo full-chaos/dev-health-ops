@@ -232,7 +232,7 @@ func TestTheReconcileGateRefusesPlantedMismatches(t *testing.T) {
 			}
 		},
 		"the registry loses the issue route's service credential consumer": func(_ []map[string]any, registry registryAnchors) {
-			delete(registry.consumers["internal_svc_authsess_token"], anchorKey(authHTTPLayer+"compat.go", 146))
+			delete(registry.consumers["internal_svc_authsess_token"], anchorKey(authHTTPLayer+"compat.go", 155))
 		},
 		"the registry names a workload exchange consumer no row accepts": func(_ []map[string]any, registry registryAnchors) {
 			registry.consumers["workload_token"][anchorKey("internal/auth/workloadexchange/exchange.go", 143)] = true
@@ -255,7 +255,7 @@ func TestTheReconcileGateRefusesPlantedMismatches(t *testing.T) {
 // is not a row's source directory.
 func TestTheRoutePackagesAreEveryAuthServiceRouteSource(t *testing.T) {
 	packages := routePackages(authServiceRows(t))
-	for _, want := range []string{authHTTPLayer, "internal/auth/workloadexchange/", "internal/auth/authruntime/"} {
+	for _, want := range []string{authHTTPLayer, "internal/auth/workloadexchange/", "internal/auth/authruntime/", "internal/platform/health/"} {
 		if !packages[want] {
 			t.Errorf("route packages %v lack %s", packages, want)
 		}

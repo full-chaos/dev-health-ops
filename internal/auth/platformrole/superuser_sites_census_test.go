@@ -18,21 +18,18 @@ import (
 )
 
 // superuserSite is one function that decides on platform power today: it reads
-// IsSuperuser or names the policy.Superuser guard level. mix is the number of
-// the site (PLAN-10979 1.3) where platform power is used as organization power,
-// or "-".
+// IsSuperuser or names the policy.Superuser guard level.
 type superuserSite struct {
 	file, function string
 	reads          int
-	mix            string
 }
 
 // TestEverySuperuserDecisionSiteIsListed is the census of the decision sites:
 // every non-test function that reads IsSuperuser or names policy.Superuser is
 // listed in testdata/superuser_sites.tsv with its count of reads, so a new or
-// moved site fails here. The rows marked with a mix number are the eight
-// places where platform power stands in for organization power; each becomes
-// an explicit platform action in a later change.
+// moved site fails here. The places where platform power stood in for
+// organization power decide by an explicit platform action now
+// (TestEveryPlatformActionSiteIsListed).
 func TestEverySuperuserDecisionSiteIsListed(t *testing.T) {
 	root, err := moduleroot.Root()
 	if err != nil {
@@ -60,11 +57,7 @@ func TestEverySuperuserDecisionSiteIsListed(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	mixes := map[string]bool{}
 	for key, site := range listed {
-		if site.mix != "-" {
-			mixes[site.mix] = true
-		}
 		if got := found[key]; got != site.reads {
 			t.Errorf("%s %s: %d superuser reads, listed %d (a site moved, changed or went away: update the census)", site.file, site.function, got, site.reads)
 		}
@@ -72,17 +65,12 @@ func TestEverySuperuserDecisionSiteIsListed(t *testing.T) {
 	var unlisted []string
 	for key, n := range found {
 		if _, ok := listed[key]; !ok {
-			unlisted = append(unlisted, fmt.Sprintf("%s\t%d\t-", key, n))
+			unlisted = append(unlisted, fmt.Sprintf("%s\t%d", key, n))
 		}
 	}
 	sort.Strings(unlisted)
 	for _, row := range unlisted {
-		t.Errorf("unlisted superuser decision site (add it to testdata/superuser_sites.tsv, with its mix number if it grants organization power): %s", row)
-	}
-	for i := 1; i <= 8; i++ {
-		if !mixes[strconv.Itoa(i)] {
-			t.Errorf("mix site %d is not marked on any row", i)
-		}
+		t.Errorf("unlisted superuser decision site (add it to testdata/superuser_sites.tsv; a site that decides must name an explicit platform action and be listed in platform_action_sites.tsv): %s", row)
 	}
 }
 
@@ -163,8 +151,8 @@ func readSuperuserSites(t *testing.T) map[string]superuserSite {
 			continue
 		}
 		fields := strings.Split(line, "\t")
-		if len(fields) != 4 {
-			t.Fatalf("superuser_sites.tsv: %q is not file, function, reads, mix", line)
+		if len(fields) != 3 {
+			t.Fatalf("superuser_sites.tsv: %q is not file, function, reads", line)
 		}
 		reads, err := strconv.Atoi(fields[2])
 		if err != nil || reads < 1 {
@@ -174,7 +162,7 @@ func readSuperuserSites(t *testing.T) map[string]superuserSite {
 		if _, dup := sites[key]; dup {
 			t.Fatalf("superuser_sites.tsv: %s listed twice", key)
 		}
-		sites[key] = superuserSite{file: fields[0], function: fields[1], reads: reads, mix: fields[3]}
+		sites[key] = superuserSite{file: fields[0], function: fields[1], reads: reads}
 	}
 	if err := scanner.Err(); err != nil {
 		t.Fatal(err)

@@ -437,6 +437,17 @@ authService:
     #    (AUTH_SESSION_READER_ROLES). Each must already exist. Empty grants none:
     #    a token auth-service issued is then refused by go-api and query-api.
     sessionReaderRoles: []
+    # -- CHAOS-10895: the External Push lifecycle append function. writerRole is a
+    #    NOLOGIN role that owns it (AUTH_PUSH_LIFECYCLE_WRITER_ROLE) and
+    #    callerRoles the logins that may execute it (go-api's API_DATABASE_ROLE
+    #    only; AUTH_PUSH_LIFECYCLE_CALLER_ROLES). The writer role must exist and
+    #    the migration login must be a member of it BEFORE this Job runs: a
+    #    privileged step, see docs/contribute/architecture/auth-control-plane-deployment.md.
+    #    Empty leaves the function unexecutable (go-api's AUTH_PUSH_LIFECYCLE_EVENTS
+    #    must stay off).
+    pushLifecycle:
+      writerRole: ""
+      callerRoles: []
     # -- The logins that must read auth sessions from phase 2 (sessions): go-api's API_DATABASE_ROLE and query-api's registry login. Both
     #    are granted like sessionReaderRoles (the rendered list is the union);
     #    phase >= 2 fails the render while either is empty.

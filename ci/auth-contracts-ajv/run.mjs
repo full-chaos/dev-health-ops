@@ -50,6 +50,8 @@ const REQUIRED_GROUPS = {
   "invite": ["accept", "reject"],
   "invite-create-request": ["accept", "reject"],
   "invite-accept-request": ["accept", "reject"],
+  "oauth-clients": ["accept", "reject"],
+  "oauth-authorization-server": ["accept", "reject"],
 };
 const DEFAULT_REQUIRED_GROUPS = ["accept", "reject", "reject_by_client"];
 
@@ -140,6 +142,7 @@ const APPROVED_AUDIT = [
   "membership_removed",
   "membership_status_changed",
   "grant_created",
+  "grant_updated",
   "grant_revoked",
   "credential_issued",
   "credential_rotated",

@@ -132,9 +132,17 @@ channel.
   aggregate: the next revision applies (the aggregate is invalidated), a duplicate
   or older one is ignored, a revision that skips ahead is a gap (the aggregate is
   invalidated and the mark moves to the gap revision, so the gap does not repeat).
+  The invalidation runs **before** the cursor and the mark move. Events of one
+  aggregate are handled one at a time from the classification to the move (other
+  aggregates do not wait), so a live event and a catch-up floor of one revision
+  invalidate it once. An invalidation
+  that returns an error leaves both where they were and is returned: a live
+  event asks for a catch-up (the floor applies it again), a catch-up or a failed
+  `InvalidateAll` of a (re)subscribe retries with the backoff, and
+  `subscription_up` stays 0 until the `InvalidateAll` and the read succeeded.
   No decision cache exists yet (5.8), so the invalidator is a no-op and the
   consumer keeps its watermarks and metrics. Metrics:
-  `devhealth_auth_revision_feed_events_total{disposition=apply|ignore|gap|dropped}` (`dropped`: a live message or a catch-up floor refused before the cursor, because it is malformed or its revision is outside 1..2^53-1; the cursor never moves on it),
+  `devhealth_auth_revision_feed_events_total{disposition=apply|ignore|gap|dropped|invalidate_failed}` (`dropped`: a live message or a catch-up floor refused before the cursor, because it is malformed or its revision is outside 1..2^53-1; the cursor never moves on it; `invalidate_failed`: the invalidation returned an error, the event is not applied and is retried),
   `devhealth_auth_revision_feed_resync_total{cause=gap|resubscribe}` and
   `devhealth_auth_revision_feed_subscription_up` (1 while subscribed and caught up). No
   aggregate id is a label, and no log line carries an id or a payload.

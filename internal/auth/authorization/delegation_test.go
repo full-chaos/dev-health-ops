@@ -550,6 +550,9 @@ func TestDelegation_PermittedActionsOfARealSessionRecord(t *testing.T) {
 		}
 		// A record whose set lacks an action the catalog would allow still denies it: the record is the cap.
 		for _, dropped := range permitted {
+			if a, _ := cat.Action(dropped); a.ResourceKind == "repository" {
+				continue
+			}
 			rest := make([]string, 0, len(permitted))
 			for _, id := range permitted {
 				if id != dropped {
@@ -564,6 +567,38 @@ func TestDelegation_PermittedActionsOfARealSessionRecord(t *testing.T) {
 			if got := e.Evaluate(orgRequest(dropped), s); got.Allowed || got.Reason != ReasonImpersonationDenied {
 				t.Errorf("role %s: %s outside the record's permitted set: %+v", role, dropped, got)
 			}
+		}
+	}
+}
+
+// The repository read follows the record under the shipped catalog: the four organization roles delegate it, and a record without it denies.
+func TestDelegation_RepositoryReadOfARealSessionRecord(t *testing.T) {
+	cat := policycatalog.Default()
+	e := NewEvaluator()
+	for _, role := range []string{"viewer", "member", "admin", "owner"} {
+		permitted, err := cat.DelegatedActions(role)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var rest []string
+		for _, id := range permitted {
+			if id != repoAction {
+				rest = append(rest, id)
+			}
+		}
+		if len(rest) != len(permitted)-1 {
+			t.Fatalf("role %s: %s is not in the delegated set %v", role, repoAction, permitted)
+		}
+		mk := func(p []string) delegatedGrantSnapshot {
+			s := delegatedRepo(p)
+			s.grantFake = repoSnapshot(role)
+			return s
+		}
+		if got := e.Evaluate(repoRequest("acme/api"), mk(permitted)); !got.Allowed || got.Reason != ReasonAllowedByMembershipDefault {
+			t.Errorf("role %s: %+v", role, got)
+		}
+		if got := e.Evaluate(repoRequest("acme/api"), mk(rest)); got.Allowed || got.Reason != ReasonImpersonationDenied {
+			t.Errorf("role %s without the action in the record: %+v", role, got)
 		}
 	}
 }

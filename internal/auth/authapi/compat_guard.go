@@ -54,7 +54,7 @@ func guardRefresh(ctx context.Context, users Users, rec recorder, q session.Quer
 	if !found || !user.IsActive || checkPin(ctx, rec.logger, record, user) != pinCurrent {
 		return session.ErrGuardRefused
 	}
-	if record.OrganizationID != nil && !user.IsSuperuser {
+	if record.OrganizationID != nil && !user.Holds(actionAdminOrgs) {
 		// A session whose organization membership is gone (D6507) is not
 		// rotated; the handler refuses and revokes it.
 		var member bool

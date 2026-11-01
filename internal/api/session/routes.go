@@ -39,7 +39,7 @@ func (h handlers) me(w http.ResponseWriter, r *http.Request) {
 		role := session.TargetRole
 		targetRole = &role
 	}
-	permissions := userPermissions(targetRole, user.IsSuperuser, user.Role)
+	permissions := userPermissions(targetRole, user)
 	list := make([]pyjson.Value, len(permissions))
 	for index, permission := range permissions {
 		list[index] = permission

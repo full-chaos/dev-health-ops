@@ -22,7 +22,7 @@ transport writes when it answers before a route (400, 404, 405, 413, 429, 500).
 
 The closed action and role catalogs `actions.v1` and `roles.v1` (CHAOS-10637) live in
 `vocabulary/` with `action-catalog.v1` and `role-catalog.v1` schemas; the Go package
-`internal/auth/policycatalog` embeds and validates them. Catalog version 5 adds the marker role `platform_owner`, which holds no action (CHAOS-12294). Catalog version 3 adds
+`internal/auth/policycatalog` embeds and validates them. Catalog version 5 adds the marker role `platform_owner`, which holds no action (CHAOS-12294). Catalog version 9 gives `acr.context.read` to the roles that hold `git.read` (CHAOS-12347). Catalog version 3 adds
 `billing.read`, `billing.manage` and `license.read` (CHAOS-11272), held as the billing and
 licensing routes allow today; they are catalog-only, so `/auth/me` does not serve them until a
 web-reviewed change does. Catalog version 2 gives every
@@ -35,6 +35,13 @@ The provisioning resources and request bodies `organization.v1`,
 `invite.v1`, `invite-create-request.v1` and `invite-accept-request.v1`
 (CHAOS-10640) are pure schema documents. Their OpenAPI components are listed
 here; the operations arrive with the routes that serve them. Rules:
+
+`oauth-clients.v1` is the OAuth authorization server's static client registry
+(ACP-ADR-13 decision 7, CHAOS-12398): `oauth-clients.v1.json` is the one file, with
+no per-environment overlay, and `oauth-authorization-server.v1` is its RFC 8414
+document. A first-party row holds a redirect path, resolved against
+`AUTH_OAUTH_WEB_ORIGIN`, and a fixed-URI row holds its exact https URIs. A row names
+audiences, never resource URIs.
 
 - A role field is a role key of the organization roles of `roles.v1`
   (viewer, member, admin, owner). A platform role is not a membership role.

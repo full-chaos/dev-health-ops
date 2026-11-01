@@ -1,10 +1,5 @@
 {
-  "catalogs": [
-    {
-      "file": "catalogs/planted-repo-reader.json",
-      "id": "planted-repo-reader"
-    }
-  ],
+  "catalogs": [],
   "description": "The golden authorization decision corpus: each row is one decision question and its internal verdict. Rows of layer pdp run through the policy decision core; rows of layer pep run through the authorize request decoder.",
   "surface": "authorization-golden.v1",
   "vectors": [
@@ -71,11 +66,6 @@
     {
       "file": "embedded-catalog-grant-role-does-not-hold-repository-read.json",
       "id": "embedded-catalog-grant-role-does-not-hold-repository-read",
-      "layer": "pdp"
-    },
-    {
-      "file": "embedded-catalog-no-role-holds-repository-read.json",
-      "id": "embedded-catalog-no-role-holds-repository-read",
       "layer": "pdp"
     },
     {

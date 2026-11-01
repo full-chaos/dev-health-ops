@@ -91,18 +91,18 @@ func NewEdDSAIssuer(secret, legacyIssuer, audience string, signer AccessSigner, 
 	}, nil
 }
 
-func (m *eddsaMinter) mint(ctx context.Context, grant Grant, now time.Time) (string, string, error) {
-	return m.mintFor(ctx, grant, now, m.audience, m.scope)
+func (m *eddsaMinter) mint(ctx context.Context, grant Grant, now, expires time.Time) (string, string, error) {
+	return m.mintFor(ctx, grant, now, expires, m.audience, m.scope)
 }
 
 // mintSession mints the token of audience auth-service (scope auth:session)
 // for the session routes: the same claims as the access token but the
 // audience, the scope and the jti.
-func (m *eddsaMinter) mintSession(ctx context.Context, grant Grant, now time.Time) (string, string, error) {
-	return m.mintFor(ctx, grant, now, contracts.SessionRouteAudience, sessionRouteScope)
+func (m *eddsaMinter) mintSession(ctx context.Context, grant Grant, now, expires time.Time) (string, string, error) {
+	return m.mintFor(ctx, grant, now, expires, contracts.SessionRouteAudience, sessionRouteScope)
 }
 
-func (m *eddsaMinter) mintFor(ctx context.Context, grant Grant, now time.Time, audience, scope string) (string, string, error) {
+func (m *eddsaMinter) mintFor(ctx context.Context, grant Grant, now, expires time.Time, audience, scope string) (string, string, error) {
 	claims := contracts.AccessTokenClaims{
 		Iss:           m.issuer,
 		Aud:           audience,
@@ -112,12 +112,15 @@ func (m *eddsaMinter) mintFor(ctx context.Context, grant Grant, now time.Time, a
 		Jti:           uuid.NewString(),
 		Iat:           now.Unix(),
 		Nbf:           now.Unix(),
-		Exp:           now.Add(EdDSAAccessLifetime).Unix(),
+		Exp:           expires.Unix(),
 		Scope:         scope,
 	}
 	if grant.OrganizationID != nil {
 		org := grant.OrganizationID.String()
 		claims.OrgID = &org
+	}
+	if grant.Actor != nil {
+		claims.Act = &contracts.AccessTokenActor{Sub: session.WirePrincipalID(*grant.Actor)}
 	}
 	if err := checkAccessClaims(claims); err != nil {
 		return "", "", fmt.Errorf("%w: %w", errIssue, err)

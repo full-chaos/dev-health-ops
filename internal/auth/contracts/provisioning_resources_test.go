@@ -15,20 +15,25 @@ import (
 )
 
 // The organization, membership and invite provisioning resources and request
-// bodies. Each surface is a pure schema document: no rule is client-only.
+// bodies, and the OAuth client registry and authorization server metadata. Each
+// surface is a pure schema document: no rule is client-only.
 var provisioningResourceSurfaces = []string{
 	"organization", "organization-create-request",
 	"membership", "membership-update-request",
 	"invite", "invite-create-request", "invite-accept-request",
+	"oauth-clients", "oauth-authorization-server",
 }
 
 var provisioningResourceKeywordTokens = map[string]string{
 	"additionalProperties": "unexpected additional properties",
+	"const":                "const:",
 	"enum":                 "enum:",
 	"maximum":              "maximum:",
+	"minItems":             "minItems:",
 	"minLength":            "minLength:",
 	"minProperties":        "minProperties:",
 	"minimum":              "minimum:",
+	"not":                  "not:",
 	"pattern":              "pattern:",
 	"required":             "required:",
 	"type":                 "type:",

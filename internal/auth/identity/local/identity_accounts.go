@@ -10,6 +10,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
+	"github.com/full-chaos/dev-health-ops/internal/auth/publicaudit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
 
@@ -56,6 +57,10 @@ type IdentityAccounts struct {
 	Links ResetLinks
 	// Now is the verification time; nil means time.Now.
 	Now func() time.Time
+	// PasswordRow writes a password write's go-api public.audit_logs row in its
+	// transaction, with the organization of the session the write issues (nil:
+	// none); nil means passwordPublicRow. A test of the call sequence replaces it.
+	PasswordRow func(ctx context.Context, tx audit.TxOps, req PasswordEnd, sessionOrg *uuid.UUID) error
 }
 
 func (a IdentityAccounts) actor(ctx context.Context) identity.Actor {
@@ -116,11 +121,12 @@ func (a IdentityAccounts) PeekResetLink(ctx context.Context, tokenHash [32]byte)
 
 func (a IdentityAccounts) SetPasswordEndingSessions(ctx context.Context, req PasswordEnd) (PasswordEndResult, error) {
 	var (
-		ended   session.Ended
-		links   int64
-		result  PasswordEndResult
-		cause   = identity.PasswordChanged
-		endFunc = func(ctx context.Context, tx audit.TxOps) error {
+		ended      session.Ended
+		links      int64
+		result     PasswordEndResult
+		sessionOrg *uuid.UUID
+		cause      = identity.PasswordChanged
+		endFunc    = func(ctx context.Context, tx audit.TxOps) error {
 			if req.ResetLink != nil {
 				if err := a.Links.ConsumeBoundResetLinkInTx(ctx, tx, req.ID, *req.ResetLink); err != nil {
 					return err
@@ -149,8 +155,13 @@ func (a IdentityAccounts) SetPasswordEndingSessions(ctx context.Context, req Pas
 					return err
 				}
 				result.Issued = &issued
+				sessionOrg = issued.Session.OrganizationID
 			}
-			return nil
+			write := a.PasswordRow
+			if write == nil {
+				write = passwordPublicRow
+			}
+			return write(ctx, tx, req, sessionOrg)
 		}
 	)
 	if req.ResetLink != nil {
@@ -167,6 +178,23 @@ func (a IdentityAccounts) SetPasswordEndingSessions(ctx context.Context, req Pas
 	slog.InfoContext(ctx, "password changed; credentials ended", "principal_id", req.ID.String(),
 		"sessions", ended.Sessions, "refresh_tokens", ended.RefreshTokens, "reset_links", links, "token_version", version)
 	return result, nil
+}
+
+// passwordPublicRow is go-api's row of a password write (internal/api/session verify.go:286 reset,
+// changepassword.go:178 change): password_reset "User reset password" or password_changed "User changed own
+// password", resource user/<user>, changes {}, in the organization of the session the change issues, else the
+// user's first public membership in the login order; no row for a user with no organization (CHAOS-11400). It
+// commits with the password and its auth event, or fails the write.
+func passwordPublicRow(ctx context.Context, tx audit.TxOps, req PasswordEnd, sessionOrg *uuid.UUID) error {
+	org, err := publicaudit.OrganizationOr(ctx, tx, sessionOrg, req.ID)
+	if err != nil || org == nil {
+		return err
+	}
+	action, description := "password_changed", "User changed own password"
+	if req.ResetLink != nil {
+		action, description = "password_reset", "User reset password"
+	}
+	return publicaudit.UserRow(ctx, tx, *org, req.ID, action, description, nil)
 }
 
 var _ Accounts = IdentityAccounts{}

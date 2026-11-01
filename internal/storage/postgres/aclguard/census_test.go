@@ -113,6 +113,7 @@ func TestEveryPrivilegeWriterOfTheSharedDatabaseTakesTheLock(t *testing.T) {
 	want := []string{
 		"internal/storage/postgres/authschema/defer_narrowing.go",
 		"internal/storage/postgres/authschema/grants.go",
+		"internal/storage/postgres/authschema/push_lifecycle_writer.go",
 		"internal/storage/river/migrate.go",
 		"internal/storage/roleprovision/roleprovision.go",
 	}

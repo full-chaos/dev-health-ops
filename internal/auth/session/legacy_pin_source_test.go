@@ -14,7 +14,9 @@ func TestEveryLegacyExchangedSessionIsPinnedAtCreation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(legacy), "s.insertSession(ctx, tx, legacy.PrincipalID") {
+	// insertSessionAs is insertSession with the session id named before the
+	// transaction (the exchange's auth.session.refreshed row names it).
+	if !strings.Contains(string(legacy), "s.insertSessionAs(ctx, tx, &newSession, legacy.PrincipalID") {
 		t.Fatal("ExchangeLegacy no longer creates its session through insertSession")
 	}
 	signin, err := os.ReadFile("signin.go")

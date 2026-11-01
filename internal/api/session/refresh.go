@@ -299,7 +299,7 @@ func (h handlers) refreshRole(w http.ResponseWriter, r *http.Request, tx pgx.Tx,
 		h.fail(w, r, "membership role", err)
 		return "", false
 	}
-	if !found && !user.IsSuperuser {
+	if !found && !user.Holds(policy.ActionAdminOrgs) {
 		ctx := r.Context()
 		if err := revokeFamily(ctx, tx, record.FamilyID, h.Now()); err != nil {
 			h.fail(w, r, "revoke family", err)
@@ -355,7 +355,7 @@ func (h handlers) refuseRevokedOfAGoneMember(w http.ResponseWriter, r *http.Requ
 		h.fail(w, r, "load user", err)
 		return true
 	}
-	if user == nil || user.IsSuperuser {
+	if user == nil || user.Holds(policy.ActionAdminOrgs) {
 		return false
 	}
 	_, found, err := membershipRole(ctx, tx, user.ID, orgID)

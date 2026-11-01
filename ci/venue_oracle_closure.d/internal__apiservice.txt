@@ -51,6 +51,7 @@ internal/auth/acrmint
 internal/auth/authconfig
 internal/auth/clientaddr
 internal/auth/contracts
+internal/auth/contracts/externalpush
 internal/auth/contracts/provisioning
 internal/auth/contracts/tokencorpus
 internal/auth/delegationend
@@ -65,6 +66,7 @@ internal/auth/passwordhash
 internal/auth/passwordpolicy
 internal/auth/platformrole/rule
 internal/auth/policycatalog
+internal/auth/publicaudit
 internal/auth/ratelimitvalkey
 internal/auth/requestid
 internal/auth/session

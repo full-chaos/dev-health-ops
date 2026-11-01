@@ -49,6 +49,7 @@ internal/auth/accessverify
 internal/auth/acraudience
 internal/auth/clientaddr
 internal/auth/contracts
+internal/auth/contracts/externalpush
 internal/auth/contracts/provisioning
 internal/auth/delegationend
 internal/auth/edgetoken
@@ -60,6 +61,7 @@ internal/auth/passwordpolicy
 internal/auth/platformrole
 internal/auth/platformrole/rule
 internal/auth/policycatalog
+internal/auth/publicaudit
 internal/auth/ratelimitvalkey
 internal/auth/requestid
 internal/auth/session

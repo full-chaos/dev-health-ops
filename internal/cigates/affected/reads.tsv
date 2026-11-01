@@ -30,6 +30,7 @@ internal/auth/contracts	code	contracts
 internal/auth/contracts	test	ci
 internal/auth/contracts	test	docs
 internal/auth/contracts/tokencorpus	code	contracts
+internal/auth/httpapi	test	deploy
 internal/auth/identity/oidc	test	ci
 internal/auth/identity/saml	test	ci
 internal/auth/identity/social	test	ci
@@ -235,3 +236,4 @@ internal/workersctl	code	contracts
 internal/workersctl	code	deploy
 internal/workerservice	code	contracts
 internal/workerservice	test	deploy
+internal/auth/grant	test	contracts

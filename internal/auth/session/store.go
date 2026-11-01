@@ -389,7 +389,7 @@ func (s *Store) exchange(ctx context.Context, credential contracts.SecretString,
 	var reuse *lockedSession
 	var reusedFamily string
 	// Only the rotate branch changes state (the successor credential, counted
-	// by migration 0038), so only it commits, with its auth.session.refreshed
+	// by migration refresh_credentials_create_count), so only it commits, with its auth.session.refreshed
 	// row and the caller's public row. Every other branch writes nothing and
 	// ends in ErrNoStateChange with its result set: a refusal, a grace replay
 	// (it rotates nothing: no event, no row) or a reuse, revoked below.

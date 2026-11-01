@@ -25,3 +25,5 @@ func (s *Store) EnsureOrganization(ctx context.Context, orgID uuid.UUID) error {
 	}
 	return s.ProjectOrganization(ctx, orgID)
 }
+
+func (s *Store) EnsureOrganizationFound(context.Context, uuid.UUID) (bool, error) { return false, nil }

@@ -191,3 +191,5 @@ func authorizeCallerSubjects(lookup secrets.LookupEnv, tokenIssuerURL string) ([
 	}
 	return items, nil
 }
+
+const EnvAcrEventsWorkloadSubject = "AUTH_ACR_EVENTS_WORKLOAD_SUBJECT"

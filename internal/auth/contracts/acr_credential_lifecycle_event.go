@@ -114,3 +114,7 @@ func ParseAcrCredentialLifecycleEvent(root string, raw []byte) (AcrCredentialLif
 	}
 	return event, nil
 }
+
+func ParseEmbeddedAcrCredentialLifecycleEvent([]byte) (AcrCredentialLifecycleEvent, error) {
+	return AcrCredentialLifecycleEvent{}, fmt.Errorf("%s: no embedded parser", AcrCredentialLifecycleEventSurface)
+}

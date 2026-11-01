@@ -276,6 +276,7 @@ type Config struct {
 	// SessionIssueWorkloadSubject is the one workload principal (prn_) whose
 	// workload token the session issue route accepts; empty = off.
 	SessionIssueWorkloadSubject string
+	AcrEventsWorkloadSubject    string
 
 	// AuthorizeCallerSubjects are the workload principals (prn_) whose
 	// workload token the authorize routes accept; empty = none.

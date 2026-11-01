@@ -14,3 +14,6 @@ var CredentialClasses []byte
 //
 //go:embed oauth-clients.v1.json
 var OAuthClients []byte
+
+// AcrCredentialLifecycleEventSchema is empty on this commit.
+var AcrCredentialLifecycleEventSchema []byte

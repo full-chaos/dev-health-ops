@@ -647,3 +647,5 @@ WHERE b.trust_domain = $1 AND b.issuer = $2 AND b.namespace = $3 AND b.service_a
 	}
 	return reg, "", nil
 }
+
+func (s *Store) LookupPrincipal(context.Context, uuid.UUID) (*Info, error) { return nil, ErrNotFound }

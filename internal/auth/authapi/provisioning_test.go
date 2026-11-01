@@ -297,6 +297,7 @@ type provFixture struct {
 	deprovision                                 *fakeDeprovision
 	reactivate                                  *fakeReactivate
 	sa                                          *fakeServiceAccounts
+	grants                                      *fakeGrants
 	reader                                      *sdkmetric.ManualReader
 	logs                                        *bytes.Buffer
 	mux                                         *http.ServeMux
@@ -371,7 +372,7 @@ func newProvFixtureWith(t *testing.T, profileRows []byte) *provFixture {
 func newProvFixtureFor(t *testing.T, profileRows []byte, workload *SessionIssueWorkload) *provFixture {
 	t.Helper()
 	f := &provFixture{t: t, creds: &fakeScopeCredentials{}, orgs: &fakeEnsurer{}, members: &fakeMembers{}, invites: &fakeInvites{},
-		deprovision: &fakeDeprovision{}, reactivate: &fakeReactivate{}, sa: &fakeServiceAccounts{}, reader: sdkmetric.NewManualReader(), logs: &bytes.Buffer{},
+		deprovision: &fakeDeprovision{}, reactivate: &fakeReactivate{}, sa: &fakeServiceAccounts{}, grants: &fakeGrants{}, reader: sdkmetric.NewManualReader(), logs: &bytes.Buffer{},
 		org: uuid.New(), admin: uuid.New(), owner: uuid.New(), viewer: uuid.New(), super: uuid.New(), target: uuid.New(), x: uuid.New()}
 	f.account()
 	f.users = &fakeProvUsers{
@@ -382,7 +383,7 @@ func newProvFixtureFor(t *testing.T, profileRows []byte, workload *SessionIssueW
 		roles: map[[2]uuid.UUID]string{{f.admin, f.org}: "admin", {f.owner, f.org}: "owner", {f.viewer, f.org}: "viewer"},
 	}
 	routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
-		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa, ProfileRows: profileRows,
+		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa, Grants: f.grants, ProfileRows: profileRows,
 		Workload: workload,
 		Logger:   slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		Meter:    sdkmetric.NewMeterProvider(sdkmetric.WithReader(f.reader)).Meter("test")})

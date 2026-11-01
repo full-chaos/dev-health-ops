@@ -23,6 +23,8 @@ func wireUnusableSubjects() map[string]string {
 		"replacement":  "ab�cd",
 		"edge space":   " abcd",
 		"trailing tab": "abcd\t",
+		"spaces only":  "   ",
+		"tab only":     "\t",
 	}
 }
 
@@ -124,6 +126,42 @@ func TestSubjectGuardOAuthCallbackRefusesAnUnusableSubject(t *testing.T) {
 				}
 				before := snapshotRows(t, ctx, st)
 				status, body := oauthCallbackOnce(t, st, providerID)
+				assertSubjectRefused(t, ctx, st, providerID, before, status, body)
+			})
+		}
+	}
+}
+
+// A sub the provider leaves out, sets to null, or sends as a number or a bool is no subject: the callback refuses it
+// like an empty one. "sub" is read with a blank ok, so the refusal is the edge rule's, not the claim reader's.
+func TestSubjectGuardOIDCCallbackRefusesASubThatIsNotAString(t *testing.T) {
+	shapes := map[string]func(claims map[string]any){
+		"absent":  func(claims map[string]any) { delete(claims, "sub") },
+		"null":    func(claims map[string]any) { claims["sub"] = nil },
+		"number":  func(claims map[string]any) { claims["sub"] = 12 },
+		"zero":    func(claims map[string]any) { claims["sub"] = 0 },
+		"boolean": func(claims map[string]any) { claims["sub"] = true },
+	}
+	for name, override := range shapes {
+		for _, held := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/held=%v", name, held), func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+				defer cancel()
+				st := startStack(t, ctx)
+				idp := startFakeIdP(t)
+				idp.subOverride = override
+				orgID := seedOrg(t, ctx, st.pool, "enterprise")
+				config := fmt.Sprintf(`{"client_id":"test-client","issuer":%q,"token_endpoint":%q,"jwks_uri":%q,"userinfo_endpoint":%q,"scopes":["openid","email"]}`,
+					idp.server.URL, idp.server.URL+"/token", idp.server.URL+"/jwks", idp.server.URL+"/userinfo")
+				providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
+					protocol: "oidc", status: "active", config: config, autoProvision: true, clientSecretEncryptedFallback: "s",
+				})
+				const email = "subject.guard@allowed.example"
+				if held {
+					seedAccount(t, ctx, st.pool, email, "oidc", "held-subject")
+				}
+				before := snapshotRows(t, ctx, st)
+				status, body := oidcSubjectCallback(t, st, idp, providerID, email, "unused")
 				assertSubjectRefused(t, ctx, st, providerID, before, status, body)
 			})
 		}

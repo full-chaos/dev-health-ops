@@ -211,7 +211,8 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	if deps.Guard != nil {
 		routes = append(routes, orgs.Routes(deps.Pool, deps.Guard, logger)...)
 		routes = append(routes, telemetry.Routes(deps.Pool, deps.Guard, deps.Auth, deps.Telemetry.Endpoint, logger)...)
-		routes = append(routes, customerpush.Routes(customerpush.Deps{Pool: deps.Pool, Guard: deps.Guard, Logger: logger, Cipher: deps.Decryptor})...)
+		routes = append(routes, customerpush.Routes(customerpush.Deps{Pool: deps.Pool, Guard: deps.Guard, Logger: logger, Cipher: deps.Decryptor,
+			PushLifecycleEvents: deps.PushLifecycleEvents, AuthSchema: deps.AuthSchema})...)
 		routes = append(routes, syncadmin.Routes(syncadmin.Deps{Pool: deps.Pool, ClickHouse: deps.ClickHouse, Guard: deps.Guard, Logger: logger, Decryptor: deps.Decryptor, Now: deps.Now, JiraHTTP: deps.SyncJiraHTTP})...)
 		routes = append(routes, credentials.Routes(credentials.Deps{Pool: deps.Pool, Guard: deps.Guard, Cipher: deps.Decryptor, Logger: logger, Now: deps.Now,
 			HTTPClient: credentialProbeClient, HostLookup: credentialHostLookup})...)
@@ -415,6 +416,11 @@ func configureWith(
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_platform_roles_owned", "api_platform_roles_owned_config_invalid", err)
+	}
+	deps.PushLifecycleEvents, err = ParsePushLifecycleEvents(envsecrets.ProcessLookup)
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_push_lifecycle_events", "api_push_lifecycle_events_config_invalid", err)
 	}
 	provisioningCred, sessionCred, err := newCredentials(authProxy, envsecrets.ProcessLookup)
 	if err != nil {

@@ -3,7 +3,7 @@
     "allowed": true,
     "cache_class": "",
     "expires_in_seconds": null,
-    "policy_revision": 7,
+    "policy_revision": 9,
     "reason": "allowed_by_role"
   },
   "id": "allow-platform-admin-admin-users",

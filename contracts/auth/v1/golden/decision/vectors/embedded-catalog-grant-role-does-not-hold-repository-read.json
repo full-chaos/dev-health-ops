@@ -3,7 +3,7 @@
     "allowed": false,
     "cache_class": "none",
     "expires_in_seconds": null,
-    "policy_revision": 7,
+    "policy_revision": 9,
     "reason": "repository_not_granted"
   },
   "id": "embedded-catalog-grant-role-does-not-hold-repository-read",
@@ -24,7 +24,7 @@
         "resource_key": "acme/api",
         "resource_kind": "repository",
         "revoked": false,
-        "role": "admin"
+        "role": "platform_admin"
       }
     ],
     "grants_error": false,
@@ -44,5 +44,5 @@
     "snapshot": "grant",
     "workload": null
   },
-  "why": "in the shipped catalog a live admin grant does not allow acr.context.read."
+  "why": "in the shipped catalog a live grant whose role does not hold acr.context.read (platform_admin, a platform role) does not allow it."
 }

@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	actionsSHA = "cee5744873ddebc1f2f58e4ccbcabca082fb917222496c47c7616114dda9921c"
-	rolesSHA   = "96d576c4e8b3ce89a6d075502ef1dce23a34f582bcbd55934c66edd8e9dc86af"
+	actionsSHA = "3954ee30e5194f152b8653f03704a703ee321d818295eec407630d439c98e3e7"
+	rolesSHA   = "f1a45054d839858215d813b8024cbd8a84c8d914dc6a80aa8e4ffa3a2546b390"
 )
 
 func repoRoot(t *testing.T) string {
@@ -434,12 +434,41 @@ func TestRepositoryIsAResourceKindAndNeverAScope(t *testing.T) {
 	}
 }
 
+// acr.context.read reads a context at a revision, like git.read: the organization roles that hold git.read hold it, and
+// no platform role does. The real catalog allows those roles by default.
+func TestAcrContextReadIsHeldByExactlyTheRolesThatHoldGitRead(t *testing.T) {
+	c := Default()
+	var holders []string
+	for _, r := range c.Roles() {
+		if got, want := c.Allows(r.ID, "acr.context.read"), c.Allows(r.ID, "git.read"); got != want {
+			t.Errorf("role %s: acr.context.read %v, git.read %v", r.ID, got, want)
+		}
+		if c.Allows(r.ID, "acr.context.read") {
+			holders = append(holders, r.ID)
+		}
+	}
+	sort.Strings(holders)
+	if got := strings.Join(holders, ","); got != "admin,member,owner,viewer" {
+		t.Errorf("acr.context.read is held by %q, want admin,member,owner,viewer", got)
+	}
+	if c.Allows("platform_admin", "acr.context.read") {
+		t.Error("platform_admin holds acr.context.read")
+	}
+	for _, role := range []string{"platform_admin", "platform_owner"} {
+		for _, action := range []string{"acr.context.read", "git.read"} {
+			if c.Allows(role, action) {
+				t.Errorf("%s holds %s", role, action)
+			}
+		}
+	}
+}
+
 func TestImpersonationIsDeniedOnTheG51List(t *testing.T) {
 	want := map[string]bool{
 		"admin.users": true, "admin.orgs": true, "admin.impersonate": true,
 		"admin.billing": true, "admin.flags": true, "admin.audit": true, "admin.telemetry": true, "admin.stats": true, "members.invite": true, "members.manage": true,
 		"org.write": true, "org.delete": true, "billing.manage": true, "settings.write": true, "integrations.write": true,
-		"members.update": true, "acr.context.read": true, "authz.decide": true,
+		"members.update": true, "authz.decide": true,
 	}
 	actions := Default().Actions()
 	if len(actions) != 34 {
@@ -490,6 +519,60 @@ func TestDelegatedActionsAreTheAllowedActionsOfAnOrganizationRole(t *testing.T) 
 		if _, err := Default().DelegatedActions(role); !errors.Is(err, ErrUnknownRole) {
 			t.Errorf("DelegatedActions(%q) = %v, want ErrUnknownRole", role, err)
 		}
+	}
+}
+
+func TestImpersonationValuesOfTheRepositoryReadAndTheTwoDeniedActions(t *testing.T) {
+	want := map[string]string{
+		"acr.context.read": ImpersonationAllowed,
+		"authz.decide":     ImpersonationDenied,
+		"members.update":   ImpersonationDenied,
+	}
+	for id, v := range want {
+		a, err := Default().Action(id)
+		if err != nil || a.Impersonation != v {
+			t.Errorf("%s impersonation = %q, %v; want %s", id, a.Impersonation, err, v)
+		}
+	}
+}
+
+func TestShippedRolesDelegateTheRepositoryReadExactlyWhenTheyHoldIt(t *testing.T) {
+	c := Default()
+	delegating := 0
+	for _, r := range c.Roles() {
+		if r.Scope != ScopeOrganization {
+			continue
+		}
+		got, err := c.DelegatedActions(r.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		has := false
+		for _, id := range got {
+			has = has || id == "acr.context.read"
+		}
+		if has != c.Allows(r.ID, "acr.context.read") {
+			t.Errorf("role %s: delegates acr.context.read %v, holds it %v", r.ID, has, c.Allows(r.ID, "acr.context.read"))
+		}
+		if has {
+			delegating++
+		}
+	}
+	if delegating != 4 {
+		t.Errorf("%d organization roles delegate acr.context.read, want 4", delegating)
+	}
+}
+
+func TestDelegatedActionsReturnTheRepositoryReadForARoleThatHoldsIt(t *testing.T) {
+	const actions = `{"schema_version":"actions.v1","catalog_version":1,"description":"d","actions":[{"action":"acr.context.read","scope":"organization","resource_kind":"repository","risk_class":"low","cache_class":"resource_revision_bound","impersonation":"allowed"},{"action":"x.write","scope":"organization","resource_kind":"organization","risk_class":"high","cache_class":"none","impersonation":"denied"},{"action":"x.other","scope":"organization","resource_kind":"organization","risk_class":"high","cache_class":"none","impersonation":"denied"}]}`
+	const roles = `{"schema_version":"roles.v1","catalog_version":1,"description":"d","roles":[{"role":"r","scope":"organization","actions":["acr.context.read","x.write"]}]}`
+	c, err := Load([]byte(actions), []byte(roles))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.DelegatedActions("r")
+	if err != nil || len(got) != 1 || got[0] != "acr.context.read" {
+		t.Fatalf("DelegatedActions = %v, %v; want [acr.context.read]", got, err)
 	}
 }
 

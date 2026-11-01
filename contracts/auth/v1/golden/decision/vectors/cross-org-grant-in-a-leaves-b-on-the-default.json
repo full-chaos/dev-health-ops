@@ -3,7 +3,7 @@
     "allowed": true,
     "cache_class": "resource_revision_bound",
     "expires_in_seconds": 30,
-    "policy_revision": 7,
+    "policy_revision": 9,
     "reason": "allowed_by_membership_default"
   },
   "id": "cross-org-grant-in-a-leaves-b-on-the-default",
@@ -15,7 +15,7 @@
     "resource_kind": "repository"
   },
   "state": {
-    "catalog": "planted-repo-reader",
+    "catalog": "embedded",
     "clock": "2027-01-15T08:00:00Z",
     "grants": [
       {

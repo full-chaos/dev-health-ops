@@ -205,7 +205,7 @@ func tagOnlyTestFiles(t *testing.T) []string {
 // list is written out on purpose: a new entry means a package gave up its filter,
 // and that must be a decision.
 var unfilteredTestPackages = []string{
-	"internal/auth/decisionstate", "internal/auth/identity", "internal/auth/identity/oidc", "internal/auth/identity/saml", "internal/auth/invite", "internal/auth/lockorder", "internal/auth/membership", "internal/auth/org",
+	"internal/auth/decisionstate", "internal/auth/grant", "internal/auth/identity", "internal/auth/identity/oidc", "internal/auth/identity/saml", "internal/auth/invite", "internal/auth/lockorder", "internal/auth/membership", "internal/auth/org",
 	"internal/auth/orgdeprovision", "internal/auth/platformrole", "internal/auth/serviceaccount", "internal/auth/usersbackfill", "internal/auth/workload", "internal/auth/workloadexchange", "internal/fixturescli", "internal/jobs/metrics/changefailure", "internal/jobs/metrics/remaining", "internal/queryapi/scancensus", "internal/storage/clickhouse/liverow", "internal/storage/postgres",
 }
 

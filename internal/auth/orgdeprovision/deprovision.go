@@ -18,6 +18,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/grantend"
 	"github.com/full-chaos/dev-health-ops/internal/auth/invite"
 	"github.com/full-chaos/dev-health-ops/internal/auth/membership"
 	"github.com/full-chaos/dev-health-ops/internal/auth/org"
@@ -83,6 +84,8 @@ type Result struct {
 }
 
 type Service struct {
+	pool     *pgxpool.Pool
+	q        string
 	orgs     *org.Store
 	members  *membership.Store
 	invites  *invite.Store
@@ -101,7 +104,7 @@ func New(cfg Config) (*Service, error) {
 	case cfg.Orgs == nil || cfg.Memberships == nil || cfg.Invites == nil:
 		return nil, errors.New("orgdeprovision: needs the organization, membership and invite stores")
 	}
-	s := &Service{orgs: cfg.Orgs, members: cfg.Memberships, invites: cfg.Invites, sessions: cfg.Sessions, logger: cfg.Logger}
+	s := &Service{pool: cfg.Pool, q: authschema.Quote(cfg.Schema), orgs: cfg.Orgs, members: cfg.Memberships, invites: cfg.Invites, sessions: cfg.Sessions, logger: cfg.Logger}
 	s.commit = func(ctx context.Context, m audit.Mutation) error { return audit.Commit(ctx, cfg.Pool, cfg.Schema, m) }
 	if s.logger == nil {
 		s.logger = slog.Default()
@@ -129,6 +132,7 @@ type plan struct {
 	active  bool
 	members *membership.OrgRemoval
 	invites *invite.OrgRevocation
+	grants  *grantend.Plan
 }
 
 // Deprovision runs the one commit, in the auth lock order (membership.Store readPairs): the principal rows
@@ -189,11 +193,18 @@ func (s *Service) plan(ctx context.Context, orgID uuid.UUID) (plan, error) {
 	if p.invites, err = s.invites.PlanRevokeAll(ctx, orgID); err != nil {
 		return plan{}, storeErr(err)
 	}
+	read := grantend.ReaderFunc(func(ctx context.Context, sql string, args ...any) (grantend.Rows, error) {
+		return s.pool.Query(ctx, sql, args...)
+	})
+	if p.grants, err = grantend.PlanOrg(ctx, read, s.q, orgID); err != nil {
+		return plan{}, fmt.Errorf("%w: plan: %w", ErrStore, err)
+	}
 	return p, nil
 }
 
 func (s *Service) once(ctx context.Context, in Input, p plan) (*Result, error) {
 	events := append(p.invites.Events(), p.members.Events()...)
+	events = append(events, p.grants.Events()...)
 	if p.active || len(events) == 0 {
 		events = append(events, org.SuspendedEvent(in.OrgID))
 	}
@@ -242,12 +253,20 @@ func (s *Service) once(ctx context.Context, in Input, p plan) (*Result, error) {
 					return err
 				}
 			}
+			// Step 6d of the auth lock order: the organization's grant rows, after the memberships and sessions.
+			if err := p.grants.Apply(ctx, tx, in.Actor.PrincipalID); err != nil {
+				if errors.Is(err, grantend.ErrStateMoved) {
+					return membership.ErrStateMoved
+				}
+				return err
+			}
 			if !active {
 				return nil
 			}
 			return s.orgs.ApplySuspend(ctx, tx, in.OrgID)
 		},
 		Audit:    auditFor(in, p.active),
+		Also:     p.grants.Audit(grantend.Actor{PrincipalID: in.Actor.PrincipalID, RequestID: in.Actor.RequestID, Caller: in.Actor.Caller}),
 		Events:   events,
 		Refusals: []error{errSessionsBusy},
 	})

@@ -15,5 +15,9 @@ var CredentialClasses []byte
 //go:embed oauth-clients.v1.json
 var OAuthClients []byte
 
-// AcrCredentialLifecycleEventSchema is empty on this commit.
+// AcrCredentialLifecycleEventSchema is the acr-credential-lifecycle-event.v1
+// schema's exact byte content: the acr events route validates with it, and the
+// service image holds no repository to read it from.
+//
+//go:embed jsonschema/acr-credential-lifecycle-event.v1.schema.json
 var AcrCredentialLifecycleEventSchema []byte

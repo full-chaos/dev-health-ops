@@ -4,6 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"sync"
+
+	"github.com/google/jsonschema-go/jsonschema"
+
+	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 )
 
 // AcrCredentialLifecycleEventSurface names the acr-credential-lifecycle-event.v1
@@ -81,6 +86,38 @@ func ParseAcrCredentialLifecycleEvent(root string, raw []byte) (AcrCredentialLif
 	if err := validateRawDocument(root, AcrCredentialLifecycleEventSurface, raw); err != nil {
 		return AcrCredentialLifecycleEvent{}, err
 	}
+	return parseValidatedAcrEvent(raw)
+}
+
+var embeddedAcrValidator = sync.OnceValues(func() (*jsonschema.Resolved, error) {
+	var schema jsonschema.Schema
+	if err := json.Unmarshal(authv1.AcrCredentialLifecycleEventSchema, &schema); err != nil {
+		return nil, fmt.Errorf("parsing the embedded %s schema: %w", AcrCredentialLifecycleEventSurface, err)
+	}
+	return schema.Resolve(nil)
+})
+
+// ParseEmbeddedAcrCredentialLifecycleEvent is ParseAcrCredentialLifecycleEvent
+// over the schema the binary embeds, for a service with no repository on disk.
+func ParseEmbeddedAcrCredentialLifecycleEvent(raw []byte) (AcrCredentialLifecycleEvent, error) {
+	resolved, err := embeddedAcrValidator()
+	if err != nil {
+		return AcrCredentialLifecycleEvent{}, err
+	}
+	if err := refuseDuplicateMembers(raw); err != nil {
+		return AcrCredentialLifecycleEvent{}, fmt.Errorf("%s: %w", AcrCredentialLifecycleEventSurface, err)
+	}
+	var document any
+	if err := json.Unmarshal(raw, &document); err != nil {
+		return AcrCredentialLifecycleEvent{}, fmt.Errorf("%s: document is not valid JSON: %w", AcrCredentialLifecycleEventSurface, err)
+	}
+	if err := resolved.Validate(document); err != nil {
+		return AcrCredentialLifecycleEvent{}, fmt.Errorf("%s: %w", AcrCredentialLifecycleEventSurface, err)
+	}
+	return parseValidatedAcrEvent(raw)
+}
+
+func parseValidatedAcrEvent(raw []byte) (AcrCredentialLifecycleEvent, error) {
 	var event AcrCredentialLifecycleEvent
 	if err := json.Unmarshal(raw, &event); err != nil {
 		return AcrCredentialLifecycleEvent{}, fmt.Errorf("%s: decoding validated document: %w", AcrCredentialLifecycleEventSurface, err)
@@ -113,8 +150,4 @@ func ParseAcrCredentialLifecycleEvent(root string, raw []byte) (AcrCredentialLif
 		}
 	}
 	return event, nil
-}
-
-func ParseEmbeddedAcrCredentialLifecycleEvent([]byte) (AcrCredentialLifecycleEvent, error) {
-	return AcrCredentialLifecycleEvent{}, fmt.Errorf("%s: no embedded parser", AcrCredentialLifecycleEventSurface)
 }

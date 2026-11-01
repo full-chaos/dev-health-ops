@@ -24,6 +24,7 @@ internal/api/standinkey
 internal/api/usersowned
 internal/apiservice/admin
 internal/audit
+internal/auth/acraudience
 internal/auth/clientaddr
 internal/auth/contracts/provisioning
 internal/auth/edgetoken

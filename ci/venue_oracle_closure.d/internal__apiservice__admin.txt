@@ -46,6 +46,7 @@ internal/apiservice/acr
 internal/apiservice/customerpush
 internal/audit
 internal/auth/accessverify
+internal/auth/acraudience
 internal/auth/clientaddr
 internal/auth/contracts
 internal/auth/contracts/provisioning

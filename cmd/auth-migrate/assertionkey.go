@@ -21,7 +21,7 @@ const (
 		" -rotated-at RFC3339 [-retire-after RFC3339] [-retire-previous-after DUR] -confirm" +
 		"\nThe key is public metadata: no key, no file and no digest is taken or printed." +
 		"\nA new active key while another is active needs -retire-previous-after (up to 24h): the old one becomes retiring in the same step." +
-		"\nA retiring key needs -retire-after, at most 24h after the active key's -rotated-at. A retired key never changes again."
+		"\nA retiring key needs -retire-after, at most 24h after the active key's -rotated-at. The active key is retired by rotating in a successor, never directly. A retired key never changes again."
 	assertionKeyListUsage = "usage: auth-migrate workload-assertion-key-list [-workload N]"
 )
 
@@ -118,6 +118,8 @@ func assertionKeyFailureClass(err error) string {
 		return "the workload has no active key to overlap"
 	case errors.Is(err, workload.ErrAssertionKeyOverlap):
 		return "retire-after is more than 24h after the active key's rotated-at"
+	case errors.Is(err, workload.ErrAssertionKeyLastActive):
+		return "the active key is retired by rotating in a successor, not directly"
 	case errors.Is(err, workload.ErrAssertionKeyTerminal):
 		return "a retired key does not change"
 	case errors.Is(err, workload.ErrAssertionKeyTransition):

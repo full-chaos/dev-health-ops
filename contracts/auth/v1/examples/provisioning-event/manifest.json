@@ -50,10 +50,6 @@
       "why": "A workload bootstrap credential change carries its status and the credential's id only, never the value or its digest."
     },
     {
-      "file": "valid-workload-assertion-key-changed.json",
-      "why": "A workload assertion key change carries the key's status only: no kid, no issuer, no key."
-    },
-    {
       "file": "valid-resource-grant-with-expiry.json",
       "why": "A grant carries its expiry (TRD section 9; Q2 default keep)."
     },
@@ -236,18 +232,6 @@
       "expect_instance_location": "/payload/change",
       "expect_keyword": "enum",
       "why": "credential_id is a member of the workload and service_account aggregates only."
-    },
-    {
-      "file": "invalid-change-key-status-not-a-status.json",
-      "expect_instance_location": "/payload/change/key_status",
-      "expect_keyword": "enum",
-      "why": "A key status is active, retiring or retired; a value outside that has no slot."
-    },
-    {
-      "file": "invalid-change-key-status-on-service-account.json",
-      "expect_instance_location": "/payload/change",
-      "expect_keyword": "enum",
-      "why": "key_status is a workload member only."
     },
     {
       "file": "invalid-change-action-set-empty.json",

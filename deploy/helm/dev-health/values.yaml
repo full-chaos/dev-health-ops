@@ -200,6 +200,10 @@ authService:
   #    to auth.platform_role_assignments. Refused unless users are owned (phase 4, usersOwnedStage owned).
   #    Runbook: docs/operate/runbooks/auth-platform-roles-flip-and-rollback.md.
   platformRolesOwned: false
+  # -- Federated sign-in join: renders AUTH_SSO_JIT=true on auth-service, so an OIDC, OAuth or SAML sign-in can join a
+  #    known account to the provider's organization and create a new account. Refused unless orgs are owned
+  #    (phase 5): below it go-api's own sign-in join still writes, and two writers would race.
+  ssoJit: false
   # -- Two replicas keep the service up through one pod loss or node drain
   #    (N+1, docs/operate/plan/auth-service-capacity.md); a PodDisruptionBudget
   #    (minAvailable 1) renders only while this is 2 or more.

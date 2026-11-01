@@ -124,6 +124,10 @@
           "type": "string",
           "enum": ["", "goApi", "owned"]
         },
+        "ssoJit": {
+          "description": "Render AUTH_SSO_JIT=true on auth-service. Refused unless orgs are owned (phase 5).",
+          "type": "boolean"
+        },
         "platformRolesOwned": {
           "description": "CHAOS-12191: render AUTH_PLATFORM_ROLES_OWNED=true on every reader. Refused unless users are owned (the templates check it).",
           "type": "boolean"

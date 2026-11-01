@@ -64,7 +64,9 @@ var errValidateKey = errors.New("authapi: the validate token holds a lone surrog
 // no more: the users row and the membership through Users (public.users and
 // public.memberships, columns of authschema.PublicReadColumns, so no new
 // grant), the session row through go-api's own session read. The two other
-// policy.Store reads are never made by Authenticate and refuse.
+// policy.Store reads are never made by Authenticate and refuse. The answer
+// carries no superuser value, so the store passes none: no platform decision
+// is made here.
 type validateStore struct {
 	users    Users
 	sessions policy.SessionStore
@@ -75,7 +77,7 @@ func (s validateStore) UserState(ctx context.Context, id uuid.UUID) (policy.User
 	if err != nil || !found {
 		return policy.UserState{}, false, err
 	}
-	return policy.UserState{IsActive: state.IsActive, IsSuperuser: state.IsSuperuser, Platform: state.Platform, TokenVersion: state.TokenVersion}, true, nil
+	return policy.UserState{IsActive: state.IsActive, TokenVersion: state.TokenVersion}, true, nil
 }
 
 func (s validateStore) AccessUser(ctx context.Context, id uuid.UUID) (policy.AccessUserRow, bool, error) {
@@ -84,7 +86,7 @@ func (s validateStore) AccessUser(ctx context.Context, id uuid.UUID) (policy.Acc
 		return policy.AccessUserRow{}, false, err
 	}
 	return policy.AccessUserRow{
-		State: policy.UserState{IsActive: state.IsActive, IsSuperuser: state.IsSuperuser, Platform: state.Platform, TokenVersion: state.TokenVersion},
+		State: policy.UserState{IsActive: state.IsActive, TokenVersion: state.TokenVersion},
 		Email: state.Email, Username: state.Username, FullName: state.FullName,
 	}, true, nil
 }

@@ -4,12 +4,14 @@ auth.api.session_route_outcomes	operation,reason_code,result	code: internal/auth
 auth.entitlement.outcomes	outcome	code: internal/auth/entitlement/entitlement.go
 auth.identity.external_links	action,outcome	code: internal/auth/identity/store.go
 auth.identity.projections	kind,outcome	code: internal/auth/identity/store.go
+auth.oauth.requests	audience,client_class,operation,outcome	code: internal/auth/authapi/oauth.go
 auth.identity.wire_slug_omitted		code: internal/auth/identity/store.go
 auth.oidc.outcomes	outcome,reason,route	code: internal/auth/identity/oidc/service.go
 auth.org.mutations	outcome,verb	code: internal/auth/org/store.go
 auth.org.deprovisions	outcome	code: internal/auth/orgdeprovision/deprovision.go
 auth.provisioning.compat_credential_uses	operation	code: internal/auth/authapi/provisioning.go
 auth.invite.mutations	outcome,verb	code: internal/auth/invite/store.go
+auth.local.reset_request_skipped	reason	code: internal/auth/identity/local/linkaudit.go
 auth.membership.mutations	outcome,verb	code: internal/auth/membership/store.go
 auth.grant.mutations	outcome,verb	code: internal/auth/grant/store.go
 auth.session.delegations	outcome	code: internal/auth/session/delegation.go

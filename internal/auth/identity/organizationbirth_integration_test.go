@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -535,4 +536,19 @@ func TestOrganizationSlugHeldInAnotherCaseGetsASuffix(t *testing.T) {
 			t.Fatalf("slug %q, want %q with a suffix", born.Slug, slug)
 		}
 	})
+}
+
+// An admin create names an owner who already belongs elsewhere: the sign-in
+// join's other-organization refusal is not an organization birth's.
+func TestOrganizationBirthKeepsItsJoin(t *testing.T) {
+	e, ctx := getEnv(t), birthContext(t)
+	owner := e.orgless(t, ctx)
+	for i := range 2 {
+		_, err := e.owned.CreateOrganization(ctx, CreateOrganizationRequest{Actor: e.orgless(t, ctx), Slug: fmt.Sprintf("two-%d-%s", i, owner.String()[:8]),
+			Name: "Two", Settings: []byte(`{}`), Tier: "community", ManagedBy: "stripe", Owner: &owner,
+			LockRoles: platformrole.LockWritesShared, Authorize: allowCreate})
+		if err != nil {
+			t.Fatalf("organization %d: %v", i, err)
+		}
+	}
 }

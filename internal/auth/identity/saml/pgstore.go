@@ -99,7 +99,7 @@ func (s *PGStore) UseAssertion(ctx context.Context, providerID uuid.UUID, issuer
 	return nil
 }
 
-const providerSQL = `SELECT id, org_id, protocol, status, allow_idp_initiated, auto_provision_users,
+const providerSQL = `SELECT id, org_id, protocol, status, allow_idp_initiated, auto_provision_users, default_role,
   config::text, allowed_domains::text
 FROM public.sso_providers WHERE id = $1`
 
@@ -111,7 +111,7 @@ func (s *PGStore) Provider(ctx context.Context, id uuid.UUID) (Provider, error) 
 		allowedDomains *string
 	)
 	err := s.pool.QueryRow(ctx, providerSQL, id).Scan(&p.ID, &p.OrgID, &p.Protocol, &p.Status,
-		&p.AllowIdPInitiated, &p.AutoProvision, &config, &allowedDomains)
+		&p.AllowIdPInitiated, &p.AutoProvision, &p.DefaultRole, &config, &allowedDomains)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Provider{}, ErrProviderNotFound
 	}

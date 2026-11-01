@@ -521,7 +521,7 @@ func (h *handlers) setUserPassword(w http.ResponseWriter, r *http.Request) {
 	input, _ := ctx.Value(setPasswordInputKey{}).(setPasswordInput)
 	adminPassword, newPassword := input.AdminPassword, input.Password
 
-	if violations := passwordpolicy.Validate(newPassword); len(violations) > 0 {
+	if violations := passwordpolicy.ValidateForHash(newPassword); len(violations) > 0 {
 		detail := pyjson.NewObject()
 		list := make([]pyjson.Value, len(violations))
 		for i, v := range violations {

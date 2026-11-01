@@ -36,7 +36,7 @@ import (
 // The runtime role reads the go-api tables it needs by column, nothing more.
 var testGrants = []string{
 	`GRANT USAGE ON SCHEMA public TO %[1]s`,
-	`GRANT SELECT (id, org_id, protocol, status, auto_provision_users, config, allowed_domains, encrypted_secrets, is_default, created_at) ON public.sso_providers TO %[1]s`,
+	`GRANT SELECT (id, org_id, protocol, status, auto_provision_users, default_role, config, allowed_domains, encrypted_secrets, is_default, created_at) ON public.sso_providers TO %[1]s`,
 	`GRANT SELECT (user_id, org_id, role) ON public.memberships TO %[1]s`,
 	`GRANT SELECT (id, email, password_hash, is_active, is_verified, auth_provider, auth_provider_id) ON public.users TO %[1]s`,
 	`GRANT SELECT (id, slug, name, is_active, tier) ON public.organizations TO %[1]s`,

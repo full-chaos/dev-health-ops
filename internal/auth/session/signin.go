@@ -21,6 +21,14 @@ import (
 // session exist together or not at all. The event's request id falls back to
 // the context's, as every session writer's does.
 func (s *Store) CreateAudited(ctx context.Context, principalID uuid.UUID, organizationID *uuid.UUID, amr []string, event audit.AuditEvent) (Issued, error) {
+	return s.CreateAuditedWith(ctx, principalID, organizationID, amr, event, publicRowOf(ctx))
+}
+
+// CreateAuditedWith is CreateAudited with public, when not nil, run in the
+// sign-in's transaction after the session is written, with the session's
+// principal and organization: go-api's public.audit_logs row of a compatibility
+// sign-in. An error from public rolls the session back with its audit row.
+func (s *Store) CreateAuditedWith(ctx context.Context, principalID uuid.UUID, organizationID *uuid.UUID, amr []string, event audit.AuditEvent, public PublicRow) (Issued, error) {
 	if !validAMR(amr) {
 		return Issued{}, ErrInvalidAMR
 	}
@@ -32,7 +40,13 @@ func (s *Store) CreateAudited(ctx context.Context, principalID uuid.UUID, organi
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			var err error
 			out, err = s.insertSession(ctx, tx, principalID, organizationID, amr, contracts.SecretString{})
-			return s.stampSignIn(ctx, tx, out.Session.ID, err)
+			if err := s.stampSignIn(ctx, tx, out.Session.ID, err); err != nil {
+				return err
+			}
+			if public != nil {
+				return public(ctx, tx, out.Session.PrincipalID, out.Session.OrganizationID)
+			}
+			return nil
 		},
 		Audit:     event,
 		OffStream: audit.OffStreamSessionLifecycle,
@@ -54,6 +68,14 @@ func (s *Store) CreateAudited(ctx context.Context, principalID uuid.UUID, organi
 // first credential was exchanged for (see firstCredential).
 func (s *Store) insertSession(ctx context.Context, tx queryRower, principalID uuid.UUID, organizationID *uuid.UUID, amr []string,
 	legacyJTI contracts.SecretString) (Issued, error) {
+	return s.insertSessionAs(ctx, tx, nil, principalID, organizationID, amr, legacyJTI)
+}
+
+// insertSessionAs is insertSession with the session's id chosen by the caller
+// (nil: the database's default): a legacy exchange names the session in its
+// audit row before the transaction.
+func (s *Store) insertSessionAs(ctx context.Context, tx queryRower, sessionUUID *uuid.UUID, principalID uuid.UUID, organizationID *uuid.UUID, amr []string,
+	legacyJTI contracts.SecretString) (Issued, error) {
 	credential, credentialID, legacyDigest, err := s.firstCredential(legacyJTI)
 	if err != nil {
 		return Issued{}, err
@@ -73,16 +95,16 @@ func (s *Store) insertSession(ctx context.Context, tx queryRower, principalID uu
 	// effective expiry (see sessionColumns).
 	var sessionID string
 	err = tx.QueryRow(ctx, `
-		INSERT INTO `+s.q+`.sessions (principal_id, organization_id, token_hash, issued_at, created_at, updated_at, expires_at, auth_time, amr, client_ip, user_agent,
+		INSERT INTO `+s.q+`.sessions (id, principal_id, organization_id, token_hash, issued_at, created_at, updated_at, expires_at, auth_time, amr, client_ip, user_agent,
 			legacy_token_version)
-		SELECT p.id, $2::uuid, $3, t.at, t.at, t.at,
+		SELECT COALESCE($8::uuid, gen_random_uuid()), p.id, $2::uuid, $3, t.at, t.at, t.at,
 		       CASE WHEN $4::double precision > 0 THEN t.at + make_interval(secs => $4::double precision) ELSE 'infinity' END,
 		       t.at, $5, $6::inet, $7, `+legacyTokenVersion+`
 		FROM `+s.q+`.principals p CROSS JOIN (SELECT clock_timestamp() AS at) t
 		LEFT JOIN public.users u ON u.id = p.id
 		WHERE p.id = $1 AND p.disabled_at IS NULL
 		RETURNING id::text`,
-		principalID.String(), org, hashCredential(handle), s.sessionLifetime.Seconds(), amr, clientaddr.Text(ctx), userAgentOf(ctx)).Scan(&sessionID)
+		principalID.String(), org, hashCredential(handle), s.sessionLifetime.Seconds(), amr, clientaddr.Text(ctx), userAgentOf(ctx), sessionUUID).Scan(&sessionID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Issued{}, ErrPrincipalUnavailable
 	}
@@ -114,6 +136,15 @@ func (s *Store) insertSession(ctx context.Context, tx queryRower, principalID uu
 // a credential that no longer works changes nothing (go-api's logout revokes
 // only the presented token).
 func (s *Store) RevokeByCredential(ctx context.Context, credential contracts.SecretString, actor Actor) (bool, error) {
+	return s.RevokeByCredentialWith(ctx, credential, actor, publicRowOf(ctx))
+}
+
+// RevokeByCredentialWith is RevokeByCredential with public, when not nil, run
+// in the revocation's transaction after the live session is revoked, with the
+// session's principal and organization: go-api's public.audit_logs row of a
+// compatibility sign-out. It runs only when the session is revoked (and its
+// auth.session.revoked row written); an error from public rolls it back.
+func (s *Store) RevokeByCredentialWith(ctx context.Context, credential contracts.SecretString, actor Actor, public PublicRow) (bool, error) {
 	if !wellFormed(credential) {
 		return false, nil
 	}
@@ -148,7 +179,13 @@ func (s *Store) RevokeByCredential(ctx context.Context, credential contracts.Sec
 			if !live {
 				return nil
 			}
-			return s.revokeSessions(ctx, tx, []string{id}, revokedByCaller)
+			if err := s.revokeSessions(ctx, tx, []string{id}, revokedByCaller); err != nil {
+				return err
+			}
+			if public != nil {
+				return public(ctx, tx, locked.PrincipalID, locked.OrganizationID)
+			}
+			return nil
 		},
 		Audit: audit.AuditEvent{
 			EventType: "auth.session.revoked", Outcome: audit.OutcomeAllowed,

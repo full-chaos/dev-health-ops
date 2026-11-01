@@ -83,6 +83,11 @@ func (h compatHandlers) readLogin(w http.ResponseWriter, r *http.Request) (login
 // local.Service decides the credential check and calls Sessions.Create only
 // on success, so the choice is made there, with the principal known.
 type loginAttempt struct {
+	// email is the address as the request gave it, for go-api's login_failed row.
+	email string
+	// kind is the refused credential check's outcome, for go-api's login_failed row: Reason alone does not tell
+	// a user with no password from a wrong password.
+	kind       local.Kind
 	requested  *uuid.UUID
 	membership *Membership
 	user       UserState
@@ -121,7 +126,7 @@ func (h compatHandlers) compatLogin(w http.ResponseWriter, r *http.Request) {
 			requested = &parsed
 		}
 	}
-	attempt := &loginAttempt{requested: requested}
+	attempt := &loginAttempt{email: input.email, requested: requested}
 	ctx := context.WithValue(r.Context(), loginAttemptKey{}, attempt)
 	outcome, err := h.login.Login(ctx, local.Credentials{Email: input.email, Password: input.password, OrganizationID: requested})
 	var notMember *notMemberError
@@ -145,6 +150,7 @@ func (h compatHandlers) compatLogin(w http.ResponseWriter, r *http.Request) {
 		h.loginUnverified(w, r, outcome, requested)
 		return
 	}
+	attempt.kind = outcome.Kind
 	if err := h.auditSignInFailed(ctx, outcome.PrincipalID, requested, string(outcome.Reason), providerLocal); err != nil {
 		h.fail(w, r, opCompatLogin, err)
 		return
@@ -307,6 +313,11 @@ func (h compatHandlers) auditSignInFailed(ctx context.Context, principal uuid.UU
 			event.Attributes["principal_id"] = principal.String()
 		}
 	}
+	if provider == providerLocal && h.AppendAuditWith != nil {
+		if public := loginFailedRow(ctx, principal, requested, reason); public != nil {
+			return h.AppendAuditWith(ctx, event, public)
+		}
+	}
 	return h.AppendAudit(ctx, event)
 }
 
@@ -364,7 +375,16 @@ func (h compatHandlers) startSession(ctx context.Context, principalID uuid.UUID,
 			return session.Issued{}, fmt.Errorf("authapi: projecting the session organization: %w", err)
 		}
 	}
-	auditOrg := sessionOrg
+	event := loginSucceeded(ctx, principalID, sessionOrg, provider)
+	if provider == providerLocal {
+		// go-api's login row commits with the session and its auth.login.succeeded row.
+		ctx = session.WithPublicRow(ctx, compatLoginRow)
+	}
+	return h.Sessions.CreateAudited(session.WithSignIn(ctx), principalID, sessionOrg, amr, event)
+}
+
+// loginSucceeded is the audit row of a session a sign-in started.
+func loginSucceeded(ctx context.Context, principalID uuid.UUID, org *uuid.UUID, provider string) audit.AuditEvent {
 	principal := principalID.String()
 	event := audit.AuditEvent{
 		EventType: EventLoginSucceeded, Outcome: audit.OutcomeAllowed,
@@ -374,11 +394,11 @@ func (h compatHandlers) startSession(ctx context.Context, principalID uuid.UUID,
 	if provider != "" {
 		event.Attributes["provider"] = provider
 	}
-	if auditOrg != nil {
-		text := auditOrg.String()
+	if org != nil {
+		text := org.String()
 		event.OrganizationID = &text
 	}
-	return h.Sessions.CreateAudited(session.WithSignIn(ctx), principalID, sessionOrg, amr, event)
+	return event
 }
 
 // userInfo is go-api's _to_user_info(user, membership).

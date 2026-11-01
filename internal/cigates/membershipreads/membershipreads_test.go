@@ -350,3 +350,75 @@ func TestAnUnresolvedConstantBehindAnotherNameOrAWordPrefixIsClean(t *testing.T)
 		}
 	}
 }
+
+// CHAOS-11862: a fmt.Sprintf whose constant arguments spell the table is a read, and one that spells public is not; a
+// constant is resolved in the Go block that declares it, not across the whole function.
+
+func sprintfSource(call string) string {
+	return "package p\n\nimport \"fmt\"\n\nconst schemaName, tableName = \"auth\", \"memberships\"\n\nvar _ = " + call + "\n"
+}
+
+func TestASprintfWhoseConstantArgumentsSpellTheTableIsARead(t *testing.T) {
+	for name, call := range map[string]string{
+		"schema and table as arguments": `fmt.Sprintf("SELECT 1 FROM %s.%s", "auth", "memberships")`,
+		"table as an argument":          `fmt.Sprintf("SELECT 1 FROM auth.%s", "memberships")`,
+		"constants as arguments":        `fmt.Sprintf("SELECT 1 FROM %s.%s", schemaName, tableName)`,
+		"quoted verbs":                  `fmt.Sprintf("SELECT 1 FROM %s.%s", "auth", "organizations")`,
+		"value verbs":                   `fmt.Sprintf("SELECT 1 FROM %v.%v", "auth", "memberships")`,
+		"a percent sign before":         `fmt.Sprintf("SELECT 100%% FROM %s.%s", "auth", "memberships")`,
+		"a non-constant schema":         `fmt.Sprintf("SELECT 1 FROM %s.%s", currentSchema(), "memberships")`,
+	} {
+		got := check(t, writeTree(t, map[string]string{"internal/apiservice/s.go": sprintfSource(call) + "\nfunc currentSchema() string { return \"\" }\n"}))
+		if len(got) == 0 {
+			t.Errorf("%s: want a finding, got none", name)
+		}
+	}
+}
+
+func TestASprintfWhoseConstantArgumentsSpellPublicIsNotAFinding(t *testing.T) {
+	for name, call := range map[string]string{
+		"schema and table as arguments": `fmt.Sprintf("SELECT 1 FROM %s.%s", "public", "memberships")`,
+		"schema as an argument":         `fmt.Sprintf("SELECT 1 FROM %s.memberships", "public")`,
+		"a quoted public":               `fmt.Sprintf("SELECT 1 FROM %s.organizations", "\"public\"")`,
+		"another table":                 `fmt.Sprintf("SELECT 1 FROM %s.%s", "auth", "sessions")`,
+	} {
+		got := check(t, writeTree(t, map[string]string{"internal/apiservice/s.go": sprintfSource(call)}))
+		if len(got) != 0 {
+			t.Errorf("%s: want no finding, got %q", name, got)
+		}
+	}
+}
+
+func blockSource(body string) string {
+	return "package p\n\nconst schema = \"auth\"\n\nfunc f(ok bool) string {\n" + body + "\n\treturn \"\"\n}\n"
+}
+
+func TestAPackageConstantIsNotReplacedByTheSameNameDeclaredInAnotherBlock(t *testing.T) {
+	// The block's own constant is public; the use after the block sees the package constant, auth.
+	src := blockSource("\tif ok {\n\t\tconst schema = \"public\"\n\t\t_ = schema + \".memberships\"\n\t}\n\treturn schema + \".memberships\"")
+	got := check(t, writeTree(t, map[string]string{"internal/apiservice/b.go": src}))
+	wantOne(t, got, "internal/apiservice/b.go:", "auth.memberships")
+	if !strings.Contains(got[0], "b.go:10") {
+		t.Fatalf("the finding should be the use after the block, line 10: %q", got)
+	}
+}
+
+func TestTheSameConstantNameInTwoBlocksIsResolvedInEachBlock(t *testing.T) {
+	src := blockSource("\tif ok {\n\t\tconst schema = \"public\"\n\t\treturn schema + \".memberships\"\n\t}\n\t{\n\t\tconst schema = \"auth\"\n\t\treturn schema + \".memberships\"\n\t}")
+	got := check(t, writeTree(t, map[string]string{"internal/apiservice/b.go": src}))
+	wantOne(t, got, "internal/apiservice/b.go:", "auth.memberships")
+	if !strings.Contains(got[0], "b.go:12") {
+		t.Fatalf("the finding should be the auth block, line 12: %q", got)
+	}
+}
+
+func TestALocalConstantIsVisibleOnlyAfterItsDeclarationAndInsideItsBlock(t *testing.T) {
+	// Before the declaration, and after the block, the name is the package constant (auth); after the declaration it is public.
+	src := blockSource("\t_ = schema + \".memberships\"\n\tconst schema = \"public\"\n\t_ = schema + \".memberships\"")
+	wantOne(t, check(t, writeTree(t, map[string]string{"internal/apiservice/b.go": src})), "internal/apiservice/b.go:6", "auth.memberships")
+}
+
+func TestAFunctionLiteralBlockResolvesItsOwnConstant(t *testing.T) {
+	src := "package p\n\nconst schema = \"auth\"\n\nvar f = func() string {\n\tconst schema = \"public\"\n\treturn schema + \".memberships\"\n}\n\nvar g = schema + \".memberships\"\n"
+	wantOne(t, check(t, writeTree(t, map[string]string{"internal/apiservice/b.go": src})), "internal/apiservice/b.go:10", "auth.memberships")
+}

@@ -13,16 +13,17 @@ import (
 var referencesAnotherSchema = regexp.MustCompile(`(?i)\breferences\s+(%|"?[a-z0-9_]+"?\s*\.)`)
 
 func referencesOutsideSchema(sql string) []string {
-	var lines []string
-	for _, line := range strings.Split(sql, "\n") {
-		if i := strings.Index(line, "--"); i >= 0 {
-			line = line[:i]
-		}
-		if referencesAnotherSchema.MatchString(line) {
-			lines = append(lines, strings.TrimSpace(line))
+	lines := strings.Split(sql, "\n")
+	for i, line := range lines {
+		if j := strings.Index(line, "--"); j >= 0 {
+			lines[i] = line[:j]
 		}
 	}
-	return lines
+	var found []string
+	for _, m := range referencesAnotherSchema.FindAllString(strings.Join(lines, "\n"), -1) {
+		found = append(found, strings.Join(strings.Fields(m), " "))
+	}
+	return found
 }
 
 func TestNoAuthMigrationReferencesAnotherSchema(t *testing.T) {
@@ -43,6 +44,8 @@ func TestTheReferencesCensusSeesWhatItIsMeantToSee(t *testing.T) {
 		`a uuid REFERENCES "public"."users" (id)`,
 		"EXECUTE format('ALTER TABLE x ADD FOREIGN KEY (a) REFERENCES %I.%I (id)', 'public', 'users')",
 		"a int references other.t(id)",
+		"ALTER TABLE t ADD FOREIGN KEY (a) REFERENCES\n    public.users (id)",
+		"a uuid REFERENCES -- the ops table\n    public.users (id)",
 	} {
 		if len(referencesOutsideSchema(bad)) == 0 {
 			t.Errorf("not seen: %s", bad)

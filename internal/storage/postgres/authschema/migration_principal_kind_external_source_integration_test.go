@@ -4,17 +4,22 @@ package authschema
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 const (
-	kindOrg      = "00000000-0000-4000-8000-000000108961"
-	kindSource   = "00000000-0000-4000-8000-000000108962"
-	kindUser     = "00000000-0000-4000-8000-000000108963"
-	kindSession  = "00000000-0000-4000-8000-000000108964"
-	kindFinger   = "0123456789abcdef"
-	kindSecret   = `'\x0a'::bytea`
+	kindOrg     = "00000000-0000-4000-8000-000000108961"
+	kindSource  = "00000000-0000-4000-8000-000000108962"
+	kindUser    = "00000000-0000-4000-8000-000000108963"
+	kindSession = "00000000-0000-4000-8000-000000108964"
+	kindFinger  = "0123456789abcdef"
+	// A fresh value per statement: the secret columns are UNIQUE, so a fixed one would refuse every second row for a reason that is not the guard.
+	kindSecret   = `decode(md5(random()::text || clock_timestamp()::text), 'hex')`
 	kindFPSecret = `decode('0123456789abcdef', 'hex')`
 )
 
@@ -87,6 +92,19 @@ func TestMigrationPrincipalKindAdmitsExternalSource(t *testing.T) {
 	}
 }
 
+// kindRefusal asserts the refusal is the guard's own: SQLSTATE 23514 and its message. Any other error is not a proof of the guard.
+func kindRefusal(t *testing.T, err error, what string) {
+	t.Helper()
+	if err == nil {
+		t.Errorf("%s was accepted, want a refusal", what)
+		return
+	}
+	var pg *pgconn.PgError
+	if !errors.As(err, &pg) || pg.Code != "23514" || !strings.Contains(pg.Message, "is an external_source") {
+		t.Errorf("%s was refused by something other than the guard: %v", what, err)
+	}
+}
+
 // TestPrincipalKindExternalSourceHoldsNoSessionMembershipOrPlatformCredential:
 // the three tables refuse the principal in the database, on insert and on a
 // move of principal_id; a user principal still holds all three, and the
@@ -121,14 +139,14 @@ func TestPrincipalKindExternalSourceHoldsNoSessionMembershipOrPlatformCredential
 			t.Fatalf("a row that must be admitted was refused: %v\n%s", err, ok)
 		}
 	}
-	m10Fail(t, domainOwnedExec(t, ctx, env, kindSessionInsert(kindSource)), "a session of an external_source principal")
-	m10Fail(t, domainOwnedExec(t, ctx, env, kindMembershipInsert(kindSource)), "a membership of an external_source principal")
-	m10Fail(t, domainOwnedExec(t, ctx, env, kindCredentialInsert(kindSource, "platform")), "a platform-class credential of an external_source principal")
+	kindRefusal(t, domainOwnedExec(t, ctx, env, kindSessionInsert(kindSource)), "a session of an external_source principal")
+	kindRefusal(t, domainOwnedExec(t, ctx, env, kindMembershipInsert(kindSource)), "a membership of an external_source principal")
+	kindRefusal(t, domainOwnedExec(t, ctx, env, kindCredentialInsert(kindSource, "platform")), "a platform-class credential of an external_source principal")
 	for _, move := range []string{
 		`UPDATE auth.sessions SET principal_id = '` + kindSource + `' WHERE principal_id = '` + kindUser + `'`,
 		`UPDATE auth.memberships SET principal_id = '` + kindSource + `' WHERE principal_id = '` + kindUser + `'`,
 		`UPDATE auth.credential_registry SET principal_id = '` + kindSource + `' WHERE principal_id = '` + kindUser + `' AND domain_owner = 'platform'`,
 	} {
-		m10Fail(t, domainOwnedExec(t, ctx, env, move), "moving a row onto an external_source principal: "+move)
+		kindRefusal(t, domainOwnedExec(t, ctx, env, move), "moving a row onto an external_source principal: "+move)
 	}
 }

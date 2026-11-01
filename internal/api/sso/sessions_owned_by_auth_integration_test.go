@@ -86,13 +86,13 @@ func TestSSOLoginTakesItsPairFromTheIssueRouteWhenAuthOwnsSessions(t *testing.T)
 		mu.Lock()
 		bodies = append(bodies, body)
 		mu.Unlock()
-		_, _ = io.WriteString(w, `{"access_token":"issued.by.auth","refresh_token":"dhr1_issued_by_auth","token_type":"bearer","expires_in":3600}`)
+		_, _ = io.WriteString(w, `{"access_token":"issued.by.auth","refresh_token":"dhr1_issued_by_auth","token_type":"bearer","expires_in":600}`)
 	}))
 	defer auth.Close()
 	st := startStackWith(t, ctx, ssoIssueClient(t, auth.URL))
 
 	status, body := oidcLogin(t, ctx, st, "issued.user@allowed.example")
-	if status != http.StatusOK || body["access_token"] != "issued.by.auth" || body["refresh_token"] != "dhr1_issued_by_auth" {
+	if status != http.StatusOK || body["access_token"] != "issued.by.auth" || body["refresh_token"] != "dhr1_issued_by_auth" || body["expires_in"] != float64(600) {
 		t.Fatalf("callback: %d %v, want the issued pair", status, body)
 	}
 	mu.Lock()
@@ -155,12 +155,12 @@ func TestSAMLLoginTakesItsPairFromTheIssueRouteWhenAuthOwnsSessions(t *testing.T
 		mu.Lock()
 		calls++
 		mu.Unlock()
-		_, _ = io.WriteString(w, `{"access_token":"issued.by.auth","refresh_token":"dhr1_issued_by_auth","token_type":"bearer","expires_in":3600}`)
+		_, _ = io.WriteString(w, `{"access_token":"issued.by.auth","refresh_token":"dhr1_issued_by_auth","token_type":"bearer","expires_in":600}`)
 	}))
 	defer auth.Close()
 	st := startStackWith(t, ctx, ssoIssueClient(t, auth.URL))
 	status, body := samlLogin(t, ctx, st, "saml.issued@allowed.example")
-	if status != http.StatusOK || body["access_token"] != "issued.by.auth" || body["refresh_token"] != "dhr1_issued_by_auth" {
+	if status != http.StatusOK || body["access_token"] != "issued.by.auth" || body["refresh_token"] != "dhr1_issued_by_auth" || body["expires_in"] != float64(600) {
 		t.Fatalf("acs: %d %v, want the issued pair", status, body)
 	}
 	mu.Lock()

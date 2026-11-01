@@ -1,6 +1,7 @@
 package authapi
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -47,6 +48,15 @@ const (
 	maxKeyOverlapSeconds = int64(serviceaccount.KeyOverlapCeiling / time.Second)
 	maxRevokeReasonBytes = 32
 )
+
+// ServiceAccountKeys are the key verbs of the service account aggregate (*serviceaccount.Store).
+type ServiceAccountKeys interface {
+	IssueKey(ctx context.Context, id uuid.UUID, expiresIn time.Duration, a serviceaccount.Actor) (serviceaccount.IssuedKey, error)
+	RotateKey(ctx context.Context, id uuid.UUID, overlap, expiresIn time.Duration, a serviceaccount.Actor) (serviceaccount.IssuedKey, error)
+	RevokeKey(ctx context.Context, credentialID uuid.UUID, reason string, a serviceaccount.Actor) error
+	ListKeys(ctx context.Context, id uuid.UUID) ([]serviceaccount.Key, error)
+	KeyByID(ctx context.Context, id uuid.UUID) (*serviceaccount.Key, error)
+}
 
 // withServiceAccountKeyRoutes mounts each key route whose profile row lists every class it admits, and logs one line
 // naming each route it leaves out.

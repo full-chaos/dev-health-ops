@@ -1569,7 +1569,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/customerpush/deps.go",
-        "line": 78
+        "line": 86
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -1639,7 +1639,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/customerpush/deps.go",
-        "line": 79
+        "line": 87
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -1709,7 +1709,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/customerpush/deps.go",
-        "line": 80
+        "line": 88
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -1779,7 +1779,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/customerpush/deps.go",
-        "line": 67
+        "line": 75
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -1849,7 +1849,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/customerpush/deps.go",
-        "line": 68
+        "line": 76
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -1919,7 +1919,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/customerpush/deps.go",
-        "line": 77
+        "line": 85
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -1989,7 +1989,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/customerpush/deps.go",
-        "line": 70
+        "line": 78
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -2059,7 +2059,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/customerpush/deps.go",
-        "line": 72
+        "line": 80
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -7848,7 +7848,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/customerpush/deps.go",
-        "line": 69
+        "line": 77
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -9101,7 +9101,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/customerpush/deps.go",
-        "line": 66
+        "line": 74
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -9171,7 +9171,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/customerpush/deps.go",
-        "line": 71
+        "line": 79
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -9241,7 +9241,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/customerpush/deps.go",
-        "line": 76
+        "line": 84
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -9311,7 +9311,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/customerpush/deps.go",
-        "line": 73
+        "line": 81
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -9337,7 +9337,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/customerpush/writes.go:580; internal/apiservice/customerpush/writes.go:578); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/customerpush/writes.go:583; internal/apiservice/customerpush/writes.go:581); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [
         "action: no catalog action covers ingest token (this leaf does not extend the vocabulary)"
       ],
@@ -9381,7 +9381,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/customerpush/deps.go",
-        "line": 75
+        "line": 83
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -9407,7 +9407,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/customerpush/writes.go:580; internal/apiservice/customerpush/writes.go:578); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/customerpush/writes.go:583; internal/apiservice/customerpush/writes.go:581); a caller without the admin role answers 403 (internal/api/policy/guard.go:129)",
       "gaps": [
         "action: no catalog action covers ingest token (this leaf does not extend the vocabulary)"
       ],
@@ -9451,7 +9451,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/apiservice/customerpush/deps.go",
-        "line": 74
+        "line": 82
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",

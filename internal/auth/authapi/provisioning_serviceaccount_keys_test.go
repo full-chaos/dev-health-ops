@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/serviceaccount"
 )
@@ -94,6 +95,49 @@ func (f *fakeServiceAccounts) KeyByID(_ context.Context, id uuid.UUID) (*service
 }
 
 var keyPatterns = []string{PatternServiceAccountKeyIssue, PatternServiceAccountKeyRotate, PatternServiceAccountKeyRevoke, PatternServiceAccountKeyList}
+
+// docWithRows is the embedded document with the rows for routes replaced by copies of the deprovision row.
+func docWithRows(t testing.TB, routes ...string) []byte {
+	t.Helper()
+	var document map[string]any
+	if err := json.Unmarshal(authv1.AuthServiceEndpointProfiles, &document); err != nil {
+		t.Fatal(err)
+	}
+	var kept []any
+	var base map[string]any
+	for _, item := range document["rows"].([]any) {
+		row := item.(map[string]any)
+		if row["route"] == PatternOrgDeprovision && row["service"] == AccessService {
+			base = row
+		}
+		if !slices.Contains(routes, row["route"].(string)) {
+			kept = append(kept, item)
+		}
+	}
+	if base == nil {
+		t.Fatal("no deprovision row in the embedded document")
+	}
+	seen := map[string]bool{}
+	for _, route := range routes {
+		if seen[route] {
+			continue
+		}
+		seen[route] = true
+		clone := map[string]any{}
+		for k, v := range base {
+			clone[k] = v
+		}
+		clone["route"] = route
+		clone["id"] = "POST " + route + " [dev-health-auth-service @api]"
+		kept = append(kept, clone)
+	}
+	document["rows"] = kept
+	raw, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
 
 func newKeyFixture(t *testing.T) *provFixture {
 	t.Helper()

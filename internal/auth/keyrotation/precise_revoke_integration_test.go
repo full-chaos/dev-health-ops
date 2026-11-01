@@ -10,6 +10,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/full-chaos/dev-health-ops/internal/token"
 )
 
@@ -138,6 +140,7 @@ func TestCompromiseEndsTheDelegatedChildOfARevokedSession(t *testing.T) {
 	inWindow := compromisedAt.Add(-5 * time.Minute)
 	base := e.session(t, ctx, actor, inWindow, nil, false)
 	e.setKids(t, ctx, base, []string{"b"})
+	pgschema.Apply(ctx, t, e.admin)
 	child := uuid.NewString()
 	if _, err := e.admin.Exec(ctx, `INSERT INTO auth.sessions (id, principal_id, organization_id, token_hash, issued_at, created_at, expires_at, amr,
 		legacy_token_version, signing_kids, actor_principal_id, delegated_from_session_id, delegation_reason, delegation_permitted_actions)
@@ -145,6 +148,17 @@ func TestCompromiseEndsTheDelegatedChildOfARevokedSession(t *testing.T) {
 		child, target, org, actor, base); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := e.admin.Exec(ctx, `INSERT INTO public.organizations (id, slug, name) VALUES ($1, $2, 'compromise')`, org, "o-"+org[:8]); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{actor, target} {
+		if _, err := e.admin.Exec(ctx, `INSERT INTO public.users
+			(id, email, auth_provider, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
+			VALUES ($1, $2, 'local', true, true, false, 0, now(), now())`, id, "u-"+id[:8]+"@example.test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pgseed.ImpersonationSession(ctx, t, e.admin, child, actor, target, org, "member", compromisedAt.Add(10*time.Minute), nil)
 	plan, err := operator.Plan(ctx, Request{Verb: VerbCompromise, KeyID: "b", Successor: "c"})
 	if err != nil || plan.Sessions != 2 {
 		t.Fatalf("compromise dry run = %+v, %v; want 2 sessions", plan, err)
@@ -165,5 +179,14 @@ func TestCompromiseEndsTheDelegatedChildOfARevokedSession(t *testing.T) {
 	}
 	if ended != 1 {
 		t.Fatalf("delegation_ended rows = %d, want 1", ended)
+	}
+	if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM public.impersonation_sessions p
+		JOIN public.audit_logs a ON a.action = 'impersonation_stop' AND a.user_id = p.admin_user_id AND a.org_id = p.target_org_id
+			AND a.resource_type = 'session' AND a.resource_id = p.target_user_id::text
+		WHERE p.id = $1 AND p.ended_at IS NOT NULL`, child).Scan(&ended); err != nil {
+		t.Fatal(err)
+	}
+	if ended != 1 {
+		t.Fatalf("ended public rows with one stop row = %d, want 1", ended)
 	}
 }

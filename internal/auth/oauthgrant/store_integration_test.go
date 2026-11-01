@@ -860,6 +860,7 @@ func TestTheSchemaHoldsTheRequestAndGrantShapes(t *testing.T) {
 	if _, err := e.store.Deny(ctx, denied.decision()); err != nil {
 		t.Fatal(err)
 	}
+	refused("a cleared denial", `UPDATE auth.oauth_authorization_requests SET decision = NULL WHERE id = $1`, denied.request)
 	refused("a denial turned into an approval", `UPDATE auth.oauth_authorization_requests
 		SET decision = 'approved', grant_id = $2, code_hash = $3, code_expires_at = clock_timestamp() + interval '1 minute' WHERE id = $1`,
 		denied.request, otherApproved.GrantID, make([]byte, 32))

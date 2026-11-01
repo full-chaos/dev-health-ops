@@ -51,6 +51,7 @@ internal/auth/acrmint
 internal/auth/authconfig
 internal/auth/clientaddr
 internal/auth/contracts
+internal/auth/contracts/externalpush
 internal/auth/contracts/provisioning
 internal/auth/contracts/tokencorpus
 internal/auth/delegationend

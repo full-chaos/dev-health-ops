@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	actionsSHA = "2eb70d2815e03cdb8e49740e4c2977316bfcfd0576656810d8ac8bd0d073a399"
-	rolesSHA   = "f3f4f94ff4ddeeba851f3fc444f191f31dd1dc83d6f211b203d567fe0d3f8a62"
+	actionsSHA = "3954ee30e5194f152b8653f03704a703ee321d818295eec407630d439c98e3e7"
+	rolesSHA   = "f1a45054d839858215d813b8024cbd8a84c8d914dc6a80aa8e4ffa3a2546b390"
 )
 
 func repoRoot(t *testing.T) string {
@@ -434,6 +434,35 @@ func TestRepositoryIsAResourceKindAndNeverAScope(t *testing.T) {
 	}
 }
 
+// acr.context.read reads a context at a revision, like git.read: the organization roles that hold git.read hold it, and
+// no platform role does. The real catalog allows those roles by default.
+func TestAcrContextReadIsHeldByExactlyTheRolesThatHoldGitRead(t *testing.T) {
+	c := Default()
+	var holders []string
+	for _, r := range c.Roles() {
+		if got, want := c.Allows(r.ID, "acr.context.read"), c.Allows(r.ID, "git.read"); got != want {
+			t.Errorf("role %s: acr.context.read %v, git.read %v", r.ID, got, want)
+		}
+		if c.Allows(r.ID, "acr.context.read") {
+			holders = append(holders, r.ID)
+		}
+	}
+	sort.Strings(holders)
+	if got := strings.Join(holders, ","); got != "admin,member,owner,viewer" {
+		t.Errorf("acr.context.read is held by %q, want admin,member,owner,viewer", got)
+	}
+	if c.Allows("platform_admin", "acr.context.read") {
+		t.Error("platform_admin holds acr.context.read")
+	}
+	for _, role := range []string{"platform_admin", "platform_owner"} {
+		for _, action := range []string{"acr.context.read", "git.read"} {
+			if c.Allows(role, action) {
+				t.Errorf("%s holds %s", role, action)
+			}
+		}
+	}
+}
+
 func TestImpersonationIsDeniedOnTheG51List(t *testing.T) {
 	want := map[string]bool{
 		"admin.users": true, "admin.orgs": true, "admin.impersonate": true,
@@ -507,20 +536,30 @@ func TestImpersonationValuesOfTheRepositoryReadAndTheTwoDeniedActions(t *testing
 	}
 }
 
-func TestShippedRolesDelegateNoRepositoryReadToday(t *testing.T) {
-	for _, r := range Default().Roles() {
+func TestShippedRolesDelegateTheRepositoryReadExactlyWhenTheyHoldIt(t *testing.T) {
+	c := Default()
+	delegating := 0
+	for _, r := range c.Roles() {
 		if r.Scope != ScopeOrganization {
 			continue
 		}
-		got, err := Default().DelegatedActions(r.ID)
+		got, err := c.DelegatedActions(r.ID)
 		if err != nil {
 			t.Fatal(err)
 		}
+		has := false
 		for _, id := range got {
-			if id == "acr.context.read" {
-				t.Errorf("role %s delegates acr.context.read: a role now holds it; the cell that it DOES delegate belongs with that change", r.ID)
-			}
+			has = has || id == "acr.context.read"
 		}
+		if has != c.Allows(r.ID, "acr.context.read") {
+			t.Errorf("role %s: delegates acr.context.read %v, holds it %v", r.ID, has, c.Allows(r.ID, "acr.context.read"))
+		}
+		if has {
+			delegating++
+		}
+	}
+	if delegating != 4 {
+		t.Errorf("%d organization roles delegate acr.context.read, want 4", delegating)
 	}
 }
 

@@ -1,5 +1,5 @@
 {
-  "catalog_version": 8,
+  "catalog_version": 9,
   "description": "Lists every served GraphQL root field. query-api enforces no catalog action (actions.v1.json) on a field today, so every action is unknown with a declared gap. Every other statement is held to a source proof by the Go guard.",
   "rows": [
     {

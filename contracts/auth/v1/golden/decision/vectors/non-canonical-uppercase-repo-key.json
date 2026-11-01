@@ -3,7 +3,7 @@
     "allowed": false,
     "cache_class": "none",
     "expires_in_seconds": null,
-    "policy_revision": 8,
+    "policy_revision": 9,
     "reason": "invalid_request"
   },
   "id": "non-canonical-uppercase-repo-key",
@@ -15,7 +15,7 @@
     "resource_kind": "repository"
   },
   "state": {
-    "catalog": "planted-repo-reader",
+    "catalog": "embedded",
     "clock": "2027-01-15T08:00:00Z",
     "grants": [],
     "grants_error": false,

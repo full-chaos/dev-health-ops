@@ -11,9 +11,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 )
 
@@ -191,6 +193,50 @@ func TestUsersReconcileMembershipClasses(t *testing.T) {
 	}
 	if d := e.orgDiffs(t, ctx, org); d != (MembershipDiffs{PublicMissing: 1, RoleDiff: 1, AuthMissing: 1}) {
 		t.Fatalf("after the public removal: %+v, want no inactive diff and the other classes unchanged", d)
+	}
+}
+
+// A sign-in join, of a known account and of a new one, leaves no membership
+// difference and no organization mismatch.
+func TestSignInJoinLeavesNoMembershipDiff(t *testing.T) {
+	e := getReconEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	org, _ := e.seedOrg(t, ctx, true)
+	e.matchOrgOnCleanup(t, org, nil)
+	known := e.seed(t, ctx, uniq("sj"), true, true)
+	e.backfill(t, ctx)
+	row := uuid.New()
+	if _, err := e.admin.Exec(ctx, `INSERT INTO public.sso_providers (id, org_id, name, protocol, status, config)
+VALUES ($1, $2, $3, 'oidc', 'active', '{}'::json)`, row, org, "oidc-"+row.String()); err != nil {
+		t.Fatal(err)
+	}
+	// The owned role in a pool of this cell's own: TestLegacyLinkPurgeVerbEndToEnd closes the shared one (the verb's defer pool.Close()).
+	pool, err := pgxpool.NewWithConfig(ctx, e.ownedRuntime(t).Config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	owned, err := identity.New(identity.Config{Pool: pool, Schema: e.schema, UsersOwnedByAuth: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	join := identity.SSOJoin{OrgID: org, Role: "viewer"}
+	if err := owned.JoinOnSignIn(ctx, known, join, identity.SelfSignUp(nil), nil); err != nil {
+		t.Fatalf("join: %v", err)
+	}
+	subject := "sub-" + uuid.NewString()
+	if _, err := owned.ProvisionAndJoin(ctx, identity.ProvisionRequest{
+		Key:   identity.ExternalKey{Issuer: "https://idp.example.test", Provider: identity.Provider(row.String()), Subject: subject},
+		Email: "sj-" + uuid.NewString()[:8] + "@example.com", Actor: identity.SelfSignUp(nil), LegacyProvider: "oidc", LegacySubject: subject,
+	}, join, nil); err != nil {
+		t.Fatalf("new account: %v", err)
+	}
+	if d := e.orgDiffs(t, ctx, org); d != (MembershipDiffs{}) {
+		t.Fatalf("after a sign-in join: %+v, want none", d)
+	}
+	if classes, ok := classesOf(e.orgsSnapshot(t, ctx), org); ok {
+		t.Fatalf("a sign-in join is a mismatch: classes %v", classes)
 	}
 }
 

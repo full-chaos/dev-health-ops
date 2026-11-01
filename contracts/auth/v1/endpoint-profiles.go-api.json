@@ -227,7 +227,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "platform route, behaviour today: only a superuser passes, any other caller answers 403 (internal/api/policy/guard.go:137); the handler does not scope by the caller's organization",
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.orgs (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:169); the handler does not scope by the caller's organization",
       "gaps": [],
       "graphql_field_name": null,
       "id": "DELETE /api/v1/admin/orgs/{org_id} [dev-health-ops-api @api]",
@@ -288,17 +288,15 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "admin.flags",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "platform route, behaviour today: only a superuser passes, any other caller answers 403 (internal/api/policy/guard.go:137); the handler does not scope by the caller's organization; a missing target answers 404 (internal/apiservice/admin/featureflags.go:494)",
-      "gaps": [
-        "action: no catalog action covers feature override (this leaf does not extend the vocabulary)"
-      ],
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.flags (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:169); the handler does not scope by the caller's organization; a missing target answers 404 (internal/apiservice/admin/featureflags.go:494)",
+      "gaps": [],
       "graphql_field_name": null,
       "id": "DELETE /api/v1/admin/orgs/{org_id}/feature-overrides/{override_id} [dev-health-ops-api @api]",
       "impersonation_policy": "exempt_no_org_context",
@@ -894,7 +892,7 @@
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
       "gaps": [
-        "action: the handler admits only a superuser (internal/api/billing/plans.go:428); no organization role holds it, and the catalog has no platform billing action",
+        "action: the handler admits only a caller holding admin.billing (internal/api/billing/plans.go:428); no organization role holds it; admin.billing is a platform action and this route is org-scoped, so the row keeps no action",
         "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
       ],
       "graphql_field_name": null,
@@ -2078,17 +2076,15 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "admin.flags",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "platform route, behaviour today: only a superuser passes, any other caller answers 403 (internal/api/policy/guard.go:137); the handler does not scope by the caller's organization",
-      "gaps": [
-        "action: no catalog action covers feature flag (this leaf does not extend the vocabulary)"
-      ],
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.flags (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:169); the handler does not scope by the caller's organization",
+      "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/feature-flags [dev-health-ops-api @api]",
       "impersonation_policy": "exempt_no_org_context",
@@ -2225,9 +2221,9 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "valkey: cache-aside of the impersonation session keyed by the caller (internal/apiservice/admin/impersonationcache.go:175): a missing client, an open circuit or an absent key reads Postgres, a Valkey error opens a short circuit that bypasses the cache, a stored negative entry answers without Postgres (impersonationcache.go:126)",
-      "disclosure_behavior": "no path resource id, behaviour today: any authenticated caller may call it; a caller who is not a superuser answers 200 with is_impersonating false and no cache or database read (internal/apiservice/admin/impersonation.go:321)",
+      "disclosure_behavior": "no path resource id, behaviour today: any authenticated caller may call it; a caller who does not hold admin.impersonate (a superuser holds it) answers 200 with is_impersonating false and no cache or database read (internal/apiservice/admin/impersonation.go:321)",
       "gaps": [
-        "action: no catalog action covers impersonation session (this leaf does not extend the vocabulary)"
+        "action: the route is open to any authenticated caller and looks a session up only for a caller holding admin.impersonate (internal/apiservice/admin/impersonation.go:321); it is not a platform-only route, so the row keeps no action"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/impersonate/status [dev-health-ops-api @api]",
@@ -3471,7 +3467,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "platform route, behaviour today: only a superuser passes, any other caller answers 403 (internal/api/policy/guard.go:137); the handler does not scope by the caller's organization",
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.orgs (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:169); the handler does not scope by the caller's organization",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/orgs [dev-health-ops-api @api]",
@@ -3539,7 +3535,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "platform route, behaviour today: only a superuser passes, any other caller answers 403 (internal/api/policy/guard.go:137); the handler does not scope by the caller's organization; a missing target answers 404 (internal/apiservice/admin/orgs.go:150)",
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.orgs (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:169); the handler does not scope by the caller's organization; a missing target answers 404 (internal/apiservice/admin/orgs.go:150)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/orgs/{org_id} [dev-health-ops-api @api]",
@@ -3600,17 +3596,15 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "admin.flags",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "platform route, behaviour today: only a superuser passes, any other caller answers 403 (internal/api/policy/guard.go:137); the handler does not scope by the caller's organization",
-      "gaps": [
-        "action: no catalog action covers feature override (this leaf does not extend the vocabulary)"
-      ],
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.flags (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:169); the handler does not scope by the caller's organization",
+      "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/orgs/{org_id}/feature-overrides [dev-health-ops-api @api]",
       "impersonation_policy": "exempt_no_org_context",
@@ -3740,17 +3734,15 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "admin.audit",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "platform route, behaviour today: only a superuser passes, any other caller answers 403 (internal/api/policy/guard.go:137); the handler does not scope by the caller's organization",
-      "gaps": [
-        "action: no catalog action covers audit log (this leaf does not extend the vocabulary)"
-      ],
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.audit (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:169); the handler does not scope by the caller's organization",
+      "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/platform/audit-logs [dev-health-ops-api @api]",
       "impersonation_policy": "exempt_no_org_context",
@@ -3810,17 +3802,15 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "admin.stats",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "platform route, behaviour today: only a superuser passes, any other caller answers 403 (internal/api/policy/guard.go:137); the handler does not scope by the caller's organization",
-      "gaps": [
-        "action: no catalog action covers platform stats (this leaf does not extend the vocabulary)"
-      ],
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.stats (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:169); the handler does not scope by the caller's organization",
+      "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/admin/platform/stats [dev-health-ops-api @api]",
       "impersonation_policy": "exempt_no_org_context",
@@ -5756,7 +5746,7 @@
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
       "gaps": [
-        "action: the handler admits only a superuser (internal/api/billing/audit.go:139); no organization role holds it, and the catalog has no platform billing action"
+        "action: the handler admits only a caller holding admin.billing (internal/api/billing/audit.go:139); no organization role holds it; admin.billing is a platform action and this route is org-scoped, so the row keeps no action"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/billing/audit [dev-health-ops-api @api]",
@@ -5826,7 +5816,7 @@
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
       "gaps": [
-        "action: the handler admits only a superuser (internal/api/billing/audit.go:214); no organization role holds it, and the catalog has no platform billing action",
+        "action: the handler admits only a caller holding admin.billing (internal/api/billing/audit.go:214); no organization role holds it; admin.billing is a platform action and this route is org-scoped, so the row keeps no action",
         "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
       ],
       "graphql_field_name": null,
@@ -6247,7 +6237,7 @@
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
       "gaps": [
-        "action: the handler admits only a superuser (internal/api/billing/refunds.go:570); no organization role holds it, and the catalog has no platform billing action"
+        "action: the handler admits only a caller holding admin.billing (internal/api/billing/refunds.go:570); no organization role holds it; admin.billing is a platform action and this route is org-scoped, so the row keeps no action"
       ],
       "graphql_field_name": null,
       "id": "GET /api/v1/billing/refunds [dev-health-ops-api @api]",
@@ -6317,7 +6307,7 @@
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
       "gaps": [
-        "action: the handler admits only a superuser (internal/api/billing/refunds.go:632); no organization role holds it, and the catalog has no platform billing action",
+        "action: the handler admits only a caller holding admin.billing (internal/api/billing/refunds.go:632); no organization role holds it; admin.billing is a platform action and this route is org-scoped, so the row keeps no action",
         "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
       ],
       "graphql_field_name": null,
@@ -7867,17 +7857,15 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "admin.flags",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a superuser passes, any other caller answers 403 (internal/api/policy/guard.go:137); the handler does not scope by the caller's organization; a missing target answers 404 (internal/apiservice/admin/featureflags.go:535)",
-      "gaps": [
-        "action: no catalog action covers feature flag (this leaf does not extend the vocabulary)"
-      ],
+      "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a caller holding admin.flags (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:169); the handler does not scope by the caller's organization; a missing target answers 404 (internal/apiservice/admin/featureflags.go:535)",
+      "gaps": [],
       "graphql_field_name": null,
       "id": "PATCH /api/v1/admin/feature-flags/{flag_id} [dev-health-ops-api @api]",
       "impersonation_policy": "exempt_no_org_context",
@@ -8218,7 +8206,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a superuser passes, any other caller answers 403 (internal/api/policy/guard.go:137); the handler does not scope by the caller's organization; a missing target answers 404 (internal/apiservice/admin/orgs.go:370)",
+      "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a caller holding admin.orgs (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:169); the handler does not scope by the caller's organization; a missing target answers 404 (internal/apiservice/admin/orgs.go:370)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "PATCH /api/v1/admin/orgs/{org_id} [dev-health-ops-api @api]",
@@ -8279,17 +8267,15 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "admin.flags",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a superuser passes, any other caller answers 403 (internal/api/policy/guard.go:137); the handler does not scope by the caller's organization; a missing target answers 404 (internal/apiservice/admin/featureflags.go:403)",
-      "gaps": [
-        "action: no catalog action covers feature override (this leaf does not extend the vocabulary)"
-      ],
+      "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a caller holding admin.flags (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:169); the handler does not scope by the caller's organization; a missing target answers 404 (internal/apiservice/admin/featureflags.go:403)",
+      "gaps": [],
       "graphql_field_name": null,
       "id": "PATCH /api/v1/admin/orgs/{org_id}/feature-overrides/{override_id} [dev-health-ops-api @api]",
       "impersonation_policy": "exempt_no_org_context",
@@ -9540,17 +9526,15 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "admin.impersonate",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
       },
       "classification": "protected",
       "current_state_cache_behavior": "valkey: after the commit the route writes the impersonation-session cache entry through (internal/apiservice/admin/impersonation.go:220; internal/apiservice/admin/impersonationcache.go:197); the route does not read the cache; a failed write is logged and opens the cache circuit, and the read side then falls back to Postgres (impersonationcache.go:115, :203)",
-      "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a superuser passes, any other caller answers 403 (internal/api/policy/guard.go:137); the target user is looked up by id and a missing target answers 404 (internal/apiservice/admin/impersonation.go:138); the caller's own organization is not read",
-      "gaps": [
-        "action: no catalog action covers impersonation session (this leaf does not extend the vocabulary)"
-      ],
+      "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a caller holding admin.impersonate (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:169); the target user is looked up by id and a missing target answers 404 (internal/apiservice/admin/impersonation.go:138); the caller's own organization is not read",
+      "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/impersonate [dev-health-ops-api @api]",
       "impersonation_policy": "exempt_no_org_context",
@@ -9610,17 +9594,15 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "admin.impersonate",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
       },
       "classification": "protected",
       "current_state_cache_behavior": "valkey: the route reads the open session from Postgres (internal/apiservice/admin/impersonation.go:260) and after the commit writes the negative cache entry through (internal/apiservice/admin/impersonationcache.go:149); a failed write is logged and opens the cache circuit, and the read side then falls back to Postgres (impersonationcache.go:203)",
-      "disclosure_behavior": "platform route, behaviour today: only a superuser passes, any other caller answers 403 (internal/api/policy/guard.go:137); the route acts on the caller's own open session and answers 400 when there is none (internal/apiservice/admin/impersonation.go:267)",
-      "gaps": [
-        "action: no catalog action covers impersonation session (this leaf does not extend the vocabulary)"
-      ],
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.impersonate (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:169); the route acts on the caller's own open session and answers 400 when there is none (internal/apiservice/admin/impersonation.go:267)",
+      "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/impersonate/stop [dev-health-ops-api @api]",
       "impersonation_policy": "exempt_no_org_context",
@@ -11003,7 +10985,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a superuser passes, any other caller answers 403 (internal/api/policy/guard.go:137); the handler does not scope by the caller's organization",
+      "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a caller holding admin.orgs (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:169); the handler does not scope by the caller's organization",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/orgs [dev-health-ops-api @api]",
@@ -11064,17 +11046,15 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "admin.flags",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a superuser passes, any other caller answers 403 (internal/api/policy/guard.go:137); the handler does not scope by the caller's organization; a missing target answers 404 (internal/apiservice/admin/featureflags.go:299)",
-      "gaps": [
-        "action: no catalog action covers feature override (this leaf does not extend the vocabulary)"
-      ],
+      "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a caller holding admin.flags (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:169); the handler does not scope by the caller's organization; a missing target answers 404 (internal/apiservice/admin/featureflags.go:299)",
+      "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/admin/orgs/{org_id}/feature-overrides [dev-health-ops-api @api]",
       "impersonation_policy": "exempt_no_org_context",
@@ -13662,7 +13642,7 @@
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
       "gaps": [
-        "action: the handler admits only a superuser (internal/api/billing/audit.go:306); no organization role holds it, and the catalog has no platform billing action",
+        "action: the handler admits only a caller holding admin.billing (internal/api/billing/audit.go:306); no organization role holds it; admin.billing is a platform action and this route is org-scoped, so the row keeps no action",
         "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
       ],
       "graphql_field_name": null,
@@ -13873,7 +13853,7 @@
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
       "gaps": [
-        "action: the handler admits only a superuser (internal/api/billing/plans.go:137); no organization role holds it, and the catalog has no platform billing action"
+        "action: the handler admits only a caller holding admin.billing (internal/api/billing/plans.go:137); no organization role holds it; admin.billing is a platform action and this route is org-scoped, so the row keeps no action"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/billing/plans [dev-health-ops-api @api]",
@@ -13934,17 +13914,15 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "admin.billing",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "platform route, behaviour today: only a superuser passes, any other caller answers 403 (internal/api/policy/guard.go:137); the caller's own organization is not read",
-      "gaps": [
-        "action: the route is superuser-only (policy.Superuser, internal/api/billing/routes.go:92) with tenancy cross_org_superuser_only; the billing actions are organization actions, and the catalog has no platform billing action"
-      ],
+      "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.billing (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:169); the caller's own organization is not read",
+      "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/billing/plans/pull-stripe [dev-health-ops-api @api]",
       "impersonation_policy": "exempt_no_org_context",
@@ -14052,7 +14030,7 @@
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
       "gaps": [
-        "action: the handler admits only a superuser (internal/api/billing/plansync.go:25); no organization role holds it, and the catalog has no platform billing action",
+        "action: the handler admits only a caller holding admin.billing (internal/api/billing/plansync.go:25); no organization role holds it; admin.billing is a platform action and this route is org-scoped, so the row keeps no action",
         "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
       ],
       "graphql_field_name": null,
@@ -14193,7 +14171,7 @@
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
       "gaps": [
-        "action: the handler admits only a superuser (internal/api/billing/reconcile.go:413); no organization role holds it, and the catalog has no platform billing action"
+        "action: the handler admits only a caller holding admin.billing (internal/api/billing/reconcile.go:413); no organization role holds it; admin.billing is a platform action and this route is org-scoped, so the row keeps no action"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/billing/reconcile [dev-health-ops-api @api]",
@@ -14263,7 +14241,7 @@
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26)",
       "gaps": [
-        "action: the handler admits only a superuser (internal/api/billing/refunds.go:71); no organization role holds it, and the catalog has no platform billing action"
+        "action: the handler admits only a caller holding admin.billing (internal/api/billing/refunds.go:71); no organization role holds it; admin.billing is a platform action and this route is org-scoped, so the row keeps no action"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/billing/refunds [dev-health-ops-api @api]",
@@ -14901,9 +14879,9 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26), and an X-Org-Id organization the caller may not use answers 403 (internal/api/telemetry/telemetry.go:120); a caller that is not a superuser, or a request in an active impersonation session, answers 403 (internal/api/telemetry/report.go:38)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:115; internal/api/policy/orgless.go:26), and an X-Org-Id organization the caller may not use answers 403 (internal/api/telemetry/telemetry.go:120); a caller that does not hold admin.telemetry (a superuser holds it), or a request in an active impersonation session, answers 403 (internal/api/telemetry/report.go:38)",
       "gaps": [
-        "action: the route checks a platform role itself (internal/api/telemetry/report.go:35) and acts in one organization; no catalog action is proven to equal that check (this leaf does not extend the vocabulary)"
+        "action: the route admits only a caller holding admin.telemetry (internal/api/telemetry/report.go:35) and acts in one organization; admin.telemetry is a platform action and this route is org-scoped, so the row keeps no action"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/telemetry/report [dev-health-ops-api @api]",
@@ -15500,7 +15478,7 @@
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "disclosure_behavior": null,
       "gaps": [
-        "action: the handler admits only a superuser (internal/api/billing/plans.go:340); no organization role holds it, and the catalog has no platform billing action",
+        "action: the handler admits only a caller holding admin.billing (internal/api/billing/plans.go:340); no organization role holds it; admin.billing is a platform action and this route is org-scoped, so the row keeps no action",
         "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
       ],
       "graphql_field_name": null,

@@ -2,6 +2,7 @@ package authruntime
 
 import (
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/auth/pushprojection"
@@ -27,7 +28,7 @@ func TestThePushProjectionOffBuildsNothing(t *testing.T) {
 	} {
 		cfg, pool, schema := feedFixture(t, env)
 		before := floorInputCount(pushprojection.FloorInputName)
-		components, err := pushProjection(cfg, discard(), pool, schema, health.NewRegistry(), nil)
+		components, err := pushProjection(cfg, discard(), pool, schema, health.NewRegistry(time.Second), nil)
 		if err != nil || len(components) != 0 {
 			t.Fatalf("%s: %d components, err %v; want none", name, len(components), err)
 		}
@@ -40,7 +41,7 @@ func TestThePushProjectionOffBuildsNothing(t *testing.T) {
 // On: one reader component, and its restore-fence floor input registered once, however many times it is built.
 func TestThePushProjectionOnBuildsOneReaderAndRegistersItsFloorInputOnce(t *testing.T) {
 	cfg, pool, schema := feedFixture(t, map[string]string{authconfig.EnvPushProjection: "on"})
-	components, err := pushProjection(cfg, discard(), pool, schema, health.NewRegistry(), nil)
+	components, err := pushProjection(cfg, discard(), pool, schema, health.NewRegistry(time.Second), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +51,7 @@ func TestThePushProjectionOnBuildsOneReaderAndRegistersItsFloorInputOnce(t *test
 	if floorInputCount(pushprojection.FloorInputName) != 1 {
 		t.Fatal("the reader is an outbox consumer and did not register its restore-fence floor input once")
 	}
-	if _, err := pushProjection(cfg, discard(), pool, schema, health.NewRegistry(), nil); err != nil {
+	if _, err := pushProjection(cfg, discard(), pool, schema, health.NewRegistry(time.Second), nil); err != nil {
 		t.Fatal(err)
 	}
 	if floorInputCount(pushprojection.FloorInputName) != 1 {

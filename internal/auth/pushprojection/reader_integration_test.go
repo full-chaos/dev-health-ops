@@ -126,7 +126,7 @@ func newEnv(t *testing.T, fence bool) (*env, error) {
 
 func (e *env) reader(t *testing.T, horizon time.Duration) *Reader {
 	t.Helper()
-	r, err := NewReader(Config{Pool: e.runtime, Schema: e.schema, Engine: e.engine, Registry: health.NewRegistry(), Horizon: horizon, BatchLimit: 50, PollInterval: time.Second})
+	r, err := NewReader(Config{Pool: e.runtime, Schema: e.schema, Engine: e.engine, Registry: health.NewRegistry(time.Second), Horizon: horizon, BatchLimit: 50, PollInterval: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,7 +303,7 @@ func TestReaderReleasesAParkedChildWhenItsParentApplies(t *testing.T) {
 	e := getEnv(t, true)
 	org := e.org(t)
 	parent, child := uuid.NewString(), uuid.NewString()
-	e.rawOutbox(t, child, 1, "external_push_credential.rotated", rawPayload(org, "src-p", 1, map[string]any{"status": "active", "fingerprint": "fedcba9876543210", "scopes": []string{"ingest:write"}, "rotation_parent_id": parent}))
+	e.rawOutbox(t, child, 1, "external_push_credential.rotated", rawPayload(org, "src-r", 1, map[string]any{"status": "active", "fingerprint": "fedcba9876543210", "scopes": []string{"ingest:write"}, "rotation_parent_id": parent}))
 	r := e.reader(t, time.Hour)
 	now := time.Now()
 	rep, err := r.Step(context.Background(), now)
@@ -357,19 +357,19 @@ func TestReaderLowWaterMarkMovesOnlyOverRowsOlderThanTheHorizon(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	tx := e.begin(t)
 	ctx := context.Background()
+	tx := e.begin(t)
 	if _, err := tx.Exec(ctx, `SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true)`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.Exec(ctx, `UPDATE auth.auth_outbox_events SET created_at = now() - interval '2 hours' WHERE id = $1`, oldRow); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE auth.auth_outbox_events SET created_at = now() - interval '2 hours' WHERE aggregate_type = 'external_push_credential' AND id < $1`, recentRow); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
 	r := e.reader(t, time.Hour)
-	rep, err := r.Step(ctx, time.Now())
+	rep, err := r.Step(ctx, time.Now().Add(2*time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -488,5 +488,39 @@ func TestReaperKeepsAPushRowAboveTheCursorAndAStoppedReaderLosesNoRow(t *testing
 	}
 	if e.count(t, `SELECT count(*) FROM auth.auth_outbox_events WHERE id = $1`, rowB) != 1 {
 		t.Fatal("a push row above the cursor was reaped")
+	}
+}
+
+func TestReaderDecidesAStaleRowItReadsSoItIsNeverReadAgain(t *testing.T) {
+	e := getEnv(t, true)
+	ctx := context.Background()
+	org, id := e.org(t), uuid.NewString()
+	first := created(org, id)
+	e.appendCommitted(t, first)
+	snapshot := first.Change
+	e.appendCommitted(t, audit.PushLifecycleEvent{EventType: externalpush.Scoped, AggregateID: id, OrganizationID: first.OrganizationID, SourceID: first.SourceID,
+		Change: externalpush.Change{Scopes: []string{"ingest:write"}}, Snapshot: &snapshot})
+	r := e.reader(t, time.Hour)
+	if rep, err := r.Step(ctx, time.Now()); err != nil || rep.Applied != 2 {
+		t.Fatalf("step: %+v, %v; want both revisions applied", rep, err)
+	}
+	tx := e.begin(t)
+	if _, err := tx.Exec(ctx, `SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM auth.credential_projection_digest WHERE external_reference = $1 AND revision = 1`, id); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if rep, err := r.Step(ctx, time.Now()); err != nil || rep.Seen != 1 || rep.Applied != 0 {
+		t.Fatalf("step: %+v, %v; want the undecided old revision read once and not applied", rep, err)
+	}
+	if e.count(t, `SELECT count(*) FROM auth.credential_projection_digest WHERE external_reference = $1 AND revision = 1 AND outcome = 'stale'`, id) != 1 {
+		t.Fatal("the stale delivery was not decided with a digest row")
+	}
+	if rep, err := r.Step(ctx, time.Now()); err != nil || rep.Seen != 0 {
+		t.Fatalf("step: %+v, %v; want nothing left to read", rep, err)
 	}
 }

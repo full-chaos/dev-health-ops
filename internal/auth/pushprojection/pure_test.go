@@ -41,11 +41,13 @@ func TestEventFromRowBuildsTheMappedPushEvent(t *testing.T) {
 
 func TestEventFromRowRefusesWhatIsNotAPushEvent(t *testing.T) {
 	for name, edit := range map[string]func(*OutboxRow){
-		"payload not json":        func(r *OutboxRow) { r.Payload = []byte("{") },
-		"payload is an array":     func(r *OutboxRow) { r.Payload = []byte("[]") },
-		"revision is a decimal":   func(r *OutboxRow) { r.Payload = []byte(`{"revision":1.5,"organization_id":"o","source_id":"s","change":{}}`) },
-		"revision missing":        func(r *OutboxRow) { r.Payload = []byte(`{"organization_id":"o","source_id":"s","change":{}}`) },
-		"no aggregate id":         func(r *OutboxRow) { r.AggregateID = "" },
+		"payload not json":    func(r *OutboxRow) { r.Payload = []byte("{") },
+		"payload is an array": func(r *OutboxRow) { r.Payload = []byte("[]") },
+		"revision is a decimal": func(r *OutboxRow) {
+			r.Payload = []byte(`{"revision":1.5,"organization_id":"o","source_id":"s","change":{}}`)
+		},
+		"revision missing": func(r *OutboxRow) { r.Payload = []byte(`{"organization_id":"o","source_id":"s","change":{}}`) },
+		"no aggregate id":  func(r *OutboxRow) { r.AggregateID = "" },
 	} {
 		row := validRow(t)
 		edit(&row)
@@ -82,10 +84,10 @@ func TestConfigRefusesWhatCannotRunARead(t *testing.T) {
 		t.Fatalf("a valid shape: %v", err)
 	}
 	for name, edit := range map[string]func(*Config){
-		"no horizon":          func(c *Config) { c.Horizon = 0 },
-		"horizon over a day":  func(c *Config) { c.Horizon = 25 * time.Hour },
-		"batch zero":          func(c *Config) { c.BatchLimit = 0 },
-		"batch over the cap":  func(c *Config) { c.BatchLimit = 1001 },
+		"no horizon":           func(c *Config) { c.Horizon = 0 },
+		"horizon over a day":   func(c *Config) { c.Horizon = 25 * time.Hour },
+		"batch zero":           func(c *Config) { c.BatchLimit = 0 },
+		"batch over the cap":   func(c *Config) { c.BatchLimit = 1001 },
 		"poll under the floor": func(c *Config) { c.PollInterval = time.Millisecond },
 	} {
 		c := base

@@ -1,14 +1,15 @@
 package outboxprojection
 
 import (
+	"reflect"
 	"testing"
 	"time"
-
-	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/pushlifecycle"
 )
+
+const sampleOrg = "7f1c0d2e-0000-4000-8000-0000000000a1"
 
 func sampleEvent() contracts.ExternalPushLifecycleEvent {
 	at := contracts.Timestamp{Time: time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)}
@@ -16,7 +17,7 @@ func sampleEvent() contracts.ExternalPushLifecycleEvent {
 		AggregateType: contracts.ExternalPushCredentialAggregate, AggregateID: "0a1b2c3d-0000-4000-8000-000000000001",
 		EventType: contracts.ExternalPushCreated, CreatedAt: at,
 		Payload: contracts.ExternalPushLifecyclePayload{
-			Revision: 1, OrganizationID: "org_" + uuid.NewString(), SourceID: "src-1",
+			Revision: 1, OrganizationID: "org_" + sampleOrg, SourceID: "src-1",
 			Change: contracts.ExternalPushLifecycleChange{Fingerprint: "0123456789abcdef", Scopes: []string{"ingest:write"}},
 		},
 	}
@@ -98,7 +99,7 @@ func TestRevokeReasonMapsIntoTheClosedList(t *testing.T) {
 func TestNarrowOnlyEverShortensAParent(t *testing.T) {
 	t0 := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
 	active := pushlifecycle.State{Status: pushlifecycle.StatusActive, ExpiresAt: "2027-01-01T00:00:00.000000Z"}
-	if got := Narrow(active, nil, nil); got != active {
+	if got := Narrow(active, nil, nil); !reflect.DeepEqual(got, active) {
 		t.Errorf("no bound changed the state: %+v", got)
 	}
 	revoked := Narrow(active, &t0, nil)

@@ -536,20 +536,30 @@ func TestImpersonationValuesOfTheRepositoryReadAndTheTwoDeniedActions(t *testing
 	}
 }
 
-func TestShippedRolesDelegateNoRepositoryReadToday(t *testing.T) {
-	for _, r := range Default().Roles() {
+func TestShippedRolesDelegateTheRepositoryReadExactlyWhenTheyHoldIt(t *testing.T) {
+	c := Default()
+	delegating := 0
+	for _, r := range c.Roles() {
 		if r.Scope != ScopeOrganization {
 			continue
 		}
-		got, err := Default().DelegatedActions(r.ID)
+		got, err := c.DelegatedActions(r.ID)
 		if err != nil {
 			t.Fatal(err)
 		}
+		has := false
 		for _, id := range got {
-			if id == "acr.context.read" {
-				t.Errorf("role %s delegates acr.context.read: a role now holds it; the cell that it DOES delegate belongs with that change", r.ID)
-			}
+			has = has || id == "acr.context.read"
 		}
+		if has != c.Allows(r.ID, "acr.context.read") {
+			t.Errorf("role %s: delegates acr.context.read %v, holds it %v", r.ID, has, c.Allows(r.ID, "acr.context.read"))
+		}
+		if has {
+			delegating++
+		}
+	}
+	if delegating != 4 {
+		t.Errorf("%d organization roles delegate acr.context.read, want 4", delegating)
 	}
 }
 

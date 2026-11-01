@@ -115,7 +115,8 @@ func TestEvaluate_EveryCatalogActionByEveryRole(t *testing.T) {
 			case "platform":
 				req = platformRequest(a.Action)
 			case "repository":
-				req = Request{Action: a.Action, ResourceKind: "repository", OrganizationID: testOrg}
+				// Served by the grant and membership default rules: TestEvaluate_RepositoryKindActionFollowsGrantAndDefaultRules.
+				continue
 			default:
 				t.Fatalf("action %s has resource kind %q", a.Action, a.ResourceKind)
 			}
@@ -141,12 +142,22 @@ func TestEvaluate_EveryCatalogActionByEveryRole(t *testing.T) {
 			}
 		}
 	}
-	if cells != len(actions)*len(roles) {
+	repository := map[string]bool{}
+	for _, a := range actions {
+		if a.ResourceKind == "repository" {
+			repository[a.Action] = true
+		}
+	}
+	if cells != (len(actions)-len(repository))*len(roles) {
 		t.Fatalf("cells %d", cells)
 	}
 	total := 0
 	for _, r := range roles {
-		total += len(r.Actions)
+		for _, a := range r.Actions {
+			if !repository[a] {
+				total++
+			}
+		}
 	}
 	if allowed != total {
 		t.Fatalf("allowed cells %d, role grants %d", allowed, total)

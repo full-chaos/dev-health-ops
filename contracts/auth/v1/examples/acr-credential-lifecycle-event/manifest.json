@@ -188,6 +188,18 @@
       "why": "A revision is an integer; a fractional number is refused by the schema, not only by the clients."
     },
     {
+      "file": "invalid-issued-actor-credential.json",
+      "expect_instance_location": "/payload/actor_type",
+      "expect_keyword": "enum",
+      "why": "acr makes a credential from a credential only by rotate: issued is never written by a credential actor."
+    },
+    {
+      "file": "invalid-device-redeemed-actor-credential.json",
+      "expect_instance_location": "/payload/actor_type",
+      "expect_keyword": "enum",
+      "why": "A device redemption is never written by a credential actor."
+    },
+    {
       "file": "invalid-revoked-at-revision-1.json",
       "expect_instance_location": "/payload/revision",
       "expect_keyword": "minimum",

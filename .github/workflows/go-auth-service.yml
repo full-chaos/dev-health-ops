@@ -201,8 +201,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
-      - name: CHAOS-12420 planted failure, reverted in the next commit
-        run: exit 1
       - name: go test -race on live PostgreSQL (session domain concurrency, CHAOS-10207)
         run: bash ci/check_go.sh auth race-integration
 

@@ -230,7 +230,14 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (*Grant, error) {
 		return nil, s.refuse(ctx, "create", err)
 	}
 	id := uuid.New()
+	who := grantend.Actor{PrincipalID: in.Actor.PrincipalID, RequestID: in.Actor.RequestID, Caller: in.Actor.Caller}
 	for range planAttempts {
+		// An expired grant of the tuple is no grant at read but still holds the tuple's unique index: this create ends it
+		// (resource_grant.expired) in its own transaction. Planned lock-free; the transaction compares the set again.
+		expired, perr := grantend.PlanExpiredTuple(ctx, grantend.ReaderFunc(s.poolRows), s.q, in.OrgID, in.PrincipalID, in.Role, in.Key)
+		if perr != nil {
+			return nil, s.refuse(ctx, "create", fmt.Errorf("%w: create: %w", ErrStore, perr))
+		}
 		err = s.run(ctx, "create", audit.Mutation{
 			Apply: func(ctx context.Context, tx audit.TxOps) error {
 				st, err := s.lockPair(ctx, tx, in.Authorize, in.OrgID, in.PrincipalID, in.Actor.PrincipalID)
@@ -247,10 +254,17 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (*Grant, error) {
 				if in.ExpiresAt != nil && !in.ExpiresAt.After(now) {
 					return ErrExpiryPast
 				}
+				if err := expired.Apply(ctx, tx, nil); err != nil {
+					if errors.Is(err, grantend.ErrStateMoved) {
+						return errStateMoved
+					}
+					return err
+				}
 				var live int
 				if err := tx.QueryRow(ctx, `SELECT count(*) FROM `+s.q+`.resource_grants
-WHERE principal_id = $1 AND organization_id = $2 AND role_key = $3 AND resource_kind = $4 AND resource_id = $5 AND revoked_at IS NULL`,
-					in.PrincipalID, in.OrgID, in.Role, KindRepository, in.Key).Scan(&live); err != nil {
+WHERE principal_id = $1 AND organization_id = $2 AND role_key = $3 AND resource_kind = $4 AND resource_id = $5 AND revoked_at IS NULL
+AND (expires_at IS NULL OR expires_at > $6)`,
+					in.PrincipalID, in.OrgID, in.Role, KindRepository, in.Key, now).Scan(&live); err != nil {
 					return err
 				}
 				if live > 0 {
@@ -270,7 +284,8 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)`, id, in.PrincipalID, in.O
 			},
 			Audit: auditRow("auth.resource_grant.created", "grant_created", in.OrgID, in.PrincipalID, id, in.Actor, []string{"role_key", "status"},
 				map[string]any{"new_status": "active"}),
-			Events:   []audit.OutboxEvent{s.createEvent(id, in)},
+			Also:     expired.Audit(who),
+			Events:   append([]audit.OutboxEvent{s.createEvent(id, in)}, expired.Events()...),
 			Refusals: []error{ErrNotMember, ErrAlreadyGranted, ErrExpiryPast},
 		})
 		if !errors.Is(err, errStateMoved) {
@@ -281,6 +296,11 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)`, id, in.PrincipalID, in.O
 		return nil, err
 	}
 	return s.Get(ctx, in.OrgID, id)
+}
+
+// poolRows is the lock-free read of the expired-tuple plan.
+func (s *Store) poolRows(ctx context.Context, sql string, args ...any) (grantend.Rows, error) {
+	return s.pool.Query(ctx, sql, args...)
 }
 
 type row struct {
@@ -360,9 +380,10 @@ func (s *Store) Update(ctx context.Context, in UpdateInput) (*Grant, error) {
 		planned := principal
 		// The audit row and event are never written when the locked read
 		// refuses; they only have to be well formed before the transaction.
-		fields := []string{"role_key"}
+		fields := []string{}
 		change := map[string]any{"status": "active"}
 		if in.Role != nil {
+			fields = append(fields, "role_key")
 			if set := s.actionSet(*in.Role); set != nil {
 				change["action_set"] = set
 			}

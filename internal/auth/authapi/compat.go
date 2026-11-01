@@ -172,7 +172,7 @@ func compatRoutes(deps CompatDeps, rows []byte) ([]httpapi.Route, error) {
 		routes = h.withSessionStateRoute(routes)
 		routes = h.withDelegatedRoutes(routes)
 	}
-	return routes, nil
+	return h.withValidateRoute(routes, rows)
 }
 
 // auth-outcome.v1 operations of the compatibility routes.

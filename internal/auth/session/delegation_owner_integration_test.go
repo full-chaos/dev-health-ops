@@ -12,6 +12,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole"
 	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
 )
@@ -103,21 +104,47 @@ func TestDelegationPlainActorKeepsTheDelegableSet(t *testing.T) {
 	}
 }
 
+// An owner role that ended before Start does not widen the set. RevokeOwner
+// deletes the row, so that case has no row to read; an expired assignment keeps
+// its row, and only rule.ActiveRule tells it from a held one.
 func TestDelegationOwnerRoleRevokedBeforeStartGivesTheDelegableSet(t *testing.T) {
-	ctx := testContext(t)
-	d := newDelegationEnv(t, ctx)
-	role, denied := roleWithADeniedAction(t)
-	c := d.fixtureRole(t, ctx, role)
-	owners := d.ownerStore(t)
-	if _, err := owners.GrantOwner(ctx, c.actor); err != nil {
-		t.Fatalf("GrantOwner: %v", err)
-	}
-	if err := owners.RevokeOwner(ctx, c.actor); err != nil {
-		t.Fatalf("RevokeOwner: %v", err)
-	}
-	row := d.start(t, ctx, c)
-	if got := d.storedActions(t, ctx, row.ID); slices.Contains(got, denied) {
-		t.Fatalf("stored %v holds %q after the owner role ended", got, denied)
+	for name, end := range map[string]func(t *testing.T, ctx context.Context, d *delegationEnv, actor uuid.UUID){
+		"deleted": func(t *testing.T, ctx context.Context, d *delegationEnv, actor uuid.UUID) {
+			if err := d.ownerStore(t).RevokeOwner(ctx, actor); err != nil {
+				t.Fatalf("RevokeOwner: %v", err)
+			}
+		},
+		"expired": func(t *testing.T, ctx context.Context, d *delegationEnv, actor uuid.UUID) {
+			if err := audit.Commit(ctx, d.admin, d.schema, audit.Mutation{
+				Apply: func(ctx context.Context, tx audit.TxOps) error {
+					_, err := tx.Exec(ctx, `UPDATE auth.platform_role_assignments SET expires_at = statement_timestamp() - interval '1 minute'
+						WHERE principal_id = $1 AND role_key = 'platform_owner'`, actor)
+					return err
+				},
+				Audit: sessionEvent("auth.platform_role.revoked"), OffStream: audit.OffStreamSessionLifecycle,
+			}); err != nil {
+				t.Fatalf("expire the owner row: %v", err)
+			}
+			if got := d.count(t, ctx, `SELECT count(*) FROM auth.platform_role_assignments
+				WHERE principal_id = $1 AND role_key = 'platform_owner' AND expires_at <= statement_timestamp()`, actor); got != 1 {
+				t.Fatalf("expired owner rows = %d, want 1", got)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := testContext(t)
+			d := newDelegationEnv(t, ctx)
+			role, denied := roleWithADeniedAction(t)
+			c := d.fixtureRole(t, ctx, role)
+			if _, err := d.ownerStore(t).GrantOwner(ctx, c.actor); err != nil {
+				t.Fatalf("GrantOwner: %v", err)
+			}
+			end(t, ctx, d, c.actor)
+			row := d.start(t, ctx, c)
+			if got := d.storedActions(t, ctx, row.ID); slices.Contains(got, denied) {
+				t.Fatalf("stored %v holds %q after the owner role ended", got, denied)
+			}
+		})
 	}
 }
 

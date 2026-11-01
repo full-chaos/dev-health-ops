@@ -247,11 +247,12 @@ fail=0
 for pkg in "${packages[@]}"; do
   start="${SECONDS}"
   rc=0
-  # internal/pgmigrate takes about 705 s at host load 30-39 (CHAOS-11714), above go test's 10 m default: it alone gets
+  # internal/pgmigrate takes about 705 s at host load 30-39 (CHAOS-11714), above go test's 10 m default; the auth schema
+  # package passed 600 s once its owner-move cells joined it (one PostgreSQL container per cell). These two get
   # -timeout 20m under a 1500 s cap. Every other package keeps the default timeout and the 900 s cap.
   cap_secs=900
   timeout_flag=()
-  if [ "${pkg}" = "internal/pgmigrate" ]; then cap_secs=1500; timeout_flag=(-timeout 20m); fi
+  if [ "${pkg}" = "internal/pgmigrate" ] || [ "${pkg}" = "internal/storage/postgres/authschema" ]; then cap_secs=1500; timeout_flag=(-timeout 20m); fi
   (cd "${wt}" && "${goenv[@]}" "${capped}" -t "${cap_secs}" -m 16 -- "${go_path}" test -json -tags=integration -count=1 -p 1 ${timeout_flag[@]+"${timeout_flag[@]}"} "./${pkg}") > "${json_tmp}" 2>/dev/null || rc=$?
   secs=$((SECONDS - start))
   counts="$("${JQ}" -s -r '[([.[] | select(.Action == "pass" and .Test != null)] | length), ([.[] | select(.Action == "fail")] | length)] | @tsv' "${json_tmp}" 2>/dev/null)" || counts="0	1"

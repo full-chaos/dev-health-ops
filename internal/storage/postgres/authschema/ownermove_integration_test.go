@@ -212,6 +212,9 @@ func newOwnerMoveEnv(t *testing.T, ctx context.Context, kinds bool) *ownerMoveEn
 		if _, err := oldConn.Exec(ctx, `CREATE FUNCTION auth.zz_definer() RETURNS int LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog AS 'SELECT 1'`); err != nil {
 			t.Fatalf("seed the definer function: %v", err)
 		}
+		if _, err := oldConn.Exec(ctx, `REVOKE ALL ON FUNCTION auth.zz_definer() FROM PUBLIC`); err != nil {
+			t.Fatalf("take PUBLIC EXECUTE off the definer function: %v", err)
+		}
 		if _, err := oldConn.Exec(ctx, fmt.Sprintf(`ALTER FUNCTION auth.zz_definer() OWNER TO %s`, Quote(mustValidatedIdentifier(env.writerRole)))); err != nil {
 			t.Fatalf("hand the definer function to the writer: %v", err)
 		}
@@ -834,13 +837,13 @@ func TestMigratorKeepsThePlatformOwnerRowRightAfterTheMove(t *testing.T) {
 		t.Fatalf("Apply as the migrator: %v", err)
 	}
 	const holder = "00000000-0000-4000-8000-000000103521"
-	if _, err := env.migrator.Exec(ctx, `INSERT INTO auth.principals (id, kind, display_name) VALUES ($1, 'user', 'owner holder')`, holder); err != nil {
+	if err := guardedExec(ctx, env.migrator, `INSERT INTO auth.principals (id, kind, display_name) VALUES ($1, 'user', 'owner holder')`, holder); err != nil {
 		t.Fatalf("seed a principal as the migrator: %v", err)
 	}
-	if _, err := env.migrator.Exec(ctx, `INSERT INTO auth.platform_role_assignments (principal_id, role_key) VALUES ($1, 'platform_owner')`, holder); err != nil {
+	if err := guardedExec(ctx, env.migrator, `INSERT INTO auth.platform_role_assignments (principal_id, role_key) VALUES ($1, 'platform_owner')`, holder); err != nil {
 		t.Errorf("a platform_owner row written by the new owner is refused: %v", err)
 	}
-	if _, err := env.runtime.Exec(ctx, `INSERT INTO auth.platform_role_assignments (principal_id, role_key) VALUES ($1, 'platform_owner')`, holder); err == nil {
+	if err := guardedExec(ctx, env.runtime, `INSERT INTO auth.platform_role_assignments (principal_id, role_key) VALUES ($1, 'platform_owner')`, holder); err == nil {
 		t.Error("the runtime role wrote a platform_owner row")
 	}
 }

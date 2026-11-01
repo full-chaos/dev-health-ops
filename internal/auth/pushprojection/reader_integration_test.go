@@ -4,7 +4,6 @@ package pushprojection
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -185,36 +184,36 @@ func (e *env) appendCommitted(t *testing.T, events ...audit.PushLifecycleEvent) 
 	}
 }
 
-// rawOutbox writes one external_push_credential row the way the writer function would, with any payload.
-func (e *env) rawOutbox(t *testing.T, aggregate string, revision int, eventType string, payload map[string]any) int64 {
+// seed runs one statement inside audit.Commit as the migration role: the guarded tables take no other write.
+func (e *env) seed(t *testing.T, sql string, args ...any) {
 	t.Helper()
-	body, err := json.Marshal(payload)
+	err := audit.Commit(context.Background(), e.admin, e.schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			_, err := tx.Exec(ctx, sql, args...)
+			return err
+		},
+		Audit:     audit.AuditEvent{EventType: "credential.test", Outcome: audit.OutcomeAllowed},
+		OffStream: audit.OffStreamWorkloadRegistry,
+	})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("seed %q: %v", sql, err)
 	}
-	tx := e.begin(t)
-	ctx := context.Background()
-	if _, err := tx.Exec(ctx, `SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true)`); err != nil {
-		t.Fatal(err)
-	}
+}
+
+func (e *env) outboxID(t *testing.T, aggregate string, revision int) int64 {
+	t.Helper()
 	var id int64
-	if err := tx.QueryRow(ctx, `INSERT INTO auth.auth_outbox_events (aggregate_type, aggregate_id, event_type, payload, idempotency_key)
-		VALUES ('external_push_credential', $1, $2, $3::jsonb, $4) RETURNING id`, aggregate, eventType, string(body),
+	if err := e.admin.QueryRow(context.Background(), `SELECT id FROM auth.auth_outbox_events WHERE idempotency_key = $1`,
 		fmt.Sprintf("external_push_credential:%s:%d", aggregate, revision)).Scan(&id); err != nil {
-		t.Fatal(err)
-	}
-	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
 	return id
 }
 
-func rawPayload(org uuid.UUID, source string, revision int, change map[string]any) map[string]any {
-	p := map[string]any{"revision": revision, "organization_id": "org_" + org.String(), "change": change}
-	if source != "" {
-		p["source_id"] = source
-	}
-	return p
+func scoped(c audit.PushLifecycleEvent, scopes ...string) audit.PushLifecycleEvent {
+	snapshot := c.Change
+	return audit.PushLifecycleEvent{EventType: externalpush.Scoped, AggregateID: c.AggregateID, OrganizationID: c.OrganizationID, SourceID: c.SourceID,
+		Change: externalpush.Change{Scopes: scopes}, Snapshot: &snapshot}
 }
 
 func TestReaderProjectsAnAppendedEventOnceAndReadsNothingTwice(t *testing.T) {
@@ -265,11 +264,21 @@ func TestReaderParksAGapAndOtherAggregatesProceedAndTheSameAggregateWaits(t *tes
 	e := getEnv(t, true)
 	org := e.org(t)
 	z, w := uuid.NewString(), uuid.NewString()
-	gap := e.rawOutbox(t, z, 3, "external_push_credential.revoked", rawPayload(org, "src-g", 3, map[string]any{"status": "revoked"}))
-	e.rawOutbox(t, w, 1, "external_push_credential.created", rawPayload(org, "src-g", 1, map[string]any{"status": "active", "fingerprint": "0123456789abcdef", "scopes": []string{"ingest:write"}}))
-	behind := e.rawOutbox(t, z, 4, "external_push_credential.revoked", rawPayload(org, "src-g", 4, map[string]any{"status": "revoked"}))
+	first := created(org, z)
+	e.appendCommitted(t, first)
 	r := e.reader(t, time.Hour)
 	now := time.Now()
+	if rep, err := r.Step(context.Background(), now); err != nil || rep.Applied < 1 {
+		t.Fatalf("setup step: %+v, %v", rep, err)
+	}
+	e.appendCommitted(t, scoped(first, "ingest:write"))
+	e.appendCommitted(t, scoped(first, "ingest:write"))
+	e.appendCommitted(t, scoped(first, "ingest:write"))
+	e.appendCommitted(t, created(org, w))
+	gap, behind := e.outboxID(t, z, 4), e.outboxID(t, z, 5)
+	// Revision 2 is marked decided without being applied: revision 3 then meets a gap.
+	e.seed(t, `INSERT INTO auth.credential_projection_digest (domain_owner, external_reference, revision, digest, outcome) VALUES ('external_push', $1, 2, $2, 'applied')`, z, make([]byte, 32))
+	e.seed(t, `INSERT INTO auth.credential_projection_digest (domain_owner, external_reference, revision, digest, outcome) VALUES ('external_push', $1, 3, $2, 'applied')`, z, make([]byte, 32))
 	rep, err := r.Step(context.Background(), now)
 	if err != nil || rep.Applied != 1 || rep.Parked != 1 {
 		t.Fatalf("step: %+v, %v; want the other aggregate applied and the gap parked", rep, err)
@@ -288,14 +297,13 @@ func TestReaderParksAGapAndOtherAggregatesProceedAndTheSameAggregateWaits(t *tes
 	if err := e.admin.QueryRow(context.Background(), `SELECT attempts FROM auth.projection_retry WHERE outbox_id = $1`, gap).Scan(&attempts); err != nil || attempts != 0 {
 		t.Fatalf("attempts = %d (%v), want 0 before the row is due", attempts, err)
 	}
-	e.rawOutbox(t, z, 1, "external_push_credential.created", rawPayload(org, "src-g", 1, map[string]any{"status": "active", "fingerprint": "0123456789abcdef", "scopes": []string{"ingest:write"}}))
-	e.rawOutbox(t, z, 2, "external_push_credential.scoped", rawPayload(org, "src-g", 2, map[string]any{"scopes": []string{"ingest:write"}}))
+	e.seed(t, `DELETE FROM auth.credential_projection_digest WHERE external_reference = $1 AND revision IN (2, 3)`, z)
 	rep, err = r.Step(context.Background(), now.Add(time.Minute))
 	if err != nil || rep.Released < 1 {
-		t.Fatalf("after the missing revisions arrived: %+v, %v; want the parked row released", rep, err)
+		t.Fatalf("after the missing revision was undecided: %+v, %v; want the parked row released", rep, err)
 	}
-	if e.count(t, `SELECT count(*) FROM auth.credential_projection WHERE external_reference = $1 AND revision >= 3`, z) != 1 {
-		t.Fatal("the parked revision and the one behind it were not applied in order")
+	if e.count(t, `SELECT count(*) FROM auth.credential_projection WHERE external_reference = $1 AND revision >= 4`, z) != 1 {
+		t.Fatal("the parked revision was not applied after its predecessors")
 	}
 }
 
@@ -303,7 +311,8 @@ func TestReaderReleasesAParkedChildWhenItsParentApplies(t *testing.T) {
 	e := getEnv(t, true)
 	org := e.org(t)
 	parent, child := uuid.NewString(), uuid.NewString()
-	e.rawOutbox(t, child, 1, "external_push_credential.rotated", rawPayload(org, "src-r", 1, map[string]any{"status": "active", "fingerprint": "fedcba9876543210", "scopes": []string{"ingest:write"}, "rotation_parent_id": parent}))
+	e.appendCommitted(t, audit.PushLifecycleEvent{EventType: externalpush.Rotated, AggregateID: child, OrganizationID: "org_" + org.String(), SourceID: "src-r",
+		Change: externalpush.Change{Status: "active", Fingerprint: "fedcba9876543210", Scopes: []string{"ingest:write"}, RotationParentID: parent}})
 	r := e.reader(t, time.Hour)
 	now := time.Now()
 	rep, err := r.Step(context.Background(), now)
@@ -323,25 +332,25 @@ func TestReaderReleasesAParkedChildWhenItsParentApplies(t *testing.T) {
 	}
 }
 
-func TestReaderParksAnEventWithNoSourceFinallyAndCountsIt(t *testing.T) {
+func TestReaderParksAnUnknownOrganizationFinallyAndCountsIt(t *testing.T) {
 	e := getEnv(t, true)
-	org := e.org(t)
 	id := uuid.NewString()
-	row := e.rawOutbox(t, id, 1, "external_push_credential.created", rawPayload(org, "", 1, map[string]any{"status": "active", "fingerprint": "0123456789abcdef", "scopes": []string{"ingest:write"}}))
+	e.appendCommitted(t, created(uuid.New(), id)) // an organization in neither projection source
+	row := e.outboxID(t, id, 1)
 	r := e.reader(t, time.Hour)
 	rep, err := r.Step(context.Background(), time.Now())
 	if err != nil || rep.Final != 1 {
-		t.Fatalf("step: %+v, %v; want one final (malformed) row", rep, err)
+		t.Fatalf("step: %+v, %v; want one final row", rep, err)
 	}
-	if e.count(t, `SELECT count(*) FROM auth.projection_retry WHERE outbox_id = $1 AND last_outcome = 'malformed' AND next_at = 'infinity'`, row) != 1 {
-		t.Fatal("the malformed row is not parked for good")
+	if e.count(t, `SELECT count(*) FROM auth.projection_retry WHERE outbox_id = $1 AND last_outcome = 'organization_unknown' AND next_at = 'infinity'`, row) != 1 {
+		t.Fatal("the row is not parked for good")
 	}
 	rep, err = r.Step(context.Background(), time.Now().Add(24*time.Hour))
 	if err != nil || rep.Seen != 0 || rep.Final != 0 {
 		t.Fatalf("a final row was read again: %+v, %v", rep, err)
 	}
 	if e.count(t, `SELECT count(*) FROM auth.credential_projection WHERE external_reference = $1`, id) != 0 {
-		t.Fatal("an event with no source_id was applied")
+		t.Fatal("an event of an unknown organization was applied")
 	}
 }
 
@@ -358,16 +367,7 @@ func TestReaderLowWaterMarkMovesOnlyOverRowsOlderThanTheHorizon(t *testing.T) {
 		}
 	}
 	ctx := context.Background()
-	tx := e.begin(t)
-	if _, err := tx.Exec(ctx, `SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true)`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tx.Exec(ctx, `UPDATE auth.auth_outbox_events SET created_at = now() - interval '2 hours' WHERE aggregate_type = 'external_push_credential' AND id < $1`, recentRow); err != nil {
-		t.Fatal(err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		t.Fatal(err)
-	}
+	e.seed(t, `UPDATE auth.auth_outbox_events SET created_at = now() - interval '2 hours' WHERE aggregate_type = 'external_push_credential' AND id < $1`, recentRow)
 	r := e.reader(t, time.Hour)
 	rep, err := r.Step(ctx, time.Now().Add(2*time.Minute))
 	if err != nil {
@@ -428,7 +428,8 @@ func TestFloorInputCoversAppliedAndParkedRevisions(t *testing.T) {
 	org := e.org(t)
 	applied, parked := uuid.NewString(), uuid.NewString()
 	e.appendCommitted(t, created(org, applied))
-	e.rawOutbox(t, parked, 3, "external_push_credential.revoked", rawPayload(org, "src-f", 3, map[string]any{"status": "revoked"}))
+	e.appendCommitted(t, audit.PushLifecycleEvent{EventType: externalpush.Rotated, AggregateID: parked, OrganizationID: "org_" + org.String(), SourceID: "src-r",
+		Change: externalpush.Change{Status: "active", Fingerprint: "fedcba9876543210", Scopes: []string{"ingest:write"}, RotationParentID: uuid.NewString()}})
 	if _, err := e.reader(t, time.Hour).Step(context.Background(), time.Now()); err != nil {
 		t.Fatal(err)
 	}
@@ -440,8 +441,8 @@ func TestFloorInputCoversAppliedAndParkedRevisions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if floors[FloorKey(applied)] != 1 || floors[FloorKey(parked)] != 3 {
-		t.Fatalf("floors %v: want the applied revision 1 and the parked revision 3", floors)
+	if floors[FloorKey(applied)] != 1 || floors[FloorKey(parked)] != 1 {
+		t.Fatalf("floors %v: want the applied revision 1 and the parked revision 1", floors)
 	}
 }
 
@@ -458,20 +459,9 @@ func TestReaperKeepsAPushRowAboveTheCursorAndAStoppedReaderLosesNoRow(t *testing
 			t.Fatal(err)
 		}
 	}
-	guarded := func(sql string, args ...any) {
-		tx := e.begin(t)
-		if _, err := tx.Exec(ctx, `SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true)`); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := tx.Exec(ctx, sql, args...); err != nil {
-			t.Fatal(err)
-		}
-		if err := tx.Commit(ctx); err != nil {
-			t.Fatal(err)
-		}
-	}
-	guarded(`UPDATE auth.auth_outbox_events SET published_at = now() - interval '9 days' WHERE id = ANY($1)`, []int64{rowA, rowB})
-	guarded(`DELETE FROM auth.projection_cursor WHERE stream = 'external_push'`)
+	guarded := e.seed
+	guarded(t, `UPDATE auth.auth_outbox_events SET published_at = now() - interval '9 days' WHERE id = ANY($1)`, []int64{rowA, rowB})
+	guarded(t, `DELETE FROM auth.projection_cursor WHERE stream = 'external_push'`)
 	cutoff := time.Now().Add(-7 * 24 * time.Hour)
 	if _, err := audit.Reap(ctx, e.runtime, e.schema, cutoff, 1000); err != nil {
 		t.Fatal(err)
@@ -479,7 +469,7 @@ func TestReaperKeepsAPushRowAboveTheCursorAndAStoppedReaderLosesNoRow(t *testing
 	if n := e.count(t, `SELECT count(*) FROM auth.auth_outbox_events WHERE id = ANY($1)`, []int64{rowA, rowB}); n != 2 {
 		t.Fatalf("with no cursor row %d of 2 push rows survive the reaper, want both (a stopped reader loses no row)", n)
 	}
-	guarded(`INSERT INTO auth.projection_cursor (stream, low_water) VALUES ('external_push', $1)`, rowA)
+	guarded(t, `INSERT INTO auth.projection_cursor (stream, low_water) VALUES ('external_push', $1)`, rowA)
 	if _, err := audit.Reap(ctx, e.runtime, e.schema, cutoff, 1000); err != nil {
 		t.Fatal(err)
 	}
@@ -504,16 +494,7 @@ func TestReaderDecidesAStaleRowItReadsSoItIsNeverReadAgain(t *testing.T) {
 	if rep, err := r.Step(ctx, time.Now()); err != nil || rep.Applied != 2 {
 		t.Fatalf("step: %+v, %v; want both revisions applied", rep, err)
 	}
-	tx := e.begin(t)
-	if _, err := tx.Exec(ctx, `SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true)`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tx.Exec(ctx, `DELETE FROM auth.credential_projection_digest WHERE external_reference = $1 AND revision = 1`, id); err != nil {
-		t.Fatal(err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		t.Fatal(err)
-	}
+	e.seed(t, `DELETE FROM auth.credential_projection_digest WHERE external_reference = $1 AND revision = 1`, id)
 	if rep, err := r.Step(ctx, time.Now()); err != nil || rep.Seen != 1 || rep.Applied != 0 {
 		t.Fatalf("step: %+v, %v; want the undecided old revision read once and not applied", rep, err)
 	}

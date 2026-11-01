@@ -4,6 +4,7 @@ package audit
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -35,7 +36,7 @@ func callFunction(ctx context.Context, tx pgx.Tx, eventType, id, payload string,
 	return revision, err
 }
 
-const goodPayload = `{"organization_id":"org_EXAMPLE0000000000000001","source_id":"src_EXAMPLE0000000000000001","change":{"status":"active","fingerprint":"0123456789abcdef","scopes":["ingest:write"]}}`
+const goodPayload = `{"organization_id":"org_EXAMPLE0000000000000001","binding":"source","source_id":"src_EXAMPLE0000000000000001","change":{"status":"active","fingerprint":"0123456789abcdef","scopes":["ingest:write"]}}`
 
 // TestPushFunctionIsTheCallersOnlyDoorAndRefusesEverythingElse runs as the
 // go-api-like login, not as an owner.
@@ -87,18 +88,25 @@ func TestPushFunctionIsTheCallersOnlyDoorAndRefusesEverythingElse(t *testing.T) 
 		eventType, id, payload string
 		snapshot               any
 	}{
-		"a provisioning id shape":       {"external_push_credential.created", "org_abc", goodPayload, nil},
-		"an uppercase uuid":             {"external_push_credential.created", strings.ToUpper(fnUUID1), goodPayload, nil},
-		"an event of another aggregate": {"organization.created", fnUUID1, goodPayload, nil},
-		"an unknown verb":               {"external_push_credential.deleted", fnUUID1, goodPayload, nil},
-		"a payload with a revision":     {"external_push_credential.created", fnUUID1, `{"revision":9,"organization_id":"org_x","source_id":"s","change":{"status":"active"}}`, nil},
-		"a payload with a key":          {"external_push_credential.created", fnUUID1, `{"idempotency_key":"k","organization_id":"org_x","source_id":"s","change":{"status":"active"}}`, nil},
-		"a payload secret member":       {"external_push_credential.created", fnUUID1, `{"secret_hash":"x","organization_id":"org_x","source_id":"s","change":{"status":"active"}}`, nil},
-		"a change secret member":        {"external_push_credential.created", fnUUID1, `{"organization_id":"org_x","source_id":"s","change":{"status":"active","secret_hash":"x"}}`, nil},
-		"a change token member":         {"external_push_credential.created", fnUUID1, `{"organization_id":"org_x","source_id":"s","change":{"status":"active","token":"x"}}`, nil},
-		"a payload that is a list":      {"external_push_credential.created", fnUUID1, `[]`, nil},
-		"a revoked without a snapshot":  {"external_push_credential.revoked", fnUUID1, `{"organization_id":"org_x","source_id":"s","change":{"status":"revoked"}}`, nil},
-		"a snapshot secret member":      {"external_push_credential.revoked", fnUUID1, `{"organization_id":"org_x","source_id":"s","change":{"status":"revoked"}}`, `{"status":"active","secret_hash":"x"}`},
+		"a provisioning id shape":                    {"external_push_credential.created", "org_abc", goodPayload, nil},
+		"an uppercase uuid":                          {"external_push_credential.created", strings.ToUpper(fnUUID1), goodPayload, nil},
+		"an event of another aggregate":              {"organization.created", fnUUID1, goodPayload, nil},
+		"an unknown verb":                            {"external_push_credential.deleted", fnUUID1, goodPayload, nil},
+		"a payload with a revision":                  {"external_push_credential.created", fnUUID1, `{"revision":9,"organization_id":"org_x","binding":"source","source_id":"s","change":{"status":"active"}}`, nil},
+		"a payload with a key":                       {"external_push_credential.created", fnUUID1, `{"idempotency_key":"k","organization_id":"org_x","binding":"source","source_id":"s","change":{"status":"active"}}`, nil},
+		"a payload secret member":                    {"external_push_credential.created", fnUUID1, `{"secret_hash":"x","organization_id":"org_x","binding":"source","source_id":"s","change":{"status":"active"}}`, nil},
+		"a change secret member":                     {"external_push_credential.created", fnUUID1, `{"organization_id":"org_x","binding":"source","source_id":"s","change":{"status":"active","secret_hash":"x"}}`, nil},
+		"a change token member":                      {"external_push_credential.created", fnUUID1, `{"organization_id":"org_x","binding":"source","source_id":"s","change":{"status":"active","token":"x"}}`, nil},
+		"a payload that is a list":                   {"external_push_credential.created", fnUUID1, `[]`, nil},
+		"no binding":                                 {"external_push_credential.created", fnUUID1, `{"organization_id":"org_x","source_id":"s","change":{"status":"active"}}`, nil},
+		"an unknown binding":                         {"external_push_credential.created", fnUUID1, `{"organization_id":"org_x","binding":"tenant","source_id":"s","change":{"status":"active"}}`, nil},
+		"a null binding":                             {"external_push_credential.created", fnUUID1, `{"organization_id":"org_x","binding":null,"source_id":"s","change":{"status":"active"}}`, nil},
+		"a source binding without one":               {"external_push_credential.created", fnUUID1, `{"organization_id":"org_x","binding":"source","change":{"status":"active"}}`, nil},
+		"an organization binding with a source":      {"external_push_credential.created", fnUUID1, `{"organization_id":"org_x","binding":"organization","source_id":"s","change":{"status":"active"}}`, nil},
+		"an organization binding with a null source": {"external_push_credential.created", fnUUID1, `{"organization_id":"org_x","binding":"organization","source_id":null,"change":{"status":"active"}}`, nil},
+		"an optional envelope member":                {"external_push_credential.created", fnUUID1, `{"actor_principal_id":"prn_x","organization_id":"org_x","binding":"source","source_id":"s","change":{"status":"active"}}`, nil},
+		"a revoked without a snapshot":               {"external_push_credential.revoked", fnUUID1, `{"organization_id":"org_x","binding":"source","source_id":"s","change":{"status":"revoked"}}`, nil},
+		"a snapshot secret member":                   {"external_push_credential.revoked", fnUUID1, `{"organization_id":"org_x","binding":"source","source_id":"s","change":{"status":"revoked"}}`, `{"status":"active","secret_hash":"x"}`},
 	}
 	for name, tc := range refusals {
 		t.Run("refuses "+name, func(t *testing.T) {
@@ -324,7 +332,7 @@ func TestPushFunctionRowsEqualTheGoFormOfTheSameInputs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload := `{"revision":` + fmt.Sprint(revision) + `,"organization_id":"org_EXAMPLE0000000000000001","source_id":"src_EXAMPLE0000000000000001","change":{"status":"active","fingerprint":"0123456789abcdef","scopes":["ingest:write"]}}`
+	payload := `{"revision":` + fmt.Sprint(revision) + `,"organization_id":"org_EXAMPLE0000000000000001","binding":"source","source_id":"src_EXAMPLE0000000000000001","change":{"status":"active","fingerprint":"0123456789abcdef","scopes":["ingest:write"]}}`
 	if err := insertOutboxRow(ctx, goTx, q, "external_push_credential", fnUUID1, "external_push_credential.created", revision, []byte(payload)); err != nil {
 		t.Fatal(err)
 	}
@@ -384,4 +392,106 @@ func deref(s *string) string {
 		return "NULL"
 	}
 	return *s
+}
+
+const orgWidePayload = `{"organization_id":"org_EXAMPLE0000000000000001","binding":"organization","change":{"status":"active","fingerprint":"0123456789abcdef","scopes":["ingest:status"]}}`
+
+type storedPush struct {
+	eventType string
+	payload   string
+}
+
+func storedPushEvents(t *testing.T, ctx context.Context, env *pushFixture, id string) []storedPush {
+	t.Helper()
+	rows, err := env.pool.Query(ctx, `SELECT event_type, payload::text FROM auth.auth_outbox_events
+		WHERE aggregate_type = 'external_push_credential' AND aggregate_id = $1 ORDER BY id`, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var out []storedPush
+	for rows.Next() {
+		var row storedPush
+		if err := rows.Scan(&row.eventType, &row.payload); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
+// TestPushFunctionStoresTheBindingAndNoPlaceholderSource: an organization-wide
+// credential is stored with binding organization and no source_id member, and a
+// source-bound one with both.
+func TestPushFunctionStoresTheBindingAndNoPlaceholderSource(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	env := newPushFixture(t, ctx)
+
+	call := func(eventType, id, payload string, snapshot any) {
+		t.Helper()
+		if err := withPushTx(t, ctx, env, true, func(tx pgx.Tx) error {
+			_, err := callFunction(ctx, tx, eventType, id, payload, snapshot)
+			return err
+		}); err != nil {
+			t.Fatalf("%s: %v", eventType, err)
+		}
+	}
+	call("external_push_credential.created", fnUUID1, orgWidePayload, nil)
+	call("external_push_credential.created", fnUUID2, goodPayload, nil)
+	for id, want := range map[string]struct{ binding, source string }{fnUUID1: {"organization", ""}, fnUUID2: {"source", "src_EXAMPLE0000000000000001"}} {
+		rows := storedPushEvents(t, ctx, env, id)
+		if len(rows) != 1 {
+			t.Fatalf("%s: %d rows, want 1", id, len(rows))
+		}
+		var got struct {
+			Binding  string  `json:"binding"`
+			SourceID *string `json:"source_id"`
+		}
+		if err := json.Unmarshal([]byte(rows[0].payload), &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Binding != want.binding || (want.source == "") != (got.SourceID == nil) || (got.SourceID != nil && *got.SourceID != want.source) {
+			t.Errorf("%s: stored payload %s, want binding %q source %q", id, rows[0].payload, want.binding, want.source)
+		}
+		if strings.Contains(rows[0].payload, `"source_id": null`) || strings.Contains(rows[0].payload, `"source_id": ""`) {
+			t.Errorf("%s: a placeholder source in %s", id, rows[0].payload)
+		}
+	}
+}
+
+// TestPushFunctionSynthesizedCreatedCarriesTheSameBinding: the first touch of
+// an organization-wide credential that predates the stream writes created and
+// then the later event, both binding organization, neither with a source_id.
+func TestPushFunctionSynthesizedCreatedCarriesTheSameBinding(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	env := newPushFixture(t, ctx)
+	snapshot := `{"status":"active","fingerprint":"0123456789abcdef","scopes":["ingest:status"]}`
+	revoked := `{"organization_id":"org_EXAMPLE0000000000000001","binding":"organization","change":{"status":"revoked"}}`
+	if err := withPushTx(t, ctx, env, true, func(tx pgx.Tx) error {
+		revision, err := callFunction(ctx, tx, "external_push_credential.revoked", fnUUID1, revoked, snapshot)
+		if err == nil && revision != 2 {
+			err = fmt.Errorf("revision = %d, want 2", revision)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rows := storedPushEvents(t, ctx, env, fnUUID1)
+	if len(rows) != 2 || rows[0].eventType != "external_push_credential.created" || rows[1].eventType != "external_push_credential.revoked" {
+		t.Fatalf("rows = %+v, want created then revoked", rows)
+	}
+	for _, row := range rows {
+		var members map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(row.payload), &members); err != nil {
+			t.Fatal(err)
+		}
+		if string(members["binding"]) != `"organization"` {
+			t.Errorf("%s: binding = %s, want \"organization\"", row.eventType, members["binding"])
+		}
+		if _, has := members["source_id"]; has {
+			t.Errorf("%s: carries a source_id member: %s", row.eventType, row.payload)
+		}
+	}
 }

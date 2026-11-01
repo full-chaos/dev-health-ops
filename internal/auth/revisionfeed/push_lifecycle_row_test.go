@@ -16,7 +16,7 @@ import (
 func pushRow(t *testing.T, id string, revision int64, eventType string, change contracts.ExternalPushLifecycleChange) audit.Event {
 	t.Helper()
 	payload, err := json.Marshal(map[string]any{"revision": revision, "organization_id": "org_EXAMPLE0000000000000001",
-		"source_id": "src_EXAMPLE0000000000000001", "change": change})
+		"binding": "source", "source_id": "src_EXAMPLE0000000000000001", "change": change})
 	if err != nil {
 		t.Fatal(err)
 	}

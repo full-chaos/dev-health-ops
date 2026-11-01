@@ -283,3 +283,62 @@ func TestTokenWritesWithTheSwitchOffWriteNoEvent(t *testing.T) {
 		t.Fatalf("%d outbox rows with the switch off", n)
 	}
 }
+
+// TestOrganizationWideTokenWritesOrganizationBoundLifecycleEvents: a token with
+// no source emits created, rotated and revoked through the real function, with
+// binding organization and no source_id member.
+func TestOrganizationWideTokenWritesOrganizationBoundLifecycleEvents(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	env := newLifecycleEnv(t, ctx, true)
+
+	w := httptest.NewRecorder()
+	env.h.createOrgToken(w, env.request(map[string]any{"name": "org", "scopes": []pyjson.Value{"ingest:status"}}, "", ""))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create org token: %d %s", w.Code, w.Body.String())
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if got := env.outbox(t, ctx, created.ID); len(got) != 1 || got[0] != (outboxRow{externalpush.Created, 1}) {
+		t.Fatalf("after create: %+v", got)
+	}
+
+	w = httptest.NewRecorder()
+	env.h.rotateToken(w, env.request(nil, "token_id", created.ID))
+	if w.Code != http.StatusOK {
+		t.Fatalf("rotate: %d %s", w.Code, w.Body.String())
+	}
+	var rotated struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &rotated); err != nil {
+		t.Fatal(err)
+	}
+	if got := env.outbox(t, ctx, rotated.ID); len(got) != 1 || got[0] != (outboxRow{externalpush.Rotated, 1}) {
+		t.Fatalf("rotated token events: %+v", got)
+	}
+	if got := env.outbox(t, ctx, created.ID); len(got) != 2 || got[1] != (outboxRow{externalpush.Revoked, 2}) {
+		t.Fatalf("parent events: %+v", got)
+	}
+
+	w = httptest.NewRecorder()
+	env.h.revokeToken(w, env.request(nil, "token_id", rotated.ID))
+	if w.Code != http.StatusOK {
+		t.Fatalf("revoke: %d %s", w.Code, w.Body.String())
+	}
+	if got := env.outbox(t, ctx, rotated.ID); len(got) != 2 || got[1] != (outboxRow{externalpush.Revoked, 2}) {
+		t.Fatalf("revoked token events: %+v", got)
+	}
+
+	if n := env.count(t, ctx, `SELECT count(*) FROM auth.auth_outbox_events WHERE aggregate_type = 'external_push_credential'
+		AND (payload->>'binding' IS DISTINCT FROM 'organization' OR jsonb_exists(payload, 'source_id'))`); n != 0 {
+		t.Fatalf("%d organization-wide events with the wrong binding or a source_id member", n)
+	}
+	if n := env.count(t, ctx, `SELECT count(*) FROM auth.auth_outbox_events WHERE aggregate_type = 'external_push_credential'`); n != 4 {
+		t.Fatalf("%d events, want 4 (created and revoked for the first token, rotated and revoked for the second)", n)
+	}
+}

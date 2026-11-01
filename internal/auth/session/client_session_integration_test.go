@@ -22,9 +22,9 @@ type clientCase struct {
 	web                  Issued
 }
 
-func newClientCase(t *testing.T, ctx context.Context) *clientCase {
+// clientCase is one person, organization and web session in the shared env.
+func (d *delegationEnv) clientCase(t *testing.T, ctx context.Context) *clientCase {
 	t.Helper()
-	d := newDelegationEnv(t, ctx)
 	c := &clientCase{delegationEnv: d, person: d.user(t, ctx, false), organization: d.org(t, ctx)}
 	d.member(t, ctx, c.organization, c.person, "member")
 	c.web = c.signIn(t, ctx, &c.organization)
@@ -101,11 +101,35 @@ func (c *clientCase) credential(t *testing.T, ctx context.Context, record Record
 	return secret
 }
 
+// TestClientSessions runs the client session cells over one PostgreSQL: each cell
+// takes its own person, organization and web session, so the cells share a server,
+// not state. The auth race job runs this package near its time cap, and a server per
+// case cost it 21 containers.
+func TestClientSessions(t *testing.T) {
+	ctx := testContext(t)
+	d := newDelegationEnv(t, ctx)
+	for _, cell := range []struct {
+		name string
+		run  func(*testing.T, context.Context, *delegationEnv)
+	}{
+		{"WhatEndsWhatOverABrowserAndAnMCPClientSession", testWhatEndsWhatOverABrowserAndAnMCPClientSession},
+		{"AStampBetweenTheTwoCreationsEndsTheChild", testAStampBetweenTheTwoCreationsEndsTheChild},
+		{"ABrowserClientDoesNotMoveItsWebSession", testABrowserClientDoesNotMoveItsWebSession},
+		{"ALinkedSessionNeverOutlivesItsParentInAnyRead", testALinkedSessionNeverOutlivesItsParentInAnyRead},
+		{"AClientSessionCarriesItsWebSessionsPinOrganizationAndLogin", testAClientSessionCarriesItsWebSessionsPinOrganizationAndLogin},
+		{"AClientSessionIsRefusedUnderASessionThatCannotConsent", testAClientSessionIsRefusedUnderASessionThatCannotConsent},
+		{"TheSchemaRefusesEveryBadWebLink", testTheSchemaRefusesEveryBadWebLink},
+		{"ActorInDelegationReadsTheDelegatedSideOnly", testActorInDelegationReadsTheDelegatedSideOnly},
+		{"ActorInDelegationReadsThroughTheEffectiveExpiry", testActorInDelegationReadsThroughTheEffectiveExpiry},
+	} {
+		t.Run(cell.name, func(t *testing.T) { cell.run(t, ctx, d) })
+	}
+}
+
 // Each of the five ends the browser client with no code on its path (acp, CHAOS-12251
 // Q2), and an MCP client's session outlives the three web-only ones (ADR-13 decision
 // 5). The positive control is the same pair live before the end.
-func TestWhatEndsWhatOverABrowserAndAnMCPClientSession(t *testing.T) {
-	ctx := testContext(t)
+func testWhatEndsWhatOverABrowserAndAnMCPClientSession(t *testing.T, ctx context.Context, d *delegationEnv) {
 	for _, tc := range []struct {
 		name          string
 		end           func(t *testing.T, ctx context.Context, c *clientCase)
@@ -136,7 +160,7 @@ func TestWhatEndsWhatOverABrowserAndAnMCPClientSession(t *testing.T) {
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			c := newClientCase(t, ctx)
+			c := d.clientCase(t, ctx)
 			browser, mcp := c.mustClient(t, ctx, true), c.mustClient(t, ctx, false)
 			if !c.live(t, ctx, browser.ID) || !c.live(t, ctx, mcp.ID) || !c.live(t, ctx, c.web.Session.ID) {
 				t.Fatal("positive control: a session is not live before the end")
@@ -158,9 +182,8 @@ func TestWhatEndsWhatOverABrowserAndAnMCPClientSession(t *testing.T) {
 // The parent's whole effective revoke is read over the parent's row (acp, 46638678):
 // a password change after the parent's creation and before the child's voids the
 // parent, and the child's own stamp cannot see it.
-func TestAStampBetweenTheTwoCreationsEndsTheChild(t *testing.T) {
-	ctx := testContext(t)
-	c := newClientCase(t, ctx)
+func testAStampBetweenTheTwoCreationsEndsTheChild(t *testing.T, ctx context.Context, d *delegationEnv) {
+	c := d.clientCase(t, ctx)
 	child := c.mustClient(t, ctx, true)
 	var between time.Time
 	if err := c.admin.QueryRow(ctx, `SELECT w.created_at + (s.created_at - w.created_at) / 2
@@ -179,9 +202,8 @@ func TestAStampBetweenTheTwoCreationsEndsTheChild(t *testing.T) {
 
 // A browser client's own end stays its own: revoking it leaves the web session live,
 // and its credential and its use move nothing on the web session.
-func TestABrowserClientDoesNotMoveItsWebSession(t *testing.T) {
-	ctx := testContext(t)
-	c := newClientCase(t, ctx)
+func testABrowserClientDoesNotMoveItsWebSession(t *testing.T, ctx context.Context, d *delegationEnv) {
+	c := d.clientCase(t, ctx)
 	child := c.mustClient(t, ctx, true)
 	before, err := c.owned.Current(ctx, c.web.Session.ID)
 	if err != nil {
@@ -222,11 +244,10 @@ func TestABrowserClientDoesNotMoveItsWebSession(t *testing.T) {
 
 // A linked session never outlives its parent in any read: the record's expiry, the
 // exchange's cap, and the expiry of a new credential.
-func TestALinkedSessionNeverOutlivesItsParentInAnyRead(t *testing.T) {
-	ctx := testContext(t)
+func testALinkedSessionNeverOutlivesItsParentInAnyRead(t *testing.T, ctx context.Context, d *delegationEnv) {
 
 	t.Run("the record", func(t *testing.T) {
-		c := newClientCase(t, ctx)
+		c := d.clientCase(t, ctx)
 		child := c.mustClient(t, ctx, true)
 		c.credential(t, ctx, child)
 		parent, err := c.owned.Current(ctx, c.web.Session.ID)
@@ -243,7 +264,7 @@ func TestALinkedSessionNeverOutlivesItsParentInAnyRead(t *testing.T) {
 	})
 
 	t.Run("the exchange cap", func(t *testing.T) {
-		c := newClientCase(t, ctx)
+		c := d.clientCase(t, ctx)
 		child := c.mustClient(t, ctx, true)
 		secret := c.credential(t, ctx, child)
 		c.idleExpire(t, ctx, c.web.Session.ID)
@@ -257,7 +278,7 @@ func TestALinkedSessionNeverOutlivesItsParentInAnyRead(t *testing.T) {
 	})
 
 	t.Run("a new credential", func(t *testing.T) {
-		c := newClientCase(t, ctx)
+		c := d.clientCase(t, ctx)
 		child := c.mustClient(t, ctx, true)
 		secret := c.credential(t, ctx, child)
 		c.guarded(t, ctx, `UPDATE auth.refresh_credentials SET expires_at = clock_timestamp() + interval '1 hour' WHERE session_id = $1`, c.web.Session.ID.String())
@@ -275,9 +296,8 @@ func TestALinkedSessionNeverOutlivesItsParentInAnyRead(t *testing.T) {
 	})
 }
 
-func TestAClientSessionCarriesItsWebSessionsPinOrganizationAndLogin(t *testing.T) {
-	ctx := testContext(t)
-	c := newClientCase(t, ctx)
+func testAClientSessionCarriesItsWebSessionsPinOrganizationAndLogin(t *testing.T, ctx context.Context, d *delegationEnv) {
+	c := d.clientCase(t, ctx)
 	for name, linked := range map[string]bool{"browser": true, "mcp": false} {
 		t.Run(name, func(t *testing.T) {
 			got := c.mustClient(t, ctx, linked)
@@ -306,8 +326,7 @@ func TestAClientSessionCarriesItsWebSessionsPinOrganizationAndLogin(t *testing.T
 }
 
 // A client session is refused under a web session that cannot stand behind it.
-func TestAClientSessionIsRefusedUnderASessionThatCannotConsent(t *testing.T) {
-	ctx := testContext(t)
+func testAClientSessionIsRefusedUnderASessionThatCannotConsent(t *testing.T, ctx context.Context, d *delegationEnv) {
 	for _, tc := range []struct {
 		name string
 		web  func(t *testing.T, ctx context.Context, c *clientCase) uuid.UUID
@@ -339,7 +358,7 @@ func TestAClientSessionIsRefusedUnderASessionThatCannotConsent(t *testing.T) {
 		}, ErrWebSessionNoOrganization},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			c := newClientCase(t, ctx)
+			c := d.clientCase(t, ctx)
 			web := tc.web(t, ctx, c)
 			for name, linked := range map[string]bool{"browser": true, "mcp": false} {
 				before := c.count(t, ctx, `SELECT count(*) FROM auth.sessions`)
@@ -358,9 +377,8 @@ func TestAClientSessionIsRefusedUnderASessionThatCannotConsent(t *testing.T) {
 // The link's shape is the schema's, for any writer: self-reference, depth two, a
 // change of the link, an actor on either end, another principal, another organization
 // and no organization are each refused. The positive control is the plain link.
-func TestTheSchemaRefusesEveryBadWebLink(t *testing.T) {
-	ctx := testContext(t)
-	c := newClientCase(t, ctx)
+func testTheSchemaRefusesEveryBadWebLink(t *testing.T, ctx context.Context, d *delegationEnv) {
+	c := d.clientCase(t, ctx)
 	other := c.user2(t, ctx)
 	otherOrg := c.org2(t, ctx)
 	insert := func(id, principal string, org *uuid.UUID, link string) error {
@@ -430,15 +448,14 @@ func TestTheSchemaRefusesEveryBadWebLink(t *testing.T) {
 // a live delegation with a plain session of their own. A target with its own session
 // is not refused, and nor is an actor after the delegation ended. A missing session
 // row is an error, never false.
-func TestActorInDelegationReadsTheDelegatedSideOnly(t *testing.T) {
-	ctx := testContext(t)
-	c := newClientCase(t, ctx)
-	d := c.fixture(t, ctx)
-	start, err := c.owned.StartDelegation(ctx, d.input())
+func testActorInDelegationReadsTheDelegatedSideOnly(t *testing.T, ctx context.Context, d *delegationEnv) {
+	c := d.clientCase(t, ctx)
+	f := c.fixture(t, ctx)
+	start, err := c.owned.StartDelegation(ctx, f.input())
 	if err != nil {
 		t.Fatalf("StartDelegation: %v", err)
 	}
-	targetOwn, err := c.owned.Create(ctx, d.target, &d.org, []string{"pwd"})
+	targetOwn, err := c.owned.Create(ctx, f.target, &f.org, []string{"pwd"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -450,41 +467,40 @@ func TestActorInDelegationReadsTheDelegatedSideOnly(t *testing.T) {
 		}
 		return got
 	}
-	if !read(d.actor, d.base.Session.ID) {
+	if !read(f.actor, f.base.Session.ID) {
 		t.Error("an actor with a plain session and a live delegation passed")
 	}
-	if !read(d.target, start.ID) {
+	if !read(f.target, start.ID) {
 		t.Error("a delegated session passed")
 	}
-	if read(d.target, targetOwn.Session.ID) {
+	if read(f.target, targetOwn.Session.ID) {
 		t.Error("a target with its own session was refused")
 	}
 	if read(c.person, c.web.Session.ID) {
 		t.Error("a principal on neither side was refused: the positive control")
 	}
-	if _, err := c.owned.ActorInDelegation(ctx, d.actor, uuid.New()); err == nil {
+	if _, err := c.owned.ActorInDelegation(ctx, f.actor, uuid.New()); err == nil {
 		t.Error("a missing session row read as false")
 	}
 	if ok, err := c.owned.EndDelegation(ctx, start.ID, Actor{}); err != nil || !ok {
 		t.Fatalf("EndDelegation: %v, %v", ok, err)
 	}
-	if read(d.actor, d.base.Session.ID) {
+	if read(f.actor, f.base.Session.ID) {
 		t.Error("an actor whose delegation ended was refused")
 	}
 }
 
 // A delegation that expired or lost its base through the effective expressions no
 // longer counts, as every other read of it.
-func TestActorInDelegationReadsThroughTheEffectiveExpiry(t *testing.T) {
-	ctx := testContext(t)
-	c := newClientCase(t, ctx)
-	d := c.fixture(t, ctx)
-	start, err := c.owned.StartDelegation(ctx, d.input())
+func testActorInDelegationReadsThroughTheEffectiveExpiry(t *testing.T, ctx context.Context, d *delegationEnv) {
+	c := d.clientCase(t, ctx)
+	f := c.fixture(t, ctx)
+	start, err := c.owned.StartDelegation(ctx, f.input())
 	if err != nil {
 		t.Fatalf("StartDelegation: %v", err)
 	}
 	c.guarded(t, ctx, `UPDATE auth.sessions SET expires_at = clock_timestamp() - interval '1 second' WHERE id = $1`, start.ID.String())
-	got, err := c.owned.ActorInDelegation(ctx, d.actor, d.base.Session.ID)
+	got, err := c.owned.ActorInDelegation(ctx, f.actor, f.base.Session.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

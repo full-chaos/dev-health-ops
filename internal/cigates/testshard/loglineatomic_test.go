@@ -125,8 +125,8 @@ func TestTheLogConverterFlushesAPackagesUnfinishedLineAtTheEnd(t *testing.T) {
 			"line\nunfinishedmore\n",
 		},
 		"a test end does not flush": {
-			outputEvent(t, "p/a", "TestA", "half ") + "{\"Action\":\"pass\",\"Package\":\"p/a\",\"Test\":\"TestA\",\"Elapsed\":0}\n" + outputEvent(t, "p/a", "TestB", "line\n"),
-			"half line\n",
+			outputEvent(t, "p/a", "TestA", "half ") + "{\"Action\":\"pass\",\"Package\":\"p/a\",\"Test\":\"TestA\",\"Elapsed\":0}\n" + outputEvent(t, "p/b", "", "other\n") + outputEvent(t, "p/a", "TestB", "line\n"),
+			"other\nhalf line\n",
 		},
 	} {
 		if got := convert(t, c.events); got != c.want {

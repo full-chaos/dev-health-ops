@@ -33,16 +33,11 @@ import (
 	"bytes"
 	"compress/flate"
 	"context"
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
-	"math/big"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -54,59 +49,27 @@ import (
 	"testing"
 	"time"
 
-	"github.com/beevik/etree"
-	"github.com/crewjam/saml"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/idpstub"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// samlIdP is a self-signed test IdP fixture: an RSA key + a self-signed
-// certificate, wired into a real saml.IdentityProvider so signing goes
-// through crewjam/saml's own pipeline.
-type samlIdP struct {
-	key  *rsa.PrivateKey
-	cert *x509.Certificate
-	der  []byte
-	idp  *saml.IdentityProvider
-}
+// samlIdP is the shared idpstub SAML provider with the metadata and SSO URLs of the former crewjam-backed fixture.
+type samlIdP struct{ *idpstub.SAML }
 
 func newSAMLIdP(t *testing.T) *samlIdP {
 	t.Helper()
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	idp, err := idpstub.NewSAML(idpstub.SAMLOptions{EntityID: "https://idp.test/saml/metadata", SSOURL: "https://idp.test/saml/sso"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "saml-6659-test-idp"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-	}
-	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cert, err := x509.ParseCertificate(der)
-	if err != nil {
-		t.Fatal(err)
-	}
-	idpMetaURL, _ := url.Parse("https://idp.test/saml/metadata")
-	idpSSOURL, _ := url.Parse("https://idp.test/saml/sso")
-	idp := &saml.IdentityProvider{
-		Key:         key,
-		Certificate: cert,
-		MetadataURL: *idpMetaURL,
-		SSOURL:      *idpSSOURL,
-	}
-	return &samlIdP{key: key, cert: cert, der: der, idp: idp}
+	return &samlIdP{idp}
 }
 
 // certConfigValue is what this fixture's provider config stores for
 // "certificate": bare base64 DER, the same shape parseSAMLCertificate's
 // non-PEM branch reads.
-func (idp *samlIdP) certConfigValue() string {
-	return base64.StdEncoding.EncodeToString(idp.der)
-}
+func (idp *samlIdP) certConfigValue() string { return idp.Keys().CertBase64() }
 
 type samlResponseOpts struct {
 	spEntityID, acsURL, email, fullName, nameID string
@@ -131,10 +94,10 @@ type samlResponseOpts struct {
 	conditionsOnlyNotOnOrAfter, confirmationOnlyNotOnOrAfter time.Time
 	// D2744 P3 split (an r1 finding that TestSAMLACSRefusesAWrongIssuer's
 	// single fixture mismatches BOTH the Response's and the Assertion's
-	// Issuer at once, since both derive from the same idp.idp.MetadataURL
+	// Issuer at once, since both derive from the same idp.EntityID()
 	// at generation time -- deleting EITHER individual crewjam check would
 	// still leave the test passing via the other one): wrongIssuerAt
-	// ("response" or "assertion") transiently swaps idp.idp.MetadataURL
+	// ("response" or "assertion") transiently swaps idp.EntityID()
 	// for ONLY the one generation step that produces that element, so the
 	// OTHER element is signed with the real, correct issuer.
 	wrongIssuerAt string
@@ -147,161 +110,34 @@ type samlResponseOpts struct {
 	authnRequestID string
 }
 
-type staticSPProvider struct{ sp *saml.EntityDescriptor }
-
-func (p staticSPProvider) GetServiceProvider(_ *http.Request, _ string) (*saml.EntityDescriptor, error) {
-	return p.sp, nil
-}
-
-type staticSessionProvider struct{ session *saml.Session }
-
-func (p staticSessionProvider) GetSession(_ http.ResponseWriter, _ *http.Request, _ *saml.IdpAuthnRequest) *saml.Session {
-	return p.session
-}
-
-// signedSAMLResponse builds a real SAML Response, with one genuinely
-// signed Assertion, through crewjam/saml's own IdentityProvider pipeline:
-// a minimal AuthnRequest -> Validate -> MakeAssertion -> (field overrides
-// for the exact content this test wants) -> MakeAssertionEl (signs) ->
-// MakeResponse, matching exactly what processSAMLResponse (saml.go) reads
-// (Status/StatusCode, Issuer, Conditions, AudienceRestriction/Audience,
-// Subject/NameID, SubjectConfirmationData, an AttributeStatement carrying
-// "email"/"full_name"). skipSign strips the signature after the fact
-// (still real, well-formed content, just unsigned); tamperAfterSign
-// mutates the final signed text (breaks the signature, as any tamper
-// must).
+// signedSAMLResponse builds a SAML Response signed on both the Assertion and the Response, as the former crewjam
+// pipeline did, with the content this test asked for. skipSign strips every signature after the fact (still
+// well-formed content, just unsigned); tamperAfterSign mutates the final signed text (breaks the signature).
 func (idp *samlIdP) signedSAMLResponse(t *testing.T, opts samlResponseOpts) string {
 	t.Helper()
-	sp := &saml.EntityDescriptor{
-		EntityID: opts.spEntityID,
-		SPSSODescriptors: []saml.SPSSODescriptor{{
-			AssertionConsumerServices: []saml.IndexedEndpoint{{
-				Binding: "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST", Location: opts.acsURL, Index: 0,
-			}},
-		}},
-	}
-	idp.idp.ServiceProviderProvider = staticSPProvider{sp: sp}
-	idp.idp.SessionProvider = staticSessionProvider{session: &saml.Session{
-		ID: "test-session", UserName: opts.email, UserEmail: opts.email, UserCommonName: opts.fullName,
-		NameID: opts.nameID, CreateTime: time.Now(),
-	}}
-
-	now := time.Now().UTC()
 	authnRequestID := opts.authnRequestID
 	if authnRequestID == "" {
-		authnRequestID = "_authnreq" + fmt.Sprint(now.UnixNano())
+		authnRequestID = "_authnreq" + fmt.Sprint(time.Now().UnixNano())
 	}
-	authnRequest := `<samlp:AuthnRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"
-	xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion"
-	ID="` + authnRequestID + `" Version="2.0" IssueInstant="` + now.Format("2006-01-02T15:04:05Z") + `"
-	Destination="` + idp.idp.SSOURL.String() + `"
-	AssertionConsumerServiceURL="` + opts.acsURL + `"
-	ProtocolBinding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST">
-	<saml:Issuer>` + opts.spEntityID + `</saml:Issuer>
-</samlp:AuthnRequest>`
-
-	req := saml.IdpAuthnRequest{
-		IDP: idp.idp, Now: now, RequestBuffer: []byte(authnRequest), HTTPRequest: &http.Request{},
-	}
-	if err := req.Validate(); err != nil {
-		t.Fatalf("validate authn request: %v", err)
-	}
-	// D2744 P3 split: the assertion's own Issuer derives from
-	// idp.idp.MetadataURL at THIS exact call (identity_provider.go's
-	// MakeAssertion), so a transient swap here -- restored immediately
-	// after -- signs the assertion with a wrong issuer while leaving the
-	// (not-yet-generated) Response's own issuer untouched.
-	realMetadataURL := idp.idp.MetadataURL
-	if opts.wrongIssuerAt == "assertion" {
-		wrong, _ := url.Parse("https://wrong-issuer.test/assertion")
-		idp.idp.MetadataURL = *wrong
-	}
-	if err := (saml.DefaultAssertionMaker{}).MakeAssertion(&req, idp.idp.SessionProvider.(staticSessionProvider).session); err != nil {
-		t.Fatalf("make assertion: %v", err)
-	}
-	idp.idp.MetadataURL = realMetadataURL
-
-	// Override with exactly what this test asked for -- MakeAssertion's
-	// own field derivations (audience/recipient/timestamps) are correct
-	// defaults, but the expired/tampered-timestamp tests need explicit
-	// control.
-	if !opts.notBefore.IsZero() {
-		req.Assertion.Conditions.NotBefore = opts.notBefore
-	}
-	if !opts.notOnOrAfter.IsZero() {
-		req.Assertion.Conditions.NotOnOrAfter = opts.notOnOrAfter
-		req.Assertion.Subject.SubjectConfirmations[0].SubjectConfirmationData.NotOnOrAfter = opts.notOnOrAfter
-	}
-	if !opts.conditionsOnlyNotOnOrAfter.IsZero() {
-		req.Assertion.Conditions.NotOnOrAfter = opts.conditionsOnlyNotOnOrAfter
-	}
-	if !opts.confirmationOnlyNotOnOrAfter.IsZero() {
-		req.Assertion.Subject.SubjectConfirmations[0].SubjectConfirmationData.NotOnOrAfter = opts.confirmationOnlyNotOnOrAfter
-	}
+	nameID := idpstub.NameID{Format: "urn:oasis:names:tc:SAML:2.0:nameid-format:transient", SPNameQualifier: opts.spEntityID, Value: opts.nameID}
 	if opts.nameIDFormat != "" {
-		req.Assertion.Subject.NameID.Format = opts.nameIDFormat
+		nameID.Format = opts.nameIDFormat
 	}
 	if opts.spNameQualifier != "" {
-		req.Assertion.Subject.NameID.SPNameQualifier = opts.spNameQualifier
+		nameID.SPNameQualifier = opts.spNameQualifier
 	}
-	if opts.noSubjectConfirmation {
-		req.Assertion.Subject.SubjectConfirmations = nil
-	}
-	// A custom "email"/"full_name" attribute statement, matching what
-	// this package's own attribute_mapping convention (config.
-	// AttributeMapping, saml.go) and the default fallback both expect --
-	// crewjam's own auto-added attributes use different (real-world,
-	// URN-OID) names this package's own tests don't configure a mapping
-	// for.
-	req.Assertion.AttributeStatements = []saml.AttributeStatement{{
-		Attributes: []saml.Attribute{
-			{Name: "email", Values: []saml.AttributeValue{{Type: "xs:string", Value: opts.email}}},
-			{Name: "full_name", Values: []saml.AttributeValue{{Type: "xs:string", Value: opts.fullName}}},
-		},
-	}}
-
-	if err := req.MakeAssertionEl(); err != nil {
-		t.Fatalf("make assertion el: %v", err)
-	}
-	// D2744 P3 split: the Response's own Issuer derives from
-	// idp.idp.MetadataURL at THIS exact call (identity_provider.go's
-	// MakeResponse) -- the assertion was already signed (with the real
-	// issuer) above, so swapping only here signs the Response with a
-	// wrong issuer while the Assertion's stays correct.
-	if opts.wrongIssuerAt == "response" {
-		wrong, _ := url.Parse("https://wrong-issuer.test/response")
-		idp.idp.MetadataURL = *wrong
-	}
-	if err := req.MakeResponse(); err != nil {
-		t.Fatalf("make response: %v", err)
-	}
-	idp.idp.MetadataURL = realMetadataURL
-
-	out, err := etree.NewDocumentWithRoot(req.ResponseEl).WriteToString()
+	response, err := idp.ResponseB64(idpstub.ResponseSpec{
+		SPEntityID: opts.spEntityID, ACSURL: opts.acsURL, InResponseTo: authnRequestID, NameID: nameID,
+		Email: opts.email, FullName: opts.fullName, SignResponse: true,
+		NotBefore: opts.notBefore, NotOnOrAfter: opts.notOnOrAfter,
+		ConditionsOnlyNotOnOrAfter: opts.conditionsOnlyNotOnOrAfter, ConfirmationOnlyNotOnOrAfter: opts.confirmationOnlyNotOnOrAfter,
+		NoConfirmation: opts.noSubjectConfirmation, WrongIssuerAt: opts.wrongIssuerAt,
+		SkipSign: opts.skipSign, TamperAfterSign: opts.tamperAfterSign,
+	})
 	if err != nil {
-		t.Fatalf("serialize response: %v", err)
+		t.Fatalf("build saml response: %v", err)
 	}
-	if opts.skipSign {
-		// MakeResponse signs BOTH the Response and the Assertion (a real,
-		// commonly-seen IdP pattern); strip every ds:Signature block, not
-		// just the first, or the Assertion's own signature alone still
-		// verifies.
-		for {
-			start := strings.Index(out, "<ds:Signature")
-			if start < 0 {
-				break
-			}
-			end := strings.Index(out[start:], "</ds:Signature>")
-			if end < 0 {
-				break
-			}
-			out = out[:start] + out[start+end+len("</ds:Signature>"):]
-		}
-	}
-	if opts.tamperAfterSign {
-		out = strings.Replace(out, opts.email, "tampered-"+opts.email, 1)
-	}
-	return base64.StdEncoding.EncodeToString([]byte(out))
+	return response
 }
 
 func TestSAMLMetadataAndInitiate(t *testing.T) {
@@ -468,7 +304,7 @@ func TestSAMLACSFullRoundTrip(t *testing.T) {
 	const (
 		spEntityID = "https://sp.test/saml/metadata"
 	)
-	entityID := idp.idp.MetadataURL.String()
+	entityID := idp.EntityID()
 	const acsURL = "https://sp.test/api/v1/auth/saml/{provider_id}/acs"
 	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":%q,"sp_acs_url":%q}`,
 		entityID, idp.certConfigValue(), spEntityID, acsURL)
@@ -530,7 +366,7 @@ func TestSAMLACSRefusesAReplayedAssertion(t *testing.T) {
 	orgID := seedOrg(t, ctx, st.pool, "enterprise")
 	idp := newSAMLIdP(t)
 	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/api/v1/auth/saml/{provider_id}/acs"}`,
-		idp.idp.MetadataURL.String(), idp.certConfigValue())
+		idp.EntityID(), idp.certConfigValue())
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "saml", status: "active", config: config, autoProvision: true})
 
 	seedMember(t, ctx, st.pool, orgID, "replay@example.test", "saml", "replay@example.test")
@@ -568,7 +404,7 @@ func TestSAMLACSRefusesATamperedAssertion(t *testing.T) {
 	orgID := seedOrg(t, ctx, st.pool, "enterprise")
 	idp := newSAMLIdP(t)
 	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/api/v1/auth/saml/{provider_id}/acs"}`,
-		idp.idp.MetadataURL.String(), idp.certConfigValue())
+		idp.EntityID(), idp.certConfigValue())
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "saml", status: "active", config: config, autoProvision: true})
 
 	samlResponse := idp.signedSAMLResponse(t, samlResponseOpts{
@@ -593,7 +429,7 @@ func TestSAMLACSRefusesAnUnsignedAssertion(t *testing.T) {
 	orgID := seedOrg(t, ctx, st.pool, "enterprise")
 	idp := newSAMLIdP(t)
 	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/api/v1/auth/saml/{provider_id}/acs"}`,
-		idp.idp.MetadataURL.String(), idp.certConfigValue())
+		idp.EntityID(), idp.certConfigValue())
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "saml", status: "active", config: config, autoProvision: true})
 
 	samlResponse := idp.signedSAMLResponse(t, samlResponseOpts{
@@ -627,7 +463,7 @@ func TestSAMLACSRefusesAnAssertionWithNoSubjectConfirmation(t *testing.T) {
 	orgID := seedOrg(t, ctx, st.pool, "enterprise")
 	idp := newSAMLIdP(t)
 	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/api/v1/auth/saml/{provider_id}/acs"}`,
-		idp.idp.MetadataURL.String(), idp.certConfigValue())
+		idp.EntityID(), idp.certConfigValue())
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "saml", status: "active", config: config, autoProvision: true})
 
 	samlResponse := idp.signedSAMLResponse(t, samlResponseOpts{
@@ -674,7 +510,7 @@ WHERE org_id = $1 AND action = 'sso_login' AND status = 'failure' ORDER BY creat
 // TestSAMLACSRefusesAWrongIssuerAtTheAssertionLevel are D2744's split of
 // an r1 P3 finding: the original single test mismatched BOTH the
 // Response's and the Assertion's Issuer at once (both derive from the
-// same idp.idp.MetadataURL at generation time), so deleting either
+// same idp.EntityID() at generation time), so deleting either
 // individual crewjam check would still leave that one test passing via
 // the other. These two independently sign ONLY one element with a wrong
 // issuer (samlResponseOpts.wrongIssuerAt), proving each check fires on
@@ -686,7 +522,7 @@ func TestSAMLACSRefusesAWrongIssuerAtTheResponseLevel(t *testing.T) {
 	orgID := seedOrg(t, ctx, st.pool, "enterprise")
 	idp := newSAMLIdP(t)
 	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/api/v1/auth/saml/{provider_id}/acs"}`,
-		idp.idp.MetadataURL.String(), idp.certConfigValue())
+		idp.EntityID(), idp.certConfigValue())
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "saml", status: "active", config: config, autoProvision: true})
 
 	samlResponse := idp.signedSAMLResponse(t, samlResponseOpts{
@@ -709,7 +545,7 @@ func TestSAMLACSRefusesAWrongIssuerAtTheAssertionLevel(t *testing.T) {
 	orgID := seedOrg(t, ctx, st.pool, "enterprise")
 	idp := newSAMLIdP(t)
 	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/api/v1/auth/saml/{provider_id}/acs"}`,
-		idp.idp.MetadataURL.String(), idp.certConfigValue())
+		idp.EntityID(), idp.certConfigValue())
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "saml", status: "active", config: config, autoProvision: true})
 
 	samlResponse := idp.signedSAMLResponse(t, samlResponseOpts{
@@ -738,7 +574,7 @@ func TestSAMLACSRefusesAnAssertionWithExpiredConditions(t *testing.T) {
 	orgID := seedOrg(t, ctx, st.pool, "enterprise")
 	idp := newSAMLIdP(t)
 	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/api/v1/auth/saml/{provider_id}/acs"}`,
-		idp.idp.MetadataURL.String(), idp.certConfigValue())
+		idp.EntityID(), idp.certConfigValue())
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "saml", status: "active", config: config, autoProvision: true})
 
 	samlResponse := idp.signedSAMLResponse(t, samlResponseOpts{
@@ -761,7 +597,7 @@ func TestSAMLACSRefusesAnAssertionWithExpiredSubjectConfirmation(t *testing.T) {
 	orgID := seedOrg(t, ctx, st.pool, "enterprise")
 	idp := newSAMLIdP(t)
 	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/api/v1/auth/saml/{provider_id}/acs"}`,
-		idp.idp.MetadataURL.String(), idp.certConfigValue())
+		idp.EntityID(), idp.certConfigValue())
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{protocol: "saml", status: "active", config: config, autoProvision: true})
 
 	samlResponse := idp.signedSAMLResponse(t, samlResponseOpts{
@@ -804,7 +640,7 @@ func TestSAMLConfigRefusesAnInsecureHTTPOverride(t *testing.T) {
 	orgID := seedOrg(t, ctx, st.pool, "enterprise")
 	idp := newSAMLIdP(t)
 	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"http://sp.test/acs"}`,
-		idp.idp.MetadataURL.String(), idp.certConfigValue())
+		idp.EntityID(), idp.certConfigValue())
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
 		protocol: "saml", status: "active", config: config, autoProvision: true,
 	})
@@ -886,7 +722,7 @@ func TestSAMLACSHonoursAllowIdpInitiatedFalse(t *testing.T) {
 	orgID := seedOrg(t, ctx, st.pool, "enterprise")
 	idp := newSAMLIdP(t)
 	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/api/v1/auth/saml/{provider_id}/acs"}`,
-		idp.idp.MetadataURL.String(), idp.certConfigValue())
+		idp.EntityID(), idp.certConfigValue())
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
 		protocol: "saml", status: "active", config: config, autoProvision: true, disallowIdpInitiated: true,
 	})
@@ -944,7 +780,7 @@ func TestSAMLTwoConcurrentInitiateFlowsBothComplete(t *testing.T) {
 	orgID := seedOrg(t, ctx, st.pool, "enterprise")
 	idp := newSAMLIdP(t)
 	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/api/v1/auth/saml/{provider_id}/acs"}`,
-		idp.idp.MetadataURL.String(), idp.certConfigValue())
+		idp.EntityID(), idp.certConfigValue())
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
 		protocol: "saml", status: "active", config: config, autoProvision: true, disallowIdpInitiated: true,
 	})
@@ -1015,7 +851,7 @@ func TestSAMLACSRefusesAMissingLoginNonceCookie(t *testing.T) {
 	orgID := seedOrg(t, ctx, st.pool, "enterprise")
 	idp := newSAMLIdP(t)
 	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/api/v1/auth/saml/{provider_id}/acs"}`,
-		idp.idp.MetadataURL.String(), idp.certConfigValue())
+		idp.EntityID(), idp.certConfigValue())
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
 		protocol: "saml", status: "active", config: config, autoProvision: true, disallowIdpInitiated: true,
 	})
@@ -1056,7 +892,7 @@ func TestSAMLACSRefusesATamperedLoginNonceCookie(t *testing.T) {
 	orgID := seedOrg(t, ctx, st.pool, "enterprise")
 	idp := newSAMLIdP(t)
 	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/api/v1/auth/saml/{provider_id}/acs"}`,
-		idp.idp.MetadataURL.String(), idp.certConfigValue())
+		idp.EntityID(), idp.certConfigValue())
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
 		protocol: "saml", status: "active", config: config, autoProvision: true, disallowIdpInitiated: true,
 	})
@@ -1143,7 +979,7 @@ func TestSAMLACSRefusesMissingRelayStateWhenNotIdpInitiated(t *testing.T) {
 	orgID := seedOrg(t, ctx, st.pool, "enterprise")
 	idp := newSAMLIdP(t)
 	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/api/v1/auth/saml/{provider_id}/acs"}`,
-		idp.idp.MetadataURL.String(), idp.certConfigValue())
+		idp.EntityID(), idp.certConfigValue())
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
 		protocol: "saml", status: "active", config: config, autoProvision: true, disallowIdpInitiated: true,
 	})
@@ -1167,7 +1003,7 @@ func TestSAMLACSRefusesATamperedRelayStateWhenNotIdpInitiated(t *testing.T) {
 	orgID := seedOrg(t, ctx, st.pool, "enterprise")
 	idp := newSAMLIdP(t)
 	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/api/v1/auth/saml/{provider_id}/acs"}`,
-		idp.idp.MetadataURL.String(), idp.certConfigValue())
+		idp.EntityID(), idp.certConfigValue())
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
 		protocol: "saml", status: "active", config: config, autoProvision: true, disallowIdpInitiated: true,
 	})
@@ -1210,7 +1046,7 @@ func TestSAMLConfigRefusesAnACSOverrideWithAnotherPath(t *testing.T) {
 	orgID := seedOrg(t, ctx, st.pool, "enterprise")
 	idp := newSAMLIdP(t)
 	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/acs"}`,
-		idp.idp.MetadataURL.String(), idp.certConfigValue())
+		idp.EntityID(), idp.certConfigValue())
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
 		protocol: "saml", status: "active", config: config, autoProvision: true,
 	})
@@ -1231,7 +1067,7 @@ func TestSAMLConfigRefusesAnACSOverrideWithAnotherPathOnEveryRoute(t *testing.T)
 	orgID := seedOrg(t, ctx, st.pool, "enterprise")
 	idp := newSAMLIdP(t)
 	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":"https://sp.test/m","sp_acs_url":"https://sp.test/api/v1/auth/saml%%2F{provider_id}%%2Facs"}`,
-		idp.idp.MetadataURL.String(), idp.certConfigValue())
+		idp.EntityID(), idp.certConfigValue())
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
 		protocol: "saml", status: "active", config: config, autoProvision: true,
 	})

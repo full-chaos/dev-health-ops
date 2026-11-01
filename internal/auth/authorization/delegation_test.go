@@ -25,6 +25,12 @@ var floorOrgActions = map[string]bool{
 	"members.invite": true, "members.manage": true, "billing.manage": true, "org.delete": true,
 }
 
+// deniedOrgActions is floorOrgActions plus the actions 4.16a flags denied (ACP ruling: floor or flag).
+var deniedOrgActions = map[string]bool{
+	"members.invite": true, "members.manage": true, "billing.manage": true, "org.delete": true,
+	"settings.write": true, "integrations.write": true, "org.write": true, "members.update": true,
+}
+
 var credentialShape = regexp.MustCompile(`^(credentials?|tokens?)\.(create|issue|rotate|revoke)$`)
 
 type delegatedSnapshot struct {
@@ -233,7 +239,7 @@ func TestDelegation_RealActorRoleNeverWidensTheEffectiveSubject(t *testing.T) {
 				if a.Scope != "organization" || a.ResourceKind != "organization" {
 					continue
 				}
-				want := held[role][a.Action] && (!floorOrgActions[a.Action] || actorRole == ownerActorRol)
+				want := held[role][a.Action] && (!deniedOrgActions[a.Action] || actorRole == ownerActorRol)
 				got := e.Evaluate(orgRequest(a.Action), delegated(role, all, actorRole))
 				if got.Allowed != want {
 					t.Errorf("role %s actor %q %s: allowed=%v want %v (%s)", role, actorRole, a.Action, got.Allowed, want, got.Reason)

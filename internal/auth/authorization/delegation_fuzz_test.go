@@ -37,7 +37,7 @@ func FuzzEvaluateDelegated(f *testing.F) {
 		if !policycatalog.Default().Allows(role, action) {
 			t.Fatalf("allowed %q for role %q that does not hold it", action, role)
 		}
-		floor := floorOrgActions[action] || credentialShape.MatchString(action) || action == "admin.impersonate"
+		floor := deniedOrgActions[action] || credentialShape.MatchString(action) || action == "admin.impersonate"
 		if floor && actorRole != ownerActorRol {
 			t.Fatalf("allowed floor action %q for actor role %q", action, actorRole)
 		}

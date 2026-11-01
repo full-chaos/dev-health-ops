@@ -45,7 +45,7 @@ var floorExact = map[string]bool{
 }
 
 // impersonationFloor is the approved deny list under impersonation. It holds
-// whatever the catalog says about an action.
+// whatever the catalog flag says; the flag denies by default as well.
 func impersonationFloor(action string) bool {
 	if floorExact[action] {
 		return true
@@ -107,7 +107,7 @@ func (e *Evaluator) Evaluate(r Request, s Snapshot) Decision {
 		!hasAction(del.Chain[0].PermittedActions, r.Action) {
 		return deny(ReasonImpersonationDenied)
 	}
-	if impersonationFloor(r.Action) {
+	if impersonationFloor(r.Action) || act.Impersonation != policycatalog.ImpersonationAllowed {
 		if del.ActorPlatformRole != platformOwnerRole {
 			return deny(ReasonImpersonationDenied)
 		}

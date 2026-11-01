@@ -16,6 +16,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authorization"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
 	"github.com/full-chaos/dev-health-ops/internal/auth/delegationinput"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole"
@@ -125,9 +126,21 @@ VALUES ($1, $2, NULL, 'local', true, true, false, 7, now(), now())`, u, "d-"+u.S
 	if _, err := admin.Exec(ctx, `INSERT INTO public.memberships (id, user_id, org_id, role) VALUES ($1, $2, $3, 'member')`, uuid.New(), target, org); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := admin.Exec(ctx, `INSERT INTO auth.platform_role_assignments (id, principal_id, role_key, granted_by) VALUES ($1, $2, $3, $2)`,
-		uuid.New(), actor, platformrole.PlatformAdmin); err != nil {
-		t.Fatal(err)
+	subject := actor.String()
+	adminRow := uuid.New()
+	if err := audit.Commit(ctx, admin, schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			_, err := tx.Exec(ctx, `INSERT INTO auth.platform_role_assignments (id, principal_id, role_key, granted_by) VALUES ($1, $2, $3, $2)`,
+				adminRow, actor, platformrole.PlatformAdmin)
+			return err
+		},
+		Audit: audit.AuditEvent{EventType: "auth.platform_role.granted", Outcome: audit.OutcomeAllowed, SubjectPrincipalID: &subject,
+			Attributes: map[string]any{"reason_code": "role_granted", "target_kind": "principal", "target_id": subject}},
+		Events: []audit.OutboxEvent{{AggregateType: "platform_role_assignment",
+			AggregateID: provisioning.WireID("platform_role_assignment", adminRow.String()), EventType: "platform_role_assignment.granted",
+			Change: map[string]any{"status": "active"}}},
+	}); err != nil {
+		t.Fatalf("grant the admin row: %v", err)
 	}
 	if _, err := owners.GrantOwner(ctx, actor); err != nil {
 		t.Fatalf("GrantOwner: %v", err)
@@ -158,13 +171,20 @@ VALUES ($1, $2, NULL, 'local', true, true, false, 7, now(), now())`, u, "d-"+u.S
 		return d, len(d.Chain) == 1
 	}
 	expire := func(role string) {
+		var rowID uuid.UUID
+		if err := admin.QueryRow(ctx, `SELECT id FROM auth.platform_role_assignments WHERE principal_id = $1 AND role_key = $2`, actor, role).Scan(&rowID); err != nil {
+			t.Fatalf("read the %s row: %v", role, err)
+		}
 		err := audit.Commit(ctx, admin, schema, audit.Mutation{
 			Apply: func(ctx context.Context, tx audit.TxOps) error {
-				_, err := tx.Exec(ctx, `UPDATE auth.platform_role_assignments SET expires_at = statement_timestamp() - interval '1 minute'
-					WHERE principal_id = $1 AND role_key = $2`, actor, role)
+				_, err := tx.Exec(ctx, `UPDATE auth.platform_role_assignments SET expires_at = statement_timestamp() - interval '1 minute' WHERE id = $1`, rowID)
 				return err
 			},
-			Audit: audit.AuditEvent{EventType: "auth.platform_role.revoked", Outcome: audit.OutcomeAllowed}, OffStream: audit.OffStreamSessionLifecycle,
+			Audit: audit.AuditEvent{EventType: "auth.platform_role.revoked", Outcome: audit.OutcomeAllowed, SubjectPrincipalID: &subject,
+				Attributes: map[string]any{"reason_code": "role_revoked", "target_kind": "principal", "target_id": subject}},
+			Events: []audit.OutboxEvent{{AggregateType: "platform_role_assignment",
+				AggregateID: provisioning.WireID("platform_role_assignment", rowID.String()), EventType: "platform_role_assignment.revoked",
+				Change: map[string]any{"status": "revoked"}}},
 		})
 		if err != nil {
 			t.Fatalf("expire %s: %v", role, err)

@@ -18,6 +18,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
@@ -132,19 +133,23 @@ func (j *jitHarness) seedAuthMembership(t *testing.T, principal, org uuid.UUID, 
 	if err := j.ids.on.Store.ProjectOrganization(ctx, org); err != nil {
 		t.Fatal(err)
 	}
-	tx, err := j.env.admin.Begin(ctx)
+	id, subject, orgText := uuid.New(), principal.String(), org.String()
+	wireStatus := status
+	if status == "invited" {
+		wireStatus = "pending"
+	}
+	err := audit.Commit(ctx, j.env.runtime, j.env.schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			_, err := tx.Exec(ctx, `INSERT INTO auth.memberships (id, organization_id, principal_id, status, role) VALUES ($1, $2, $3, $4, 'member')`,
+				id, org, principal, status)
+			return err
+		},
+		Audit: audit.AuditEvent{EventType: "auth.membership.added", Outcome: audit.OutcomeAllowed, SubjectPrincipalID: &subject, OrganizationID: &orgText,
+			Attributes: map[string]any{"reason_code": "membership_added", "target_kind": "membership", "target_id": id.String()}},
+		Events: []audit.OutboxEvent{{AggregateType: "membership", AggregateID: provisioning.WireID("membership", id.String()),
+			EventType: "membership." + status, Change: map[string]any{"status": wireStatus}}},
+	})
 	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, `SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true)`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tx.Exec(ctx, `INSERT INTO auth.memberships (organization_id, principal_id, status, role) VALUES ($1, $2, $3, 'member')`,
-		org, principal, status); err != nil {
-		t.Fatal(err)
-	}
-	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
 }

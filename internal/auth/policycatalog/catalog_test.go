@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	actionsSHA = "065aaac695a23beb9b9b18c5855e4f2de59d280338d72d0244ce044ae770bd00"
-	rolesSHA   = "9075e5211a30d5038761f6e410e243e7822aa79de738765c00e0bafd81b7fa65"
+	actionsSHA = "10c314f05bd38a35dc5491b2baffe9a6ef69be348bf1c5dc17dc534db2d568c8"
+	rolesSHA   = "e49d2c4e17db8e38baacb26dc7c36b917cfc46582d51c2abf44b8b670d702e1b"
 )
 
 func repoRoot(t *testing.T) string {

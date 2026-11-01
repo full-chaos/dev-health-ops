@@ -45,6 +45,27 @@ name a superuser as an owner, nor move an account off a superuser owner. An acco
 (404) only to an active superuser; any other actor gets the refusal it would get for an account of another organization
 (`admin_required`), so the reason never shows whether the account exists.
 
+## Keys
+
+A key is `fcsak_` and 32 random bytes. The registry keeps its SHA-256 digest, never the value. An account holds one live key, or two during a rotation's overlap.
+
+A key authenticates nowhere until CHAOS-12362 lands: no route accepts one yet.
+
+| Route | Body | Answer |
+| --- | --- | --- |
+| `POST /internal/v1/service-accounts/keys/issue` | `service_account_id`, `actor_principal_id`, optional `expires_in_seconds` | `credential-receipt.v1` kind `issue`, with the value once |
+| `POST /internal/v1/service-accounts/keys/rotate` | `service_account_id`, `actor_principal_id`, `overlap_seconds`, optional `expires_in_seconds` | `credential-receipt.v1` kind `rotate`, with the value once |
+| `POST /internal/v1/service-accounts/keys/revoke` | `credential_id`, `actor_principal_id`, `reason` | `credential-entry.v1`, also on a repeat |
+| `POST /internal/v1/service-accounts/keys/list` | `service_account_id`, `actor_principal_id` | `credential-list.v1`, the live keys, no value and no whole digest |
+
+`expires_in_seconds` is 1 to 31536000. If it is absent, the expiry is 90 days. `null` is a malformed body. `overlap_seconds` is 0 to 86400 and it is required.
+
+The actor rule is the rule above. Issue and rotate also refuse a non-superuser on a superuser-owned account, before the verb and again after its locks. Revoke has no such check, so a kill stays open on a disabled account, a suspended organization and a lost owner. List runs the rule once and writes nothing. An unknown key answers as an unknown account does: 404 `key_not_found` to an active superuser, the actor refusal to any other actor.
+
+A route answer lost on a timeout leaves a live key with no holder. List the keys and revoke that key.
+
+A blind margin restore cannot undo a revocation or a shortened expiry made after the target, so such a key is live again until its expiry, up to 365 days. The apply names the count of live keys in `rotate_keys_after_blind_margin`: rotate or revoke every key.
+
 ## Refusals
 
 | Status | `reason_code` | Meaning |
@@ -58,6 +79,12 @@ name a superuser as an owner, nor move an account off a superuser owner. An acco
 | 409 | `owner_invalid` | The owner is not a user, or is disabled. |
 | 409 | `owner_not_member` | The owner is not an active member of the organization. |
 | 409 | `already_in_state` | Disable of a disabled account, enable of an active one, or the current owner named again. |
+| 400 | `expiry_invalid`, `overlap_invalid`, `reason_invalid` | A key route's value is outside its bounds. |
+| 404 | `key_not_found` | No such key. |
+| 409 | `service_account_disabled` | Issue or rotate on a disabled account. |
+| 409 | `key_live` | Issue on an account with a live key. |
+| 409 | `key_none` | Rotate on an account with no live key. |
+| 409 | `key_rotating` | Rotate during an overlap. |
 | 409 | `state_changed` | The owner or organization changed while the verb ran. Disable reads again once before it answers this. |
 | 409 | `users_not_owned` | auth-service does not own users. |
 | 503 | `store_unavailable` | The store failed. Nothing was written. |

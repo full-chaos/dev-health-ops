@@ -102,7 +102,7 @@ func sessionRoutes(
 		return authapi.SessionsNotEnabledRoutes(), nil
 	}
 	sessions, err := session.New(session.Config{
-		Pool: pool, Schema: schema, Logger: logger, UsersOwned: cfg.UsersOwned,
+		Pool: pool, Schema: schema, Logger: logger, UsersOwned: cfg.UsersOwned, PlatformRolesOwned: cfg.PlatformRolesOwned,
 		SuccessorKey: contracts.NewSecretString(cfg.Session.SuccessorKey.Reveal()),
 	})
 	if err != nil {

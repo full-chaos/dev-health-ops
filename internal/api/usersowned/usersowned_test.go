@@ -68,3 +68,12 @@ func TestFromLookupAgreesWithAuthConfig(t *testing.T) {
 		t.Errorf("unset: %v, %v", got, err)
 	}
 }
+
+func TestOrgsOnReadsLikeUsersOwned(t *testing.T) {
+	for raw, want := range map[string]bool{"": false, "false": false, " FALSE ": false, "true": true, "TRUE": true, "maybe": true} {
+		t.Setenv(OrgsEnv, raw)
+		if got := OrgsOn(); got != want {
+			t.Errorf("%s=%q: OrgsOn = %v, want %v", OrgsEnv, raw, got, want)
+		}
+	}
+}

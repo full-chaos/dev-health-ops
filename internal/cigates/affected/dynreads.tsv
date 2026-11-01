@@ -117,6 +117,7 @@ internal/auth/ratelimitvalkey	acl_test.go
 internal/auth/restorefence	consumers_test.go
 internal/auth/session	credential_test.go
 internal/auth/workloadexchange	tokenreview.go
+internal/auth/writerinventory	membership_census_test.go
 internal/auth/writerinventory	scan_test.go
 internal/auth/writerinventory	usersowned_census_shapes_test.go
 internal/auth/writerinventory	usersowned_census_test.go

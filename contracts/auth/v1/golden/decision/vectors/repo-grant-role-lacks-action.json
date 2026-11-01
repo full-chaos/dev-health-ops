@@ -3,7 +3,7 @@
     "allowed": false,
     "cache_class": "none",
     "expires_in_seconds": null,
-    "policy_revision": 5,
+    "policy_revision": 6,
     "reason": "repository_not_granted"
   },
   "id": "repo-grant-role-lacks-action",

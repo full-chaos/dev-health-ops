@@ -586,14 +586,9 @@ func insertOutboxEvents(ctx context.Context, tx pgx.Tx, schema authschema.Valida
 	events := outboxOrder(m.Events)
 	q := authschema.Quote(schema)
 	for _, e := range events {
-		var revision int64
-		if err := tx.QueryRow(ctx, `
-			INSERT INTO `+q+`.aggregate_revisions AS r (aggregate_type, aggregate_id, revision)
-			VALUES ($1, $2, 1)
-			ON CONFLICT (aggregate_type, aggregate_id)
-			DO UPDATE SET revision = r.revision + 1, updated_at = clock_timestamp()
-			RETURNING r.revision`, e.AggregateType, e.AggregateID).Scan(&revision); err != nil {
-			return fmt.Errorf("%w: bumping the %s revision: %w", ErrMutationFailed, e.AggregateType, err)
+		revision, err := bumpRevision(ctx, tx, q, e.AggregateType, e.AggregateID)
+		if err != nil {
+			return err
 		}
 		payload := map[string]any{"revision": revision, "change": orEmpty(e.Change)}
 		if m.Audit.OrganizationID != nil {
@@ -606,16 +601,41 @@ func insertOutboxEvents(ctx context.Context, tx pgx.Tx, schema authschema.Valida
 		if err != nil {
 			return fmt.Errorf("%w: encoding the outbox payload", ErrMutationFailed)
 		}
-		key := e.AggregateType + ":" + e.AggregateID + ":" + strconv.FormatInt(revision, 10)
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO `+q+`.auth_outbox_events
-			    (aggregate_type, aggregate_id, event_type, payload, idempotency_key)
-			VALUES ($1, $2, $3, $4, $5)`,
-			e.AggregateType, e.AggregateID, e.EventType, encoded, key); err != nil {
-			return fmt.Errorf("%w: inserting the outbox event: %w", ErrMutationFailed, err)
+		if err := insertOutboxRow(ctx, tx, q, e.AggregateType, e.AggregateID, e.EventType, revision, encoded); err != nil {
+			return err
 		}
 		slog.DebugContext(ctx, "audit: outbox event written",
 			"aggregate_type", e.AggregateType, "event_type", e.EventType, "revision", revision)
+	}
+	return nil
+}
+
+// bumpRevision raises the aggregate's revision by one, creating it at 1, and
+// returns the new value. The upsert's row lock is held to commit, so the next
+// writer of the aggregate reads the committed value (contiguous), and a
+// rollback undoes the bump (no gap). Every outbox writer goes through it.
+func bumpRevision(ctx context.Context, tx pgx.Tx, quotedSchema, aggregateType, aggregateID string) (int64, error) {
+	var revision int64
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO `+quotedSchema+`.aggregate_revisions AS r (aggregate_type, aggregate_id, revision)
+		VALUES ($1, $2, 1)
+		ON CONFLICT (aggregate_type, aggregate_id)
+		DO UPDATE SET revision = r.revision + 1, updated_at = clock_timestamp()
+		RETURNING r.revision`, aggregateType, aggregateID).Scan(&revision); err != nil {
+		return 0, fmt.Errorf("%w: bumping the %s revision: %w", ErrMutationFailed, aggregateType, err)
+	}
+	return revision, nil
+}
+
+// insertOutboxRow writes one outbox row, its key aggregate_type:aggregate_id:revision.
+func insertOutboxRow(ctx context.Context, tx pgx.Tx, quotedSchema, aggregateType, aggregateID, eventType string, revision int64, payload []byte) error {
+	key := aggregateType + ":" + aggregateID + ":" + strconv.FormatInt(revision, 10)
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO `+quotedSchema+`.auth_outbox_events
+		    (aggregate_type, aggregate_id, event_type, payload, idempotency_key)
+		VALUES ($1, $2, $3, $4, $5)`,
+		aggregateType, aggregateID, eventType, payload, key); err != nil {
+		return fmt.Errorf("%w: inserting the outbox event: %w", ErrMutationFailed, err)
 	}
 	return nil
 }

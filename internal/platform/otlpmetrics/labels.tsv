@@ -57,6 +57,7 @@ dev_health_categorize_byo_optin_unreadable_total	reason	code: internal/jobs/inve
 dev_health_generation_repair_failures_total	step	code: internal/jobs/metrics/daily/generation_repair_metrics.go
 dev_health_generation_repair_partial_total		code: internal/jobs/metrics/daily/generation_repair_metrics.go
 dev_health_ic_finalize_refused_empty_org_total		code: internal/jobs/metrics/daily/icfinalize/executor.go
+devhealth_customerpush_lifecycle_events_skipped_total	operation,reason	code: internal/apiservice/customerpush/lifecycle.go
 devhealth_integration_credential_decrypt_failed_total	provider	code: internal/api/credentials/metrics.go
 devhealth_llmorgsettings_decrypt_failure_total		code: internal/llmorgsettings/telemetry.go
 devhealth_llmorgsettings_key_validation_failed_total		code: internal/llmorgsettings/telemetry.go

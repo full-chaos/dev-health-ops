@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"strings"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
+	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/oauthgrant"
@@ -355,6 +357,9 @@ func TestOAuthLogsHoldNoSecretAndOnlyAClientsHost(t *testing.T) {
 	text := browserQuery()
 	text.Set("client_id", "free-text-from-a-client")
 	o.get(text)
+	other := browserQuery()
+	other.Set("client_id", "gopher://free-host-from-a-client/")
+	o.get(other)
 	o.get(browserQuery())
 	headers := o.bearer(o.grant())
 	o.post("action=describe&request_id="+uuid.NewString(), headers)
@@ -363,7 +368,7 @@ func TestOAuthLogsHoldNoSecretAndOnlyAClientsHost(t *testing.T) {
 	if !strings.Contains(logs, `"client":"client.example.test"`) || !strings.Contains(logs, `"client":"dev-health-web"`) {
 		t.Fatalf("the positive control is missing: %s", logs)
 	}
-	for _, secret := range []string{oauthState, oauthChallenge, "fcoac_code", "fcocs_token", "some/path", "free-text-from-a-client"} {
+	for _, secret := range []string{oauthState, oauthChallenge, "fcoac_code", "fcocs_token", "some/path", "free-text-from-a-client", "free-host-from-a-client"} {
 		if strings.Contains(logs, secret) {
 			t.Errorf("the log holds %q", secret)
 		}
@@ -448,17 +453,18 @@ func TestDecideReadsBothTokenClasses(t *testing.T) {
 func TestDecideRefusesAMalformedSubmit(t *testing.T) {
 	id := uuid.NewString()
 	for name, body := range map[string]string{
-		"no action":             "request_id=" + id,
-		"another action":        "action=consent&request_id=" + id,
-		"no request":            "action=describe",
-		"a request not a uuid":  "action=describe&request_id=abc",
-		"an upper-case id":      "action=describe&request_id=" + strings.ToUpper(id),
-		"a repeated name":       "action=describe&action=approve&request_id=" + id,
-		"an unknown name":       "action=describe&request_id=" + id + "&principal_id=" + id,
-		"describe with a token": "action=describe&csrf_token=x&request_id=" + id,
-		"approve with no token": "action=approve&request_id=" + id,
-		"deny with no token":    "action=deny&request_id=" + id,
-		"a bad escape":          "action=%zz",
+		"no action":                 "request_id=" + id,
+		"another action":            "action=consent&request_id=" + id,
+		"no request":                "action=describe",
+		"a request not a uuid":      "action=describe&request_id=abc",
+		"an upper-case id":          "action=describe&request_id=" + strings.ToUpper(id),
+		"a repeated name":           "action=describe&action=approve&request_id=" + id,
+		"an unknown name":           "action=describe&request_id=" + id + "&principal_id=" + id,
+		"describe with a token":     "action=describe&csrf_token=x&request_id=" + id,
+		"approve with no token":     "action=approve&request_id=" + id,
+		"approve with another name": "action=approve&csrf_token=t&principal_id=" + id + "&request_id=" + id,
+		"deny with no token":        "action=deny&request_id=" + id,
+		"a bad escape":              "action=%zz",
 	} {
 		t.Run(name, func(t *testing.T) {
 			o := newPlainOAuthFixture(t)
@@ -535,17 +541,17 @@ func TestDecideChargesThePerPrincipalBudget(t *testing.T) {
 		for k, v := range headers {
 			request.Header.Set(k, v)
 		}
-		request.RemoteAddr = address
+		request = request.WithContext(clientaddr.With(request.Context(), netip.MustParseAddr(address)))
 		response := httptest.NewRecorder()
 		o.mux.ServeHTTP(response, request)
 		return response.Code
 	}
 	for i := range oauthPrincipalLimit.Count {
-		if got := send(fmt.Sprintf("192.0.2.%d:1234", i+1)); got != http.StatusOK {
+		if got := send(fmt.Sprintf("192.0.2.%d", i+1)); got != http.StatusOK {
 			t.Fatalf("request %d: %d", i, got)
 		}
 	}
-	if got := send("198.51.100.1:1234"); got != http.StatusTooManyRequests {
+	if got := send("198.51.100.1"); got != http.StatusTooManyRequests {
 		t.Fatalf("status %d", got)
 	}
 }

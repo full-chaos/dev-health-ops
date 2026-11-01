@@ -231,8 +231,8 @@ func (h oauthHandlers) authorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	method, methodOK := single(query, "code_challenge_method")
-	challenge, challengeOK := single(query, "code_challenge")
-	if !methodOK || method != "S256" || !challengeOK || !codeChallengePattern.MatchString(challenge) {
+	challenge, _ := single(query, "code_challenge")
+	if !methodOK || method != "S256" || !codeChallengePattern.MatchString(challenge) {
 		fail("invalid_request")
 		return
 	}
@@ -319,7 +319,7 @@ func (h oauthHandlers) decide(w http.ResponseWriter, r *http.Request) {
 		h.describe(w, r, request, record)
 	case "approve", "deny":
 		token, present := body["csrf_token"]
-		if !present || len(body) != 3 {
+		if !present {
 			h.refuse(w, r, refusal{http.StatusBadRequest, reasonMalformed}, "invalid_request")
 			return
 		}

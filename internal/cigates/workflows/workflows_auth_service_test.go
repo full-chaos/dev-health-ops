@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"regexp"
 	"sort"
 	"strings"
@@ -173,6 +174,15 @@ func authViolations(t *testing.T, root string) []string {
 	sort.Strings(needs)
 	if !reflect.DeepEqual(needs, []string{"auth-changes", "auth-corpus-queue", "auth-fuzz", "auth-go-quality", "auth-race", "auth-race-integration", "auth-test"}) {
 		out = append(out, fmt.Sprintf("auth-gate.needs must fan in auth-changes, auth-go-quality, auth-test, auth-race, auth-race-integration, auth-fuzz, auth-corpus-queue, got %v", needs))
+	}
+	var cancelNeeds []string
+	for _, n := range asList(asMap(jobs["auth-cancel-stacked-queue-children"])["needs"]) {
+		cancelNeeds = append(cancelNeeds, asString(n))
+	}
+	for _, n := range append(needs, "auth-gate") {
+		if !slices.Contains(cancelNeeds, n) {
+			out = append(out, fmt.Sprintf("auth-cancel-stacked-queue-children.needs must name %s: a red job of the entry must cancel the runs stacked on it", n))
+		}
 	}
 	gateSteps := stepsOf(gate)
 	if len(gateSteps) == 0 || !gatePairRe.MatchString(shellCode(asString(gateSteps[0]["run"]))) {

@@ -116,3 +116,10 @@ func authorityOf(stored []string) (Authority, int) {
 	}
 	return a, ignored
 }
+
+// AuthorityOfRoles is the Authority of the given role keys: the platform roles
+// of the catalog among them, as a stored read keeps them.
+func AuthorityOfRoles(roles ...string) Authority {
+	a, _ := authorityOf(roles)
+	return a
+}

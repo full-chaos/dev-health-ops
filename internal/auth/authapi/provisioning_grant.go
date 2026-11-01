@@ -60,21 +60,25 @@ type grantAnswer struct {
 	OrganizationID string  `json:"organization_id"`
 	PrincipalID    string  `json:"principal_id"`
 	Role           string  `json:"role"`
-	ResourceKey    string  `json:"resource_key"`
 	ExpiresAt      *string `json:"expires_at,omitempty"`
 	Status         string  `json:"status"`
 	Revision       int64   `json:"revision"`
 }
 
+// answerOf is the projection every route answers with. It carries no repository key: the caller sent it and the answer
+// does not repeat it. The status is revoked first, then expired, else active.
 func answerOf(g *grant.Grant) grantAnswer {
 	a := grantAnswer{GrantID: g.ID.String(), OrganizationID: g.OrgID.String(), PrincipalID: g.PrincipalID.String(), Role: g.Role,
-		ResourceKey: g.Key, Status: "active", Revision: g.Revision}
+		Status: "active", Revision: g.Revision}
 	if g.ExpiresAt != nil {
 		t := g.ExpiresAt.UTC().Format(time.RFC3339Nano)
 		a.ExpiresAt = &t
 	}
-	if !g.Live() {
+	switch {
+	case !g.Live():
 		a.Status = "revoked"
+	case g.ExpiresAt != nil && !g.ExpiresAt.After(time.Now()):
+		a.Status = "expired"
 	}
 	return a
 }

@@ -88,6 +88,7 @@ type OIDC struct {
 	docIssuer     *string
 	failDiscovery bool
 	failUserinfo  bool
+	override      func(map[string]any)
 }
 
 // NewOIDC builds the provider; keys are generated unless opts.Keys is set.
@@ -110,7 +111,7 @@ func NewOIDC(opts OIDCOptions) (*OIDC, error) {
 			{Sub: "bob", Email: "bob@idp.example.test", Name: "Bob Example", EmailVerified: &yes},
 		}
 	}
-	return &OIDC{opts: opts, keys: keys, now: now, issuer: opts.Issuer, codes: map[string]pendingCode{},
+	return &OIDC{opts: opts, override: opts.Override, keys: keys, now: now, issuer: opts.Issuer, codes: map[string]pendingCode{},
 		tokens: map[string]OIDCUser{}, next: opts.Users[0]}, nil
 }
 
@@ -143,6 +144,19 @@ func (o *OIDC) SetUserinfo(answer map[string]any) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.userinfo = answer
+}
+
+// SetOverride replaces the claims edit applied to every id_token and userinfo answer; nil removes it.
+func (o *OIDC) SetOverride(edit func(map[string]any)) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.override = edit
+}
+
+func (o *OIDC) currentOverride() func(map[string]any) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.override
 }
 
 // SetDocIssuer makes the discovery document name a different issuer; nil restores the served one.
@@ -210,12 +224,7 @@ func (o *OIDC) IDTokenClaims(user OIDCUser, clientID, nonce string) map[string]a
 	now := o.now()
 	claims := map[string]any{"iss": issuer, "aud": clientID, "sub": user.Sub, "nonce": nonce,
 		"iat": now.Unix(), "exp": now.Add(5 * time.Minute).Unix()}
-	if user.Email != "" {
-		claims["email"] = user.Email
-	}
-	if user.Name != "" {
-		claims["name"] = user.Name
-	}
+	claims["email"], claims["name"] = user.Email, user.Name
 	if user.EmailVerified != nil {
 		claims["email_verified"] = *user.EmailVerified
 	}
@@ -406,8 +415,8 @@ func (o *OIDC) serveToken(w http.ResponseWriter, r *http.Request) {
 		if pending.claims != nil {
 			pending.claims(claims)
 		}
-		if o.opts.Override != nil {
-			o.opts.Override(claims)
+		if edit := o.currentOverride(); edit != nil {
+			edit(claims)
 		}
 		var err error
 		if idToken, err = o.SignIDToken(nil, claims); err != nil {
@@ -441,8 +450,8 @@ func (o *OIDC) serveUserinfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	answer := map[string]any{"sub": user.Sub, "email": user.Email, "name": user.Name}
-	if o.opts.Override != nil {
-		o.opts.Override(answer)
+	if edit := o.currentOverride(); edit != nil {
+		edit(answer)
 	}
 	writeJSON(w, http.StatusOK, answer)
 }

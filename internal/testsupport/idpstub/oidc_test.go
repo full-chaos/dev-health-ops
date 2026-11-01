@@ -338,3 +338,32 @@ func TestOIDCIssueCodeReturnsAPreSignedIDTokenVerbatim(t *testing.T) {
 		}
 	}
 }
+
+func TestOIDCSetOverrideEditsIDTokenAndUserinfo(t *testing.T) {
+	o, srv := startOIDC(t, idpstub.OIDCOptions{})
+	o.SetOverride(func(c map[string]any) { c["sub"] = 42 })
+	code, _, _ := authorize(t, srv, nil)
+	status, tok := exchange(t, srv, code, "verifier-1")
+	if status != http.StatusOK {
+		t.Fatalf("status %d", status)
+	}
+	_, claims, _, _ := jwtParts(t, tok["id_token"].(string))
+	if claims["sub"] != float64(42) {
+		t.Fatalf("id_token sub = %v", claims["sub"])
+	}
+	if _, info := getJSON(t, srv.Client(), srv.URL+"/userinfo", tok["access_token"].(string)); info["sub"] != float64(42) {
+		t.Fatalf("userinfo sub = %v", info["sub"])
+	}
+}
+
+func TestOIDCClaimsKeepEmptyEmailAndName(t *testing.T) {
+	o, srv := startOIDC(t, idpstub.OIDCOptions{AcceptAnyCode: true, NoPKCE: true})
+	o.SetNext(idpstub.OIDCUser{Sub: "s"}, "n")
+	_, tok := exchange(t, srv, "c", "")
+	_, claims, _, _ := jwtParts(t, tok["id_token"].(string))
+	for _, k := range []string{"email", "name", "sub", "nonce"} {
+		if _, has := claims[k]; !has {
+			t.Errorf("claim %s missing: %v", k, claims)
+		}
+	}
+}

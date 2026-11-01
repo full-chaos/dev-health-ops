@@ -493,6 +493,8 @@ func TestCreateOrgRaceWithRoleRevoke(t *testing.T) {
 }
 
 // go-api's slug read folds case, so the free-slug read does too, in each schema.
+// The held slug is the upper-case one: the read lowers its argument, so a held
+// lower-case slug matches with or without the fold on the column.
 func TestOrganizationSlugHeldInAnotherCaseGetsASuffix(t *testing.T) {
 	e, ctx := getEnv(t), birthContext(t)
 	create := func(t *testing.T, slug string) *BornOrganization {
@@ -506,18 +508,18 @@ func TestOrganizationSlugHeldInAnotherCaseGetsASuffix(t *testing.T) {
 		return born
 	}
 	t.Run("public row only", func(t *testing.T) {
-		held := "case-pub-" + uuid.NewString()[:8]
+		held := "CASE-PUB-" + strings.ToUpper(uuid.NewString()[:8])
 		org := e.seedOrg(t, ctx)
 		if _, err := e.admin.Exec(ctx, `UPDATE public.organizations SET slug = $2 WHERE id = $1`, org, held); err != nil {
 			t.Fatal(err)
 		}
-		slug := strings.ToUpper(held)
+		slug := strings.ToLower(held)
 		if born := create(t, slug); !strings.HasPrefix(born.Slug, slug+"-") {
 			t.Fatalf("slug %q, want %q with a suffix", born.Slug, slug)
 		}
 	})
 	t.Run("auth row only", func(t *testing.T) {
-		held := "case-auth-" + uuid.NewString()[:8]
+		held := "CASE-AUTH-" + strings.ToUpper(uuid.NewString()[:8])
 		org := e.seedOrg(t, ctx)
 		if _, err := e.admin.Exec(ctx, `UPDATE public.organizations SET slug = $2 WHERE id = $1`, org, held); err != nil {
 			t.Fatal(err)
@@ -528,7 +530,7 @@ func TestOrganizationSlugHeldInAnotherCaseGetsASuffix(t *testing.T) {
 		if _, err := e.admin.Exec(ctx, `DELETE FROM public.organizations WHERE id = $1`, org); err != nil {
 			t.Fatal(err)
 		}
-		slug := strings.ToUpper(held)
+		slug := strings.ToLower(held)
 		if born := create(t, slug); !strings.HasPrefix(born.Slug, slug+"-") {
 			t.Fatalf("slug %q, want %q with a suffix", born.Slug, slug)
 		}

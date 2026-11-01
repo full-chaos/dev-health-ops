@@ -660,3 +660,19 @@ func TestEvaluate_RepositoryKindActionFollowsGrantAndDefaultRules(t *testing.T) 
 		t.Error("the catalog holds no repository-kind action")
 	}
 }
+
+// The real catalog gives acr.context.read to the organization roles that hold git.read (catalog version 6): each is
+// allowed a repository by the membership default, and platform_admin holds it through neither a membership nor a grant.
+func TestEvaluate_AcrContextReadIsAllowedToTheOrgRolesByDefault(t *testing.T) {
+	e := NewEvaluator()
+	req := Request{Action: "acr.context.read", ResourceKind: "repository", OrganizationID: testOrg, ResourceKey: "acme/api"}
+	for _, role := range []string{"viewer", "member", "admin", "owner"} {
+		got := e.Evaluate(req, repoSnapshot(role))
+		if !got.Allowed || got.Reason != ReasonAllowedByMembershipDefault {
+			t.Errorf("role %s: %+v, want allowed by the membership default", role, got)
+		}
+	}
+	if got := e.Evaluate(req, platformSnapshot("platform_admin")); got.Allowed {
+		t.Errorf("platform_admin: %+v, want deny", got)
+	}
+}

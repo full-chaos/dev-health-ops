@@ -6,6 +6,7 @@ package delegationinput
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -78,6 +79,50 @@ func invalid(inner authorization.Snapshot) authorization.Snapshot {
 	return delegatedSnapshot{Snapshot: inner}
 }
 
+// Snapshot reads the session and the actor's platform role now and returns the
+// snapshot to evaluate. A session row that is not delegated returns Inner
+// unchanged, unless a token names an actor. Every failure returns a snapshot
+// that denies, and an error when the cause is a failed read.
 func (a *Adapter) Snapshot(ctx context.Context, in Input) (authorization.Snapshot, error) {
-	return invalid(in.Inner), nil
+	if in.Inner == nil {
+		return nil, errors.New("delegationinput: no inner snapshot")
+	}
+	if in.SessionID == uuid.Nil {
+		return invalid(in.Inner), nil
+	}
+	rec, err := a.sessions.Current(ctx, in.SessionID)
+	if err != nil {
+		return invalid(in.Inner), fmt.Errorf("%w: session: %w", ErrDelegationUnavailable, err)
+	}
+	if rec.Delegation == nil {
+		if in.ClaimedActor != nil {
+			return invalid(in.Inner), nil
+		}
+		return in.Inner, nil
+	}
+	actor := rec.Delegation.Actor
+	if rec.PrincipalID != in.PrincipalID || rec.RevokedAt != nil || !a.now().Before(rec.ExpiresAt) ||
+		rec.OrganizationID == nil || actor == uuid.Nil || (in.ClaimedActor != nil && *in.ClaimedActor != actor) {
+		return invalid(in.Inner), nil
+	}
+	auth, err := a.roles.Resolve(ctx, actor)
+	if err != nil {
+		return invalid(in.Inner), fmt.Errorf("%w: platform role: %w", ErrDelegationUnavailable, err)
+	}
+	if !auth.Allows(session.ImpersonateAction) {
+		return invalid(in.Inner), nil
+	}
+	role := ""
+	if auth.IsOwner() {
+		role = platformrole.PlatformOwner
+	}
+	return delegatedSnapshot{Snapshot: in.Inner, del: authorization.Delegation{
+		Chain: []authorization.Hop{{
+			ActorPrincipalID: actor.String(),
+			PermittedActions: append([]string(nil), rec.Delegation.PermittedActions...),
+		}},
+		ActorPlatformRole:    role,
+		TargetOrganizationID: rec.OrganizationID.String(),
+		Assurance:            session.AssuranceOf(rec.AMR),
+	}}, nil
 }

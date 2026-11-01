@@ -43,6 +43,7 @@ internal/auth/contracts	access_token_goldens_test.go	contracts/auth/v1/examples/
 internal/auth/contracts	anchor_ranges_test.go	contracts/auth/v1	dir	*
 internal/auth/contracts	authorization_goldens_test.go	unexpressed	-	-
 internal/auth/contracts	credential_goldens_test.go	unexpressed	-	-
+internal/auth/contracts	decision_golden_shape_test.go	contracts/auth/v1/golden/decision	tree	*
 internal/auth/contracts	discovery_goldens_test.go	contracts/auth/v1/examples/discovery	dir	*
 internal/auth/contracts	endpoint_auth_profile_goldens_test.go	contracts/auth/v1/examples/endpoint-auth-profile	dir	*
 internal/auth/contracts	endpoint_profile_source_commit_history_test.go	contracts/auth/v1	dir	*

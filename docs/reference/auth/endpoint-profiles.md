@@ -338,6 +338,18 @@ every Bearer route accepts the HS256 token today. The profile-routed
 validation middleware picks the HS256 verifier only on a row that opts in;
 HS256 retirement removes the opt-ins.
 
+## `delegated_bearer`
+
+An auth-service row that `authenticateWith` gates has `delegated_bearer`:
+does a delegated session's bearer pass this route's gate. The value is
+`allowed` on `GET /v1/sessions/current` and `POST /v1/sessions/revoke`, and
+`denied` on the other four rows. The test
+`TestDelegatedBearerRowsEqualTheGoAllowlist` holds the values equal to the Go
+allowlist. A row that `authenticateWith` does not reach omits the field.
+
+This field is not `impersonation_policy`. That field says whether go-api's
+org-context override reaches a route.
+
 ## One registration per line (CHAOS-4774)
 
 A row addresses its surface as `file:line`, so two route registrations written

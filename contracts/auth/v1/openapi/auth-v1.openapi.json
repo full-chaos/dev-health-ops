@@ -264,6 +264,16 @@
               }
             }
           },
+          "403": {
+            "description": "error.v1 not_entitled: the bearer's session is delegated, and a delegated session may not end the target's other sessions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "413": {
             "description": "The request body is over the configured limit; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1).",
             "content": {

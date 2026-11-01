@@ -55,7 +55,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/token"
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -609,14 +608,10 @@ func configureWithRoutes(
 		return nil, err
 	}
 
-	var projectOrg func(context.Context, uuid.UUID) (bool, error)
-	if cfg.PushProjection {
-		projectionIdentities, err := identity.New(identityConfig(cfg, logger, store.Pool(), schemaID))
-		if err != nil {
-			closeStore()
-			return nil, err
-		}
-		projectOrg = organizationProjector(projectionIdentities)
+	projectOrg, err := organizationProjectorFor(cfg, logger, store.Pool(), schemaID)
+	if err != nil {
+		closeStore()
+		return nil, err
 	}
 	projectionComponents, err := pushProjection(cfg, logger, store.Pool(), schemaID, registry, projectOrg)
 	if err != nil {

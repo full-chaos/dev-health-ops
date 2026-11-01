@@ -910,3 +910,26 @@ func TestSchemaOwnerPinExceptsOnlyThePushLifecycleFunctionOfTheWriter(t *testing
 		t.Errorf("another function owned by the writer passes the pin: %v", err)
 	}
 }
+
+// A restore from a backup taken before the move brings the old owner back: the pin fails and names the remedy, and
+// the owner move run again makes the pin pass.
+func TestPinFailsAfterARestoreBringsTheOldOwnerBackAndOwnerMoveFixesIt(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+	env := newOwnerMoveEnv(t, ctx, false)
+	env.move(t, ctx, env.moveOptions(true))
+	pinned := env.options(true)
+	pinned.SchemaOwnerRole = env.migratorRole
+	if _, err := Apply(ctx, env.migrator, pinned); err != nil {
+		t.Fatalf("Apply under the pin after the move: %v", err)
+	}
+	env.move(t, ctx, env.reverseOptions(true))
+	_, err := Grants(ctx, env.admin, pinned)
+	if !errors.Is(err, ErrSchemaOwnerPin) || !strings.Contains(err.Error(), "owner-move") {
+		t.Fatalf("after the old owner came back the pin gave %v, want ErrSchemaOwnerPin naming owner-move", err)
+	}
+	env.move(t, ctx, env.moveOptions(true))
+	if _, err := Grants(ctx, env.migrator, pinned); err != nil {
+		t.Errorf("the grants pass under the pin after the owner move was run again: %v", err)
+	}
+}

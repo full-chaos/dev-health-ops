@@ -871,6 +871,12 @@
       "Discovery": {
         "$ref": "../jsonschema/discovery.v1.schema.json"
       },
+      "OAuthAuthorizationServer": {
+        "$ref": "../jsonschema/oauth-authorization-server.v1.schema.json"
+      },
+      "OAuthClients": {
+        "$ref": "../jsonschema/oauth-clients.v1.schema.json"
+      },
       "EndpointAuthProfile": {
         "$ref": "../jsonschema/endpoint-auth-profile.v1.schema.json"
       },

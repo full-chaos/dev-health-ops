@@ -8,7 +8,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
-	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/org"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole"
@@ -22,21 +21,6 @@ const (
 	// PatternOrgCreate is the route of an organization a superuser creates.
 	PatternOrgCreate = "/internal/v1/organizations/create"
 )
-
-// withOrgCreateRoutes mounts each organization route only when the profile
-// document holds its row: a row's source line must exist at the document's
-// source_commit, so a route lands before its row.
-func (h provisioningHandlers) withOrgCreateRoutes(routes []httpapi.Route, rows []byte) []httpapi.Route {
-	for _, route := range []httpapi.Route{
-		{Method: http.MethodPost, Pattern: PatternOrgOnboard, Handler: http.HandlerFunc(h.orgOnboard)},
-		{Method: http.MethodPost, Pattern: PatternOrgCreate, Handler: http.HandlerFunc(h.orgCreate)},
-	} {
-		if rowsAcceptFor(rows, []string{route.Pattern}, []string{serviceSessionIssuerClass}) == nil {
-			routes = append(routes, route)
-		}
-	}
-	return routes
-}
 
 const (
 	opOrgOnboard      = "organization_onboard"

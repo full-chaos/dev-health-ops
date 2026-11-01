@@ -9,8 +9,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/full-chaos/dev-health-go/authverify"
-
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
@@ -50,33 +48,10 @@ func (c *acrReadCounter) OrgMembership(ctx context.Context, user, org uuid.UUID)
 }
 
 // acrRefusalReason is the refused-counter reason of an ACR-audience token at a
-// platform verifier, for the authverify this module pins. While authverify
-// knows no ACR audience (v0.33.0) the token fails its claims contract
-// (ReasonContract, counted malformed). Once it knows them (the release of
-// CHAOS-12249) the token fails the verifier's audience pin (ReasonAudience,
-// counted claims). Either way the cells below refuse it; the reason tells the
-// two stages apart, so a pin bump runs them against the stage it ships.
-func acrRefusalReason(t *testing.T) string {
-	t.Helper()
-	if acrAudienceKnownToAuthverify(t) {
-		return accessverify.ReasonClaims
-	}
-	return accessverify.ReasonMalformed
-}
-
-// acrAudienceKnownToAuthverify reports whether the pinned authverify builds a
-// verifier for acr-api. A verifier for dev-health-api under the same config
-// must build, so only the audience decides.
-func acrAudienceKnownToAuthverify(t *testing.T) bool {
-	t.Helper()
-	config := authverify.VerifierConfig{Issuer: "https://auth.example.test", Audience: "dev-health-api", Keys: authverify.StaticKeys{}}
-	if _, err := authverify.NewVerifier(config); err != nil {
-		t.Fatalf("a dev-health-api verifier did not build: %v", err)
-	}
-	config.Audience = contracts.ACRAPIAudience
-	_, err := authverify.NewVerifier(config)
-	return err == nil
-}
+// platform verifier: since dev-health-go v0.36.0 authverify knows the audiences,
+// so the token fails the verifier's audience pin (ReasonAudience, counted
+// claims), not its claims contract.
+const acrRefusalReason = accessverify.ReasonClaims
 
 // acrAudiences are the two ACR audiences with their scopes (CHAOS-12248).
 var acrAudiences = []struct{ aud, scope string }{
@@ -119,7 +94,7 @@ func TestAnACRAudienceTokenIsRefusedAtGoAPIBeforeAnyRead(t *testing.T) {
 			}
 			counters := f.counters(t)
 			for _, path := range []string{probeAuthenticated, probeAdmin} {
-				series := accessverify.RefusedMetric + "|profile=GET " + path + ",reason=" + acrRefusalReason(t) + ",service=" + goAPIAccessService
+				series := accessverify.RefusedMetric + "|profile=GET " + path + ",reason=" + acrRefusalReason + ",service=" + goAPIAccessService
 				if counters[series] == 0 {
 					t.Errorf("no %s", series)
 				}

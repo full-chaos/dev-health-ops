@@ -18,7 +18,7 @@ import (
 
 type noImpersonation struct{}
 
-func (noImpersonation) ImpersonatingActor(context.Context, uuid.UUID) (bool, error) {
+func (noImpersonation) ImpersonatingActor(context.Context, uuid.UUID, uuid.UUID) (bool, error) {
 	return false, nil
 }
 
@@ -52,7 +52,7 @@ func TestAnACRMintedTokenSignedByAuthServicesOwnKeyIsRefusedAtTheSessionRoutes(t
 				t.Fatalf("the minted %s token is not a valid access-token.v1 document: %v", audience, err)
 			}
 			a.sessions.currentErr = errors.New("a session read")
-			code, reason := acrRefusal(t)
+			code, reason := acrRefusalCode, accessverify.ReasonClaims
 			for _, route := range routes {
 				expectError(t, a.do(route.method, route.path, "", map[string]string{"Authorization": "Bearer " + minted}), http.StatusUnauthorized, code)
 				if got := a.counter(accessverify.RefusedMetric, map[string]string{"service": AccessService, "profile": route.method + " " + route.path, "reason": reason}); got != 1 {

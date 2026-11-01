@@ -16,7 +16,7 @@ import (
 // admin may only act on a user who has a membership in orgID. Returns false
 // (and writes the 404) when out of scope; a superuser is always in scope.
 func (h *handlers) ensureUserInScope(ctx context.Context, w http.ResponseWriter, user *policy.User, orgID, targetUserID uuid.UUID) bool {
-	if user.IsSuperuser {
+	if user.Holds(rule.ActionAdminUsers) {
 		return true
 	}
 	inScope, err := h.store.userHasMembership(ctx, orgID, targetUserID)
@@ -37,7 +37,7 @@ func (h *handlers) ensureUserInScope(ctx context.Context, w http.ResponseWriter,
 // false (and writes the 403) when access is refused; a superuser always
 // passes.
 func (h *handlers) ensureOrgAdminAccess(ctx context.Context, w http.ResponseWriter, user *policy.User, orgID uuid.UUID) bool {
-	if user.IsSuperuser {
+	if user.Holds(rule.ActionAdminOrgs) {
 		return true
 	}
 	membership, err := h.store.membershipRole(ctx, orgID, user.ID)
@@ -57,7 +57,7 @@ func (h *handlers) ensureOrgAdminAccess(ctx context.Context, w http.ResponseWrit
 // superuser's own org_id claim (possibly ""), else the caller's org_id
 // claim, 403 when absent.
 func orgIDForNonSuperuser(w http.ResponseWriter, user *policy.User) (string, bool) {
-	if user.IsSuperuser {
+	if user.Holds(rule.ActionAdminOrgs) {
 		return user.OrgID, true
 	}
 	if user.OrgID == "" {

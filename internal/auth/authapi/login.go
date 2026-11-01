@@ -364,7 +364,11 @@ func (h compatHandlers) startSession(ctx context.Context, principalID uuid.UUID,
 			return session.Issued{}, fmt.Errorf("authapi: projecting the session organization: %w", err)
 		}
 	}
-	auditOrg := sessionOrg
+	return h.Sessions.CreateAudited(session.WithSignIn(ctx), principalID, sessionOrg, amr, loginSucceeded(ctx, principalID, sessionOrg, provider))
+}
+
+// loginSucceeded is the audit row of a session a sign-in started.
+func loginSucceeded(ctx context.Context, principalID uuid.UUID, org *uuid.UUID, provider string) audit.AuditEvent {
 	principal := principalID.String()
 	event := audit.AuditEvent{
 		EventType: EventLoginSucceeded, Outcome: audit.OutcomeAllowed,
@@ -374,11 +378,11 @@ func (h compatHandlers) startSession(ctx context.Context, principalID uuid.UUID,
 	if provider != "" {
 		event.Attributes["provider"] = provider
 	}
-	if auditOrg != nil {
-		text := auditOrg.String()
+	if org != nil {
+		text := org.String()
 		event.OrganizationID = &text
 	}
-	return h.Sessions.CreateAudited(session.WithSignIn(ctx), principalID, sessionOrg, amr, event)
+	return event
 }
 
 // userInfo is go-api's _to_user_info(user, membership).

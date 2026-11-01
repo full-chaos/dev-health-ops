@@ -57,7 +57,11 @@ func ssoSettings(lookup secrets.LookupEnv) (SSO, error) {
 	if err != nil {
 		return SSO{}, err
 	}
-	out := SSO{StateKey: state, EncryptionKey: key, EncryptionSalt: strings.TrimSpace(valueOf(lookup, EnvSettingsEncryptionSalt))}
+	jit, err := strictBool(lookup, EnvSSOJIT)
+	if err != nil {
+		return SSO{}, err
+	}
+	out := SSO{JIT: jit, StateKey: state, EncryptionKey: key, EncryptionSalt: strings.TrimSpace(valueOf(lookup, EnvSettingsEncryptionSalt))}
 	if base := strings.TrimRight(strings.TrimSpace(valueOf(lookup, EnvAppBaseURL)), "/"); base != "" {
 		parsed, parseErr := url.Parse(base)
 		if parseErr != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" {

@@ -11,10 +11,27 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
 
-// samlJIT is the SAML membership seam of cfg.
-func samlJIT(authconfig.Config, *identity.Store) saml.MembershipJIT { return nil }
+// samlJIT is the SAML membership seam, nil with AUTH_SSO_JIT off.
+func samlJIT(cfg authconfig.Config, logger *slog.Logger, identities *identity.Store) saml.MembershipJIT {
+	if !cfg.SSO.JIT {
+		return nil
+	}
+	return saml.PGJIT{Identities: identities, Logger: logger}
+}
 
-// oidcJIT is the OIDC membership seam of cfg.
-func oidcJIT(authconfig.Config, *slog.Logger, *identity.Store, *session.Store, authapi.SSOSessions) oidc.MembershipJIT {
-	return nil
+// oidcJIT is the OIDC membership seam, nil with AUTH_SSO_JIT off.
+func oidcJIT(cfg authconfig.Config, logger *slog.Logger, identities *identity.Store, sessions *session.Store, sso authapi.SSOSessions) oidc.MembershipJIT {
+	if !cfg.SSO.JIT {
+		return nil
+	}
+	return oidc.PGJIT{Identities: identities, Sessions: sessions, LoginEvent: sso.LoginEvent, Mint: sso.MintOIDC, Logger: logger}
+}
+
+// oidcSeam builds the OIDC seam once the session issuer exists.
+type oidcSeam func(authapi.SSOSessions) oidc.MembershipJIT
+
+func oidcSeamOf(cfg authconfig.Config, logger *slog.Logger, identities *identity.Store, sessions *session.Store) oidcSeam {
+	return func(sso authapi.SSOSessions) oidc.MembershipJIT {
+		return oidcJIT(cfg, logger, identities, sessions, sso)
+	}
 }

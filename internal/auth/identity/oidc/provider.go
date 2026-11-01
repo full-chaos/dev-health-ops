@@ -56,6 +56,7 @@ type StoredProvider struct {
 	ID, OrgID                        uuid.UUID
 	Protocol, Status                 string
 	AutoProvision                    bool
+	DefaultRole                      string
 	Config                           string
 	AllowedDomains, EncryptedSecrets *string
 }
@@ -71,13 +72,13 @@ var ErrProviderConfig = errors.New("oidc: stored provider configuration is malfo
 type PGProviders struct{ Pool *pgxpool.Pool }
 
 func (p PGProviders) ProviderRow(ctx context.Context, id uuid.UUID) (StoredProvider, error) {
-	return scanStoredProvider(p.Pool.QueryRow(ctx, `SELECT id, org_id, protocol, status, auto_provision_users, config::text,
+	return scanStoredProvider(p.Pool.QueryRow(ctx, `SELECT id, org_id, protocol, status, auto_provision_users, default_role, config::text,
 	allowed_domains::text, encrypted_secrets::text
 FROM public.sso_providers WHERE id = $1`, id))
 }
 
 func (p PGProviders) DefaultProviderRow(ctx context.Context, orgID uuid.UUID, protocol string) (StoredProvider, error) {
-	return scanStoredProvider(p.Pool.QueryRow(ctx, `SELECT id, org_id, protocol, status, auto_provision_users, config::text,
+	return scanStoredProvider(p.Pool.QueryRow(ctx, `SELECT id, org_id, protocol, status, auto_provision_users, default_role, config::text,
 	allowed_domains::text, encrypted_secrets::text
 FROM public.sso_providers
 WHERE org_id = $1 AND protocol = $2 AND status = 'active'
@@ -86,7 +87,7 @@ ORDER BY is_default DESC, created_at, id LIMIT 1`, orgID, protocol))
 
 func scanStoredProvider(r pgx.Row) (StoredProvider, error) {
 	var row StoredProvider
-	err := r.Scan(&row.ID, &row.OrgID, &row.Protocol, &row.Status, &row.AutoProvision, &row.Config,
+	err := r.Scan(&row.ID, &row.OrgID, &row.Protocol, &row.Status, &row.AutoProvision, &row.DefaultRole, &row.Config,
 		&row.AllowedDomains, &row.EncryptedSecrets)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return StoredProvider{}, ErrProviderNotFound
@@ -101,7 +102,7 @@ func scanStoredProvider(r pgx.Row) (StoredProvider, error) {
 // is ErrProviderConfig.
 func decodeProvider(stored StoredProvider) (Provider, error) {
 	row := Provider{ID: stored.ID, OrgID: stored.OrgID, Protocol: stored.Protocol, Status: stored.Status,
-		AutoProvision: stored.AutoProvision}
+		AutoProvision: stored.AutoProvision, DefaultRole: stored.DefaultRole}
 	var err error
 	if _, oauth := oauthProviderOf(row.Protocol); oauth {
 		if row.OAuth, err = decodeOAuthConfig(stored.Config); err == nil {

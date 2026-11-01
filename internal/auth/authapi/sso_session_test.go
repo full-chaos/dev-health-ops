@@ -143,7 +143,7 @@ func TestOIDCSessionStartsAFederatedSessionInTheSignInOrganization(t *testing.T)
 	}
 	created := f.sessions.created[0]
 	if !reflect.DeepEqual(created.amr, []string{"fed"}) || *created.org != f.org ||
-		created.event.EventType != EventLoginSucceeded || created.event.Attributes["provider"] != "sso" {
+		created.event.EventType != EventLoginSucceeded || created.event.Attributes["provider"] != "oidc" {
 		t.Fatalf("session %+v", created)
 	}
 }

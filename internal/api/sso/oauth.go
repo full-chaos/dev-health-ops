@@ -778,9 +778,7 @@ func (h handlers) oauthProvisionUser(ctx context.Context, row *providerRow, prov
 		if claims.avatarURL != "" {
 			avatarURLPtr = &claims.avatarURL
 		}
-		if claims.externalID != "" {
-			externalIDPtr = &claims.externalID
-		}
+		externalIDPtr = &claims.externalID
 		if claims.username != "" {
 			usernamePtr = &claims.username
 		}

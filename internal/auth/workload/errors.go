@@ -12,6 +12,8 @@ var (
 	ErrBindingTaken    = errors.New("workload: the federation tuple is bound to a workload already")
 	ErrBindingNotFound = errors.New("workload: binding not found")
 	ErrStore           = errors.New("workload: store unavailable")
+	// ErrRebindStateChanged: the binding changed between the read and the lock.
+	ErrRebindStateChanged = errors.New("workload: the binding changed between the read and the lock")
 
 	// The assertion key verbs' refusals. None carries an input value.
 	ErrAssertionKeyInvalid      = errors.New("workload: an assertion key field is malformed")
@@ -20,6 +22,8 @@ var (
 	ErrAssertionKeyTransition   = errors.New("workload: the assertion key change is not allowed from its current state")
 	ErrAssertionKeyOverlap      = errors.New("workload: retire_after is more than 24 h after the active key's rotated_at")
 	ErrAssertionKeyNoActive     = errors.New("workload: the workload has no active assertion key to overlap")
+	// ErrAssertionKeyLastActive: the active key is not retired without a successor, so a workload that has a key keeps one active key.
+	ErrAssertionKeyLastActive = errors.New("workload: the active assertion key is retired by rotating in a successor, not directly")
 	// ErrAssertionKeyWorkloadDisabled: the verb refuses a workload whose row is disabled.
 	ErrAssertionKeyWorkloadDisabled = errors.New("workload: the workload is disabled; enable it before changing its assertion keys")
 

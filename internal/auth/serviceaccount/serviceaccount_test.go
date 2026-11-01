@@ -276,3 +276,66 @@ func TestRefusalsKeepTheirIdentityThroughRun(t *testing.T) {
 		t.Fatalf("a database error came back as %v", err)
 	}
 }
+
+func TestNilAuthorizeIsDeniedAndAnErrorPassesThrough(t *testing.T) {
+	if err := (Actor{}).authorize(context.Background(), audit.TxOps{}, Locked{}); !errors.Is(err, ErrDenied) {
+		t.Fatalf("nil Authorize: %v, want ErrDenied", err)
+	}
+	boom := errors.New("read failed")
+	if err := (Actor{Authorize: func(context.Context, audit.TxOps, Locked) error { return boom }}).authorize(context.Background(), audit.TxOps{}, Locked{}); !errors.Is(err, boom) {
+		t.Fatalf("Authorize error: %v, want it as it is", err)
+	}
+}
+
+// Disable reads the owner before its transaction, so it reads again once when the account moved; Enable and SetOwner do not.
+func TestDisableReadsAgainOnceOnAStateChangeAndTheOthersDoNot(t *testing.T) {
+	info := &Info{ID: uuid.New(), OrgID: uuid.New(), Owner: uuid.New(), Active: true}
+	build := func(results ...error) (*Store, *int, *int) {
+		commits, reads := 0, 0
+		s := &Store{ownsUsers: true, logger: nopLogger(), mutations: nopCounter(t),
+			commit: func(context.Context, audit.Mutation) error {
+				r := results[commits]
+				commits++
+				return r
+			},
+			read: func(context.Context, uuid.UUID) (*Info, error) { reads++; return info, nil }}
+		return s, &commits, &reads
+	}
+	ctx := context.Background()
+	s, commits, reads := build(ErrStateChanged, nil)
+	if err := s.Disable(ctx, info.ID, okActor()); err != nil || *commits != 2 || *reads != 2 {
+		t.Fatalf("one move: err %v, %d commits, %d reads; want nil, 2, 2", err, *commits, *reads)
+	}
+	s, commits, reads = build(ErrStateChanged, ErrStateChanged)
+	if err := s.Disable(ctx, info.ID, okActor()); !errors.Is(err, ErrStateChanged) || *commits != 2 || *reads != 2 {
+		t.Fatalf("two moves: err %v, %d commits, %d reads; want ErrStateChanged, 2, 2", err, *commits, *reads)
+	}
+	s, commits, _ = build(ErrAlreadyInState)
+	if err := s.Disable(ctx, info.ID, okActor()); !errors.Is(err, ErrAlreadyInState) || *commits != 1 {
+		t.Fatalf("another refusal: err %v, %d commits; want it as it is, 1", err, *commits)
+	}
+	s, commits, _ = build(ErrStateChanged)
+	if err := s.Enable(ctx, info.ID, okActor()); !errors.Is(err, ErrStateChanged) || *commits != 1 {
+		t.Fatalf("Enable: err %v, %d commits; want ErrStateChanged after one", err, *commits)
+	}
+	s, commits, _ = build(ErrStateChanged)
+	if err := s.SetOwner(ctx, info.ID, uuid.New(), okActor()); !errors.Is(err, ErrStateChanged) || *commits != 1 {
+		t.Fatalf("SetOwner: err %v, %d commits; want ErrStateChanged after one", err, *commits)
+	}
+}
+
+func TestTheAuditRowNamesTheCallerCredential(t *testing.T) {
+	cred := uuid.NewString()
+	s, got := captured(t, true, nil)
+	if _, err := s.Create(context.Background(), CreateInput{OrgID: uuid.New(), Name: "ci-bot", Owner: uuid.New()},
+		Actor{Caller: audit.Caller{CredentialID: cred}}); err != nil {
+		t.Fatal(err)
+	}
+	attrs := (*got)[0].Audit.Attributes
+	if attrs["credential_id"] != cred {
+		t.Fatalf("attributes %v, want credential_id %s", attrs, cred)
+	}
+	if err := audit.ValidateAttributes(attrs); err != nil {
+		t.Fatal(err)
+	}
+}

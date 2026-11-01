@@ -5,10 +5,13 @@
 package serviceaccount
 
 import (
+	"context"
 	"regexp"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 )
 
 var namePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
@@ -21,10 +24,33 @@ func ValidateName(name string) error {
 	return nil
 }
 
-// Actor is who ran a verb; both are nil for an operator command.
+// Locked is what Authorize sees: the organization and the account's current owner, read under the verb's locks
+// (the zero uuid for a create, which has no account yet).
+type Locked struct {
+	OrgID uuid.UUID
+	Owner uuid.UUID
+}
+
+// Authorize decides, inside the verb's transaction after its principal locks and before any write, whether the
+// actor may make the change. It must only read: the verbs take no lock on public.users or public.memberships for it. A
+// demotion that commits during the verb's transaction therefore counts as after it. A nil Authorize refuses
+// (ErrDenied).
+type Authorize func(ctx context.Context, tx audit.TxOps, l Locked) error
+
+// Actor is who ran a verb and how it is authorized.
 type Actor struct {
 	PrincipalID *uuid.UUID
 	RequestID   *string
+	// Caller is the credential the request came with; the audit row names it.
+	Caller    audit.Caller
+	Authorize Authorize
+}
+
+func (a Actor) authorize(ctx context.Context, tx audit.TxOps, l Locked) error {
+	if a.Authorize == nil {
+		return ErrDenied
+	}
+	return a.Authorize(ctx, tx, l)
 }
 
 type CreateInput struct {

@@ -51,12 +51,11 @@ func MarkSignatureOnly(next http.Handler) http.Handler {
 
 // markScopeExempt is MarkSignatureOnly plus the exact "METHOD path" routes of
 // extra (AuthProxyConfig.ScopeExemptRoutes: the routes auth-service
-// authenticates while their aggregate is on). An extra route matches its raw
-// path exactly, with no template.
+// authenticates while their aggregate is on). Extra routes match on r.URL.Path, so the exempt set equals what the router routes to the forward.
 func markScopeExempt(extra map[string]bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if signatureOnlyMatch(r.Method, r.URL.EscapedPath()) || extra[r.Method+" "+r.URL.EscapedPath()] {
+			if signatureOnlyMatch(r.Method, r.URL.EscapedPath()) || extra[r.Method+" "+r.URL.Path] {
 				r = r.WithContext(context.WithValue(r.Context(), signatureOnlyKey{}, true))
 			}
 			next.ServeHTTP(w, r)

@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/delegationend"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/token"
 )
@@ -332,7 +333,14 @@ func (o *Operator) commit(ctx context.Context, request Request, planned Result) 
 				if err != nil {
 					return err
 				}
+				delegated, err := delegationend.Lock(ctx, tx, o.q(), ids, false)
+				if err != nil {
+					return err
+				}
 				if err := o.revokeSessions(ctx, tx, ids); err != nil {
+					return err
+				}
+				if err := delegationend.Record(ctx, tx, delegated); err != nil {
 					return err
 				}
 				result.Sessions = len(ids)
@@ -405,10 +413,11 @@ func (o *Operator) write(ctx context.Context, tx audit.TxOps, move Move, now tim
 // a refresh credential issued inside [activated_at, deactivated_at or now] and
 // after now - RevokeWindow. A session whose signing_kids are recorded is
 // revoked iff kid is in the set, whatever its age; a NULL set keeps the window
-// rule. A key that never signed revokes nothing.
+// rule. A key that never signed revokes nothing. The delegated children of
+// those sessions go with them, whatever key they carry.
 func (o *Operator) sessionsToRevoke(ctx context.Context, db querier, kid string, now time.Time, lock bool) ([]string, error) {
 	sql := `
-		SELECT s.id::text
+		WITH hit AS (SELECT s.id
 		FROM ` + o.q() + `.sessions s
 		JOIN ` + o.q() + `.signing_keys k ON k.kid = $1::text AND k.activated_at IS NOT NULL
 		WHERE s.revoked_at IS NULL AND (
@@ -420,7 +429,10 @@ func (o *Operator) sessionsToRevoke(ctx context.Context, db querier, kid string,
 		        SELECT 1 FROM ` + o.q() + `.refresh_credentials r
 		        WHERE r.session_id = s.id
 		          AND r.issued_at >= k.activated_at AND r.issued_at <= COALESCE(k.deactivated_at, $2::timestamptz)
-		          AND r.issued_at > $3::timestamptz))))
+		          AND r.issued_at > $3::timestamptz)))))
+		SELECT s.id::text FROM ` + o.q() + `.sessions s
+		WHERE s.revoked_at IS NULL
+		  AND (s.id IN (SELECT id FROM hit) OR s.delegated_from_session_id IN (SELECT id FROM hit))
 		ORDER BY s.id`
 	if lock {
 		sql += ` FOR UPDATE OF s`

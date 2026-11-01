@@ -213,6 +213,7 @@ type dirGroup struct {
 	execScopes map[*ast.FuncDecl]*scope
 	bound      bool
 	pure       map[*ast.FuncDecl]bool // pureFunc answers
+	touched    map[string]bool        // sliceTouched answers, by package and name
 	// structFields: the unexported fields of each struct type of the directory; badStruct: a type the scan cannot see
 	// every value of (new(T), var x T, elided element literals); fieldKind: the join of the kinds assigned to each field
 	// name by the literals and the assignments of the directory
@@ -3338,9 +3339,14 @@ func (c *fileCtx) sliceElems(e ast.Expr, at ast.Node, depth int) ([]ast.Expr, bo
 	return nil, false
 }
 
-// packageSlice is the initializer of a package variable the directory assigns only at its declaration.
+// packageSlice is the initializer of a package variable the directory assigns only at its declaration and never writes
+// into, aliases or passes out: its elements are then the initializer's, whatever else runs.
 func (c *fileCtx) packageSlice(name string) ast.Expr {
-	return c.g.vars[c.pkg][name]
+	def := c.g.vars[c.pkg][name]
+	if def == nil || ast.IsExported(name) || c.g.sliceTouched(c.pkg, name) {
+		return nil
+	}
+	return def
 }
 
 // enclosingBody is the body of the top-level function declaration that holds n.

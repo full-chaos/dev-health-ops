@@ -31,11 +31,14 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/invite"
 	"github.com/full-chaos/dev-health-ops/internal/auth/membership"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole"
+	authsession "github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/auth/signedtoken"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -50,11 +53,16 @@ import (
 // admin role. Both pools carry a barrier: a test holds one statement of a
 // writer at its start, so each writer runs its own code up to that point.
 type env struct {
-	admin       *pgxpool.Pool
-	runtime     *pgxpool.Pool
-	members     *membership.Store
-	invites     *invite.Store
-	identity    *identity.Store
+	admin   *pgxpool.Pool
+	runtime *pgxpool.Pool
+	// goPool is go-api's pool: every statement on it passes goBarrier.
+	goPool   *pgxpool.Pool
+	members  *membership.Store
+	invites  *invite.Store
+	identity *identity.Store
+	// sessions and platform are the delegation cells' stores on the runtime role.
+	sessions    *authsession.Store
+	platform    *platformrole.Store
 	authBarrier *barrier
 	goBarrier   *barrier
 	server      *httptest.Server
@@ -152,6 +160,7 @@ func newEnv(t *testing.T) (*env, error) {
 		return nil, fmt.Errorf("go-api pool: %w", err)
 	}
 	closers = append(closers, goPool.Close)
+	e.goPool = goPool
 
 	schema, err := authschema.NewValidatedIdentifier("auth")
 	if err != nil {
@@ -166,6 +175,17 @@ func newEnv(t *testing.T) (*env, error) {
 		return nil, err
 	}
 	if e.identity, err = identity.New(identity.Config{Pool: e.runtime, Schema: schema, UsersOwnedByAuth: true}); err != nil {
+		return nil, err
+	}
+	successor, err := randomText(32)
+	if err != nil {
+		return nil, err
+	}
+	if e.sessions, err = authsession.New(authsession.Config{Pool: e.runtime, Schema: schema,
+		SuccessorKey: contracts.NewSecretString(successor), UsersOwned: true, PlatformRolesOwned: true}); err != nil {
+		return nil, err
+	}
+	if e.platform, err = platformrole.New(platformrole.Config{Pool: e.runtime, Schema: schema}); err != nil {
 		return nil, err
 	}
 

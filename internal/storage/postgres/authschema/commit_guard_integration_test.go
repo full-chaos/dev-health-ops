@@ -159,6 +159,11 @@ var unguardedColumns = map[string]map[string]string{
 		// Written once at insert; its own trigger (0016) refuses any change,
 		// inside audit.Commit or not, so it has no UPDATE OF guard.
 		"legacy_token_version": "lifecycle",
+		// The same: written at insert, and the delegated sessions trigger refuses any change.
+		"actor_principal_id": "lifecycle", "delegated_from_session_id": "lifecycle",
+		"delegation_reason": "lifecycle", "delegation_permitted_actions": "lifecycle",
+		// The same: written at insert, and 0042's trigger refuses any change.
+		"web_session_id": "lifecycle",
 		// Appended at every mint, outside audit.Commit: a key set, not a
 		// session decision.
 		"signing_kids": "lifecycle",
@@ -173,6 +178,17 @@ var unguardedColumns = map[string]map[string]string{
 		"id": "lifecycle", "created_at": "lifecycle",
 		"principal_id": "security", "purpose": "security", "token_hash": "security", "expires_at": "security", "consumed_at": "security",
 		"issued_token_version": "security",
+	},
+	// One authorization transaction, written by an unauthenticated GET. Its binding,
+	// decision and consume are write-once by 0042's trigger, and a decision commits
+	// inside audit.Commit with the rows it creates.
+	"oauth_authorization_requests": {
+		"id": "lifecycle", "client_id": "lifecycle", "client_class": "lifecycle", "redirect_uri": "lifecycle",
+		"resource": "lifecycle", "audience": "lifecycle", "scope": "lifecycle", "state": "lifecycle",
+		"code_challenge": "lifecycle", "code_challenge_method": "lifecycle", "web_session_id": "lifecycle",
+		"principal_id": "lifecycle", "organization_id": "lifecycle", "csrf_hash": "lifecycle", "decision": "lifecycle",
+		"grant_id": "lifecycle", "code_hash": "lifecycle", "code_expires_at": "lifecycle", "consumed_at": "lifecycle",
+		"expires_at": "lifecycle", "created_at": "lifecycle",
 	},
 	"sso_flow_states": {
 		"id": "lifecycle", "protocol": "lifecycle", "provider_id": "lifecycle", "flow_hash": "lifecycle", "binding_hash": "lifecycle",

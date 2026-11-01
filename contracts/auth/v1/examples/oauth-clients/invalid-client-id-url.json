@@ -1,0 +1,17 @@
+{
+  "schema_version": "oauth-clients.v1",
+  "clients": [
+    {
+      "client_id": "https://client.example.test/meta.json",
+      "client_name": "Workbench",
+      "client_class": "browser",
+      "first_party": false,
+      "audiences": [
+        "acr-api"
+      ],
+      "redirect_uris": [
+        "https://workbench.example.test/oauth/callback"
+      ]
+    }
+  ]
+}

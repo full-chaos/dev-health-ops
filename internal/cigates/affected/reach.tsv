@@ -105,6 +105,7 @@ internal/auth/contracts	contracts.go	internal/apiservice
 internal/auth/contracts	contracts.go	internal/apiservice/acr
 internal/auth/contracts	contracts.go	internal/apiservice/admin
 internal/auth/contracts	contracts.go	internal/audit
+internal/auth/contracts	contracts.go	internal/auth/acrmint
 internal/auth/contracts	contracts.go	internal/auth/authapi
 internal/auth/contracts	contracts.go	internal/auth/authconfig
 internal/auth/contracts	contracts.go	internal/auth/authorization
@@ -124,6 +125,7 @@ internal/auth/contracts	contracts.go	internal/auth/keyrotation
 internal/auth/contracts	contracts.go	internal/auth/linkmail
 internal/auth/contracts	contracts.go	internal/auth/lockorder
 internal/auth/contracts	contracts.go	internal/auth/membership
+internal/auth/contracts	contracts.go	internal/auth/oauthgrant
 internal/auth/contracts	contracts.go	internal/auth/org
 internal/auth/contracts	contracts.go	internal/auth/orgdeprovision
 internal/auth/contracts	contracts.go	internal/auth/passwordpolicy
@@ -162,6 +164,7 @@ internal/auth/keystore	open_unix.go	internal/api/externalingest
 internal/auth/keystore	open_unix.go	internal/api/webhookintake
 internal/auth/keystore	open_unix.go	internal/apiservice
 internal/auth/keystore	open_unix.go	internal/apiservice/acr
+internal/auth/keystore	open_unix.go	internal/auth/acrmint
 internal/auth/keystore	open_unix.go	internal/auth/authapi
 internal/auth/keystore	open_unix.go	internal/auth/authruntime
 internal/auth/keystore	open_unix.go	internal/auth/keyrotation

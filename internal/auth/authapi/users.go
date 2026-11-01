@@ -18,13 +18,21 @@ import (
 
 // UserState is the live public.users state an access token is minted from.
 type UserState struct {
-	Email        string
-	Username     *string
-	FullName     *string
-	IsActive     bool
-	IsSuperuser  bool
+	Email       string
+	Username    *string
+	FullName    *string
+	IsActive    bool
+	IsSuperuser bool
+	// Platform is the platform action set held when it is not the one
+	// IsSuperuser means; nil carries only the flag.
+	Platform     *rule.Platform
 	TokenVersion int64
 	AuthProvider *string
+}
+
+// Holds reports whether the user holds the platform action now.
+func (s UserState) Holds(action string) bool {
+	return rule.Holds(s.Platform, s.IsSuperuser, action)
 }
 
 // Users reads the go-api-owned user and membership rows. Until the users

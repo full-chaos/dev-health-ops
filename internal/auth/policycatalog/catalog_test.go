@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	actionsSHA = "e9559ac1011d123c884ca8101678d7533cfcc4e380eae95b24ea095834068fd2"
-	rolesSHA   = "328e3d5a7187a5c80eb643114ad2a3599d4f1d59c534b742c072e03f2df53b53"
+	actionsSHA = "cee5744873ddebc1f2f58e4ccbcabca082fb917222496c47c7616114dda9921c"
+	rolesSHA   = "96d576c4e8b3ce89a6d075502ef1dce23a34f582bcbd55934c66edd8e9dc86af"
 )
 
 func repoRoot(t *testing.T) string {
@@ -138,7 +138,7 @@ func TestPlatformOwnerIsAMarkerHoldingNoAction(t *testing.T) {
 }
 
 func TestLoadRefusesMalformedCatalogs(t *testing.T) {
-	const okA = `{"schema_version":"actions.v1","catalog_version":1,"description":"d","actions":[{"action":"a.b","scope":"organization","resource_kind":"organization","risk_class":"low","cache_class":"decision_bound"},{"action":"a.c","scope":"organization","resource_kind":"organization","risk_class":"low","cache_class":"decision_bound"}]}`
+	const okA = `{"schema_version":"actions.v1","catalog_version":1,"description":"d","actions":[{"action":"a.b","scope":"organization","resource_kind":"organization","risk_class":"low","cache_class":"decision_bound","impersonation":"denied"},{"action":"a.c","scope":"organization","resource_kind":"organization","risk_class":"low","cache_class":"decision_bound","impersonation":"denied"}]}`
 	const okR = `{"schema_version":"roles.v1","catalog_version":1,"description":"d","roles":[{"role":"r","scope":"organization","actions":["a.b"]}]}`
 	if _, err := Load([]byte(okA), []byte(okR)); err != nil {
 		t.Fatalf("well-formed catalog refused: %v", err)
@@ -190,7 +190,7 @@ func TestEveryEmbeddedActionHasARiskAndCacheClassAndHighRiskIsNeverCached(t *tes
 }
 
 func TestLoadRefusesARoleHoldingEveryAction(t *testing.T) {
-	a := `{"schema_version":"actions.v1","catalog_version":1,"description":"d","actions":[{"action":"a.b","scope":"organization","resource_kind":"organization","risk_class":"low","cache_class":"decision_bound"},{"action":"a.c","scope":"organization","resource_kind":"organization","risk_class":"low","cache_class":"decision_bound"}]}`
+	a := `{"schema_version":"actions.v1","catalog_version":1,"description":"d","actions":[{"action":"a.b","scope":"organization","resource_kind":"organization","risk_class":"low","cache_class":"decision_bound","impersonation":"denied"},{"action":"a.c","scope":"organization","resource_kind":"organization","risk_class":"low","cache_class":"decision_bound","impersonation":"denied"}]}`
 	r := `{"schema_version":"roles.v1","catalog_version":1,"description":"d","roles":[{"role":"r","scope":"organization","actions":["a.b","a.c"]}]}`
 	if _, err := Load([]byte(a), []byte(r)); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("err = %v, want ErrInvalid", err)
@@ -222,7 +222,9 @@ func TestEmbeddedFilesValidateAgainstTheirSchemas(t *testing.T) {
 // internal/api/session/permissions.go. Catalog-only = not served in /auth/me
 // until a web-reviewed change adds it there; every other catalog action must
 // still equal a session permission.
-var catalogOnly = map[string]bool{"billing.read": true, "billing.manage": true, "license.read": true, "members.update": true, "authz.decide": true, "acr.context.read": true}
+var catalogOnly = map[string]bool{"admin.impersonate": true, "billing.read": true, "billing.manage": true, "license.read": true, "members.update": true, "authz.decide": true, "acr.context.read": true,
+	"admin.billing": true, "admin.flags": true, "admin.audit": true, "admin.telemetry": true, "admin.stats": true,
+}
 
 type sessionEntry struct {
 	role string
@@ -407,7 +409,7 @@ func TestRepositoryIsAResourceKindAndNeverAScope(t *testing.T) {
 	const okR = `{"schema_version":"roles.v1","catalog_version":1,"description":"d","roles":[{"role":"r","scope":"organization","actions":["a.b"]}]}`
 	act := func(scope, kind string) string {
 		row := func(id string) string {
-			return `{"action":"` + id + `","scope":"` + scope + `","resource_kind":"` + kind + `","risk_class":"low","cache_class":"decision_bound"}`
+			return `{"action":"` + id + `","scope":"` + scope + `","resource_kind":"` + kind + `","risk_class":"low","cache_class":"decision_bound","impersonation":"denied"}`
 		}
 		return `{"schema_version":"actions.v1","catalog_version":1,"description":"d","actions":[` + row("a.b") + `,` + row("a.c") + `]}`
 	}
@@ -429,5 +431,96 @@ func TestRepositoryIsAResourceKindAndNeverAScope(t *testing.T) {
 	roleScope := strings.Replace(okR, `"scope":"organization"`, `"scope":"repository"`, 1)
 	if _, err := Load([]byte(act("organization", "organization")), []byte(roleScope)); err == nil {
 		t.Error("a repository role scope was accepted")
+	}
+}
+
+func TestImpersonationIsDeniedOnTheG51List(t *testing.T) {
+	want := map[string]bool{
+		"admin.users": true, "admin.orgs": true, "admin.impersonate": true,
+		"admin.billing": true, "admin.flags": true, "admin.audit": true, "admin.telemetry": true, "admin.stats": true, "members.invite": true, "members.manage": true,
+		"org.write": true, "org.delete": true, "billing.manage": true, "settings.write": true, "integrations.write": true,
+		"members.update": true, "acr.context.read": true, "authz.decide": true,
+	}
+	actions := Default().Actions()
+	if len(actions) != 34 {
+		t.Fatalf("%d actions, want 34", len(actions))
+	}
+	for _, a := range actions {
+		denied := a.Impersonation == ImpersonationDenied
+		if denied != want[a.ID] {
+			t.Errorf("%s impersonation = %s", a.ID, a.Impersonation)
+		}
+	}
+}
+
+func TestLoadRefusesAnActionWithNoImpersonationValue(t *testing.T) {
+	const roles = `{"schema_version":"roles.v1","catalog_version":1,"description":"d","roles":[{"role":"r","scope":"organization","actions":["a.b"]}]}`
+	for name, member := range map[string]string{"missing": ``, "unknown": `,"impersonation":"maybe"`, "empty": `,"impersonation":""`} {
+		actions := `{"schema_version":"actions.v1","catalog_version":1,"description":"d","actions":[{"action":"a.b","scope":"organization","resource_kind":"organization","risk_class":"low","cache_class":"none"` + member + `}]}`
+		if _, err := Load([]byte(actions), []byte(roles)); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: Load = %v, want ErrInvalid", name, err)
+		}
+	}
+}
+
+func TestOnlyThePlatformAdminRoleHoldsImpersonate(t *testing.T) {
+	got := Default().RolesHolding("admin.impersonate", ScopePlatform)
+	if len(got) != 1 || got[0] != "platform_admin" {
+		t.Fatalf("roles holding admin.impersonate = %v", got)
+	}
+	if got := Default().RolesHolding("admin.impersonate", ScopeOrganization); len(got) != 0 {
+		t.Fatalf("organization roles holding admin.impersonate = %v", got)
+	}
+}
+
+func TestDelegatedActionsAreTheAllowedActionsOfAnOrganizationRole(t *testing.T) {
+	got, err := Default().DelegatedActions("owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) == 0 {
+		t.Fatal("owner permits no delegated action")
+	}
+	for _, id := range got {
+		if a, err := Default().Action(id); err != nil || a.Impersonation != ImpersonationAllowed {
+			t.Errorf("owner delegated action %s: %+v, %v", id, a, err)
+		}
+	}
+	for _, role := range []string{"platform_admin", "custom", ""} {
+		if _, err := Default().DelegatedActions(role); !errors.Is(err, ErrUnknownRole) {
+			t.Errorf("DelegatedActions(%q) = %v, want ErrUnknownRole", role, err)
+		}
+	}
+}
+
+// The admin platform actions are exactly the eight the platform_admin
+// role lists, every one high risk, never cached and denied to a delegated
+// session, and no organization role holds one.
+func TestPlatformActionsAreHeldOnlyByPlatformAdmin(t *testing.T) {
+	c := Default()
+	want := []string{"admin.audit", "admin.billing", "admin.flags", "admin.impersonate", "admin.orgs", "admin.stats", "admin.telemetry", "admin.users"}
+	var platform []string
+	for _, a := range c.Actions() {
+		if a.Scope != ScopePlatform || !strings.HasPrefix(a.ID, "admin.") {
+			continue
+		}
+		platform = append(platform, a.ID)
+		if a.RiskClass != RiskHigh || a.CacheClass != CacheNone || a.ResourceKind != "platform" || a.Impersonation != ImpersonationDenied {
+			t.Errorf("platform action %s: risk %s cache %s kind %s impersonation %s", a.ID, a.RiskClass, a.CacheClass, a.ResourceKind, a.Impersonation)
+		}
+		for _, r := range c.Roles() {
+			if r.ID != "platform_admin" && c.Allows(r.ID, a.ID) {
+				t.Errorf("role %s holds platform action %s", r.ID, a.ID)
+			}
+		}
+	}
+	sort.Strings(platform)
+	if strings.Join(platform, ",") != strings.Join(want, ",") {
+		t.Fatalf("platform actions %v, want %v", platform, want)
+	}
+	for _, a := range want {
+		if !c.Allows("platform_admin", a) {
+			t.Errorf("platform_admin does not hold %s", a)
+		}
 	}
 }

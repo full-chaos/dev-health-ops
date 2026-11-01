@@ -170,13 +170,13 @@ func (g *Guard) currentUser(w http.ResponseWriter, r *http.Request, level Authz)
 		countRoleSource(r.Context(), kindRolePlatformGate)
 	case level == Admin || level == AdminOrg:
 		switch {
-		case user.IsSuperuser:
+		case user.Holds(ActionAdminOrgs):
 			countRoleSource(r.Context(), kindRolePlatformBypass)
 		case user.OrgID == "":
 			countRoleSource(r.Context(), kindRoleClaimFallback)
 		}
 	}
-	if (level != Admin && level != AdminOrg) || user.IsSuperuser || user.OrgID == "" {
+	if (level != Admin && level != AdminOrg) || user.Holds(ActionAdminOrgs) || user.OrgID == "" {
 		return user, true
 	}
 	// At an admin level the caller's role in the token's own org is the

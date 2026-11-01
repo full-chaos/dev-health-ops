@@ -364,6 +364,14 @@ func TestBillingEdgeRawBodyIsPinned(t *testing.T) {
 			edgeAssertRefused(t, rig.post(body, headers), "signature_mismatch", headers)
 		})
 	}
+	// The other direction: a signature over another serialization does not
+	// cover the bytes sent.
+	for name, signedBody := range variants {
+		t.Run("signed_as_"+name, func(t *testing.T) {
+			other := edgeSigned(signedBody)
+			edgeAssertRefused(t, rig.post(orig, other), "signature_mismatch", other)
+		})
+	}
 	// The body is read whole before it is parsed: a signed body that is not
 	// JSON passes the check and fails after it, with no refusal line.
 	notJSON := "this is not json"

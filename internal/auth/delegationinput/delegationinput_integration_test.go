@@ -140,7 +140,7 @@ VALUES ($1, $2, NULL, 'local', true, true, false, 7, now(), now())`, u, "d-"+u.S
 	if err != nil {
 		t.Fatalf("StartDelegation: %v", err)
 	}
-	ad, err := delegationinput.New(delegationinput.Config{Sessions: sessions, Roles: roles})
+	ad, err := delegationinput.New(delegationinput.Config{Sessions: sessions, Roles: delegationinput.StoreRoles(roles)})
 	if err != nil {
 		t.Fatal(err)
 	}

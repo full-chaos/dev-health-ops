@@ -42,12 +42,12 @@ func (f *fakeSessions) Current(context.Context, uuid.UUID) (session.Record, erro
 }
 
 type fakeRoles struct {
-	auth  platformrole.Authority
+	auth  Authority
 	err   error
 	calls int
 }
 
-func (f *fakeRoles) Resolve(context.Context, uuid.UUID) (platformrole.Authority, error) {
+func (f *fakeRoles) Resolve(context.Context, uuid.UUID) (Authority, error) {
 	f.calls++
 	return f.auth, f.err
 }
@@ -68,7 +68,7 @@ func record() session.Record {
 	}
 }
 
-func rig(t *testing.T, rec session.Record, auth platformrole.Authority) (*Adapter, *fakeSessions, *fakeRoles) {
+func rig(t *testing.T, rec session.Record, auth Authority) (*Adapter, *fakeSessions, *fakeRoles) {
 	t.Helper()
 	s, r := &fakeSessions{rec: rec}, &fakeRoles{auth: auth}
 	a, err := New(Config{Sessions: s, Roles: r, Now: func() time.Time { return now }})
@@ -86,10 +86,17 @@ func eval(s authorization.Snapshot, action string) authorization.Decision {
 	return authorization.NewEvaluator().Evaluate(authorization.Request{Action: action, ResourceKind: "organization", OrganizationID: orgID.String()}, s)
 }
 
+type fakeAuth struct{ owner, power bool }
+
+func (f fakeAuth) IsOwner() bool { return f.owner }
+func (f fakeAuth) Allows(a string) bool {
+	return f.power && a == session.ImpersonateAction
+}
+
 var (
-	owner  = platformrole.AuthorityOfRoles(platformrole.PlatformOwner, platformrole.PlatformAdmin)
-	admin  = platformrole.AuthorityOfRoles(platformrole.PlatformAdmin)
-	nobody = platformrole.AuthorityOfRoles()
+	owner  = fakeAuth{owner: true, power: true}
+	admin  = fakeAuth{power: true}
+	nobody = fakeAuth{}
 )
 
 // The evaluator reads the target org from Delegation: it is the record's org.

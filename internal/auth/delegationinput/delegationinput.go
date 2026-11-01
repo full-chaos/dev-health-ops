@@ -25,10 +25,25 @@ type Sessions interface {
 	Current(ctx context.Context, id uuid.UUID) (session.Record, error)
 }
 
-// Roles resolves the platform authority a principal holds now (*platformrole.Store).
-type Roles interface {
-	Resolve(ctx context.Context, principal uuid.UUID) (platformrole.Authority, error)
+// Authority is what the adapter reads of a principal's platform authority.
+type Authority interface {
+	IsOwner() bool
+	Allows(action string) bool
 }
+
+// Roles resolves the platform authority a principal holds now.
+type Roles interface {
+	Resolve(ctx context.Context, principal uuid.UUID) (Authority, error)
+}
+
+type storeRoles struct{ s *platformrole.Store }
+
+func (r storeRoles) Resolve(ctx context.Context, principal uuid.UUID) (Authority, error) {
+	return r.s.Resolve(ctx, principal)
+}
+
+// StoreRoles reads the live authority from the platform role store.
+func StoreRoles(s *platformrole.Store) Roles { return storeRoles{s} }
 
 // Config builds an Adapter.
 type Config struct {

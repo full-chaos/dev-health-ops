@@ -63,5 +63,5 @@ func revisionFeedWith(
 
 type nopInvalidator struct{}
 
-func (nopInvalidator) Invalidate(context.Context, string, string, int64) {}
-func (nopInvalidator) InvalidateAll(context.Context)                     {}
+func (nopInvalidator) Invalidate(context.Context, string, string, int64) error { return nil }
+func (nopInvalidator) InvalidateAll(context.Context) error                     { return nil }

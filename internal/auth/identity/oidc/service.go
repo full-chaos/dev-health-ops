@@ -621,18 +621,44 @@ func (s *Service) resolve(ctx context.Context, row Provider, v validated, reques
 	switch {
 	case found:
 		tokens, err = s.cfg.Sessions.Issue(ctx, req)
-	case s.cfg.MembershipJIT != nil:
+	case s.cfg.MembershipJIT != nil && row.AutoProvision:
+		var joined bool
+		if req.Role, joined = s.signInRole(ctx, row); !joined {
+			return Login{}, notMember()
+		}
 		tokens, err = s.cfg.MembershipJIT.JoinAndIssue(ctx, principal.ID, org, req)
+		if errors.Is(err, identity.ErrAlreadyMember) {
+			if req.Role, _, err = s.cfg.Memberships.Role(ctx, principal.ID, org); err == nil {
+				tokens, err = s.cfg.Sessions.Issue(ctx, req)
+			}
+		}
 	default:
 		return Login{}, notMember()
 	}
-	if errors.Is(err, ErrSessionUnavailable) {
+	switch {
+	case err == nil:
+	case errors.Is(err, ErrSessionUnavailable):
 		return Login{}, unavailable(err)
-	}
-	if err != nil {
+	case errors.Is(err, ErrSignupNotAvailable):
+		return Login{}, deny(http.StatusForbidden, ReasonSignupUnavailable, "Sign-up through this provider is not available")
+	case errors.Is(err, ErrNotOrgMember):
+		return Login{}, notMember()
+	case errors.Is(err, ErrPrincipalDisabled):
+		return Login{}, deny(http.StatusForbidden, ReasonPrincipalDeactivated, "User account is disabled")
+	default:
 		return Login{}, internal(ReasonStoreUnavailable, err)
 	}
-	return Login{PrincipalID: principal.ID, Email: principal.Email, OrgID: &org, Role: role, Tokens: tokens}, nil
+	return Login{PrincipalID: principal.ID, Email: principal.Email, OrgID: &org, Role: req.Role, Tokens: tokens}, nil
+}
+
+// signInRole is the provider row's role for a join; owner or an unknown value is
+// refused before any write.
+func (s *Service) signInRole(ctx context.Context, row Provider) (string, bool) {
+	role, ok := identity.SignInRole(row.DefaultRole)
+	if !ok {
+		s.cfg.Logger.WarnContext(ctx, "auth oidc: sign-in join refused", "branch", "default_role_not_granted", "provider_id", row.ID)
+	}
+	return role, ok
 }
 
 // refuseUnusableEmail answers an address the shared provider email rule refuses with go-api's 400
@@ -660,9 +686,13 @@ func (s *Service) newAccount(ctx context.Context, row Provider, v validated, req
 	if s.cfg.MembershipJIT == nil {
 		return Login{}, notMember()
 	}
+	role, ok := s.signInRole(ctx, row)
+	if !ok {
+		return Login{}, notMember()
+	}
 	p := v.profile
 	org := row.OrgID
-	req := SessionRequest{OrgID: &org, Role: "member", AMR: AMR}
+	req := SessionRequest{OrgID: &org, Role: role, AMR: AMR}
 	principal, tokens, err := s.cfg.MembershipJIT.ProvisionJoinAndIssue(ctx,
 		FederatedAccount{Key: v.key, Email: p.Email, FullName: p.FullName, LegacyFullName: p.LegacyFullName, RequestID: requestID}, org, req)
 	switch {
@@ -678,6 +708,10 @@ func (s *Service) newAccount(ctx context.Context, row Provider, v validated, req
 		return Login{}, authFailed(ReasonMalformed, err)
 	case errors.Is(err, ErrSessionUnavailable):
 		return Login{}, unavailable(err)
+	case errors.Is(err, ErrNotOrgMember):
+		return Login{}, notMember()
+	case errors.Is(err, ErrPrincipalDisabled):
+		return Login{}, deny(http.StatusForbidden, ReasonPrincipalDeactivated, "User account is disabled")
 	default:
 		return Login{}, internal(ReasonStoreUnavailable, err)
 	}

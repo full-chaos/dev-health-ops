@@ -204,6 +204,8 @@ auth-service has 48 profile rows. Its routes do not carry an `action` field. The
 | `POST /api/v1/auth/social-login` | protected | `social_oauth_exchange` | `none` |
 | `POST /internal/v1/sessions` | protected | `internal_svc_authsess_token`, `workload_token` | `none` |
 | `POST /internal/v1/sessions/state` | protected | `internal_svc_authsess_token`, `workload_token` | `none` |
+| `POST /internal/v1/sessions/delegated` | protected | `internal_svc_authsess_token`, `workload_token` | `none` |
+| `POST /internal/v1/sessions/delegated/end` | protected | `internal_svc_authsess_token`, `workload_token` | `none` |
 | `POST /internal/v1/memberships/add` | protected | `internal_svc_authsess_token`, `workload_token` | `org_scoped` |
 | `POST /internal/v1/memberships/role` | protected | `internal_svc_authsess_token`, `workload_token` | `org_scoped` |
 | `POST /internal/v1/memberships/remove` | protected | `internal_svc_authsess_token`, `workload_token` | `org_scoped` |
@@ -215,6 +217,10 @@ auth-service has 48 profile rows. Its routes do not carry an `action` field. The
 | `POST /internal/v1/organizations/reactivate` | protected | `internal_svc_authsess_token`, `workload_token` | `cross_org_superuser_only` |
 | `POST /internal/v1/organizations/suspend` | protected | `internal_svc_authsess_token` | `cross_org_superuser_only` |
 | `POST /internal/v1/organizations/state` | protected | `internal_svc_authsess_token`, `workload_token` | `cross_org_superuser_only` |
+| `POST /internal/v1/service-accounts/create` | protected | `internal_svc_authsess_token`, `workload_token` | `org_scoped` |
+| `POST /internal/v1/service-accounts/disable` | protected | `internal_svc_authsess_token`, `workload_token` | `org_scoped` |
+| `POST /internal/v1/service-accounts/enable` | protected | `internal_svc_authsess_token`, `workload_token` | `org_scoped` |
+| `POST /internal/v1/service-accounts/owner` | protected | `internal_svc_authsess_token`, `workload_token` | `org_scoped` |
 | `POST /internal/v1/token/exchange` | protected | `kubernetes_sa_token_exchange`, `workload_bootstrap_credential` | `none` |
 | `GET /api/v1/auth/verify` | public | none | `none` |
 | `POST /api/v1/auth/register` | public | none | `none` |

@@ -236,3 +236,4 @@ internal/workersctl	code	contracts
 internal/workersctl	code	deploy
 internal/workerservice	code	contracts
 internal/workerservice	test	deploy
+internal/auth/grant	test	contracts

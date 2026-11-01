@@ -10,10 +10,10 @@ import (
 // A matrix padded with duplicate legs must not reach the leg count: the leg selector refuses a list with a repeated leg name, and the
 // queue-tested check counts DISTINCT successful job names, not jobs.
 
-// paddedLegs is ten entries with six distinct names: static, test 1 and 2 twice each, race 2, 3 and 4 twice each.
+// paddedLegs is eleven entries with six distinct names: static, test 1 and 2 twice each, race 2, 3 and 4 twice each, race 4 a third time.
 var paddedLegNames = []string{
 	"static", "test-1-of-4", "test-1-of-4", "test-2-of-4", "test-2-of-4",
-	"race-2-of-5", "race-2-of-5", "race-3-of-5", "race-3-of-5", "race-4-of-5",
+	"race-2-of-5", "race-2-of-5", "race-3-of-5", "race-3-of-5", "race-4-of-5", "race-4-of-5",
 }
 
 func paddedLegsJSON() string {
@@ -54,20 +54,20 @@ func TestTheQueueHelperCountsDistinctLegNamesNotJobs(t *testing.T) {
 	for _, n := range paddedLegNames {
 		padded = append(padded, qualityLeg{name: n, job: "success", step: "success"})
 	}
-	if len(padded) != 10 {
-		t.Fatalf("the padded list has %d entries, want 10", len(padded))
+	if len(padded) != 11 {
+		t.Fatalf("the padded list has %d entries, want 11", len(padded))
 	}
 	got, _ := runQualityHelper(t, qualitySha, good, qualityJobsJSON(padded), false, "")
 	if got {
-		t.Error("ten successful jobs with six distinct names were accepted as a fully run queue run")
+		t.Error("eleven successful jobs with six distinct names were accepted as a fully run queue run")
 	}
 	got, _ = runQualityHelper(t, qualitySha, good, qualityJobsJSON(qualityLegs(nil)), false, filepath.Join(t.TempDir(), "run-id"))
 	if !got {
-		t.Error("ten successful jobs with ten distinct names were refused")
+		t.Error("eleven successful jobs with eleven distinct names were refused")
 	}
 }
 
-func TestTheShippedLegListHasTenDistinctLegs(t *testing.T) {
+func TestTheShippedLegListHasElevenDistinctLegs(t *testing.T) {
 	seen := map[string]bool{}
 	legs := goQualityLegList(t, repoRoot(t))
 	for _, e := range legs {
@@ -77,7 +77,7 @@ func TestTheShippedLegListHasTenDistinctLegs(t *testing.T) {
 		}
 		seen[n] = true
 	}
-	if len(legs) != 10 || len(seen) != 10 {
-		t.Errorf("ci/go_quality_legs.json has %d entries and %d distinct names, want 10 and 10", len(legs), len(seen))
+	if len(legs) != 11 || len(seen) != 11 {
+		t.Errorf("ci/go_quality_legs.json has %d entries and %d distinct names, want 11 and 11", len(legs), len(seen))
 	}
 }

@@ -309,57 +309,10 @@ func newProvFixture(t *testing.T) *provFixture {
 }
 
 // docWithRow is the embedded endpoint-profile document with its row for route (if any) replaced by a copy of the
-// deprovision row, last: the suspend route is mounted only when its row exists. The service account routes are dark until
-// their rows ship, so it plants theirs too.
+// deprovision row, last: the suspend route is mounted only when its row exists.
 func docWithRow(t testing.TB, route string) []byte {
 	t.Helper()
-	return docWithRows(t, append([]string{route}, serviceAccountPatterns...)...)
-}
-
-// serviceAccountPatterns are the service account routes.
-var serviceAccountPatterns = []string{PatternServiceAccountCreate, PatternServiceAccountDisable, PatternServiceAccountEnable, PatternServiceAccountOwner}
-
-// docWithRows is the embedded document with the rows for routes replaced by copies of the deprovision row.
-func docWithRows(t testing.TB, routes ...string) []byte {
-	t.Helper()
-	var document map[string]any
-	if err := json.Unmarshal(authv1.AuthServiceEndpointProfiles, &document); err != nil {
-		t.Fatal(err)
-	}
-	var kept []any
-	var base map[string]any
-	for _, item := range document["rows"].([]any) {
-		row := item.(map[string]any)
-		if row["route"] == PatternOrgDeprovision && row["service"] == AccessService {
-			base = row
-		}
-		if !slices.Contains(routes, row["route"].(string)) {
-			kept = append(kept, item)
-		}
-	}
-	if base == nil {
-		t.Fatal("no deprovision row in the embedded document")
-	}
-	seen := map[string]bool{}
-	for _, route := range routes {
-		if seen[route] {
-			continue
-		}
-		seen[route] = true
-		clone := map[string]any{}
-		for k, v := range base {
-			clone[k] = v
-		}
-		clone["route"] = route
-		clone["id"] = "POST " + route + " [dev-health-auth-service @api]"
-		kept = append(kept, clone)
-	}
-	document["rows"] = kept
-	raw, err := json.Marshal(document)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return raw
+	return docWithRows(t, append([]string{route}, keyPatterns...)...)
 }
 
 // embeddedDocWithoutRow is the embedded endpoint-profile document without the rows for route.
@@ -543,7 +496,7 @@ func routeCases() []routeCase {
 		{opOrgCreate, PatternOrgCreate, func(f *provFixture, a uuid.UUID) map[string]any {
 			return map[string]any{"actor_principal_id": a.String(), "organization_name": "Acme", "slug": "acme", "tier": "community", "managed_by": "stripe"}
 		}, []string{"actor_principal_id", "organization_name", "managed_by"}},
-	}, serviceAccountCases()...)
+	}, append(serviceAccountCases(), keyCases()...)...)
 }
 
 // fakeInviteID is the invite the revoke route case names.

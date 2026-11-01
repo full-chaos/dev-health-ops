@@ -9,8 +9,10 @@ import (
 	"github.com/jackc/pgx/v5"
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/registerorg"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/publicaudit"
 )
 
 // ErrInvalidPasswordHash reports a password verifier that is not a bcrypt
@@ -100,7 +102,19 @@ VALUES ($1, $2, $2, $3, $4, CASE WHEN $3::text IS NULL THEN NULL ELSE clock_time
 			if birth == nil {
 				return nil
 			}
-			return s.insertOrganizationBirth(ctx, tx, *birth)
+			if err := s.insertOrganizationBirth(ctx, tx, *birth); err != nil {
+				return err
+			}
+			// go-api's register row (internal/api/session register.go:167) names the organization this same commit
+			// gives birth to, after its row (audit_logs_org_id_fkey is not deferrable) (CHAOS-11400).
+			changes := pyjson.NewObject()
+			changes.Set("email", email)
+			changes.Set("organization_id", birth.ID.String())
+			encoded, err := publicaudit.Changes(changes)
+			if err != nil {
+				return err
+			}
+			return publicaudit.UserRow(ctx, tx, birth.ID, principal, "create", "User registered", encoded)
 		},
 		Audit:  provisionAudit(subject, req.Actor, req.Organization != nil),
 		Also:   birthAudits,

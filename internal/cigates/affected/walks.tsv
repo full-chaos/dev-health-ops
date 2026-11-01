@@ -3,6 +3,7 @@ ci/tools/gotestfuncs	main.go	unexpressed	-	-
 cmd/dev-health-migration-matrix	contract_test.go	cmd/dev-health-migration-matrix	dir	*
 cmd/gqlgen-guard	main_test.go	unexpressed	-	-
 deploy/helm/dev-health	auth_session_secret_script_test.go	unexpressed	-	-
+deploy/helm/dev-health	auth_sso_jit_test.go	deploy/helm/dev-health/templates	dir	*
 deploy/helm/dev-health	auth_switch_strict_test.go	deploy/helm/dev-health/templates	dir	*
 internal/adminops	users_password_fixtures_test.go	internal/adminops	dir	*
 internal/adminops	users_password_fixtures_test.go	internal/adminops/testdata	dir	*
@@ -52,6 +53,7 @@ internal/auth/contracts	endpoint_profiles_query_api_test.go	contracts/auth/v1	di
 internal/auth/contracts	error_envelope_goldens_test.go	contracts/auth/v1/examples/error	dir	*
 internal/auth/contracts	fixture_scanner_plain_base64_test.go	contracts/auth/v1/examples	tree	*
 internal/auth/contracts	fixture_secret_scanner_test.go	contracts/auth/v1/examples	tree	*
+internal/auth/contracts	golden_token_secret_scan_test.go	unexpressed	-	-
 internal/auth/contracts	jwks_document_goldens_test.go	contracts/auth/v1/examples/jwks	dir	*
 internal/auth/contracts	openapi_refresh_versions_test.go	contracts/auth/v1/jsonschema	dir	*
 internal/auth/contracts	principal_contract_goldens_test.go	contracts/auth/v1/examples/principal	dir	*

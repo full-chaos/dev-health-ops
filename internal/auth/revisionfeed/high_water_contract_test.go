@@ -29,7 +29,7 @@ func (c *revisionCache) put(typ, id string, revisions ...int64) {
 	}
 }
 
-func (c *revisionCache) Invalidate(_ context.Context, typ, id string, revision int64) {
+func (c *revisionCache) Invalidate(_ context.Context, typ, id string, revision int64) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.calls = append(c.calls, call{typ: typ, id: id, revision: revision})
@@ -38,13 +38,15 @@ func (c *revisionCache) Invalidate(_ context.Context, typ, id string, revision i
 			delete(c.entries[typ+":"+id], r)
 		}
 	}
+	return nil
 }
 
-func (c *revisionCache) InvalidateAll(context.Context) {
+func (c *revisionCache) InvalidateAll(context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.calls = append(c.calls, call{all: true})
 	c.entries = map[string]map[int64]bool{}
+	return nil
 }
 
 func (c *revisionCache) held(typ, id string) []int64 {

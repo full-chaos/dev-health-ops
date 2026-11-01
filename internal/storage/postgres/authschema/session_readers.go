@@ -2,6 +2,7 @@ package authschema
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -39,6 +40,24 @@ func sessionReaderStatements(ctx context.Context, conn querier, options Options,
 		}
 		if !exists {
 			return nil, fmt.Errorf("%w: session reader role %q does not exist", ErrInvalidOptions, reader)
+		}
+		// The revokes below strip every ACL entry the reader holds in the
+		// schema. For a reader that is, or inherits from, an owner of the
+		// schema or of one of its tables or sequences, that strips the owner's
+		// own entries; refuse before any statement runs.
+		var owner string
+		switch err := conn.QueryRow(ctx, `
+			SELECT r.rolname FROM pg_roles r
+			WHERE pg_has_role($1, r.oid, 'USAGE')
+			  AND (r.oid = (SELECT nspowner FROM pg_namespace WHERE nspname = $2)
+			       OR EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+			                  WHERE n.nspname = $2 AND c.relowner = r.oid AND c.relkind IN ('r', 'p', 'S', 'v', 'm', 'f')))
+			ORDER BY r.rolname LIMIT 1`, reader, options.Schema).Scan(&owner); {
+		case err == nil:
+			return nil, fmt.Errorf("%w: session reader role %q is, or inherits from, %q, which owns objects in schema %q",
+				ErrInvalidOptions, reader, owner, options.Schema)
+		case !errors.Is(err, pgx.ErrNoRows):
+			return nil, fmt.Errorf("%w: reading ownership of session reader role %q: %v", ErrMigrationFailed, reader, redactPGError(err))
 		}
 		role := quoteIdentifier(roleID)
 		statements = append(statements,

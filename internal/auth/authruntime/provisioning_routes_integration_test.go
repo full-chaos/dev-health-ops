@@ -14,8 +14,10 @@ import (
 	"github.com/google/uuid"
 
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
 const (
@@ -358,7 +360,8 @@ func TestProvisioningRoutesOffByDefault(t *testing.T) {
 	for _, path := range []string{"/internal/v1/memberships/add", "/internal/v1/memberships/role", "/internal/v1/memberships/remove",
 		"/internal/v1/memberships/transfer", "/internal/v1/invites/create", "/internal/v1/invites/accept", "/internal/v1/organizations/deprovision",
 		"/internal/v1/organizations/reactivate", "/internal/v1/organizations/suspend", authapi.PatternServiceAccountCreate,
-		authapi.PatternServiceAccountDisable, authapi.PatternServiceAccountEnable, authapi.PatternServiceAccountOwner} {
+		authapi.PatternServiceAccountDisable, authapi.PatternServiceAccountEnable, authapi.PatternServiceAccountOwner,
+		authapi.PatternServiceAccountKeyIssue, authapi.PatternServiceAccountKeyRotate, authapi.PatternServiceAccountKeyRevoke, authapi.PatternServiceAccountKeyList} {
 		if got := e.doWith(t, path, `{}`, map[string]string{"Authorization": "Bearer " + token}); got.status != http.StatusNotFound {
 			t.Fatalf("%s with the switch off: %d, want 404", path, got.status)
 		}
@@ -589,13 +592,12 @@ token_version, created_at, updated_at) VALUES ($1, $2, NULL, 'local', true, true
 	}
 }
 
-// The service account routes through configure with their profile rows planted (they ship dark: the embedded document has none yet), as the runtime role: an organization owner creates an account with a member as its owner, disables,
+// The service account routes through configure with the embedded endpoint-profile document (the startup gate passes with the routes on), as the runtime role: an organization owner creates an account with a member as its owner, disables,
 // enables and moves it; each write has its audit row naming the actor, the owner and the caller credential; a viewer,
 // an unknown account and an unprojected actor are refused as named; a repeat disable is 409.
 func TestProvisioningServiceAccountsThroughConfigure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	withProfileRow(t, authapi.PatternServiceAccountCreate, authapi.PatternServiceAccountDisable, authapi.PatternServiceAccountEnable, authapi.PatternServiceAccountOwner)
 	e, header := newProvisioningEnv(t, ctx)
 	boss, org := e.seed(t, ctx)
 	first, second, viewer := e.account(t, ctx, acctMail(), false, true), e.account(t, ctx, acctMail(), false, true), e.account(t, ctx, acctMail(), false, true)
@@ -645,8 +647,8 @@ func TestProvisioningServiceAccountsThroughConfigure(t *testing.T) {
 		t.Fatalf("disable of an unknown account by a superuser: %d %s", got.status, got.body)
 	}
 	if got := post(authapi.PatternServiceAccountDisable, map[string]any{"service_account_id": uuid.NewString(), "actor_principal_id": boss.String()}); got.status != http.StatusForbidden ||
-		object(t, got)["reason_code"] != "superuser_required" {
-		t.Fatalf("disable of an unknown account by an owner: %d %s", got.status, got.body)
+		object(t, got)["reason_code"] != "admin_required" {
+		t.Fatalf("disable of an unknown account by an owner: %d %s, want 403 admin_required (the answer for an account of another organization)", got.status, got.body)
 	}
 	for event, want := range map[string]int{"created": 1, "disabled": 1, "owner_changed": 1, "enabled": 1} {
 		var n int
@@ -673,12 +675,111 @@ token_version, created_at, updated_at) VALUES ($1, $2, NULL, 'local', true, true
 	}
 }
 
+// The key routes through the real stack, with a row document: issue, list, rotate and revoke on real rows, the issued
+// value resolves, the audit rows name the calling credential, the value is in the two receipts only, and the id of a
+// credential of another class answers key_not_found with nothing of that row on the wire.
+func TestProvisioningServiceAccountKeysThroughConfigure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	withProfileRow(t, authapi.PatternServiceAccountCreate, authapi.PatternServiceAccountKeyIssue, authapi.PatternServiceAccountKeyRotate,
+		authapi.PatternServiceAccountKeyRevoke, authapi.PatternServiceAccountKeyList)
+	e, header := newProvisioningEnv(t, ctx)
+	boss, org := e.seed(t, ctx)
+	owner, viewer, super := e.account(t, ctx, acctMail(), false, true), e.account(t, ctx, acctMail(), false, true), e.account(t, ctx, acctMail(), true, true)
+	e.addVia(t, header, org, owner, boss, "member")
+	e.addVia(t, header, org, viewer, boss, "viewer")
+	post := func(path string, body map[string]any) answer { return e.doWith(t, path, jsonBody(t, body), header) }
+	created := post(authapi.PatternServiceAccountCreate, map[string]any{"organization_id": org.String(), "actor_principal_id": boss.String(),
+		"owner_principal_id": owner.String(), "name": "key-bot"})
+	if created.status != http.StatusOK {
+		t.Fatalf("create: %d %s", created.status, created.body)
+	}
+	id, _ := object(t, created)["service_account_id"].(string)
+	account := map[string]any{"service_account_id": id, "actor_principal_id": boss.String()}
+
+	issued := post(authapi.PatternServiceAccountKeyIssue, account)
+	if issued.status != http.StatusOK {
+		t.Fatalf("issue: %d %s", issued.status, issued.body)
+	}
+	receipt := object(t, issued)
+	first, _ := receipt["secret"].(string)
+	credential, _ := receipt["credential"].(map[string]any)
+	key, _ := credential["id"].(string)
+	if !strings.HasPrefix(first, "fcsak_") || credential["status"] != "active" || credential["credential_class"] != "service_account_key" {
+		t.Fatalf("issue receipt: status %v class %v", credential["status"], credential["credential_class"])
+	}
+	if got := post(authapi.PatternServiceAccountKeyIssue, account); got.status != http.StatusConflict || object(t, got)["reason_code"] != "key_live" {
+		t.Fatalf("a second issue: %d %s", got.status, got.body)
+	}
+	viewerBody := map[string]any{"service_account_id": id, "actor_principal_id": viewer.String(), "overlap_seconds": 60}
+	if got := post(authapi.PatternServiceAccountKeyRotate, viewerBody); got.status != http.StatusForbidden || object(t, got)["reason_code"] != "admin_required" {
+		t.Fatalf("rotate by a viewer: %d %s", got.status, got.body)
+	}
+	rotated := post(authapi.PatternServiceAccountKeyRotate, map[string]any{"service_account_id": id, "actor_principal_id": boss.String(), "overlap_seconds": 60})
+	if rotated.status != http.StatusOK {
+		t.Fatalf("rotate: %d %s", rotated.status, rotated.body)
+	}
+	second, _ := object(t, rotated)["secret"].(string)
+	if second == "" || second == first {
+		t.Fatal("rotate gave no new value")
+	}
+	listed := post(authapi.PatternServiceAccountKeyList, account)
+	if listed.status != http.StatusOK || strings.Contains(string(listed.body), first) || strings.Contains(string(listed.body), second) {
+		t.Fatalf("list: %d", listed.status)
+	}
+	if items, _ := object(t, listed)["items"].([]any); len(items) != 2 {
+		t.Fatalf("list holds %d keys, want 2", len(items))
+	}
+	revoke := map[string]any{"credential_id": key, "actor_principal_id": boss.String(), "reason": "compromised"}
+	for i := 0; i < 2; i++ {
+		got := post(authapi.PatternServiceAccountKeyRevoke, revoke)
+		if got.status != http.StatusOK || object(t, got)["status"] != "revoked" || strings.Contains(string(got.body), first) {
+			t.Fatalf("revoke %d: %d", i, got.status)
+		}
+	}
+	for event, want := range map[string]int{"key_issued": 1, "key_rotated": 1, "key_revoked": 1} {
+		var n int
+		if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = $1 AND actor_principal_id = $2 AND attributes ? 'credential_id'`,
+			"auth.service_account."+event, boss).Scan(&n); err != nil || n != want {
+			t.Fatalf("%d %s audit rows (%v), want %d", n, event, err, want)
+		}
+	}
+	var live, leaks int
+	if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.credential_registry WHERE credential_class = 'service_account_key' AND revoked_at IS NULL`).Scan(&live); err != nil || live != 1 {
+		t.Fatalf("%d live keys (%v), want 1", live, err)
+	}
+	if err := e.admin.QueryRow(ctx, `SELECT (SELECT count(*) FROM auth.security_audit_events r WHERE to_jsonb(r)::text LIKE '%' || $1 || '%')
++ (SELECT count(*) FROM auth.auth_outbox_events r WHERE to_jsonb(r)::text LIKE '%' || $1 || '%')`, second[len("fcsak_"):]).Scan(&leaks); err != nil || leaks != 0 {
+		t.Fatalf("%d rows hold the value (%v)", leaks, err)
+	}
+
+	other := uuid.New()
+	schema, err := authschema.NewValidatedIdentifier("auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := audit.Commit(ctx, e.admin, schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			_, err := tx.Exec(ctx, `INSERT INTO auth.credential_registry (id, principal_id, credential_class, secret_hash, hash_algorithm, fingerprint, expires_at)
+VALUES ($1, $2, 'workload_bootstrap_credential', decode(md5($1::uuid::text), 'hex'), 'sha256', substr(md5($1::uuid::text), 1, 16), now() + interval '1 hour')`, other, boss)
+			return err
+		},
+		Audit:     audit.AuditEvent{EventType: "credential.test", Outcome: audit.OutcomeAllowed},
+		OffStream: audit.OffStreamWorkloadRegistry,
+	}); err != nil {
+		t.Fatalf("seed a credential of another class: %v", err)
+	}
+	got := post(authapi.PatternServiceAccountKeyRevoke, map[string]any{"credential_id": "crd_" + other.String(), "actor_principal_id": super.String(), "reason": "compromised"})
+	if got.status != http.StatusNotFound || object(t, got)["reason_code"] != "key_not_found" || strings.Contains(string(got.body), other.String()) {
+		t.Fatalf("revoke of a credential of another class: %d %s", got.status, got.body)
+	}
+}
+
 // With auth-service not owning users, the routes are served and the verbs that need users refuse: create is 409
 // users_not_owned and writes nothing, while disable still works.
 func TestProvisioningServiceAccountsWhileUsersAreNotOwned(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	withProfileRow(t, authapi.PatternServiceAccountCreate, authapi.PatternServiceAccountDisable, authapi.PatternServiceAccountEnable, authapi.PatternServiceAccountOwner)
 	e := newRoutesEnvWith(t, ctx, map[string]string{authconfig.EnvMembershipRoutes: "true", authconfig.EnvInviteTokenSecret: provisioningInviteSecret,
 		authconfig.EnvInviteTokenSecretPrevious: provisioningInvitePrevious})
 	token, _ := e.issuerCredential(t, ctx, "auth-session-issuer", `["memberships:write", "sessions:issue"]`, false, false)

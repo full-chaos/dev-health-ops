@@ -40,6 +40,9 @@ type State struct {
 	// LegacyTokenVersion is the session's token_version pin; nil on a session
 	// that has none.
 	LegacyTokenVersion *int64
+	// ActorPrincipalID is the real actor of a delegated session; nil on any
+	// other session.
+	ActorPrincipalID *uuid.UUID
 	// ClientClass is the class of the session's live OAuth grant, browser or
 	// mcp; empty on a session with no live grant. A reader of an OAuth session
 	// refuses an empty class: there is no default class.
@@ -110,13 +113,15 @@ const stateRequiredMembers = 5
 
 // stateOptionalMembers is the closed list of optional members. A new name is
 // added here before auth-service emits it (D6123); an unknown name is refused.
-var stateOptionalMembers = []string{"client_class"}
+var stateOptionalMembers = []string{"client_class", "actor_principal_id"}
 
 // parseState reads the five required members of the state document:
 // principal_id (a canonical UUID), organization_id (a canonical UUID or null),
 // revoked and expired (booleans) and legacy_token_version (an integer or null);
-// and the optional client_class (browser or mcp), present only for a session
-// with a live OAuth grant. A missing, repeated or unknown member is refused.
+// the optional client_class (browser or mcp), present only for a session with a
+// live OAuth grant; and the optional actor_principal_id (a canonical UUID),
+// present only on a delegated session. A missing, repeated or unknown member is
+// refused.
 func parseState(answer []byte) (State, error) {
 	members, ok := objectMembers(answer)
 	if !ok {
@@ -181,6 +186,13 @@ func parseState(answer []byte) (State, error) {
 			return State{}, errStateAnswer
 		}
 		out.LegacyTokenVersion = &version
+	}
+	if raw, present := members["actor_principal_id"]; present {
+		actor, err := canonicalUUID(raw)
+		if err != nil {
+			return State{}, err
+		}
+		out.ActorPrincipalID = &actor
 	}
 	return out, nil
 }

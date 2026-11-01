@@ -2,6 +2,7 @@ package restorefence
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -28,6 +29,46 @@ func TestActionLinesCarryOnlyKindSourceCountAndIDs(t *testing.T) {
 		if strings.Contains(l, "hash") || strings.Contains(l, "token") && !strings.Contains(l, "provider") {
 			t.Errorf("a line names credential material: %s", l)
 		}
+	}
+}
+
+const liveKeysLine = "operator-action rotate_keys_after_blind_margin source=auth.credential_registry count=3 ids= follow-up=rotate or revoke every key"
+
+func TestACountOnlyActionPrintsItsCountAndNoID(t *testing.T) {
+	lines := ActionLines([]OperatorAction{{Kind: ActionRotateKeysAfterBlindMargin, Source: "auth.credential_registry", Count: 3}})
+	if len(lines) != 1 || lines[0] != liveKeysLine {
+		t.Fatalf("lines = %q, want %q", lines, liveKeysLine)
+	}
+}
+
+func TestACountSurvivesTheMergeAndTheStoredList(t *testing.T) {
+	merged := mergeActions([]OperatorAction{{Kind: ActionRotateKeysAfterBlindMargin, Source: "auth.credential_registry", Count: 3}})
+	if len(merged) != 1 || merged[0].Count != 3 || len(merged[0].IDs) != 0 {
+		t.Fatalf("merged = %+v, want the count kept", merged)
+	}
+	stored, err := json.Marshal(merged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(stored), `"count":3`) {
+		t.Errorf("the stored list %s lost the count", stored)
+	}
+	read, err := PendingActions(context.Background(), bytesQuerier{bytesRow{raw: stored}}, testSchema(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lines := ActionLines(read); len(lines) != 1 || lines[0] != liveKeysLine {
+		t.Errorf("status prints %q, want %q", lines, liveKeysLine)
+	}
+}
+
+func TestAnActionWithIDsStoresNoCount(t *testing.T) {
+	stored, err := json.Marshal(OperatorAction{Kind: ActionForcePasswordReset, Source: "auth.users", IDs: []string{"a"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(stored), "count") {
+		t.Errorf("%s holds a count member", stored)
 	}
 }
 

@@ -771,7 +771,7 @@ rendered one, a Secret reference included, and put a literal in the manifest. au
 names and proves each is refused.
 */}}
 {{- define "dev-health.authServiceEnvNames" -}}
-{{- $names := list "AUTH_DATABASE_URI" "AUTH_JWT_SECRET_KEY" "AUTH_SESSION_SUCCESSOR_KEY" "AUTH_LOGIN_LOCKOUT_KEY" "AUTH_SOCIAL_LINK_ROUTES" "AUTH_ACCESS_TOKEN_CLASS" "AUTH_TOKEN_ISSUER_URL" "AUTH_JWT_AUDIENCE" "AUTH_WORKLOAD_EXCHANGE" "AUTH_WORKLOAD_TRUST_DOMAIN" "AUTH_WORKLOAD_EXCHANGE_CLUSTER_ISSUER" "AUTH_WORKLOAD_EXCHANGE_KUBE_API_URL" "AUTH_WORKLOAD_EXCHANGE_KUBE_CA_FILE" "AUTH_WORKLOAD_EXCHANGE_REVIEWER_TOKEN_FILE" "AUTH_USERS_OWNED" "AUTH_ORGS_OWNED" "AUTH_PLATFORM_ROLES_OWNED" "AUTH_VALKEY_URI" "AUTH_SERVICE_TRUSTED_PROXIES" "OTEL_ENABLED" "OTEL_EXPORTER_OTLP_ENDPOINT" "OTEL_SAMPLE_RATE" "OTEL_SERVICE_NAME" "EMAIL_PROVIDER" "EMAIL_FROM_ADDRESS" "APP_BASE_URL" "AUTH_MAIL_ALLOW_CONSOLE" -}}
+{{- $names := list "AUTH_DATABASE_URI" "AUTH_JWT_SECRET_KEY" "AUTH_SESSION_SUCCESSOR_KEY" "AUTH_LOGIN_LOCKOUT_KEY" "AUTH_SOCIAL_LINK_ROUTES" "AUTH_ACCESS_TOKEN_CLASS" "AUTH_ACCESS_TOKEN_LIFETIME" "AUTH_TOKEN_ISSUER_URL" "AUTH_JWT_AUDIENCE" "AUTH_WORKLOAD_EXCHANGE" "AUTH_WORKLOAD_TRUST_DOMAIN" "AUTH_WORKLOAD_EXCHANGE_CLUSTER_ISSUER" "AUTH_WORKLOAD_EXCHANGE_KUBE_API_URL" "AUTH_WORKLOAD_EXCHANGE_KUBE_CA_FILE" "AUTH_WORKLOAD_EXCHANGE_REVIEWER_TOKEN_FILE" "AUTH_USERS_OWNED" "AUTH_ORGS_OWNED" "AUTH_PLATFORM_ROLES_OWNED" "AUTH_VALKEY_URI" "AUTH_SERVICE_TRUSTED_PROXIES" "OTEL_ENABLED" "OTEL_EXPORTER_OTLP_ENDPOINT" "OTEL_SAMPLE_RATE" "OTEL_SERVICE_NAME" "EMAIL_PROVIDER" "EMAIL_FROM_ADDRESS" "APP_BASE_URL" "AUTH_MAIL_ALLOW_CONSOLE" -}}
 {{- /* EMAIL_API_KEY is appended, not listed, so the worker allow-list keeps the only listed spelling (a chartgates planted defect edits it). */ -}}
 {{- $names = (append (append $names "EMAIL_API_KEY") "RESEND_API_KEY") -}}
 {{- range $provider := list "GITHUB" "GITLAB" "GOOGLE" }}{{- range $suffix := list "CLIENT_ID" "CLIENT_SECRET" }}{{- $names = append $names (printf "SOCIAL_%s_%s" $provider $suffix) }}{{- end }}{{- end -}}
@@ -883,6 +883,18 @@ moves from public.users.is_superuser to auth.platform_role_assignments only afte
 {{- if $v -}}
 {{- /* The phase 5 leaf (orgs owned) tightens this guard to authOn orgsOwned. */ -}}
 {{- if ne (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true" }}{{- fail "authService.platformRolesOwned needs users owned: authService.phase 4 with authService.usersOwnedStage=owned (docs/operate/runbooks/auth-platform-roles-flip-and-rollback.md)" }}{{- end -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/*
+"true" when authService.ssoJit is on, else "". The one read of the switch.
+*/}}
+{{- define "dev-health.ssoJit" -}}
+{{- $v := .Values.authService.ssoJit -}}
+{{- if not (kindIs "bool" $v) }}{{- fail "authService.ssoJit must be true or false" }}{{- end -}}
+{{- if $v -}}
+{{- if ne (include "dev-health.authOn" (dict "flag" "orgsOwned" "context" .)) "true" }}{{- fail "authService.ssoJit needs orgs owned (authService.phase 5): below it go-api's own sign-in join still writes, and two writers would race" }}{{- end -}}
 true
 {{- end -}}
 {{- end -}}
@@ -1021,6 +1033,22 @@ auth-service's issuerURLPattern (internal/auth/authconfig), so a value the servi
 {{- if or (eq $class "eddsa") $issuer -}}
 {{- if not (regexMatch "^https://[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,63}){0,8}$" $issuer) }}{{- fail "authService.accessToken.class=eddsa needs authService.accessToken.issuerURL: an https URL with a lowercase host, no trailing slash, userinfo, query or fragment" }}{{- end -}}
 {{- $issuer -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+The eddsa access token's lifetime (authService.accessToken.lifetime, AUTH_ACCESS_TOKEN_LIFETIME): "" when unset (the
+service default, 60 minutes). Set, it must be whole minutes from 5m to 60m and the class must be eddsa: the
+hs256_compat token is go-api's, with go-api's 60 minutes (ACP-ADR-03 amendment).
+*/}}
+{{- define "dev-health.authAccessLifetime" -}}
+{{- $t := default dict .Values.authService.accessToken -}}
+{{- $lifetime := $t.lifetime | default "" -}}
+{{- if $lifetime -}}
+{{- if not (kindIs "string" $lifetime) }}{{- fail "authService.accessToken.lifetime must be a string such as 10m" }}{{- end -}}
+{{- if ne ($t.class | default "") "eddsa" }}{{- fail "authService.accessToken.lifetime needs authService.accessToken.class=eddsa: the hs256_compat token keeps go-api's 60 minutes" }}{{- end -}}
+{{- if not (regexMatch "^([5-9]|[1-5][0-9]|60)m$|^1h$" $lifetime) }}{{- fail "authService.accessToken.lifetime must be whole minutes from 5m to 60m (or 1h)" }}{{- end -}}
+{{- $lifetime -}}
 {{- end -}}
 {{- end -}}
 

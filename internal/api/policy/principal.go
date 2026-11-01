@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 )
 
 // User is api/services/auth.py AuthenticatedUser after
@@ -26,8 +27,11 @@ type User struct {
 	// OrgID is the "org_id" claim, "" when absent or null.
 	OrgID string
 	// Role is the "role" claim ("member" when absent, "" when null).
-	Role           string
-	IsSuperuser    bool
+	Role        string
+	IsSuperuser bool
+	// Platform is the platform action set the caller holds when it is not
+	// the one IsSuperuser means; nil is a caller that carries only the flag.
+	Platform       *rule.Platform
 	Username       *string
 	FullName       *string
 	ImpersonatedBy *string
@@ -41,15 +45,21 @@ type User struct {
 	accessToken    bool
 }
 
+// Holds reports whether the caller holds the platform action now.
+func (u *User) Holds(action string) bool {
+	return rule.Holds(u.Platform, u.IsSuperuser, action)
+}
+
 // IsAdmin is AuthenticatedUser.is_admin.
 func (u *User) IsAdmin() bool {
-	return u.Role == "owner" || u.Role == "admin" || u.IsSuperuser
+	return u.Role == "owner" || u.Role == "admin" || u.Holds(rule.ActionAdminOrgs)
 }
 
 // UserState is the users row authenticate_access_token reads.
 type UserState struct {
 	IsActive     bool
 	IsSuperuser  bool
+	Platform     *rule.Platform
 	TokenVersion int64
 }
 
@@ -202,7 +212,7 @@ func (a *Authenticator) CheckClaims(ctx context.Context, claims jwt.MapClaims) (
 		return nil, err
 	}
 	user.SessionID = sessionID
-	user.IsSuperuser = state.IsSuperuser
+	user.IsSuperuser, user.Platform = state.IsSuperuser, state.Platform
 	user.TokenVersion = int(version)
 	return user, nil
 }

@@ -1,4 +1,4 @@
--- 0045 append_external_push_lifecycle_event takes the payload's binding
+-- 0046 append_external_push_lifecycle_event takes the payload's binding
 -- (CHAOS-12358): external-push-lifecycle-event.v1 now requires payload.binding,
 -- `source` (source_id required) or `organization` (an organization-wide
 -- credential: source_id forbidden, no placeholder). No External Push event was

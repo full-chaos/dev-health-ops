@@ -113,7 +113,7 @@ func newBindingUpgrade(t *testing.T, ctx context.Context, inherit bool) *binding
 
 // installBeforeBinding applies the lineage up to the binding migration as the login,
 // then hands the function to the writer the way a grants run does: the state
-// production is in before 0045 rolls.
+// production is in before the binding migration (0046) rolls.
 func (u *bindingUpgrade) installBeforeBinding(t *testing.T, ctx context.Context) *pgx.Conn {
 	t.Helper()
 	conn, err := pgx.Connect(ctx, u.uri)
@@ -203,7 +203,7 @@ func TestPushLifecycleBindingUpgradeRunsAsAnInheritingMemberOfTheWriter(t *testi
 		t.Fatal(err)
 	}
 	if before != u.writer {
-		t.Fatalf("before 0045 the function is owned by %q, want the writer %q", before, u.writer)
+		t.Fatalf("before the binding migration the function is owned by %q, want the writer %q", before, u.writer)
 	}
 
 	pool, err := pgxpool.New(ctx, u.uri)
@@ -220,13 +220,13 @@ func TestPushLifecycleBindingUpgradeRunsAsAnInheritingMemberOfTheWriter(t *testi
 		t.Fatal(err)
 	}
 	if result.CurrentVersion != head || len(result.AppliedVersions) == 0 || result.AppliedVersions[0] != bindingMigration(t).Version {
-		t.Fatalf("result = %+v, want the run to start at 45 and reach head %d", result, head)
+		t.Fatalf("result = %+v, want the run to start at the binding migration and reach head %d", result, head)
 	}
 	u.requireBindingFunction(t, ctx)
 }
 
 // TestPushLifecycleBindingFreshInstallReachesHeadInOneApply is the fresh row:
-// 0044 creates the function as the login and 0045 replaces it in the same run.
+// 0044 creates the function as the login and the binding migration (0046) replaces it in the same run.
 func TestPushLifecycleBindingFreshInstallReachesHeadInOneApply(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
@@ -252,7 +252,7 @@ func TestPushLifecycleBindingNeedsAnInheritingMembership(t *testing.T) {
 	conn := u.installBeforeBinding(t, ctx)
 	err := applyOne(ctx, conn, u.options, bindingMigration(t))
 	if err == nil {
-		t.Fatal("0045 was applied by a login that does not inherit the writer's privileges")
+		t.Fatal("the binding migration was applied by a login that does not inherit the writer's privileges")
 	}
 	var pgErr *pgconn.PgError
 	if !(errors.As(err, &pgErr) && pgErr.Code == "42501") && !strings.Contains(err.Error(), "must be owner of function") {

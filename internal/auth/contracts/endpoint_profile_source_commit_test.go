@@ -280,3 +280,126 @@ func TestSourceCommitFixtureRejectsAMalformedIdAndAnInventoryWithNoAnchors(t *te
 		t.Fatalf("an inventory with no anchors passed vacuously: %v", problems)
 	}
 }
+
+// A declared rewrite: an inventory may list, in the top-level rewritten_anchors, an anchor whose line this change
+// rewrote on purpose. The entry is {file, line, was, now}. For an anchor with an entry, now must be the tree text at that
+// line and was must occur exactly once in the file at source_commit; every other anchor keeps the rule above. An entry
+// fails when the tree line also occurs at source_commit (it rewrites nothing) and when it matches no anchor, so the list
+// empties again at the re-pin and cannot rot.
+
+const (
+	rewriteBefore = "package x\n\nfunc a() {}\nmux.Handle(\"/a\", h)\n"
+	rewriteAfter  = "package x\n\nfunc a() {}\nmux.Handle(\"/b\", h)\n"
+	rewriteWas    = "mux.Handle(\"/a\", h)"
+	rewriteNow    = "mux.Handle(\"/b\", h)"
+)
+
+// inventoryWith is an inventory with an anchor at each of lines and the rewritten_anchors JSON given (empty: none).
+func inventoryWith(commit string, lines []int, entries string) map[string]any {
+	rows := make([]string, 0, len(lines))
+	for _, line := range lines {
+		rows = append(rows, fmt.Sprintf(`{"source": {"file": "routes.go", "line": %d}}`, line))
+	}
+	raw := fmt.Sprintf(`{"source_commit": %q, "rows": [%s]`, commit, strings.Join(rows, ","))
+	if entries != "" {
+		raw += `, "rewritten_anchors": ` + entries
+	}
+	raw += "}"
+	var document map[string]any
+	if err := json.Unmarshal([]byte(raw), &document); err != nil {
+		panic(err)
+	}
+	return document
+}
+
+func rewriteEntry(file string, line int, was, now string) string {
+	return fmt.Sprintf(`[{"file": %q, "line": %d, "was": %q, "now": %q}]`, file, line, was, now)
+}
+
+func wantOneProblem(t *testing.T, problems []string, fragments ...string) {
+	t.Helper()
+	if len(problems) != 1 {
+		t.Fatalf("want exactly one problem, got %v", problems)
+	}
+	for _, fragment := range fragments {
+		if !strings.Contains(problems[0], fragment) {
+			t.Fatalf("the problem %q does not say %q", problems[0], fragment)
+		}
+	}
+}
+
+// Green: the line's text was rewritten, the entry names the old and the new text, both hold.
+func TestSourceCommitRewrittenAnchorAcceptsAValidEntry(t *testing.T) {
+	dir, base, _ := fixtureRepoWith(t, rewriteBefore, rewriteAfter)
+	if problems := problemsForSourceCommit(dir, "fixture", inventoryWith(base, []int{4}, rewriteEntry("routes.go", 4, rewriteWas, rewriteNow))); len(problems) != 0 {
+		t.Fatalf("a valid rewritten anchor was refused: %v", problems)
+	}
+}
+
+// was is not a line of the file at source_commit (a wrong text).
+func TestSourceCommitRewrittenAnchorRejectsAWrongWas(t *testing.T) {
+	dir, base, _ := fixtureRepoWith(t, rewriteBefore, rewriteAfter)
+	problems := problemsForSourceCommit(dir, "fixture", inventoryWith(base, []int{4}, rewriteEntry("routes.go", 4, "mux.Handle(\"/zzz\", h)", rewriteNow)))
+	wantOneProblem(t, problems, "rewritten anchor routes.go:4", "was", "0 times")
+}
+
+// was is the NEW text: it exists in the tree and not at source_commit.
+func TestSourceCommitRewrittenAnchorRejectsAWasAbsentAtSourceCommit(t *testing.T) {
+	dir, base, _ := fixtureRepoWith(t, rewriteBefore, rewriteAfter)
+	problems := problemsForSourceCommit(dir, "fixture", inventoryWith(base, []int{4}, rewriteEntry("routes.go", 4, rewriteNow, rewriteNow)))
+	wantOneProblem(t, problems, "rewritten anchor routes.go:4", "was", "0 times")
+}
+
+// was occurs twice at source_commit: it does not name one line.
+func TestSourceCommitRewrittenAnchorRejectsAWasThatOccursTwice(t *testing.T) {
+	line := "mux.Handle(\"/a\", h)\n"
+	dir, base, _ := fixtureRepoWith(t, "package x\n"+line+line, "package x\n"+line+"mux.Handle(\"/b\", h)\n")
+	problems := problemsForSourceCommit(dir, "fixture", inventoryWith(base, []int{3}, rewriteEntry("routes.go", 3, rewriteWas, rewriteNow)))
+	wantOneProblem(t, problems, "rewritten anchor routes.go:3", "was", "2 times")
+}
+
+// now is not what the tree holds at that line.
+func TestSourceCommitRewrittenAnchorRejectsANowThatIsNotTheTreeText(t *testing.T) {
+	dir, base, _ := fixtureRepoWith(t, rewriteBefore, rewriteAfter)
+	problems := problemsForSourceCommit(dir, "fixture", inventoryWith(base, []int{4}, rewriteEntry("routes.go", 4, rewriteWas, "mux.Handle(\"/c\", h)")))
+	wantOneProblem(t, problems, "rewritten anchor routes.go:4", "now", "is not the tree text")
+}
+
+// The entry names a line no anchor of the rows is on.
+func TestSourceCommitRewrittenAnchorRejectsAnEntryThatMatchesNoAnchor(t *testing.T) {
+	dir, base, _ := fixtureRepoWith(t, rewriteBefore, rewriteAfter)
+	problems := problemsForSourceCommit(dir, "fixture", inventoryWith(base, []int{3}, rewriteEntry("routes.go", 4, rewriteWas, rewriteNow)))
+	wantOneProblem(t, problems, "rewritten anchor routes.go:4", "matches no anchor")
+}
+
+// The tree line also occurs at source_commit (a line shift): the entry rewrites nothing.
+func TestSourceCommitRewrittenAnchorRejectsAnEntryThatRewritesNothing(t *testing.T) {
+	dir, base, _ := fixtureRepo(t)
+	problems := problemsForSourceCommit(dir, "fixture", inventoryWith(base, []int{5}, rewriteEntry("routes.go", 5, rewriteWas, rewriteWas)))
+	wantOneProblem(t, problems, "rewritten anchor routes.go:5", "rewrites nothing")
+}
+
+// An anchor with no entry keeps today's rule, beside an anchor that has one.
+func TestSourceCommitRewrittenAnchorLeavesAnAnchorWithoutAnEntryUnderTheOldRule(t *testing.T) {
+	dir, base, _ := fixtureRepoWith(t, "package x\n\nfunc a() {}\nmux.Handle(\"/a\", h)\n", "package x\n\nfunc z() {}\nmux.Handle(\"/b\", h)\n")
+	problems := problemsForSourceCommit(dir, "fixture", inventoryWith(base, []int{3, 4}, rewriteEntry("routes.go", 4, rewriteWas, rewriteNow)))
+	wantOneProblem(t, problems, "routes.go:3", "stale base")
+}
+
+// The same anchor listed twice, and an entry that is not {file, line, was, now} with nothing else.
+func TestSourceCommitRewrittenAnchorRejectsAMalformedEntryAndADuplicate(t *testing.T) {
+	dir, base, _ := fixtureRepoWith(t, rewriteBefore, rewriteAfter)
+	one := `{"file": "routes.go", "line": 4, "was": "mux.Handle(\"/a\", h)", "now": "mux.Handle(\"/b\", h)"}`
+	for name, entries := range map[string]string{
+		"listed twice":                      "[" + one + "," + one + "]",
+		"a missing key":                     `[{"file": "routes.go", "line": 4, "was": "mux.Handle(\"/a\", h)"}]`,
+		"an extra key":                      `[{"file": "routes.go", "line": 4, "was": "mux.Handle(\"/a\", h)", "now": "mux.Handle(\"/b\", h)", "why": "x"}]`,
+		"a line that is not a whole number": `[{"file": "routes.go", "line": 4.5, "was": "mux.Handle(\"/a\", h)", "now": "mux.Handle(\"/b\", h)"}]`,
+		"not a list":                        `{"file": "routes.go"}`,
+	} {
+		problems := problemsForSourceCommit(dir, "fixture", inventoryWith(base, []int{4}, entries))
+		if len(problems) == 0 || !strings.Contains(strings.Join(problems, "\n"), "rewritten_anchors") {
+			t.Errorf("%s: not refused as a rewritten_anchors defect: %v", name, problems)
+		}
+	}
+}

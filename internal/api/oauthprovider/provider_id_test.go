@@ -81,3 +81,25 @@ func TestProfileTextLoneSurrogates(t *testing.T) {
 		}
 	}
 }
+
+// A numeric id, zero included, is str(id): non-empty, so it is a subject and never the empty string that the sign-in
+// edge rule refuses.
+func TestEveryParserKeepsANumericProviderIDAsANonEmptyText(t *testing.T) {
+	profile := map[string]func(id string) string{
+		GitHub: func(id string) string { return `{"id": ` + id + `, "login": "a", "email": "a@x.com"}` },
+		GitLab: func(id string) string {
+			return `{"id": ` + id + `, "username": "u", "email": "a@x.com", "confirmed_at": "2026-01-01T00:00:00Z"}`
+		},
+		Google: func(id string) string { return `{"id": ` + id + `, "email": "a@x.com", "verified_email": true}` },
+	}
+	path := map[string]string{GitHub: "/gh/user", GitLab: "/gl/api/v4/user", Google: "/google"}
+	for provider, build := range profile {
+		for id, want := range map[string]string{"0": "0", "12": "12"} {
+			client := fakeClient(t, map[string]route{path[provider]: {200, build(id)}})
+			info, err := client.FetchUserInfo(context.Background(), provider, "tok")
+			if err != nil || PyStr(info.ProviderUserID) != want {
+				t.Errorf("%s: id %s: %+v %v, want the text %q", provider, id, info, err, want)
+			}
+		}
+	}
+}

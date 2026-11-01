@@ -8,7 +8,8 @@
 //     row (a new deny grant) has an id no entry holds: absence is a dependency;
 //   - watermark: Get misses when a dependency's watermark is above the revision the decision read, or when an event of a
 //     tagged type (or InvalidateAll) came after the read began (Begin), so a Put that lands after its event's eviction is
-//     never served.
+//     never served. Put refuses a zero stamp and a stamp of another cache. That the caller takes the stamp BEFORE it
+//     reads cannot be checked here: the census of the wiring lists it.
 //
 // Never stored: a deny, an allow of a high-risk action or of cache class none, and an allow that carries an Audit
 // obligation (the owner exemption of a delegated session), so the decision point never skips its audit emission.
@@ -24,6 +25,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/authorization"
@@ -101,8 +103,13 @@ type Dependency struct {
 	Revision      int64
 }
 
-// Stamp is the cache's event count when a read began (Begin).
-type Stamp uint64
+// Stamp is the cache's event count when a read began, from Begin. Its zero value is no stamp.
+type Stamp struct {
+	cache uint64
+	gen   uint64
+}
+
+var cacheIDs atomic.Uint64
 
 // Read is what the decision read: the aggregates, the aggregate types it read as a set (absence counts), and the Stamp
 // taken before the read.
@@ -124,8 +131,15 @@ const (
 	NotStoredUnknownAction PutResult = "unknown_action"
 	NotStoredExpired       PutResult = "expired"
 	NotStoredInvalid       PutResult = "invalid"
+	NotStoredStamp         PutResult = "stamp"
 	NotStoredClosed        PutResult = "closed"
 )
+
+// PutResults is the closed set of PutResult values, in a fixed order.
+func PutResults() []PutResult {
+	return []PutResult{Stored, NotStoredDeny, NotStoredAudit, NotStoredHighRisk, NotStoredClassNone, NotStoredUnknownAction,
+		NotStoredExpired, NotStoredInvalid, NotStoredStamp, NotStoredClosed}
+}
 
 type entry struct {
 	key      string
@@ -133,11 +147,12 @@ type entry struct {
 	expires  int64
 	deps     []Dependency
 	types    []string
-	stamp    Stamp
+	stamp    uint64
 }
 
 // Cache is safe for concurrent use.
 type Cache struct {
+	id      uint64
 	catalog *policycatalog.Catalog
 	marks   Watermarks
 	now     func() time.Time
@@ -149,9 +164,9 @@ type Cache struct {
 	entries map[string]*list.Element
 	byAgg   map[string]map[*list.Element]struct{}
 	byType  map[string]map[*list.Element]struct{}
-	gen     Stamp
-	allGen  Stamp
-	typeGen map[string]Stamp
+	gen     uint64 // the event count; starts at 1 so a zero Stamp is never a real one
+	allGen  uint64
+	typeGen map[string]uint64
 }
 
 // New validates cfg and returns an empty cache.
@@ -162,7 +177,7 @@ func New(cfg Config) (*Cache, error) {
 	if cfg.MaxEntries < 0 {
 		return nil, errors.New("decisioncache: MaxEntries must not be negative")
 	}
-	c := &Cache{catalog: cfg.Catalog, marks: cfg.Watermarks, now: cfg.Now, max: cfg.MaxEntries}
+	c := &Cache{id: cacheIDs.Add(1), catalog: cfg.Catalog, marks: cfg.Watermarks, now: cfg.Now, max: cfg.MaxEntries, gen: 1}
 	if c.now == nil {
 		c.now = time.Now
 	}
@@ -179,7 +194,7 @@ func (c *Cache) reset() {
 	c.byAgg = map[string]map[*list.Element]struct{}{}
 	c.byType = map[string]map[*list.Element]struct{}{}
 	if c.typeGen == nil {
-		c.typeGen = map[string]Stamp{}
+		c.typeGen = map[string]uint64{}
 	}
 }
 
@@ -187,7 +202,7 @@ func (c *Cache) reset() {
 func (c *Cache) Begin() Stamp {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.gen
+	return Stamp{cache: c.id, gen: c.gen}
 }
 
 // Put stores an allow that may be reused, and says why when it does not.
@@ -238,12 +253,17 @@ func (c *Cache) Put(k Key, d authorization.Decision, r Read) PutResult {
 		return NotStoredExpired
 	}
 
-	e := &entry{key: k.encode(), decision: copyDecision(d), expires: expires, deps: slices.Clone(r.Dependencies),
-		types: slices.Clone(r.SetTypes), stamp: r.Stamp}
+	stored := copyDecision(d)
+	stored.ExpiresAtUnixNano = expires
+	e := &entry{key: k.encode(), decision: stored, expires: expires, deps: slices.Clone(r.Dependencies),
+		types: slices.Clone(r.SetTypes), stamp: r.Stamp.gen}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
 		return NotStoredClosed
+	}
+	if r.Stamp.cache != c.id || r.Stamp.gen == 0 || r.Stamp.gen > c.gen {
+		return NotStoredStamp
 	}
 	if old, ok := c.entries[e.key]; ok {
 		c.remove(old)
@@ -262,7 +282,8 @@ func (c *Cache) Put(k Key, d authorization.Decision, r Read) PutResult {
 	return Stored
 }
 
-// Get returns a stored allow for k, with ExpiresAtUnixNano set to the STORED expiry (never now plus TTL). It misses on
+// Get returns a stored allow for k. Its ExpiresAtUnixNano is the STORED expiry, already cut to TTL at Put, never now plus
+// TTL and never the decision's longer one. It misses on
 // expiry, on a dependency whose watermark is above the revision read, and on an event of a tagged type or an
 // InvalidateAll after the read began; such an entry is dropped.
 func (c *Cache) Get(k Key) (authorization.Decision, bool) {
@@ -283,9 +304,7 @@ func (c *Cache) Get(k Key) (authorization.Decision, bool) {
 		return authorization.Decision{}, false
 	}
 	c.lru.MoveToFront(el)
-	d := copyDecision(e.decision)
-	d.ExpiresAtUnixNano = e.expires
-	return d, true
+	return copyDecision(e.decision), true
 }
 
 func (c *Cache) stale(e *entry) bool {

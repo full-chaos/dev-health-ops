@@ -241,6 +241,8 @@ func (q poolQuerier) queryRow(ctx context.Context, sql string, args ...any) pgx.
 //	   step 3) do the same for the whole organization through
 //	   EndOrganizationInTx; a later verb that ends a membership in place,
 //	   such as a route for Suspend, must end its sessions the same way;
+//	   6b. a service account verb: the auth.service_accounts row FOR UPDATE;
+//	   6c. a service account key verb: its auth.credential_registry rows FOR UPDATE;
 //	7. aggregate_revisions, inside audit.Commit.
 //
 // Steps 1 and 2 take every id any later statement of the verb references,

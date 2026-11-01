@@ -395,7 +395,8 @@ validator and the writer; the event is a closed projection of lifecycle state.
 * **Actor.** `actor_type` (`user`, `operator`, `credential`, `system`) plus
   `actor_ref`, absent for `system`. A credential acting on itself is
   `actor_type` `credential`; the clients check that `actor_ref` is the aggregate
-  id on `revoked` and the replaced credential on `rotated`. `expired` is always
+  id on `revoked` and the replaced credential on `rotated`. `issued` and
+  `device_redeemed` are never written by a credential actor. `expired` is always
   written by the system. `change.acr_class` (six values) and the optional
   opaque `change.owner_subject` ride on revision 1 events only.
 

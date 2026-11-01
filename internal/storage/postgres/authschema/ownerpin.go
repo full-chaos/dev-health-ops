@@ -32,7 +32,8 @@ func (o Options) validateSchemaOwnerRole() error {
 	return nil
 }
 
-// schemaObjectsNotOwnedSQL counts, by kind, the objects of the schema ($1) owned by a role other than $2. It reads
+// schemaObjectsNotOwnedSQL counts, by kind, the objects of the schema ($1) owned by a role other than $2, except the
+// append function ($4) when the push lifecycle writer role ($3) owns it. It reads
 // every catalog an owner can differ on: relations, routines, types, collations, statistics, text search objects,
 // operators, operator classes and families, conversions and the schema itself. An index, a TOAST table, an array
 // type and a table's row type follow their table, so they are not read.
@@ -45,6 +46,7 @@ SELECT kind, count(*) FROM (
   UNION ALL
   SELECT CASE p.prokind WHEN 'p' THEN 'procedure' WHEN 'a' THEN 'aggregate' ELSE 'function' END, p.proowner
   FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1
+    AND NOT (p.proname = $4 AND p.proowner = (SELECT oid FROM pg_roles WHERE rolname = $3))
   UNION ALL
   SELECT CASE t.typtype WHEN 'd' THEN 'domain' ELSE 'type' END, t.typowner
   FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
@@ -87,7 +89,8 @@ func verifySchemaOwnerPin(ctx context.Context, conn *pgx.Conn, options Options) 
 		return fmt.Errorf("%w: the pinned schema owner %q holds %s; it must be NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS",
 			ErrSchemaOwnerPin, options.SchemaOwnerRole, strings.Join(attributes, ", "))
 	}
-	rows, err := conn.Query(ctx, schemaObjectsNotOwnedSQL, options.Schema, options.SchemaOwnerRole)
+	rows, err := conn.Query(ctx, schemaObjectsNotOwnedSQL, options.Schema, options.SchemaOwnerRole,
+		pushWriterOrNone(options), PushLifecycleFunction)
 	if err != nil {
 		return fmt.Errorf("%w: reading the owners of the schema's objects", ErrMigrationFailed)
 	}
@@ -109,4 +112,12 @@ func verifySchemaOwnerPin(ctx context.Context, conn *pgx.Conn, options Options) 
 			ErrSchemaOwnerPin, options.Schema, options.SchemaOwnerRole, strings.Join(lines, ", "))
 	}
 	return nil
+}
+
+// pushWriterOrNone is the writer role the pin excepts; a name no role carries when none is configured.
+func pushWriterOrNone(options Options) string {
+	if options.PushLifecycleWriterRole == "" {
+		return "\x00none"
+	}
+	return options.PushLifecycleWriterRole
 }

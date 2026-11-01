@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	actionsSHA = "10c314f05bd38a35dc5491b2baffe9a6ef69be348bf1c5dc17dc534db2d568c8"
-	rolesSHA   = "e49d2c4e17db8e38baacb26dc7c36b917cfc46582d51c2abf44b8b670d702e1b"
+	actionsSHA = "d1e0f217e4d40f8e9cfb0d5041d66f214b977201f3b1e8570c956e37ed9fb2f5"
+	rolesSHA   = "f164758d728ca9318f2b61e6708070f4874cc051cd65ddace77f0bfb07a8c86d"
 )
 
 func repoRoot(t *testing.T) string {
@@ -222,7 +222,9 @@ func TestEmbeddedFilesValidateAgainstTheirSchemas(t *testing.T) {
 // internal/api/session/permissions.go. Catalog-only = not served in /auth/me
 // until a web-reviewed change adds it there; every other catalog action must
 // still equal a session permission.
-var catalogOnly = map[string]bool{"admin.impersonate": true, "billing.read": true, "billing.manage": true, "license.read": true, "members.update": true, "authz.decide": true, "acr.context.read": true}
+var catalogOnly = map[string]bool{"admin.impersonate": true, "billing.read": true, "billing.manage": true, "license.read": true, "members.update": true, "authz.decide": true, "acr.context.read": true,
+	"admin.billing": true, "admin.flags": true, "admin.audit": true, "admin.telemetry": true, "admin.stats": true,
+}
 
 type sessionEntry struct {
 	role string
@@ -434,13 +436,14 @@ func TestRepositoryIsAResourceKindAndNeverAScope(t *testing.T) {
 
 func TestImpersonationIsDeniedOnTheG51List(t *testing.T) {
 	want := map[string]bool{
-		"admin.users": true, "admin.orgs": true, "admin.impersonate": true, "members.invite": true, "members.manage": true,
+		"admin.users": true, "admin.orgs": true, "admin.impersonate": true,
+		"admin.billing": true, "admin.flags": true, "admin.audit": true, "admin.telemetry": true, "admin.stats": true, "members.invite": true, "members.manage": true,
 		"org.write": true, "org.delete": true, "billing.manage": true, "settings.write": true, "integrations.write": true,
 		"members.update": true, "acr.context.read": true, "authz.decide": true,
 	}
 	actions := Default().Actions()
-	if len(actions) != 29 {
-		t.Fatalf("%d actions, want 29", len(actions))
+	if len(actions) != 34 {
+		t.Fatalf("%d actions, want 34", len(actions))
 	}
 	for _, a := range actions {
 		denied := a.Impersonation == ImpersonationDenied

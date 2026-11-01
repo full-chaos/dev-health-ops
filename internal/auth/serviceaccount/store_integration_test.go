@@ -221,7 +221,7 @@ func (e *env) count(t *testing.T, sql string, args ...any) int {
 
 func (e *env) create(t *testing.T, orgID, owner uuid.UUID) uuid.UUID {
 	t.Helper()
-	id, err := e.sa.Create(ctxT(t), CreateInput{OrgID: orgID, Name: "bot-" + uuid.NewString()[:8], Owner: owner}, Actor{})
+	id, err := e.sa.Create(ctxT(t), CreateInput{OrgID: orgID, Name: "bot-" + uuid.NewString()[:8], Owner: owner}, okActor())
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -245,7 +245,7 @@ func TestSACreateWritesRowsAuditOutboxAndRevision(t *testing.T) {
 	e := getEnv(t)
 	orgID := e.seedOrg(t)
 	owner, actor := e.member(t, orgID), e.seedUser(t)
-	id, err := e.sa.Create(ctxT(t), CreateInput{OrgID: orgID, Name: "ci-bot", Owner: owner}, Actor{PrincipalID: &actor})
+	id, err := e.sa.Create(ctxT(t), CreateInput{OrgID: orgID, Name: "ci-bot", Owner: owner}, okActorFor(&actor))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,14 +299,14 @@ func TestSACreateRefusals(t *testing.T) {
 	}
 	for _, c := range cases {
 		before := e.count(t, `SELECT (SELECT count(*) FROM auth.service_accounts) + (SELECT count(*) FROM auth.principals WHERE kind = 'service_account') + (SELECT count(*) FROM auth.security_audit_events)`)
-		if _, err := e.sa.Create(ctxT(t), c.in, Actor{}); !errors.Is(err, c.want) {
+		if _, err := e.sa.Create(ctxT(t), c.in, okActor()); !errors.Is(err, c.want) {
 			t.Errorf("%s: %v, want %v", c.cell, err, c.want)
 		}
 		if after := e.count(t, `SELECT (SELECT count(*) FROM auth.service_accounts) + (SELECT count(*) FROM auth.principals WHERE kind = 'service_account') + (SELECT count(*) FROM auth.security_audit_events)`); after != before {
 			t.Errorf("%s: a refusal wrote %d rows", c.cell, after-before)
 		}
 	}
-	if _, err := e.sa.Create(ctxT(t), CreateInput{OrgID: other, Name: taken, Owner: e.member(t, other)}, Actor{}); err != nil {
+	if _, err := e.sa.Create(ctxT(t), CreateInput{OrgID: other, Name: taken, Owner: e.member(t, other)}, okActor()); err != nil {
 		t.Errorf("the same name in another organization: %v", err)
 	}
 }
@@ -315,20 +315,20 @@ func TestSADisableSetsRowAndPrincipalAndIsRefusedTwice(t *testing.T) {
 	e := getEnv(t)
 	orgID := e.seedOrg(t)
 	id := e.create(t, orgID, e.member(t, orgID))
-	if err := e.sa.Disable(ctxT(t), id, Actor{}); err != nil {
+	if err := e.sa.Disable(ctxT(t), id, okActor()); err != nil {
 		t.Fatal(err)
 	}
 	if got := strings.Split(e.writes(t, id), "/"); got[0] != "disabled" || got[1] != "true" || got[3] != "true" {
 		t.Fatalf("state %v", got)
 	}
 	before := e.writes(t, id)
-	if err := e.sa.Disable(ctxT(t), id, Actor{}); !errors.Is(err, ErrAlreadyInState) {
+	if err := e.sa.Disable(ctxT(t), id, okActor()); !errors.Is(err, ErrAlreadyInState) {
 		t.Fatalf("second Disable: %v", err)
 	}
 	if e.writes(t, id) != before {
 		t.Fatal("a refused Disable wrote")
 	}
-	if err := e.sa.Disable(ctxT(t), e.seedUser(t), Actor{}); !errors.Is(err, ErrNotFound) {
+	if err := e.sa.Disable(ctxT(t), e.seedUser(t), okActor()); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Disable of a user: %v", err)
 	}
 }
@@ -343,17 +343,17 @@ func TestSALostOwnerKeepsTheAccountAndBlocksEnable(t *testing.T) {
 	if err != nil || !info.Active || info.OwnerMember || !info.OwnerEnabled {
 		t.Fatalf("after the owner left: %+v %v, want active, owner enabled, not a member", info, err)
 	}
-	if err := e.sa.Disable(ctxT(t), id, Actor{}); err != nil {
+	if err := e.sa.Disable(ctxT(t), id, okActor()); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.sa.Enable(ctxT(t), id, Actor{}); !errors.Is(err, ErrOwnerNotMember) {
+	if err := e.sa.Enable(ctxT(t), id, okActor()); !errors.Is(err, ErrOwnerNotMember) {
 		t.Fatalf("Enable with a lost owner: %v", err)
 	}
 	next := e.member(t, orgID)
-	if err := e.sa.SetOwner(ctxT(t), id, next, Actor{}); err != nil {
+	if err := e.sa.SetOwner(ctxT(t), id, next, okActor()); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.sa.Enable(ctxT(t), id, Actor{}); err != nil {
+	if err := e.sa.Enable(ctxT(t), id, okActor()); err != nil {
 		t.Fatalf("Enable after SetOwner: %v", err)
 	}
 	if got := strings.Split(e.writes(t, id), "/"); got[0] != "active" || got[1] != "false" || got[3] != "false" {
@@ -366,13 +366,13 @@ func TestSASetOwnerAuditAndEventNameTheNewOwner(t *testing.T) {
 	orgID := e.seedOrg(t)
 	old, next := e.member(t, orgID), e.member(t, orgID)
 	id := e.create(t, orgID, old)
-	if err := e.sa.SetOwner(ctxT(t), id, old, Actor{}); !errors.Is(err, ErrAlreadyInState) {
+	if err := e.sa.SetOwner(ctxT(t), id, old, okActor()); !errors.Is(err, ErrAlreadyInState) {
 		t.Fatalf("same owner: %v", err)
 	}
-	if err := e.sa.SetOwner(ctxT(t), id, e.seedUser(t), Actor{}); !errors.Is(err, ErrOwnerNotMember) {
+	if err := e.sa.SetOwner(ctxT(t), id, e.seedUser(t), okActor()); !errors.Is(err, ErrOwnerNotMember) {
 		t.Fatalf("non-member owner: %v", err)
 	}
-	if err := e.sa.SetOwner(ctxT(t), id, next, Actor{}); err != nil {
+	if err := e.sa.SetOwner(ctxT(t), id, next, okActor()); err != nil {
 		t.Fatal(err)
 	}
 	if n := e.count(t, `SELECT count(*) FROM auth.security_audit_events WHERE subject_principal_id = $1 AND event_type = 'auth.service_account.owner_changed'
@@ -394,19 +394,19 @@ func TestSANotOwnedRefusesBeforeAnyWrite(t *testing.T) {
 	owner := e.member(t, orgID)
 	id := e.create(t, orgID, owner)
 	before := e.count(t, `SELECT (SELECT count(*) FROM auth.service_accounts) + (SELECT count(*) FROM auth.security_audit_events)`)
-	if _, err := e.notOwned.Create(ctxT(t), CreateInput{OrgID: orgID, Name: "x1", Owner: owner}, Actor{}); !errors.Is(err, ErrNotOwned) {
+	if _, err := e.notOwned.Create(ctxT(t), CreateInput{OrgID: orgID, Name: "x1", Owner: owner}, okActor()); !errors.Is(err, ErrNotOwned) {
 		t.Errorf("Create: %v", err)
 	}
-	if err := e.notOwned.Enable(ctxT(t), id, Actor{}); !errors.Is(err, ErrNotOwned) {
+	if err := e.notOwned.Enable(ctxT(t), id, okActor()); !errors.Is(err, ErrNotOwned) {
 		t.Errorf("Enable: %v", err)
 	}
-	if err := e.notOwned.SetOwner(ctxT(t), id, owner, Actor{}); !errors.Is(err, ErrNotOwned) {
+	if err := e.notOwned.SetOwner(ctxT(t), id, owner, okActor()); !errors.Is(err, ErrNotOwned) {
 		t.Errorf("SetOwner: %v", err)
 	}
 	if after := e.count(t, `SELECT (SELECT count(*) FROM auth.service_accounts) + (SELECT count(*) FROM auth.security_audit_events)`); after != before {
 		t.Errorf("a refused verb wrote %d rows", after-before)
 	}
-	if err := e.notOwned.Disable(ctxT(t), id, Actor{}); err != nil {
+	if err := e.notOwned.Disable(ctxT(t), id, okActor()); err != nil {
 		t.Errorf("Disable must work with users not owned: %v", err)
 	}
 }
@@ -416,7 +416,7 @@ func TestSAEnableRefusesAStateThatChangedBeforeTheLocks(t *testing.T) {
 	orgID := e.seedOrg(t)
 	old, next := e.member(t, orgID), e.member(t, orgID)
 	id := e.create(t, orgID, old)
-	if err := e.sa.Disable(ctxT(t), id, Actor{}); err != nil {
+	if err := e.sa.Disable(ctxT(t), id, okActor()); err != nil {
 		t.Fatal(err)
 	}
 	moved := *e.sa
@@ -428,7 +428,7 @@ func TestSAEnableRefusesAStateThatChangedBeforeTheLocks(t *testing.T) {
 		return info, err
 	}
 	before := e.writes(t, id)
-	if err := moved.Enable(ctxT(t), id, Actor{}); !errors.Is(err, ErrStateChanged) {
+	if err := moved.Enable(ctxT(t), id, okActor()); !errors.Is(err, ErrStateChanged) {
 		t.Fatalf("Enable on a moved owner: %v", err)
 	}
 	if got := e.writes(t, id); strings.Split(got, "/")[0] != "disabled" || strings.Split(before, "/")[0] != "disabled" {
@@ -491,7 +491,7 @@ func TestSAPairMembershipRemoveOfTheOwnerAndEnableAndCreate(t *testing.T) {
 	orgID := e.seedOrg(t)
 	owner := e.member(t, orgID)
 	id := e.create(t, orgID, owner)
-	if err := e.sa.Disable(ctxT(t), id, Actor{}); err != nil {
+	if err := e.sa.Disable(ctxT(t), id, okActor()); err != nil {
 		t.Fatal(err)
 	}
 	h := newHeld()
@@ -507,9 +507,9 @@ func TestSAPairMembershipRemoveOfTheOwnerAndEnableAndCreate(t *testing.T) {
 		t.Fatalf("%s: the removal never reached Authorize", cell)
 	}
 	enableErr, createErr := make(chan error, 1), make(chan error, 1)
-	go func() { enableErr <- e.sa.Enable(ctxT(t), id, Actor{}) }()
+	go func() { enableErr <- e.sa.Enable(ctxT(t), id, okActor()) }()
 	go func() {
-		_, err := e.sa.Create(ctxT(t), CreateInput{OrgID: orgID, Name: "p-sa1", Owner: owner}, Actor{})
+		_, err := e.sa.Create(ctxT(t), CreateInput{OrgID: orgID, Name: "p-sa1", Owner: owner}, okActor())
 		createErr <- err
 	}()
 	e.waitsOn(t, cell, "principals")
@@ -565,7 +565,7 @@ func TestSAPairOrgDeprovisionAndCreate(t *testing.T) {
 	}
 	createErr := make(chan error, 1)
 	go func() {
-		_, err := e.sa.Create(ctxT(t), CreateInput{OrgID: orgID, Name: "p-sa2", Owner: owner}, Actor{})
+		_, err := e.sa.Create(ctxT(t), CreateInput{OrgID: orgID, Name: "p-sa2", Owner: owner}, okActor())
 		createErr <- err
 	}()
 	e.waitsOn(t, cell, "organizations")
@@ -588,7 +588,7 @@ func TestSAPairDisableOrderAndEnable(t *testing.T) {
 	e := getEnv(t)
 	orgID := e.seedOrg(t)
 	id := e.create(t, orgID, e.member(t, orgID))
-	if err := e.sa.Disable(ctxT(t), id, Actor{}); err != nil {
+	if err := e.sa.Disable(ctxT(t), id, okActor()); err != nil {
 		t.Fatal(err)
 	}
 	tx, err := e.admin.Begin(ctxT(t))
@@ -600,7 +600,7 @@ func TestSAPairDisableOrderAndEnable(t *testing.T) {
 		t.Fatal(err)
 	}
 	enableErr := make(chan error, 1)
-	go func() { enableErr <- e.sa.Enable(ctxT(t), id, Actor{}) }()
+	go func() { enableErr <- e.sa.Enable(ctxT(t), id, okActor()) }()
 	e.waitsOn(t, cell, "principals")
 	if _, err := tx.Exec(ctxT(t), `SELECT principal_id FROM auth.service_accounts WHERE principal_id = $1 FOR UPDATE`, id); err != nil {
 		t.Fatalf("%s: the holder's second lock: %v", cell, err)
@@ -615,5 +615,145 @@ func TestSAPairDisableOrderAndEnable(t *testing.T) {
 		}
 	case <-time.After(60 * time.Second):
 		t.Fatalf("%s: Enable did not finish", cell)
+	}
+}
+
+func actorOf(id uuid.UUID, a Authorize) Actor { return Actor{PrincipalID: &id, Authorize: a} }
+
+func (e *env) rowsAndAudit(t *testing.T) int {
+	t.Helper()
+	return e.count(t, `SELECT (SELECT count(*) FROM auth.service_accounts) + (SELECT count(*) FROM auth.principals WHERE kind = 'service_account') + (SELECT count(*) FROM auth.security_audit_events WHERE event_type LIKE 'auth.service_account.%') + (SELECT count(*) FROM auth.auth_outbox_events WHERE aggregate_type = 'service_account')`)
+}
+
+func TestSANilAuthorizeRefusesEveryVerbAndWritesNothing(t *testing.T) {
+	e := getEnv(t)
+	orgID := e.seedOrg(t)
+	owner := e.member(t, orgID)
+	id := e.create(t, orgID, owner)
+	other := e.member(t, orgID)
+	before := e.rowsAndAudit(t)
+	ctx := ctxT(t)
+	if _, err := e.sa.Create(ctx, CreateInput{OrgID: orgID, Name: "nil-authz", Owner: owner}, Actor{}); !errors.Is(err, ErrDenied) {
+		t.Errorf("Create: %v", err)
+	}
+	if err := e.sa.Disable(ctx, id, Actor{}); !errors.Is(err, ErrDenied) {
+		t.Errorf("Disable: %v", err)
+	}
+	if err := e.sa.Enable(ctx, id, Actor{}); !errors.Is(err, ErrDenied) {
+		t.Errorf("Enable: %v", err)
+	}
+	if err := e.sa.SetOwner(ctx, id, other, Actor{}); !errors.Is(err, ErrDenied) {
+		t.Errorf("SetOwner: %v", err)
+	}
+	if after := e.rowsAndAudit(t); after != before {
+		t.Errorf("a refused verb wrote %d rows", after-before)
+	}
+}
+
+func TestSAAuthorizeSeesTheLockedStateAndAFailureWritesNothing(t *testing.T) {
+	e := getEnv(t)
+	orgID := e.seedOrg(t)
+	owner, next := e.member(t, orgID), e.member(t, orgID)
+	ctx := ctxT(t)
+	var seen []Locked
+	spy := func(_ context.Context, _ audit.TxOps, l Locked) error { seen = append(seen, l); return nil }
+	id, err := e.sa.Create(ctx, CreateInput{OrgID: orgID, Name: "spy-bot", Owner: owner}, actorOf(owner, spy))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.sa.SetOwner(ctx, id, next, actorOf(owner, spy)); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.sa.Disable(ctx, id, actorOf(owner, spy)); err != nil {
+		t.Fatal(err)
+	}
+	if want := []Locked{{OrgID: orgID}, {OrgID: orgID, Owner: owner}, {OrgID: orgID, Owner: next}}; !slicesEqual(seen, want) {
+		t.Fatalf("Authorize saw %+v, want %+v", seen, want)
+	}
+	before := e.rowsAndAudit(t)
+	denied := func(context.Context, audit.TxOps, Locked) error { return ErrDenied }
+	broken := func(context.Context, audit.TxOps, Locked) error { return errors.New("read failed") }
+	if err := e.sa.Enable(ctx, id, actorOf(owner, denied)); !errors.Is(err, ErrDenied) {
+		t.Errorf("denied Enable: %v", err)
+	}
+	if err := e.sa.Enable(ctx, id, actorOf(owner, broken)); !errors.Is(err, ErrStore) {
+		t.Errorf("broken Enable: %v, want ErrStore", err)
+	}
+	if _, err := e.sa.Create(ctx, CreateInput{OrgID: orgID, Name: "denied-bot", Owner: owner}, actorOf(owner, denied)); !errors.Is(err, ErrDenied) {
+		t.Errorf("denied Create: %v", err)
+	}
+	if after := e.rowsAndAudit(t); after != before {
+		t.Errorf("a refused Authorize left %d rows", after-before)
+	}
+}
+
+func slicesEqual(a, b []Locked) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// Disable reads the owner before its transaction. A SetOwner that commits between that read and the account row lock
+// moves the owner: the first attempt is ErrStateChanged and writes nothing, the second runs on the new owner and its
+// one audit row names it.
+func TestSADisableReadsAgainWhenTheOwnerMovesBeforeTheLock(t *testing.T) {
+	e := getEnv(t)
+	orgID := e.seedOrg(t)
+	first, second := e.member(t, orgID), e.member(t, orgID)
+	id := e.create(t, orgID, first)
+	moves := 0
+	raced := *e.sa
+	raced.read = func(ctx context.Context, id uuid.UUID) (*Info, error) {
+		info, err := e.sa.Lookup(ctx, id)
+		if err == nil && moves == 0 {
+			moves++
+			e.commitSeed(t, `UPDATE auth.service_accounts SET owner_principal_id = $2 WHERE principal_id = $1`, id, second)
+		}
+		return info, err
+	}
+	if err := raced.Disable(ctxT(t), id, okActor()); err != nil {
+		t.Fatalf("Disable after one race: %v", err)
+	}
+	if n := e.count(t, `SELECT count(*) FROM auth.security_audit_events WHERE subject_principal_id = $1 AND event_type = 'auth.service_account.disabled'`, id); n != 1 {
+		t.Fatalf("%d disabled audit rows, want exactly 1", n)
+	}
+	if n := e.count(t, `SELECT count(*) FROM auth.security_audit_events WHERE subject_principal_id = $1 AND event_type = 'auth.service_account.disabled'
+AND attributes->>'principal_id' = $2`, id, second.String()); n != 1 {
+		t.Fatalf("the disabled audit row does not name the owner read under the lock (%s)", second)
+	}
+	if got := strings.Split(e.writes(t, id), "/"); got[0] != "disabled" {
+		t.Fatalf("state %v", got)
+	}
+}
+
+func TestSADisableAnswersStateChangedAfterTwoRacesAndChangesNothing(t *testing.T) {
+	e := getEnv(t)
+	orgID := e.seedOrg(t)
+	a, b, c := e.member(t, orgID), e.member(t, orgID), e.member(t, orgID)
+	id := e.create(t, orgID, a)
+	owners := []uuid.UUID{b, c}
+	reads := 0
+	raced := *e.sa
+	raced.read = func(ctx context.Context, id uuid.UUID) (*Info, error) {
+		info, err := e.sa.Lookup(ctx, id)
+		if err == nil && reads < len(owners) {
+			e.commitSeed(t, `UPDATE auth.service_accounts SET owner_principal_id = $2 WHERE principal_id = $1`, id, owners[reads])
+			reads++
+		}
+		return info, err
+	}
+	before := e.writes(t, id)
+	if err := raced.Disable(ctxT(t), id, okActor()); !errors.Is(err, ErrStateChanged) {
+		t.Fatalf("Disable after two races: %v, want ErrStateChanged", err)
+	}
+	after := strings.Split(e.writes(t, id), "/")
+	if after[0] != "active" || after[3] != "false" || strings.Split(before, "/")[4] != after[4] {
+		t.Fatalf("a refused Disable changed state: before %s after %v", before, after)
 	}
 }

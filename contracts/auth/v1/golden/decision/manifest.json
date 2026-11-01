@@ -1,0 +1,6 @@
+{
+  "catalogs": [],
+  "description": "The golden authorization decision corpus: each row is one decision question and its internal verdict.",
+  "surface": "authorization-golden.v1",
+  "vectors": []
+}

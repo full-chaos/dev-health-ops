@@ -102,6 +102,7 @@ type Store struct {
 	logger          *slog.Logger
 	exchanges       metric.Int64Counter
 	revocations     metric.Int64Counter
+	delegations     metric.Int64Counter
 }
 
 // Format and LogValue keep the successor key out of every printed form: fmt
@@ -146,6 +147,10 @@ func New(cfg Config) (*Store, error) {
 	if s.revocations, err = meter.Int64Counter("auth.session.revocations",
 		metric.WithDescription("Sessions revoked, by revoked_reason.")); err != nil {
 		return nil, fmt.Errorf("session: registering the revocation counter: %w", err)
+	}
+	if s.delegations, err = meter.Int64Counter("auth.session.delegations",
+		metric.WithDescription("Delegated session starts by outcome: started or refused.")); err != nil {
+		return nil, fmt.Errorf("session: registering the delegation counter: %w", err)
 	}
 	return s, nil
 }

@@ -24,6 +24,10 @@ var (
 	// ErrPredecessorOtherPrincipal refuses a predecessor that belongs to
 	// another principal: a session is only ever superseded by its own user.
 	ErrPredecessorOtherPrincipal = errors.New("session: the predecessor session belongs to another principal")
+	// ErrPredecessorDelegated refuses a predecessor that is a delegated
+	// session: a switch from it would mint the target a full session with a
+	// refresh credential.
+	ErrPredecessorDelegated = errors.New("session: the predecessor session is delegated")
 )
 
 // EventSessionRevoked is the audit event type of a session revoke.
@@ -72,6 +76,8 @@ func (s *Store) CreateSupersedingAudited(ctx context.Context, principalID uuid.U
 				return ErrPredecessorOtherPrincipal
 			case locked.RevokedAt != nil || locked.expired:
 				return ErrPredecessorNotLive
+			case locked.Delegation != nil:
+				return ErrPredecessorDelegated
 			}
 			if err := s.revokeSessions(ctx, tx, []string{predecessorID}, revokedByCaller); err != nil {
 				return err
@@ -82,10 +88,10 @@ func (s *Store) CreateSupersedingAudited(ctx context.Context, principalID uuid.U
 		Audit:     event,
 		Also:      []audit.AuditEvent{revoked},
 		OffStream: audit.OffStreamSessionLifecycle,
-		Refusals:  []error{ErrPredecessorNotLive, ErrPredecessorOtherPrincipal, ErrPrincipalUnavailable},
+		Refusals:  []error{ErrPredecessorNotLive, ErrPredecessorOtherPrincipal, ErrPredecessorDelegated, ErrPrincipalUnavailable},
 	})
 	if err != nil {
-		for _, refusal := range []error{ErrPredecessorNotLive, ErrPredecessorOtherPrincipal, ErrPrincipalUnavailable} {
+		for _, refusal := range []error{ErrPredecessorNotLive, ErrPredecessorOtherPrincipal, ErrPredecessorDelegated, ErrPrincipalUnavailable} {
 			if errors.Is(err, refusal) {
 				s.logger.WarnContext(ctx, "superseding session issue refused",
 					"principal_id", principal, "predecessor_session_id", predecessorID, "reason", refusal.Error())

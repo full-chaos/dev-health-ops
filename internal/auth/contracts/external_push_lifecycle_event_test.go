@@ -183,3 +183,44 @@ func TestExternalPushLifecycleEveryEventTypeHasAGolden(t *testing.T) {
 		}
 	}
 }
+
+func TestExternalPushLifecycleEventsSurviveAMarshalRoundTrip(t *testing.T) {
+	c := loadWireCorpus(t, provisioningSurfaces[2])
+	for _, a := range c.Accept {
+		event, err := ParseExternalPushLifecycleEvent(testRoot(t), readCorpusFile(t, provisioningSurfaces[2], a.File))
+		if err != nil {
+			t.Fatalf("%s: %v", a.File, err)
+		}
+		raw, err := json.Marshal(event)
+		if err != nil {
+			t.Fatalf("%s: marshal: %v", a.File, err)
+		}
+		again, err := ParseExternalPushLifecycleEvent(testRoot(t), raw)
+		if err != nil {
+			t.Errorf("%s: the marshaled event is refused: %v\n%s", a.File, err, raw)
+			continue
+		}
+		if !reflect.DeepEqual(again, event) {
+			t.Errorf("%s: round trip changed the event:\n got %+v\nwant %+v", a.File, again, event)
+		}
+	}
+}
+
+func TestExternalPushLifecycleEmptyScopesMarshalAsAnEmptyList(t *testing.T) {
+	scoped := ExternalPushLifecycleChange{Scopes: []string{}}
+	raw, err := json.Marshal(scoped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != `{"scopes":[]}` {
+		t.Fatalf("empty scopes marshal as %s, want {\"scopes\":[]}", raw)
+	}
+	revoked := ExternalPushLifecycleChange{Status: "revoked"}
+	raw, err = json.Marshal(revoked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != `{"status":"revoked"}` {
+		t.Fatalf("a change with no scopes marshals as %s, want no scopes member", raw)
+	}
+}

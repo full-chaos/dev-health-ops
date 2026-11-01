@@ -298,6 +298,7 @@ func issuePreKeyRefusals() map[string]func(*workloadIssueFixture) map[string]str
 		},
 		"hs256 edge token": func(w *workloadIssueFixture) map[string]string { return w.bearer(w.grant()) },
 		"fcacr_":           func(*workloadIssueFixture) map[string]string { return bearerOf("fcacr_" + forty3) },
+		"fcsak_":           func(*workloadIssueFixture) map[string]string { return bearerOf("fcsak_" + forty3) },
 		"fcpush_":          func(*workloadIssueFixture) map[string]string { return bearerOf("fcpush_" + forty3) },
 		"fcwlb_":           func(*workloadIssueFixture) map[string]string { return bearerOf("fcwlb_" + forty3) },
 		"svc_acr_":         func(*workloadIssueFixture) map[string]string { return bearerOf("svc_acr_" + forty3) },

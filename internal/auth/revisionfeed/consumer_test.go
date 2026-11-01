@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -27,18 +28,45 @@ type call struct {
 type recorder struct {
 	mu    sync.Mutex
 	calls []call
+	// failures is how many of the next calls return errInvalidate (each still recorded).
+	failures int
+	// onInvalidate runs inside Invalidate, before it returns.
+	onInvalidate func()
 }
 
-func (r *recorder) Invalidate(_ context.Context, typ, id string, revision int64) {
+var errInvalidate = errors.New("invalidate failed")
+
+func (r *recorder) next() error {
+	if r.failures > 0 {
+		r.failures--
+		return errInvalidate
+	}
+	return nil
+}
+
+func (r *recorder) Invalidate(_ context.Context, typ, id string, revision int64) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	hook := r.onInvalidate
 	r.calls = append(r.calls, call{typ: typ, id: id, revision: revision})
+	err := r.next()
+	r.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	return err
 }
 
-func (r *recorder) InvalidateAll(context.Context) {
+func (r *recorder) InvalidateAll(context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls = append(r.calls, call{all: true})
+	return r.next()
+}
+
+func (r *recorder) failNext(n int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.failures = n
 }
 
 func (r *recorder) snapshot() []call {
@@ -116,7 +144,7 @@ func TestConsumerReplaysTheManifestVectors(t *testing.T) {
 				if want != nil {
 					wantStep = want[i]
 				}
-				got := c.Handle(context.Background(), ev(step[0].(string), step[1].(string), int64(step[2].(float64))))
+				got, _ := c.Handle(context.Background(), ev(step[0].(string), step[1].(string), int64(step[2].(float64))))
 				if string(got) != wantStep {
 					t.Fatalf("step %d (%v): %q, want %q", i, step[:3], got, wantStep)
 				}
@@ -137,7 +165,7 @@ func TestConsumerReplaysTheManifestVectors(t *testing.T) {
 func TestDuplicateInvalidatesOnce(t *testing.T) {
 	c, rec := newTestConsumer(t)
 	for i, want := range []contracts.Disposition{contracts.Apply, contracts.Ignore, contracts.Ignore} {
-		if got := c.Handle(context.Background(), ev("principal", "p1", 1)); got != want {
+		if got, _ := c.Handle(context.Background(), ev("principal", "p1", 1)); got != want {
 			t.Fatalf("delivery %d: %q, want %q", i, got, want)
 		}
 	}
@@ -149,16 +177,16 @@ func TestDuplicateInvalidatesOnce(t *testing.T) {
 func TestOutOfOrderIsAGapThenIgnoredAndTheCursorEndsAtTheLaterRevision(t *testing.T) {
 	c, rec := newTestConsumer(t)
 	ctx := context.Background()
-	if got := c.Handle(ctx, ev("principal", "p1", 1)); got != contracts.Apply {
+	if got, _ := c.Handle(ctx, ev("principal", "p1", 1)); got != contracts.Apply {
 		t.Fatalf("1: %q", got)
 	}
-	if got := c.Handle(ctx, ev("principal", "p1", 3)); got != contracts.Gap {
+	if got, _ := c.Handle(ctx, ev("principal", "p1", 3)); got != contracts.Gap {
 		t.Fatalf("3: %q, want gap", got)
 	}
-	if got := c.Handle(ctx, ev("principal", "p1", 2)); got != contracts.Ignore {
+	if got, _ := c.Handle(ctx, ev("principal", "p1", 2)); got != contracts.Ignore {
 		t.Fatalf("2 after 3: %q, want ignore", got)
 	}
-	if got := c.Handle(ctx, ev("principal", "p1", 4)); got != contracts.Apply {
+	if got, _ := c.Handle(ctx, ev("principal", "p1", 4)); got != contracts.Apply {
 		t.Fatalf("4: %q, want apply (the mark is at 3)", got)
 	}
 	want := []call{{typ: "principal", id: "p1", revision: 1}, {typ: "principal", id: "p1", revision: 3}, {typ: "principal", id: "p1", revision: 4}}
@@ -177,14 +205,14 @@ func TestAGapInvalidatesTheAggregateAndMovesTheMark(t *testing.T) {
 	c, rec := newTestConsumer(t)
 	ctx := context.Background()
 	c.Handle(ctx, ev("organization", "o1", 1))
-	if got := c.Handle(ctx, ev("organization", "o1", 3)); got != contracts.Gap {
+	if got, _ := c.Handle(ctx, ev("organization", "o1", 3)); got != contracts.Gap {
 		t.Fatalf("3: %q, want gap", got)
 	}
 	calls := rec.snapshot()
 	if len(calls) != 2 || calls[1] != (call{typ: "organization", id: "o1", revision: 3}) {
 		t.Fatalf("calls %+v, want the gap to Invalidate(organization, o1, 3)", calls)
 	}
-	if got := c.Handle(ctx, ev("organization", "o1", 3)); got != contracts.Ignore {
+	if got, _ := c.Handle(ctx, ev("organization", "o1", 3)); got != contracts.Ignore {
 		t.Fatalf("the gap revision again: %q, want ignore (a gap repeats forever without the resync)", got)
 	}
 	if latest, ok := c.Watermarks().Latest("organization", "o1"); !ok || latest != 3 {
@@ -196,10 +224,10 @@ func TestARestartedConsumerSeesFiveAsAGapThenSixApplies(t *testing.T) {
 	first, _ := newTestConsumer(t)
 	first.Handle(context.Background(), ev("principal", "p1", 1))
 	second, rec := newTestConsumer(t)
-	if got := second.Handle(context.Background(), ev("principal", "p1", 5)); got != contracts.Gap {
+	if got, _ := second.Handle(context.Background(), ev("principal", "p1", 5)); got != contracts.Gap {
 		t.Fatalf("5 on a new consumer: %q, want gap", got)
 	}
-	if got := second.Handle(context.Background(), ev("principal", "p1", 6)); got != contracts.Apply {
+	if got, _ := second.Handle(context.Background(), ev("principal", "p1", 6)); got != contracts.Apply {
 		t.Fatalf("6: %q, want apply", got)
 	}
 	if n := len(rec.snapshot()); n != 2 {
@@ -216,7 +244,7 @@ func TestResubscribedInvalidatesEverythingOnce(t *testing.T) {
 	if len(calls) != 2 || !calls[1].all {
 		t.Fatalf("calls %+v, want the apply then one InvalidateAll", calls)
 	}
-	if got := c.Handle(ctx, ev("principal", "p1", 1)); got != contracts.Ignore {
+	if got, _ := c.Handle(ctx, ev("principal", "p1", 1)); got != contracts.Ignore {
 		t.Fatalf("a duplicate after a resubscribe: %q, want ignore (the marks survive it)", got)
 	}
 }

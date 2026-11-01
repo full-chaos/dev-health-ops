@@ -47,6 +47,10 @@ type Store struct {
 	read      func(context.Context, uuid.UUID) (*Info, error)
 	logger    *slog.Logger
 	mutations metric.Int64Counter
+	// keyResolves counts ResolveKey answers by outcome.
+	keyResolves metric.Int64Counter
+	// mint makes a key value.
+	mint func() (string, error)
 }
 
 func New(cfg Config) (*Store, error) {
@@ -58,7 +62,7 @@ func New(cfg Config) (*Store, error) {
 	case cfg.Locks == nil:
 		return nil, errors.New("serviceaccount: no row locker")
 	}
-	s := &Store{pool: cfg.Pool, q: authschema.Quote(cfg.Schema), locks: cfg.Locks, ownsUsers: cfg.OwnsUsers, logger: cfg.Logger}
+	s := &Store{pool: cfg.Pool, q: authschema.Quote(cfg.Schema), locks: cfg.Locks, ownsUsers: cfg.OwnsUsers, logger: cfg.Logger, mint: MintKey}
 	s.commit = func(ctx context.Context, m audit.Mutation) error { return audit.Commit(ctx, cfg.Pool, cfg.Schema, m) }
 	s.read = s.Lookup
 	if s.logger == nil {
@@ -72,6 +76,10 @@ func New(cfg Config) (*Store, error) {
 	if s.mutations, err = meter.Int64Counter("auth.serviceaccount.mutations",
 		metric.WithDescription("Service account mutations, by verb and outcome.")); err != nil {
 		return nil, fmt.Errorf("serviceaccount: registering the mutation counter: %w", err)
+	}
+	if s.keyResolves, err = meter.Int64Counter("auth.serviceaccount.key_resolves",
+		metric.WithDescription("Service account key resolves, by outcome.")); err != nil {
+		return nil, fmt.Errorf("serviceaccount: registering the key resolve counter: %w", err)
 	}
 	return s, nil
 }
@@ -91,14 +99,14 @@ func outcomeLabel(err error) string {
 		return "ok"
 	case errors.Is(err, ErrNotFound), errors.Is(err, ErrOrgNotFound):
 		return "not_found"
-	case errors.Is(err, ErrNameTaken), errors.Is(err, ErrAlreadyInState):
+	case errors.Is(err, ErrNameTaken), errors.Is(err, ErrAlreadyInState), errors.Is(err, audit.ErrNoStateChange):
 		return "taken"
 	case errors.Is(err, ErrNotOwned):
 		return "not_owned"
 	case errors.Is(err, ErrStore):
 		return "error"
 	}
-	for _, r := range refusals {
+	for _, r := range keyRefusals {
 		if errors.Is(err, r) {
 			return "invalid"
 		}
@@ -238,7 +246,7 @@ type accountRow struct {
 	active bool
 }
 
-// lockAccount is step 7: the service_accounts row FOR UPDATE.
+// lockAccount is step 6b: the service_accounts row FOR UPDATE.
 func (s *Store) lockAccount(ctx context.Context, tx audit.TxOps, id uuid.UUID) (accountRow, error) {
 	var r accountRow
 	var owner *uuid.UUID

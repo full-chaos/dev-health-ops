@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	actionsSHA = "cee5744873ddebc1f2f58e4ccbcabca082fb917222496c47c7616114dda9921c"
-	rolesSHA   = "787270c52e7987ac85506ba648971fb5f9e38a3d4c3cc1e9e5f48964958f4124"
+	actionsSHA = "2eb70d2815e03cdb8e49740e4c2977316bfcfd0576656810d8ac8bd0d073a399"
+	rolesSHA   = "4c78855e514f65eeb459111702c223f7858d69c71ed145d5fd5f2e72de836927"
 )
 
 func repoRoot(t *testing.T) string {
@@ -468,7 +468,7 @@ func TestImpersonationIsDeniedOnTheG51List(t *testing.T) {
 		"admin.users": true, "admin.orgs": true, "admin.impersonate": true,
 		"admin.billing": true, "admin.flags": true, "admin.audit": true, "admin.telemetry": true, "admin.stats": true, "members.invite": true, "members.manage": true,
 		"org.write": true, "org.delete": true, "billing.manage": true, "settings.write": true, "integrations.write": true,
-		"members.update": true, "acr.context.read": true, "authz.decide": true,
+		"members.update": true, "authz.decide": true,
 	}
 	actions := Default().Actions()
 	if len(actions) != 34 {
@@ -519,6 +519,50 @@ func TestDelegatedActionsAreTheAllowedActionsOfAnOrganizationRole(t *testing.T) 
 		if _, err := Default().DelegatedActions(role); !errors.Is(err, ErrUnknownRole) {
 			t.Errorf("DelegatedActions(%q) = %v, want ErrUnknownRole", role, err)
 		}
+	}
+}
+
+func TestImpersonationValuesOfTheRepositoryReadAndTheTwoDeniedActions(t *testing.T) {
+	want := map[string]string{
+		"acr.context.read": ImpersonationAllowed,
+		"authz.decide":     ImpersonationDenied,
+		"members.update":   ImpersonationDenied,
+	}
+	for id, v := range want {
+		a, err := Default().Action(id)
+		if err != nil || a.Impersonation != v {
+			t.Errorf("%s impersonation = %q, %v; want %s", id, a.Impersonation, err, v)
+		}
+	}
+}
+
+func TestShippedRolesDelegateNoRepositoryReadToday(t *testing.T) {
+	for _, r := range Default().Roles() {
+		if r.Scope != ScopeOrganization {
+			continue
+		}
+		got, err := Default().DelegatedActions(r.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, id := range got {
+			if id == "acr.context.read" {
+				t.Errorf("role %s delegates acr.context.read: a role now holds it; the cell that it DOES delegate belongs with that change", r.ID)
+			}
+		}
+	}
+}
+
+func TestDelegatedActionsReturnTheRepositoryReadForARoleThatHoldsIt(t *testing.T) {
+	const actions = `{"schema_version":"actions.v1","catalog_version":1,"description":"d","actions":[{"action":"acr.context.read","scope":"organization","resource_kind":"repository","risk_class":"low","cache_class":"resource_revision_bound","impersonation":"allowed"},{"action":"x.write","scope":"organization","resource_kind":"organization","risk_class":"high","cache_class":"none","impersonation":"denied"},{"action":"x.other","scope":"organization","resource_kind":"organization","risk_class":"high","cache_class":"none","impersonation":"denied"}]}`
+	const roles = `{"schema_version":"roles.v1","catalog_version":1,"description":"d","roles":[{"role":"r","scope":"organization","actions":["acr.context.read","x.write"]}]}`
+	c, err := Load([]byte(actions), []byte(roles))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.DelegatedActions("r")
+	if err != nil || len(got) != 1 || got[0] != "acr.context.read" {
+		t.Fatalf("DelegatedActions = %v, %v; want [acr.context.read]", got, err)
 	}
 }
 

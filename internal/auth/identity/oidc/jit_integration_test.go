@@ -35,6 +35,9 @@ type jitHarness struct {
 func newJITHarness(t *testing.T, opts harnessOpts) *jitHarness {
 	t.Helper()
 	opts.signup = true
+	if opts.allowedDomains == nil {
+		opts.allowedDomains = []string{"example.com"}
+	}
 	h := newHarness(t, opts)
 	sessions, err := session.New(session.Config{Pool: h.env.runtime, Schema: h.env.schema, UsersOwned: true,
 		SuccessorKey: contracts.NewSecretString(base64.RawURLEncoding.EncodeToString(make([]byte, 32)))})
@@ -571,4 +574,65 @@ func TestJITTokenFailureNextSignInWorks(t *testing.T) {
 		t.Fatalf("login %+v, member sessions %d", login, j.sessions.count())
 	}
 	j.wantOneMembership(t, user, "member")
+}
+
+func (j *jitHarness) setAllowedDomains(t *testing.T, list any) {
+	t.Helper()
+	if _, err := j.env.admin.Exec(context.Background(), `UPDATE public.sso_providers SET allowed_domains = $2::json WHERE id = $1`, j.providerID, list); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestJITNewAccountNeedsAListedDomain(t *testing.T) {
+	t.Run("oidc", func(t *testing.T) {
+		for name, list := range map[string]any{"empty": "[]", "null": nil} {
+			t.Run(name, func(t *testing.T) {
+				j := newJITHarness(t, harnessOpts{})
+				j.setAllowedDomains(t, list)
+				before := j.jitTableCounts(t)
+				_, failure := j.signIn(t, "sub-"+uuid.NewString(), uniqueEmail("jit-list"))
+				wantDenied(t, failure, http.StatusBadRequest, ReasonProvisioningDisabled)
+				wantSameCounts(t, before, j.jitTableCounts(t))
+				if n := j.count(t, `SELECT count(*) FROM public.sso_providers WHERE id = $1 AND last_error = $2`, j.providerID, msgAutoProvisionOff); n != 1 {
+					t.Fatalf("%d provider rows with the auto-provision failure, want 1", n)
+				}
+			})
+		}
+		t.Run("listed", func(t *testing.T) {
+			j := newJITHarness(t, harnessOpts{})
+			email := uniqueEmail("jit-list")
+			if _, failure := j.signIn(t, "sub-"+uuid.NewString(), email); failure != nil {
+				t.Fatalf("sign-in: %v", failure)
+			}
+			j.wantOneMembership(t, j.principalOf(t, email), "member")
+		})
+		t.Run("unlisted", func(t *testing.T) {
+			j := newJITHarness(t, harnessOpts{allowedDomains: []string{"other.example"}})
+			before := j.jitTableCounts(t)
+			_, failure := j.signIn(t, "sub-"+uuid.NewString(), uniqueEmail("jit-list"))
+			wantDenied(t, failure, http.StatusForbidden, ReasonDomainNotAllowed)
+			wantSameCounts(t, before, j.jitTableCounts(t))
+		})
+		t.Run("switch_off", func(t *testing.T) {
+			j := newJITHarness(t, harnessOpts{})
+			j.svc.cfg.MembershipJIT = nil
+			j.setAllowedDomains(t, "[]")
+			_, failure := j.signIn(t, "sub-"+uuid.NewString(), uniqueEmail("jit-list"))
+			wantDenied(t, failure, http.StatusForbidden, ReasonMembershipRequired)
+		})
+	})
+}
+
+// A key the row holds decides the account: the email and the empty list do not.
+func TestJITKnownKeyIgnoresAnEmptyList(t *testing.T) {
+	t.Run("oidc", func(t *testing.T) {
+		j := newJITHarness(t, harnessOpts{})
+		email, sub := uniqueEmail("jit-known"), "sub-"+uuid.NewString()
+		user := j.account(t, sub, email)
+		j.setAllowedDomains(t, "[]")
+		if _, failure := j.signIn(t, sub, email); failure != nil {
+			t.Fatalf("known key refused: %v", failure)
+		}
+		j.wantOneMembership(t, user, "member")
+	})
 }

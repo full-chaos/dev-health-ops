@@ -149,7 +149,7 @@ func postACSAuto(t *testing.T, store *lookupStore, members *memberSet, jit saml.
 	idp := newTestIdP(t)
 	p := saml.Provider{
 		ID: uuid.New(), OrgID: uuid.New(), Protocol: "saml", Status: "active",
-		AllowIdPInitiated: true, AutoProvision: autoProvision,
+		AllowIdPInitiated: true, AutoProvision: autoProvision, AllowedDomains: []string{"example.com"},
 		Config: saml.Config{EntityID: idp.entityID, Certificate: encodeCert(idp)},
 	}
 	sessions := &sessionsSpy{}

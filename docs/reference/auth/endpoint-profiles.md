@@ -384,10 +384,20 @@ Every `contracts/auth/v1/endpoint-profiles.*.json` carries a top-level
   so this half is what catches an inventory whose anchors changed after it was
   derived.
 
+- **Declared rewrite.** A change that rewrites the text of an anchored line on
+  purpose lists it in the optional top-level `rewritten_anchors`, one
+  `{file, line, was, now}` per anchor. For an anchor with an entry, `now` must be
+  the tree text at that line and `was` must occur exactly once in that file at
+  `source_commit`; every other anchor keeps the rule above. An entry whose tree
+  line also occurs at `source_commit` (it rewrites nothing), an entry that
+  matches no anchor, an entry listed twice and an entry that is not exactly those
+  four keys all fail, so the list is empty again at the next re-pin of
+  `source_commit`. `source_commit` is still an ancestor of `HEAD`, always.
+
 Not verified: that the anchored line is the right symbol (the rows gate in
 `internal/queryapi/server` owns that), and anchors that name another repo.
 When you move an anchor, bump `source_commit` to a commit on `main` at which
-every anchor line holds.
+every anchor line holds, and empty `rewritten_anchors`.
 
 ## Contributor guide: registering a new route or credential class
 

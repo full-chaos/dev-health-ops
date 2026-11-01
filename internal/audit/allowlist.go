@@ -40,9 +40,11 @@ var allowedAttributeKeys = map[string]struct{}{
 	"jti":          {},
 	"principal_id": {},
 	"binding_id":   {},
-	"revision":     {},
-	"audience":     {},
-	"actions":      {},
+	// The auth.workload.assertion_key_set row: the stored key row's id (the kid itself is public metadata and stays in the table).
+	"assertion_key_id": {},
+	"revision":         {},
+	"audience":         {},
+	"actions":          {},
 	// The auth.session.issued row of a workload call: the verified token's jti.
 	// A provisioning row of a workload call also names the workload principal.
 	"workload_jti":        {},
@@ -197,7 +199,7 @@ var attributeVocabulary = map[string][]string{
 	"principal_enabled": {"true"},
 	"changed_fields": {
 		"role_key", "status", "display_name", "disabled_at", "expires_at", "revoked_at", "email", "email_verified_at",
-		"scopes", "audiences", "organization_id", "allowed_actions", "binding", "invited_by", "joined_at", "owner_principal_id",
+		"scopes", "audiences", "organization_id", "allowed_actions", "binding", "assertion_key", "invited_by", "joined_at", "owner_principal_id",
 	},
 }
 
@@ -226,6 +228,7 @@ var attributeIDRules = map[string]*regexp.Regexp{
 	"principal_id":        uuidPattern,
 	"caller_principal_id": uuidPattern,
 	"binding_id":          uuidPattern,
+	"assertion_key_id":    uuidPattern,
 	"related_key_id":      regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`),
 	// run_id names one operator run (a roll's purge Job): a short slug, never free text.
 	"run_id": regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`),

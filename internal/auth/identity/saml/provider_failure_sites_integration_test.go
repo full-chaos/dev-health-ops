@@ -141,5 +141,8 @@ func TestSAMLAutoProvisionOffRecordsTheProvisioningStage(t *testing.T) {
 		t.Fatalf("err = %v, want ErrAutoProvisionDisabled", err)
 	}
 	wantRecord(t, h, "provisioning", "User not found and auto-provisioning disabled", 1)
+	if _, err := h.db.admin.Exec(context.Background(), `UPDATE public.sso_providers SET auto_provision_users = true WHERE id = $1`, h.provider.ID); err != nil {
+		t.Fatal(err)
+	}
 	signsIn(t, h)
 }

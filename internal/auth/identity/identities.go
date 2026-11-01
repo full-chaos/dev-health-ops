@@ -281,7 +281,13 @@ type ProvisionRequest struct {
 // (ErrSignupNotAvailable before). A key already linked is ErrIdentityTaken; an
 // email another principal holds is ErrEmailTaken, and nothing is linked to that
 // principal.
-func (s *Store) ProvisionFederated(ctx context.Context, req ProvisionRequest) (_ uuid.UUID, err error) {
+func (s *Store) ProvisionFederated(ctx context.Context, req ProvisionRequest) (uuid.UUID, error) {
+	return s.provisionFederated(ctx, req, nil, nil)
+}
+
+// provisionFederated is ProvisionFederated with, when join is set, the sign-in
+// join and after in its commit (ProvisionAndJoin).
+func (s *Store) provisionFederated(ctx context.Context, req ProvisionRequest, join *SSOJoin, after AfterJoin) (_ uuid.UUID, err error) {
 	defer func() { s.countLink(ctx, "provision", err) }()
 	if !s.ownsUsers {
 		return uuid.Nil, ErrSignupNotAvailable
@@ -301,6 +307,16 @@ func (s *Store) ProvisionFederated(ctx context.Context, req ProvisionRequest) (_
 	subject, target := principal.String(), linkID.String()
 	auditEvent := identityAudit("auth.principal.provisioned", "principal_provisioned", req.Key, target, subject, req.Actor)
 	auditEvent.Attributes["target_kind"], auditEvent.Attributes["target_id"] = "principal", subject
+	events := []audit.OutboxEvent{
+		principalEvent(subject, "principal.created", true), userEvent(subject, "user.created"),
+		userEvent(subject, "user.email_verified"), identityEvent("external_identity.linked", req.Key, target, subject),
+	}
+	var also []audit.AuditEvent
+	membership := uuid.New()
+	if join != nil {
+		added, activated := signInJoinRecords(membership, principal, join.OrgID, join.Role, req.Actor)
+		also, events = []audit.AuditEvent{added}, append(events, activated)
+	}
 	err = audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			if _, err := tx.Exec(ctx, `INSERT INTO `+s.q+`.principals (id, kind, display_name) VALUES ($1, 'user', $2)`,
@@ -314,18 +330,25 @@ VALUES ($1, $2, $3, clock_timestamp())`, principal, req.Email, emailLower); err 
 			if err := insertPublicUser(ctx, tx, legacy); err != nil {
 				return err
 			}
-			return s.attachIdentity(ctx, tx, linkID, req.Key, principal, true, ErrIdentityTaken, ErrIdentityTaken)
+			if err := s.attachIdentity(ctx, tx, linkID, req.Key, principal, true, ErrIdentityTaken, ErrIdentityTaken); err != nil || join == nil {
+				return err
+			}
+			err := s.insertJoinMembership(ctx, tx, membershipJoin{ID: membership, Principal: principal, OrgID: join.OrgID, Role: join.Role, SignIn: true})
+			if err != nil || after == nil {
+				return err
+			}
+			return after(ctx, tx, principal)
 		},
-		Audit: auditEvent,
-		Events: []audit.OutboxEvent{
-			principalEvent(subject, "principal.created", true), userEvent(subject, "user.created"),
-			userEvent(subject, "user.email_verified"), identityEvent("external_identity.linked", req.Key, target, subject),
-		},
+		Audit: auditEvent, Also: also, Events: events,
 	})
 	switch {
 	case err == nil:
 	case errors.Is(err, ErrLegacyProjection):
 		return uuid.Nil, ErrLegacyProjection
+	case errors.Is(err, ErrOrganizationSuspended):
+		return uuid.Nil, ErrOrganizationSuspended
+	case errors.Is(err, ErrOrganizationNotFound):
+		return uuid.Nil, ErrOrganizationNotFound
 	case isPublicSSOIdentityCollision(err):
 		return uuid.Nil, ErrIdentityTaken
 	case isEmailCollision(err), isPublicEmailCollision(err):

@@ -11,15 +11,17 @@ import (
 	"go.opentelemetry.io/otel"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/oidc"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/saml"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/ssoaudit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
 
 const (
 	opSSOSession = "sso_session"
-	ssoProvider  = "sso"
+	ssoProvider  = "oidc"
 	samlProvider = "saml"
 )
 
@@ -84,6 +86,31 @@ func (s SSOSessions) issue(ctx context.Context, principalID uuid.UUID, org *uuid
 		return ssoIssued{}, err
 	}
 	return ssoIssued{tokens: tokens, refresh: issued.Credential.Reveal(), email: user.Email, role: text, org: org}, nil
+}
+
+// LoginEvent is the audit row of a sign-in whose session a join's commit writes.
+func (s SSOSessions) LoginEvent(ctx context.Context, principalID uuid.UUID, org *uuid.UUID) audit.AuditEvent {
+	return loginSucceeded(ctx, principalID, org, ssoProvider)
+}
+
+// MintOIDC turns a session the join's commit stored into the caller's tokens. It
+// writes nothing.
+func (s SSOSessions) MintOIDC(ctx context.Context, issued session.Issued, req oidc.SessionRequest) (oidc.Tokens, error) {
+	user, found, err := s.h.Users.State(ctx, req.PrincipalID)
+	if err != nil {
+		return oidc.Tokens{}, err
+	}
+	if !found {
+		return oidc.Tokens{}, errors.New("authapi: a federated sign-in's user is not in public.users")
+	}
+	role := req.Role
+	tokens, err := s.h.Issuer.Tokens(ctx, Grant{PrincipalID: req.PrincipalID, OrganizationID: req.OrgID, Role: roleText(&role, req.OrgID != nil),
+		SessionID: issued.Session.ID, User: user})
+	if err != nil {
+		return oidc.Tokens{}, err
+	}
+	return oidc.Tokens{AccessToken: tokens.Access, RefreshToken: issued.Credential.Reveal(), ExpiresIn: int64(s.h.Issuer.ExpiresIn()),
+		SessionAccessToken: tokens.Session}, nil
 }
 
 // OIDC is the oidc.SessionIssuer.

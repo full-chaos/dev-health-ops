@@ -129,7 +129,6 @@ func TestRegisterOrganizationGrantRefusesAnUndeclaredColumnAndAnyUpdate(t *testi
 		t.Fatalf("Apply with the switch on: %v", err)
 	}
 	for name, statement := range map[string]string{
-		"organizations.description":        `INSERT INTO public.organizations (id, slug, name, description) VALUES (gen_random_uuid(), 's-1', 'n', 'x')`,
 		"organizations.stripe_customer_id": `INSERT INTO public.organizations (id, slug, name, stripe_customer_id) VALUES (gen_random_uuid(), 's-2', 'n', 'x')`,
 		"memberships.user_id update":       `UPDATE public.memberships SET user_id = user_id`,
 		"update an organization":           `UPDATE public.organizations SET name = 'z' WHERE id = gen_random_uuid()`,

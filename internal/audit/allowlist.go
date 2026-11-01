@@ -40,9 +40,11 @@ var allowedAttributeKeys = map[string]struct{}{
 	"jti":          {},
 	"principal_id": {},
 	"binding_id":   {},
-	"revision":     {},
-	"audience":     {},
-	"actions":      {},
+	// The auth.workload.assertion_key_set row: the stored key row's id (the kid itself is public metadata and stays in the table).
+	"assertion_key_id": {},
+	"revision":         {},
+	"audience":         {},
+	"actions":          {},
 	// The auth.session.issued row of a workload call: the verified token's jti.
 	// A provisioning row of a workload call also names the workload principal.
 	"workload_jti":        {},
@@ -165,7 +167,7 @@ var attributeVocabulary = map[string][]string{
 		"email_collision", "signup_unavailable", "identity_conflict",
 		"provider_already_linked", "expired", "principal_not_found", "malformed", "compromised",
 		"invite_created", "invite_accepted", "invite_revoked", "restore_fence_bootstrap",
-		"workload_enabled",
+		"workload_enabled", "service_account_owner_changed",
 	},
 	"target_kind": {
 		"principal", "organization", "membership", "role_assignment", "resource_grant", "credential",
@@ -190,14 +192,14 @@ var attributeVocabulary = map[string][]string{
 	"credential_class": {"user_access_token", "refresh_credential", "workload_token", "acr_client", "external_push", "service_account_key", "workload_bootstrap_credential"},
 	// source names who started an auth-service record: go-api-delegated is a
 	// session go-api signed the user in for and asked auth-service to issue.
-	"source": {"go-api-delegated"},
+	"source": {"go-api-delegated", "operator-cli"},
 	// amr is session.v1's closed authentication-method set.
 	"amr": {"pwd", "otp", "mfa", "hwk", "swk", "fed"},
 	// principal_enabled is present only when the principal row was enabled.
 	"principal_enabled": {"true"},
 	"changed_fields": {
 		"role_key", "status", "display_name", "disabled_at", "expires_at", "revoked_at", "email", "email_verified_at",
-		"scopes", "audiences", "organization_id", "allowed_actions", "binding", "invited_by", "joined_at",
+		"scopes", "audiences", "organization_id", "allowed_actions", "binding", "assertion_key", "invited_by", "joined_at", "owner_principal_id",
 	},
 }
 
@@ -226,6 +228,7 @@ var attributeIDRules = map[string]*regexp.Regexp{
 	"principal_id":        uuidPattern,
 	"caller_principal_id": uuidPattern,
 	"binding_id":          uuidPattern,
+	"assertion_key_id":    uuidPattern,
 	"related_key_id":      regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`),
 	// run_id names one operator run (a roll's purge Job): a short slug, never free text.
 	"run_id": regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`),

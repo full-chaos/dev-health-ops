@@ -13,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
+	"github.com/full-chaos/dev-health-ops/internal/auth/delegationend"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -135,6 +136,10 @@ func (s *Store) Grant(ctx context.Context, in GrantInput) (uuid.UUID, error) {
 	if !IsPlatformRole(in.Role) {
 		return uuid.Nil, ErrNotPlatformRole
 	}
+	if in.Role == PlatformOwner {
+		s.refuseOwner(ctx, audit.EventPlatformOwnerGrantRefused, in.Actor, in.Principal)
+		return uuid.Nil, ErrPlatformOwnerCLIOnly
+	}
 	id := uuid.New()
 	actor, subject := in.Actor.String(), in.Principal.String()
 	err := audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
@@ -200,6 +205,10 @@ func (s *Store) Revoke(ctx context.Context, in RevokeInput) error {
 	if !IsPlatformRole(in.Role) {
 		return ErrNotPlatformRole
 	}
+	if in.Role == PlatformOwner {
+		s.refuseOwner(ctx, audit.EventPlatformOwnerRevokeRefused, in.Actor, in.Principal)
+		return ErrPlatformOwnerCLIOnly
+	}
 	var target uuid.UUID
 	err := s.pool.QueryRow(ctx, `SELECT id FROM `+s.q+`.platform_role_assignments WHERE principal_id = $1 AND role_key = $2`,
 		in.Principal, in.Role).Scan(&target)
@@ -260,7 +269,10 @@ ORDER BY r.id`)
 			if admins == 0 {
 				return ErrLastPlatformAdmin
 			}
-			_, err = tx.Exec(ctx, `DELETE FROM `+s.q+`.platform_role_assignments WHERE id = $1`, target)
+			if _, err = tx.Exec(ctx, `DELETE FROM `+s.q+`.platform_role_assignments WHERE id = $1`, target); err != nil {
+				return err
+			}
+			_, err = delegationend.EndOfActor(ctx, tx, s.q, in.Principal)
 			return err
 		},
 		Audit:  roleAudit("auth.platform_role.revoked", "role_revoked", actor, subject),
@@ -443,7 +455,8 @@ ORDER BY r.principal_id, r.role_key`)
 }
 
 var refusals = []error{ErrGranterNotHeld, ErrPrincipalMissing, ErrNotHumanUser, ErrPrincipalOff,
-	ErrExpiryNotFuture, ErrAlreadyHeld, ErrNotHeld, ErrLastPlatformAdmin, ErrBootstrapAdminActive, ErrBootstrapRowChanged}
+	ErrExpiryNotFuture, ErrAlreadyHeld, ErrNotHeld, ErrLastPlatformAdmin, ErrBootstrapAdminActive, ErrBootstrapRowChanged,
+	ErrPlatformOwnerCLIOnly}
 
 // writeErr returns a refusal as itself and any other failure as ErrStore.
 func (s *Store) writeErr(ctx context.Context, op string, err error) error {

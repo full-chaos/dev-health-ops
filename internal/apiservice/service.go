@@ -398,7 +398,11 @@ func configureWith(
 	if err != nil {
 		return nil, dependencyFailure(ctx, logger, "api_auth_proxy", "api_auth_proxy_config_invalid", err)
 	}
-	deps, depComponents, err := buildDeps(ctx, cfg, registry, logger, authProxy)
+	acrProjectScope, err := ParseACRAccessProjectScope(envsecrets.ProcessLookup)
+	if err != nil {
+		return nil, dependencyFailure(ctx, logger, "api_acr_project_scope", "api_acr_project_scope_config_invalid", err)
+	}
+	deps, depComponents, err := buildDeps(ctx, cfg, registry, logger, authProxy, acrProjectScope)
 	if err != nil {
 		return nil, err
 	}
@@ -506,7 +510,7 @@ func configureWith(
 	}
 	logOrgDeletionPreflight(ctx, logger, deps.ClickHouseDSN)
 	gate := NewIntakeGate(&deps, logger)
-	server, err := NewServerWithGate(cfg, logger, Routes(deps, logger), gate, scope...)
+	server, err := newServer(cfg, logger, Routes(deps, logger), gate, deps.AuthProxy.ScopeExemptRoutes(), scope...)
 	if err != nil {
 		return nil, dependencyFailure(ctx, logger, "api_server", "api_server_config_failed", err)
 	}
@@ -595,9 +599,16 @@ func InternalRoutes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		if states, ok := deps.SessionIssuer.(sessionissue.StateReader); ok {
 			sessions = states
 		}
-		access = acr.NewPostgresAccessStore(deps.Pool,
+		store := acr.NewPostgresAccessStore(deps.Pool,
 			policy.PGStore{Pool: deps.Pool, AuthSchema: deps.AuthSchema, PlatformRolesOwned: deps.PlatformRolesOwned},
 			acr.ClickHouseRepositoryInventory{Conn: deps.ClickHouse}, sessions)
+		// project_scope (CHAOS-12224) only with ACR_ACCESS_PROJECT_SCOPE on: an
+		// acr that does not know the field refuses every answer that carries it.
+		if deps.ACRAccessProjectScope {
+			store.Projects = acr.ClickHouseProjectInventory{Conn: deps.ClickHouse}
+			logger.Info("acr principal access: project_scope on", "env", EnvACRAccessProjectScope)
+		}
+		access = store
 	}
 	counters, err := limitStore(deps)
 	if err != nil {
@@ -725,8 +736,21 @@ func NewServerWithGate(
 	gate *webhookintake.Gate,
 	scope ...func(http.Handler) http.Handler,
 ) (*httpapi.Server, error) {
+	return newServer(cfg, logger, routes, gate, nil, scope...)
+}
+
+// newServer is NewServerWithGate whose scope layers also skip the exact routes of scopeExempt
+// (AuthProxyConfig.ScopeExemptRoutes): the proxied routes auth-service authenticates.
+func newServer(
+	cfg config.Config,
+	logger *slog.Logger,
+	routes []httpapi.Route,
+	gate *webhookintake.Gate,
+	scopeExempt map[string]bool,
+	scope ...func(http.Handler) http.Handler,
+) (*httpapi.Server, error) {
 	noStore := httpapi.NewNoStoreRoutes(httpapi.AdminRoutes)
-	middleware := []func(http.Handler) http.Handler{buildinfo.Stamp(version.Current("api")), pyheaders.UnhandledErrorShape, CloseHTTP10, MarkSignatureOnly, DecodedPathRouting, noStore.Middleware}
+	middleware := []func(http.Handler) http.Handler{buildinfo.Stamp(version.Current("api")), pyheaders.UnhandledErrorShape, CloseHTTP10, markScopeExempt(scopeExempt), DecodedPathRouting, noStore.Middleware}
 	if gate != nil {
 		middleware = append(middleware, intakeGate(gate, cfg.CORSAllowedOrigins))
 	}

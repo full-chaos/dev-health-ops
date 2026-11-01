@@ -498,15 +498,17 @@ func Load(spec Spec) (Config, error) {
 			return Config{}, fmt.Errorf("%s=%s needs %s", EnvAccessTokenClass, AccessClassEdDSA, EnvTokenIssuerURL)
 		}
 		if _, ok := contracts.AccessTokenScope(cfg.Session.AccessAudience); !ok {
-			return Config{}, fmt.Errorf("%s=%s needs %s to name a user access token audience",
-				EnvAccessTokenClass, AccessClassEdDSA, EnvAccessTokenAudience)
+			return Config{}, fmt.Errorf("%s=%s needs %s to name a session token audience (%s or %s)",
+				EnvAccessTokenClass, AccessClassEdDSA, EnvAccessTokenAudience, contracts.PlatformAPIAudience, contracts.SessionRouteAudience)
 		}
 	}
-	if cfg.Session.Enabled && cfg.Session.AccessClass == AccessClassEdDSA && cfg.Session.AccessAudience != contracts.SessionRouteAudience {
-		// The session routes accept an EdDSA token of audience auth-service only: started like this every
-		// signed-in user's token would be refused at every one of them.
-		return Config{}, fmt.Errorf("%s=%s with %s=%s: the session routes accept the EdDSA access token only with audience %s; the issuer switch (CHAOS-10456) must mint that audience before this class can start",
-			EnvAccessTokenClass, AccessClassEdDSA, EnvAccessTokenAudience, cfg.Session.AccessAudience, contracts.SessionRouteAudience)
+	if cfg.Session.Enabled && cfg.Session.AccessClass == AccessClassEdDSA && cfg.Session.AccessAudience == contracts.SessionRouteAudience {
+		// Under eddsa the configured audience is the API token's, and the session routes' token of audience
+		// auth-service is minted beside it. An API token of audience auth-service would be refused at every go-api
+		// and query-api row.
+		return Config{}, fmt.Errorf("%s=%s with %s=%s: %s names the API token's audience (%s); the session-route token of audience %s is minted beside it",
+			EnvAccessTokenClass, AccessClassEdDSA, EnvAccessTokenAudience, cfg.Session.AccessAudience, EnvAccessTokenAudience,
+			contracts.PlatformAPIAudience, contracts.SessionRouteAudience)
 	}
 	if cfg.TrustedProxies, err = clientaddr.ParseTrust(valueOf(lookup, EnvTrustedProxies)); err != nil {
 		return Config{}, err
@@ -636,6 +638,16 @@ func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 			return SessionTokens{}, fmt.Errorf("%s is set but empty or has surrounding whitespace: unset it for go-api's default audience", EnvLegacyJWTAudience)
 		}
 		out.LegacyAudience = raw
+	}
+	// No auth-service token carries an ACR audience, under either class: acr-api
+	// and acr-mcp have a separate mint (ACP-ADR-13 decision 3, CHAOS-12248).
+	for _, setting := range []struct{ name, audience string }{
+		{EnvAccessTokenAudience, out.AccessAudience},
+		{EnvLegacyJWTAudience, out.LegacyAudience},
+	} {
+		if _, acr := contracts.ACRAccessTokenScope(setting.audience); acr {
+			return SessionTokens{}, fmt.Errorf("%s names an ACR audience; no auth-service token carries one (ACP-ADR-13)", setting.name)
+		}
 	}
 	access, hasAccess, err := secrets.ResolveSecret(EnvAccessTokenSecret, lookup)
 	if err != nil {

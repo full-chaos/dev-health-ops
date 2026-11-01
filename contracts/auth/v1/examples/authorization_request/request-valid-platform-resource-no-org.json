@@ -1,5 +1,5 @@
 {
-  "action": "platform.keys.rotate",
+  "action": "admin.orgs",
   "context": {
     "client_service": "dev-health-web",
     "request_id": "req_EXAMPLE0000000000000000001"

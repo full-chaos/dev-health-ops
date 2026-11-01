@@ -125,6 +125,14 @@ var showGrantsRowPattern = regexp.MustCompile(`(?i)^GRANT\s+(.+?)\s+ON\s+([^\s.]
 // legitimately names its own per-run database, and this check must be
 // correct for both without special-casing either).
 func CheckAPIClickHouseAuthorization(ctx context.Context, conn driver.Conn) error {
+	return CheckAPIClickHouseAuthorizationFor(ctx, conn, false)
+}
+
+// CheckAPIClickHouseAuthorizationFor is CheckAPIClickHouseAuthorization against
+// APIPostureFor(database, projectScope): with go-api's ACR access read project
+// scope on, the login must also hold ProjectScopeGrant, and with it off it must
+// not (the check is exact in both directions).
+func CheckAPIClickHouseAuthorizationFor(ctx context.Context, conn driver.Conn, projectScope bool) error {
 	if conn == nil {
 		return ErrUnavailable
 	}
@@ -132,7 +140,33 @@ func CheckAPIClickHouseAuthorization(ctx context.Context, conn driver.Conn) erro
 	if err := conn.QueryRow(ctx, "SELECT currentDatabase()").Scan(&database); err != nil {
 		return fmt.Errorf("clickhouse: read current database: %w", err)
 	}
-	return CheckPosture(ctx, conn, APIPosture(database))
+	return CheckPosture(ctx, conn, APIPostureFor(database, projectScope))
+}
+
+// ProjectScopeGrant is the SELECT on projects that go-api's ACR access read
+// needs for project_scope (CHAOS-12224, internal/projectinventory). It is NOT
+// in APIPosture: the project scope is behind a flag that stays off until acr
+// accepts project_scope everywhere, and the readiness check is exact, so a
+// grant that rolled before the flag would be an extra grant and refuse go-api.
+// The users.d line (and the ClickHouse Cloud GRANT) and the flag move
+// together. On bigboy that is the canonical path (CHAOS-12268): `cigate bigboy
+// render-ch-users --project-scope` renders this row after APIPosture's rows,
+// `grants-compare --project-scope` expects it, and both bigboy checks pick the
+// option from the flag in go-api's env file. testdata/api_grants_project_scope
+// .golden pins the flag-on statements. In prod, the GRANT and the values.prod
+// users.d line are the roll step of the flip.
+func ProjectScopeGrant(database string) TableGrant {
+	return TableGrant{Database: database, Table: "projects", AllowSelect: true}
+}
+
+// APIPostureFor is APIPosture, plus ProjectScopeGrant when projectScope is on.
+// With projectScope off it is exactly APIPosture.
+func APIPostureFor(database string, projectScope bool) Posture {
+	posture := APIPosture(database)
+	if projectScope {
+		posture.RequiredTables = append(posture.RequiredTables, ProjectScopeGrant(database))
+	}
+	return posture
 }
 
 // GrantStatements renders posture as the literal `GRANT ... TO <role>` SQL

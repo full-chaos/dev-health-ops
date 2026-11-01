@@ -93,6 +93,7 @@ Design docs (read the guardrails at minimum):
 | `pagerduty_webhook_signature` | active | external_source | |
 | `workload_token` | optional_feature | workload | |
 | `workload_bootstrap_credential` | optional_feature | workload | |
+| `service_account_key` | **unconsumed** | service_account | no verb and no route yet |
 
 **30 classes at the Wave 0 freeze** (31 with `effective_principal_envelope`, added by CHAOS-4737 below). 5 were not in CHAOS-3273's minimum list and were discovered
 during this inventory (`new_vs_ticket: true` in the JSON):
@@ -169,11 +170,19 @@ that ops sends to PagerDuty.
 **`user_access_token` (CHAOS-10442).** The EdDSA user access token of TRD
 section 11, the successor of `ops_access_token_hs256`. It is class 33. Its wire
 contract is `access-token.v1`: header {alg EdDSA, typ at+jwt, kid}; claims iss,
-aud (one of `dev-health-api`, `auth-service`), sub, principal_type, sid, jti,
+aud (one of `dev-health-api`, `auth-service`, `acr-api`, `acr-mcp`), sub, principal_type, sid, jti,
 iat, nbf, exp, optional org_id and scope. It carries no role, email, profile,
 superuser bit or token version: authorization is checked per request. Its
 lifetime is at most the 60 min HS256-compat ceiling. The class is
 `unconsumed`: nothing mints or verifies it yet.
+The audiences `acr-api` and `acr-mcp` (scopes `acr:api` and `acr:mcp`,
+CHAOS-12248) are ACR's: acr-api accepts `acr-api` only and acr-mcp `acr-mcp`
+only. go-api, query-api and auth-service refuse both. No ops platform token
+carries one: the session token settings (`AUTH_JWT_AUDIENCE`,
+`AUTH_LEGACY_JWT_AUDIENCE`, go-api's `JWT_AUDIENCE`), the HS256 edge-token
+verifier and signer, the envelope verifier and both minters refuse them. The
+mint that will issue them is a separate one (ACP-ADR-13), not built yet
+(CHAOS-12082 step O2).
 
 **`workload_token` (CHAOS-10782).** The EdDSA workload token of TRD section 11
 for one internal service caller. Its wire contract is `workload-token.v1`:
@@ -219,6 +228,16 @@ class is `optional_feature`. The operator creates, rotates, revokes and
 disables a credential with `auth-migrate workloads bootstrap-create`,
 `bootstrap-rotate`, `bootstrap-revoke` and `bootstrap-disable` (migration role;
 see the [bootstrap credential runbook](../../operate/runbooks/auth-workload-bootstrap-credential.md)).
+
+**`service_account_key` (CHAOS-12273).** The key of an organization's service
+account: `fcsak_` and 32 random bytes as unpadded base64url. The class exists
+in the contract and the registry CHECK; no verb mints it yet and no route
+accepts it. A key authenticates nowhere until the use leaf CHAOS-12362 lands,
+so the class is `unconsumed`. It is no bearer: go-api and the auth-service
+session issue route refuse its prefix before any validator. The registry
+(`auth.credential_registry`) keeps the SHA-256 digest of the whole value, never
+the value. Each key change is one `service_account.key_changed` provisioning
+event that names the credential row id.
 
 **`acr_browser_refresh_token` (CHAOS-12141).** The refresh token of the ACR
 first-party browser client (acr CHAOS-12124): `acrrt_` and 32 random bytes as

@@ -54,6 +54,7 @@ var goMessageForProvisioningKeyword = map[string]string{
 	"maximum":       "maximum:",
 	"type":          "type:",
 	"minItems":      "minItems:",
+	"not":           "not:",
 }
 
 func provisioningTokenFor(keyword string) (string, bool) {
@@ -77,6 +78,14 @@ var provisioningSurfaces = []provisioningSurface{
 	}},
 	{AuditEventSurface, "contracts/auth/v1/examples/audit-event", func(root string, raw []byte) error {
 		_, err := ParseAuditEvent(root, raw)
+		return err
+	}},
+	{ExternalPushLifecycleEventSurface, "contracts/auth/v1/examples/external-push-lifecycle-event", func(root string, raw []byte) error {
+		_, err := ParseExternalPushLifecycleEvent(root, raw)
+		return err
+	}},
+	{AcrCredentialLifecycleEventSurface, "contracts/auth/v1/examples/acr-credential-lifecycle-event", func(root string, raw []byte) error {
+		_, err := ParseAcrCredentialLifecycleEvent(root, raw)
 		return err
 	}},
 }

@@ -760,3 +760,11 @@ func TestReviewValidWorkloadJTIThroughProductionSessionAuditValidation(t *testin
 		t.Fatalf("the audit validation refuses the event the route builds: %v", err)
 	}
 }
+
+// A service-account key is refused by its prefix, before any header is decoded.
+func TestIssueRouteRefusesAServiceAccountKey(t *testing.T) {
+	class, reason := classifyIssueBearer("fcsak_" + strings.Repeat("Kq", 21) + "Z")
+	if class != issueClassRefused || reason != "other_credential_class" {
+		t.Fatalf("classifyIssueBearer = %v %q, want refused other_credential_class", class, reason)
+	}
+}

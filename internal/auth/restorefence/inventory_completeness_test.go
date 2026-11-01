@@ -18,9 +18,8 @@ import (
 // auth schema, or a legacy public table that carries an access state, must be a section or be listed here.
 var excluded = map[string]string{
 	// Ruled out with a ticket (D6453 am.2, D6454, D6459).
-	"auth.login_attempts":            "covered by apply from the source only (RESTORE_FENCE_SOURCE_URI; live locks, raise-only), not a manifest section: the key is an identifier hash",
-	"public.login_attempts":          "covered by apply from the source only (RESTORE_FENCE_SOURCE_URI; live locks, raise-only), not a manifest section: the key is an email",
-	"auth.platform_role_assignments": "ticket 11846 (ACP 4.15a/4.15b): a revoke is a DELETE the fence cannot see",
+	"auth.login_attempts":   "covered by apply from the source only (RESTORE_FENCE_SOURCE_URI; live locks, raise-only), not a manifest section: the key is an identifier hash",
+	"public.login_attempts": "covered by apply from the source only (RESTORE_FENCE_SOURCE_URI; live locks, raise-only), not a manifest section: the key is an email",
 	// Not access-bearing state.
 	"auth.actions":                  "not access-bearing: closed vocabulary written by the migration role",
 	"auth.roles":                    "not access-bearing: closed vocabulary written by the migration role",
@@ -35,8 +34,9 @@ var excluded = map[string]string{
 	"public.billing_plans":          "not access-bearing: billing catalogue",
 	"public.billing_prices":         "not access-bearing: billing catalogue",
 	// Follow-up 11872 (D6459 am.1).
-	"auth.policy_revisions":      "not access-bearing today: dormant, insert-only, no code reads or writes it (ADR-05/07); a reader needs a fence section (the tripwire test enforces it)",
-	"auth.entitlement_snapshots": "not access-bearing today: dormant, insert-only, no code reads or writes it (ADR-05/07); a reader needs a fence section (the tripwire test enforces it)",
+	"auth.policy_revisions":        "not access-bearing today: dormant, insert-only, no code reads or writes it (ADR-05/07); a reader needs a fence section (the tripwire test enforces it)",
+	"auth.workload_assertion_keys": "not access-bearing today: public key metadata for the operator list, no runtime reader and no runtime GRANT (CHAOS-11208); a reader needs a fence section (the tripwire test enforces it)",
+	"auth.entitlement_snapshots":   "not access-bearing today: dormant, insert-only, no code reads or writes it (ADR-05/07); a reader needs a fence section (the tripwire test enforces it)",
 }
 
 // accessStateColumns are the columns that carry an access-removing state in the legacy public schema.

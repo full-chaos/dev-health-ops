@@ -15,14 +15,17 @@
 //
 // Constants are evaluated the way the compiler evaluates them (go/constant over the AST): literals, integer and rune
 // conversions, string(...), arithmetic, shifts, len of a constant string, constants of the same package (any file of the
-// directory, grouped blocks, typed or untyped, built from other constants) or of the enclosing function. A constant of
+// directory, grouped blocks, typed or untyped, built from other constants) or of an enclosing block of the use (a constant
+// declared in a block is visible from the end of its spec to the end of that block, and the innermost one wins). A constant of
 // ANOTHER package is not loaded: a table name right behind one is refused by name as unresolved, with a dot of its own or
 // without (the constant may hold the schema and the dot).
 //
 // A PostgreSQL quoted identifier with Unicode escapes, U&"...", is refused wherever it appears: its name is not the text and
 // the gate does not decode it.
 //
-// A variable, a call or a field is not folded. In a `+` chain the constant operands around it fold into runs, and a run that
+// A call to fmt.Sprintf is folded too: its constant arguments are put into the %s, %v, %d and %q verbs, in order, and a verb
+// whose argument is not a constant (or that has a flag, a width or an index) stays as written, so the verb rule above still
+// applies to it. Any other variable, call or field is not folded. In a `+` chain the constant operands around it fold into runs, and a run that
 // begins with ".memberships" or ".organizations" (the table behind a non-constant qualifier) is a finding; so is a verb
 // right before the dot. There is no allow list: a read of those tables has no legitimate place in these packages.
 //
@@ -99,11 +102,10 @@ func Check(root string, scopes []Scope) ([]string, error) {
 		tables := packageConsts(files)
 		for _, pf := range files {
 			imports := importNames(pf.file)
+			fmtNames := importsOf(pf.file, "fmt")
 			for _, decl := range pf.file.Decls {
-				fl := &folder{pkg: tables[pf.dir], imports: imports}
-				if fd, ok := decl.(*ast.FuncDecl); ok && fd.Body != nil {
-					fl.local = declaredConsts(fd.Body)
-				}
+				fl := &folder{pkg: tables[pf.dir], imports: imports, fmtNames: fmtNames}
+				fl.locals = localConsts(decl)
 				report := func(n ast.Node, text string) {
 					for _, ref := range refsAll(text) {
 						findings = append(findings, fmt.Sprintf("%s:%d: membership-read: %s code names %s: go-api and query-api read public.memberships and public.organizations only; auth-service writes both copies in one transaction (D6358, CHAOS-10985)",
@@ -116,6 +118,16 @@ func Check(root string, scopes []Scope) ([]string, error) {
 					case *ast.BasicLit:
 						if text, ok := fl.fold(e); ok {
 							report(e, text)
+						}
+						return false
+					case *ast.CallExpr:
+						text, folded := fl.sprintf(e)
+						if !folded {
+							return true
+						}
+						report(e, text)
+						for _, arg := range e.Args[1:] {
+							ast.Inspect(arg, visit)
 						}
 						return false
 					case *ast.BinaryExpr:
@@ -248,16 +260,56 @@ func (t constTable) add(spec *ast.ValueSpec, values []ast.Expr) {
 	}
 }
 
-// declaredConsts are the constants of a function body (every const declaration inside it).
-func declaredConsts(body ast.Node) constTable {
-	table := constTable{}
-	ast.Inspect(body, func(n ast.Node) bool {
-		if gd, ok := n.(*ast.GenDecl); ok && gd.Tok == token.CONST {
-			addConstSpecs(table, gd)
+// localConst is a constant declared inside a function: visible from the end of its spec to the end of the block (a block
+// statement, or a case or comm clause) that declares it.
+type localConst struct {
+	name     string
+	expr     ast.Expr
+	from, to token.Pos // the declaring block
+	after    token.Pos // the end of the spec
+}
+
+// localConsts are the constants declared in the blocks of a top-level declaration (a function body, or a func literal in a
+// package-level variable), each with the block that scopes it.
+func localConsts(root ast.Node) []localConst {
+	var out []localConst
+	ast.Walk(constWalker{out: &out}, root)
+	return out
+}
+
+type constWalker struct {
+	out   *[]localConst
+	scope ast.Node
+}
+
+func (w constWalker) Visit(n ast.Node) ast.Visitor {
+	switch x := n.(type) {
+	case nil:
+		return nil
+	case *ast.BlockStmt, *ast.CaseClause, *ast.CommClause:
+		return constWalker{out: w.out, scope: x}
+	case *ast.GenDecl:
+		if x.Tok != token.CONST {
+			return w
 		}
-		return true
-	})
-	return table
+		if w.scope != nil {
+			var values []ast.Expr
+			for _, sp := range x.Specs {
+				vs := sp.(*ast.ValueSpec)
+				if len(vs.Values) > 0 {
+					values = vs.Values
+				}
+				for i, name := range vs.Names {
+					if name.Name == "_" || i >= len(values) {
+						continue
+					}
+					*w.out = append(*w.out, localConst{name: name.Name, expr: values[i], from: w.scope.Pos(), to: w.scope.End(), after: vs.End()})
+				}
+			}
+		}
+		return nil
+	}
+	return w
 }
 
 // addConstSpecs adds a const block: a spec with no values repeats the values of the one before it, as Go does.
@@ -307,13 +359,31 @@ func importNames(file *ast.File) map[string]bool {
 	return names
 }
 
+// importsOf are the names the file binds to the import path pkg (the package name, or its alias).
+func importsOf(file *ast.File, pkg string) map[string]bool {
+	names := map[string]bool{}
+	for _, imp := range file.Imports {
+		if p, err := strconv.Unquote(imp.Path.Value); err != nil || p != pkg {
+			continue
+		}
+		switch {
+		case imp.Name == nil:
+			names[path.Base(pkg)] = true
+		case imp.Name.Name != "_" && imp.Name.Name != ".":
+			names[imp.Name.Name] = true
+		}
+	}
+	return names
+}
+
 // folder evaluates a constant expression the way the compiler does. Not constant (ok false): a variable, a call, a field, or
 // anything else that is not a constant. A constant the gate cannot resolve folds to the unresolved marker.
 type folder struct {
-	pkg     constTable
-	local   constTable
-	imports map[string]bool
-	depth   int
+	pkg      constTable
+	locals   []localConst
+	imports  map[string]bool
+	fmtNames map[string]bool
+	depth    int
 }
 
 var unresolvedValue = constant.MakeString(unresolved)
@@ -362,8 +432,8 @@ func (f *folder) eval(e ast.Expr) (v constant.Value, ok bool) {
 	case *ast.CallExpr:
 		return f.evalCall(x)
 	case *ast.Ident:
-		table := f.table(x.Name)
-		if table == nil {
+		exprs, local, found := f.lookup(x.Name, x.Pos())
+		if !found {
 			switch x.Name {
 			case "true":
 				return constant.MakeBool(true), true
@@ -372,18 +442,20 @@ func (f *folder) eval(e ast.Expr) (v constant.Value, ok bool) {
 			}
 			return nil, false
 		}
-		exprs := table[x.Name]
 		if len(exprs) != 1 {
 			return unresolvedValue, true
 		}
-		child := &folder{pkg: f.pkg, imports: f.imports, depth: f.depth + 1}
-		if _, isLocal := f.local[x.Name]; isLocal {
-			child.local = f.local
+		// A package constant's expression sits outside every block of this function, and its positions belong to another file.
+		child := &folder{pkg: f.pkg, imports: f.imports, fmtNames: f.fmtNames, depth: f.depth + 1}
+		if local {
+			child.locals = f.locals
 		}
 		return child.eval(exprs[0])
 	case *ast.SelectorExpr:
-		if id, ok := x.X.(*ast.Ident); ok && f.imports[id.Name] && f.table(id.Name) == nil {
-			return unresolvedValue, true
+		if id, ok := x.X.(*ast.Ident); ok && f.imports[id.Name] {
+			if _, _, declared := f.lookup(id.Name, id.Pos()); !declared {
+				return unresolvedValue, true
+			}
 		}
 	}
 	return nil, false
@@ -421,7 +493,10 @@ func (f *folder) evalBinary(x *ast.BinaryExpr) (constant.Value, bool) {
 // evalCall evaluates a conversion to a basic type, or len of a constant string, when the name is the predeclared one.
 func (f *folder) evalCall(x *ast.CallExpr) (constant.Value, bool) {
 	id, isID := x.Fun.(*ast.Ident)
-	if !isID || len(x.Args) != 1 || f.table(id.Name) != nil {
+	if !isID || len(x.Args) != 1 {
+		return nil, false
+	}
+	if _, _, declared := f.lookup(id.Name, id.Pos()); declared {
 		return nil, false
 	}
 	arg, ok := f.eval(x.Args[0])
@@ -456,15 +531,93 @@ func (f *folder) evalCall(x *ast.CallExpr) (constant.Value, bool) {
 	return nil, false
 }
 
-// table is the scope that declares name: the function's constants first, then the package's; nil when neither does.
-func (f *folder) table(name string) constTable {
-	if _, ok := f.local[name]; ok {
-		return f.local
+// lookup finds the constant that name means at pos: the innermost enclosing block that declares it before pos, else the
+// package. local reports which one.
+func (f *folder) lookup(name string, pos token.Pos) (exprs []ast.Expr, local, found bool) {
+	best := -1
+	for i, c := range f.locals {
+		if c.name != name || pos < c.after || pos < c.from || pos >= c.to {
+			continue
+		}
+		if best < 0 || c.from > f.locals[best].from || (c.from == f.locals[best].from && c.after > f.locals[best].after) {
+			best = i
+		}
 	}
-	if _, ok := f.pkg[name]; ok {
-		return f.pkg
+	if best >= 0 {
+		return []ast.Expr{f.locals[best].expr}, true, true
 	}
-	return nil
+	if exprs, ok := f.pkg[name]; ok {
+		return exprs, false, true
+	}
+	return nil, false, false
+}
+
+// sprintf folds a call of fmt.Sprintf with a constant format: each constant argument replaces its %s, %v, %d or %q verb, in
+// order. A verb with a flag, a width or an index ends the substitution (the argument order is no longer known), and a verb whose
+// argument is not a constant stays as written. ok is false when the call is not that or nothing was substituted, so the format
+// literal is scanned as written.
+func (f *folder) sprintf(call *ast.CallExpr) (text string, ok bool) {
+	sel, isSel := call.Fun.(*ast.SelectorExpr)
+	if !isSel || sel.Sel.Name != "Sprintf" || len(call.Args) < 2 {
+		return "", false
+	}
+	id, isID := sel.X.(*ast.Ident)
+	if !isID || !f.fmtNames[id.Name] {
+		return "", false
+	}
+	if _, _, declared := f.lookup(id.Name, id.Pos()); declared {
+		return "", false
+	}
+	format, isConst := f.fold(call.Args[0])
+	if !isConst {
+		return "", false
+	}
+	args := call.Args[1:]
+	var out strings.Builder
+	next, substituted := 0, 0
+	for i := 0; i < len(format); i++ {
+		if format[i] != '%' {
+			out.WriteByte(format[i])
+			continue
+		}
+		if i+1 >= len(format) {
+			out.WriteByte('%')
+			break
+		}
+		verb := format[i+1]
+		if verb == '%' {
+			out.WriteByte('%')
+			i++
+			continue
+		}
+		if !strings.ContainsRune("svdq", rune(verb)) || next >= len(args) {
+			out.WriteString(format[i:])
+			break
+		}
+		i++
+		value, isValue := f.eval(args[next])
+		next++
+		rendered, usable := "", isValue
+		if usable {
+			switch {
+			case value.Kind() == constant.String && verb == 'q':
+				rendered = strconv.Quote(constant.StringVal(value))
+			case value.Kind() == constant.String && (verb == 's' || verb == 'v'):
+				rendered = constant.StringVal(value)
+			case value.Kind() == constant.Int && (verb == 'd' || verb == 'v'):
+				rendered = value.ExactString()
+			default:
+				usable = false
+			}
+		}
+		if !usable {
+			out.WriteString("%" + string(verb))
+			continue
+		}
+		out.WriteString(rendered)
+		substituted++
+	}
+	return out.String(), substituted > 0
 }
 
 // refsAll lists the references in text as written and with its SQL comments replaced by a space (a comment inside the name

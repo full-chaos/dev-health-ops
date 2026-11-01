@@ -603,7 +603,6 @@ func TestAuthProxyKeepsGoAPIFrontChecks(t *testing.T) {
 	for _, call := range []proxyCall{
 		{method: http.MethodPost, target: "/api/v1/auth/login", body: `{"email": `},
 		{method: http.MethodPost, target: "/api/v1/auth/login", body: `{"email": "not-an-email", "password": "x"}`},
-		{method: http.MethodPost, target: "/api/v1/auth/change-password", body: `{"current_password": "a", "new_password": "long-enough-1"}`},
 		{method: http.MethodGet, target: "/api/v1/auth/verify"},
 		{method: http.MethodPost, target: "/api/v1/auth/oidc/p-1/authorize", body: `{"redirect_uri": `},
 		{method: http.MethodPost, target: "/api/v1/auth/oidc/p-1/callback", body: "not-json"},

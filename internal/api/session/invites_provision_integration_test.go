@@ -23,10 +23,12 @@ import (
 // it: onCall runs during the call (while go-api waits on it), then the route
 // answers err or an accepted invite of ownedOrgD.
 type acceptRoute struct {
-	mu       sync.Mutex
-	requests []authprovision.AcceptRequest
-	onCall   func(authprovision.AcceptRequest)
-	err      error
+	mu        sync.Mutex
+	requests  []authprovision.AcceptRequest
+	onCall    func(authprovision.AcceptRequest)
+	err       error
+	onboards  []authprovision.OnboardRequest
+	onOnboard func(authprovision.OnboardRequest)
 }
 
 func (a *acceptRoute) AcceptInvite(_ context.Context, in authprovision.AcceptRequest) (authprovision.Accepted, error) {
@@ -62,6 +64,23 @@ func (a *acceptRoute) CreateInvite(context.Context, authprovision.InviteRequest)
 }
 func (a *acceptRoute) Deprovision(context.Context, uuid.UUID, uuid.UUID) error {
 	return errNotThisRoute
+}
+func (a *acceptRoute) OnboardOrganization(_ context.Context, in authprovision.OnboardRequest) (authprovision.Born, error) {
+	a.mu.Lock()
+	a.onboards = append(a.onboards, in)
+	onCall, err := a.onOnboard, a.err
+	a.mu.Unlock()
+	if onCall != nil {
+		onCall(in)
+	}
+	if err != nil {
+		return authprovision.Born{}, err
+	}
+	member := uuid.New()
+	return authprovision.Born{OrgID: uuid.MustParse(ownedOrgD), MembershipID: &member}, nil
+}
+func (a *acceptRoute) CreateOrganization(context.Context, authprovision.CreateOrganizationRequest) (authprovision.Born, error) {
+	return authprovision.Born{}, errNotThisRoute
 }
 
 // writeCounts is every go-api row an invite join writes today.
@@ -193,5 +212,90 @@ func TestInviteJoinRefusalsIssueNoSession(t *testing.T) {
 	}
 	if after := writeCounts(t, ctx, st); after != before {
 		t.Fatalf("a refused join wrote rows or issued a session: %v -> %v", before, after)
+	}
+}
+
+// With the switch on, onboard create_org asks auth-service, with no go-api
+// transaction open and no go-api row written, then issues the owner's session.
+func TestOnboardCreateOrgGoesToAuthWithTheSwitchOn(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	t.Setenv("TRUSTED_PROXIES", "127.0.0.1,::1")
+	route := &acceptRoute{}
+	st := startStackProvisioned(t, ctx, authmail.Config{}, nil, nil, route)
+	fresh := newcomer(t, ctx, st)
+	var open int
+	route.onOnboard = func(authprovision.OnboardRequest) {
+		if err := st.pool.QueryRow(context.Background(), `SELECT count(*) FROM pg_stat_activity
+WHERE datname = current_database() AND state LIKE 'idle in transaction%' AND pid <> pg_backend_pid()`).Scan(&open); err != nil {
+			t.Errorf("pg_stat_activity: %v", err)
+		}
+	}
+	var orgsBefore int
+	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM organizations`).Scan(&orgsBefore); err != nil {
+		t.Fatal(err)
+	}
+	before := writeCounts(t, ctx, st)
+	status, body := joinRequest(t, ctx, st, "/api/v1/auth/onboard", fresh, `{"action": "create_org", "org_name": "Acme Ops"}`, func() []string { return nil })
+	if status != http.StatusOK || sessionscenario.Field(body, "org_id") != ownedOrgD || sessionscenario.Field(body, "role") != "owner" ||
+		sessionscenario.Field(body, "access_token") == "" {
+		t.Fatalf("create_org: %d %s", status, body)
+	}
+	if len(route.onboards) != 1 || route.onboards[0].Name != "Acme Ops" || route.onboards[0].Description != "Organization created during onboarding" {
+		t.Fatalf("auth requests %+v", route.onboards)
+	}
+	if open != 0 {
+		t.Fatalf("go-api held %d transactions during the auth call", open)
+	}
+	var orgsAfter int
+	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM organizations`).Scan(&orgsAfter); err != nil {
+		t.Fatal(err)
+	}
+	after := writeCounts(t, ctx, st)
+	if orgsAfter != orgsBefore || after[0] != before[0] || after[2] != before[2] {
+		t.Fatalf("go-api wrote rows of its own: organizations %d -> %d, memberships/audit %v -> %v", orgsBefore, orgsAfter, before, after)
+	}
+}
+
+func TestOnboardCreateOrgRefusalAnswers(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	t.Setenv("TRUSTED_PROXIES", "127.0.0.1,::1")
+	route := &acceptRoute{err: &authprovision.Refused{Status: 409, Reason: "already_member"}}
+	st := startStackProvisioned(t, ctx, authmail.Config{}, nil, nil, route)
+	fresh := newcomer(t, ctx, st)
+	status, body := changeRequest(t, ctx, st, http.MethodPost, "/api/v1/auth/onboard", fresh, `{"action": "create_org", "org_name": "Acme Ops"}`)
+	if status != http.StatusBadRequest || body != `{"detail":{"message":"Already onboarded"}}` {
+		t.Fatalf("a raced member: %d %s", status, body)
+	}
+	route.mu.Lock()
+	route.err = authprovision.ErrUnavailable
+	route.mu.Unlock()
+	status, body = changeRequest(t, ctx, st, http.MethodPost, "/api/v1/auth/onboard", fresh, `{"action": "create_org", "org_name": "Acme Ops"}`)
+	if status != http.StatusServiceUnavailable || body != `{"detail":{"message":"Authentication service unavailable"}}` {
+		t.Fatalf("auth down: %d %s", status, body)
+	}
+	calls := len(route.onboards)
+	status, _ = changeRequest(t, ctx, st, http.MethodPost, "/api/v1/auth/onboard", fresh, `{"action": "create_org", "org_name": "   "}`)
+	if status != http.StatusUnprocessableEntity || len(route.onboards) != calls {
+		t.Fatalf("a blank name: %d, calls %d -> %d", status, calls, len(route.onboards))
+	}
+}
+
+// The switch off: go-api's own transaction writes the rows; no auth call.
+func TestOnboardCreateOrgUnchangedSwitchOff(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	t.Setenv("TRUSTED_PROXIES", "127.0.0.1,::1")
+	st := startStackProvisioned(t, ctx, authmail.Config{}, nil, nil, nil)
+	fresh := newcomer(t, ctx, st)
+	status, body := joinRequest(t, ctx, st, "/api/v1/auth/onboard", fresh, `{"action": "create_org", "org_name": "Local Ops"}`, func() []string { return nil })
+	if status != http.StatusOK || sessionscenario.Field(body, "role") != "owner" {
+		t.Fatalf("create_org: %d %s", status, body)
+	}
+	var rows int
+	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM organizations o JOIN memberships m ON m.org_id = o.id
+WHERE o.name = 'Local Ops' AND m.role = 'owner' AND o.slug LIKE 'local-ops-%'`).Scan(&rows); err != nil || rows != 1 {
+		t.Fatalf("go-api rows = %d, err %v", rows, err)
 	}
 }

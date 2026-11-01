@@ -105,8 +105,10 @@ internal/auth/contracts	contracts.go	internal/apiservice
 internal/auth/contracts	contracts.go	internal/apiservice/acr
 internal/auth/contracts	contracts.go	internal/apiservice/admin
 internal/auth/contracts	contracts.go	internal/audit
+internal/auth/contracts	contracts.go	internal/auth/acrmint
 internal/auth/contracts	contracts.go	internal/auth/authapi
 internal/auth/contracts	contracts.go	internal/auth/authconfig
+internal/auth/contracts	contracts.go	internal/auth/authorization
 internal/auth/contracts	contracts.go	internal/auth/authruntime
 internal/auth/contracts	contracts.go	internal/auth/contracts
 internal/auth/contracts	contracts.go	internal/auth/contracts/provisioning
@@ -127,12 +129,15 @@ internal/auth/contracts	contracts.go	internal/auth/org
 internal/auth/contracts	contracts.go	internal/auth/orgdeprovision
 internal/auth/contracts	contracts.go	internal/auth/passwordpolicy
 internal/auth/contracts	contracts.go	internal/auth/policycatalog
+internal/auth/contracts	contracts.go	internal/auth/pushlifecycle
 internal/auth/contracts	contracts.go	internal/auth/revisionfeed
+internal/auth/contracts	contracts.go	internal/auth/serviceaccount
 internal/auth/contracts	contracts.go	internal/auth/servicecred
 internal/auth/contracts	contracts.go	internal/auth/session
 internal/auth/contracts	contracts.go	internal/auth/usersbackfill
 internal/auth/contracts	contracts.go	internal/auth/workloadexchange
 internal/auth/contracts	contracts.go	internal/cigates/chartgates
+internal/auth/contracts	contracts.go	internal/cigates/workflows
 internal/auth/contracts	contracts.go	internal/platform/logging
 internal/auth/contracts	contracts.go	internal/queryapi/server
 internal/auth/contracts	contracts.go	internal/testsupport/usertokens
@@ -158,6 +163,7 @@ internal/auth/keystore	open_unix.go	internal/api/externalingest
 internal/auth/keystore	open_unix.go	internal/api/webhookintake
 internal/auth/keystore	open_unix.go	internal/apiservice
 internal/auth/keystore	open_unix.go	internal/apiservice/acr
+internal/auth/keystore	open_unix.go	internal/auth/acrmint
 internal/auth/keystore	open_unix.go	internal/auth/authapi
 internal/auth/keystore	open_unix.go	internal/auth/authruntime
 internal/auth/keystore	open_unix.go	internal/auth/keyrotation
@@ -202,6 +208,8 @@ internal/cigates/bigboyrender	chusers.go	cmd/cigate
 internal/cigates/bigboyrender	chusers.go	internal/cigates/bigboyrender
 internal/cigates/bigboyrender	posture.go	cmd/cigate
 internal/cigates/bigboyrender	posture.go	internal/cigates/bigboyrender
+internal/cigates/bigboyrender	projectscope.go	cmd/cigate
+internal/cigates/bigboyrender	projectscope.go	internal/cigates/bigboyrender
 internal/cigates/bigboyrender	values.go	cmd/cigate
 internal/cigates/bigboyrender	values.go	internal/cigates/bigboyrender
 internal/cigates/docsbuild	docsbuild.go	cmd/cigate
@@ -488,6 +496,7 @@ internal/platform/secrets	source.go	internal/auth/usersbackfill
 internal/platform/secrets	source.go	internal/backfillrun
 internal/platform/secrets	source.go	internal/billingcli
 internal/platform/secrets	source.go	internal/chmigrate
+internal/platform/secrets	source.go	internal/cigates/workflows
 internal/platform/secrets	source.go	internal/clicredentials
 internal/platform/secrets	source.go	internal/fixturescli
 internal/platform/secrets	source.go	internal/maintenancecli
@@ -626,6 +635,7 @@ internal/testsupport/bigboydir	bigboydir.go	internal/cigates/chpin
 internal/testsupport/bigboydir	bigboydir.go	internal/cigates/routing
 internal/testsupport/bigboydir	bigboydir.go	internal/ingressplanes
 internal/testsupport/bigboydir	bigboydir.go	internal/testsupport/bigboydir
+internal/testsupport/corpusmatrix	matrix.go	internal/testsupport/corpusmatrix
 internal/testsupport/goldenscan	tree.go	internal/testsupport/goldenscan/treegate
 internal/testsupport/goldenscan	tree.go	internal/testsupport/recordedfiles/manifest
 internal/testsupport/oraclecompare	oraclecompare.go	internal/jobs/investment/categorize/decision
@@ -641,6 +651,7 @@ internal/testsupport/recordedfiles	recordedfiles.go	internal/testsupport/recorde
 internal/testsupport/sessionscenario	quirks.go	internal/testsupport/sessionscenario
 internal/testsupport/sessionscenario	sessionscenario.go	internal/api/session
 internal/testsupport/sessionscenario	sessionscenario.go	internal/auth/identity/local
+internal/testsupport/sessionscenario	sessionscenario.go	internal/testsupport/corpusmatrix
 internal/testsupport/sessionscenario	sessionscenario.go	internal/testsupport/sessionscenario
 internal/testsupport/venueoracle	external.go	internal/apiservice/authflowvenue
 internal/testsupport/venueoracle	external.go	internal/testsupport/venueoracle
@@ -811,6 +822,7 @@ internal/testsupport/venueoracle	golden_walk.go	internal/syncbudget
 internal/testsupport/venueoracle	golden_walk.go	internal/synccli
 internal/testsupport/venueoracle	golden_walk.go	internal/synccoverage
 internal/testsupport/venueoracle	golden_walk.go	internal/syncdispatchruntime
+internal/testsupport/venueoracle	golden_walk.go	internal/testsupport/corpusmatrix
 internal/testsupport/venueoracle	golden_walk.go	internal/testsupport/programoracle
 internal/testsupport/venueoracle	golden_walk.go	internal/testsupport/sessionscenario
 internal/testsupport/venueoracle	golden_walk.go	internal/testsupport/venueoracle
@@ -920,6 +932,7 @@ internal/testsupport/venueoracle	opened.go	internal/syncbudget
 internal/testsupport/venueoracle	opened.go	internal/synccli
 internal/testsupport/venueoracle	opened.go	internal/synccoverage
 internal/testsupport/venueoracle	opened.go	internal/syncdispatchruntime
+internal/testsupport/venueoracle	opened.go	internal/testsupport/corpusmatrix
 internal/testsupport/venueoracle	opened.go	internal/testsupport/programoracle
 internal/testsupport/venueoracle	opened.go	internal/testsupport/sessionscenario
 internal/testsupport/venueoracle	opened.go	internal/testsupport/venueoracle

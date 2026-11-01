@@ -106,7 +106,7 @@ func TestALockoutSourceErrorCarriesNoKey(t *testing.T) {
 
 // The new section is the only change of the section set: every other section exports what version 4 held.
 func TestEveryOtherSectionExportsWhatVersionFourHeld(t *testing.T) {
-	if got := sectionSetDigest(t, identitySection); got != pinnedSectionSet[4] {
+	if got := sectionSetDigest(t, identitySection, platformRoleSection); got != pinnedSectionSet[4] {
 		t.Errorf("a section other than auth.external_identities changed its export (digest %s, version 4 pinned %s)", got, pinnedSectionSet[4])
 	}
 }

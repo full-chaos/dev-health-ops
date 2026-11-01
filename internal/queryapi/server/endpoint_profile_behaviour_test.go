@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/ed25519"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -40,6 +41,8 @@ type behaviourStack struct {
 	edge     string
 	user     string
 	reader   *accessReader
+	priv     ed25519.PrivateKey
+	seen     *[]authctx.Claims
 }
 
 // newBehaviourStack is the stack with the access-token issuer set: the edge
@@ -56,6 +59,12 @@ func newBehaviourStack(t *testing.T) *behaviourStack {
 // /query and /graphql authenticator routed by row when keys is set.
 func newAccessStack(t *testing.T, base *accessStore, setup *accessSetup, legacyOn bool) *behaviourStack {
 	t.Helper()
+	return newAccessStackOn(t, newQueryAPIUserStoreFrom(base), setup, legacyOn)
+}
+
+// newAccessStackOn is newAccessStack over a users store the caller wraps.
+func newAccessStackOn(t *testing.T, store queryAPIUserStore, setup *accessSetup, legacyOn bool) *behaviourStack {
+	t.Helper()
 	getenv := getenvFunc(func(name string) string {
 		switch name {
 		case deploymentEnvEnv:
@@ -66,7 +75,6 @@ func newAccessStack(t *testing.T, base *accessStore, setup *accessSetup, legacyO
 		return ""
 	})
 	verifier, priv := iaVerifier(t)
-	store := newQueryAPIUserStoreFrom(base)
 	auth := ecEdgeAuth(t, store)
 	var reader *accessReader
 	if setup != nil {
@@ -76,8 +84,10 @@ func newAccessStack(t *testing.T, base *accessStore, setup *accessSetup, legacyO
 		}
 	}
 	mux := routeswitch.NewMux(routeswitch.StaticSwitch{"probe": true})
+	seen := &[]authctx.Claims{}
 	mux.Register("probe", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = authctx.FromContext(r.Context())
+		claims, _ := authctx.FromContext(r.Context())
+		*seen = append(*seen, claims)
 		w.WriteHeader(http.StatusOK)
 	}))
 	query := newDocumentDispatchHandler(getenv, mux, map[string]string{digestHex(iaDocument): "probe"}, verifier, auth, store, "", nil)
@@ -115,6 +125,8 @@ func newAccessStack(t *testing.T, base *accessStore, setup *accessSetup, legacyO
 		envelope: iaEnvelope(t, priv, principal.Claims{OrgID: ecOrg.String(), Role: "admin"}),
 		edge:     ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", tokenVersion: 5}),
 		reader:   reader,
+		priv:     priv,
+		seen:     seen,
 	}
 }
 
@@ -127,6 +139,11 @@ func (s *behaviourStack) do(listener, method, path, carrier string) int {
 // send is do with the answer's body; bearer, when set, is the Authorization
 // bearer instead of the carrier's.
 func (s *behaviourStack) send(listener, method, path, carrier, bearer string) answer {
+	return s.sendWith(listener, method, path, carrier, bearer, nil)
+}
+
+// sendWith is send with extra request headers.
+func (s *behaviourStack) sendWith(listener, method, path, carrier, bearer string, headers map[string]string) answer {
 	var request *http.Request
 	switch {
 	case path == "/graphql" && (method == http.MethodGet || method == http.MethodHead):
@@ -152,6 +169,9 @@ func (s *behaviourStack) send(listener, method, path, carrier, bearer string) an
 	}
 	if bearer != "" {
 		request.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	for name, value := range headers {
+		request.Header.Set(name, value)
 	}
 	recorder := httptest.NewRecorder()
 	s.handlers[listener].ServeHTTP(recorder, request)

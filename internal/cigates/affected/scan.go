@@ -232,13 +232,22 @@ func ScanReads(root string) ([]Read, error) {
 	}
 	module := modulePath(root)
 	programs := execProgramDirs(byDir, module)
+	world := map[string]*dirGroup{}
 	for _, d := range dirs {
-		g := newDirGroup(d, module, byDir[d])
+		world[d] = newDirGroup(d, module, byDir[d])
+		world[d].world = world
+	}
+	for _, d := range dirs {
+		g := world[d]
+		g.underProgram = programs[d]
+		g.prebind()
 		flow := newFlowGroup(byDir[d])
+		flow.execInTemp = g.execInTemp
+		flow.exprInTemp = g.exprInTemp
+		flow.modulePure = g.modulePure
 		for _, s := range byDir[d] {
 			reads = append(reads, scanFile(s.fset, s.file, s.rel, top, g.chdir, flow)...)
 		}
-		g.underProgram = programs[d]
 		reads = append(reads, g.analyze()...)
 	}
 	out := reads
@@ -340,7 +349,10 @@ func scanFile(fset *token.FileSet, f *ast.File, rel string, top map[string]bool,
 		name := callName(call.Fun)
 		join := name == "filepath.Join" || name == "path.Join"
 		if join {
-			joinLiterals(call, top, consumed, add)
+			joinLiterals(call, top, consumed, add, func(e ast.Expr) bool {
+				sf := flow.fileOf[f]
+				return flow.exprInTemp != nil && sf != nil && flow.exprInTemp(sf, e)
+			})
 		}
 		for _, a := range call.Args {
 			lit := strLit(a)
@@ -611,6 +623,7 @@ func PlanReads(args []string, stdout, stderr io.Writer) int {
 	checkCallGraph := fs.Bool("reach", false, "also recompute reach.tsv from the call graph (go/packages, SSA, RTA) and fail on any difference")
 	reachCache := fs.String("reach-cache", "", "with --reach: directory of a reach store; reuse the rows stored for an identical input hash, store them after a green computed run")
 	reachFresh := fs.Bool("reach-cache-fresh", false, "with --reach-cache: never read the store; compute, and store a green result (merge queue and main pushes)")
+	listSpreads := fs.Bool("list-unresolved-spreads", false, "print file:line of every exec whose spread arguments the scan cannot resolve, and exit")
 	printKey := fs.Bool("print-reach-key", false, "print the input hash of the call graph and exit")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -642,6 +655,19 @@ func PlanReads(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
+	}
+	if *listSpreads {
+		var sites []string
+		for _, r := range reads {
+			if r.Kind == ReadEdge && strings.HasSuffix(r.Literal, unresolvedSpreadLiteral) {
+				sites = append(sites, fmt.Sprintf("%s:%d", r.File, r.Line))
+			}
+		}
+		sort.Strings(sites)
+		for _, s := range sites {
+			fmt.Fprintln(stdout, s)
+		}
+		return 0
 	}
 	if *write {
 		if err := writeGenerated(dir, reads); err != nil {
@@ -783,12 +809,17 @@ func sortedKeys[V any](m map[string]V) []string {
 
 // joinLiterals reads a Join whose string-literal arguments, from one naming a first-level entry on, spell one path:
 // filepath.Join(root, "docs", "a.md") reads docs/a.md.
-func joinLiterals(call *ast.CallExpr, top map[string]bool, consumed map[*ast.BasicLit]bool, add func(token.Pos, string, string)) {
+func joinLiterals(call *ast.CallExpr, top map[string]bool, consumed map[*ast.BasicLit]bool, add func(token.Pos, string, string), inTemp func(ast.Expr) bool) {
 	var parts []string
 	var lits []*ast.BasicLit
 	var base ast.Expr // the argument before the literals, nil when they lead
 	flush := func() {
-		if len(parts) > 0 {
+		if len(parts) > 0 && base != nil && inTemp(base) {
+			// the parts name files of a temp directory
+			for _, l := range lits {
+				consumed[l] = true
+			}
+		} else if len(parts) > 0 {
 			p := normalizeRepoPath(path.Join(parts...))
 			// One bare name joined to a base that names no root (filepath.Join(ContractsDir(root), "README.md")) is a
 			// file of that base, not of the repository root: dynreads.go places it, or records it unbounded.

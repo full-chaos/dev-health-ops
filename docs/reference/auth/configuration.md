@@ -9,6 +9,7 @@ source_of_truth:
   - internal/platform/secrets/source.go
   - internal/auth/keystore/keystore.go
   - cmd/auth-migrate/main.go
+  - internal/auth/authconfig/workload.go
 applicability: current
 lifecycle: active
 ---
@@ -60,8 +61,8 @@ and `/readyz` fails closed, naming the check. See the
 | (none, secret) | `AUTH_JWT_SECRET_KEY` or `AUTH_JWT_SECRET_KEY_FILE` | unset | HS256 key of the compatibility access token: the same value as go-api's `JWT_SECRET_KEY`, at least 32 characters. Set together with `AUTH_SESSION_SUCCESSOR_KEY`; with neither, no session route is mounted; with one, startup fails. |
 | (none, secret) | `AUTH_SESSION_SUCCESSOR_KEY` or `AUTH_SESSION_SUCCESSOR_KEY_FILE` | unset | 32 bytes, base64url without padding. Derives the rotated refresh credential that a 30 s grace replay returns again. |
 | `--jwt-issuer` | `AUTH_JWT_ISSUER` | `dev-health-ops` | `iss` of the access token; must equal go-api's `JWT_ISSUER`. |
-| `--jwt-audience` | `AUTH_JWT_AUDIENCE` | `dev-health-api` | `aud` of the access token; must equal go-api's `JWT_AUDIENCE`. |
-| (none) | `AUTH_LEGACY_JWT_AUDIENCE` | `dev-health-api` | `aud` that the `eddsa` class checks go-api's HS256 compatibility access token with; must equal go-api's `JWT_AUDIENCE` before the eddsa flip. Set but empty is refused at start. The `hs256_compat` class ignores it and uses `AUTH_JWT_AUDIENCE`. |
+| `--jwt-audience` | `AUTH_JWT_AUDIENCE` | `dev-health-api` | `aud` of the access token; must equal go-api's `JWT_AUDIENCE`. The ACR audiences `acr-api` and `acr-mcp` are refused at start, under either class. |
+| (none) | `AUTH_LEGACY_JWT_AUDIENCE` | `dev-health-api` | `aud` that the `eddsa` class checks go-api's HS256 compatibility access token with; must equal go-api's `JWT_AUDIENCE` before the eddsa flip. Set but empty is refused at start, and so are `acr-api` and `acr-mcp`. The `hs256_compat` class ignores it and uses `AUTH_JWT_AUDIENCE`. |
 | (none, secret) | `AUTH_VALKEY_URI` or `AUTH_VALKEY_URI_FILE` | unset | `redis://` or `rediss://` URI on database 1 (path `/1`) of the shared rate-limit store. Required, and refused at startup when absent, while the session routes are mounted (they carry the compatibility refresh limit, and the login, credential and social link limits); with the session routes off it is checked for shape only and never dialled. Nothing dials at startup: an unreachable store fails the `valkey` readiness check and answers the limited routes with a 500. |
 | `--orgs-owned` | `AUTH_ORGS_OWNED` | `false` | `true` makes auth-service the only writer of organizations: the sign-in organization projection then reads no public table and writes nothing, and an organization missing from `auth.organizations` answers not found. Mounts no route. Turn it on only after the organization backfill is complete; once it is `true`, `dho auth orgs-backfill` refuses (exit 3, dry run included) before it connects to any database. Any other value than `true` or `false` fails startup. |
 | `--revision-feed` | `AUTH_REVISION_FEED` | `off` | `on` gives the auth outbox publisher a Valkey sink (one Lua call: high-water revision hash plus a publish) and subscribes this replica to the revision feed channel; `off` keeps publishing disabled, exactly as before. Needs `AUTH_VALKEY_URI` (startup is refused without it) and the ACL rule above, which carries the feed's channel and commands. Mounts no route. Only `on` and `off` are values. See `docs/contribute/architecture/auth-control-plane-audit-outbox.md`. |
@@ -69,7 +70,7 @@ and `/readyz` fails closed, naming the check. See the
 | `--membership-routes` | `AUTH_MEMBERSHIP_ROUTES` | `false` | `true` mounts the internal membership, invite and organization deprovision routes (see [provisioning routes](#provisioning-routes)); any other value than `true` or `false` fails startup, and `true` needs the session secrets and both invite keys. |
 | (none, secret) | `AUTH_INVITE_TOKEN_SECRET` or `AUTH_INVITE_TOKEN_SECRET_FILE` | unset | Signing key of new invite tokens: go-api's link signing key (`LINK_TOKEN_SECRET`, else its `JWT_SECRET_KEY` chain), so a token either side minted is accepted by both. Required while `AUTH_MEMBERSHIP_ROUTES` is `true`; startup names the missing variable only. |
 | (none, secret) | `AUTH_INVITE_TOKEN_SECRET_PREVIOUS` or `AUTH_INVITE_TOKEN_SECRET_PREVIOUS_FILE` | unset | Retired invite key: accepted, never used to sign (go-api's `LINK_TOKEN_SECRET_PREVIOUS`). Required while `AUTH_MEMBERSHIP_ROUTES` is `true`; with no retired key, set it to the signing key. A token is checked against the signing key, this key, then `AUTH_JWT_SECRET_KEY`, as go-api checks its links. |
-| (none) | `AUTH_ACCESS_TOKEN_CLASS` | `hs256_compat` | The one class of access token this service mints: `hs256_compat` or `eddsa` (exact match; any other value fails startup). `eddsa` needs `AUTH_TOKEN_ISSUER_URL` (the `iss`, byte for byte), a signing key, and `AUTH_JWT_AUDIENCE` of `dev-health-api` or `auth-service`; tokens last 60 minutes and carry the access-token.v1 claims only. The session routes still verify HS256 tokens only. |
+| (none) | `AUTH_ACCESS_TOKEN_CLASS` | `hs256_compat` | The one class of access token this service mints: `hs256_compat` or `eddsa` (exact match; any other value fails startup). `eddsa` needs `AUTH_TOKEN_ISSUER_URL` (the `iss`, byte for byte) and a signing key; `AUTH_JWT_AUDIENCE` is the access token's audience (`dev-health-api`). Each sign-in, refresh and issue answer also carries `session_access_token`, the token of audience `auth-service` the session routes accept. Tokens last 60 minutes and carry the access-token.v1 claims only. |
 | `--version` | | | Prints build metadata as JSON. |
 | `--healthcheck` | | | Probes this deployment's own operator `/readyz` over loopback; exit 0 only on HTTP 200. For container healthchecks. |
 
@@ -81,7 +82,7 @@ The session, social link and change-password routes read their bearer through th
 
 A password change issues the caller's new session in the organization of the session it replaces only while the caller is still a member of that organization; if the membership is gone, the new session has no organization, as in go-api.
 
-The session routes accept the EdDSA token with audience `auth-service` only. While the session routes are mounted, the service therefore refuses to start with the eddsa access token class unless `AUTH_JWT_AUDIENCE` is `auth-service`; the chart renders `dev-health-api` for that class, so the class stays off until the issuer switch mints the session route audience. Under that class the HS256 compatibility access token is checked with `AUTH_LEGACY_JWT_AUDIENCE` (go-api's `JWT_AUDIENCE`, `dev-health-api` when unset), not with `AUTH_JWT_AUDIENCE`.
+The session routes accept the EdDSA token with audience `auth-service` only, and go-api and query-api one with audience `dev-health-api` only. Under the eddsa class the service therefore mints both for one session: `access_token` (audience `AUTH_JWT_AUDIENCE`, `dev-health-api`) and `session_access_token` (audience `auth-service`), same sid and lifetime; each token's signing kid is recorded on the session (a key rotation between the two signs can give them different kids, both published). `/v1/token/refresh` answers `refresh-response.v2`; go-api's wire answers (login, refresh, social, SSO, change-password, and go-api's own sign-ins through the issue route) add `session_access_token` as their last member. With the session routes mounted the service refuses to start with the eddsa class and `AUTH_JWT_AUDIENCE=auth-service`, which every go-api and query-api row would refuse. A client sends `session_access_token` as the bearer of the session routes, `/api/v1/auth/change-password` and the social link routes. Under that class the HS256 compatibility access token is checked with `AUTH_LEGACY_JWT_AUDIENCE` (go-api's `JWT_AUDIENCE`, `dev-health-api` when unset), not with `AUTH_JWT_AUDIENCE`.
 
 ### Rate limits
 
@@ -121,6 +122,9 @@ With `AUTH_MEMBERSHIP_ROUTES=true`, auth-service serves the membership, invite a
 - A write's refusals are named `error.v1` reason codes (for example 409 `last_owner`, `organization_suspended`, `already_member`, 404 `membership_not_found`, 400 `invite_invalid` for every unusable token); a store failure is a 503.
 - `organizations/deprovision` revokes every pending invite, removes every live membership (both tables each) and suspends the organization in one commit with one `auth.organization.deprovisioned` audit row; a repeat is a no-op. Afterwards the membership and invite writes of that organization refuse.
 - `invites/revoke` ends one pending invite: the body is `organization_id`, `invite_id` and `actor_principal_id`. The actor rule (an active superuser, or an owner or admin member) runs before the invite is read, so a refused actor gets the same 403 for an existing and an unknown invite. The rule runs again under the revoke's locks (the actor's and the inviter's rows, then the organization row). The answers: 200 `{invite_id, status: "revoked"}`, also for a repeat, which writes no second audit row; 404 `invite_not_found`; 409 `invite_not_pending` for an accepted or expired invite (the expiry is checked against the clock read after the invite row lock). A revoke writes no go-api `audit_logs` row.
+- `organizations/onboard` and `organizations/create` are not mounted until the embedded endpoint-profile document holds their rows.
+- `organizations/onboard` creates a user's first organization. The body is `{"principal_id", "organization_name", "description", "request_metadata"}`; it takes no slug, tier or settings. One commit writes the organization and the owner membership in both schemas and go-api's `audit_logs` row. A principal with a membership gets 409 `already_member`, a disabled one 403 `principal_deactivated`, under the principal row lock. A taken slug gets one 8 hex suffix.
+- `organizations/create` creates an organization for a superuser. The body is `{"actor_principal_id", "organization_name", "slug", "tier", "managed_by"}` and an optional `organization_description`, `settings` and `owner_principal_id`. The actor rule runs before any read and again under the verb's locks. One commit writes the organization and, when named, its owner, in both schemas.
 - `organizations/reactivate` has its row like the other routes. It ends an organization's suspension (a deprovision's included): the body is `{"organization_id", "actor_principal_id"}`, the actor must be an active superuser (read through the users seam, before anything else and again under the organization row lock), and the answer is `{"organization_id", "status": "active", "reactivated"}`. An organization that is not suspended answers 200 with `reactivated` false and writes nothing. A reactivation writes one `auth.organization.reactivated` audit row naming the actor, the `organization.reactivated` event and the revision, in one commit. It does not restore the memberships and invites a deprovision ended. A suspension in the auth schema ends only by this route: go-api's own `is_active` flows into the schema as a suspension, never as a reactivation.
 - `organizations/state` has its row. It answers `{"organization_id", "status", "revision"}` for the organization named by the body `{"organization_id"}`, the status and the revision read in one statement; go-api's `is_active` PATCH sends that revision as `if_revision` to suspend and reactivate, and a stale one answers 409 `state_changed` and writes nothing. It takes the session issuer service credential or the go-api workload token (admitted as the other provisioning routes are), reads no actor and writes no audit row; an unknown organization is 404 `organization_not_found` and a store fault 503 `store_unavailable`.
 - `organizations/suspend` mirrors reactivate: the body is `{"organization_id", "actor_principal_id"}`, the actor must be an active superuser (read through the users seam before anything else and again under the organization row lock), and the answer is `{"organization_id", "status": "suspended", "suspended"}`; an organization that is already suspended answers 200 with `suspended` false and writes nothing. It writes one `auth.organization.suspended` audit row naming the actor, the `organization.suspended` event and the revision in one commit. An actor with no `auth.principals` row, or any fault of the store, answers the fail-closed 503 `store_unavailable`.
@@ -137,7 +141,32 @@ With `AUTH_MEMBERSHIP_ROUTES=true`, auth-service serves the membership, invite a
   | `AUTH_WORKLOAD_BOOTSTRAP_FILE` | `workload` only: path of the workload bootstrap credential file (Compose). |
   | `AUTH_WORKLOAD_ISSUER` | `workload` only, required: auth-service's token issuer URL (`AUTH_TOKEN_ISSUER_URL`, https); every workload token must carry it. |
 
-  The exchange goes to the origin of `AUTH_PROXY_URL` (`POST /internal/v1/token/exchange`, which auth-service mounts only with `AUTH_WORKLOAD_EXCHANGE=true`); the subject file is read again for every exchange, and one exchange serves all the clients that selected `workload` (the provisioning clients and the session issue client). `workload` with a missing or invalid input is a start-up error naming it. A failed exchange fails that call (503) with no request to the provisioning routes; there is no fallback to `svc_authsess_`. The suspend route accepts the workload token only once its endpoint-profile row lists it.
+  The exchange goes to the origin of `AUTH_PROXY_URL` (`POST /internal/v1/token/exchange`, which auth-service mounts only while `AUTH_WORKLOAD_EXCHANGE` or `AUTH_WORKLOAD_BOOTSTRAP` is `true`; see [workload-token exchange](#workload-token-exchange)); the subject file is read again for every exchange, and one exchange serves all the clients that selected `workload` (the provisioning clients and the session issue client). `workload` with a missing or invalid input is a start-up error naming it. A failed exchange fails that call (503) with no request to the provisioning routes; there is no fallback to `svc_authsess_`. The suspend route accepts the workload token only once its endpoint-profile row lists it.
+
+### Workload token exchange
+
+The route `POST /internal/v1/token/exchange` is internal: go-api never forwards it. It is mounted while
+`AUTH_WORKLOAD_EXCHANGE` or `AUTH_WORKLOAD_BOOTSTRAP` is `true`, and each switch turns on one subject. Both need
+`AUTH_TOKEN_ISSUER_URL` (the `iss` of the workload tokens it signs). Any other value than `true` or `false` fails
+startup. The values are not secrets: a path names a file, and the files hold the secrets.
+
+| Environment | Default | Rule |
+| --- | --- | --- |
+| `AUTH_WORKLOAD_EXCHANGE` | `false` | `true` turns on the Kubernetes subject: a projected ServiceAccount token, reviewed by the cluster API server (TokenReview). Needs the five settings below. |
+| `AUTH_WORKLOAD_TRUST_DOMAIN` | unset | Required with the Kubernetes subject. Non-empty, at most 253 bytes, no surrounding whitespace. Names this cluster in the workload bindings. |
+| `AUTH_WORKLOAD_EXCHANGE_CLUSTER_ISSUER` | unset | Required with the Kubernetes subject. At most 512 bytes, no surrounding whitespace. The `iss` of the cluster's ServiceAccount tokens; a binding's `-issuer` must equal it. |
+| `AUTH_WORKLOAD_EXCHANGE_KUBE_API_URL` | unset | Required with the Kubernetes subject. An https origin: `https://host[:port]`, no path, query, fragment or credentials. |
+| `AUTH_WORKLOAD_EXCHANGE_KUBE_CA_FILE` | unset | Required with the Kubernetes subject. Absolute, clean path of the PEM bundle that the API server certificate must chain to. No other root is trusted. |
+| `AUTH_WORKLOAD_EXCHANGE_REVIEWER_TOKEN_FILE` | unset | Required with the Kubernetes subject. Absolute, clean path of auth-service's own token, which may create `tokenreviews`. Read again on every review (at most 16 KiB). |
+| `AUTH_WORKLOAD_BOOTSTRAP` | `false` | `true` turns on the Compose bootstrap credential subject. It reads no other setting. |
+
+A missing or malformed value stops auth-service at start (exit 1) with a message that names the variable and never
+its value. The chart renders the Kubernetes settings from `authService.workloadExchange` (see the
+[Kubernetes federation runbook](../../operate/runbooks/auth-workload-kubernetes-federation.md)); with the
+Compose profile the bootstrap subject is set up by the
+[bootstrap credential runbook](../../operate/runbooks/auth-workload-bootstrap-credential.md). The registry the
+exchange reads is in the [workload registry](workload-registry.md). The reasons that a refused exchange logs are in
+[Troubleshooting by reason](../../operate/runbooks/auth-workload-kubernetes-federation.md#troubleshooting-by-reason).
 
 ## auth-migrate
 
@@ -204,3 +233,4 @@ warning per attempt. See
 - `internal/platform/secrets/source.go`: `Resolve` (mutual exclusion, newline trim, error wording).
 - `internal/auth/authruntime/runtime.go`: `--version`, `--healthcheck`.
 - `cmd/auth-migrate/main.go`: environment names, `--check`, `runBudget`.
+- `internal/auth/authconfig/workload.go`: `workloadExchange` (the exchange settings, defaults and bounds), `HTTPSOrigin`.

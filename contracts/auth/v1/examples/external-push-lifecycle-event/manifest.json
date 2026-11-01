@@ -1,0 +1,185 @@
+{
+  "description": "Golden corpus for external-push-lifecycle-event.v1; the single inventory read by the Go and ajv runners. reject_by_client documents are schema-valid and refused by ParseExternalPushLifecycleEvent on the raw token or by a rule a schema cannot state.",
+  "accept": [
+    {
+      "file": "valid-created.json",
+      "why": "The fullest shape: every optional member present."
+    },
+    {
+      "file": "valid-created-minimal.json",
+      "why": "No expiry and no optional envelope members."
+    },
+    {
+      "file": "valid-scoped-narrowed.json",
+      "why": "A later event narrows the scope set."
+    },
+    {
+      "file": "valid-scoped-to-none.json",
+      "why": "Scopes may narrow to the empty set after creation."
+    },
+    {
+      "file": "valid-rotated.json",
+      "why": "A rotation opens a NEW aggregate at revision 1 and names the credential it replaces."
+    },
+    {
+      "file": "valid-revoked.json",
+      "why": "Terminal. No reason member: the reason code stays in the registry and the audit trail."
+    },
+    {
+      "file": "valid-expired.json",
+      "why": "Terminal. Names the instant it expired."
+    },
+    {
+      "file": "valid-revision-at-maximum.json",
+      "why": "The largest revision a float64 producer can hold."
+    }
+  ],
+  "reject": [
+    {
+      "file": "invalid-top-level-unknown-member.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "Closed envelope."
+    },
+    {
+      "file": "invalid-change-secret-hash.json",
+      "expect_instance_location": "/payload/change",
+      "expect_keyword": "additionalProperties",
+      "why": "A verifier has no member."
+    },
+    {
+      "file": "invalid-change-token.json",
+      "expect_instance_location": "/payload/change",
+      "expect_keyword": "additionalProperties",
+      "why": "A token has no member."
+    },
+    {
+      "file": "invalid-payload-token-hash.json",
+      "expect_instance_location": "/payload",
+      "expect_keyword": "additionalProperties",
+      "why": "Closed payload."
+    },
+    {
+      "file": "invalid-created-at-revision-2.json",
+      "expect_instance_location": "/payload/revision",
+      "expect_keyword": "const",
+      "why": "created opens an aggregate: revision 1 only."
+    },
+    {
+      "file": "invalid-rotated-at-revision-2.json",
+      "expect_instance_location": "/payload/revision",
+      "expect_keyword": "const",
+      "why": "rotated opens an aggregate: revision 1 only."
+    },
+    {
+      "file": "invalid-revoked-at-revision-1.json",
+      "expect_instance_location": "/payload/revision",
+      "expect_keyword": "minimum",
+      "why": "A terminal event follows an opening event."
+    },
+    {
+      "file": "invalid-created-fingerprint-uppercase.json",
+      "expect_instance_location": "/payload/change/fingerprint",
+      "expect_keyword": "pattern",
+      "why": "Fingerprint is lowercase hex."
+    },
+    {
+      "file": "invalid-created-fingerprint-absent.json",
+      "expect_instance_location": "/payload/change",
+      "expect_keyword": "required",
+      "why": "A new credential carries its fingerprint."
+    },
+    {
+      "file": "invalid-created-fingerprint-full-digest.json",
+      "expect_instance_location": "/payload/change/fingerprint",
+      "expect_keyword": "pattern",
+      "why": "A 64-hex digest is not a fingerprint."
+    },
+    {
+      "file": "invalid-created-scopes-empty.json",
+      "expect_instance_location": "/payload/change/scopes",
+      "expect_keyword": "minItems",
+      "why": "A new credential carries at least one scope."
+    },
+    {
+      "file": "invalid-scoped-duplicate-scope.json",
+      "expect_instance_location": "/payload/change/scopes",
+      "expect_keyword": "uniqueItems",
+      "why": "Scopes are a set."
+    },
+    {
+      "file": "invalid-scoped-bad-scope-shape.json",
+      "expect_instance_location": "/payload/change/scopes/0",
+      "expect_keyword": "pattern",
+      "why": "Scope names have the principal.v1 shape."
+    },
+    {
+      "file": "invalid-rotated-parent-absent.json",
+      "expect_instance_location": "/payload/change",
+      "expect_keyword": "required",
+      "why": "A rotation names its parent."
+    },
+    {
+      "file": "invalid-revoked-status-active.json",
+      "expect_instance_location": "/payload/change/status",
+      "expect_keyword": "const",
+      "why": "revoked says revoked."
+    },
+    {
+      "file": "invalid-expired-expiry-absent.json",
+      "expect_instance_location": "/payload/change",
+      "expect_keyword": "required",
+      "why": "expired names the instant."
+    },
+    {
+      "file": "invalid-aggregate-type-other.json",
+      "expect_instance_location": "/aggregate_type",
+      "expect_keyword": "const",
+      "why": "Only the push credential aggregate."
+    },
+    {
+      "file": "invalid-event-type-unknown-verb.json",
+      "expect_instance_location": "/event_type",
+      "expect_keyword": "enum",
+      "why": "Closed verbs."
+    },
+    {
+      "file": "invalid-organization-id-absent.json",
+      "expect_instance_location": "/payload",
+      "expect_keyword": "required",
+      "why": "Every event names its tenant."
+    },
+    {
+      "file": "invalid-source-id-shape.json",
+      "expect_instance_location": "/payload/source_id",
+      "expect_keyword": "pattern",
+      "why": "Ids are url-safe base64 characters only."
+    }
+  ],
+  "reject_by_client": [
+    {
+      "file": "client-rejected-idempotency-key-revision-mismatch.json",
+      "why": "The key names revision 3, the payload says 2."
+    },
+    {
+      "file": "client-rejected-idempotency-key-other-aggregate.json",
+      "why": "The key names another credential."
+    },
+    {
+      "file": "client-rejected-created-at-impossible-date.json",
+      "why": "Lexically valid, not a calendar date."
+    },
+    {
+      "file": "client-rejected-expires-at-impossible-date.json",
+      "why": "Lexically valid, not a calendar date."
+    },
+    {
+      "file": "client-rejected-revision-decimal-form.json",
+      "why": "1.0 passes schema integer; the client refuses the raw token."
+    },
+    {
+      "file": "client-rejected-revision-exponent-form.json",
+      "why": "1e0 passes schema integer; the client refuses the raw token."
+    }
+  ]
+}

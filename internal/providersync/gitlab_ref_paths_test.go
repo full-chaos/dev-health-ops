@@ -105,7 +105,7 @@ func TestTheCatalogStatesNoTargetForAnAmbiguousGitLabProject(t *testing.T) {
 	}
 	path := "platform/api-v2"
 	projects := []gitlabTeamCatalogProjectRow{{ID: id, OrgID: "org", Provider: "gitlab", ProjectKey: &path, IsActive: 1}}
-	if err := handler.collectProjectTargets(context.Background(), nil, "org", projects,
+	if err := handler.collectProjectTargets(context.Background(), nil, "org", "run", projects,
 		map[string]string{id.String(): "123"}, time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatal(err)
 	}

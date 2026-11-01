@@ -424,6 +424,11 @@ func TestAuthorizeStateFailuresAreA503NeverADecision(t *testing.T) {
 			h := newAuthorizeHandlerFixture(t)
 			plant(h)
 			assertError(t, h.one(q(h)), http.StatusServiceUnavailable, reasonStoreUnavailable)
+			if name != "grant read" {
+				// An organization action reads no grant, so only the other
+				// failures reach it.
+				assertError(t, h.one(h.question("settings.write", "organization", "acme", h.org)), http.StatusServiceUnavailable, reasonStoreUnavailable)
+			}
 			assertError(t, h.batch(h.question("settings.write", "organization", "acme", h.org), q(h)), http.StatusServiceUnavailable, reasonStoreUnavailable)
 		})
 	}

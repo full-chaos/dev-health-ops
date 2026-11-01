@@ -235,6 +235,16 @@ func TestSnapshotPrincipalNeedsBothFlagsAndTheUserKind(t *testing.T) {
 			t.Fatalf("kind %s: %v, want unknown", kind, s)
 		}
 	}
+	// A non-user principal whose id also has a public.users row is still not
+	// a user: the kind decides, not the row.
+	shadow := uuid.New()
+	e.exec(t, ctx, `INSERT INTO public.users
+	(id, email, password_hash, auth_provider, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
+VALUES ($1, $2, NULL, 'local', true, true, true, 0, now(), now())`, shadow, "shadow-"+shadow.String()[:8]+"@example.com")
+	e.armed(t, ctx, `INSERT INTO auth.principals (id, kind) VALUES ($1, 'service_account')`, shadow)
+	if snap := e.snapshot(t, ctx, shadow, ""); snap.PrincipalStatus() != authorization.StatusUnknown || snap.PlatformRole() != "" {
+		t.Fatalf("a service account with a users row: %v %q, want unknown and no platform role", snap.PrincipalStatus(), snap.PlatformRole())
+	}
 	if s := e.snapshot(t, ctx, uuid.New(), "").PrincipalStatus(); s != authorization.StatusUnknown {
 		t.Fatalf("an unknown principal: %v, want unknown", s)
 	}

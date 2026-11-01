@@ -89,15 +89,20 @@ VALUES ($1, $2, NULL, 'local', true, true, false, $3, now(), now())`, user, "d-"
 	return l
 }
 
+// server is the routes CompatRoutes mounts from the embedded document.
 func (l *delegatedLive) server(t *testing.T) http.Handler {
 	t.Helper()
-	rec, err := newRecorder(slog.New(slog.DiscardHandler), sdkmetric.NewMeterProvider().Meter("test"))
+	routes, err := CompatRoutes(CompatDeps{Sessions: l.store, Users: l.users, Issuer: l.issuer, Projector: l.identity,
+		Logger:             slog.New(slog.DiscardHandler),
+		AppendAudit:        func(context.Context, audit.AuditEvent) error { return nil },
+		ServiceCredentials: &fakeServiceCredentials{id: uuid.NewString()},
+		Meter:              sdkmetric.NewMeterProvider().Meter("test"),
+		Limits:             mustLimits(t, httpapi.NewMemoryCounters(nil)),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := compatHandlers{CompatDeps: CompatDeps{Sessions: l.store, Users: l.users, Issuer: l.issuer, Projector: l.identity,
-		ServiceCredentials: &fakeServiceCredentials{id: uuid.NewString()}}, rec: rec}
-	return serveRoutes(h.withDelegatedRouteRows(nil, delegatedRowsDocument))
+	return serveRoutes(routes)
 }
 
 func (l *delegatedLive) bearerRoutes(t *testing.T) http.Handler {
@@ -272,18 +277,9 @@ func TestSwitchFromADelegatedSessionIsRefusedOverARealRow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	l := newDelegatedLive(t, ctx)
-	id, _ := l.start(t, l.server(t))
-	routes, err := CompatRoutes(CompatDeps{Sessions: l.store, Users: l.users, Issuer: l.issuer, Projector: l.identity,
-		Logger:             slog.New(slog.DiscardHandler),
-		AppendAudit:        func(context.Context, audit.AuditEvent) error { return nil },
-		ServiceCredentials: &fakeServiceCredentials{id: uuid.NewString()},
-		Meter:              sdkmetric.NewMeterProvider().Meter("test"),
-		Limits:             mustLimits(t, httpapi.NewMemoryCounters(nil)),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	r := post(serveRoutes(routes), PatternIssueSession, issueBodyWithPredecessor(l.target, l.org.String(), `"`+id.String()+`"`), issuerBearer)
+	server := l.server(t)
+	id, _ := l.start(t, server)
+	r := post(server, PatternIssueSession, issueBodyWithPredecessor(l.target, l.org.String(), `"`+id.String()+`"`), issuerBearer)
 	if r.Code != http.StatusForbidden {
 		t.Fatalf("switch %d: %s", r.Code, r.Body)
 	}

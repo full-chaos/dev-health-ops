@@ -248,6 +248,10 @@ var optionRegistry = []Option{
 		Usage: "true when auth-service owns user creation and local credential links; with the session secrets it mounts the password and e-mail verification routes",
 	},
 	{
+		Flag: "sso-jit", Env: EnvSSOJIT, Kind: KindString, Default: "false", Group: GroupSession,
+		Usage: "\"true\" lets a federated sign-in join a known account to the provider's organization and create a new account. A provider row must allow it too (auto_provision_users), and it needs " + EnvUsersOwned,
+	},
+	{
 		Flag: "platform-roles-owned", Env: rule.OwnedEnv, Kind: KindString, Default: "false", Group: GroupSession,
 		Usage: "true when auth-service owns the platform roles: the sign-in state reads is_superuser from the auth platform role assignments. Mounts no route",
 	},

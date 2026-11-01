@@ -17,7 +17,7 @@ import (
 // AccessExpiresIn is refresh-response.v1 expires_in: go-api's accessExpiresIn.
 const AccessExpiresIn = int(edgetoken.AccessLifetime / time.Second)
 
-// EdDSAAccessLifetime is the exp - iat of an EdDSA access token (60 min, the
+// EdDSAAccessLifetime is the default exp - iat of an EdDSA access token (60 min, the
 // ceiling access-token.v1 allows).
 const EdDSAAccessLifetime = contracts.AccessTokenLifetimeCeiling
 
@@ -37,6 +37,7 @@ type eddsaMinter struct {
 	issuer   string
 	audience string
 	scope    string
+	lifetime time.Duration
 	check    signerCheck
 }
 
@@ -46,7 +47,16 @@ var sessionRouteScope, _ = contracts.AccessTokenScope(contracts.SessionRouteAudi
 // EdDSAOption adjusts NewEdDSAIssuer.
 type EdDSAOption func(*eddsaSettings)
 
-type eddsaSettings struct{ legacyAudience string }
+type eddsaSettings struct {
+	legacyAudience string
+	lifetime       time.Duration
+}
+
+// WithAccessLifetime sets exp - iat of both minted tokens (and so every answer's expires_in): at least one minute,
+// at most the access-token.v1 ceiling (ACP-ADR-03). Without it the lifetime is the ceiling, EdDSAAccessLifetime.
+func WithAccessLifetime(lifetime time.Duration) EdDSAOption {
+	return func(s *eddsaSettings) { s.lifetime = lifetime }
+}
 
 // WithLegacyAudience sets the audience the HS256 compatibility token is verified
 // with (go-api's JWT_AUDIENCE). An empty value keeps go-api's default audience.
@@ -65,7 +75,7 @@ func WithLegacyAudience(audience string) EdDSAOption {
 // legacy refresh); this Issuer never signs with them. issuerURL is the iss
 // claim, byte for byte.
 func NewEdDSAIssuer(secret, legacyIssuer, audience string, signer AccessSigner, issuerURL string, options ...EdDSAOption) (*Issuer, error) {
-	settings := eddsaSettings{legacyAudience: contracts.PlatformAPIAudience}
+	settings := eddsaSettings{legacyAudience: contracts.PlatformAPIAudience, lifetime: EdDSAAccessLifetime}
 	for _, option := range options {
 		option(&settings)
 	}
@@ -76,6 +86,9 @@ func NewEdDSAIssuer(secret, legacyIssuer, audience string, signer AccessSigner, 
 	if signer == nil {
 		return nil, errors.New("authapi: the EdDSA access token needs a signer")
 	}
+	if settings.lifetime < time.Minute || settings.lifetime > contracts.AccessTokenLifetimeCeiling || settings.lifetime%time.Second != 0 {
+		return nil, errors.New("authapi: the EdDSA access token lifetime must be whole seconds from one minute to the access-token.v1 ceiling")
+	}
 	if issuerURL == "" {
 		return nil, errors.New("authapi: the EdDSA access token needs an issuer URL")
 	}
@@ -85,7 +98,7 @@ func NewEdDSAIssuer(secret, legacyIssuer, audience string, signer AccessSigner, 
 		return nil, err
 	}
 	return &Issuer{
-		eddsa:    &eddsaMinter{signer: signer, issuer: issuerURL, audience: audience, scope: scope},
+		eddsa:    &eddsaMinter{signer: signer, issuer: issuerURL, audience: audience, scope: scope, lifetime: settings.lifetime},
 		verifier: verifier,
 		now:      time.Now,
 	}, nil

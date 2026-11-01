@@ -98,6 +98,14 @@ with `membership_required`. With it on, a known account joins as in step 4;
 organization only. An SSO sign-in never issues a session outside the provider's
 organization.
 
+auth-service provisions the same way when `AUTH_SSO_JIT=true`, and it differs from
+go-api on two points:
+
+- A sign-in grants `viewer`, `member` or `admin`. A default role of `owner`, or any
+  other value, refuses the sign-in as `membership_required`, and nothing is written.
+- A sign-in never undoes a membership status. A removed, suspended or invited member
+  of the provider's organization is refused as `membership_required`.
+
 For OAuth providers the provider must report the email as verified. For OIDC and
 SAML providers the identity provider's response is the source of the email.
 

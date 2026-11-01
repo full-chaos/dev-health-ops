@@ -40,6 +40,9 @@ contracts/auth/v1/examples/external-push-lifecycle-event/invalid-change-secret-h
 # CHAOS-10456: the enum value "hs256_compat" of AUTH_ACCESS_TOKEN_CLASS on the rewritten class row matches generic-api-key by name
 # shape; it is a class name, not a credential. Commit-less file:rule:line form so the row still matches after a squash.
 docs/reference/auth/configuration.md:generic-api-key:72
+# CHAOS-10458: the class row of the configuration reference (now naming AUTH_ACCESS_TOKEN_LIFETIME) carries the enum value
+# "hs256_compat", which generic-api-key matches by name shape; a class name, not a credential. Commit-less form.
+docs/reference/auth/configuration.md:generic-api-key:73
 # CHAOS-11193: acr credential lifecycle event corpus. These invalid fixtures exist to prove a secret-named member is refused; the value
 # at line 23 in the first commit of the corpus is a fabricated sample, never a credential (the final tree holds a short placeholder).
 # Commit-less file:rule:line form so the rows still match after a squash.
@@ -48,3 +51,7 @@ contracts/auth/v1/examples/acr-credential-lifecycle-event/invalid-change-token.j
 contracts/auth/v1/examples/acr-credential-lifecycle-event/invalid-change-access-token.json:generic-api-key:23
 contracts/auth/v1/examples/acr-credential-lifecycle-event/invalid-change-token-hash.json:generic-api-key:23
 contracts/auth/v1/examples/acr-credential-lifecycle-event/invalid-change-token-prefix.json:generic-api-key:23
+# CHAOS-12399: the public RFC 7636 example PKCE challenge, under a constant whose name held "auth", in an earlier branch
+# commit; not a credential. The constant is renamed and the head is clean; the row covers the branch's history only.
+# Commit-less file:rule:line form, as the rows above.
+internal/auth/authapi/oauth_test.go:generic-api-key:30

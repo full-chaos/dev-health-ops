@@ -77,6 +77,7 @@ type fakeSessions struct {
 	startErr  error
 	started   []session.StartInput
 	ended     []uuid.UUID
+	endCalls  int
 	endErr    error
 }
 
@@ -93,6 +94,7 @@ func (f *fakeSessions) StartDelegation(_ context.Context, in session.StartInput)
 func (f *fakeSessions) EndDelegation(_ context.Context, id uuid.UUID, _ session.Actor) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.endCalls++
 	if f.endErr != nil {
 		return false, f.endErr
 	}
@@ -156,7 +158,7 @@ func (f *fakeSessions) CreateSupersedingAudited(ctx context.Context, principal u
 	return issued, nil
 }
 
-func (f *fakeSessions) ExchangeLegacy(_ context.Context, legacy session.LegacyRefresh) (session.Result, error) {
+func (f *fakeSessions) ExchangeLegacyGuarded(_ context.Context, legacy session.LegacyRefresh, _ session.Guard) (session.Result, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.legacy = append(f.legacy, legacy)

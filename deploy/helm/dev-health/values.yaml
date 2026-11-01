@@ -218,6 +218,10 @@ authService:
     #    and query-api verify web tokens as before. It mounts auth-service's
     #    discovery and JWKS routes and is required by the workload-token exchange.
     issuerURL: ""
+    # -- AUTH_ACCESS_TOKEN_LIFETIME, the eddsa access token's lifetime: whole minutes from 5m to 60m (or 1h). Empty
+    #    renders nothing (the service default, 60 minutes). Needs class eddsa. ACP-ADR-03 targets 10m, set as its own
+    #    step after the eddsa flip (refresh demand rises in the same ratio; see the auth-service capacity plan).
+    lifetime: ""
   # -- The Kubernetes workload-token exchange (POST /internal/v1/token/exchange): a workload presents its
   #    projected ServiceAccount token and auth-service has the cluster API server review it (TokenReview).
   #    Off by default. On, the chart renders AUTH_WORKLOAD_EXCHANGE and its settings, the ClusterRole

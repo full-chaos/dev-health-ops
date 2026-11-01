@@ -470,7 +470,9 @@ func (m Mutation) validate() error {
 // security mutation is the failure this package exists to make impossible.
 func Commit(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier, m Mutation) (err error) {
 	defer func() {
-		if err != nil {
+		// A mutation that changed nothing (ErrNoStateChange) is a no-op, not a failed commit: a refused refresh
+		// exchange is normal traffic (CHAOS-11400), so it logs no ERROR line.
+		if err != nil && !errors.Is(err, ErrNoStateChange) {
 			logCommitFailure(ctx, m, err)
 		}
 	}()

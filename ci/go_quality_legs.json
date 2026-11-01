@@ -4,9 +4,10 @@
   {"name": "test-2-of-4", "args": "test 2 4"},
   {"name": "test-3-of-4", "args": "test 3 4"},
   {"name": "test-4-of-4", "args": "test 4 4"},
-  {"name": "race-1-of-5", "args": "race 1 5", "heavy": true, "pool": true},
-  {"name": "race-2-of-5", "args": "race 2 5", "heavy": true, "pool": true},
-  {"name": "race-3-of-5", "args": "race 3 5", "heavy": true, "pool": true},
-  {"name": "race-4-of-5", "args": "race 4 5", "heavy": true, "pool": true},
-  {"name": "race-5-of-5", "args": "race 5 5", "heavy": true, "pool": true}
+  {"name": "race-1-of-6", "args": "race 1 6", "heavy": true, "pool": true},
+  {"name": "race-2-of-6", "args": "race 2 6", "heavy": true, "pool": true},
+  {"name": "race-3-of-6", "args": "race 3 6", "heavy": true, "pool": true},
+  {"name": "race-4-of-6", "args": "race 4 6", "heavy": true, "pool": true},
+  {"name": "race-5-of-6", "args": "race 5 6", "heavy": true, "pool": true},
+  {"name": "race-6-of-6", "args": "race 6 6", "heavy": true, "pool": true}
 ]

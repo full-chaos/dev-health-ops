@@ -201,7 +201,7 @@ func TestIssuedKeyPrintsNoSecret(t *testing.T) {
 	raw, _ := json.Marshal(key)
 	body := value[len(KeyPrefix):]
 	for form, text := range map[string]string{"%v": fmt.Sprintf("%v", key), "%+v": fmt.Sprintf("%+v", key), "%#v": fmt.Sprintf("%#v", key),
-		"%s": fmt.Sprintf("%s", key), "slog": log.String(), "json": string(raw)} {
+		"%s": fmt.Sprintf("%s", key.Secret), "slog": log.String(), "json": string(raw)} {
 		if strings.Contains(text, body) {
 			t.Errorf("%s prints the value", form)
 		}

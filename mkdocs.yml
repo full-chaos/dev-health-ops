@@ -231,6 +231,7 @@ nav:
       - Auth service configuration: reference/auth/configuration.md
       - Auth workload registry: reference/auth/workload-registry.md
       - Auth identity linking: reference/auth/identity-linking.md
+      - Auth delegated sessions: reference/auth/delegated-sessions.md
       - Auth service readiness and SLO: reference/auth/readiness-and-slo.md
       - GraphQL:
           - reference/graphql/index.md

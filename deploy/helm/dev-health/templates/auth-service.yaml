@@ -130,7 +130,7 @@ binary): the native sleep action, a Kubernetes >= 1.30 feature. Same shape as go
 {{- if eq (upper (trim .name)) "AUTH_DATABASE_MAX_CONNS" }}{{- fail "authService.extraEnv must not set AUTH_DATABASE_MAX_CONNS: use authService.database.maxConns, which the render checks" }}{{- end }}
 {{- if eq (upper (trim .name)) "AUTH_PLATFORM_ROLES_OWNED" }}{{- fail "authService.extraEnv must not set AUTH_PLATFORM_ROLES_OWNED: authService.platformRolesOwned renders it, for go-api, query-api and the auth Jobs too" }}{{- end }}
 {{- if eq (upper (trim .name)) "AUTH_ORGS_OWNED" }}{{- fail "authService.extraEnv must not set AUTH_ORGS_OWNED: authService.phase renders it, for the backfill Job too" }}{{- end }}
-{{- if has (upper (trim .name)) (list "AUTH_ACCESS_TOKEN_CLASS" "AUTH_TOKEN_ISSUER_URL" "AUTH_JWT_AUDIENCE") }}{{- fail (printf "authService.extraEnv must not set %s: use authService.accessToken, which go-api reads too" .name) }}{{- end }}
+{{- if has (upper (trim .name)) (list "AUTH_ACCESS_TOKEN_CLASS" "AUTH_ACCESS_TOKEN_LIFETIME" "AUTH_TOKEN_ISSUER_URL" "AUTH_JWT_AUDIENCE") }}{{- fail (printf "authService.extraEnv must not set %s: use authService.accessToken, which go-api reads too" .name) }}{{- end }}
 {{- if eq (upper (trim .name)) "AUTH_LOGIN_LOCKOUT_KEY" }}{{- fail "authService.extraEnv must not set AUTH_LOGIN_LOCKOUT_KEY: use authService.sessionKeys.loginLockout, which reaches the container by secretKeyRef" }}{{- end }}
 {{- if eq (upper (trim .name)) "AUTH_SOCIAL_LINK_ROUTES" }}{{- fail "authService.extraEnv must not set AUTH_SOCIAL_LINK_ROUTES: use authService.socialLinkRoutes, which the render checks" }}{{- end }}
 {{- if eq .name "AUTH_SIGNING_KEY" }}{{- fail "authService.extraEnv must not set AUTH_SIGNING_KEY: direct-value signing material is rejected by the service (ACP-ADR-02 §4); use authService.signingKey" }}{{- end }}
@@ -265,6 +265,10 @@ spec:
           {{- if $eddsaIssuer }}
             - name: AUTH_JWT_AUDIENCE
               value: "dev-health-api"
+          {{- end }}
+          {{- with include "dev-health.authAccessLifetime" . }}
+            - name: AUTH_ACCESS_TOKEN_LIFETIME
+              value: {{ . | quote }}
           {{- end }}
           {{- if eq (include "dev-health.authWorkloadExchange" .) "true" }}
           {{- $w := .Values.authService.workloadExchange }}

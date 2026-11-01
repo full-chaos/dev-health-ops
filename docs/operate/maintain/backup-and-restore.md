@@ -249,11 +249,11 @@ Order (nothing serves traffic until the last step):
    `postgresql.auto.conf` before it is promoted, so no client or job can write before the fence runs.
 3. Restore a second, shadow copy of the same base backup to the END of the WAL archive (no recovery target) and keep it
    away from clients. It is the source of everything the target time dropped.
-4. Export the manifest from the shadow copy with the migration role (the command refuses the runtime role):
+4. Export the manifest from the shadow copy with the owner login (the superuser or ops-table owner; the least-privilege migration login cannot read the legacy tables, and the command refuses the runtime role):
    `auth-migrate restore-fence export -out manifest.json` (`AUTH_MIGRATION_DATABASE_URI`, `AUTH_RUNTIME_DATABASE_ROLE`
    and `AUTH_DATABASE_SCHEMA` in the environment; no secret on a command line). The manifest holds ids, states and
    revision floors, never a credential, a hash or a token.
-5. Apply it to the restored copy: first the dry run, `auth-migrate restore-fence apply -manifest manifest.json` (it writes
+5. Apply it to the restored copy, on the owner login too (the least-privilege migration login stops in the privilege preflight): first the dry run, `auth-migrate restore-fence apply -manifest manifest.json` (it writes
    nothing and prints the counts per table), then `... apply -manifest manifest.json -apply`. The migration DSN of the
    apply carries `options='-c default_transaction_read_only=off'` so the apply can write although the copy is read-only.
    One transaction does everything: the revision floors, every revocation made after the target time, and the fence row

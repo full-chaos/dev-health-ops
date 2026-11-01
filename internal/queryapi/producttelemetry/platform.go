@@ -5,6 +5,8 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 )
 
 // PGQuerier is the read-only Postgres surface the organization-name read uses;
@@ -48,6 +50,14 @@ type Principal struct {
 	Present             bool
 	IsSuperuser         bool
 	ImpersonationActive bool
+	// Platform is the platform action set held when it is not the one
+	// IsSuperuser means; nil carries only the flag.
+	Platform *rule.Platform
+}
+
+// Holds reports whether the caller holds the platform action now.
+func (p Principal) Holds(action string) bool {
+	return rule.Holds(p.Platform, p.IsSuperuser, action)
 }
 
 // AccessError is a platform-gate refusal.

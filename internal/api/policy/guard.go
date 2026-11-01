@@ -143,6 +143,18 @@ func (g *Guard) Wrap(level Authz, next http.Handler) http.Handler {
 	}))
 }
 
+// WrapPlatform returns next behind the platform gate of action: only a caller
+// that holds action passes.
+func (g *Guard) WrapPlatform(action string, next http.Handler) http.Handler {
+	return g.Wrap(Superuser, next)
+}
+
+// WrapAdminOr returns next behind Admin, which a caller that holds action also
+// passes.
+func (g *Guard) WrapAdminOr(action string, next http.Handler) http.Handler {
+	return g.Wrap(Admin, next)
+}
+
 // currentUser is get_current_user. It writes the refusal itself. At the admin
 // levels the role is the token org's membership row's (adminRole).
 func (g *Guard) currentUser(w http.ResponseWriter, r *http.Request, level Authz) (*User, bool) {

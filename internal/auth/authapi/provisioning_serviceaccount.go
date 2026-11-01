@@ -118,8 +118,9 @@ func serviceAccountRefusal(err error, denied errActorRefused) refusal {
 }
 
 // serviceAccountOrg reads the account a route names, before any verb runs, for the organization the actor rule needs.
-// An account that does not exist can be authorized for no organization: only an active superuser is told so (404); any
-// other actor gets the actor refusal, so a refused actor learns nothing about the rows. It writes the answer and returns
+// An account that does not exist can be authorized for no organization: the actor rule runs on the nil organization, so a
+// non-superuser gets the refusal it would get for an account of another organization (admin_required), and only an active
+// superuser is told the account is unknown (404). A refused actor learns nothing about the rows. It writes the answer and returns
 // false when the route must stop.
 func (h provisioningHandlers) serviceAccountInfo(w http.ResponseWriter, r *http.Request, op string, id, actor uuid.UUID) (*serviceaccount.Info, bool) {
 	ctx := r.Context()
@@ -128,7 +129,7 @@ func (h provisioningHandlers) serviceAccountInfo(w http.ResponseWriter, r *http.
 	case err == nil:
 		return info, true
 	case errors.Is(err, serviceaccount.ErrNotFound):
-		_, rule := h.actorRule(ctx, h.Reader, actor, uuid.Nil, true)
+		_, rule := h.actorRule(ctx, h.Reader, actor, uuid.Nil, false)
 		var refused errActorRefused
 		switch {
 		case errors.As(rule, &refused):

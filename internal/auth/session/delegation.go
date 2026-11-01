@@ -10,6 +10,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
@@ -68,6 +70,14 @@ var delegationRefusals = []error{
 	ErrTargetPlatformRole, ErrTargetNotMember, ErrTargetRoleUnknown, ErrOrganizationUnavailable,
 }
 
+// Outcomes of auth.session.delegations. No "ended": a cascade ends a delegation
+// in internal/auth/delegationend, which has no meter, and a partial count would
+// mislead. The delegation_ended audit row is the record of an end.
+const (
+	delegationStarted = "started"
+	delegationRefused = "refused"
+)
+
 // StartInput is one delegation request. It names no actor: the actor is the
 // principal of the base session (G-4).
 type StartInput struct {
@@ -87,6 +97,29 @@ type StartInput struct {
 // the actor end first, expired ones too, so an actor runs one delegation. A
 // base or prior row another writer holds is ErrBusy, retried BusyAttempts times.
 func (s *Store) StartDelegation(ctx context.Context, in StartInput) (Record, error) {
+	record, err := s.startDelegation(ctx, in)
+	switch {
+	case err == nil:
+		s.delegations.Add(ctx, 1, metric.WithAttributes(attribute.String("outcome", delegationStarted)))
+	case isDelegationRefusal(err):
+		s.delegations.Add(ctx, 1, metric.WithAttributes(attribute.String("outcome", delegationRefused)))
+	}
+	return record, err
+}
+
+func isDelegationRefusal(err error) bool {
+	if errors.Is(err, ErrNotOwned) || errors.Is(err, ErrInvalidReason) {
+		return true
+	}
+	for _, refusal := range delegationRefusals {
+		if errors.Is(err, refusal) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Store) startDelegation(ctx context.Context, in StartInput) (Record, error) {
 	if !s.platformOwned || !s.usersOwned {
 		return Record{}, ErrNotOwned
 	}
@@ -174,7 +207,9 @@ func (s *Store) startOnce(ctx context.Context, in StartInput, actor uuid.UUID, r
 // lockDelegation takes steps -1 to 6 of the auth lock order and decides on what
 // they hold: both principals, the organization, the target's membership, and
 // the actor's authority under the shared platform role lock. It returns the
-// actions the delegation permits.
+// actions the delegation permits: the delegable actions of the target's role,
+// or the role's full set for an actor who holds platform_owner now. The target
+// role is an organization role, so no platform action enters the set.
 func (s *Store) lockDelegation(ctx context.Context, tx audit.TxOps, in StartInput, actor uuid.UUID) ([]string, error) {
 	if _, err := tx.Exec(ctx, rule.SharedWriteLockSQL, rule.WriteLock); err != nil {
 		return nil, err
@@ -220,14 +255,30 @@ func (s *Store) lockDelegation(ctx context.Context, tx audit.TxOps, in StartInpu
 		in.OrganizationID, in.TargetPrincipalID); err != nil {
 		return nil, err
 	}
-	if err := s.checkAuthority(ctx, tx, actor, in.TargetPrincipalID); err != nil {
+	owner, err := s.checkAuthority(ctx, tx, actor, in.TargetPrincipalID)
+	if err != nil {
 		return nil, err
 	}
 	if role == nil {
 		return nil, ErrTargetRoleUnknown
 	}
-	permitted, err := policycatalog.Default().DelegatedActions(*role)
-	if err != nil || len(permitted) == 0 {
+	return permittedActions(*role, owner)
+}
+
+func permittedActions(role string, owner bool) ([]string, error) {
+	catalog := policycatalog.Default()
+	permitted, err := catalog.DelegatedActions(role)
+	if err != nil {
+		return nil, ErrTargetRoleUnknown
+	}
+	if owner {
+		full, err := catalog.Role(role)
+		if err != nil {
+			return nil, ErrTargetRoleUnknown
+		}
+		permitted = full.Actions
+	}
+	if len(permitted) == 0 {
 		return nil, ErrTargetRoleUnknown
 	}
 	return permitted, nil
@@ -257,24 +308,28 @@ func (s *Store) lockPerson(ctx context.Context, tx audit.TxOps, id uuid.UUID) (b
 
 // checkAuthority decides on the current platform role assignments, under the
 // shared lock that a grant or revoke waits for: the actor holds the action, and
-// the target holds no platform role (G-50).
-func (s *Store) checkAuthority(ctx context.Context, tx audit.TxOps, actor, target uuid.UUID) error {
-	var allowed, targetHolds bool
+// the target holds no platform role (G-50). It reports whether the actor holds
+// platform_owner now.
+func (s *Store) checkAuthority(ctx context.Context, tx audit.TxOps, actor, target uuid.UUID) (bool, error) {
+	var allowed, targetHolds, owner bool
 	roles := policycatalog.Default().RolesHolding(ImpersonateAction, policycatalog.ScopePlatform)
 	if err := tx.QueryRow(ctx, `SELECT
 		EXISTS (SELECT 1 FROM `+s.q+`.platform_role_assignments r JOIN `+s.q+`.principals p ON p.id = r.principal_id
 			WHERE r.principal_id = $1 AND r.role_key = ANY($2::text[]) AND `+rule.ActiveRule("r", "p")+`),
 		EXISTS (SELECT 1 FROM `+s.q+`.platform_role_assignments r JOIN `+s.q+`.principals p ON p.id = r.principal_id
-			WHERE r.principal_id = $3 AND `+rule.ActiveRule("r", "p")+`)`, actor, roles, target).Scan(&allowed, &targetHolds); err != nil {
-		return err
+			WHERE r.principal_id = $3 AND `+rule.ActiveRule("r", "p")+`),
+		EXISTS (SELECT 1 FROM `+s.q+`.platform_role_assignments r JOIN `+s.q+`.principals p ON p.id = r.principal_id
+			WHERE r.principal_id = $1 AND r.role_key = $4 AND `+rule.ActiveRule("r", "p")+`)`,
+		actor, roles, target, rule.PlatformOwner).Scan(&allowed, &targetHolds, &owner); err != nil {
+		return false, err
 	}
 	switch {
 	case !allowed:
-		return ErrActorNotAuthorized
+		return false, ErrActorNotAuthorized
 	case targetHolds:
-		return ErrTargetPlatformRole
+		return false, ErrTargetPlatformRole
 	}
-	return nil
+	return owner, nil
 }
 
 // lockBaseAndPriors is step 6a: the base session and the actor's unrevoked

@@ -23,6 +23,24 @@
       ]
     },
     {
+      "audience": "acr-api",
+      "classes": [
+        "user_access_token"
+      ],
+      "services": [
+        "dev-health-acr-api"
+      ]
+    },
+    {
+      "audience": "acr-mcp",
+      "classes": [
+        "user_access_token"
+      ],
+      "services": [
+        "dev-health-acr-mcp"
+      ]
+    },
+    {
       "audience": "query-api",
       "classes": [
         "effective_principal_envelope"

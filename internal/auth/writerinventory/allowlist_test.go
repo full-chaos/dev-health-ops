@@ -205,6 +205,9 @@ var Allowlist = []Entry{
 	{File: "internal/auth/workload/store.go", Func: "Store.setBindingEnabled", Table: "auth.workload_bindings", Verb: "UPDATE"},
 	{File: "internal/auth/workload/store.go", Func: "Store.setEnabled", Table: "auth.principals", Verb: "UPDATE"},
 	{File: "internal/auth/workload/store.go", Func: "Store.setEnabled", Table: "auth.workloads", Verb: "UPDATE"},
+	// The workload assertion key verb (CHAOS-11208): auth-migrate operator role, inside audit.Commit.
+	{File: "internal/auth/workload/assertion_keys.go", Func: "Store.SetAssertionKey", Table: "auth.workload_assertion_keys", Verb: "INSERT"},
+	{File: "internal/auth/workload/assertion_keys.go", Func: "Store.SetAssertionKey", Table: "auth.workload_assertion_keys", Verb: "UPDATE"},
 	// The workload bootstrap lifecycle verbs (CHAOS-11183, acp GO 10-29): auth-migrate operator role, inside audit.Commit.
 	{File: "internal/auth/workload/bootstrap_lifecycle.go", Func: "Store.CreateBootstrap", Table: "auth.credential_registry", Verb: "INSERT"},
 	{File: "internal/auth/workload/bootstrap_lifecycle.go", Func: "Store.DisableBootstrap", Table: "auth.credential_registry", Verb: "UPDATE"},

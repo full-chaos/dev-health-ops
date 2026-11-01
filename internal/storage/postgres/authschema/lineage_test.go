@@ -251,7 +251,11 @@ func TestEveryCreatedTableHasADeclaredPosture(t *testing.T) {
 	// NOT reachable by the runtime: the runtime never reads or writes the
 	// lineage, it only observes that the schema exists (CHAOS-4881's readiness
 	// check queries pg_namespace, not this table).
-	deliberatelyUnreachable := map[string]struct{}{versionTable: {}}
+	// workload_assertion_keys (CHAOS-11208) is public key metadata the operator
+	// verbs read and write as the migration role; no runtime path reads it, so the
+	// runtime holds no privilege on it. A reader adds a posture row and a fence
+	// section in the same change.
+	deliberatelyUnreachable := map[string]struct{}{versionTable: {}, "workload_assertion_keys": {}}
 
 	var missing []string
 	for table := range created {

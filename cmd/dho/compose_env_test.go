@@ -57,6 +57,8 @@ var verbServices = map[string]string{
 	"auth-migrate":                     "`auth-migrate`: a standalone one-shot binary that opens the database at once; its own DSN and role settings are not measured here",
 	"auth-grants":                      "`auth-migrate grants`: the same standalone binary with the grants verb; opens the database at once; its own DSN and role settings are not measured here",
 	"auth-fence-init":                  "`auth-migrate restore-fence init -if-absent`: the same standalone binary; opens the database at once; its own DSN and role settings are not measured here",
+	"auth-workload-seed":               "`auth-migrate workloads seed -apply`: the same standalone binary; opens the database at once; its own DSN and role settings are not measured here",
+	"auth-workload-bootstrap":          "`auth-migrate workloads bootstrap-create -apply`: the same standalone binary; opens the database at once and writes the credential file; its own DSN and role settings are not measured here",
 	"go-sync-dispatch-route-activate":  "`dho workers routes apply`: opens the database at once; only the DSN groups are checked",
 	"go-sync-finalize-route-activate":  "`dho workers routes apply`: opens the database at once; only the DSN groups are checked",
 	"go-sync-post-route-activate":      "`dho workers routes apply`: opens the database at once; only the DSN groups are checked",

@@ -11,9 +11,6 @@ import (
 // ErrOwnerMove reports an owner move this package refuses or could not finish.
 var ErrOwnerMove = errors.New("auth owner move")
 
-// ErrSchemaOwnerPin reports an auth schema whose objects are not all owned by the pinned owner role.
-var ErrSchemaOwnerPin = errors.New("auth schema owner pin")
-
 // PublicPrivilege is one privilege on one ops-schema table that the auth migrator holds WITH GRANT OPTION.
 // Columns is nil for a table-level privilege.
 type PublicPrivilege struct {

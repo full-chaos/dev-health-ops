@@ -205,6 +205,9 @@ func (o Options) Validate(migrationRole string) error {
 		}
 		seen[reader] = true
 	}
+	if err := o.validateSchemaOwnerRole(); err != nil {
+		return err
+	}
 	if err := o.validatePushLifecycle(migrationRole); err != nil {
 		return err
 	}
@@ -400,6 +403,9 @@ func applyGrantsAndVerify(ctx context.Context, conn pooledConn, options Options,
 	// removed from the manifest in a later release, a restored backup -- is
 	// corrected by the next migrate run rather than persisting because no new
 	// migration happened to be pending.
+	if err := verifySchemaOwnerPin(ctx, conn.Conn(), options); err != nil {
+		return result, err
+	}
 	var retained []GrantRecord
 	if err := applyRuntimeGrants(ctx, conn.Conn(), RuntimePosture(), options, &retained); err != nil {
 		return result, err

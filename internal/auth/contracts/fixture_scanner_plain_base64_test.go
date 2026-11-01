@@ -51,6 +51,11 @@ func TestScannerDecodesBase64InPlainJSONStringValues(t *testing.T) {
 	if mid := urlOnly[4 : len(urlOnly)-4]; !strings.ContainsAny(mid, "-_") {
 		t.Fatal("the URL-alphabet control no longer uses the URL alphabet")
 	}
+	// The URL-only run is also long and random-looking, so the entropy rule fires on its text alone; only the prefix
+	// finding proves the decoded text was read.
+	if findings := scanFixtureContent("R2", stringDoc(t, urlOnly)); !strings.Contains(strings.Join(findings, "\n"), "forbidden credential prefix") {
+		t.Errorf("R2 URL alphabet: the decoded text was not read: %v", findings)
+	}
 	hidden := map[string]string{
 		"R1 standard alphabet, prefix rule":      stringDoc(t, std(key)),
 		"R1b standard alphabet, ghp prefix":      stringDoc(t, std(ghp)),
@@ -133,7 +138,7 @@ func TestScannerJoinsHeaderAndPayloadText(t *testing.T) {
 		"random key split across a later header value and a later payload value": token(
 			`{"alg":"HS256","typ":"JWT","k":"`+random[:half]+`"}`, `{"iss":"https://auth.example.test","v":"`+random[half:]+`"}`),
 		"random secret inside prose in the payload": token(
-			`{"alg":"HS256"}`, `{"note":"the secret is `+random+` ok"}`),
+			`{"n":1}`, `{"note":"the secret is `+random+` ok"}`),
 		"prefix split across header and payload": token(
 			`{"alg":"HS256","k":"`+key[:3]+`"}`, `{"v":"`+key[3:]+`"}`),
 		"punctuated secret in the payload": `{"access_token":"` +

@@ -48,7 +48,8 @@
           "resource_kind": {
             "enum": [
               "platform",
-              "organization"
+              "organization",
+              "repository"
             ]
           },
           "risk_class": {

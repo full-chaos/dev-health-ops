@@ -68,6 +68,7 @@ While the shared rate-limit store fails, every request that reaches the limiter 
 | `dev_health_runtime_uptime_seconds` | gauge | Process uptime. |
 | `dev_health_api_rate_limit_store_errors_total{limit}` | counter | Rate-limit store errors per limiter id (`auth_svc_...`); each answered a closed 500. Present at zero once the limited routes are built; carries limit ids only. |
 | `dev_health_api_http_requests_total{listener,method,route,status_class}` | counter | Requests on the API listener. Unmatched paths share the label `unmatched`; a raw path is never a label. |
+| `dev_health_api_legacy_path_total{surface,kind}` | counter | Uses of legacy API auth paths, telemetry only. `surface=guard_level` (kind: public, authenticated, admin, admin_org, superuser, optional; one per request entering a guarded route, refused callers included), `role_source` (membership_row, claim_fallback, platform_bypass, platform_gate; where an Admin, AdminOrg or Superuser decision read its role or flag), `direct_read` (users, memberships, org_memberships, impersonation_sessions, auth_sessions; one per policy store read). |
 | `dev_health_api_http_request_duration_seconds` | histogram | Request latency on the API listener. |
 | `devhealth_auth_outbox_publisher_enabled` | gauge | 0 in Wave 1 (no sink). |
 | `devhealth_auth_outbox_oldest_pending_age_seconds` | gauge | Outbox backlog age. |

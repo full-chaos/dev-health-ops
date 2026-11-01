@@ -114,6 +114,8 @@ func TestEvaluate_EveryCatalogActionByEveryRole(t *testing.T) {
 				req = orgRequest(a.Action)
 			case "platform":
 				req = platformRequest(a.Action)
+			case "repository":
+				req = Request{Action: a.Action, ResourceKind: "repository", OrganizationID: testOrg}
 			default:
 				t.Fatalf("action %s has resource kind %q", a.Action, a.ResourceKind)
 			}
@@ -159,7 +161,7 @@ func TestEvaluate_PlatformRoleNeverSatisfiesOrgAction(t *testing.T) {
 			continue
 		}
 		for _, a := range actions {
-			if a.Scope != "organization" {
+			if a.Scope != "organization" || a.ResourceKind != "organization" {
 				continue
 			}
 			s := orgSnapshot("")
@@ -208,7 +210,7 @@ func TestEvaluate_UnknownActionDenies(t *testing.T) {
 		known[a.Action] = true
 	}
 	e := NewEvaluator()
-	for _, a := range []string{"", "admin", "*", "org.*", "ORG.READ", "org.read ", "org.read\n", "org.fly", "billing.fly", "acr.context.read", "superuser.all"} {
+	for _, a := range []string{"", "admin", "*", "org.*", "ORG.READ", "org.read ", "org.read\n", "org.fly", "billing.fly", "acr.context.write", "superuser.all"} {
 		if known[a] {
 			t.Fatalf("%q is in the catalog; pick another unknown", a)
 		}
@@ -439,7 +441,10 @@ func TestReasonSetIsClosed(t *testing.T) {
 		"allowed_by_role", "invalid_request", "unknown_action", "resource_mismatch",
 		"principal_inactive", "organization_inactive", "no_membership", "org_mismatch",
 		"membership_inactive", "platform_role_absent", "role_unknown", "role_scope_mismatch",
-		"role_lacks_action", "impersonation_denied", "delegation_invalid",
+		"role_lacks_action", "allowed_by_repository_grant", "grant_absent", "repository_not_granted",
+		"grant_expired", "grant_revoked", "workload_audience_denied",
+		"workload_action_denied", "clock_unavailable", "service_account_inactive",
+		"allowed_by_membership_default", "grant_read_failed", "impersonation_denied", "delegation_invalid",
 	}
 	got := AllReasons()
 	sort.Slice(got, func(i, j int) bool { return got[i] < got[j] })
@@ -539,30 +544,44 @@ func TestEvaluate_EveryDenyPathCarriesTheCatalogVersion(t *testing.T) {
 		req    Request
 		snap   Snapshot
 		reason Reason
+		eval   *Evaluator // nil: the embedded catalog
 	}{
-		{"nil snapshot", orgRequest("org.read"), nil, ReasonInvalidRequest},
-		{"invalid request", orgRequest("ORG.READ"), orgSnapshot("owner"), ReasonInvalidRequest},
-		{"unknown action", orgRequest("org.fly"), orgSnapshot("owner"), ReasonUnknownAction},
-		{"resource mismatch", Request{Action: "org.read", ResourceKind: "platform"}, orgSnapshot("owner"), ReasonResourceMismatch},
-		{"principal inactive", orgRequest("org.read"), inactive(func(s *fakeSnapshot) { s.principal = StatusSuspended }), ReasonPrincipalInactive},
-		{"organization inactive", orgRequest("org.read"), inactive(func(s *fakeSnapshot) { s.orgStatus[testOrg] = StatusSuspended }), ReasonOrganizationInactive},
+		{"nil snapshot", orgRequest("org.read"), nil, ReasonInvalidRequest, nil},
+		{"invalid request", orgRequest("ORG.READ"), orgSnapshot("owner"), ReasonInvalidRequest, nil},
+		{"unknown action", orgRequest("org.fly"), orgSnapshot("owner"), ReasonUnknownAction, nil},
+		{"resource mismatch", Request{Action: "org.read", ResourceKind: "platform"}, orgSnapshot("owner"), ReasonResourceMismatch, nil},
+		{"principal inactive", orgRequest("org.read"), inactive(func(s *fakeSnapshot) { s.principal = StatusSuspended }), ReasonPrincipalInactive, nil},
+		{"organization inactive", orgRequest("org.read"), inactive(func(s *fakeSnapshot) { s.orgStatus[testOrg] = StatusSuspended }), ReasonOrganizationInactive, nil},
 		{"membership inactive", orgRequest("org.read"), inactive(func(s *fakeSnapshot) {
 			s.memberships[testOrg] = Membership{OrgID: testOrg, Role: "owner", Status: StatusRemoved}
-		}), ReasonMembershipInactive},
-		{"no membership", orgRequest("org.read"), inactive(func(s *fakeSnapshot) { s.memberships = map[string]Membership{} }), ReasonNoMembership},
+		}), ReasonMembershipInactive, nil},
+		{"no membership", orgRequest("org.read"), inactive(func(s *fakeSnapshot) { s.memberships = map[string]Membership{} }), ReasonNoMembership, nil},
 		{"org mismatch", orgRequest("org.read"), inactive(func(s *fakeSnapshot) {
 			s.memberships[testOrg] = Membership{OrgID: "org-2", Role: "owner", Status: StatusActive}
-		}), ReasonOrgMismatch},
-		{"platform role absent", platformRequest("admin.users"), orgSnapshot("owner"), ReasonPlatformRoleAbsent},
-		{"role unknown", orgRequest("org.read"), orgSnapshot("guest"), ReasonRoleUnknown},
-		{"role scope mismatch", orgRequest("org.read"), orgSnapshot("platform_admin"), ReasonRoleScopeMismatch},
-		{"role lacks action", orgRequest("org.delete"), orgSnapshot("viewer"), ReasonRoleLacksAction},
-		{"impersonation denied", orgRequest("org.delete"), delegated("owner", []string{"org.delete"}, ""), ReasonImpersonationDenied},
-		{"delegation invalid", orgRequest("org.read"), delegated("owner", nil, "").withChain(nil), ReasonDelegationInvalid},
+		}), ReasonOrgMismatch, nil},
+		{"platform role absent", platformRequest("admin.users"), orgSnapshot("owner"), ReasonPlatformRoleAbsent, nil},
+		{"role unknown", orgRequest("org.read"), orgSnapshot("guest"), ReasonRoleUnknown, nil},
+		{"role scope mismatch", orgRequest("org.read"), orgSnapshot("platform_admin"), ReasonRoleScopeMismatch, nil},
+		{"role lacks action", orgRequest("org.delete"), orgSnapshot("viewer"), ReasonRoleLacksAction, nil},
+		// Repository reasons: planted catalog (the real one has no role holding a repository action yet).
+		{"grant absent", repoRequest("acme/api"), saWithNoRows(), ReasonGrantAbsent, plantedEvaluator()},
+		{"repository not granted", repoRequest("acme/api"), repoSnapshot("member", liveGrant("acme/web")), ReasonRepositoryNotGranted, plantedEvaluator()},
+		{"grant expired", repoRequest("acme/api"), repoSnapshot("member", expiredGrant("acme/api")), ReasonGrantExpired, plantedEvaluator()},
+		{"grant revoked", repoRequest("acme/api"), repoSnapshot("member", revokedGrant("acme/api")), ReasonGrantRevoked, plantedEvaluator()},
+		{"workload audience", repoRequest("acme/api"), withWorkload(repoSnapshot("member", liveGrant("acme/api")), "x", []string{"y"}, []string{repoAction}), ReasonWorkloadAudienceDenied, plantedEvaluator()},
+		{"workload action", repoRequest("acme/api"), withWorkload(repoSnapshot("member", liveGrant("acme/api")), "y", []string{"y"}, []string{"org.read"}), ReasonWorkloadActionDenied, plantedEvaluator()},
+		{"clock unavailable", repoRequest("acme/api"), noClock(repoSnapshot("member", liveGrant("acme/api"))), ReasonClockUnavailable, plantedEvaluator()},
+		{"service account inactive", repoRequest("acme/api"), inactiveSA(), ReasonServiceAccountInactive, plantedEvaluator()},
+		{"grant read failed", repoRequest("acme/api"), readFails(repoSnapshot("member")), ReasonGrantReadFailed, plantedEvaluator()},
+		{"impersonation denied", orgRequest("org.delete"), delegated("owner", []string{"org.delete"}, ""), ReasonImpersonationDenied, nil},
+		{"delegation invalid", orgRequest("org.read"), delegated("owner", nil, "").withChain(nil), ReasonDelegationInvalid, nil},
 	}
 	seen := map[Reason]bool{}
-	e := NewEvaluator()
 	for _, c := range cases {
+		e := c.eval
+		if e == nil {
+			e = NewEvaluator()
+		}
 		got := e.Evaluate(c.req, c.snap)
 		if got.Allowed || got.Reason != c.reason {
 			t.Errorf("%s: %+v want deny %s", c.name, got, c.reason)
@@ -573,7 +592,8 @@ func TestEvaluate_EveryDenyPathCarriesTheCatalogVersion(t *testing.T) {
 		seen[c.reason] = true
 	}
 	for _, r := range AllReasons() {
-		if r != ReasonAllowedByRole && !seen[r] {
+		allow := r == ReasonAllowedByRole || r == ReasonAllowedByRepositoryGrant || r == ReasonAllowedByMembershipDefault
+		if !allow && !seen[r] {
 			t.Errorf("deny reason %s has no revision case", r)
 		}
 	}
@@ -586,5 +606,59 @@ func TestEvaluate_EveryDenyPathCarriesTheCatalogVersion(t *testing.T) {
 		if got.Allowed || got.PolicyRevision != 0 {
 			t.Errorf("%s: %+v", name, got)
 		}
+	}
+}
+
+// 10774 put a repository-kind action in the catalog before any role held it;
+// 5.3 serves repository requests. Each one follows the grant and membership
+// default rules, so a role's outcome is exactly whether the vocabulary files
+// say it holds the action (read here from the JSON, not through Allows).
+func TestEvaluate_RepositoryKindActionFollowsGrantAndDefaultRules(t *testing.T) {
+	actions, roles, _ := vocab(t)
+	holds := func(role, action string) bool {
+		for _, r := range roles {
+			if r.Role == role {
+				for _, a := range r.Actions {
+					if a == action {
+						return true
+					}
+				}
+			}
+		}
+		return false
+	}
+	e := NewEvaluator()
+	seen := 0
+	for _, a := range actions {
+		if a.ResourceKind != "repository" {
+			continue
+		}
+		seen++
+		req := Request{Action: a.Action, ResourceKind: "repository", OrganizationID: testOrg, ResourceKey: "acme/api"}
+		for _, r := range roles {
+			if r.Scope == "platform" {
+				if got := e.Evaluate(req, platformSnapshot(r.Role)); got.Allowed || got.Reason != ReasonGrantAbsent {
+					t.Errorf("platform role %s on %s: %+v", r.Role, a.Action, got)
+				}
+				continue
+			}
+			wantDefault := holds(r.Role, a.Action) || (r.Role == "owner" && holds("admin", a.Action))
+			got := e.Evaluate(req, repoSnapshot(r.Role))
+			if got.Allowed != wantDefault || (got.Allowed && got.Reason != ReasonAllowedByMembershipDefault) {
+				t.Errorf("membership role %s, no rows, %s: %+v want allowed=%v", r.Role, a.Action, got, wantDefault)
+			}
+			g := Grant{OrgID: testOrg, Role: r.Role, ResourceKind: "repository", ResourceKey: "acme/api"}
+			got = e.Evaluate(req, repoSnapshot("viewer", g))
+			if got.Allowed != holds(r.Role, a.Action) || (got.Allowed && got.Reason != ReasonAllowedByRepositoryGrant) {
+				t.Errorf("grant role %s, %s: %+v want allowed=%v", r.Role, a.Action, got, holds(r.Role, a.Action))
+			}
+			other := Grant{OrgID: testOrg, Role: r.Role, ResourceKind: "repository", ResourceKey: "acme/web"}
+			if got := e.Evaluate(req, repoSnapshot(r.Role, other)); got.Allowed {
+				t.Errorf("membership role %s beside another repository's row, %s: %+v", r.Role, a.Action, got)
+			}
+		}
+	}
+	if seen == 0 {
+		t.Error("the catalog holds no repository-kind action")
 	}
 }

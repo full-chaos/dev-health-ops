@@ -128,7 +128,9 @@ internal/auth/contracts	contracts.go	internal/auth/org
 internal/auth/contracts	contracts.go	internal/auth/orgdeprovision
 internal/auth/contracts	contracts.go	internal/auth/passwordpolicy
 internal/auth/contracts	contracts.go	internal/auth/policycatalog
+internal/auth/contracts	contracts.go	internal/auth/pushlifecycle
 internal/auth/contracts	contracts.go	internal/auth/revisionfeed
+internal/auth/contracts	contracts.go	internal/auth/serviceaccount
 internal/auth/contracts	contracts.go	internal/auth/servicecred
 internal/auth/contracts	contracts.go	internal/auth/session
 internal/auth/contracts	contracts.go	internal/auth/usersbackfill
@@ -203,6 +205,8 @@ internal/cigates/bigboyrender	chusers.go	cmd/cigate
 internal/cigates/bigboyrender	chusers.go	internal/cigates/bigboyrender
 internal/cigates/bigboyrender	posture.go	cmd/cigate
 internal/cigates/bigboyrender	posture.go	internal/cigates/bigboyrender
+internal/cigates/bigboyrender	projectscope.go	cmd/cigate
+internal/cigates/bigboyrender	projectscope.go	internal/cigates/bigboyrender
 internal/cigates/bigboyrender	values.go	cmd/cigate
 internal/cigates/bigboyrender	values.go	internal/cigates/bigboyrender
 internal/cigates/docsbuild	docsbuild.go	cmd/cigate
@@ -627,6 +631,7 @@ internal/testsupport/bigboydir	bigboydir.go	internal/cigates/chpin
 internal/testsupport/bigboydir	bigboydir.go	internal/cigates/routing
 internal/testsupport/bigboydir	bigboydir.go	internal/ingressplanes
 internal/testsupport/bigboydir	bigboydir.go	internal/testsupport/bigboydir
+internal/testsupport/corpusmatrix	matrix.go	internal/testsupport/corpusmatrix
 internal/testsupport/goldenscan	tree.go	internal/testsupport/goldenscan/treegate
 internal/testsupport/goldenscan	tree.go	internal/testsupport/recordedfiles/manifest
 internal/testsupport/oraclecompare	oraclecompare.go	internal/jobs/investment/categorize/decision
@@ -642,6 +647,7 @@ internal/testsupport/recordedfiles	recordedfiles.go	internal/testsupport/recorde
 internal/testsupport/sessionscenario	quirks.go	internal/testsupport/sessionscenario
 internal/testsupport/sessionscenario	sessionscenario.go	internal/api/session
 internal/testsupport/sessionscenario	sessionscenario.go	internal/auth/identity/local
+internal/testsupport/sessionscenario	sessionscenario.go	internal/testsupport/corpusmatrix
 internal/testsupport/sessionscenario	sessionscenario.go	internal/testsupport/sessionscenario
 internal/testsupport/venueoracle	external.go	internal/apiservice/authflowvenue
 internal/testsupport/venueoracle	external.go	internal/testsupport/venueoracle
@@ -812,6 +818,7 @@ internal/testsupport/venueoracle	golden_walk.go	internal/syncbudget
 internal/testsupport/venueoracle	golden_walk.go	internal/synccli
 internal/testsupport/venueoracle	golden_walk.go	internal/synccoverage
 internal/testsupport/venueoracle	golden_walk.go	internal/syncdispatchruntime
+internal/testsupport/venueoracle	golden_walk.go	internal/testsupport/corpusmatrix
 internal/testsupport/venueoracle	golden_walk.go	internal/testsupport/programoracle
 internal/testsupport/venueoracle	golden_walk.go	internal/testsupport/sessionscenario
 internal/testsupport/venueoracle	golden_walk.go	internal/testsupport/venueoracle
@@ -921,6 +928,7 @@ internal/testsupport/venueoracle	opened.go	internal/syncbudget
 internal/testsupport/venueoracle	opened.go	internal/synccli
 internal/testsupport/venueoracle	opened.go	internal/synccoverage
 internal/testsupport/venueoracle	opened.go	internal/syncdispatchruntime
+internal/testsupport/venueoracle	opened.go	internal/testsupport/corpusmatrix
 internal/testsupport/venueoracle	opened.go	internal/testsupport/programoracle
 internal/testsupport/venueoracle	opened.go	internal/testsupport/sessionscenario
 internal/testsupport/venueoracle	opened.go	internal/testsupport/venueoracle

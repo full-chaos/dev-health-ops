@@ -46,6 +46,7 @@ internal/apiservice/admin
 internal/apiservice/customerpush
 internal/audit
 internal/auth/accessverify
+internal/auth/acraudience
 internal/auth/authconfig
 internal/auth/clientaddr
 internal/auth/contracts
@@ -70,6 +71,7 @@ internal/auth/signedtoken
 internal/auth/workload
 internal/auth/workloadexchange
 internal/chmigrate
+internal/cigates/bigboyrender
 internal/cli
 internal/edgetokenmint
 internal/egressguard
@@ -160,6 +162,7 @@ internal/teamprovider
 internal/testsupport/chschema
 internal/testsupport/containers
 internal/testsupport/egressallow
+internal/testsupport/ingestpg
 internal/testsupport/moduleroot
 internal/testsupport/pgschema
 internal/testsupport/pgseed

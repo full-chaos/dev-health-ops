@@ -13,7 +13,8 @@ Seven surfaces are planned (CHAOS-3270). Shipped so far: `principal.v1`
 `authorization_decision.v1` and the two batch forms (CHAOS-4932). All seven
 planned surfaces have shipped, and the Wave 2 session surfaces `session.v1`,
 `refresh-request.v1`, `refresh-response.v1` and `auth-outcome.v1` (CHAOS-10155)
-follow them, then the Wave 3 user access token `access-token.v1` (CHAOS-10442), the Wave 8
+follow them, then the Wave 3 user access token `access-token.v1` (CHAOS-10442),
+`refresh-response.v2` (the refresh answer for the EdDSA access token; v1 stays the answer for the HS256 token and both are read until the HS256 issuer is removed), the Wave 8
 workload token `workload-token.v1` (CHAOS-10648: typ `workload+jwt`, one audience, no
 `org_id`/`sid`/`scope`, at most 300 s; its signed corpus is `golden/workload-token`),
 and `transport-error.v1` (CHAOS-10392), the body auth-service's shared
@@ -21,13 +22,13 @@ transport writes when it answers before a route (400, 404, 405, 413, 429, 500).
 
 The closed action and role catalogs `actions.v1` and `roles.v1` (CHAOS-10637) live in
 `vocabulary/` with `action-catalog.v1` and `role-catalog.v1` schemas; the Go package
-`internal/auth/policycatalog` embeds and validates them. Catalog version 3 adds
+`internal/auth/policycatalog` embeds and validates them. Catalog version 5 adds the marker role `platform_owner`, which holds no action (CHAOS-12294). Catalog version 3 adds
 `billing.read`, `billing.manage` and `license.read` (CHAOS-11272), held as the billing and
 licensing routes allow today; they are catalog-only, so `/auth/me` does not serve them until a
 web-reviewed change does. Catalog version 2 gives every
 action a `risk_class` and a `cache_class` (a high-risk action is never cached), and
 `authorization_decision.v1` `reason_code` is a closed enum, `decision_reason_code` in
-`vocabulary/reason-codes.json` (CHAOS-10641); `error.v1` stays shape-only. The profile gate (`ValidateEndpointAuthProfile`) also refuses a cached profile that names no catalog action (one pinned exemption, acr.context.read, until it is catalogued) and a profile that caches a high-risk catalog action; that join of two files runs in Go only, the ajv runner cannot see it.
+`vocabulary/reason-codes.json` (CHAOS-10641); `error.v1` stays shape-only. The profile gate (`ValidateEndpointAuthProfile`) also refuses a cached profile that names no catalog action and a profile that caches a high-risk catalog action; that join of two files runs in Go only, the ajv runner cannot see it.
 
 The provisioning resources and request bodies `organization.v1`,
 `organization-create-request.v1`, `membership.v1`, `membership-update-request.v1`,
@@ -37,6 +38,10 @@ here; the operations arrive with the routes that serve them. Rules:
 
 - A role field is a role key of the organization roles of `roles.v1`
   (viewer, member, admin, owner). A platform role is not a membership role.
+  The platform roles are `platform_admin` and `platform_owner`. `platform_owner`
+  is a marker role: it holds no action (an owner acts through a
+  `platform_admin` row it also holds), and only `auth-migrate platform-owner-grant` and `platform-owner-revoke`
+  write it (CHAOS-12294); no API route grants or revokes it.
 - `membership.v1` status is the memberships status of the auth schema:
   `invited`, `active`, `suspended`, `removed`. The provisioning event spells the
   same states differently: `invited` (event `pending`); the other three are

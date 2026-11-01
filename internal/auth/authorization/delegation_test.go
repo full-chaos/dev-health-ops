@@ -55,8 +55,27 @@ func allOrgActions(t *testing.T) []string {
 	actions, _, _ := vocab(t)
 	var out []string
 	for _, a := range actions {
-		if a.Scope == "organization" {
+		if a.Scope == "organization" && a.ResourceKind == "organization" {
 			out = append(out, a.Action)
+		}
+	}
+	return out
+}
+
+func heldBy(t *testing.T, role string) []string {
+	t.Helper()
+	_, roles, _ := vocab(t)
+	var out []string
+	for _, r := range roles {
+		if r.Role != role {
+			continue
+		}
+		for _, id := range allOrgActions(t) {
+			for _, a := range r.Actions {
+				if a == id {
+					out = append(out, id)
+				}
+			}
 		}
 	}
 	return out
@@ -196,7 +215,7 @@ func TestDelegation_RealActorRoleNeverWidensTheEffectiveSubject(t *testing.T) {
 	for _, role := range []string{"viewer", "member", "admin", "owner"} {
 		for _, actorRole := range []string{"", "platform_admin", "superuser", "root", "owner", ownerActorRol} {
 			for _, a := range actions {
-				if a.Scope != "organization" {
+				if a.Scope != "organization" || a.ResourceKind != "organization" {
 					continue
 				}
 				want := held[role][a.Action] && (!floorOrgActions[a.Action] || actorRole == ownerActorRol)
@@ -213,7 +232,7 @@ func TestDelegation_EmptyPermittedActionsDeniesEverything(t *testing.T) {
 	e := NewEvaluator()
 	for _, permitted := range [][]string{nil, {}} {
 		for _, actorRole := range []string{"", ownerActorRol} {
-			for _, id := range allOrgActions(t) {
+			for _, id := range heldBy(t, "owner") {
 				got := e.Evaluate(orgRequest(id), delegated("owner", permitted, actorRole))
 				if got.Allowed || got.Reason != ReasonImpersonationDenied {
 					t.Errorf("permitted %#v actor %q %s: %+v want impersonation_denied", permitted, actorRole, id, got)
@@ -348,7 +367,7 @@ func TestDelegation_NonDelegatedDecisionsAreUnchanged(t *testing.T) {
 			continue
 		}
 		for _, a := range actions {
-			if a.Scope != "organization" {
+			if a.Scope != "organization" || a.ResourceKind != "organization" {
 				continue
 			}
 			plain := e.Evaluate(orgRequest(a.Action), orgSnapshot(r.Role))
@@ -356,10 +375,75 @@ func TestDelegation_NonDelegatedDecisionsAreUnchanged(t *testing.T) {
 			want := Decision{Allowed: held[r.Role][a.Action], Reason: ReasonRoleLacksAction, PolicyRevision: ver}
 			if want.Allowed {
 				want.Reason = ReasonAllowedByRole
+			} else {
+				want.CacheClass = CacheNone
 			}
 			if plain != want || aware != want {
 				t.Errorf("%s %s: plain %+v aware %+v want %+v", r.Role, a.Action, plain, aware, want)
 			}
 		}
+	}
+}
+
+type delegatedGrantSnapshot struct {
+	grantFake
+	d Delegation
+}
+
+func (f delegatedGrantSnapshot) Delegation() (Delegation, bool) { return f.d, true }
+
+func delegatedRepo(permitted []string, grants ...Grant) delegatedGrantSnapshot {
+	return delegatedGrantSnapshot{
+		grantFake: repoSnapshot("member", grants...),
+		d: Delegation{
+			Chain:                []Hop{{ActorPrincipalID: testActor, PermittedActions: permitted}},
+			TargetOrganizationID: testOrg,
+			Assurance:            "aal2",
+		},
+	}
+}
+
+func TestDelegation_RepositoryAllowCarriesTheAllowlistAndKeepsTheCacheBound(t *testing.T) {
+	e := plantedEvaluator()
+	plain := e.Evaluate(repoRequest("acme/api"), repoSnapshot("member", liveGrant("acme/api")))
+	got := e.Evaluate(repoRequest("acme/api"), delegatedRepo([]string{repoAction}, liveGrant("acme/api")))
+	if !got.Allowed || got.Reason != ReasonAllowedByRepositoryGrant {
+		t.Fatalf("%+v", got)
+	}
+	want := &Obligations{TenantScope: testOrg, MinimumAssurance: "aal2", RepositoryAllowlist: []string{"acme/api"}}
+	if got.Obligations == nil || got.Obligations.TenantScope != want.TenantScope || got.Obligations.MinimumAssurance != "aal2" ||
+		len(got.Obligations.RepositoryAllowlist) != 1 || got.Obligations.RepositoryAllowlist[0] != "acme/api" {
+		t.Fatalf("obligations %+v want %+v", got.Obligations, want)
+	}
+	if got.CacheClass != plain.CacheClass || got.ExpiresAtUnixNano != plain.ExpiresAtUnixNano {
+		t.Errorf("delegation changed the cache bound: %+v vs %+v", got, plain)
+	}
+}
+
+func TestDelegation_RepositoryAllowOutsidePermittedActionsDenies(t *testing.T) {
+	e := plantedEvaluator()
+	for _, permitted := range [][]string{nil, {"org.read"}} {
+		got := e.Evaluate(repoRequest("acme/api"), delegatedRepo(permitted, liveGrant("acme/api")))
+		if got.Allowed || got.Reason != ReasonImpersonationDenied || got.Obligations != nil {
+			t.Errorf("permitted %v: %+v want impersonation_denied", permitted, got)
+		}
+	}
+}
+
+func TestDelegation_RepositoryRequestOfAnotherOrganizationIsInvalid(t *testing.T) {
+	e := plantedEvaluator()
+	req := repoRequest("acme/api")
+	req.OrganizationID = "org-2"
+	got := e.Evaluate(req, delegatedRepo([]string{repoAction}, liveGrant("acme/api")))
+	if got.Allowed || got.Reason != ReasonDelegationInvalid {
+		t.Fatalf("%+v", got)
+	}
+}
+
+func TestDelegation_RepositoryDenyKeepsTheGrantReason(t *testing.T) {
+	e := plantedEvaluator()
+	got := e.Evaluate(repoRequest("acme/api"), delegatedRepo([]string{repoAction}, liveGrant("acme/web")))
+	if got.Allowed || got.Reason != ReasonRepositoryNotGranted || got.Obligations != nil {
+		t.Fatalf("%+v", got)
 	}
 }

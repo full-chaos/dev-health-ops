@@ -9,6 +9,8 @@ const AuditReasonOwnerExempt = "owner_exempt"
 type Obligations struct {
 	TenantScope      string `json:"tenant_scope,omitempty"`
 	MinimumAssurance string `json:"minimum_assurance,omitempty"`
+	// RepositoryAllowlist is the one repository key of a repository request.
+	RepositoryAllowlist []string `json:"repository_allowlist,omitempty"`
 }
 
 // DelegationAudit is the impersonation context of an exempted allow.

@@ -55,6 +55,9 @@ type Request struct {
 	Action         string
 	ResourceKind   string
 	OrganizationID string
+	// ResourceKey is the canonical repository key ("owner/repo", or "*" for
+	// the whole organization); empty for every other resource kind.
+	ResourceKey string
 }
 
 // Reason is a closed, internal token for a decision.
@@ -75,6 +78,19 @@ const (
 	ReasonRoleScopeMismatch    Reason = "role_scope_mismatch"
 	ReasonRoleLacksAction      Reason = "role_lacks_action"
 
+	ReasonAllowedByRepositoryGrant Reason = "allowed_by_repository_grant"
+	ReasonGrantAbsent              Reason = "grant_absent"
+	ReasonRepositoryNotGranted     Reason = "repository_not_granted"
+	ReasonGrantExpired             Reason = "grant_expired"
+	ReasonGrantRevoked             Reason = "grant_revoked"
+	ReasonWorkloadAudienceDenied   Reason = "workload_audience_denied"
+	ReasonWorkloadActionDenied     Reason = "workload_action_denied"
+	ReasonClockUnavailable         Reason = "clock_unavailable"
+	ReasonServiceAccountInactive   Reason = "service_account_inactive"
+
+	ReasonAllowedByMembershipDefault Reason = "allowed_by_membership_default"
+	ReasonGrantReadFailed            Reason = "grant_read_failed"
+
 	ReasonImpersonationDenied Reason = "impersonation_denied"
 	ReasonDelegationInvalid   Reason = "delegation_invalid"
 )
@@ -85,7 +101,11 @@ func AllReasons() []Reason {
 		ReasonAllowedByRole, ReasonInvalidRequest, ReasonUnknownAction, ReasonResourceMismatch,
 		ReasonPrincipalInactive, ReasonOrganizationInactive, ReasonNoMembership, ReasonOrgMismatch,
 		ReasonMembershipInactive, ReasonPlatformRoleAbsent, ReasonRoleUnknown, ReasonRoleScopeMismatch,
-		ReasonRoleLacksAction, ReasonImpersonationDenied, ReasonDelegationInvalid,
+		ReasonRoleLacksAction, ReasonAllowedByRepositoryGrant, ReasonGrantAbsent, ReasonRepositoryNotGranted,
+		ReasonGrantExpired, ReasonGrantRevoked, ReasonWorkloadAudienceDenied,
+		ReasonWorkloadActionDenied, ReasonClockUnavailable, ReasonServiceAccountInactive,
+		ReasonAllowedByMembershipDefault, ReasonGrantReadFailed,
+		ReasonImpersonationDenied, ReasonDelegationInvalid,
 	}
 }
 
@@ -96,8 +116,28 @@ type Decision struct {
 	// PolicyRevision is the catalog version the decision was made under; 0
 	// when no catalog was available.
 	PolicyRevision int
+	// CacheClass says how long a consumer may reuse the decision. A deny is
+	// CacheNone. A repository allow is CacheResourceRevisionBound when a live
+	// grant or the membership default allowed it, unless the action's catalog
+	// class is none. Allows of organization and
+	// platform actions leave it empty: the catalog class applies.
+	CacheClass CacheClass
+	// ExpiresAtUnixNano is the instant a repository allow stops being usable:
+	// clock plus RepositoryAllowBoundNanos (30 s), for a live-grant allow and a
+	// membership-default allow alike. 0 for every other decision, and for a
+	// repository action whose catalog cache class is none.
+	ExpiresAtUnixNano int64
 	// Obligations is set only on an allow of a delegated session.
 	Obligations *Obligations
 	// Audit is set only on an allow that the owner exemption made possible.
 	Audit *DelegationAudit
 }
+
+// CacheClass is the closed allow-cache class of a decision (TRD section 14).
+type CacheClass string
+
+const (
+	CacheNone                  CacheClass = "none"
+	CacheDecisionBound         CacheClass = "decision_bound"
+	CacheResourceRevisionBound CacheClass = "resource_revision_bound"
+)

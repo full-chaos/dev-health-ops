@@ -77,7 +77,7 @@ func hasAction(list []string, v string) bool {
 // snapshot denies; a denial made under a catalog carries its version.
 func (e *Evaluator) Evaluate(r Request, s Snapshot) Decision {
 	ds, ok := s.(DelegationSnapshot)
-	if !ok || e == nil || e.cat == nil {
+	if !ok || e == nil || e.cat == nil || isNilCatalog(e.cat) {
 		return e.evaluateBase(r, s)
 	}
 	del, delegated := ds.Delegation()
@@ -117,5 +117,8 @@ func (e *Evaluator) Evaluate(r Request, s Snapshot) Decision {
 		}
 	}
 	d.Obligations = &Obligations{TenantScope: r.OrganizationID, MinimumAssurance: del.Assurance}
+	if r.ResourceKind == resourceRepository {
+		d.Obligations.RepositoryAllowlist = []string{r.ResourceKey}
+	}
 	return d
 }

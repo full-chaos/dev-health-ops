@@ -219,7 +219,7 @@ run_integration_go_test() {
   local module_dir="$1" sid pid rc=0 i own_pgid tmo
   local -a private_group=()
   shift
-  tmo="$(job_go_test_timeout 22)" || return 2
+  tmo="$(job_go_test_timeout 32)" || return 2
   sid="${TESTCONTAINERS_SESSION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
   [[ "${sid}" =~ ^[A-Za-z0-9._-]{8,64}$ ]] \
     || die "TESTCONTAINERS_SESSION_ID must match ^[A-Za-z0-9._-]{8,64}\$"
@@ -4689,6 +4689,7 @@ AUTH_PACKAGES=(
 # exists in the tree without a row here, or a row names a function that does not.
 AUTH_FUZZ_TARGETS=(
   "./internal/auth/authapi FuzzParseRefreshRequest"
+  "./internal/auth/authapi FuzzDecodeAuthorizationRequest"
   "./internal/auth/contracts FuzzParseErrorEnvelope"
   "./internal/auth/contracts FuzzRevisionUnmarshal"
   "./internal/auth/contracts FuzzTimestampUnmarshal"
@@ -4712,6 +4713,7 @@ AUTH_FUZZ_TARGETS=(
   "./internal/auth/identity/saml FuzzSAMLSubject"
   "./internal/auth/authorization FuzzNormalizeRequest"
   "./internal/auth/authorization FuzzEvaluateRequest"
+  "./internal/auth/authorization FuzzEvaluateRepositoryGrant"
   "./internal/auth/authorization FuzzEvaluateDelegated"
 )
 AUTH_FUZZTIME="${AUTH_FUZZTIME:-20s}"

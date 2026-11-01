@@ -21,6 +21,8 @@ not resolved; **C3 = retain, fail-closed** — removal of the six legacy ingest
 routes is scheduled for Wave 10 (CHAOS-3283), after customer notice.
 {: .fc-page-lede }
 
+**Retired (CHAOS-11813):** the six legacy ingest routes are gone and answer 404. The text below is the record of the decision when it was made. See [Legacy ingest retirement](../../operate/runbooks/legacy-ingest-retirement.md).
+
 > **Note:** The Python api paths and tools that this page names (`src/dev_health_ops/api/...`, `ci/check_endpoint_profiles.py`, `contracts/auth/v1/endpoint-profiles.ops.json`) were removed with the Python api. This page is a record of the design as ratified.
 
 !!! info "How to use this"
@@ -292,6 +294,8 @@ than running in a silently weaker mode.
 
 ### C3 — The 30-day producer window bounds a claim; it does not close it
 
+**Retired (CHAOS-11813):** the six legacy ingest routes are gone and answer 404. The text below is the record of the decision when it was made. See [Legacy ingest retirement](../../operate/runbooks/legacy-ingest-retirement.md).
+
 Zero external requests across all six legacy ingest routes in a 30-day window
 over 10.5M prod spans. That does **not** exclude a quarterly batch, an annual
 reconciliation, or a customer integration on their calendar rather than ours.
@@ -357,7 +361,7 @@ nothing.
 | Move `GO_API_ENVELOPE_PRIVATE_KEY` to a `_FILE` source with web's file contract | Hardening | ADR-02 — two custody postures for one requirement |
 | Close a latent trust path in the impersonation middleware | Latent defect | Tracked in the Auth Control Plane project; detail is held under the fix-first disclosure policy |
 | Establish `query-api`'s single auth seam | Structural | ACP-ADR-12 — 40 unwritten resolvers, each an opportunity to omit a check nothing verifies |
-| Decide remove-vs-retain on the six legacy ingest routes | External contract | C3 — chris's call, not an engineering inference |
+| Decide remove-vs-retain on the six legacy ingest routes | External contract | C3 — chris's call, not an engineering inference. Retired (CHAOS-11813): see [Legacy ingest retirement](../../operate/runbooks/legacy-ingest-retirement.md). |
 | Disambiguate `null` in the profile schema (B10) | Contract defect | All 370 ops rows carry an advisory null; 272 carry no gaps entry and are correct — the contract cannot express why |
 | Lift the gaps field-naming rule into the schema description (B11) | Documentation | The real rule lives only in the gate; a reader of the contract cannot find it |
 

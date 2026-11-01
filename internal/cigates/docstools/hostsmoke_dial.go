@@ -85,12 +85,13 @@ func (t *hsTrace) last() []byte {
 }
 
 func hsDialPlain(ctx context.Context, network, addr string) (net.Conn, error) {
-	dialer := &net.Dialer{Timeout: hsTimeout}
+	timeout := hsTimeout
+	dialer := &net.Dialer{Timeout: timeout}
 	conn, err := dialer.DialContext(ctx, network, addr)
 	if err != nil {
 		return nil, err
 	}
-	return hsIdleConn{conn}, nil
+	return hsIdleConn{conn, timeout}, nil
 }
 
 // hsTLSConfig is the TLS configuration of every https connection: the system roots (hsRoots nil), the name of the URL

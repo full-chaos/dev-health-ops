@@ -269,48 +269,8 @@ func TestActionCachePolicyRefusesACachedProfileForAnUncataloguedAction(t *testin
 	if err := CheckActionCachePolicy(map[string]any{"action": "billing.refund", "cache_class": "none"}); err != nil {
 		t.Errorf("an unknown action with cache_class none was refused: %v", err)
 	}
-	if err := CheckActionCachePolicy(map[string]any{"action": "acr.context.read", "cache_class": "decision_bound"}); err != nil {
-		t.Errorf("a pinned exemption was refused: %v", err)
-	}
-}
-
-// The exemption list is pinned by hand: an added entry is red, and an entry
-// with no committed valid cached example left is red.
-func TestUncataloguedCachedActionExemptionsArePinnedExactly(t *testing.T) {
-	want := []string{"acr.context.read"}
-	var got []string
-	for action, reason := range uncataloguedCachedActions {
-		if reason == "" {
-			t.Errorf("exemption %s has no reason", action)
-		}
-		got = append(got, action)
-	}
-	sort.Strings(got)
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("exemptions %v, pinned %v", got, want)
-	}
-	catalog := map[string]bool{}
-	for _, raw := range readJSONFile(t, "contracts/auth/v1/vocabulary/actions.v1.json")["actions"].([]any) {
-		catalog[raw.(map[string]any)["action"].(string)] = true
-	}
-	users := map[string]bool{}
-	for _, entry := range loadEndpointAuthProfileManifest(t).Accept {
-		profile := loadEndpointAuthProfileFixture(t, entry.File).(map[string]any)
-		action, _ := profile["action"].(string)
-		if cache, _ := profile["cache_class"].(string); action != "" && cache != "" && cache != "none" && !catalog[action] {
-			users[action] = true
-			if _, ok := uncataloguedCachedActions[action]; !ok {
-				t.Errorf("valid example %s caches uncatalogued action %s, which is not exempted", entry.File, action)
-			}
-		}
-	}
-	for _, action := range want {
-		if catalog[action] {
-			t.Errorf("exemption %s is now in the catalog: delete it", action)
-		}
-		if !users[action] {
-			t.Errorf("exemption %s has no valid cached example left: delete it", action)
-		}
+	if err := CheckActionCachePolicy(map[string]any{"action": "acr.context.read", "cache_class": "resource_revision_bound"}); err != nil {
+		t.Errorf("a catalogued acr action was refused: %v", err)
 	}
 }
 
@@ -345,12 +305,12 @@ func TestActionCachePolicyRefusesACatalogActionWithAnotherCacheClass(t *testing.
 	}
 }
 
-// The exemption matches the action name exactly: no prefix, suffix, case or
-// whitespace variant of a pinned name is exempt.
-func TestExemptionMatchesTheActionNameExactly(t *testing.T) {
+// A catalog action matches by its exact name: no prefix, suffix, case or
+// whitespace variant of a catalog name is accepted.
+func TestCatalogMatchesTheActionNameExactly(t *testing.T) {
 	for _, action := range []string{"acr.context.rea", "acr.context", "acr", "acr.context.read.x", "acr.context.read ", " acr.context.read", "ACR.context.read", "acr.context.reads"} {
-		if err := CheckActionCachePolicy(map[string]any{"action": action, "cache_class": "decision_bound"}); err == nil {
-			t.Errorf("%q was exempt", action)
+		if err := CheckActionCachePolicy(map[string]any{"action": action, "cache_class": "resource_revision_bound"}); err == nil {
+			t.Errorf("%q was accepted", action)
 		}
 	}
 }

@@ -51,6 +51,8 @@ const (
 	// connected again under another binding, after the target) and queued each stored token for the revocation worker in
 	// the same statement. Nothing is required of the operator.
 	ActionProviderRevocationQueuedFromCredential ActionKind = "provider_revocation_queued_from_credential"
+	ActionRegrantPlatformRole                    ActionKind = "regrant_platform_role"
+	ActionNoActivePlatformAdmin                  ActionKind = "no_active_platform_admin"
 )
 
 // requeueRunbookStep is the follow-up of revocations an apply only named: the runbook step that sets the source. A
@@ -76,6 +78,8 @@ var followUp = map[ActionKind]string{
 	ActionReviewMembershipRole:                   "none",
 	ActionIdentityUnlinked:                       "none",
 	ActionProviderRevocationQueuedFromCredential: "none",
+	ActionRegrantPlatformRole:                    "a platform_admin grants each role again (admin route), except a platform_owner row: auth-migrate platform-owner-grant -principal <uuid> -confirm; with no active platform_admin run the break-glass verb first",
+	ActionNoActivePlatformAdmin:                  "auth-migrate platform-role-bootstrap -principal <uuid> -confirm",
 }
 
 // OperatorAction is the ids a section names for one action. Ids only: never a
@@ -134,7 +138,7 @@ func followUpOf(a OperatorAction) string {
 func ActionLines(actions []OperatorAction) []string {
 	var lines []string
 	for _, a := range mergeActions(actions) {
-		if len(a.IDs) == 0 {
+		if len(a.IDs) == 0 && a.Kind != ActionNoActivePlatformAdmin {
 			continue
 		}
 		lines = append(lines, fmt.Sprintf("operator-action %s source=%s count=%d ids=%s follow-up=%s", a.Kind, a.Source, len(a.IDs), strings.Join(a.IDs, ","), followUpOf(a)))

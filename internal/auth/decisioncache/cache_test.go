@@ -594,3 +594,52 @@ func TestConcurrentGetPutInvalidate(t *testing.T) {
 		t.Fatalf("%d entries over the bound 64", n)
 	}
 }
+
+// acp on point 2: a Put without a stamp of this cache is refused, so a caller cannot skip Begin.
+func TestAPutWithoutAStampOfThisCacheIsRefused(t *testing.T) {
+	r := newRig(t, 0)
+	other := newRig(t, 0)
+	k := baseKey(t)
+	for name, rd := range map[string]Read{
+		"zero stamp":    {Dependencies: read(r).Dependencies},
+		"foreign stamp": {Dependencies: read(r).Dependencies, Stamp: other.c.Begin()},
+	} {
+		if got := r.c.Put(k, allow(k), rd); got != NotStoredStamp {
+			t.Fatalf("%s: Put = %q, want %q", name, got, NotStoredStamp)
+		}
+		miss(t, r, k, name)
+	}
+	mustStore(t, r, k, allow(k), read(r))
+}
+
+// acp on point 4 (condition 1): the 30 s cut is in the STORED decision, and every hit returns that value.
+func TestTheCutExpiryIsTheStoredOneOnEveryHit(t *testing.T) {
+	r := newRig(t, 0)
+	k := repoKey(t)
+	put := r.clock.Now()
+	d := allow(k)
+	d.CacheClass, d.ExpiresAtUnixNano = authorization.CacheResourceRevisionBound, put.Add(60*time.Second).UnixNano()
+	mustStore(t, r, k, d, read(r))
+	first := hit(t, r, k).ExpiresAtUnixNano
+	if limit := put.Add(TTL).UnixNano(); first > limit {
+		t.Fatalf("a hit returned expires_at %d, after Put time + 30 s %d", first, limit)
+	}
+	r.clock.advance(20 * time.Second)
+	if again := hit(t, r, k).ExpiresAtUnixNano; again != first {
+		t.Fatalf("a later hit returned %d, the first %d: the value is not the stored one", again, first)
+	}
+}
+
+// The Put reasons are a closed set: they may be metric labels.
+func TestThePutResultsAreAClosedSet(t *testing.T) {
+	want := []string{"stored", "deny", "audit_obligation", "high_risk", "class_none", "unknown_action", "expired", "invalid", "stamp", "closed"}
+	got := PutResults()
+	if len(got) != len(want) {
+		t.Fatalf("PutResults = %q, want %q", got, want)
+	}
+	for i := range want {
+		if string(got[i]) != want[i] {
+			t.Fatalf("PutResults = %q, want %q", got, want)
+		}
+	}
+}

@@ -373,6 +373,14 @@
             "null"
           ]
         },
+        "delegated_bearer": {
+          "description": "On an auth-service row that authenticateWith gates: whether a delegated session's bearer passes this route's gate. allowed or denied; the row of the Go allowlist delegatedBearerOperations reads allowed. A row authenticateWith does not reach omits the field. It is not impersonation_policy: that field says whether go-api's org-context override reaches a route.",
+          "enum": [
+            "allowed",
+            "denied"
+          ],
+          "type": "string"
+        },
         "disclosure_behavior": {
           "description": "Safe 401/403/404 disclosure behavior (TRD §18), where determinable at the family level. ABSENT means not applicable to this route (code evidence says so); null means undetermined in this pass and MUST be paired with a gaps entry naming this field, i.e. an entry that begins with \"<field>:\" (CHAOS-4744, ACP decision sheet B10 shape b).",
           "type": [

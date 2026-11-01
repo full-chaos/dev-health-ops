@@ -28,7 +28,7 @@ func restoreFenceMigration(t *testing.T) string {
 }
 
 // The auth schema has no SECURITY DEFINER function, with ONE named exception:
-// append_external_push_lifecycle_event (migration 0039, CHAOS-10895, ruled by
+// append_external_push_lifecycle_event (migration 0040, CHAOS-10895, ruled by
 // the Auth Control Plane design authority). go-api's login may not write the
 // guarded outbox tables, and the commit guard is a setting any role can set, so
 // the only safe door is a function that runs as a dedicated NOLOGIN owner with

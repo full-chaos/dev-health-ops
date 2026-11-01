@@ -312,30 +312,7 @@ func newProvFixture(t *testing.T) *provFixture {
 // deprovision row, last: the suspend route is mounted only when its row exists.
 func docWithRow(t testing.TB, route string) []byte {
 	t.Helper()
-	var document map[string]any
-	if err := json.Unmarshal(embeddedDocWithoutRow(t, route), &document); err != nil {
-		t.Fatal(err)
-	}
-	rows := document["rows"].([]any)
-	for _, item := range rows {
-		row := item.(map[string]any)
-		if row["route"] == PatternOrgDeprovision && row["service"] == AccessService {
-			clone := map[string]any{}
-			for k, v := range row {
-				clone[k] = v
-			}
-			clone["route"] = route
-			clone["id"] = "POST " + route + " [dev-health-auth-service @api]"
-			document["rows"] = append(rows, clone)
-			raw, err := json.Marshal(document)
-			if err != nil {
-				t.Fatal(err)
-			}
-			return raw
-		}
-	}
-	t.Fatal("no deprovision row in the embedded document")
-	return nil
+	return docWithRows(t, append([]string{route}, keyPatterns...)...)
 }
 
 // embeddedDocWithoutRow is the embedded endpoint-profile document without the rows for route.
@@ -519,7 +496,7 @@ func routeCases() []routeCase {
 		{opOrgCreate, PatternOrgCreate, func(f *provFixture, a uuid.UUID) map[string]any {
 			return map[string]any{"actor_principal_id": a.String(), "organization_name": "Acme", "slug": "acme", "tier": "community", "managed_by": "stripe"}
 		}, []string{"actor_principal_id", "organization_name", "managed_by"}},
-	}, serviceAccountCases()...)
+	}, append(serviceAccountCases(), keyCases()...)...)
 }
 
 // fakeInviteID is the invite the revoke route case names.

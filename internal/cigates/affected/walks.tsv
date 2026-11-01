@@ -3,6 +3,7 @@ ci/tools/gotestfuncs	main.go	unexpressed	-	-
 cmd/dev-health-migration-matrix	contract_test.go	cmd/dev-health-migration-matrix	dir	*
 cmd/gqlgen-guard	main_test.go	unexpressed	-	-
 deploy/helm/dev-health	auth_session_secret_script_test.go	unexpressed	-	-
+deploy/helm/dev-health	auth_sso_jit_test.go	deploy/helm/dev-health/templates	dir	*
 deploy/helm/dev-health	auth_switch_strict_test.go	deploy/helm/dev-health/templates	dir	*
 internal/adminops	users_password_fixtures_test.go	internal/adminops	dir	*
 internal/adminops	users_password_fixtures_test.go	internal/adminops/testdata	dir	*

@@ -266,6 +266,15 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedI
 				return fmt.Errorf("counting the platform role assignments (sqlstate %s)", sqlState(err))
 			}
 			rolesInUse := rolesBefore > 0 || manifestRowCount(m, platformRolesSection) > 0
+			if m == nil {
+				var keys int64
+				if err := tx.QueryRow(ctx, liveKeysSQL(schema)).Scan(&keys); err != nil {
+					return fmt.Errorf("counting the live service account keys (sqlstate %s)", sqlState(err))
+				}
+				if keys > 0 {
+					report.Actions = append(report.Actions, OperatorAction{Kind: ActionRotateKeysAfterBlindMargin, Source: "auth.credential_registry", Count: keys})
+				}
+			}
 			for _, s := range sections {
 				if m == nil {
 					if q := blindReviewSQL(s, schema); q != "" {

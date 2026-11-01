@@ -54,6 +54,8 @@ var goOnlyRoutes = map[string]struct {
 	"POST /internal/v1/service-accounts/enable":   {false, "internal provisioning route; no go-api twin; writes no policy body"},
 	"POST /internal/v1/service-accounts/owner":    {false, "internal provisioning route; no go-api twin; writes no policy body"},
 	"POST /internal/v1/sessions/state":            {false, "internal session state read for go-api's Ask Dev access read; no go-api twin; writes nothing"},
+	"POST /internal/v1/sessions/delegated":        {false, "internal delegated session start, go-api calls it; no go-api twin; writes no Python-shaped body"},
+	"POST /internal/v1/sessions/delegated/end":    {false, "internal delegated session end, go-api calls it; no go-api twin; writes no Python-shaped body"},
 	"POST /v1/identities/social":                  {false, "auth-service native route; no go-api twin; writes no policy body"},
 	"POST /v1/sessions/revoke-all":                {false, "auth-service native route; no go-api twin; writes no policy body"},
 	"POST /v1/sessions/revoke":                    {false, "auth-service native route; no go-api twin; writes no policy body"},

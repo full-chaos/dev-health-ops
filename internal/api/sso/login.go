@@ -101,6 +101,7 @@ func (h handlers) finishSSOLogin(ctx context.Context, w http.ResponseWriter, r *
 	}
 	now := h.Now()
 	var access, refresh, refreshJTI, sessionAccess string
+	expiresIn := int64(edgetoken.AccessLifetime / time.Second)
 	var family uuid.UUID
 	var refreshExpiresAt time.Time
 	if h.Issuer != nil {
@@ -109,7 +110,7 @@ func (h handlers) finishSSOLogin(ctx context.Context, w http.ResponseWriter, r *
 			h.fail(w, r, "issue session", err)
 			return
 		}
-		access, refresh, sessionAccess = pair.Access, pair.Refresh, pair.SessionAccess
+		access, refresh, sessionAccess, expiresIn = pair.Access, pair.Refresh, pair.SessionAccess, pair.ExpiresIn
 	} else {
 		jti, err := newJTI()
 		if err != nil {
@@ -202,7 +203,7 @@ VALUES ($1, $2, $3, $4, $5, $6, NULL, NULL, NULL, $7, $8, $9)`,
 	out.Set("access_token", access)
 	out.Set("refresh_token", refresh)
 	out.Set("token_type", "bearer")
-	out.Set("expires_in", pyjson.IntOf(int64(edgetoken.AccessLifetime/time.Second)))
+	out.Set("expires_in", pyjson.IntOf(expiresIn))
 	out.Set("user_id", user.id.String())
 	out.Set("email", user.email)
 	out.Set("org_id", loginOrgID)

@@ -231,8 +231,9 @@ see the [bootstrap credential runbook](../../operate/runbooks/auth-workload-boot
 
 **`service_account_key` (CHAOS-12273).** The key of an organization's service
 account: `fcsak_` and 32 random bytes as unpadded base64url. The store verbs
-exist in `internal/auth/serviceaccount`, but no route serves them and no route
-accepts a key. A key authenticates nowhere until the use leaf CHAOS-12362 lands,
+exist in `internal/auth/serviceaccount`, and their routes
+(`/internal/v1/service-accounts/keys/*`) are dark until their profile rows ship.
+No route accepts a key. A key authenticates nowhere until the use leaf CHAOS-12362 lands,
 so the class is `unconsumed`. It is no bearer: go-api and the auth-service
 session issue route refuse its prefix before any validator. The registry
 (`auth.credential_registry`) keeps the SHA-256 digest of the whole value, never

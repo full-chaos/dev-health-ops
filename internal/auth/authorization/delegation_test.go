@@ -120,7 +120,7 @@ func TestDelegation_PlantedCredentialActionIsDeniedUnderImpersonation(t *testing
 	if err := json.Unmarshal(vocabulary.RolesV1, &rf); err != nil {
 		t.Fatal(err)
 	}
-	ids := []string{"credentials.issue", "credentials.rotate", "credentials.revoke", "tokens.create", "admin.impersonate"}
+	ids := []string{"credentials.issue", "credentials.rotate", "credentials.revoke", "tokens.create"}
 	for _, id := range ids {
 		af["actions"] = append(af["actions"].([]any), map[string]any{
 			"action": id, "scope": "organization", "resource_kind": "organization", "risk_class": "high", "cache_class": "none",
@@ -147,12 +147,44 @@ func TestDelegation_PlantedCredentialActionIsDeniedUnderImpersonation(t *testing
 			t.Errorf("%s: %+v want impersonation_denied", id, got)
 		}
 	}
-	got := e.Evaluate(orgRequest("admin.impersonate"), delegated("owner", ids, ownerActorRol))
-	if got.Allowed || got.Reason != ReasonImpersonationDenied {
-		t.Errorf("a nested impersonation is denied for platform_owner too: %+v", got)
-	}
 	if got := e.Evaluate(orgRequest("credentials.rotate"), delegated("owner", ids, ownerActorRol)); !got.Allowed || got.Audit == nil {
 		t.Errorf("platform_owner exemption covers a planted credential action: %+v", got)
+	}
+}
+
+func TestDelegation_PlantedPlatformImpersonateIsDeniedForEveryone(t *testing.T) {
+	var af, rf map[string]any
+	if err := json.Unmarshal(vocabulary.ActionsV1, &af); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(vocabulary.RolesV1, &rf); err != nil {
+		t.Fatal(err)
+	}
+	af["actions"] = append(af["actions"].([]any), map[string]any{
+		"action": "admin.impersonate", "scope": "platform", "resource_kind": "platform", "risk_class": "high", "cache_class": "none",
+	})
+	for _, r := range rf["roles"].([]any) {
+		if m := r.(map[string]any); m["role"] == "platform_admin" {
+			m["actions"] = append(m["actions"].([]any), "admin.impersonate")
+		}
+	}
+	ab, _ := json.Marshal(af)
+	rb, _ := json.Marshal(rf)
+	cat, err := policycatalog.Load(ab, rb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := newEvaluator(cat)
+	for _, actorRole := range []string{"", ownerActorRol} {
+		s := delegated("owner", []string{"admin.impersonate"}, actorRole)
+		s.fakeSnapshot.platformRole = "platform_admin"
+		got := e.Evaluate(platformRequest("admin.impersonate"), s)
+		if got.Allowed || got.Reason != ReasonImpersonationDenied {
+			t.Errorf("actor %q: %+v want impersonation_denied", actorRole, got)
+		}
+	}
+	if got := e.Evaluate(platformRequest("admin.impersonate"), platformSnapshot("platform_admin")); !got.Allowed {
+		t.Errorf("planted action not allowed without delegation: %+v", got)
 	}
 }
 
@@ -173,6 +205,7 @@ func TestDelegation_NestedChainDeniedForEveryone(t *testing.T) {
 
 func TestDelegation_PlatformOwnerExemptionIsAllowedAndAudited(t *testing.T) {
 	e := NewEvaluator()
+	// all is a planted full action set: the real Start path stores it for a platform_owner actor with 10987 PR-C.
 	all := allOrgActions(t)
 	for id := range floorOrgActions {
 		got := e.Evaluate(orgRequest(id), delegated("owner", all, ownerActorRol))

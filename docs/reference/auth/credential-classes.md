@@ -93,7 +93,7 @@ Design docs (read the guardrails at minimum):
 | `pagerduty_webhook_signature` | active | external_source | |
 | `workload_token` | optional_feature | workload | |
 | `workload_bootstrap_credential` | optional_feature | workload | |
-| `service_account_key` | **unconsumed** | service_account | no verb and no route yet |
+| `service_account_key` | **unconsumed** | service_account | issued by the key routes; no route accepts it |
 
 **30 classes at the Wave 0 freeze** (31 with `effective_principal_envelope`, added by CHAOS-4737 below). 5 were not in CHAOS-3273's minimum list and were discovered
 during this inventory (`new_vs_ticket: true` in the JSON):

@@ -91,7 +91,7 @@ func (i *Issuer) Tokens(ctx context.Context, grant Grant) (Tokens, error) {
 // whole seconds.
 func (i *Issuer) ExpiresIn() int {
 	if i.eddsa != nil {
-		return int(EdDSAAccessLifetime / time.Second)
+		return int(i.eddsa.lifetime / time.Second)
 	}
 	return AccessExpiresIn
 }

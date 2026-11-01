@@ -40,3 +40,6 @@ contracts/auth/v1/examples/external-push-lifecycle-event/invalid-change-secret-h
 # CHAOS-10456: the enum value "hs256_compat" of AUTH_ACCESS_TOKEN_CLASS on the rewritten class row matches generic-api-key by name
 # shape; it is a class name, not a credential. Commit-less file:rule:line form so the row still matches after a squash.
 docs/reference/auth/configuration.md:generic-api-key:72
+# CHAOS-10458: the class row of the configuration reference (now naming AUTH_ACCESS_TOKEN_LIFETIME) carries the enum value
+# "hs256_compat", which generic-api-key matches by name shape; a class name, not a credential. Commit-less form.
+docs/reference/auth/configuration.md:generic-api-key:73

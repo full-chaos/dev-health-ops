@@ -362,6 +362,17 @@ at current session volumes. **Declared gap:** no measurement of refresh rate at
 on principle, not on load evidence. G-74 load tests precede cutover and are the
 place this gets falsified.
 
+### Amendment, 2026-11-01 (W3 D3)
+
+- The declared gap is closed. The G-74 runs (2026-10-25, bigboy throwaway compose, acp-accepted) refreshed at 1x and 6x
+  the 60-minute rate: p95 7.4 ms and 6.8 ms, no errors, the SLO held, and auth-service CPU went from 4.7% to 18.9%
+  (docs/operate/plan/auth-service-capacity.md). The 10-minute target is now backed by load evidence.
+- 60 minutes is no longer tied to HS256 compatibility. It is the access-token.v1 ceiling, and the EdDSA access token
+  ships at 60 minutes. The lifetime is a setting of the eddsa class (`AUTH_ACCESS_TOKEN_LIFETIME`, whole minutes from 5
+  to 60, default 60), and moving it to 10 minutes is a separate step after the eddsa flip, sized by the capacity rule
+  (refresh demand = active sessions / lifetime).
+- The HS256 compatibility token keeps go-api's 60 minutes until D2 retires it.
+
 ---
 
 ## ACP-ADR-04 — Auth schema ownership and aggregate transition

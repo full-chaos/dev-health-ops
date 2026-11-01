@@ -146,7 +146,7 @@ func newAccessIssuer(cfg authconfig.Config, signer authapi.AccessSigner) (*autha
 	case authconfig.AccessClassEdDSA:
 		return authapi.NewEdDSAIssuer(
 			cfg.Session.AccessSecret.Reveal(), cfg.Session.AccessIssuer, cfg.Session.AccessAudience,
-			signer, cfg.TokenIssuerURL, authapi.WithLegacyAudience(cfg.Session.LegacyAudience),
+			signer, cfg.TokenIssuerURL, authapi.WithLegacyAudience(cfg.Session.LegacyAudience), authapi.WithAccessLifetime(cfg.Session.AccessLifetime),
 		)
 	}
 	return nil, fmt.Errorf("authruntime: unknown access token class %q", cfg.Session.AccessClass)

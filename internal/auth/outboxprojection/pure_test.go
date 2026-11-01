@@ -5,11 +5,24 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/pushlifecycle"
 )
 
 const sampleOrg = "7f1c0d2e-0000-4000-8000-0000000000a1"
+
+func pushIn(e contracts.ExternalPushLifecycleEvent) Input {
+	return Input{Domain: DomainExternalPush, Event: e}
+}
+
+func acrIn() Input {
+	e := sampleEvent()
+	e.AggregateID = "cred_abcdef"
+	return Input{Domain: DomainAcr, Event: e, AcrClass: "browser", OwnerSubject: "sub-1", BodyDigest: [32]byte{1, 2, 3}, Actor: uuid.MustParse("0a1b2c3d-0000-4000-8000-0000000000c1")}
+}
 
 func sampleEvent() contracts.ExternalPushLifecycleEvent {
 	at := contracts.Timestamp{Time: time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)}
@@ -54,7 +67,7 @@ func TestEveryOutcomeHasOneClassAndOnlyAGapAndAPendingParentRetry(t *testing.T) 
 
 func TestDigestIsStableAndNamesTheWholeBody(t *testing.T) {
 	a, b := sampleEvent(), sampleEvent()
-	if Digest(a) != Digest(b) {
+	if Digest(pushIn(a)) != Digest(pushIn(b)) {
 		t.Fatal("the same event digests differently")
 	}
 	for name, edit := range map[string]func(*contracts.ExternalPushLifecycleEvent){
@@ -67,14 +80,14 @@ func TestDigestIsStableAndNamesTheWholeBody(t *testing.T) {
 	} {
 		c := sampleEvent()
 		edit(&c)
-		if Digest(c) == Digest(a) {
+		if Digest(pushIn(c)) == Digest(pushIn(a)) {
 			t.Errorf("a changed %s leaves the digest unchanged", name)
 		}
 	}
 }
 
 func TestVerdictComparesTheStoredDigest(t *testing.T) {
-	d := Digest(sampleEvent())
+	d := Digest(pushIn(sampleEvent()))
 	other := d
 	other[0] ^= 1
 	if Compare(nil, d) != VerdictNew || Compare(d[:], d) != VerdictSame || Compare(other[:], d) != VerdictDifferent {
@@ -124,13 +137,11 @@ func TestNarrowOnlyEverShortensAParent(t *testing.T) {
 }
 
 func TestInputCheckRefusesWhatCannotBeKeyed(t *testing.T) {
-	ok := Input{Domain: DomainExternalPush, Event: sampleEvent()}
+	ok := pushIn(sampleEvent())
 	if err := ok.Check(); err != nil {
 		t.Fatalf("a valid push input: %v", err)
 	}
-	acr := Input{Domain: DomainAcr, Event: sampleEvent(), AcrClass: "acr_client_credential", OwnerSubject: "sub-1"}
-	acr.Event.AggregateID = "cred_abcdef"
-	if err := acr.Check(); err != nil {
+	if err := acrIn().Check(); err != nil {
 		t.Fatalf("a valid acr input: %v", err)
 	}
 	cases := map[string]func(*Input){
@@ -142,9 +153,8 @@ func TestInputCheckRefusesWhatCannotBeKeyed(t *testing.T) {
 		"id with a slash":             func(i *Input) { i.Event.AggregateID = "a/b" },
 		"revision zero":               func(i *Input) { i.Event.Payload.Revision = 0 },
 		"unknown domain":              func(i *Input) { i.Domain = "stripe" },
-		"acr with no class":           func(i *Input) { i.Domain, i.AcrClass = DomainAcr, "" },
-		"acr with a wrong class":      func(i *Input) { i.Domain, i.AcrClass = DomainAcr, "workload_token" },
-		"push with an acr class":      func(i *Input) { i.AcrClass = "acr_client_credential" },
+		"push with an acr class":      func(i *Input) { i.AcrClass = "browser" },
+		"push with an owner":          func(i *Input) { i.OwnerSubject = "sub-1" },
 	}
 	for name, edit := range cases {
 		in := ok
@@ -153,9 +163,85 @@ func TestInputCheckRefusesWhatCannotBeKeyed(t *testing.T) {
 			t.Errorf("%s was accepted", name)
 		}
 	}
-	browser := acr
-	browser.AcrClass = "acr_browser_refresh_token"
-	if err := browser.Check(); err != nil {
-		t.Errorf("the browser refresh class: %v", err)
+	acrCases := map[string]func(*Input){
+		"acr with no class at revision 1":    func(i *Input) { i.AcrClass = "" },
+		"acr with a registry class value":    func(i *Input) { i.AcrClass = "acr_client_credential" },
+		"acr with the browser refresh class": func(i *Input) { i.AcrClass = "acr_browser_refresh_token" },
+		"acr with a seventh class":           func(i *Input) { i.AcrClass = "service" },
+		"acr with no body digest":            func(i *Input) { i.BodyDigest = [32]byte{} },
+		"acr with no actor":                  func(i *Input) { i.Actor = uuid.Nil },
+		"acr later revision, a bad class":    func(i *Input) { i.Event.Payload.Revision, i.AcrClass = 2, "service" },
+	}
+	for name, edit := range acrCases {
+		in := acrIn()
+		edit(&in)
+		if err := in.Check(); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+	for _, class := range []string{"browser", "oauth_user", "native_device", "org_bearer", "operator", "workload"} {
+		in := acrIn()
+		in.AcrClass = class
+		if err := in.Check(); err != nil {
+			t.Errorf("wire class %s: %v", class, err)
+		}
+	}
+	// The contract carries the class and the owner at revision 1 only: a revoke has neither and must land.
+	revoke := acrIn()
+	revoke.Event.Payload.Revision, revoke.AcrClass, revoke.OwnerSubject = 2, "", ""
+	if err := revoke.Check(); err != nil {
+		t.Errorf("an acr event at revision 2 with no class or owner: %v", err)
+	}
+	if err := ok.Check(); err != nil || ok.Actor != uuid.Nil {
+		t.Errorf("a push input needs no actor: %v", err)
+	}
+}
+
+// The registry class of every acr credential is acr_client_credential; the wire class is kept as projected data.
+func TestRegistryClassIsOneValuePerDomain(t *testing.T) {
+	if got := RegistryClass(pushIn(sampleEvent())); got != "external_push_ingest_token" {
+		t.Errorf("push class %q", got)
+	}
+	for _, wire := range []string{"browser", "oauth_user", "native_device", "org_bearer", "operator", "workload"} {
+		in := acrIn()
+		in.AcrClass = wire
+		if got := RegistryClass(in); got != "acr_client_credential" {
+			t.Errorf("acr wire class %s maps to %q, want acr_client_credential", wire, got)
+		}
+	}
+}
+
+// An acr event is keyed by the SHA-256 of the posted bytes: the mapped push event drops fields (the owner, the
+// class), so a digest of it would call a same-revision delivery with another owner a duplicate.
+func TestAcrDigestIsTheBodyDigestAndNotTheMappedEvent(t *testing.T) {
+	a, b := acrIn(), acrIn()
+	b.OwnerSubject, b.AcrClass = "another-owner", "operator"
+	if Digest(a) != Digest(b) {
+		t.Fatal("the mapped fields changed an acr digest that rests on the posted bytes alone")
+	}
+	c := acrIn()
+	c.BodyDigest = [32]byte{9}
+	if Digest(a) == Digest(c) {
+		t.Fatal("a different posted body leaves the acr digest unchanged")
+	}
+	push := pushIn(sampleEvent())
+	push.BodyDigest = [32]byte{7}
+	if Digest(push) != Digest(pushIn(sampleEvent())) {
+		t.Fatal("a push digest must not depend on BodyDigest")
+	}
+	if Digest(a) == Digest(pushIn(a.Event)) {
+		t.Fatal("an acr and a push digest of one event share a value")
+	}
+}
+
+// Only a decision that refused the event is a denied audit row.
+func TestAuditOutcomeIsDeniedOnlyForARefusingDecision(t *testing.T) {
+	for _, o := range []Outcome{pushlifecycle.RefusedTerminal, pushlifecycle.RefusedWiden, pushlifecycle.RefusedTransition, pushlifecycle.RefusedParent} {
+		if AuditOutcome(o) != audit.OutcomeDenied {
+			t.Errorf("%s: audit outcome %s, want denied", o, AuditOutcome(o))
+		}
+	}
+	if AuditOutcome(pushlifecycle.Applied) != audit.OutcomeAllowed {
+		t.Error("an applied decision is an allowed audit row")
 	}
 }

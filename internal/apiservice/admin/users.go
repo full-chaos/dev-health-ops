@@ -73,7 +73,7 @@ func (h *handlers) userRoutes() []httpapi.Route {
 		{Method: http.MethodPatch, Pattern: usersPrefix + "/users/{user_id}", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.updateUser))},
 		{Method: http.MethodPost, Pattern: usersPrefix + "/users/{user_id}/password",
 			Handler: h.bodyFirst(policy.Admin,
-				httpapi.ValidateThenLimit(validateSetPasswordBody, h.passwordLimiter, adminUserKey, h.write)(http.HandlerFunc(h.setUserPassword)))},
+				httpapi.ValidateThenLimitDependency(validateSetPasswordBody, h.passwordLimiter, adminUserKey, h.write)(http.HandlerFunc(h.setUserPassword)))},
 		{Method: http.MethodDelete, Pattern: usersPrefix + "/users/{user_id}", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.deleteUser))},
 	}
 }

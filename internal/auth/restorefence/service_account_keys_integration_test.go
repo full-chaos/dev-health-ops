@@ -92,6 +92,9 @@ WHERE credential_class = 'service_account_key' AND (cardinality(scopes) > 0 OR c
 		t.Errorf("%d keys hold a scope or an audience (%v)", widened, err)
 	}
 	for _, action := range report.Actions {
+		if action.Kind == ActionRotateKeysAfterBlindMargin {
+			t.Errorf("a manifest apply named the key count: %+v", action)
+		}
 		for _, id := range action.IDs {
 			for _, name := range []string{"rotated", "revoked", "kept", "successor", "issued-after-t"} {
 				if strings.Contains(id, fenceKeyID(name).String()) {
@@ -101,4 +104,92 @@ WHERE credential_class = 'service_account_key' AND (cardinality(scopes) > 0 OR c
 		}
 	}
 	assertNoSecret(t, ctx, restored, manifest, report)
+}
+
+func (d *fenceDB) insertOtherClass(t *testing.T, ctx context.Context, name string, expires time.Time) {
+	t.Helper()
+	d.commit(t, ctx, "credential.created", 0, func(ctx context.Context, tx audit.TxOps) error {
+		_, err := tx.Exec(ctx, `INSERT INTO auth.credential_registry (id, principal_id, credential_class, secret_hash, hash_algorithm, fingerprint, expires_at)
+VALUES ($1, $2, 'workload_token', decode(md5($1::uuid::text), 'hex'), 'sha256', '0123456789abcdef', $3)`,
+			fenceKeyID(name), uuid.NewSHA1(uuid.NameSpaceURL, []byte("fence-principal")), expires)
+		return err
+	})
+}
+
+func (d *fenceDB) revokeKey(t *testing.T, ctx context.Context, name string) {
+	t.Helper()
+	d.commit(t, ctx, "credential.revoked", 0, func(ctx context.Context, tx audit.TxOps) error {
+		_, err := tx.Exec(ctx, `UPDATE auth.credential_registry SET revoked_at = now(), revoked_reason = 'compromised' WHERE id = $1`, fenceKeyID(name))
+		return err
+	})
+}
+
+func keyCountActions(report Report) []OperatorAction {
+	var out []OperatorAction
+	for _, action := range report.Actions {
+		if action.Kind == ActionRotateKeysAfterBlindMargin {
+			out = append(out, action)
+		}
+	}
+	return out
+}
+
+// A blind margin has no source state, so it cannot undo a revocation made after T. It names the count of live keys:
+// not a revoked key, not an expired key, not a credential of another class, and no id.
+func TestABlindMarginNamesTheCountOfLiveKeysAndNoKey(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	db := newFenceDB(t, ctx)
+	db.stateT(t, ctx)
+	future := time.Now().Add(24 * time.Hour)
+	db.insertKey(t, ctx, "live-1", future, nil)
+	db.insertKey(t, ctx, "live-2", future, nil)
+	db.insertKey(t, ctx, "live-3", future, nil)
+	db.insertKey(t, ctx, "revoked", future, nil)
+	db.revokeKey(t, ctx, "revoked")
+	db.insertKey(t, ctx, "expired", time.Now().Add(-time.Hour), nil)
+	db.insertOtherClass(t, ctx, "other-class", future)
+
+	report, err := Apply(ctx, db.admin, db.schema, nil, Options{Apply: true, BlindMargin: 1000})
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	found := keyCountActions(report)
+	if len(found) != 1 || found[0].Count != 3 || len(found[0].IDs) != 0 || found[0].Source != "auth.credential_registry" {
+		t.Fatalf("key actions = %+v, want one with count 3 and no id", found)
+	}
+	read, err := PendingActions(ctx, db.admin, db.schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Join(ActionLines(read), "\n")
+	if !strings.Contains(lines, liveKeysLine) {
+		t.Errorf("status lines hold no key line: %s", lines)
+	}
+	for _, name := range []string{"live-1", "live-2", "live-3", "revoked", "expired", "other-class"} {
+		if strings.Contains(lines, fenceKeyID(name).String()) {
+			t.Errorf("a line names the key %s", name)
+		}
+	}
+	if strings.Contains(lines, "fcsak_") {
+		t.Error("a line holds a key prefix")
+	}
+	assertNoSecret(t, ctx, db, nil, report)
+}
+
+func TestABlindMarginWithNoLiveKeyNamesNoKeyAction(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	db := newFenceDB(t, ctx)
+	db.stateT(t, ctx)
+	db.insertKey(t, ctx, "revoked", time.Now().Add(24*time.Hour), nil)
+	db.revokeKey(t, ctx, "revoked")
+	db.insertKey(t, ctx, "expired", time.Now().Add(-time.Hour), nil)
+	report, err := Apply(ctx, db.admin, db.schema, nil, Options{Apply: true, BlindMargin: 1000})
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if found := keyCountActions(report); len(found) != 0 {
+		t.Errorf("no live key, but the report names %+v", found)
+	}
 }

@@ -442,6 +442,14 @@ func (o Operator) UpdateUser(ctx context.Context, in UpdateUserInput) (*UpdateUs
 		if err != nil {
 			return err
 		}
+		if in.MembershipOrg != nil {
+			// A membership-only update writes no users row, and its INSERT's foreign
+			// key check comes after the unique index: unlocked, a writer that holds
+			// this row gives uq_membership_user_org or a deadlock.
+			if _, err := store.Pool.Exec(ctx, `SELECT 1 FROM users WHERE id = $1 FOR UPDATE`, user.ID); err != nil {
+				return err
+			}
+		}
 		changes := []string{}
 		shownEmail := user.Email
 		if hasProfileChange {

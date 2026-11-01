@@ -132,7 +132,10 @@ channel.
   aggregate: the next revision applies (the aggregate is invalidated), a duplicate
   or older one is ignored, a revision that skips ahead is a gap (the aggregate is
   invalidated and the mark moves to the gap revision, so the gap does not repeat).
-  The invalidation runs **before** the cursor and the mark move. An invalidation
+  The invalidation runs **before** the cursor and the mark move. Events of one
+  aggregate are handled one at a time from the classification to the move (other
+  aggregates do not wait), so a live event and a catch-up floor of one revision
+  invalidate it once. An invalidation
   that returns an error leaves both where they were and is returned: a live
   event asks for a catch-up (the floor applies it again), a catch-up or a failed
   `InvalidateAll` of a (re)subscribe retries with the backoff, and

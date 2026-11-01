@@ -41,13 +41,16 @@ type Config struct {
 
 // Consumer applies outbox events by aggregate revision. Revision order is per aggregate; delivery may repeat,
 // overlap and reorder (audit.Sink), so every event is classified (Peek) and advanced (ResyncTo) by contracts.ConsumerCursor
-// under one mutex; the invalidation runs between the two, outside it.
+// under one mutex; the invalidation runs between the two, outside it. Handles of one aggregate are serialized from the
+// Peek to the advance (inflight), so a live event and a catch-up floor of one revision never both invalidate it.
 type Consumer struct {
-	mu     sync.Mutex
-	cursor *contracts.ConsumerCursor
-	marks  *Watermarks
-	inv    Invalidator
-	log    *slog.Logger
+	mu       sync.Mutex
+	cursor   *contracts.ConsumerCursor
+	inflight map[string]chan struct{} // closed when the Handle that holds the aggregate key is done
+	marks    *Watermarks
+	inv      Invalidator
+	log      *slog.Logger
+	onWait   func(key string) // test seam: a Handle starts to wait for its aggregate
 
 	events  metric.Int64Counter
 	resyncs metric.Int64Counter
@@ -58,7 +61,7 @@ func NewConsumer(cfg Config) (*Consumer, error) {
 	if cfg.Invalidator == nil {
 		return nil, errors.New("revisionfeed: an invalidator is required")
 	}
-	c := &Consumer{cursor: contracts.NewConsumerCursor(), marks: NewWatermarks(), inv: cfg.Invalidator, log: cfg.Logger}
+	c := &Consumer{cursor: contracts.NewConsumerCursor(), inflight: map[string]chan struct{}{}, marks: NewWatermarks(), inv: cfg.Invalidator, log: cfg.Logger}
 	if c.log == nil {
 		c.log = slog.New(slog.DiscardHandler)
 	}
@@ -89,9 +92,16 @@ var ErrInvalidate = errors.New("revisionfeed: invalidation failed")
 // the gap revision (ResyncTo), so the gap does not repeat for every later revision; Ignore drops it. The invalidation runs
 // BEFORE the cursor and the mark advance, and outside the lock, so a slow cache never blocks another aggregate's event. An
 // invalidation error is returned (wrapping ErrInvalidate) with the cursor and the mark unmoved: the event is retryable.
+// A second Handle of the same aggregate waits for the first to finish and then classifies (a ctx that ends while it waits
+// is returned, nothing invalidated).
 func (c *Consumer) Handle(ctx context.Context, e contracts.ProvisioningEvent) (contracts.Disposition, error) {
 	revision := int64(e.Payload.Revision)
 	key := contracts.AggregateKey(e.AggregateType, e.AggregateID)
+	done, err := c.acquire(ctx, key)
+	if err != nil {
+		return "", err
+	}
+	defer c.release(key, done)
 	c.mu.Lock()
 	disposition := c.cursor.Peek(e)
 	c.mu.Unlock()
@@ -120,6 +130,36 @@ func (c *Consumer) Handle(ctx context.Context, e contracts.ProvisioningEvent) (c
 		c.logDisposition(ctx, slog.LevelDebug, e.AggregateType, revision, disposition)
 	}
 	return disposition, nil
+}
+
+// acquire takes the in-flight slot of key, waiting while another Handle holds it.
+func (c *Consumer) acquire(ctx context.Context, key string) (chan struct{}, error) {
+	for {
+		c.mu.Lock()
+		busy, held := c.inflight[key]
+		if !held {
+			done := make(chan struct{})
+			c.inflight[key] = done
+			c.mu.Unlock()
+			return done, nil
+		}
+		c.mu.Unlock()
+		if c.onWait != nil {
+			c.onWait(key)
+		}
+		select {
+		case <-busy:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+}
+
+func (c *Consumer) release(key string, done chan struct{}) {
+	c.mu.Lock()
+	delete(c.inflight, key)
+	c.mu.Unlock()
+	close(done)
 }
 
 // HandleOutbox maps an outbox row to a provisioning event and handles it. A row that does not map is refused with the

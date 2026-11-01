@@ -85,7 +85,7 @@ func (e *Evaluator) Evaluate(r Request, s Snapshot) Decision {
 		return e.evaluateBase(r, s)
 	}
 	rev := e.cat.Version()
-	deny := func(why Reason) Decision { return Decision{Reason: why, PolicyRevision: rev} }
+	deny := func(why Reason) Decision { return Decision{Reason: why, PolicyRevision: rev, CacheClass: CacheNone} }
 
 	switch {
 	case len(del.Chain) == 0:

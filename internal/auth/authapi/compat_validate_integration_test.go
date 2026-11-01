@@ -109,6 +109,16 @@ VALUES ($1, $2, $3, 'admin', now(), now(), now())`, uuid.New(), org, id)
 		exec(`INSERT INTO auth.principals (id, kind, display_name) VALUES ($1, 'user', 'validate-test')`, id.String())
 		return id
 	}
+	if err := audit.Commit(ctx, admin, schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			_, err := tx.Exec(ctx, `INSERT INTO auth.organizations (id, name, slug) VALUES ($1, $2, $2)`, org, "validate-"+org.String())
+			return err
+		},
+		Audit:  audit.AuditEvent{EventType: "organization.created", Outcome: audit.OutcomeAllowed},
+		Events: []audit.OutboxEvent{{AggregateType: "organization", AggregateID: "org_" + org.String(), EventType: "organization.updated"}},
+	}); err != nil {
+		t.Fatalf("seed auth organization: %v", err)
+	}
 	create := func(s *session.Store, principal uuid.UUID) uuid.UUID {
 		issued, err := s.Create(ctx, principal, &org, []string{"pwd"})
 		if err != nil {

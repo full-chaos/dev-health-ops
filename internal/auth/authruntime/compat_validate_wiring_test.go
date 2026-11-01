@@ -18,7 +18,11 @@ import (
 // and the route stays dark, a 404, until the endpoint-profile row lands
 // (PR-2, D6617); the start log names it.
 func TestTheValidateRouteIsBuiltAndDarkWithoutItsProfileRow(t *testing.T) {
-	env := compatEnvironment(map[string]string{authconfig.EnvDatabaseURI: "postgres://auth@127.0.0.1:1/devhealth"})
+	env := compatEnvironment(map[string]string{
+		authconfig.EnvDatabaseURI:    "postgres://auth@127.0.0.1:1/devhealth",
+		authconfig.EnvSigningKeyFile: "/nonexistent",
+		authconfig.EnvSigningKeyID:   "validate-test",
+	})
 	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(env)})
 	if err != nil {
 		t.Fatal(err)

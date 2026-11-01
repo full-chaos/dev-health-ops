@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 
@@ -93,15 +92,15 @@ func acpRows(t *testing.T, golden map[string]string) map[string]string {
 			line = "Org A" + strings.TrimPrefix(line, "Org B")
 		}
 		if strings.Contains(line, "login_failedsession") {
+			// auth-service writes go-api's failed sign-in row itself, the typed address included (CHAOS-11400).
 			failed++
-			line = regexp.MustCompile(`\{"email": "[^"]*"\}`).ReplaceAllString(line, "{}")
 		}
 		audit = append(audit, line)
 	}
 	if failed != 1 {
 		t.Fatalf("the golden holds %d failed sign-in rows, want 1", failed)
 	}
-	audit = append(audit, `<nil>pia@example.comloginsessionuser:pia@example.comUser logged in{}{"ip_address": "203.0.113.7", "user_agent": "venue-oracle/1"}success<null>`)
+	// pia's sign-in names no organization: no row, as go-api (CHAOS-11400).
 	out[TableAuditLogs] = strings.Join(audit, rowSeparator)
 	return out
 }
@@ -121,7 +120,7 @@ func TestQuirksCoverTheGoldenAndTheExpectedTargetRowsExactly(t *testing.T) {
 	if dead := l.Dead(); len(dead) != 0 {
 		t.Errorf("dead quirks: %v", dead)
 	}
-	want := "audit-login-failed-attempted-email-not-recorded=1 audit-login-without-organization-recorded=1 login-organization-chosen-without-activity=2 audit-login-organization-chosen-without-activity=2 users-last-login-not-stamped=2"
+	want := "login-organization-chosen-without-activity=2 audit-login-organization-chosen-without-activity=2 users-last-login-not-stamped=2"
 	if got := l.Covered(); got != want {
 		t.Errorf("Covered = %q, want %q", got, want)
 	}
@@ -185,19 +184,17 @@ func TestEveryProjectedTableIsAGoldenComparison(t *testing.T) {
 	}
 }
 
-func TestQuirkExtraRowsAreLimitedToTheirCount(t *testing.T) {
+// An orgless sign-in row is no longer excused (auth-service writes none, as go-api): one is reported.
+func TestAnOrglessSignInRowIsReported(t *testing.T) {
 	golden := goldenRows(t)
 	acp := acpRows(t, golden)
 	l, err := NewLedger(forwarded(t, "sessions,local_login"), false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	dup := `<nil>pia@example.comloginsessionuser:pia@example.comUser logged in{}{"ip_address": "203.0.113.7", "user_agent": "venue-oracle/1"}success<null>`
-	if !strings.Contains(acp[TableAuditLogs], dup) {
-		t.Fatal("the expected orgless sign-in row changed")
-	}
-	if problems := l.Compare(TableAuditLogs, golden[TableAuditLogs], acp[TableAuditLogs]+rowSeparator+dup); len(problems) == 0 {
-		t.Fatal("a second orgless sign-in row was accepted")
+	orgless := `<nil>pia@example.comloginsessionuser:pia@example.comUser logged in{}{"ip_address": "203.0.113.7", "user_agent": "venue-oracle/1"}success<null>`
+	if problems := l.Compare(TableAuditLogs, golden[TableAuditLogs], acp[TableAuditLogs]+rowSeparator+orgless); len(problems) == 0 {
+		t.Fatal("an orgless sign-in row was accepted")
 	}
 }
 

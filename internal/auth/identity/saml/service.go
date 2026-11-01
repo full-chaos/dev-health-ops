@@ -290,7 +290,7 @@ func (s *Service) ConsumeFor(ctx context.Context, p Provider, posted string, coo
 		return SignIn{}, err
 	}
 	if !found {
-		principalID, err := s.provisionNew(ctx, p, id, email, s.fullName(p, v))
+		principalID, err := s.provisionNew(ctx, p, id, v.NameID.Value, email, s.fullName(p, v))
 		if err != nil {
 			return SignIn{}, err
 		}
@@ -318,7 +318,7 @@ func (s *Service) requireMember(ctx context.Context, p Provider, principalID uui
 	if err != nil {
 		return err
 	}
-	if !member && s.JIT != nil {
+	if !member && s.JIT != nil && p.AutoProvision {
 		if err := s.JIT.JoinOnSignIn(ctx, principalID, p); err != nil {
 			return err
 		}
@@ -360,7 +360,7 @@ func (s *Service) matchRequest(ctx context.Context, p Provider, v Verified, cook
 // service without the membership seam is ErrNotOrgMember. All of these write
 // nothing. Otherwise the seam creates the account, its identity and its
 // membership in one transaction; the session is issued after it returns.
-func (s *Service) provisionNew(ctx context.Context, p Provider, id Identity, email, fullName string) (uuid.UUID, error) {
+func (s *Service) provisionNew(ctx context.Context, p Provider, id Identity, nameID, email, fullName string) (uuid.UUID, error) {
 	normalized, err := s.Store.NormalizeEmail(email)
 	if err != nil {
 		return uuid.Nil, s.refuse(ctx, p, ErrInvalidEmailAddress)
@@ -381,7 +381,12 @@ func (s *Service) provisionNew(ctx context.Context, p Provider, id Identity, ema
 	if s.JIT == nil {
 		return uuid.Nil, s.refuse(ctx, p, ErrNotOrgMember)
 	}
-	principalID, err := s.JIT.ProvisionOnSignIn(ctx, NewAccount{Identity: id, Email: normalized, FullName: fullName}, p)
+	var legacyName *string
+	if fullName != "" {
+		legacyName = &fullName
+	}
+	principalID, err := s.JIT.ProvisionOnSignIn(ctx,
+		NewAccount{Identity: id, Email: normalized, FullName: fullName, LegacySubject: nameID, LegacyFullName: legacyName}, p)
 	switch {
 	case err == nil:
 		return principalID, nil

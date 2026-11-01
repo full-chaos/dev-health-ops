@@ -41,7 +41,7 @@ func TestProjectionRoutingSessionsForwardedReadsAuthRefreshAndAudit(t *testing.T
 		t.Fatalf("refresh_tokens: projected %v err %v\n%s", projected, err, refresh)
 	}
 	audit, projected, err := Query(TableAuditLogs, publicAudit, f)
-	if err != nil || !projected || !strings.Contains(audit, "auth.security_audit_events") || !strings.Contains(audit, "FROM audit_logs a") {
+	if err != nil || !projected || strings.Contains(audit, "auth.security_audit_events") || !strings.Contains(audit, "FROM audit_logs a") {
 		t.Fatalf("audit_logs: projected %v err %v\n%s", projected, err, audit)
 	}
 	users, projected, err := Query(TableUsers, publicUsers, f)

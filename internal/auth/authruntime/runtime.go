@@ -41,6 +41,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/local"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/social"
 	"github.com/full-chaos/dev-health-ops/internal/auth/keyrotation"
+	"github.com/full-chaos/dev-health-ops/internal/auth/publicaudit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/restorefence"
 	"github.com/full-chaos/dev-health-ops/internal/auth/servicecred"
@@ -53,6 +54,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/token"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -123,7 +125,12 @@ func sessionRoutes(
 	if err != nil {
 		return nil, err
 	}
-	return append(routes, compat...), nil
+	routes = append(routes, compat...)
+	oauth, err := oauthRoutes(cfg, logger, pool, schema, sessions, issuer, limits, accessSigner)
+	if err != nil {
+		return nil, err
+	}
+	return append(routes, oauth...), nil
 }
 
 // logAPIRoutes states what the API listener serves. The refresh and logout
@@ -189,6 +196,12 @@ func compatRoutes(
 		AppendAudit: func(ctx context.Context, event audit.AuditEvent) error {
 			return audit.Append(ctx, pool, schema, event)
 		},
+		AppendAuditWith: func(ctx context.Context, event audit.AuditEvent, apply func(ctx context.Context, tx audit.TxOps) error) error {
+			return audit.AppendWith(ctx, pool, schema, event, apply)
+		},
+		PublicAuditTx: func(ctx context.Context, fn func(ctx context.Context, tx publicaudit.Tx) error) error {
+			return pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error { return fn(ctx, tx) })
+		},
 		Limits: limits,
 	}
 	if cfg.Session.LoginEnabled {
@@ -215,7 +228,7 @@ func compatRoutes(
 	if err != nil {
 		return nil, err
 	}
-	sso, err := ssoRoutes(cfg, logger, pool, schema, identities, deps)
+	sso, err := ssoRoutes(cfg, logger, pool, schema, identities, deps, oidcSeamOf(cfg, logger, identities, sessions))
 	if err != nil {
 		return nil, err
 	}
@@ -766,7 +779,7 @@ func apiServerOptions(cfg authconfig.Config, logger *slog.Logger, routes []httpa
 		// carry X-Auth-Request-ID as route answers do. The client address
 		// (every audit row and session) and the user agent (every session)
 		// are bound by internal/auth/clientaddr.
-		Middleware: []func(http.Handler) http.Handler{requestid.Middleware, clientaddr.Middleware(cfg.TrustedProxies)},
+		Middleware: []func(http.Handler) http.Handler{requestid.Middleware, clientaddr.Middleware(cfg.TrustedProxies), publicaudit.Middleware},
 		// The transport id is always minted here, never a client's
 		// X-Request-ID: it reaches every log line and envelope.
 		AcceptRequestID: func(string) bool { return false },

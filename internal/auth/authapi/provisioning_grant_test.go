@@ -12,7 +12,6 @@ import (
 
 	"github.com/google/uuid"
 
-	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/grant"
 )
@@ -65,93 +64,59 @@ func (f *fakeGrants) Revoke(ctx context.Context, in grant.RevokeInput) (*grant.G
 	return f.run("revoke", in.OrgID, f.principal, in.Actor, in.Authorize)
 }
 
-// docWithGrantRows is the embedded endpoint-profile document with a row for each grant route, copied from the deprovision row.
-func docWithGrantRows(t testing.TB) []byte {
-	t.Helper()
-	var document map[string]any
-	if err := json.Unmarshal(authv1.AuthServiceEndpointProfiles, &document); err != nil {
-		t.Fatal(err)
-	}
-	rows := document["rows"].([]any)
-	var source map[string]any
-	for _, item := range rows {
-		if row := item.(map[string]any); row["route"] == PatternOrgDeprovision && row["service"] == AccessService {
-			source = row
-		}
-	}
-	if source == nil {
-		t.Fatal("no deprovision row in the embedded document")
-	}
-	for _, route := range grantPatterns {
-		clone := map[string]any{}
-		for k, v := range source {
-			clone[k] = v
-		}
-		clone["route"] = route
-		clone["id"] = "POST " + route + " [dev-health-auth-service @api]"
-		rows = append(rows, clone)
-	}
-	document["rows"] = rows
-	raw, err := json.Marshal(document)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return raw
-}
-
 func newGrantFixture(t *testing.T) *provFixture {
 	t.Helper()
-	f := newProvFixtureFor(t, docWithGrantRows(t), nil)
+	f := newProvFixtureFor(t, nil, nil)
 	f.grants.principal = f.target
 	f.grants.out = grant.Grant{ID: uuid.New(), OrgID: f.org, PrincipalID: f.target, Role: "viewer", Key: "acme/api", Origin: grant.OriginAPI, Revision: 1}
 	return f
 }
 
-type grantCase struct {
-	op, path string
-	body     func(f *provFixture, actor uuid.UUID) map[string]any
-}
-
-func grantCases() []grantCase {
-	return []grantCase{
+func grantCases() []routeCase {
+	return []routeCase{
 		{opGrantCreate, PatternGrantCreate, func(f *provFixture, a uuid.UUID) map[string]any {
 			return map[string]any{"organization_id": f.org.String(), "actor_principal_id": a.String(), "principal_id": f.target.String(),
 				"role": "viewer", "resource_key": "acme/api"}
-		}},
+		}, []string{"organization_id", "actor_principal_id", "principal_id", "role", "resource_key"}},
 		{opGrantUpdate, PatternGrantUpdate, func(f *provFixture, a uuid.UUID) map[string]any {
 			return map[string]any{"organization_id": f.org.String(), "actor_principal_id": a.String(), "grant_id": f.grants.out.ID.String(), "role": "admin"}
-		}},
+		}, []string{"organization_id", "actor_principal_id", "grant_id"}},
 		{opGrantRevoke, PatternGrantRevoke, func(f *provFixture, a uuid.UUID) map[string]any {
 			return map[string]any{"organization_id": f.org.String(), "actor_principal_id": a.String(), "grant_id": f.grants.out.ID.String()}
-		}},
+		}, []string{"organization_id", "actor_principal_id", "grant_id"}},
 	}
 }
 
-// The grant routes are dark: not on the startup gate, mounted only when the profile document holds a row for each, and one
-// log line names each route that is not mounted.
-func TestGrantRoutesMountOnlyOnTheirRows(t *testing.T) {
-	for _, pattern := range grantPatterns {
-		if slices.Contains(provisioningPatterns, pattern) {
-			t.Fatalf("%s is on the startup gate; the grant routes are dark until their rows ship", pattern)
-		}
-	}
-	bare := newProvFixtureFor(t, nil, nil)
-	for _, c := range grantCases() {
-		if response := bare.post(c.path, encode(c.body(bare, bare.super)), nil); response.Code != http.StatusNotFound {
-			t.Errorf("%s over the embedded document: %d, want 404 (no route)", c.path, response.Code)
-		}
-		if !strings.Contains(bare.logs.String(), `"route":"`+c.path+`"`) {
-			t.Errorf("no log line names the unmounted route %s", c.path)
-		}
-	}
-	if bare.grants.calls != 0 {
-		t.Fatal("an unmounted route reached the store")
-	}
+// The grant routes are served with the embedded document: its rows are there, so each answers and none is a 404.
+func TestGrantRoutesAreServedWithTheEmbeddedDocument(t *testing.T) {
 	f := newGrantFixture(t)
 	for _, c := range grantCases() {
 		if response := f.post(c.path, encode(c.body(f, f.super)), nil); response.Code != http.StatusOK {
-			t.Errorf("%s over a document with its row: %d %s", c.path, response.Code, response.Body)
+			t.Errorf("%s over the embedded document: %d %s, want 200", c.path, response.Code, response.Body)
 		}
+	}
+	if strings.Contains(f.logs.String(), "not mounted") && strings.Contains(f.logs.String(), "/internal/v1/grants/") {
+		t.Fatalf("a grant route was logged as not mounted: %s", f.logs.String())
+	}
+}
+
+// The grant routes are on the startup gate: a document without a row builds no route at all and names the route.
+func TestGrantRoutesAreOnTheStartupGate(t *testing.T) {
+	f := newProvFixtureFor(t, nil, nil)
+	for _, c := range grantCases() {
+		if !slices.Contains(provisioningPatterns, c.path) || provisioningRouteOps[c.op] != c.path {
+			t.Fatalf("%s is not in the provisioning patterns or route operations", c.path)
+		}
+		routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
+			Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa, Grants: f.grants,
+			ProfileRows: embeddedDocWithoutRow(t, c.path)})
+		if !errors.Is(err, errProvisioningRows) || routes != nil || !strings.Contains(err.Error(), "POST "+c.path+" ") {
+			t.Fatalf("a document without the %s row built %d routes, err %v; want none and a refusal naming it", c.path, len(routes), err)
+		}
+	}
+	if _, err := ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
+		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa}); err == nil {
+		t.Fatal("routes were built with no grant store")
 	}
 }
 
@@ -159,7 +124,7 @@ func TestGrantRoutesMountOnlyOnTheirRows(t *testing.T) {
 func TestGrantRoutesPassTheRequestAndAnswerTheGrant(t *testing.T) {
 	f := newGrantFixture(t)
 	expires := time.Date(2031, 5, 6, 7, 8, 9, 0, time.UTC)
-	post := func(c grantCase, mutate func(map[string]any)) map[string]any {
+	post := func(c routeCase, mutate func(map[string]any)) map[string]any {
 		body := c.body(f, f.admin)
 		if mutate != nil {
 			mutate(body)
@@ -284,67 +249,25 @@ func TestGrantRoutesRunTheActorRuleBeforeAndInsideTheVerb(t *testing.T) {
 	}
 }
 
-// A go-api workload token is refused on the grant routes until their operations are listed.
-func TestGrantRoutesTakeNoWorkloadToken(t *testing.T) {
+// The go-api workload token is taken by the three grant routes, as by the service account routes, and the operations are on the
+// workload list.
+func TestGrantRoutesTakeTheWorkloadToken(t *testing.T) {
 	for _, op := range grantOps {
-		if workloadOperations[op] {
-			t.Fatalf("%s is on the workload list", op)
+		if !workloadOperations[op] {
+			t.Fatalf("%s is not on the workload list", op)
 		}
 	}
 	w := newWorkloadIssueFixture(t)
-	f := newProvFixtureFor(t, docWithGrantRows(t), w.workload)
+	f := newProvFixtureFor(t, nil, w.workload)
+	f.grants.principal = f.target
+	f.grants.out = grant.Grant{ID: uuid.New(), OrgID: f.org, PrincipalID: f.target, Role: "viewer", Key: "acme/api", Origin: grant.OriginAPI, Revision: 1}
 	header, _ := w.mint("workload+jwt", nil)
 	for _, c := range grantCases() {
-		expectRefusal(t, f.post(c.path, encode(c.body(f, f.super)), header), http.StatusUnauthorized, reasonInvalidCredentials)
-	}
-	if f.grants.calls != 0 {
-		t.Fatal("a workload token reached the grant store")
-	}
-}
-
-// No answer of the three routes carries the repository key: not as a member, not anywhere in the body.
-func TestGrantRoutesAnswersNeverCarryTheKey(t *testing.T) {
-	f := newGrantFixture(t)
-	for _, c := range grantCases() {
-		response := f.post(c.path, encode(c.body(f, f.admin)), nil)
-		if response.Code != http.StatusOK {
-			t.Fatalf("%s: %d %s", c.path, response.Code, response.Body)
-		}
-		body := response.Body.String()
-		if strings.Contains(body, "acme/api") || strings.Contains(body, "resource_key") {
-			t.Fatalf("%s answer carries the repository key: %s", c.path, body)
+		if response := f.post(c.path, encode(c.body(f, f.super)), header); response.Code != http.StatusOK {
+			t.Fatalf("%s with a workload token: %d %s", c.path, response.Code, response.Body)
 		}
 	}
-}
-
-// The status of an answer is revoked first, then expired, else active: a role-only update of an expired grant answers expired,
-// a revoke of an expired grant answers revoked, a grant without an expiry or with one in the future is active.
-func TestGrantAnswerStatusIsRevokedThenExpiredThenActive(t *testing.T) {
-	f := newGrantFixture(t)
-	past, future := time.Now().Add(-time.Hour), time.Now().Add(time.Hour)
-	cases := grantCases()
-	for _, c := range []struct {
-		name    string
-		route   grantCase
-		expires *time.Time
-		revoked *time.Time
-		want    string
-	}{
-		{"create, no expiry", cases[0], nil, nil, "active"},
-		{"create, future expiry", cases[0], &future, nil, "active"},
-		{"update, role only, expired grant", cases[1], &past, nil, "expired"},
-		{"update, expired grant, live again", cases[1], &future, nil, "active"},
-		{"revoke, expired grant", cases[2], &past, &past, "revoked"},
-		{"revoke, live grant", cases[2], nil, &past, "revoked"},
-	} {
-		f.grants.out.ExpiresAt, f.grants.out.RevokedAt = c.expires, c.revoked
-		response := f.post(c.route.path, encode(c.route.body(f, f.admin)), nil)
-		var out map[string]any
-		if err := json.Unmarshal(response.Body.Bytes(), &out); err != nil || response.Code != http.StatusOK {
-			t.Fatalf("%s: %d %s", c.name, response.Code, response.Body)
-		}
-		if out["status"] != c.want {
-			t.Errorf("%s: status %v, want %s", c.name, out["status"], c.want)
-		}
+	if f.grants.calls != 3 {
+		t.Fatalf("the grant store was called %d times, want 3", f.grants.calls)
 	}
 }

@@ -14,6 +14,7 @@ var provisioningRoutes = []string{
 	"/internal/v1/organizations/onboard", "/internal/v1/organizations/create",
 	"/internal/v1/service-accounts/create", "/internal/v1/service-accounts/disable", "/internal/v1/service-accounts/enable",
 	"/internal/v1/service-accounts/owner",
+	"/internal/v1/grants/create", "/internal/v1/grants/update", "/internal/v1/grants/revoke",
 }
 
 func provisioningRows(t *testing.T) map[string]map[string]any {

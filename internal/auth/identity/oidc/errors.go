@@ -49,6 +49,7 @@ var allReasons = []Reason{
 var (
 	ErrIdentityNotFound   = errors.New("oidc: no principal holds this external identity")
 	ErrSignupNotAvailable = identity.ErrSignupNotAvailable
+	ErrPrincipalDisabled  = errors.New("oidc: the account is disabled")
 	ErrIdentityConflict   = errors.New("oidc: the external identity or e-mail belongs to another account")
 	ErrIdentityAmbiguous  = errors.New("oidc: more than one account carries the external identity")
 	ErrNotOrgMember       = errors.New("oidc: the account is not a member of the provider organization")

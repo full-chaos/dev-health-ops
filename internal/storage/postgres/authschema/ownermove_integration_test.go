@@ -134,13 +134,12 @@ func newOwnerMoveEnv(t *testing.T, ctx context.Context, kinds bool) *ownerMoveEn
 	if err != nil {
 		t.Fatalf("read database name: %v", err)
 	}
-	q := func(name string) string { return Quote(mustValidatedIdentifier(name)) }
 	for _, statement := range []string{
-		fmt.Sprintf("CREATE ROLE %s LOGIN SUPERUSER PASSWORD '%s'", q(env.oldRole), fixturePassword),
-		fmt.Sprintf("CREATE ROLE %s LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '%s'", q(env.migratorRole), fixturePassword),
-		fmt.Sprintf("CREATE ROLE %s LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '%s'", q(env.runtimeRole), fixturePassword),
-		fmt.Sprintf("CREATE ROLE %s NOLOGIN", q(env.writerRole)),
-		fmt.Sprintf("GRANT CONNECT ON DATABASE %s TO %s, %s", q(database), q(env.migratorRole), q(env.runtimeRole)),
+		fmt.Sprintf("CREATE ROLE %s LOGIN SUPERUSER PASSWORD '%s'", Quote(mustValidatedIdentifier(env.oldRole)), fixturePassword),
+		fmt.Sprintf("CREATE ROLE %s LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '%s'", Quote(mustValidatedIdentifier(env.migratorRole)), fixturePassword),
+		fmt.Sprintf("CREATE ROLE %s LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '%s'", Quote(mustValidatedIdentifier(env.runtimeRole)), fixturePassword),
+		fmt.Sprintf("CREATE ROLE %s NOLOGIN", Quote(mustValidatedIdentifier(env.writerRole))),
+		fmt.Sprintf("GRANT CONNECT ON DATABASE %s TO %s, %s", Quote(mustValidatedIdentifier(database)), Quote(mustValidatedIdentifier(env.migratorRole)), Quote(mustValidatedIdentifier(env.runtimeRole))),
 	} {
 		if _, err := admin.Exec(ctx, statement); err != nil {
 			t.Fatalf("setup %q: %v", statement, err)
@@ -175,7 +174,7 @@ func newOwnerMoveEnv(t *testing.T, ctx context.Context, kinds bool) *ownerMoveEn
 		owned = append(owned, grant.Table)
 	}
 	for _, table := range owned {
-		if _, err := conn.Exec(ctx, fmt.Sprintf(`ALTER TABLE public.%s OWNER TO %s`, q(table), q(env.oldRole))); err != nil {
+		if _, err := conn.Exec(ctx, fmt.Sprintf(`ALTER TABLE public.%s OWNER TO %s`, Quote(mustValidatedIdentifier(table)), Quote(mustValidatedIdentifier(env.oldRole)))); err != nil {
 			t.Fatalf("hand public.%s to the superuser owner: %v", table, err)
 		}
 	}
@@ -213,7 +212,7 @@ func newOwnerMoveEnv(t *testing.T, ctx context.Context, kinds bool) *ownerMoveEn
 		if _, err := oldConn.Exec(ctx, `CREATE FUNCTION auth.zz_definer() RETURNS int LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog AS 'SELECT 1'`); err != nil {
 			t.Fatalf("seed the definer function: %v", err)
 		}
-		if _, err := oldConn.Exec(ctx, fmt.Sprintf(`ALTER FUNCTION auth.zz_definer() OWNER TO %s`, q(env.writerRole))); err != nil {
+		if _, err := oldConn.Exec(ctx, fmt.Sprintf(`ALTER FUNCTION auth.zz_definer() OWNER TO %s`, Quote(mustValidatedIdentifier(env.writerRole)))); err != nil {
 			t.Fatalf("hand the definer function to the writer: %v", err)
 		}
 	}
@@ -242,7 +241,7 @@ func (e *ownerMoveEnv) moveOptions(apply bool) OwnerMoveOptions {
 }
 
 func (e *ownerMoveEnv) reverseOptions(apply bool) OwnerMoveOptions {
-	return OwnerMoveOptions{Schema: e.schema, From: e.migratorRole, To: e.oldRole, RuntimeRole: e.runtimeRole, Apply: apply}
+	return OwnerMoveOptions{Schema: e.schema, From: e.migratorRole, To: e.oldRole, RuntimeRole: e.runtimeRole, Apply: apply, Restore: true}
 }
 
 func (e *ownerMoveEnv) owners(t *testing.T, ctx context.Context) map[string]int {
@@ -700,12 +699,12 @@ func TestSchemaOwnerPin(t *testing.T) {
 	}
 	for _, attribute := range []string{"SUPERUSER", "CREATEROLE", "REPLICATION", "BYPASSRLS"} {
 		t.Run("a pinned owner with "+attribute, func(t *testing.T) {
-			q := Quote(mustValidatedIdentifier(env.migratorRole))
-			if _, err := env.admin.Exec(ctx, fmt.Sprintf(`ALTER ROLE %s %s`, q, attribute)); err != nil {
+			role := Quote(mustValidatedIdentifier(env.migratorRole))
+			if _, err := env.admin.Exec(ctx, "ALTER ROLE "+role+" "+attribute); err != nil {
 				t.Fatal(err)
 			}
 			defer func() {
-				if _, err := env.admin.Exec(ctx, fmt.Sprintf(`ALTER ROLE %s NO%s`, q, attribute)); err != nil {
+				if _, err := env.admin.Exec(ctx, "ALTER ROLE "+role+" NO"+attribute); err != nil {
 					t.Fatal(err)
 				}
 			}()
@@ -781,13 +780,12 @@ func TestApplyAsTheOwnerOfAPrecreatedSchemaWithoutDatabaseCreate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	q := func(name string) string { return Quote(mustValidatedIdentifier(name)) }
 	for _, statement := range []string{
-		fmt.Sprintf("CREATE ROLE %s LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '%s'", q(migratorRole), fixturePassword),
-		fmt.Sprintf("CREATE ROLE %s LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '%s'", q(runtimeRole), fixturePassword),
-		fmt.Sprintf("GRANT CONNECT ON DATABASE %s TO %s, %s", q(database), q(migratorRole), q(runtimeRole)),
-		fmt.Sprintf("REVOKE CREATE ON DATABASE %s FROM PUBLIC", q(database)),
-		fmt.Sprintf("CREATE SCHEMA auth AUTHORIZATION %s", q(migratorRole)),
+		fmt.Sprintf("CREATE ROLE %s LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '%s'", Quote(mustValidatedIdentifier(migratorRole)), fixturePassword),
+		fmt.Sprintf("CREATE ROLE %s LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '%s'", Quote(mustValidatedIdentifier(runtimeRole)), fixturePassword),
+		fmt.Sprintf("GRANT CONNECT ON DATABASE %s TO %s, %s", Quote(mustValidatedIdentifier(database)), Quote(mustValidatedIdentifier(migratorRole)), Quote(mustValidatedIdentifier(runtimeRole))),
+		fmt.Sprintf("REVOKE CREATE ON DATABASE %s FROM PUBLIC", Quote(mustValidatedIdentifier(database))),
+		fmt.Sprintf("CREATE SCHEMA auth AUTHORIZATION %s", Quote(mustValidatedIdentifier(migratorRole))),
 	} {
 		if _, err := admin.Exec(ctx, statement); err != nil {
 			t.Fatalf("setup %q: %v", statement, err)
@@ -881,8 +879,8 @@ func TestSchemaOwnerPinExceptsOnlyThePushLifecycleFunctionOfTheWriter(t *testing
 	if _, err := Apply(ctx, env.migrator, env.options(true)); err != nil {
 		t.Fatalf("Apply as the migrator: %v", err)
 	}
-	function := fmt.Sprintf("auth.%s%s", PushLifecycleFunction, PushLifecycleFunctionSignature)
-	if _, err := env.admin.Exec(ctx, fmt.Sprintf(`ALTER FUNCTION %s OWNER TO %s`, function, Quote(mustValidatedIdentifier(env.writerRole)))); err != nil {
+	const function = "auth." + PushLifecycleFunction + PushLifecycleFunctionSignature
+	if _, err := env.admin.Exec(ctx, "ALTER FUNCTION "+function+" OWNER TO "+Quote(mustValidatedIdentifier(env.writerRole))); err != nil {
 		t.Fatalf("hand the append function to the writer: %v", err)
 	}
 	conn, err := env.admin.Acquire(ctx)

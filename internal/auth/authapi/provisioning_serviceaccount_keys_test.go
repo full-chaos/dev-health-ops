@@ -274,6 +274,18 @@ func TestKeyRouteExpiryDefaultAndBounds(t *testing.T) {
 	}
 }
 
+func TestKeyRouteNullExpiryIsMalformed(t *testing.T) {
+	f := newKeyFixture(t)
+	for _, c := range keyCases()[:2] {
+		response := f.post(c.path, encode(merged(c.body(f, f.admin), map[string]any{"expires_in_seconds": nil})), nil)
+		if response.Code == http.StatusOK {
+			t.Errorf("%s: a null expiry got the default: verb got %s", c.op, f.sa.expiresIn)
+			continue
+		}
+		expectRefusal(t, response, http.StatusBadRequest, reasonMalformed)
+	}
+}
+
 func TestKeyRouteOverlapIsRequiredAndBounded(t *testing.T) {
 	f := newKeyFixture(t)
 	c := keyCases()[1]

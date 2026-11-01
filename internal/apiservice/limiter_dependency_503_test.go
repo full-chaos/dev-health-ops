@@ -86,9 +86,10 @@ func TestLimiterRoutesAnswerTheStoreFailureByItsKind(t *testing.T) {
 			kind   string
 			err    error
 			status int
+			body   string
 		}{
-			{"typed dependency failure", fmt.Errorf("rate limit script: %w", valkey.ErrClosing), http.StatusServiceUnavailable},
-			{"other store error", errors.New("counter store refused"), http.StatusInternalServerError},
+			{"typed dependency failure", fmt.Errorf("rate limit script: %w", valkey.ErrClosing), http.StatusServiceUnavailable, `{"detail":{"message":"Authentication service unavailable"}}`},
+			{"other store error", errors.New("counter store refused"), http.StatusInternalServerError, `{"detail":"Internal Server Error"}`},
 		} {
 			t.Run(route.name+"/"+c.kind, func(t *testing.T) {
 				deps := Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier, Signer: signer,
@@ -112,6 +113,9 @@ func TestLimiterRoutesAnswerTheStoreFailureByItsKind(t *testing.T) {
 				retry := got.Header().Get("Retry-After")
 				if (c.status == http.StatusServiceUnavailable) != (retry != "") {
 					t.Fatalf("Retry-After %q on status %d", retry, got.Code)
+				}
+				if c.body != got.Body.String() {
+					t.Fatalf("body %q, want %q", got.Body.String(), c.body)
 				}
 			})
 		}

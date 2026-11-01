@@ -97,7 +97,7 @@ func (i *Issuer) Tokens(ctx context.Context, grant Grant) (Tokens, error) {
 // whole seconds.
 func (i *Issuer) ExpiresIn() int {
 	if i.eddsa != nil {
-		return int(EdDSAAccessLifetime / time.Second)
+		return int(i.eddsa.lifetime / time.Second)
 	}
 	return AccessExpiresIn
 }
@@ -113,7 +113,7 @@ func (i *Issuer) mint(ctx context.Context, grant Grant, withSession bool) (Token
 	case i.signer != nil && i.eddsa != nil:
 		return Tokens{}, fmt.Errorf("%w: both access token classes are configured", errIssue)
 	case i.eddsa != nil:
-		expires, err := grantExpiry(grant, now, EdDSAAccessLifetime)
+		expires, err := grantExpiry(grant, now, i.eddsa.lifetime)
 		if err != nil {
 			return Tokens{}, err
 		}

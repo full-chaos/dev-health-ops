@@ -11,10 +11,13 @@ import (
 	"go.opentelemetry.io/otel"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/oidc"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/saml"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/ssoaudit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
+	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
 
 const (
@@ -84,6 +87,16 @@ func (s SSOSessions) issue(ctx context.Context, principalID uuid.UUID, org *uuid
 		return ssoIssued{}, err
 	}
 	return ssoIssued{tokens: tokens, refresh: issued.Credential.Reveal(), email: user.Email, role: text, org: org}, nil
+}
+
+// LoginEvent is the audit row of a sign-in whose session a join's commit writes.
+func (s SSOSessions) LoginEvent(ctx context.Context, _ uuid.UUID, _ *uuid.UUID) audit.AuditEvent {
+	return audit.AuditEvent{RequestID: requestid.Audit(ctx)}
+}
+
+// MintOIDC turns a session the join's commit stored into the caller's tokens.
+func (s SSOSessions) MintOIDC(context.Context, session.Issued, oidc.SessionRequest) (oidc.Tokens, error) {
+	return oidc.Tokens{}, errors.New("authapi: MintOIDC is not built")
 }
 
 // OIDC is the oidc.SessionIssuer.

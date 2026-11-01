@@ -22,6 +22,10 @@ const (
 	// a secret: environment or _FILE only.
 	EnvSettingsEncryptionKey  = "SETTINGS_ENCRYPTION_KEY"
 	EnvSettingsEncryptionSalt = "SETTINGS_ENCRYPTION_SALT"
+	// EnvSSOJIT lets a federated sign-in join a known account to the provider's
+	// organization and create a new account. A provider row must allow it too
+	// (auto_provision_users), and it needs AUTH_USERS_OWNED.
+	EnvSSOJIT = "AUTH_SSO_JIT"
 )
 
 var errBaseURL = errors.New(EnvAppBaseURL + " must be an absolute http(s) URL")
@@ -32,6 +36,8 @@ type SSO struct {
 	AppBaseURL     string
 	EncryptionKey  secrets.Value
 	EncryptionSalt string
+	// JIT is AUTH_SSO_JIT.
+	JIT bool
 }
 
 // OIDCEnabled is set when the OIDC and OAuth routes have all three values.

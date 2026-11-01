@@ -20,6 +20,7 @@ type Provider struct {
 	Protocol         string
 	Status           string
 	AutoProvision    bool
+	DefaultRole      string
 	Config           ProviderConfig // an OIDC row
 	OAuth            OAuthConfig    // an OAuth row
 	AllowedDomains   []string

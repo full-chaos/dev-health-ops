@@ -191,7 +191,7 @@ jobs:
     strategy:
       # One red leg must not cancel the others: every leg reports its own signal.
       fail-fast: false
-      # CHAOS-11418: the legs live in ci/go_quality_legs.json (static, test-N-of-4, race-N-of-5; the tooling tests pin the
+      # CHAOS-11418: the legs live in ci/go_quality_legs.json (static, test-N-of-4, race-N-of-6; the tooling tests pin the
       # race and test counts there). go-quality-plan filters them with ci/go_quality_legs.sh: a pull request without the ci:full
       # label starts no race leg (a job cannot read its own matrix in an `if`, so the leg is left out, not started to report a
       # skip). The legs are not required status contexts (the ruleset requires the `go-quality` aggregate), so the count can
@@ -206,7 +206,7 @@ jobs:
     # restores the hosted runner with no code change. Fork PRs always stay
     # hosted -- same safety condition as go.yml's dual-leg jobs (a public
     # repo must never hand a fork's untrusted PR code a self-hosted runner).
-    # CHAOS-10294: the race legs flagged `pool` (race-1, race-2, race-3, race-4, race-5) run on the bigboy ARC pool
+    # CHAOS-10294: the race legs flagged `pool` (race-1, race-2, race-3, race-4, race-5, race-6) run on the bigboy ARC pool
     # named by the repo variable CI_RACE_RUNNER, on push to main of THIS repo only
     # (ops is public: a fork or PR event never reaches the pool through this term).
     # The variable unset or empty = hosted. SELF_HOSTED_RUNNERS keeps routing
@@ -666,7 +666,7 @@ jobs:
           QUEUE_RUN: ${{ needs.go-quality-plan.outputs.queue_run }}
         run: |
           if [ -n "${QUEUE_RUN}" ]; then
-            summary="go-quality on this push: static ran; test-1-of-4, test-2-of-4, test-3-of-4, test-4-of-4, race-1-of-5, race-2-of-5, race-3-of-5, race-4-of-5, race-5-of-5 skipped: queue-tested sha, merge_group run ${QUEUE_RUN}"
+            summary="go-quality on this push: static ran; test-1-of-4, test-2-of-4, test-3-of-4, test-4-of-4, race-1-of-6, race-2-of-6, race-3-of-6, race-4-of-6, race-5-of-6, race-6-of-6 skipped: queue-tested sha, merge_group run ${QUEUE_RUN}"
           else
             summary="go-quality on this push: every leg ran (no queue-tested sha)"
           fi

@@ -644,8 +644,8 @@ func TestProvisioningServiceAccountsThroughConfigure(t *testing.T) {
 		t.Fatalf("disable of an unknown account by a superuser: %d %s", got.status, got.body)
 	}
 	if got := post(authapi.PatternServiceAccountDisable, map[string]any{"service_account_id": uuid.NewString(), "actor_principal_id": boss.String()}); got.status != http.StatusForbidden ||
-		object(t, got)["reason_code"] != "superuser_required" {
-		t.Fatalf("disable of an unknown account by an owner: %d %s", got.status, got.body)
+		object(t, got)["reason_code"] != "admin_required" {
+		t.Fatalf("disable of an unknown account by an owner: %d %s, want 403 admin_required (the answer for an account of another organization)", got.status, got.body)
 	}
 	for event, want := range map[string]int{"created": 1, "disabled": 1, "owner_changed": 1, "enabled": 1} {
 		var n int

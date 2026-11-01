@@ -340,7 +340,7 @@ func (o *Operator) commit(ctx context.Context, request Request, planned Result) 
 				if err := o.revokeSessions(ctx, tx, ids); err != nil {
 					return err
 				}
-				if err := delegationend.Record(ctx, tx, delegated); err != nil {
+				if err := delegationend.Record(ctx, tx, delegated, delegationend.KeepPublicRows); err != nil {
 					return err
 				}
 				result.Sessions = len(ids)

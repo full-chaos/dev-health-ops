@@ -11,7 +11,8 @@
 // A delegated session also has go-api's record: a row of
 // public.impersonation_sessions with the session's id, which go-api's readers
 // and the OAuth actor check see, and impersonation_start and impersonation_stop
-// rows of public.audit_logs. This package is auth-service's one writer of them.
+// rows of public.audit_logs. This package is auth-service's one writer of them,
+// and a key compromise the one end that leaves them (KeepPublicRows).
 package delegationend
 
 import (
@@ -45,6 +46,21 @@ const (
 	publicActionStart  = "impersonation_start"
 	publicActionStop   = "impersonation_stop"
 	publicResourceType = "session"
+)
+
+// PublicRows says whether Record ends go-api's rows.
+type PublicRows bool
+
+const (
+	// EndPublicRows ends the public rows with the session rows.
+	EndPublicRows PublicRows = true
+	// KeepPublicRows leaves them, for a key compromise alone, on every install. It
+	// runs as the migration login, which holds no write on go-api's tables by
+	// design, and a security end must not fail. The row stays open to its
+	// expires_at, at most 15 minutes; its one effect is that the actor's acr mint
+	// refuses until then. The auth audit row holds the end, and no
+	// impersonation_stop row is written.
+	KeepPublicRows PublicRows = false
 )
 
 // Row is one unrevoked delegated session.
@@ -105,9 +121,9 @@ func End(ctx context.Context, tx audit.TxOps, q string, rows []Row, reason strin
 }
 
 // Record queues one EventEnded row per row, naming the real actor and the
-// target (G-49), never the reason text, and ends the public rows. Every end of a
-// delegated row reaches this function.
-func Record(ctx context.Context, tx audit.TxOps, rows []Row) error {
+// target (G-49), never the reason text, and ends the public rows as public says.
+// Every end of a delegated row reaches this function.
+func Record(ctx context.Context, tx audit.TxOps, rows []Row, public PublicRows) error {
 	for _, r := range rows {
 		actor, target, org := r.Actor, r.Target, r.Organization
 		event := audit.AuditEvent{
@@ -122,7 +138,7 @@ func Record(ctx context.Context, tx audit.TxOps, rows []Row) error {
 			return err
 		}
 	}
-	if len(rows) == 0 {
+	if len(rows) == 0 || public == KeepPublicRows {
 		return nil
 	}
 	return endPublicRows(ctx, tx, rows)
@@ -238,7 +254,7 @@ func EndOfActor(ctx context.Context, tx audit.TxOps, q string, actor uuid.UUID) 
 	if err := End(ctx, tx, q, rows, ReasonActorEnded); err != nil {
 		return 0, fmt.Errorf("delegationend: ending the sessions of an actor: %w", err)
 	}
-	if err := Record(ctx, tx, rows); err != nil {
+	if err := Record(ctx, tx, rows, EndPublicRows); err != nil {
 		return 0, err
 	}
 	return len(rows), nil

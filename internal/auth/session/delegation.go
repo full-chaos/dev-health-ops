@@ -390,7 +390,7 @@ func (s *Store) lockBaseAndPriors(ctx context.Context, tx audit.TxOps, base, act
 	if err := delegationend.End(ctx, tx, s.q, priors, delegationend.ReasonSuperseded); err != nil {
 		return err
 	}
-	return delegationend.Record(ctx, tx, priors)
+	return delegationend.Record(ctx, tx, priors, delegationend.EndPublicRows)
 }
 
 type delegationRow struct {

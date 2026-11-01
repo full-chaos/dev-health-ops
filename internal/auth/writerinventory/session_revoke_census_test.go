@@ -14,14 +14,15 @@ import (
 // children, so a new site needs a ruling and a place here.
 var sessionRevokeSites = map[string]string{
 	"internal/auth/session/store.go":               "Store.endSessions: ends the delegated children of ids; delegationend.Record ends the public rows",
-	"internal/auth/keyrotation/store.go":           "Operator.revokeSessions: sessionsToRevoke selects the children; delegationend.Record ends the public rows",
+	"internal/auth/keyrotation/store.go":           "Operator.revokeSessions: sessionsToRevoke selects the children; the public row stays open to its expires_at (KeepPublicRows)",
 	"internal/auth/session/unpinned.go":            "RevokeUnpinned: no child possible, a live base has a pin (sessions_pin_present); no public row",
 	"internal/auth/delegationend/delegationend.go": "End: child rows only; each caller's delegationend.Record ends the public rows",
 }
 
 // delegationEnders call delegationend.End or lock delegated rows to end them.
 // Each one calls delegationend.Record, which ends the public row: a new
-// end path outside Record leaves go-api's row open.
+// end path outside Record leaves go-api's row open. Only a key compromise keeps
+// the row: it runs as the migration login, which holds no write on go-api's tables.
 var delegationEnders = []string{
 	"internal/auth/keyrotation/store.go",
 	"internal/auth/session/delegation.go",
@@ -108,6 +109,9 @@ func TestEveryRevokeSiteEndsThePublicRow(t *testing.T) {
 		found = append(found, filepath.ToSlash(rel))
 		if !strings.Contains(string(raw), "delegationend.Record(") {
 			t.Errorf("%s ends delegated rows and does not call delegationend.Record", rel)
+		}
+		if strings.Contains(string(raw), "delegationend.KeepPublicRows") != (filepath.ToSlash(rel) == "internal/auth/keyrotation/store.go") {
+			t.Errorf("%s: KeepPublicRows is for a key compromise, and only that", rel)
 		}
 		return nil
 	})

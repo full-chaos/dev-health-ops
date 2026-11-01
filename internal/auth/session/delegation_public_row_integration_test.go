@@ -119,7 +119,7 @@ func TestDelegationAuditFailureLeavesNoPublicRow(t *testing.T) {
 	})
 }
 
-// The key compromise path is TestCompromiseEndsTheDelegatedChildOfARevokedSession
+// A key compromise keeps the row: TestCompromiseAsAMigratorWithNoOpsWriteLeavesThePublicRow
 // in internal/auth/keyrotation.
 func TestDelegationPublicRowEndsOnEveryEndPath(t *testing.T) {
 	ctx := testContext(t)
@@ -283,8 +283,8 @@ func TestStartEndsALegacyRowWithNoTarget(t *testing.T) {
 }
 
 // Rolled back to the switch off, the runtime role cannot start a public row,
-// and a live delegated row still ends. A compromise runs as the migration role:
-// TestCompromiseEndsTheDelegatedChildOfARevokedSession has its switch off.
+// and a live delegated row still ends. A compromise runs as the migration login:
+// TestCompromiseAsAMigratorWithNoOpsWriteLeavesThePublicRow has its switch off.
 func TestSwitchOffStillEndsThePublicRow(t *testing.T) {
 	ctx := testContext(t)
 	d := newDelegationEnv(t, ctx)

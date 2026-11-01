@@ -174,7 +174,8 @@ func oauthRowsMissing(raw []byte) string {
 }
 
 // noRedirect is a refusal of GET /oauth/authorize with no redirect: the redirect is
-// not proven, so nothing may be sent to it. client is the id to log, host only.
+// not proven, so nothing may be sent to it. client is a registry id, or empty: nothing
+// a client sent reaches the log.
 func (h oauthHandlers) noRedirect(w http.ResponseWriter, r *http.Request, reason, client string) {
 	h.record(r.Context(), oauthEvent{operation: oauthOpAuthorize, outcome: oauthOutcomeRefused, reason: reason, client: client})
 	writeRefusal(w, r, refusal{http.StatusBadRequest, reasonMalformed})
@@ -191,14 +192,14 @@ func (h oauthHandlers) authorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	clientID, clientOK := single(query, "client_id")
-	redirectURI, redirectOK := single(query, "redirect_uri")
+	presented, redirectOK := single(query, "redirect_uri")
 	if !clientOK || !redirectOK {
-		h.noRedirect(w, r, "invalid_request", clientHost(clientID))
+		h.noRedirect(w, r, "invalid_request", "")
 		return
 	}
 	client, known := h.Registry.Client(clientID)
 	if !known {
-		h.noRedirect(w, r, "unknown_client", clientHost(clientID))
+		h.noRedirect(w, r, "unknown_client", "")
 		return
 	}
 	if !admit(w, r, httpapi.WriteError, oauthAuthorizeScope,
@@ -210,10 +211,14 @@ func (h oauthHandlers) authorize(w http.ResponseWriter, r *http.Request) {
 		h.noRedirect(w, r, "web_origin_unset", client.ID)
 		return
 	}
-	if !slices.Contains(h.redirectsOf(client), redirectURI) {
+	// From here the redirect is the registry's own value, not the client's text.
+	redirects := h.redirectsOf(client)
+	match := slices.Index(redirects, presented)
+	if match < 0 {
 		h.noRedirect(w, r, "redirect_mismatch", client.ID)
 		return
 	}
+	redirectURI := redirects[match]
 	audience := client.Audiences[0]
 	resource := h.resources[audience]
 	if resource == "" {
@@ -500,8 +505,8 @@ func (h oauthHandlers) metadata(w http.ResponseWriter, r *http.Request) {
 }
 
 // oauthEvent is one operation's Info line and counter (D0 section 10). It holds no
-// token, code, verifier, state or client-supplied text: client is a registry id, or
-// a metadata client's host.
+// token, code, verifier, state or client-supplied text: client is a registry id. A
+// metadata client arrives with O5, which logs its host once it has validated it.
 type oauthEvent struct {
 	operation, outcome, reason, audience, class, client, grant string
 }
@@ -520,16 +525,6 @@ func (h oauthHandlers) fail(ctx context.Context, e oauthEvent, err error) {
 		attribute.String("audience", e.audience), attribute.String("client_class", e.class)))
 	h.logger.ErrorContext(ctx, "auth oauth request failed", slog.String("operation", e.operation), slog.String("client", e.client),
 		slog.String("request_id", httpapi.LoggableRequestID(ctx)), logging.ErrorAttr(err))
-}
-
-// clientHost is what may be logged of a client_id the registry does not hold: the
-// host of an https URL, and nothing of any other text.
-func clientHost(id string) string {
-	parsed, err := url.Parse(id)
-	if err != nil || parsed.Scheme != "https" {
-		return ""
-	}
-	return parsed.Hostname()
 }
 
 // endpointRowExists reports whether the document holds an auth-service row for the

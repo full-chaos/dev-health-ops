@@ -377,28 +377,24 @@ func TestAuthorizeChargesThePerClientBudget(t *testing.T) {
 	}
 }
 
-// The telemetry holds no code, token or state, and of a client id outside the
-// registry only an https host.
-func TestOAuthLogsHoldNoSecretAndOnlyAClientsHost(t *testing.T) {
+// The telemetry holds no code, token or state, and nothing of a client id outside
+// the registry: not its text, and not the host of a URL.
+func TestOAuthLogsHoldNoSecretAndOnlyRegistryClients(t *testing.T) {
 	o := newPlainOAuthFixture(t)
-	bad := browserQuery()
-	bad.Set("client_id", "https://client.example.test/some/path?secret=1")
-	o.get(bad)
-	text := browserQuery()
-	text.Set("client_id", "free-text-from-a-client")
-	o.get(text)
-	other := browserQuery()
-	other.Set("client_id", "gopher://free-host-from-a-client/")
-	o.get(other)
+	for _, id := range []string{"https://client.example.test/some/path?secret=1", "free-text-from-a-client", "gopher://free-host-from-a-client/"} {
+		bad := browserQuery()
+		bad.Set("client_id", id)
+		o.get(bad)
+	}
 	o.get(browserQuery())
 	headers := o.bearer(o.grant())
 	o.post("action=describe&request_id="+uuid.NewString(), headers)
 	o.post("action=approve&csrf_token=fcocs_token&request_id="+uuid.NewString(), headers)
 	logs := o.logs.String()
-	if !strings.Contains(logs, `"client":"client.example.test"`) || !strings.Contains(logs, `"client":"dev-health-web"`) {
+	if !strings.Contains(logs, `"client":"dev-health-web"`) {
 		t.Fatalf("the positive control is missing: %s", logs)
 	}
-	for _, secret := range []string{oauthState, pkceExample, "fcoac_code", "fcocs_token", "some/path", "free-text-from-a-client", "free-host-from-a-client"} {
+	for _, secret := range []string{oauthState, pkceExample, "fcoac_code", "fcocs_token", "client.example.test", "some/path", "free-text-from-a-client", "free-host-from-a-client"} {
 		if strings.Contains(logs, secret) {
 			t.Errorf("the log holds %q", secret)
 		}

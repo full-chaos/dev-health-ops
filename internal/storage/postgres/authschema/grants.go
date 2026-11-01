@@ -98,6 +98,10 @@ func RuntimePosture() []TablePrivilege {
 		{Table: "login_attempts", Select: true, Insert: true, Update: true, Delete: true},
 		{Table: "sso_flow_states", Select: true, Insert: true, Update: true, Delete: true},
 		{Table: "saml_assertion_uses", Select: true, Insert: true, Delete: true},
+		// OAuth authorization server (0042): a request row is swept once it and its
+		// code have expired; a revoked grant keeps its row, so no DELETE.
+		{Table: "oauth_authorization_requests", Select: true, Insert: true, Update: true, Delete: true},
+		{Table: "oauth_grants", Select: true, Insert: true, Update: true},
 
 		// Credential material: metadata only, and keys are read-only.
 		{Table: "signing_keys", Select: true},
@@ -107,7 +111,7 @@ func RuntimePosture() []TablePrivilege {
 		{Table: "actions", Select: true},
 		{Table: "roles", Select: true},
 		{Table: "role_actions", Select: true},
-		{Table: "resource_grants", Select: true, Insert: true, Update: true, Delete: true},
+		{Table: "resource_grants", Select: true, Insert: true, Update: true, Delete: false},
 		{Table: "policy_revisions", Select: true, Insert: true},
 		{Table: "entitlement_snapshots", Select: true, Insert: true},
 
@@ -345,6 +349,7 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 		lost = append(lost, readerNarrowing(reader, beforeReaders[reader], afterReader)...)
 	}
 	sort.Slice(lost, func(i, j int) bool { return lost[i].less(lost[j]) })
+	var deferred []GrantRecord
 	if len(lost) > 0 {
 		digest := narrowingDigest(lost)
 		if options.AcknowledgeNarrowing != digest {
@@ -377,9 +382,26 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 			"schema", options.Schema, "runtime_role", options.RuntimeRole,
 			"narrowed", len(lost)-len(kept), "digest", digest,
 		)
+		deferred = kept
 		if retained != nil {
 			*retained = kept
 		}
+	}
+	// A reader that cannot hold exactly its declared reads is refused here,
+	// inside the transaction, so the reader revokes roll back with the refusal.
+	readerViolations, err := sessionReaderViolations(ctx, tx.Conn(), options)
+	if err != nil {
+		return err
+	}
+	if readerViolations = excuseRetained(readerViolations, deferred); len(readerViolations) > 0 {
+		logger.ErrorContext(
+			ctx, "session readers cannot hold exactly their declared reads; refusing and rolling back",
+			"schema", options.Schema, "violations", len(readerViolations),
+		)
+		return fmt.Errorf(
+			"%w (schema %q, role %q):\n%s",
+			ErrRuntimeRoleCanEscalate, options.Schema, options.RuntimeRole, describeViolations(readerViolations),
+		)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("%w: committing the runtime grants: %v", ErrMigrationFailed, redactPGError(err))

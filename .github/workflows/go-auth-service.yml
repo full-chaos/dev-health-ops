@@ -168,7 +168,25 @@ jobs:
   # CHAOS-12213: the race legs have their own job and their own 30 minute cap. In auth-test they shared one cap with the other
   # legs, and `job_go_test_timeout` gives each race-integration package the time left under that cap, so a slow job left a late
   # package too little time. The cap is not raised: each job stays under it.
+  # CHAOS-12420: the same again. The two legs grew to the whole 30 minutes on a slow runner, and the last package got a
+  # 2 s timeout, so each leg has a job of its own. auth-gate fans in both.
   auth-race:
+    needs: [auth-changes]
+    if: needs.auth-changes.outputs.relevant == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: '**/go.sum'
+      - name: go test -race (auth packages)
+        run: bash ci/check_go.sh auth race
+
+  auth-race-integration:
     needs: [auth-changes]
     if: needs.auth-changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
@@ -183,8 +201,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: '**/go.sum'
-      - name: go test -race (auth packages)
-        run: bash ci/check_go.sh auth race
       - name: go test -race on live PostgreSQL (session domain concurrency, CHAOS-10207)
         run: bash ci/check_go.sh auth race-integration
 
@@ -309,7 +325,7 @@ jobs:
 
   auth-gate:
     if: always()
-    needs: [auth-changes, auth-go-quality, auth-test, auth-race, auth-fuzz, auth-corpus-queue]
+    needs: [auth-changes, auth-go-quality, auth-test, auth-race, auth-race-integration, auth-fuzz, auth-corpus-queue]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
@@ -320,6 +336,7 @@ jobs:
       QUALITY: ${{ needs.auth-go-quality.result }}
       TEST: ${{ needs.auth-test.result }}
       RACE: ${{ needs.auth-race.result }}
+      RACE_INTEGRATION: ${{ needs.auth-race-integration.result }}
       FUZZ: ${{ needs.auth-fuzz.result }}
     steps:
       - name: Fan in
@@ -342,7 +359,7 @@ jobs:
             exit 0
           fi
           [ "${RELEVANT}" = "true" ] || { echo "auth-changes produced no relevance verdict" >&2; exit 1; }
-          for pair in "auth-go-quality=${QUALITY}" "auth-test=${TEST}" "auth-race=${RACE}" "auth-fuzz=${FUZZ}"; do
+          for pair in "auth-go-quality=${QUALITY}" "auth-test=${TEST}" "auth-race=${RACE}" "auth-race-integration=${RACE_INTEGRATION}" "auth-fuzz=${FUZZ}"; do
             [ "${pair#*=}" = "success" ] || { echo "${pair}: a relevant change needs every gate job to pass" >&2; exit 1; }
           done
           echo "all auth gate jobs passed"
@@ -352,7 +369,7 @@ jobs:
   # (no job needs it), continue-on-error, and the checkout is the target branch's tip, never the merge group.
   auth-cancel-stacked-queue-children:
     name: cancel-stacked-queue-children
-    needs: [auth-changes, auth-go-quality, auth-test, auth-race, auth-fuzz, auth-corpus-queue, auth-gate]
+    needs: [auth-changes, auth-go-quality, auth-test, auth-race, auth-race-integration, auth-fuzz, auth-corpus-queue, auth-gate]
     if: failure() && github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 5

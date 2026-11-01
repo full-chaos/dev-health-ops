@@ -77,6 +77,18 @@ const (
 	// iss and the discovery document names. Unset, the discovery route is not
 	// mounted (the JWKS route still is).
 	EnvTokenIssuerURL = "AUTH_TOKEN_ISSUER_URL"
+	// EnvOAuthResourceACRAPI and EnvOAuthResourceACRMCP are the RFC 8707 resource
+	// URIs of the two ACR audiences: absolute https URLs, compared byte for byte with
+	// a request's resource, never normalised. Unset leaves that audience unservable
+	// at request time, with no start refusal. A contract row cannot hold them: a row
+	// holds no environment value (acp, CHAOS-12251).
+	EnvOAuthResourceACRAPI = "AUTH_OAUTH_RESOURCE_ACR_API"
+	EnvOAuthResourceACRMCP = "AUTH_OAUTH_RESOURCE_ACR_MCP"
+	// EnvOAuthWebOrigin is web's https origin, no path. It resolves first-party
+	// redirect paths and the consent page URL. Unset is a no-redirect refusal at
+	// request time, with no start refusal. APP_BASE_URL cannot serve: it names
+	// go-api and carries IdP callbacks. AUTH_URL cannot: it is web's own env.
+	EnvOAuthWebOrigin = "AUTH_OAUTH_WEB_ORIGIN"
 	// EnvSigningKeyDirect is the PROHIBITED spelling. ACP-ADR-02 §4:
 	// "Direct-value secret env vars are prohibited for signing material."
 	// Load rejects it when present rather than ignoring it, because an
@@ -215,6 +227,11 @@ type Config struct {
 
 	// TokenIssuerURL is EnvTokenIssuerURL, "" when unset.
 	TokenIssuerURL string
+	// OAuthResourceACRAPI, OAuthResourceACRMCP and OAuthWebOrigin are their
+	// settings, "" when unset.
+	OAuthResourceACRAPI string
+	OAuthResourceACRMCP string
+	OAuthWebOrigin      string
 
 	// Session holds the session routes' token settings. Session.Enabled is
 	// false when neither secret is set: the service then mounts no session
@@ -477,6 +494,9 @@ func Load(spec Spec) (Config, error) {
 	}
 
 	if cfg.SigningKeySetPath, cfg.SigningKeyPath, cfg.SigningKeyID, err = signingKey(lookup); err != nil {
+		return Config{}, err
+	}
+	if err := oauthSettings(lookup, &cfg); err != nil {
 		return Config{}, err
 	}
 	if cfg.TokenIssuerURL, err = tokenIssuerURL(lookup); err != nil {
@@ -992,6 +1012,36 @@ func logLevel(lookup secrets.LookupEnv) (slog.Level, error) {
 	default:
 		return 0, fmt.Errorf("%s must be one of debug, info, warn, error", EnvLogLevel)
 	}
+}
+
+// oauthWebOriginPattern is an https origin with no path, query, userinfo or
+// fragment and a lowercase ASCII host.
+var oauthWebOriginPattern = regexp.MustCompile(`^https://[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:[0-9]{1,5})?$`)
+
+// oauthResourcePattern is an absolute https URL with an optional path, and no
+// userinfo, query or fragment.
+var oauthResourcePattern = regexp.MustCompile(`^https://[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)*$`)
+
+// oauthSettings reads the OAuth settings. Unset is valid: the routes refuse at
+// request time, so a dark deployment starts. A value of the wrong form is an
+// operator error and refuses the start, as AUTH_TOKEN_ISSUER_URL does.
+func oauthSettings(lookup secrets.LookupEnv, cfg *Config) error {
+	for _, setting := range []struct {
+		name    string
+		pattern *regexp.Regexp
+		into    *string
+	}{
+		{EnvOAuthResourceACRAPI, oauthResourcePattern, &cfg.OAuthResourceACRAPI},
+		{EnvOAuthResourceACRMCP, oauthResourcePattern, &cfg.OAuthResourceACRMCP},
+		{EnvOAuthWebOrigin, oauthWebOriginPattern, &cfg.OAuthWebOrigin},
+	} {
+		value := valueOf(lookup, setting.name)
+		if value != "" && !setting.pattern.MatchString(value) {
+			return fmt.Errorf("%s has the wrong form", setting.name)
+		}
+		*setting.into = value
+	}
+	return nil
 }
 
 // issuerURLPattern is discovery.v1's issuer pattern: an https origin with an

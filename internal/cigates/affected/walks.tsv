@@ -52,6 +52,7 @@ internal/auth/contracts	endpoint_profiles_query_api_test.go	contracts/auth/v1	di
 internal/auth/contracts	error_envelope_goldens_test.go	contracts/auth/v1/examples/error	dir	*
 internal/auth/contracts	fixture_scanner_plain_base64_test.go	contracts/auth/v1/examples	tree	*
 internal/auth/contracts	fixture_secret_scanner_test.go	contracts/auth/v1/examples	tree	*
+internal/auth/contracts	golden_token_secret_scan_test.go	unexpressed	-	-
 internal/auth/contracts	jwks_document_goldens_test.go	contracts/auth/v1/examples/jwks	dir	*
 internal/auth/contracts	openapi_refresh_versions_test.go	contracts/auth/v1/jsonschema	dir	*
 internal/auth/contracts	principal_contract_goldens_test.go	contracts/auth/v1/examples/principal	dir	*
@@ -84,6 +85,8 @@ internal/auth/identity/local	linkbind_census_test.go	.	tree	*.go
 internal/auth/keystore	custody_test.go	internal/auth/keystore	dir	*
 internal/auth/platformrole	owned_parse_census_test.go	cmd	tree	*
 internal/auth/platformrole	owned_parse_census_test.go	internal	tree	*
+internal/auth/platformrole	platform_action_sites_census_test.go	cmd	tree	*
+internal/auth/platformrole	platform_action_sites_census_test.go	internal	tree	*
 internal/auth/platformrole	superuser_fills_census_test.go	cmd	tree	*
 internal/auth/platformrole	superuser_fills_census_test.go	internal	tree	*
 internal/auth/platformrole	superuser_literals_census_test.go	cmd	tree	*

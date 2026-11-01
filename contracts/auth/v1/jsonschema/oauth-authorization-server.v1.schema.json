@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fullchaos.dev/contracts/auth/v1/jsonschema/oauth-authorization-server.v1.schema.json",
+  "title": "Auth Control Plane OAuth authorization server metadata (v1 wire format)",
+  "description": "The RFC 8414 document at /.well-known/oauth-authorization-server/oauth (D0 section 3). Closed: authorization code with PKCE S256 and refresh, public clients, the issuer on every redirect (RFC 9207). No dynamic client registration (D0 section 4). Every endpoint is the issuer plus its fixed path; JSON Schema cannot compare two members, so the producer pins that.",
+  "type": "object",
+  "required": [
+    "issuer",
+    "authorization_endpoint",
+    "token_endpoint",
+    "revocation_endpoint",
+    "jwks_uri",
+    "response_types_supported",
+    "grant_types_supported",
+    "code_challenge_methods_supported",
+    "token_endpoint_auth_methods_supported",
+    "scopes_supported",
+    "authorization_response_iss_parameter_supported"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "issuer": {
+      "type": "string",
+      "pattern": "^https://[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)*$"
+    },
+    "authorization_endpoint": {
+      "type": "string",
+      "pattern": "^https://[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)*$"
+    },
+    "token_endpoint": {
+      "type": "string",
+      "pattern": "^https://[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)*$"
+    },
+    "revocation_endpoint": {
+      "type": "string",
+      "pattern": "^https://[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)*$"
+    },
+    "jwks_uri": {
+      "type": "string",
+      "pattern": "^https://[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,63}){0,8}/[.]well-known/jwks[.]json$"
+    },
+    "response_types_supported": {
+      "type": "array",
+      "const": [
+        "code"
+      ]
+    },
+    "grant_types_supported": {
+      "type": "array",
+      "const": [
+        "authorization_code",
+        "refresh_token"
+      ]
+    },
+    "code_challenge_methods_supported": {
+      "type": "array",
+      "const": [
+        "S256"
+      ]
+    },
+    "token_endpoint_auth_methods_supported": {
+      "type": "array",
+      "const": [
+        "none"
+      ]
+    },
+    "scopes_supported": {
+      "type": "array",
+      "const": [
+        "acr:api",
+        "acr:mcp"
+      ]
+    },
+    "authorization_response_iss_parameter_supported": {
+      "const": true
+    }
+  }
+}

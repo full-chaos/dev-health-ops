@@ -37,6 +37,10 @@ type Route struct {
 	// MaxBodyBytes overrides the server default body bound for this route.
 	// Zero means the server default.
 	MaxBodyBytes int64
+	// EmptyBody refuses any request body on this route, declared or not. It is
+	// the explicit form of "this route takes no body": a zero MaxBodyBytes means
+	// the server default, which on go-api is 50 MiB.
+	EmptyBody bool
 	// Allow, set on the first route registered for a pattern, is the Allow
 	// header of that pattern's 405. Empty means every registered method of
 	// the pattern, sorted.
@@ -548,6 +552,9 @@ func routeChain(route Route, options ServerOptions, logger *slog.Logger, write E
 	maxBody := route.MaxBodyBytes
 	if maxBody <= 0 {
 		maxBody = options.MaxBodyBytes
+	}
+	if route.EmptyBody {
+		maxBody = 0
 	}
 
 	handler := RecoverWith(logger, route.Method+" "+route.Pattern, write)(markRoute(route))

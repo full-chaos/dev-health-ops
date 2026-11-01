@@ -280,8 +280,12 @@ func TestRaceParallelExchangeOfOneCredentialRotatesOnce(t *testing.T) {
 	if live := e.liveCredentials(t, ctx, issued.Session.ID); live != 1 {
 		t.Fatalf("%d live credentials, want 1", live)
 	}
-	if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events`); n != 0 {
+	// One rotation, one auth.session.refreshed row (CHAOS-11400); the grace replays write none.
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type <> 'auth.session.refreshed'`); n != 0 {
 		t.Fatalf("%d audit rows after a clean rotation, want 0", n)
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.session.refreshed'`); n != 1 {
+		t.Fatalf("%d refreshed rows after one rotation and its grace replays, want 1", n)
 	}
 	if next := e.exchange(t, ctx, e.store, results[0].Credential); next.Reason != ReasonAccepted {
 		t.Fatalf("the successor's own exchange = %s, want accepted", next.Reason)
@@ -548,8 +552,12 @@ func TestGraceWithAChangedKeyIsRetryableAndRevokesNothing(t *testing.T) {
 	if e.sessionRevoked(t, ctx, issued.Session.ID) || e.liveCredentials(t, ctx, issued.Session.ID) != 1 {
 		t.Fatal("a key mismatch revoked the session or its successor")
 	}
-	if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events`); n != 0 {
+	// The first exchange's accepted rotation wrote its auth.session.refreshed row (CHAOS-11400); the mismatch adds none.
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type <> 'auth.session.refreshed'`); n != 0 {
 		t.Fatalf("%d audit rows after a key mismatch, want 0", n)
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.session.refreshed'`); n != 1 {
+		t.Fatalf("%d refreshed rows after one accepted exchange and a key mismatch, want 1", n)
 	}
 	if next := e.exchange(t, ctx, e.store, child.Credential); next.Reason != ReasonAccepted {
 		t.Fatalf("the successor no longer exchanges: %s", next.Reason)

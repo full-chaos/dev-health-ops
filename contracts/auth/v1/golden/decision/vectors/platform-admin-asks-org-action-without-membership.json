@@ -3,7 +3,7 @@
     "allowed": false,
     "cache_class": "none",
     "expires_in_seconds": null,
-    "policy_revision": 6,
+    "policy_revision": 9,
     "reason": "no_membership"
   },
   "id": "platform-admin-asks-org-action-without-membership",

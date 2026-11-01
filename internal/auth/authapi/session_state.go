@@ -26,13 +26,15 @@ const reasonSessionNotFound = "session_not_found"
 // revoked is the effective revoke (an explicit revoke, or a password change
 // after the session was created), and expired is the rule of authenticate
 // (the effective expiry, the absolute cap or the idle expiry, whichever is
-// first, is not after now). Ids are canonical UUIDs.
+// first, is not after now). ActorPrincipalID is present only on a delegated
+// session. Ids are canonical UUIDs.
 type sessionStateAnswer struct {
 	PrincipalID        string  `json:"principal_id"`
 	OrganizationID     *string `json:"organization_id"`
 	Revoked            bool    `json:"revoked"`
 	Expired            bool    `json:"expired"`
 	LegacyTokenVersion *int64  `json:"legacy_token_version"`
+	ActorPrincipalID   *string `json:"actor_principal_id,omitempty"`
 }
 
 // withSessionStateRoute mounts the session state route when the embedded
@@ -47,6 +49,15 @@ func (h compatHandlers) withSessionStateRoute(routes []httpapi.Route) []httpapi.
 // token when its binding is) it logs one line naming the route and mounts
 // nothing.
 func (h compatHandlers) withSessionStateRouteRows(routes []httpapi.Route, rows []byte) []httpapi.Route {
+	if rowsAcceptFor(rows, []string{PatternSessionState}, h.issueCallerClasses()) != nil {
+		h.rec.logger.Info("auth session route not mounted: no endpoint-profile row", "route", PatternSessionState)
+		return routes
+	}
+	return append(routes, httpapi.Route{Method: http.MethodPost, Pattern: PatternSessionState, Handler: http.HandlerFunc(h.sessionState)})
+}
+
+// issueCallerClasses are the credential classes issueCallerFor admits here.
+func (h compatHandlers) issueCallerClasses() []string {
 	var admitted []string
 	if h.ServiceCredentials != nil {
 		admitted = append(admitted, serviceSessionIssuerClass)
@@ -54,11 +65,7 @@ func (h compatHandlers) withSessionStateRouteRows(routes []httpapi.Route, rows [
 	if h.IssueWorkload != nil {
 		admitted = append(admitted, workloadTokenClass)
 	}
-	if rowsAcceptFor(rows, []string{PatternSessionState}, admitted) != nil {
-		h.rec.logger.Info("auth session route not mounted: no endpoint-profile row", "route", PatternSessionState)
-		return routes
-	}
-	return append(routes, httpapi.Route{Method: http.MethodPost, Pattern: PatternSessionState, Handler: http.HandlerFunc(h.sessionState)})
+	return admitted
 }
 
 // sessionState is POST /internal/v1/sessions/state: one strict object
@@ -104,6 +111,10 @@ func (h compatHandlers) sessionState(w http.ResponseWriter, r *http.Request) {
 	if record.OrganizationID != nil {
 		org := record.OrganizationID.String()
 		answer.OrganizationID = &org
+	}
+	if record.Delegation != nil {
+		actor := record.Delegation.Actor.String()
+		answer.ActorPrincipalID = &actor
 	}
 	h.rec.record(ctx, opSessionState, "success", reasonAccepted, nil)
 	writeJSON(w, http.StatusOK, answer)

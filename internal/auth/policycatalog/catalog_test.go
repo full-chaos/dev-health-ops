@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	actionsSHA = "10c314f05bd38a35dc5491b2baffe9a6ef69be348bf1c5dc17dc534db2d568c8"
-	rolesSHA   = "e49d2c4e17db8e38baacb26dc7c36b917cfc46582d51c2abf44b8b670d702e1b"
+	actionsSHA = "3954ee30e5194f152b8653f03704a703ee321d818295eec407630d439c98e3e7"
+	rolesSHA   = "f1a45054d839858215d813b8024cbd8a84c8d914dc6a80aa8e4ffa3a2546b390"
 )
 
 func repoRoot(t *testing.T) string {
@@ -222,7 +222,9 @@ func TestEmbeddedFilesValidateAgainstTheirSchemas(t *testing.T) {
 // internal/api/session/permissions.go. Catalog-only = not served in /auth/me
 // until a web-reviewed change adds it there; every other catalog action must
 // still equal a session permission.
-var catalogOnly = map[string]bool{"admin.impersonate": true, "billing.read": true, "billing.manage": true, "license.read": true, "members.update": true, "authz.decide": true, "acr.context.read": true}
+var catalogOnly = map[string]bool{"admin.impersonate": true, "billing.read": true, "billing.manage": true, "license.read": true, "members.update": true, "authz.decide": true, "acr.context.read": true,
+	"admin.billing": true, "admin.flags": true, "admin.audit": true, "admin.telemetry": true, "admin.stats": true,
+}
 
 type sessionEntry struct {
 	role string
@@ -432,15 +434,45 @@ func TestRepositoryIsAResourceKindAndNeverAScope(t *testing.T) {
 	}
 }
 
+// acr.context.read reads a context at a revision, like git.read: the organization roles that hold git.read hold it, and
+// no platform role does. The real catalog allows those roles by default.
+func TestAcrContextReadIsHeldByExactlyTheRolesThatHoldGitRead(t *testing.T) {
+	c := Default()
+	var holders []string
+	for _, r := range c.Roles() {
+		if got, want := c.Allows(r.ID, "acr.context.read"), c.Allows(r.ID, "git.read"); got != want {
+			t.Errorf("role %s: acr.context.read %v, git.read %v", r.ID, got, want)
+		}
+		if c.Allows(r.ID, "acr.context.read") {
+			holders = append(holders, r.ID)
+		}
+	}
+	sort.Strings(holders)
+	if got := strings.Join(holders, ","); got != "admin,member,owner,viewer" {
+		t.Errorf("acr.context.read is held by %q, want admin,member,owner,viewer", got)
+	}
+	if c.Allows("platform_admin", "acr.context.read") {
+		t.Error("platform_admin holds acr.context.read")
+	}
+	for _, role := range []string{"platform_admin", "platform_owner"} {
+		for _, action := range []string{"acr.context.read", "git.read"} {
+			if c.Allows(role, action) {
+				t.Errorf("%s holds %s", role, action)
+			}
+		}
+	}
+}
+
 func TestImpersonationIsDeniedOnTheG51List(t *testing.T) {
 	want := map[string]bool{
-		"admin.users": true, "admin.orgs": true, "admin.impersonate": true, "members.invite": true, "members.manage": true,
+		"admin.users": true, "admin.orgs": true, "admin.impersonate": true,
+		"admin.billing": true, "admin.flags": true, "admin.audit": true, "admin.telemetry": true, "admin.stats": true, "members.invite": true, "members.manage": true,
 		"org.write": true, "org.delete": true, "billing.manage": true, "settings.write": true, "integrations.write": true,
-		"members.update": true, "acr.context.read": true, "authz.decide": true,
+		"members.update": true, "authz.decide": true,
 	}
 	actions := Default().Actions()
-	if len(actions) != 29 {
-		t.Fatalf("%d actions, want 29", len(actions))
+	if len(actions) != 34 {
+		t.Fatalf("%d actions, want 34", len(actions))
 	}
 	for _, a := range actions {
 		denied := a.Impersonation == ImpersonationDenied
@@ -486,6 +518,92 @@ func TestDelegatedActionsAreTheAllowedActionsOfAnOrganizationRole(t *testing.T) 
 	for _, role := range []string{"platform_admin", "custom", ""} {
 		if _, err := Default().DelegatedActions(role); !errors.Is(err, ErrUnknownRole) {
 			t.Errorf("DelegatedActions(%q) = %v, want ErrUnknownRole", role, err)
+		}
+	}
+}
+
+func TestImpersonationValuesOfTheRepositoryReadAndTheTwoDeniedActions(t *testing.T) {
+	want := map[string]string{
+		"acr.context.read": ImpersonationAllowed,
+		"authz.decide":     ImpersonationDenied,
+		"members.update":   ImpersonationDenied,
+	}
+	for id, v := range want {
+		a, err := Default().Action(id)
+		if err != nil || a.Impersonation != v {
+			t.Errorf("%s impersonation = %q, %v; want %s", id, a.Impersonation, err, v)
+		}
+	}
+}
+
+func TestShippedRolesDelegateTheRepositoryReadExactlyWhenTheyHoldIt(t *testing.T) {
+	c := Default()
+	delegating := 0
+	for _, r := range c.Roles() {
+		if r.Scope != ScopeOrganization {
+			continue
+		}
+		got, err := c.DelegatedActions(r.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		has := false
+		for _, id := range got {
+			has = has || id == "acr.context.read"
+		}
+		if has != c.Allows(r.ID, "acr.context.read") {
+			t.Errorf("role %s: delegates acr.context.read %v, holds it %v", r.ID, has, c.Allows(r.ID, "acr.context.read"))
+		}
+		if has {
+			delegating++
+		}
+	}
+	if delegating != 4 {
+		t.Errorf("%d organization roles delegate acr.context.read, want 4", delegating)
+	}
+}
+
+func TestDelegatedActionsReturnTheRepositoryReadForARoleThatHoldsIt(t *testing.T) {
+	const actions = `{"schema_version":"actions.v1","catalog_version":1,"description":"d","actions":[{"action":"acr.context.read","scope":"organization","resource_kind":"repository","risk_class":"low","cache_class":"resource_revision_bound","impersonation":"allowed"},{"action":"x.write","scope":"organization","resource_kind":"organization","risk_class":"high","cache_class":"none","impersonation":"denied"},{"action":"x.other","scope":"organization","resource_kind":"organization","risk_class":"high","cache_class":"none","impersonation":"denied"}]}`
+	const roles = `{"schema_version":"roles.v1","catalog_version":1,"description":"d","roles":[{"role":"r","scope":"organization","actions":["acr.context.read","x.write"]}]}`
+	c, err := Load([]byte(actions), []byte(roles))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.DelegatedActions("r")
+	if err != nil || len(got) != 1 || got[0] != "acr.context.read" {
+		t.Fatalf("DelegatedActions = %v, %v; want [acr.context.read]", got, err)
+	}
+}
+
+// The admin platform actions are exactly the eight the platform_admin
+// role lists, every one high risk, never cached and denied to a delegated
+// session, and no organization role holds one.
+func TestPlatformActionsAreHeldOnlyByPlatformAdmin(t *testing.T) {
+	c := Default()
+	want := []string{"admin.audit", "admin.billing", "admin.flags", "admin.impersonate", "admin.orgs", "admin.stats", "admin.telemetry", "admin.users"}
+	var platform []string
+	for _, a := range c.Actions() {
+		if a.Scope != ScopePlatform || !strings.HasPrefix(a.ID, "admin.") {
+			continue
+		}
+		platform = append(platform, a.ID)
+		if a.RiskClass != RiskHigh || a.CacheClass != CacheNone || a.ResourceKind != "platform" || a.Impersonation != ImpersonationDenied {
+			t.Errorf("platform action %s: risk %s cache %s kind %s impersonation %s", a.ID, a.RiskClass, a.CacheClass, a.ResourceKind, a.Impersonation)
+		}
+		for _, r := range c.Roles() {
+			if r.ID != "platform_admin" && c.Allows(r.ID, a.ID) {
+				t.Errorf("role %s holds platform action %s", r.ID, a.ID)
+			}
+		}
+	}
+	sort.Strings(platform)
+	if strings.Join(platform, ",") != strings.Join(want, ",") {
+		t.Fatalf("platform actions %v, want %v", platform, want)
+	}
+	for _, a := range want {
+		if !c.Allows("platform_admin", a) {
+			t.Errorf("platform_admin does not hold %s", a)
 		}
 	}
 }

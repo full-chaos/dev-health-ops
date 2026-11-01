@@ -17,11 +17,13 @@ internal/auth/acrmint
 internal/auth/authapi
 internal/auth/clientaddr
 internal/auth/contracts
+internal/auth/contracts/externalpush
 internal/auth/contracts/provisioning
 internal/auth/contracts/tokencorpus
 internal/auth/delegationend
 internal/auth/edgetoken
 internal/auth/emaildomain
+internal/auth/grantend
 internal/auth/httpapi
 internal/auth/identity
 internal/auth/identity/local
@@ -32,6 +34,7 @@ internal/auth/identity/ssoaudit
 internal/auth/invite
 internal/auth/keystore
 internal/auth/membership
+internal/auth/oauthgrant
 internal/auth/org
 internal/auth/orgdeprovision
 internal/auth/passwordhash
@@ -39,6 +42,7 @@ internal/auth/passwordpolicy
 internal/auth/platformrole
 internal/auth/platformrole/rule
 internal/auth/policycatalog
+internal/auth/publicaudit
 internal/auth/requestid
 internal/auth/serviceaccount
 internal/auth/servicecred

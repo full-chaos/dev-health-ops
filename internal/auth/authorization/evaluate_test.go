@@ -115,7 +115,8 @@ func TestEvaluate_EveryCatalogActionByEveryRole(t *testing.T) {
 			case "platform":
 				req = platformRequest(a.Action)
 			case "repository":
-				req = Request{Action: a.Action, ResourceKind: "repository", OrganizationID: testOrg}
+				// Served by the grant and membership default rules: TestEvaluate_RepositoryKindActionFollowsGrantAndDefaultRules.
+				continue
 			default:
 				t.Fatalf("action %s has resource kind %q", a.Action, a.ResourceKind)
 			}
@@ -141,12 +142,22 @@ func TestEvaluate_EveryCatalogActionByEveryRole(t *testing.T) {
 			}
 		}
 	}
-	if cells != len(actions)*len(roles) {
+	repository := map[string]bool{}
+	for _, a := range actions {
+		if a.ResourceKind == "repository" {
+			repository[a.Action] = true
+		}
+	}
+	if cells != (len(actions)-len(repository))*len(roles) {
 		t.Fatalf("cells %d", cells)
 	}
 	total := 0
 	for _, r := range roles {
-		total += len(r.Actions)
+		for _, a := range r.Actions {
+			if !repository[a] {
+				total++
+			}
+		}
 	}
 	if allowed != total {
 		t.Fatalf("allowed cells %d, role grants %d", allowed, total)
@@ -660,5 +671,21 @@ func TestEvaluate_RepositoryKindActionFollowsGrantAndDefaultRules(t *testing.T) 
 	}
 	if seen == 0 {
 		t.Error("the catalog holds no repository-kind action")
+	}
+}
+
+// The real catalog gives acr.context.read to the organization roles that hold git.read (catalog version 6): each is
+// allowed a repository by the membership default, and platform_admin holds it through neither a membership nor a grant.
+func TestEvaluate_AcrContextReadIsAllowedToTheOrgRolesByDefault(t *testing.T) {
+	e := NewEvaluator()
+	req := Request{Action: "acr.context.read", ResourceKind: "repository", OrganizationID: testOrg, ResourceKey: "acme/api"}
+	for _, role := range []string{"viewer", "member", "admin", "owner"} {
+		got := e.Evaluate(req, repoSnapshot(role))
+		if !got.Allowed || got.Reason != ReasonAllowedByMembershipDefault {
+			t.Errorf("role %s: %+v, want allowed by the membership default", role, got)
+		}
+	}
+	if got := e.Evaluate(req, platformSnapshot("platform_admin")); got.Allowed {
+		t.Errorf("platform_admin: %+v, want deny", got)
 	}
 }

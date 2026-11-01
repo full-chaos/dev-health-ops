@@ -134,3 +134,26 @@ func TestPlatformAction_BillingNeverReadsTheSuperuserFlag(t *testing.T) {
 		})
 	}
 }
+
+// The pull route is the one platform-wrapped route of the package: it is
+// wrapped by admin.billing, and no other route of the table is wrapped by a
+// platform wrap.
+func TestPlatformAction_BillingPullRouteIsWrappedByAdminBilling(t *testing.T) {
+	raw, err := os.ReadFile("routes.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapped := 0
+	for _, line := range strings.Split(string(raw), "\n") {
+		if !strings.Contains(line, "WrapPlatform(") {
+			continue
+		}
+		wrapped++
+		if !strings.Contains(line, "/plans/pull-stripe") || !strings.Contains(line, "WrapPlatform(policy.ActionAdminBilling,") {
+			t.Errorf("a platform wrap that is not the pull route under admin.billing: %s", strings.TrimSpace(line))
+		}
+	}
+	if wrapped != 1 {
+		t.Errorf("%d platform-wrapped routes, want exactly the pull route", wrapped)
+	}
+}

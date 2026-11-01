@@ -33,22 +33,30 @@ type Deps struct {
 	// Cipher reads a managed integration's credential payload for the
 	// operational ownership check; nil is a process without a key.
 	Cipher credentials.Cipher
+	// PushLifecycleEvents turns on the External Push lifecycle events: each
+	// token create, rotate and revoke also appends its events to the auth
+	// outbox (schema AuthSchema, empty means "auth") in the same transaction.
+	// Off, no event is written and the routes are unchanged.
+	PushLifecycleEvents bool
+	AuthSchema          string
 }
 
 type handlers struct {
-	pool   *pgxpool.Pool
-	guard  *policy.Guard
-	logger *slog.Logger
-	now    func() time.Time
-	getenv func(string) (string, bool)
-	cipher credentials.Cipher
+	pool      *pgxpool.Pool
+	guard     *policy.Guard
+	logger    *slog.Logger
+	now       func() time.Time
+	getenv    func(string) (string, bool)
+	cipher    credentials.Cipher
+	lifecycle lifecycle
 }
 
 // Routes returns the area's routes. A path's Allow value is the methods of
 // the first route FastAPI declares for it, which Starlette reports on a
 // 405.
 func Routes(deps Deps) []httpapi.Route {
-	h := &handlers{pool: deps.Pool, guard: deps.Guard, logger: deps.Logger, now: deps.Now, getenv: deps.Getenv, cipher: deps.Cipher}
+	h := &handlers{pool: deps.Pool, guard: deps.Guard, logger: deps.Logger, now: deps.Now, getenv: deps.Getenv, cipher: deps.Cipher,
+		lifecycle: newLifecycle(deps.PushLifecycleEvents, deps.AuthSchema)}
 	if h.logger == nil {
 		h.logger = slog.Default()
 	}

@@ -19,6 +19,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
+	"github.com/full-chaos/dev-health-ops/internal/auth/grantend"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
@@ -243,6 +244,9 @@ func (q poolQuerier) queryRow(ctx context.Context, sql string, args ...any) pgx.
 //	   such as a route for Suspend, must end its sessions the same way;
 //	   6b. a service account verb: the auth.service_accounts row FOR UPDATE;
 //	   6c. a service account key verb: its auth.credential_registry rows FOR UPDATE;
+//	   6d. a removal: the pair's live auth.resource_grants rows FOR UPDATE,
+//	   ORDER BY id (grantend.Plan.Apply), after the sessions; a grant verb
+//	   (internal/auth/grant) takes the same rows last, after the pair (ReadPair);
 //	7. aggregate_revisions, inside audit.Commit.
 //
 // Steps 1 and 2 take every id any later statement of the verb references,
@@ -624,6 +628,17 @@ func (s *Store) mutate(ctx context.Context, v verb, c Change) (*Membership, erro
 		if d, derr := decide(v, plan.prev, c.Role, read.activeOwners); derr == nil {
 			plan.next = d.next
 		}
+		events := []audit.OutboxEvent{eventFor(v, plan.id, plan.next)}
+		var also []audit.AuditEvent
+		var grants *grantend.Plan
+		if v == verbRemove {
+			if grants, err = grantend.PlanPair(ctx, grantend.ReaderFunc(s.poolRows), s.q, c.OrgID, c.PrincipalID); err != nil {
+				s.record(ctx, v, err)
+				return nil, fmt.Errorf("%w: %s: %w", ErrStore, v, err)
+			}
+			events = append(events, grants.Events()...)
+			also = grants.Audit(grantend.Actor{PrincipalID: c.Actor.PrincipalID, RequestID: c.Actor.RequestID, Caller: c.Actor.Caller})
+		}
 		err = s.run(ctx, v, audit.Mutation{
 			Apply: func(ctx context.Context, tx audit.TxOps) error {
 				l, err := s.readPairs(ctx, txQuerier{tx}, c.OrgID, ids, c.InvitedBy, c.Actor.PrincipalID, read.referenced(), true, nil)
@@ -656,17 +671,30 @@ func (s *Store) mutate(ctx context.Context, v verb, c Change) (*Membership, erro
 				if err := s.write(ctx, tx, c.OrgID, p, plan.id, d.next, v == verbAdd, c.InvitedBy); err != nil {
 					return err
 				}
-				if v != verbRemove || s.sessions == nil {
+				if v != verbRemove {
 					return nil
 				}
-				ended, err = s.sessions.EndOrgInTx(ctx, tx, c.PrincipalID, c.OrgID)
-				if errors.Is(err, session.ErrBusy) {
-					return errSessionsBusy
+				if s.sessions != nil {
+					ended, err = s.sessions.EndOrgInTx(ctx, tx, c.PrincipalID, c.OrgID)
+					if errors.Is(err, session.ErrBusy) {
+						return errSessionsBusy
+					}
+					if err != nil {
+						return err
+					}
 				}
-				return err
+				// Step 6d of the auth lock order: the pair's grant rows, after the membership rows and the sessions.
+				if err := grants.Apply(ctx, tx, c.Actor.PrincipalID); err != nil {
+					if errors.Is(err, grantend.ErrStateMoved) {
+						return errStateMoved
+					}
+					return err
+				}
+				return nil
 			},
 			Audit:    auditFor(v, c.OrgID, c.PrincipalID, plan.id, c.Actor, plan.prev, plan.next),
-			Events:   []audit.OutboxEvent{eventFor(v, plan.id, plan.next)},
+			Also:     also,
+			Events:   events,
 			Refusals: []error{errSessionsBusy},
 		})
 		if !errors.Is(err, errStateMoved) && !errors.Is(err, errSessionsBusy) {
@@ -859,4 +887,42 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 	case <-t.C:
 		return nil
 	}
+}
+
+// poolRows is the lock-free read of the grant plan.
+func (s *Store) poolRows(ctx context.Context, sql string, args ...any) (grantend.Rows, error) {
+	return s.pool.Query(ctx, sql, args...)
+}
+
+// PairState is the effective membership of one pair, read under the auth lock
+// order's locks.
+type PairState struct {
+	Status Status
+	Role   string
+}
+
+// Active is true for an active membership.
+func (p PairState) Active() bool { return p.Status == StatusActive }
+
+// ReadPair locks one pair in the auth lock order inside the caller's
+// transaction (steps -1 to 6: principals and users, the organization row FOR
+// SHARE, the pair's membership rows FOR UPDATE) and returns its effective
+// state. actor, when set, is locked FOR SHARE. The caller takes its own rows
+// (grants, step 6d) after it. ErrPrincipalNotFound, ErrOrgNotFound and
+// ErrOrgSuspended are the lookup refusals; ErrStateMoved: plan again.
+func (s *Store) ReadPair(ctx context.Context, tx audit.TxOps, orgID, principalID uuid.UUID, actor *uuid.UUID) (PairState, error) {
+	if !s.ownsUsers {
+		return PairState{}, ErrNotOwned
+	}
+	ids := []uuid.UUID{principalID}
+	free, err := s.readPairs(ctx, poolQuerier{s.pool}, orgID, ids, nil, actor, nil, false, nil)
+	if err != nil {
+		free = &locked{pairs: map[uuid.UUID]*pairRows{principalID: {principal: principalID}}}
+	}
+	l, err := s.readPairs(ctx, txQuerier{tx}, orgID, ids, nil, actor, free.referenced(), true, nil)
+	if err != nil {
+		return PairState{}, err
+	}
+	st := l.pairs[principalID].state()
+	return PairState{Status: st.status, Role: st.role}, nil
 }

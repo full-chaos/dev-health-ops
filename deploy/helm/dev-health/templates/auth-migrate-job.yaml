@@ -68,6 +68,12 @@ spec:
             - name: AUTH_SESSION_READER_ROLES
               value: {{ join "," . | quote }}
             {{- end }}
+            {{- with $m.pushLifecycle.writerRole }}
+            - name: AUTH_PUSH_LIFECYCLE_WRITER_ROLE
+              value: {{ . | quote }}
+            - name: AUTH_PUSH_LIFECYCLE_CALLER_ROLES
+              value: {{ join "," $m.pushLifecycle.callerRoles | quote }}
+            {{- end }}
           resources:
             {{- toYaml $m.resources | nindent 12 }}
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, capabilities: {drop: [ALL]}, seccompProfile: {type: RuntimeDefault}}

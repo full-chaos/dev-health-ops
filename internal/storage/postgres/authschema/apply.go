@@ -97,6 +97,17 @@ type Options struct {
 	// apply and grants run refuses a schema with an object owned by any other role, and a pinned role that is a
 	// superuser or can create roles. Empty means the pin is off (a dev stack whose migrator is a superuser).
 	SchemaOwnerRole string
+
+	// PushLifecycleWriterRole is the dedicated NOLOGIN role that owns the one
+	// function go-api calls to append External Push lifecycle events
+	// (CHAOS-10895). Empty means the function stays owned by the migration role
+	// and nobody can execute it. It must already exist, must have no login and
+	// no membership, and the migration role must be a member of it (the one
+	// thing ALTER FUNCTION OWNER needs); see applyPushLifecycleWriter.
+	PushLifecycleWriterRole string
+	// PushLifecycleCallerRoles are the logins that may execute that function:
+	// go-api's, and no other. Required when PushLifecycleWriterRole is set.
+	PushLifecycleCallerRoles []string
 	// LockTimeout bounds how long one migration's transaction waits for a
 	// lock. Zero means DefaultMigrationLockTimeout; see the lock policy.
 	LockTimeout time.Duration
@@ -193,6 +204,9 @@ func (o Options) Validate(migrationRole string) error {
 				ErrInvalidOptions, reader)
 		}
 		seen[reader] = true
+	}
+	if err := o.validatePushLifecycle(migrationRole); err != nil {
+		return err
 	}
 	if migrationRole != "" && migrationRole == o.RuntimeRole {
 		return fmt.Errorf(
@@ -396,6 +410,10 @@ func applyGrantsAndVerify(ctx context.Context, conn pooledConn, options Options,
 		"tables", len(RuntimePosture()),
 	)
 
+	if err := applyPushLifecycleWriter(ctx, conn, options, logger); err != nil {
+		return result, err
+	}
+
 	// Grants applied without error proves the statements succeeded. It does
 	// NOT prove the runtime role holds only what the manifest declares:
 	// object-level grants are not the only route to authority, and codex
@@ -415,6 +433,11 @@ func applyGrantsAndVerify(ctx context.Context, conn pooledConn, options Options,
 		return result, err
 	}
 	violations = excuseRetained(violations, retained)
+	writerViolations, err := pushWriterViolations(ctx, conn, options)
+	if err != nil {
+		return result, err
+	}
+	violations = append(violations, writerViolations...)
 	if len(violations) > 0 {
 		logger.ErrorContext(
 			ctx, "runtime role can escalate beyond its declared posture",

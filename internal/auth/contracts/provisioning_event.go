@@ -105,20 +105,28 @@ type ConsumerCursor struct{ last map[string]int64 }
 // NewConsumerCursor returns an empty cursor.
 func NewConsumerCursor() *ConsumerCursor { return &ConsumerCursor{last: map[string]int64{}} }
 
-// Observe classifies e and advances the cursor only on Apply.
-func (c *ConsumerCursor) Observe(e ProvisioningEvent) Disposition {
-	key := AggregateKey(e.AggregateType, e.AggregateID)
-	last := c.last[key] // 0 for an aggregate never seen
+// Peek says what Observe would answer for e and moves nothing. A consumer that must act BEFORE the cursor moves
+// (invalidate a cache, then advance) classifies, acts, and advances with ResyncTo.
+func (c *ConsumerCursor) Peek(e ProvisioningEvent) Disposition {
+	last := c.last[AggregateKey(e.AggregateType, e.AggregateID)] // 0 for an aggregate never seen
 	rev := int64(e.Payload.Revision)
 	switch {
 	case rev <= last:
 		return Ignore
 	case rev == last+1:
-		c.last[key] = rev
 		return Apply
 	default:
 		return Gap
 	}
+}
+
+// Observe classifies e and advances the cursor only on Apply.
+func (c *ConsumerCursor) Observe(e ProvisioningEvent) Disposition {
+	d := c.Peek(e)
+	if d == Apply {
+		c.last[AggregateKey(e.AggregateType, e.AggregateID)] = int64(e.Payload.Revision)
+	}
+	return d
 }
 
 // AggregateKey is the key a ConsumerCursor keeps an aggregate's mark under.

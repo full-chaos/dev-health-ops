@@ -72,7 +72,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # clear diff.
 COPY cmd/dho ./cmd/dho
 COPY cmd/registrydump ./cmd/registrydump
-COPY contracts/auth/v1/embed.go contracts/auth/v1/credential-classes.json contracts/auth/v1/endpoint_profiles_go_api.go contracts/auth/v1/endpoint-profiles.go-api.json contracts/auth/v1/endpoint_profiles_query_api.go contracts/auth/v1/endpoint-profiles.query-api.json contracts/auth/v1/endpoint_profiles_auth_service.go contracts/auth/v1/endpoint-profiles.auth-service.json ./contracts/auth/v1/
+COPY contracts/auth/v1/embed.go contracts/auth/v1/credential-classes.json contracts/auth/v1/oauth-clients.v1.json contracts/auth/v1/endpoint_profiles_go_api.go contracts/auth/v1/endpoint-profiles.go-api.json contracts/auth/v1/endpoint_profiles_query_api.go contracts/auth/v1/endpoint-profiles.query-api.json contracts/auth/v1/endpoint_profiles_auth_service.go contracts/auth/v1/endpoint-profiles.auth-service.json ./contracts/auth/v1/
 COPY contracts/graphql/v1 ./contracts/graphql/v1
 COPY contracts/jobs/v1 ./contracts/jobs/v1
 COPY contracts/sync-dispatch/v1 ./contracts/sync-dispatch/v1

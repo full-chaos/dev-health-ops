@@ -1,0 +1,54 @@
+{
+  "expect": {
+    "allowed": true,
+    "cache_class": "resource_revision_bound",
+    "expires_in_seconds": 30,
+    "policy_revision": 5,
+    "reason": "allowed_by_membership_default"
+  },
+  "id": "cross-org-grant-in-a-leaves-b-on-the-default",
+  "layer": "pdp",
+  "request": {
+    "action": "acr.context.read",
+    "organization_id": "org-b",
+    "resource_key": "acme/api",
+    "resource_kind": "repository"
+  },
+  "state": {
+    "catalog": "planted-repo-reader",
+    "clock": "2027-01-15T08:00:00Z",
+    "grants": [
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "acme/api",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      }
+    ],
+    "grants_error": false,
+    "memberships": {
+      "org-a": {
+        "org_id": "org-a",
+        "role": "member",
+        "status": "active"
+      },
+      "org-b": {
+        "org_id": "org-b",
+        "role": "member",
+        "status": "active"
+      }
+    },
+    "organizations": {
+      "org-a": "active",
+      "org-b": "active"
+    },
+    "platform_role": "",
+    "principal_status": "active",
+    "service_accounts": {},
+    "snapshot": "grant",
+    "workload": null
+  },
+  "why": "grants in org-a do not end org-b's membership default."
+}

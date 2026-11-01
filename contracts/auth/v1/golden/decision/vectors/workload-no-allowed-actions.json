@@ -1,0 +1,46 @@
+{
+  "expect": {
+    "allowed": false,
+    "cache_class": "none",
+    "expires_in_seconds": null,
+    "policy_revision": 5,
+    "reason": "workload_action_denied"
+  },
+  "id": "workload-no-allowed-actions",
+  "layer": "pdp",
+  "request": {
+    "action": "org.read",
+    "organization_id": "org-a",
+    "resource_key": "",
+    "resource_kind": "organization"
+  },
+  "state": {
+    "catalog": "embedded",
+    "clock": "2027-01-15T08:00:00Z",
+    "grants": [],
+    "grants_error": false,
+    "memberships": {
+      "org-a": {
+        "org_id": "org-a",
+        "role": "member",
+        "status": "active"
+      }
+    },
+    "organizations": {
+      "org-a": "active"
+    },
+    "platform_role": "",
+    "principal_status": "active",
+    "service_accounts": {},
+    "snapshot": "grant",
+    "workload": {
+      "allowed_actions": [],
+      "audience": "dev-health-api",
+      "audiences": [
+        "auth-service",
+        "dev-health-api"
+      ]
+    }
+  },
+  "why": "an empty allowed-actions list allows nothing."
+}

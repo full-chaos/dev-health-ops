@@ -46,15 +46,25 @@ type signatureOnlyKey struct{}
 // exactly one of signatureOnlyRoutes. It must run before DecodedPathRouting,
 // which drops the encoded form of the path.
 func MarkSignatureOnly(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if signatureOnlyMatch(r.Method, r.URL.EscapedPath()) {
-			r = r.WithContext(context.WithValue(r.Context(), signatureOnlyKey{}, true))
-		}
-		next.ServeHTTP(w, r)
-	})
+	return markScopeExempt(nil)(next)
 }
 
-// skipScope runs mw for every request except a marked signature-only one.
+// markScopeExempt is MarkSignatureOnly plus the exact "METHOD path" routes of
+// extra (AuthProxyConfig.ScopeExemptRoutes: the routes auth-service
+// authenticates while their aggregate is on). An extra route matches its raw
+// path exactly, with no template.
+func markScopeExempt(extra map[string]bool) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if signatureOnlyMatch(r.Method, r.URL.EscapedPath()) || extra[r.Method+" "+r.URL.EscapedPath()] {
+				r = r.WithContext(context.WithValue(r.Context(), signatureOnlyKey{}, true))
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// skipScope runs mw for every request except a marked scope-exempt one.
 func skipScope(mw func(http.Handler) http.Handler) func(http.Handler) http.Handler {
 	if mw == nil {
 		return nil

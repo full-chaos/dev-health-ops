@@ -1,0 +1,33 @@
+{
+  "expect": {
+    "allowed": false,
+    "cache_class": "none",
+    "expires_in_seconds": null,
+    "policy_revision": 5,
+    "reason": "no_membership"
+  },
+  "id": "platform-admin-asks-org-action-without-membership",
+  "layer": "pdp",
+  "request": {
+    "action": "org.read",
+    "organization_id": "org-a",
+    "resource_key": "",
+    "resource_kind": "organization"
+  },
+  "state": {
+    "catalog": "embedded",
+    "clock": "2027-01-15T08:00:00Z",
+    "grants": [],
+    "grants_error": false,
+    "memberships": {},
+    "organizations": {
+      "org-a": "active"
+    },
+    "platform_role": "platform_admin",
+    "principal_status": "active",
+    "service_accounts": {},
+    "snapshot": "grant",
+    "workload": null
+  },
+  "why": "a platform role does not inherit into an organization."
+}

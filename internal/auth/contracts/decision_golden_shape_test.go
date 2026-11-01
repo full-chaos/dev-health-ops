@@ -263,8 +263,8 @@ func TestDecisionGoldenFilesAreCanonicalAndClosed(t *testing.T) {
 				decisionKeys(t, f.rel+" request", v["request"], decisionRequestKeys...)
 				decisionKeys(t, f.rel+" expect", v["expect"], decisionExpectKeys...)
 				if st, ok := v["state"].(map[string]any); ok {
-					if c := st["catalog"]; c != "embedded" && c != "planted-repo-reader" {
-						t.Errorf("%s: catalog %v outside embedded|planted-repo-reader", f.rel, c)
+					if c := st["catalog"]; c != "embedded" {
+						t.Errorf("%s: catalog %v outside the closed set (embedded)", f.rel, c)
 					}
 				}
 			case "pep":

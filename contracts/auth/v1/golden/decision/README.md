@@ -25,15 +25,9 @@ Every row is run by exactly one runner. A runner refuses a row of the other laye
   `accepted` with the decoded question, or `refused` with the refusal text. A caller-asserted actor, roles, principal id or
   organization is refused. Runner: `internal/auth/authapi/authorize_golden_test.go`. Main has no authorize HTTP handler yet.
 
-`state.catalog` is a closed enum:
-
-- `embedded`: the shipped catalog.
-- `planted-repo-reader`: the shipped catalog plus the data file `catalogs/planted-repo-reader.json`, which lets admin, member and viewer hold
-  `acr.context.read`. In the shipped catalog no role holds that action, so the grant and membership-default allows cannot be reached.
-  Rows on this catalog pin evaluator logic, NOT the shipped catalog. They are `allowed_by_repository_grant`,
-  `allowed_by_membership_default`, `grant_expired` and `grant_revoked`, and every other repository row.
-  Row `embedded-catalog-no-role-holds-repository-read` pins that no shipped role holds the action. The change that gives a role
-  `acr.context.read` turns it red, and the planted rows then move to `embedded`.
+`state.catalog` is a closed enum with one value, `embedded`: the shipped catalog. Until catalog version 6 no shipped role held
+`acr.context.read`, so the repository rows ran on a planted catalog; version 6 gives the action to viewer, member, admin and owner
+and every row runs on the shipped catalog. `manifest.json` keeps an empty `catalogs` list for a catalog data file a future row may name.
 
 ## expect.reason is INTERNAL
 

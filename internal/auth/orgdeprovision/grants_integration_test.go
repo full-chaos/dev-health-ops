@@ -37,8 +37,19 @@ func TestDeprovisionEndsTheOrganizationsLiveGrants(t *testing.T) {
 	for i, m := range members {
 		id := uuid.New()
 		grants = append(grants, id)
-		if _, err := e.admin.Exec(ctx, `INSERT INTO auth.resource_grants (id, principal_id, organization_id, role_key, resource_kind, resource_id, granted_by)
+		tx, err := e.admin.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO auth.resource_grants (id, principal_id, organization_id, role_key, resource_kind, resource_id, granted_by)
 VALUES ($1, $2, $3, 'viewer', 'repository', $4, $5)`, id, m, p.org, []string{"acme/api", "*"}[i%2], actor); err != nil {
+			_ = tx.Rollback(ctx)
+			t.Fatal(err)
+		}
+		if err := tx.Commit(ctx); err != nil {
 			t.Fatal(err)
 		}
 	}

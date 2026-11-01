@@ -12,11 +12,29 @@ import (
 func (e *env) seedGrant(t *testing.T, ctx context.Context, org, principal, by uuid.UUID, key string) uuid.UUID {
 	t.Helper()
 	id := uuid.New()
-	if _, err := e.admin.Exec(ctx, `INSERT INTO auth.resource_grants (id, principal_id, organization_id, role_key, resource_kind, resource_id, granted_by)
-VALUES ($1, $2, $3, 'viewer', 'repository', $4, $5)`, id, principal, org, key, by); err != nil {
-		t.Fatalf("seed grant: %v", err)
-	}
+	e.adminTx(t, ctx, `INSERT INTO auth.resource_grants (id, principal_id, organization_id, role_key, resource_kind, resource_id, granted_by)
+VALUES ($1, $2, $3, 'viewer', 'repository', $4, $5)`, id, principal, org, key, by)
 	return id
+}
+
+// adminTx runs a fixture write on a table the commit guard protects: the
+// guard's triggers are off for this one transaction.
+func (e *env) adminTx(t *testing.T, ctx context.Context, sql string, args ...any) {
+	t.Helper()
+	tx, err := e.admin.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, sql, args...); err != nil {
+		t.Fatalf("fixture write: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // I5, I6: removing a member ends that pair's live grants in the same
@@ -34,9 +52,7 @@ func TestRemoveEndsThePairsLiveGrantsAndAReAddHasNone(t *testing.T) {
 	g1, g2 := e.seedGrant(t, ctx, org, user, owner, "acme/api"), e.seedGrant(t, ctx, org, user, owner, "*")
 	keep, otherOrg := e.seedGrant(t, ctx, org, peer, owner, "acme/api"), e.seedGrant(t, ctx, other, user, owner, "acme/api")
 	done := e.seedGrant(t, ctx, org, user, owner, "acme/old")
-	if _, err := e.admin.Exec(ctx, `UPDATE auth.resource_grants SET revoked_at = now(), revoked_by = $2 WHERE id = $1`, done, owner); err != nil {
-		t.Fatal(err)
-	}
+	e.adminTx(t, ctx, `UPDATE auth.resource_grants SET revoked_at = now(), revoked_by = $2 WHERE id = $1`, done, owner)
 	actor := owner
 	if _, err := e.store.Remove(ctx, Change{OrgID: org, PrincipalID: user, Actor: Actor{PrincipalID: &actor}, Authorize: allowAll}); err != nil {
 		t.Fatalf("Remove: %v", err)

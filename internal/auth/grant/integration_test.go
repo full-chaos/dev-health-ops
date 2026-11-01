@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
@@ -486,5 +487,43 @@ WHERE m.organization_id = $1 AND m.principal_id = $2 AND m.status <> 'active' AN
 		if _, err := e.members.Add(ctx, membership.Change{OrgID: s.org, PrincipalID: s.user, Role: "member", Authorize: allowAll}); err != nil && !errors.Is(err, membership.ErrAlreadyMember) {
 			t.Fatalf("round %d re-add: %v", i, err)
 		}
+	}
+}
+
+// The seeded roles are exactly viewer, member and admin: a raw owner grant
+// fails on the foreign key to auth.roles, as the Store refuses it first.
+func TestOwnerIsNotASeededRole(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	s := e.setup(t, ctx)
+	var keys []string
+	rows, err := e.admin.Query(ctx, `SELECT role_key FROM auth.roles WHERE scope = 'organization' ORDER BY role_key`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			t.Fatal(err)
+		}
+		keys = append(keys, k)
+	}
+	rows.Close()
+	if fmt.Sprint(keys) != "[admin member viewer]" {
+		t.Fatalf("organization roles in auth.roles = %v, want [admin member viewer]", keys)
+	}
+	tx, err := e.admin.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `ALTER TABLE auth.resource_grants DISABLE TRIGGER USER`); err != nil {
+		t.Fatal(err)
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO auth.resource_grants (id, principal_id, organization_id, role_key, resource_kind, resource_id, granted_by)
+VALUES ($1, $2, $3, 'owner', 'repository', 'acme/api', $4)`, uuid.New(), s.user, s.org, s.admin)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.ConstraintName != "resource_grants_role_key_fkey" {
+		t.Fatalf("raw owner grant = %v, want a violation of resource_grants_role_key_fkey", err)
 	}
 }

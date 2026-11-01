@@ -6,6 +6,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +17,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
 func TestValidKey(t *testing.T) {
@@ -196,5 +199,57 @@ func TestCreateEventAndAuditRowAreWellFormed(t *testing.T) {
 	}
 	if got := wireTime(exp); got != "2030-01-02T03:04:05.6789Z" {
 		t.Errorf("wireTime = %q", got)
+	}
+}
+
+// resource_grants.role_key references auth.roles, which nothing else fills: the
+// migration that adds origin seeds exactly the roles a grant may carry, each an
+// organization role of the closed catalog.
+func TestMigrationSeedsExactlyTheGrantRoles(t *testing.T) {
+	migrations, err := authschema.Migrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seeded []string
+	for _, m := range migrations {
+		if !strings.Contains(m.SQL, "resource_grants_history_guard") || !strings.Contains(m.SQL, "INSERT INTO roles") {
+			continue
+		}
+		for _, row := range regexp.MustCompile(`\('([a-z_]+)', '([a-z_]+)', 'organization', true\)`).FindAllStringSubmatch(m.SQL, -1) {
+			if row[1] != row[2] {
+				t.Errorf("role %q is named %q; the name is the key", row[1], row[2])
+			}
+			seeded = append(seeded, row[1])
+		}
+	}
+	sort.Strings(seeded)
+	want := Roles()
+	sort.Strings(want)
+	if strings.Join(seeded, ",") != strings.Join(want, ",") {
+		t.Fatalf("seeded roles = %v, grant roles = %v", seeded, want)
+	}
+	raw, err := os.ReadFile(filepath.Join(repoRoot(t), "contracts", "auth", "v1", "vocabulary", "roles.v1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var catalog struct {
+		Roles []struct{ Role, Scope string } `json:"roles"`
+	}
+	if err := json.Unmarshal(raw, &catalog); err != nil {
+		t.Fatal(err)
+	}
+	org := map[string]bool{}
+	for _, r := range catalog.Roles {
+		if r.Scope == "organization" {
+			org[r.Role] = true
+		}
+	}
+	for _, r := range want {
+		if !org[r] {
+			t.Errorf("grant role %q is not an organization role of roles.v1.json", r)
+		}
+	}
+	if org["owner"] && ValidRole("owner") {
+		t.Error("owner must not be a grant role")
 	}
 }

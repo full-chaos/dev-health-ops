@@ -27,6 +27,11 @@ var excluded = map[string]string{
 	"auth.auth_outbox_events":           "not access-bearing: append-only event stream; the revision floors (auth.aggregate_revisions) cover what consumers saw",
 	"auth.security_audit_events":        "not access-bearing: append-only audit stream",
 	"auth.restore_fence_state":          "not access-bearing: the fence's own state table",
+	"auth.push_sources":                 "not access-bearing: the principal of one (organization, source); the principal's disable switch is the auth.principals section",
+	"auth.credential_projection":        "not access-bearing: the projected lifecycle state; the live access state is the credential_registry row, which the auth.credential_registry sections narrow",
+	"auth.credential_projection_digest": "not access-bearing: digests of applied events",
+	"auth.projection_cursor":            "not access-bearing: the reader's low-water mark, restored with the outbox it indexes",
+	"auth.projection_retry":             "not access-bearing: parked events, restored with the outbox they came from",
 	"auth.sso_flow_states":              "covered by apply, not a manifest section: apply marks every flow state consumed",
 	"auth.oauth_authorization_requests": "not access-bearing: a code lives 60 s, so no restore brings one back live, and a request is decided only by its web session, which the fence covers",
 	// Nothing can set oauth_grants.revoked_at yet: the writer census (writerinventory) lists one writer, Approve's

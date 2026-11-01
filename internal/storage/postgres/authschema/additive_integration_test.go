@@ -464,6 +464,12 @@ var additiveExemptions = []additiveExemption{
 		reason: "principals.kind admits external_source; the redefined list is the 0001 list plus " +
 			"that one value, so it only widens (CHAOS-10896)",
 	},
+	{
+		name:       "credential_projection",
+		regression: `constraint credential_registry.credential_registry_revoked_reason_code redefined "CHECK (((revoked_reason IS NULL) OR (revoked_reason = ANY (ARRAY['compromised'::text, 'owner_request'::text]))))" -> "CHECK (((revoked_reason IS NULL) OR (revoked_reason = ANY (ARRAY['compromised'::text, 'domain_revoked'::text, 'owner_request'::text]))))"`,
+		reason: "revoked_reason admits domain_revoked; the redefined list is the 0011 list plus " +
+			"that one value, so it only widens (CHAOS-10896)",
+	},
 }
 
 // TestEveryMigrationStepIsAdditive applies the lineage ONE MIGRATION AT A TIME

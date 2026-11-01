@@ -121,6 +121,14 @@ func RuntimePosture() []TablePrivilege {
 		// Per-aggregate revision counter (0013): bumped, never deleted.
 		{Table: "aggregate_revisions", Select: true, Insert: true, Update: true},
 
+		// External credential projection (0047): written only inside audit.Commit.
+		// A digest row is never edited; a sources row is never removed.
+		{Table: "push_sources", Select: true, Insert: true},
+		{Table: "credential_projection", Select: true, Insert: true, Update: true},
+		{Table: "credential_projection_digest", Select: true, Insert: true},
+		{Table: "projection_cursor", Select: true, Insert: true, Update: true},
+		{Table: "projection_retry", Select: true, Insert: true, Update: true, Delete: true},
+
 		// Restore fence (0035): the runtime only reads which timelines are fenced.
 		{Table: "restore_fence_state", Select: true},
 	}

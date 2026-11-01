@@ -667,7 +667,7 @@ func TestWorkloadComposeOneShotsMatchComposeYML(t *testing.T) {
 	assertGuard(t, workloadComposeGuard, []plantCase{
 		{"renamed-service", func(t *testing.T, d docTree) docTree {
 			return d.editAll(t, composeFile, "auth-workload-seed", "auth-workload-seeded")
-		}, "auth-workload-seeded"},
+		}, "no service auth-workload-seed"},
 		{"changed-command", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, composeFile, `command: ["workloads", "seed", "-apply"]`, `command: ["workloads", "seed", "-apply", "-x"]`)
 		}, "workloads seed -apply -x"},

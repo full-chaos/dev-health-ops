@@ -62,6 +62,38 @@ The dry run lists the live credentials of the workload, one line each: `live cre
 workload with a live credential is refused: rotate it. The apply prints `credential=ID` and `expires_at=TIME` of
 the new credential. Keep the id: you need it to revoke.
 
+## Compose one-shots
+
+The Compose stack (`compose.yml`, profile `auth`) creates the first credential of the `api` workload with three
+one-shot services. No running service depends on them, because a later `up` would run `bootstrap-create` again
+and it refuses a workload with a live credential.
+
+| Service | What it does | Audit event |
+| --- | --- | --- |
+| `auth-workload-volume` | Sets the owner and mode of the volume directory `/run/workload` (user 65532, mode 0700), only when they differ. | no audit row |
+| `auth-workload-seed` | Runs `workloads seed -apply`. | `auth.workload.registered`, `auth.workload.audiences_changed`, `auth.workload.allowed_actions_changed` (see [Seed the workload row](#seed-the-workload-row)) |
+| `auth-workload-bootstrap` | Runs `workloads bootstrap-create -workload api -out /run/workload/api.bootstrap -apply`. | `auth.workload.bootstrap_created` (reason `credential_issued`) |
+
+```sh
+docker compose --profile auth run --rm auth-workload-bootstrap
+```
+
+- The one command is enough. Compose starts `auth-workload-volume` and `auth-workload-seed` first, in that
+  dependency order (`auth-workload-seed` also waits for `auth-grants`), and each of them is safe to run again.
+- The value is written once to `/run/workload/api.bootstrap` (mode 0600) in the named volume `workload_bootstrap`.
+  The registry keeps only its digest. The command prints the credential id (`credential=ID`), never the value.
+- go-api mounts the volume read-only at `/run/workload` and reads the file only when
+  `AUTH_SESSION_ISSUE_CREDENTIAL` or `AUTH_PROVISIONING_CREDENTIAL` selects `workload`. auth-service never mounts
+  it. To accept the value, auth-service needs `AUTH_WORKLOAD_BOOTSTRAP=true` and `AUTH_TOKEN_ISSUER_URL` (go-api's
+  `AUTH_WORKLOAD_ISSUER` follows it).
+- A second `run --rm auth-workload-bootstrap` is refused (`the workload has a live bootstrap value; rotate it`)
+  and removes its own file. If the volume was removed and the database was not, the registry still holds the live
+  credential: find its id with the dry run below, revoke it, then run the one-shot again. `down -v` removes the
+  volume and the database volume together.
+- The compose file does not script a rotation. The verbs below work against the same database with the migration
+  login. Put the new file in place of `/run/workload/api.bootstrap` yourself, and deliver it before the overlap
+  ends.
+
 ## Rotate
 
 ```sh

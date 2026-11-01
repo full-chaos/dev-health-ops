@@ -45,6 +45,8 @@ internal/atlassianteams	vendored_patch_chain_test.go
 internal/audit	drill_attempt_integration_test.go
 internal/audit	drill_password_integration_test.go
 internal/audit	drill_pitr_integration_test.go
+internal/auth/authapi	authorize_auth_test.go
+internal/auth/authapi	authorize_request_test.go
 internal/auth/authapi	hung_read_test.go
 internal/auth/authapi	issuer_eddsa_test.go
 internal/auth/authconfig	config_test.go
@@ -57,6 +59,7 @@ internal/auth/contracts	authorization_goldens_test.go
 internal/auth/contracts	authorization_schema_test.go
 internal/auth/contracts	contracts.go
 internal/auth/contracts	credential_anchor_lines_test.go
+internal/auth/contracts	credential_class_workload_validators_test.go
 internal/auth/contracts	credential_columns_test.go
 internal/auth/contracts	credential_goldens_test.go
 internal/auth/contracts	credential_refusal_test.go

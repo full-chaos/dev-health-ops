@@ -676,6 +676,8 @@ is a permissive `Annotated[dict, Depends(...)]` at `api/ingest/auth.py:151` and
 a fail-closed dataclass with `org_id` and `scopes` at
 `api/external_ingest/auth.py:65`.
 
+**Retired (CHAOS-11813):** the six legacy ingest routes are gone and answer 404. The text below is the record of the decision when it was made. See [Legacy ingest retirement](../../operate/runbooks/legacy-ingest-retirement.md).
+
 ### Decision
 
 1. **`fcpush_*` keeps its domain validator and its source/organization/scope

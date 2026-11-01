@@ -181,6 +181,7 @@ nav:
           - Auth users flip-back grants: operate/runbooks/auth-users-flip-back-grants.md
           - Workload bootstrap credential: operate/runbooks/auth-workload-bootstrap-credential.md
           - Service accounts: operate/runbooks/auth-service-accounts.md
+          - Legacy ingest retirement: operate/runbooks/legacy-ingest-retirement.md
       - Prod cutover 2026-09-11:
           - operate/prod-cutover-2026-09-11-lessons/index.md
   - Integrate and extend:

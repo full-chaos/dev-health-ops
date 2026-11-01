@@ -169,11 +169,19 @@ that ops sends to PagerDuty.
 **`user_access_token` (CHAOS-10442).** The EdDSA user access token of TRD
 section 11, the successor of `ops_access_token_hs256`. It is class 33. Its wire
 contract is `access-token.v1`: header {alg EdDSA, typ at+jwt, kid}; claims iss,
-aud (one of `dev-health-api`, `auth-service`), sub, principal_type, sid, jti,
+aud (one of `dev-health-api`, `auth-service`, `acr-api`, `acr-mcp`), sub, principal_type, sid, jti,
 iat, nbf, exp, optional org_id and scope. It carries no role, email, profile,
 superuser bit or token version: authorization is checked per request. Its
 lifetime is at most the 60 min HS256-compat ceiling. The class is
 `unconsumed`: nothing mints or verifies it yet.
+The audiences `acr-api` and `acr-mcp` (scopes `acr:api` and `acr:mcp`,
+CHAOS-12248) are ACR's: acr-api accepts `acr-api` only and acr-mcp `acr-mcp`
+only. go-api, query-api and auth-service refuse both. No ops platform token
+carries one: the session token settings (`AUTH_JWT_AUDIENCE`,
+`AUTH_LEGACY_JWT_AUDIENCE`, go-api's `JWT_AUDIENCE`), the HS256 edge-token
+verifier and signer, the envelope verifier and both minters refuse them. The
+mint that will issue them is a separate one (ACP-ADR-13), not built yet
+(CHAOS-12082 step O2).
 
 **`workload_token` (CHAOS-10782).** The EdDSA workload token of TRD section 11
 for one internal service caller. Its wire contract is `workload-token.v1`:

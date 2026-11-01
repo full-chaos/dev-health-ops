@@ -78,7 +78,7 @@ var followUp = map[ActionKind]string{
 	ActionReviewMembershipRole:                   "none",
 	ActionIdentityUnlinked:                       "none",
 	ActionProviderRevocationQueuedFromCredential: "none",
-	ActionRegrantPlatformRole:                    "a platform_admin grants each role again (admin route); with no active platform_admin run the break-glass verb first",
+	ActionRegrantPlatformRole:                    "a platform_admin grants each role again (admin route), except a platform_owner row: auth-migrate platform-owner-grant -principal <uuid> -confirm; with no active platform_admin run the break-glass verb first",
 	ActionNoActivePlatformAdmin:                  "auth-migrate platform-role-bootstrap -principal <uuid> -confirm",
 }
 

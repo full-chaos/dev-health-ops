@@ -18,7 +18,7 @@ lifecycle: active
 
 # Policy catalog reference
 
-The catalog is the closed list of actions and roles of the Auth Control Plane. It is catalog version 4 on `main`: 28 actions and 5 roles. An action or role that is not in the catalog is refused everywhere.
+The catalog is the closed list of actions and roles of the Auth Control Plane. It is catalog version 5: 28 actions and 6 roles. An action or role that is not in the catalog is refused everywhere.
 {: .fc-page-lede }
 
 The JSON files are the single source. `internal/auth/policycatalog` embeds them, parses them and validates them at start. A defect panics the process, so a bad catalog never serves. See also [authentication and authorization](authn-authz.md), [action map](action-map.md) and [obligations](obligations.md).
@@ -83,6 +83,7 @@ A high-risk action must have cache class `none`. The loader refuses a catalog th
 | `admin` | organization | 22 of 28 |
 | `owner` | organization | 23 of 28 |
 | `platform_admin` | platform | 2 of 28 |
+| `platform_owner` | platform | 0 of 28 |
 
 Each role lists its actions explicitly. There is no inheritance, no wildcard and no all-actions role. Which role holds which action:
 
@@ -119,7 +120,7 @@ Each role lists its actions explicitly. There is no inheritance, no wildcard and
 
 No role holds `members.update`, `acr.context.read` or `authz.decide` yet, so the decision core denies them to every role until a roles change grants them.
 
-Source: `contracts/auth/v1/vocabulary/roles.v1.json`. The role keys `viewer`, `member`, `admin` and `owner` are the organization roles that `membership.v1` uses. `platform_admin` is a platform role and is not a membership role.
+Source: `contracts/auth/v1/vocabulary/roles.v1.json`. The role keys `viewer`, `member`, `admin` and `owner` are the organization roles that `membership.v1` uses. `platform_admin` and `platform_owner` are platform roles and are not membership roles. `platform_owner` holds no action: it is a marker that only the operator grants (`auth-migrate platform-owner-grant`), and an owner acts through a `platform_admin` row it also holds.
 
 ## Rules the loader enforces
 
@@ -186,6 +187,7 @@ From `contracts/auth/v1/README.md`:
 - Version 2: every action gets a `risk_class` and a `cache_class` (CHAOS-10641).
 - Version 3: `billing.read`, `billing.manage` and `license.read` (CHAOS-11272). They are held as the billing and licensing routes allow today. They are catalog-only: `/auth/me` does not serve them until a web-reviewed change does.
 - Version 4: `acr.context.read` (organization scope, repository resource kind, low risk, `resource_revision_bound`), `members.update` (organization, high, `none`) and `authz.decide` (platform, high, `none`) (CHAOS-10774). The resource-kind set gains `repository`. The cached-action exemption list is gone.
+- Version 5: the role `platform_owner` (platform scope, no action) (CHAOS-12294). No action changed, so no decision changes.
 
 ## Planned, not built
 

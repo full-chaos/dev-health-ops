@@ -2,6 +2,8 @@ package policy
 
 import (
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -167,4 +169,42 @@ func wrapLevel(g *Guard, level Authz, next http.Handler) http.Handler {
 		return g.WrapPlatform(ActionAdminOrgs, next)
 	}
 	return g.Wrap(level, next)
+}
+
+// The body-first forms decide exactly as their wraps: a platform route by its
+// action, the admin.users route for Admin or the holder.
+func TestPlatformRoute_BodyFirstFormsDecideLikeTheirWraps(t *testing.T) {
+	post := func(handler http.Handler, headers map[string]string) response {
+		request := httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(`{}`))
+		request.Header.Set("Content-Type", "application/json")
+		for key, value := range headers {
+			request.Header.Set(key, value)
+		}
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		return response{recorder.Code, recorder.Body.String(), recorder.Header()}
+	}
+	for _, c := range platformCases(rule.ActionAdminFlags) {
+		store := routeStore(c)
+		guard := NewGuard(authenticator(t, store), quiet())
+		want := 403
+		if c.want {
+			want = 200
+		}
+		if got := post(guard.BodyFirstPlatform(rule.ActionAdminFlags, echo), bearer(t, superClaims)); got.status != want {
+			t.Errorf("BodyFirstPlatform, %s: %d %s, want %d", c.name, got.status, got.body, want)
+		}
+	}
+	for _, c := range []struct {
+		name string
+		set  *rule.Platform
+		want int
+	}{{"admin.users only, no role", only(rule.ActionAdminUsers), 200}, {"another action only", allBut(rule.ActionAdminUsers), 403}} {
+		store := newStore()
+		store.users[userID] = UserState{IsActive: true, Platform: c.set}
+		guard := NewGuard(authenticator(t, store), quiet())
+		if got := post(guard.BodyFirstAdminOr(rule.ActionAdminUsers, echo), bearer(t, orgless)); got.status != c.want {
+			t.Errorf("BodyFirstAdminOr, %s: %d %s, want %d", c.name, got.status, got.body, c.want)
+		}
+	}
 }

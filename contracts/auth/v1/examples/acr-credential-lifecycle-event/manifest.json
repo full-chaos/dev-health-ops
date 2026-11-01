@@ -182,6 +182,12 @@
       "why": "rotated opens the new aggregate: revision 1 only."
     },
     {
+      "file": "invalid-revision-not-integer.json",
+      "expect_instance_location": "/payload/revision",
+      "expect_keyword": "type",
+      "why": "A revision is an integer; a fractional number is refused by the schema, not only by the clients."
+    },
+    {
       "file": "invalid-revoked-at-revision-1.json",
       "expect_instance_location": "/payload/revision",
       "expect_keyword": "minimum",

@@ -5,17 +5,19 @@ import (
 	"testing"
 )
 
-const delegatedSessionsMigration = 38
+// delegatedSessionsMigrationName finds the migration by name, so a renumber at a
+// final merge changes no cell.
+const delegatedSessionsMigrationName = "delegated_sessions"
 
-// 0038 takes auth.principals before the ALTER on auth.sessions, in writer
-// order: auth-migrate does not retry a deadlock (rulings on CHAOS-10987, D5).
-func TestMigration0038TakesPrincipalsFirst(t *testing.T) {
+// The migration takes auth.principals before the ALTER on auth.sessions, in
+// writer order: auth-migrate does not retry a deadlock (rulings on CHAOS-10987, D5).
+func TestDelegatedSessionsMigrationTakesPrincipalsFirst(t *testing.T) {
 	migrations, err := Migrations()
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, m := range migrations {
-		if m.Version != delegatedSessionsMigration {
+		if m.Name != delegatedSessionsMigrationName {
 			continue
 		}
 		lock := strings.Index(m.SQL, "LOCK TABLE principals IN SHARE ROW EXCLUSIVE MODE;")
@@ -30,5 +32,5 @@ func TestMigration0038TakesPrincipalsFirst(t *testing.T) {
 		}
 		return
 	}
-	t.Fatalf("the lineage lacks migration %04d", delegatedSessionsMigration)
+	t.Fatalf("the lineage lacks the migration %s", delegatedSessionsMigrationName)
 }

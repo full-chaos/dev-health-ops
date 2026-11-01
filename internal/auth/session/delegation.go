@@ -26,7 +26,7 @@ const ImpersonateAction = "admin.impersonate"
 // MaxDelegation is a delegated session's whole life (ACP-ADR-03).
 const MaxDelegation = 15 * time.Minute
 
-// maxDelegationReason is the longest reason, in characters; 0038's CHECK holds
+// maxDelegationReason is the longest reason, in characters; sessions_delegation_shape holds
 // the same bound.
 const maxDelegationReason = 500
 

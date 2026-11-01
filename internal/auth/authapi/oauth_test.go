@@ -234,6 +234,12 @@ func TestAuthorizeSendsNoRedirectBeforeTheRedirectIsProven(t *testing.T) {
 			}
 		}
 	})
+	t.Run("no web origin refuses a fixed-URI client too", func(t *testing.T) {
+		o := newOAuthFixture(t, newFixture(t), func(d *OAuthDeps) { d.WebOrigin = "" })
+		if r := o.get(mcpQuery()); r.Code != http.StatusBadRequest || r.Header().Get("Location") != "" {
+			t.Fatalf("status %d, location %q", r.Code, r.Header().Get("Location"))
+		}
+	})
 	t.Run("the other audience stays servable", func(t *testing.T) {
 		o := newOAuthFixture(t, newFixture(t), func(d *OAuthDeps) { d.ResourceACRAPI = "" })
 		if r := o.get(mcpQuery()); r.Code != http.StatusFound {

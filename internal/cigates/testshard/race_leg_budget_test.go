@@ -2,8 +2,6 @@ package testshard_test
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -21,24 +19,14 @@ const (
 
 func raceWeights(t *testing.T) map[string]float64 {
 	t.Helper()
-	files, err := filepath.Glob(filepath.Join(repoRoot(t), "ci", "go_race_weights.d", "*.tsv"))
-	if err != nil || len(files) == 0 {
-		t.Fatalf("no race weights files: %v", err)
-	}
 	w := map[string]float64{}
-	for _, f := range files {
-		raw, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, l := range strings.Split(string(raw), "\n") {
-			if f := strings.Split(l, "\t"); len(f) == 2 {
-				v, err := strconv.ParseFloat(strings.TrimSpace(f[1]), 64)
-				if err != nil {
-					t.Fatalf("weight row %q: %v", l, err)
-				}
-				w[f[0]] = v
+	for _, l := range strings.Split(raceweightsMerge(raceweightsRealFiles(t)), "\n") {
+		if f := strings.Split(l, "\t"); len(f) == 2 {
+			v, err := strconv.ParseFloat(strings.TrimSpace(f[1]), 64)
+			if err != nil {
+				t.Fatalf("weight row %q: %v", l, err)
 			}
+			w[f[0]] = v
 		}
 	}
 	return w

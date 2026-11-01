@@ -27,6 +27,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
 ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
+# shellcheck source=ci/lib/registry_retry.sh
+source "${SCRIPT_DIR}/lib/registry_retry.sh"
 # The suffix comes from /dev/urandom: the preflight below is check-then-use, and compose adopts a
 # resource that already carries the project name, so the name must not be guessable.
 PROJECT="${AUTH_COMPOSE_PROOF_PROJECT:-authproof$$-$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')}"
@@ -101,7 +103,7 @@ assert_project_prefixed() {
 BUILD_FLAG=--build
 [ "${AUTH_PROOF_PREBUILT:-}" != 1 ] || BUILD_FLAG=--no-build
 printf 'step 1: up %s --wait auth-service\n' "${BUILD_FLAG}"
-compose --profile auth up "${BUILD_FLAG}" --detach --wait --wait-timeout 600 auth-service
+registry_retry_run auth-compose-up -- compose --profile auth up "${BUILD_FLAG}" --detach --wait --wait-timeout 600 auth-service
 assert_project_prefixed
 PORT="$(compose --profile auth port auth-service 8096 | sed 's/.*://')"
 [[ "${PORT}" =~ ^[0-9]+$ ]] || die "could not read the ephemeral operator port (${PORT})"

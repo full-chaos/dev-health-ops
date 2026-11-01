@@ -283,9 +283,9 @@ func TestAuthCorpusExternalRegistryClassStopsAtThreeTries(t *testing.T) {
 // Every build-or-pull call site in ci/*.sh goes through registry_retry_run, or is named here by file and function with
 // the reason it is not in the class. A new site fails this test until it does one or the other.
 var rrCensusAllowlist = map[string]string{
-	"ci/auth_corpus_external.sh:up_once":         "retried by up_service: infra_class asks registry_transient, retry loop in up_service",
-	"ci/check_auth_k8s.sh:main":                  "base images pulled with pull_pinned_base_image (retry) and built --pull=false",
-	"ci/check_session_cutover_rehearsal.sh:main": "base images pulled with pull_pinned_base_image (retry) and built --pull=false",
+	"ci/auth_corpus_external.sh:up_once":          "retried by up_service: infra_class asks registry_transient, retry loop in up_service",
+	"ci/check_auth_k8s.sh:build":                  "base images pulled with pull_pinned_base_image (retry) and built --pull=false",
+	"ci/check_session_cutover_rehearsal.sh:build": "base images pulled with pull_pinned_base_image (retry) and built --pull=false",
 }
 
 var rrCensusLine = regexp.MustCompile(`docker (buildx )?build\b|docker compose[^#]* (--build|build)\b|compose[^#]*\$\{BUILD_FLAG\}|^\s*compose build\b`)

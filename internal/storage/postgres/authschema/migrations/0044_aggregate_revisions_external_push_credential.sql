@@ -1,4 +1,4 @@
--- 0043 aggregate_revisions admits the external_push_credential aggregate.
+-- 0044 aggregate_revisions admits the external_push_credential aggregate.
 -- NOT ADDITIVE in two places, on purpose (additiveExemptions): it REDEFINES the
 -- aggregate_type CHECK and the aggregate_id CHECK, and only WIDENS them
 -- (nothing is removed from the 0033 type list; every id the 0013 pattern

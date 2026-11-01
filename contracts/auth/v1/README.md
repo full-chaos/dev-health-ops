@@ -36,6 +36,13 @@ The provisioning resources and request bodies `organization.v1`,
 (CHAOS-10640) are pure schema documents. Their OpenAPI components are listed
 here; the operations arrive with the routes that serve them. Rules:
 
+`oauth-clients.v1` is the OAuth authorization server's static client registry
+(ACP-ADR-13 decision 7, CHAOS-12398): `oauth-clients.v1.json` is the one file, with
+no per-environment overlay, and `oauth-authorization-server.v1` is its RFC 8414
+document. A first-party row holds a redirect path, resolved against
+`AUTH_OAUTH_WEB_ORIGIN`, and a fixed-URI row holds its exact https URIs. A row names
+audiences, never resource URIs.
+
 - A role field is a role key of the organization roles of `roles.v1`
   (viewer, member, admin, owner). A platform role is not a membership role.
   The platform roles are `platform_admin` and `platform_owner`. `platform_owner`

@@ -238,23 +238,60 @@ func (s *Store) sessionColumns() string {
 }
 
 // effectiveRevokedAt is the expression for alias s's revoked_at as the record
-// reports it: the explicit revoke, else the principal's password stamp
-// (users.password_updated_at) when that is strictly after the session was
-// created. A password change thus ends every older session in the same
-// transaction that wrote the new hash, whether or not RevokeAll ran. Both
-// times are database-clock values; a principal with no stamp voids nothing.
+// reports it: the session's own revoke (ownRevokedAt), else, for a browser
+// client's session, the whole effective revoke of its web session, evaluated
+// over the web session's row. A client session is created after its web session,
+// so a password change between the two creations voids the parent and not the
+// child's own stamp: the parent's stamp must be read against the parent's
+// created_at. Liveness is read, not written (CHAOS-12398): a web logout, an
+// organization switch, revoke-all and a password change end the child with no
+// code on those paths.
 func (s *Store) effectiveRevokedAt() string {
-	return fmt.Sprintf(`COALESCE(s.revoked_at,
-		(SELECT u.password_updated_at FROM %s.users u
-		 WHERE u.principal_id = s.principal_id AND u.password_updated_at > s.created_at))`, s.q)
+	return `COALESCE(` + s.ownRevokedAt("s") + `, ` + s.ofWebParent(s.ownRevokedAt("wp")) + `)`
 }
 
-// effectiveExpiry is the expression for alias s's effective expiry.
+// ownRevokedAt is one session row's revoke, for alias: the explicit revoke, else
+// the principal's password stamp (users.password_updated_at) when that is
+// strictly after the session was created. A password change thus ends every
+// older session in the same transaction that wrote the new hash, whether or not
+// RevokeAll ran. Both times are database-clock values; a principal with no stamp
+// voids nothing.
+func (s *Store) ownRevokedAt(alias string) string {
+	return fmt.Sprintf(`COALESCE(%[2]s.revoked_at,
+		(SELECT u.password_updated_at FROM %[1]s.users u
+		 WHERE u.principal_id = %[2]s.principal_id AND u.password_updated_at > %[2]s.created_at))`, s.q, alias)
+}
+
+// effectiveExpiry is the expression for alias s's effective expiry: its own, or
+// for a browser client's session its web session's when that is first. LEAST
+// ignores the NULL of an unlinked session.
 func (s *Store) effectiveExpiry() string {
-	return fmt.Sprintf(`LEAST(s.expires_at, COALESCE(
-		(SELECT r.expires_at FROM %s.refresh_credentials r WHERE r.session_id = s.id
+	return `LEAST(` + s.ownExpiry("s") + `, ` + s.ofWebParent(s.ownExpiry("wp")) + `)`
+}
+
+// effectiveCap is alias s's absolute cap: sessions.expires_at, or for a browser
+// client's session its web session's effective expiry when that is first. A
+// refresh exchange and a new credential's expiry both read it, so a client
+// session cannot be exchanged, or hold a credential, past its web session.
+func (s *Store) effectiveCap() string {
+	return `LEAST(s.expires_at, ` + s.ofWebParent(s.ownExpiry("wp")) + `)`
+}
+
+// ownExpiry is one session row's expiry, for alias: the absolute cap or its
+// newest credential's expiry, whichever is first. A session with no credential
+// uses its last rotation plus the refresh lifetime.
+func (s *Store) ownExpiry(alias string) string {
+	return fmt.Sprintf(`LEAST(%[2]s.expires_at, COALESCE(
+		(SELECT r.expires_at FROM %[1]s.refresh_credentials r WHERE r.session_id = %[2]s.id
 		 ORDER BY r.issued_at DESC, r.created_at DESC LIMIT 1),
-		COALESCE(s.last_seen_at, s.created_at) + %d * interval '1 microsecond'))`, s.q, s.refreshTTL.Microseconds())
+		COALESCE(%[2]s.last_seen_at, %[2]s.created_at) + %[3]d * interval '1 microsecond'))`, s.q, alias, s.refreshTTL.Microseconds())
+}
+
+// ofWebParent reads expr over alias wp, the web session of alias s. It is NULL
+// for an unlinked session. Depth one: a linked session's parent has no link
+// (0042's trigger), so one subquery is the whole chain.
+func (s *Store) ofWebParent(expr string) string {
+	return `(SELECT ` + expr + ` FROM ` + s.q + `.sessions wp WHERE wp.id = s.web_session_id)`
 }
 
 func scanRecord(row pgx.Row, extra ...any) (Record, error) {
@@ -366,8 +403,8 @@ type queryRower interface {
 // lockedSession is the session row read FOR UPDATE, with what an exchange
 // decides on. expired is the EFFECTIVE expiry (Record.ExpiresAt) against the
 // database clock, the same liveness Current reports; capExpired is the
-// absolute cap alone, which an exchange checks before the credential's own
-// expiry so an expired credential reports refresh_expired.
+// absolute cap alone (effectiveCap), which an exchange checks before the
+// credential's own expiry so an expired credential reports refresh_expired.
 type lockedSession struct {
 	Record
 	expired, capExpired, principalDisabled bool
@@ -378,7 +415,7 @@ func (s *Store) lockSession(ctx context.Context, db queryRower, sessionID string
 	var now time.Time
 	var err error
 	l.Record, err = scanRecord(db.QueryRow(ctx, `
-		SELECT `+s.sessionColumns()+`, clock_timestamp(), s.expires_at <= clock_timestamp(), p.disabled_at IS NOT NULL
+		SELECT `+s.sessionColumns()+`, clock_timestamp(), `+s.effectiveCap()+` <= clock_timestamp(), p.disabled_at IS NOT NULL
 		FROM `+s.q+`.sessions s JOIN `+s.q+`.principals p ON p.id = s.principal_id
 		WHERE s.id = $1
 		FOR UPDATE OF s`, sessionID), &now, &l.capExpired, &l.principalDisabled)
@@ -534,7 +571,7 @@ func (s *Store) rotate(ctx context.Context, tx txWriter, session Record, p prese
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO `+s.q+`.refresh_credentials (id, session_id, principal_id, token_hash, family_id, parent_id, expires_at)
 		VALUES ($1, $2, $3, $4, $5, $6, LEAST(clock_timestamp() + make_interval(secs => $7::double precision),
-			(SELECT expires_at FROM `+s.q+`.sessions WHERE id = $2)))
+			(SELECT `+s.effectiveCap()+` FROM `+s.q+`.sessions s WHERE s.id = $2)))
 		RETURNING expires_at`,
 		childID.String(), session.ID.String(), session.PrincipalID.String(), hashCredential(successor),
 		p.familyID, p.id, s.refreshTTL.Seconds()).Scan(&expires); err != nil {

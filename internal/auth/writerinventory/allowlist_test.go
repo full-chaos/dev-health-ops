@@ -156,6 +156,16 @@ var Allowlist = []Entry{
 	{File: "internal/auth/membership/store.go", Func: "Store.write", Table: "public.memberships", Verb: "DELETE"},
 	{File: "internal/auth/membership/store.go", Func: "Store.write", Table: "public.memberships", Verb: "INSERT"},
 	{File: "internal/auth/membership/store.go", Func: "Store.write", Table: "public.memberships", Verb: "UPDATE"},
+	// The OAuth authorization server's state (CHAOS-12398, ACP-ADR-13). Approve and Deny write inside audit.Commit;
+	// a request is written unaudited by an unauthenticated GET and swept by traffic. No route calls these yet.
+	{File: "internal/auth/oauthgrant/store.go", Func: "Store.Approve", Table: "auth.oauth_authorization_requests", Verb: "UPDATE"},
+	{File: "internal/auth/oauthgrant/store.go", Func: "Store.Approve", Table: "auth.oauth_grants", Verb: "INSERT"},
+	{File: "internal/auth/oauthgrant/store.go", Func: "Store.ConsumeCode", Table: "auth.oauth_authorization_requests", Verb: "UPDATE"},
+	{File: "internal/auth/oauthgrant/store.go", Func: "Store.CreateRequest", Table: "auth.oauth_authorization_requests", Verb: "DELETE"},
+	{File: "internal/auth/oauthgrant/store.go", Func: "Store.CreateRequest", Table: "auth.oauth_authorization_requests", Verb: "INSERT"},
+	{File: "internal/auth/oauthgrant/store.go", Func: "Store.Deny", Table: "auth.oauth_authorization_requests", Verb: "UPDATE"},
+	{File: "internal/auth/oauthgrant/store.go", Func: "Store.Describe", Table: "auth.oauth_authorization_requests", Verb: "UPDATE"},
+	{File: "internal/auth/session/client_session.go", Func: "Store.InsertClientSession", Table: "auth.sessions", Verb: "INSERT"},
 	// The invite aggregate: auth.invites and go-api's org_invites row in one audit.Commit, only while AUTH_USERS_OWNED is on.
 	{File: "internal/auth/invite/store.go", Func: "Store.Create", Table: "auth.invites", Verb: "INSERT"},
 	{File: "internal/auth/invite/store.go", Func: "Store.Create", Table: "public.org_invites", Verb: "INSERT"},

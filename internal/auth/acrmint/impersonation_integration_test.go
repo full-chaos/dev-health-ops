@@ -60,8 +60,8 @@ func TestPGImpersonationReadsTheActorSideOfALiveSession(t *testing.T) {
 	t.Cleanup(pool.Close)
 
 	now := time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC)
-	reader := PGImpersonation{Pool: pool, Now: func() time.Time { return now }}
-	if _, err := reader.ImpersonatingActor(ctx, uuid.New()); err == nil {
+	reader := PGImpersonation{Pool: pool, Sessions: noDelegation{}, Now: func() time.Time { return now }}
+	if _, err := reader.ImpersonatingActor(ctx, uuid.New(), uuid.New()); err == nil {
 		t.Fatal("a read with no impersonation_sessions table answered without an error")
 	}
 	migrateSchema(t, ctx, pool)
@@ -105,7 +105,7 @@ VALUES ($1, NULL, $2, $3, 'member', $4)`, uuid.New(), stranger, org, now.Add(tim
 		"actor of an expired one":    {expired, false},
 		"no row as actor":            {stranger, false},
 	} {
-		got, err := reader.ImpersonatingActor(ctx, tc.principal)
+		got, err := reader.ImpersonatingActor(ctx, tc.principal, uuid.New())
 		if err != nil || got != tc.want {
 			t.Errorf("%s: %v, %v; want %v", name, got, err, tc.want)
 		}

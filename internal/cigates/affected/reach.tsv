@@ -125,6 +125,7 @@ internal/auth/contracts	contracts.go	internal/auth/keyrotation
 internal/auth/contracts	contracts.go	internal/auth/linkmail
 internal/auth/contracts	contracts.go	internal/auth/lockorder
 internal/auth/contracts	contracts.go	internal/auth/membership
+internal/auth/contracts	contracts.go	internal/auth/oauthgrant
 internal/auth/contracts	contracts.go	internal/auth/org
 internal/auth/contracts	contracts.go	internal/auth/orgdeprovision
 internal/auth/contracts	contracts.go	internal/auth/passwordpolicy

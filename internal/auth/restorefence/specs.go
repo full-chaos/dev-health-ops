@@ -606,6 +606,13 @@ func blindReviewSQL(s section, schema authschema.ValidatedIdentifier) string {
 	return `SELECT ` + id + ` FROM ` + s.qualified(schema) + ` t WHERE ` + s.blindReview + ` ORDER BY 1`
 }
 
+// liveKeysSQL counts the live service account keys, the rule of serviceaccount.liveKey. A blind margin names the count: it
+// has no source state to tell which of them the source had ended.
+func liveKeysSQL(schema authschema.ValidatedIdentifier) string {
+	return `SELECT count(*) FROM ` + authschema.Quote(schema) + `.credential_registry t
+WHERE t.credential_class = 'service_account_key' AND t.revoked_at IS NULL AND t.expires_at > clock_timestamp()`
+}
+
 // idSQL is the operator id of a restored row (alias t).
 func (s section) idSQL() string {
 	if s.idExpr != "" {

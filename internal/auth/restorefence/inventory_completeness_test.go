@@ -34,8 +34,9 @@ var excluded = map[string]string{
 	"public.billing_plans":          "not access-bearing: billing catalogue",
 	"public.billing_prices":         "not access-bearing: billing catalogue",
 	// Follow-up 11872 (D6459 am.1).
-	"auth.policy_revisions":      "not access-bearing today: dormant, insert-only, no code reads or writes it (ADR-05/07); a reader needs a fence section (the tripwire test enforces it)",
-	"auth.entitlement_snapshots": "not access-bearing today: dormant, insert-only, no code reads or writes it (ADR-05/07); a reader needs a fence section (the tripwire test enforces it)",
+	"auth.policy_revisions":        "not access-bearing today: dormant, insert-only, no code reads or writes it (ADR-05/07); a reader needs a fence section (the tripwire test enforces it)",
+	"auth.workload_assertion_keys": "not access-bearing today: public key metadata for the operator list, no runtime reader and no runtime GRANT (CHAOS-11208); a reader needs a fence section (the tripwire test enforces it)",
+	"auth.entitlement_snapshots":   "not access-bearing today: dormant, insert-only, no code reads or writes it (ADR-05/07); a reader needs a fence section (the tripwire test enforces it)",
 }
 
 // accessStateColumns are the columns that carry an access-removing state in the legacy public schema.

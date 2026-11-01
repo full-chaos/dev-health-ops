@@ -105,3 +105,62 @@ func (h handlers) joinInAuth(w http.ResponseWriter, r *http.Request, token, desc
 	role := accepted.Role
 	h.commitThenIssue(w, r, issue, user, &membershipRow{OrgID: accepted.OrgID, Role: &role, JoinedAt: &now, CreatedAt: now}, orgName)
 }
+
+// onboardInAuth is onboard create_org with AUTH_PROXY_ORG_PROVISIONING on. As
+// joinInAuth, go-api ends its read before the call: auth-service commits the
+// organization, the owner membership and go-api's audit row in one commit.
+func (h handlers) onboardInAuth(w http.ResponseWriter, r *http.Request, orgName *string) {
+	ctx := r.Context()
+	read, err := h.Pool.Begin(ctx)
+	if err != nil {
+		h.fail(w, r, "begin", err)
+		return
+	}
+	user, ok := h.callerRow(w, r, read)
+	onboarded := false
+	if ok {
+		err = read.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM memberships WHERE user_id = $1::uuid)`, user.ID).Scan(&onboarded)
+	}
+	_ = read.Rollback(context.Background())
+	switch {
+	case !ok:
+		return
+	case err != nil:
+		h.fail(w, r, "load memberships", err)
+		return
+	case onboarded:
+		refuse(w, http.StatusBadRequest, "Already onboarded")
+		return
+	}
+	name, err := validateOrganizationName(orgName)
+	if err != nil {
+		refuseViolations(w, http.StatusUnprocessableEntity, err.Error(), []string{err.Error()})
+		return
+	}
+	metadata, err := audit.RequestMetadata(r)
+	if err != nil {
+		h.fail(w, r, "audit", err)
+		return
+	}
+	born, err := h.Provision.OnboardOrganization(ctx, authprovision.OnboardRequest{PrincipalID: user.ID, Name: name,
+		Description: "Organization created during onboarding", RequestMetadata: metadata})
+	if err != nil {
+		if authprovision.ReasonOf(err) == "already_member" {
+			refuse(w, http.StatusBadRequest, "Already onboarded")
+			return
+		}
+		h.Logger.WarnContext(ctx, "api session onboard: auth-service did not create the organization; nothing was written",
+			"refused", errors.Is(err, authprovision.ErrRefused), "reason", authprovision.ReasonOf(err))
+		refuse(w, http.StatusServiceUnavailable, sessionissue.UnavailableText)
+		return
+	}
+	issue, err := h.Pool.Begin(ctx)
+	if err != nil {
+		h.fail(w, r, "begin", err)
+		return
+	}
+	defer func() { _ = issue.Rollback(context.Background()) }()
+	now := h.Now()
+	role := "owner"
+	h.commitThenIssue(w, r, issue, user, &membershipRow{OrgID: born.OrgID, Role: &role, JoinedAt: &now, CreatedAt: now}, name)
+}

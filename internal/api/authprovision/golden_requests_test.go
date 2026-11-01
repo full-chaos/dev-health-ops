@@ -77,6 +77,8 @@ func goldenAnswer(path string) string {
 		return `{"organization_id":"` + org + `","status":"suspended"}`
 	case orgreactivate.StatePath:
 		return `{"organization_id":"` + org + `","status":"active","revision":4}`
+	case authprovision.PathOrgOnboard, authprovision.PathOrgCreate:
+		return `{"organization_id":"` + org + `","membership_id":"` + goldenRow + `"}`
 	}
 	return `{}`
 }
@@ -161,7 +163,7 @@ type lifecycle interface {
 	orgreactivate.StateReader
 }
 
-// goldenCalls are the 10 outgoing verbs with fixed inputs, in a fixed order.
+// goldenCalls are the 12 outgoing verbs with fixed inputs, in a fixed order.
 func goldenCalls(prov authprovision.Provisioner, life lifecycle) []goldenCall {
 	ctx := context.Background()
 	invitedBy := goldenInvitedBy
@@ -192,10 +194,20 @@ func goldenCalls(prov authprovision.Provisioner, life lifecycle) []goldenCall {
 		{"organizations_reactivate", func() error { return life.Reactivate(ctx, goldenOrg, goldenActor, &reactivateRevision) }},
 		{"organizations_suspend", func() error { return life.Suspend(ctx, goldenOrg, goldenActor, &suspendRevision) }},
 		{"organizations_state", func() error { _, err := life.State(ctx, goldenOrg); return err }},
+		{"organizations_onboard", func() error {
+			_, err := prov.OnboardOrganization(ctx, authprovision.OnboardRequest{PrincipalID: goldenPrincipal, Name: "Acme", Description: "golden onboard", RequestMetadata: metadata})
+			return err
+		}},
+		{"organizations_create", func() error {
+			description := "golden create"
+			_, err := prov.CreateOrganization(ctx, authprovision.CreateOrganizationRequest{Actor: goldenActor, Slug: "acme", Name: "Acme", Description: &description,
+				Settings: json.RawMessage(`{"a":1}`), Tier: "team", ManagedBy: "manual", Owner: &goldenTo})
+			return err
+		}},
 	}
 }
 
-// goldenVerbs drives the 10 verbs and returns the request each one sent.
+// goldenVerbs drives the 12 verbs and returns the request each one sent.
 func goldenVerbs(t *testing.T, g *goldenServer, prov authprovision.Provisioner, life lifecycle) []goldenRequest {
 	t.Helper()
 	calls := goldenCalls(prov, life)

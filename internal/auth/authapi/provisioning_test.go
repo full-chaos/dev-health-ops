@@ -104,9 +104,13 @@ type noRows struct{}
 func (noRows) QueryRow(context.Context, string, ...any) pgx.Row { return nil }
 
 type fakeEnsurer struct {
-	err   error
-	calls int
-	last  uuid.UUID
+	err     error
+	calls   int
+	last    uuid.UUID
+	bornErr error
+	bornID  uuid.UUID
+	onboard identity.OnboardOrganizationRequest
+	create  identity.CreateOrganizationRequest
 }
 
 func (f *fakeEnsurer) EnsureOrganization(_ context.Context, orgID uuid.UUID) error {

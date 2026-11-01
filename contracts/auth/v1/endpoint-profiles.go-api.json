@@ -9754,7 +9754,7 @@
         "name": "EdDSA"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13); the route also uses Valkey key github_app_install_state:<jti> GET internal/api/githubapp/routes.go:261, SET :269 (replay guard; unavailable cache is logged and request proceeds) (not an authorization-decision cache)",
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13); the route also uses Valkey key github_app_install_state:<jti> GET internal/api/githubapp/routes.go:331, SET :339 (replay guard; unavailable cache is logged and request proceeds) (not an authorization-decision cache)",
       "disclosure_behavior": null,
       "gaps": [
         "disclosure_behavior: the answers for a missing id and for another organization's id are not shown to be equal on this route; no claim is recorded"
@@ -9799,7 +9799,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/githubapp/routes.go",
-        "line": 85
+        "line": 95
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",
@@ -9869,7 +9869,7 @@
       "service": "dev-health-ops-api",
       "source": {
         "file": "internal/api/githubapp/routes.go",
-        "line": 83
+        "line": 93
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped",

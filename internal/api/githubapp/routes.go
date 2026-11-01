@@ -59,6 +59,16 @@ type Deps struct {
 type handlers struct {
 	Deps
 	saver credentials.Saver
+	// begin opens the callback's transaction; nil means Pool.Begin. A test sets
+	// it to count the statements each refusal runs.
+	begin func(context.Context) (pgx.Tx, error)
+}
+
+func (h handlers) beginTx(ctx context.Context) (pgx.Tx, error) {
+	if h.begin != nil {
+		return h.begin(ctx)
+	}
+	return h.Pool.Begin(ctx)
 }
 
 // Routes returns the two install routes.
@@ -202,12 +212,16 @@ func (h handlers) installCallback(w http.ResponseWriter, r *http.Request) {
 		h.internal(w, r, "verify installer access", outcome.err)
 		return
 	}
+	if outcome.inaccessible {
+		h.refuseInaccessible(ctx, w, request.installationID, orgID)
+		return
+	}
 	if outcome.status != 0 {
 		detail(w, outcome.status, outcome.detail)
 		return
 	}
 
-	tx, err := h.Pool.Begin(ctx)
+	tx, err := h.beginTx(ctx)
 	if err != nil {
 		h.internal(w, r, "begin", err)
 		return
@@ -254,8 +268,56 @@ func (h handlers) installCallback(w http.ResponseWriter, r *http.Request) {
 // carries the class only.
 func (h handlers) refuseLinkedElsewhere(ctx context.Context, w http.ResponseWriter) {
 	h.Logger.WarnContext(ctx, "install callback refused: installation not linkable", slog.String("class", "linked_elsewhere"))
+	answerInstallerAccessDenied(w)
+}
+
+// refuseInaccessible answers an installation the installer cannot access. It
+// first runs the local work the linked-elsewhere refusal runs (begin, lookup,
+// the guarded claim, rollback), so response time does not tell the two apart by
+// stored state. A failure of that work is logged by class and never changes the
+// answer.
+func (h handlers) refuseInaccessible(ctx context.Context, w http.ResponseWriter, installationID *big.Int, orgID string) {
+	if err := h.refusalWork(ctx, installationID, orgID); err != nil {
+		h.Logger.WarnContext(ctx, "install callback refusal work failed", slog.String("class", "refusal_work"))
+	}
+	answerInstallerAccessDenied(w)
+}
+
+// answerInstallerAccessDenied is the one answer both refusals give.
+func answerInstallerAccessDenied(w http.ResponseWriter) {
 	detail(w, http.StatusForbidden, installerAccessDenied)
 }
+
+// refusalWork runs the statements upsertInstallation runs when another
+// organization holds the installation, with the claim switched off so the
+// update matches no row and nothing is written: the same begin, lookup, update
+// and rollback whatever is stored.
+func (h handlers) refusalWork(ctx context.Context, installationID *big.Int, orgID string) error {
+	if !installationID.IsInt64() {
+		return errors.New("installation id is outside the bigint range")
+	}
+	tx, err := h.beginTx(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	id := installationID.Int64()
+	var existing string
+	if err := tx.QueryRow(ctx, selectInstallationSQL, id).Scan(&existing); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
+	_, err = tx.Exec(ctx, claimInstallationSQL, orgID, nil, nil, h.Now().UTC().Truncate(time.Microsecond), id, false)
+	return err
+}
+
+const (
+	selectInstallationSQL = `SELECT id::text FROM github_app_installations WHERE installation_id = $1`
+	// claimInstallationSQL takes an unowned or the caller's row. $6 is the
+	// claim switch: false matches no row, for the refusal work.
+	claimInstallationSQL = `UPDATE github_app_installations
+		SET org_id = $1, account_login = $2, account_type = $3, suspended_at = NULL, updated_at = $4
+		WHERE installation_id = $5 AND $6::boolean AND (org_id IS NULL OR org_id = $1)`
+)
 
 // consumeState is _consume_install_state_jti, reporting whether the state was
 // already used. The replay cache is defence in depth (GitHub's OAuth code is
@@ -293,7 +355,7 @@ func (h handlers) upsertInstallation(ctx context.Context, tx pgx.Tx, installatio
 	now := h.Now().UTC().Truncate(time.Microsecond)
 
 	var existing string
-	err = tx.QueryRow(ctx, `SELECT id::text FROM github_app_installations WHERE installation_id = $1`, id).Scan(&existing)
+	err = tx.QueryRow(ctx, selectInstallationSQL, id).Scan(&existing)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		inserted, insertErr := h.insertInstallation(ctx, tx, id, orgID, login, accountType, now)
@@ -306,9 +368,7 @@ func (h handlers) upsertInstallation(ctx context.Context, tx pgx.Tx, installatio
 	case err != nil:
 		return false, err
 	}
-	tag, err := tx.Exec(ctx, `UPDATE github_app_installations
-		SET org_id = $1, account_login = $2, account_type = $3, suspended_at = NULL, updated_at = $4
-		WHERE installation_id = $5 AND (org_id IS NULL OR org_id = $1)`, orgID, login, accountType, now, id)
+	tag, err := tx.Exec(ctx, claimInstallationSQL, orgID, login, accountType, now, id, true)
 	if err != nil {
 		return false, err
 	}

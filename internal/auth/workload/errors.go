@@ -13,6 +13,16 @@ var (
 	ErrBindingNotFound = errors.New("workload: binding not found")
 	ErrStore           = errors.New("workload: store unavailable")
 
+	// The assertion key verbs' refusals. None carries an input value.
+	ErrAssertionKeyInvalid      = errors.New("workload: an assertion key field is malformed")
+	ErrAssertionKeyActiveExists = errors.New("workload: the workload has an active assertion key; name -retire-previous-after to rotate")
+	ErrAssertionKeyTerminal     = errors.New("workload: a retired assertion key does not change")
+	ErrAssertionKeyTransition   = errors.New("workload: the assertion key change is not allowed from its current state")
+	ErrAssertionKeyOverlap      = errors.New("workload: retire_after is more than 24 h after the active key's rotated_at")
+	ErrAssertionKeyNoActive     = errors.New("workload: the workload has no active assertion key to overlap")
+	// ErrAssertionKeyWorkloadDisabled: the verb refuses a workload whose row is disabled.
+	ErrAssertionKeyWorkloadDisabled = errors.New("workload: the workload is disabled; enable it before changing its assertion keys")
+
 	// The bootstrap lifecycle verbs' refusals. None carries an input value.
 	ErrBootstrapValue    = errors.New("workload: the bootstrap value is not a canonical minted value")
 	ErrBootstrapExpiry   = errors.New("workload: the bootstrap expiry is outside (0, 90 d]")

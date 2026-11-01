@@ -31,7 +31,7 @@
           "algorithm": null,
           "anchor": {
             "line": 577,
-            "note": "rotate: INSERT INTO refresh_credentials (the issued child credential)",
+            "note": "INSERT INTO `+s.q+`.refresh_credentials (",
             "path": "internal/auth/session/store.go"
           },
           "audience": null,
@@ -353,7 +353,7 @@
           "algorithm": null,
           "anchor": {
             "line": 577,
-            "note": "rotate: INSERT INTO refresh_credentials (the issued child credential)",
+            "note": "INSERT INTO `+s.q+`.refresh_credentials (",
             "path": "internal/auth/session/store.go"
           },
           "audience": null,

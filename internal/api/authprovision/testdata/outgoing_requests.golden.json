@@ -258,5 +258,57 @@
       ]
     },
     "body": "{\"organization_id\":\"11111111-1111-4111-8111-111111111111\"}"
+  },
+  {
+    "verb": "organizations_onboard",
+    "method": "POST",
+    "path": "/internal/v1/organizations/onboard",
+    "headers": {
+      "Accept": [
+        "application/json"
+      ],
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Authorization": [
+        "Bearer svc_authsess_\u003cPLACEHOLDER\u003e"
+      ],
+      "Content-Length": [
+        "152"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "User-Agent": [
+        "Go-http-client/1.1"
+      ]
+    },
+    "body": "{\"description\":\"golden onboard\",\"organization_name\":\"Acme\",\"principal_id\":\"22222222-2222-4222-8222-222222222222\",\"request_metadata\":{\"source\":\"golden\"}}"
+  },
+  {
+    "verb": "organizations_create",
+    "method": "POST",
+    "path": "/internal/v1/organizations/create",
+    "headers": {
+      "Accept": [
+        "application/json"
+      ],
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Authorization": [
+        "Bearer svc_authsess_\u003cPLACEHOLDER\u003e"
+      ],
+      "Content-Length": [
+        "260"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "User-Agent": [
+        "Go-http-client/1.1"
+      ]
+    },
+    "body": "{\"actor_principal_id\":\"33333333-3333-4333-8333-333333333333\",\"managed_by\":\"manual\",\"organization_description\":\"golden create\",\"organization_name\":\"Acme\",\"owner_principal_id\":\"44444444-4444-4444-8444-444444444444\",\"settings\":{\"a\":1},\"slug\":\"acme\",\"tier\":\"team\"}"
   }
 ]

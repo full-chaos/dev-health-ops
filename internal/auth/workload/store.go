@@ -103,6 +103,8 @@ func outcomeLabel(err error) string {
 	case errors.Is(err, ErrNameInvalid), errors.Is(err, ErrAudienceInvalid), errors.Is(err, ErrActionInvalid), errors.Is(err, ErrBindingInvalid),
 		errors.Is(err, ErrBootstrapValue), errors.Is(err, ErrBootstrapExpiry), errors.Is(err, ErrBootstrapOverlap), errors.Is(err, ErrBootstrapReason),
 		errors.Is(err, ErrBootstrapWorkloadDisabled), errors.Is(err, ErrBootstrapPrincipalDisabled),
+		errors.Is(err, ErrAssertionKeyInvalid), errors.Is(err, ErrAssertionKeyActiveExists), errors.Is(err, ErrAssertionKeyTerminal),
+		errors.Is(err, ErrAssertionKeyTransition), errors.Is(err, ErrAssertionKeyOverlap), errors.Is(err, ErrAssertionKeyNoActive), errors.Is(err, ErrAssertionKeyWorkloadDisabled),
 		errors.Is(err, ErrOperatorNotFound), errors.Is(err, ErrOperatorDisabled), errors.Is(err, ErrOperatorIsSubject),
 		errors.Is(err, ErrPrincipalNotWorkload), errors.Is(err, ErrEnableStateChanged), errors.Is(err, ErrRebindStateChanged):
 		return "invalid"
@@ -124,7 +126,7 @@ func (s *Store) run(ctx context.Context, v verb, m audit.Mutation) (err error) {
 	err = s.commit(ctx, m)
 	switch {
 	case err == nil, errors.Is(err, audit.ErrNoStateChange), errors.Is(err, ErrNotFound), errors.Is(err, ErrNameTaken),
-		errors.Is(err, ErrBindingTaken), errors.Is(err, ErrBindingNotFound), errors.Is(err, ErrRebindStateChanged):
+		errors.Is(err, ErrBindingTaken), errors.Is(err, ErrBindingNotFound), errors.Is(err, ErrRebindStateChanged), isAssertionKeyRefusal(err):
 		return err
 	}
 	s.logger.ErrorContext(ctx, "workload: store failure", "verb", string(v), logging.ErrorAttr(err))

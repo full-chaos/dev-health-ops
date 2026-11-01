@@ -23,6 +23,11 @@ import (
 // purgeRuntime is a second runtime login on the shared database, granted with
 // AUTH_USERS_OWNED on (the purge grant is switch-gated); e.runtime keeps the
 // switch-off grants.
+const (
+	purgeRuntimeRole     = "purge_owned_runtime"
+	purgeRuntimePassword = "purge-test-only-not-a-credential"
+)
+
 var (
 	purgeRuntimeOnce sync.Once
 	purgeRuntimePool *pgxpool.Pool
@@ -34,8 +39,7 @@ func (e *reconEnv) ownedRuntime(t *testing.T) *pgxpool.Pool {
 	purgeRuntimeOnce.Do(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		role := "purge_owned_runtime"
-		const password = "purge-test-only-not-a-credential"
+		role, password := purgeRuntimeRole, purgeRuntimePassword
 		if _, err := e.admin.Exec(ctx, fmt.Sprintf(`CREATE ROLE %q LOGIN PASSWORD '%s'`, role, password)); err != nil {
 			purgeRuntimeErr = err
 			return
@@ -272,7 +276,15 @@ func TestLegacyLinkPurgeVerbEndToEnd(t *testing.T) {
 	seeded := e.seedLegacy(t, ctx)
 	old := connectFn
 	connectFn = func(context.Context, cli.Env, string) (*pgxpool.Pool, authschema.ValidatedIdentifier, int) {
-		return e.ownedRuntime(t), e.schema, cli.ExitOK
+		// The verb closes the pool it gets: hand it one of its own, never the shared one.
+		e.ownedRuntime(t)
+		cfg := e.admin.Config().Copy()
+		cfg.ConnConfig.User, cfg.ConnConfig.Password = purgeRuntimeRole, purgeRuntimePassword
+		pool, err := pgxpool.NewWithConfig(ctx, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return pool, e.schema, cli.ExitOK
 	}
 	t.Cleanup(func() { connectFn = old })
 

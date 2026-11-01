@@ -870,3 +870,45 @@ func TestWidenedManifestFailsClosedUntilGrantsOnlyRuns(t *testing.T) {
 		t.Error("GrantsOnly did not give the migrator the privilege")
 	}
 }
+
+// The pin has one exception: the append function of the External Push lifecycle, owned by the configured writer role.
+// Any other object the writer owns, and the same function without the writer configured, fail the pin.
+func TestSchemaOwnerPinExceptsOnlyThePushLifecycleFunctionOfTheWriter(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+	env := newOwnerMoveEnv(t, ctx, false)
+	env.move(t, ctx, env.moveOptions(true))
+	if _, err := Apply(ctx, env.migrator, env.options(true)); err != nil {
+		t.Fatalf("Apply as the migrator: %v", err)
+	}
+	function := fmt.Sprintf("auth.%s%s", PushLifecycleFunction, PushLifecycleFunctionSignature)
+	if _, err := env.admin.Exec(ctx, fmt.Sprintf(`ALTER FUNCTION %s OWNER TO %s`, function, Quote(mustValidatedIdentifier(env.writerRole)))); err != nil {
+		t.Fatalf("hand the append function to the writer: %v", err)
+	}
+	conn, err := env.admin.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Release()
+	pinned := env.options(true)
+	pinned.SchemaOwnerRole = env.migratorRole
+
+	pinned.PushLifecycleWriterRole = env.writerRole
+	if err := verifySchemaOwnerPin(ctx, conn.Conn(), pinned); err != nil {
+		t.Errorf("the append function owned by the configured writer fails the pin: %v", err)
+	}
+	other := pinned
+	other.PushLifecycleWriterRole = ""
+	if err := verifySchemaOwnerPin(ctx, conn.Conn(), other); !errors.Is(err, ErrSchemaOwnerPin) || !strings.Contains(err.Error(), "function") {
+		t.Errorf("without a configured writer the append function passes the pin: %v", err)
+	}
+	if _, err := env.admin.Exec(ctx, `CREATE FUNCTION auth.zz_other() RETURNS int LANGUAGE sql AS 'SELECT 1'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.admin.Exec(ctx, fmt.Sprintf(`ALTER FUNCTION auth.zz_other() OWNER TO %s`, Quote(mustValidatedIdentifier(env.writerRole)))); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifySchemaOwnerPin(ctx, conn.Conn(), pinned); !errors.Is(err, ErrSchemaOwnerPin) {
+		t.Errorf("another function owned by the writer passes the pin: %v", err)
+	}
+}

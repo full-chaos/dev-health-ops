@@ -14,6 +14,8 @@ var provisioningRoutes = []string{
 	"/internal/v1/organizations/onboard", "/internal/v1/organizations/create",
 	"/internal/v1/service-accounts/create", "/internal/v1/service-accounts/disable", "/internal/v1/service-accounts/enable",
 	"/internal/v1/service-accounts/owner",
+	"/internal/v1/service-accounts/keys/issue", "/internal/v1/service-accounts/keys/rotate",
+	"/internal/v1/service-accounts/keys/revoke", "/internal/v1/service-accounts/keys/list",
 }
 
 func provisioningRows(t *testing.T) map[string]map[string]any {
@@ -88,6 +90,25 @@ func TestTheRegistryNamesTheProvisioningRoutesAsConsumersOfBothClasses(t *testin
 		}
 		if named != len(provisioningRoutes) {
 			t.Fatalf("%d workload_token provisioning consumers name both variables, want %d", named, len(provisioningRoutes))
+		}
+	}
+}
+
+// A key route issues a value only on issue and rotate, and those two rows say the value authenticates nowhere yet.
+func TestTheKeyRowsNameTheIssuedKeyAndItsUse(t *testing.T) {
+	const gap = "a key this route issues authenticates nowhere yet"
+	rows := provisioningRows(t)
+	for route, issues := range map[string]bool{
+		"/internal/v1/service-accounts/keys/issue": true, "/internal/v1/service-accounts/keys/rotate": true,
+		"/internal/v1/service-accounts/keys/revoke": false, "/internal/v1/service-accounts/keys/list": false,
+	} {
+		issued, _ := rows[route]["issued_credential"].([]any)
+		gaps, _ := rows[route]["gaps"].([]any)
+		if issues != (len(issued) == 1) || issues != slices.Contains(gaps, any(gap)) {
+			t.Errorf("%s: issued %v, gaps %v; want the issued key and the gap line: %v", route, issued, gaps, issues)
+		}
+		if issues && issued[0].(map[string]any)["class_id"] != "service_account_key" {
+			t.Errorf("%s issues %v", route, issued[0])
 		}
 	}
 }

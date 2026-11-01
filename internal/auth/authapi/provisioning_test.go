@@ -312,7 +312,7 @@ func newProvFixture(t *testing.T) *provFixture {
 // deprovision row, last: the suspend route is mounted only when its row exists.
 func docWithRow(t testing.TB, route string) []byte {
 	t.Helper()
-	return docWithRows(t, append([]string{route}, keyPatterns...)...)
+	return docWithRows(t, route)
 }
 
 // embeddedDocWithoutRow is the embedded endpoint-profile document without the rows for route.

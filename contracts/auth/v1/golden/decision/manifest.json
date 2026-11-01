@@ -59,6 +59,16 @@
       "layer": "pdp"
     },
     {
+      "file": "delegated-owner-manages-members-is-impersonation-denied.json",
+      "id": "delegated-owner-manages-members-is-impersonation-denied",
+      "layer": "pdp"
+    },
+    {
+      "file": "delegated-request-for-another-organization-is-delegation-invalid.json",
+      "id": "delegated-request-for-another-organization-is-delegation-invalid",
+      "layer": "pdp"
+    },
+    {
       "file": "embedded-catalog-grant-role-does-not-hold-repository-read.json",
       "id": "embedded-catalog-grant-role-does-not-hold-repository-read",
       "layer": "pdp"

@@ -83,6 +83,10 @@ var provisioningSurfaces = []provisioningSurface{
 		_, err := ParseExternalPushLifecycleEvent(root, raw)
 		return err
 	}},
+	{AcrCredentialLifecycleEventSurface, "contracts/auth/v1/examples/acr-credential-lifecycle-event", func(root string, raw []byte) error {
+		_, err := ParseAcrCredentialLifecycleEvent(root, raw)
+		return err
+	}},
 }
 
 func loadWireCorpus(t *testing.T, s provisioningSurface) wireCorpus {

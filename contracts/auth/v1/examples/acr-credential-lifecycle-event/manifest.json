@@ -1,0 +1,367 @@
+{
+  "description": "Golden corpus for acr-credential-lifecycle-event.v1; the single inventory read by the Go and ajv runners. reject_by_client documents are schema-valid and refused by ParseAcrCredentialLifecycleEvent on the raw token or by a rule a schema cannot state.",
+  "accept": [
+    {
+      "file": "valid-issued.json",
+      "why": "The fullest shape: every optional member present."
+    },
+    {
+      "file": "valid-issued-minimal.json",
+      "why": "An operator-issued credential: no owner, no expiry, no request id."
+    },
+    {
+      "file": "valid-issued-workload-system.json",
+      "why": "A workload exchange credential: no owner and no actor reference, the system acted."
+    },
+    {
+      "file": "valid-device-redeemed.json",
+      "why": "A device authorization redeemed into a credential; the approving subject is the owner."
+    },
+    {
+      "file": "valid-device-redeemed-oauth-user.json",
+      "why": "The RFC 8628 device grant class is also admitted."
+    },
+    {
+      "file": "valid-rotated-self.json",
+      "why": "Self-rotate: the actor is the credential being replaced, named by rotation_parent_id."
+    },
+    {
+      "file": "valid-rotated-operator.json",
+      "why": "An operator rotation opens a NEW aggregate at revision 1 and names the credential it replaces."
+    },
+    {
+      "file": "valid-revoked-self.json",
+      "why": "Self-revoke: the actor is the credential itself."
+    },
+    {
+      "file": "valid-revoked-operator.json",
+      "why": "Revoked by an operator: the actor differs from the credential. Terminal; no reason member, the prose stays in acr."
+    },
+    {
+      "file": "valid-revoked-user.json",
+      "why": "Revoked by a user."
+    },
+    {
+      "file": "valid-revoked-system.json",
+      "why": "Revoked by the system: no actor reference."
+    },
+    {
+      "file": "valid-revoked-rotated-parent.json",
+      "why": "No-overlap rotation: the replaced credential is revoked in the same transaction by the credential itself."
+    },
+    {
+      "file": "valid-expired.json",
+      "why": "Terminal. Written by the system at the cut or natural expiry instant."
+    },
+    {
+      "file": "valid-expired-after-overlap.json",
+      "why": "A self-rotated parent expires at the end of its overlap."
+    },
+    {
+      "file": "valid-revoked-revision-3.json",
+      "why": "Out of order on the wire: revision 3 is schema-valid; the projection core decides a gap, a duplicate or a stale delivery."
+    },
+    {
+      "file": "valid-expired-revision-4.json",
+      "why": "Out of order on the wire: a larger revision is still a valid event."
+    },
+    {
+      "file": "valid-revision-at-maximum.json",
+      "why": "The largest revision a float64 producer can hold."
+    }
+  ],
+  "reject": [
+    {
+      "file": "invalid-top-level-unknown-member.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "Closed envelope."
+    },
+    {
+      "file": "invalid-payload-unknown-member.json",
+      "expect_instance_location": "/payload",
+      "expect_keyword": "additionalProperties",
+      "why": "Closed payload; the owner is change.owner_subject, there is no principal_id."
+    },
+    {
+      "file": "invalid-change-secret-hash.json",
+      "expect_instance_location": "/payload/change",
+      "expect_keyword": "additionalProperties",
+      "why": "A verifier has no member."
+    },
+    {
+      "file": "invalid-change-token.json",
+      "expect_instance_location": "/payload/change",
+      "expect_keyword": "additionalProperties",
+      "why": "A token has no member."
+    },
+    {
+      "file": "invalid-change-access-token.json",
+      "expect_instance_location": "/payload/change",
+      "expect_keyword": "additionalProperties",
+      "why": "A bearer has no member."
+    },
+    {
+      "file": "invalid-change-token-hash.json",
+      "expect_instance_location": "/payload/change",
+      "expect_keyword": "additionalProperties",
+      "why": "A token digest has no member."
+    },
+    {
+      "file": "invalid-change-fingerprint.json",
+      "expect_instance_location": "/payload/change",
+      "expect_keyword": "additionalProperties",
+      "why": "Nothing derived from the secret goes on the wire."
+    },
+    {
+      "file": "invalid-change-token-prefix.json",
+      "expect_instance_location": "/payload/change",
+      "expect_keyword": "additionalProperties",
+      "why": "The display prefix is a slice of the secret."
+    },
+    {
+      "file": "invalid-change-display-prefix.json",
+      "expect_instance_location": "/payload/change",
+      "expect_keyword": "additionalProperties",
+      "why": "The display prefix is a slice of the secret."
+    },
+    {
+      "file": "invalid-change-device-code.json",
+      "expect_instance_location": "/payload/change",
+      "expect_keyword": "additionalProperties",
+      "why": "A device code is a redeemable secret."
+    },
+    {
+      "file": "invalid-change-user-code.json",
+      "expect_instance_location": "/payload/change",
+      "expect_keyword": "additionalProperties",
+      "why": "A user code is part of the device authorization secret."
+    },
+    {
+      "file": "invalid-aggregate-type-other.json",
+      "expect_instance_location": "/aggregate_type",
+      "expect_keyword": "const",
+      "why": "One aggregate type; the push aggregate has its own surface."
+    },
+    {
+      "file": "invalid-event-type-unknown-verb.json",
+      "expect_instance_location": "/event_type",
+      "expect_keyword": "enum",
+      "why": "Closed event vocabulary."
+    },
+    {
+      "file": "invalid-event-type-scoped.json",
+      "expect_instance_location": "/event_type",
+      "expect_keyword": "enum",
+      "why": "No scope-change event in v1: no acr path changes scopes after issue."
+    },
+    {
+      "file": "invalid-issued-at-revision-2.json",
+      "expect_instance_location": "/payload/revision",
+      "expect_keyword": "const",
+      "why": "issued opens an aggregate: revision 1 only."
+    },
+    {
+      "file": "invalid-device-redeemed-at-revision-2.json",
+      "expect_instance_location": "/payload/revision",
+      "expect_keyword": "const",
+      "why": "device_redeemed opens an aggregate: revision 1 only."
+    },
+    {
+      "file": "invalid-rotated-at-revision-2.json",
+      "expect_instance_location": "/payload/revision",
+      "expect_keyword": "const",
+      "why": "rotated opens the new aggregate: revision 1 only."
+    },
+    {
+      "file": "invalid-revoked-at-revision-1.json",
+      "expect_instance_location": "/payload/revision",
+      "expect_keyword": "minimum",
+      "why": "revoked is a later event: revision 2 or more."
+    },
+    {
+      "file": "invalid-expired-at-revision-1.json",
+      "expect_instance_location": "/payload/revision",
+      "expect_keyword": "minimum",
+      "why": "expired is a later event: revision 2 or more."
+    },
+    {
+      "file": "invalid-revoked-status-active.json",
+      "expect_instance_location": "/payload/change/status",
+      "expect_keyword": "const",
+      "why": "A revoked event states revoked."
+    },
+    {
+      "file": "invalid-expired-expiry-absent.json",
+      "expect_instance_location": "/payload/change",
+      "expect_keyword": "required",
+      "why": "expired names the instant it expired."
+    },
+    {
+      "file": "invalid-issued-scopes-empty.json",
+      "expect_instance_location": "/payload/change/scopes",
+      "expect_keyword": "minItems",
+      "why": "A credential is never issued with no scope; empty never means all."
+    },
+    {
+      "file": "invalid-issued-scopes-duplicate.json",
+      "expect_instance_location": "/payload/change/scopes",
+      "expect_keyword": "uniqueItems",
+      "why": "Scopes are a set."
+    },
+    {
+      "file": "invalid-issued-scope-bad-shape.json",
+      "expect_instance_location": "/payload/change/scopes/0",
+      "expect_keyword": "pattern",
+      "why": "Scope names are lowercase words joined by colons."
+    },
+    {
+      "file": "invalid-issued-class-absent.json",
+      "expect_instance_location": "/payload/change",
+      "expect_keyword": "required",
+      "why": "The issuance class is required on an opening event."
+    },
+    {
+      "file": "invalid-issued-class-seventh.json",
+      "expect_instance_location": "/payload/change/acr_class",
+      "expect_keyword": "enum",
+      "why": "The class vocabulary is closed at six."
+    },
+    {
+      "file": "invalid-rotated-class-browser.json",
+      "expect_instance_location": "/payload/change/acr_class",
+      "expect_keyword": "enum",
+      "why": "A browser credential renews by its refresh grant and is never rotated."
+    },
+    {
+      "file": "invalid-device-redeemed-class-org-bearer.json",
+      "expect_instance_location": "/payload/change/acr_class",
+      "expect_keyword": "enum",
+      "why": "A device redemption is native_device or oauth_user only."
+    },
+    {
+      "file": "invalid-revoked-carries-class.json",
+      "expect_instance_location": "/payload/change",
+      "expect_keyword": "additionalProperties",
+      "why": "Class is on revision 1 events only."
+    },
+    {
+      "file": "invalid-revoked-carries-owner.json",
+      "expect_instance_location": "/payload/change",
+      "expect_keyword": "additionalProperties",
+      "why": "Owner is on revision 1 events only."
+    },
+    {
+      "file": "invalid-expired-carries-scopes.json",
+      "expect_instance_location": "/payload/change",
+      "expect_keyword": "additionalProperties",
+      "why": "Scopes never change after issue."
+    },
+    {
+      "file": "invalid-rotated-parent-absent.json",
+      "expect_instance_location": "/payload/change",
+      "expect_keyword": "required",
+      "why": "A rotation names the credential it replaces."
+    },
+    {
+      "file": "invalid-issued-carries-parent.json",
+      "expect_instance_location": "/payload/change",
+      "expect_keyword": "additionalProperties",
+      "why": "Only rotated names a parent."
+    },
+    {
+      "file": "invalid-owner-subject-shape.json",
+      "expect_instance_location": "/payload/change/owner_subject",
+      "expect_keyword": "pattern",
+      "why": "Opaque, but bounded in alphabet and length."
+    },
+    {
+      "file": "invalid-actor-type-absent.json",
+      "expect_instance_location": "/payload",
+      "expect_keyword": "required",
+      "why": "The actor type is required on every event."
+    },
+    {
+      "file": "invalid-actor-type-unknown.json",
+      "expect_instance_location": "/payload/actor_type",
+      "expect_keyword": "enum",
+      "why": "Closed at user, operator, credential, system."
+    },
+    {
+      "file": "invalid-actor-ref-absent-for-user.json",
+      "expect_instance_location": "/payload",
+      "expect_keyword": "required",
+      "why": "An actor other than the system is named."
+    },
+    {
+      "file": "invalid-actor-ref-with-system.json",
+      "expect_instance_location": "/payload",
+      "expect_keyword": "not",
+      "why": "The system has no reference: the actor_ref present with system is refused."
+    },
+    {
+      "file": "invalid-expired-actor-user.json",
+      "expect_instance_location": "/payload/actor_type",
+      "expect_keyword": "const",
+      "why": "expired is always written by the system."
+    },
+    {
+      "file": "invalid-organization-id-absent.json",
+      "expect_instance_location": "/payload",
+      "expect_keyword": "required",
+      "why": "Tenant is required."
+    },
+    {
+      "file": "invalid-organization-id-shape.json",
+      "expect_instance_location": "/payload/organization_id",
+      "expect_keyword": "pattern",
+      "why": "The acr UUID form is mapped by the producer; the wire carries the org_ form."
+    },
+    {
+      "file": "invalid-aggregate-id-shape.json",
+      "expect_instance_location": "/aggregate_id",
+      "expect_keyword": "pattern",
+      "why": "The credential id is the registry's external_reference form."
+    },
+    {
+      "file": "invalid-idempotency-key-shape.json",
+      "expect_instance_location": "/idempotency_key",
+      "expect_keyword": "pattern",
+      "why": "The key shape is pinned."
+    }
+  ],
+  "reject_by_client": [
+    {
+      "file": "client-rejected-idempotency-key-revision-mismatch.json",
+      "why": "The key must carry the payload revision."
+    },
+    {
+      "file": "client-rejected-idempotency-key-other-aggregate.json",
+      "why": "The key must carry the aggregate id."
+    },
+    {
+      "file": "client-rejected-created-at-impossible-date.json",
+      "why": "Calendar-impossible day."
+    },
+    {
+      "file": "client-rejected-expires-at-impossible-date.json",
+      "why": "Calendar-impossible day."
+    },
+    {
+      "file": "client-rejected-credential-revoked-actor-not-self.json",
+      "why": "Self-revoke: actor_ref must equal aggregate_id; a schema cannot compare two members."
+    },
+    {
+      "file": "client-rejected-credential-rotated-actor-not-parent.json",
+      "why": "Self-rotate: actor_ref must equal rotation_parent_id."
+    },
+    {
+      "file": "client-rejected-revision-decimal-form.json",
+      "why": "A decimal-form revision token is refused on the raw token."
+    },
+    {
+      "file": "client-rejected-revision-exponent-form.json",
+      "why": "An exponent-form revision token is refused on the raw token."
+    }
+  ]
+}

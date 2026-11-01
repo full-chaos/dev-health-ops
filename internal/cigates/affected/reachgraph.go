@@ -36,7 +36,11 @@ type reachGraph struct {
 }
 
 func newReachGraph(prog *ssa.Program, roots []*ssa.Function) *reachGraph {
-	res := rta.Analyze(roots, false)
+	return reachGraphOf(prog, rta.Analyze(roots, false), nil)
+}
+
+// reachGraphOf is the reach graph of an RTA result; onSite, when not nil, sees the group of each dynamic and invoke call.
+func reachGraphOf(prog *ssa.Program, res *rta.Result, onSite func(ssa.CallInstruction, int32)) *reachGraph {
 	g := &reachGraph{id: map[*ssa.Function]int32{}, pkgID: map[*ssa.Package]int32{}}
 	add := func(f *ssa.Function) int32 {
 		if id, ok := g.id[f]; ok {
@@ -62,7 +66,7 @@ func newReachGraph(prog *ssa.Program, roots []*ssa.Function) *reachGraph {
 	for f := range res.Reachable {
 		add(f)
 	}
-	g.addDynamicCalls(prog, res, add)
+	g.addDynamicCalls(prog, res, add, onSite)
 
 	// typeOf indexes a type and, once, its exported methods and the types derived from it, as RTA's runtime types
 	// (golang.org/x/tools/internal/typesinternal.ForEachElement, BSD-3-Clause, The Go Authors).
@@ -170,7 +174,7 @@ func newReachGraph(prog *ssa.Program, roots []*ssa.Function) *reachGraph {
 // of an interface method to that method of every runtime type that implements the interface, so the callees of a call
 // depend only on its signature or its interface method: a function names the groups it calls, and the walk expands a
 // group once, instead of one edge per call site and callee (tens of millions for error.Error and io.Writer).
-func (g *reachGraph) addDynamicCalls(prog *ssa.Program, res *rta.Result, add func(*ssa.Function) int32) {
+func (g *reachGraph) addDynamicCalls(prog *ssa.Program, res *rta.Result, add func(*ssa.Function) int32, onSite func(ssa.CallInstruction, int32)) {
 	type method struct {
 		pkg  *types.Package
 		name string
@@ -221,8 +225,15 @@ func (g *reachGraph) addDynamicCalls(prog *ssa.Program, res *rta.Result, add fun
 							in.methods[c.Method.Id()] = m
 						}
 						calls[m.grp] = true
+						if onSite != nil {
+							onSite(call, m.grp)
+						}
 					case c.StaticCallee() == nil && !builtin:
-						calls[sigGroup(c.Signature())] = true
+						grp := sigGroup(c.Signature())
+						calls[grp] = true
+						if onSite != nil {
+							onSite(call, grp)
+						}
 					}
 					rands = rands[1:]
 				}

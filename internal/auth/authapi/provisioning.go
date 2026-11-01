@@ -134,16 +134,16 @@ type OrganizationEnsurer interface {
 
 // ProvisioningDeps are the provisioning routes' collaborators.
 type ProvisioningDeps struct {
-	Credentials   ProvisioningCredentials
-	Users         ProvisioningUsers
-	Reader        session.Queryer
-	Organizations OrganizationEnsurer
-	Memberships   Memberships
-	Invites       Invites
-	Deprovision   Deprovisioner
-	Orgs          OrganizationLifecycle
-	// ServiceAccounts is the organization service account aggregate.
-	ServiceAccounts ServiceAccounts
+	Credentials     ProvisioningCredentials
+	Users           ProvisioningUsers
+	Reader          session.Queryer
+	Organizations   OrganizationEnsurer
+	Memberships     Memberships
+	Invites         Invites
+	Deprovision     Deprovisioner
+	Orgs            OrganizationLifecycle
+	ServiceAccounts ServiceAccounts // the organization service account aggregate
+	Grants          Grants          // the resource grant aggregate; nil mounts no grant route
 	// Workload is the go-api workload token path the session issue route
 	// takes too (one subject); nil refuses every workload token.
 	Workload *SessionIssueWorkload
@@ -220,6 +220,7 @@ func ProvisioningRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 		{Method: http.MethodPost, Pattern: PatternServiceAccountKeyList, Handler: http.HandlerFunc(h.serviceAccountKeyList)},
 	}
 	routes = h.withStateRoute(routes, rows)
+	routes = h.withGrantRoutes(routes, rows)
 	return routes, nil
 }
 

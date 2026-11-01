@@ -73,7 +73,7 @@ func (j *resolveJIT) ProvisionJoinAndIssue(_ context.Context, account FederatedA
 func resolveRun(protocol string, ids *resolveIdentities, members resolveMembers, jit MembershipJIT) (Login, *Error, *resolveSessions) {
 	sessions := &resolveSessions{}
 	svc := &Service{cfg: Config{Identities: ids, Memberships: members, Sessions: sessions, MembershipJIT: jit}}
-	row := Provider{ID: uuid.New(), OrgID: uuid.New(), Protocol: protocol, AutoProvision: true}
+	row := Provider{ID: uuid.New(), OrgID: uuid.New(), Protocol: protocol, AutoProvision: true, AllowedDomains: []string{"example.com"}}
 	v := validated{profile: profile{Email: "p@example.com", EmailVerified: true}}
 	login, failure := svc.resolve(context.Background(), row, v, nil)
 	return login, failure, sessions

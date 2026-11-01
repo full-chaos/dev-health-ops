@@ -210,7 +210,32 @@ func TestTheWorkloadBootstrapEventCarriesAStatusAndACredentialIDOnly(t *testing.
 		"a bootstrap value as the id":        {"workload", prn, "workload.bootstrap_changed", map[string]any{"credential_id": "fcwlb_" + strings.Repeat("A", 43)}},
 		"a digest member":                    {"workload", prn, "workload.bootstrap_changed", map[string]any{"secret_hash": "00"}},
 		"the event on another aggregate":     {"service_account", prn, "workload.bootstrap_changed", map[string]any{"status": "active"}},
-		"credential_id on another aggregate": {"service_account", prn, "service_account.created", map[string]any{"credential_id": crd}},
+		"credential_id on another aggregate": {"organization", "org_00000000-0000-4000-8000-000000000003", "organization.updated", map[string]any{"credential_id": crd}},
+	}
+	for name, c := range refused {
+		if err := CheckEvent(c.aggregate, c.id, c.event, c.change); err == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+}
+
+func TestTheServiceAccountKeyEventCarriesAStatusAndACredentialIDOnly(t *testing.T) {
+	const prn = "prn_00000000-0000-4000-8000-000000000001"
+	const crd = "crd_00000000-0000-4000-8000-000000000002"
+	for _, status := range []string{"active", "revoked", "expired"} {
+		if err := CheckEvent("service_account", prn, "service_account.key_changed", map[string]any{"status": status, "credential_id": crd}); err != nil {
+			t.Errorf("status %s refused: %v", status, err)
+		}
+	}
+	refused := map[string]struct {
+		aggregate, id, event string
+		change               map[string]any
+	}{
+		"an overlap status":                {"service_account", prn, "service_account.key_changed", map[string]any{"status": "overlap", "credential_id": crd}},
+		"a principal id as the credential": {"service_account", prn, "service_account.key_changed", map[string]any{"status": "active", "credential_id": prn}},
+		"a key value as the id":            {"service_account", prn, "service_account.key_changed", map[string]any{"status": "active", "credential_id": "fcsak_" + strings.Repeat("A", 43)}},
+		"a digest member":                  {"service_account", prn, "service_account.key_changed", map[string]any{"secret_hash": "00"}},
+		"the event on another aggregate":   {"workload", prn, "service_account.key_changed", map[string]any{"status": "active"}},
 	}
 	for name, c := range refused {
 		if err := CheckEvent(c.aggregate, c.id, c.event, c.change); err == nil {

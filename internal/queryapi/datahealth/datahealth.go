@@ -22,6 +22,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 )
 
@@ -55,6 +56,14 @@ type Principal struct {
 	Present     bool
 	Role        string
 	IsSuperuser bool
+	// Platform is the platform action set held when it is not the one
+	// IsSuperuser means; nil carries only the flag.
+	Platform *rule.Platform
+}
+
+// Holds reports whether the caller holds the platform action now.
+func (p Principal) Holds(action string) bool {
+	return rule.Holds(p.Platform, p.IsSuperuser, action)
 }
 
 // AccessError is a refusal to serve the request; Authentication marks the
@@ -73,7 +82,7 @@ func RequireOperator(p Principal) error {
 	if !p.Present {
 		return &AccessError{Message: "Authentication required"}
 	}
-	if p.IsSuperuser {
+	if p.Holds(rule.ActionAdminStats) {
 		return nil
 	}
 	switch strings.ToLower(p.Role) {

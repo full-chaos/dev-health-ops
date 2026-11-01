@@ -125,6 +125,7 @@ internal/auth/contracts	contracts.go	internal/auth/keyrotation
 internal/auth/contracts	contracts.go	internal/auth/linkmail
 internal/auth/contracts	contracts.go	internal/auth/lockorder
 internal/auth/contracts	contracts.go	internal/auth/membership
+internal/auth/contracts	contracts.go	internal/auth/oauthgrant
 internal/auth/contracts	contracts.go	internal/auth/org
 internal/auth/contracts	contracts.go	internal/auth/orgdeprovision
 internal/auth/contracts	contracts.go	internal/auth/passwordpolicy
@@ -143,6 +144,7 @@ internal/auth/contracts	contracts.go	internal/queryapi/server
 internal/auth/contracts	contracts.go	internal/testsupport/usertokens
 internal/auth/contracts	endpoint_auth_profile_selector_gate.go	internal/apiservice
 internal/auth/contracts	endpoint_auth_profile_selector_gate.go	internal/auth/contracts
+internal/auth/contracts	endpoint_auth_profile_selector_gate.go	internal/auth/workloadexchange
 internal/auth/contracts/tokencorpus	corpus.go	internal/api/billing
 internal/auth/contracts/tokencorpus	corpus.go	internal/api/externalingest
 internal/auth/contracts/tokencorpus	corpus.go	internal/api/webhookintake

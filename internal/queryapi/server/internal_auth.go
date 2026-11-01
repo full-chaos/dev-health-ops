@@ -191,7 +191,7 @@ func roleInOrg(user *policy.User, orgID, memberRole string, member bool) (string
 	switch {
 	case member:
 		return memberRole, true
-	case user.IsSuperuser && orgID != user.OrgID:
+	case user.Holds(policy.ActionAdminOrgs) && orgID != user.OrgID:
 		return "", true
 	}
 	return "", false

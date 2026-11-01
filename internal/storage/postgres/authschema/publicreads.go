@@ -47,6 +47,9 @@ func PublicReadColumns() []ColumnGrant {
 		// activity; the metrics finalize job projects it here (computed_at is its
 		// freshness), so auth-service never reads ClickHouse.
 		{Table: "org_activity", Columns: []string{"org_id", "has_data", "computed_at"}},
+		// The OAuth actor check (acrmint.PGImpersonation): the actor side of a live
+		// impersonation. Its reader arrives in O3b (CHAOS-12399), the grant first.
+		{Table: "impersonation_sessions", Columns: []string{"admin_user_id", "ended_at", "expires_at"}},
 		// The session issue route checks go-api's auth-session-issuer
 		// service credential by its hash (last_used_at is not read or
 		// stamped).

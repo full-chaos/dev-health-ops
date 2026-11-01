@@ -1,90 +1,79 @@
 # The superuser decision sites: every non-test function that reads IsSuperuser or names policy.Superuser,
-# with its count of reads. mix is the number of the site (PLAN-10979 section 1.3; 9 = the auth-service provisioning routes, #5236) where platform power
-# stands in for organization power, else "-". TestEverySuperuserDecisionSiteIsListed holds this list.
-# file	function	reads	mix
-internal/adminops/users.go	runUsersDelete	2	-
-internal/adminops/users.go	runUsersList	1	-
-internal/api/billing/audit.go	handlers.getAudit	1	-
-internal/api/billing/audit.go	handlers.listAudit	1	-
-internal/api/billing/audit.go	handlers.resolveAudit	1	-
-internal/api/billing/invoices.go	invoiceOrg	1	-
-internal/api/billing/plans.go	isSuperuser	1	-
-internal/api/billing/reconcile.go	handlers.reconcile	1	-
-internal/api/billing/refunds.go	handlers.createRefund	1	-
-internal/api/billing/refunds.go	handlers.getRefund	1	-
-internal/api/billing/refunds.go	handlers.listRefunds	1	-
-internal/api/billing/routes.go	Routes	1	-
-internal/api/billing/subscriptions.go	handlers.resolveOrg	2	-
-internal/api/orgs/orgs.go	handlers.entitlements	1	7
-internal/api/policy/accessroute.go	Scope.mayImpersonate	1	-
-internal/api/policy/accessroute_user.go	Authenticator.accessTokenUser	1	-
-internal/api/policy/guard.go	Guard.Wrap	2	-
-internal/api/policy/guard.go	Guard.currentUser	2	4
-internal/api/policy/principal.go	Authenticator.CheckClaims	1	-
-internal/api/policy/principal.go	User.IsAdmin	1	1
-internal/api/policy/scope.go	EffectiveOrgID	1	4
-internal/api/policy/scope.go	Scope.Impersonation	1	-
-internal/api/policy/scope.go	Scope.mayUseOrg	1	4
-internal/api/policy/scope.go	Scope.useTokenOrg	1	4
-internal/api/session/changepassword.go	handlers.changePassword	1	-
-internal/api/session/login.go	handlers.loginInTx	1	-
-internal/api/session/onboarding.go	handlers.buildOnboardingState	2	-
-internal/api/session/refresh.go	handlers.refreshRole	1	4
-internal/api/session/refresh.go	handlers.refuseRevokedOfAGoneMember	1	4
-internal/api/session/refresh.go	refreshUserInfo	1	-
-internal/api/session/routes.go	handlers.me	2	2
-internal/api/session/routes.go	handlers.switchOrg	1	-
-internal/api/session/social.go	handlers.socialLogin	1	-
-internal/api/session/store.go	scanUsers	1	-
-internal/api/session/tokens.go	accessClaims	1	-
-internal/api/session/tokens.go	userInfo	1	-
-internal/api/telemetry/report.go	handlers.requirePlatformRole	1	-
-internal/api/telemetry/telemetry.go	handlers.withOrg	1	-
-internal/apiservice/admin/auditlogs.go	handlers.auditLogRoutes	1	-
-internal/apiservice/admin/featureflags.go	handlers.featureRoutes	6	-
-internal/apiservice/admin/guards.go	handlers.ensureOrgAdminAccess	1	3
-internal/apiservice/admin/guards.go	handlers.ensureUserInScope	1	3
-internal/apiservice/admin/guards.go	handlers.refuseSuperuserWrite	1	-
-internal/apiservice/admin/guards.go	orgIDForNonSuperuser	1	3
-internal/apiservice/admin/impersonation.go	handlers.impersonationRoutes	2	-
-internal/apiservice/admin/impersonation.go	handlers.impersonationStatus	1	-
-internal/apiservice/admin/impersonation.go	handlers.startImpersonation	1	-
-internal/apiservice/admin/operator.go	userView	1	-
-internal/apiservice/admin/orgs.go	handlers.orgRoutes	5	-
-internal/apiservice/admin/platformstats.go	handlers.platformRoutes	1	-
-internal/apiservice/admin/store.go	pgStore.userByID	1	-
-internal/apiservice/admin/users.go	handlers.createUserOrg	1	8
-internal/apiservice/admin/users.go	handlers.listUsers	1	8
-internal/apiservice/admin/users.go	handlers.updateUser	2	-
-internal/apiservice/admin/users.go	userResponseObject	1	-
-internal/apiservice/admin/userstore.go	pgStore.insertUser	3	-
-internal/apiservice/admin/userstore.go	pgStore.updateUser	4	-
-internal/apiservice/admin/userstore.go	scanFullUser	1	-
-internal/auth/authapi/compat.go	compatHandlers.compatRefresh	1	4
-internal/auth/authapi/compat.go	refreshUserInfo	1	-
-internal/auth/authapi/compat_guard.go	guardRefresh	1	4
-internal/auth/authapi/credentials.go	credentialHandlers.changed	1	-
-internal/auth/authapi/issuer.go	Issuer.hs256Access	1	-
-internal/auth/authapi/login.go	compatHandlers.loginSucceeded	1	-
-internal/auth/authapi/login.go	userInfo	1	-
-internal/auth/authapi/provisioning.go	provisioningHandlers.actorRule	1	9
-internal/auth/authapi/provisioning.go	provisioningHandlers.targetsRule	2	9
-internal/auth/authapi/refresh.go	handlers.refresh	1	4
-internal/auth/authapi/social.go	compatHandlers.socialSignedIn	1	-
-internal/auth/authapi/users.go	PGUsers.StateOn	1	-
-internal/auth/edgetoken/signer.go	Signer.Access	1	-
-internal/envelopemint/envelopemint.go	Mint	1	-
-internal/queryapi/datahealth/datahealth.go	RequireOperator	1	6
-internal/queryapi/graph/operation_org_guard.go	operationOrgDecision	1	-
-internal/queryapi/graph/schema.resolvers.go	queryResolver.DataHealth	1	-
-internal/queryapi/graph/schema.resolvers.go	queryResolver.ProductTelemetryPlatformDashboard	1	-
-internal/queryapi/principal/edge_access.go	EdgeVerifier.VerifyRouted	1	-
-internal/queryapi/principal/edge_verifier.go	EdgeVerifier.Verify	1	-
-internal/queryapi/principal/verifier.go	enforceSuperuserDiscipline	2	-
-internal/queryapi/producttelemetry/platform.go	RequirePlatformAdmin	1	-
-internal/queryapi/server/graphql_edge_route.go	authenticateGraphQLEdge	1	-
-internal/queryapi/server/internal_auth.go	authenticateInternalRequest	1	-
-internal/queryapi/server/internal_auth.go	checkEdgeCarrier	2	-
-internal/queryapi/server/internal_auth.go	liveScope	1	-
-internal/queryapi/server/internal_auth.go	roleInOrg	1	5
-internal/queryapi/server/mcp_route.go	mcpAuthenticate	1	-
+# with its count of reads. The nine places where platform power stood in for organization power (PLAN-10979
+# section 1.3; 9 = the auth-service provisioning routes, #5236) no longer read the flag: each decides by an explicit
+# platform action and is listed in platform_action_sites.tsv. What is left here is carriage (token claims, wire
+# fields, writers, row scans), the Holds methods that turn the flag into the actions platform_admin lists, and the
+# platform-only routes that move onto their own actions next (CHAOS-11847 PR-B).
+# TestEverySuperuserDecisionSiteIsListed holds this list.
+# file	function	reads
+internal/adminops/users.go	runUsersDelete	2
+internal/adminops/users.go	runUsersList	1
+internal/api/billing/audit.go	handlers.getAudit	1
+internal/api/billing/audit.go	handlers.listAudit	1
+internal/api/billing/audit.go	handlers.resolveAudit	1
+internal/api/billing/invoices.go	invoiceOrg	1
+internal/api/billing/plans.go	isSuperuser	1
+internal/api/billing/reconcile.go	handlers.reconcile	1
+internal/api/billing/refunds.go	handlers.createRefund	1
+internal/api/billing/refunds.go	handlers.getRefund	1
+internal/api/billing/refunds.go	handlers.listRefunds	1
+internal/api/billing/routes.go	Routes	1
+internal/api/billing/subscriptions.go	handlers.resolveOrg	2
+internal/api/policy/accessroute.go	Scope.mayImpersonate	1
+internal/api/policy/accessroute_user.go	Authenticator.accessTokenUser	1
+internal/api/policy/guard.go	Guard.Wrap	2
+internal/api/policy/principal.go	Authenticator.CheckClaims	1
+internal/api/policy/principal.go	User.Holds	1
+internal/api/policy/scope.go	Scope.Impersonation	1
+internal/api/session/changepassword.go	handlers.changePassword	1
+internal/api/session/login.go	handlers.loginInTx	1
+internal/api/session/onboarding.go	handlers.buildOnboardingState	2
+internal/api/session/refresh.go	refreshUserInfo	1
+internal/api/session/routes.go	handlers.me	1
+internal/api/session/routes.go	handlers.switchOrg	1
+internal/api/session/social.go	handlers.socialLogin	1
+internal/api/session/store.go	scanUsers	1
+internal/api/session/store.go	userRow.Holds	1
+internal/api/session/tokens.go	accessClaims	1
+internal/api/session/tokens.go	userInfo	1
+internal/api/telemetry/report.go	handlers.requirePlatformRole	1
+internal/api/telemetry/telemetry.go	handlers.withOrg	1
+internal/apiservice/admin/auditlogs.go	handlers.auditLogRoutes	1
+internal/apiservice/admin/featureflags.go	handlers.featureRoutes	6
+internal/apiservice/admin/guards.go	handlers.refuseSuperuserWrite	1
+internal/apiservice/admin/impersonation.go	handlers.impersonationRoutes	2
+internal/apiservice/admin/impersonation.go	handlers.impersonationStatus	1
+internal/apiservice/admin/impersonation.go	handlers.startImpersonation	1
+internal/apiservice/admin/operator.go	userView	1
+internal/apiservice/admin/orgs.go	handlers.orgRoutes	5
+internal/apiservice/admin/platformstats.go	handlers.platformRoutes	1
+internal/apiservice/admin/store.go	pgStore.userByID	1
+internal/apiservice/admin/users.go	handlers.updateUser	2
+internal/apiservice/admin/users.go	userResponseObject	1
+internal/apiservice/admin/userstore.go	pgStore.insertUser	3
+internal/apiservice/admin/userstore.go	pgStore.updateUser	4
+internal/apiservice/admin/userstore.go	scanFullUser	1
+internal/auth/authapi/compat.go	refreshUserInfo	1
+internal/auth/authapi/credentials.go	credentialHandlers.changed	1
+internal/auth/authapi/issuer.go	Issuer.hs256Access	1
+internal/auth/authapi/login.go	compatHandlers.loginSucceeded	1
+internal/auth/authapi/login.go	userInfo	1
+internal/auth/authapi/provisioning.go	provisioningHandlers.targetsRule	1
+internal/auth/authapi/social.go	compatHandlers.socialSignedIn	1
+internal/auth/authapi/users.go	PGUsers.StateOn	1
+internal/auth/authapi/users.go	UserState.Holds	1
+internal/auth/edgetoken/signer.go	Signer.AccessUntil	1
+internal/envelopemint/envelopemint.go	Mint	1
+internal/queryapi/datahealth/datahealth.go	Principal.Holds	1
+internal/queryapi/graph/operation_org_guard.go	operationOrgDecision	1
+internal/queryapi/graph/schema.resolvers.go	queryResolver.DataHealth	1
+internal/queryapi/graph/schema.resolvers.go	queryResolver.ProductTelemetryPlatformDashboard	1
+internal/queryapi/principal/edge_access.go	EdgeVerifier.VerifyRouted	1
+internal/queryapi/principal/edge_verifier.go	EdgeVerifier.Verify	1
+internal/queryapi/principal/verifier.go	enforceSuperuserDiscipline	2
+internal/queryapi/producttelemetry/platform.go	RequirePlatformAdmin	1
+internal/queryapi/server/graphql_edge_route.go	authenticateGraphQLEdge	1
+internal/queryapi/server/internal_auth.go	authenticateInternalRequest	1
+internal/queryapi/server/internal_auth.go	checkEdgeCarrier	2
+internal/queryapi/server/internal_auth.go	liveScope	1
+internal/queryapi/server/mcp_route.go	mcpAuthenticate	1

@@ -310,7 +310,7 @@ func (h provisioningHandlers) actorRule(ctx context.Context, q session.Queryer, 
 	if !found || !state.IsActive {
 		return UserState{}, errActorRefused{reasonDeactivated}
 	}
-	if state.IsSuperuser {
+	if state.Holds(actionAdminOrgs) {
 		return state, nil
 	}
 	if superuserOnly {
@@ -330,7 +330,7 @@ func (h provisioningHandlers) actorRule(ctx context.Context, q session.Queryer, 
 // superuser: no target may be a superuser. It reads the targets' users rows,
 // which the membership verb holds FOR UPDATE (step 2).
 func (h provisioningHandlers) targetsRule(ctx context.Context, q session.Queryer, actor UserState, targets []uuid.UUID) error {
-	if actor.IsSuperuser {
+	if actor.Holds(actionAdminUsers) {
 		return nil
 	}
 	for _, target := range targets {

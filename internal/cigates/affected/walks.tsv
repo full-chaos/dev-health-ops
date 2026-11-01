@@ -84,6 +84,8 @@ internal/auth/identity/local	linkbind_census_test.go	.	tree	*.go
 internal/auth/keystore	custody_test.go	internal/auth/keystore	dir	*
 internal/auth/platformrole	owned_parse_census_test.go	cmd	tree	*
 internal/auth/platformrole	owned_parse_census_test.go	internal	tree	*
+internal/auth/platformrole	platform_action_sites_census_test.go	cmd	tree	*
+internal/auth/platformrole	platform_action_sites_census_test.go	internal	tree	*
 internal/auth/platformrole	superuser_fills_census_test.go	cmd	tree	*
 internal/auth/platformrole	superuser_fills_census_test.go	internal	tree	*
 internal/auth/platformrole	superuser_literals_census_test.go	cmd	tree	*
@@ -204,6 +206,7 @@ internal/cigates/workflows	auth_corpus_queue_test.go	unexpressed	-	-
 internal/cigates/workflows	chart_started_selector_test.go	unexpressed	-	-
 internal/cigates/workflows	providerstub_not_release_test.go	.github/workflows	dir	*
 internal/cigates/workflows	race_json_artifact_test.go	unexpressed	-	-
+internal/cigates/workflows	registry_retry_test.go	unexpressed	-	-
 internal/cigates/workflows	ttl_registry_test.go	unexpressed	-	-
 internal/cigates/workflows	workflows_common_test.go	unexpressed	-	-
 internal/cigates/workflows	workflows_go_resolver_test.go	unexpressed	-	-

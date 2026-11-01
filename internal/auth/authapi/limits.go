@@ -47,6 +47,10 @@ var (
 	socialLinkLimit     = httpapi.Limit{ID: "auth_svc_social_link_ip_principal", Count: 10, Window: time.Hour}
 	// refreshLimit is go-api's auth_refresh budget (10 per 15 minutes per client address) for the compatibility refresh route.
 	refreshLimit = httpapi.Limit{ID: "auth_svc_refresh", Count: 10, Window: 15 * time.Minute}
+	// The OAuth authorize budgets (D0 section 4). go-api's aggregate charges the per
+	// address budgets outside body processing; these need the parsed request.
+	oauthClientLimit    = httpapi.Limit{ID: "auth_svc_oauth_authorize_client", Count: 60, Window: time.Minute}
+	oauthPrincipalLimit = httpapi.Limit{ID: "auth_svc_oauth_authorize_principal", Count: 20, Window: time.Minute}
 )
 
 // rateLimitKeyInfo is the HKDF info of the key that digests identifiers in the
@@ -133,6 +137,8 @@ var scopeCodes = map[string]string{
 	PatternCompatRefresh: "s04",
 	PatternResetPassword: "s02",
 	socialLinkRoute:      "s03",
+	oauthAuthorizeScope:  "s05",
+	oauthDecideScope:     "s06",
 }
 
 // admit counts each charge in order and reports whether the request may go

@@ -48,3 +48,7 @@ contracts/auth/v1/examples/acr-credential-lifecycle-event/invalid-change-token.j
 contracts/auth/v1/examples/acr-credential-lifecycle-event/invalid-change-access-token.json:generic-api-key:23
 contracts/auth/v1/examples/acr-credential-lifecycle-event/invalid-change-token-hash.json:generic-api-key:23
 contracts/auth/v1/examples/acr-credential-lifecycle-event/invalid-change-token-prefix.json:generic-api-key:23
+# CHAOS-12399: the public RFC 7636 example PKCE challenge, under a constant whose name held "auth", in an earlier branch
+# commit; not a credential. The constant is renamed and the head is clean; the row covers the branch's history only.
+# Commit-less file:rule:line form, as the rows above.
+internal/auth/authapi/oauth_test.go:generic-api-key:30

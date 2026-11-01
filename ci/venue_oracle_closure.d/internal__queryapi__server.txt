@@ -34,6 +34,7 @@ internal/auth/identity/ssoaudit
 internal/auth/invite
 internal/auth/keystore
 internal/auth/membership
+internal/auth/oauthgrant
 internal/auth/org
 internal/auth/orgdeprovision
 internal/auth/passwordhash

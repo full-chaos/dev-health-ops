@@ -679,7 +679,8 @@ func TestProvisioningServiceAccountsWhileUsersAreNotOwned(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	withProfileRow(t, authapi.PatternServiceAccountCreate, authapi.PatternServiceAccountDisable, authapi.PatternServiceAccountEnable, authapi.PatternServiceAccountOwner)
-	e := newRoutesEnvWith(t, ctx, map[string]string{authconfig.EnvMembershipRoutes: "true", authconfig.EnvInviteTokenSecret: provisioningInviteSecret})
+	e := newRoutesEnvWith(t, ctx, map[string]string{authconfig.EnvMembershipRoutes: "true", authconfig.EnvInviteTokenSecret: provisioningInviteSecret,
+		authconfig.EnvInviteTokenSecretPrevious: provisioningInvitePrevious})
 	token, _ := e.issuerCredential(t, ctx, "auth-session-issuer", `["memberships:write", "sessions:issue"]`, false, false)
 	header := map[string]string{"Authorization": "Bearer " + token, "Content-Type": "application/json"}
 	boss, org := e.seed(t, ctx)

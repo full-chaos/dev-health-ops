@@ -1,4 +1,4 @@
--- 0039 credential_registry.credential_class admits service_account_key.
+-- 0040 credential_registry.credential_class admits service_account_key.
 -- NOT ADDITIVE in one place, on purpose (additiveExemptions): it REDEFINES the
 -- class CHECK and only WIDENS it (nothing is removed from the 0037 list).
 --

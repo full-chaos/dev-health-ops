@@ -21,6 +21,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
 ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
+# shellcheck source=ci/lib/registry_retry.sh
+source "${SCRIPT_DIR}/lib/registry_retry.sh"
 MANIFEST="${ROOT}/deploy/go-workers/deployment.json"
 # The suffix comes from /dev/urandom: the preflight below is check-then-use, and compose adopts a
 # resource that already carries the project name, so the name must not be guessable.
@@ -155,7 +157,7 @@ assert_stable() {
 }
 
 printf 'step 1: build the images this tree defines\n'
-compose build go-worker-heavy go-river-migrate go-contractcheck
+registry_retry_run workers-compose-build -- compose build go-worker-heavy go-river-migrate go-contractcheck
 
 printf 'step 2: data services\n'
 compose up --detach --wait --wait-timeout 600 postgres clickhouse valkey pgbouncer

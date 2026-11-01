@@ -612,7 +612,8 @@ AND attributes->>'target_id' = $1 AND attributes->>'reason_code' = 'expired' AND
 	}
 }
 
-// Two creates race on an expired tuple: one row, one created and one expired event, the other is ErrAlreadyGranted.
+// Two creates race on an expired tuple, each planning the same expired row before either starts its transaction (a barrier
+// in the plan seam holds both on their first attempt): one row, one created and one expired event, the other is ErrAlreadyGranted.
 func TestTwoCreatesRaceOnAnExpiredTuple(t *testing.T) {
 	e := getEnv(t)
 	ctx := context.Background()
@@ -624,6 +625,21 @@ func TestTwoCreatesRaceOnAnExpiredTuple(t *testing.T) {
 			t.Fatal(err)
 		}
 		e.expire(t, ctx, g1.ID)
+		var mu sync.Mutex
+		planned := 0
+		barrier := make(chan struct{})
+		e.store.afterPlan = func() {
+			mu.Lock()
+			planned++
+			n := planned
+			mu.Unlock()
+			switch {
+			case n == 2:
+				close(barrier)
+			case n < 2:
+				<-barrier
+			}
+		}
 		errs := make(chan error, 2)
 		var wg sync.WaitGroup
 		for range 2 {
@@ -635,6 +651,7 @@ func TestTwoCreatesRaceOnAnExpiredTuple(t *testing.T) {
 			}()
 		}
 		wg.Wait()
+		e.store.afterPlan = nil
 		close(errs)
 		ok, already := 0, 0
 		for err := range errs {
@@ -659,6 +676,40 @@ func TestTwoCreatesRaceOnAnExpiredTuple(t *testing.T) {
 		if n := e.count(t, ctx, `SELECT count(*) FROM auth.auth_outbox_events WHERE event_type = 'resource_grant.created' AND payload->>'organization_id' = $1`, "org_"+s.org.String()); n != 2 {
 			t.Fatalf("round %d: %d created events in the organization (the first grant and one new), want 2", round, n)
 		}
+	}
+}
+
+// A create whose plan found no expired row, and whose row expires before its transaction starts, sees the set move, plans
+// again and grants: the row is ended once and the new grant is live.
+func TestCreateOverARowThatExpiresBetweenPlanAndTransactionGrantsAfterOneRetry(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	s := e.setup(t, ctx)
+	at := time.Now().Add(3 * time.Second)
+	g1, err := e.createWith(t, ctx, s, "viewer", "acme/between", &at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	e.store.afterPlan = func() {
+		calls++
+		if calls == 1 {
+			time.Sleep(time.Until(at.Add(time.Second)))
+		}
+	}
+	defer func() { e.store.afterPlan = nil }()
+	g2, err := e.createWith(t, ctx, s, "viewer", "acme/between", nil)
+	if err != nil {
+		t.Fatalf("create after the planned set moved: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("plan seam called %d times, want 2 (one attempt moved, one granted)", calls)
+	}
+	if g2.ID == g1.ID || !g2.Live() {
+		t.Fatalf("new grant = %+v", g2)
+	}
+	if n := e.events(t, ctx, "resource_grant.expired", g1.ID); n != 1 {
+		t.Fatalf("expired events = %d, want 1", n)
 	}
 }
 

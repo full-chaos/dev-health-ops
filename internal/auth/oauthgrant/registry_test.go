@@ -46,11 +46,11 @@ func TestTheRegistryParseRefusesWhatASchemaCannot(t *testing.T) {
 		"an unknown member": `{"schema_version":"oauth-clients.v1","extra":1,"clients":[` + row + `]}`,
 		"trailing data":     `{"schema_version":"oauth-clients.v1","clients":[` + row + `]}{}`,
 	} {
-		if _, err := parseRegistry([]byte(raw)); err == nil {
+		if _, err := ParseRegistry([]byte(raw)); err == nil {
 			t.Errorf("%s was accepted", name)
 		}
 	}
-	if _, err := parseRegistry([]byte(`{"schema_version":"oauth-clients.v1","clients":[` + row + `]}`)); err != nil {
+	if _, err := ParseRegistry([]byte(`{"schema_version":"oauth-clients.v1","clients":[` + row + `]}`)); err != nil {
 		t.Fatalf("positive control: %v", err)
 	}
 }

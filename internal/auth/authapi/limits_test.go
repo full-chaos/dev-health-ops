@@ -600,7 +600,7 @@ func TestEverySharedRouteRefusesInGoAPIShape(t *testing.T) {
 // names or abbreviates its route, and a route outside the set is refused with
 // the generic 500 and counts nothing.
 func TestCounterScopesAreAClosedSetOfNeutralCodes(t *testing.T) {
-	want := map[string]string{PatternCompatLogin: "s01", PatternResetPassword: "s02", socialLinkRoute: "s03", PatternCompatRefresh: "s04"}
+	want := map[string]string{oauthAuthorizeScope: "s05", oauthDecideScope: "s06", PatternCompatLogin: "s01", PatternResetPassword: "s02", socialLinkRoute: "s03", PatternCompatRefresh: "s04"}
 	if !reflect.DeepEqual(scopeCodes, want) {
 		t.Fatalf("scope codes %v, pinned %v", scopeCodes, want)
 	}

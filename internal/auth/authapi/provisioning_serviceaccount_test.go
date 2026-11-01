@@ -208,11 +208,11 @@ func TestServiceAccountUnknownAccountIsNamedOnlyToASuperuser(t *testing.T) {
 			status int
 			reason string
 		}{
-			"admin of the org": {f.admin, http.StatusForbidden, reasonSuperuserRequired},
-			"owner of the org": {f.owner, http.StatusForbidden, reasonSuperuserRequired},
-			"inactive":         {f.x, http.StatusForbidden, reasonDeactivated},
-			"unknown actor":    {uuid.New(), http.StatusForbidden, reasonDeactivated},
-			"superuser":        {f.super, http.StatusNotFound, reasonServiceAccountNotFound},
+			"admin of the org": {f.admin, http.StatusForbidden, "admin_required"},
+			"owner of the org": {f.owner, http.StatusForbidden, "admin_required"},
+			"inactive":         {f.x, http.StatusForbidden, "principal_deactivated"},
+			"unknown actor":    {uuid.New(), http.StatusForbidden, "principal_deactivated"},
+			"superuser":        {f.super, http.StatusNotFound, "service_account_not_found"},
 		} {
 			before := f.sa.calls
 			expectRefusal(t, f.post(c.path, body(tc.actor), nil), tc.status, tc.reason)
@@ -224,6 +224,52 @@ func TestServiceAccountUnknownAccountIsNamedOnlyToASuperuser(t *testing.T) {
 	f.sa.lookupErr = errors.New("read failed")
 	for _, c := range serviceAccountCases()[1:] {
 		expectRefusal(t, f.post(c.path, encode(c.body(f, f.super)), nil), http.StatusServiceUnavailable, reasonStoreUnavailable)
+	}
+}
+
+// An unknown account id and an account of another organization answer a non-superuser actor alike, so the reason never
+// shows whether the row exists: the same status and reason_code. An active superuser alone tells them apart (404 on an
+// unknown id, the verb on a foreign account); an inactive or unknown actor gets the same refusal in both cases.
+func TestServiceAccountUnknownAndForeignAccountAnswerAlike(t *testing.T) {
+	f := newProvFixture(t)
+	f.users.states[f.x] = UserState{IsActive: false, IsSuperuser: true}
+	foreign := serviceaccount.Info{ID: uuid.New(), OrgID: uuid.New(), Name: "elsewhere", Active: true, Owner: f.owner}
+	for _, c := range serviceAccountCases()[1:] {
+		unknown := func(actor uuid.UUID) string {
+			m := c.body(f, actor)
+			m["service_account_id"] = uuid.New().String()
+			return encode(m)
+		}
+		other := func(actor uuid.UUID) string {
+			m := c.body(f, actor)
+			m["service_account_id"] = foreign.ID.String()
+			return encode(m)
+		}
+		for name, tc := range map[string]struct {
+			actor  uuid.UUID
+			status int
+			reason string
+		}{
+			"viewer of another org": {f.viewer, http.StatusForbidden, "admin_required"},
+			"admin of another org":  {f.admin, http.StatusForbidden, "admin_required"},
+			"owner of another org":  {f.owner, http.StatusForbidden, "admin_required"},
+			"member of no org":      {f.target, http.StatusForbidden, "admin_required"},
+			"inactive":              {f.x, http.StatusForbidden, "principal_deactivated"},
+			"unknown actor":         {uuid.New(), http.StatusForbidden, "principal_deactivated"},
+		} {
+			f.sa.info = foreign
+			expectRefusal(t, f.post(c.path, other(tc.actor), nil), tc.status, tc.reason)
+			expectRefusal(t, f.post(c.path, unknown(tc.actor), nil), tc.status, tc.reason)
+			if f.sa.calls != 0 {
+				t.Fatalf("%s %s: a refused actor reached a verb", c.op, name)
+			}
+		}
+		// The superuser: 404 on an unknown id, the verb on the foreign account.
+		expectRefusal(t, f.post(c.path, unknown(f.super), nil), http.StatusNotFound, "service_account_not_found")
+		if response := f.post(c.path, other(f.super), nil); response.Code != http.StatusOK {
+			t.Fatalf("%s on a foreign account by a superuser: %d %s", c.op, response.Code, response.Body)
+		}
+		f.sa.calls = 0
 	}
 }
 

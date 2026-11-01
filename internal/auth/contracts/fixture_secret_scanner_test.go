@@ -294,10 +294,12 @@ const maxEmbeddedDocuments = 1000
 // text, or a malformed one, is not read this way and is judged as one value. tooMany reports a value with more than
 // maxEmbeddedDocuments documents.
 func embeddedDocuments(value string) (documents []any, ok, tooMany bool) {
-	if len(value) < 2 || (value[0] != '{' && value[0] != '[') {
+	// Only JSON whitespace is skipped: a value led by \f, \v or a no-break space is not JSON text and is judged whole.
+	text := strings.TrimLeft(value, " \t\r\n")
+	if len(text) < 2 || (text[0] != '{' && text[0] != '[') {
 		return nil, false, false
 	}
-	decoder := json.NewDecoder(strings.NewReader(value))
+	decoder := json.NewDecoder(strings.NewReader(text))
 	for {
 		var document any
 		err := decoder.Decode(&document)
@@ -400,13 +402,13 @@ func scanDecoded(budget *scanBudget, name, text string, depth int) []string {
 	return findings
 }
 
-// scanJoinedSegments reads every string value of the decoded header followed by every string value of the decoded
-// payload (a key with half in each segment), under the budget. Pairs, not the concatenation of all values: merging
-// unrelated values of one segment would invent runs that no secret has.
+// scanJoinedSegments reads every string of the decoded header (member names and values) followed by every string of
+// the decoded payload (a key with half in each segment), under the budget. Pairs across the two segments only, not the
+// concatenation of all strings: merging unrelated strings of one segment would invent runs that no secret has.
 func scanJoinedSegments(budget *scanBudget, name, headerText, payloadText string) []string {
 	var findings []string
-	tails := orderedStringValues(payloadText)
-	for _, head := range orderedStringValues(headerText) {
+	tails := orderedStrings(payloadText)
+	for _, head := range orderedStrings(headerText) {
 		for _, tail := range tails {
 			if !budget.charge(len(head) + len(tail)) {
 				return findings
@@ -419,43 +421,18 @@ func scanJoinedSegments(budget *scanBudget, name, headerText, payloadText string
 	return findings
 }
 
-// orderedStringValues is every string value (not member name) of a JSON document in
-// document order. Text that is not JSON gives nothing.
-func orderedStringValues(text string) []string {
-	type frame struct{ object, key bool }
+// orderedStrings is every string of a JSON document, member names and values, in document order. Text that is not
+// JSON gives nothing.
+func orderedStrings(text string) []string {
 	decoder := json.NewDecoder(strings.NewReader(text))
 	var out []string
-	var stack []frame
-	valueDone := func() {
-		if n := len(stack); n > 0 && stack[n-1].object {
-			stack[n-1].key = true
-		}
-	}
 	for {
 		token, err := decoder.Token()
 		if err != nil {
 			return out
 		}
-		switch value := token.(type) {
-		case json.Delim:
-			switch value {
-			case '{':
-				stack = append(stack, frame{object: true, key: true})
-			case '[':
-				stack = append(stack, frame{})
-			default:
-				stack = stack[:len(stack)-1]
-				valueDone()
-			}
-		case string:
-			if n := len(stack); n > 0 && stack[n-1].object && stack[n-1].key {
-				stack[n-1].key = false
-				continue
-			}
+		if value, isString := token.(string); isString {
 			out = append(out, value)
-			valueDone()
-		default:
-			valueDone()
 		}
 	}
 }

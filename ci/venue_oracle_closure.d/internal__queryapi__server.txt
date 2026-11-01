@@ -41,6 +41,7 @@ internal/auth/platformrole/rule
 internal/auth/policycatalog
 internal/auth/publicaudit
 internal/auth/requestid
+internal/auth/serviceaccount
 internal/auth/servicecred
 internal/auth/session
 internal/auth/sessionid

@@ -357,7 +357,8 @@ func TestProvisioningRoutesOffByDefault(t *testing.T) {
 	token, _ := e.issuerCredential(t, ctx, "auth-session-issuer", `["memberships:write", "sessions:issue"]`, false, false)
 	for _, path := range []string{"/internal/v1/memberships/add", "/internal/v1/memberships/role", "/internal/v1/memberships/remove",
 		"/internal/v1/memberships/transfer", "/internal/v1/invites/create", "/internal/v1/invites/accept", "/internal/v1/organizations/deprovision",
-		"/internal/v1/organizations/reactivate", "/internal/v1/organizations/suspend"} {
+		"/internal/v1/organizations/reactivate", "/internal/v1/organizations/suspend", authapi.PatternServiceAccountCreate,
+		authapi.PatternServiceAccountDisable, authapi.PatternServiceAccountEnable, authapi.PatternServiceAccountOwner} {
 		if got := e.doWith(t, path, `{}`, map[string]string{"Authorization": "Bearer " + token}); got.status != http.StatusNotFound {
 			t.Fatalf("%s with the switch off: %d, want 404", path, got.status)
 		}
@@ -585,5 +586,111 @@ token_version, created_at, updated_at) VALUES ($1, $2, NULL, 'local', true, true
 	}
 	if activeRows(other) != 1 {
 		t.Fatal("a failed suspend suspended the organization")
+	}
+}
+
+// The service account routes through configure with their profile rows planted (they ship dark: the embedded document has none yet), as the runtime role: an organization owner creates an account with a member as its owner, disables,
+// enables and moves it; each write has its audit row naming the actor, the owner and the caller credential; a viewer,
+// an unknown account and an unprojected actor are refused as named; a repeat disable is 409.
+func TestProvisioningServiceAccountsThroughConfigure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	withProfileRow(t, authapi.PatternServiceAccountCreate, authapi.PatternServiceAccountDisable, authapi.PatternServiceAccountEnable, authapi.PatternServiceAccountOwner)
+	e, header := newProvisioningEnv(t, ctx)
+	boss, org := e.seed(t, ctx)
+	first, second, viewer := e.account(t, ctx, acctMail(), false, true), e.account(t, ctx, acctMail(), false, true), e.account(t, ctx, acctMail(), false, true)
+	super, stranger := e.account(t, ctx, acctMail(), true, true), e.account(t, ctx, acctMail(), false, true)
+	e.addVia(t, header, org, first, boss, "member")
+	e.addVia(t, header, org, second, boss, "member")
+	e.addVia(t, header, org, viewer, boss, "viewer")
+	post := func(path string, body map[string]any) answer { return e.doWith(t, path, jsonBody(t, body), header) }
+	created := post(authapi.PatternServiceAccountCreate, map[string]any{"organization_id": org.String(), "actor_principal_id": boss.String(),
+		"owner_principal_id": first.String(), "name": "ci-bot"})
+	if created.status != http.StatusOK {
+		t.Fatalf("create: %d %s", created.status, created.body)
+	}
+	out := object(t, created)
+	id, _ := out["service_account_id"].(string)
+	if id == "" || out["status"] != "active" || out["owner_principal_id"] != first.String() || out["name"] != "ci-bot" {
+		t.Fatalf("create answer = %v", out)
+	}
+	if got := post(authapi.PatternServiceAccountCreate, map[string]any{"organization_id": org.String(), "actor_principal_id": viewer.String(),
+		"owner_principal_id": first.String(), "name": "other-bot"}); got.status != http.StatusForbidden || object(t, got)["reason_code"] != "admin_required" {
+		t.Fatalf("create by a viewer: %d %s", got.status, got.body)
+	}
+	if got := post(authapi.PatternServiceAccountCreate, map[string]any{"organization_id": org.String(), "actor_principal_id": boss.String(),
+		"owner_principal_id": first.String(), "name": "ci-bot"}); got.status != http.StatusConflict || object(t, got)["reason_code"] != "name_taken" {
+		t.Fatalf("create with a taken name: %d %s", got.status, got.body)
+	}
+	if got := post(authapi.PatternServiceAccountCreate, map[string]any{"organization_id": org.String(), "actor_principal_id": boss.String(),
+		"owner_principal_id": stranger.String(), "name": "stranger-owned"}); got.status != http.StatusConflict || object(t, got)["reason_code"] != "owner_not_member" {
+		t.Fatalf("create with a non-member owner: %d %s", got.status, got.body)
+	}
+	switchBody := map[string]any{"service_account_id": id, "actor_principal_id": boss.String()}
+	if got := post(authapi.PatternServiceAccountDisable, switchBody); got.status != http.StatusOK || object(t, got)["status"] != "disabled" {
+		t.Fatalf("disable: %d %s", got.status, got.body)
+	}
+	if got := post(authapi.PatternServiceAccountDisable, switchBody); got.status != http.StatusConflict || object(t, got)["reason_code"] != "already_in_state" {
+		t.Fatalf("repeat disable: %d %s", got.status, got.body)
+	}
+	if got := post(authapi.PatternServiceAccountOwner, map[string]any{"service_account_id": id, "actor_principal_id": boss.String(),
+		"owner_principal_id": second.String()}); got.status != http.StatusOK || object(t, got)["owner_principal_id"] != second.String() {
+		t.Fatalf("owner: %d %s", got.status, got.body)
+	}
+	if got := post(authapi.PatternServiceAccountEnable, switchBody); got.status != http.StatusOK || object(t, got)["status"] != "active" {
+		t.Fatalf("enable: %d %s", got.status, got.body)
+	}
+	if got := post(authapi.PatternServiceAccountDisable, map[string]any{"service_account_id": uuid.NewString(), "actor_principal_id": super.String()}); got.status != http.StatusNotFound ||
+		object(t, got)["reason_code"] != "service_account_not_found" {
+		t.Fatalf("disable of an unknown account by a superuser: %d %s", got.status, got.body)
+	}
+	if got := post(authapi.PatternServiceAccountDisable, map[string]any{"service_account_id": uuid.NewString(), "actor_principal_id": boss.String()}); got.status != http.StatusForbidden ||
+		object(t, got)["reason_code"] != "superuser_required" {
+		t.Fatalf("disable of an unknown account by an owner: %d %s", got.status, got.body)
+	}
+	for event, want := range map[string]int{"created": 1, "disabled": 1, "owner_changed": 1, "enabled": 1} {
+		var n int
+		if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = $1 AND subject_principal_id = $2
+AND actor_principal_id = $3 AND attributes ? 'credential_id'`, "auth.service_account."+event, id, boss).Scan(&n); err != nil || n != want {
+			t.Fatalf("%d %s audit rows naming the actor and the caller credential (%v), want %d", n, event, err, want)
+		}
+	}
+	ghost := uuid.New()
+	if _, err := e.admin.Exec(ctx, `INSERT INTO users (id, email, password_hash, auth_provider, is_active, is_verified, is_superuser,
+token_version, created_at, updated_at) VALUES ($1, $2, NULL, 'local', true, true, true, 0, now(), now())`, ghost, acctMail()); err != nil {
+		t.Fatalf("seed the unprojected superuser: %v", err)
+	}
+	before := 0
+	_ = e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.service_accounts`).Scan(&before)
+	if got := post(authapi.PatternServiceAccountCreate, map[string]any{"organization_id": org.String(), "actor_principal_id": ghost.String(),
+		"owner_principal_id": first.String(), "name": "ghost-bot"}); got.status != http.StatusServiceUnavailable || object(t, got)["reason_code"] != "store_unavailable" {
+		t.Fatalf("create by an actor with no principal row: %d %s, want 503 store_unavailable", got.status, got.body)
+	}
+	after := 0
+	_ = e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.service_accounts`).Scan(&after)
+	if after != before {
+		t.Fatal("a failed create wrote an account")
+	}
+}
+
+// With auth-service not owning users, the routes are served and the verbs that need users refuse: create is 409
+// users_not_owned and writes nothing, while disable still works.
+func TestProvisioningServiceAccountsWhileUsersAreNotOwned(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	withProfileRow(t, authapi.PatternServiceAccountCreate, authapi.PatternServiceAccountDisable, authapi.PatternServiceAccountEnable, authapi.PatternServiceAccountOwner)
+	e := newRoutesEnvWith(t, ctx, map[string]string{authconfig.EnvMembershipRoutes: "true", authconfig.EnvInviteTokenSecret: provisioningInviteSecret,
+		authconfig.EnvInviteTokenSecretPrevious: provisioningInvitePrevious})
+	token, _ := e.issuerCredential(t, ctx, "auth-session-issuer", `["memberships:write", "sessions:issue"]`, false, false)
+	header := map[string]string{"Authorization": "Bearer " + token, "Content-Type": "application/json"}
+	boss, org := e.seed(t, ctx)
+	got := e.doWith(t, authapi.PatternServiceAccountCreate, jsonBody(t, map[string]any{"organization_id": org.String(), "actor_principal_id": boss.String(),
+		"owner_principal_id": boss.String(), "name": "not-owned"}), header)
+	if got.status != http.StatusConflict || object(t, got)["reason_code"] != "users_not_owned" {
+		t.Fatalf("create while users are not owned: %d %s", got.status, got.body)
+	}
+	var n int
+	if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.service_accounts`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("%d accounts after a refused create (%v)", n, err)
 	}
 }

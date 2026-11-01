@@ -5,6 +5,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
 ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
+# shellcheck source=ci/lib/registry_retry.sh
+source "${SCRIPT_DIR}/lib/registry_retry.sh"
 DOCKERFILE="${ROOT}/docker/go-worker.Dockerfile"
 IMAGE_PREFIX="${DEV_HEALTH_GO_IMAGE_PREFIX:-dev-health-go}"
 
@@ -194,7 +196,7 @@ build_target() {
       || die "prebuilt images serve only ${IMAGE_PREFIX}-<target>:ci, not ${tag}"
     verify_loaded_image "${target}"
   else
-    docker build \
+    registry_retry_run docker-build -- docker build \
       --file "${DOCKERFILE}" \
       --target "${target}" \
       --build-arg "VERSION=${VERSION}" \

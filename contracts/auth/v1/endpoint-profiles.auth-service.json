@@ -599,6 +599,20 @@
           "issuer": "AUTH_JWT_ISSUER (default dev-health-ops)",
           "lifetime_seconds": 900,
           "note": "go-api's access claims of the target from the live users and membership rows, plus sid and impersonating_user_id = the actor. exp is the session's expires_at, at most 15 minutes."
+        },
+        {
+          "algorithm": null,
+          "anchor": {
+            "line": 114,
+            "note": "func (h compatHandlers) startDelegated",
+            "path": "internal/auth/authapi/delegated.go"
+          },
+          "audience": null,
+          "class_id": "impersonation_session",
+          "direction": "returned_to_caller",
+          "issuer": null,
+          "lifetime_seconds": 900,
+          "note": "The delegated session row, as session.v1 with its delegation object. It has no refresh credential."
         }
       ],
       "method": "POST",

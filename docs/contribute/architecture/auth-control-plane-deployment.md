@@ -143,6 +143,22 @@ migration login to hold the writer's privileges, so the membership granted in st
 1 must **inherit** (`GRANT <writer> TO <migration login> WITH INHERIT TRUE`, the
 default); a `SET`-only membership fails the migration with a permission error.
 
+### The migration login owns the auth schema and is not a superuser
+
+The login of `authService.migrate.secretName` is a dedicated role (`LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`) that owns the auth schema and every object in it. A superuser owner would lend superuser authority to any owner path in the schema. The pin, the environment variable `AUTH_SCHEMA_OWNER_ROLE` of the `auth-migrate` and `auth-grants` Jobs, names that role; with it set, every `auth-migrate` and `auth-grants` run checks, before any GRANT, that the schema and every object in it has that owner (the one append function of the push lifecycle, owned by its writer role, is the only exception) and that the role holds none of the five attributes. Unset, the check is off (the dev Compose stack migrates as a superuser).
+
+1. **Privileged, once, by the postgres superuser** (`kubectl exec` on the postgres pod; the password goes in on stdin and never on a command line): create the login; for a fresh database also `CREATE SCHEMA auth AUTHORIZATION <login>`. The login needs no `CREATE` on the database: `auth-migrate` does not run `CREATE SCHEMA` on a schema that exists.
+2. **An existing database whose schema a superuser owns:** run `auth-migrate owner-move -from <old owner> -to <login> -runtime-role <runtime login>` with the old owner's DSN (it must be a superuser). It prints counts only; add `-apply` to make the change. It moves the schema and every object the old owner owns in one transaction under the same locks as the grants pass, gives the login the privileges of the grants pass in the ops schema WITH GRANT OPTION, and re-grants the runtime login's rows in that schema as the login before it revokes the old grantor's rows, so a reader of the runtime login sees no gap. It is safe to run again. A restore from a backup taken before the move brings the old owner back: the pin fails and names this step.
+3. Rotate the migration Secret to the new DSN, then roll.
+
+**Rollback** is the Secret back to the old DSN **and** `auth-migrate owner-move -from <login> -to <old owner> -restore -apply`. The reverse run is not optional: on the old login a `REVOKE` reaches only the rows that login granted, so a later narrowing would leave the rows the migration login granted.
+
+**A change that widens the ops-schema privileges of the runtime login** (a new column in `PublicReadColumns` or in a write grant) states in its PR body to run `auth-migrate owner-move -grants-only` once with the old owner's DSN before the roll. A roll that forgets it fails closed at the grants Job with the privilege named and no partial grant.
+
+**The login holds `REFERENCES`, without grant option, on each ops table of that set.** PostgreSQL refuses a table-level `REVOKE ALL` from a role that holds no table-level privilege on the table, and the grants pass begins each ops table with that statement. `REFERENCES` lets this login create a foreign key to those tables from a table of its own, and nothing else. No auth migration may add such a key without a ruling; a test fails on a `REFERENCES` clause that names another schema.
+
+**`auth-migrate restore-fence apply` stays on the owner login.** It writes the legacy ops tables, which the migration login cannot. Run by hand with the old owner's DSN, it stops before any write and names the missing privilege when run as the migration login.
+
 ## Kubernetes (Helm)
 
 The chart section is `authService`, default **off**. One value turns it on and

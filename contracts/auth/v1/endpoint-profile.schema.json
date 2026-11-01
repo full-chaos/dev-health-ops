@@ -725,6 +725,40 @@
       "format": "date-time",
       "type": "string"
     },
+    "rewritten_anchors": {
+      "description": "Anchors whose line this change rewrote on purpose, each {file, line, was, now}. For an anchor with an entry the tree text at file:line must equal now and was must occur exactly once in that file at source_commit; an entry whose tree line also occurs at source_commit (it rewrites nothing) or that matches no anchor of the rows fails the history check, so the list is empty again at the next re-pin of source_commit. Absent or empty: every anchor holds at source_commit and in the tree.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "file",
+          "line",
+          "was",
+          "now"
+        ],
+        "properties": {
+          "file": {
+            "type": "string",
+            "minLength": 1
+          },
+          "line": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "was": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The line's text at source_commit."
+          },
+          "now": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The line's text in the tree."
+          }
+        }
+      }
+    },
     "rows": {
       "items": {
         "$ref": "#/$defs/endpointProfile"

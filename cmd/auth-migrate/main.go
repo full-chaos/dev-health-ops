@@ -112,6 +112,9 @@ func execute(
 	if len(args) > 0 && args[0] == "platform-role-bootstrap" {
 		return executePlatformRoleBootstrap(parent, args[1:], lookup, stdout, stderr)
 	}
+	if len(args) > 0 && args[0] == ownerMoveVerb {
+		return executeOwnerMove(parent, args[1:], lookup, stdout, stderr)
+	}
 	if len(args) > 0 && args[0] == platformOwnerGrantVerb {
 		return executePlatformOwnerGrant(parent, args[1:], lookup, stdout, stderr)
 	}
@@ -238,6 +241,12 @@ func execute(
 		}
 	}
 
+	ownerRole, err := schemaOwnerRole(lookup)
+	if err != nil {
+		fmt.Fprintf(stderr, "configuration error: %v\n", err)
+		return 1
+	}
+
 	logger := logging.NewJSON(stderr, slog.LevelInfo)
 	if grantsOnly {
 		result, err := authschema.Grants(ctx, pool, authschema.Options{
@@ -249,6 +258,7 @@ func execute(
 			PushLifecycleCallerRoles: pushCallers,
 			UsersOwned:               usersOwned,
 			PlatformRolesOwned:       platformRolesOwned,
+			SchemaOwnerRole:          ownerRole,
 			AcknowledgeNarrowing:     strings.TrimSpace(*ackNarrowing),
 			DeferNarrowing:           *deferNarrowing,
 		})
@@ -269,6 +279,7 @@ func execute(
 		PushLifecycleCallerRoles: pushCallers,
 		UsersOwned:               usersOwned,
 		PlatformRolesOwned:       platformRolesOwned,
+		SchemaOwnerRole:          ownerRole,
 
 		AcknowledgeNarrowing: strings.TrimSpace(*ackNarrowing),
 		DeferNarrowing:       *deferNarrowing,

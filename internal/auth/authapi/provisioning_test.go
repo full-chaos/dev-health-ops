@@ -511,6 +511,12 @@ func routeCases() []routeCase {
 		{opOrgState, PatternOrgState, func(f *provFixture, _ uuid.UUID) map[string]any {
 			return map[string]any{"organization_id": f.org.String()}
 		}, []string{"organization_id"}},
+		{opOrgOnboard, PatternOrgOnboard, func(_ *provFixture, a uuid.UUID) map[string]any {
+			return map[string]any{"principal_id": a.String(), "organization_name": "Acme"}
+		}, []string{"principal_id", "organization_name"}},
+		{opOrgCreate, PatternOrgCreate, func(f *provFixture, a uuid.UUID) map[string]any {
+			return map[string]any{"actor_principal_id": a.String(), "organization_name": "Acme", "slug": "acme", "tier": "community", "managed_by": "stripe"}
+		}, []string{"actor_principal_id", "organization_name", "managed_by"}},
 	}
 }
 

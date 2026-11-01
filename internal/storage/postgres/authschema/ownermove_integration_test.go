@@ -873,8 +873,15 @@ func TestWidenedManifestFailsClosedUntilGrantsOnlyRuns(t *testing.T) {
 	if _, err := Grants(ctx, env.migrator, options); err != nil {
 		t.Errorf("the grants pass after GrantsOnly: %v", err)
 	}
-	if !strings.Contains(strings.Join(env.aclSnapshot(t, ctx), "\n"), "public.users.last_login_at|"+env.migratorRole) {
-		t.Error("GrantsOnly did not give the migrator the privilege")
+	gave := false
+	for _, line := range env.aclSnapshot(t, ctx) {
+		parts := strings.Split(line, "|")
+		if parts[1] == "public.users.last_login_at" && strings.HasSuffix(parts[2], ">"+env.migratorRole) && parts[3] == "UPDATE" && parts[4] == "true" {
+			gave = true
+		}
+	}
+	if !gave {
+		t.Error("GrantsOnly did not give the migrator UPDATE (last_login_at) WITH GRANT OPTION")
 	}
 }
 

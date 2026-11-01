@@ -83,6 +83,7 @@ var followUp = map[ActionKind]string{
 	ActionProviderRevocationQueuedFromCredential: "none",
 	ActionRegrantPlatformRole:                    "a platform_admin grants each role again (admin route), except a platform_owner row: auth-migrate platform-owner-grant -principal <uuid> -confirm; with no active platform_admin run the break-glass verb first",
 	ActionNoActivePlatformAdmin:                  "auth-migrate platform-role-bootstrap -principal <uuid> -confirm",
+	ActionRotateKeysAfterBlindMargin:             "rotate or revoke every key",
 }
 
 // OperatorAction is the ids a section names for one action, or a count for an action that names no row. Ids and a count
@@ -101,18 +102,20 @@ func mergeActions(in []OperatorAction) []OperatorAction {
 		source string
 	}
 	seen := map[key]map[string]bool{}
+	counts := map[key]int64{}
 	for _, a := range in {
 		k := key{a.Kind, a.Source}
 		if seen[k] == nil {
 			seen[k] = map[string]bool{}
 		}
+		counts[k] = max(counts[k], a.Count)
 		for _, id := range a.IDs {
 			seen[k][id] = true
 		}
 	}
 	out := make([]OperatorAction, 0, len(seen))
 	for k, ids := range seen {
-		a := OperatorAction{Kind: k.kind, Source: k.source, IDs: []string{}}
+		a := OperatorAction{Kind: k.kind, Source: k.source, IDs: []string{}, Count: counts[k]}
 		for id := range ids {
 			a.IDs = append(a.IDs, id)
 		}
@@ -138,14 +141,18 @@ func followUpOf(a OperatorAction) string {
 	return followUp[a.Kind]
 }
 
-// ActionLines prints one line per action that has ids.
+// ActionLines prints one line per action that has ids or a count.
 func ActionLines(actions []OperatorAction) []string {
 	var lines []string
 	for _, a := range mergeActions(actions) {
-		if len(a.IDs) == 0 && a.Kind != ActionNoActivePlatformAdmin {
+		if len(a.IDs) == 0 && a.Count == 0 && a.Kind != ActionNoActivePlatformAdmin {
 			continue
 		}
-		lines = append(lines, fmt.Sprintf("operator-action %s source=%s count=%d ids=%s follow-up=%s", a.Kind, a.Source, len(a.IDs), strings.Join(a.IDs, ","), followUpOf(a)))
+		count := a.Count
+		if count == 0 {
+			count = int64(len(a.IDs))
+		}
+		lines = append(lines, fmt.Sprintf("operator-action %s source=%s count=%d ids=%s follow-up=%s", a.Kind, a.Source, count, strings.Join(a.IDs, ","), followUpOf(a)))
 	}
 	return lines
 }

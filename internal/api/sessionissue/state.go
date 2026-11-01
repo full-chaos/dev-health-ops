@@ -40,6 +40,10 @@ type State struct {
 	// LegacyTokenVersion is the session's token_version pin; nil on a session
 	// that has none.
 	LegacyTokenVersion *int64
+	// ClientClass is the class of the session's live OAuth grant, browser or
+	// mcp; empty on a session with no live grant. A reader of an OAuth session
+	// refuses an empty class: there is no default class.
+	ClientClass string
 }
 
 // StateReader reads one session's state.
@@ -101,16 +105,43 @@ func (c *Client) State(ctx context.Context, sessionID uuid.UUID) (State, error) 
 
 var errStateAnswer = errors.New("the state answer is not exactly the session state document")
 
-// parseState reads exactly the five members of the state document: principal_id
-// (a canonical UUID), organization_id (a canonical UUID or null), revoked and
-// expired (booleans) and legacy_token_version (an integer or null). A missing,
-// repeated or unknown member is refused.
+// stateRequiredMembers is the number of required members of the state document.
+const stateRequiredMembers = 5
+
+// stateOptionalMembers is the closed list of optional members. A new name is
+// added here before auth-service emits it (D6123); an unknown name is refused.
+var stateOptionalMembers = []string{"client_class"}
+
+// parseState reads the five required members of the state document:
+// principal_id (a canonical UUID), organization_id (a canonical UUID or null),
+// revoked and expired (booleans) and legacy_token_version (an integer or null);
+// and the optional client_class (browser or mcp), present only for a session
+// with a live OAuth grant. A missing, repeated or unknown member is refused.
 func parseState(answer []byte) (State, error) {
 	members, ok := objectMembers(answer)
-	if !ok || len(members) != 5 {
+	if !ok {
+		return State{}, errStateAnswer
+	}
+	required := len(members)
+	for _, name := range stateOptionalMembers {
+		if _, present := members[name]; present {
+			required--
+		}
+	}
+	if required != stateRequiredMembers {
 		return State{}, errStateAnswer
 	}
 	var out State
+	if class, present := members["client_class"]; present {
+		switch string(class) {
+		case `"browser"`:
+			out.ClientClass = "browser"
+		case `"mcp"`:
+			out.ClientClass = "mcp"
+		default:
+			return State{}, errStateAnswer
+		}
+	}
 	principal, err := canonicalUUID(members["principal_id"])
 	if err != nil {
 		return State{}, err

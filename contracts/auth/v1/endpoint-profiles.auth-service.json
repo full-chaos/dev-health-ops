@@ -30,7 +30,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 505,
+            "line": 542,
             "note": "func (s *Store) rotate",
             "path": "internal/auth/session/store.go"
           },
@@ -45,7 +45,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 404,
+          "line": 441,
           "note": "func (s *Store) Exchange",
           "path": "internal/auth/session/store.go"
         },
@@ -352,7 +352,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 505,
+            "line": 542,
             "note": "func (s *Store) rotate",
             "path": "internal/auth/session/store.go"
           },
@@ -367,7 +367,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 404,
+          "line": 441,
           "note": "func (s *Store) Exchange",
           "path": "internal/auth/session/store.go"
         },
@@ -1135,7 +1135,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 313,
+            "line": 350,
             "note": "func (s *Store) Create",
             "path": "internal/auth/session/store.go"
           },

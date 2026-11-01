@@ -1,0 +1,115 @@
+{
+  "description": "The golden corpus for the oauth-clients.v1 registry. Each surface is a pure schema document: no rule is client-only.",
+  "accept": [
+    {
+      "file": "valid-first-party.json",
+      "why": "The first-party browser row: a path, no URI."
+    },
+    {
+      "file": "valid-fixed-uri.json",
+      "why": "A fixed-URI row: exact https URIs, no path."
+    },
+    {
+      "file": "valid-mcp.json",
+      "why": "An MCP row asks for the acr-mcp audience."
+    }
+  ],
+  "reject": [
+    {
+      "file": "invalid-no-clients.json",
+      "expect_instance_location": "/clients",
+      "expect_keyword": "minItems",
+      "why": "An empty registry serves nobody."
+    },
+    {
+      "file": "invalid-first-party-with-uri.json",
+      "expect_instance_location": "/clients/0",
+      "expect_keyword": "not",
+      "why": "A first-party row holds a path: an environment value has no place in the file."
+    },
+    {
+      "file": "invalid-fixed-with-path.json",
+      "expect_instance_location": "/clients/0",
+      "expect_keyword": "not",
+      "why": "A fixed-URI row holds its exact URIs."
+    },
+    {
+      "file": "invalid-both-redirects.json",
+      "expect_instance_location": "/clients/0",
+      "expect_keyword": "not",
+      "why": "A row holds one redirect form."
+    },
+    {
+      "file": "invalid-loopback-http.json",
+      "expect_instance_location": "/clients/0/redirect_uris/0",
+      "expect_keyword": "pattern",
+      "why": "A loopback redirect in a prod binary is an open door."
+    },
+    {
+      "file": "invalid-uri-with-query.json",
+      "expect_instance_location": "/clients/0/redirect_uris/0",
+      "expect_keyword": "pattern",
+      "why": "A redirect is compared exact: no query."
+    },
+    {
+      "file": "invalid-path-relative.json",
+      "expect_instance_location": "/clients/0/redirect_path",
+      "expect_keyword": "pattern",
+      "why": "A path starts at the origin."
+    },
+    {
+      "file": "invalid-path-protocol-relative.json",
+      "expect_instance_location": "/clients/0/redirect_path",
+      "expect_keyword": "pattern",
+      "why": "A path that an origin join would read as another host."
+    },
+    {
+      "file": "invalid-path-dot-dot.json",
+      "expect_instance_location": "/clients/0/redirect_path",
+      "expect_keyword": "pattern",
+      "why": "No traversal segment."
+    },
+    {
+      "file": "invalid-mcp-browser-audience.json",
+      "expect_instance_location": "/clients/0/audiences",
+      "expect_keyword": "const",
+      "why": "An MCP client can never ask for the browser audience (ADR-13 decision 7)."
+    },
+    {
+      "file": "invalid-browser-mcp-audience.json",
+      "expect_instance_location": "/clients/0/audiences",
+      "expect_keyword": "const",
+      "why": "A browser client asks for acr-api."
+    },
+    {
+      "file": "invalid-unknown-class.json",
+      "expect_instance_location": "/clients/0/client_class",
+      "expect_keyword": "enum",
+      "why": "Two classes."
+    },
+    {
+      "file": "invalid-resource-uri-as-audience.json",
+      "expect_instance_location": "/clients/0/audiences",
+      "expect_keyword": "const",
+      "why": "A row holds audience names, not URIs."
+    },
+    {
+      "file": "invalid-client-id-url.json",
+      "expect_instance_location": "/clients/0/client_id",
+      "expect_keyword": "pattern",
+      "why": "A metadata client has no row."
+    },
+    {
+      "file": "invalid-unknown-member.json",
+      "expect_instance_location": "/clients/0",
+      "expect_keyword": "additionalProperties",
+      "why": "A row is closed: no client-supplied field can apply."
+    },
+    {
+      "file": "invalid-schema-version.json",
+      "expect_instance_location": "/schema_version",
+      "expect_keyword": "const",
+      "why": "The version is exact."
+    }
+  ]
+}

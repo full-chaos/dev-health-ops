@@ -331,6 +331,9 @@ func TestAClientSessionIsRefusedUnderASessionThatCannotConsent(t *testing.T) {
 		{"a linked client session", func(t *testing.T, ctx context.Context, c *clientCase) uuid.UUID {
 			return c.mustClient(t, ctx, true).ID
 		}, ErrWebSessionNotLive},
+		{"a delegated session", func(t *testing.T, ctx context.Context, c *clientCase) uuid.UUID {
+			return c.start(t, ctx, c.fixture(t, ctx)).ID
+		}, ErrWebSessionDelegated},
 		{"no organization", func(t *testing.T, ctx context.Context, c *clientCase) uuid.UUID {
 			return c.signIn(t, ctx, nil).Session.ID
 		}, ErrWebSessionNoOrganization},

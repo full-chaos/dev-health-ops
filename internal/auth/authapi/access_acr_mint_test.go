@@ -18,7 +18,7 @@ import (
 
 type noImpersonation struct{}
 
-func (noImpersonation) ImpersonatingActor(context.Context, uuid.UUID) (bool, error) {
+func (noImpersonation) ImpersonatingActor(context.Context, uuid.UUID, uuid.UUID) (bool, error) {
 	return false, nil
 }
 

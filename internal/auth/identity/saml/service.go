@@ -373,13 +373,14 @@ func (s *Service) provisionNew(ctx context.Context, p Provider, id Identity, nam
 		return uuid.Nil, s.refuse(ctx, p, &EmailConflictError{Method: owner.Method})
 	}
 	if !p.AutoProvision {
-		if err := s.recordProviderFailure(ctx, p, stageProvisioning, msgAutoProvisionOff); err != nil {
-			return uuid.Nil, err
-		}
-		return uuid.Nil, s.refuse(ctx, p, ErrAutoProvisionDisabled)
+		return uuid.Nil, s.provisioningOff(ctx, p)
 	}
 	if s.JIT == nil {
 		return uuid.Nil, s.refuse(ctx, p, ErrNotOrgMember)
+	}
+	// An asserted email is the org's IdP's word: only a domain the row lists can make an account.
+	if len(p.AllowedDomains) == 0 {
+		return uuid.Nil, s.provisioningOff(ctx, p)
 	}
 	var legacyName *string
 	if fullName != "" {
@@ -394,6 +395,14 @@ func (s *Service) provisionNew(ctx context.Context, p Provider, id Identity, nam
 		return uuid.Nil, s.refuse(ctx, p, &EmailConflictError{})
 	}
 	return uuid.Nil, s.refuse(ctx, p, err)
+}
+
+// provisioningOff is the refusal of a new account a provider row does not allow.
+func (s *Service) provisioningOff(ctx context.Context, p Provider) error {
+	if err := s.recordProviderFailure(ctx, p, stageProvisioning, msgAutoProvisionOff); err != nil {
+		return err
+	}
+	return s.refuse(ctx, p, ErrAutoProvisionDisabled)
 }
 
 func (s *Service) fullName(p Provider, v Verified) string {

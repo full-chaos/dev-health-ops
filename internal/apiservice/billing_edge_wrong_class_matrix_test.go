@@ -22,7 +22,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/billing/stripeclient"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/usertokens"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/usertokens/withissuer"
 )
 
 // The billing-edge listener takes no credential but Stripe's signature. These
@@ -266,11 +265,11 @@ func TestBillingEdgeStripeClassCarrierWithoutAValidSignature(t *testing.T) {
 }
 
 // TestBillingEdgeLegacyKeysAreRefused: the legacy HS256 access token, the
-// legacy refresh token, every user token the platform mints, and a retired
+// legacy refresh token, the corpus tokens usertokens mints, and a retired
 // key, each in every place a credential can arrive.
 func TestBillingEdgeLegacyKeysAreRefused(t *testing.T) {
 	rig := newEdgeRig(t)
-	tokens := withissuer.All(t)
+	tokens := usertokens.All(t)
 	tokens = append(tokens, usertokens.Token{Kind: "retired_key", Value: edgeRetiredKey})
 	for _, token := range tokens {
 		for _, cell := range edgeCredentialCells(token.Value) {

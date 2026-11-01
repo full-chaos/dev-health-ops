@@ -61,8 +61,8 @@ var errMultipleLegacyRows = errors.New("session: more than one public.refresh_to
 // disabled or missing, so the family is revoked in a transaction of its own.
 var errDeactivatedFirstExchange = errors.New("session: first legacy exchange for an unavailable principal")
 
-func readLegacyRow(ctx context.Context, tx queryer, hexDigest string) (*legacyRow, error) {
-	rows, err := tx.Query(ctx, legacyRowQuery, hexDigest, GraceWindow.Seconds())
+func readLegacyRow[R legacyRows](ctx context.Context, query func(ctx context.Context, sql string, args ...any) (R, error), hexDigest string) (*legacyRow, error) {
+	rows, err := query(ctx, legacyRowQuery, hexDigest, GraceWindow.Seconds())
 	if err != nil {
 		return nil, err
 	}
@@ -81,9 +81,12 @@ func readLegacyRow(ctx context.Context, tx queryer, hexDigest string) (*legacyRo
 	return found, rows.Err()
 }
 
-// queryer is a pgx.Tx or an audit.TxOps that can return rows.
-type queryer interface {
-	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+// legacyRows is the rows of a pgx.Tx or an audit.TxOps query.
+type legacyRows interface {
+	Next() bool
+	Scan(dest ...any) error
+	Close()
+	Err() error
 }
 
 // ExchangeLegacy exchanges a go-api refresh token once for a new session.
@@ -104,14 +107,48 @@ type queryer interface {
 // first exchange or a replay for a deactivated (or missing) principal revokes
 // the same family and answers ReasonPrincipalDeactivated, as go-api's
 // allowActive does.
-func (s *Store) ExchangeLegacy(ctx context.Context, legacy LegacyRefresh) (result Result, err error) {
+func (s *Store) ExchangeLegacy(ctx context.Context, legacy LegacyRefresh) (Result, error) {
+	return s.ExchangeLegacyWith(ctx, legacy, publicRowOf(ctx))
+}
+
+// ExchangeLegacyWith is ExchangeLegacy with public, when not nil, run in the
+// exchange's transaction after the first exchange created the session: go-api's
+// public.audit_logs row of a compatibility refresh. The first exchange commits
+// with its auth.session.refreshed row (the new session is its counted state
+// change); a replay, a refusal or a reuse writes neither.
+func (s *Store) ExchangeLegacyWith(ctx context.Context, legacy LegacyRefresh, public PublicRow) (Result, error) {
+	return s.exchangeLegacy(ctx, legacy, nil, public)
+}
+
+// ExchangeLegacyGuarded is ExchangeLegacy with a Guard run on the new session
+// inside the exchange's transaction, before it commits: a refusal rolls the
+// first exchange back (no session, no event, the go-api token unchanged) and
+// returns ErrGuardRefused with the uncommitted session in Result.Session, as
+// ExchangeGuarded does for a native credential. A replay is unguarded.
+func (s *Store) ExchangeLegacyGuarded(ctx context.Context, legacy LegacyRefresh, guard Guard) (Result, error) {
+	result, err := s.exchangeLegacy(ctx, legacy, guard, publicRowOf(ctx))
+	var refusal guardRefusal
+	if errors.As(err, &refusal) {
+		return Result{Issued: Issued{Session: refusal.record}}, ErrGuardRefused
+	}
+	return result, err
+}
+
+func (s *Store) exchangeLegacy(ctx context.Context, legacy LegacyRefresh, guard Guard, public PublicRow) (result Result, err error) {
 	defer func() { s.recordExchange(ctx, result, err) }()
 	digest := legacyJTIDigest(legacy.JTI)
 	hexDigest := hex.EncodeToString(digest)
 	var reusedFamily *uuid.UUID
 	var deactivated bool
-	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		row, err := readLegacyRow(ctx, tx, hexDigest)
+	// The session the first exchange creates is named before the transaction,
+	// so its audit row is fixed here.
+	newSession, err := uuid.NewRandom()
+	if err != nil {
+		return Result{Reason: ReasonStoreUnavailable}, fmt.Errorf("%w: legacy refresh exchange: %w", ErrStore, err)
+	}
+	event := refreshedEvent(ctx, legacy.PrincipalID.String(), newSession.String())
+	err = audit.Commit(ctx, s.pool, s.schema, audit.Mutation{Apply: func(ctx context.Context, tx audit.TxOps) error {
+		row, err := readLegacyRow(ctx, tx.Query, hexDigest)
 		if err != nil {
 			return err
 		}
@@ -145,7 +182,7 @@ func (s *Store) ExchangeLegacy(ctx context.Context, legacy LegacyRefresh) (resul
 			if tag.RowsAffected() != 1 {
 				return fmt.Errorf("revoking the go-api refresh token changed %d rows under its lock", tag.RowsAffected())
 			}
-			issued, err := s.insertSession(ctx, tx, legacy.PrincipalID, legacy.OrganizationID, legacyAMR, legacy.JTI)
+			issued, err := s.insertSessionAs(ctx, tx, &newSession, legacy.PrincipalID, legacy.OrganizationID, legacyAMR, legacy.JTI)
 			if errors.Is(err, ErrPrincipalUnavailable) {
 				reusedFamily, deactivated = &row.familyID, true
 				return errDeactivatedFirstExchange
@@ -153,12 +190,22 @@ func (s *Store) ExchangeLegacy(ctx context.Context, legacy LegacyRefresh) (resul
 			if err != nil {
 				return err
 			}
+			if err := runGuard(ctx, tx, issued.Session, guard); err != nil {
+				return err
+			}
+			if public != nil {
+				if err := public(ctx, tx, issued.Session.PrincipalID, issued.Session.OrganizationID); err != nil {
+					return err
+				}
+			}
 			result = Result{Reason: ReasonAccepted, Issued: issued}
 		}
 		return nil
-	})
+	}, Audit: event, OffStream: audit.OffStreamSessionLifecycle, Refusals: []error{ErrGraceUnavailable, errDeactivatedFirstExchange, ErrGuardRefused}})
 	switch {
-	case errors.Is(err, ErrGraceUnavailable):
+	case err == nil, errors.Is(err, audit.ErrNoStateChange):
+		err = nil
+	case errors.Is(err, ErrGraceUnavailable), errors.Is(err, ErrGuardRefused):
 		return Result{Reason: ReasonDependency}, err
 	case errors.Is(err, errDeactivatedFirstExchange):
 		err = nil
@@ -199,7 +246,7 @@ type legacyReplay struct {
 
 // replayLegacy reads the credential exchanged from a jti under its session
 // lock and recomputes it. It writes nothing.
-func (s *Store) replayLegacy(ctx context.Context, tx pgx.Tx, digest []byte, jti contracts.SecretString) (legacyReplay, error) {
+func (s *Store) replayLegacy(ctx context.Context, tx queryRower, digest []byte, jti contracts.SecretString) (legacyReplay, error) {
 	var sessionID string
 	err := tx.QueryRow(ctx, fmt.Sprintf(`SELECT c.session_id::text FROM %[1]s.refresh_credentials c WHERE c.legacy_jti_hash = $1`, s.q), digest).Scan(&sessionID)
 	if errors.Is(err, pgx.ErrNoRows) {

@@ -103,7 +103,12 @@ func TestIdentityAccountsPassesTheHashNotThePasswordAndOneRequestID(t *testing.T
 	fixed := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
 	store := &recordingStore{principal: &identity.Principal{ID: uuid.New(), IsActive: true, IsVerified: true}}
 	ender := &recordingEnder{}
-	acc := IdentityAccounts{Store: store, Sessions: ender, Links: ender, RequestID: func(context.Context) *string { return &rid }, Now: func() time.Time { return fixed }}
+	var rows []PasswordEnd
+	acc := IdentityAccounts{Store: store, Sessions: ender, Links: ender, RequestID: func(context.Context) *string { return &rid }, Now: func() time.Time { return fixed },
+		PasswordRow: func(_ context.Context, _ audit.TxOps, req PasswordEnd, _ *uuid.UUID) error {
+			rows = append(rows, req)
+			return nil
+		}}
 	ctx := context.Background()
 	name := "Ada"
 	if _, err := acc.ProvisionLocal(ctx, ProvisionLocalRequest{Email: "a@example.com", FullName: &name, PasswordHash: "$2b$12$hash"}); err != nil {
@@ -125,6 +130,9 @@ func TestIdentityAccountsPassesTheHashNotThePasswordAndOneRequestID(t *testing.T
 	}
 	if ender.recorded != 4 {
 		t.Fatalf("revocations recorded = %d after two committed writes of 2 sessions, want 4", ender.recorded)
+	}
+	if len(rows) != 2 || rows[0].ResetLink != nil || rows[1].ResetLink == nil {
+		t.Fatalf("public rows written in the password transaction = %d (%+v), want one per write: the change's, then the reset's", len(rows), rows)
 	}
 	store.endErr = identity.ErrLinkUnusable
 	if _, err := acc.SetPasswordEndingSessions(ctx, PasswordEnd{ID: uuid.New(), Hash: "$2b$12$h", ResetLink: &link}); !errors.Is(err, ErrResetLinkUnusable) {

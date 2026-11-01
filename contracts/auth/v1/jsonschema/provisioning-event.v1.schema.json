@@ -120,15 +120,6 @@
               "pattern": "^crd_[A-Za-z0-9_-]{1,64}$",
               "description": "A workload bootstrap credential's server-minted id. The value and its digest are never carried."
             },
-            "key_status": {
-              "type": "string",
-              "enum": [
-                "active",
-                "retiring",
-                "retired"
-              ],
-              "description": "Where a workload assertion signing key is in its life after the change. The kid, the issuer and any key are never carried."
-            },
             "provider": {
               "type": "string",
               "pattern": "^[a-z][a-z0-9_-]{1,31}$",
@@ -499,8 +490,7 @@
               "workload.disabled",
               "workload.enabled",
               "workload.audiences_changed",
-              "workload.bootstrap_changed",
-              "workload.assertion_key_changed"
+              "workload.bootstrap_changed"
             ]
           },
           "payload": {
@@ -512,8 +502,7 @@
                   "enum": [
                     "status",
                     "audiences",
-                    "credential_id",
-                    "key_status"
+                    "credential_id"
                   ]
                 }
               }

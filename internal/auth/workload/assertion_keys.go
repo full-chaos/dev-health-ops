@@ -70,7 +70,7 @@ type AssertionKey struct {
 // not a store failure.
 func isAssertionKeyRefusal(err error) bool {
 	for _, refusal := range []error{ErrAssertionKeyInvalid, ErrAssertionKeyActiveExists, ErrAssertionKeyTerminal,
-		ErrAssertionKeyTransition, ErrAssertionKeyOverlap, ErrAssertionKeyNoActive, ErrAssertionKeyWorkloadDisabled} {
+		ErrAssertionKeyTransition, ErrAssertionKeyOverlap, ErrAssertionKeyNoActive, ErrAssertionKeyLastActive, ErrAssertionKeyWorkloadDisabled} {
 		if errors.Is(err, refusal) {
 			return true
 		}
@@ -228,6 +228,9 @@ func planAssertionKey(spec AssertionKeySpec, existing, active *assertionRow) (as
 		}
 		return assertionPlan{}, ErrAssertionKeyTransition
 	case AssertionKeyRetired:
+		if existing.Status == AssertionKeyActive {
+			return assertionPlan{}, ErrAssertionKeyLastActive
+		}
 		return assertionPlan{Action: planUpdate}, nil
 	}
 	if activeOther == nil {
@@ -244,7 +247,7 @@ func planAssertionKey(spec AssertionKeySpec, existing, active *assertionRow) (as
 
 // SetAssertionKey records or moves one signing key of a workload. It validates
 // every rule before it writes, commits through audit.Commit with one audit row
-// and one provisioning event, and returns the key's row id. A repeat that
+// (no provisioning event: nothing reads one), and returns the key's row id. A repeat that
 // changes nothing writes nothing.
 func (s *Store) SetAssertionKey(ctx context.Context, name string, spec AssertionKeySpec, a Actor) (uuid.UUID, error) {
 	spec.RotatedAt = spec.RotatedAt.UTC().Truncate(time.Microsecond)
@@ -323,9 +326,8 @@ WHERE id = $1`, activeID, plan.DemotePreviousUntil.UTC().Truncate(time.Microseco
 				id, info.PrincipalID, spec.Issuer, spec.KID, string(spec.Status), spec.RotatedAt, retire)
 			return err
 		},
-		Audit: s.assertionKeyAudit(info.PrincipalID, id, spec.Status, a),
-		Events: []audit.OutboxEvent{{AggregateType: "workload", AggregateID: wire(info.PrincipalID), EventType: "workload.assertion_key_changed",
-			Change: map[string]any{"key_status": string(spec.Status)}}},
+		Audit:     s.assertionKeyAudit(info.PrincipalID, id, spec.Status, a),
+		OffStream: audit.OffStreamWorkloadRegistry,
 	})
 	if err != nil {
 		return uuid.Nil, err

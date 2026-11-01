@@ -30,8 +30,8 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 569,
-            "note": "func (s *Store) rotate",
+            "line": 577,
+            "note": "rotate: INSERT INTO refresh_credentials (the issued child credential)",
             "path": "internal/auth/session/store.go"
           },
           "audience": null,
@@ -352,8 +352,8 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 569,
-            "note": "func (s *Store) rotate",
+            "line": 577,
+            "note": "rotate: INSERT INTO refresh_credentials (the issued child credential)",
             "path": "internal/auth/session/store.go"
           },
           "audience": null,
@@ -1631,5 +1631,5 @@
     }
   ],
   "schema_version": "endpoint-profile.v1",
-  "source_commit": "5eb5cbea641749cc0798b0eca082bf40fad6029b"
+  "source_commit": "57fa54108e0bf71c6d5a66e64e5c7d925d569aa6"
 }

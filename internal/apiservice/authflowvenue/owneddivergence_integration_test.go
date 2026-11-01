@@ -105,15 +105,6 @@ const credentialsFamily = "CHAOS-11398 family: auth-service's credentials and re
 var securityHeaders = []string{"content-length", "content-security-policy", "referrer-policy", "strict-transport-security", "vary",
 	"x-content-type-options", "x-frame-options"}
 
-// goAPIStepDivergences are the steps where go-api's own answer is stricter than the frozen Python answer; exact, as
-// ownedStepDivergences is.
-var goAPIStepDivergences = []stepDivergence{
-	{Step: "register: password over 72 bytes", PythonStatus: 500, GoStatus: 422, PythonBodyMarker: "Internal Server Error",
-		GoBodyMarker: "Password must be no more than 72 bytes long",
-		Headers:      append(append([]string{}, securityHeaders...), "access-control-allow-credentials", "access-control-allow-origin", "access-control-expose-headers"),
-		Reason:       "Python's bcrypt raises on a password over 72 bytes (500); go-api refuses it with passwordpolicy.ValidateForHash before it hashes. Go is stricter. " + credentialsFamily},
-}
-
 var ownedStepDivergences = []stepDivergence{
 	{Step: "verify: non-ascii signature", PythonStatus: 500, GoStatus: 400, PythonBodyMarker: "Internal Server Error",
 		GoBodyMarker: "Invalid or expired verification token", Headers: securityHeaders,
@@ -131,6 +122,16 @@ var ownedStepDivergences = []stepDivergence{
 	{Step: "limit: verify, another e-mail key", PythonStatus: 400, GoStatus: 429, PythonBodyMarker: "Invalid or expired verification token",
 		GoBodyMarker: "Rate limit exceeded", Headers: []string{"content-length"},
 		Reason: "auth-service counts the verify limit by one key where Python counted per e-mail, so the twelfth request is limited. " + credentialsFamily},
+}
+
+// goAPIStepDivergences are the steps where go-api's own answer is stricter than the frozen Python answer; exact, as
+// ownedStepDivergences is.
+var goAPIStepDivergences = []stepDivergence{
+	{Step: "register: password over 72 bytes", PythonStatus: 500, GoStatus: 422, PythonBodyMarker: "Internal Server Error",
+		GoBodyMarker: "Password must be no more than 72 bytes long",
+		Headers: []string{"content-length", "content-security-policy", "referrer-policy", "strict-transport-security", "vary",
+			"x-content-type-options", "x-frame-options", "access-control-allow-credentials", "access-control-allow-origin", "access-control-expose-headers"},
+		Reason: "Python's bcrypt raises on a password over 72 bytes (500); go-api refuses it with passwordpolicy.ValidateForHash before it hashes. Go is stricter. " + credentialsFamily},
 }
 
 func TestCredentialsNoStoreNeedsTheCredentialsAggregateForwarded(t *testing.T) {

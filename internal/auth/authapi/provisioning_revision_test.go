@@ -232,8 +232,11 @@ func TestOrgStateIsDarkWithoutItsProfileRow(t *testing.T) {
 	if got := both.post(stateRoute, both.stateBody(), nil); got.Code != http.StatusOK {
 		t.Fatalf("state with its row: %d %s, want 200", got.Code, got.Body)
 	}
-	if strings.Contains(both.logs.String(), "not mounted") {
-		t.Fatalf("a not-mounted line with both rows present: %s", both.logs.String())
+	for _, line := range strings.Split(both.logs.String(), "\n") {
+		// The grant routes are dark too and log their own line (provisioning_grant_test.go).
+		if strings.Contains(line, "not mounted") && !strings.Contains(line, "/internal/v1/grants/") {
+			t.Fatalf("a not-mounted line with both rows present: %s", line)
+		}
 	}
 }
 

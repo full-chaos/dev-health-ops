@@ -7,6 +7,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
+	"github.com/full-chaos/dev-health-ops/internal/auth/grant"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/invite"
@@ -57,8 +58,12 @@ func provisioningRoutes(cfg authconfig.Config, logger *slog.Logger, pool *pgxpoo
 	if err != nil {
 		return nil, err
 	}
+	grants, err := grant.New(grant.Config{Pool: pool, Schema: schema, OwnsUsers: cfg.UsersOwned, Members: members, Logger: logger})
+	if err != nil {
+		return nil, err
+	}
 	return authapi.ProvisioningRoutes(authapi.ProvisioningDeps{
 		Credentials: servicecred.PG{Pool: pool}, Users: pgUsers(cfg, pool, schema), Reader: pool, Organizations: identities,
-		Memberships: members, Invites: invites, Deprovision: deprovision, Orgs: orgs, ServiceAccounts: accounts, Workload: workload, Logger: logger, ProfileRows: provisioningProfileRows,
+		Memberships: members, Invites: invites, Deprovision: deprovision, Orgs: orgs, ServiceAccounts: accounts, Grants: grants, Workload: workload, Logger: logger, ProfileRows: provisioningProfileRows,
 	})
 }

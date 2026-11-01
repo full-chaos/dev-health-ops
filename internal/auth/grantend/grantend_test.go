@@ -45,3 +45,30 @@ func TestUUIDArrayLiteral(t *testing.T) {
 		t.Fatal("empty array literal")
 	}
 }
+
+func TestExpiredTuplePlanEndsWithExpiredEventsAndAuditRows(t *testing.T) {
+	org, principal, id, actor := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	p := &Plan{org: org, scope: scopeExpiredTuple, role: "viewer", key: "acme/api", rows: []grantRow{{id: id, principal: principal}}}
+	events := p.Events()
+	if len(events) != 1 || events[0].EventType != "resource_grant.expired" || events[0].Change["status"] != "expired" {
+		t.Fatalf("expired plan events = %+v", events)
+	}
+	if err := provisioning.CheckEvent(events[0].AggregateType, events[0].AggregateID, events[0].EventType, events[0].Change); err != nil {
+		t.Fatalf("expired event: %v", err)
+	}
+	rows := p.Audit(Actor{PrincipalID: &actor})
+	if len(rows) != 1 || rows[0].EventType != "auth.resource_grant.expired" || rows[0].Attributes["reason_code"] != "expired" || rows[0].Attributes["new_status"] != "expired" {
+		t.Fatalf("expired plan audit rows = %+v", rows)
+	}
+	if err := audit.ValidateAttributes(rows[0].Attributes); err != nil {
+		t.Fatalf("expired audit attributes: %v", err)
+	}
+	// A revoke plan keeps its revoked rows.
+	r := &Plan{org: org, scope: scopeGrant, rows: []grantRow{{id: id, principal: principal}}}
+	if r.Events()[0].EventType != "resource_grant.revoked" || r.Audit(Actor{})[0].EventType != EventType {
+		t.Fatal("a revoke plan changed its events")
+	}
+	if got := (&Plan{scope: scopeExpiredTuple, org: org, arg: principal, role: "viewer", key: "k/k"}).args(); len(got) != 4 {
+		t.Fatalf("expired plan args = %v, want org, principal, role, key", got)
+	}
+}

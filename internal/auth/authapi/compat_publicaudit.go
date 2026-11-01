@@ -67,6 +67,10 @@ var loginFailures = map[string]loginFailure{
 // unknownAccountFailure is the invalid_credentials row of an address no user holds.
 var unknownAccountFailure = loginFailure{"Login failed: user not found", "Invalid credentials", false}
 
+// passwordUnavailableFailure is go-api's row of a user with no password hash (login.go:233). Its reason on the wire
+// is invalid_credentials, so the row keys on the outcome kind.
+var passwordUnavailableFailure = loginFailure{"Login failed: password login unavailable", "Password login not available for this account", false}
+
 // loginFailedRow is go-api's login_failed row of a refused password sign-in: resource session/<user> (the normalized
 // address for an unknown account and for a lock), changes {"email": <normalized>} (and the requested organization
 // for a non-member), status failure. It returns nil when go-api writes no row: no attempt in ctx (a malformed body),
@@ -79,6 +83,9 @@ func loginFailedRow(ctx context.Context, principal uuid.UUID, requested *uuid.UU
 	}
 	if principal == uuid.Nil {
 		failure = unknownAccountFailure
+	}
+	if attempt.kind == local.KindPasswordUnavailable {
+		failure = passwordUnavailableFailure
 	}
 	email := pythonparity.Strip(pythonparity.Lower(attempt.email))
 	return func(ctx context.Context, tx audit.TxOps) error {

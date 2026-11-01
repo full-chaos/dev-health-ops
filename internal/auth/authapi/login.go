@@ -84,7 +84,10 @@ func (h compatHandlers) readLogin(w http.ResponseWriter, r *http.Request) (login
 // on success, so the choice is made there, with the principal known.
 type loginAttempt struct {
 	// email is the address as the request gave it, for go-api's login_failed row.
-	email      string
+	email string
+	// kind is the refused credential check's outcome, for go-api's login_failed row: Reason alone does not tell
+	// a user with no password from a wrong password.
+	kind       local.Kind
 	requested  *uuid.UUID
 	membership *Membership
 	user       UserState
@@ -147,6 +150,7 @@ func (h compatHandlers) compatLogin(w http.ResponseWriter, r *http.Request) {
 		h.loginUnverified(w, r, outcome, requested)
 		return
 	}
+	attempt.kind = outcome.Kind
 	if err := h.auditSignInFailed(ctx, outcome.PrincipalID, requested, string(outcome.Reason), providerLocal); err != nil {
 		h.fail(w, r, opCompatLogin, err)
 		return

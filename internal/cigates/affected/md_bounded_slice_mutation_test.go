@@ -17,6 +17,17 @@ func TestPlanReadsPackageSliceSpreadNeedsAnUntouchedSlice(t *testing.T) {
 		name, extra string
 		resolved    bool
 	}{
+		{"same_named_field", "type h struct{ args []string }\n\nfunc (x h) n() int { return len(x.args) }\n", true},
+		{"same_named_parameter", "func f(args []string) { args[0] = \"x\" }\n", true},
+		{"external_test_use", "XTEST:package p_test\n\nvar args = []string{\"a\"}\n\nfunc init() { args[0] = \"x\" }\n", true},
+		{"local_shadow_control", "func init() {\n\targs := []string{\"x\"}\n\t_ = args\n}\n", false},
+		{"shadowed_len", "func init() {\n\tlen := func(a []string) int { a[1] = \"x\"; return 0 }\n\t_ = len(args)\n}\n", false},
+		{"shadowed_cap", "func init() {\n\tcap := func(a []string) int { a[1] = \"x\"; return 0 }\n\t_ = cap(args)\n}\n", false},
+		{"shadowed_append", "func init() {\n\tappend := func(dst []string, s ...string) []string { s[1] = \"x\"; return dst }\n\t_ = append(nil, args...)\n}\n", false},
+		{"shadowed_package_append", "func append(dst []string, s ...string) []string { s[1] = \"x\"; return dst }\n\nfunc init() { _ = append(nil, args...) }\n", false},
+		{"shadowed_import_alias_method", "type r struct{}\n\nfunc (r) Command(n string, a ...string) { a[1] = \"x\" }\n\nfunc init() {\n\texec := r{}\n\texec.Command(\"a\", args...)\n}\n", false},
+		{"local_nonstdlib_module", "FILE:p/p_mut_test.go=package p\n\nimport \"m/mutator\"\n\nfunc init() { mutator.Change(args...) }\n", false},
+		{"stdlib_alias_spread", "FILE:p/p_alias_test.go=package p\n\nimport ex \"os/exec\"\n\nfunc alias() error { return ex.Command(\"git\", args...).Run() }\n", true},
 		{"untouched", "", true},
 		{"len_and_range_only", "func n() int {\n\tc := 0\n\tfor range args {\n\t\tc += len(args)\n\t}\n\treturn c\n}\n", true},
 		{"spread_into_stdlib", "func j() []string { return append([]string{\"a\"}, args...) }\n", true},
@@ -46,6 +57,11 @@ func TestPlanReadsPackageSliceSpreadNeedsAnUntouchedSlice(t *testing.T) {
 			switch {
 			case strings.HasPrefix(c.extra, "TESTFILE:"):
 				files["p/p_extra_test.go"] = "package p\n\n" + strings.TrimPrefix(c.extra, "TESTFILE:")
+			case strings.HasPrefix(c.extra, "XTEST:"):
+				files["p/p_ext_test.go"] = strings.TrimPrefix(c.extra, "XTEST:")
+			case strings.HasPrefix(c.extra, "FILE:"):
+				name, body, _ := strings.Cut(strings.TrimPrefix(c.extra, "FILE:"), "=")
+				files[name] = body
 			case strings.HasPrefix(c.extra, "RENAME:"):
 				src = strings.ReplaceAll(src, "args", strings.TrimPrefix(c.extra, "RENAME:"))
 			default:
@@ -60,6 +76,10 @@ func TestPlanReadsPackageSliceSpreadNeedsAnUntouchedSlice(t *testing.T) {
 			listed := strings.Contains(res.stdout, "p/p_spread_test.go:")
 			if listed == c.resolved {
 				t.Fatalf("resolved=%v but unresolved list is %q", c.resolved, res.stdout)
+			}
+			rows := planReads(t, root)
+			if got := strings.Contains(rows.stdout+rows.stderr, "README.md"); got != c.resolved {
+				t.Fatalf("a README.md row is %v, want %v:\n%s%s", got, c.resolved, rows.stdout, rows.stderr)
 			}
 		})
 	}

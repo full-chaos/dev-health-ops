@@ -122,7 +122,7 @@ auth-migrate workloads disable -workload NAME -apply
 ```
 
 The verb sets the disabled mark on the workload row and on its principal in one transaction and writes one
-audit row (`auth.workload.disabled`). The exchange then refuses every binding of the workload and
+audit row. The exchange then refuses every binding of the workload and
 `bootstrap-create` and `bootstrap-rotate` refuse it. A repeat writes nothing. It does not revoke live bootstrap
 values: run `bootstrap-disable` as well, because `enable` refuses while one is live. Undo it with `enable` (see
 above).

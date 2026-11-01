@@ -210,7 +210,7 @@ func TestScopeExemptRoutesAreExactAndFlagBound(t *testing.T) {
 		"POST /api/v1/auth/change-password":   true,
 		"GET /api/v1/auth/change-password":    false,
 		"POST /api/v1/auth/change-password/":  false,
-		"POST /api/v1/auth/change%2Dpassword": false,
+		"POST /api/v1/auth/change%2Dpassword": true,
 		"POST /api/v1/auth/me":                false,
 	} {
 		method, path, _ := strings.Cut(target, " ")

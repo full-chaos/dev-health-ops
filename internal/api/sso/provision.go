@@ -96,9 +96,7 @@ func (h handlers) provisionOrGetUser(ctx context.Context, row *providerRow, emai
 		if name != "" {
 			fullNamePtr = &name
 		}
-		if externalID != "" {
-			externalIDPtr = &externalID
-		}
+		externalIDPtr = &externalID
 		return h.createAccountAndMembership(ctx, row, ssoNewAccount{
 			email: email, authProvider: authProviderValue, externalID: externalIDPtr, fullName: fullNamePtr,
 			ssoProviderID: &providerID, saml: saml,
@@ -212,7 +210,7 @@ var errIdentityConflict = errors.New("identity conflict")
 // provider's identity.
 func (h handlers) resolveProviderIdentity(ctx context.Context, authProvider string, providerID uuid.UUID, externalID, email string) (uuid.UUID, bool, error) {
 	return h.resolveIdentityKey(ctx, `SELECT id FROM users WHERE auth_provider = $1::text AND sso_provider_id = $3::uuid AND auth_provider_id = $2::text LIMIT 2`,
-		[]any{authProvider, externalID, providerID}, externalID, email)
+		[]any{authProvider, externalID, providerID}, email)
 }
 
 // resolveSSOIdentity selects an OAuth account by its (auth_provider,
@@ -222,34 +220,32 @@ func (h handlers) resolveProviderIdentity(ctx context.Context, authProvider stri
 // conflict; it is never adopted or rewritten.
 func (h handlers) resolveSSOIdentity(ctx context.Context, authProvider, externalID, email string) (uuid.UUID, bool, error) {
 	return h.resolveIdentityKey(ctx, `SELECT id FROM users WHERE auth_provider = $1::text AND auth_provider_id = $2::text LIMIT 2`,
-		[]any{authProvider, externalID}, externalID, email)
+		[]any{authProvider, externalID}, email)
 }
 
-func (h handlers) resolveIdentityKey(ctx context.Context, keyQuery string, keyArgs []any, externalID, email string) (uuid.UUID, bool, error) {
-	if externalID != "" {
-		rows, err := h.Pool.Query(ctx, keyQuery, keyArgs...)
-		if err != nil {
+func (h handlers) resolveIdentityKey(ctx context.Context, keyQuery string, keyArgs []any, email string) (uuid.UUID, bool, error) {
+	rows, err := h.Pool.Query(ctx, keyQuery, keyArgs...)
+	if err != nil {
+		return uuid.Nil, false, err
+	}
+	defer rows.Close()
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
 			return uuid.Nil, false, err
 		}
-		defer rows.Close()
-		var ids []uuid.UUID
-		for rows.Next() {
-			var id uuid.UUID
-			if err := rows.Scan(&id); err != nil {
-				return uuid.Nil, false, err
-			}
-			ids = append(ids, id)
-		}
-		if err := rows.Err(); err != nil {
-			return uuid.Nil, false, err
-		}
-		switch len(ids) {
-		case 1:
-			return ids[0], true, nil
-		case 0:
-		default:
-			return uuid.Nil, false, errIdentityConflict
-		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return uuid.Nil, false, err
+	}
+	switch len(ids) {
+	case 1:
+		return ids[0], true, nil
+	case 0:
+	default:
+		return uuid.Nil, false, errIdentityConflict
 	}
 	var taken bool
 	if err := h.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM users WHERE lower(email) = lower($1::text))`, email).Scan(&taken); err != nil {

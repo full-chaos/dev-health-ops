@@ -103,7 +103,7 @@ func outcomeLabel(err error) string {
 		errors.Is(err, ErrBootstrapValue), errors.Is(err, ErrBootstrapExpiry), errors.Is(err, ErrBootstrapOverlap), errors.Is(err, ErrBootstrapReason),
 		errors.Is(err, ErrBootstrapWorkloadDisabled), errors.Is(err, ErrBootstrapPrincipalDisabled),
 		errors.Is(err, ErrAssertionKeyInvalid), errors.Is(err, ErrAssertionKeyActiveExists), errors.Is(err, ErrAssertionKeyTerminal),
-		errors.Is(err, ErrAssertionKeyTransition), errors.Is(err, ErrAssertionKeyOverlap), errors.Is(err, ErrAssertionKeyNoActive), errors.Is(err, ErrAssertionKeyWorkloadDisabled),
+		errors.Is(err, ErrAssertionKeyTransition), errors.Is(err, ErrAssertionKeyOverlap), errors.Is(err, ErrAssertionKeyNoActive), errors.Is(err, ErrAssertionKeyLastActive), errors.Is(err, ErrAssertionKeyWorkloadDisabled),
 		errors.Is(err, ErrOperatorNotFound), errors.Is(err, ErrOperatorDisabled), errors.Is(err, ErrOperatorIsSubject),
 		errors.Is(err, ErrPrincipalNotWorkload), errors.Is(err, ErrEnableStateChanged):
 		return "invalid"

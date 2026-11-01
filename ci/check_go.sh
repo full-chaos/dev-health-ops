@@ -767,6 +767,7 @@ leg_json_file() {
 # each package apart (key: Package) and prints only whole lines: a line of one package is never mixed with another package's text.
 # The tail of a package is printed when its package-level pass/fail/skip event arrives, and every tail at the end of the stream, so no
 # byte is lost (a hung or killed package keeps its last words). A line that is not a JSON event is whole and is printed at once.
+# shellcheck disable=SC2016
 GO_TEST_LEG_JQ='
 foreach ((inputs | ((fromjson? | select(type == "object" and ((.Action | type) == "string"))) // {Action: "raw", Output: (. + "\n")})), null) as $e (
   {tails: {}, out: ""};

@@ -176,7 +176,7 @@ func (s *SAML) Build(spec ResponseSpec) (*etree.Document, *etree.Element, *etree
 	if spec.Audiences == nil && !spec.NoAudience {
 		spec.Audiences = [][]string{{spec.SPEntityID}}
 	}
-	if spec.NameID.Value == "" {
+	if spec.NameID.Value == "" && !spec.ExplicitNameID {
 		spec.NameID = s.opts.Users[0].NameID
 		if spec.Email == "" && spec.FullName == "" {
 			spec.Email, spec.FullName = s.opts.Users[0].Email, s.opts.Users[0].FullName

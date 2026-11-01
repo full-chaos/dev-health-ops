@@ -127,7 +127,7 @@ func (idp *samlIdP) signedSAMLResponse(t *testing.T, opts samlResponseOpts) stri
 		nameID.SPNameQualifier = opts.spNameQualifier
 	}
 	response, err := idp.ResponseB64(idpstub.ResponseSpec{
-		SPEntityID: opts.spEntityID, ACSURL: opts.acsURL, InResponseTo: authnRequestID, NameID: nameID,
+		SPEntityID: opts.spEntityID, ACSURL: opts.acsURL, InResponseTo: authnRequestID, NameID: nameID, ExplicitNameID: true,
 		Email: opts.email, FullName: opts.fullName, SignResponse: true,
 		NotBefore: opts.notBefore, NotOnOrAfter: opts.notOnOrAfter,
 		ConditionsOnlyNotOnOrAfter: opts.conditionsOnlyNotOnOrAfter, ConfirmationOnlyNotOnOrAfter: opts.confirmationOnlyNotOnOrAfter,

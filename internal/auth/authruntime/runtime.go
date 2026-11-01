@@ -547,6 +547,12 @@ func configureWithRoutes(
 		return nil, err
 	}
 	routes = append(routes, workloadRoutes...)
+	decisionRoutes, err := authorizeRoutes(cfg, logger, store.Pool(), schemaID, signer)
+	if err != nil {
+		closeStore()
+		return nil, err
+	}
+	routes = append(routes, decisionRoutes...)
 	routes = append(routes, authapi.WellKnownRoutes(authapi.WellKnownDeps{
 		Keys: signer, IssuerURL: cfg.TokenIssuerURL, Logger: logger,
 	})...)

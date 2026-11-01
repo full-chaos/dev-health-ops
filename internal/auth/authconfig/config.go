@@ -257,6 +257,10 @@ type Config struct {
 	// workload token the session issue route accepts; empty = off.
 	SessionIssueWorkloadSubject string
 
+	// AuthorizeCallerSubjects are the workload principals (prn_) whose
+	// workload token the authorize routes accept; empty = none.
+	AuthorizeCallerSubjects []string
+
 	// EnvOnlySettings names the non-secret settings that were resolved from
 	// the environment although a canonical flag exists for them. A deployment
 	// configured that way is invisible in `docker compose config`, so the
@@ -347,6 +351,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Bool("workload_exchange_enabled", c.WorkloadExchange.Enabled),
 		slog.Bool("workload_bootstrap_enabled", c.WorkloadExchange.Bootstrap),
 		slog.Bool("issue_route_workload_enabled", c.SessionIssueWorkloadSubject != ""),
+		slog.Int("authorize_caller_count", len(c.AuthorizeCallerSubjects)),
 	}
 }
 
@@ -535,6 +540,9 @@ func Load(spec Spec) (Config, error) {
 		return Config{}, err
 	}
 	if cfg.SessionIssueWorkloadSubject, err = sessionIssueWorkloadSubject(lookup, cfg.TokenIssuerURL); err != nil {
+		return Config{}, err
+	}
+	if cfg.AuthorizeCallerSubjects, err = authorizeCallerSubjects(lookup, cfg.TokenIssuerURL); err != nil {
 		return Config{}, err
 	}
 	if cfg.RevisionFeed, err = revisionFeed(lookup); err != nil {

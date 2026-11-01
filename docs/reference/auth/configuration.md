@@ -139,6 +139,18 @@ With `AUTH_MEMBERSHIP_ROUTES=true`, auth-service serves the membership, invite a
 
   The exchange goes to the origin of `AUTH_PROXY_URL` (`POST /internal/v1/token/exchange`, which auth-service mounts only with `AUTH_WORKLOAD_EXCHANGE=true`); the subject file is read again for every exchange, and one exchange serves all the clients that selected `workload` (the provisioning clients and the session issue client). `workload` with a missing or invalid input is a start-up error naming it. A failed exchange fails that call (503) with no request to the provisioning routes; there is no fallback to `svc_authsess_`. The suspend route accepts the workload token only once its endpoint-profile row lists it.
 
+### Authorize routes
+
+`POST /v1/authorize` and `POST /v1/authorize:batch` are the policy decision point (authorization_request.v1 in, authorization_decision.v1 or authorization_batch_response.v1 out). Each route mounts only when `contracts/auth/v1/endpoint-profiles.auth-service.json` holds its row admitting `workload_token`. Without the row the route answers 404, and the startup log has an Info line `auth authorize route not mounted` with the `route`.
+
+- With `AUTH_AUTHORIZE_CALLER_SUBJECTS` set (comma-separated workload principal ids, `prn_` and 22 base64url characters each, no repeats; it needs `AUTH_TOKEN_ISSUER_URL`; default unset, which refuses every caller), a caller presents its own workload token: header `typ` `workload+jwt`, audience `auth-service`, `sub` in the list. A wrong audience or an unlisted subject is refused before the key set or any table is read. Every refused caller gets 401 `invalid_credentials`.
+- `principal_reference` is the end user's EdDSA access token (`typ` `at+jwt`, audience `dev-health-api`, scope `api:access`). An HS256 token, a workload token, an `auth-service` audience token, an expired token or a token whose session is revoked, expired or another principal's is refused for the whole call with 401 `principal_reference_invalid`. That code is distinct from the caller's `invalid_credentials`.
+- The body is at most 16 KiB (single) or 256 KiB (batch, 1 to 100 requests). A larger body is 413. A member the contract does not define, a repeated member, a member in another case or a mistyped value is 400 `malformed`.
+- Every state read of a call (the session, the principal, go-api's users and memberships rows, the organization and the repository grants) runs in one `READ ONLY REPEATABLE READ` transaction. A read failure, or a decision the core could not make for want of state, is 503 `store_unavailable` for the whole call, never a decision. A key set that cannot be read is 503 `dependency_unavailable`.
+- Items of a batch are decided apart: a deny of one item never changes another.
+- `expires_at` is the decision time for every deny and for every allow except a repository allow, which keeps the core's 30 s bound.
+- Each decision is logged at Info with `decision_id`, `allowed` and `reason_code` only.
+
 ## auth-migrate
 
 | Flag | Environment | Rule |

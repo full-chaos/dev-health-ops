@@ -54,7 +54,7 @@ func legNames(t *testing.T, root string, matrixJSON string) []string {
 
 func TestLegScriptSelectsRaceLegsByEvent(t *testing.T) {
 	root := repoRoot(t)
-	all := []string{"static", "test-1-of-4", "test-2-of-4", "test-3-of-4", "test-4-of-4", "race-1-of-5", "race-2-of-5", "race-3-of-5", "race-4-of-5", "race-5-of-5"}
+	all := []string{"static", "test-1-of-4", "test-2-of-4", "test-3-of-4", "test-4-of-4", "race-1-of-6", "race-2-of-6", "race-3-of-6", "race-4-of-6", "race-5-of-6", "race-6-of-6"}
 	noRace := all[:5]
 	for _, c := range []struct {
 		event, full string
@@ -335,7 +335,7 @@ func TestLegScriptPlantedDefects(t *testing.T) {
 			wrong := 0
 			for _, e := range [][2]string{{"pull_request", "false"}, {"merge_group", "false"}} {
 				out, _, code := runLegsScript(t, tree, e[0], e[1])
-				hasRace := strings.Contains(out, "race-1-of-5")
+				hasRace := strings.Contains(out, "race-1-of-6")
 				if code != 0 || hasRace != (e[0] == "merge_group") {
 					wrong++
 				}

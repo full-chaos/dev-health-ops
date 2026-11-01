@@ -30,8 +30,8 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 547,
-            "note": "func (s *Store) rotate",
+            "line": 577,
+            "note": "INSERT INTO `+s.q+`.refresh_credentials (",
             "path": "internal/auth/session/store.go"
           },
           "audience": null,
@@ -318,7 +318,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/compat.go",
-        "line": 142
+        "line": 151
       },
       "surface_kind": "rest"
     },
@@ -352,8 +352,8 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 547,
-            "note": "func (s *Store) rotate",
+            "line": 577,
+            "note": "INSERT INTO `+s.q+`.refresh_credentials (",
             "path": "internal/auth/session/store.go"
           },
           "audience": null,
@@ -377,7 +377,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/compat.go",
-        "line": 129
+        "line": 138
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -395,7 +395,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 116,
+          "line": 138,
           "note": "func (s *Store) RevokeByCredential",
           "path": "internal/auth/session/signin.go"
         },
@@ -405,7 +405,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/compat.go",
-        "line": 130
+        "line": 139
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -463,7 +463,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/compat.go",
-        "line": 149
+        "line": 158
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -526,7 +526,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/compat.go",
-        "line": 146
+        "line": 155
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -720,7 +720,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 264,
+            "line": 265,
             "note": "signedtoken.Build(id, s.secret)",
             "path": "internal/auth/invite/store.go"
           },
@@ -1775,5 +1775,5 @@
     }
   ],
   "schema_version": "endpoint-profile.v1",
-  "source_commit": "7a7f6305d31af955d800995e2abee57c57816a69"
+  "source_commit": "57fa54108e0bf71c6d5a66e64e5c7d925d569aa6"
 }

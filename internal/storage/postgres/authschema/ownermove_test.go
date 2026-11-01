@@ -209,3 +209,27 @@ func TestOptionsSchemaOwnerRoleValidates(t *testing.T) {
 		t.Errorf("a valid pinned owner is refused: %v", err)
 	}
 }
+
+// The anchor is the one table-level privilege the migrator holds without grant option; no grant builder gives it to
+// the runtime role, so it stays out of the set the builders are compared with.
+func TestPublicAnchorPrivilegeIsOutsideTheSetAndCoversEveryTable(t *testing.T) {
+	if PublicAnchorPrivilege != "REFERENCES" {
+		t.Fatalf("anchor privilege = %q, want REFERENCES (the weakest table-level privilege)", PublicAnchorPrivilege)
+	}
+	tables := map[string]bool{}
+	for _, entry := range PublicPrivilegeSet() {
+		if entry.Privilege == PublicAnchorPrivilege {
+			t.Errorf("%s: the anchor privilege is in the grant set", entry.Table)
+		}
+		tables[entry.Table] = true
+	}
+	anchors := PublicAnchorTables()
+	if len(anchors) != len(tables) {
+		t.Fatalf("anchor tables = %v, want one per table of the set %v", anchors, tables)
+	}
+	for _, table := range anchors {
+		if !tables[table] {
+			t.Errorf("anchor table %s is not a table of the set", table)
+		}
+	}
+}

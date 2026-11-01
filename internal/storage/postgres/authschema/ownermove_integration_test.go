@@ -72,7 +72,7 @@ SELECT kind, object, grantor, grantee, priv, grantable FROM (
   SELECT 'relation' AS kind, n.nspname || '.' || c.relname AS object, gr.rolname::text AS grantor,
          coalesce(ge.rolname::text, 'PUBLIC') AS grantee, a.privilege_type AS priv, a.is_grantable AS grantable
   FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-  CROSS JOIN LATERAL aclexplode(coalesce(c.relacl, acldefault(CASE c.relkind WHEN 'S' THEN 's' ELSE 'r' END, c.relowner))) a
+  CROSS JOIN LATERAL aclexplode(coalesce(c.relacl, acldefault((CASE c.relkind WHEN 'S' THEN 's' ELSE 'r' END)::"char", c.relowner))) a
   JOIN pg_roles gr ON gr.oid = a.grantor LEFT JOIN pg_roles ge ON ge.oid = a.grantee
   WHERE n.nspname IN ('auth','public') AND c.relkind IN ('r','p','v','m','f','S')
   UNION ALL
@@ -492,12 +492,21 @@ func TestOwnerMoveGrantorsAndTheMigratorsOwnPrivilegeSet(t *testing.T) {
 		if err := rows.Scan(&table, &priv, &col, &grantable); err != nil {
 			t.Fatal(err)
 		}
-		if !grantable {
+		if !grantable && priv != PublicAnchorPrivilege {
 			t.Errorf("the migrator holds %s %s %s without grant option", table, priv, col)
 		}
 		have[table+"|"+priv+"|"+col] = true
 	}
 	want := map[string]bool{}
+	for _, table := range PublicAnchorTables() {
+		var exists bool
+		if err := env.admin.QueryRow(ctx, `SELECT to_regclass('public.' || quote_ident($1)) IS NOT NULL`, table).Scan(&exists); err != nil {
+			t.Fatal(err)
+		}
+		if exists {
+			want[table+"|"+PublicAnchorPrivilege+"|"] = true
+		}
+	}
 	for key := range keysOfPrivilegeSet(PublicPrivilegeSet()) {
 		parts := strings.Split(key, "|")
 		var exists bool

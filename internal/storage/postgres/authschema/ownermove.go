@@ -90,6 +90,27 @@ func PublicPrivilegeSet() []PublicPrivilege {
 	return set
 }
 
+// PublicAnchorPrivilege is the one table-level privilege the migrator holds, without grant option, on each ops table of
+// the privilege set. PostgreSQL refuses a table-level REVOKE ALL from a role that holds no table-level privilege on the
+// table at all ("permission denied"), and the grants pass starts every public table with that statement; any table-level
+// privilege lifts the refusal. REFERENCES is the weakest one: it lets the holder reference the table's columns from a
+// table of its own and nothing else.
+const PublicAnchorPrivilege = "REFERENCES"
+
+// PublicAnchorTables lists the ops tables the migrator holds PublicAnchorPrivilege on: the tables of PublicPrivilegeSet.
+func PublicAnchorTables() []string {
+	seen := map[string]bool{}
+	var tables []string
+	for _, entry := range PublicPrivilegeSet() {
+		if !seen[entry.Table] {
+			seen[entry.Table] = true
+			tables = append(tables, entry.Table)
+		}
+	}
+	sort.Strings(tables)
+	return tables
+}
+
 func slicesContains(list []string, item string) bool {
 	for _, v := range list {
 		if v == item {
@@ -529,6 +550,11 @@ func ownerMovePublicStatements(ctx context.Context, tx pgx.Tx, options OwnerMove
 
 	var statements []string
 	if !options.Restore {
+		for _, table := range PublicAnchorTables() {
+			if tables[table] != nil {
+				statements = append(statements, "GRANT "+PublicAnchorPrivilege+" ON TABLE "+qualified(table)+" TO "+to)
+			}
+		}
 		for _, entry := range PublicPrivilegeSet() {
 			info := tables[entry.Table]
 			keyword, ok := privilegeKeyword(entry.Privilege)

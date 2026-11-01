@@ -14,7 +14,7 @@ import (
 )
 
 // PushLifecycleFunction is the one function go-api may execute in the auth
-// schema (migration 0040), and PushLifecycleFunctionSignature its argument
+// schema (migration 0042), and PushLifecycleFunctionSignature its argument
 // list. It runs as PushLifecycleWriterRole and appends one External Push
 // lifecycle event to the outbox under the commit guard.
 const (

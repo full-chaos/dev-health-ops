@@ -119,8 +119,7 @@ sequence. A posture check in every `auth-migrate` run pins that set.
 Roll order, each step before the next:
 
 1. **Privileged, by whoever creates the logins** (compose: `auth-provision` does it
-   when `AUTH_PUSH_LIFECYCLE_WRITER_ROLE` is set; bigboy and production: the database
-   administrator, the same step that provisions `devhealth_auth`):
+   when `AUTH_PUSH_LIFECYCLE_WRITER_ROLE` is set; bigboy and production: the postgres superuser, through `kubectl exec` on the postgres pod, the same step that provisions `devhealth_auth`):
    `CREATE ROLE <writer> NOLOGIN;` and `GRANT <writer> TO <migration login>;`. The
    migration login (not a superuser) cannot do this itself, and it needs the
    membership for `ALTER FUNCTION ... OWNER TO`. A missing role, a role that can log in,
@@ -128,7 +127,7 @@ Roll order, each step before the next:
 2. `auth-migrate` with `AUTH_PUSH_LIFECYCLE_WRITER_ROLE=<writer>` and
    `AUTH_PUSH_LIFECYCLE_CALLER_ROLES=<go-api login>` (Helm:
    `authService.migrate.pushLifecycle`; both the migrate and the grants Job). Migration
-   0040 creates the function and widens the revision table's two CHECKs; the grant
+   0042 creates the function and widens the revision table's two CHECKs; the grant
    pass hands the function to the writer, with `CREATE` on the schema granted and
    revoked inside one transaction, and gives `EXECUTE` to the callers only.
 3. Only then roll go-api with `AUTH_PUSH_LIFECYCLE_EVENTS=true`. With the flag on and

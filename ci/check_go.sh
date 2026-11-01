@@ -755,18 +755,38 @@ leg_json_file() {
 }
 
 # go_test_leg LOG LEGJSON ARG...: `go test -json ARG...` of one stage of a test or race leg (run it from the module directory).
-# The plain log, on stdout and in LOG, is every Output field of the event stream verbatim, in stream order (the -v form: more
+# The plain log, on stdout and in LOG, is every Output field of the event stream verbatim, whole lines per package (GO_TEST_LEG_JQ; the -v form: more
 # lines than plain go test, never fewer). A line that is not a JSON event passes through raw. The raw stream is kept in a stage
 # temp file and appended to LEGJSON (/dev/null when the leg keeps no timings) when the stage ends. Every element of the pipe is
 # read right after it: go test's own status is the stage status; a failed converter, a failed copy of the raw stream, a failed
 # write of the plain log or of LEGJSON is named on stderr and makes the stage fail (rc 70) when go test passed. A failed converter
 # drains its input (go test is never killed by a broken pipe) and the raw stream is printed into the plain log, so the log is
 # never empty.
+# CHAOS-12386: go test -json cuts a test line longer than 1024 bytes into several output events, and packages run in parallel, so an
+# event of another package (its "ok" summary line) can land between two chunks of one line. The filter keeps the unfinished tail of
+# each package apart (key: Package) and prints only whole lines: a line of one package is never mixed with another package's text.
+# The tail of a package is printed when its package-level pass/fail/skip event arrives, and every tail at the end of the stream, so no
+# byte is lost (a hung or killed package keeps its last words). A line that is not a JSON event is whole and is printed at once.
 GO_TEST_LEG_JQ='
-inputs
-| ((fromjson? | select(type == "object" and ((.Action | type) == "string"))) // {Action: "output", Output: (. + "\n")})
-| select(.Action == "output")
-| ((.Output // "") | tostring)'
+foreach ((inputs | ((fromjson? | select(type == "object" and ((.Action | type) == "string"))) // {Action: "raw", Output: (. + "\n")})), null) as $e (
+  {tails: {}, out: ""};
+    if $e == null then
+      {tails: {}, out: ([.tails[]] | join(""))}
+    elif $e.Action == "raw" then
+      .out = $e.Output
+    elif $e.Action == "output" then
+      (($e.Package // "") | tostring) as $p
+      | ((.tails[$p] // "") + (($e.Output // "") | tostring) | split("\n")) as $parts
+      | .out = ($parts[:-1] | map(. + "\n") | join(""))
+      | .tails[$p] = ($parts[-1] // "")
+    elif ($e.Action | IN("pass", "fail", "skip")) and (($e.Test // "") == "") then
+      (($e.Package // "") | tostring) as $p
+      | .out = (.tails[$p] // "")
+      | .tails[$p] = ""
+    else
+      .out = ""
+    end;
+    .out)'
 go_test_leg() {
   local log="$1" legjson="$2" rc raw problem=0
   local -a ps fb
@@ -831,7 +851,7 @@ go_test_json_run() {
 }
 
 # go_test_json_run_t TIMEOUT JSON_FILE LOG_FILE PKG...: ONE fresh `go test -json` run of the packages (run it from the module directory).
-# The events are appended to JSON_FILE; jq turns them back into the plain go test log on stdout and in LOG_FILE (the ok lines
+# The events are appended to JSON_FILE; jq (GO_TEST_LEG_JQ, whole lines per package) turns them back into the plain go test log on stdout and in LOG_FILE (the ok lines
 # the wall and unweighted guards read). pipefail keeps go test's exit code. TIMEOUT is an argument, never read from the environment.
 go_test_json_run_t() {
   local timeout="$1" json="$2" log="$3"
@@ -839,7 +859,7 @@ go_test_json_run_t() {
   command -v jq >/dev/null 2>&1 || die "the race-excluded receipts need jq to read go test -json events"
   "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -json -count=1 -timeout "${timeout}" "$@" \
     | tee -a "${json}" \
-    | jq -rj 'select(.Action == "output") | .Output' \
+    | jq -nR --unbuffered -rj "${GO_TEST_LEG_JQ}" \
     | tee -a "${log}"
 }
 

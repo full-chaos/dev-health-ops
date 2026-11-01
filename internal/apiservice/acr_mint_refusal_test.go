@@ -106,7 +106,7 @@ func TestAnACRMintedTokenIsRefusedAtGoAPIBeforeAnyRead(t *testing.T) {
 			}
 			counters := f.counters(t)
 			for _, path := range []string{probeAuthenticated, probeAdmin} {
-				series := accessverify.RefusedMetric + "|profile=GET " + path + ",reason=" + acrRefusalReason(t) + ",service=" + goAPIAccessService
+				series := accessverify.RefusedMetric + "|profile=GET " + path + ",reason=" + acrRefusalReason + ",service=" + goAPIAccessService
 				if counters[series] == 0 {
 					t.Errorf("no %s", series)
 				}

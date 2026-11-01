@@ -1,4 +1,4 @@
--- 0042 resource_grants: origin. ADDITIVE ONLY.
+-- 0043 resource_grants: origin. ADDITIVE ONLY.
 --
 -- origin: who made the grant. 'api' is a grant made through the grant routes (granted_by
 -- names the actor, enforced by the grant Store); 'backfill' is a grant the W4 4.22 backfill

@@ -1,0 +1,39 @@
+{
+  "expect": {
+    "allowed": false,
+    "cache_class": "none",
+    "expires_in_seconds": null,
+    "policy_revision": 6,
+    "reason": "organization_inactive"
+  },
+  "id": "organization-suspended",
+  "layer": "pdp",
+  "request": {
+    "action": "org.read",
+    "organization_id": "org-a",
+    "resource_key": "",
+    "resource_kind": "organization"
+  },
+  "state": {
+    "catalog": "embedded",
+    "clock": "2027-01-15T08:00:00Z",
+    "grants": [],
+    "grants_error": false,
+    "memberships": {
+      "org-a": {
+        "org_id": "org-a",
+        "role": "member",
+        "status": "active"
+      }
+    },
+    "organizations": {
+      "org-a": "suspended"
+    },
+    "platform_role": "",
+    "principal_status": "active",
+    "service_accounts": {},
+    "snapshot": "grant",
+    "workload": null
+  },
+  "why": "a suspended organization denies."
+}

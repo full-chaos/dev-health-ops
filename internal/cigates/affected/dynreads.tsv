@@ -45,11 +45,15 @@ internal/atlassianteams	vendored_patch_chain_test.go
 internal/audit	drill_attempt_integration_test.go
 internal/audit	drill_password_integration_test.go
 internal/audit	drill_pitr_integration_test.go
+internal/auth/acrmint	acrmint_test.go
+internal/auth/acrmint	census_test.go
 internal/auth/authapi	authorize_auth_test.go
+internal/auth/authapi	authorize_golden_test.go
 internal/auth/authapi	authorize_request_test.go
 internal/auth/authapi	hung_read_test.go
 internal/auth/authapi	issuer_eddsa_test.go
 internal/auth/authconfig	config_test.go
+internal/auth/authorization	golden_decision_test.go
 internal/auth/authruntime	audit_request_id_scan_test.go
 internal/auth/authruntime	endpoint_profile_rows_test.go
 internal/auth/authruntime	fixed_credential_scan_test.go
@@ -104,6 +108,7 @@ internal/auth/platformrole	superuser_fills_census_test.go
 internal/auth/platformrole	superuser_literals_census_test.go
 internal/auth/platformrole	superuser_sites_census_test.go
 internal/auth/platformrole	superuser_writes_census_test.go
+internal/auth/pushlifecycle	acr_mapping_test.go
 internal/auth/ratelimitvalkey	acl_feed_test.go
 internal/auth/ratelimitvalkey	acl_test.go
 internal/auth/restorefence	consumers_test.go

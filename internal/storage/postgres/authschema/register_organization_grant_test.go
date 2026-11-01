@@ -11,7 +11,7 @@ func TestRegisterOrganizationGrantIsTheReviewedColumns(t *testing.T) {
 		got[grant.Table] = grant.Columns
 	}
 	want := map[string][]string{
-		"organizations": {"id", "slug", "name", "settings", "tier", "managed_by", "is_active", "created_at", "updated_at"},
+		"organizations": {"id", "slug", "name", "description", "settings", "tier", "managed_by", "is_active", "created_at", "updated_at"},
 		"memberships":   {"id", "user_id", "org_id", "role", "joined_at", "created_at", "updated_at"},
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -21,4 +21,19 @@ func TestRegisterOrganizationGrantIsTheReviewedColumns(t *testing.T) {
 	if len(insert) != 14 || len(update) != 5 {
 		t.Fatalf("the public.users write grant changed: %v / %v", insert, update)
 	}
+}
+
+// Every organization birth goes through auth-service, the admin create with
+// its description too.
+func TestRegisterOrganizationGrantHoldsDescription(t *testing.T) {
+	for _, grant := range RegisterOrganizationGrants() {
+		if grant.Table == "organizations" {
+			for _, column := range grant.Columns {
+				if column == "description" {
+					return
+				}
+			}
+		}
+	}
+	t.Fatal("no INSERT grant on public.organizations.description")
 }

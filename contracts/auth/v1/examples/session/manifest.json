@@ -23,6 +23,10 @@
     {
       "file": "valid-auth-time-before-created.json",
       "why": "Authentication earlier than the session record; offset form."
+    },
+    {
+      "file": "valid-delegated.json",
+      "why": "A delegated session: the real actor, the reason and the permitted actions."
     }
   ],
   "reject": [
@@ -205,6 +209,30 @@
       "expect_keyword": "additionalProperties",
       "file": "invalid-secret-field-ip-address.json",
       "why": "`ip_address` has no field in session.v1; absence is enforced by additionalProperties:false."
+    },
+    {
+      "file": "invalid-delegation-missing-reason.json",
+      "expect_instance_location": "/delegation",
+      "expect_keyword": "required",
+      "why": "G-52 requires a reason."
+    },
+    {
+      "file": "invalid-delegation-extra-member.json",
+      "expect_instance_location": "/delegation",
+      "expect_keyword": "additionalProperties",
+      "why": "delegation is closed."
+    },
+    {
+      "file": "invalid-delegation-actor-wrong-prefix.json",
+      "expect_instance_location": "/delegation/actor_principal_id",
+      "expect_keyword": "pattern",
+      "why": "The actor is a principal id."
+    },
+    {
+      "file": "invalid-delegation-reason-empty.json",
+      "expect_instance_location": "/delegation/reason",
+      "expect_keyword": "pattern",
+      "why": "An empty reason is no reason."
     }
   ],
   "reject_by_client": [

@@ -1,0 +1,39 @@
+{
+  "expect": {
+    "allowed": true,
+    "cache_class": "resource_revision_bound",
+    "expires_in_seconds": 30,
+    "policy_revision": 6,
+    "reason": "allowed_by_membership_default"
+  },
+  "id": "repo-membership-default-allows",
+  "layer": "pdp",
+  "request": {
+    "action": "acr.context.read",
+    "organization_id": "org-a",
+    "resource_key": "acme/api",
+    "resource_kind": "repository"
+  },
+  "state": {
+    "catalog": "planted-repo-reader",
+    "clock": "2027-01-15T08:00:00Z",
+    "grants": [],
+    "grants_error": false,
+    "memberships": {
+      "org-a": {
+        "org_id": "org-a",
+        "role": "member",
+        "status": "active"
+      }
+    },
+    "organizations": {
+      "org-a": "active"
+    },
+    "platform_role": "",
+    "principal_status": "active",
+    "service_accounts": {},
+    "snapshot": "grant",
+    "workload": null
+  },
+  "why": "no grant row of any state: the membership role holds the action."
+}

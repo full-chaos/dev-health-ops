@@ -105,6 +105,7 @@ internal/auth/contracts	contracts.go	internal/apiservice
 internal/auth/contracts	contracts.go	internal/apiservice/acr
 internal/auth/contracts	contracts.go	internal/apiservice/admin
 internal/auth/contracts	contracts.go	internal/audit
+internal/auth/contracts	contracts.go	internal/auth/acrmint
 internal/auth/contracts	contracts.go	internal/auth/authapi
 internal/auth/contracts	contracts.go	internal/auth/authconfig
 internal/auth/contracts	contracts.go	internal/auth/authorization
@@ -136,6 +137,7 @@ internal/auth/contracts	contracts.go	internal/auth/session
 internal/auth/contracts	contracts.go	internal/auth/usersbackfill
 internal/auth/contracts	contracts.go	internal/auth/workloadexchange
 internal/auth/contracts	contracts.go	internal/cigates/chartgates
+internal/auth/contracts	contracts.go	internal/cigates/workflows
 internal/auth/contracts	contracts.go	internal/platform/logging
 internal/auth/contracts	contracts.go	internal/queryapi/server
 internal/auth/contracts	contracts.go	internal/testsupport/usertokens
@@ -161,6 +163,7 @@ internal/auth/keystore	open_unix.go	internal/api/externalingest
 internal/auth/keystore	open_unix.go	internal/api/webhookintake
 internal/auth/keystore	open_unix.go	internal/apiservice
 internal/auth/keystore	open_unix.go	internal/apiservice/acr
+internal/auth/keystore	open_unix.go	internal/auth/acrmint
 internal/auth/keystore	open_unix.go	internal/auth/authapi
 internal/auth/keystore	open_unix.go	internal/auth/authruntime
 internal/auth/keystore	open_unix.go	internal/auth/keyrotation
@@ -493,6 +496,7 @@ internal/platform/secrets	source.go	internal/auth/usersbackfill
 internal/platform/secrets	source.go	internal/backfillrun
 internal/platform/secrets	source.go	internal/billingcli
 internal/platform/secrets	source.go	internal/chmigrate
+internal/platform/secrets	source.go	internal/cigates/workflows
 internal/platform/secrets	source.go	internal/clicredentials
 internal/platform/secrets	source.go	internal/fixturescli
 internal/platform/secrets	source.go	internal/maintenancecli

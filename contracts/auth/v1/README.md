@@ -371,6 +371,35 @@ visible in the file layout, not in a conditionally present field:
   paged by an opaque cursor (CHAOS-10136): at most 100 items a page, `next_cursor`
   absent on the last page, order created_at then id ascending.
 
+### ACR credential lifecycle events: metadata only (CHAOS-11193)
+
+`acr-credential-lifecycle-event.v1` is one lifecycle event of an ACR `fcacr_`
+credential as the Auth Control Plane receives it (ACP-ADR-08). ACR stays the
+validator and the writer; the event is a closed projection of lifecycle state.
+
+* **Closed at every level.** The envelope, the payload and each change object
+  have `additionalProperties: false`. There is no member for a secret, a hash, a
+  token, a token prefix, a fingerprint, a device or user code, or a principal id;
+  a test walks the schema and the accepted fixtures and fails on any member name
+  that suggests secret material.
+* **Same aggregate rule as the External Push contract.** The aggregate is the acr
+  credential id (the registry's `external_reference`); `revision` is per
+  aggregate; the idempotency key is `acr_credential:<id>:<revision>`. The ordering,
+  terminal and no-widen rules are the `internal/auth/pushlifecycle` core:
+  `acr_mapping_test.go` drives the golden events through the real `Apply`.
+* **Kinds:** `issued`, `device_redeemed`, `rotated` (revision 1, a new aggregate
+  that names its parent), `revoked` and `expired` (revision 2 or more, terminal).
+  No scope or audience event: no acr path changes scopes after issue. A rotation
+  with no overlap also revokes the parent in the same transaction; with an overlap
+  the parent stays active and receives `expired` when its cut expiry passes.
+* **Actor.** `actor_type` (`user`, `operator`, `credential`, `system`) plus
+  `actor_ref`, absent for `system`. A credential acting on itself is
+  `actor_type` `credential`; the clients check that `actor_ref` is the aggregate
+  id on `revoked` and the replaced credential on `rotated`. `issued` and
+  `device_redeemed` are never written by a credential actor. `expired` is always
+  written by the system. `change.acr_class` (six values) and the optional
+  opaque `change.owner_subject` ride on revision 1 events only.
+
 ### JWKS and discovery: one issuer, one key use (CHAOS-4930)
 
 `jwks.v1` and `discovery.v1` are the two documents behind TRD §15's

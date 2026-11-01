@@ -207,6 +207,10 @@ func (f *Flows) Register(ctx context.Context, req RegisterRequest) (FlowOutcome,
 	if errors.Is(err, identity.ErrEmailTaken) {
 		return f.noticeExisting(ctx, email), nil
 	}
+	if errors.Is(err, identity.ErrOrganizationSlugCollision) {
+		slog.WarnContext(ctx, "local: the organization slug is taken; the sign-up wrote nothing")
+		return FlowOutcome{Kind: FlowOK}, nil
+	}
 	if err != nil {
 		return FlowOutcome{}, fmt.Errorf("local: creating the account: %w", err)
 	}

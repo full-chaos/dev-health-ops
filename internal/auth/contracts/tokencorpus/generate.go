@@ -44,6 +44,8 @@ type claimSet struct {
 	iat, nbf, exp                         int64
 	org                                   string
 	rawSub                                string
+	// act is the raw JSON of the act claim; empty leaves the claim out.
+	act string
 }
 
 func baseClaims() claimSet {
@@ -68,6 +70,9 @@ func (c claimSet) text() string {
 	}
 	if c.org != "" {
 		members = append(members, member{"org_id", q(c.org)})
+	}
+	if c.act != "" {
+		members = append(members, member{"act", c.act})
 	}
 	members = append(members, member{"scope", q(c.scope)})
 	return object(members...)
@@ -214,6 +219,23 @@ func Generate(random io.Reader) (*Corpus, error) {
 		reject(now, AudienceAuth, ReasonAudience, "A valid dev-health-api token presented to auth-service."))
 	b.add("invalid-aud-auth-token-at-api", good, auth.text(), edSigner(activeKey),
 		reject(now, AudienceAPI, ReasonAudience, "A valid auth-service token presented to dev-health-api."))
+	delegated, delegatedAuth := api, auth
+	delegated.act, delegatedAuth.act = `{"sub":"prn_BBBBBBBBBBBBBBBBBBBBBB"}`, `{"sub":"prn_BBBBBBBBBBBBBBBBBBBBBB"}`
+	b.add("valid-act-api", good, delegated.text(), edSigner(activeKey),
+		accept(now, AudienceAPI, "A delegated token: sub is the effective subject, act.sub the real actor."))
+	b.add("valid-act-auth-service", good, delegatedAuth.text(), edSigner(activeKey),
+		accept(now, AudienceAuth, "A delegated token at auth-service's own session routes."))
+	for _, c := range []struct{ name, raw, why string }{
+		{"invalid-act-null", `null`, "act null: absent and null are not the same."},
+		{"invalid-act-string", `"prn_BBBBBBBBBBBBBBBBBBBBBB"`, "act is an object, not a bare subject."},
+		{"invalid-act-extra-member", `{"sub":"prn_BBBBBBBBBBBBBBBBBBBBBB","reason":"support"}`, "act is closed: the reason stays on the session row."},
+		{"invalid-act-nested", `{"sub":"prn_BBBBBBBBBBBBBBBBBBBBBB","act":{"sub":"prn_CCCCCCCCCCCCCCCCCCCCCC"}}`, "One hop only: a nested act is an extra member."},
+		{"invalid-act-sub-usr-prefix", `{"sub":"usr_BBBBBBBBBBBBBBBBBBBBBB"}`, "act.sub is a principal id."},
+	} {
+		bad := api
+		bad.act = c.raw
+		b.add(c.name, good, bad.text(), edSigner(activeKey), contractRefusal("schema", c.why))
+	}
 
 	// The ACR audiences (CHAOS-12248): each ACR service accepts its own one, and
 	// no platform verifier (go-api and query-api at dev-health-api, auth-service)

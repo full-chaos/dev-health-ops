@@ -94,48 +94,57 @@ func bearerToken(r *http.Request) (string, bool) {
 // token go-api refuses is refused here too). It answers the refusal itself and
 // returns false.
 func (h handlers) authenticate(w http.ResponseWriter, r *http.Request, operation string) (Bearer, session.Record, bool) {
+	return h.authenticateWith(w, r, operation, h.rec.refuse)
+}
+
+// refuser writes an authentication refusal: the session routes' error.v1 (recorder.refuse), or go-api's wire on a
+// go-api compatibility route that go-api forwards unread (goAPIBearerRefusal).
+type refuser func(w http.ResponseWriter, r *http.Request, operation string, answer refusal, err error)
+
+// authenticateWith is authenticate with the refusal written by refuse.
+func (h handlers) authenticateWith(w http.ResponseWriter, r *http.Request, operation string, refuse refuser) (Bearer, session.Record, bool) {
 	token, ok := bearerToken(r)
 	if !ok {
-		h.rec.refuse(w, r, operation, unauthorized(reasonMalformed), nil)
+		refuse(w, r, operation, unauthorized(reasonMalformed), nil)
 		return Bearer{}, session.Record{}, false
 	}
 	bearer, reason, err := h.Issuer.bearer(r.Context(), r.Pattern, token)
 	if err != nil {
 		refused, logged := bearerRefusal(reason, err)
-		h.rec.refuse(w, r, operation, refused, logged)
+		refuse(w, r, operation, refused, logged)
 		return Bearer{}, session.Record{}, false
 	}
 	record, err := h.Sessions.Current(r.Context(), bearer.SessionID)
 	switch {
 	case errors.Is(err, session.ErrSessionNotFound):
-		h.rec.refuse(w, r, operation, unauthorized(reasonSessionRevoked), nil)
+		refuse(w, r, operation, unauthorized(reasonSessionRevoked), nil)
 		return Bearer{}, session.Record{}, false
 	case err != nil:
-		h.rec.refuse(w, r, operation, unavailable(reasonStoreUnavailable), err)
+		refuse(w, r, operation, unavailable(reasonStoreUnavailable), err)
 		return Bearer{}, session.Record{}, false
 	case record.PrincipalID != bearer.PrincipalID:
-		h.rec.refuse(w, r, operation, unauthorized(reasonMalformed), nil)
+		refuse(w, r, operation, unauthorized(reasonMalformed), nil)
 		return Bearer{}, session.Record{}, false
 	case record.RevokedAt != nil:
-		h.rec.refuse(w, r, operation, unauthorized(reasonSessionRevoked), nil)
+		refuse(w, r, operation, unauthorized(reasonSessionRevoked), nil)
 		return Bearer{}, session.Record{}, false
 	case !record.ExpiresAt.After(h.Issuer.now()):
-		h.rec.refuse(w, r, operation, unauthorized(reasonSessionExpired), nil)
+		refuse(w, r, operation, unauthorized(reasonSessionExpired), nil)
 		return Bearer{}, session.Record{}, false
 	}
 	user, found, err := h.Users.State(r.Context(), bearer.PrincipalID)
 	switch {
 	case err != nil:
-		h.rec.refuse(w, r, operation, unavailable(reasonStoreUnavailable), err)
+		refuse(w, r, operation, unavailable(reasonStoreUnavailable), err)
 		return Bearer{}, session.Record{}, false
 	case !found:
-		h.rec.refuse(w, r, operation, unauthorized(reasonPrincipalNotFound), nil)
+		refuse(w, r, operation, unauthorized(reasonPrincipalNotFound), nil)
 		return Bearer{}, session.Record{}, false
 	case !user.IsActive:
-		h.rec.refuse(w, r, operation, unauthorized(reasonDeactivated), nil)
+		refuse(w, r, operation, unauthorized(reasonDeactivated), nil)
 		return Bearer{}, session.Record{}, false
 	case bearer.revisionStale(record, user):
-		h.rec.refuse(w, r, operation, unauthorized(reasonRevisionStale), nil)
+		refuse(w, r, operation, unauthorized(reasonRevisionStale), nil)
 		return Bearer{}, session.Record{}, false
 	}
 	return bearer, record, true

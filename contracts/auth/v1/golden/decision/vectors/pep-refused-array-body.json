@@ -1,0 +1,11 @@
+{
+  "expect": {
+    "outcome": "refused",
+    "question": null,
+    "refusal": "not a JSON object"
+  },
+  "id": "pep-refused-array-body",
+  "layer": "pep",
+  "request_raw": "[{\"schema_version\":\"authorization_request.v1\",\"principal_reference\":\"prf_EXAMPLE0000000000000001\",\"action\":\"acr.context.read\",\"resource\":{\"type\":\"repository\",\"key\":\"acme/api\",\"organization_id\":\"org_EXAMPLE0000000000000001\"},\"context\":{\"request_id\":\"req_EXAMPLE0000000000000000001\",\"client_service\":\"dev-health-web\"}}]",
+  "why": "an array body is refused."
+}

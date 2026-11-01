@@ -9,6 +9,7 @@ source_of_truth:
   - internal/platform/secrets/source.go
   - internal/auth/keystore/keystore.go
   - cmd/auth-migrate/main.go
+  - internal/auth/authconfig/workload.go
 applicability: current
 lifecycle: active
 ---
@@ -121,6 +122,9 @@ With `AUTH_MEMBERSHIP_ROUTES=true`, auth-service serves the membership, invite a
 - A write's refusals are named `error.v1` reason codes (for example 409 `last_owner`, `organization_suspended`, `already_member`, 404 `membership_not_found`, 400 `invite_invalid` for every unusable token); a store failure is a 503.
 - `organizations/deprovision` revokes every pending invite, removes every live membership (both tables each) and suspends the organization in one commit with one `auth.organization.deprovisioned` audit row; a repeat is a no-op. Afterwards the membership and invite writes of that organization refuse.
 - `invites/revoke` ends one pending invite: the body is `organization_id`, `invite_id` and `actor_principal_id`. The actor rule (an active superuser, or an owner or admin member) runs before the invite is read, so a refused actor gets the same 403 for an existing and an unknown invite. The rule runs again under the revoke's locks (the actor's and the inviter's rows, then the organization row). The answers: 200 `{invite_id, status: "revoked"}`, also for a repeat, which writes no second audit row; 404 `invite_not_found`; 409 `invite_not_pending` for an accepted or expired invite (the expiry is checked against the clock read after the invite row lock). A revoke writes no go-api `audit_logs` row.
+- `organizations/onboard` and `organizations/create` are not mounted until the embedded endpoint-profile document holds their rows.
+- `organizations/onboard` creates a user's first organization. The body is `{"principal_id", "organization_name", "description", "request_metadata"}`; it takes no slug, tier or settings. One commit writes the organization and the owner membership in both schemas and go-api's `audit_logs` row. A principal with a membership gets 409 `already_member`, a disabled one 403 `principal_deactivated`, under the principal row lock. A taken slug gets one 8 hex suffix.
+- `organizations/create` creates an organization for a superuser. The body is `{"actor_principal_id", "organization_name", "slug", "tier", "managed_by"}` and an optional `organization_description`, `settings` and `owner_principal_id`. The actor rule runs before any read and again under the verb's locks. One commit writes the organization and, when named, its owner, in both schemas.
 - `organizations/reactivate` has its row like the other routes. It ends an organization's suspension (a deprovision's included): the body is `{"organization_id", "actor_principal_id"}`, the actor must be an active superuser (read through the users seam, before anything else and again under the organization row lock), and the answer is `{"organization_id", "status": "active", "reactivated"}`. An organization that is not suspended answers 200 with `reactivated` false and writes nothing. A reactivation writes one `auth.organization.reactivated` audit row naming the actor, the `organization.reactivated` event and the revision, in one commit. It does not restore the memberships and invites a deprovision ended. A suspension in the auth schema ends only by this route: go-api's own `is_active` flows into the schema as a suspension, never as a reactivation.
 - `organizations/state` has its row. It answers `{"organization_id", "status", "revision"}` for the organization named by the body `{"organization_id"}`, the status and the revision read in one statement; go-api's `is_active` PATCH sends that revision as `if_revision` to suspend and reactivate, and a stale one answers 409 `state_changed` and writes nothing. It takes the session issuer service credential or the go-api workload token (admitted as the other provisioning routes are), reads no actor and writes no audit row; an unknown organization is 404 `organization_not_found` and a store fault 503 `store_unavailable`.
 - `organizations/suspend` mirrors reactivate: the body is `{"organization_id", "actor_principal_id"}`, the actor must be an active superuser (read through the users seam before anything else and again under the organization row lock), and the answer is `{"organization_id", "status": "suspended", "suspended"}`; an organization that is already suspended answers 200 with `suspended` false and writes nothing. It writes one `auth.organization.suspended` audit row naming the actor, the `organization.suspended` event and the revision in one commit. An actor with no `auth.principals` row, or any fault of the store, answers the fail-closed 503 `store_unavailable`.
@@ -137,7 +141,32 @@ With `AUTH_MEMBERSHIP_ROUTES=true`, auth-service serves the membership, invite a
   | `AUTH_WORKLOAD_BOOTSTRAP_FILE` | `workload` only: path of the workload bootstrap credential file (Compose). |
   | `AUTH_WORKLOAD_ISSUER` | `workload` only, required: auth-service's token issuer URL (`AUTH_TOKEN_ISSUER_URL`, https); every workload token must carry it. |
 
-  The exchange goes to the origin of `AUTH_PROXY_URL` (`POST /internal/v1/token/exchange`, which auth-service mounts only with `AUTH_WORKLOAD_EXCHANGE=true`); the subject file is read again for every exchange, and one exchange serves all the clients that selected `workload` (the provisioning clients and the session issue client). `workload` with a missing or invalid input is a start-up error naming it. A failed exchange fails that call (503) with no request to the provisioning routes; there is no fallback to `svc_authsess_`. The suspend route accepts the workload token only once its endpoint-profile row lists it.
+  The exchange goes to the origin of `AUTH_PROXY_URL` (`POST /internal/v1/token/exchange`, which auth-service mounts only while `AUTH_WORKLOAD_EXCHANGE` or `AUTH_WORKLOAD_BOOTSTRAP` is `true`; see [workload-token exchange](#workload-token-exchange)); the subject file is read again for every exchange, and one exchange serves all the clients that selected `workload` (the provisioning clients and the session issue client). `workload` with a missing or invalid input is a start-up error naming it. A failed exchange fails that call (503) with no request to the provisioning routes; there is no fallback to `svc_authsess_`. The suspend route accepts the workload token only once its endpoint-profile row lists it.
+
+### Workload token exchange
+
+The route `POST /internal/v1/token/exchange` is internal: go-api never forwards it. It is mounted while
+`AUTH_WORKLOAD_EXCHANGE` or `AUTH_WORKLOAD_BOOTSTRAP` is `true`, and each switch turns on one subject. Both need
+`AUTH_TOKEN_ISSUER_URL` (the `iss` of the workload tokens it signs). Any other value than `true` or `false` fails
+startup. The values are not secrets: a path names a file, and the files hold the secrets.
+
+| Environment | Default | Rule |
+| --- | --- | --- |
+| `AUTH_WORKLOAD_EXCHANGE` | `false` | `true` turns on the Kubernetes subject: a projected ServiceAccount token, reviewed by the cluster API server (TokenReview). Needs the five settings below. |
+| `AUTH_WORKLOAD_TRUST_DOMAIN` | unset | Required with the Kubernetes subject. Non-empty, at most 253 bytes, no surrounding whitespace. Names this cluster in the workload bindings. |
+| `AUTH_WORKLOAD_EXCHANGE_CLUSTER_ISSUER` | unset | Required with the Kubernetes subject. At most 512 bytes, no surrounding whitespace. The `iss` of the cluster's ServiceAccount tokens; a binding's `-issuer` must equal it. |
+| `AUTH_WORKLOAD_EXCHANGE_KUBE_API_URL` | unset | Required with the Kubernetes subject. An https origin: `https://host[:port]`, no path, query, fragment or credentials. |
+| `AUTH_WORKLOAD_EXCHANGE_KUBE_CA_FILE` | unset | Required with the Kubernetes subject. Absolute, clean path of the PEM bundle that the API server certificate must chain to. No other root is trusted. |
+| `AUTH_WORKLOAD_EXCHANGE_REVIEWER_TOKEN_FILE` | unset | Required with the Kubernetes subject. Absolute, clean path of auth-service's own token, which may create `tokenreviews`. Read again on every review (at most 16 KiB). |
+| `AUTH_WORKLOAD_BOOTSTRAP` | `false` | `true` turns on the Compose bootstrap credential subject. It reads no other setting. |
+
+A missing or malformed value stops auth-service at start (exit 1) with a message that names the variable and never
+its value. The chart renders the Kubernetes settings from `authService.workloadExchange` (see the
+[Kubernetes federation runbook](../../operate/runbooks/auth-workload-kubernetes-federation.md)); with the
+Compose profile the bootstrap subject is set up by the
+[bootstrap credential runbook](../../operate/runbooks/auth-workload-bootstrap-credential.md). The registry the
+exchange reads is in the [workload registry](workload-registry.md). The reasons that a refused exchange logs are in
+[Troubleshooting by reason](../../operate/runbooks/auth-workload-kubernetes-federation.md#troubleshooting-by-reason).
 
 ## auth-migrate
 
@@ -204,3 +233,4 @@ warning per attempt. See
 - `internal/platform/secrets/source.go`: `Resolve` (mutual exclusion, newline trim, error wording).
 - `internal/auth/authruntime/runtime.go`: `--version`, `--healthcheck`.
 - `cmd/auth-migrate/main.go`: environment names, `--check`, `runBudget`.
+- `internal/auth/authconfig/workload.go`: `workloadExchange` (the exchange settings, defaults and bounds), `HTTPSOrigin`.

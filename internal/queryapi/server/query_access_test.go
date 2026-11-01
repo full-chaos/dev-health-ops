@@ -217,6 +217,7 @@ var corpusAtAnotherAudience = map[string]string{
 	"invalid-order-audience-over-expiry.json":        "reject",
 	"invalid-order-audience-over-not-yet-valid.json": "reject",
 	"invalid-order-issuer-over-audience.json":        "reject",
+	"valid-act-auth-service.json":                    "reject",
 	"valid-auth-service.json":                        "reject",
 	// The ACR audiences (CHAOS-12248): an ACR token is refused here at any
 	// clock; a dev-health-api token presented to an ACR service is good here.

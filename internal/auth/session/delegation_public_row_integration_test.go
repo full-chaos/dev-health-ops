@@ -69,6 +69,14 @@ func TestDelegationWritesThePublicRow(t *testing.T) {
 	if got := d.publicAudit(t, ctx, publicStart, c); got != 1 {
 		t.Fatalf("impersonation_start rows = %d, want 1", got)
 	}
+	other := d.fixture(t, ctx)
+	if _, err := d.admin.Exec(ctx, `UPDATE public.memberships SET role = 'admin' WHERE user_id = $1`, other.target); err != nil {
+		t.Fatal(err)
+	}
+	second := d.start(t, ctx, other)
+	if got := d.count(t, ctx, `SELECT count(*) FROM public.impersonation_sessions WHERE id = $1 AND target_role = 'admin'`, second.ID); got != 1 {
+		t.Fatalf("the public row does not carry the locked role: %d", got)
+	}
 }
 
 // Either row of a Start refused by the database leaves neither row.

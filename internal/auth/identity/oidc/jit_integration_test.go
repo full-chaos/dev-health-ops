@@ -171,10 +171,7 @@ func (j *jitHarness) callback(t *testing.T, sub, email string) <-chan jitResult 
 	t.Helper()
 	s := j.start(t)
 	idToken := j.sign(t, j.claims(s.nonce, sub, email))
-	code := "code-" + uuid.NewString()
-	j.idp.mu.Lock()
-	j.idp.codes[code] = pendingCode{challenge: s.challenge, idToken: idToken}
-	j.idp.mu.Unlock()
+	code := j.idp.register(s.challenge, idToken)
 	out := make(chan jitResult, 1)
 	go func() {
 		login, _, err := j.svc.Callback(context.Background(), j.providerID, CallbackInput{Code: code, State: s.state, RequestID: &j.requestID,

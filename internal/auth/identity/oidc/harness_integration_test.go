@@ -12,12 +12,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -30,6 +28,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/ssoaudit"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/idpstub"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
 
@@ -172,103 +171,37 @@ func (r *recordingSessions) count() int {
 	return len(r.requests)
 }
 
-// fakeIdP is an OpenID provider over TLS: discovery, JWKS, a token endpoint
-// that checks PKCE, and an optional userinfo endpoint.
+// fakeIdP is the shared idpstub OpenID provider over TLS, with the OAuth2 social fake on the same server.
 type fakeIdP struct {
+	*idpstub.OIDC
 	server *httptest.Server
-	key    *rsa.PrivateKey
-	kid    string
-
-	mu         sync.Mutex
-	codes      map[string]pendingCode
-	tokenCalls int
-	userinfo   map[string]any
-	docIssuer  *string
-	oauth      *fakeOAuth
-	// failDiscovery and failUserinfo play a provider whose endpoint answers 502.
-	failDiscovery, failUserinfo bool
+	oauth  *fakeOAuth
+	// mu is held by tests while they edit the fake between a flow's start and its callback.
+	mu sync.Mutex
 }
-
-type pendingCode struct{ challenge, idToken string }
 
 func startIdP(t *testing.T) *fakeIdP {
 	t.Helper()
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	stub, err := idpstub.NewOIDC(idpstub.OIDCOptions{MinimalDiscovery: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	idp := &fakeIdP{key: key, kid: "k1", codes: map[string]pendingCode{}, oauth: newFakeOAuth()}
+	idp := &fakeIdP{OIDC: stub, oauth: newFakeOAuth()}
 	mux := http.NewServeMux()
 	idp.oauth.routes(mux)
-	mux.HandleFunc("/jwks", idp.serveJWKS)
-	mux.HandleFunc("/token", idp.serveToken)
-	mux.HandleFunc("/userinfo", idp.serveUserinfo)
-	mux.HandleFunc("/", idp.serveDiscovery)
+	mux.Handle("/", stub.Handler())
 	idp.server = httptest.NewTLSServer(mux)
+	stub.SetBaseURL(idp.server.URL)
 	t.Cleanup(idp.server.Close)
 	return idp
 }
 
+// register makes the IdP answer a fresh code, for the PKCE challenge, with idToken exactly as given.
+func (idp *fakeIdP) register(challenge, idToken string) string {
+	return idp.IssueCode(idpstub.CodeRequest{Challenge: challenge, IDToken: &idToken})
+}
+
 func b64(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
-
-func (idp *fakeIdP) serveJWKS(w http.ResponseWriter, _ *http.Request) {
-	pub := idp.key.PublicKey
-	_ = json.NewEncoder(w).Encode(map[string]any{"keys": []map[string]any{{
-		"kty": "RSA", "kid": idp.kid, "use": "sig", "alg": "RS256",
-		"n": b64(pub.N.Bytes()), "e": b64(big.NewInt(int64(pub.E)).Bytes()),
-	}}})
-}
-
-func (idp *fakeIdP) serveToken(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "bad form", http.StatusBadRequest)
-		return
-	}
-	idp.mu.Lock()
-	defer idp.mu.Unlock()
-	idp.tokenCalls++
-	pending, ok := idp.codes[r.PostForm.Get("code")]
-	sum := sha256.Sum256([]byte(r.PostForm.Get("code_verifier")))
-	if !ok || b64(sum[:]) != pending.challenge {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(`{"error":"invalid_grant"}`))
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "idp-access", "token_type": "Bearer",
-		"expires_in": 300, "id_token": pending.idToken})
-}
-
-func (idp *fakeIdP) serveUserinfo(w http.ResponseWriter, _ *http.Request) {
-	idp.mu.Lock()
-	defer idp.mu.Unlock()
-	if idp.failUserinfo {
-		http.Error(w, "unavailable", http.StatusBadGateway)
-		return
-	}
-	_ = json.NewEncoder(w).Encode(idp.userinfo)
-}
-
-func (idp *fakeIdP) serveDiscovery(w http.ResponseWriter, r *http.Request) {
-	if !strings.HasSuffix(r.URL.Path, "/.well-known/openid-configuration") {
-		http.NotFound(w, r)
-		return
-	}
-	issuer := idp.server.URL + strings.TrimSuffix(r.URL.Path, "/.well-known/openid-configuration")
-	idp.mu.Lock()
-	if idp.failDiscovery {
-		idp.mu.Unlock()
-		http.Error(w, "unavailable", http.StatusBadGateway)
-		return
-	}
-	if idp.docIssuer != nil {
-		issuer = *idp.docIssuer
-	}
-	idp.mu.Unlock()
-	_ = json.NewEncoder(w).Encode(map[string]any{"issuer": issuer, "token_endpoint": idp.server.URL + "/token",
-		"jwks_uri": idp.server.URL + "/jwks"})
-}
 
 func signRS256(t *testing.T, key *rsa.PrivateKey, header, claims map[string]any) string {
 	t.Helper()
@@ -556,7 +489,7 @@ func (h *harness) claims(nonce, sub, email string) map[string]any {
 
 func (h *harness) sign(t *testing.T, claims map[string]any) string {
 	t.Helper()
-	return signRS256(t, h.idp.key, map[string]any{"alg": "RS256", "kid": h.idp.kid, "typ": "JWT"}, claims)
+	return signRS256(t, h.idp.Keys().Key, map[string]any{"alg": "RS256", "kid": h.idp.Keys().KID, "typ": "JWT"}, claims)
 }
 
 // finish registers a fresh code for idToken at the IdP and runs the callback
@@ -568,10 +501,7 @@ func (h *harness) finish(t *testing.T, s started, idToken string) (Login, *Error
 
 func (h *harness) finishWith(t *testing.T, providerID uuid.UUID, s started, idToken string, withCookie bool) (Login, *Error) {
 	t.Helper()
-	code := "code-" + uuid.NewString()
-	h.idp.mu.Lock()
-	h.idp.codes[code] = pendingCode{challenge: s.challenge, idToken: idToken}
-	h.idp.mu.Unlock()
+	code := h.idp.register(s.challenge, idToken)
 	login, clear, err := h.svc.Callback(context.Background(), providerID, CallbackInput{
 		Code: code, State: s.state, RequestID: &h.requestID,
 		Cookie: func(name string) (string, bool) {

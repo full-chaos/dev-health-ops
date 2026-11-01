@@ -55,6 +55,7 @@ type pendingCode struct {
 	challenge, nonce, clientID string
 	user                       OIDCUser
 	claims                     func(map[string]any)
+	idToken                    *string
 }
 
 // CodeRequest registers an authorization code without the /authorize hop.
@@ -62,6 +63,9 @@ type CodeRequest struct {
 	Challenge, Nonce, ClientID string
 	User                       OIDCUser
 	Claims                     func(map[string]any)
+	// IDToken, when set, is returned as the id_token exactly as given (empty means an empty id_token), so a test
+	// can sign its own header and claims.
+	IDToken *string
 }
 
 // OIDC is an OpenID provider: discovery, JWKS, authorize, token and userinfo.
@@ -191,7 +195,7 @@ func (o *OIDC) IssueCode(req CodeRequest) string {
 	code := randomToken()
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	o.codes[code] = pendingCode{challenge: req.Challenge, nonce: req.Nonce, clientID: req.ClientID, user: req.User, claims: req.Claims}
+	o.codes[code] = pendingCode{challenge: req.Challenge, nonce: req.Nonce, clientID: req.ClientID, user: req.User, claims: req.Claims, idToken: req.IDToken}
 	return code
 }
 
@@ -394,17 +398,22 @@ func (o *OIDC) serveToken(w http.ResponseWriter, r *http.Request) {
 	if clientID == "" {
 		clientID = form.Get("client_id")
 	}
-	claims := o.IDTokenClaims(pending.user, clientID, pending.nonce)
-	if pending.claims != nil {
-		pending.claims(claims)
-	}
-	if o.opts.Override != nil {
-		o.opts.Override(claims)
-	}
-	idToken, err := o.SignIDToken(nil, claims)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	var idToken string
+	if pending.idToken != nil {
+		idToken = *pending.idToken
+	} else {
+		claims := o.IDTokenClaims(pending.user, clientID, pending.nonce)
+		if pending.claims != nil {
+			pending.claims(claims)
+		}
+		if o.opts.Override != nil {
+			o.opts.Override(claims)
+		}
+		var err error
+		if idToken, err = o.SignIDToken(nil, claims); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 	access := oidcAccessPrefix + randomToken()
 	o.mu.Lock()

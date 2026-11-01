@@ -327,3 +327,14 @@ func TestOIDCAcceptAnyCodeAnswersTheNextUser(t *testing.T) {
 		t.Fatalf("email_verified present for a user that left it nil: %v", claims)
 	}
 }
+
+func TestOIDCIssueCodeReturnsAPreSignedIDTokenVerbatim(t *testing.T) {
+	o, srv := startOIDC(t, idpstub.OIDCOptions{})
+	for _, want := range []string{"a.b.c", ""} {
+		code := o.IssueCode(idpstub.CodeRequest{Challenge: pkce("v"), IDToken: &want})
+		status, tok := exchange(t, srv, code, "v")
+		if got, _ := tok["id_token"].(string); status != http.StatusOK || got != want {
+			t.Fatalf("id_token = %q (status %d), want %q", got, status, want)
+		}
+	}
+}

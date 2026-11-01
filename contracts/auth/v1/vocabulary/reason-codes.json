@@ -8,6 +8,7 @@
     ],
     "values": [
       "compromised",
+      "domain_revoked",
       "owner_request"
     ]
   },
@@ -29,6 +30,7 @@
       "revision_conflict",
       "internal_error",
       "compromised",
+      "domain_revoked",
       "owner_request",
       "role_granted",
       "role_revoked",

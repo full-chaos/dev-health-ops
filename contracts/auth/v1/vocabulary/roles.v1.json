@@ -101,6 +101,11 @@
         "admin.users",
         "admin.impersonate"
       ]
+    },
+    {
+      "role": "platform_owner",
+      "scope": "platform",
+      "actions": []
     }
   ]
 }

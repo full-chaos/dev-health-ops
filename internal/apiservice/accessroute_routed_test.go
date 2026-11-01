@@ -360,17 +360,28 @@ type corpusManifest struct {
 	} `json:"vectors"`
 }
 
-// corpusAtAuthService are the rows decided at auth-service, with go-api's
-// decision of the same token at the same clock: the dev-health-api token in
-// its window is good; expired, not yet valid, another issuer and an
-// auth-service token are refused.
-var corpusAtAuthService = map[string]string{
+// corpusAtAnotherAudience are the rows decided at another audience
+// (auth-service, acr-api, acr-mcp), with go-api's decision of the same token at
+// the same clock: the dev-health-api token in its window is good; expired, not
+// yet valid, another issuer, an auth-service token and an ACR token are
+// refused.
+var corpusAtAnotherAudience = map[string]string{
 	"invalid-aud-api-token-at-auth-service.json":     "accept",
 	"invalid-order-audience-over-expiry.json":        "reject",
 	"invalid-order-audience-over-not-yet-valid.json": "reject",
 	"invalid-order-issuer-over-audience.json":        "reject",
 	"valid-act-auth-service.json":                    "reject",
 	"valid-auth-service.json":                        "reject",
+	// The ACR audiences (CHAOS-12248): an ACR token is refused here at any
+	// clock; a dev-health-api token presented to an ACR service is good here.
+	"invalid-aud-acr-api-token-at-acr-mcp.json":      "reject",
+	"invalid-aud-acr-api-token-at-auth-service.json": "reject",
+	"invalid-aud-acr-mcp-token-at-acr-api.json":      "reject",
+	"invalid-aud-acr-mcp-token-at-auth-service.json": "reject",
+	"invalid-aud-api-token-at-acr-api.json":          "accept",
+	"invalid-aud-api-token-at-acr-mcp.json":          "accept",
+	"valid-acr-api.json":                             "reject",
+	"valid-acr-mcp.json":                             "reject",
 }
 
 // TestA2CorpusThroughGoAPI runs every vector of the signed access-token
@@ -397,7 +408,7 @@ func TestA2CorpusThroughGoAPI(t *testing.T) {
 			expect := row.Expect
 			if row.Audience != accessTokenAudienceAPI {
 				var known bool
-				if expect, known = corpusAtAuthService[row.File]; !known {
+				if expect, known = corpusAtAnotherAudience[row.File]; !known {
 					t.Fatalf("a corpus row decided at %s that this test does not place at go-api", row.Audience)
 				}
 			}

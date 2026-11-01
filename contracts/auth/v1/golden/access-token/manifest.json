@@ -13,7 +13,7 @@
       "alg": "EdDSA",
       "use": "sig",
       "kid": "auth-example-2026-04",
-      "x": "hQhyNmeyoo1Rz0_e6VFw7xhJRieIr-XfDUtn0PL3OPs"
+      "x": "6HWc3HoMtq3zC_-eijQV8lVvMN7OmFQKGeuAQZxBCxQ"
     }
   ],
   "decision_order": [
@@ -108,6 +108,70 @@
       "why": "alg none with an empty signature."
     },
     {
+      "file": "invalid-aud-acr-api-token-at-acr-mcp.json",
+      "now": 1760000300,
+      "verify_as_audience": "acr-mcp",
+      "expect": "reject",
+      "reason": "audience",
+      "why": "A valid acr-api token presented to acr-mcp."
+    },
+    {
+      "file": "invalid-aud-acr-api-token-at-api.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "audience",
+      "why": "A valid acr-api token presented to dev-health-api (go-api, query-api)."
+    },
+    {
+      "file": "invalid-aud-acr-api-token-at-auth-service.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "audience",
+      "why": "A valid acr-api token presented to auth-service."
+    },
+    {
+      "file": "invalid-aud-acr-mcp-token-at-acr-api.json",
+      "now": 1760000300,
+      "verify_as_audience": "acr-api",
+      "expect": "reject",
+      "reason": "audience",
+      "why": "A valid acr-mcp token presented to acr-api: each ACR service accepts its own audience only."
+    },
+    {
+      "file": "invalid-aud-acr-mcp-token-at-api.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "reject",
+      "reason": "audience",
+      "why": "A valid acr-mcp token presented to dev-health-api (go-api, query-api)."
+    },
+    {
+      "file": "invalid-aud-acr-mcp-token-at-auth-service.json",
+      "now": 1760000300,
+      "verify_as_audience": "auth-service",
+      "expect": "reject",
+      "reason": "audience",
+      "why": "A valid acr-mcp token presented to auth-service."
+    },
+    {
+      "file": "invalid-aud-api-token-at-acr-api.json",
+      "now": 1760000300,
+      "verify_as_audience": "acr-api",
+      "expect": "reject",
+      "reason": "audience",
+      "why": "A valid dev-health-api token presented to acr-api."
+    },
+    {
+      "file": "invalid-aud-api-token-at-acr-mcp.json",
+      "now": 1760000300,
+      "verify_as_audience": "acr-mcp",
+      "expect": "reject",
+      "reason": "audience",
+      "why": "A valid dev-health-api token presented to acr-mcp."
+    },
+    {
       "file": "invalid-aud-api-token-at-auth-service.json",
       "now": 1760000300,
       "verify_as_audience": "auth-service",
@@ -130,7 +194,7 @@
       "expect": "reject",
       "reason": "contract",
       "contract_stage": "schema",
-      "why": "an audience outside the contract's two."
+      "why": "an audience the contract does not name."
     },
     {
       "file": "invalid-delayed-nbf-before-nbf.json",
@@ -411,6 +475,20 @@
       "reason": "contract",
       "contract_stage": "schema",
       "why": "typ is case-sensitive."
+    },
+    {
+      "file": "valid-acr-api.json",
+      "now": 1760000300,
+      "verify_as_audience": "acr-api",
+      "expect": "accept",
+      "why": "The token for acr-api, verified as that audience. It differs from valid-api in aud and scope only."
+    },
+    {
+      "file": "valid-acr-mcp.json",
+      "now": 1760000300,
+      "verify_as_audience": "acr-mcp",
+      "expect": "accept",
+      "why": "The token for acr-mcp, verified as that audience. It differs from valid-api in aud and scope only."
     },
     {
       "file": "valid-act-api.json",

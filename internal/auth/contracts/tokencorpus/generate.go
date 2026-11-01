@@ -17,6 +17,8 @@ const (
 	Issuer        = "https://auth.example.test"
 	AudienceAPI   = "dev-health-api"
 	AudienceAuth  = "auth-service"
+	AudienceACR   = "acr-api"
+	AudienceMCP   = "acr-mcp"
 	KidActive     = "auth-example-2026-10"
 	KidOverlap    = "auth-example-2026-11"
 	KidUnknown    = "auth-example-2027-01"
@@ -212,7 +214,7 @@ func Generate(random io.Reader) (*Corpus, error) {
 	b.add("invalid-iss-not-an-https-url", good, strings.Replace(api.text(), Issuer, "http://auth.example.test", 1), edSigner(activeKey),
 		contractRefusal("schema", "an http issuer."))
 	b.add("invalid-aud-unknown", good, strings.Replace(api.text(), `"dev-health-api"`, `"dev-health-workload"`, 1), edSigner(activeKey),
-		contractRefusal("schema", "an audience outside the contract's two."))
+		contractRefusal("schema", "an audience the contract does not name."))
 	b.add("invalid-aud-api-token-at-auth-service", good, api.text(), edSigner(activeKey),
 		reject(now, AudienceAuth, ReasonAudience, "A valid dev-health-api token presented to auth-service."))
 	b.add("invalid-aud-auth-token-at-api", good, auth.text(), edSigner(activeKey),
@@ -234,6 +236,34 @@ func Generate(random io.Reader) (*Corpus, error) {
 		bad.act = c.raw
 		b.add(c.name, good, bad.text(), edSigner(activeKey), contractRefusal("schema", c.why))
 	}
+
+	// The ACR audiences (CHAOS-12248): each ACR service accepts its own one, and
+	// no platform verifier (go-api and query-api at dev-health-api, auth-service)
+	// accepts either. Each refused token is the valid ACR token of its audience.
+	acrAPI := api
+	acrAPI.aud, acrAPI.scope = AudienceACR, "acr:api"
+	acrMCP := api
+	acrMCP.aud, acrMCP.scope = AudienceMCP, "acr:mcp"
+	b.add("valid-acr-api", good, acrAPI.text(), edSigner(activeKey),
+		accept(now, AudienceACR, "The token for acr-api, verified as that audience. It differs from valid-api in aud and scope only."))
+	b.add("valid-acr-mcp", good, acrMCP.text(), edSigner(activeKey),
+		accept(now, AudienceMCP, "The token for acr-mcp, verified as that audience. It differs from valid-api in aud and scope only."))
+	b.add("invalid-aud-acr-api-token-at-api", good, acrAPI.text(), edSigner(activeKey),
+		reject(now, AudienceAPI, ReasonAudience, "A valid acr-api token presented to dev-health-api (go-api, query-api)."))
+	b.add("invalid-aud-acr-mcp-token-at-api", good, acrMCP.text(), edSigner(activeKey),
+		reject(now, AudienceAPI, ReasonAudience, "A valid acr-mcp token presented to dev-health-api (go-api, query-api)."))
+	b.add("invalid-aud-acr-api-token-at-auth-service", good, acrAPI.text(), edSigner(activeKey),
+		reject(now, AudienceAuth, ReasonAudience, "A valid acr-api token presented to auth-service."))
+	b.add("invalid-aud-acr-mcp-token-at-auth-service", good, acrMCP.text(), edSigner(activeKey),
+		reject(now, AudienceAuth, ReasonAudience, "A valid acr-mcp token presented to auth-service."))
+	b.add("invalid-aud-acr-mcp-token-at-acr-api", good, acrMCP.text(), edSigner(activeKey),
+		reject(now, AudienceACR, ReasonAudience, "A valid acr-mcp token presented to acr-api: each ACR service accepts its own audience only."))
+	b.add("invalid-aud-acr-api-token-at-acr-mcp", good, acrAPI.text(), edSigner(activeKey),
+		reject(now, AudienceMCP, ReasonAudience, "A valid acr-api token presented to acr-mcp."))
+	b.add("invalid-aud-api-token-at-acr-api", good, api.text(), edSigner(activeKey),
+		reject(now, AudienceACR, ReasonAudience, "A valid dev-health-api token presented to acr-api."))
+	b.add("invalid-aud-api-token-at-acr-mcp", good, api.text(), edSigner(activeKey),
+		reject(now, AudienceMCP, ReasonAudience, "A valid dev-health-api token presented to acr-mcp."))
 	wrongSub := api
 	wrongSub.sub = "usr_AAAAAAAAAAAAAAAAAAAAAA"
 	b.add("invalid-sub-user-prefix", good, wrongSub.text(), edSigner(activeKey),

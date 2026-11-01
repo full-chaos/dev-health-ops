@@ -112,6 +112,31 @@ func TestScopesDoNotMix(t *testing.T) {
 	}
 }
 
+// platform_owner is a marker role (CHAOS-12294): it holds NO action, so an
+// owner-only principal passes no authorization check. To act, an owner also
+// holds a platform_admin row.
+func TestPlatformOwnerIsAMarkerHoldingNoAction(t *testing.T) {
+	c := Default()
+	owner, err := c.Role("platform_owner")
+	if err != nil {
+		t.Fatalf("platform_owner is not in the catalog: %v", err)
+	}
+	if owner.Scope != ScopePlatform {
+		t.Errorf("platform_owner scope = %s, want platform", owner.Scope)
+	}
+	if len(owner.Actions) != 0 {
+		t.Errorf("platform_owner actions = %v, want none", owner.Actions)
+	}
+	for _, a := range c.Actions() {
+		if c.Allows("platform_owner", a.ID) {
+			t.Errorf("platform_owner allows %s", a.ID)
+		}
+	}
+	if admin, _ := c.Role("platform_admin"); len(admin.Actions) == 0 {
+		t.Error("platform_admin lost its actions")
+	}
+}
+
 func TestLoadRefusesMalformedCatalogs(t *testing.T) {
 	const okA = `{"schema_version":"actions.v1","catalog_version":1,"description":"d","actions":[{"action":"a.b","scope":"organization","resource_kind":"organization","risk_class":"low","cache_class":"decision_bound","impersonation":"denied"},{"action":"a.c","scope":"organization","resource_kind":"organization","risk_class":"low","cache_class":"decision_bound","impersonation":"denied"}]}`
 	const okR = `{"schema_version":"roles.v1","catalog_version":1,"description":"d","roles":[{"role":"r","scope":"organization","actions":["a.b"]}]}`

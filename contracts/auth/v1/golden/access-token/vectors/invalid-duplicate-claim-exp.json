@@ -1,5 +1,5 @@
 {
   "header_json": "{\"alg\":\"EdDSA\",\"typ\":\"at+jwt\",\"kid\":\"auth-example-2026-10\"}",
   "payload_json": "{\"iss\":\"https://auth.example.test\",\"aud\":\"dev-health-api\",\"sub\":\"prn_AAAAAAAAAAAAAAAAAAAAAA\",\"principal_type\":\"human\",\"sid\":\"ses_AAAAAAAAAAAAAAAAAAAAAQ\",\"jti\":\"000000000000000000000001\",\"iat\":1760000000,\"nbf\":1760000000,\"exp\":1760000600,\"exp\":1760003600,\"org_id\":\"00000000-0000-4000-8000-000000000001\",\"scope\":\"api:access\"}",
-  "signature_hex": "7d4af51ee697f8c19f69c53f86c5290ec3a99366dea354c24762a9e10dac83a3aeabfa38603b4a4b1c7b54c6b1a27d8f2b676416d71bee7e6420cd9c6e344408"
+  "signature_hex": "5c2e20efa6ff543dab6a57ea2d85eaef72ee013aefd2ba06660af6b047d1b74df73a8efbea93c5bfe581c9c6da8d5a4d1672406c1fb21dcc1f1084bf27a90e0d"
 }

@@ -228,7 +228,7 @@ VALUES ($1, $2, $3, 'oidc', 'active', '{}'::json)`, row, org, "oidc-"+row.String
 	subject := "sub-" + uuid.NewString()
 	if _, err := owned.ProvisionAndJoin(ctx, identity.ProvisionRequest{
 		Key:   identity.ExternalKey{Issuer: "https://idp.example.test", Provider: identity.Provider(row.String()), Subject: subject},
-		Email: uniq("sj"), Actor: identity.SelfSignUp(nil), LegacyProvider: "oidc", LegacySubject: subject,
+		Email: "sj-" + uuid.NewString()[:8] + "@example.com", Actor: identity.SelfSignUp(nil), LegacyProvider: "oidc", LegacySubject: subject,
 	}, join, nil); err != nil {
 		t.Fatalf("new account: %v", err)
 	}

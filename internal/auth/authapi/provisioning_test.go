@@ -296,6 +296,7 @@ type provFixture struct {
 	invites                                     *fakeInvites
 	deprovision                                 *fakeDeprovision
 	reactivate                                  *fakeReactivate
+	sa                                          *fakeServiceAccounts
 	reader                                      *sdkmetric.ManualReader
 	logs                                        *bytes.Buffer
 	mux                                         *http.ServeMux
@@ -370,8 +371,9 @@ func newProvFixtureWith(t *testing.T, profileRows []byte) *provFixture {
 func newProvFixtureFor(t *testing.T, profileRows []byte, workload *SessionIssueWorkload) *provFixture {
 	t.Helper()
 	f := &provFixture{t: t, creds: &fakeScopeCredentials{}, orgs: &fakeEnsurer{}, members: &fakeMembers{}, invites: &fakeInvites{},
-		deprovision: &fakeDeprovision{}, reactivate: &fakeReactivate{}, reader: sdkmetric.NewManualReader(), logs: &bytes.Buffer{},
+		deprovision: &fakeDeprovision{}, reactivate: &fakeReactivate{}, sa: &fakeServiceAccounts{}, reader: sdkmetric.NewManualReader(), logs: &bytes.Buffer{},
 		org: uuid.New(), admin: uuid.New(), owner: uuid.New(), viewer: uuid.New(), super: uuid.New(), target: uuid.New(), x: uuid.New()}
+	f.account()
 	f.users = &fakeProvUsers{
 		states: map[uuid.UUID]UserState{
 			f.admin: {IsActive: true}, f.owner: {IsActive: true}, f.viewer: {IsActive: true},
@@ -380,7 +382,7 @@ func newProvFixtureFor(t *testing.T, profileRows []byte, workload *SessionIssueW
 		roles: map[[2]uuid.UUID]string{{f.admin, f.org}: "admin", {f.owner, f.org}: "owner", {f.viewer, f.org}: "viewer"},
 	}
 	routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
-		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ProfileRows: profileRows,
+		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa, ProfileRows: profileRows,
 		Workload: workload,
 		Logger:   slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		Meter:    sdkmetric.NewMeterProvider(sdkmetric.WithReader(f.reader)).Meter("test")})
@@ -408,7 +410,7 @@ func (f *provFixture) post(path, body string, header map[string]string) *httptes
 }
 
 func (f *provFixture) storeCalls() int {
-	return f.orgs.calls + f.members.calls + f.invites.calls + f.deprovision.calls + f.reactivate.calls + f.reactivate.suspends
+	return f.orgs.calls + f.members.calls + f.invites.calls + f.deprovision.calls + f.reactivate.calls + f.reactivate.suspends + f.sa.calls
 }
 
 func (f *provFixture) uses(op string) (int64, bool) {
@@ -473,7 +475,7 @@ type routeCase struct {
 }
 
 func routeCases() []routeCase {
-	return []routeCase{
+	return append([]routeCase{
 		{opMembershipAdd, PatternMembershipAdd, func(f *provFixture, a uuid.UUID) map[string]any {
 			return map[string]any{"organization_id": f.org.String(), "principal_id": f.target.String(), "actor_principal_id": a.String(),
 				"role": "member", "invited_by_principal_id": nil}
@@ -511,7 +513,13 @@ func routeCases() []routeCase {
 		{opOrgState, PatternOrgState, func(f *provFixture, _ uuid.UUID) map[string]any {
 			return map[string]any{"organization_id": f.org.String()}
 		}, []string{"organization_id"}},
-	}
+		{opOrgOnboard, PatternOrgOnboard, func(_ *provFixture, a uuid.UUID) map[string]any {
+			return map[string]any{"principal_id": a.String(), "organization_name": "Acme"}
+		}, []string{"principal_id", "organization_name"}},
+		{opOrgCreate, PatternOrgCreate, func(f *provFixture, a uuid.UUID) map[string]any {
+			return map[string]any{"actor_principal_id": a.String(), "organization_name": "Acme", "slug": "acme", "tier": "community", "managed_by": "stripe"}
+		}, []string{"actor_principal_id", "organization_name", "managed_by"}},
+	}, serviceAccountCases()...)
 }
 
 // fakeInviteID is the invite the revoke route case names.
@@ -1158,7 +1166,7 @@ func TestOrgSuspendIsOnTheStartupGate(t *testing.T) {
 	}
 	f := newProvFixture(t)
 	routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
-		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate,
+		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa,
 		ProfileRows: embeddedDocWithoutRow(t, PatternOrgSuspend)})
 	if !errors.Is(err, errProvisioningRows) || routes != nil || !strings.Contains(err.Error(), "POST "+PatternOrgSuspend+" ") {
 		t.Fatalf("a document without the suspend row: %d routes, %v; want none and a refusal naming the route", len(routes), err)

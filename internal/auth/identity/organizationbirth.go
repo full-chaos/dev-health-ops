@@ -16,6 +16,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/registerorg"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 var (
@@ -80,7 +81,7 @@ func newOrganizationBirth(slug, name string, owner *uuid.UUID) organizationBirth
 }
 
 // freeOrganizationSlug returns slug, or slug with one random suffix when either
-// schema holds it. A purge leaves the suspended auth row, so a slug can be taken
+// schema holds it in any case, as go-api's slug read folds case. A purge leaves the suspended auth row, so a slug can be taken
 // in auth alone. It runs before the commit: the outbox event carries the slug.
 func (s *Store) freeOrganizationSlug(ctx context.Context, slug string) (string, error) {
 	held, err := s.organizationSlugHeld(ctx, slug)
@@ -103,8 +104,8 @@ func (s *Store) freeOrganizationSlug(ctx context.Context, slug string) (string, 
 
 func (s *Store) organizationSlugHeld(ctx context.Context, slug string) (bool, error) {
 	var held bool
-	err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM public.organizations WHERE slug = $1)
-  OR EXISTS (SELECT 1 FROM `+s.q+`.organizations WHERE slug = $1)`, slug).Scan(&held)
+	err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM public.organizations WHERE lower(slug) = $1)
+  OR EXISTS (SELECT 1 FROM `+s.q+`.organizations WHERE lower(slug) = $1)`, pythonparity.Lower(slug)).Scan(&held)
 	return held, err
 }
 

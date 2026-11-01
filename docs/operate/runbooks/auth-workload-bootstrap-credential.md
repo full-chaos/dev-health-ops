@@ -195,3 +195,48 @@ revokes one. Deliver the new file to the workload's secret mount.
   `bootstrap-rotate -workload NAME -out PATH -overlap 0s -apply` (the old value is refused at once) and deliver
   the new file. If two are live (a rotation landed), run `bootstrap-disable -workload NAME -apply`, then
   `bootstrap-create`.
+
+## Disable a workload
+
+```sh
+auth-migrate workloads disable -workload NAME
+auth-migrate workloads disable -workload NAME -apply
+```
+
+The verb sets the disabled mark on the workload row and on its principal in one transaction and writes one
+audit row. The exchange then refuses every binding of the workload and
+`bootstrap-create` and `bootstrap-rotate` refuse it. A repeat writes nothing. It does not revoke live bootstrap
+values: run `bootstrap-disable` as well, because `enable` refuses while one is live. Undo it with `enable` (see
+above).
+
+## Rebind a recreated ServiceAccount
+
+A binding can pin the UID of its Kubernetes ServiceAccount. A ServiceAccount that is deleted and created again
+with the same name has a new UID, and the exchange refuses it (`uid_mismatch`). A recreated ServiceAccount is a
+new identity: moving the pin is a trust change. Read the new UID from the cluster, never from the failing
+caller or its token:
+
+```sh
+kubectl get sa NAME -n NAMESPACE -o jsonpath='{.metadata.uid}'
+auth-migrate workloads rebind -trust-domain T -issuer I -namespace NAMESPACE -service-account NAME -uid UID
+auth-migrate workloads rebind -trust-domain T -issuer I -namespace NAMESPACE -service-account NAME -uid UID -apply
+```
+
+- The tuple names the binding; it is unique across workloads. An unknown tuple is refused and nothing is written.
+- The change and its audit row (`auth.workload.binding_rebound`, with `binding_id` and `binding_disabled`)
+  commit in one transaction. The old UID is refused at once and the new one accepted.
+- The same UID is a no-op. A binding without a pin gets one.
+- Rebind never enables a disabled binding (`binding_disabled` = `true` in the audit row). Use `binding-enable`.
+- The verb never prints a UID.
+
+## Disable or enable one binding
+
+```sh
+auth-migrate workloads binding-disable -trust-domain T -issuer I -namespace NAMESPACE -service-account NAME -apply
+auth-migrate workloads binding-enable -trust-domain T -issuer I -namespace NAMESPACE -service-account NAME -apply
+```
+
+`binding-disable` makes the exchange refuse that one binding at once and leaves the workload and its other
+bindings as they are. `binding-enable` clears the mark. Each writes one audit row
+(`auth.workload.binding_disabled`, `auth.workload.binding_enabled`); a repeat writes nothing. Without `-apply`
+the verb is a dry run.

@@ -80,7 +80,7 @@ func TestProvisioningRoutesNeedTheirProfileRows(t *testing.T) {
 	// row builds no route at all.
 	f := newProvFixture(t)
 	routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
-		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate,
+		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa,
 		ProfileRows: plant(func(row map[string]any) (map[string]any, bool) { return row, row["route"] != PatternInviteAccept })})
 	if !errors.Is(err, errProvisioningRows) || routes != nil {
 		t.Fatalf("ProvisioningRoutes over a document without a row: %d routes, %v; want none and a refusal", len(routes), err)
@@ -98,7 +98,7 @@ func TestProvisioningRoutesRefuseUserTokens(t *testing.T) {
 	pool, connects := usertokens.CountingPool(t)
 	f := newProvFixture(t)
 	routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: servicecred.PG{Pool: pool}, Users: f.users, Reader: noRows{},
-		Organizations: f.orgs, Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ProfileRows: docWithRow(t, PatternOrgSuspend),
+		Organizations: f.orgs, Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa, ProfileRows: docWithRow(t, PatternOrgSuspend),
 		Logger: slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))})
 	if err != nil {
 		t.Fatal(err)
@@ -156,8 +156,8 @@ func TestTheReactivateRouteIsInTheStartupGate(t *testing.T) {
 		}
 		routes++
 	}
-	if routes != 11 {
-		t.Fatalf("%d provisioning routes served, want 11", routes)
+	if routes != 17 {
+		t.Fatalf("%d provisioning routes served, want 17", routes)
 	}
 	for _, line := range strings.Split(f.logs.String(), "\n") {
 		if strings.Contains(line, "not mounted") && !strings.Contains(line, PatternOrgState) {
@@ -254,7 +254,7 @@ func provisioningRoutesOver(t *testing.T, rows []byte, workload *SessionIssueWor
 	t.Helper()
 	f := newProvFixture(t)
 	routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
-		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, Workload: workload, ProfileRows: rows})
+		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa, Workload: workload, ProfileRows: rows})
 	var patterns []string
 	for _, route := range routes {
 		patterns = append(patterns, route.Pattern)
@@ -271,15 +271,17 @@ func provisioningRoutesOver(t *testing.T, rows []byte, workload *SessionIssueWor
 // is the whole admitted set.
 func TestProvisioningRoutesMountOnlyOnRowsAcceptingEveryAdmittedClass(t *testing.T) {
 	workload := newWorkloadIssueFixture(t).workload
+	// The org state read is dark: not on the startup gate, mounted only on a row.
+	dark := []string{PatternOrgState}
 	for op, pattern := range provisioningRouteOps {
 		issuerOnly := plantClasses(t, pattern, serviceSessionIssuerClass)
 		both := plantClasses(t, pattern, serviceSessionIssuerClass, workloadTokenClass)
-		if workloadOperations[op] && pattern != PatternOrgState {
+		if workloadOperations[op] && !slices.Contains(dark, pattern) {
 			if _, err := provisioningRoutesOver(t, issuerOnly, workload); !errors.Is(err, errProvisioningRows) ||
 				!strings.Contains(err.Error(), "POST "+pattern+" ") {
 				t.Errorf("%s: an issuer-only row with the workload path configured: %v, want a refusal naming the route", op, err)
 			}
-		} else if pattern != PatternOrgState {
+		} else if !slices.Contains(dark, pattern) {
 			if _, err := provisioningRoutesOver(t, issuerOnly, workload); err != nil {
 				t.Errorf("%s: a non-workload route on an issuer-only row: %v, want it mounted", op, err)
 			}
@@ -291,22 +293,24 @@ func TestProvisioningRoutesMountOnlyOnRowsAcceptingEveryAdmittedClass(t *testing
 			t.Errorf("%s: a row listing both classes: %v, want it mounted", op, err)
 		}
 	}
-	mounted := func(rows []byte, workload *SessionIssueWorkload) bool {
-		patterns, err := provisioningRoutesOver(t, rows, workload)
-		if err != nil {
-			t.Fatalf("org state row: %v", err)
+	for _, pattern := range dark {
+		mounted := func(rows []byte, workload *SessionIssueWorkload) bool {
+			patterns, err := provisioningRoutesOver(t, rows, workload)
+			if err != nil {
+				t.Fatalf("%s row: %v", pattern, err)
+			}
+			return slices.Contains(patterns, pattern)
 		}
-		return slices.Contains(patterns, PatternOrgState)
-	}
-	issuerOnly := plantClasses(t, PatternOrgState, serviceSessionIssuerClass)
-	if mounted(issuerOnly, workload) {
-		t.Error("the org state route mounted on an issuer-only row with the workload path configured")
-	}
-	if !mounted(issuerOnly, nil) {
-		t.Error("the org state route did not mount on an issuer-only row without the workload path")
-	}
-	if !mounted(plantClasses(t, PatternOrgState, serviceSessionIssuerClass, workloadTokenClass), workload) {
-		t.Error("the org state route did not mount on a row listing both classes")
+		issuerOnly := plantClasses(t, pattern, serviceSessionIssuerClass)
+		if mounted(issuerOnly, workload) {
+			t.Errorf("%s mounted on an issuer-only row with the workload path configured", pattern)
+		}
+		if !mounted(issuerOnly, nil) {
+			t.Errorf("%s did not mount on an issuer-only row without the workload path", pattern)
+		}
+		if !mounted(plantClasses(t, pattern, serviceSessionIssuerClass, workloadTokenClass), workload) {
+			t.Errorf("%s did not mount on a row listing both classes", pattern)
+		}
 	}
 }
 

@@ -142,6 +142,8 @@ FILES=(
   # CHAOS-11649: the shared bounded retry loop the pull helper uses, and its fixture suite.
   "${ROOT}/ci/lib/retry.sh"
   "${ROOT}/ci/retry_test.sh"
+  # CHAOS-12372: the bounded retry of registry blob-fetch failures in image builds.
+  "${ROOT}/ci/lib/registry_retry.sh"
   # the bounded ghcr.io login fallback for merge_group jobs, and its fixture suite.
   "${ROOT}/ci/lib/ghcr_login.sh"
   "${ROOT}/ci/ghcr_login_test.sh"

@@ -1,0 +1,61 @@
+{
+  "expect": {
+    "allowed": false,
+    "cache_class": "none",
+    "expires_in_seconds": null,
+    "policy_revision": 8,
+    "reason": "delegation_invalid"
+  },
+  "id": "delegated-request-for-another-organization-is-delegation-invalid",
+  "layer": "pdp",
+  "request": {
+    "action": "org.read",
+    "organization_id": "org-b",
+    "resource_key": "",
+    "resource_kind": "organization"
+  },
+  "state": {
+    "catalog": "embedded",
+    "clock": "2027-01-15T08:00:00Z",
+    "delegation": {
+      "actor_platform_role": "platform_admin",
+      "assurance": "aal1",
+      "chain": [
+        {
+          "actor": "prn_actor",
+          "permitted_actions": [
+            "analytics.read",
+            "members.manage",
+            "org.read",
+            "org.write"
+          ]
+        }
+      ],
+      "target_organization_id": "org-a"
+    },
+    "grants": [],
+    "grants_error": false,
+    "memberships": {
+      "org-a": {
+        "org_id": "org-a",
+        "role": "owner",
+        "status": "active"
+      },
+      "org-b": {
+        "org_id": "org-b",
+        "role": "owner",
+        "status": "active"
+      }
+    },
+    "organizations": {
+      "org-a": "active",
+      "org-b": "active"
+    },
+    "platform_role": "",
+    "principal_status": "active",
+    "service_accounts": {},
+    "snapshot": "grant",
+    "workload": null
+  },
+  "why": "A delegated session is bound to its target organization: a request for org-b is refused as an invalid delegation although the effective subject holds a live owner membership in org-b."
+}

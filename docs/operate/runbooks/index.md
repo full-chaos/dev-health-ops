@@ -23,6 +23,7 @@ lifecycle: active
 - [Auth-service scrape check and alert import](auth-service-scrape-and-alerts.md)
 - [Auth users flip-back grants](auth-users-flip-back-grants.md)
 - [Workload bootstrap credential](auth-workload-bootstrap-credential.md)
+- [Service accounts](auth-service-accounts.md)
 - [Kubernetes workload federation](auth-workload-kubernetes-federation.md)
 - [Legacy ingest retirement](legacy-ingest-retirement.md)
 

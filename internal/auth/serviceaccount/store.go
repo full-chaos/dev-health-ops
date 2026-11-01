@@ -47,6 +47,10 @@ type Store struct {
 	read      func(context.Context, uuid.UUID) (*Info, error)
 	logger    *slog.Logger
 	mutations metric.Int64Counter
+	// keyResolves counts ResolveKey answers by outcome.
+	keyResolves metric.Int64Counter
+	// mint makes a key value.
+	mint func() (string, error)
 }
 
 func New(cfg Config) (*Store, error) {
@@ -58,7 +62,7 @@ func New(cfg Config) (*Store, error) {
 	case cfg.Locks == nil:
 		return nil, errors.New("serviceaccount: no row locker")
 	}
-	s := &Store{pool: cfg.Pool, q: authschema.Quote(cfg.Schema), locks: cfg.Locks, ownsUsers: cfg.OwnsUsers, logger: cfg.Logger}
+	s := &Store{pool: cfg.Pool, q: authschema.Quote(cfg.Schema), locks: cfg.Locks, ownsUsers: cfg.OwnsUsers, logger: cfg.Logger, mint: MintKey}
 	s.commit = func(ctx context.Context, m audit.Mutation) error { return audit.Commit(ctx, cfg.Pool, cfg.Schema, m) }
 	s.read = s.Lookup
 	if s.logger == nil {
@@ -72,6 +76,10 @@ func New(cfg Config) (*Store, error) {
 	if s.mutations, err = meter.Int64Counter("auth.serviceaccount.mutations",
 		metric.WithDescription("Service account mutations, by verb and outcome.")); err != nil {
 		return nil, fmt.Errorf("serviceaccount: registering the mutation counter: %w", err)
+	}
+	if s.keyResolves, err = meter.Int64Counter("auth.serviceaccount.key_resolves",
+		metric.WithDescription("Service account key resolves, by outcome.")); err != nil {
+		return nil, fmt.Errorf("serviceaccount: registering the key resolve counter: %w", err)
 	}
 	return s, nil
 }
@@ -91,14 +99,14 @@ func outcomeLabel(err error) string {
 		return "ok"
 	case errors.Is(err, ErrNotFound), errors.Is(err, ErrOrgNotFound):
 		return "not_found"
-	case errors.Is(err, ErrNameTaken), errors.Is(err, ErrAlreadyInState):
+	case errors.Is(err, ErrNameTaken), errors.Is(err, ErrAlreadyInState), errors.Is(err, audit.ErrNoStateChange):
 		return "taken"
 	case errors.Is(err, ErrNotOwned):
 		return "not_owned"
 	case errors.Is(err, ErrStore):
 		return "error"
 	}
-	for _, r := range refusals {
+	for _, r := range keyRefusals {
 		if errors.Is(err, r) {
 			return "invalid"
 		}
@@ -157,6 +165,7 @@ func auditFor(eventType, reason string, id, org uuid.UUID, owner *uuid.UUID, a A
 		actor := a.PrincipalID.String()
 		ev.ActorPrincipalID = &actor
 	}
+	a.Caller.Annotate(ev.Attributes)
 	return ev
 }
 
@@ -237,7 +246,7 @@ type accountRow struct {
 	active bool
 }
 
-// lockAccount is step 7: the service_accounts row FOR UPDATE.
+// lockAccount is step 6b: the service_accounts row FOR UPDATE.
 func (s *Store) lockAccount(ctx context.Context, tx audit.TxOps, id uuid.UUID) (accountRow, error) {
 	var r accountRow
 	var owner *uuid.UUID
@@ -267,6 +276,9 @@ func (s *Store) Create(ctx context.Context, in CreateInput, a Actor) (uuid.UUID,
 	err := s.run(ctx, verbCreate, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			if err := s.lockSet(ctx, tx, nil, in.Owner, a.PrincipalID); err != nil {
+				return err
+			}
+			if err := a.authorize(ctx, tx, Locked{OrgID: in.OrgID}); err != nil {
 				return err
 			}
 			orgActive, err := s.lockOrg(ctx, tx, in.OrgID)
@@ -306,8 +318,20 @@ VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING RETURNING principal_id`, id, 
 // Disable sets the account's row and its principal disabled in one
 // transaction. It takes the principal row alone, never public.users: a
 // service account has no users row, so the kill switch works whether or not
-// auth-service owns users.
+// auth-service owns users. Its Authorize is a plain read in the same
+// transaction: a demotion that commits during the transaction counts as after it.
+// The audit row names the owner read before the transaction; an owner or an
+// organization that moved by the time the account row is locked is
+// ErrStateChanged, and Disable reads again and runs once more.
 func (s *Store) Disable(ctx context.Context, id uuid.UUID, a Actor) error {
+	err := s.disableOnce(ctx, id, a)
+	if errors.Is(err, ErrStateChanged) {
+		err = s.disableOnce(ctx, id, a)
+	}
+	return err
+}
+
+func (s *Store) disableOnce(ctx context.Context, id uuid.UUID, a Actor) error {
 	info, err := s.read(ctx, id)
 	if err != nil {
 		s.record(ctx, verbDisable, err)
@@ -332,6 +356,12 @@ func (s *Store) Disable(ctx context.Context, id uuid.UUID, a Actor) error {
 			}
 			row, err := s.lockAccount(ctx, tx, id)
 			if err != nil {
+				return err
+			}
+			if row.org != info.OrgID || row.owner != info.Owner {
+				return ErrStateChanged
+			}
+			if err := a.authorize(ctx, tx, Locked{OrgID: row.org, Owner: row.owner}); err != nil {
 				return err
 			}
 			if err := decideDisable(row.active); err != nil {
@@ -384,6 +414,9 @@ func (s *Store) Enable(ctx context.Context, id uuid.UUID, a Actor) error {
 			if row.org != info.OrgID || row.owner != info.Owner {
 				return ErrStateChanged
 			}
+			if err := a.authorize(ctx, tx, Locked{OrgID: row.org, Owner: row.owner}); err != nil {
+				return err
+			}
 			if err := decideEnable(row.active, orgActive, st); err != nil {
 				return err
 			}
@@ -433,6 +466,9 @@ func (s *Store) SetOwner(ctx context.Context, id, newOwner uuid.UUID, a Actor) e
 			}
 			if row.org != info.OrgID || row.owner != info.Owner {
 				return ErrStateChanged
+			}
+			if err := a.authorize(ctx, tx, Locked{OrgID: row.org, Owner: row.owner}); err != nil {
+				return err
 			}
 			if err := decideSetOwner(row.owner, newOwner, orgActive, st); err != nil {
 				return err

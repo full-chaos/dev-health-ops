@@ -80,6 +80,12 @@ var negativeProofs = map[string]negativeProof{
 	"auth-service|POST /internal/v1/invites/revoke [dev-health-auth-service @api]":                             {file: proofProvision, test: provisionTest},
 	"auth-service|POST /internal/v1/organizations/suspend [dev-health-auth-service @api]":                      {file: proofProvision, test: provisionTest},
 	"auth-service|POST /internal/v1/organizations/state [dev-health-auth-service @api]":                        {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/service-accounts/create [dev-health-auth-service @api]":                    {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/service-accounts/disable [dev-health-auth-service @api]":                   {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/service-accounts/enable [dev-health-auth-service @api]":                    {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/service-accounts/owner [dev-health-auth-service @api]":                     {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/organizations/onboard [dev-health-auth-service @api]":                      {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/organizations/create [dev-health-auth-service @api]":                       {file: proofProvision, test: provisionTest},
 	"auth-service|POST /internal/v1/sessions/state [dev-health-auth-service @api]":                             {file: proofSessState, test: sessStateTest},
 	"auth-service|POST /v1/token/refresh [dev-health-auth-service @api]":                                       {file: proofRefresh, test: refreshTest},
 	"auth-service|POST /api/v1/auth/refresh [dev-health-auth-service @api]":                                    {file: proofRefresh, test: refreshTest},
@@ -198,8 +204,8 @@ func TestNegativeProofCensus(t *testing.T) {
 	}
 	// CHAOS-11813 retired the 6 legacy ingest rows (26, 25, 1 before); CHAOS-11798 added the 7 provisioning rows (20, 19, 1 before);
 	// CHAOS-11885 added the organization reactivate row, CHAOS-11887 the invite revoke row and the organization suspend row, CHAOS-12043 the organization state row;
-	// CHAOS-12128 the principal access read row; CHAOS-12189 the session state row.
-	if len(derivedRows(t)) != 33 || proven != 32 || exempt != 1 {
-		t.Fatalf("derived %d rows, %d proven, %d exempt; want 33, 32, 1", len(derivedRows(t)), proven, exempt)
+	// CHAOS-12128 the principal access read row; CHAOS-12189 the session state row; CHAOS-10992 the organization onboard and create rows.
+	if len(derivedRows(t)) != 39 || proven != 38 || exempt != 1 {
+		t.Fatalf("derived %d rows, %d proven, %d exempt; want 39, 38, 1", len(derivedRows(t)), proven, exempt)
 	}
 }

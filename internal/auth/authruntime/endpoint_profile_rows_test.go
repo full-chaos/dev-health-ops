@@ -237,9 +237,9 @@ func plantedMissingRow(t *testing.T, served map[string]bool, other string) {
 
 // servedAuthRouteCount is every route the probe serves: four session routes, two social link routes,
 // four compatibility routes, the session issue route, the session state route, the eight federated sign-in routes, the six credentials routes,
-// the eleven provisioning routes and the three operator paths on GET and HEAD, and GET and HEAD of the JWKS and the
+// the seventeen provisioning routes and the three operator paths on GET and HEAD, and GET and HEAD of the JWKS and the
 // discovery document.
-const servedAuthRouteCount = 48
+const servedAuthRouteCount = 54
 
 // compareServedToRows returns the served routes with no row and the rows for
 // routes nothing serves, per method and listener.
@@ -364,6 +364,8 @@ func TestAuthEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
 		"/internal/v1/invites/revoke":            "PatternInviteRevoke",
 		"/internal/v1/organizations/suspend":     "PatternOrgSuspend",
 		"/internal/v1/organizations/state":       "PatternOrgState",
+		"/internal/v1/organizations/onboard":     "PatternOrgOnboard",
+		"/internal/v1/organizations/create":      "PatternOrgCreate",
 	}
 	checked := 0
 	var walk func(node any, where string)

@@ -10,14 +10,17 @@ import (
 // provisioningPatterns are the routes AUTH_MEMBERSHIP_ROUTES mounts.
 var provisioningPatterns = []string{PatternMembershipAdd, PatternMembershipRole, PatternMembershipRemove,
 	PatternMembershipTransfer, PatternInviteCreate, PatternInviteAccept, PatternOrgDeprovision, PatternOrgReactivate, PatternInviteRevoke,
-	PatternOrgSuspend}
+	PatternOrgSuspend, PatternOrgOnboard, PatternOrgCreate, PatternServiceAccountCreate, PatternServiceAccountDisable, PatternServiceAccountEnable,
+	PatternServiceAccountOwner}
 
 // provisioningRouteOps maps each provisioning operation to its route.
 var provisioningRouteOps = map[string]string{
 	opMembershipAdd: PatternMembershipAdd, opMembershipRole: PatternMembershipRole, opMembershipRemove: PatternMembershipRemove,
 	opMembershipTransfer: PatternMembershipTransfer, opInviteCreate: PatternInviteCreate, opInviteAccept: PatternInviteAccept,
 	opOrgDeprovision: PatternOrgDeprovision, opOrgReactivate: PatternOrgReactivate, opInviteRevoke: PatternInviteRevoke,
-	opOrgSuspend: PatternOrgSuspend, opOrgState: PatternOrgState,
+	opOrgSuspend: PatternOrgSuspend, opOrgState: PatternOrgState, opOrgOnboard: PatternOrgOnboard, opOrgCreate: PatternOrgCreate,
+	opServiceAccountCreate: PatternServiceAccountCreate, opServiceAccountDisable: PatternServiceAccountDisable,
+	opServiceAccountEnable: PatternServiceAccountEnable, opServiceAccountOwner: PatternServiceAccountOwner,
 }
 
 // serviceSessionIssuerClass is the endpoint-profile credential class of the

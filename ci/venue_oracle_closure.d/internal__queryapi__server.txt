@@ -22,6 +22,7 @@ internal/auth/contracts/tokencorpus
 internal/auth/delegationend
 internal/auth/edgetoken
 internal/auth/emaildomain
+internal/auth/grantend
 internal/auth/httpapi
 internal/auth/identity
 internal/auth/identity/local
@@ -40,6 +41,7 @@ internal/auth/platformrole
 internal/auth/platformrole/rule
 internal/auth/policycatalog
 internal/auth/requestid
+internal/auth/serviceaccount
 internal/auth/servicecred
 internal/auth/session
 internal/auth/sessionid

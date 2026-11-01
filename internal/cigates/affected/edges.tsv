@@ -69,6 +69,7 @@ internal/cigates/affected	plan.go	unexpressed
 internal/cigates/affected	plan_wiring_test.go	unexpressed
 internal/cigates/affected	reach.go	unexpressed
 internal/cigates/affected	reachcache.go	unexpressed
+internal/cigates/affected	reachgraph_internal_test.go	unexpressed
 internal/cigates/affected	scan.go	unexpressed
 internal/cigates/affectedmatrix	ci_script_helpers_test.go	unexpressed
 internal/cigates/affectedmodule	ci_script_helpers_test.go	unexpressed
@@ -172,6 +173,7 @@ internal/cigates/workflows	governance_context_test.go	unexpressed
 internal/cigates/workflows	image_reuse_exec_norace_test.go	unexpressed
 internal/cigates/workflows	providersync_shard_budget_test.go	unexpressed
 internal/cigates/workflows	race_pool_routing_test.go	unexpressed
+internal/cigates/workflows	registry_retry_test.go	unexpressed
 internal/cigates/workflows	strip_hook_test.go	unexpressed
 internal/cigates/workflows	workflows_auth_service_test.go	unexpressed
 internal/cigates/workflows	workflows_base_images_test.go	unexpressed

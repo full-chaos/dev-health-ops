@@ -90,6 +90,9 @@ const (
 
 	ReasonAllowedByMembershipDefault Reason = "allowed_by_membership_default"
 	ReasonGrantReadFailed            Reason = "grant_read_failed"
+
+	ReasonImpersonationDenied Reason = "impersonation_denied"
+	ReasonDelegationInvalid   Reason = "delegation_invalid"
 )
 
 // AllReasons lists every Reason the package can return.
@@ -102,6 +105,7 @@ func AllReasons() []Reason {
 		ReasonGrantExpired, ReasonGrantRevoked, ReasonWorkloadAudienceDenied,
 		ReasonWorkloadActionDenied, ReasonClockUnavailable, ReasonServiceAccountInactive,
 		ReasonAllowedByMembershipDefault, ReasonGrantReadFailed,
+		ReasonImpersonationDenied, ReasonDelegationInvalid,
 	}
 }
 
@@ -123,6 +127,10 @@ type Decision struct {
 	// membership-default allow alike. 0 for every other decision, and for a
 	// repository action whose catalog cache class is none.
 	ExpiresAtUnixNano int64
+	// Obligations is set only on an allow of a delegated session.
+	Obligations *Obligations
+	// Audit is set only on an allow that the owner exemption made possible.
+	Audit *DelegationAudit
 }
 
 // CacheClass is the closed allow-cache class of a decision (TRD section 14).

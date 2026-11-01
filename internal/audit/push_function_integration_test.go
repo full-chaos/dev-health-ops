@@ -232,6 +232,25 @@ func TestPushWriterHoldsExactlyTheDeclaredSet(t *testing.T) {
 		}
 	})
 
+	t.Run("a changed owner is handed back to the writer by the next run", func(t *testing.T) {
+		fn := `'auth.append_external_push_lifecycle_event(text,text,jsonb,jsonb)'::regprocedure`
+		if _, err := env.pool.Exec(ctx, `ALTER FUNCTION auth.append_external_push_lifecycle_event(text, text, jsonb, jsonb) OWNER TO `+authschema.Quote(mustIdent(t, runtime))); err != nil {
+			t.Fatal(err)
+		}
+		if q(`SELECT (SELECT rolname FROM pg_roles WHERE oid = proowner) = $1 FROM pg_proc WHERE oid = `+fn, env.writerRole) {
+			t.Fatal("the mutation did not change the owner")
+		}
+		if _, err := authschema.Apply(ctx, env.pool, authschema.Options{
+			Schema: "auth", RuntimeRole: runtime, SessionReaderRoles: []string{env.callerRole},
+			PushLifecycleWriterRole: env.writerRole, PushLifecycleCallerRoles: []string{env.callerRole},
+		}); err != nil {
+			t.Fatalf("Apply after an owner change: %v", err)
+		}
+		if !q(`SELECT (SELECT rolname FROM pg_roles WHERE oid = proowner) = $1 FROM pg_proc WHERE oid = `+fn, env.writerRole) {
+			t.Fatal("the next run did not hand the function back to the writer role")
+		}
+	})
+
 	t.Run("a grant outside the auth schema fails the posture check", func(t *testing.T) {
 		if _, err := env.pool.Exec(ctx, `CREATE TABLE public.push_writer_drift (id int)`); err != nil {
 			t.Fatal(err)

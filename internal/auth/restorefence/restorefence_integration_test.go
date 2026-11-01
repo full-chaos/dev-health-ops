@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,6 +30,7 @@ type fenceDB struct {
 	admin       *pgxpool.Pool
 	runtime     *pgxpool.Pool
 	runtimeRole string
+	writerRole  string
 	schema      authschema.ValidatedIdentifier
 }
 
@@ -59,7 +61,25 @@ func newFenceDB(t *testing.T, ctx context.Context) *fenceDB {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { containers.DropRole(admin, role, t.Logf) })
-	if _, err := authschema.Apply(ctx, admin, authschema.Options{Schema: "auth", RuntimeRole: role}); err != nil {
+	writer, err := containers.RoleName("fence_push_writer", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caller, err := containers.RoleName("fence_push_caller", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{fmt.Sprintf("CREATE ROLE %q NOLOGIN", writer), fmt.Sprintf("CREATE ROLE %q NOLOGIN", caller)} {
+		if _, err := admin.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		containers.DropRole(admin, writer, t.Logf)
+		containers.DropRole(admin, caller, t.Logf)
+	})
+	if _, err := authschema.Apply(ctx, admin, authschema.Options{Schema: "auth", RuntimeRole: role,
+		PushLifecycleWriterRole: writer, PushLifecycleCallerRoles: []string{caller}}); err != nil {
 		t.Fatalf("authschema.Apply: %v", err)
 	}
 	schema, err := authschema.NewValidatedIdentifier("auth")
@@ -75,7 +95,7 @@ func newFenceDB(t *testing.T, ctx context.Context) *fenceDB {
 		t.Fatal(err)
 	}
 	t.Cleanup(runtime.Close)
-	return &fenceDB{admin: admin, runtime: runtime, runtimeRole: role, schema: schema}
+	return &fenceDB{admin: admin, runtime: runtime, runtimeRole: role, writerRole: writer, schema: schema}
 }
 
 func fenceOrgID(i int) uuid.UUID {
@@ -532,22 +552,108 @@ func TestTheRuntimeRoleReadsTheTimelineItself(t *testing.T) {
 	}
 }
 
-// The auth schema holds no SECURITY DEFINER function but the one External Push
-// lifecycle append function (migration 0042, CHAOS-10895): it is the only door
-// go-api's login has to the guarded outbox tables, and its lineage lint and
-// owner posture row pin it (authschema restore_fence_posture_test.go).
-func TestTheAuthSchemaHasNoSecurityDefinerFunction(t *testing.T) {
+// securityDefinerViolations reads EVERY SECURITY DEFINER function of the auth
+// schema, with its name, owner and proconfig, and returns what is wrong with
+// the set. Exactly one row is allowed: the External Push lifecycle append
+// function (authschema.PushLifecycleFunction), owned by the dedicated NOLOGIN
+// writer role, with a pinned search_path. A second row, a missing row, another
+// owner or a missing search_path each yield a violation naming the row.
+func securityDefinerViolations(t *testing.T, ctx context.Context, db *fenceDB) []string {
+	t.Helper()
+	rows, err := db.admin.Query(ctx, `SELECT p.proname, o.rolname, o.rolcanlogin, coalesce(p.proconfig, ARRAY[]::text[])
+		FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace JOIN pg_roles o ON o.oid = p.proowner
+		WHERE n.nspname = 'auth' AND p.prosecdef ORDER BY p.proname`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var violations []string
+	count := 0
+	for rows.Next() {
+		var name, owner string
+		var canLogin bool
+		var config []string
+		if err := rows.Scan(&name, &owner, &canLogin, &config); err != nil {
+			t.Fatal(err)
+		}
+		count++
+		if name != authschema.PushLifecycleFunction {
+			violations = append(violations, fmt.Sprintf("auth.%s is a SECURITY DEFINER function that is not %s", name, authschema.PushLifecycleFunction))
+			continue
+		}
+		if owner != db.writerRole || canLogin || owner == db.runtimeRole {
+			violations = append(violations, fmt.Sprintf("auth.%s is owned by %q (login=%v), want the NOLOGIN writer role %q", name, owner, canLogin, db.writerRole))
+		}
+		pinned := false
+		for _, entry := range config {
+			if strings.HasPrefix(entry, "search_path=") {
+				pinned = true
+			}
+		}
+		if !pinned {
+			violations = append(violations, fmt.Sprintf("auth.%s has no pinned search_path (proconfig %v)", name, config))
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		violations = append(violations, fmt.Sprintf("the auth schema holds %d SECURITY DEFINER function(s), want exactly 1 (%s)", count, authschema.PushLifecycleFunction))
+	}
+	return violations
+}
+
+// TestTheAuthSchemaHoldsExactlyTheOnePinnedSecurityDefinerFunction: readiness
+// still reads the timeline as the runtime role, and the one allowed function
+// does not touch the fence. Two mutants prove the check can fail: a second
+// SECURITY DEFINER function, and the function's search_path removed. A changed
+// owner is held by the writer posture check (pushWriterViolations,
+// authschema TestPushWriterHoldsExactlyTheDeclaredSet and the audit
+// "owner" cell), and this test re-reads the owner as well.
+func TestTheAuthSchemaHoldsExactlyTheOnePinnedSecurityDefinerFunction(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	db := newFenceDB(t, ctx)
-	var n int64
-	if err := db.admin.QueryRow(ctx, `SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-		WHERE n.nspname = 'auth' AND p.prosecdef AND p.proname <> 'append_external_push_lifecycle_event'`).Scan(&n); err != nil {
+	if violations := securityDefinerViolations(t, ctx, db); len(violations) > 0 {
+		t.Fatalf("the auth schema's SECURITY DEFINER set is not the allowed one: %s", strings.Join(violations, "; "))
+	}
+
+	t.Run("mutant: a second SECURITY DEFINER function", func(t *testing.T) {
+		db.must(t, ctx, `CREATE FUNCTION auth.zz_mutant_definer() RETURNS int LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog AS 'SELECT 1'`)
+		defer db.must(t, ctx, `DROP FUNCTION auth.zz_mutant_definer()`)
+		violations := securityDefinerViolations(t, ctx, db)
+		if len(violations) == 0 {
+			t.Fatal("a second SECURITY DEFINER function in the auth schema was accepted")
+		}
+		t.Logf("FAIL (killed): %s", strings.Join(violations, "; "))
+	})
+	t.Run("mutant: the function's search_path removed", func(t *testing.T) {
+		fn := "auth." + authschema.PushLifecycleFunction + authschema.PushLifecycleFunctionSignature
+		db.must(t, ctx, `ALTER FUNCTION `+fn+` RESET search_path`)
+		defer db.must(t, ctx, `ALTER FUNCTION `+fn+` SET search_path = auth, pg_temp`)
+		violations := securityDefinerViolations(t, ctx, db)
+		if len(violations) == 0 {
+			t.Fatal("the append function without a pinned search_path was accepted")
+		}
+		t.Logf("FAIL (killed): %s", strings.Join(violations, "; "))
+	})
+	t.Run("mutant: another owner", func(t *testing.T) {
+		fn := "auth." + authschema.PushLifecycleFunction + authschema.PushLifecycleFunctionSignature
+		db.must(t, ctx, `ALTER FUNCTION `+fn+` OWNER TO `+authschema.Quote(mustIdentifier(t, db.runtimeRole)))
+		defer db.must(t, ctx, `ALTER FUNCTION `+fn+` OWNER TO `+authschema.Quote(mustIdentifier(t, db.writerRole)))
+		if len(securityDefinerViolations(t, ctx, db)) == 0 {
+			t.Fatal("the append function owned by the runtime role was accepted")
+		}
+	})
+}
+
+func mustIdentifier(t *testing.T, name string) authschema.ValidatedIdentifier {
+	t.Helper()
+	id, err := authschema.NewValidatedIdentifier(name)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 0 {
-		t.Fatalf("the auth schema holds %d SECURITY DEFINER function(s)", n)
-	}
+	return id
 }
 
 // The families of the second scope ruling: authorization state (membership,

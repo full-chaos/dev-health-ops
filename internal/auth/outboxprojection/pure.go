@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/pushlifecycle"
 )
@@ -87,19 +88,27 @@ func ClassOf(o Outcome) Class {
 type Input struct {
 	Domain Domain
 	Event  contracts.ExternalPushLifecycleEvent
-	// AcrClass is the registry credential class of an acr credential
-	// (acr_client_credential or acr_browser_refresh_token); empty for push.
+	// AcrClass is the acr wire class of an acr credential (browser, oauth_user, native_device, org_bearer, operator,
+	// workload): required at revision 1, which is the only revision that carries it, and kept as projected data. The
+	// registry class of every acr credential is acr_client_credential. Empty for push.
 	AcrClass string
-	// OwnerSubject is the acr credential's owner subject, kept as projected data.
+	// OwnerSubject is the acr credential's owner subject (revision 1 only), kept as projected data.
 	OwnerSubject string
 	// RevokeReason is the reason a revoked event carries, if it carries one.
 	RevokeReason string
+	// BodyDigest is the SHA-256 of the posted bytes of an acr event. It is required for DomainAcr and is the whole of
+	// its digest: the mapped event drops fields (the owner, the class), so a digest of it would call a same-revision
+	// delivery with another owner a duplicate. A push event ignores it.
+	BodyDigest [32]byte
+	// Actor is the verified principal that posted the event: the audit row's actor. Required for DomainAcr; a push
+	// event read from the outbox has none.
+	Actor uuid.UUID
 }
 
 var (
 	referencePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 	sourcePattern    = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
-	acrClasses       = map[string]bool{"acr_client_credential": true, "acr_browser_refresh_token": true}
+	acrClasses       = map[string]bool{"browser": true, "oauth_user": true, "native_device": true, "org_bearer": true, "operator": true, "workload": true}
 )
 
 // ErrMalformed names why an input cannot be keyed.
@@ -112,8 +121,14 @@ func (in Input) Check() error {
 	switch {
 	case in.Domain != DomainExternalPush && in.Domain != DomainAcr:
 		return fmt.Errorf("%w: unknown domain", ErrMalformed)
-	case in.Domain == DomainAcr && !acrClasses[in.AcrClass]:
-		return fmt.Errorf("%w: an acr credential needs one of the two acr classes", ErrMalformed)
+	case in.Domain == DomainAcr && in.BodyDigest == [32]byte{}:
+		return fmt.Errorf("%w: an acr event needs the digest of its posted body", ErrMalformed)
+	case in.Domain == DomainAcr && in.Actor == uuid.Nil:
+		return fmt.Errorf("%w: an acr event needs its actor", ErrMalformed)
+	case in.Domain == DomainAcr && e.Payload.Revision == 1 && !acrClasses[in.AcrClass]:
+		return fmt.Errorf("%w: an acr credential needs one of the six acr classes at revision 1", ErrMalformed)
+	case in.Domain == DomainAcr && in.AcrClass != "" && !acrClasses[in.AcrClass]:
+		return fmt.Errorf("%w: acr class", ErrMalformed)
 	case in.Domain == DomainExternalPush && (in.AcrClass != "" || in.OwnerSubject != ""):
 		return fmt.Errorf("%w: an acr class on a push credential", ErrMalformed)
 	case !referencePattern.MatchString(e.AggregateID):
@@ -138,14 +153,37 @@ func ParseOrganization(wire string) (uuid.UUID, error) {
 	return id, nil
 }
 
-// Digest is the SHA-256 of the whole event body, under a version prefix: a
-// same-revision delivery with another body has another digest.
-func Digest(e contracts.ExternalPushLifecycleEvent) [32]byte {
-	raw, err := json.Marshal(e)
+// Digest is the stored digest of an input. A push event digests the whole mapped event body under a version
+// prefix. An acr event digests the SHA-256 of its posted bytes, which names every field the contract carries.
+func Digest(in Input) [32]byte {
+	if in.Domain == DomainAcr {
+		return sha256.Sum256(append([]byte("credential-projection/v2/acr\n"), in.BodyDigest[:]...))
+	}
+	raw, err := json.Marshal(in.Event)
 	if err != nil {
 		raw = []byte(fmt.Sprintf("unmarshalable:%v", err))
 	}
 	return sha256.Sum256(append([]byte("credential-projection/v1\n"), raw...))
+}
+
+// RegistryClass is the credential_registry class of an input: every acr credential is acr_client_credential
+// (the wire class is projected data), every push credential external_push_ingest_token.
+func RegistryClass(in Input) string {
+	if in.Domain == DomainAcr {
+		return "acr_client_credential"
+	}
+	return "external_push_ingest_token"
+}
+
+// AuditOutcome is the audit row's outcome of a decision: denied for a decision that refused the event, allowed
+// otherwise.
+func AuditOutcome(o Outcome) audit.Outcome {
+	switch o {
+	case pushlifecycle.RefusedTerminal, pushlifecycle.RefusedWiden, pushlifecycle.RefusedTransition, pushlifecycle.RefusedParent:
+		return audit.OutcomeDenied
+	default:
+		return audit.OutcomeAllowed
+	}
 }
 
 // Verdict compares a stored digest with an incoming one.

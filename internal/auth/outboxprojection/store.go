@@ -14,8 +14,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/pushlifecycle"
 )
 
-const pushClass = "external_push_ingest_token"
-
 // stored is one credential_projection row with the registry bounds it joins.
 type stored struct {
 	state       pushlifecycle.State
@@ -29,7 +27,10 @@ type stored struct {
 // apply runs inside audit.Commit's transaction. It writes nothing for a
 // duplicate, a stale delivery, a conflict or a retry outcome, which Commit
 // reports as ErrNoStateChange.
-func (e *Engine) apply(ctx context.Context, tx audit.TxOps, in Input, organization uuid.UUID, attrs map[string]any) (Result, error) {
+// errOutcomeMismatch: the audit row was built for the other outcome (allowed or denied); Project retries with the right one.
+var errOutcomeMismatch = errors.New("outboxprojection: the audit outcome does not match the decision")
+
+func (e *Engine) apply(ctx context.Context, tx audit.TxOps, in Input, organization uuid.UUID, attrs map[string]any, denied bool) (Result, error) {
 	event := in.Event
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
 		"credential_projection:"+string(in.Domain)+":"+event.AggregateID); err != nil {
@@ -40,7 +41,7 @@ func (e *Engine) apply(ctx context.Context, tx audit.TxOps, in Input, organizati
 		return Result{}, err
 	}
 	revision := int64(event.Payload.Revision)
-	digest := Digest(event)
+	digest := Digest(in)
 
 	var storedDigest []byte
 	err = tx.QueryRow(ctx, `SELECT digest FROM `+e.q+`.credential_projection_digest
@@ -81,6 +82,9 @@ func (e *Engine) apply(ctx context.Context, tx audit.TxOps, in Input, organizati
 	case outcome == pushlifecycle.Duplicate || outcome == pushlifecycle.Stale:
 		return Result{Outcome: outcome, State: current.state}, nil
 	case outcome != pushlifecycle.Applied:
+		if !denied {
+			return Result{}, errOutcomeMismatch
+		}
 		attrs["reason_code"] = "denied_policy"
 		if err := e.insertDigest(ctx, tx, in, revision, digest, outcome); err != nil {
 			return Result{}, err
@@ -88,6 +92,9 @@ func (e *Engine) apply(ctx context.Context, tx audit.TxOps, in Input, organizati
 		return Result{Outcome: outcome, State: current.state}, nil
 	}
 
+	if denied {
+		return Result{}, errOutcomeMismatch
+	}
 	principal, err := e.ensureSource(ctx, tx, organization, event.Payload.SourceID)
 	if err != nil {
 		return Result{}, err
@@ -207,10 +214,7 @@ func (e *Engine) insertRegistry(ctx context.Context, tx audit.TxOps, in Input, i
 	if err != nil {
 		return err
 	}
-	class := pushClass
-	if in.Domain == DomainAcr {
-		class = in.AcrClass
-	}
+	class := RegistryClass(in)
 	// The registry row of a domain-owned credential holds the public fingerprint
 	// and no verifier (0026); rotation_parent_id stays NULL, the lineage is in
 	// credential_projection (0007 refuses a revoked parent that the core accepts).
@@ -263,9 +267,11 @@ func (e *Engine) upsertProjection(ctx context.Context, tx audit.TxOps, in Input,
 		expires = &next.ExpiresAt
 	}
 	if in.Domain == DomainAcr {
-		class, owner = &in.AcrClass, &in.OwnerSubject
-		if in.OwnerSubject == "" {
-			owner = nil
+		if in.AcrClass != "" {
+			class = &in.AcrClass
+		}
+		if in.OwnerSubject != "" {
+			owner = &in.OwnerSubject
 		}
 	}
 	_, err := tx.Exec(ctx, `INSERT INTO `+e.q+`.credential_projection AS p

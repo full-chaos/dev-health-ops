@@ -103,26 +103,45 @@ func (e *Engine) Project(ctx context.Context, in Input) (Result, error) {
 		}
 	}
 
-	attrs := map[string]any{"target_kind": "credential", "credential_class": auditClass(in.Domain), "revision": int64(in.Event.Payload.Revision)}
 	orgText := organization.String()
+	var actor *string
+	if in.Actor != uuid.Nil {
+		text := in.Actor.String()
+		actor = &text
+	}
+	// The audit row's outcome is fixed before Apply decides. A refused decision is denied, anything else allowed: Apply
+	// refuses to write under the wrong outcome and the call runs again under the right one.
+	denied := false
 	var res Result
-	err := audit.Commit(ctx, e.cfg.Pool, e.cfg.Schema, audit.Mutation{
-		Apply: func(ctx context.Context, tx audit.TxOps) error {
-			var err error
-			res, err = e.apply(ctx, tx, in, organization, attrs)
-			return err
-		},
-		// Commit reads the attributes after Apply, which sets the reason and status it decided.
-		Audit:     audit.AuditEvent{EventType: "auth.credential_projection.decided", Outcome: audit.OutcomeAllowed, OrganizationID: &orgText, Attributes: attrs},
-		OffStream: audit.OffStreamCredentialProjection,
-	})
-	if err != nil && !errors.Is(err, audit.ErrNoStateChange) {
-		return Result{}, err
+	for attempt := 0; attempt < 3; attempt++ {
+		attrs := map[string]any{"target_kind": "credential", "credential_class": auditClass(in.Domain), "revision": int64(in.Event.Payload.Revision)}
+		outcome := audit.OutcomeAllowed
+		if denied {
+			outcome = audit.OutcomeDenied
+		}
+		err := audit.Commit(ctx, e.cfg.Pool, e.cfg.Schema, audit.Mutation{
+			Apply: func(ctx context.Context, tx audit.TxOps) error {
+				var err error
+				res, err = e.apply(ctx, tx, in, organization, attrs, denied)
+				return err
+			},
+			// Commit reads the attributes after Apply, which sets the reason and status it decided.
+			Audit:     audit.AuditEvent{EventType: "auth.credential_projection.decided", Outcome: outcome, ActorPrincipalID: actor, OrganizationID: &orgText, Attributes: attrs},
+			OffStream: audit.OffStreamCredentialProjection,
+		})
+		if errors.Is(err, errOutcomeMismatch) {
+			denied = !denied
+			continue
+		}
+		if err != nil && !errors.Is(err, audit.ErrNoStateChange) {
+			return Result{}, err
+		}
+		if res.Outcome == "" {
+			return Result{}, fmt.Errorf("outboxprojection: the mutation decided nothing")
+		}
+		return e.result(ctx, in, res.Outcome, res.State), nil
 	}
-	if res.Outcome == "" {
-		return Result{}, fmt.Errorf("outboxprojection: the mutation decided nothing")
-	}
-	return e.result(ctx, in, res.Outcome, res.State), nil
+	return Result{}, fmt.Errorf("outboxprojection: the audit outcome never matched the decision")
 }
 
 func auditClass(d Domain) string {

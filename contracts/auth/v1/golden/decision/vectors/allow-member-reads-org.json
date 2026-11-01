@@ -3,7 +3,7 @@
     "allowed": true,
     "cache_class": "",
     "expires_in_seconds": null,
-    "policy_revision": 6,
+    "policy_revision": 8,
     "reason": "allowed_by_role"
   },
   "id": "allow-member-reads-org",

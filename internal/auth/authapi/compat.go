@@ -160,6 +160,7 @@ func CompatRoutes(deps CompatDeps) ([]httpapi.Route, error) {
 	}
 	if deps.ServiceCredentials != nil || deps.IssueWorkload != nil {
 		routes = h.withSessionStateRoute(routes)
+		routes = h.withDelegatedRoutes(routes)
 	}
 	return routes, nil
 }
@@ -424,7 +425,7 @@ func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
 		h.refuseCompat(w, r, opCompatRefresh, http.StatusUnauthorized, reasonRevisionStale, textRefreshReused)
 		return
 	}
-	if record.OrganizationID != nil && !user.IsSuperuser {
+	if record.OrganizationID != nil && !user.Holds(actionAdminOrgs) {
 		_, member, err := h.Users.Role(ctx, record.PrincipalID, *record.OrganizationID)
 		if err != nil {
 			h.fail(w, r, opCompatRefresh, err)

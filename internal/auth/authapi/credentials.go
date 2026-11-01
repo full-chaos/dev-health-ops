@@ -328,16 +328,18 @@ func (h credentialHandlers) authenticatedChange() http.Handler {
 
 // goAPIBearerRefusal answers a refused change-password bearer as go-api's guard does (policy.Guard currentUser):
 // no Authorization header is "Not authenticated", a header that is not a bearer is "Invalid authorization header",
-// any other refusal "Invalid or expired token", each a 401 with WWW-Authenticate: Bearer; an unavailable dependency
-// is go-api's 503 and anything else its 500. go-api forwards this route unread while AUTH_PROXY_CREDENTIALS is on,
+// any other refusal "Invalid or expired token", each a 401 with WWW-Authenticate: Bearer; a delegated bearer is go-api's
+// 403 for an impersonated caller; an unavailable dependency is go-api's 503 and anything else its 500. go-api forwards this route unread while AUTH_PROXY_CREDENTIALS is on,
 // so these are the bytes its clients got from go-api's guard before.
 func (h credentialHandlers) goAPIBearerRefusal(w http.ResponseWriter, r *http.Request, operation string, answer refusal, err error) {
 	result := "denied"
-	if answer.status != http.StatusUnauthorized {
+	if answer.status != http.StatusUnauthorized && answer.status != http.StatusForbidden {
 		result = "error"
 	}
 	h.compat.rec.record(r.Context(), operation, result, answer.reason, err)
 	switch answer.status {
+	case http.StatusForbidden:
+		policy.WriteDetail(w, http.StatusForbidden, policy.ErrorDetail(textChangeNotAllowed), nil)
 	case http.StatusUnauthorized:
 		text := "Invalid or expired token"
 		header := r.Header.Get("Authorization")

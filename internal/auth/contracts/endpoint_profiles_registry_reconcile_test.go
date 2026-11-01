@@ -255,7 +255,7 @@ func TestTheReconcileGateRefusesPlantedMismatches(t *testing.T) {
 // is not a row's source directory.
 func TestTheRoutePackagesAreEveryAuthServiceRouteSource(t *testing.T) {
 	packages := routePackages(authServiceRows(t))
-	for _, want := range []string{authHTTPLayer, "internal/auth/workloadexchange/", "internal/auth/authruntime/"} {
+	for _, want := range []string{authHTTPLayer, "internal/auth/workloadexchange/", "internal/auth/authruntime/", "internal/platform/health/"} {
 		if !packages[want] {
 			t.Errorf("route packages %v lack %s", packages, want)
 		}

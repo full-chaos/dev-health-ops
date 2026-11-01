@@ -127,7 +127,7 @@ Roll order, each step before the next:
 2. `auth-migrate` with `AUTH_PUSH_LIFECYCLE_WRITER_ROLE=<writer>` and
    `AUTH_PUSH_LIFECYCLE_CALLER_ROLES=<go-api login>` (Helm:
    `authService.migrate.pushLifecycle`; both the migrate and the grants Job). Migration
-   0042 creates the function and widens the revision table's two CHECKs; the grant
+   0043 creates the function and widens the revision table's two CHECKs; the grant
    pass hands the function to the writer, with `CREATE` on the schema granted and
    revoked inside one transaction, and gives `EXECUTE` to the callers only.
 3. Only then roll go-api with `AUTH_PUSH_LIFECYCLE_EVENTS=true`. With the flag on and

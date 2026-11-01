@@ -33,14 +33,18 @@ var ErrRefused = errors.New(Message)
 // link auth-service's configuration; TestFromLookupAgreesWithAuthConfig pins
 // the two together.
 func FromLookup(lookup func(string) (string, bool)) (bool, error) {
-	raw, _ := lookup(Env)
+	return readSwitch(Env, lookup)
+}
+
+func readSwitch(name string, lookup func(string) (string, bool)) (bool, error) {
+	raw, _ := lookup(name)
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "", "false":
 		return false, nil
 	case "true":
 		return true, nil
 	}
-	return false, fmt.Errorf("%s must be true or false", Env)
+	return false, fmt.Errorf("%s must be true or false", name)
 }
 
 // On reads the switch from the process environment on every call. The
@@ -56,8 +60,13 @@ func On() bool {
 // OrgsEnv is the orgs-owned switch, with the meaning auth-service gives it.
 const OrgsEnv = "AUTH_ORGS_OWNED"
 
-// OrgsOn reads OrgsEnv.
-func OrgsOn() bool { return false }
+// OrgsOn reads OrgsEnv on every call, by the rule of On: a value that cannot be
+// read counts as on, so go-api holds back from a table auth may own. No start
+// check reads it; the chart holds the order of the switches.
+func OrgsOn() bool {
+	on, err := readSwitch(OrgsEnv, secrets.ProcessLookup)
+	return err != nil || on
+}
 
 // RefuseWhileUsersOwned is the guard of a writer that returns an error: nil
 // while the switch is off.

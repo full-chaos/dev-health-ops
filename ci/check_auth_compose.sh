@@ -148,6 +148,22 @@ owned="$(compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" -d "${POS
 printf 'objects in the auth schema owned by the runtime login: %s\n' "${owned}"
 [ "${owned}" = "0" ] || die "runtime login owns ${owned} objects in the auth schema"
 
+printf 'step 4a: the migration login is plain, owns the auth schema and every object in it, and the Jobs ran under the owner pin\n'
+migrator="${AUTH_MIGRATION_DATABASE_ROLE:-devhealth_auth_migrator}"
+posture="$(compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" -At \
+  -c "SELECT rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls FROM pg_roles WHERE rolname = '${migrator}'")"
+printf 'migration login rolsuper|rolcreatedb|rolcreaterole|rolreplication|rolbypassrls = %s\n' "${posture}"
+[ "${posture}" = "f|f|f|f|f" ] || die "the migration login holds an elevated attribute: ${posture}"
+foreign="$(compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" -At \
+  -c "SELECT (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = '${AUTH_DATABASE_SCHEMA:-auth}' AND c.relowner <> r.oid) + (SELECT count(*) FROM pg_namespace WHERE nspname = '${AUTH_DATABASE_SCHEMA:-auth}' AND nspowner <> r.oid) FROM pg_roles r WHERE r.rolname = '${migrator}'")"
+printf 'relations of the auth schema, and the schema, not owned by the migration login: %s\n' "${foreign}"
+[ "${foreign}" = "0" ] || die "${foreign} objects of the auth schema are not owned by the migration login"
+for job in auth-migrate auth-grants; do
+  compose --profile auth logs --no-color "${job}" 2>&1 | grep -F 'verified auth schema owner pin' >/dev/null \
+    || die "${job} did not log the owner pin it verified (AUTH_SCHEMA_OWNER_ROLE unset or the check did not run)"
+  printf '%s logged: verified auth schema owner pin\n' "${job}"
+done
+
 printf 'step 4b: provisioning de-escalates a pre-existing elevated login\n'
 compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" -c "ALTER ROLE ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth} CREATEDB CREATEROLE"
 compose --profile auth run --rm --no-deps auth-provision

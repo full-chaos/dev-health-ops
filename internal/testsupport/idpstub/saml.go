@@ -298,7 +298,7 @@ func (s *SAML) Build(spec ResponseSpec) (*etree.Document, *etree.Element, *etree
 		method = dsig.RSASHA256SignatureMethod
 	}
 	if !spec.UnsignedAssertion {
-		signed, err := s.sign(a, method)
+		signed, err := s.Sign(a, method)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -307,7 +307,7 @@ func (s *SAML) Build(spec ResponseSpec) (*etree.Document, *etree.Element, *etree
 		a = signed
 	}
 	if spec.SignResponse {
-		signed, err := s.sign(r, method)
+		signed, err := s.Sign(r, method)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -318,7 +318,8 @@ func (s *SAML) Build(spec ResponseSpec) (*etree.Document, *etree.Element, *etree
 	return doc, r, a, nil
 }
 
-func (s *SAML) sign(el *etree.Element, method string) (*etree.Element, error) {
+// Sign signs el with the stub key, as an enveloped signature with the given signature method.
+func (s *SAML) Sign(el *etree.Element, method string) (*etree.Element, error) {
 	ctx := dsig.NewDefaultSigningContext(dsig.TLSCertKeyStore(s.keys.TLS()))
 	ctx.Canonicalizer = dsig.MakeC14N10ExclusiveCanonicalizerWithPrefixList("")
 	if err := ctx.SetSignatureMethod(method); err != nil {

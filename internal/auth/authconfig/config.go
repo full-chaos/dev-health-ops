@@ -437,13 +437,11 @@ func Load(spec Spec) (Config, error) {
 	); err != nil {
 		return Config{}, err
 	}
-	burst, err := integer(
-		lookup, EnvRateLimitBurst, int64(defaultRateLimitBurst), minRateLimitBurst, maxRateLimitBurst,
-	)
-	if err != nil {
+	if cfg.RateLimit.Burst, err = smallInteger(
+		lookup, EnvRateLimitBurst, defaultRateLimitBurst, minRateLimitBurst, maxRateLimitBurst,
+	); err != nil {
 		return Config{}, err
 	}
-	cfg.RateLimit.Burst = int(burst)
 	if cfg.Public.MaxInFlight, err = smallInteger(
 		lookup, EnvPublicMaxInFlight, defaultPublicMaxInFlight, minPublicMaxInFlight, maxPublicMaxInFlight,
 	); err != nil {

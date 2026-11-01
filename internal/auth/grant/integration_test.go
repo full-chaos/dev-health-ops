@@ -379,6 +379,21 @@ func TestSameKeyInTwoOrganizationsIsIndependent(t *testing.T) {
 	if _, err := e.store.Revoke(ctx, RevokeInput{OrgID: a.org, GrantID: gb.ID, Actor: Actor{PrincipalID: &actor}, Authorize: allowAll}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Revoke across organizations = %v, want ErrNotFound", err)
 	}
+	// The same through an organization the grant does not belong to: Update must
+	// answer not found and write neither the row nor an audit row.
+	admin := "admin"
+	if _, err := e.store.Update(ctx, UpdateInput{OrgID: a.org, GrantID: gb.ID, Role: &admin, Actor: Actor{PrincipalID: &actor}, Authorize: allowAll}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Update across organizations = %v, want ErrNotFound", err)
+	}
+	if got, err := e.store.Get(ctx, b.org, gb.ID); err != nil || got.Role != "viewer" || got.Revision != 1 || !got.Live() {
+		t.Fatalf("grant of the other organization after the cross-organization writes = %+v, %v; want unchanged viewer revision 1", got, err)
+	}
+	for _, eventType := range []string{"auth.resource_grant.updated", "auth.resource_grant.revoked"} {
+		if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = $1 AND attributes->>'target_id' = $2`,
+			eventType, gb.ID.String()); n != 0 {
+			t.Fatalf("%s audit rows for the other organization's grant = %d, want 0", eventType, n)
+		}
+	}
 }
 
 // I4: an expiry must be in the future; none is fine.

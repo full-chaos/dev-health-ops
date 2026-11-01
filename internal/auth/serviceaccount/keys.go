@@ -101,6 +101,11 @@ type Key struct {
 	CreatedAt time.Time
 	UpdatedAt time.Time
 	ParentID  *uuid.UUID
+
+	Fingerprint   string
+	RevokedAt     *time.Time
+	RevokedReason *string
+	CreatedBy     *uuid.UUID
 }
 
 // IssuedKey is the answer of IssueKey and RotateKey, and the one place a key
@@ -534,6 +539,8 @@ FROM `+s.q+`.credential_registry WHERE principal_id = $1 AND `+liveKey+` ORDER B
 	}
 	return out, nil
 }
+
+func (s *Store) KeyByID(context.Context, uuid.UUID) (*Key, error) { return nil, ErrStore }
 
 // keyRow is the one row ResolveKey reads.
 type keyRow struct {

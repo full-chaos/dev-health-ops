@@ -313,7 +313,7 @@ func newProvFixture(t *testing.T) *provFixture {
 // their rows ship, so it plants theirs too.
 func docWithRow(t testing.TB, route string) []byte {
 	t.Helper()
-	return docWithRows(t, append([]string{route}, serviceAccountPatterns...)...)
+	return docWithRows(t, append(append([]string{route}, serviceAccountPatterns...), keyPatterns...)...)
 }
 
 // serviceAccountPatterns are the service account routes.
@@ -543,7 +543,7 @@ func routeCases() []routeCase {
 		{opOrgCreate, PatternOrgCreate, func(f *provFixture, a uuid.UUID) map[string]any {
 			return map[string]any{"actor_principal_id": a.String(), "organization_name": "Acme", "slug": "acme", "tier": "community", "managed_by": "stripe"}
 		}, []string{"actor_principal_id", "organization_name", "managed_by"}},
-	}, serviceAccountCases()...)
+	}, append(serviceAccountCases(), keyCases()...)...)
 }
 
 // fakeInviteID is the invite the revoke route case names.

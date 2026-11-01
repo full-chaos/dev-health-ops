@@ -28,6 +28,7 @@ type fakeServiceAccounts struct {
 	actor     serviceaccount.Actor
 	newOwner  uuid.UUID
 	locked    serviceaccount.Locked
+	fakeKeys
 }
 
 func (f *fakeServiceAccounts) run(verb string, a serviceaccount.Actor, l serviceaccount.Locked) error {
@@ -77,6 +78,7 @@ func (f *fakeServiceAccounts) Lookup(_ context.Context, id uuid.UUID) (*servicea
 
 func (f *provFixture) account() { // the account the disable, enable and owner routes name
 	f.sa.info = serviceaccount.Info{ID: uuid.New(), OrgID: f.org, Name: "ci-bot", Active: true, Owner: f.owner, OwnerEnabled: true, OwnerMember: true}
+	seedKey(f)
 }
 
 func serviceAccountCases() []routeCase {
@@ -208,8 +210,8 @@ func TestServiceAccountUnknownAccountIsNamedOnlyToASuperuser(t *testing.T) {
 			status int
 			reason string
 		}{
-			"admin of the org": {f.admin, http.StatusForbidden, reasonSuperuserRequired},
-			"owner of the org": {f.owner, http.StatusForbidden, reasonSuperuserRequired},
+			"admin of the org": {f.admin, http.StatusForbidden, reasonAdminRequired},
+			"owner of the org": {f.owner, http.StatusForbidden, reasonAdminRequired},
 			"inactive":         {f.x, http.StatusForbidden, reasonDeactivated},
 			"unknown actor":    {uuid.New(), http.StatusForbidden, reasonDeactivated},
 			"superuser":        {f.super, http.StatusNotFound, reasonServiceAccountNotFound},

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -47,6 +48,11 @@ type ServiceAccounts interface {
 	Enable(ctx context.Context, id uuid.UUID, a serviceaccount.Actor) error
 	SetOwner(ctx context.Context, id, newOwner uuid.UUID, a serviceaccount.Actor) error
 	Lookup(ctx context.Context, id uuid.UUID) (*serviceaccount.Info, error)
+	IssueKey(ctx context.Context, id uuid.UUID, expiresIn time.Duration, a serviceaccount.Actor) (serviceaccount.IssuedKey, error)
+	RotateKey(ctx context.Context, id uuid.UUID, overlap, expiresIn time.Duration, a serviceaccount.Actor) (serviceaccount.IssuedKey, error)
+	RevokeKey(ctx context.Context, credentialID uuid.UUID, reason string, a serviceaccount.Actor) error
+	ListKeys(ctx context.Context, id uuid.UUID) ([]serviceaccount.Key, error)
+	KeyByID(ctx context.Context, id uuid.UUID) (*serviceaccount.Key, error)
 }
 
 type serviceAccountAnswer struct {
@@ -109,6 +115,14 @@ func serviceAccountRefusal(err error, denied errActorRefused) refusal {
 		{serviceaccount.ErrOwnerNotMember, refusal{http.StatusConflict, reasonOwnerNotMember}},
 		{serviceaccount.ErrAlreadyInState, refusal{http.StatusConflict, reasonAlreadyInState}},
 		{serviceaccount.ErrStateChanged, refusal{http.StatusConflict, reasonStateChanged}},
+		{serviceaccount.ErrAccountDisabled, refusal{http.StatusConflict, reasonServiceAccountDisabled}},
+		{serviceaccount.ErrKeyLive, refusal{http.StatusConflict, reasonKeyLive}},
+		{serviceaccount.ErrKeyRotating, refusal{http.StatusConflict, reasonKeyRotating}},
+		{serviceaccount.ErrKeyNone, refusal{http.StatusConflict, reasonKeyNone}},
+		{serviceaccount.ErrKeyNotFound, refusal{http.StatusNotFound, reasonKeyNotFound}},
+		{serviceaccount.ErrKeyExpiry, refusal{http.StatusBadRequest, reasonExpiryInvalid}},
+		{serviceaccount.ErrKeyOverlap, refusal{http.StatusBadRequest, reasonOverlapInvalid}},
+		{serviceaccount.ErrKeyReason, refusal{http.StatusBadRequest, reasonRevokeReasonInvalid}},
 	} {
 		if errors.Is(err, c.err) {
 			return c.answer
@@ -117,31 +131,39 @@ func serviceAccountRefusal(err error, denied errActorRefused) refusal {
 	return unavailable(reasonStoreUnavailable)
 }
 
-// serviceAccountOrg reads the account a route names, before any verb runs, for the organization the actor rule needs.
-// An account that does not exist can be authorized for no organization: only an active superuser is told so (404); any
-// other actor gets the actor refusal, so a refused actor learns nothing about the rows. It writes the answer and returns
-// false when the route must stop.
+// serviceAccountInfo reads the account a route names, before any verb runs, for the organization the actor rule needs.
 func (h provisioningHandlers) serviceAccountInfo(w http.ResponseWriter, r *http.Request, op string, id, actor uuid.UUID) (*serviceaccount.Info, bool) {
-	ctx := r.Context()
-	info, err := h.ServiceAccounts.Lookup(ctx, id)
+	return h.accountOf(w, r, op, id, actor, reasonServiceAccountNotFound)
+}
+
+// accountOf reads an account. An account that does not exist can be authorized for no organization (refuseUnknown).
+func (h provisioningHandlers) accountOf(w http.ResponseWriter, r *http.Request, op string, id, actor uuid.UUID, notFound string) (*serviceaccount.Info, bool) {
+	info, err := h.ServiceAccounts.Lookup(r.Context(), id)
 	switch {
 	case err == nil:
 		return info, true
 	case errors.Is(err, serviceaccount.ErrNotFound):
-		_, rule := h.actorRule(ctx, h.Reader, actor, uuid.Nil, true)
-		var refused errActorRefused
-		switch {
-		case errors.As(rule, &refused):
-			h.rec.refuse(w, r, op, refusal{http.StatusForbidden, refused.reason}, nil)
-		case rule != nil:
-			h.rec.refuse(w, r, op, unavailable(reasonStoreUnavailable), rule)
-		default:
-			h.rec.refuse(w, r, op, refusal{http.StatusNotFound, reasonServiceAccountNotFound}, nil)
-		}
+		h.refuseUnknown(w, r, op, actor, notFound)
 	default:
 		h.rec.refuse(w, r, op, unavailable(reasonStoreUnavailable), err)
 	}
 	return nil, false
+}
+
+// refuseUnknown answers a row that does not exist. The actor rule runs on the nil organization, so a non-superuser gets
+// the refusal it would get for a row of another organization, and only an active superuser is told the row is unknown
+// (404 with reason). It writes the answer.
+func (h provisioningHandlers) refuseUnknown(w http.ResponseWriter, r *http.Request, op string, actor uuid.UUID, reason string) {
+	_, rule := h.actorRule(r.Context(), h.Reader, actor, uuid.Nil, true)
+	var refused errActorRefused
+	switch {
+	case errors.As(rule, &refused):
+		h.rec.refuse(w, r, op, refusal{http.StatusForbidden, refused.reason}, nil)
+	case rule != nil:
+		h.rec.refuse(w, r, op, unavailable(reasonStoreUnavailable), rule)
+	default:
+		h.rec.refuse(w, r, op, refusal{http.StatusNotFound, reason}, nil)
+	}
 }
 
 func (h provisioningHandlers) serviceAccountDone(w http.ResponseWriter, r *http.Request, op string, err error, denied errActorRefused, answer serviceAccountAnswer) {

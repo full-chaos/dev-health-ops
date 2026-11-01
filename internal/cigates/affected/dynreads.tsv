@@ -55,6 +55,7 @@ internal/auth/authruntime	endpoint_profile_rows_test.go
 internal/auth/authruntime	fixed_credential_scan_test.go
 internal/auth/authruntime	kidwiring_callers_test.go
 internal/auth/contracts	access_token_goldens_test.go
+internal/auth/contracts	acr_credential_lifecycle_event_test.go
 internal/auth/contracts	authorization_goldens_test.go
 internal/auth/contracts	authorization_schema_test.go
 internal/auth/contracts	contracts.go
@@ -104,6 +105,7 @@ internal/auth/platformrole	superuser_fills_census_test.go
 internal/auth/platformrole	superuser_literals_census_test.go
 internal/auth/platformrole	superuser_sites_census_test.go
 internal/auth/platformrole	superuser_writes_census_test.go
+internal/auth/pushlifecycle	acr_mapping_test.go
 internal/auth/ratelimitvalkey	acl_feed_test.go
 internal/auth/ratelimitvalkey	acl_test.go
 internal/auth/restorefence	consumers_test.go

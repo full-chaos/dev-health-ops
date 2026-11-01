@@ -157,7 +157,8 @@ func TestAcrLifecycleVocabulariesArePinned(t *testing.T) {
 	if got, want := enum(payload["actor_type"]), []string{AcrActorUser, AcrActorOperator, AcrActorCredential, AcrActorSystem}; !slices.Equal(got, want) {
 		t.Errorf("actor types %v, want %v", got, want)
 	}
-	classes := enum(acrChangeMembers(t, schema)["acr_class"])
+	issued := schema["allOf"].([]any)[0].(map[string]any)["then"].(map[string]any)["properties"].(map[string]any)
+	classes := enum(issued["payload"].(map[string]any)["properties"].(map[string]any)["change"].(map[string]any)["properties"].(map[string]any)["acr_class"])
 	if len(classes) != 6 {
 		t.Errorf("%d classes in the issued branch, want 6", len(classes))
 	}

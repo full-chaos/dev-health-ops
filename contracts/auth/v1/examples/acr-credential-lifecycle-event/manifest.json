@@ -10,6 +10,14 @@
       "why": "An operator-issued credential: no owner, no expiry, no request id."
     },
     {
+      "file": "valid-issued-browser.json",
+      "why": "The first-party browser class: a user-approved credential with a short life."
+    },
+    {
+      "file": "valid-issued-operator-class.json",
+      "why": "The operator class stays in the vocabulary even though no acr path derives it today."
+    },
+    {
       "file": "valid-issued-workload-system.json",
       "why": "A workload exchange credential: no owner and no actor reference, the system acted."
     },

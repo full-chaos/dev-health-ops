@@ -54,6 +54,7 @@ var goMessageForProvisioningKeyword = map[string]string{
 	"maximum":       "maximum:",
 	"type":          "type:",
 	"minItems":      "minItems:",
+	"not":           "not:",
 }
 
 func provisioningTokenFor(keyword string) (string, bool) {

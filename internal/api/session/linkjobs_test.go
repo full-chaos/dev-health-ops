@@ -298,15 +298,12 @@ func TestDrainStopsTheReporterAfterALastReport(t *testing.T) {
 	drop()
 	release()
 	q.wait()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	// A live context: the drain returns only after its wait goroutine and the reporter's final report are done,
+	// so the next fillQueue never adds to the WaitGroup while that goroutine still starts its Wait.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	<-ctx.Done()
 	q.drain(ctx)
 	count := func() int { return strings.Count(logs.String(), "queue full") }
-	deadline := time.Now().Add(2 * time.Second)
-	for count() == 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
 	if !strings.Contains(logs.String(), "count=1") {
 		t.Fatalf("the last report was not written at the stop:\n%s", logs.String())
 	}

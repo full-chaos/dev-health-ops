@@ -4,13 +4,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/noop"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
+	"github.com/full-chaos/dev-health-ops/internal/auth/publicaudit"
 )
 
 // resetRequestedEvent is the audit row of a password-reset request. A known
@@ -41,10 +47,53 @@ func (l *PGLinks) issueResetRequest(ctx context.Context, req IssueRequest, princ
 		return fmt.Errorf("local: reading the membership of a reset request: %w", err)
 	}
 	err = audit.AppendWith(ctx, l.pool, l.schema, resetRequestedEvent(principal, real, org), func(ctx context.Context, tx audit.TxOps) error {
-		return l.writeBoundLink(ctx, tx, req, principal, real)
+		if err := l.writeBoundLink(ctx, tx, req, principal, real); err != nil {
+			return err
+		}
+		return resetRequestedPublicRow(ctx, tx, principal, real)
 	})
+	if errors.Is(err, errResetRequestPublicRow) {
+		// The request answers as every other address's does (no enumeration);
+		// nothing was committed: no link, no auth event, no public row.
+		resetRequestSkipped.Add(ctx, 1, metric.WithAttributes(attribute.String("reason", reasonPublicAuditRefused)))
+		slog.WarnContext(ctx, "local: reset request not recorded; nothing committed", "reason", reasonPublicAuditRefused)
+		return ErrResetRequestNotRecorded
+	}
 	if err != nil {
 		return fmt.Errorf("local: storing a link credential: %w", err)
+	}
+	return nil
+}
+
+// errResetRequestPublicRow wraps a failed write of a reset request's go-api row.
+var errResetRequestPublicRow = errors.New("local: the reset request's public audit row was refused")
+
+// ErrResetRequestNotRecorded is IssueBound's answer to a reset request whose
+// go-api public.audit_logs row could not be written: nothing was committed,
+// and the flow answers as it answers any address (a decoy, no mail delivered).
+var ErrResetRequestNotRecorded = errors.New("local: the reset request was not recorded")
+
+// reasonPublicAuditRefused is the one closed reason of a skipped reset request.
+const reasonPublicAuditRefused = "public_audit_refused"
+
+// resetRequestSkipped counts reset requests answered without a commit.
+var resetRequestSkipped = func() metric.Int64Counter {
+	counter, err := otel.Meter("github.com/full-chaos/dev-health-ops/internal/auth/identity/local").Int64Counter(
+		"auth.local.reset_request_skipped", metric.WithDescription("Password reset requests answered without a commit, by closed reason."))
+	if err != nil {
+		counter, _ = noop.NewMeterProvider().Meter("noop").Int64Counter("auth.local.reset_request_skipped")
+	}
+	return counter
+}()
+
+// resetRequestedPublicRow is go-api's row of a reset request (internal/api/session verify.go:231 auditUserEvent):
+// password_reset_requested "Password reset requested", resource user/<user>, changes {}, in the user's first public
+// membership's organization in the login order; none for a user with no membership (CHAOS-11400). It is one
+// statement of the same text for a known address, an unknown one (real false: the decoy writes nothing) and a user
+// with no membership, so the request's statements stay the same for every address.
+func resetRequestedPublicRow(ctx context.Context, tx audit.TxOps, principal uuid.UUID, real bool) error {
+	if err := publicaudit.FirstMembershipUserRow(ctx, tx, real, principal, "password_reset_requested", "Password reset requested"); err != nil {
+		return fmt.Errorf("%w: %w", errResetRequestPublicRow, err)
 	}
 	return nil
 }

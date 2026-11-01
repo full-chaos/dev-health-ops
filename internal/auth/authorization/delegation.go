@@ -103,7 +103,7 @@ func (e *Evaluator) Evaluate(r Request, s Snapshot) Decision {
 		return d
 	}
 	act, err := e.cat.Action(r.Action)
-	if err != nil || act.Scope == policycatalog.ScopePlatform || r.Action == "admin.impersonate" ||
+	if err != nil || act.Scope == policycatalog.ScopePlatform ||
 		!hasAction(del.Chain[0].PermittedActions, r.Action) {
 		return deny(ReasonImpersonationDenied)
 	}

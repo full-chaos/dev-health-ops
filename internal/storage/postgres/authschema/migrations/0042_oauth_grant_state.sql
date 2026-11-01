@@ -86,7 +86,7 @@ CREATE TABLE oauth_grants (
     organization_id    uuid        NOT NULL REFERENCES organizations (id) ON DELETE CASCADE,
     client_id          text        NOT NULL CHECK (char_length(client_id) BETWEEN 1 AND 512),
     client_class       text        NOT NULL CHECK (client_class IN ('browser', 'mcp')),
-    credential_purpose text        NOT NULL DEFAULT 'oauth' CHECK (credential_purpose = 'oauth'),
+    purpose            text        NOT NULL DEFAULT 'oauth' CHECK (purpose = 'oauth'),
     resource           text        NOT NULL CHECK (char_length(resource) BETWEEN 1 AND 2048),
     audience           text        NOT NULL CHECK (audience IN ('acr-api', 'acr-mcp')),
     scope              text        NOT NULL CHECK (char_length(scope) BETWEEN 1 AND 256),

@@ -188,3 +188,31 @@ func TestRunDisable(t *testing.T) {
 		t.Fatalf("unknown: %d %d", code, g.disabled)
 	}
 }
+
+func TestRebindRefusesAnEmptyOrBlankUIDAtTheParser(t *testing.T) {
+	for name, uid := range map[string]string{"empty": "", "whitespace only": " ", "tab": "\t"} {
+		_, err := parseWorkloadsArgs(withArgs("rebind", "-uid", uid), io.Discard)
+		if err == nil {
+			t.Errorf("%s uid accepted", name)
+			continue
+		}
+		_, missing := parseWorkloadsArgs(withArgs("rebind"), io.Discard)
+		if missing == nil || err.Error() != missing.Error() {
+			t.Errorf("%s uid: message %q differs from the missing -uid message %v", name, err, missing)
+		}
+	}
+}
+
+func TestRebindEmptyUIDDryRunExitsTwoBeforeAnyStoreCall(t *testing.T) {
+	lookup := func(string) (string, bool) {
+		t.Fatal("the environment was read for a rebind with an empty -uid")
+		return "", false
+	}
+	var stderr strings.Builder
+	if code := executeWorkloads(t.Context(), withArgs("rebind", "-uid", ""), lookup, io.Discard, &stderr); code != 2 {
+		t.Fatalf("exit = %d, want 2 (stderr %q)", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "rebind needs -uid") {
+		t.Errorf("stderr %q does not name the -uid refusal", stderr.String())
+	}
+}

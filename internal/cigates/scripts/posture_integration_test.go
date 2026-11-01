@@ -794,8 +794,9 @@ func TestPostureIntegrationHardCodesNoToolchainPath(t *testing.T) {
 }
 
 // CHAOS-11714: internal/pgmigrate needs about 705 s at host load 30-39, above go test's 10 m default, so the runner
-// gives that one package -timeout 20m (and a capped.sh limit above it). Every other package keeps the default.
-func TestPostureIntegrationGivesOnlyPgmigrateALongTimeout(t *testing.T) {
+// gives it -timeout 20m (and a capped.sh limit above it). internal/storage/postgres/authschema needs about 650 s
+// under load and gets the same. Every other package keeps the default.
+func TestPostureIntegrationGivesTheSlowPackagesALongTimeout(t *testing.T) {
 	f := postureDemo(t)
 	write := func(rel, body string) {
 		p := filepath.Join(f.dir, rel)
@@ -806,8 +807,9 @@ func TestPostureIntegrationGivesOnlyPgmigrateALongTimeout(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	write("ci/posture_integration_packages.tsv", "internal/ok\ninternal/pgmigrate\n")
+	write("ci/posture_integration_packages.tsv", "internal/ok\ninternal/pgmigrate\ninternal/storage/postgres/authschema\n")
 	write("internal/pgmigrate/pg_test.go", "package pgmigrate\n\nimport \"testing\"\n\nfunc TestRan(t *testing.T) {}\n")
+	write("internal/storage/postgres/authschema/a_test.go", "package authschema\n\nimport \"testing\"\n\nfunc TestRan(t *testing.T) {}\n")
 	f.git("add", ".")
 	f.git("commit", "-q", "-m", "pgmigrate fixture")
 	calls := filepath.Join(t.TempDir(), "calls.txt")
@@ -822,8 +824,9 @@ func TestPostureIntegrationGivesOnlyPgmigrateALongTimeout(t *testing.T) {
 	}
 	env := append(isolatedGoEnv(t), "PATH="+filepath.Dir(goBinary(t))+string(os.PathListSeparator)+"/usr/bin:/bin")
 	res := cmdSpec{dir: f.dir, env: env}.run("bash", filepath.Join(f.dir, "ci", "posture_integration.sh"), "--run", "--paths", paths, "--test-runner", runner)
-	if res.code == 0 || postureRow(res, "SIMULATED internal/ok ") == "" || postureRow(res, "SIMULATED internal/pgmigrate ") == "" {
-		t.Fatalf("want both packages run (exit is non-zero in test-runner mode): exit %d stdout=%q stderr=%q", res.code, res.stdout, res.stderr)
+	if res.code == 0 || postureRow(res, "SIMULATED internal/ok ") == "" || postureRow(res, "SIMULATED internal/pgmigrate ") == "" ||
+		postureRow(res, "SIMULATED internal/storage/postgres/authschema ") == "" {
+		t.Fatalf("want all three packages run (exit is non-zero in test-runner mode): exit %d stdout=%q stderr=%q", res.code, res.stdout, res.stderr)
 	}
 	raw, err := os.ReadFile(calls)
 	if err != nil {
@@ -837,6 +840,11 @@ func TestPostureIntegrationGivesOnlyPgmigrateALongTimeout(t *testing.T) {
 			if !strings.Contains(line, " -timeout 20m ") || !strings.HasPrefix(line, "-t 1500 ") {
 				t.Fatalf("internal/pgmigrate must run with -timeout 20m under a 1500 s cap, got %q", line)
 			}
+		case strings.HasSuffix(line, " ./internal/storage/postgres/authschema"):
+			seen++
+			if !strings.Contains(line, " -timeout 20m ") || !strings.HasPrefix(line, "-t 1500 ") {
+				t.Fatalf("internal/storage/postgres/authschema must run with -timeout 20m under a 1500 s cap, got %q", line)
+			}
 		case strings.HasSuffix(line, " ./internal/ok"):
 			seen++
 			if strings.Contains(line, "-timeout") || !strings.HasPrefix(line, "-t 900 ") {
@@ -846,7 +854,7 @@ func TestPostureIntegrationGivesOnlyPgmigrateALongTimeout(t *testing.T) {
 			t.Fatalf("unexpected runner call %q", line)
 		}
 	}
-	if seen != 2 {
+	if seen != 3 {
 		t.Fatalf("want one runner call per package, got %d: %q", seen, raw)
 	}
 }

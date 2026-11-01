@@ -48,8 +48,7 @@ var joinPublicMembershipColumns = []string{"id", "user_id", "org_id", "role", "j
 // insertJoinMembership writes the active membership of a join inside the
 // caller's audit.Commit: the public.memberships row go-api's readers use, then
 // the auth.memberships row, with one id, role and instant. Both rows commit
-// together or neither does. It is the only writer of a new auth membership
-// apart from the organizations backfill, which copies public rows.
+// together or neither does.
 //
 // It locks the auth principal row, then the public.users row (the lock
 // go-api's own JIT join takes), then the auth organization row FOR SHARE: the

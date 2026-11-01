@@ -254,7 +254,7 @@ func (h handlers) commitThenIssue(w http.ResponseWriter, r *http.Request, tx pgx
 	out.Set("access_token", pair.access)
 	out.Set("refresh_token", pair.refresh)
 	out.Set("token_type", "bearer")
-	out.Set("expires_in", accessExpiresIn)
+	out.Set("expires_in", expiresInOf(pair))
 	out.Set("org_id", membership.OrgID.String())
 	out.Set("org_name", orgName)
 	out.Set("role", roleText(membership.Role))

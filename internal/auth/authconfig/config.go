@@ -105,6 +105,9 @@ const (
 	// EnvAccessTokenClass picks the one class of access token this service
 	// mints: hs256_compat (the default) or eddsa. Exact match, no fallback.
 	EnvAccessTokenClass = "AUTH_ACCESS_TOKEN_CLASS"
+	// EnvAccessTokenLifetime is the eddsa access token's lifetime (exp - iat): whole minutes from 5 to 60, default 60
+	// (ACP-ADR-03: EdDSA ships at 60 minutes, the 10-minute target is this setting). Not used under hs256_compat.
+	EnvAccessTokenLifetime = "AUTH_ACCESS_TOKEN_LIFETIME"
 	// EnvSessionSuccessorKey is the 32-byte session successor key (base64url,
 	// no padding) that derives a rotated refresh credential (CHAOS-10207
 	// ruling Q-B1-1). Secret: environment or _FILE only.
@@ -296,6 +299,9 @@ type SessionTokens struct {
 	AccessSecret   secrets.Value
 	AccessIssuer   string
 	AccessAudience string
+	// AccessLifetime is the eddsa access token's exp - iat (EnvAccessTokenLifetime); go-api's 60 minutes under
+	// hs256_compat.
+	AccessLifetime time.Duration
 	// LegacyAudience is the audience of go-api's HS256 token under the eddsa class.
 	LegacyAudience string
 	SuccessorKey   secrets.Value
@@ -361,6 +367,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.String("jwt_issuer", c.Session.AccessIssuer),
 		slog.String("jwt_audience", c.Session.AccessAudience),
 		slog.String("access_class", c.Session.AccessClass),
+		slog.String("access_lifetime", c.Session.AccessLifetime.String()),
 		slog.Bool("workload_exchange_enabled", c.WorkloadExchange.Enabled),
 		slog.Bool("workload_bootstrap_enabled", c.WorkloadExchange.Bootstrap),
 		slog.Bool("issue_route_workload_enabled", c.SessionIssueWorkloadSubject != ""),
@@ -437,13 +444,11 @@ func Load(spec Spec) (Config, error) {
 	); err != nil {
 		return Config{}, err
 	}
-	burst, err := integer(
-		lookup, EnvRateLimitBurst, int64(defaultRateLimitBurst), minRateLimitBurst, maxRateLimitBurst,
-	)
-	if err != nil {
+	if cfg.RateLimit.Burst, err = smallInteger(
+		lookup, EnvRateLimitBurst, defaultRateLimitBurst, minRateLimitBurst, maxRateLimitBurst,
+	); err != nil {
 		return Config{}, err
 	}
-	cfg.RateLimit.Burst = int(burst)
 	if cfg.Public.MaxInFlight, err = smallInteger(
 		lookup, EnvPublicMaxInFlight, defaultPublicMaxInFlight, minPublicMaxInFlight, maxPublicMaxInFlight,
 	); err != nil {
@@ -639,6 +644,21 @@ func accessTokenClass(lookup secrets.LookupEnv) (string, error) {
 	return "", fmt.Errorf("%s must be %s or %s", EnvAccessTokenClass, AccessClassHS256Compat, AccessClassEdDSA)
 }
 
+// accessTokenLifetime reads EnvAccessTokenLifetime: unset is the access-token.v1 ceiling (60 minutes); a set value
+// is a Go duration of whole minutes from 5 to 60, written without surrounding whitespace.
+func accessTokenLifetime(lookup secrets.LookupEnv) (time.Duration, error) {
+	raw, set := lookup(EnvAccessTokenLifetime)
+	if !set {
+		return contracts.AccessTokenLifetimeCeiling, nil
+	}
+	lifetime, err := time.ParseDuration(raw)
+	if err != nil || raw != strings.TrimSpace(raw) || lifetime%time.Minute != 0 ||
+		lifetime < 5*time.Minute || lifetime > contracts.AccessTokenLifetimeCeiling {
+		return 0, fmt.Errorf("%s must be whole minutes from 5m to 60m", EnvAccessTokenLifetime)
+	}
+	return lifetime, nil
+}
+
 // sessionTokens resolves the session routes' settings. The two secrets come
 // together or not at all: a deployment with one of them meant to serve the
 // session routes, and silently serving none would hide that.
@@ -651,6 +671,12 @@ func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 		AccessClass:    class,
 		AccessIssuer:   stringOr(lookup, EnvAccessTokenIssuer, defaultAccessTokenIssuer),
 		AccessAudience: stringOr(lookup, EnvAccessTokenAudience, defaultAccessTokenAudience),
+		AccessLifetime: contracts.AccessTokenLifetimeCeiling,
+	}
+	if class == AccessClassEdDSA {
+		if out.AccessLifetime, err = accessTokenLifetime(lookup); err != nil {
+			return SessionTokens{}, err
+		}
 	}
 	out.LegacyAudience = contracts.PlatformAPIAudience
 	if raw, set := lookup(EnvLegacyJWTAudience); set {

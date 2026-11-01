@@ -892,6 +892,9 @@ func TestSAMLSignInWithoutMembershipIsRefusedWithoutWrites(t *testing.T) {
 	t.Run("new account, the membership seam fails", func(t *testing.T) {
 		h.svc.JIT = failingSeam{}
 		defer func() { h.svc.JIT = nil }()
+		if _, err := h.db.admin.Exec(context.Background(), `UPDATE public.sso_providers SET allowed_domains = '["example.com"]'::json WHERE id = $1`, h.provider.ID); err != nil {
+			t.Fatal(err)
+		}
 		before := h.writeCounts()
 		signIn, err := h.consume(h.respond(resp{nameID: nid("new-" + uuid.NewString()), email: uniqueEmail("free")}), nil)
 		if err == nil || errors.Is(err, saml.ErrNotOrgMember) {

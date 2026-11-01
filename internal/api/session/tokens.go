@@ -22,7 +22,20 @@ const accessExpiresIn = int64(edgetoken.AccessLifetime / time.Second)
 
 // tokenPair is a sign-in's tokens; session is auth-service's session-route
 // token under its eddsa class, empty otherwise.
-type tokenPair struct{ access, refresh, session string }
+type tokenPair struct {
+	access, refresh, session string
+	// expiresIn is the access token's lifetime when auth-service issued the pair; 0 for go-api's own mint
+	// (accessExpiresIn).
+	expiresIn int64
+}
+
+// expiresInOf is the expires_in a sign-in answer states for pair.
+func expiresInOf(pair tokenPair) int64 {
+	if pair.expiresIn > 0 {
+		return pair.expiresIn
+	}
+	return accessExpiresIn
+}
 
 // roleText is str(membership.role): a NULL role is the text "None".
 func roleText(role *string) string {
@@ -108,7 +121,7 @@ func (h handlers) issueSession(ctx context.Context, r *http.Request, userID uuid
 	if err != nil {
 		return tokenPair{}, err
 	}
-	return tokenPair{access: pair.Access, refresh: pair.Refresh, session: pair.SessionAccess}, nil
+	return tokenPair{access: pair.Access, refresh: pair.Refresh, session: pair.SessionAccess, expiresIn: pair.ExpiresIn}, nil
 }
 
 // issuerRefusedTheOrg reports whether the issue route refused the session as
@@ -193,7 +206,7 @@ func loginResponse(pair tokenPair, needsOnboarding bool, user *pyjson.Object, is
 	out.Set("access_token", pair.access)
 	out.Set("refresh_token", pair.refresh)
 	out.Set("token_type", "bearer")
-	out.Set("expires_in", pyjson.IntOf(accessExpiresIn))
+	out.Set("expires_in", pyjson.IntOf(expiresInOf(pair)))
 	out.Set("needs_onboarding", needsOnboarding)
 	out.Set("user", user)
 	if isNewUser != nil {

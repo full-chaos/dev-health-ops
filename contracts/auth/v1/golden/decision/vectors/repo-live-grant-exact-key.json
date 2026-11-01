@@ -3,7 +3,7 @@
     "allowed": true,
     "cache_class": "resource_revision_bound",
     "expires_in_seconds": 30,
-    "policy_revision": 7,
+    "policy_revision": 8,
     "reason": "allowed_by_repository_grant"
   },
   "id": "repo-live-grant-exact-key",

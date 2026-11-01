@@ -1639,7 +1639,7 @@ check_race_weights_rows() {
 # check_plan_reads: the declared-read guard of the plan verdict (`cmd/cigate plan-reads`) over the whole tree: every
 # package that names a path of a declared class in a string literal has a reads.tsv row, and --reach recomputes
 # reach.tsv (the programs that call each code-scope unbounded site: go/packages, SSA and RTA over the module; about
-# 3 min and an 8 GB live heap on 4 cores, so the GC holds it under GOMEMLIMIT) and fails on any difference. It runs in the static leg, which runs on every change. With PLAN_READS_REACH_CACHE set (the
+# 3 min and a 6.5 GiB live heap on 4 cores under the tool's own 8 GiB soft limit; a peak RSS over the 10 GiB budget, reachBudgetMiB, fails: >= 30% under a 16 GiB scope, e.g. capped.sh's GOMEMLIMIT 85% of MemoryMax) and fails on any difference. It runs in the static leg, which runs on every change. With PLAN_READS_REACH_CACHE set (the
 # GitHub-hosted legs only, go-quality.yml) a pull request reuses a store of the same input hash; PLAN_READS_REACH_FRESH (every
 # other event) computes fresh and only stores (CHAOS-11421).
 check_plan_reads() {

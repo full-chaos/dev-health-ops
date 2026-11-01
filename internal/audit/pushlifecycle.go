@@ -42,7 +42,7 @@ type PushLifecycleEvent struct {
 // its events commit or roll back together. It accepts only this one contract.
 //
 // It writes through the auth schema's append_external_push_lifecycle_event
-// function (migration 0038), not through the tables: the caller's login holds
+// function (migration 0039), not through the tables: the caller's login holds
 // EXECUTE on that function and no table privilege. The function fixes the
 // aggregate type, the event list and the payload members, assigns the revision
 // and the idempotency key, and arms and disarms the commit guard itself, so

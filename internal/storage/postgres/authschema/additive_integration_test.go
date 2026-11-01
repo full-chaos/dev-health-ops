@@ -414,12 +414,12 @@ var additiveExemptions = []additiveExemption{
 		reason:     "aggregate_revisions admits the invite aggregate; the redefined list is the 0013 list plus that one value, so it only widens (CHAOS-10981)",
 	},
 	{
-		version:    38,
+		version:    39,
 		regression: `constraint aggregate_revisions.aggregate_revisions_aggregate_type_check redefined "CHECK ((aggregate_type = ANY (ARRAY['principal'::text, 'user'::text, 'external_identity'::text, 'organization'::text, 'membership'::text, 'platform_role_assignment'::text, 'service_account'::text, 'workload'::text, 'resource_grant'::text, 'invite'::text])))" -> "CHECK ((aggregate_type = ANY (ARRAY['principal'::text, 'user'::text, 'external_identity'::text, 'organization'::text, 'membership'::text, 'platform_role_assignment'::text, 'service_account'::text, 'workload'::text, 'resource_grant'::text, 'invite'::text, 'external_push_credential'::text])))"`,
 		reason:     "aggregate_revisions admits the external_push_credential aggregate; the redefined list is the 0033 list plus that one value, so it only widens (CHAOS-10895)",
 	},
 	{
-		version:    38,
+		version:    39,
 		regression: `constraint aggregate_revisions.aggregate_revisions_aggregate_id_check redefined "CHECK ((aggregate_id ~ '^[a-z]{3}_[A-Za-z0-9_-]{1,64}$'::text))" -> "CHECK (((aggregate_id ~ '^[a-z]{3}_[A-Za-z0-9_-]{1,64}$'::text) OR ((aggregate_type = 'external_push_credential'::text) AND (aggregate_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'::text))))"`,
 		reason:     "aggregate_revisions admits a bare UUID id for the external_push_credential aggregate; the redefined pattern is the 0013 pattern or that one shape for that one type, so it only widens (CHAOS-10895)",
 	},

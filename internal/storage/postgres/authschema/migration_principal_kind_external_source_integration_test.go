@@ -95,12 +95,18 @@ func TestMigrationPrincipalKindAdmitsExternalSource(t *testing.T) {
 // kindRefusal asserts the refusal is the guard's own: SQLSTATE 23514 and its message. Any other error is not a proof of the guard.
 func kindRefusal(t *testing.T, err error, what string) {
 	t.Helper()
+	kindRefusalBy(t, err, what, "is an external_source")
+}
+
+// kindRefusalBy is kindRefusal for a refusal another constraint makes first.
+func kindRefusalBy(t *testing.T, err error, what, message string) {
+	t.Helper()
 	if err == nil {
 		t.Errorf("%s was accepted, want a refusal", what)
 		return
 	}
 	var pg *pgconn.PgError
-	if !errors.As(err, &pg) || pg.Code != "23514" || !strings.Contains(pg.Message, "is an external_source") {
+	if !errors.As(err, &pg) || pg.Code != "23514" || !strings.Contains(pg.Message, message) {
 		t.Errorf("%s was refused by something other than the guard: %v", what, err)
 	}
 }
@@ -142,11 +148,13 @@ func TestPrincipalKindExternalSourceHoldsNoSessionMembershipOrPlatformCredential
 	kindRefusal(t, domainOwnedExec(t, ctx, env, kindSessionInsert(kindSource)), "a session of an external_source principal")
 	kindRefusal(t, domainOwnedExec(t, ctx, env, kindMembershipInsert(kindSource)), "a membership of an external_source principal")
 	kindRefusal(t, domainOwnedExec(t, ctx, env, kindCredentialInsert(kindSource, "platform")), "a platform-class credential of an external_source principal")
-	for _, move := range []string{
-		`UPDATE auth.sessions SET principal_id = '` + kindSource + `' WHERE principal_id = '` + kindUser + `'`,
-		`UPDATE auth.memberships SET principal_id = '` + kindSource + `' WHERE principal_id = '` + kindUser + `'`,
-		`UPDATE auth.credential_registry SET principal_id = '` + kindSource + `' WHERE principal_id = '` + kindUser + `' AND domain_owner = 'platform'`,
+	// credential_registry refuses a move of principal_id itself, first: its lifecycle trigger (0007) keeps the row's identity
+	// immutable and fires before the kind guard, so the guard's UPDATE arm on that table is not observable.
+	for _, move := range []struct{ sql, message string }{
+		{`UPDATE auth.sessions SET principal_id = '` + kindSource + `' WHERE principal_id = '` + kindUser + `'`, "is an external_source"},
+		{`UPDATE auth.memberships SET principal_id = '` + kindSource + `' WHERE principal_id = '` + kindUser + `'`, "is an external_source"},
+		{`UPDATE auth.credential_registry SET principal_id = '` + kindSource + `' WHERE principal_id = '` + kindUser + `' AND domain_owner = 'platform'`, "are immutable"},
 	} {
-		kindRefusal(t, domainOwnedExec(t, ctx, env, move), "moving a row onto an external_source principal: "+move)
+		kindRefusalBy(t, domainOwnedExec(t, ctx, env, move.sql), "moving a row onto an external_source principal: "+move.sql, move.message)
 	}
 }

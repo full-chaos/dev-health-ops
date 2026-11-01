@@ -3,6 +3,7 @@ package serviceaccount
 import "errors"
 
 var (
+	ErrDenied         = errors.New("serviceaccount: the actor may not change service accounts of the organization")
 	ErrNotOwned       = errors.New("serviceaccount: auth-service does not own users, so the verb is not served")
 	ErrNotFound       = errors.New("serviceaccount: service account not found")
 	ErrNameInvalid    = errors.New("serviceaccount: the name is outside the service account name pattern")
@@ -18,5 +19,5 @@ var (
 	ErrStore          = errors.New("serviceaccount: store unavailable")
 )
 
-var refusals = []error{ErrNotOwned, ErrNotFound, ErrNameInvalid, ErrNameTaken, ErrOrgNotFound, ErrOrgNotActive, ErrOwnerNotUser,
+var refusals = []error{ErrDenied, ErrNotOwned, ErrNotFound, ErrNameInvalid, ErrNameTaken, ErrOrgNotFound, ErrOrgNotActive, ErrOwnerNotUser,
 	ErrOwnerDisabled, ErrOwnerNotMember, ErrAlreadyInState, ErrNotAccount, ErrStateChanged}

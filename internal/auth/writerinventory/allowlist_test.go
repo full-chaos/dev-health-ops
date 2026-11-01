@@ -193,13 +193,15 @@ var Allowlist = []Entry{
 	// Org service accounts (CHAOS-10989 4.19): written by auth-service, inside audit.Commit.
 	{File: "internal/auth/serviceaccount/store.go", Func: "Store.Create", Table: "auth.principals", Verb: "INSERT"},
 	{File: "internal/auth/serviceaccount/store.go", Func: "Store.Create", Table: "auth.service_accounts", Verb: "INSERT"},
-	{File: "internal/auth/serviceaccount/store.go", Func: "Store.Disable", Table: "auth.principals", Verb: "UPDATE"},
-	{File: "internal/auth/serviceaccount/store.go", Func: "Store.Disable", Table: "auth.service_accounts", Verb: "UPDATE"},
+	{File: "internal/auth/serviceaccount/store.go", Func: "Store.disableOnce", Table: "auth.principals", Verb: "UPDATE"},
+	{File: "internal/auth/serviceaccount/store.go", Func: "Store.disableOnce", Table: "auth.service_accounts", Verb: "UPDATE"},
 	{File: "internal/auth/serviceaccount/store.go", Func: "Store.Enable", Table: "auth.principals", Verb: "UPDATE"},
 	{File: "internal/auth/serviceaccount/store.go", Func: "Store.Enable", Table: "auth.service_accounts", Verb: "UPDATE"},
 	{File: "internal/auth/serviceaccount/store.go", Func: "Store.SetOwner", Table: "auth.service_accounts", Verb: "UPDATE"},
 	{File: "internal/auth/workload/enable.go", Func: "Store.EnableWorkload", Table: "auth.principals", Verb: "UPDATE"},
 	{File: "internal/auth/workload/enable.go", Func: "Store.EnableWorkload", Table: "auth.workloads", Verb: "UPDATE"},
+	// CHAOS-12363 (acp approved plan): auth-migrate rebind, inside audit.Commit.
+	{File: "internal/auth/workload/rebind.go", Func: "Store.RebindBinding", Table: "auth.workload_bindings", Verb: "UPDATE"},
 	{File: "internal/auth/workload/store.go", Func: "Store.AddBinding", Table: "auth.workload_bindings", Verb: "INSERT"},
 	{File: "internal/auth/workload/store.go", Func: "Store.Register", Table: "auth.principals", Verb: "INSERT"},
 	{File: "internal/auth/workload/store.go", Func: "Store.Register", Table: "auth.workloads", Verb: "INSERT"},

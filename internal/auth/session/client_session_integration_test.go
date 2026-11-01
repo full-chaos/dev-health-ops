@@ -389,6 +389,23 @@ func TestTheSchemaRefusesEveryBadWebLink(t *testing.T) {
 	if err := insert(uuid.NewString(), user, nil, web); err == nil {
 		t.Error("a link with no organization was accepted")
 	}
+	// The parent trigger also refuses these two, so each CHECK clause is observed
+	// where it alone decides: an org-less pair passes the trigger, and with the
+	// trigger off a self-reference meets the CHECK alone.
+	orgless := c.signIn(t, ctx, nil).Session.ID.String()
+	if err := insert(uuid.NewString(), user, nil, orgless); err == nil {
+		t.Error("an org-less link was accepted")
+	}
+	if _, err := c.admin.Exec(ctx, `ALTER TABLE auth.sessions DISABLE TRIGGER sessions_web_link_parent`); err != nil {
+		t.Fatal(err)
+	}
+	selfErr := insert(self, user, &c.organization, self)
+	if _, err := c.admin.Exec(ctx, `ALTER TABLE auth.sessions ENABLE TRIGGER sessions_web_link_parent`); err != nil {
+		t.Fatal(err)
+	}
+	if selfErr == nil {
+		t.Error("the CHECK accepted a self-reference")
+	}
 	second := c.signIn(t, ctx, &c.organization).Session.ID.String()
 	if _, err := c.admin.Exec(ctx, `UPDATE auth.sessions SET web_session_id = $2 WHERE id = $1`, child, second); err == nil {
 		t.Error("a change of the link was accepted")

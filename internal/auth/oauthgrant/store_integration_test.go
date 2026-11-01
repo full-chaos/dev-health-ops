@@ -258,6 +258,12 @@ func TestApproveRecordsOneSessionOneGrantAndTheirAudit(t *testing.T) {
 				WHERE id = $1 AND decision = 'approved' AND grant_id = $2 AND code_hash IS NOT NULL AND code_expires_at > clock_timestamp()`, f.request, got.GrantID); live != 1 {
 				t.Fatalf("request rows = %d", live)
 			}
+			// A code lives 60 s and a request 10 minutes, on the database clock.
+			if lives := e.count(t, ctx, `SELECT count(*) FROM auth.oauth_authorization_requests WHERE id = $1
+				AND code_expires_at BETWEEN clock_timestamp() + interval '45 seconds' AND clock_timestamp() + interval '60 seconds'
+				AND expires_at BETWEEN created_at + interval '599 seconds' AND created_at + interval '601 seconds'`, f.request); lives != 1 {
+				t.Fatal("the code or the request has the wrong life")
+			}
 			for _, event := range []string{EventConsentApproved, EventClientSessionCreate} {
 				if rows := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events
 					WHERE event_type = $1 AND actor_principal_id = $2 AND attributes->>'target_id' = $3
@@ -839,6 +845,12 @@ func TestTheSchemaHoldsTheRequestAndGrantShapes(t *testing.T) {
 	refused("a cleared consume", `UPDATE auth.oauth_authorization_requests SET consumed_at = NULL WHERE id = $1`, f.request)
 
 	g := e.flow(t, ctx, ClassBrowser)
+	h := e.flow(t, ctx, ClassBrowser)
+	refused("a changed web session", `UPDATE auth.oauth_authorization_requests SET web_session_id = $2 WHERE id = $1`, g.request, h.web)
+	refused("a changed principal", `UPDATE auth.oauth_authorization_requests SET principal_id = $2 WHERE id = $1`, g.request, h.principal)
+	refused("a changed organization", `UPDATE auth.oauth_authorization_requests SET organization_id = $2 WHERE id = $1`, g.request, h.organization)
+	refused("a changed token hash", `UPDATE auth.oauth_authorization_requests SET csrf_hash = $2 WHERE id = $1`, g.request, make([]byte, 32))
+	refused("a changed grant", `UPDATE auth.oauth_authorization_requests SET grant_id = NULL WHERE id = $1`, f.request)
 	refused("a code with no decision", `UPDATE auth.oauth_authorization_requests SET code_hash = $2 WHERE id = $1`, g.request, make([]byte, 32))
 	refused("an approval with no code", `UPDATE auth.oauth_authorization_requests SET decision = 'approved' WHERE id = $1`, g.request)
 	refused("a decision with no binding", `INSERT INTO auth.oauth_authorization_requests

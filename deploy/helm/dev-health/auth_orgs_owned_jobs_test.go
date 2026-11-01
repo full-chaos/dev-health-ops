@@ -80,8 +80,11 @@ func TestOrgsOwnedRendersOnTheGrantsAndMigrateJobsAtPhase5(t *testing.T) {
 		{"Job", "a-dev-health-auth-grants"},
 	}
 	for phase, want := range map[string]bool{"4": false, "5": true} {
-		docs := renderWithoutPhase5Refusal(t, goAPIWithAuth(append([]string{"--set", "authService.phase=" + phase,
-			"--set", "authService.usersOwnedStage=owned"}, phase3Secrets...)...)...)
+		sets := []string{"--set", "authService.phase=" + phase}
+		if phase == "4" {
+			sets = append(sets, "--set", "authService.usersOwnedStage=owned")
+		}
+		docs := renderWithoutPhase5Refusal(t, goAPIWithAuth(append(sets, phase3Secrets...)...)...)
 		for _, target := range targets {
 			doc := authDoc(docs, target.kind, target.name)
 			if doc == nil {

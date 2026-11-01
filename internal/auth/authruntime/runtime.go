@@ -123,7 +123,12 @@ func sessionRoutes(
 	if err != nil {
 		return nil, err
 	}
-	return append(routes, compat...), nil
+	routes = append(routes, compat...)
+	oauth, err := oauthRoutes(cfg, logger, pool, schema, sessions, issuer, limits, accessSigner)
+	if err != nil {
+		return nil, err
+	}
+	return append(routes, oauth...), nil
 }
 
 // logAPIRoutes states what the API listener serves. The refresh and logout

@@ -51,8 +51,11 @@ const (
 	// connected again under another binding, after the target) and queued each stored token for the revocation worker in
 	// the same statement. Nothing is required of the operator.
 	ActionProviderRevocationQueuedFromCredential ActionKind = "provider_revocation_queued_from_credential"
-	ActionRegrantPlatformRole                    ActionKind = "regrant_platform_role"
-	ActionNoActivePlatformAdmin                  ActionKind = "no_active_platform_admin"
+	// ActionRotateKeysAfterBlindMargin: a blind margin has no source state, so a service account key revoked or shortened
+	// after the target is live again until its expiry. The action holds the count of live keys and no id.
+	ActionRotateKeysAfterBlindMargin ActionKind = "rotate_keys_after_blind_margin"
+	ActionRegrantPlatformRole        ActionKind = "regrant_platform_role"
+	ActionNoActivePlatformAdmin      ActionKind = "no_active_platform_admin"
 )
 
 // requeueRunbookStep is the follow-up of revocations an apply only named: the runbook step that sets the source. A
@@ -82,12 +85,13 @@ var followUp = map[ActionKind]string{
 	ActionNoActivePlatformAdmin:                  "auth-migrate platform-role-bootstrap -principal <uuid> -confirm",
 }
 
-// OperatorAction is the ids a section names for one action. Ids only: never a
-// hash, a token or a secret.
+// OperatorAction is the ids a section names for one action, or a count for an action that names no row. Ids and a count
+// only: never a hash, a token or a secret.
 type OperatorAction struct {
 	Kind   ActionKind `json:"kind"`
 	Source string     `json:"source"`
 	IDs    []string   `json:"ids"`
+	Count  int64      `json:"count,omitempty"`
 }
 
 // mergeActions merges actions of one kind and source and sorts every id list.

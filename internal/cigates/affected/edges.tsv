@@ -159,6 +159,7 @@ internal/cigates/workflows	auth_corpus_external_test.go	unexpressed
 internal/cigates/workflows	auth_corpus_queue_test.go	cmd/auth-service
 internal/cigates/workflows	auth_corpus_queue_test.go	unexpressed
 internal/cigates/workflows	auth_relevance_step_test.go	unexpressed
+internal/cigates/workflows	auth_workload_compose_test.go	unexpressed
 internal/cigates/workflows	chart_started_selector_test.go	unexpressed
 internal/cigates/workflows	ci_script_helpers_test.go	unexpressed
 internal/cigates/workflows	docs_only_step_test.go	unexpressed

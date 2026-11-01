@@ -227,6 +227,10 @@ type Deps struct {
 	// from the auth platform role assignments and a public is_superuser write
 	// refuses.
 	PlatformRolesOwned bool
+	// PushLifecycleEvents is EnvPushLifecycleEvents (default off): customer-push
+	// token writes also append External Push lifecycle events to the auth
+	// outbox, in the same transaction.
+	PushLifecycleEvents bool
 	// AuthSchema is AUTH_DATABASE_SCHEMA, where the platform role rule reads
 	// while PlatformRolesOwned (empty: "auth").
 	AuthSchema string

@@ -297,8 +297,12 @@ func TestEveryRefusalHasItsOutcomeAndNoToken(t *testing.T) {
 					t.Errorf("the Warn line carries %q: %s", key, lines[0])
 				}
 			}
-			if entry["level"] != "WARN" || entry["msg"] != tc.want.Error() || entry["audience"] != tc.label {
-				t.Errorf("log line %s", lines[0])
+			wantOrg := r.OrganizationID.String()
+			if r.OrganizationID == uuid.Nil {
+				wantOrg = ""
+			}
+			if entry["level"] != "WARN" || entry["msg"] != tc.want.Error() || entry["audience"] != tc.label || entry["org_id"] != wantOrg {
+				t.Errorf("log line %s; want level WARN, msg %q, audience %q, org_id %q", lines[0], tc.want.Error(), tc.label, wantOrg)
 			}
 			for _, secret := range []string{testPrincipal.String(), session.WirePrincipalID(testPrincipal), testSession.String(), session.WireSessionID(testSession), "k1"} {
 				if strings.Contains(lines[0], secret) {
@@ -340,9 +344,14 @@ func TestNewRefusesAMissingSignerIssuerOrImpersonationReader(t *testing.T) {
 	signer := newFileSigner(t)
 	imp := &impersonationStub{}
 	for name, cfg := range map[string]Config{
-		"no signer":        {IssuerURL: testIssuer, Impersonation: imp},
-		"no issuer":        {Signer: signer, Impersonation: imp},
-		"no impersonation": {Signer: signer, IssuerURL: testIssuer},
+		"no signer":         {IssuerURL: testIssuer, Impersonation: imp},
+		"no issuer":         {Signer: signer, Impersonation: imp},
+		"an http issuer":    {Signer: signer, IssuerURL: "http://auth.example.test", Impersonation: imp},
+		"a trailing slash":  {Signer: signer, IssuerURL: testIssuer + "/", Impersonation: imp},
+		"an uppercase host": {Signer: signer, IssuerURL: "https://Auth.example.test", Impersonation: imp},
+		"a query":           {Signer: signer, IssuerURL: testIssuer + "?x=1", Impersonation: imp},
+		"userinfo":          {Signer: signer, IssuerURL: "https://u@auth.example.test", Impersonation: imp},
+		"no impersonation":  {Signer: signer, IssuerURL: testIssuer},
 	} {
 		if _, err := New(cfg); err == nil {
 			t.Errorf("%s: New built a minter", name)
@@ -350,5 +359,32 @@ func TestNewRefusesAMissingSignerIssuerOrImpersonationReader(t *testing.T) {
 	}
 	if _, err := New(Config{Signer: signer, IssuerURL: testIssuer, Impersonation: imp}); err != nil {
 		t.Fatalf("control: %v", err)
+	}
+}
+
+// TestTheIssuerPatternIsTheDiscoveryIssuerPatternOfTheContract: New refuses
+// an issuer the access-token.v1 schema would refuse in iss, with the schema's
+// own pattern.
+func TestTheIssuerPatternIsTheDiscoveryIssuerPatternOfTheContract(t *testing.T) {
+	root, err := contracts.RepoRoot(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(contracts.ContractsDir(root), "jsonschema", "discovery.v1.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Properties struct {
+			Issuer struct {
+				Pattern string `json:"pattern"`
+			} `json:"issuer"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatal(err)
+	}
+	if schema.Properties.Issuer.Pattern == "" || schema.Properties.Issuer.Pattern != issuerPattern.String() {
+		t.Fatalf("schema issuer pattern %q, acrmint %q", schema.Properties.Issuer.Pattern, issuerPattern.String())
 	}
 }

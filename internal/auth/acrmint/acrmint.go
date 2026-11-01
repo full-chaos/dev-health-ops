@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"time"
 
 	"github.com/google/uuid"
@@ -50,6 +51,11 @@ const (
 	OutcomeImpersonationUnavailable = "impersonation_unavailable"
 	OutcomeSignerUnavailable        = "signer_unavailable"
 )
+
+// issuerPattern is the discovery.v1 issuer shape, the one access-token.v1's
+// iss takes (a test pins it to the schema): an https origin with an optional
+// path prefix, no trailing slash, userinfo, query or fragment.
+var issuerPattern = regexp.MustCompile(`^https://[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,63}){0,8}$`)
 
 // otherAudience is the metric label of an audience that is not an ACR one, so
 // a caller's value never becomes a label.
@@ -89,7 +95,8 @@ type Config struct {
 	Impersonation Impersonation
 	// Meter records MintsMetric; nil records nothing.
 	Meter metric.Meter
-	// Logger writes one Warn line per refusal; nil discards it.
+	// Logger writes one Warn line per refusal; nil discards it, so the caller
+	// that wires the mint (O3) passes its service logger.
 	Logger *slog.Logger
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
@@ -126,8 +133,8 @@ func New(cfg Config) (*Minter, error) {
 	if cfg.Signer == nil {
 		return nil, errors.New("acrmint: a signer is required")
 	}
-	if cfg.IssuerURL == "" {
-		return nil, errors.New("acrmint: an issuer URL is required")
+	if !issuerPattern.MatchString(cfg.IssuerURL) {
+		return nil, errors.New("acrmint: the issuer URL is not an access-token.v1 issuer (https, lowercase host, no trailing slash)")
 	}
 	if cfg.Impersonation == nil {
 		return nil, errors.New("acrmint: an impersonation reader is required")

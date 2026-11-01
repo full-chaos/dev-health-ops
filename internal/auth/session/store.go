@@ -35,6 +35,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/delegationend"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -80,6 +81,9 @@ type Config struct {
 	SessionLifetime time.Duration
 	Logger          *slog.Logger
 	UsersOwned      bool // AUTH_USERS_OWNED: a sign-in stamps public.users.last_login_at
+	// PlatformRolesOwned is AUTH_PLATFORM_ROLES_OWNED. Off, or with UsersOwned
+	// off, StartDelegation refuses (ErrNotOwned).
+	PlatformRolesOwned bool
 	// Meter registers the exchange and revocation counters; nil uses the
 	// process meter.
 	Meter metric.Meter
@@ -94,6 +98,7 @@ type Store struct {
 	refreshTTL      time.Duration
 	sessionLifetime time.Duration
 	usersOwned      bool
+	platformOwned   bool
 	logger          *slog.Logger
 	exchanges       metric.Int64Counter
 	revocations     metric.Int64Counter
@@ -119,7 +124,7 @@ func New(cfg Config) (*Store, error) {
 	}
 	s := &Store{
 		pool: cfg.Pool, schema: cfg.Schema, q: authschema.Quote(cfg.Schema), key: key,
-		refreshTTL: cfg.RefreshTTL, sessionLifetime: cfg.SessionLifetime, usersOwned: cfg.UsersOwned, logger: cfg.Logger,
+		refreshTTL: cfg.RefreshTTL, sessionLifetime: cfg.SessionLifetime, usersOwned: cfg.UsersOwned, platformOwned: cfg.PlatformRolesOwned, logger: cfg.Logger,
 	}
 	if s.refreshTTL <= 0 {
 		s.refreshTTL = defaultRefreshTTL
@@ -159,6 +164,17 @@ type Record struct {
 	// LegacyTokenVersion is public.users.token_version when the session was
 	// created; nil on a session row older than migration 0016.
 	LegacyTokenVersion *int64
+	// Delegation is set on a delegated session: PrincipalID is the effective
+	// subject, Delegation.Actor the real actor (G-49).
+	Delegation *Delegation
+}
+
+// Delegation is what a delegated session row adds. ID, start and end are the
+// session's own id, CreatedAt and ExpiresAt.
+type Delegation struct {
+	Actor            uuid.UUID
+	Reason           string
+	PermittedActions []string
 }
 
 // Wire is the session.v1 document of the record.
@@ -175,6 +191,13 @@ func (r Record) Wire() contracts.Session {
 	}
 	if r.RevokedAt != nil {
 		out.RevokedAt = &contracts.Timestamp{Time: r.RevokedAt.UTC()}
+	}
+	if r.Delegation != nil {
+		out.Delegation = &contracts.SessionDelegation{
+			ActorPrincipalID: WirePrincipalID(r.Delegation.Actor),
+			Reason:           r.Delegation.Reason,
+			PermittedActions: append([]string{}, r.Delegation.PermittedActions...),
+		}
 	}
 	return out
 }
@@ -210,7 +233,8 @@ func validAMR(amr []string) bool {
 // refresh lifetime, which is when its last credential expired.
 func (s *Store) sessionColumns() string {
 	return `s.id::text, s.principal_id::text, s.organization_id::text, s.revision,
-	s.auth_time, s.amr, s.created_at, ` + s.effectiveExpiry() + `, ` + s.effectiveRevokedAt() + `, s.legacy_token_version`
+	s.auth_time, s.amr, s.created_at, ` + s.effectiveExpiry() + `, ` + s.effectiveRevokedAt() + `, s.legacy_token_version,
+	s.actor_principal_id::text, s.delegation_reason, s.delegation_permitted_actions`
 }
 
 // effectiveRevokedAt is the expression for alias s's revoked_at as the record
@@ -235,11 +259,14 @@ func (s *Store) effectiveExpiry() string {
 
 func scanRecord(row pgx.Row, extra ...any) (Record, error) {
 	var (
-		r                 Record
-		id, principal     string
-		organization      *string
-		authTime          *time.Time
-		dest              = []any{&id, &principal, &organization, &r.Revision, &authTime, &r.AMR, &r.CreatedAt, &r.ExpiresAt, &r.RevokedAt, &r.LegacyTokenVersion}
+		r             Record
+		id, principal string
+		organization  *string
+		authTime      *time.Time
+		actor, reason *string
+		permitted     []string
+		dest          = []any{&id, &principal, &organization, &r.Revision, &authTime, &r.AMR, &r.CreatedAt, &r.ExpiresAt, &r.RevokedAt, &r.LegacyTokenVersion,
+			&actor, &reason, &permitted}
 		parseErr, scanErr error
 	)
 	if scanErr = row.Scan(append(dest, extra...)...); scanErr != nil {
@@ -262,6 +289,16 @@ func scanRecord(row pgx.Row, extra ...any) (Record, error) {
 		r.AuthTime = *authTime
 	} else {
 		r.AuthTime = r.CreatedAt
+	}
+	if actor != nil {
+		id, err := uuid.Parse(*actor)
+		if err != nil {
+			return Record{}, err
+		}
+		r.Delegation = &Delegation{Actor: id, PermittedActions: permitted}
+		if reason != nil {
+			r.Delegation.Reason = *reason
+		}
 	}
 	return r, nil
 }
@@ -561,17 +598,33 @@ func (s *Store) revokeForReuse(ctx context.Context, session Record, familyID str
 // revokeSessions revokes the given sessions and every credential of them. The
 // caller holds their locks inside an audit.Commit transaction.
 func (s *Store) revokeSessions(ctx context.Context, tx audit.TxOps, ids []string, reason string) error {
+	return s.endSessions(ctx, tx, ids, reason, false)
+}
+
+// endSessions is revokeSessions; a delegated row among ids and every delegated
+// child of ids end with them, each with a delegation_ended audit row. nowait
+// is the mode of a caller under the auth lock order's step 6a.
+func (s *Store) endSessions(ctx context.Context, tx audit.TxOps, ids []string, reason string, nowait bool) error {
+	delegated, err := delegationend.Lock(ctx, tx, s.q, ids, nowait)
+	if err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE `+s.q+`.refresh_credentials
 		SET revoked_at = clock_timestamp(), revoked_reason = $2, updated_at = clock_timestamp()
 		WHERE session_id = ANY($1::uuid[]) AND revoked_at IS NULL`, ids, reason); err != nil {
 		return err
 	}
-	_, err := tx.Exec(ctx, `
+	if _, err := tx.Exec(ctx, `
 		UPDATE `+s.q+`.sessions
 		SET revoked_at = clock_timestamp(), revoked_reason = $2, updated_at = clock_timestamp()
-		WHERE id = ANY($1::uuid[]) AND revoked_at IS NULL`, ids, reason)
-	return err
+		WHERE id = ANY($1::uuid[]) AND revoked_at IS NULL`, ids, reason); err != nil {
+		return err
+	}
+	if err := delegationend.End(ctx, tx, s.q, delegationend.Children(delegated, ids), delegationend.ReasonBaseEnded); err != nil {
+		return err
+	}
+	return delegationend.Record(ctx, tx, delegated)
 }
 
 // Revoke ends one live session and every credential of it. It reports false

@@ -132,7 +132,7 @@ func (s *Store) endLockedSessions(ctx context.Context, tx audit.TxOps, lock stri
 		return 0, endOrgErr("locking the sessions", err)
 	}
 	if len(ids) > 0 {
-		if err := s.revokeSessions(ctx, tx, ids, revokedByCaller); err != nil {
+		if err := s.endSessions(ctx, tx, ids, revokedByCaller, true); err != nil {
 			return 0, endOrgErr("revoking the sessions", err)
 		}
 	}

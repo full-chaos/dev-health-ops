@@ -35,10 +35,11 @@ type Registry struct {
 // tests, on the same bytes; this parse refuses what a schema cannot: a repeated
 // client_id.
 func LoadRegistry() (Registry, error) {
-	return parseRegistry(authv1.OAuthClients)
+	return ParseRegistry(authv1.OAuthClients)
 }
 
-func parseRegistry(raw []byte) (Registry, error) {
+// ParseRegistry parses a registry document. LoadRegistry is the production caller.
+func ParseRegistry(raw []byte) (Registry, error) {
 	var doc struct {
 		SchemaVersion string   `json:"schema_version"`
 		Clients       []Client `json:"clients"`

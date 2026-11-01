@@ -133,6 +133,10 @@ type NewAccount struct {
 	Identity Identity
 	Email    string
 	FullName string
+	// LegacySubject is the NameID value, go-api's public.users auth_provider_id.
+	LegacySubject string
+	// LegacyFullName is the public.users full_name: nil is NULL.
+	LegacyFullName *string
 }
 
 // MembershipJIT is the seam that turns just-in-time membership on. With a nil

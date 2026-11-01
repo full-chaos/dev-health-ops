@@ -36,6 +36,9 @@ type membershipJoin struct {
 	Principal uuid.UUID
 	OrgID     uuid.UUID
 	Role      string
+	// SignIn is a federated sign-in's join: under the locks, a disabled account
+	// and a membership in another organization refuse.
+	SignIn bool
 }
 
 // joinPublicMembershipColumns are the public.memberships columns a join
@@ -122,6 +125,11 @@ func (s *Store) insertJoinMembership(ctx context.Context, tx audit.TxOps, m memb
 	case auth:
 		return ErrMembershipDiverged
 	}
+	if m.SignIn {
+		if err := s.refuseSignInJoin(ctx, tx, m); err != nil {
+			return err
+		}
+	}
 	var at time.Time
 	if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&at); err != nil {
 		return err
@@ -133,6 +141,26 @@ VALUES ($1, $2, $3, $4, $5, $5, $5)`, m.ID, m.Principal, m.OrgID, m.Role, at); e
 	_, err = tx.Exec(ctx, `INSERT INTO `+s.q+`.memberships (id, organization_id, principal_id, status, role, joined_at, created_at, updated_at)
 VALUES ($1, $2, $3, 'active', $4, $5, $5, $5)`, m.ID, m.OrgID, m.Principal, m.Role, at)
 	return err
+}
+
+// refuseSignInJoin runs with the principal and public.users rows held, so every
+// membership writer of the account has committed or waits.
+func (s *Store) refuseSignInJoin(ctx context.Context, tx audit.TxOps, m membershipJoin) error {
+	var active, elsewhere bool
+	if err := tx.QueryRow(ctx, `SELECT
+  (SELECT p.disabled_at IS NULL FROM `+s.q+`.principals p WHERE p.id = $1) AND (SELECT u.is_active FROM public.users u WHERE u.id = $1),
+  EXISTS (SELECT 1 FROM public.memberships WHERE user_id = $1 AND org_id <> $2)
+  OR EXISTS (SELECT 1 FROM `+s.q+`.memberships WHERE principal_id = $1 AND organization_id <> $2 AND status <> 'removed')`,
+		m.Principal, m.OrgID).Scan(&active, &elsewhere); err != nil {
+		return err
+	}
+	if !active {
+		return ErrAccountInactive
+	}
+	if elsewhere {
+		return ErrMemberElsewhere
+	}
+	return nil
 }
 
 // publicJoinWriteErr maps a missing public organization (foreign key) to

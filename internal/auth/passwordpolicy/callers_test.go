@@ -7,18 +7,18 @@ import (
 	"testing"
 )
 
-// Every path that sets a password reaches passwordpolicy.Validate through
+// Every path that sets a password reaches passwordpolicy.ValidateForHash through
 // one of these functions; a path that stops calling it, or a new copy of the
 // length rule, shows up here.
 func TestEveryPasswordSettingPathCallsTheSharedPolicy(t *testing.T) {
 	paths := []struct{ file, fn, callee string }{
-		{"../../api/session/register.go", "register", "passwordpolicy.Validate"},
-		{"../../api/session/changepassword.go", "changePassword", "passwordpolicy.Validate"},
+		{"../../api/session/register.go", "register", "passwordpolicy.ValidateForHash"},
+		{"../../api/session/changepassword.go", "changePassword", "passwordpolicy.ValidateForHash"},
 		{"../../api/session/resetpolicy.go", "validateResetPasswordPolicy", "passwordpolicy.ValidateForHash"},
 		{"../../api/session/verify.go", "resetPassword", "validateResetPasswordPolicy"},
 		{"../../apiservice/admin/passwordviolations.go", "refusePasswordPolicy", "passwordpolicy.ValidateForHash"},
 		{"../../apiservice/admin/users.go", "createUser", "refusePasswordPolicy"},
-		{"../../apiservice/admin/users.go", "setUserPassword", "passwordpolicy.Validate"},
+		{"../../apiservice/admin/users.go", "setUserPassword", "passwordpolicy.ValidateForHash"},
 		{"../../apiservice/admin/operator.go", "operatorPasswordRefusal", "passwordpolicy.ValidateForHash"},
 		{"../../apiservice/admin/operator.go", "CreateUser", "operatorPasswordRefusal"},
 		{"../../apiservice/admin/operator.go", "UpdateUser", "operatorPasswordRefusal"},

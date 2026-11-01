@@ -23,6 +23,7 @@ internal/audit	test	contracts
 internal/auth/authapi	test	ci
 internal/auth/authapi	test	contracts
 internal/auth/authconfig	test	contracts
+internal/auth/authorization	test	contracts
 internal/auth/authruntime	test	contracts
 internal/auth/authruntime	test	deploy
 internal/auth/contracts	code	contracts

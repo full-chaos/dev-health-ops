@@ -60,3 +60,28 @@ func TestEdDSAAccessLifetimeOutsideTheCeilingIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// The go-api compatible refresh route answers the issuer's lifetime: under eddsa with 10 minutes its expires_in
+// and its access token's exp - iat are both 600.
+func TestCompatRefreshUnderEdDSAStatesTheConfiguredLifetime(t *testing.T) {
+	signer, _, _ := fileSigner(t)
+	issuer, err := NewEdDSAIssuer(testSecret, testIssuer, contracts.PlatformAPIAudience, signer, goldenIssuer, WithAccessLifetime(10*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := compatFixtureWith(t, issuer)
+	f.sessions.result = accepted(f.record)
+	f.buildCompat()
+	response := f.do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+credential()+`"}`, nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("compat refresh %d: %s", response.Code, response.Body)
+	}
+	answer := decodeObject(t, response.Body.Bytes())
+	token, _ := answer["access_token"].(string)
+	if answer["expires_in"] != float64(600) || token == "" {
+		t.Fatalf("compat refresh answer expires_in %v, want 600", answer["expires_in"])
+	}
+	if c := claimsOf(t, token); c.Exp-c.Iat != 600 {
+		t.Fatalf("compat refresh access token lifetime %d, want 600", c.Exp-c.Iat)
+	}
+}

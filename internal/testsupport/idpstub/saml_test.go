@@ -267,3 +267,27 @@ func TestSAMLCertEndpointServesPEM(t *testing.T) {
 		t.Fatal("/saml/cert is not the signing certificate")
 	}
 }
+
+func TestSAMLExplicitEmptyNameIDStaysEmpty(t *testing.T) {
+	s := newSAML(t, idpstub.SAMLOptions{})
+	spec := idpstub.ResponseSpec{ExplicitNameID: true, NameID: idpstub.NameID{Format: "urn:oasis:names:tc:SAML:2.0:nameid-format:transient"}, Email: "a@example.test"}
+	doc, _, assertion, err := s.Build(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nameID := assertion.FindElement("./Subject/NameID")
+	if nameID == nil || nameID.Text() != "" || nameID.SelectAttrValue("Format", "") != spec.NameID.Format {
+		t.Fatalf("NameID element = %v, want an empty one with the given format", nameID)
+	}
+	if got := doc.Root().FindElement("//Attribute[@Name='email']/AttributeValue"); got == nil || got.Text() != "a@example.test" {
+		t.Fatalf("email attribute = %v", got)
+	}
+	if _, err := verify(t, s, spec); err == nil {
+		t.Fatal("the product verifier accepted an empty NameID")
+	}
+	other := spec
+	other.ExplicitNameID, other.NameID = false, idpstub.NameID{}
+	if doc2, _, a2, err := s.Build(other); err != nil || a2.FindElement("./Subject/NameID").Text() != "alice" || doc2 == nil {
+		t.Fatalf("without ExplicitNameID the first user applies: %v", err)
+	}
+}

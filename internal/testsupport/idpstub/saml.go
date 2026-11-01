@@ -67,8 +67,11 @@ type ResponseSpec struct {
 	NoAudience              bool
 	InResponseTo            string
 	NameID                  NameID
-	Email, FullName         string
-	Issuer                  string
+	// ExplicitNameID sends NameID exactly as given, even when its value is empty; without it an empty NameID value
+	// means the first user.
+	ExplicitNameID  bool
+	Email, FullName string
+	Issuer          string
 	// WrongIssuerAt is "response" or "assertion": only that element carries a foreign issuer.
 	WrongIssuerAt                                            string
 	Status                                                   string

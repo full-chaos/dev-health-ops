@@ -180,6 +180,7 @@ func TestSchemaEnumsEqualTheVocabularyFile(t *testing.T) {
 // A value enters with the producer that emits it (CHAOS-10194).
 var approvedRevokedReasons = []string{
 	"compromised",
+	"domain_revoked",
 	"owner_request",
 }
 
@@ -218,6 +219,7 @@ var approvedAuditReasonCodes = []string{
 	"revision_conflict",
 	"internal_error",
 	"compromised",
+	"domain_revoked",
 	"owner_request",
 	"role_granted",
 	"role_revoked",

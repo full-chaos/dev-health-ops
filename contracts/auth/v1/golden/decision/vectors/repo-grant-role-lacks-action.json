@@ -24,7 +24,7 @@
         "resource_key": "acme/api",
         "resource_kind": "repository",
         "revoked": false,
-        "role": "owner"
+        "role": "platform_admin"
       }
     ],
     "grants_error": false,

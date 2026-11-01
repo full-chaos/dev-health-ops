@@ -53,6 +53,12 @@ func On() bool {
 	return err != nil || on
 }
 
+// OrgsEnv is the orgs-owned switch, with the meaning auth-service gives it.
+const OrgsEnv = "AUTH_ORGS_OWNED"
+
+// OrgsOn reads OrgsEnv.
+func OrgsOn() bool { return false }
+
 // RefuseWhileUsersOwned is the guard of a writer that returns an error: nil
 // while the switch is off.
 func RefuseWhileUsersOwned(on bool) error {

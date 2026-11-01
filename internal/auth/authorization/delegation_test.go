@@ -548,5 +548,22 @@ func TestDelegation_PermittedActionsOfARealSessionRecord(t *testing.T) {
 				t.Errorf("role %s %s: allowed=%v want %v (%s)", role, id, got.Allowed, want, got.Reason)
 			}
 		}
+		// A record whose set lacks an action the catalog would allow still denies it: the record is the cap.
+		for _, dropped := range permitted {
+			rest := make([]string, 0, len(permitted))
+			for _, id := range permitted {
+				if id != dropped {
+					rest = append(rest, id)
+				}
+			}
+			rec := session.Record{Delegation: &session.Delegation{Actor: uuid.New(), Reason: "r", PermittedActions: rest}}
+			s := delegatedSnapshot{fakeSnapshot: orgSnapshot(role), on: true, d: Delegation{
+				Chain:                []Hop{{ActorPrincipalID: rec.Delegation.Actor.String(), PermittedActions: rec.Delegation.PermittedActions}},
+				TargetOrganizationID: testOrg, Assurance: "aal1",
+			}}
+			if got := e.Evaluate(orgRequest(dropped), s); got.Allowed || got.Reason != ReasonImpersonationDenied {
+				t.Errorf("role %s: %s outside the record's permitted set: %+v", role, dropped, got)
+			}
+		}
 	}
 }

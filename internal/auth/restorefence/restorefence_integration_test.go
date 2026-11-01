@@ -532,12 +532,17 @@ func TestTheRuntimeRoleReadsTheTimelineItself(t *testing.T) {
 	}
 }
 
+// The auth schema holds no SECURITY DEFINER function but the one External Push
+// lifecycle append function (migration 0042, CHAOS-10895): it is the only door
+// go-api's login has to the guarded outbox tables, and its lineage lint and
+// owner posture row pin it (authschema restore_fence_posture_test.go).
 func TestTheAuthSchemaHasNoSecurityDefinerFunction(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	db := newFenceDB(t, ctx)
 	var n int64
-	if err := db.admin.QueryRow(ctx, `SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'auth' AND p.prosecdef`).Scan(&n); err != nil {
+	if err := db.admin.QueryRow(ctx, `SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+		WHERE n.nspname = 'auth' AND p.prosecdef AND p.proname <> 'append_external_push_lifecycle_event'`).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	if n != 0 {

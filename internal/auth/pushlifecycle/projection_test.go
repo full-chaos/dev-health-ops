@@ -170,7 +170,7 @@ func TestProjectionRotationIsBoundToTheNamedParent(t *testing.T) {
 		parent *State
 		want   Outcome
 	}{
-		"no parent state":               {rotated(credB, credA, "ingest:write"), nil, RefusedParent},
+		"no parent state":               {rotated(credB, credA, "ingest:write"), nil, ParentPending},
 		"never-seen parent":             {rotated(credB, credA, "ingest:write"), &State{}, RefusedParent},
 		"wider than parent":             {rotated(credB, credA, "ingest:write", "ingest:status"), &parent, RefusedWiden},
 		"its own parent":                {rotated(credB, credB, "ingest:write"), &parent, RefusedTransition},

@@ -560,7 +560,13 @@ func workloadComposeGuard(d docTree) []string {
 			out = append(out, composeFile+": no service "+name)
 			continue
 		}
-		mustContain(&out, "Compose one-shots", section, "`"+name+"`")
+		inTable := false
+		for _, r := range mdTableRows(section) {
+			inTable = inTable || (len(r) > 0 && r[0] == name)
+		}
+		if !inTable {
+			out = append(out, "Compose one-shots: no table row for the service "+name)
+		}
 		profiles := asList(svc["profiles"])
 		if len(profiles) != 1 || asString(profiles[0]) != "auth" {
 			out = append(out, composeFile+": "+name+" is not in the profile auth alone")

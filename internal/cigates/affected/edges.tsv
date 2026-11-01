@@ -69,6 +69,7 @@ internal/cigates/affected	plan.go	unexpressed
 internal/cigates/affected	plan_wiring_test.go	unexpressed
 internal/cigates/affected	reach.go	unexpressed
 internal/cigates/affected	reachcache.go	unexpressed
+internal/cigates/affected	reachgraph_internal_test.go	unexpressed
 internal/cigates/affected	scan.go	unexpressed
 internal/cigates/affectedmatrix	ci_script_helpers_test.go	unexpressed
 internal/cigates/affectedmodule	ci_script_helpers_test.go	unexpressed

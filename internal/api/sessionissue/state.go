@@ -40,6 +40,7 @@ type State struct {
 	// LegacyTokenVersion is the session's token_version pin; nil on a session
 	// that has none.
 	LegacyTokenVersion *int64
+	ActorPrincipalID   *uuid.UUID
 }
 
 // StateReader reads one session's state.

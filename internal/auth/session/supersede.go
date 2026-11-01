@@ -24,6 +24,7 @@ var (
 	// ErrPredecessorOtherPrincipal refuses a predecessor that belongs to
 	// another principal: a session is only ever superseded by its own user.
 	ErrPredecessorOtherPrincipal = errors.New("session: the predecessor session belongs to another principal")
+	ErrPredecessorDelegated      = errors.New("session: the predecessor session is delegated")
 )
 
 // EventSessionRevoked is the audit event type of a session revoke.

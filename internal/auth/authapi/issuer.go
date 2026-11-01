@@ -53,6 +53,8 @@ type Grant struct {
 	Role           string
 	SessionID      uuid.UUID
 	User           UserState
+	ExpiresAt      *time.Time
+	Actor          *uuid.UUID
 }
 
 // errIssue wraps a failure to mint an access token.
@@ -76,8 +78,9 @@ func (i *Issuer) AccessContext(ctx context.Context, grant Grant) (string, error)
 // accept (they accept an EdDSA token of that audience only). Under
 // hs256_compat Session is empty: the session routes accept the HS256 token.
 type Tokens struct {
-	Access  string
-	Session string
+	Access    string
+	Session   string
+	ExpiresIn int
 }
 
 // Tokens mints the answer to grant: the access token and, under eddsa, the

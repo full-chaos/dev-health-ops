@@ -293,11 +293,18 @@ func (r *Reader) Step(ctx context.Context, now time.Time) (StepReport, error) {
 	if err != nil {
 		return rep, err
 	}
+	held := map[string]bool{}
 	for _, row := range rows {
+		// A later row of an aggregate waits behind a row parked in this same pass, as it does behind one parked before.
+		if held[row.AggregateID] {
+			continue
+		}
 		rep.Seen++
+		before := rep.Parked + rep.Final
 		if err := r.handle(ctx, row, now, &rep); err != nil {
 			return rep, err
 		}
+		held[row.AggregateID] = rep.Parked+rep.Final > before
 	}
 	if err := r.retryDue(ctx, now, &rep); err != nil {
 		return rep, err

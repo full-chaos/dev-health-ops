@@ -46,7 +46,7 @@ SELECT kind, count(*) FROM (
   UNION ALL
   SELECT CASE p.prokind WHEN 'p' THEN 'procedure' WHEN 'a' THEN 'aggregate' ELSE 'function' END, p.proowner
   FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1
-    AND NOT (p.proname = $4 AND p.proowner = (SELECT oid FROM pg_roles WHERE rolname = $3))
+    AND NOT (p.proname = $4 AND p.proowner IS NOT DISTINCT FROM (SELECT oid FROM pg_roles WHERE rolname = NULLIF($3, '')))
   UNION ALL
   SELECT CASE t.typtype WHEN 'd' THEN 'domain' ELSE 'type' END, t.typowner
   FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
@@ -90,7 +90,7 @@ func verifySchemaOwnerPin(ctx context.Context, conn *pgx.Conn, options Options) 
 			ErrSchemaOwnerPin, options.SchemaOwnerRole, strings.Join(attributes, ", "))
 	}
 	rows, err := conn.Query(ctx, schemaObjectsNotOwnedSQL, options.Schema, options.SchemaOwnerRole,
-		pushWriterOrNone(options), PushLifecycleFunction)
+		options.PushLifecycleWriterRole, PushLifecycleFunction)
 	if err != nil {
 		return fmt.Errorf("%w: reading the owners of the schema's objects", ErrMigrationFailed)
 	}
@@ -112,12 +112,4 @@ func verifySchemaOwnerPin(ctx context.Context, conn *pgx.Conn, options Options) 
 			ErrSchemaOwnerPin, options.Schema, options.SchemaOwnerRole, strings.Join(lines, ", "))
 	}
 	return nil
-}
-
-// pushWriterOrNone is the writer role the pin excepts; a name no role carries when none is configured.
-func pushWriterOrNone(options Options) string {
-	if options.PushLifecycleWriterRole == "" {
-		return "\x00none"
-	}
-	return options.PushLifecycleWriterRole
 }

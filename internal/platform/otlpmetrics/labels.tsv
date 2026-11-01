@@ -1,4 +1,5 @@
 instrument	labels	reason
+auth.acr.access_mints	audience,outcome	code: internal/auth/acrmint/acrmint.go
 auth.api.session_route_outcomes	operation,reason_code,result	code: internal/auth/authapi/wire.go
 auth.entitlement.outcomes	outcome	code: internal/auth/entitlement/entitlement.go
 auth.identity.external_links	action,outcome	code: internal/auth/identity/store.go

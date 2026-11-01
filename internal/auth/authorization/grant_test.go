@@ -25,6 +25,7 @@ type plantedCatalog struct {
 	base       *policycatalog.Catalog
 	holders    map[string]bool // nil: plantedHolders
 	cacheClass string          // "": resource_revision_bound
+	noFlag     bool            // the action carries no impersonation flag
 }
 
 var plantedHolders = map[string]bool{"viewer": true, "member": true, "admin": true}
@@ -33,11 +34,17 @@ func (p plantedCatalog) Version() int { return p.base.Version() }
 func (p plantedCatalog) Action(id string) (policycatalog.Action, error) {
 	if id == repoAction {
 		return policycatalog.Action{ID: id, Scope: policycatalog.ScopeOrganization, ResourceKind: "repository",
-			RiskClass: policycatalog.RiskLow, CacheClass: p.class()}, nil
+			RiskClass: policycatalog.RiskLow, CacheClass: p.class(), Impersonation: p.flag()}, nil
 	}
 	return p.base.Action(id)
 }
 func (p plantedCatalog) Role(id string) (policycatalog.Role, error) { return p.base.Role(id) }
+func (p plantedCatalog) flag() string {
+	if p.noFlag {
+		return ""
+	}
+	return policycatalog.ImpersonationAllowed
+}
 func (p plantedCatalog) class() string {
 	if p.cacheClass == "" {
 		return policycatalog.CacheResourceRevisionBound

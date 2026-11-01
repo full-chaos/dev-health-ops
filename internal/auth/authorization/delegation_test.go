@@ -6,9 +6,12 @@ import (
 	"regexp"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/full-chaos/dev-health-ops/contracts/auth/v1/vocabulary"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
+	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
 
 const (
@@ -123,7 +126,7 @@ func TestDelegation_PlantedCredentialActionIsDeniedUnderImpersonation(t *testing
 	ids := []string{"credentials.issue", "credentials.rotate", "credentials.revoke", "tokens.create"}
 	for _, id := range ids {
 		af["actions"] = append(af["actions"].([]any), map[string]any{
-			"action": id, "scope": "organization", "resource_kind": "organization", "risk_class": "high", "cache_class": "none",
+			"action": id, "scope": "organization", "resource_kind": "organization", "risk_class": "high", "cache_class": "none", "impersonation": "allowed",
 		})
 		for _, r := range rf["roles"].([]any) {
 			if m := r.(map[string]any); m["role"] == "owner" {
@@ -152,29 +155,8 @@ func TestDelegation_PlantedCredentialActionIsDeniedUnderImpersonation(t *testing
 	}
 }
 
-func TestDelegation_PlantedPlatformImpersonateIsDeniedForEveryone(t *testing.T) {
-	var af, rf map[string]any
-	if err := json.Unmarshal(vocabulary.ActionsV1, &af); err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(vocabulary.RolesV1, &rf); err != nil {
-		t.Fatal(err)
-	}
-	af["actions"] = append(af["actions"].([]any), map[string]any{
-		"action": "admin.impersonate", "scope": "platform", "resource_kind": "platform", "risk_class": "high", "cache_class": "none",
-	})
-	for _, r := range rf["roles"].([]any) {
-		if m := r.(map[string]any); m["role"] == "platform_admin" {
-			m["actions"] = append(m["actions"].([]any), "admin.impersonate")
-		}
-	}
-	ab, _ := json.Marshal(af)
-	rb, _ := json.Marshal(rf)
-	cat, err := policycatalog.Load(ab, rb)
-	if err != nil {
-		t.Fatal(err)
-	}
-	e := newEvaluator(cat)
+func TestDelegation_PlatformImpersonateIsDeniedForEveryone(t *testing.T) {
+	e := NewEvaluator()
 	for _, actorRole := range []string{"", ownerActorRol} {
 		s := delegated("owner", []string{"admin.impersonate"}, actorRole)
 		s.fakeSnapshot.platformRole = "platform_admin"
@@ -184,7 +166,7 @@ func TestDelegation_PlantedPlatformImpersonateIsDeniedForEveryone(t *testing.T) 
 		}
 	}
 	if got := e.Evaluate(platformRequest("admin.impersonate"), platformSnapshot("platform_admin")); !got.Allowed {
-		t.Errorf("planted action not allowed without delegation: %+v", got)
+		t.Errorf("not allowed without delegation: %+v", got)
 	}
 }
 
@@ -478,5 +460,87 @@ func TestDelegation_RepositoryDenyKeepsTheGrantReason(t *testing.T) {
 	got := e.Evaluate(repoRequest("acme/api"), delegatedRepo([]string{repoAction}, liveGrant("acme/web")))
 	if got.Allowed || got.Reason != ReasonRepositoryNotGranted || got.Obligations != nil {
 		t.Fatalf("%+v", got)
+	}
+}
+
+// Catalog flag (4.16a): an action not flagged allowed is denied under impersonation, off the floor too.
+func TestDelegation_FlaggedActionIsDeniedUnlessThePlatformOwnerActs(t *testing.T) {
+	cat := policycatalog.Default()
+	e := NewEvaluator()
+	all := allOrgActions(t)
+	n := 0
+	for _, id := range heldBy(t, "owner") {
+		a, _ := cat.Action(id)
+		if a.Impersonation == policycatalog.ImpersonationAllowed || impersonationFloor(id) {
+			continue
+		}
+		n++
+		if got := e.Evaluate(orgRequest(id), delegated("owner", all, "")); got.Allowed || got.Reason != ReasonImpersonationDenied {
+			t.Errorf("%s: %+v want impersonation_denied", id, got)
+		}
+		got := e.Evaluate(orgRequest(id), delegated("owner", all, ownerActorRol))
+		if !got.Allowed || got.Audit == nil || got.Audit.Reason != AuditReasonOwnerExempt {
+			t.Errorf("%s: platform_owner %+v want allow with owner_exempt", id, got)
+		}
+	}
+	if n == 0 {
+		t.Fatal("no flagged action off the floor: the cell proves nothing")
+	}
+}
+
+func TestDelegation_ActionWithoutAFlagIsDeniedUnderImpersonation(t *testing.T) {
+	e := newEvaluator(plantedCatalog{base: policycatalog.Default(), noFlag: true})
+	got := e.Evaluate(repoRequest("acme/api"), delegatedRepo([]string{repoAction}, liveGrant("acme/api")))
+	if got.Allowed || got.Reason != ReasonImpersonationDenied {
+		t.Fatalf("%+v", got)
+	}
+	if got := newEvaluator(plantedCatalog{base: policycatalog.Default()}).Evaluate(repoRequest("acme/api"), delegatedRepo([]string{repoAction}, liveGrant("acme/api"))); !got.Allowed {
+		t.Fatalf("flagged allowed action denied: %+v", got)
+	}
+}
+
+// R14: every floor action that exists in the catalog is flagged denied there.
+func TestDelegation_FloorIsASubsetOfTheCatalogFlag(t *testing.T) {
+	cat := policycatalog.Default()
+	seen := 0
+	for _, a := range cat.Actions() {
+		if impersonationFloor(a.ID) {
+			seen++
+			if a.Impersonation != policycatalog.ImpersonationDenied {
+				t.Errorf("%s is on the floor but the catalog flag is %q", a.ID, a.Impersonation)
+			}
+		}
+	}
+	for id := range floorExact {
+		if _, err := cat.Action(id); err != nil {
+			t.Errorf("floor id %s is not in the catalog: %v", id, err)
+		}
+	}
+	if seen < len(floorExact) {
+		t.Errorf("only %d floor actions found in the catalog", seen)
+	}
+}
+
+// R15: permitted_actions as a real session.Record carries them.
+func TestDelegation_PermittedActionsOfARealSessionRecord(t *testing.T) {
+	cat := policycatalog.Default()
+	e := NewEvaluator()
+	for _, role := range []string{"viewer", "member", "admin", "owner"} {
+		permitted, err := cat.DelegatedActions(role)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec := session.Record{Delegation: &session.Delegation{Actor: uuid.New(), Reason: "r", PermittedActions: permitted}}
+		for _, id := range allOrgActions(t) {
+			s := delegatedSnapshot{fakeSnapshot: orgSnapshot(role), on: true, d: Delegation{
+				Chain:                []Hop{{ActorPrincipalID: rec.Delegation.Actor.String(), PermittedActions: rec.Delegation.PermittedActions}},
+				TargetOrganizationID: testOrg, Assurance: "aal1",
+			}}
+			a, _ := cat.Action(id)
+			want := cat.Allows(role, id) && a.Impersonation == policycatalog.ImpersonationAllowed
+			if got := e.Evaluate(orgRequest(id), s); got.Allowed != want {
+				t.Errorf("role %s %s: allowed=%v want %v (%s)", role, id, got.Allowed, want, got.Reason)
+			}
+		}
 	}
 }

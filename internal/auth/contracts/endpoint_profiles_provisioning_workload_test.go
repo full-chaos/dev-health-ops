@@ -1,6 +1,9 @@
 package contracts
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -111,4 +114,33 @@ func TestTheKeyRowsNameTheIssuedKeyAndItsUse(t *testing.T) {
 			t.Errorf("%s issues %v", route, issued[0])
 		}
 	}
+}
+
+// Issuing is live and use is not: the class stays unconsumed, with no consumer and no validator, until the use of a key lands.
+func TestTheKeyClassStaysUnconsumedUntilItsUseLands(t *testing.T) {
+	var document struct {
+		Classes []struct {
+			ClassID    string `json:"class_id"`
+			Status     string `json:"status"`
+			Consumers  []any  `json:"consumers"`
+			Validators []any  `json:"validators"`
+		} `json:"classes"`
+	}
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "contracts", "auth", "v1", "credential-classes.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+	for _, class := range document.Classes {
+		if class.ClassID != "service_account_key" {
+			continue
+		}
+		if class.Status != "unconsumed" || len(class.Consumers) != 0 || len(class.Validators) != 0 {
+			t.Fatalf("service_account_key is %s with %d consumers and %d validators, want unconsumed with none", class.Status, len(class.Consumers), len(class.Validators))
+		}
+		return
+	}
+	t.Fatal("no service_account_key class")
 }

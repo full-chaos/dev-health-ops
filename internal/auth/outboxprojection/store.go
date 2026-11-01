@@ -81,8 +81,7 @@ func (e *Engine) apply(ctx context.Context, tx audit.TxOps, in Input, organizati
 		return Result{Outcome: outcome, State: current.state}, nil
 	case outcome == pushlifecycle.Duplicate || outcome == pushlifecycle.Stale:
 		// The core met a revision no digest row names (a lost digest, a restored timeline): decide it now, so the
-		// reader never reads the same delivery again.
-		attrs["reason_code"] = "denied_policy"
+		// reader never reads the same delivery again. It is not a refusal: an allowed audit row.
 		if err := e.insertDigest(ctx, tx, in, revision, digest, outcome); err != nil {
 			return Result{}, err
 		}

@@ -421,6 +421,9 @@ func TestTwoReadersApplyEachEventOnce(t *testing.T) {
 		if n := e.count(t, `SELECT count(*) FROM auth.credential_registry WHERE external_reference = $1`, id); n != 1 {
 			t.Fatalf("credential %s has %d registry rows, want 1", id, n)
 		}
+		if n := e.count(t, `SELECT count(*) FROM auth.credential_projection_digest WHERE external_reference = $1 AND revision = 1`, id); n != 1 {
+			t.Fatalf("credential %s has %d digest rows, want 1", id, n)
+		}
 	}
 }
 

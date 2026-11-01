@@ -19,10 +19,19 @@ import (
 // This is stricter than go-api's logout, which revokes only the presented
 // token: a sign-out must leave no token of the lineage that refresh accepts.
 func (s *Store) RevokeLegacy(ctx context.Context, legacy LegacyRefresh, actor Actor) (bool, error) {
+	return s.RevokeLegacyWith(ctx, legacy, actor, publicRowOf(ctx))
+}
+
+// RevokeLegacyWith is RevokeLegacy with public, when not nil, run in the audited
+// transaction after an auth-schema session of the lineage is revoked, with the
+// token's principal and organization: go-api's public.audit_logs row of a
+// compatibility sign-out. A lineage with no auth-schema session to revoke writes
+// no auth event and so no public row.
+func (s *Store) RevokeLegacyWith(ctx context.Context, legacy LegacyRefresh, actor Actor, public PublicRow) (bool, error) {
 	hexDigest := hex.EncodeToString(legacyJTIDigest(legacy.JTI))
 	var row *legacyRow
 	if err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) (err error) {
-		row, err = readLegacyRow(ctx, tx, hexDigest)
+		row, err = readLegacyRow(ctx, tx.Query, hexDigest)
 		return err
 	}); err != nil {
 		return false, fmt.Errorf("%w: reading the go-api refresh token: %w", ErrStore, err)
@@ -33,8 +42,11 @@ func (s *Store) RevokeLegacy(ctx context.Context, legacy LegacyRefresh, actor Ac
 	principal := legacy.PrincipalID.String()
 	err := audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
-			_, err := s.revokeFamilyTx(ctx, tx, row.familyID, revokedByCaller)
-			return err
+			ids, err := s.revokeFamilyTx(ctx, tx, row.familyID, revokedByCaller)
+			if err != nil || len(ids) == 0 || public == nil {
+				return err
+			}
+			return public(ctx, tx, legacy.PrincipalID, legacy.OrganizationID)
 		},
 		Audit: audit.AuditEvent{
 			EventType: "auth.session.revoked", Outcome: audit.OutcomeAllowed,

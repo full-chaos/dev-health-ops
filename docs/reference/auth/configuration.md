@@ -9,6 +9,7 @@ source_of_truth:
   - internal/platform/secrets/source.go
   - internal/auth/keystore/keystore.go
   - cmd/auth-migrate/main.go
+  - internal/auth/authconfig/workload.go
 applicability: current
 lifecycle: active
 ---
@@ -140,7 +141,32 @@ With `AUTH_MEMBERSHIP_ROUTES=true`, auth-service serves the membership, invite a
   | `AUTH_WORKLOAD_BOOTSTRAP_FILE` | `workload` only: path of the workload bootstrap credential file (Compose). |
   | `AUTH_WORKLOAD_ISSUER` | `workload` only, required: auth-service's token issuer URL (`AUTH_TOKEN_ISSUER_URL`, https); every workload token must carry it. |
 
-  The exchange goes to the origin of `AUTH_PROXY_URL` (`POST /internal/v1/token/exchange`, which auth-service mounts only with `AUTH_WORKLOAD_EXCHANGE=true`); the subject file is read again for every exchange, and one exchange serves all the clients that selected `workload` (the provisioning clients and the session issue client). `workload` with a missing or invalid input is a start-up error naming it. A failed exchange fails that call (503) with no request to the provisioning routes; there is no fallback to `svc_authsess_`. The suspend route accepts the workload token only once its endpoint-profile row lists it.
+  The exchange goes to the origin of `AUTH_PROXY_URL` (`POST /internal/v1/token/exchange`, which auth-service mounts only while `AUTH_WORKLOAD_EXCHANGE` or `AUTH_WORKLOAD_BOOTSTRAP` is `true`; see [workload-token exchange](#workload-token-exchange)); the subject file is read again for every exchange, and one exchange serves all the clients that selected `workload` (the provisioning clients and the session issue client). `workload` with a missing or invalid input is a start-up error naming it. A failed exchange fails that call (503) with no request to the provisioning routes; there is no fallback to `svc_authsess_`. The suspend route accepts the workload token only once its endpoint-profile row lists it.
+
+### Workload token exchange
+
+The route `POST /internal/v1/token/exchange` is internal: go-api never forwards it. It is mounted while
+`AUTH_WORKLOAD_EXCHANGE` or `AUTH_WORKLOAD_BOOTSTRAP` is `true`, and each switch turns on one subject. Both need
+`AUTH_TOKEN_ISSUER_URL` (the `iss` of the workload tokens it signs). Any other value than `true` or `false` fails
+startup. The values are not secrets: a path names a file, and the files hold the secrets.
+
+| Environment | Default | Rule |
+| --- | --- | --- |
+| `AUTH_WORKLOAD_EXCHANGE` | `false` | `true` turns on the Kubernetes subject: a projected ServiceAccount token, reviewed by the cluster API server (TokenReview). Needs the five settings below. |
+| `AUTH_WORKLOAD_TRUST_DOMAIN` | unset | Required with the Kubernetes subject. Non-empty, at most 253 bytes, no surrounding whitespace. Names this cluster in the workload bindings. |
+| `AUTH_WORKLOAD_EXCHANGE_CLUSTER_ISSUER` | unset | Required with the Kubernetes subject. At most 512 bytes, no surrounding whitespace. The `iss` of the cluster's ServiceAccount tokens; a binding's `-issuer` must equal it. |
+| `AUTH_WORKLOAD_EXCHANGE_KUBE_API_URL` | unset | Required with the Kubernetes subject. An https origin: `https://host[:port]`, no path, query, fragment or credentials. |
+| `AUTH_WORKLOAD_EXCHANGE_KUBE_CA_FILE` | unset | Required with the Kubernetes subject. Absolute, clean path of the PEM bundle that the API server certificate must chain to. No other root is trusted. |
+| `AUTH_WORKLOAD_EXCHANGE_REVIEWER_TOKEN_FILE` | unset | Required with the Kubernetes subject. Absolute, clean path of auth-service's own token, which may create `tokenreviews`. Read again on every review (at most 16 KiB). |
+| `AUTH_WORKLOAD_BOOTSTRAP` | `false` | `true` turns on the Compose bootstrap credential subject. It reads no other setting. |
+
+A missing or malformed value stops auth-service at start (exit 1) with a message that names the variable and never
+its value. The chart renders the Kubernetes settings from `authService.workloadExchange` (see the
+[Kubernetes federation runbook](../../operate/runbooks/auth-workload-kubernetes-federation.md)); with the
+Compose profile the bootstrap subject is set up by the
+[bootstrap credential runbook](../../operate/runbooks/auth-workload-bootstrap-credential.md). The registry the
+exchange reads is in the [workload registry](workload-registry.md). The reasons that a refused exchange logs are in
+[Troubleshooting by reason](../../operate/runbooks/auth-workload-kubernetes-federation.md#troubleshooting-by-reason).
 
 ## auth-migrate
 
@@ -207,3 +233,4 @@ warning per attempt. See
 - `internal/platform/secrets/source.go`: `Resolve` (mutual exclusion, newline trim, error wording).
 - `internal/auth/authruntime/runtime.go`: `--version`, `--healthcheck`.
 - `cmd/auth-migrate/main.go`: environment names, `--check`, `runBudget`.
+- `internal/auth/authconfig/workload.go`: `workloadExchange` (the exchange settings, defaults and bounds), `HTTPSOrigin`.

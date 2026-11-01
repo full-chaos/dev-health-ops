@@ -6,10 +6,23 @@
 -- The 0020 kind and key CHECKs were validated by 0024.
 --
 -- resource_grants_history_guard also freezes origin of a revoked row.
+--
+-- roles: resource_grants.role_key references roles, which no migration or service fills
+-- (a read of prod found 0 rows), so no grant could be created. This seeds the three
+-- organization roles a grant may carry: viewer, member, admin. owner is organization-wide
+-- authority and is not seeded, so the foreign key refuses an owner grant as well as the
+-- Store. Name is the key; role_actions and actions stay unseeded (policy activation is
+-- separate). A unit test holds the list equal to the grant roles and roles.v1.json.
 
 ALTER TABLE resource_grants
     ADD COLUMN origin text NOT NULL DEFAULT 'api',
     ADD CONSTRAINT resource_grants_origin_closed CHECK (origin IN ('api', 'backfill'));
+
+INSERT INTO roles (role_key, name, scope, built_in) VALUES
+    ('viewer', 'viewer', 'organization', true),
+    ('member', 'member', 'organization', true),
+    ('admin', 'admin', 'organization', true)
+ON CONFLICT (role_key) DO NOTHING;
 
 CREATE OR REPLACE FUNCTION resource_grants_history_guard() RETURNS trigger
 LANGUAGE plpgsql

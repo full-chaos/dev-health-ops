@@ -108,6 +108,7 @@ internal/auth/platformrole	superuser_fills_census_test.go
 internal/auth/platformrole	superuser_literals_census_test.go
 internal/auth/platformrole	superuser_sites_census_test.go
 internal/auth/platformrole	superuser_writes_census_test.go
+internal/auth/pushlifecycle	acr_mapping_test.go
 internal/auth/ratelimitvalkey	acl_feed_test.go
 internal/auth/ratelimitvalkey	acl_test.go
 internal/auth/restorefence	consumers_test.go

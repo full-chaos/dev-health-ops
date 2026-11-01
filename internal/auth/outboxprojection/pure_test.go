@@ -1,6 +1,7 @@
 package outboxprojection
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 	"time"
@@ -45,7 +46,7 @@ func TestEveryOutcomeHasOneClassAndOnlyAGapAndAPendingParentRetry(t *testing.T) 
 		pushlifecycle.RefusedTerminal: ClassRefused, pushlifecycle.RefusedWiden: ClassRefused,
 		pushlifecycle.RefusedTransition: ClassRefused, pushlifecycle.RefusedParent: ClassRefused,
 		OutcomeConflict: ClassConflict, OutcomeMalformed: ClassRefused, OutcomeOrganizationUnknown: ClassRefused,
-		OutcomeUnfenced: ClassUnfenced,
+		OutcomeUnfenced: ClassUnfenced, OutcomeStateChanged: ClassRetry,
 	}
 	for _, core := range pushlifecycle.Outcomes {
 		if _, ok := want[core]; !ok {
@@ -243,5 +244,37 @@ func TestAuditOutcomeIsDeniedOnlyForARefusingDecision(t *testing.T) {
 	}
 	if AuditOutcome(pushlifecycle.Applied) != audit.OutcomeAllowed {
 		t.Error("an applied decision is an allowed audit row")
+	}
+}
+
+// The audit outcome is fixed before Apply decides, so a refusal is written by a second try. If the second try decides
+// something other than a refusal the state moved under us: there is no third try, nothing is written, and the answer
+// is a retry.
+func TestASecondTryThatDecidesOtherThanRefusedIsARetryAndNeverAThirdTry(t *testing.T) {
+	calls := []bool{}
+	script := func(answers ...error) func(bool) (Result, error) {
+		calls = calls[:0]
+		return func(denied bool) (Result, error) {
+			calls = append(calls, denied)
+			err := answers[len(calls)-1]
+			return Result{Outcome: pushlifecycle.Applied, Class: ClassDone}, err
+		}
+	}
+	res, err := runTries(script(errOutcomeMismatch, errOutcomeMismatch))
+	if err != nil || res.Outcome != OutcomeStateChanged || res.Class != ClassRetry {
+		t.Fatalf("two mismatches: %+v, %v; want a state_changed retry", res, err)
+	}
+	if len(calls) != 2 || calls[0] || !calls[1] {
+		t.Fatalf("tries %v, want exactly two (allowed, then denied) and no third", calls)
+	}
+	if res, err := runTries(script(errOutcomeMismatch, nil)); err != nil || res.Outcome != pushlifecycle.Applied || len(calls) != 2 {
+		t.Fatalf("a mismatch then a match: %+v, %v, %d tries", res, err, len(calls))
+	}
+	if res, err := runTries(script(nil)); err != nil || res.Outcome != pushlifecycle.Applied || len(calls) != 1 {
+		t.Fatalf("a first match: %+v, %v, %d tries", res, err, len(calls))
+	}
+	boom := errors.New("boom")
+	if _, err := runTries(script(boom)); !errors.Is(err, boom) || len(calls) != 1 {
+		t.Fatalf("an error must end the call at once: %v, %d tries", err, len(calls))
 	}
 }

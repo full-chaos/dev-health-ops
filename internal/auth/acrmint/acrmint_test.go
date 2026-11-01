@@ -66,7 +66,7 @@ type impersonationStub struct {
 	asked  []uuid.UUID
 }
 
-func (s *impersonationStub) ImpersonatingActor(_ context.Context, principal uuid.UUID) (bool, error) {
+func (s *impersonationStub) ImpersonatingActor(_ context.Context, principal, _ uuid.UUID) (bool, error) {
 	s.asked = append(s.asked, principal)
 	return s.active, s.err
 }
@@ -335,7 +335,7 @@ func TestTheTargetOfAnImpersonationIsNotRefused(t *testing.T) {
 
 type actorSet map[uuid.UUID]bool
 
-func (a actorSet) ImpersonatingActor(_ context.Context, principal uuid.UUID) (bool, error) {
+func (a actorSet) ImpersonatingActor(_ context.Context, principal, _ uuid.UUID) (bool, error) {
 	return a[principal], nil
 }
 

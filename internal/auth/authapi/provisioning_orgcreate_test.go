@@ -2,9 +2,9 @@ package authapi
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -35,26 +35,6 @@ func (f *fakeEnsurer) CreateOrganization(ctx context.Context, in identity.Create
 		return nil, f.bornErr
 	}
 	return &identity.BornOrganization{ID: f.bornID, Slug: in.Slug}, nil
-}
-
-// newOrgFixture serves the routes over a document that holds their rows.
-func newOrgFixture(t *testing.T) *provFixture {
-	t.Helper()
-	var document map[string]any
-	if err := json.Unmarshal(authv1.AuthServiceEndpointProfiles, &document); err != nil {
-		t.Fatal(err)
-	}
-	rows := document["rows"].([]any)
-	for _, pattern := range []string{PatternOrgOnboard, PatternOrgCreate} {
-		rows = append(rows, map[string]any{"service": AccessService, "method": "POST", "route": pattern,
-			"accepted_credential_classes": []any{serviceSessionIssuerClass}})
-	}
-	document["rows"] = rows
-	raw, err := json.Marshal(document)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return newProvFixtureWith(t, raw)
 }
 
 func onboardBody(principal uuid.UUID) string {
@@ -96,7 +76,7 @@ func TestOrgCreateRoutesRefusals(t *testing.T) {
 		{"create store down", PatternOrgCreate, func(f *provFixture) string { return createBody(f.super, "") }, failed, 503, reasonStoreUnavailable, 1},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			f := newOrgFixture(t)
+			f := newProvFixture(t)
 			f.orgs.bornErr = c.bornErr
 			got := f.post(c.path, c.body(f), nil)
 			if got.Code != c.status || reasonOf(t, got) != c.reason || f.orgs.calls != c.store {
@@ -107,7 +87,7 @@ func TestOrgCreateRoutesRefusals(t *testing.T) {
 }
 
 func TestOrgCreateRoutesAnswer(t *testing.T) {
-	f := newOrgFixture(t)
+	f := newProvFixture(t)
 	f.orgs.bornID = uuid.New()
 	got := f.post(PatternOrgOnboard, onboardBody(f.target), nil)
 	if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), f.orgs.bornID.String()) {
@@ -134,7 +114,7 @@ func TestOrgCreateRoutesAnswer(t *testing.T) {
 // The actor rule runs again on the verb's transaction: a demotion after the
 // precheck is refused there.
 func TestOrgCreateSuperuserRuleRunsOnTheTx(t *testing.T) {
-	f := newOrgFixture(t)
+	f := newProvFixture(t)
 	f.users.inTx = &fakeProvUsers{states: map[uuid.UUID]UserState{f.super: {IsActive: true}}}
 	got := f.post(PatternOrgCreate, createBody(f.super, ""), nil)
 	if got.Code != http.StatusForbidden || reasonOf(t, got) != reasonSuperuserRequired {
@@ -144,7 +124,7 @@ func TestOrgCreateSuperuserRuleRunsOnTheTx(t *testing.T) {
 
 func TestOnboardRouteRefusesTierSlugSettings(t *testing.T) {
 	for _, member := range []string{`"tier":"enterprise"`, `"slug":"mine"`, `"settings":{}`, `"managed_by":"manual"`, `"owner_principal_id":"` + uuid.NewString() + `"`} {
-		f := newOrgFixture(t)
+		f := newProvFixture(t)
 		got := f.post(PatternOrgOnboard, `{"principal_id":"`+f.target.String()+`","organization_name":"Acme",`+member+`}`, nil)
 		if got.Code != http.StatusBadRequest || f.orgs.calls != 0 {
 			t.Fatalf("%s: %d %s, store calls %d", member, got.Code, got.Body.String(), f.orgs.calls)
@@ -152,13 +132,19 @@ func TestOnboardRouteRefusesTierSlugSettings(t *testing.T) {
 	}
 }
 
-// The routes stay dark in a build whose document has no rows for them: a row's
-// source line must exist at the document's source_commit.
-func TestOrgCreateRoutesAreDarkWithoutTheirRows(t *testing.T) {
-	f := newProvFixture(t)
-	for _, c := range []struct{ path, body string }{{PatternOrgOnboard, onboardBody(f.target)}, {PatternOrgCreate, createBody(f.super, "")}} {
-		if got := f.post(c.path, c.body, nil); got.Code != http.StatusNotFound || f.orgs.calls != 0 {
-			t.Fatalf("%s: %d %s, store calls %d; want 404 and none", c.path, got.Code, got.Body.String(), f.orgs.calls)
+func TestOrgCreateRoutesProfileRows(t *testing.T) {
+	for _, pattern := range []string{PatternOrgOnboard, PatternOrgCreate} {
+		if !slices.Contains(provisioningPatterns, pattern) {
+			t.Fatalf("%s is not a provisioning route", pattern)
 		}
+	}
+	if err := provisioningRowsPresent(authv1.AuthServiceEndpointProfiles, true); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOrgCreateRoutesWorkloadToken(t *testing.T) {
+	if !workloadOperations[opOrgOnboard] || !workloadOperations[opOrgCreate] {
+		t.Fatal("go-api's workload token is not admitted on the organization routes")
 	}
 }

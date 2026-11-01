@@ -30,7 +30,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 505,
+            "line": 542,
             "note": "func (s *Store) rotate",
             "path": "internal/auth/session/store.go"
           },
@@ -45,7 +45,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 404,
+          "line": 441,
           "note": "func (s *Store) Exchange",
           "path": "internal/auth/session/store.go"
         },
@@ -352,7 +352,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 505,
+            "line": 542,
             "note": "func (s *Store) rotate",
             "path": "internal/auth/session/store.go"
           },
@@ -367,7 +367,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 404,
+          "line": 441,
           "note": "func (s *Store) Exchange",
           "path": "internal/auth/session/store.go"
         },
@@ -594,7 +594,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/provisioning.go",
-        "line": 198
+        "line": 201
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped"
@@ -628,7 +628,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/provisioning.go",
-        "line": 199
+        "line": 202
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped"
@@ -662,7 +662,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/provisioning.go",
-        "line": 200
+        "line": 203
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped"
@@ -696,7 +696,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/provisioning.go",
-        "line": 201
+        "line": 204
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped"
@@ -745,7 +745,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/provisioning.go",
-        "line": 202
+        "line": 205
       },
       "surface_kind": "rest",
       "tenant_requirement": "org_scoped"
@@ -779,7 +779,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/provisioning.go",
-        "line": 203
+        "line": 206
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -844,7 +844,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/provisioning.go",
-        "line": 204
+        "line": 207
       },
       "surface_kind": "rest",
       "tenant_requirement": "cross_org_superuser_only"
@@ -878,7 +878,75 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/provisioning.go",
-        "line": 205
+        "line": 208
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "cross_org_superuser_only"
+    },
+    {
+      "accepted_credential_classes": [
+        "internal_svc_authsess_token",
+        "workload_token"
+      ],
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "workload+jwt"
+      },
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the account and its memberships are read live under the principal row lock.",
+      "disclosure_behavior": "The body is principal_id, organization_name and an optional description and request_metadata; it takes no slug, tier or settings. Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials; an account that is missing or not active gets 403 principal_deactivated, one with a membership 409 already_member, under the principal row lock. The answer is the new organization and membership ids.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/organizations/onboard [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 26,
+          "note": "func (p PG) CheckScope",
+          "path": "internal/auth/servicecred/scope.go"
+        },
+        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). A workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read by internal/auth/authapi/issue_workload.go SessionIssueWorkload.authorize, the session issue route's path: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. Any other bearer is refused before any read and before the body is read; then the actor must be an active superuser (go-api's PATCH /api/v1/admin/orgs/{org_id} is superuser only), checked on the live users row before anything is read for the request, and again inside the commit after the organization row lock."
+      },
+      "route": "/internal/v1/organizations/onboard",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/provisioning_orgcreate.go",
+        "line": 20
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "none"
+    },
+    {
+      "accepted_credential_classes": [
+        "internal_svc_authsess_token",
+        "workload_token"
+      ],
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "workload+jwt"
+      },
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the actor's public.users row is read live before the write and again under the write's locks.",
+      "disclosure_behavior": "The body is actor_principal_id, organization_name, slug, tier, managed_by and an optional organization_description, settings and owner_principal_id. Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials; an actor that is not an active superuser gets 403 (principal_deactivated or superuser_required) before any row of the request is read, and the same rule runs again under the verb's locks. The answer is the new organization id, and the membership id when an owner was named.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /internal/v1/organizations/create [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 26,
+          "note": "func (p PG) CheckScope",
+          "path": "internal/auth/servicecred/scope.go"
+        },
+        "description": "servicecred.PG.CheckScope: the bearer must match svc_authsess_ + 43 base64url characters; its SHA-256 is looked up in public.internal_service_credentials and must be an unrevoked, unexpired auth-session-issuer row holding memberships:write (internal/auth/authapi/provisioning.go admit). A workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is decided without a table read by internal/auth/authapi/issue_workload.go SessionIssueWorkload.authorize, the session issue route's path: audience auth-service and the configured go-api workload principal (AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT) as sub, then authverify.WorkloadVerifier. Any other bearer is refused before any read and before the body is read; then the actor must be an active superuser (go-api's PATCH /api/v1/admin/orgs/{org_id} is superuser only), checked on the live users row before anything is read for the request, and again inside the commit after the organization row lock."
+      },
+      "route": "/internal/v1/organizations/create",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/provisioning_orgcreate.go",
+        "line": 22
       },
       "surface_kind": "rest",
       "tenant_requirement": "cross_org_superuser_only"
@@ -1135,7 +1203,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 313,
+            "line": 350,
             "note": "func (s *Store) Create",
             "path": "internal/auth/session/store.go"
           },
@@ -1563,5 +1631,5 @@
     }
   ],
   "schema_version": "endpoint-profile.v1",
-  "source_commit": "d7882d92403017d2881cd5880ebd8f5352dbce38"
+  "source_commit": "c564fde67d7c24bdd447b99ae18b4faee6c2c247"
 }

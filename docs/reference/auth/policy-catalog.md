@@ -191,7 +191,7 @@ From `contracts/auth/v1/README.md`:
 - Version 4: `acr.context.read` (organization scope, repository resource kind, low risk, `resource_revision_bound`), `members.update` (organization, high, `none`) and `authz.decide` (platform, high, `none`) (CHAOS-10774). The resource-kind set gains `repository`. The cached-action exemption list is gone.
 - Version 5: the role `platform_owner` (platform scope, no action) (CHAOS-12294). No action changed, so no decision changes.
 - Version 6: every action gets a required `impersonation` member (`denied` or `allowed`), and the action `admin.impersonate` (CHAOS-10987).
-- Version 9: `acr.context.read` is `allowed` under a delegated session (CHAOS-12401). No role changed, so no decision changes.
+- Version 7: `acr.context.read` is `allowed` under a delegated session (CHAOS-12401). No role changed, so no decision changes.
 
 ## Planned, not built
 

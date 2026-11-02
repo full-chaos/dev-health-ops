@@ -14,7 +14,7 @@ var Allowlist = []Entry{
 	{File: "internal/api/billing/subscription.go", Func: "handlers.syncOrgLicense", Table: "public.organizations", Verb: "UPDATE"},
 	{File: "internal/api/billing/subscriptionhooks.go", Func: "handlers.revokeLicense", Table: "public.organizations", Verb: "UPDATE"},
 	{File: "internal/api/billing/webhook.go", Func: "handlers.persistLicense", Table: "public.organizations", Verb: "UPDATE"},
-	{File: "internal/api/orgs/orgs.go", Func: "handlers.updateOwnOrg", Table: "public.organizations", Verb: "UPDATE"},
+	{File: "internal/api/orgs/orgs_owned.go", Func: "handlers.ownUpdateSQL", Table: "public.organizations", Verb: "UPDATE"},
 	{File: "internal/api/session/changepassword.go", Func: "handlers.changePassword", Table: "public.users", Verb: "UPDATE"},
 	{File: "internal/api/session/invites.go", Func: "handlers.acceptInvite", Table: "public.org_invites", Verb: "UPDATE"},
 	{File: "internal/api/session/linktokens.go", Func: "deleteLinkTokens", Table: "public.email_verification_tokens", Verb: "DELETE"},

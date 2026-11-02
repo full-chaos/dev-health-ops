@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/sessionevent"
 )
 
 type wireEvent struct {
@@ -125,7 +127,14 @@ func TestEachProducerWritesItsMappedEvent(t *testing.T) {
 	if err := e.owned.SetPasswordHash(ctx, local, testBcrypt, Actor{}); err != nil {
 		t.Fatal(err)
 	}
-	e.wantEvents(t, ctx, "principal", "prn_"+local.String(), wireEvent{Verb: "principal.created", Change: status("active")})
+	// The password stamp ends every older session with no session row written, so the change tells the stream with one scope
+	// event whose revoked_before is the stamp the same UPDATE wrote.
+	var stamp time.Time
+	if err := e.admin.QueryRow(ctx, `SELECT password_updated_at FROM auth.users WHERE principal_id = $1`, local).Scan(&stamp); err != nil {
+		t.Fatal(err)
+	}
+	e.wantEvents(t, ctx, "principal", "prn_"+local.String(), wireEvent{Verb: "principal.created", Change: status("active")},
+		wireEvent{Verb: "principal.sessions_revoked", Change: map[string]any{"revoked_before": stamp.UTC().Format(sessionevent.BeforeLayout), "reason": "password_changed"}})
 	e.wantEvents(t, ctx, "user", "prn_"+local.String(),
 		wireEvent{Verb: "user.created"}, wireEvent{Verb: "user.email_verified"}, wireEvent{Verb: "user.credentials_changed"})
 

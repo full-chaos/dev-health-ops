@@ -10,6 +10,7 @@ internal/api/credentials	32
 internal/api/syncadmin	113
 internal/api/teamsidentity	46
 internal/atlassianteams	11
+internal/auth/authapi	60
 internal/auth/contracts	13
 internal/auth/identity/local	31
 internal/cigates/affected	600

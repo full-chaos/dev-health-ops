@@ -202,7 +202,7 @@ var attributeVocabulary = map[string][]string{
 	"audience": {"auth-service", "dev-health-api", "acr-api", "acr-mcp"},
 	// client_class is an OAuth client's class, from the trusted client registry.
 	"client_class":     {"browser", "mcp"},
-	"credential_class": {"user_access_token", "refresh_credential", "workload_token", "acr_client", "external_push", "service_account_key", "workload_bootstrap_credential"},
+	"credential_class": {"user_access_token", "refresh_credential", "workload_token", "acr_client", "external_push", "service_account_key", "service_account_token", "workload_bootstrap_credential"},
 	// source names who started an auth-service record: go-api-delegated is a
 	// session go-api signed the user in for and asked auth-service to issue.
 	"source": {"go-api-delegated", "operator-cli"},

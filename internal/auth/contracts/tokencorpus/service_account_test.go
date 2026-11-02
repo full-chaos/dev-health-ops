@@ -2,7 +2,10 @@ package tokencorpus
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -605,15 +608,15 @@ func TestServiceAccountCorpusHasOneAudienceAndRefusesEveryOtherAtTheContractAndT
 // The committed corpus is pinned by a digest over every file, so any edit
 // (a vector, a signature, a key, the manifest) is red until the pin is moved
 // in the same commit. Regenerating the corpus draws fresh keys and moves it.
-const serviceAccountCorpusDigest = "0000000000000000000000000000000000000000000000000000000000000000"
+const serviceAccountCorpusDigest = "a5a5f8f513c98c1e3b10d89429645518e4f1c7984df0c716d409f06b33b83b93"
 
 func TestServiceAccountCorpusDigestIsPinned(t *testing.T) {
-	got, err := CorpusDigest(filepath.Join(testRoot(t), ServiceAccountDir))
+	got, err := corpusDigest(filepath.Join(testRoot(t), ServiceAccountDir))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != serviceAccountCorpusDigest {
-		t.Fatalf("the service-account-token corpus digest is %s, the pin is %s: a corpus change moves serviceAccountCorpusDigest in the same commit (go run ./internal/auth/contracts/tokencorpus/gen service-account-token prints it)", got, serviceAccountCorpusDigest)
+		t.Fatalf("the service-account-token corpus digest is %s, the pin is %s: a corpus change moves serviceAccountCorpusDigest in the same commit (regenerating the corpus with go run ./internal/auth/contracts/tokencorpus/gen service-account-token changes it)", got, serviceAccountCorpusDigest)
 	}
 }
 
@@ -622,11 +625,11 @@ func TestCorpusDigestCoversEveryFileAndItsName(t *testing.T) {
 	if err := Write(dir, mustGenerateServiceAccount(t, "a")); err != nil {
 		t.Fatal(err)
 	}
-	base, err := CorpusDigest(dir)
+	base, err := corpusDigest(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	again, err := CorpusDigest(dir)
+	again, err := corpusDigest(dir)
 	if err != nil || again != base {
 		t.Fatalf("the digest is not stable: %q, %q, %v", base, again, err)
 	}
@@ -644,7 +647,7 @@ func TestCorpusDigestCoversEveryFileAndItsName(t *testing.T) {
 		if err := change(); err != nil {
 			t.Fatal(err)
 		}
-		moved, err := CorpusDigest(dir)
+		moved, err := corpusDigest(dir)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -653,4 +656,36 @@ func TestCorpusDigestCoversEveryFileAndItsName(t *testing.T) {
 		}
 		base = moved
 	}
+}
+
+// corpusDigest is the sha256 over the sorted "<file sha256>  <relative path>"
+// lines of every file under dir: any change to a vector, a key, a signature,
+// the manifest or the file set moves it.
+func corpusDigest(dir string) (string, error) {
+	var lines []string
+	err := filepath.WalkDir(dir, func(path string, e os.DirEntry, err error) error {
+		if err != nil || e.IsDir() {
+			return err
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		lines = append(lines, fmt.Sprintf("%x  %s", sha256.Sum256(raw), filepath.ToSlash(rel)))
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	sort.Strings(lines)
+	return hex.EncodeToString(sumLines(lines)), nil
+}
+
+func sumLines(lines []string) []byte {
+	h := sha256.Sum256([]byte(strings.Join(lines, "\n") + "\n"))
+	return h[:]
 }

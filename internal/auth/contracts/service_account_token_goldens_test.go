@@ -155,6 +155,7 @@ var serviceAccountTokenClientRefusals = map[string]string{
 	"client-rejected-exp-equals-nbf.json":            "refused at client_rule exp_not_after_nbf",
 	"client-rejected-nbf-before-iat.json":            "refused at client_rule nbf_before_iat",
 	"client-rejected-duplicate-claim-aud.json":       "refused at duplicate_member",
+	"client-rejected-duplicate-claim-cid.json":       "refused at duplicate_member",
 	"client-rejected-duplicate-header-typ.json":      "refused at duplicate_member",
 	"client-rejected-exp-decimal-form.json":          "refused at decode",
 }

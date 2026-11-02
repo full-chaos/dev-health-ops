@@ -848,6 +848,9 @@
       "WorkloadToken": {
         "$ref": "../jsonschema/workload-token.v1.schema.json"
       },
+      "ServiceAccountToken": {
+        "$ref": "../jsonschema/service-account-token.v1.schema.json"
+      },
       "AuditEvent": {
         "$ref": "../jsonschema/audit-event.v1.schema.json"
       },

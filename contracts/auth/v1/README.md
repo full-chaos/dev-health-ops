@@ -17,6 +17,9 @@ follow them, then the Wave 3 user access token `access-token.v1` (CHAOS-10442),
 `refresh-response.v2` (the refresh answer for the EdDSA access token; v1 stays the answer for the HS256 token and both are read until the HS256 issuer is removed), the Wave 8
 workload token `workload-token.v1` (CHAOS-10648: typ `workload+jwt`, one audience, no
 `org_id`/`sid`/`scope`, at most 300 s; its signed corpus is `golden/workload-token`),
+the service account token `service-account-token.v1` (CHAOS-12362: typ `sa+jwt`, audience
+`dev-health-api`, `org_id` and `cid`, no `sid`/`scope`, at most 300 s; its signed corpus is
+`golden/service-account-token`),
 and `transport-error.v1` (CHAOS-10392), the body auth-service's shared
 transport writes when it answers before a route (400, 404, 405, 413, 429, 500).
 

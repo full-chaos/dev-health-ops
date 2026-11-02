@@ -1,5 +1,6 @@
 // Command gen writes the signed access-token.v1 golden corpus (no argument) or
-// the workload-token.v1 one (argument workload-token) with fresh keys.
+// the workload-token.v1 one (argument workload-token) or the
+// service-account-token.v1 one (argument service-account-token) with fresh keys.
 // The private keys live in memory only and are discarded.
 package main
 
@@ -31,8 +32,10 @@ func main() {
 		err = run(root, filepath.Join(root, out), nil)
 	case "workload-token":
 		err = runWorkload(root, filepath.Join(root, tokencorpus.WorkloadDir), nil)
+	case "service-account-token":
+		err = runServiceAccount(root, filepath.Join(root, tokencorpus.ServiceAccountDir), nil)
 	default:
-		err = fmt.Errorf("unknown corpus %q (none, or workload-token)", surface)
+		err = fmt.Errorf("unknown corpus %q (none, workload-token or service-account-token)", surface)
 	}
 	if err != nil {
 		fail(err)
@@ -70,8 +73,19 @@ func runWorkload(root, out string, random io.Reader) error {
 	return tokencorpus.Write(out, corpus)
 }
 
+// runServiceAccount is run for the service-account-token.v1 corpus.
 func runServiceAccount(root, out string, random io.Reader) error {
-	return fmt.Errorf("not implemented")
+	if _, err := contracts.RepoRoot(root); err != nil {
+		return err
+	}
+	corpus, err := tokencorpus.GenerateServiceAccount(random)
+	if err != nil {
+		return err
+	}
+	if err := tokencorpus.VerifyAll(root, corpus); err != nil {
+		return err
+	}
+	return tokencorpus.Write(out, corpus)
 }
 
 func fail(err error) {

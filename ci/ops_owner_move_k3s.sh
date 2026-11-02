@@ -310,7 +310,7 @@ for who in domain queue; do
     else
       printf "export PGPASSWORD='%s'\n" "${QUEUE_PASSWORD}"
       # shellcheck disable=SC2016
-      printf '%s\n' 'n=0; f=0; while [ -e /tmp/loop.go ]; do n=$((n+1)); psql -h 127.0.0.1 -U devhealth_queue -d omu -v ON_ERROR_STOP=1 -At -c "WITH j AS (INSERT INTO river.river_job (kind, max_attempts, state, finalized_at) VALUES ('"'"'owner_move.probe'"'"', 1, '"'"'cancelled'"'"', now()) RETURNING id) DELETE FROM river.river_job WHERE id IN (SELECT id FROM j)" -c "SELECT count(*) FROM public.sync_run_units" >/dev/null 2>>/tmp/loop.queue.err || f=$((f+1)); sleep 0.1; done; echo "$n $f" >/tmp/loop.queue.out'
+      printf '%s\n' 'n=0; f=0; while [ -e /tmp/loop.go ]; do n=$((n+1)); psql -h 127.0.0.1 -U devhealth_queue -d omu -v ON_ERROR_STOP=1 -At -c "WITH j AS (INSERT INTO river.river_job (kind, args, max_attempts, state, finalized_at) VALUES ('"'"'owner_move.probe'"'"', '"'"'{}'"'"', 1, '"'"'cancelled'"'"', now()) RETURNING id) DELETE FROM river.river_job WHERE id IN (SELECT id FROM j)" -c "SELECT count(*) FROM public.sync_run_units" >/dev/null 2>>/tmp/loop.queue.err || f=$((f+1)); sleep 0.1; done; echo "$n $f" >/tmp/loop.queue.out'
     fi
   } | K exec -i deploy/ops-postgres -- sh -s >/dev/null 2>&1 &
 done

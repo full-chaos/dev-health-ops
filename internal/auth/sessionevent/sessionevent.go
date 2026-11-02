@@ -4,8 +4,6 @@
 package sessionevent
 
 import (
-	"crypto/sha256"
-	"encoding/base64"
 	"fmt"
 	"time"
 
@@ -55,10 +53,9 @@ func scope(aggregate, id, reason string, at time.Time) audit.OutboxEvent {
 		Change: map[string]any{"revoked_before": at.UTC().Format(BeforeLayout), "reason": reason}}
 }
 
-// SigningKey is the signing_key.compromised event of kid. The aggregate id is key_ plus the unpadded base64url SHA-256 of
-// the kid (a kid may hold a dot, an aggregate id may not); the kid travels as change.kid.
+// SigningKey is the signing_key.compromised event of kid. The aggregate id is provisioning.SigningKeyID(kid) (a kid may
+// hold a dot, an aggregate id may not); the kid travels as change.kid.
 func SigningKey(kid string) audit.OutboxEvent {
-	sum := sha256.Sum256([]byte(kid))
-	return audit.OutboxEvent{AggregateType: "signing_key", AggregateID: "key_" + base64.RawURLEncoding.EncodeToString(sum[:]),
+	return audit.OutboxEvent{AggregateType: "signing_key", AggregateID: provisioning.SigningKeyID(kid),
 		EventType: "signing_key.compromised", Change: map[string]any{"kid": kid}}
 }

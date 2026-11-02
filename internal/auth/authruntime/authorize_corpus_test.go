@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"slices"
@@ -50,6 +53,15 @@ const (
 var azExclusionReasons = []azExclusion{
 	azWorkloadPrincipalUnreachable, azServiceAccountUnreachable, azStateFailureIs503, azStatusNotRepresentable,
 	azPlainSnapshotUnreachable, azMembershipOrgIsTheKey, azDelegatedSessionPending,
+}
+
+// A reason that rests on how the real stack is built names the cell that pins
+// that construction. The cell is a test function in the named file; dropping it,
+// or dropping the entry, fails TestAuthorizeCorpusExclusionPinCellsExist.
+type azPinCell struct{ file, fn string }
+
+var azExclusionPinCells = map[azExclusion]azPinCell{
+	azMembershipOrgIsTheKey: {"../decisionstate/decisionstate_integration_test.go", "TestSnapshotMembershipOrgIsTheAskedOrg"},
 }
 
 var azCorpusExclusions = map[string]azExclusion{
@@ -513,5 +525,30 @@ func TestAuthorizeCorpusRenderedBodiesDecodeAsExpected(t *testing.T) {
 	questions, err := authapi.DecodeAuthorizationBatchRequest(batch)
 	if err != nil || len(questions) != len(accepted) {
 		t.Fatalf("one batch of the %d accepted rows: %d questions, %v", len(accepted), len(questions), err)
+	}
+}
+
+func TestAuthorizeCorpusExclusionPinCellsExist(t *testing.T) {
+	if _, ok := azExclusionPinCells[azMembershipOrgIsTheKey]; !ok {
+		t.Fatalf("reason %q names no pin cell", azMembershipOrgIsTheKey)
+	}
+	for why, cell := range azExclusionPinCells {
+		if !slices.Contains(azExclusionReasons, why) {
+			t.Errorf("pin cell for %q: the reason is outside the closed set", why)
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), cell.file, nil, 0)
+		if err != nil {
+			t.Errorf("reason %q: pin cell file %s: %v", why, cell.file, err)
+			continue
+		}
+		found := false
+		for _, d := range file.Decls {
+			if f, ok := d.(*ast.FuncDecl); ok && f.Recv == nil && f.Name.Name == cell.fn && strings.HasPrefix(f.Name.Name, "Test") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("reason %q: pin cell %s is not a test function of %s", why, cell.fn, cell.file)
+		}
 	}
 }

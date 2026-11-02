@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/metric/noop"
@@ -349,5 +350,43 @@ func TestHighRiskActionIsTheCatalogClass(t *testing.T) {
 	}
 	if high == 0 || highRiskAction("nothing.here") {
 		t.Fatalf("%d high-risk actions; unknown action audited: %v", high, highRiskAction("nothing.here"))
+	}
+}
+
+// With the decision cache wired, no high-risk decision is stored or served from it: the wire
+// expiry is the decision time, and a second identical call decides again and writes a second
+// audit row. A pin cell: the rule holds on main before the audit existed.
+func TestAuthorizeHighRiskDecisionsAreNeverCachedSoEachIsAudited(t *testing.T) {
+	high := 0
+	for _, a := range delegatedCatalogActions {
+		act, err := policycatalog.Default().Action(a.action)
+		if err != nil || act.RiskClass != policycatalog.RiskHigh {
+			continue
+		}
+		high++
+		c := newCacheFixture(t)
+		decisionTime := time.Unix(0, authorizeNow).UTC().Format(expiresAtLayout)
+		for call := 1; call <= 2; call++ {
+			rec := c.one(c.delegatedQuestion(a))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("%s call %d: status %d %s", a.action, call, rec.Code, rec.Body)
+			}
+			d := decodeWire[wireDecision](t, rec)
+			if d.ExpiresAt != decisionTime {
+				t.Errorf("%s call %d: expires_at %s, want the decision time %s", a.action, call, d.ExpiresAt, decisionTime)
+			}
+			if n := len(c.audit.rows()); n != call {
+				t.Errorf("%s after call %d: %d audit rows, want %d", a.action, call, n, call)
+			}
+		}
+		if hits := c.counter(MetricDecisionCacheLookups, "hit"); hits != 0 {
+			t.Errorf("%s: %d cache hits for a high-risk action", a.action, hits)
+		}
+		if stored := c.counter(MetricDecisionCachePuts, "stored"); stored != 0 {
+			t.Errorf("%s: %d decisions stored for a high-risk action", a.action, stored)
+		}
+	}
+	if high != 22 {
+		t.Fatalf("walked %d high-risk actions, want 22", high)
 	}
 }

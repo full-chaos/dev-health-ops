@@ -50,7 +50,7 @@ func newSAFixture(t *testing.T) *saFixture {
 
 func (s *saFixture) liveKey() DecisionKey {
 	return DecisionKey{Found: true, PrincipalID: s.account, AccountOrgID: s.accountOrg, Class: serviceAccountKeyClass,
-		DomainOwner: "platform", ExpiresAtUnixNano: authorizeNow + int64(time.Hour)}
+		DomainOwner: "platform", ExpiresAtUnixNano: authorizeNow + int64(time.Hour), NowUnixNano: authorizeNow}
 }
 
 func (s *saFixture) principalRef() ReferencedPrincipal {
@@ -217,7 +217,7 @@ func TestAuthorizeServiceAccountOrgAndPlatformActionsAreDenied(t *testing.T) {
 		d.ReasonCode != string(authorization.ReasonNoMembership) {
 		t.Fatalf("organization action: %+v, want no_membership", d)
 	}
-	if d := s.decide(t, s.saQuestion("admin.users", "platform", "", "")); d.Allowed ||
+	if d := s.decide(t, s.saQuestion("admin.users", "platform", "platform", "")); d.Allowed ||
 		d.ReasonCode != string(authorization.ReasonPlatformRoleAbsent) {
 		t.Fatalf("platform action: %+v, want platform_role_absent", d)
 	}
@@ -243,14 +243,12 @@ func TestDecisionKeyLiveForEveryClause(t *testing.T) {
 		"clock is past": func(k *DecisionKey) { k.NowUnixNano = k.ExpiresAtUnixNano + 1 },
 	} {
 		k := s.liveKey()
-		k.NowUnixNano = authorizeNow
 		mutate(&k)
 		if k.liveFor(p) {
 			t.Errorf("%s: the key is live, want refused", name)
 		}
 	}
 	k := s.liveKey()
-	k.NowUnixNano = authorizeNow
 	p.OrgID = uuid.NewString()
 	if k.liveFor(p) {
 		t.Error("token org_id of another organization: the key is live, want refused")

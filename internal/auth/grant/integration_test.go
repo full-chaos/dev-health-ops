@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/grantend"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/membership"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -540,5 +541,298 @@ VALUES ($1, $2, $3, 'owner', 'repository', 'acme/api', $4)`, uuid.New(), s.user,
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) || pgErr.ConstraintName != "resource_grants_role_key_fkey" {
 		t.Fatalf("raw owner grant = %v, want a violation of resource_grants_role_key_fkey", err)
+	}
+}
+
+// expire sets a grant's expiry into the past, as time passing would; the API refuses a past expiry, so this is SQL, with the
+// commit guard's triggers off for the one transaction.
+func (e *env) expire(t *testing.T, ctx context.Context, id uuid.UUID) {
+	t.Helper()
+	tx, err := e.admin.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE auth.resource_grants SET expires_at = now() - interval '1 minute' WHERE id = $1`, id); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (e *env) createWith(t *testing.T, ctx context.Context, s setup, role, key string, at *time.Time) (*Grant, error) {
+	actor := s.admin
+	return e.store.Create(ctx, CreateInput{OrgID: s.org, PrincipalID: s.user, Role: role, Key: key, ExpiresAt: at, Actor: Actor{PrincipalID: &actor}, Authorize: allowAll})
+}
+
+// C1: a grant whose expiry passed is no grant, yet it held the tuple's unique index: a create over it ends it (resource_grant.expired,
+// no revoker) and grants again, and a tuple whose row has not expired is still ErrAlreadyGranted.
+func TestCreateOnATupleWhoseOnlyRowIsExpiredGrantsAgain(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	s := e.setup(t, ctx)
+	soon := time.Now().Add(time.Hour)
+	g1, err := e.createWith(t, ctx, s, "viewer", "acme/api", &soon)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.createWith(t, ctx, s, "viewer", "acme/api", nil); !errors.Is(err, ErrAlreadyGranted) {
+		t.Fatalf("create over a row that has not expired = %v, want ErrAlreadyGranted", err)
+	}
+	if n := e.events(t, ctx, "resource_grant.expired", g1.ID); n != 0 {
+		t.Fatalf("a create refused over a live row wrote %d expired events", n)
+	}
+	e.expire(t, ctx, g1.ID)
+	g2, err := e.createWith(t, ctx, s, "viewer", "acme/api", nil)
+	if err != nil {
+		t.Fatalf("create over an expired tuple: %v", err)
+	}
+	if g2.ID == g1.ID || !g2.Live() {
+		t.Fatalf("new grant = %+v, old %s", g2, g1.ID)
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.resource_grants WHERE id = $1 AND revoked_at IS NOT NULL AND revoked_by IS NULL`, g1.ID); n != 1 {
+		t.Fatal("the expired grant was not ended without a revoker")
+	}
+	if n := e.events(t, ctx, "resource_grant.expired", g1.ID); n != 1 {
+		t.Fatalf("expired events for the old grant = %d, want 1", n)
+	}
+	if n := e.events(t, ctx, "resource_grant.created", g2.ID); n != 1 {
+		t.Fatalf("created events for the new grant = %d, want 1", n)
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.resource_grant.expired'
+AND attributes->>'target_id' = $1 AND attributes->>'reason_code' = 'expired' AND attributes->>'new_status' = 'expired'`, g1.ID.String()); n != 1 {
+		t.Fatalf("expired audit rows = %d, want 1", n)
+	}
+	if _, err := e.createWith(t, ctx, s, "viewer", "acme/api", nil); !errors.Is(err, ErrAlreadyGranted) {
+		t.Fatalf("a second create after the re-grant = %v, want ErrAlreadyGranted", err)
+	}
+}
+
+// Two creates race on an expired tuple, each planning the same expired row before either starts its transaction (a barrier
+// in the plan seam holds both on their first attempt): one row, one created and one expired event, the other is ErrAlreadyGranted.
+func TestTwoCreatesRaceOnAnExpiredTuple(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	for round := range 5 {
+		s := e.setup(t, ctx)
+		soon := time.Now().Add(time.Hour)
+		g1, err := e.createWith(t, ctx, s, "member", "acme/race", &soon)
+		if err != nil {
+			t.Fatal(err)
+		}
+		e.expire(t, ctx, g1.ID)
+		var mu sync.Mutex
+		planned := 0
+		barrier := make(chan struct{})
+		e.store.afterPlan = func() {
+			mu.Lock()
+			planned++
+			n := planned
+			mu.Unlock()
+			switch {
+			case n == 2:
+				close(barrier)
+			case n < 2:
+				<-barrier
+			}
+		}
+		errs := make(chan error, 2)
+		var wg sync.WaitGroup
+		for range 2 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_, err := e.createWith(t, ctx, s, "member", "acme/race", nil)
+				errs <- err
+			}()
+		}
+		wg.Wait()
+		e.store.afterPlan = nil
+		close(errs)
+		ok, already := 0, 0
+		for err := range errs {
+			switch {
+			case err == nil:
+				ok++
+			case errors.Is(err, ErrAlreadyGranted):
+				already++
+			default:
+				t.Fatalf("round %d: %v", round, err)
+			}
+		}
+		if ok != 1 || already != 1 {
+			t.Fatalf("round %d: %d creates succeeded and %d were ErrAlreadyGranted, want 1 and 1", round, ok, already)
+		}
+		if n := e.count(t, ctx, `SELECT count(*) FROM auth.resource_grants WHERE organization_id = $1 AND principal_id = $2 AND revoked_at IS NULL`, s.org, s.user); n != 1 {
+			t.Fatalf("round %d: %d live rows, want 1", round, n)
+		}
+		if n := e.events(t, ctx, "resource_grant.expired", g1.ID); n != 1 {
+			t.Fatalf("round %d: %d expired events, want 1", round, n)
+		}
+		if n := e.count(t, ctx, `SELECT count(*) FROM auth.auth_outbox_events WHERE event_type = 'resource_grant.created' AND payload->>'organization_id' = $1`, "org_"+s.org.String()); n != 2 {
+			t.Fatalf("round %d: %d created events in the organization (the first grant and one new), want 2", round, n)
+		}
+	}
+}
+
+// A create whose plan found no expired row, and whose row expires before its transaction starts, sees the set move, plans
+// again and grants: the row is ended once and the new grant is live.
+func TestCreateOverARowThatExpiresBetweenPlanAndTransactionGrantsAfterOneRetry(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	s := e.setup(t, ctx)
+	at := time.Now().Add(3 * time.Second)
+	g1, err := e.createWith(t, ctx, s, "viewer", "acme/between", &at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	e.store.afterPlan = func() {
+		calls++
+		if calls == 1 {
+			time.Sleep(time.Until(at.Add(time.Second)))
+		}
+	}
+	defer func() { e.store.afterPlan = nil }()
+	g2, err := e.createWith(t, ctx, s, "viewer", "acme/between", nil)
+	if err != nil {
+		t.Fatalf("create after the planned set moved: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("plan seam called %d times, want 2 (one attempt moved, one granted)", calls)
+	}
+	if g2.ID == g1.ID || !g2.Live() {
+		t.Fatalf("new grant = %+v", g2)
+	}
+	if n := e.events(t, ctx, "resource_grant.expired", g1.ID); n != 1 {
+		t.Fatalf("expired events = %d, want 1", n)
+	}
+}
+
+// A row that expires between the plan and the transaction: the plan was empty, the transaction finds the row, the set differs
+// (ErrStateMoved), and the next plan holds it.
+func TestARowThatExpiresBetweenPlanAndApplyMovesTheSet(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	s := e.setup(t, ctx)
+	at := time.Now().Add(2 * time.Second)
+	g, err := e.createWith(t, ctx, s, "admin", "acme/slow", &at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := func() *grantend.Plan {
+		p, err := grantend.PlanExpiredTuple(ctx, grantend.ReaderFunc(e.store.poolRows), e.store.q, s.org, s.user, "admin", "acme/slow")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	early := plan()
+	if early.Len() != 0 {
+		t.Fatal("a row that has not expired was planned")
+	}
+	time.Sleep(3 * time.Second)
+	apply := func(p *grantend.Plan) error {
+		var got error
+		err := e.store.run(ctx, "test", audit.Mutation{
+			Apply: func(ctx context.Context, tx audit.TxOps) error {
+				got = p.Apply(ctx, tx, nil)
+				return got
+			},
+			Audit:    grantend.AuditExpiredFor(s.org, s.user, g.ID, grantend.Actor{}),
+			Events:   []audit.OutboxEvent{grantend.ExpiredEventFor(g.ID)},
+			Refusals: []error{grantend.ErrStateMoved},
+		})
+		_ = err
+		return got
+	}
+	if err := apply(early); !errors.Is(err, grantend.ErrStateMoved) {
+		t.Fatalf("apply of the early plan = %v, want ErrStateMoved", err)
+	}
+	late := plan()
+	if late.Len() != 1 {
+		t.Fatalf("the next plan holds %d rows, want 1", late.Len())
+	}
+	if err := apply(late); err != nil {
+		t.Fatalf("apply of the next plan = %v", err)
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.resource_grants WHERE id = $1 AND revoked_at IS NOT NULL`, g.ID); n != 1 {
+		t.Fatal("the planned row was not ended")
+	}
+}
+
+// C2: the audit row of an update names what the update set.
+func TestExpiryOnlyUpdateAuditRowNamesOnlyExpiresAt(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	s := e.setup(t, ctx)
+	g := e.create(t, ctx, s, "viewer", "acme/api")
+	actor := s.admin
+	role, soon := "admin", time.Now().Add(time.Hour)
+	later := soon.Add(time.Hour)
+	steps := []struct {
+		name string
+		in   UpdateInput
+		want string
+	}{
+		{"role only", UpdateInput{Role: &role}, `["role_key"]`},
+		{"expiry only", UpdateInput{ExpiresAt: &soon}, `["expires_at"]`},
+		{"clear only", UpdateInput{ClearExpiry: true}, `["expires_at"]`},
+		{"both", UpdateInput{Role: ptr("member"), ExpiresAt: &later}, `["role_key", "expires_at"]`},
+	}
+	for _, st := range steps {
+		st.in.OrgID, st.in.GrantID, st.in.Actor, st.in.Authorize = s.org, g.ID, Actor{PrincipalID: &actor}, allowAll
+		if _, err := e.store.Update(ctx, st.in); err != nil {
+			t.Fatalf("%s: %v", st.name, err)
+		}
+		var fields string
+		if err := e.admin.QueryRow(ctx, `SELECT attributes->>'changed_fields' FROM auth.security_audit_events WHERE event_type = 'auth.resource_grant.updated'
+AND attributes->>'target_id' = $1 ORDER BY id DESC LIMIT 1`, g.ID.String()).Scan(&fields); err != nil {
+			t.Fatalf("%s: %v", st.name, err)
+		}
+		if fields != st.want {
+			t.Fatalf("%s: latest update audit row changed_fields = %s, want %s", st.name, fields, st.want)
+		}
+	}
+}
+
+func ptr(s string) *string { return &s }
+
+// Update on an expired row stays allowed: an expiry-only update makes it live again (audit fields [expires_at], no expired
+// event); a role-only update leaves it expired.
+func TestUpdateOnAnExpiredRowStaysAllowed(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	s := e.setup(t, ctx)
+	actor := s.admin
+	soon := time.Now().Add(time.Hour)
+	g, err := e.createWith(t, ctx, s, "viewer", "acme/renew", &soon)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.expire(t, ctx, g.ID)
+	role := "member"
+	u, err := e.store.Update(ctx, UpdateInput{OrgID: s.org, GrantID: g.ID, Role: &role, Actor: Actor{PrincipalID: &actor}, Authorize: allowAll})
+	if err != nil || u.Role != "member" || u.ExpiresAt == nil || u.ExpiresAt.After(time.Now()) {
+		t.Fatalf("role-only update on an expired row = %+v, %v; want the role changed and the row still expired", u, err)
+	}
+	renewed := time.Now().Add(48 * time.Hour)
+	u, err = e.store.Update(ctx, UpdateInput{OrgID: s.org, GrantID: g.ID, ExpiresAt: &renewed, Actor: Actor{PrincipalID: &actor}, Authorize: allowAll})
+	if err != nil || u.ExpiresAt == nil || !u.ExpiresAt.After(time.Now()) || !u.Live() {
+		t.Fatalf("expiry-only update on an expired row = %+v, %v; want it live again", u, err)
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.resource_grant.updated' AND attributes->>'target_id' = $1
+AND attributes->'changed_fields' = '["expires_at"]'::jsonb`, g.ID.String()); n != 1 {
+		t.Fatalf("expiry-only update audit rows = %d, want 1", n)
+	}
+	if n := e.events(t, ctx, "resource_grant.expired", g.ID); n != 0 {
+		t.Fatalf("an update wrote %d expired events", n)
+	}
+	if _, err := e.createWith(t, ctx, s, "member", "acme/renew", nil); !errors.Is(err, ErrAlreadyGranted) {
+		t.Fatalf("create over the renewed row's tuple = %v, want ErrAlreadyGranted", err)
 	}
 }

@@ -795,3 +795,109 @@ func TestProvisioningServiceAccountsWhileUsersAreNotOwned(t *testing.T) {
 		t.Fatalf("%d accounts after a refused create (%v)", n, err)
 	}
 }
+
+// The grant routes, mounted by a row document the test plants, drive the real stores: create, create over a tuple whose only
+// row has expired (the expired row is ended in the same transaction), update, revoke, and the audit rows and events of each.
+func TestProvisioningGrantsThroughConfigure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	withProfileRow(t, authapi.PatternGrantCreate, authapi.PatternGrantUpdate, authapi.PatternGrantRevoke)
+	e, header := newProvisioningEnv(t, ctx)
+	boss, org := e.seed(t, ctx)
+	member, viewer := e.account(t, ctx, acctMail(), false, true), e.account(t, ctx, acctMail(), false, true)
+	e.addVia(t, header, org, member, boss, "member")
+	e.addVia(t, header, org, viewer, boss, "viewer")
+	post := func(path string, body map[string]any) answer { return e.doWith(t, path, jsonBody(t, body), header) }
+	count := func(sql string, args ...any) int {
+		var n int
+		if err := e.admin.QueryRow(ctx, sql, args...).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	create := map[string]any{"organization_id": org.String(), "actor_principal_id": boss.String(), "principal_id": member.String(),
+		"role": "viewer", "resource_key": "acme/api"}
+	first := post(authapi.PatternGrantCreate, create)
+	if first.status != http.StatusOK {
+		t.Fatalf("create: %d %s", first.status, first.body)
+	}
+	out := object(t, first)
+	firstID, _ := out["grant_id"].(string)
+	if firstID == "" || out["status"] != "active" || out["role"] != "viewer" || out["principal_id"] != member.String() {
+		t.Fatalf("create answer = %v", out)
+	}
+	if strings.Contains(string(first.body), "acme/api") || strings.Contains(string(first.body), "resource_key") {
+		t.Fatalf("the create answer carries the repository key: %s", first.body)
+	}
+	if got := post(authapi.PatternGrantCreate, create); got.status != http.StatusConflict || object(t, got)["reason_code"] != "already_granted" {
+		t.Fatalf("a second live grant: %d %s", got.status, got.body)
+	}
+	denied := map[string]any{"organization_id": org.String(), "actor_principal_id": viewer.String(), "principal_id": member.String(), "role": "viewer", "resource_key": "acme/web"}
+	if got := post(authapi.PatternGrantCreate, denied); got.status != http.StatusForbidden || object(t, got)["reason_code"] != "admin_required" {
+		t.Fatalf("create by a viewer: %d %s", got.status, got.body)
+	}
+	// The grant expires (SQL only: the API refuses a past expiry), then a create over the tuple ends it and grants again.
+	tx, err := e.admin.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE auth.resource_grants SET expires_at = now() - interval '1 minute' WHERE id = $1`, firstID); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	again := post(authapi.PatternGrantCreate, create)
+	if again.status != http.StatusOK {
+		t.Fatalf("create over an expired tuple: %d %s", again.status, again.body)
+	}
+	secondID, _ := object(t, again)["grant_id"].(string)
+	if secondID == "" || secondID == firstID {
+		t.Fatalf("create over an expired tuple answered %s (first %s)", again.body, firstID)
+	}
+	if n := count(`SELECT count(*) FROM auth.resource_grants WHERE id = $1 AND revoked_at IS NOT NULL AND revoked_by IS NULL`, firstID); n != 1 {
+		t.Fatal("the expired grant was not ended")
+	}
+	for event, want := range map[string]int{"resource_grant.expired": 1} {
+		if n := count(`SELECT count(*) FROM auth.auth_outbox_events WHERE event_type = $1 AND aggregate_id = $2`, event, "grt_"+firstID); n != want {
+			t.Fatalf("%d %s events for the expired grant, want %d", n, event, want)
+		}
+	}
+	if n := count(`SELECT count(*) FROM auth.auth_outbox_events WHERE event_type = 'resource_grant.created' AND aggregate_id = $1`, "grt_"+secondID); n != 1 {
+		t.Fatal("no created event for the new grant")
+	}
+	exp := time.Now().Add(48 * time.Hour).UTC().Format(time.RFC3339)
+	upd := post(authapi.PatternGrantUpdate, map[string]any{"organization_id": org.String(), "actor_principal_id": boss.String(), "grant_id": secondID,
+		"expires_at": exp, "expected_revision": 1})
+	if upd.status != http.StatusOK || object(t, upd)["revision"] != float64(2) {
+		t.Fatalf("update: %d %s", upd.status, upd.body)
+	}
+	if strings.Contains(string(upd.body), "acme/api") || strings.Contains(string(upd.body), "resource_key") {
+		t.Fatalf("the update answer carries the repository key: %s", upd.body)
+	}
+	if n := count(`SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.resource_grant.updated' AND attributes->>'target_id' = $1
+AND attributes->'changed_fields' = '["expires_at"]'::jsonb AND attributes ? 'credential_id' AND actor_principal_id = $2`, secondID, boss); n != 1 {
+		t.Fatalf("%d expiry-only update audit rows naming only expires_at, the actor and the caller credential, want 1", n)
+	}
+	if got := post(authapi.PatternGrantUpdate, map[string]any{"organization_id": org.String(), "actor_principal_id": boss.String(), "grant_id": secondID,
+		"role": "admin", "expected_revision": 1}); got.status != http.StatusConflict || object(t, got)["reason_code"] != "revision_conflict" {
+		t.Fatalf("update with a stale revision: %d %s", got.status, got.body)
+	}
+	rev := post(authapi.PatternGrantRevoke, map[string]any{"organization_id": org.String(), "actor_principal_id": boss.String(), "grant_id": secondID})
+	if rev.status != http.StatusOK || object(t, rev)["status"] != "revoked" {
+		t.Fatalf("revoke: %d %s", rev.status, rev.body)
+	}
+	if strings.Contains(string(rev.body), "acme/api") || strings.Contains(string(rev.body), "resource_key") {
+		t.Fatalf("the revoke answer carries the repository key: %s", rev.body)
+	}
+	if n := count(`SELECT count(*) FROM auth.resource_grants WHERE id = $1 AND revoked_by = $2`, secondID, boss); n != 1 {
+		t.Fatal("the revoked grant does not name its revoker")
+	}
+	if got := post(authapi.PatternGrantRevoke, map[string]any{"organization_id": org.String(), "actor_principal_id": boss.String(), "grant_id": uuid.NewString()}); got.status != http.StatusNotFound ||
+		object(t, got)["reason_code"] != "grant_not_found" {
+		t.Fatalf("revoke of an unknown grant: %d %s", got.status, got.body)
+	}
+}

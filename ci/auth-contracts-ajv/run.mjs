@@ -122,6 +122,7 @@ const PINNED_INVENTORY = {
 // the schema enums together must also need a deliberate edit here (CHAOS-10194).
 const APPROVED_REVOKED = [
   "compromised",
+  "domain_revoked",
   "owner_request",
 ];
 const APPROVED_AUDIT = [
@@ -138,6 +139,7 @@ const APPROVED_AUDIT = [
   "revision_conflict",
   "internal_error",
   "compromised",
+  "domain_revoked",
   "owner_request",
   "role_granted",
   "role_revoked",

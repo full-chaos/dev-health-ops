@@ -895,6 +895,20 @@ true
 {{- end -}}
 
 {{/*
+"true" when authService.revisionFeed.enabled renders AUTH_REVISION_FEED=on on auth-service, else "". templates/auth-revision-feed-guard.yaml
+runs it on every render, so a switch that auth-service would not carry (phase 0 renders no auth-service) fails instead of being dropped.
+*/}}
+{{- define "dev-health.revisionFeed" -}}
+{{- $v := (default dict .Values.authService.revisionFeed).enabled -}}
+{{- if not (kindIs "bool" $v) }}{{- fail "authService.revisionFeed.enabled must be true or false" }}{{- end -}}
+{{- if $v -}}
+{{- if ne (include "dev-health.authOn" (dict "flag" "service" "context" .)) "true" }}{{- fail "authService.revisionFeed.enabled needs auth-service (authService.phase >= 1): below it no auth-service renders, and the switch would be dropped" }}{{- end -}}
+{{- if not .Values.authService.valkey.secretName }}{{- fail "authService.revisionFeed.enabled needs authService.valkey.secretName: the feed writes to the rate-limit store, and auth-service refuses to start without AUTH_VALKEY_URI" }}{{- end -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/*
 "true" when authService.ssoJit is on, else "". The one read of the switch.
 */}}
 {{- define "dev-health.ssoJit" -}}

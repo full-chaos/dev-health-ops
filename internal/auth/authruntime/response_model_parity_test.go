@@ -119,7 +119,7 @@ func parityRoutes(t *testing.T) []httpapi.Route {
 		t.Fatalf("exchangeRoutes: %v", err)
 	}
 	_, _, keys := authorizeTestDeps(t)
-	decision, err := authorizeRoutes(cfg, logger, pool, schema, keys)
+	decision, err := authorizeRoutes(cfg, logger, pool, schema, keys, nil)
 	if err != nil {
 		t.Fatalf("authorizeRoutes: %v", err)
 	}

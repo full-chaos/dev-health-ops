@@ -169,7 +169,7 @@ func created(org uuid.UUID, id string, scopes ...string) audit.PushLifecycleEven
 	if scopes == nil {
 		scopes = []string{"ingest:write"}
 	}
-	return audit.PushLifecycleEvent{EventType: externalpush.Created, AggregateID: id, OrganizationID: "org_" + org.String(), SourceID: "src-r",
+	return audit.PushLifecycleEvent{Binding: externalpush.BindingSource, EventType: externalpush.Created, AggregateID: id, OrganizationID: "org_" + org.String(), SourceID: "src-r",
 		Change: externalpush.Change{Status: "active", Fingerprint: freshFingerprint(), Scopes: scopes}}
 }
 
@@ -217,7 +217,7 @@ func (e *env) outboxID(t *testing.T, aggregate string, revision int) int64 {
 
 func scoped(c audit.PushLifecycleEvent, scopes ...string) audit.PushLifecycleEvent {
 	snapshot := c.Change
-	return audit.PushLifecycleEvent{EventType: externalpush.Scoped, AggregateID: c.AggregateID, OrganizationID: c.OrganizationID, SourceID: c.SourceID,
+	return audit.PushLifecycleEvent{Binding: externalpush.BindingSource, EventType: externalpush.Scoped, AggregateID: c.AggregateID, OrganizationID: c.OrganizationID, SourceID: c.SourceID,
 		Change: externalpush.Change{Scopes: scopes}, Snapshot: &snapshot}
 }
 
@@ -334,7 +334,7 @@ func TestReaderReleasesAParkedChildWhenItsParentApplies(t *testing.T) {
 	e := getEnv(t, true)
 	org := e.org(t)
 	parent, child := uuid.NewString(), uuid.NewString()
-	e.appendCommitted(t, audit.PushLifecycleEvent{EventType: externalpush.Rotated, AggregateID: child, OrganizationID: "org_" + org.String(), SourceID: "src-r",
+	e.appendCommitted(t, audit.PushLifecycleEvent{Binding: externalpush.BindingSource, EventType: externalpush.Rotated, AggregateID: child, OrganizationID: "org_" + org.String(), SourceID: "src-r",
 		Change: externalpush.Change{Status: "active", Fingerprint: freshFingerprint(), Scopes: []string{"ingest:write"}, RotationParentID: parent}})
 	r := e.reader(t, time.Hour)
 	now := time.Now()
@@ -455,7 +455,7 @@ func TestFloorInputCoversAppliedAndParkedRevisions(t *testing.T) {
 	org := e.org(t)
 	applied, parked := uuid.NewString(), uuid.NewString()
 	e.appendCommitted(t, created(org, applied))
-	e.appendCommitted(t, audit.PushLifecycleEvent{EventType: externalpush.Rotated, AggregateID: parked, OrganizationID: "org_" + org.String(), SourceID: "src-r",
+	e.appendCommitted(t, audit.PushLifecycleEvent{Binding: externalpush.BindingSource, EventType: externalpush.Rotated, AggregateID: parked, OrganizationID: "org_" + org.String(), SourceID: "src-r",
 		Change: externalpush.Change{Status: "active", Fingerprint: freshFingerprint(), Scopes: []string{"ingest:write"}, RotationParentID: uuid.NewString()}})
 	if _, err := e.reader(t, time.Hour).Step(context.Background(), time.Now()); err != nil {
 		t.Fatal(err)
@@ -515,7 +515,7 @@ func TestReaderDecidesAStaleRowItReadsSoItIsNeverReadAgain(t *testing.T) {
 	first := created(org, id)
 	e.appendCommitted(t, first)
 	snapshot := first.Change
-	e.appendCommitted(t, audit.PushLifecycleEvent{EventType: externalpush.Scoped, AggregateID: id, OrganizationID: first.OrganizationID, SourceID: first.SourceID,
+	e.appendCommitted(t, audit.PushLifecycleEvent{Binding: externalpush.BindingSource, EventType: externalpush.Scoped, AggregateID: id, OrganizationID: first.OrganizationID, SourceID: first.SourceID,
 		Change: externalpush.Change{Scopes: []string{"ingest:write"}}, Snapshot: &snapshot})
 	r := e.reader(t, time.Hour)
 	if rep, err := r.Step(ctx, time.Now()); err != nil || rep.Applied != 2 {

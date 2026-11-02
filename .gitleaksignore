@@ -58,3 +58,6 @@ internal/auth/authapi/oauth_test.go:generic-api-key:30
 # CHAOS-12395: the sha256("abc") prefix (a public test vector) in the validate route's rate-limit key cell, line 588 in an earlier branch commit (170a04dd7f);
 # the tip line carries an inline gitleaks:allow. Commit-less file:rule:line form so the row still matches after a squash. Not a credential.
 internal/auth/authapi/compat_validate_test.go:generic-api-key:588
+# CHAOS-12562: the parity golden cell passes the map key and the field-name literal "CycleP5030dHours" to assertFloatEqual; the
+# generic-api-key rule reads them as a key and a value. Commit-less file:rule:line form (line 582 in c6ee7c06 and at the tip). Not a credential.
+internal/jobs/metrics/daily/icfinalize/parity_golden_test.go:generic-api-key:582

@@ -18,8 +18,10 @@ type RollingStat struct {
 	TeamID          string
 	ChurnLOC30d     float64
 	DeliveryUnits30 float64
-	CycleP5030dHrs  float64
-	WIPMax30d       float64
+	// CycleP5030dHrs is nil when no day of the window holds a cycle: the
+	// person has no 30-day cycle, which is not a cycle of 0 hours.
+	CycleP5030dHrs *float64
+	WIPMax30d      float64
 }
 
 // rollingWindowDays mirrors `start = as_of - timedelta(days=29)` — a 30-day
@@ -48,13 +50,18 @@ const rollingWindowDays = 29
 // Neither arm reads the person's membership or the team id stored on a row.
 // The work-item counts enter from the work-item arm only, so an item never
 // counts on the owner of the person's repository too.
+//
+// The cycle is the median over the days of the window that hold one (the git
+// arm gives a day with no merged pull request no cycle, and the work-item arm
+// gives none). A person with no such day has no 30-day cycle: NULL, never 0
+// (CHAOS-12562). This diverges from the reference, which read 0 for both.
 var rollingStatsSQL = `
 SELECT
     owner_team,
     identity_id,
     sum(loc_touched)            AS churn_loc_30d,
     sum(delivery_units)         AS delivery_units_30d,
-    ifNull(median(cycle_p50_hours), 0) AS cycle_p50_30d_hours,
+    median(cycle_p50_hours)     AS cycle_p50_30d_hours,
     toUInt32(max(work_items_active)) AS wip_max_30d
 FROM (` + rollingStatsGitArmSQL + `
     UNION ALL` + rollingStatsWorkItemArmSQL + `
@@ -64,6 +71,14 @@ GROUP BY owner_team, identity_id`
 // rollingStatsGitArmSQL is the git half of a point: loc_touched, the merged
 // pull requests (delivery_units less the work items ic_finalize added to the
 // row, MergeICUserMetrics) and the cycle time. It gives no WIP.
+//
+// A row holds a cycle only when it holds a merged pull request: cycle_p50_hours
+// is the median of the day's merged pull requests (repouser), and the median
+// of none is stored as 0, which is no cycle. A merged pull request of 0 hours
+// is a cycle of 0 and counts. The test is the merged pull requests as the arm
+// reads them, not prs_merged: a row that ic_finalize has not rewritten holds
+// the column defaults (cycle_p50_hours 0, delivery_units 0), so it gives no
+// cycle rather than a false 0.
 //
 // The FROM clause reproduces clickhouse_dedup.dedup_from("user_metrics_daily")
 // exactly. user_metrics_daily is APPEND-ONLY (it is absent from
@@ -90,7 +105,8 @@ var rollingStatsGitArmSQL = `
            if(ow.owner_team_id = '', '` + unassignedTeamID + `', ow.owner_team_id)) AS owner_team,
         toUInt64(u.loc_touched) AS loc_touched,
         toUInt64(greatest(toInt64(u.delivery_units) - toInt64(u.work_items_completed), 0)) AS delivery_units,
-        CAST(u.cycle_p50_hours, 'Nullable(Float64)') AS cycle_p50_hours,
+        if(toInt64(u.delivery_units) - toInt64(u.work_items_completed) > 0,
+           CAST(u.cycle_p50_hours, 'Nullable(Float64)'), NULL) AS cycle_p50_hours,
         toUInt64(0) AS work_items_active
     FROM (
         SELECT *

@@ -75,6 +75,8 @@ type cacheState struct {
 	order      []string
 	inside     func()
 	clock      *int64
+	// afterErr fails the transaction after fn returned: the decisions were made but the read did not commit cleanly.
+	afterErr error
 }
 
 func (c *cacheState) Read(ctx context.Context, fn func(DecisionTx) error) error {
@@ -86,7 +88,10 @@ func (c *cacheState) Read(ctx context.Context, fn func(DecisionTx) error) error 
 	if c.inside != nil {
 		c.inside()
 	}
-	return fn(cacheTx{fakeDecisionTx{c.fakeDecisionState}, c})
+	if err := fn(cacheTx{fakeDecisionTx{c.fakeDecisionState}, c}); err != nil {
+		return err
+	}
+	return c.afterErr
 }
 
 type cacheTx struct {
@@ -434,5 +439,17 @@ func TestEveryDecisionReadIsMarked(t *testing.T) {
 		if !slices.Contains(seen, m) {
 			t.Errorf("census row %s names no method", m)
 		}
+	}
+}
+
+// A Put happens only after the whole transaction succeeded: a decision made in a read that then failed is never stored.
+func TestATransactionThatFailsAfterTheDecisionsStoresNothing(t *testing.T) {
+	c := newCacheFixture(t)
+	c.cs.afterErr = errors.New("rollback failed")
+	if rec := c.one(c.question(lowAction, "organization", "acme", c.org)); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status %d, want 503", rec.Code)
+	}
+	if n := c.cache.Len(); n != 0 {
+		t.Fatalf("%d entries after a failed transaction, want 0", n)
 	}
 }

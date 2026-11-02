@@ -637,8 +637,8 @@ var formatPlants = []struct {
 		"func f(row Row) { slog.Default().Warn(\"x\", \"k\", row.DedupeKey) }\n",
 		"func f(row Row) { slog.Default().Warn(\"x\", \"k\", row.N) }\n"},
 	{"F03-helper-return",
-		"func keyOf(r Row) string { return r.DedupeKey }\nfunc f(r Row) { slog.Info(\"x\", \"k\", keyOf(r)) }\n",
-		"func keyOf(r Row) string { return r.DedupeKey }\nfunc f(r Row) { if credshape.AnyCredentialShaped(keyOf(r)) { return }; slog.Info(\"x\", \"k\", keyOf(r)) }\n"},
+		"type Holder struct{ inner Row }\nfunc keyOf(h Holder) string { return h.inner.DedupeKey }\nfunc f(h Holder) { slog.Info(\"x\", \"k\", keyOf(h)) }\n",
+		"type Holder struct{ inner Row }\nfunc keyOf(h Holder) string { return h.inner.DedupeKey }\nfunc f(h Holder) { if credshape.AnyCredentialShaped(keyOf(h)) { return }; slog.Info(\"x\", \"k\", keyOf(h)) }\n"},
 	{"F04-whole-struct",
 		"func f(r Row) error { return fmt.Errorf(\"bad %+v\", r) }\n",
 		"func f(r Row) error { return fmt.Errorf(\"bad %d\", r.N) }\n"},
@@ -689,10 +689,12 @@ func TestQueueRowFormatCensusFindsEachPlantedShape(t *testing.T) {
 }
 
 func TestQueueRowFormatCensusRecursesIntoSubpackages(t *testing.T) {
-	got := plantCensus(t, map[string]string{"internal/joboutbox/sub/deep/x.go": "func f(row Row) { slog.Info(\"x\", \"k\", row.DedupeKey) }\n"})
-	if len(got) == 0 {
-		t.Error("R01-subpackage: a plant in a subpackage was not found")
-	}
+	t.Run("R01-subpackage", func(t *testing.T) {
+		got := plantCensus(t, map[string]string{"internal/joboutbox/sub/deep/x.go": "func f(row Row) { slog.Info(\"x\", \"k\", row.DedupeKey) }\n"})
+		if len(got) == 0 {
+			t.Error("R01-subpackage: a plant in a subpackage was not found")
+		}
+	})
 }
 
 func TestQueueRowSQLCensusFindsArgsAtAnyPosition(t *testing.T) {

@@ -169,7 +169,7 @@ func (h *handlers) listUsers(w http.ResponseWriter, r *http.Request) {
 	case user.Holds(policy.ActionAdminUsers):
 		users, err = h.store.listAllUsers(ctx, filter)
 	default:
-		orgIDRaw, ok := orgIDForNonSuperuser(w, user)
+		orgIDRaw, ok := orgIDForNonSuperuser(w, user, policy.ActionAdminUsers)
 		if !ok {
 			return
 		}
@@ -196,7 +196,7 @@ func (h *handlers) listUsers(w http.ResponseWriter, r *http.Request) {
 func (h *handlers) getUser(w http.ResponseWriter, r *http.Request) {
 	user := policy.UserFrom(r.Context())
 	ctx := r.Context()
-	orgIDRaw, ok := orgIDForNonSuperuser(w, user)
+	orgIDRaw, ok := orgIDForNonSuperuser(w, user, policy.ActionAdminUsers)
 	if !ok {
 		return
 	}
@@ -374,7 +374,7 @@ func (h *handlers) createUserOrg(ctx context.Context, w http.ResponseWriter, r *
 		if caller.Holds(policy.ActionAdminUsers) {
 			return uuid.Nil, true
 		}
-		claim, ok := orgIDForNonSuperuser(w, caller)
+		claim, ok := orgIDForNonSuperuser(w, caller, policy.ActionAdminUsers)
 		if !ok {
 			return uuid.Nil, false
 		}
@@ -429,7 +429,7 @@ func (h *handlers) updateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	user := policy.UserFrom(r.Context())
 	ctx := r.Context()
-	orgIDRaw, ok := orgIDForNonSuperuser(w, user)
+	orgIDRaw, ok := orgIDForNonSuperuser(w, user, policy.ActionAdminUsers)
 	if !ok {
 		return
 	}
@@ -507,7 +507,7 @@ func (h *handlers) setUserPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	user := policy.UserFrom(r.Context())
 	ctx := r.Context()
-	orgIDRaw, ok := orgIDForNonSuperuser(w, user)
+	orgIDRaw, ok := orgIDForNonSuperuser(w, user, policy.ActionAdminUsers)
 	if !ok {
 		return
 	}
@@ -658,7 +658,7 @@ func (h *handlers) deleteUser(w http.ResponseWriter, r *http.Request) {
 	}
 	user := policy.UserFrom(r.Context())
 	ctx := r.Context()
-	orgIDRaw, ok := orgIDForNonSuperuser(w, user)
+	orgIDRaw, ok := orgIDForNonSuperuser(w, user, policy.ActionAdminUsers)
 	if !ok {
 		return
 	}

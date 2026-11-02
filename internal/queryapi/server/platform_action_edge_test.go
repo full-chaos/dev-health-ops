@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/internalidentity"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
@@ -167,6 +168,52 @@ func TestEdgeOrglessAdmissionNeedsASetOrTheFlag(t *testing.T) {
 					t.Fatalf("status %d, %d runs, want the 401 and no run", recorder.Code, len(seen))
 				}
 			})
+		}
+	}
+}
+
+// Through the real gqlgen server every carrier shares: an org-less caller
+// with a platform set but without admin.telemetry is refused by the operation
+// guard before a resolver runs, for the dashboard and for a credential-org
+// field alike.
+func TestOrglessPlatformSetIsRefusedByTheServedGuard(t *testing.T) {
+	server := newGraphQLServer(&graph.Resolver{})
+	dashboard := registeredProductTelemetryPlatformDashboardDocument
+	for _, c := range []struct {
+		name     string
+		document string
+		claims   authctx.Claims
+	}{
+		{"admin.stats holder, the dashboard", dashboard, authctx.Claims{Platform: paSet(rule.ActionAdminStats)}},
+		{"admin.telemetry holder, dataHealth", `query Q { dataHealth(team: "x") { __typename } }`, authctx.Claims{Platform: paSet(rule.ActionAdminTelemetry)}},
+		{"admin.telemetry holder, an introspection root", `query Q { __schema { types { name } } }`, authctx.Claims{Platform: paSet(rule.ActionAdminTelemetry)}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			body := `{"query":` + jsonQuote(t, c.document) + `,"variables":{"input":{"startDate":"2026-01-01","endDate":"2026-01-31"}}}`
+			request := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(body))
+			request.Header.Set("Content-Type", "application/json")
+			request = request.WithContext(authctx.WithClaims(request.Context(), c.claims))
+			recorder := httptest.NewRecorder()
+			server.ServeHTTP(recorder, request)
+			if !strings.Contains(recorder.Body.String(), "Authorization required") {
+				t.Fatalf("status %d body %q, want the guard's refusal", recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+}
+
+// The MCP carrier never carries a platform set: its claims always have an org
+// and hold no platform action, so the org-less rule cannot be reached there.
+func TestMCPCarrierHoldsNoPlatformAction(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/query", nil)
+	iaHeaders(ecOrg.String(), "viewer", false, false)(request)
+	claims, status, reason := mcpAuthenticate(request)
+	if status != 0 || reason != "" || claims.OrgID != ecOrg.String() || claims.Platform != nil {
+		t.Fatalf("claims %+v status %d reason %q", claims, status, reason)
+	}
+	for _, action := range rule.PlatformActions {
+		if claims.Holds(action) {
+			t.Errorf("MCP claims hold %s", action)
 		}
 	}
 }

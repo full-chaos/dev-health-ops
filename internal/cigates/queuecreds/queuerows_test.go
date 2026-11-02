@@ -27,6 +27,22 @@ var queueRowExpressions = []struct {
 	{regexp.MustCompile(`\bdedupe_key\b`), func([]string) string { return "dedupe_key" }},
 }
 
+// sqlKeys names the queue-row fields one SQL text reads.
+func sqlKeys(text string) []string {
+	seen := map[string]bool{}
+	for _, expression := range queueRowExpressions {
+		for _, match := range expression.pattern.FindAllStringSubmatch(text, -1) {
+			seen[expression.key(match)] = true
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for key := range seen {
+		out = append(out, key)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // queueRowReads finds every SQL string literal outside tests that names a
 // field of a queue row's JSON arguments or its dedupe key, keyed by the
 // declaration that holds it.
@@ -73,14 +89,12 @@ func queueRowReads(t *testing.T, root string) map[string][]string {
 					if err != nil || !(strings.Contains(upper, "SELECT") || strings.Contains(upper, "INSERT") || strings.Contains(upper, "UPDATE")) {
 						return true
 					}
-					for _, expression := range queueRowExpressions {
-						for _, match := range expression.pattern.FindAllStringSubmatch(text, -1) {
-							where := rel + "#" + name
-							if found[where] == nil {
-								found[where] = map[string]bool{}
-							}
-							found[where][expression.key(match)] = true
+					for _, key := range sqlKeys(text) {
+						where := rel + "#" + name
+						if found[where] == nil {
+							found[where] = map[string]bool{}
 						}
+						found[where][key] = true
 					}
 					return true
 				})
@@ -264,65 +278,9 @@ var decodedRowFieldOutputs = map[string]string{
 // calls the shared value detector on it, or the value comes from a decoded envelope.
 func TestNoQueueRowFieldIsFormattedIntoAnErrorOrLogUnguarded(t *testing.T) {
 	root := repoRoot(t)
-	fset := token.NewFileSet()
-	seen := map[string]bool{}
-	for _, dir := range []string{"internal/joboutbox", "internal/syncreconciler", "internal/joboperator", "internal/jobruntime", "internal/workersctl"} {
-		entries, err := os.ReadDir(filepath.Join(root, dir))
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, entry := range entries {
-			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
-				continue
-			}
-			path := filepath.Join(root, dir, entry.Name())
-			source, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			file, err := parser.ParseFile(fset, path, source, 0)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, decl := range file.Decls {
-				fn, ok := decl.(*ast.FuncDecl)
-				if !ok || fn.Body == nil {
-					continue
-				}
-				body := string(source[fset.Position(fn.Pos()).Offset:fset.Position(fn.End()).Offset])
-				where := dir + "/" + entry.Name() + "#" + fn.Name.Name
-				ast.Inspect(fn.Body, func(node ast.Node) bool {
-					call, ok := node.(*ast.CallExpr)
-					if !ok || !outputCall.MatchString(exprText(fset, source, call.Fun)) {
-						return true
-					}
-					for _, arg := range call.Args {
-						ast.Inspect(arg, func(inner ast.Node) bool {
-							name := ""
-							switch typed := inner.(type) {
-							case *ast.Ident:
-								name = typed.Name
-							case *ast.SelectorExpr:
-								name = typed.Sel.Name
-							}
-							if name == "" || !rowKeyName.MatchString(name) {
-								return true
-							}
-							if strings.Contains(body, guardCall) {
-								return true
-							}
-							if _, ok := decodedRowFieldOutputs[where]; ok {
-								seen[where] = true
-								return true
-							}
-							t.Errorf("%s formats %s into an error or log line without %s", where, name, guardCall)
-							return true
-						})
-					}
-					return true
-				})
-			}
-		}
+	findings, seen := formatCensus(t, root, censusDirs)
+	for _, finding := range findings {
+		t.Error(finding)
 	}
 	for where := range decodedRowFieldOutputs {
 		if !seen[where] {

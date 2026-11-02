@@ -25,6 +25,14 @@ type Aggregate struct {
 	Events   []string
 	Change   []string
 	Required []string
+	// EventRequired lists change members one event must carry besides Required.
+	EventRequired map[string][]string
+	// Fixed pins a change member to one value for every event of the aggregate.
+	Fixed map[string]string
+	// OneShot marks an aggregate that has exactly one event, at revision 1, and never another (a terminal fact such as
+	// a session revoke). It keeps no aggregate_revisions row and no feed state: the producer writes revision 1 without
+	// a counter, and the feed publishes without a high-water mark.
+	OneShot bool
 }
 
 // MaxWireIDLength is the longest aggregate_id the idempotency_key can carry.
@@ -32,8 +40,9 @@ const MaxWireIDLength = 64
 
 var provisioningAggregates = map[string]Aggregate{
 	"principal": {IDPrefix: "prn_",
-		Events: []string{"principal.created", "principal.disabled", "principal.enabled"},
-		Change: []string{"status"}},
+		Events:        []string{"principal.created", "principal.disabled", "principal.enabled", "principal.sessions_revoked"},
+		Change:        []string{"status", "revoked_before", "reason"},
+		EventRequired: map[string][]string{"principal.sessions_revoked": {"revoked_before", "reason"}}},
 	"user": {IDPrefix: "prn_",
 		Events: []string{"user.created", "user.email_verified", "user.email_unverified", "user.email_changed",
 			"user.credentials_changed", "user.tokens_invalidated"}},
@@ -41,8 +50,10 @@ var provisioningAggregates = map[string]Aggregate{
 		Events: []string{"external_identity.linked", "external_identity.unlinked"},
 		Change: []string{"provider", "principal_id"}, Required: []string{"principal_id"}},
 	"organization": {IDPrefix: "org_",
-		Events: []string{"organization.created", "organization.updated", "organization.suspended", "organization.reactivated"},
-		Change: []string{"status", "slug"}},
+		Events: []string{"organization.created", "organization.updated", "organization.suspended", "organization.reactivated",
+			"organization.sessions_revoked"},
+		Change:        []string{"status", "slug", "revoked_before", "reason"},
+		EventRequired: map[string][]string{"organization.sessions_revoked": {"revoked_before", "reason"}}},
 	"membership": {IDPrefix: "mbr_",
 		Events: []string{"membership.invited", "membership.activated", "membership.role_changed", "membership.suspended", "membership.removed"},
 		Change: []string{"status", "role_id"}},
@@ -60,6 +71,13 @@ var provisioningAggregates = map[string]Aggregate{
 	"invite": {IDPrefix: "inv_",
 		Events: []string{"invite.created", "invite.accepted", "invite.revoked"},
 		Change: []string{"status"}},
+	"session": {IDPrefix: "ses_",
+		Events: []string{"session.revoked"},
+		Change: []string{"status", "reason"}, Required: []string{"status", "reason"},
+		Fixed: map[string]string{"status": "revoked"}, OneShot: true},
+	"signing_key": {IDPrefix: "key_",
+		Events: []string{"signing_key.compromised"},
+		Change: []string{"kid"}, Required: []string{"kid"}},
 	"resource_grant": {IDPrefix: "grt_",
 		Events: []string{"resource_grant.created", "resource_grant.updated", "resource_grant.revoked", "resource_grant.expired"},
 		Change: []string{"status", "resource_type", "resource_key", "action_set", "effect", "expires_at"}},
@@ -90,6 +108,9 @@ var provisioningChangeMembers = map[string]changeMember{
 	"action_set":         {array: true, minItems: 1, maxItems: 64, pattern: `^[a-z][a-z0-9_]*([.][a-z][a-z0-9_]*)+$`},
 	"effect":             {enum: []string{"allow", "deny"}},
 	"expires_at":         {pattern: wireTimestampPattern},
+	"revoked_before":     {pattern: wireTimestampPattern},
+	"reason":             {enum: []string{"caller", "refresh_reuse", "password_changed", "org_ended", "delegation_ended", "compromised"}},
+	"kid":                {pattern: `^[A-Za-z0-9._-]{1,64}$`},
 }
 
 var (
@@ -114,6 +135,9 @@ func AggregateTypes() []string {
 	sort.Strings(out)
 	return out
 }
+
+// IsOneShot reports whether aggregateType is a one-shot aggregate (see Aggregate.OneShot).
+func IsOneShot(aggregateType string) bool { return provisioningAggregates[aggregateType].OneShot }
 
 // AggregateOf returns the vocabulary of one aggregate type.
 func AggregateOf(aggregateType string) (Aggregate, bool) {
@@ -153,9 +177,9 @@ func CheckEvent(aggregateType, aggregateID, eventType string, change map[string]
 	if !listHas(a.Events, eventType) {
 		return fmt.Errorf("%s: event_type %q is not a %s event", Surface, eventType, aggregateType)
 	}
-	for _, name := range a.Required {
+	for _, name := range append(append([]string(nil), a.Required...), a.EventRequired[eventType]...) {
 		if _, ok := change[name]; !ok {
-			return fmt.Errorf("%s: %s must carry change.%s", Surface, aggregateType, name)
+			return fmt.Errorf("%s: %s must carry change.%s", Surface, eventType, name)
 		}
 	}
 	for name, value := range change {
@@ -164,6 +188,9 @@ func CheckEvent(aggregateType, aggregateID, eventType string, change map[string]
 		}
 		if err := checkChangeMember(name, value); err != nil {
 			return fmt.Errorf("%s: change.%s: %w", Surface, name, err)
+		}
+		if want, ok := a.Fixed[name]; ok && value != want {
+			return fmt.Errorf("%s: change.%s of a %s must be %q", Surface, name, aggregateType, want)
 		}
 	}
 	return nil
@@ -201,7 +228,7 @@ func checkChangeMember(name string, value any) error {
 	if !memberPattern[name].MatchString(text) {
 		return fmt.Errorf("%q is outside the pattern", text)
 	}
-	if name == "expires_at" {
+	if name == "expires_at" || name == "revoked_before" {
 		if _, err := time.Parse(time.RFC3339Nano, text); err != nil {
 			return fmt.Errorf("%q is not a calendar instant", text)
 		}

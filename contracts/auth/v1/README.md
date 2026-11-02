@@ -326,6 +326,32 @@ boundary (TRD §9, §13).
   stream in v1 (ACP-ADR-08, ACP-ADR-09); mutation request bodies are caller
   hints, never authority, and belong with each route when it is mounted.
 
+* **Revocation events (CHAOS-11816, ruled by acp, answers-11816-1).** A consumer
+  learns that sessions or a signing key ended from this stream, not from the WAL.
+  `session.revoked` (aggregate `session`, id `ses_` + the `session.v1` id,
+  `change`: `status` = `revoked` and a closed `reason`) is ONE session, ended by
+  an explicit revoke; it is revision 1 and terminal, there is no `session.created`,
+  and a revoke that changes nothing writes no event. `session` is a
+  one-shot aggregate: the producer writes revision 1 with no `aggregate_revisions` row, the
+  second write of the same session (a child revoked with its parent, then on its own row)
+  is the same fact and writes no second row, and the revision feed publishes it without a
+  high-water field, a mark or a cursor entry on any side. A bulk end is ONE scope
+  event on the existing aggregates, `principal.sessions_revoked` or
+  `organization.sessions_revoked`, whose `change.revoked_before` is the instant the
+  store wrote as `revoked_at` on the sessions it ended (one clock reading, not the
+  event's `created_at`): the consumer drops every session it holds in that scope
+  that started before `revoked_before` and leaves a session that started at or
+  after it. `signing_key.compromised` (aggregate `signing_key`, id `key_` + the
+  unpadded base64url SHA-256 of the kid, because a kid may hold a dot that an
+  aggregate id cannot; `change.kid` carries the kid) voids every token the key
+  signed; the other key states are the JWKS's. A signing-key event has no
+  `organization_id`: the optional member is absent for a platform-level aggregate.
+  `reason` is `caller`, `refresh_reuse`, `password_changed`, `org_ended`,
+  `delegation_ended` or `compromised`. Order across aggregates stays unpromised.
+  This change is the contract only: no producer writes these events yet
+  (the producer is a later change; session and signing-key lifecycle stay
+  `OffStream` until then).
+
 ### Credential metadata: secrets are returned once (CHAOS-4934)
 
 TRD §12: secret values are returned once. The contract makes that asymmetry

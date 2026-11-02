@@ -16,6 +16,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
 )
 
 // Invalidator is what a cache gives the consumer. Invalidate evicts what the cache holds for one aggregate (a new
@@ -96,6 +97,9 @@ var ErrInvalidate = errors.New("revisionfeed: invalidation failed")
 // is returned, nothing invalidated).
 func (c *Consumer) Handle(ctx context.Context, e contracts.ProvisioningEvent) (contracts.Disposition, error) {
 	revision := int64(e.Payload.Revision)
+	if provisioning.IsOneShot(e.AggregateType) {
+		return c.handleOneShot(ctx, e, revision)
+	}
 	key := contracts.AggregateKey(e.AggregateType, e.AggregateID)
 	done, err := c.acquire(ctx, key)
 	if err != nil {
@@ -130,6 +134,22 @@ func (c *Consumer) Handle(ctx context.Context, e contracts.ProvisioningEvent) (c
 		c.logDisposition(ctx, slog.LevelDebug, e.AggregateType, revision, disposition)
 	}
 	return disposition, nil
+}
+
+// handleOneShot invalidates a one-shot aggregate (a session revoke) and keeps nothing: no cursor entry, no mark, no
+// in-flight slot. The event is a terminal fact that exists once; the sink wrote no high-water field for it, a duplicate
+// delivery only evicts again, and a replica that was away lost nothing because every resubscribe already calls
+// InvalidateAll. An invalidation error is returned and retries with the redelivery, as for any aggregate.
+func (c *Consumer) handleOneShot(ctx context.Context, e contracts.ProvisioningEvent, revision int64) (contracts.Disposition, error) {
+	if err := c.inv.Invalidate(ctx, e.AggregateType, e.AggregateID, revision); err != nil {
+		c.events.Add(ctx, 1, metric.WithAttributes(attribute.String("disposition", "invalidate_failed")))
+		c.log.LogAttrs(ctx, slog.LevelWarn, "revision feed invalidation failed; the event stays unapplied",
+			slog.String("aggregate_type", e.AggregateType), slog.Int64("revision", revision), slog.String("disposition", string(contracts.Apply)))
+		return contracts.Apply, fmt.Errorf("%w: %w", ErrInvalidate, err)
+	}
+	c.events.Add(ctx, 1, metric.WithAttributes(attribute.String("disposition", string(contracts.Apply))))
+	c.logDisposition(ctx, slog.LevelDebug, e.AggregateType, revision, contracts.Apply)
+	return contracts.Apply, nil
 }
 
 // acquire takes the in-flight slot of key, waiting while another Handle holds it.

@@ -339,7 +339,7 @@ func (h *handlers) updateOrganization(w http.ResponseWriter, r *http.Request) {
 	object, ok := errs.Object(body)
 	patch := orgUpdate{}
 	if ok {
-		if v, present := errs.OptionalString(object, "name", 0, 0); present {
+		if v, present := h.optionalName(&errs, object); present {
 			patch.Name = &v
 		}
 		if v, present := errs.OptionalString(object, "description", 0, 0); present {
@@ -375,6 +375,9 @@ func (h *handlers) updateOrganization(w http.ResponseWriter, r *http.Request) {
 		if accepted != nil {
 			authActive = h.authStateHook(orgID, *accepted)
 		}
+	}
+	if patch.authOwned = h.orgsOwned(); patch.authOwned && patch.Name != nil && !h.renameInAuth(w, r, orgID, *patch.Name) {
+		return
 	}
 	updated, err := h.store.updateOrganization(ctx, orgID, patch, authActive)
 	if err != nil {

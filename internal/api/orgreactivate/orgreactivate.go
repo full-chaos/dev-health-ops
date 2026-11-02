@@ -1,5 +1,6 @@
 // Package orgreactivate is go-api's client of auth-service's organization
-// reactivate route (POST /internal/v1/organizations/reactivate). A suspension
+// reactivate route (POST /internal/v1/organizations/reactivate), and of its
+// suspend, state and rename routes. A suspension
 // in the auth schema ends only by this route (D6456), so go-api's PATCH
 // is_active=true calls it before it writes its own row, behind
 // AUTH_PROXY_ORG_PROVISIONING. It presents the go-api service credential
@@ -31,6 +32,8 @@ const (
 	SuspendPath = "/internal/v1/organizations/suspend"
 	// StatePath is the organization state read route on auth-service's API listener.
 	StatePath = "/internal/v1/organizations/state"
+	// RenamePath is the organization rename route on auth-service's API listener.
+	RenamePath = "/internal/v1/organizations/rename"
 )
 
 var (
@@ -42,7 +45,20 @@ var (
 	ErrUnavailable = errors.New("orgreactivate: auth-service organization reactivate route unavailable")
 	// ErrStateChanged: auth-service answered 409 state_changed: the if_revision sent is stale. The call changed nothing.
 	ErrStateChanged = errors.New("orgreactivate: the organization changed since the revision read")
+	// ErrNameInvalid: the rename route refused the name (422 name_invalid). The call changed nothing.
+	ErrNameInvalid = errors.New("orgreactivate: auth-service refused the organization name")
+	// ErrSuspended: the rename route refused a suspended organization (409 organization_suspended). The call changed nothing.
+	ErrSuspended = errors.New("orgreactivate: the organization is suspended")
+	// ErrNotFound: the rename route found no such organization (404). The call changed nothing.
+	ErrNotFound = errors.New("orgreactivate: auth-service has no such organization")
 )
+
+// Renamer renames an organization in auth-service. While auth-service owns
+// organizations its commit also writes go-api's organizations.name. A nil
+// error means the organization carries the name there (a no-op included).
+type Renamer interface {
+	Rename(ctx context.Context, orgID, actor uuid.UUID, name string) error
+}
 
 // Reactivator ends an organization's suspension in the auth schema. A nil
 // error means the organization is active there (a no-op included).
@@ -106,6 +122,17 @@ type request struct {
 	IfRevision       *int64 `json:"if_revision,omitempty"`
 }
 
+type renameRequest struct {
+	OrganizationID   string `json:"organization_id"`
+	ActorPrincipalID string `json:"actor_principal_id"`
+	Name             string `json:"name"`
+}
+
+type renameAnswer struct {
+	OrganizationID string `json:"organization_id"`
+	Name           string `json:"name"`
+}
+
 type stateRequest struct {
 	OrganizationID string `json:"organization_id"`
 }
@@ -135,6 +162,36 @@ func (c *Client) Reactivate(ctx context.Context, orgID, actor uuid.UUID, ifRevis
 // suspended is success, with the same error classes as Reactivate.
 func (c *Client) Suspend(ctx context.Context, orgID, actor uuid.UUID, ifRevision *int64) error {
 	return c.post(ctx, SuspendPath, orgID, actor, "suspended", ifRevision)
+}
+
+// Rename asks auth-service to rename orgID, acting as actor (a superuser, or
+// an owner or admin of the organization). Only an answer that names orgID is
+// success; a refusal is classed (name, suspended, not found, other), never
+// carrying the credential or the answer text.
+func (c *Client) Rename(ctx context.Context, orgID, actor uuid.UUID, name string) error {
+	if true {
+		return ErrUnavailable
+	}
+	var got renameAnswer
+	err := c.core.Post(ctx, RenamePath, renameRequest{OrganizationID: orgID.String(), ActorPrincipalID: actor.String(), Name: name}, &got)
+	var refused *authprovision.Refused
+	switch {
+	case errors.As(err, &refused):
+		switch {
+		case refused.Status == http.StatusUnprocessableEntity && refused.Reason == "name_invalid":
+			return fmt.Errorf("%w: status %d", ErrNameInvalid, refused.Status)
+		case refused.Status == http.StatusConflict && refused.Reason == "organization_suspended":
+			return fmt.Errorf("%w: status %d", ErrSuspended, refused.Status)
+		case refused.Status == http.StatusNotFound:
+			return fmt.Errorf("%w: status %d", ErrNotFound, refused.Status)
+		}
+		return fmt.Errorf("%w: status %d", ErrRefused, refused.Status)
+	case err != nil:
+		return fmt.Errorf("%w: %w", ErrUnavailable, err)
+	case got.OrganizationID != orgID.String():
+		return fmt.Errorf("%w: answer is not the organization renamed", ErrUnavailable)
+	}
+	return nil
 }
 
 // State reads orgID's status and aggregate revision from auth-service in one call.

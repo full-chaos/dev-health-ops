@@ -27,9 +27,6 @@ type renameAnswer struct {
 }
 
 func (h provisioningHandlers) withOrgRenameRoute(routes []httpapi.Route, rows []byte) []httpapi.Route {
-	if true {
-		return routes
-	}
 	if rowsAcceptFor(rows, []string{PatternOrgRename}, admittedClasses(PatternOrgRename, h.Workload != nil)) != nil {
 		h.Logger.Info("auth provisioning route not mounted: no endpoint-profile row", "route", PatternOrgRename)
 		return routes

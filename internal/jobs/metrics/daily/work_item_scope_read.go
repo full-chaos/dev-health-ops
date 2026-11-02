@@ -486,13 +486,79 @@ WHERE org_id = ? AND is_primary = 1
 	return attributions, nil
 }
 
+// workItemScopeTeamSetSource is the team set of each item: its primary row and
+// its co-owner rows (section 0.4d), with the newest-computed_at fence of
+// loadWorkItemScopeAttributions. The caller closes the item filter and groups
+// by (repository, item, team).
+const workItemScopeTeamSetSource = `
+SELECT repo_id, work_item_id, team_id
+FROM work_item_team_attributions FINAL
+WHERE org_id = ? AND is_primary IN (1, 2)
+  AND team_id IS NOT NULL AND team_id != ''
+  AND (repo_id, work_item_id, computed_at) IN (
+      SELECT repo_id, work_item_id, max(computed_at)
+      FROM work_item_team_attributions
+      WHERE org_id = ?
+        AND (repo_id, work_item_id) IN (
+          SELECT repo_id, work_item_id FROM work_items WHERE org_id = ?`
+
+// loadWorkItemScopeTeamSets reads every team of each item that passes the
+// superset filter, one row per (repository, item, team): the team-grouped read
+// the team split of a person's row is built from (CHAOS-12535). The rollups do
+// not read it; they keep the primary team.
+func loadWorkItemScopeTeamSets(
+	ctx context.Context, conn repositoryRows, organizationID string,
+	values []string, emptyScope, filtered bool,
+) (map[workItemAttributionAddress][]string, error) {
+	rows, err := conn.Query(ctx, `
+WITH ? AS scopes
+SELECT s.repo_id, s.work_item_id, toString(s.team_id)
+FROM (`+workItemScopeTeamSetSource+workItemScopeFilterSQL(emptyScope, filtered)+`)
+      GROUP BY repo_id, work_item_id)
+) AS s
+GROUP BY s.repo_id, s.work_item_id, toString(s.team_id)
+ORDER BY s.repo_id, s.work_item_id, toString(s.team_id)`,
+		workItemScopeFilterArgument(values), organizationID, organizationID, organizationID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("load work item scope team sets: %w", err)
+	}
+	defer rows.Close()
+	teams := make(map[workItemAttributionAddress][]string)
+	for rows.Next() {
+		var (
+			address workItemAttributionAddress
+			teamID  string
+		)
+		if err := rows.Scan(&address.repoID, &address.workItemID, &teamID); err != nil {
+			return nil, fmt.Errorf("scan work item scope team set: %w", err)
+		}
+		teams[address] = append(teams[address], teamID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate work item scope team sets: %w", err)
+	}
+	return teams, nil
+}
+
+// coOwnerTeams is the team set less the primary team.
+func coOwnerTeams(teamSet []string, primary string) []string {
+	var coOwners []string
+	for _, teamID := range teamSet {
+		if strings.TrimSpace(teamID) != strings.TrimSpace(primary) {
+			coOwners = append(coOwners, teamID)
+		}
+	}
+	return coOwners
+}
+
 // loadWorkItemScopeRead does every read of one family for one partition. A
 // failed query fails the read: the caller writes nothing, because a row
-// computed from a part of a scope reads as a complete answer. withTransitions
-// and metricsColumns name what the family computes from.
+// computed from a part of a scope reads as a complete answer. withTransitions,
+// metricsColumns and withCoOwners name what the family computes from.
 func loadWorkItemScopeRead(
 	ctx context.Context, conn repositoryRows, family string, run Run, partition Partition,
-	scope workItemPartitionScope, withTransitions, metricsColumns bool,
+	scope workItemPartitionScope, withTransitions, metricsColumns, withCoOwners bool,
 ) (workItemScopeRead, error) {
 	if conn == nil || strings.TrimSpace(run.OrganizationID) == "" || !scope.start.Before(scope.end) {
 		return workItemScopeRead{}, ErrInvalidState
@@ -540,10 +606,17 @@ func loadWorkItemScopeRead(
 		}
 	}
 	var attributions map[workItemAttributionAddress]workItemPrimaryAttribution
+	var teamSets map[workItemAttributionAddress][]string
 	if len(kept) > 0 {
 		attributions, err = loadWorkItemScopeAttributions(ctx, conn, run.OrganizationID, values, emptyScope, filtered)
 		if err != nil {
 			return workItemScopeRead{}, err
+		}
+		if withCoOwners {
+			teamSets, err = loadWorkItemScopeTeamSets(ctx, conn, run.OrganizationID, values, emptyScope, filtered)
+			if err != nil {
+				return workItemScopeRead{}, err
+			}
 		}
 	}
 	inPartition := make(map[uuid.UUID]struct{}, len(scope.repoIDs))
@@ -558,7 +631,12 @@ func loadWorkItemScopeRead(
 			read.Stats.ItemsOutsidePartition++
 		}
 		read.Items = append(read.Items, row.workItemMetricsRow)
-		if attribution, found := attributions[workItemAttributionAddress{row.RepoID, row.WorkItemID}]; found {
+		address := workItemAttributionAddress{row.RepoID, row.WorkItemID}
+		attribution, found := attributions[address]
+		if coOwners := coOwnerTeams(teamSets[address], attribution.TeamID); len(coOwners) > 0 {
+			attribution.CoOwnerTeamIDs, found = coOwners, true
+		}
+		if found {
 			read.Attributions[row.WorkItemID] = attribution
 		}
 	}

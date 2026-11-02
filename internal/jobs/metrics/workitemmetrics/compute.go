@@ -92,6 +92,10 @@ type Attribution struct {
 	WorkScopeID string
 	TeamID      string
 	TeamName    string
+	// CoOwnerTeamIDs are the other teams of the item (work_item_team_attributions
+	// is_primary = 2, section 0.4d), never TeamID. Only the team split of the
+	// person's row reads them; every rollup keeps the primary team.
+	CoOwnerTeamIDs []string
 }
 
 // Resolver answers for the item at a given INDEX in the Items slice handed to
@@ -141,6 +145,17 @@ type MetricsDailyRow struct {
 	PredictabilityScore      float64
 }
 
+// UserTeamCount is the part of a person's row that belongs to one team of the
+// person's items (CHAOS-12535). IsPrimary is 1 for the items whose primary team
+// it is (unassigned included) and 2 for the items it co-owns. Over the entries
+// with IsPrimary 1, the counts add up to the row's own counts.
+type UserTeamCount struct {
+	TeamID           string
+	IsPrimary        uint8
+	ItemsCompleted   int
+	WIPCountEndOfDay int
+}
+
 // UserMetricsDailyRow mirrors WorkItemUserMetricsDailyRecord.
 type UserMetricsDailyRow struct {
 	Day               time.Time
@@ -154,6 +169,10 @@ type UserMetricsDailyRow struct {
 	WIPCountEndOfDay  int
 	CycleTimeP50Hours *float64
 	CycleTimeP90Hours *float64
+	// TeamSplit holds the completed and open items of the row for each team of
+	// the items, sorted by team id then IsPrimary; an entry with no completed and
+	// no open item is left out. TeamID is only the row's label.
+	TeamSplit []UserTeamCount
 }
 
 // CycleTimeRecord mirrors the COMPLETE Python WorkItemCycleTimeRecord,
@@ -248,6 +267,59 @@ type userBucket struct {
 	// holds the name of each. The row is labelled by the team with the most items.
 	teamItems map[string]int
 	teamNames map[string]string
+	// split counts the completed and open items of each team entry.
+	split map[userTeamKey]*userTeamCounts
+}
+
+type userTeamKey struct {
+	teamID    string
+	isPrimary uint8
+}
+
+type userTeamCounts struct {
+	completed, wip int
+}
+
+// addToSplit counts one item for its primary team and for each co-owner team.
+func (bucket *userBucket) addToSplit(attribution Attribution, add func(*userTeamCounts)) {
+	entry := func(key userTeamKey) {
+		counts := bucket.split[key]
+		if counts == nil {
+			counts = &userTeamCounts{}
+			bucket.split[key] = counts
+		}
+		add(counts)
+	}
+	entry(userTeamKey{attribution.TeamID, 1})
+	seen := map[string]bool{attribution.TeamID: true}
+	for _, stored := range attribution.CoOwnerTeamIDs {
+		coOwner := NormalizeTeamID(&stored)
+		if coOwner == UnassignedTeamID || seen[coOwner] {
+			continue
+		}
+		seen[coOwner] = true
+		entry(userTeamKey{coOwner, 2})
+	}
+}
+
+// teamSplit is the row's split in its stored order.
+func (bucket *userBucket) teamSplit() []UserTeamCount {
+	split := make([]UserTeamCount, 0, len(bucket.split))
+	for key, counts := range bucket.split {
+		if counts.completed == 0 && counts.wip == 0 {
+			continue
+		}
+		split = append(split, UserTeamCount{
+			TeamID: key.teamID, IsPrimary: key.isPrimary, ItemsCompleted: counts.completed, WIPCountEndOfDay: counts.wip,
+		})
+	}
+	sort.Slice(split, func(i, j int) bool {
+		if split[i].TeamID != split[j].TeamID {
+			return split[i].TeamID < split[j].TeamID
+		}
+		return split[i].IsPrimary < split[j].IsPrimary
+	})
+	return split
 }
 
 // label is the team the row of the person carries: the team with the most of the
@@ -327,7 +399,7 @@ func ComputeDailyTriplet(
 		uKey := userKey{item.Provider, attribution.WorkScopeID, userIdentity}
 		uBucket := users[uKey]
 		if uBucket == nil {
-			uBucket = &userBucket{teamItems: map[string]int{}, teamNames: map[string]string{}}
+			uBucket = &userBucket{teamItems: map[string]int{}, teamNames: map[string]string{}, split: map[userTeamKey]*userTeamCounts{}}
 			users[uKey] = uBucket
 		}
 		uBucket.teamItems[attribution.TeamID]++
@@ -356,6 +428,7 @@ func ComputeDailyTriplet(
 		if completedToday {
 			bucket.itemsCompleted++
 			uBucket.itemsCompleted++
+			uBucket.addToSplit(attribution, func(counts *userTeamCounts) { counts.completed++ })
 			if assignee == nil {
 				bucket.itemsCompletedUnassigned++
 			}
@@ -404,6 +477,7 @@ func ComputeDailyTriplet(
 		if wipEndOfDay {
 			bucket.wipCount++
 			uBucket.wipCount++
+			uBucket.addToSplit(attribution, func(counts *userTeamCounts) { counts.wip++ })
 			if assignee == nil {
 				bucket.wipUnassigned++
 			}
@@ -484,6 +558,7 @@ func ComputeDailyTriplet(
 			WIPCountEndOfDay:  bucket.wipCount,
 			CycleTimeP50Hours: Percentile(bucket.cycleHours, 50),
 			CycleTimeP90Hours: Percentile(bucket.cycleHours, 90),
+			TeamSplit:         bucket.teamSplit(),
 		})
 	}
 	return result

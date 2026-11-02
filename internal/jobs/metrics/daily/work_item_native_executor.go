@@ -132,7 +132,7 @@ func (executor *WorkItemExecutor) ComputeFamily(
 func computeWorkItemTriplet(
 	ctx context.Context, conn driver.Conn, run Run, partition Partition, scope workItemPartitionScope,
 ) (workItemScopeRead, workitemmetrics.Triplet, error) {
-	read, err := loadWorkItemScopeRead(ctx, conn, "work_item", run, partition, scope, true, true)
+	read, err := loadWorkItemScopeRead(ctx, conn, "work_item", run, partition, scope, true, true, true)
 	if err != nil {
 		return workItemScopeRead{}, workitemmetrics.Triplet{}, err
 	}
@@ -173,7 +173,9 @@ func storedItemsOfRows(rows []workItemMetricsRow) []workitemmetrics.StoredItem {
 func primaryAttributionsOf(attributions map[string]workItemPrimaryAttribution) map[string]workitemmetrics.PrimaryAttribution {
 	out := make(map[string]workitemmetrics.PrimaryAttribution, len(attributions))
 	for id, attribution := range attributions {
-		out[id] = workitemmetrics.PrimaryAttribution{TeamID: attribution.TeamID, TeamName: attribution.TeamName}
+		out[id] = workitemmetrics.PrimaryAttribution{
+			TeamID: attribution.TeamID, TeamName: attribution.TeamName, CoOwnerTeamIDs: attribution.CoOwnerTeamIDs,
+		}
 	}
 	return out
 }

@@ -178,6 +178,9 @@ FROM (
 type workItemPrimaryAttribution struct {
 	TeamID   string // "" when the primary row's team_id is NULL (e.g. source=unassigned)
 	TeamName string
+	// CoOwnerTeamIDs are the item's other teams (is_primary = 2), read only by
+	// the work_item family for the team split of a person's row.
+	CoOwnerTeamIDs []string
 }
 
 // LoadWorkItemPrimaryTeamAttributions reads the primary (is_primary=1) row

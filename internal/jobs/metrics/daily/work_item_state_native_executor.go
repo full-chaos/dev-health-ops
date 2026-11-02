@@ -183,7 +183,7 @@ type workItemStateComputed struct {
 func computeWorkItemStateRows(
 	ctx context.Context, conn driver.Conn, run Run, partition Partition, scope workItemPartitionScope, computedAt time.Time,
 ) (workItemStateComputed, error) {
-	read, err := loadWorkItemScopeRead(ctx, conn, "work_item_state", run, partition, scope, true, false)
+	read, err := loadWorkItemScopeRead(ctx, conn, "work_item_state", run, partition, scope, true, false, false)
 	if err != nil {
 		return workItemStateComputed{}, err
 	}

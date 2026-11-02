@@ -121,7 +121,7 @@ func RuntimePosture() []TablePrivilege {
 		// Per-aggregate revision counter (0013): bumped, never deleted.
 		{Table: "aggregate_revisions", Select: true, Insert: true, Update: true},
 
-		// External credential projection (0048): written only inside audit.Commit.
+		// External credential projection (0049): written only inside audit.Commit.
 		// A digest row is never edited; a sources row is never removed.
 		{Table: "push_sources", Select: true, Insert: true},
 		{Table: "credential_projection", Select: true, Insert: true, Update: true},

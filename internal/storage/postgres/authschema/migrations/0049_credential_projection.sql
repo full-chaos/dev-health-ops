@@ -1,4 +1,4 @@
--- 0048 projection of external credentials (CHAOS-10896, CHAOS-11196).
+-- 0049 projection of external credentials (CHAOS-10896, CHAOS-11196).
 -- NOT ADDITIVE in one place, on purpose (additiveExemptions): it REDEFINES the
 -- credential_registry.revoked_reason CHECK and only WIDENS it by one value,
 -- domain_revoked (a revoked event of a domain that names no reason; the other

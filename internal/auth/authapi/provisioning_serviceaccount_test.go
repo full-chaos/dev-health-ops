@@ -386,7 +386,7 @@ func TestServiceAccountRoutesAreOnTheStartupGate(t *testing.T) {
 			t.Fatalf("%s is not in the provisioning patterns or route operations", c.path)
 		}
 		routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
-			Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa,
+			Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa, Grants: f.grants,
 			ProfileRows: embeddedDocWithoutRow(t, c.path)})
 		if !errors.Is(err, errProvisioningRows) || routes != nil || !strings.Contains(err.Error(), "POST "+c.path+" ") {
 			t.Fatalf("a document without the %s row built %d routes, err %v; want none and a refusal naming it", c.path, len(routes), err)

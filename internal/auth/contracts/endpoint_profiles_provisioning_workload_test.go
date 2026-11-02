@@ -1,6 +1,9 @@
 package contracts
 
 import (
+	"os"
+	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -14,6 +17,7 @@ var provisioningRoutes = []string{
 	"/internal/v1/organizations/onboard", "/internal/v1/organizations/create",
 	"/internal/v1/service-accounts/create", "/internal/v1/service-accounts/disable", "/internal/v1/service-accounts/enable",
 	"/internal/v1/service-accounts/owner",
+	"/internal/v1/grants/create", "/internal/v1/grants/update", "/internal/v1/grants/revoke",
 }
 
 func provisioningRows(t *testing.T) map[string]map[string]any {
@@ -88,6 +92,45 @@ func TestTheRegistryNamesTheProvisioningRoutesAsConsumersOfBothClasses(t *testin
 		}
 		if named != len(provisioningRoutes) {
 			t.Fatalf("%d workload_token provisioning consumers name both variables, want %d", named, len(provisioningRoutes))
+		}
+	}
+}
+
+// A provisioning consumer of credential-classes.json is anchored at a line that names the route its description names: where
+// the anchored line holds a quoted /internal/v1/ route, it is that route. A consumer moved onto the line of a sibling route
+// (which has its own pinned text) is caught here and nowhere else.
+func TestAProvisioningConsumerAnchorLineNamesTheRouteItDescribes(t *testing.T) {
+	document := loadClassRegistryDocument(t)
+	root := testRoot(t)
+	described := regexp.MustCompile(`auth-service POST (/internal/v1/[a-z0-9/_-]+)`)
+	quoted := regexp.MustCompile(`"(/internal/v1/[a-z0-9/_-]+)"`)
+	checked := map[string]int{}
+	for _, class := range document.Classes {
+		for _, consumer := range class.Consumers {
+			m := described.FindStringSubmatch(consumer.Description)
+			if m == nil || consumer.Anchor == nil || consumer.Anchor.Repo != "ops" {
+				continue
+			}
+			raw, err := os.ReadFile(filepath.Join(root, consumer.Anchor.Path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines := strings.Split(string(raw), "\n")
+			if consumer.Anchor.Line < 1 || consumer.Anchor.Line > len(lines) {
+				t.Errorf("%s %s: anchor %s:%d is outside the file", class.ClassID, m[1], consumer.Anchor.Path, consumer.Anchor.Line)
+				continue
+			}
+			if q := quoted.FindStringSubmatch(lines[consumer.Anchor.Line-1]); q != nil {
+				if q[1] != m[1] {
+					t.Errorf("%s consumer of %s is anchored at %s:%d, a line that names %s", class.ClassID, m[1], consumer.Anchor.Path, consumer.Anchor.Line, q[1])
+				}
+				checked[class.ClassID]++
+			}
+		}
+	}
+	for _, class := range []string{"workload_token", "internal_svc_authsess_token"} {
+		if checked[class] < 7 {
+			t.Errorf("%s: %d provisioning consumers anchored at a quoted route line, want at least 7 (the grant and service account routes)", class, checked[class])
 		}
 	}
 }

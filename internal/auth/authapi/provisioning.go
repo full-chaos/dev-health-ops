@@ -167,8 +167,8 @@ type provisioningHandlers struct {
 // deprovision routes. Each registration is on a line of its own.
 func ProvisioningRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 	if deps.Credentials == nil || deps.Users == nil || deps.Reader == nil || deps.Organizations == nil ||
-		deps.Memberships == nil || deps.Invites == nil || deps.Deprovision == nil || deps.Orgs == nil || deps.ServiceAccounts == nil {
-		return nil, errors.New("authapi: provisioning routes need credentials, users, a reader, organizations, memberships, invites, a deprovisioner, the organization reactivate and suspend verbs and the service account verbs")
+		deps.Memberships == nil || deps.Invites == nil || deps.Deprovision == nil || deps.Orgs == nil || deps.ServiceAccounts == nil || deps.Grants == nil {
+		return nil, errors.New("authapi: provisioning routes need credentials, users, a reader, organizations, memberships, invites, a deprovisioner, the organization reactivate and suspend verbs, the service account verbs and the grant verbs")
 	}
 	rows := deps.ProfileRows
 	if rows == nil {
@@ -214,9 +214,11 @@ func ProvisioningRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 		{Method: http.MethodPost, Pattern: PatternServiceAccountDisable, Handler: h.serviceAccountSwitch(opServiceAccountDisable, false)},
 		{Method: http.MethodPost, Pattern: PatternServiceAccountEnable, Handler: h.serviceAccountSwitch(opServiceAccountEnable, true)},
 		{Method: http.MethodPost, Pattern: PatternServiceAccountOwner, Handler: http.HandlerFunc(h.serviceAccountOwner)},
+		{Method: http.MethodPost, Pattern: PatternGrantCreate, Handler: http.HandlerFunc(h.grantCreate)},
+		{Method: http.MethodPost, Pattern: PatternGrantUpdate, Handler: http.HandlerFunc(h.grantUpdate)},
+		{Method: http.MethodPost, Pattern: PatternGrantRevoke, Handler: http.HandlerFunc(h.grantRevoke)},
 	}
 	routes = h.withStateRoute(routes, rows)
-	routes = h.withGrantRoutes(routes, rows)
 	routes = h.withServiceAccountKeyRoutes(routes, rows)
 	return routes, nil
 }
@@ -252,7 +254,8 @@ func (h provisioningHandlers) admitUpTo(w http.ResponseWriter, r *http.Request, 
 var workloadOperations = map[string]bool{opMembershipAdd: true, opMembershipRole: true, opMembershipRemove: true,
 	opMembershipTransfer: true, opInviteCreate: true, opInviteAccept: true, opOrgDeprovision: true, opOrgReactivate: true, opOrgOnboard: true, opOrgCreate: true, opOrgState: true,
 	opServiceAccountCreate: true, opServiceAccountDisable: true, opServiceAccountEnable: true, opServiceAccountOwner: true,
-	opServiceAccountKeyIssue: true, opServiceAccountKeyRotate: true, opServiceAccountKeyRevoke: true, opServiceAccountKeyList: true}
+	opServiceAccountKeyIssue: true, opServiceAccountKeyRotate: true, opServiceAccountKeyRevoke: true, opServiceAccountKeyList: true,
+	opGrantCreate: true, opGrantUpdate: true, opGrantRevoke: true}
 
 // caller authorizes the bearer, its class read from the text before any store
 // or key-set read: the session issuer credential holding memberships:write

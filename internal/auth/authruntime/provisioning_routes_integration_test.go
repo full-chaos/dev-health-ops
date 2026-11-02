@@ -801,7 +801,6 @@ func TestProvisioningServiceAccountsWhileUsersAreNotOwned(t *testing.T) {
 func TestProvisioningGrantsThroughConfigure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	withProfileRow(t, authapi.PatternGrantCreate, authapi.PatternGrantUpdate, authapi.PatternGrantRevoke)
 	e, header := newProvisioningEnv(t, ctx)
 	boss, org := e.seed(t, ctx)
 	member, viewer := e.account(t, ctx, acctMail(), false, true), e.account(t, ctx, acctMail(), false, true)

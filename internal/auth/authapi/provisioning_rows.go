@@ -11,7 +11,7 @@ import (
 var provisioningPatterns = []string{PatternMembershipAdd, PatternMembershipRole, PatternMembershipRemove,
 	PatternMembershipTransfer, PatternInviteCreate, PatternInviteAccept, PatternOrgDeprovision, PatternOrgReactivate, PatternInviteRevoke,
 	PatternOrgSuspend, PatternOrgOnboard, PatternOrgCreate, PatternServiceAccountCreate, PatternServiceAccountDisable, PatternServiceAccountEnable,
-	PatternServiceAccountOwner}
+	PatternServiceAccountOwner, PatternGrantCreate, PatternGrantUpdate, PatternGrantRevoke}
 
 // provisioningRouteOps maps each provisioning operation to its route.
 var provisioningRouteOps = map[string]string{

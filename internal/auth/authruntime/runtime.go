@@ -47,6 +47,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/restorefence"
 	"github.com/full-chaos/dev-health-ops/internal/auth/servicecred"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
+	"github.com/full-chaos/dev-health-ops/internal/auth/workloadexchange"
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
@@ -600,6 +601,16 @@ func configureWithRoutes(
 		closeStore()
 		return nil, err
 	}
+	var listeners []lifecycle.Component
+	listeners = append(listeners, announcedListener{listener: apiHTTP, logger: logger, budget: cfg.ShutdownTimeout * 3 / 4})
+	if cfg.InternalAddress != "" {
+		internalHTTP, err := httpapi.NewServer(internalServerOptions(cfg, logger, routes))
+		if err != nil {
+			closeStore()
+			return nil, err
+		}
+		listeners = append(listeners, announcedListener{listener: internalHTTP, logger: logger, budget: cfg.ShutdownTimeout / 4})
+	}
 
 	loopConfig := audit.DefaultLoopConfig(schemaID, registry)
 	loopConfig.Logger = logger
@@ -613,12 +624,9 @@ func configureWithRoutes(
 	components = append(components, limitComponents...)
 	components = append(components, credComponents...)
 	components = append(components, feed.components...)
-	return append(components,
-		outboxLoop,
-		announcedListener{listener: operatorHTTP, logger: logger},
-		announcedListener{listener: apiHTTP, logger: logger, budget: cfg.ShutdownTimeout * 3 / 4},
-		health.Gate{Registry: registry},
-	), nil
+	components = append(components, outboxLoop, announcedListener{listener: operatorHTTP, logger: logger})
+	components = append(components, listeners...)
+	return append(components, health.Gate{Registry: registry}), nil
 }
 
 // keyStatesComponent ends the key-state read in flight on shutdown, before the
@@ -812,6 +820,38 @@ func apiServerOptions(cfg authconfig.Config, logger *slog.Logger, routes []httpa
 		AccessAttrs: accessLogIDs(cfg.TrustedProxies),
 	}
 }
+
+// internalRoutes are the only routes the internal listener serves: the service-to-service calls of the policy
+// enforcement points, each made with the caller's own token (the workload-token exchange and the authorize routes).
+var internalRoutes = map[string]bool{
+	http.MethodPost + " " + workloadexchange.Pattern:      true,
+	http.MethodPost + " " + authapi.PatternAuthorize:      true,
+	http.MethodPost + " " + authapi.PatternAuthorizeBatch: true,
+}
+
+// internalServerOptions is the internal listener: the API listener's options over internalRoutes alone, on
+// cfg.InternalAddress, with no trusted proxy. Its callers are identified by their tokens, so the client address is
+// always the TCP peer and a forwarded X-Forwarded-For or X-Request-ID is never believed (cfg.TrustedProxies is the
+// API listener's alone). It has no publicaudit middleware: nothing forwards a request id to it.
+func internalServerOptions(cfg authconfig.Config, logger *slog.Logger, routes []httpapi.Route) httpapi.ServerOptions {
+	var served []httpapi.Route
+	for _, route := range routes {
+		if internalRoutes[route.Method+" "+route.Pattern] {
+			served = append(served, route)
+		}
+	}
+	options := apiServerOptions(cfg, logger, served)
+	var noProxy clientaddr.Trust
+	options.Address = cfg.InternalAddress
+	options.Name = internalHTTPName
+	options.Listener = "internal"
+	options.Middleware = []func(http.Handler) http.Handler{requestid.Middleware, clientaddr.Middleware(noProxy)}
+	options.AccessAttrs = accessLogIDs(noProxy)
+	return options
+}
+
+// internalHTTPName is the internal listener's component name.
+const internalHTTPName = "auth-internal-http"
 
 // runHealthcheck is the exec-form container probe: the runtime image is
 // distroless (no shell, no curl), so Docker's healthcheck must invoke this

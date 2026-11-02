@@ -276,6 +276,20 @@ authService:
   # -- The operator listener: /healthz, /readyz, /metrics. Probes use it, never
   #    the API port.
   operatorPort: 8096
+  # -- The internal listener (CHAOS-12661, --internal-http-addr): the service-to-service routes alone
+  #    (POST /internal/v1/token/exchange, /v1/authorize and /v1/authorize:batch), for the policy enforcement
+  #    points. It trusts no forwarded address (authService.trustedProxies is the API port's alone): each caller is
+  #    identified by its own token. Off by default. On, the chart renders the arg, a named `internal` containerPort,
+  #    a ClusterIP Service `<fullname>-auth-service-internal` and a NetworkPolicy of the same name that admits the
+  #    pods of the listed peers on this port and nothing else. The API port, its Service and its policy do not
+  #    change. Needs authService.phase >= 1 and authService.networkPolicy.enabled.
+  internal:
+    enabled: false
+    # -- A whole number from 1 to 65535, not port or operatorPort.
+    port: 8097
+    # -- The workloads of this release admitted on the internal port, by name: web, query-api, go-api. Each name
+    #    once; at least one while enabled.
+    peers: []
   image:
     # -- docker/go-worker.Dockerfile target `auth-service`. Non-local profiles
     #    pin `repository@sha256:<digest>` (immutable release artifact).

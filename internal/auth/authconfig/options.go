@@ -115,6 +115,11 @@ var optionRegistry = []Option{
 		Usage: "host:port for the operator surface (/healthz, /readyz, /metrics)",
 	},
 	{
+		Flag: "internal-http-addr", Env: EnvInternalAddress, Kind: KindString, Group: GroupHTTP,
+		Usage: "host:port for the internal listener: the workload-token exchange and the authorize routes alone, " +
+			"with no trusted proxy; empty turns it off",
+	},
+	{
 		Flag: "request-timeout", Env: EnvRequestTimeout, Kind: KindDuration,
 		Default: defaultRequestTimeout.String(), Group: GroupHTTP,
 		Usage: "per-request handler deadline applied to every API route",

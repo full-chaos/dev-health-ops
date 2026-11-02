@@ -19,7 +19,7 @@
     },
     {
       "name": "web",
-      "audiences": [],
+      "audiences": ["auth-service"],
       "allowed_actions": []
     },
     {

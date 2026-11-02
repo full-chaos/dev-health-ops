@@ -1121,6 +1121,31 @@ true
 {{- end -}}
 
 {{/*
+"true" while auth-service's internal listener is on (authService.internal), "" while it is off; fails the render on a
+setting the listener cannot run with. The listener serves the service-to-service routes alone and trusts no forwarded
+address, so its own NetworkPolicy, admitting the listed peer workloads only, is part of it.
+*/}}
+{{- define "dev-health.authInternal" -}}
+{{- $in := default dict .Values.authService.internal -}}
+{{- if eq (include "dev-health.authBool" (dict "value" (ternary $in.enabled false (hasKey $in "enabled")) "key" "authService.internal.enabled")) "true" -}}
+{{- if not (eq (include "dev-health.authOn" (dict "flag" "service" "context" .)) "true") }}{{- fail "authService.internal.enabled needs authService.phase >= 1: there is no auth-service to listen" }}{{- end -}}
+{{- if not .Values.authService.networkPolicy.enabled }}{{- fail "authService.internal.enabled needs authService.networkPolicy.enabled: the internal port is open only to authService.internal.peers, by its own NetworkPolicy" }}{{- end -}}
+{{- $port := $in.port -}}
+{{- if or (not (or (kindIs "float64" $port) (kindIs "int64" $port) (kindIs "int" $port))) (ne (floor $port) (float64 $port)) (lt (int $port) 1) (gt (int $port) 65535) }}{{- fail "authService.internal.port must be a whole number from 1 to 65535" }}{{- end -}}
+{{- if has (int $port) (list (int .Values.authService.port) (int .Values.authService.operatorPort)) }}{{- fail "authService.internal.port must differ from authService.port and authService.operatorPort" }}{{- end -}}
+{{- if not (kindIs "slice" $in.peers) }}{{- fail "authService.internal.peers must be a list of workload names (web, query-api, go-api)" }}{{- end -}}
+{{- if not $in.peers }}{{- fail "authService.internal.peers must name at least one workload (web, query-api, go-api): the internal port admits only the listed peers" }}{{- end -}}
+{{- $seen := dict -}}
+{{- range $in.peers }}
+{{- if not (and (kindIs "string" .) (has . (list "web" "query-api" "go-api"))) }}{{- fail (printf "authService.internal.peers: %v is not one of web, query-api, go-api" .) }}{{- end -}}
+{{- if hasKey $seen . }}{{- fail (printf "authService.internal.peers lists %s twice" .) }}{{- end -}}
+{{- $_ := set $seen . true -}}
+{{- end -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/*
 The auth-service ServiceAccount token mount: the configured value, or on while the exchange runs (the pod's own token is
 the TokenReview reviewer token).
 */}}

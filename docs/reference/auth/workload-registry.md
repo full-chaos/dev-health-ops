@@ -30,7 +30,7 @@ The table below is written by hand. A docs test compares it with the JSON, row b
 | `api` | `auth-service` | none |
 | `auth-service` | none | none |
 | `acr-api` | `auth-service`, `dev-health-api` | none |
-| `web` | none | none |
+| `web` | `auth-service` | none |
 | `query-api` | none | none |
 
 - A row with no audience is a registry identity only. The exchange never resolves it: it refuses a request for any audience, and the log line

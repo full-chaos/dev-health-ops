@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -219,26 +220,23 @@ func newOwnerMoveEnv(t *testing.T, ctx context.Context, kinds bool) *ownerMoveEn
 			t.Fatalf("hand the definer function to the writer: %v", err)
 		}
 	}
-	// The last migration is held back on purpose (the test applies it after the move), so the tables it creates do not exist
-	// yet: grant the posture of the tables that do. Every later Grants and Apply call runs at head with the full posture.
-	existing := map[string]bool{}
-	tableRows, err := oldConn.Query(ctx, `SELECT table_name FROM information_schema.tables WHERE table_schema = 'auth'`)
-	if err != nil {
-		t.Fatalf("list the tables applied so far: %v", err)
+	// The last migration is held back on purpose (the test applies it after the move), so the tables IT creates do not exist
+	// yet: leave out exactly those posture entries, derived from the held-back migration's own CREATE TABLE statements. Every
+	// other entry is granted, so a table an earlier migration should have created still fails here instead of being skipped.
+	heldBack := map[string]bool{}
+	for _, match := range regexp.MustCompile(`(?mi)^\s*CREATE TABLE (?:IF NOT EXISTS )?(\w+)`).FindAllStringSubmatch(migrations[len(migrations)-1].SQL, -1) {
+		heldBack[match[1]] = true
 	}
-	for tableRows.Next() {
-		var name string
-		if err := tableRows.Scan(&name); err != nil {
-			t.Fatal(err)
-		}
-		existing[name] = true
-	}
-	tableRows.Close()
-	var appliedPosture []TablePrivilege
+	var appliedPosture, leftOut []TablePrivilege
 	for _, entry := range RuntimePosture() {
-		if existing[entry.Table] {
+		if heldBack[entry.Table] {
+			leftOut = append(leftOut, entry)
+		} else {
 			appliedPosture = append(appliedPosture, entry)
 		}
+	}
+	if len(heldBack) > 0 && len(leftOut) == 0 {
+		t.Fatalf("the held-back migration creates %d table(s) and none is in the runtime posture: the filter would prove nothing", len(heldBack))
 	}
 	if err := applyRuntimeGrants(ctx, oldConn.Conn(), appliedPosture, env.options(true), nil); err != nil {
 		t.Fatalf("runtime grants as the superuser owner: %v", err)

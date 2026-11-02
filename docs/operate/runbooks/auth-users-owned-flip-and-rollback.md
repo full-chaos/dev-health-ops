@@ -91,6 +91,19 @@ Roll back in the opposite order. auth-service stops owning users first, so no ow
    Any `true` means the narrowing did not run: STOP, keep the hook Job logs, and do not hand-run a REVOKE. Then clear `narrowAfterFlipBack` and the acknowledgement in the next change.
 5. Do the rollback with `helm upgrade`, not `helm rollback`: `helm rollback` runs no auth hooks.
 
+## SSO accounts across the flip (rehearsal step)
+
+Phase 4 cannot provision a new OIDC or SAML account: auth-service's sign-in join (`AUTH_SSO_JIT`) renders only from phase 5, and go-api refuses `public.users` writes while users are owned. The phase 4 check is therefore on accounts that already exist. `ci/auth_flipback_sso_k3s.sh` rehearses it on bigboy k3s, in a namespace the lead owns, in this order:
+
+1. At phase 3, create the OIDC provider row and the SAML provider row through the go-api admin route (`POST /api/v1/auth/sso/providers`, auto-provisioning on, `allowed_domains` set). No hand SQL.
+2. At phase 3, sign in with an OIDC and a SAML identity through go-api: go-api writes the two users (the OIDC and SAML users created through go-api at phase 3), each with `auth_provider` and `sso_provider_id` set.
+3. U1, the `up-go-api` barrier, the users-backfill, a `users-reconcile` that reads 0, the `up-owned` barrier, U3.
+4. Sign in again with both identities under owned. Both answer 200 as the same accounts, and no `public.users` row changes.
+5. D1, the `down-auth` barrier, D2 (the flip back 4 to 3 of the Rollback section).
+6. Then sign in through go-api with both identities. Both answer 200 as the same accounts: no new account, no `identity_conflict`, and the auth schema counts equal those before the flip back.
+
+The case of an account that auth-service provisions through its own sign-in join under owned, and then a flip back, exists only from phase 5. It has its own step in the orgs-owned flip kit (CHAOS-10998). The proof of that case stays `TestFlipBackSignInFindsAnAccountProvisionedUnderOwned` until then.
+
 ## If a barrier fails
 
 The script prints one line per failed check on stderr. Fix the cause (a stuck old pod, a stalled rollout) and run the same script again. If the cause is a go-api pod that cannot reach `AUTH_USERS_OWNED=true`, do not run the next step. A script that cannot reach the cluster exits non-zero too: it never reads a failed call as a pass.

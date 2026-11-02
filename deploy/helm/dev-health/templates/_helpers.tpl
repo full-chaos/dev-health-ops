@@ -890,6 +890,18 @@ true
 {{/*
 "true" when authService.ssoJit is on, else "". The one read of the switch.
 */}}
+{{/*
+"true" when authService.revisionFeed.enabled renders AUTH_REVISION_FEED=on on auth-service, else "".
+*/}}
+{{- define "dev-health.revisionFeed" -}}
+{{- $v := (default dict .Values.authService.revisionFeed).enabled -}}
+{{- if not (kindIs "bool" $v) }}{{- fail "authService.revisionFeed.enabled must be true or false" }}{{- end -}}
+{{- if $v -}}
+{{- if not .Values.authService.valkey.secretName }}{{- fail "authService.revisionFeed.enabled needs authService.valkey.secretName: the feed writes to the rate-limit store, and auth-service refuses to start without AUTH_VALKEY_URI" }}{{- end -}}
+true
+{{- end -}}
+{{- end -}}
+
 {{- define "dev-health.ssoJit" -}}
 {{- $v := .Values.authService.ssoJit -}}
 {{- if not (kindIs "bool" $v) }}{{- fail "authService.ssoJit must be true or false" }}{{- end -}}

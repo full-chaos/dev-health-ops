@@ -118,7 +118,8 @@ func (e *env) exec(t *testing.T, ctx context.Context, sql string, args ...any) {
 }
 
 // armed writes a guarded security table the way a test seed may: in an admin
-// transaction that arms the audit commit guard.
+// transaction with the triggers off (session_replication_role replica), as the
+// organization deprovision fixtures do, so this file names no guard setting.
 func (e *env) armed(t *testing.T, ctx context.Context, sql string, args ...any) {
 	t.Helper()
 	tx, err := e.admin.Begin(ctx)
@@ -126,8 +127,7 @@ func (e *env) armed(t *testing.T, ctx context.Context, sql string, args ...any) 
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, `SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true),
-		set_config('dev_health.audit_changed', pg_current_xact_id()::text || ':0', true)`); err != nil {
+	if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := tx.Exec(ctx, sql, args...); err != nil {

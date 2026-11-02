@@ -177,8 +177,8 @@ func TestAuditRowsPassTheAllowlistAndNameTheMembership(t *testing.T) {
 		reason     string
 	}{
 		{verbAdd, state{}, state{status: StatusActive, role: "member"}, "auth.membership.added", "membership_added"},
-		{verbChangeRole, state{status: StatusActive, role: "member"}, state{status: StatusActive, role: "admin"}, "auth.membership.role_changed", "membership_status_changed"},
-		{verbTransfer, state{status: StatusActive, role: "owner"}, state{status: StatusActive, role: "admin"}, "auth.membership.ownership_transferred", "membership_status_changed"},
+		{verbChangeRole, state{status: StatusActive, role: "member"}, state{status: StatusActive, role: "admin"}, "auth.membership.role_changed", "membership_role_changed"},
+		{verbTransfer, state{status: StatusActive, role: "owner"}, state{status: StatusActive, role: "admin"}, "auth.membership.ownership_transferred", "membership_role_changed"},
 		{verbSuspend, state{status: StatusActive, role: "member"}, state{status: StatusSuspended, role: "member"}, "auth.membership.suspended", "membership_status_changed"},
 		{verbReactivate, state{status: StatusSuspended, role: "member"}, state{status: StatusActive, role: "member"}, "auth.membership.reactivated", "membership_status_changed"},
 		{verbRemove, state{status: StatusActive, role: "member"}, state{status: StatusRemoved, role: "member"}, "auth.membership.removed", "membership_removed"},
@@ -206,9 +206,20 @@ func TestAuditRowsPassTheAllowlistAndNameTheMembership(t *testing.T) {
 				}
 			}
 			if c.prev.role != c.next.role && c.prev.status == c.next.status {
+				if ev.Attributes["previous_role"] != c.prev.role || ev.Attributes["new_role"] != c.next.role {
+					t.Fatalf("role slots = %v/%v, want %s/%s", ev.Attributes["previous_role"], ev.Attributes["new_role"], c.prev.role, c.next.role)
+				}
 				fields, _ := ev.Attributes["changed_fields"].([]string)
 				if len(fields) != 1 || fields[0] != "role_key" {
 					t.Fatalf("changed_fields = %v, want [role_key]", ev.Attributes["changed_fields"])
+				}
+			}
+			if c.prev.role == c.next.role {
+				if _, ok := ev.Attributes["previous_role"]; ok {
+					t.Fatalf("previous_role set on a verb that changes no role: %v", ev.Attributes)
+				}
+				if _, ok := ev.Attributes["new_role"]; ok {
+					t.Fatalf("new_role set on a verb that changes no role: %v", ev.Attributes)
 				}
 			}
 			if err := audit.ValidateAttributes(ev.Attributes); err != nil {

@@ -262,3 +262,22 @@ func TestPrincipalEnabledAcceptsTheOneMemberList(t *testing.T) {
 		t.Fatal("principal_enabled [] accepted")
 	}
 }
+
+func TestRoleChangeAttributesAreAClosedRoleSet(t *testing.T) {
+	ok := map[string]any{"reason_code": "membership_role_changed", "previous_role": "admin", "new_role": "owner", "changed_fields": []string{"role_key"}}
+	if err := ValidateAttributes(ok); err != nil {
+		t.Fatalf("role change attributes refused: %v", err)
+	}
+	for _, key := range []string{"previous_role", "new_role"} {
+		for _, bad := range []string{"superuser", "ADMIN", "a.b", "platform_admin", "", "admin ", "Bearer abcdef0123456789"} {
+			if err := ValidateAttributes(map[string]any{key: bad}); err == nil {
+				t.Errorf("%s=%q was accepted", key, bad)
+			}
+		}
+		for _, role := range []string{"viewer", "member", "admin", "owner"} {
+			if err := ValidateAttributes(map[string]any{key: role}); err != nil {
+				t.Errorf("%s=%q refused: %v", key, role, err)
+			}
+		}
+	}
+}

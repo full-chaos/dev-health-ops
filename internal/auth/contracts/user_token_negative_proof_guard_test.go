@@ -90,6 +90,9 @@ var negativeProofs = map[string]negativeProof{
 	"auth-service|POST /internal/v1/service-accounts/keys/rotate [dev-health-auth-service @api]":               {file: proofProvision, test: provisionTest},
 	"auth-service|POST /internal/v1/service-accounts/keys/revoke [dev-health-auth-service @api]":               {file: proofProvision, test: provisionTest},
 	"auth-service|POST /internal/v1/service-accounts/keys/list [dev-health-auth-service @api]":                 {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/grants/create [dev-health-auth-service @api]":                              {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/grants/update [dev-health-auth-service @api]":                              {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/grants/revoke [dev-health-auth-service @api]":                              {file: proofProvision, test: provisionTest},
 	"auth-service|POST /internal/v1/organizations/onboard [dev-health-auth-service @api]":                      {file: proofProvision, test: provisionTest},
 	"auth-service|POST /internal/v1/organizations/create [dev-health-auth-service @api]":                       {file: proofProvision, test: provisionTest},
 	"auth-service|POST /internal/v1/sessions/state [dev-health-auth-service @api]":                             {file: proofSessState, test: sessStateTest},
@@ -214,7 +217,7 @@ func TestNegativeProofCensus(t *testing.T) {
 	// CHAOS-11885 added the organization reactivate row, CHAOS-11887 the invite revoke row and the organization suspend row, CHAOS-12043 the organization state row;
 	// CHAOS-12128 the principal access read row; CHAOS-12189 the session state row; CHAOS-10992 the organization onboard and create rows.
 	// CHAOS-10987 the two delegated session rows; CHAOS-12273 the four service account key rows.
-	if len(derivedRows(t)) != 45 || proven != 44 || exempt != 1 {
-		t.Fatalf("derived %d rows, %d proven, %d exempt; want 45, 44, 1", len(derivedRows(t)), proven, exempt)
+	if len(derivedRows(t)) != 48 || proven != 47 || exempt != 1 {
+		t.Fatalf("derived %d rows, %d proven, %d exempt; want 48, 47, 1", len(derivedRows(t)), proven, exempt)
 	}
 }

@@ -48,6 +48,7 @@ const rolesEnvironment = "\nEnvironment (every password also accepts <NAME>_FILE
 	"  QUERY_API_DATABASE_ROLE / QUERY_API_DATABASE_PASSWORD               optional\n" +
 	"  RIVER_KEDA_READONLY_DATABASE_ROLE / RIVER_KEDA_READONLY_PASSWORD    optional (KEDA read-only scaler login)\n" +
 	"  OTEL_PG_MONITOR_DATABASE_ROLE / OTEL_PG_MONITOR_DATABASE_PASSWORD   optional (collector pg_monitor-only login; no table or schema privilege)\n" +
+	"  OPS_MIGRATOR_DATABASE_ROLE / OPS_MIGRATOR_DATABASE_PASSWORD         optional (the ops migration login: LOGIN, CONNECT, nothing else)\n" +
 	"  RIVER_DATABASE_SCHEMA (default river)                               the schema the KEDA login may read\n"
 
 // ExecuteRoles runs `dho migrate roles`. Default: apply, then verify the bootstrap
@@ -236,13 +237,16 @@ func rolesOptionsFromEnvironment(lookup platformsecrets.LookupEnv, stderr io.Wri
 	if options.Monitor, err = role("OTEL_PG_MONITOR_DATABASE_ROLE", "OTEL_PG_MONITOR_DATABASE_PASSWORD", false, ""); err != nil {
 		return fail(err)
 	}
+	if options.Migrator, err = role("OPS_MIGRATOR_DATABASE_ROLE", "OPS_MIGRATOR_DATABASE_PASSWORD", false, ""); err != nil {
+		return fail(err)
+	}
 	options.RiverSchema = name("RIVER_DATABASE_SCHEMA")
 	return options, true
 }
 
 func roleNames(options roleprovision.Options) map[string]string {
 	names := map[string]string{"domain": options.Domain.Name, "queue": options.Queue.Name, "coordinator": options.Coordinator.Name}
-	for label, role := range map[string]roleprovision.Role{"api": options.API, "query_api": options.QueryAPI, "keda": options.Keda, "monitor": options.Monitor} {
+	for label, role := range map[string]roleprovision.Role{"api": options.API, "query_api": options.QueryAPI, "keda": options.Keda, "monitor": options.Monitor, "migrator": options.Migrator} {
 		if role.Name != "" {
 			names[label] = role.Name
 		}
@@ -263,6 +267,9 @@ func roleLabels(options roleprovision.Options) []string {
 	}
 	if options.Monitor.Name != "" {
 		labels = append(labels, "monitor")
+	}
+	if options.Migrator.Name != "" {
+		labels = append(labels, "migrator")
 	}
 	return labels
 }

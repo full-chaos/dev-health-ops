@@ -178,3 +178,24 @@ func TestClassNamesAreClosedMetricLabels(t *testing.T) {
 		}
 	}
 }
+
+func TestExpiryToleranceHoldsOnlyForAnExpiredProjection(t *testing.T) {
+	exp := now.Add(-tick / 2)
+	p := projected("a", 2, pushlifecycle.StatusRevoked)
+	p.ExpiresAt = &exp
+	got := diff(t, []Listed{listed("a", 2, pushlifecycle.StatusActive)}, []Projected{p})
+	want(t, got, Finding{Class: ClassStatus, ID: "a"})
+}
+
+func TestExpiryToleranceHoldsOnlyForAnActiveListing(t *testing.T) {
+	exp := now.Add(-tick / 2)
+	p := projected("a", 2, pushlifecycle.StatusExpired)
+	p.ExpiresAt = &exp
+	got := diff(t, []Listed{listed("a", 2, pushlifecycle.StatusRevoked)}, []Projected{p})
+	want(t, got, Finding{Class: ClassStatus, ID: "a"})
+}
+
+func TestExpiryToleranceNeedsAnExpiry(t *testing.T) {
+	got := diff(t, []Listed{listed("a", 2, pushlifecycle.StatusActive)}, []Projected{projected("a", 2, pushlifecycle.StatusExpired)})
+	want(t, got, Finding{Class: ClassStatus, ID: "a"})
+}

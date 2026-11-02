@@ -795,3 +795,42 @@ func TestProvisioningServiceAccountsWhileUsersAreNotOwned(t *testing.T) {
 		t.Fatalf("%d accounts after a refused create (%v)", n, err)
 	}
 }
+
+// With AUTH_ORGS_OWNED the suspend and reactivate routes, through configure, also write go-api's is_active in the
+// verb's commit.
+func TestProvisioningSuspendWritesPublicWhileOrgsOwned(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	e := newRoutesEnvWith(t, ctx, map[string]string{
+		authconfig.EnvUsersOwned:                "true",
+		authconfig.EnvOrgsOwned:                 "true",
+		authconfig.EnvMembershipRoutes:          "true",
+		authconfig.EnvInviteTokenSecret:         provisioningInviteSecret,
+		authconfig.EnvInviteTokenSecretPrevious: provisioningInvitePrevious,
+	})
+	token, _ := e.issuerCredential(t, ctx, "auth-session-issuer", `["memberships:write", "sessions:issue"]`, false, false)
+	header := map[string]string{"Authorization": "Bearer " + token, "Content-Type": "application/json"}
+	_, org := e.seed(t, ctx)
+	super := e.account(t, ctx, acctMail(), true, true)
+	publicActive := func() bool {
+		t.Helper()
+		var active bool
+		if err := e.admin.QueryRow(ctx, `SELECT is_active FROM public.organizations WHERE id = $1`, org).Scan(&active); err != nil {
+			t.Fatal(err)
+		}
+		return active
+	}
+	body := jsonBody(t, map[string]any{"organization_id": org.String(), "actor_principal_id": super.String()})
+	if got := e.doWith(t, authapi.PatternOrgSuspend, body, header); got.status != http.StatusOK {
+		t.Fatalf("suspend: %d %s", got.status, got.body)
+	}
+	if publicActive() {
+		t.Fatal("go-api's row is still active after the suspend with orgs owned")
+	}
+	if got := e.doWith(t, authapi.PatternOrgReactivate, body, header); got.status != http.StatusOK {
+		t.Fatalf("reactivate: %d %s", got.status, got.body)
+	}
+	if !publicActive() {
+		t.Fatal("go-api's row is still inactive after the reactivate with orgs owned")
+	}
+}

@@ -156,8 +156,8 @@ func TestTheReactivateRouteIsInTheStartupGate(t *testing.T) {
 		}
 		routes++
 	}
-	if routes != 21 {
-		t.Fatalf("%d provisioning routes served, want 21", routes)
+	if routes != 22 {
+		t.Fatalf("%d provisioning routes served, want 22", routes)
 	}
 	for _, line := range strings.Split(f.logs.String(), "\n") {
 		if strings.Contains(line, "not mounted") && !strings.Contains(line, PatternOrgState) {
@@ -225,7 +225,7 @@ func TestTheRowsGateNeedsTheInviteRevokeRow(t *testing.T) {
 func plantClasses(t *testing.T, route string, classes ...string) []byte {
 	t.Helper()
 	var document map[string]any
-	if err := json.Unmarshal(docWithRows(t, keyPatterns...), &document); err != nil {
+	if err := json.Unmarshal(docWithRows(t, append([]string{PatternOrgRename}, keyPatterns...)...), &document); err != nil {
 		t.Fatal(err)
 	}
 	planted := false
@@ -272,7 +272,7 @@ func provisioningRoutesOver(t *testing.T, rows []byte, workload *SessionIssueWor
 func TestProvisioningRoutesMountOnlyOnRowsAcceptingEveryAdmittedClass(t *testing.T) {
 	workload := newWorkloadIssueFixture(t).workload
 	// Dark routes (the org state read and the key routes) are not on the startup gate: they mount only on a row.
-	dark := append([]string{PatternOrgState}, keyPatterns...)
+	dark := append([]string{PatternOrgState, PatternOrgRename}, keyPatterns...)
 	for op, pattern := range provisioningRouteOps {
 		issuerOnly := plantClasses(t, pattern, serviceSessionIssuerClass)
 		both := plantClasses(t, pattern, serviceSessionIssuerClass, workloadTokenClass)
@@ -323,6 +323,7 @@ func TestProvisioningRouteOpsCoverTheRoutes(t *testing.T) {
 	}
 	patterns = append(patterns, PatternOrgState)
 	patterns = append(patterns, keyPatterns...)
+	patterns = append(patterns, PatternOrgRename)
 	var mapped []string
 	var ops []string
 	for op, pattern := range provisioningRouteOps {

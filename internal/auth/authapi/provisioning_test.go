@@ -246,6 +246,27 @@ type fakeReactivate struct {
 	revision int64
 	revStep  int64
 	getErr   error
+	// renames counts RenameAuthorized calls; rid/rname/rIfRevision/ractor are the last call's arguments.
+	renames     int
+	rid         uuid.UUID
+	rname       string
+	rIfRevision *int64
+	ractor      org.Actor
+}
+
+func (f *fakeReactivate) RenameAuthorized(ctx context.Context, id uuid.UUID, name string, ifRevision *int64, a org.Actor, authz org.Authorize) (bool, error) {
+	f.renames++
+	f.rid, f.rname, f.rIfRevision, f.ractor = id, name, ifRevision, a
+	if authz == nil {
+		return false, org.ErrDenied
+	}
+	if err := authz(ctx, audit.TxOps{}, id); err != nil {
+		return false, err
+	}
+	if f.err != nil {
+		return false, f.err
+	}
+	return !f.noop, nil
 }
 
 func (f *fakeReactivate) Get(_ context.Context, id uuid.UUID) (*org.Organization, error) {
@@ -312,7 +333,7 @@ func newProvFixture(t *testing.T) *provFixture {
 // deprovision row, last: the suspend route is mounted only when its row exists.
 func docWithRow(t testing.TB, route string) []byte {
 	t.Helper()
-	return docWithRows(t, append([]string{route}, keyPatterns...)...)
+	return docWithRows(t, append([]string{route, PatternOrgRename}, keyPatterns...)...)
 }
 
 // embeddedDocWithoutRow is the embedded endpoint-profile document without the rows for route.
@@ -387,7 +408,8 @@ func (f *provFixture) post(path, body string, header map[string]string) *httptes
 }
 
 func (f *provFixture) storeCalls() int {
-	return f.orgs.calls + f.members.calls + f.invites.calls + f.deprovision.calls + f.reactivate.calls + f.reactivate.suspends + f.sa.calls
+	return f.orgs.calls + f.members.calls + f.invites.calls + f.deprovision.calls + f.reactivate.calls + f.reactivate.suspends +
+		f.reactivate.renames + f.sa.calls
 }
 
 func (f *provFixture) uses(op string) (int64, bool) {
@@ -496,6 +518,9 @@ func routeCases() []routeCase {
 		{opOrgCreate, PatternOrgCreate, func(f *provFixture, a uuid.UUID) map[string]any {
 			return map[string]any{"actor_principal_id": a.String(), "organization_name": "Acme", "slug": "acme", "tier": "community", "managed_by": "stripe"}
 		}, []string{"actor_principal_id", "organization_name", "managed_by"}},
+		{opOrgRename, PatternOrgRename, func(f *provFixture, a uuid.UUID) map[string]any {
+			return map[string]any{"organization_id": f.org.String(), "actor_principal_id": a.String(), "name": "Renamed"}
+		}, []string{"organization_id", "actor_principal_id", "name"}},
 	}, append(serviceAccountCases(), keyCases()...)...)
 }
 

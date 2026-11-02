@@ -56,7 +56,7 @@ const (
 
 var provisioningOperations = []string{opMembershipAdd, opMembershipRole, opMembershipRemove, opMembershipTransfer,
 	opInviteCreate, opInviteAccept, opOrgDeprovision, opOrgReactivate, opOrgSuspend, opInviteRevoke, opOrgState, opOrgOnboard, opOrgCreate,
-	opServiceAccountCreate, opServiceAccountDisable, opServiceAccountEnable, opServiceAccountOwner, opServiceAccountKeyIssue, opServiceAccountKeyRotate, opServiceAccountKeyRevoke, opServiceAccountKeyList}
+	opServiceAccountCreate, opServiceAccountDisable, opServiceAccountEnable, opServiceAccountOwner, opServiceAccountKeyIssue, opServiceAccountKeyRotate, opServiceAccountKeyRevoke, opServiceAccountKeyList, opOrgRename}
 
 // Provisioning refusal codes beyond the shared ones.
 const (
@@ -216,7 +216,7 @@ func ProvisioningRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 		{Method: http.MethodPost, Pattern: PatternServiceAccountOwner, Handler: http.HandlerFunc(h.serviceAccountOwner)},
 	}
 	routes = h.withStateRoute(routes, rows)
-	routes = h.withServiceAccountKeyRoutes(routes, rows)
+	routes = h.withOrgRenameRoute(h.withServiceAccountKeyRoutes(routes, rows), rows)
 	return routes, nil
 }
 
@@ -251,7 +251,7 @@ func (h provisioningHandlers) admitUpTo(w http.ResponseWriter, r *http.Request, 
 var workloadOperations = map[string]bool{opMembershipAdd: true, opMembershipRole: true, opMembershipRemove: true,
 	opMembershipTransfer: true, opInviteCreate: true, opInviteAccept: true, opOrgDeprovision: true, opOrgReactivate: true, opOrgOnboard: true, opOrgCreate: true, opOrgState: true,
 	opServiceAccountCreate: true, opServiceAccountDisable: true, opServiceAccountEnable: true, opServiceAccountOwner: true,
-	opServiceAccountKeyIssue: true, opServiceAccountKeyRotate: true, opServiceAccountKeyRevoke: true, opServiceAccountKeyList: true}
+	opServiceAccountKeyIssue: true, opServiceAccountKeyRotate: true, opServiceAccountKeyRevoke: true, opServiceAccountKeyList: true, opOrgRename: true}
 
 // caller authorizes the bearer, its class read from the text before any store
 // or key-set read: the session issuer credential holding memberships:write

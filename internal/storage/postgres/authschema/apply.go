@@ -85,6 +85,10 @@ type Options struct {
 	// holds UsersWriteGrant on public.users. Off, it holds no write privilege
 	// there, and the grants pass revokes any it held.
 	UsersOwned bool
+	// OrgsOwned is the organizations-owned switch (AUTH_ORGS_OWNED): the runtime
+	// role holds OrganizationWriteGrants on public.organizations. Off, it holds
+	// no UPDATE there, and the grants pass revokes any it held.
+	OrgsOwned bool
 	// DeferNarrowing keeps, with the acknowledgement, every lost grant the
 	// users-owned switch gives (the 4->3 flip-back release, whose old owned
 	// pods still serve); the rest narrows. See defer_narrowing.go.

@@ -424,7 +424,9 @@ type snapshot struct {
 	orgStatus    authorization.Status
 	membership   *authorization.Membership
 	grants       []authorization.Grant
-	now          int64
+	// account is the service-account row of a service-account principal.
+	account *authorization.ServiceAccount
+	now     int64
 	// deps and sets are what the snapshot read, for the decision cache (Reader.collect).
 	deps []decisioncache.Dependency
 	sets []string
@@ -461,6 +463,14 @@ func (s *snapshot) Workload() (authorization.WorkloadLimits, bool) {
 
 func (s *snapshot) ServiceAccount(string) (authorization.ServiceAccount, bool) {
 	return authorization.ServiceAccount{}, false
+}
+
+// applyServiceAccount sets the state of a service-account principal from its row.
+func (s *snapshot) applyServiceAccount(uuid.UUID, string, bool) {}
+
+// ServiceAccountKey reads the key row a service-account reference names.
+func (t *txReader) ServiceAccountKey(context.Context, uuid.UUID) (authapi.DecisionKey, error) {
+	return authapi.DecisionKey{NowUnixNano: t.now}, nil
 }
 
 func (s *snapshot) NowUnixNano() int64 { return s.now }

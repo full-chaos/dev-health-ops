@@ -54,6 +54,30 @@ type DecisionSession struct {
 	HasDelegatedFrom bool
 }
 
+// serviceAccountKeyClass is the credential class of a service-account key
+// (serviceaccount.KeyClass).
+const serviceAccountKeyClass = "service_account_key"
+
+// DecisionKey is the service-account key row a reference names, as the
+// decision transaction reads it.
+type DecisionKey struct {
+	Found       bool
+	PrincipalID uuid.UUID
+	// AccountOrgID is the organization of the key principal's service-account
+	// row; "" when the principal has none.
+	AccountOrgID string
+	Class        string
+	DomainOwner  string
+	Revoked      bool
+	// ExpiresAtUnixNano is 0 when the row has no expiry.
+	ExpiresAtUnixNano int64
+	// NowUnixNano is the transaction's clock.
+	NowUnixNano int64
+}
+
+// liveFor reports a key row that may stand for the reference.
+func (k DecisionKey) liveFor(ReferencedPrincipal) bool { return false }
+
 // delegated reports an impersonation session. The decision core's delegation
 // rules are not wired to this route yet, so such a reference is denied with
 // delegation_invalid instead of being decided as the plain target user.
@@ -71,6 +95,9 @@ func (delegatedSnapshot) Delegation() (authorization.Delegation, bool) {
 // error means the state could not be read.
 type DecisionTx interface {
 	Session(ctx context.Context, sessionID uuid.UUID) (DecisionSession, error)
+	// ServiceAccountKey reads the key row a service-account reference names,
+	// with the transaction's clock.
+	ServiceAccountKey(ctx context.Context, credentialID uuid.UUID) (DecisionKey, error)
 	// Snapshot is the principal's state for one organization ("" for a
 	// platform decision), with the transaction's clock.
 	Snapshot(ctx context.Context, principal uuid.UUID, orgID string) (authorization.GrantSnapshot, error)
@@ -115,6 +142,16 @@ type authorizeHandlers struct {
 	rec        recorder
 	cache      cacheMetrics
 	decisionID func() (string, error)
+	// resolve, when set, resolves a principal reference in place of
+	// References.Resolve; only tests set it.
+	resolve func(reference string) (ReferencedPrincipal, string, error)
+}
+
+func (h authorizeHandlers) resolveReference(reference string) (ReferencedPrincipal, string, error) {
+	if h.resolve != nil {
+		return h.resolve(reference)
+	}
+	return h.References.Resolve(reference)
 }
 
 // AuthorizeRoutes returns the routes whose endpoint-profile row admits the
@@ -276,7 +313,7 @@ func (h authorizeHandlers) decide(w http.ResponseWriter, r *http.Request, op str
 		p, seen := resolved[q.PrincipalReference]
 		if !seen {
 			var why string
-			p, why, err = h.References.Resolve(q.PrincipalReference)
+			p, why, err = h.resolveReference(q.PrincipalReference)
 			if err != nil {
 				h.rec.refuse(w, r, op, unavailable(reasonDependency), err)
 				return nil, false

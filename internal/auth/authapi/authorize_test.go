@@ -36,6 +36,7 @@ type fakeSnapshot struct {
 	membership   *authorization.Membership
 	grants       []authorization.Grant
 	grantsErr    error
+	account      *authorization.ServiceAccount
 	now          int64
 }
 
@@ -57,8 +58,11 @@ func (s *fakeSnapshot) Grants(string) ([]authorization.Grant, error) { return s.
 func (s *fakeSnapshot) Workload() (authorization.WorkloadLimits, bool) {
 	return authorization.WorkloadLimits{}, false
 }
-func (s *fakeSnapshot) ServiceAccount(string) (authorization.ServiceAccount, bool) {
-	return authorization.ServiceAccount{}, false
+func (s *fakeSnapshot) ServiceAccount(org string) (authorization.ServiceAccount, bool) {
+	if org == "" || s.account == nil {
+		return authorization.ServiceAccount{}, false
+	}
+	return *s.account, true
 }
 func (s *fakeSnapshot) NowUnixNano() int64 { return s.now }
 
@@ -69,13 +73,17 @@ type snapKey struct {
 
 // fakeDecisionState counts transactions and reads, and can fail each step.
 type fakeDecisionState struct {
-	sessions   map[uuid.UUID]DecisionSession
-	snapshots  map[snapKey]*fakeSnapshot
-	beginErr   error
-	sessionErr error
-	snapErr    error
-	reads      int
-	snapReads  int
+	sessions     map[uuid.UUID]DecisionSession
+	keys         map[uuid.UUID]DecisionKey
+	snapshots    map[snapKey]*fakeSnapshot
+	beginErr     error
+	sessionErr   error
+	keyErr       error
+	snapErr      error
+	reads        int
+	sessionReads int
+	keyReads     int
+	snapReads    int
 }
 
 func (f *fakeDecisionState) Read(ctx context.Context, fn func(DecisionTx) error) error {
@@ -89,10 +97,21 @@ func (f *fakeDecisionState) Read(ctx context.Context, fn func(DecisionTx) error)
 type fakeDecisionTx struct{ f *fakeDecisionState }
 
 func (t fakeDecisionTx) Session(_ context.Context, id uuid.UUID) (DecisionSession, error) {
+	t.f.sessionReads++
 	if t.f.sessionErr != nil {
 		return DecisionSession{}, t.f.sessionErr
 	}
 	return t.f.sessions[id], nil
+}
+
+func (t fakeDecisionTx) ServiceAccountKey(_ context.Context, id uuid.UUID) (DecisionKey, error) {
+	t.f.keyReads++
+	if t.f.keyErr != nil {
+		return DecisionKey{}, t.f.keyErr
+	}
+	k := t.f.keys[id]
+	k.NowUnixNano = authorizeNow
+	return k, nil
 }
 
 func (t fakeDecisionTx) Snapshot(_ context.Context, principal uuid.UUID, org string) (authorization.GrantSnapshot, error) {

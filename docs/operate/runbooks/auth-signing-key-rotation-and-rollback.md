@@ -53,9 +53,16 @@ The stack needs three wirings that the plain `auth` profile of `compose.yml` doe
 
 The seeded user is marked verified with one `UPDATE` on the throwaway project database of the rehearsal. That statement is rehearsal-only: it never runs against another database, and the runbook steps above contain no SQL.
 
-### Measured so far (drill, compose, 2026-11-02)
+### Measured so far (rotation stage, compose, 2026-11-02)
 
-- Window a, no restart: go-api and query-api refused the compromised-kid token 2 s after the key drop. The session check on both verifiers reads the revoked session, so the JWKS cache bound (330 s) is not what ended it. A token whose session is not revoked would be bounded by the cache; the key drop revokes every session that holds a token of that kid, so no such token is expected.
-- Window b (restart after the drop): the first run read the old published port after the restart, so its lines are void. The rerun result is recorded with the rehearsal records.
+One full `rotation` run passed: 102 cells, no `FAIL`, no `FINDING`.
 
-Open items: the planned rotation with the real 4200 s floor (`rotation` stage) and the k3s rehearsal of the issuer rollback with the chart are not run yet.
+- Planned rotation: the publish floor passed after 314 s (floor 300 s); an activate inside the floor was refused with 297 s remaining. A probe of the old kid's token every 0.5 s across the activate saw 172 answers and no non-2xx one. The retire floor passed after 4224 s (floor 4200 s); a retire inside it was refused with 4175 s remaining.
+- The signer reads the durable key states again every 15 s (`KeyStateRefresh`), so the first login after an `activate` or `rollback` can still be signed by the old key. The rehearsal waits 20 s before it judges a new signer. Login is limited to 10 per 15 min per address and account, so a script that polls the login is refused (429).
+- Window a, no restart (compromise of b): the JWKS dropped b 10 s after the compromise, and go-api and query-api accepted the b token for 10 s (cache bound 330 s). The compromise revoked 13 sessions.
+- Window b (compromise of c, restart after the drop): go-api refused the c token 13 s after the drop (restart took 8 s), query-api 20 s after (restart took 7 s); both answered 401. The compromise revoked 4 sessions.
+- Issuer rollback (`hs256_compat` and back to `eddsa`): HS256 tokens accepted, the compromised kid stayed refused and out of the JWKS, `rollback -kid` on it stayed refused, and the revoked session stayed refused.
+
+The records of the run are the six files under the run directory `records/` (`00-environment` to `40-S3-issuer-rollback`).
+
+Open item: the k3s rehearsal of the issuer rollback with the chart is not run yet.

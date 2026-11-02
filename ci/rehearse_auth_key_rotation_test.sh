@@ -67,8 +67,8 @@ done
 if awk '$1 == "query-api:" {on=1; next} /^  [a-z]/ {on=0} on && /AUTH_PROXY_SESSIONS: "true"/ {found=1} END {exit !found}' "${OVR}"; then ok override-query-api-expects-session-read; else bad override-query-api-expects-session-read; fi
 
 # A recreated container gets new ephemeral host ports (smoke v7: login answered 000): every --force-recreate is followed by a port read.
-recreates="$(grep -c -- '--force-recreate' "${SCRIPT}")"
-refreshes="$(grep -c '^ *refresh_ports$' "${SCRIPT}")"
+recreates="$(grep -c -- '--force-recreate' "${SCRIPT}" || true)"
+refreshes="$(grep -c '^ *refresh_ports$' "${SCRIPT}" || true)"
 if [ "${recreates}" -gt 0 ] && [ "${refreshes}" -ge "${recreates}" ]; then ok every-recreate-rereads-the-ports; else bad "every-recreate-rereads-the-ports (${recreates} recreates, ${refreshes} reads)"; fi
 
 # The host SMTP sink is unreachable from the bigboy docker bridge (smoke v3: no route to host): the user is verified in the

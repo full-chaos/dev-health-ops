@@ -119,6 +119,8 @@ done
 [ -r "${KUBECONFIG_FILE}" ] || die "the kubeconfig ${KUBECONFIG_FILE} is not readable"
 case "${NS}" in dev-health | default | kube-*) die "refusing the namespace ${NS}" ;; esac
 
+# kubectl and helm both get the kubeconfig by flag; the export is for any other client the tools start.
+export KUBECONFIG="${KUBECONFIG_FILE}"
 kc() { kubectl --kubeconfig "${KUBECONFIG_FILE}" "$@"; }
 K() { kc -n "${NS}" "$@"; }
 export LOCAL_PG="${PG_IMAGE}"
@@ -197,7 +199,7 @@ is_super() { pg -c "SELECT rolsuper FROM pg_roles WHERE rolname = '$1'"; }
 completed_events() { # DATABASE-RELEASE: Completed events of the auth-migrate hook Job of a release
   K get events --field-selector "involvedObject.name=$1-dev-health-auth-migrate,reason=Completed" -o json | jq '[.items[].count // 1] | add // 0'
 }
-helm_up() { helm upgrade --install "$@" --timeout 8m >/dev/null; }
+helm_up() { helm upgrade --install --kubeconfig "${KUBECONFIG_FILE}" "$@" --timeout 8m >/dev/null; }
 
 # readbacks of a database at the tree's head owned by the migration login, with the pin verified by a one-off grants run
 readbacks() { # LEG DATABASE SECRET
@@ -228,7 +230,7 @@ helm_args "${RELEASE_FRESH}" "${IMG_MIG}" "${MIGRATOR}" sec-mig-fresh sec-db-fre
 helm_up "${HELM_ARGS[@]}"
 [ "$(completed_events "${RELEASE_FRESH}")" -ge 1 ] || die "leg 1: the migrate hook Job did not complete"
 pass "leg 1: the pre-install hook Job ran as the migration login with the pin and completed"
-if ! helm get hooks "${RELEASE_FRESH}" -n "${NS}" | grep -q 'AUTH_SCHEMA_OWNER_ROLE'; then die "leg 1: the rendered hook carries no AUTH_SCHEMA_OWNER_ROLE"; fi
+if ! helm get hooks "${RELEASE_FRESH}" --kubeconfig "${KUBECONFIG_FILE}" -n "${NS}" | grep -q 'AUTH_SCHEMA_OWNER_ROLE'; then die "leg 1: the rendered hook carries no AUTH_SCHEMA_OWNER_ROLE"; fi
 pass "leg 1: the hook Job carries AUTH_SCHEMA_OWNER_ROLE"
 readbacks "leg1" authmove_fresh sec-mig-fresh
 

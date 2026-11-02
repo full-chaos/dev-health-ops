@@ -87,13 +87,14 @@ func TestExchangeFormIsTheRFC8693WorkloadGrant(t *testing.T) {
 		"grant_type":         "urn:ietf:params:oauth:grant-type:token-exchange",
 		"subject_token":      subjectJWT,
 		"subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+		"resource":           "urn:acr:org:" + orgOne,
 	} {
 		if form.Get(k) != v {
 			t.Fatalf("form %s = %q, want %q", k, form.Get(k), v)
 		}
 	}
-	if len(form) != 3 {
-		t.Fatalf("form has %d fields, want 3: no scope and no requested type", len(form))
+	if len(form) != 4 {
+		t.Fatalf("form has %d fields, want 4: no scope, no requested type, no audience", len(form))
 	}
 	if f.exchangeCT[0] != "application/x-www-form-urlencoded" {
 		t.Fatalf("content type = %q", f.exchangeCT[0])
@@ -419,15 +420,21 @@ func TestNewRefusesPlainHTTPToANonLoopbackOrigin(t *testing.T) {
 		"limit negative": {BaseURL: secure, TokenEndpoint: secure, SubjectTokenFile: file, PageLimit: -1},
 		"base userinfo":  {BaseURL: mustURL("https://u:p@acr.example.test"), TokenEndpoint: secure, SubjectTokenFile: file},
 		"base query":     {BaseURL: mustURL("https://acr.example.test/?a=b"), TokenEndpoint: secure, SubjectTokenFile: file},
+		"no org":         {BaseURL: secure, TokenEndpoint: secure, SubjectTokenFile: file, OrgID: ""},
+		"org uppercase":  {BaseURL: secure, TokenEndpoint: secure, SubjectTokenFile: file, OrgID: strings.ToUpper(orgOne)},
+		"org not a uuid": {BaseURL: secure, TokenEndpoint: secure, SubjectTokenFile: file, OrgID: "acme"},
+		"org with urn":   {BaseURL: secure, TokenEndpoint: secure, SubjectTokenFile: file, OrgID: "urn:acr:org:" + orgOne},
+		"org padded":     {BaseURL: secure, TokenEndpoint: secure, SubjectTokenFile: file, OrgID: " " + orgOne},
+		"org no hyphens": {BaseURL: secure, TokenEndpoint: secure, SubjectTokenFile: file, OrgID: strings.ReplaceAll(orgOne, "-", "")},
 	} {
 		if _, err := New(cfg); err == nil {
 			t.Fatalf("%s: New accepted the config", name)
 		}
 	}
-	if _, err := New(Config{BaseURL: loop, TokenEndpoint: loop, SubjectTokenFile: file}); err != nil {
+	if _, err := New(Config{BaseURL: loop, TokenEndpoint: loop, SubjectTokenFile: file, OrgID: orgOne}); err != nil {
 		t.Fatalf("loopback http refused: %v", err)
 	}
-	if _, err := New(Config{BaseURL: secure, TokenEndpoint: secure, SubjectTokenFile: file}); err != nil {
+	if _, err := New(Config{BaseURL: secure, TokenEndpoint: secure, SubjectTokenFile: file, OrgID: orgOne}); err != nil {
 		t.Fatalf("https refused: %v", err)
 	}
 }
@@ -444,6 +451,7 @@ func TestKindsAreClosedMetricLabels(t *testing.T) {
 	want := map[Kind]string{
 		KindExchange: "exchange", KindUnauthorized: "unauthorized", KindForbidden: "forbidden", KindRateLimited: "rate_limited",
 		KindUnavailable: "unavailable", KindRejected: "rejected", KindSchema: "schema", KindWalk: "walk", KindTransport: "transport",
+		KindInvalidRequest: "invalid_request", KindInvalidTarget: "invalid_target",
 	}
 	for k, name := range want {
 		if string(k) != name {
@@ -462,4 +470,85 @@ func TestNextAfterAboveTheLastIdIsRefusedNotWalked(t *testing.T) {
 	}
 	_, err := list(t, newClient(t, f, func(c *Config) { c.PageLimit = 1 }))
 	wantKind(t, err, KindSchema)
+}
+
+func TestExchangeResourceNamesTheConfiguredOrganization(t *testing.T) {
+	for _, org := range []string{orgOne, orgTwo} {
+		f := newFake(t)
+		if _, err := list(t, newClient(t, f, func(c *Config) { c.OrgID = org })); err != nil {
+			t.Fatal(err)
+		}
+		if got := f.exchanges[0]["resource"]; !slices.Equal(got, []string{"urn:acr:org:" + org}) {
+			t.Fatalf("resource = %q, want exactly urn:acr:org:%s", got, org)
+		}
+	}
+}
+
+func TestSelectorRefusalsAreOwnKindsAndNeverRetried(t *testing.T) {
+	for name, tc := range map[string]struct {
+		body string
+		kind Kind
+	}{
+		"several bindings, no selector": {`{"schema_version":"token_exchange_error.v1","error":"invalid_request"}`, KindInvalidRequest},
+		"unbound organization":          {`{"schema_version":"token_exchange_error.v1","error":"invalid_target"}`, KindInvalidTarget},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFake(t, row("a", 1, "active"))
+			f.exchangeRC, f.exchangeRaw = 400, tc.body
+			c := newClient(t, f, nil)
+			for i := 0; i < 2; i++ {
+				e := wantKind(t, listErr(t, c), tc.kind)
+				if e.Status != 400 {
+					t.Fatalf("status = %d, want 400", e.Status)
+				}
+			}
+			if len(f.exchanges) != 2 {
+				t.Fatalf("exchanges = %d, want one per List call and no retry inside it", len(f.exchanges))
+			}
+			if len(f.snapshotCalls()) != 0 {
+				t.Fatal("the listing was called after a refused exchange")
+			}
+		})
+	}
+}
+
+func listErr(t *testing.T, c *Client) error {
+	t.Helper()
+	_, err := list(t, c)
+	return err
+}
+
+func TestOtherExchangeRefusalsStayKindExchange(t *testing.T) {
+	for name, tc := range map[string]struct {
+		rc   int
+		body string
+	}{
+		"invalid_grant":                  {400, `{"error":"invalid_grant"}`},
+		"unauthorized_client":            {400, `{"error":"unauthorized_client"}`},
+		"invalid_target at status 401":   {401, `{"error":"invalid_target"}`},
+		"invalid_request at status 500":  {500, `{"error":"invalid_request"}`},
+		"invalid_target with extra case": {400, `{"error":"Invalid_Target"}`},
+		"error is not a string":          {400, `{"error":["invalid_target"]}`},
+		"no error field":                 {400, `{"schema_version":"token_exchange_error.v1"}`},
+		"not json":                       {400, `invalid_target`},
+		"oversized body with the code":   {400, `{"error":"invalid_target","pad":"` + strings.Repeat("x", 20<<10) + `"}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFake(t)
+			f.exchangeRC, f.exchangeRaw = tc.rc, tc.body
+			wantKind(t, listErr(t, newClient(t, f, nil)), KindExchange)
+		})
+	}
+}
+
+func TestSelectorRefusalErrorsNameNoBodyTokenOrOrganization(t *testing.T) {
+	f := newFake(t)
+	f.exchangeRC, f.exchangeRaw = 400, `{"error":"invalid_target","error_description":"org leaky-org-detail"}`
+	err := listErr(t, newClient(t, f, nil))
+	wantKind(t, err, KindInvalidTarget)
+	for _, bad := range []string{subjectJWT, orgOne, "leaky", "urn:acr"} {
+		if strings.Contains(err.Error(), bad) {
+			t.Fatalf("error %q names %q", err, bad)
+		}
+	}
 }

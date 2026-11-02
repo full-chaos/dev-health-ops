@@ -18,6 +18,8 @@ const (
 	exchangePath = "/api/v1/oauth/token"
 	subjectJWT   = "subject-jwt-one"
 	accessOne    = "access-one"
+	orgOne       = "0b6f3a52-8c1e-4d7a-9a4e-3f2d1c0b9e87"
+	orgTwo       = "7d1e94c0-52aa-4b0e-8f31-6c2a9e5b4d10"
 )
 
 type listCall struct {
@@ -132,7 +134,7 @@ func newClient(t *testing.T, f *fakeACR, mod func(*Config)) *Client {
 	t.Helper()
 	base, _ := url.Parse(f.srv.URL)
 	tok, _ := url.Parse(f.srv.URL + exchangePath)
-	cfg := Config{BaseURL: base, TokenEndpoint: tok, SubjectTokenFile: subjectFile(t, subjectJWT+"\n"), Timeout: 5 * time.Second}
+	cfg := Config{BaseURL: base, TokenEndpoint: tok, SubjectTokenFile: subjectFile(t, subjectJWT+"\n"), OrgID: orgOne, Timeout: 5 * time.Second}
 	if mod != nil {
 		mod(&cfg)
 	}

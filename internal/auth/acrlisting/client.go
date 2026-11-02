@@ -67,6 +67,9 @@ const (
 	KindSchema       Kind = "schema"
 	KindWalk         Kind = "walk"
 	KindTransport    Kind = "transport"
+
+	KindInvalidRequest Kind = "invalid_request"
+	KindInvalidTarget  Kind = "invalid_target"
 )
 
 // Error is a failed listing. Its text is a fixed phrase and the status: no token, body or id. RetryAfter is the
@@ -109,6 +112,7 @@ type Config struct {
 	// SubjectTokenFile is the projected ServiceAccount token of the workload bound in acr. It is read again on every
 	// exchange, never cached.
 	SubjectTokenFile string
+	OrgID            string
 	// HTTPClient is optional; a nil one is httpguard.NewClient. Whatever is given follows no redirect.
 	HTTPClient *http.Client
 	Timeout    time.Duration

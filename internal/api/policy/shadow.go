@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"slices"
 	"strings"
 	"sync"
@@ -239,6 +238,32 @@ func NewShadow(cfg ShadowConfig) (*Shadow, error) {
 	return s, nil
 }
 
+// Callers are the closed kinds of the counter's caller label.
+const (
+	ShadowCallerMember    = "member"
+	ShadowCallerAdmin     = "admin"
+	ShadowCallerSuperuser = "superuser"
+)
+
+// ShadowObservation is what a service tells the shadow about one request its legacy check has
+// already decided. It holds values only, and no go-api type: any service can fill it.
+type ShadowObservation struct {
+	// Pattern is the route template "METHOD /route" that keys the row.
+	Pattern string
+	// Bearer is the end user's access token, the PDP's principal reference. Never logged.
+	Bearer string
+	// OrgID is the caller's effective organization; empty when it has none.
+	OrgID string
+	// Caller is one of the ShadowCaller kinds.
+	Caller string
+	// UserAccessToken is true when Bearer is a user access token the PDP can resolve.
+	UserAccessToken bool
+	// Impersonating is true while a delegated session is in force: the PDP cannot decide it yet.
+	Impersonating bool
+	// LegacyAllowed is the legacy check's answer.
+	LegacyAllowed bool
+}
+
 // shadowCall is everything the goroutine needs: values only, no request.
 type shadowCall struct {
 	ctx           context.Context
@@ -249,32 +274,31 @@ type shadowCall struct {
 	legacyAllowed bool
 }
 
-// Observe records how the PDP would have decided a request the legacy guard has already decided.
-// The guard calls it once, after its decision and before it answers, with the caller's bearer
-// token (only guard.go reads the Authorization header); it returns at once.
-func (s *Shadow) Observe(r *http.Request, user *User, bearer string, legacyAllowed bool) {
-	if s == nil || r == nil || user == nil {
+// Observe records how the PDP would have decided a request the legacy check has already decided.
+// A service calls it once, after its decision and before it answers; it returns at once and has no
+// result. A nil Shadow is off.
+func (s *Shadow) Observe(ctx context.Context, o ShadowObservation) {
+	if s == nil {
 		return
 	}
 	defer func() { _ = recover() }()
-	row, ok := s.rows[r.Pattern]
+	row, ok := s.rows[o.Pattern]
 	if !ok {
 		return
 	}
 	if s.percent < 100 && s.seen.Add(1)%100 >= s.percent {
 		return
 	}
-	ctx := r.Context()
 	if row.HighRisk && !s.highRisk {
 		countShadowResult(ctx, resultSkipped)
 		return
 	}
-	org := strings.ToLower(user.OrgID)
-	if bearer == "" || !user.accessToken || ImpersonationFrom(ctx) != nil || (row.ResourceType == policycatalog.ScopeOrganization && org == "") {
+	org := strings.ToLower(o.OrgID)
+	if o.Bearer == "" || !o.UserAccessToken || o.Impersonating || (row.ResourceType == policycatalog.ScopeOrganization && org == "") {
 		countShadowResult(ctx, resultSkipped)
 		return
 	}
-	request := pep.Request{PrincipalReference: bearer, Action: row.Action, ResourceType: row.ResourceType, ResourceKey: shadowPlatformKey}
+	request := pep.Request{PrincipalReference: o.Bearer, Action: row.Action, ResourceType: row.ResourceType, ResourceKey: shadowPlatformKey}
 	if row.ResourceType == policycatalog.ScopeOrganization {
 		request.ResourceKey, request.OrganizationID = org, org
 	}
@@ -284,19 +308,13 @@ func (s *Shadow) Observe(r *http.Request, user *User, bearer string, legacyAllow
 		countShadowResult(ctx, resultDropped)
 		return
 	}
-	call := shadowCall{ctx: context.WithoutCancel(ctx), request: request, row: row, pattern: r.Pattern, caller: shadowCaller(user), legacyAllowed: legacyAllowed}
+	caller := o.Caller
+	if !slices.Contains(shadowCallers, caller) {
+		caller = ShadowCallerMember
+	}
+	call := shadowCall{ctx: context.WithoutCancel(ctx), request: request, row: row, pattern: o.Pattern, caller: caller, legacyAllowed: o.LegacyAllowed}
 	s.wg.Add(1)
 	go s.run(call)
-}
-
-func shadowCaller(user *User) string {
-	switch {
-	case user.Holds(ActionAdminOrgs):
-		return "superuser"
-	case user.Role == "owner" || user.Role == "admin":
-		return "admin"
-	}
-	return "member"
 }
 
 func (s *Shadow) run(call shadowCall) {
@@ -361,6 +379,3 @@ func (s *Shadow) logAllowed(gate int) bool {
 	last := s.logGate[gate].Load()
 	return now-last >= int64(time.Second) && s.logGate[gate].CompareAndSwap(last, now)
 }
-
-// SetShadow installs s beside the guard; nil is off. Call it once, before the guard serves.
-func (g *Guard) SetShadow(s *Shadow) { g.shadow = s }

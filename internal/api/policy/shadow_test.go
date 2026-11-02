@@ -421,7 +421,7 @@ func TestShadowOffAsksNothing(t *testing.T) {
 		shadowRequest(handler, http.MethodGet, path)
 	}
 	var nilShadow *Shadow
-	nilShadow.Observe(httptest.NewRequest(http.MethodGet, "/x", nil), &User{}, shadowBearer, true)
+	nilShadow.Observe(context.Background(), ShadowObservation{Pattern: "GET /api/v1/admin/teams", Bearer: shadowBearer, OrgID: ownOrg, Caller: ShadowCallerAdmin, UserAccessToken: true, LegacyAllowed: true})
 	if mismatch, results := rec.snapshot(); len(mismatch)+len(results) != 0 || len(pdp.calls()) != 0 {
 		t.Fatalf("shadow off counted %v %v and made %d calls", mismatch, results, len(pdp.calls()))
 	}

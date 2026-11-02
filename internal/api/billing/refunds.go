@@ -68,7 +68,7 @@ func (h handlers) createRefund(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user := policy.UserFrom(r.Context())
-	if !user.IsSuperuser {
+	if !user.Holds(policy.ActionAdminBilling) {
 		h.write(w, superuserRequired)
 		return
 	}
@@ -567,7 +567,7 @@ func (h handlers) listRefunds(w http.ResponseWriter, r *http.Request) {
 		h.write(w, validation(errs))
 		return
 	}
-	if !policy.UserFrom(r.Context()).IsSuperuser {
+	if !policy.UserFrom(r.Context()).Holds(policy.ActionAdminBilling) {
 		h.write(w, superuserRequired)
 		return
 	}
@@ -629,7 +629,7 @@ func (h handlers) getRefund(w http.ResponseWriter, r *http.Request) {
 		h.write(w, validation(errs))
 		return
 	}
-	if !policy.UserFrom(r.Context()).IsSuperuser {
+	if !policy.UserFrom(r.Context()).Holds(policy.ActionAdminBilling) {
 		h.write(w, superuserRequired)
 		return
 	}

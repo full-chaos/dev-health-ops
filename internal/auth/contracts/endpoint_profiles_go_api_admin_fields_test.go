@@ -457,7 +457,6 @@ func TestFieldChecksCatchPlantedDefectsOnEveryNewFamily(t *testing.T) {
 	scopes := catalogScopes(t)
 	ids := []string{
 		"GET /api/v1/billing/invoices [dev-health-ops-api @api]",
-		"POST /api/v1/billing/plans/pull-stripe [dev-health-ops-api @api]",
 		"GET /api/v1/auth/me [dev-health-ops-api @api]",
 		"GET /api/v1/orgs/me [dev-health-ops-api @api]",
 		"GET /api/v1/licensing/entitlements/{org_id} [dev-health-ops-api @api]",
@@ -776,10 +775,11 @@ var billingActionRows = map[string]string{
 	"POST /api/v1/billing/subscriptions/change-plan [dev-health-ops-api @api]":  "billing.manage",
 	"POST /api/v1/billing/subscriptions/cancel [dev-health-ops-api @api]":       "billing.manage",
 	"POST /api/v1/billing/subscriptions/reactivate [dev-health-ops-api @api]":   "billing.manage",
+	"POST /api/v1/billing/plans/pull-stripe [dev-health-ops-api @api]":          "admin.billing",
 }
 
-// The billing rows no catalog role set fits: superuser-only handlers, the anonymous plan reads, the platform
-// pull and the routes every organization role may call. They keep action null with a gap that says why.
+// The billing rows no catalog role set fits: superuser-only handlers (org-scoped rows, which the shape test forbids a
+// platform action), the anonymous plan reads and the routes every organization role may call. They keep action null with a gap that says why.
 var billingNullRows = []string{
 	"GET /api/v1/billing/plans [dev-health-ops-api @api]",
 	"GET /api/v1/billing/plans/{plan_id} [dev-health-ops-api @api]",

@@ -22,7 +22,7 @@ import (
 // Stripe id, then store the ids. A Stripe failure is the unhandled 500, and
 // the Stripe objects created before it stay in Stripe, as in Python.
 func (h handlers) syncPlan(w http.ResponseWriter, r *http.Request) {
-	if !isSuperuser(policy.UserFrom(r.Context())) {
+	if !holdsBilling(policy.UserFrom(r.Context())) {
 		h.write(w, superadminRequired)
 		return
 	}

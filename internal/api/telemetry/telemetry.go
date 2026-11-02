@@ -110,7 +110,7 @@ func (h handlers) withOrg(next http.HandlerFunc) http.Handler {
 			h.refuse(w, r, "no_org_context", "Organization context required")
 			return
 		}
-		if !user.IsSuperuser && requested != user.OrgID {
+		if !user.Holds(policy.ActionAdminTelemetry) && requested != user.OrgID {
 			member, err := h.auth.IsMember(r.Context(), user.UserID, requested)
 			if err != nil {
 				h.internal(w, r, "membership", err)

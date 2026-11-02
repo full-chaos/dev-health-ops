@@ -196,7 +196,7 @@ func TestComposeWorkloadBootstrapMounts(t *testing.T) {
 	if issuerGo != "${AUTH_TOKEN_ISSUER_URL:-}" || issuerAuth != "${AUTH_TOKEN_ISSUER_URL:-}" {
 		t.Errorf("issuer: go-api %q, auth-service %q; both must read ${AUTH_TOKEN_ISSUER_URL:-}: a token carries the issuer it was signed under", issuerGo, issuerAuth)
 	}
-	// go-api selectors stay out of compose.yml: unset is the default, session_compat.
+	// go-api selectors stay out of compose.yml: unset is the default (session_compat for the session issue route; the provisioning clients take workload).
 	for _, name := range []string{"AUTH_SESSION_ISSUE_CREDENTIAL", "AUTH_PROVISIONING_CREDENTIAL"} {
 		if v, ok := envString(t, c.Services["go-api"], name); ok && v != "${"+name+":-}" {
 			t.Errorf("go-api %s = %q, want blank by default", name, v)

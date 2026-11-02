@@ -83,7 +83,7 @@ docker compose --profile auth run --rm auth-workload-bootstrap
 - The value is written once to `/run/workload/api.bootstrap` (mode 0600) in the named volume `workload_bootstrap`.
   The registry keeps only its digest. The command prints the credential id (`credential=ID`), never the value.
 - go-api mounts the volume read-only at `/run/workload` and reads the file only when
-  `AUTH_SESSION_ISSUE_CREDENTIAL` or `AUTH_PROVISIONING_CREDENTIAL` selects `workload`. auth-service never mounts
+  `AUTH_SESSION_ISSUE_CREDENTIAL` selects `workload`, or `AUTH_PROXY_ORG_PROVISIONING` is on (the provisioning clients always use it). auth-service never mounts
   it. To accept the value, auth-service needs `AUTH_WORKLOAD_BOOTSTRAP=true` and `AUTH_TOKEN_ISSUER_URL` (go-api's
   `AUTH_WORKLOAD_ISSUER` follows it).
 - A second `run --rm auth-workload-bootstrap` is refused (`the workload has a live bootstrap value; rotate it`)

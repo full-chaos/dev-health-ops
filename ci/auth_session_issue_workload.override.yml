@@ -37,7 +37,7 @@ services:
       # AUTH_USERS_OWNED on needs it: go-api refuses to start otherwise.
       AUTH_PROXY_CREDENTIALS: "true"
       AUTH_PROXY_ORG_PROVISIONING: "true"
-      # workload, or empty for go-api's session credential on the provisioning routes (an empty value is the unset default).
+      # workload or empty (both take the workload token on the provisioning routes; session_compat is retired there).
       AUTH_PROVISIONING_CREDENTIAL: ${AUTH_PROVISIONING_CREDENTIAL:-}
       # workload, or empty for go-api's session credential on the session issue route (an empty value is the unset default).
       AUTH_SESSION_ISSUE_CREDENTIAL: ${AUTH_SESSION_ISSUE_CREDENTIAL:-}

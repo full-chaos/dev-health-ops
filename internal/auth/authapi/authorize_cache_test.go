@@ -178,7 +178,7 @@ func newCacheFixture(t *testing.T) *cacheFixture {
 func (c *cacheFixture) rebuild(t *testing.T, cache DecisionCache) {
 	t.Helper()
 	routes, err := AuthorizeRoutes(AuthorizeDeps{
-		Callers: c.callers(), References: c.references(), State: c.cs, Evaluator: authorization.NewEvaluator(),
+		Callers: c.callers(), References: c.references(), State: c.cs, Evaluator: authorization.NewEvaluator(), Audit: c.audit.write,
 		ProfileRows: authorizeProfileDoc(t, PatternAuthorize, PatternAuthorizeBatch),
 		Cache:       cache, Ready: func() bool { return c.ready },
 		Logger: slog.New(slog.NewJSONHandler(c.logs, nil)), Meter: sdkmetric.NewMeterProvider(sdkmetric.WithReader(c.reader)).Meter("test"),

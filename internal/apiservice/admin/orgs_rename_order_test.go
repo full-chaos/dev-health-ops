@@ -35,10 +35,8 @@ func orderHandlers(log *orderLog, current string, renamer orgreactivate.Renamer)
 	return h
 }
 
-// While organizations are owned a PATCH that renames and suspends (or only renames) renames first: a refused or failed
-// rename, a name that is blank after the strip, or no rename client answers before any suspend reaches auth-service.
-// A PATCH that reactivates must reactivate first (auth refuses a rename of a suspended organization), so a name blank
-// after the strip and a missing client are refused before the reactivate.
+// While organizations are owned a PATCH that renames renames first: a refused or failed rename, a name that is blank
+// after the strip, or no rename client answers before any suspend or reactivate reaches auth-service.
 func TestOrgPatchRefusedRenameChangesNoAuthStateWhileOrgsOwned(t *testing.T) {
 	t.Setenv(usersowned.OrgsEnv, "true")
 	refusals := map[string]error{"name": orgreactivate.ErrNameInvalid, "suspended": orgreactivate.ErrSuspended,
@@ -73,16 +71,31 @@ func TestOrgPatchRefusedRenameChangesNoAuthStateWhileOrgsOwned(t *testing.T) {
 		}
 	}
 	log := &orderLog{}
-	if code, _ := patchOrg(orderHandlers(log, "suspended", &fakeOrderRenamer{log: log}), `{"name": "New", "is_active": true}`); code == http.StatusConflict ||
-		log.index("auth") < 0 || log.index("rename") < log.index("auth") {
-		t.Errorf("reactivate and rename: %d, steps %v; want the reactivate before the rename", code, log.steps)
-	}
-	log = &orderLog{}
 	patchOrg(orderHandlers(log, "active", &fakeOrderRenamer{log: log}), `{"name": "New", "is_active": false}`)
 	if log.index("rename") < 0 || log.index("auth-suspend") < log.index("rename") {
 		t.Errorf("suspend and rename: steps %v; want the rename before the suspend", log.steps)
 	}
 	if !strings.Contains(strings.Join(log.steps, ","), "rename") {
 		t.Fatal("no rename step")
+	}
+}
+
+// Rename always goes first (answers-12275-2): a PATCH {name, is_active: true} on a suspended organization is refused
+// by auth's rename (409), and neither auth state nor go-api's row changes. On an active one the rename still precedes
+// the reactivate call.
+func TestOrgPatchRenameBeforeReactivateWhileOrgsOwned(t *testing.T) {
+	t.Setenv(usersowned.OrgsEnv, "true")
+	log := &orderLog{}
+	code, body := patchOrg(orderHandlers(log, "suspended", &fakeOrderRenamer{log: log, err: orgreactivate.ErrSuspended}), `{"name": "New", "is_active": true}`)
+	if code != http.StatusConflict || !strings.Contains(body, "Organization is suspended") {
+		t.Errorf("suspended: %d %s, steps %v; want 409 Organization is suspended", code, body, log.steps)
+	}
+	if log.count("rename") != 1 || log.count("auth") != 0 || log.count("auth-suspend") != 0 || log.count("db:begin") != 0 || log.count("db:exec") != 0 {
+		t.Errorf("suspended: steps %v; want one rename and no reactivate, suspend or go-api write", log.steps)
+	}
+	log = &orderLog{}
+	patchOrg(orderHandlers(log, "active", &fakeOrderRenamer{log: log}), `{"name": "New", "is_active": true}`)
+	if log.index("rename") < 0 || log.index("auth") < log.index("rename") {
+		t.Errorf("active: steps %v; want the rename before the reactivate", log.steps)
 	}
 }

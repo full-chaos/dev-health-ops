@@ -9,9 +9,11 @@ import (
 )
 
 const (
-	shadowMismatchMetric = "dev_health_api_shadow_mismatch_total"
-	shadowResultMetric   = "dev_health_api_shadow_results_total"
-	shadowMeterName      = "github.com/full-chaos/dev-health-ops/internal/api/policy"
+	shadowMismatchMetric      = "dev_health_api_shadow_mismatch_total"
+	shadowResultMetric        = "dev_health_api_shadow_results_total"
+	shadowEnabledMetric       = "dev_health_api_shadow_enabled"
+	shadowConfigInvalidMetric = "dev_health_api_shadow_config_invalid"
+	shadowMeterName           = "github.com/full-chaos/dev-health-ops/internal/api/policy"
 )
 
 type shadowMismatchAdder func(ctx context.Context, namespace, caller, class string)

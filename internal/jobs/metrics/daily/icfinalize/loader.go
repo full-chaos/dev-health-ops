@@ -126,9 +126,12 @@ var rollingStatsGitArmSQL = `
 // team, unassigned for an item with none; section 0.4d: a co-owner team takes
 // the item whole, as a co-owned repository row counts whole in each owner).
 // What the primary entries of a row do not hold (a row written before the
-// split existed holds none) is unassigned. A blank or "unknown" identity keeps
-// a blank team, and "unassigned" (an item with no assignee) is no person of a
-// team: its items stay on unassigned.
+// split existed holds none) is unassigned; a remainder of 0 gives no entry, so
+// a person whose items are all in teams has no point on unassigned. A blank
+// or "unknown" identity keeps a blank team, and "unassigned" (an item with no
+// assignee) is no person of a team: its items stay on unassigned. Neither is a
+// person a co-owner team ranks, so each item of theirs counts once, by its
+// primary entry.
 var rollingStatsWorkItemArmSQL = `
     SELECT
         identity_id,
@@ -143,23 +146,25 @@ var rollingStatsWorkItemArmSQL = `
             w.day AS day,
             if(w.user_identity IN ('', 'unknown'), '',
                if(w.user_identity = '` + unassignedTeamID + `', '` + unassignedTeamID + `', tupleElement(split, 1))) AS owner_team,
-            tupleElement(split, 2) AS completed,
-            tupleElement(split, 3) AS wip
+            tupleElement(split, 3) AS completed,
+            tupleElement(split, 4) AS wip
         FROM work_item_user_metrics_daily AS w FINAL
         ARRAY JOIN arrayConcat(
-            arrayZip(w.team_split_team_ids, w.team_split_items_completed, w.team_split_wip_end_of_day),
-            [tuple(
+            arrayZip(w.team_split_team_ids, w.team_split_is_primary, w.team_split_items_completed, w.team_split_wip_end_of_day),
+            arrayFilter(remainder -> tupleElement(remainder, 3) > 0 OR tupleElement(remainder, 4) > 0, [tuple(
                 '` + unassignedTeamID + `',
+                toUInt8(1),
                 toUInt32(greatest(toInt64(w.items_completed) - toInt64(arraySum(arrayFilter(
                     (c, p) -> p = 1, w.team_split_items_completed, w.team_split_is_primary))), 0)),
                 toUInt32(greatest(toInt64(w.wip_count_end_of_day) - toInt64(arraySum(arrayFilter(
                     (c, p) -> p = 1, w.team_split_wip_end_of_day, w.team_split_is_primary))), 0))
-            )]
+            )])
         ) AS split
         WHERE w.day >= {start:Date} AND w.day <= {end:Date}
           AND w.org_id = {org_id:String}
           AND ` + rowview.OrgPredicate("work_item_user_metrics_daily", "w") + `
           AND ` + liverow.Predicate("work_item_user_metrics_daily", "w") + `
+          AND (tupleElement(split, 2) = 1 OR w.user_identity NOT IN ('', 'unknown', '` + unassignedTeamID + `'))
     )
     GROUP BY identity_id, owner_team, day`
 

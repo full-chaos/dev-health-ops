@@ -2286,8 +2286,9 @@ Limits:
   counts. The landscape reads the split (FINAL, the org view rows, the live rows): the git half takes `delivery_units`
   less `work_items_completed` and no WIP, so an item never counts on the owner of the person's repository too; WIP is
   the largest daily sum over the person's work scopes. What a row's primary entries do not hold (a row written
-  before the split existed) is `unassigned`. An item with no assignee (the person `unassigned`) stays on team
-  `unassigned`. Membership plays no part. The rollup tables keep the primary team only (the known limit above).
+  before the split existed) is `unassigned`; a remainder of 0 gives no entry, so a person with work items and no
+  count in the window has no work-item point. An item with no assignee (the person `unassigned`) stays on team
+  `unassigned`, and counts once (its primary entry). Membership plays no part. The rollup tables keep the primary team only (the known limit above).
   Past days get the split when the work_item family recomputes them and the landscape when ic_finalize recomputes
   them (a roll step). Asserted on real ClickHouse by `TestTheLandscapeTakesAWorkItemsTeamFromTheLadder` (jira,
   gitlab, github, linear). What stays:

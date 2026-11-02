@@ -115,7 +115,9 @@ func TestTheWorkItemArmReadsTheTeamSplit(t *testing.T) {
 	for _, required := range []string{
 		"FROM work_item_user_metrics_daily AS w FINAL",
 		"(w.row_view IN (",
-		"arrayZip(w.team_split_team_ids, w.team_split_items_completed, w.team_split_wip_end_of_day)",
+		"arrayZip(w.team_split_team_ids, w.team_split_is_primary, w.team_split_items_completed, w.team_split_wip_end_of_day)",
+		"remainder -> tupleElement(remainder, 3) > 0 OR tupleElement(remainder, 4) > 0",
+		"AND (tupleElement(split, 2) = 1 OR w.user_identity NOT IN ('', 'unknown', 'unassigned'))",
 		"(c, p) -> p = 1, w.team_split_items_completed, w.team_split_is_primary",
 		"(c, p) -> p = 1, w.team_split_wip_end_of_day, w.team_split_is_primary",
 		"GROUP BY identity_id, owner_team, day",

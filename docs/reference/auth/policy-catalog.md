@@ -56,6 +56,8 @@ Names are dotted and namespaced. A bare single segment is not an action (the pat
 | `billing.manage` | organization | organization | high | `none` |
 | `license.read` | organization | organization | low | `decision_bound` |
 | `acr.context.read` | organization | repository | low | `resource_revision_bound` |
+| `acr.evidence.read` | organization | repository | low | `resource_revision_bound` |
+| `acr.credential.issue` | organization | organization | high | `none` |
 | `admin.users` | platform | platform | high | `none` |
 | `admin.orgs` | platform | platform | high | `none` |
 | `authz.decide` | platform | platform | high | `none` |
@@ -66,9 +68,9 @@ Source: `contracts/auth/v1/vocabulary/actions.v1.json`. `resource_kind` equals `
 
 | Cache class | Actions |
 | --- | --- |
-| `none` | All 16 high-risk actions. A decision for these is never reused. |
-| `decision_bound` | The low-risk actions except `git.read` and `acr.context.read`. |
-| `resource_revision_bound` | `git.read` and `acr.context.read`. |
+| `none` | All 23 high-risk actions. A decision for these is never reused. |
+| `decision_bound` | The low-risk actions except `git.read`, `acr.context.read` and `acr.evidence.read`. |
+| `resource_revision_bound` | `git.read`, `acr.context.read` and `acr.evidence.read`. |
 
 The two cached classes are the allow-cache classes of TRD section 14. The catalog files do not define them further. A cached allow is bound to the policy revision of its decision and ends at the decision's `expires_at` (`authorization_decision.v1`, see [obligations](obligations.md#decision)).
 
@@ -114,13 +116,15 @@ Each role lists its actions explicitly. There is no inheritance, no wildcard and
 | `billing.manage` |  |  | yes | yes |  |
 | `license.read` | yes | yes | yes | yes |  |
 | `acr.context.read` | yes | yes | yes | yes |  |
+| `acr.evidence.read` |  |  |  |  |  |
+| `acr.credential.issue` |  |  |  |  |  |
 | `admin.users` |  |  |  |  | yes |
 | `admin.orgs` |  |  |  |  | yes |
 | `authz.decide` |  |  |  |  |  |
 
-No role holds `members.update` or `authz.decide` yet, so the decision core denies them to every role until a roles change grants them. `acr.context.read` is held by the roles that hold `git.read` (catalog version 9); the decision core serves a repository request by the membership default or a repository grant, so a role that holds the action is allowed by default.
+No role holds `members.update`, `authz.decide`, `acr.evidence.read` or `acr.credential.issue` yet, so the decision core denies them to every role until a roles change grants them. `acr.context.read` is held by the roles that hold `git.read` (catalog version 9); the decision core serves a repository request by the membership default or a repository grant, so a role that holds the action is allowed by default.
 
-Every action names `impersonation` (`denied` or `allowed`): whether a delegated session may exercise it. `acr.context.read` is `allowed` (a read, low risk). `members.update` and `authz.decide` are `denied`. A delegated session gets it only when the actor role holds it: `viewer`, `member`, `admin` and `owner` do.
+Every action names `impersonation` (`denied` or `allowed`): whether a delegated session may exercise it. `acr.context.read` is `allowed` (a read, low risk). `acr.evidence.read` is `allowed` (a read, low risk). `members.update`, `authz.decide` and `acr.credential.issue` are `denied`. A delegated session gets it only when the actor role holds it: `viewer`, `member`, `admin` and `owner` do.
 
 Source: `contracts/auth/v1/vocabulary/roles.v1.json`. The role keys `viewer`, `member`, `admin` and `owner` are the organization roles that `membership.v1` uses. `platform_admin` and `platform_owner` are platform roles and are not membership roles. `platform_owner` holds no action: it is a marker that only the operator grants (`auth-migrate platform-owner-grant`), and an owner acts through a `platform_admin` row it also holds.
 
@@ -197,3 +201,4 @@ From `contracts/auth/v1/README.md`:
 ## Planned, not built
 
 The catalog on `main` has no platform action other than `admin.users`, `admin.orgs` and `authz.decide`. The superuser-inherited sites in go-api have no explicit platform action yet. CHAOS-11847 plans `admin.billing`, `admin.flags`, `admin.audit`, `admin.impersonate`, `admin.telemetry` and `admin.stats`. CHAOS-10987 (delegated session) also changes the catalog. Neither change is on `main`, and the version number each will take is not fixed here.
+- Version 10: `acr.evidence.read` (organization scope, repository resource kind, low risk, `resource_revision_bound`) and `acr.credential.issue` (organization, organization, high, `none`) (CHAOS-12660). No role holds either, so the decision core denies both to every role until a roles change grants them.

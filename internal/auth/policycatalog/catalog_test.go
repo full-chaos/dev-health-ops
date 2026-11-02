@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	actionsSHA = "3954ee30e5194f152b8653f03704a703ee321d818295eec407630d439c98e3e7"
-	rolesSHA   = "f1a45054d839858215d813b8024cbd8a84c8d914dc6a80aa8e4ffa3a2546b390"
+	actionsSHA = "675fc94475732681650a10e5e7ea02d8da4c3870e2e6f5fa9e7a448daa781dc7"
+	rolesSHA   = "c0b45a25270e835da254238d0f18362888fb892309850de6ab33791720137a2d"
 )
 
 func repoRoot(t *testing.T) string {
@@ -222,7 +222,7 @@ func TestEmbeddedFilesValidateAgainstTheirSchemas(t *testing.T) {
 // internal/api/session/permissions.go. Catalog-only = not served in /auth/me
 // until a web-reviewed change adds it there; every other catalog action must
 // still equal a session permission.
-var catalogOnly = map[string]bool{"admin.impersonate": true, "billing.read": true, "billing.manage": true, "license.read": true, "members.update": true, "authz.decide": true, "acr.context.read": true,
+var catalogOnly = map[string]bool{"admin.impersonate": true, "billing.read": true, "billing.manage": true, "license.read": true, "members.update": true, "authz.decide": true, "acr.context.read": true, "acr.evidence.read": true, "acr.credential.issue": true,
 	"admin.billing": true, "admin.flags": true, "admin.audit": true, "admin.telemetry": true, "admin.stats": true,
 }
 
@@ -468,11 +468,11 @@ func TestImpersonationIsDeniedOnTheG51List(t *testing.T) {
 		"admin.users": true, "admin.orgs": true, "admin.impersonate": true,
 		"admin.billing": true, "admin.flags": true, "admin.audit": true, "admin.telemetry": true, "admin.stats": true, "members.invite": true, "members.manage": true,
 		"org.write": true, "org.delete": true, "billing.manage": true, "settings.write": true, "integrations.write": true,
-		"members.update": true, "authz.decide": true,
+		"members.update": true, "authz.decide": true, "acr.credential.issue": true,
 	}
 	actions := Default().Actions()
-	if len(actions) != 34 {
-		t.Fatalf("%d actions, want 34", len(actions))
+	if len(actions) != 36 {
+		t.Fatalf("%d actions, want 36", len(actions))
 	}
 	for _, a := range actions {
 		denied := a.Impersonation == ImpersonationDenied
@@ -524,9 +524,11 @@ func TestDelegatedActionsAreTheAllowedActionsOfAnOrganizationRole(t *testing.T) 
 
 func TestImpersonationValuesOfTheRepositoryReadAndTheTwoDeniedActions(t *testing.T) {
 	want := map[string]string{
-		"acr.context.read": ImpersonationAllowed,
-		"authz.decide":     ImpersonationDenied,
-		"members.update":   ImpersonationDenied,
+		"acr.context.read":     ImpersonationAllowed,
+		"acr.evidence.read":    ImpersonationAllowed,
+		"acr.credential.issue": ImpersonationDenied,
+		"authz.decide":         ImpersonationDenied,
+		"members.update":       ImpersonationDenied,
 	}
 	for id, v := range want {
 		a, err := Default().Action(id)

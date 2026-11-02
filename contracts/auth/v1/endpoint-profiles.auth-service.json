@@ -417,6 +417,49 @@
     },
     {
       "accepted_credential_classes": [
+        "ops_access_token_hs256",
+        "user_access_token"
+      ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: the users row (and, for a token with an org_id, the membership row) is read live through PGUsers; a token with a sid reads its session row live (policy.PGStore.SessionState, then the session store's effective revoke and expiry).",
+      "disclosure_behavior": "go-api's wire: the token travels in the JSON body field token, never in a header. A refused token is 200 with valid false and every other member null, so the answer says only that the token is not good; a malformed body is go-api's 422 detail list; a store or key set fault is a 503, never a pass. The body never echoes the token.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/auth/validate [dev-health-auth-service @api]",
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 123,
+          "note": "func newValidateAuth",
+          "path": "internal/auth/authapi/compat_validate.go"
+        },
+        "description": "newValidateAuth: go-api's own decision, policy.Authenticator.Authenticate, over the body token. An HS256 token is verified by the go-api verifier the Issuer holds, then CheckClaims and userFromClaims (legacy_hs256 true). With AUTH_TOKEN_ISSUER_URL and a key set, an EdDSA user_access_token (JWT header alg EdDSA) of audience dev-health-api is checked by the profile-routed validator over this route's one row, then go-api's accessTokenUser; the acr-api and acr-mcp audiences, the workload token and a query-api audience token are refused. A token naming a session also needs that session live in auth-service's own state (stricter than go-api: an expired session or one revoked by a password stamp is valid false)."
+      },
+      "public_rationale": null,
+      "route": "/api/v1/auth/validate",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/compat_validate.go",
+        "line": 30
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "none",
+      "token_shape": {
+        "algorithm": "HS256 (legacy_hs256) or EdDSA (user_access_token)",
+        "audience": "HS256: AUTH_JWT_AUDIENCE (default dev-health-api, go-api's JWT_AUDIENCE); EdDSA: dev-health-api",
+        "issuer": "HS256: AUTH_JWT_ISSUER (default dev-health-ops, go-api's JWT_ISSUER); EdDSA: AUTH_TOKEN_ISSUER_URL",
+        "token_type": "HS256 JWT, type=access; or the access-token.v1 JWS"
+      }
+    },
+    {
+      "accepted_credential_classes": [
         "social_oauth_exchange"
       ],
       "classification": "protected",
@@ -1633,6 +1676,72 @@
       "tenant_requirement": "none"
     },
     {
+      "accepted_credential_classes": [
+        "workload_token"
+      ],
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "workload+jwt"
+      },
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: the caller's workload token reads only the signer's published key set; the principal_reference token reads the same key set, and every state read of the call (the referenced session, the principal, the users and memberships rows, the organization and every grant row) runs in one READ ONLY REPEATABLE READ transaction of the call, so a call never sees a state that changed under it. The decision is never stored by this route.",
+      "disclosure_behavior": "Every caller refusal, for every credential class and reason (no bearer, another class, a wrong audience, a subject not in AUTH_AUTHORIZE_CALLER_SUBJECTS, a bad signature or time), is the same 401 error.v1 invalid_credentials, answered before any body byte is read; a refused principal_reference is the whole call's 401 principal_reference_invalid, with no item index, so a PEP can tell its own token failing from the user's; a malformed or over-count body is 400 malformed, and a body over the bound is the transport's 413; a store, clock or key set failure is the whole call's 503 error.v1, never a per-item deny and never an allow. A decision, allow or deny, is the 200 body with a decision_id, the reason_code, the policy_revision and expires_at; the reason_code is for the PEP and is not echoed to an end user. A principal reference that names a delegated session denies every action with delegation_invalid until delegated evaluation ships.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /v1/authorize [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 85,
+          "note": "func (a *AuthorizeCallers) Authenticate",
+          "path": "internal/auth/authapi/authorize_caller.go"
+        },
+        "description": "AuthorizeCallers.Authenticate, run by the route's admission gate before the body bound reads a byte: only a workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is accepted; every other credential class is refused from the bearer text. Its audience must be auth-service and its sub one of the caller workloads of AUTH_AUTHORIZE_CALLER_SUBJECTS, both checked on the unverified payload before the key set is read and again on the verified claims; then authverify.WorkloadVerifier checks signature, issuer, audience and times. With no caller subject configured every caller is refused."
+      },
+      "route": "/v1/authorize",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/authorize.go",
+        "line": 25
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "none"
+    },
+    {
+      "accepted_credential_classes": [
+        "workload_token"
+      ],
+      "class_disambiguator": {
+        "kind": "jwt_header_typ",
+        "name": "workload+jwt"
+      },
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: the caller's workload token reads only the signer's published key set; the principal_reference token reads the same key set, and every state read of the call (the referenced session, the principal, the users and memberships rows, the organization and every grant row) runs in one READ ONLY REPEATABLE READ transaction of the call, so a call never sees a state that changed under it. The decision is never stored by this route.",
+      "disclosure_behavior": "As POST /v1/authorize, for each item of one call: the items are decided apart (one deny never changes another item), every item reads from the one transaction of the call, a refused principal_reference or a state failure on any item fails the whole call (401 principal_reference_invalid or 503), and the answer holds one decision per request index.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /v1/authorize:batch [dev-health-auth-service @api]",
+      "issued_credential": [],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 85,
+          "note": "func (a *AuthorizeCallers) Authenticate",
+          "path": "internal/auth/authapi/authorize_caller.go"
+        },
+        "description": "AuthorizeCallers.Authenticate, run by the route's admission gate before the body bound reads a byte: only a workload token (JOSE typ workload+jwt, chosen from the bearer text before any validator runs) is accepted; every other credential class is refused from the bearer text. Its audience must be auth-service and its sub one of the caller workloads of AUTH_AUTHORIZE_CALLER_SUBJECTS, both checked on the unverified payload before the key set is read and again on the verified claims; then authverify.WorkloadVerifier checks signature, issuer, audience and times. With no caller subject configured every caller is refused."
+      },
+      "route": "/v1/authorize:batch",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/authorize.go",
+        "line": 26
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "none"
+    },
+    {
       "accepted_credential_classes": [],
       "classification": "public",
       "disclosure_behavior": "An unknown, expired, used or wrong-purpose secret is the same 400; no detail names which.",
@@ -2201,5 +2310,5 @@
     }
   ],
   "schema_version": "endpoint-profile.v1",
-  "source_commit": "cde17b146c37c76b5df637d49bcf463634f6ef67"
+  "source_commit": "f1b88a086ed92247268032bedfb647c638325992"
 }

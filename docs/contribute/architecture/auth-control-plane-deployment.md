@@ -19,7 +19,7 @@ lifecycle: active
 
 Both deployments are **dormant by default**: nothing starts unless you ask for
 it, and removing it changes no other service. Without the session keys the
-service answers only its operator surface, the refresh and logout 503 stubs, the
+service answers only its operator surface, the refresh, logout and validate 503 stubs, the
 well-known routes when a token issuer URL is set, and the workload exchange when
 it is on; see the [architecture](auth-control-plane-architecture.md).
 {: .fc-page-lede }
@@ -257,6 +257,14 @@ refuses a literal `value` under any secret-like name (`*_SECRET`, `*_PASSWORD`,
 `*_TOKEN`, `*_KEY`, `*_DSN`, `*_CREDENTIALS`); such a name comes only by
 `valueFrom.secretKeyRef`. `goApi.extraEnv` follows the same two rules for the
 names the chart renders for go-api.
+
+The issuer's two public documents are routed by one `ingress.hosts` entry (CHAOS-12359): host `H`, paths
+`/.well-known/openid-configuration` and `/.well-known/jwks.json`, both `pathType: Exact`, `service: auth-service`.
+The chart refuses any other path, path type or service on that host, a `pythonAllowList` on it, and a render whose
+`authService.accessToken.issuerURL` is not `https://H` (pods fetch `issuer + /.well-known/...`, redirects refused).
+While such a host exists, the auth-service NetworkPolicy also admits the ingress controller
+(`networkPolicy.ingressControllerNamespace`, `authService.networkPolicy.ingressControllerPodLabels`) on the API port
+only; without it no rule for the controller renders.
 
 The chart creates **no Secret** for it. Create these in the release namespace
 first and reference them by name:

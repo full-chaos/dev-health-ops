@@ -160,7 +160,7 @@ func TestTheReactivateRouteIsInTheStartupGate(t *testing.T) {
 		t.Fatalf("%d provisioning routes served, want 21", routes)
 	}
 	for _, line := range strings.Split(f.logs.String(), "\n") {
-		if strings.Contains(line, "not mounted") && !strings.Contains(line, PatternOrgState) {
+		if strings.Contains(line, "not mounted") && !strings.Contains(line, PatternOrgState) && !strings.Contains(line, "/internal/v1/grants/") {
 			t.Fatalf("a not-mounted line was logged for a route other than the dark state route: %s", line)
 		}
 	}
@@ -225,7 +225,7 @@ func TestTheRowsGateNeedsTheInviteRevokeRow(t *testing.T) {
 func plantClasses(t *testing.T, route string, classes ...string) []byte {
 	t.Helper()
 	var document map[string]any
-	if err := json.Unmarshal(docWithRows(t, keyPatterns...), &document); err != nil {
+	if err := json.Unmarshal(authv1.AuthServiceEndpointProfiles, &document); err != nil {
 		t.Fatal(err)
 	}
 	planted := false
@@ -271,9 +271,12 @@ func provisioningRoutesOver(t *testing.T, rows []byte, workload *SessionIssueWor
 // is the whole admitted set.
 func TestProvisioningRoutesMountOnlyOnRowsAcceptingEveryAdmittedClass(t *testing.T) {
 	workload := newWorkloadIssueFixture(t).workload
-	// Dark routes (the org state read and the key routes) are not on the startup gate: they mount only on a row.
-	dark := append([]string{PatternOrgState}, keyPatterns...)
+	// The org state read is not on the startup gate: it mounts only on a row.
+	dark := []string{PatternOrgState}
 	for op, pattern := range provisioningRouteOps {
+		if slices.Contains(grantPatterns, pattern) {
+			continue // no row in the embedded document yet; provisioning_grant_test.go plants its own
+		}
 		issuerOnly := plantClasses(t, pattern, serviceSessionIssuerClass)
 		both := plantClasses(t, pattern, serviceSessionIssuerClass, workloadTokenClass)
 		if workloadOperations[op] && !slices.Contains(dark, pattern) {
@@ -322,7 +325,7 @@ func TestProvisioningRouteOpsCoverTheRoutes(t *testing.T) {
 		patterns = append(patterns, pattern)
 	}
 	patterns = append(patterns, PatternOrgState)
-	patterns = append(patterns, keyPatterns...)
+	patterns = append(patterns, grantPatterns...)
 	var mapped []string
 	var ops []string
 	for op, pattern := range provisioningRouteOps {

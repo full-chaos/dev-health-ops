@@ -169,9 +169,61 @@ func TestTeamFlowEntitiesAreTheActiveTeams(t *testing.T) {
 // is a retired one. A measured row with no pull request of an ACTIVE team
 // stays in the list.
 func TestAIImpactAnswersGiveRetractionRowsNoWeight(t *testing.T) {
+	impactAnswersGiveRetractionRowsNoWeight(t, retractionseed.Options{})
+}
+
+// The seeded days cross a month, so the rows lie in two partitions of the
+// table and the last retraction pair of the older one may stay unmerged.
+func TestAIImpactAnswersAcrossAMonthEdge(t *testing.T) {
+	impactAnswersGiveRetractionRowsNoWeight(t, retractionseed.Options{DaysClock: retractionseed.MonthEdgeClock(time.Now())})
+}
+
+// No retraction row is merged over its old row: the state between the write
+// and the background merge.
+func TestAIImpactAnswersWithUnmergedRetractionRows(t *testing.T) {
+	impactAnswersGiveRetractionRowsNoWeight(t, retractionseed.Options{StopMerges: true})
+}
+
+// The opportunity read takes the newest row of a key as it stands: a retraction
+// row's NULL averages are not filled from the old row under it.
+func TestOpportunityRowsOfAnUnmergedRetractionHoldNoAverage(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
-	store := retractionseed.Start(ctx, t)
+	store := retractionseed.StartWith(ctx, t, retractionseed.Options{StopMerges: true})
+	client, err := clickhouse.NewClickHouseQueryClientWithOptions(clickhouse.Options{DSN: store.URI})
+	if err != nil {
+		t.Fatalf("construct query client: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	rows, err := loadImpactRowsForOpportunities(ctx, client, retractionseed.RetractedOrg, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	retired := map[string]bool{}
+	for _, team := range retractionseed.Teams {
+		retired[team.RetiredID] = true
+	}
+	retractions := 0
+	for _, row := range rows {
+		if !retired[row.TeamID] || row.PrsTotal != 0 {
+			continue
+		}
+		retractions++
+		if row.ReviewsPer != nil || row.CycleHours != nil {
+			t.Fatalf("retraction row of %s serves an old average: %+v", row.TeamID, row)
+		}
+	}
+	if want := len(retractionseed.Teams) * (retractionseed.DayCount - 1); retractions != want {
+		t.Fatalf("%d retraction rows read, want %d", retractions, want)
+	}
+}
+
+func impactAnswersGiveRetractionRowsNoWeight(t *testing.T, options retractionseed.Options) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	store := retractionseed.StartWith(ctx, t, options)
 	client, err := clickhouse.NewClickHouseQueryClientWithOptions(clickhouse.Options{DSN: store.URI})
 	if err != nil {
 		t.Fatalf("construct query client: %v", err)

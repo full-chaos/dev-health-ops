@@ -39,7 +39,7 @@ type suspendAnswer struct {
 }
 
 // orgSuspend suspends an organization: a superuser actor only (go-api's PATCH /admin/orgs/{org_id} is
-// policy.Superuser), read through the users seam before anything is read for the request and again inside the verb's
+// WrapPlatform with admin.orgs), read through the users seam before anything is read for the request and again inside the verb's
 // transaction after the row lock. An organization that is already suspended answers 200 with suspended false and
 // writes nothing. A fault of the store, an actor with no auth.principals row included, is the fail-closed 503.
 func (h provisioningHandlers) orgSuspend(w http.ResponseWriter, r *http.Request) {

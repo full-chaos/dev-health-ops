@@ -8,6 +8,7 @@ import (
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 )
 
@@ -127,7 +128,7 @@ func operationOrgDecision(ctx context.Context, operation *graphql.OperationConte
 	if claims.OrgID == first {
 		return "", ""
 	}
-	if claims.IsSuperuser && !claims.ImpersonationActive {
+	if claims.Holds(rule.ActionAdminOrgs) && !claims.ImpersonationActive {
 		return "", first
 	}
 	return "Access denied: cannot query org '" + first + "'", ""

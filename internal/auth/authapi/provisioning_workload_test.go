@@ -237,7 +237,7 @@ func TestEveryProvisioningRouteIsOnTheWorkloadListOrRefusesTheToken(t *testing.T
 		expectRefusal(t, response, http.StatusUnauthorized, reasonInvalidCredentials)
 	}
 	for _, op := range provisioningOperations {
-		if !cased[op] {
+		if !cased[op] && !slices.Contains(grantOps, op) { // the grant routes have their own cells (provisioning_grant_test.go)
 			t.Fatalf("%s has no route case", op)
 		}
 	}

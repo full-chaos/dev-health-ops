@@ -157,6 +157,15 @@ func guardLevelOf(handler ast.Expr) (string, bool) {
 	if dispatcherFiles[name] != "" && len(call.Args) == 0 {
 		return "Admin", true
 	}
+	// The platform wraps carry an action, not a level: WrapPlatform decides
+	// like the Superuser level did, WrapAdminOr like Admin (and a holder of
+	// its action).
+	switch name {
+	case "WrapPlatform", "bodyFirstPlatform":
+		return "Superuser", true
+	case "WrapAdminOr", "bodyFirstAdminOr":
+		return "Admin", true
+	}
 	if len(call.Args) == 0 {
 		return "", false
 	}

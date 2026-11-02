@@ -234,7 +234,7 @@ func (s *Scope) Impersonation(next http.Handler) http.Handler {
 			writeCallerLookupFailure(w, err)
 			return
 		}
-		if user == nil || !user.IsSuperuser {
+		if user == nil || !user.Holds(ActionAdminImpersonate) {
 			next.ServeHTTP(w, r)
 			return
 		}

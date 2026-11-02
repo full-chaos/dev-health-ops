@@ -27,6 +27,11 @@ var readsTheTargetsFlag = map[string]bool{
 
 func (s platformActionSite) key() string { return s.file + "\t" + s.function + "\t" + s.action }
 
+var actionTakingCalls = map[string]bool{
+	"Holds": true, "WrapPlatform": true, "WrapAdminOr": true, "BodyFirstPlatform": true, "BodyFirstAdminOr": true,
+	"bodyFirstPlatform": true, "bodyFirstAdminOr": true,
+}
+
 // platformActionReads lists, per function, the actions it names in a Holds
 // call: x.Holds(<ActionAdmin*|actionAdmin*|rule.ActionAdmin*>).
 func platformActionReads(file *ast.File) map[string]map[string]bool {
@@ -38,10 +43,13 @@ func platformActionReads(file *ast.File) map[string]map[string]bool {
 		}
 		ast.Inspect(fn, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
-			if !ok || len(call.Args) != 1 {
+			if !ok || len(call.Args) == 0 {
 				return true
 			}
-			if sel, ok := call.Fun.(*ast.SelectorExpr); !ok || sel.Sel.Name != "Holds" {
+			// A decision names its action in the first argument: a Holds call, or a platform
+			// wrap of a route (WrapPlatform, WrapAdminOr and the body-first forms).
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || !actionTakingCalls[sel.Sel.Name] || (sel.Sel.Name == "Holds" && len(call.Args) != 1) {
 				return true
 			}
 			name := ""
@@ -117,9 +125,9 @@ func TestEveryPlatformActionSiteIsListed(t *testing.T) {
 		}
 		if _, n := strconv.Atoi(site.origin); n == nil {
 			mixes[site.origin] = true
-			if _, reads := flagged[site.file+"\t"+site.function]; reads && !readsTheTargetsFlag[site.file+"\t"+site.function] {
-				problems = append(problems, "mix site still reads the superuser flag: "+key)
-			}
+		}
+		if _, reads := flagged[site.file+"\t"+site.function]; reads && !readsTheTargetsFlag[site.file+"\t"+site.function] {
+			problems = append(problems, "a deciding site still reads the superuser flag: "+key)
 		}
 	}
 	for i := 1; i <= 9; i++ {

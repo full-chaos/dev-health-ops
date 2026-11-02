@@ -134,16 +134,16 @@ type OrganizationEnsurer interface {
 
 // ProvisioningDeps are the provisioning routes' collaborators.
 type ProvisioningDeps struct {
-	Credentials   ProvisioningCredentials
-	Users         ProvisioningUsers
-	Reader        session.Queryer
-	Organizations OrganizationEnsurer
-	Memberships   Memberships
-	Invites       Invites
-	Deprovision   Deprovisioner
-	Orgs          OrganizationLifecycle
-	// ServiceAccounts is the organization service account aggregate.
-	ServiceAccounts ServiceAccounts
+	Credentials     ProvisioningCredentials
+	Users           ProvisioningUsers
+	Reader          session.Queryer
+	Organizations   OrganizationEnsurer
+	Memberships     Memberships
+	Invites         Invites
+	Deprovision     Deprovisioner
+	Orgs            OrganizationLifecycle
+	ServiceAccounts ServiceAccounts // the organization service account aggregate
+	Grants          Grants          // the resource grant aggregate; nil mounts no grant route
 	// Workload is the go-api workload token path the session issue route
 	// takes too (one subject); nil refuses every workload token.
 	Workload *SessionIssueWorkload
@@ -214,9 +214,13 @@ func ProvisioningRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 		{Method: http.MethodPost, Pattern: PatternServiceAccountDisable, Handler: h.serviceAccountSwitch(opServiceAccountDisable, false)},
 		{Method: http.MethodPost, Pattern: PatternServiceAccountEnable, Handler: h.serviceAccountSwitch(opServiceAccountEnable, true)},
 		{Method: http.MethodPost, Pattern: PatternServiceAccountOwner, Handler: http.HandlerFunc(h.serviceAccountOwner)},
+		{Method: http.MethodPost, Pattern: PatternServiceAccountKeyIssue, Handler: http.HandlerFunc(h.serviceAccountKeyIssue)},
+		{Method: http.MethodPost, Pattern: PatternServiceAccountKeyRotate, Handler: http.HandlerFunc(h.serviceAccountKeyRotate)},
+		{Method: http.MethodPost, Pattern: PatternServiceAccountKeyRevoke, Handler: http.HandlerFunc(h.serviceAccountKeyRevoke)},
+		{Method: http.MethodPost, Pattern: PatternServiceAccountKeyList, Handler: http.HandlerFunc(h.serviceAccountKeyList)},
 	}
 	routes = h.withStateRoute(routes, rows)
-	routes = h.withServiceAccountKeyRoutes(routes, rows)
+	routes = h.withGrantRoutes(routes, rows)
 	return routes, nil
 }
 
@@ -711,7 +715,7 @@ type deprovisionAnswer struct {
 }
 
 // orgDeprovision is go-api's organization deletion step in the auth schema:
-// a superuser actor only (go-api's DELETE /orgs/{org_id} is policy.Superuser).
+// a superuser actor only (go-api's DELETE /orgs/{org_id} is WrapPlatform with admin.orgs).
 func (h provisioningHandlers) orgDeprovision(w http.ResponseWriter, r *http.Request) {
 	body, caller, ok := h.admit(w, r, opOrgDeprovision, "organization_id", "actor_principal_id")
 	if !ok {
@@ -764,7 +768,7 @@ type reactivateAnswer struct {
 }
 
 // orgReactivate ends an organization's suspension: a superuser actor only
-// (go-api's PATCH /admin/orgs/{org_id} is policy.Superuser), read through the
+// (go-api's PATCH /admin/orgs/{org_id} is WrapPlatform with admin.orgs), read through the
 // users seam before anything is read for the request and again inside the
 // verb's transaction after the row lock. An organization that is not
 // suspended answers 200 with reactivated false and writes nothing.

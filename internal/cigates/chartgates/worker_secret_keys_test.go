@@ -426,6 +426,10 @@ func TestWorkerSecretKeysGuardsPlantedDefects(t *testing.T) {
 		{"a-listed-key-has-no-reader-in-the-sources", reader,
 			mut(chartFile(values), "    - APP_BASE_URL\n", "    - APP_BASE_URL\n    - A_KEY_NO_ONE_READS\n"),
 			func(g *guard) { sharedSecretKeysAreClassified(g, map[string][]string{}) }, "neither the config registry nor an environment lookup"},
+		{"a-source-reads-a-dsn-name-the-chart-list-lacks", reader, nil,
+			func(g *guard) {
+				chartDSNListMatchesDSNClass(g, map[string][]string{"ANALYTICS_DATABASE_URI": {"internal/analytics/store.go"}})
+			}, "ANALYTICS_DATABASE_URI is a database DSN secret"},
 		{"the-blanks-are-gone", reader,
 			mut(chartFile(workers), "            {{- range $blank := include \"dev-health.goWorkerDSNNames\" $ | fromJsonArray }}", "            {{- range $blank := list }}"),
 			workerDSNBlanksRenderLast, "no optional secret reference or no blank"},

@@ -57,5 +57,10 @@ for var in AUTH_SIGNING_KEY_FILE AUTH_SIGNING_KEY_ID; do
   if grep -qE "^      ${var}: \"\"\$" "${OVR}"; then ok "override-blanks-${var}"; else bad "override-blanks-${var}"; fi
 done
 
+# The host SMTP sink is unreachable from the bigboy docker bridge (smoke v3: no route to host): the user is verified in the
+# throwaway database instead.
+if grep -q 'auth_webproof_smtp_sink' "${SCRIPT}"; then bad no-host-smtp-sink; else ok no-host-smtp-sink; fi
+if grep -q 'SET is_verified = true' "${SCRIPT}"; then ok verifies-the-user-in-the-database; else bad verifies-the-user-in-the-database; fi
+
 if [ ! -s "${FAKE_LOG}" ]; then ok no-docker-call-before-the-checks; else bad no-docker-call-before-the-checks; fi
 exit "${failed}"

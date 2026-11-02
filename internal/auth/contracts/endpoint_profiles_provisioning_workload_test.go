@@ -1,6 +1,7 @@
 package contracts
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -14,9 +15,12 @@ var provisioningRoutes = []string{
 	"/internal/v1/memberships/add", "/internal/v1/memberships/role", "/internal/v1/memberships/remove",
 	"/internal/v1/memberships/transfer", "/internal/v1/invites/create", "/internal/v1/invites/accept",
 	"/internal/v1/organizations/deprovision", "/internal/v1/organizations/reactivate", "/internal/v1/organizations/state",
+	"/internal/v1/organizations/suspend",
 	"/internal/v1/organizations/onboard", "/internal/v1/organizations/create",
 	"/internal/v1/service-accounts/create", "/internal/v1/service-accounts/disable", "/internal/v1/service-accounts/enable",
 	"/internal/v1/service-accounts/owner",
+	"/internal/v1/service-accounts/keys/issue", "/internal/v1/service-accounts/keys/rotate",
+	"/internal/v1/service-accounts/keys/revoke", "/internal/v1/service-accounts/keys/list",
 	"/internal/v1/grants/create", "/internal/v1/grants/update", "/internal/v1/grants/revoke",
 }
 
@@ -94,6 +98,54 @@ func TestTheRegistryNamesTheProvisioningRoutesAsConsumersOfBothClasses(t *testin
 			t.Fatalf("%d workload_token provisioning consumers name both variables, want %d", named, len(provisioningRoutes))
 		}
 	}
+}
+
+// A key route issues a value only on issue and rotate, and those two rows say the value authenticates nowhere yet.
+func TestTheKeyRowsNameTheIssuedKeyAndItsUse(t *testing.T) {
+	const gap = "a key this route issues authenticates nowhere yet"
+	rows := provisioningRows(t)
+	for route, issues := range map[string]bool{
+		"/internal/v1/service-accounts/keys/issue": true, "/internal/v1/service-accounts/keys/rotate": true,
+		"/internal/v1/service-accounts/keys/revoke": false, "/internal/v1/service-accounts/keys/list": false,
+	} {
+		issued, _ := rows[route]["issued_credential"].([]any)
+		gaps, _ := rows[route]["gaps"].([]any)
+		if issues != (len(issued) == 1) || issues != slices.Contains(gaps, any(gap)) {
+			t.Errorf("%s: issued %v, gaps %v; want the issued key and the gap line: %v", route, issued, gaps, issues)
+		}
+		if issues && issued[0].(map[string]any)["class_id"] != "service_account_key" {
+			t.Errorf("%s issues %v", route, issued[0])
+		}
+	}
+}
+
+// Issuing is live and use is not: the class stays unconsumed, with no consumer and no validator, until the use of a key lands.
+func TestTheKeyClassStaysUnconsumedUntilItsUseLands(t *testing.T) {
+	var document struct {
+		Classes []struct {
+			ClassID    string `json:"class_id"`
+			Status     string `json:"status"`
+			Consumers  []any  `json:"consumers"`
+			Validators []any  `json:"validators"`
+		} `json:"classes"`
+	}
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "contracts", "auth", "v1", "credential-classes.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+	for _, class := range document.Classes {
+		if class.ClassID != "service_account_key" {
+			continue
+		}
+		if class.Status != "unconsumed" || len(class.Consumers) != 0 || len(class.Validators) != 0 {
+			t.Fatalf("service_account_key is %s with %d consumers and %d validators, want unconsumed with none", class.Status, len(class.Consumers), len(class.Validators))
+		}
+		return
+	}
+	t.Fatal("no service_account_key class")
 }
 
 // A provisioning consumer of credential-classes.json is anchored at a line that names the route its description names: where

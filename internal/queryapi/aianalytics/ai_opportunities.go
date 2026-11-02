@@ -248,6 +248,7 @@ func opportunityBindings(orgID string, repoID string, extra ...clickhouse.Bindin
 	return append(b, extra...)
 }
 
+// The averages read through a tuple as dailyStatement's do.
 func loadImpactRowsForOpportunities(ctx context.Context, client QueryClient, orgID, repoID, teamID string) ([]impactRow, error) {
 	filters := []string{"day >= today() - 30"}
 	bindings := opportunityBindings(orgID, repoID)
@@ -264,8 +265,8 @@ func loadImpactRowsForOpportunities(ctx context.Context, client QueryClient, org
     toString(repo_id) AS repo_id_str,
     attribution_bucket,
     argMax(prs_total, metrics.computed_at) AS prs_total,
-    argMax(reviews_per_pr, metrics.computed_at) AS reviews_per_pr,
-    argMax(cycle_time_avg_hours, metrics.computed_at) AS cycle_time_avg_hours,
+    (argMax(tuple(reviews_per_pr), metrics.computed_at)).1 AS reviews_per_pr,
+    (argMax(tuple(cycle_time_avg_hours), metrics.computed_at)).1 AS cycle_time_avg_hours,
     argMax(rework_prs, metrics.computed_at) AS rework_prs,
     argMax(test_gap_prs, metrics.computed_at) AS test_gap_prs
 FROM ai_impact_metrics_daily AS metrics

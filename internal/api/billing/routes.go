@@ -89,7 +89,7 @@ func Routes(deps Deps) []httpapi.Route {
 		// The literal path is its own pattern, so a wrong method on it
 		// answers its own 405 (Allow: POST, as Starlette's first partial
 		// match), while GET/PUT/DELETE on it reach the {plan_id} routes.
-		{Method: http.MethodPost, Pattern: prefix + "/plans/pull-stripe", Allow: http.MethodPost, Handler: g.Wrap(policy.Superuser, http.HandlerFunc(h.pullStripe))},
+		{Method: http.MethodPost, Pattern: prefix + "/plans/pull-stripe", Allow: http.MethodPost, Handler: g.WrapPlatform(policy.ActionAdminBilling, http.HandlerFunc(h.pullStripe))},
 		// HEAD would otherwise reach GET /plans/{plan_id}, whose 405 names
 		// GET; Starlette's first partial match for this path is the POST.
 		{Method: http.MethodHead, Pattern: prefix + "/plans/pull-stripe", Handler: http.HandlerFunc(pullStripeNotAllowed)},

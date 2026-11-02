@@ -612,3 +612,21 @@ func TestPublicAdmissionRefusesAValueBeyondIntRange(t *testing.T) {
 		t.Errorf("1.5: error = %v, want an integer refusal", err)
 	}
 }
+
+// A RateLimit burst beyond the range of an int on any platform is refused with
+// the range message, as the public burst is; it is not read as "not an integer".
+func TestRateLimitBurstRefusesAValueBeyondIntRange(t *testing.T) {
+	for _, value := range []string{"4294967297", "2147483648", "9223372036854775808", "-2147483649"} {
+		e := baseEnv()
+		e[EnvRateLimitBurst] = value
+		_, err := Load(Spec{LookupEnv: lookupFrom(e)})
+		if err == nil || !strings.Contains(err.Error(), "must be between") {
+			t.Errorf("%s=%s: error = %v, want a range refusal", EnvRateLimitBurst, value, err)
+		}
+	}
+	e := baseEnv()
+	e[EnvRateLimitBurst] = "1.5"
+	if _, err := Load(Spec{LookupEnv: lookupFrom(e)}); err == nil || !strings.Contains(err.Error(), "must be an integer") {
+		t.Errorf("1.5: error = %v, want an integer refusal", err)
+	}
+}

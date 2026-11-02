@@ -9,4 +9,8 @@ const (
 	ActionAdminOrgs        = rule.ActionAdminOrgs
 	ActionAdminBilling     = rule.ActionAdminBilling
 	ActionAdminImpersonate = rule.ActionAdminImpersonate
+	ActionAdminFlags       = rule.ActionAdminFlags
+	ActionAdminAudit       = rule.ActionAdminAudit
+	ActionAdminTelemetry   = rule.ActionAdminTelemetry
+	ActionAdminStats       = rule.ActionAdminStats
 )

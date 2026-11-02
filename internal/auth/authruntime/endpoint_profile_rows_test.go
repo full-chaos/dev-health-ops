@@ -239,7 +239,7 @@ func plantedMissingRow(t *testing.T, served map[string]bool, other string) {
 // four compatibility routes, the session issue route, the session state route, the two delegated session routes, the eight federated sign-in routes, the six credentials routes,
 // the twenty-four provisioning routes and the three operator paths on GET and HEAD, and GET and HEAD of the JWKS and the
 // discovery document.
-const servedAuthRouteCount = 59
+const servedAuthRouteCount = 63
 
 // compareServedToRows returns the served routes with no row and the rows for
 // routes nothing serves, per method and listener.

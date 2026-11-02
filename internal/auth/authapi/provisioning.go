@@ -214,12 +214,15 @@ func ProvisioningRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 		{Method: http.MethodPost, Pattern: PatternServiceAccountDisable, Handler: h.serviceAccountSwitch(opServiceAccountDisable, false)},
 		{Method: http.MethodPost, Pattern: PatternServiceAccountEnable, Handler: h.serviceAccountSwitch(opServiceAccountEnable, true)},
 		{Method: http.MethodPost, Pattern: PatternServiceAccountOwner, Handler: http.HandlerFunc(h.serviceAccountOwner)},
+		{Method: http.MethodPost, Pattern: PatternServiceAccountKeyIssue, Handler: http.HandlerFunc(h.serviceAccountKeyIssue)},
+		{Method: http.MethodPost, Pattern: PatternServiceAccountKeyRotate, Handler: http.HandlerFunc(h.serviceAccountKeyRotate)},
+		{Method: http.MethodPost, Pattern: PatternServiceAccountKeyRevoke, Handler: http.HandlerFunc(h.serviceAccountKeyRevoke)},
+		{Method: http.MethodPost, Pattern: PatternServiceAccountKeyList, Handler: http.HandlerFunc(h.serviceAccountKeyList)},
 		{Method: http.MethodPost, Pattern: PatternGrantCreate, Handler: http.HandlerFunc(h.grantCreate)},
 		{Method: http.MethodPost, Pattern: PatternGrantUpdate, Handler: http.HandlerFunc(h.grantUpdate)},
 		{Method: http.MethodPost, Pattern: PatternGrantRevoke, Handler: http.HandlerFunc(h.grantRevoke)},
 	}
 	routes = h.withStateRoute(routes, rows)
-	routes = h.withServiceAccountKeyRoutes(routes, rows)
 	return routes, nil
 }
 
@@ -249,10 +252,10 @@ func (h provisioningHandlers) admitUpTo(w http.ResponseWriter, r *http.Request, 
 }
 
 // workloadOperations are the operations that take the go-api workload token. The
-// list is default-deny: any other operation (the invite revoke and organization
-// suspend among them) refuses a workload token before the key set is read.
+// list is default-deny: any other operation (the invite revoke among them)
+// refuses a workload token before the key set is read.
 var workloadOperations = map[string]bool{opMembershipAdd: true, opMembershipRole: true, opMembershipRemove: true,
-	opMembershipTransfer: true, opInviteCreate: true, opInviteAccept: true, opOrgDeprovision: true, opOrgReactivate: true, opOrgOnboard: true, opOrgCreate: true, opOrgState: true,
+	opMembershipTransfer: true, opInviteCreate: true, opInviteAccept: true, opOrgDeprovision: true, opOrgReactivate: true, opOrgSuspend: true, opOrgOnboard: true, opOrgCreate: true, opOrgState: true,
 	opServiceAccountCreate: true, opServiceAccountDisable: true, opServiceAccountEnable: true, opServiceAccountOwner: true,
 	opServiceAccountKeyIssue: true, opServiceAccountKeyRotate: true, opServiceAccountKeyRevoke: true, opServiceAccountKeyList: true,
 	opGrantCreate: true, opGrantUpdate: true, opGrantRevoke: true}
@@ -715,7 +718,7 @@ type deprovisionAnswer struct {
 }
 
 // orgDeprovision is go-api's organization deletion step in the auth schema:
-// a superuser actor only (go-api's DELETE /orgs/{org_id} is policy.Superuser).
+// a superuser actor only (go-api's DELETE /orgs/{org_id} is WrapPlatform with admin.orgs).
 func (h provisioningHandlers) orgDeprovision(w http.ResponseWriter, r *http.Request) {
 	body, caller, ok := h.admit(w, r, opOrgDeprovision, "organization_id", "actor_principal_id")
 	if !ok {
@@ -768,7 +771,7 @@ type reactivateAnswer struct {
 }
 
 // orgReactivate ends an organization's suspension: a superuser actor only
-// (go-api's PATCH /admin/orgs/{org_id} is policy.Superuser), read through the
+// (go-api's PATCH /admin/orgs/{org_id} is WrapPlatform with admin.orgs), read through the
 // users seam before anything is read for the request and again inside the
 // verb's transaction after the row lock. An organization that is not
 // suspended answers 200 with reactivated false and writes nothing.

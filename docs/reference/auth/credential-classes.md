@@ -93,7 +93,7 @@ Design docs (read the guardrails at minimum):
 | `pagerduty_webhook_signature` | active | external_source | |
 | `workload_token` | optional_feature | workload | |
 | `workload_bootstrap_credential` | optional_feature | workload | |
-| `service_account_key` | **unconsumed** | service_account | no verb and no route yet |
+| `service_account_key` | **unconsumed** | service_account | issued by the key routes; no route accepts it |
 
 **30 classes at the Wave 0 freeze** (31 with `effective_principal_envelope`, added by CHAOS-4737 below). 5 were not in CHAOS-3273's minimum list and were discovered
 during this inventory (`new_vs_ticket: true` in the JSON):
@@ -231,8 +231,8 @@ see the [bootstrap credential runbook](../../operate/runbooks/auth-workload-boot
 
 **`service_account_key` (CHAOS-12273).** The key of an organization's service
 account: `fcsak_` and 32 random bytes as unpadded base64url. The store verbs
-exist in `internal/auth/serviceaccount`, and their routes
-(`/internal/v1/service-accounts/keys/*`) are dark until their profile rows ship.
+exist in `internal/auth/serviceaccount`, and the routes
+`/internal/v1/service-accounts/keys/*` issue, rotate, revoke and list keys.
 No route accepts a key. A key authenticates nowhere until the use leaf CHAOS-12362 lands,
 so the class is `unconsumed`. It is no bearer: go-api and the auth-service
 session issue route refuse its prefix before any validator. The registry

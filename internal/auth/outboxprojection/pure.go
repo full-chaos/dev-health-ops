@@ -9,6 +9,7 @@ package outboxprojection
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -86,7 +87,8 @@ func ClassOf(o Outcome) Class {
 }
 
 // Input is one event in hand. Event is the event mapped onto the External Push
-// lifecycle shape (an acr event is mapped by its caller); Domain says whose
+// lifecycle shape (an acr event is mapped by its caller; for acr, Event.Payload.Change.Fingerprint is derived by the
+// engine from the aggregate id and never read); Domain says whose
 // credential it is.
 type Input struct {
 	Domain Domain
@@ -167,6 +169,14 @@ func Digest(in Input) [32]byte {
 		raw = []byte(fmt.Sprintf("unmarshalable:%v", err))
 	}
 	return sha256.Sum256(append([]byte("credential-projection/v1\n"), raw...))
+}
+
+// AcrFingerprint is the fingerprint of an acr credential: the first 8 bytes of the SHA-256 of its aggregate id, in hex
+// (a public value of a public id). The wire carries none, so the engine derives it and ignores any value a mapper
+// passes: two credentials can never share the registry's UNIQUE secret_hash.
+func AcrFingerprint(aggregateID string) string {
+	sum := sha256.Sum256([]byte(aggregateID))
+	return hex.EncodeToString(sum[:8])
 }
 
 // RegistryClass is the credential_registry class of an input: every acr credential is acr_client_credential

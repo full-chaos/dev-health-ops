@@ -93,6 +93,10 @@ func (e *Engine) Project(ctx context.Context, in Input) (Result, error) {
 		return Result{}, err
 	}
 	organization, _ := ParseOrganization(in.Event.Payload.OrganizationID)
+	if in.Domain == DomainAcr {
+		// For acr the fingerprint is derived, not read.
+		in.Event.Payload.Change.Fingerprint = AcrFingerprint(in.Event.AggregateID)
+	}
 	if e.cfg.ProjectOrganization != nil {
 		found, err := e.cfg.ProjectOrganization(ctx, organization)
 		if err != nil {

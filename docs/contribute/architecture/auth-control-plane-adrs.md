@@ -373,6 +373,8 @@ place this gets falsified.
   (refresh demand = active sessions / lifetime).
 - The HS256 compatibility token keeps go-api's 60 minutes until D2 retires it.
 
+Note, 2026-11-02: the capacity rule above, "refresh demand = active sessions / lifetime", leaves out the web refresh leeway. Web refreshes 5 minutes before expiry, so at 10 minutes the period is about 300 s and demand is 2 times that formula; at 5 minutes web refreshes on every request. The corrected rule is in docs/operate/plan/auth-service-capacity.md. The multi-tab race check is still open. The amendment text above is kept as written.
+
 ---
 
 ## ACP-ADR-04 — Auth schema ownership and aggregate transition

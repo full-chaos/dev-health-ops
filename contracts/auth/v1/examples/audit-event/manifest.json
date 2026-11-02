@@ -40,6 +40,10 @@
     {
       "file": "valid-producer-legacy-link-tokens-purged.json",
       "why": "Whole-number counters, zero included, and a run slug."
+    },
+    {
+      "file": "valid-producer-authorize-high-risk-decided.json",
+      "why": "The auth.authorize.high_risk_decided row (ops #5530): decision id, the 24-code decision vocabulary, a repository resource, the caller's workload attributes."
     }
   ],
   "reject": [
@@ -198,6 +202,24 @@
       "expect_instance_location": "/actor_principal_id",
       "expect_keyword": "pattern",
       "why": "The row holds a bare uuid; the wire form is prefixed."
+    },
+    {
+      "file": "invalid-attributes-decision-reason-code-unlisted.json",
+      "expect_instance_location": "/attributes/decision_reason_code",
+      "expect_keyword": "enum",
+      "why": "The decision reason code is a closed 24-code vocabulary."
+    },
+    {
+      "file": "invalid-attributes-decision-id-malformed.json",
+      "expect_instance_location": "/attributes/decision_id",
+      "expect_keyword": "pattern",
+      "why": "A decision id is dec_ plus 26 characters."
+    },
+    {
+      "file": "invalid-attributes-resource-type-unlisted.json",
+      "expect_instance_location": "/attributes/resource_type",
+      "expect_keyword": "enum",
+      "why": "The resource type is the closed authorization_request.v1 set."
     }
   ],
   "reject_by_client": [

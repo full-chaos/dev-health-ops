@@ -81,7 +81,7 @@ func operationOrgViolation(ctx context.Context, operation *graphql.OperationCont
 // the operation may run) and, when a verified, non-impersonating superuser named
 // an org other than their own, that org (the operation then runs against it).
 func operationOrgDecision(ctx context.Context, operation *graphql.OperationContext) (message, rebindTo string) {
-	if claims, ok := authctx.FromContext(ctx); ok && claims.OrgID == "" && !claims.IsSuperuser && claims.Platform != nil {
+	if claims, ok := authctx.FromContext(ctx); ok && orglessPlatformCaller(claims) {
 		if !orglessOperationAllowed(claims, operation) {
 			return "Authorization required", ""
 		}
@@ -143,6 +143,13 @@ func operationOrgDecision(ctx context.Context, operation *graphql.OperationConte
 		return "", first
 	}
 	return "Access denied: cannot query org '" + first + "'", ""
+}
+
+// orglessPlatformCaller is a caller with no organization and no superuser flag
+// that carries a platform action set: the one caller the edge lets through
+// org-less on a set alone.
+func orglessPlatformCaller(claims authctx.Claims) bool {
+	return claims.OrgID == "" && !claims.IsSuperuser && claims.Platform != nil
 }
 
 // orglessOperationAllowed is the admission of an org-less caller that has no

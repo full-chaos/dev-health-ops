@@ -54,10 +54,11 @@ func (h *handlers) ensureOrgAdminAccess(ctx context.Context, w http.ResponseWrit
 }
 
 // orgIDForNonSuperuser is common.py's _get_org_id_for_non_superuser: a
-// holder of the route's platform action gets their own org_id claim
-// (possibly ""), else the caller's org_id claim, 403 when absent.
-func orgIDForNonSuperuser(w http.ResponseWriter, user *policy.User, action string) (string, bool) {
-	if user.Holds(action) {
+// holder of admin.users (every route that calls it is an /admin/users route)
+// gets their own org_id claim (possibly ""), else the caller's org_id claim,
+// 403 when absent.
+func orgIDForNonSuperuser(w http.ResponseWriter, user *policy.User) (string, bool) {
+	if user.Holds(rule.ActionAdminUsers) {
 		return user.OrgID, true
 	}
 	if user.OrgID == "" {

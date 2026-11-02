@@ -11,16 +11,21 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/auth/session"
+	"github.com/full-chaos/dev-health-ops/internal/token"
 )
 
 // failingBody is a request body whose read fails within the size limit: a
@@ -48,21 +53,27 @@ func undeclaredStatuses(operation string, observed map[int]bool, declared map[st
 // credential the store cannot check, and enough requests to exhaust the
 // route's rate bucket. Every status those answers carry must be a response the
 // operation declares.
+var callerPrincipal = uuid.MustParse("00000000-0000-4000-8000-0000000000c1")
+
 func TestEveryStatusTheStackAnswersIsAnOpenAPIResponse(t *testing.T) {
+	keyDir := t.TempDir()
+	writeSigningKey(t, keyDir, "k1.pem")
+	keyPath := filepath.Join(keyDir, "k1.pem")
 	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(sessionEnvironment(map[string]string{
-		authconfig.EnvDatabaseURI:            "postgres://auth@127.0.0.1:1/devhealth",
-		authconfig.EnvDatabaseConnectTimeout: "200ms",
-		authconfig.EnvSigningKeyFile:         "/nonexistent",
-		authconfig.EnvSigningKeyID:           "openapi-statuses",
-		authconfig.EnvMaxBodyBytes:           "1024",
-		authconfig.EnvRateLimitPerSecond:     "0.01",
-		authconfig.EnvRateLimitBurst:         "4",
-		authconfig.EnvPublicRateLimit:        "0.01",
-		authconfig.EnvPublicRateLimitBurst:   "4",
-		authconfig.EnvAPIAddress:             "127.0.0.1:0",
-		authconfig.EnvOperatorAddress:        "127.0.0.1:1",
-		authconfig.EnvSocialLinkRoutes:       "true",
-		authconfig.EnvTokenIssuerURL:         wellKnownIssuer,
+		authconfig.EnvDatabaseURI:             "postgres://auth@127.0.0.1:1/devhealth",
+		authconfig.EnvDatabaseConnectTimeout:  "200ms",
+		authconfig.EnvSigningKeyFile:          "/nonexistent",
+		authconfig.EnvSigningKeyID:            "openapi-statuses",
+		authconfig.EnvMaxBodyBytes:            "1024",
+		authconfig.EnvRateLimitPerSecond:      "0.01",
+		authconfig.EnvRateLimitBurst:          "4",
+		authconfig.EnvPublicRateLimit:         "0.01",
+		authconfig.EnvPublicRateLimitBurst:    "4",
+		authconfig.EnvAPIAddress:              "127.0.0.1:0",
+		authconfig.EnvOperatorAddress:         "127.0.0.1:1",
+		authconfig.EnvSocialLinkRoutes:        "true",
+		authconfig.EnvTokenIssuerURL:          wellKnownIssuer,
+		authconfig.EnvAuthorizeCallerSubjects: session.WirePrincipalID(callerPrincipal),
 	}))})
 	if err != nil {
 		t.Fatalf("load config: %v", err)
@@ -100,6 +111,20 @@ func TestEveryStatusTheStackAnswersIsAnOpenAPIResponse(t *testing.T) {
 	wellFormed := map[string]string{
 		"/v1/token/refresh": `{"schema_version":"refresh-request.v1","refresh_credential":"` + credential + `"}`,
 	}
+	// The authorize routes answer a caller gate before any body byte is read, so a probe with no credential
+	// reaches only 401. A listed caller's signed workload token passes the gate: a body that is not one request
+	// is then the route's 400, and a body over the route's bound the transport's 413.
+	now := time.Now()
+	claims, err := json.Marshal(contracts.WorkloadTokenClaims{Iss: wellKnownIssuer, Aud: "auth-service", Sub: session.WirePrincipalID(callerPrincipal),
+		PrincipalType: "workload", Jti: uuid.NewString(), Iat: now.Unix(), Nbf: now.Unix(), Exp: now.Unix() + 300})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listedCaller, _, err := token.NewFileSigner(token.FileConfig{KeyPath: keyPath, KeyID: "k1"}).Sign(context.Background(), contracts.WorkloadTokenTyp, claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callerBearer := map[string]int{"/v1/authorize": 20000, "/v1/authorize:batch": 300000}
 
 	raw, err := os.ReadFile("../../../contracts/auth/v1/openapi/auth-v1.openapi.json")
 	if err != nil {
@@ -135,6 +160,10 @@ func TestEveryStatusTheStackAnswersIsAnOpenAPIResponse(t *testing.T) {
 		for lower, operation := range operations {
 			method := strings.ToUpper(lower)
 			observed := map[int]bool{}
+			if oversize, ok := callerBearer[path]; ok {
+				observed[do(method, path, strings.NewReader(strings.Repeat("x", oversize)), listedCaller)] = true
+				observed[do(method, path, strings.NewReader("{}"), listedCaller)] = true
+			}
 			observed[do(method, path, strings.NewReader("{}"), "")] = true
 			observed[do(method, path, strings.NewReader(strings.Repeat("x", 4096)), "")] = true
 			observed[do(method, path, failingBody{}, "")] = true

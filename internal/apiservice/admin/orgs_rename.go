@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/api/usersowned"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 // ownedNameMax is auth-service's organization name bound (org.NormalizeName).
@@ -33,6 +34,33 @@ func (h *handlers) optionalName(errs *pybody.Errors, object *pyjson.Object) (str
 		return errs.OptionalString(object, "name", 1, ownedNameMax)
 	}
 	return errs.OptionalString(object, "name", 0, 0)
+}
+
+// renameOrder says when a PATCH name goes to auth-service while organizations are owned: before any suspend (so a
+// refused rename changes no auth state), or after a reactivate (auth refuses a rename of a suspended organization).
+func (h *handlers) renameOrder(patch orgUpdate) (first, later bool) {
+	if !patch.authOwned || patch.Name == nil {
+		return false, false
+	}
+	if patch.IsActive != nil && *patch.IsActive {
+		return false, true
+	}
+	return true, false
+}
+
+// renamePrecheck refuses, before any auth-service call, what the rename would refuse without reading anything: no
+// rename client (go-api never writes the name itself then), or a name that is blank after the strip.
+func (h *handlers) renamePrecheck(w http.ResponseWriter, r *http.Request, name string) bool {
+	if h.orgRenamer == nil {
+		h.logger.ErrorContext(r.Context(), "admin: no auth-service rename client while organizations are owned")
+		policy.WriteInternal(w)
+		return false
+	}
+	if pythonparity.Strip(name) == "" {
+		policy.WriteDetail(w, http.StatusUnprocessableEntity, "Organization name must be 1 to 100 characters", nil)
+		return false
+	}
+	return true
 }
 
 // renameInAuth renames the organization in auth-service, acting as the

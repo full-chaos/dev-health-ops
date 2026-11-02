@@ -366,6 +366,14 @@ func (h *handlers) updateOrganization(w http.ResponseWriter, r *http.Request) {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 		return
 	}
+	patch.authOwned = h.orgsOwned()
+	renameFirst, renameLater := h.renameOrder(patch)
+	if (renameFirst || renameLater) && !h.renamePrecheck(w, r, *patch.Name) {
+		return
+	}
+	if renameFirst && !h.renameInAuth(w, r, orgID, *patch.Name) {
+		return
+	}
 	var authActive orgAuthStateFunc
 	if patch.IsActive != nil {
 		accepted, ok := h.orgStatusInAuth(w, r, orgID, *patch.IsActive)
@@ -376,7 +384,7 @@ func (h *handlers) updateOrganization(w http.ResponseWriter, r *http.Request) {
 			authActive = h.authStateHook(orgID, *accepted)
 		}
 	}
-	if patch.authOwned = h.orgsOwned(); patch.authOwned && patch.Name != nil && !h.renameInAuth(w, r, orgID, *patch.Name) {
+	if renameLater && !h.renameInAuth(w, r, orgID, *patch.Name) {
 		return
 	}
 	updated, err := h.store.updateOrganization(ctx, orgID, patch, authActive)

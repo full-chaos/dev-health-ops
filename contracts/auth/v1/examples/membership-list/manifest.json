@@ -1,0 +1,49 @@
+{
+  "description": "Golden corpus for membership-list.v1. No client-only rule in this corpus: every rule here is a schema rule; the rules a schema cannot say are in golden/read-api.",
+  "accept": [
+    {
+      "file": "valid-first-page.json",
+      "why": "A first page with a cursor."
+    },
+    {
+      "file": "valid-last-page.json",
+      "why": "The last page: no cursor."
+    },
+    {
+      "file": "valid-empty.json",
+      "why": "No members is a valid list."
+    }
+  ],
+  "reject": [
+    {
+      "file": "invalid-next-cursor-empty.json",
+      "expect_instance_location": "/next_cursor",
+      "expect_keyword": "pattern",
+      "why": "An empty cursor says nothing."
+    },
+    {
+      "file": "invalid-item-invalid-membership.json",
+      "expect_instance_location": "/items/0",
+      "expect_keyword": "enum",
+      "why": "An item is a membership-read body."
+    },
+    {
+      "file": "invalid-items-over-100.json",
+      "expect_instance_location": "/items",
+      "expect_keyword": "maxItems",
+      "why": "At most 100 items a page."
+    },
+    {
+      "file": "invalid-items-not-array.json",
+      "expect_instance_location": "/items",
+      "expect_keyword": "type",
+      "why": "items is an array."
+    },
+    {
+      "file": "invalid-extra-member.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "Closed object."
+    }
+  ]
+}

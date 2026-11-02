@@ -1,0 +1,14 @@
+{
+  "id": "request-limit-101-refused",
+  "kind": "request",
+  "operation": "memberships_list",
+  "request": {
+    "schema_version": "membership-list-request.v1",
+    "organization_id": "org_EXAMPLE0000000000000001",
+    "limit": 101
+  },
+  "request_schema": "reject",
+  "parse": "reject",
+  "rule": "schema",
+  "why": "Over the cap: refused, not clamped."
+}

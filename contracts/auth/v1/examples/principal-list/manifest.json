@@ -1,0 +1,67 @@
+{
+  "description": "Golden corpus for principal-list.v1. No client-only rule in this corpus: every rule here is a schema rule; the rules a schema cannot say are in golden/read-api.",
+  "accept": [
+    {
+      "file": "valid-first-page.json",
+      "why": "A first page: items in id order and an opaque next_cursor."
+    },
+    {
+      "file": "valid-last-page.json",
+      "why": "The last page: next_cursor is ABSENT."
+    },
+    {
+      "file": "valid-empty.json",
+      "why": "No principals is a valid list."
+    }
+  ],
+  "reject": [
+    {
+      "file": "invalid-next-cursor-empty.json",
+      "expect_instance_location": "/next_cursor",
+      "expect_keyword": "pattern",
+      "why": "An empty cursor says nothing."
+    },
+    {
+      "file": "invalid-next-cursor-null.json",
+      "expect_instance_location": "/next_cursor",
+      "expect_keyword": "type",
+      "why": "Absent is the only form of no more pages."
+    },
+    {
+      "file": "invalid-next-cursor-alphabet.json",
+      "expect_instance_location": "/next_cursor",
+      "expect_keyword": "pattern",
+      "why": "Cursor alphabet is base64url."
+    },
+    {
+      "file": "invalid-next-cursor-no-prefix.json",
+      "expect_instance_location": "/next_cursor",
+      "expect_keyword": "pattern",
+      "why": "Cursor carries its version prefix."
+    },
+    {
+      "file": "invalid-item-email.json",
+      "expect_instance_location": "/items/0",
+      "expect_keyword": "additionalProperties",
+      "why": "An item is a principal-read body: no email."
+    },
+    {
+      "file": "invalid-items-absent.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "items is required."
+    },
+    {
+      "file": "invalid-items-over-100.json",
+      "expect_instance_location": "/items",
+      "expect_keyword": "maxItems",
+      "why": "At most 100 items a page."
+    },
+    {
+      "file": "invalid-extra-member.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "Closed object."
+    }
+  ]
+}

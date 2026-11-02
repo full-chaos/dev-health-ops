@@ -1,0 +1,7 @@
+{
+  "schema_version": "organization-list-request.v1",
+  "principal_id": "prn_EXAMPLE0000000000000001",
+  "membership_status": "active",
+  "limit": "50",
+  "cursor": "k1_cHJuX0VYQU1QTEUwMDAwMDAwMDAwMDAwMDAx"
+}

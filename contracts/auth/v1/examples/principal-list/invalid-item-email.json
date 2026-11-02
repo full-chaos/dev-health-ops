@@ -1,0 +1,14 @@
+{
+  "schema_version": "principal-list.v1",
+  "items": [
+    {
+      "schema_version": "principal-read.v1",
+      "principal_id": "prn_EXAMPLE0000000000000001",
+      "kind": "user",
+      "status": "active",
+      "revision": 3,
+      "email": "a@example.invalid"
+    }
+  ],
+  "next_cursor": "k1_cHJuX0VYQU1QTEUwMDAwMDAwMDAwMDAwMDAy"
+}

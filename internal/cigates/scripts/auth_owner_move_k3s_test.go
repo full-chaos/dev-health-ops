@@ -128,11 +128,21 @@ func TestAuthOwnerMoveK3sGivesEveryClusterHelmCallTheKubeconfig(t *testing.T) {
 // contacted; what the script does before and after its first namespace call is what these cells hold.
 const k3sStubKubectl = `#!/usr/bin/env bash
 echo "$*" >>"$STUB_LOG"
+ns_file="$STUB_STATE/ns"
+make_ns() {
+  # the namespace exists after this call; STUB_CREATE_FOREIGN=1 makes it carry another run's token
+  if [ "${STUB_CREATE_FOREIGN:-0}" = 1 ]; then printf 'authmove-run: foreign0token\n' >"$ns_file"; else
+    { cat 2>/dev/null; printf '\n'; } >"$ns_file"
+  fi
+  [ "${STUB_KILL_PARENT_AFTER_CREATE:-0}" = 1 ] && kill -TERM "$PPID"
+  exit 0
+}
 case "$*" in
   *"get nodes"*) printf '%s' "${STUB_NODE_VERSION:-}" ;;
-  *"get namespace"*) [ "${STUB_NS_EXISTS:-0}" = 1 ] && exit 0 || exit 1 ;;
-  *"create namespace"*) exit "${STUB_CREATE_RC:-0}" ;;
-  *"delete namespace"*) exit 0 ;;
+  *"get namespace"*jsonpath*) [ -s "$ns_file" ] || exit 1; sed -n 's/.*authmove-run: *//p' "$ns_file" ;;
+  *"get namespace"*) { [ "${STUB_NS_EXISTS:-0}" = 1 ] || [ -s "$ns_file" ]; } && exit 0 || exit 1 ;;
+  *"create namespace"* | *"create -f"*) [ "${STUB_CREATE_RC:-0}" = 0 ] || exit "$STUB_CREATE_RC"; make_ns ;;
+  *"delete namespace"*) rm -f "$ns_file"; exit 0 ;;
   *) exit 1 ;;
 esac
 `
@@ -155,12 +165,15 @@ func k3sStubRun(t *testing.T, env []string, args ...string) (cmdResult, string) 
 	if err := os.WriteFile(kubeconfig, []byte("apiVersion: v1\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Mkdir(filepath.Join(dir, "state"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	log := filepath.Join(dir, "calls.log")
 	if err := os.WriteFile(log, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	base := []string{
-		strings.Replace(shimBasePath(), "PATH=", "PATH="+dir+":", 1), "STUB_LOG=" + log, "AUTH_MOVE_KUBECONFIG=" + kubeconfig,
+		strings.Replace(shimBasePath(), "PATH=", "PATH="+dir+":", 1), "STUB_LOG=" + log, "STUB_STATE=" + filepath.Join(dir, "state"), "AUTH_MOVE_KUBECONFIG=" + kubeconfig,
 		"AUTH_MOVE_IMAGE_MIGRATE=" + digestA, "AUTH_MOVE_IMAGE_MIGRATE_PRIOR=" + digestB, "AUTH_MOVE_IMAGE_SERVICE=" + digestS,
 	}
 	res := cmdSpec{dir: root, env: append(base, env...)}.run("bash", append([]string{filepath.Join(root, k3sScript)}, args...)...)
@@ -194,6 +207,29 @@ func TestAuthOwnerMoveK3sDeletesOnlyTheNamespaceItCreated(t *testing.T) {
 	_, calls = k3sStubRun(t, []string{k3s})
 	if !strings.Contains(calls, "create namespace authmove-") || !strings.Contains(calls, "delete namespace authmove-") {
 		t.Errorf("a namespace the run created was not deleted on failure:\n%s", calls)
+	}
+}
+
+// The namespace can exist before the script has recorded that it created it (a signal between the API call and the
+// next statement). The run owns a namespace by a token it put on it at creation, never by a variable set afterwards.
+func TestAuthOwnerMoveK3sDeletesItsNamespaceWhenTerminatedRightAfterCreate(t *testing.T) {
+	k3s := "STUB_NODE_VERSION=v1.30.2+k3s1"
+	res, calls := k3sStubRun(t, []string{k3s, "STUB_KILL_PARENT_AFTER_CREATE=1"})
+	if res.code != 143 {
+		t.Errorf("exit %d, want 143 (the termination); stderr %q", res.code, res.stderr)
+	}
+	if !strings.Contains(calls, "delete namespace authmove-") {
+		t.Errorf("terminated after the namespace was created, and it was not deleted:\n%s", calls)
+	}
+}
+
+func TestAuthOwnerMoveK3sNeverDeletesANamespaceThatCarriesAnotherRunsToken(t *testing.T) {
+	_, calls := k3sStubRun(t, []string{"STUB_NODE_VERSION=v1.30.2+k3s1", "STUB_CREATE_FOREIGN=1"})
+	if !strings.Contains(calls, "authmove-") {
+		t.Fatalf("the script never reached the namespace:\n%s", calls)
+	}
+	if strings.Contains(calls, "delete namespace") {
+		t.Errorf("deleted a namespace whose token is not this run's:\n%s", calls)
 	}
 }
 

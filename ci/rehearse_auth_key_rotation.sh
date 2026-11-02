@@ -35,6 +35,7 @@ readonly ISSUER_HOST="auth-issuer.rehearsal.test"
 readonly ISSUER_URL="https://${ISSUER_HOST}:8443"
 # internal/auth/keyrotation: PendingFloor = JWKS cache TTL; RetiringFloor = access ceiling + skew + cache TTL.
 readonly PENDING_FLOOR=300
+readonly KEY_STATE_REFRESH=15
 readonly RETIRING_FLOOR=4200
 # dev-health-go authverify JWKSClient: CacheTTL 5m, RefreshFloor 30s.
 readonly VERIFIER_CACHE_BOUND=330
@@ -310,13 +311,9 @@ wait_jwks_kids() { # wait_jwks_kids "a b" TIMEOUT_S
   done
   return 1
 }
-login_signs_by() { # login_signs_by KID: log in until the token is signed by KID (the signer re-reads key states every 15 s)
-  local deadline=$((SECONDS + 45))
-  while [ "${SECONDS}" -lt "${deadline}" ]; do
-    login_user && kid_is "${L_ACCESS}" "$1" && return 0
-    sleep 3
-  done
-  return 1
+login_signs_by() { # login_signs_by KID: wait out the key-state refresh (15 s), then one login; login is limited to 10 per 15 min
+  sleep $((KEY_STATE_REFRESH + 5))
+  login_user && kid_is "${L_ACCESS}" "$1"
 }
 probe_bg() { # probe_bg TOKEN OUTFILE SECONDS: GET /api/v1/auth/me every 0.5 s
   local tok="$1" out="$2" end=$((SECONDS + $3)) n=0

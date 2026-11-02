@@ -162,6 +162,7 @@ func TestEachKeyComponentVariedMisses(t *testing.T) {
 		{"assurance", func(k *Key) { k.Assurance = "aal3" }},
 		{"policy revision", func(k *Key) { k.PolicyRevision++ }},
 		{"entitlement revision", func(k *Key) { k.EntitlementRevision = 1 }},
+		{"unfed values", func(k *Key) { k.Unfed = "user:inactive" }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newRig(t, 0)
@@ -660,4 +661,20 @@ func TestADependencyAtRevisionZeroIsStoredAndAnyEventMisses(t *testing.T) {
 		t.Fatal(err)
 	}
 	miss(t, r, k, "Invalidate at revision 1 of an aggregate read at revision 0")
+}
+
+// PLAN-10842-C Q1: values the caller reads on every call because no feed event covers them (go-api's public.users and
+// public.memberships) are part of the key: a change in one is a different key, so the stored allow is never served.
+func TestTheUnfedValuesArePartOfTheKey(t *testing.T) {
+	r := newRig(t, 0)
+	k := baseKey(t)
+	k.Unfed = "user:active,superuser:false,role:member"
+	mustStore(t, r, k, allow(k), read(r))
+	hit(t, r, k)
+	for _, changed := range []string{"user:inactive,superuser:false,role:member", "user:active,superuser:true,role:member",
+		"user:active,superuser:false,role:viewer", ""} {
+		other := k
+		other.Unfed = changed
+		miss(t, r, other, "unfed values "+changed)
+	}
 }

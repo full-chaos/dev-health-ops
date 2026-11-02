@@ -449,3 +449,30 @@ func TestJoinMembershipOnlyInTheJoinOrg(t *testing.T) {
 		t.Fatalf("rows of the account: public=%d auth=%d, want 1 and 1", pub, auth)
 	}
 }
+
+// The organization projection is its own commit before the join's, as at every
+// sign-in: a refused join leaves that row and no membership.
+func TestRefusedSignInJoinLeavesOnlyTheProjection(t *testing.T) {
+	e := getEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	user, elsewhere := e.joinFixture(t, ctx)
+	if err := joinCommit(ctx, e.owned, membershipJoin{ID: uuid.New(), Principal: user, OrgID: elsewhere, Role: "member"}, nil); err != nil {
+		t.Fatalf("seed the other membership: %v", err)
+	}
+	org := e.seedOrg(t, ctx)
+	err := e.owned.JoinOnSignIn(ctx, user, SSOJoin{OrgID: org, Role: "member"}, SelfSignUp(nil), nil)
+	if !errors.Is(err, ErrMemberElsewhere) {
+		t.Fatalf("join = %v, want ErrMemberElsewhere", err)
+	}
+	var projected int
+	if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.organizations WHERE id = $1`, org).Scan(&projected); err != nil {
+		t.Fatal(err)
+	}
+	if projected != 1 {
+		t.Fatalf("%d projected organization rows, want 1", projected)
+	}
+	if p, a := e.memberRows(t, ctx, user, org); p != 0 || a != 0 {
+		t.Fatalf("membership rows after a refused join: public=%d auth=%d, want 0 and 0", p, a)
+	}
+}

@@ -14,8 +14,10 @@ import (
 	"github.com/google/uuid"
 
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
 const (
@@ -358,7 +360,8 @@ func TestProvisioningRoutesOffByDefault(t *testing.T) {
 	for _, path := range []string{"/internal/v1/memberships/add", "/internal/v1/memberships/role", "/internal/v1/memberships/remove",
 		"/internal/v1/memberships/transfer", "/internal/v1/invites/create", "/internal/v1/invites/accept", "/internal/v1/organizations/deprovision",
 		"/internal/v1/organizations/reactivate", "/internal/v1/organizations/suspend", authapi.PatternServiceAccountCreate,
-		authapi.PatternServiceAccountDisable, authapi.PatternServiceAccountEnable, authapi.PatternServiceAccountOwner} {
+		authapi.PatternServiceAccountDisable, authapi.PatternServiceAccountEnable, authapi.PatternServiceAccountOwner,
+		authapi.PatternServiceAccountKeyIssue, authapi.PatternServiceAccountKeyRotate, authapi.PatternServiceAccountKeyRevoke, authapi.PatternServiceAccountKeyList} {
 		if got := e.doWith(t, path, `{}`, map[string]string{"Authorization": "Bearer " + token}); got.status != http.StatusNotFound {
 			t.Fatalf("%s with the switch off: %d, want 404", path, got.status)
 		}
@@ -672,6 +675,106 @@ token_version, created_at, updated_at) VALUES ($1, $2, NULL, 'local', true, true
 	}
 }
 
+// The key routes through the real stack, with a row document: issue, list, rotate and revoke on real rows, the issued
+// value resolves, the audit rows name the calling credential, the value is in the two receipts only, and the id of a
+// credential of another class answers key_not_found with nothing of that row on the wire.
+func TestProvisioningServiceAccountKeysThroughConfigure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	withProfileRow(t, authapi.PatternServiceAccountCreate, authapi.PatternServiceAccountKeyIssue, authapi.PatternServiceAccountKeyRotate,
+		authapi.PatternServiceAccountKeyRevoke, authapi.PatternServiceAccountKeyList)
+	e, header := newProvisioningEnv(t, ctx)
+	boss, org := e.seed(t, ctx)
+	owner, viewer, super := e.account(t, ctx, acctMail(), false, true), e.account(t, ctx, acctMail(), false, true), e.account(t, ctx, acctMail(), true, true)
+	e.addVia(t, header, org, owner, boss, "member")
+	e.addVia(t, header, org, viewer, boss, "viewer")
+	post := func(path string, body map[string]any) answer { return e.doWith(t, path, jsonBody(t, body), header) }
+	created := post(authapi.PatternServiceAccountCreate, map[string]any{"organization_id": org.String(), "actor_principal_id": boss.String(),
+		"owner_principal_id": owner.String(), "name": "key-bot"})
+	if created.status != http.StatusOK {
+		t.Fatalf("create: %d %s", created.status, created.body)
+	}
+	id, _ := object(t, created)["service_account_id"].(string)
+	account := map[string]any{"service_account_id": id, "actor_principal_id": boss.String()}
+
+	issued := post(authapi.PatternServiceAccountKeyIssue, account)
+	if issued.status != http.StatusOK {
+		t.Fatalf("issue: %d %s", issued.status, issued.body)
+	}
+	receipt := object(t, issued)
+	first, _ := receipt["secret"].(string)
+	credential, _ := receipt["credential"].(map[string]any)
+	key, _ := credential["id"].(string)
+	if !strings.HasPrefix(first, "fcsak_") || credential["status"] != "active" || credential["credential_class"] != "service_account_key" {
+		t.Fatalf("issue receipt: status %v class %v", credential["status"], credential["credential_class"])
+	}
+	if got := post(authapi.PatternServiceAccountKeyIssue, account); got.status != http.StatusConflict || object(t, got)["reason_code"] != "key_live" {
+		t.Fatalf("a second issue: %d %s", got.status, got.body)
+	}
+	viewerBody := map[string]any{"service_account_id": id, "actor_principal_id": viewer.String(), "overlap_seconds": 60}
+	if got := post(authapi.PatternServiceAccountKeyRotate, viewerBody); got.status != http.StatusForbidden || object(t, got)["reason_code"] != "admin_required" {
+		t.Fatalf("rotate by a viewer: %d %s", got.status, got.body)
+	}
+	rotated := post(authapi.PatternServiceAccountKeyRotate, map[string]any{"service_account_id": id, "actor_principal_id": boss.String(), "overlap_seconds": 60})
+	if rotated.status != http.StatusOK {
+		t.Fatalf("rotate: %d %s", rotated.status, rotated.body)
+	}
+	second, _ := object(t, rotated)["secret"].(string)
+	if second == "" || second == first {
+		t.Fatal("rotate gave no new value")
+	}
+	listed := post(authapi.PatternServiceAccountKeyList, account)
+	if listed.status != http.StatusOK || strings.Contains(string(listed.body), first) || strings.Contains(string(listed.body), second) {
+		t.Fatalf("list: %d", listed.status)
+	}
+	if items, _ := object(t, listed)["items"].([]any); len(items) != 2 {
+		t.Fatalf("list holds %d keys, want 2", len(items))
+	}
+	revoke := map[string]any{"credential_id": key, "actor_principal_id": boss.String(), "reason": "compromised"}
+	for i := 0; i < 2; i++ {
+		got := post(authapi.PatternServiceAccountKeyRevoke, revoke)
+		if got.status != http.StatusOK || object(t, got)["status"] != "revoked" || strings.Contains(string(got.body), first) {
+			t.Fatalf("revoke %d: %d", i, got.status)
+		}
+	}
+	for event, want := range map[string]int{"key_issued": 1, "key_rotated": 1, "key_revoked": 1} {
+		var n int
+		if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = $1 AND actor_principal_id = $2 AND attributes ? 'credential_id'`,
+			"auth.service_account."+event, boss).Scan(&n); err != nil || n != want {
+			t.Fatalf("%d %s audit rows (%v), want %d", n, event, err, want)
+		}
+	}
+	var live, leaks int
+	if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.credential_registry WHERE credential_class = 'service_account_key' AND revoked_at IS NULL`).Scan(&live); err != nil || live != 1 {
+		t.Fatalf("%d live keys (%v), want 1", live, err)
+	}
+	if err := e.admin.QueryRow(ctx, `SELECT (SELECT count(*) FROM auth.security_audit_events r WHERE to_jsonb(r)::text LIKE '%' || $1 || '%')
++ (SELECT count(*) FROM auth.auth_outbox_events r WHERE to_jsonb(r)::text LIKE '%' || $1 || '%')`, second[len("fcsak_"):]).Scan(&leaks); err != nil || leaks != 0 {
+		t.Fatalf("%d rows hold the value (%v)", leaks, err)
+	}
+
+	other := uuid.New()
+	schema, err := authschema.NewValidatedIdentifier("auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := audit.Commit(ctx, e.admin, schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			_, err := tx.Exec(ctx, `INSERT INTO auth.credential_registry (id, principal_id, credential_class, secret_hash, hash_algorithm, fingerprint, expires_at)
+VALUES ($1, $2, 'workload_bootstrap_credential', decode(md5($1::uuid::text), 'hex'), 'sha256', substr(md5($1::uuid::text), 1, 16), now() + interval '1 hour')`, other, boss)
+			return err
+		},
+		Audit:     audit.AuditEvent{EventType: "credential.test", Outcome: audit.OutcomeAllowed},
+		OffStream: audit.OffStreamWorkloadRegistry,
+	}); err != nil {
+		t.Fatalf("seed a credential of another class: %v", err)
+	}
+	got := post(authapi.PatternServiceAccountKeyRevoke, map[string]any{"credential_id": "crd_" + other.String(), "actor_principal_id": super.String(), "reason": "compromised"})
+	if got.status != http.StatusNotFound || object(t, got)["reason_code"] != "key_not_found" || strings.Contains(string(got.body), other.String()) {
+		t.Fatalf("revoke of a credential of another class: %d %s", got.status, got.body)
+	}
+}
+
 // With auth-service not owning users, the routes are served and the verbs that need users refuse: create is 409
 // users_not_owned and writes nothing, while disable still works.
 func TestProvisioningServiceAccountsWhileUsersAreNotOwned(t *testing.T) {
@@ -690,5 +793,111 @@ func TestProvisioningServiceAccountsWhileUsersAreNotOwned(t *testing.T) {
 	var n int
 	if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.service_accounts`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("%d accounts after a refused create (%v)", n, err)
+	}
+}
+
+// The grant routes, mounted by a row document the test plants, drive the real stores: create, create over a tuple whose only
+// row has expired (the expired row is ended in the same transaction), update, revoke, and the audit rows and events of each.
+func TestProvisioningGrantsThroughConfigure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	withProfileRow(t, authapi.PatternGrantCreate, authapi.PatternGrantUpdate, authapi.PatternGrantRevoke)
+	e, header := newProvisioningEnv(t, ctx)
+	boss, org := e.seed(t, ctx)
+	member, viewer := e.account(t, ctx, acctMail(), false, true), e.account(t, ctx, acctMail(), false, true)
+	e.addVia(t, header, org, member, boss, "member")
+	e.addVia(t, header, org, viewer, boss, "viewer")
+	post := func(path string, body map[string]any) answer { return e.doWith(t, path, jsonBody(t, body), header) }
+	count := func(sql string, args ...any) int {
+		var n int
+		if err := e.admin.QueryRow(ctx, sql, args...).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	create := map[string]any{"organization_id": org.String(), "actor_principal_id": boss.String(), "principal_id": member.String(),
+		"role": "viewer", "resource_key": "acme/api"}
+	first := post(authapi.PatternGrantCreate, create)
+	if first.status != http.StatusOK {
+		t.Fatalf("create: %d %s", first.status, first.body)
+	}
+	out := object(t, first)
+	firstID, _ := out["grant_id"].(string)
+	if firstID == "" || out["status"] != "active" || out["role"] != "viewer" || out["principal_id"] != member.String() {
+		t.Fatalf("create answer = %v", out)
+	}
+	if strings.Contains(string(first.body), "acme/api") || strings.Contains(string(first.body), "resource_key") {
+		t.Fatalf("the create answer carries the repository key: %s", first.body)
+	}
+	if got := post(authapi.PatternGrantCreate, create); got.status != http.StatusConflict || object(t, got)["reason_code"] != "already_granted" {
+		t.Fatalf("a second live grant: %d %s", got.status, got.body)
+	}
+	denied := map[string]any{"organization_id": org.String(), "actor_principal_id": viewer.String(), "principal_id": member.String(), "role": "viewer", "resource_key": "acme/web"}
+	if got := post(authapi.PatternGrantCreate, denied); got.status != http.StatusForbidden || object(t, got)["reason_code"] != "admin_required" {
+		t.Fatalf("create by a viewer: %d %s", got.status, got.body)
+	}
+	// The grant expires (SQL only: the API refuses a past expiry), then a create over the tuple ends it and grants again.
+	tx, err := e.admin.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE auth.resource_grants SET expires_at = now() - interval '1 minute' WHERE id = $1`, firstID); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	again := post(authapi.PatternGrantCreate, create)
+	if again.status != http.StatusOK {
+		t.Fatalf("create over an expired tuple: %d %s", again.status, again.body)
+	}
+	secondID, _ := object(t, again)["grant_id"].(string)
+	if secondID == "" || secondID == firstID {
+		t.Fatalf("create over an expired tuple answered %s (first %s)", again.body, firstID)
+	}
+	if n := count(`SELECT count(*) FROM auth.resource_grants WHERE id = $1 AND revoked_at IS NOT NULL AND revoked_by IS NULL`, firstID); n != 1 {
+		t.Fatal("the expired grant was not ended")
+	}
+	for event, want := range map[string]int{"resource_grant.expired": 1} {
+		if n := count(`SELECT count(*) FROM auth.auth_outbox_events WHERE event_type = $1 AND aggregate_id = $2`, event, "grt_"+firstID); n != want {
+			t.Fatalf("%d %s events for the expired grant, want %d", n, event, want)
+		}
+	}
+	if n := count(`SELECT count(*) FROM auth.auth_outbox_events WHERE event_type = 'resource_grant.created' AND aggregate_id = $1`, "grt_"+secondID); n != 1 {
+		t.Fatal("no created event for the new grant")
+	}
+	exp := time.Now().Add(48 * time.Hour).UTC().Format(time.RFC3339)
+	upd := post(authapi.PatternGrantUpdate, map[string]any{"organization_id": org.String(), "actor_principal_id": boss.String(), "grant_id": secondID,
+		"expires_at": exp, "expected_revision": 1})
+	if upd.status != http.StatusOK || object(t, upd)["revision"] != float64(2) {
+		t.Fatalf("update: %d %s", upd.status, upd.body)
+	}
+	if strings.Contains(string(upd.body), "acme/api") || strings.Contains(string(upd.body), "resource_key") {
+		t.Fatalf("the update answer carries the repository key: %s", upd.body)
+	}
+	if n := count(`SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.resource_grant.updated' AND attributes->>'target_id' = $1
+AND attributes->'changed_fields' = '["expires_at"]'::jsonb AND attributes ? 'credential_id' AND actor_principal_id = $2`, secondID, boss); n != 1 {
+		t.Fatalf("%d expiry-only update audit rows naming only expires_at, the actor and the caller credential, want 1", n)
+	}
+	if got := post(authapi.PatternGrantUpdate, map[string]any{"organization_id": org.String(), "actor_principal_id": boss.String(), "grant_id": secondID,
+		"role": "admin", "expected_revision": 1}); got.status != http.StatusConflict || object(t, got)["reason_code"] != "revision_conflict" {
+		t.Fatalf("update with a stale revision: %d %s", got.status, got.body)
+	}
+	rev := post(authapi.PatternGrantRevoke, map[string]any{"organization_id": org.String(), "actor_principal_id": boss.String(), "grant_id": secondID})
+	if rev.status != http.StatusOK || object(t, rev)["status"] != "revoked" {
+		t.Fatalf("revoke: %d %s", rev.status, rev.body)
+	}
+	if strings.Contains(string(rev.body), "acme/api") || strings.Contains(string(rev.body), "resource_key") {
+		t.Fatalf("the revoke answer carries the repository key: %s", rev.body)
+	}
+	if n := count(`SELECT count(*) FROM auth.resource_grants WHERE id = $1 AND revoked_by = $2`, secondID, boss); n != 1 {
+		t.Fatal("the revoked grant does not name its revoker")
+	}
+	if got := post(authapi.PatternGrantRevoke, map[string]any{"organization_id": org.String(), "actor_principal_id": boss.String(), "grant_id": uuid.NewString()}); got.status != http.StatusNotFound ||
+		object(t, got)["reason_code"] != "grant_not_found" {
+		t.Fatalf("revoke of an unknown grant: %d %s", got.status, got.body)
 	}
 }

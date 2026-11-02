@@ -338,6 +338,18 @@ every Bearer route accepts the HS256 token today. The profile-routed
 validation middleware picks the HS256 verifier only on a row that opts in;
 HS256 retirement removes the opt-ins.
 
+## `delegated_bearer`
+
+An auth-service row that `authenticateWith` gates has `delegated_bearer`:
+does a delegated session's bearer pass this route's gate. The value is
+`allowed` on `GET /v1/sessions/current` and `POST /v1/sessions/revoke`, and
+`denied` on the other four rows. The test
+`TestDelegatedBearerRowsEqualTheGoAllowlist` holds the values equal to the Go
+allowlist. A row that `authenticateWith` does not reach omits the field.
+
+This field is not `impersonation_policy`. That field says whether go-api's
+org-context override reaches a route.
+
 ## One registration per line (CHAOS-4774)
 
 A row addresses its surface as `file:line`, so two route registrations written
@@ -372,10 +384,20 @@ Every `contracts/auth/v1/endpoint-profiles.*.json` carries a top-level
   so this half is what catches an inventory whose anchors changed after it was
   derived.
 
+- **Declared rewrite.** A change that rewrites the text of an anchored line on
+  purpose lists it in the optional top-level `rewritten_anchors`, one
+  `{file, line, was, now}` per anchor. For an anchor with an entry, `now` must be
+  the tree text at that line and `was` must occur exactly once in that file at
+  `source_commit`; every other anchor keeps the rule above. An entry whose tree
+  line also occurs at `source_commit` (it rewrites nothing), an entry that
+  matches no anchor, an entry listed twice and an entry that is not exactly those
+  four keys all fail, so the list is empty again at the next re-pin of
+  `source_commit`. `source_commit` is still an ancestor of `HEAD`, always.
+
 Not verified: that the anchored line is the right symbol (the rows gate in
 `internal/queryapi/server` owns that), and anchors that name another repo.
 When you move an anchor, bump `source_commit` to a commit on `main` at which
-every anchor line holds.
+every anchor line holds, and empty `rewritten_anchors`.
 
 ## Contributor guide: registering a new route or credential class
 

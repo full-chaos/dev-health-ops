@@ -99,12 +99,15 @@ organization only. An SSO sign-in never issues a session outside the provider's
 organization.
 
 auth-service provisions the same way when `AUTH_SSO_JIT=true`, and it differs from
-go-api on two points:
+go-api on three points:
 
 - A sign-in grants `viewer`, `member` or `admin`. A default role of `owner`, or any
   other value, refuses the sign-in as `membership_required`, and nothing is written.
 - A sign-in never undoes a membership status. A removed, suspended or invited member
   of the provider's organization is refused as `membership_required`.
+- An email from the identity provider is the provider's claim, never proof of the
+  mailbox. A new account needs a domain in `allowed_domains`: an empty list refuses it,
+  answered as auto-provisioning off. A key the provider row already holds is not affected.
 
 For OAuth providers the provider must report the email as verified. For OIDC and
 SAML providers the identity provider's response is the source of the email.

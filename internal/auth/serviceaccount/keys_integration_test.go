@@ -5,6 +5,7 @@ package serviceaccount
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"log/slog"
 	"strings"
@@ -810,4 +811,42 @@ func TestSAKeyPairIssueOrgDeprovision(t *testing.T) {
 			_, err := e.deprov.Deprovision(ctxT(t), orgdeprovision.Input{OrgID: orgID, Authorize: deprovisionAllowed})
 			return err
 		})
+}
+
+// KeyByID reads a key in any state. The id is the caller's: a credential of another class is not found.
+func TestSAKeyByIDReadsAKeyAndFiltersTheClass(t *testing.T) {
+	e := getEnv(t)
+	actor := uuid.New()
+	e.commitSeed(t, `INSERT INTO auth.principals (id, kind, display_name) VALUES ($1, 'user', 'keyactor')`, actor)
+	_, _, id := e.account(t)
+	k, err := e.sa.IssueKey(ctxT(t), id, keyDay, okActorFor(&actor))
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := KeyDigest(k.Secret.Reveal())
+	got, err := e.sa.KeyByID(ctxT(t), k.Key.ID)
+	if err != nil || got.ID != k.Key.ID || got.Principal != id || got.Fingerprint != hex.EncodeToString(digest[:8]) || got.RevokedAt != nil ||
+		got.CreatedBy == nil || *got.CreatedBy != actor || !got.ExpiresAt.Equal(k.Key.ExpiresAt) {
+		t.Fatalf("KeyByID: %+v, %v", got, err)
+	}
+	if k.Key.Fingerprint != got.Fingerprint || k.Key.CreatedBy == nil || *k.Key.CreatedBy != actor {
+		t.Fatalf("the issue answer: %+v", k.Key)
+	}
+	if err := e.sa.RevokeKey(ctxT(t), k.Key.ID, KeyReasonCompromised, okActor()); err != nil {
+		t.Fatal(err)
+	}
+	if got, err = e.sa.KeyByID(ctxT(t), k.Key.ID); err != nil || got.RevokedAt == nil || got.RevokedReason == nil || *got.RevokedReason != "compromised" {
+		t.Fatalf("KeyByID after a revoke: %+v, %v", got, err)
+	}
+	if _, err := e.sa.KeyByID(ctxT(t), uuid.New()); !errors.Is(err, ErrKeyNotFound) {
+		t.Fatalf("no such id: %v", err)
+	}
+	value, _ := MintKey()
+	other := KeyDigest(value)
+	credential := uuid.New()
+	e.commitSeed(t, `INSERT INTO auth.credential_registry (id, principal_id, credential_class, secret_hash, hash_algorithm, fingerprint, expires_at)
+VALUES ($1, $2, 'workload_bootstrap_credential', $3, 'sha256', encode($4::bytea, 'hex'), now() + interval '1 hour')`, credential, id, other[:], other[:8])
+	if _, err := e.sa.KeyByID(ctxT(t), credential); !errors.Is(err, ErrKeyNotFound) {
+		t.Fatalf("a credential of another class: %v", err)
+	}
 }

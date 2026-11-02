@@ -154,6 +154,8 @@ type Pair struct {
 	Access        string
 	Refresh       string
 	SessionAccess string
+	// ExpiresIn is the access token's lifetime in seconds as auth-service answered it (1..3600).
+	ExpiresIn int64
 }
 
 // Issuer issues sessions.
@@ -257,11 +259,15 @@ type issueBody struct {
 	PredecessorSessionID *string  `json:"predecessor_session_id,omitempty"`
 }
 
+// maxExpiresIn is the access-token.v1 lifetime ceiling in seconds: an issue answer above it is not a token pair.
+const maxExpiresIn = 3600
+
 type issueAnswer struct {
 	AccessToken        string `json:"access_token"`
 	RefreshToken       string `json:"refresh_token"`
 	TokenType          string `json:"token_type"`
 	SessionAccessToken string `json:"session_access_token"`
+	ExpiresIn          *int64 `json:"expires_in"`
 }
 
 // Issue asks auth-service for a session of req. The end user's User-Agent
@@ -323,8 +329,14 @@ func (c *Client) Issue(ctx context.Context, r *http.Request, req Request) (Pair,
 	if err := json.Unmarshal(answer, &pair); err != nil {
 		return Pair{}, fmt.Errorf("%w: answer is not JSON", ErrUnavailable)
 	}
-	if pair.AccessToken == "" || pair.RefreshToken == "" || !strings.EqualFold(pair.TokenType, "bearer") {
+	// An answer without expires_in is go-api's 60 minutes (the issue route has always sent it; older fakes did not).
+	expiresIn := int64(maxExpiresIn)
+	if pair.ExpiresIn != nil {
+		expiresIn = *pair.ExpiresIn
+	}
+	if pair.AccessToken == "" || pair.RefreshToken == "" || !strings.EqualFold(pair.TokenType, "bearer") ||
+		expiresIn < 1 || expiresIn > maxExpiresIn {
 		return Pair{}, fmt.Errorf("%w: answer is not a token pair", ErrUnavailable)
 	}
-	return Pair{Access: pair.AccessToken, Refresh: pair.RefreshToken, SessionAccess: pair.SessionAccessToken}, nil
+	return Pair{Access: pair.AccessToken, Refresh: pair.RefreshToken, SessionAccess: pair.SessionAccessToken, ExpiresIn: expiresIn}, nil
 }

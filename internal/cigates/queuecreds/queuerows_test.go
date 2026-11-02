@@ -22,7 +22,7 @@ var queueRowExpressions = []struct {
 	{regexp.MustCompile(`\bargs\s*->\s*'([a-z_]+)'\s*->>\s*'([a-z_]+)'`), func(m []string) string { return "args->" + m[1] + "->>" + m[2] }},
 	{regexp.MustCompile(`\bargs\s*#>>\s*'\{([a-z_,]+)\}'`), func(m []string) string { return "args#>>" + m[1] }},
 	{regexp.MustCompile(`\bargs\s*->\s*'([a-z_]+)'`), func(m []string) string { return "args->" + m[1] }},
-	{regexp.MustCompile(`\b(?:[a-z_]+\.)?args\s*(?:::|,|\s+AS\b)`), func([]string) string { return "args" }},
+	{regexp.MustCompile(`(?i)\b(?:[a-z_]+\.)?args(?:\s*(?:::|,|\)|;|=|<|>|!|\|\|)|\s+(?:AS|FROM|FILTER|IS|IN|NOT|LIKE|ILIKE|ORDER|GROUP|WHERE|END|THEN|AND|OR|WHEN|ELSE)\b|\s*$)`), func([]string) string { return "args" }},
 	{regexp.MustCompile(`\bencoded_args\b`), func([]string) string { return "encoded_args" }},
 	{regexp.MustCompile(`\bdedupe_key\b`), func([]string) string { return "dedupe_key" }},
 }
@@ -262,15 +262,20 @@ func TestEveryQueueRowReadIsClassifiedAndItsGuardIsPresent(t *testing.T) {
 }
 
 var (
-	outputCall = regexp.MustCompile(`^(fmt\.(Errorf|Sprintf|Sprint|Sprintln|Fprintf|Printf|Println)|errors\.New|slog\.[A-Z][A-Za-z]*|.*(?:ogger|slog)(?:\(\))?\.(Debug|Info|Warn|Error)[A-Za-z]*)$`)
 	rowKeyName = regexp.MustCompile(`(?i)^(dedupekey|sourcededupekey|idempotencykey|correlationid|encodedargs|args)$`)
 )
 
 // Queue-row fields that a job's own code reads after the decoder has accepted
 // them; the value is guarded because Decode refused anything credential-shaped.
 var decodedRowFieldOutputs = map[string]string{
-	"internal/jobruntime/adapter.go#logStart":   "envelope fields after jobcontract.Decode",
-	"internal/jobruntime/adapter.go#NewAdapter": "the typed argument type's registered kind name, not a queue row value",
+	"internal/jobruntime/adapter.go#logStart":                                "envelope fields after jobcontract.Decode",
+	"internal/jobruntime/adapter.go#NewAdapter":                              "the typed argument type's registered kind name, not a queue row value",
+	"internal/jobruntime/adapter.go#execute":                                 "envelope correlation id on the handler logger, after jobcontract.Decode",
+	"internal/jobruntime/adapter.go#logFinish":                               "envelope correlation id on the finish line, after jobcontract.Decode",
+	"internal/jobruntime/adapter.go#startJobSpan":                            "envelope correlation id and organization id as span attributes, after jobcontract.Decode",
+	"internal/workersctl/trigger_investment.go#writeManualInvestmentTrigger": "the generation string is built by the same command from the canonical organization id, parsed dates and a hashed rerun tag; it is not read from a queue row",
+	"internal/workersctl/trigger_workgraph.go#writeManualWorkgraphTrigger":   "the generation string is built by the same command from the canonical organization id and parsed dates; it is not read from a queue row",
+	"internal/workersctl/trigger_workgraph.go#rollbackTriggerTx":             "a local slice named args that holds slog attributes the caller built from request id, organization id and generation; not queue row arguments",
 }
 
 // A queue row's dedupe key, idempotency key, correlation id or arguments must

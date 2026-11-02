@@ -302,8 +302,7 @@ boundary (TRD §9, §13).
   bounds), and `TestAuditAllowlistKeysEqualSchemaAttributeKeys` and
   `TestAuditAttributeRulesMatchTheSchemaTypes` fail on any difference in either
   direction. The members no producer writes (`action`, `aggregate_type`,
-  `aggregate_revision`, until a producer writes `resource_type` and
-  `decision_id`) stay in v1 and are named, with a reason, in
+  `aggregate_revision`) stay in v1 and are named, with a reason, in
   `schemaOnlyAuditKeys`. An allowlist key that no producer writes and no open
   change plans is deleted (`TestEveryAuditAllowlistKeyHasAWriter`). The
   database row keeps uuid text for every id; the wire document prefixes

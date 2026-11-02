@@ -21,8 +21,6 @@ var schemaOnlyAuditKeys = map[string]string{
 	"action":             "published in v1 for the decision audit shape; no producer writes it (the authorize row names its action as action_key)",
 	"aggregate_type":     "published in v1 for a provisioning aggregate; no audit producer writes it",
 	"aggregate_revision": "published in v1 for a provisioning aggregate; no audit producer writes it",
-	"resource_type":      "CHAOS-12364 adds the writer and the allowlist entry; remove this row when it merges",
-	"decision_id":        "CHAOS-12364 adds the writer and the allowlist entry; remove this row when it merges",
 }
 
 // auditKeyWriters is the census: for every allowlist key, a non-test file on
@@ -32,7 +30,7 @@ var auditKeyWriters = map[string]string{
 	"reason_code":                      "internal/auth/membership/membership.go",
 	"target_kind":                      "internal/auth/membership/membership.go",
 	"target_id":                        "internal/auth/membership/membership.go",
-	"action_key":                       "internal/auth/session/delegation.go",
+	"action_key":                       "internal/auth/authapi/authorize_audit.go",
 	"resource_kind":                    "internal/auth/grant/store.go",
 	"provider":                         "internal/auth/authapi/login.go",
 	"changed_fields":                   "internal/auth/membership/membership.go",
@@ -63,14 +61,16 @@ var auditKeyWriters = map[string]string{
 	"purged_email_verification_tokens": "internal/auth/usersbackfill/linkpurge.go",
 	"purged_password_reset_tokens":     "internal/auth/usersbackfill/linkpurge.go",
 	"run_id":                           "internal/auth/usersbackfill/linkpurge.go",
+	"decision_id":                      "internal/auth/authapi/authorize_audit.go",
+	"decision_reason_code":             "internal/auth/authapi/authorize_audit.go",
+	"resource_type":                    "internal/auth/authapi/authorize_audit.go",
+	"resource_id":                      "internal/auth/authapi/authorize_audit.go",
+	"policy_revision":                  "internal/auth/authapi/authorize_audit.go",
 }
 
 // plannedAuditKeys are allowlist keys with no writer on main that an open PR
 // writes; that PR owns them. A key moves to auditKeyWriters when its writer merges.
-var plannedAuditKeys = map[string]string{
-	"policy_revision": "CHAOS-12364 authorize_audit.go",
-	"resource_id":     "CHAOS-12364 authorize_audit.go",
-}
+var plannedAuditKeys = map[string]string{}
 
 func auditSchemaAttributes(t *testing.T) map[string]map[string]any {
 	t.Helper()
@@ -205,7 +205,7 @@ var goodAuditIDSamples = map[string]string{
 	"target_id": "6f1c2d3e-4a5b-4c6d-8e7f-901a2b3c4d5e", "credential_id": "6f1c2d3e-4a5b-4c6d-8e7f-901a2b3c4d5e",
 	"principal_id": "6f1c2d3e-4a5b-4c6d-8e7f-901a2b3c4d5e", "caller_principal_id": "6f1c2d3e-4a5b-4c6d-8e7f-901a2b3c4d5e",
 	"binding_id": "6f1c2d3e-4a5b-4c6d-8e7f-901a2b3c4d5e", "assertion_key_id": "6f1c2d3e-4a5b-4c6d-8e7f-901a2b3c4d5e",
-	"jti": "6f1c2d3e-4a5b-4c6d-8e7f-901a2b3c4d5e", "resource_id": "acme/widgets", "action_key": "acr.context.read",
+	"jti": "6f1c2d3e-4a5b-4c6d-8e7f-901a2b3c4d5e", "decision_id": "dec_EXAMPLE0000000000000000001", "resource_id": "acme/widgets", "action_key": "acr.context.read",
 	"key_id": "kid-2026.11", "related_key_id": "kid-2026.10", "workload_jti": "AAAAAAAAAAAAAAAAAAAAAA", "run_id": "roll-24d",
 }
 

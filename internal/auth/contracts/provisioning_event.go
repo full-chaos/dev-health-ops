@@ -169,6 +169,7 @@ type AuditAttributes struct {
 	AggregateRevision             *Revision `json:"aggregate_revision,omitempty"`
 	CredentialClass               string    `json:"credential_class,omitempty"`
 	DecisionID                    string    `json:"decision_id,omitempty"`
+	DecisionReasonCode            string    `json:"decision_reason_code,omitempty"`
 	ActionKey                     string    `json:"action_key,omitempty"`
 	Actions                       []string  `json:"actions,omitempty"`
 	Amr                           []string  `json:"amr,omitempty"`

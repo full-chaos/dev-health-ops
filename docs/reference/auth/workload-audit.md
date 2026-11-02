@@ -31,7 +31,8 @@ The read printed ids, names, audiences, actions, binding references and key ids 
   does not list. No row lists one, so no action is unused, and no workload token carries one.
 - **Tested rotation and recovery.** A row is PASS only when all four hold: a documented verb, a test that runs it,
   a recorded live drill, and a recovery path with a test. A row whose drill is not done is PARTIAL and names the
-  drill ticket. A row with no documented verb or no test is a GAP.
+  drill ticket. A row with no documented verb or no test is a GAP. A row with no audience, no binding and no
+  credential has nothing to rotate: it is N/A (identity only), and only its recovery path is checked.
 - Integration tests named below run in hosted CI only. They were cited, not run, for this audit.
 
 ## Registry rows
@@ -44,8 +45,8 @@ Production holds the same 5 rows as the JSON: no row is missing, none is unliste
 | `api` | go-api / platform-operations | `auth-service` | none | `prod` `prod.fullchaos.dev`, `dev-health/dev-health-ops-go-api`, UID pinned, enabled (added 2026-11-02 19:28Z) | Kubernetes exchange; no bootstrap credential | PARTIAL |
 | `acr-api` | acr-api / platform-operations | `auth-service`, `dev-health-api` | none | none | none: `authWorkloadClient.enabled` is `false` in the acr chart | PARTIAL |
 | `web` | web / platform-operations | none | none | none | one assertion key, `web-2026-09`, active, issuer `https://www.fullchaos.dev` | GAP |
-| `auth-service` | auth-service / platform-operations | none | none | none | none | PASS (identity only) |
-| `query-api` | query-api / platform-operations | none | none | none | none | PASS (identity only) |
+| `auth-service` | auth-service / platform-operations | none | none | none | none | N/A (identity only) |
+| `query-api` | query-api / platform-operations | none | none | none | none | N/A (identity only) |
 
 Prod holds no bootstrap credential row: the bootstrap subject is for Compose and self-hosted installs.
 
@@ -82,7 +83,7 @@ server (`acr/migrations/postgres/0030_workload_token_exchange.sql`, `0070_worklo
 ## Summary
 
 - Rows audited: 5 registry rows plus the ACR binding table (0 rows).
-- PASS 2 (identity only), PARTIAL 2 (`api`, `acr-api`; drills CHAOS-11237 and CHAOS-11238 pending), GAP 2 (`web`
+- PASS 0, N/A 2 (`auth-service`, `query-api`: identity only), PARTIAL 2 (`api`, `acr-api`; drills CHAOS-11237 and CHAOS-11238 pending), GAP 2 (`web`
   assertion key runbook; ACR binding table procedure).
 - Actions removed: 0 (none exist). Owners: derived from the component; an owner field is not stored.
 - Follow-up: one ticket covers the owner field, the web assertion-key runbook and the ACR binding-table procedure.

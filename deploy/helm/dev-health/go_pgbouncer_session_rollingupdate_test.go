@@ -91,6 +91,13 @@ func TestSessionRollingUpdateUnsetRendersByteEqual(t *testing.T) {
 			t.Errorf("%s render: %d keep annotations on the PgBouncer Secret, want one per Secret", name, n)
 		}
 		tip = strings.ReplaceAll(tip, keepAnn, "type: Opaque\n")
+		// The auth-migrate Job is kept after success (CHAOS-10812): its hook-succeeded delete policy and the
+		// ttlSecondsAfterFinished line are restored to the base's, exactly once where the Job renders.
+		keptJob := "    helm.sh/hook-delete-policy: before-hook-creation\nspec:\n  ttlSecondsAfterFinished: 86400\n  backoffLimit:"
+		if n := strings.Count(tip, keptJob); n != strings.Count(tip, "kind: Job\nmetadata:\n  name: a-dev-health-auth-migrate\n") {
+			t.Errorf("%s render: %d kept-Job policy blocks, want one per auth-migrate Job", name, n)
+		}
+		tip = strings.ReplaceAll(tip, keptJob, "    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded\nspec:\n  backoffLimit:")
 		// The Valkey args gained a pinned --appendfsync after the base: that one pair is left out of the tip, exactly once.
 		fsyncArgs := "            - --appendfsync\n            - everysec\n"
 		if n := strings.Count(tipValkey, fsyncArgs); n != 1 {

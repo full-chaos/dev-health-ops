@@ -32,7 +32,8 @@ func newProvWorkloadFixture(t *testing.T) *provWorkloadFixture {
 var workloadRouteOps = []string{opMembershipAdd, opMembershipRole, opMembershipRemove, opMembershipTransfer,
 	opInviteCreate, opInviteAccept, opOrgDeprovision, opOrgReactivate, opOrgSuspend, opOrgState, opOrgOnboard, opOrgCreate,
 	opServiceAccountCreate, opServiceAccountDisable, opServiceAccountEnable, opServiceAccountOwner,
-	opServiceAccountKeyIssue, opServiceAccountKeyRotate, opServiceAccountKeyRevoke, opServiceAccountKeyList}
+	opServiceAccountKeyIssue, opServiceAccountKeyRotate, opServiceAccountKeyRevoke, opServiceAccountKeyList,
+	opGrantCreate, opGrantUpdate, opGrantRevoke, opOrgRename}
 
 // workloadRouteCases and offWorkloadRouteCases split routeCases by workloadRouteOps.
 func workloadRouteCases() []routeCase { return routeCasesWhere(true) }
@@ -68,9 +69,17 @@ func callerOf(f *provFixture, op string) audit.Caller {
 		return f.reactivate.actor.Caller
 	case opOrgSuspend:
 		return f.reactivate.sactor.Caller
+	case opOrgRename:
+		return f.reactivate.ractor.Caller
 	case opServiceAccountCreate, opServiceAccountDisable, opServiceAccountEnable, opServiceAccountOwner,
 		opServiceAccountKeyIssue, opServiceAccountKeyRotate, opServiceAccountKeyRevoke:
 		return f.sa.actor.Caller
+	case opGrantCreate:
+		return f.grants.create.Actor.Caller
+	case opGrantUpdate:
+		return f.grants.update.Actor.Caller
+	case opGrantRevoke:
+		return f.grants.revoke.Actor.Caller
 	case opOrgOnboard:
 		return f.orgs.onboard.Caller
 	case opOrgCreate:
@@ -238,7 +247,7 @@ func TestEveryProvisioningRouteIsOnTheWorkloadListOrRefusesTheToken(t *testing.T
 		expectRefusal(t, response, http.StatusUnauthorized, reasonInvalidCredentials)
 	}
 	for _, op := range provisioningOperations {
-		if !cased[op] && !slices.Contains(grantOps, op) { // the grant routes have their own cells (provisioning_grant_test.go)
+		if !cased[op] {
 			t.Fatalf("%s has no route case", op)
 		}
 	}

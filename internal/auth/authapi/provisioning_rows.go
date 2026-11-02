@@ -12,7 +12,7 @@ var provisioningPatterns = []string{PatternMembershipAdd, PatternMembershipRole,
 	PatternMembershipTransfer, PatternInviteCreate, PatternInviteAccept, PatternOrgDeprovision, PatternOrgReactivate, PatternInviteRevoke,
 	PatternOrgSuspend, PatternOrgOnboard, PatternOrgCreate, PatternServiceAccountCreate, PatternServiceAccountDisable, PatternServiceAccountEnable,
 	PatternServiceAccountOwner, PatternServiceAccountKeyIssue, PatternServiceAccountKeyRotate, PatternServiceAccountKeyRevoke,
-	PatternServiceAccountKeyList}
+	PatternServiceAccountKeyList, PatternGrantCreate, PatternGrantUpdate, PatternGrantRevoke}
 
 // provisioningRouteOps maps each provisioning operation to its route.
 var provisioningRouteOps = map[string]string{
@@ -25,6 +25,7 @@ var provisioningRouteOps = map[string]string{
 	opGrantCreate: PatternGrantCreate, opGrantUpdate: PatternGrantUpdate, opGrantRevoke: PatternGrantRevoke,
 	opServiceAccountKeyIssue: PatternServiceAccountKeyIssue, opServiceAccountKeyRotate: PatternServiceAccountKeyRotate,
 	opServiceAccountKeyRevoke: PatternServiceAccountKeyRevoke, opServiceAccountKeyList: PatternServiceAccountKeyList,
+	opOrgRename: PatternOrgRename,
 }
 
 // serviceSessionIssuerClass is the endpoint-profile credential class of the

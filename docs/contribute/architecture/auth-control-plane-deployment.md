@@ -128,14 +128,21 @@ Roll order, each step before the next:
 2. `auth-migrate` with `AUTH_PUSH_LIFECYCLE_WRITER_ROLE=<writer>` and
    `AUTH_PUSH_LIFECYCLE_CALLER_ROLES=<go-api login>` (Helm:
    `authService.migrate.pushLifecycle`; both the migrate and the grants Job). Migration
-   0044 creates the function and widens the revision table's two CHECKs; the grant
+   0044 creates the function and widens the revision table's two CHECKs, 0047 replaces its body; the grant
    pass hands the function to the writer, with `CREATE` on the schema granted and
    revoked inside one transaction, and gives `EXECUTE` to the callers only.
 3. Only then roll go-api with `AUTH_PUSH_LIFECYCLE_EVENTS=true`. With the flag on and
    the grants missing, token writes fail as 500 and roll back.
 
-Organization-wide tokens (no source) emit no event: the contract requires a
-`source_id`.
+Organization-wide tokens (no source) emit events too (CHAOS-12358). Every event
+carries a required `binding`: `source` (with `source_id`) or `organization`
+(no `source_id`; there is no placeholder source). Migration 0047 replaces the
+function so it accepts `binding`; run it before go-api sends the member, because
+the 0044 function refuses a payload that has one. Keep `AUTH_PUSH_LIFECYCLE_EVENTS`
+off until both steps are done. Replacing a function the writer role owns needs the
+migration login to hold the writer's privileges, so the membership granted in step
+1 must **inherit** (`GRANT <writer> TO <migration login> WITH INHERIT TRUE`, the
+default); a `SET`-only membership fails the migration with a permission error.
 
 ### The migration login owns the auth schema and is not a superuser
 
@@ -176,7 +183,7 @@ rollback is the phase minus 1.
 | 2 | Sessions | Phase 1 plus `AUTH_PROXY_URL`, `AUTH_PROXY_SESSIONS` and `AUTH_SESSION_ISSUE_TOKEN` on go-api (from phase 2 every `AUTH_PROXY_*` flag is rendered `"true"` or `"false"`, so an env entry beats `goApi.envFrom`), `AUTH_PROXY_SESSIONS` on query-api, the migrate Job and the River hooks, the session keys on auth-service, and the auth-service API port open to go-api only. Needs the session readers, the successor key and the rate-limit store. |
 | 3 | Login and social sign-in | Phase 2 plus `AUTH_PROXY_LOCAL_LOGIN` and `AUTH_PROXY_SOCIAL` on go-api, and on auth-service `AUTH_LOGIN_LOCKOUT_KEY` (`authService.sessionKeys.loginLockout`) and the six optional `SOCIAL_<PROVIDER>_CLIENT_ID` / `_CLIENT_SECRET` keys (`authService.social.secretName`). |
 | 4 | Users owned | Phase 3 plus `AUTH_PROXY_CREDENTIALS` and `AUTH_USERS_OWNED` (go-api, auth-service, the migrate, grants and backfill Jobs). Needs `authService.usersOwnedStage`: `goApi` (go-api only) first, then `owned` (everything else), with the barrier script between them ([runbook](../../operate/runbooks/auth-users-owned-flip-and-rollback.md)). Renders (D6358). |
-| 5 | Orgs owned | Phase 4 plus `AUTH_ORGS_OWNED` (auth-service, go-api, the migrate Job, the River hook and the backfill Job). Needs `goApi.authProxy.orgProvisioning=true`, `authService.sessionKeys.inviteToken.secretName` (the invite signing keys, rendered at phase 5 only) and no `authService.usersOwnedStage`. Revokes the api role's memberships writes and narrows its organizations grants ([runbook](../../operate/runbooks/auth-orgs-owned-flip-and-rollback.md)). |
+| 5 | Orgs owned | Phase 4 plus `AUTH_ORGS_OWNED` (auth-service, go-api, the migrate Job, the River hook, and the backfill, auth-migrate and auth-grants Jobs). Needs `goApi.authProxy.orgProvisioning=true`, `authService.sessionKeys.inviteToken.secretName` (the invite signing keys, rendered at phase 5 only) and no `authService.usersOwnedStage`. Revokes the api role's memberships writes and narrows its organizations grants ([runbook](../../operate/runbooks/auth-orgs-owned-flip-and-rollback.md)). |
 
 Phases 4 and 5 mean (D6358) that auth-service becomes the writer of the existing
 public `users` table (4) and of the public `organizations` and `memberships`

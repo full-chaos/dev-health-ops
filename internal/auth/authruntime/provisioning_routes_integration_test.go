@@ -799,7 +799,6 @@ func TestProvisioningServiceAccountsWhileUsersAreNotOwned(t *testing.T) {
 func TestProvisioningGrantsThroughConfigure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	withProfileRow(t, authapi.PatternGrantCreate, authapi.PatternGrantUpdate, authapi.PatternGrantRevoke)
 	e, header := newProvisioningEnv(t, ctx)
 	boss, org := e.seed(t, ctx)
 	member, viewer := e.account(t, ctx, acctMail(), false, true), e.account(t, ctx, acctMail(), false, true)
@@ -897,5 +896,44 @@ AND attributes->'changed_fields' = '["expires_at"]'::jsonb AND attributes ? 'cre
 	if got := post(authapi.PatternGrantRevoke, map[string]any{"organization_id": org.String(), "actor_principal_id": boss.String(), "grant_id": uuid.NewString()}); got.status != http.StatusNotFound ||
 		object(t, got)["reason_code"] != "grant_not_found" {
 		t.Fatalf("revoke of an unknown grant: %d %s", got.status, got.body)
+	}
+}
+
+// With AUTH_ORGS_OWNED the suspend and reactivate routes, through configure, also write go-api's is_active in the
+// verb's commit.
+func TestProvisioningSuspendWritesPublicWhileOrgsOwned(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	e := newRoutesEnvWith(t, ctx, map[string]string{
+		authconfig.EnvUsersOwned:                "true",
+		authconfig.EnvOrgsOwned:                 "true",
+		authconfig.EnvMembershipRoutes:          "true",
+		authconfig.EnvInviteTokenSecret:         provisioningInviteSecret,
+		authconfig.EnvInviteTokenSecretPrevious: provisioningInvitePrevious,
+	})
+	token, _ := e.issuerCredential(t, ctx, "auth-session-issuer", `["memberships:write", "sessions:issue"]`, false, false)
+	header := map[string]string{"Authorization": "Bearer " + token, "Content-Type": "application/json"}
+	_, org := e.seed(t, ctx)
+	super := e.account(t, ctx, acctMail(), true, true)
+	publicActive := func() bool {
+		t.Helper()
+		var active bool
+		if err := e.admin.QueryRow(ctx, `SELECT is_active FROM public.organizations WHERE id = $1`, org).Scan(&active); err != nil {
+			t.Fatal(err)
+		}
+		return active
+	}
+	body := jsonBody(t, map[string]any{"organization_id": org.String(), "actor_principal_id": super.String()})
+	if got := e.doWith(t, authapi.PatternOrgSuspend, body, header); got.status != http.StatusOK {
+		t.Fatalf("suspend: %d %s", got.status, got.body)
+	}
+	if publicActive() {
+		t.Fatal("go-api's row is still active after the suspend with orgs owned")
+	}
+	if got := e.doWith(t, authapi.PatternOrgReactivate, body, header); got.status != http.StatusOK {
+		t.Fatalf("reactivate: %d %s", got.status, got.body)
+	}
+	if !publicActive() {
+		t.Fatal("go-api's row is still inactive after the reactivate with orgs owned")
 	}
 }

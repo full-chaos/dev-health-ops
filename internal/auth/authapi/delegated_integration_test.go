@@ -16,6 +16,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/acrmint"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
@@ -285,5 +286,43 @@ func TestSwitchFromADelegatedSessionIsRefusedOverARealRow(t *testing.T) {
 	}
 	if l.ended(t, ctx, id) {
 		t.Fatal("the refused switch ended the row")
+	}
+}
+
+type noDelegatedSide struct{}
+
+func (noDelegatedSide) ActorInDelegation(context.Context, uuid.UUID, uuid.UUID) (bool, error) {
+	return false, nil
+}
+
+// go-api's two readers of the table see the row while it is open, and not after
+// it ends. The acrmint reader here has its delegated side off, so its answer is
+// the table's alone.
+func TestDelegationPublicRowReaders(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	l := newDelegatedLive(t, ctx)
+	row, err := l.store.StartDelegation(ctx, session.StartInput{BaseSessionID: l.base, TargetPrincipalID: l.target,
+		OrganizationID: l.org, Reason: "support ticket"})
+	if err != nil {
+		t.Fatalf("StartDelegation: %v", err)
+	}
+	store := policy.PGStore{Pool: l.admin, AuthSchema: "auth"}
+	mint := acrmint.PGImpersonation{Pool: l.runtime, Sessions: noDelegatedSide{}}
+	active, err := store.ActiveImpersonation(ctx, l.actor)
+	if err != nil || active == nil || active.ID != row.ID || active.TargetUserID != l.target || active.TargetOrgID != l.org || active.TargetRole != "member" {
+		t.Fatalf("ActiveImpersonation = %+v, %v", active, err)
+	}
+	if got, err := mint.ImpersonatingActor(ctx, l.actor, l.base); err != nil || !got {
+		t.Fatalf("ImpersonatingActor = %v, %v", got, err)
+	}
+	if ok, err := l.store.EndDelegation(ctx, row.ID, session.Actor{}); err != nil || !ok {
+		t.Fatalf("EndDelegation = %v, %v", ok, err)
+	}
+	if active, err := store.ActiveImpersonation(ctx, l.actor); err != nil || active != nil {
+		t.Fatalf("ActiveImpersonation after the end = %+v, %v", active, err)
+	}
+	if got, err := mint.ImpersonatingActor(ctx, l.actor, l.base); err != nil || got {
+		t.Fatalf("ImpersonatingActor after the end = %v, %v", got, err)
 	}
 }

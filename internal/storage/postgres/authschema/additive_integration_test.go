@@ -424,6 +424,11 @@ var additiveExemptions = []additiveExemption{
 		reason:     "aggregate_revisions admits a bare UUID id for the external_push_credential aggregate; the redefined pattern is the 0013 pattern or that one shape for that one type, so it only widens (CHAOS-10895)",
 	},
 	{
+		name:       "aggregate_revisions_signing_key",
+		regression: `constraint aggregate_revisions.aggregate_revisions_aggregate_type_check redefined "CHECK ((aggregate_type = ANY (ARRAY['principal'::text, 'user'::text, 'external_identity'::text, 'organization'::text, 'membership'::text, 'platform_role_assignment'::text, 'service_account'::text, 'workload'::text, 'resource_grant'::text, 'invite'::text, 'external_push_credential'::text])))" -> "CHECK ((aggregate_type = ANY (ARRAY['principal'::text, 'user'::text, 'external_identity'::text, 'organization'::text, 'membership'::text, 'platform_role_assignment'::text, 'service_account'::text, 'workload'::text, 'resource_grant'::text, 'invite'::text, 'external_push_credential'::text, 'signing_key'::text])))"`,
+		reason:     "aggregate_revisions admits the signing_key aggregate; the redefined list is the 0044 list plus that one value, so it only widens (CHAOS-11816)",
+	},
+	{
 		version:    34,
 		regression: `constraint platform_role_assignments.platform_role_assignments_principal_id_fkey redefined "FOREIGN KEY (principal_id) REFERENCES auth.principals(id) ON DELETE CASCADE" -> "FOREIGN KEY (principal_id) REFERENCES auth.principals(id) ON DELETE RESTRICT"`,
 		reason:     "deleting a principal that holds a platform role is refused instead of deleting the role",

@@ -9,7 +9,24 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
+// workItemRow is fetchIssueIdentityQuery's row: the latest title, that row's
+// repository id, and how many repositories hold the work item.
+type workItemRow struct {
+	title        string
+	repoID       string
+	repositories uint64
+}
+
 func issueTitleClient(t *testing.T, titles map[string]string) fakeQueryClient {
+	t.Helper()
+	rows := map[string]workItemRow{}
+	for org, title := range titles {
+		rows[org] = workItemRow{title: title, repoID: "11111111-1111-1111-1111-111111111111", repositories: 1}
+	}
+	return issueIdentityClient(t, rows)
+}
+
+func issueIdentityClient(t *testing.T, rowsByOrg map[string]workItemRow) fakeQueryClient {
 	t.Helper()
 	return fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
 		if strings.Contains(query, "FROM work_items FINAL") {
@@ -19,8 +36,8 @@ func issueTitleClient(t *testing.T, titles map[string]string) fakeQueryClient {
 					org, _ = b.Value.(string)
 				}
 			}
-			if title, ok := titles[org]; ok {
-				return &fixtureRowScanner{rows: [][]any{{title}}}, nil
+			if row, ok := rowsByOrg[org]; ok {
+				return &fixtureRowScanner{rows: [][]any{{row.title, row.repoID, row.repositories}}}, nil
 			}
 			return &fixtureRowScanner{}, nil
 		}
@@ -74,10 +91,10 @@ func TestIssueFlameEntityTitleNeverCrossesTheOrgBoundary(t *testing.T) {
 	}
 }
 
-func TestFetchIssueTitleQueryIsBoundToTheCallersOrg(t *testing.T) {
+func TestFetchIssueIdentityQueryIsBoundToTheCallersOrg(t *testing.T) {
 	for _, want := range []string{"FROM work_items FINAL", "work_item_id = {work_item_id:String}", "AND org_id = {org_id:String}"} {
-		if !strings.Contains(fetchIssueTitleQuery, want) {
-			t.Fatalf("title query missing %q:\n%s", want, fetchIssueTitleQuery)
+		if !strings.Contains(fetchIssueIdentityQuery, want) {
+			t.Fatalf("identity query missing %q:\n%s", want, fetchIssueIdentityQuery)
 		}
 	}
 }
@@ -96,5 +113,52 @@ func TestIssueFlameRequestFailsWhenTheTitleReadFails(t *testing.T) {
 	}
 	if got != nil {
 		t.Fatalf("response = %#v, want none on a failed title read", got)
+	}
+}
+
+func issueEntityRepoID(t *testing.T, client fakeQueryClient, org string) any {
+	t.Helper()
+	got, err := BuildResponse(context.Background(), client, org, Params{EntityType: "issue", EntityID: "wi-1"})
+	if err != nil {
+		t.Fatalf("BuildResponse: %v", err)
+	}
+	repoID, ok := got.Entity.Get("repo_id")
+	if !ok {
+		t.Fatal("issue entity has no repo_id key")
+	}
+	return repoID
+}
+
+// CHAOS-12563: the repository id goes out only when exactly one repository
+// holds the work item, so a caller never builds ACR's work_item.v2 id from a
+// guess.
+func TestIssueFlameEntityServesTheOneRepositoryThatHoldsTheWorkItem(t *testing.T) {
+	const repo = "22222222-2222-2222-2222-222222222222"
+	client := issueIdentityClient(t, map[string]workItemRow{"org-1": {title: "Fix login", repoID: repo, repositories: 1}})
+	if got := issueEntityRepoID(t, client, "org-1"); got != repo {
+		t.Fatalf("repo_id = %#v, want %s", got, repo)
+	}
+}
+
+func TestIssueFlameEntityRepoIDIsNullUnlessExactlyOneRepositoryHoldsIt(t *testing.T) {
+	for name, rows := range map[string]map[string]workItemRow{
+		"no row":            {},
+		"two repositories":  {"org-1": {title: "Fix login", repoID: "22222222-2222-2222-2222-222222222222", repositories: 2}},
+		"blank repository":  {"org-1": {title: "Fix login", repoID: " ", repositories: 1}},
+		"another org's row": {"org-2": {title: "Other", repoID: "22222222-2222-2222-2222-222222222222", repositories: 1}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := issueEntityRepoID(t, issueIdentityClient(t, rows), "org-1"); got != nil {
+				t.Fatalf("repo_id = %#v, want null", got)
+			}
+		})
+	}
+}
+
+func TestFetchIssueIdentityQueryCountsRepositoriesBeforeItPicksTheLatestRow(t *testing.T) {
+	for _, want := range []string{"uniqExact(repo_id) OVER () AS repositories", "toString(repo_id) AS repo_id", "LIMIT 1"} {
+		if !strings.Contains(fetchIssueIdentityQuery, want) {
+			t.Fatalf("identity query missing %q:\n%s", want, fetchIssueIdentityQuery)
+		}
 	}
 }

@@ -49,7 +49,8 @@ func PublicReadColumns() []ColumnGrant {
 		{Table: "org_activity", Columns: []string{"org_id", "has_data", "computed_at"}},
 		// The OAuth actor check (acrmint.PGImpersonation): the actor side of a live
 		// impersonation. Its reader arrives in O3b (CHAOS-12399), the grant first.
-		{Table: "impersonation_sessions", Columns: []string{"admin_user_id", "ended_at", "expires_at"}},
+		// id: a delegated session's end finds its row by id (ImpersonationEndColumns).
+		{Table: "impersonation_sessions", Columns: []string{"id", "admin_user_id", "ended_at", "expires_at"}},
 		// The session issue route checks go-api's auth-session-issuer
 		// service credential by its hash (last_used_at is not read or
 		// stamped).
@@ -760,10 +761,16 @@ func publicReadViolations(ctx context.Context, conn *pgx.Conn, options Options) 
 		if options.UsersOwned && schema == publicSchema && (kind == "r" || kind == "p") && isInviteWriteColumn(table, privilege, column) {
 			continue
 		}
+		if options.OrgsOwned && schema == publicSchema && (kind == "r" || kind == "p") && isOrganizationWriteColumn(table, privilege, column) {
+			continue
+		}
 		if schema == publicSchema && (kind == "r" || kind == "p") && isPublicAuditWriteColumn(table, privilege, column) {
 			continue
 		}
 		if schema == publicSchema && (kind == "r" || kind == "p") && isSSOProviderWriteColumn(table, privilege, column) {
+			continue
+		}
+		if schema == publicSchema && (kind == "r" || kind == "p") && isImpersonationWriteColumn(options.UsersOwned, table, privilege, column) {
 			continue
 		}
 		violations = append(violations, Violation{
@@ -790,5 +797,14 @@ func publicReadViolations(ctx context.Context, conn *pgx.Conn, options Options) 
 	if err != nil {
 		return nil, err
 	}
-	return append(append(append(append(violations, missing...), inviteMissing...), auditMissing...), providerWriteMissing...), nil
+	impersonationMissing, err := impersonationWriteMissing(ctx, conn, options)
+	if err != nil {
+		return nil, err
+	}
+	organizationMissing, err := organizationWriteMissing(ctx, conn, options)
+	if err != nil {
+		return nil, err
+	}
+	return append(append(append(append(append(append(violations, missing...), inviteMissing...), auditMissing...), providerWriteMissing...),
+		impersonationMissing...), organizationMissing...), nil
 }

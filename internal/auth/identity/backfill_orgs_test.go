@@ -89,22 +89,37 @@ func TestDecideMembership(t *testing.T) {
 	}
 }
 
-func TestRoleChangeAuditNamesTheChangedFieldAndIsAccepted(t *testing.T) {
-	ev := roleChangeAudit(MembershipBackfillTarget{OrgID: uuid.New(), UserID: uuid.New(), Role: "owner"}, uuid.New())
+func TestRoleChangeAuditCarriesTheReasonAndBothRolesAndIsAccepted(t *testing.T) {
+	prev := "member"
+	ev := roleChangeAudit(MembershipBackfillTarget{OrgID: uuid.New(), UserID: uuid.New(), Role: "owner"}, uuid.New(), &prev)
 	if ev.EventType != "auth.membership.role_changed" {
 		t.Fatalf("event type = %q", ev.EventType)
+	}
+	if ev.Attributes["reason_code"] != "membership_role_changed" {
+		t.Fatalf("reason_code = %v", ev.Attributes["reason_code"])
 	}
 	fields, ok := ev.Attributes["changed_fields"].([]string)
 	if !ok || len(fields) != 1 || fields[0] != "role_key" {
 		t.Fatalf("changed_fields = %v", ev.Attributes["changed_fields"])
 	}
+	if ev.Attributes["previous_role"] != "member" || ev.Attributes["new_role"] != "owner" {
+		t.Fatalf("role slots = %v/%v", ev.Attributes["previous_role"], ev.Attributes["new_role"])
+	}
 	if err := audit.ValidateAttributes(ev.Attributes); err != nil {
 		t.Fatalf("the audit allowlist refuses the attributes: %v", err)
 	}
-	for k, v := range ev.Attributes {
-		if s, ok := v.(string); ok && (s == "owner" || s == "admin") {
-			t.Fatalf("attribute %s carries a role value", k)
-		}
+}
+
+func TestRoleChangeAuditWithNoStoredRoleHasNoPreviousRole(t *testing.T) {
+	ev := roleChangeAudit(MembershipBackfillTarget{OrgID: uuid.New(), UserID: uuid.New(), Role: "admin"}, uuid.New(), nil)
+	if _, ok := ev.Attributes["previous_role"]; ok {
+		t.Fatalf("previous_role = %v with no stored role", ev.Attributes["previous_role"])
+	}
+	if ev.Attributes["new_role"] != "admin" {
+		t.Fatalf("new_role = %v", ev.Attributes["new_role"])
+	}
+	if err := audit.ValidateAttributes(ev.Attributes); err != nil {
+		t.Fatalf("the audit allowlist refuses the attributes: %v", err)
 	}
 }
 

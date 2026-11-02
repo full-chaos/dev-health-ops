@@ -8,6 +8,7 @@
   "payload": {
     "revision": 2,
     "organization_id": "org_EXAMPLE0000000000000001",
+    "binding": "source",
     "source_id": "src_EXAMPLE0000000000000001",
     "change": {
       "scopes": [

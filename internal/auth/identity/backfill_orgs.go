@@ -354,10 +354,14 @@ RETURNING id`, id, t.OrgID, t.UserID, t.Role, t.JoinedAt, inviter).Scan(&inserte
 	return insertOutcome{}, s.storeErr(ctx, "insert membership", err)
 }
 
-// roleChangeAudit names the changed field; the audit vocabulary has no slot for a role value.
-func roleChangeAudit(t MembershipBackfillTarget, id uuid.UUID) audit.AuditEvent {
-	ev := membershipAudit("auth.membership.role_changed", "membership_status_changed", t, id)
+// roleChangeAudit names the changed field and both roles; previous is the stored role the update is guarded on.
+func roleChangeAudit(t MembershipBackfillTarget, id uuid.UUID, previous *string) audit.AuditEvent {
+	ev := membershipAudit("auth.membership.role_changed", "membership_role_changed", t, id)
 	ev.Attributes["changed_fields"] = []string{"role_key"}
+	if previous != nil {
+		ev.Attributes["previous_role"] = *previous
+	}
+	ev.Attributes["new_role"] = t.Role
 	return ev
 }
 
@@ -374,7 +378,7 @@ func (s *Store) updateMembershipRole(ctx context.Context, id uuid.UUID, t Member
 WHERE id = $1 AND status = 'active' AND role IS DISTINCT FROM $2 AND role IS NOT DISTINCT FROM $3::text`, id, t.Role, expected)
 			return err
 		},
-		Audit:  roleChangeAudit(t, id),
+		Audit:  roleChangeAudit(t, id, expected),
 		Events: []audit.OutboxEvent{membershipEvent(id, "membership.role_changed", map[string]any{"role_id": "rol_" + t.Role})},
 	})
 	switch {

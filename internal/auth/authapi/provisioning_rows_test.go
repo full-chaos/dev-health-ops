@@ -80,7 +80,7 @@ func TestProvisioningRoutesNeedTheirProfileRows(t *testing.T) {
 	// row builds no route at all.
 	f := newProvFixture(t)
 	routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
-		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa,
+		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa, Grants: f.grants,
 		ProfileRows: plant(func(row map[string]any) (map[string]any, bool) { return row, row["route"] != PatternInviteAccept })})
 	if !errors.Is(err, errProvisioningRows) || routes != nil {
 		t.Fatalf("ProvisioningRoutes over a document without a row: %d routes, %v; want none and a refusal", len(routes), err)
@@ -98,7 +98,7 @@ func TestProvisioningRoutesRefuseUserTokens(t *testing.T) {
 	pool, connects := usertokens.CountingPool(t)
 	f := newProvFixture(t)
 	routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: servicecred.PG{Pool: pool}, Users: f.users, Reader: noRows{},
-		Organizations: f.orgs, Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa, ProfileRows: docWithRow(t, PatternOrgSuspend),
+		Organizations: f.orgs, Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa, Grants: f.grants, ProfileRows: docWithRow(t, PatternOrgSuspend),
 		Logger: slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))})
 	if err != nil {
 		t.Fatal(err)
@@ -156,8 +156,8 @@ func TestTheReactivateRouteIsInTheStartupGate(t *testing.T) {
 		}
 		routes++
 	}
-	if routes != 21 {
-		t.Fatalf("%d provisioning routes served, want 21", routes)
+	if routes != 25 {
+		t.Fatalf("%d provisioning routes served, want 25", routes)
 	}
 	for _, line := range strings.Split(f.logs.String(), "\n") {
 		if strings.Contains(line, "not mounted") && !strings.Contains(line, PatternOrgState) && !strings.Contains(line, "/internal/v1/grants/") {
@@ -225,7 +225,7 @@ func TestTheRowsGateNeedsTheInviteRevokeRow(t *testing.T) {
 func plantClasses(t *testing.T, route string, classes ...string) []byte {
 	t.Helper()
 	var document map[string]any
-	if err := json.Unmarshal(authv1.AuthServiceEndpointProfiles, &document); err != nil {
+	if err := json.Unmarshal(docWithRows(t, PatternOrgRename), &document); err != nil {
 		t.Fatal(err)
 	}
 	planted := false
@@ -254,7 +254,7 @@ func provisioningRoutesOver(t *testing.T, rows []byte, workload *SessionIssueWor
 	t.Helper()
 	f := newProvFixture(t)
 	routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
-		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa, Workload: workload, ProfileRows: rows})
+		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa, Grants: f.grants, Workload: workload, ProfileRows: rows})
 	var patterns []string
 	for _, route := range routes {
 		patterns = append(patterns, route.Pattern)
@@ -271,12 +271,9 @@ func provisioningRoutesOver(t *testing.T, rows []byte, workload *SessionIssueWor
 // is the whole admitted set.
 func TestProvisioningRoutesMountOnlyOnRowsAcceptingEveryAdmittedClass(t *testing.T) {
 	workload := newWorkloadIssueFixture(t).workload
-	// The org state read is not on the startup gate: it mounts only on a row.
-	dark := []string{PatternOrgState}
+	// The org state read and the rename route are not on the startup gate: they mount only on a row.
+	dark := []string{PatternOrgState, PatternOrgRename}
 	for op, pattern := range provisioningRouteOps {
-		if slices.Contains(grantPatterns, pattern) {
-			continue // no row in the embedded document yet; provisioning_grant_test.go plants its own
-		}
 		issuerOnly := plantClasses(t, pattern, serviceSessionIssuerClass)
 		both := plantClasses(t, pattern, serviceSessionIssuerClass, workloadTokenClass)
 		if workloadOperations[op] && !slices.Contains(dark, pattern) {
@@ -325,7 +322,7 @@ func TestProvisioningRouteOpsCoverTheRoutes(t *testing.T) {
 		patterns = append(patterns, pattern)
 	}
 	patterns = append(patterns, PatternOrgState)
-	patterns = append(patterns, grantPatterns...)
+	patterns = append(patterns, PatternOrgRename)
 	var mapped []string
 	var ops []string
 	for op, pattern := range provisioningRouteOps {

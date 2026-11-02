@@ -93,12 +93,28 @@ var sqlOperandExemptions = []sqlOperandExemption{
 		reason: "updateColumns holds only quoteIdentifier results of the validated InviteWriteGrants names",
 	},
 	{
+		file: "orgwrite_grants.go", fn: "organizationWriteStatements", operand: `strings.Join(columns, ", ")`,
+		reason: "columns holds only quoteIdentifier results of the validated OrganizationWriteGrants names",
+	},
+	{
 		file: "publicaudit_grant.go", fn: "publicAuditWriteStatements", operand: `strings.Join(columns, ", ")`,
 		reason: "columns holds only quoteIdentifier results of the validated PublicAuditWriteColumns names",
 	},
 	{
 		file: "ssoproviderwrite_grant.go", fn: "ssoProviderWriteStatements", operand: `strings.Join(columns, ", ")`,
 		reason: "columns holds only quoteIdentifier results of the validated SSOProviderWriteColumns names",
+	},
+	{
+		file: "impersonationwrite_grant.go", fn: "impersonationWriteStatements", operand: `strings.Join(end, ", ")`,
+		reason: "end holds only quoteIdentifier results of the validated ImpersonationEndColumns names",
+	},
+	{
+		file: "impersonationwrite_grant.go", fn: "impersonationWriteStatements", operand: `strings.Join(start, ", ")`,
+		reason: "start holds only quoteIdentifier results of the validated ImpersonationStartColumns names",
+	},
+	{
+		file: "impersonationwrite_grant.go", fn: "impersonationWriteStatements", operand: `strings.Join(read, ", ")`,
+		reason: "read holds only quoteIdentifier results of the validated ImpersonationLegacyReadColumns names",
 	},
 	{
 		file: "session_readers.go", fn: "sessionReaderStatements", operand: `strings.Join(columns, ", ")`,

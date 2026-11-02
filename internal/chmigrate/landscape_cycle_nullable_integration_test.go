@@ -4,12 +4,16 @@ package chmigrate_test
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 const landscapeCycleVersion = "146_landscape_cycle_nullable.sql"
@@ -174,4 +178,138 @@ WHERE org_id = 'org-146-down' AND identity_id = 'keys-only'`).Scan(&cycle); err 
 	if columnType, _, _ := landscapeCycleColumn(ctx, t, conn); columnType != "Nullable(Float64)" {
 		t.Fatalf("after the upgrade again: %s, want Nullable(Float64)", columnType)
 	}
+}
+
+// INVARIANT (CHAOS-12562): a row of zeros stored before 146 holds the old
+// default 0 in the cycle. 146 sets it to NULL, so the row stays not live under
+// the liveness test, which reads a Nullable measure as live when it is not
+// NULL. A computed point with a cycle of 0 hours (x_norm above 0) keeps its 0.
+//
+// CHMIGRATE_146_SEED_ROWS (default 630) seeds that many more points before 146,
+// one row of zeros in each 63 rows for 10 (the share of rows of zeros on the dev
+// store: 10932 of 68865), the others computed points, some with a cycle of 0.
+// The test logs the rows the UPDATE changed and the wall time of each statement
+// of 146.
+func TestMigration146LeavesAStoredRowOfZerosNotLive(t *testing.T) {
+	ctx := context.Background()
+	seedRows := 630
+	if text := os.Getenv("CHMIGRATE_146_SEED_ROWS"); text != "" {
+		parsed, err := strconv.Atoi(text)
+		if err != nil || parsed < 0 {
+			t.Fatalf("CHMIGRATE_146_SEED_ROWS = %q: want a count", text)
+		}
+		seedRows = parsed
+	}
+	scratch := scratchDatabase(t)
+	conn := openDatabase(t, scratch.URI, "")
+	db, _, err := chmigrate.NewConnDB(ctx, conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline, err := chmigrate.LoadBaseline()
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain, err := chmigrate.LoadChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var before []chmigrate.ChainFile
+	var migration chmigrate.ChainFile
+	for _, file := range chain {
+		if file.Version == landscapeCycleVersion {
+			migration = file
+			continue
+		}
+		before = append(before, file)
+	}
+	if migration.Version == "" {
+		t.Fatalf("the live chain does not hold %s", landscapeCycleVersion)
+	}
+	if _, err := chmigrate.Upgrade(ctx, db, baseline, before); err != nil {
+		t.Fatalf("the chain before 146: %v", err)
+	}
+	if columnType, _, _ := landscapeCycleColumn(ctx, t, conn); columnType != "Float64" {
+		t.Fatalf("before 146 the cycle is %s, want Float64", columnType)
+	}
+	const org = "org-146-zeros"
+	exec := func(query string) {
+		t.Helper()
+		if err := conn.Exec(ctx, query); err != nil {
+			t.Fatalf("%s: %v", query, err)
+		}
+	}
+	// The row of zeros the stale-key rule wrote before 146: keys only.
+	exec(`INSERT INTO ic_landscape_rolling_30d (repo_id, as_of_day, identity_id, team_id, map_name, org_id)
+VALUES ('00000000-0000-0000-0000-000000000000', '2026-09-21', 'retracted', 'team-retired', 'churn_throughput', '` + org + `')`)
+	// A computed point of a person whose cycle is 0 hours.
+	exec(`INSERT INTO ic_landscape_rolling_30d
+    (repo_id, as_of_day, identity_id, team_id, map_name, x_raw, y_raw, x_norm, y_norm, churn_loc_30d, delivery_units_30d, cycle_p50_30d_hours, wip_max_30d, org_id)
+VALUES ('00000000-0000-0000-0000-000000000000', '2026-09-21', 'zero-hours', 'team-1', 'cycle_throughput', 0, 1, 0.5, 0.5, 0, 1, 0, 0, '` + org + `')`)
+	// The seeded points: number % 63 < 10 is a row of zeros (keys only), the
+	// others computed points (x_norm above 0), every fifth with a cycle of 0.
+	if seedRows > 0 {
+		exec(fmt.Sprintf(`INSERT INTO ic_landscape_rolling_30d
+    (repo_id, as_of_day, identity_id, team_id, map_name, x_raw, y_raw, x_norm, y_norm,
+     churn_loc_30d, delivery_units_30d, cycle_p50_30d_hours, wip_max_30d, org_id)
+SELECT toUUID('00000000-0000-0000-0000-000000000000'), toDate('2026-08-01') + intDiv(number, 2000),
+    concat('seed-', toString(number)), 'team-seed', 'churn_throughput',
+    if(zero, 0, 1), if(zero, 0, 2), if(zero, 0, 0.5), if(zero, 0, 0.5),
+    if(zero, 0, 10), if(zero, 0, 1), if(zero, 0, toFloat64(number %% 5)), 0, 'org-146-seed'
+FROM (SELECT number, number %% 63 < 10 AS zero FROM numbers(%d))`, seedRows))
+	}
+	nullCycles := func() uint64 {
+		t.Helper()
+		var n uint64
+		if err := conn.QueryRow(ctx, "SELECT count() FROM ic_landscape_rolling_30d WHERE cycle_p50_30d_hours IS NULL").Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	var total uint64
+	if err := conn.QueryRow(ctx, "SELECT count() FROM ic_landscape_rolling_30d").Scan(&total); err != nil {
+		t.Fatal(err)
+	}
+
+	// Each statement of 146 on its own, timed; then the upgrade records 146
+	// (and runs its statements again, which changes nothing).
+	for _, statement := range chmigrate.SplitStatements(migration.SQL) {
+		started := time.Now()
+		if err := conn.Exec(ctx, statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+		t.Logf("146 statement in %s: %.80q", time.Since(started).Round(time.Millisecond), statement)
+	}
+	changed := nullCycles()
+	t.Logf("146 set the cycle of %d of %d stored rows to NULL (seeded %d)", changed, total, seedRows)
+	if _, err := chmigrate.Upgrade(ctx, db, baseline, chain); err != nil {
+		t.Fatalf("146 over the chain before it: %v", err)
+	}
+	if again := nullCycles(); again != changed {
+		t.Errorf("the upgrade after the statements changed %d more rows, want none", again-changed)
+	}
+	if wantSeeded := uint64(seedRows/63*10 + min(seedRows%63, 10)); changed != 1+wantSeeded {
+		t.Errorf("146 changed %d rows, want %d (the row of zeros and the %d seeded rows of zeros)", changed, 1+wantSeeded, wantSeeded)
+	}
+	read := func(identity string) (cycle *float64, live uint8) {
+		t.Helper()
+		if err := conn.QueryRow(ctx, `SELECT cycle_p50_30d_hours, toUInt8(`+teamkeytables.ICLandscapeRolling30d.LiveRow("")+`)
+FROM ic_landscape_rolling_30d FINAL WHERE org_id = ? AND identity_id = ?`, org, identity).Scan(&cycle, &live); err != nil {
+			t.Fatal(err)
+		}
+		return cycle, live
+	}
+	if cycle, live := read("retracted"); cycle != nil || live != 0 {
+		t.Errorf("the stored row of zeros after 146: cycle %s, live %d; want NULL and not live", optionalCycle(cycle), live)
+	}
+	if cycle, live := read("zero-hours"); cycle == nil || *cycle != 0 || live != 1 {
+		t.Errorf("the computed point of 0 hours after 146: cycle %s, live %d; want 0 and live", optionalCycle(cycle), live)
+	}
+}
+
+func optionalCycle(value *float64) string {
+	if value == nil {
+		return "NULL"
+	}
+	return fmt.Sprint(*value)
 }

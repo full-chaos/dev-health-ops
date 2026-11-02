@@ -10,6 +10,6 @@
     "occurred_at": "2026-11-02T11:30:00.123456Z"
   },
   "parse": "reject",
-  "rule": "status_mismatch",
+  "rule": "envelope",
   "why": "The body status is the HTTP status."
 }

@@ -117,7 +117,7 @@ const readAPIGoldenDir = "contracts/auth/v1/golden/read-api"
 
 // readAPICorpusDigest pins every file of golden/read-api. Moving it is a
 // deliberate edit beside the corpus change.
-const readAPICorpusDigest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+const readAPICorpusDigest = "sha256:12ab7d91dcad08e4a119bff4325861f5cdb3a90a013fd916c25d580a677041c7"
 
 func readAPIGoldenFiles(t *testing.T) []decisionFile {
 	t.Helper()
@@ -321,7 +321,7 @@ func TestReadAPIEveryOperationHasAnAcceptedAndAParserRefusedVector(t *testing.T)
 		if v.Parse == "accept" {
 			accepted[v.Operation] = true
 		}
-		if v.Parse == "refuse" && v.ResponseSchema == "accept" {
+		if v.Parse == "reject" && v.ResponseSchema == "accept" {
 			refused[v.Operation] = true
 		}
 	}

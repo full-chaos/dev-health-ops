@@ -64,6 +64,10 @@ internal/auth/contracts	principal_contract_goldens_test.go	contracts/auth/v1/exa
 internal/auth/contracts	provisioning_event_goldens_test.go	unexpressed	-	-
 internal/auth/contracts	provisioning_resources_test.go	internal/storage/postgres/authschema/migrations	dir	*
 internal/auth/contracts	provisioning_resources_test.go	unexpressed	-	-
+internal/auth/contracts	read_api_test.go	contracts/auth/v1/golden/read-api	tree	*
+internal/auth/contracts	read_api_test.go	contracts/auth/v1/golden/read-api/vectors	dir	*
+internal/auth/contracts	read_api_test.go	internal/storage/postgres/authschema/migrations	dir	*
+internal/auth/contracts	read_api_test.go	unexpressed	-	-
 internal/auth/contracts	reason_code_vocabulary_test.go	unexpressed	-	-
 internal/auth/contracts	refresh_response_v2_test.go	contracts/auth/v1/examples/refresh-response.v2	dir	*
 internal/auth/contracts	reject_location_test.go	contracts/auth/v1/examples	tree	*

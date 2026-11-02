@@ -23,7 +23,7 @@
     },
     {
       "file": "invalid-item-invalid-membership.json",
-      "expect_instance_location": "/items/0",
+      "expect_instance_location": "/items/0/role",
       "expect_keyword": "enum",
       "why": "An item is a membership-read body."
     },

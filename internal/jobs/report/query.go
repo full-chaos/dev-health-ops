@@ -743,6 +743,11 @@ func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any
 //
 // The normalized coordinates (x_norm, y_norm) are not here: they are ranks
 // inside one team, and a chart of them keeps one value per (person, team).
+//
+// The whole cycle reads the days that hold a cycle only, as the landscape
+// compute does (icfinalize rollingStatsGitArmSQL): a day with no merged pull
+// request has no cycle, and a person with no such day has no whole cycle
+// (NULL), which the chart's mean leaves out.
 var wholePersonLandscapeColumns = map[string]string{
 	"churn_loc_30d":       "whole_churn",
 	"delivery_units_30d":  "whole_delivery",
@@ -779,7 +784,8 @@ func wholePersonLandscapeSource(metric, landscapeSource, where, repoFilter strin
                 points.as_of_day AS as_of_day, points.identity_id AS identity_id,
                 toFloat64(sum(person_rows.loc_touched)) AS whole_churn,
                 toFloat64(sum(person_rows.delivery_units)) AS whole_delivery,
-                median(person_rows.cycle_p50_hours) AS whole_cycle,
+                median(if(toInt64(person_rows.delivery_units) - toInt64(person_rows.work_items_completed) > 0,
+                    CAST(person_rows.cycle_p50_hours, 'Nullable(Float64)'), NULL)) AS whole_cycle,
                 toFloat64(max(person_rows.work_items_active)) AS whole_wip
             FROM (
                 SELECT DISTINCT org_id, repo_id, map_name, as_of_day, identity_id

@@ -81,6 +81,14 @@ func isTransportErrorRef(schema any) bool {
 	return len(object) == 1 && object["$ref"] == transportErrorRef
 }
 
+const errorRef = "#/components/schemas/Error"
+
+// isErrorRef: exactly {"$ref": Error}, the route's own error.v1 refusal; a sibling keyword could narrow it.
+func isErrorRef(schema any) bool {
+	object, _ := schema.(map[string]any)
+	return len(object) == 1 && object["$ref"] == errorRef
+}
+
 // checkedKeywords are the schema keywords an extra oneOf member may use, from the census of the keywords the live
 // OpenAPI document's inline schemas use (type, required, additionalProperties, properties, const, enum, description,
 // format); any other keyword fails closed. The census also holds $ref and oneOf; a member may not use $ref (the walk
@@ -617,7 +625,13 @@ func TestTheOpenAPIPathGateChecksTheOneOfExtraMembers(t *testing.T) {
 			plantOneOf(d, "/v1/identities/social", "post", "400", m)
 		}, true},
 		"an extra member that is a ref": {func(d map[string]any) {
+			plantOneOf(d, "/v1/identities/social", "post", "400", map[string]any{"$ref": "#/components/schemas/Session"})
+		}, true},
+		"an extra member that is the error.v1 ref": {func(d map[string]any) {
 			plantOneOf(d, "/v1/identities/social", "post", "400", map[string]any{"$ref": "#/components/schemas/Error"})
+		}, false},
+		"an extra member that is the error.v1 ref with a sibling keyword": {func(d map[string]any) {
+			plantOneOf(d, "/v1/identities/social", "post", "400", map[string]any{"$ref": "#/components/schemas/Error", "not": map[string]any{}})
 		}, true},
 		"an extra member that is a string schema": {func(d map[string]any) {
 			plantOneOf(d, "/v1/identities/social", "post", "400", map[string]any{"type": "string"})
@@ -1128,6 +1142,21 @@ func TestTheOpenAPIPathGateExemptsOnlyGoAPIsPathSpace(t *testing.T) {
 		})
 		if len(openAPIPathProblems(document, rows)) == 0 {
 			t.Errorf("an API row at %s without an operation passed", route)
+		}
+	}
+}
+
+// D6643: the 400 a route answers for a body that is not exactly one request is
+// error.v1 (status 400, reason malformed). The two authorize operations declare
+// it beside the transport's own 400.
+func TestTheAuthorizeOperationsDeclareTheMalformed400AsErrorV1(t *testing.T) {
+	document := loadOpenAPIRaw(t)
+	for _, route := range []string{"/v1/authorize", "/v1/authorize:batch"} {
+		op := document["paths"].(map[string]any)[route].(map[string]any)["post"].(map[string]any)
+		schema := op["responses"].(map[string]any)["400"].(map[string]any)["content"].(map[string]any)["application/json"].(map[string]any)["schema"].(map[string]any)
+		members, _ := schema["oneOf"].([]any)
+		if len(members) != 2 || !isTransportErrorRef(members[0]) || !isErrorRef(members[1]) {
+			t.Errorf("%s: its 400 is %v, want oneOf [TransportError, Error]", route, schema)
 		}
 	}
 }

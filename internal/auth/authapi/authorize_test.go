@@ -402,9 +402,7 @@ func assertError(t *testing.T, rec *httptest.ResponseRecorder, status int, reaso
 	if rec.Code != status {
 		t.Fatalf("status %d, want %d; body %s", rec.Code, status, rec.Body)
 	}
-	if status != http.StatusBadRequest {
-		validateSurface(t, contracts.ErrorSurface, rec.Body.Bytes())
-	}
+	validateSurface(t, contracts.ErrorSurface, rec.Body.Bytes())
 	var doc struct {
 		ReasonCode string `json:"reason_code"`
 	}

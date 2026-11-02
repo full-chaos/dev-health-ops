@@ -1,5 +1,5 @@
 {
-  "description": "Golden corpus for authorization_batch_response.v1 (CHAOS-4932). reject_by_client documents VALIDATE and every client MUST refuse them when checked against `request`, the batch request they answer (two items); the valid fixtures answer the same request.",
+  "description": "Golden corpus for authorization_batch_response.v1 (CHAOS-4932). reject_by_client documents VALIDATE and every client MUST refuse them when checked against `request`, the batch request they answer (two items); the valid fixtures answer the same request. accept_not_cacheable documents VALIDATE and every client MUST accept them against a stated `now`, marking the expired item not cacheable.",
   "accept": [
     {
       "file": "batch-response-valid-items-disagree.json",
@@ -66,12 +66,14 @@
       "why": "Indices 0,2: a gap."
     },
     {
-      "file": "batch-response-client-expired-item.json",
-      "why": "Item 0 is an expired allow in an otherwise well-formed batch. The whole response is refused, not just the item, as for every other binding failure."
-    },
-    {
       "file": "batch-response-client-decimal-form-index.json",
       "why": "index 1.0 is a valid schema integer; the clients refuse a decimal-form token."
+    }
+  ],
+  "accept_not_cacheable": [
+    {
+      "file": "batch-response-valid-item-expired-not-cacheable.json",
+      "why": "Item 0 is an allow past its expires_at in an otherwise well-formed batch. The response is accepted; item 0 is marked not cacheable (use once). Moved from reject_by_client by the 5.9 ruling."
     }
   ],
   "request": {

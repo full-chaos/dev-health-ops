@@ -44,7 +44,7 @@ readonly HOST_DEFAULT_KUBECONFIG="/etc/rancher/k3s/k3s.yaml"
 readonly RELEASE="ap" FULL="ap-dev-health"
 readonly IDP_HOST="idp.fb.test"
 readonly SP_ENTITY="https://sp.fb.test/saml/metadata"
-readonly DOMAIN="fb.test"
+readonly DOMAIN="fbrehearsal.dev"
 PASSES=0
 
 die() {
@@ -454,7 +454,8 @@ pass "S1 admin user and organization created by the admin verbs"
 # ---- S2 provider rows through the go-api admin route --------------------------------------------------------------------------------------
 pf_all
 jfile --arg e "${ADMIN_EMAIL}" --arg p "${ADMIN_PASSWORD}" '{email: $e, password: $p}'
-[ "$(api POST /api/v1/auth/login "${WORK}/req.json")" = 200 ] || die "S2: the admin login through go-api did not answer 200"
+status="$(api POST /api/v1/auth/login "${WORK}/req.json")"
+[ "${status}" = 200 ] || die "S2: the admin login through go-api answered ${status}: $(jq -c '.detail // empty' "${BODY}" 2>/dev/null | cut -c1-200)"
 (umask 077; printf 'Authorization: Bearer %s\n' "$(jq -r '.access_token // empty' "${BODY}")" >"${WORK}/admin.hdr")
 if [ ! -s "${WORK}/admin.hdr" ] || grep -q 'Bearer $' "${WORK}/admin.hdr"; then die "S2: the admin login returned no access token"; fi
 idp_get "https://${IDP_HOST}/saml/cert"
@@ -465,11 +466,11 @@ jfile --arg ip "${IDP_HOST}" --arg domain "${DOMAIN}" --arg cert "${SAML_CERT}" 
   saml_config: {entity_id: ("https://" + $ip + "/saml/metadata"), sso_url: ("https://" + $ip + "/saml/sso"), certificate: $cert, sp_entity_id: $sp,
     sp_acs_url: "https://sp.fb.test/api/v1/auth/saml/{provider_id}/acs"}}'
 status="$(api POST /api/v1/auth/sso/providers "${WORK}/req.json" "${WORK}/admin.hdr")"
-[ "${status}" = 200 ] || [ "${status}" = 201 ] || die "S2: the SAML provider create answered ${status}"
+[ "${status}" = 200 ] || [ "${status}" = 201 ] || die "S2: the SAML provider create answered ${status}: $(jq -c '.detail // empty' "${BODY}" 2>/dev/null | cut -c1-200)"
 SAML_ID="$(jq -r '.id // empty' "${BODY}")"
 [[ "${SAML_ID}" =~ ^[0-9a-f-]{36}$ ]] || die "S2: a provider create returned no id"
 status="$(api POST "/api/v1/auth/sso/providers/${SAML_ID}/activate" "" "${WORK}/admin.hdr")"
-[ "${status}" = 200 ] || die "S2: the provider activate answered ${status}"
+[ "${status}" = 200 ] || die "S2: the provider activate answered ${status}: $(jq -c '.detail // empty' "${BODY}" 2>/dev/null | cut -c1-200)"
 pass "S2 a SAML provider row exists and is active (go-api admin route, auto-provision on, allowed_domains ${DOMAIN})"
 
 # ---- sign-ins ---------------------------------------------------------------------------------------------------------------------------

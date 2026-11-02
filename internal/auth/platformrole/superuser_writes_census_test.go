@@ -18,28 +18,172 @@ import (
 )
 
 var (
-	usersWrite   = regexp.MustCompile(`(?is)\b(?:insert\s+into|update)\s+(?:public\.)?users\b`)
-	usersInsert  = regexp.MustCompile(`(?is)\binsert\s+into\s+(?:public\.)?users\s*\(([^)]*)\)\s*values\s*\((.*)\)`)
-	superuserSet = regexp.MustCompile(`(?i)\bis_superuser\s*=\s*([^,\s]+)`)
+	usersWrite = regexp.MustCompile(`(?is)\b(?:insert\s+into|update)\s+(?:only\s+)?(?:"?public"?\s*\.\s*)?"?users"?\b`)
+	insertHead = regexp.MustCompile(`(?is)\binsert\s+into\s+(?:public\s*\.\s*)?users(?:\s+as\s+\w+)?\s*`)
+	updateHead = regexp.MustCompile(`(?is)\bupdate\s+(?:only\s+)?(?:public\s*\.\s*)?users\b`)
+	setKeyword = regexp.MustCompile(`(?is)\bset\b`)
+	valuesHead = regexp.MustCompile(`(?is)^\s*values\s*\(`)
+	clauseEnd  = regexp.MustCompile(`(?is)^(?:where|from|returning)\b`)
 )
 
+// unparsedWrite is the value of a static users write whose targets the probe
+// cannot parse: the census lists it as a finding, never accepts it.
+const unparsedWrite = "unparsed"
+
 // superuserWriteValue is the value a users INSERT or UPDATE statement gives
-// is_superuser, lowered, or "" when the statement does not write it.
+// is_superuser, lowered, or "" when the statement does not write it. Quoted
+// and schema-qualified names, tuple SET targets and an ON CONFLICT DO UPDATE
+// SET are read; a users write it cannot parse gives unparsedWrite.
 func superuserWriteValue(sql string) string {
-	if m := usersInsert.FindStringSubmatch(sql); m != nil {
-		columns := splitTopLevel(m[1])
-		values := splitTopLevel(m[2])
-		for i, column := range columns {
-			if strings.EqualFold(column, "is_superuser") && i < len(values) {
-				return strings.ToLower(values[i])
-			}
+	sql = strings.ReplaceAll(sql, `"`, "")
+	var values []string
+	rest := sql
+	if loc := insertHead.FindStringIndex(sql); loc != nil {
+		rest = sql[loc[1]:]
+		if !strings.HasPrefix(rest, "(") {
+			return unparsedWrite
 		}
+		end := matchParen(rest, 0)
+		if end < 0 {
+			return unparsedWrite
+		}
+		columns := splitTopLevel(rest[1:end])
+		rest = rest[end+1:]
+		if head := strings.ToLower(columns[0]); strings.HasPrefix(head, "select") || strings.HasPrefix(head, "with") {
+			return unparsedWrite
+		}
+		for i, column := range columns {
+			if !strings.EqualFold(column, "is_superuser") {
+				continue
+			}
+			vm := valuesHead.FindStringIndex(rest)
+			if vm == nil {
+				return unparsedWrite
+			}
+			open := vm[1] - 1
+			close := matchParen(rest, open)
+			if close < 0 {
+				return unparsedWrite
+			}
+			row := splitTopLevel(rest[open+1 : close])
+			if i >= len(row) {
+				return unparsedWrite
+			}
+			values = append(values, strings.ToLower(row[i]))
+		}
+	} else if loc := updateHead.FindStringIndex(sql); loc != nil {
+		rest = sql[loc[1]:]
+		if !setKeyword.MatchString(rest) {
+			return unparsedWrite
+		}
+	} else {
 		return ""
 	}
-	if m := superuserSet.FindStringSubmatch(sql); m != nil {
-		return strings.ToLower(m[1])
+	if loc := setKeyword.FindStringIndex(rest); loc != nil {
+		set, ok := setAssignments(rest[loc[1]:])
+		if !ok {
+			return unparsedWrite
+		}
+		values = append(values, set...)
 	}
-	return ""
+	return strings.Join(values, ",")
+}
+
+// matchParen is the index of the parenthesis closing the one at s[open], or -1.
+func matchParen(s string, open int) int {
+	depth := 0
+	for i := open; i < len(s); i++ {
+		switch s[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// setAssignments returns the values a SET clause gives is_superuser, and false
+// when an assignment's target or value shape is not one it parses.
+func setAssignments(clause string) ([]string, bool) {
+	depth, end := 0, len(clause)
+scan:
+	for i := 0; i < len(clause); i++ {
+		switch clause[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		default:
+			if depth == 0 && (i == 0 || !isWordByte(clause[i-1])) && clauseEnd.MatchString(clause[i:]) {
+				end = i
+				break scan
+			}
+		}
+	}
+	var values []string
+	for _, assignment := range splitTopLevel(clause[:end]) {
+		eq := topLevelEquals(assignment)
+		if eq < 0 {
+			return nil, false
+		}
+		lhs, rhs := strings.TrimSpace(assignment[:eq]), strings.TrimSpace(assignment[eq+1:])
+		if !strings.HasPrefix(lhs, "(") {
+			if columnName(lhs) == "is_superuser" {
+				values = append(values, strings.ToLower(strings.Fields(rhs + " ")[0]))
+			}
+			continue
+		}
+		columns := splitTopLevel(lhs[1 : len(lhs)-1])
+		if lower := strings.ToLower(rhs); strings.HasPrefix(lower, "row") {
+			rhs = strings.TrimSpace(rhs[3:])
+		}
+		var row []string
+		if strings.HasPrefix(rhs, "(") && matchParen(rhs, 0) == len(rhs)-1 {
+			row = splitTopLevel(rhs[1 : len(rhs)-1])
+		}
+		for i, column := range columns {
+			if columnName(column) != "is_superuser" {
+				continue
+			}
+			if len(row) != len(columns) {
+				return nil, false
+			}
+			values = append(values, strings.ToLower(row[i]))
+		}
+	}
+	return values, true
+}
+
+func isWordByte(b byte) bool {
+	return b == '_' || b >= '0' && b <= '9' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z'
+}
+
+// columnName is the lowered column of a possibly qualified target.
+func columnName(target string) string {
+	target = strings.TrimSpace(target)
+	return strings.ToLower(target[strings.LastIndex(target, ".")+1:])
+}
+
+// topLevelEquals is the index of the first = outside parentheses, or -1.
+func topLevelEquals(s string) int {
+	depth := 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		case '=':
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
 }
 
 // splitTopLevel splits on the commas outside parentheses and trims each part.
@@ -69,7 +213,7 @@ func superuserWrites(file *ast.File) map[string][]string {
 	collect := func(scope string, node ast.Node) {
 		ast.Inspect(node, func(n ast.Node) bool {
 			lit, ok := n.(*ast.BasicLit)
-			if !ok || lit.Kind != token.STRING || !strings.Contains(lit.Value, "is_superuser") {
+			if !ok || lit.Kind != token.STRING {
 				return true
 			}
 			sql, err := strconv.Unquote(lit.Value)

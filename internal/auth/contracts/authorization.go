@@ -45,6 +45,7 @@ type AuthorizationDecision struct {
 	PolicyRevision Revision                  `json:"policy_revision"`
 	ExpiresAt      Timestamp                 `json:"expires_at"`
 	Obligations    *AuthorizationObligations `json:"obligations,omitempty"`
+	Cacheable      bool                      `json:"-"`
 }
 
 func checkedDocument(root, surface string, raw []byte) (any, error) {

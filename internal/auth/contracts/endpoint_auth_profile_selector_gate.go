@@ -16,8 +16,9 @@ import (
 // ClassMarker is one way a credential class announces itself on the request
 // head, in the vocabulary of endpoint-auth-profile.v1's class_disambiguator.
 type ClassMarker struct {
-	Kind string `json:"kind"`
-	Name string `json:"name"`
+	Kind  string `json:"kind"`
+	Name  string `json:"name"`
+	Shape string `json:"shape,omitempty"`
 }
 
 // selectorNameMax is the schemas' maxLength for a selector name (code points).

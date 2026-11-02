@@ -163,6 +163,7 @@ func TestEachKeyComponentVariedMisses(t *testing.T) {
 		{"policy revision", func(k *Key) { k.PolicyRevision++ }},
 		{"entitlement revision", func(k *Key) { k.EntitlementRevision = 1 }},
 		{"unfed values", func(k *Key) { k.Unfed = "user:inactive" }},
+		{"state version", func(k *Key) { k.State = "rows:changed" }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newRig(t, 0)

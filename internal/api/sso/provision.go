@@ -302,7 +302,7 @@ func (h handlers) requireMembership(ctx context.Context, userID uuid.UUID, orgID
 
 func membershipRequiredDetail() *pyjson.Object {
 	detail := pyjson.NewObject()
-	detail.Set("message", "A membership in this organization is required")
+	detail.Set("message", identity.MembershipRequiredMessage)
 	detail.Set("reason", "membership_required")
 	return detail
 }

@@ -675,7 +675,7 @@ func refuseUnusableEmail(email string) *Error {
 
 func notMember() *Error {
 	return deny(http.StatusForbidden, ReasonMembershipRequired,
-		"This account is not a member of the provider's organization.")
+		map[string]any{"message": identity.MembershipRequiredMessage, "reason": string(ReasonMembershipRequired)})
 }
 
 // newAccount runs the e-mail checks. With JIT off it then refuses, writing

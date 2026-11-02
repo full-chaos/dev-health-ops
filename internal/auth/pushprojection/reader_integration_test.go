@@ -257,6 +257,20 @@ func TestReaderProjectsThreeCredentialsOfOneSourceEachUnderItsOwnFingerprint(t *
 	}
 }
 
+func TestReaderProjectsAnOrganizationBoundEventToTheOrganizationPrincipal(t *testing.T) {
+	e := getEnv(t, true)
+	org, id := e.org(t), uuid.NewString()
+	e.appendCommitted(t, audit.PushLifecycleEvent{Binding: externalpush.BindingOrganization, EventType: externalpush.Created, AggregateID: id,
+		OrganizationID: "org_" + org.String(), Change: externalpush.Change{Status: "active", Fingerprint: freshFingerprint(), Scopes: []string{"ingest:write"}}})
+	rep, err := e.reader(t, time.Hour).Step(context.Background(), time.Now())
+	if err != nil || rep.Applied != 1 {
+		t.Fatalf("step: %+v, %v; want the organization-bound event applied", rep, err)
+	}
+	if n := e.count(t, `SELECT count(*) FROM auth.credential_projection p JOIN auth.push_sources s ON s.principal_id = p.principal_id WHERE p.external_reference = $1 AND p.binding = 'organization' AND p.source_id IS NULL AND s.source_id IS NULL AND s.organization_id = $2`, id, org); n != 1 {
+		t.Fatal("the organization-bound credential is not held by the organization principal")
+	}
+}
+
 func TestReaderReadsALateLowerIdThatCommitsAfterAHigherOne(t *testing.T) {
 	e := getEnv(t, true)
 	org := e.org(t)

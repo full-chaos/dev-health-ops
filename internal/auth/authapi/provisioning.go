@@ -247,10 +247,10 @@ func (h provisioningHandlers) admitUpTo(w http.ResponseWriter, r *http.Request, 
 }
 
 // workloadOperations are the operations that take the go-api workload token. The
-// list is default-deny: any other operation (the invite revoke and organization
-// suspend among them) refuses a workload token before the key set is read.
+// list is default-deny: any other operation (the invite revoke among them)
+// refuses a workload token before the key set is read.
 var workloadOperations = map[string]bool{opMembershipAdd: true, opMembershipRole: true, opMembershipRemove: true,
-	opMembershipTransfer: true, opInviteCreate: true, opInviteAccept: true, opOrgDeprovision: true, opOrgReactivate: true, opOrgOnboard: true, opOrgCreate: true, opOrgState: true,
+	opMembershipTransfer: true, opInviteCreate: true, opInviteAccept: true, opOrgDeprovision: true, opOrgReactivate: true, opOrgSuspend: true, opOrgOnboard: true, opOrgCreate: true, opOrgState: true,
 	opServiceAccountCreate: true, opServiceAccountDisable: true, opServiceAccountEnable: true, opServiceAccountOwner: true,
 	opServiceAccountKeyIssue: true, opServiceAccountKeyRotate: true, opServiceAccountKeyRevoke: true, opServiceAccountKeyList: true}
 

@@ -22,13 +22,20 @@ var authorizeProfileRows []byte
 // published key set. A route mounts only when its endpoint-profile row exists.
 // Without AUTH_AUTHORIZE_CALLER_SUBJECTS the caller gate is nil and refuses
 // every caller; without AUTH_TOKEN_ISSUER_URL no principal reference resolves.
+//
+// decisions is the decision cache with the feed on, nil with it off: the routes then decide without a cache and
+// decisionstate collects nothing.
 func authorizeRoutes(cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
-	signer authapi.AccessSigner) ([]httpapi.Route, error) {
-	state, err := decisionstate.New(decisionstate.Config{Pool: pool, Schema: schema, Users: pgUsers(cfg, pool, schema)})
+	signer authapi.AccessSigner, decisions *decisionFeed) ([]httpapi.Route, error) {
+	state, err := decisionstate.New(decisionstate.Config{Pool: pool, Schema: schema, Users: pgUsers(cfg, pool, schema),
+		CollectDependencies: decisions != nil})
 	if err != nil {
 		return nil, err
 	}
 	deps := authapi.AuthorizeDeps{State: state, Evaluator: authorization.NewEvaluator(), ProfileRows: authorizeProfileRows, Logger: logger}
+	if decisions != nil {
+		deps.Cache, deps.Ready = decisions.cache, decisions.ready
+	}
 	if cfg.TokenIssuerURL != "" {
 		keys, ok := signer.(authapi.KeySetSource)
 		if !ok {

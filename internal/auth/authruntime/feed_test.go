@@ -42,7 +42,8 @@ func TestTheRevisionFeedOffBuildsNothing(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg, pool, schema := feedFixture(t, env)
-			publisher, components, err := revisionFeed(cfg, discard(), pool, schema)
+			parts, err := revisionFeed(cfg, discard(), pool, schema)
+			publisher, components := parts.publisher, parts.components
 			if err != nil || publisher != nil || len(components) != 0 {
 				t.Fatalf("publisher %v, %d components, err %v; want none", publisher, len(components), err)
 			}
@@ -56,7 +57,8 @@ func TestTheRevisionFeedOnBuildsAPublisherAndASubscriberWithoutDialling(t *testi
 	cfg, pool, schema := feedFixture(t, map[string]string{
 		authconfig.EnvValkeyURI: "redis://auth-service-ratelimit:SENTINEL_PW@127.0.0.1:1/1", authconfig.EnvRevisionFeed: "on",
 	})
-	publisher, components, err := revisionFeed(cfg, discard(), pool, schema)
+	parts, err := revisionFeed(cfg, discard(), pool, schema)
+	publisher, components := parts.publisher, parts.components
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +105,8 @@ func TestTheFloorInputIsRegisteredOnlyWhenTheFeedIsOnAndNothingDialsAtBuild(t *t
 	} {
 		cfg, pool, schema := feedFixture(t, env)
 		before := count()
-		publisher, components, err := revisionFeedWith(cfg, discard(), pool, schema, dial)
+		parts, err := revisionFeedWith(cfg, discard(), pool, schema, dial)
+		publisher, components := parts.publisher, parts.components
 		if err != nil || publisher != nil || len(components) != 0 {
 			t.Fatalf("%s: publisher %v, %d components, err %v", name, publisher, len(components), err)
 		}
@@ -116,7 +119,8 @@ func TestTheFloorInputIsRegisteredOnlyWhenTheFeedIsOnAndNothingDialsAtBuild(t *t
 	}
 	cfg, pool, schema := feedFixture(t, map[string]string{authconfig.EnvValkeyURI: testValkeyURI, authconfig.EnvRevisionFeed: "on"})
 	before := count()
-	_, components, err := revisionFeedWith(cfg, discard(), pool, schema, dial)
+	parts, err := revisionFeedWith(cfg, discard(), pool, schema, dial)
+	components := parts.components
 	if err != nil || len(components) != 1 {
 		t.Fatalf("on: %d components, err %v", len(components), err)
 	}

@@ -558,7 +558,12 @@ func TestAuthorizeDecisionIDFailureIsA503(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, PatternAuthorize, bytes.NewReader(mustJSON(t, h.question("settings.write", "organization", "acme", h.org))))
 	req.Header.Set("Authorization", "Bearer "+h.workloadToken(nil))
 	w := httptest.NewRecorder()
-	requestid.Middleware(http.HandlerFunc(handlers.authorize)).ServeHTTP(w, req)
+	admit := handlers.admit(opAuthorize)
+	requestid.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if admitted, ok := admit(w, r); ok {
+			handlers.authorize(w, admitted)
+		}
+	})).ServeHTTP(w, req)
 	assertError(t, w, http.StatusServiceUnavailable, reasonDependency)
 }
 

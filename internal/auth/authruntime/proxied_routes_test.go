@@ -257,7 +257,7 @@ func TestEveryGoAPIProxiedAuthRouteIsMountedInEveryAuthServicePhase(t *testing.T
 
 func TestNotMountedStubsAnswer503WithRetryAfterInEveryPhase(t *testing.T) {
 	stubbed := map[int][]string{
-		1: {"POST /api/v1/auth/refresh", "POST /api/v1/auth/logout"},
+		1: {"POST /api/v1/auth/refresh", "POST /api/v1/auth/logout", "POST /api/v1/auth/validate"},
 		2: {"GET /api/v1/auth/verify", "POST /api/v1/auth/login", "POST /api/v1/auth/register"},
 		3: {"GET /api/v1/auth/verify", "POST /api/v1/auth/register"},
 	}

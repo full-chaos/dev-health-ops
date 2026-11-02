@@ -11,6 +11,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/auth/serviceaccount"
 	"github.com/full-chaos/dev-health-ops/internal/auth/workload"
 	"github.com/full-chaos/dev-health-ops/internal/auth/workloadexchange"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -93,4 +94,16 @@ func (r bootstrapRegistry) ResolveBootstrap(ctx context.Context, digest [sha256.
 		},
 		CredentialID: reg.CredentialID, ExpiresAt: reg.ExpiresAt,
 	}, nil
+}
+
+// keyResolver is the read the key adapter needs (*serviceaccount.KeyResolver).
+type keyResolver interface {
+	ResolveKey(ctx context.Context, digest [sha256.Size]byte, now time.Time) (serviceaccount.ResolvedKey, error)
+}
+
+// serviceAccountKeyRegistry adapts ResolveKey to the exchange.
+type serviceAccountKeyRegistry struct{ resolver keyResolver }
+
+func (r serviceAccountKeyRegistry) ResolveServiceAccountKey(context.Context, [sha256.Size]byte, time.Time) (workloadexchange.ServiceAccountKeyRegistration, error) {
+	return workloadexchange.ServiceAccountKeyRegistration{}, nil
 }

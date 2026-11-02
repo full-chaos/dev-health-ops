@@ -105,6 +105,9 @@ type Deps struct {
 	// Bootstrap resolves a Compose bootstrap credential by its digest; nil
 	// turns the bootstrap subject off.
 	Bootstrap BootstrapRegistry
+	// ServiceAccountKeys resolves a service account key by its digest; nil
+	// turns the service account key subject off.
+	ServiceAccountKeys ServiceAccountKeyRegistry
 	// RefusalReason names why Registry.Resolve refused, for the log line and
 	// the counter only.
 	RefusalReason func(error) string

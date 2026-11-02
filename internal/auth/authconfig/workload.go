@@ -25,6 +25,9 @@ const (
 	// workload-token exchange route with the Compose bootstrap credential
 	// subject.
 	EnvWorkloadBootstrap = "AUTH_WORKLOAD_BOOTSTRAP"
+	// EnvServiceAccountExchange ("true" or "false", default false) mounts the
+	// workload-token exchange route with the service account key subject.
+	EnvServiceAccountExchange = "AUTH_SERVICE_ACCOUNT_EXCHANGE"
 	// EnvWorkloadTrustDomain names this cluster in the workload bindings.
 	EnvWorkloadTrustDomain = "AUTH_WORKLOAD_TRUST_DOMAIN"
 	// EnvWorkloadClusterIssuer is the ServiceAccount token issuer of the
@@ -45,6 +48,7 @@ const (
 type WorkloadExchange struct {
 	Enabled           bool
 	Bootstrap         bool
+	ServiceAccountKey bool
 	TrustDomain       string
 	ClusterIssuer     string
 	KubeAPIURL        string

@@ -1660,7 +1660,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/authorize.go",
-        "line": 24
+        "line": 25
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -1693,7 +1693,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/authorize.go",
-        "line": 25
+        "line": 26
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -2267,5 +2267,5 @@
     }
   ],
   "schema_version": "endpoint-profile.v1",
-  "source_commit": "4193af6c7bb0d3e9def1ce46aced9368ca76e4b5"
+  "source_commit": "f1b88a086ed92247268032bedfb647c638325992"
 }

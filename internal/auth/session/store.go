@@ -37,6 +37,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/delegationend"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
+	"github.com/full-chaos/dev-health-ops/internal/auth/sessionevent"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
@@ -660,35 +661,120 @@ func (s *Store) revokeForReuse(ctx context.Context, session Record, familyID str
 }
 
 // revokeSessions revokes the given sessions and every credential of them. The
-// caller holds their locks inside an audit.Commit transaction.
+// caller holds their locks inside an audit.Commit transaction. It queues a
+// session.revoked event for each session it ended, for each live client session
+// under them and for each delegated session it reached (CHAOS-11816).
 func (s *Store) revokeSessions(ctx context.Context, tx audit.TxOps, ids []string, reason string) error {
-	return s.endSessions(ctx, tx, ids, reason, false)
+	_, err := s.endSessions(ctx, tx, ids, reason, false, true)
+	return err
+}
+
+// revokeSessionsBulk is revokeSessions for a bulk end whose caller queues ONE scope event instead of one per session
+// (principal.sessions_revoked, organization.sessions_revoked). It returns the instant it wrote as revoked_at on every row,
+// which the scope event carries as revoked_before.
+func (s *Store) revokeSessionsBulk(ctx context.Context, tx audit.TxOps, ids []string, reason string, nowait bool) (time.Time, error) {
+	return s.endSessions(ctx, tx, ids, reason, nowait, false)
 }
 
 // endSessions is revokeSessions; a delegated row among ids and every delegated
 // child of ids end with them, each with a delegation_ended audit row. nowait
-// is the mode of a caller under the auth lock order's step 6a.
-func (s *Store) endSessions(ctx context.Context, tx audit.TxOps, ids []string, reason string, nowait bool) error {
+// is the mode of a caller under the auth lock order's step 6a. It reads ONE
+// clock reading and writes it as revoked_at of every credential and session it
+// ends, and returns it. With each set it queues session.revoked for every
+// session it ended and for the live client sessions whose web session it ended
+// (they end by read of the parent's revoke, with no row written; a client
+// session that commits after this read has no event, and the server's read of
+// the parent still refuses it).
+func (s *Store) endSessions(ctx context.Context, tx audit.TxOps, ids []string, reason string, nowait, each bool) (time.Time, error) {
 	delegated, err := delegationend.Lock(ctx, tx, s.q, ids, nowait)
 	if err != nil {
-		return err
+		return time.Time{}, err
+	}
+	var at time.Time
+	if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&at); err != nil {
+		return time.Time{}, err
+	}
+	var children []string
+	if each {
+		if children, err = s.liveClientSessions(ctx, tx, ids); err != nil {
+			return time.Time{}, err
+		}
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE `+s.q+`.refresh_credentials
-		SET revoked_at = clock_timestamp(), revoked_reason = $2, updated_at = clock_timestamp()
-		WHERE session_id = ANY($1::uuid[]) AND revoked_at IS NULL`, ids, reason); err != nil {
-		return err
+		SET revoked_at = $3, revoked_reason = $2, updated_at = $3
+		WHERE session_id = ANY($1::uuid[]) AND revoked_at IS NULL`, ids, reason, at); err != nil {
+		return time.Time{}, err
 	}
-	if _, err := tx.Exec(ctx, `
+	rows, err := tx.Query(ctx, `
 		UPDATE `+s.q+`.sessions
-		SET revoked_at = clock_timestamp(), revoked_reason = $2, updated_at = clock_timestamp()
-		WHERE id = ANY($1::uuid[]) AND revoked_at IS NULL`, ids, reason); err != nil {
-		return err
+		SET revoked_at = $3, revoked_reason = $2, updated_at = $3
+		WHERE id = ANY($1::uuid[]) AND revoked_at IS NULL
+		RETURNING id::text`, ids, reason, at)
+	if err != nil {
+		return time.Time{}, err
+	}
+	var ended []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return time.Time{}, err
+		}
+		ended = append(ended, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return time.Time{}, err
+	}
+	if each {
+		wire, err := eventReason(reason)
+		if err != nil {
+			return time.Time{}, err
+		}
+		for _, id := range append(ended, children...) {
+			event, err := sessionevent.Session(id, wire)
+			if err != nil {
+				return time.Time{}, err
+			}
+			if err := tx.AddEvent(event); err != nil {
+				return time.Time{}, err
+			}
+		}
 	}
 	if err := delegationend.End(ctx, tx, s.q, delegationend.Children(delegated, ids), delegationend.ReasonBaseEnded); err != nil {
-		return err
+		return time.Time{}, err
 	}
-	return delegationend.Record(ctx, tx, delegated, delegationend.EndPublicRows)
+	return at, delegationend.Record(ctx, tx, delegated, delegationend.EndPublicRows)
+}
+
+// liveClientSessions are the sessions under the web sessions ids whose own revoked_at is NULL.
+func (s *Store) liveClientSessions(ctx context.Context, tx audit.TxOps, ids []string) ([]string, error) {
+	rows, err := tx.Query(ctx, `SELECT id::text FROM `+s.q+`.sessions WHERE web_session_id = ANY($1::uuid[]) AND revoked_at IS NULL ORDER BY id`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// eventReason maps a stored revoked_reason to the closed reason of provisioning-event.v1.
+func eventReason(reason string) (string, error) {
+	switch reason {
+	case revokedByCaller:
+		return sessionevent.ReasonCaller, nil
+	case revokedByReuse:
+		return sessionevent.ReasonRefreshReuse, nil
+	}
+	return "", fmt.Errorf("%w: no event reason for revoked_reason %q", ErrStore, reason)
 }
 
 // Revoke ends one live session and every credential of it. It reports false

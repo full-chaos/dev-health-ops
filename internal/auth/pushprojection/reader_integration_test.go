@@ -630,6 +630,9 @@ func TestReaderReadsALaterRevisionThatWaitedBehindAParkedHeadOnceTheHeadResolves
 	if rep.Mark >= laterRow || stored >= laterRow {
 		t.Fatalf("mark = %d, stored = %d: the mark passed the later revision %d that waits behind the parked head", rep.Mark, stored, laterRow)
 	}
+	if rep.Mark < headRow {
+		t.Fatalf("mark = %d: the mark did not move over the parked head %d (a parked row is decided for the mark)", rep.Mark, headRow)
+	}
 	e.appendCommitted(t, created(org, parent))
 	if _, err := r.Step(ctx, time.Now().Add(10*time.Minute)); err != nil {
 		t.Fatal(err)

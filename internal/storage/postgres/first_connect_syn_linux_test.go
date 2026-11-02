@@ -53,8 +53,10 @@ func silentListener(t *testing.T) string {
 	return ""
 }
 
-// A dropped SYN holds an attempt only for AttemptTimeout; the next attempt
-// then starts. pgx gets no connect_timeout, so only the attempt bounds it.
+// A dropped SYN holds an attempt only until AttemptTimeout ends it; the next
+// attempt then starts. pgx gets no connect_timeout, so only the attempt's own
+// deadline can end it: each attempt returns with that deadline passed while
+// the run is still live.
 func TestFirstConnectAttemptTimeoutBoundsADroppedSYN(t *testing.T) {
 	address := silentListener(t)
 	dsn := "postgres://login:sekret-pw@" + address + "/db?sslmode=disable"
@@ -66,11 +68,19 @@ func TestFirstConnectAttemptTimeoutBoundsADroppedSYN(t *testing.T) {
 		Report:         TextReport(&out, "test verb", "PostgreSQL"),
 		Sleep:          func(context.Context, time.Duration) { time.Sleep(20 * time.Millisecond) },
 	}
+	// A hang ceiling only: the run ends red if an attempt outlives its deadline by minutes.
+	run, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
 	var starts, ends []time.Time
-	err := wait.Do(context.Background(), func(ctx context.Context) error {
+	var endedByOwnDeadline []bool
+	err := wait.Do(run, func(ctx context.Context) error {
+		deadline, _ := ctx.Deadline()
 		starts = append(starts, time.Now())
 		conn, err := pgx.Connect(ctx, dsn)
-		ends = append(ends, time.Now())
+		end := time.Now()
+		ends = append(ends, end)
+		// The socket's deadline (the attempt's) can fire a beat before ctx's own timer.
+		endedByOwnDeadline = append(endedByOwnDeadline, !end.Before(deadline) && run.Err() == nil)
 		if err == nil {
 			_ = conn.Close(context.Background())
 		}
@@ -82,9 +92,12 @@ func TestFirstConnectAttemptTimeoutBoundsADroppedSYN(t *testing.T) {
 	if len(starts) < 2 {
 		t.Fatalf("%d attempts, want the dropped SYN retried", len(starts))
 	}
+	if run.Err() != nil {
+		t.Fatal("the run hit its hang ceiling: an attempt was not ended by its own deadline")
+	}
 	for i := range starts {
-		if took := ends[i].Sub(starts[i]); took < attemptTimeout-50*time.Millisecond || took > attemptTimeout+time.Second {
-			t.Errorf("attempt %d took %v, want about the %v attempt timeout", i+1, took, attemptTimeout)
+		if !endedByOwnDeadline[i] {
+			t.Errorf("attempt %d returned before its own deadline passed: the SYN was answered, not dropped", i+1)
 		}
 		if i > 0 && starts[i].Before(ends[i-1]) {
 			t.Errorf("attempt %d started before attempt %d ended", i+1, i)

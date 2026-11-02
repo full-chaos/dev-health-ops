@@ -32,10 +32,23 @@ func refusedAddress(t *testing.T) string {
 	return address
 }
 
+// fakeClockFirstConnect is a 10 s budget on a clock only the pauses move:
+// pauses of 2, 4 and 4 s, so 4 attempts and 3 retry lines.
+func fakeClockFirstConnect() postgresstore.FirstConnect {
+	clock := time.Unix(0, 0)
+	return postgresstore.FirstConnect{
+		Budget: 10 * time.Second, AttemptTimeout: time.Second,
+		Now:   func() time.Time { return clock },
+		Sleep: func(_ context.Context, d time.Duration) { clock = clock.Add(d) },
+	}
+}
+
 // `migrate river` (river-migrate hook) and `migrate roles` (provision-roles
 // hook) wait for their first connect, write one line per retry, and fail
 // closed at the bound with their own unavailable message.
 func TestRiverAndRolesWaitForTheFirstConnectThenFailClosed(t *testing.T) {
+	saved := firstConnect
+	t.Cleanup(func() { firstConnect = saved })
 	uri := "postgresql://migrator:sekret-pw@" + refusedAddress(t) + "/devhealth?sslmode=disable"
 	for name, run := range map[string]func(stdout, stderr *bytes.Buffer) int{
 		"migrate river": func(stdout, stderr *bytes.Buffer) int {
@@ -56,8 +69,8 @@ func TestRiverAndRolesWaitForTheFirstConnectThenFailClosed(t *testing.T) {
 			}), stdout, stderr)
 		},
 	} {
+		firstConnect = fakeClockFirstConnect()
 		var stdout, stderr bytes.Buffer
-		start := time.Now()
 		code := run(&stdout, &stderr)
 		out := stderr.String()
 		if code != 1 || !strings.Contains(out, "migration error: PostgreSQL migration endpoint unavailable") {
@@ -67,8 +80,8 @@ func TestRiverAndRolesWaitForTheFirstConnectThenFailClosed(t *testing.T) {
 			!strings.Contains(out, ", refused, next in ") {
 			t.Fatalf("%s: no wait line before the failure:\n%s", name, out)
 		}
-		if elapsed := time.Since(start); elapsed < 900*time.Millisecond || elapsed > 5*time.Second {
-			t.Fatalf("%s: failed after %v, want at the 1 s bound", name, elapsed)
+		if got := strings.Count(out, name+" waiting: "); got != 3 {
+			t.Fatalf("%s: %d wait lines, want 3 (4 attempts in the 10 s budget):\n%s", name, got, out)
 		}
 		if strings.Contains(out, "sekret-pw") || strings.Contains(out, "pw-domain") {
 			t.Fatalf("%s: the output names a password:\n%s", name, out)

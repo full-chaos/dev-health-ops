@@ -137,18 +137,21 @@ func TestFirstConnectStopsWhenTheRunEnds(t *testing.T) {
 }
 
 func TestFirstConnectEachAttemptRunsUnderAttemptTimeout(t *testing.T) {
-	wait := FirstConnect{Budget: time.Second, AttemptTimeout: 50 * time.Millisecond}
-	var remaining time.Duration
+	const attemptTimeout = time.Hour
+	wait := FirstConnect{Budget: time.Second, AttemptTimeout: attemptTimeout}
+	var before, after, deadline time.Time
+	before = time.Now()
 	_ = wait.Do(context.Background(), func(ctx context.Context) error {
-		deadline, ok := ctx.Deadline()
-		if !ok {
+		after = time.Now()
+		var ok bool
+		if deadline, ok = ctx.Deadline(); !ok {
 			t.Fatal("the attempt has no deadline")
 		}
-		remaining = time.Until(deadline)
 		return nil
 	})
-	if remaining <= 0 || remaining > 50*time.Millisecond {
-		t.Fatalf("attempt deadline in %v, want within the 50ms attempt timeout", remaining)
+	// The deadline is set between the two reads: before+T <= deadline <= after+T.
+	if deadline.Before(before.Add(attemptTimeout)) || deadline.After(after.Add(attemptTimeout)) {
+		t.Fatalf("attempt deadline %v, want AttemptTimeout after the attempt start (%v..%v)", deadline, before, after)
 	}
 }
 
@@ -214,17 +217,15 @@ func TestConnectWaitingRefusedPortFailsAtTheBound(t *testing.T) {
 	address := freePort(t)
 	dsn := "postgres://login:sekret-pw@" + address + "/db?sslmode=disable"
 	var out bytes.Buffer
-	start := time.Now()
-	conn, err := ConnectWaiting(context.Background(), dsn, shortRealWait(500*time.Millisecond, &out))
+	wait, _ := fakeClockWait(10*time.Second, &out)
+	conn, err := ConnectWaiting(context.Background(), dsn, wait)
 	if conn != nil || !errors.Is(err, syscall.ECONNREFUSED) {
 		t.Fatalf("ConnectWaiting() = %v, %v; want no connection and a refused error", conn, err)
 	}
-	if elapsed := time.Since(start); elapsed > 3*time.Second {
-		t.Fatalf("the wait took %v, want about its 500ms budget", elapsed)
-	}
 	text := out.String()
-	if strings.Count(text, ", refused, ") < 2 {
-		t.Fatalf("want at least 2 refused lines:\n%s", text)
+	// A 10 s budget on a clock only the pauses (2, 4, 4 s) move: 4 attempts, 3 lines.
+	if strings.Count(text, ", refused, ") != 3 {
+		t.Fatalf("want 3 refused lines:\n%s", text)
 	}
 	if strings.Contains(text, "sekret-pw") || strings.Contains(text, "login") || strings.Contains(text, address) {
 		t.Fatalf("a wait line names the password, the login or the address:\n%s", text)

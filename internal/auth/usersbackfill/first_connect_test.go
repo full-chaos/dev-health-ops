@@ -16,7 +16,12 @@ import (
 // writes one line per retry, and fails closed at the bound.
 func TestConnectWaitsForTheFirstConnectThenFailsClosed(t *testing.T) {
 	saved := firstConnect
-	firstConnect = pgstorage.FirstConnect{Budget: time.Second, AttemptTimeout: time.Second}
+	clock := time.Unix(0, 0)
+	firstConnect = pgstorage.FirstConnect{
+		Budget: 10 * time.Second, AttemptTimeout: time.Second,
+		Now:   func() time.Time { return clock },
+		Sleep: func(_ context.Context, d time.Duration) { clock = clock.Add(d) },
+	}
 	t.Cleanup(func() { firstConnect = saved })
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -28,7 +33,6 @@ func TestConnectWaitsForTheFirstConnectThenFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stderr bytes.Buffer
-	start := time.Now()
 	pool, _, code := connect(context.Background(), cli.Env{Stderr: &stderr, Lookup: func(key string) (string, bool) {
 		if key == dsnEnv {
 			return "postgresql://auth_runtime:sekret-pw@" + address + "/auth?sslmode=disable", true
@@ -43,8 +47,9 @@ func TestConnectWaitsForTheFirstConnectThenFailsClosed(t *testing.T) {
 		!strings.Contains(out, ", refused, next in ") {
 		t.Fatalf("no wait line before the failure:\n%s", out)
 	}
-	if elapsed := time.Since(start); elapsed < 900*time.Millisecond || elapsed > 5*time.Second {
-		t.Fatalf("failed after %v, want at the 1 s bound", elapsed)
+	// A 10 s budget on a clock only the pauses (2, 4, 4 s) move: 4 attempts, 3 lines.
+	if got := strings.Count(out, " waiting: "); got != 3 {
+		t.Fatalf("%d wait lines, want 3:\n%s", got, out)
 	}
 	if strings.Contains(out, "sekret-pw") {
 		t.Fatalf("the output names the password:\n%s", out)

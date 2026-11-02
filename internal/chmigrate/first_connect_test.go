@@ -17,7 +17,6 @@ import (
 // per retry, and fails closed at the bound with clickhouse_unavailable.
 func TestUpgradeWaitsForTheFirstClickHouseConnectThenFailsClosed(t *testing.T) {
 	saved := firstConnect
-	firstConnect = pgstorage.FirstConnect{Budget: time.Second, AttemptTimeout: time.Second}
 	t.Cleanup(func() { firstConnect = saved })
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -32,8 +31,13 @@ func TestUpgradeWaitsForTheFirstClickHouseConnectThenFailsClosed(t *testing.T) {
 		"clickhouse://migrator:sekret-pw@" + address + "/devhealth",
 		"http://migrator:sekret-pw@" + address + "/devhealth",
 	} {
+		clock := time.Unix(0, 0)
+		firstConnect = pgstorage.FirstConnect{
+			Budget: 10 * time.Second, AttemptTimeout: time.Second,
+			Now:   func() time.Time { return clock },
+			Sleep: func(_ context.Context, d time.Duration) { clock = clock.Add(d) },
+		}
 		var stdout, stderr bytes.Buffer
-		start := time.Now()
 		code := run(context.Background(), "upgrade", cli.Env{Stdout: &stdout, Stderr: &stderr, Lookup: func(key string) (string, bool) {
 			switch key {
 			case OrderingContractEnv:
@@ -52,8 +56,9 @@ func TestUpgradeWaitsForTheFirstClickHouseConnectThenFailsClosed(t *testing.T) {
 			!strings.Contains(out, ", refused, next in ") {
 			t.Fatalf("%s: no refused wait line before the failure:\n%s", scheme, out)
 		}
-		if elapsed := time.Since(start); elapsed < 900*time.Millisecond || elapsed > 5*time.Second {
-			t.Fatalf("%s: failed after %v, want at the 1 s bound", scheme, elapsed)
+		// A 10 s budget on a clock only the pauses (2, 4, 4 s) move: 4 attempts, 3 lines.
+		if got := strings.Count(out, " waiting: "); got != 3 {
+			t.Fatalf("%s: %d wait lines, want 3:\n%s", scheme, got, out)
 		}
 		if strings.Contains(out, "sekret-pw") {
 			t.Fatalf("%s: the output names the password:\n%s", scheme, out)

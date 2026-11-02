@@ -70,11 +70,14 @@ type Key struct {
 	Assurance           string
 	PolicyRevision      int
 	EntitlementRevision int64
+	// Unfed carries the values the caller reads on every call because no feed event covers them (go-api's public.users
+	// and public.memberships). They are never served from the cache: a change in one is another key.
+	Unfed string
 }
 
 func (k Key) encode() string {
 	b := make([]byte, 0, 128)
-	for _, s := range []string{k.PrincipalID, k.SessionID, k.OrganizationID, k.Action, k.ResourceKind, k.ResourceKey, k.Assurance} {
+	for _, s := range []string{k.PrincipalID, k.SessionID, k.OrganizationID, k.Action, k.ResourceKind, k.ResourceKey, k.Assurance, k.Unfed} {
 		b = strconv.AppendQuote(b, s)
 		b = append(b, ',')
 	}
@@ -96,7 +99,8 @@ func (k Key) encode() string {
 	return string(append(b, ']'))
 }
 
-// Dependency is one aggregate the decision read, at the revision it read.
+// Dependency is one aggregate the decision read, at the revision it read. Revision 0 is an aggregate with no event yet: any
+// event of it is revision 1 or more, so it evicts the entry and its watermark makes Get miss.
 type Dependency struct {
 	AggregateType string
 	AggregateID   string
@@ -217,7 +221,7 @@ func (c *Cache) Put(k Key, d authorization.Decision, r Read) PutResult {
 		return NotStoredInvalid
 	}
 	for _, dep := range r.Dependencies {
-		if dep.AggregateType == "" || dep.AggregateID == "" || dep.Revision < 1 {
+		if dep.AggregateType == "" || dep.AggregateID == "" || dep.Revision < 0 {
 			return NotStoredInvalid
 		}
 	}

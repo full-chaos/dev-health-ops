@@ -411,15 +411,18 @@
     },
     {
       "file": "client-rejected-duplicate-claim-aud.json",
-      "why": "aud appears twice (acr-api, then dev-health-api): the schema sees the survivor."
+      "why": "aud appears twice (acr-api, then dev-health-api): the schema sees the survivor.",
+      "duplicate_member": true
     },
     {
       "file": "client-rejected-duplicate-claim-cid.json",
-      "why": "cid appears twice: the schema sees the survivor."
+      "why": "cid appears twice: the schema sees the survivor.",
+      "duplicate_member": true
     },
     {
       "file": "client-rejected-duplicate-header-typ.json",
-      "why": "typ appears twice (at+jwt, then sa+jwt): the schema sees the survivor."
+      "why": "typ appears twice (at+jwt, then sa+jwt): the schema sees the survivor.",
+      "duplicate_member": true
     },
     {
       "file": "client-rejected-exp-decimal-form.json",

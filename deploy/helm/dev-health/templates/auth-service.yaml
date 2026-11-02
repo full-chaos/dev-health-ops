@@ -30,6 +30,7 @@ stage-signing-key init container exists.
 {{- $socialOn := eq (include "dev-health.authOn" (dict "flag" "social" "context" .)) "true" }}
 {{- $tokenClass := (default dict $a.accessToken).class | default "" }}
 {{- if and $loginOn (not (trim (toString $a.sessionKeys.loginLockout.secretName))) }}{{- fail "authService.phase >= 3 (login) needs authService.sessionKeys.loginLockout.secretName: without the lockout key auth-service mounts no login route, and go-api would forward sign-in to a 404" }}{{- end }}
+{{- if and (eq (include "dev-health.authOn" (dict "flag" "orgsOwned" "context" .)) "true") (not (trim (toString (default dict $a.sessionKeys.inviteToken).secretName))) }}{{- fail "authService.phase 5 needs authService.sessionKeys.inviteToken.secretName: the Secret with the invite signing keys (AUTH_INVITE_TOKEN_SECRET and AUTH_INVITE_TOKEN_SECRET_PREVIOUS); the membership routes phase 5 needs refuse to start without both" }}{{- end }}
 {{- if and $socialOn (not (trim (toString $a.social.secretName))) }}{{- fail "authService.phase >= 3 (social sign-in) needs authService.social.secretName: the Secret with the SOCIAL_<PROVIDER>_CLIENT_ID and _CLIENT_SECRET keys go-api reads, so auth-service signs in with the same providers" }}{{- end }}
 {{- if and (eq (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true") (not (trim (toString (default dict $a.mail).secretName))) }}{{- fail "authService.phase >= 4 (users owned) needs authService.mail.secretName: the Secret holding EMAIL_PROVIDER, EMAIL_FROM_ADDRESS, EMAIL_API_KEY and APP_BASE_URL for the verify and reset mails; auth-service refuses to start without a usable mail setting" }}{{- end }}
 {{- /* When the mail Secret is the one this chart creates, its content is readable here: refuse a setting auth-service would refuse at start. */}}
@@ -238,6 +239,13 @@ spec:
               valueFrom: {secretKeyRef: {name: {{ include "dev-health.hs256SecretName" . | quote }}, key: "JWT_SECRET_KEY"}}
             - name: AUTH_SESSION_SUCCESSOR_KEY
               valueFrom: {secretKeyRef: {name: {{ $a.sessionKeys.successor.secretName | quote }}, key: {{ $a.sessionKeys.successor.secretKey | quote }}}}
+          {{- end }}
+          {{- if eq (include "dev-health.authOn" (dict "flag" "orgsOwned" "context" .)) "true" }}
+          {{- /* The membership routes (mounted by AUTH_MEMBERSHIP_ROUTES, which phase 5 needs through orgProvisioning) refuse to start without both invite keys. */}}
+            - name: AUTH_INVITE_TOKEN_SECRET
+              valueFrom: {secretKeyRef: {name: {{ $a.sessionKeys.inviteToken.secretName | quote }}, key: {{ $a.sessionKeys.inviteToken.secretKey | quote }}}}
+            - name: AUTH_INVITE_TOKEN_SECRET_PREVIOUS
+              valueFrom: {secretKeyRef: {name: {{ $a.sessionKeys.inviteToken.secretName | quote }}, key: {{ $a.sessionKeys.inviteToken.previousSecretKey | quote }}}}
           {{- end }}
           {{- if $loginOn }}
             - name: AUTH_LOGIN_LOCKOUT_KEY

@@ -384,6 +384,13 @@ authService:
     loginLockout:
       secretName: ""
       secretKey: AUTH_LOGIN_LOCKOUT_KEY
+    # -- AUTH_INVITE_TOKEN_SECRET and AUTH_INVITE_TOKEN_SECRET_PREVIOUS: the invite signing key and the retired one
+    #    the membership routes verify with (both required while they are mounted). Rendered at phase 5 only, which
+    #    needs the Secret named here; below it the value is inert. The chart creates no Secret.
+    inviteToken:
+      secretName: ""
+      secretKey: AUTH_INVITE_TOKEN_SECRET
+      previousSecretKey: AUTH_INVITE_TOKEN_SECRET_PREVIOUS
   # -- CHAOS-11648: the old pod keeps serving for preStopSeconds while its endpoint is removed, then
   #    gets SIGTERM (the go-api drain, CHAOS-10718). 0 renders no hook, maximum 600. Native sleep
   #    action: Kubernetes >= 1.30 (the image has no shell).

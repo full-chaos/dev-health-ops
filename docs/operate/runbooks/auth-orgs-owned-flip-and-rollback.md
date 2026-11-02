@@ -19,7 +19,7 @@ At `authService.phase: 5` the chart renders `AUTH_ORGS_OWNED=true` on auth-servi
 
 ## Order
 
-0. auth-service holds the invite keys: `AUTH_INVITE_TOKEN_SECRET` and `AUTH_INVITE_TOKEN_SECRET_PREVIOUS`, set through `authService.extraEnv` by `valueFrom.secretKeyRef` (the membership routes refuse to start without both).
+0. The Secret named in `authService.sessionKeys.inviteToken.secretName` exists, with the invite signing key (`AUTH_INVITE_TOKEN_SECRET`) and the retired one (`AUTH_INVITE_TOKEN_SECRET_PREVIOUS`) under the keys `secretKey` and `previousSecretKey` (the defaults are those names). The membership routes refuse to start without both, and phase 5 refuses to render without the Secret name. The chart renders both references at phase 5 only and creates no Secret.
 1. `goApi.authProxy.orgProvisioning: true` is live on every go-api pod, and one full roll has finished. The REVOKE with an older pod live gives that pod `42501` on a membership write, and its readiness check fails on the exact posture.
 2. `dho auth orgs-backfill` ran, and `dho auth orgs-reconcile -exact` prints 0 for every class.
 3. The River hook image is at or above the build that carries the AUTH_ORGS_OWNED posture. Roll it with every domain group whose posture moved since the live anchor (D6446).

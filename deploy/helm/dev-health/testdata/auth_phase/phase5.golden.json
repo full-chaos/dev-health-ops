@@ -1,5 +1,7 @@
 {
   "Deployment/a-dev-health-auth-service/auth-service/AUTH_DATABASE_URI": "secret:auth-db/AUTH_DATABASE_URI",
+  "Deployment/a-dev-health-auth-service/auth-service/AUTH_INVITE_TOKEN_SECRET": "secret:auth-invite/AUTH_INVITE_TOKEN_SECRET",
+  "Deployment/a-dev-health-auth-service/auth-service/AUTH_INVITE_TOKEN_SECRET_PREVIOUS": "secret:auth-invite/AUTH_INVITE_TOKEN_SECRET_PREVIOUS",
   "Deployment/a-dev-health-auth-service/auth-service/AUTH_JWT_SECRET_KEY": "secret:a-dev-health-hs256/JWT_SECRET_KEY",
   "Deployment/a-dev-health-auth-service/auth-service/AUTH_LOGIN_LOCKOUT_KEY": "secret:auth-lockout/AUTH_LOGIN_LOCKOUT_KEY",
   "Deployment/a-dev-health-auth-service/auth-service/AUTH_MEMBERSHIP_ROUTES": "value:true",

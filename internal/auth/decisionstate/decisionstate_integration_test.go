@@ -467,8 +467,9 @@ func TestSessionReadsTheDelegationColumnsAndTheBaseLiveness(t *testing.T) {
 	if s := e.readSession(t, ctx, id); s.BaseLive || !s.Live {
 		t.Fatalf("a revoked base: %+v, want the row live and the base not", s)
 	}
-	expiredBase := e.session(t, ctx, actor, "-1 minute", false)
-	if s := e.readSession(t, ctx, e.delegatedSession(t, ctx, target, actor, expiredBase, org, []string{"git.read"})); s.BaseLive {
+	otherActor := e.user(t, ctx, true, false)
+	expiredBase := e.session(t, ctx, otherActor, "-1 minute", false)
+	if s := e.readSession(t, ctx, e.delegatedSession(t, ctx, target, otherActor, expiredBase, org, []string{"git.read"})); s.BaseLive {
 		t.Fatalf("an expired base read as live: %+v", s)
 	}
 }

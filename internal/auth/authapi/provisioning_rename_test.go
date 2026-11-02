@@ -19,12 +19,12 @@ func renameBody(f *provFixture, actor uuid.UUID, name string) string {
 	return encode(map[string]any{"organization_id": f.org.String(), "actor_principal_id": actor.String(), "name": name})
 }
 
-// Dark: the embedded document has no rename row, so the route answers 404, the store is not reached, one startup line
-// names it, and every other provisioning route is still built.
+// Dark without its row: a document without the rename row answers 404, the store is not reached, one startup line names
+// it, and every other provisioning route is still built.
 func TestOrgRenameIsDarkWithoutItsProfileRow(t *testing.T) {
-	f := newProvFixtureWith(t, authv1.AuthServiceEndpointProfiles)
+	f := newProvFixtureWith(t, docWithoutRow(t, nil, PatternOrgRename))
 	if got := f.post(PatternOrgRename, renameBody(f, f.super, "New"), nil); got.Code != http.StatusNotFound {
-		t.Fatalf("rename with the embedded document: %d %s, want 404", got.Code, got.Body)
+		t.Fatalf("rename without its row: %d %s, want 404", got.Code, got.Body)
 	}
 	if f.reactivate.renames != 0 {
 		t.Fatal("the store ran for a route that is not mounted")
@@ -43,6 +43,22 @@ func TestOrgRenameIsDarkWithoutItsProfileRow(t *testing.T) {
 	}
 	if got := f.post(PatternOrgSuspend, encode(routeCases()[8].body(f, f.super)), nil); got.Code != http.StatusOK {
 		t.Fatalf("suspend beside the dark rename route: %d %s, want 200", got.Code, got.Body)
+	}
+}
+
+// The embedded document holds the rename row: the route is served, and no startup line calls it unmounted.
+func TestOrgRenameIsServedWithTheEmbeddedDocument(t *testing.T) {
+	f := newProvFixtureWith(t, authv1.AuthServiceEndpointProfiles)
+	if got := f.post(PatternOrgRename, renameBody(f, f.super, "New"), nil); got.Code != http.StatusOK {
+		t.Fatalf("rename with the embedded document: %d %s, want 200", got.Code, got.Body)
+	}
+	if f.reactivate.renames != 1 {
+		t.Fatalf("%d renames, want 1", f.reactivate.renames)
+	}
+	for _, line := range strings.Split(f.logs.String(), "\n") {
+		if strings.Contains(line, "not mounted") && strings.Contains(line, PatternOrgRename) {
+			t.Fatalf("a not-mounted line for the rename route: %s", line)
+		}
 	}
 }
 

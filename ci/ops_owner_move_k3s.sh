@@ -362,7 +362,9 @@ pinned_upgrade() { # DB: Secret rotated to the migration login, release upgraded
   hook_secret "sec-migrate-$1" "$1" "${NEW}"
   helm_args "$1" "$1" "${NEW}" 1
   helm_up "${HELM_ARGS[@]}"
-  K logs "job/$1-dev-health-river-migrate" 2>&1 | grep -qF 'verified ops schema owner pin' || die "$1: river-migrate did not log the pin it verified"
+  local logs
+  logs="$(K logs "job/$1-dev-health-river-migrate" 2>&1)"
+  grep -qF 'verified ops schema owner pin' <<<"${logs}" || die "$1: river-migrate did not log the pin it verified"
   pass "$1: the pinned upgrade ran every ops hook as ${NEW}; river-migrate verified the pin"
 }
 

@@ -16,13 +16,17 @@ type LandscapeRecord struct {
 	YNorm      float64
 	Churn      float64
 	Delivery   float64
-	CycleP50   float64
-	WIPMax     float64
+	// CycleP50 is nil for a person with no 30-day cycle (RollingStat).
+	CycleP50 *float64
+	WIPMax   float64
 }
 
 // mapNames is the fixed set compute_ic_landscape_rolling emits, in the order
 // its `vectors` dict declares them.
 var mapNames = [3]string{"churn_throughput", "cycle_throughput", "wip_throughput"}
+
+// cycleMap is the index of cycle_throughput in mapNames.
+const cycleMap = 1
 
 // ComputeLandscape ports compute_ic_landscape_rolling (compute_ic.py:189).
 //
@@ -30,6 +34,11 @@ var mapNames = [3]string{"churn_throughput", "cycle_throughput", "wip_throughput
 // vector of that team's members only. A one-member team therefore ranks 0.5 on
 // every axis by construction — the same value an empty vector yields, so the
 // two are indistinguishable in the output.
+//
+// A person with no 30-day cycle (CycleP5030dHrs nil) has no x on the cycle
+// map: no cycle_throughput point, and no place in that map's ranks. log1p(0)
+// would rank the person as the fastest. The person keeps the churn and WIP
+// points, ranked among every member (CHAOS-12562; the reference read 0).
 //
 // team_map resolves a missing team_id: an identity with a blank team_id and a
 // non-"unknown" identity falls back to team_map, then to "unassigned"; a blank
@@ -64,9 +73,11 @@ func ComputeLandscape(stats []RollingStat, teamMap map[string]string) []Landscap
 				}
 			}
 		}
-		churnXY, cycleXY, wipXY := LandscapeAxes(
-			stat.ChurnLOC30d, stat.DeliveryUnits30, stat.CycleP5030dHrs, stat.WIPMax30d,
-		)
+		var cycle float64
+		if stat.CycleP5030dHrs != nil {
+			cycle = *stat.CycleP5030dHrs
+		}
+		churnXY, cycleXY, wipXY := LandscapeAxes(stat.ChurnLOC30d, stat.DeliveryUnits30, cycle, stat.WIPMax30d)
 		byTeam[teamID] = append(byTeam[teamID], enriched{
 			stat: stat, teamID: teamID, axes: [3][2]float64{churnXY, cycleXY, wipXY},
 		})
@@ -83,14 +94,23 @@ func ComputeLandscape(stats []RollingStat, teamMap map[string]string) []Landscap
 		members := byTeam[teamID]
 		// One x/y vector per map, over this team's members only.
 		var xVectors, yVectors [3][]float64
+		onMap := func(member enriched, i int) bool {
+			return i != cycleMap || member.stat.CycleP5030dHrs != nil
+		}
 		for _, member := range members {
 			for i := range mapNames {
+				if !onMap(member, i) {
+					continue
+				}
 				xVectors[i] = append(xVectors[i], member.axes[i][0])
 				yVectors[i] = append(yVectors[i], member.axes[i][1])
 			}
 		}
 		for _, member := range members {
 			for i, mapName := range mapNames {
+				if !onMap(member, i) {
+					continue
+				}
 				x, y := member.axes[i][0], member.axes[i][1]
 				records = append(records, LandscapeRecord{
 					IdentityID: member.stat.IdentityID,

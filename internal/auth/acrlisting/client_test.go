@@ -163,13 +163,14 @@ func TestShortLivedAccessTokenIsNeverCached(t *testing.T) {
 
 func TestExchangeFailuresAreKindExchange(t *testing.T) {
 	for name, set := range map[string]func(*fakeACR){
-		"status 400":      func(f *fakeACR) { f.exchangeRC = 400 },
-		"status 401":      func(f *fakeACR) { f.exchangeRC = 401 },
-		"status 503":      func(f *fakeACR) { f.exchangeRC = 503 },
-		"no access token": func(f *fakeACR) { f.exchangeRaw = `{"access_token":"","expires_in":60}` },
-		"no expiry":       func(f *fakeACR) { f.exchangeRaw = `{"access_token":"x","expires_in":0}` },
-		"not json":        func(f *fakeACR) { f.exchangeRaw = `nope` },
-		"space in token":  func(f *fakeACR) { f.exchangeRaw = `{"access_token":"a b","expires_in":60}` },
+		"status 400":                   func(f *fakeACR) { f.exchangeRC = 400 },
+		"status 401":                   func(f *fakeACR) { f.exchangeRC = 401 },
+		"status 503":                   func(f *fakeACR) { f.exchangeRC = 503 },
+		"status 500 with a valid body": func(f *fakeACR) { f.exchangeRC = 500; f.exchangeRaw = `{"access_token":"x","expires_in":3600}` },
+		"no access token":              func(f *fakeACR) { f.exchangeRaw = `{"access_token":"","expires_in":60}` },
+		"no expiry":                    func(f *fakeACR) { f.exchangeRaw = `{"access_token":"x","expires_in":0}` },
+		"not json":                     func(f *fakeACR) { f.exchangeRaw = `nope` },
+		"space in token":               func(f *fakeACR) { f.exchangeRaw = `{"access_token":"a b","expires_in":60}` },
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newFake(t, row("a", 1, "active"))
@@ -449,4 +450,16 @@ func TestKindsAreClosedMetricLabels(t *testing.T) {
 			t.Fatalf("kind %q, want %q", k, name)
 		}
 	}
+}
+
+func TestNextAfterAboveTheLastIdIsRefusedNotWalked(t *testing.T) {
+	f := newFake(t)
+	f.listRaw = func(after string, _ int) (int, string) {
+		if after == "" {
+			return 200, `{"schema_version":"credential_lifecycle_list.v1","items":[{"credential_id":"a","revision":1,"status":"active"}],"next_after":"c"}`
+		}
+		return 200, `{"schema_version":"credential_lifecycle_list.v1","items":[],"next_after":null}`
+	}
+	_, err := list(t, newClient(t, f, func(c *Config) { c.PageLimit = 1 }))
+	wantKind(t, err, KindSchema)
 }

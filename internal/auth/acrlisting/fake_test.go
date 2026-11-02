@@ -65,6 +65,7 @@ func (f *fakeACR) serve(w http.ResponseWriter, r *http.Request) {
 		f.exchangeCT = append(f.exchangeCT, r.Header.Get("Content-Type"))
 		if f.exchangeRC != 0 {
 			w.WriteHeader(f.exchangeRC)
+			_, _ = w.Write([]byte(f.exchangeRaw))
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")

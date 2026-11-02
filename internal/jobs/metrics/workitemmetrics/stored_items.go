@@ -38,6 +38,9 @@ type StoredItem struct {
 type PrimaryAttribution struct {
 	TeamID   string
 	TeamName string
+	// CoOwnerTeamIDs are the item's co-owner teams (is_primary = 2); only the
+	// team split of a person's row reads them.
+	CoOwnerTeamIDs []string
 }
 
 // WorkScopeID ports WorkItem.work_scope_id
@@ -114,9 +117,10 @@ func StoredItemResolver(rows []StoredItem, attributions map[string]PrimaryAttrib
 		row := rows[index]
 		attribution := attributions[row.WorkItemID]
 		return Attribution{
-			WorkScopeID: row.WorkScopeID(),
-			TeamID:      NormalizeTeamID(&attribution.TeamID),
-			TeamName:    NormalizeTeamName(&attribution.TeamName),
+			WorkScopeID:    row.WorkScopeID(),
+			TeamID:         NormalizeTeamID(&attribution.TeamID),
+			TeamName:       NormalizeTeamName(&attribution.TeamName),
+			CoOwnerTeamIDs: attribution.CoOwnerTeamIDs,
 		}
 	}
 }

@@ -33,7 +33,7 @@ var workloadRouteOps = []string{opMembershipAdd, opMembershipRole, opMembershipR
 	opInviteCreate, opInviteAccept, opOrgDeprovision, opOrgReactivate, opOrgSuspend, opOrgState, opOrgOnboard, opOrgCreate,
 	opServiceAccountCreate, opServiceAccountDisable, opServiceAccountEnable, opServiceAccountOwner,
 	opServiceAccountKeyIssue, opServiceAccountKeyRotate, opServiceAccountKeyRevoke, opServiceAccountKeyList,
-	opGrantCreate, opGrantUpdate, opGrantRevoke}
+	opGrantCreate, opGrantUpdate, opGrantRevoke, opOrgRename}
 
 // workloadRouteCases and offWorkloadRouteCases split routeCases by workloadRouteOps.
 func workloadRouteCases() []routeCase { return routeCasesWhere(true) }
@@ -69,6 +69,8 @@ func callerOf(f *provFixture, op string) audit.Caller {
 		return f.reactivate.actor.Caller
 	case opOrgSuspend:
 		return f.reactivate.sactor.Caller
+	case opOrgRename:
+		return f.reactivate.ractor.Caller
 	case opServiceAccountCreate, opServiceAccountDisable, opServiceAccountEnable, opServiceAccountOwner,
 		opServiceAccountKeyIssue, opServiceAccountKeyRotate, opServiceAccountKeyRevoke:
 		return f.sa.actor.Caller

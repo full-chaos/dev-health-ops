@@ -50,7 +50,12 @@ func emittedPublicGrants(t *testing.T) map[string]bool {
 	ctx := context.Background()
 	logger := slog.New(slog.DiscardHandler)
 	options := Options{Schema: "auth", RuntimeRole: "rt", UsersOwned: true, RequirePublicTables: true}
+	ownedOptions := options
+	ownedOptions.OrgsOwned = true
 	builders := map[string]func() ([]string, error){
+		"orgWrite": func() ([]string, error) {
+			return organizationWriteStatements(ctx, presentQuerier{}, ownedOptions, logger)
+		},
 		"publicRead": func() ([]string, error) { return publicReadStatements(ctx, presentQuerier{}, options, logger) },
 		"usersWrite": func() ([]string, error) { return usersWriteStatements(ctx, presentQuerier{}, options, logger) },
 		"register": func() ([]string, error) {

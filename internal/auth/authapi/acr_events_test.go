@@ -269,8 +269,11 @@ func TestAcrEventsRefuseEveryRejectedExample(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// The corpus organization id is a placeholder the handler refuses on its own;
+		// a real one leaves the schema and the parse as the only refusers.
+		body := strings.ReplaceAll(string(raw), `"org_EXAMPLE0000000000000001"`, `"org_`+acrEventOrg+`"`)
 		a := newAcrEventsFixture(t, acrEventRows(workloadTokenClass))
-		response, _ := a.post(a.token(), string(raw))
+		response, _ := a.post(a.token(), body)
 		if response.Code != http.StatusBadRequest || jsonBody(t, response)["reason_code"] != reasonMalformed {
 			t.Fatalf("%s: %d: %s", base, response.Code, response.Body)
 		}

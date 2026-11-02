@@ -2,6 +2,9 @@ package postgres
 
 import (
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"reflect"
 	"regexp"
@@ -132,6 +135,47 @@ func TestAPIPostureOrganizationsColumnsCoverTheDDL(t *testing.T) {
 	for _, column := range granted {
 		if !columns[column] {
 			t.Errorf("granted column %s is not in the DDL", column)
+		}
+	}
+}
+
+// The old entry points hold no logic of their own: each is one return of the
+// For-form with the orgs switch off, so there is one code path to keep right.
+func TestAPIPostureOldEntryPointsAreOneLineWrappers(t *testing.T) {
+	fileSet := token.NewFileSet()
+	file, err := parser.ParseFile(fileSet, "api_authorization.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, callee := range map[string]string{"APIPosture": "APIPostureFor", "CheckAPIAuthorization": "CheckAPIAuthorizationFor"} {
+		var decl *ast.FuncDecl
+		for _, d := range file.Decls {
+			if fn, ok := d.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Name.Name == name {
+				decl = fn
+			}
+		}
+		if decl == nil {
+			t.Fatalf("%s is not declared", name)
+		}
+		if len(decl.Body.List) != 1 {
+			t.Errorf("%s has %d statements, want one return of %s", name, len(decl.Body.List), callee)
+			continue
+		}
+		ret, ok := decl.Body.List[0].(*ast.ReturnStmt)
+		if !ok || len(ret.Results) != 1 {
+			t.Errorf("%s: the one statement is not a single-value return", name)
+			continue
+		}
+		call, ok := ret.Results[0].(*ast.CallExpr)
+		if !ok {
+			t.Errorf("%s: the return is not a call", name)
+			continue
+		}
+		if ident, ok := call.Fun.(*ast.Ident); !ok || ident.Name != callee {
+			t.Errorf("%s returns a call of %v, want %s", name, call.Fun, callee)
+		}
+		if last, ok := call.Args[len(call.Args)-1].(*ast.Ident); !ok || last.Name != "false" {
+			t.Errorf("%s does not pass orgsOwned=false", name)
 		}
 	}
 }

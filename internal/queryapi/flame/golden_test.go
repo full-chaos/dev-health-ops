@@ -43,6 +43,8 @@ func (s *fixtureRowScanner) Scan(dest ...any) error {
 			}
 			v := row[i].(string)
 			*typed = &v
+		case *uint64:
+			*typed = row[i].(uint64)
 		case *time.Time:
 			*typed = row[i].(time.Time)
 		case **time.Time:
@@ -119,6 +121,19 @@ func withoutServedTitle(t *testing.T, body string) string {
 	const key = `"title":null,`
 	if strings.Count(body, key) != 1 {
 		t.Fatalf("issue entity must carry exactly one null title here: %s", body)
+	}
+	return strings.Replace(body, key, "", 1)
+}
+
+// withoutServedRepoID removes the issue entity's repository id (CHAOS-12563), a
+// key the Go API serves and the recorded response never had, so the recorded
+// goldens stay byte-identical. A null id is the only value these fixtures
+// produce: they hold no work_items row.
+func withoutServedRepoID(t *testing.T, body string) string {
+	t.Helper()
+	const key = `,"repo_id":null`
+	if strings.Count(body, key) != 1 {
+		t.Fatalf("issue entity must carry exactly one null repo_id here: %s", body)
 	}
 	return strings.Replace(body, key, "", 1)
 }
@@ -218,7 +233,7 @@ func TestGoldenIssueWithBacklogWait(t *testing.T) {
 		t.Fatalf("BuildResponse: %v", err)
 	}
 	want := loadGolden(t, "issue_with_backlog_wait.json")
-	if gotJSON, wantJSON := withoutServedTitle(t, mustMarshal(t, got)), mustMarshal(t, want); gotJSON != wantJSON {
+	if gotJSON, wantJSON := withoutServedRepoID(t, withoutServedTitle(t, mustMarshal(t, got))), mustMarshal(t, want); gotJSON != wantJSON {
 		t.Fatalf("response mismatch\n got:  %s\nwant: %s", gotJSON, wantJSON)
 	}
 }
@@ -244,7 +259,7 @@ func TestGoldenIssueNoBacklogWait(t *testing.T) {
 		t.Fatalf("BuildResponse: %v", err)
 	}
 	want := loadGolden(t, "issue_no_backlog_wait.json")
-	if gotJSON, wantJSON := withoutServedTitle(t, mustMarshal(t, got)), mustMarshal(t, want); gotJSON != wantJSON {
+	if gotJSON, wantJSON := withoutServedRepoID(t, withoutServedTitle(t, mustMarshal(t, got))), mustMarshal(t, want); gotJSON != wantJSON {
 		t.Fatalf("response mismatch\n got:  %s\nwant: %s", gotJSON, wantJSON)
 	}
 }
@@ -445,7 +460,8 @@ func TestBuildResponseIssueTimelineUsesNowFallback(t *testing.T) {
 // value, buildIssueFlameResponse has no field to read it from --
 // issueRow itself declares no TeamID/WorkScopeID member -- so the
 // response entity is exactly the four keys _build_issue_flame_response
-// (services/flame.py:268-273) set plus the served title, never more. This is a
+// (services/flame.py:268-273) set plus the served title and repository id,
+// never more. This is a
 // structural guarantee (the type has no such field to leak), and this
 // test pins the OBSERVABLE half of that guarantee: the wire shape.
 func TestIssueEntityNeverCarriesTeamAttributionFields(t *testing.T) {
@@ -466,7 +482,7 @@ func TestIssueEntityNeverCarriesTeamAttributionFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildResponse: %v", err)
 	}
-	wantKeys := map[string]bool{"work_item_id": true, "title": true, "provider": true, "type": true, "status": true}
+	wantKeys := map[string]bool{"work_item_id": true, "title": true, "provider": true, "type": true, "status": true, "repo_id": true}
 	if got.Entity.Len() != len(wantKeys) {
 		t.Fatalf("entity has %d keys, want %d: %+v", got.Entity.Len(), len(wantKeys), got.Entity.Keys())
 	}

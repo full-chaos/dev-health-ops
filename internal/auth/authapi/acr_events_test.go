@@ -329,6 +329,13 @@ func TestAcrEventsAnswerEachOutcome(t *testing.T) {
 	}
 }
 
+func TestAcrEventsAnswerAStateChangeAsARetry(t *testing.T) {
+	a := newAcrEventsFixture(t, acrEventRows(workloadTokenClass))
+	a.projector.outcome = outboxprojection.OutcomeStateChanged
+	response, _ := a.post(a.token(), acrEventBody("cred_exampleaaaaaaaaaa", 1, "active"))
+	expectError(t, response, http.StatusConflict, reasonProjectionRetry)
+}
+
 func TestAcrEventsAnswer503OnAnEngineFault(t *testing.T) {
 	a := newAcrEventsFixture(t, acrEventRows(workloadTokenClass))
 	a.projector.err = errors.New("store down")

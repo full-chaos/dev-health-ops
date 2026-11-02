@@ -179,7 +179,8 @@ func TestARevokedGrantEventEvictsTheAllowThatReadIt(t *testing.T) {
 		decisioncache.Read{Dependencies: deps, SetTypes: sets, Stamp: stamp}); got != decisioncache.Stored {
 		t.Fatalf("Put = %q", got)
 	}
-	requestID := "req_EXAMPLE0000000000000000042"
+	// The audit request id is a UUID, as identity/store_integration_test.go:406 builds it (request := uuid.NewString()).
+	requestID := uuid.NewString()
 	if err := audit.Commit(ctx, e.runtime, e.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			_, err := tx.Exec(ctx, `UPDATE auth.resource_grants SET revoked_at = now(), revoked_by = $2 WHERE id = $1`, grant, owner)

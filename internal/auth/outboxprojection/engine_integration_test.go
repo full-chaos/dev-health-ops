@@ -210,6 +210,23 @@ func TestProjectCreatesPrincipalRegistryAndProjectionAndNoCursor(t *testing.T) {
 	}
 }
 
+func TestProjectThreeCredentialsOfOneSourceEachApplyUnderTheirOwnFingerprint(t *testing.T) {
+	e := getEnv(t, true)
+	org := e.org(t)
+	var ids []string
+	for i := 0; i < 3; i++ {
+		c := created(org, "src-three", "ingest:write")
+		ids = append(ids, c.id)
+		mustOutcome(t, e.project(t, c.input()), pushlifecycle.Applied)
+		if n := e.count(t, `SELECT count(*) FROM auth.credential_registry WHERE external_reference = $1 AND fingerprint = $2 AND secret_hash = decode($2, 'hex')`, c.id, c.change.Fingerprint); n != 1 {
+			t.Fatalf("credential %d: %d registry rows under its own fingerprint, want 1", i, n)
+		}
+	}
+	if n := e.count(t, `SELECT count(DISTINCT secret_hash) FROM auth.credential_registry WHERE external_reference = ANY($1)`, ids); n != 3 {
+		t.Fatalf("%d distinct secret hashes, want 3", n)
+	}
+}
+
 func TestProjectDuplicateAndStaleWriteNothingAndAConflictIsNotApplied(t *testing.T) {
 	e := getEnv(t, true)
 	org := e.org(t)

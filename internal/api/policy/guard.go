@@ -79,6 +79,7 @@ func WithImpersonation(ctx context.Context, session *Impersonation) context.Cont
 type Guard struct {
 	auth   *Authenticator
 	logger *slog.Logger
+	shadow *Shadow
 }
 
 // NewGuard builds a Guard over auth.
@@ -143,7 +144,15 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 		if !ok {
 			return
 		}
+		// The shadow call sees the caller as the legacy decision did, before an org swap, and
+		// never changes the answer.
+		caller := user
+		bearer := ""
+		if g.shadow != nil {
+			bearer, _ = BearerToken(r.Header.Get("Authorization"))
+		}
 		if user.OrgID == "" && !user.Holds(gt.orglessAction()) && !OrglessMayReach(r.Method, r.URL.Path) {
+			g.shadow.Observe(r, caller, bearer, false)
 			WriteDetail(w, http.StatusForbidden, "Organization context required", nil)
 			return
 		}
@@ -158,19 +167,23 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 				user = &acting
 			}
 			if !user.IsAdmin() && !(gt.kind == gateAdminOr && user.Holds(gt.action)) {
+				g.shadow.Observe(r, caller, bearer, false)
 				WriteDetail(w, http.StatusForbidden, "Admin access required", nil)
 				return
 			}
 			if level == AdminOrg && user.OrgID == "" {
+				g.shadow.Observe(r, caller, bearer, false)
 				WriteDetail(w, http.StatusForbidden, "Organization context required", nil)
 				return
 			}
 		case Superuser:
 			if gt.kind != gatePlatform || !user.Holds(gt.action) {
+				g.shadow.Observe(r, caller, bearer, false)
 				WriteDetail(w, http.StatusForbidden, "Superuser access required", nil)
 				return
 			}
 		}
+		g.shadow.Observe(r, caller, bearer, true)
 		next.ServeHTTP(w, r.WithContext(WithUser(r.Context(), user)))
 	}))
 }

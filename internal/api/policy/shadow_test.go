@@ -19,7 +19,8 @@ import (
 	"github.com/full-chaos/dev-health-go/pep"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
-	"go.opentelemetry.io/otel/attribute"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
@@ -420,7 +421,7 @@ func TestShadowOffAsksNothing(t *testing.T) {
 		shadowRequest(handler, http.MethodGet, path)
 	}
 	var nilShadow *Shadow
-	nilShadow.Observe(httptest.NewRequest(http.MethodGet, "/x", nil), &User{}, true)
+	nilShadow.Observe(httptest.NewRequest(http.MethodGet, "/x", nil), &User{}, shadowBearer, true)
 	if mismatch, results := rec.snapshot(); len(mismatch)+len(results) != 0 || len(pdp.calls()) != 0 {
 		t.Fatalf("shadow off counted %v %v and made %d calls", mismatch, results, len(pdp.calls()))
 	}
@@ -455,18 +456,35 @@ func TestShadowNeverChangesAnyGuardAnswer(t *testing.T) {
 }
 
 func TestShadowCounterLabelSetsAreClosed(t *testing.T) {
-	keys := func(kvs []attribute.KeyValue) []string {
-		out := make([]string, 0, len(kvs))
-		for _, kv := range kvs {
-			out = append(out, string(kv.Key))
-		}
-		sort.Strings(out)
-		return out
+	reader := sdkmetric.NewManualReader()
+	meter := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("shadow-test")
+	newShadowMismatchAdder(meter)(context.Background(), "teams", "admin", "unresolved")
+	newShadowResultAdder(meter)(context.Background(), "match")
+	var collected metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &collected); err != nil {
+		t.Fatal(err)
 	}
-	if got := keys(mismatchAttributes("teams", "admin", "unresolved")); !slices.Equal(got, []string{"caller", "class", "namespace"}) {
+	keysByMetric := map[string][]string{}
+	for _, scope := range collected.ScopeMetrics {
+		for _, m := range scope.Metrics {
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			if !ok {
+				t.Fatalf("%s is not an int64 sum", m.Name)
+			}
+			for _, point := range sum.DataPoints {
+				var keys []string
+				for _, kv := range point.Attributes.ToSlice() {
+					keys = append(keys, string(kv.Key))
+				}
+				sort.Strings(keys)
+				keysByMetric[m.Name] = keys
+			}
+		}
+	}
+	if got := keysByMetric[shadowMismatchMetric]; !slices.Equal(got, []string{"caller", "class", "namespace"}) {
 		t.Fatalf("mismatch counter keys %v, want [caller class namespace]", got)
 	}
-	if got := keys(resultAttributes("match")); !slices.Equal(got, []string{"result"}) {
+	if got := keysByMetric[shadowResultMetric]; !slices.Equal(got, []string{"result"}) {
 		t.Fatalf("results counter keys %v, want [result]", got)
 	}
 	rec := recordShadow(t)
@@ -571,7 +589,7 @@ func TestShadowSamplePercent(t *testing.T) {
 	for _, percent := range []int{100, 50} {
 		recordShadow(t)
 		pdp := newTestPDP(t, allowAll)
-		sh, _ := newShadowFor(t, pdp.client(t), func(c *ShadowConfig) { c.SamplePercent = percent })
+		sh, _ := newShadowFor(t, pdp.client(t), func(c *ShadowConfig) { c.SamplePercent, c.MaxInFlight = percent, 200 })
 		handler := shadowHandler(t, personaStore(personaAdmin), userClaims(nil), sh, nil)
 		for i := 0; i < 100; i++ {
 			shadowRequest(handler, http.MethodGet, "/api/v1/admin/teams")

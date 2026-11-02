@@ -21,7 +21,7 @@ func TestCheckExternalPushLifecycleAgreesWithTheSchemaCorpus(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", a.File, err)
 		}
-		if err := externalpush.Check(event.EventType, event.AggregateID, event.Payload.OrganizationID, event.Payload.SourceID, event.Payload.Change.Wire()); err != nil {
+		if err := externalpush.Check(event.EventType, event.AggregateID, event.Payload.OrganizationID, event.Payload.Binding, event.Payload.SourceID, event.Payload.Change.Wire()); err != nil {
 			t.Errorf("accept %s is refused by the runtime check: %v", a.File, err)
 		}
 	}
@@ -37,7 +37,7 @@ func TestCheckExternalPushLifecycleAgreesWithTheSchemaCorpus(t *testing.T) {
 		if err := json.Unmarshal(readCorpusFile(t, provisioningSurfaces[2], r.File), &event); err != nil {
 			t.Fatalf("reject %s does not decode: %v", r.File, err)
 		}
-		if err := externalpush.Check(event.EventType, event.AggregateID, event.Payload.OrganizationID, event.Payload.SourceID, event.Payload.Change.Wire()); err == nil {
+		if err := externalpush.Check(event.EventType, event.AggregateID, event.Payload.OrganizationID, event.Payload.Binding, event.Payload.SourceID, event.Payload.Change.Wire()); err == nil {
 			t.Errorf("reject %s (%s at %s) is accepted by the runtime check", r.File, r.ExpectKeyword, r.ExpectInstanceLocation)
 		}
 		checked++
@@ -50,23 +50,47 @@ func TestCheckExternalPushLifecycleAgreesWithTheSchemaCorpus(t *testing.T) {
 func TestCheckExternalPushLifecycleRefusesWhatTheTypesCannotCarry(t *testing.T) {
 	good := ExternalPushLifecycleChange{Status: "active", Fingerprint: "0123456789abcdef", Scopes: []string{"ingest:write"}}
 	const org, src, id = "org_EXAMPLE0000000000000001", "src_EXAMPLE0000000000000001", "cred-1"
-	if err := externalpush.Check(ExternalPushCreated, id, org, src, good.Wire()); err != nil {
+	if err := externalpush.Check(ExternalPushCreated, id, org, ExternalPushBindingSource, src, good.Wire()); err != nil {
 		t.Fatalf("a valid created is refused: %v", err)
 	}
 	for name, tc := range map[string]struct {
 		eventType, id, org, src string
 		change                  ExternalPushLifecycleChange
 	}{
-		"revoked with scopes":       {ExternalPushRevoked, id, org, src, ExternalPushLifecycleChange{Status: "revoked", Scopes: []string{}}},
-		"scoped with a status":      {ExternalPushScoped, id, org, src, ExternalPushLifecycleChange{Status: "active", Scopes: []string{}}},
-		"scoped without scopes":     {ExternalPushScoped, id, org, src, ExternalPushLifecycleChange{}},
-		"created with a parent":     {ExternalPushCreated, id, org, src, ExternalPushLifecycleChange{Status: "active", Fingerprint: "0123456789abcdef", Scopes: []string{"ingest:write"}, RotationParentID: "p"}},
-		"organization without org_": {ExternalPushCreated, id, "EXAMPLE", src, good},
-		"id with a dot":             {ExternalPushCreated, "a.b", org, src, good},
-		"unknown verb":              {"external_push_credential.deleted", id, org, src, good},
+		"revoked with scopes":             {ExternalPushRevoked, id, org, src, ExternalPushLifecycleChange{Status: "revoked", Scopes: []string{}}},
+		"scoped with a status":            {ExternalPushScoped, id, org, src, ExternalPushLifecycleChange{Status: "active", Scopes: []string{}}},
+		"scoped without scopes":           {ExternalPushScoped, id, org, src, ExternalPushLifecycleChange{}},
+		"created with a parent":           {ExternalPushCreated, id, org, src, ExternalPushLifecycleChange{Status: "active", Fingerprint: "0123456789abcdef", Scopes: []string{"ingest:write"}, RotationParentID: "p"}},
+		"organization without org_":       {ExternalPushCreated, id, "EXAMPLE", src, good},
+		"id with a dot":                   {ExternalPushCreated, "a.b", org, src, good},
+		"unknown verb":                    {"external_push_credential.deleted", id, org, src, good},
+		"source binding without a source": {ExternalPushCreated, id, org, "", good},
 	} {
-		if err := externalpush.Check(tc.eventType, tc.id, tc.org, tc.src, tc.change.Wire()); err == nil {
+		if err := externalpush.Check(tc.eventType, tc.id, tc.org, ExternalPushBindingSource, tc.src, tc.change.Wire()); err == nil {
 			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+func TestCheckExternalPushLifecycleBinding(t *testing.T) {
+	good := ExternalPushLifecycleChange{Status: "active", Fingerprint: "0123456789abcdef", Scopes: []string{"ingest:status"}}.Wire()
+	const org, src, id = "org_EXAMPLE0000000000000001", "src_EXAMPLE0000000000000001", "cred-1"
+	for name, tc := range map[string]struct {
+		binding, src string
+		ok           bool
+	}{
+		"source with a source":             {ExternalPushBindingSource, src, true},
+		"organization without a source":    {ExternalPushBindingOrganization, "", true},
+		"source without a source":          {ExternalPushBindingSource, "", false},
+		"organization with a source":       {ExternalPushBindingOrganization, src, false},
+		"no binding, no source":            {"", "", false},
+		"no binding, with a source":        {"", src, false},
+		"unknown binding":                  {"tenant", src, false},
+		"unknown binding without a source": {"tenant", "", false},
+	} {
+		err := externalpush.Check(ExternalPushCreated, id, org, tc.binding, tc.src, good)
+		if (err == nil) != tc.ok {
+			t.Errorf("%s: err = %v, want ok = %v", name, err, tc.ok)
 		}
 	}
 }

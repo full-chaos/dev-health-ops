@@ -293,6 +293,10 @@ func TestChangeRoleSuspendReactivateProject(t *testing.T) {
 	if got := e.rows(t, ctx, org, user); got != (rows{"admin", "active", "admin"}) {
 		t.Fatalf("after role change = %+v", got)
 	}
+	if got := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.membership.role_changed' AND organization_id = $1
+AND attributes->>'reason_code' = 'membership_role_changed' AND attributes->>'previous_role' = 'member' AND attributes->>'new_role' = 'admin'`, org.String()); got != 1 {
+		t.Fatalf("role-changed audit rows with the reason and both roles: got %d, want 1", got)
+	}
 	if _, err := e.store.Suspend(ctx, Change{OrgID: org, PrincipalID: user, Authorize: allowAll}); err != nil {
 		t.Fatal(err)
 	}

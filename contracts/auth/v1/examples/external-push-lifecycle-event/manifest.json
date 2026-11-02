@@ -32,6 +32,18 @@
     {
       "file": "valid-revision-at-maximum.json",
       "why": "The largest revision a float64 producer can hold."
+    },
+    {
+      "file": "valid-created-organization.json",
+      "why": "An organization-wide credential: binding organization and no source_id."
+    },
+    {
+      "file": "valid-rotated-organization.json",
+      "why": "A rotation of an organization-wide credential keeps binding organization."
+    },
+    {
+      "file": "valid-revoked-organization.json",
+      "why": "Terminal event of an organization-wide credential."
     }
   ],
   "reject": [
@@ -154,6 +166,30 @@
       "expect_instance_location": "/payload/source_id",
       "expect_keyword": "pattern",
       "why": "Ids are url-safe base64 characters only."
+    },
+    {
+      "file": "invalid-binding-absent.json",
+      "expect_instance_location": "/payload",
+      "expect_keyword": "required",
+      "why": "binding is required: an event with neither form is malformed."
+    },
+    {
+      "file": "invalid-binding-unknown-value.json",
+      "expect_instance_location": "/payload/binding",
+      "expect_keyword": "enum",
+      "why": "binding is the closed set source or organization."
+    },
+    {
+      "file": "invalid-binding-source-without-source-id.json",
+      "expect_instance_location": "/payload",
+      "expect_keyword": "required",
+      "why": "binding source requires source_id."
+    },
+    {
+      "file": "invalid-binding-organization-with-source-id.json",
+      "expect_instance_location": "/payload",
+      "expect_keyword": "not",
+      "why": "binding organization forbids source_id; no placeholder source."
     }
   ],
   "reject_by_client": [

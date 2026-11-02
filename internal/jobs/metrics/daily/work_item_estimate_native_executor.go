@@ -85,7 +85,7 @@ func (executor *WorkItemEstimateExecutor) ComputeFamily(
 func computeWorkItemEstimateRows(
 	ctx context.Context, conn driver.Conn, run Run, partition Partition, scope workItemPartitionScope,
 ) (workItemScopeRead, []workitemmetrics.EstimateCoverageRow, error) {
-	read, err := loadWorkItemScopeRead(ctx, conn, "work_item_estimate", run, partition, scope, false, true)
+	read, err := loadWorkItemScopeRead(ctx, conn, "work_item_estimate", run, partition, scope, false, true, false)
 	if err != nil {
 		return workItemScopeRead{}, nil, err
 	}

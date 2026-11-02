@@ -102,8 +102,10 @@ func contract1Database(ctx context.Context, t *testing.T, admin driver.Conn, uri
 }
 
 // The contract-1 shape a test asks for is the one it was before the baseline moved to the chain head: the
-// overlay on the archived 098 baseline, then the archived chain, builds the database the overlay on the head
-// baseline builds (no archived chain file touches an operational table).
+// overlay on the archived 098 baseline, then the archived chain, then the live chain, builds the database the
+// overlay on the head baseline, then the live chain, builds (no archived chain file touches an operational
+// table). Each side is X, then the live chain (sql/, the migrations after the squash), so the live chain also
+// runs over contract 1.
 func TestContract1OverTheHeadBaselineEqualsTheArchivedChain(t *testing.T) {
 	ctx := context.Background()
 	instance := startInstance(ctx, t)
@@ -139,7 +141,8 @@ func TestContract1OverTheHeadBaselineEqualsTheArchivedChain(t *testing.T) {
 	if _, err := rand.Read(suffix); err != nil {
 		t.Fatal(err)
 	}
-	a := contract1Database(ctx, t, admin, instance.URI, "dho_contract1_archive_"+hex.EncodeToString(suffix), old, archivedChain)
+	oldWay := append(append([]chmigrate.ChainFile(nil), archivedChain...), live...)
+	a := contract1Database(ctx, t, admin, instance.URI, "dho_contract1_archive_"+hex.EncodeToString(suffix), old, oldWay)
 	b := contract1Database(ctx, t, admin, instance.URI, "dho_contract1_head_"+hex.EncodeToString(suffix), head, live)
 	if !reflect.DeepEqual(a, b) {
 		for index := 0; index < len(a) || index < len(b); index++ {

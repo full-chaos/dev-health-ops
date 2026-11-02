@@ -54,6 +54,7 @@ type authorizationManifest struct {
 	Accept         []authorizationEntry
 	Reject         []authorizationEntry
 	RejectByClient []authorizationEntry
+	NotCacheable   []authorizationEntry
 	BatchRequest   json.RawMessage
 }
 
@@ -86,6 +87,7 @@ func loadAuthorizationManifest(t *testing.T) authorizationManifest {
 			Accept         []authorizationEntry `json:"accept"`
 			Reject         []authorizationEntry `json:"reject"`
 			RejectByClient []authorizationEntry `json:"reject_by_client"`
+			NotCacheable   []authorizationEntry `json:"accept_not_cacheable"`
 			Request        json.RawMessage      `json:"request"`
 		}
 		if err := json.Unmarshal(raw, &manifest); err != nil {
@@ -100,9 +102,13 @@ func loadAuthorizationManifest(t *testing.T) authorizationManifest {
 		for i := range manifest.RejectByClient {
 			manifest.RejectByClient[i].Surface = surface
 		}
+		for i := range manifest.NotCacheable {
+			manifest.NotCacheable[i].Surface = surface
+		}
 		merged.Accept = append(merged.Accept, manifest.Accept...)
 		merged.Reject = append(merged.Reject, manifest.Reject...)
 		merged.RejectByClient = append(merged.RejectByClient, manifest.RejectByClient...)
+		merged.NotCacheable = append(merged.NotCacheable, manifest.NotCacheable...)
 		if surface == AuthorizationBatchResponseSurface {
 			merged.BatchRequest = manifest.Request
 		}
@@ -148,7 +154,7 @@ func TestAuthorizationCorpusIsNotEmptyInEitherDirection(t *testing.T) {
 func TestEveryAuthorizationFixtureOnDiskIsClaimedByTheManifest(t *testing.T) {
 	manifest := loadAuthorizationManifest(t)
 	claimed := map[string]map[string]bool{}
-	for _, group := range [][]authorizationEntry{manifest.Accept, manifest.Reject, manifest.RejectByClient} {
+	for _, group := range [][]authorizationEntry{manifest.Accept, manifest.Reject, manifest.RejectByClient, manifest.NotCacheable} {
 		for _, entry := range group {
 			if claimed[entry.Surface] == nil {
 				claimed[entry.Surface] = map[string]bool{}
@@ -331,32 +337,92 @@ func TestEveryAuthorizationManifestPathMatchesItsSurfaceDirectory(t *testing.T) 
 	}
 }
 
-func TestADecisionIsUsableOnlyStrictlyBeforeItsExpiry(t *testing.T) {
-	// Both sides of the bound, for a single decision and for a batch item: an
-	// instant just before expiry parses, the expiry instant itself and anything
-	// later is refused, and a refusal is for every verdict (allow and deny).
+func TestADecisionIsCacheableOnlyStrictlyBeforeItsExpiry(t *testing.T) {
+	// expires_at bounds REUSE, never the answer to the request it was issued
+	// for: an instant at or after expiry still parses, and the decision says it
+	// must not be cached. Single decision (allow and deny) and batch item.
 	root := testRoot(t)
 	raw := authorizationBytes(t, AuthorizationDecisionSurface, "decision-valid-allow-with-obligations.json")
 	expiry := time.Date(2026, 9, 3, 5, 0, 30, 0, time.UTC)
-	if _, err := ParseAuthorizationDecision(root, raw, expiry.Add(-time.Second)); err != nil {
-		t.Fatalf("a decision one second before its expiry was refused: %v", err)
+	before, err := ParseAuthorizationDecision(root, raw, expiry.Add(-time.Second))
+	if err != nil || !before.Cacheable {
+		t.Fatalf("one second before expiry: err=%v decision=%+v, want parsed and Cacheable", err, before)
 	}
 	for _, now := range []time.Time{expiry, expiry.Add(time.Second), expiry.AddDate(1, 0, 0)} {
-		if decision, err := ParseAuthorizationDecision(root, raw, now); err == nil {
-			t.Errorf("now=%s: expired allow escaped as allowed=%v", now, decision.Allowed)
+		decision, err := ParseAuthorizationDecision(root, raw, now)
+		if err != nil {
+			t.Fatalf("now=%s: an allow past its expiry was refused: %v", now, err)
+		}
+		if !decision.Allowed || decision.Cacheable {
+			t.Errorf("now=%s: allowed=%v cacheable=%v, want allowed=true cacheable=false", now, decision.Allowed, decision.Cacheable)
 		}
 	}
 	deny := authorizationBytes(t, AuthorizationDecisionSurface, "decision-valid-deny.json")
-	if _, err := ParseAuthorizationDecision(root, deny, expiry); err == nil {
-		t.Error("an expired deny was accepted; the rule must not depend on the verdict")
+	denied, err := ParseAuthorizationDecision(root, deny, expiry)
+	if err != nil || denied.Allowed || denied.Cacheable {
+		t.Errorf("expired deny: err=%v decision=%+v, want parsed, denied, not cacheable", err, denied)
 	}
 	request := authorizationBytes(t, AuthorizationBatchRequestSurface, "batch-request-valid-two-items.json")
 	response := authorizationBytes(t, AuthorizationBatchResponseSurface, "batch-response-valid-items-disagree.json")
-	if _, err := ParseAuthorizationBatchResponse(root, request, response, expiry.Add(-time.Second)); err != nil {
-		t.Fatalf("a batch one second before expiry was refused: %v", err)
+	items, err := ParseAuthorizationBatchResponse(root, request, response, expiry.Add(-time.Second))
+	if err != nil || !items[0].Cacheable || !items[1].Cacheable {
+		t.Fatalf("batch one second before expiry: err=%v items=%+v, want all Cacheable", err, items)
 	}
-	if _, err := ParseAuthorizationBatchResponse(root, request, response, expiry); err == nil {
-		t.Error("an expired batch item escaped")
+	items, err = ParseAuthorizationBatchResponse(root, request, response, expiry)
+	if err != nil {
+		t.Fatalf("a batch at expiry was refused: %v", err)
+	}
+	if items[0].Cacheable || items[1].Cacheable || !items[0].Allowed || items[1].Allowed {
+		t.Errorf("batch at expiry: %+v, want verdicts kept and none cacheable", items)
+	}
+}
+
+func TestNotCacheableFixturesValidateAndParseAsUseOnce(t *testing.T) {
+	root := testRoot(t)
+	manifest := loadAuthorizationManifest(t)
+	if len(manifest.NotCacheable) == 0 {
+		t.Fatal("manifest has no accept_not_cacheable entries; the class would be vacuous")
+	}
+	seen := map[string]bool{}
+	for _, entry := range manifest.NotCacheable {
+		seen[entry.Surface] = true
+		t.Run(entry.File, func(t *testing.T) {
+			raw := authorizationBytes(t, entry.Surface, entry.File)
+			var document any
+			if err := json.Unmarshal(raw, &document); err != nil {
+				t.Fatal(err)
+			}
+			if err := Validate(root, entry.Surface, document); err != nil {
+				t.Fatalf("not-cacheable fixture must validate: %v", err)
+			}
+			switch entry.Surface {
+			case AuthorizationDecisionSurface:
+				decision, err := ParseAuthorizationDecision(root, raw, authorizationNow)
+				if err != nil || decision.Cacheable || !decision.Allowed {
+					t.Fatalf("err=%v decision=%+v, want an allow that is not cacheable", err, decision)
+				}
+			case AuthorizationBatchResponseSurface:
+				items, err := ParseAuthorizationBatchResponse(root, manifest.BatchRequest, raw, authorizationNow)
+				if err != nil || len(items) != 2 || items[0].Cacheable || !items[0].Allowed {
+					t.Fatalf("err=%v items=%+v, want item 0 an allow that is not cacheable", err, items)
+				}
+			default:
+				t.Fatalf("no client for surface %s", entry.Surface)
+			}
+		})
+	}
+	for _, surface := range []string{AuthorizationDecisionSurface, AuthorizationBatchResponseSurface} {
+		if !seen[surface] {
+			t.Errorf("no accept_not_cacheable fixture for %s", surface)
+		}
+	}
+}
+
+func TestAnUnknownReasonCodeIsStillRefusedPastExpiry(t *testing.T) {
+	root := testRoot(t)
+	raw := authorizationBytes(t, AuthorizationDecisionSurface, "decision-invalid-reason-code-not-in-vocabulary.json")
+	if decision, err := ParseAuthorizationDecision(root, raw, authorizationNow.AddDate(1, 0, 0)); err == nil {
+		t.Fatalf("an unknown reason code parsed past expiry: %+v", decision)
 	}
 }
 

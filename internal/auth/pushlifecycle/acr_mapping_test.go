@@ -59,7 +59,7 @@ func mapAcr(e contracts.AcrCredentialLifecycleEvent) contracts.ExternalPushLifec
 		SchemaVersion: contracts.ExternalPushLifecycleEventSurface, AggregateType: contracts.ExternalPushCredentialAggregate,
 		AggregateID: e.AggregateID, EventType: types[e.EventType], IdempotencyKey: e.IdempotencyKey, CreatedAt: e.CreatedAt,
 		Payload: contracts.ExternalPushLifecyclePayload{
-			Revision: e.Payload.Revision, OrganizationID: e.Payload.OrganizationID, SourceID: acrSourceID, Change: change,
+			Revision: e.Payload.Revision, OrganizationID: e.Payload.OrganizationID, Binding: contracts.ExternalPushBindingSource, SourceID: acrSourceID, Change: change,
 		},
 	}
 }

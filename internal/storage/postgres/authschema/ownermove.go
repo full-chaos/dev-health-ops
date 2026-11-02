@@ -71,6 +71,9 @@ func PublicPrivilegeSet() []PublicPrivilege {
 	}
 	add(publicAuditTable, "INSERT", PublicAuditWriteColumns())
 	add(ssoProvidersTable, "UPDATE", SSOProviderWriteColumns())
+	add(impersonationTable, "UPDATE", ImpersonationEndColumns())
+	add(impersonationTable, "INSERT", ImpersonationStartColumns())
+	add(impersonationTable, "SELECT", ImpersonationLegacyReadColumns())
 
 	var set []PublicPrivilege
 	for k, names := range columns {

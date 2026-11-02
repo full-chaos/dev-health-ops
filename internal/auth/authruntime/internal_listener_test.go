@@ -285,3 +285,61 @@ func TestTheInternalListenerRefusesANonWorkloadOrUnlistedCaller(t *testing.T) {
 		}
 	}
 }
+
+const injectedInternalOnly = http.MethodPost + " /internal/v1/test-only/get"
+
+func injectInternalOnly(t *testing.T, keys ...string) {
+	t.Helper()
+	saved := internalOnlyRoutes
+	internalOnlyRoutes = map[string]bool{}
+	for _, key := range keys {
+		internalOnlyRoutes[key] = true
+	}
+	t.Cleanup(func() { internalOnlyRoutes = saved })
+}
+
+func internalOnlyProbeRoute() httpapi.Route {
+	return httpapi.Route{Method: http.MethodPost, Pattern: "/internal/v1/test-only/get", Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+	})}
+}
+
+// A route keyed in internalOnlyRoutes is served by the internal listener and is 404 on the public API listener; the
+// three PEP routes stay on both.
+func TestAnInternalOnlyRouteIsServedInternallyAndNotPublicly(t *testing.T) {
+	injectInternalOnly(t, injectedInternalOnly)
+	cfg := loadInternalConfig(t, fullInternalEnv(t, session.WirePrincipalID(uuid.New())))
+	handlers := listenerHandlers(t, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), []httpapi.Route{internalOnlyProbeRoute()})
+	internal := mustListener(t, handlers, internalListenerName)
+	api := mustListener(t, handlers, apiListenerName)
+	if code := probe(internal, http.MethodPost, "/internal/v1/test-only/get"); code != http.StatusTeapot {
+		t.Errorf("internal listener answered %d for the internal-only route, want %d", code, http.StatusTeapot)
+	}
+	if code := probe(api, http.MethodPost, "/internal/v1/test-only/get"); code != http.StatusNotFound {
+		t.Errorf("public listener answered %d for the internal-only route, want 404", code)
+	}
+	for _, route := range pepRoutes {
+		method, path, _ := strings.Cut(route, " ")
+		for name, handler := range map[string]http.Handler{internalListenerName: internal, apiListenerName: api} {
+			if code := probe(handler, method, path); code == http.StatusNotFound || code == http.StatusMethodNotAllowed {
+				t.Errorf("%s answered %d on the %s listener, want the route's own answer", route, code, name)
+			}
+		}
+	}
+}
+
+// A key in internalOnlyRoutes that is no registered route stops startup: no silent dead key.
+func TestAnInternalOnlyKeyWithNoRouteFailsStartup(t *testing.T) {
+	injectInternalOnly(t, injectedInternalOnly)
+	cfg := loadInternalConfig(t, fullInternalEnv(t, ""))
+	components, err := configureWithRoutes(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	if err == nil {
+		for _, component := range components {
+			_ = component.Shutdown(context.Background())
+		}
+		t.Fatal("configure accepted an internalOnlyRoutes key that is not a registered route")
+	}
+	if !strings.Contains(err.Error(), injectedInternalOnly) {
+		t.Errorf("startup error %q does not name the dead key", err)
+	}
+}

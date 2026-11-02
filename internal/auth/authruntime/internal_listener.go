@@ -20,6 +20,10 @@ var internalRoutes = map[string]bool{
 	http.MethodPost + " " + authapi.PatternAuthorizeBatch: true,
 }
 
+// internalOnlyRoutes ("METHOD pattern" keys) are served on the internal listener and never on the public API listener;
+// empty until a route needs it.
+var internalOnlyRoutes = map[string]bool{}
+
 // internalServerOptions is the internal listener: the API listener's options over internalRoutes alone, on
 // cfg.InternalAddress, with no trusted proxy. Its callers are identified by their tokens, so the client address is
 // always the TCP peer and a forwarded X-Forwarded-For or X-Request-ID is never believed (cfg.TrustedProxies is the

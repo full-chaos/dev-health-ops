@@ -50,6 +50,7 @@ internal/auth/requestid
 internal/auth/serviceaccount
 internal/auth/servicecred
 internal/auth/session
+internal/auth/sessionevent
 internal/auth/sessionid
 internal/auth/signedtoken
 internal/backfillrun

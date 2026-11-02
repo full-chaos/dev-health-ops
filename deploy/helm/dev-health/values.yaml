@@ -438,6 +438,14 @@ authService:
     secretKey: AUTH_MIGRATION_DATABASE_URI
     # -- The runtime login auth-migrate grants privileges to.
     runtimeRole: devhealth_auth
+    # -- The role that owns the auth schema and every object in it (AUTH_SCHEMA_OWNER_ROLE): a NOSUPERUSER login that is
+    #    the migration login's role. Set, both auth-migrate Jobs refuse, before any GRANT, a schema with an object
+    #    another role owns (the push lifecycle append function, owned by its writer role, is the one exception), and a
+    #    pinned role that holds SUPERUSER, CREATEDB, CREATEROLE, REPLICATION or BYPASSRLS. Empty turns the pin off
+    #    (allowed at every phase). It must differ from runtimeRole, the session readers and the push lifecycle roles.
+    #    A database whose schema a superuser owns is moved once by `auth-migrate owner-move`, see
+    #    docs/contribute/architecture/auth-control-plane-deployment.md.
+    ownerRole: ""
     # -- The logins of the services that end an access token when its
     #    auth-service session is revoked (go-api's API_DATABASE_ROLE and
     #    query-api's registry login). auth-migrate grants each exactly SELECT on

@@ -1328,12 +1328,18 @@ services:
     volumes:
       - auth_signing_keys:/var/lib/dev-health/envelope-keys
 
-  # One-shot: creates the runtime login auth-service connects as, idempotently.
-  # It is a plain unprivileged login (no superuser, createdb, createrole,
-  # replication or RLS bypass) that owns nothing; auth-migrate grants it the
-  # approved table privileges. The password default equals the role name:
-  # local development only, like every other login in this file. A production
-  # login is provisioned by the database provider before auth-migrate runs.
+  # One-shot: creates the runtime login auth-service connects as and the migration
+  # login the auth one-shots connect as, idempotently, and the auth schema for the
+  # migration login. Both are plain unprivileged logins (no superuser, createdb,
+  # createrole, replication or RLS bypass). The runtime login owns nothing;
+  # auth-migrate grants it the approved table privileges. The migration login OWNS
+  # the auth schema and every object in it (the schema is created AUTHORIZATION it,
+  # so it needs no CREATE on the database), and auth-owner-grants gives it the
+  # privileges on the ops tables the grants pass needs. The password defaults equal
+  # the role names: local development only, like every other login in this file. A
+  # production login is provisioned by the database provider before auth-migrate
+  # runs. A volume made before this change holds a postgres-owned auth schema: move
+  # it once with `auth-migrate owner-move` (see the deployment doc) or `down -v`.
   # The DSNs of auth-migrate and auth-service use the libpq keyword form with the
   # password in single quotes (a URI would need every reserved character in the
   # password percent-encoded, which Compose cannot do): any password works except
@@ -1359,11 +1365,19 @@ services:
         SELECT format('CREATE ROLE %I LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS', :'role', :'pw')
           WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'role') \gexec
         SELECT format('ALTER ROLE %I NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD %L', :'role', :'pw') \gexec
+        \getenv mrole AUTH_MIGRATION_DATABASE_ROLE
+        \getenv mpw AUTH_MIGRATION_DATABASE_PASSWORD
+        \getenv schema AUTH_DATABASE_SCHEMA
+        SELECT format('CREATE ROLE %I LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS', :'mrole', :'mpw')
+          WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'mrole') \gexec
+        SELECT format('ALTER ROLE %I NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD %L', :'mrole', :'mpw') \gexec
+        SELECT format('CREATE SCHEMA %I AUTHORIZATION %I', :'schema', :'mrole')
+          WHERE NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = :'schema') \gexec
         \getenv writer AUTH_PUSH_LIFECYCLE_WRITER_ROLE
         SELECT format('CREATE ROLE %I NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS', :'writer')
           WHERE :'writer' <> '' AND NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'writer') \gexec
-        SELECT format('GRANT %I TO %I', :'writer', current_user)
-          WHERE :'writer' <> '' AND NOT pg_has_role(current_user, :'writer', 'MEMBER') \gexec
+        SELECT format('GRANT %I TO %I', :'writer', :'mrole')
+          WHERE :'writer' <> '' AND NOT pg_has_role(:'mrole', :'writer', 'MEMBER') \gexec
         SQL
     environment:
       PGHOST: postgres
@@ -1373,6 +1387,9 @@ services:
       PGDATABASE: ${POSTGRES_DB:-postgres}
       AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}
       AUTH_RUNTIME_DATABASE_PASSWORD: ${AUTH_RUNTIME_DATABASE_PASSWORD:-devhealth_auth}
+      AUTH_MIGRATION_DATABASE_ROLE: ${AUTH_MIGRATION_DATABASE_ROLE:-devhealth_auth_migrator}
+      AUTH_MIGRATION_DATABASE_PASSWORD: ${AUTH_MIGRATION_DATABASE_PASSWORD:-devhealth_auth_migrator}
+      AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
       # CHAOS-10895: the NOLOGIN role that owns the External Push lifecycle append
       # function, created here (with the migration login a member of it, the one
       # thing ALTER FUNCTION OWNER needs) only when named. Empty creates nothing.
@@ -1381,11 +1398,48 @@ services:
       postgres:
         condition: service_healthy
 
+  # One-shot: gives the migration login the privileges on the ops (public) tables that the
+  # grants pass needs to give the runtime login its rows (`auth-migrate owner-move
+  # -grants-only`): each privilege of the grants pass WITH GRANT OPTION, plus REFERENCES as
+  # the table-level anchor PostgreSQL needs for a REVOKE. It must connect as a superuser (it
+  # grants as the table owner), so it is the one auth one-shot that keeps the database
+  # superuser's DSN. It runs after the ops migrate (which creates the tables) and before
+  # auth-migrate; it changes no owner. A table the ops migrate has not created yet is skipped,
+  # and a repeat run changes nothing.
+  auth-owner-grants:
+    image: ${DEV_HEALTH_GO_AUTH_MIGRATE_IMAGE:-ghcr.io/full-chaos/dev-health-go-auth-migrate:local}
+    command:
+      - owner-move
+      - -from
+      - ${POSTGRES_USER:-postgres}
+      - -to
+      - ${AUTH_MIGRATION_DATABASE_ROLE:-devhealth_auth_migrator}
+      - -grants-only
+      - -apply
+    profiles: [auth]
+    networks: [auth_plane]
+    restart: "no"
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    environment:
+      AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${POSTGRES_USER:-postgres} password='${POSTGRES_PASSWORD:-postgres}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
+      AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
+      AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}
+    depends_on:
+      auth-provision:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+
   # One-shot: applies the auth schema lineage and the runtime grants. It
-  # connects as the database owner (the migration role), never as the runtime
-  # login: auth-migrate refuses a connection that authenticates AS the runtime
-  # role. `auth-migrate --check` reports whether the schema is at the embedded
-  # head without issuing DDL; the public-table grants come from auth-grants.
+  # connects as the migration login (a NOSUPERUSER role that owns the auth schema;
+  # AUTH_SCHEMA_OWNER_ROLE pins that), never as the runtime login: auth-migrate
+  # refuses a connection that authenticates AS the runtime role.
+  # `auth-migrate --check` reports whether the schema is at the embedded head
+  # without issuing DDL; the public-table grants come from auth-grants.
   auth-migrate:
     image: ${DEV_HEALTH_GO_AUTH_MIGRATE_IMAGE:-ghcr.io/full-chaos/dev-health-go-auth-migrate:local}
     build:
@@ -1404,14 +1458,17 @@ services:
     security_opt: [no-new-privileges:true]
     tmpfs: [/tmp]
     environment:
-      AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${POSTGRES_USER:-postgres} password='${POSTGRES_PASSWORD:-postgres}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
+      AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${AUTH_MIGRATION_DATABASE_ROLE:-devhealth_auth_migrator} password='${AUTH_MIGRATION_DATABASE_PASSWORD:-devhealth_auth_migrator}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
       AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
       AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
       AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}
       AUTH_PUSH_LIFECYCLE_WRITER_ROLE: ${AUTH_PUSH_LIFECYCLE_WRITER_ROLE:-}
       AUTH_PUSH_LIFECYCLE_CALLER_ROLES: ${AUTH_PUSH_LIFECYCLE_CALLER_ROLES:-}
+      AUTH_SCHEMA_OWNER_ROLE: ${AUTH_MIGRATION_DATABASE_ROLE:-devhealth_auth_migrator}
     depends_on:
       auth-provision:
+        condition: service_completed_successfully
+      auth-owner-grants:
         condition: service_completed_successfully
       migrate:
         condition: service_completed_successfully
@@ -1434,12 +1491,13 @@ services:
     security_opt: [no-new-privileges:true]
     tmpfs: [/tmp]
     environment:
-      AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${POSTGRES_USER:-postgres} password='${POSTGRES_PASSWORD:-postgres}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
+      AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${AUTH_MIGRATION_DATABASE_ROLE:-devhealth_auth_migrator} password='${AUTH_MIGRATION_DATABASE_PASSWORD:-devhealth_auth_migrator}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
       AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
       AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
       AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}
       AUTH_PUSH_LIFECYCLE_WRITER_ROLE: ${AUTH_PUSH_LIFECYCLE_WRITER_ROLE:-}
       AUTH_PUSH_LIFECYCLE_CALLER_ROLES: ${AUTH_PUSH_LIFECYCLE_CALLER_ROLES:-}
+      AUTH_SCHEMA_OWNER_ROLE: ${AUTH_MIGRATION_DATABASE_ROLE:-devhealth_auth_migrator}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -1462,7 +1520,7 @@ services:
     security_opt: [no-new-privileges:true]
     tmpfs: [/tmp]
     environment:
-      AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${POSTGRES_USER:-postgres} password='${POSTGRES_PASSWORD:-postgres}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
+      AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${AUTH_MIGRATION_DATABASE_ROLE:-devhealth_auth_migrator} password='${AUTH_MIGRATION_DATABASE_PASSWORD:-devhealth_auth_migrator}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
       AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
       AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
       AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}
@@ -1505,7 +1563,7 @@ services:
     security_opt: [no-new-privileges:true]
     tmpfs: [/tmp]
     environment:
-      AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${POSTGRES_USER:-postgres} password='${POSTGRES_PASSWORD:-postgres}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
+      AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${AUTH_MIGRATION_DATABASE_ROLE:-devhealth_auth_migrator} password='${AUTH_MIGRATION_DATABASE_PASSWORD:-devhealth_auth_migrator}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
       AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
       AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
       AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}
@@ -1525,7 +1583,7 @@ services:
     security_opt: [no-new-privileges:true]
     tmpfs: [/tmp]
     environment:
-      AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${POSTGRES_USER:-postgres} password='${POSTGRES_PASSWORD:-postgres}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
+      AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${AUTH_MIGRATION_DATABASE_ROLE:-devhealth_auth_migrator} password='${AUTH_MIGRATION_DATABASE_PASSWORD:-devhealth_auth_migrator}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
       AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
       AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
       AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}

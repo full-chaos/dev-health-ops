@@ -27,11 +27,17 @@ const Surface = "access-token.v1"
 // SurfaceWorkload names the contract of the workload-token corpus.
 const SurfaceWorkload = "workload-token.v1"
 
+// SurfaceServiceAccount names the contract of the service-account-token corpus.
+const SurfaceServiceAccount = "service-account-token.v1"
+
 // Dir is the access-token corpus directory, relative to the repo root.
 var Dir = filepath.Join("contracts", "auth", "v1", "golden", "access-token")
 
 // WorkloadDir is the workload-token corpus directory, relative to the repo root.
 var WorkloadDir = filepath.Join("contracts", "auth", "v1", "golden", "workload-token")
+
+// ServiceAccountDir is the service-account-token corpus directory, relative to the repo root.
+var ServiceAccountDir = filepath.Join("contracts", "auth", "v1", "golden", "service-account-token")
 
 // Outcome of a vector, and the closed vocabulary of refusal reasons.
 const (

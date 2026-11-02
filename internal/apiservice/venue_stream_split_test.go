@@ -16,6 +16,29 @@ import (
 
 const productTelemetryEventsPath = "/api/v1/product-telemetry/events"
 
+// acceptedTelemetryEvent is one event the intake's value rules accept.
+const acceptedTelemetryEvent = `{"events":[{"name":"page_viewed","schemaVersion":"1","eventId":"e-accepted","ts":"2026-09-23T02:00:00.123Z","sessionId":"s","anonymousUserId":"a","payload":{"feature":"work_graph","surface":"quadrant_panel"}}]}`
+
+// acceptedTelemetryProblem is empty when the answer is the intake accepting one event into the anonymous stream.
+func acceptedTelemetryProblem(status int, body string) string {
+	if status != 202 {
+		return fmt.Sprintf("status %d, want 202", status)
+	}
+	var answer struct {
+		Status        string `json:"status"`
+		ItemsReceived int    `json:"items_received"`
+		ItemsDropped  int    `json:"items_dropped"`
+		Stream        string `json:"stream"`
+	}
+	if err := json.Unmarshal([]byte(body), &answer); err != nil {
+		return fmt.Sprintf("body is not JSON: %v", err)
+	}
+	if answer.Status != "accepted" || answer.ItemsReceived != 1 || answer.ItemsDropped != 0 || answer.Stream != "product-telemetry:anonymous:events" {
+		return fmt.Sprintf("answer is %q items_received=%d items_dropped=%d stream=%q", answer.Status, answer.ItemsReceived, answer.ItemsDropped, answer.Stream)
+	}
+	return ""
+}
+
 // requestEntries are the stream entries one request added to the Go plane.
 type requestEntries struct {
 	request string
@@ -212,5 +235,26 @@ func TestNewStreamEntriesIsAMultisetDifference(t *testing.T) {
 	}
 	if got := parseStreamEntries(streamPlantedEntryA + " | " + streamPlantedEntryB); len(got) != 2 || streamKeyOfEntry(got[1]) != "h2" {
 		t.Fatalf("parsed %v", got)
+	}
+}
+
+func TestAcceptedTelemetryProblem(t *testing.T) {
+	const good = `{"ingestion_id":"x","status":"accepted","items_received":1,"stream":"product-telemetry:anonymous:events"}`
+	for _, c := range []struct {
+		name   string
+		status int
+		body   string
+		bad    bool
+	}{
+		{"accepted", 202, good, false},
+		{"dropped event", 202, `{"status":"accepted","items_received":0,"items_dropped":1,"stream":"product-telemetry:anonymous:events"}`, true},
+		{"partly dropped", 202, `{"status":"accepted","items_received":1,"items_dropped":1,"stream":"product-telemetry:anonymous:events"}`, true},
+		{"refused", 422, good, true},
+		{"other stream", 202, `{"status":"accepted","items_received":1,"stream":"product-telemetry:h:events"}`, true},
+		{"not JSON", 202, `x`, true},
+	} {
+		if got := acceptedTelemetryProblem(c.status, c.body); (got != "") != c.bad {
+			t.Errorf("%s: problem %q, bad=%v", c.name, got, c.bad)
+		}
 	}
 }

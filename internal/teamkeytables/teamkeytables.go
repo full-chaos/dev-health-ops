@@ -210,7 +210,9 @@ var (
 		NullableMeasures: []string{"after_hours_commit_ratio", "weekend_commit_ratio"},
 	}
 	// ic_landscape_rolling_30d holds one point for each (team, map, identity)
-	// of a day. Its repo_id is one fixed placeholder id.
+	// of a day. Its repo_id is one fixed placeholder id. cycle_p50_30d_hours is
+	// NULL for a person with no 30-day cycle, and in a row of zeros (its
+	// default).
 	ICLandscapeRolling30d = Table{
 		Table: "ic_landscape_rolling_30d", Family: "ic_finalize", DayColumn: "as_of_day",
 		Keys: []KeyColumn{
@@ -220,8 +222,9 @@ var (
 		Counts:     []string{"churn_loc_30d", "delivery_units_30d", "wip_max_30d"},
 		Measures: []string{
 			"x_raw", "y_raw", "x_norm", "y_norm",
-			"churn_loc_30d", "delivery_units_30d", "cycle_p50_30d_hours", "wip_max_30d",
+			"churn_loc_30d", "delivery_units_30d", "wip_max_30d",
 		},
+		NullableMeasures: []string{"cycle_p50_30d_hours"},
 	}
 	// compounding_risk_daily holds the team id in scope_id for the rows of
 	// scope 'team'. The rows of scope 'repo' belong to another family and hold

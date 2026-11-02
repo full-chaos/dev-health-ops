@@ -509,6 +509,10 @@ func plan(ctx context.Context, tx pgx.Tx, options Options, report *Report) ([]st
 		case options.From:
 			statements = append(statements, "ALTER DATABASE "+quote(database)+" OWNER TO "+to)
 			report.Moved["database"]++
+			if options.Restore {
+				// The forward move merged the migration login's CONNECT into the owner's entry; it logs in again after a rollback.
+				statements = append(statements, "GRANT CONNECT ON DATABASE "+quote(database)+" TO "+quote(options.From))
+			}
 		case options.To:
 		default:
 			return nil, fmt.Errorf("%w: the database is owned by neither the old nor the new owner", ErrOwnerMove)

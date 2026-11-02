@@ -93,6 +93,7 @@ internal/apiservice	provisioning_credential.go	internal/auth/authapi
 internal/apiservice	provisioning_credential.go	internal/auth/authruntime
 internal/auth/contracts	contracts.go	cmd/auth-migrate
 internal/auth/contracts	contracts.go	cmd/auth-service
+internal/auth/contracts	contracts.go	cmd/dev-health-worker-migrate
 internal/auth/contracts	contracts.go	cmd/dho
 internal/auth/contracts	contracts.go	cmd/loadtest
 internal/auth/contracts	contracts.go	deploy/helm/dev-health
@@ -144,6 +145,9 @@ internal/auth/contracts	contracts.go	internal/cigates/chartgates
 internal/auth/contracts	contracts.go	internal/cigates/workflows
 internal/auth/contracts	contracts.go	internal/platform/logging
 internal/auth/contracts	contracts.go	internal/queryapi/server
+internal/auth/contracts	contracts.go	internal/rivermigrate
+internal/auth/contracts	contracts.go	internal/rivermigrate/rolese2e
+internal/auth/contracts	contracts.go	internal/syncroute
 internal/auth/contracts	contracts.go	internal/testsupport/usertokens
 internal/auth/contracts	endpoint_auth_profile_selector_gate.go	internal/apiservice
 internal/auth/contracts	endpoint_auth_profile_selector_gate.go	internal/auth/contracts

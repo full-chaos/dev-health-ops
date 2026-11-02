@@ -565,6 +565,7 @@ internal/reconcilerservice	readiness_timeout_test.go
 internal/rivermigrate	deploy_wiring_test.go
 internal/scheduler/sync	venue_golden_address_test.go
 internal/storage/clickhouse/liverow	census_test.go
+internal/storage/postgres	api_authorization_orgs_owned_test.go
 internal/storage/postgres	openers_test.go
 internal/storage/postgres	posture_cache_cadence_test.go
 internal/storage/postgres	posture_identity_sites_test.go

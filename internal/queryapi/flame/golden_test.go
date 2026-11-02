@@ -438,6 +438,10 @@ func TestBuildResponseIssueTimelineUsesNowFallback(t *testing.T) {
 	defer func() { now = original }()
 
 	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		// The work item read holds no row here: no title, no repository id.
+		if strings.Contains(query, "FROM work_items FINAL") {
+			return &fixtureRowScanner{}, nil
+		}
 		return &fixtureRowScanner{rows: [][]any{{
 			"github", "bug", "in_progress",
 			day(2024, 1, 5, 8, 0, 0), day(2024, 1, 6, 9, 0, 0), nil,

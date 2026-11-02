@@ -1,0 +1,34 @@
+{
+  "id": "list-principals-unordered",
+  "kind": "exchange",
+  "operation": "principals_list",
+  "request": {
+    "schema_version": "principal-list-request.v1",
+    "organization_id": "org_EXAMPLE0000000000000001",
+    "limit": 2
+  },
+  "response": {
+    "schema_version": "principal-list.v1",
+    "items": [
+      {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000002",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000001",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      }
+    ],
+    "next_cursor": "k1_cHJuX0VYQU1QTEUwMDAwMDAwMDAwMDAwMDAx"
+  },
+  "response_schema": "accept",
+  "parse": "reject",
+  "rule": "items_not_ascending",
+  "why": "Ascending id order."
+}

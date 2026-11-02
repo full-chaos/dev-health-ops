@@ -129,6 +129,7 @@ binary): the native sleep action, a Kubernetes >= 1.30 feature. Same shape as go
 {{- if eq (upper (trim .name)) "AUTH_USERS_OWNED" }}{{- fail "authService.extraEnv must not set AUTH_USERS_OWNED: authService.phase renders it, for the auth-migrate, grants and backfill Jobs too, so the write grant on public.users follows the switch" }}{{- end }}
 {{- if eq (upper (trim .name)) "AUTH_SERVICE_SHUTDOWN_TIMEOUT" }}{{- fail "authService.extraEnv must not set AUTH_SERVICE_SHUTDOWN_TIMEOUT: authService.shutdownTimeout owns it, and the grace-period guard reads that value" }}{{- end }}
 {{- if eq (upper (trim .name)) "AUTH_DATABASE_MAX_CONNS" }}{{- fail "authService.extraEnv must not set AUTH_DATABASE_MAX_CONNS: use authService.database.maxConns, which the render checks" }}{{- end }}
+{{- if eq (upper (trim .name)) "AUTH_REVISION_FEED" }}{{- fail "authService.extraEnv must not set AUTH_REVISION_FEED: authService.revisionFeed.enabled renders it, past the rate-limit store check" }}{{- end }}
 {{- if eq (upper (trim .name)) "AUTH_SSO_JIT" }}{{- fail "authService.extraEnv must not set AUTH_SSO_JIT: authService.ssoJit renders it, past the orgs-owned check" }}{{- end }}
 {{- if eq (upper (trim .name)) "AUTH_PLATFORM_ROLES_OWNED" }}{{- fail "authService.extraEnv must not set AUTH_PLATFORM_ROLES_OWNED: authService.platformRolesOwned renders it, for go-api, query-api and the auth Jobs too" }}{{- end }}
 {{- if eq (upper (trim .name)) "AUTH_ORGS_OWNED" }}{{- fail "authService.extraEnv must not set AUTH_ORGS_OWNED: authService.phase renders it, for the backfill Job too" }}{{- end }}
@@ -327,6 +328,10 @@ spec:
           {{- if $a.valkey.secretName }}
             - name: AUTH_VALKEY_URI
               valueFrom: {secretKeyRef: {name: {{ $a.valkey.secretName | quote }}, key: {{ $a.valkey.secretKey | quote }}}}
+          {{- end }}
+          {{- if eq (include "dev-health.revisionFeed" .) "true" }}
+            - name: AUTH_REVISION_FEED
+              value: "on"
           {{- end }}
           {{- if $a.trustedProxies }}
             - name: AUTH_SERVICE_TRUSTED_PROXIES

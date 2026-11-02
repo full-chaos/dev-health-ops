@@ -215,6 +215,12 @@ authService:
   #    known account to the provider's organization and create a new account. Refused unless orgs are owned
   #    (phase 5): below it go-api's own sign-in join still writes, and two writers would race.
   ssoJit: false
+  # -- Revision feed: renders AUTH_REVISION_FEED=on on auth-service, so its audit outbox publisher sends each
+  #    committed revision to the rate-limit store (database 1) and every replica subscribes to the feed. It needs
+  #    valkey.secretName: the service refuses to start with the feed on and no AUTH_VALKEY_URI. Off renders nothing,
+  #    and outbox rows stay pending. authService.extraEnv cannot set AUTH_REVISION_FEED.
+  revisionFeed:
+    enabled: false
   # -- Two replicas keep the service up through one pod loss or node drain
   #    (N+1, docs/operate/plan/auth-service-capacity.md); a PodDisruptionBudget
   #    (minAvailable 1) renders only while this is 2 or more.

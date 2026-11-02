@@ -18,6 +18,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/valkeyreply"
 )
 
 type storeErr struct{ err error }
@@ -161,6 +162,49 @@ func TestAValkeyFailureAnswers503OnEveryLimitedRoute(t *testing.T) {
 	}
 	if compat.attempts.failures != 0 {
 		t.Error("the login handler ran with the counter store down")
+	}
+}
+
+func limitedRouteCalls(t *testing.T, store storeErr) map[string]*httptest.ResponseRecorder {
+	t.Helper()
+	compat := newCompatFixture(t)
+	compat.counters = store
+	compat.buildCompat()
+	cred := newCredFixtureWith(t, store)
+	return map[string]*httptest.ResponseRecorder{
+		"login":    compat.do(http.MethodPost, PatternCompatLogin, loginBody(compatEmail, "wrong password", ""), nil),
+		"register": cred.call(http.MethodPost, PatternRegister, registerBody, nil),
+		"verify":   cred.call(http.MethodGet, PatternVerifyEmail+"?token=sentinel-token", "", nil),
+		"resend":   cred.call(http.MethodPost, PatternResendVerification, `{"email":"sentinel-person@example.com"}`, nil),
+		"change":   cred.call(http.MethodPost, PatternChangePassword, `{"current_password":"a-password-1","new_password":"Brand-new-pass-77!"}`, cred.bearer(cred.grant())),
+		"forgot":   cred.call(http.MethodPost, PatternForgotPassword, `{"email":"sentinel-person@example.com"}`, nil),
+		"reset":    cred.call(http.MethodPost, PatternResetPassword, `{"token":"sentinel-token","new_password":"another-password-1"}`, nil),
+	}
+}
+
+func TestAValkeyCommandErrorAnswers500OnLoginRegisterAndCredentials(t *testing.T) {
+	reply := valkeyreply.Error(t, "WRONGTYPE Operation against a key holding the wrong kind of value")
+	for name, r := range limitedRouteCalls(t, storeErr{fmt.Errorf("rate limit script: %w", reply)}) {
+		t.Run(name, func(t *testing.T) {
+			if r.Code != http.StatusInternalServerError {
+				t.Errorf("%s = %d, want 500: %s", name, r.Code, r.Body)
+			}
+			if got := r.Header().Get("Retry-After"); got != "" {
+				t.Errorf("%s 500 carries Retry-After %q", name, got)
+			}
+		})
+	}
+}
+
+func TestAValkeyAvailabilityReplyAnswers503OnLoginRegisterAndCredentials(t *testing.T) {
+	reply := valkeyreply.Error(t, "LOADING Valkey is loading the dataset in memory")
+	for name, r := range limitedRouteCalls(t, storeErr{fmt.Errorf("rate limit script: %w", reply)}) {
+		t.Run(name, func(t *testing.T) {
+			expectDown(t, name, r, r.Body.String())
+			if got := r.Header().Get("Retry-After"); got == "" {
+				t.Errorf("%s 503 has no Retry-After", name)
+			}
+		})
 	}
 }
 

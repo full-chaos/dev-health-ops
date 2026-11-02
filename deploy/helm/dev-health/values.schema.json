@@ -136,6 +136,12 @@
         "platformRolesOwned": {
           "description": "CHAOS-12191: render AUTH_PLATFORM_ROLES_OWNED=true on every reader. Refused unless orgs are owned, phase 5 (the templates check it).",
           "type": "boolean"
+        },
+        "revisionFeed": {
+          "description": "CHAOS-11816: enabled renders AUTH_REVISION_FEED=on on auth-service. Refused without valkey.secretName (the templates check it).",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "enabled": { "type": "boolean" } }
         }
       }
     },

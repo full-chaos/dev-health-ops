@@ -47,12 +47,22 @@ const (
 	// RefusedTransition: the event is not valid for the credential's state or
 	// changes its identity.
 	RefusedTransition Outcome = "refused_transition"
-	// RefusedParent: a rotation names no parent the caller could supply.
+	// RefusedParent: the parent the caller supplied is wrong (another
+	// credential, organization or source, retired before the rotation, or in an
+	// unknown state). It is final: a retry cannot change it.
 	RefusedParent Outcome = "refused_parent"
+	// ParentPending: a rotation's parent is not seen yet (the caller's nil).
+	// Like Gap it is a retry: nothing is applied and the caller parks the event.
+	ParentPending Outcome = "parent_pending"
 )
 
 // Outcomes is every Outcome, for exhaustive label sets and tests.
-var Outcomes = []Outcome{Applied, Duplicate, Stale, Gap, RefusedTerminal, RefusedWiden, RefusedTransition, RefusedParent}
+var Outcomes = []Outcome{Applied, Duplicate, Stale, Gap, RefusedTerminal, RefusedWiden, RefusedTransition, RefusedParent, ParentPending}
+
+// Retry reports whether the event may apply later: a Gap fills when the missing
+// revisions arrive, and a pending parent when the parent does. Every other
+// outcome is final for this delivery.
+func (o Outcome) Retry() bool { return o == Gap || o == ParentPending }
 
 // State is one credential's projection. The zero value is a credential never
 // seen. Revision is the last applied revision.
@@ -76,7 +86,7 @@ type State struct {
 // State of the credential named by rotation_parent_id; the caller loads it from
 // storage keyed by that id inside the event's organization, and Apply trusts
 // only what it can check: the parent's id, organization, binding and source must equal
-// the event's, or the outcome is RefusedParent (so does a nil parent). A parent
+// the event's, or the outcome is RefusedParent; a nil parent is ParentPending. A parent
 // that was already retired before the rotation's created_at is RefusedParent,
 // where retired means the earliest of its terminal event's created_at and its
 // expires_at; one retired at or after it, in any arrival order, is accepted,
@@ -87,7 +97,7 @@ type State struct {
 // The producer writes a rotated event and its parent's retirement in one
 // transaction, each on its own aggregate; between the two events a consumer may
 // see both credentials live, and that window is accepted.
-// A parent that has not been seen yet is the caller's nil: retry later. The
+// A parent that has not been seen yet is the caller's nil: ParentPending, retry later. The
 // returned state is state itself unless the outcome is Applied. Apply never panics and never returns Applied for a
 // terminal credential.
 func Apply(state State, event contracts.ExternalPushLifecycleEvent, parent *State) (State, Outcome) {
@@ -120,7 +130,10 @@ func Apply(state State, event contracts.ExternalPushLifecycleEvent, parent *Stat
 			if change.RotationParentID == "" || change.RotationParentID == event.AggregateID {
 				return state, RefusedTransition
 			}
-			if parent == nil || parent.AggregateID == "" || parent.AggregateID != change.RotationParentID ||
+			if parent == nil {
+				return state, ParentPending
+			}
+			if parent.AggregateID == "" || parent.AggregateID != change.RotationParentID ||
 				parent.OrganizationID != event.Payload.OrganizationID || parent.Binding != event.Payload.Binding ||
 				parent.SourceID != event.Payload.SourceID ||
 				parent.Revision < 1 {

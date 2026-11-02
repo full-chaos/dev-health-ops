@@ -124,7 +124,7 @@ func newMoveEnv(t *testing.T, ctx context.Context) *moveEnv {
 		`CREATE TYPE river.job_state AS ENUM ('available', 'running')`,
 		`CREATE TABLE river.jobs (id bigserial PRIMARY KEY, state river.job_state NOT NULL DEFAULT 'available')`,
 		`CREATE FUNCTION river.notify_fn() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN NEW; END'`,
-		`GRANT CONNECT ON DATABASE `+quote(env.database)+` TO `+env.rt1+`, `+env.mig,
+		`GRANT CONNECT ON DATABASE `+quote(env.database)+` TO `+env.rt1+`, `+env.mig+`, `+env.next,
 		`REVOKE TEMPORARY ON DATABASE `+quote(env.database)+` FROM PUBLIC`,
 		`GRANT USAGE ON SCHEMA public TO `+env.rt1+`, `+env.mig+`, `+env.rt2,
 		`GRANT SELECT, INSERT ON public.users TO `+env.rt1,

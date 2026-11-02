@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel/metric/noop"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authorization"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
@@ -29,6 +30,7 @@ type saFixture struct {
 	accountOrg string
 	credential uuid.UUID
 	snap       *fakeSnapshot
+	audits     []audit.AuditEvent
 }
 
 func newSAFixture(t *testing.T) *saFixture {
@@ -66,6 +68,10 @@ func (s *saFixture) serve(t *testing.T, state DecisionState, cache DecisionCache
 	s.routes = serveWithReferences(t, AuthorizeDeps{
 		Callers: s.callers(), References: s.references(), State: state, Evaluator: authorization.NewEvaluator(),
 		Cache: cache, Ready: ready,
+		Audit: func(_ context.Context, events []audit.AuditEvent) error {
+			s.audits = append(s.audits, events...)
+			return nil
+		},
 	}, map[string]ReferencedPrincipal{saReference: s.principalRef()})
 }
 
@@ -76,6 +82,9 @@ func serveWithReferences(t *testing.T, deps AuthorizeDeps, refs map[string]Refer
 	}
 	if deps.Meter == nil {
 		deps.Meter = noop.NewMeterProvider().Meter("test")
+	}
+	if deps.Audit == nil {
+		deps.Audit = func(context.Context, []audit.AuditEvent) error { return nil }
 	}
 	rec, err := newRecorder(deps.Logger, deps.Meter)
 	if err != nil {
@@ -220,6 +229,14 @@ func TestAuthorizeServiceAccountOrgAndPlatformActionsAreDenied(t *testing.T) {
 	if d := s.decide(t, s.saQuestion("admin.users", "platform", "platform", "")); d.Allowed ||
 		d.ReasonCode != string(authorization.ReasonPlatformRoleAbsent) {
 		t.Fatalf("platform action: %+v, want platform_role_absent", d)
+	}
+	if len(s.audits) != 2 {
+		t.Fatalf("%d high-risk audit rows, want 2 (settings.write, admin.users)", len(s.audits))
+	}
+	for _, e := range s.audits {
+		if e.ActorPrincipalID == nil || *e.ActorPrincipalID != s.account.String() || e.Outcome != audit.OutcomeDenied {
+			t.Fatalf("high-risk audit row %+v, want a denied row whose actor is the service account", e)
+		}
 	}
 }
 

@@ -90,3 +90,28 @@ func TestAuthOwnerMoveK3sKeepsSecretsOffTheCommandLineAndUsesNoKind(t *testing.T
 		}
 	}
 }
+
+// kubectl got the kubeconfig and helm did not, so the first helm call of a lead run on bigboy reached localhost:8080.
+// Every helm call that talks to the cluster names the kubeconfig; `helm template` does not talk to it.
+func TestAuthOwnerMoveK3sGivesEveryClusterHelmCallTheKubeconfig(t *testing.T) {
+	text := readText(t, filepath.Join(rootOf(t), k3sScript))
+	var clusterCalls int
+	for n, line := range strings.Split(text, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		for _, sub := range []string{"upgrade", "install", "get", "status", "uninstall", "list", "rollback", "history"} {
+			if !strings.Contains(trimmed, "helm "+sub+" ") {
+				continue
+			}
+			clusterCalls++
+			if !strings.Contains(trimmed, `--kubeconfig "${KUBECONFIG_FILE}"`) {
+				t.Errorf("line %d: a helm %s call without --kubeconfig \"${KUBECONFIG_FILE}\": %s", n+1, sub, trimmed)
+			}
+		}
+	}
+	if clusterCalls < 2 {
+		t.Errorf("found %d cluster helm calls; the cell reads nothing", clusterCalls)
+	}
+}

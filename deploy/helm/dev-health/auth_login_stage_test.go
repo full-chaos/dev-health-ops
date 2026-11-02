@@ -8,8 +8,8 @@ import (
 )
 
 // CHAOS-12532: phase 3 rolls in two stages. Stage authService: auth-service mounts the login route (the lockout key and
-// the social client env) while go-api still logs in locally. Stage goApi: go-api forwards login and social. An unset
-// stage is today's one-step phase 3, which equals stage goApi. The stage exists only at phase 3.
+// the social client env) while go-api still logs in locally. Stage goApi: go-api forwards login and social. Phase 3
+// needs a stage and the stage exists only at phase 3 (the usersOwnedStage rules at phase 4).
 
 func loginStageArgs(phase, stage string, extra ...string) []string {
 	sets := []string{"--set", "authService.phase=" + phase}
@@ -72,19 +72,16 @@ func TestLoginStageGoAPIForwardsLoginAndSocial(t *testing.T) {
 	}
 }
 
-// An unset stage is the one-step phase 3 of today: its render is byte-equal to stage goApi's, and the auth-service
-// halves of the two stages are byte-equal to each other.
-func TestLoginStageUnsetIsTheOneStepPhase3(t *testing.T) {
-	_, unset, err := renderAuth(t, loginStageArgs("3", "")...)
-	if err != nil {
-		t.Fatalf("phase 3 without a stage: render: %v\n%.400s", err, unset)
+// Phase 3 without a stage is refused, naming both values and their order (a silent default would let the race back in).
+func TestPhase3NeedsALoginStage(t *testing.T) {
+	_, out, err := renderAuthRaw(t, loginStageArgs("3", "")...)
+	if err == nil {
+		t.Fatalf("phase 3 without a stage rendered: %.300s", out)
 	}
-	_, goAPI, err := renderAuth(t, loginStageArgs("3", "goApi")...)
-	if err != nil {
-		t.Fatalf("stage goApi: render: %v\n%.400s", err, goAPI)
-	}
-	if unset != goAPI {
-		t.Errorf("phase 3 without a stage differs from stage goApi: the default one-step render moved")
+	for _, want := range []string{"authService.loginStage", "authService first", "then goApi"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the refusal does not say %q: %.400s", want, out)
+		}
 	}
 }
 
@@ -95,7 +92,7 @@ func TestLoginStageIsRefusedOutsidePhase3(t *testing.T) {
 			if phase == "4" {
 				extra = append(extra, "--set", "authService.usersOwnedStage=goApi")
 			}
-			_, out, err := renderAuth(t, loginStageArgs(phase, stage, extra...)...)
+			_, out, err := renderAuthRaw(t, loginStageArgs(phase, stage, extra...)...)
 			if err == nil || !strings.Contains(out, "authService.loginStage") {
 				t.Errorf("phase %s with loginStage=%s rendered: err=%v out=%.300s", phase, stage, err, out)
 			}
@@ -105,7 +102,7 @@ func TestLoginStageIsRefusedOutsidePhase3(t *testing.T) {
 
 func TestLoginStageValueIsClosed(t *testing.T) {
 	for _, bad := range []string{"GoApi", "auth-service", "both", "true"} {
-		_, out, err := renderAuth(t, loginStageArgs("3", bad)...)
+		_, out, err := renderAuthRaw(t, loginStageArgs("3", bad)...)
 		if err == nil || !strings.Contains(out, "loginStage") {
 			t.Errorf("loginStage %q rendered: err=%v out=%.300s", bad, err, out)
 		}
@@ -118,7 +115,7 @@ func TestNoRenderForwardsLoginToAnAuthServiceWithoutTheLoginRoute(t *testing.T) 
 		phase, stage string
 		extra        []string
 	}{
-		{"2", "", nil}, {"3", "", nil}, {"3", "authService", nil}, {"3", "goApi", nil},
+		{"2", "", nil}, {"3", "authService", nil}, {"3", "goApi", nil},
 		{"4", "", []string{"--set", "authService.usersOwnedStage=goApi"}},
 		{"4", "", []string{"--set", "authService.usersOwnedStage=owned"}},
 	}

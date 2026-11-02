@@ -195,13 +195,13 @@ authService:
   #             barrier (up-owned) first. Rollback runs the other way: goApi, barrier down-auth, then phase 3.
   #    Runbook: docs/operate/runbooks/auth-users-owned-flip-and-rollback.md.
   usersOwnedStage: ""
-  # -- Phase 3 only (CHAOS-12532): the roll order of login and social sign-in. Unset is stage goApi (the one-step phase 3).
+  # -- Phase 3 only (CHAOS-12532), required there and refused elsewhere: the roll order of login and social sign-in.
   #      authService  auth-service mounts the login route and the social clients (the lockout key and SOCIAL_* env);
   #                   go-api keeps AUTH_PROXY_LOCAL_LOGIN and AUTH_PROXY_SOCIAL false and still logs in locally.
   #                   Release this first and wait until every auth-service pod is Ready.
   #      goApi        go-api forwards login and social (AUTH_PROXY_LOCAL_LOGIN, AUTH_PROXY_SOCIAL true). Every
   #                   auth-service pod already serves them. Rollback runs the other way: stage authService, then phase 2.
-  #    Refused at any phase other than 3. Runbook: docs/contribute/architecture/auth-control-plane-deployment.md.
+  #    The roll to phase 4 and the rollback to phase 2 drop the value. Runbook: docs/contribute/architecture/auth-control-plane-deployment.md.
   loginStage: ""
   # -- Platform roles owned: renders AUTH_PLATFORM_ROLES_OWNED=true on auth-service, go-api, query-api and the
   #    auth-migrate, auth-grants and auth-backfill Jobs, so platform authority moves from public.users.is_superuser

@@ -763,6 +763,7 @@ leaf), and renders the phase. Every ladder read goes through dev-health.authOn, 
 {{- if and (ne (int $p) 4) (ne $stage "") }}{{- fail (printf "authService.usersOwnedStage is set but authService.phase is %d: the stage exists only at phase 4" (int $p)) }}{{- end -}}
 {{- $loginStage := toString (default "" $v.authService.loginStage) -}}
 {{- if not (has $loginStage (list "" "authService" "goApi")) }}{{- fail (printf "authService.loginStage must be authService or goApi, got %q" $loginStage) }}{{- end -}}
+{{- if and (eq (int $p) 3) (eq $loginStage "") }}{{- fail "authService.phase 3 needs authService.loginStage: authService first (auth-service mounts the login route and the social clients, go-api still logs in locally), then goApi (go-api forwards login and social once every auth-service pod serves them); a rollback runs the other way, goApi to authService, then phase 2 with no stage (docs/contribute/architecture/auth-control-plane-deployment.md)" }}{{- end -}}
 {{- if and (ne (int $p) 3) (ne $loginStage "") }}{{- fail (printf "authService.loginStage is set but authService.phase is %d: the stage exists only at phase 3 (authService first, then goApi; docs/contribute/architecture/auth-control-plane-deployment.md)" (int $p)) }}{{- end -}}
 {{- int $p -}}
 {{- end -}}
@@ -865,7 +866,7 @@ usersOwned 4, orgsOwned 5. credentials moves with go-api's users switch: go-api 
 go to auth-service. auth-service mounts them from phase 2 (a 503 stub until users are owned).
 Phase 3 has two stages (authService.loginStage, CHAOS-12532): localLogin and social (auth-service: the lockout key and the social client env)
 are on at both; goApiLocalLogin and goApiSocial (go-api's AUTH_PROXY_LOCAL_LOGIN and AUTH_PROXY_SOCIAL) are off at stage authService, so go-api
-forwards login only after every auth-service pod serves it. An unset stage is stage goApi, the one-step phase 3. The stage exists only at phase 3.
+forwards login only after every auth-service pod serves it. Phase 3 needs the stage (like usersOwnedStage at phase 4) and it exists only at phase 3.
 Phase 4 has two stages (authService.usersOwnedStage): goApiUsersOwned (go-api's AUTH_USERS_OWNED) is on at both; usersOwned (auth-service,
 the auth Jobs, the grants) is on only at stage owned, so go-api rolls first and auth-service owns users after (CHAOS-11606).
 */}}

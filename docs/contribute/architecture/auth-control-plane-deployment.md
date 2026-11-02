@@ -201,20 +201,23 @@ auth-service and go-api pods run the same phase.
 
 Phase 3 is two rolls (`authService.loginStage`, CHAOS-12532). One upgrade that turned both halves on made go-api forward
 login while the old auth-service pods, which have no login route, still answered `503` (a rehearsal on k3s measured 11 to
-24 seconds of failed sign-in per flip). So the stage value splits it:
+24 seconds of failed sign-in per flip). So the stage value splits it, and the chart refuses phase 3 without it
+(`authService.loginStage` is `authService` first, then `goApi`), refuses a bad value, and refuses it at any phase other
+than 3:
 
 1. Stage `authService`: set `authService.phase: 3`, `authService.loginStage: authService`, and the two Secret names
    (`authService.sessionKeys.loginLockout.secretName`, `authService.social.secretName`). Only auth-service changes: it
    gets `AUTH_LOGIN_LOCKOUT_KEY` and the `SOCIAL_*` client env and mounts the login route. go-api keeps
    `AUTH_PROXY_LOCAL_LOGIN` and `AUTH_PROXY_SOCIAL` false and logs in locally. Wait until every auth-service pod is Ready
    (`kubectl rollout status deploy/<release>-auth-service`); the old pods are gone by then.
-2. Stage `goApi`: change `authService.loginStage` to `goApi` (an unset stage is the same render). Only go-api changes: it
-   forwards login and social, and every auth-service pod already serves them.
+2. Stage `goApi`: change `authService.loginStage` to `goApi`. Only go-api changes: it forwards login and social, and
+   every auth-service pod already serves them.
 
 Rollback goes in the reverse order. Stage `goApi` to stage `authService` first (go-api logs in locally again), wait until
-the go-api pods are Ready, then phase 2 with `loginStage` unset and the two Secret names removed (auth-service drops the
-login route last). The value is refused at any phase other than 3, so the phase 2 and phase 4 releases carry none; the
-phase 4 flip-back release to phase 3 may leave it unset, which keeps go-api forwarding login.
+the go-api pods are Ready, then phase 2 with no stage and the two Secret names removed (auth-service drops the login
+route last). The step from phase 3 to phase 4 drops the value too (the phase 4 release carries no `loginStage`; both login
+flags are on at phase 4). A release that returns from phase 4 to phase 3 (the users flip-back) sets
+`authService.loginStage: goApi`, which keeps go-api forwarding login.
 
 The chart cannot read the running image, so check it before the upgrade.
 

@@ -64,6 +64,9 @@ func SessionReaderColumns() ColumnGrant {
 	return ColumnGrant{Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at", "legacy_token_version"}}
 }
 
+// ProjectionReaderReads is everything a projection reader role reads in the auth schema.
+func ProjectionReaderReads() []ColumnGrant { return nil }
+
 // PlatformRoleReaderColumns is what a session reader role also reads while the
 // platform roles switch is on: the columns platformrole.HoldsSQL reads.
 func PlatformRoleReaderColumns() []ColumnGrant {

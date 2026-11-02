@@ -215,3 +215,6 @@ func excuseRetained(violations []Violation, retained []GrantRecord) []Violation 
 	}
 	return kept
 }
+
+// projectionReaderNarrowing is what a projection reader lost of ProjectionReaderReads between before and after, named by the reader.
+func projectionReaderNarrowing(reader string, before, after []GrantRecord) []GrantRecord { return nil }

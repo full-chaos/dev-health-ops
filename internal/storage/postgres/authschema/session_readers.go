@@ -185,3 +185,8 @@ func sessionReaderViolations(ctx context.Context, conn *pgx.Conn, options Option
 	}
 	return violations, nil
 }
+
+// presentReads keeps the reads whose table exists in the schema.
+func presentReads(ctx context.Context, conn querier, schema string, reads []ColumnGrant) ([]ColumnGrant, error) {
+	return nil, nil
+}

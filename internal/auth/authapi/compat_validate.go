@@ -328,10 +328,13 @@ func (h validateHandler) refuseToken(w http.ResponseWriter, r *http.Request, rea
 
 // validateFault answers a decision that could not be made: a store or key
 // set that is down is go-api's 503 (unavailableCompat), anything else the
-// generic 500. go-api's own handler answers both with its 500
-// (internal/api/session fail checks sessionissue.ErrUnavailable only).
+// generic 500. Down is policy.ErrUnavailable, go-api's own class
+// (policy.WriteAuthFailure; under RouteAccess the legacy verifier keeps no
+// driver error), or a dependency failure (fail). go-api's own handler answers
+// both with its 500 (internal/api/session fail checks
+// sessionissue.ErrUnavailable only).
 func (h validateHandler) validateFault(w http.ResponseWriter, r *http.Request, err error) {
-	if errors.Is(err, policy.ErrKeySourceUnavailable) {
+	if errors.Is(err, policy.ErrUnavailable) {
 		h.unavailableCompat(w, r, opCompatValidate, err)
 		return
 	}

@@ -12,8 +12,15 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-go/authverify"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
 	"github.com/full-chaos/dev-health-ops/internal/cigates/livee2e"
+	"github.com/full-chaos/dev-health-ops/internal/envelopemint"
 )
 
 const (
@@ -97,5 +104,100 @@ func TestNoHS256SecretVerb(t *testing.T) {
 	}
 	if strings.Contains(stderr.String(), "jwt-secret") {
 		t.Fatalf("usage still names jwt-secret")
+	}
+}
+
+func mintedToken(t *testing.T, keyFile string, env map[string]string) string {
+	t.Helper()
+	base := map[string]string{
+		"E2E_USER_ID": tokenUser, "E2E_ORG_ID": tokenOrg, "E2E_SESSION_ID": tokenSession,
+		"E2E_ISSUER_URL": tokenIssuer, "E2E_ISSUER_KEY_FILE": keyFile,
+	}
+	for name, value := range env {
+		base[name] = value
+	}
+	var stdout, stderr bytes.Buffer
+	if code := livee2e.Run([]string{"mint-token"}, func(name string) string { return base[name] }, &stdout, &stderr); code != 0 {
+		t.Fatalf("mint-token exited %d: %s", code, stderr.String())
+	}
+	return strings.TrimSpace(stdout.String())
+}
+
+func publicKeyOf(t *testing.T, keyFile string) ed25519.PublicKey {
+	t.Helper()
+	pemBytes, err := os.ReadFile(keyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := envelopemint.LoadPrivateKey(pemBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return key.Public().(ed25519.PublicKey)
+}
+
+func TestMintedTokenVerifiesAsAnAccessTokenV1ForTheKeyAndIssuer(t *testing.T) {
+	keyFile := writeIssuerKey(t)
+	token := mintedToken(t, keyFile, nil)
+	verifier, err := authverify.NewVerifier(authverify.VerifierConfig{
+		Issuer: tokenIssuer, Audience: "dev-health-api", Keys: authverify.StaticKeys{livee2e.DefaultIssuerKeyID: publicKeyOf(t, keyFile)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims, err := verifier.Verify(token, time.Now())
+	if err != nil {
+		t.Fatalf("token does not verify: %v", err)
+	}
+	user := uuid.MustParse(tokenUser)
+	if claims.Subject != "prn_"+base64.RawURLEncoding.EncodeToString(user[:]) {
+		t.Fatalf("sub does not name the user the caller gave")
+	}
+	if claims.OrgID == nil || *claims.OrgID != tokenOrg || claims.Scope != "api:access" {
+		t.Fatalf("claims = %+v", claims)
+	}
+	if id, err := sessionid.Parse(claims.SessionID); err != nil || id != uuid.MustParse(tokenSession) {
+		t.Fatalf("sid does not name the session the caller gave")
+	}
+	other := authverify.StaticKeys{livee2e.DefaultIssuerKeyID: publicKeyOf(t, writeIssuerKey(t))}
+	otherVerifier, _ := authverify.NewVerifier(authverify.VerifierConfig{Issuer: tokenIssuer, Audience: "dev-health-api", Keys: other})
+	if _, err := otherVerifier.Verify(token, time.Now()); authverify.ReasonOf(err) != authverify.ReasonSignature {
+		t.Fatalf("another key must refuse the token by signature, got %v", err)
+	}
+}
+
+func TestMintTokenNeedsItsInputs(t *testing.T) {
+	keyFile := writeIssuerKey(t)
+	for name, env := range map[string]map[string]string{
+		"no session":   {"E2E_SESSION_ID": ""},
+		"bad session":  {"E2E_SESSION_ID": "not-a-uuid"},
+		"no issuer":    {"E2E_ISSUER_URL": ""},
+		"no key file":  {"E2E_ISSUER_KEY_FILE": ""},
+		"missing file": {"E2E_ISSUER_KEY_FILE": filepath.Join(t.TempDir(), "absent")},
+		"bad user":     {"E2E_USER_ID": "user-7"},
+	} {
+		base := map[string]string{
+			"E2E_USER_ID": tokenUser, "E2E_ORG_ID": tokenOrg, "E2E_SESSION_ID": tokenSession,
+			"E2E_ISSUER_URL": tokenIssuer, "E2E_ISSUER_KEY_FILE": keyFile,
+		}
+		for k, v := range env {
+			base[k] = v
+		}
+		var stdout, stderr bytes.Buffer
+		if code := livee2e.Run([]string{"mint-token"}, func(n string) string { return base[n] }, &stdout, &stderr); code != 1 || stdout.Len() != 0 {
+			t.Errorf("%s: exit %d, stdout %d bytes, want exit 1 and no token", name, code, stdout.Len())
+		}
+	}
+}
+
+func TestMintTokenRefusesAKeyFileOthersCanRead(t *testing.T) {
+	keyFile := writeIssuerKey(t)
+	if err := os.Chmod(keyFile, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	getenv := tokenEnv(keyFile)
+	if code := livee2e.Run([]string{"mint-token"}, getenv, &stdout, &stderr); code != 1 || stdout.Len() != 0 {
+		t.Fatalf("exit %d, want exit 1 and no token for a key file with group or other bits", code)
 	}
 }

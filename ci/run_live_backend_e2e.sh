@@ -142,6 +142,7 @@ API_PID=""
 WORKER_PID=""
 RECONCILER_PID=""
 QUERY_API_PID=""
+ISSUER_PID=""
 
 # CHAOS-5025 (shared teardown bound): see validate_teardown_wait_secs /
 # stop_worker_stack in ci/lib/go_worker_fixture.sh.
@@ -173,6 +174,7 @@ cleanup() {
   stop_worker_stack
   stop_service "query-api" "${QUERY_API_PID}"
   stop_service "dho api" "${API_PID}"
+  stop_service "issuer stub" "${ISSUER_PID}"
   rm -rf "${TMP_DIR}" >/dev/null 2>&1 || true
   return "${rc}"
 }
@@ -325,14 +327,31 @@ build_go_binaries
 MIGRATION_DATABASE_URI="${POSTGRES_URI}" DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1 RIVER_DATABASE_SCHEMA=river \
   "${BIN_DIR}/dho" migrate postgres upgrade
 
-# JWT_SECRET_KEY is now required (no SHA256 derivation fallback) — derive the same
-# value generate_auth_token() uses so tokens match between API and e2e client.
-if [ -z "${JWT_SECRET_KEY:-}" ]; then
-  JWT_SECRET_KEY="$(
-    ENC_KEY_INPUT="${SETTINGS_ENCRYPTION_KEY:-dev-key-not-for-prod}" "${BIN_DIR}/cigate" live-e2e jwt-secret
-  )"
-  export JWT_SECRET_KEY
-fi
+# The access token the api and query-api verify is signed by a throwaway Ed25519 key of the CI issuer stub
+# (internal/testsupport/issuerstub): https://localhost, discovery + JWKS only. Both services reach it through
+# AUTH_ACCESS_TOKEN_ISSUER and trust its CA through SSL_CERT_FILE (set for those two processes only). The key
+# lives in this run's TMP_DIR; no prod binary carries a test key source and no token is signed with a shared secret.
+echo "==> starting the CI issuer stub"
+ISSUER_DIR="${TMP_DIR}/issuer"
+go build -buildvcs=false -trimpath -o "${BIN_DIR}/issuerstub" ./internal/testsupport/issuerstub/cmd/issuerstub
+set -m
+"${BIN_DIR}/issuerstub" -dir "${ISSUER_DIR}" >"${TMP_DIR}/issuerstub.log" 2>&1 &
+ISSUER_PID="$!"
+set +m
+for ((i = 1; i <= READINESS_ATTEMPTS; i++)); do
+  [ -s "${ISSUER_DIR}/issuer-url" ] && break
+  if ! kill -0 "${ISSUER_PID}" >/dev/null 2>&1; then
+    echo "ERROR: the CI issuer stub exited before it listened:" >&2
+    tail -n 20 "${TMP_DIR}/issuerstub.log" >&2 || true
+    exit 1
+  fi
+  sleep 0.2
+done
+[ -s "${ISSUER_DIR}/issuer-url" ] || { echo "ERROR: the CI issuer stub did not publish its URL" >&2; exit 1; }
+E2E_ISSUER_URL="$(tr -d '\r\n' <"${ISSUER_DIR}/issuer-url")"
+E2E_ISSUER_KEY_FILE="${ISSUER_DIR}/private/envelope-private-key.pem"
+E2E_ISSUER_CA_FILE="${ISSUER_DIR}/ca.pem"
+export E2E_ISSUER_URL E2E_ISSUER_KEY_FILE E2E_ISSUER_CA_FILE
 
 # CHAOS-7039: `dho api` (the Go binary) at BASE_URL. Needs its own dedicated
 # Postgres/ClickHouse/Valkey env shape (internal/apiservice/service.go,
@@ -370,7 +389,11 @@ echo "==> starting dho api at ${BASE_URL}"
   # ClickHouse login separation.
   export API_CLICKHOUSE_URI="${CLICKHOUSE_URI_NATIVE}"
   export VALKEY_URI="redis://${VALKEY_HOST}:${VALKEY_PORT}/1"
-  export JWT_SECRET_KEY="${JWT_SECRET_KEY}"
+  export AUTH_ACCESS_TOKEN_ISSUER="${E2E_ISSUER_URL}"
+  export SSL_CERT_FILE="${E2E_ISSUER_CA_FILE}"
+  # dho api refuses to start without JWT_SECRET_KEY until its HS256 verifier is removed: a random value per run that no minter reads.
+  JWT_SECRET_KEY="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')" # go-api startup only
+  export JWT_SECRET_KEY # go-api startup only
   exec "${BIN_DIR}/dho" api --api-addr="${API_HOST}:${API_PORT}" --http-addr="127.0.0.1:${API_OPERATOR_PORT}"
 ) >"${API_LOG_FILE}" 2>&1 &
 API_PID="$!"

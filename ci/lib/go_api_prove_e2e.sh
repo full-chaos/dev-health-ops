@@ -17,7 +17,7 @@
 # inactive principal refuses the token while the minter refuses to mint.
 #
 # Reads: ROOT_DIR, BIN_DIR, TMP_DIR, POSTGRES_URI, CLICKHOUSE_URI_NATIVE,
-# E2E_ORG_ID, JWT_SECRET_KEY, QUERY_API_PORT, READINESS_ATTEMPTS,
+# E2E_ORG_ID, E2E_ISSUER_URL, E2E_ISSUER_KEY_FILE, E2E_ISSUER_CA_FILE, QUERY_API_PORT, READINESS_ATTEMPTS,
 # READINESS_SLEEP_SECS, EXIT_FAILURE. Sets QUERY_API_PID (the caller declares
 # it and stops it with stop_service). Requires the cigate and dho binaries in BIN_DIR, e2e_psql and e2e_dho_admin (ci/lib/e2e_fixture.sh) and
 # wait_for_http_ready to be defined.
@@ -164,9 +164,10 @@ query_api_e2e_start() {
     export GO_API_ENVELOPE_ISSUER="dev-health-ops-edge"
     export GO_API_ENVELOPE_AUDIENCE="query-api"
     export QUERY_API_ADDR="127.0.0.1:${QUERY_API_PORT}"
-    # /graphql is mounted only with the edge access-token key: the same key
-    # mint-edge-token signs with, as in the deployed query-api.
-    export GO_API_EDGE_JWT_SECRET="${JWT_SECRET_KEY}"
+    # /graphql verifies the edge access token against the CI issuer stub (ci/run_live_backend_e2e.sh), as the
+    # deployed query-api verifies against its issuer; the stub's CA is trusted for this process only.
+    export AUTH_ACCESS_TOKEN_ISSUER="${E2E_ISSUER_URL}"
+    export SSL_CERT_FILE="${E2E_ISSUER_CA_FILE}"
     export DEV_HEALTH_ENV="ci"
     export GO_API_PROOF_ROUTE_ENABLED="true"
     export GO_API_HOME_ENABLED="true"

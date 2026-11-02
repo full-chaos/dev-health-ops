@@ -396,7 +396,7 @@ func TestWithoutACacheTheRouteIsUnchanged(t *testing.T) {
 func TestADelegatedSessionBypassesTheCache(t *testing.T) {
 	c := newCacheFixture(t)
 	s := c.state.sessions[c.sid]
-	s.HasActor = true
+	s.HasActor, s.BaseLive = true, true
 	c.state.sessions[c.sid] = s
 	c.ask()
 	if c.cache.Len() != 0 || c.counter(MetricDecisionCacheLookups, "bypass") != 1 {
@@ -437,6 +437,7 @@ func TestEveryDecisionReadIsMarked(t *testing.T) {
 		"Snapshot.ServiceAccount":     "never true on this route (decisionstate)",
 		"Snapshot.NowUnixNano":        "gate: the tx clock, read every call",
 		"DecisionTx.Session":          "gate: read every call before the cache",
+		"DecisionTx.Actor":            "gate: read fresh in the tx, only for a delegated session, which never uses the cache",
 		"DecisionTx.Snapshot":         "dep and tag through DependencySnapshot; Begin before Read",
 		"DecisionTx.Unfed":            "key: decisioncache.Key.Unfed, read every call",
 		"DecisionTx.StateVersion":     "key: decisioncache.Key.State, the row versions (xmin) of the pair, read every call",

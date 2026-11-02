@@ -607,3 +607,33 @@ func TestPlatformActionsAreHeldOnlyByPlatformAdmin(t *testing.T) {
 		}
 	}
 }
+
+// acr.evidence.read reads evidence at a revision like acr.context.read; acr.credential.issue mints a credential and is never cached.
+func TestEmbeddedCatalogHoldsTheAcrEvidenceReadAndCredentialIssueRows(t *testing.T) {
+	want := map[string]Action{
+		"acr.evidence.read":    {Scope: ScopeOrganization, ResourceKind: "repository", RiskClass: RiskLow, CacheClass: CacheResourceRevisionBound, Impersonation: ImpersonationAllowed},
+		"acr.credential.issue": {Scope: ScopeOrganization, ResourceKind: "organization", RiskClass: RiskHigh, CacheClass: CacheNone, Impersonation: ImpersonationDenied},
+	}
+	for id, w := range want {
+		a, err := Default().Action(id)
+		if err != nil {
+			t.Errorf("%s: %v", id, err)
+			continue
+		}
+		if a.Scope != w.Scope || a.ResourceKind != w.ResourceKind || a.RiskClass != w.RiskClass || a.CacheClass != w.CacheClass || a.Impersonation != w.Impersonation {
+			t.Errorf("%s = %+v, want %+v", id, a, w)
+		}
+	}
+}
+
+// No role holds the two new actions until a roles change grants them.
+func TestNoRoleHoldsAcrEvidenceReadOrCredentialIssue(t *testing.T) {
+	c := Default()
+	for _, r := range c.Roles() {
+		for _, id := range []string{"acr.evidence.read", "acr.credential.issue"} {
+			if c.Allows(r.ID, id) {
+				t.Errorf("role %s holds %s", r.ID, id)
+			}
+		}
+	}
+}

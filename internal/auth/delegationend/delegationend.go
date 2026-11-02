@@ -24,6 +24,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/publicaudit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
+	"github.com/full-chaos/dev-health-ops/internal/auth/sessionevent"
 )
 
 // The audit events of a delegated session's life.
@@ -135,6 +136,13 @@ func Record(ctx context.Context, tx audit.TxOps, rows []Row, public PublicRows) 
 			},
 		}
 		if err := tx.AddAudit(event); err != nil {
+			return err
+		}
+		revoked, err := sessionevent.Session(r.ID, sessionevent.ReasonDelegationEnd)
+		if err != nil {
+			return err
+		}
+		if err := tx.AddEvent(revoked); err != nil {
 			return err
 		}
 	}

@@ -30,7 +30,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 577,
+            "line": 578,
             "note": "INSERT INTO `+s.q+`.refresh_credentials (",
             "path": "internal/auth/session/store.go"
           },
@@ -45,7 +45,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 446,
+          "line": 447,
           "note": "func (s *Store) Exchange",
           "path": "internal/auth/session/store.go"
         },
@@ -357,7 +357,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 577,
+            "line": 578,
             "note": "INSERT INTO `+s.q+`.refresh_credentials (",
             "path": "internal/auth/session/store.go"
           },
@@ -372,7 +372,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 446,
+          "line": 447,
           "note": "func (s *Store) Exchange",
           "path": "internal/auth/session/store.go"
         },
@@ -1816,7 +1816,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 355,
+            "line": 356,
             "note": "func (s *Store) Create",
             "path": "internal/auth/session/store.go"
           },

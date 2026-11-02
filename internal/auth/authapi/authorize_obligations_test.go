@@ -2,8 +2,11 @@ package authapi
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -191,7 +194,7 @@ func TestAuthorizeBatchItemsKeepTheirOwnObligations(t *testing.T) {
 func TestAuthorizeRefusesAnObligationThatIsNotPerContract(t *testing.T) {
 	many := make([]string, 257)
 	for i := range many {
-		many[i] = "o/r" + strings.Repeat("a", 1) + string(rune('a'+i%26)) + string(rune('a'+(i/26)%26))
+		many[i] = fmt.Sprintf("o/r%03d", i)
 	}
 	cases := map[string]func(org string) *authorization.Obligations{
 		"an uppercase repository key": func(string) *authorization.Obligations {
@@ -269,3 +272,42 @@ func TestAuthorizeWireCarriesTheObligationsOfADelegatedAllow(t *testing.T) {
 }
 
 func uuidOther() string { return "00000000-0000-4000-8000-0000000000aa" }
+
+func TestMaxRepositoryAllowlistIsTheSchemaBound(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(repoRoot(t), "contracts/auth/v1/jsonschema/authorization_decision.v1.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Properties struct {
+			Obligations struct {
+				Properties struct {
+					RepositoryAllowlist struct {
+						MaxItems int `json:"maxItems"`
+					} `json:"repository_allowlist"`
+				} `json:"properties"`
+			} `json:"obligations"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatal(err)
+	}
+	if got := schema.Properties.Obligations.Properties.RepositoryAllowlist.MaxItems; got != maxRepositoryAllowlist {
+		t.Fatalf("schema maxItems %d, wire mapper bound %d", got, maxRepositoryAllowlist)
+	}
+}
+
+func TestAuthorizeServesAnAllowlistOfExactlyTheBound(t *testing.T) {
+	keys := make([]string, maxRepositoryAllowlist)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("o/r%03d", i)
+	}
+	planted := map[string]authorization.Decision{}
+	h := newAuthorizeHandlerFixture(t, withPlanted(planted))
+	planted["analytics.read"] = plantedAllow(&authorization.Obligations{TenantScope: h.org, RepositoryRestricted: true, RepositoryAllowlist: keys})
+	rec := h.one(h.question("analytics.read", "organization", "acme", h.org))
+	d := parseDecision(t, rec)
+	if d.Obligations == nil || d.Obligations.RepositoryAllowlist == nil || len(*d.Obligations.RepositoryAllowlist) != maxRepositoryAllowlist {
+		t.Fatalf("an allowlist at the bound was not served whole: %s", rec.Body)
+	}
+}

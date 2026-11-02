@@ -806,7 +806,7 @@ func TestValidateCompatLimitIsGoAPIsCountAndKey(t *testing.T) {
 		t.Fatalf("empty token over the count: %d %s", r.Code, r.Body)
 	}
 	digest := validateKeyFor(t, "abc")
-	if digest != "validate-token:ba7816bf8f01cfea414140de5dae2223" {
+	if digest != "validate-token:ba7816bf8f01cfea414140de5dae2223" { // gitleaks:allow -- sha256("abc") prefix, a public test vector
 		t.Fatalf("token key = %q, want go-api's validate-token:<sha256[:32]>", digest)
 	}
 }

@@ -1,2 +1,0 @@
-legacy	pdp	reason	namespace	class	note
-allow	deny	delegation_invalid	*	intentional	The PDP refuses every delegated session until its delegation rules are wired (internal/auth/authapi/authorize.go delegated); the legacy guard serves an impersonating caller.

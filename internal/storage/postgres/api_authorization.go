@@ -388,9 +388,36 @@ func CheckAPIAuthorization(ctx context.Context, pool *pgxpool.Pool, expectedRole
 }
 
 // APIPostureFor is APIPosture with the orgs-owned switch (AUTH_ORGS_OWNED).
+// While auth-service owns organizations and memberships, go-api reads
+// memberships and writes none, inserts no organization and updates only the
+// organization columns auth-service does not write (not id, slug, name,
+// is_active or created_at). DELETE stays on organizations for the purge. The
+// river migration grants and go-api's readiness check read the same switch,
+// so a rollback is the switch off plus a migrate run.
 func APIPostureFor(sessionsOwnedByAuth, orgsOwned bool) RolePosture {
-	return APIPosture(sessionsOwnedByAuth)
+	posture := APIPosture(sessionsOwnedByAuth)
+	if !orgsOwned {
+		return posture
+	}
+	for i := range posture.RequiredTables {
+		switch posture.RequiredTables[i].TableName {
+		case "memberships":
+			posture.RequiredTables[i] = TablePrivilege{"memberships", false, false, false}
+		case "organizations":
+			posture.RequiredTables[i] = TablePrivilege{"organizations", false, false, true}
+		}
+	}
+	for _, column := range organizationsColumnsWhileOwned {
+		posture.ColumnScoped = append(posture.ColumnScoped, ColumnPrivilege{"organizations", column, "UPDATE"})
+	}
+	return posture
 }
+
+// organizationsColumnsWhileOwned are the organization columns go-api still
+// updates once auth-service owns organizations: the profile, the plan and the
+// onboarding stamp. TestAPIPostureOrganizationsColumnsCoverTheDDL classifies
+// every column of the table, so a new one needs a decision here.
+var organizationsColumnsWhileOwned = []string{"description", "settings", "tier", "stripe_customer_id", "managed_by", "onboarding_integration_skipped_at", "updated_at"}
 
 // CheckAPIAuthorizationFor is CheckAPIAuthorization over APIPostureFor.
 func CheckAPIAuthorizationFor(ctx context.Context, pool *pgxpool.Pool, expectedRole, riverSchema string, sessionsOwnedByAuth, orgsOwned bool) error {

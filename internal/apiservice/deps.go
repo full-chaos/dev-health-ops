@@ -382,8 +382,13 @@ func buildDeps(
 		// per-probe check flapped readiness. The cached check runs it
 		// single-flight off the probe's deadline and serves a passing answer
 		// for a bounded window (see postgres.CachedPostureCheck).
+		apiPosture, err := apiPostureFor(authProxy, envsecrets.ProcessLookup)
+		if err != nil {
+			pool.Close()
+			return Deps{}, nil, dependencyFailure(ctx, logger, "api_orgs_owned", "api_orgs_owned_config_invalid", err)
+		}
 		postureCheck := postgres.NewCachedPostureCheck(
-			pool, cfg.APIDatabaseRole, cfg.RiverDatabaseSchema, postgres.APIPosture(authProxy.Enabled(AuthSessions)),
+			pool, cfg.APIDatabaseRole, cfg.RiverDatabaseSchema, apiPosture,
 			postgres.PostureCheckOptions{Logger: logger},
 		)
 		if err := registry.RegisterRequired(apiDatabaseCheck, postureCheck.Check); err != nil {

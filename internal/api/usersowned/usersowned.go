@@ -63,7 +63,7 @@ const OrgsEnv = "AUTH_ORGS_OWNED"
 // OrgsFromLookup reads OrgsEnv like auth-service: unset or empty is off,
 // anything but true or false is an error.
 func OrgsFromLookup(lookup func(string) (string, bool)) (bool, error) {
-	return false, nil
+	return readSwitch(OrgsEnv, lookup)
 }
 
 // OrgsOn reads OrgsEnv on every call, by the rule of On: a value that cannot be

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -15,9 +16,8 @@ import (
 )
 
 // c8 (runtime): the session runtime builds the validate route's collaborators
-// and the route stays dark, a 404, until the endpoint-profile row lands
-// (PR-2, D6617); the start log names it.
-func TestTheValidateRouteIsBuiltAndDarkWithoutItsProfileRow(t *testing.T) {
+// and mounts the route once, on its embedded endpoint-profile row.
+func TestTheValidateRouteIsMountedOnItsEmbeddedProfileRow(t *testing.T) {
 	env := compatEnvironment(map[string]string{
 		authconfig.EnvDatabaseURI:    "postgres://auth@127.0.0.1:1/devhealth",
 		authconfig.EnvSigningKeyFile: "/nonexistent",
@@ -41,12 +41,16 @@ func TestTheValidateRouteIsBuiltAndDarkWithoutItsProfileRow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	mounted := 0
 	for _, route := range routes {
-		if route.Pattern == authapi.PatternCompatValidate {
-			t.Fatalf("%s %s is mounted without its endpoint-profile row", route.Method, route.Pattern)
+		if route.Method == http.MethodPost && route.Pattern == authapi.PatternCompatValidate {
+			mounted++
 		}
 	}
-	if !strings.Contains(logs.String(), `"msg":"auth validate route not mounted: no endpoint-profile row","route":"`+authapi.PatternCompatValidate+`"`) {
-		t.Fatalf("the start log does not name the dark validate route: %s", logs.String())
+	if mounted != 1 {
+		t.Fatalf("POST %s is mounted %d times, want 1", authapi.PatternCompatValidate, mounted)
+	}
+	if strings.Contains(logs.String(), "auth validate route not mounted") {
+		t.Fatalf("the start log says the validate route is not mounted: %s", logs.String())
 	}
 }

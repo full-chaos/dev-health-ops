@@ -49,6 +49,9 @@ dev_health_api_stripe_webhook_unhandled_events_total	event_type	code: internal/a
 devhealth_api_session_mail_sends_total	outcome,purpose	code: internal/api/session/sendqueue.go
 devhealth_auth_linkmail_sends_total	outcome,purpose	code: internal/auth/linkmail/linkmail.go
 devhealth_auth_credential_projection_total	domain,outcome	code: internal/auth/outboxprojection/project.go
+devhealth_auth_push_projection_final_rows		code: internal/auth/pushprojection/reader.go
+devhealth_auth_push_projection_lag		code: internal/auth/pushprojection/reader.go
+devhealth_auth_push_projection_parked_rows		code: internal/auth/pushprojection/reader.go
 devhealth_auth_outbox_delivered_total		code: internal/audit/publisher.go
 devhealth_auth_outbox_delivery_failures_total	reason	code: internal/audit/publisher.go
 devhealth_auth_outbox_oldest_pending_age_seconds		code: internal/audit/outboxloop.go

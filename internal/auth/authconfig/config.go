@@ -127,6 +127,8 @@ const (
 	EnvOrgsOwned = "AUTH_ORGS_OWNED"
 	// EnvRevisionFeed is the revision feed switch (on or off, default off).
 	EnvRevisionFeed = "AUTH_REVISION_FEED"
+	// EnvPushProjection is the External Push projection switch (on or off, default off).
+	EnvPushProjection = "AUTH_PUSH_PROJECTION"
 	// EnvSocialLinkRoutes ("true" or "false", default false) mounts the
 	// bearer-only social link and unlink routes; it needs the session secrets.
 	EnvSocialLinkRoutes = "AUTH_SOCIAL_LINK_ROUTES"
@@ -261,6 +263,9 @@ type Config struct {
 	OrgsOwned bool
 	// RevisionFeed is AUTH_REVISION_FEED=on: the outbox publisher has a Valkey sink and this replica subscribes.
 	RevisionFeed bool
+	// PushProjection is AUTH_PUSH_PROJECTION=on: this replica runs the External Push projection reader (it reads the
+	// external_push_credential rows of the auth outbox and projects them). Mounts no route.
+	PushProjection bool
 
 	// PlatformRolesOwned is AUTH_PLATFORM_ROLES_OWNED, parsed by
 	// rule.OwnedFromLookup: the sign-in state reads is_superuser from
@@ -579,6 +584,9 @@ func Load(spec Spec) (Config, error) {
 	if cfg.RevisionFeed, err = revisionFeed(lookup); err != nil {
 		return Config{}, err
 	}
+	if cfg.PushProjection, err = pushProjection(lookup); err != nil {
+		return Config{}, err
+	}
 	if cfg.ValkeyURI, err = valkeySetting(lookup, cfg.LimitedRoutesMounted()); err != nil {
 		return Config{}, err
 	}
@@ -598,6 +606,18 @@ func revisionFeed(lookup secrets.LookupEnv) (bool, error) {
 		return true, nil
 	}
 	return false, fmt.Errorf("%s must be on or off", EnvRevisionFeed)
+}
+
+// pushProjection reads AUTH_PUSH_PROJECTION: unset or empty is off; only on and off (any case) are values. The refusal
+// does not quote the value.
+func pushProjection(lookup secrets.LookupEnv) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(valueOf(lookup, EnvPushProjection))) {
+	case "", "off":
+		return false, nil
+	case "on":
+		return true, nil
+	}
+	return false, fmt.Errorf("%s must be on or off", EnvPushProjection)
 }
 
 // LimitedRoutesMounted reports whether a route that counts in the shared

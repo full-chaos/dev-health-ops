@@ -31,7 +31,7 @@ func TestCredentialProjectionTablesAreKeyedByDomain(t *testing.T) {
 	for table, key := range map[string]string{
 		"credential_projection":        `PRIMARY KEY (domain_owner, external_reference)`,
 		"credential_projection_digest": `PRIMARY KEY (domain_owner, external_reference, revision)`,
-		"push_sources":                 `PRIMARY KEY (organization_id, source_id)`,
+		"push_sources":                 `principal_id    uuid        PRIMARY KEY`,
 		"projection_cursor":            `stream          text        PRIMARY KEY`,
 		"projection_retry":             `PRIMARY KEY (stream, outbox_id)`,
 	} {
@@ -89,5 +89,25 @@ func TestCredentialProjectionWidensTheRevokedReasonList(t *testing.T) {
 	}
 	if !regexp.MustCompile(`(?s)\ALOCK TABLE principals, organizations, credential_registry IN SHARE ROW EXCLUSIVE MODE;`).MatchString(strings.TrimSpace(sql)) {
 		t.Error("the first statement does not lock principals, organizations, credential_registry in that order")
+	}
+}
+
+// An organization-bound credential has no source (CHAOS-12358): binding is stored, source_id is null exactly for the
+// organization binding, and there is one principal per (organization, source) and ONE per organization, each under a
+// partial UNIQUE (a plain unique key would treat two null sources as different).
+func TestCredentialProjectionStoresTheBindingAndOneOrganizationPrincipal(t *testing.T) {
+	sql := credentialProjectionSQL(t)
+	for _, want := range []string{
+		`binding                   text        NOT NULL CHECK (binding IN ('source', 'organization'))`,
+		`CONSTRAINT credential_projection_binding_source CHECK ((binding = 'source') = (source_id IS NOT NULL))`,
+		`CREATE UNIQUE INDEX push_sources_source_key ON push_sources (organization_id, source_id) WHERE source_id IS NOT NULL;`,
+		`CREATE UNIQUE INDEX push_sources_organization_key ON push_sources (organization_id) WHERE source_id IS NULL;`,
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("the migration lacks %q", want)
+		}
+	}
+	if regexp.MustCompile(`(?s)CREATE TABLE credential_projection \(.*?source_id\s+text\s+NOT NULL.*?\n\);`).MatchString(sql) {
+		t.Error("credential_projection.source_id is still NOT NULL")
 	}
 }

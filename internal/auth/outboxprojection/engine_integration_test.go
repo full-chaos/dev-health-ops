@@ -155,6 +155,8 @@ type spec struct {
 	kind     string
 	change   contracts.ExternalPushLifecycleChange
 	at       time.Time
+	// binding is the payload binding: "" and source mean source-bound (source names the source); organization means no source.
+	binding string
 }
 
 func (s spec) input() Input {
@@ -162,8 +164,22 @@ func (s spec) input() Input {
 		AggregateType: contracts.ExternalPushCredentialAggregate, AggregateID: s.id, EventType: s.kind,
 		IdempotencyKey: fmt.Sprintf("external_push_credential:%s:%d", s.id, s.revision),
 		CreatedAt:      contracts.Timestamp{Time: s.at},
-		Payload:        contracts.ExternalPushLifecyclePayload{Revision: contracts.Revision(s.revision), OrganizationID: "org_" + s.org.String(), SourceID: s.source, Change: s.change},
+		Payload:        contracts.ExternalPushLifecyclePayload{Revision: contracts.Revision(s.revision), OrganizationID: "org_" + s.org.String(), Binding: s.bindingValue(), SourceID: s.sourceValue(), Change: s.change},
 	}}
+}
+
+func (s spec) bindingValue() string {
+	if s.binding == "" {
+		return contracts.ExternalPushBindingSource
+	}
+	return s.binding
+}
+
+func (s spec) sourceValue() string {
+	if s.binding == contracts.ExternalPushBindingOrganization {
+		return ""
+	}
+	return s.source
 }
 
 // freshFingerprint is a new 16-hex fingerprint: the registry's secret_hash of a projected row is that fingerprint's
@@ -565,5 +581,123 @@ func TestProjectMalformedEventWritesNothing(t *testing.T) {
 	mustOutcome(t, res, OutcomeMalformed)
 	if n := e.count(t, `SELECT count(*) FROM auth.credential_projection_digest WHERE external_reference = $1`, c.id); n != 0 {
 		t.Fatal("a malformed event left a digest row")
+	}
+}
+
+// Organization-bound credentials and the binding round trip (answers-10896-4).
+func orgBound(org uuid.UUID, scopes ...string) spec {
+	c := created(org, "", scopes...)
+	c.binding = contracts.ExternalPushBindingOrganization
+	return c
+}
+
+func TestProjectBindingRoundTripsSoALaterEventOfAStoredCredentialApplies(t *testing.T) {
+	e := getEnv(t, true)
+	org := e.org(t)
+	c := created(org, "src-bind", "ingest:write", "ingest:status")
+	mustOutcome(t, e.project(t, c.input()), pushlifecycle.Applied)
+	mustOutcome(t, e.project(t, c.next(contracts.ExternalPushScoped, contracts.ExternalPushLifecycleChange{Scopes: []string{"ingest:write"}}).input()), pushlifecycle.Applied)
+	if n := e.count(t, `SELECT count(*) FROM auth.credential_projection WHERE external_reference = $1 AND binding = 'source' AND source_id = 'src-bind'`, c.id); n != 1 {
+		t.Fatal("the source binding was not stored with its source")
+	}
+}
+
+func TestProjectOrganizationBoundCredentialsShareOneOrganizationPrincipal(t *testing.T) {
+	e := getEnv(t, true)
+	org := e.org(t)
+	a, b := orgBound(org, "ingest:write"), orgBound(org, "ingest:write")
+	mustOutcome(t, e.project(t, a.input()), pushlifecycle.Applied)
+	mustOutcome(t, e.project(t, b.input()), pushlifecycle.Applied)
+	if n := e.count(t, `SELECT count(*) FROM auth.push_sources WHERE organization_id = $1 AND source_id IS NULL`, org); n != 1 {
+		t.Fatalf("%d organization principals, want 1", n)
+	}
+	if n := e.count(t, `SELECT count(DISTINCT principal_id) FROM auth.credential_projection WHERE external_reference = ANY($1) AND binding = 'organization' AND source_id IS NULL`, []string{a.id, b.id}); n != 1 {
+		t.Fatalf("the two organization-bound credentials hold %d principals, want 1", n)
+	}
+	mustOutcome(t, e.project(t, a.next(contracts.ExternalPushRevoked, contracts.ExternalPushLifecycleChange{Status: "revoked"}).input()), pushlifecycle.Applied)
+}
+
+func TestProjectAnOrganizationBoundChildOfASourceBoundParentIsRefused(t *testing.T) {
+	e := getEnv(t, true)
+	org := e.org(t)
+	parent := created(org, "src-par", "ingest:write")
+	mustOutcome(t, e.project(t, parent.input()), pushlifecycle.Applied)
+	child := orgBound(org, "ingest:write")
+	child.kind, child.change.RotationParentID = contracts.ExternalPushRotated, parent.id
+	mustOutcome(t, e.project(t, child.input()), pushlifecycle.RefusedParent)
+}
+
+// Condition 1: the organization principal is created with the first organization-bound event, and two concurrent first
+// events leave ONE principal.
+func TestProjectTwoConcurrentFirstOrganizationBoundEventsMakeOnePrincipal(t *testing.T) {
+	e := getEnv(t, true)
+	org := e.org(t)
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		c := orgBound(org, "ingest:write")
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			res, err := e.engine.Project(context.Background(), c.input())
+			if err != nil || res.Outcome != pushlifecycle.Applied {
+				t.Errorf("Project: %+v, %v", res, err)
+			}
+		}()
+	}
+	wg.Wait()
+	if n := e.count(t, `SELECT count(*) FROM auth.push_sources WHERE organization_id = $1 AND source_id IS NULL`, org); n != 1 {
+		t.Fatalf("%d organization principals after four concurrent first events, want 1", n)
+	}
+}
+
+// Condition 2: a real source named "organization" never collides with the organization principal.
+func TestProjectASourceNamedOrganizationIsNotTheOrganizationPrincipal(t *testing.T) {
+	e := getEnv(t, true)
+	org := e.org(t)
+	named := created(org, "organization", "ingest:write")
+	mustOutcome(t, e.project(t, named.input()), pushlifecycle.Applied)
+	mustOutcome(t, e.project(t, orgBound(org, "ingest:write").input()), pushlifecycle.Applied)
+	if n := e.count(t, `SELECT count(DISTINCT principal_id) FROM auth.push_sources WHERE organization_id = $1`, org); n != 2 {
+		t.Fatalf("%d principals for a source named organization plus the organization binding, want 2", n)
+	}
+	if n := e.count(t, `SELECT count(*) FROM auth.push_sources WHERE organization_id = $1 AND source_id = 'organization'`, org); n != 1 {
+		t.Fatal("the source named organization has no principal of its own")
+	}
+}
+
+// Condition 3: revoking every organization-wide credential keeps the organization principal (it holds audit history).
+func TestProjectRevokingEveryOrganizationWideCredentialKeepsThePrincipal(t *testing.T) {
+	e := getEnv(t, true)
+	org := e.org(t)
+	a, b := orgBound(org, "ingest:write"), orgBound(org, "ingest:write")
+	e.project(t, a.input())
+	e.project(t, b.input())
+	mustOutcome(t, e.project(t, a.next(contracts.ExternalPushRevoked, contracts.ExternalPushLifecycleChange{Status: "revoked"}).input()), pushlifecycle.Applied)
+	mustOutcome(t, e.project(t, b.next(contracts.ExternalPushRevoked, contracts.ExternalPushLifecycleChange{Status: "revoked"}).input()), pushlifecycle.Applied)
+	if n := e.count(t, `SELECT count(*) FROM auth.push_sources s JOIN auth.principals p ON p.id = s.principal_id WHERE s.organization_id = $1 AND s.source_id IS NULL AND p.disabled_at IS NULL`, org); n != 1 {
+		t.Fatalf("%d live organization principals after revoking every org-wide credential, want 1", n)
+	}
+}
+
+// Condition 4: the organization principal gets no capability that a source principal lacks: the same kind, the same
+// database guards, and no session, membership, platform role or grant of its own.
+func TestProjectTheOrganizationPrincipalHoldsNoCapabilityASourcePrincipalLacks(t *testing.T) {
+	e := getEnv(t, true)
+	org := e.org(t)
+	mustOutcome(t, e.project(t, orgBound(org, "ingest:write").input()), pushlifecycle.Applied)
+	mustOutcome(t, e.project(t, created(org, "src-cap", "ingest:write").input()), pushlifecycle.Applied)
+	for _, kind := range []string{"organization", "source"} {
+		where := `s.source_id IS NULL`
+		if kind == "source" {
+			where = `s.source_id = 'src-cap'`
+		}
+		for table, column := range map[string]string{"sessions": "principal_id", "memberships": "principal_id", "platform_role_assignments": "principal_id", "resource_grants": "principal_id", "service_accounts": "principal_id"} {
+			if n := e.count(t, `SELECT count(*) FROM auth.`+table+` t JOIN auth.push_sources s ON s.principal_id = t.`+column+` WHERE s.organization_id = $1 AND `+where, org); n != 0 {
+				t.Errorf("the %s principal holds %d rows of %s", kind, n, table)
+			}
+		}
+		if n := e.count(t, `SELECT count(*) FROM auth.push_sources s JOIN auth.principals p ON p.id = s.principal_id WHERE s.organization_id = $1 AND `+where+` AND p.kind = 'external_source'`, org); n != 1 {
+			t.Errorf("the %s principal is not of kind external_source", kind)
+		}
 	}
 }

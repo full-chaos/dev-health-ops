@@ -33,7 +33,7 @@ func sampleEvent() contracts.ExternalPushLifecycleEvent {
 		AggregateType: contracts.ExternalPushCredentialAggregate, AggregateID: "0a1b2c3d-0000-4000-8000-000000000001",
 		EventType: contracts.ExternalPushCreated, CreatedAt: at,
 		Payload: contracts.ExternalPushLifecyclePayload{
-			Revision: 1, OrganizationID: "org_" + sampleOrg, SourceID: "src-1",
+			Revision: 1, OrganizationID: "org_" + sampleOrg, Binding: contracts.ExternalPushBindingSource, SourceID: "src-1",
 			Change: contracts.ExternalPushLifecycleChange{Fingerprint: "0123456789abcdef", Scopes: []string{"ingest:write"}},
 		},
 	}
@@ -290,5 +290,42 @@ func TestAcrFingerprintIsTheFirstEightBytesOfTheSHA256OfTheAggregateID(t *testin
 	}
 	if AcrFingerprint("cred_abcdef") == AcrFingerprint("cred_abcdeg") || len(AcrFingerprint("x")) != 16 {
 		t.Fatal("the derived fingerprint is not 16 hex characters, one per id")
+	}
+}
+
+// The binding rules of Input.Check. A source-bound event names a
+// source; an organization-bound event has none (there is no placeholder source); an unknown or absent binding is refused.
+func TestInputCheckAppliesTheBindingRules(t *testing.T) {
+	source := pushIn(sampleEvent())
+	if err := source.Check(); err != nil {
+		t.Fatalf("a source-bound push input: %v", err)
+	}
+	org := pushIn(sampleEvent())
+	org.Event.Payload.Binding, org.Event.Payload.SourceID = contracts.ExternalPushBindingOrganization, ""
+	if err := org.Check(); err != nil {
+		t.Fatalf("an organization-bound push input with no source: %v", err)
+	}
+	for name, edit := range map[string]func(*Input){
+		"source binding with no source id":   func(i *Input) { i.Event.Payload.SourceID = "" },
+		"organization binding with a source": func(i *Input) { i.Event.Payload.Binding = contracts.ExternalPushBindingOrganization },
+		"unknown binding":                    func(i *Input) { i.Event.Payload.Binding = "team" },
+		"no binding":                         func(i *Input) { i.Event.Payload.Binding = "" },
+	} {
+		in := source
+		edit(&in)
+		if err := in.Check(); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+	// An acr event is always source-bound (source acr): the engine derives its binding, so a mapper that leaves it empty is
+	// accepted, and one with no source id is refused.
+	acr := acrIn()
+	acr.Event.Payload.Binding = ""
+	if err := acr.Check(); err != nil {
+		t.Errorf("an acr input with no binding (derived): %v", err)
+	}
+	acr.Event.Payload.SourceID = ""
+	if err := acr.Check(); err == nil {
+		t.Error("an acr input with no source id was accepted")
 	}
 }

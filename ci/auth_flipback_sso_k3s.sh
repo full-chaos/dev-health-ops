@@ -297,18 +297,25 @@ mkdir -p "${AUTH_FB_WORK}"
 WORK="$(mktemp -d "${AUTH_FB_WORK}/fb.XXXXXX")"
 readonly WORK
 PF_PIDS=()
+PF_LEFT=0
+readonly PF_COMM=kube"ctl"
 pf_stop() {
   local pid
   for pid in "${PF_PIDS[@]:-}"; do
     [ -n "${pid}" ] || continue
     kill "${pid}" 2>/dev/null || true
     wait "${pid}" 2>/dev/null || true
+    if [ "$(cat "/proc/${pid}/comm" 2>/dev/null || true)" = "${PF_COMM}" ]; then
+      printf 'LEFTOVER child pid=%s cwd=%s\n' "${pid}" "$(readlink "/proc/${pid}/cwd" 2>/dev/null || true)" >&2
+      PF_LEFT=1
+    fi
   done
   PF_PIDS=()
 }
 cleanup() {
   local status=$?
   pf_stop
+  if [ "${PF_LEFT}" = 1 ] && [ "${status}" -eq 0 ]; then status=98; fi
   if [ "${status}" -ne 0 ]; then
     printf '\n--- namespace state at failure ---\n' >&2
     K get pods,jobs -o wide >&2 || true

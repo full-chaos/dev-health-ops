@@ -569,6 +569,12 @@ authService:
     # -- Pod selectors allowed to scrape the operator port (/metrics). Empty admits
     #    nobody (kubelet probes are not subject to NetworkPolicy).
     metricsFrom: []
+    # -- Labels of the ingress controller pods admitted to the API port, only while an ingress.hosts entry routes
+    #    to `service: auth-service` (the issuer's two public documents; CHAOS-12359). The namespace is
+    #    networkPolicy.ingressControllerNamespace. No such host renders no rule for the controller.
+    ingressControllerPodLabels:
+      app.kubernetes.io/name: ingress-nginx
+      app.kubernetes.io/component: controller
     egress:
       # -- Peers the service may reach on database.port: a list of NetworkPolicy
       #    `to` entries (podSelector, namespaceSelector, ipBlock). REQUIRED when
@@ -1567,6 +1573,11 @@ ingress:
         - path: /
           pathType: Prefix
           service: web
+    # -- CHAOS-12359: the issuer's host may route exactly its two public documents to auth-service:
+    #    {host: auth.example.com, paths: [{path: /.well-known/openid-configuration, pathType: Exact, service: auth-service},
+    #    {path: /.well-known/jwks.json, pathType: Exact, service: auth-service}]}. The host serves nothing else, carries no
+    #    pythonAllowList, and authService.accessToken.issuerURL must be https://<host> (pods fetch issuer + /.well-known/...).
+    #    The auth-service NetworkPolicy then admits the ingress controller on the API port.
   # -- CHAOS-7047: paths that leave the go-api default when a host routes "/" to
   #    `service: go-api` (set `pythonAllowList: true` on that host; the key keeps
   #    its name). Everything else on such a host reaches the Go api, whose own 404

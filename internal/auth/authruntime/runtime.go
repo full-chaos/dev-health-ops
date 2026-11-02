@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/apimetrics"
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
@@ -202,7 +203,8 @@ func compatRoutes(
 		PublicAuditTx: func(ctx context.Context, fn func(ctx context.Context, tx publicaudit.Tx) error) error {
 			return pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error { return fn(ctx, tx) })
 		},
-		Limits: limits,
+		Limits:   limits,
+		Validate: validateConfig(cfg, pool, schema, signer),
 	}
 	if cfg.Session.LoginEnabled {
 		deps.Login = &authapi.LoginConfig{
@@ -237,6 +239,18 @@ func compatRoutes(
 		return nil, err
 	}
 	return append(append(append(routes, links...), sso...), provisioning...), nil
+}
+
+// validateConfig is the validate route's go-api session read over the auth
+// schema (policy.PGStore, read for its session row only) and, when the EdDSA
+// discovery issuer is set, the EdDSA user token check with the key set this
+// service signs with.
+func validateConfig(cfg authconfig.Config, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier, signer authapi.AccessSigner) *authapi.ValidateConfig {
+	config := &authapi.ValidateConfig{Sessions: policy.PGStore{Pool: pool, AuthSchema: schema.String()}}
+	if keys, ok := signer.(authapi.KeySetSource); ok && cfg.TokenIssuerURL != "" {
+		config.IssuerURL, config.Keys = cfg.TokenIssuerURL, keys
+	}
+	return config
 }
 
 // Main runs the command and exits with its status.

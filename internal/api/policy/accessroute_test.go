@@ -250,9 +250,11 @@ func TestImpersonationRunsForAUserToken(t *testing.T) {
 }
 
 // TestOnlyGoAPIAndQueryAPIRouteAnAuthenticator: the non-test RouteAccess calls
-// in the module are go-api's construction (internal/apiservice) and query-api's
+// in the module are go-api's construction (internal/apiservice), query-api's
 // (its REST edge verifier and its /query and /graphql authenticator, built
-// only with AUTH_ACCESS_TOKEN_ISSUER set); no other binary routes one.
+// only with AUTH_ACCESS_TOKEN_ISSUER set) and auth-service's validate
+// compatibility route (internal/auth/authapi, which answers EdDSA tokens through
+// go-api's routed path); no other binary routes one.
 func TestOnlyGoAPIAndQueryAPIRouteAnAuthenticator(t *testing.T) {
 	root, err := moduleroot.Root()
 	if err != nil {
@@ -296,6 +298,7 @@ func TestOnlyGoAPIAndQueryAPIRouteAnAuthenticator(t *testing.T) {
 	sort.Strings(sites)
 	want := []string{
 		"internal/apiservice/service.go",
+		"internal/auth/authapi/compat_validate.go",
 		"internal/queryapi/principal/edge_access.go",
 		"internal/queryapi/server/access_verify.go",
 		"internal/queryapi/server/access_verify.go",

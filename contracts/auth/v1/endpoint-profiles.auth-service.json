@@ -323,7 +323,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/compat.go",
-        "line": 151
+        "line": 161
       },
       "surface_kind": "rest"
     },
@@ -382,7 +382,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/compat.go",
-        "line": 138
+        "line": 148
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -410,7 +410,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/compat.go",
-        "line": 139
+        "line": 149
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -468,7 +468,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/compat.go",
-        "line": 158
+        "line": 168
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -531,7 +531,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/compat.go",
-        "line": 155
+        "line": 165
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"

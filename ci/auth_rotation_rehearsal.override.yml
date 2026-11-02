@@ -44,5 +44,22 @@ services:
       SSL_CERT_FILE: /etc/rehearsal/tls/issuer.pem
     volumes:
       - ${REHEARSAL_DIR:?}/tls/issuer.pem:/etc/rehearsal/tls/issuer.pem:ro
+  # query-api verifies the same EdDSA user access token (AUTH_ACCESS_TOKEN_ISSUER) and also reads the live session, so the
+  # rehearsal measures it beside go-api. It leaves the `planes` network (its fixed subnet is host-global) and publishes
+  # its query port on a loopback ephemeral port.
+  query-api:
+    networks: !override [default]
+    ports: ["127.0.0.1::8090"]
+    environment:
+      AUTH_ACCESS_TOKEN_ISSUER: ${REHEARSAL_VERIFY_ISSUER:-}
+      SSL_CERT_FILE: /etc/rehearsal/tls/issuer.pem
+    volumes:
+      - type: volume
+        source: envelope_keys
+        target: /run/envelope/public
+        read_only: true
+        volume:
+          subpath: public
+      - ${REHEARSAL_DIR:?}/tls/issuer.pem:/etc/rehearsal/tls/issuer.pem:ro
 volumes:
   rehearsal_keys:

@@ -63,14 +63,16 @@ stage smoke:    up (postgres, clickhouse, valkey, migrate chain, auth-service, g
 S1 planned:     adopt; stage b; register b (pending, published); activate b refused before 300 s with the remaining seconds,
                 allowed after; overlap: a-token still accepted by go-api, b-token accepted, no non-2xx on the probe;
                 rollback a (a active), rollback b (b active); retire a refused before 4200 s, allowed after; a leaves the JWKS.
-S2 compromise:  stage c, register c (published 300 s+); sessions under b; compromise b -successor c: b leaves the JWKS and is
-                denied, c signs, the sessions of b are revoked (refresh refused), a session of a and the session of c still
-                refresh; b-token refused by go-api within 330 s (the verifier JWKS cache bound); every verb on b refused;
-                a manifest that names b active changes nothing.
-S3 rollback:    class eddsa -> hs256_compat (auth-service + go-api recreated): new tokens are HS256, go-api accepts them, the
+S2 compromise:  stage c and d, register both (published 300 s+); sessions under b; compromise b -successor c: b leaves the JWKS
+                and is denied, c signs, the sessions of b are revoked (refresh refused), a session of a and the session of c still
+                refresh; every verb on b refused; a manifest that names b active changes nothing.
+                Window a (no restart): literal WINDOW_A lines, seconds go-api and query-api keep accepting a b-token (bound 330 s).
+                Window b (pm): compromise c -successor d, then restart go-api and query-api one at a time right after the key
+                drop: literal WINDOW_B lines; a verifier that still accepts the old kid is a FINDING (exit 1 at the end).
+S3 rollback:    class eddsa -> hs256_compat (auth-service, go-api and query-api recreated): new tokens are HS256, go-api accepts them, the
                 compromised kid stays out of the JWKS and denied, the revoked sessions stay refused, a b-token is refused;
                 back to eddsa: c signs, b is still absent.
-stage drill:    smoke, then S2 and S3 on key a (successor b, 300 s publish floor) without S1.
+stage drill:    smoke, then S2 window a on key a (successor b), S2 window b on key b (successor c), S3; no S1; about 20 minutes.
 floors:         real, once (about 80 minutes); no state_since is edited.
 needs:          docker, curl, jq, openssl, node; REHEARSAL_DIR, REHEARSAL_IMAGES_ENV
 PLAN
@@ -141,7 +143,7 @@ cleanup() {
   if [ "${status}" -ne 0 ]; then
     printf '\n--- services at failure ---\n' >&2
     compose --profile auth ps --all >&2 || true
-    compose --profile auth logs --no-color --tail 60 auth-service go-api issuer-tls >&2 || true
+    compose --profile auth logs --no-color --tail 60 auth-service go-api query-api issuer-tls >&2 || true
   fi
   compose --profile auth down --volumes --remove-orphans >/dev/null 2>&1 || true
   docker volume rm "${KEYS_VOL}" >/dev/null 2>&1 || true
@@ -185,7 +187,7 @@ done
 
 # ---------- keys and TLS ----------
 say "step 1: keys a b c, the issuer certificate, the key-set manifests"
-for kid in a b c; do
+for kid in a b c d; do
   openssl genpkey -algorithm ed25519 -out "${DIR}/keys/${kid}.pem" 2>/dev/null
 done
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 2 -subj "/CN=${ISSUER_HOST}" \
@@ -225,7 +227,7 @@ stage_keys() {
 
 # ---------- stack ----------
 say "step 2: create the project, stage key a, bring the stack up"
-compose --profile auth create --no-build --pull never go-api auth-service issuer-tls >/dev/null
+compose --profile auth create --no-build --pull never go-api query-api auth-service issuer-tls >/dev/null
 docker volume inspect "${KEYS_VOL}" >/dev/null 2>&1 || die "the keys volume ${KEYS_VOL} was not created by compose"
 write_manifest a:active
 stage_keys a.pem
@@ -239,7 +241,7 @@ AUTH_PROOF_SMTP_PORT="$(cat "${SINK_DIR}/port")"
 [[ "${AUTH_PROOF_SMTP_PORT}" =~ ^[0-9]+$ ]] || die "the SMTP sink did not start"
 export AUTH_PROOF_SMTP_PORT
 
-registry_retry_run rotation-up -- compose --profile auth up --no-build --pull never --detach --wait --wait-timeout 900 go-api auth-service issuer-tls
+registry_retry_run rotation-up -- compose --profile auth up --no-build --pull never --detach --wait --wait-timeout 900 go-api query-api auth-service issuer-tls
 psql_one() { compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" -At -c "$1"; }
 compose exec -T postgres psql -v ON_ERROR_STOP=1 -q -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" >/dev/null \
   < <(printf '\\set token %s\n' "'${AUTH_SESSION_ISSUE_TOKEN}'"; cat <<'SQL'
@@ -251,7 +253,8 @@ SQL
 
 API_PORT="$(compose port go-api 8000 | sed 's/.*://')"
 ISSUER_HOST_PORT="$(compose port issuer-tls 8443 | sed 's/.*://')"
-[[ "${API_PORT}" =~ ^[0-9]+$ && "${ISSUER_HOST_PORT}" =~ ^[0-9]+$ ]] || die "could not read the published ports"
+QUERY_PORT="$(compose port query-api 8090 | sed 's/.*://')"
+[[ "${API_PORT}" =~ ^[0-9]+$ && "${ISSUER_HOST_PORT}" =~ ^[0-9]+$ && "${QUERY_PORT}" =~ ^[0-9]+$ ]] || die "could not read the published ports"
 BASE="http://127.0.0.1:${API_PORT}"
 WEB_ORIGIN="${AUTH_PROOF_WEB_ORIGIN:-http://localhost:3000}"
 
@@ -267,6 +270,11 @@ discovery_doc() {
 api_code() { # api_code TOKEN PATH -> http code (000 when nothing answered)
   local code
   code="$(printf 'Authorization: Bearer %s\n' "$1" | curl -sS -o /dev/null -w '%{http_code}' --max-time 10 -H @- "${BASE}$2" 2>/dev/null)" || true
+  printf '%s' "${code:-000}"
+}
+query_code() { # query_code TOKEN -> http code of query-api's GET /api/v1/filters/options
+  local code
+  code="$(printf 'Authorization: Bearer %s\n' "$1" | curl -sS -o /dev/null -w '%{http_code}' --max-time 10 -H @- "http://127.0.0.1:${QUERY_PORT}/api/v1/filters/options" 2>/dev/null)" || true
   printf '%s' "${code:-000}"
 }
 post_json() { # post_json PATH JQ-FILTER: the body is built from the environment -> P_CODE P_BODY
@@ -329,6 +337,14 @@ alg_is() { [ "$(jwt_part "$1" 0 2>/dev/null | jq -r .alg 2>/dev/null || true)" =
 verdict_is() { [ "$(status_verdict "$1")" = "$2" ]; }
 me_accepts() { verdict_is "$(api_code "$1" /api/v1/auth/me)" accepted; }
 me_refuses() { verdict_is "$(api_code "$1" /api/v1/auth/me)" refused; }
+query_refuses() { [ "$(query_code "$1")" = 401 ]; }
+query_serves() { local c; c="$(query_code "$1")"; [ "${c}" != 401 ] && [ "${c}" != 000 ] && [ "${c:0:1}" != 5 ]; }
+FINDINGS=0
+soft_check() { # soft_check NAME CMD...: a failure is recorded as a FINDING and the run goes on
+  local name="$1"
+  shift
+  if "$@"; then rec_pass "${name}"; else rec_line "FINDING: ${name}"; printf 'FINDING: %s\n' "${name}" >&2; FINDINGS=1; fi
+}
 jwks_lacks() { # a served key set without KID: an unreachable or malformed document is not "lacks"
   local doc rc=0
   doc="$(jwks_doc)" || return 1
@@ -371,16 +387,19 @@ check smoke-go-api-accepts-a me_accepts "${TOK_A1}"
 rec_line "jwks_cache_control=$(curl -sS -D - -o /dev/null --max-time 10 --cacert "${DIR}/tls/issuer.pem" --connect-to "${ISSUER_HOST}:8443:127.0.0.1:${ISSUER_HOST_PORT}" "${ISSUER_URL}/.well-known/jwks.json" | tr -d '\r' | grep -i '^cache-control:' | head -n 1)"
 
 # ---------- scenarios ----------
-# scenario_compromise OLD NEW OTHER_REFRESH: OLD is the active key, NEW a pending key published for the floor.
+# scenario_compromise OLD NEW OTHER_REFRESH EXPECT_SET MODE: OLD is the active key, NEW a pending key published for the floor.
+# MODE cache: measure how long go-api and query-api keep accepting an OLD token with no restart (window a).
+# MODE restart: right after the key drop, restart go-api and then query-api one at a time and measure the same (window b).
 scenario_compromise() {
-  local old="$1" new="$2" other="$3" sold_access sold_refresh t0 after verb
-  rec_open "${DIR}/records/30-S2-emergency-compromise-${old}.txt" "S2 emergency compromise of ${old} $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  say "S2: compromise ${old}, successor ${new}"
+  local old="$1" new="$2" other="$3" expect="$4" mode="$5" sold_access sold_refresh t0 verb snew_refresh
+  rec_open "${DIR}/records/30-S2-emergency-compromise-${old}-${mode}.txt" "S2 emergency compromise of ${old}, mode ${mode} $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  say "S2: compromise ${old}, successor ${new}, mode ${mode}"
   login_or_die
   sold_access="${L_ACCESS}"
   sold_refresh="${L_REFRESH}"
   check "s2-session-of-${old}-signed-by-${old}" kid_is "${sold_access}" "${old}"
   check "s2-go-api-accepts-${old}" me_accepts "${sold_access}"
+  check "s2-query-api-serves-${old}" query_serves "${sold_access}"
   keys_cmd compromise -kid "${old}" -successor "${new}"
   check s2-dry-run-moves-old-compromised out_has "${old}: active -> compromised"
   check s2-dry-run-moves-new-active out_has "${new}: pending -> active"
@@ -391,11 +410,44 @@ scenario_compromise() {
   check s2-sessions-revoked-at-least-one sessions_revoked_ge_1
   check "s2-${old}-compromised" eq "$(key_state "${old}")" compromised
   check "s2-${new}-active" eq "$(key_state "${new}")" active
-  check "s2-${old}-left-the-jwks" wait_jwks_kids "${new}" 60
+  check "s2-${old}-left-the-jwks" wait_jwks_kids "${expect}" 60
   rec_line "jwks_without_${old}_after_s=$(elapsed_since "${t0}")"
+
+  if [ "${mode}" = cache ]; then
+    say "S2 window a: how long do go-api and query-api accept the ${old}-token (no restart)"
+    local go_after="" q_after=""
+    while [ -z "${go_after}" ] || [ -z "${q_after}" ]; do
+      [ "$(elapsed_since "${t0}")" -lt 900 ] || die "a verifier still accepts the compromised-kid token after 900 s"
+      if [ -z "${go_after}" ] && me_refuses "${sold_access}"; then go_after="$(elapsed_since "${t0}")"; fi
+      if [ -z "${q_after}" ] && query_refuses "${sold_access}"; then q_after="$(elapsed_since "${t0}")"; fi
+      sleep 5
+    done
+    rec_line "WINDOW_A verifier=go-api old_kid=${old} no_restart accepted_for_s=${go_after} cache_bound_s=${VERIFIER_CACHE_BOUND}"
+    rec_line "WINDOW_A verifier=query-api old_kid=${old} no_restart accepted_for_s=${q_after} cache_bound_s=${VERIFIER_CACHE_BOUND}"
+    printf 'WINDOW_A go-api %s s, query-api %s s\n' "${go_after}" "${q_after}"
+    check s2-go-api-refuses-old-within-the-cache-bound le "${go_after}" "${VERIFIER_CACHE_BOUND}"
+    check s2-query-api-refuses-old-within-the-cache-bound le "${q_after}" "${VERIFIER_CACHE_BOUND}"
+  else
+    say "S2 window b: restart go-api, then query-api, one at a time, right after the key drop"
+    local svc started after refused
+    for svc in go-api query-api; do
+      started="$(date +%s)"
+      compose --profile auth restart "${svc}" >/dev/null
+      compose --profile auth up --no-build --pull never --detach --wait --wait-timeout 300 --no-deps "${svc}" >/dev/null
+      refused=0
+      if [ "${svc}" = go-api ]; then me_refuses "${sold_access}" && refused=1; else query_refuses "${sold_access}" && refused=1; fi
+      after="$(elapsed_since "${t0}")"
+      rec_line "WINDOW_B verifier=${svc} old_kid=${old} restart_after_drop restart_took_s=$(elapsed_since "${started}") refused_at_s=${after} refused=${refused}"
+      printf 'WINDOW_B %s refused=%s at %s s after the drop\n' "${svc}" "${refused}" "${after}"
+      soft_check "s2-${svc}-refuses-old-right-after-its-restart" eq "${refused}" 1
+    done
+  fi
+  COMPROMISED_ACCESS="${sold_access}"
+  COMPROMISED_REFRESH="${sold_refresh}"
+
   login_or_die
   check "s2-new-session-signed-by-${new}" kid_is "${L_ACCESS}" "${new}"
-  local snew_refresh="${L_REFRESH}"
+  snew_refresh="${L_REFRESH}"
   refresh_with "${sold_refresh}"
   check "s2-session-of-${old}-refresh-refused" verdict_is "${R_CODE}" refused
   if [ -n "${other}" ]; then
@@ -406,17 +458,6 @@ scenario_compromise() {
   refresh_with "${snew_refresh}"
   check "s2-session-of-${new}-still-refreshes" eq "${R_CODE}" 200
 
-  say "S2: time until go-api refuses the ${old}-token (verifier JWKS cache)"
-  until me_refuses "${sold_access}"; do
-    [ "$(elapsed_since "${t0}")" -lt 900 ] || die "go-api still accepts the compromised-kid token after 900 s"
-    sleep 5
-  done
-  after="$(elapsed_since "${t0}")"
-  rec_line "go_api_refused_${old}_token_after_s=${after} bound_s=${VERIFIER_CACHE_BOUND}"
-  check s2-go-api-refuses-old-within-the-cache-bound le "${after}" "${VERIFIER_CACHE_BOUND}"
-  COMPROMISED_ACCESS="${sold_access}"
-  COMPROMISED_REFRESH="${sold_refresh}"
-
   say "S2: compromised is terminal"
   for verb in activate retire rollback compromise; do
     keys_cmd "${verb}" -kid "${old}" -apply
@@ -424,15 +465,19 @@ scenario_compromise() {
   done
   keys_cmd register -kid "${old}" -apply
   check "s2-register-${old}-refused" refused_as key_registered
-  write_manifest "${old}:active" "${new}:pending"
-  stage_keys "${old}.pem"
-  sleep 45
-  check s2-manifest-naming-old-active-changes-nothing-in-jwks eq "$(jwks_kid_set)" "${new}"
-  login_or_die
-  check s2-manifest-naming-old-active-does-not-sign kid_is "${L_ACCESS}" "${new}"
-  check "s2-${old}-still-compromised" eq "$(key_state "${old}")" compromised
-  write_manifest "${new}:active"
-  stage_keys "${new}.pem"
+  if [ "${mode}" = cache ]; then
+    local extra_entries=() k
+    for k in ${EXTRA_PENDING:-}; do extra_entries+=("${k}:pending"); done
+    write_manifest "${old}:active" "${new}:pending" "${extra_entries[@]}"
+    stage_keys "${old}.pem"
+    sleep 45
+    check s2-manifest-naming-old-active-changes-nothing-in-jwks eq "$(jwks_kid_set)" "${expect}"
+    login_or_die
+    check s2-manifest-naming-old-active-does-not-sign kid_is "${L_ACCESS}" "${new}"
+    check "s2-${old}-still-compromised" eq "$(key_state "${old}")" compromised
+    write_manifest "${new}:active" "${extra_entries[@]}"
+    stage_keys "${new}.pem"
+  fi
 }
 
 # scenario_issuer_rollback BADKID: BADKID is compromised; COMPROMISED_ACCESS/REFRESH are a token and refresh credential of it.
@@ -445,7 +490,7 @@ scenario_issuer_rollback() {
   check s3-good-token-accepted-before-rollback me_accepts "${pre}"
   export REHEARSAL_ACCESS_CLASS="hs256_compat"
   export REHEARSAL_VERIFY_ISSUER=""
-  compose --profile auth up --no-build --pull never --detach --wait --wait-timeout 300 --no-deps --force-recreate auth-service go-api >/dev/null
+  compose --profile auth up --no-build --pull never --detach --wait --wait-timeout 300 --no-deps --force-recreate auth-service go-api query-api >/dev/null
   login_or_die
   check s3-new-token-is-hs256 alg_is "${L_ACCESS}" HS256
   check s3-go-api-accepts-the-hs256-token me_accepts "${L_ACCESS}"
@@ -459,7 +504,7 @@ scenario_issuer_rollback() {
   say "S3: forward again: class hs256_compat -> eddsa"
   export REHEARSAL_ACCESS_CLASS="eddsa"
   export REHEARSAL_VERIFY_ISSUER="${ISSUER_URL}"
-  compose --profile auth up --no-build --pull never --detach --wait --wait-timeout 300 --no-deps --force-recreate auth-service go-api >/dev/null
+  compose --profile auth up --no-build --pull never --detach --wait --wait-timeout 300 --no-deps --force-recreate auth-service go-api query-api >/dev/null
   login_or_die
   check "s3-forward-signed-by-${good}" kid_is "${L_ACCESS}" "${good}"
   check "s3-forward-go-api-accepts-${good}" me_accepts "${L_ACCESS}"
@@ -478,14 +523,14 @@ if [ "${STAGE}" = smoke ]; then
   say "smoke: issuer class flip (hs256_compat and back) before any floor"
   export REHEARSAL_ACCESS_CLASS="hs256_compat"
   export REHEARSAL_VERIFY_ISSUER=""
-  compose --profile auth up --no-build --pull never --detach --wait --wait-timeout 300 --no-deps --force-recreate auth-service go-api >/dev/null
+  compose --profile auth up --no-build --pull never --detach --wait --wait-timeout 300 --no-deps --force-recreate auth-service go-api query-api >/dev/null
   login_or_die
   check smoke-flip-token-is-hs256 alg_is "${L_ACCESS}" HS256
   check smoke-flip-go-api-accepts-hs256 me_accepts "${L_ACCESS}"
   check smoke-flip-jwks-still-served jwks_lacks b
   export REHEARSAL_ACCESS_CLASS="eddsa"
   export REHEARSAL_VERIFY_ISSUER="${ISSUER_URL}"
-  compose --profile auth up --no-build --pull never --detach --wait --wait-timeout 300 --no-deps --force-recreate auth-service go-api >/dev/null
+  compose --profile auth up --no-build --pull never --detach --wait --wait-timeout 300 --no-deps --force-recreate auth-service go-api query-api >/dev/null
   login_or_die
   check smoke-flip-back-signed-by-a kid_is "${L_ACCESS}" a
   say "smoke done"
@@ -494,16 +539,25 @@ fi
 
 if [ "${STAGE}" = drill ]; then
   say "drill: register b, wait the publish floor, then S2 on a and S3"
-  write_manifest a:active b:pending
-  stage_keys b.pem
+  write_manifest a:active b:pending c:pending
+  stage_keys b.pem c.pem
   keys_cmd register -kid b -apply
   check drill-register-b-applied eq "${KRC}" 0
+  keys_cmd register -kid c -apply
+  check drill-register-c-applied eq "${KRC}" 0
   B_REGISTER_EPOCH="$(date +%s)"
   wait_publish_floor b "${B_REGISTER_EPOCH}"
-  scenario_compromise a b ""
-  scenario_issuer_rollback a b
+  EXTRA_PENDING="c"
+  scenario_compromise a b "" "b c" cache
+  EXTRA_PENDING=""
+  scenario_compromise b c "" "c" restart
+  scenario_issuer_rollback b c
   say "records:"
   for f in "${DIR}"/records/*.txt; do printf '%s  %s\n' "$(sha256sum "${f}" | cut -c1-64)" "${f##*/}"; done
+  if [ "${FINDINGS}" != 0 ]; then
+    say "FINDINGS recorded: see the records (lines starting with FINDING)"
+    exit 1
+  fi
   say "drill done"
   exit 0
 fi
@@ -581,12 +635,14 @@ RETIRE_REMAIN="$(floor_remaining_seconds "${KERR}")"
 rec_line "retire_floor_remaining_s=${RETIRE_REMAIN}"
 check s1-retire-remaining-within-retire-floor within "${RETIRE_REMAIN}" "${RETIRING_FLOOR}"
 
-# S2 needs c published for the publish floor before the compromise: register it now, inside the retire wait.
-say "S2 prep: stage c and register it (published during the retire wait)"
-write_manifest a:retiring b:active c:pending
-stage_keys c.pem
+# S2 needs c and d published for the publish floor before the compromises: register them now, inside the retire wait.
+say "S2 prep: stage c and d and register them (published during the retire wait)"
+write_manifest a:retiring b:active c:pending d:pending
+stage_keys c.pem d.pem
 keys_cmd register -kid c -apply
 check s2-prep-register-c-applied eq "${KRC}" 0
+keys_cmd register -kid d -apply
+check s2-prep-register-d-applied eq "${KRC}" 0
 C_REGISTER_EPOCH="$(date +%s)"
 
 say "S1: wait for the retire floor (real clock, about 70 minutes)"
@@ -605,22 +661,29 @@ check s1-retire-not-before-the-floor ge "${RETIRE_WAIT}" $((RETIRING_FLOOR - 5))
 keys_cmd retire -kid a -apply
 check s1-retire-a-applied eq "${KRC}" 0
 check s1-a-retired eq "$(key_state a)" retired
-check s1-a-left-the-jwks wait_jwks_kids "b c" 60
+check s1-a-left-the-jwks wait_jwks_kids "b c d" 60
 rec_line "note: every token a signed has expired by the retire floor, so the a-token refusal is by expiry and by absence from the JWKS together"
 keys_cmd rollback -kid a
 check s1-retired-a-would-return-only-as-pending out_has "a: retired -> pending"
 login_or_die
 check s1-b-signs-after-retire kid_is "${L_ACCESS}" b
-write_manifest b:active c:pending
-stage_keys b.pem c.pem
+write_manifest b:active c:pending d:pending
+stage_keys b.pem c.pem d.pem
 
 c_age="$(elapsed_since "${C_REGISTER_EPOCH}")"
 check s2-c-published-past-the-floor ge "${c_age}" "${PENDING_FLOOR}"
-scenario_compromise b c "${RT_A1}"
-scenario_issuer_rollback b c
+EXTRA_PENDING="d"
+scenario_compromise b c "${RT_A1}" "c d" cache
+EXTRA_PENDING=""
+scenario_compromise c d "" "d" restart
+scenario_issuer_rollback c d
 
 say "records:"
 for f in "${DIR}"/records/*.txt; do
   printf '%s  %s\n' "$(sha256sum "${f}" | cut -c1-64)" "${f##*/}"
 done
+if [ "${FINDINGS}" != 0 ]; then
+  say "FINDINGS recorded: see the records (lines starting with FINDING)"
+  exit 1
+fi
 say "rotation rehearsal done"

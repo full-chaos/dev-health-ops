@@ -27,8 +27,9 @@ type SubscriberConfig struct {
 	Backoff  func(attempt int) time.Duration
 }
 
-// Subscriber keeps one subscription to Channel and feeds every message to the Consumer. Every subscribe (the first and every
-// reconnect) calls Consumer.Resubscribed: pub/sub has no replay, so events published while it was down are lost.
+// Subscriber keeps one subscription to Channel and feeds every message to the Consumer. Every confirmed subscribe (the first,
+// every reconnect, and a client's own reconnect inside one Subscribe call) calls Consumer.Resubscribed: pub/sub has no
+// replay, so events published while it was down are lost.
 type Subscriber struct {
 	client   Client
 	consumer *Consumer
@@ -36,6 +37,11 @@ type Subscriber struct {
 	backoff  func(int) time.Duration
 	up       atomic.Int64
 	attempt  atomic.Int64
+
+	// readiness: confirmation counts the confirmed subscribes; up is set to 1 only by the catch-up of the latest one. Both
+	// move under readyMu, so an older catch-up can never raise the gauge after a newer confirmation lowered it.
+	readyMu      sync.Mutex
+	confirmation uint64
 }
 
 // cycle is the state of one subscription. It is new for every subscribe, so a request raised on an ended subscription
@@ -105,7 +111,8 @@ func (s *Subscriber) Run(ctx context.Context) {
 		_ = s.client.Subscribe(ctx, Channel, SubscribeHooks{
 			OnSubscribed: func() {
 				s.attempt.Store(0)
-				cy.resubPending.Store(s.consumer.Resubscribed(ctx) != nil)
+				s.confirm()
+				cy.resubPending.Store(true)
 				cy.signal()
 			},
 			OnMessage: func(message string) {
@@ -130,6 +137,34 @@ func (s *Subscriber) Run(ctx context.Context) {
 	}
 }
 
+// confirm starts a new confirmation: the subscription is not ready until its InvalidateAll and catch-up succeed.
+func (s *Subscriber) confirm() {
+	s.readyMu.Lock()
+	defer s.readyMu.Unlock()
+	s.confirmation++
+	s.up.Store(0)
+}
+
+// currentConfirmation is the latest confirmation; a catch-up remembers it before it starts.
+func (s *Subscriber) currentConfirmation() uint64 {
+	s.readyMu.Lock()
+	defer s.readyMu.Unlock()
+	return s.confirmation
+}
+
+// markReady raises the gauge for the confirmation a catch-up started under, unless a newer one came since.
+func (s *Subscriber) markReady(confirmation uint64) {
+	s.readyMu.Lock()
+	defer s.readyMu.Unlock()
+	if s.confirmation == confirmation {
+		s.up.Store(1)
+	}
+}
+
+// Ready is true while the latest confirmed subscribe's InvalidateAll and catch-up both succeeded: until then, events may
+// have been lost and a cache must not be served.
+func (s *Subscriber) Ready() bool { return s.up.Load() == 1 }
+
 // catchUpOnSignal runs the catch-up each time the cycle asks for it, off the connection's read loop (a read on the same
 // client from inside the hook could block it).
 func (s *Subscriber) catchUpOnSignal(ctx context.Context, cy *cycle) {
@@ -146,10 +181,11 @@ func (s *Subscriber) catchUpOnSignal(ctx context.Context, cy *cycle) {
 // catchUp reads the high-water hash and gives it to the consumer, retrying with the backoff until it works or ctx ends. It
 // runs only after the subscribe was confirmed: an event published before the read is in the hash, one published after it
 // arrives on the channel, and a live event is revision-idempotent with the read. Nothing but the failure is logged, never
-// its cause. A failed InvalidateAll of the subscribe, or a floor whose invalidation failed, is a failed attempt: the gauge
-// stays where it was and the attempt is retried.
+// its cause. The InvalidateAll of the subscribe runs here, off the read loop; it and a floor whose invalidation failed are
+// failed attempts, retried only after the backoff. The gauge rises only for the confirmation the attempt started under.
 func (s *Subscriber) catchUp(ctx context.Context, cy *cycle) {
 	for attempt := 1; ctx.Err() == nil; attempt++ {
+		confirmation := s.currentConfirmation()
 		if cy.resubPending.Load() {
 			if err := s.consumer.Resubscribed(ctx); err == nil {
 				cy.resubPending.Store(false)
@@ -161,7 +197,7 @@ func (s *Subscriber) catchUp(ctx context.Context, cy *cycle) {
 				err = s.consumer.CatchUp(ctx, floors)
 			}
 			if err == nil {
-				s.up.Store(1)
+				s.markReady(confirmation)
 				return
 			}
 		}

@@ -36,7 +36,8 @@ type OIDCOptions struct {
 	Clock func() time.Time
 	// Issuer is the iss claim of every id_token. Empty means the base URL.
 	Issuer string
-	// ClientID and RedirectURIs, when set, are checked at /authorize; ClientSecret, when set, is checked at /token.
+	// RedirectURIs is the allow-list /authorize redirects to: it redirects only to an entry of this list, and with the list
+	// empty it refuses every request. ClientID, when set, is checked at /authorize; ClientSecret, when set, at /token.
 	ClientID     string
 	ClientSecret string
 	RedirectURIs []string
@@ -330,7 +331,14 @@ func (o *OIDC) serveAuthorize(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized_client", http.StatusBadRequest)
 		return
 	}
-	if len(o.opts.RedirectURIs) > 0 && !contains(o.opts.RedirectURIs, redirect) {
+	registered := ""
+	for _, entry := range o.opts.RedirectURIs {
+		if entry == redirect {
+			registered = entry
+			break
+		}
+	}
+	if registered == "" {
 		http.Error(w, "invalid redirect_uri", http.StatusBadRequest)
 		return
 	}
@@ -338,7 +346,7 @@ func (o *OIDC) serveAuthorize(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "S256 code_challenge required", http.StatusBadRequest)
 		return
 	}
-	target, err := url.Parse(redirect)
+	target, err := url.Parse(registered)
 	if err != nil || (target.Scheme != "https" && target.Scheme != "http") {
 		http.Error(w, "invalid redirect_uri", http.StatusBadRequest)
 		return

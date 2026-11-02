@@ -41,7 +41,7 @@ func TestCmdIdpstubCertsServeOIDCAndSAML(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- serve("serve", []string{"-listen", addr, "-cert", filepath.Join(dir, "server.pem"), "-key", filepath.Join(dir, "server.key"),
-			"-base-url", base, "-user", "carol,carol@kit.test,Carol"})
+			"-base-url", base, "-redirect-uri", "https://sp.kit.test/cb", "-user", "carol,carol@kit.test,Carol"})
 	}()
 	caPEM, err := os.ReadFile(filepath.Join(dir, "ca.pem"))
 	if err != nil {

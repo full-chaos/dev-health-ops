@@ -112,7 +112,7 @@ func serve(mode string, args []string) error {
 	clientID := fs.String("client-id", "", "OIDC client id to require (empty accepts any)")
 	clientSecret := fs.String("client-secret", "", "OIDC client secret to require (empty accepts any)")
 	var redirects, users, acs stringList
-	fs.Var(&redirects, "redirect-uri", "an OIDC redirect URI to allow (repeatable; none allows any)")
+	fs.Var(&redirects, "redirect-uri", "an OIDC redirect URI to allow (repeatable; at least one is required for serve and oidc)")
 	fs.Var(&acs, "acs-url", "a SAML ACS URL to allow (repeatable; none allows any)")
 	fs.Var(&users, "user", "sub,email[,name] (repeatable; the first is the default user; none gives alice and bob)")
 	spEntity := fs.String("sp-entity-id", "", "SAML SP entity id used for responses built without a request")
@@ -128,6 +128,9 @@ func serve(mode string, args []string) error {
 		return err
 	}
 	mux := http.NewServeMux()
+	if (mode == "serve" || mode == "oidc") && len(redirects) == 0 {
+		return errors.New("-redirect-uri is required: /authorize redirects only to a registered URI")
+	}
 	if mode == "serve" || mode == "oidc" {
 		o, err := idpstub.NewOIDC(idpstub.OIDCOptions{ClientID: *clientID, ClientSecret: *clientSecret, RedirectURIs: redirects, Users: oidcUsers})
 		if err != nil {

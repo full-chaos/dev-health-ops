@@ -267,6 +267,10 @@
                           "revoked_before",
                           "reason"
                         ]
+                      },
+                      "properties": {
+                        "revoked_before": {},
+                        "reason": {}
                       }
                     }
                   }
@@ -466,6 +470,10 @@
                           "revoked_before",
                           "reason"
                         ]
+                      },
+                      "properties": {
+                        "revoked_before": {},
+                        "reason": {}
                       }
                     }
                   }
@@ -808,7 +816,8 @@
                 "properties": {
                   "status": {
                     "const": "revoked"
-                  }
+                  },
+                  "reason": {}
                 }
               },
               "revision": {
@@ -853,13 +862,19 @@
                   "enum": [
                     "kid"
                   ]
+                },
+                "properties": {
+                  "kid": {}
                 }
               }
             },
             "not": {
               "required": [
                 "organization_id"
-              ]
+              ],
+              "properties": {
+                "organization_id": {}
+              }
             },
             "description": "A signing key is platform-level: no organization_id."
           }

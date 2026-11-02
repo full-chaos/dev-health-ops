@@ -55,7 +55,6 @@ expect_rc probe-one-drop-fails 1 probe_no_downtime "${T}/drop"
 expect_rc probe-401-fails 1 probe_no_downtime "${T}/refused"
 expect_rc probe-empty-fails 1 probe_no_downtime "${T}/empty"
 expect_eq probe-summary "$(probe_summary "${T}/drop")" "probes=3 non2xx=1"
-expect_rc probe-all-refused-passes 0 probe_all_refused "${T}/refused.only" || true
 printf '%s\n' '1 401' '2 401' >"${T}/refused.only"
 printf '%s\n' '1 401' '2 200' >"${T}/leak"
 expect_rc probe-all-refused-passes 0 probe_all_refused "${T}/refused.only"
@@ -75,7 +74,7 @@ expect_eq keys-state "$(keys_list_state "$(printf 'a\tretiring\tsince 2026-11-02
 expect_rc keys-state-missing 1 keys_list_state "$(printf 'a\tretiring\tsince x\n')" z
 
 ( set -o noclobber; rec_open "${T}/rec1" first; rec_pass one; rec_fail two ) >/dev/null 2>&1 || true
-grep -q '^PASS: one$' "${T}/rec1" && grep -q '^FAIL: two$' "${T}/rec1" && ok record-lines || bad record-lines
+if grep -q '^PASS: one$' "${T}/rec1" && grep -q '^FAIL: two$' "${T}/rec1"; then ok record-lines; else bad record-lines; fi
 expect_rc record-no-overwrite 1 bash -c "source '${LIB}'; rec_open '${T}/rec1' again"
 expect_rc record-no-secret-line 1 bash -c "source '${LIB}'; rec_open '${T}/rec2' x; rec_line 'dsn=postgres://u:p@h/db'"
 

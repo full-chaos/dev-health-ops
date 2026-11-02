@@ -51,6 +51,7 @@ internal/auth/edgetoken/signer.go	Signer.AccessUntil	1
 internal/envelopemint/envelopemint.go	Mint	1
 internal/queryapi/authctx/authctx.go	Claims.Holds	1
 internal/queryapi/datahealth/datahealth.go	Principal.Holds	1
+internal/queryapi/graph/operation_org_guard.go	orglessPlatformCaller	1
 internal/queryapi/graph/schema.resolvers.go	queryResolver.DataHealth	1
 internal/queryapi/graph/schema.resolvers.go	queryResolver.ProductTelemetryPlatformDashboard	1
 internal/queryapi/producttelemetry/platform.go	Principal.Holds	1

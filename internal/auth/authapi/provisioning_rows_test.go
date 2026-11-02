@@ -55,7 +55,7 @@ func TestProvisioningRoutesNeedTheirProfileRows(t *testing.T) {
 			"row removed": func(row map[string]any) (map[string]any, bool) { return row, row["route"] != pattern },
 			"class removed": func(row map[string]any) (map[string]any, bool) {
 				if row["route"] == pattern {
-					row["accepted_credential_classes"] = []any{"workload_token"}
+					row["accepted_credential_classes"] = []any{serviceSessionIssuerClass}
 				}
 				return row, true
 			},

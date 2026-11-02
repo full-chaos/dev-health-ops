@@ -29,7 +29,7 @@ covers no credential: a service account holds none yet, so it cannot sign in or 
 ## Routes
 
 The routes are internal to auth-service. They sit behind `AUTH_MEMBERSHIP_ROUTES` with the other provisioning routes,
-take the session issuer service credential (`svc_authsess_` with `memberships:write`) or the go-api workload token,
+take the go-api workload token only (the `svc_authsess_` credential is refused),
 admitted as the other provisioning routes admit it, and have no go-api caller yet.
 
 | Route | Body | Answer |

@@ -238,12 +238,12 @@ func TestOrgStateIsDarkWithoutItsProfileRow(t *testing.T) {
 	}
 }
 
-func TestOrgStateNeedsAnAuthServicePostRowAcceptingTheIssuerCredential(t *testing.T) {
+func TestOrgStateNeedsAnAuthServicePostRowAcceptingTheWorkloadToken(t *testing.T) {
 	bare := docWithoutRow(t, nil, stateRoute)
 	for name, edit := range map[string]func(row map[string]any){
 		"another service": func(row map[string]any) { row["service"] = "dev-health-ops-api" },
 		"another method":  func(row map[string]any) { row["method"] = "GET" },
-		"another class":   func(row map[string]any) { row["accepted_credential_classes"] = []any{"workload_token"} },
+		"another class":   func(row map[string]any) { row["accepted_credential_classes"] = []any{serviceSessionIssuerClass} },
 	} {
 		var document map[string]any
 		if err := json.Unmarshal(docWithExtraRow(t, bare, stateRoute), &document); err != nil {

@@ -204,6 +204,7 @@ func TestMigrateRiverOrgsOwnedRevokesThenRegrantsTheExactPosture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() { _ = tx.Rollback(ctx) }()
 	if _, err := tx.Exec(ctx, `SELECT 1 FROM organizations WHERE id = $1 FOR NO KEY UPDATE`, orgID); err != nil {
 		t.Fatalf("org lock: %v", err)
 	}

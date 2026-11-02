@@ -1,0 +1,5 @@
+{
+  "header_json": "{\"alg\":\"EdDSA\",\"typ\":\"sa+jwt\",\"kid\":\"auth-example-2026-10\"}",
+  "payload_json": "{\"iss\":\"https://auth.example.test\",\"aud\":\"dev-health-api\",\"sub\":\"prn_AAAAAAAAAAAAAAAAAAAAAA\",\"principal_type\":\"service_account\",\"org_id\":\"00000000-0000-4000-8000-000000000001\",\"cid\":\"crd_AAAAAAAAAAAAAAAAAAAAAA\",\"jti\":\"000000000000000000000001\",\"iat\":1760000000,\"exp\":1760000300}",
+  "signature_hex": "41c7c38621bbd77d9d4912740cd5589cbf0de2cf21168d5fdb6a89fa90e255424c389e1a84a4c15d359b6c28e7c3e9c9eb178ee01d83f4ad4c1bc8500d675a0b"
+}

@@ -74,7 +74,7 @@ S3 rollback:    class eddsa -> hs256_compat (auth-service, go-api and query-api 
                 back to eddsa: c signs, b is still absent.
 stage drill:    smoke, then S2 window a on key a (successor b), S2 window b on key b (successor c), S3; no S1; about 20 minutes.
 floors:         real, once (about 80 minutes); no state_since is edited.
-needs:          docker, curl, jq, openssl, node; REHEARSAL_DIR, REHEARSAL_IMAGES_ENV
+needs:          docker, curl, jq, openssl; REHEARSAL_DIR, REHEARSAL_IMAGES_ENV
 PLAN
   exit 0
 fi
@@ -82,7 +82,7 @@ fi
 : "${REHEARSAL_DIR:?set REHEARSAL_DIR to a new directory}"
 : "${REHEARSAL_IMAGES_ENV:?set REHEARSAL_IMAGES_ENV to the image digest file}"
 [ -f "${REHEARSAL_IMAGES_ENV}" ] || die "REHEARSAL_IMAGES_ENV names no file"
-for tool in docker curl jq openssl node base64; do
+for tool in docker curl jq openssl base64; do
   command -v "${tool}" >/dev/null 2>&1 || die "${tool} is required"
 done
 if [ -e "${REHEARSAL_DIR}" ] && [ -n "$(ls -A "${REHEARSAL_DIR}" 2>/dev/null)" ]; then
@@ -123,6 +123,8 @@ AUTH_LOGIN_LOCKOUT_KEY="$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -
 AUTH_SESSION_ISSUE_TOKEN="svc_authsess_$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')"
 [[ "${AUTH_SESSION_ISSUE_TOKEN}" =~ ^svc_authsess_[A-Za-z0-9_-]{43}$ ]] || die "could not build a session issue credential"
 export POSTGRES_PASSWORD AUTH_RUNTIME_DATABASE_PASSWORD AUTH_SESSION_SUCCESSOR_KEY AUTH_LOGIN_LOCKOUT_KEY AUTH_SESSION_ISSUE_TOKEN
+# go-api mail settings come from the webproof override; mail is not delivered in this rehearsal (the user is verified in SQL).
+export AUTH_PROOF_SMTP_PORT=2525
 export REHEARSAL_ISSUER_URL="${ISSUER_URL}"
 export REHEARSAL_ACCESS_CLASS="eddsa"
 export REHEARSAL_VERIFY_ISSUER="${ISSUER_URL}"
@@ -134,12 +136,10 @@ compose() {
     -f "${SCRIPT_DIR}/auth_rotation_rehearsal.override.yml" "$@"
 }
 
-SINK_PID=""
 PROBE_PID=""
 cleanup() {
   local status=$?
   [ -z "${PROBE_PID}" ] || kill "${PROBE_PID}" >/dev/null 2>&1 || true
-  [ -z "${SINK_PID}" ] || kill "${SINK_PID}" >/dev/null 2>&1 || true
   if [ "${status}" -ne 0 ]; then
     printf '\n--- services at failure ---\n' >&2
     compose --profile auth ps --all >&2 || true
@@ -231,15 +231,6 @@ compose --profile auth create --no-build --pull never go-api query-api auth-serv
 docker volume inspect "${KEYS_VOL}" >/dev/null 2>&1 || die "the keys volume ${KEYS_VOL} was not created by compose"
 write_manifest a:active
 stage_keys a.pem
-
-SINK_DIR="${DIR}/sink"
-mkdir -p "${SINK_DIR}"
-node "${SCRIPT_DIR}/auth_webproof_smtp_sink.mjs" "${SINK_DIR}/port" "${SINK_DIR}/mail" &
-SINK_PID=$!
-for _ in $(seq 1 50); do [ -s "${SINK_DIR}/port" ] && break; sleep 0.1; done
-AUTH_PROOF_SMTP_PORT="$(cat "${SINK_DIR}/port")"
-[[ "${AUTH_PROOF_SMTP_PORT}" =~ ^[0-9]+$ ]] || die "the SMTP sink did not start"
-export AUTH_PROOF_SMTP_PORT
 
 registry_retry_run rotation-up -- compose --profile auth up --no-build --pull never --detach --wait --wait-timeout 900 go-api query-api auth-service issuer-tls
 psql_one() { compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" -At -c "$1"; }
@@ -353,21 +344,15 @@ jwks_lacks() { # a served key set without KID: an unreachable or malformed docum
 }
 sessions_revoked_ge_1() { [[ "${KOUT}" =~ sessions\ revoked:\ ([0-9]+) ]] && [ "${BASH_REMATCH[1]}" -ge 1 ]; }
 
-# ---------- seed one user through go-api register (auth-service sign-up stays gated) ----------
+# ---------- seed one user through go-api register (auth-service sign-up stays gated); the host SMTP sink is unreachable
+# from the bigboy docker bridge, so the verified flag is set in the throwaway database ----------
 say "step 3: seed one verified user"
 EMAIL="rotation-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')@example.com"
 PASSWORD="Pw-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
 export EMAIL PASSWORD
 E="${EMAIL}" P="${PASSWORD}" post_json /api/v1/auth/register '{email:env.E,password:env.P,full_name:"Rotation Rehearsal",org_name:"Rotation Rehearsal Org"}'
 case "${P_CODE}" in 200 | 201 | 202) ;; *) die "register answered ${P_CODE}" ;; esac
-mail_token=""
-for _ in $(seq 1 30); do
-  if [ -s "${SINK_DIR}/mail.token" ]; then mail_token="$(cat "${SINK_DIR}/mail.token")"; break; fi
-  sleep 1
-done
-[ -n "${mail_token}" ] || die "the captured mail carried no verification token"
-vcode="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "${BASE}/api/v1/auth/verify?token=${mail_token}")"
-[ "${vcode}" = 200 ] || die "verify answered ${vcode}"
+psql_one "UPDATE public.users SET is_verified = true WHERE email = '${EMAIL}' RETURNING 1" | grep -qx 1 || die "could not verify the seeded user in the database"
 
 # ---------- smoke ----------
 rec_open "${DIR}/records/10-smoke.txt" "smoke $(date -u +%Y-%m-%dT%H:%M:%SZ)"

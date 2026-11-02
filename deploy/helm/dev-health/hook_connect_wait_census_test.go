@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -43,6 +44,100 @@ var entrypointBinaries = map[string]string{
 	"dev-health-go-dho":          "dho",
 	"dev-health-go-operator":     "dho",
 	"dev-health-go-auth-migrate": "auth-migrate",
+}
+
+// connectBudget is what one container adds to its pod's worst case, in seconds:
+// its first-connect wait, its own run, and the chart's startup and cleanup
+// margin. unbounded marks a run with no bound of its own (only the Job's
+// activeDeadlineSeconds); fromDeadlineArg takes the run from its --deadline arg.
+type connectBudget struct {
+	wait, own, margin int
+	unbounded         bool
+	fromDeadlineArg   bool
+}
+
+// firstConnectBound is postgres.FirstConnect: 60 s budget + one 10 s last attempt.
+const firstConnectBound = 70
+
+// defaultHelmTimeout is deploy/dev-health's default helm --timeout (35m). The
+// index hooks are rolled under the 90m timeout values.yaml names for them.
+const (
+	defaultHelmTimeout = 2100
+	indexHelmTimeout   = 5400
+)
+
+var connectBudgets = map[string]connectBudget{
+	"dho workers routes apply":         {wait: firstConnectBound, own: 30},
+	"dho migrate upgrade":              {wait: 2 * firstConnectBound, unbounded: true},
+	"dho migrate postgres build-index": {wait: firstConnectBound, fromDeadlineArg: true, margin: 360},
+	"dho migrate roles":                {wait: firstConnectBound, own: 50},
+	"dho migrate river":                {wait: firstConnectBound, own: 230},
+	"dho auth users-backfill":          {wait: firstConnectBound, unbounded: true},
+	"dho auth users-reconcile":         {wait: firstConnectBound, unbounded: true},
+	"dho auth orgs-backfill":           {wait: firstConnectBound, unbounded: true},
+	"dho auth legacy-link-purge":       {wait: firstConnectBound, unbounded: true},
+	"auth-migrate":                     {wait: 60, unbounded: true},
+	"auth-migrate grants":              {wait: 60, unbounded: true},
+	"dho version":                      {},
+	"sh -ec until pg_isready":          {unbounded: true},
+	"install -m 0400":                  {},
+	"sh -c for n":                      {},
+}
+
+func deadlineArgSeconds(container map[string]any) int {
+	for _, arg := range stringList(container["args"]) {
+		if v, ok := strings.CutPrefix(arg, "--deadline="); ok {
+			d, err := time.ParseDuration(v)
+			if err == nil {
+				return int(d.Seconds())
+			}
+		}
+	}
+	return 0
+}
+
+// budgetViolations checks each Job: the sum over its pod's init containers and
+// containers of wait + own run + margin must fit its activeDeadlineSeconds and
+// the helm --timeout it is rolled under.
+func budgetViolations(docs []map[string]any) []string {
+	var violations []string
+	for _, doc := range docs {
+		if kind, _ := doc["kind"].(string); kind != "Job" {
+			continue
+		}
+		name, _ := at(doc, "metadata", "name").(string)
+		spec, _ := at(doc, "spec", "template", "spec").(map[string]any)
+		deadline, _ := at(doc, "spec", "activeDeadlineSeconds").(int)
+		total, timeout := 0, defaultHelmTimeout
+		for _, group := range []string{"initContainers", "containers"} {
+			for _, item := range asList(spec[group]) {
+				container, _ := item.(map[string]any)
+				key, _ := entrypointKey(container)
+				b, known := connectBudgets[key]
+				if !known {
+					violations = append(violations, fmt.Sprintf("Job/%s %s %v runs %q: no budget row in connectBudgets", name, group, container["name"], key))
+					continue
+				}
+				own := b.own
+				if b.fromDeadlineArg {
+					own = deadlineArgSeconds(container)
+					timeout = indexHelmTimeout
+				}
+				total += b.wait + own + b.margin
+			}
+		}
+		if deadline <= 0 {
+			violations = append(violations, fmt.Sprintf("Job/%s has no activeDeadlineSeconds", name))
+			continue
+		}
+		if total > deadline {
+			violations = append(violations, fmt.Sprintf("Job/%s worst case %d s (first-connect waits + own run + chart margin) > activeDeadlineSeconds %d", name, total, deadline))
+		}
+		if total > timeout {
+			violations = append(violations, fmt.Sprintf("Job/%s worst case %d s > helm --timeout %d s", name, total, timeout))
+		}
+	}
+	return violations
 }
 
 type censusEntry struct {
@@ -192,7 +287,11 @@ func TestHookConnectWaitCensus(t *testing.T) {
 	sort.Strings(names)
 	total := 0
 	for _, name := range names {
-		entries := censusEntries(renderDocs(t, renders[name]...))
+		docs := renderDocs(t, renders[name]...)
+		for _, v := range budgetViolations(docs) {
+			t.Errorf("render %q: %s", name, v)
+		}
+		entries := censusEntries(docs)
 		total += len(entries)
 		for _, violation := range censusViolations(entries) {
 			t.Errorf("render %q: %s", name, violation)
@@ -204,7 +303,15 @@ func TestHookConnectWaitCensus(t *testing.T) {
 	if total < 20 {
 		t.Fatalf("only %d Job and init containers rendered: the census measures nothing", total)
 	}
+	for key := range connectBudgets {
+		if _, ok := connectWaits[key]; !ok {
+			t.Errorf("connectBudgets row %q has no connectWaits row", key)
+		}
+	}
 	for key := range connectWaits {
+		if _, ok := connectBudgets[key]; !ok {
+			t.Errorf("connectWaits row %q has no connectBudgets row", key)
+		}
 		if !seen[key] {
 			t.Errorf("connectWaits row %q: no render runs it; remove the row", key)
 		}

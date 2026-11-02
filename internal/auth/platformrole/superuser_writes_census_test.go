@@ -97,7 +97,7 @@ func superuserWrites(file *ast.File) map[string][]string {
 
 // TestEverySuperuserWriteIsProvenWhileOwned is the census of the writes of
 // public users.is_superuser: every non-test users INSERT or UPDATE statement
-// that writes the column either writes the constant false, or is listed in
+// that names the column (a constant false included: the column defaults to false, so an INSERT omits it) is listed in
 // testdata/superuser_writes.tsv with the test that proves what it does while
 // the platform roles are owned (refused, or the column left out), so no write
 // carries a switched read back into the public column. A fixture under
@@ -122,9 +122,7 @@ func TestEverySuperuserWriteIsProvenWhileOwned(t *testing.T) {
 			rel := filepath.ToSlash(strings.TrimPrefix(path, root+string(filepath.Separator)))
 			for function, values := range superuserWrites(file) {
 				for _, value := range values {
-					if value != "false" {
-						found[rel+"\t"+function] = append(found[rel+"\t"+function], value)
-					}
+					found[rel+"\t"+function] = append(found[rel+"\t"+function], value)
 				}
 			}
 			return nil
@@ -163,7 +161,7 @@ func TestEverySuperuserWriteIsProvenWhileOwned(t *testing.T) {
 	}
 	sort.Strings(unlisted)
 	for _, row := range unlisted {
-		t.Errorf("unproven is_superuser write (a constant false, or list it in testdata/superuser_writes.tsv with the test of its owned behaviour): %s", row)
+		t.Errorf("unproven is_superuser write (omit the column, or list it in testdata/superuser_writes.tsv with the test of its owned behaviour): %s", row)
 	}
 }
 

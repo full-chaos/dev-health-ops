@@ -64,3 +64,6 @@ internal/jobs/metrics/daily/icfinalize/parity_golden_test.go:generic-api-key:582
 # CHAOS-12661: a fixed 32-hex request id in the internal-listener XFF cell matches generic-api-key by shape; it is a test request id, not a credential.
 # Commit-less file:rule:line form so the row still matches after a squash; generic-api-key is suppressed on this line only.
 internal/auth/authruntime/internal_listener_test.go:generic-api-key:208
+# CHAOS-10801: the warm-redaction cell holds the test-only literal "KEYSENTINEL-4f1c9a" to prove the key never reaches an error or log;
+# the generic-api-key rule reads the const name and value as a key. Commit-less file:rule:line form. Not a credential.
+internal/providerfoundation/credentials_decryptor_warm_redaction_test.go:generic-api-key:17

@@ -677,12 +677,30 @@ VALUES ($1, $2, $3, 'oidc', 'active', '{}'::json)`, row, org, "oidc-"+row.String
 		request := oidc.SessionRequest{OrgID: &org, Role: "member", AMR: oidc.AMR}
 		principal, tokens, err := seam.ProvisionJoinAndIssue(ctx, oidc.FederatedAccount{
 			Key:   oidc.ExternalKey{Issuer: "https://idp.example.test", Provider: row.String(), Subject: subject},
-			Email: jitEmail(subject)}, org, request)
+			Email: jitEmail(subject), LegacyProvider: oidc.ProviderKind}, org, request)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if tokens.AccessToken == "" || tokens.RefreshToken == "" {
 			t.Fatalf("tokens %+v", tokens)
+		}
+		if n := e.count(t, ctx, `SELECT count(*) FROM public.users WHERE id = $1 AND auth_provider = 'oidc' AND sso_provider_id = $2`, principal.ID, row); n != 1 {
+			t.Errorf("%d users rows with auth_provider oidc bound to the provider, want 1", n)
+		}
+		oauthRow := uuid.New()
+		if _, err := e.admin.Exec(ctx, `INSERT INTO public.sso_providers (id, org_id, name, protocol, status, config)
+VALUES ($1, $2, $3, 'oauth_github', 'active', '{}'::json)`, oauthRow, org, "oauth-"+oauthRow.String()); err != nil {
+			t.Fatal(err)
+		}
+		oauthSubject := "jit-oauth-" + uuid.NewString()
+		oauthPrincipal, _, err := seam.ProvisionJoinAndIssue(ctx, oidc.FederatedAccount{
+			Key:   oidc.ExternalKey{Issuer: "https://github.com", Provider: oauthRow.String(), Subject: oauthSubject},
+			Email: jitEmail(oauthSubject), LegacyProvider: "github"}, org, request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n := e.count(t, ctx, `SELECT count(*) FROM public.users WHERE id = $1 AND auth_provider = 'github' AND auth_provider_id = $2 AND sso_provider_id IS NULL`, oauthPrincipal.ID, oauthSubject); n != 1 {
+			t.Errorf("%d users rows with auth_provider github, want 1", n)
 		}
 		for _, event := range []string{"auth.principal.provisioned", "auth.membership.added", authapi.EventLoginSucceeded} {
 			if n := e.auditRows(t, ctx, principal.ID, event); n != 1 {

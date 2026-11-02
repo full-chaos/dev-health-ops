@@ -613,10 +613,22 @@ func configureWithRoutes(
 		return nil, err
 	}
 
+	projectOrg, err := organizationProjectorFor(cfg, logger, store.Pool(), schemaID)
+	if err != nil {
+		closeStore()
+		return nil, err
+	}
+	projectionComponents, err := pushProjection(cfg, logger, store.Pool(), schemaID, registry, projectOrg)
+	if err != nil {
+		closeStore()
+		return nil, err
+	}
+
 	components := []lifecycle.Component{store, keyStatesComponent{states: keyStates}}
 	components = append(components, limitComponents...)
 	components = append(components, credComponents...)
 	components = append(components, feed.components...)
+	components = append(components, projectionComponents...)
 	return append(components,
 		outboxLoop,
 		announcedListener{listener: operatorHTTP, logger: logger},

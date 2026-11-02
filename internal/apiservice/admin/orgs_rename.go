@@ -36,16 +36,10 @@ func (h *handlers) optionalName(errs *pybody.Errors, object *pyjson.Object) (str
 	return errs.OptionalString(object, "name", 0, 0)
 }
 
-// renameOrder says when a PATCH name goes to auth-service while organizations are owned: before any suspend (so a
-// refused rename changes no auth state), or after a reactivate (auth refuses a rename of a suspended organization).
-func (h *handlers) renameOrder(patch orgUpdate) (first, later bool) {
-	if !patch.authOwned || patch.Name == nil {
-		return false, false
-	}
-	if patch.IsActive != nil && *patch.IsActive {
-		return false, true
-	}
-	return true, false
+// renamesInAuth says a PATCH name goes to auth-service while organizations are owned. It goes before any suspend or
+// reactivate, so a refused rename (a suspended organization included) changes no auth state and no go-api row.
+func (h *handlers) renamesInAuth(patch orgUpdate) bool {
+	return patch.authOwned && patch.Name != nil
 }
 
 // renamePrecheck refuses, before any auth-service call, what the rename would refuse without reading anything: no

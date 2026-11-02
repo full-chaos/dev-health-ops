@@ -367,12 +367,10 @@ func (h *handlers) updateOrganization(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	patch.authOwned = h.orgsOwned()
-	renameFirst, renameLater := h.renameOrder(patch)
-	if (renameFirst || renameLater) && !h.renamePrecheck(w, r, *patch.Name) {
-		return
-	}
-	if renameFirst && !h.renameInAuth(w, r, orgID, *patch.Name) {
-		return
+	if h.renamesInAuth(patch) {
+		if !h.renamePrecheck(w, r, *patch.Name) || !h.renameInAuth(w, r, orgID, *patch.Name) {
+			return
+		}
 	}
 	var authActive orgAuthStateFunc
 	if patch.IsActive != nil {
@@ -383,9 +381,6 @@ func (h *handlers) updateOrganization(w http.ResponseWriter, r *http.Request) {
 		if accepted != nil {
 			authActive = h.authStateHook(orgID, *accepted)
 		}
-	}
-	if renameLater && !h.renameInAuth(w, r, orgID, *patch.Name) {
-		return
 	}
 	updated, err := h.store.updateOrganization(ctx, orgID, patch, authActive)
 	if err != nil {

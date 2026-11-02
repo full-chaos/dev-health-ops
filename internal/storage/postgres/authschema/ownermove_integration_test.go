@@ -219,7 +219,28 @@ func newOwnerMoveEnv(t *testing.T, ctx context.Context, kinds bool) *ownerMoveEn
 			t.Fatalf("hand the definer function to the writer: %v", err)
 		}
 	}
-	if err := ApplyRuntimeGrants(ctx, oldConn.Conn(), env.options(true)); err != nil {
+	// The last migration is held back on purpose (the test applies it after the move), so the tables it creates do not exist
+	// yet: grant the posture of the tables that do. Every later Grants and Apply call runs at head with the full posture.
+	existing := map[string]bool{}
+	tableRows, err := oldConn.Query(ctx, `SELECT table_name FROM information_schema.tables WHERE table_schema = 'auth'`)
+	if err != nil {
+		t.Fatalf("list the tables applied so far: %v", err)
+	}
+	for tableRows.Next() {
+		var name string
+		if err := tableRows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		existing[name] = true
+	}
+	tableRows.Close()
+	var appliedPosture []TablePrivilege
+	for _, entry := range RuntimePosture() {
+		if existing[entry.Table] {
+			appliedPosture = append(appliedPosture, entry)
+		}
+	}
+	if err := applyRuntimeGrants(ctx, oldConn.Conn(), appliedPosture, env.options(true), nil); err != nil {
 		t.Fatalf("runtime grants as the superuser owner: %v", err)
 	}
 	return env

@@ -162,3 +162,32 @@ func sessionIssueWorkloadSubject(lookup secrets.LookupEnv, tokenIssuerURL string
 	}
 	return value, nil
 }
+
+// EnvAuthorizeCallerSubjects is the comma-separated list of the workload
+// principals (prn_) whose workload token the authorize routes accept. Unset,
+// the routes accept no caller. Set, it needs EnvTokenIssuerURL.
+const EnvAuthorizeCallerSubjects = "AUTH_AUTHORIZE_CALLER_SUBJECTS"
+
+// authorizeCallerSubjects reads the authorize routes' caller subjects. Errors
+// name the variable and an item's position, never a value.
+func authorizeCallerSubjects(lookup secrets.LookupEnv, tokenIssuerURL string) ([]string, error) {
+	value, ok := lookup(EnvAuthorizeCallerSubjects)
+	if !ok || value == "" {
+		return nil, nil
+	}
+	items := strings.Split(value, ",")
+	seen := make(map[string]bool, len(items))
+	for i, item := range items {
+		if !sessionIssueWorkloadSubjectPattern.MatchString(item) {
+			return nil, fmt.Errorf("%s item %d must be a workload principal id (prn_ and 22 base64url characters)", EnvAuthorizeCallerSubjects, i)
+		}
+		if seen[item] {
+			return nil, fmt.Errorf("%s item %d is repeated", EnvAuthorizeCallerSubjects, i)
+		}
+		seen[item] = true
+	}
+	if tokenIssuerURL == "" {
+		return nil, fmt.Errorf("%s needs %s", EnvAuthorizeCallerSubjects, EnvTokenIssuerURL)
+	}
+	return items, nil
+}

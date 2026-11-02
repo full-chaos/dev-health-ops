@@ -285,7 +285,9 @@ func (r *Reader) Shutdown(ctx context.Context) error {
 	}
 }
 
-const revisionExpr = `(CASE WHEN o.payload ->> 'revision' ~ '^[0-9]{1,15}$' THEN (o.payload ->> 'revision')::bigint END)`
+// revisionExpr is the payload revision as a bigint, or NULL when it is outside the wire range 1..2^53-1 (16 digits at most).
+const revisionExpr = `(CASE WHEN o.payload ->> 'revision' ~ '^[0-9]{1,16}$' THEN
+		(CASE WHEN (o.payload ->> 'revision')::bigint <= 9007199254740991 THEN (o.payload ->> 'revision')::bigint END) END)`
 
 // Step reads, projects and parks one batch, retries the parked rows that are
 // due, and moves the low-water mark. It does nothing on an unfenced timeline.

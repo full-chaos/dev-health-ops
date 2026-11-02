@@ -26,7 +26,7 @@ func event(typ string, id string, revision int64, change contracts.ExternalPushL
 		EventType:     typ,
 		CreatedAt:     contracts.Timestamp{Time: t0},
 		Payload: contracts.ExternalPushLifecyclePayload{
-			Revision: contracts.Revision(revision), OrganizationID: org, SourceID: source, Change: change,
+			Revision: contracts.Revision(revision), OrganizationID: org, Binding: contracts.ExternalPushBindingSource, SourceID: source, Change: change,
 		},
 	}
 }
@@ -100,7 +100,7 @@ func TestProjectionDuplicateAndStaleAreNoOps(t *testing.T) {
 }
 
 func sameState(a, b State) bool {
-	return a.AggregateID == b.AggregateID && a.OrganizationID == b.OrganizationID && a.SourceID == b.SourceID &&
+	return a.AggregateID == b.AggregateID && a.OrganizationID == b.OrganizationID && a.Binding == b.Binding && a.SourceID == b.SourceID &&
 		a.Revision == b.Revision && a.Status == b.Status && a.Fingerprint == b.Fingerprint &&
 		slices.Equal(a.Scopes, b.Scopes) && a.RotationParentID == b.RotationParentID && a.ExpiresAt == b.ExpiresAt && a.TerminalAt.Equal(b.TerminalAt)
 }
@@ -170,18 +170,21 @@ func TestProjectionRotationIsBoundToTheNamedParent(t *testing.T) {
 		parent *State
 		want   Outcome
 	}{
-		"no parent state":          {rotated(credB, credA, "ingest:write"), nil, RefusedParent},
-		"never-seen parent":        {rotated(credB, credA, "ingest:write"), &State{}, RefusedParent},
-		"wider than parent":        {rotated(credB, credA, "ingest:write", "ingest:status"), &parent, RefusedWiden},
-		"its own parent":           {rotated(credB, credB, "ingest:write"), &parent, RefusedTransition},
-		"no parent id":             {rotated(credB, "", "ingest:write"), &parent, RefusedTransition},
-		"another credential":       {rotated(credB, credA, "ingest:write"), other(func(p *State) { p.AggregateID = "cred-C" }), RefusedParent},
-		"parent with no id":        {rotated(credB, credA, "ingest:write"), other(func(p *State) { p.AggregateID = "" }), RefusedParent},
-		"parent in another org":    {rotated(credB, credA, "ingest:write"), other(func(p *State) { p.OrganizationID = "org_EXAMPLE0000000000000002" }), RefusedParent},
-		"parent in another source": {rotated(credB, credA, "ingest:write"), other(func(p *State) { p.SourceID = "src_EXAMPLE0000000000000002" }), RefusedParent},
-		"rotated after create":     {rotated(credB, credA, "ingest:write"), &parent, RefusedTransition},
-		"child org differs":        {withOrg(rotated(credB, credA, "ingest:write"), "org_EXAMPLE0000000000000002"), &parent, RefusedParent},
-		"child source differs":     {withSource(rotated(credB, credA, "ingest:write"), "src_EXAMPLE0000000000000002"), &parent, RefusedParent},
+		"no parent state":               {rotated(credB, credA, "ingest:write"), nil, RefusedParent},
+		"never-seen parent":             {rotated(credB, credA, "ingest:write"), &State{}, RefusedParent},
+		"wider than parent":             {rotated(credB, credA, "ingest:write", "ingest:status"), &parent, RefusedWiden},
+		"its own parent":                {rotated(credB, credB, "ingest:write"), &parent, RefusedTransition},
+		"no parent id":                  {rotated(credB, "", "ingest:write"), &parent, RefusedTransition},
+		"another credential":            {rotated(credB, credA, "ingest:write"), other(func(p *State) { p.AggregateID = "cred-C" }), RefusedParent},
+		"parent with no id":             {rotated(credB, credA, "ingest:write"), other(func(p *State) { p.AggregateID = "" }), RefusedParent},
+		"parent in another org":         {rotated(credB, credA, "ingest:write"), other(func(p *State) { p.OrganizationID = "org_EXAMPLE0000000000000002" }), RefusedParent},
+		"parent in another source":      {rotated(credB, credA, "ingest:write"), other(func(p *State) { p.SourceID = "src_EXAMPLE0000000000000002" }), RefusedParent},
+		"rotated after create":          {rotated(credB, credA, "ingest:write"), &parent, RefusedTransition},
+		"child org differs":             {withOrg(rotated(credB, credA, "ingest:write"), "org_EXAMPLE0000000000000002"), &parent, RefusedParent},
+		"child source differs":          {withSource(rotated(credB, credA, "ingest:write"), "src_EXAMPLE0000000000000002"), &parent, RefusedParent},
+		"child binding differs only":    {withBinding(rotated(credB, credA, "ingest:write"), contracts.ExternalPushBindingOrganization), &parent, RefusedParent},
+		"parent binding differs only":   {rotated(credB, credA, "ingest:write"), other(func(p *State) { p.Binding = contracts.ExternalPushBindingOrganization }), RefusedParent},
+		"org-wide child, source parent": {orgWide(rotated(credB, credA, "ingest:write")), &parent, RefusedParent},
 	}
 	for name, tc := range cases {
 		from := State{}
@@ -197,6 +200,18 @@ func TestProjectionRotationIsBoundToTheNamedParent(t *testing.T) {
 
 func withOrg(e contracts.ExternalPushLifecycleEvent, org string) contracts.ExternalPushLifecycleEvent {
 	e.Payload.OrganizationID = org
+	return e
+}
+
+func withBinding(e contracts.ExternalPushLifecycleEvent, binding string) contracts.ExternalPushLifecycleEvent {
+	e.Payload.Binding = binding
+	return e
+}
+
+// orgWide turns an event into the organization-wide form: no source.
+func orgWide(e contracts.ExternalPushLifecycleEvent) contracts.ExternalPushLifecycleEvent {
+	e.Payload.Binding = contracts.ExternalPushBindingOrganization
+	e.Payload.SourceID = ""
 	return e
 }
 
@@ -314,7 +329,7 @@ func TestProjectionNeverAppliesToATerminalAggregateAndNeverPanics(t *testing.T) 
 			}
 			events = append(events, e)
 		}
-		parent := &State{AggregateID: credB, OrganizationID: org, SourceID: source, Revision: 1, Status: StatusActive, Scopes: scopePool}
+		parent := &State{AggregateID: credB, OrganizationID: org, Binding: contracts.ExternalPushBindingSource, SourceID: source, Revision: 1, Status: StatusActive, Scopes: scopePool}
 		replay := func() State {
 			state := State{}
 			for _, e := range events {
@@ -507,5 +522,45 @@ func TestProjectionEmptyScopesStayEmptyAndPermitNothing(t *testing.T) {
 	revoked := mustApply(t, full, revoked(credA, 2), nil)
 	if Permits(revoked, "ingest:write", t0) {
 		t.Errorf("a revoked credential permits a scope")
+	}
+}
+
+func TestProjectionOrganizationWideCredentialLifecycle(t *testing.T) {
+	create := orgWide(created(credA, "ingest:status", "ingest:write"))
+	state := mustApply(t, State{}, create, nil)
+	if state.Binding != contracts.ExternalPushBindingOrganization || state.SourceID != "" || state.Status != StatusActive {
+		t.Fatalf("after created: %+v", state)
+	}
+	state = mustApply(t, state, orgWide(scoped(credA, 2, "ingest:status")), nil)
+	rotate := orgWide(rotated(credB, credA, "ingest:status"))
+	parent := state
+	child := mustApply(t, State{}, rotate, &parent)
+	if child.Binding != contracts.ExternalPushBindingOrganization || child.SourceID != "" || child.RotationParentID != credA {
+		t.Fatalf("after rotated: %+v", child)
+	}
+	retired := mustApply(t, state, orgWide(revoked(credA, 3)), nil)
+	if retired.Status != StatusRevoked {
+		t.Fatalf("after revoked: %+v", retired)
+	}
+}
+
+func TestProjectionBindingNeverChangesInsideAnAggregate(t *testing.T) {
+	sourceBound := mustApply(t, State{}, created(credA, "ingest:write"), nil)
+	orgBound := mustApply(t, State{}, orgWide(created(credA, "ingest:write")), nil)
+	cases := map[string]struct {
+		state State
+		e     contracts.ExternalPushLifecycleEvent
+	}{
+		"source credential, org-wide scoped":  {sourceBound, orgWide(scoped(credA, 2, "ingest:write"))},
+		"source credential, org-wide revoked": {sourceBound, orgWide(revoked(credA, 2))},
+		"org credential, source scoped":       {orgBound, scoped(credA, 2, "ingest:write")},
+		"org credential, source revoked":      {orgBound, revoked(credA, 2)},
+		"binding differs, same source id":     {sourceBound, withBinding(revoked(credA, 2), contracts.ExternalPushBindingOrganization)},
+	}
+	for name, tc := range cases {
+		next, outcome := Apply(tc.state, tc.e, nil)
+		if outcome != RefusedTransition || !sameState(next, tc.state) {
+			t.Errorf("%s: outcome %s, want %s with the state unchanged", name, outcome, RefusedTransition)
+		}
 	}
 }

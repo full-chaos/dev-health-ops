@@ -27,8 +27,11 @@ type PushLifecycleEvent struct {
 	EventType      string
 	AggregateID    string
 	OrganizationID string
-	SourceID       string
-	Change         externalpush.Change
+	// Binding is source (SourceID names the source) or organization (SourceID
+	// is empty).
+	Binding  string
+	SourceID string
+	Change   externalpush.Change
 	// Snapshot is the credential's state as of this write, in the created form
 	// (status active, fingerprint, scopes, optional expires_at). It is required
 	// on a scoped, revoked or expired event and used only when the credential
@@ -85,9 +88,10 @@ func AppendPushLifecycle(ctx context.Context, tx pgx.Tx, schema authschema.Valid
 func pushLifecycleArguments(e PushLifecycleEvent) (payload string, snapshot any, err error) {
 	encoded, err := json.Marshal(struct {
 		OrganizationID string              `json:"organization_id"`
-		SourceID       string              `json:"source_id"`
+		Binding        string              `json:"binding"`
+		SourceID       string              `json:"source_id,omitempty"`
 		Change         externalpush.Change `json:"change"`
-	}{e.OrganizationID, e.SourceID, e.Change})
+	}{e.OrganizationID, e.Binding, e.SourceID, e.Change})
 	if err != nil {
 		return "", nil, fmt.Errorf("%w: encoding the payload", ErrPushLifecycle)
 	}
@@ -102,7 +106,7 @@ func pushLifecycleArguments(e PushLifecycleEvent) (payload string, snapshot any,
 }
 
 func checkPushLifecycle(e PushLifecycleEvent) error {
-	if err := externalpush.Check(e.EventType, e.AggregateID, e.OrganizationID, e.SourceID, e.Change); err != nil {
+	if err := externalpush.Check(e.EventType, e.AggregateID, e.OrganizationID, e.Binding, e.SourceID, e.Change); err != nil {
 		return err
 	}
 	switch e.EventType {
@@ -110,7 +114,7 @@ func checkPushLifecycle(e PushLifecycleEvent) error {
 		if e.Snapshot == nil {
 			return errors.New("a scoped, revoked or expired event needs the credential's snapshot")
 		}
-		return externalpush.Check(externalpush.Created, e.AggregateID, e.OrganizationID, e.SourceID, *e.Snapshot)
+		return externalpush.Check(externalpush.Created, e.AggregateID, e.OrganizationID, e.Binding, e.SourceID, *e.Snapshot)
 	default:
 		if e.Snapshot != nil {
 			return errors.New("only a scoped, revoked or expired event takes a snapshot")

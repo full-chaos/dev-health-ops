@@ -49,3 +49,4 @@ internal/testsupport/sessionscenario/sessionscenario.go	Seed	2	test support writ
 internal/testsupport/sessionscenario/target.go	MintTokens	1	test support claim key
 internal/testsupport/venueoracle/gosubstrate.go	-	1	test support claim key
 internal/testsupport/venueoracle/gosubstrate.go	accessClaims	2	test support claim key
+internal/testsupport/superuserwriter/superuserwriter.go	Pool	1	test support: the one users column the role cannot write

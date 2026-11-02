@@ -165,7 +165,7 @@ func TestFlipbackSSOK3sRefusesAKubeconfigThatIsNotNamespaceScopedOrNotThisRuns(t
 var fbSteps = []string{
 	"S0 install at phase 3",
 	"S1 admin and organization",
-	"S2 provider rows through the go-api admin route",
+	"S2 the SAML provider row, one INSERT in the rehearsal namespace",
 	"S3 SSO sign-in at phase 3 creates the SAML user",
 	"S4 flip 3 to 4: U1 go-api forwards, barrier up-go-api",
 	"S5 users-backfill and users-reconcile",
@@ -215,6 +215,24 @@ func TestFlipbackSSOK3sPrintPlanNeedsNoClusterInput(t *testing.T) {
 	}
 }
 
+// The live phase 4 step is read-only first (pm 2026-11-02): count the prod providers and the SSO-linked users, create nothing.
+func TestFlipbackSSOK3sLiveCountModeIsReadOnlyAndNeedsNoCluster(t *testing.T) {
+	res, calls := fbRun(t, nil, "--print-live-count-sql")
+	if res.code != 0 || strings.TrimSpace(calls) != "" {
+		t.Fatalf("exit %d, calls %q, stderr %q", res.code, calls, res.stderr)
+	}
+	for _, want := range []string{"FROM public.sso_providers", "auth_provider IN ('oidc', 'saml')", "sso_provider_id IS NOT NULL", "BEGIN READ ONLY", "ROLLBACK"} {
+		if !strings.Contains(res.stdout, want) {
+			t.Errorf("the count SQL lacks %q\n%s", want, res.stdout)
+		}
+	}
+	for _, banned := range []string{"INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER"} {
+		if strings.Contains(strings.ToUpper(res.stdout), banned) {
+			t.Errorf("the count SQL holds %s", banned)
+		}
+	}
+}
+
 func TestFlipbackSSOK3sHasNoKeepFlag(t *testing.T) {
 	if res, _ := fbRun(t, fbGoodEnvs, "--keep"); res.code == 0 || !strings.Contains(res.stderr, "usage:") {
 		t.Errorf("--keep: exit %d, stderr %q; want it refused as an unknown argument", res.code, res.stderr)
@@ -224,16 +242,19 @@ func TestFlipbackSSOK3sHasNoKeepFlag(t *testing.T) {
 func TestFlipbackSSOK3sShape(t *testing.T) {
 	text := readText(t, filepath.Join(rootOf(t), fbScript))
 	for _, want := range []string{"--from-file=\"$2=/dev/stdin\"", "auth-users-owned-barrier.sh", "up-go-api", "up-owned", "down-auth", "users-backfill", "users-reconcile",
-		"/api/v1/auth/sso/providers"} {
+		"INSERT INTO sso_providers"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("the script lacks %q", want)
 		}
 	}
 	for _, banned := range []string{"kind create", "kind load", "docker ", "ctr ", "sudo ", "--from-literal", "--password ", "authService.ssoJit", "ssoJit=", "name: AUTH_SSO_JIT",
-		"create namespace", "delete namespace", "pkill", "killall", "nohup", "INSERT INTO", "UPDATE public", "DELETE FROM", "externalIPs", "IDP_IP", "oidc"} {
+		"create namespace", "delete namespace", "pkill", "killall", "nohup", "/api/v1/auth/sso/providers", "UPDATE public", "DELETE FROM", "externalIPs", "IDP_IP", "oidc"} {
 		if strings.Contains(text, banned) {
 			t.Errorf("the script contains %q", banned)
 		}
+	}
+	if n := strings.Count(text, "INSERT INTO"); n != 1 {
+		t.Errorf("the script holds %d INSERT statements; want exactly the one sso_providers row of the rehearsal namespace", n)
 	}
 	// the one time the host default path may appear is the refusal
 	if n := strings.Count(text, "/etc/rancher/k3s/k3s.yaml"); n != 1 {
@@ -272,6 +293,9 @@ func TestFlipbackSSORunbookCarriesTheStepLinesAndTheJITScope(t *testing.T) {
 		"sign in through go-api",
 		"CHAOS-10998",
 		"OIDC leg stays in the integration tests",
+		"count the SSO providers and the SSO-linked users",
+		"not applicable at 11505",
+		"creates nothing",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("the runbook lacks %q", want)

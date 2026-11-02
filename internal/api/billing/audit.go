@@ -136,7 +136,7 @@ func (h handlers) listAudit(w http.ResponseWriter, r *http.Request) {
 		h.write(w, validation(errs))
 		return
 	}
-	if !policy.UserFrom(r.Context()).IsSuperuser {
+	if !policy.UserFrom(r.Context()).Holds(policy.ActionAdminBilling) {
 		h.write(w, superadminRequired)
 		return
 	}
@@ -211,7 +211,7 @@ func (h handlers) getAudit(w http.ResponseWriter, r *http.Request) {
 		h.write(w, validation(errs))
 		return
 	}
-	if !policy.UserFrom(r.Context()).IsSuperuser {
+	if !policy.UserFrom(r.Context()).Holds(policy.ActionAdminBilling) {
 		h.write(w, superadminRequired)
 		return
 	}
@@ -303,7 +303,7 @@ func (h handlers) resolveAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user := policy.UserFrom(r.Context())
-	if !user.IsSuperuser {
+	if !user.Holds(policy.ActionAdminBilling) {
 		h.write(w, superadminRequired)
 		return
 	}

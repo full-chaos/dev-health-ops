@@ -19,12 +19,12 @@ import (
 
 func (h *handlers) featureRoutes() []httpapi.Route {
 	return []httpapi.Route{
-		{Method: http.MethodGet, Pattern: governancePrefix + "/feature-flags", Handler: h.guard.Wrap(policy.Superuser, http.HandlerFunc(h.listFeatureFlags))},
-		{Method: http.MethodGet, Pattern: governancePrefix + "/orgs/{org_id}/feature-overrides", Handler: h.guard.Wrap(policy.Superuser, http.HandlerFunc(h.listFeatureOverrides))},
-		{Method: http.MethodPost, Pattern: governancePrefix + "/orgs/{org_id}/feature-overrides", Handler: h.bodyFirst(policy.Superuser, http.HandlerFunc(h.createFeatureOverride))},
-		{Method: http.MethodPatch, Pattern: governancePrefix + "/orgs/{org_id}/feature-overrides/{override_id}", Handler: h.bodyFirst(policy.Superuser, http.HandlerFunc(h.updateFeatureOverride))},
-		{Method: http.MethodDelete, Pattern: governancePrefix + "/orgs/{org_id}/feature-overrides/{override_id}", Handler: h.guard.Wrap(policy.Superuser, http.HandlerFunc(h.deleteFeatureOverride))},
-		{Method: http.MethodPatch, Pattern: governancePrefix + "/feature-flags/{flag_id}", Handler: h.bodyFirst(policy.Superuser, http.HandlerFunc(h.updateFeatureFlag))},
+		{Method: http.MethodGet, Pattern: governancePrefix + "/feature-flags", Handler: h.guard.WrapPlatform(policy.ActionAdminFlags, http.HandlerFunc(h.listFeatureFlags))},
+		{Method: http.MethodGet, Pattern: governancePrefix + "/orgs/{org_id}/feature-overrides", Handler: h.guard.WrapPlatform(policy.ActionAdminFlags, http.HandlerFunc(h.listFeatureOverrides))},
+		{Method: http.MethodPost, Pattern: governancePrefix + "/orgs/{org_id}/feature-overrides", Handler: h.bodyFirstPlatform(policy.ActionAdminFlags, http.HandlerFunc(h.createFeatureOverride))},
+		{Method: http.MethodPatch, Pattern: governancePrefix + "/orgs/{org_id}/feature-overrides/{override_id}", Handler: h.bodyFirstPlatform(policy.ActionAdminFlags, http.HandlerFunc(h.updateFeatureOverride))},
+		{Method: http.MethodDelete, Pattern: governancePrefix + "/orgs/{org_id}/feature-overrides/{override_id}", Handler: h.guard.WrapPlatform(policy.ActionAdminFlags, http.HandlerFunc(h.deleteFeatureOverride))},
+		{Method: http.MethodPatch, Pattern: governancePrefix + "/feature-flags/{flag_id}", Handler: h.bodyFirstPlatform(policy.ActionAdminFlags, http.HandlerFunc(h.updateFeatureFlag))},
 	}
 }
 

@@ -29,7 +29,7 @@ func pydanticTime(value *time.Time) pyjson.Value {
 // superuser (`_resolve_org_id(user, org_id if user.is_superuser else
 // None)`), so no caller reaches another org's invoices.
 func invoiceOrg(ctx context.Context, h handlers, q querier, user *policy.User, param *uuid.UUID) (*uuid.UUID, *reply, error) {
-	if !user.IsSuperuser {
+	if !user.Holds(policy.ActionAdminBilling) {
 		param = nil
 	}
 	return h.resolveOrg(ctx, q, user, param)

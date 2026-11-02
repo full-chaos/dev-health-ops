@@ -176,7 +176,7 @@ func TestGuardReadsTheRoleOfTheTokensOwnOrgMembership(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			store := tokenOrgStore(tc.member, tc.role)
 			token := sign(t, claims(func(c jwt.MapClaims) { c["role"] = tc.claim }))
-			got := serve(NewGuard(authenticator(t, store), quiet()).Wrap(tc.level, echo), http.MethodGet, "/x", map[string]string{"Authorization": "Bearer " + token})
+			got := serve(wrapLevel(NewGuard(authenticator(t, store), quiet()), tc.level, echo), http.MethodGet, "/x", map[string]string{"Authorization": "Bearer " + token})
 			if got.status != tc.status || tc.body != "" && !strings.HasPrefix(got.body, tc.body) {
 				t.Fatalf("%d %q, want %d %q", got.status, got.body, tc.status, tc.body)
 			}
@@ -189,7 +189,7 @@ func TestOrgScopeAndGuardReadTheTokenOrgMembershipOncePerRequest(t *testing.T) {
 	store := tokenOrgStore(true, "admin")
 	scope := goAPIScope(t, store)
 	auth := scope.auth
-	handler := auth.ReadOnce(scope.Principal(scope.OrgScope(scope.Impersonation(NewGuard(auth, quiet()).Wrap(AdminOrg, echo)))))
+	handler := auth.ReadOnce(scope.Principal(scope.OrgScope(scope.Impersonation(wrapLevel(NewGuard(auth, quiet()), AdminOrg, echo)))))
 	got := serve(handler, http.MethodGet, "/x", map[string]string{"Authorization": "Bearer " + sign(t, claims(func(c jwt.MapClaims) { c["role"] = "admin" }))})
 	if got.status != 200 || countReads(store, ownOrgKey) != 1 {
 		t.Fatalf("%d %q, reads %d, want 200 and 1", got.status, got.body, countReads(store, ownOrgKey))
@@ -343,7 +343,7 @@ func TestTokenOrgMissingOrNotAUUIDOnTheFullChain(t *testing.T) {
 			store := absentOrgStore()
 			scope := goAPIScope(t, store)
 			auth := scope.auth
-			handler := auth.ReadOnce(scope.Principal(scope.OrgScope(scope.Impersonation(NewGuard(auth, quiet()).Wrap(AdminOrg, echo)))))
+			handler := auth.ReadOnce(scope.Principal(scope.OrgScope(scope.Impersonation(wrapLevel(NewGuard(auth, quiet()), AdminOrg, echo)))))
 			got := serve(handler, http.MethodGet, "/x", map[string]string{"Authorization": "Bearer " + sign(t, claims(func(c jwt.MapClaims) { c["org_id"], c["role"] = tc.org, "admin" }))})
 			if got.status != 200 || !strings.HasPrefix(got.body, "org="+tc.org+" ") || len(store.membershipSeen) != tc.reads {
 				t.Fatalf("%d %q, reads %v; want 200 in the claimed org after %d reads", got.status, got.body, store.membershipSeen, tc.reads)
@@ -369,7 +369,7 @@ func TestGuardTokenOrgMembershipReadErrorIsNeverAPassOrA403(t *testing.T) {
 				store := tokenOrgStore(true, "admin")
 				store.errMember = tc.err
 				token := sign(t, claims(func(c jwt.MapClaims) { c["role"] = "admin" }))
-				got := serve(NewGuard(authenticator(t, store), quiet()).Wrap(level, echo), http.MethodGet, "/x", map[string]string{"Authorization": "Bearer " + token})
+				got := serve(wrapLevel(NewGuard(authenticator(t, store), quiet()), level, echo), http.MethodGet, "/x", map[string]string{"Authorization": "Bearer " + token})
 				if got.status != tc.status || !strings.HasPrefix(got.body, tc.body) {
 					t.Fatalf("%d %q, want %d %q", got.status, got.body, tc.status, tc.body)
 				}

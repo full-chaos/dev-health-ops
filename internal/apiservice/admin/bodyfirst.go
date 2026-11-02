@@ -24,6 +24,16 @@ func (h *handlers) bodyFirst(level policy.Authz, next http.Handler) http.Handler
 	return h.guard.BodyFirst(level, next)
 }
 
+// bodyFirstPlatform is bodyFirst behind the platform gate of action.
+func (h *handlers) bodyFirstPlatform(action string, next http.Handler) http.Handler {
+	return h.guard.BodyFirstPlatform(action, next)
+}
+
+// bodyFirstAdminOr is bodyFirst behind Admin or a holder of action.
+func (h *handlers) bodyFirstAdminOr(action string, next http.Handler) http.Handler {
+	return h.guard.BodyFirstAdminOr(action, next)
+}
+
 // bodyFromContext returns the body bodyFirst already read and validated
 // (never call pybody.Read(r) again inside a bodyFirst-wrapped handler: the
 // request body reader is already drained).

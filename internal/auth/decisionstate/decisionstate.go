@@ -128,22 +128,18 @@ func (t *txReader) Snapshot(ctx context.Context, principal uuid.UUID, orgID stri
 }
 
 // Unfed reads what no feed event covers (go-api writes public.users and public.memberships without an outbox event), for
-// the decision cache key. is_superuser counts only while auth does not own the platform roles: owned, the role comes from
-// auth's assignments, which the feed covers. A public membership row with a NULL role is no row, as effective() reads it.
+// the decision cache key. The users row is read through PGUsers.StateOn, as the snapshot reads it; its platform role
+// counts only while auth does not own the platform roles: owned, the role comes from auth's assignments, which the feed
+// covers. A public membership row with a NULL role is no row, as effective() reads it.
 func (t *txReader) Unfed(ctx context.Context, principal uuid.UUID, orgID string) (authapi.UnfedState, error) {
 	u := authapi.UnfedState{NowUnixNano: t.now}
-	var active, superuser bool
-	err := t.tx.QueryRow(ctx, `SELECT COALESCE(is_active, false), COALESCE(is_superuser, false) FROM public.users WHERE id = $1`,
-		principal).Scan(&active, &superuser)
-	switch {
-	case errors.Is(err, pgx.ErrNoRows):
-		superuser = false
-	case err != nil:
+	user, found, err := t.r.users.StateOn(ctx, t.tx, principal)
+	if err != nil {
 		return authapi.UnfedState{}, storeErr("unfed user", err)
-	default:
-		u.UserFound, u.UserActive = true, active
 	}
+	u.UserFound, u.UserActive = found, found && user.IsActive
 	if !t.r.users.PlatformRolesOwned {
+		superuser := found && user.IsSuperuser
 		u.Superuser = &superuser
 	}
 	org, err := uuid.Parse(orgID)

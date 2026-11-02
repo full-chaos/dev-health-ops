@@ -75,7 +75,15 @@ spec:
     {{- range $host.paths }}{{- if eq .service "auth-service" }}{{- $authPaths = append $authPaths .path }}{{- end }}{{- end }}
     {{- if $authPaths }}
     {{- if ne (len $authPaths) (len $host.paths) }}{{- fail (printf "ingress.hosts %q routes to auth-service and to another service: a host that routes to auth-service serves only the two well-known documents (%s, %s)" $host.host "/.well-known/openid-configuration" "/.well-known/jwks.json") }}{{- end }}
-    {{- if $host.pythonAllowList }}{{- fail (printf "ingress.hosts %q routes to auth-service and must not carry a pythonAllowList" $host.host) }}{{- end }}
+    {{- if hasKey $host "pythonAllowList" }}{{- fail (printf "ingress.hosts %q routes to auth-service and must not carry a pythonAllowList" $host.host) }}{{- end }}
+    {{- $entries := 0 }}
+    {{- range $.Values.ingress.hosts }}{{- if eq .host $host.host }}{{- $entries = add1 $entries }}{{- end }}{{- end }}
+    {{- if gt $entries 1 }}{{- fail (printf "ingress.hosts %q is in more than one ingress.hosts entry and one of them routes to auth-service: the host must have that one entry and no other route" $host.host) }}{{- end }}
+    {{- range $ann := list "use-regex" "rewrite-target" "app-root" "configuration-snippet" "server-snippet" "permanent-redirect" "temporal-redirect" }}
+    {{- if hasKey (default (dict) $.Values.ingress.annotations) (printf "nginx.ingress.kubernetes.io/%s" $ann) }}
+    {{- fail (printf "ingress.annotations %s on an Ingress that routes to auth-service: a regex/rewrite/snippet-class annotation changes how the two Exact paths match (lookalike paths would reach auth-service)" $ann) }}
+    {{- end }}
+    {{- end }}
     {{- if ne (len $authPaths) (len (uniq $authPaths)) }}{{- fail (printf "ingress.hosts %q lists a path to auth-service twice" $host.host) }}{{- end }}
     {{- range $host.paths }}
     {{- if or (ne .pathType "Exact") (not (has .path (list "/.well-known/openid-configuration" "/.well-known/jwks.json"))) }}

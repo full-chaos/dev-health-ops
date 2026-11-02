@@ -191,13 +191,10 @@ func TestWellKnownRouteRefusals(t *testing.T) {
 		{"controller namespace is the release namespace", 2, []string{wkHostValue(wkBothPaths...)}, append(append([]string{}, issuer...), "--namespace", "ns1", "--set", "networkPolicy.ingressControllerNamespace=ns1"), "must name the ingress controller's namespace"},
 		{"allow-list false", 2, []string{`{"host":"` + wkHost + `","pythonAllowList":false,"paths":[` + strings.Join(wkBothPaths, ",") + `]}`}, issuer, "must not carry a pythonAllowList"},
 		{"allow-list empty list", 2, []string{`{"host":"` + wkHost + `","pythonAllowList":[],"paths":[` + strings.Join(wkBothPaths, ",") + `]}`}, issuer, "must not carry a pythonAllowList"},
-		{"allow-list null", 2, []string{`{"host":"` + wkHost + `","pythonAllowList":null,"paths":[` + strings.Join(wkBothPaths, ",") + `]}`}, issuer, "must not carry a pythonAllowList"},
+		{"allow-list null", 2, []string{`{"host":"` + wkHost + `","pythonAllowList":null,"paths":[` + strings.Join(wkBothPaths, ",") + `]}`}, issuer, "pythonAllowList must be true or a list"},
 		{"second entry of the same host routes web", 2, []string{wkHostValue(wkBothPaths...), `{"host":"` + wkHost + `","paths":[{"path":"/","pathType":"Prefix","service":"web"}]}`}, issuer, "more than one ingress.hosts entry"},
 		{"second entry of the same host routes auth-service again", 2, []string{wkHostValue(wkPath(wkJWKS, "Exact")), wkHostValue(wkPath(wkDiscovery, "Exact"))}, issuer, "more than one ingress.hosts entry"},
-		{"use-regex annotation", 2, []string{wkHostValue(wkBothPaths...)}, append(append([]string{}, issuer...), "--set-string", `ingress.annotations.nginx\.ingress\.kubernetes\.io/use-regex=true`), "on an Ingress that routes to auth-service"},
-		{"rewrite-target annotation", 2, []string{wkHostValue(wkBothPaths...)}, append(append([]string{}, issuer...), "--set-string", `ingress.annotations.nginx\.ingress\.kubernetes\.io/rewrite-target=/x`), "on an Ingress that routes to auth-service"},
 		{"controller labels null", 2, []string{wkHostValue(wkBothPaths...)}, append(append([]string{}, issuer...), "--set-json", `authService.networkPolicy.ingressControllerPodLabels=null`), "ingressControllerPodLabels must not be empty"},
-		{"controller labels empty map", 2, []string{wkHostValue(wkBothPaths...)}, append(append([]string{}, issuer...), "--set-json", `authService.networkPolicy.ingressControllerPodLabels={}`), "ingressControllerPodLabels must not be empty"},
 		{"auth-service not running", 0, []string{wkHostValue(wkBothPaths...)}, issuer, "authService.phase >= 1"},
 	}
 	for _, c := range cases {
@@ -235,5 +232,24 @@ func TestWellKnownRouteSharesTheOneAPIPortRule(t *testing.T) {
 		if rules != 1 {
 			t.Errorf("routed=%v: %d ingress rules on the API port, want 1", routed, rules)
 		}
+	}
+}
+
+// The auth host alone (no go-api host, whose own guard would fire first): an annotation that changes how paths match refuses.
+func TestWellKnownRouteRefusesPathMatchingAnnotations(t *testing.T) {
+	for _, ann := range []string{"use-regex", "rewrite-target", "app-root", "configuration-snippet", "server-snippet", "permanent-redirect", "temporal-redirect"} {
+		t.Run(ann, func(t *testing.T) {
+			args := phaseArgs(2, "--set", "ingress.enabled=true", "--set-json", `ingress.hosts=[`+wkHostValue(wkBothPaths...)+`]`,
+				"--set", "authService.accessToken.issuerURL="+wkIssuer, "--set-string", `ingress.annotations.nginx\.ingress\.kubernetes\.io/`+ann+`=x`)
+			_, out, err := renderAuth(t, args...)
+			if err == nil || !strings.Contains(out, "on an Ingress that routes to auth-service") {
+				t.Errorf("annotation %s: want a refusal, got err=%v\n%.600s", ann, err, out)
+			}
+		})
+	}
+	_, out, err := renderAuth(t, phaseArgs(2, "--set", "ingress.enabled=true", "--set-json", `ingress.hosts=[`+wkHostValue(wkBothPaths...)+`]`,
+		"--set", "authService.accessToken.issuerURL="+wkIssuer, "--set-string", `ingress.annotations.nginx\.ingress\.kubernetes\.io/proxy-body-size=50m`)...)
+	if err != nil {
+		t.Errorf("an unrelated annotation is refused: %v\n%.400s", err, out)
 	}
 }

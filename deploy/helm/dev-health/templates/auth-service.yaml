@@ -477,25 +477,25 @@ spec:
   {{- if and $wellKnown (or (not (toString $.Values.networkPolicy.ingressControllerNamespace)) (eq (toString $.Values.networkPolicy.ingressControllerNamespace) (include "dev-health.namespace" $))) }}
   {{- fail "networkPolicy.ingressControllerNamespace must name the ingress controller's namespace, not this release's, while a host routes to auth-service" }}
   {{- end }}
+  {{- if and $wellKnown (not (and (kindIs "map" $a.networkPolicy.ingressControllerPodLabels) $a.networkPolicy.ingressControllerPodLabels)) }}
+  {{- fail "authService.networkPolicy.ingressControllerPodLabels must not be empty while a host routes to auth-service: with no pod labels every pod of the controller namespace would reach the API port" }}
+  {{- end }}
   {{- if or $apiFrom $a.networkPolicy.metricsFrom $wellKnown }}
   ingress:
-    {{- if $wellKnown }}
+    {{- /* One rule on the API port carries every peer (the deploy egress proof plan reads at most one). */}}
+    {{- if or $apiFrom $wellKnown }}
     - from:
+        {{- range $apiFrom }}
+        - podSelector:
+            {{- toYaml . | nindent 12 }}
+        {{- end }}
+        {{- if $wellKnown }}
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: {{ $.Values.networkPolicy.ingressControllerNamespace | quote }}
           podSelector:
             matchLabels:
               {{- toYaml $a.networkPolicy.ingressControllerPodLabels | nindent 14 }}
-      ports:
-        - protocol: TCP
-          port: {{ $a.port }}
-    {{- end }}
-    {{- with $apiFrom }}
-    - from:
-        {{- range . }}
-        - podSelector:
-            {{- toYaml . | nindent 12 }}
         {{- end }}
       ports:
         - protocol: TCP

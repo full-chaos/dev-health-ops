@@ -154,7 +154,7 @@ func TestSubjectGuardOIDCCallbackRefusesASubThatIsNotAString(t *testing.T) {
 				defer cancel()
 				st := startStack(t, ctx)
 				idp := startFakeIdP(t)
-				idp.subOverride = shape.override
+				idp.SetOverride(shape.override)
 				orgID := seedOrg(t, ctx, st.pool, "enterprise")
 				config := fmt.Sprintf(`{"client_id":"test-client","issuer":%q,"token_endpoint":%q,"jwks_uri":%q,"userinfo_endpoint":%q,"scopes":["openid","email"]}`,
 					idp.server.URL, idp.server.URL+"/token", idp.server.URL+"/jwks", idp.server.URL+"/userinfo")

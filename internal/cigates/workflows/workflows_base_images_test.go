@@ -20,7 +20,7 @@ import (
 const baseImagesOwner = "full-chaos"
 
 var baseImageDockerfiles = []string{
-	"docker/go-worker.Dockerfile", "docker/smtpsink.Dockerfile", "docker/providerstub.Dockerfile", "docker/go-api-tools.Dockerfile",
+	"docker/go-worker.Dockerfile", "docker/smtpsink.Dockerfile", "docker/providerstub.Dockerfile", "docker/idpstub.Dockerfile", "docker/go-api-tools.Dockerfile",
 }
 
 var baseImageFiles = append([]string{
@@ -88,8 +88,8 @@ func baseImagesViolations(t *testing.T, root string) []string {
 			}
 		}
 	}
-	if seen["GO_BUILD_IMAGE"] != 4 || seen["TOOLS_RUNTIME_IMAGE"] != 1 {
-		out = append(out, fmt.Sprintf("the Dockerfile walk found GO_BUILD_IMAGE x%d and TOOLS_RUNTIME_IMAGE x%d, want x4 and x1: the walk found nothing to hold", seen["GO_BUILD_IMAGE"], seen["TOOLS_RUNTIME_IMAGE"]))
+	if seen["GO_BUILD_IMAGE"] != 5 || seen["TOOLS_RUNTIME_IMAGE"] != 1 {
+		out = append(out, fmt.Sprintf("the Dockerfile walk found GO_BUILD_IMAGE x%d and TOOLS_RUNTIME_IMAGE x%d, want x5 and x1: the walk found nothing to hold", seen["GO_BUILD_IMAGE"], seen["TOOLS_RUNTIME_IMAGE"]))
 	}
 
 	doc := loadWf(t, root, "mirror-test-images.yml")

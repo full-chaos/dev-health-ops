@@ -10,10 +10,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/metric"
-	"go.opentelemetry.io/otel/metric/noop"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
@@ -32,24 +28,6 @@ type lifecycle struct {
 	err    error
 }
 
-// skipped counts the token writes that emit no event because the token has no
-// source (the contract binds a credential to a source). The label set is fixed:
-// reason is "no_source", operation is create, rotate or revoke. No token or
-// organization id is a label.
-var skipped = func() metric.Int64Counter {
-	counter, err := otel.Meter("github.com/full-chaos/dev-health-ops/internal/apiservice/customerpush").Int64Counter(
-		"devhealth_customerpush_lifecycle_events_skipped_total",
-		metric.WithDescription("Customer-push token writes that emitted no External Push lifecycle event, by operation and reason."))
-	if err != nil {
-		return noop.Int64Counter{}
-	}
-	return counter
-}()
-
-func countSkipped(ctx context.Context, operation string) {
-	skipped.Add(ctx, 1, metric.WithAttributes(attribute.String("operation", operation), attribute.String("reason", "no_source")))
-}
-
 func newLifecycle(on bool, schema string) lifecycle {
 	if !on {
 		return lifecycle{}
@@ -63,8 +41,8 @@ func newLifecycle(on bool, schema string) lifecycle {
 
 // created, rotated and revoked append the events of one mutation in tx, which
 // must hold the credential rows' locks. They do nothing while the events are
-// off. A source-less (organization-wide) token has no event: the contract
-// binds a credential to a source.
+// off. A source-less token is organization-wide: its events carry binding
+// organization and no source_id.
 func (l lifecycle) created(ctx context.Context, tx pgx.Tx, token newToken) error {
 	if !l.on {
 		return nil
@@ -72,9 +50,6 @@ func (l lifecycle) created(ctx context.Context, tx pgx.Tx, token newToken) error
 	events, err := createdEvents(token)
 	if err != nil {
 		return err
-	}
-	if len(events) == 0 {
-		countSkipped(ctx, "create")
 	}
 	return l.append(ctx, tx, events)
 }
@@ -87,9 +62,6 @@ func (l lifecycle) rotated(ctx context.Context, tx pgx.Tx, old tokenRow, next ne
 	if err != nil {
 		return err
 	}
-	if len(events) == 0 {
-		countSkipped(ctx, "rotate")
-	}
 	return l.append(ctx, tx, events)
 }
 
@@ -97,13 +69,9 @@ func (l lifecycle) revoked(ctx context.Context, tx pgx.Tx, token tokenRow) error
 	if !l.on {
 		return nil
 	}
-	event, ok, err := revokedEvent(token)
+	event, err := revokedEvent(token)
 	if err != nil {
 		return err
-	}
-	if !ok {
-		countSkipped(ctx, "revoke")
-		return nil
 	}
 	return l.append(ctx, tx, []audit.PushLifecycleEvent{event})
 }
@@ -147,21 +115,21 @@ func createdChange(id uuid.UUID, scopes []string, expiresAt *time.Time) external
 		Scopes: credentialScopes(scopes), ExpiresAt: credentialExpiry(expiresAt)}
 }
 
-func wireIDs(orgID string, sourceID *uuid.UUID) (organization, source string, err error) {
-	if sourceID == nil {
-		return "", "", nil
-	}
+func wireIDs(orgID string, sourceID *uuid.UUID) (organization, binding, source string, err error) {
 	organization = provisioning.WireID("organization", orgID)
 	if organization == "" {
-		return "", "", errors.New("customerpush: the organization id cannot be carried on the lifecycle wire")
+		return "", "", "", errors.New("customerpush: the organization id cannot be carried on the lifecycle wire")
 	}
-	return organization, sourceID.String(), nil
+	if sourceID == nil {
+		return organization, externalpush.BindingOrganization, "", nil
+	}
+	return organization, externalpush.BindingSource, sourceID.String(), nil
 }
 
 // createdEvents is the event of a new token.
 func createdEvents(t newToken) ([]audit.PushLifecycleEvent, error) {
-	organization, source, err := wireIDs(t.OrgID, t.SourceID)
-	if err != nil || source == "" {
+	organization, binding, source, err := wireIDs(t.OrgID, t.SourceID)
+	if err != nil {
 		return nil, err
 	}
 	var expires *time.Time
@@ -170,35 +138,35 @@ func createdEvents(t newToken) ([]audit.PushLifecycleEvent, error) {
 		expires = &at
 	}
 	return []audit.PushLifecycleEvent{{EventType: externalpush.Created, AggregateID: t.ID.String(),
-		OrganizationID: organization, SourceID: source, Change: createdChange(t.ID, t.Scopes, expires)}}, nil
+		OrganizationID: organization, Binding: binding, SourceID: source, Change: createdChange(t.ID, t.Scopes, expires)}}, nil
 }
 
 // revokedEvent is the retirement of a stored token. The snapshot is the token
 // as stored, for a token that predates the stream.
-func revokedEvent(old tokenRow) (audit.PushLifecycleEvent, bool, error) {
-	organization, source, err := wireIDs(old.OrgID, old.SourceID)
-	if err != nil || source == "" {
-		return audit.PushLifecycleEvent{}, false, err
+func revokedEvent(old tokenRow) (audit.PushLifecycleEvent, error) {
+	organization, binding, source, err := wireIDs(old.OrgID, old.SourceID)
+	if err != nil {
+		return audit.PushLifecycleEvent{}, err
 	}
 	names, err := scopeNames(old.Scopes)
 	if err != nil {
-		return audit.PushLifecycleEvent{}, false, err
+		return audit.PushLifecycleEvent{}, err
 	}
 	snapshot := createdChange(old.ID, names, old.ExpiresAt)
 	return audit.PushLifecycleEvent{EventType: externalpush.Revoked, AggregateID: old.ID.String(),
-		OrganizationID: organization, SourceID: source,
-		Change: externalpush.Change{Status: "revoked"}, Snapshot: &snapshot}, true, nil
+		OrganizationID: organization, Binding: binding, SourceID: source,
+		Change: externalpush.Change{Status: "revoked"}, Snapshot: &snapshot}, nil
 }
 
 // rotatedEvents is a rotation: the new token's rotated event and the old
 // token's revoked event, appended together.
 func rotatedEvents(old tokenRow, next newToken) ([]audit.PushLifecycleEvent, error) {
-	revoked, ok, err := revokedEvent(old)
-	if err != nil || !ok {
+	revoked, err := revokedEvent(old)
+	if err != nil {
 		return nil, err
 	}
 	created, err := createdEvents(next)
-	if err != nil || len(created) == 0 {
+	if err != nil {
 		return nil, err
 	}
 	rotated := created[0]

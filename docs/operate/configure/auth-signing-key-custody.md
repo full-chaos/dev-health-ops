@@ -42,7 +42,7 @@ auth-service checks the key file on every readiness request. The file must pass 
 
 A fault of the file does not stop the process. The process starts, `/healthz` stays 200, and `/readyz` answers
 503 with the reason: `key_file_unreadable`, `key_file_not_regular`, `key_file_mode_too_permissive`,
-`key_file_too_large`, `key_file_not_pem`, `key_file_ambiguous_pem` or `key_file_unparseable`.
+`key_file_too_large`, `key_file_not_pem`, `key_file_ambiguous_pem`, `key_file_unparseable` or `key_file_wrong_algorithm`.
 Under the eddsa class every route that mints a token checks the key first and answers 503 if it fails.
 The readiness check also signs a probe with the active key and verifies it with the published public key.
 

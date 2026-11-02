@@ -132,7 +132,8 @@ cookie value, ends here.
 
 **What the verifier does meanwhile.** It serves keys from memory for 5 minutes, then for 10 more minutes
 (grace) while refreshes fail. Tokens of a key it already holds keep verifying in that time. A `kid` it does not
-hold gets `503`. After the grace, every token gets `503`.
+hold gets `503`. After the grace, every token that passes the contract check gets `503`. A token that fails the
+contract check is checked before any key is read and keeps its `401` (`malformed`).
 
 **Causes and checks.** The refresh fails if any of these is true. Test each from the verifier's network.
 

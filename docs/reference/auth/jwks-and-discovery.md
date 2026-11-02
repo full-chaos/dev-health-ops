@@ -83,9 +83,10 @@ The client works like this:
    `ErrKeySourceUnavailable`. go-api and query-api answer `503` for it, not `401`. A `kid` that is in
    memory still verifies inside the grace time.
 
-go-api and query-api keep no list of denied `kid` values. A key that leaves the JWKS stops verifying when
-each verifier's memory of it ends, at most `CacheTTL` after its last good refresh, and a
-compromised key also needs the sessions that hold its tokens revoked.
+go-api and query-api keep no list of denied `kid` values. A successful refresh replaces the
+keys in memory, so a key that left the JWKS stops verifying at the first successful refresh after it left. While
+refreshes fail, the old keys stay usable until `CacheTTL` plus `OutageGrace` after the last good refresh (15 minutes
+with the defaults). A compromised key also needs the sessions that hold its tokens revoked.
 
 ## Check the documents by hand
 

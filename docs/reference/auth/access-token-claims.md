@@ -97,8 +97,9 @@ The EdDSA verifier decides in this order. The first failure ends the check.
 go-api and query-api set no leeway: a clock difference shows at once. The SDK `Verifier` accepts a leeway of 0
 to 60 seconds, in whole seconds.
 
-A key source that cannot be read is not a refusal. The caller gets `503`, not `401`, and the label is
-`unavailable`. Every refusal answers `401` with a generic body. The reason is in the log at debug level and in
+The contract check (step 1) runs before the key lookup, so a token that fails it gets `401` even during an
+outage. A token that passes the contract check and needs a key that cannot be read is not a refusal: the caller
+gets `503`, not `401`, and the label is `unavailable`. Every refusal answers `401` with a generic body. The reason is in the log at debug level and in
 the counter `devhealth_auth_access_token_refused_total` (labels `service`, `profile`, `reason`). The counter
 `devhealth_auth_access_token_accepted_total` has the label `class`: `user_access_token` or
 `ops_access_token_hs256`.

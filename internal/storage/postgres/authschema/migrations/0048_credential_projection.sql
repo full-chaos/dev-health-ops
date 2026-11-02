@@ -9,7 +9,7 @@
 -- External Push consumer and the acr endpoint share one set of tables and one
 -- rule set: domain_owner is the credential_registry's value (external_push, acr).
 --
---   push_sources                 one external_source principal per (organization, source)
+--   push_sources                 one external_source principal per (organization, source), and one per organization
 --   credential_projection        one row per credential: the last applied state
 --   credential_projection_digest one row per (credential, revision) decided: the digest of
 --                                the event body, so a same-revision delivery with another
@@ -29,19 +29,24 @@ ALTER TABLE credential_registry
 
 ALTER TABLE credential_registry VALIDATE CONSTRAINT credential_registry_revoked_reason_code;
 
+-- One external_source principal per (organization, source) and ONE per organization for the organization-bound
+-- credentials (answers-10896-4; an organization-bound event has no source). A null source_id is the organization's
+-- principal, so each key is a partial UNIQUE: a plain unique key would treat two null sources as different.
 CREATE TABLE push_sources (
+    principal_id    uuid        PRIMARY KEY REFERENCES principals (id) ON DELETE RESTRICT,
     organization_id uuid        NOT NULL REFERENCES organizations (id) ON DELETE RESTRICT,
-    source_id       text        NOT NULL CHECK (source_id ~ '^[A-Za-z0-9_-]{1,64}$'),
-    principal_id    uuid        NOT NULL UNIQUE REFERENCES principals (id) ON DELETE RESTRICT,
-    created_at      timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (organization_id, source_id)
+    source_id       text        CHECK (source_id IS NULL OR source_id ~ '^[A-Za-z0-9_-]{1,64}$'),
+    created_at      timestamptz NOT NULL DEFAULT now()
 );
+CREATE UNIQUE INDEX push_sources_source_key ON push_sources (organization_id, source_id) WHERE source_id IS NOT NULL;
+CREATE UNIQUE INDEX push_sources_organization_key ON push_sources (organization_id) WHERE source_id IS NULL;
 
 CREATE TABLE credential_projection (
     domain_owner              text        NOT NULL CHECK (domain_owner IN ('external_push', 'acr')),
     external_reference        text        NOT NULL CHECK (external_reference ~ '^[A-Za-z0-9_-]{1,128}$'),
-    organization_id           uuid        NOT NULL,
-    source_id                 text        NOT NULL,
+    organization_id           uuid        NOT NULL REFERENCES organizations (id) ON DELETE RESTRICT,
+    binding                   text        NOT NULL CHECK (binding IN ('source', 'organization')),
+    source_id                 text,
     revision                  bigint      NOT NULL CHECK (revision >= 1),
     max_seen_revision         bigint      NOT NULL CHECK (max_seen_revision >= revision),
     status                    text        NOT NULL CHECK (status IN ('active', 'revoked', 'expired')),
@@ -56,7 +61,7 @@ CREATE TABLE credential_projection (
     owner_subject             text,
     updated_at                timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (domain_owner, external_reference),
-    FOREIGN KEY (organization_id, source_id) REFERENCES push_sources (organization_id, source_id) ON DELETE RESTRICT,
+    CONSTRAINT credential_projection_binding_source CHECK ((binding = 'source') = (source_id IS NOT NULL)),
     CONSTRAINT credential_projection_terminal_shape
         CHECK ((status = 'active') = (terminal_at IS NULL))
 );

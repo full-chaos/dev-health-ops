@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/pushlifecycle"
@@ -699,5 +700,28 @@ func TestProjectTheOrganizationPrincipalHoldsNoCapabilityASourcePrincipalLacks(t
 		if n := e.count(t, `SELECT count(*) FROM auth.push_sources s JOIN auth.principals p ON p.id = s.principal_id WHERE s.organization_id = $1 AND `+where+` AND p.kind = 'external_source'`, org); n != 1 {
 			t.Errorf("the %s principal is not of kind external_source", kind)
 		}
+	}
+}
+
+// The partial UNIQUE keys hold the one-principal-per-organization rule in the database, whatever the engine does: a second
+// organization principal row of one organization is refused.
+func TestProjectASecondOrganizationPrincipalRowIsRefusedByThePartialUnique(t *testing.T) {
+	e := getEnv(t, true)
+	org := e.org(t)
+	mustOutcome(t, e.project(t, orgBound(org, "ingest:write").input()), pushlifecycle.Applied)
+	second := uuid.New()
+	err := audit.Commit(context.Background(), e.admin, e.schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			if _, err := tx.Exec(ctx, `INSERT INTO auth.principals (id, kind, display_name) VALUES ($1, 'external_source', 'second')`, second); err != nil {
+				return err
+			}
+			_, err := tx.Exec(ctx, `INSERT INTO auth.push_sources (organization_id, source_id, principal_id) VALUES ($1, NULL, $2)`, org, second)
+			return err
+		},
+		Audit:     audit.AuditEvent{EventType: "credential.test", Outcome: audit.OutcomeAllowed},
+		OffStream: audit.OffStreamWorkloadRegistry,
+	})
+	if err == nil {
+		t.Fatal("a second organization principal row was accepted, want a unique violation")
 	}
 }

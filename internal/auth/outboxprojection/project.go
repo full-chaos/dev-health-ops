@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/pushlifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/auth/restorefence"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -96,6 +97,7 @@ func (e *Engine) Project(ctx context.Context, in Input) (Result, error) {
 	if in.Domain == DomainAcr {
 		// For acr the fingerprint is derived, not read.
 		in.Event.Payload.Change.Fingerprint = AcrFingerprint(in.Event.AggregateID)
+		in.Event.Payload.Binding = contracts.ExternalPushBindingSource
 	}
 	if e.cfg.ProjectOrganization != nil {
 		found, err := e.cfg.ProjectOrganization(ctx, organization)

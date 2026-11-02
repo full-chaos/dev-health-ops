@@ -138,7 +138,7 @@ func (e *Engine) apply(ctx context.Context, tx audit.TxOps, in Input, organizati
 // lock takes the row FOR UPDATE.
 func (e *Engine) load(ctx context.Context, tx audit.TxOps, domain Domain, reference string, organization uuid.UUID, lock bool) (stored, bool, error) {
 	query := `SELECT p.revision, p.max_seen_revision, p.status, p.fingerprint, p.scopes, p.rotation_parent_reference, p.expires_at, p.terminal_at,
-		p.principal_id, p.registry_id, p.source_id, r.revoked_at, r.expires_at
+		p.principal_id, p.registry_id, p.binding, p.source_id, r.revoked_at, r.expires_at
 		FROM ` + e.q + `.credential_projection p JOIN ` + e.q + `.credential_registry r ON r.id = p.registry_id
 		WHERE p.domain_owner = $1 AND p.external_reference = $2 AND p.organization_id = $3`
 	if lock {
@@ -146,12 +146,13 @@ func (e *Engine) load(ctx context.Context, tx audit.TxOps, domain Domain, refere
 	}
 	var (
 		s                  stored
-		status, source     string
+		status, binding    string
+		source             *string
 		parentRef, expires *string
 		terminal           *time.Time
 	)
 	err := tx.QueryRow(ctx, query, string(domain), reference, organization).Scan(&s.state.Revision, &s.maxSeen, &status, &s.state.Fingerprint,
-		&s.state.Scopes, &parentRef, &expires, &terminal, &s.principal, &s.registry, &source, &s.revokedAt, &s.registryExp)
+		&s.state.Scopes, &parentRef, &expires, &terminal, &s.principal, &s.registry, &binding, &source, &s.revokedAt, &s.registryExp)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return stored{}, false, nil
 	}
@@ -160,7 +161,10 @@ func (e *Engine) load(ctx context.Context, tx audit.TxOps, domain Domain, refere
 	}
 	s.state.AggregateID = reference
 	s.state.OrganizationID = "org_" + organization.String()
-	s.state.SourceID = source
+	s.state.Binding = binding
+	if source != nil {
+		s.state.SourceID = *source
+	}
 	s.state.Status = pushlifecycle.Status(status)
 	if parentRef != nil {
 		s.state.RotationParentID = *parentRef
@@ -174,14 +178,21 @@ func (e *Engine) load(ctx context.Context, tx audit.TxOps, domain Domain, refere
 	return s, true, nil
 }
 
-// ensureSource returns the external_source principal of (organization, source),
-// creating it and its sources row on the first event of the pair.
+// ensureSource returns the external_source principal of (organization, source), creating it and its sources row on
+// the first event of the pair. An empty source is the organization's own principal (organization-bound credentials):
+// it is created with the first organization-bound event, in the same transaction, and kept when its credentials end
+// (it holds audit history). The advisory lock serializes concurrent first events; each key is also a partial UNIQUE.
 func (e *Engine) ensureSource(ctx context.Context, tx audit.TxOps, organization uuid.UUID, source string) (uuid.UUID, error) {
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "push_source:"+organization.String()+":"+source); err != nil {
+	var sourceID *string
+	display := "organization"
+	if source != "" {
+		sourceID, display = &source, source
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "push_source:"+organization.String()+":"+fmt.Sprint(sourceID != nil)+":"+source); err != nil {
 		return uuid.Nil, err
 	}
 	var id uuid.UUID
-	err := tx.QueryRow(ctx, `SELECT principal_id FROM `+e.q+`.push_sources WHERE organization_id = $1 AND source_id = $2`, organization, source).Scan(&id)
+	err := tx.QueryRow(ctx, `SELECT principal_id FROM `+e.q+`.push_sources WHERE organization_id = $1 AND source_id IS NOT DISTINCT FROM $2::text`, organization, sourceID).Scan(&id)
 	if err == nil {
 		return id, nil
 	}
@@ -189,10 +200,10 @@ func (e *Engine) ensureSource(ctx context.Context, tx audit.TxOps, organization 
 		return uuid.Nil, err
 	}
 	id = uuid.New()
-	if _, err := tx.Exec(ctx, `INSERT INTO `+e.q+`.principals (id, kind, display_name) VALUES ($1, 'external_source', $2)`, id, source); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO `+e.q+`.principals (id, kind, display_name) VALUES ($1, 'external_source', $2)`, id, display); err != nil {
 		return uuid.Nil, err
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO `+e.q+`.push_sources (organization_id, source_id, principal_id) VALUES ($1, $2, $3)`, organization, source, id); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO `+e.q+`.push_sources (organization_id, source_id, principal_id) VALUES ($1, $2, $3)`, organization, sourceID, id); err != nil {
 		return uuid.Nil, err
 	}
 	return id, nil
@@ -256,7 +267,10 @@ func (e *Engine) upsertProjection(ctx context.Context, tx audit.TxOps, in Input,
 		t := next.TerminalAt.UTC()
 		terminal = &t
 	}
-	var parent, expires, class, owner *string
+	var parent, expires, class, owner, sourceValue *string
+	if next.SourceID != "" {
+		sourceValue = &next.SourceID
+	}
 	if next.Scopes == nil {
 		next.Scopes = []string{}
 	}
@@ -275,14 +289,14 @@ func (e *Engine) upsertProjection(ctx context.Context, tx audit.TxOps, in Input,
 		}
 	}
 	_, err := tx.Exec(ctx, `INSERT INTO `+e.q+`.credential_projection AS p
-		(domain_owner, external_reference, organization_id, source_id, revision, max_seen_revision, status, fingerprint, scopes,
+		(domain_owner, external_reference, organization_id, binding, source_id, revision, max_seen_revision, status, fingerprint, scopes,
 		 rotation_parent_reference, expires_at, terminal_at, principal_id, registry_id, acr_class, owner_subject)
-		VALUES ($1, $2, $3, $4, $5, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		VALUES ($1, $2, $3, $4, $5, $6, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 		ON CONFLICT (domain_owner, external_reference) DO UPDATE SET
 		  revision = EXCLUDED.revision, max_seen_revision = GREATEST(p.max_seen_revision, EXCLUDED.revision),
 		  status = EXCLUDED.status, scopes = EXCLUDED.scopes, expires_at = EXCLUDED.expires_at,
 		  terminal_at = EXCLUDED.terminal_at, updated_at = clock_timestamp()`,
-		string(in.Domain), next.AggregateID, organization, next.SourceID, next.Revision, string(next.Status), next.Fingerprint, next.Scopes,
+		string(in.Domain), next.AggregateID, organization, next.Binding, sourceValue, next.Revision, string(next.Status), next.Fingerprint, next.Scopes,
 		parent, expires, terminal, principal, registry, class, owner)
 	return err
 }

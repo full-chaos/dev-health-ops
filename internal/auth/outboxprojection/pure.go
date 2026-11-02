@@ -119,8 +119,9 @@ var (
 // ErrMalformed names why an input cannot be keyed.
 var ErrMalformed = errors.New("outboxprojection: malformed input")
 
-// Check refuses an input the store cannot key. An event with no source_id is
-// malformed until organization-wide credentials exist (CHAOS-12358).
+// Check refuses an input the store cannot key. A source-bound event names its source; an organization-bound event
+// (CHAOS-12358) names none, and its principal is the organization's. An acr event is always source-bound: the engine
+// derives its binding.
 func (in Input) Check() error {
 	e := in.Event
 	switch {
@@ -140,8 +141,14 @@ func (in Input) Check() error {
 		return fmt.Errorf("%w: aggregate id", ErrMalformed)
 	case e.Payload.Revision < 1:
 		return fmt.Errorf("%w: revision", ErrMalformed)
-	case !sourcePattern.MatchString(e.Payload.SourceID):
+	case in.Domain == DomainAcr && !sourcePattern.MatchString(e.Payload.SourceID):
 		return fmt.Errorf("%w: source id", ErrMalformed)
+	case in.Domain == DomainExternalPush && e.Payload.Binding != contracts.ExternalPushBindingSource && e.Payload.Binding != contracts.ExternalPushBindingOrganization:
+		return fmt.Errorf("%w: binding", ErrMalformed)
+	case in.Domain == DomainExternalPush && e.Payload.Binding == contracts.ExternalPushBindingSource && !sourcePattern.MatchString(e.Payload.SourceID):
+		return fmt.Errorf("%w: source id", ErrMalformed)
+	case in.Domain == DomainExternalPush && e.Payload.Binding == contracts.ExternalPushBindingOrganization && e.Payload.SourceID != "":
+		return fmt.Errorf("%w: an organization-bound event names no source", ErrMalformed)
 	}
 	if _, err := ParseOrganization(e.Payload.OrganizationID); err != nil {
 		return err

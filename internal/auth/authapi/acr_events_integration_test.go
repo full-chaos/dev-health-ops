@@ -298,7 +298,7 @@ func TestAcrEventsIssuedWritesEveryRow(t *testing.T) {
 		t.Fatalf("registry rows = %d", got)
 	}
 	if got := l.count(t, `SELECT count(*) FROM auth.credential_projection WHERE domain_owner = 'acr' AND external_reference = $1
-		AND organization_id = $2 AND revision = 1 AND status = 'active' AND acr_class = 'org_bearer' AND owner_subject = 'subject_EXAMPLE0000000001'`, id, l.org); got != 1 {
+		AND organization_id = $2 AND binding = 'source' AND source_id = 'acr' AND revision = 1 AND status = 'active' AND acr_class = 'org_bearer' AND owner_subject = 'subject_EXAMPLE0000000001'`, id, l.org); got != 1 {
 		t.Fatalf("projection rows = %d", got)
 	}
 	if got := l.count(t, `SELECT count(*) FROM auth.credential_projection_digest WHERE external_reference = $1 AND revision = 1`, id); got != 1 {

@@ -42,7 +42,8 @@ const (
 	// decisionstate builds the membership from the pair it read: its org id is
 	// always the asked organization, so org_mismatch on a membership is unreachable.
 	azMembershipOrgIsTheKey azExclusion = "membership_org_is_the_key"
-	// Delegated sessions are decided by #5537; PR-B replays these rows after it.
+	// The router denies every delegated session delegation_invalid until the
+	// decision core decides delegation on this route.
 	azDelegatedSessionPending azExclusion = "delegated_session_pending"
 )
 

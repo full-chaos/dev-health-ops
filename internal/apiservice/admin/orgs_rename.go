@@ -20,7 +20,7 @@ const ownedNameMax = 100
 // orgsOwned is AUTH_ORGS_OWNED: auth-service writes organizations.name and
 // is_active, so the admin PATCH sends the name there first and leaves both
 // columns alone in its own write.
-func (h *handlers) orgsOwned() bool { return false }
+func (h *handlers) orgsOwned() bool { return OrgsOwned() }
 
 // OrgsOwned reads AUTH_ORGS_OWNED (usersowned.OrgsOn); the organization state reconciler does not start while it is on.
 func OrgsOwned() bool { return usersowned.OrgsOn() }

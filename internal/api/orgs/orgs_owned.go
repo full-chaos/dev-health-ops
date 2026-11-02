@@ -28,7 +28,7 @@ var errAnswered = errors.New("orgs: the request was answered")
 // orgsOwned is AUTH_ORGS_OWNED: auth-service writes organizations.name, so
 // PATCH /api/v1/orgs/me sends the name there first and writes only the
 // description itself.
-func (h handlers) orgsOwned() bool { return false && usersowned.OrgsOn() }
+func (h handlers) orgsOwned() bool { return usersowned.OrgsOn() }
 
 // nameMax is the name bound the PATCH checks before anything else: 255 as
 // before, or auth-service's 100 while it owns organizations. A stored name

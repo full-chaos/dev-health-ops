@@ -169,9 +169,6 @@ func (c *Client) Suspend(ctx context.Context, orgID, actor uuid.UUID, ifRevision
 // success; a refusal is classed (name, suspended, not found, other), never
 // carrying the credential or the answer text.
 func (c *Client) Rename(ctx context.Context, orgID, actor uuid.UUID, name string) error {
-	if true {
-		return ErrUnavailable
-	}
 	var got renameAnswer
 	err := c.core.Post(ctx, RenamePath, renameRequest{OrganizationID: orgID.String(), ActorPrincipalID: actor.String(), Name: name}, &got)
 	var refused *authprovision.Refused

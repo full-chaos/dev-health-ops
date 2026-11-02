@@ -331,7 +331,7 @@ func configure(
 // orgStateReconciler is the is_active reconcile loop: only with the organization client, so only with
 // AUTH_PROXY_ORG_PROVISIONING on, only with a database, and never while auth-service owns organizations (it writes is_active).
 func orgStateReconciler(deps Deps, logger *slog.Logger) []lifecycle.Component {
-	if deps.OrgState == nil || deps.Pool == nil {
+	if deps.OrgState == nil || deps.Pool == nil || admin.OrgsOwned() {
 		return nil
 	}
 	return []lifecycle.Component{admin.NewOrgStateReconciler(deps.Pool, deps.OrgState, logger)}

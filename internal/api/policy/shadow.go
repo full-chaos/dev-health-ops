@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,9 +41,6 @@ const (
 	shadowPlatformKey     = "platform"
 	shadowClassHeader     = "legacy\tpdp\treason\tnamespace\tclass\tnote"
 )
-
-//go:embed shadow_classes.tsv
-var shadowClassTable []byte
 
 // ShadowRow is one go-api endpoint-profile row that names a catalog action.
 type ShadowRow struct {

@@ -57,6 +57,14 @@ type decisionDocument struct {
 	OrganizationID *string `json:"organization_id"`
 	PolicyRevision int     `json:"policy_revision"`
 	ExpiresAt      string  `json:"expires_at"`
+	// Obligations is set only on the allow of a delegated session.
+	Obligations *wireObligations `json:"obligations,omitempty"`
+}
+
+type wireObligations struct {
+	TenantScope         string   `json:"tenant_scope,omitempty"`
+	MinimumAssurance    string   `json:"minimum_assurance,omitempty"`
+	RepositoryAllowlist []string `json:"repository_allowlist,omitempty"`
 }
 
 type batchDecision struct {

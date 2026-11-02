@@ -190,6 +190,7 @@ func TestAuthorizeDelegatedOtherOrganizationIsDelegationInvalid(t *testing.T) {
 func TestAuthorizeDelegatedWildcardAndPlatformAreImpersonationDenied(t *testing.T) {
 	h := newAuthorizeHandlerFixture(t)
 	h.delegate("acr.context.read", "admin.users")
+	h.state.snapshots[snapKey{h.principal, ""}].platformRole = "platform_admin"
 	for name, q := range map[string]map[string]any{
 		"wildcard repository": h.question("acr.context.read", "repository", "*", h.org),
 		"platform action":     h.question("admin.users", "platform", "platform", ""),

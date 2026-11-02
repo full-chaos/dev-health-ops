@@ -20,8 +20,8 @@ lifecycle: active
 An authorization decision answers one question: may this principal perform this action on this resource. A decision that allows may carry obligations. An obligation is a condition the resource service must enforce on the allowed request.
 {: .fc-page-lede }
 
-!!! warning "Contract only"
-    The wire contract and the Go parser exist on `main`. No service issues a decision and no service enforces an obligation. The auth-service has no authorize route (`contracts/auth/v1/openapi/auth-v1.openapi.json` lists the session, identity and discovery routes only). The decision point is planned in CHAOS-10841 (`POST /v1/authorize` and `POST /v1/authorize:batch`) and obligations in CHAOS-10839. See [Status](#status).
+!!! note "Delegated sessions only"
+    `POST /v1/authorize` and `POST /v1/authorize:batch` exist on `main` (CHAOS-10841) and are dark until the auth-service profile rows mount them. The decision point puts obligations on the allow of a delegated (impersonation) session only: `tenant_scope`, `minimum_assurance` and, for a repository request, a one-key `repository_allowlist`. A plain session's allow carries none. No service enforces an obligation yet. See [Status](#status).
 
 ## Request
 
@@ -41,11 +41,11 @@ A batch request holds 1 to 100 requests. A batch response holds 1 to 100 decisio
 | Member | Rule |
 | --- | --- |
 | `allowed` | Required. A strict JSON boolean. No default. Missing, null, `"true"` or `1` is invalid. |
-| `reason_code` | A closed enum: `allowed_by_repository_grant`, `grant_absent`, `repository_not_granted`, `platform_role_absent`. |
+| `reason_code` | A closed enum, `decision_reason_code` in `contracts/auth/v1/vocabulary/reason-codes.json` (24 values, including `impersonation_denied` and `delegation_invalid`). |
 | `decision_id` | Minted by the server (`dec_` plus 26 characters). Never copied from the caller. |
 | `organization_id` | Null only for a platform or pre-organization decision. |
 | `policy_revision` | The monotonic revision of the active policy set. Every allow-cache key binds it. |
-| `expires_at` | Required for an allow and a deny. After this instant the caller must not reuse the decision for a later request and must ask again. |
+| `expires_at` | Required for an allow and a deny. After this instant the caller must not reuse the decision for a later request and must ask again. The allow of a delegated session expires at the decision time: use it once. |
 | `obligations` | Present only on an allow. A deny that carries `obligations` is invalid. |
 
 ## Obligations
@@ -81,11 +81,11 @@ A decision point failure is an `error.v1` document (503). It is a different sche
 | Part | State |
 | --- | --- |
 | Wire schemas and Go parser | On `main`. |
-| `POST /v1/authorize` and `POST /v1/authorize:batch` | Planned, CHAOS-10841. No route exists. |
-| Actor chain, delegation limits and obligations in the decision point | Planned, CHAOS-10839. |
+| `POST /v1/authorize` and `POST /v1/authorize:batch` | On `main`, dark until the endpoint-profile rows mount them (CHAOS-10841). |
+| Actor chain, delegation limits and obligations in the decision point | Rules in the core (CHAOS-10839). The route reads the delegated row, the delegating session and the actor in one transaction and emits `tenant_scope`, `minimum_assurance` and `repository_allowlist` (CHAOS-12438). The owner-exemption audit event is written by a follow-up change; until then the exemption is a log line. |
 | Policy enforcement points that read obligations | Planned. web: CHAOS-10846 (TypeScript server-only decision client) and CHAOS-10883 (server actions use single decisions). |
 | `step_up` and `minimum_assurance` enforcement | Planned, CHAOS-10839. No MFA factor exists. The decision sheet (`docs/contribute/architecture/auth-control-plane-decision-sheet.md`) records the decision that the vocabulary and enforcement path ship before a factor does, and that the high-risk list is denied during impersonation until step-up exists. |
 | Entitlement-derived obligation | Planned, CHAOS-10837 (entitlement adapter) and CHAOS-10862 (billing and licensing enforcement point). ADR text (`docs/contribute/architecture/auth-control-plane-adrs.md`) allows a decision to carry one. The decision schema defines no entitlement obligation, so adding one is a schema change. |
 | Tenant scope as the go-api and query-api rule | Today the organization comes from `OrgScope` and `OperationOrgGuard`. See [authentication and authorization](authn-authz.md). |
 
-Until the decision point exists, treat every obligation in this page as a contract that a future producer and consumer must meet, not as behaviour of a running service.
+Until a policy enforcement point reads them, treat every obligation in this page as a contract that a consumer must meet, not as enforced behaviour.

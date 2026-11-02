@@ -16,6 +16,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authorization"
+	"github.com/full-chaos/dev-health-ops/internal/auth/delegationinput"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -551,5 +552,60 @@ func TestActorIsReadInTheTransactionSnapshot(t *testing.T) {
 	}
 	if a := e.actor(t, ctx, actor); a.CanImpersonate {
 		t.Fatalf("a new transaction still holds the role: %+v", a)
+	}
+}
+
+type delegatedSnap struct {
+	authorization.GrantSnapshot
+	del authorization.Delegation
+}
+
+func (d delegatedSnap) Delegation() (authorization.Delegation, bool) { return d.del, true }
+
+// A real delegated row, its actor and the target's membership, read in one
+// transaction and decided by the real evaluator.
+func TestDelegatedRowDecidesOverTheRealRows(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	target, actor, org := e.user(t, ctx, true, false), e.user(t, ctx, true, false), e.org(t, ctx)
+	e.exec(t, ctx, `INSERT INTO public.memberships (id, user_id, org_id, role, joined_at) VALUES ($1, $2, $3, 'admin', now())`, uuid.New(), target, org)
+	e.role(t, ctx, actor, "platform_admin")
+	base := e.session(t, ctx, actor, "1 hour", false)
+	id := e.delegatedSession(t, ctx, target, actor, base, org, []string{"analytics.read", "settings.write"})
+	decide := func(action string) authorization.Decision {
+		var d authorization.Decision
+		if err := e.reader.Read(ctx, func(tx authapi.DecisionTx) error {
+			s, err := tx.Session(ctx, id)
+			if err != nil {
+				return err
+			}
+			a, err := tx.Actor(ctx, s.ActorPrincipalID)
+			if err != nil {
+				return err
+			}
+			snap, err := tx.Snapshot(ctx, s.PrincipalID, org.String())
+			if err != nil {
+				return err
+			}
+			d = authorization.NewEvaluator().Evaluate(authorization.Request{Action: action, ResourceKind: "organization", OrganizationID: org.String()},
+				delegatedSnap{snap, delegationinput.Delegation(delegationinput.Facts{
+					Actor: s.ActorPrincipalID, Organization: s.OrganizationID, AMR: s.AMR, PermittedActions: s.PermittedActions,
+					ActorMayImpersonate: a.Active && a.CanImpersonate, ActorOwner: a.Owner,
+				})})
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	if d := decide("analytics.read"); !d.Allowed || d.Obligations == nil || d.Obligations.TenantScope != org.String() || d.Obligations.MinimumAssurance != "aal1" {
+		t.Fatalf("permitted action: %+v %+v", d, d.Obligations)
+	}
+	if d := decide("settings.write"); d.Allowed || d.Reason != authorization.ReasonImpersonationDenied {
+		t.Fatalf("admin actor on a denied action: %+v", d)
+	}
+	e.armed(t, ctx, `UPDATE public.users SET is_active = false WHERE id = $1`, actor)
+	if d := decide("analytics.read"); d.Allowed || d.Reason != authorization.ReasonDelegationInvalid {
+		t.Fatalf("deactivated actor: %+v", d)
 	}
 }

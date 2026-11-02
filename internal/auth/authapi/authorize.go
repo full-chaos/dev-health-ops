@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
@@ -13,6 +14,7 @@ import (
 
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authorization"
+	"github.com/full-chaos/dev-health-ops/internal/auth/delegationinput"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
@@ -74,18 +76,19 @@ type ActorState struct {
 	Owner bool
 }
 
-// delegated reports an impersonation session. The decision core's delegation
-// rules are not wired to this route yet, so such a reference is denied with
-// delegation_invalid instead of being decided as the plain target user.
+// delegated reports an impersonation session: it is decided by the core's
+// delegation rules over the row's own columns, never as the plain target user.
 func (s DecisionSession) delegated() bool { return s.HasActor || s.HasDelegatedFrom }
 
-// delegatedSnapshot makes the decision core deny every request with
-// delegation_invalid: a delegation with an empty actor chain.
-type delegatedSnapshot struct{ authorization.GrantSnapshot }
-
-func (delegatedSnapshot) Delegation() (authorization.Delegation, bool) {
-	return authorization.Delegation{}, true
+// delegatedSnapshot is the effective subject's snapshot with the actor chain of
+// the delegated session. An empty chain denies every request with
+// delegation_invalid.
+type delegatedSnapshot struct {
+	authorization.GrantSnapshot
+	del authorization.Delegation
 }
+
+func (d delegatedSnapshot) Delegation() (authorization.Delegation, bool) { return d.del, true }
 
 // DecisionTx reads decision state inside one read-only transaction. Every
 // error means the state could not be read.
@@ -228,6 +231,7 @@ type authorizeItem struct {
 	principal ReferencedPrincipal
 	decision  authorization.Decision
 	now       int64
+	delegated bool
 }
 
 // decide authenticates the caller, decodes the body, resolves every principal
@@ -300,15 +304,32 @@ func (h authorizeHandlers) decide(w http.ResponseWriter, r *http.Request, op str
 			return nil, false
 		}
 		h.Logger.InfoContext(ctx, "authorize decision", "decision_id", doc.DecisionID, "allowed", doc.Allowed, "reason_code", doc.ReasonCode)
+		// The owner-exemption audit event is written by a follow-up change,
+		// outside this read-only transaction; until then the exemption is only
+		// this log line.
+		if a := item.decision.Audit; a != nil {
+			h.Logger.WarnContext(ctx, "authorize owner exemption", "decision_id", doc.DecisionID, "actor_principal_id", a.ActorPrincipalID,
+				"organization_id", a.OrganizationID, "action", a.Action, "audit_reason", a.Reason)
+		}
 		out[i] = doc
 	}
 	return out, true
 }
 
-// evaluate checks each referenced session once, then decides each item over
-// its (principal, organization) snapshot, read once per pair.
+// referencedSession is a live session a principal reference names, with its
+// actor when it is a delegated session.
+type referencedSession struct {
+	id    uuid.UUID
+	row   DecisionSession
+	actor ActorState
+}
+
+// evaluate checks each referenced session once (and reads the actor of a
+// delegated one once), then decides each item over its (principal,
+// organization, session) snapshot, read once per triple. A delegated session
+// is live only while its delegating session is.
 func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved map[string]ReferencedPrincipal, items []authorizeItem) error {
-	delegatedRefs := map[string]bool{}
+	sessions := map[string]referencedSession{}
 	for ref, p := range resolved {
 		sid, err := session.ParseWireSessionID(p.SessionID)
 		if err != nil {
@@ -318,28 +339,46 @@ func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved
 		if err != nil {
 			return err
 		}
-		if !s.Found || !s.Live || s.PrincipalID != p.ID {
+		if !s.Found || !s.Live || s.PrincipalID != p.ID || (s.delegated() && !s.BaseLive) {
 			return errAuthorizeReferenceRefused
 		}
-		delegatedRefs[ref] = s.delegated()
+		rs := referencedSession{id: sid, row: s}
+		if s.delegated() && s.ActorPrincipalID != uuid.Nil {
+			if rs.actor, err = tx.Actor(ctx, s.ActorPrincipalID); err != nil {
+				return err
+			}
+		}
+		sessions[ref] = rs
 	}
-	type pair struct {
+	type triple struct {
 		principal uuid.UUID
 		org       string
-		delegated bool
+		session   uuid.UUID
 	}
-	snapshots := map[pair]authorization.GrantSnapshot{}
+	snapshots := map[triple]authorization.GrantSnapshot{}
 	for i := range items {
 		q := items[i].question
-		key := pair{items[i].principal.ID, q.OrganizationID, delegatedRefs[q.PrincipalReference]}
+		rs := sessions[q.PrincipalReference]
+		delegated := rs.row.delegated()
+		key := triple{principal: items[i].principal.ID, org: q.OrganizationID}
+		if delegated {
+			key.session = rs.id
+		}
 		snap, ok := snapshots[key]
 		if !ok {
 			var err error
 			if snap, err = tx.Snapshot(ctx, key.principal, key.org); err != nil {
 				return err
 			}
-			if key.delegated {
-				snap = delegatedSnapshot{snap}
+			if delegated {
+				snap = delegatedSnapshot{snap, delegationinput.Delegation(delegationinput.Facts{
+					Actor:               rs.row.ActorPrincipalID,
+					Organization:        rs.row.OrganizationID,
+					AMR:                 rs.row.AMR,
+					PermittedActions:    rs.row.PermittedActions,
+					ActorMayImpersonate: rs.actor.Active && rs.actor.CanImpersonate,
+					ActorOwner:          rs.actor.Owner,
+				})}
 			}
 			snapshots[key] = snap
 		}
@@ -351,12 +390,18 @@ func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved
 			req.ResourceKey = q.ResourceKey
 		}
 		d := h.Evaluator.Evaluate(req, snap)
-		if _, onWire := wireReasonCode(d.Reason); !onWire {
+		if _, onWire := wireReasonCode(d.Reason); !onWire || !obligationsFit(d, delegated) {
 			return errAuthorizeStateFailure
 		}
-		items[i].decision, items[i].now = d, snap.NowUnixNano()
+		items[i].decision, items[i].now, items[i].delegated = d, snap.NowUnixNano(), delegated
 	}
 	return nil
+}
+
+// obligationsFit is the wire rule of obligations: only the allow of a delegated
+// session carries them, and every such allow does.
+func obligationsFit(d authorization.Decision, delegated bool) bool {
+	return (d.Allowed && delegated) == (d.Obligations != nil)
 }
 
 func (h authorizeHandlers) document(item authorizeItem) (decisionDocument, error) {
@@ -373,6 +418,13 @@ func (h authorizeHandlers) document(item authorizeItem) (decisionDocument, error
 		PrincipalID:    session.WirePrincipalID(item.principal.ID),
 		PolicyRevision: item.decision.PolicyRevision,
 		ExpiresAt:      decisionExpiry(item.decision, item.now).Format(expiresAtLayout),
+	}
+	if item.delegated {
+		// A delegated allow is used once: the impersonation can end at any time.
+		doc.ExpiresAt = time.Unix(0, item.now).UTC().Format(expiresAtLayout)
+	}
+	if o := item.decision.Obligations; o != nil {
+		doc.Obligations = &wireObligations{TenantScope: o.TenantScope, MinimumAssurance: o.MinimumAssurance, RepositoryAllowlist: o.RepositoryAllowlist}
 	}
 	if org := item.question.OrganizationID; org != "" {
 		doc.OrganizationID = &org

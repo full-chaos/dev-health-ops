@@ -458,6 +458,12 @@ var additiveExemptions = []additiveExemption{
 		reason: "credential_class admits service_account_key; the redefined list is the 0037 list plus " +
 			"that one value, so it only widens (CHAOS-12273)",
 	},
+	{
+		name:       "principal_kind_external_source",
+		regression: `constraint principals.principals_kind_check redefined "CHECK ((kind = ANY (ARRAY['user'::text, 'service_account'::text, 'workload'::text])))" -> "CHECK ((kind = ANY (ARRAY['user'::text, 'service_account'::text, 'workload'::text, 'external_source'::text])))"`,
+		reason: "principals.kind admits external_source; the redefined list is the 0001 list plus " +
+			"that one value, so it only widens (CHAOS-10896)",
+	},
 }
 
 // TestEveryMigrationStepIsAdditive applies the lineage ONE MIGRATION AT A TIME

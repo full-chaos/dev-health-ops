@@ -594,7 +594,11 @@ func TestReaderMarkNeverPassesAnOldRowItDidNotScan(t *testing.T) {
 		events = append(events, created(org, id))
 	}
 	e.appendCommitted(t, events...)
-	first, last := e.outboxID(t, ids[0], 1), e.outboxID(t, ids[len(ids)-1], 1)
+	// AppendPushLifecycle orders a batch by aggregate id, so the first and last outbox ids are not those of ids[0] and ids[59].
+	var first, last int64
+	if err := e.admin.QueryRow(ctx, `SELECT min(id), max(id) FROM auth.auth_outbox_events WHERE aggregate_id = ANY($1)`, ids).Scan(&first, &last); err != nil {
+		t.Fatal(err)
+	}
 	e.seedOutbox(t, `UPDATE auth.auth_outbox_events SET created_at = now() - interval '2 hours' WHERE aggregate_type = 'external_push_credential' AND id <= $1`, last)
 	undecided := `SELECT COALESCE(min(o.id), 0) FROM auth.auth_outbox_events o WHERE o.id BETWEEN $1 AND $2
 		AND NOT EXISTS (SELECT 1 FROM auth.credential_projection_digest d WHERE d.domain_owner = 'external_push' AND d.external_reference = o.aggregate_id AND d.revision = 1)`

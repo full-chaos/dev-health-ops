@@ -27,7 +27,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/oauthprovider"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
-	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 )
@@ -39,8 +38,6 @@ type Deps struct {
 	Auth     *policy.Authenticator
 	Verifier *edgetoken.Verifier
 	Signer   *edgetoken.Signer
-	// RefreshAccepted counts each HS256 refresh token Verifier accepts; nil counts nothing.
-	RefreshAccepted *accessverify.RefreshCounter
 	// ClickHouse is the api's own ClickHouse login (organization activity); nil means none (no CLICKHOUSE_URI).
 	ClickHouse driver.Conn
 	// Limits is where the rate limits count: the api's shared counter

@@ -60,7 +60,9 @@ func TestRefreshCountsAnAcceptedHS256RefreshTokenAndNothingElse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := handlers{Deps: Deps{Verifier: verifier, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), RefreshAccepted: counter}}
+	h := handlers{Deps: Deps{Verifier: verifier, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}}
+	SetRefreshAccepted(counter)
+	t.Cleanup(func() { SetRefreshAccepted(nil) })
 	now := time.Now()
 	refresh, err := signer.Refresh(edgetoken.RefreshClaims{UserID: "11111111-1111-1111-1111-111111111111"}, now, "jti-1")
 	if err != nil {

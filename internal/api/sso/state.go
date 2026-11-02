@@ -34,13 +34,9 @@ import (
 const oidcStateTTL = 10 * time.Minute
 
 // oidcStateHKDFInfo is the fixed HKDF info string deriving the state's
-// AES-256-GCM key from the api's own JWT_SECRET_KEY (Deps.StateSecret; the
-// literal value apiservice/service.go passes is
-// deps.GitHubStateSigner.Secret, the SAME cfg.APIJWTSecret.Reveal() every
-// other short-lived signed/encrypted token in this codebase derives from
-// -- no new env var). A fixed, distinct info string is what keeps this
-// derived key independent of the access/refresh token key and the
-// GitHub-App install-state key even though root secret is shared.
+// AES-256-GCM key from Deps.StateSecret (SSO_STATE_SECRET, else the api's
+// JWT_SECRET_KEY). A fixed, distinct info string keeps this derived key
+// independent of the OAuth and SAML state keys derived from the same root.
 const oidcStateHKDFInfo = "dev-health-ops:oidc-state-aead-v1"
 
 // Python's generate_oidc_authorization_request (services/sso.py:471-519)

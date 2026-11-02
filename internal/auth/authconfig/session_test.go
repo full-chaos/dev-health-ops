@@ -245,3 +245,12 @@ func TestRateLimitKeyIsRefusedShortOrWithoutTheSessionSecrets(t *testing.T) {
 		}
 	}
 }
+
+func TestRateLimitKeyEqualToAnotherPurposesKeyIsRefused(t *testing.T) {
+	env := sessionEnv(testAccessSecret, testSuccessorKey)
+	env[EnvRateLimitKey] = testAccessSecret
+	_, err := Load(Spec{LookupEnv: lookupFrom(env)})
+	if err == nil || !strings.Contains(err.Error(), EnvRateLimitKey) || strings.Contains(err.Error(), testAccessSecret) {
+		t.Fatalf("got %v, want an error naming %s, not its value", err, EnvRateLimitKey)
+	}
+}

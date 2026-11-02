@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -12,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/audit"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 )
 
@@ -65,12 +67,21 @@ func refreshResponse(access, refresh string, user *pyjson.Object) *pyjson.Object
 	return out
 }
 
+// refreshAccepted counts each HS256 refresh token the refresh route accepts;
+// nil counts nothing. It is a variable of this package, not a Deps field,
+// because the endpoint-profile rows pin line numbers in session.go.
+var refreshAccepted atomic.Pointer[accessverify.RefreshCounter]
+
+// SetRefreshAccepted sets the counter the refresh route counts accepted HS256 refresh tokens with.
+func SetRefreshAccepted(counter *accessverify.RefreshCounter) { refreshAccepted.Store(counter) }
+
 func (h handlers) verifyRefresh(ctx context.Context, token string) (jwt.MapClaims, error) {
 	claims, err := h.Verifier.VerifyType(token, edgetoken.RefreshType)
 	if err != nil {
 		h.Logger.DebugContext(ctx, "refresh token refused", "reason", edgetoken.ReasonOf(err))
 		return nil, err
 	}
+	refreshAccepted.Load().Accepted(ctx)
 	return claims, nil
 }
 

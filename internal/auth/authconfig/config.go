@@ -727,6 +727,10 @@ func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 	if err != nil {
 		return SessionTokens{}, err
 	}
+	rateKey, hasRateKey, err := secrets.ResolveSecret(EnvRateLimitKey, lookup)
+	if err != nil {
+		return SessionTokens{}, err
+	}
 	linkRoutes, err := strictBool(lookup, EnvSocialLinkRoutes)
 	if err != nil {
 		return SessionTokens{}, err
@@ -740,7 +744,19 @@ func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 			return SessionTokens{}, fmt.Errorf("%s needs the session secrets (%s and %s)",
 				EnvLoginLockoutKey, EnvAccessTokenSecret, EnvSessionSuccessorKey)
 		}
+		if hasRateKey {
+			return SessionTokens{}, fmt.Errorf("%s needs the session secrets (%s and %s)",
+				EnvRateLimitKey, EnvAccessTokenSecret, EnvSessionSuccessorKey)
+		}
 		return out, nil
+	}
+	if hasRateKey && rateKey.Reveal() == access.Reveal() {
+		return SessionTokens{}, fmt.Errorf("%s must differ from %s: one key per purpose", EnvRateLimitKey, EnvAccessTokenSecret)
+	}
+	if hasRateKey && len([]rune(rateKey.Reveal())) < minAccessTokenSecretLength {
+		return SessionTokens{}, fmt.Errorf(
+			"%s must be at least %d characters", EnvRateLimitKey, minAccessTokenSecretLength,
+		)
 	}
 	if len([]rune(access.Reveal())) < minAccessTokenSecretLength {
 		return SessionTokens{}, fmt.Errorf(
@@ -753,6 +769,7 @@ func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 		)
 	}
 	out.Enabled, out.AccessSecret, out.SuccessorKey = true, access, successor
+	out.RateLimitKey = rateKey
 	out.SocialLinkRoutes = linkRoutes
 	lockout, _, err := secrets.ResolveSecret(EnvLoginLockoutKey, lookup)
 	if err != nil {

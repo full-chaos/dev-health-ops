@@ -16,6 +16,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
@@ -114,6 +115,7 @@ type compatHandlers struct {
 	login *local.Service
 
 	loginIP, loginAccount, refresh *httpapi.KeyedLimiter
+	refreshAccepted                *accessverify.RefreshCounter
 }
 
 // CompatRoutes returns go-api's refresh and logout, and login and
@@ -143,7 +145,11 @@ func compatRoutes(deps CompatDeps, rows []byte) ([]httpapi.Route, error) {
 	if deps.Limits == nil {
 		return nil, errNoLimits
 	}
-	h := compatHandlers{CompatDeps: deps, rec: rec, refresh: deps.Limits.limiter(refreshLimit)}
+	refreshAccepted, err := accessverify.NewRefreshCounter(meter, AccessService)
+	if err != nil {
+		return nil, err
+	}
+	h := compatHandlers{CompatDeps: deps, rec: rec, refresh: deps.Limits.limiter(refreshLimit), refreshAccepted: refreshAccepted}
 	routes := []httpapi.Route{
 		{Method: http.MethodPost, Pattern: PatternCompatRefresh, Handler: http.HandlerFunc(h.compatRefresh)},
 		{Method: http.MethodPost, Pattern: PatternCompatLogout, Handler: http.HandlerFunc(h.compatLogout)},
@@ -505,6 +511,7 @@ func (h compatHandlers) exchangeLegacy(w http.ResponseWriter, r *http.Request, t
 		h.refuseCompat(w, r, opCompatRefresh, http.StatusUnauthorized, string(session.ReasonRefreshUnknown), textInvalidRefresh)
 		return session.Result{}, nil, false, nil
 	}
+	h.refreshAccepted.Accepted(ctx)
 	err = h.Projector.Project(ctx, legacy.PrincipalID)
 	if err == nil && legacy.OrganizationID != nil {
 		err = h.Projector.ProjectOrganization(ctx, *legacy.OrganizationID)

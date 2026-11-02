@@ -287,7 +287,7 @@ func TestAcrEventsIssuedWritesEveryRow(t *testing.T) {
 	l := newAcrLive(t, true)
 	id := acrID()
 	l.want(t, l.issued(id), http.StatusNoContent, "")
-	fingerprint := pushlifecycle.AcrFingerprint(id)
+	fingerprint := outboxprojection.AcrFingerprint(id)
 	if got := l.count(t, `SELECT count(*) FROM auth.push_sources s JOIN auth.principals p ON p.id = s.principal_id
 		WHERE s.organization_id = $1 AND s.source_id = 'acr' AND p.kind = 'external_source'`, l.org); got != 1 {
 		t.Fatalf("source principals = %d", got)

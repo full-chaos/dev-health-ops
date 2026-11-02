@@ -296,7 +296,7 @@ func TestAcrEventsHandTheEngineTheEventAndTheDigestOfThePostedBytes(t *testing.T
 	if in.Actor != uuidOfWire(t, a.subject) {
 		t.Fatalf("actor = %s, want the verified workload", in.Actor)
 	}
-	if in.Event.AggregateID != "cred_exampleaaaaaaaaaa" || in.Event.Payload.SourceID != "acr" || in.Event.Payload.Change.Fingerprint == "" {
+	if in.Event.AggregateID != "cred_exampleaaaaaaaaaa" || in.Event.Payload.SourceID != "acr" || in.Event.Payload.Change.Fingerprint != "" {
 		t.Fatalf("event = %+v", in.Event)
 	}
 }

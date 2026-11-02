@@ -10,14 +10,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 )
 
-func TestAcrFingerprintIsThePublicHashOfTheID(t *testing.T) {
-	if got, want := AcrFingerprint("cred_exampleparentaaa"), "b04d9435b4621ea9"; got != want {
-		t.Fatalf("AcrFingerprint = %q, want %q", got, want)
-	}
-}
-
 // FromAcr holds over every valid example: each event type maps, a revision 1
-// event carries the fingerprint, and a later one does not.
+// event carries no fingerprint: the engine derives it.
 func TestFromAcrMapsEveryValidExample(t *testing.T) {
 	wd, err := os.Getwd()
 	if err != nil {
@@ -55,8 +49,8 @@ func TestFromAcrMapsEveryValidExample(t *testing.T) {
 			mapped.Payload.OrganizationID != event.Payload.OrganizationID || mapped.Payload.SourceID != AcrSourceID {
 			t.Errorf("%s: mapped = %+v", filepath.Base(name), mapped)
 		}
-		if (mapped.Payload.Change.Fingerprint != "") != (event.Payload.Revision == 1) {
-			t.Errorf("%s: fingerprint %q at revision %d", filepath.Base(name), mapped.Payload.Change.Fingerprint, event.Payload.Revision)
+		if mapped.Payload.Change.Fingerprint != "" {
+			t.Errorf("%s: fingerprint %q at revision %d, want none", filepath.Base(name), mapped.Payload.Change.Fingerprint, event.Payload.Revision)
 		}
 		text, err := json.Marshal(mapped)
 		if err != nil {

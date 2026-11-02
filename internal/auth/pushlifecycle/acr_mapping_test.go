@@ -15,6 +15,8 @@ import (
 // push rules and cannot drift.
 const (
 	acrParentID = "cred_exampleparentaaa"
+	// The engine derives the acr fingerprint; Apply only needs one at creation.
+	acrTestFingerprint = "00112233445566ff"
 )
 
 func acrEvent(t *testing.T, name string) contracts.AcrCredentialLifecycleEvent {
@@ -40,7 +42,11 @@ func acrEvent(t *testing.T, name string) contracts.AcrCredentialLifecycleEvent {
 
 func applyAcr(t *testing.T, state State, e contracts.AcrCredentialLifecycleEvent, parent *State) (State, Outcome) {
 	t.Helper()
-	return Apply(state, FromAcr(e), parent)
+	mapped := FromAcr(e)
+	if e.Payload.Revision == 1 {
+		mapped.Payload.Change.Fingerprint = acrTestFingerprint
+	}
+	return Apply(state, mapped, parent)
 }
 
 func mustApplyAcr(t *testing.T, state State, e contracts.AcrCredentialLifecycleEvent, parent *State) State {

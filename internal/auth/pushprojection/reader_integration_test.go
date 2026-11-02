@@ -205,6 +205,23 @@ func (e *env) seed(t *testing.T, sql string, args ...any) {
 	}
 }
 
+// seedOutbox runs one statement against the guarded outbox the way the audit package's publisher cells do: the guard
+// (migration 0006) counts no outbox write as state, so audit.Commit refuses an outbox-only statement as "changed no state".
+func (e *env) seedOutbox(t *testing.T, sql string, args ...any) {
+	t.Helper()
+	ctx := context.Background()
+	tx := e.begin(t)
+	if _, err := tx.Exec(ctx, `SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, sql, args...); err != nil {
+		t.Fatalf("seedOutbox %q: %v", sql, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func (e *env) outboxID(t *testing.T, aggregate string, revision int) int64 {
 	t.Helper()
 	var id int64
@@ -308,9 +325,9 @@ func TestReaderParksAGapAndOtherAggregatesProceedAndTheSameAggregateWaits(t *tes
 	if rep, err := r.Step(context.Background(), now); err != nil || rep.Applied < 1 {
 		t.Fatalf("setup step: %+v, %v", rep, err)
 	}
-	e.appendCommitted(t, scoped(first, "ingest:write"))
-	e.appendCommitted(t, scoped(first, "ingest:write"))
-	e.appendCommitted(t, scoped(first, "ingest:write"))
+	for i := 0; i < 4; i++ { // revisions 2..5: 4 is the gap, 5 waits behind it
+		e.appendCommitted(t, scoped(first, "ingest:write"))
+	}
 	e.appendCommitted(t, created(org, w))
 	gap, behind := e.outboxID(t, z, 4), e.outboxID(t, z, 5)
 	// Revision 2 is marked decided without being applied: revision 3 then meets a gap.
@@ -393,6 +410,7 @@ func TestReaderParksAnUnknownOrganizationFinallyAndCountsIt(t *testing.T) {
 
 func TestReaderLowWaterMarkMovesOnlyOverRowsOlderThanTheHorizon(t *testing.T) {
 	e := getEnv(t, true)
+	e.drain(t, e.reader(t, time.Hour))
 	org := e.org(t)
 	oldID, recentID := uuid.NewString(), uuid.NewString()
 	e.appendCommitted(t, created(org, oldID))
@@ -404,7 +422,7 @@ func TestReaderLowWaterMarkMovesOnlyOverRowsOlderThanTheHorizon(t *testing.T) {
 		}
 	}
 	ctx := context.Background()
-	e.seed(t, `UPDATE auth.auth_outbox_events SET created_at = now() - interval '2 hours' WHERE aggregate_type = 'external_push_credential' AND id < $1`, recentRow)
+	e.seedOutbox(t, `UPDATE auth.auth_outbox_events SET created_at = now() - interval '2 hours' WHERE aggregate_type = 'external_push_credential' AND id < $1`, recentRow)
 	r := e.reader(t, time.Hour)
 	rep, err := r.Step(ctx, time.Now().Add(2*time.Minute))
 	if err != nil {
@@ -501,7 +519,7 @@ func TestReaperKeepsAPushRowAboveTheCursorAndAStoppedReaderLosesNoRow(t *testing
 		}
 	}
 	guarded := e.seed
-	guarded(t, `UPDATE auth.auth_outbox_events SET published_at = now() - interval '9 days' WHERE id = ANY($1)`, []int64{rowA, rowB})
+	e.seedOutbox(t, `UPDATE auth.auth_outbox_events SET published_at = now() - interval '9 days' WHERE id = ANY($1)`, []int64{rowA, rowB})
 	guarded(t, `DELETE FROM auth.projection_cursor WHERE stream = 'external_push'`)
 	cutoff := time.Now().Add(-7 * 24 * time.Hour)
 	if _, err := audit.Reap(ctx, e.runtime, e.schema, cutoff, 1000); err != nil {
@@ -525,6 +543,7 @@ func TestReaperKeepsAPushRowAboveTheCursorAndAStoppedReaderLosesNoRow(t *testing
 func TestReaderDecidesAStaleRowItReadsSoItIsNeverReadAgain(t *testing.T) {
 	e := getEnv(t, true)
 	ctx := context.Background()
+	e.drain(t, e.reader(t, time.Hour))
 	org, id := e.org(t), uuid.NewString()
 	first := created(org, id)
 	e.appendCommitted(t, first)
@@ -576,7 +595,7 @@ func TestReaderMarkNeverPassesAnOldRowItDidNotScan(t *testing.T) {
 	}
 	e.appendCommitted(t, events...)
 	first, last := e.outboxID(t, ids[0], 1), e.outboxID(t, ids[len(ids)-1], 1)
-	e.seed(t, `UPDATE auth.auth_outbox_events SET created_at = now() - interval '2 hours' WHERE aggregate_type = 'external_push_credential' AND id <= $1`, last)
+	e.seedOutbox(t, `UPDATE auth.auth_outbox_events SET created_at = now() - interval '2 hours' WHERE aggregate_type = 'external_push_credential' AND id <= $1`, last)
 	undecided := `SELECT COALESCE(min(o.id), 0) FROM auth.auth_outbox_events o WHERE o.id BETWEEN $1 AND $2
 		AND NOT EXISTS (SELECT 1 FROM auth.credential_projection_digest d WHERE d.domain_owner = 'external_push' AND d.external_reference = o.aggregate_id AND d.revision = 1)`
 	rep, err := r.Step(ctx, time.Now().Add(2*time.Minute))
@@ -613,9 +632,11 @@ func TestReaderReadsALaterRevisionThatWaitedBehindAParkedHeadOnceTheHeadResolves
 	head := audit.PushLifecycleEvent{Binding: externalpush.BindingSource, EventType: externalpush.Rotated, AggregateID: child, OrganizationID: "org_" + org.String(), SourceID: "src-r",
 		Change: externalpush.Change{Status: "active", Fingerprint: freshFingerprint(), Scopes: []string{"ingest:write"}, RotationParentID: parent}}
 	e.appendCommitted(t, head)
-	e.appendCommitted(t, scoped(head, "ingest:write"))
+	snapshotOf := head
+	snapshotOf.Change.RotationParentID = ""
+	e.appendCommitted(t, scoped(snapshotOf, "ingest:write"))
 	headRow, laterRow := e.outboxID(t, child, 1), e.outboxID(t, child, 2)
-	e.seed(t, `UPDATE auth.auth_outbox_events SET created_at = now() - interval '2 hours' WHERE aggregate_type = 'external_push_credential' AND id <= $1`, laterRow)
+	e.seedOutbox(t, `UPDATE auth.auth_outbox_events SET created_at = now() - interval '2 hours' WHERE aggregate_type = 'external_push_credential' AND id <= $1`, laterRow)
 	rep, err := r.Step(ctx, time.Now().Add(2*time.Minute))
 	if err != nil || rep.Parked != 1 {
 		t.Fatalf("step 1: %+v, %v; want the head parked as parent_pending", rep, err)

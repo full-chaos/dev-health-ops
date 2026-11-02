@@ -56,6 +56,8 @@ var responseModelRoutes = map[string]bool{
 	"POST /internal/v1/sessions/state":                false,
 	"POST /internal/v1/sessions/delegated":            false,
 	"POST /internal/v1/sessions/delegated/end":        false,
+	"POST /v1/authorize":                              false,
+	"POST /v1/authorize:batch":                        false,
 	"POST /v1/token/refresh":                          false,
 	"GET /v1/sessions/current":                        false,
 	"POST /v1/sessions/revoke":                        false,

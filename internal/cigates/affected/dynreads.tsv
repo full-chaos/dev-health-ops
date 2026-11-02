@@ -45,6 +45,7 @@ internal/atlassianteams	vendored_patch_chain_test.go
 internal/audit	drill_attempt_integration_test.go
 internal/audit	drill_password_integration_test.go
 internal/audit	drill_pitr_integration_test.go
+internal/auth/acrlisting	client.go
 internal/auth/acrmint	acrmint_test.go
 internal/auth/acrmint	census_test.go
 internal/auth/authapi	authorize_auth_test.go
@@ -92,6 +93,7 @@ internal/auth/contracts	reject_location_test.go
 internal/auth/contracts	retired_credential_class_test.go
 internal/auth/contracts	retired_legacy_ingest_test.go
 internal/auth/contracts	schema_dialect_test.go
+internal/auth/contracts	service_account_token_goldens_test.go
 internal/auth/contracts	session_goldens_test.go
 internal/auth/contracts	session_hardening_test.go
 internal/auth/contracts	transport_error_goldens_test.go
@@ -99,6 +101,7 @@ internal/auth/contracts	user_token_negative_proof_guard_test.go
 internal/auth/contracts	workload_token_goldens_test.go
 internal/auth/contracts/provisioning	vocabulary_test.go
 internal/auth/contracts/tokencorpus	corpus.go
+internal/auth/contracts/tokencorpus	service_account_test.go
 internal/auth/httpapi	transport_error_contract_test.go
 internal/auth/identity	externalkey_test.go
 internal/auth/identity	placeholder_copies_test.go
@@ -114,8 +117,10 @@ internal/auth/platformrole	superuser_literals_census_test.go
 internal/auth/platformrole	superuser_sites_census_test.go
 internal/auth/platformrole	superuser_writes_census_test.go
 internal/auth/pushlifecycle	acr_mapping_test.go
+internal/auth/pushprojection	import_guard_test.go
 internal/auth/ratelimitvalkey	acl_feed_test.go
 internal/auth/ratelimitvalkey	acl_test.go
+internal/auth/restorefence	consumers_reader_test.go
 internal/auth/restorefence	consumers_test.go
 internal/auth/session	credential_test.go
 internal/auth/workloadexchange	tokenreview.go

@@ -411,15 +411,15 @@ func TestNewRefusesPlainHTTPToANonLoopbackOrigin(t *testing.T) {
 	secure, _ := url.Parse("https://acr.example.test")
 	file := subjectFile(t, "x")
 	for name, cfg := range map[string]Config{
-		"plain base":     {BaseURL: remote, TokenEndpoint: secure, SubjectTokenFile: file},
-		"plain endpoint": {BaseURL: secure, TokenEndpoint: remote, SubjectTokenFile: file},
-		"no base":        {TokenEndpoint: secure, SubjectTokenFile: file},
-		"no endpoint":    {BaseURL: secure, SubjectTokenFile: file},
-		"no subject":     {BaseURL: secure, TokenEndpoint: secure},
-		"limit 501":      {BaseURL: secure, TokenEndpoint: secure, SubjectTokenFile: file, PageLimit: 501},
-		"limit negative": {BaseURL: secure, TokenEndpoint: secure, SubjectTokenFile: file, PageLimit: -1},
-		"base userinfo":  {BaseURL: mustURL("https://u:p@acr.example.test"), TokenEndpoint: secure, SubjectTokenFile: file},
-		"base query":     {BaseURL: mustURL("https://acr.example.test/?a=b"), TokenEndpoint: secure, SubjectTokenFile: file},
+		"plain base":     {BaseURL: remote, TokenEndpoint: secure, SubjectTokenFile: file, OrgID: orgOne},
+		"plain endpoint": {BaseURL: secure, TokenEndpoint: remote, SubjectTokenFile: file, OrgID: orgOne},
+		"no base":        {TokenEndpoint: secure, SubjectTokenFile: file, OrgID: orgOne},
+		"no endpoint":    {BaseURL: secure, SubjectTokenFile: file, OrgID: orgOne},
+		"no subject":     {BaseURL: secure, TokenEndpoint: secure, OrgID: orgOne},
+		"limit 501":      {BaseURL: secure, TokenEndpoint: secure, SubjectTokenFile: file, OrgID: orgOne, PageLimit: 501},
+		"limit negative": {BaseURL: secure, TokenEndpoint: secure, SubjectTokenFile: file, OrgID: orgOne, PageLimit: -1},
+		"base userinfo":  {BaseURL: mustURL("https://u:p@acr.example.test"), TokenEndpoint: secure, SubjectTokenFile: file, OrgID: orgOne},
+		"base query":     {BaseURL: mustURL("https://acr.example.test/?a=b"), TokenEndpoint: secure, SubjectTokenFile: file, OrgID: orgOne},
 		"no org":         {BaseURL: secure, TokenEndpoint: secure, SubjectTokenFile: file, OrgID: ""},
 		"org uppercase":  {BaseURL: secure, TokenEndpoint: secure, SubjectTokenFile: file, OrgID: strings.ToUpper(orgOne)},
 		"org not a uuid": {BaseURL: secure, TokenEndpoint: secure, SubjectTokenFile: file, OrgID: "acme"},
@@ -436,6 +436,20 @@ func TestNewRefusesPlainHTTPToANonLoopbackOrigin(t *testing.T) {
 	}
 	if _, err := New(Config{BaseURL: secure, TokenEndpoint: secure, SubjectTokenFile: file, OrgID: orgOne}); err != nil {
 		t.Fatalf("https refused: %v", err)
+	}
+}
+
+func TestNewRefusesAnOrgIDWhoseAnyGroupIsNotLowercaseHex(t *testing.T) {
+	secure, _ := url.Parse("https://acr.example.test")
+	file := subjectFile(t, "x")
+	groups := strings.Split(orgOne, "-")
+	for i := range groups {
+		g := slices.Clone(groups)
+		g[i] = strings.ToUpper(g[i])
+		org := strings.Join(g, "-")
+		if _, err := New(Config{BaseURL: secure, TokenEndpoint: secure, SubjectTokenFile: file, OrgID: org}); err == nil {
+			t.Fatalf("New accepted org id %q with group %d in upper case", org, i)
+		}
 	}
 }
 

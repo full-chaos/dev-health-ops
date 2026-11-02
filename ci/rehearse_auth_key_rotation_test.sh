@@ -63,6 +63,9 @@ for job in auth-migrate auth-grants; do
   if awk -v job="${job}:" '$1 == job {on=1; next} /^  [a-z]/ {on=0} on && /AUTH_SESSION_READER_ROLES: devhealth_api,devhealth_query_api/ {found=1} END {exit !found}' "${OVR}"; then ok "override-grants-session-readers-${job}"; else bad "override-grants-session-readers-${job}"; fi
 done
 
+# query-api's role posture must expect the session read it is granted (smoke v6: "auth.sessions.id outside the manifest").
+if awk '$1 == "query-api:" {on=1; next} /^  [a-z]/ {on=0} on && /AUTH_PROXY_SESSIONS: "true"/ {found=1} END {exit !found}' "${OVR}"; then ok override-query-api-expects-session-read; else bad override-query-api-expects-session-read; fi
+
 # The host SMTP sink is unreachable from the bigboy docker bridge (smoke v3: no route to host): the user is verified in the
 # throwaway database instead.
 if grep -q 'auth_webproof_smtp_sink' "${SCRIPT}"; then bad no-host-smtp-sink; else ok no-host-smtp-sink; fi

@@ -159,15 +159,50 @@ func (c *ConsumerCursor) ResyncTo(key string, revision int64) {
 }
 
 // AuditAttributes are the allowlisted audit attributes; every schema member is
-// carried, so a parser never silently drops data the schema admits.
+// carried, so a parser never silently drops data the schema admits. A key is
+// absent from a row unless its event writes it.
 type AuditAttributes struct {
-	ReasonCode        string    `json:"reason_code,omitempty"`
-	Action            string    `json:"action,omitempty"`
-	ResourceType      string    `json:"resource_type,omitempty"`
-	AggregateType     string    `json:"aggregate_type,omitempty"`
-	AggregateRevision *Revision `json:"aggregate_revision,omitempty"`
-	CredentialClass   string    `json:"credential_class,omitempty"`
-	DecisionID        string    `json:"decision_id,omitempty"`
+	ReasonCode                    string    `json:"reason_code,omitempty"`
+	Action                        string    `json:"action,omitempty"`
+	ResourceType                  string    `json:"resource_type,omitempty"`
+	AggregateType                 string    `json:"aggregate_type,omitempty"`
+	AggregateRevision             *Revision `json:"aggregate_revision,omitempty"`
+	CredentialClass               string    `json:"credential_class,omitempty"`
+	DecisionID                    string    `json:"decision_id,omitempty"`
+	ActionKey                     string    `json:"action_key,omitempty"`
+	Actions                       []string  `json:"actions,omitempty"`
+	Amr                           []string  `json:"amr,omitempty"`
+	AssertionKeyID                string    `json:"assertion_key_id,omitempty"`
+	Audience                      string    `json:"audience,omitempty"`
+	BindingDisabled               string    `json:"binding_disabled,omitempty"`
+	BindingID                     string    `json:"binding_id,omitempty"`
+	CallerPrincipalID             string    `json:"caller_principal_id,omitempty"`
+	ChangedFields                 []string  `json:"changed_fields,omitempty"`
+	ClientClass                   string    `json:"client_class,omitempty"`
+	CredentialID                  string    `json:"credential_id,omitempty"`
+	JTI                           string    `json:"jti,omitempty"`
+	KeyID                         string    `json:"key_id,omitempty"`
+	NewRole                       string    `json:"new_role,omitempty"`
+	NewStatus                     string    `json:"new_status,omitempty"`
+	PolicyRevision                *Revision `json:"policy_revision,omitempty"`
+	PreviousRole                  string    `json:"previous_role,omitempty"`
+	PreviousStatus                string    `json:"previous_status,omitempty"`
+	PrincipalEnabled              string    `json:"principal_enabled,omitempty"`
+	PrincipalID                   string    `json:"principal_id,omitempty"`
+	Provider                      string    `json:"provider,omitempty"`
+	PurgedEmailVerificationTokens *Revision `json:"purged_email_verification_tokens,omitempty"`
+	PurgedPasswordResetTokens     *Revision `json:"purged_password_reset_tokens,omitempty"`
+	RelatedKeyID                  string    `json:"related_key_id,omitempty"`
+	ResourceID                    string    `json:"resource_id,omitempty"`
+	ResourceKind                  string    `json:"resource_kind,omitempty"`
+	Revision                      *Revision `json:"revision,omitempty"`
+	RotationRefusal               string    `json:"rotation_refusal,omitempty"`
+	RotationVerb                  string    `json:"rotation_verb,omitempty"`
+	RunID                         string    `json:"run_id,omitempty"`
+	Source                        string    `json:"source,omitempty"`
+	TargetID                      string    `json:"target_id,omitempty"`
+	TargetKind                    string    `json:"target_kind,omitempty"`
+	WorkloadJTI                   string    `json:"workload_jti,omitempty"`
 }
 
 // AuditEvent is one audit event, validated and parsed. Every schema member is

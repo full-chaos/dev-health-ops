@@ -167,13 +167,15 @@ func TestAuditAttributeRulesMatchTheSchemaTypes(t *testing.T) {
 			continue // the key-set pin reports it
 		}
 		switch {
-		case key == "changed_fields":
+		case audit.IsListVocabularyKey(key):
 			items, _ := prop["items"].(map[string]any)
 			want := append([]string(nil), vocab[key]...)
 			sort.Strings(want)
 			if prop["type"] != "array" || !reflect.DeepEqual(asStrings(t, items["enum"]), want) || prop["minItems"] != float64(1) {
 				t.Errorf("%s: schema %v is not a non-empty array of the vocabulary", key, prop)
 			}
+		case key == "reason_code":
+			// the schema enum is a superset (authorize decision codes); TestEveryReasonCodeTheAuditProducerAcceptsValidatesOnTheWire holds the producer set inside it
 		case vocab[key] != nil:
 			want := append([]string(nil), vocab[key]...)
 			sort.Strings(want)
@@ -230,11 +232,11 @@ func TestAuditProducerValuesAgreeWithTheSchema(t *testing.T) {
 	}
 	for _, key := range audit.AllowedAttributeKeys() {
 		switch {
-		case key == "changed_fields":
+		case audit.IsListVocabularyKey(key):
 			for _, v := range vocab[key] {
 				check(key, []string{v}, true)
 			}
-			check(key, []string{"not_a_field"}, false)
+			check(key, []string{"not-in-the-vocabulary"}, false)
 			check(key, []string{}, false)
 		case vocab[key] != nil:
 			for _, v := range vocab[key] {

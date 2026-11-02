@@ -296,6 +296,22 @@ boundary (TRD §9, §13).
   excluded with a reason, or a member has no column. Excluded: surrogate ids,
   delivery bookkeeping (`available_at`, `published_at`, `attempts`,
   `last_error`) and `client_ip`.
+* **`audit-event.v1` `attributes` is the producer allowlist, one vocabulary.**
+  Every key `internal/audit/allowlist.go` accepts is a member of `attributes`
+  with the same closed rule (same enum, same id pattern, same list and integer
+  bounds), and `TestAuditAllowlistKeysEqualSchemaAttributeKeys` and
+  `TestAuditAttributeRulesMatchTheSchemaTypes` fail on any difference in either
+  direction. The members no producer writes (`action`, `aggregate_type`,
+  `aggregate_revision`, until a producer writes `resource_type` and
+  `decision_id`) stay in v1 and are named, with a reason, in
+  `schemaOnlyAuditKeys`. An allowlist key that no producer writes and no open
+  change plans is deleted (`TestEveryAuditAllowlistKeyHasAWriter`). The
+  database row keeps uuid text for every id; the wire document prefixes
+  the envelope ids (`prn_` for the actor and the subject, `org_` for the
+  organization) and re-encodes `request_id` as `req_` plus 26 base32
+  characters (`requestid.WireOf`); an attribute id is the row's uuid text.
+  `internal/testsupport/auditwire` projects a producer row that way and the
+  producer unit tests validate it against the schema.
 * **The idempotency key is `(aggregate_type, aggregate_id, payload.revision)`,
   and `revision` is per aggregate.** Nothing implies an ordering across
   aggregates, so a consumer that sorts the whole stream is wrong. The

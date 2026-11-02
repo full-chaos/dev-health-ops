@@ -45,6 +45,8 @@ type AuthorizationDecision struct {
 	PolicyRevision Revision                  `json:"policy_revision"`
 	ExpiresAt      Timestamp                 `json:"expires_at"`
 	Obligations    *AuthorizationObligations `json:"obligations,omitempty"`
+	// Cacheable is true only when expires_at is strictly after the parse instant.
+	Cacheable bool `json:"-"`
 }
 
 func checkedDocument(root, surface string, raw []byte) (any, error) {
@@ -67,20 +69,13 @@ func decodeStrict(raw []byte, into any) error {
 	return dec.Decode(into)
 }
 
-// refuseExpired rejects a decision whose expires_at is not strictly after now.
-//
-// Expiry is the bound on a stale allow (TRD section 14), so a parser that only
-// read the timestamp would hand back allowed=true for a decision nobody may
-// reuse. An expired deny is refused too: the caller denies either way, and a
-// single rule is easier to hold than one per verdict. `now` is a parameter, not
-// time.Now(), so a caller states which instant it means and tests are not
-// date-dependent.
-func refuseExpired(surface string, d AuthorizationDecision, now time.Time) error {
-	if !d.ExpiresAt.Time.After(now) {
-		return fmt.Errorf("%s: decision %s expired at %s (now %s); it must not be reused",
-			surface, d.DecisionID, d.ExpiresAt.Time.UTC().Format(time.RFC3339Nano), now.UTC().Format(time.RFC3339Nano))
-	}
-	return nil
+// markCacheable sets Cacheable from expires_at against now. expires_at bounds
+// REUSE, never the answer to the request the decision was issued for: a
+// decision at or past its expiry is still valid for that request and is
+// "use once, do not cache". `now` is a parameter, not time.Now(), so tests are
+// not date-dependent.
+func markCacheable(d *AuthorizationDecision, now time.Time) {
+	d.Cacheable = d.ExpiresAt.Time.After(now)
 }
 
 // ParseAuthorizationDecision parses one decision from the RAW response body.
@@ -100,9 +95,7 @@ func ParseAuthorizationDecision(root string, raw []byte, now time.Time) (*Author
 	if err := decodeStrict(raw, &decision); err != nil {
 		return nil, fmt.Errorf("%s: decoding validated document: %w", AuthorizationDecisionSurface, err)
 	}
-	if err := refuseExpired(AuthorizationDecisionSurface, decision.AuthorizationDecision, now); err != nil {
-		return nil, err
-	}
+	markCacheable(&decision.AuthorizationDecision, now)
 	return &decision.AuthorizationDecision, nil
 }
 
@@ -145,9 +138,7 @@ func ParseAuthorizationBatchResponse(root string, requestRaw, responseRaw []byte
 			return nil, fmt.Errorf("%s: decision at position %d declares index %d; refusing the whole response",
 				AuthorizationBatchResponseSurface, position, item.Index)
 		}
-		if err := refuseExpired(AuthorizationBatchResponseSurface, item.Decision, now); err != nil {
-			return nil, err
-		}
+		markCacheable(&item.Decision, now)
 		out[position] = item.Decision
 	}
 	return out, nil

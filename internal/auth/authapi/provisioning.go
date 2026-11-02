@@ -144,8 +144,6 @@ type ProvisioningDeps struct {
 	Orgs            OrganizationLifecycle
 	ServiceAccounts ServiceAccounts // the organization service account aggregate
 	Grants          Grants          // the resource grant aggregate; nil mounts no grant route
-	Reads           ReadStore       // the versioned reads of organizations, memberships and principals; nil mounts none
-	GrantReads      GrantReads      // the versioned reads of grants; nil mounts none
 	// Workload is the go-api workload token path the session issue route
 	// takes too (one subject); nil refuses every workload token.
 	Workload *SessionIssueWorkload
@@ -224,7 +222,7 @@ func ProvisioningRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 		{Method: http.MethodPost, Pattern: PatternGrantUpdate, Handler: http.HandlerFunc(h.grantUpdate)},
 		{Method: http.MethodPost, Pattern: PatternGrantRevoke, Handler: http.HandlerFunc(h.grantRevoke)},
 	}
-	routes = h.withReadRoutes(h.withOrgRenameRoute(h.withStateRoute(routes, rows), rows), rows)
+	routes = h.withOrgRenameRoute(h.withStateRoute(routes, rows), rows)
 	return routes, nil
 }
 

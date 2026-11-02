@@ -4,12 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/metric"
 
+	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/grant"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
@@ -46,28 +50,69 @@ type GrantReads interface {
 	ListForOrg(ctx context.Context, orgID uuid.UUID, f grant.ListFilter) ([]grant.Grant, error)
 }
 
+type readHandlers struct {
+	ReadDeps
+	rec recorder
+}
+
 // readRoute is one read route: its operation in the contract, pattern and handler.
 type readRoute struct {
 	op      string
 	pattern string
-	handle  func(h provisioningHandlers, w http.ResponseWriter, r *http.Request, op contracts.ReadOperation)
+	handle  func(h readHandlers, w http.ResponseWriter, r *http.Request, op contracts.ReadOperation)
 	grants  bool
 }
 
 var readRoutes = []readRoute{
-	{"principals_get", PatternPrincipalsGet, provisioningHandlers.principalsGet, false},
-	{"principals_list", PatternPrincipalsList, provisioningHandlers.principalsList, false},
-	{"organizations_get", PatternOrganizationsGet, provisioningHandlers.organizationsGet, false},
-	{"organizations_list", PatternOrganizationsList, provisioningHandlers.organizationsList, false},
-	{"memberships_get", PatternMembershipsGet, provisioningHandlers.membershipsGet, false},
-	{"memberships_list", PatternMembershipsList, provisioningHandlers.membershipsList, false},
-	{"grants_get", PatternGrantsGet, provisioningHandlers.grantsGet, true},
-	{"grants_list", PatternGrantsList, provisioningHandlers.grantsList, true},
+	{"principals_get", PatternPrincipalsGet, readHandlers.principalsGet, false},
+	{"principals_list", PatternPrincipalsList, readHandlers.principalsList, false},
+	{"organizations_get", PatternOrganizationsGet, readHandlers.organizationsGet, false},
+	{"organizations_list", PatternOrganizationsList, readHandlers.organizationsList, false},
+	{"memberships_get", PatternMembershipsGet, readHandlers.membershipsGet, false},
+	{"memberships_list", PatternMembershipsList, readHandlers.membershipsList, false},
+	{"grants_get", PatternGrantsGet, readHandlers.grantsGet, true},
+	{"grants_list", PatternGrantsList, readHandlers.grantsList, true},
+}
+
+// ReadDeps are the read routes' collaborators; a nil store leaves its routes out.
+type ReadDeps struct {
+	Credentials ProvisioningCredentials
+	Reads       ReadStore
+	GrantReads  GrantReads
+	Logger      *slog.Logger
+	Meter       metric.Meter
+	// ProfileRows is the endpoint-profile document; nil is the one the binary embeds.
+	ProfileRows []byte
+}
+
+// ReadRoutes returns the versioned read routes for the internal listener only: ProvisioningRoutes never returns them, so the
+// public listener cannot serve them. A route is returned only when its store is wired and its endpoint-profile row exists.
+func ReadRoutes(deps ReadDeps) ([]httpapi.Route, error) {
+	if deps.Credentials == nil {
+		return nil, errors.New("authapi: the read routes need credentials")
+	}
+	rows := deps.ProfileRows
+	if rows == nil {
+		rows = authv1.AuthServiceEndpointProfiles
+	}
+	if deps.Logger == nil {
+		deps.Logger = slog.Default()
+	}
+	meter := deps.Meter
+	if meter == nil {
+		meter = otel.Meter("github.com/full-chaos/dev-health-ops/internal/auth/authapi")
+	}
+	rec, err := newRecorder(deps.Logger, meter)
+	if err != nil {
+		return nil, err
+	}
+	h := readHandlers{ReadDeps: deps, rec: rec}
+	return h.withReadRoutes(nil, rows), nil
 }
 
 // withReadRoutes mounts each read route whose store is wired and whose endpoint-profile row lists the session issuer credential
 // class, else logs one line naming the route.
-func (h provisioningHandlers) withReadRoutes(routes []httpapi.Route, rows []byte) []httpapi.Route {
+func (h readHandlers) withReadRoutes(routes []httpapi.Route, rows []byte) []httpapi.Route {
 	for _, rr := range readRoutes {
 		stored := h.Reads != nil
 		if rr.grants {
@@ -93,7 +138,7 @@ func (h provisioningHandlers) withReadRoutes(routes []httpapi.Route, rows []byte
 
 // readAdmit checks the bearer is a session issuer credential holding the operation's read scope (a write scope never
 // satisfies it) and reads the body as one strict object of the allowed members. A refusal is already written.
-func (h provisioningHandlers) readAdmit(w http.ResponseWriter, r *http.Request, op contracts.ReadOperation, allowed ...string) (strictObject, bool) {
+func (h readHandlers) readAdmit(w http.ResponseWriter, r *http.Request, op contracts.ReadOperation, allowed ...string) (strictObject, bool) {
 	token, ok := bearerToken(r)
 	if !ok {
 		h.rec.refuse(w, r, op.Name, unauthorized(reasonInvalidCredentials), nil)
@@ -225,12 +270,12 @@ func (o strictObject) presentBool(name string) (bool, error) {
 	return false, errProvisioningBody
 }
 
-func (h provisioningHandlers) malformed(w http.ResponseWriter, r *http.Request, op contracts.ReadOperation) {
+func (h readHandlers) malformed(w http.ResponseWriter, r *http.Request, op contracts.ReadOperation) {
 	h.rec.refuse(w, r, op.Name, refusal{http.StatusBadRequest, reasonMalformed}, nil)
 }
 
 // readFailure answers a failed read: the named not-found for a missing row, else 503 with the cause logged and never answered.
-func (h provisioningHandlers) readFailure(w http.ResponseWriter, r *http.Request, op contracts.ReadOperation, err error, missing error, notFound string) {
+func (h readHandlers) readFailure(w http.ResponseWriter, r *http.Request, op contracts.ReadOperation, err error, missing error, notFound string) {
 	answer := unavailable(reasonStoreUnavailable)
 	if errors.Is(err, missing) {
 		answer = refusal{http.StatusNotFound, notFound}
@@ -238,7 +283,7 @@ func (h provisioningHandlers) readFailure(w http.ResponseWriter, r *http.Request
 	h.rec.refuse(w, r, op.Name, answer, failure(answer, err))
 }
 
-func (h provisioningHandlers) answered(w http.ResponseWriter, r *http.Request, op contracts.ReadOperation, body any) {
+func (h readHandlers) answered(w http.ResponseWriter, r *http.Request, op contracts.ReadOperation, body any) {
 	h.rec.record(r.Context(), op.Name, "success", reasonAccepted, nil)
 	writeJSON(w, http.StatusOK, body)
 }
@@ -336,7 +381,7 @@ func nextCursor(more bool, prefix string, last uuid.UUID) string {
 	return contracts.EncodeKeysetCursor(prefix + last.String())
 }
 
-func (h provisioningHandlers) principalsGet(w http.ResponseWriter, r *http.Request, op contracts.ReadOperation) {
+func (h readHandlers) principalsGet(w http.ResponseWriter, r *http.Request, op contracts.ReadOperation) {
 	body, ok := h.readAdmit(w, r, op, "principal_id")
 	if !ok {
 		return
@@ -354,7 +399,7 @@ func (h provisioningHandlers) principalsGet(w http.ResponseWriter, r *http.Reque
 	h.answered(w, r, op, principalWire(found))
 }
 
-func (h provisioningHandlers) principalsList(w http.ResponseWriter, r *http.Request, op contracts.ReadOperation) {
+func (h readHandlers) principalsList(w http.ResponseWriter, r *http.Request, op contracts.ReadOperation) {
 	body, ok := h.readAdmit(w, r, op, "organization_id", "kind", "limit", "cursor")
 	if !ok {
 		return
@@ -382,7 +427,7 @@ func (h provisioningHandlers) principalsList(w http.ResponseWriter, r *http.Requ
 	h.answered(w, r, op, listWire{"principal-list.v1", items, nextCursor(more && len(found) > 0, op.IDPrefix, last)})
 }
 
-func (h provisioningHandlers) organizationsGet(w http.ResponseWriter, r *http.Request, op contracts.ReadOperation) {
+func (h readHandlers) organizationsGet(w http.ResponseWriter, r *http.Request, op contracts.ReadOperation) {
 	body, ok := h.readAdmit(w, r, op, "organization_id")
 	if !ok {
 		return
@@ -405,7 +450,7 @@ type organizationItemWire struct {
 	Membership   membershipReadWire   `json:"membership"`
 }
 
-func (h provisioningHandlers) organizationsList(w http.ResponseWriter, r *http.Request, op contracts.ReadOperation) {
+func (h readHandlers) organizationsList(w http.ResponseWriter, r *http.Request, op contracts.ReadOperation) {
 	body, ok := h.readAdmit(w, r, op, "principal_id", "membership_status", "limit", "cursor")
 	if !ok {
 		return
@@ -437,7 +482,7 @@ func (h provisioningHandlers) organizationsList(w http.ResponseWriter, r *http.R
 	h.answered(w, r, op, listWire{"organization-list.v1", items, nextCursor(more && len(found) > 0, op.IDPrefix, last)})
 }
 
-func (h provisioningHandlers) membershipsGet(w http.ResponseWriter, r *http.Request, op contracts.ReadOperation) {
+func (h readHandlers) membershipsGet(w http.ResponseWriter, r *http.Request, op contracts.ReadOperation) {
 	body, ok := h.readAdmit(w, r, op, "organization_id", "principal_id")
 	if !ok {
 		return
@@ -456,7 +501,7 @@ func (h provisioningHandlers) membershipsGet(w http.ResponseWriter, r *http.Requ
 	h.answered(w, r, op, membershipWire(found))
 }
 
-func (h provisioningHandlers) membershipsList(w http.ResponseWriter, r *http.Request, op contracts.ReadOperation) {
+func (h readHandlers) membershipsList(w http.ResponseWriter, r *http.Request, op contracts.ReadOperation) {
 	body, ok := h.readAdmit(w, r, op, "organization_id", "status", "limit", "cursor")
 	if !ok {
 		return
@@ -488,7 +533,7 @@ func (h provisioningHandlers) membershipsList(w http.ResponseWriter, r *http.Req
 	h.answered(w, r, op, listWire{"membership-list.v1", items, nextCursor(more && len(found) > 0, op.IDPrefix, last)})
 }
 
-func (h provisioningHandlers) grantsGet(w http.ResponseWriter, r *http.Request, op contracts.ReadOperation) {
+func (h readHandlers) grantsGet(w http.ResponseWriter, r *http.Request, op contracts.ReadOperation) {
 	body, ok := h.readAdmit(w, r, op, "organization_id", "grant_id")
 	if !ok {
 		return
@@ -507,7 +552,7 @@ func (h provisioningHandlers) grantsGet(w http.ResponseWriter, r *http.Request, 
 	h.answered(w, r, op, grantWire(*found))
 }
 
-func (h provisioningHandlers) grantsList(w http.ResponseWriter, r *http.Request, op contracts.ReadOperation) {
+func (h readHandlers) grantsList(w http.ResponseWriter, r *http.Request, op contracts.ReadOperation) {
 	body, ok := h.readAdmit(w, r, op, "organization_id", "principal_id", "include_revoked", "limit", "cursor")
 	if !ok {
 		return

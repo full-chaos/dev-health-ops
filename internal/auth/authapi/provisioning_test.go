@@ -391,15 +391,21 @@ func newProvFixtureFor(t *testing.T, profileRows []byte, workload *SessionIssueW
 		roles: map[[2]uuid.UUID]string{{f.admin, f.org}: "admin", {f.owner, f.org}: "owner", {f.viewer, f.org}: "viewer"},
 	}
 	routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
-		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa, Grants: f.grants, Reads: f.reads, GrantReads: f.grantReads, ProfileRows: profileRows,
+		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa, Grants: f.grants, ProfileRows: profileRows,
 		Workload: workload,
 		Logger:   slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		Meter:    sdkmetric.NewMeterProvider(sdkmetric.WithReader(f.reader)).Meter("test")})
 	if err != nil {
 		t.Fatal(err)
 	}
+	readRoutes, err := ReadRoutes(ReadDeps{Credentials: f.creds, Reads: f.reads, GrantReads: f.grantReads, ProfileRows: profileRows,
+		Logger: slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		Meter:  sdkmetric.NewMeterProvider(sdkmetric.WithReader(f.reader)).Meter("test")})
+	if err != nil {
+		t.Fatal(err)
+	}
 	f.mux = http.NewServeMux()
-	for _, route := range routes {
+	for _, route := range append(routes, readRoutes...) {
 		f.mux.Handle(route.Method+" "+route.Pattern, requestid.Middleware(route.Handler))
 	}
 	return f

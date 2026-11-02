@@ -200,7 +200,15 @@ func TestReadRoutesNotMountedWithoutRow(t *testing.T) {
 
 func TestReadRoutesNotMountedWithoutStore(t *testing.T) {
 	f := newReadFixture(t)
-	f.mux = nil
+	routes, err := ReadRoutes(ReadDeps{Credentials: f.creds, ProfileRows: docWithRows(t, readPatterns()...)})
+	if err != nil || len(routes) != 0 {
+		t.Fatalf("read routes with no store: %d, %v", len(routes), err)
+	}
+}
+
+// The public listener's route set never holds a read route, whatever rows the document has: ProvisioningRoutes does not build them.
+func TestProvisioningRoutesNeverServeReads(t *testing.T) {
+	f := newReadFixture(t)
 	routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
 		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa, Grants: f.grants,
 		ProfileRows: docWithRows(t, append(readPatterns(), PatternOrgSuspend, PatternOrgRename)...)})
@@ -209,7 +217,7 @@ func TestReadRoutesNotMountedWithoutStore(t *testing.T) {
 	}
 	for _, route := range routes {
 		if slices.Contains(readPatterns(), route.Pattern) {
-			t.Errorf("%s mounted with no read store", route.Pattern)
+			t.Errorf("ProvisioningRoutes returned %s", route.Pattern)
 		}
 	}
 }

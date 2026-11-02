@@ -18,6 +18,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/auditwire"
 )
 
 func TestValidKey(t *testing.T) {
@@ -193,6 +194,7 @@ func TestCreateEventAndAuditRowAreWellFormed(t *testing.T) {
 			t.Errorf("created event %+v: %v", in, err)
 		}
 		row := auditRow("auth.resource_grant.created", "grant_created", org, principal, id, Actor{PrincipalID: &actor}, []string{"role_key", "status"}, map[string]any{"new_status": "active"})
+		auditwire.MustValidate(t, row)
 		if err := audit.ValidateAttributes(row.Attributes); err != nil {
 			t.Errorf("audit attributes: %v", err)
 		}

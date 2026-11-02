@@ -226,6 +226,47 @@ func AttributeVocabulary() map[string][]string {
 	return out
 }
 
+// AllowedAttributeKeys returns the allowlist's keys, sorted.
+func AllowedAttributeKeys() []string {
+	out := make([]string, 0, len(allowedAttributeKeys))
+	for k := range allowedAttributeKeys {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// AttributeIDPatterns returns the regexp source of each id-valued key.
+func AttributeIDPatterns() map[string]string {
+	out := make(map[string]string, len(attributeIDRules))
+	for k, v := range attributeIDRules {
+		out[k] = v.String()
+	}
+	return out
+}
+
+// AttributeNumberKeys returns the whole-number keys, sorted.
+func AttributeNumberKeys() []string {
+	out := make([]string, 0, len(attributeNumberKeys))
+	for k := range attributeNumberKeys {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// AttributeListPatterns returns the regexp source of each list-valued key's members.
+func AttributeListPatterns() map[string]string {
+	out := make(map[string]string, len(attributeListRules))
+	for k, v := range attributeListRules {
+		out[k] = v.String()
+	}
+	return out
+}
+
+// MaxAttributeListLength is the bound on a list-valued attribute.
+const MaxAttributeListLength = maxAttributeListLength
+
 // attributeIDRules are the id-valued keys and the rule each value must satisfy.
 var attributeIDRules = map[string]*regexp.Regexp{
 	"target_id":      uuidPattern,

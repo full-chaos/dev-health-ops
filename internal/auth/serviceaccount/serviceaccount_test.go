@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
 	"github.com/full-chaos/dev-health-ops/internal/auth/membership"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/auditwire"
 )
 
 var okOwner = ownerState{isUser: true, member: true}
@@ -168,6 +169,7 @@ func TestOwnedGuardRefusesBeforeAnyTransaction(t *testing.T) {
 
 func checkMutation(t *testing.T, m audit.Mutation, event, reason string, id uuid.UUID, change map[string]any) {
 	t.Helper()
+	auditwire.MustValidate(t, m.Audit)
 	if err := audit.ValidateAttributes(m.Audit.Attributes); err != nil {
 		t.Fatalf("audit attributes refused: %v", err)
 	}

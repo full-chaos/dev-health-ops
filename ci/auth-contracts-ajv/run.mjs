@@ -24,7 +24,7 @@ const rootArg = args.find((a) => !a.startsWith("--"));
 const root = path.resolve(rootArg ?? path.join(here, "..", ".."));
 const v1 = path.join(root, "contracts", "auth", "v1");
 
-const MUST_VALIDATE = { accept: true, reject_by_client: true };
+const MUST_VALIDATE = { accept: true, reject_by_client: true, accept_not_cacheable: true };
 // go_schema_gap: refused here by `format` while Go's Validate accepts it (a calendar-impossible day; CHAOS-10135).
 const MUST_REJECT = { reject: true, narrower_than_consumer: true, go_schema_gap: true };
 
@@ -36,6 +36,9 @@ const REQUIRED_GROUPS = {
   // reject_by_client here holds the profile gate's join of token pins to the credential-class markers: schema-valid, gate-refused.
   "endpoint-auth-profile": ["accept", "reject", "reject_by_client"],
   // Request surfaces carry no client-only rule; the decision and batch response corpora do.
+  // accept_not_cacheable: schema-valid, accepted by the clients, marked use-once (expires_at bounds reuse only).
+  authorization_decision: ["accept", "reject", "reject_by_client", "accept_not_cacheable"],
+  authorization_batch_response: ["accept", "reject", "reject_by_client", "accept_not_cacheable"],
   authorization_request: ["accept", "reject"],
   authorization_batch_request: ["accept", "reject"],
   // The transport envelope has no field a schema cannot check, so no client-only rule.
@@ -119,6 +122,7 @@ const PINNED_INVENTORY = {
 // the schema enums together must also need a deliberate edit here (CHAOS-10194).
 const APPROVED_REVOKED = [
   "compromised",
+  "domain_revoked",
   "owner_request",
 ];
 const APPROVED_AUDIT = [
@@ -135,6 +139,7 @@ const APPROVED_AUDIT = [
   "revision_conflict",
   "internal_error",
   "compromised",
+  "domain_revoked",
   "owner_request",
   "role_granted",
   "role_revoked",
@@ -192,6 +197,26 @@ const APPROVED_DECISION = [
   "grant_absent",
   "repository_not_granted",
   "platform_role_absent",
+  "allowed_by_membership_default",
+  "allowed_by_role",
+  "delegation_invalid",
+  "grant_expired",
+  "grant_revoked",
+  "impersonation_denied",
+  "invalid_request",
+  "membership_inactive",
+  "no_membership",
+  "org_mismatch",
+  "organization_inactive",
+  "principal_inactive",
+  "resource_mismatch",
+  "role_lacks_action",
+  "role_scope_mismatch",
+  "role_unknown",
+  "service_account_inactive",
+  "unknown_action",
+  "workload_action_denied",
+  "workload_audience_denied",
 ];
 const NOT_IN_THE_VOCABULARY = [
   "secret_0123456789abcdef0123",

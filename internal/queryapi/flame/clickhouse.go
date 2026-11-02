@@ -41,6 +41,7 @@ type reviewRow struct {
 type issueRow struct {
 	WorkItemID  string
 	Title       *string
+	RepoID      *string
 	Provider    *string
 	Type        *string
 	Status      *string
@@ -263,12 +264,21 @@ func fetchDeployment(ctx context.Context, client QueryClient, repoID, deployment
 	return &row, rows.Err()
 }
 
-// fetchIssueTitleQuery reads the work item's title from the canonical
-// work_items table. The cycle-time snapshot carries no title. org_id binds the
-// read to the caller's organisation, so another organisation's title for the
-// same work_item_id is never served.
-const fetchIssueTitleQuery = `
-        SELECT title
+// fetchIssueIdentityQuery reads the work item's title and its repository id
+// from the canonical work_items table. The cycle-time snapshot carries
+// neither. org_id binds the read to the caller's organisation, so another
+// organisation's row for the same work_item_id is never served.
+//
+// repositories counts every repository that holds this work_item_id in the
+// organisation, before LIMIT 1 picks the latest row's title. The repository
+// id is served only when that count is 1 (CHAOS-12563): ACR names a work item
+// work_item.v2:<repo id>:<work_item_id>, and with two repositories either id
+// would be a guess.
+const fetchIssueIdentityQuery = `
+        SELECT
+            title,
+            toString(repo_id) AS repo_id,
+            uniqExact(repo_id) OVER () AS repositories
         FROM work_items FINAL
         WHERE work_item_id = {work_item_id:String}
           AND org_id = {org_id:String}
@@ -276,26 +286,41 @@ const fetchIssueTitleQuery = `
         LIMIT 1
     `
 
-// fetchIssueTitle returns nil when the work item has no stored title: the
-// response then carries a null title and the web shows "Unresolved".
-func fetchIssueTitle(ctx context.Context, client QueryClient, workItemID, orgID string) (*string, error) {
-	rows, err := client.Query(ctx, fetchIssueTitleQuery, []dhclickhouse.Binding{
+// issueIdentity is what work_items says of the work item: its stored title
+// and, when exactly one repository holds it, that repository's id.
+type issueIdentity struct {
+	Title  *string
+	RepoID *string
+}
+
+// fetchIssueIdentity returns no title when none is stored: the response then
+// carries a null title and the web shows "Unresolved". It returns no
+// repository id when none or several repositories hold the work item.
+func fetchIssueIdentity(ctx context.Context, client QueryClient, workItemID, orgID string) (issueIdentity, error) {
+	rows, err := client.Query(ctx, fetchIssueIdentityQuery, []dhclickhouse.Binding{
 		{Name: "work_item_id", Value: workItemID},
 		{Name: "org_id", Value: orgID},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("flame: fetch_issue_title query: %w", err)
+		return issueIdentity{}, fmt.Errorf("flame: fetch_issue_identity query: %w", err)
 	}
 	defer rows.Close()
 	if !rows.Next() {
-		return nil, rows.Err()
+		return issueIdentity{}, rows.Err()
 	}
-	var title string
-	if err := rows.Scan(&title); err != nil {
-		return nil, fmt.Errorf("flame: fetch_issue_title scan: %w", err)
+	var (
+		title, repoID string
+		repositories  uint64
+	)
+	if err := rows.Scan(&title, &repoID, &repositories); err != nil {
+		return issueIdentity{}, fmt.Errorf("flame: fetch_issue_identity scan: %w", err)
 	}
-	if strings.TrimSpace(title) == "" {
-		return nil, rows.Err()
+	var identity issueIdentity
+	if strings.TrimSpace(title) != "" {
+		identity.Title = &title
 	}
-	return &title, rows.Err()
+	if repositories == 1 && strings.TrimSpace(repoID) != "" {
+		identity.RepoID = &repoID
+	}
+	return identity, rows.Err()
 }

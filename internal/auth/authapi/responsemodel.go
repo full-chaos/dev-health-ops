@@ -50,6 +50,7 @@ var responseModelRoutes = map[string]bool{
 	"POST /internal/v1/organizations/deprovision":     false,
 	"POST /internal/v1/organizations/reactivate":      false,
 	"POST /internal/v1/organizations/state":           false,
+	"POST /internal/v1/organizations/rename":          false,
 	"POST /internal/v1/organizations/onboard":         false,
 	"POST /internal/v1/organizations/create":          false,
 	"POST /internal/v1/sessions/state":                false,

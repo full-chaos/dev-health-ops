@@ -115,6 +115,7 @@ internal/auth/contracts	contracts.go	internal/auth/contracts/provisioning
 internal/auth/contracts	contracts.go	internal/auth/contracts/tokencorpus
 internal/auth/contracts	contracts.go	internal/auth/contracts/tokencorpus/gen
 internal/auth/contracts	contracts.go	internal/auth/decisioncache
+internal/auth/contracts	contracts.go	internal/auth/decisionstate
 internal/auth/contracts	contracts.go	internal/auth/delegationinput
 internal/auth/contracts	contracts.go	internal/auth/grant
 internal/auth/contracts	contracts.go	internal/auth/httpapi
@@ -131,6 +132,7 @@ internal/auth/contracts	contracts.go	internal/auth/membership
 internal/auth/contracts	contracts.go	internal/auth/oauthgrant
 internal/auth/contracts	contracts.go	internal/auth/org
 internal/auth/contracts	contracts.go	internal/auth/orgdeprovision
+internal/auth/contracts	contracts.go	internal/auth/outboxprojection
 internal/auth/contracts	contracts.go	internal/auth/passwordpolicy
 internal/auth/contracts	contracts.go	internal/auth/policycatalog
 internal/auth/contracts	contracts.go	internal/auth/pushlifecycle
@@ -171,6 +173,7 @@ internal/auth/keystore	open_unix.go	internal/apiservice/acr
 internal/auth/keystore	open_unix.go	internal/auth/acrmint
 internal/auth/keystore	open_unix.go	internal/auth/authapi
 internal/auth/keystore	open_unix.go	internal/auth/authruntime
+internal/auth/keystore	open_unix.go	internal/auth/decisionstate
 internal/auth/keystore	open_unix.go	internal/auth/keyrotation
 internal/auth/keystore	open_unix.go	internal/auth/keystore
 internal/auth/keystore	open_unix.go	internal/auth/lockorder
@@ -643,6 +646,7 @@ internal/testsupport/bigboydir	bigboydir.go	internal/testsupport/bigboydir
 internal/testsupport/corpusmatrix	matrix.go	internal/testsupport/corpusmatrix
 internal/testsupport/goldenscan	tree.go	internal/testsupport/goldenscan/treegate
 internal/testsupport/goldenscan	tree.go	internal/testsupport/recordedfiles/manifest
+internal/testsupport/idpstub/cmd/idpstub	main.go	internal/testsupport/idpstub/cmd/idpstub
 internal/testsupport/oraclecompare	oraclecompare.go	internal/jobs/investment/categorize/decision
 internal/testsupport/oraclecompare	oraclecompare.go	internal/providersync
 internal/testsupport/providerstub	stub.go	internal/testsupport/providerstub

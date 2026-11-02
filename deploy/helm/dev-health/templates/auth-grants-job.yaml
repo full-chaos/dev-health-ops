@@ -62,6 +62,10 @@ spec:
             - name: AUTH_USERS_OWNED
               value: "true"
             {{- end }}
+            {{- if eq (include "dev-health.authOn" (dict "flag" "orgsOwned" "context" .)) "true" }}
+            - name: AUTH_ORGS_OWNED
+              value: "true"
+            {{- end }}
             {{- if eq (include "dev-health.platformRolesOwned" .) "true" }}
             - name: AUTH_PLATFORM_ROLES_OWNED
               value: "true"

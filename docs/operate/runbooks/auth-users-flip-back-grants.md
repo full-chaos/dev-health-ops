@@ -39,7 +39,7 @@ not hand-run a REVOKE.
    ```
 
    Its `HASH` is the owned pod-template hash.
-2. **The flip-back release:** phase 3, with `acknowledgeGrantNarrowing` set to the digest that a refused run of this
+2. **The flip-back release:** phase 3 with `authService.loginStage: goApi`, and `acknowledgeGrantNarrowing` set to the digest that a refused run of this
    release prints. The hook logs show `runtime grants narrowing deferred with operator acknowledgement`, with the
    number of deferred grants.
 3. **Check that no old owned pod is left (read only).** Count the pods of the owned ReplicaSet, Terminating pods
@@ -99,7 +99,7 @@ not hand-run a REVOKE.
    )
    ```
 
-4. **The narrowing release:** still phase 3, with `authService.migrate.narrowAfterFlipBack=true` and
+4. **The narrowing release:** still phase 3 (`authService.loginStage: goApi`), with `authService.migrate.narrowAfterFlipBack=true` and
    `acknowledgeGrantNarrowing` set to the digest of the deferred grants. A run with a wrong digest is refused and
    prints the right one. The chart refuses the flag without the acknowledgement, and at phase 4 or higher. The hook
    logs show `runtime grants narrowed with operator acknowledgement`.

@@ -154,9 +154,9 @@ The login of `authService.migrate.secretName` is a dedicated role (`LOGIN NOSUPE
 
 **Compose:** a volume made before the migration login existed holds a `postgres`-owned auth schema. `auth-migrate` then stops at the pin with the owner-move remedy. Run `auth-migrate owner-move -from postgres -to devhealth_auth_migrator -runtime-role devhealth_auth -apply` once against that database (the same one-shot image, with the superuser DSN), or recreate the volume. A volume of a dev stack that never ran the auth profile has no auth schema and needs nothing.
 
-**What does not change here:** the kind proofs `ci/check_auth_k8s.sh` and `ci/check_session_cutover_rehearsal.sh` still migrate as a superuser DSN; the least-privilege path is proved by the Compose proof above and by the bigboy k3s rehearsal.
+**What does not change here:** the kind proofs `ci/check_auth_k8s.sh` and `ci/check_session_cutover_rehearsal.sh` still migrate as a superuser DSN; the least-privilege path is proved by the Compose proof above and by the bigboy k3s rehearsal, `ci/auth_owner_move_k3s.sh` (not a CI job: the lead runs it on bigboy in a fresh namespace with registry digests of the PR head images in `AUTH_MOVE_IMAGE_MIGRATE`, `AUTH_MOVE_IMAGE_MIGRATE_PRIOR` and `AUTH_MOVE_IMAGE_SERVICE`; `--print-plan` renders the chart with and without the pin and needs no cluster). Its three legs are a fresh install, an upgrade from a superuser-owned database one migration behind with `owner-move` and the last migration run as the login, and the rollback with an ACL snapshot compared before the move and after the restore. The database there is auth-only; the ops-table privileges are proved by the Compose proof.
 
-**Rollback** is the Secret back to the old DSN **and** `auth-migrate owner-move -from <login> -to <old owner> -restore -apply`. The reverse run is not optional: on the old login a `REVOKE` reaches only the rows that login granted, so a later narrowing would leave the rows the migration login granted.
+**Rollback** is the Secret back to the old DSN, `auth-migrate owner-move -from <login> -to <old owner> -restore -apply` **and** `authService.migrate.ownerRole` empty again (the objects are the old owner's once more, so a pin that still named the migration login would refuse them). The reverse run is not optional: on the old login a `REVOKE` reaches only the rows that login granted, so a later narrowing would leave the rows the migration login granted.
 
 **A change that widens the ops-schema privileges of the runtime login** (a new column in `PublicReadColumns` or in a write grant) states in its PR body to run `auth-migrate owner-move -grants-only` once with the old owner's DSN before the roll. A roll that forgets it fails closed at the grants Job with the privilege named and no partial grant.
 
@@ -181,9 +181,9 @@ rollback is the phase minus 1.
 | 0 | go-api only | No auth-service, no `AUTH_PROXY_*`. |
 | 1 | auth-service dark | auth-service, its migrate and grants Jobs and policies; `AUTH_DATABASE_SCHEMA` on go-api, query-api and the River hooks. No route reaches the service. |
 | 2 | Sessions | Phase 1 plus `AUTH_PROXY_URL`, `AUTH_PROXY_SESSIONS` and `AUTH_SESSION_ISSUE_TOKEN` on go-api (from phase 2 every `AUTH_PROXY_*` flag is rendered `"true"` or `"false"`, so an env entry beats `goApi.envFrom`), `AUTH_PROXY_SESSIONS` on query-api, the migrate Job and the River hooks, the session keys on auth-service, and the auth-service API port open to go-api only. Needs the session readers, the successor key and the rate-limit store. |
-| 3 | Login and social sign-in | Phase 2 plus `AUTH_PROXY_LOCAL_LOGIN` and `AUTH_PROXY_SOCIAL` on go-api, and on auth-service `AUTH_LOGIN_LOCKOUT_KEY` (`authService.sessionKeys.loginLockout`) and the six optional `SOCIAL_<PROVIDER>_CLIENT_ID` / `_CLIENT_SECRET` keys (`authService.social.secretName`). |
+| 3 | Login and social sign-in | Phase 2 plus `AUTH_PROXY_LOCAL_LOGIN` and `AUTH_PROXY_SOCIAL` on go-api (two stages, `authService.loginStage`: `authService` first, then `goApi`), and on auth-service `AUTH_LOGIN_LOCKOUT_KEY` (`authService.sessionKeys.loginLockout`) and the six optional `SOCIAL_<PROVIDER>_CLIENT_ID` / `_CLIENT_SECRET` keys (`authService.social.secretName`). |
 | 4 | Users owned | Phase 3 plus `AUTH_PROXY_CREDENTIALS` and `AUTH_USERS_OWNED` (go-api, auth-service, the migrate, grants and backfill Jobs). Needs `authService.usersOwnedStage`: `goApi` (go-api only) first, then `owned` (everything else), with the barrier script between them ([runbook](../../operate/runbooks/auth-users-owned-flip-and-rollback.md)). Renders (D6358). |
-| 5 | Orgs owned | Phase 4 plus `AUTH_ORGS_OWNED` (auth-service and the backfill Job). **Refused at render.** |
+| 5 | Orgs owned | Phase 4 plus `AUTH_ORGS_OWNED` (auth-service, the backfill Job, and the auth-migrate and auth-grants Jobs). **Refused at render.** |
 
 Phases 4 and 5 mean (D6358) that auth-service becomes the writer of the existing
 public `users` table (4) and of the public `organizations` and `memberships`
@@ -210,6 +210,26 @@ without it they answer 404. The commit floor of the running auth-service image:
 
 Sign-in answers 503 during the move from phase 1 to 2 and back, until the
 auth-service and go-api pods run the same phase.
+
+Phase 3 is two rolls (`authService.loginStage`, CHAOS-12532). One upgrade that turned both halves on made go-api forward
+login while the old auth-service pods, which have no login route, still answered `503` (a rehearsal on k3s measured 11 to
+24 seconds of failed sign-in per flip). So the stage value splits it, and the chart refuses phase 3 without it
+(`authService.loginStage` is `authService` first, then `goApi`), refuses a bad value, and refuses it at any phase other
+than 3:
+
+1. Stage `authService`: set `authService.phase: 3`, `authService.loginStage: authService`, and the two Secret names
+   (`authService.sessionKeys.loginLockout.secretName`, `authService.social.secretName`). Only auth-service changes: it
+   gets `AUTH_LOGIN_LOCKOUT_KEY` and the `SOCIAL_*` client env and mounts the login route. go-api keeps
+   `AUTH_PROXY_LOCAL_LOGIN` and `AUTH_PROXY_SOCIAL` false and logs in locally. Wait until every auth-service pod is Ready
+   (`kubectl rollout status deploy/<release>-auth-service`); the old pods are gone by then.
+2. Stage `goApi`: change `authService.loginStage` to `goApi`. Only go-api changes: it forwards login and social, and
+   every auth-service pod already serves them.
+
+Rollback goes in the reverse order. Stage `goApi` to stage `authService` first (go-api logs in locally again), wait until
+the go-api pods are Ready, then phase 2 with no stage and the two Secret names removed (auth-service drops the login
+route last). The step from phase 3 to phase 4 drops the value too (the phase 4 release carries no `loginStage`; both login
+flags are on at phase 4). A release that returns from phase 4 to phase 3 (the users flip-back) sets
+`authService.loginStage: goApi`, which keeps go-api forwarding login.
 
 The chart cannot read the running image, so check it before the upgrade.
 

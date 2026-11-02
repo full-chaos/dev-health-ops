@@ -464,6 +464,9 @@ func buildIssueFlameResponse(entityID string, issue issueRow) (*Response, error)
 		pyjson.KeyValue[any]{Key: "provider", Value: nullableString(issue.Provider)},
 		pyjson.KeyValue[any]{Key: "type", Value: nullableString(issue.Type)},
 		pyjson.KeyValue[any]{Key: "status", Value: nullableString(issue.Status)},
+		// Go only (CHAOS-12563): the repository that holds the work item, so a
+		// caller can build ACR's work_item.v2 id. Null unless exactly one does.
+		pyjson.KeyValue[any]{Key: "repo_id", Value: nullableString(issue.RepoID)},
 	)
 	return &Response{Entity: entity, Timeline: timeline, Frames: frames}, nil
 }
@@ -591,9 +594,11 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 		if issue == nil {
 			return nil, notFound("Issue not found")
 		}
-		if issue.Title, err = fetchIssueTitle(ctx, client, params.EntityID, orgID); err != nil {
+		identity, err := fetchIssueIdentity(ctx, client, params.EntityID, orgID)
+		if err != nil {
 			return nil, err
 		}
+		issue.Title, issue.RepoID = identity.Title, identity.RepoID
 		return buildIssueFlameResponse(params.EntityID, *issue)
 
 	case "deployment":

@@ -20,11 +20,12 @@ const PatternOrgSuspend = "/internal/v1/organizations/suspend"
 
 const opOrgSuspend = "organization_suspend"
 
-// OrganizationLifecycle ends and begins an organization's suspension, authorizing the actor under the row lock
-// (*org.Store).
+// OrganizationLifecycle ends and begins an organization's suspension and renames it, authorizing the actor under the
+// row lock (*org.Store).
 type OrganizationLifecycle interface {
 	OrganizationReactivator
 	SuspendAuthorized(ctx context.Context, id uuid.UUID, ifRevision *int64, a org.Actor, authz org.Authorize) (changed bool, err error)
+	RenameAuthorized(ctx context.Context, id uuid.UUID, name string, ifRevision *int64, a org.Actor, authz org.Authorize) (changed bool, err error)
 	// Get reads the organization's status and revision in one statement.
 	Get(ctx context.Context, id uuid.UUID) (*org.Organization, error)
 }

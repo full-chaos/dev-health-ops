@@ -10,7 +10,7 @@ func (e Entry) Key() string {
 }
 
 var Allowlist = []Entry{
-	// go-api organization writers, pre-existing; organizations are not owned by auth-service. The auth-service register inserts below only add new rows.
+	// go-api organization writers, pre-existing. auth-service writes only new rows (the births below) and, with AUTH_ORGS_OWNED, name and is_active.
 	{File: "internal/api/billing/subscription.go", Func: "handlers.syncOrgLicense", Table: "public.organizations", Verb: "UPDATE"},
 	{File: "internal/api/billing/subscriptionhooks.go", Func: "handlers.revokeLicense", Table: "public.organizations", Verb: "UPDATE"},
 	{File: "internal/api/billing/webhook.go", Func: "handlers.persistLicense", Table: "public.organizations", Verb: "UPDATE"},
@@ -181,6 +181,8 @@ var Allowlist = []Entry{
 	{File: "internal/auth/invite/orgrevocation.go", Func: "Store.ApplyRevokeAll", Table: "auth.invites", Verb: "UPDATE"},
 	{File: "internal/auth/invite/orgrevocation.go", Func: "Store.ApplyRevokeAll", Table: "public.org_invites", Verb: "UPDATE"},
 	{File: "internal/auth/org/deprovision.go", Func: "Store.ApplySuspend", Table: "auth.organizations", Verb: "UPDATE"},
+	// AUTH_ORGS_OWNED (CHAOS-12275, answers-10992-plan-v2): auth-service keeps go-api's name and is_active equal in the verb's commit.
+	{File: "internal/auth/org/deprovision.go", Func: "Store.ApplySuspend", Table: "public.organizations", Verb: "UPDATE"},
 	{File: "internal/auth/platformrole/store.go", Func: "Store.bootstrapApply", Table: "auth.platform_role_assignments", Verb: "DELETE"},
 	{File: "internal/auth/platformrole/store.go", Func: "Store.bootstrapApply", Table: "auth.platform_role_assignments", Verb: "INSERT"},
 	{File: "internal/auth/platformrole/store.go", Func: "Store.Grant", Table: "auth.platform_role_assignments", Verb: "INSERT"},
@@ -202,6 +204,16 @@ var Allowlist = []Entry{
 	{File: "internal/auth/session/unpinned.go", Func: "RevokeUnpinned", Table: "auth.sessions", Verb: "UPDATE"},
 	// The workload registry (CHAOS-10980; new auth-table writers ruled by acp 10-26 00:4xZ): written by the auth-migrate operator role, inside audit.Commit.
 	// Org service accounts (CHAOS-10989 4.19): written by auth-service, inside audit.Commit.
+	// CHAOS-10896 (acp answers-10896 Q3, answers-10896-3, answers-11196): the credential projection engine writes the external_source
+	// principal, the registry row and the projected state, each inside audit.Commit; the reader and the acr route call it.
+	{File: "internal/auth/outboxprojection/store.go", Func: "Engine.ensureSource", Table: "auth.principals", Verb: "INSERT"},
+	{File: "internal/auth/outboxprojection/store.go", Func: "Engine.ensureSource", Table: "auth.push_sources", Verb: "INSERT"},
+	{File: "internal/auth/outboxprojection/store.go", Func: "Engine.expireRegistry", Table: "auth.credential_registry", Verb: "UPDATE"},
+	{File: "internal/auth/outboxprojection/store.go", Func: "Engine.insertDigest", Table: "auth.credential_projection_digest", Verb: "INSERT"},
+	{File: "internal/auth/outboxprojection/store.go", Func: "Engine.insertRegistry", Table: "auth.credential_registry", Verb: "INSERT"},
+	{File: "internal/auth/outboxprojection/store.go", Func: "Engine.narrowScopes", Table: "auth.credential_registry", Verb: "UPDATE"},
+	{File: "internal/auth/outboxprojection/store.go", Func: "Engine.revokeRegistry", Table: "auth.credential_registry", Verb: "UPDATE"},
+	{File: "internal/auth/outboxprojection/store.go", Func: "Engine.upsertProjection", Table: "auth.credential_projection", Verb: "UPSERT"},
 	{File: "internal/auth/serviceaccount/keys.go", Func: "Store.IssueKey", Table: "auth.credential_registry", Verb: "INSERT"},
 	{File: "internal/auth/serviceaccount/keys.go", Func: "Store.RotateKey", Table: "auth.credential_registry", Verb: "INSERT"},
 	{File: "internal/auth/serviceaccount/keys.go", Func: "Store.RotateKey", Table: "auth.credential_registry", Verb: "UPDATE"},
@@ -236,6 +248,7 @@ var Allowlist = []Entry{
 	{File: "internal/auth/workload/bootstrap_lifecycle.go", Func: "Store.RotateBootstrap", Table: "auth.credential_registry", Verb: "UPDATE"},
 	{File: "internal/auth/org/store.go", Func: "Store.Create", Table: "auth.organizations", Verb: "INSERT"},
 	{File: "internal/auth/org/store.go", Func: "Store.mutateOnce", Table: "auth.organizations", Verb: "UPDATE"},
+	{File: "internal/auth/org/store.go", Func: "Store.writePublic", Table: "public.organizations", Verb: "UPDATE"},
 	// TEMPORARY: the one-time legacy refresh exchange revokes go-api's refresh tokens (authschema.LegacyRefreshTokenGrant). CHAOS-10408 removes both rows with the grant.
 	// acp ruling 2026-10-26 (CHAOS-11506): the legacy link-token purge, run only where users are owned; DELETE of go-api's public link-token rows, counted and audited.
 	{File: "internal/auth/usersbackfill/linkpurge.go", Func: "PurgeLegacyLinks", Table: "public.email_verification_tokens", Verb: "DELETE"},

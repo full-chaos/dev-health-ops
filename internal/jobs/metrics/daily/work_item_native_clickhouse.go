@@ -281,7 +281,9 @@ func WriteWorkItemUserMetricsDaily(
 	batch, err := conn.PrepareBatch(ctx, `INSERT INTO work_item_user_metrics_daily (
 		day, provider, work_scope_id, user_identity, team_id, team_name,
 		items_started, items_completed, wip_count_end_of_day,
-		cycle_time_p50_hours, cycle_time_p90_hours, computed_at, org_id, row_view, retracted)`)
+		cycle_time_p50_hours, cycle_time_p90_hours, computed_at, org_id,
+		team_split_team_ids, team_split_is_primary, team_split_items_completed, team_split_wip_end_of_day,
+		row_view, retracted)`)
 	if err != nil {
 		return 0, fmt.Errorf("prepare work_item_user_metrics_daily batch: %w", err)
 	}
@@ -322,10 +324,15 @@ func WriteWorkItemUserMetricsDaily(
 		if err != nil {
 			return 0, err
 		}
+		split, err := workItemUserTeamSplitColumns(row)
+		if err != nil {
+			return 0, err
+		}
 		if err := batch.Append(
 			dayValue, row.Provider, row.WorkScopeID, row.UserIdentity, row.TeamID, row.TeamName,
 			counters[0], counters[1], counters[2],
-			row.CycleTimeP50Hours, row.CycleTimeP90Hours, item.at, organizationID, item.view, item.retracted,
+			row.CycleTimeP50Hours, row.CycleTimeP90Hours, item.at, organizationID,
+			split.teamIDs, split.isPrimary, split.completed, split.wip, item.view, item.retracted,
 		); err != nil {
 			return 0, fmt.Errorf("append work_item_user_metrics_daily row: %w", err)
 		}
@@ -455,4 +462,35 @@ func WriteEstimateCoverageMetricsDaily(
 // workItemRowViews are the views every aggregate row of the three work-item
 // daily tables is written under. Until the per-scope dedupe lands both views
 // hold the same numbers; a legacy row is never written again.
+// workItemUserTeamSplit is the four parallel team_split_* columns of one
+// work_item_user_metrics_daily row (CHAOS-12535). A row of zeros holds none.
+type workItemUserTeamSplit struct {
+	teamIDs   []string
+	isPrimary []uint8
+	completed []uint32
+	wip       []uint32
+}
+
+func workItemUserTeamSplitColumns(row workitemmetrics.UserMetricsDailyRow) (workItemUserTeamSplit, error) {
+	split := workItemUserTeamSplit{
+		teamIDs: []string{}, isPrimary: []uint8{}, completed: []uint32{}, wip: []uint32{},
+	}
+	for _, entry := range row.TeamSplit {
+		counters, err := workItemUInt32s("work_item_user_metrics_daily",
+			fmt.Sprintf("%s %q user %q team %q", row.Provider, row.WorkScopeID, row.UserIdentity, entry.TeamID),
+			[]workItemCounter{
+				{"team_split_items_completed", entry.ItemsCompleted},
+				{"team_split_wip_end_of_day", entry.WIPCountEndOfDay},
+			})
+		if err != nil {
+			return workItemUserTeamSplit{}, err
+		}
+		split.teamIDs = append(split.teamIDs, entry.TeamID)
+		split.isPrimary = append(split.isPrimary, entry.IsPrimary)
+		split.completed = append(split.completed, counters[0])
+		split.wip = append(split.wip, counters[1])
+	}
+	return split, nil
+}
+
 var workItemRowViews = []string{teamkeytables.OrgRowView, teamkeytables.ScopeRowView}

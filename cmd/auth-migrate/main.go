@@ -222,6 +222,12 @@ func execute(
 		return 1
 	}
 
+	orgsOwned, err := authconfig.OrgsOwnedFromLookup(lookup)
+	if err != nil {
+		fmt.Fprintf(stderr, "configuration error: %v\n", err)
+		return 1
+	}
+
 	platformRolesOwned, err := rule.OwnedFromLookup(lookup)
 	if err != nil {
 		fmt.Fprintf(stderr, "configuration error: %v\n", err)
@@ -257,6 +263,7 @@ func execute(
 			PushLifecycleWriterRole:  pushWriter,
 			PushLifecycleCallerRoles: pushCallers,
 			UsersOwned:               usersOwned,
+			OrgsOwned:                orgsOwned,
 			PlatformRolesOwned:       platformRolesOwned,
 			SchemaOwnerRole:          ownerRole,
 			AcknowledgeNarrowing:     strings.TrimSpace(*ackNarrowing),
@@ -278,6 +285,7 @@ func execute(
 		PushLifecycleWriterRole:  pushWriter,
 		PushLifecycleCallerRoles: pushCallers,
 		UsersOwned:               usersOwned,
+		OrgsOwned:                orgsOwned,
 		PlatformRolesOwned:       platformRolesOwned,
 		SchemaOwnerRole:          ownerRole,
 

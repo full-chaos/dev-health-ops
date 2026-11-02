@@ -176,7 +176,7 @@ func TestPDPLoadK3sPodScriptKeepsValuesOffArgvAndInFiles(t *testing.T) {
 // The runner pod is a YAML template (envsubst IMG_MIG and RUNNER_IMAGE): the bootstrap value is written in the pod's own
 // volume by an init container and read by nothing outside the pod.
 func TestPDPLoadK3sRunnerPodWritesTheBootstrapValueIntoItsOwnVolumeOnly(t *testing.T) {
-	text := readText(t, filepath.Join(rootOf(t), "ci/pdp_load_k3s/runner-pod.yaml"))
+	text := readText(t, filepath.Join(rootOf(t), "ci/pdp_load_k3s/runner-pod.tpl"))
 	text = strings.NewReplacer("${IMG_MIG}", "registry.example/m@sha256:"+strings.Repeat("a", 64), "${RUNNER_IMAGE}", "registry.example/r@sha256:"+strings.Repeat("b", 64)).Replace(text)
 	var pod struct {
 		Spec struct {

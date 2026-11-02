@@ -372,6 +372,11 @@ type Config struct {
 	// (dho api only): JWT_SECRET_KEY, JWT_ISSUER and JWT_AUDIENCE, the same
 	// variables the Python api reads.
 	APIJWTSecret secrets.Value
+	// SSOStateSecret and GitHubAppStateSecret (SSO_STATE_SECRET,
+	// GITHUB_APP_STATE_SECRET) key the SSO login state and the GitHub App
+	// install state, one key per purpose. Optional (dho api only).
+	SSOStateSecret       secrets.Value
+	GitHubAppStateSecret secrets.Value
 	// LinkTokenSecret signs invite, verification and reset link tokens;
 	// LinkTokenSecretPrevious is a retired signing key still accepted during a
 	// rotation overlap (dho api only). Both are optional.

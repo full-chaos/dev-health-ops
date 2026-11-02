@@ -116,6 +116,10 @@ const (
 	// padding): the HMAC key of the lockout identifier (local.Config). Set,
 	// with the session secrets, it mounts the login route. Secret.
 	EnvLoginLockoutKey = "AUTH_LOGIN_LOCKOUT_KEY"
+	// EnvRateLimitKey is the key the rate-limit counters digest identifiers
+	// with (HKDF input). Optional; unset, the limiter is keyed from
+	// EnvAccessTokenSecret. Secret: environment or _FILE only.
+	EnvRateLimitKey = "AUTH_RATE_LIMIT_KEY"
 
 	// EnvUsersOwned is the D3c users-owned switch (true or false, default false).
 	EnvUsersOwned = "AUTH_USERS_OWNED"
@@ -309,6 +313,8 @@ type SessionTokens struct {
 	// LegacyAudience is the audience of go-api's HS256 token under the eddsa class.
 	LegacyAudience string
 	SuccessorKey   secrets.Value
+	// RateLimitKey is EnvRateLimitKey; unset, the rate limiter keys from AccessSecret.
+	RateLimitKey secrets.Value
 	// LoginEnabled is set with LockoutKey: the login route is mounted.
 	LoginEnabled bool
 	LockoutKey   secrets.Value

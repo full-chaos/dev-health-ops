@@ -65,13 +65,21 @@ func refreshResponse(access, refresh string, user *pyjson.Object) *pyjson.Object
 	return out
 }
 
+func (h handlers) verifyRefresh(ctx context.Context, token string) (jwt.MapClaims, error) {
+	claims, err := h.Verifier.VerifyType(token, edgetoken.RefreshType)
+	if err != nil {
+		h.Logger.DebugContext(ctx, "refresh token refused", "reason", edgetoken.ReasonOf(err))
+		return nil, err
+	}
+	return claims, nil
+}
+
 // refresh is POST /api/v1/auth/refresh (refresh.py).
 func (h handlers) refresh(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	token, _ := ctx.Value(refreshInputKey{}).(string)
-	claims, verifyErr := h.Verifier.VerifyType(token, edgetoken.RefreshType)
+	claims, verifyErr := h.verifyRefresh(ctx, token)
 	if verifyErr != nil {
-		h.Logger.DebugContext(ctx, "refresh token refused", "reason", edgetoken.ReasonOf(verifyErr))
 		h.refuseInvalidRefresh(w, r, token)
 		return
 	}

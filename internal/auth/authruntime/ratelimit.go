@@ -125,9 +125,13 @@ func limitStore(
 	if err := registry.RegisterMetrics(metricsSourceRateLimit, httpapi.RateLimitStoreErrors); err != nil {
 		return nil, nil, err
 	}
-	limits, err := authapi.NewLimits(store, cfg.Session.AccessSecret.Reveal())
+	limits, err := authapi.NewLimits(store, rateLimitSecret(cfg))
 	if err != nil {
 		return nil, nil, err
 	}
 	return limits, []lifecycle.Component{store}, nil
+}
+
+func rateLimitSecret(cfg authconfig.Config) string {
+	return cfg.Session.AccessSecret.Reveal()
 }

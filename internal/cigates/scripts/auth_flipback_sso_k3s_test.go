@@ -302,3 +302,27 @@ func TestFlipbackSSORunbookCarriesTheStepLinesAndTheJITScope(t *testing.T) {
 		}
 	}
 }
+
+// The port-forward is a long-lived child. Started through the kc shell function it is a subshell: kill of $! leaves the kubectl
+// behind, and that kubectl holds fd 9 of the heavy slot lock. So it is a direct kubectl command with fd 9 closed, and the stop
+// waits for it.
+func TestFlipbackSSOK3sPortForwardIsADirectKubectlWithoutTheSlotFd(t *testing.T) {
+	text := readText(t, filepath.Join(rootOf(t), fbScript))
+	var found int
+	for n, line := range strings.Split(text, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") || !strings.Contains(trimmed, "port-forward") || strings.HasPrefix(trimmed, "die ") || strings.Contains(trimmed, "did not start") {
+			continue
+		}
+		found++
+		if !strings.HasPrefix(trimmed, `kubectl --kubeconfig "${KUBECONFIG_FILE}"`) || !strings.Contains(trimmed, "9>&-") || !strings.HasSuffix(trimmed, "&") {
+			t.Errorf("line %d: the port-forward must be a direct kubectl command with 9>&- run in the background: %s", n+1, trimmed)
+		}
+	}
+	if found != 1 {
+		t.Errorf("found %d port-forward start lines; want 1", found)
+	}
+	if !strings.Contains(text, `wait "${pid}"`) {
+		t.Errorf("pf_stop does not wait for the killed port-forward")
+	}
+}

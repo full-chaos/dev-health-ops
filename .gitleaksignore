@@ -61,3 +61,7 @@ internal/auth/authapi/compat_validate_test.go:generic-api-key:588
 # CHAOS-12562: the parity golden cell passes the map key and the field-name literal "CycleP5030dHours" to assertFloatEqual; the
 # generic-api-key rule reads them as a key and a value. Commit-less file:rule:line form (line 582 in c6ee7c06 and at the tip). Not a credential.
 internal/jobs/metrics/daily/icfinalize/parity_golden_test.go:generic-api-key:582
+# CHAOS-11620: the k3s rehearsal cell file holds the fixed placeholder run token "0123456789abcdef" (line 25 at the tip) and a call that
+# passes it to the stub (line 155 in 3f0ccab68). The generic-api-key rule reads them as a key. Commit-less file:rule:line form. Not a credential.
+internal/cigates/scripts/auth_flipback_sso_k3s_test.go:generic-api-key:25
+internal/cigates/scripts/auth_flipback_sso_k3s_test.go:generic-api-key:155

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -17,11 +18,16 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel"
 
+	"github.com/full-chaos/dev-health-go/authverify"
+
+	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	apisession "github.com/full-chaos/dev-health-ops/internal/api/session"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/auth/acrmint"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
@@ -68,6 +74,14 @@ type goAPIValidateStore struct{ f *validateFixture }
 func (g goAPIValidateStore) UserState(ctx context.Context, id uuid.UUID) (policy.UserState, bool, error) {
 	state, found, err := g.f.users.State(ctx, id)
 	return policy.UserState{IsActive: state.IsActive, IsSuperuser: state.IsSuperuser, TokenVersion: state.TokenVersion}, found, err
+}
+
+func (g goAPIValidateStore) AccessUser(ctx context.Context, id uuid.UUID) (policy.AccessUserRow, bool, error) {
+	state, found, err := g.f.users.State(ctx, id)
+	return policy.AccessUserRow{
+		State: policy.UserState{IsActive: state.IsActive, IsSuperuser: state.IsSuperuser, TokenVersion: state.TokenVersion},
+		Email: state.Email, Username: state.Username, FullName: state.FullName,
+	}, found, err
 }
 
 func (g goAPIValidateStore) Membership(ctx context.Context, user, org uuid.UUID) (string, bool, error) {
@@ -180,8 +194,10 @@ func (f *validateFixture) build() {
 	f.goAPI = f.goAPIHandler()
 }
 
-// goAPIHandler is go-api's own POST /api/v1/auth/validate, unrouted (HS256
-// only, prod today), over goAPIValidateStore.
+// goAPIHandler is go-api's own POST /api/v1/auth/validate over
+// goAPIValidateStore: unrouted (HS256 only, prod today), or under the EdDSA
+// configuration routed as go-api routes it (goAPIRouteAccess), behind its
+// route-profile middleware (apiservice newServer).
 func (f *validateFixture) goAPIHandler() http.Handler {
 	f.t.Helper()
 	verifier, err := edgetoken.New(testSecret, testIssuer, testAudience)
@@ -198,16 +214,134 @@ func (f *validateFixture) goAPIHandler() http.Handler {
 		f.t.Fatal(err)
 	}
 	f.t.Cleanup(pool.Close)
+	if f.eddsa {
+		f.goAPIRouteAccess(auth, logger)
+	}
 	for _, route := range apisession.Routes(apisession.Deps{Pool: pool, Guard: policy.NewGuard(auth, logger), Auth: auth,
 		Verifier: verifier, Signer: f.hs256, Logger: logger, Limits: httpapi.NewMemoryCounters(nil)}) {
 		if route.Method == http.MethodPost && route.Pattern == PatternCompatValidate {
+			templates, err := httpapi.NewRouteTemplates([]httpapi.Route{route})
+			if err != nil {
+				f.t.Fatal(err)
+			}
 			mux := http.NewServeMux()
 			mux.Handle(route.Method+" "+route.Pattern, route.Handler)
-			return mux
+			return policy.RouteProfiles(templates.Match)(mux)
 		}
 	}
 	f.t.Fatal("go-api mounts no validate route")
 	return nil
+}
+
+// goAPIAccessService is go-api's endpoint-profile service (apiservice
+// goAPIAccessService).
+const goAPIAccessService = "dev-health-ops-api"
+
+// goAPIRouteAccess routes auth as go-api's service start does
+// (apiservice buildAccessVerify, then RouteAccess): every dev-health-ops-api
+// row of go-api's endpoint-profile document, the EdDSA verifier of audience
+// dev-health-api pinned to the fixture's issuer over the keys the fixture
+// signs with, and the HS256 path as the legacy verifier.
+func (f *validateFixture) goAPIRouteAccess(auth *policy.Authenticator, logger *slog.Logger) {
+	f.t.Helper()
+	set, err := f.signer.KeySet(context.Background())
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	keys := authverify.StaticKeys{}
+	for _, key := range set.Published() {
+		keys[key.KeyID] = key.PublicKey
+	}
+	verifier, err := authverify.NewVerifier(authverify.VerifierConfig{Issuer: goldenIssuer, Audience: "dev-health-api", Keys: keys})
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	validator, err := accessverify.New(accessverify.Config{
+		Rows:   goAPIAccessRows(f.t),
+		EdDSA:  verifier,
+		Legacy: goAPILegacyVerifier(auth.AuthenticateLegacy),
+		Meter:  otel.Meter("github.com/full-chaos/dev-health-ops/internal/auth/accessverify"),
+		Logger: logger,
+	})
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	if err := auth.RouteAccess(goAPIRoutedAccess{validator}, goAPIAccessService); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+// goAPIAccessRows is apiservice goAPIAccessRows: every dev-health-ops-api row
+// of go-api's endpoint-profile document.
+func goAPIAccessRows(t *testing.T) []accessverify.Row {
+	t.Helper()
+	var document struct {
+		Rows []struct {
+			Service    string   `json:"service"`
+			Method     string   `json:"method"`
+			Route      string   `json:"route"`
+			Classes    []string `json:"accepted_credential_classes"`
+			Validation *struct {
+				LegacyHS256 bool `json:"legacy_hs256"`
+			} `json:"access_token_validation"`
+		} `json:"rows"`
+	}
+	if err := json.Unmarshal(authv1.GoAPIEndpointProfiles, &document); err != nil {
+		t.Fatal(err)
+	}
+	var rows []accessverify.Row
+	for _, entry := range document.Rows {
+		if entry.Service != goAPIAccessService {
+			continue
+		}
+		accepts := false
+		for _, class := range entry.Classes {
+			accepts = accepts || class == accessverify.ClassUser
+		}
+		rows = append(rows, accessverify.Row{Service: goAPIAccessService, Profile: entry.Method + " " + entry.Route,
+			AcceptsUser: accepts, LegacyHS256: entry.Validation != nil && entry.Validation.LegacyHS256})
+	}
+	return rows
+}
+
+// goAPILegacyVerifier is apiservice legacyVerifier.
+func goAPILegacyVerifier(authenticate func(context.Context, string) (*policy.User, error)) accessverify.LegacyVerifier {
+	return func(ctx context.Context, token string) (any, error) {
+		user, err := authenticate(ctx, token)
+		switch {
+		case err == nil:
+			return user, nil
+		case policy.IsRefusal(err), policy.IsClaimTypeError(err):
+			return nil, err
+		default:
+			return nil, fmt.Errorf("%w: %w", accessverify.ErrUnavailable, err)
+		}
+	}
+}
+
+// goAPIRoutedAccess is apiservice routedAccessVerify.
+type goAPIRoutedAccess struct{ validator *accessverify.Validator }
+
+func (r goAPIRoutedAccess) Validate(ctx context.Context, service, profile, bearer string) (*policy.RoutedResult, error) {
+	result, err := r.validator.Validate(ctx, service, profile, bearer)
+	switch {
+	case errors.Is(err, authverify.ErrKeySourceUnavailable):
+		return nil, fmt.Errorf("%w: %w", policy.ErrKeySourceUnavailable, err)
+	case errors.Is(err, accessverify.ErrUnavailable):
+		return nil, fmt.Errorf("%w: %w", policy.ErrUnavailable, err)
+	case err != nil:
+		return nil, err
+	}
+	switch {
+	case result.Class == accessverify.ClassLegacy:
+		if user, ok := result.Legacy.(*policy.User); ok && user != nil {
+			return &policy.RoutedResult{Legacy: user}, nil
+		}
+	case result.Class == accessverify.ClassUser && result.Claims != nil:
+		claims := result.Claims
+		return &policy.RoutedResult{Claims: &policy.AccessTokenClaims{Subject: claims.Subject, SessionID: claims.SessionID, OrgID: claims.OrgID}}, nil
+	}
+	return nil, errors.New("go-api access verify: result of an unexpected class")
 }
 
 func (f *validateFixture) post(server http.Handler, body string, header map[string]string) *httptest.ResponseRecorder {
@@ -313,9 +447,11 @@ func TestValidateCompatC1ASidlessTokenOfAnActiveUserIsValidAsInGoAPI(t *testing.
 	expectSamePlanes(t, "sid-less token", compat, goAPI)
 }
 
-// c2: a token naming a live session of an active user at the current
-// token_version is valid on both planes.
-func TestValidateCompatC2ALiveSessionOfAnActiveUserIsValid(t *testing.T) {
+// c2, the HS256 class cell (answers-12395-3 D1): an HS256 token naming a live
+// session of an active user at the current token_version is valid, and the
+// answer is go-api's unrouted answer byte for byte (c1, c3 and c4 compare the
+// class's other rows the same way).
+func TestValidateCompatC2HS256AnswerIsGoAPIsAnswerByteForByte(t *testing.T) {
 	f := newValidateFixture(t, false)
 	body := tokenBody(f.hs256Token(nil))
 	compat, goAPI := f.post(f.server, body, nil), f.post(f.goAPI, body, nil)
@@ -450,6 +586,76 @@ func TestValidateCompatC4RefusedInputsAnswerGoAPIsStatusAndBody(t *testing.T) {
 					t.Errorf("%s: %d %s, recorded Python answer %d %v", tc.name, compat.Code, compat.Body, status, want)
 				}
 			}
+		})
+	}
+}
+
+// The EdDSA class cell (answers-12395-3 D1): under the EdDSA configuration
+// the answer to a user access token of audience dev-health-api is go-api's
+// routed answer (accessverify, then accessTokenUser's users row, session and
+// membership reads) for the same token and rows, byte for byte; an HS256
+// token beside it is go-api's routed legacy answer.
+func TestValidateCompatEdDSAAnswerIsGoAPIsRoutedAnswerByteForByte(t *testing.T) {
+	stale, other := int64(3), uuid.New()
+	for _, tc := range []struct {
+		name    string
+		arrange func(*validateFixture)
+		token   func(*validateFixture) string
+		want    func(*validateFixture) string
+	}{
+		{name: "live session of an active user", want: func(f *validateFixture) string {
+			return f.validAnswer("ada@example.com", f.org.String(), "admin")
+		}},
+		{name: "email from the users row, role from the membership row", arrange: func(f *validateFixture) {
+			user, viewer := f.users.users[f.principal], "viewer"
+			user.Email = "ada.lovelace@example.com"
+			f.users.users[f.principal] = user
+			f.users.roles[[2]uuid.UUID{f.principal, f.org}] = &viewer
+		}, want: func(f *validateFixture) string {
+			return f.validAnswer("ada.lovelace@example.com", f.org.String(), "viewer")
+		}},
+		{name: "deactivated user", arrange: func(f *validateFixture) {
+			user := f.users.users[f.principal]
+			user.IsActive = false
+			f.users.users[f.principal] = user
+		}},
+		{name: "unknown user", arrange: func(f *validateFixture) { delete(f.users.users, f.principal) }},
+		{name: "unknown session", arrange: func(f *validateFixture) { delete(f.rows.rows, f.record.ID) }},
+		{name: "revoked session", arrange: func(f *validateFixture) {
+			now := time.Now()
+			f.rows.rows[f.record.ID] = policy.SessionRow{PrincipalID: f.principal, Revoked: true, LegacyTokenVersion: f.record.LegacyTokenVersion}
+			record := f.record
+			record.RevokedAt = &now
+			f.sessions.records[f.record.ID] = record
+		}},
+		{name: "session of another principal", arrange: func(f *validateFixture) {
+			f.rows.rows[f.record.ID] = policy.SessionRow{PrincipalID: other, LegacyTokenVersion: f.record.LegacyTokenVersion}
+		}},
+		{name: "stale pin", arrange: func(f *validateFixture) {
+			f.rows.rows[f.record.ID] = policy.SessionRow{PrincipalID: f.principal, LegacyTokenVersion: &stale}
+		}},
+		{name: "org the user left", arrange: func(f *validateFixture) { delete(f.users.roles, [2]uuid.UUID{f.principal, f.org}) }},
+		{name: "aud auth-service", token: func(f *validateFixture) string { return f.eddsaToken(contracts.SessionRouteAudience) }},
+		{name: "HS256 token beside it", token: func(f *validateFixture) string { return f.hs256Token(nil) }, want: func(f *validateFixture) string {
+			return f.validAnswer("ada@example.com", f.org.String(), "admin")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newValidateFixture(t, true)
+			if tc.arrange != nil {
+				tc.arrange(f)
+			}
+			token := f.eddsaToken(contracts.PlatformAPIAudience)
+			if tc.token != nil {
+				token = tc.token(f)
+			}
+			want := nullAnswer
+			if tc.want != nil {
+				want = tc.want(f)
+			}
+			compat, goAPI := f.post(f.server, tokenBody(token), nil), f.post(f.goAPI, tokenBody(token), nil)
+			expectAnswer(t, tc.name, compat, http.StatusOK, want)
+			expectSamePlanes(t, tc.name, compat, goAPI)
 		})
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -149,8 +150,9 @@ func TestBaselineEqualsTheArchivedChain(t *testing.T) {
 }
 
 // TestAPreSquashHeadDatabaseRunsNoDDL: a database the old way built to its head (prod, bigboy and every dev database
-// reach the squash this way) is at this build's head, nothing pending, and an upgrade of it changes nothing: no
-// object, no seed row, no version row.
+// reach the squash this way) is at this build's baseline head, nothing of the squash pending, and an upgrade against the
+// baseline changes nothing: no object, no seed row, no version row. The live chain (sql/, the migrations after the
+// squash) is then pending exactly, and an upgrade applies exactly its files and nothing of the baseline.
 func TestAPreSquashHeadDatabaseRunsNoDDL(t *testing.T) {
 	env := newSquashEnv(t)
 	head, err := chmigrate.LoadBaseline()
@@ -161,17 +163,20 @@ func TestAPreSquashHeadDatabaseRunsNoDDL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	database, conn, db, _ := env.build(t, loadArchivedBaseline(t), loadArchivedChain(t))
+	archivedChain := loadArchivedChain(t)
+	archivedHead := archivedChain[len(archivedChain)-1].Version
+	database, conn, db, _ := env.build(t, loadArchivedBaseline(t), archivedChain)
 	beforeCatalog, beforeVersions := catalog(t, env.ctx, conn, database), versionRows(t, env.ctx, conn, database)
 	beforeCapture := capture(t, env.ctx, conn, database, productionContract)
 
-	status, err := chmigrate.ReadStatus(env.ctx, db, head, live)
-	if err != nil || status.State != "at_head" || len(status.Pending) != 0 || status.Head != chmigrate.HeadVersion(head, live) {
-		t.Fatalf("status of a pre-squash head database = %+v, %v; want at_head with nothing pending", status, err)
+	// The squash: the baseline alone.
+	status, err := chmigrate.ReadStatus(env.ctx, db, head, nil)
+	if err != nil || status.State != "at_head" || len(status.Pending) != 0 || status.Head != archivedHead {
+		t.Fatalf("status of a pre-squash head database against the baseline = %+v, %v; want at_head %s with nothing pending", status, err, archivedHead)
 	}
-	result, err := chmigrate.Upgrade(env.ctx, db, head, live)
+	result, err := chmigrate.Upgrade(env.ctx, db, head, nil)
 	if err != nil || result.Action != "up_to_date" || len(result.Created)+len(result.Seeded)+len(result.Applied) != 0 {
-		t.Fatalf("upgrade of a pre-squash head database = %+v, %v; want up_to_date, nothing created, seeded or applied", result, err)
+		t.Fatalf("upgrade of a pre-squash head database against the baseline = %+v, %v; want up_to_date, nothing created, seeded or applied", result, err)
 	}
 	if got := versionRows(t, env.ctx, conn, database); !reflect.DeepEqual(got, beforeVersions) {
 		t.Errorf("schema_migrations changed: %s", firstDifference(got, beforeVersions))
@@ -180,6 +185,48 @@ func TestAPreSquashHeadDatabaseRunsNoDDL(t *testing.T) {
 		t.Errorf("the upgrade changed the database: %s", diff)
 	}
 	compareCatalogs(t, "after the upgrade", catalog(t, env.ctx, conn, database), beforeCatalog)
+
+	// The live chain: exactly its files are pending and applied, after the baseline head.
+	var liveVersions []string
+	for _, file := range live {
+		liveVersions = append(liveVersions, file.Version)
+	}
+	status, err = chmigrate.ReadStatus(env.ctx, db, head, live)
+	if err != nil || status.State != "at_head" || !reflect.DeepEqual(status.Pending, liveVersions) || status.Head != chmigrate.HeadVersion(head, live) {
+		t.Fatalf("status of a pre-squash head database with the live chain = %+v, %v; want at_head with exactly %v pending", status, err, liveVersions)
+	}
+	wantAction := "up_to_date"
+	if len(live) > 0 {
+		wantAction = "chain_applied"
+	}
+	result, err = chmigrate.Upgrade(env.ctx, db, head, live)
+	if err != nil || result.Action != wantAction || len(result.Created)+len(result.Seeded) != 0 || !reflect.DeepEqual(result.Applied, liveVersions) {
+		t.Fatalf("upgrade of a pre-squash head database with the live chain = %+v, %v; want %s applying exactly %v, nothing created or seeded", result, err, wantAction, liveVersions)
+	}
+	gained := map[string]int{}
+	for _, row := range versionRows(t, env.ctx, conn, database) {
+		gained[strings.SplitN(row, "|", 2)[0]]++
+	}
+	for _, row := range beforeVersions {
+		gained[strings.SplitN(row, "|", 2)[0]]--
+	}
+	var gainedVersions []string
+	for version, count := range gained {
+		if count != 0 {
+			gainedVersions = append(gainedVersions, version)
+		}
+		if count != 0 && count != 1 {
+			t.Errorf("schema_migrations gained %d rows of %s", count, version)
+		}
+	}
+	sort.Strings(gainedVersions)
+	if !reflect.DeepEqual(gainedVersions, liveVersions) {
+		t.Errorf("schema_migrations gained %v, want exactly the live chain %v", gainedVersions, liveVersions)
+	}
+	status, err = chmigrate.ReadStatus(env.ctx, db, head, live)
+	if err != nil || status.State != "at_head" || len(status.Pending) != 0 {
+		t.Fatalf("status after the live chain = %+v, %v; want at_head with nothing pending", status, err)
+	}
 }
 
 // TestADatabaseBelowTheSquashedBaselineIsRefused: a database the old way left part-way through the archived chain

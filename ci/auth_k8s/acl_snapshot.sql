@@ -27,4 +27,10 @@ SELECT kind || '|' || object || '|' || grantor || '>' || grantee || '|' || priv 
   CROSS JOIN LATERAL aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
   JOIN pg_roles gr ON gr.oid = a.grantor LEFT JOIN pg_roles ge ON ge.oid = a.grantee
   WHERE n.nspname = 'auth'
+  UNION ALL
+  SELECT 'type', n.nspname || '.' || t.typname, gr.rolname::text, coalesce(ge.rolname::text, 'PUBLIC'), a.privilege_type, a.is_grantable
+  FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+  CROSS JOIN LATERAL aclexplode(coalesce(t.typacl, acldefault('T', t.typowner))) a
+  JOIN pg_roles gr ON gr.oid = a.grantor LEFT JOIN pg_roles ge ON ge.oid = a.grantee
+  WHERE n.nspname = 'auth' AND t.typcategory <> 'A'
 ) s ORDER BY 1;

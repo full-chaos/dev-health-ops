@@ -3,7 +3,7 @@
 # Not a CI job (no kind): the lead runs it on bigboy in a FRESH namespace and the script deletes that namespace on exit.
 #
 #   ci/auth_owner_move_k3s.sh --print-plan   no cluster: print the plan and check the chart renders the pin env (needs helm)
-#   ci/auth_owner_move_k3s.sh [--keep]       the three legs below; --keep leaves the namespace for a failed run
+#   ci/auth_owner_move_k3s.sh                the three legs below; the namespace is always deleted on exit
 #
 # Leg 1 FRESH     schema created AUTHORIZATION the NOSUPERUSER migration login; chart install with ownerRole.
 # Leg 2 UPGRADE   a superuser-owned database one migration behind (the PRIOR auth-migrate image), `owner-move` (dry run, then
@@ -28,7 +28,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -
 ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
 readonly SCRIPT_DIR ROOT
 readonly PG_IMAGE="postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15"
-readonly DIGEST_RE='^[a-z0-9./_-]+(:[0-9]+)?(/[a-z0-9._-]+)*@sha256:[0-9a-f]{64}$'
+readonly DIGEST_RE='^[a-z0-9]+([._-][a-z0-9]+)*(:[0-9]+)?(/[a-z0-9]+([._-][a-z0-9]+)*)+@sha256:[0-9a-f]{64}$'
 readonly MIGRATOR="devhealth_auth_migrator"
 readonly RUNTIME="devhealth_auth"
 readonly RELEASE_FRESH="amf" RELEASE_UPG="amu" RELEASE_RB="amr"
@@ -40,19 +40,18 @@ die() {
 pass() { printf 'PASS: %s\n' "$1"; }
 
 PRINT_PLAN=0
-KEEP=0
 for arg in "$@"; do
   case "${arg}" in
     --print-plan) PRINT_PLAN=1 ;;
-    --keep) KEEP=1 ;;
-    *) die "usage: ci/auth_owner_move_k3s.sh [--print-plan] [--keep]" ;;
+    *) die "usage: ci/auth_owner_move_k3s.sh [--print-plan]" ;;
   esac
 done
 
 if [ "${PRINT_PLAN}" = 1 ]; then
   zeros="$(printf '0%.0s' $(seq 1 64))"
+  ones="$(printf '1%.0s' $(seq 1 64))"
   IMG_MIG="registry.invalid/auth-migrate@sha256:${zeros}"
-  IMG_PRIOR="registry.invalid/auth-migrate-prior@sha256:${zeros}"
+  IMG_PRIOR="registry.invalid/auth-migrate-prior@sha256:${ones}"
   IMG_SVC="registry.invalid/auth-service@sha256:${zeros}"
 else
   IMG_MIG="${AUTH_MOVE_IMAGE_MIGRATE:-}"
@@ -62,7 +61,7 @@ fi
 for image in "${IMG_MIG}" "${IMG_PRIOR}" "${IMG_SVC}"; do
   [[ "${image}" =~ ${DIGEST_RE} ]] || die "an image is not a registry digest reference (repo@sha256:<64 hex>): ${image:-<unset>}"
 done
-[ "${IMG_MIG}" != "${IMG_PRIOR}" ] || die "the prior auth-migrate image equals the tree's: leg 2 needs a database one migration behind"
+[ "${IMG_MIG##*@}" != "${IMG_PRIOR##*@}" ] || die "the prior auth-migrate image equals the tree's: leg 2 needs a database one migration behind"
 for tool in helm jq; do
   command -v "${tool}" >/dev/null 2>&1 || die "${tool} is required"
 done
@@ -117,6 +116,9 @@ for tool in kubectl openssl envsubst od; do
   command -v "${tool}" >/dev/null 2>&1 || die "${tool} is required"
 done
 [ -r "${KUBECONFIG_FILE}" ] || die "the kubeconfig ${KUBECONFIG_FILE} is not readable"
+# The file name proves nothing: ask the cluster. k3s kubelets report a version like v1.30.2+k3s1; kind and other clusters do not.
+nodes="$(kubectl --kubeconfig "${KUBECONFIG_FILE}" get nodes -o jsonpath='{.items[*].status.nodeInfo.kubeletVersion}' 2>/dev/null || true)"
+case "${nodes}" in *+k3s*) ;; *) die "the cluster behind ${KUBECONFIG_FILE} is not a k3s cluster (kubelet versions: ${nodes:-none}); no kind, no prod" ;; esac
 case "${NS}" in dev-health | default | kube-*) die "refusing the namespace ${NS}" ;; esac
 
 # kubectl and helm both get the kubeconfig by flag; the export is for any other client the tools start.
@@ -125,16 +127,16 @@ kc() { kubectl --kubeconfig "${KUBECONFIG_FILE}" "$@"; }
 K() { kc -n "${NS}" "$@"; }
 export LOCAL_PG="${PG_IMAGE}"
 
+# CREATED is set only after this run created the namespace: a name that already existed, or a create that failed, is never deleted.
+CREATED=0
 cleanup() {
   local status=$?
-  if [ "${status}" -ne 0 ]; then
+  if [ "${status}" -ne 0 ] && [ "${CREATED}" = 1 ]; then
     printf '\n--- namespace state at failure ---\n' >&2
     K get pods,jobs -o wide >&2 || true
     K logs --all-containers --tail 60 -l app.kubernetes.io/component=auth-migrate >&2 || true
   fi
-  if [ "${KEEP}" = 1 ] && [ "${status}" -ne 0 ]; then
-    printf 'namespace %s kept (--keep)\n' "${NS}" >&2
-  else
+  if [ "${CREATED}" = 1 ]; then
     kc delete namespace "${NS}" --wait=false >/dev/null 2>&1 || true
   fi
   exit "${status}"
@@ -145,6 +147,7 @@ trap 'exit 143' TERM HUP
 
 if kc get namespace "${NS}" >/dev/null 2>&1; then die "the namespace ${NS} exists"; fi
 kc create namespace "${NS}" >/dev/null
+CREATED=1
 printf 'namespace %s created on %s\n' "${NS}" "${KUBECONFIG_FILE}"
 
 pg() { K exec -i deploy/auth-postgres -- psql -U postgres -v ON_ERROR_STOP=1 -At "$@"; }
@@ -244,8 +247,9 @@ helm_args "${RELEASE_UPG}" "${IMG_PRIOR}" "" sec-mig-upg sec-db-upg
 helm_up "${HELM_ARGS[@]}"
 base="$(applied_versions authmove_upg)"
 head="$(embedded_versions)"
-[ -n "${base}" ] && [ "${base}" != "${head}" ] || die "leg 2: the base state (${base:-none}) is not behind the embedded lineage (${head})"
-pass "leg 2: base state is behind the head (applied: ${base}| head: ${head})"
+expected_base="$(awk '{for (i = 1; i < NF; i++) printf "%s ", $i; print ""}' <<<"${head}")"
+[ -n "${base}" ] && [ "${base}" = "${expected_base}" ] || die "leg 2: the base state (${base:-none}) is not exactly one migration behind the embedded lineage (expected ${expected_base:-none})"
+pass "leg 2: base state is exactly one migration behind the head (applied: ${base}| head: ${head})"
 [ "$(owner_misses authmove_upg postgres)" = 0 ] || die "leg 2: the base state is not owned by the superuser"
 pass "leg 2: the base state is owned by the superuser"
 

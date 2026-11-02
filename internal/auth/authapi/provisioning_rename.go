@@ -13,9 +13,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 )
 
-// PatternOrgRename is the organization rename route. It is dark: it mounts only
-// on an endpoint-profile row that accepts every class it admits, and it is not
-// on the startup gate.
+// PatternOrgRename is the organization rename route. It mounts only on an
+// endpoint-profile row that accepts every class it admits (the embedded document
+// holds one); it is not on the startup gate.
 const PatternOrgRename = "/internal/v1/organizations/rename"
 
 const opOrgRename = "organization_rename"

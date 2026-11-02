@@ -11,12 +11,11 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/grant"
-	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 )
 
-// The repository grant routes. They mount only when the endpoint-profile document holds a row for each (withGrantRoutes) and
-// are not on the startup gate (provisioningPatterns): on a build without the rows each answers 404 and the service starts.
+// The repository grant routes, served with the other provisioning routes: their endpoint-profile rows are on the same startup gate
+// (provisioningPatterns), so a document without a row builds none of them.
 const (
 	PatternGrantCreate = "/internal/v1/grants/create"
 	PatternGrantUpdate = "/internal/v1/grants/update"
@@ -81,29 +80,6 @@ func answerOf(g *grant.Grant) grantAnswer {
 		a.Status = "expired"
 	}
 	return a
-}
-
-// withGrantRoutes mounts the grant routes when the profile document holds a row listing every class each admits, else logs
-// one line naming the route. Without a Grants store it mounts none.
-func (h provisioningHandlers) withGrantRoutes(routes []httpapi.Route, rows []byte) []httpapi.Route {
-	if h.Grants == nil {
-		return routes
-	}
-	for _, r := range []struct {
-		pattern string
-		handler http.HandlerFunc
-	}{
-		{PatternGrantCreate, h.grantCreate},
-		{PatternGrantUpdate, h.grantUpdate},
-		{PatternGrantRevoke, h.grantRevoke},
-	} {
-		if rowsAcceptFor(rows, []string{r.pattern}, admittedClasses(r.pattern, h.Workload != nil)) != nil {
-			h.Logger.Info("auth provisioning route not mounted: no endpoint-profile row", "route", r.pattern)
-			continue
-		}
-		routes = append(routes, httpapi.Route{Method: http.MethodPost, Pattern: r.pattern, Handler: r.handler})
-	}
-	return routes
 }
 
 // grantActor is the verb's Actor: the acting principal, the request id and the calling credential.

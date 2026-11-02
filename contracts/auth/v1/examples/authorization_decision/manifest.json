@@ -1,5 +1,5 @@
 {
-  "description": "Golden corpus for authorization_decision.v1 (CHAOS-4932). reject_by_client documents VALIDATE against the schema and every client MUST still refuse them.",
+  "description": "Golden corpus for authorization_decision.v1 (CHAOS-4932). reject_by_client documents VALIDATE against the schema and every client MUST still refuse them. accept_not_cacheable documents VALIDATE and every client MUST accept them against a stated `now`, marked not cacheable (use once).",
   "accept": [
     {
       "file": "decision-valid-allow-with-obligations.json",
@@ -262,10 +262,6 @@
   ],
   "reject_by_client": [
     {
-      "file": "decision-client-expired-allow.json",
-      "why": "An allow whose expires_at is long past. Valid for the schema (a timestamp is a timestamp); TRD section 14 makes expiry the bound on a stale allow, so a client that hands back allowed=true for it exposes a decision nobody may reuse. Both clients refuse it against a stated `now`."
-    },
-    {
       "file": "decision-client-duplicate-allowed-member.json",
       "duplicate_member": true,
       "why": "`allowed` appears twice, false then true. Every parser keeps the last, so the survivor is a well-formed ALLOW that the schema validates; only the raw bytes show the verdict was ambiguous. The client must refuse on the bytes."
@@ -273,6 +269,12 @@
     {
       "file": "decision-client-decimal-form-policy-revision.json",
       "why": "42.0 is a valid JSON Schema integer, so all three validators accept it. A float64 reader has already rounded a decimal-form token, so it is indistinguishable from the integer it rounds to; both clients refuse it (wire-integer rule). Valid for the schema, refused by the client."
+    }
+  ],
+  "accept_not_cacheable": [
+    {
+      "file": "decision-valid-allow-expired-not-cacheable.json",
+      "why": "An allow whose expires_at is long past. It validates and the client ACCEPTS it: expires_at bounds REUSE, not the answer to the request it was issued for. The parsed decision is marked not cacheable (use once). Moved from reject_by_client by the 5.9 ruling."
     }
   ]
 }

@@ -261,8 +261,8 @@ func closedSchemaProblems(schema map[string]any, path string) []string {
 	return problems
 }
 
-// oneOfExtraMemberProblems checks every member of a transport status oneOf after the envelope: an inline object
-// schema, closed at every level, and disjoint from the envelope. The envelope is closed and requires "error", so a
+// oneOfExtraMemberProblems checks every member of a transport status oneOf after the envelope: the route's own
+// error.v1 ({"$ref": Error}), or an inline object schema, closed at every level, and disjoint from the envelope. The envelope is closed and requires "error", so a
 // closed member without an "error" property cannot match the same body.
 func oneOfExtraMemberProblems(key, status string, schema map[string]any) []string {
 	members, _ := schema["oneOf"].([]any)
@@ -272,6 +272,11 @@ func oneOfExtraMemberProblems(key, status string, schema map[string]any) []strin
 			continue
 		}
 		path := fmt.Sprintf("OpenAPI operation %s: its %s oneOf member %d", key, status, index)
+		if isErrorRef(raw) {
+			// The route's own error.v1 refusal: closed and disjoint from the envelope by its own schema_version
+			// (TestErrorV1IsDisjointFromTheTransportEnvelope).
+			continue
+		}
 		member, ok := raw.(map[string]any)
 		if !ok || member["type"] != "object" || member["$ref"] != nil {
 			problems = append(problems, path+" must be an inline object schema")
@@ -1158,5 +1163,33 @@ func TestTheAuthorizeOperationsDeclareTheMalformed400AsErrorV1(t *testing.T) {
 		if len(members) != 2 || !isTransportErrorRef(members[0]) || !isErrorRef(members[1]) {
 			t.Errorf("%s: its 400 is %v, want oneOf [TransportError, Error]", route, schema)
 		}
+	}
+}
+
+// A 400 body validates against exactly one of the declared members: the
+// error.v1 400 never validates as the transport envelope, and a transport 400
+// never validates as error.v1.
+func TestErrorV1IsDisjointFromTheTransportEnvelope(t *testing.T) {
+	root := testRoot(t)
+	var errorDoc any
+	if err := json.Unmarshal(loadErrorFixture(t, "valid-400-malformed.json"), &errorDoc); err != nil {
+		t.Fatal(err)
+	}
+	if Validate(root, "transport-error.v1", errorDoc) == nil {
+		t.Error("the error.v1 400 validates as a transport envelope")
+	}
+	raw, err := os.ReadFile(filepath.Join(root, "contracts/auth/v1/examples/transport-error/valid-invalid-request.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var transportDoc any
+	if err := json.Unmarshal(raw, &transportDoc); err != nil {
+		t.Fatal(err)
+	}
+	if Validate(root, "transport-error.v1", transportDoc) != nil {
+		t.Fatal("the transport 400 fixture does not validate as a transport envelope")
+	}
+	if Validate(root, ErrorSurface, transportDoc) == nil {
+		t.Error("a transport 400 validates as error.v1")
 	}
 }

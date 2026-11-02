@@ -646,11 +646,18 @@
             }
           },
           "400": {
-            "description": "The request body could not be read (a transport failure within the size limit); answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1). A body that is not exactly one request (or one batch) is the route's own refusal with reason malformed.",
+            "description": "Either the request body could not be read (a transport failure within the size limit), answered by the transport before the route in its own error envelope, transport-error.v1; or a body that is not exactly one request (or one batch), the route's own error.v1 refusal with status 400 and reason malformed (D6643). The body is one of the two, never both.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TransportError"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/TransportError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    }
+                  ]
                 }
               }
             }
@@ -730,11 +737,18 @@
             }
           },
           "400": {
-            "description": "The request body could not be read (a transport failure within the size limit); answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1). A body that is not exactly one request (or one batch) is the route's own refusal with reason malformed.",
+            "description": "Either the request body could not be read (a transport failure within the size limit), answered by the transport before the route in its own error envelope, transport-error.v1; or a body that is not exactly one request (or one batch), the route's own error.v1 refusal with status 400 and reason malformed (D6643). The body is one of the two, never both.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TransportError"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/TransportError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    }
+                  ]
                 }
               }
             }

@@ -20,6 +20,7 @@
     "status": {
       "type": "integer",
       "enum": [
+        400,
         401,
         403,
         404,
@@ -27,7 +28,7 @@
         429,
         503
       ],
-      "description": "The HTTP status this envelope accompanies, enumerated EXACTLY as TRD section 18 defines it:\n  401 -- accepted credential class missing, invalid, or expired.\n  403 -- authenticated principal lacks the action, entitlement, or grant.\n  404 -- hiding cross-tenant or resource existence where required.\n  409 -- state, lifecycle, or idempotency conflict.\n  429 -- rate limit, device polling, or abuse control.\n  503 -- mandatory current-state authority unavailable and no valid unexpired decision.\n\nThe enum is CLOSED. A 500 is deliberately absent: an unhandled server fault must not be describable in a contract that promises to disclose nothing, because the shape invites populating it from an exception. A fault surfaces as 503 with a reason code, or it is a defect.\n\nDuplicating the status in the body is not redundant -- it keeps the envelope self-describing once logged or queued, where the HTTP frame is gone. It does create one hazard the schema cannot police: this value MUST equal the HTTP status actually sent. A mismatch is a client-enforced rejection (see the reject_by_client fixtures), not a schema violation, because the schema never sees the response line."
+      "description": "The HTTP status this envelope accompanies, enumerated EXACTLY as TRD section 18 defines it:\n  400 -- the request body is not exactly one request (or one batch): reason_code `malformed` ONLY (D6643, an amendment of TRD section 18; the `allOf` rule below ties the two).\n  401 -- accepted credential class missing, invalid, or expired.\n  403 -- authenticated principal lacks the action, entitlement, or grant.\n  404 -- hiding cross-tenant or resource existence where required.\n  409 -- state, lifecycle, or idempotency conflict.\n  429 -- rate limit, device polling, or abuse control.\n  503 -- mandatory current-state authority unavailable and no valid unexpired decision.\n\nThe enum is CLOSED. A 500 is deliberately absent: an unhandled server fault must not be describable in a contract that promises to disclose nothing, because the shape invites populating it from an exception. A fault surfaces as 503 with a reason code, or it is a defect.\n\nDuplicating the status in the body is not redundant -- it keeps the envelope self-describing once logged or queued, where the HTTP frame is gone. It does create one hazard the schema cannot police: this value MUST equal the HTTP status actually sent. A mismatch is a client-enforced rejection (see the reject_by_client fixtures), not a schema violation, because the schema never sees the response line."
     },
     "reason_code": {
       "type": "string",
@@ -82,5 +83,27 @@
       ]
     },
     "description": "Conversely, a non-transient status MUST NOT carry retry guidance. A `retry_after_seconds` on a 401 or 403 tells a caller to retry a request that will fail identically forever, and on a 404 it is a weak existence oracle -- a resource worth retrying for is a resource that might appear. Absence is the correct answer for every status the `if` does not name."
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": 400
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "reason_code": {
+            "const": "malformed"
+          }
+        },
+        "description": "A 400 carries reason `malformed` and nothing else (D6643). The status is admitted for exactly one refusal -- a body that is not exactly one request -- so a route cannot widen it into a general client-error status with its own reason vocabulary. A 400 is not transient: it falls to the `else` branch above, so it carries no retry_after_seconds."
+      }
+    }
+  ]
 }

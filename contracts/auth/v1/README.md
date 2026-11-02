@@ -129,6 +129,13 @@ class bit `error.v1` once because no shared guard existed):
 use the same rule; revisions add the int64 range. Fixtures for these rules
 belong in `reject_by_client`.
 
+`error.v1`'s `status` admits 400 for reason `malformed` only (D6643, an
+amendment of TRD section 18): the schema's `allOf` conditional ties the two, so
+a route cannot use 400 for any other refusal. A route that answers it declares
+`oneOf [TransportError, Error]` for its 400: the transport's own 400 (a body
+that could not be read) and the route's `error.v1` refusal are disjoint
+(`TestErrorV1IsDisjointFromTheTransportEnvelope`).
+
 ### Constraints live in the cross-language dialect intersection
 
 Six divergences are known. **They are enforced by four different mechanisms,

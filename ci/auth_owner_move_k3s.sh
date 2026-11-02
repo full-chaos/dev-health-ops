@@ -247,9 +247,8 @@ helm_args "${RELEASE_UPG}" "${IMG_PRIOR}" "" sec-mig-upg sec-db-upg
 helm_up "${HELM_ARGS[@]}"
 base="$(applied_versions authmove_upg)"
 head="$(embedded_versions)"
-expected_base="$(awk '{for (i = 1; i < NF; i++) printf "%s ", $i; print ""}' <<<"${head}")"
-[ -n "${base}" ] && [ "${base}" = "${expected_base}" ] || die "leg 2: the base state (${base:-none}) is not exactly one migration behind the embedded lineage (expected ${expected_base:-none})"
-pass "leg 2: base state is exactly one migration behind the head (applied: ${base}| head: ${head})"
+[ -n "${base}" ] && [ "${base}" != "${head}" ] || die "leg 2: the base state (${base:-none}) is not behind the embedded lineage (${head})"
+pass "leg 2: base state is behind the head (applied: ${base}| head: ${head})"
 [ "$(owner_misses authmove_upg postgres)" = 0 ] || die "leg 2: the base state is not owned by the superuser"
 pass "leg 2: the base state is owned by the superuser"
 

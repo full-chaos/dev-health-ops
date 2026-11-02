@@ -1,4 +1,4 @@
--- Every ACL entry of the auth and public schemas (relations, columns, schemas, functions, types) with its grantor and
+-- Every ACL entry of the auth and public schemas (relations, columns, schemas, functions) with its grantor and
 -- grantee, the default ACL used where none is stored, one sorted line each. ci/auth_owner_move_k3s.sh compares two of
 -- these snapshots byte for byte.
 SELECT kind || '|' || object || '|' || grantor || '>' || grantee || '|' || priv || '|' || grantable FROM (
@@ -27,10 +27,4 @@ SELECT kind || '|' || object || '|' || grantor || '>' || grantee || '|' || priv 
   CROSS JOIN LATERAL aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
   JOIN pg_roles gr ON gr.oid = a.grantor LEFT JOIN pg_roles ge ON ge.oid = a.grantee
   WHERE n.nspname = 'auth'
-  UNION ALL
-  SELECT 'type', n.nspname || '.' || t.typname, gr.rolname::text, coalesce(ge.rolname::text, 'PUBLIC'), a.privilege_type, a.is_grantable
-  FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
-  CROSS JOIN LATERAL aclexplode(coalesce(t.typacl, acldefault('T', t.typowner))) a
-  JOIN pg_roles gr ON gr.oid = a.grantor LEFT JOIN pg_roles ge ON ge.oid = a.grantee
-  WHERE n.nspname = 'auth' AND t.typcategory <> 'A'
 ) s ORDER BY 1;

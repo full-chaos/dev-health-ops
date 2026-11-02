@@ -327,6 +327,14 @@ build_go_binaries
 MIGRATION_DATABASE_URI="${POSTGRES_URI}" DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1 RIVER_DATABASE_SCHEMA=river \
   "${BIN_DIR}/dho" migrate postgres upgrade
 
+# The api checks an access token's session in the auth schema, which `dho migrate postgres` does not create: auth-migrate
+# does (the only DDL path of that schema). A NOLOGIN role stands in for the runtime login it grants to; the api here
+# connects as the superuser and needs no grant.
+echo "==> applying the auth schema (auth-migrate)"
+go build -buildvcs=false -trimpath -o "${BIN_DIR}/auth-migrate" ./cmd/auth-migrate
+e2e_psql -c "DO \$\$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'e2e_auth_runtime') THEN CREATE ROLE e2e_auth_runtime NOLOGIN; END IF; END \$\$;" >/dev/null
+AUTH_MIGRATION_DATABASE_URI="${POSTGRES_URI/+asyncpg/}" AUTH_RUNTIME_DATABASE_ROLE=e2e_auth_runtime "${BIN_DIR}/auth-migrate"
+
 # The access token the api and query-api verify is signed by a throwaway Ed25519 key of the CI issuer stub
 # (internal/testsupport/issuerstub): https://localhost, discovery + JWKS only. Both services reach it through
 # AUTH_ACCESS_TOKEN_ISSUER and trust its CA through SSL_CERT_FILE (set for those two processes only). The key

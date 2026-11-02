@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -22,62 +21,53 @@ import (
 )
 
 var (
-	envOnce sync.Once
-	envPool *pgxpool.Pool
-	envErr  error
-	closers []func()
+	poolsMu sync.Mutex
+	pools   = map[*testing.T]*pgxpool.Pool{}
 )
 
-func TestMain(m *testing.M) {
-	code := m.Run()
-	for i := len(closers) - 1; i >= 0; i-- {
-		closers[i]()
-	}
-	os.Exit(code)
-}
-
+// adminPool is the table owner's pool on this test's own PostgreSQL, started on first use and closed with the test.
 func adminPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	envOnce.Do(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		defer cancel()
-		instance, err := containers.StartPostgres(ctx)
-		if err != nil {
-			envErr = err
-			return
-		}
-		closers = append(closers, func() {
-			c, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			_ = instance.Close(c)
-		})
-		admin, err := pgxpool.New(ctx, instance.URI)
-		if err != nil {
-			envErr = err
-			return
-		}
-		closers = append(closers, admin.Close)
-		pgschema.Apply(ctx, t, admin)
-		role, err := containers.RoleName("acrreconcile_runtime", instance)
-		if err != nil {
-			envErr = err
-			return
-		}
-		if _, err := admin.Exec(ctx, fmt.Sprintf(`CREATE ROLE %q LOGIN PASSWORD 'acrreconcile-test-only-not-a-credential'`, role)); err != nil {
-			envErr = err
-			return
-		}
-		closers = append(closers, func() { containers.DropRole(admin, role, func(string, ...any) {}) })
-		if _, err := authschema.Apply(ctx, admin, authschema.Options{Schema: "auth", RuntimeRole: role, UsersOwned: true}); err != nil {
-			envErr = err
-			return
-		}
-		envPool = admin
-	})
-	if envErr != nil {
-		t.Fatal(envErr)
+	poolsMu.Lock()
+	defer poolsMu.Unlock()
+	if pool := pools[t]; pool != nil {
+		return pool
 	}
-	return envPool
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		c, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_ = instance.Close(c)
+	})
+	admin, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(admin.Close)
+	pgschema.Apply(ctx, t, admin)
+	role, err := containers.RoleName("acrreconcile_runtime", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, fmt.Sprintf(`CREATE ROLE %q LOGIN PASSWORD 'acrreconcile-test-only-not-a-credential'`, role)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { containers.DropRole(admin, role, func(string, ...any) {}) })
+	if _, err := authschema.Apply(ctx, admin, authschema.Options{Schema: "auth", RuntimeRole: role, UsersOwned: true}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		poolsMu.Lock()
+		delete(pools, t)
+		poolsMu.Unlock()
+	})
+	pools[t] = admin
+	return admin
 }
 
 type row struct {

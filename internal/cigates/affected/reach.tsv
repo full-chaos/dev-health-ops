@@ -106,6 +106,7 @@ internal/auth/contracts	contracts.go	internal/apiservice/acr
 internal/auth/contracts	contracts.go	internal/apiservice/admin
 internal/auth/contracts	contracts.go	internal/audit
 internal/auth/contracts	contracts.go	internal/auth/acrmint
+internal/auth/contracts	contracts.go	internal/auth/acrreconcile
 internal/auth/contracts	contracts.go	internal/auth/authapi
 internal/auth/contracts	contracts.go	internal/auth/authconfig
 internal/auth/contracts	contracts.go	internal/auth/authorization

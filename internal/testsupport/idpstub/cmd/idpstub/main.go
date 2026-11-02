@@ -149,7 +149,7 @@ func serve(mode string, args []string) error {
 		return err
 	}
 	logged := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Println("idpstub:", r.Method, r.URL.Path) // path only: no query, no values
+		fmt.Println(requestLogLine(r.Method, r.URL.Path)) // path only: no query, no values
 		mux.ServeHTTP(w, r)
 	})
 	server := &http.Server{Addr: *listen, Handler: logged, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,
@@ -167,6 +167,10 @@ func serve(mode string, args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return server.Shutdown(ctx)
+}
+
+func requestLogLine(method, path string) string {
+	return "idpstub: " + method + " " + path
 }
 
 // writeFresh writes data to a NEW regular file; a file already there is removed first, never followed or reused.

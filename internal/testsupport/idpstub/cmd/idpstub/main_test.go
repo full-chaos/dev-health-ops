@@ -92,3 +92,13 @@ func TestCmdIdpstubRefusesMissingFlagsAndBadUsers(t *testing.T) {
 		t.Error("a -user without an email was accepted")
 	}
 }
+
+func TestRequestLogLineHoldsNoLineBreak(t *testing.T) {
+	line := requestLogLine("GET", "/a\nidpstub: forged\r/b")
+	if strings.ContainsAny(line, "\r\n") {
+		t.Fatalf("log line %q holds a line break", line)
+	}
+	if got := requestLogLine("POST", "/saml/sso"); got != "idpstub: POST /saml/sso" {
+		t.Fatalf("log line = %q", got)
+	}
+}

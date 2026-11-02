@@ -166,3 +166,28 @@ func TestACatchUpOfAnOlderConfirmationDoesNotRaiseTheGauge(t *testing.T) {
 		t.Fatalf("gauge %d: the older confirmation's catch-up raised it after the newer confirmation failed", got)
 	}
 }
+
+// Ready is the readiness the decision cache asks for: true only while the current confirmation's InvalidateAll and catch-up
+// both succeeded.
+func TestReadyFollowsTheCurrentConfirmation(t *testing.T) {
+	rig := startSubscriber(t)
+	if rig.sub.Ready() {
+		t.Fatal("ready before any confirmation")
+	}
+	s := rig.client.next(t)
+	s.hooks.OnSubscribed()
+	waitFor(t, "ready", rig.sub.Ready)
+	rig.rec.failNext(1 << 20)
+	s.hooks.OnSubscribed()
+	if rig.sub.Ready() {
+		t.Fatal("ready right after a new confirmation, before its InvalidateAll succeeded")
+	}
+	waitFor(t, "two failed InvalidateAll of the new confirmation", func() bool { return allCalls(rig.rec) >= 3 })
+	if rig.sub.Ready() {
+		t.Fatal("ready while the new confirmation's InvalidateAll fails")
+	}
+	rig.rec.failNext(0)
+	waitFor(t, "ready again", rig.sub.Ready)
+	s.done <- nil
+	waitFor(t, "not ready after the subscription ended", func() bool { return !rig.sub.Ready() })
+}

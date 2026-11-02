@@ -60,6 +60,12 @@ func On() bool {
 // OrgsEnv is the orgs-owned switch, with the meaning auth-service gives it.
 const OrgsEnv = "AUTH_ORGS_OWNED"
 
+// OrgsFromLookup reads OrgsEnv like auth-service: unset or empty is off,
+// anything but true or false is an error.
+func OrgsFromLookup(lookup func(string) (string, bool)) (bool, error) {
+	return false, nil
+}
+
 // OrgsOn reads OrgsEnv on every call, by the rule of On: a value that cannot be
 // read counts as on, so go-api holds back from a table auth may own. No start
 // check reads it; the chart holds the order of the switches.

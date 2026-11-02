@@ -77,3 +77,20 @@ func TestOrgsOnReadsLikeUsersOwned(t *testing.T) {
 		}
 	}
 }
+
+func TestOrgsFromLookupAgreesWithAuthConfig(t *testing.T) {
+	for _, value := range []string{"", " ", "true", "TRUE", " true ", "false", "False", "1", "0", "yes", "maybe", "t", "tru"} {
+		lookup := lookupOf(map[string]string{OrgsEnv: value})
+		got, gotErr := OrgsFromLookup(lookup)
+		want, wantErr := authconfig.OrgsOwnedFromLookup(lookup)
+		if got != want || (gotErr != nil) != (wantErr != nil) {
+			t.Errorf("%q: usersowned = %v, %v; authconfig = %v, %v", value, got, gotErr, want, wantErr)
+		}
+	}
+	if _, err := OrgsFromLookup(lookupOf(map[string]string{OrgsEnv: "maybe"})); err == nil || !strings.Contains(err.Error(), OrgsEnv) {
+		t.Errorf("a bad value must name %s: %v", OrgsEnv, err)
+	}
+	if got, err := OrgsFromLookup(lookupOf(nil)); got || err != nil {
+		t.Errorf("unset: %v, %v", got, err)
+	}
+}

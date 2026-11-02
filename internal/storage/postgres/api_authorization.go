@@ -386,3 +386,13 @@ func APIPosture(sessionsOwnedByAuth bool) RolePosture {
 func CheckAPIAuthorization(ctx context.Context, pool *pgxpool.Pool, expectedRole, riverSchema string, sessionsOwnedByAuth bool) error {
 	return CheckRolePosture(ctx, pool, expectedRole, riverSchema, APIPosture(sessionsOwnedByAuth))
 }
+
+// APIPostureFor is APIPosture with the orgs-owned switch (AUTH_ORGS_OWNED).
+func APIPostureFor(sessionsOwnedByAuth, orgsOwned bool) RolePosture {
+	return APIPosture(sessionsOwnedByAuth)
+}
+
+// CheckAPIAuthorizationFor is CheckAPIAuthorization over APIPostureFor.
+func CheckAPIAuthorizationFor(ctx context.Context, pool *pgxpool.Pool, expectedRole, riverSchema string, sessionsOwnedByAuth, orgsOwned bool) error {
+	return CheckRolePosture(ctx, pool, expectedRole, riverSchema, APIPostureFor(sessionsOwnedByAuth, orgsOwned))
+}

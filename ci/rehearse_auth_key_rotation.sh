@@ -310,6 +310,14 @@ wait_jwks_kids() { # wait_jwks_kids "a b" TIMEOUT_S
   done
   return 1
 }
+login_signs_by() { # login_signs_by KID: log in until the token is signed by KID (the signer re-reads key states every 15 s)
+  local deadline=$((SECONDS + 45))
+  while [ "${SECONDS}" -lt "${deadline}" ]; do
+    login_user && kid_is "${L_ACCESS}" "$1" && return 0
+    sleep 3
+  done
+  return 1
+}
 probe_bg() { # probe_bg TOKEN OUTFILE SECONDS: GET /api/v1/auth/me every 0.5 s
   local tok="$1" out="$2" end=$((SECONDS + $3)) n=0
   : >"${out}"
@@ -436,8 +444,7 @@ scenario_compromise() {
   COMPROMISED_ACCESS="${sold_access}"
   COMPROMISED_REFRESH="${sold_refresh}"
 
-  login_or_die
-  check "s2-new-session-signed-by-${new}" kid_is "${L_ACCESS}" "${new}"
+  check "s2-new-session-signed-by-${new}" login_signs_by "${new}"
   snew_refresh="${L_REFRESH}"
   refresh_with "${sold_refresh}"
   check "s2-session-of-${old}-refresh-refused" verdict_is "${R_CODE}" refused
@@ -597,8 +604,7 @@ keys_cmd activate -kid b -apply
 check s1-activate-b-applied eq "${KRC}" 0
 check s1-b-active eq "$(key_state b)" active
 check s1-a-retiring eq "$(key_state a)" retiring
-login_or_die
-check s1-new-token-signed-by-b kid_is "${L_ACCESS}" b
+check s1-new-token-signed-by-b login_signs_by b
 check s1-go-api-accepts-b me_accepts "${L_ACCESS}"
 check s1-a-token-still-accepted-in-overlap me_accepts "${TOK_A2}"
 check s1-a-and-b-both-published wait_jwks_kids "a b" 60
@@ -612,15 +618,13 @@ keys_cmd rollback -kid a -apply
 check s1-rollback-a-applied eq "${KRC}" 0
 check s1-after-rollback-a-active eq "$(key_state a)" active
 check s1-after-rollback-b-retiring eq "$(key_state b)" retiring
-login_or_die
-check s1-after-rollback-a-signs kid_is "${L_ACCESS}" a
+check s1-after-rollback-a-signs login_signs_by a
 keys_cmd rollback -kid b -apply
 check s1-rollback-b-applied eq "${KRC}" 0
 SWITCH_EPOCH="$(date +%s)"
 check s1-after-forward-b-active eq "$(key_state b)" active
 check s1-after-forward-a-retiring eq "$(key_state a)" retiring
-login_or_die
-check s1-forward-b-signs kid_is "${L_ACCESS}" b
+check s1-forward-b-signs login_signs_by b
 write_manifest a:retiring b:active
 stage_keys a.pem
 
@@ -660,8 +664,7 @@ check s1-a-left-the-jwks wait_jwks_kids "b c d" 60
 rec_line "note: every token a signed has expired by the retire floor, so the a-token refusal is by expiry and by absence from the JWKS together"
 keys_cmd rollback -kid a
 check s1-retired-a-would-return-only-as-pending out_has "a: retired -> pending"
-login_or_die
-check s1-b-signs-after-retire kid_is "${L_ACCESS}" b
+check s1-b-signs-after-retire login_signs_by b
 write_manifest b:active c:pending d:pending
 stage_keys b.pem c.pem d.pem
 

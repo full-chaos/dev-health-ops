@@ -84,5 +84,30 @@ if grep -q 'WINDOW_B .*last_code=' "${SCRIPT}"; then ok window-b-records-the-cod
 if grep -q 'auth_webproof_smtp_sink' "${SCRIPT}"; then bad no-host-smtp-sink; else ok no-host-smtp-sink; fi
 if grep -q 'SET is_verified = true' "${SCRIPT}"; then ok verifies-the-user-in-the-database; else bad verifies-the-user-in-the-database; fi
 
+# auth-service re-reads the key states every KeyStateRefresh (15 s, internal/token/states.go): a login right after a state change
+# may still be signed by the old key (rotation v1: s1-new-token-signed-by-b). Cells that expect a new signer poll the login.
+for cell in s1-new-token-signed-by-b s1-after-rollback-a-signs s1-forward-b-signs s1-b-signs-after-retire; do
+  if grep -qE "^check ${cell} login_signs_by " "${SCRIPT}"; then ok "${cell}-polls-the-signer"; else bad "${cell}-polls-the-signer"; fi
+done
+if grep -qE 'check "s2-new-session-signed-by-\$\{new\}" login_signs_by ' "${SCRIPT}"; then ok s2-new-session-polls-the-signer; else bad s2-new-session-polls-the-signer; fi
+fn="$(sed -n '/^login_signs_by() {/,/^}/p' "${SCRIPT}")"
+if [ -n "${fn}" ]; then
+  # shellcheck disable=SC2034,SC2317
+  probe="$(cat <<EOS
+n=0
+L_ACCESS=""
+login_user() { n=\$((n + 1)); L_ACCESS="t\${n}"; }
+kid_is() { [ "\$1" = "t3" ]; }
+sleep() { :; }
+${fn}
+login_signs_by b && [ "\${n}" = 3 ] && echo late-signer-found
+EOS
+)"
+  out="$(bash -c "${probe}" 2>&1 || true)"
+  if grep -q late-signer-found <<<"${out}"; then ok login-signs-by-waits-for-the-new-signer; else bad login-signs-by-waits-for-the-new-signer; fi
+else
+  bad login-signs-by-waits-for-the-new-signer
+fi
+
 if [ ! -s "${FAKE_LOG}" ]; then ok no-docker-call-before-the-checks; else bad no-docker-call-before-the-checks; fi
 exit "${failed}"

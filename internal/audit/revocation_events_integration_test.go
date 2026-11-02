@@ -15,7 +15,7 @@ import (
 
 // TestRevocationEventsCommitAsProvisioningEvents: the session, signing-key and
 // scope revocation events of provisioning-event.v1 (CHAOS-11816) pass Commit,
-// get contiguous per-aggregate revisions from aggregate_revisions (the 0046
+// get contiguous per-aggregate revisions from aggregate_revisions (the 0048
 // CHECK admits signing_key) and each outbox row parses as the wire contract.
 // session is one-shot: revision 1, no aggregate_revisions row, and a second
 // revoke of the same session (a child revoked with its parent, then on its own

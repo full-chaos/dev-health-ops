@@ -1,4 +1,4 @@
--- 0046 aggregate_revisions admits the signing_key aggregate.
+-- 0048 aggregate_revisions admits the signing_key aggregate.
 -- NOT ADDITIVE in one place, on purpose (additiveExemptions): it REDEFINES the
 -- aggregate_type CHECK and only WIDENS it (nothing is removed from the 0044
 -- list), so no stored row can violate it and no pre-flight count is needed.

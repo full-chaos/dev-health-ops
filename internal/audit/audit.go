@@ -595,7 +595,7 @@ func insertOutboxEvents(ctx context.Context, tx pgx.Tx, schema authschema.Valida
 			}
 		}
 		payload := map[string]any{"revision": revision, "change": orEmpty(e.Change)}
-		if m.Audit.OrganizationID != nil {
+		if a, _ := provisioning.AggregateOf(e.AggregateType); m.Audit.OrganizationID != nil && !a.NoOrganization {
 			payload["organization_id"] = provisioning.WireID("organization", *m.Audit.OrganizationID)
 		}
 		if m.Audit.ActorPrincipalID != nil {

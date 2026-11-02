@@ -141,6 +141,10 @@ func (c *Consumer) Handle(ctx context.Context, e contracts.ProvisioningEvent) (c
 // delivery only evicts again, and a replica that was away lost nothing because every resubscribe already calls
 // InvalidateAll. An invalidation error is returned and retries with the redelivery, as for any aggregate.
 func (c *Consumer) handleOneShot(ctx context.Context, e contracts.ProvisioningEvent, revision int64) (contracts.Disposition, error) {
+	if revision != 1 {
+		c.Dropped(ctx)
+		return "", ErrOneShotRevision
+	}
 	if err := c.inv.Invalidate(ctx, e.AggregateType, e.AggregateID, revision); err != nil {
 		c.events.Add(ctx, 1, metric.WithAttributes(attribute.String("disposition", "invalidate_failed")))
 		c.log.LogAttrs(ctx, slog.LevelWarn, "revision feed invalidation failed; the event stays unapplied",

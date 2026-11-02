@@ -346,8 +346,8 @@ boundary (TRD §9, §13).
   aggregate id cannot; `change.kid` carries the kid) voids every token the key
   signed; the other key states are the JWKS's. A signing-key event has no
   `organization_id`: the optional member is absent for a platform-level aggregate.
-  `reason` is `caller`, `refresh_reuse`, `password_changed`, `org_ended`,
-  `delegation_ended` or `compromised`. Order across aggregates stays unpromised.
+  The allowlist is per EVENT, not per aggregate: a scope event carries `revoked_before` and `reason` and nothing else, and no ordinary principal or organization event carries either. The wire pins a session event at revision 1, and clients (`ParseProvisioningEvent`, the feed mapper, the sink and the consumer) refuse any other revision for it and an id that is not the derived one for a signing key. `reason` is `caller`, `refresh_reuse`, `password_changed`, `org_ended`,
+  `delegation_ended` or `compromised`. A principal's sessions ended in ONE organization (a membership removed) are told as `principal.sessions_revoked` with reason `org_ended`: there is no (principal, organization) shape, so a consumer may also drop that principal's sessions in other organizations, which only evicts a cache (the server still decides). Order across aggregates stays unpromised.
   This change is the contract only: no producer writes these events yet
   (the producer is a later change; session and signing-key lifecycle stay
   `OffStream` until then).

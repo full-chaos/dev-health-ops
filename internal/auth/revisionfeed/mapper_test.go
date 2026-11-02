@@ -9,6 +9,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
 )
 
 func outboxEvent(key string, payload string) audit.Event {
@@ -105,20 +106,44 @@ func TestHandleOutboxAppliesAMappedEvent(t *testing.T) {
 func TestFromOutboxMapsTheRevocationEvents(t *testing.T) {
 	for _, tc := range []struct{ aggregate, id, event, change string }{
 		{"session", "ses_EXAMPLE0000000000001", "session.revoked", `{"status":"revoked","reason":"caller"}`},
-		{"signing_key", "key_EXAMPLE0000000000000000000000000000000000001", "signing_key.compromised", `{"kid":"example.key"}`},
+		{"signing_key", provisioning.SigningKeyID("example.key"), "signing_key.compromised", `{"kid":"example.key"}`},
 		{"principal", "prn_EXAMPLE0000000000000001", "principal.sessions_revoked", `{"revoked_before":"2026-09-03T09:59:59Z","reason":"password_changed"}`},
 		{"organization", "org_EXAMPLE0000000000000001", "organization.sessions_revoked", `{"revoked_before":"2026-09-03T09:59:59Z","reason":"org_ended"}`},
 	} {
 		t.Run(tc.event, func(t *testing.T) {
-			e := outboxEvent(tc.aggregate+":"+tc.id+":3", `{"revision":3,"change":`+tc.change+`}`)
+			rev, wantRev := "3", int64(3)
+			if tc.aggregate == "session" {
+				rev, wantRev = "1", 1
+			}
+			e := outboxEvent(tc.aggregate+":"+tc.id+":"+rev, `{"revision":`+rev+`,"change":`+tc.change+`}`)
 			e.AggregateType, e.AggregateID, e.EventType = tc.aggregate, tc.id, tc.event
 			got, err := FromOutbox(e)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got.AggregateType != tc.aggregate || got.EventType != tc.event || got.Payload.Revision != 3 || got.DedupeKey() != got.IdempotencyKey {
+			if got.AggregateType != tc.aggregate || got.EventType != tc.event || int64(got.Payload.Revision) != wantRev || got.DedupeKey() != got.IdempotencyKey {
 				t.Fatalf("mapped event %+v", got)
 			}
 		})
+	}
+}
+
+func TestFromOutboxRefusesAOneShotEventPastRevisionOneAndAForgedSigningKeyID(t *testing.T) {
+	const ses = "ses_EXAMPLE0000000000001"
+	session := outboxEvent("session:"+ses+":2", `{"revision":2,"change":{"status":"revoked","reason":"caller"}}`)
+	session.AggregateType, session.AggregateID, session.EventType = "session", ses, "session.revoked"
+	if _, err := FromOutbox(session); !errors.Is(err, ErrOneShotRevision) {
+		t.Fatalf("session revision 2: err = %v, want ErrOneShotRevision", err)
+	}
+	forged := "key_" + strings.Repeat("a", 43)
+	key := outboxEvent("signing_key:"+forged+":1", `{"revision":1,"change":{"kid":"example.key"}}`)
+	key.AggregateType, key.AggregateID, key.EventType = "signing_key", forged, "signing_key.compromised"
+	if _, err := FromOutbox(key); !errors.Is(err, ErrSigningKeyID) {
+		t.Fatalf("forged signing key id: err = %v, want ErrSigningKeyID", err)
+	}
+	genuine := provisioning.SigningKeyID("example.key")
+	key.AggregateID, key.IdempotencyKey = genuine, "signing_key:"+genuine+":1"
+	if _, err := FromOutbox(key); err != nil {
+		t.Fatalf("genuine signing key id: %v", err)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
 )
 
 // TestRevocationEventsCommitAsProvisioningEvents: the session, signing-key and
@@ -33,7 +34,7 @@ func TestRevocationEventsCommitAsProvisioningEvents(t *testing.T) {
 	if _, err := env.pool.Exec(ctx, `INSERT INTO auth.principals (id, kind) VALUES ($1, 'user')`, actor); err != nil {
 		t.Fatal(err)
 	}
-	session, key, principal, org := "ses_"+uuid.NewString(), "key_"+uuid.NewString(), "prn_"+uuid.NewString(), "org_"+uuid.NewString()
+	session, key, principal, org := "ses_"+uuid.NewString(), provisioning.SigningKeyID("example.key-2026-09"), "prn_"+uuid.NewString(), "org_"+uuid.NewString()
 	scope := map[string]any{"revoked_before": "2026-09-03T09:59:59.123456Z", "reason": "password_changed"}
 	events := []OutboxEvent{
 		{AggregateType: "session", AggregateID: session, EventType: "session.revoked", Change: map[string]any{"status": "revoked", "reason": "caller"}},
@@ -87,5 +88,46 @@ func TestRevocationEventsCommitAsProvisioningEvents(t *testing.T) {
 		if counter != 2 {
 			t.Errorf("%s counter = %d, want 2", e.AggregateType, counter)
 		}
+	}
+}
+
+// TestAPlatformLevelEventCarriesNoOrganization: Commit puts the audit row's organization on every event payload, except for
+// a platform-level aggregate (a signing key), whose events the contract forbids to carry one.
+func TestAPlatformLevelEventCarriesNoOrganization(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	env := newAuditFixture(t, ctx)
+	runtime := runtimeRolePool(t, ctx, env.pool)
+	root, err := contracts.RepoRoot(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	actor, org := uuid.NewString(), uuid.NewString()
+	if _, err := env.pool.Exec(ctx, `INSERT INTO auth.principals (id, kind) VALUES ($1, 'user')`, actor); err != nil {
+		t.Fatal(err)
+	}
+	key := provisioning.SigningKeyID("example.key-2026-09")
+	err = Commit(ctx, runtime, env.schema, Mutation{
+		Apply: func(ctx context.Context, tx TxOps) error {
+			_, err := tx.Exec(ctx, `INSERT INTO auth.organizations (id, name, slug) VALUES ($1, 'o', 'o-platform')`, org)
+			return err
+		},
+		Audit: AuditEvent{EventType: "organization.updated", Outcome: OutcomeAllowed, ActorPrincipalID: &actor, OrganizationID: &org},
+		Events: []OutboxEvent{{AggregateType: "signing_key", AggregateID: key, EventType: "signing_key.compromised",
+			Change: map[string]any{"kid": "example.key-2026-09"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := envelopeRows(t, ctx, env)
+	if len(rows) != 1 {
+		t.Fatalf("%d rows, want 1", len(rows))
+	}
+	event, err := contracts.ParseProvisioningEvent(root, []byte(rows[0].raw))
+	if err != nil {
+		t.Fatalf("not provisioning-event.v1: %v\n%s", err, rows[0].raw)
+	}
+	if event.Payload.OrganizationID != "" {
+		t.Errorf("organization_id = %q on a platform-level event", event.Payload.OrganizationID)
 	}
 }

@@ -261,7 +261,46 @@
                       "required": [
                         "revoked_before",
                         "reason"
-                      ]
+                      ],
+                      "propertyNames": {
+                        "enum": [
+                          "revoked_before",
+                          "reason"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event_type": {
+                  "enum": [
+                    "principal.created",
+                    "principal.disabled",
+                    "principal.enabled"
+                  ]
+                }
+              },
+              "required": [
+                "event_type"
+              ]
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "type": "object",
+                  "properties": {
+                    "change": {
+                      "type": "object",
+                      "propertyNames": {
+                        "enum": [
+                          "status"
+                        ]
+                      }
                     }
                   }
                 }
@@ -421,7 +460,48 @@
                       "required": [
                         "revoked_before",
                         "reason"
-                      ]
+                      ],
+                      "propertyNames": {
+                        "enum": [
+                          "revoked_before",
+                          "reason"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event_type": {
+                  "enum": [
+                    "organization.created",
+                    "organization.updated",
+                    "organization.suspended",
+                    "organization.reactivated"
+                  ]
+                }
+              },
+              "required": [
+                "event_type"
+              ]
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "type": "object",
+                  "properties": {
+                    "change": {
+                      "type": "object",
+                      "propertyNames": {
+                        "enum": [
+                          "status",
+                          "slug"
+                        ]
+                      }
                     }
                   }
                 }
@@ -730,6 +810,9 @@
                     "const": "revoked"
                   }
                 }
+              },
+              "revision": {
+                "const": 1
               }
             }
           }
@@ -751,7 +834,7 @@
         "properties": {
           "aggregate_id": {
             "type": "string",
-            "pattern": "^key_[A-Za-z0-9_-]{1,64}$"
+            "pattern": "^key_[A-Za-z0-9_-]{43}$"
           },
           "event_type": {
             "enum": [
@@ -772,7 +855,13 @@
                   ]
                 }
               }
-            }
+            },
+            "not": {
+              "required": [
+                "organization_id"
+              ]
+            },
+            "description": "A signing key is platform-level: no organization_id."
           }
         }
       }

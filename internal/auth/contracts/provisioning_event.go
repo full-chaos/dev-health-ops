@@ -1,6 +1,8 @@
 package contracts
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -81,7 +83,22 @@ func ParseProvisioningEvent(root string, raw []byte) (ProvisioningEvent, error) 
 			"%s: idempotency_key %q does not equal %q (aggregate_type:aggregate_id:payload.revision)",
 			ProvisioningEventSurface, event.IdempotencyKey, want)
 	}
+	// A pattern cannot hash: a signing_key aggregate id is key_ and the base64url SHA-256 of change.kid, so an id that is
+	// not the derived one names a different key than the kid it carries. A test holds SigningKeyAggregateID equal to
+	// provisioning.SigningKeyID (this package cannot import it: that package's tests import this one).
+	if event.AggregateType == "signing_key" {
+		var kid string
+		if raw, ok := event.Payload.Change["kid"]; !ok || json.Unmarshal(raw, &kid) != nil || event.AggregateID != SigningKeyAggregateID(kid) {
+			return ProvisioningEvent{}, fmt.Errorf("%s: signing_key aggregate_id does not equal the derived id (key_ and the base64url SHA-256) of change.kid", ProvisioningEventSurface)
+		}
+	}
 	return event, nil
+}
+
+// SigningKeyAggregateID is the aggregate id of the signing key kid: "key_" and the unpadded base64url SHA-256 of the kid.
+func SigningKeyAggregateID(kid string) string {
+	sum := sha256.Sum256([]byte(kid))
+	return "key_" + base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
 // Disposition is what a consumer does with an event.

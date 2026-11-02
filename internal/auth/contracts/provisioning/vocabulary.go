@@ -6,6 +6,8 @@
 package provisioning
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
 	"regexp"
 	"sort"
@@ -22,9 +24,18 @@ const Surface = "provisioning-event.v1"
 // verbs and the payload.change members it may carry.
 type Aggregate struct {
 	IDPrefix string
+	// IDSuffix, when set, is the exact regexp body that follows the prefix (default: the generic 1-64 character wire id).
+	IDSuffix string
 	Events   []string
+	// Change are the members an ordinary event of the aggregate may carry.
 	Change   []string
 	Required []string
+	// Scoped lists, for an event that carries members of its own, exactly the members that event may carry: it replaces
+	// Change for that event, so a scope event never carries an ordinary member and an ordinary event never carries a
+	// scope member.
+	Scoped map[string][]string
+	// NoOrganization marks a platform-level aggregate: its events carry no organization_id.
+	NoOrganization bool
 	// EventRequired lists change members one event must carry besides Required.
 	EventRequired map[string][]string
 	// Fixed pins a change member to one value for every event of the aggregate.
@@ -41,7 +52,8 @@ const MaxWireIDLength = 64
 var provisioningAggregates = map[string]Aggregate{
 	"principal": {IDPrefix: "prn_",
 		Events:        []string{"principal.created", "principal.disabled", "principal.enabled", "principal.sessions_revoked"},
-		Change:        []string{"status", "revoked_before", "reason"},
+		Change:        []string{"status"},
+		Scoped:        map[string][]string{"principal.sessions_revoked": {"revoked_before", "reason"}},
 		EventRequired: map[string][]string{"principal.sessions_revoked": {"revoked_before", "reason"}}},
 	"user": {IDPrefix: "prn_",
 		Events: []string{"user.created", "user.email_verified", "user.email_unverified", "user.email_changed",
@@ -52,7 +64,8 @@ var provisioningAggregates = map[string]Aggregate{
 	"organization": {IDPrefix: "org_",
 		Events: []string{"organization.created", "organization.updated", "organization.suspended", "organization.reactivated",
 			"organization.sessions_revoked"},
-		Change:        []string{"status", "slug", "revoked_before", "reason"},
+		Change:        []string{"status", "slug"},
+		Scoped:        map[string][]string{"organization.sessions_revoked": {"revoked_before", "reason"}},
 		EventRequired: map[string][]string{"organization.sessions_revoked": {"revoked_before", "reason"}}},
 	"membership": {IDPrefix: "mbr_",
 		Events: []string{"membership.invited", "membership.activated", "membership.role_changed", "membership.suspended", "membership.removed"},
@@ -75,7 +88,7 @@ var provisioningAggregates = map[string]Aggregate{
 		Events: []string{"session.revoked"},
 		Change: []string{"status", "reason"}, Required: []string{"status", "reason"},
 		Fixed: map[string]string{"status": "revoked"}, OneShot: true},
-	"signing_key": {IDPrefix: "key_",
+	"signing_key": {IDPrefix: "key_", IDSuffix: "[A-Za-z0-9_-]{43}", NoOrganization: true,
 		Events: []string{"signing_key.compromised"},
 		Change: []string{"kid"}, Required: []string{"kid"}},
 	"resource_grant": {IDPrefix: "grt_",
@@ -116,9 +129,15 @@ var provisioningChangeMembers = map[string]changeMember{
 var (
 	wireIDSuffix  = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 	memberPattern = map[string]*regexp.Regexp{}
+	idPatterns    = map[string]*regexp.Regexp{}
 )
 
 func init() {
+	for name, a := range provisioningAggregates {
+		if a.IDSuffix != "" {
+			idPatterns[name] = regexp.MustCompile(a.IDPattern())
+		}
+	}
 	for name, m := range provisioningChangeMembers {
 		if m.pattern != "" {
 			memberPattern[name] = regexp.MustCompile(m.pattern)
@@ -134,6 +153,30 @@ func AggregateTypes() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// SigningKeyID is the aggregate id of the signing_key aggregate for kid: "key_" and the unpadded base64url SHA-256 of the kid
+// (43 characters). A kid may hold a dot, which an aggregate id may not, so the id is derived and the kid travels as change.kid.
+func SigningKeyID(kid string) string {
+	sum := sha256.Sum256([]byte(kid))
+	return "key_" + base64.RawURLEncoding.EncodeToString(sum[:])
+}
+
+// IDPattern is the schema pattern of the aggregate ids of aggregateType.
+func (a Aggregate) IDPattern() string {
+	suffix := a.IDSuffix
+	if suffix == "" {
+		suffix = "[A-Za-z0-9_-]{1,64}"
+	}
+	return "^" + a.IDPrefix + suffix + "$"
+}
+
+// ChangeMembers are the members the event may carry.
+func (a Aggregate) ChangeMembers(event string) []string {
+	if own, ok := a.Scoped[event]; ok {
+		return own
+	}
+	return a.Change
 }
 
 // IsOneShot reports whether aggregateType is a one-shot aggregate (see Aggregate.OneShot).
@@ -168,7 +211,7 @@ func CheckEvent(aggregateType, aggregateID, eventType string, change map[string]
 		return fmt.Errorf("%s: unknown aggregate_type %q", Surface, aggregateType)
 	}
 	if len(aggregateID) <= len(a.IDPrefix) || aggregateID[:len(a.IDPrefix)] != a.IDPrefix ||
-		!wireIDSuffix.MatchString(aggregateID[len(a.IDPrefix):]) {
+		!wireIDSuffix.MatchString(aggregateID[len(a.IDPrefix):]) || (a.IDSuffix != "" && !idPatterns[aggregateType].MatchString(aggregateID)) {
 		return fmt.Errorf("%s: aggregate_id %q is not a %s id", Surface, aggregateID, a.IDPrefix)
 	}
 	if len(aggregateID) > MaxWireIDLength {
@@ -182,8 +225,15 @@ func CheckEvent(aggregateType, aggregateID, eventType string, change map[string]
 			return fmt.Errorf("%s: %s must carry change.%s", Surface, eventType, name)
 		}
 	}
+	if aggregateType == "signing_key" {
+		kid, _ := change["kid"].(string)
+		if aggregateID != SigningKeyID(kid) {
+			return fmt.Errorf("%s: signing_key aggregate_id is not the derived id of change.kid", Surface)
+		}
+	}
+	allowed := a.ChangeMembers(eventType)
 	for name, value := range change {
-		if !listHas(a.Change, name) {
+		if !listHas(allowed, name) {
 			return fmt.Errorf("%s: %s may not carry change.%s", Surface, aggregateType, name)
 		}
 		if err := checkChangeMember(name, value); err != nil {

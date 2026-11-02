@@ -10,6 +10,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
 )
 
 func deliverable(revision string) audit.Event {
@@ -171,9 +172,10 @@ func TestTheSigningKeyTravelsTheFeedLikeAnyOtherAggregate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const id = "key_EXAMPLE0000000000000000000000000000000000001"
+	id := provisioning.SigningKeyID("example.key")
 	e := deliverable("1")
 	e.AggregateType, e.AggregateID, e.IdempotencyKey = "signing_key", id, "signing_key:"+id+":1"
+	e.Payload = []byte(`{"revision":1,"change":{"kid":"example.key"}}`)
 	if err := sink.Deliver(context.Background(), e); err != nil {
 		t.Fatalf("Deliver: %v", err)
 	}
@@ -204,6 +206,7 @@ func TestAOneShotEventPublishesWithoutHighWaterStateAndTheConsumerKeepsNone(t *t
 		id := "ses_EXAMPLE000000000000" + string(rune('A'+i))
 		e := deliverable("1")
 		e.AggregateType, e.AggregateID, e.IdempotencyKey = "session", id, "session:"+id+":1"
+		e.Payload = []byte(`{"revision":1,"change":{"status":"revoked","reason":"caller"}}`)
 		if err := sink.Deliver(context.Background(), e); err != nil {
 			t.Fatalf("Deliver: %v", err)
 		}
@@ -236,5 +239,15 @@ func TestAOneShotEventPublishesWithoutHighWaterStateAndTheConsumerKeepsNone(t *t
 	}
 	if got := len(rec.snapshot()); got != 2*n {
 		t.Fatalf("%d Invalidate calls, want %d (every delivery evicts)", got, 2*n)
+	}
+}
+
+func TestAOneShotConsumerEventPastRevisionOneIsRefused(t *testing.T) {
+	c, rec := newTestConsumer(t)
+	if _, err := c.Handle(context.Background(), ev("session", "ses_EXAMPLE0000000000001", 2)); !errors.Is(err, ErrOneShotRevision) {
+		t.Fatalf("err = %v, want ErrOneShotRevision", err)
+	}
+	if n := len(rec.snapshot()); n != 0 {
+		t.Fatalf("%d Invalidate calls, want none", n)
 	}
 }

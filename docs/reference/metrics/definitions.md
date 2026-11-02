@@ -310,6 +310,11 @@ full cycle time: it is a real input, not an outlier to remove.
   values, the same rule as the daily value.
 - **No merge.** A week or month with no merged pull request has no value. It
   is not zero.
+- **Person, 30 days (landscape).** `ic_landscape_rolling_30d.cycle_p50_30d_hours`
+  is the median of the person's daily medians over the 30 days ending on the
+  point's day, read only from the days with a merged pull request. A day with no
+  merged pull request is left out, not read as 0 hours. A person with no such day
+  has no value (NULL) and no point on the cycle map.
 
 ## Blocked hours in `work_item_state_durations_daily`
 

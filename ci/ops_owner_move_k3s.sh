@@ -107,7 +107,7 @@ fi
 
 # ---------------------------------------------------------------------------------------------------------------------
 case "${KUBECONFIG_FILE}" in *k3s*) ;; *) die "OPS_MOVE_KUBECONFIG must name a k3s kubeconfig (no kind, no prod)" ;; esac
-for tool in kubectl openssl od; do
+for tool in kubectl openssl od envsubst; do
   command -v "${tool}" >/dev/null 2>&1 || die "${tool} is required"
 done
 [ -r "${KUBECONFIG_FILE}" ] || die "the kubeconfig ${KUBECONFIG_FILE} is not readable"
@@ -174,70 +174,8 @@ put_secret ops-migrator OPS_MIGRATOR_DATABASE_PASSWORD="${NEW_PASSWORD}"
 put_secret ops-app UNUSED=1
 put_secret ops-hs256 JWT_SECRET_KEY="$(openssl rand -hex 32)"
 
-K apply -f - >/dev/null <<EOF
-apiVersion: apps/v1
-kind: Deployment
-metadata: {name: ops-postgres}
-spec:
-  replicas: 1
-  selector: {matchLabels: {app: ops-postgres}}
-  template:
-    metadata: {labels: {app: ops-postgres}}
-    spec:
-      securityContext: {runAsNonRoot: true, runAsUser: 70, runAsGroup: 70, fsGroup: 70}
-      volumes: [{name: data, emptyDir: {}}]
-      containers:
-        - name: postgres
-          image: ${PG_IMAGE}
-          imagePullPolicy: IfNotPresent
-          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
-          volumeMounts: [{name: data, mountPath: /var/lib/postgresql}]
-          env:
-            - {name: POSTGRES_USER, value: ${OLD}}
-            - {name: POSTGRES_DB, value: ${OLD}}
-            - name: POSTGRES_PASSWORD
-              valueFrom: {secretKeyRef: {name: ops-pg, key: POSTGRES_PASSWORD}}
-            - {name: PGDATA, value: /var/lib/postgresql/pgdata}
-          readinessProbe:
-            exec: {command: [pg_isready, -h, 127.0.0.1, -U, ${OLD}]}
-            periodSeconds: 2
----
-apiVersion: v1
-kind: Service
-metadata: {name: ops-postgres}
-spec:
-  selector: {app: ops-postgres}
-  ports: [{port: 5432, targetPort: 5432}]
----
-apiVersion: apps/v1
-kind: Deployment
-metadata: {name: ops-clickhouse}
-spec:
-  replicas: 1
-  selector: {matchLabels: {app: ops-clickhouse}}
-  template:
-    metadata: {labels: {app: ops-clickhouse}}
-    spec:
-      containers:
-        - name: clickhouse
-          image: ${CH_IMAGE}
-          imagePullPolicy: IfNotPresent
-          env:
-            - {name: CLICKHOUSE_USER, value: dho}
-            - {name: CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT, value: "1"}
-            - name: CLICKHOUSE_PASSWORD
-              valueFrom: {secretKeyRef: {name: ops-pg, key: CLICKHOUSE_PASSWORD}}
-          readinessProbe:
-            tcpSocket: {port: 9000}
-            periodSeconds: 2
----
-apiVersion: v1
-kind: Service
-metadata: {name: ops-clickhouse}
-spec:
-  selector: {app: ops-clickhouse}
-  ports: [{name: native, port: 9000, targetPort: 9000}, {name: http, port: 8123, targetPort: 8123}]
-EOF
+# shellcheck disable=SC2016
+OPS_PG_IMAGE="${PG_IMAGE}" OPS_CH_IMAGE="${CH_IMAGE}" envsubst '${OPS_PG_IMAGE} ${OPS_CH_IMAGE}' <"${SCRIPT_DIR}/ops_k8s/infra.yaml" | K apply -f - >/dev/null
 K rollout status deploy/ops-postgres --timeout=240s >/dev/null
 K rollout status deploy/ops-clickhouse --timeout=300s >/dev/null
 pass "postgres (superuser ${OLD}) and clickhouse are up"
@@ -282,52 +220,11 @@ oneoff() {
 helm_up() { helm upgrade --install --kubeconfig "${KUBECONFIG_FILE}" "$@" --timeout 10m >/dev/null; }
 
 acl_snapshot() { # DB: every ACL entry (stored or default) of the database, schemas public and river and their objects
-  pg -d "$1" <<'SQL'
-SELECT kind || '|' || object || '|' || grantor || '>' || grantee || '|' || priv || '|' || grantable FROM (
-  SELECT 'database' AS kind, d.datname::text AS object, gr.rolname::text AS grantor, coalesce(ge.rolname::text, 'PUBLIC') AS grantee,
-         a.privilege_type AS priv, a.is_grantable AS grantable
-  FROM pg_database d CROSS JOIN LATERAL aclexplode(coalesce(d.datacl, acldefault('d', d.datdba))) a
-  JOIN pg_roles gr ON gr.oid = a.grantor LEFT JOIN pg_roles ge ON ge.oid = a.grantee WHERE d.datname = current_database()
-  UNION ALL
-  SELECT 'schema', n.nspname::text, gr.rolname::text, coalesce(ge.rolname::text, 'PUBLIC'), a.privilege_type, a.is_grantable
-  FROM pg_namespace n CROSS JOIN LATERAL aclexplode(coalesce(n.nspacl, acldefault('n', n.nspowner))) a
-  JOIN pg_roles gr ON gr.oid = a.grantor LEFT JOIN pg_roles ge ON ge.oid = a.grantee WHERE n.nspname IN ('public', 'river')
-  UNION ALL
-  SELECT 'relation', n.nspname || '.' || c.relname, gr.rolname::text, coalesce(ge.rolname::text, 'PUBLIC'), a.privilege_type, a.is_grantable
-  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-  CROSS JOIN LATERAL aclexplode(coalesce(c.relacl, acldefault((CASE c.relkind WHEN 'S' THEN 's' ELSE 'r' END)::"char", c.relowner))) a
-  JOIN pg_roles gr ON gr.oid = a.grantor LEFT JOIN pg_roles ge ON ge.oid = a.grantee
-  WHERE n.nspname IN ('public', 'river') AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
-  UNION ALL
-  SELECT 'column', n.nspname || '.' || c.relname || '.' || att.attname, gr.rolname::text, coalesce(ge.rolname::text, 'PUBLIC'),
-         a.privilege_type, a.is_grantable
-  FROM pg_attribute att JOIN pg_class c ON c.oid = att.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace
-  CROSS JOIN LATERAL aclexplode(att.attacl) a JOIN pg_roles gr ON gr.oid = a.grantor LEFT JOIN pg_roles ge ON ge.oid = a.grantee
-  WHERE n.nspname IN ('public', 'river') AND NOT att.attisdropped
-  UNION ALL
-  SELECT 'function', p.oid::regprocedure::text, gr.rolname::text, coalesce(ge.rolname::text, 'PUBLIC'), a.privilege_type, a.is_grantable
-  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-  CROSS JOIN LATERAL aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
-  JOIN pg_roles gr ON gr.oid = a.grantor LEFT JOIN pg_roles ge ON ge.oid = a.grantee WHERE n.nspname IN ('public', 'river')
-  UNION ALL
-  SELECT 'type', n.nspname || '.' || t.typname, gr.rolname::text, coalesce(ge.rolname::text, 'PUBLIC'), a.privilege_type, a.is_grantable
-  FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
-  CROSS JOIN LATERAL aclexplode(coalesce(t.typacl, acldefault('T', t.typowner))) a
-  JOIN pg_roles gr ON gr.oid = a.grantor LEFT JOIN pg_roles ge ON ge.oid = a.grantee
-  WHERE n.nspname IN ('public', 'river') AND t.typcategory <> 'A'
-) s ORDER BY 1;
-SQL
+  pg -d "$1" -f - <"${SCRIPT_DIR}/ops_k8s/acl_snapshot.sql"
 }
 
 owned_by() { # DB ROLE: relations, routines and types of public and river, the schema river and the database owned by ROLE
-  pg -d "$1" -v "role=$2" <<'SQL'
-SELECT (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname IN ('public', 'river') AND c.relowner = r.oid)
-     + (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname IN ('public', 'river') AND p.proowner = r.oid)
-     + (SELECT count(*) FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE n.nspname IN ('public', 'river') AND t.typowner = r.oid)
-     + (SELECT count(*) FROM pg_namespace WHERE nspname = 'river' AND nspowner = r.oid)
-     + (SELECT count(*) FROM pg_database WHERE datname = current_database() AND datdba = r.oid)
-FROM pg_roles r WHERE r.rolname = :'role';
-SQL
+  pg -d "$1" -v "role=$2" -f - <"${SCRIPT_DIR}/ops_k8s/owned_by.sql"
 }
 
 install() { # DB: database and ClickHouse database, hook Secrets on the superuser, release without the pin
@@ -398,6 +295,9 @@ pinned_upgrade omf
 readbacks omf
 
 # ===================================================================================================================
+# Roles are cluster-wide and the runtime-role closure refuses grants held in another database: prod has one
+# application database, so each leg drops the one before it.
+pg -c "DROP DATABASE omf WITH (FORCE)" >/dev/null
 printf '=== leg 2: UPGRADE under runtime traffic ===\n'
 install omu
 K exec -i deploy/ops-postgres -- sh -c 'rm -f /tmp/loop.*; touch /tmp/loop.go' >/dev/null
@@ -436,6 +336,7 @@ K wait --for=condition=Ready pod --all --timeout=120s >/dev/null || die "omu: no
 pass "omu: the release is deployed and every pod is Ready"
 
 # ===================================================================================================================
+pg -c "DROP DATABASE omu WITH (FORCE)" >/dev/null
 printf '=== leg 3: ROLLBACK ===\n'
 install omr
 snap_before="$(acl_snapshot omr)"

@@ -1,6 +1,8 @@
 package outboxprojection
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"reflect"
 	"testing"
@@ -276,5 +278,17 @@ func TestASecondTryThatDecidesOtherThanRefusedIsARetryAndNeverAThirdTry(t *testi
 	boom := errors.New("boom")
 	if _, err := runTries(script(boom)); !errors.Is(err, boom) || len(calls) != 1 {
 		t.Fatalf("an error must end the call at once: %v, %d tries", err, len(calls))
+	}
+}
+
+// For acr the fingerprint is derived, not read: the first 8 bytes of the SHA-256 of the aggregate id, in hex
+// (acp answers-11196 Q4), so no mapper can pass a value that two credentials share.
+func TestAcrFingerprintIsTheFirstEightBytesOfTheSHA256OfTheAggregateID(t *testing.T) {
+	sum := sha256.Sum256([]byte("cred_abcdef"))
+	if got, want := AcrFingerprint("cred_abcdef"), hex.EncodeToString(sum[:8]); got != want {
+		t.Fatalf("AcrFingerprint = %q, want %q", got, want)
+	}
+	if AcrFingerprint("cred_abcdef") == AcrFingerprint("cred_abcdeg") || len(AcrFingerprint("x")) != 16 {
+		t.Fatal("the derived fingerprint is not 16 hex characters, one per id")
 	}
 }

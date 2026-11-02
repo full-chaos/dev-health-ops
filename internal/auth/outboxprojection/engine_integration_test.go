@@ -234,16 +234,17 @@ func TestProjectThreeCredentialsOfOneSourceEachApplyUnderTheirOwnFingerprint(t *
 	}
 }
 
-func TestProjectThreeAcrCredentialsOfOneOwnerEachApplyUnderTheirOwnRegistryRow(t *testing.T) {
+func TestProjectThreeAcrCredentialsOfOneOwnerEachApplyUnderADerivedFingerprint(t *testing.T) {
 	e := getEnv(t, true)
 	org := e.org(t)
 	var ids []string
-	for i := 0; i < 3; i++ {
+	for i, callerFingerprint := range []string{"0123456789abcdef", "", "0123456789abcdef"} {
 		c := acrCreated(org)
+		c.change.Fingerprint = callerFingerprint // whatever the mapper passes, the engine derives its own for acr
 		ids = append(ids, c.id)
 		mustOutcome(t, e.project(t, e.acr(t, c, "owner-1", 1)), pushlifecycle.Applied)
-		if n := e.count(t, `SELECT count(*) FROM auth.credential_registry WHERE external_reference = $1 AND domain_owner = 'acr' AND fingerprint = $2`, c.id, c.change.Fingerprint); n != 1 {
-			t.Fatalf("acr credential %d: %d registry rows under its own fingerprint, want 1", i, n)
+		if n := e.count(t, `SELECT count(*) FROM auth.credential_registry WHERE external_reference = $1 AND domain_owner = 'acr' AND fingerprint = $2 AND secret_hash = decode($2, 'hex')`, c.id, acrFingerprint(c.id)); n != 1 {
+			t.Fatalf("acr credential %d: %d registry rows under sha256(aggregate_id)[:8], want 1", i, n)
 		}
 	}
 	if n := e.count(t, `SELECT count(DISTINCT secret_hash) FROM auth.credential_registry WHERE external_reference = ANY($1)`, ids); n != 3 {

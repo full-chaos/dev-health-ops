@@ -25,6 +25,7 @@ var provisioningRouteOps = map[string]string{
 	opGrantCreate: PatternGrantCreate, opGrantUpdate: PatternGrantUpdate, opGrantRevoke: PatternGrantRevoke,
 	opServiceAccountKeyIssue: PatternServiceAccountKeyIssue, opServiceAccountKeyRotate: PatternServiceAccountKeyRotate,
 	opServiceAccountKeyRevoke: PatternServiceAccountKeyRevoke, opServiceAccountKeyList: PatternServiceAccountKeyList,
+	opOrgRename: PatternOrgRename,
 }
 
 // serviceSessionIssuerClass is the endpoint-profile credential class of the

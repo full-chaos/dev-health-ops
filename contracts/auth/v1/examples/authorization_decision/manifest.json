@@ -20,6 +20,86 @@
     {
       "file": "decision-valid-allow-without-obligations.json",
       "why": "An allow with no obligations is legal."
+    },
+    {
+      "file": "decision-valid-reason-allowed-by-role.json",
+      "why": "An allow by the member's organization role (5.2)."
+    },
+    {
+      "file": "decision-valid-reason-invalid-request.json",
+      "why": "A deny for a request the decision core cannot read in canonical form."
+    },
+    {
+      "file": "decision-valid-reason-unknown-action.json",
+      "why": "A deny for an action outside the catalog."
+    },
+    {
+      "file": "decision-valid-reason-resource-mismatch.json",
+      "why": "A deny for an action asked about the wrong resource kind."
+    },
+    {
+      "file": "decision-valid-reason-principal-inactive.json",
+      "why": "A deny for a principal that is not active."
+    },
+    {
+      "file": "decision-valid-reason-organization-inactive.json",
+      "why": "A deny for an organization that is not active."
+    },
+    {
+      "file": "decision-valid-reason-no-membership.json",
+      "why": "A deny for a principal with no membership in the organization."
+    },
+    {
+      "file": "decision-valid-reason-org-mismatch.json",
+      "why": "A deny for a membership of another organization."
+    },
+    {
+      "file": "decision-valid-reason-membership-inactive.json",
+      "why": "A deny for a membership that is not active."
+    },
+    {
+      "file": "decision-valid-reason-role-unknown.json",
+      "why": "A deny for a role outside the catalog."
+    },
+    {
+      "file": "decision-valid-reason-role-scope-mismatch.json",
+      "why": "A deny for a role of the other scope."
+    },
+    {
+      "file": "decision-valid-reason-role-lacks-action.json",
+      "why": "A deny for a role that does not hold the action."
+    },
+    {
+      "file": "decision-valid-reason-grant-expired.json",
+      "why": "A deny for a repository grant at or past its expiry (5.3)."
+    },
+    {
+      "file": "decision-valid-reason-grant-revoked.json",
+      "why": "A deny for a revoked repository grant (5.3)."
+    },
+    {
+      "file": "decision-valid-reason-workload-audience-denied.json",
+      "why": "A deny for a workload whose token audience the registry does not list (5.3)."
+    },
+    {
+      "file": "decision-valid-reason-workload-action-denied.json",
+      "why": "A deny for a workload action the registry does not allow (5.3)."
+    },
+    {
+      "file": "decision-valid-reason-service-account-inactive.json",
+      "why": "A deny for a service account that is not active in the organization (5.3)."
+    },
+    {
+      "file": "decision-valid-reason-allowed-by-membership-default.json",
+      "why": "A repository allow by the membership default (5.3)."
+    },
+    {
+      "file": "decision-valid-reason-impersonation-denied.json",
+      "why": "Reserved for the actor-chain leaf: a deny under impersonation."
+    },
+    {
+      "file": "decision-valid-reason-delegation-invalid.json",
+      "why": "Reserved for the actor-chain leaf: a deny for an invalid delegation."
     }
   ],
   "reject": [

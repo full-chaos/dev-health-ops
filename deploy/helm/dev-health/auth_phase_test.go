@@ -33,6 +33,9 @@ func phaseArgs(phase int, extra ...string) []string {
 	out = append(out, riverHookSets...)
 	out = append(out, roleEnv("devhealth_query")...)
 	out = append(out, "--set", fmt.Sprintf("authService.phase=%d", phase))
+	if phase == 3 {
+		out = append(out, "--set", "authService.loginStage=goApi")
+	}
 	if phase >= 2 {
 		out = append(out, "--set", "authService.migrate.sessionReaders.queryApi=devhealth_query")
 		out = append(out, sessionSuccessor...)

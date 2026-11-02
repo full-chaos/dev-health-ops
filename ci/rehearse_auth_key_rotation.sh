@@ -242,8 +242,7 @@ VALUES (gen_random_uuid(), 'auth-session-issuer', encode(sha256(convert_to(:'tok
 SQL
   ) || die "could not store the session issue credential"
 
-# A recreated container gets new ephemeral host ports: read them again after every --force-recreate.
-refresh_ports
+# A recreated container gets new ephemeral host ports: read them again after every recreate.
 refresh_ports() {
   API_PORT="$(compose port go-api 8000 | sed 's/.*://')"
   ISSUER_HOST_PORT="$(compose port issuer-tls 8443 | sed 's/.*://')"

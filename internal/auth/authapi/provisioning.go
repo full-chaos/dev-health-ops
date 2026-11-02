@@ -214,10 +214,13 @@ func ProvisioningRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 		{Method: http.MethodPost, Pattern: PatternServiceAccountDisable, Handler: h.serviceAccountSwitch(opServiceAccountDisable, false)},
 		{Method: http.MethodPost, Pattern: PatternServiceAccountEnable, Handler: h.serviceAccountSwitch(opServiceAccountEnable, true)},
 		{Method: http.MethodPost, Pattern: PatternServiceAccountOwner, Handler: http.HandlerFunc(h.serviceAccountOwner)},
+		{Method: http.MethodPost, Pattern: PatternServiceAccountKeyIssue, Handler: http.HandlerFunc(h.serviceAccountKeyIssue)},
+		{Method: http.MethodPost, Pattern: PatternServiceAccountKeyRotate, Handler: http.HandlerFunc(h.serviceAccountKeyRotate)},
+		{Method: http.MethodPost, Pattern: PatternServiceAccountKeyRevoke, Handler: http.HandlerFunc(h.serviceAccountKeyRevoke)},
+		{Method: http.MethodPost, Pattern: PatternServiceAccountKeyList, Handler: http.HandlerFunc(h.serviceAccountKeyList)},
 	}
 	routes = h.withStateRoute(routes, rows)
 	routes = h.withGrantRoutes(routes, rows)
-	routes = h.withServiceAccountKeyRoutes(routes, rows)
 	return routes, nil
 }
 

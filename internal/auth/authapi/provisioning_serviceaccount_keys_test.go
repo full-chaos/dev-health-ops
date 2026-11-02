@@ -94,8 +94,6 @@ func (f *fakeServiceAccounts) KeyByID(_ context.Context, id uuid.UUID) (*service
 	return &k, nil
 }
 
-var keyPatterns = []string{PatternServiceAccountKeyIssue, PatternServiceAccountKeyRotate, PatternServiceAccountKeyRevoke, PatternServiceAccountKeyList}
-
 // docWithRows is the embedded document with the rows for routes replaced by copies of the deprovision row.
 func docWithRows(t testing.TB, routes ...string) []byte {
 	t.Helper()
@@ -141,7 +139,7 @@ func docWithRows(t testing.TB, routes ...string) []byte {
 
 func newKeyFixture(t *testing.T) *provFixture {
 	t.Helper()
-	return newProvFixtureWith(t, docWithRows(t, append(slices.Clone(provisioningPatterns), keyPatterns...)...))
+	return newProvFixture(t)
 }
 
 func seedKey(f *provFixture) {
@@ -507,7 +505,7 @@ func TestKeyRouteStatusFollowsTheTimestamps(t *testing.T) {
 
 func TestKeyRoutesTakeTheGoAPIWorkloadTokenAndNoOtherSubject(t *testing.T) {
 	w := newWorkloadIssueFixture(t)
-	f := &provWorkloadFixture{provFixture: newProvFixtureFor(t, docWithRows(t, append(slices.Clone(provisioningPatterns), keyPatterns...)...), w.workload), w: w}
+	f := &provWorkloadFixture{provFixture: newProvFixtureFor(t, docWithRow(t, PatternOrgSuspend), w.workload), w: w}
 	want := uuidOfWire(t, f.w.subject)
 	for _, c := range keyCases() {
 		if !workloadOperations[c.op] {
@@ -532,28 +530,25 @@ func TestKeyRoutesTakeTheGoAPIWorkloadTokenAndNoOtherSubject(t *testing.T) {
 	}
 }
 
-// The routes are dark until their rows ship: not on the startup gate, mounted only with a row, each left out with one
-// log line naming it, and the service starts either way.
-func TestKeyRoutesMountOnlyWithTheirRow(t *testing.T) {
+// The key routes are on the startup gate: a build whose document has no row for one of them builds no route, and the
+// embedded document serves all four.
+func TestKeyRoutesAreOnTheStartupGate(t *testing.T) {
+	f := newProvFixture(t)
 	for _, c := range keyCases() {
-		if slices.Contains(provisioningPatterns, c.path) {
-			t.Fatalf("%s is on the startup gate before its row ships", c.path)
+		if !slices.Contains(provisioningPatterns, c.path) {
+			t.Errorf("%s is not on the startup gate", c.path)
 		}
 		if provisioningRouteOps[c.op] != c.path {
-			t.Fatalf("%s is not in the route operations", c.op)
+			t.Errorf("%s is not in the route operations", c.op)
 		}
-	}
-	f := newProvFixtureWith(t, docWithRows(t, slices.Clone(provisioningPatterns)...))
-	for _, c := range keyCases() {
-		if response := f.post(c.path, encode(c.body(f, f.super)), nil); response.Code != http.StatusNotFound {
-			t.Fatalf("%s with no row: %d, want 404", c.path, response.Code)
+		err := provisioningRowsPresent(embeddedDocWithoutRow(t, c.path), false)
+		if !errors.Is(err, errProvisioningRows) || !strings.Contains(err.Error(), "POST "+c.path+" ") {
+			t.Errorf("a document without the %s row: %v, want a refusal naming the route", c.path, err)
 		}
-		if !strings.Contains(f.logs.String(), `"route":"`+c.path+`"`) {
-			t.Fatalf("%s logged no not-mounted line", c.path)
+		if response := f.post(c.path, encode(c.body(f, f.super)), nil); response.Code != http.StatusOK {
+			t.Errorf("%s on the embedded document: %d, want 200", c.path, response.Code)
 		}
-	}
-	if f.sa.calls != 0 {
-		t.Fatal("a dark route reached a verb")
+		f.sa.key.RevokedAt, f.sa.key.RevokedReason = nil, nil
 	}
 }
 

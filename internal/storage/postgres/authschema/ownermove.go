@@ -53,6 +53,8 @@ func PublicPrivilegeSet() []PublicPrivilege {
 	for _, grant := range RegisterOrganizationGrants() {
 		add(grant.Table, "INSERT", grant.Columns)
 	}
+	orgWrite := OrganizationWriteGrants()
+	add(orgWrite.Table, "UPDATE", orgWrite.Update)
 	for _, grant := range LegacyLinkPurgeGrants() {
 		tableLevel[key{grant.Table, "DELETE"}] = true
 		add(grant.Table, "SELECT", grant.Select)

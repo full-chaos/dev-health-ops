@@ -68,7 +68,7 @@ Bootstrap credentials (`bootstrap-create`, `bootstrap-rotate`, `bootstrap-revoke
 `acr.workload_bindings` is a different table from `auth.workload_bindings`. It maps a Kubernetes identity (trust
 domain, namespace, ServiceAccount, UID) to an ACR organization, role and repository scopes, for the ACR exchange
 server (`acr/migrations/postgres/0030_workload_token_exchange.sql`, `0070_workload_bindings_org_key.sql`;
-`internal/storage/postgres/workload_bindings.go`).
+`acr/internal/storage/postgres/workload_bindings.go`).
 
 | Item | Result |
 | --- | --- |

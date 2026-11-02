@@ -70,6 +70,23 @@ spec:
     {{- fail (printf "ingress.hosts %q pythonAllowList must be true or a list of {path, pathType}, got %s" $host.host (kindOf $host.pythonAllowList)) }}
     {{- end }}
     {{- end }}
+    {{- /* CHAOS-12359: a host may route the issuer's two public documents to auth-service (pods fetch issuer + /.well-known/... through the public host) and nothing else. */}}
+    {{- $authPaths := list }}
+    {{- range $host.paths }}{{- if eq .service "auth-service" }}{{- $authPaths = append $authPaths .path }}{{- end }}{{- end }}
+    {{- if $authPaths }}
+    {{- if ne (len $authPaths) (len $host.paths) }}{{- fail (printf "ingress.hosts %q routes to auth-service and to another service: a host that routes to auth-service serves only the two well-known documents (%s, %s)" $host.host "/.well-known/openid-configuration" "/.well-known/jwks.json") }}{{- end }}
+    {{- if $host.pythonAllowList }}{{- fail (printf "ingress.hosts %q routes to auth-service and must not carry a pythonAllowList" $host.host) }}{{- end }}
+    {{- if ne (len $authPaths) (len (uniq $authPaths)) }}{{- fail (printf "ingress.hosts %q lists a path to auth-service twice" $host.host) }}{{- end }}
+    {{- range $host.paths }}
+    {{- if or (ne .pathType "Exact") (not (has .path (list "/.well-known/openid-configuration" "/.well-known/jwks.json"))) }}
+    {{- fail (printf "ingress.hosts %q path %q pathType %q routes to auth-service: only the two well-known documents as Exact paths (/.well-known/openid-configuration, /.well-known/jwks.json) may" $host.host .path .pathType) }}
+    {{- end }}
+    {{- end }}
+    {{- if not (include "dev-health.authOn" (dict "flag" "service" "context" $)) }}{{- fail (printf "ingress.hosts %q routes to auth-service but authService.phase >= 1 is not set (the Service would not exist)" $host.host) }}{{- end }}
+    {{- $issuer := (default dict $.Values.authService.accessToken).issuerURL | default "" }}
+    {{- if not $issuer }}{{- fail (printf "ingress.hosts %q routes to auth-service: it needs authService.accessToken.issuerURL (the documents are served for that issuer)" $host.host) }}{{- end }}
+    {{- if ne $issuer (printf "https://%s" $host.host) }}{{- fail (printf "ingress.hosts %q routes to auth-service: authService.accessToken.issuerURL must be https://%s (the issuer is the fetch URL: another host or a path prefix would not find the documents)" $host.host $host.host) }}{{- end }}
+    {{- end }}
     - host: {{ $host.host | quote }}
       http:
         paths:
@@ -105,6 +122,10 @@ spec:
                 {{- fail (printf "ingress.hosts %q routes to query-api-mcp: the MCP caller-class listener trusts the internal identity headers and is never public (CHAOS-7085)" $host.host) }}
                 {{- else if eq .service "go-api-internal" }}
                 {{- fail (printf "ingress.hosts %q routes to go-api-internal: the internal listener is unauthenticated by design and never public (CHAOS-7181)" $host.host) }}
+                {{- else if eq .service "auth-service" }}
+                name: {{ include "dev-health.fullname" $ }}-auth-service
+                port:
+                  number: {{ $.Values.authService.port }}
                 {{- else if eq .service "web" }}
                 name: {{ include "dev-health.fullname" $ }}-web
                 port:

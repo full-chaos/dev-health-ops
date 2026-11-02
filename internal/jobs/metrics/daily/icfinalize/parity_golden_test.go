@@ -292,17 +292,17 @@ type goldenUserMetric struct {
 }
 
 type goldenLandscapeRow struct {
-	IdentityID       string  `json:"identity_id"`
-	TeamID           *string `json:"team_id"`
-	MapName          string  `json:"map_name"`
-	XRaw             float64 `json:"x_raw"`
-	YRaw             float64 `json:"y_raw"`
-	XNorm            float64 `json:"x_norm"`
-	YNorm            float64 `json:"y_norm"`
-	ChurnLOC30d      int64   `json:"churn_loc_30d"`
-	DeliveryUnits30d int64   `json:"delivery_units_30d"`
+	IdentityID       string   `json:"identity_id"`
+	TeamID           *string  `json:"team_id"`
+	MapName          string   `json:"map_name"`
+	XRaw             float64  `json:"x_raw"`
+	YRaw             float64  `json:"y_raw"`
+	XNorm            float64  `json:"x_norm"`
+	YNorm            float64  `json:"y_norm"`
+	ChurnLOC30d      int64    `json:"churn_loc_30d"`
+	DeliveryUnits30d int64    `json:"delivery_units_30d"`
 	CycleP5030dHours *float64 `json:"cycle_p50_30d_hours"`
-	WIPMax30d        int64   `json:"wip_max_30d"`
+	WIPMax30d        int64    `json:"wip_max_30d"`
 }
 
 type parityGolden struct {

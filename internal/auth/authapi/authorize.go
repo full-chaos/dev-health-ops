@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authorization"
 	"github.com/full-chaos/dev-health-ops/internal/auth/decisioncache"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
@@ -95,6 +96,9 @@ type AuthorizeDeps struct {
 	References *PrincipalReferences
 	State      DecisionState
 	Evaluator  *authorization.Evaluator
+	// Audit writes the audit rows of one call's high-risk decisions in one
+	// transaction, all or none.
+	Audit func(ctx context.Context, events []audit.AuditEvent) error
 	// ProfileRows is the endpoint-profile document a route's row is looked up
 	// in; nil reads the embedded document.
 	ProfileRows []byte
@@ -119,6 +123,9 @@ type authorizeHandlers struct {
 func AuthorizeRoutes(deps AuthorizeDeps) ([]httpapi.Route, error) {
 	if deps.State == nil || deps.Evaluator == nil {
 		return nil, errors.New("authapi: the authorize routes need decision state and an evaluator")
+	}
+	if deps.Audit == nil {
+		return nil, errors.New("authapi: the authorize routes need an audit sink for high-risk decisions")
 	}
 	if deps.Logger == nil {
 		deps.Logger = slog.Default()
@@ -220,6 +227,9 @@ type authorizeItem struct {
 	principal ReferencedPrincipal
 	decision  authorization.Decision
 	now       int64
+	// orgKnown is true when the question's organization is a canonical uuid
+	// the decision transaction found.
+	orgKnown bool
 	// cache is the item's lookup result; key and read are set on a miss whose
 	// snapshot said what it read.
 	cache string
@@ -313,6 +323,10 @@ func (h authorizeHandlers) decide(w http.ResponseWriter, r *http.Request, op str
 		h.Logger.InfoContext(ctx, "authorize decision", "decision_id", doc.DecisionID, "allowed", doc.Allowed, "reason_code", doc.ReasonCode,
 			"cache", item.cache)
 		out[i] = doc
+	}
+	if err := h.auditHighRisk(ctx, items, out); err != nil {
+		h.rec.refuse(w, r, op, unavailable(reasonStoreUnavailable), err)
+		return nil, false
 	}
 	return out, true
 }
@@ -410,6 +424,7 @@ func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved
 			}
 		}
 		items[i].decision, items[i].now = d, snap.NowUnixNano()
+		items[i].orgKnown = knownOrganization(q.OrganizationID, snap)
 	}
 	return nil
 }

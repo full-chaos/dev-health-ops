@@ -209,7 +209,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		Provision:     deps.OrgProvisioner,
 	})...)
 	if deps.Guard != nil {
-		routes = append(routes, orgs.Routes(deps.Pool, deps.Guard, logger)...)
+		routes = append(routes, orgs.Routes(deps.Pool, deps.Guard, logger, deps.OrgRenamer)...)
 		routes = append(routes, telemetry.Routes(deps.Pool, deps.Guard, deps.Auth, deps.Telemetry.Endpoint, logger)...)
 		routes = append(routes, customerpush.Routes(customerpush.Deps{Pool: deps.Pool, Guard: deps.Guard, Logger: logger, Cipher: deps.Decryptor,
 			PushLifecycleEvents: deps.PushLifecycleEvents, AuthSchema: deps.AuthSchema})...)
@@ -276,7 +276,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			OrgReactivator:     deps.OrgReactivator,
 			OrgProvisioner:     deps.OrgProvisioner,
 			OrgSuspender:       deps.OrgSuspender,
-			OrgState:           deps.OrgState,
+			OrgState:           deps.OrgState, OrgRenamer: deps.OrgRenamer,
 		})...)
 	}
 	webhookintake.LogUnconfiguredSecrets(logger)
@@ -329,9 +329,9 @@ func configure(
 }
 
 // orgStateReconciler is the is_active reconcile loop: only with the organization client, so only with
-// AUTH_PROXY_ORG_PROVISIONING on, and only with a database.
+// AUTH_PROXY_ORG_PROVISIONING on, only with a database, and never while auth-service owns organizations (it writes is_active).
 func orgStateReconciler(deps Deps, logger *slog.Logger) []lifecycle.Component {
-	if deps.OrgState == nil || deps.Pool == nil {
+	if deps.OrgState == nil || deps.Pool == nil || admin.OrgsOwned() {
 		return nil
 	}
 	return []lifecycle.Component{admin.NewOrgStateReconciler(deps.Pool, deps.OrgState, logger)}
@@ -438,7 +438,7 @@ func configureWith(
 		return nil, dependencyFailure(ctx, logger, "api_org_provisioning", "api_org_provisioning_config_invalid", err)
 	}
 	if orgClient != nil {
-		deps.OrgReactivator, deps.OrgSuspender, deps.OrgState = orgClient, orgClient, orgClient
+		deps.OrgReactivator, deps.OrgSuspender, deps.OrgState, deps.OrgRenamer = orgClient, orgClient, orgClient, orgClient
 	}
 	depComponents = append(depComponents, orgStateReconciler(deps, logger)...)
 	deps.OrgProvisioner, err = orgProvisioner(authProxy, envsecrets.ProcessLookup, provisioningCred)

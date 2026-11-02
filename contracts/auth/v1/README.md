@@ -351,9 +351,7 @@ boundary (TRD §9, §13).
   `organization_id`: the optional member is absent for a platform-level aggregate.
   The allowlist is per EVENT, not per aggregate: a scope event carries `revoked_before` and `reason` and nothing else, and no ordinary principal or organization event carries either. The wire pins a session event at revision 1, and clients (`ParseProvisioningEvent`, the feed mapper, the sink and the consumer) refuse any other revision for it and an id that is not the derived one for a signing key. `reason` is `caller`, `refresh_reuse`, `password_changed`, `org_ended`,
   `delegation_ended` or `compromised`. A principal's sessions ended in ONE organization (a membership removed) are told as `principal.sessions_revoked` with reason `org_ended`: there is no (principal, organization) shape, so a consumer may also drop that principal's sessions in other organizations, which only evicts a cache (the server still decides). Order across aggregates stays unpromised.
-  This change is the contract only: no producer writes these events yet
-  (the producer is a later change; session and signing-key lifecycle stay
-  `OffStream` until then).
+  Producers: every session end that writes a revoke (explicit revoke, refresh reuse, sign-in supersede, a legacy family revoke, a delegated session ended with its actor or base) queues `session.revoked`, and the live linked client sessions of a revoked web session get one each in the same transaction (a client session that commits after that read has no event; the server's read of the parent still refuses it). Bulk ends queue one scope event with the one clock reading written as `revoked_at`: revoke-all and end-all (reason `caller`), a membership or organization end (`org_ended`), a password change (`password_changed`, `revoked_before` is the stamp the same UPDATE wrote; a session created between that stamp and the UPDATE is decided by the server's row, not the event). A key compromise queues `signing_key.compromised` only. `RevokeUnpinned` (a one-off backfill) stays off-stream by ruling.
 
 ### Credential metadata: secrets are returned once (CHAOS-4934)
 

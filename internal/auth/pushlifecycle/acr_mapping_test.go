@@ -193,8 +193,8 @@ func TestAcrRotationRefusesAWiderScopeSetAWrongParentAndAMissingParent(t *testin
 	if _, outcome := applyAcr(t, State{}, wider, &parent); outcome != RefusedWiden {
 		t.Fatalf("wider rotation: outcome %s, want refused_widen", outcome)
 	}
-	if _, outcome := applyAcr(t, State{}, rotated, nil); outcome != RefusedParent {
-		t.Fatalf("no parent: outcome %s, want refused_parent", outcome)
+	if _, outcome := applyAcr(t, State{}, rotated, nil); outcome != ParentPending {
+		t.Fatalf("no parent: outcome %s, want parent_pending", outcome)
 	}
 	other := parent
 	other.OrganizationID = "org_EXAMPLE0000000000000002"

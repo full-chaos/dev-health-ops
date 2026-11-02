@@ -26,7 +26,7 @@ outbox event commit in one transaction ([ACP-ADR-04](auth-control-plane-adrs.md)
 
 | Login | Used by | May do |
 | --- | --- | --- |
-| **Migration** (`AUTH_MIGRATION_DATABASE_URI`) | `auth-migrate` only | DDL. It owns every object it creates. |
+| **Migration** (`AUTH_MIGRATION_DATABASE_URI`) | `auth-migrate` only | DDL. A `NOSUPERUSER` login that owns the auth schema and every object in it (`AUTH_SCHEMA_OWNER_ROLE` pins that). Its privileges on the ops tables are exactly those of the grants pass, `WITH GRANT OPTION`, plus `REFERENCES`. |
 | **Runtime** (`AUTH_DATABASE_URI`) | `auth-service` | The DML listed in the manifest below, and nothing else. It owns no DDL. |
 
 `auth-migrate` refuses a connection that authenticates **as** the runtime role

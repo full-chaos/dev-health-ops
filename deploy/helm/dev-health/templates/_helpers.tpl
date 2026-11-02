@@ -1124,6 +1124,21 @@ schema Job and the grants Job.
 {{- end }}
 
 {{/*
+The auth schema owner pin (authService.migrate.ownerRole -> AUTH_SCHEMA_OWNER_ROLE) for both auth-migrate Jobs, or "".
+Empty renders nothing at every phase. Set, the role must differ from the runtime login, every session reader and every
+push lifecycle role, or the render fails (auth-migrate refuses the first two at run time as well).
+*/}}
+{{- define "dev-health.authSchemaOwnerRole" -}}
+{{- $m := .Values.authService.migrate -}}
+{{- $owner := trim (toString (default "" $m.ownerRole)) -}}
+{{- if $owner -}}
+{{- $others := concat (list $m.runtimeRole $m.pushLifecycle.writerRole) (default (list) $m.sessionReaderRoles) (default (list) $m.pushLifecycle.callerRoles) (list (trim (toString $m.sessionReaders.goApi)) (trim (toString $m.sessionReaders.queryApi))) -}}
+{{- if has $owner $others }}{{- fail "authService.migrate.ownerRole must differ from authService.migrate.runtimeRole, every session reader role and every push lifecycle role" }}{{- end -}}
+{{- $owner -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 -defer-narrowing for both auth-migrate Jobs, or "". A Job that passes the acknowledgement while auth-service does not
 own users (authOn "usersOwned" off; today phase 3 or lower) also defers: that is the flip-back release, whose old owned auth-service pods still serve while its pre-upgrade hooks
 run, so the users-owned grants it would revoke are kept (CHAOS-11581). authService.migrate.narrowAfterFlipBack, set in

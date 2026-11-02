@@ -32,7 +32,7 @@ source "${SCRIPT_DIR}/lib/registry_retry.sh"
 # The suffix comes from /dev/urandom: the preflight below is check-then-use, and compose adopts a
 # resource that already carries the project name, so the name must not be guessable.
 PROJECT="${AUTH_COMPOSE_PROOF_PROJECT:-authproof$$-$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')}"
-AUTH_SERVICES=(auth-service auth-fence-init auth-migrate auth-grants auth-provision auth-keys-init)
+AUTH_SERVICES=(auth-service auth-fence-init auth-migrate auth-grants auth-owner-grants auth-provision auth-keys-init)
 
 die() {
   printf 'ERROR: %s\n' "$1" >&2
@@ -113,7 +113,7 @@ health="$(docker inspect --format '{{.State.Health.Status}}' "$(compose --profil
 printf 'auth-service container health: %s\n' "${health}"
 [ "${health}" = "healthy" ] || die "auth-service container health is ${health}, want healthy"
 
-for one_shot in auth-keys-init auth-provision auth-migrate auth-grants auth-fence-init; do
+for one_shot in auth-keys-init auth-provision auth-owner-grants auth-migrate auth-grants auth-fence-init; do
   code="$(docker inspect --format '{{.State.ExitCode}}' "$(compose --profile auth ps -a -q "${one_shot}")")"
   printf '%s exit code: %s\n' "${one_shot}" "${code}"
   [ "${code}" = "0" ] || die "${one_shot} exited ${code}, want 0"
@@ -122,7 +122,11 @@ done
 printf 'step 2: operator listener\n'
 base="http://127.0.0.1:${PORT}"
 for endpoint in healthz readyz; do
-  status="$(curl --silent --show-error --max-time 5 --output /dev/stderr --write-out '%{http_code}' "${base}/${endpoint}")"
+  # The body goes to stderr through the shell, not through `--output /dev/stderr`: curl opens that path with O_TRUNC,
+  # which empties a log file that stderr is redirected to and erases everything printed before this step.
+  response="$(curl --silent --show-error --max-time 5 --write-out '\n%{http_code}' "${base}/${endpoint}")"
+  status="${response##*$'\n'}"
+  printf '%s\n' "${response%$'\n'*}" >&2
   printf '\nGET /%s -> %s\n' "${endpoint}" "${status}"
   [ "${status}" = "200" ] || die "/${endpoint} answered ${status}, want 200"
 done
@@ -148,6 +152,22 @@ owned="$(compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" -d "${POS
 printf 'objects in the auth schema owned by the runtime login: %s\n' "${owned}"
 [ "${owned}" = "0" ] || die "runtime login owns ${owned} objects in the auth schema"
 
+printf 'step 4a: the migration login is plain, owns the auth schema and every object in it, and the Jobs ran under the owner pin\n'
+migrator="${AUTH_MIGRATION_DATABASE_ROLE:-devhealth_auth_migrator}"
+posture="$(compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" -At \
+  -c "SELECT rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls FROM pg_roles WHERE rolname = '${migrator}'")"
+printf 'migration login rolsuper|rolcreatedb|rolcreaterole|rolreplication|rolbypassrls = %s\n' "${posture}"
+[ "${posture}" = "f|f|f|f|f" ] || die "the migration login holds an elevated attribute: ${posture}"
+foreign="$(compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" -At \
+  -c "SELECT (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = '${AUTH_DATABASE_SCHEMA:-auth}' AND c.relowner <> r.oid) + (SELECT count(*) FROM pg_namespace WHERE nspname = '${AUTH_DATABASE_SCHEMA:-auth}' AND nspowner <> r.oid) FROM pg_roles r WHERE r.rolname = '${migrator}'")"
+printf 'relations of the auth schema, and the schema, not owned by the migration login: %s\n' "${foreign}"
+[ "${foreign}" = "0" ] || die "${foreign} objects of the auth schema are not owned by the migration login"
+for job in auth-migrate auth-grants; do
+  compose --profile auth logs --no-color "${job}" 2>&1 | grep -F 'verified auth schema owner pin' >/dev/null \
+    || die "${job} did not log the owner pin it verified (AUTH_SCHEMA_OWNER_ROLE unset or the check did not run)"
+  printf '%s logged: verified auth schema owner pin\n' "${job}"
+done
+
 printf 'step 4b: provisioning de-escalates a pre-existing elevated login\n'
 compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" -c "ALTER ROLE ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth} CREATEDB CREATEROLE"
 compose --profile auth run --rm --no-deps auth-provision
@@ -167,7 +187,7 @@ expected="$(compose --profile auth ps -q auth-service postgres | xargs docker in
 
 printf 'step 4d: no auth service is on the default network\n'
 compose --profile auth config --format json | jq -er '
-  [ "auth-keys-init", "auth-provision", "auth-migrate", "auth-grants", "auth-fence-init", "auth-service" ] as $names
+  [ "auth-keys-init", "auth-provision", "auth-owner-grants", "auth-migrate", "auth-grants", "auth-fence-init", "auth-service" ] as $names
   | .services as $s
   | [ $names[] | . as $n | $s[$n]
       | { name: $n, nets: ((.networks // {}) | keys | sort), mode: (.network_mode // null) } ] as $rows
@@ -178,7 +198,7 @@ compose --profile auth config --format json | jq -er '
 
 printf 'step 4e: no secret reaches a process argument\n'
 compose --profile auth config --format json | jq -er '
-  [ "auth-keys-init", "auth-provision", "auth-migrate", "auth-grants", "auth-fence-init", "auth-service" ] as $names
+  [ "auth-keys-init", "auth-provision", "auth-owner-grants", "auth-migrate", "auth-grants", "auth-fence-init", "auth-service" ] as $names
   | .services as $s
   | [ $names[] | . as $n | $s[$n]
       | ([ (.entrypoint // [])[], (.command // [])[] ] | join(" ")) as $text

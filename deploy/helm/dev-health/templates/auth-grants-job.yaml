@@ -70,6 +70,10 @@ spec:
             - name: AUTH_SESSION_READER_ROLES
               value: {{ join "," . | quote }}
             {{- end }}
+            {{- with include "dev-health.authSchemaOwnerRole" . }}
+            - name: AUTH_SCHEMA_OWNER_ROLE
+              value: {{ . | quote }}
+            {{- end }}
             {{- with $m.pushLifecycle.writerRole }}
             - name: AUTH_PUSH_LIFECYCLE_WRITER_ROLE
               value: {{ . | quote }}

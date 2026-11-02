@@ -16,6 +16,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/valkeyreply"
 )
 
 // failingLimitStore fails every counter call of the limit named failID with err, and admits all others.
@@ -90,6 +91,8 @@ func TestLimiterRoutesAnswerTheStoreFailureByItsKind(t *testing.T) {
 		}{
 			{"typed dependency failure", fmt.Errorf("rate limit script: %w", valkey.ErrClosing), http.StatusServiceUnavailable, `{"detail":{"message":"Authentication service unavailable"}}`},
 			{"other store error", errors.New("counter store refused"), http.StatusInternalServerError, `{"detail":"Internal Server Error"}`},
+			{"Valkey command error", fmt.Errorf("rate limit script: %w", valkeyreply.Error(t, "WRONGTYPE Operation against a key holding the wrong kind of value")), http.StatusInternalServerError, `{"detail":"Internal Server Error"}`},
+			{"Valkey availability reply", fmt.Errorf("rate limit script: %w", valkeyreply.Error(t, "LOADING Valkey is loading the dataset in memory")), http.StatusServiceUnavailable, `{"detail":{"message":"Authentication service unavailable"}}`},
 		} {
 			t.Run(route.name+"/"+c.kind, func(t *testing.T) {
 				deps := Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier, Signer: signer,

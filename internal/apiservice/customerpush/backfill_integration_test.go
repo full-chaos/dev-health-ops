@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/externalpush"
 )
 
@@ -285,5 +286,53 @@ func TestBackfillCommitsEachTokenAloneSoAFailureLeavesTheRestWritten(t *testing.
 	}
 	if got := env.outbox(t, ctx, victim.String()); len(got) != 1 || got[0] != (outboxRow{externalpush.Created, 1}) {
 		t.Fatalf("victim events after rerun: %+v", got)
+	}
+}
+
+// TestBackfillWaitsForTheRowLockThenSkipsAToken: a route-like writer holds the
+// token row, writes its events and commits while the backfill waits; the backfill
+// then finds the aggregate under the lock and skips instead of failing.
+func TestBackfillWaitsForTheRowLockThenSkipsAToken(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	env := newLifecycleEnv(t, ctx, true)
+	id := env.legacyToken(t, ctx)
+	holder, err := env.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Rollback(ctx) }()
+	row, err := scanToken(holder.QueryRow(ctx, `SELECT `+tokenColumns+` FROM external_ingest_tokens WHERE id = $1 FOR UPDATE`, id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := storedLifecycleEvents(row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := audit.AppendPushLifecycle(ctx, holder, env.h.lifecycle.schema, events); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	var rep BackfillReport
+	var runErr error
+	go func() {
+		defer close(done)
+		rep, runErr = BackfillLifecycle(ctx, env.pool, "auth", true, 5)
+	}()
+	select {
+	case <-done:
+		t.Fatalf("the backfill finished while another transaction held the token row: %+v %v", rep, runErr)
+	case <-time.After(1500 * time.Millisecond):
+	}
+	if err := holder.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	if runErr != nil || rep.Candidates != 1 || rep.Skipped != 1 || rep.Written != 0 || rep.Failed != 0 {
+		t.Fatalf("report = %+v, %v", rep, runErr)
+	}
+	if got := env.outbox(t, ctx, id.String()); len(got) != 1 || got[0] != (outboxRow{externalpush.Created, 1}) {
+		t.Fatalf("events: %+v", got)
 	}
 }

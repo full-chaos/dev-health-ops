@@ -222,7 +222,7 @@ func TestEmbeddedFilesValidateAgainstTheirSchemas(t *testing.T) {
 // internal/api/session/permissions.go. Catalog-only = not served in /auth/me
 // until a web-reviewed change adds it there; every other catalog action must
 // still equal a session permission.
-var catalogOnly = map[string]bool{"admin.impersonate": true, "billing.read": true, "billing.manage": true, "license.read": true, "members.update": true, "authz.decide": true, "acr.context.read": true,
+var catalogOnly = map[string]bool{"admin.impersonate": true, "billing.read": true, "billing.manage": true, "license.read": true, "members.update": true, "authz.decide": true, "acr.context.read": true, "reports.write": true,
 	"admin.billing": true, "admin.flags": true, "admin.audit": true, "admin.telemetry": true, "admin.stats": true,
 }
 
@@ -393,6 +393,31 @@ func TestCatalogHoldsTheBillingAndLicenseActions(t *testing.T) {
 	}
 }
 
+// reports.write covers the saved-report writes query-api serves as the GraphQL mutations createSavedReport, updateSavedReport,
+// deleteSavedReport, cloneSavedReport and triggerReport. Parity with today's guard: the only check on those writes is
+// requireMutationOrg (internal/queryapi/graph/reports_mutations.go:38), which reads the organization and no role, so
+// every organization role that can read can write; the platform roles hold no organization action.
+func TestReportsWriteIsHeldByEveryOrganizationRoleAsTodaysWritersAre(t *testing.T) {
+	c := Default()
+	a, err := c.Action("reports.write")
+	if err != nil {
+		t.Fatalf("action reports.write: %v", err)
+	}
+	if a.Scope != ScopeOrganization || a.ResourceKind != "organization" || a.RiskClass != RiskHigh || a.CacheClass != CacheNone || a.Impersonation != ImpersonationDenied {
+		t.Errorf("reports.write = %+v, want organization scope and kind, high risk, cache none, impersonation denied", a)
+	}
+	var got []string
+	for _, r := range c.Roles() {
+		if c.Allows(r.ID, "reports.write") {
+			got = append(got, r.ID)
+		}
+	}
+	sort.Strings(got)
+	if strings.Join(got, ",") != "admin,member,owner,viewer" {
+		t.Errorf("reports.write is held by %v, want admin,member,owner,viewer", got)
+	}
+}
+
 // acr.context.read is the first repository-kind action: organization scope, a repository as its resource.
 func TestEmbeddedCatalogHoldsAcrContextReadAsARepositoryAction(t *testing.T) {
 	a, err := Default().Action("acr.context.read")
@@ -467,12 +492,12 @@ func TestImpersonationIsDeniedOnTheG51List(t *testing.T) {
 	want := map[string]bool{
 		"admin.users": true, "admin.orgs": true, "admin.impersonate": true,
 		"admin.billing": true, "admin.flags": true, "admin.audit": true, "admin.telemetry": true, "admin.stats": true, "members.invite": true, "members.manage": true,
-		"org.write": true, "org.delete": true, "billing.manage": true, "settings.write": true, "integrations.write": true,
+		"org.write": true, "org.delete": true, "billing.manage": true, "settings.write": true, "integrations.write": true, "reports.write": true,
 		"members.update": true, "authz.decide": true,
 	}
 	actions := Default().Actions()
-	if len(actions) != 34 {
-		t.Fatalf("%d actions, want 34", len(actions))
+	if len(actions) != 35 {
+		t.Fatalf("%d actions, want 35", len(actions))
 	}
 	for _, a := range actions {
 		denied := a.Impersonation == ImpersonationDenied

@@ -380,8 +380,8 @@ func TestAnInputAttributeNamedLikeThePlaceholderIsHidden(t *testing.T) {
 	credentialKey := sentinelToken() + "k"
 	input := func() []attribute.KeyValue {
 		return []attribute.KeyValue{
-			attribute.String(credentialKey, "first"),
 			attribute.String(placeholderKey, marker),
+			attribute.String(credentialKey, "first"),
 			attribute.String("outcome", "ok"),
 			attribute.String(credentialKey+"2", "last"),
 		}

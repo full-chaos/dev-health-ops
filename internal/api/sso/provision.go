@@ -405,7 +405,7 @@ type dbExecer interface {
 // the same way); otherwise it runs on the pool. nil means no write.
 func (h handlers) membershipOrJoin(ctx context.Context, row *providerRow, userID uuid.UUID, update func(ctx context.Context, db dbExecer) error) (*provisionedMembership, error) {
 	membership, err := h.requireMembership(ctx, userID, row.OrgID)
-	if !errors.Is(err, errMembershipRequired) || !row.AutoProvision {
+	if !errors.Is(err, errMembershipRequired) || !row.AutoProvision || h.refuseWhileUsersOwned() != nil {
 		if err != nil {
 			return nil, err
 		}

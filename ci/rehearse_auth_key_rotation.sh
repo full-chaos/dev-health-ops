@@ -242,11 +242,16 @@ VALUES (gen_random_uuid(), 'auth-session-issuer', encode(sha256(convert_to(:'tok
 SQL
   ) || die "could not store the session issue credential"
 
-API_PORT="$(compose port go-api 8000 | sed 's/.*://')"
-ISSUER_HOST_PORT="$(compose port issuer-tls 8443 | sed 's/.*://')"
-QUERY_PORT="$(compose port query-api 8090 | sed 's/.*://')"
-[[ "${API_PORT}" =~ ^[0-9]+$ && "${ISSUER_HOST_PORT}" =~ ^[0-9]+$ && "${QUERY_PORT}" =~ ^[0-9]+$ ]] || die "could not read the published ports"
-BASE="http://127.0.0.1:${API_PORT}"
+# A recreated container gets new ephemeral host ports: read them again after every --force-recreate.
+refresh_ports
+refresh_ports() {
+  API_PORT="$(compose port go-api 8000 | sed 's/.*://')"
+  ISSUER_HOST_PORT="$(compose port issuer-tls 8443 | sed 's/.*://')"
+  QUERY_PORT="$(compose port query-api 8090 | sed 's/.*://')"
+  [[ "${API_PORT}" =~ ^[0-9]+$ && "${ISSUER_HOST_PORT}" =~ ^[0-9]+$ && "${QUERY_PORT}" =~ ^[0-9]+$ ]] || die "could not read the published ports"
+  BASE="http://127.0.0.1:${API_PORT}"
+}
+refresh_ports
 WEB_ORIGIN="${AUTH_PROOF_WEB_ORIGIN:-http://localhost:3000}"
 
 # ---------- helpers: HTTP without a secret on argv ----------
@@ -476,6 +481,7 @@ scenario_issuer_rollback() {
   export REHEARSAL_ACCESS_CLASS="hs256_compat"
   export REHEARSAL_VERIFY_ISSUER=""
   compose --profile auth up --no-build --pull never --detach --wait --wait-timeout 300 --no-deps --force-recreate auth-service go-api query-api >/dev/null
+  refresh_ports
   login_or_die
   check s3-new-token-is-hs256 alg_is "${L_ACCESS}" HS256
   check s3-go-api-accepts-the-hs256-token me_accepts "${L_ACCESS}"
@@ -490,6 +496,7 @@ scenario_issuer_rollback() {
   export REHEARSAL_ACCESS_CLASS="eddsa"
   export REHEARSAL_VERIFY_ISSUER="${ISSUER_URL}"
   compose --profile auth up --no-build --pull never --detach --wait --wait-timeout 300 --no-deps --force-recreate auth-service go-api query-api >/dev/null
+  refresh_ports
   login_or_die
   check "s3-forward-signed-by-${good}" kid_is "${L_ACCESS}" "${good}"
   check "s3-forward-go-api-accepts-${good}" me_accepts "${L_ACCESS}"
@@ -509,6 +516,7 @@ if [ "${STAGE}" = smoke ]; then
   export REHEARSAL_ACCESS_CLASS="hs256_compat"
   export REHEARSAL_VERIFY_ISSUER=""
   compose --profile auth up --no-build --pull never --detach --wait --wait-timeout 300 --no-deps --force-recreate auth-service go-api query-api >/dev/null
+  refresh_ports
   login_or_die
   check smoke-flip-token-is-hs256 alg_is "${L_ACCESS}" HS256
   check smoke-flip-go-api-accepts-hs256 me_accepts "${L_ACCESS}"
@@ -516,6 +524,7 @@ if [ "${STAGE}" = smoke ]; then
   export REHEARSAL_ACCESS_CLASS="eddsa"
   export REHEARSAL_VERIFY_ISSUER="${ISSUER_URL}"
   compose --profile auth up --no-build --pull never --detach --wait --wait-timeout 300 --no-deps --force-recreate auth-service go-api query-api >/dev/null
+  refresh_ports
   login_or_die
   check smoke-flip-back-signed-by-a kid_is "${L_ACCESS}" a
   say "smoke done"

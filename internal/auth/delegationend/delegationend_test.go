@@ -27,7 +27,7 @@ func TestEndOfNoRowsWritesNothing(t *testing.T) {
 
 // A TxOps with no queue has nowhere to put the row, and the caller hears it.
 func TestRecordFailsWithNoAuditQueue(t *testing.T) {
-	err := Record(context.Background(), audit.TxOps{}, []Row{{ID: "a", Target: "t", Actor: "x", Organization: "o"}})
+	err := Record(context.Background(), audit.TxOps{}, []Row{{ID: "a", Target: "t", Actor: "x", Organization: "o"}}, EndPublicRows)
 	if !errors.Is(err, audit.ErrMutationFailed) {
 		t.Fatalf("Record = %v, want ErrMutationFailed", err)
 	}

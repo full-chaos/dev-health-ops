@@ -32,7 +32,7 @@ var publicReadOracle = map[string][]string{
 	"org_licenses":                 {"org_id", "tier", "features_override"},
 	"org_activity":                 {"org_id", "has_data", "computed_at"},
 	"internal_service_credentials": {"id", "service_name", "token_hash", "scopes", "expires_at", "revoked_at"},
-	"impersonation_sessions":       {"admin_user_id", "ended_at", "expires_at"},
+	"impersonation_sessions":       {"id", "admin_user_id", "ended_at", "expires_at"},
 }
 
 type publicReadsEnv struct {

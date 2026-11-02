@@ -40,6 +40,12 @@ var _ interface {
 	graphql.OperationInterceptor
 } = OperationOrgGuard{}
 
+// orglessRootActions are the root fields an org-less caller without the
+// superuser flag may run, each with the one platform action that admits it.
+var orglessRootActions = map[string]string{
+	"productTelemetryPlatformDashboard": rule.ActionAdminTelemetry,
+}
+
 func (OperationOrgGuard) ExtensionName() string { return "OperationOrgGuard" }
 
 func (OperationOrgGuard) Validate(graphql.ExecutableSchema) error { return nil }

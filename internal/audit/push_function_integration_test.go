@@ -325,7 +325,7 @@ func TestPushFunctionRowsEqualTheGoFormOfTheSameInputs(t *testing.T) {
 		t.Fatal(err)
 	}
 	payload := `{"revision":` + fmt.Sprint(revision) + `,"organization_id":"org_EXAMPLE0000000000000001","source_id":"src_EXAMPLE0000000000000001","change":{"status":"active","fingerprint":"0123456789abcdef","scopes":["ingest:write"]}}`
-	if err := insertOutboxRow(ctx, goTx, q, "external_push_credential", fnUUID1, "external_push_credential.created", revision, []byte(payload)); err != nil {
+	if err := insertOutboxRow(ctx, goTx, q, "external_push_credential", fnUUID1, "external_push_credential.created", revision, []byte(payload), false); err != nil {
 		t.Fatal(err)
 	}
 	if err := goTx.Commit(ctx); err != nil {

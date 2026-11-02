@@ -1,0 +1,17 @@
+{
+  "schema_version": "provisioning-event.v1",
+  "aggregate_type": "organization",
+  "aggregate_id": "org_EXAMPLE0000000000000001",
+  "event_type": "organization.sessions_revoked",
+  "idempotency_key": "organization:org_EXAMPLE0000000000000001:7",
+  "created_at": "2026-09-03T10:00:00Z",
+  "payload": {
+    "revision": 7,
+    "organization_id": "org_EXAMPLE0000000000000001",
+    "actor_principal_id": "prn_EXAMPLE0000000000000001",
+    "change": {
+      "revoked_before": "2026-09-03T09:59:59.123456Z",
+      "reason": "org_ended"
+    }
+  }
+}

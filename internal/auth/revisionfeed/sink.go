@@ -7,6 +7,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
 )
 
 // highWaterScript is the sink's one Lua call: it raises the aggregate's field in the high-water hash to the incoming
@@ -26,6 +27,15 @@ if current == nil or incoming > current then
 end
 redis.call('PUBLISH', ARGV[3], ARGV[1] .. ':' .. ARGV[2])
 return raised
+`
+
+// publishOnlyScript is the one-shot aggregates' script (provisioning.IsOneShot): it publishes and keeps nothing. No field
+// is written to the high-water hash, so a session event leaves no state in Valkey, in any replica's marks, or in the
+// published floors the restore fence and every resubscribe read. It needs only +eval and +publish, which the ACL already
+// carries. KEYS[1] the hash (unused), ARGV[1] "<type>:<id>", ARGV[2] the revision, ARGV[3] the channel
+const publishOnlyScript = `
+redis.call('PUBLISH', ARGV[3], ARGV[1] .. ':' .. ARGV[2])
+return 0
 `
 
 // deliveryError carries one of audit.AllFailureReasons and a fixed text: the publisher stores only the reason, and an
@@ -58,7 +68,11 @@ func (s *Sink) Deliver(ctx context.Context, e audit.Event) error {
 	}
 	field := contracts.AggregateKey(mapped.AggregateType, mapped.AggregateID)
 	revision := strconv.FormatInt(int64(mapped.Payload.Revision), 10)
-	if _, err := s.client.EvalInt(ctx, highWaterScript, []string{HighWaterKey}, []string{field, revision, Channel}); err != nil {
+	script := highWaterScript
+	if provisioning.IsOneShot(mapped.AggregateType) {
+		script = publishOnlyScript
+	}
+	if _, err := s.client.EvalInt(ctx, script, []string{HighWaterKey}, []string{field, revision, Channel}); err != nil {
 		if errors.Is(classify(err), ErrRejected) {
 			return deliveryError{reason: "consumer_rejected"}
 		}

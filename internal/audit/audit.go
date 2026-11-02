@@ -586,9 +586,13 @@ func insertOutboxEvents(ctx context.Context, tx pgx.Tx, schema authschema.Valida
 	events := outboxOrder(m.Events)
 	q := authschema.Quote(schema)
 	for _, e := range events {
-		revision, err := bumpRevision(ctx, tx, q, e.AggregateType, e.AggregateID)
-		if err != nil {
-			return err
+		oneShot := provisioning.IsOneShot(e.AggregateType)
+		revision := int64(1)
+		if !oneShot {
+			var err error
+			if revision, err = bumpRevision(ctx, tx, q, e.AggregateType, e.AggregateID); err != nil {
+				return err
+			}
 		}
 		payload := map[string]any{"revision": revision, "change": orEmpty(e.Change)}
 		if m.Audit.OrganizationID != nil {
@@ -601,7 +605,7 @@ func insertOutboxEvents(ctx context.Context, tx pgx.Tx, schema authschema.Valida
 		if err != nil {
 			return fmt.Errorf("%w: encoding the outbox payload", ErrMutationFailed)
 		}
-		if err := insertOutboxRow(ctx, tx, q, e.AggregateType, e.AggregateID, e.EventType, revision, encoded); err != nil {
+		if err := insertOutboxRow(ctx, tx, q, e.AggregateType, e.AggregateID, e.EventType, revision, encoded, oneShot); err != nil {
 			return err
 		}
 		slog.DebugContext(ctx, "audit: outbox event written",
@@ -628,12 +632,20 @@ func bumpRevision(ctx context.Context, tx pgx.Tx, quotedSchema, aggregateType, a
 }
 
 // insertOutboxRow writes one outbox row, its key aggregate_type:aggregate_id:revision.
-func insertOutboxRow(ctx context.Context, tx pgx.Tx, quotedSchema, aggregateType, aggregateID, eventType string, revision int64, payload []byte) error {
+//
+// A one-shot aggregate's key is the same on every attempt (revision 1), and the same session can be revoked as a child
+// of its parent and again on its own row: the second write is the same fact, so it conflicts on the key and writes
+// nothing, instead of aborting the mutation (a logout must not fail on it).
+func insertOutboxRow(ctx context.Context, tx pgx.Tx, quotedSchema, aggregateType, aggregateID, eventType string, revision int64, payload []byte, oneShot bool) error {
 	key := aggregateType + ":" + aggregateID + ":" + strconv.FormatInt(revision, 10)
+	onConflict := ""
+	if oneShot {
+		onConflict = " ON CONFLICT (idempotency_key) DO NOTHING"
+	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO `+quotedSchema+`.auth_outbox_events
 		    (aggregate_type, aggregate_id, event_type, payload, idempotency_key)
-		VALUES ($1, $2, $3, $4, $5)`,
+		VALUES ($1, $2, $3, $4, $5)`+onConflict,
 		aggregateType, aggregateID, eventType, payload, key); err != nil {
 		return fmt.Errorf("%w: inserting the outbox event: %w", ErrMutationFailed, err)
 	}

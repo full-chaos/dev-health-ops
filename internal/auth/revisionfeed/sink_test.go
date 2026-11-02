@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 )
 
 func deliverable(revision string) audit.Event {
@@ -161,5 +162,79 @@ func TestTheHighWaterScriptTakesTheMaxBeforeItWritesAndPublishesAfterwards(t *te
 	}
 	if !strings.Contains(s, "tonumber(") {
 		t.Fatal("revisions are compared as numbers, not as strings")
+	}
+}
+
+func TestTheSigningKeyTravelsTheFeedLikeAnyOtherAggregate(t *testing.T) {
+	client := &fakeClient{evalResult: 1}
+	sink, err := NewSink(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const id = "key_EXAMPLE0000000000000000000000000000000000001"
+	e := deliverable("1")
+	e.AggregateType, e.AggregateID, e.IdempotencyKey = "signing_key", id, "signing_key:"+id+":1"
+	if err := sink.Deliver(context.Background(), e); err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+	if calls := client.calls(); len(calls) != 1 || calls[0].script != highWaterScript || calls[0].args[0] != "signing_key:"+id {
+		t.Fatalf("calls %+v", calls)
+	}
+	c, rec := newTestConsumer(t)
+	if got, err := c.Handle(context.Background(), ev("signing_key", id, 1)); err != nil || got != contracts.Apply {
+		t.Fatalf("Handle = %q, %v; want apply", got, err)
+	}
+	if n := len(rec.snapshot()); n != 1 {
+		t.Fatalf("%d Invalidate calls, want 1", n)
+	}
+}
+
+// A one-shot aggregate (a session revoke) keeps no state on any side: the sink publishes and writes no high-water field,
+// and the consumer evicts and keeps no cursor entry and no mark. N events leave the hash, the marks and the cursor as
+// they were; a resubscribe already evicts everything, so a replica that was away loses nothing.
+func TestAOneShotEventPublishesWithoutHighWaterStateAndTheConsumerKeepsNone(t *testing.T) {
+	client := &fakeClient{evalResult: 0}
+	sink, err := NewSink(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, rec := newTestConsumer(t)
+	const n = 5
+	for i := 0; i < n; i++ {
+		id := "ses_EXAMPLE000000000000" + string(rune('A'+i))
+		e := deliverable("1")
+		e.AggregateType, e.AggregateID, e.IdempotencyKey = "session", id, "session:"+id+":1"
+		if err := sink.Deliver(context.Background(), e); err != nil {
+			t.Fatalf("Deliver: %v", err)
+		}
+		if got, err := c.Handle(context.Background(), ev("session", id, 1)); err != nil || got != contracts.Apply {
+			t.Fatalf("Handle = %q, %v; want apply", got, err)
+		}
+		// The same event again: evicts again, still no state.
+		if _, err := c.Handle(context.Background(), ev("session", id, 1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, call := range client.calls() {
+		if call.script != publishOnlyScript || strings.Contains(call.script, "HSET") || strings.Contains(call.script, "HGET") {
+			t.Fatalf("a one-shot event ran a script that touches the hash: %q", call.script)
+		}
+		if len(call.args) != 3 || !strings.HasPrefix(call.args[0], "session:ses_") || call.args[1] != "1" || call.args[2] != Channel {
+			t.Fatalf("args %q", call.args)
+		}
+	}
+	if got := len(client.calls()); got != n {
+		t.Fatalf("%d script calls, want %d", got, n)
+	}
+	for i := 0; i < n; i++ {
+		if _, ok := c.Watermarks().Latest("session", "ses_EXAMPLE000000000000"+string(rune('A'+i))); ok {
+			t.Fatalf("a mark exists for session %d", i)
+		}
+		if d := c.cursor.Peek(ev("session", "ses_EXAMPLE000000000000"+string(rune('A'+i)), 1)); d != contracts.Apply {
+			t.Fatalf("the cursor holds an entry for session %d (Peek = %s)", i, d)
+		}
+	}
+	if got := len(rec.snapshot()); got != 2*n {
+		t.Fatalf("%d Invalidate calls, want %d (every delivery evicts)", got, 2*n)
 	}
 }

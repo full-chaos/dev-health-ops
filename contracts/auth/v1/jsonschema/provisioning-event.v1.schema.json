@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://fullchaos.dev/contracts/auth/v1/jsonschema/provisioning-event.v1.schema.json",
   "title": "Auth Control Plane provisioning outbox event (v1 wire format)",
-  "description": "One event from auth_outbox_events (TRD sections 9 and 13), as a consumer receives it. A security mutation and its outbox row commit in ONE transaction, and consumers process idempotently by aggregate revision, so the consumer contract is as much the deliverable as the producer one: an event a consumer cannot deduplicate is broken even if it validates.\n\nTHE ENVELOPE IS THE OUTBOX ROW. Its members are exactly the columns of auth_outbox_events that cross a service boundary (aggregate_type, aggregate_id, event_type, idempotency_key, created_at, payload), plus schema_version; the table's delivery bookkeeping (id, available_at, published_at, attempts, last_error) is not carried. A test derives both sets from the migration and fails if the schema and the table disagree in either direction.\n\nTHE IDEMPOTENCY KEY IS (aggregate_type, aggregate_id, revision), and `revision` is PER AGGREGATE, never global. Nothing here implies an ordering across aggregates; a consumer that sorts the whole stream is wrong. The `idempotency_key` column must equal aggregate_type + \":\" + aggregate_id + \":\" + payload.revision, which the clients enforce. Consumer rule (client-side, with golden vectors): apply an event when its revision is exactly the last applied revision + 1 (or 1 for an aggregate never seen); a revision at or below the last applied one is a duplicate or stale delivery and is ignored; a larger one is a gap, which is not applied and means the consumer must resynchronise.\n\n`revision` is an integer token in 1..2^53-1. JSON Schema `integer` admits `1.0`, so a decimal- or exponent-form token is refused by the clients on the raw token (reject_by_client fixtures), and 2^53 and beyond are refused by the schema because a float64 producer has already lost the value.\n\nTHE `change` OBJECT IS AN ALLOWLIST, not a free-form map. Audit-style metadata cannot be asserted secret-free by a schema, so the fields that would carry a secret are unrepresentable: each aggregate type names exactly the members it may carry (propertyNames per aggregate), every member is typed, and no member can hold plaintext credentials, provider tokens, raw codes, untrusted bodies or high-cardinality identities (emails, provider subjects, display names). An arbitrary key fails.\n\nAggregate ids are server-minted. Each aggregate type pins its own id prefix, so an `organization` event carrying a `prn_` id disagrees in shape and fails. The prefixes `idn_`, `mbr_`, `pra_`, `grt_` and `rol_` are introduced by this contract; `prn_` and `org_` are principal.v1's.\n\nSCOPE (decided, not accidental). Entitlement snapshots are a projection the control plane CONSUMES (ACP-ADR-07: billing and licensing stay authoritative), so entitlement changes are not provisioning events. ACR and External Push lifecycle changes are metadata projections owned by the credential surface (ACP-ADR-08, ACP-ADR-09: the control plane is neither their validator nor their writer) and are not in this stream in v1. Mutation REQUEST bodies are caller hints, never authority (TRD section 2, principle 3); they belong with each route when it is mounted.",
+  "description": "One event from auth_outbox_events (TRD sections 9 and 13), as a consumer receives it. A security mutation and its outbox row commit in ONE transaction, and consumers process idempotently by aggregate revision, so the consumer contract is as much the deliverable as the producer one: an event a consumer cannot deduplicate is broken even if it validates.\n\nTHE ENVELOPE IS THE OUTBOX ROW. Its members are exactly the columns of auth_outbox_events that cross a service boundary (aggregate_type, aggregate_id, event_type, idempotency_key, created_at, payload), plus schema_version; the table's delivery bookkeeping (id, available_at, published_at, attempts, last_error) is not carried. A test derives both sets from the migration and fails if the schema and the table disagree in either direction.\n\nTHE IDEMPOTENCY KEY IS (aggregate_type, aggregate_id, revision), and `revision` is PER AGGREGATE, never global. Nothing here implies an ordering across aggregates; a consumer that sorts the whole stream is wrong. The `idempotency_key` column must equal aggregate_type + \":\" + aggregate_id + \":\" + payload.revision, which the clients enforce. Consumer rule (client-side, with golden vectors): apply an event when its revision is exactly the last applied revision + 1 (or 1 for an aggregate never seen); a revision at or below the last applied one is a duplicate or stale delivery and is ignored; a larger one is a gap, which is not applied and means the consumer must resynchronise.\n\n`revision` is an integer token in 1..2^53-1. JSON Schema `integer` admits `1.0`, so a decimal- or exponent-form token is refused by the clients on the raw token (reject_by_client fixtures), and 2^53 and beyond are refused by the schema because a float64 producer has already lost the value.\n\nTHE `change` OBJECT IS AN ALLOWLIST, not a free-form map. Audit-style metadata cannot be asserted secret-free by a schema, so the fields that would carry a secret are unrepresentable: each aggregate type names exactly the members it may carry (propertyNames per aggregate), every member is typed, and no member can hold plaintext credentials, provider tokens, raw codes, untrusted bodies or high-cardinality identities (emails, provider subjects, display names). An arbitrary key fails.\n\nAggregate ids are server-minted. Each aggregate type pins its own id prefix, so an `organization` event carrying a `prn_` id disagrees in shape and fails. The prefixes `idn_`, `mbr_`, `pra_`, `grt_` and `rol_` are introduced by this contract; `prn_` and `org_` are principal.v1's.\n\nSCOPE (decided, not accidental). Entitlement snapshots are a projection the control plane CONSUMES (ACP-ADR-07: billing and licensing stay authoritative), so entitlement changes are not provisioning events. ACR and External Push lifecycle changes are metadata projections owned by the credential surface (ACP-ADR-08, ACP-ADR-09: the control plane is neither their validator nor their writer) and are not in this stream in v1. Mutation REQUEST bodies are caller hints, never authority (TRD section 2, principle 3); they belong with each route when it is mounted.\n\nREVOCATION EVENTS (CHAOS-11816). A consumer learns that sessions ended from this stream, not from the WAL. `session.revoked` (aggregate `session`, id `ses_` + the session.v1 id) is ONE session, its refresh credentials with it, ended by an explicit revoke; it is terminal and has revision 1, there is no session.created, and a revoke that changes nothing writes no event. `principal.sessions_revoked` and `organization.sessions_revoked` (the existing aggregates) end MANY sessions at once: a bulk end writes one scope event with `revoked_before`, not one event per session; the consumer drops every session it holds for that principal or organization that started before `revoked_before`, and a session that started at or after it is not touched. A password change writes a principal scope event (the stamp ends older sessions with no row write). `signing_key.compromised` (aggregate `signing_key`, id `key_` + base64url SHA-256 of the kid, `change.kid` the key id) says the key is compromised: every token it signed is void, and the sessions it minted need no event of their own. The other signing-key states are not events (the JWKS carries them). A signing_key event carries no `organization_id`: the key is platform-level. Cross-aggregate order is NOT promised: a scope event and a session event are separate aggregates.",
   "type": "object",
   "required": [
     "schema_version",
@@ -29,7 +29,9 @@
         "service_account",
         "workload",
         "resource_grant",
-        "invite"
+        "invite",
+        "session",
+        "signing_key"
       ]
     },
     "aggregate_id": {
@@ -167,6 +169,27 @@
               "type": "string",
               "pattern": "^([0-9]{3}[1-9]|[0-9]{2}[1-9][0-9]|[0-9][1-9][0-9]{2}|[1-9][0-9]{3})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,6})?(Z|[+-](0[0-9]|1[0-9]|2[0-3]):[0-5][0-9])$",
               "description": "The grant's expiry (TRD section 9 resource_grants.expires_at; Q2 default keep). For a grant an expiry is an authorization boundary, not a hint."
+            },
+            "revoked_before": {
+              "type": "string",
+              "pattern": "^([0-9]{3}[1-9]|[0-9]{2}[1-9][0-9]|[0-9][1-9][0-9]{2}|[1-9][0-9]{3})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,6})?(Z|[+-](0[0-9]|1[0-9]|2[0-3]):[0-5][0-9])$",
+              "description": "A session-scope revocation boundary. The same instant the Auth Control Plane wrote as revoked_at on the sessions it ended in that transaction (one clock reading, not the event's created_at). A consumer drops every session it holds in the event's scope that started BEFORE this instant; a session that started at or after it is untouched."
+            },
+            "reason": {
+              "enum": [
+                "caller",
+                "refresh_reuse",
+                "password_changed",
+                "org_ended",
+                "delegation_ended",
+                "compromised"
+              ],
+              "description": "Why sessions ended, from a closed vocabulary; never free text. caller: the person or their client ended it (logout, revoke, revoke-all, organization switch). refresh_reuse: a spent refresh credential was presented again. password_changed: the account password changed. org_ended: the membership or the organization ended. delegation_ended: a delegated session ended with its actor or base session, or was superseded. compromised: its signing key was declared compromised."
+            },
+            "kid": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._-]{1,64}$",
+              "description": "A signing key id as the JWKS and the token header carry it (the keystore KeyIDPattern). A kid may hold a dot, which an aggregate_id cannot, so a signing_key aggregate_id is key_ plus the unpadded base64url of the SHA-256 of the kid (43 characters) and the kid itself is this member."
             }
           },
           "description": "The allowlisted description of what changed; the member set is pinned per aggregate_type below. May be empty."
@@ -196,7 +219,8 @@
             "enum": [
               "principal.created",
               "principal.disabled",
-              "principal.enabled"
+              "principal.enabled",
+              "principal.sessions_revoked"
             ]
           },
           "payload": {
@@ -206,13 +230,45 @@
                 "type": "object",
                 "propertyNames": {
                   "enum": [
-                    "status"
+                    "status",
+                    "revoked_before",
+                    "reason"
                   ]
                 }
               }
             }
           }
-        }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "event_type": {
+                  "const": "principal.sessions_revoked"
+                }
+              },
+              "required": [
+                "event_type"
+              ]
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "type": "object",
+                  "properties": {
+                    "change": {
+                      "type": "object",
+                      "required": [
+                        "revoked_before",
+                        "reason"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
       }
     },
     {
@@ -322,7 +378,8 @@
               "organization.created",
               "organization.updated",
               "organization.suspended",
-              "organization.reactivated"
+              "organization.reactivated",
+              "organization.sessions_revoked"
             ]
           },
           "payload": {
@@ -333,13 +390,45 @@
                 "propertyNames": {
                   "enum": [
                     "status",
-                    "slug"
+                    "slug",
+                    "revoked_before",
+                    "reason"
                   ]
                 }
               }
             }
           }
-        }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "event_type": {
+                  "const": "organization.sessions_revoked"
+                }
+              },
+              "required": [
+                "event_type"
+              ]
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "type": "object",
+                  "properties": {
+                    "change": {
+                      "type": "object",
+                      "required": [
+                        "revoked_before",
+                        "reason"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
       }
     },
     {
@@ -591,6 +680,95 @@
                 "propertyNames": {
                   "enum": [
                     "status"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "aggregate_type": {
+            "const": "session"
+          }
+        },
+        "required": [
+          "aggregate_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "aggregate_id": {
+            "type": "string",
+            "pattern": "^ses_[A-Za-z0-9_-]{1,64}$"
+          },
+          "event_type": {
+            "enum": [
+              "session.revoked"
+            ]
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "change": {
+                "type": "object",
+                "required": [
+                  "status",
+                  "reason"
+                ],
+                "propertyNames": {
+                  "enum": [
+                    "status",
+                    "reason"
+                  ]
+                },
+                "properties": {
+                  "status": {
+                    "const": "revoked"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "aggregate_type": {
+            "const": "signing_key"
+          }
+        },
+        "required": [
+          "aggregate_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "aggregate_id": {
+            "type": "string",
+            "pattern": "^key_[A-Za-z0-9_-]{1,64}$"
+          },
+          "event_type": {
+            "enum": [
+              "signing_key.compromised"
+            ]
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "change": {
+                "type": "object",
+                "required": [
+                  "kid"
+                ],
+                "propertyNames": {
+                  "enum": [
+                    "kid"
                   ]
                 }
               }

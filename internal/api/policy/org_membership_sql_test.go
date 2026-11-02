@@ -14,3 +14,11 @@ func TestOrgMembershipReadsTheOrganizationActiveFlag(t *testing.T) {
 		t.Fatalf("orgMembershipSQL does not read organizations.is_active:\n%s", orgMembershipSQL)
 	}
 }
+
+// The plain membership read (X-Org-Id, the user access token's org) holds the
+// same rule as the token-org read: an inactive organization has no members.
+func TestMembershipReadsTheOrganizationActiveFlag(t *testing.T) {
+	if !strings.Contains(membershipSQL, "is_active") {
+		t.Fatalf("membershipSQL does not read organizations.is_active:\n%s", membershipSQL)
+	}
+}

@@ -4,6 +4,8 @@ package outboxprojection
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -232,6 +234,23 @@ func TestProjectThreeCredentialsOfOneSourceEachApplyUnderTheirOwnFingerprint(t *
 	}
 }
 
+func TestProjectThreeAcrCredentialsOfOneOwnerEachApplyUnderTheirOwnRegistryRow(t *testing.T) {
+	e := getEnv(t, true)
+	org := e.org(t)
+	var ids []string
+	for i := 0; i < 3; i++ {
+		c := acrCreated(org)
+		ids = append(ids, c.id)
+		mustOutcome(t, e.project(t, e.acr(t, c, "owner-1", 1)), pushlifecycle.Applied)
+		if n := e.count(t, `SELECT count(*) FROM auth.credential_registry WHERE external_reference = $1 AND domain_owner = 'acr' AND fingerprint = $2`, c.id, c.change.Fingerprint); n != 1 {
+			t.Fatalf("acr credential %d: %d registry rows under its own fingerprint, want 1", i, n)
+		}
+	}
+	if n := e.count(t, `SELECT count(DISTINCT secret_hash) FROM auth.credential_registry WHERE external_reference = ANY($1)`, ids); n != 3 {
+		t.Fatalf("%d distinct acr secret hashes, want 3", n)
+	}
+}
+
 func TestProjectDuplicateAndStaleWriteNothingAndAConflictIsNotApplied(t *testing.T) {
 	e := getEnv(t, true)
 	org := e.org(t)
@@ -384,9 +403,17 @@ func (e *env) acr(t *testing.T, s spec, owner string, body byte) Input {
 	return in
 }
 
+// acrFingerprint is the fingerprint of an acr credential as the acr mapping derives it (acp answers-11196 Q4): the first
+// 8 bytes of the SHA-256 of the cred_ id, in hex. A public value of a public id, so no two credentials share one.
+func acrFingerprint(id string) string {
+	sum := sha256.Sum256([]byte(id))
+	return hex.EncodeToString(sum[:8])
+}
+
 func acrCreated(org uuid.UUID) spec {
 	c := created(org, "acr", "context:read")
 	c.id = "cred_" + uuid.NewString()[:12]
+	c.change.Fingerprint = acrFingerprint(c.id)
 	return c
 }
 

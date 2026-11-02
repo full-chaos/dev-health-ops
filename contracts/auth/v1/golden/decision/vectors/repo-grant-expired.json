@@ -4,7 +4,8 @@
     "cache_class": "none",
     "expires_in_seconds": null,
     "policy_revision": 10,
-    "reason": "grant_expired"
+    "reason": "grant_expired",
+    "wire_reason_code": "grant_expired"
   },
   "id": "repo-grant-expired",
   "layer": "pdp",

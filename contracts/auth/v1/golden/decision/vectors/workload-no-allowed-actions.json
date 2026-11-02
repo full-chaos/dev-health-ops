@@ -4,7 +4,8 @@
     "cache_class": "none",
     "expires_in_seconds": null,
     "policy_revision": 10,
-    "reason": "workload_action_denied"
+    "reason": "workload_action_denied",
+    "wire_reason_code": "workload_action_denied"
   },
   "id": "workload-no-allowed-actions",
   "layer": "pdp",

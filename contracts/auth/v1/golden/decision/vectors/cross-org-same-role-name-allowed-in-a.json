@@ -4,7 +4,8 @@
     "cache_class": "",
     "expires_in_seconds": null,
     "policy_revision": 10,
-    "reason": "allowed_by_role"
+    "reason": "allowed_by_role",
+    "wire_reason_code": "allowed_by_role"
   },
   "id": "cross-org-same-role-name-allowed-in-a",
   "layer": "pdp",

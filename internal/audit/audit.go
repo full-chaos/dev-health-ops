@@ -163,9 +163,11 @@ type OutboxEvent struct {
 	Change        map[string]any
 }
 
-// OffStreamSessionLifecycle marks a mutation that is deliberately not a
-// provisioning event: session and refresh-credential lifecycle (the
-// provisioning stream has no session aggregate).
+// OffStreamSessionLifecycle marks a mutation with no STATIC provisioning events:
+// session and refresh-credential lifecycle. Its revocations are queued from
+// inside Apply with TxOps.AddEvent (session.revoked and the scope events,
+// CHAOS-11816), because only the code that ended the sessions knows which; a
+// session start and a revoke that changes nothing write none.
 const OffStreamSessionLifecycle = "session_lifecycle"
 
 // OffStreamLinkCredentialLifecycle marks the consume of a single-use link
@@ -175,8 +177,9 @@ const OffStreamSessionLifecycle = "session_lifecycle"
 // new password) is a provisioning event written by the identity store.
 const OffStreamLinkCredentialLifecycle = "link_credential_lifecycle"
 
-// OffStreamSigningKeyLifecycle marks a signing-key rotation verb: key states
-// are not a provisioning aggregate.
+// OffStreamSigningKeyLifecycle marks a signing-key rotation verb: only the
+// compromise queues an event (signing_key.compromised); the other key states
+// are the JWKS's, not the stream's.
 const OffStreamSigningKeyLifecycle = "signing_key_lifecycle"
 
 // OffStreamWorkloadRegistry marks a workload registry change that has no
@@ -257,6 +260,7 @@ type TxOps struct {
 // read it: a retained TxOps cannot add a row nothing would write.
 type auditQueue struct {
 	events []AuditEvent
+	outbox []OutboxEvent
 	closed bool
 }
 
@@ -275,6 +279,23 @@ func (t TxOps) AddAudit(events ...AuditEvent) error {
 		}
 	}
 	t.queue.events = append(t.queue.events, events...)
+	return nil
+}
+
+// AddEvent queues outbox events of this mutation from inside Apply, for an event only the code that reached a state
+// change can name (the sessions a cascade ended). Commit writes them with Events, in the same transaction, after the
+// changed-row count: a mutation that changed nothing writes none, and a failure writing one rolls the mutation back. Each
+// event is checked against provisioning-event.v1 here. A TxOps of any other transaction has no queue and refuses.
+func (t TxOps) AddEvent(events ...OutboxEvent) error {
+	if t.queue == nil || t.queue.closed {
+		return fmt.Errorf("%w: no event queue on this transaction", ErrMutationFailed)
+	}
+	for _, e := range events {
+		if err := provisioning.CheckEvent(e.AggregateType, e.AggregateID, e.EventType, e.Change); err != nil {
+			return fmt.Errorf("%w: %w", ErrMutationFailed, err)
+		}
+	}
+	t.queue.outbox = append(t.queue.outbox, events...)
 	return nil
 }
 
@@ -535,6 +556,7 @@ func Commit(ctx context.Context, pool *pgxpool.Pool, schema authschema.Validated
 	}
 	// After the changed-row count: the revision rows are guarded, so a bump
 	// counted before it would make a no-op mutation look like a change.
+	m.Events = append(append([]OutboxEvent(nil), m.Events...), queue.outbox...)
 	if err := insertOutboxEvents(ctx, tx, schema, m); err != nil {
 		return err
 	}

@@ -1,11 +1,13 @@
 package authruntime
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authorization"
@@ -32,7 +34,10 @@ func authorizeRoutes(cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.P
 	if err != nil {
 		return nil, err
 	}
-	deps := authapi.AuthorizeDeps{State: state, Evaluator: authorization.NewEvaluator(), ProfileRows: authorizeProfileRows, Logger: logger}
+	deps := authapi.AuthorizeDeps{State: state, Evaluator: authorization.NewEvaluator(), ProfileRows: authorizeProfileRows, Logger: logger,
+		Audit: func(ctx context.Context, events []audit.AuditEvent) error {
+			return audit.AppendAll(ctx, pool, schema, events...)
+		}}
 	if decisions != nil {
 		deps.Cache, deps.Ready = decisions.cache, decisions.ready
 	}

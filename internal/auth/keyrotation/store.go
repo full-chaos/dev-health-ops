@@ -13,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/delegationend"
+	"github.com/full-chaos/dev-health-ops/internal/auth/sessionevent"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/token"
 )
@@ -344,6 +345,10 @@ func (o *Operator) commit(ctx context.Context, request Request, planned Result) 
 					return err
 				}
 				result.Sessions = len(ids)
+				// The compromised kid is the fact: every token it signed is void, and the sessions it minted need no event of their own.
+				if err := tx.AddEvent(sessionevent.SigningKey(request.KeyID)); err != nil {
+					return err
+				}
 			}
 			for _, move := range moves {
 				if err := o.write(ctx, tx, move, now); err != nil {

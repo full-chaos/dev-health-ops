@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -160,12 +161,16 @@ func (e *env) begin(t *testing.T) pgx.Tx {
 	return tx
 }
 
+// freshFingerprint is a new 16-hex fingerprint: the registry's secret_hash of a projected row is that fingerprint's 8
+// bytes and is UNIQUE, so two credentials never share one.
+func freshFingerprint() string { return strings.ReplaceAll(uuid.NewString(), "-", "")[:16] }
+
 func created(org uuid.UUID, id string, scopes ...string) audit.PushLifecycleEvent {
 	if scopes == nil {
 		scopes = []string{"ingest:write"}
 	}
 	return audit.PushLifecycleEvent{EventType: externalpush.Created, AggregateID: id, OrganizationID: "org_" + org.String(), SourceID: "src-r",
-		Change: externalpush.Change{Status: "active", Fingerprint: "0123456789abcdef", Scopes: scopes}}
+		Change: externalpush.Change{Status: "active", Fingerprint: freshFingerprint(), Scopes: scopes}}
 }
 
 func (e *env) append(t *testing.T, tx pgx.Tx, events ...audit.PushLifecycleEvent) {
@@ -330,7 +335,7 @@ func TestReaderReleasesAParkedChildWhenItsParentApplies(t *testing.T) {
 	org := e.org(t)
 	parent, child := uuid.NewString(), uuid.NewString()
 	e.appendCommitted(t, audit.PushLifecycleEvent{EventType: externalpush.Rotated, AggregateID: child, OrganizationID: "org_" + org.String(), SourceID: "src-r",
-		Change: externalpush.Change{Status: "active", Fingerprint: "fedcba9876543210", Scopes: []string{"ingest:write"}, RotationParentID: parent}})
+		Change: externalpush.Change{Status: "active", Fingerprint: freshFingerprint(), Scopes: []string{"ingest:write"}, RotationParentID: parent}})
 	r := e.reader(t, time.Hour)
 	now := time.Now()
 	rep, err := r.Step(context.Background(), now)
@@ -451,7 +456,7 @@ func TestFloorInputCoversAppliedAndParkedRevisions(t *testing.T) {
 	applied, parked := uuid.NewString(), uuid.NewString()
 	e.appendCommitted(t, created(org, applied))
 	e.appendCommitted(t, audit.PushLifecycleEvent{EventType: externalpush.Rotated, AggregateID: parked, OrganizationID: "org_" + org.String(), SourceID: "src-r",
-		Change: externalpush.Change{Status: "active", Fingerprint: "fedcba9876543210", Scopes: []string{"ingest:write"}, RotationParentID: uuid.NewString()}})
+		Change: externalpush.Change{Status: "active", Fingerprint: freshFingerprint(), Scopes: []string{"ingest:write"}, RotationParentID: uuid.NewString()}})
 	if _, err := e.reader(t, time.Hour).Step(context.Background(), time.Now()); err != nil {
 		t.Fatal(err)
 	}

@@ -70,6 +70,8 @@ type FederatedAccount struct {
 	// LegacyFullName is the public.users full_name: nil is NULL.
 	LegacyFullName *string
 	RequestID      *string
+	// LegacyProvider is the users.auth_provider value the new row carries.
+	LegacyProvider string
 }
 
 // IdentityStore is the identity store as this flow uses it.

@@ -65,11 +65,7 @@ func (j PGJIT) JoinAndIssue(ctx context.Context, principalID, orgID uuid.UUID, r
 // starts the session in one commit.
 func (j PGJIT) ProvisionJoinAndIssue(ctx context.Context, account FederatedAccount, orgID uuid.UUID, req SessionRequest) (Principal, Tokens, error) {
 	var issued session.Issued
-	id, err := j.Identities.ProvisionAndJoin(ctx, identity.ProvisionRequest{
-		Key:   identity.ExternalKey{Issuer: account.Key.Issuer, Provider: identity.Provider(account.Key.Provider), Subject: account.Key.Subject},
-		Email: account.Email, FullName: account.FullName, Actor: identity.SelfSignUp(account.RequestID),
-		LegacyProvider: ProviderKind, LegacySubject: account.Key.Subject, LegacyFullName: account.LegacyFullName,
-	}, identity.SSOJoin{OrgID: orgID, Role: req.Role}, j.sessionHook(req, &issued))
+	id, err := j.Identities.ProvisionAndJoin(ctx, provisionRequest(account), identity.SSOJoin{OrgID: orgID, Role: req.Role}, j.sessionHook(req, &issued))
 	if err != nil {
 		return Principal{}, Tokens{}, j.refused(ctx, orgID, err)
 	}

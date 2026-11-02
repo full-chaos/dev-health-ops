@@ -167,7 +167,7 @@ func Start(ctx context.Context, t *testing.T) Store {
 }
 
 // StartWith is Start with Options.
-func StartWith(ctx context.Context, t *testing.T, options Options) Store {
+func StartWith(ctx context.Context, t *testing.T, seedOptions Options) Store {
 	t.Helper()
 	instance, err := containers.StartClickHouse(ctx)
 	if err != nil {
@@ -188,12 +188,12 @@ func StartWith(ctx context.Context, t *testing.T, options Options) Store {
 		t.Fatalf("retractionseed: open connection: %v", err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	if options.StopMerges {
+	if seedOptions.StopMerges {
 		if err := conn.Exec(ctx, `SYSTEM STOP MERGES ai_impact_metrics_daily`); err != nil {
 			t.Fatalf("retractionseed: stop merges: %v", err)
 		}
 	}
-	return Store{Seed: applyAt(ctx, t, conn, options.DaysClock), URI: instance.URI, Conn: conn}
+	return Store{Seed: applyAt(ctx, t, conn, seedOptions.DaysClock), URI: instance.URI, Conn: conn}
 }
 
 // Apply seeds both organizations and returns the facts of the seed.

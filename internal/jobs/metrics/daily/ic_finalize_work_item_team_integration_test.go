@@ -17,7 +17,9 @@ import (
 // landscapePoint is one (team, person) point of ic_landscape_rolling_30d, read
 // from the churn_throughput map (the three maps carry the same values).
 type landscapePoint struct {
-	Churn, Delivery, WIP, Cycle float64
+	Churn, Delivery, WIP float64
+	// Cycle is nil for a point with no 30-day cycle.
+	Cycle *float64
 }
 
 // landscapeWorkItemWorld is one organization of one provider, computed through
@@ -155,11 +157,11 @@ func checkLandscapeWorkItemWorld(t *testing.T, world landscapeWorkItemWorld) {
 
 	t.Run("C6 the git half stays on the owner of the repository", func(t *testing.T) {
 		alice, ok := point(landscapeAlice, world.alpha)
-		if !ok || alice.Churn != 50 || alice.Delivery != 2 || alice.WIP != 0 || alice.Cycle != 7 {
+		if !ok || alice.Churn != 50 || alice.Delivery != 2 || alice.WIP != 0 || alice.Cycle == nil || *alice.Cycle != 7 {
 			t.Errorf("alice in alpha = %+v (present %v), want churn 50, delivery 2 (merged pull requests), wip 0, cycle 7", alice, ok)
 		}
 		for _, team := range []string{world.beta, "unassigned"} {
-			if value, ok := point(landscapeAlice, team); ok && (value.Churn != 0 || value.Cycle != 0) {
+			if value, ok := point(landscapeAlice, team); ok && (value.Churn != 0 || value.Cycle != nil) {
 				t.Errorf("alice in %s = %+v: a work-item point holds no churn and no cycle time", team, value)
 			}
 		}

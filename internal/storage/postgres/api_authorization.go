@@ -360,17 +360,7 @@ func apiPosture() RolePosture {
 // check read the same flag, so the REVOKE follows it and a rollback is the
 // flag off plus a migrate run.
 func APIPosture(sessionsOwnedByAuth bool) RolePosture {
-	posture := apiPosture()
-	if !sessionsOwnedByAuth {
-		return posture
-	}
-	for i := range posture.RequiredTables {
-		if posture.RequiredTables[i].TableName == "refresh_tokens" {
-			posture.RequiredTables[i] = TablePrivilege{"refresh_tokens", false, false, true}
-		}
-	}
-	posture.ColumnScoped = append(posture.ColumnScoped, ColumnPrivilege{"refresh_tokens", "revoked_at", "UPDATE"})
-	return posture
+	return APIPostureFor(sessionsOwnedByAuth, false)
 }
 
 // CheckAPIAuthorization is the dho api Service's readiness check: it binds
@@ -384,7 +374,7 @@ func APIPosture(sessionsOwnedByAuth bool) RolePosture {
 // apiservice/service.go) once that package exists; this function has no
 // dependency on it and can be called, and tested, standing alone.
 func CheckAPIAuthorization(ctx context.Context, pool *pgxpool.Pool, expectedRole, riverSchema string, sessionsOwnedByAuth bool) error {
-	return CheckRolePosture(ctx, pool, expectedRole, riverSchema, APIPosture(sessionsOwnedByAuth))
+	return CheckAPIAuthorizationFor(ctx, pool, expectedRole, riverSchema, sessionsOwnedByAuth, false)
 }
 
 // APIPostureFor is APIPosture with the orgs-owned switch (AUTH_ORGS_OWNED).
@@ -395,7 +385,15 @@ func CheckAPIAuthorization(ctx context.Context, pool *pgxpool.Pool, expectedRole
 // river migration grants and go-api's readiness check read the same switch,
 // so a rollback is the switch off plus a migrate run.
 func APIPostureFor(sessionsOwnedByAuth, orgsOwned bool) RolePosture {
-	posture := APIPosture(sessionsOwnedByAuth)
+	posture := apiPosture()
+	if sessionsOwnedByAuth {
+		for i := range posture.RequiredTables {
+			if posture.RequiredTables[i].TableName == "refresh_tokens" {
+				posture.RequiredTables[i] = TablePrivilege{"refresh_tokens", false, false, true}
+			}
+		}
+		posture.ColumnScoped = append(posture.ColumnScoped, ColumnPrivilege{"refresh_tokens", "revoked_at", "UPDATE"})
+	}
 	if !orgsOwned {
 		return posture
 	}

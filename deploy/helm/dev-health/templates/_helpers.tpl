@@ -761,6 +761,10 @@ leaf), and renders the phase. Every ladder read goes through dev-health.authOn, 
 {{- if not (has $stage (list "" "goApi" "owned")) }}{{- fail (printf "authService.usersOwnedStage must be goApi or owned, got %q" $stage) }}{{- end -}}
 {{- if and (eq (int $p) 4) (eq $stage "") }}{{- fail "authService.phase 4 needs authService.usersOwnedStage: goApi first (go-api forwards the credential routes, auth-service does not own users yet), then owned after the barrier (docs/operate/runbooks/auth-users-owned-flip-and-rollback.md)" }}{{- end -}}
 {{- if and (ne (int $p) 4) (ne $stage "") }}{{- fail (printf "authService.usersOwnedStage is set but authService.phase is %d: the stage exists only at phase 4" (int $p)) }}{{- end -}}
+{{- $loginStage := toString (default "" $v.authService.loginStage) -}}
+{{- if not (has $loginStage (list "" "authService" "goApi")) }}{{- fail (printf "authService.loginStage must be authService or goApi, got %q" $loginStage) }}{{- end -}}
+{{- if and (eq (int $p) 3) (eq $loginStage "") }}{{- fail "authService.phase 3 needs authService.loginStage: authService first (auth-service mounts the login route and the social clients, go-api still logs in locally), then goApi (go-api forwards login and social once every auth-service pod serves them); a rollback runs the other way, goApi to authService, then phase 2 with no stage (docs/contribute/architecture/auth-control-plane-deployment.md)" }}{{- end -}}
+{{- if and (ne (int $p) 3) (ne $loginStage "") }}{{- fail (printf "authService.loginStage is set but authService.phase is %d: the stage exists only at phase 3 (authService first, then goApi; docs/contribute/architecture/auth-control-plane-deployment.md)" (int $p)) }}{{- end -}}
 {{- int $p -}}
 {{- end -}}
 
@@ -860,15 +864,18 @@ and the other enable flags say. templates/auth-service.yaml includes it once, ou
 The ladder (each flag is on from its phase up): service 1, sessions 2, localLogin 3, social 3, credentials 4,
 usersOwned 4, orgsOwned 5. credentials moves with go-api's users switch: go-api refuses AUTH_USERS_OWNED unless the credential routes
 go to auth-service. auth-service mounts them from phase 2 (a 503 stub until users are owned).
+Phase 3 has two stages (authService.loginStage, CHAOS-12532): localLogin and social (auth-service: the lockout key and the social client env)
+are on at both; goApiLocalLogin and goApiSocial (go-api's AUTH_PROXY_LOCAL_LOGIN and AUTH_PROXY_SOCIAL) are off at stage authService, so go-api
+forwards login only after every auth-service pod serves it. Phase 3 needs the stage (like usersOwnedStage at phase 4) and it exists only at phase 3.
 Phase 4 has two stages (authService.usersOwnedStage): goApiUsersOwned (go-api's AUTH_USERS_OWNED) is on at both; usersOwned (auth-service,
 the auth Jobs, the grants) is on only at stage owned, so go-api rolls first and auth-service owns users after (CHAOS-11606).
 */}}
 {{- define "dev-health.authOn" -}}
-{{- $ladder := dict "service" 1 "sessions" 2 "localLogin" 3 "social" 3 "credentials" 4 "goApiUsersOwned" 4 "usersOwned" 4 "orgsOwned" 5 -}}
+{{- $ladder := dict "service" 1 "sessions" 2 "localLogin" 3 "social" 3 "goApiLocalLogin" 3 "goApiSocial" 3 "credentials" 4 "goApiUsersOwned" 4 "usersOwned" 4 "orgsOwned" 5 -}}
 {{- if not (hasKey $ladder .flag) }}{{- fail (printf "dev-health.authOn: %s is not a ladder flag" .flag) }}{{- end -}}
 {{- $phase := int (include "dev-health.authPhase" .context) -}}
 {{- if ge $phase (int (get $ladder .flag)) -}}
-{{- if or (ne .flag "usersOwned") (ge $phase 5) (eq (toString .context.Values.authService.usersOwnedStage) "owned") -}}true{{- end -}}
+{{- if and (or (ne .flag "usersOwned") (ge $phase 5) (eq (toString .context.Values.authService.usersOwnedStage) "owned")) (or (not (has .flag (list "goApiLocalLogin" "goApiSocial"))) (ne (toString .context.Values.authService.loginStage) "authService")) -}}true{{- end -}}
 {{- end -}}
 {{- end -}}
 

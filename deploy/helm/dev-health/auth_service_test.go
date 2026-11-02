@@ -32,7 +32,23 @@ var authNetworkPolicy = []string{
 	"--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24",
 }
 
+// renderAuth renders the chart with the given args. A phase 3 render that names no authService.loginStage gets
+// stage goApi (CHAOS-12532: phase 3 needs a stage, and goApi is the form every phase 3 test before the stage existed
+// pinned), so those tests keep their meaning. renderAuthRaw adds nothing: the refusal tests use it.
 func renderAuth(t *testing.T, args ...string) ([]map[string]any, string, error) {
+	t.Helper()
+	phase3, staged := false, false
+	for _, arg := range args {
+		phase3 = phase3 || arg == "authService.phase=3"
+		staged = staged || strings.HasPrefix(arg, "authService.loginStage")
+	}
+	if phase3 && !staged {
+		args = append(append([]string{}, args...), "--set", "authService.loginStage=goApi")
+	}
+	return renderAuthRaw(t, args...)
+}
+
+func renderAuthRaw(t *testing.T, args ...string) ([]map[string]any, string, error) {
 	t.Helper()
 	if _, err := exec.LookPath("helm"); err != nil {
 		t.Skip("helm is not installed")

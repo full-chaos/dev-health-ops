@@ -68,6 +68,22 @@
     {
       "file": "valid-revision-at-maximum.json",
       "why": "Revision 2^53-1, the largest value a float64 producer represents exactly."
+    },
+    {
+      "file": "valid-session-revoked.json",
+      "why": "One session ended by an explicit revoke: revision 1, terminal, status revoked and a closed reason; no session.created exists."
+    },
+    {
+      "file": "valid-principal-sessions-revoked.json",
+      "why": "A bulk end of one principal's sessions (here a password change) is ONE scope event with revoked_before at microsecond precision, on the existing principal aggregate."
+    },
+    {
+      "file": "valid-organization-sessions-revoked.json",
+      "why": "The organization scope: every session of the organization that started before revoked_before."
+    },
+    {
+      "file": "valid-signing-key-compromised.json",
+      "why": "A compromised signing key: the aggregate id is key_ + the base64url SHA-256 of the kid (derived, 43 characters; a kid may hold a dot), the kid is a change member, and the platform-level key carries no organization_id."
     }
   ],
   "reject": [
@@ -262,6 +278,72 @@
       "expect_instance_location": "/payload/request_id",
       "expect_keyword": "pattern",
       "why": "request_id is fixed length and server-minted."
+    },
+    {
+      "file": "invalid-session-revoked-status-not-revoked.json",
+      "expect_instance_location": "/payload/change/status",
+      "expect_keyword": "const",
+      "why": "A session event says revoked and nothing else."
+    },
+    {
+      "file": "invalid-session-revoked-reason-free-text.json",
+      "expect_instance_location": "/payload/change/reason",
+      "expect_keyword": "enum",
+      "why": "The reason is a closed vocabulary; free text has no slot."
+    },
+    {
+      "file": "invalid-principal-sessions-revoked-without-revoked-before.json",
+      "expect_instance_location": "/payload/change",
+      "expect_keyword": "required",
+      "why": "A scope event without its boundary: the consumer cannot tell which sessions survive."
+    },
+    {
+      "file": "invalid-signing-key-compromised-without-kid.json",
+      "expect_instance_location": "/payload/change",
+      "expect_keyword": "required",
+      "why": "The aggregate id is a hash of the kid, so the kid must travel as a member."
+    },
+    {
+      "file": "invalid-session-id-with-principal-prefix.json",
+      "expect_instance_location": "/aggregate_id",
+      "expect_keyword": "pattern",
+      "why": "aggregate_type and aggregate_id disagree in shape: a session event carrying a prn_ id."
+    },
+    {
+      "file": "invalid-principal-created-with-scope-member.json",
+      "expect_instance_location": "/payload/change",
+      "expect_keyword": "enum",
+      "why": "An ordinary principal event carries no scope member: the allowlist is per event, not per aggregate."
+    },
+    {
+      "file": "invalid-principal-sessions-revoked-with-status.json",
+      "expect_instance_location": "/payload/change",
+      "expect_keyword": "enum",
+      "why": "A scope event carries its own two members and no ordinary one."
+    },
+    {
+      "file": "invalid-organization-sessions-revoked-with-slug.json",
+      "expect_instance_location": "/payload/change",
+      "expect_keyword": "enum",
+      "why": "A scope event carries no slug."
+    },
+    {
+      "file": "invalid-session-revoked-revision-2.json",
+      "expect_instance_location": "/payload/revision",
+      "expect_keyword": "const",
+      "why": "A session event is a one-shot aggregate: revision 1 on the wire."
+    },
+    {
+      "file": "invalid-signing-key-id-wrong-length.json",
+      "expect_instance_location": "/aggregate_id",
+      "expect_keyword": "pattern",
+      "why": "The signing key id is key_ and a 43 character hash."
+    },
+    {
+      "file": "invalid-signing-key-compromised-with-organization.json",
+      "expect_instance_location": "/payload",
+      "expect_keyword": "not",
+      "why": "A signing key is platform-level: no organization_id."
     }
   ],
   "reject_by_client": [
@@ -308,6 +390,14 @@
     {
       "file": "client-rejected-idempotency-key-other-aggregate.json",
       "why": "idempotency_key names a different aggregate id."
+    },
+    {
+      "file": "client-rejected-revoked-before-impossible-date.json",
+      "why": "`2026-04-31` in revoked_before: the calendar check covers every timestamp member of the change object."
+    },
+    {
+      "file": "client-rejected-signing-key-id-of-another-kid.json",
+      "why": "Schema-valid, but the id is not the SHA-256 of change.kid: a pattern cannot hash, the clients derive and compare."
     }
   ],
   "consumer_vectors": {

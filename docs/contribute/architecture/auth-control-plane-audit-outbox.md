@@ -48,7 +48,11 @@ contract refuses, bumps the aggregate's revision in `aggregate_revisions`
 lock is held to commit, so revisions are contiguous per aggregate and a
 rolled-back commit leaves no gap. A mutation that is not a provisioning event
 (session lifecycle) sets `OffStream` instead of `Events` and writes its audit
-row only.
+row only. The wire contract already admits the revocation events that will
+replace the session and signing-key `OffStream` reasons (`session.revoked`,
+`principal.sessions_revoked`, `organization.sessions_revoked`,
+`signing_key.compromised`, CHAOS-11816); no producer writes them yet, so the
+code above is unchanged until the producer change lands. The session aggregate is one-shot (revision 1, terminal): `Commit` bumps no revision row for it and writes its outbox row with `ON CONFLICT (idempotency_key) DO NOTHING`; the revision feed sink publishes it with a script that writes no high-water field, and the consumer evicts without a mark or a cursor entry, so a session event adds no state to Valkey, to a replica or to the restore floors.
 
 The guarantee is held by PostgreSQL for code that does not set out to defeat
 it. Migration `0006` puts a trigger on the audit and outbox tables and on the

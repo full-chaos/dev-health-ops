@@ -280,16 +280,19 @@ func checkEdgeCarrier(r *http.Request, edgeAuth *policy.Authenticator, token str
 		}
 		role = orgRole
 		orgID = canonicalOrg(orgID)
-	case !user.IsSuperuser:
+	case !user.IsSuperuser && user.Platform == nil:
 		noteRefusal(r, "edge_org_missing", "edge")
 		return authctx.Claims{}, edgeRefused
 	}
 	// No org at all (a platform-wide operation, e.g.
 	// productTelemetryPlatformDashboard, which Python itself calls with
-	// org_id="" -- schema.py:222): no membership, no role in an org.
+	// org_id="" -- schema.py:222): no membership, no role in an org. A caller
+	// with no flag gets here only with a platform action set from the live
+	// row; graph.OperationOrgGuard then admits only the operations whose
+	// named action that set holds.
 
 	internalidentity.RecordOutcome("edge", "accepted")
-	return authctx.Claims{OrgID: orgID, Role: role, IsSuperuser: user.IsSuperuser, ImpersonationActive: impersonationActive}, edgeAccepted
+	return authctx.Claims{OrgID: orgID, Role: role, IsSuperuser: user.IsSuperuser, ImpersonationActive: impersonationActive, Platform: user.Platform}, edgeAccepted
 }
 
 // authenticateEdgeTokenOnly authenticates /graphql, the product path an

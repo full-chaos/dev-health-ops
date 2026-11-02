@@ -199,3 +199,51 @@ func TestExpiryToleranceNeedsAnExpiry(t *testing.T) {
 	got := diff(t, []Listed{listed("a", 2, pushlifecycle.StatusActive)}, []Projected{projected("a", 2, pushlifecycle.StatusExpired)})
 	want(t, got, Finding{Class: ClassStatus, ID: "a"})
 }
+
+func TestUnknownProjectedStatusIsAnErrorOnEveryPath(t *testing.T) {
+	for name, tc := range map[string]struct {
+		l []Listed
+		p []Projected
+	}{
+		"unmatched":          {nil, []Projected{projected("x", 1, "frozen")}},
+		"same revision":      {[]Listed{listed("x", 1, pushlifecycle.StatusActive)}, []Projected{projected("x", 1, "frozen")}},
+		"different revision": {[]Listed{listed("x", 2, pushlifecycle.StatusActive)}, []Projected{projected("x", 1, "frozen")}},
+		"empty status":       {[]Listed{listed("x", 1, pushlifecycle.StatusActive)}, []Projected{projected("x", 1, pushlifecycle.StatusUnknown)}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := Diff(tc.l, tc.p, now, tick)
+			if !errors.Is(err, ErrUnknownStatus) {
+				t.Fatalf("findings = %v, err = %v, want ErrUnknownStatus", got, err)
+			}
+		})
+	}
+}
+
+func TestExpiryToleranceIsTheOneTickWindowAfterTheExpiry(t *testing.T) {
+	for name, tc := range map[string]struct {
+		expiry time.Time
+		drift  bool
+	}{
+		"expired just now":           {now, false},
+		"past, within the tick":      {now.Add(-tick / 2), false},
+		"past, at the tick boundary": {now.Add(-tick), false},
+		"past, beyond the tick":      {now.Add(-tick - time.Second), true},
+		"future, within the tick":    {now.Add(tick / 2), true},
+		"future, one second":         {now.Add(time.Second), true},
+		"future, at the tick":        {now.Add(tick), true},
+		"future, beyond the tick":    {now.Add(tick + time.Second), true},
+		"future, one hour away":      {now.Add(time.Hour), true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := projected("a", 2, pushlifecycle.StatusExpired)
+			exp := tc.expiry
+			p.ExpiresAt = &exp
+			got := diff(t, []Listed{listed("a", 2, pushlifecycle.StatusActive)}, []Projected{p})
+			if tc.drift {
+				want(t, got, Finding{Class: ClassStatus, ID: "a"})
+			} else {
+				want(t, got)
+			}
+		})
+	}
+}

@@ -116,6 +116,7 @@ type validateFixture struct {
 	record    session.Record
 	sessions  *fakeSessions
 	users     fakeUsers
+	pgUsers   Users // replaces users when set
 	rows      *sessionRows
 	issuer    *Issuer
 	hs256     *edgetoken.Signer
@@ -170,8 +171,12 @@ func (f *validateFixture) deps() CompatDeps {
 	if f.eddsa {
 		config.IssuerURL, config.Keys = goldenIssuer, f.signer
 	}
+	var users Users = f.users
+	if f.pgUsers != nil {
+		users = f.pgUsers
+	}
 	return CompatDeps{
-		Sessions: f.sessions, Users: f.users, Issuer: f.issuer, Projector: &fakeProjector{},
+		Sessions: f.sessions, Users: users, Issuer: f.issuer, Projector: &fakeProjector{},
 		Logger:      slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		AppendAudit: func(context.Context, audit.AuditEvent) error { return nil },
 		Limits:      mustLimits(f.t, f.counters),
@@ -732,32 +737,42 @@ func TestValidateCompatC5TokenClassesAreGoAPIsAndNoWider(t *testing.T) {
 }
 
 // c6: a store fault is go-api's 503 with go-api's text, never a pass: the
-// users read, go-api's session row read, and auth-service's effective state
-// read.
+// users read (a refused dial, and a real pgx pool on a dead address), go-api's
+// session row read, and auth-service's effective state read; unrouted (HS256
+// only) and routed under the EdDSA configuration, where go-api's legacy
+// verifier hands the route policy.ErrUnavailable without the driver error.
 func TestValidateCompatC6AStoreFaultIsThe503(t *testing.T) {
 	down := &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}
+	dead, err := pgxpool.New(context.Background(), "postgres://validate:none@127.0.0.1:1/none?connect_timeout=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(dead.Close)
 	want := `{"detail":{"message":"` + sessionissue.UnavailableText + `"}}`
-	for _, tc := range []struct {
-		name    string
-		arrange func(*validateFixture)
-		token   func(*validateFixture) string
-	}{
-		{name: "users read", arrange: func(f *validateFixture) { f.users.err = down }},
-		{name: "users read, sid-less", arrange: func(f *validateFixture) { f.users.err = down },
-			token: func(f *validateFixture) string { return f.hs256Token(sidless) }},
-		{name: "session row read", arrange: func(f *validateFixture) { f.rows.err = down }},
-		{name: "effective state read", arrange: func(f *validateFixture) { f.sessions.currentErr = errors.Join(session.ErrStore, down) }},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			f := newValidateFixture(t, false)
-			tc.arrange(f)
-			f.build()
-			token := f.hs256Token(nil)
-			if tc.token != nil {
-				token = tc.token(f)
-			}
-			expectAnswer(t, tc.name, f.post(f.server, tokenBody(token), nil), http.StatusServiceUnavailable, want)
-		})
+	for _, eddsa := range []bool{false, true} {
+		for _, tc := range []struct {
+			name    string
+			arrange func(*validateFixture)
+			token   func(*validateFixture) string
+		}{
+			{name: "users read", arrange: func(f *validateFixture) { f.users.err = down }},
+			{name: "users read, sid-less", arrange: func(f *validateFixture) { f.users.err = down },
+				token: func(f *validateFixture) string { return f.hs256Token(sidless) }},
+			{name: "users read, dead pgx pool", arrange: func(f *validateFixture) { f.pgUsers = PGUsers{Pool: dead} }},
+			{name: "session row read", arrange: func(f *validateFixture) { f.rows.err = down }},
+			{name: "effective state read", arrange: func(f *validateFixture) { f.sessions.currentErr = errors.Join(session.ErrStore, down) }},
+		} {
+			t.Run(fmt.Sprintf("%s eddsa=%v", tc.name, eddsa), func(t *testing.T) {
+				f := newValidateFixture(t, eddsa)
+				tc.arrange(f)
+				f.build()
+				token := f.hs256Token(nil)
+				if tc.token != nil {
+					token = tc.token(f)
+				}
+				expectAnswer(t, tc.name, f.post(f.server, tokenBody(token), nil), http.StatusServiceUnavailable, want)
+			})
+		}
 	}
 }
 

@@ -185,11 +185,11 @@ func TestAuthOwnerMoveK3sRefusesAClusterThatIsNotK3sBeforeAnyNamespaceCall(t *te
 	if res.code == 0 || !strings.Contains(res.stderr, "is not a k3s cluster") {
 		t.Errorf("a kind-like kubelet version behind a file named k3s: exit %d, stderr %q", res.code, res.stderr)
 	}
-	if strings.Contains(calls, "create namespace") || strings.Contains(calls, "delete") {
+	if strings.Contains(calls, "create ") || strings.Contains(calls, "delete") {
 		t.Errorf("the script changed the cluster before refusing:\n%s", calls)
 	}
 	res, calls = k3sStubRun(t, []string{"STUB_NODE_VERSION=v1.30.2+k3s1"})
-	if strings.Contains(res.stderr, "is not a k3s cluster") || !strings.Contains(calls, "create namespace authmove-") {
+	if strings.Contains(res.stderr, "is not a k3s cluster") || !strings.Contains(calls, "create -f -") {
 		t.Errorf("a k3s kubelet version was refused or never reached the namespace: stderr %q, calls:\n%s", res.stderr, calls)
 	}
 }
@@ -205,7 +205,7 @@ func TestAuthOwnerMoveK3sDeletesOnlyTheNamespaceItCreated(t *testing.T) {
 		t.Errorf("a failed create was followed by a delete:\n%s", calls)
 	}
 	_, calls = k3sStubRun(t, []string{k3s})
-	if !strings.Contains(calls, "create namespace authmove-") || !strings.Contains(calls, "delete namespace authmove-") {
+	if !strings.Contains(calls, "create -f -") || !strings.Contains(calls, "delete namespace authmove-") {
 		t.Errorf("a namespace the run created was not deleted on failure:\n%s", calls)
 	}
 }

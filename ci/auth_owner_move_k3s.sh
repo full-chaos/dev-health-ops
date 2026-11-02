@@ -127,16 +127,19 @@ kc() { kubectl --kubeconfig "${KUBECONFIG_FILE}" "$@"; }
 K() { kc -n "${NS}" "$@"; }
 export LOCAL_PG="${PG_IMAGE}"
 
-# CREATED is set only after this run created the namespace: a name that already existed, or a create that failed, is never deleted.
-CREATED=0
+# The run owns the namespace by a token it puts on it in the same call that creates it. A name that already existed, a
+# create that failed, and a namespace made by another run carry no token of ours and are never deleted; a signal between
+# the create call and the next statement cannot hide a namespace this run made.
+RUN_TOKEN="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+owned() { [ "$(kc get namespace "${NS}" -o 'jsonpath={.metadata.labels.authmove-run}' 2>/dev/null)" = "${RUN_TOKEN}" ]; }
 cleanup() {
   local status=$?
-  if [ "${status}" -ne 0 ] && [ "${CREATED}" = 1 ]; then
-    printf '\n--- namespace state at failure ---\n' >&2
-    K get pods,jobs -o wide >&2 || true
-    K logs --all-containers --tail 60 -l app.kubernetes.io/component=auth-migrate >&2 || true
-  fi
-  if [ "${CREATED}" = 1 ]; then
+  if owned; then
+    if [ "${status}" -ne 0 ]; then
+      printf '\n--- namespace state at failure ---\n' >&2
+      K get pods,jobs -o wide >&2 || true
+      K logs --all-containers --tail 60 -l app.kubernetes.io/component=auth-migrate >&2 || true
+    fi
     kc delete namespace "${NS}" --wait=false >/dev/null 2>&1 || true
   fi
   exit "${status}"
@@ -146,8 +149,14 @@ trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 
 if kc get namespace "${NS}" >/dev/null 2>&1; then die "the namespace ${NS} exists"; fi
-kc create namespace "${NS}" >/dev/null
-CREATED=1
+kc create -f - >/dev/null <<EOF
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${NS}
+  labels:
+    authmove-run: ${RUN_TOKEN}
+EOF
 printf 'namespace %s created on %s\n' "${NS}" "${KUBECONFIG_FILE}"
 
 pg() { K exec -i deploy/auth-postgres -- psql -U postgres -v ON_ERROR_STOP=1 -At "$@"; }

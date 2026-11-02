@@ -58,25 +58,24 @@ done
 case "${STAGE}" in smoke | drill | rotation) ;; *) die "--stage is smoke, drill or rotation" ;; esac
 
 if [ "${PRINT_PLAN}" = 1 ]; then
-  cat <<'PLAN'
-stage smoke:    up (postgres, clickhouse, valkey, migrate chain, auth-service, go-api, issuer-tls); register + verify one user;
-                login; token header kid is a; JWKS (https, rehearsal CA) lists a; go-api /api/v1/auth/me accepts the token.
-S1 planned:     adopt; stage b; register b (pending, published); activate b refused before 300 s with the remaining seconds,
-                allowed after; overlap: a-token still accepted by go-api, b-token accepted, no non-2xx on the probe;
-                rollback a (a active), rollback b (b active); retire a refused before 4200 s, allowed after; a leaves the JWKS.
-S2 compromise:  stage c and d, register both (published 300 s+); sessions under b; compromise b -successor c: b leaves the JWKS
-                and is denied, c signs, the sessions of b are revoked (refresh refused), a session of a and the session of c still
-                refresh; every verb on b refused; a manifest that names b active changes nothing.
-                Window a (no restart): literal WINDOW_A lines, seconds go-api and query-api keep accepting a b-token (bound 330 s).
-                Window b (pm): compromise c -successor d, then restart go-api and query-api one at a time right after the key
-                drop: literal WINDOW_B lines; a verifier that still accepts the old kid is a FINDING (exit 1 at the end).
-S3 rollback:    class eddsa -> hs256_compat (auth-service, go-api and query-api recreated): new tokens are HS256, go-api accepts them, the
-                compromised kid stays out of the JWKS and denied, the revoked sessions stay refused, a b-token is refused;
-                back to eddsa: c signs, b is still absent.
-stage drill:    smoke, then S2 window a on key a (successor b), S2 window b on key b (successor c), S3; no S1; about 20 minutes.
-floors:         real, once (about 80 minutes); no state_since is edited.
-needs:          docker, curl, jq, openssl; REHEARSAL_DIR, REHEARSAL_IMAGES_ENV
-PLAN
+  printf '%s\n' \
+    'stage smoke:    up (postgres, clickhouse, valkey, migrate chain, auth-service, go-api, issuer-tls); register + verify one user;' \
+    '                login; token header kid is a; JWKS (https, rehearsal CA) lists a; go-api /api/v1/auth/me accepts the token.' \
+    'S1 planned:     adopt; stage b; register b (pending, published); activate b refused before 300 s with the remaining seconds,' \
+    '                allowed after; overlap: a-token still accepted by go-api, b-token accepted, no non-2xx on the probe;' \
+    '                rollback a (a active), rollback b (b active); retire a refused before 4200 s, allowed after; a leaves the JWKS.' \
+    'S2 compromise:  stage c and d, register both (published 300 s+); sessions under b; compromise b -successor c: b leaves the JWKS' \
+    '                and is denied, c signs, the sessions of b are revoked (refresh refused), a session of a and the session of c still' \
+    '                refresh; every verb on b refused; a manifest that names b active changes nothing.' \
+    '                Window a (no restart): literal WINDOW_A lines, seconds go-api and query-api keep accepting a b-token (bound 330 s).' \
+    '                Window b (pm): compromise c -successor d, then restart go-api and query-api one at a time right after the key' \
+    '                drop: literal WINDOW_B lines; a verifier that still accepts the old kid is a FINDING (exit 1 at the end).' \
+    'S3 rollback:    class eddsa -> hs256_compat (auth-service, go-api and query-api recreated): new tokens are HS256, go-api accepts them, the' \
+    '                compromised kid stays out of the JWKS and denied, the revoked sessions stay refused, a b-token is refused;' \
+    '                back to eddsa: c signs, b is still absent.' \
+    'stage drill:    smoke, then S2 window a on key a (successor b), S2 window b on key b (successor c), S3; no S1; about 20 minutes.' \
+    'floors:         real, once (about 80 minutes); no state_since is edited.' \
+    'needs:          docker, curl, jq, openssl; REHEARSAL_DIR, REHEARSAL_IMAGES_ENV'
   exit 0
 fi
 

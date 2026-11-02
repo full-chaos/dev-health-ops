@@ -43,9 +43,9 @@ func TestOIDCProviderFailuresRecordGoAPIsRowAndKeepTheProviderActive(t *testing.
 		"token exchange": {run: func(t *testing.T, h *harness, s started) *Error { return h.callbackWithCode(s, "code-never-granted") },
 			status: http.StatusBadRequest, reason: ReasonDependency, message: "OIDC token exchange failed"},
 		"discovery fetch": {opts: harnessOpts{discovery: true},
-			before: func(h *harness) { h.idp.failDiscovery = true },
+			before: func(h *harness) { h.idp.SetFailDiscovery(true) },
 			run:    func(t *testing.T, h *harness, s started) *Error { return h.callbackWithCode(s, "code-1") },
-			after:  func(h *harness) { h.idp.failDiscovery = false },
+			after:  func(h *harness) { h.idp.SetFailDiscovery(false) },
 			status: http.StatusBadRequest, reason: ReasonDependency, message: "Failed to fetch OIDC discovery document"},
 		"no id token": {run: func(t *testing.T, h *harness, s started) *Error { _, f := h.finish(t, s, ""); return f },
 			status: http.StatusBadRequest, reason: ReasonMalformed, message: "OIDC token response missing id_token"},
@@ -54,7 +54,7 @@ func TestOIDCProviderFailuresRecordGoAPIsRowAndKeepTheProviderActive(t *testing.
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, f := h.finish(t, s, signRS256(t, other, map[string]any{"alg": "RS256", "kid": h.idp.kid, "typ": "JWT"}, h.claims(s.nonce, "sub-1", uniqueEmail("sig"))))
+			_, f := h.finish(t, s, signRS256(t, other, map[string]any{"alg": "RS256", "kid": h.idp.Keys().KID, "typ": "JWT"}, h.claims(s.nonce, "sub-1", uniqueEmail("sig"))))
 			return f
 		}, status: http.StatusBadRequest, reason: ReasonBadSignature, message: "OIDC id_token validation failed"},
 		"nonce": {run: func(t *testing.T, h *harness, s started) *Error {
@@ -62,12 +62,15 @@ func TestOIDCProviderFailuresRecordGoAPIsRowAndKeepTheProviderActive(t *testing.
 			return f
 		}, status: http.StatusBadRequest, reason: ReasonNonceMismatch, message: "OIDC nonce mismatch"},
 		"userinfo": {opts: harnessOpts{userinfo: true},
-			before: func(h *harness) { h.idp.failUserinfo = true },
+			before: func(h *harness) { h.idp.SetFailUserinfo(true) },
 			run: func(t *testing.T, h *harness, s started) *Error {
 				_, f := h.finish(t, s, h.sign(t, h.claims(s.nonce, "sub-1", uniqueEmail("ui"))))
 				return f
 			},
-			after:  func(h *harness) { h.idp.failUserinfo, h.idp.userinfo = false, map[string]any{"sub": memberSub} },
+			after: func(h *harness) {
+				h.idp.SetFailUserinfo(false)
+				h.idp.SetUserinfo(map[string]any{"sub": memberSub})
+			},
 			status: http.StatusBadRequest, reason: ReasonDependency, message: "OIDC userinfo request failed"},
 		"no email": {run: func(t *testing.T, h *harness, s started) *Error {
 			_, f := h.finish(t, s, h.sign(t, h.claims(s.nonce, "sub-1", "")))
@@ -128,8 +131,8 @@ func TestOIDCRefusalsGoAPIDoesNotRecordWriteNothing(t *testing.T) {
 		reason Reason
 	}{
 		"azp differs":              {claims: func(c map[string]any) { c["azp"] = "another-client" }, reason: ReasonAudience},
-		"userinfo subject differs": {opts: harnessOpts{userinfo: true}, before: func(h *harness) { h.idp.userinfo = map[string]any{"sub": "another-subject"} }, reason: ReasonMalformed},
-		"document issuer differs":  {opts: harnessOpts{discovery: true}, before: func(h *harness) { h.idp.docIssuer = &other }, reason: ReasonDependency},
+		"userinfo subject differs": {opts: harnessOpts{userinfo: true}, before: func(h *harness) { h.idp.SetUserinfo(map[string]any{"sub": "another-subject"}) }, reason: ReasonMalformed},
+		"document issuer differs":  {opts: harnessOpts{discovery: true}, before: func(h *harness) { h.idp.SetDocIssuer(&other) }, reason: ReasonDependency},
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := newHarness(t, tc.opts)

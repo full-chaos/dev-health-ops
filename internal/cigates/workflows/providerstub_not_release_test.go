@@ -14,7 +14,7 @@ import (
 const providerStubName = "providerstub"
 
 // corpusToolNames are the corpus-only images: the provider stub and the mail sink (docker/smtpsink.Dockerfile).
-var corpusToolNames = []string{providerStubName, "smtpsink"}
+var corpusToolNames = []string{providerStubName, "smtpsink", "idpstub"}
 
 // providerStubInRelease is every way the release inputs name the stub: texts maps a path to its content.
 func providerStubInRelease(texts map[string]string) []string {

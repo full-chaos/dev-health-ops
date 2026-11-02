@@ -449,6 +449,9 @@ internal/testsupport/chschema	contract_test.go	internal/testsupport/chschema	dir
 internal/testsupport/chschema	contract_test.go	unexpressed	-	-
 internal/testsupport/containers	close_remote_test.go	.	tree	*_test.go
 internal/testsupport/gitmaintcensus	census_test.go	.	tree	*.go
+internal/testsupport/idpstub	boundary_test.go	.	tree	*.go
+internal/testsupport/idpstub	boundary_test.go	docker	dir	*
+internal/testsupport/idpstub	boundary_test.go	internal/testsupport/idpstub	tree	*
 internal/testsupport/moduleroot	moduleroot_test.go	unexpressed	-	*.go
 internal/testsupport/providerstub	stub.go	unexpressed	-	-
 internal/testsupport/recordedfiles	recordedfiles.go	unexpressed	-	-

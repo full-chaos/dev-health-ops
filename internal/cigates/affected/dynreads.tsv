@@ -600,6 +600,7 @@ internal/testsupport/corpusmatrix	matrix.go
 internal/testsupport/gitmaintcensus	census_test.go
 internal/testsupport/goldenscan	tree.go
 internal/testsupport/goldenscan	vectors_test.go
+internal/testsupport/idpstub/cmd/idpstub	main.go
 internal/testsupport/moduleroot	moduleroot_test.go
 internal/testsupport/oraclecompare	oraclecompare.go
 internal/testsupport/providerstub	corpus_social_test.go

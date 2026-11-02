@@ -643,6 +643,7 @@ internal/testsupport/bigboydir	bigboydir.go	internal/testsupport/bigboydir
 internal/testsupport/corpusmatrix	matrix.go	internal/testsupport/corpusmatrix
 internal/testsupport/goldenscan	tree.go	internal/testsupport/goldenscan/treegate
 internal/testsupport/goldenscan	tree.go	internal/testsupport/recordedfiles/manifest
+internal/testsupport/idpstub/cmd/idpstub	main.go	internal/testsupport/idpstub/cmd/idpstub
 internal/testsupport/oraclecompare	oraclecompare.go	internal/jobs/investment/categorize/decision
 internal/testsupport/oraclecompare	oraclecompare.go	internal/providersync
 internal/testsupport/providerstub	stub.go	internal/testsupport/providerstub

@@ -267,6 +267,22 @@ func TestClickHouseQueryAdapterChartsEveryRegistryMetric(t *testing.T) {
 			}
 		}
 	}
+	// A user row's delivery units are its merged pull requests and its
+	// completed work items (MergeICUserMetrics). The whole cycle of a landscape
+	// chart reads a row's cycle only when the row holds a merged pull request
+	// (delivery_units less work_items_completed above 0), so the row is seeded
+	// as one that does.
+	const user = "user_metrics_daily"
+	for index, column := range columns[user] {
+		if column == "delivery_units" {
+			delivery := seeded[user+".prs_merged"] + seeded[user+".work_items_completed"]
+			if seeded[user+".prs_merged"] <= 0 {
+				t.Fatalf("%s.prs_merged is not seeded above 0", user)
+			}
+			seeded[user+".delivery_units"] = delivery
+			values[user][index] = fmt.Sprint(delivery)
+		}
+	}
 	// Two versions of the one key per table: an older run (every value +1000,
 	// computed first) and the newest run (the seeded values). A chart that
 	// counts both versions, or reads the older one, is not the seeded value.

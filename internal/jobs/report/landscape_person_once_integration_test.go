@@ -26,7 +26,8 @@ import (
 //   - person-b: one user row (whole churn 10), an older generation of it with
 //     other values, a row 30 days before the day (outside the window), and
 //     points in team-1;
-//   - a retraction point (a retired team id, every measure 0) for person-c;
+//   - a retraction point (a retired team id, every measure at its default, the
+//     cycle NULL) for person-c;
 //   - a row and a point of another organization.
 //
 // Each raw metric is read org-wide (as a scorecard, by day, by repository, and
@@ -104,7 +105,11 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		point(org, "person-a", "team-2", mapName, 40, 3, 22, 4, 0.4, 0.3, newest)
 		point(org, "person-b", "team-1", mapName, 10, 2, 4, 2, 0.25, 0.25, newest)
 	}
-	point(org, "person-c", "team-retired", "churn_throughput", 0, 0, 0, 0, 0, 0, newest)
+	// The row of zeros of the stale-key rule writes its keys only: every
+	// measure holds its default, the cycle NULL.
+	exec(`
+INSERT INTO ic_landscape_rolling_30d (repo_id, as_of_day, identity_id, team_id, map_name, computed_at, org_id)
+VALUES (?, ?, 'person-c', 'team-retired', 'churn_throughput', ?, ?)`, repo, day, newest, org)
 	point("org-other", "person-a", "team-1", "churn_throughput", 7777, 7777, 7777, 7777, 0.5, 0.5, newest)
 
 	chart := func(metric, chartType, groupBy string, teams []string) map[string]float64 {

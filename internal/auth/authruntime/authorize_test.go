@@ -51,7 +51,7 @@ func withAuthorizeRows(t *testing.T, raw []byte) {
 func TestTheAuthorizeRoutesAreDarkWithoutTheirRows(t *testing.T) {
 	pool, schema, signer := authorizeTestDeps(t)
 	cfg := authconfig.Config{TokenIssuerURL: "https://auth.example.com", AuthorizeCallerSubjects: []string{session.WirePrincipalID(uuid.New())}}
-	routes, err := authorizeRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, signer)
+	routes, err := authorizeRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, signer, nil)
 	if err != nil || len(routes) != 0 {
 		t.Fatalf("routes %d, %v; want 0 without rows", len(routes), err)
 	}
@@ -73,7 +73,7 @@ func TestTheAuthorizeRoutesMountOnTheirRows(t *testing.T) {
 		"no callers":       {TokenIssuerURL: "https://auth.example.com"},
 		"no issuer at all": {},
 	} {
-		routes, err := authorizeRoutes(cfg, logger, pool, schema, signer)
+		routes, err := authorizeRoutes(cfg, logger, pool, schema, signer, nil)
 		if err != nil || len(routes) != 2 {
 			t.Fatalf("%s: routes %d, %v; want both", name, len(routes), err)
 		}
@@ -83,7 +83,7 @@ func TestTheAuthorizeRoutesMountOnTheirRows(t *testing.T) {
 func TestTheAuthorizeCallerGateNeedsASignerThatReadsItsKeySet(t *testing.T) {
 	pool, schema, _ := authorizeTestDeps(t)
 	cfg := authconfig.Config{TokenIssuerURL: "https://auth.example.com", AuthorizeCallerSubjects: []string{session.WirePrincipalID(uuid.New())}}
-	_, err := authorizeRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, noKeySet{})
+	_, err := authorizeRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, noKeySet{}, nil)
 	if err == nil || !strings.Contains(err.Error(), "key set") {
 		t.Fatalf("a signer without a key set was not refused: %v", err)
 	}

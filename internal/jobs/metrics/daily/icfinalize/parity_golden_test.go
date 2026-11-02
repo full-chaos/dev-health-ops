@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"testing"
 	"time"
 
@@ -206,6 +207,21 @@ func TestICFinalizeMatchesTheFrozenPythonGolden(t *testing.T) {
 			golden.LandscapeRolling[index].TeamID = &unassigned
 		}
 	}
+	// A declared divergence (CHAOS-12562): carol has no merged pull request, so
+	// she has no 30-day cycle. The reference stored 0 and put her on the cycle
+	// map at log1p(0), the fastest place; here her cycle is NULL and she has no
+	// cycle-map point. Her churn and WIP points are the reference's.
+	kept := golden.LandscapeRolling[:0]
+	for _, row := range golden.LandscapeRolling {
+		if row.IdentityID == "carol@example.com" {
+			if row.MapName == "cycle_throughput" {
+				continue
+			}
+			row.CycleP5030dHours = nil
+		}
+		kept = append(kept, row)
+	}
+	golden.LandscapeRolling = kept
 
 	if _, err := executor.computeForDay(ctx, orgID, day, resolveTeam, nil, nil); err != nil {
 		t.Fatalf("computeForDay: %v", err)
@@ -276,17 +292,17 @@ type goldenUserMetric struct {
 }
 
 type goldenLandscapeRow struct {
-	IdentityID       string  `json:"identity_id"`
-	TeamID           *string `json:"team_id"`
-	MapName          string  `json:"map_name"`
-	XRaw             float64 `json:"x_raw"`
-	YRaw             float64 `json:"y_raw"`
-	XNorm            float64 `json:"x_norm"`
-	YNorm            float64 `json:"y_norm"`
-	ChurnLOC30d      int64   `json:"churn_loc_30d"`
-	DeliveryUnits30d int64   `json:"delivery_units_30d"`
-	CycleP5030dHours float64 `json:"cycle_p50_30d_hours"`
-	WIPMax30d        int64   `json:"wip_max_30d"`
+	IdentityID       string   `json:"identity_id"`
+	TeamID           *string  `json:"team_id"`
+	MapName          string   `json:"map_name"`
+	XRaw             float64  `json:"x_raw"`
+	YRaw             float64  `json:"y_raw"`
+	XNorm            float64  `json:"x_norm"`
+	YNorm            float64  `json:"y_norm"`
+	ChurnLOC30d      int64    `json:"churn_loc_30d"`
+	DeliveryUnits30d int64    `json:"delivery_units_30d"`
+	CycleP5030dHours *float64 `json:"cycle_p50_30d_hours"`
+	WIPMax30d        int64    `json:"wip_max_30d"`
 }
 
 type parityGolden struct {
@@ -388,7 +404,7 @@ type gotLandscapeRow struct {
 	YNorm            float64
 	ChurnLOC30d      uint64
 	DeliveryUnits30d uint32
-	CycleP5030dHours float64
+	CycleP5030dHours *float64
 	WIPMax30d        uint32
 }
 
@@ -558,11 +574,24 @@ func assertLandscapeMatchesGolden(
 		if int64(row.DeliveryUnits30d) != want.DeliveryUnits30d {
 			t.Errorf("%s: DeliveryUnits30d = %d, want %d", key, row.DeliveryUnits30d, want.DeliveryUnits30d)
 		}
-		assertFloatEqual(t, key, "CycleP5030dHours", row.CycleP5030dHours, want.CycleP5030dHours)
+		switch {
+		case row.CycleP5030dHours == nil && want.CycleP5030dHours == nil:
+		case row.CycleP5030dHours == nil || want.CycleP5030dHours == nil:
+			t.Errorf("%s: CycleP5030dHours = %s, want %s", key, optionalFloat(row.CycleP5030dHours), optionalFloat(want.CycleP5030dHours))
+		default:
+			assertFloatEqual(t, key, "CycleP5030dHours", *row.CycleP5030dHours, *want.CycleP5030dHours)
+		}
 		if int64(row.WIPMax30d) != want.WIPMax30d {
 			t.Errorf("%s: WIPMax30d = %d, want %d", key, row.WIPMax30d, want.WIPMax30d)
 		}
 	}
+}
+
+func optionalFloat(value *float64) string {
+	if value == nil {
+		return "NULL"
+	}
+	return strconv.FormatFloat(*value, 'g', -1, 64)
 }
 
 func assertFloatEqual(t *testing.T, subject, field string, got, want float64) {

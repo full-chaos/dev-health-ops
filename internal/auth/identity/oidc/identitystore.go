@@ -80,11 +80,7 @@ func (a StoreIdentities) EmailInUse(ctx context.Context, email string) (bool, er
 // ProvisionFederated creates the account as a self sign-up: the audit row names
 // the new principal as its own actor.
 func (a StoreIdentities) ProvisionFederated(ctx context.Context, account FederatedAccount) (Principal, error) {
-	id, err := a.Store.ProvisionFederated(ctx, identity.ProvisionRequest{
-		Key:   identity.ExternalKey{Issuer: account.Key.Issuer, Provider: identity.Provider(account.Key.Provider), Subject: account.Key.Subject},
-		Email: account.Email, FullName: account.FullName, Actor: identity.SelfSignUp(account.RequestID),
-		LegacyProvider: ProviderKind, LegacySubject: account.Key.Subject, LegacyFullName: account.LegacyFullName,
-	})
+	id, err := a.Store.ProvisionFederated(ctx, provisionRequest(account))
 	switch {
 	case errors.Is(err, identity.ErrIdentityTaken), errors.Is(err, identity.ErrEmailTaken):
 		return Principal{}, ErrIdentityConflict

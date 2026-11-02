@@ -70,6 +70,10 @@ func runWorkload(root, out string, random io.Reader) error {
 	return tokencorpus.Write(out, corpus)
 }
 
+func runServiceAccount(root, out string, random io.Reader) error {
+	return fmt.Errorf("not implemented")
+}
+
 func fail(err error) {
 	fmt.Fprintln(os.Stderr, "tokencorpus:", err)
 	os.Exit(1)

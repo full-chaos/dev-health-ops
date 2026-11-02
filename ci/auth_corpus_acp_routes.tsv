@@ -4,6 +4,7 @@
 # aggregate<TAB>method<TAB>pattern
 sessions	POST	/api/v1/auth/refresh
 sessions	POST	/api/v1/auth/logout
+sessions	POST	/api/v1/auth/validate
 local_login	POST	/api/v1/auth/login
 credentials	POST	/api/v1/auth/register
 credentials	GET	/api/v1/auth/verify

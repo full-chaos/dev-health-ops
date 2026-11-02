@@ -417,6 +417,49 @@
     },
     {
       "accepted_credential_classes": [
+        "ops_access_token_hs256",
+        "user_access_token"
+      ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: the users row (and, for a token with an org_id, the membership row) is read live through PGUsers; a token with a sid reads its session row live (policy.PGStore.SessionState, then the session store's effective revoke and expiry).",
+      "disclosure_behavior": "go-api's wire: the token travels in the JSON body field token, never in a header. A refused token is 200 with valid false and every other member null, so the answer says only that the token is not good; a malformed body is go-api's 422 detail list; a store or key set fault is a 503, never a pass. The body never echoes the token.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/auth/validate [dev-health-auth-service @api]",
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 123,
+          "note": "func newValidateAuth",
+          "path": "internal/auth/authapi/compat_validate.go"
+        },
+        "description": "newValidateAuth: go-api's own decision, policy.Authenticator.Authenticate, over the body token. An HS256 token is verified by the go-api verifier the Issuer holds, then CheckClaims and userFromClaims (legacy_hs256 true). With AUTH_TOKEN_ISSUER_URL and a key set, an EdDSA user_access_token (JWT header alg EdDSA) of audience dev-health-api is checked by the profile-routed validator over this route's one row, then go-api's accessTokenUser; the acr-api and acr-mcp audiences, the workload token and a query-api audience token are refused. A token naming a session also needs that session live in auth-service's own state (stricter than go-api: an expired session or one revoked by a password stamp is valid false)."
+      },
+      "public_rationale": null,
+      "route": "/api/v1/auth/validate",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/compat_validate.go",
+        "line": 30
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "none",
+      "token_shape": {
+        "algorithm": "HS256 (legacy_hs256) or EdDSA (user_access_token)",
+        "audience": "HS256: AUTH_JWT_AUDIENCE (default dev-health-api, go-api's JWT_AUDIENCE); EdDSA: dev-health-api",
+        "issuer": "HS256: AUTH_JWT_ISSUER (default dev-health-ops, go-api's JWT_ISSUER); EdDSA: AUTH_TOKEN_ISSUER_URL",
+        "token_type": "HS256 JWT, type=access; or the access-token.v1 JWS"
+      }
+    },
+    {
+      "accepted_credential_classes": [
         "social_oauth_exchange"
       ],
       "classification": "protected",
@@ -2201,5 +2244,5 @@
     }
   ],
   "schema_version": "endpoint-profile.v1",
-  "source_commit": "cde17b146c37c76b5df637d49bcf463634f6ef67"
+  "source_commit": "1b5fbfa0f829b8b88f1a16fdc52f4dab3ba72263"
 }

@@ -189,6 +189,15 @@ func TestWellKnownRouteRefusals(t *testing.T) {
 		{"issuer on another host", 2, []string{wkHostValue(wkBothPaths...)}, []string{"--set", "authService.accessToken.issuerURL=https://other.example.test"}, "must be https://" + wkHost},
 		{"issuer with a path prefix", 2, []string{wkHostValue(wkBothPaths...)}, []string{"--set", "authService.accessToken.issuerURL=" + wkIssuer + "/v1"}, "must be https://" + wkHost},
 		{"controller namespace is the release namespace", 2, []string{wkHostValue(wkBothPaths...)}, append(append([]string{}, issuer...), "--namespace", "ns1", "--set", "networkPolicy.ingressControllerNamespace=ns1"), "must name the ingress controller's namespace"},
+		{"allow-list false", 2, []string{`{"host":"` + wkHost + `","pythonAllowList":false,"paths":[` + strings.Join(wkBothPaths, ",") + `]}`}, issuer, "must not carry a pythonAllowList"},
+		{"allow-list empty list", 2, []string{`{"host":"` + wkHost + `","pythonAllowList":[],"paths":[` + strings.Join(wkBothPaths, ",") + `]}`}, issuer, "must not carry a pythonAllowList"},
+		{"allow-list null", 2, []string{`{"host":"` + wkHost + `","pythonAllowList":null,"paths":[` + strings.Join(wkBothPaths, ",") + `]}`}, issuer, "must not carry a pythonAllowList"},
+		{"second entry of the same host routes web", 2, []string{wkHostValue(wkBothPaths...), `{"host":"` + wkHost + `","paths":[{"path":"/","pathType":"Prefix","service":"web"}]}`}, issuer, "more than one ingress.hosts entry"},
+		{"second entry of the same host routes auth-service again", 2, []string{wkHostValue(wkPath(wkJWKS, "Exact")), wkHostValue(wkPath(wkDiscovery, "Exact"))}, issuer, "more than one ingress.hosts entry"},
+		{"use-regex annotation", 2, []string{wkHostValue(wkBothPaths...)}, append(append([]string{}, issuer...), "--set-string", `ingress.annotations.nginx\.ingress\.kubernetes\.io/use-regex=true`), "on an Ingress that routes to auth-service"},
+		{"rewrite-target annotation", 2, []string{wkHostValue(wkBothPaths...)}, append(append([]string{}, issuer...), "--set-string", `ingress.annotations.nginx\.ingress\.kubernetes\.io/rewrite-target=/x`), "on an Ingress that routes to auth-service"},
+		{"controller labels null", 2, []string{wkHostValue(wkBothPaths...)}, append(append([]string{}, issuer...), "--set-json", `authService.networkPolicy.ingressControllerPodLabels=null`), "ingressControllerPodLabels must not be empty"},
+		{"controller labels empty map", 2, []string{wkHostValue(wkBothPaths...)}, append(append([]string{}, issuer...), "--set-json", `authService.networkPolicy.ingressControllerPodLabels={}`), "ingressControllerPodLabels must not be empty"},
 		{"auth-service not running", 0, []string{wkHostValue(wkBothPaths...)}, issuer, "authService.phase >= 1"},
 	}
 	for _, c := range cases {
@@ -205,4 +214,26 @@ func wkController(namespace string) netpolSource {
 	src := controllerSourceFor(namespace)
 	src.podLabels = map[string]string{"app.kubernetes.io/name": "ingress-nginx", "app.kubernetes.io/component": "controller"}
 	return src
+}
+
+// One API-port rule carries every peer: the egress proof plan of the deploy repo reads at most one rule on the API port.
+func TestWellKnownRouteSharesTheOneAPIPortRule(t *testing.T) {
+	for _, routed := range []bool{false, true} {
+		var hosts []string
+		if routed {
+			hosts = []string{wkHostValue(wkBothPaths...)}
+		}
+		policy := wkNetpol(t, renderOK(t, wkArgs(2, hosts, "--set", "authService.accessToken.issuerURL="+wkIssuer)))
+		rules := 0
+		for _, rule := range policy.Spec.Ingress {
+			for _, p := range rule.Ports {
+				if p.Port == 8095 {
+					rules++
+				}
+			}
+		}
+		if rules != 1 {
+			t.Errorf("routed=%v: %d ingress rules on the API port, want 1", routed, rules)
+		}
+	}
 }

@@ -1,6 +1,7 @@
 // Package acrlisting is the read-only client of the acr credential lifecycle listing (GET /internal/v1/credentials/lifecycle,
 // schema credential_lifecycle_list.v1) that the Auth Control Plane reconciliation reads (CHAOS-11199). One Client is one
-// workload identity, which acr binds to one organization, so one Client lists one organization.
+// workload identity and one organization: the exchange names the organization (RFC 8693 resource), because acr can bind
+// one identity in several.
 //
 // It sends exactly two kinds of request: the RFC 8693 token exchange (POST, the subject token is in the body and nowhere
 // else) and the listing (GET, with the exchanged access token). It follows no redirect, retries nothing (the caller owns
@@ -45,6 +46,7 @@ const (
 var (
 	idPattern       = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 	revisionPattern = regexp.MustCompile(`^[1-9][0-9]{0,18}$`)
+	orgPattern      = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 )
 
 // Row is one listed credential. Status is one of active, revoked, expired.
@@ -68,6 +70,8 @@ const (
 	KindWalk         Kind = "walk"
 	KindTransport    Kind = "transport"
 
+	// KindInvalidRequest and KindInvalidTarget are acr's own refusals of the org selector: the identity is bound in
+	// several organizations and no usable selector arrived, or it is not bound in the selected one.
 	KindInvalidRequest Kind = "invalid_request"
 	KindInvalidTarget  Kind = "invalid_target"
 )
@@ -112,7 +116,9 @@ type Config struct {
 	// SubjectTokenFile is the projected ServiceAccount token of the workload bound in acr. It is read again on every
 	// exchange, never cached.
 	SubjectTokenFile string
-	OrgID            string
+	// OrgID is the organization to list, a lowercase UUID. It is sent as the RFC 8693 resource urn:acr:org:<OrgID>,
+	// because one workload identity can be bound in several organizations.
+	OrgID string
 	// HTTPClient is optional; a nil one is httpguard.NewClient. Whatever is given follows no redirect.
 	HTTPClient *http.Client
 	Timeout    time.Duration
@@ -129,6 +135,7 @@ var ErrInvalidConfig = errors.New("acrlisting: invalid configuration")
 type Client struct {
 	base, endpoint *url.URL
 	subjectFile    string
+	org            string
 	http           *http.Client
 	limit, pages   int
 	now            func() time.Time
@@ -165,12 +172,14 @@ func New(cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("%w: token endpoint", ErrInvalidConfig)
 	case strings.TrimSpace(cfg.SubjectTokenFile) == "":
 		return nil, fmt.Errorf("%w: subject token file", ErrInvalidConfig)
+	case !orgPattern.MatchString(cfg.OrgID):
+		return nil, fmt.Errorf("%w: org id", ErrInvalidConfig)
 	case cfg.PageLimit < 0 || cfg.PageLimit > maxPageLimit:
 		return nil, fmt.Errorf("%w: page limit", ErrInvalidConfig)
 	case cfg.MaxPages < 0:
 		return nil, fmt.Errorf("%w: max pages", ErrInvalidConfig)
 	}
-	c := &Client{base: cfg.BaseURL, endpoint: cfg.TokenEndpoint, subjectFile: cfg.SubjectTokenFile, limit: cfg.PageLimit, pages: cfg.MaxPages, now: cfg.Now}
+	c := &Client{base: cfg.BaseURL, endpoint: cfg.TokenEndpoint, subjectFile: cfg.SubjectTokenFile, org: cfg.OrgID, limit: cfg.PageLimit, pages: cfg.MaxPages, now: cfg.Now}
 	if c.limit == 0 {
 		c.limit = maxPageLimit
 	}
@@ -346,7 +355,7 @@ func (c *Client) exchange(ctx context.Context) (string, time.Duration, error) {
 	if err != nil {
 		return "", 0, fail(KindExchange)
 	}
-	form := url.Values{"grant_type": {exchangeGrant}, "subject_token": {subject}, "subject_token_type": {exchangeSubject}}
+	form := url.Values{"grant_type": {exchangeGrant}, "subject_token": {subject}, "subject_token_type": {exchangeSubject}, "resource": {"urn:acr:org:" + c.org}}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint.String(), strings.NewReader(form.Encode()))
 	if err != nil {
 		return "", 0, fail(KindExchange)
@@ -358,7 +367,7 @@ func (c *Client) exchange(ctx context.Context) (string, time.Duration, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", 0, &Error{Kind: KindExchange, Status: resp.StatusCode}
+		return "", 0, &Error{Kind: exchangeRefusalKind(resp), Status: resp.StatusCode}
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxExchangeBytes+1))
 	if err != nil || len(body) > maxExchangeBytes {
@@ -372,6 +381,29 @@ func (c *Client) exchange(ctx context.Context) (string, time.Duration, error) {
 		return "", 0, fail(KindExchange)
 	}
 	return out.AccessToken, time.Duration(out.ExpiresIn) * time.Second, nil
+}
+
+func exchangeRefusalKind(resp *http.Response) Kind {
+	if resp.StatusCode != http.StatusBadRequest {
+		return KindExchange
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxExchangeBytes+1))
+	if err != nil || len(body) > maxExchangeBytes {
+		return KindExchange
+	}
+	var out struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &out) != nil {
+		return KindExchange
+	}
+	switch out.Error {
+	case "invalid_request":
+		return KindInvalidRequest
+	case "invalid_target":
+		return KindInvalidTarget
+	}
+	return KindExchange
 }
 
 func printableToken(s string) bool {

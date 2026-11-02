@@ -61,7 +61,8 @@ NS="opsmove-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
 readonly NS
 KUBECONFIG_FILE="${OPS_MOVE_KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 
-# The UPGRADE leg's database also has the auth side of prod: schema auth owned by the auth migrator, the sessions table,
+# The UPGRADE leg's database also has the auth side of prod: schema auth owned by the auth migrator, its bookkeeping
+# table (the shape dho migrate postgres exempts), the sessions table,
 # and query-api's session read granted by the auth migrator (the auth-grants sessionReaders form). Its River step runs
 # with QUERY_API_DATABASE_ROLE and AUTH_PROXY_SESSIONS, as prod's does.
 readonly AUTH_DB="omu" QUERY_API="devhealth_query_api" AUTH_MIGRATOR="devhealth_auth_migrator"
@@ -249,6 +250,7 @@ install() { # DB: database and ClickHouse database, hook Secrets on the superuse
   hook_secret "sec-migrate-$1" "$1" "${OLD}"
   if [ "$1" = "${AUTH_DB}" ]; then
     pg -d "$1" -c "CREATE SCHEMA auth AUTHORIZATION ${AUTH_MIGRATOR}" -c "SET ROLE ${AUTH_MIGRATOR}" \
+      -c "CREATE TABLE auth.schema_migrations (version integer PRIMARY KEY, name text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())" \
       -c "CREATE TABLE auth.sessions (id uuid PRIMARY KEY, principal_id uuid NOT NULL, revoked_at timestamptz, legacy_token_version integer, secret_hash text)" \
       -c "INSERT INTO auth.sessions (id, principal_id) VALUES (gen_random_uuid(), gen_random_uuid())" \
       -c "GRANT USAGE ON SCHEMA auth TO ${QUERY_API}" \

@@ -16,6 +16,8 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authorization"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
+	"github.com/full-chaos/dev-health-ops/internal/auth/decisioncache"
 	"github.com/full-chaos/dev-health-ops/internal/auth/membership"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -36,13 +38,17 @@ type Config struct {
 	// Users reads public.users (is_active, and is_superuser or the platform
 	// role rule while platform roles are owned).
 	Users authapi.PGUsers
+	// CollectDependencies makes every snapshot say what it read (the aggregate
+	// ids and their revisions, in the same transaction) for the decision cache.
+	CollectDependencies bool
 }
 
 // Reader is an authapi.DecisionState over Postgres.
 type Reader struct {
-	pool   *pgxpool.Pool
-	schema authschema.ValidatedIdentifier
-	users  authapi.PGUsers
+	pool    *pgxpool.Pool
+	schema  authschema.ValidatedIdentifier
+	users   authapi.PGUsers
+	collect bool
 }
 
 // New validates cfg.
@@ -53,7 +59,7 @@ func New(cfg Config) (*Reader, error) {
 	if cfg.Schema == (authschema.ValidatedIdentifier{}) {
 		return nil, errors.New("decisionstate: a validated auth schema is required")
 	}
-	return &Reader{pool: cfg.Pool, schema: cfg.Schema, users: cfg.Users}, nil
+	return &Reader{pool: cfg.Pool, schema: cfg.Schema, users: cfg.Users, collect: cfg.CollectDependencies}, nil
 }
 
 func storeErr(what string, err error) error { return fmt.Errorf("%w: %s: %w", ErrStore, what, err) }
@@ -106,13 +112,144 @@ func (t *txReader) Snapshot(ctx context.Context, principal uuid.UUID, orgID stri
 		return nil, err
 	}
 	org, err := uuid.Parse(orgID)
+	read := orgID != "" && err == nil && org.String() == orgID
+	if read {
+		if err := t.organization(ctx, principal, org, s); err != nil {
+			return nil, err
+		}
+	}
+	if t.r.collect {
+		s.sets = setTypes(read, t.r.users.PlatformRolesOwned)
+		if s.deps, err = t.revisions(ctx, s.deps); err != nil {
+			return nil, err
+		}
+	}
+	return snapshotOut(s, t.r.collect), nil
+}
+
+// Unfed reads what no feed event covers (go-api writes public.users and public.memberships without an outbox event), for
+// the decision cache key. is_superuser counts only while auth does not own the platform roles: owned, the role comes from
+// auth's assignments, which the feed covers. A public membership row with a NULL role is no row, as effective() reads it.
+func (t *txReader) Unfed(ctx context.Context, principal uuid.UUID, orgID string) (authapi.UnfedState, error) {
+	u := authapi.UnfedState{NowUnixNano: t.now}
+	var active, superuser bool
+	err := t.tx.QueryRow(ctx, `SELECT COALESCE(is_active, false), COALESCE(is_superuser, false) FROM public.users WHERE id = $1`,
+		principal).Scan(&active, &superuser)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		superuser = false
+	case err != nil:
+		return authapi.UnfedState{}, storeErr("unfed user", err)
+	default:
+		u.UserFound, u.UserActive = true, active
+	}
+	if !t.r.users.PlatformRolesOwned {
+		u.Superuser = &superuser
+	}
+	org, err := uuid.Parse(orgID)
 	if orgID == "" || err != nil || org.String() != orgID {
-		return s, nil
+		return u, nil
 	}
-	if err := t.organization(ctx, principal, org, s); err != nil {
-		return nil, err
+	var role *string
+	err = t.tx.QueryRow(ctx, `SELECT role FROM public.memberships WHERE user_id = $1 AND org_id = $2`, principal, org).Scan(&role)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+	case err != nil:
+		return authapi.UnfedState{}, storeErr("unfed membership", err)
+	case role != nil:
+		u.MembershipRoleFound, u.MembershipRole = true, *role
 	}
-	return s, nil
+	return u, nil
+}
+
+// revisions reads the revision of each dependency in the transaction; an aggregate with no row yet is revision 0.
+func (t *txReader) revisions(ctx context.Context, deps []decisioncache.Dependency) ([]decisioncache.Dependency, error) {
+	if len(deps) == 0 {
+		return deps, nil
+	}
+	types, ids := make([]string, len(deps)), make([]string, len(deps))
+	for i, d := range deps {
+		types[i], ids[i] = d.AggregateType, d.AggregateID
+	}
+	rows, err := t.tx.Query(ctx, `SELECT aggregate_type, aggregate_id, revision FROM `+t.table("aggregate_revisions")+`
+WHERE (aggregate_type, aggregate_id) IN (SELECT * FROM unnest($1::text[], $2::text[]))`, types, ids)
+	if err != nil {
+		return nil, storeErr("revisions", err)
+	}
+	defer rows.Close()
+	found := map[string]int64{}
+	for rows.Next() {
+		var (
+			typ, id string
+			rev     int64
+		)
+		if err := rows.Scan(&typ, &id, &rev); err != nil {
+			return nil, storeErr("revisions", err)
+		}
+		found[typ+":"+id] = rev
+	}
+	if err := rows.Err(); err != nil {
+		return nil, storeErr("revisions", err)
+	}
+	return withRevisions(deps, found), nil
+}
+
+// principalDependencies are the principal and user aggregates of a principal, under the writers' wire ids.
+func principalDependencies(principal uuid.UUID) []decisioncache.Dependency {
+	return []decisioncache.Dependency{
+		{AggregateType: "principal", AggregateID: provisioning.WireID("principal", principal.String())},
+		{AggregateType: "user", AggregateID: provisioning.WireID("user", principal.String())},
+	}
+}
+
+// organizationDependencies are the organization, the auth membership row (when one exists) and each grant row read.
+func organizationDependencies(org uuid.UUID, membershipID *uuid.UUID, grants []uuid.UUID) []decisioncache.Dependency {
+	deps := []decisioncache.Dependency{{AggregateType: "organization", AggregateID: provisioning.WireID("organization", org.String())}}
+	if membershipID != nil {
+		deps = append(deps, decisioncache.Dependency{AggregateType: "membership", AggregateID: provisioning.WireID("membership", membershipID.String())})
+	}
+	for _, g := range grants {
+		deps = append(deps, decisioncache.Dependency{AggregateType: "resource_grant", AggregateID: provisioning.WireID("resource_grant", g.String())})
+	}
+	return deps
+}
+
+// withRevisions sets each dependency's revision from found ("type:id"); a missing one is 0.
+func withRevisions(deps []decisioncache.Dependency, found map[string]int64) []decisioncache.Dependency {
+	out := make([]decisioncache.Dependency, len(deps))
+	for i, d := range deps {
+		d.Revision = found[d.AggregateType+":"+d.AggregateID]
+		out[i] = d
+	}
+	return out
+}
+
+// setTypes are the aggregate types read as a set, where a row that did not exist is a dependency too: the platform role
+// assignments while auth owns them, and the organization's memberships and grants.
+func setTypes(org, owned bool) []string {
+	var sets []string
+	if owned {
+		sets = append(sets, "platform_role_assignment")
+	}
+	if org {
+		sets = append(sets, "membership", "resource_grant")
+	}
+	return sets
+}
+
+// collectedSnapshot is a snapshot that says what it read (authapi.DependencySnapshot).
+type collectedSnapshot struct{ *snapshot }
+
+func (c collectedSnapshot) Dependencies() []decisioncache.Dependency { return c.deps }
+func (c collectedSnapshot) SetTypes() []string                       { return c.sets }
+
+// snapshotOut gives the dependencies only when the reader collected them, so a decision whose reads were not recorded is
+// never stored.
+func snapshotOut(s *snapshot, collect bool) authorization.GrantSnapshot {
+	if collect {
+		return collectedSnapshot{s}
+	}
+	return s
 }
 
 // principal reads the principal's kind and disable mark, then, for a user,
@@ -128,6 +265,9 @@ func (t *txReader) principal(ctx context.Context, principal uuid.UUID, s *snapsh
 		return nil
 	case err != nil:
 		return storeErr("principal", err)
+	}
+	if t.r.collect {
+		s.deps = append(s.deps, principalDependencies(principal)...)
 	}
 	if kind != principalKindUser {
 		return nil
@@ -169,23 +309,38 @@ func (t *txReader) organization(ctx context.Context, principal, org uuid.UUID, s
 	if err != nil {
 		return storeErr("membership", err)
 	}
+	var membershipID *uuid.UUID
+	if t.r.collect {
+		var id uuid.UUID
+		err := t.tx.QueryRow(ctx, `SELECT id FROM `+t.table("memberships")+` WHERE organization_id = $1 AND principal_id = $2`, org, principal).Scan(&id)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+		case err != nil:
+			return storeErr("membership id", err)
+		default:
+			membershipID = &id
+		}
+	}
 	if m.Found {
 		s.membership = &authorization.Membership{OrgID: s.org, Role: m.Role, Status: authorization.ParseStatus(string(m.Status))}
 	}
-	rows, err := t.tx.Query(ctx, `SELECT role_key, resource_kind, resource_id, expires_at, revoked_at IS NOT NULL
+	rows, err := t.tx.Query(ctx, `SELECT id, role_key, resource_kind, resource_id, expires_at, revoked_at IS NOT NULL
 FROM `+t.table("resource_grants")+` WHERE principal_id = $1 AND organization_id = $2`, principal, org)
 	if err != nil {
 		return storeErr("grants", err)
 	}
 	defer rows.Close()
+	var grantIDs []uuid.UUID
 	for rows.Next() {
 		var (
+			id      uuid.UUID
 			g       authorization.Grant
 			expires *time.Time
 		)
-		if err := rows.Scan(&g.Role, &g.ResourceKind, &g.ResourceKey, &expires, &g.Revoked); err != nil {
+		if err := rows.Scan(&id, &g.Role, &g.ResourceKind, &g.ResourceKey, &expires, &g.Revoked); err != nil {
 			return storeErr("grants", err)
 		}
+		grantIDs = append(grantIDs, id)
 		g.OrgID = s.org
 		if expires != nil {
 			g.ExpiresAtUnixNano = expires.UnixNano()
@@ -194,6 +349,9 @@ FROM `+t.table("resource_grants")+` WHERE principal_id = $1 AND organization_id 
 	}
 	if err := rows.Err(); err != nil {
 		return storeErr("grants", err)
+	}
+	if t.r.collect {
+		s.deps = append(s.deps, organizationDependencies(org, membershipID, grantIDs)...)
 	}
 	return nil
 }
@@ -208,6 +366,9 @@ type snapshot struct {
 	membership   *authorization.Membership
 	grants       []authorization.Grant
 	now          int64
+	// deps and sets are what the snapshot read, for the decision cache (Reader.collect).
+	deps []decisioncache.Dependency
+	sets []string
 }
 
 func (s *snapshot) PrincipalStatus() authorization.Status { return s.principal }

@@ -140,8 +140,16 @@ channel.
   event asks for a catch-up (the floor applies it again), a catch-up or a failed
   `InvalidateAll` of a (re)subscribe retries with the backoff, and
   `subscription_up` stays 0 until the `InvalidateAll` and the read succeeded.
-  No decision cache exists yet (5.8), so the invalidator is a no-op and the
-  consumer keeps its watermarks and metrics. Metrics:
+  Readiness is per confirmation: every confirmed subscribe (also a client
+  reconnect inside one subscription) sets `subscription_up` to 0, and only the
+  catch-up of the latest confirmation sets it to 1 again.
+  The invalidator is the decision cache (`internal/auth/decisioncache`) that
+  `POST /v1/authorize` and `:batch` ask while the subscription is ready: an
+  allow is stored with the aggregates and revisions its decision read, and an
+  event of one of them evicts it. With the feed off there is no cache. Metrics
+  of the cache: `devhealth_auth_decision_cache_lookups_total{result=hit|miss|bypass}`,
+  `devhealth_auth_decision_cache_puts_total{result}` (the closed `decisioncache.PutResults` set)
+  and `devhealth_auth_decision_cache_entries`. Metrics of the feed:
   `devhealth_auth_revision_feed_events_total{disposition=apply|ignore|gap|dropped|invalidate_failed}` (`dropped`: a live message or a catch-up floor refused before the cursor, because it is malformed or its revision is outside 1..2^53-1; the cursor never moves on it; `invalidate_failed`: the invalidation returned an error, the event is not applied and is retried),
   `devhealth_auth_revision_feed_resync_total{cause=gap|resubscribe}` and
   `devhealth_auth_revision_feed_subscription_up` (1 while subscribed and caught up). No

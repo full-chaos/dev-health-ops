@@ -1,6 +1,7 @@
 package scripts_test
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -17,10 +18,17 @@ var digestA = "registry.example/auth-migrate@sha256:" + strings.Repeat("a", 64)
 var digestB = "registry.example/auth-migrate@sha256:" + strings.Repeat("b", 64)
 var digestS = "registry.example/auth-service@sha256:" + strings.Repeat("c", 64)
 
+// k3sRun runs the script with a kubectl that refuses every call and a kubeconfig that does not exist, so that no defect of the
+// script, and no red run of an unfixed one, can reach the cluster of a host that has /etc/rancher/k3s/k3s.yaml.
 func k3sRun(t *testing.T, env []string, args ...string) cmdResult {
 	t.Helper()
 	root := rootOf(t)
-	return cmdSpec{dir: root, env: append([]string{shimBasePath()}, env...)}.run("bash", append([]string{filepath.Join(root, k3sScript)}, args...)...)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "kubectl"), []byte("#!/usr/bin/env bash\necho 'kubectl is denied in this cell' >&2\nexit 99\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	base := []string{strings.Replace(shimBasePath(), "PATH=", "PATH="+dir+":", 1), "AUTH_MOVE_KUBECONFIG=" + filepath.Join(dir, "no-such-k3s.yaml")}
+	return cmdSpec{dir: root, env: append(base, env...)}.run("bash", append([]string{filepath.Join(root, k3sScript)}, args...)...)
 }
 
 func TestAuthOwnerMoveK3sPrintPlanRendersThePinOnlyWhenOwnerRoleIsSet(t *testing.T) {
@@ -113,5 +121,114 @@ func TestAuthOwnerMoveK3sGivesEveryClusterHelmCallTheKubeconfig(t *testing.T) {
 	}
 	if clusterCalls < 2 {
 		t.Errorf("found %d cluster helm calls; the cell reads nothing", clusterCalls)
+	}
+}
+
+// A stub kubectl and helm stand in for the cluster: they log every call and answer from the environment. No cluster is
+// contacted; what the script does before and after its first namespace call is what these cells hold.
+const k3sStubKubectl = `#!/usr/bin/env bash
+echo "$*" >>"$STUB_LOG"
+case "$*" in
+  *"get nodes"*) printf '%s' "${STUB_NODE_VERSION:-}" ;;
+  *"get namespace"*) [ "${STUB_NS_EXISTS:-0}" = 1 ] && exit 0 || exit 1 ;;
+  *"create namespace"*) exit "${STUB_CREATE_RC:-0}" ;;
+  *"delete namespace"*) exit 0 ;;
+  *) exit 1 ;;
+esac
+`
+
+func k3sStubRun(t *testing.T, env []string, args ...string) (cmdResult, string) {
+	t.Helper()
+	for _, tool := range []string{"jq", "openssl", "envsubst", "od"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("%s is not installed", tool)
+		}
+	}
+	root := rootOf(t)
+	dir := t.TempDir()
+	for name, body := range map[string]string{"kubectl": k3sStubKubectl, "helm": "#!/usr/bin/env bash\nexit 1\n"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	kubeconfig := filepath.Join(dir, "k3s-test.yaml")
+	if err := os.WriteFile(kubeconfig, []byte("apiVersion: v1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	log := filepath.Join(dir, "calls.log")
+	if err := os.WriteFile(log, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base := []string{
+		strings.Replace(shimBasePath(), "PATH=", "PATH="+dir+":", 1), "STUB_LOG=" + log, "AUTH_MOVE_KUBECONFIG=" + kubeconfig,
+		"AUTH_MOVE_IMAGE_MIGRATE=" + digestA, "AUTH_MOVE_IMAGE_MIGRATE_PRIOR=" + digestB, "AUTH_MOVE_IMAGE_SERVICE=" + digestS,
+	}
+	res := cmdSpec{dir: root, env: append(base, env...)}.run("bash", append([]string{filepath.Join(root, k3sScript)}, args...)...)
+	return res, readText(t, log)
+}
+
+func TestAuthOwnerMoveK3sRefusesAClusterThatIsNotK3sBeforeAnyNamespaceCall(t *testing.T) {
+	res, calls := k3sStubRun(t, []string{"STUB_NODE_VERSION=v1.30.2"})
+	if res.code == 0 || !strings.Contains(res.stderr, "is not a k3s cluster") {
+		t.Errorf("a kind-like kubelet version behind a file named k3s: exit %d, stderr %q", res.code, res.stderr)
+	}
+	if strings.Contains(calls, "create namespace") || strings.Contains(calls, "delete") {
+		t.Errorf("the script changed the cluster before refusing:\n%s", calls)
+	}
+	res, calls = k3sStubRun(t, []string{"STUB_NODE_VERSION=v1.30.2+k3s1"})
+	if strings.Contains(res.stderr, "is not a k3s cluster") || !strings.Contains(calls, "create namespace authmove-") {
+		t.Errorf("a k3s kubelet version was refused or never reached the namespace: stderr %q, calls:\n%s", res.stderr, calls)
+	}
+}
+
+func TestAuthOwnerMoveK3sDeletesOnlyTheNamespaceItCreated(t *testing.T) {
+	k3s := "STUB_NODE_VERSION=v1.30.2+k3s1"
+	res, calls := k3sStubRun(t, []string{k3s, "STUB_NS_EXISTS=1"})
+	if res.code == 0 || !strings.Contains(res.stderr, "exists") || strings.Contains(calls, "delete namespace") {
+		t.Errorf("a namespace that exists: exit %d, stderr %q, calls:\n%s", res.code, res.stderr, calls)
+	}
+	_, calls = k3sStubRun(t, []string{k3s, "STUB_CREATE_RC=1"})
+	if strings.Contains(calls, "delete namespace") {
+		t.Errorf("a failed create was followed by a delete:\n%s", calls)
+	}
+	_, calls = k3sStubRun(t, []string{k3s})
+	if !strings.Contains(calls, "create namespace authmove-") || !strings.Contains(calls, "delete namespace authmove-") {
+		t.Errorf("a namespace the run created was not deleted on failure:\n%s", calls)
+	}
+}
+
+func TestAuthOwnerMoveK3sRefusesMalformedImagePathsAndTheSameDigestUnderAMirror(t *testing.T) {
+	good := "registry.example/auth-migrate@sha256:" + strings.Repeat("a", 64)
+	mirror := "mirror.example/other/auth-migrate@sha256:" + strings.Repeat("a", 64)
+	slash := "registry.example//auth-migrate@sha256:" + strings.Repeat("a", 64)
+	for name, env := range map[string][]string{
+		"double slash, migrate": {"AUTH_MOVE_IMAGE_MIGRATE=" + slash, "AUTH_MOVE_IMAGE_MIGRATE_PRIOR=" + digestB, "AUTH_MOVE_IMAGE_SERVICE=" + digestS},
+		"double slash, prior":   {"AUTH_MOVE_IMAGE_MIGRATE=" + digestA, "AUTH_MOVE_IMAGE_MIGRATE_PRIOR=" + slash, "AUTH_MOVE_IMAGE_SERVICE=" + digestS},
+		"double slash, service": {"AUTH_MOVE_IMAGE_MIGRATE=" + digestA, "AUTH_MOVE_IMAGE_MIGRATE_PRIOR=" + digestB, "AUTH_MOVE_IMAGE_SERVICE=" + slash},
+		"trailing slash":        {"AUTH_MOVE_IMAGE_MIGRATE=registry.example/@sha256:" + strings.Repeat("a", 64), "AUTH_MOVE_IMAGE_MIGRATE_PRIOR=" + digestB, "AUTH_MOVE_IMAGE_SERVICE=" + digestS},
+	} {
+		t.Run(name, func(t *testing.T) {
+			res := k3sRun(t, env)
+			if res.code == 0 || !strings.Contains(res.stderr, "is not a registry digest reference") {
+				t.Fatalf("exit %d, stderr %q; want a refusal naming the digest rule", res.code, res.stderr)
+			}
+		})
+	}
+	res := k3sRun(t, []string{"AUTH_MOVE_IMAGE_MIGRATE=" + good, "AUTH_MOVE_IMAGE_MIGRATE_PRIOR=" + mirror, "AUTH_MOVE_IMAGE_SERVICE=" + digestS})
+	if res.code == 0 || !strings.Contains(res.stderr, "prior auth-migrate image equals the tree's") {
+		t.Errorf("the same digest under another repository: exit %d, stderr %q", res.code, res.stderr)
+	}
+}
+
+func TestAuthOwnerMoveK3sHasNoKeepFlagAndChecksTheExactPredecessorAndTypeACLs(t *testing.T) {
+	if res := k3sRun(t, nil, "--keep"); res.code == 0 || !strings.Contains(res.stderr, "usage:") {
+		t.Errorf("--keep: exit %d, stderr %q; want it refused as an unknown argument", res.code, res.stderr)
+	}
+	script := readText(t, filepath.Join(rootOf(t), k3sScript))
+	if !strings.Contains(script, "expected_base") {
+		t.Error("leg 2 does not compare the base state with the exact predecessor of the head lineage")
+	}
+	if !strings.Contains(readText(t, filepath.Join(rootOf(t), "ci/auth_k8s/acl_snapshot.sql")), "pg_type") {
+		t.Error("the ACL snapshot has no type arm")
 	}
 }

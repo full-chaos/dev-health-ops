@@ -144,7 +144,7 @@ func samlDomainRun(t *testing.T, email string, linked bool) ssoAnswer {
 	idp := newSAMLIdP(t)
 	orgID := seedOrg(t, ctx, st.pool, "enterprise")
 	config := fmt.Sprintf(`{"entity_id":%q,"sso_url":"https://idp.test/sso","certificate":%q,"sp_entity_id":%q,"sp_acs_url":%q}`,
-		idp.idp.MetadataURL.String(), idp.certConfigValue(), nameIDSP, "https://sp.test/api/v1/auth/saml/{provider_id}/acs")
+		idp.EntityID(), idp.certConfigValue(), nameIDSP, "https://sp.test/api/v1/auth/saml/{provider_id}/acs")
 	domains := `["allowed.example"]`
 	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
 		protocol: "saml", status: "active", config: config, autoProvision: true, allowedDomains: &domains,

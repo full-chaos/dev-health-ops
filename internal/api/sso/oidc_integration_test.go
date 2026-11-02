@@ -21,8 +21,6 @@ package sso_test
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -36,7 +34,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -46,128 +43,34 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/sso"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/idpstub"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
 
 const testJWTKey = "oidc-6658-test-" + "0123456789abcdef0123456789abcdef"
 
-// fakeIdP is a minimal, real (RSA-signed) OIDC provider fixture: a JWKS
-// endpoint, a token endpoint that mints an id_token embedding whatever
-// nonce the test tells it to for the next exchange, and a userinfo
-// endpoint. One instance is shared by every subtest that needs a live
-// exchange; nextNonce/nextnEmail are set immediately before each callback.
+// fakeIdP is the shared idpstub OpenID provider on a plain HTTP server. It answers any code with the user and nonce
+// the test tells it to for the next exchange: set is called immediately before each callback.
 type fakeIdP struct {
-	key      *rsa.PrivateKey
-	server   *httptest.Server
-	mu       sync.Mutex
-	nonce    string
-	email    string
-	fullName string
-	sub      string
-	// subOverride, when set, rewrites the claims of both the id_token and the userinfo answer, so a test can drop
-	// "sub" or make it a non-string.
-	subOverride func(claims map[string]any)
-	// receivedVerifier is the code_verifier the token endpoint actually
-	// received on the last exchange, for the PKCE round-trip assertion.
-	receivedVerifier string
-	// receivedSecret is the client_secret actually received, for the
-	// decrypt-and-forward assertion.
-	receivedSecret string
+	*idpstub.OIDC
+	server *httptest.Server
 }
 
 func startFakeIdP(t *testing.T) *fakeIdP {
 	t.Helper()
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	stub, err := idpstub.NewOIDC(idpstub.OIDCOptions{AcceptAnyCode: true, NoPKCE: true, MinimalDiscovery: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	idp := &fakeIdP{key: key}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/jwks", idp.serveJWKS)
-	mux.HandleFunc("/token", idp.serveToken)
-	mux.HandleFunc("/userinfo", idp.serveUserinfo)
-	idp.server = httptest.NewServer(mux)
+	idp := &fakeIdP{OIDC: stub, server: httptest.NewServer(stub.Handler())}
+	stub.SetBaseURL(idp.server.URL)
+	stub.SetIssuer(idp.server.URL)
 	t.Cleanup(idp.server.Close)
 	return idp
 }
 
 func (idp *fakeIdP) set(nonce, email, fullName, sub string) {
-	idp.mu.Lock()
-	defer idp.mu.Unlock()
-	idp.nonce, idp.email, idp.fullName, idp.sub = nonce, email, fullName, sub
-}
-
-func b64url(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
-
-func (idp *fakeIdP) serveJWKS(w http.ResponseWriter, r *http.Request) {
-	pub := idp.key.PublicKey
-	jwk := map[string]any{
-		"kty": "RSA", "use": "sig", "alg": "RS256", "kid": "test-key-1",
-		"n": b64url(pub.N.Bytes()),
-		"e": b64url(bigIntToBytes(pub.E)),
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"keys": []any{jwk}})
-}
-
-func bigIntToBytes(e int) []byte {
-	// Standard RSA public exponent 65537 = 0x010001.
-	if e == 65537 {
-		return []byte{0x01, 0x00, 0x01}
-	}
-	buf := []byte{byte(e >> 16), byte(e >> 8), byte(e)}
-	return buf
-}
-
-func (idp *fakeIdP) serveToken(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	idp.mu.Lock()
-	idp.receivedVerifier = r.Form.Get("code_verifier")
-	idp.receivedSecret = r.Form.Get("client_secret")
-	nonce, email, fullName, sub := idp.nonce, idp.email, idp.fullName, idp.sub
-	override := idp.subOverride
-	idp.mu.Unlock()
-
-	now := time.Now()
-	claims := jwt.MapClaims{
-		"iss": idp.server.URL, "aud": r.Form.Get("client_id"), "sub": sub,
-		"exp": now.Add(5 * time.Minute).Unix(), "iat": now.Unix(), "nonce": nonce,
-		"email": email, "name": fullName,
-	}
-	if override != nil {
-		override(claims)
-	}
-	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-	token.Header["kid"] = "test-key-1"
-	idToken, err := token.SignedString(idp.key)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"access_token": "test-access-token", "id_token": idToken, "token_type": "Bearer", "expires_in": 300,
-	})
-}
-
-func (idp *fakeIdP) serveUserinfo(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("Authorization") != "Bearer test-access-token" {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	idp.mu.Lock()
-	email, fullName, sub := idp.email, idp.fullName, idp.sub
-	override := idp.subOverride
-	idp.mu.Unlock()
-	answer := map[string]any{"email": email, "name": fullName, "sub": sub}
-	if override != nil {
-		override(answer)
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(answer)
+	idp.SetNext(idpstub.OIDCUser{Sub: sub, Email: email, Name: fullName}, nonce)
 }
 
 // testClock is a settable clock: real time until a test freezes/advances
@@ -399,9 +302,7 @@ func TestOIDCAuthorizeAndCallbackFullRoundTrip(t *testing.T) {
 	// The PKCE round trip actually ran: the verifier the callback sent to
 	// the token endpoint hashes to the challenge the authorize step gave
 	// the caller.
-	idp.mu.Lock()
-	verifier, secret := idp.receivedVerifier, idp.receivedSecret
-	idp.mu.Unlock()
+	verifier, secret := idp.Received()
 	sum := sha256.Sum256([]byte(verifier))
 	if got := base64.RawURLEncoding.EncodeToString(sum[:]); got != codeChallenge {
 		t.Fatalf("PKCE: code_verifier %q hashes to %q, want challenge %q", verifier, got, codeChallenge)

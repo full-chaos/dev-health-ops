@@ -13,7 +13,9 @@ import (
 	"go.opentelemetry.io/otel/metric"
 
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authorization"
+	"github.com/full-chaos/dev-health-ops/internal/auth/decisioncache"
 	"github.com/full-chaos/dev-health-ops/internal/auth/delegationinput"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
@@ -100,6 +102,13 @@ type DecisionTx interface {
 	// Snapshot is the principal's state for one organization ("" for a
 	// platform decision), with the transaction's clock.
 	Snapshot(ctx context.Context, principal uuid.UUID, orgID string) (authorization.GrantSnapshot, error)
+	// Unfed is what no feed event covers, with the transaction's clock: read
+	// on every call while the decision cache is in use.
+	Unfed(ctx context.Context, principal uuid.UUID, orgID string) (UnfedState, error)
+	// StateVersion is a digest of the versions of the rows a decision of the
+	// pair depends on, read on every call while the decision cache is in use:
+	// a committed change is a new key before its feed event arrives.
+	StateVersion(ctx context.Context, principal uuid.UUID, orgID string) (string, error)
 }
 
 // DecisionState runs fn in one READ ONLY REPEATABLE READ transaction, so every
@@ -115,16 +124,24 @@ type AuthorizeDeps struct {
 	References *PrincipalReferences
 	State      DecisionState
 	Evaluator  *authorization.Evaluator
+	// Audit writes the audit rows of one call's high-risk decisions in one
+	// transaction, all or none.
+	Audit func(ctx context.Context, events []audit.AuditEvent) error
 	// ProfileRows is the endpoint-profile document a route's row is looked up
 	// in; nil reads the embedded document.
 	ProfileRows []byte
 	Logger      *slog.Logger
 	Meter       metric.Meter
+	// Cache is the decision cache, nil without the revision feed. It is asked
+	// only while Ready reports the feed confirmed and caught up.
+	Cache DecisionCache
+	Ready func() bool
 }
 
 type authorizeHandlers struct {
 	AuthorizeDeps
 	rec        recorder
+	cache      cacheMetrics
 	decisionID func() (string, error)
 }
 
@@ -134,6 +151,9 @@ type authorizeHandlers struct {
 func AuthorizeRoutes(deps AuthorizeDeps) ([]httpapi.Route, error) {
 	if deps.State == nil || deps.Evaluator == nil {
 		return nil, errors.New("authapi: the authorize routes need decision state and an evaluator")
+	}
+	if deps.Audit == nil {
+		return nil, errors.New("authapi: the authorize routes need an audit sink for high-risk decisions")
 	}
 	if deps.Logger == nil {
 		deps.Logger = slog.Default()
@@ -150,7 +170,11 @@ func AuthorizeRoutes(deps AuthorizeDeps) ([]httpapi.Route, error) {
 	if rows == nil {
 		rows = authv1.AuthServiceEndpointProfiles
 	}
-	h := authorizeHandlers{AuthorizeDeps: deps, rec: rec, decisionID: newDecisionID}
+	cache, err := newCacheMetrics(meter, deps.Cache)
+	if err != nil {
+		return nil, err
+	}
+	h := authorizeHandlers{AuthorizeDeps: deps, rec: rec, cache: cache, decisionID: newDecisionID}
 	var routes []httpapi.Route
 	for _, route := range []httpapi.Route{
 		{Method: http.MethodPost, Pattern: PatternAuthorize, Handler: http.HandlerFunc(h.authorize), MaxBodyBytes: maxAuthorizeBody, Admit: h.admit(opAuthorize)},
@@ -232,6 +256,14 @@ type authorizeItem struct {
 	decision  authorization.Decision
 	now       int64
 	delegated bool
+	// orgKnown is true when the question's organization is a canonical uuid
+	// the decision transaction found.
+	orgKnown bool
+	// cache is the item's lookup result; key and read are set on a miss whose
+	// snapshot said what it read.
+	cache string
+	key   decisioncache.Key
+	read  *decisioncache.Read
 }
 
 // decide authenticates the caller, decodes the body, resolves every principal
@@ -287,7 +319,14 @@ func (h authorizeHandlers) decide(w http.ResponseWriter, r *http.Request, op str
 		}
 		items[i] = authorizeItem{question: q, principal: p}
 	}
-	err = h.State.Read(ctx, func(tx DecisionTx) error { return h.evaluate(ctx, tx, resolved, items) })
+	// The stamp is taken BEFORE the transaction's snapshot: an event the
+	// snapshot misses is later than the stamp, so a Put of what it read misses.
+	cached := h.Cache != nil && h.Ready != nil && h.Ready()
+	var stamp decisioncache.Stamp
+	if cached {
+		stamp = h.Cache.Begin()
+	}
+	err = h.State.Read(ctx, func(tx DecisionTx) error { return h.evaluate(ctx, tx, resolved, items, cached) })
 	switch {
 	case errors.Is(err, errAuthorizeReferenceRefused):
 		h.rec.refuse(w, r, op, unauthorized(reasonPrincipalReferenceInvalid), nil)
@@ -296,6 +335,13 @@ func (h authorizeHandlers) decide(w http.ResponseWriter, r *http.Request, op str
 		h.rec.refuse(w, r, op, unavailable(reasonStoreUnavailable), err)
 		return nil, false
 	}
+	for i := range items {
+		h.cache.lookup(ctx, items[i].cache)
+		if read := items[i].read; read != nil {
+			read.Stamp = stamp
+			h.cache.put(ctx, h.Cache.Put(items[i].key, items[i].decision, *read))
+		}
+	}
 	out := make([]decisionDocument, len(items))
 	for i, item := range items {
 		doc, err := h.document(item)
@@ -303,7 +349,8 @@ func (h authorizeHandlers) decide(w http.ResponseWriter, r *http.Request, op str
 			h.rec.refuse(w, r, op, unavailable(reasonDependency), err)
 			return nil, false
 		}
-		h.Logger.InfoContext(ctx, "authorize decision", "decision_id", doc.DecisionID, "allowed", doc.Allowed, "reason_code", doc.ReasonCode)
+		h.Logger.InfoContext(ctx, "authorize decision", "decision_id", doc.DecisionID, "allowed", doc.Allowed, "reason_code", doc.ReasonCode,
+			"cache", item.cache)
 		// The owner-exemption audit event is written by a follow-up change,
 		// outside this read-only transaction; until then the exemption is only
 		// this log line.
@@ -312,6 +359,10 @@ func (h authorizeHandlers) decide(w http.ResponseWriter, r *http.Request, op str
 				"organization_id", a.OrganizationID, "action", a.Action, "audit_reason", a.Reason)
 		}
 		out[i] = doc
+	}
+	if err := h.auditHighRisk(ctx, items, out); err != nil {
+		h.rec.refuse(w, r, op, unavailable(reasonStoreUnavailable), err)
+		return nil, false
 	}
 	return out, true
 }
@@ -327,8 +378,11 @@ type referencedSession struct {
 // evaluate checks each referenced session once (and reads the actor of a
 // delegated one once), then decides each item over its (principal,
 // organization, session) snapshot, read once per triple. A delegated session
-// is live only while its delegating session is.
-func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved map[string]ReferencedPrincipal, items []authorizeItem) error {
+// is live only while its delegating session is. With the cache in use, an item
+// of a session that is not delegated reads its unfed values and asks the cache
+// first; a hit reads no snapshot. A delegated session is never cached.
+func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved map[string]ReferencedPrincipal, items []authorizeItem,
+	cached bool) error {
 	sessions := map[string]referencedSession{}
 	for ref, p := range resolved {
 		sid, err := session.ParseWireSessionID(p.SessionID)
@@ -356,6 +410,8 @@ func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved
 		session   uuid.UUID
 	}
 	snapshots := map[triple]authorization.GrantSnapshot{}
+	unfed := map[triple]UnfedState{}
+	versions := map[triple]string{}
 	for i := range items {
 		q := items[i].question
 		rs := sessions[q.PrincipalReference]
@@ -363,6 +419,34 @@ func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved
 		key := triple{principal: items[i].principal.ID, org: q.OrganizationID}
 		if delegated {
 			key.session = rs.id
+		}
+		items[i].cache = cacheBypass
+		if cached && !delegated {
+			u, ok := unfed[key]
+			if !ok {
+				var err error
+				if u, err = tx.Unfed(ctx, key.principal, key.org); err != nil {
+					return err
+				}
+				unfed[key] = u
+			}
+			if u.NowUnixNano <= 0 {
+				return errAuthorizeStateFailure
+			}
+			version, ok := versions[key]
+			if !ok {
+				var err error
+				if version, err = tx.StateVersion(ctx, key.principal, key.org); err != nil {
+					return err
+				}
+				versions[key] = version
+			}
+			items[i].key = cacheKey(items[i], u, version)
+			if d, hit := h.Cache.Get(items[i].key); hit {
+				items[i].decision, items[i].now, items[i].cache = d, u.NowUnixNano, cacheHit
+				continue
+			}
+			items[i].cache = cacheMiss
 		}
 		snap, ok := snapshots[key]
 		if !ok {
@@ -393,7 +477,18 @@ func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved
 		if _, onWire := wireReasonCode(d.Reason); !onWire || !obligationsFit(d, delegated) {
 			return errAuthorizeStateFailure
 		}
+		if items[i].cache == cacheMiss {
+			// A decision_bound allow is good for TTL from its decision while
+			// the cache (and so the feed) bounds it; otherwise it expires now.
+			if d.Allowed && d.ExpiresAtUnixNano == 0 && decisionBound(q.Action, d) {
+				d.ExpiresAtUnixNano = snap.NowUnixNano() + int64(decisioncache.TTL)
+			}
+			if ds, ok := snap.(DependencySnapshot); ok {
+				items[i].read = &decisioncache.Read{Dependencies: ds.Dependencies(), SetTypes: ds.SetTypes()}
+			}
+		}
 		items[i].decision, items[i].now, items[i].delegated = d, snap.NowUnixNano(), delegated
+		items[i].orgKnown = knownOrganization(q.OrganizationID, snap)
 	}
 	return nil
 }

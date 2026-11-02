@@ -117,11 +117,22 @@ func (t fakeDecisionTx) Snapshot(_ context.Context, principal uuid.UUID, org str
 	return &fakeSnapshot{now: authorizeNow}, nil
 }
 
+// StateVersion reads nothing the route without a cache asks for.
+func (t fakeDecisionTx) StateVersion(context.Context, uuid.UUID, string) (string, error) {
+	return "", nil
+}
+
+// Unfed reads nothing the route without a cache asks for.
+func (t fakeDecisionTx) Unfed(context.Context, uuid.UUID, string) (UnfedState, error) {
+	return UnfedState{NowUnixNano: authorizeNow}, nil
+}
+
 var authorizeNow = time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC).UnixNano()
 
 type authorizeHandlerFixture struct {
 	*authorizeFixture
 	state     *fakeDecisionState
+	audit     *fakeAudit
 	principal uuid.UUID
 	org       string
 	reference string
@@ -166,8 +177,9 @@ func newAuthorizeHandlerFixture(t *testing.T) *authorizeHandlerFixture {
 			{principal, ""}: {principal: authorization.StatusActive, now: authorizeNow},
 		},
 	}
+	sink := &fakeAudit{}
 	routes, err := AuthorizeRoutes(AuthorizeDeps{
-		Callers: f.callers(), References: f.references(), State: state, Evaluator: authorization.NewEvaluator(),
+		Callers: f.callers(), References: f.references(), State: state, Evaluator: authorization.NewEvaluator(), Audit: sink.write,
 		ProfileRows: authorizeProfileDoc(t, PatternAuthorize, PatternAuthorizeBatch),
 	})
 	if err != nil {
@@ -181,7 +193,7 @@ func newAuthorizeHandlerFixture(t *testing.T) *authorizeHandlerFixture {
 		t.Fatal(err)
 	}
 	byPattern := map[string]http.Handler{PatternAuthorize: server.Handler(), PatternAuthorizeBatch: server.Handler()}
-	return &authorizeHandlerFixture{authorizeFixture: f, state: state, principal: principal, org: org, reference: reference, sid: sessionID, routes: byPattern}
+	return &authorizeHandlerFixture{authorizeFixture: f, state: state, audit: sink, principal: principal, org: org, reference: reference, sid: sessionID, routes: byPattern}
 }
 
 func (h *authorizeHandlerFixture) question(action, kind, key, org string) map[string]any {
@@ -254,7 +266,7 @@ var decisionIDShape = regexp.MustCompile(`^dec_[A-Za-z0-9_-]{26}$`)
 
 func TestAuthorizeRoutesStayDarkWithoutTheirRows(t *testing.T) {
 	f := newAuthorizeFixture(t)
-	deps := AuthorizeDeps{Callers: f.callers(), References: f.references(), State: &fakeDecisionState{}, Evaluator: authorization.NewEvaluator()}
+	deps := AuthorizeDeps{Callers: f.callers(), References: f.references(), State: &fakeDecisionState{}, Evaluator: authorization.NewEvaluator(), Audit: (&fakeAudit{}).write}
 	routes, err := AuthorizeRoutes(deps)
 	if err != nil {
 		t.Fatal(err)

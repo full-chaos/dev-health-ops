@@ -63,6 +63,13 @@ var allowedAttributeKeys = map[string]struct{}{
 	"purged_email_verification_tokens": {},
 	"purged_password_reset_tokens":     {},
 	"run_id":                           {},
+
+	// The auth.authorize.high_risk_decided row: the decision's id and reason
+	// code (the wire codes, not the audit reason_code set) and the type of
+	// the resource asked about.
+	"decision_id":          {},
+	"decision_reason_code": {},
+	"resource_type":        {},
 }
 
 // ValidateAttributes refuses an audit attribute map that has a key outside the
@@ -174,7 +181,7 @@ var attributeVocabulary = map[string][]string{
 		"email_collision", "signup_unavailable", "identity_conflict",
 		"provider_already_linked", "expired", "principal_not_found", "malformed", "compromised",
 		"invite_created", "invite_accepted", "invite_revoked", "restore_fence_bootstrap",
-		"workload_enabled", "service_account_owner_changed",
+		"workload_enabled", "service_account_owner_changed", "domain_revoked", "owner_request",
 	},
 	"target_kind": {
 		"principal", "organization", "membership", "role_assignment", "resource_grant", "credential",
@@ -182,6 +189,19 @@ var attributeVocabulary = map[string][]string{
 		"signing_key", "invite",
 	},
 	"resource_kind": {"organization", "repository", "project", "team"},
+	// decision_reason_code is authorization_decision.v1's reason_code set (reason-codes.json decision_reason_code).
+	"decision_reason_code": {
+		"allowed_by_membership_default", "allowed_by_repository_grant", "allowed_by_role", "delegation_invalid", "grant_absent",
+		"grant_expired", "grant_revoked", "impersonation_denied", "invalid_request", "membership_inactive", "no_membership",
+		"org_mismatch", "organization_inactive", "platform_role_absent", "principal_inactive", "repository_not_granted",
+		"resource_mismatch", "role_lacks_action", "role_scope_mismatch", "role_unknown", "service_account_inactive",
+		"unknown_action", "workload_action_denied", "workload_audience_denied",
+	},
+	// resource_type is authorization_request.v1's resource type set.
+	"resource_type": {
+		"organization", "repository", "membership", "service_account", "grant", "credential", "session", "signing_key",
+		"subscription", "platform",
+	},
 	// previous_role and new_role are the organization roles of roles.v1.json on a membership role change.
 	"previous_role":   {"viewer", "member", "admin", "owner"},
 	"new_role":        {"viewer", "member", "admin", "owner"},
@@ -228,7 +248,9 @@ func AttributeVocabulary() map[string][]string {
 
 // attributeIDRules are the id-valued keys and the rule each value must satisfy.
 var attributeIDRules = map[string]*regexp.Regexp{
-	"target_id":      uuidPattern,
+	"target_id": uuidPattern,
+	// decision_id is a server-minted authorize decision id.
+	"decision_id":    regexp.MustCompile(`^dec_[A-Za-z0-9_-]{26}$`),
 	"credential_id":  uuidPattern,
 	"resource_id":    regexp.MustCompile(`^(\*|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*)$`),
 	"role_key":       regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*){1,3}$`),

@@ -1,0 +1,727 @@
+//go:build integration
+
+package outboxprojection
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
+	"github.com/full-chaos/dev-health-ops/internal/auth/pushlifecycle"
+	"github.com/full-chaos/dev-health-ops/internal/auth/restorefence"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
+)
+
+type env struct {
+	admin    *pgxpool.Pool
+	runtime  *pgxpool.Pool
+	schema   authschema.ValidatedIdentifier
+	identity *identity.Store
+	engine   *Engine
+}
+
+var (
+	closers []func()
+	fenced  = map[bool]*env{}
+	mu      sync.Mutex
+)
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	for i := len(closers) - 1; i >= 0; i-- {
+		closers[i]()
+	}
+	os.Exit(code)
+}
+
+func getEnv(t *testing.T, fence bool) *env {
+	t.Helper()
+	mu.Lock()
+	defer mu.Unlock()
+	if e := fenced[fence]; e != nil {
+		return e
+	}
+	e, err := newEnv(t, fence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fenced[fence] = e
+	return e
+}
+
+func newEnv(t *testing.T, fence bool) (*env, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		return nil, err
+	}
+	closers = append(closers, func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_ = instance.Close(closeCtx)
+	})
+	admin, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		return nil, err
+	}
+	closers = append(closers, admin.Close)
+	pgschema.Apply(ctx, t, admin)
+	role, err := containers.RoleName("outboxprojection_runtime", instance)
+	if err != nil {
+		return nil, err
+	}
+	const password = "outboxprojection-test-only-not-a-credential"
+	if _, err := admin.Exec(ctx, fmt.Sprintf(`CREATE ROLE %q LOGIN PASSWORD '%s'`, role, password)); err != nil {
+		return nil, err
+	}
+	closers = append(closers, func() { containers.DropRole(admin, role, func(string, ...any) {}) })
+	if _, err := authschema.Apply(ctx, admin, authschema.Options{Schema: "auth", RuntimeRole: role, UsersOwned: true}); err != nil {
+		return nil, err
+	}
+	cfg := admin.Config().Copy()
+	cfg.ConnConfig.User, cfg.ConnConfig.Password = role, password
+	runtime, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	closers = append(closers, runtime.Close)
+	schema, err := authschema.NewValidatedIdentifier("auth")
+	if err != nil {
+		return nil, err
+	}
+	if fence {
+		if _, err := restorefence.Init(ctx, admin, schema, restorefence.InitOptions{IfAbsent: true}); err != nil {
+			return nil, err
+		}
+	}
+	id, err := identity.New(identity.Config{Pool: runtime, Schema: schema, UsersOwnedByAuth: true})
+	if err != nil {
+		return nil, err
+	}
+	// The actor of an acr event is the verified acr-api workload: an auth.principals row of kind workload (the workload registry
+	// writes it, internal/auth/workload/store.go), which security_audit_events.actor_principal_id references.
+	if _, err := admin.Exec(ctx, `INSERT INTO auth.principals (id, kind, display_name) VALUES ($1, 'workload', 'acr-api') ON CONFLICT DO NOTHING`, acrActor); err != nil {
+		return nil, err
+	}
+	e := &env{admin: admin, runtime: runtime, schema: schema, identity: id}
+	e.engine, err = New(Config{Pool: runtime, Schema: schema, ProjectOrganization: func(ctx context.Context, org uuid.UUID) (bool, error) {
+		err := id.ProjectOrganization(ctx, org)
+		if errors.Is(err, identity.ErrOrganizationNotFound) {
+			return false, nil
+		}
+		return err == nil, err
+	}})
+	return e, err
+}
+
+func (e *env) org(t *testing.T) uuid.UUID {
+	t.Helper()
+	id := uuid.New()
+	if _, err := e.admin.Exec(context.Background(), `INSERT INTO public.organizations (id, slug, name) VALUES ($1, $2, 'projection')`, id, "org-"+id.String()[:8]); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func (e *env) count(t *testing.T, sql string, args ...any) int {
+	t.Helper()
+	var n int
+	if err := e.admin.QueryRow(context.Background(), sql, args...).Scan(&n); err != nil {
+		t.Fatalf("%q: %v", sql, err)
+	}
+	return n
+}
+
+type spec struct {
+	org      uuid.UUID
+	source   string
+	id       string
+	revision int
+	kind     string
+	change   contracts.ExternalPushLifecycleChange
+	at       time.Time
+	// binding is the payload binding: "" and source mean source-bound (source names the source); organization means no source.
+	binding string
+}
+
+func (s spec) input() Input {
+	return Input{Domain: DomainExternalPush, Event: contracts.ExternalPushLifecycleEvent{
+		AggregateType: contracts.ExternalPushCredentialAggregate, AggregateID: s.id, EventType: s.kind,
+		IdempotencyKey: fmt.Sprintf("external_push_credential:%s:%d", s.id, s.revision),
+		CreatedAt:      contracts.Timestamp{Time: s.at},
+		Payload:        contracts.ExternalPushLifecyclePayload{Revision: contracts.Revision(s.revision), OrganizationID: "org_" + s.org.String(), Binding: s.bindingValue(), SourceID: s.sourceValue(), Change: s.change},
+	}}
+}
+
+func (s spec) bindingValue() string {
+	if s.binding == "" {
+		return contracts.ExternalPushBindingSource
+	}
+	return s.binding
+}
+
+func (s spec) sourceValue() string {
+	if s.binding == contracts.ExternalPushBindingOrganization {
+		return ""
+	}
+	return s.source
+}
+
+// freshFingerprint is a new 16-hex fingerprint: the registry's secret_hash of a projected row is that fingerprint's
+// 8 bytes and is UNIQUE, so two credentials never share one.
+func freshFingerprint() string { return strings.ReplaceAll(uuid.NewString(), "-", "")[:16] }
+
+func created(org uuid.UUID, source string, scopes ...string) spec {
+	return spec{org: org, source: source, id: uuid.NewString(), revision: 1, kind: contracts.ExternalPushCreated, at: time.Now().UTC().Truncate(time.Microsecond),
+		change: contracts.ExternalPushLifecycleChange{Status: "active", Fingerprint: freshFingerprint(), Scopes: scopes}}
+}
+
+func (s spec) next(kind string, change contracts.ExternalPushLifecycleChange) spec {
+	s.revision++
+	s.kind, s.change = kind, change
+	s.at = s.at.Add(time.Second)
+	return s
+}
+
+func (e *env) project(t *testing.T, in Input) Result {
+	t.Helper()
+	res, err := e.engine.Project(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	return res
+}
+
+func mustOutcome(t *testing.T, res Result, want Outcome) {
+	t.Helper()
+	if res.Outcome != want {
+		t.Fatalf("outcome %s (class %s), want %s", res.Outcome, res.Class, want)
+	}
+}
+
+func TestProjectCreatesPrincipalRegistryAndProjectionAndNoCursor(t *testing.T) {
+	e := getEnv(t, true)
+	org := e.org(t)
+	c := created(org, "src-a", "ingest:write")
+	mustOutcome(t, e.project(t, c.input()), pushlifecycle.Applied)
+	if n := e.count(t, `SELECT count(*) FROM auth.push_sources s JOIN auth.principals p ON p.id = s.principal_id WHERE s.organization_id = $1 AND s.source_id = 'src-a' AND p.kind = 'external_source'`, org); n != 1 {
+		t.Fatalf("external_source principals = %d, want 1", n)
+	}
+	if n := e.count(t, `SELECT count(*) FROM auth.credential_registry WHERE domain_owner = 'external_push' AND external_reference = $1 AND credential_class = 'external_push_ingest_token' AND hash_algorithm = 'fingerprint' AND fingerprint = $2 AND scopes = ARRAY['ingest:write']::auth.credential_scope[] AND revoked_at IS NULL`, c.id, c.change.Fingerprint); n != 1 {
+		t.Fatalf("registry rows = %d, want 1", n)
+	}
+	if n := e.count(t, `SELECT count(*) FROM auth.credential_projection p WHERE external_reference = $1 AND revision = 1 AND max_seen_revision = 1 AND status = 'active'`, c.id); n != 1 {
+		t.Fatalf("projection rows = %d, want 1", n)
+	}
+	if n := e.count(t, `SELECT count(*) FROM auth.projection_cursor`); n != 0 {
+		t.Fatalf("the one call touched the reader's cursor: %d rows", n)
+	}
+	second := created(org, "src-a", "ingest:write")
+	mustOutcome(t, e.project(t, second.input()), pushlifecycle.Applied)
+	if n := e.count(t, `SELECT count(*) FROM auth.push_sources WHERE organization_id = $1 AND source_id = 'src-a'`, org); n != 1 {
+		t.Fatalf("a second credential of the source made %d principals", n)
+	}
+}
+
+func TestProjectThreeCredentialsOfOneSourceEachApplyUnderTheirOwnFingerprint(t *testing.T) {
+	e := getEnv(t, true)
+	org := e.org(t)
+	var ids []string
+	for i := 0; i < 3; i++ {
+		c := created(org, "src-three", "ingest:write")
+		ids = append(ids, c.id)
+		mustOutcome(t, e.project(t, c.input()), pushlifecycle.Applied)
+		if n := e.count(t, `SELECT count(*) FROM auth.credential_registry WHERE external_reference = $1 AND fingerprint = $2 AND secret_hash = decode($2, 'hex')`, c.id, c.change.Fingerprint); n != 1 {
+			t.Fatalf("credential %d: %d registry rows under its own fingerprint, want 1", i, n)
+		}
+	}
+	if n := e.count(t, `SELECT count(DISTINCT secret_hash) FROM auth.credential_registry WHERE external_reference = ANY($1)`, ids); n != 3 {
+		t.Fatalf("%d distinct secret hashes, want 3", n)
+	}
+}
+
+func TestProjectThreeAcrCredentialsOfOneOwnerEachApplyUnderADerivedFingerprint(t *testing.T) {
+	e := getEnv(t, true)
+	org := e.org(t)
+	var ids []string
+	for i, callerFingerprint := range []string{"0123456789abcdef", "", "0123456789abcdef"} {
+		c := acrCreated(org)
+		c.change.Fingerprint = callerFingerprint // whatever the mapper passes, the engine derives its own for acr
+		ids = append(ids, c.id)
+		mustOutcome(t, e.project(t, e.acr(t, c, "owner-1", 1)), pushlifecycle.Applied)
+		if n := e.count(t, `SELECT count(*) FROM auth.credential_registry WHERE external_reference = $1 AND domain_owner = 'acr' AND fingerprint = $2 AND secret_hash = decode($2, 'hex')`, c.id, acrFingerprint(c.id)); n != 1 {
+			t.Fatalf("acr credential %d: %d registry rows under sha256(aggregate_id)[:8], want 1", i, n)
+		}
+	}
+	if n := e.count(t, `SELECT count(DISTINCT secret_hash) FROM auth.credential_registry WHERE external_reference = ANY($1)`, ids); n != 3 {
+		t.Fatalf("%d distinct acr secret hashes, want 3", n)
+	}
+}
+
+func TestProjectDuplicateAndStaleWriteNothingAndAConflictIsNotApplied(t *testing.T) {
+	e := getEnv(t, true)
+	org := e.org(t)
+	c := created(org, "src-b", "ingest:write", "ingest:status")
+	e.project(t, c.input())
+	scoped := c.next(contracts.ExternalPushScoped, contracts.ExternalPushLifecycleChange{Scopes: []string{"ingest:write"}})
+	mustOutcome(t, e.project(t, scoped.input()), pushlifecycle.Applied)
+	before := e.count(t, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.credential_projection.decided'`)
+	mustOutcome(t, e.project(t, scoped.input()), pushlifecycle.Duplicate)
+	mustOutcome(t, e.project(t, c.input()), pushlifecycle.Stale)
+	other := scoped
+	other.change.Scopes = []string{"ingest:status"}
+	res := e.project(t, other.input())
+	mustOutcome(t, res, OutcomeConflict)
+	if res.Class != ClassConflict {
+		t.Fatalf("class %s", res.Class)
+	}
+	if after := e.count(t, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.credential_projection.decided'`); after != before {
+		t.Fatalf("a duplicate, a stale delivery or a conflict wrote %d audit rows", after-before)
+	}
+	if n := e.count(t, `SELECT count(*) FROM auth.credential_registry WHERE external_reference = $1 AND scopes = ARRAY['ingest:write']::auth.credential_scope[]`, c.id); n != 1 {
+		t.Fatalf("the conflicting body changed the registry")
+	}
+}
+
+func TestProjectGapAndAPendingParentAreRetriesThatWriteNothing(t *testing.T) {
+	e := getEnv(t, true)
+	org := e.org(t)
+	c := created(org, "src-c", "ingest:write")
+	gap := c
+	gap.revision, gap.kind = 3, contracts.ExternalPushRevoked
+	res := e.project(t, gap.input())
+	mustOutcome(t, res, pushlifecycle.Gap)
+	if res.Class != ClassRetry {
+		t.Fatalf("class %s", res.Class)
+	}
+	parent := created(org, "src-c", "ingest:write")
+	child := spec{org: org, source: "src-c", id: uuid.NewString(), revision: 1, kind: contracts.ExternalPushRotated, at: time.Now().UTC().Truncate(time.Microsecond),
+		change: contracts.ExternalPushLifecycleChange{Status: "active", Fingerprint: freshFingerprint(), Scopes: []string{"ingest:write"}, RotationParentID: parent.id}}
+	mustOutcome(t, e.project(t, child.input()), pushlifecycle.ParentPending)
+	if n := e.count(t, `SELECT count(*) FROM auth.credential_projection WHERE external_reference IN ($1, $2)`, c.id, child.id); n != 0 {
+		t.Fatalf("a retry outcome wrote %d projection rows", n)
+	}
+	mustOutcome(t, e.project(t, parent.input()), pushlifecycle.Applied)
+	mustOutcome(t, e.project(t, child.input()), pushlifecycle.Applied)
+}
+
+func TestProjectAParentSeenAndWrongIsRefusedFinalAndRecorded(t *testing.T) {
+	e := getEnv(t, true)
+	org, other := e.org(t), e.org(t)
+	parent := created(other, "src-d", "ingest:write")
+	e.project(t, parent.input())
+	child := spec{org: org, source: "src-d", id: uuid.NewString(), revision: 1, kind: contracts.ExternalPushRotated, at: time.Now().UTC().Truncate(time.Microsecond),
+		change: contracts.ExternalPushLifecycleChange{Status: "active", Fingerprint: freshFingerprint(), Scopes: []string{"ingest:write"}, RotationParentID: parent.id}}
+	// The parent lives in another organization: not found inside this one, so a pending parent.
+	mustOutcome(t, e.project(t, child.input()), pushlifecycle.ParentPending)
+	widen := created(org, "src-d", "ingest:write")
+	e.project(t, widen.input())
+	wide := spec{org: org, source: "src-d", id: uuid.NewString(), revision: 1, kind: contracts.ExternalPushRotated, at: time.Now().UTC().Truncate(time.Microsecond),
+		change: contracts.ExternalPushLifecycleChange{Status: "active", Fingerprint: freshFingerprint(), Scopes: []string{"ingest:write", "ingest:status"}, RotationParentID: widen.id}}
+	res := e.project(t, wide.input())
+	mustOutcome(t, res, pushlifecycle.RefusedWiden)
+	if res.Class != ClassRefused {
+		t.Fatalf("class %s", res.Class)
+	}
+	if n := e.count(t, `SELECT count(*) FROM auth.credential_projection_digest WHERE external_reference = $1 AND outcome = 'refused_widen'`, wide.id); n != 1 {
+		t.Fatalf("the final refusal left %d digest rows, want 1 (the reader must not read it again)", n)
+	}
+	if n := e.count(t, `SELECT count(*) FROM auth.credential_registry WHERE external_reference = $1`, wide.id); n != 0 {
+		t.Fatal("a refused rotation wrote a registry row")
+	}
+}
+
+func TestProjectRevokeWithNoReasonIsDomainRevokedAndAMappedReasonKeepsItsValue(t *testing.T) {
+	e := getEnv(t, true)
+	org := e.org(t)
+	a, b := created(org, "src-e", "ingest:write"), created(org, "src-e", "ingest:write")
+	e.project(t, a.input())
+	e.project(t, b.input())
+	mustOutcome(t, e.project(t, a.next(contracts.ExternalPushRevoked, contracts.ExternalPushLifecycleChange{Status: "revoked"}).input()), pushlifecycle.Applied)
+	rb := b.next(contracts.ExternalPushRevoked, contracts.ExternalPushLifecycleChange{Status: "revoked"}).input()
+	rb.RevokeReason = "compromised"
+	mustOutcome(t, e.project(t, rb), pushlifecycle.Applied)
+	for id, reason := range map[string]string{a.id: "domain_revoked", b.id: "compromised"} {
+		if n := e.count(t, `SELECT count(*) FROM auth.credential_registry WHERE external_reference = $1 AND revoked_at IS NOT NULL AND revoked_reason = $2`, id, reason); n != 1 {
+			t.Errorf("credential %s: revoked_reason %s not stored", id, reason)
+		}
+	}
+	mustOutcome(t, e.project(t, a.next(contracts.ExternalPushRevoked, contracts.ExternalPushLifecycleChange{Status: "revoked"}).next(contracts.ExternalPushScoped, contracts.ExternalPushLifecycleChange{Scopes: []string{"ingest:write"}}).input()), pushlifecycle.RefusedTerminal)
+}
+
+func TestProjectRotationAppliesWhenTheParentRevokedFirst(t *testing.T) {
+	e := getEnv(t, true)
+	org := e.org(t)
+	parent := created(org, "src-f", "ingest:write")
+	e.project(t, parent.input())
+	rotatedAt := parent.at.Add(2 * time.Second)
+	revoke := parent.next(contracts.ExternalPushRevoked, contracts.ExternalPushLifecycleChange{Status: "revoked"})
+	revoke.at = rotatedAt
+	mustOutcome(t, e.project(t, revoke.input()), pushlifecycle.Applied)
+	child := spec{org: org, source: "src-f", id: uuid.NewString(), revision: 1, kind: contracts.ExternalPushRotated, at: rotatedAt,
+		change: contracts.ExternalPushLifecycleChange{Status: "active", Fingerprint: freshFingerprint(), Scopes: []string{"ingest:write"}, RotationParentID: parent.id}}
+	mustOutcome(t, e.project(t, child.input()), pushlifecycle.Applied)
+	if n := e.count(t, `SELECT count(*) FROM auth.credential_registry WHERE external_reference = $1 AND rotation_parent_id IS NULL AND revoked_at IS NULL`, child.id); n != 1 {
+		t.Fatal("the child row must be live with no registry parent link")
+	}
+	if n := e.count(t, `SELECT count(*) FROM auth.credential_projection WHERE external_reference = $1 AND rotation_parent_reference = $2`, child.id, parent.id); n != 1 {
+		t.Fatal("the lineage is not in credential_projection")
+	}
+}
+
+func TestProjectNarrowsFromTheRegistryAndNeverWidens(t *testing.T) {
+	e := getEnv(t, true)
+	org := e.org(t)
+	c := created(org, "src-g", "ingest:write", "ingest:status")
+	e.project(t, c.input())
+	mustOutcome(t, e.project(t, c.next(contracts.ExternalPushScoped, contracts.ExternalPushLifecycleChange{Scopes: []string{"ingest:write"}}).input()), pushlifecycle.Applied)
+	if n := e.count(t, `SELECT count(*) FROM auth.credential_registry WHERE external_reference = $1 AND scopes = ARRAY['ingest:write']::auth.credential_scope[]`, c.id); n != 1 {
+		t.Fatal("the registry scopes were not narrowed")
+	}
+}
+
+func TestProjectAnOrganizationWithNoAuthRowIsProjectedAndAnUnknownOneIsRefused(t *testing.T) {
+	e := getEnv(t, true)
+	org := e.org(t) // only in public.organizations: the sign-in projection has not run
+	if n := e.count(t, `SELECT count(*) FROM auth.organizations WHERE id = $1`, org); n != 0 {
+		t.Skip("the organization is already projected")
+	}
+	mustOutcome(t, e.project(t, created(org, "src-h", "ingest:write").input()), pushlifecycle.Applied)
+	if n := e.count(t, `SELECT count(*) FROM auth.organizations WHERE id = $1`, org); n != 1 {
+		t.Fatal("the organization was not projected before the store step")
+	}
+	res := e.project(t, created(uuid.New(), "src-h", "ingest:write").input())
+	mustOutcome(t, res, OutcomeOrganizationUnknown)
+	if res.Class != ClassRefused {
+		t.Fatalf("class %s", res.Class)
+	}
+}
+
+var acrActor = uuid.MustParse("0a1b2c3d-0000-4000-8000-0000000000c1")
+
+func (e *env) acr(t *testing.T, s spec, owner string, body byte) Input {
+	t.Helper()
+	in := s.input()
+	in.Domain, in.AcrClass, in.OwnerSubject, in.Actor = DomainAcr, "browser", owner, acrActor
+	if s.revision > 1 {
+		in.AcrClass, in.OwnerSubject = "", ""
+	}
+	in.BodyDigest = [32]byte{body, byte(s.revision)}
+	return in
+}
+
+// acrFingerprint is the fingerprint of an acr credential as the acr mapping derives it (acp answers-11196 Q4): the first
+// 8 bytes of the SHA-256 of the cred_ id, in hex. A public value of a public id, so no two credentials share one.
+func acrFingerprint(id string) string {
+	sum := sha256.Sum256([]byte(id))
+	return hex.EncodeToString(sum[:8])
+}
+
+func acrCreated(org uuid.UUID) spec {
+	c := created(org, "acr", "context:read")
+	c.id = "cred_" + uuid.NewString()[:12]
+	c.change.Fingerprint = acrFingerprint(c.id)
+	return c
+}
+
+func TestProjectAcrDomainKeepsItsWireClassUnderTheOneRegistryClassAndOwnerSubject(t *testing.T) {
+	e := getEnv(t, true)
+	c := acrCreated(e.org(t))
+	mustOutcome(t, e.project(t, e.acr(t, c, "sub-1", 1)), pushlifecycle.Applied)
+	if n := e.count(t, `SELECT count(*) FROM auth.credential_registry r JOIN auth.credential_projection p ON p.registry_id = r.id WHERE r.external_reference = $1 AND r.domain_owner = 'acr' AND r.credential_class = 'acr_client_credential' AND p.acr_class = 'browser' AND p.owner_subject = 'sub-1'`, c.id); n != 1 {
+		t.Fatal("the acr row lost its wire class, its owner subject, or is not under acr_client_credential")
+	}
+}
+
+func TestProjectAcrSameRevisionOtherBodyIsAConflictAndWritesNothing(t *testing.T) {
+	e := getEnv(t, true)
+	c := acrCreated(e.org(t))
+	mustOutcome(t, e.project(t, e.acr(t, c, "sub-1", 1)), pushlifecycle.Applied)
+	before := e.count(t, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.credential_projection.decided'`)
+	other := e.acr(t, c, "sub-OTHER", 2)
+	res := e.project(t, other)
+	mustOutcome(t, res, OutcomeConflict)
+	if res.Class != ClassConflict {
+		t.Fatalf("class %s", res.Class)
+	}
+	if e.count(t, `SELECT count(*) FROM auth.credential_projection WHERE external_reference = $1 AND owner_subject = 'sub-1'`, c.id) != 1 {
+		t.Fatal("the conflicting delivery changed the projection")
+	}
+	if after := e.count(t, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.credential_projection.decided'`); after != before {
+		t.Fatalf("a conflict wrote %d audit rows", after-before)
+	}
+	mustOutcome(t, e.project(t, e.acr(t, c, "sub-1", 1)), pushlifecycle.Duplicate)
+}
+
+func TestProjectAcrRevokeCarriesNoClassAndLandsAsDomainRevoked(t *testing.T) {
+	e := getEnv(t, true)
+	c := acrCreated(e.org(t))
+	mustOutcome(t, e.project(t, e.acr(t, c, "sub-1", 1)), pushlifecycle.Applied)
+	revoke := c.next(contracts.ExternalPushRevoked, contracts.ExternalPushLifecycleChange{Status: "revoked"})
+	mustOutcome(t, e.project(t, e.acr(t, revoke, "", 1)), pushlifecycle.Applied)
+	if e.count(t, `SELECT count(*) FROM auth.credential_registry WHERE external_reference = $1 AND revoked_at IS NOT NULL AND revoked_reason = 'domain_revoked'`, c.id) != 1 {
+		t.Fatal("the acr revoke did not land as domain_revoked")
+	}
+	if e.count(t, `SELECT count(*) FROM auth.credential_projection WHERE external_reference = $1 AND acr_class = 'browser' AND owner_subject = 'sub-1'`, c.id) != 1 {
+		t.Fatal("the revoke erased the stored class or owner subject")
+	}
+}
+
+func TestProjectAuditRowNamesTheActorAndIsDeniedOnlyForARefusal(t *testing.T) {
+	e := getEnv(t, true)
+	org := e.org(t)
+	c := acrCreated(org)
+	mustOutcome(t, e.project(t, e.acr(t, c, "sub-1", 1)), pushlifecycle.Applied)
+	if e.count(t, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.credential_projection.decided' AND outcome = 'allowed' AND actor_principal_id = $1 AND attributes ->> 'reason_code' = 'credential_issued'`, acrActor) < 1 {
+		t.Fatal("the applied acr row does not name the actor or is not allowed")
+	}
+	// A refused decision of each core refusal is a DENIED audit row.
+	widen := created(org, "src-den", "ingest:write")
+	e.project(t, widen.input())
+	wideChild := spec{org: org, source: "src-den", id: uuid.NewString(), revision: 1, kind: contracts.ExternalPushRotated, at: time.Now().UTC().Truncate(time.Microsecond),
+		change: contracts.ExternalPushLifecycleChange{Status: "active", Fingerprint: freshFingerprint(), Scopes: []string{"ingest:write", "ingest:status"}, RotationParentID: widen.id}}
+	mustOutcome(t, e.project(t, wideChild.input()), pushlifecycle.RefusedWiden)
+	revoked := created(org, "src-den", "ingest:write")
+	e.project(t, revoked.input())
+	rv := revoked.next(contracts.ExternalPushRevoked, contracts.ExternalPushLifecycleChange{Status: "revoked"})
+	e.project(t, rv.input())
+	mustOutcome(t, e.project(t, rv.next(contracts.ExternalPushScoped, contracts.ExternalPushLifecycleChange{Scopes: []string{"ingest:write"}}).input()), pushlifecycle.RefusedTerminal)
+	transition := created(org, "src-den", "ingest:write")
+	e.project(t, transition.input())
+	mustOutcome(t, e.project(t, transition.next(contracts.ExternalPushCreated, contracts.ExternalPushLifecycleChange{Fingerprint: freshFingerprint(), Scopes: []string{"ingest:write"}}).input()), pushlifecycle.RefusedTransition)
+	badParent := created(org, "src-den", "ingest:write")
+	e.project(t, badParent.input())
+	other := created(org, "src-den", "ingest:write")
+	e.project(t, other.input())
+	rot := spec{org: org, source: "src-den", id: uuid.NewString(), revision: 1, kind: contracts.ExternalPushRotated, at: time.Now().UTC().Add(time.Hour).Truncate(time.Microsecond),
+		change: contracts.ExternalPushLifecycleChange{Status: "active", Fingerprint: freshFingerprint(), Scopes: []string{"ingest:write"}, RotationParentID: badParent.id}}
+	e.project(t, rev(badParent, t0(badParent)).input())
+	mustOutcome(t, e.project(t, rot.input()), pushlifecycle.RefusedParent)
+	if n := e.count(t, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.credential_projection.decided' AND outcome = 'denied' AND attributes ->> 'reason_code' = 'denied_policy'`); n < 4 {
+		t.Fatalf("denied audit rows = %d, want one per refused outcome (4)", n)
+	}
+	if n := e.count(t, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.credential_projection.decided' AND outcome = 'allowed' AND attributes ->> 'reason_code' = 'denied_policy'`); n != 0 {
+		t.Fatalf("%d refused decisions are still allowed rows", n)
+	}
+}
+
+func rev(s spec, at time.Time) spec {
+	r := s.next(contracts.ExternalPushRevoked, contracts.ExternalPushLifecycleChange{Status: "revoked"})
+	r.at = at
+	return r
+}
+
+func t0(s spec) time.Time { return s.at.Add(time.Minute) }
+
+func TestProjectTwoWritersOfOneCredentialApplyOnce(t *testing.T) {
+	e := getEnv(t, true)
+	org := e.org(t)
+	c := created(org, "src-i", "ingest:write")
+	var wg sync.WaitGroup
+	results := make([]Outcome, 4)
+	for i := range results {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			res, err := e.engine.Project(context.Background(), c.input())
+			if err != nil {
+				t.Errorf("Project: %v", err)
+			}
+			results[i] = res.Outcome
+		}()
+	}
+	wg.Wait()
+	applied := 0
+	for _, o := range results {
+		if o == pushlifecycle.Applied {
+			applied++
+		}
+	}
+	if applied != 1 {
+		t.Fatalf("outcomes %v: applied %d times, want once", results, applied)
+	}
+	if n := e.count(t, `SELECT count(*) FROM auth.credential_registry WHERE external_reference = $1`, c.id); n != 1 {
+		t.Fatalf("registry rows %d, want 1", n)
+	}
+}
+
+func TestProjectOnAnUnfencedTimelineWritesNothing(t *testing.T) {
+	e := getEnv(t, false)
+	org := e.org(t)
+	c := created(org, "src-j", "ingest:write")
+	res := e.project(t, c.input())
+	mustOutcome(t, res, OutcomeUnfenced)
+	if res.Class != ClassUnfenced {
+		t.Fatalf("class %s", res.Class)
+	}
+	if n := e.count(t, `SELECT count(*) FROM auth.credential_projection`); n != 0 {
+		t.Fatalf("an unfenced call wrote %d projection rows", n)
+	}
+}
+
+func TestProjectMalformedEventWritesNothing(t *testing.T) {
+	e := getEnv(t, true)
+	c := created(e.org(t), "", "ingest:write")
+	res := e.project(t, c.input())
+	mustOutcome(t, res, OutcomeMalformed)
+	if n := e.count(t, `SELECT count(*) FROM auth.credential_projection_digest WHERE external_reference = $1`, c.id); n != 0 {
+		t.Fatal("a malformed event left a digest row")
+	}
+}
+
+// Organization-bound credentials and the binding round trip (answers-10896-4).
+func orgBound(org uuid.UUID, scopes ...string) spec {
+	c := created(org, "", scopes...)
+	c.binding = contracts.ExternalPushBindingOrganization
+	return c
+}
+
+func TestProjectBindingRoundTripsSoALaterEventOfAStoredCredentialApplies(t *testing.T) {
+	e := getEnv(t, true)
+	org := e.org(t)
+	c := created(org, "src-bind", "ingest:write", "ingest:status")
+	mustOutcome(t, e.project(t, c.input()), pushlifecycle.Applied)
+	mustOutcome(t, e.project(t, c.next(contracts.ExternalPushScoped, contracts.ExternalPushLifecycleChange{Scopes: []string{"ingest:write"}}).input()), pushlifecycle.Applied)
+	if n := e.count(t, `SELECT count(*) FROM auth.credential_projection WHERE external_reference = $1 AND binding = 'source' AND source_id = 'src-bind'`, c.id); n != 1 {
+		t.Fatal("the source binding was not stored with its source")
+	}
+}
+
+func TestProjectOrganizationBoundCredentialsShareOneOrganizationPrincipal(t *testing.T) {
+	e := getEnv(t, true)
+	org := e.org(t)
+	a, b := orgBound(org, "ingest:write"), orgBound(org, "ingest:write")
+	mustOutcome(t, e.project(t, a.input()), pushlifecycle.Applied)
+	mustOutcome(t, e.project(t, b.input()), pushlifecycle.Applied)
+	if n := e.count(t, `SELECT count(*) FROM auth.push_sources WHERE organization_id = $1 AND source_id IS NULL`, org); n != 1 {
+		t.Fatalf("%d organization principals, want 1", n)
+	}
+	if n := e.count(t, `SELECT count(DISTINCT principal_id) FROM auth.credential_projection WHERE external_reference = ANY($1) AND binding = 'organization' AND source_id IS NULL`, []string{a.id, b.id}); n != 1 {
+		t.Fatalf("the two organization-bound credentials hold %d principals, want 1", n)
+	}
+	mustOutcome(t, e.project(t, a.next(contracts.ExternalPushRevoked, contracts.ExternalPushLifecycleChange{Status: "revoked"}).input()), pushlifecycle.Applied)
+}
+
+func TestProjectAnOrganizationBoundChildOfASourceBoundParentIsRefused(t *testing.T) {
+	e := getEnv(t, true)
+	org := e.org(t)
+	parent := created(org, "src-par", "ingest:write")
+	mustOutcome(t, e.project(t, parent.input()), pushlifecycle.Applied)
+	child := orgBound(org, "ingest:write")
+	child.kind, child.change.RotationParentID = contracts.ExternalPushRotated, parent.id
+	mustOutcome(t, e.project(t, child.input()), pushlifecycle.RefusedParent)
+}
+
+// Condition 1: the organization principal is created with the first organization-bound event, and two concurrent first
+// events leave ONE principal.
+func TestProjectTwoConcurrentFirstOrganizationBoundEventsMakeOnePrincipal(t *testing.T) {
+	e := getEnv(t, true)
+	org := e.org(t)
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		c := orgBound(org, "ingest:write")
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			res, err := e.engine.Project(context.Background(), c.input())
+			if err != nil || res.Outcome != pushlifecycle.Applied {
+				t.Errorf("Project: %+v, %v", res, err)
+			}
+		}()
+	}
+	wg.Wait()
+	if n := e.count(t, `SELECT count(*) FROM auth.push_sources WHERE organization_id = $1 AND source_id IS NULL`, org); n != 1 {
+		t.Fatalf("%d organization principals after four concurrent first events, want 1", n)
+	}
+}
+
+// Condition 2: a real source named "organization" never collides with the organization principal.
+func TestProjectASourceNamedOrganizationIsNotTheOrganizationPrincipal(t *testing.T) {
+	e := getEnv(t, true)
+	org := e.org(t)
+	named := created(org, "organization", "ingest:write")
+	mustOutcome(t, e.project(t, named.input()), pushlifecycle.Applied)
+	mustOutcome(t, e.project(t, orgBound(org, "ingest:write").input()), pushlifecycle.Applied)
+	if n := e.count(t, `SELECT count(DISTINCT principal_id) FROM auth.push_sources WHERE organization_id = $1`, org); n != 2 {
+		t.Fatalf("%d principals for a source named organization plus the organization binding, want 2", n)
+	}
+	if n := e.count(t, `SELECT count(*) FROM auth.push_sources WHERE organization_id = $1 AND source_id = 'organization'`, org); n != 1 {
+		t.Fatal("the source named organization has no principal of its own")
+	}
+}
+
+// Condition 3: revoking every organization-wide credential keeps the organization principal (it holds audit history).
+func TestProjectRevokingEveryOrganizationWideCredentialKeepsThePrincipal(t *testing.T) {
+	e := getEnv(t, true)
+	org := e.org(t)
+	a, b := orgBound(org, "ingest:write"), orgBound(org, "ingest:write")
+	e.project(t, a.input())
+	e.project(t, b.input())
+	mustOutcome(t, e.project(t, a.next(contracts.ExternalPushRevoked, contracts.ExternalPushLifecycleChange{Status: "revoked"}).input()), pushlifecycle.Applied)
+	mustOutcome(t, e.project(t, b.next(contracts.ExternalPushRevoked, contracts.ExternalPushLifecycleChange{Status: "revoked"}).input()), pushlifecycle.Applied)
+	if n := e.count(t, `SELECT count(*) FROM auth.push_sources s JOIN auth.principals p ON p.id = s.principal_id WHERE s.organization_id = $1 AND s.source_id IS NULL AND p.disabled_at IS NULL`, org); n != 1 {
+		t.Fatalf("%d live organization principals after revoking every org-wide credential, want 1", n)
+	}
+}
+
+// Condition 4: the organization principal gets no capability that a source principal lacks: the same kind, the same
+// database guards, and no session, membership, platform role or grant of its own.
+func TestProjectTheOrganizationPrincipalHoldsNoCapabilityASourcePrincipalLacks(t *testing.T) {
+	e := getEnv(t, true)
+	org := e.org(t)
+	mustOutcome(t, e.project(t, orgBound(org, "ingest:write").input()), pushlifecycle.Applied)
+	mustOutcome(t, e.project(t, created(org, "src-cap", "ingest:write").input()), pushlifecycle.Applied)
+	for _, kind := range []string{"organization", "source"} {
+		where := `s.source_id IS NULL`
+		if kind == "source" {
+			where = `s.source_id = 'src-cap'`
+		}
+		for table, column := range map[string]string{"sessions": "principal_id", "memberships": "principal_id", "platform_role_assignments": "principal_id", "resource_grants": "principal_id", "service_accounts": "principal_id"} {
+			if n := e.count(t, `SELECT count(*) FROM auth.`+table+` t JOIN auth.push_sources s ON s.principal_id = t.`+column+` WHERE s.organization_id = $1 AND `+where, org); n != 0 {
+				t.Errorf("the %s principal holds %d rows of %s", kind, n, table)
+			}
+		}
+		if n := e.count(t, `SELECT count(*) FROM auth.push_sources s JOIN auth.principals p ON p.id = s.principal_id WHERE s.organization_id = $1 AND `+where+` AND p.kind = 'external_source'`, org); n != 1 {
+			t.Errorf("the %s principal is not of kind external_source", kind)
+		}
+	}
+}
+
+// The partial UNIQUE keys hold the one-principal-per-organization rule in the database, whatever the engine does: a second
+// organization principal row of one organization is refused.
+func TestProjectASecondOrganizationPrincipalRowIsRefusedByThePartialUnique(t *testing.T) {
+	e := getEnv(t, true)
+	org := e.org(t)
+	mustOutcome(t, e.project(t, orgBound(org, "ingest:write").input()), pushlifecycle.Applied)
+	second := uuid.New()
+	err := audit.Commit(context.Background(), e.admin, e.schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			if _, err := tx.Exec(ctx, `INSERT INTO auth.principals (id, kind, display_name) VALUES ($1, 'external_source', 'second')`, second); err != nil {
+				return err
+			}
+			_, err := tx.Exec(ctx, `INSERT INTO auth.push_sources (organization_id, source_id, principal_id) VALUES ($1, NULL, $2)`, org, second)
+			return err
+		},
+		Audit:     audit.AuditEvent{EventType: "credential.test", Outcome: audit.OutcomeAllowed},
+		OffStream: audit.OffStreamWorkloadRegistry,
+	})
+	if err == nil {
+		t.Fatal("a second organization principal row was accepted, want a unique violation")
+	}
+}

@@ -320,12 +320,12 @@ func TestCallbackRefusesReplayedState(t *testing.T) {
 	if _, failure := h.finish(t, s, h.sign(t, h.claims(s.nonce, "sub-replay", email))); failure != nil {
 		t.Fatalf("first callback: %v", failure)
 	}
-	calls := h.idp.tokenCalls
+	calls := h.idp.TokenCalls()
 	before := h.snapshot(t)
 	_, failure := h.finish(t, s, h.sign(t, h.claims(s.nonce, "sub-replay", email)))
 	wantDenied(t, failure, http.StatusBadRequest, ReasonReplayed)
 	wantUnchanged(t, h, before)
-	if h.idp.tokenCalls != calls {
+	if h.idp.TokenCalls() != calls {
 		t.Fatal("a replayed state reached the token endpoint")
 	}
 }
@@ -385,20 +385,20 @@ func TestCallbackRefusesUnsignedIDToken(t *testing.T) {
 
 func TestCallbackRefusesSymmetricAlgWithPublicKey(t *testing.T) {
 	h := newHarness(t, harnessOpts{signup: true})
-	der, err := x509.MarshalPKIXPublicKey(&h.idp.key.PublicKey)
+	der, err := x509.MarshalPKIXPublicKey(&h.idp.Keys().Key.PublicKey)
 	if err != nil {
 		t.Fatal(err)
 	}
 	keys := map[string][]byte{
 		"pem": pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}),
-		"der": der, "modulus": h.idp.key.PublicKey.N.Bytes(),
+		"der": der, "modulus": h.idp.Keys().Key.PublicKey.N.Bytes(),
 	}
 	for name, secret := range keys {
 		for _, alg := range []string{"HS256", "HS384", "HS512"} {
 			t.Run(name+" "+alg, func(t *testing.T) {
 				before := h.snapshot(t)
 				s := h.start(t)
-				input := encodeSegments(t, map[string]any{"alg": alg, "kid": h.idp.kid}, h.claims(s.nonce, "sub-hs", uniqueEmail("hs")))
+				input := encodeSegments(t, map[string]any{"alg": alg, "kid": h.idp.Keys().KID}, h.claims(s.nonce, "sub-hs", uniqueEmail("hs")))
 				mac := hmac.New(sha256.New, secret)
 				_, _ = io.WriteString(mac, input)
 				_, failure := h.finish(t, s, input+"."+b64(mac.Sum(nil)))
@@ -415,7 +415,7 @@ func TestCallbackRefusesKeyNotInIssuerJWKS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for name, kid := range map[string]string{"unknown kid": "k-stranger", "issuer kid": h.idp.kid} {
+	for name, kid := range map[string]string{"unknown kid": "k-stranger", "issuer kid": h.idp.Keys().KID} {
 		t.Run(name, func(t *testing.T) {
 			before := h.snapshot(t)
 			s := h.start(t)
@@ -477,7 +477,7 @@ func TestDiscoveryIssuerMustMatchTheConfiguredIssuer(t *testing.T) {
 	t.Run("another issuer", func(t *testing.T) {
 		h := newHarness(t, harnessOpts{signup: true, discovery: true})
 		untrusted := "https://untrusted.example"
-		h.idp.docIssuer = &untrusted
+		h.idp.SetDocIssuer(&untrusted)
 		before := h.snapshot(t)
 		s := h.start(t)
 		claims := h.claims(s.nonce, "sub-disco", uniqueEmail("disco"))
@@ -490,7 +490,7 @@ func TestDiscoveryIssuerMustMatchTheConfiguredIssuer(t *testing.T) {
 
 func TestUserinfoSubjectMustMatchTheIDToken(t *testing.T) {
 	h := newHarness(t, harnessOpts{signup: true, userinfo: true})
-	h.idp.userinfo = map[string]any{"sub": "someone-else", "email": uniqueEmail("ui"), "email_verified": true}
+	h.idp.SetUserinfo(map[string]any{"sub": "someone-else", "email": uniqueEmail("ui"), "email_verified": true})
 	before := h.snapshot(t)
 	s := h.start(t)
 	claims := h.claims(s.nonce, "sub-ui", "")
@@ -527,11 +527,7 @@ func TestHandlersRoundTrip(t *testing.T) {
 	}
 	parsed, _ := http.NewRequest(http.MethodGet, authz["authorization_url"], nil)
 	q := parsed.URL.Query()
-	code := "code-" + uuid.NewString()
-	h.idp.mu.Lock()
-	h.idp.codes[code] = pendingCode{challenge: q.Get("code_challenge"),
-		idToken: h.sign(t, h.claims(q.Get("nonce"), "sub-http", uniqueEmail("http")))}
-	h.idp.mu.Unlock()
+	code := h.idp.register(q.Get("code_challenge"), h.sign(t, h.claims(q.Get("nonce"), "sub-http", uniqueEmail("http"))))
 
 	body, _ := json.Marshal(map[string]string{"code": code, "state": authz["state"], "code_verifier": "caller-chosen"})
 	req, _ := http.NewRequest(http.MethodPost, base+"/callback", strings.NewReader(string(body)))
@@ -610,11 +606,11 @@ func TestNonEntitledOrganizationIsRefused(t *testing.T) {
 			t.Fatal(err)
 		}
 		before := h.snapshot(t)
-		calls := h.idp.tokenCalls
+		calls := h.idp.TokenCalls()
 		_, failure := h.finish(t, s, h.sign(t, h.claims(s.nonce, "sub-unlicensed", uniqueEmail("unlicensed"))))
 		wantDenied(t, failure, http.StatusPaymentRequired, ReasonNotEntitled)
 		wantUnchanged(t, h, before)
-		if h.idp.tokenCalls != calls {
+		if h.idp.TokenCalls() != calls {
 			t.Fatal("a non-entitled callback reached the token endpoint")
 		}
 		if n := h.count(t, `SELECT count(*) FROM auth.sso_flow_states WHERE consumed_at IS NOT NULL AND provider_id = $1`, h.providerID); n != 0 {

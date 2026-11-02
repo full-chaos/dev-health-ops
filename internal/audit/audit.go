@@ -189,9 +189,14 @@ const OffStreamWorkloadRegistry = "workload_registry"
 // raises exist so the next real event is a revision no consumer has seen.
 const OffStreamRestoreFence = "restore_fence"
 
+// OffStreamCredentialProjection marks the projection of an external credential
+// event (CHAOS-10896): it writes the principal, the registry row and the
+// projected state and republishes nothing.
+const OffStreamCredentialProjection = "credential_projection"
+
 var offStreamReasons = map[string]bool{
 	OffStreamSessionLifecycle: true, OffStreamLinkCredentialLifecycle: true, OffStreamSigningKeyLifecycle: true,
-	OffStreamWorkloadRegistry: true, OffStreamRestoreFence: true,
+	OffStreamWorkloadRegistry: true, OffStreamRestoreFence: true, OffStreamCredentialProjection: true,
 }
 
 // TxOps is what a mutation may do inside the transaction.

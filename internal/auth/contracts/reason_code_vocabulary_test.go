@@ -180,6 +180,7 @@ func TestSchemaEnumsEqualTheVocabularyFile(t *testing.T) {
 // A value enters with the producer that emits it (CHAOS-10194).
 var approvedRevokedReasons = []string{
 	"compromised",
+	"domain_revoked",
 	"owner_request",
 }
 
@@ -238,6 +239,7 @@ var approvedAuditReasonCodes = []string{
 	"revision_conflict",
 	"internal_error",
 	"compromised",
+	"domain_revoked",
 	"owner_request",
 	"role_granted",
 	"role_revoked",
@@ -425,5 +427,30 @@ func TestEveryValidDecisionFixtureUsesAListedReasonCode(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// The audit row of a high-risk authorize decision names the decision's reason in the audit
+// attribute decision_reason_code, a separate key from the audit reason_code set. Its closed
+// set is the decision reason vocabulary, and the schema enum of authorization_decision.v1.
+func TestAuditDecisionReasonCodeIsTheDecisionVocabulary(t *testing.T) {
+	vocab := loadReasonVocabulary(t)
+	producer := slices.Sorted(slices.Values(audit.AttributeVocabulary()["decision_reason_code"]))
+	if len(producer) < 20 {
+		t.Fatalf("the producer has %d decision reason codes; the check would be vacuous", len(producer))
+	}
+	if want := slices.Sorted(slices.Values(vocab.DecisionReason.Values)); !slices.Equal(producer, want) {
+		t.Errorf("audit decision_reason_code %v, vocabulary decision_reason_code %v", producer, want)
+	}
+	schema := readJSONFile(t, "contracts/auth/v1/jsonschema/authorization_decision.v1.schema.json")
+	props, _ := schema["properties"].(map[string]any)
+	reason, _ := props["reason_code"].(map[string]any)
+	list, _ := reason["enum"].([]any)
+	var enum []string
+	for _, v := range list {
+		enum = append(enum, v.(string))
+	}
+	if slices.Sort(enum); !slices.Equal(producer, enum) {
+		t.Errorf("audit decision_reason_code %v, authorization_decision.v1 enum %v", producer, enum)
 	}
 }

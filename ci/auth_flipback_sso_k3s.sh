@@ -271,7 +271,7 @@ export KUBECONFIG="${KUBECONFIG_FILE}"
 kc() { kubectl --kubeconfig "${KUBECONFIG_FILE}" "$@"; }
 K() { kc -n "${NS}" "$@"; }
 
-for verb_resource in "list nodes" "create namespaces" "create clusterroles"; do
+for verb_resource in "list nodes" "create ns" "create clusterroles"; do
   # shellcheck disable=SC2086
   [ "$(kc auth can-i ${verb_resource} 2>/dev/null || true)" = no ] || die "the kubeconfig is not namespace scoped: it may ${verb_resource}"
 done

@@ -28,9 +28,9 @@ func (e *env) key(t *testing.T, ctx context.Context, principal uuid.UUID, class,
 	t.Helper()
 	id := uuid.New()
 	e.armed(t, ctx, `INSERT INTO auth.credential_registry
-(id, principal_id, credential_class, display_prefix, secret_hash, hash_algorithm, fingerprint, expires_at, revoked_at)
+(id, principal_id, credential_class, display_prefix, secret_hash, hash_algorithm, fingerprint, expires_at, revoked_at, revoked_reason)
 VALUES ($1, $2, $3, 'fcsak_', decode(md5($1::uuid::text), 'hex'), 'sha256', substr(md5($1::uuid::text), 1, 16), `+expires+`,
-CASE WHEN $4 THEN now() END)`, id, principal, class, revoked)
+CASE WHEN $4 THEN now() END, CASE WHEN $4 THEN 'owner_request' END)`, id, principal, class, revoked)
 	return id
 }
 

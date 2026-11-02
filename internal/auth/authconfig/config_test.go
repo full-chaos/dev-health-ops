@@ -347,6 +347,7 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvSSOJIT:                      "true",
 		EnvMembershipRoutes:            "true",
 		EnvSessionIssueWorkloadSubject: "prn_AAAAAAAAAAAAAAAAAAAAAA",
+		EnvAuthorizeCallerSubjects:     "prn_AAAAAAAAAAAAAAAAAAAAAA,prn_BBBBBBBBBBBBBBBBBBBBBB",
 		EnvTrustedProxies:              "10.0.0.5,192.168.0.0/16",
 		"SOCIAL_GITHUB_CLIENT_ID":      "gh-client",
 		"SOCIAL_GITLAB_CLIENT_ID":      "gl-client",
@@ -383,6 +384,7 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvSSOJIT:                      func(c Config) string { return strconv.FormatBool(c.SSO.JIT) },
 		EnvMembershipRoutes:            func(c Config) string { return strconv.FormatBool(c.Provisioning.Routes) },
 		EnvSessionIssueWorkloadSubject: func(c Config) string { return c.SessionIssueWorkloadSubject },
+		EnvAuthorizeCallerSubjects:     func(c Config) string { return strings.Join(c.AuthorizeCallerSubjects, ",") },
 		EnvTrustedProxies:              func(c Config) string { return itoa(int64(c.TrustedProxies.Len())) },
 		"SOCIAL_GITHUB_CLIENT_ID":      func(c Config) string { return c.Social["github"].ID },
 		"SOCIAL_GITLAB_CLIENT_ID":      func(c Config) string { return c.Social["gitlab"].ID },
@@ -426,7 +428,7 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 			if option.Env == EnvRevisionFeed {
 				env[EnvValkeyURI] = testValkeyURI
 			}
-			if option.Env == EnvSessionIssueWorkloadSubject {
+			if option.Env == EnvSessionIssueWorkloadSubject || option.Env == EnvAuthorizeCallerSubjects {
 				env[EnvTokenIssuerURL] = "https://auth.example.com"
 			}
 			env[option.Env] = value

@@ -314,3 +314,37 @@ func TestABusySuspendIsADomainRefusalOfItsCommit(t *testing.T) {
 		t.Fatalf("refusals %v", got.Refusals)
 	}
 }
+
+// A nil Authorize or a bad name refuses before the commit is built.
+func TestRenameAuthorizedRefusesBeforeAnyCommit(t *testing.T) {
+	committed := false
+	s := newTestStore(func(context.Context, audit.Mutation) error { committed = true; return nil })
+	if changed, err := s.RenameAuthorized(context.Background(), uuid.New(), "Name", nil, Actor{}, nil); !errors.Is(err, ErrDenied) || changed {
+		t.Fatalf("nil Authorize: changed=%v err=%v, want denied", changed, err)
+	}
+	for _, name := range []string{"   ", strings.Repeat("x", 101)} {
+		if _, err := s.RenameAuthorized(context.Background(), uuid.New(), name, nil, Actor{}, allowAll); !errors.Is(err, ErrNameInvalid) {
+			t.Fatalf("name %q: err=%v, want ErrNameInvalid", name, err)
+		}
+	}
+	if committed {
+		t.Fatal("a refused rename reached the commit")
+	}
+}
+
+// The mutation is the one Rename plans: the renamed audit row with the actor, and organization.updated with no name.
+func TestRenameAuthorizedPlansTheRenameAuditAndEvent(t *testing.T) {
+	var got audit.Mutation
+	s := newTestStore(func(_ context.Context, m audit.Mutation) error { got = m; return nil })
+	actor := uuid.New()
+	changed, err := s.RenameAuthorized(context.Background(), uuid.New(), "New", nil, Actor{PrincipalID: &actor}, allowAll)
+	if err != nil || !changed {
+		t.Fatalf("rename: changed=%v err=%v", changed, err)
+	}
+	if got.Audit.EventType != "auth.organization.renamed" || got.Audit.ActorPrincipalID == nil || *got.Audit.ActorPrincipalID != actor.String() {
+		t.Fatalf("audit = %+v", got.Audit)
+	}
+	if len(got.Events) != 1 || got.Events[0].EventType != "organization.updated" || len(got.Events[0].Change) != 0 {
+		t.Fatalf("events = %+v", got.Events)
+	}
+}

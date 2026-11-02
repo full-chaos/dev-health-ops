@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/membership"
 	"github.com/full-chaos/dev-health-ops/internal/auth/org"
 	"github.com/full-chaos/dev-health-ops/internal/auth/orgdeprovision"
+	"github.com/full-chaos/dev-health-ops/internal/auth/publicread"
 	"github.com/full-chaos/dev-health-ops/internal/auth/serviceaccount"
 	"github.com/full-chaos/dev-health-ops/internal/auth/servicecred"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
@@ -62,8 +63,12 @@ func provisioningRoutes(cfg authconfig.Config, logger *slog.Logger, pool *pgxpoo
 	if err != nil {
 		return nil, err
 	}
+	reads, err := publicread.New(publicread.Config{Querier: pool, AuthSchema: authschema.Quote(schema), Logger: logger})
+	if err != nil {
+		return nil, err
+	}
 	return authapi.ProvisioningRoutes(authapi.ProvisioningDeps{
 		Credentials: servicecred.PG{Pool: pool}, Users: pgUsers(cfg, pool, schema), Reader: pool, Organizations: identities,
-		Memberships: members, Invites: invites, Deprovision: deprovision, Orgs: orgs, ServiceAccounts: accounts, Grants: grants, Workload: workload, Logger: logger, ProfileRows: provisioningProfileRows,
+		Memberships: members, Invites: invites, Deprovision: deprovision, Orgs: orgs, ServiceAccounts: accounts, Grants: grants, Reads: reads, GrantReads: grants, Workload: workload, Logger: logger, ProfileRows: provisioningProfileRows,
 	})
 }

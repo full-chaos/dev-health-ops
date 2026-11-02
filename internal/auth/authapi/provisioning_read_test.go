@@ -297,6 +297,7 @@ func TestForeignAndMissingSameAnswer(t *testing.T) {
 			var doc map[string]any
 			_ = json.Unmarshal(got.Body.Bytes(), &doc)
 			delete(doc, "request_id")
+			delete(doc, "occurred_at")
 			raw, _ := json.Marshal(doc)
 			answers = append(answers, label+string(raw))
 		}
@@ -614,7 +615,14 @@ func TestReadAnswersMatchThePR1Corpus(t *testing.T) {
 
 var idToken = regexp.MustCompile(`"((?:org|mbr|prn|grt)_)([A-Za-z0-9_-]+)"`)
 
-func uuidFor(s string) uuid.UUID { return uuid.NewSHA1(uuid.NameSpaceOID, []byte(s)) }
+// uuidFor maps an example id to a uuid that keeps the order of the example ids (they end in a counter).
+func uuidFor(s string) uuid.UUID {
+	n := 0
+	for _, c := range s[strings.LastIndexFunc(s, func(r rune) bool { return r < '0' || r > '9' })+1:] {
+		n = n*10 + int(c-'0')
+	}
+	return uuid.MustParse(fmt.Sprintf("00000000-0000-4000-8000-%012d", n))
+}
 
 // mapIDs gives every example id in text the uuid form of the same prefix.
 func mapIDs(text string) string {
@@ -751,5 +759,16 @@ func loadCorpus(t *testing.T, f *provFixture, op string, response json.RawMessag
 		}
 	default:
 		t.Fatalf("no loader for %s", op)
+	}
+}
+
+// public.memberships.joined_at is nullable and the contract needs one for an active member: a row without it reads as joined when
+// it was created.
+func TestMembershipWithoutJoinedAtReadsAsJoinedWhenCreated(t *testing.T) {
+	f := newReadFixture(t)
+	f.reads.mem.JoinedAt = nil
+	got := f.post(PatternMembershipsGet, readCases()[4].body(f), nil)
+	if !strings.Contains(got.Body.String(), `"joined_at":"`+stamp(readTime)+`"`) {
+		t.Fatalf("%s", got.Body)
 	}
 }

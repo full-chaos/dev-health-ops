@@ -95,8 +95,8 @@ func TestAMissingProvisioningRowNamesTheRouteInTheStartLog(t *testing.T) {
 		t.Fatalf("start log route=%v, want POST %s; log:\n%s", entry["route"], authapi.PatternMembershipAdd, logs)
 	}
 	classes, _ := entry["required_classes"].([]any)
-	if len(classes) != 1 || classes[0] != "internal_svc_authsess_token" {
-		t.Fatalf("start log required_classes=%v, want [internal_svc_authsess_token]; log:\n%s", entry["required_classes"], logs)
+	if len(classes) != 1 || classes[0] != "workload_token" {
+		t.Fatalf("start log required_classes=%v, want [workload_token]; log:\n%s", entry["required_classes"], logs)
 	}
 	// The line holds exactly these fields: names only, so no future detail can
 	// add a value to it unnoticed.

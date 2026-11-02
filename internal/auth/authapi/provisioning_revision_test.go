@@ -10,7 +10,6 @@ import (
 
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/auth/org"
-	"github.com/full-chaos/dev-health-ops/internal/auth/servicecred"
 )
 
 const stateRoute = "/internal/v1/organizations/state"
@@ -196,8 +195,7 @@ func TestOrgStateBodyIsStrict(t *testing.T) {
 func TestOrgStateRefusesABadServiceCredential(t *testing.T) {
 	f := newProvFixtureWith(t, docWithRow(t, stateRoute))
 	expectRefusal(t, f.post(stateRoute, f.stateBody(), map[string]string{}), http.StatusUnauthorized, reasonInvalidCredentials)
-	f.creds.refusal = servicecred.RefusedRevoked
-	expectRefusal(t, f.post(stateRoute, f.stateBody(), nil), http.StatusUnauthorized, reasonInvalidCredentials)
+	expectRefusal(t, f.post(stateRoute, f.stateBody(), map[string]string{"Authorization": "Bearer " + provisioningToken}), http.StatusUnauthorized, reasonInvalidCredentials)
 	if f.reactivate.gets != 0 {
 		t.Fatal("a refused credential reached the store")
 	}

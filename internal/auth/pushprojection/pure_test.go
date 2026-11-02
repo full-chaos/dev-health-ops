@@ -2,6 +2,8 @@ package pushprojection
 
 import (
 	"encoding/json"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -104,5 +106,26 @@ func TestFloorKeyIsTheAggregateKeyOfTheFence(t *testing.T) {
 	}
 	if FloorInputName != "push-projection-store" {
 		t.Fatalf("FloorInputName = %q", FloorInputName)
+	}
+}
+
+func TestRevisionExpressionCoversTheWholeWireRange(t *testing.T) {
+	m := regexp.MustCompile(`~ '([^']+)'`).FindStringSubmatch(revisionExpr)
+	if m == nil {
+		t.Fatalf("no digit predicate in %q", revisionExpr)
+	}
+	re := regexp.MustCompile(m[1])
+	for _, rev := range []string{"1", "999999999999999", "1000000000000000", "9007199254740991"} {
+		if !re.MatchString(rev) {
+			t.Errorf("revision %s does not match the digit predicate %s: its digest check compares to NULL and a decided row is read again", rev, m[1])
+		}
+	}
+	for _, rev := range []string{"", "-1", "1.5", "1e3", "10000000000000000", "x1"} {
+		if re.MatchString(rev) {
+			t.Errorf("revision %q matches the digit predicate %s", rev, m[1])
+		}
+	}
+	if !strings.Contains(revisionExpr, "9007199254740991") {
+		t.Errorf("the expression has no upper bound at the wire maximum 9007199254740991: %q", revisionExpr)
 	}
 }

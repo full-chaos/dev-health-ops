@@ -546,3 +546,98 @@ func TestReaderDecidesAStaleRowItReadsSoItIsNeverReadAgain(t *testing.T) {
 		t.Fatalf("step: %+v, %v; want nothing left to read", rep, err)
 	}
 }
+
+func (e *env) drain(t *testing.T, r *Reader) {
+	t.Helper()
+	for i := 0; i < 20; i++ {
+		rep, err := r.Step(context.Background(), time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rep.Seen == 0 && rep.Retried == 0 {
+			return
+		}
+	}
+	t.Fatal("the reader did not drain the outbox in 20 steps")
+}
+
+func TestReaderMarkNeverPassesAnOldRowItDidNotScan(t *testing.T) {
+	e := getEnv(t, true)
+	ctx := context.Background()
+	org := e.org(t)
+	r := e.reader(t, time.Hour)
+	e.drain(t, r)
+	var ids []string
+	var events []audit.PushLifecycleEvent
+	for i := 0; i < 60; i++ {
+		id := uuid.NewString()
+		ids = append(ids, id)
+		events = append(events, created(org, id))
+	}
+	e.appendCommitted(t, events...)
+	first, last := e.outboxID(t, ids[0], 1), e.outboxID(t, ids[len(ids)-1], 1)
+	e.seed(t, `UPDATE auth.auth_outbox_events SET created_at = now() - interval '2 hours' WHERE aggregate_type = 'external_push_credential' AND id <= $1`, last)
+	undecided := `SELECT COALESCE(min(o.id), 0) FROM auth.auth_outbox_events o WHERE o.id BETWEEN $1 AND $2
+		AND NOT EXISTS (SELECT 1 FROM auth.credential_projection_digest d WHERE d.domain_owner = 'external_push' AND d.external_reference = o.aggregate_id AND d.revision = 1)`
+	rep, err := r.Step(ctx, time.Now().Add(2*time.Minute))
+	if err != nil || rep.Applied != 50 {
+		t.Fatalf("step 1: %+v, %v; want one batch of 50 applied", rep, err)
+	}
+	var unscanned int64
+	if err := e.admin.QueryRow(ctx, undecided, first, last).Scan(&unscanned); err != nil || unscanned == 0 {
+		t.Fatalf("unscanned row = %d (%v), want the first of the 10 rows past the batch", unscanned, err)
+	}
+	var stored int64
+	if err := e.admin.QueryRow(ctx, `SELECT low_water FROM auth.projection_cursor WHERE stream = 'external_push'`).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if rep.Mark >= unscanned || stored >= unscanned {
+		t.Fatalf("mark = %d, stored = %d: the mark passed the old row %d the step never scanned (the reaper could delete it)", rep.Mark, stored, unscanned)
+	}
+	rep, err = r.Step(ctx, time.Now().Add(4*time.Minute))
+	if err != nil || rep.Applied != 10 {
+		t.Fatalf("step 2: %+v, %v; want the 10 rows left applied", rep, err)
+	}
+	if rep.Mark < last {
+		t.Fatalf("mark = %d after every old row is decided, want it at or past %d", rep.Mark, last)
+	}
+}
+
+func TestReaderReadsALaterRevisionThatWaitedBehindAParkedHeadOnceTheHeadResolves(t *testing.T) {
+	e := getEnv(t, true)
+	ctx := context.Background()
+	org := e.org(t)
+	r := e.reader(t, time.Hour)
+	e.drain(t, r)
+	parent, child := uuid.NewString(), uuid.NewString()
+	head := audit.PushLifecycleEvent{Binding: externalpush.BindingSource, EventType: externalpush.Rotated, AggregateID: child, OrganizationID: "org_" + org.String(), SourceID: "src-r",
+		Change: externalpush.Change{Status: "active", Fingerprint: freshFingerprint(), Scopes: []string{"ingest:write"}, RotationParentID: parent}}
+	e.appendCommitted(t, head)
+	e.appendCommitted(t, scoped(head, "ingest:write"))
+	headRow, laterRow := e.outboxID(t, child, 1), e.outboxID(t, child, 2)
+	e.seed(t, `UPDATE auth.auth_outbox_events SET created_at = now() - interval '2 hours' WHERE aggregate_type = 'external_push_credential' AND id <= $1`, laterRow)
+	rep, err := r.Step(ctx, time.Now().Add(2*time.Minute))
+	if err != nil || rep.Parked != 1 {
+		t.Fatalf("step 1: %+v, %v; want the head parked as parent_pending", rep, err)
+	}
+	if e.count(t, `SELECT count(*) FROM auth.projection_retry WHERE outbox_id = $1`, headRow) != 1 {
+		t.Fatal("the head is not parked")
+	}
+	var stored int64
+	if err := e.admin.QueryRow(ctx, `SELECT low_water FROM auth.projection_cursor WHERE stream = 'external_push'`).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if rep.Mark >= laterRow || stored >= laterRow {
+		t.Fatalf("mark = %d, stored = %d: the mark passed the later revision %d that waits behind the parked head", rep.Mark, stored, laterRow)
+	}
+	e.appendCommitted(t, created(org, parent))
+	if _, err := r.Step(ctx, time.Now().Add(10*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Step(ctx, time.Now().Add(12*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if e.count(t, `SELECT count(*) FROM auth.credential_projection WHERE external_reference = $1 AND revision >= 2`, child) != 1 {
+		t.Fatal("the later revision was never read after its head resolved")
+	}
+}

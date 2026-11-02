@@ -328,6 +328,8 @@ func fakeSecret(t *testing.T, ref string) string {
 		return key32
 	case key == "MIGRATION_URI", key == "AUTH_MIGRATION_DATABASE_URI":
 		return "postgres://migrate:pw@db:5432/devhealth"
+	case strings.HasPrefix(key, "AUTH_INVITE_TOKEN_SECRET"):
+		return "invite-" + strings.ToLower(key) + "-0123456789abcdef"
 	case key == "AUTH_SESSION_ISSUE_TOKEN":
 		return "svc_fake_session_issuer_token"
 	case key == "AUTH_VALKEY_URI":
@@ -391,13 +393,22 @@ func authServiceOverrides(t *testing.T, doc map[string]any) map[string]string {
 	return out
 }
 
+// The membership routes auth-service mounts at phase 5 need both invite keys (authconfig), which the chart passes
+// through authService.extraEnv by Secret reference.
+var inviteSecrets = []string{
+	"--set", "authService.extraEnv[1].name=AUTH_INVITE_TOKEN_SECRET", "--set", "authService.extraEnv[1].valueFrom.secretKeyRef.name=auth-invite",
+	"--set", "authService.extraEnv[1].valueFrom.secretKeyRef.key=AUTH_INVITE_TOKEN_SECRET",
+	"--set", "authService.extraEnv[2].name=AUTH_INVITE_TOKEN_SECRET_PREVIOUS", "--set", "authService.extraEnv[2].valueFrom.secretKeyRef.name=auth-invite",
+	"--set", "authService.extraEnv[2].valueFrom.secretKeyRef.key=AUTH_INVITE_TOKEN_SECRET_PREVIOUS",
+}
+
 func TestAuthPhaseStartupAgrees(t *testing.T) {
 	type variant struct {
 		phase int
 		extra []string
 	}
 	variants := map[string]variant{
-		"phase 0": {0, nil}, "phase 1": {1, nil}, "phase 2": {2, nil}, "phase 3": {3, nil}, "phase 4": {4, nil}, "phase 5": {5, nil},
+		"phase 0": {0, nil}, "phase 1": {1, nil}, "phase 2": {2, nil}, "phase 3": {3, nil}, "phase 4": {4, nil}, "phase 5": {5, inviteSecrets},
 		"phase 2 eddsa":       {2, []string{"--set", "authService.accessToken.class=eddsa", "--set", "authService.accessToken.issuerURL=https://auth.example"}},
 		"phase 3 link routes": {3, []string{"--set", "authService.socialLinkRoutes=true"}},
 	}

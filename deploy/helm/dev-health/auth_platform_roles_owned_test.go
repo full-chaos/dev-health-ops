@@ -36,7 +36,7 @@ func TestPlatformRolesOwnedFalseRendersNothing(t *testing.T) {
 
 // True renders AUTH_PLATFORM_ROLES_OWNED=true on all six readers.
 func TestPlatformRolesOwnedTrueRendersOnEverySite(t *testing.T) {
-	args := phaseArgs(4, "--set", "authService.platformRolesOwned=true")
+	args := phase5Args("--set", "authService.platformRolesOwned=true")
 	docs, out, err := renderAuth(t, args...)
 	if err != nil {
 		t.Fatalf("render: %v\n%.400s", err, out)
@@ -56,9 +56,10 @@ func TestPlatformRolesOwnedTrueRendersOnEverySite(t *testing.T) {
 	}
 }
 
-// True needs users owned: below phase 4 and at stage goApi the render fails.
-func TestPlatformRolesOwnedTrueNeedsUsersOwned(t *testing.T) {
+// True needs orgs owned: below phase 5, stage owned of phase 4 included, the render fails.
+func TestPlatformRolesOwnedTrueNeedsOrgsOwned(t *testing.T) {
 	for name, args := range map[string][]string{
+		"phase 4 owned": phaseArgs(4, "--set", "authService.platformRolesOwned=true"),
 		"phase 3":       phaseArgs(3, "--set", "authService.platformRolesOwned=true"),
 		"phase 4 goApi": phaseArgs(4, "--set", "authService.usersOwnedStage=goApi", "--set", "authService.platformRolesOwned=true"),
 		"go-api only":   {"--set", "goApi.enabled=true", "--set", "authService.platformRolesOwned=true"},
@@ -91,8 +92,8 @@ func TestPlatformRolesOwnedCannotBeSetThroughExtraEnv(t *testing.T) {
 
 func platformRolesBackfillArgs(sets ...string) []string {
 	args := withSets(append(append([]string{}, backfillOn...), phase3Secrets...), append([]string{"authService.backfill.verb=users-reconcile",
-		"authService.phase=4", "authService.usersOwnedStage=owned", "goApi.enabled=true"}, sets...)...)
-	return append(append(append(args, sessionReaders...), sessionSuccessor...), authTrusted...)
+		"authService.phase=5", "goApi.enabled=true"}, sets...)...)
+	return append(append(append(append(args, sessionReaders...), sessionSuccessor...), authTrusted...), orgProvisioningOn...)
 }
 
 // The check runs on every render, so it holds when no consumer renders: phase 0, go-api, query-api and the backfill Job off.

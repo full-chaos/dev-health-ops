@@ -181,8 +181,11 @@ authService:
   #         public users table; no auth-schema copy, no projection.
   #      5  orgs owned: AUTH_ORGS_OWNED too. Meaning (D6358): auth-service writes
   #         the existing public organizations and memberships tables.
-  #    Phase 5 is refused at render: orgs owned needs its own public-table writer
-  #    leaf. Phase 4 renders. Rollback from phase 4 is NOT one upgrade: stage goApi,
+  #    Phase 5 needs goApi.authProxy.orgProvisioning=true (and AUTH_MEMBERSHIP_ROUTES on
+  #    auth-service): go-api sends organization and membership changes to auth-service.
+  #    AUTH_ORGS_OWNED then also reaches go-api, the migrate Job and the River hook, which
+  #    revoke the api role's memberships writes and narrow organizations
+  #    (docs/operate/runbooks/auth-orgs-owned-flip-and-rollback.md). Rollback from phase 4 is NOT one upgrade: stage goApi,
   #    then deploy/scripts/auth-users-owned-barrier.sh down-auth, then phase 3 (runbook
   #    docs/operate/runbooks/auth-users-owned-flip-and-rollback.md). The chart refuses the keys this replaces (goApi.authProxy,
   #    authService.enabled, authService.usersOwned, authService.orgsOwned).
@@ -197,7 +200,7 @@ authService:
   usersOwnedStage: ""
   # -- Platform roles owned: renders AUTH_PLATFORM_ROLES_OWNED=true on auth-service, go-api, query-api and the
   #    auth-migrate, auth-grants and auth-backfill Jobs, so platform authority moves from public.users.is_superuser
-  #    to auth.platform_role_assignments. Refused unless users are owned (phase 4, usersOwnedStage owned).
+  #    to auth.platform_role_assignments. Refused unless orgs are owned (phase 5).
   #    Runbook: docs/operate/runbooks/auth-platform-roles-flip-and-rollback.md.
   platformRolesOwned: false
   # -- Federated sign-in join: renders AUTH_SSO_JIT=true on auth-service, so an OIDC, OAuth or SAML sign-in can join a

@@ -735,8 +735,8 @@ serve it).
 
 {{/*
 authService.phase, the one auth cutover key (values.yaml lists the phases). It refuses the keys it replaces, refuses
-any value that is not a whole number from 0 to 5, refuses phase 5 (D6358: orgs owned waits for its own public-table writer
-leaf), and renders the phase. Every ladder read goes through dev-health.authOn, so every render runs these checks.
+any value that is not a whole number from 0 to 5, refuses phase 5 without goApi.authProxy.orgProvisioning (orgs owned moves
+organization changes to auth-service, which go-api must call), and renders the phase. Every ladder read goes through dev-health.authOn, so every render runs these checks.
 */}}
 {{- define "dev-health.authPhase" -}}
 {{- $v := .Values -}}
@@ -756,7 +756,7 @@ leaf), and renders the phase. Every ladder read goes through dev-health.authOn, 
 {{- $routes := false }}{{- range ($v.authService.extraEnv | default list) }}{{- if eq (toString .name) "AUTH_MEMBERSHIP_ROUTES" }}{{- $routes = eq (toString .value) "true" }}{{- end }}{{- end }}
 {{- if not $routes }}{{- fail "goApi.authProxy.orgProvisioning needs authService.extraEnv AUTH_MEMBERSHIP_ROUTES=true (the exact name; the last entry with that name must be \"true\"): go-api calls auth-service's provisioning routes, which auth-service mounts only with that setting" }}{{- end }}
 {{- end -}}
-{{- if ge (int $p) 5 }}{{- fail (printf "authService.phase %d: phase 5 (orgs owned) needs its own public-table writer leaf (D6358): auth-service does not yet write the existing public organizations and memberships tables, so phase 4 is the highest phase this chart renders" (int $p)) }}{{- end -}}
+{{- if and (ge (int $p) 5) (ne (default false (default dict $v.goApi.authProxy).orgProvisioning) true) }}{{- fail "authService.phase 5 needs goApi.authProxy.orgProvisioning=true: with orgs owned auth-service writes the organization and membership rows, so go-api must send member, invite, organization create, rename and delete changes to it" }}{{- end -}}
 {{- $stage := toString (default "" $v.authService.usersOwnedStage) -}}
 {{- if not (has $stage (list "" "goApi" "owned")) }}{{- fail (printf "authService.usersOwnedStage must be goApi or owned, got %q" $stage) }}{{- end -}}
 {{- if and (eq (int $p) 4) (eq $stage "") }}{{- fail "authService.phase 4 needs authService.usersOwnedStage: goApi first (go-api forwards the credential routes, auth-service does not own users yet), then owned after the barrier (docs/operate/runbooks/auth-users-owned-flip-and-rollback.md)" }}{{- end -}}
@@ -874,15 +874,14 @@ the auth Jobs, the grants) is on only at stage owned, so go-api rolls first and 
 
 {{/*
 "true" when authService.platformRolesOwned is on, else "". The one read of the switch: auth-service, go-api, query-api and the
-auth Jobs render AUTH_PLATFORM_ROLES_OWNED from it. true is refused unless users are owned (authOn usersOwned): platform authority
-moves from public.users.is_superuser to auth.platform_role_assignments only after users do.
+auth Jobs render AUTH_PLATFORM_ROLES_OWNED from it. true is refused unless orgs are owned (authOn orgsOwned, phase 5): platform authority
+moves from public.users.is_superuser to auth.platform_role_assignments only after users and organizations do.
 */}}
 {{- define "dev-health.platformRolesOwned" -}}
 {{- $v := .Values.authService.platformRolesOwned -}}
 {{- if not (kindIs "bool" $v) }}{{- fail "authService.platformRolesOwned must be true or false" }}{{- end -}}
 {{- if $v -}}
-{{- /* The phase 5 leaf (orgs owned) tightens this guard to authOn orgsOwned. */ -}}
-{{- if ne (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true" }}{{- fail "authService.platformRolesOwned needs users owned: authService.phase 4 with authService.usersOwnedStage=owned (docs/operate/runbooks/auth-platform-roles-flip-and-rollback.md)" }}{{- end -}}
+{{- if ne (include "dev-health.authOn" (dict "flag" "orgsOwned" "context" .)) "true" }}{{- fail "authService.platformRolesOwned needs orgs owned: authService.phase 5 (docs/operate/runbooks/auth-platform-roles-flip-and-rollback.md)" }}{{- end -}}
 true
 {{- end -}}
 {{- end -}}

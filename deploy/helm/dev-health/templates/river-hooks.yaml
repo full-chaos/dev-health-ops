@@ -473,6 +473,11 @@ spec:
             - name: AUTH_PROXY_SESSIONS
               value: "true"
             {{- end }}
+            {{- if eq (include "dev-health.authOn" (dict "flag" "orgsOwned" "context" .)) "true" }}
+            {{- /* go-api's AUTH_ORGS_OWNED: the api role's memberships and organizations grants follow it (postgres.APIPostureFor). */}}
+            - name: AUTH_ORGS_OWNED
+              value: "true"
+            {{- end }}
           envFrom:
             - secretRef:
                 {{- if .Values.secrets.create }}

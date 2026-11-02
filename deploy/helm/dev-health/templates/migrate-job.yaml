@@ -238,6 +238,11 @@ spec:
             - name: AUTH_PROXY_SESSIONS
               value: "true"
             {{- end }}
+            {{- if eq (include "dev-health.authOn" (dict "flag" "orgsOwned" "context" .)) "true" }}
+            {{- /* go-api's AUTH_ORGS_OWNED: the River step's api role grants on memberships and organizations follow it (postgres.APIPostureFor). */}}
+            - name: AUTH_ORGS_OWNED
+              value: "true"
+            {{- end }}
             {{- if $chCloud.enabled }}
             {{- /*
             CHAOS-10754 / CHAOS-11995: the Cloud login for the DDL this Job

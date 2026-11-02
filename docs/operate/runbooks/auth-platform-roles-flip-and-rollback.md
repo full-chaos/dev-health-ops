@@ -9,7 +9,7 @@ lifecycle: active
 
 # Auth platform roles flip and rollback
 
-With `authService.platformRolesOwned: true` the chart renders `AUTH_PLATFORM_ROLES_OWNED=true` on auth-service, go-api, query-api, and the auth-migrate, auth-grants and auth-backfill Jobs. Platform authority then comes from `auth.platform_role_assignments` and no longer from `public.users.is_superuser` (CHAOS-11003). The render refuses `true` unless users are owned (`authService.phase: 4` with `usersOwnedStage: owned`).
+With `authService.platformRolesOwned: true` the chart renders `AUTH_PLATFORM_ROLES_OWNED=true` on auth-service, go-api, query-api, and the auth-migrate, auth-grants and auth-backfill Jobs. Platform authority then comes from `auth.platform_role_assignments` and no longer from `public.users.is_superuser` (CHAOS-11003). The render refuses `true` unless orgs are owned (`authService.phase: 5`, which is users owned too).
 
 ## Rules
 

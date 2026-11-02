@@ -129,7 +129,7 @@
           "type": "boolean"
         },
         "platformRolesOwned": {
-          "description": "CHAOS-12191: render AUTH_PLATFORM_ROLES_OWNED=true on every reader. Refused unless users are owned (the templates check it).",
+          "description": "CHAOS-12191: render AUTH_PLATFORM_ROLES_OWNED=true on every reader. Refused unless orgs are owned, phase 5 (the templates check it).",
           "type": "boolean"
         }
       }

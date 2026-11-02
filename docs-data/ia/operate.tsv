@@ -55,6 +55,7 @@ op-rb-query-api	op-runbooks	/operate/runbooks/query-api-bootstrap/	Query-api boo
 op-rb-auth-sessions-flip	op-runbooks	/operate/runbooks/auth-sessions-flip-and-rollback/	Auth sessions flip and rollback	runbook	true	public	active	false
 op-rb-auth-users-owned-flip	op-runbooks	/operate/runbooks/auth-users-owned-flip-and-rollback/	Auth users-owned flip and rollback	runbook	true	public	active	false
 op-rb-auth-platform-roles-flip	op-runbooks	/operate/runbooks/auth-platform-roles-flip-and-rollback/	Auth platform roles flip and rollback	runbook	true	public	active	false
+op-rb-auth-orgs-owned-flip	op-runbooks	/operate/runbooks/auth-orgs-owned-flip-and-rollback/	Auth orgs-owned flip and rollback	runbook	true	public	active	false
 op-rb-auth-service-scrape-alerts	op-runbooks	/operate/runbooks/auth-service-scrape-and-alerts/	Auth-service scrape check and alert import	runbook	true	public	active	false
 op-rb-auth-users-flip-back-grants	op-runbooks	/operate/runbooks/auth-users-flip-back-grants/	Auth users flip-back grants	runbook	true	public	active	false
 op-rb-auth-workload-bootstrap-credential	op-runbooks	/operate/runbooks/auth-workload-bootstrap-credential/	Workload bootstrap credential	runbook	true	public	active	false

@@ -28,11 +28,10 @@ func TestSSOJITOffRendersNothing(t *testing.T) {
 func TestSSOJITTrueNeedsOrgsOwned(t *testing.T) {
 	const on = "authService.ssoJit=true"
 	for name, args := range map[string][]string{
-		"phase 2":                          phaseArgs(2, "--set", on),
-		"phase 3":                          phaseArgs(3, "--set", on),
-		"phase 4 goApi":                    phaseArgs(4, "--set", "authService.usersOwnedStage=goApi", "--set", on),
-		"phase 4 owned":                    phaseArgs(4, "--set", on),
-		"phase 5 without org provisioning": phaseArgs(5, append([]string{"--set", on}, membershipRoutesOn...)...),
+		"phase 2":       phaseArgs(2, "--set", on),
+		"phase 3":       phaseArgs(3, "--set", on),
+		"phase 4 goApi": phaseArgs(4, "--set", "authService.usersOwnedStage=goApi", "--set", on),
+		"phase 4 owned": phaseArgs(4, "--set", on),
 	} {
 		_, out, err := renderAuth(t, args...)
 		if err == nil || !strings.Contains(out, "authService.ssoJit needs orgs owned") {

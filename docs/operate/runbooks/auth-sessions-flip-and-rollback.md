@@ -111,7 +111,7 @@ Phase 2 turns on the sessions flag only. The access-token key is the Secret go-a
 ### B5 Readback
 
 1. `helm history` shows the new revision deployed; `helm status` is clean.
-2. The auth-migrate and grant hook Job logs show success. Read no database directly.
+2. The auth-migrate and grant hook Job logs show success. Read no database directly. `kubectl logs job/<release>-dev-health-auth-migrate` shows `auth schema current at version N` (the applied auth schema version; the Job is kept 24 h after success). The auth-service log shows `auth schema checked` with `embedded_head_version`: the newest version in that build. It appears at the first successful readiness, not at process start. Compare N with it.
 3. The go-api log line "auth proxy routing" shows `sessions` true and `local_login` and `credentials` false. That line states the flags only; the session routes are proven by step 6.
 4. Auth-service pods are Ready, and the log shows no rate-limit store error.
 5. 15 minutes of pod logs show 0 errors and 0 go-api 5xx.

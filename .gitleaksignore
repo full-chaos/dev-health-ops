@@ -61,3 +61,5 @@ internal/auth/authapi/compat_validate_test.go:generic-api-key:588
 # CHAOS-12562: the parity golden cell passes the map key and the field-name literal "CycleP5030dHours" to assertFloatEqual; the
 # generic-api-key rule reads them as a key and a value. Commit-less file:rule:line form (line 582 in c6ee7c06 and at the tip). Not a credential.
 internal/jobs/metrics/daily/icfinalize/parity_golden_test.go:generic-api-key:582
+# The planted marker of the service account key exchange tests: a fixed test string, not a credential. Commit-less file:rule:line form so the row still matches after a squash.
+internal/auth/workloadexchange/service_account_key_test.go:generic-api-key:30

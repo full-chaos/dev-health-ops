@@ -688,7 +688,7 @@ func (s *Store) endSessions(ctx context.Context, tx audit.TxOps, ids []string, r
 	if err := delegationend.End(ctx, tx, s.q, delegationend.Children(delegated, ids), delegationend.ReasonBaseEnded); err != nil {
 		return err
 	}
-	return delegationend.Record(ctx, tx, delegated)
+	return delegationend.Record(ctx, tx, delegated, delegationend.EndPublicRows)
 }
 
 // Revoke ends one live session and every credential of it. It reports false

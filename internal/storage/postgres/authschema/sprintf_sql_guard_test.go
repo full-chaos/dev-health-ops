@@ -101,6 +101,18 @@ var sqlOperandExemptions = []sqlOperandExemption{
 		reason: "columns holds only quoteIdentifier results of the validated SSOProviderWriteColumns names",
 	},
 	{
+		file: "impersonationwrite_grant.go", fn: "impersonationWriteStatements", operand: `strings.Join(end, ", ")`,
+		reason: "end holds only quoteIdentifier results of the validated ImpersonationEndColumns names",
+	},
+	{
+		file: "impersonationwrite_grant.go", fn: "impersonationWriteStatements", operand: `strings.Join(start, ", ")`,
+		reason: "start holds only quoteIdentifier results of the validated ImpersonationStartColumns names",
+	},
+	{
+		file: "impersonationwrite_grant.go", fn: "impersonationWriteStatements", operand: `strings.Join(read, ", ")`,
+		reason: "read holds only quoteIdentifier results of the validated ImpersonationLegacyReadColumns names",
+	},
+	{
 		file: "session_readers.go", fn: "sessionReaderStatements", operand: `strings.Join(columns, ", ")`,
 		reason: "columns holds only quoteIdentifier results of the validated SessionReaderReads names",
 	},

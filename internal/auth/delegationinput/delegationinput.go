@@ -124,22 +124,14 @@ func (a *Adapter) Snapshot(ctx context.Context, in Input) (authorization.Snapsho
 	if err != nil {
 		return invalid(in.Inner), fmt.Errorf("%w: platform role: %w", ErrDelegationUnavailable, err)
 	}
-	if !auth.Allows(session.ImpersonateAction) {
-		return invalid(in.Inner), nil
-	}
-	role := ""
-	if auth.IsOwner() {
-		role = platformrole.PlatformOwner
-	}
-	return delegatedSnapshot{Snapshot: in.Inner, del: authorization.Delegation{
-		Chain: []authorization.Hop{{
-			ActorPrincipalID: actor.String(),
-			PermittedActions: append([]string(nil), rec.Delegation.PermittedActions...),
-		}},
-		ActorPlatformRole:    role,
-		TargetOrganizationID: rec.OrganizationID.String(),
-		Assurance:            session.AssuranceOf(rec.AMR),
-	}}, nil
+	return delegatedSnapshot{Snapshot: in.Inner, del: Delegation(Facts{
+		Actor:               actor,
+		Organization:        rec.OrganizationID,
+		AMR:                 rec.AMR,
+		PermittedActions:    rec.Delegation.PermittedActions,
+		ActorMayImpersonate: auth.Allows(session.ImpersonateAction),
+		ActorOwner:          auth.IsOwner(),
+	})}, nil
 }
 
 // Facts are the values of one delegated session row and of its actor, read by
@@ -158,4 +150,21 @@ type Facts struct {
 // Delegation is the actor chain the evaluator decides over. A row that cannot
 // be decided is the empty chain, which denies every action with
 // delegation_invalid.
-func Delegation(Facts) authorization.Delegation { return authorization.Delegation{} }
+func Delegation(f Facts) authorization.Delegation {
+	if f.Actor == uuid.Nil || f.Organization == nil || !f.ActorMayImpersonate {
+		return authorization.Delegation{}
+	}
+	role := ""
+	if f.ActorOwner {
+		role = platformrole.PlatformOwner
+	}
+	return authorization.Delegation{
+		Chain: []authorization.Hop{{
+			ActorPrincipalID: f.Actor.String(),
+			PermittedActions: append([]string(nil), f.PermittedActions...),
+		}},
+		ActorPlatformRole:    role,
+		TargetOrganizationID: f.Organization.String(),
+		Assurance:            session.AssuranceOf(f.AMR),
+	}
+}

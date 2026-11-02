@@ -595,7 +595,11 @@ func configureWithRoutes(
 	logAPIRoutes(ctx, logger, cfg, routes, len(extra))
 	routes = append(routes, extra...)
 
-	apiHTTP, err := httpapi.NewServer(apiServerOptions(cfg, logger, routes))
+	if err := checkInternalOnlyRoutes(routes); err != nil {
+		closeStore()
+		return nil, err
+	}
+	apiHTTP, err := httpapi.NewServer(apiServerOptions(cfg, logger, publicRoutes(routes)))
 	if err != nil {
 		closeStore()
 		return nil, err

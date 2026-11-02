@@ -1,6 +1,7 @@
 package authruntime
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -24,6 +25,31 @@ var internalRoutes = map[string]bool{
 // empty until a route needs it.
 var internalOnlyRoutes = map[string]bool{}
 
+// publicRoutes drops every internalOnlyRoutes key, so an internal-only route never reaches the public listener.
+func publicRoutes(routes []httpapi.Route) []httpapi.Route {
+	var kept []httpapi.Route
+	for _, route := range routes {
+		if !internalOnlyRoutes[route.Method+" "+route.Pattern] {
+			kept = append(kept, route)
+		}
+	}
+	return kept
+}
+
+// checkInternalOnlyRoutes fails when an internalOnlyRoutes key is no registered route (a dead key would be silent).
+func checkInternalOnlyRoutes(routes []httpapi.Route) error {
+	registered := map[string]bool{}
+	for _, route := range routes {
+		registered[route.Method+" "+route.Pattern] = true
+	}
+	for key := range internalOnlyRoutes {
+		if !registered[key] {
+			return fmt.Errorf("internal-only route %q is not a registered route", key)
+		}
+	}
+	return nil
+}
+
 // internalServerOptions is the internal listener: the API listener's options over internalRoutes alone, on
 // cfg.InternalAddress, with no trusted proxy. Its callers are identified by their tokens, so the client address is
 // always the TCP peer and a forwarded X-Forwarded-For or X-Request-ID is never believed (cfg.TrustedProxies is the
@@ -31,7 +57,8 @@ var internalOnlyRoutes = map[string]bool{}
 func internalServerOptions(cfg authconfig.Config, logger *slog.Logger, routes []httpapi.Route) httpapi.ServerOptions {
 	var served []httpapi.Route
 	for _, route := range routes {
-		if internalRoutes[route.Method+" "+route.Pattern] {
+		key := route.Method + " " + route.Pattern
+		if internalRoutes[key] || internalOnlyRoutes[key] {
 			served = append(served, route)
 		}
 	}

@@ -31,6 +31,14 @@ expect_rc jwt-kid-garbage-refused 1 jwt_header_kid "not-a-jwt"
 expect_eq jwt-sid "$(jwt_claim "${TOK_A}" sid)" "s-1"
 expect_rc jwt-claim-absent-refused 1 jwt_claim "${TOK_A}" nope
 
+# A segment whose base64 holds both url-safe characters ("-" for "+", "_" for "/") decodes back to its JSON.
+TOK_SAFE="$(jwt '{"alg":"EdDSA","kid":"a"}' '{"sid":"???>>>?>?>?>>>>???"}')"
+case "${TOK_SAFE}" in *_*) ok fixture-has-underscore ;; *) bad fixture-has-underscore ;; esac
+case "${TOK_SAFE}" in *-*) ok fixture-has-hyphen ;; *) bad fixture-has-hyphen ;; esac
+expect_eq jwt-claim-urlsafe-segment "$(jwt_claim "${TOK_SAFE}" sid)" '???>>>?>?>?>>>>???'
+TOK_EMPTY_KID="$(jwt '{"alg":"EdDSA","kid":""}' '{"sid":"s-4"}')"
+expect_rc jwt-kid-empty-refused 1 jwt_header_kid "${TOK_EMPTY_KID}"
+
 JWKS3='{"keys":[{"kid":"c","kty":"OKP"},{"kid":"a","kty":"OKP"},{"kid":"b","kty":"OKP"}]}'
 expect_eq jwks-kids-sorted "$(jwks_kids "${JWKS3}" | tr '\n' ' ')" "a b c "
 expect_rc jwks-has-b 0 jwks_has_kid "${JWKS3}" b

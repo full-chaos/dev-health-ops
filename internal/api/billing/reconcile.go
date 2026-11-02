@@ -410,7 +410,7 @@ func (h handlers) reconcile(w http.ResponseWriter, r *http.Request) {
 		h.write(w, validation(errs))
 		return
 	}
-	if !policy.UserFrom(r.Context()).IsSuperuser {
+	if !policy.UserFrom(r.Context()).Holds(policy.ActionAdminBilling) {
 		h.write(w, superadminRequired)
 		return
 	}

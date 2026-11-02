@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/servicecred"
 )
@@ -29,7 +30,7 @@ func newProvWorkloadFixture(t *testing.T) *provWorkloadFixture {
 // workloadRouteOps are the routes that take the go-api workload token; every
 // other provisioning route refuses it.
 var workloadRouteOps = []string{opMembershipAdd, opMembershipRole, opMembershipRemove, opMembershipTransfer,
-	opInviteCreate, opInviteAccept, opOrgDeprovision, opOrgReactivate, opOrgState, opOrgOnboard, opOrgCreate,
+	opInviteCreate, opInviteAccept, opOrgDeprovision, opOrgReactivate, opOrgSuspend, opOrgState, opOrgOnboard, opOrgCreate,
 	opServiceAccountCreate, opServiceAccountDisable, opServiceAccountEnable, opServiceAccountOwner,
 	opServiceAccountKeyIssue, opServiceAccountKeyRotate, opServiceAccountKeyRevoke, opServiceAccountKeyList}
 
@@ -243,11 +244,10 @@ func TestEveryProvisioningRouteIsOnTheWorkloadListOrRefusesTheToken(t *testing.T
 	}
 }
 
-// The invite revoke and organization suspend routes are not in
-// workloadRouteOps: a valid go-api workload token is the same 401 body as a
-// refused session issuer credential, before the key set, the credential check,
-// the users seam or the verb (so no audit row), and it is not counted. The
-// session issuer credential still works on them.
+// The invite revoke route is not in workloadRouteOps: a valid go-api workload
+// token is the same 401 body as a refused session issuer credential, before the
+// key set, the credential check, the users seam or the verb (so no audit row),
+// and it is not counted. The session issuer credential still works on it.
 func TestProvisioningRoutesOffTheWorkloadListRefuseTheWorkloadToken(t *testing.T) {
 	off := offWorkloadRouteCases()
 	var ops []string
@@ -255,7 +255,7 @@ func TestProvisioningRoutesOffTheWorkloadListRefuseTheWorkloadToken(t *testing.T
 		ops = append(ops, c.op)
 	}
 	slices.Sort(ops)
-	if want := []string{opInviteRevoke, opOrgSuspend}; !slices.Equal(ops, want) {
+	if want := []string{opInviteRevoke}; !slices.Equal(ops, want) {
 		t.Fatalf("routes off the workload list = %v, want %v", ops, want)
 	}
 	for _, c := range off {
@@ -307,5 +307,61 @@ func TestProvisioningWorkloadLogsCarryNoTokenText(t *testing.T) {
 	}
 	if !strings.Contains(logs, `"refusal":"subject"`) {
 		t.Fatalf("the refusal reason is not logged: %s", logs)
+	}
+}
+
+// The suspend route takes the go-api workload token with the document the
+// binary embeds: the routes build with the workload path on, the verb gets the
+// workload principal and the token's jti as the caller, and nothing reaches
+// the service credential check or the compat count.
+func TestOrgSuspendAcceptsTheGoAPIWorkloadTokenOnTheEmbeddedDocument(t *testing.T) {
+	w := newWorkloadIssueFixture(t)
+	f := newProvFixtureFor(t, authv1.AuthServiceEndpointProfiles, w.workload)
+	header, jti := w.mint("workload+jwt", nil)
+	body := encode(map[string]any{"organization_id": f.org.String(), "actor_principal_id": f.super.String()})
+	if response := f.post(PatternOrgSuspend, body, header); response.Code != http.StatusOK {
+		t.Fatalf("suspend with the workload token: %d %s, want 200", response.Code, response.Body)
+	}
+	if f.reactivate.suspends != 1 {
+		t.Fatalf("%d suspends, want 1", f.reactivate.suspends)
+	}
+	caller := f.reactivate.sactor.Caller
+	if want := uuidOfWire(t, w.subject); caller.Workload == nil || *caller.Workload != want || caller.JTI != jti || caller.CredentialID != "" {
+		t.Fatalf("suspend caller = %+v, want workload %s and jti %s", caller, want, jti)
+	}
+	if got, _ := f.uses(opOrgSuspend); got != 0 || len(f.creds.scopes) != 0 {
+		t.Fatalf("a workload suspend reached the credential check (%d) or the compat count (%d)", len(f.creds.scopes), got)
+	}
+}
+
+// With the workload path on, every other bearer stays refused on the suspend
+// route: a wrong audience, subject or typ, another credential prefix, a token
+// the verifier refuses and a refused session issuer credential are the same
+// 401, and none reaches the verb.
+func TestOrgSuspendStillRefusesEveryOtherBearer(t *testing.T) {
+	refusals := map[string]func(*workloadIssueFixture) map[string]string{}
+	for name, build := range issuePreKeyRefusals() {
+		refusals["pre-key "+name] = build
+	}
+	for name, build := range issueVerifierRefusals() {
+		refusals["verifier "+name] = build
+	}
+	for name, build := range refusals {
+		w := newWorkloadIssueFixture(t)
+		f := newProvFixtureFor(t, authv1.AuthServiceEndpointProfiles, w.workload)
+		body := encode(map[string]any{"organization_id": f.org.String(), "actor_principal_id": f.super.String()})
+		expectRefusal(t, f.post(PatternOrgSuspend, body, build(w)), http.StatusUnauthorized, reasonInvalidCredentials)
+		if f.reactivate.suspends != 0 || f.users.reads != 0 || len(f.creds.scopes) != 0 {
+			t.Fatalf("%s: a refused bearer reached the suspend verb (%d), the users seam (%d) or the credential check (%d)", name,
+				f.reactivate.suspends, f.users.reads, len(f.creds.scopes))
+		}
+	}
+	w := newWorkloadIssueFixture(t)
+	f := newProvFixtureFor(t, authv1.AuthServiceEndpointProfiles, w.workload)
+	f.creds.refusal = servicecred.RefusedRevoked
+	body := encode(map[string]any{"organization_id": f.org.String(), "actor_principal_id": f.super.String()})
+	expectRefusal(t, f.post(PatternOrgSuspend, body, nil), http.StatusUnauthorized, reasonInvalidCredentials)
+	if f.reactivate.suspends != 0 || w.keys.reads != 0 {
+		t.Fatalf("a refused session issuer credential reached the suspend verb (%d) or the key set (%d)", f.reactivate.suspends, w.keys.reads)
 	}
 }

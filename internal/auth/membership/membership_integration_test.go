@@ -773,3 +773,24 @@ func TestActorAndTargetVerbsShareOneLockOrder(t *testing.T) {
 		}
 	}
 }
+
+// An add on a suspended organization is refused under the verb's locks.
+func TestAddOnASuspendedOrgIsRefused(t *testing.T) {
+	e := getEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	org, user := e.seedOrg(t, ctx), e.seedUser(t, ctx)
+	if _, err := e.admin.Exec(ctx, `UPDATE public.organizations SET is_active = false WHERE id = $1`, org); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.identity.ProjectOrganization(ctx, org); err != nil {
+		t.Fatal(err)
+	}
+	_, err := e.store.Add(ctx, Change{OrgID: org, PrincipalID: user, Role: "member", Authorize: allowAll})
+	if !errors.Is(err, ErrOrgSuspended) {
+		t.Fatalf("Add = %v, want ErrOrgSuspended", err)
+	}
+	if n := e.count(t, ctx, `SELECT (SELECT count(*) FROM public.memberships WHERE org_id = $1) + (SELECT count(*) FROM auth.memberships WHERE organization_id = $1)`, org); n != 0 {
+		t.Fatalf("%d membership rows, want none", n)
+	}
+}

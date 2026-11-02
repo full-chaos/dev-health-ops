@@ -15,6 +15,12 @@ const ExternalPushLifecycleEventSurface = externalpush.Surface
 // ExternalPushCredentialAggregate is the one aggregate type of the surface.
 const ExternalPushCredentialAggregate = externalpush.Aggregate
 
+// External Push credential bindings.
+const (
+	ExternalPushBindingSource       = externalpush.BindingSource
+	ExternalPushBindingOrganization = externalpush.BindingOrganization
+)
+
 // External Push lifecycle event types, in the schema's closed order.
 const (
 	ExternalPushCreated = externalpush.Created
@@ -53,7 +59,8 @@ func (c ExternalPushLifecycleChange) MarshalJSON() ([]byte, error) { return c.Wi
 type ExternalPushLifecyclePayload struct {
 	Revision         Revision                    `json:"revision"`
 	OrganizationID   string                      `json:"organization_id"`
-	SourceID         string                      `json:"source_id"`
+	Binding          string                      `json:"binding"`
+	SourceID         string                      `json:"source_id,omitempty"`
 	ActorPrincipalID string                      `json:"actor_principal_id,omitempty"`
 	RequestID        string                      `json:"request_id,omitempty"`
 	Change           ExternalPushLifecycleChange `json:"change"`

@@ -258,6 +258,16 @@ func levelIn(root ast.Node, closures map[string]string) string {
 				level = n.Sel.Name
 			}
 		case *ast.CallExpr:
+			// The platform wraps name an action, not a level: WrapPlatform is the
+			// Superuser level, WrapAdminOr the Admin level.
+			if sel, ok := n.Fun.(*ast.SelectorExpr); ok {
+				switch sel.Sel.Name {
+				case "WrapPlatform", "BodyFirstPlatform", "bodyFirstPlatform":
+					level = "Superuser"
+				case "WrapAdminOr", "BodyFirstAdminOr", "bodyFirstAdminOr":
+					level = "Admin"
+				}
+			}
 			switch fun := n.Fun.(type) {
 			case *ast.Ident:
 				if closure, ok := closures[fun.Name]; ok {

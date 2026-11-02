@@ -111,6 +111,7 @@ var authorizeNow = time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC).UnixNano()
 type authorizeHandlerFixture struct {
 	*authorizeFixture
 	state     *fakeDecisionState
+	audit     *fakeAudit
 	principal uuid.UUID
 	org       string
 	reference string
@@ -155,8 +156,9 @@ func newAuthorizeHandlerFixture(t *testing.T) *authorizeHandlerFixture {
 			{principal, ""}: {principal: authorization.StatusActive, now: authorizeNow},
 		},
 	}
+	sink := &fakeAudit{}
 	routes, err := AuthorizeRoutes(AuthorizeDeps{
-		Callers: f.callers(), References: f.references(), State: state, Evaluator: authorization.NewEvaluator(),
+		Callers: f.callers(), References: f.references(), State: state, Evaluator: authorization.NewEvaluator(), Audit: sink.write,
 		ProfileRows: authorizeProfileDoc(t, PatternAuthorize, PatternAuthorizeBatch),
 	})
 	if err != nil {
@@ -170,7 +172,7 @@ func newAuthorizeHandlerFixture(t *testing.T) *authorizeHandlerFixture {
 		t.Fatal(err)
 	}
 	byPattern := map[string]http.Handler{PatternAuthorize: server.Handler(), PatternAuthorizeBatch: server.Handler()}
-	return &authorizeHandlerFixture{authorizeFixture: f, state: state, principal: principal, org: org, reference: reference, sid: sessionID, routes: byPattern}
+	return &authorizeHandlerFixture{authorizeFixture: f, state: state, audit: sink, principal: principal, org: org, reference: reference, sid: sessionID, routes: byPattern}
 }
 
 func (h *authorizeHandlerFixture) question(action, kind, key, org string) map[string]any {

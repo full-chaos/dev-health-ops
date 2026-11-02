@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authorization"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
@@ -87,6 +88,9 @@ type AuthorizeDeps struct {
 	References *PrincipalReferences
 	State      DecisionState
 	Evaluator  *authorization.Evaluator
+	// Audit writes the audit rows of one call's high-risk decisions in one
+	// transaction, all or none.
+	Audit func(ctx context.Context, events []audit.AuditEvent) error
 	// ProfileRows is the endpoint-profile document a route's row is looked up
 	// in; nil reads the embedded document.
 	ProfileRows []byte

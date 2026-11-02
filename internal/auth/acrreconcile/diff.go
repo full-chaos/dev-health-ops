@@ -78,6 +78,9 @@ func Diff(listed []Listed, projected []Projected, now time.Time, tick time.Durat
 	}
 	p := make(map[string]Projected, len(projected))
 	for _, r := range projected {
+		if !knownStatus(r.Status) {
+			return nil, fmt.Errorf("%w: %q (projection)", ErrUnknownStatus, r.Status)
+		}
 		if _, dup := p[r.ID]; dup {
 			return nil, fmt.Errorf("%w (projection)", ErrDuplicate)
 		}
@@ -111,7 +114,7 @@ func Diff(listed []Listed, projected []Projected, now time.Time, tick time.Durat
 
 func withinExpiryTick(l Listed, p Projected, now time.Time, tick time.Duration) bool {
 	return l.Status == pushlifecycle.StatusActive && p.Status == pushlifecycle.StatusExpired &&
-		p.ExpiresAt != nil && now.Sub(*p.ExpiresAt) <= tick
+		p.ExpiresAt != nil && !now.Before(*p.ExpiresAt) && now.Sub(*p.ExpiresAt) <= tick
 }
 
 // Confirm keeps the findings of the first pass that the second pass, run after

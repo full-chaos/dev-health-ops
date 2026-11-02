@@ -143,6 +143,7 @@ const APPROVED_AUDIT = [
   "membership_added",
   "membership_removed",
   "membership_status_changed",
+  "membership_role_changed",
   "grant_created",
   "grant_updated",
   "grant_revoked",

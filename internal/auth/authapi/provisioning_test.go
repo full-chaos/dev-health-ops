@@ -23,6 +23,7 @@ import (
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/grant"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/invite"
 	"github.com/full-chaos/dev-health-ops/internal/auth/membership"
@@ -352,6 +353,8 @@ func newProvFixtureFor(t *testing.T, profileRows []byte, workload *SessionIssueW
 		deprovision: &fakeDeprovision{}, reactivate: &fakeReactivate{}, sa: &fakeServiceAccounts{}, grants: &fakeGrants{}, reader: sdkmetric.NewManualReader(), logs: &bytes.Buffer{},
 		org: uuid.New(), admin: uuid.New(), owner: uuid.New(), viewer: uuid.New(), super: uuid.New(), target: uuid.New(), x: uuid.New()}
 	f.account()
+	f.grants.principal = f.target
+	f.grants.out = grant.Grant{ID: uuid.New(), OrgID: f.org, PrincipalID: f.target, Role: "viewer", Key: "acme/api", Origin: grant.OriginAPI, Revision: 1}
 	f.users = &fakeProvUsers{
 		states: map[uuid.UUID]UserState{
 			f.admin: {IsActive: true}, f.owner: {IsActive: true}, f.viewer: {IsActive: true},
@@ -388,7 +391,7 @@ func (f *provFixture) post(path, body string, header map[string]string) *httptes
 }
 
 func (f *provFixture) storeCalls() int {
-	return f.orgs.calls + f.members.calls + f.invites.calls + f.deprovision.calls + f.reactivate.calls + f.reactivate.suspends + f.sa.calls
+	return f.orgs.calls + f.members.calls + f.invites.calls + f.deprovision.calls + f.reactivate.calls + f.reactivate.suspends + f.sa.calls + f.grants.calls
 }
 
 func (f *provFixture) uses(op string) (int64, bool) {
@@ -497,7 +500,7 @@ func routeCases() []routeCase {
 		{opOrgCreate, PatternOrgCreate, func(f *provFixture, a uuid.UUID) map[string]any {
 			return map[string]any{"actor_principal_id": a.String(), "organization_name": "Acme", "slug": "acme", "tier": "community", "managed_by": "stripe"}
 		}, []string{"actor_principal_id", "organization_name", "managed_by"}},
-	}, append(serviceAccountCases(), keyCases()...)...)
+	}, append(append(serviceAccountCases(), keyCases()...), grantCases()...)...)
 }
 
 // fakeInviteID is the invite the revoke route case names.
@@ -1144,7 +1147,7 @@ func TestOrgSuspendIsOnTheStartupGate(t *testing.T) {
 	}
 	f := newProvFixture(t)
 	routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
-		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa,
+		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa, Grants: f.grants,
 		ProfileRows: embeddedDocWithoutRow(t, PatternOrgSuspend)})
 	if !errors.Is(err, errProvisioningRows) || routes != nil || !strings.Contains(err.Error(), "POST "+PatternOrgSuspend+" ") {
 		t.Fatalf("a document without the suspend row: %d routes, %v; want none and a refusal naming the route", len(routes), err)

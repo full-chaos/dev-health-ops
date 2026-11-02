@@ -15,6 +15,7 @@ internal/auth/accessverify
 internal/auth/acraudience
 internal/auth/acrmint
 internal/auth/authapi
+internal/auth/authorization
 internal/auth/clientaddr
 internal/auth/contracts
 internal/auth/contracts/externalpush

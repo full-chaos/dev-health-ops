@@ -258,3 +258,48 @@ func TestTheCensusFindsAConstantFalseSuperuserInsert(t *testing.T) {
 		t.Errorf("found %v, want the one false write of f", found)
 	}
 }
+
+// The probe sees the quoted, qualified, tuple and conflict-update column
+// target forms, each with the value it gives is_superuser.
+func TestTheSuperuserWriteProbeSeesQuotedAndTupleTargets(t *testing.T) {
+	for name, tc := range map[string]struct{ sql, want string }{
+		"tuple_set":            {`UPDATE users SET (is_superuser) = (false) WHERE id = $1`, "false"},
+		"tuple_set_two":        {`UPDATE users SET (email, is_superuser) = ($2, $3) WHERE id = $1`, "$3"},
+		"tuple_set_quoted":     {`UPDATE users SET ("email", "is_superuser") = ($2, true) WHERE id = $1`, "true"},
+		"quoted_set":           {`UPDATE users SET "is_superuser" = $2 WHERE id = $1`, "$2"},
+		"quoted_insert":        {`INSERT INTO users (id, "is_superuser") VALUES ($1, false)`, "false"},
+		"quoted_table_insert":  {`INSERT INTO "users" (id, is_superuser) VALUES ($1, $2)`, "$2"},
+		"qualified_quoted":     {`INSERT INTO "public"."users" (id, "is_superuser") VALUES ($1, $2)`, "$2"},
+		"qualified_update":     {`UPDATE public.users SET is_superuser = $2 WHERE id = $1`, "$2"},
+		"quoted_table_update":  {`UPDATE "public"."users" SET (is_superuser) = ($2) WHERE id = $1`, "$2"},
+		"qualified_column_set": {`UPDATE users SET users.is_superuser = $2 WHERE id = $1`, "$2"},
+		"conflict_update":      {`INSERT INTO users (id) VALUES ($1) ON CONFLICT (id) DO UPDATE SET is_superuser = excluded.is_superuser`, "excluded.is_superuser"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if !usersWrite.MatchString(strings.ReplaceAll(tc.sql, `"`, "")) {
+				t.Fatalf("%q: not seen as a users write", tc.sql)
+			}
+			if got := superuserWriteValue(tc.sql); got != tc.want {
+				t.Errorf("%q: value %q, want %q", tc.sql, got, tc.want)
+			}
+		})
+	}
+}
+
+// A static users write whose targets the probe cannot parse is a finding, not
+// an accept.
+func TestTheSuperuserWriteProbeFailsClosedOnUnparsedTargets(t *testing.T) {
+	for name, sql := range map[string]string{
+		"insert_select":       `INSERT INTO users (id, is_superuser) SELECT id, false FROM staging`,
+		"insert_no_columns":   `INSERT INTO users VALUES ($1, false) -- is_superuser`,
+		"tuple_row_value":     `UPDATE users SET (is_superuser) = ROW(false) WHERE id = $1`,
+		"update_no_set":       `UPDATE users /* is_superuser */ WHERE id = $1`,
+		"insert_no_col_names": `INSERT INTO users SELECT * FROM staging /* is_superuser */`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := superuserWriteValue(sql); got == "" {
+				t.Errorf("%q: accepted, want a finding", sql)
+			}
+		})
+	}
+}

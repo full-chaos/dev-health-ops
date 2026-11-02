@@ -234,6 +234,24 @@ func TestReaderProjectsAnAppendedEventOnceAndReadsNothingTwice(t *testing.T) {
 	}
 }
 
+func TestReaderProjectsThreeCredentialsOfOneSourceEachUnderItsOwnFingerprint(t *testing.T) {
+	e := getEnv(t, true)
+	org := e.org(t)
+	var ids []string
+	for i := 0; i < 3; i++ {
+		id := uuid.NewString()
+		ids = append(ids, id)
+		e.appendCommitted(t, created(org, id))
+	}
+	rep, err := e.reader(t, time.Hour).Step(context.Background(), time.Now())
+	if err != nil || rep.Applied != 3 {
+		t.Fatalf("step: %+v, %v; want all three credentials applied", rep, err)
+	}
+	if n := e.count(t, `SELECT count(DISTINCT secret_hash) FROM auth.credential_registry WHERE external_reference = ANY($1)`, ids); n != 3 {
+		t.Fatalf("%d distinct secret hashes, want 3 (a projected row's secret hash is its UNIQUE fingerprint)", n)
+	}
+}
+
 func TestReaderReadsALateLowerIdThatCommitsAfterAHigherOne(t *testing.T) {
 	e := getEnv(t, true)
 	org := e.org(t)

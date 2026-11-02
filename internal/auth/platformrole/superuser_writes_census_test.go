@@ -120,11 +120,7 @@ func TestEverySuperuserWriteIsProvenWhileOwned(t *testing.T) {
 				return err
 			}
 			rel := filepath.ToSlash(strings.TrimPrefix(path, root+string(filepath.Separator)))
-			for function, values := range superuserWrites(file) {
-				for _, value := range values {
-					found[rel+"\t"+function] = append(found[rel+"\t"+function], value)
-				}
-			}
+			collectCensusWrites(file, rel, found)
 			return nil
 		})
 		if err != nil {
@@ -162,6 +158,16 @@ func TestEverySuperuserWriteIsProvenWhileOwned(t *testing.T) {
 	sort.Strings(unlisted)
 	for _, row := range unlisted {
 		t.Errorf("unproven is_superuser write (omit the column, or list it in testdata/superuser_writes.tsv with the test of its owned behaviour): %s", row)
+	}
+}
+
+// collectCensusWrites adds every is_superuser write of file to found, by file and function, a constant false
+// included: the column defaults to false, so no statement has a reason to write it.
+func collectCensusWrites(file *ast.File, rel string, found map[string][]string) {
+	for function, values := range superuserWrites(file) {
+		for _, value := range values {
+			found[rel+"\t"+function] = append(found[rel+"\t"+function], value)
+		}
 	}
 }
 
@@ -235,5 +241,20 @@ func TestTheSuperuserWriteProbeSeesItsShapes(t *testing.T) {
 		if got := superuserWriteValue(sql); usersWrite.MatchString(sql) && got != want {
 			t.Errorf("%q: value %q, want %q", sql, got, want)
 		}
+	}
+}
+
+// A users INSERT that names is_superuser with a constant false is a census
+// finding, as any other value is.
+func TestTheCensusFindsAConstantFalseSuperuserInsert(t *testing.T) {
+	const source = "package p\n\nfunc f() {\n\t_ = `INSERT INTO users (id, is_superuser, token_version) VALUES ($1, false, 0)`\n}\n"
+	file, err := parser.ParseFile(token.NewFileSet(), "p.go", source, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := map[string][]string{}
+	collectCensusWrites(file, "internal/p/p.go", found)
+	if got := strings.Join(found["internal/p/p.go\tf"], ","); got != "false" {
+		t.Errorf("found %v, want the one false write of f", found)
 	}
 }

@@ -33,7 +33,7 @@ internal/apiservice/admin/auditlogs.go	handlers.auditLogRoutes	admin.audit	route
 internal/apiservice/admin/featureflags.go	handlers.featureRoutes	admin.flags	route
 internal/apiservice/admin/guards.go	handlers.ensureOrgAdminAccess	admin.orgs	3
 internal/apiservice/admin/guards.go	handlers.ensureUserInScope	admin.users	3
-internal/apiservice/admin/guards.go	orgIDForNonSuperuser	admin.orgs	3
+internal/apiservice/admin/guards.go	orgIDForNonSuperuser	admin.users	3
 internal/apiservice/admin/impersonation.go	handlers.impersonationRoutes	admin.impersonate	route
 internal/apiservice/admin/impersonation.go	handlers.impersonationStatus	admin.impersonate	handler
 internal/apiservice/admin/orgs.go	handlers.orgRoutes	admin.orgs	route

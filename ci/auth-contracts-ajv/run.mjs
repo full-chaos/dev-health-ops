@@ -24,7 +24,7 @@ const rootArg = args.find((a) => !a.startsWith("--"));
 const root = path.resolve(rootArg ?? path.join(here, "..", ".."));
 const v1 = path.join(root, "contracts", "auth", "v1");
 
-const MUST_VALIDATE = { accept: true, reject_by_client: true };
+const MUST_VALIDATE = { accept: true, reject_by_client: true, accept_not_cacheable: true };
 // go_schema_gap: refused here by `format` while Go's Validate accepts it (a calendar-impossible day; CHAOS-10135).
 const MUST_REJECT = { reject: true, narrower_than_consumer: true, go_schema_gap: true };
 
@@ -36,6 +36,9 @@ const REQUIRED_GROUPS = {
   // reject_by_client here holds the profile gate's join of token pins to the credential-class markers: schema-valid, gate-refused.
   "endpoint-auth-profile": ["accept", "reject", "reject_by_client"],
   // Request surfaces carry no client-only rule; the decision and batch response corpora do.
+  // accept_not_cacheable: schema-valid, accepted by the clients, marked use-once (expires_at bounds reuse only).
+  authorization_decision: ["accept", "reject", "reject_by_client", "accept_not_cacheable"],
+  authorization_batch_response: ["accept", "reject", "reject_by_client", "accept_not_cacheable"],
   authorization_request: ["accept", "reject"],
   authorization_batch_request: ["accept", "reject"],
   // The transport envelope has no field a schema cannot check, so no client-only rule.
@@ -141,6 +144,7 @@ const APPROVED_AUDIT = [
   "membership_added",
   "membership_removed",
   "membership_status_changed",
+  "membership_role_changed",
   "grant_created",
   "grant_updated",
   "grant_revoked",

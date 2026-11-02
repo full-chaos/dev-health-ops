@@ -1,0 +1,14 @@
+{
+  "schema_version": "provisioning-event.v1",
+  "aggregate_type": "signing_key",
+  "aggregate_id": "key_kJCxi5kmdtbJNOZ65aU_uIKoTsNmX7f8c5QNwB-auzg",
+  "event_type": "signing_key.compromised",
+  "idempotency_key": "signing_key:key_kJCxi5kmdtbJNOZ65aU_uIKoTsNmX7f8c5QNwB-auzg:1",
+  "created_at": "2026-09-03T10:00:00Z",
+  "payload": {
+    "revision": 1,
+    "change": {
+      "kid": "example.key-2026-09"
+    }
+  }
+}

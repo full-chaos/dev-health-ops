@@ -45,7 +45,7 @@ A batch request holds 1 to 100 requests. A batch response holds 1 to 100 decisio
 | `decision_id` | Minted by the server (`dec_` plus 26 characters). Never copied from the caller. |
 | `organization_id` | Null only for a platform or pre-organization decision. |
 | `policy_revision` | The monotonic revision of the active policy set. Every allow-cache key binds it. |
-| `expires_at` | Required for an allow and a deny. After this instant the caller must ask again. |
+| `expires_at` | Required for an allow and a deny. After this instant the caller must not reuse the decision for a later request and must ask again. |
 | `obligations` | Present only on an allow. A deny that carries `obligations` is invalid. |
 
 ## Obligations
@@ -71,7 +71,7 @@ In Go (`internal/auth/contracts/authorization.go`, `AuthorizationObligations`) e
 1. Duplicate object members are refused on the raw bytes first. A repeated `allowed` keeps the last value in every JSON parser, so the schema alone would accept an allow the sender never clearly sent.
 2. The document is validated against the schema.
 3. The document is decoded strictly, with unknown fields refused.
-4. A decision whose `expires_at` is not after `now` is refused, allow or deny. `now` is a parameter.
+4. A decision whose `expires_at` is not after `now` is still valid for the request it answers, allow or deny. The parser marks it not cacheable (`Cacheable` is false): use it once and do not store it. `expires_at` bounds reuse, never the answer. `now` is a parameter.
 5. For a batch, the response must hold exactly one decision per request, and the decision at position `i` must declare index `i`. A response that fails either rule is refused whole. The caller denies every item.
 
 A decision point failure is an `error.v1` document (503). It is a different schema from a decision, so "the decision point failed" and "the decision point said no" are distinguishable.

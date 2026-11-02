@@ -126,12 +126,17 @@ func TestICFinalizeMatchesTheFrozenPythonGolden(t *testing.T) {
 
 	// Work-item rows: alice (aggregation branch) and carol (work-item-only,
 	// no git row exists for her at all).
+	// alice's row carries its team split (CHAOS-12535): her 4 done and 2 open
+	// items are attributed to team-shared-ab, the team that owns her
+	// repository (see the declared divergence below).
 	if err := conn.Exec(ctx, `INSERT INTO work_item_user_metrics_daily
         (day, provider, work_scope_id, user_identity, team_id, team_name,
          items_started, items_completed, wip_count_end_of_day,
-         cycle_time_p50_hours, cycle_time_p90_hours, computed_at, org_id)
+         cycle_time_p50_hours, cycle_time_p90_hours, computed_at, org_id,
+         team_split_team_ids, team_split_is_primary, team_split_items_completed, team_split_wip_end_of_day)
         VALUES (?, 'jira', 'scope-alice', 'alice@example.com', 'team-git-a', 'Team Git A',
-                6, 4, 2, 10.0, 20.0, ?, ?)`,
+                6, 4, 2, 10.0, 20.0, ?, ?,
+                ['team-shared-ab'], [1], [4], [2])`,
 		day, seedNow, orgID); err != nil {
 		t.Fatal(err)
 	}
@@ -173,6 +178,16 @@ func TestICFinalizeMatchesTheFrozenPythonGolden(t *testing.T) {
 	// synthesized repository), which no team owns: her point is "unassigned",
 	// a DECLARED divergence from the reference's team-wi-c (a one-member team
 	// ranks 0.5 either way, so only the team id differs).
+	//
+	// A second DECLARED divergence (CHAOS-12535): the team of a person's work
+	// items is the items' own attribution (the team split of the person's
+	// work_item_user_metrics_daily row), not the team of the person's git row.
+	// The reference put alice's work items on her git row, so on
+	// team-shared-ab; the fixture states that attribution in alice's split, so
+	// her point is the reference's. carol's row holds no split (the shape of a
+	// row written before the split existed): her items are unassigned, as
+	// declared above. TestTheLandscapeTakesAWorkItemsTeamFromTheLadder (package
+	// daily) pins the unattributed and pre-split cases.
 	for _, repoID := range []uuid.UUID{repoAlice, repoBob} {
 		if err := conn.Exec(ctx, `INSERT INTO repos (id, repo, org_id, provider, last_synced) VALUES (?, ?, ?, 'github', ?)`,
 			repoID, "acme/"+repoID.String(), orgID, seedNow); err != nil {
@@ -401,7 +416,12 @@ WHERE as_of_day = ? AND org_id = ?`, day.Format("2006-01-02"), orgID)
 			t.Fatal(err)
 		}
 		row.TeamID = teamID
-		out[row.IdentityID+"\x1f"+row.MapName] = row
+		key := row.IdentityID + "\x1f" + row.MapName
+		if earlier, seen := out[key]; seen {
+			t.Fatalf("%s %s has two points, team %s and team %s: the readback keys a point by identity and map, so one would hide the other",
+				row.IdentityID, row.MapName, optionalString(earlier.TeamID), optionalString(teamID))
+		}
+		out[key] = row
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
@@ -566,6 +586,13 @@ func assertOptionalStringEqual(t *testing.T, subject, field string, got, want *s
 }
 
 func derefOrNil(value *string) string {
+	if value == nil {
+		return "<nil>"
+	}
+	return *value
+}
+
+func optionalString(value *string) string {
 	if value == nil {
 		return "<nil>"
 	}

@@ -113,6 +113,11 @@ func newEnv(t *testing.T, fence bool) (*env, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The actor of an acr event is the verified acr-api workload: an auth.principals row of kind workload (the workload registry
+	// writes it, internal/auth/workload/store.go), which security_audit_events.actor_principal_id references.
+	if _, err := admin.Exec(ctx, `INSERT INTO auth.principals (id, kind, display_name) VALUES ($1, 'workload', 'acr-api') ON CONFLICT DO NOTHING`, acrActor); err != nil {
+		return nil, err
+	}
 	e := &env{admin: admin, runtime: runtime, schema: schema, identity: id}
 	e.engine, err = New(Config{Pool: runtime, Schema: schema, ProjectOrganization: func(ctx context.Context, org uuid.UUID) (bool, error) {
 		err := id.ProjectOrganization(ctx, org)

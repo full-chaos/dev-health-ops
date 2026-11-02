@@ -74,6 +74,11 @@ if [ "${recreates}" -gt 0 ] && [ "${refreshes}" -ge "${recreates}" ]; then ok ev
 # A function must be defined before its first call (smoke v8: "refresh_ports: command not found").
 if [ "$(grep -n 'refresh_ports' "${SCRIPT}" | grep -v '^[0-9]*:#' | head -n 1 | cut -d: -f2- | tr -d ' ')" = 'refresh_ports(){' ]; then ok refresh-ports-defined-before-first-call; else bad refresh-ports-defined-before-first-call; fi
 
+# A restarted container also gets new ephemeral host ports (drill v9: WINDOW_B read the old port, then "login answered 000").
+if awk '/compose --profile auth restart/ {n=NR} n && NR<=n+3 && /refresh_ports/ {ok=1} END {exit !(n && ok)}' "${SCRIPT}"; then ok restart-rereads-the-ports; else bad restart-rereads-the-ports; fi
+# A window line records the status code it judged, so a refusal that is really a dead port cannot read as a finding.
+if grep -q 'WINDOW_B .*last_code=' "${SCRIPT}"; then ok window-b-records-the-code; else bad window-b-records-the-code; fi
+
 # The host SMTP sink is unreachable from the bigboy docker bridge (smoke v3: no route to host): the user is verified in the
 # throwaway database instead.
 if grep -q 'auth_webproof_smtp_sink' "${SCRIPT}"; then bad no-host-smtp-sink; else ok no-host-smtp-sink; fi

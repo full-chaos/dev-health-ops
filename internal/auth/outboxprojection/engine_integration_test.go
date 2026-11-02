@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -158,9 +159,13 @@ func (s spec) input() Input {
 	}}
 }
 
+// freshFingerprint is a new 16-hex fingerprint: the registry's secret_hash of a projected row is that fingerprint's
+// 8 bytes and is UNIQUE, so two credentials never share one.
+func freshFingerprint() string { return strings.ReplaceAll(uuid.NewString(), "-", "")[:16] }
+
 func created(org uuid.UUID, source string, scopes ...string) spec {
 	return spec{org: org, source: source, id: uuid.NewString(), revision: 1, kind: contracts.ExternalPushCreated, at: time.Now().UTC().Truncate(time.Microsecond),
-		change: contracts.ExternalPushLifecycleChange{Status: "active", Fingerprint: "0123456789abcdef", Scopes: scopes}}
+		change: contracts.ExternalPushLifecycleChange{Status: "active", Fingerprint: freshFingerprint(), Scopes: scopes}}
 }
 
 func (s spec) next(kind string, change contracts.ExternalPushLifecycleChange) spec {
@@ -194,7 +199,7 @@ func TestProjectCreatesPrincipalRegistryAndProjectionAndNoCursor(t *testing.T) {
 	if n := e.count(t, `SELECT count(*) FROM auth.push_sources s JOIN auth.principals p ON p.id = s.principal_id WHERE s.organization_id = $1 AND s.source_id = 'src-a' AND p.kind = 'external_source'`, org); n != 1 {
 		t.Fatalf("external_source principals = %d, want 1", n)
 	}
-	if n := e.count(t, `SELECT count(*) FROM auth.credential_registry WHERE domain_owner = 'external_push' AND external_reference = $1 AND credential_class = 'external_push_ingest_token' AND hash_algorithm = 'fingerprint' AND fingerprint = '0123456789abcdef' AND scopes = ARRAY['ingest:write']::auth.credential_scope[] AND revoked_at IS NULL`, c.id); n != 1 {
+	if n := e.count(t, `SELECT count(*) FROM auth.credential_registry WHERE domain_owner = 'external_push' AND external_reference = $1 AND credential_class = 'external_push_ingest_token' AND hash_algorithm = 'fingerprint' AND fingerprint = $2 AND scopes = ARRAY['ingest:write']::auth.credential_scope[] AND revoked_at IS NULL`, c.id, c.change.Fingerprint); n != 1 {
 		t.Fatalf("registry rows = %d, want 1", n)
 	}
 	if n := e.count(t, `SELECT count(*) FROM auth.credential_projection p WHERE external_reference = $1 AND revision = 1 AND max_seen_revision = 1 AND status = 'active'`, c.id); n != 1 {
@@ -265,7 +270,7 @@ func TestProjectGapAndAPendingParentAreRetriesThatWriteNothing(t *testing.T) {
 	}
 	parent := created(org, "src-c", "ingest:write")
 	child := spec{org: org, source: "src-c", id: uuid.NewString(), revision: 1, kind: contracts.ExternalPushRotated, at: time.Now().UTC().Truncate(time.Microsecond),
-		change: contracts.ExternalPushLifecycleChange{Status: "active", Fingerprint: "fedcba9876543210", Scopes: []string{"ingest:write"}, RotationParentID: parent.id}}
+		change: contracts.ExternalPushLifecycleChange{Status: "active", Fingerprint: freshFingerprint(), Scopes: []string{"ingest:write"}, RotationParentID: parent.id}}
 	mustOutcome(t, e.project(t, child.input()), pushlifecycle.ParentPending)
 	if n := e.count(t, `SELECT count(*) FROM auth.credential_projection WHERE external_reference IN ($1, $2)`, c.id, child.id); n != 0 {
 		t.Fatalf("a retry outcome wrote %d projection rows", n)
@@ -280,13 +285,13 @@ func TestProjectAParentSeenAndWrongIsRefusedFinalAndRecorded(t *testing.T) {
 	parent := created(other, "src-d", "ingest:write")
 	e.project(t, parent.input())
 	child := spec{org: org, source: "src-d", id: uuid.NewString(), revision: 1, kind: contracts.ExternalPushRotated, at: time.Now().UTC().Truncate(time.Microsecond),
-		change: contracts.ExternalPushLifecycleChange{Status: "active", Fingerprint: "fedcba9876543210", Scopes: []string{"ingest:write"}, RotationParentID: parent.id}}
+		change: contracts.ExternalPushLifecycleChange{Status: "active", Fingerprint: freshFingerprint(), Scopes: []string{"ingest:write"}, RotationParentID: parent.id}}
 	// The parent lives in another organization: not found inside this one, so a pending parent.
 	mustOutcome(t, e.project(t, child.input()), pushlifecycle.ParentPending)
 	widen := created(org, "src-d", "ingest:write")
 	e.project(t, widen.input())
 	wide := spec{org: org, source: "src-d", id: uuid.NewString(), revision: 1, kind: contracts.ExternalPushRotated, at: time.Now().UTC().Truncate(time.Microsecond),
-		change: contracts.ExternalPushLifecycleChange{Status: "active", Fingerprint: "fedcba9876543210", Scopes: []string{"ingest:write", "ingest:status"}, RotationParentID: widen.id}}
+		change: contracts.ExternalPushLifecycleChange{Status: "active", Fingerprint: freshFingerprint(), Scopes: []string{"ingest:write", "ingest:status"}, RotationParentID: widen.id}}
 	res := e.project(t, wide.input())
 	mustOutcome(t, res, pushlifecycle.RefusedWiden)
 	if res.Class != ClassRefused {
@@ -328,7 +333,7 @@ func TestProjectRotationAppliesWhenTheParentRevokedFirst(t *testing.T) {
 	revoke.at = rotatedAt
 	mustOutcome(t, e.project(t, revoke.input()), pushlifecycle.Applied)
 	child := spec{org: org, source: "src-f", id: uuid.NewString(), revision: 1, kind: contracts.ExternalPushRotated, at: rotatedAt,
-		change: contracts.ExternalPushLifecycleChange{Status: "active", Fingerprint: "fedcba9876543210", Scopes: []string{"ingest:write"}, RotationParentID: parent.id}}
+		change: contracts.ExternalPushLifecycleChange{Status: "active", Fingerprint: freshFingerprint(), Scopes: []string{"ingest:write"}, RotationParentID: parent.id}}
 	mustOutcome(t, e.project(t, child.input()), pushlifecycle.Applied)
 	if n := e.count(t, `SELECT count(*) FROM auth.credential_registry WHERE external_reference = $1 AND rotation_parent_id IS NULL AND revoked_at IS NULL`, child.id); n != 1 {
 		t.Fatal("the child row must be live with no registry parent link")
@@ -440,7 +445,7 @@ func TestProjectAuditRowNamesTheActorAndIsDeniedOnlyForARefusal(t *testing.T) {
 	widen := created(org, "src-den", "ingest:write")
 	e.project(t, widen.input())
 	wideChild := spec{org: org, source: "src-den", id: uuid.NewString(), revision: 1, kind: contracts.ExternalPushRotated, at: time.Now().UTC().Truncate(time.Microsecond),
-		change: contracts.ExternalPushLifecycleChange{Status: "active", Fingerprint: "fedcba9876543210", Scopes: []string{"ingest:write", "ingest:status"}, RotationParentID: widen.id}}
+		change: contracts.ExternalPushLifecycleChange{Status: "active", Fingerprint: freshFingerprint(), Scopes: []string{"ingest:write", "ingest:status"}, RotationParentID: widen.id}}
 	mustOutcome(t, e.project(t, wideChild.input()), pushlifecycle.RefusedWiden)
 	revoked := created(org, "src-den", "ingest:write")
 	e.project(t, revoked.input())
@@ -449,13 +454,13 @@ func TestProjectAuditRowNamesTheActorAndIsDeniedOnlyForARefusal(t *testing.T) {
 	mustOutcome(t, e.project(t, rv.next(contracts.ExternalPushScoped, contracts.ExternalPushLifecycleChange{Scopes: []string{"ingest:write"}}).input()), pushlifecycle.RefusedTerminal)
 	transition := created(org, "src-den", "ingest:write")
 	e.project(t, transition.input())
-	mustOutcome(t, e.project(t, transition.next(contracts.ExternalPushCreated, contracts.ExternalPushLifecycleChange{Fingerprint: "0123456789abcdef", Scopes: []string{"ingest:write"}}).input()), pushlifecycle.RefusedTransition)
+	mustOutcome(t, e.project(t, transition.next(contracts.ExternalPushCreated, contracts.ExternalPushLifecycleChange{Fingerprint: freshFingerprint(), Scopes: []string{"ingest:write"}}).input()), pushlifecycle.RefusedTransition)
 	badParent := created(org, "src-den", "ingest:write")
 	e.project(t, badParent.input())
 	other := created(org, "src-den", "ingest:write")
 	e.project(t, other.input())
 	rot := spec{org: org, source: "src-den", id: uuid.NewString(), revision: 1, kind: contracts.ExternalPushRotated, at: time.Now().UTC().Add(time.Hour).Truncate(time.Microsecond),
-		change: contracts.ExternalPushLifecycleChange{Status: "active", Fingerprint: "fedcba9876543210", Scopes: []string{"ingest:write"}, RotationParentID: badParent.id}}
+		change: contracts.ExternalPushLifecycleChange{Status: "active", Fingerprint: freshFingerprint(), Scopes: []string{"ingest:write"}, RotationParentID: badParent.id}}
 	e.project(t, rev(badParent, t0(badParent)).input())
 	mustOutcome(t, e.project(t, rot.input()), pushlifecycle.RefusedParent)
 	if n := e.count(t, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.credential_projection.decided' AND outcome = 'denied' AND attributes ->> 'reason_code' = 'denied_policy'`); n < 4 {

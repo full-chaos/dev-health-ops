@@ -204,6 +204,16 @@ var Allowlist = []Entry{
 	{File: "internal/auth/session/unpinned.go", Func: "RevokeUnpinned", Table: "auth.sessions", Verb: "UPDATE"},
 	// The workload registry (CHAOS-10980; new auth-table writers ruled by acp 10-26 00:4xZ): written by the auth-migrate operator role, inside audit.Commit.
 	// Org service accounts (CHAOS-10989 4.19): written by auth-service, inside audit.Commit.
+	// CHAOS-10896 (acp answers-10896 Q3, answers-10896-3, answers-11196): the credential projection engine writes the external_source
+	// principal, the registry row and the projected state, each inside audit.Commit; the reader and the acr route call it.
+	{File: "internal/auth/outboxprojection/store.go", Func: "Engine.ensureSource", Table: "auth.principals", Verb: "INSERT"},
+	{File: "internal/auth/outboxprojection/store.go", Func: "Engine.ensureSource", Table: "auth.push_sources", Verb: "INSERT"},
+	{File: "internal/auth/outboxprojection/store.go", Func: "Engine.expireRegistry", Table: "auth.credential_registry", Verb: "UPDATE"},
+	{File: "internal/auth/outboxprojection/store.go", Func: "Engine.insertDigest", Table: "auth.credential_projection_digest", Verb: "INSERT"},
+	{File: "internal/auth/outboxprojection/store.go", Func: "Engine.insertRegistry", Table: "auth.credential_registry", Verb: "INSERT"},
+	{File: "internal/auth/outboxprojection/store.go", Func: "Engine.narrowScopes", Table: "auth.credential_registry", Verb: "UPDATE"},
+	{File: "internal/auth/outboxprojection/store.go", Func: "Engine.revokeRegistry", Table: "auth.credential_registry", Verb: "UPDATE"},
+	{File: "internal/auth/outboxprojection/store.go", Func: "Engine.upsertProjection", Table: "auth.credential_projection", Verb: "UPSERT"},
 	{File: "internal/auth/serviceaccount/keys.go", Func: "Store.IssueKey", Table: "auth.credential_registry", Verb: "INSERT"},
 	{File: "internal/auth/serviceaccount/keys.go", Func: "Store.RotateKey", Table: "auth.credential_registry", Verb: "INSERT"},
 	{File: "internal/auth/serviceaccount/keys.go", Func: "Store.RotateKey", Table: "auth.credential_registry", Verb: "UPDATE"},

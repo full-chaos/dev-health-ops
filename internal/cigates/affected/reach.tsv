@@ -132,6 +132,7 @@ internal/auth/contracts	contracts.go	internal/auth/membership
 internal/auth/contracts	contracts.go	internal/auth/oauthgrant
 internal/auth/contracts	contracts.go	internal/auth/org
 internal/auth/contracts	contracts.go	internal/auth/orgdeprovision
+internal/auth/contracts	contracts.go	internal/auth/outboxprojection
 internal/auth/contracts	contracts.go	internal/auth/passwordpolicy
 internal/auth/contracts	contracts.go	internal/auth/policycatalog
 internal/auth/contracts	contracts.go	internal/auth/pushlifecycle

@@ -418,15 +418,17 @@ scenario_compromise() {
     check s2-query-api-refuses-old-within-the-cache-bound le "${q_after}" "${VERIFIER_CACHE_BOUND}"
   else
     say "S2 window b: restart go-api, then query-api, one at a time, right after the key drop"
-    local svc started after refused
+    local svc started after refused last_code
     for svc in go-api query-api; do
       started="$(date +%s)"
       compose --profile auth restart "${svc}" >/dev/null
       compose --profile auth up --no-build --pull never --detach --wait --wait-timeout 300 --no-deps "${svc}" >/dev/null
+      refresh_ports
       refused=0
-      if [ "${svc}" = go-api ]; then me_refuses "${sold_access}" && refused=1; else query_refuses "${sold_access}" && refused=1; fi
+      if [ "${svc}" = go-api ]; then last_code="$(api_code "${sold_access}" /api/v1/auth/me)"; else last_code="$(query_code "${sold_access}")"; fi
+      [ "${last_code}" = 401 ] && refused=1
       after="$(elapsed_since "${t0}")"
-      rec_line "WINDOW_B verifier=${svc} old_kid=${old} restart_after_drop restart_took_s=$(elapsed_since "${started}") refused_at_s=${after} refused=${refused}"
+      rec_line "WINDOW_B verifier=${svc} old_kid=${old} restart_after_drop restart_took_s=$(elapsed_since "${started}") refused_at_s=${after} refused=${refused} last_code=${last_code}"
       printf 'WINDOW_B %s refused=%s at %s s after the drop\n' "${svc}" "${refused}" "${after}"
       soft_check "s2-${svc}-refuses-old-right-after-its-restart" eq "${refused}" 1
     done

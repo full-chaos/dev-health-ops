@@ -132,7 +132,11 @@ func TestFernetDecryptorPrintsOnlyTheRedactionMarker(t *testing.T) {
 			t.Errorf("Sprintf(%s) = %q, want %q", verb, got, marker)
 		}
 	}
-	if got := decryptor.String(); got != marker {
+	stringer, ok := any(decryptor).(fmt.Stringer)
+	if !ok {
+		t.Fatal("FernetDecryptor is not a fmt.Stringer")
+	}
+	if got := stringer.String(); got != marker {
 		t.Errorf("String() = %q", got)
 	}
 	encoded, err := json.Marshal(decryptor)

@@ -68,6 +68,37 @@ An actor disabled through a go-api write is not a session end path of
 auth-service. Their delegated session stays live until its `expires_at`, so the
 bound is 15 minutes. A new start is refused at once.
 
+## go-api's record
+
+A start also writes go-api's record in its transaction: one row of
+`public.impersonation_sessions` with the session's id, times, actor, target,
+organization and the target's role, and one `impersonation_start` row of
+`public.audit_logs`. It also ends the actor's open go-api rows, each with an
+`impersonation_stop` row, as go-api's own start ends them.
+
+Every end of a delegated session ends the public row in its transaction and
+writes one `impersonation_stop` row, a cascade too, except a key compromise. A
+row go-api already ended writes no second one. The audit row has the actor in
+the target's organization, with resource `session` and the target's id.
+
+A key compromise (`auth-migrate keys`) runs as the migration login, which holds
+no write on go-api's tables, and a security end must not fail. It ends the
+session and leaves the public row: the row stays open to its `expires_at`, at
+most 15 minutes, and writes no `impersonation_stop` row. Until then the actor's
+acr mint refuses. The `auth.session.delegation_ended` row holds the end.
+
+The runtime role holds `UPDATE (ended_at)` and `SELECT (id)` on the table
+whatever `AUTH_USERS_OWNED` says, so a security end works with the switch off.
+The `INSERT` and the read of `target_user_id` and `target_org_id` follow the
+switch.
+
+### Rollback
+
+Before `AUTH_USERS_OWNED` or `AUTH_PLATFORM_ROLES_OWNED` goes off, end the live
+delegated sessions: their tokens stay valid to `expires_at`, and Start refuses
+from then on. This is for live tokens only. A row left open still ends on every
+end path, because its end follows no switch.
+
 ## Tokens
 
 `exp` is the earlier of the token lifetime and the session's `expires_at`. Under

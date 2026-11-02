@@ -247,6 +247,9 @@ func (q poolQuerier) queryRow(ctx context.Context, sql string, args ...any) pgx.
 //	   6d. a removal: the pair's live auth.resource_grants rows FOR UPDATE,
 //	   ORDER BY id (grantend.Plan.Apply), after the sessions; a grant verb
 //	   (internal/auth/grant) takes the same rows last, after the pair (ReadPair);
+//	   6e. a delegated session's start or end: its public.impersonation_sessions
+//	   row, after the auth.sessions row (delegationend). go-api's writers take
+//	   that row alone and no auth lock, so no cycle;
 //	7. aggregate_revisions, inside audit.Commit.
 //
 // Steps 1 and 2 take every id any later statement of the verb references,

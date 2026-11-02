@@ -7,6 +7,12 @@
 // writers (revoke, revoke-all, the organization verbs) reach it by id or by
 // target; this package adds the two ways the target's writers cannot see: the
 // actor's base session ended, or the actor lost the right to delegate.
+//
+// A delegated session also has go-api's record: a row of
+// public.impersonation_sessions with the session's id, which go-api's readers
+// and the OAuth actor check see, and impersonation_start and impersonation_stop
+// rows of public.audit_logs. This package is auth-service's one writer of them,
+// and a key compromise the one end that leaves them (KeepPublicRows).
 package delegationend
 
 import (
@@ -16,6 +22,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/publicaudit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 )
 
@@ -31,6 +38,29 @@ const (
 	ReasonActorEnded = "delegation_actor_ended"
 	// ReasonSuperseded is a prior row the actor's next Start ended.
 	ReasonSuperseded = "delegation_superseded"
+)
+
+// The audit_logs actions and resource of a delegated session, go-api's names
+// (internal/api/audit).
+const (
+	publicActionStart  = "impersonation_start"
+	publicActionStop   = "impersonation_stop"
+	publicResourceType = "session"
+)
+
+// PublicRows says whether Record ends go-api's rows.
+type PublicRows bool
+
+const (
+	// EndPublicRows ends the public rows with the session rows.
+	EndPublicRows PublicRows = true
+	// KeepPublicRows leaves them, for a key compromise alone, on every install. It
+	// runs as the migration login, which holds no write on go-api's tables by
+	// design, and a security end must not fail. The row stays open to its
+	// expires_at, at most 15 minutes; its one effect is that the actor's acr mint
+	// refuses until then. The auth audit row holds the end, and no
+	// impersonation_stop row is written.
+	KeepPublicRows PublicRows = false
 )
 
 // Row is one unrevoked delegated session.
@@ -91,8 +121,9 @@ func End(ctx context.Context, tx audit.TxOps, q string, rows []Row, reason strin
 }
 
 // Record queues one EventEnded row per row, naming the real actor and the
-// target (G-49), never the reason text.
-func Record(ctx context.Context, tx audit.TxOps, rows []Row) error {
+// target (G-49), never the reason text, and ends the public rows as public says.
+// Every end of a delegated row reaches this function.
+func Record(ctx context.Context, tx audit.TxOps, rows []Row, public PublicRows) error {
 	for _, r := range rows {
 		actor, target, org := r.Actor, r.Target, r.Organization
 		event := audit.AuditEvent{
@@ -107,7 +138,109 @@ func Record(ctx context.Context, tx audit.TxOps, rows []Row) error {
 			return err
 		}
 	}
+	if len(rows) == 0 || public == KeepPublicRows {
+		return nil
+	}
+	return endPublicRows(ctx, tx, rows)
+}
+
+// endPublicRows ends the public rows of rows and writes one stop row for each it
+// ended. A row go-api already ended, or no row, writes none. The row it ended
+// holds foreign keys to the target's organization and to both users, under its
+// lock, so a stop row cannot fail a security end.
+func endPublicRows(ctx context.Context, tx audit.TxOps, rows []Row) error {
+	byID := make(map[string]Row, len(rows))
+	ids := make([]string, len(rows))
+	for i, r := range rows {
+		byID[r.ID], ids[i] = r, r.ID
+	}
+	ended, err := tx.Query(ctx, `UPDATE public.impersonation_sessions SET ended_at = clock_timestamp()
+		WHERE id = ANY($1::uuid[]) AND ended_at IS NULL RETURNING id::text`, ids)
+	if err != nil {
+		return err
+	}
+	defer ended.Close()
+	var endedIDs []string
+	for ended.Next() {
+		var id string
+		if err := ended.Scan(&id); err != nil {
+			return err
+		}
+		endedIDs = append(endedIDs, id)
+	}
+	if err := ended.Err(); err != nil {
+		return err
+	}
+	ended.Close()
+	for _, id := range endedIDs {
+		r := byID[id]
+		if err := publicRow(ctx, tx, publicActionStop, r.Organization, r.Actor, r.Target); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// EndLegacy ends the actor's open public rows that have no delegated session:
+// rows go-api started. It runs in a Start, after the actor's delegated rows
+// ended, as go-api's own start ends them, expired ones too. The target is empty
+// on a row whose target user was deleted.
+func EndLegacy(ctx context.Context, tx audit.TxOps, actor string) error {
+	rows, err := tx.Query(ctx, `UPDATE public.impersonation_sessions SET ended_at = clock_timestamp()
+		WHERE admin_user_id = $1::uuid AND ended_at IS NULL
+		RETURNING target_org_id::text, COALESCE(target_user_id::text, '')`, actor)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	type legacy struct{ org, target string }
+	var ended []legacy
+	for rows.Next() {
+		var l legacy
+		if err := rows.Scan(&l.org, &l.target); err != nil {
+			return err
+		}
+		ended = append(ended, l)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	rows.Close()
+	for _, l := range ended {
+		if err := publicRow(ctx, tx, publicActionStop, l.org, actor, l.target); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Begin writes go-api's record of a started delegation in the transaction of
+// r's session row: the public row, with the session's id and times, and its
+// impersonation_start row. role is the target's role, under the caller's
+// membership lock.
+func Begin(ctx context.Context, tx audit.TxOps, q string, r Row, role string) error {
+	if _, err := tx.Exec(ctx, `INSERT INTO public.impersonation_sessions
+		(id, admin_user_id, target_user_id, target_org_id, target_role, created_at, expires_at)
+		SELECT id, actor_principal_id, principal_id, organization_id, $2::text, created_at, expires_at
+		FROM `+q+`.sessions WHERE id = $1::uuid`, r.ID, role); err != nil {
+		return err
+	}
+	return publicRow(ctx, tx, publicActionStart, r.Organization, r.Actor, r.Target)
+}
+
+// publicRow is go-api's audit_logs row of a delegated session: the actor in the
+// target's organization, resource session/<target> (admin/impersonation.go).
+func publicRow(ctx context.Context, tx audit.TxOps, action, org, actor, target string) error {
+	orgID, err := uuid.Parse(org)
+	if err != nil {
+		return fmt.Errorf("delegationend: the organization of a public row: %w", err)
+	}
+	actorID, err := uuid.Parse(actor)
+	if err != nil {
+		return fmt.Errorf("delegationend: the actor of a public row: %w", err)
+	}
+	return publicaudit.Write(ctx, tx, publicaudit.Row{OrgID: orgID, UserID: &actorID, Action: action,
+		ResourceType: publicResourceType, ResourceID: target})
 }
 
 // EndOfActor ends every unrevoked delegated session the actor runs, with its
@@ -121,7 +254,7 @@ func EndOfActor(ctx context.Context, tx audit.TxOps, q string, actor uuid.UUID) 
 	if err := End(ctx, tx, q, rows, ReasonActorEnded); err != nil {
 		return 0, fmt.Errorf("delegationend: ending the sessions of an actor: %w", err)
 	}
-	if err := Record(ctx, tx, rows); err != nil {
+	if err := Record(ctx, tx, rows, EndPublicRows); err != nil {
 		return 0, err
 	}
 	return len(rows), nil

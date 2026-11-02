@@ -123,3 +123,29 @@ func TestFernetDecryptorLogValueAndJSONCarryNoKeyOrSalt(t *testing.T) {
 		t.Fatalf("LogValue = %s", value)
 	}
 }
+
+func TestFernetDecryptorPrintsOnlyTheRedactionMarker(t *testing.T) {
+	const marker = "providerfoundation.FernetDecryptor"
+	decryptor := decryptorForRedaction(t)
+	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%d"} {
+		if got := fmt.Sprintf(verb, decryptor); got != marker {
+			t.Errorf("Sprintf(%s) = %q, want %q", verb, got, marker)
+		}
+	}
+	if got := decryptor.String(); got != marker {
+		t.Errorf("String() = %q", got)
+	}
+	encoded, err := json.Marshal(decryptor)
+	if err != nil || string(encoded) != `"`+marker+`"` {
+		t.Errorf("json.Marshal = %s, %v", encoded, err)
+	}
+	encoded, err = json.Marshal(decryptorHolderExported{Decryptor: decryptor})
+	if err != nil || string(encoded) != `{"Decryptor":"`+marker+`"}` {
+		t.Errorf("nested json.Marshal = %s, %v", encoded, err)
+	}
+	var buf bytes.Buffer
+	slog.New(slog.NewJSONHandler(&buf, nil)).Info("m", "decryptor", decryptor)
+	if !strings.Contains(buf.String(), `"decryptor":{"encryption_key_configured":true}`) {
+		t.Errorf("slog = %s", buf.String())
+	}
+}

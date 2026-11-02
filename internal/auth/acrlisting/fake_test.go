@@ -16,7 +16,6 @@ import (
 
 const (
 	exchangePath = "/api/v1/oauth/token"
-	listPath     = "/internal/v1/credentials/lifecycle"
 	subjectJWT   = "subject-jwt-one"
 	accessOne    = "access-one"
 )

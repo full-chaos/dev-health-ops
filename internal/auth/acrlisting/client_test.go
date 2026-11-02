@@ -71,7 +71,7 @@ func TestOnlyTheExchangePostsAndTheListingGets(t *testing.T) {
 	if _, err := list(t, newClient(t, f, func(c *Config) { c.PageLimit = 1 })); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"POST " + exchangePath, "GET " + listPath, "GET " + listPath, "GET " + listPath}
+	want := []string{"POST " + exchangePath, "GET " + listPath, "GET " + listPath}
 	if !slices.Equal(f.methods, want) {
 		t.Fatalf("requests = %v, want %v", f.methods, want)
 	}

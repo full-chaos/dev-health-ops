@@ -300,7 +300,9 @@ PF_PIDS=()
 pf_stop() {
   local pid
   for pid in "${PF_PIDS[@]:-}"; do
-    [ -n "${pid}" ] && kill "${pid}" 2>/dev/null || true
+    [ -n "${pid}" ] || continue
+    kill "${pid}" 2>/dev/null || true
+    wait "${pid}" 2>/dev/null || true
   done
   PF_PIDS=()
 }
@@ -422,7 +424,7 @@ PF_IDP=""
 pf_start() { # VAR SERVICE REMOTE-PORT
   local log="${WORK}/pf.$2.$$.log" port=""
   : >"${log}"
-  kc -n "${NS}" port-forward "svc/$2" ":$3" >"${log}" 2>&1 &
+  kubectl --kubeconfig "${KUBECONFIG_FILE}" -n "${NS}" port-forward "svc/$2" ":$3" >"${log}" 2>&1 9>&- &
   PF_PIDS+=("$!")
   for _ in $(seq 1 60); do
     port="$(sed -n 's/^Forwarding from 127\.0\.0\.1:\([0-9][0-9]*\) ->.*/\1/p' "${log}" | head -1)"

@@ -264,6 +264,7 @@ func TestWrongShapesAreKindSchemaNeverNoRows(t *testing.T) {
 		"not json":             `<html>`,
 		"next with no items":   ok("", `"a"`),
 		"next below last item": ok(item("b", "1", "active")+","+item("c", "1", "active"), `"a"`),
+		"next above last item": ok(item("a", "1", "active")+","+item("b", "1", "active"), `"c"`),
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newFake(t)
@@ -316,7 +317,9 @@ func TestWalkIsBoundedByMaxPages(t *testing.T) {
 
 func TestOversizedBodyIsKindSchema(t *testing.T) {
 	f := newFake(t)
-	f.listRaw = func(string, int) (int, string) { return 200, strings.Repeat(" ", 2<<20) }
+	f.listRaw = func(string, int) (int, string) {
+		return 200, `{"schema_version":"credential_lifecycle_list.v1","items":[],"next_after":null}` + strings.Repeat(" ", 2<<20)
+	}
 	_, err := list(t, newClient(t, f, nil))
 	wantKind(t, err, KindSchema)
 }

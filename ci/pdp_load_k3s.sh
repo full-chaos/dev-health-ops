@@ -142,7 +142,7 @@ fi
 
 # ---------------------------------------------------------------------------------------------------------------------
 case "${KUBECONFIG_FILE}" in *k3s*) ;; *) die "AUTH_PDP_KUBECONFIG must name a k3s kubeconfig (no kind, no prod)" ;; esac
-for tool in kubectl openssl od sha256sum; do
+for tool in kubectl openssl od sha256sum envsubst; do
   command -v "${tool}" >/dev/null 2>&1 || die "${tool} is required"
 done
 [ -r "${KUBECONFIG_FILE}" ] || die "the kubeconfig ${KUBECONFIG_FILE} is not readable"
@@ -237,36 +237,10 @@ ORG_ID="$(cat /proc/sys/kernel/random/uuid)"
 PSU -v "user_id=${USER_ID}" -v "org_id=${ORG_ID}" -f - <"${SCRIPT_DIR}/pdp_load_k3s/seed.sql" >/dev/null
 pass "leg 1: one human with an admin membership"
 
-# The runner pod: init containers seed the workload registry and write the bootstrap value into the pod's own volume; the
-# value never leaves the pod. The runner image is the one the proofs use for psql, nc and sed.
-kc -n "${NS}" apply -f - >/dev/null <<YAML
-apiVersion: v1
-kind: Pod
-metadata: {name: pdp-runner}
-spec:
-  restartPolicy: Never
-  securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, fsGroup: 65532}
-  volumes: [{name: work, emptyDir: {}}]
-  initContainers:
-    - name: seed
-      image: ${IMG_MIG}
-      args: [workloads, seed, -apply]
-      env: &migenv
-        - {name: AUTH_MIGRATION_DATABASE_URI, valueFrom: {secretKeyRef: {name: auth-migrate-db, key: AUTH_MIGRATION_DATABASE_URI}}}
-        - {name: AUTH_RUNTIME_DATABASE_ROLE, value: devhealth_auth}
-    - name: bootstrap
-      image: ${IMG_MIG}
-      args: [workloads, bootstrap-create, -workload, api, -out, /work/api.bootstrap, -apply]
-      env: *migenv
-      volumeMounts: [{name: work, mountPath: /work}]
-  containers:
-    - name: runner
-      image: ${RUNNER_IMAGE}
-      imagePullPolicy: IfNotPresent
-      command: [sleep, "86400"]
-      volumeMounts: [{name: work, mountPath: /work}]
-      securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
-YAML
+# The runner pod (ci/pdp_load_k3s/runner-pod.yaml): its init containers seed the workload registry and write the bootstrap value into the
+# pod's own volume; the value never leaves the pod.
+# shellcheck disable=SC2016
+IMG_MIG="${IMG_MIG}" RUNNER_IMAGE="${RUNNER_IMAGE}" envsubst '${IMG_MIG} ${RUNNER_IMAGE}' <"${SCRIPT_DIR}/pdp_load_k3s/runner-pod.yaml" | K apply -f - >/dev/null
 K wait --for=condition=Ready pod/pdp-runner --timeout=300s >/dev/null || { K describe pod pdp-runner >&2 || true; die "the runner pod did not become Ready"; }
 SUBJECT="$(PSU -f - <"${SCRIPT_DIR}/pdp_load_k3s/subject.sql")"
 [[ "${SUBJECT}" =~ ^prn_[A-Za-z0-9_-]{22}$ ]] || die "the api workload principal id is not a wire principal id"

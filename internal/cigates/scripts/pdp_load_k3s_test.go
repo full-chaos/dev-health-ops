@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // ci/pdp_load_k3s.sh is run by the lead on bigboy k3s, never in CI. These cells hold what can be checked without a
@@ -167,6 +169,49 @@ func TestPDPLoadK3sPodScriptKeepsValuesOffArgvAndInFiles(t *testing.T) {
 	for _, banned := range []string{"curl ", "wget ", "echo \"$(cat", "set -x"} {
 		if strings.Contains(text, banned) {
 			t.Errorf("the pod script contains %q", banned)
+		}
+	}
+}
+
+// The runner pod is a YAML template (envsubst IMG_MIG and RUNNER_IMAGE): the bootstrap value is written in the pod's own
+// volume by an init container and read by nothing outside the pod.
+func TestPDPLoadK3sRunnerPodWritesTheBootstrapValueIntoItsOwnVolumeOnly(t *testing.T) {
+	text := readText(t, filepath.Join(rootOf(t), "ci/pdp_load_k3s/runner-pod.yaml"))
+	text = strings.NewReplacer("${IMG_MIG}", "registry.example/m@sha256:"+strings.Repeat("a", 64), "${RUNNER_IMAGE}", "registry.example/r@sha256:"+strings.Repeat("b", 64)).Replace(text)
+	var pod struct {
+		Spec struct {
+			InitContainers []struct {
+				Name string   `yaml:"name"`
+				Args []string `yaml:"args"`
+				Env  []struct {
+					Name string `yaml:"name"`
+				} `yaml:"env"`
+			} `yaml:"initContainers"`
+			Containers []struct {
+				Name string `yaml:"name"`
+			} `yaml:"containers"`
+		} `yaml:"spec"`
+	}
+	if err := yaml.Unmarshal([]byte(text), &pod); err != nil {
+		t.Fatal(err)
+	}
+	if len(pod.Spec.InitContainers) != 2 || len(pod.Spec.Containers) != 1 {
+		t.Fatalf("%d init containers and %d containers, want 2 and 1", len(pod.Spec.InitContainers), len(pod.Spec.Containers))
+	}
+	if got := strings.Join(pod.Spec.InitContainers[0].Args, " "); got != "workloads seed -apply" {
+		t.Errorf("first init container args %q", got)
+	}
+	if got := strings.Join(pod.Spec.InitContainers[1].Args, " "); got != "workloads bootstrap-create -workload api -out /work/api.bootstrap -apply" {
+		t.Errorf("second init container args %q", got)
+	}
+	for _, ic := range pod.Spec.InitContainers {
+		if len(ic.Env) != 2 {
+			t.Errorf("init container %s has %d env entries, want the migration DSN and the runtime role", ic.Name, len(ic.Env))
+		}
+	}
+	for _, banned := range []string{"hostPath", "hostNetwork", "privileged: true"} {
+		if strings.Contains(text, banned) {
+			t.Errorf("the runner pod contains %q", banned)
 		}
 	}
 }

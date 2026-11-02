@@ -158,7 +158,7 @@ func (c *cacheFixture) rebuild(t *testing.T, cache DecisionCache) {
 		Callers: c.callers(), References: c.references(), State: c.cs, Evaluator: authorization.NewEvaluator(),
 		ProfileRows: authorizeProfileDoc(t, PatternAuthorize, PatternAuthorizeBatch),
 		Cache:       cache, Ready: func() bool { return c.ready },
-		Logger:      slog.New(slog.NewJSONHandler(c.logs, nil)), Meter: sdkmetric.NewMeterProvider(sdkmetric.WithReader(c.reader)).Meter("test"),
+		Logger: slog.New(slog.NewJSONHandler(c.logs, nil)), Meter: sdkmetric.NewMeterProvider(sdkmetric.WithReader(c.reader)).Meter("test"),
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -4,7 +4,8 @@
     "cache_class": "none",
     "expires_in_seconds": null,
     "policy_revision": 9,
-    "reason": "clock_unavailable"
+    "reason": "clock_unavailable",
+    "wire_reason_code": null
   },
   "id": "repo-clock-unavailable",
   "layer": "pdp",

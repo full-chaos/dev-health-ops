@@ -4,7 +4,8 @@
     "cache_class": "none",
     "expires_in_seconds": null,
     "policy_revision": 9,
-    "reason": "repository_not_granted"
+    "reason": "repository_not_granted",
+    "wire_reason_code": "repository_not_granted"
   },
   "id": "cross-org-repo-key-collision",
   "layer": "pdp",

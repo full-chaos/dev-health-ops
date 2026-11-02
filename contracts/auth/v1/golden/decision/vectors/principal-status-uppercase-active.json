@@ -4,7 +4,8 @@
     "cache_class": "none",
     "expires_in_seconds": null,
     "policy_revision": 9,
-    "reason": "principal_inactive"
+    "reason": "principal_inactive",
+    "wire_reason_code": "principal_inactive"
   },
   "id": "principal-status-uppercase-active",
   "layer": "pdp",

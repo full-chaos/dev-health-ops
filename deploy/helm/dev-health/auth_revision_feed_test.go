@@ -82,3 +82,29 @@ func TestRevisionFeedCannotBeSetThroughExtraEnv(t *testing.T) {
 		t.Errorf("extraEnv rendered: err=%v out=%.300s", err, out)
 	}
 }
+
+// Phase 0 renders no auth-service: the switch is refused there, with or without the store Secret, never dropped.
+func TestRevisionFeedNeedsAuthService(t *testing.T) {
+	base := []string{"--set", "web.enabled=false", "--set", "authService.phase=0", "--set", "goApi.enabled=false", "--set", "queryApi.enabled=false"}
+	for name, extra := range map[string][]string{
+		"no store Secret":   {"--set", "authService.revisionFeed.enabled=true"},
+		"with store Secret": append([]string{"--set", "authService.revisionFeed.enabled=true"}, feedValkey...),
+	} {
+		_, out, err := renderAuth(t, append(append([]string{}, base...), extra...)...)
+		if err == nil || !strings.Contains(out, "authService.revisionFeed.enabled needs auth-service") {
+			t.Errorf("%s: phase 0 rendered: err=%v out=%.300s", name, err, out)
+		}
+	}
+	if _, out, err := renderAuth(t, append(append([]string{}, base...), "--set", "authService.revisionFeed.enabled=false")...); err != nil {
+		t.Fatalf("phase 0 with the switch off failed: %v\n%.300s", err, out)
+	}
+}
+
+// The checks run on every render, so a bad value fails when auth-service does not render.
+func TestRevisionFeedIsCheckedWithNoAuthServiceRendered(t *testing.T) {
+	base := []string{"--set", "web.enabled=false", "--set", "authService.phase=0", "--set", "goApi.enabled=false", "--set", "queryApi.enabled=false"}
+	_, out, err := renderAuth(t, append(append([]string{}, base...), "--set-json", "authService.revisionFeed.enabled=null")...)
+	if err == nil || !strings.Contains(out, "authService.revisionFeed.enabled must be true or false") {
+		t.Errorf("null rendered with no auth-service: err=%v out=%.300s", err, out)
+	}
+}

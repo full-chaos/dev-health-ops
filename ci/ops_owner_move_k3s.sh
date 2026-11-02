@@ -331,9 +331,10 @@ for who in domain queue; do
   pass "omu: the ${who} login ran ${result%% *} read+write rounds through the plan, the move, the rotation and the pinned upgrade with 0 failures"
 done
 readbacks omu
-K wait --for=condition=Ready pod --all --timeout=120s >/dev/null || die "omu: not every pod is Ready"
+K wait --for=condition=Ready pod --field-selector=status.phase=Running --timeout=120s >/dev/null || die "omu: not every running pod is Ready"
+[ -z "$(K get pods --field-selector=status.phase=Failed -o name)" ] || die "omu: a pod failed"
 [ "$(helm status omu --kubeconfig "${KUBECONFIG_FILE}" -n "${NS}" -o json | jq -r .info.status)" = deployed ] || die "omu: the release is not deployed"
-pass "omu: the release is deployed and every pod is Ready"
+pass "omu: the release is deployed, every running pod is Ready and no pod failed (hook pods Completed)"
 
 # ===================================================================================================================
 pg -c "DROP DATABASE omu WITH (FORCE)" >/dev/null

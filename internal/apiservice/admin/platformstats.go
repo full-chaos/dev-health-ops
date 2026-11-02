@@ -12,7 +12,7 @@ import (
 
 func (h *handlers) platformRoutes() []httpapi.Route {
 	return []httpapi.Route{
-		{Method: http.MethodGet, Pattern: governancePrefix + "/platform/stats", Handler: h.guard.Wrap(policy.Superuser, http.HandlerFunc(h.platformStats))},
+		{Method: http.MethodGet, Pattern: governancePrefix + "/platform/stats", Handler: h.guard.WrapPlatform(policy.ActionAdminStats, http.HandlerFunc(h.platformStats))},
 	}
 }
 

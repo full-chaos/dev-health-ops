@@ -10,14 +10,11 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
-	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/serviceaccount"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
 
-// The service account key routes. Each is mounted only when the endpoint-profile document holds a row accepting every
-// class it admits (withServiceAccountKeyRoutes); without the row it answers 404 and the service starts. They are not on
-// the startup gate (provisioningPatterns) until their rows ship.
+// The service account key routes.
 const PatternServiceAccountKeyIssue = "/internal/v1/service-accounts/keys/issue"
 const PatternServiceAccountKeyRotate = "/internal/v1/service-accounts/keys/rotate"
 const PatternServiceAccountKeyRevoke = "/internal/v1/service-accounts/keys/revoke"
@@ -56,24 +53,6 @@ type ServiceAccountKeys interface {
 	RevokeKey(ctx context.Context, credentialID uuid.UUID, reason string, a serviceaccount.Actor) error
 	ListKeys(ctx context.Context, id uuid.UUID) ([]serviceaccount.Key, error)
 	KeyByID(ctx context.Context, id uuid.UUID) (*serviceaccount.Key, error)
-}
-
-// withServiceAccountKeyRoutes mounts each key route whose profile row lists every class it admits, and logs one line
-// naming each route it leaves out.
-func (h provisioningHandlers) withServiceAccountKeyRoutes(routes []httpapi.Route, rows []byte) []httpapi.Route {
-	for _, r := range []httpapi.Route{
-		{Method: http.MethodPost, Pattern: PatternServiceAccountKeyIssue, Handler: http.HandlerFunc(h.serviceAccountKeyIssue)},
-		{Method: http.MethodPost, Pattern: PatternServiceAccountKeyRotate, Handler: http.HandlerFunc(h.serviceAccountKeyRotate)},
-		{Method: http.MethodPost, Pattern: PatternServiceAccountKeyRevoke, Handler: http.HandlerFunc(h.serviceAccountKeyRevoke)},
-		{Method: http.MethodPost, Pattern: PatternServiceAccountKeyList, Handler: http.HandlerFunc(h.serviceAccountKeyList)},
-	} {
-		if rowsAcceptFor(rows, []string{r.Pattern}, admittedClasses(r.Pattern, h.Workload != nil)) != nil {
-			h.Logger.Info("auth provisioning route not mounted: no endpoint-profile row", "route", r.Pattern)
-			continue
-		}
-		routes = append(routes, r)
-	}
-	return routes
 }
 
 func keyWireID(id uuid.UUID) string { return "crd_" + id.String() }

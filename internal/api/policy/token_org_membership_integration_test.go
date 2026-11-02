@@ -45,7 +45,7 @@ func TestTokenOrgMembershipIsTheLivePublicRow(t *testing.T) {
 	// go-api's scope declares rows; every route here is an org-scoped one.
 	scope.DeclaredRows(func(string) (BearerRow, bool) { return BearerRow{AccessToken: true}, true })
 	chain := func(level Authz) http.Handler {
-		return auth.ReadOnce(scope.Principal(scope.OrgScope(scope.Impersonation(NewGuard(auth, quiet()).Wrap(level, echo)))))
+		return auth.ReadOnce(scope.Principal(scope.OrgScope(scope.Impersonation(wrapLevel(NewGuard(auth, quiet()), level, echo)))))
 	}
 	token := "Bearer " + sign(t, claims(func(c jwt.MapClaims) {
 		c["sub"], c["org_id"], c["role"], c["tv"] = user.String(), org.String(), "admin", 0

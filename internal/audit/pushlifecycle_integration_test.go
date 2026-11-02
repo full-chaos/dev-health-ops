@@ -106,13 +106,13 @@ func newPushFixture(t *testing.T, ctx context.Context) *pushFixture {
 }
 
 func pushCreated(id string, scopes ...string) PushLifecycleEvent {
-	return PushLifecycleEvent{EventType: externalpush.Created, AggregateID: id, OrganizationID: pushOrg, SourceID: pushSource,
+	return PushLifecycleEvent{EventType: externalpush.Created, AggregateID: id, OrganizationID: pushOrg, Binding: externalpush.BindingSource, SourceID: pushSource,
 		Change: externalpush.Change{Status: "active", Fingerprint: "0123456789abcdef", Scopes: scopes}}
 }
 
 func pushRevoked(id string) PushLifecycleEvent {
 	snapshot := externalpush.Change{Status: "active", Fingerprint: "0123456789abcdef", Scopes: []string{"ingest:write"}}
-	return PushLifecycleEvent{EventType: externalpush.Revoked, AggregateID: id, OrganizationID: pushOrg, SourceID: pushSource,
+	return PushLifecycleEvent{EventType: externalpush.Revoked, AggregateID: id, OrganizationID: pushOrg, Binding: externalpush.BindingSource, SourceID: pushSource,
 		Change: externalpush.Change{Status: "revoked"}, Snapshot: &snapshot}
 }
 
@@ -323,7 +323,7 @@ func TestAppendPushLifecycleRotationWritesBothAggregatesAtOnceOrNone(t *testing.
 	defer cancel()
 	env := newPushFixture(t, ctx)
 
-	rotated := PushLifecycleEvent{EventType: externalpush.Rotated, AggregateID: "00000000-0000-4000-8000-0000000000b2", OrganizationID: pushOrg, SourceID: pushSource,
+	rotated := PushLifecycleEvent{EventType: externalpush.Rotated, AggregateID: "00000000-0000-4000-8000-0000000000b2", OrganizationID: pushOrg, Binding: externalpush.BindingSource, SourceID: pushSource,
 		Change: externalpush.Change{Status: "active", Fingerprint: "fedcba9876543210", Scopes: []string{"ingest:write"}, RotationParentID: "00000000-0000-4000-8000-0000000000c3"}}
 	if err := withPushTx(t, ctx, env, true, func(tx pgx.Tx) error {
 		return AppendPushLifecycle(ctx, tx, env.schema, []PushLifecycleEvent{rotated, pushRevoked("00000000-0000-4000-8000-0000000000c3")})

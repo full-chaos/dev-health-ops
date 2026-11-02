@@ -18,6 +18,13 @@ const Surface = "external-push-lifecycle-event.v1"
 // Aggregate is the one aggregate type of the surface.
 const Aggregate = "external_push_credential"
 
+// Bindings: what a credential is bound to. A source-bound credential names its
+// source; an organization-wide credential names none (no placeholder source).
+const (
+	BindingSource       = "source"
+	BindingOrganization = "organization"
+)
+
 // Event types, in the schema's closed order.
 const (
 	Created = Aggregate + ".created"
@@ -73,7 +80,7 @@ func (c Change) MarshalJSON() ([]byte, error) {
 // service cannot read from disk, and the corpus differential test keeps the two
 // equal. A change member the schema forbids has no field on the type, so it
 // cannot be carried at all.
-func Check(eventType, aggregateID, organizationID, sourceID string, change Change) error {
+func Check(eventType, aggregateID, organizationID, binding, sourceID string, change Change) error {
 	surface := Surface
 	if !idPattern.MatchString(aggregateID) {
 		return fmt.Errorf("%s: aggregate_id is not 1..64 of [A-Za-z0-9_-]", surface)
@@ -81,8 +88,17 @@ func Check(eventType, aggregateID, organizationID, sourceID string, change Chang
 	if !orgIDPattern.MatchString(organizationID) {
 		return fmt.Errorf("%s: organization_id is not org_ followed by 1..64 of [A-Za-z0-9_-]", surface)
 	}
-	if !idPattern.MatchString(sourceID) {
-		return fmt.Errorf("%s: source_id is not 1..64 of [A-Za-z0-9_-]", surface)
+	switch binding {
+	case BindingSource:
+		if !idPattern.MatchString(sourceID) {
+			return fmt.Errorf("%s: source_id is not 1..64 of [A-Za-z0-9_-]", surface)
+		}
+	case BindingOrganization:
+		if sourceID != "" {
+			return fmt.Errorf("%s: an organization-wide credential carries no source_id", surface)
+		}
+	default:
+		return fmt.Errorf("%s: binding is not %q or %q", surface, BindingSource, BindingOrganization)
 	}
 	var (
 		wantStatus      string

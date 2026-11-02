@@ -9,6 +9,7 @@ internal/adminops	users_password_fixtures_test.go	internal/adminops	dir	*
 internal/adminops	users_password_fixtures_test.go	internal/adminops/testdata	dir	*
 internal/adminops	users_password_fixtures_test.go	internal/adminops/testdata/golden	dir	*
 internal/adminops	usersowned_test.go	internal/adminops	dir	*
+internal/api/billing	platform_action_test.go	internal/api/billing	dir	*
 internal/api/integrationsadmin/discoveryvenue	discover_venue_oracle_integration_test.go	internal/api/syncadmin/testdata/jira_recorded	dir	*
 internal/api/policy	accessroute_test.go	.	tree	*.go
 internal/api/policy	principalonce_test.go	internal/api/policy	dir	*
@@ -21,6 +22,7 @@ internal/api/teamsidentity	deleted_at_writer_census_test.go	internal	tree	*.go
 internal/api/teamsidentity	team_id_writer_census_test.go	cmd	tree	*.go
 internal/api/teamsidentity	team_id_writer_census_test.go	internal	tree	*.go
 internal/api/teamsidentity	team_id_writer_census_test.go	internal/api/teamsidentity	dir	*
+internal/api/telemetry	platform_action_test.go	internal/api/telemetry	dir	*
 internal/api/webhookintake	pagerduty_refusal_test.go	internal/api/webhookintake	dir	*
 internal/api/webhookintake	removed_providers_test.go	.	tree	*.go
 internal/apiservice	endpoint_profile_scan_test.go	unexpressed	-	*.go

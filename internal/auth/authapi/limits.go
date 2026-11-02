@@ -93,7 +93,7 @@ func NewLimits(store httpapi.CounterStore, secret string) (*Limits, error) {
 func LimitIDs() []string {
 	limits := []httpapi.Limit{
 		loginIPLimit, loginAccountLimit, verifyLimit, resendLimit, resendIPLimit, forgotLimit, forgotIPLimit,
-		resetIPLimit, resetTokenLimit, changePasswordLimit, socialLinkLimit, refreshLimit, registerIPLimit,
+		resetIPLimit, resetTokenLimit, changePasswordLimit, socialLinkLimit, refreshLimit, registerIPLimit, validateLimit,
 	}
 	ids := make([]string, len(limits))
 	for i, limit := range limits {
@@ -133,12 +133,13 @@ type charge struct {
 // scopeCodes is the closed set of counter scopes admit accepts, each with the
 // neutral code the store keys on. A route outside it is refused, never counted.
 var scopeCodes = map[string]string{
-	PatternCompatLogin:   "s01",
-	PatternCompatRefresh: "s04",
-	PatternResetPassword: "s02",
-	socialLinkRoute:      "s03",
-	oauthAuthorizeScope:  "s05",
-	oauthDecideScope:     "s06",
+	PatternCompatLogin:    "s01",
+	PatternCompatRefresh:  "s04",
+	PatternCompatValidate: "s07",
+	PatternResetPassword:  "s02",
+	socialLinkRoute:       "s03",
+	oauthAuthorizeScope:   "s05",
+	oauthDecideScope:      "s06",
 }
 
 // admit counts each charge in order and reports whether the request may go

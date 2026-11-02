@@ -6,7 +6,11 @@
 // plumbing layer.
 package authctx
 
-import "context"
+import (
+	"context"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
+)
 
 type contextKey struct{}
 
@@ -28,6 +32,14 @@ type Claims struct {
 	// ImpersonationActive is copied from the verified envelope: true while the
 	// effective identity is an impersonated user.
 	ImpersonationActive bool
+	// Platform is the platform action set held when it is not the one
+	// IsSuperuser means; nil carries only the flag.
+	Platform *rule.Platform
+}
+
+// Holds reports whether the caller holds the platform action now.
+func (c Claims) Holds(action string) bool {
+	return rule.Holds(c.Platform, c.IsSuperuser, action)
 }
 
 // WithClaims returns a context carrying claims for downstream resolvers.

@@ -408,3 +408,148 @@ VALUES ($1, $2, now() + interval '10 minutes', 0, $3, $4, $5, 'support', ARRAY['
 		}
 	}
 }
+
+// session seeds a session row of principal. delegatedFrom and actor make it an
+// impersonation row of org.
+func (e *env) session(t *testing.T, ctx context.Context, principal uuid.UUID, expiresIn string, revoked bool) uuid.UUID {
+	t.Helper()
+	id := uuid.New()
+	revokedAt := "NULL"
+	if revoked {
+		revokedAt = "now()"
+	}
+	e.armed(t, ctx, `INSERT INTO auth.sessions (id, principal_id, token_hash, expires_at, auth_time, amr, legacy_token_version, revoked_at)
+VALUES ($1, $2, $3, now() + interval '`+expiresIn+`', now(), ARRAY['pwd'], 0, `+revokedAt+`)`, id, principal, []byte("ds-"+id.String()))
+	return id
+}
+
+func (e *env) delegatedSession(t *testing.T, ctx context.Context, target, actor, base, org uuid.UUID, permitted []string) uuid.UUID {
+	t.Helper()
+	id := uuid.New()
+	e.armed(t, ctx, `INSERT INTO auth.sessions (id, principal_id, organization_id, token_hash, expires_at, auth_time, amr, legacy_token_version,
+	actor_principal_id, delegated_from_session_id, delegation_reason, delegation_permitted_actions)
+VALUES ($1, $2, $3, $4, now() + interval '10 minutes', now(), ARRAY['pwd','otp'], 0, $5, $6, 'support', $7)`,
+		id, target, org, []byte("ds-"+id.String()), actor, base, permitted)
+	return id
+}
+
+func (e *env) readSession(t *testing.T, ctx context.Context, id uuid.UUID) authapi.DecisionSession {
+	t.Helper()
+	var s authapi.DecisionSession
+	if err := e.reader.Read(ctx, func(tx authapi.DecisionTx) error {
+		var err error
+		s, err = tx.Session(ctx, id)
+		return err
+	}); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	return s
+}
+
+func TestSessionReadsTheDelegationColumnsAndTheBaseLiveness(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	target, actor, org := e.user(t, ctx, true, false), e.user(t, ctx, true, false), e.org(t, ctx)
+	base := e.session(t, ctx, actor, "1 hour", false)
+	id := e.delegatedSession(t, ctx, target, actor, base, org, []string{"git.read", "analytics.read"})
+	s := e.readSession(t, ctx, id)
+	if !s.Found || !s.Live || !s.HasActor || !s.HasDelegatedFrom || !s.BaseLive || s.ActorPrincipalID != actor ||
+		s.OrganizationID == nil || *s.OrganizationID != org || len(s.AMR) != 2 || s.AMR[0] != "pwd" ||
+		len(s.PermittedActions) != 2 || s.PermittedActions[0] != "git.read" {
+		t.Fatalf("%+v", s)
+	}
+	plain := e.readSession(t, ctx, base)
+	if !plain.Found || plain.HasActor || plain.HasDelegatedFrom || plain.BaseLive || plain.ActorPrincipalID != uuid.Nil || plain.OrganizationID != nil {
+		t.Fatalf("a plain row: %+v", plain)
+	}
+	e.armed(t, ctx, `UPDATE auth.sessions SET revoked_at = now() WHERE id = $1`, base)
+	if s := e.readSession(t, ctx, id); s.BaseLive || !s.Live {
+		t.Fatalf("a revoked base: %+v, want the row live and the base not", s)
+	}
+	expiredBase := e.session(t, ctx, actor, "-1 minute", false)
+	if s := e.readSession(t, ctx, e.delegatedSession(t, ctx, target, actor, expiredBase, org, []string{"git.read"})); s.BaseLive {
+		t.Fatalf("an expired base read as live: %+v", s)
+	}
+}
+
+func (e *env) role(t *testing.T, ctx context.Context, principal uuid.UUID, role string) {
+	t.Helper()
+	e.armed(t, ctx, `INSERT INTO auth.platform_role_assignments (principal_id, role_key) VALUES ($1, $2)`, principal, role)
+}
+
+func (e *env) actor(t *testing.T, ctx context.Context, actor uuid.UUID) authapi.ActorState {
+	t.Helper()
+	var a authapi.ActorState
+	if err := e.reader.Read(ctx, func(tx authapi.DecisionTx) error {
+		var err error
+		a, err = tx.Actor(ctx, actor)
+		return err
+	}); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	return a
+}
+
+func TestActorStateIsTheLiveRoleAndUserState(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	none := e.user(t, ctx, true, false)
+	if a := e.actor(t, ctx, none); !a.Active || a.CanImpersonate || a.Owner {
+		t.Fatalf("no role: %+v", a)
+	}
+	admin := e.user(t, ctx, true, false)
+	e.role(t, ctx, admin, "platform_admin")
+	if a := e.actor(t, ctx, admin); !a.Active || !a.CanImpersonate || a.Owner {
+		t.Fatalf("platform_admin: %+v", a)
+	}
+	owner := e.user(t, ctx, true, false)
+	e.role(t, ctx, owner, "platform_admin")
+	e.role(t, ctx, owner, "platform_owner")
+	if a := e.actor(t, ctx, owner); !a.Active || !a.CanImpersonate || !a.Owner {
+		t.Fatalf("owner: %+v", a)
+	}
+	if a := e.actor(t, ctx, uuid.New()); a != (authapi.ActorState{}) {
+		t.Fatalf("unknown principal: %+v", a)
+	}
+}
+
+func TestActorDeactivatedUserIsNotActiveWhateverItsRole(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	inactive := e.user(t, ctx, false, false)
+	e.role(t, ctx, inactive, "platform_admin")
+	if a := e.actor(t, ctx, inactive); a.Active {
+		t.Fatalf("users.is_active false read as active: %+v", a)
+	}
+	disabled := e.user(t, ctx, true, false)
+	e.role(t, ctx, disabled, "platform_admin")
+	e.armed(t, ctx, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1`, disabled)
+	if a := e.actor(t, ctx, disabled); a.Active || a.CanImpersonate {
+		t.Fatalf("a disabled principal: %+v", a)
+	}
+}
+
+// The actor is read in the decision transaction: a role revoked after the
+// transaction took its snapshot is still held inside it.
+func TestActorIsReadInTheTransactionSnapshot(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	actor := e.user(t, ctx, true, false)
+	e.role(t, ctx, actor, "platform_admin")
+	if err := e.reader.Read(ctx, func(tx authapi.DecisionTx) error {
+		if a, err := tx.Actor(ctx, actor); err != nil || !a.CanImpersonate {
+			t.Fatalf("first read %+v %v", a, err)
+		}
+		e.armed(t, ctx, `DELETE FROM auth.platform_role_assignments WHERE principal_id = $1`, actor)
+		a, err := tx.Actor(ctx, actor)
+		if err != nil || !a.CanImpersonate {
+			t.Fatalf("after the role was deleted outside the transaction: %+v %v, want the snapshot's state", a, err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if a := e.actor(t, ctx, actor); a.CanImpersonate {
+		t.Fatalf("a new transaction still holds the role: %+v", a)
+	}
+}

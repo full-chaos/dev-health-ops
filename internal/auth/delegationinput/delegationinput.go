@@ -141,3 +141,21 @@ func (a *Adapter) Snapshot(ctx context.Context, in Input) (authorization.Snapsho
 		Assurance:            session.AssuranceOf(rec.AMR),
 	}}, nil
 }
+
+// Facts are the values of one delegated session row and of its actor, read by
+// the caller. Nothing in it comes from a token claim.
+type Facts struct {
+	Actor            uuid.UUID
+	Organization     *uuid.UUID
+	AMR              []string
+	PermittedActions []string
+	// ActorMayImpersonate is true when the actor is active now and holds the
+	// impersonation action. ActorOwner is true when it holds platform_owner.
+	ActorMayImpersonate bool
+	ActorOwner          bool
+}
+
+// Delegation is the actor chain the evaluator decides over. A row that cannot
+// be decided is the empty chain, which denies every action with
+// delegation_invalid.
+func Delegation(Facts) authorization.Delegation { return authorization.Delegation{} }

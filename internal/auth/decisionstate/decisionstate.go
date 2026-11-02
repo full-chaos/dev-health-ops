@@ -97,6 +97,11 @@ actor_principal_id IS NOT NULL, delegated_from_session_id IS NOT NULL FROM `+t.t
 	return s, nil
 }
 
+// Actor is not read yet.
+func (t *txReader) Actor(context.Context, uuid.UUID) (authapi.ActorState, error) {
+	return authapi.ActorState{}, nil
+}
+
 // Snapshot reads the principal's state for orgID ("" for a platform
 // decision). An org id that is not a canonical uuid names no organization: its
 // status is unknown and nothing is read for it.

@@ -50,6 +50,28 @@ type DecisionSession struct {
 	// or a delegating session: an impersonation session.
 	HasActor         bool
 	HasDelegatedFrom bool
+	// The delegation columns of the row, as the same read returned them.
+	// ActorPrincipalID is uuid.Nil without an actor. OrganizationID is the
+	// target organization of an impersonation session.
+	ActorPrincipalID uuid.UUID
+	OrganizationID   *uuid.UUID
+	AMR              []string
+	PermittedActions []string
+	// BaseLive is true when the delegating session is neither revoked nor
+	// expired at the transaction's clock; false when there is none.
+	BaseLive bool
+}
+
+// ActorState is the real actor of a delegated session, read in the decision
+// transaction.
+type ActorState struct {
+	// Active is true when the actor is an active user principal and its
+	// public.users row is active.
+	Active bool
+	// CanImpersonate is true when the actor holds admin.impersonate now.
+	CanImpersonate bool
+	// Owner is true when the actor holds platform_owner now.
+	Owner bool
 }
 
 // delegated reports an impersonation session. The decision core's delegation
@@ -69,6 +91,9 @@ func (delegatedSnapshot) Delegation() (authorization.Delegation, bool) {
 // error means the state could not be read.
 type DecisionTx interface {
 	Session(ctx context.Context, sessionID uuid.UUID) (DecisionSession, error)
+	// Actor is the live state of the real actor of a delegated session; the
+	// zero ActorState for an unknown principal.
+	Actor(ctx context.Context, actor uuid.UUID) (ActorState, error)
 	// Snapshot is the principal's state for one organization ("" for a
 	// platform decision), with the transaction's clock.
 	Snapshot(ctx context.Context, principal uuid.UUID, orgID string) (authorization.GrantSnapshot, error)

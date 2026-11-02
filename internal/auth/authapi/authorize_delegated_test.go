@@ -343,3 +343,26 @@ func TestAuthorizeBatchMixesPlainAndDelegatedSessionsOfOnePrincipal(t *testing.T
 		}
 	}
 }
+
+// The wire rule of obligations is fail closed: a mismatch is a state failure,
+// not a decision.
+func TestObligationsFitRule(t *testing.T) {
+	with := &authorization.Obligations{TenantScope: "t"}
+	for name, tc := range map[string]struct {
+		d         authorization.Decision
+		delegated bool
+		want      bool
+	}{
+		"delegated allow with":    {authorization.Decision{Allowed: true, Obligations: with}, true, true},
+		"delegated allow without": {authorization.Decision{Allowed: true}, true, false},
+		"delegated deny without":  {authorization.Decision{}, true, true},
+		"delegated deny with":     {authorization.Decision{Obligations: with}, true, false},
+		"plain allow without":     {authorization.Decision{Allowed: true}, false, true},
+		"plain allow with":        {authorization.Decision{Allowed: true, Obligations: with}, false, false},
+		"plain deny with":         {authorization.Decision{Obligations: with}, false, false},
+	} {
+		if got := obligationsFit(tc.d, tc.delegated); got != tc.want {
+			t.Errorf("%s: %v, want %v", name, got, tc.want)
+		}
+	}
+}

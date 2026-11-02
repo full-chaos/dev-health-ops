@@ -113,7 +113,7 @@ func newBindingUpgrade(t *testing.T, ctx context.Context, inherit bool) *binding
 
 // installBeforeBinding applies the lineage up to the binding migration as the login,
 // then hands the function to the writer the way a grants run does: the state
-// production is in before the binding migration (0046) rolls.
+// production is in before the binding migration (0047) rolls.
 func (u *bindingUpgrade) installBeforeBinding(t *testing.T, ctx context.Context) *pgx.Conn {
 	t.Helper()
 	conn, err := pgx.Connect(ctx, u.uri)
@@ -226,7 +226,7 @@ func TestPushLifecycleBindingUpgradeRunsAsAnInheritingMemberOfTheWriter(t *testi
 }
 
 // TestPushLifecycleBindingFreshInstallReachesHeadInOneApply is the fresh row:
-// 0044 creates the function as the login and the binding migration (0046) replaces it in the same run.
+// 0044 creates the function as the login and the binding migration (0047) replaces it in the same run.
 func TestPushLifecycleBindingFreshInstallReachesHeadInOneApply(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()

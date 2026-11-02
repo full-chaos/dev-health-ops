@@ -51,5 +51,11 @@ rc=0
 run bash -x "${SCRIPT}" --print-plan >/dev/null 2>&1 || rc=$?
 if [ "${rc}" = 2 ]; then ok xtrace-refused; else bad "xtrace-refused (rc ${rc})"; fi
 
+OVR="${ROOT}/ci/auth_rotation_rehearsal.override.yml"
+# auth-service refuses the key-set file beside the single-key variables, even unset by !reset (smoke v2): they must be set empty.
+for var in AUTH_SIGNING_KEY_FILE AUTH_SIGNING_KEY_ID; do
+  if grep -qE "^      ${var}: \"\"\$" "${OVR}"; then ok "override-blanks-${var}"; else bad "override-blanks-${var}"; fi
+done
+
 if [ ! -s "${FAKE_LOG}" ]; then ok no-docker-call-before-the-checks; else bad no-docker-call-before-the-checks; fi
 exit "${failed}"

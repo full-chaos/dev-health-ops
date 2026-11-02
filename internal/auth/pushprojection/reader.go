@@ -8,7 +8,7 @@
 // a pure cursor could pass a lower id that commits late. A row is read while
 // no digest row of the engine names its (credential, revision) and it is not
 // parked, in id order from a low-water mark. The mark moves only over rows
-// older than the horizon; a row that commits later than that falls to the next
+// older than the horizon and only across rows that are decided or parked; a row that commits later than that falls to the next
 // revision's gap and to the drift alert.
 package pushprojection
 
@@ -324,7 +324,7 @@ func (r *Reader) Step(ctx context.Context, now time.Time) (StepReport, error) {
 		return rep, err
 	}
 	rep.Mark = mark
-	next, newest, err := r.nextMark(ctx, now)
+	next, newest, err := r.nextMark(ctx, now, mark)
 	if err != nil {
 		return rep, err
 	}
@@ -502,15 +502,24 @@ func (r *Reader) retryDue(ctx context.Context, now time.Time, rep *StepReport) e
 }
 
 // nextMark is the highest id the mark may move to: every push row younger than
-// the horizon stays above it, and the mark never passes the newest row older
-// than the horizon. newest is the highest push id (for the lag gauge).
-func (r *Reader) nextMark(ctx context.Context, now time.Time) (next, newest int64, err error) {
+// the horizon stays above it, it never passes the newest row older than the
+// horizon, and it moves only across a contiguous prefix of rows that are durably
+// decided (a digest row) or parked: the first row above the mark that is neither
+// (never scanned, or held behind a parked row of its aggregate) stops it, so the
+// reaper cannot delete a row the reader has not decided. newest is the highest
+// push id (for the lag gauge).
+func (r *Reader) nextMark(ctx context.Context, now time.Time, mark int64) (next, newest int64, err error) {
 	cutoff := now.Add(-r.cfg.Horizon).UTC()
 	err = r.cfg.Pool.QueryRow(ctx, `
 		SELECT LEAST(
 		    (SELECT COALESCE(MAX(id), 0) FROM `+r.q+`.auth_outbox_events WHERE aggregate_type = 'external_push_credential' AND created_at < $1),
-		    (SELECT COALESCE(MIN(id), 9223372036854775807) - 1 FROM `+r.q+`.auth_outbox_events WHERE aggregate_type = 'external_push_credential' AND created_at >= $1)),
-		    (SELECT COALESCE(MAX(id), 0) FROM `+r.q+`.auth_outbox_events WHERE aggregate_type = 'external_push_credential')`, cutoff).Scan(&next, &newest)
+		    (SELECT COALESCE(MIN(id), 9223372036854775807) - 1 FROM `+r.q+`.auth_outbox_events WHERE aggregate_type = 'external_push_credential' AND created_at >= $1),
+		    (SELECT COALESCE(MIN(o.id), 9223372036854775807) - 1 FROM `+r.q+`.auth_outbox_events AS o
+		      WHERE o.aggregate_type = 'external_push_credential' AND o.id > $2
+		        AND NOT EXISTS (SELECT 1 FROM `+r.q+`.credential_projection_digest d
+		                        WHERE d.domain_owner = 'external_push' AND d.external_reference = o.aggregate_id AND d.revision = `+revisionExpr+`)
+		        AND NOT EXISTS (SELECT 1 FROM `+r.q+`.projection_retry p WHERE p.stream = $3 AND p.outbox_id = o.id))),
+		    (SELECT COALESCE(MAX(id), 0) FROM `+r.q+`.auth_outbox_events WHERE aggregate_type = 'external_push_credential')`, cutoff, mark, Stream).Scan(&next, &newest)
 	return next, newest, err
 }
 

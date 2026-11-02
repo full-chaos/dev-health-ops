@@ -56,7 +56,7 @@ go_api_prove_e2e_pgx_uri() {
 # dho verb exists for advancing token_version alone (`users delete` also ends the login, `users update --password`
 # sets a password hash on a service principal).
 go_api_prove_e2e_principal() {
-  local id="${GO_API_PROVE_E2E_PRINCIPAL_ID}" shape
+  local id="${GO_API_PROVE_E2E_PRINCIPAL_ID}" shape session_id
   case "$1" in
     assert-migrated)
       shape="$(e2e_psql --field-separator=, -c "SELECT auth_provider, password_hash IS NULL, is_active, is_superuser, token_version,
@@ -72,6 +72,24 @@ go_api_prove_e2e_principal() {
       ;;
     grant-membership)
       e2e_dho_admin users update --id "${id}" --org "${E2E_ORG_ID}" --role viewer >/dev/null
+      ;;
+    seed-session)
+      # An access token is accepted only for a live session of its principal, pinned to the principal's token_version
+      # (auth-service writes it at login; no login runs for a service principal). dho mint edge-token reads this row
+      # and never writes it, so the fixture does: once after the membership, again after each token_version bump.
+      session_id="$(e2e_psql -c "
+        INSERT INTO auth.principals (id, kind, display_name) VALUES ('${id}', 'user', 'go-api-prove') ON CONFLICT (id) DO NOTHING;
+        INSERT INTO auth.sessions (principal_id, token_hash, expires_at, legacy_token_version)
+          SELECT id, sha256(convert_to(gen_random_uuid()::text, 'UTF8')), now() + interval '2 hours', token_version
+            FROM public.users WHERE id = '${id}'
+          RETURNING id;" | tail -n 1)" || return 1
+      case "${session_id}" in
+        *[!0-9a-fA-F-]* | "")
+          echo "could not read the proof principal session id"
+          return 1
+          ;;
+      esac
+      export EDGE_TOKEN_SESSION_ID="${session_id}"
       ;;
     bump-token-version)
       e2e_psql -c "UPDATE users SET token_version = token_version + 1 WHERE id = '${id}'" >/dev/null
@@ -107,6 +125,14 @@ go_api_prove_e2e_edge_served() {
   grep -q "\"data\":{\"${GO_API_PROVE_E2E_OPERATION}\":" "${GO_API_PROVE_E2E_DIR}/edge-response.json" \
     && ! grep -q '"errors"' "${GO_API_PROVE_E2E_DIR}/edge-response.json" \
     && grep -qi '^x-dev-health-plane: go' "${GO_API_PROVE_E2E_DIR}/edge-response.headers"
+}
+
+# The EdDSA signer the edge-token mint (dho mint edge-token and the in-process mint of dho goapi prove) reads: the CI
+# issuer stub's key (ci/run_live_backend_e2e.sh), signing for the issuer both services verify against.
+go_api_prove_e2e_signer_env() {
+  export EDGE_TOKEN_SIGNING_KEY_FILE="${E2E_ISSUER_KEY_FILE}"
+  export EDGE_TOKEN_KID="${E2E_ISSUER_KID:-ci-e2e-1}"
+  export AUTH_ACCESS_TOKEN_ISSUER="${E2E_ISSUER_URL}"
 }
 
 go_api_prove_e2e_mint_edge_token() {
@@ -247,6 +273,7 @@ run_go_api_prove_e2e() {
   "${BIN_DIR}/cigate" live-e2e edge-request "${dir}/documents.json" "${GO_API_PROVE_E2E_OPERATION}" "${E2E_ORG_ID}" > "${dir}/edge-request.json" \
     || go_api_prove_e2e_fail "could not build the registered ${GO_API_PROVE_E2E_OPERATION} request"
 
+  go_api_prove_e2e_signer_env
   echo "==> [go-api-prove e2e] the migration created the proof service principal, with no membership"
   go_api_prove_e2e_principal assert-migrated || go_api_prove_e2e_fail "the proof service principal row is not the migrated one"
   set +e
@@ -261,6 +288,7 @@ run_go_api_prove_e2e() {
 
   echo "==> [go-api-prove e2e] granting the proof service principal a viewer membership"
   go_api_prove_e2e_principal grant-membership || go_api_prove_e2e_fail "could not grant the proof service principal a membership"
+  go_api_prove_e2e_principal seed-session || go_api_prove_e2e_fail "could not seed the proof service principal session"
 
   # query-api serves every registered operation and no routing row decides it (CHAOS-8702): the candidate goes
   # through /graphql itself, the path a real client takes.
@@ -282,6 +310,7 @@ run_go_api_prove_e2e() {
   go_api_prove_e2e_principal bump-token-version || go_api_prove_e2e_fail "could not bump token_version"
   status="$(go_api_prove_e2e_edge_status "${dir}/token-v0")"
   [ "${status}" = "401" ] || go_api_prove_e2e_fail "the edge answered ${status} to a token minted before a token_version bump, want 401"
+  go_api_prove_e2e_principal seed-session || go_api_prove_e2e_fail "could not seed a session at the bumped token_version"
   (umask 077 && go_api_prove_e2e_mint_edge_token > "${dir}/token-v1") || go_api_prove_e2e_fail "mint-edge-token refused after a token_version bump"
   status="$(go_api_prove_e2e_edge_status "${dir}/token-v1")"
   [ "${status}" = "200" ] || go_api_prove_e2e_fail "the edge answered ${status} to a token minted after the bump, want 200"

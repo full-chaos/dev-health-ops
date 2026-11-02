@@ -60,3 +60,31 @@ func TestRunMintsAnEdDSATokenWithAKeyFileAndNoHS256Secret(t *testing.T) {
 		t.Fatalf("header = %v, want alg EdDSA, typ at+jwt, kid ci-e2e-1", header)
 	}
 }
+
+func TestRunEdDSARefusesWithoutASessionAfterNamingThePrincipal(t *testing.T) {
+	t.Setenv("JWT_SECRET_KEY", "")
+	t.Setenv("EDGE_TOKEN_SIGNING_KEY_FILE", writeEdDSAKey(t))
+	t.Setenv("EDGE_TOKEN_KID", "ci-e2e-1")
+	t.Setenv("EDGE_TOKEN_SESSION_ID", "")
+	t.Setenv("AUTH_ACCESS_TOKEN_ISSUER", "https://localhost:8443")
+	var opened, closed bool
+	var out bytes.Buffer
+	err := run(context.Background(), []string{"-org", testOrg}, &out, io.Discard, opener(&fakeDB{active: true}, &opened, &closed))
+	if err == nil || !strings.Contains(err.Error(), "EDGE_TOKEN_SESSION_ID") || out.Len() != 0 {
+		t.Fatalf("err = %v, stdout %d bytes; want a refusal naming EDGE_TOKEN_SESSION_ID and no token", err, out.Len())
+	}
+	err = run(context.Background(), []string{"-org", testOrg}, &out, io.Discard, opener(&fakeDB{active: false}, &opened, &closed))
+	if err == nil || !strings.Contains(err.Error(), "not active") {
+		t.Fatalf("an inactive principal must be named before the session: %v", err)
+	}
+}
+
+func TestRunEdDSAKeyFileModeNeverReadsTheHS256Secret(t *testing.T) {
+	t.Setenv("JWT_SECRET_KEY", testKey)
+	t.Setenv("EDGE_TOKEN_SIGNING_KEY_FILE", filepath.Join(t.TempDir(), "absent"))
+	var opened, closed bool
+	err := run(context.Background(), []string{"-org", testOrg}, &bytes.Buffer{}, io.Discard, opener(&fakeDB{active: true}, &opened, &closed))
+	if err == nil || opened {
+		t.Fatalf("a missing key file must refuse before the database opens, even with the HS256 secret set: err=%v opened=%v", err, opened)
+	}
+}

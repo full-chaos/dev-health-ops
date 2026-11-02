@@ -144,7 +144,7 @@ func authorizeProfileDoc(t *testing.T, patterns ...string) []byte {
 	return raw
 }
 
-func newAuthorizeHandlerFixture(t *testing.T) *authorizeHandlerFixture {
+func newAuthorizeHandlerFixture(t *testing.T, opts ...func(*AuthorizeDeps)) *authorizeHandlerFixture {
 	t.Helper()
 	f := newAuthorizeFixture(t)
 	f.now = time.Unix(0, authorizeNow)
@@ -167,10 +167,14 @@ func newAuthorizeHandlerFixture(t *testing.T) *authorizeHandlerFixture {
 		},
 	}
 	sink := &fakeAudit{}
-	routes, err := AuthorizeRoutes(AuthorizeDeps{
+	deps := AuthorizeDeps{
 		Callers: f.callers(), References: f.references(), State: state, Evaluator: authorization.NewEvaluator(), Audit: sink.write,
 		ProfileRows: authorizeProfileDoc(t, PatternAuthorize, PatternAuthorizeBatch),
-	})
+	}
+	for _, opt := range opts {
+		opt(&deps)
+	}
+	routes, err := AuthorizeRoutes(deps)
 	if err != nil {
 		t.Fatal(err)
 	}

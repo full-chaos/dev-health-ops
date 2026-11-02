@@ -61,6 +61,11 @@ NS="opsmove-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
 readonly NS
 KUBECONFIG_FILE="${OPS_MOVE_KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 
+# The UPGRADE leg's database also has the auth side of prod: schema auth owned by the auth migrator, the sessions table,
+# and query-api's session read granted by the auth migrator (the auth-grants sessionReaders form). Its River step runs
+# with QUERY_API_DATABASE_ROLE and AUTH_PROXY_SESSIONS, as prod's does.
+readonly AUTH_DB="omu" QUERY_API="devhealth_query_api" AUTH_MIGRATOR="devhealth_auth_migrator"
+
 # helm_args RELEASE DATABASE PIN INDEX  -> HELM_ARGS (INDEX=1 also renders the open-units and streak index Jobs: they need
 # the baseline's tables, so they run on upgrades only)
 helm_args() {
@@ -81,6 +86,7 @@ helm_args() {
     --set "migrations.hook.streakIndex.enabled=$([ "$4" = 1 ] && echo true || echo false)"
   )
   if [ -n "$3" ]; then HELM_ARGS+=(--set "migrations.hook.ownerRole=$3"); fi
+  if [ "$2" = "${AUTH_DB}" ]; then HELM_ARGS+=(--set-json "queryApi.extraEnv=[{\"name\":\"QUERY_API_DATABASE_ROLE\",\"value\":\"${QUERY_API}\"}]"); fi
 }
 
 print_plan() {
@@ -179,6 +185,9 @@ OPS_PG_IMAGE="${PG_IMAGE}" OPS_CH_IMAGE="${CH_IMAGE}" envsubst '${OPS_PG_IMAGE} 
 K rollout status deploy/ops-postgres --timeout=240s >/dev/null
 K rollout status deploy/ops-clickhouse --timeout=300s >/dev/null
 pass "postgres (superuser ${OLD}) and clickhouse are up"
+QUERY_API_PASSWORD="$(openssl rand -hex 12)"
+printf "CREATE ROLE %s LOGIN PASSWORD '%s' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;\nCREATE ROLE %s NOLOGIN NOSUPERUSER;\n" \
+  "${QUERY_API}" "${QUERY_API_PASSWORD}" "${AUTH_MIGRATOR}" | K exec -i deploy/ops-postgres -- psql -U "${OLD}" -v ON_ERROR_STOP=1 -q -f - >/dev/null
 
 pg() { K exec -i deploy/ops-postgres -- psql -U "${OLD}" -v ON_ERROR_STOP=1 -At "$@"; }
 # shellcheck disable=SC2016
@@ -191,8 +200,10 @@ chdsn() { printf 'clickhouse://dho:%s@ops-clickhouse:9000/%s' "${CH_PASSWORD}" "
 hook_secret() { # NAME DB LOGIN
   local password=${PG_PASSWORD}
   [ "$3" = "${NEW}" ] && password=${NEW_PASSWORD}
+  local auth=()
+  [ "$2" = "${AUTH_DB}" ] && auth=(AUTH_PROXY_SESSIONS=true AUTH_DATABASE_SCHEMA=auth)
   put_secret "$1" MIGRATION_DATABASE_URI="$(dsn "$3" "${password}" "$2")" POSTGRES_URI="$(dsn "$3" "${password}" "$2")" \
-    CLICKHOUSE_URI="$(chdsn "$2")"
+    CLICKHOUSE_URI="$(chdsn "$2")" "${auth[@]}"
 }
 
 # one-off pod of the operator image: oneoff NAME SECRET PIN ARGS... (prints the run's output; fails on a non-zero exit
@@ -223,6 +234,10 @@ acl_snapshot() { # DB: every ACL entry (stored or default) of the database, sche
   pg -d "$1" -f - <"${SCRIPT_DIR}/ops_k8s/acl_snapshot.sql"
 }
 
+auth_acl() { # DB: every stored ACL entry of schema auth and its relations and columns
+  pg -d "$1" -c "SELECT s.line FROM (SELECT 'schema auth ' || a.grantor::regrole || '>' || a.grantee::regrole || ' ' || a.privilege_type AS line FROM pg_namespace n, aclexplode(n.nspacl) a WHERE n.nspname = 'auth' UNION ALL SELECT 'rel ' || c.relname || ' ' || a.grantor::regrole || '>' || a.grantee::regrole || ' ' || a.privilege_type FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace, aclexplode(c.relacl) a WHERE n.nspname = 'auth' UNION ALL SELECT 'col ' || c.relname || '.' || t.attname || ' ' || a.grantor::regrole || '>' || a.grantee::regrole || ' ' || a.privilege_type FROM pg_attribute t JOIN pg_class c ON c.oid = t.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace, aclexplode(t.attacl) a WHERE n.nspname = 'auth') s ORDER BY 1"
+}
+
 owned_by() { # DB ROLE: relations, routines and types of public and river, the schema river and the database owned by ROLE
   pg -d "$1" -v "role=$2" -f - <"${SCRIPT_DIR}/ops_k8s/owned_by.sql"
 }
@@ -232,6 +247,14 @@ install() { # DB: database and ClickHouse database, hook Secrets on the superuse
   ch "CREATE DATABASE IF NOT EXISTS $1" >/dev/null
   hook_secret "sec-owner-$1" "$1" "${OLD}"
   hook_secret "sec-migrate-$1" "$1" "${OLD}"
+  if [ "$1" = "${AUTH_DB}" ]; then
+    pg -d "$1" -c "CREATE SCHEMA auth AUTHORIZATION ${AUTH_MIGRATOR}" -c "SET ROLE ${AUTH_MIGRATOR}" \
+      -c "CREATE TABLE auth.sessions (id uuid PRIMARY KEY, principal_id uuid NOT NULL, revoked_at timestamptz, legacy_token_version integer, secret_hash text)" \
+      -c "INSERT INTO auth.sessions (id, principal_id) VALUES (gen_random_uuid(), gen_random_uuid())" \
+      -c "GRANT USAGE ON SCHEMA auth TO ${QUERY_API}" \
+      -c "GRANT SELECT (id, principal_id, revoked_at, legacy_token_version) ON auth.sessions TO ${QUERY_API}" >/dev/null
+    pass "$1: schema auth owned by ${AUTH_MIGRATOR}; query-api's session read granted by the auth migrator (auth-grants form)"
+  fi
   helm_args "$1" "$1" "" 0
   helm_up "${HELM_ARGS[@]}"
   [ "$(owned_by "$1" "${NEW}")" = 0 ] || die "$1: the migration login owns objects before the move"
@@ -300,10 +323,16 @@ readbacks omf
 pg -c "DROP DATABASE omf WITH (FORCE)" >/dev/null
 printf '=== leg 2: UPGRADE under runtime traffic ===\n'
 install omu
+auth_before="$(auth_acl omu)"
+grep -q "col sessions.principal_id ${AUTH_MIGRATOR}>${QUERY_API} SELECT" <<<"${auth_before}" || die "omu: query-api holds no session read from the auth migrator after the superuser install: ${auth_before}"
 K exec -i deploy/ops-postgres -- sh -c 'rm -f /tmp/loop.*; touch /tmp/loop.go' >/dev/null
-for who in domain queue; do
+for who in domain queue query; do
   {
-    if [ "${who}" = domain ]; then
+    if [ "${who}" = query ]; then
+      printf "export PGPASSWORD='%s'\n" "${QUERY_API_PASSWORD}"
+      # shellcheck disable=SC2016
+      printf '%s\n' 'n=0; f=0; while [ -e /tmp/loop.go ]; do n=$((n+1)); psql -h 127.0.0.1 -U devhealth_query_api -d omu -v ON_ERROR_STOP=1 -At -c "SELECT count(id) FROM auth.sessions WHERE revoked_at IS NULL" >/dev/null 2>>/tmp/loop.query.err || f=$((f+1)); sleep 0.1; done; echo "$n $f" >/tmp/loop.query.out'
+    elif [ "${who}" = domain ]; then
       printf "export PGPASSWORD='%s'\n" "${DOMAIN_PASSWORD}"
       # shellcheck disable=SC2016
       printf '%s\n' 'n=0; f=0; while [ -e /tmp/loop.go ]; do n=$((n+1)); psql -h 127.0.0.1 -U devhealth_domain -d omu -v ON_ERROR_STOP=1 -At -c "SELECT count(*) FROM public.integrations" -c "UPDATE public.integration_credentials SET updated_at = updated_at WHERE id IS NULL" >/dev/null 2>>/tmp/loop.domain.err || f=$((f+1)); sleep 0.1; done; echo "$n $f" >/tmp/loop.domain.out'
@@ -321,7 +350,7 @@ pinned_upgrade omu
 sleep 3
 K exec -i deploy/ops-postgres -- sh -c 'rm -f /tmp/loop.go' >/dev/null
 wait
-for who in domain queue; do
+for who in domain queue query; do
   result="$(K exec -i deploy/ops-postgres -- sh -c "cat /tmp/loop.${who}.out" 2>/dev/null || true)"
   printf '%s login read+write statements (runs failures): %s\n' "${who}" "${result}"
   if [ -z "${result}" ] || [ "${result##* }" != 0 ] || [ "${result%% *}" -lt 10 ]; then
@@ -331,6 +360,10 @@ for who in domain queue; do
   pass "omu: the ${who} login ran ${result%% *} read+write rounds through the plan, the move, the rotation and the pinned upgrade with 0 failures"
 done
 readbacks omu
+logs="$(K logs job/omu-dev-health-river-migrate 2>&1)"
+grep -qF "query-api's session read is left to auth-grants" <<<"${logs}" || die "omu: the pinned River step did not leave the session read to auth-grants"
+[ "$(auth_acl omu)" = "${auth_before}" ] || { diff <(printf '%s\n' "${auth_before}") <(auth_acl omu) >&2 || true; die "omu: the pinned River step changed an ACL entry in schema auth"; }
+pass "omu: the pinned River step granted and revoked nothing in schema auth; query-api's session read is still the auth migrator's"
 K wait --for=condition=Ready pod --field-selector=status.phase=Running --timeout=120s >/dev/null || die "omu: not every running pod is Ready"
 [ -z "$(K get pods --field-selector=status.phase=Failed -o name)" ] || die "omu: a pod failed"
 [ "$(helm status omu --kubeconfig "${KUBECONFIG_FILE}" -n "${NS}" -o json | jq -r .info.status)" = deployed ] || die "omu: the release is not deployed"

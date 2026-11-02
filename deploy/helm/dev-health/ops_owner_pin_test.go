@@ -225,3 +225,17 @@ func TestProvisionRolesExternalSecretName(t *testing.T) {
 		})
 	}
 }
+
+// With the pin on and auth-service owning sessions, a release whose query-api session reader is not named is refused:
+// the pinned River step leaves that read to auth-grants, so the reader must be configured there.
+func TestOpsOwnerRoleWithSessionsOwnedAndNoAuthGrantsReaderIsRefused(t *testing.T) {
+	args := opsPinArgs(append(opsSessionsOn("--set", "queryApi.enabled=false", "--set", "authService.migrate.sessionReaders.goApi=devhealth_api"),
+		"--set", "migrations.hook.ownerRole=devhealth_migrator")...)
+	_, out, err := renderAuth(t, args...)
+	if err == nil {
+		t.Fatal("the render succeeded; it must refuse")
+	}
+	if !strings.Contains(out, "sessionReaders.queryApi") {
+		t.Fatalf("the refusal does not name authService.migrate.sessionReaders.queryApi: %.400s", out)
+	}
+}

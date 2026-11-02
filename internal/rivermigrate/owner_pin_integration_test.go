@@ -116,6 +116,25 @@ func TestMigrateRiverAsThePinnedNosuperuserDatabaseOwner(t *testing.T) {
 		return ok
 	}
 
+	authACL := func() []string {
+		t.Helper()
+		rows, err := admin.Query(ctx, `SELECT kind || ' ' || object || ' ' || a.grantor::regrole::text || '>' || a.grantee::regrole::text || ' ' || a.privilege_type
+			FROM (SELECT 'schema' AS kind, n.nspname::text AS object, n.nspacl AS acl FROM pg_namespace n WHERE n.nspname = 'auth'
+			      UNION ALL SELECT 'relation', c.relname::text, c.relacl FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'auth'
+			      UNION ALL SELECT 'column', c.relname || '.' || t.attname, t.attacl FROM pg_attribute t JOIN pg_class c ON c.oid = t.attrelid
+			        JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'auth' AND t.attacl IS NOT NULL) o,
+			LATERAL aclexplode(o.acl) a ORDER BY 1`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return lines
+	}
+	authBefore := authACL()
+
 	if code, out := migrate(instance.URI); code != 1 || !strings.Contains(out, "ops schema owner pin") || riverExists() {
 		t.Fatalf("a superuser DSN under the pin: exit %d, river created %v\n%s", code, riverExists(), out)
 	}
@@ -140,6 +159,9 @@ func TestMigrateRiverAsThePinnedNosuperuserDatabaseOwner(t *testing.T) {
 	}
 	if !sessionRead {
 		t.Error("the River leg revoked query-api's auth session read that auth-grants gave it")
+	}
+	if after := authACL(); strings.Join(after, "\n") != strings.Join(authBefore, "\n") {
+		t.Errorf("the River leg as the pinned login changed ACL entries in schema auth:\nbefore %v\nafter  %v", authBefore, after)
 	}
 	if !savedReports {
 		t.Error("the query-api leg did not grant its public manifest")

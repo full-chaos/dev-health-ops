@@ -263,6 +263,19 @@ func MaxBodyWith(limit int64, write ErrorWriter) func(http.Handler) http.Handler
 	}
 }
 
+// admitBeforeBody runs a route's admission gate ahead of the body bound.
+func admitBeforeBody(gate func(http.ResponseWriter, *http.Request) (*http.Request, bool)) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			admitted, ok := gate(w, r)
+			if !ok {
+				return
+			}
+			next.ServeHTTP(w, admitted)
+		})
+	}
+}
+
 // Deadline bounds the request context.
 //
 // This is the mechanism behind CHAOS-4881's "bounded context.Context deadlines

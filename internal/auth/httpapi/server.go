@@ -68,6 +68,13 @@ type Route struct {
 	// shared one, so a stalled dependency behind other routes cannot refuse
 	// it. Only a route that does no dependency I/O belongs here.
 	PublicClass bool
+	// Admit, when set, is an admission gate that runs after the rate limit and
+	// the in-flight cap and BEFORE the body bound, so a request it refuses is
+	// answered without a single body byte read, whatever the framing. It
+	// returns the request to serve (which may carry what the gate attached to
+	// its context) and true, or false after writing the refusal itself. Nil, the
+	// default, leaves the chain as it was.
+	Admit func(http.ResponseWriter, *http.Request) (*http.Request, bool)
 	// Unthrottled skips the server's body bound, in-flight cap and rate limit
 	// for this route; recovery, the deadline and the route record stay. Only a
 	// constant handler that reads no body and does no I/O belongs here.
@@ -561,6 +568,9 @@ func routeChain(route Route, options ServerOptions, logger *slog.Logger, write E
 	handler = Deadline(options.RequestTimeout)(handler)
 	if !route.Unthrottled {
 		handler = MaxBodyWith(maxBody, write)(handler)
+		if route.Admit != nil {
+			handler = admitBeforeBody(route.Admit)(handler)
+		}
 		handler = inFlightLimit(inFlight, logger, write)(handler)
 		handler = RateLimitWith(NewBucket(perSecond, burst, options.Now), write)(handler)
 	}

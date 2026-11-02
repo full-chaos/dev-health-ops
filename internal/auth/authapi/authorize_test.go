@@ -22,6 +22,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/authorization"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
@@ -161,10 +162,14 @@ func newAuthorizeHandlerFixture(t *testing.T) *authorizeHandlerFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	byPattern := map[string]http.Handler{}
-	for _, r := range routes {
-		byPattern[r.Pattern] = r.Handler
+	server, err := httpapi.NewServer(httpapi.ServerOptions{
+		Address: "127.0.0.1:0", Logger: slog.New(slog.DiscardHandler), Routes: routes,
+		RequestTimeout: 5 * time.Second, MaxBodyBytes: 1 << 20, RateLimit: 1000, RateLimitBurst: 1000,
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
+	byPattern := map[string]http.Handler{PatternAuthorize: server.Handler(), PatternAuthorizeBatch: server.Handler()}
 	return &authorizeHandlerFixture{authorizeFixture: f, state: state, principal: principal, org: org, reference: reference, sid: sessionID, routes: byPattern}
 }
 

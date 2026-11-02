@@ -125,8 +125,8 @@ func AuthorizeRoutes(deps AuthorizeDeps) ([]httpapi.Route, error) {
 	h := authorizeHandlers{AuthorizeDeps: deps, rec: rec, decisionID: newDecisionID}
 	var routes []httpapi.Route
 	for _, route := range []httpapi.Route{
-		{Method: http.MethodPost, Pattern: PatternAuthorize, Handler: http.HandlerFunc(h.authorize), MaxBodyBytes: maxAuthorizeBody},
-		{Method: http.MethodPost, Pattern: PatternAuthorizeBatch, Handler: http.HandlerFunc(h.authorizeBatch), MaxBodyBytes: maxAuthorizeBatchBody},
+		{Method: http.MethodPost, Pattern: PatternAuthorize, Handler: http.HandlerFunc(h.authorize), MaxBodyBytes: maxAuthorizeBody, Admit: h.admit(opAuthorize)},
+		{Method: http.MethodPost, Pattern: PatternAuthorizeBatch, Handler: http.HandlerFunc(h.authorizeBatch), MaxBodyBytes: maxAuthorizeBatchBody, Admit: h.admit(opAuthorizeBatch)},
 	} {
 		if rowsAcceptFor(rows, []string{route.Pattern}, []string{workloadTokenClass}) != nil {
 			h.Logger.Info("auth authorize route not mounted: no endpoint-profile row", "route", route.Pattern)
@@ -162,9 +162,40 @@ func (h authorizeHandlers) authorizeBatch(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, doc)
 }
 
+// authorizeCallerKey carries the verified caller from the route's admission
+// gate to the handler.
+type authorizeCallerKey struct{}
+
+const reasonCallerNotAdmitted = "caller_not_admitted"
+
+// admit is the routes' admission gate: it authenticates the policy-enforcement
+// point before any body byte is read and answers the refusal itself.
+func (h authorizeHandlers) admit(op string) func(http.ResponseWriter, *http.Request) (*http.Request, bool) {
+	return func(w http.ResponseWriter, r *http.Request) (*http.Request, bool) {
+		ctx := r.Context()
+		token, ok := bearerToken(r)
+		if !ok {
+			h.rec.refuse(w, r, op, unauthorized(reasonInvalidCredentials), nil)
+			return nil, false
+		}
+		caller, why, err := h.Callers.Authenticate(token)
+		if err != nil {
+			h.rec.refuse(w, r, op, unavailable(reasonDependency), err)
+			return nil, false
+		}
+		if why != "" {
+			h.Logger.WarnContext(ctx, "authorize refused: caller", "refusal", why, "operation", op)
+			h.rec.refuse(w, r, op, unauthorized(reasonInvalidCredentials), nil)
+			return nil, false
+		}
+		return r.WithContext(context.WithValue(ctx, authorizeCallerKey{}, caller)), true
+	}
+}
+
 var (
-	errAuthorizeReferenceRefused = errors.New("authapi: a principal reference names no live session of its principal")
-	errAuthorizeStateFailure     = errors.New("authapi: the decision core could not read its state")
+	errAuthorizeCallerNotAdmitted = errors.New("authapi: the authorize handler was reached without an admitted caller")
+	errAuthorizeReferenceRefused  = errors.New("authapi: a principal reference names no live session of its principal")
+	errAuthorizeStateFailure      = errors.New("authapi: the decision core could not read its state")
 )
 
 type authorizeItem struct {
@@ -181,19 +212,12 @@ type authorizeItem struct {
 func (h authorizeHandlers) decide(w http.ResponseWriter, r *http.Request, op string, limit int64,
 	decode func([]byte) ([]AuthorizationQuestion, error)) ([]decisionDocument, bool) {
 	ctx := r.Context()
-	token, ok := bearerToken(r)
-	if !ok {
-		h.rec.refuse(w, r, op, unauthorized(reasonInvalidCredentials), nil)
-		return nil, false
-	}
-	_, why, err := h.Callers.Authenticate(token)
-	if err != nil {
-		h.rec.refuse(w, r, op, unavailable(reasonDependency), err)
-		return nil, false
-	}
-	if why != "" {
-		h.Logger.WarnContext(ctx, "authorize refused: caller", "refusal", why, "operation", op)
-		h.rec.refuse(w, r, op, unauthorized(reasonInvalidCredentials), nil)
+	if _, admitted := ctx.Value(authorizeCallerKey{}).(AuthorizeCaller); !admitted {
+		// The route's admission gate did not run: fail closed, and never verify
+		// the bearer here.
+		h.Logger.ErrorContext(ctx, "authorize handler reached without an admitted caller", "operation", op)
+		h.rec.record(ctx, op, "error", reasonCallerNotAdmitted, errAuthorizeCallerNotAdmitted)
+		w.WriteHeader(http.StatusInternalServerError)
 		return nil, false
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))

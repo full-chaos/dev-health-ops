@@ -523,10 +523,12 @@ func (executor *Executor) computeForDay(
 		}
 	}
 
-	// The landscape's team is the owner of the repository of each row (ruling
+	// The landscape's team of a git row is the owner of its repository (ruling
 	// D5985), as of the end of the day: a person gets a point in each team
-	// that owns a repository the person worked in, ranked among the people of
-	// that team's repositories. Membership plays no part in it.
+	// that owns a repository the person worked in. The team of the person's
+	// work items is the team of the items (CHAOS-12535, LoadRollingStats). A
+	// point is ranked among the people of its team. Membership plays no part in
+	// it.
 	owners, err := teamownership.OwnersByRepo(ctx, executor.conn, orgID, ownershipAsOf(day))
 	if err != nil {
 		return written, err

@@ -1476,8 +1476,10 @@ project (section 0.1): a native team key gives one team.
   its teams (CHAOS-9562, D5998), see "The team quadrants weigh by owner share" below. Team-scoped and team-grouped readers today: the issues drilldown with a team scope
   (`internal/queryapi/drilldown/issues.go`), the aggregated-flame throughput with a team
   (`internal/queryapi/aggflame/clickhouse.go`), the team cycle/throughput quadrant
-  (`internal/queryapi/quadrant/quadrant.go`, one point per team) and the TEAM and REPO flow-matrix dimensions
-  (`internal/queryapi/analytics/flowmatrix.go`: a node per team; repository pairs joined through the team).
+  (`internal/queryapi/quadrant/quadrant.go`, one point per team), the TEAM and REPO flow-matrix dimensions
+  (`internal/queryapi/analytics/flowmatrix.go`: a node per team; repository pairs joined through the team) and the
+  work-item half of the landscape (`ic_landscape_rolling_30d`, one point per team and person, through the team split
+  of `work_item_user_metrics_daily`; CHAOS-12535).
   Readers that stay on `= 1` although they name a team: the organization flame (a breakdown of the
   organization total by primary team), the daily rollup inputs and the investment team-repository donors
   (one team per item, section "Known limit" below), and the one-team-per-work-unit votes
@@ -1523,7 +1525,10 @@ project (section 0.1): a native team key gives one team.
   `LoadWorkItemPrimaryTeamAttributions` / `loadWorkItemScopeAttributions`), so organization totals do not
   change. A rollup-based team view shows a co-owned item under its primary team only, until the rollup rows
   carry the team set with one organization-counted row per set. Linked-issue inheritance (section 2) also
-  passes the primary team only.
+  passes the primary team only. One exception holds the team set: the `team_split_*` arrays of a
+  `work_item_user_metrics_daily` row (CHAOS-12535), which the work_item family fills from one more read,
+  `loadWorkItemScopeTeamSets` (`is_primary IN (1, 2)`, one row per item and team), for the landscape only; the row's
+  `team_id` label and its counts keep the primary team.
 - **The team review quadrant reads repository ownership (CHAOS-9339).** At the team grain the quadrant's
   `user_metrics_daily` metrics (review load, review latency, and churn, which the churn/throughput pair reads at the
   repository grain unless `scope_type=service`) group a row by the team that owns its repository now
@@ -2261,20 +2266,31 @@ Limits:
   count 0 (a group whose items are all closed; a group with no pull request of unknown origin). Such a row and a row
   of zeros are equal.
 - A reader with no FINAL and no `argMax` sees the old row and the row of zeros until a merge.
-- `ic_landscape_rolling_30d` (ruling D5985): the team of a point is the team that OWNS the repository of the
-  person's row, never the person's membership and never a team id stored on the row. A person's 30-day numbers in a
-  team are the person's `user_metrics_daily` rows in the repositories the team owns (`teamownership.OwnersByRepo` as
+- `ic_landscape_rolling_30d` (ruling D5985): the team of a point's git half is the team that OWNS the repository of the
+  person's row, never the person's membership and never a team id stored on the row. A person's 30-day git numbers in a
+  team (churn, merged pull requests, cycle time) are the person's `user_metrics_daily` rows in the repositories the team owns (`teamownership.OwnersByRepo` as
   of the last millisecond of the day: the ownership rule of the query API's team groupings -- FINAL, the bitemporal
   window, the `repos` name join with its matched sentinel, a non-empty team id, a repository `repos` holds -- and an
   inactive team owns nothing). A repository owned by several teams counts whole in each of them; a person who worked
   in repositories of two teams has a point in each, ranked among the people of that team's repositories. A row of a
-  repository no team owns, and the row of a person with work items and no git row (the synthesized repository,
-  which no team owns), is `unassigned`; a blank or `unknown` identity keeps a blank team. Ownership is provider-
+  repository no team owns is `unassigned`; the row of a person with work items and no git row (the synthesized
+  repository) is no git fact and gives no point; a blank or `unknown` identity keeps a blank team. Ownership is provider-
   agnostic: a GitHub access grant, a GitLab group's project grant and a Jira or Linear team's project, each derived
-  into repository ownership, give the same answer (tested per provider). What stays:
-  - work items reach the landscape only through the person's git row of the day (the merge adds a person's completed
-    items to one git row); items of a person with no git row are `unassigned`, and items are never split by the
-    repository their pull requests are in;
+  into repository ownership, give the same answer (tested per provider).
+- The work-item half of a landscape point (completed items in `delivery_units_30d`, `wip_max_30d`) takes the team of
+  the ITEMS (CHAOS-12535), for every provider: section 0.1's primary team (`is_primary = 1`, `unassigned` for an item
+  with none), and each co-owner team of section 0.4d (`is_primary = 2`) takes the item WHOLE, as a co-owned repository
+  row counts whole in each owner (the landscape is a team-grouped view; one item counts once in the organization).
+  The work_item family stores, on each person's `work_item_user_metrics_daily` row, a team split (four parallel
+  `team_split_*` arrays: team, 1 or 2, completed, open at the end of the day); the primary entries add up to the row's
+  counts. The landscape reads the split (FINAL, the org view rows, the live rows): the git half takes `delivery_units`
+  less `work_items_completed` and no WIP, so an item never counts on the owner of the person's repository too; WIP is
+  the largest daily sum over the person's work scopes. What a row's primary entries do not hold (a row written
+  before the split existed) is `unassigned`. An item with no assignee (the person `unassigned`) stays on team
+  `unassigned`. Membership plays no part. The rollup tables keep the primary team only (the known limit above).
+  Past days get the split when the work_item family recomputes them and the landscape when ic_finalize recomputes
+  them (a roll step). Asserted on real ClickHouse by `TestTheLandscapeTakesAWorkItemsTeamFromTheLadder` (jira,
+  gitlab, github, linear). What stays:
   - a stored point of a day the run does not compute keeps the team it was stored with until that day is computed
     again (a recompute of history is a separate decision);
   - a report chart of a person metric of the landscape (churn, delivery, cycle time, WIP, the raw axes) that is NOT

@@ -68,9 +68,9 @@ func TestSelectorGateRejectsASelectorTwoAcceptedClassesShare(t *testing.T) {
 }
 
 func TestSelectorGateRejectsAClassWithNoMarker(t *testing.T) {
-	profile := multiClassProfile(t, []any{"acr_client_credential", "ops_refresh_token"}, "credential_prefix", "fcacr_")
+	profile := multiClassProfile(t, []any{"acr_client_credential", "link_credential"}, "credential_prefix", "fcacr_")
 	if err := CheckClassSelector(profile, realRegistry(t)); err == nil {
-		t.Fatal("gate accepted a route whose second class (ops_refresh_token) has no marker")
+		t.Fatal("gate accepted a route whose second class (link_credential) has no marker")
 	}
 	registry := syntheticRegistry(
 		RegistryClass{ClassID: "acr_client_credential", Markers: []ClassMarker{{Kind: "credential_prefix", Name: "fcacr_"}}},
@@ -271,6 +271,10 @@ func TestEveryMarkerIsDiscriminatedInItsClassTransport(t *testing.T) {
 			marker := raw.(map[string]any)
 			kind, name := marker["kind"].(string), strings.ToLower(marker["name"].(string))
 			ok := markerMatchesTransport(kind, name, head, shape)
+			if kind == bodyFieldKind {
+				bodyShape, _ := marker["shape"].(string)
+				ok = bodyMarkerMatchesTransport(name, strings.ToLower(bodyShape), head, shape)
+			}
 			if !ok {
 				t.Errorf("class %v marker %s/%q is not how its transport text presents the credential (header_or_cookie %q, shape %q)",
 					class["class_id"], kind, name, transport["header_or_cookie"], transport["shape"])
@@ -304,6 +308,17 @@ func markerMatchesTransport(kind, name, head, shape string) bool {
 		return strings.Contains(head, "grant_type "+name)
 	}
 	return false
+}
+
+func bodyMarkerMatchesTransport(name, markerShape, head, shape string) bool {
+	_, rest, found := strings.Cut(head, "json body field ")
+	if !found || markerTransportToken(rest) != name {
+		return false
+	}
+	if value, isPrefix := strings.CutPrefix(markerShape, "prefix:"); isPrefix {
+		return strings.Contains(shape, "opaque "+value+" ")
+	}
+	return markerShape == "jwt" && strings.Contains(shape, " jwt,")
 }
 
 func markerTransportToken(text string) string {

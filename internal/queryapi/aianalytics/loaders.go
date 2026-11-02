@@ -12,6 +12,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
+// A Nullable column reads through a tuple: argMax skips a NULL, so until the
+// merge a retraction row's NULL would lose to the value of the old row under it.
 const dailyStatement = `SELECT
     team_id,
     toString(repo_id) AS repo_id_str,
@@ -23,27 +25,27 @@ const dailyStatement = `SELECT
     argMax(agent_created_prs, metrics.computed_at) AS agent_created_prs,
     argMax(human_prs, metrics.computed_at) AS human_prs,
     argMax(unknown_prs, metrics.computed_at) AS unknown_prs,
-    argMax(ai_assisted_pr_ratio, metrics.computed_at) AS ai_assisted_pr_ratio,
-    argMax(cycle_time_avg_hours, metrics.computed_at) AS cycle_time_avg_hours,
-    argMax(ai_cycle_time_delta_hours, metrics.computed_at) AS ai_cycle_time_delta_hours,
-    argMax(reviews_per_pr, metrics.computed_at) AS reviews_per_pr,
-    argMax(ai_review_amplification, metrics.computed_at) AS ai_review_amplification,
-    argMax(changes_requested_per_pr, metrics.computed_at) AS changes_requested_per_pr,
+    (argMax(tuple(ai_assisted_pr_ratio), metrics.computed_at)).1 AS ai_assisted_pr_ratio,
+    (argMax(tuple(cycle_time_avg_hours), metrics.computed_at)).1 AS cycle_time_avg_hours,
+    (argMax(tuple(ai_cycle_time_delta_hours), metrics.computed_at)).1 AS ai_cycle_time_delta_hours,
+    (argMax(tuple(reviews_per_pr), metrics.computed_at)).1 AS reviews_per_pr,
+    (argMax(tuple(ai_review_amplification), metrics.computed_at)).1 AS ai_review_amplification,
+    (argMax(tuple(changes_requested_per_pr), metrics.computed_at)).1 AS changes_requested_per_pr,
     argMax(rework_prs, metrics.computed_at) AS rework_prs,
-    argMax(rework_drag_rate, metrics.computed_at) AS rework_drag_rate,
+    (argMax(tuple(rework_drag_rate), metrics.computed_at)).1 AS rework_drag_rate,
     argMax(followup_commits_count, metrics.computed_at) AS followup_commits_count,
     argMax(revert_prs, metrics.computed_at) AS revert_prs,
-    argMax(revert_rate, metrics.computed_at) AS revert_rate,
+    (argMax(tuple(revert_rate), metrics.computed_at)).1 AS revert_rate,
     argMax(incidents_count, metrics.computed_at) AS incidents_count,
-    argMax(incident_drag_rate, metrics.computed_at) AS incident_drag_rate,
+    (argMax(tuple(incident_drag_rate), metrics.computed_at)).1 AS incident_drag_rate,
     argMax(test_gap_prs, metrics.computed_at) AS test_gap_prs,
-    argMax(test_gap_rate, metrics.computed_at) AS test_gap_rate,
+    (argMax(tuple(test_gap_rate), metrics.computed_at)).1 AS test_gap_rate,
     argMax(leverage_prs_component, metrics.computed_at) AS leverage_prs_component,
-    argMax(leverage_cycle_time_component, metrics.computed_at) AS leverage_cycle_time_component,
-    argMax(leverage_review_component, metrics.computed_at) AS leverage_review_component,
-    argMax(leverage_rework_component, metrics.computed_at) AS leverage_rework_component,
-    argMax(leverage_test_component, metrics.computed_at) AS leverage_test_component,
-    argMax(leverage_incident_component, metrics.computed_at) AS leverage_incident_component,
+    (argMax(tuple(leverage_cycle_time_component), metrics.computed_at)).1 AS leverage_cycle_time_component,
+    (argMax(tuple(leverage_review_component), metrics.computed_at)).1 AS leverage_review_component,
+    (argMax(tuple(leverage_rework_component), metrics.computed_at)).1 AS leverage_rework_component,
+    (argMax(tuple(leverage_test_component), metrics.computed_at)).1 AS leverage_test_component,
+    (argMax(tuple(leverage_incident_component), metrics.computed_at)).1 AS leverage_incident_component,
     max(metrics.computed_at) AS computed_at
 FROM ai_impact_metrics_daily AS metrics
 WHERE %s

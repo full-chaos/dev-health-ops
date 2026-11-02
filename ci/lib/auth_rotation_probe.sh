@@ -80,7 +80,9 @@ floor_remaining_seconds() {
 }
 
 refusal_reason() {
-  [[ "$1" =~ ^refused:\ ([a-z_]+) ]] || return 1
+  local line
+  line="$(grep -m 1 -E '^refused: [a-z_]+' <<<"$1")" || return 1
+  [[ "${line}" =~ ^refused:\ ([a-z_]+) ]] || return 1
   printf '%s\n' "${BASH_REMATCH[1]}"
 }
 

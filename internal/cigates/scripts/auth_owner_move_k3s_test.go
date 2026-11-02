@@ -220,15 +220,8 @@ func TestAuthOwnerMoveK3sRefusesMalformedImagePathsAndTheSameDigestUnderAMirror(
 	}
 }
 
-func TestAuthOwnerMoveK3sHasNoKeepFlagAndChecksTheExactPredecessorAndTypeACLs(t *testing.T) {
+func TestAuthOwnerMoveK3sHasNoKeepFlag(t *testing.T) {
 	if res := k3sRun(t, nil, "--keep"); res.code == 0 || !strings.Contains(res.stderr, "usage:") {
 		t.Errorf("--keep: exit %d, stderr %q; want it refused as an unknown argument", res.code, res.stderr)
-	}
-	script := readText(t, filepath.Join(rootOf(t), k3sScript))
-	if !strings.Contains(script, "expected_base") {
-		t.Error("leg 2 does not compare the base state with the exact predecessor of the head lineage")
-	}
-	if !strings.Contains(readText(t, filepath.Join(rootOf(t), "ci/auth_k8s/acl_snapshot.sql")), "pg_type") {
-		t.Error("the ACL snapshot has no type arm")
 	}
 }

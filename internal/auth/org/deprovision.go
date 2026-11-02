@@ -25,10 +25,15 @@ func (s *Store) LockForUpdate(ctx context.Context, tx audit.TxOps, id uuid.UUID)
 
 // ApplySuspend sets disabled_at inside the caller's audit.Commit, on a row the
 // caller locked with LockForUpdate. A suspended organization keeps its
-// disabled_at.
+// disabled_at. While auth-service owns organizations, go-api's is_active goes
+// false in the same commit.
 func (s *Store) ApplySuspend(ctx context.Context, tx audit.TxOps, id uuid.UUID) error {
 	_, err := tx.Exec(ctx, `UPDATE `+s.q+`.organizations SET disabled_at = clock_timestamp(), updated_at = clock_timestamp()
 WHERE id = $1 AND disabled_at IS NULL`, id)
+	if err != nil || !s.ownsOrgs {
+		return err
+	}
+	_, err = tx.Exec(ctx, `UPDATE public.organizations SET is_active = false, updated_at = clock_timestamp() WHERE id = $1 AND is_active`, id)
 	return err
 }
 

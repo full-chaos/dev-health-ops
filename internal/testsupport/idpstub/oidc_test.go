@@ -31,6 +31,14 @@ func pkce(verifier string) string {
 
 func startOIDC(t *testing.T, opts idpstub.OIDCOptions) (*idpstub.OIDC, *httptest.Server) {
 	t.Helper()
+	if opts.RedirectURIs == nil {
+		opts.RedirectURIs = []string{redirectURI}
+	}
+	return startOIDCExact(t, opts)
+}
+
+func startOIDCExact(t *testing.T, opts idpstub.OIDCOptions) (*idpstub.OIDC, *httptest.Server) {
+	t.Helper()
 	o, err := idpstub.NewOIDC(opts)
 	if err != nil {
 		t.Fatal(err)
@@ -364,6 +372,49 @@ func TestOIDCClaimsKeepEmptyEmailAndName(t *testing.T) {
 	for _, k := range []string{"email", "name", "sub", "nonce"} {
 		if _, has := claims[k]; !has {
 			t.Errorf("claim %s missing: %v", k, claims)
+		}
+	}
+}
+
+func TestOIDCAuthorizeWithNoRegisteredRedirectURIIsRefused(t *testing.T) {
+	_, srv := startOIDCExact(t, idpstub.OIDCOptions{})
+	if code, _, status := authorize(t, srv, nil); status != http.StatusBadRequest || code != "" {
+		t.Fatalf("authorize with no registered redirect URI = %d code=%q, want 400 and no redirect", status, code)
+	}
+}
+
+func TestOIDCAuthorizeRefusesAnUnregisteredRedirectURI(t *testing.T) {
+	_, srv := startOIDCExact(t, idpstub.OIDCOptions{RedirectURIs: []string{redirectURI}})
+	for _, other := range []string{"https://evil.example.test/cb", redirectURI + "/x", redirectURI + "?a=b", "http://sp.example.test/cb"} {
+		if _, _, status := authorize(t, srv, url.Values{"redirect_uri": {other}}); status != http.StatusBadRequest {
+			t.Errorf("redirect_uri %q: status %d, want 400", other, status)
+		}
+	}
+}
+
+func TestOIDCAuthorizeRedirectsToExactlyTheRegisteredURIWithCodeAndState(t *testing.T) {
+	const second = "https://sp.example.test/other?keep=1"
+	_, srv := startOIDCExact(t, idpstub.OIDCOptions{RedirectURIs: []string{redirectURI, second}})
+	c := *srv.Client()
+	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	for _, registered := range []string{redirectURI, second} {
+		q := url.Values{"response_type": {"code"}, "client_id": {clientID}, "redirect_uri": {registered}, "state": {"st-9"},
+			"code_challenge": {pkce("v")}, "code_challenge_method": {"S256"}}
+		res, err := c.Get(srv.URL + "/authorize?" + q.Encode())
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		loc, err := url.Parse(res.Header.Get("Location"))
+		if err != nil || res.StatusCode != http.StatusFound {
+			t.Fatalf("%s: status %d location %q", registered, res.StatusCode, res.Header.Get("Location"))
+		}
+		want, _ := url.Parse(registered)
+		if loc.Scheme != want.Scheme || loc.Host != want.Host || loc.Path != want.Path {
+			t.Fatalf("redirected to %s, want the registered %s", loc, registered)
+		}
+		if loc.Query().Get("code") == "" || loc.Query().Get("state") != "st-9" || (want.Query().Get("keep") != "" && loc.Query().Get("keep") != "1") {
+			t.Fatalf("redirect query = %v", loc.Query())
 		}
 	}
 }

@@ -102,3 +102,25 @@ func TestRequestLogLineHoldsNoLineBreak(t *testing.T) {
 		t.Fatalf("log line = %q", got)
 	}
 }
+
+func TestCmdServeRefusesToStartWithoutARedirectURI(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "certs")
+	if err := certs([]string{"-out", dir, "-host", "localhost"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"serve", "oidc"} {
+		done := make(chan error, 1)
+		go func() {
+			done <- serve(mode, []string{"-listen", freePort(t), "-cert", filepath.Join(dir, "server.pem"), "-key", filepath.Join(dir, "server.key"),
+				"-base-url", "https://localhost"})
+		}()
+		select {
+		case err := <-done:
+			if err == nil || !strings.Contains(err.Error(), "redirect-uri") {
+				t.Fatalf("%s: error = %v, want one naming -redirect-uri", mode, err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("%s started with no -redirect-uri", mode)
+		}
+	}
+}

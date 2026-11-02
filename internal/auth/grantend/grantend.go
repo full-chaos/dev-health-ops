@@ -58,6 +58,7 @@ const (
 	scopePair scope = iota + 1
 	scopeOrg
 	scopeGrant
+	scopeExpiredTuple
 )
 
 type grantRow struct {
@@ -71,6 +72,8 @@ type Plan struct {
 	scope scope
 	org   uuid.UUID
 	arg   uuid.UUID
+	role  string
+	key   string
 	rows  []grantRow
 }
 
@@ -101,6 +104,12 @@ func PlanGrant(ctx context.Context, r Reader, quotedSchema string, orgID, grantI
 	return read(ctx, r, &Plan{q: quotedSchema, scope: scopeGrant, org: orgID, arg: grantID})
 }
 
+// PlanExpiredTuple plans the end of the not-revoked grant of one (principal, role, repository key) tuple whose expiry has
+// passed on the database clock: an expired grant is no grant at read, but it still holds the tuple's unique index.
+func PlanExpiredTuple(ctx context.Context, r Reader, quotedSchema string, orgID, principalID uuid.UUID, role, key string) (*Plan, error) {
+	return read(ctx, r, &Plan{q: quotedSchema, scope: scopeExpiredTuple, org: orgID, arg: principalID, role: role, key: key})
+}
+
 func (p *Plan) selectSQL(lock bool) string {
 	sql := `SELECT id, principal_id FROM ` + p.q + `.resource_grants WHERE organization_id = $1 AND revoked_at IS NULL`
 	switch p.scope {
@@ -108,6 +117,8 @@ func (p *Plan) selectSQL(lock bool) string {
 		sql += ` AND principal_id = $2`
 	case scopeGrant:
 		sql += ` AND id = $2`
+	case scopeExpiredTuple:
+		sql += ` AND principal_id = $2 AND role_key = $3 AND resource_kind = 'repository' AND resource_id = $4 AND expires_at IS NOT NULL AND expires_at <= clock_timestamp()`
 	}
 	sql += ` ORDER BY id`
 	if lock {
@@ -117,8 +128,11 @@ func (p *Plan) selectSQL(lock bool) string {
 }
 
 func (p *Plan) args() []any {
-	if p.scope == scopeOrg {
+	switch p.scope {
+	case scopeOrg:
 		return []any{p.org}
+	case scopeExpiredTuple:
+		return []any{p.org, p.arg, p.role, p.key}
 	}
 	return []any{p.org, p.arg}
 }
@@ -175,10 +189,34 @@ func AuditFor(orgID, principalID, id uuid.UUID, a Actor) audit.AuditEvent {
 	return ev
 }
 
-// Events are the planned resource_grant.revoked events, one per grant.
+// ExpiredEventFor is the resource_grant.expired outbox event of one grant whose expiry passed and which a new grant of the
+// same tuple ends.
+func ExpiredEventFor(id uuid.UUID) audit.OutboxEvent {
+	return audit.OutboxEvent{AggregateType: "resource_grant", AggregateID: provisioning.WireID("resource_grant", id.String()),
+		EventType: "resource_grant.expired", Change: map[string]any{"status": "expired"}}
+}
+
+// ExpiredEventType is the audit event type of one expired grant end.
+const ExpiredEventType = "auth.resource_grant.expired"
+
+// AuditExpiredFor is the audit row of one expired grant end: no actor ended it, the new grant's actor is on the new
+// grant's own row.
+func AuditExpiredFor(orgID, principalID, id uuid.UUID, a Actor) audit.AuditEvent {
+	ev := AuditFor(orgID, principalID, id, a)
+	ev.EventType = ExpiredEventType
+	ev.Attributes["reason_code"] = "expired"
+	ev.Attributes["new_status"] = "expired"
+	return ev
+}
+
+// Events are the planned resource_grant.revoked events, one per grant (resource_grant.expired for an expired-tuple plan).
 func (p *Plan) Events() []audit.OutboxEvent {
 	out := make([]audit.OutboxEvent, 0, len(p.rows))
 	for _, g := range p.rows {
+		if p.scope == scopeExpiredTuple {
+			out = append(out, ExpiredEventFor(g.id))
+			continue
+		}
 		out = append(out, EventFor(g.id))
 	}
 	return out
@@ -188,6 +226,10 @@ func (p *Plan) Events() []audit.OutboxEvent {
 func (p *Plan) Audit(a Actor) []audit.AuditEvent {
 	out := make([]audit.AuditEvent, 0, len(p.rows))
 	for _, g := range p.rows {
+		if p.scope == scopeExpiredTuple {
+			out = append(out, AuditExpiredFor(p.org, g.principal, g.id, a))
+			continue
+		}
 		out = append(out, AuditFor(p.org, g.principal, g.id, a))
 	}
 	return out
@@ -198,7 +240,9 @@ func (p *Plan) Audit(a Actor) []audit.AuditEvent {
 // system caller.
 func (p *Plan) Apply(ctx context.Context, tx audit.TxOps, revokedBy *uuid.UUID) error {
 	if len(p.rows) == 0 {
-		now, err := read(ctx, txReader{tx}, &Plan{q: p.q, scope: p.scope, org: p.org, arg: p.arg})
+		same := *p
+		same.rows = nil
+		now, err := read(ctx, txReader{tx}, &same)
 		if err != nil {
 			return err
 		}
@@ -224,7 +268,7 @@ func (p *Plan) Apply(ctx context.Context, tx audit.TxOps, revokedBy *uuid.UUID) 
 		}
 	}
 	var by any
-	if revokedBy != nil {
+	if revokedBy != nil && p.scope != scopeExpiredTuple {
 		by = *revokedBy
 	}
 	tag, err := tx.Exec(ctx, `UPDATE `+p.q+`.resource_grants SET revoked_at = clock_timestamp(), revoked_by = $2, updated_at = clock_timestamp()

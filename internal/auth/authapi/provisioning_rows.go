@@ -21,6 +21,7 @@ var provisioningRouteOps = map[string]string{
 	opOrgSuspend: PatternOrgSuspend, opOrgState: PatternOrgState, opOrgOnboard: PatternOrgOnboard, opOrgCreate: PatternOrgCreate,
 	opServiceAccountCreate: PatternServiceAccountCreate, opServiceAccountDisable: PatternServiceAccountDisable,
 	opServiceAccountEnable: PatternServiceAccountEnable, opServiceAccountOwner: PatternServiceAccountOwner,
+	opGrantCreate: PatternGrantCreate, opGrantUpdate: PatternGrantUpdate, opGrantRevoke: PatternGrantRevoke,
 	opServiceAccountKeyIssue: PatternServiceAccountKeyIssue, opServiceAccountKeyRotate: PatternServiceAccountKeyRotate,
 	opServiceAccountKeyRevoke: PatternServiceAccountKeyRevoke, opServiceAccountKeyList: PatternServiceAccountKeyList,
 }

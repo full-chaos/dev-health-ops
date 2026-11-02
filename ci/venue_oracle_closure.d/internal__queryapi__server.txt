@@ -23,6 +23,7 @@ internal/auth/contracts/tokencorpus
 internal/auth/delegationend
 internal/auth/edgetoken
 internal/auth/emaildomain
+internal/auth/grant
 internal/auth/grantend
 internal/auth/httpapi
 internal/auth/identity

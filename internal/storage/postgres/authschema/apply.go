@@ -93,6 +93,11 @@ type Options struct {
 	// each session reader role also holds PlatformRoleReaderColumns. Off, it
 	// holds the session read alone; turning it off is a narrowing.
 	PlatformRolesOwned bool
+	// SchemaOwnerRole pins the owner of the auth schema and of every object in it (AUTH_SCHEMA_OWNER_ROLE). Set, each
+	// apply and grants run refuses a schema with an object owned by any other role, and a pinned role that is a
+	// superuser or can create roles. Empty means the pin is off (a dev stack whose migrator is a superuser).
+	SchemaOwnerRole string
+
 	// PushLifecycleWriterRole is the dedicated NOLOGIN role that owns the one
 	// function go-api calls to append External Push lifecycle events
 	// (CHAOS-10895). Empty means the function stays owned by the migration role
@@ -199,6 +204,9 @@ func (o Options) Validate(migrationRole string) error {
 				ErrInvalidOptions, reader)
 		}
 		seen[reader] = true
+	}
+	if err := o.validateSchemaOwnerRole(); err != nil {
+		return err
 	}
 	if err := o.validatePushLifecycle(migrationRole); err != nil {
 		return err
@@ -395,6 +403,9 @@ func applyGrantsAndVerify(ctx context.Context, conn pooledConn, options Options,
 	// removed from the manifest in a later release, a restored backup -- is
 	// corrected by the next migrate run rather than persisting because no new
 	// migration happened to be pending.
+	if err := verifySchemaOwnerPin(ctx, conn.Conn(), options); err != nil {
+		return result, err
+	}
 	var retained []GrantRecord
 	if err := applyRuntimeGrants(ctx, conn.Conn(), RuntimePosture(), options, &retained); err != nil {
 		return result, err

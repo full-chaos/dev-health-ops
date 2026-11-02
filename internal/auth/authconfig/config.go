@@ -374,6 +374,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.String("access_lifetime", c.Session.AccessLifetime.String()),
 		slog.Bool("workload_exchange_enabled", c.WorkloadExchange.Enabled),
 		slog.Bool("workload_bootstrap_enabled", c.WorkloadExchange.Bootstrap),
+		slog.Bool("service_account_exchange_enabled", c.WorkloadExchange.ServiceAccountKey),
 		slog.Bool("issue_route_workload_enabled", c.SessionIssueWorkloadSubject != ""),
 		slog.Int("authorize_caller_count", len(c.AuthorizeCallerSubjects)),
 	}

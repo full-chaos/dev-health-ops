@@ -49,8 +49,8 @@ func (d Deps) check() error {
 	if d.RefusalReason == nil || d.Signer == nil || d.Audit == nil {
 		return errors.New("workloadexchange: refusal reason, signer and audit are required")
 	}
-	if d.Validator == nil && d.Bootstrap == nil {
-		return errors.New("workloadexchange: a TokenReview validator or a bootstrap registry is required")
+	if d.Validator == nil && d.Bootstrap == nil && d.ServiceAccountKeys == nil {
+		return errors.New("workloadexchange: a TokenReview validator, a bootstrap or a key registry is required")
 	}
 	if d.Validator != nil && d.Registry == nil {
 		return errors.New("workloadexchange: the TokenReview subject needs the workload registry")

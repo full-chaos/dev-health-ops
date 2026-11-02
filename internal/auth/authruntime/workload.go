@@ -3,6 +3,7 @@ package authruntime
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -19,8 +20,9 @@ import (
 )
 
 // exchangeRoutes is the workload-token exchange route, mounted only with
-// AUTH_WORKLOAD_EXCHANGE (the Kubernetes subject) or AUTH_WORKLOAD_BOOTSTRAP
-// (the Compose bootstrap subject) on. A CA bundle that cannot be read refuses
+// AUTH_WORKLOAD_EXCHANGE (the Kubernetes subject), AUTH_WORKLOAD_BOOTSTRAP
+// (the Compose bootstrap subject) or AUTH_SERVICE_ACCOUNT_EXCHANGE (the service
+// account key subject) on. A CA bundle that cannot be read refuses
 // startup.
 func exchangeRoutes(
 	cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier, signer *token.Signer,
@@ -55,6 +57,13 @@ func exchangeRoutes(
 	}
 	if cfg.WorkloadExchange.Bootstrap {
 		deps.Bootstrap = bootstrapRegistry{store: store}
+	}
+	if cfg.WorkloadExchange.ServiceAccountKey {
+		resolver, err := serviceaccount.NewKeyResolver(serviceaccount.KeyResolverConfig{Pool: pool, Schema: schema, Logger: logger})
+		if err != nil {
+			return nil, err
+		}
+		deps.ServiceAccountKeys = serviceAccountKeyRegistry{resolver: resolver}
 	}
 	return workloadexchange.Routes(deps)
 }
@@ -101,9 +110,21 @@ type keyResolver interface {
 	ResolveKey(ctx context.Context, digest [sha256.Size]byte, now time.Time) (serviceaccount.ResolvedKey, error)
 }
 
-// serviceAccountKeyRegistry adapts ResolveKey to the exchange.
+// serviceAccountKeyRegistry adapts ResolveKey to the exchange. The exchange
+// gets the key row, the account, its organization, the expiry and the revision;
+// the key's audiences and scopes are not passed on, so no rule can read them.
 type serviceAccountKeyRegistry struct{ resolver keyResolver }
 
-func (r serviceAccountKeyRegistry) ResolveServiceAccountKey(context.Context, [sha256.Size]byte, time.Time) (workloadexchange.ServiceAccountKeyRegistration, error) {
-	return workloadexchange.ServiceAccountKeyRegistration{}, nil
+func (r serviceAccountKeyRegistry) ResolveServiceAccountKey(ctx context.Context, digest [sha256.Size]byte, now time.Time) (workloadexchange.ServiceAccountKeyRegistration, error) {
+	key, err := r.resolver.ResolveKey(ctx, digest, now)
+	if err != nil {
+		var refusal *serviceaccount.KeyRefusal
+		if errors.As(err, &refusal) {
+			return workloadexchange.ServiceAccountKeyRegistration{}, &workloadexchange.KeyRefusal{Reason: refusal.Reason}
+		}
+		return workloadexchange.ServiceAccountKeyRegistration{}, err
+	}
+	return workloadexchange.ServiceAccountKeyRegistration{
+		CredentialID: key.CredentialID, PrincipalID: key.Principal, OrgID: key.OrgID, ExpiresAt: key.ExpiresAt, Revision: key.Revision,
+	}, nil
 }

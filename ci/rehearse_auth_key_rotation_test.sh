@@ -71,6 +71,9 @@ recreates="$(grep -c -- '--force-recreate' "${SCRIPT}" || true)"
 refreshes="$(grep -c '^ *refresh_ports$' "${SCRIPT}" || true)"
 if [ "${recreates}" -gt 0 ] && [ "${refreshes}" -ge "${recreates}" ]; then ok every-recreate-rereads-the-ports; else bad "every-recreate-rereads-the-ports (${recreates} recreates, ${refreshes} reads)"; fi
 
+# A function must be defined before its first call (smoke v8: "refresh_ports: command not found").
+if [ "$(grep -n 'refresh_ports' "${SCRIPT}" | grep -v '^[0-9]*:#' | head -n 1 | cut -d: -f2- | tr -d ' ')" = 'refresh_ports(){' ]; then ok refresh-ports-defined-before-first-call; else bad refresh-ports-defined-before-first-call; fi
+
 # The host SMTP sink is unreachable from the bigboy docker bridge (smoke v3: no route to host): the user is verified in the
 # throwaway database instead.
 if grep -q 'auth_webproof_smtp_sink' "${SCRIPT}"; then bad no-host-smtp-sink; else ok no-host-smtp-sink; fi

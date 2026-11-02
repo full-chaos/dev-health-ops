@@ -49,6 +49,7 @@ var goOnlyRoutes = map[string]struct {
 	"POST /internal/v1/organizations/deprovision":    {false, "internal provisioning route; no go-api twin; writes no policy body"},
 	"POST /internal/v1/organizations/reactivate":     {false, "internal provisioning route; no go-api twin; writes no policy body"},
 	"POST /internal/v1/organizations/state":          {false, "internal provisioning route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/organizations/rename":         {false, "internal provisioning route; no go-api twin; writes no policy body"},
 	"POST /internal/v1/service-accounts/create":      {false, "internal provisioning route; no go-api twin; writes no policy body"},
 	"POST /internal/v1/service-accounts/disable":     {false, "internal provisioning route; no go-api twin; writes no policy body"},
 	"POST /internal/v1/service-accounts/enable":      {false, "internal provisioning route; no go-api twin; writes no policy body"},

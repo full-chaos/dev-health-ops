@@ -237,6 +237,12 @@ func execute(
 		return 1
 	}
 
+	projectionReaders, err := projectionReaderRoles(lookup)
+	if err != nil {
+		fmt.Fprintf(stderr, "configuration error: %v\n", err)
+		return 1
+	}
+
 	pushWriter := valueOr(lookup, envPushWriter, "")
 	pushCallers, err := roleList(lookup, envPushCallers)
 	if err != nil {
@@ -262,6 +268,7 @@ func execute(
 			Schema:                   schema,
 			RuntimeRole:              runtimeRole,
 			SessionReaderRoles:       readers,
+			ProjectionReaderRoles:    projectionReaders,
 			Logger:                   logger,
 			PushLifecycleWriterRole:  pushWriter,
 			PushLifecycleCallerRoles: pushCallers,
@@ -284,6 +291,7 @@ func execute(
 		Schema:                   schema,
 		RuntimeRole:              runtimeRole,
 		SessionReaderRoles:       readers,
+		ProjectionReaderRoles:    projectionReaders,
 		Logger:                   logger,
 		PushLifecycleWriterRole:  pushWriter,
 		PushLifecycleCallerRoles: pushCallers,
@@ -317,7 +325,9 @@ func sessionReaderRoles(lookup secrets.LookupEnv) ([]string, error) {
 }
 
 // projectionReaderRoles reads AUTH_PROJECTION_READER_ROLES, parsed as the session readers are.
-func projectionReaderRoles(lookup secrets.LookupEnv) ([]string, error) { return nil, nil }
+func projectionReaderRoles(lookup secrets.LookupEnv) ([]string, error) {
+	return roleList(lookup, envProjectionReaders)
+}
 
 // roleList reads a comma-separated list of role names from the environment.
 func roleList(lookup secrets.LookupEnv, name string) ([]string, error) {

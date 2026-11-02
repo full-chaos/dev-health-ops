@@ -216,5 +216,19 @@ func excuseRetained(violations []Violation, retained []GrantRecord) []Violation 
 	return kept
 }
 
-// projectionReaderNarrowing is what a projection reader lost of ProjectionReaderReads between before and after, named by the reader.
-func projectionReaderNarrowing(reader string, before, after []GrantRecord) []GrantRecord { return nil }
+// projectionReaderNarrowing is what a projection reader lost of ProjectionReaderReads between before and after, named by the
+// reader. A grant it held outside the declared columns is one a re-apply removes without an acknowledgement.
+func projectionReaderNarrowing(reader string, before, after []GrantRecord) []GrantRecord {
+	var lost []GrantRecord
+	declared := ProjectionReaderReads()
+	for _, g := range narrowedGrants(before, after) {
+		if g.Kind != "column" || g.Privilege != "SELECT" || !slices.ContainsFunc(declared, func(r ColumnGrant) bool {
+			return r.Table == g.Object && slices.Contains(r.Columns, g.Column)
+		}) {
+			continue
+		}
+		g.Role = reader
+		lost = append(lost, g)
+	}
+	return lost
+}

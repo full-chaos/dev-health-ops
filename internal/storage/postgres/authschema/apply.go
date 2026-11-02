@@ -213,6 +213,16 @@ func (o Options) Validate(migrationRole string) error {
 		}
 		seen[reader] = true
 	}
+	for _, reader := range o.ProjectionReaderRoles {
+		if err := ValidateIdentifier(reader); err != nil {
+			return err
+		}
+		if reader == o.RuntimeRole || (migrationRole != "" && reader == migrationRole) || seen[reader] {
+			return fmt.Errorf("%w: projection reader role %q must differ from the runtime role, the migration role and every other reader",
+				ErrInvalidOptions, reader)
+		}
+		seen[reader] = true
+	}
 	if err := o.validateSchemaOwnerRole(); err != nil {
 		return err
 	}

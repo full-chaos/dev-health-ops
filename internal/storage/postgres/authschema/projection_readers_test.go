@@ -55,6 +55,10 @@ func TestProjectionReaderNarrowingNamesTheLostDeclaredColumns(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("projectionReaderNarrowing = %+v, want %+v", got, want)
 	}
+	widened := append(append([]GrantRecord(nil), before...), grant("fingerprint"))
+	if got := projectionReaderNarrowing("devhealth_worker", widened, after); !reflect.DeepEqual(got, want) {
+		t.Fatalf("a lost undeclared column was counted: %+v", got)
+	}
 	if got := projectionReaderNarrowing("devhealth_worker", after, after); len(got) != 0 {
 		t.Fatalf("an unchanged grant narrowed: %+v", got)
 	}

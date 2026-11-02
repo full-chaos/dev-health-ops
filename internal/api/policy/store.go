@@ -137,7 +137,11 @@ func (s PGStore) UserState(ctx context.Context, id uuid.UUID) (UserState, bool, 
 	return state, true, nil
 }
 
-const membershipSQL = `SELECT role FROM memberships WHERE user_id = $1 AND org_id = $2 LIMIT 1`
+// membershipSQL reads the row of an active organization only (is_active is
+// true, as orgMembershipSQL and the login read take it): a suspend keeps the
+// members' rows.
+const membershipSQL = `SELECT m.role FROM memberships m JOIN organizations o ON o.id = m.org_id
+WHERE m.user_id = $1 AND m.org_id = $2 AND o.is_active IS true LIMIT 1`
 
 // Membership is user_is_member_of_org's query, reading the row's role too:
 // the existence answers the membership check, the role is the user's role in
@@ -150,7 +154,7 @@ func (s PGStore) Membership(ctx context.Context, userID, orgID uuid.UUID) (strin
 		return "", false, nil
 	}
 	if err != nil {
-		return "", false, storeError(err, "SELECT on memberships (user_id, org_id, role)")
+		return "", false, storeError(err, "SELECT on memberships (user_id, org_id, role) and organizations (id, is_active)")
 	}
 	if role == nil {
 		return "", true, nil

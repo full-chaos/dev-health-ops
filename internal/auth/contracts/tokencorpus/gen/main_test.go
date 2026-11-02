@@ -105,3 +105,45 @@ func TestRunWorkloadRefusesAnUnknownRepoRoot(t *testing.T) {
 		t.Fatal("runWorkload wrote a corpus against a root with no contract schemas")
 	}
 }
+
+func TestRunServiceAccountWritesACorpusThatVerifiesAndDropsStaleVectors(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := contracts.RepoRoot(wd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "corpus")
+	seed := func() *chain { return &chain{state: sha256.Sum256([]byte("gen-service-account-test"))} }
+	if err := runServiceAccount(root, out, seed()); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(out, "vectors", "invalid-retired.json")
+	if err := os.WriteFile(stale, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runServiceAccount(root, out, seed()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stale); err == nil {
+		t.Fatal("runServiceAccount left a retired vector behind")
+	}
+	c, err := tokencorpus.Load(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Manifest.Surface != tokencorpus.SurfaceServiceAccount {
+		t.Fatalf("surface %q", c.Manifest.Surface)
+	}
+	if err := tokencorpus.VerifyAll(root, c); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunServiceAccountRefusesAnUnknownRepoRoot(t *testing.T) {
+	if err := runServiceAccount(t.TempDir(), t.TempDir(), nil); err == nil {
+		t.Fatal("runServiceAccount wrote a corpus against a root with no contract schemas")
+	}
+}

@@ -4,7 +4,8 @@
     "cache_class": "none",
     "expires_in_seconds": null,
     "policy_revision": 10,
-    "reason": "role_lacks_action"
+    "reason": "role_lacks_action",
+    "wire_reason_code": "role_lacks_action"
   },
   "id": "role-lacks-action-viewer-writes-org",
   "layer": "pdp",

@@ -214,6 +214,12 @@ var Allowlist = []Entry{
 	{File: "internal/auth/outboxprojection/store.go", Func: "Engine.narrowScopes", Table: "auth.credential_registry", Verb: "UPDATE"},
 	{File: "internal/auth/outboxprojection/store.go", Func: "Engine.revokeRegistry", Table: "auth.credential_registry", Verb: "UPDATE"},
 	{File: "internal/auth/outboxprojection/store.go", Func: "Engine.upsertProjection", Table: "auth.credential_projection", Verb: "UPSERT"},
+	// CHAOS-10896 (acp answers-10896-3): the push projection reader moves its low-water mark and parks, retimes and releases rows of
+	// its retry table, each inside audit.Commit.
+	{File: "internal/auth/pushprojection/reader.go", Func: "Reader.advance", Table: "auth.projection_cursor", Verb: "UPDATE"},
+	{File: "internal/auth/pushprojection/reader.go", Func: "Reader.park", Table: "auth.projection_retry", Verb: "UPSERT"},
+	{File: "internal/auth/pushprojection/reader.go", Func: "Reader.readMark", Table: "auth.projection_cursor", Verb: "INSERT"},
+	{File: "internal/auth/pushprojection/reader.go", Func: "Reader.release", Table: "auth.projection_retry", Verb: "DELETE"},
 	{File: "internal/auth/serviceaccount/keys.go", Func: "Store.IssueKey", Table: "auth.credential_registry", Verb: "INSERT"},
 	{File: "internal/auth/serviceaccount/keys.go", Func: "Store.RotateKey", Table: "auth.credential_registry", Verb: "INSERT"},
 	{File: "internal/auth/serviceaccount/keys.go", Func: "Store.RotateKey", Table: "auth.credential_registry", Verb: "UPDATE"},

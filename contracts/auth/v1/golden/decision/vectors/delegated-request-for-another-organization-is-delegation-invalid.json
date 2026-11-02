@@ -4,7 +4,8 @@
     "cache_class": "none",
     "expires_in_seconds": null,
     "policy_revision": 10,
-    "reason": "delegation_invalid"
+    "reason": "delegation_invalid",
+    "wire_reason_code": "delegation_invalid"
   },
   "id": "delegated-request-for-another-organization-is-delegation-invalid",
   "layer": "pdp",

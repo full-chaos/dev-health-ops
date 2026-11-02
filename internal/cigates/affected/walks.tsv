@@ -50,6 +50,7 @@ internal/auth/contracts	access_token_goldens_test.go	contracts/auth/v1/examples/
 internal/auth/contracts	acr_embedded_schema_test.go	contracts/auth/v1/examples/acr-credential-lifecycle-event	dir	*
 internal/auth/contracts	anchor_ranges_test.go	contracts/auth/v1	dir	*
 internal/auth/contracts	authorization_goldens_test.go	unexpressed	-	-
+internal/auth/contracts	credential_class_service_account_token_test.go	contracts/auth/v1	dir	*
 internal/auth/contracts	credential_goldens_test.go	unexpressed	-	-
 internal/auth/contracts	decision_golden_shape_test.go	contracts/auth/v1/golden/decision	tree	*
 internal/auth/contracts	discovery_goldens_test.go	contracts/auth/v1/examples/discovery	dir	*
@@ -72,6 +73,7 @@ internal/auth/contracts	reject_location_test.go	contracts/auth/v1/examples	tree	
 internal/auth/contracts	retired_credential_class_test.go	contracts/auth/v1/endpoint-profiles.*.json	dir	*
 internal/auth/contracts	retired_credential_class_test.go	contracts/auth/v1/examples/endpoint-auth-profile/*.json	dir	*
 internal/auth/contracts	schema_dialect_test.go	contracts/auth/v1/jsonschema	dir	*
+internal/auth/contracts	service_account_token_goldens_test.go	contracts/auth/v1/examples/service-account-token	dir	*
 internal/auth/contracts	session_goldens_test.go	unexpressed	-	-
 internal/auth/contracts	transport_error_goldens_test.go	unexpressed	-	-
 internal/auth/contracts	workload_token_goldens_test.go	contracts/auth/v1/examples/workload-token	dir	*
@@ -79,6 +81,9 @@ internal/auth/contracts/tokencorpus	corpus.go	unexpressed	-	-
 internal/auth/contracts/tokencorpus	corpus_test.go	contracts/auth/v1/golden/access-token	dir	*
 internal/auth/contracts/tokencorpus	corpus_test.go	contracts/auth/v1/golden/access-token	tree	*
 internal/auth/contracts/tokencorpus	corpus_test.go	contracts/auth/v1/golden/access-token/vectors	dir	*
+internal/auth/contracts/tokencorpus	service_account_test.go	contracts/auth/v1/golden/service-account-token	dir	*
+internal/auth/contracts/tokencorpus	service_account_test.go	contracts/auth/v1/golden/service-account-token	tree	*
+internal/auth/contracts/tokencorpus	service_account_test.go	contracts/auth/v1/golden/service-account-token/vectors	dir	*
 internal/auth/contracts/tokencorpus	workload_test.go	contracts/auth/v1/golden/workload-token	dir	*
 internal/auth/contracts/tokencorpus	workload_test.go	contracts/auth/v1/golden/workload-token	tree	*
 internal/auth/contracts/tokencorpus	workload_test.go	contracts/auth/v1/golden/workload-token/vectors	dir	*
@@ -104,6 +109,8 @@ internal/auth/platformrole	superuser_writes_census_test.go	cmd	tree	*
 internal/auth/platformrole	superuser_writes_census_test.go	internal	tree	*
 internal/auth/platformrole	superuser_writes_census_test.go	unexpressed	-	-
 internal/auth/pushlifecycle	acr_test.go	contracts/auth/v1/examples/acr-credential-lifecycle-event	dir	*
+internal/auth/pushprojection	import_guard_test.go	unexpressed	-	-
+internal/auth/restorefence	consumers_reader_test.go	internal	tree	*.go
 internal/auth/restorefence	consumers_test.go	internal	tree	*.go
 internal/auth/restorefence	inventory_completeness_test.go	.	tree	*.go
 internal/auth/restorefence	platform_roles_test.go	internal/auth/restorefence	dir	*

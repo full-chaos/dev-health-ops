@@ -265,3 +265,123 @@ func lowKey(user, org uuid.UUID) decisioncache.Key {
 	return decisioncache.Key{PrincipalID: "prn_" + user.String(), SessionID: "ses_cell", OrganizationID: org.String(), Action: action,
 		ResourceKind: "organization", PolicyRevision: policycatalog.Default().Version()}
 }
+
+func (e *env) stateVersion(t *testing.T, ctx context.Context, r *Reader, principal uuid.UUID, org string) string {
+	t.Helper()
+	var v string
+	if err := r.Read(ctx, func(tx authapi.DecisionTx) error {
+		var err error
+		v, err = tx.StateVersion(ctx, principal, org)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+// stepChanges runs each step and requires the state version to change after each one.
+func (e *env) stepChanges(t *testing.T, ctx context.Context, r *Reader, principal uuid.UUID, org string, steps []struct {
+	name string
+	run  func()
+}) {
+	t.Helper()
+	before := e.stateVersion(t, ctx, r, principal, org)
+	for _, s := range steps {
+		s.run()
+		after := e.stateVersion(t, ctx, r, principal, org)
+		if after == before {
+			t.Fatalf("%s: the state version did not change (%s)", s.name, after)
+		}
+		before = after
+	}
+}
+
+type step = struct {
+	name string
+	run  func()
+}
+
+// r1 P1, pm option C: an insert, an update and a delete of a grant of the pair each change the state version, with no
+// outbox event.
+func TestTheStateVersionChangesOnAGrantInsertUpdateAndDelete(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	user, owner, org := e.user(t, ctx, true, false), e.user(t, ctx, true, false), e.org(t, ctx)
+	r := e.collecting(t, false)
+	grant := uuid.New()
+	e.stepChanges(t, ctx, r, user, org.String(), []step{
+		{"insert", func() {
+			e.armed(t, ctx, `INSERT INTO auth.resource_grants (id, principal_id, organization_id, role_key, resource_kind, resource_id) VALUES ($1, $2, $3, 'viewer', 'repository', 'acme/state')`, grant, user, org)
+		}},
+		{"update", func() {
+			e.armed(t, ctx, `UPDATE auth.resource_grants SET revoked_at = now(), revoked_by = $2 WHERE id = $1`, grant, owner)
+		}},
+		{"delete", func() { e.armed(t, ctx, `DELETE FROM auth.resource_grants WHERE id = $1`, grant) }},
+	})
+}
+
+// r1 P1, pm option C: a raw write of the principal, organization, membership or platform role assignment rows, with no
+// outbox event, changes the state version.
+func TestTheStateVersionChangesOnRawWritesWithNoEvent(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	t.Run("principals", func(t *testing.T) {
+		principal := uuid.New()
+		e.stepChanges(t, ctx, e.collecting(t, false), principal, "", []step{
+			{"insert", func() { e.armed(t, ctx, `INSERT INTO auth.principals (id, kind) VALUES ($1, 'user')`, principal) }},
+			{"update", func() { e.armed(t, ctx, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1`, principal) }},
+			{"delete", func() { e.armed(t, ctx, `DELETE FROM auth.principals WHERE id = $1`, principal) }},
+		})
+	})
+	t.Run("organizations", func(t *testing.T) {
+		user, org := e.user(t, ctx, true, false), uuid.New()
+		e.stepChanges(t, ctx, e.collecting(t, false), user, org.String(), []step{
+			{"insert", func() {
+				e.armed(t, ctx, `INSERT INTO auth.organizations (id, slug, name) VALUES ($1, $2, 'state-version')`, org, "sv-"+org.String()[:8])
+			}},
+			{"update", func() { e.armed(t, ctx, `UPDATE auth.organizations SET disabled_at = now() WHERE id = $1`, org) }},
+			{"delete", func() { e.armed(t, ctx, `DELETE FROM auth.organizations WHERE id = $1`, org) }},
+		})
+	})
+	t.Run("memberships", func(t *testing.T) {
+		user, org := e.user(t, ctx, true, false), e.org(t, ctx)
+		e.stepChanges(t, ctx, e.collecting(t, false), user, org.String(), []step{
+			{"insert", func() {
+				e.armed(t, ctx, `INSERT INTO auth.memberships (organization_id, principal_id, status, role, joined_at) VALUES ($1, $2, 'active', 'admin', now())`, org, user)
+			}},
+			{"update", func() {
+				e.armed(t, ctx, `UPDATE auth.memberships SET role = 'member' WHERE organization_id = $1 AND principal_id = $2`, org, user)
+			}},
+			{"delete", func() {
+				e.armed(t, ctx, `DELETE FROM auth.memberships WHERE organization_id = $1 AND principal_id = $2`, org, user)
+			}},
+		})
+	})
+	t.Run("platform_role_assignments", func(t *testing.T) {
+		user := e.user(t, ctx, true, false)
+		e.stepChanges(t, ctx, e.collecting(t, true), user, "", []step{
+			{"insert", func() {
+				e.armed(t, ctx, `INSERT INTO auth.platform_role_assignments (principal_id, role_key) VALUES ($1, 'platform_admin')`, user)
+			}},
+			{"update", func() {
+				e.armed(t, ctx, `UPDATE auth.platform_role_assignments SET expires_at = now() + interval '1 day' WHERE principal_id = $1`, user)
+			}},
+			{"delete", func() { e.armed(t, ctx, `DELETE FROM auth.platform_role_assignments WHERE principal_id = $1`, user) }},
+		})
+	})
+}
+
+// pm option C: VACUUM FREEZE keeps xmin, so the state version of unchanged rows is stable across it.
+func TestTheStateVersionIsStableAcrossVacuumFreeze(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	user, org := e.user(t, ctx, true, false), e.org(t, ctx)
+	e.armed(t, ctx, `INSERT INTO auth.memberships (organization_id, principal_id, status, role, joined_at) VALUES ($1, $2, 'active', 'admin', now())`, org, user)
+	e.armed(t, ctx, `INSERT INTO auth.resource_grants (principal_id, organization_id, role_key, resource_kind, resource_id) VALUES ($1, $2, 'viewer', 'repository', 'acme/frozen')`, user, org)
+	r := e.collecting(t, true)
+	before := e.stateVersion(t, ctx, r, user, org.String())
+	e.exec(t, ctx, `VACUUM (FREEZE) auth.principals, auth.organizations, auth.memberships, auth.resource_grants, auth.platform_role_assignments`)
+	if after := e.stateVersion(t, ctx, r, user, org.String()); after != before {
+		t.Fatalf("the state version changed across VACUUM FREEZE: %s -> %s", before, after)
+	}
+}

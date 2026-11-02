@@ -122,7 +122,11 @@ done
 printf 'step 2: operator listener\n'
 base="http://127.0.0.1:${PORT}"
 for endpoint in healthz readyz; do
-  status="$(curl --silent --show-error --max-time 5 --output /dev/stderr --write-out '%{http_code}' "${base}/${endpoint}")"
+  # The body goes to stderr through the shell, not through `--output /dev/stderr`: curl opens that path with O_TRUNC,
+  # which empties a log file that stderr is redirected to and erases everything printed before this step.
+  response="$(curl --silent --show-error --max-time 5 --write-out '\n%{http_code}' "${base}/${endpoint}")"
+  status="${response##*$'\n'}"
+  printf '%s\n' "${response%$'\n'*}" >&2
   printf '\nGET /%s -> %s\n' "${endpoint}" "${status}"
   [ "${status}" = "200" ] || die "/${endpoint} answered ${status}, want 200"
 done
